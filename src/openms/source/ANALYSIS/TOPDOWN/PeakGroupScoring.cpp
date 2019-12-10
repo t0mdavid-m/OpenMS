@@ -325,8 +325,8 @@ namespace OpenMS
     }
 
     return false;
-
-    /*for (int i = 2; i < std::min(7, range); i++)
+/*
+    for (int i = 2; i < std::min(7, range); i++)
     {
       for (int l = 0; l < i; l++)
       {
