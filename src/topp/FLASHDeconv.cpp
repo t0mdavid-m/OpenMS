@@ -96,16 +96,21 @@ protected:
     registerDoubleOption_("minICS", "<cosine threshold 0 - 1>", .75, "cosine threshold between avg. and observed isotope pattern (spectrum level)", false, true);
     registerDoubleOption_("minCCS", "<cosine threshold 0 - 1>", .5, "cosine threshold between per-charge-intensity and fitted gaussian distribution (spectrum level)", false, true);
 
-    registerIntOption_("minCP", "<min continuous charge peak count>", 3, "minimum number of peaks of continuous charges per mass", false, true);
 
+    registerIntOption_("minCP", "<min continuous charge peak count>", 3, "minimum number of peaks of continuous charges per mass", false, true);
     registerIntOption_("maxMC", "<max mass count>", -1, "maximum mass count per spec", false, true);
     //
     registerDoubleOption_("minIT", "<min intensity>", 0.0, "intensity threshold (default 0.0)", false, true);
     registerDoubleOption_("RTwindow", "<seconds>", 0.0, "RT window (if 0, 1% total gradient time)", false, true);
     registerDoubleOption_("minRTspan", "<seconds>", 10.0, "Min feature RT span", false, true);
     registerIntOption_("writeSpecDeconv", "<1:true 0:false>", 0, "to write per spectrum deconvoluted masses or not. If set, [prefix]PerSpecMasses.tsv is generated", false, true);
-
     registerIntOption_("maxMSL", "", 1, "maximum MS-level (inclusive) for deconvolution", false, true);
+
+    // parameters for MSn
+    registerDoubleOption_("tol2", "<MSn tolerance>", 10.0, "ppm tolerance for MSn (n>1)", false, false);
+    registerDoubleOption_("minICS2", "<MSn cosine threshold 0 - 1>", .5, "cosine threshold between avg. and observed isotope pattern (spectrum level) for MSn (n>1)", false, true);
+    registerDoubleOption_("minCCS2", "<MSn cosine threshold 0 - 1>", .5, "cosine threshold between per-charge-intensity and fitted gaussian distribution (spectrum level) for MSn (n>1)", false, true);
+    registerIntOption_("minCP2", "<MSn min continuous charge peak count>", 2, "minimum number of peaks of continuous charges per mass for MSn (n>1)", false, true);
 
     //registerIntOption_("jitter", "<1:true 0:false>", 0, "jitter universal pattern to generate decoy features (output file will end with *Decoy.tsv)", false, true);
   }
@@ -137,6 +142,12 @@ protected:
     param.writeSpecTsv = getIntOption_("writeSpecDeconv");
     //param.jitter = getIntOption_("jitter");
     param.maxMSLevel = getIntOption_("maxMSL");
+    param.tolerance2 = getDoubleOption_("tol2") * 1e-6;
+    param.binWidth2 = .5 / param.tolerance2;
+    param.minContinuousChargePeakCount2 = getIntOption_("minCP2");
+    param.minIsotopeCosineSpec2 = getDoubleOption_("minICS2");
+    param.minChargeCosineSpec2 = getDoubleOption_("minCCS2");
+
     return param;
   }
 
@@ -150,11 +161,9 @@ protected:
     return FLASHDeconvHelperStructs::PrecalcularedAveragine(100, param.maxMass, 25, generator);
   }
 
-
   // the main_ function is called after all parameters are read
   ExitCodes main_(int, const char **) override
   {
-
     //-------------------------------------------------------------
     // parsing parameters
     //-------------------------------------------------------------
@@ -202,14 +211,9 @@ protected:
       // if (param.RTwindow > 0)
       // {
 
-      if (param.jitter == 0)
-      {
-        fsf.open(outfilePath + ".tsv", fstream::out);
-      }
-      else
-      {
-        fsf.open(outfilePath + "Decoy.tsv", fstream::out);
-      }
+
+      fsf.open(outfilePath + ".tsv", fstream::out);
+
       //  }
 
       writeHeader(fs, fsf, true);
@@ -248,7 +252,7 @@ protected:
       for (auto it = map.begin(); it != map.end(); ++it)
       {
         //cout<<it->getMSLevel()<<endl;
-        if ((int) it->getMSLevel() > param.maxMSLevel)
+        if (it->getMSLevel() > param.maxMSLevel)
         {
           continue;
         }
@@ -275,14 +279,9 @@ protected:
           fs.open(outfilePath + outfileName + "PerSpecMasses.tsv", fstream::out);
           fsm.open(outfilePath + outfileName + "PerSpecMasses.m", fstream::out);
         }
-        if (param.jitter == 0)
-        {
-          fsf.open(outfilePath + outfileName + ".tsv", fstream::out);
-        }
-        else
-        {
-          fsf.open(outfilePath + outfileName + "Decoy.tsv", fstream::out);
-        }
+
+        fsf.open(outfilePath + outfileName + ".tsv", fstream::out);
+
 
         // fsm.open(outfilePath + outfileName + "Annotated.m", fstream::out); //
         writeHeader(fs, fsf, true);
@@ -526,12 +525,15 @@ protected:
       minCharge = minCharge < p.charge ? minCharge : p.charge;
       maxCharge = maxCharge > p.charge ? maxCharge : p.charge;
     }
+    //<< std::to_string(am) << "\t" << std::to_string(m) << "\t" << intensity << "\t"
+    //       << (maxCharge - minCharge + 1) << "\t" << minCharge << "\t" << maxCharge << "\t"
+    //       << std::to_string(pg.spec->getRT())
     //cout<<1<<endl;
     fs << pg.massIndex << "\t" << pg.specIndex << "\t" << param.fileName << "\t" << pg.spec->getNativeID() << "\t"<< pg.spec->getMSLevel() << "\t"
         << pg.massCntr << "\t"
-       << fixed << setprecision(3) << am << "\t" << m << "\t" << intensity << "\t"
-       << (maxCharge - minCharge + 1) << "\t" << minCharge << "\t" << maxCharge << "\t"
-       << fixed << setprecision(1) << pg.spec->getRT()
+        << std::to_string(am) << "\t" << std::to_string(m) << "\t" << intensity << "\t"
+        << (maxCharge - minCharge + 1) << "\t" << minCharge << "\t" << maxCharge << "\t"
+        << std::to_string(pg.spec->getRT())
        << "\t" << pg.peaks.size() << "\t";
 
     fs << fixed << setprecision(2);
@@ -603,9 +605,9 @@ protected:
     {
       return;
     }
-    double &m = pg.monoisotopicMass;
-    double &am = pg.avgMass;
-    double &intensity = pg.intensity;
+//    double &m = pg.monoisotopicMass;
+//    double &am = pg.avgMass;
+    //double &intensity = pg.intensity;
     //int nm = getNominalMass(m);
     sort(pg.peaks.begin(), pg.peaks.end());
     int minCharge = param.chargeRange + param.minCharge;
