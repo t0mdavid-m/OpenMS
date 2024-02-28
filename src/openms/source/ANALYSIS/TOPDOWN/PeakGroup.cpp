@@ -159,12 +159,16 @@ namespace OpenMS
     updateAvgDaError_();
     updateSNR_((float)avg.getSNRMultiplicationFactor(monoisotopic_mass_));
 
+    max_snr_abs_charge_ = -1;
     for (int abs_charge = min_abs_charge_; abs_charge <= max_abs_charge_; abs_charge++)
     {
-      if (getChargeSNR(abs_charge) > getChargeSNR(max_snr_abs_charge_))
+      if ( (getChargeSNR(abs_charge) > getChargeSNR(max_snr_abs_charge_)) && (getChargeIntensity(abs_charge) >= 5e4) )
       {
         max_snr_abs_charge_ = abs_charge;
       }
+    }
+    if (max_snr_abs_charge_ < 0) {
+      return 0;
     }
 
     qscore_ = Qscore::getQscore(this, spec);
