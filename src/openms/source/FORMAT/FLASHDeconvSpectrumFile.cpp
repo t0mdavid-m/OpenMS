@@ -19,8 +19,11 @@ namespace OpenMS
 
    */
 
-  void FLASHDeconvSpectrumFile::writeDeconvolvedMasses(DeconvolvedSpectrum& dspec, std::fstream& fs, const String& file_name,
-                                                       const FLASHDeconvHelperStructs::PrecalculatedAveragine& avg, double tol, const bool write_detail, const bool report_decoy)
+  inline std::default_random_engine generator_;
+  inline std::uniform_real_distribution<double> distribution_(0.0,1.0);
+
+  void FLASHDeconvSpectrumFile::writeDeconvolvedMasses(DeconvolvedSpectrum& dspec, std::fstream& fs, const String& file_name, const FLASHDeconvHelperStructs::PrecalculatedAveragine& avg, double tol,
+                                                       const bool write_detail, const bool report_decoy, const double noise_decoy_weight)
   {
     static std::vector<uint> indices {};
 
@@ -35,8 +38,23 @@ namespace OpenMS
     }
     uint& index = indices[dspec.getOriginalSpectrum().getMSLevel() - 1];
 
-    for (auto& pg : dspec)
+    for (int i = 0; i < dspec.size(); i++)
     {
+      auto& pg = dspec[i];
+
+      if (pg.getTargetDecoyType() == PeakGroup::TargetDecoyType::noise_decoy)
+      {
+        double number = distribution_(generator_);
+        if (number > noise_decoy_weight)
+        {
+          continue;
+        }
+        if (number * noise_decoy_weight > 1.0)
+        {
+          i --;
+        }
+      }
+
       const double mono_mass = pg.getMonoMass();
       const double avg_mass = pg.getMonoMass() + avg.getAverageMassDelta(mono_mass);
       const double intensity = pg.getIntensity();
