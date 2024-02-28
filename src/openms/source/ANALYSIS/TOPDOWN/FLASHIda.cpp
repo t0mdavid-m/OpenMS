@@ -418,172 +418,174 @@ namespace OpenMS
 
     for (int iteration = targeting_mode_ == 2 ? 0 : 1; iteration < 2; iteration++) // for mass exclusion, first collect masses with exclusion list. Then collect without exclusion. This works the best
     {
-      for (int selection_phase = selection_phase_start; selection_phase <= selection_phase_end; selection_phase++)
-      {
-        for (const auto& pg : deconvolved_spectrum_)
+      for (int i = 0; i < mass_count; i++) {
+        for (int selection_phase = selection_phase_start; selection_phase <= 0; selection_phase++)
         {
-          if (selected_peak_groups_.size() >= mass_count)
+          for (const auto& pg : deconvolved_spectrum_)
           {
-            break;
-          }
-
-          int charge = pg.getRepAbsCharge();
-          double qscore = std::min(.9, pg.getQscore());
-          double mass = pg.getMonoMass();
-          auto [mz1, mz2] = pg.getRepMzRange();
-
-          double center_mz = (mz1 + mz2) / 2.0;
-
-          mz1 -= optimal_window_margin_;
-          mz2 += optimal_window_margin_;
-
-          int nominal_mass = SpectralDeconvolution::getNominalMass(mass);
-          bool target_matched = false;
-          double snr_threshold = snr_threshold_;
-          double qscore_threshold = qscore_threshold_;
-          double tqscore_factor_for_exclusion = 1.0;
-          int integer_mz = (int)round(center_mz);
-
-          if (iteration == 0)
-          {
-            auto inter = t_mass_qscore_map_.find(nominal_mass);
-            if (inter != t_mass_qscore_map_.end())
+            if (selected_peak_groups_.size() >= mass_count)
             {
-              tqscore_factor_for_exclusion = t_mass_qscore_map_[nominal_mass];
+              break;
             }
-            if (1 - tqscore_factor_for_exclusion > tqscore_threshold)
-            {
-              continue;
-            }
-          }
 
-          if (targeting_mode_ == 1 && target_masses_.size() > 0) // inclusive mode
-          {
-            double delta = 2 * tol_[0] * mass * 1e-6;
-            auto ub = std::upper_bound(target_masses_.begin(), target_masses_.end(), mass + delta);
+            int charge = pg.getRepAbsCharge();
+            double qscore = std::min(.9, pg.getQscore());
+            double mass = pg.getMonoMass();
+            auto [mz1, mz2] = pg.getRepMzRange();
 
-            while (!target_matched)
+            double center_mz = (mz1 + mz2) / 2.0;
+
+            mz1 -= optimal_window_margin_;
+            mz2 += optimal_window_margin_;
+
+            int nominal_mass = SpectralDeconvolution::getNominalMass(mass);
+            bool target_matched = false;
+            double snr_threshold = snr_threshold_;
+            double qscore_threshold = qscore_threshold_;
+            double tqscore_factor_for_exclusion = 1.0;
+            int integer_mz = (int)round(center_mz);
+
+            if (iteration == 0)
             {
-              if (ub != target_masses_.end())
+              auto inter = t_mass_qscore_map_.find(nominal_mass);
+              if (inter != t_mass_qscore_map_.end())
               {
-                if (std::abs(*ub - mass) < delta) // target is detected.
+                tqscore_factor_for_exclusion = t_mass_qscore_map_[nominal_mass];
+              }
+              if (1 - tqscore_factor_for_exclusion > tqscore_threshold)
+              {
+                continue;
+              }
+            }
+
+            if (targeting_mode_ == 1 && target_masses_.size() > 0) // inclusive mode
+            {
+              double delta = 2 * tol_[0] * mass * 1e-6;
+              auto ub = std::upper_bound(target_masses_.begin(), target_masses_.end(), mass + delta);
+
+              while (!target_matched)
+              {
+                if (ub != target_masses_.end())
                 {
-                  target_matched = true;
+                  if (std::abs(*ub - mass) < delta) // target is detected.
+                  {
+                    target_matched = true;
+                  }
+                  if (mass - *ub > delta)
+                  {
+                    break;
+                  }
                 }
-                if (mass - *ub > delta)
+                if (ub == target_masses_.begin())
                 {
                   break;
                 }
+                ub--;
               }
-              if (ub == target_masses_.begin())
+
+              if (target_matched)
               {
-                break;
+                snr_threshold = 0.0;
+                qscore_threshold = 0.0; // stop exclusion for targets. todo tqscore lowest first? charge change.
               }
-              ub--;
+              else
+              {
+                continue;
+              }
+            }
+            else if (targeting_mode_ == 3 && excluded_masses_.size() > 0) // inclusive mode
+            {
+              bool to_exclude = false;
+              double delta = 2 * tol_[0] * mass * 1e-6;
+              auto ub = std::upper_bound(excluded_masses_.begin(), excluded_masses_.end(), mass + delta);
+
+              while (!to_exclude)
+              {
+                if (ub != excluded_masses_.end())
+                {
+                  if (std::abs(*ub - mass) < delta) // target is detected.
+                  {
+                    to_exclude = true;
+                  }
+                  if (mass - *ub > delta)
+                  {
+                    break;
+                  }
+                }
+                if (ub == excluded_masses_.begin())
+                {
+                  break;
+                }
+                ub--;
+              }
+
+              if (to_exclude)
+              {
+                continue;
+              }
             }
 
-            if (target_matched)
+            if (qscore < qscore_threshold)
             {
-              snr_threshold = 0.0;
-              qscore_threshold = 0.0; // stop exclusion for targets. todo tqscore lowest first? charge change.
+              break;
+            }
+
+            if (pg.getChargeSNR(charge) < snr_threshold)
+            {
+              continue;
+            }
+
+            if (current_selected_mzs.find(center_mz) != current_selected_mzs.end()) // mz has been triggered
+            {
+              //if (selection_phase < selection_phase_end)
+              //{
+              //  continue;
+              //}
+              if (!target_matched && current_selected_masses.find(pg.getMonoMass()) == current_selected_masses.end()) // but mass is different
+              {
+                continue;
+              }
+            }
+
+            if (selection_phase < selection_phase_end - 1)
+            { // first, select masses under tqscore threshold
+              if (tqscore_exceeding_mass_rt_map_.find(nominal_mass) != tqscore_exceeding_mass_rt_map_.end() || tqscore_exceeding_mz_rt_map_.find(integer_mz) != tqscore_exceeding_mz_rt_map_.end())
+              {
+                continue;
+              }
+            }
+
+            all_mass_rt_map_[nominal_mass] = rt;
+            auto inter = mass_qscore_map_.find(nominal_mass);
+            if (inter == mass_qscore_map_.end())
+            {
+              mass_qscore_map_[nominal_mass] = 1 - qscore;
             }
             else
             {
-              continue;
+              mass_qscore_map_[nominal_mass] *= 1 - qscore;
             }
-          }
-          else if (targeting_mode_ == 3 && excluded_masses_.size() > 0) // inclusive mode
-          {
-            bool to_exclude = false;
-            double delta = 2 * tol_[0] * mass * 1e-6;
-            auto ub = std::upper_bound(excluded_masses_.begin(), excluded_masses_.end(), mass + delta);
 
-            while (!to_exclude)
+            if (1 - mass_qscore_map_[nominal_mass] * tqscore_factor_for_exclusion > tqscore_threshold)
             {
-              if (ub != excluded_masses_.end())
-              {
-                if (std::abs(*ub - mass) < delta) // target is detected.
-                {
-                  to_exclude = true;
-                }
-                if (mass - *ub > delta)
-                {
-                  break;
-                }
-              }
-              if (ub == excluded_masses_.begin())
-              {
-                break;
-              }
-              ub--;
+              tqscore_exceeding_mass_rt_map_[nominal_mass] = rt;
+              tqscore_exceeding_mz_rt_map_[integer_mz] = rt;
             }
 
-            if (to_exclude)
-            {
-              continue;
-            }
-          }
+            id_mass_map_[window_id_] = nominal_mass;
+            id_mz_map_[window_id_] = integer_mz;
+            id_qscore_map_[window_id_] = qscore;
+            trigger_ids_.push_back(window_id_);
+            window_id_++;
 
-          if (qscore < qscore_threshold)
-          {
-            break;
-          }
+            selected_peak_groups_.push_back(pg);
+            trigger_charges.push_back(charge);
 
-          if (pg.getChargeSNR(charge) < snr_threshold)
-          {
-            continue;
+            trigger_left_isolation_mzs_.push_back(mz1);
+            trigger_right_isolation_mzs_.push_back(mz2);
+            current_selected_masses.insert(pg.getMonoMass());
+            current_selected_mzs.insert(center_mz);
           }
-
-          if (current_selected_mzs.find(center_mz) != current_selected_mzs.end()) // mz has been triggered
-          {
-            if (selection_phase < selection_phase_end)
-            {
-              continue;
-            }
-            if (!target_matched && current_selected_masses.find(pg.getMonoMass()) == current_selected_masses.end()) // but mass is different
-            {
-              continue;
-            }
-          }
-
-          if (selection_phase < selection_phase_end - 1)
-          { // first, select masses under tqscore threshold
-            if (tqscore_exceeding_mass_rt_map_.find(nominal_mass) != tqscore_exceeding_mass_rt_map_.end() || tqscore_exceeding_mz_rt_map_.find(integer_mz) != tqscore_exceeding_mz_rt_map_.end())
-            {
-              continue;
-            }
-          }
-
-          all_mass_rt_map_[nominal_mass] = rt;
-          auto inter = mass_qscore_map_.find(nominal_mass);
-          if (inter == mass_qscore_map_.end())
-          {
-            mass_qscore_map_[nominal_mass] = 1 - qscore;
-          }
-          else
-          {
-            mass_qscore_map_[nominal_mass] *= 1 - qscore;
-          }
-
-          if (1 - mass_qscore_map_[nominal_mass] * tqscore_factor_for_exclusion > tqscore_threshold)
-          {
-            tqscore_exceeding_mass_rt_map_[nominal_mass] = rt;
-            tqscore_exceeding_mz_rt_map_[integer_mz] = rt;
-          }
-
-          id_mass_map_[window_id_] = nominal_mass;
-          id_mz_map_[window_id_] = integer_mz;
-          id_qscore_map_[window_id_] = qscore;
-          trigger_ids_.push_back(window_id_);
-          window_id_++;
-          
-          selected_peak_groups_.push_back(pg);
-          trigger_charges.push_back(charge);
-
-          trigger_left_isolation_mzs_.push_back(mz1);
-          trigger_right_isolation_mzs_.push_back(mz2);
-          current_selected_masses.insert(pg.getMonoMass());
-          current_selected_mzs.insert(center_mz);
         }
       }
     }
@@ -621,16 +623,30 @@ namespace OpenMS
 
   void FLASHIda::getAllMonoisotopicMasses(double* masses, int length)
   {
-    int len = std::min(length, (int)deconvolved_spectrum_.size());
-    for (int i = 0; i < len; i++)
+    int len = std::min(length, GetAllPeakGroupSize());
+    int writePos = 0;
+    for (int i = 0; i < deconvolved_spectrum_.size(); i++)
     {
-      masses[i] = deconvolved_spectrum_[i].getMonoMass();
+        if (deconvolved_spectrum_[i].getQscore() > qscore_threshold_) {
+          masses[writePos] = deconvolved_spectrum_[i].getMonoMass();
+          writePos += 1;
+          if (writePos >= len) {
+            break;
+          }
+      }
     }
   }
 
   int FLASHIda::GetAllPeakGroupSize()
   {
-    return deconvolved_spectrum_.size();
+    int size = 0;
+    for (int i = 0; i < deconvolved_spectrum_.size(); i++) {
+      if (deconvolved_spectrum_[i].getQscore() > qscore_threshold_)
+      {
+        size += 1;
+      }
+    }
+    return size;
   }
 
   void FLASHIda::getIsolationWindows(double* wstart, double* wend, double* qscores, int* charges, int* min_charges, int* max_charges, double* mono_masses, double* chare_cos, double* charge_snrs,
