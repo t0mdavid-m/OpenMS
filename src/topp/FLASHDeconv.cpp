@@ -328,7 +328,39 @@ protected:
         msNscan_to_precursor_pg[deconvolved_spectrum.getScanNumber()] = deconvolved_spectrum.getPrecursorPeakGroup();
       }
     }
+/*
+    for (auto& deconvolved_spectrum : deconvolved_spectra)
+    {
+      uint ms_level = deconvolved_spectrum.getOriginalSpectrum().getMSLevel();
+      if (ms_level != 1) continue;
 
+      const int max_count = 10;
+      double threshold = 0;
+      double mass = 0;
+      double intensity_sum = 0;
+
+      if (deconvolved_spectrum.size() > max_count)
+      {
+        std::vector<float> intensites;
+        intensites.reserve(deconvolved_spectrum.size());
+        for (const auto& pg : deconvolved_spectrum)
+        {
+          intensites.push_back(pg.getIntensity());
+        }
+        std::sort(intensites.rbegin(), intensites.rend());
+        threshold = intensites[max_count];
+      }
+
+      for (const auto& pg : deconvolved_spectrum)
+      {
+        if (pg.getIntensity() < threshold) continue;
+        mass += pg.getMonoMass() * pg.getIntensity();
+        intensity_sum += pg.getIntensity();
+      }
+      if (intensity_sum <= 0)  std::cout<< deconvolved_spectrum.getOriginalSpectrum().getRT()<<" " <<  0 << "\n";
+      std::cout << deconvolved_spectrum.getOriginalSpectrum().getRT()<< " " <<  mass / intensity_sum << "\n";
+    }
+*/
     for (auto& val : per_ms_level_deconv_spec_count)
     {
       OPENMS_LOG_INFO << "So far, FLASHDeconv found " << per_ms_level_mass_count[val.first] << " masses in " << val.second << " MS" << val.first << " spectra out of "
