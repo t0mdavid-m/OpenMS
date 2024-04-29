@@ -586,10 +586,26 @@ FLASHIda::FLASHIda(char* arg)
 
   double FLASHIda::getRepresentativeMass()
   {
+    const int max_count = 10;
+    double threshold = 0;
     double mass = 0;
     double intensity_sum = 0;
+
+    if (deconvolved_spectrum_.size() > max_count)
+    {
+      std::vector<float> intensites;
+      intensites.reserve(deconvolved_spectrum_.size());
+      for (const auto& pg : deconvolved_spectrum_)
+      {
+        intensites.push_back(pg.getIntensity());
+      }
+      std::sort(intensites.rbegin(), intensites.rend());
+      threshold = intensites[max_count];
+    }
+
     for (const auto& pg : deconvolved_spectrum_)
     {
+      if (pg.getIntensity() < threshold) continue;
       mass += pg.getMonoMass() * pg.getIntensity();
       intensity_sum += pg.getIntensity();
     }
