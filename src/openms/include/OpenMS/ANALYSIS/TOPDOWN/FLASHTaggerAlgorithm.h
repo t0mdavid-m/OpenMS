@@ -83,6 +83,8 @@ namespace OpenMS
     int getProteinIndex(const ProteinHit& hit) const;
     int getTagIndex(const FLASHDeconvHelperStructs::Tag& tag) const;
     std::vector<int> getMatchedPositions(const ProteinHit& hit, const FLASHDeconvHelperStructs::Tag& tag) const;
+    std::vector<double> getDeltaMasses(const ProteinHit& hit, const FLASHDeconvHelperStructs::Tag& tag) const;
+
   protected:
     void updateMembers_() override;
     /// implemented for DefaultParamHandler

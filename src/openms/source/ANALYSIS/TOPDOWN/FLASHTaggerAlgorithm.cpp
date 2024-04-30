@@ -644,7 +644,7 @@ void FLASHTaggerAlgorithm::runMatching(const String& fasta_file)
           {
             auto nterm = fe.sequence.substr(0, pos);
             if (x_pos != String::npos) { nterm.erase(remove(nterm.begin(), nterm.end(), 'X'), nterm.end()); }
-            double aamass = nterm.empty() ? 0 : AASequence::fromString(nterm).getMonoWeight();
+            double aamass = nterm.empty() ? 0 : AASequence::fromString(nterm).getMonoWeight(Residue::Internal);
             if (std::abs(tag.getNtermMass() - aamass) > flanking_mass_tol_) continue;
           }
 
@@ -652,8 +652,7 @@ void FLASHTaggerAlgorithm::runMatching(const String& fasta_file)
           {
             auto cterm = fe.sequence.substr(pos + tag.getSequence().length());
             if (x_pos != String::npos) cterm.erase(remove(cterm.begin(), cterm.end(), 'X'), cterm.end());
-
-            double aamass = cterm.empty() ? 0 : AASequence::fromString(cterm).getMonoWeight();
+            double aamass = cterm.empty() ? 0 : AASequence::fromString(cterm).getMonoWeight(Residue::Internal);
             if (std::abs(tag.getCtermMass() - aamass) > flanking_mass_tol_) continue;
           }
 
@@ -800,6 +799,35 @@ std::vector<int> FLASHTaggerAlgorithm::getMatchedPositions(const ProteinHit& hit
     indices.push_back((int)pos);
   }
   return indices;
+}
+
+std::vector<double> FLASHTaggerAlgorithm::getDeltaMasses(const ProteinHit& hit, const FLASHDeconvHelperStructs::Tag& tag) const
+{
+  Size pos = 0;
+  std::vector<double> dmasses;
+  auto seq = hit.getSequence();
+  auto tagseq = tag.getSequence().toUpper();
+  while (true)
+  {
+    pos = find_with_X_(seq, tagseq, pos + 1);
+    if (pos == String::npos) break;
+    auto x_pos = seq.find('X');
+    double delta_mass;
+    if (tag.getNtermMass() > 0)
+    {
+      auto nterm = seq.substr(0, pos);
+      if (x_pos != String::npos) { nterm.erase(remove(nterm.begin(), nterm.end(), 'X'), nterm.end()); }
+      delta_mass = tag.getNtermMass() - (nterm.empty() ? 0 : AASequence::fromString(nterm).getMonoWeight(Residue::Internal));
+    }
+    else
+    {
+      auto cterm = seq.substr(pos + tag.getSequence().length());
+      if (x_pos != String::npos) cterm.erase(remove(cterm.begin(), cterm.end(), 'X'), cterm.end());
+      delta_mass = tag.getCtermMass() - (cterm.empty() ? 0 : AASequence::fromString(cterm).getMonoWeight(Residue::Internal));
+    }
+    dmasses.push_back(delta_mass);
+  }
+  return dmasses;
 }
 
 std::vector<FLASHDeconvHelperStructs::Tag> FLASHTaggerAlgorithm::getTags(const ProteinHit& hit) const

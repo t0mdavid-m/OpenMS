@@ -18,7 +18,7 @@ namespace OpenMS
   **/
   void FLASHTaggerFile::writeTagHeader(std::fstream& fs)
   {
-    fs << "TagIndex\tProteinIndex\tProteinAccession\tProteinDescription\tTagSequence\tNmass\tCmass\tStartPos\tLength\tDeNovoScore\tMasses\tMassScores\t"
+    fs << "TagIndex\tProteinIndex\tProteinAccession\tProteinDescription\tTagSequence\tNmass\tCmass\tStartPos\tDeltaMass\tLength\tDeNovoScore\tMasses\tMassScores\t"
           "Scans\n";
   }
 
@@ -45,22 +45,28 @@ namespace OpenMS
         String description = "";
         String hitindices = "";
         String positions = "";
+        String delta_masses = "";
         for (const auto& hit : hits)
         {
           if (! acc.empty()) acc += ";";
           if (! description.empty()) description += ";";
           if (! hitindices.empty()) hitindices += ";";
           if (! positions.empty()) positions += ";";
+          if (! delta_masses.empty()) delta_masses += ";";
+
           acc += hit.getAccession();
           description += hit.getDescription();
           hitindices += std::to_string(tagger.getProteinIndex(hit));
 
           auto seqposition = tagger.getMatchedPositions(hit, tag);
           if (seqposition.size() != 0) { positions += std::to_string(seqposition[0]); }
+
+          auto delta_mass = tagger.getDeltaMasses(hit, tag);
+          if (delta_mass.size() != 0) { delta_masses += std::to_string(delta_mass[0]); }
         }
 
         fs << tagger.getTagIndex(tag) << "\t" << hitindices << "\t" << acc << "\t" << description << "\t" << tag.getSequence() << "\t"
-           << std::to_string(tag.getNtermMass()) << "\t" << std::to_string(tag.getCtermMass()) << "\t" << positions << "\t" << tag.getLength()
+           << std::to_string(tag.getNtermMass()) << "\t" << std::to_string(tag.getCtermMass()) << "\t" << positions << "\t" << delta_masses << "\t" << tag.getLength()
            << "\t" << tag.getScore() << "\t";
 
         for (const auto& mz : tag.getMzs())
