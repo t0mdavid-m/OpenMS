@@ -18,7 +18,7 @@ namespace OpenMS
   /// harmonic charge factors that will be considered for harmonic mass reduction.
   inline const std::vector<int> harmonic_charges_ {2, 3, 5, 7, 11};
   /// this is additional mass tolerance in Da to get more high signal-to-ratio peaks in this candidate peakgroup finding
-  inline const double max_mass_dalton_tolerance = .16;
+  inline const double max_mass_dalton_tolerance_ = .16;
   /// high and low charges are differently deconvolved. This value determines the (inclusive) threshold for low charge.
   inline const int low_charge_ = 10; // 10 inclusive
   inline const double tol_div_factor = 2.5;                           // use narrow tolerance for deconvolution and at the end use the input tolerance to filter out overlapping masses.
@@ -32,11 +32,11 @@ namespace OpenMS
     defaults_.setValue("max_mass", 100000.0, "Maximum mass (Da)");
 
     defaults_.setValue("min_charge", 1, "Minimum charge state for MS1 spectra (can be negative for negative mode)");
-    defaults_.setValue("max_charge", 100, "Maximum charge state for MS1 spectra (can be negative for negative mode)");
+    defaults_.setValue("max_charge", 100, "Maximum charge state for spectra (can be negative for negative mode)");
 
     defaults_.setValue("precursor_charge", 0,
-                       "Charge state of the target precursor. All precursor charge is fixed to this value. "
-                       "This parameter is useful for targeted studies where MS2 spectra are generated from a fixed precursor (e.g., Native-MS). ");
+                       "Charge state of the target precursor. All precursor charge for MSn is fixed to this value. "
+                       "For MSn, the maximum mass and charge values are upper bounded by this parameter.");
     defaults_.setMinInt("precursor_charge", 0);
     // defaults_.addTag("precursor_charge", "advanced");
 
@@ -155,7 +155,7 @@ namespace OpenMS
           Precursor precursor(deconvolved_spectrum_.getPrecursor());
           int abs_charge = (int)round(precursor_peak_group.getMonoMass() / precursor.getMZ());
           precursor.setCharge(precursor_peak_group.isPositive() ? abs_charge : -abs_charge);
-          deconvolved_spectrum_.setPrecursor(precursor);
+           deconvolved_spectrum_.setPrecursor(precursor);
         }
       }
     }
@@ -720,7 +720,7 @@ namespace OpenMS
         // now we have a matching peak for this mass of charge  abs_charge. From here, isotope peaks are collected
         const double mz = log_mz_peaks_[max_peak_index].mz;                                   // charged mz
         const double iso_delta = iso_da_distance_ / (double)abs_charge;
-        double mz_delta = std::min(max_mass_dalton_tolerance / (double)abs_charge, tol * mz); //
+        double mz_delta = std::min(max_mass_dalton_tolerance_ / (double)abs_charge, tol * mz); //
 
         double max_mz = mz;
 

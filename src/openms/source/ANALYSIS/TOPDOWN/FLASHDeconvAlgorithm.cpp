@@ -434,7 +434,7 @@ namespace OpenMS
             precursor_log_mz_peak.mass = smap[0];
             precursor_log_mz_peak.intensity = smap[6];
 
-            PeakGroup precursor_pg;
+            PeakGroup precursor_pg(precursor_log_mz_peak.abs_charge, precursor_log_mz_peak.abs_charge, true);
             precursor_pg.push_back(precursor_log_mz_peak);
             precursor_pg.setAbsChargeRange(std::abs((int)smap[7]), std::abs((int)smap[8]));
             precursor_pg.setChargeIsotopeCosine(precursor_log_mz_peak.abs_charge, smap[9]);
