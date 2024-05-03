@@ -5,8 +5,8 @@
 // $Maintainer: Kyowon Jeong, Jihyung Kim $
 // $Authors: Kyowon Jeong, Jihyung Kim $
 // --------------------------------------------------------------------------
-// #define TRAIN_OUT
-//#define USE_TAGGER
+//#define TRAIN_OUT
+#define USE_TAGGER
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvAlgorithm.h>
 #ifdef USE_TAGGER
@@ -378,8 +378,6 @@ protected:
     auto tagger_param = getParam_().copy("tagger:", true);
     if ((int)tagger_param.getValue("max_tag_count") > 0 && !deconvolved_spectra.empty() && tols.size() > 1)
     {
-      OPENMS_LOG_INFO << "Finding sequence tags from deconvolved MS2 spectra ..." << endl;
-
       String fastaname = tagger_param.getValue("fasta").toString();
       String out_tag = tagger_param.getValue("out_tag").toString();
       String out_protein_tag = tagger_param.getValue("out_protein").toString();

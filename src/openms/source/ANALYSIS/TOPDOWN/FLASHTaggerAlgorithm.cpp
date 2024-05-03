@@ -227,12 +227,12 @@ void FLASHTaggerAlgorithm::constructDAC_(FLASHTaggerAlgorithm::DAC_& dac,
   }
 }
 
-FLASHTaggerAlgorithm::FLASHTaggerAlgorithm(): DefaultParamHandler("FLASHTaggerAlgorithm")
+FLASHTaggerAlgorithm::FLASHTaggerAlgorithm(): DefaultParamHandler("FLASHTaggerAlgorithm"), ProgressLogger()
 {
   setDefaultParams_();
 }
 
-FLASHTaggerAlgorithm::FLASHTaggerAlgorithm(const FLASHTaggerAlgorithm& other): DefaultParamHandler(other)
+FLASHTaggerAlgorithm::FLASHTaggerAlgorithm(const FLASHTaggerAlgorithm& other): DefaultParamHandler(other), ProgressLogger()
 {
 }
 
@@ -297,24 +297,25 @@ void FLASHTaggerAlgorithm::updateMembers_()
 
 void FLASHTaggerAlgorithm::run(const std::vector<DeconvolvedSpectrum>& deconvolved_spectra, double ppm)
 {
-  DeconvolvedSpectrum dspec_for_tagging;
-  for (const auto& dspec : deconvolved_spectra)
+  setLogType(CMD);
+  startProgress(0, (SignedSize)deconvolved_spectra.size(), "running FLASHTagger");
+  tags_.reserve(deconvolved_spectra.size() * max_tag_count_);
+#pragma omp parallel for default(none) shared(deconvolved_spectra, ppm)
+  for (int i = 0; i < deconvolved_spectra.size(); i++)
   {
-    if (dspec.isDecoy() || dspec.getOriginalSpectrum().getMSLevel() == 1) continue;
-    for (const auto& pg : dspec)
+    const auto& dspec = deconvolved_spectra[i];
+    nextProgress();
+    if (dspec.empty() || dspec.isDecoy() || dspec.getOriginalSpectrum().getMSLevel() == 1) continue;
+#pragma omp critical
+    for (const auto& tag : run_(dspec, ppm))
     {
-      dspec_for_tagging.push_back(pg);
+      tags_.push_back(tag);
     }
   }
-  if (deconvolved_spectra.size() > 1)
-  {
-    dspec_for_tagging.sort();
-    SpectralDeconvolution::removeOverlappingPeakGroups(dspec_for_tagging, ppm * 1e-6); // merged peak groups have scan number information!
-  }
-  run(dspec_for_tagging, ppm);
+  endProgress();
 }
 
-void FLASHTaggerAlgorithm::run(const DeconvolvedSpectrum& dspec, double ppm)
+const std::vector<FLASHDeconvHelperStructs::Tag> FLASHTaggerAlgorithm::run_(const DeconvolvedSpectrum& dspec, double ppm)
 {
   std::vector<double> mzs;
   std::vector<int> scores;
@@ -341,7 +342,7 @@ void FLASHTaggerAlgorithm::run(const DeconvolvedSpectrum& dspec, double ppm)
     scores.push_back(score); //
     scans.push_back(pg.getScanNumber());
   }
-  run(mzs, scores, scans, ppm);
+  return run_(mzs, scores, scans, ppm);
 }
 
 void FLASHTaggerAlgorithm::updateTagSet_(std::set<FLASHDeconvHelperStructs::Tag>& tag_set,
@@ -444,12 +445,14 @@ void FLASHTaggerAlgorithm::updateTagSet_(std::set<FLASHDeconvHelperStructs::Tag>
   }
 }
 
-void FLASHTaggerAlgorithm::run(const std::vector<double>& mzs, const std::vector<int>& scores, const std::vector<int>& scans, double ppm)
+const std::vector<FLASHDeconvHelperStructs::Tag> FLASHTaggerAlgorithm::run_(const std::vector<double>& mzs, const std::vector<int>& scores, const std::vector<int>& scans, double ppm)
 {
-  if (max_tag_count_ == 0) return;
+  auto tags = std::vector<FLASHDeconvHelperStructs::Tag>();
+  if (max_tag_count_ == 0) return tags;
 
   std::vector<double> _mzs;
   std::vector<int> _scores, _scans;
+  tags.reserve(max_tag_count_);
   int threshold;
 
   if (mzs.size() >= max_node_cntr)
@@ -523,14 +526,16 @@ void FLASHTaggerAlgorithm::run(const std::vector<double>& mzs, const std::vector
     for (const auto& tag : tagSet)
     {
       if ((int)tag.getLength() != length) continue;
-      tags_.push_back(tag);
+      tags.push_back(tag);
       if (++count == max_tag_count_) break;
     }
-    OPENMS_LOG_INFO << "Tag count with length " << length << ": " << count << std::endl;
+    //OPENMS_LOG_INFO << "Tag count with length " << length << ": " << count << std::endl;
   }
 
-  std::sort(tags_.begin(), tags_.end(),
+  std::sort(tags.begin(), tags.end(),
             [](const FLASHDeconvHelperStructs::Tag& a, const FLASHDeconvHelperStructs::Tag& b) { return a.getScore() > b.getScore(); });
+
+  return tags;
 }
 
 Size FLASHTaggerAlgorithm::find_with_X_(const std::string_view& A, const String& B, Size pos) // allow a single X. pos is in A
