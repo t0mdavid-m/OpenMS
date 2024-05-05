@@ -585,7 +585,7 @@ FLASHIda::FLASHIda(char* arg)
   }
 
   double FLASHIda::getRepresentativeMass()
-  {
+  {/*
     const int max_count = 10;
     double threshold = 0;
     double mass = 0;
@@ -611,6 +611,19 @@ FLASHIda::FLASHIda(char* arg)
     }
     if (intensity_sum <= 0) return 0;
     return mass / intensity_sum;
+    */
+    auto filter_str = deconvolved_spectrum_.getOriginalSpectrum().getMetaValue("filter string").toString();
+    Size pos = filter_str.find("cv=");
+    double cv;
+
+    if (pos != String::npos) // get the preferred mass ranges accding to CV values.
+    {
+      Size end = filter_str.find(" ", pos);
+      if (end == String::npos) end = filter_str.length() - 1;
+      cv = std::stod(filter_str.substr(pos + 3, end - pos));
+      return cv;
+    }
+    return -100;
   }
 
   void FLASHIda::getIsolationWindows(double* wstart,

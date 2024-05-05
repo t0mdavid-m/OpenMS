@@ -298,7 +298,7 @@ void FLASHTaggerAlgorithm::updateMembers_()
 void FLASHTaggerAlgorithm::run(const std::vector<DeconvolvedSpectrum>& deconvolved_spectra, double ppm)
 {
   setLogType(CMD);
-  startProgress(0, (SignedSize)deconvolved_spectra.size(), "running FLASHTagger");
+  startProgress(0, (SignedSize)deconvolved_spectra.size(), "running FLASHTagger: finding tags");
   tags_.reserve(deconvolved_spectra.size() * max_tag_count_);
 #pragma omp parallel for default(none) shared(deconvolved_spectra, ppm)
   for (int i = 0; i < deconvolved_spectra.size(); i++)
@@ -569,7 +569,6 @@ void FLASHTaggerAlgorithm::runMatching(const String& fasta_file)
   std::vector<std::pair<ProteinHit, std::vector<int>>> pairs;
   std::vector<int> start_loc(tags_.size(), 0);
   std::vector<int> end_loc(tags_.size(), 0);
-
   // for each tag, find the possible start and end locations in the protein sequence. If C term, they are negative values to specify values are from
   // the end of the protein
 #pragma omp parallel for default(none) shared(end_loc, start_loc)
@@ -584,6 +583,9 @@ void FLASHTaggerAlgorithm::runMatching(const String& fasta_file)
 
   int min_hit_tag_score = max_path_score_;
   double decoy_mul = .0;
+
+  setLogType(CMD);
+  startProgress(0, (SignedSize)fasta_entry.size(), "running FLASHTagger: database searching");
 
   for (int n = 0; n < 2; n++)
   {
@@ -601,6 +603,8 @@ void FLASHTaggerAlgorithm::runMatching(const String& fasta_file)
         continue;
       }
       if (! is_decoy && n != 0) continue;
+
+      nextProgress();
 
       std::vector<int> matched_tag_indices;
       auto x_pos = fe.sequence.find('X');
@@ -647,19 +651,19 @@ void FLASHTaggerAlgorithm::runMatching(const String& fasta_file)
         {
           if (tag.getNtermMass() > 0 && pos >= 0)
           {
-            auto nterm = fe.sequence.substr(0, pos);
+            auto nterm = fe.sequence.substr(0, std::min(pos, (int)fe.sequence.length()));
             if (x_pos != String::npos) { nterm.erase(remove(nterm.begin(), nterm.end(), 'X'), nterm.end()); }
             double aamass = nterm.empty() ? 0 : AASequence::fromString(nterm).getMonoWeight(Residue::Internal);
             if (std::abs(tag.getNtermMass() - aamass) > flanking_mass_tol_) continue;
           }
-
-          if (tag.getCtermMass() > 0 && pos + tag.getSequence().length() < fe.sequence.length())
+          else if (tag.getCtermMass() > 0 && pos + tag.getSequence().length() < fe.sequence.length())
           {
             auto cterm = fe.sequence.substr(pos + tag.getSequence().length());
             if (x_pos != String::npos) cterm.erase(remove(cterm.begin(), cterm.end(), 'X'), cterm.end());
             double aamass = cterm.empty() ? 0 : AASequence::fromString(cterm).getMonoWeight(Residue::Internal);
             if (std::abs(tag.getCtermMass() - aamass) > flanking_mass_tol_) continue;
           }
+          else continue;
 
           for (int off = 0; off < (int)tag.getLength(); off++)
           {
@@ -704,6 +708,8 @@ void FLASHTaggerAlgorithm::runMatching(const String& fasta_file)
       }
     }
   }
+
+  endProgress();
   if (pairs.empty()) return;
 
   protein_hits_.reserve(pairs.size());
