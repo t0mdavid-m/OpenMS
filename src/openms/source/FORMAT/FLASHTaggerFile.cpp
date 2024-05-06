@@ -56,7 +56,7 @@ namespace OpenMS
 
           acc += hit.getAccession();
           description += hit.getDescription();
-          hitindices += std::to_string(tagger.getProteinIndex(hit));
+          hitindices += std::to_string(tagger.getProteinIndex(hit, tag.getScan()));
 
           auto seqposition = tagger.getMatchedPositions(hit, tag);
           if (seqposition.size() != 0) { positions += std::to_string(seqposition[0]); }
@@ -79,10 +79,7 @@ namespace OpenMS
           fs << std::to_string(tag.getScore(i)) << ",";
         }
         fs << "\t";
-        for (auto i = 0; i < tag.getLength(); i++)
-        {
-          fs << std::to_string(tag.getScan(i)) << ",";
-        }
+        fs << std::to_string(tag.getScan());
         fs << "\n";
       }
 
@@ -92,20 +89,23 @@ namespace OpenMS
 
   void FLASHTaggerFile::writeProteins(const FLASHTaggerAlgorithm& tagger, std::fstream& fs)
   {
-    for (const auto& hit : tagger.getProteinHits())
+    for (const int scan : tagger.getScans())
     {
-      String tagindices = "";
-      int cntr = 0;
-      for (const auto& tag : tagger.getTags(hit))
+      for (const auto& hit : tagger.getProteinHits(scan))
       {
-        if (! tagindices.empty()) tagindices += ";";
-        tagindices += std::to_string(tagger.getTagIndex(tag));
-        cntr++;
-      }
+        String tagindices = "";
+        int cntr = 0;
+        for (const auto& tag : tagger.getTags(hit, scan))
+        {
+          if (! tagindices.empty()) tagindices += ";";
+          tagindices += std::to_string(tagger.getTagIndex(tag));
+          cntr++;
+        }
 
-      fs << tagger.getProteinIndex(hit) << "\t" << hit.getAccession() << "\t" << hit.getDescription() << "\t" << hit.getSequence() << "\t"
-         << hit.getMetaValue("MatchedAA") << "\t" << 100.0 * hit.getCoverage() << "\t" << hit.getScore() << "\t"
-         << std::to_string((double)hit.getMetaValue("qvalue")) << "\t" << cntr << "\t" << tagindices << "\n";
+        fs << tagger.getProteinIndex(hit, scan) << "\t" << hit.getAccession() << "\t" << hit.getDescription() << "\t" << hit.getSequence() << "\t"
+           << hit.getMetaValue("MatchedAA") << "\t" << 100.0 * hit.getCoverage() << "\t" << hit.getScore() << "\t"
+           << std::to_string((double)hit.getMetaValue("qvalue")) << "\t" << cntr << "\t" << tagindices << "\n";
+      }
     }
   }
 } // namespace OpenMS

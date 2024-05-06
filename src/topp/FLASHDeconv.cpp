@@ -6,7 +6,7 @@
 // $Authors: Kyowon Jeong, Jihyung Kim $
 // --------------------------------------------------------------------------
 //#define TRAIN_OUT
-//#define USE_TAGGER
+#define USE_TAGGER
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvAlgorithm.h>
 #ifdef USE_TAGGER
@@ -387,8 +387,11 @@ protected:
       tagger_param.remove("fasta");
       tagger.setParameters(tagger_param);
 
-      tagger.run(deconvolved_spectra, tols[1]);
-      tagger.runMatching(fastaname);
+      FASTAFile fasta_file;
+      std::vector<FASTAFile::FASTAEntry> fasta_entry;
+      fasta_file.load(fastaname, fasta_entry);
+
+      tagger.run(deconvolved_spectra, tols[1], fasta_entry);
 
       if (!out_protein_tag.empty())
       {

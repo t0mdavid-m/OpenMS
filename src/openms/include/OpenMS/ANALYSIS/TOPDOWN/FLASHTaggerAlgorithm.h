@@ -45,24 +45,26 @@ namespace OpenMS
 
     /// Find sequence tags from @p mzs and @p intensities then store them in @p tags.
     /**
-      @brief merges all deconvolved spectra to one spectrum.
+      @brief
       Decoy or MS level 1 spectra are removed by this process.
       Overlapping PeakGroups in merged spectra are also removed.
       This function triggers the void run(const DeconvolvedSpectrum& dspec, double ppm) function using 
       merged spectrum and ppm
 
       @param deconvolved_spectra spectra deconvolved by FLASHDeconv.
-      @param ppm The acceptable ppm tolerance for mass.
+      @param ppm The acceptable ppm tolerance for mass
+      @param fasta_entry fasta entry to searched against
       
     */
-    void run(const std::vector<DeconvolvedSpectrum>& deconvolved_spectra, double ppm);
-    void runMatching(const String& fasta_file);
+    void run(const std::vector<DeconvolvedSpectrum>& deconvolved_spectra, double ppm, const std::vector<FASTAFile::FASTAEntry>& fasta_entry);
 
-    const std::vector<ProteinHit>& getProteinHits() const;
+    const std::vector<int>& getScans() const;
+    const std::vector<ProteinHit>& getProteinHits(int scan) const;
     const std::vector<ProteinHit> getProteinHits(const FLASHDeconvHelperStructs::Tag& tag) const;
-    std::vector<FLASHDeconvHelperStructs::Tag> getTags(const ProteinHit& hit) const;
+    std::vector<FLASHDeconvHelperStructs::Tag> getTags(const ProteinHit& hit, int scan) const;
+    const std::vector<FLASHDeconvHelperStructs::Tag>& getTags(int scan) const;
     const std::vector<FLASHDeconvHelperStructs::Tag>& getTags() const;
-    int getProteinIndex(const ProteinHit& hit) const;
+    int getProteinIndex(const ProteinHit& hit, int scan) const;
     int getTagIndex(const FLASHDeconvHelperStructs::Tag& tag) const;
     std::vector<int> getMatchedPositions(const ProteinHit& hit, const FLASHDeconvHelperStructs::Tag& tag) const;
     std::vector<double> getDeltaMasses(const ProteinHit& hit, const FLASHDeconvHelperStructs::Tag& tag) const;
@@ -91,14 +93,14 @@ namespace OpenMS
       @param ppm The acceptable ppm tolerance for mass.
         @return found tags
     */
-    const std::vector<FLASHDeconvHelperStructs::Tag> run_(const std::vector<double>& mzs, const std::vector<int>& scores, const std::vector<int>& scan_numbers, double ppm);
+    const std::vector<FLASHDeconvHelperStructs::Tag> run_(const std::vector<double>& mzs, const std::vector<int>& scores, int scan, double ppm);
     void constructDAC_(FLASHTaggerAlgorithm::DAC_& dac, const std::vector<double>& mzs, const std::vector<int>& scores, int length, double tol);
     std::vector<Residue> getAA_(double l, double r, double tol, int iso_offset = 0) const;
     void updateEdgeMasses_();
     int getVertex_(int index, int path_score, int level, int iso_level) const;
     int getIndex_(int vertex) const;
 
-    void updateTagSet_(std::set<FLASHDeconvHelperStructs::Tag>& tag_set, std::map<String, std::vector<FLASHDeconvHelperStructs::Tag>>& seq_tag, const std::vector<int>& path, const std::vector<double>& mzs, const std::vector<int>& scores, const std::vector<int>& scans, double ppm);
+    void updateTagSet_(std::set<FLASHDeconvHelperStructs::Tag>& tag_set, std::map<String, std::vector<FLASHDeconvHelperStructs::Tag>>& seq_tag, const std::vector<int>& path, const std::vector<double>& mzs, const std::vector<int>& scores, int scan, double ppm);
 
     bool connectEdge_(FLASHTaggerAlgorithm::DAC_& dac, int vertex1, int vertex2, boost::dynamic_bitset<>& visited);
 
@@ -108,10 +110,11 @@ namespace OpenMS
     std::map<double, std::vector<Residue>> aa_mass_map_;
     std::map<int, std::map<int, std::vector<String>>> edge_aa_map_;
 
-    std::vector<FLASHDeconvHelperStructs::Tag> tags_;
-    std::vector<ProteinHit> protein_hits_;
-    std::vector<std::vector<int>> matching_tags_indices_; // from protein hit to tag index
-    std::vector<std::vector<int>> matching_hits_indices_; // from tag to protein hit index
+    std::map<int, std::vector<FLASHDeconvHelperStructs::Tag>> tags_; // from scan to tags
+    std::map<int, std::vector<ProteinHit>> protein_hits_; // from scan to hits
+    std::map<int, std::vector<std::vector<int>>> matching_tags_indices_; // from scan to vector of tag indices - vector index = hit index
+    std::map<int, std::vector<std::vector<int>>> matching_hits_indices_; // from scan to vector of hit indices - vector index = tag index
+    void runMatching_(int scan, const std::vector<FASTAFile::FASTAEntry>& fasta_entry);
 
     int max_tag_count_ = 0;
     int min_tag_length_ = 0;

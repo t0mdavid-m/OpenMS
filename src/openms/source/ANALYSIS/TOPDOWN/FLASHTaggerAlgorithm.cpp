@@ -295,22 +295,25 @@ void FLASHTaggerAlgorithm::updateMembers_()
   max_edge_mass_ = aa_mass_map_.rbegin()->first + max_iso_in_tag_ * Constants::C13C12_MASSDIFF_U;
 }
 
-void FLASHTaggerAlgorithm::run(const std::vector<DeconvolvedSpectrum>& deconvolved_spectra, double ppm)
+void FLASHTaggerAlgorithm::run(const std::vector<DeconvolvedSpectrum>& deconvolved_spectra, double ppm, const std::vector<FASTAFile::FASTAEntry>& fasta_entry)
 {
   setLogType(CMD);
   startProgress(0, (SignedSize)deconvolved_spectra.size(), "running FLASHTagger: finding tags");
-  tags_.reserve(deconvolved_spectra.size() * max_tag_count_);
-#pragma omp parallel for default(none) shared(deconvolved_spectra, ppm)
+
+#pragma omp parallel for default(none) shared(deconvolved_spectra, ppm, fasta_entry)
   for (int i = 0; i < deconvolved_spectra.size(); i++)
   {
     const auto& dspec = deconvolved_spectra[i];
     nextProgress();
     if (dspec.empty() || dspec.isDecoy() || dspec.getOriginalSpectrum().getMSLevel() == 1) continue;
+    tags_[dspec.getScanNumber()] = std::vector<FLASHDeconvHelperStructs::Tag>();
+    tags_[dspec.getScanNumber()].reserve(deconvolved_spectra.size() * max_tag_count_);
 #pragma omp critical
     for (const auto& tag : run_(dspec, ppm))
     {
-      tags_.push_back(tag);
+      tags_[dspec.getScanNumber()].push_back(tag);
     }
+    runMatching_(dspec.getScanNumber(), fasta_entry);
   }
   endProgress();
 }
@@ -319,7 +322,6 @@ const std::vector<FLASHDeconvHelperStructs::Tag> FLASHTaggerAlgorithm::run_(cons
 {
   std::vector<double> mzs;
   std::vector<int> scores;
-  std::vector<int> scans;
   mzs.reserve(dspec.size());
   scores.reserve(dspec.size());
   std::vector<double> qscores;
@@ -338,11 +340,9 @@ const std::vector<FLASHDeconvHelperStructs::Tag> FLASHTaggerAlgorithm::run_(cons
   {
     mzs.push_back(pg.getMonoMass());
     int score = (int)round(10 * log10(std::max(1e-6, pg.getQscore2D() / std::max(1e-6, (1.0 - random_hit_prob)))));
-
-    scores.push_back(score); //
-    scans.push_back(pg.getScanNumber());
+    scores.push_back(score);
   }
-  return run_(mzs, scores, scans, ppm);
+  return run_(mzs, scores, dspec.getScanNumber(), ppm);
 }
 
 void FLASHTaggerAlgorithm::updateTagSet_(std::set<FLASHDeconvHelperStructs::Tag>& tag_set,
@@ -350,7 +350,7 @@ void FLASHTaggerAlgorithm::updateTagSet_(std::set<FLASHDeconvHelperStructs::Tag>
                                          const std::vector<int>& path,
                                          const std::vector<double>& mzs,
                                          const std::vector<int>& scores,
-                                         const std::vector<int>& scans,
+                                         int scan,
                                          double ppm)
 {
   double flanking_mass = -1;
@@ -358,10 +358,8 @@ void FLASHTaggerAlgorithm::updateTagSet_(std::set<FLASHDeconvHelperStructs::Tag>
   std::vector<String> seqs {""};
   std::vector<double> tag_mzs;
   std::vector<int> tag_scores;
-  std::vector<int> tag_scans;
   tag_mzs.reserve(path.size() - 1);
   tag_scores.reserve(path.size() - 1);
-  tag_scans.reserve(path.size() - 1);
 
   for (int j = 1; j < (int)path.size(); j++)
   {
@@ -382,13 +380,11 @@ void FLASHTaggerAlgorithm::updateTagSet_(std::set<FLASHDeconvHelperStructs::Tag>
       seqs = tmp_seqs;
       tag_mzs.push_back(mzs[i1]);
       tag_scores.push_back(scores[i1]);
-      tag_scans.push_back(scans[i1]);
     }
     else if (i2 == 0) // nterm
     {
       tag_mzs.push_back(mzs[i1]);
       tag_scores.push_back(scores[i1]);
-      tag_scans.push_back(scans[i1]);
       flanking_mass = mzs[i1];
     }
   }
@@ -398,9 +394,6 @@ void FLASHTaggerAlgorithm::updateTagSet_(std::set<FLASHDeconvHelperStructs::Tag>
 
   std::vector<int> rev_tag_scores(tag_scores);
   std::reverse(rev_tag_scores.begin(), rev_tag_scores.end());
-
-  std::vector<int> rev_tag_scans(tag_scans);
-  std::reverse(rev_tag_scans.begin(), rev_tag_scans.end());
 
   for (const auto& seq : seqs)
   {
@@ -418,7 +411,7 @@ void FLASHTaggerAlgorithm::updateTagSet_(std::set<FLASHDeconvHelperStructs::Tag>
     }
     if (pass)
     {
-      auto direct_tag = FLASHDeconvHelperStructs::Tag(seq, flanking_mass, -1, tag_mzs, tag_scores, tag_scans);
+      auto direct_tag = FLASHDeconvHelperStructs::Tag(seq, flanking_mass, -1, tag_mzs, tag_scores, scan);
       tag_set.insert(direct_tag);
       seq_tag[seq].push_back(direct_tag);
     }
@@ -438,20 +431,20 @@ void FLASHTaggerAlgorithm::updateTagSet_(std::set<FLASHDeconvHelperStructs::Tag>
     }
     if (pass)
     {
-      auto reverse_tag = FLASHDeconvHelperStructs::Tag(rev_seq, -1, flanking_mass, rev_tag_mzs, rev_tag_scores, rev_tag_scans);
+      auto reverse_tag = FLASHDeconvHelperStructs::Tag(rev_seq, -1, flanking_mass, rev_tag_mzs, rev_tag_scores, scan);
       tag_set.insert(reverse_tag);
       seq_tag[rev_seq].push_back(reverse_tag);
     }
   }
 }
 
-const std::vector<FLASHDeconvHelperStructs::Tag> FLASHTaggerAlgorithm::run_(const std::vector<double>& mzs, const std::vector<int>& scores, const std::vector<int>& scans, double ppm)
+const std::vector<FLASHDeconvHelperStructs::Tag> FLASHTaggerAlgorithm::run_(const std::vector<double>& mzs, const std::vector<int>& scores, int scan, double ppm)
 {
   auto tags = std::vector<FLASHDeconvHelperStructs::Tag>();
   if (max_tag_count_ == 0) return tags;
 
   std::vector<double> _mzs;
-  std::vector<int> _scores, _scans;
+  std::vector<int> _scores;
   tags.reserve(max_tag_count_);
   int threshold;
 
@@ -464,25 +457,21 @@ const std::vector<FLASHDeconvHelperStructs::Tag> FLASHTaggerAlgorithm::run_(cons
 
     _mzs.reserve(max_node_cntr + 1);
     _scores.reserve(max_node_cntr + 1);
-    _scans.reserve(max_node_cntr + 1);
   }
   else
   {
     _mzs.reserve(mzs.size() + 1);
     _scores.reserve(mzs.size() + 1);
-    _scans.reserve(mzs.size() + 1);
     threshold = *std::min_element(scores.begin(), scores.end());
   }
 
   _mzs.push_back(.0);
   _scores.push_back(0);
-  _scans.push_back(0);
   for (int i = 0; i < (int)mzs.size(); i++)
   {
     if (scores[i] < threshold) continue;
     _mzs.push_back(mzs[i]);
     _scores.push_back(scores[i]);
-    _scans.push_back(scans[i]);
   }
   // filtration of top 500 masses is done
 
@@ -514,7 +503,7 @@ const std::vector<FLASHDeconvHelperStructs::Tag> FLASHTaggerAlgorithm::run_(cons
       }
       for (const auto& path : all_paths)
       {
-        updateTagSet_(_tagSet, seq_tag, path, _mzs, _scores, _scans, ppm);
+        updateTagSet_(_tagSet, seq_tag, path, _mzs, _scores, scan, ppm);
       }
     }
     tagSet.insert(_tagSet.begin(), _tagSet.end());
@@ -559,22 +548,20 @@ Size FLASHTaggerAlgorithm::find_with_X_(const std::string_view& A, const String&
 }
 
 // Make output struct containing all information about matched entries and tags, coverage, score etc.
-void FLASHTaggerAlgorithm::runMatching(const String& fasta_file)
+void FLASHTaggerAlgorithm::runMatching_(int scan, const std::vector<FASTAFile::FASTAEntry>& fasta_entry)
 {
-  if (tags_.empty()) return;
-  std::vector<FASTAFile::FASTAEntry> fasta_entry;
-  FASTAFile ffile;
-  ffile.load(fasta_file, fasta_entry);
+  if (tags_.find(scan) == tags_.end() || tags_[scan].empty()) return;
+  auto& tags = tags_[scan];
 
   std::vector<std::pair<ProteinHit, std::vector<int>>> pairs;
-  std::vector<int> start_loc(tags_.size(), 0);
-  std::vector<int> end_loc(tags_.size(), 0);
+  std::vector<int> start_loc(tags.size(), 0);
+  std::vector<int> end_loc(tags.size(), 0);
   // for each tag, find the possible start and end locations in the protein sequence. If C term, they are negative values to specify values are from
   // the end of the protein
-#pragma omp parallel for default(none) shared(end_loc, start_loc)
-  for (int i = 0; i < (int)tags_.size(); i++)
+#pragma omp parallel for default(none) shared(tags, end_loc, start_loc)
+  for (int i = 0; i < (int)tags.size(); i++)
   {
-    const auto& tag = tags_[i];
+    const auto& tag = tags[i];
     auto flanking_mass = std::max(tag.getNtermMass(), tag.getCtermMass());
 
     start_loc[i] = std::max(0, int(floor(flanking_mass - flanking_mass_tol_) / aa_mass_map_.rbegin()->first));
@@ -584,12 +571,9 @@ void FLASHTaggerAlgorithm::runMatching(const String& fasta_file)
   int min_hit_tag_score = max_path_score_;
   double decoy_mul = .0;
 
-  setLogType(CMD);
-  startProgress(0, (SignedSize)fasta_entry.size(), "running FLASHTagger: database searching");
-
   for (int n = 0; n < 2; n++)
   {
-#pragma omp parallel for default(none) shared(pairs, fasta_entry, start_loc, end_loc, decoy_mul, min_hit_tag_score, n)
+#pragma omp parallel for default(none) shared(tags, pairs, fasta_entry, start_loc, end_loc, decoy_mul, min_hit_tag_score, n)
     for (int i = 0; i < (int)fasta_entry.size(); i++)
     {
       const auto& fe = fasta_entry[i];
@@ -604,15 +588,13 @@ void FLASHTaggerAlgorithm::runMatching(const String& fasta_file)
       }
       if (! is_decoy && n != 0) continue;
 
-      nextProgress();
-
       std::vector<int> matched_tag_indices;
       auto x_pos = fe.sequence.find('X');
       std::map<Size, int> matched_pos_score;
       // find range, match allowing X.
-      for (int j = 0; j < (int)tags_.size(); j++)
+      for (int j = 0; j < (int)tags.size(); j++)
       {
-        auto& tag = tags_[j];
+        auto& tag = tags[j];
         if (is_decoy && tag.getScore() < min_hit_tag_score) break;
         bool isNterm = tag.getNtermMass() > 0;
 
@@ -709,10 +691,10 @@ void FLASHTaggerAlgorithm::runMatching(const String& fasta_file)
     }
   }
 
-  endProgress();
   if (pairs.empty()) return;
 
-  protein_hits_.reserve(pairs.size());
+  protein_hits_[scan] = std::vector<ProteinHit>();
+  protein_hits_[scan].reserve(pairs.size());
 
   std::sort(pairs.begin(), pairs.end(),
             [](const std::pair<ProteinHit, std::vector<int>>& left, const std::pair<ProteinHit, std::vector<int>>& right) {
@@ -743,41 +725,57 @@ void FLASHTaggerAlgorithm::runMatching(const String& fasta_file)
     iter->first.setMetaValue("qvalue", min_qvalue);
   }
 
-  matching_tags_indices_.reserve(pairs.size());
-  matching_hits_indices_ = std::vector<std::vector<int>>(tags_.size());
+  matching_tags_indices_[scan] = std::vector<std::vector<int>>();
+  matching_hits_indices_[scan] = std::vector<std::vector<int>>();
+
+  matching_tags_indices_[scan].reserve(pairs.size());
+  matching_hits_indices_[scan] = std::vector<std::vector<int>>(tags_[scan].size());
 
   for (const auto& [hit, indices] : pairs)
   {
     if ((double)hit.getMetaValue("qvalue") > fdr_) continue;
     if ((int)hit.getMetaValue("IsDecoy") > 0 && ! keep_decoy_) continue;
 
-    protein_hits_.push_back(hit);
-    matching_tags_indices_.push_back(indices);
+    protein_hits_[scan].push_back(hit);
+    matching_tags_indices_[scan].push_back(indices);
     for (const auto& index : indices)
     {
-      matching_hits_indices_[index].push_back(protein_hits_.size() - 1);
+      matching_hits_indices_[scan][index].push_back(protein_hits_.size() - 1);
     }
   }
 }
 
-int FLASHTaggerAlgorithm::getProteinIndex(const ProteinHit& hit) const
+int FLASHTaggerAlgorithm::getProteinIndex(const ProteinHit& hit, int scan) const
 {
-  auto iter = std::find(protein_hits_.begin(), protein_hits_.end(), hit);
-  if (iter == protein_hits_.end()) return -1;
-  return std::distance(protein_hits_.begin(), iter);
+  if (protein_hits_.find(scan) == protein_hits_.end()) return -1;
+  auto protein_hits = protein_hits_.at(scan);
+  auto iter = std::find(protein_hits.begin(), protein_hits.end(), hit);
+  if (iter == protein_hits.end()) return -1;
+  return std::distance(protein_hits.begin(), iter);
 }
 
 int FLASHTaggerAlgorithm::getTagIndex(const FLASHDeconvHelperStructs::Tag& tag) const
 {
-  auto iter = std::find(tags_.begin(), tags_.end(), tag);
-  if (iter == tags_.end()) return -1;
-  return std::distance(tags_.begin(), iter);
+  auto tags = tags_.at(tag.getScan());
+  auto iter = std::find(tags.begin(), tags.end(), tag);
+  if (iter == tags.end()) return -1;
+  return std::distance(tags.begin(), iter);
 }
 
-
-const std::vector<ProteinHit>& FLASHTaggerAlgorithm::getProteinHits() const
+const std::vector<int>& FLASHTaggerAlgorithm::getScans() const
 {
-  return protein_hits_;
+  std::vector<int> scans;
+  for (const auto& tag : tags_)
+  {
+    scans.push_back(tag.first);
+  }
+  return scans;
+}
+
+const std::vector<ProteinHit>& FLASHTaggerAlgorithm::getProteinHits(int scan) const
+{
+  if (protein_hits_.find(scan) == protein_hits_.end()) return std::vector<ProteinHit>();
+  return protein_hits_.at(scan);
 }
 
 const std::vector<ProteinHit> FLASHTaggerAlgorithm::getProteinHits(const FLASHDeconvHelperStructs::Tag& tag) const
@@ -785,16 +783,28 @@ const std::vector<ProteinHit> FLASHTaggerAlgorithm::getProteinHits(const FLASHDe
   std::vector<ProteinHit> hits;
   int index = getTagIndex(tag);
   if (index < 0) return hits;
-  for (auto i : matching_hits_indices_[index])
+  for (auto i : matching_hits_indices_.at(tag.getScan())[index])
   {
-    hits.push_back(protein_hits_[i]);
+    hits.push_back(protein_hits_.at(tag.getScan())[i]);
   }
   return hits;
 }
 
 const std::vector<FLASHDeconvHelperStructs::Tag>& FLASHTaggerAlgorithm::getTags() const
 {
-  return tags_;
+  std::vector<FLASHDeconvHelperStructs::Tag> all_tags;
+
+  for (const auto& [scan, tags] : tags_)
+  {
+    all_tags.insert(all_tags.end(), tags.begin(), tags.end());
+  }
+  return all_tags;
+}
+
+const std::vector<FLASHDeconvHelperStructs::Tag>& FLASHTaggerAlgorithm::getTags(int scan) const
+{
+  if (tags_.find(scan) == tags_.end()) return std::vector<FLASHDeconvHelperStructs::Tag>();
+  return tags_.at(scan);
 }
 
 std::vector<int> FLASHTaggerAlgorithm::getMatchedPositions(const ProteinHit& hit, const FLASHDeconvHelperStructs::Tag& tag) const
@@ -841,14 +851,14 @@ std::vector<double> FLASHTaggerAlgorithm::getDeltaMasses(const ProteinHit& hit, 
   return dmasses;
 }
 
-std::vector<FLASHDeconvHelperStructs::Tag> FLASHTaggerAlgorithm::getTags(const ProteinHit& hit) const
+std::vector<FLASHDeconvHelperStructs::Tag> FLASHTaggerAlgorithm::getTags(const ProteinHit& hit, int scan) const
 {
   std::vector<FLASHDeconvHelperStructs::Tag> tags;
-  int index = getProteinIndex(hit);
+  int index = getProteinIndex(hit, scan);
   if (index < 0) return tags;
-  for (auto i : matching_tags_indices_[index])
+  for (auto i : matching_tags_indices_.at(scan)[index])
   {
-    tags.push_back(tags_[i]);
+    tags.push_back(tags_.at(scan)[i]);
   }
   return tags;
 }
