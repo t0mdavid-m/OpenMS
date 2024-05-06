@@ -392,7 +392,6 @@ protected:
       fasta_file.load(fastaname, fasta_entry);
 
       tagger.run(deconvolved_spectra, tols[1], fasta_entry);
-
       if (!out_protein_tag.empty())
       {
         fstream out_tagger_stream = fstream(out_protein_tag, fstream::out);
@@ -406,7 +405,6 @@ protected:
         fstream out_tagger_stream = fstream(out_tag, fstream::out);
         FLASHTaggerFile::writeTagHeader(out_tagger_stream);
         FLASHTaggerFile::writeTags(tagger, out_tagger_stream);
-
         out_tagger_stream.close();
       }
     }

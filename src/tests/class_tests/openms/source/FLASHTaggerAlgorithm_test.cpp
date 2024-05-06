@@ -118,7 +118,7 @@ END_SECTION
 START_SECTION(runMatching())
 {
   tagger.runMatching(OPENMS_GET_TEST_DATA_PATH("uniprot-mg1655-filtered-reviewed_yes.fasta"));
-  TEST_EQUAL(tagger.getProteinHits().size(), 2)
+  TEST_EQUAL(tagger.getProteinHitsAt().size(), 2)
 }
 END_SECTION
 
@@ -127,23 +127,23 @@ START_SECTION(getProteinHits())
 {
   std::string sequence1 = "EVQLV";
   std::string sequence2 = "GPSLS";
-  TEST_EQUAL(tagger.getProteinHits()[0].getSequence().substr(0, 5), sequence1)
-  TEST_EQUAL(tagger.getProteinHits()[1].getSequence().substr(0, 5), sequence2)
+  TEST_EQUAL(tagger.getProteinHitsAt()[0].getSequence().substr(0, 5), sequence1)
+  TEST_EQUAL(tagger.getProteinHitsAt()[1].getSequence().substr(0, 5), sequence2)
 }
 END_SECTION
 
 
 START_SECTION(getProteinHits(const FLASHDeconvHelperStructs::Tag& tag)) 
 {
-  TEST_EQUAL(tagger.getProteinHits(tagger.getTags()[0]).size(), 1)
-  TEST_EQUAL(tagger.getProteinHits(tagger.getTags()[1]).size(), 0)
+  TEST_EQUAL(tagger.getProteinHitsMatchedBy(tagger.getTags()[0]).size(), 1)
+  TEST_EQUAL(tagger.getProteinHitsMatchedBy(tagger.getTags()[1]).size(), 0)
 }
 END_SECTION
 
 START_SECTION(getProteinHits(const FLASHDeconvHelperStructs::Tag& tag)) 
 {
-  TEST_EQUAL(tagger.getProteinHits(tagger.getTags()[0]).size(), 1)
-  TEST_EQUAL(tagger.getProteinHits(tagger.getTags()[1]).size(), 0)
+  TEST_EQUAL(tagger.getProteinHitsMatchedBy(tagger.getTags()[0]).size(), 1)
+  TEST_EQUAL(tagger.getProteinHitsMatchedBy(tagger.getTags()[1]).size(), 0)
 }
 END_SECTION
 
@@ -152,8 +152,8 @@ START_SECTION(getTags(const ProteinHit& hit))
 {
   std::string sequence3 = "GQGTMVTVSS";
   std::string sequence4 = "SVTVMTGQGW";
-  TEST_EQUAL(tagger.getTags(tagger.getProteinHits()[0])[0].getSequence(), sequence3)
-  TEST_EQUAL(tagger.getTags(tagger.getProteinHits()[1])[1].getSequence(), sequence4)
+  TEST_EQUAL(tagger.getTagsAt(tagger.getProteinHitsAt()[0])[0].getSequence(), sequence3)
+  TEST_EQUAL(tagger.getTagsAt(tagger.getProteinHitsAt()[1])[1].getSequence(), sequence4)
 }
 END_SECTION
 
@@ -167,8 +167,8 @@ END_SECTION
 START_SECTION(getProteinIndex())
  {
  
-   TEST_EQUAL(tagger.getProteinIndex(tagger.getProteinHits()[0]), 0) 
-   TEST_EQUAL(tagger.getProteinIndex(tagger.getProteinHits()[1]), 1)
+   TEST_EQUAL(tagger.getProteinIndex(tagger.getProteinHitsAt()[0]), 0)
+   TEST_EQUAL(tagger.getProteinIndex(tagger.getProteinHitsAt()[1]), 1)
  }
 END_SECTION
 
@@ -188,7 +188,7 @@ END_SECTION
 START_SECTION(getMatchedPositions()) 
 {
 
-    TEST_EQUAL(tagger.getMatchedPositions(tagger.getProteinHits()[0], tagger.getTags()[0])[0], 111) 
+    TEST_EQUAL(tagger.getMatchedPositions(tagger.getProteinHitsAt()[0], tagger.getTags()[0])[0], 111)
 
   } END_SECTION
 
