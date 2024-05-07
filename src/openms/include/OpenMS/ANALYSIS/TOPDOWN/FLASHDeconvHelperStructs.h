@@ -234,6 +234,15 @@ namespace OpenMS
       int getScore() const;
       int getScore(int pos) const;
       int getScan() const;
+      int getIndex() const
+      {
+        return index_;
+      }
+
+      void setIndex(int i)
+      {
+        index_ = i;
+      }
       String toString() const;
       const std::vector<double>& getMzs() const;
 
@@ -243,6 +252,7 @@ namespace OpenMS
       std::vector<double> mzs_;
       std::vector<int> scores_;
       int scan_;
+      int index_;
       Size length_;
     };
 

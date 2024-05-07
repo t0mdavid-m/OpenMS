@@ -58,15 +58,12 @@ namespace OpenMS
     */
     void run(const std::vector<DeconvolvedSpectrum>& deconvolved_spectra, double ppm, const std::vector<FASTAFile::FASTAEntry>& fasta_entry);
 
-    std::vector<int> getScans() const;
+    void getProteinHits(std::vector<ProteinHit>& hits) const;
+    void getProteinHitsMatchedBy(const FLASHDeconvHelperStructs::Tag& tag, std::vector<ProteinHit>& hits) const;
+    void getTagsMatchingTo(const ProteinHit& hit, std::vector<FLASHDeconvHelperStructs::Tag>& tags) const;
+    void getTags(bool matched, std::vector<FLASHDeconvHelperStructs::Tag>& tags) const;
 
-    std::vector<ProteinHit> getProteinHitsAt(int scan) const;
-    std::vector<ProteinHit> getProteinHitsMatchedBy(const FLASHDeconvHelperStructs::Tag& tag) const;
-    std::vector<FLASHDeconvHelperStructs::Tag> getTagsMatchingTo(const ProteinHit& hit, int scan) const;
-    std::vector<FLASHDeconvHelperStructs::Tag> getTagsAt(int scan) const;
-
-    int getProteinIndex(const ProteinHit& hit, int scan) const;
-    int getTagIndex(const FLASHDeconvHelperStructs::Tag& tag) const;
+    int getProteinIndex(const ProteinHit& hit) const;
 
     std::vector<int> getMatchedPositions(const ProteinHit& hit, const FLASHDeconvHelperStructs::Tag& tag) const;
     std::vector<double> getDeltaMasses(const ProteinHit& hit, const FLASHDeconvHelperStructs::Tag& tag) const;
@@ -113,11 +110,11 @@ namespace OpenMS
     std::map<double, std::vector<Residue>> aa_mass_map_;
     std::map<int, std::map<int, std::vector<String>>> edge_aa_map_;
 
-    std::map<int, std::vector<FLASHDeconvHelperStructs::Tag>> tags_; // from scan to tags
-    std::map<int, std::vector<ProteinHit>> protein_hits_; // from scan to hits
-    std::map<int, std::vector<std::vector<int>>> matching_tags_indices_; // from scan to vector of tag indices - outer vector index = hit index
-    std::map<int, std::vector<std::vector<int>>> matching_hits_indices_; // from scan to vector of hit indices - outer vector index = tag index
-    void runMatching_(int scan, const std::vector<FASTAFile::FASTAEntry>& fasta_entry);
+    std::vector<FLASHDeconvHelperStructs::Tag> tags_; // from scan to tags
+    std::vector<ProteinHit> protein_hits_;
+    std::vector<std::vector<int>> matching_tags_indices_; // outer vector index = hit index
+    std::vector<std::vector<int>> matching_hits_indices_; // outer vector index = tag index
+    void runMatching_(const std::vector<FASTAFile::FASTAEntry>& fasta_entry);
     void calculate_qvalue_(const std::vector<FASTAFile::FASTAEntry>& fasta_entry);
 
     int max_tag_count_ = 0;
@@ -126,7 +123,6 @@ namespace OpenMS
     int max_iso_in_tag_ = 0;
     int max_path_score_ = 0;
     int min_path_score_ = 0;
-    int max_pro_count_ = -1;
     int min_cov_aa_ = 5;
     double fdr_ = 1.0;
     bool keep_decoy_ = false;
