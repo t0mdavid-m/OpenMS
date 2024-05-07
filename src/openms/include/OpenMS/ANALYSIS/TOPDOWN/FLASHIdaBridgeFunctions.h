@@ -86,7 +86,7 @@ namespace OpenMS
 
   extern "C" OPENMS_DLLAPI void GetAllMonoisotopicMasses(FLASHIda *pObject, double *masses, int length);
 
-  extern "C" OPENMS_DLLAPI double GetRepresentativeMass(FLASHIda* pObject);
+  extern "C" OPENMS_DLLAPI double GetRepresentativeMass(FLASHIda *pObject);
 
   /// keeps the precalculated averagine to calculate average masses from monoisotopic masses
   static FLASHDeconvHelperStructs::PrecalculatedAveragine avg;
