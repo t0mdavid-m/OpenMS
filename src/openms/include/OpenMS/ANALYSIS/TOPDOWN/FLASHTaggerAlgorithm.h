@@ -115,7 +115,7 @@ namespace OpenMS
     std::vector<std::vector<int>> matching_tags_indices_; // outer vector index = hit index
     std::vector<std::vector<int>> matching_hits_indices_; // outer vector index = tag index
     void runMatching_(const std::vector<FASTAFile::FASTAEntry>& fasta_entry);
-    void calculate_qvalue_(const std::vector<FASTAFile::FASTAEntry>& fasta_entry);
+    void calculate_qvalue_(const std::vector<FASTAFile::FASTAEntry>& fasta_entry, std::vector<std::pair<ProteinHit, std::vector<int>>>& pairs);
 
     int max_tag_count_ = 0;
     int min_tag_length_ = 0;

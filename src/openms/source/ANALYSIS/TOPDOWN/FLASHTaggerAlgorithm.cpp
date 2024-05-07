@@ -321,7 +321,6 @@ void FLASHTaggerAlgorithm::run(const std::vector<DeconvolvedSpectrum>& deconvolv
   endProgress();
 
   runMatching_(fasta_entry);
-  calculate_qvalue_(fasta_entry);
 }
 
 void FLASHTaggerAlgorithm::getTags_(const DeconvolvedSpectrum& dspec, double ppm, std::vector<FLASHDeconvHelperStructs::Tag>& tags)
@@ -684,34 +683,12 @@ void FLASHTaggerAlgorithm::runMatching_(const std::vector<FASTAFile::FASTAEntry>
     }
   }
   endProgress();
-  if (pairs.empty()) return;
-
-  protein_hits_ = std::vector<ProteinHit>();
-
-  std::sort(pairs.begin(), pairs.end(),
-            [](const std::pair<ProteinHit, std::vector<int>>& left, const std::pair<ProteinHit, std::vector<int>>& right) {
-              return left.first.getScore() > right.first.getScore();
-            });
-
-  protein_hits_.reserve(pairs.size());
-
-  matching_tags_indices_ = std::vector<std::vector<int>>();
-  matching_hits_indices_ = std::vector<std::vector<int>>(tags_.size());
-  matching_tags_indices_.reserve(pairs.size());
-
-  for (const auto& [hit, indices] : pairs)
-  {
-    protein_hits_.push_back(hit);
-    matching_tags_indices_.push_back(indices);
-    for (const auto& index : indices)
-    {
-      matching_hits_indices_[index].push_back(protein_hits_.size() - 1);
-    }
-  }
+  calculate_qvalue_(fasta_entry, pairs);
 }
 
-void FLASHTaggerAlgorithm::calculate_qvalue_(const std::vector<FASTAFile::FASTAEntry>& fasta_entry)
+void FLASHTaggerAlgorithm::calculate_qvalue_(const std::vector<FASTAFile::FASTAEntry>& fasta_entry, std::vector<std::pair<ProteinHit, std::vector<int>>>& pairs) // fix tomorrow.
 {
+  if (pairs.empty()) return;
   double cum_target_count = 0;
   double cum_decoy_count = 0;
   double decoy_mul = 0;
@@ -719,16 +696,16 @@ void FLASHTaggerAlgorithm::calculate_qvalue_(const std::vector<FASTAFile::FASTAE
   {
     if (fe.identifier.hasPrefix("DECOY")) decoy_mul++;
   }
-  if (decoy_mul <= 0) return; // TODO
+  if (decoy_mul <= 0) return;
 
   decoy_mul /= fasta_entry.size() - decoy_mul; //
 
-  std::sort(protein_hits_.begin(), protein_hits_.end(),
-            [](const ProteinHit& left, const ProteinHit& right) {
-              return left.getScore() > right.getScore();
+  std::sort(pairs.begin(), pairs.end(),
+            [](const std::pair<ProteinHit, std::vector<int>>& left, const std::pair<ProteinHit, std::vector<int>>& right) {
+              return left.first.getScore() > right.first.getScore();
             });
 
-  for (auto& hit : protein_hits_)
+  for (auto& [hit, indices] : pairs)
   {
     bool is_decoy = (int)hit.getMetaValue("IsDecoy") > 0;
     if (is_decoy) { cum_decoy_count += 1.0 / decoy_mul; }
@@ -739,27 +716,31 @@ void FLASHTaggerAlgorithm::calculate_qvalue_(const std::vector<FASTAFile::FASTAE
   }
 
   double min_qvalue = 1;
-  for (auto iter = protein_hits_.rbegin(); iter!= protein_hits_.rend(); iter++)
+  for (auto iter = pairs.rbegin(); iter!= pairs.rend(); iter++)
   {
-    min_qvalue = std::min(min_qvalue, (double)iter->getMetaValue("qvalue"));
-    iter->setMetaValue("qvalue", min_qvalue);
+    min_qvalue = std::min(min_qvalue, (double)iter->first.getMetaValue("qvalue"));
+    iter->first.setMetaValue("qvalue", min_qvalue);
   }
 
-  std::vector<ProteinHit> new_hits;
-  for (auto& hit : protein_hits_)
+  protein_hits_.reserve(pairs.size());
+
+  matching_tags_indices_ = std::vector<std::vector<int>>();
+  matching_hits_indices_ = std::vector<std::vector<int>>(tags_.size());
+  matching_tags_indices_.reserve(pairs.size());
+
+  for (const auto& [hit, indices] : pairs)
   {
     double qvalue = (double)hit.getMetaValue("qvalue");
     if (qvalue > fdr_) continue;
     if ((int)hit.getMetaValue("IsDecoy") > 0 && ! keep_decoy_) continue;
-    new_hits.push_back(hit);
-  }
-  protein_hits_ = new_hits;
 
-  for (auto& h : matching_hits_indices_)
-  {
-    while (!h.empty() && h.back() >= new_hits.size()) h.pop_back();
+    protein_hits_.push_back(hit);
+    matching_tags_indices_.push_back(indices);
+    for (const auto& index : indices)
+    {
+      matching_hits_indices_[index].push_back(protein_hits_.size() - 1);
+    }
   }
-  while (matching_tags_indices_.size() > new_hits.size()) matching_tags_indices_.pop_back();
 }
 
 int FLASHTaggerAlgorithm::getProteinIndex(const ProteinHit& hit) const

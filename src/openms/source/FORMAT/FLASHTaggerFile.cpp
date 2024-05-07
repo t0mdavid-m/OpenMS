@@ -103,7 +103,7 @@ namespace OpenMS
 
       fs << tagger.getProteinIndex(hit) << "\t" << hit.getAccession() << "\t" << hit.getDescription() << "\t" << hit.getSequence() << "\t"
          << hit.getMetaValue("MatchedAA") << "\t" << 100.0 * hit.getCoverage() << "\t" << hit.getScore() << "\t"
-         << std::to_string((hit.metaValueExists("qvalue") ? (double)hit.getMetaValue("qvalue") : 0)) << "\t" << cntr << "\t" << tagindices << "\n";
+         << std::to_string((hit.metaValueExists("qvalue") ? (double)hit.getMetaValue("qvalue") : -1)) << "\t" << cntr << "\t" << tagindices << "\n";
       }
     }
   } // namespace OpenMS
