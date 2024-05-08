@@ -578,8 +578,9 @@ namespace OpenMS
     for (int n = 0; n < 2; n++)
     {
   #pragma omp parallel for default(none) shared(pairs, fasta_entry, start_loc, end_loc, n)
-      for (const auto& fe : fasta_entry)
+      for (int i = 0; i < (int)fasta_entry.size(); i++)
       {
+        const auto& fe = fasta_entry[i];
         bool is_decoy = false;
         if (fe.identifier.hasPrefix("DECOY")) { is_decoy = true; }
 
