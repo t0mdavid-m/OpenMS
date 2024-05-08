@@ -205,7 +205,7 @@ namespace OpenMS
     SpectralDeconvolution fd_;
 
     /// total QScore threshold
-    double tqscore_threshold = .99;
+    double tqscore_threshold = .999;
 
     /// q score threshold - determined from C# side
     double qscore_threshold_;
