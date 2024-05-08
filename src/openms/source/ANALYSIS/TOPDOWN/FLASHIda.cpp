@@ -365,7 +365,7 @@ FLASHIda::FLASHIda(char* arg)
     new_mass_qscore_map_.swap(mass_qscore_map_);
     std::unordered_map<int, double>().swap(new_mass_qscore_map_);
 
-    double min_cv_mass = 0;
+   /* double min_cv_mass = 0;
     double max_cv_mass = 1e100;
 
     auto filter_str = deconvolved_spectrum_.getOriginalSpectrum().getMetaValue("filter string").toString();
@@ -397,8 +397,7 @@ FLASHIda::FLASHIda(char* arg)
           max_cv_mass = loc->second[1];
         }
       }
-    }
-
+    }*/
 
     const int selection_phase_start = 0;
     const int selection_phase_end = 2; // inclusive
@@ -421,10 +420,10 @@ FLASHIda::FLASHIda(char* arg)
           double qscore = std::min(.9, pg.getQscore());
           double mass = pg.getMonoMass();
 
-          if (selection_phase == selection_phase_start)
-          {
-            if (mass < min_cv_mass || mass > max_cv_mass) continue;
-          }
+          //if (selection_phase == selection_phase_start)
+          //{
+          //  if (mass < min_cv_mass || mass > max_cv_mass) continue;
+          //}
 
           auto [mz1, mz2] = pg.getRepMzRange();
 
@@ -496,7 +495,7 @@ FLASHIda::FLASHIda(char* arg)
             if (to_exclude) { continue; }
           }
 
-          if (qscore < qscore_threshold) { break; }
+          //if (qscore < qscore_threshold) { break; }
 
           if (pg.getChargeSNR(charge) < snr_threshold) { continue; }
 

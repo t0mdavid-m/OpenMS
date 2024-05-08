@@ -49,7 +49,7 @@ namespace OpenMS
       cv = std::stod(filter_str.substr(pos + 3, end - pos));
     }
     auto weights = (is_profile ? weight_profile_ : weight_centroid_);
-    if (cv <= 0)
+    /*if (cv <= 0)
     {
       const std::vector<double> cvs {.0, -40.0, -50.0, -60.0};
       double min_val = cvs.back();
@@ -77,7 +77,7 @@ namespace OpenMS
       {
         weights = weight_CV_60_;
       }
-    }
+    }*/
 
     double score = weights.back() + .5;
     auto fv = toFeatureVector_(pg);
