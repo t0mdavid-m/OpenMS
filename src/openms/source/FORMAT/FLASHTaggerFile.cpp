@@ -27,7 +27,7 @@ namespace OpenMS
   void FLASHTaggerFile::writeProteinHeader(std::fstream& fs)
   {
     fs << "ProteinIndex\tProteinAccession\tProteinDescription\tProteinSequence\tMatchedAminoAcidCount\tCoverage(%)"
-          "\tProteinScore\tProteinQvalue\tTagCount\tTagIndices\n";
+          "\tProteinScore\tProteinQvalue\tTagCount\tTagIndices\tScans\n";
   }
 
   /// write the features in regular file output
@@ -91,19 +91,28 @@ namespace OpenMS
     for (const auto& hit : hits)
     {
       String tagindices = "";
+      String scans = "";
       int cntr = 0;
       std::vector<FLASHDeconvHelperStructs::Tag> tags;
+      std::set<int> sns;
       tagger.getTagsMatchingTo(hit, tags);
       for (const auto& tag : tags)
       {
         if (! tagindices.empty()) tagindices += ";";
         tagindices += std::to_string(tag.getIndex());
+        sns.insert(tag.getScan());
         cntr++;
+      }
+
+      for (const auto& sn : sns)
+      {
+        if (! scans.empty()) scans += ";";
+        scans += std::to_string(sn);
       }
 
       fs << tagger.getProteinIndex(hit) << "\t" << hit.getAccession() << "\t" << hit.getDescription() << "\t" << hit.getSequence() << "\t"
          << hit.getMetaValue("MatchedAA") << "\t" << 100.0 * hit.getCoverage() << "\t" << hit.getScore() << "\t"
-         << std::to_string((hit.metaValueExists("qvalue") ? (double)hit.getMetaValue("qvalue") : -1)) << "\t" << cntr << "\t" << tagindices << "\n";
+         << std::to_string((hit.metaValueExists("qvalue") ? (double)hit.getMetaValue("qvalue") : -1)) << "\t" << cntr << "\t" << tagindices << "\t" << scans << "\n";
       }
     }
   } // namespace OpenMS

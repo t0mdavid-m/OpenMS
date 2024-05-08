@@ -65,8 +65,8 @@ namespace OpenMS
 
     int getProteinIndex(const ProteinHit& hit) const;
 
-    std::vector<int> getMatchedPositions(const ProteinHit& hit, const FLASHDeconvHelperStructs::Tag& tag) const;
-    std::vector<double> getDeltaMasses(const ProteinHit& hit, const FLASHDeconvHelperStructs::Tag& tag) const;
+    static std::vector<int> getMatchedPositions(const ProteinHit& hit, const FLASHDeconvHelperStructs::Tag& tag) ;
+    static std::vector<double> getDeltaMasses(const ProteinHit& hit, const FLASHDeconvHelperStructs::Tag& tag) ;
 
   protected:
     void updateMembers_() override;
@@ -102,7 +102,7 @@ namespace OpenMS
 
     void updateTagSet_(std::set<FLASHDeconvHelperStructs::Tag>& tag_set, std::map<String, std::vector<FLASHDeconvHelperStructs::Tag>>& seq_tag, const std::vector<int>& path, const std::vector<double>& mzs, const std::vector<int>& scores, int scan, double ppm);
 
-    bool connectEdge_(FLASHTaggerAlgorithm::DAC_& dac, int vertex1, int vertex2, boost::dynamic_bitset<>& visited);
+    static bool connectEdge_(FLASHTaggerAlgorithm::DAC_& dac, int vertex1, int vertex2, boost::dynamic_bitset<>& visited);
 
     static Size find_with_X_(const std::string_view& A, const String& B, Size pos = 0);
 
