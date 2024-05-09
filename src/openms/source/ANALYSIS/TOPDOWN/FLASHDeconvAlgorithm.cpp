@@ -467,6 +467,18 @@ namespace OpenMS
 
       int scan_number = getScanNumber(map, index);
       String native_id = spec.getNativeID();
+      
+      auto filter_str = spec.getMetaValue("filter string").toString();
+      Size pos = filter_str.find("cv=");
+      double cv = 1;
+
+      if (pos != String::npos)
+      {
+        Size end = filter_str.find(" ", pos);
+        if (end == String::npos) end = filter_str.length() - 1;
+        cv = std::stod(filter_str.substr(pos + 3, end - pos));
+      }
+
       // find all candidate scan numbers from ms_level - 1
       int num_preceding = ms_level == 2 ? preceding_MS1_count_ : 1;
       auto index_copy = index;
@@ -475,6 +487,7 @@ namespace OpenMS
         index_copy--;
         if (map[index_copy].getMSLevel() == ms_level - 1) { num_preceding--; }
       }
+
       int b_scan_number = getScanNumber(map, index_copy);
 
       // then find deconvolved spectra within the scan numbers.
@@ -487,7 +500,19 @@ namespace OpenMS
       // exclude decoy ones.
       while (diter < deconvolved_spectra.end() && diter->getScanNumber() < scan_number)
       {
-        if (diter->getOriginalSpectrum().getMSLevel() == ms_level - 1 && ! diter->isDecoy()) { survey_scans.push_back(*diter); }
+
+        auto filter_str = diter->getOriginalSpectrum().getMetaValue("filter string").toString();
+        Size pos = filter_str.find("cv=");
+        double cv_match = 1;
+
+        if (pos != String::npos)
+        {
+          Size end = filter_str.find(" ", pos);
+          if (end == String::npos) end = filter_str.length() - 1;
+          cv_match = std::stod(filter_str.substr(pos + 3, end - pos));
+        }
+
+        if ((diter->getOriginalSpectrum().getMSLevel() == ms_level - 1) && (! diter->isDecoy()) && (std::abs(cv_match - cv) < 1e-5)) { survey_scans.push_back(*diter); }
         diter++;
       }
 
