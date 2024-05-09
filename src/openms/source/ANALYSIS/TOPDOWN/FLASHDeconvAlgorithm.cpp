@@ -406,6 +406,17 @@ namespace OpenMS
     if (precursor_map_for_ida_.empty()) return;
 
     int scan_number = getScanNumber(map, index);
+    auto filter_str = map[index].getMetaValue("filter string").toString();
+    Size pos = filter_str.find("cv=");
+    double cv = MAXFLOAT;
+
+    if (pos != String::npos)
+    {
+      Size end = filter_str.find(" ", pos);
+      if (end == String::npos) end = filter_str.length() - 1;
+      cv = std::stod(filter_str.substr(pos + 3, end - pos));
+    }
+
     auto iter = precursor_map_for_ida_.lower_bound(scan_number);
 
     while (iter != precursor_map_for_ida_.begin()
@@ -446,7 +457,22 @@ namespace OpenMS
             precursor_pg.setQscore(smap[2]);
             precursor_pg.setRepAbsCharge(precursor_log_mz_peak.abs_charge);
             precursor_pg.updateMonoMassAndIsotopeIntensities();
-            precursor_pg.setScanNumber(scan_number);
+            int ms1_scan_number = iter->first;
+            Size index_copy (index);
+            while(index_copy != 0 && getScanNumber(map, index_copy--) != ms1_scan_number);
+
+            auto filter_str2 = map[index_copy].getMetaValue("filter string").toString(); // this part is messy. Make a function to parse CV from map
+            Size pos2 = filter_str2.find("cv=");
+            double cv_match = MAXFLOAT;
+
+            if (pos2 != String::npos)
+            {
+              Size end2 = filter_str2.find(" ", pos2);
+              if (end2 == String::npos) end2 = filter_str2.length() - 1;
+              cv_match = std::stod(filter_str2.substr(pos2 + 3, end2 - pos2));
+            }
+            if (std::abs(cv_match - cv) > 1e-5) continue;
+
             native_id_precursor_peak_group_map_[map[index].getNativeID()] = precursor_pg;
             break;
           }
@@ -462,15 +488,15 @@ namespace OpenMS
   {
     for (Size index = 0; index < map.size(); index++)
     {
-      auto spec = map[index];
+      auto spec = map[index]; // MS2 index
       if (spec.getMSLevel() != ms_level) { continue; }
 
       int scan_number = getScanNumber(map, index);
       String native_id = spec.getNativeID();
-      
+
       auto filter_str = spec.getMetaValue("filter string").toString();
       Size pos = filter_str.find("cv=");
-      double cv = 1;
+      double cv = MAXFLOAT;
 
       if (pos != String::npos)
       {
@@ -497,25 +523,12 @@ namespace OpenMS
 
       std::vector<DeconvolvedSpectrum> survey_scans;
 
-      // exclude decoy ones.
+      // exclude decoy ones and cv mismatches
       while (diter < deconvolved_spectra.end() && diter->getScanNumber() < scan_number)
       {
-
-        auto filter_str = diter->getOriginalSpectrum().getMetaValue("filter string").toString();
-        Size pos = filter_str.find("cv=");
-        double cv_match = 1;
-
-        if (pos != String::npos)
-        {
-          Size end = filter_str.find(" ", pos);
-          if (end == String::npos) end = filter_str.length() - 1;
-          cv_match = std::stod(filter_str.substr(pos + 3, end - pos));
-        }
-
-        if ((diter->getOriginalSpectrum().getMSLevel() == ms_level - 1) && (! diter->isDecoy()) && (std::abs(cv_match - cv) < 1e-5)) { survey_scans.push_back(*diter); }
+        if ((diter->getOriginalSpectrum().getMSLevel() == ms_level - 1) && (! diter->isDecoy()) && (std::abs(diter->getCV() - cv) < 1e-5)) { survey_scans.push_back(*diter); }
         diter++;
       }
-
       // register the best precursor, starting from the most recent one. Out of the masses in a single scan, use the max SNR one.
 
       double start_mz = 0;
