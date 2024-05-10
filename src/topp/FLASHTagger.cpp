@@ -162,20 +162,19 @@ protected:
       tagger.run(deconvolved_spectra, tol, fasta_entry);
       OPENMS_LOG_INFO << "FLASHTagger run complete. Now writing the results in output files ..." << endl;
 
-      if (! out_protein_file.empty())
-      {
-        fstream out_tagger_stream = fstream(out_protein_file, fstream::out);
-        FLASHTaggerFile::writeProteinHeader(out_tagger_stream);
-        FLASHTaggerFile::writeProteins(tagger, out_tagger_stream);
-        out_tagger_stream.close();
-      }
-
       if (! out_tag_file.empty())
       {
         fstream out_tagger_stream = fstream(out_tag_file, fstream::out);
         FLASHTaggerFile::writeTagHeader(out_tagger_stream);
         FLASHTaggerFile::writeTags(tagger, out_tagger_stream);
+        out_tagger_stream.close();
+      }
 
+      if (! out_protein_file.empty())
+      {
+        fstream out_tagger_stream = fstream(out_protein_file, fstream::out);
+        FLASHTaggerFile::writeProteinHeader(out_tagger_stream);
+        FLASHTaggerFile::writeProteins(tagger, out_tagger_stream);
         out_tagger_stream.close();
       }
     }

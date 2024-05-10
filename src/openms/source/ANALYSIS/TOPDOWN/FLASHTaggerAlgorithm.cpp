@@ -561,6 +561,7 @@ namespace OpenMS
     std::vector<std::pair<ProteinHit, std::vector<int>>> pairs;
     std::vector<int> start_loc(tags_.size(), 0);
     std::vector<int> end_loc(tags_.size(), 0);
+
     // for each tag, find the possible start and end locations in the protein sequence. If C term, they are negative values to specify values are from
     // the end of the protein
   #pragma omp parallel for default(none) shared(end_loc, start_loc)
@@ -691,6 +692,11 @@ namespace OpenMS
       }
     }
     endProgress();
+
+    matching_tags_indices_ = std::vector<std::vector<int>>();
+    matching_hits_indices_ = std::vector<std::vector<int>>(tags_.size());
+    matching_tags_indices_.reserve(pairs.size());
+
     calculate_qvalue_(fasta_entry, pairs);
   }
 
@@ -705,9 +711,8 @@ namespace OpenMS
     {
       if (fe.identifier.hasPrefix("DECOY")) decoy_mul++;
     }
-    if (decoy_mul <= 0) return;
-
-    decoy_mul /= (double)fasta_entry.size() - decoy_mul; //
+    if (decoy_mul > 0)
+      decoy_mul /= (double)fasta_entry.size() - decoy_mul; //
 
     std::sort(pairs.begin(), pairs.end(),
               [](const std::pair<ProteinHit, std::vector<int>>& left, const std::pair<ProteinHit, std::vector<int>>& right) {
@@ -732,10 +737,6 @@ namespace OpenMS
     }
 
     protein_hits_.reserve(pairs.size());
-
-    matching_tags_indices_ = std::vector<std::vector<int>>();
-    matching_hits_indices_ = std::vector<std::vector<int>>(tags_.size());
-    matching_tags_indices_.reserve(pairs.size());
 
     for (const auto& [hit, indices] : pairs)
     {
