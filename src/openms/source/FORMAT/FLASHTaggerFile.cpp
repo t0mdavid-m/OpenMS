@@ -18,7 +18,7 @@ namespace OpenMS
   **/
   void FLASHTaggerFile::writeTagHeader(std::fstream& fs)
   {
-    fs << "Scan\ttagIndex\tProteinIndex\tProteinAccession\tProteinDescription\tTagSequence\tNmass\tCmass\tStartPos\tDeltaMass\tLength\tDeNovoScore\tMas"
+    fs << "Scan\tTagIndex\tProteinIndex\tProteinAccession\tProteinDescription\tTagSequence\tNmass\tCmass\tStartPos\tDeltaMass\tLength\tDeNovoScore\tMas"
           "ses\tMassScores\t"
           "\n";
   }
