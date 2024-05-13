@@ -496,7 +496,7 @@ namespace OpenMS
 
       auto filter_str = spec.getMetaValue("filter string").toString();
       Size pos = filter_str.find("cv=");
-      double cv = MAXFLOAT;
+      double cv = 1e5;
 
       if (pos != String::npos)
       {

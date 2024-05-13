@@ -170,7 +170,7 @@ namespace OpenMS
     Precursor::ActivationMethod activation_method_ = Precursor::ActivationMethod::CID;
     /// scan number and precursor scan number
     int scan_number_ = 0, precursor_scan_number_ = 0;
-    double cv_ = MAXFLOAT;
+    double cv_ = 1e5;
     /// isobaric quantities
     FLASHDeconvHelperStructs::IsobaricQuantities quantities_;
   };
