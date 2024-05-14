@@ -408,7 +408,7 @@ namespace OpenMS
     int scan_number = getScanNumber(map, index);
     auto filter_str = map[index].getMetaValue("filter string").toString();
     Size pos = filter_str.find("cv=");
-    double cv = MAXFLOAT;
+    double cv = 1e5;
 
     if (pos != String::npos)
     {
@@ -463,7 +463,7 @@ namespace OpenMS
 
             auto filter_str2 = map[index_copy].getMetaValue("filter string").toString(); // this part is messy. Make a function to parse CV from map
             Size pos2 = filter_str2.find("cv=");
-            double cv_match = MAXFLOAT;
+            double cv_match = 1e5;
 
             if (pos2 != String::npos)
             {
