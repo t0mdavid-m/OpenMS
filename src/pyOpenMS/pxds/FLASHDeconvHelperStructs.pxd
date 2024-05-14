@@ -26,7 +26,7 @@ cdef extern from "<OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvHelperStructs.h>" namespac
         # wrap-inherits:
 
         # default constructor
-        Tag(String seq, double n_mass, double c_mass, libcpp_vector[double] & mzs, libcpp_vector[int]& scores, libcpp_vector[int] & scans) except + nogil
+        Tag(String seq, double n_mass, double c_mass, libcpp_vector[double] & mzs, libcpp_vector[int]& scores, int scan) except + nogil
         # copy constructor
         Tag(Tag &) except + nogil
 

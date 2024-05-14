@@ -109,88 +109,20 @@ FLASHTaggerAlgorithm tagger;
 
 START_SECTION(run())
 {
-  tagger.run(deconvolved_spectra, tol);
-  TEST_EQUAL(tagger.getTags().size(),264)
+  FASTAFile fasta_file;
+  std::vector<FASTAFile::FASTAEntry> fasta_entry;
+  fasta_file.load("C:\\Users\\qlcsk\\Desktop\\jkvision\\openms\\pyFLASHDeconv\\uniprot-mg1655-filtered-reviewed_yes.fasta", fasta_entry);
+  tagger.run(deconvolved_spectra, tol, fasta_entry);
+  std::vector<FLASHDeconvHelperStructs::Tag> tag;
+  tagger.getTags(true, tag);
+  TEST_EQUAL(tag.size(),114)
 }
 END_SECTION
 
 
-START_SECTION(runMatching())
-{
-  tagger.runMatching(OPENMS_GET_TEST_DATA_PATH("uniprot-mg1655-filtered-reviewed_yes.fasta"));
-  TEST_EQUAL(tagger.getProteinHitsAt().size(), 2)
-}
-END_SECTION
 
 
-START_SECTION(getProteinHits())
-{
-  std::string sequence1 = "EVQLV";
-  std::string sequence2 = "GPSLS";
-  TEST_EQUAL(tagger.getProteinHitsAt()[0].getSequence().substr(0, 5), sequence1)
-  TEST_EQUAL(tagger.getProteinHitsAt()[1].getSequence().substr(0, 5), sequence2)
-}
-END_SECTION
 
-
-START_SECTION(getProteinHits(const FLASHDeconvHelperStructs::Tag& tag)) 
-{
-  TEST_EQUAL(tagger.getProteinHitsMatchedBy(tagger.getTags()[0]).size(), 1)
-  TEST_EQUAL(tagger.getProteinHitsMatchedBy(tagger.getTags()[1]).size(), 0)
-}
-END_SECTION
-
-START_SECTION(getProteinHits(const FLASHDeconvHelperStructs::Tag& tag)) 
-{
-  TEST_EQUAL(tagger.getProteinHitsMatchedBy(tagger.getTags()[0]).size(), 1)
-  TEST_EQUAL(tagger.getProteinHitsMatchedBy(tagger.getTags()[1]).size(), 0)
-}
-END_SECTION
-
-
-START_SECTION(getTags(const ProteinHit& hit))
-{
-  std::string sequence3 = "GQGTMVTVSS";
-  std::string sequence4 = "SVTVMTGQGW";
-  TEST_EQUAL(tagger.getTagsAt(tagger.getProteinHitsAt()[0])[0].getSequence(), sequence3)
-  TEST_EQUAL(tagger.getTagsAt(tagger.getProteinHitsAt()[1])[1].getSequence(), sequence4)
-}
-END_SECTION
-
-START_SECTION(getTags())
-{
-  TEST_EQUAL(tagger.getTags()[0].getScore(), 18) 
-  TEST_EQUAL(tagger.getTags()[1].getScore(), 18)
-}
-END_SECTION
-
-START_SECTION(getProteinIndex())
- {
- 
-   TEST_EQUAL(tagger.getProteinIndex(tagger.getProteinHitsAt()[0]), 0)
-   TEST_EQUAL(tagger.getProteinIndex(tagger.getProteinHitsAt()[1]), 1)
- }
-END_SECTION
-
-START_SECTION(getTagIndex())
- {
- 
-   TEST_EQUAL(tagger.getTagIndex(tagger.getTags()[0]), 0) 
-   TEST_EQUAL(tagger.getTagIndex(tagger.getTags()[1]), 1)
-   TEST_EQUAL(tagger.getTagIndex(tagger.getTags()[2]), 2) 
-   TEST_EQUAL(tagger.getTagIndex(tagger.getTags()[3]), 3)
-   TEST_EQUAL(tagger.getTagIndex(tagger.getTags()[4]), 4) 
-
-
- }
-END_SECTION
-
-START_SECTION(getMatchedPositions()) 
-{
-
-    TEST_EQUAL(tagger.getMatchedPositions(tagger.getProteinHitsAt()[0], tagger.getTags()[0])[0], 111)
-
-  } END_SECTION
 
 
 /////////////////////////////////////////////////////////////
