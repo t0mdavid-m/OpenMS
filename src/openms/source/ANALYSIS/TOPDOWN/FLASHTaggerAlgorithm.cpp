@@ -124,15 +124,14 @@ namespace OpenMS
     return ((vertex / (max_path_score_ - min_path_score_ + 1)) / (max_iso_in_tag_ + 1)) / (max_tag_length_ + 1);
   }
 
-  bool FLASHTaggerAlgorithm::connectEdge_(FLASHTaggerAlgorithm::DAC_& dac, int vertex1, int vertex2, boost::dynamic_bitset<>& visited)
+  void FLASHTaggerAlgorithm::connectEdge_(FLASHTaggerAlgorithm::DAC_& dac, int vertex1, int vertex2, boost::dynamic_bitset<>& visited)
   {
-    if (vertex1 < 0 || vertex2 < 0 || vertex1 >= (int)visited.size() || vertex2 >= (int)visited.size()) return false;
-    if (! visited[vertex2]) return false;
+    if (vertex1 < 0 || vertex2 < 0 || vertex1 >= (int)visited.size() || vertex2 >= (int)visited.size()) return;
+    if (! visited[vertex2]) return;
 
     dac.addEdge(vertex1, vertex2);
-    return visited[vertex1] = true;
+    visited[vertex1] = true;
   }
-
 
   void FLASHTaggerAlgorithm::constructDAC_(FLASHTaggerAlgorithm::DAC_& dac,
                                            const std::vector<double>& mzs,
@@ -151,7 +150,7 @@ namespace OpenMS
     {
       auto r = mzs[end_index];
 
-      // first, make edge from r to source and sink to r.
+      // first, make edge from r to source.
       int vertex1 = getVertex_(end_index, scores[end_index], 0, 0);
       int vertex2 = getVertex_(0, 0, 0, 0);
 
@@ -206,19 +205,15 @@ namespace OpenMS
         }
         if (max_iso_in_tag_ == 0) break;
       }
-
+      //  make edge from sink to r
       if (end_index < (int)mzs.size() - 1)
       {
         for (int g = 0; g <= max_iso_in_tag_; g++)
         {
           for (int score = min_path_score_; score <= max_path_score_; score++)
           {
-            int edge_score = scores[mzs.size() - 1];
-            if (score - edge_score < min_path_score_) continue;
-            if (score - edge_score > max_path_score_) break;
-
             vertex1 = (int)getVertex_((int)mzs.size() - 1, score, length, g);
-            vertex2 = (int)getVertex_(end_index, score - edge_score, length, g);
+            vertex2 = (int)getVertex_(end_index, score, length, g);
             connectEdge_(dac, vertex1, vertex2, visited);
           }
         }
