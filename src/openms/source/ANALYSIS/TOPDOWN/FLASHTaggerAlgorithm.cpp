@@ -260,7 +260,7 @@ namespace OpenMS
     defaults_.setMaxInt("max_length", 30);
     defaults_.setMinInt("max_length", 3);
 
-    defaults_.setValue("flanking_mass_tol", 500.0, "Flanking mass tolerance in Da.");
+    defaults_.setValue("flanking_mass_tol", 2000.0, "Flanking mass tolerance in Da.");
     defaults_.setValue("max_iso_error_count", 0, "Maximum isotope error count per tag.");
     defaults_.setMaxInt("max_iso_error_count", 2);
     defaults_.setMinInt("max_iso_error_count", 0);
@@ -286,6 +286,7 @@ namespace OpenMS
     max_iso_in_tag_ = param_.getValue("max_iso_error_count");
     min_cov_aa_ = (int)param_.getValue("min_matched_aa");
     fdr_ = param_.getValue("fdr");
+    flanking_mass_tol_ = param_.getValue("flanking_mass_tol");
     keep_decoy_ = param_.getValue("keep_decoy").toString() == "true";
     updateEdgeMasses_();
     max_edge_mass_ = aa_mass_map_.rbegin()->first + max_iso_in_tag_ * Constants::C13C12_MASSDIFF_U;
@@ -489,6 +490,7 @@ namespace OpenMS
 
     max_path_score_ = std::max(max_path_score_, std::max(max_vertex_score, max_vertex_score) * (min_tag_length_ - 2));
     min_path_score_ = std::min(min_path_score_, std::max(min_vertex_score, min_vertex_score) * (min_tag_length_ - 2));
+    min_path_score_ = std::max(0, min_path_score_);
 
     std::set<FLASHDeconvHelperStructs::Tag> tagSet;
     std::map<String, std::vector<FLASHDeconvHelperStructs::Tag>> seq_tag;
