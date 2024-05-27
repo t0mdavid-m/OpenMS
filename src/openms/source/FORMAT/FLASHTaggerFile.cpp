@@ -59,11 +59,11 @@ namespace OpenMS
           description += hit.getDescription();
           hitindices += std::to_string(tagger.getProteinIndex(hit));
 
-          auto seqposition = tagger.getMatchedPositions(hit, tag);
-          if (seqposition.size() != 0) { positions += std::to_string(seqposition[0]); }
-
-          auto delta_mass = tagger.getDeltaMasses(hit, tag);
-          if (delta_mass.size() != 0) { delta_masses += std::to_string(delta_mass[0]); }
+          auto pos = std::vector<int>();
+          auto masses = std::vector<double>();
+          tagger.getMatchedPositionsAndFlankingMassDiffs(pos, masses, hit, tag);
+          if (pos.size() != 0) { positions += std::to_string(pos[0]); }
+          if (masses.size() != 0) { delta_masses += std::to_string(masses[0]); }
         }
 
         fs << tag.getScan() << "\t" << tag.getIndex() << "\t" << hitindices << "\t" << acc << "\t" << description << "\t" << tag.getSequence() << "\t"

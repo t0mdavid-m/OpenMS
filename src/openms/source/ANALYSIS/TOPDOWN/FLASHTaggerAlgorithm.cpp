@@ -782,7 +782,7 @@ namespace OpenMS
     }
   }
 
-  std::vector<int> FLASHTaggerAlgorithm::getMatchedPositions(const ProteinHit& hit, const FLASHDeconvHelperStructs::Tag& tag)
+  void FLASHTaggerAlgorithm::getMatchedPositionsAndFlankingMassDiffs(std::vector<int>& positions, std::vector<double>& masses, const ProteinHit& hit, const FLASHDeconvHelperStructs::Tag& tag) const
   {
     Size pos = 0;
     std::vector<int> indices;
@@ -792,23 +792,9 @@ namespace OpenMS
     {
       pos = find_with_X_(seq, tagseq, pos + 1);
       if (pos == String::npos) break;
-      indices.push_back((int)pos);
-    }
-    return indices;
-  }
+      double delta_mass = 0;
 
-  std::vector<double> FLASHTaggerAlgorithm::getDeltaMasses(const ProteinHit& hit, const FLASHDeconvHelperStructs::Tag& tag)
-  {
-    Size pos = 0;
-    std::vector<double> dmasses;
-    const auto& seq = hit.getSequence();
-    auto tagseq = tag.getSequence().toUpper();
-    while (true)
-    {
-      pos = find_with_X_(seq, tagseq, pos + 1);
-      if (pos == String::npos) break;
       auto x_pos = seq.find('X');
-      double delta_mass;
       if (tag.getNtermMass() > 0)
       {
         auto nterm = seq.substr(0, pos);
@@ -821,9 +807,10 @@ namespace OpenMS
         if (x_pos != String::npos) cterm.erase(remove(cterm.begin(), cterm.end(), 'X'), cterm.end());
         delta_mass = tag.getCtermMass() - (cterm.empty() ? 0 : AASequence::fromString(cterm).getMonoWeight(Residue::Internal));
       }
-      dmasses.push_back(delta_mass);
+      if (std::abs(delta_mass) > flanking_mass_tol_) continue;
+      masses.push_back(delta_mass);
+      positions.push_back((int)pos);
     }
-    return dmasses;
   }
 
   void FLASHTaggerAlgorithm::getTagsMatchingTo(const ProteinHit& hit, std::vector<FLASHDeconvHelperStructs::Tag>& tags) const
