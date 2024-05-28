@@ -71,7 +71,7 @@ namespace OpenMS
     defaults_.setValue("merging_method", 0,
                        "Method for spectra merging before deconvolution. 0: No merging  1: Average gaussian method to perform moving gaussian "
                        "averaging of spectra per MS level. Effective to increase "
-                       "proteoform ID sensitivity (in particular for Q-TOF datasets). 2: Block method to perform merging of all spectra into a single "
+                       "proteoform ID sensitivity (in particular for Q-TOF datasets). For MSn, only the ones from the same precursor mass (subject to tolerance) are averaged. 2: Block method to perform merging of all spectra into a single "
                        "one per MS level (e.g., for NativeMS datasets).");
     defaults_.setMinInt("merging_method", 0);
     defaults_.setMaxInt("merging_method", 2);
