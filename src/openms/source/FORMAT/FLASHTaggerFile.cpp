@@ -59,7 +59,7 @@ namespace OpenMS
           
           String proteindescription = hit.getDescription();
           if (proteindescription.empty()) {
-            proteindescription = " "
+            proteindescription = " ";
           }
           description += proteindescription;
           hitindices += std::to_string(tagger.getProteinIndex(hit));
