@@ -56,7 +56,12 @@ namespace OpenMS
           if (! delta_masses.empty()) delta_masses += ";";
 
           acc += hit.getAccession();
-          description += hit.getDescription();
+          
+          String proteindescription = hit.getDescription();
+          if (proteindescription.empty()) {
+            proteindescription = " "
+          }
+          description += proteindescription;
           hitindices += std::to_string(tagger.getProteinIndex(hit));
 
           auto seqposition = tagger.getMatchedPositions(hit, tag);
