@@ -716,7 +716,6 @@ namespace OpenMS
         {
           continue;
         }
-
         // now we have a matching peak for this mass of charge  abs_charge. From here, isotope peaks are collected
         const double mz = log_mz_peaks_[max_peak_index].mz;                                   // charged mz
         const double iso_delta = iso_da_distance_ / (double)abs_charge;
@@ -801,7 +800,7 @@ namespace OpenMS
         if (min_off != max_off)
         {
           pg.swap(new_peaks);
-          pg.updateMonoMassAndIsotopeIntensities();
+          pg.updateMonoMassAndIsotopeIntensities(tol);
 
           if (pg.getMonoMass() < current_min_mass_ || pg.getMonoMass() > current_max_mass_) { continue; }
           pg.setScanNumber(deconvolved_spectrum_.getScanNumber());
@@ -938,7 +937,6 @@ namespace OpenMS
                                                -peak_group.getMinNegativeIsotopeIndex(), window_width, allowed_iso_error_, target_decoy_type_);
       peak_group.setIsotopeCosine(cos);
       // first filtration to remove false positives before further processing.
-
       if (cos < std::min(min_isotope_cosine_[ms_level_ - 1], 0.5)) { continue; }
 
       int num_iteration = 10;
@@ -961,6 +959,7 @@ namespace OpenMS
           break;
         }
       }
+
       if (! mass_determined || peak_group.empty() || peak_group.getQscore() <= 0 || peak_group.getMonoMass() < current_min_mass_
           || peak_group.getMonoMass() > current_max_mass_)
         continue;

@@ -14,7 +14,7 @@
 namespace OpenMS
 {
   inline const Size max_node_cntr = 500;
-  class FLASHTaggerAlgorithm::DAC_
+  class FLASHTaggerAlgorithm::DAG_
   {
   private:
     int vertex_count_;
@@ -22,7 +22,7 @@ namespace OpenMS
     std::vector<std::vector<int>> adj_list_; //
 
   public:
-    explicit DAC_(int vertice_count): vertex_count_(vertice_count), adj_list_(vertice_count)
+    explicit DAG_(int vertice_count): vertex_count_(vertice_count), adj_list_(vertice_count)
     {
     }
 
@@ -124,16 +124,16 @@ namespace OpenMS
     return ((vertex / (max_path_score_ - min_path_score_ + 1)) / (max_iso_in_tag_ + 1)) / (max_tag_length_ + 1);
   }
 
-  void FLASHTaggerAlgorithm::connectEdge_(FLASHTaggerAlgorithm::DAC_& dac, int vertex1, int vertex2, boost::dynamic_bitset<>& visited)
+  void FLASHTaggerAlgorithm::connectEdge_(FLASHTaggerAlgorithm::DAG_& dag, int vertex1, int vertex2, boost::dynamic_bitset<>& visited)
   {
     if (vertex1 < 0 || vertex2 < 0 || vertex1 >= (int)visited.size() || vertex2 >= (int)visited.size()) return;
     if (! visited[vertex2]) return;
 
-    dac.addEdge(vertex1, vertex2);
+    dag.addEdge(vertex1, vertex2);
     visited[vertex1] = true;
   }
 
-  void FLASHTaggerAlgorithm::constructDAC_(FLASHTaggerAlgorithm::DAC_& dac,
+  void FLASHTaggerAlgorithm::constructDAG_(FLASHTaggerAlgorithm::DAG_& dag,
                                            const std::vector<double>& mzs,
                                            const std::vector<int>& scores,
                                            int length,
@@ -143,7 +143,7 @@ namespace OpenMS
     edge_aa_map_.clear();
     int start_index = 1; // zeroth = source.
     int end_index = 1;
-    boost::dynamic_bitset<> visited(dac.size());
+    boost::dynamic_bitset<> visited(dag.size());
     visited[getVertex_(0, 0, 0, 0)] = true;
 
     while (end_index < (int)mzs.size())
@@ -154,7 +154,7 @@ namespace OpenMS
       int vertex1 = getVertex_(end_index, scores[end_index], 0, 0);
       int vertex2 = getVertex_(0, 0, 0, 0);
 
-      connectEdge_(dac, vertex1, vertex2, visited);
+      connectEdge_(dag, vertex1, vertex2, visited);
 
       // from an edge i, j to class edge.  for each i, j make a unique key. key to an edge.
 
@@ -198,7 +198,7 @@ namespace OpenMS
 
                 vertex1 = getVertex_(end_index, score, lvl + 1, g + n);
                 vertex2 = getVertex_(current_index, score - edge_score, lvl, g);
-                connectEdge_(dac, vertex1, vertex2, visited);
+                connectEdge_(dag, vertex1, vertex2, visited);
               }
             }
           }
@@ -214,7 +214,7 @@ namespace OpenMS
           {
             vertex1 = (int)getVertex_((int)mzs.size() - 1, score, length, g);
             vertex2 = (int)getVertex_(end_index, score, length, g);
-            connectEdge_(dac, vertex1, vertex2, visited);
+            connectEdge_(dag, vertex1, vertex2, visited);
           }
         }
       }
@@ -497,8 +497,8 @@ namespace OpenMS
 
     for (int length = min_tag_length_; length <= max_tag_length_; length++)
     {
-      FLASHTaggerAlgorithm::DAC_ dac((int)_mzs.size() * (1 + max_tag_length_) * (1 + max_iso_in_tag_) * (1 + max_path_score_ - min_path_score_));
-      constructDAC_(dac, _mzs, _scores, length, ppm);
+      FLASHTaggerAlgorithm::DAG_ dag((int)_mzs.size() * (1 + max_tag_length_) * (1 + max_iso_in_tag_) * (1 + max_path_score_ - min_path_score_));
+      constructDAG_(dag, _mzs, _scores, length, ppm);
 
       std::set<FLASHDeconvHelperStructs::Tag> _tagSet;
       for (int score = max_path_score_; score >= min_path_score_ && (int)_tagSet.size() < max_tag_count_; score--)
@@ -507,7 +507,7 @@ namespace OpenMS
         all_paths.reserve(max_tag_count_);
         for (int g = 0; g <= max_iso_in_tag_; g++)
         {
-          dac.findAllPaths(getVertex_((int)_mzs.size() - 1, score, length, g), getVertex_(0, 0, 0, 0), all_paths, max_tag_count_);
+          dag.findAllPaths(getVertex_((int)_mzs.size() - 1, score, length, g), getVertex_(0, 0, 0, 0), all_paths, max_tag_count_);
         }
         for (const auto& path : all_paths)
         {

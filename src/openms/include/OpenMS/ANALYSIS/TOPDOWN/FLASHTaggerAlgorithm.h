@@ -73,7 +73,7 @@ namespace OpenMS
     void setDefaultParams_();
 
   private:
-    class DAC_;
+    class DAG_;
     /**
      @brief makes three vectors containing monoisotopic mass and score and scan numbers of each peakgroups.
      This function triggers the void run(const DeconvolvedSpectrum& dspec, double ppm) function using
@@ -93,7 +93,7 @@ namespace OpenMS
     */
     void getTags_(const std::vector<double>& mzs, const std::vector<int>& scores, int scan, double ppm, std::vector<FLASHDeconvHelperStructs::Tag>& tags);
 
-    void constructDAC_(FLASHTaggerAlgorithm::DAC_& dac, const std::vector<double>& mzs, const std::vector<int>& scores, int length, double tol);
+    void constructDAG_(FLASHTaggerAlgorithm::DAG_& dag, const std::vector<double>& mzs, const std::vector<int>& scores, int length, double tol);
     std::vector<Residue> getAA_(double l, double r, double tol, int iso_offset = 0) const;
     void updateEdgeMasses_();
     int getVertex_(int index, int path_score, int level, int iso_level) const;
@@ -101,7 +101,7 @@ namespace OpenMS
 
     void updateTagSet_(std::set<FLASHDeconvHelperStructs::Tag>& tag_set, std::map<String, std::vector<FLASHDeconvHelperStructs::Tag>>& seq_tag, const std::vector<int>& path, const std::vector<double>& mzs, const std::vector<int>& scores, int scan, double ppm);
 
-    static void connectEdge_(FLASHTaggerAlgorithm::DAC_& dac, int vertex1, int vertex2, boost::dynamic_bitset<>& visited);
+    static void connectEdge_(FLASHTaggerAlgorithm::DAG_& dag, int vertex1, int vertex2, boost::dynamic_bitset<>& visited);
 
     static Size find_with_X_(const std::string_view& A, const String& B, Size pos = 0);
 

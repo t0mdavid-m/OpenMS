@@ -402,6 +402,7 @@ namespace OpenMS
     quantifier.quantify(map, deconvolved_spectra, deconvolved_features);
   }
 
+  // currently only MS2 precursors
   void FLASHDeconvAlgorithm::findPrecursorPeakGroupsFormIdaLog_(const MSExperiment& map, Size index, double start_mz, double end_mz)
   {
     if (precursor_map_for_ida_.empty()) return;
@@ -457,7 +458,7 @@ namespace OpenMS
             precursor_pg.setAvgPPMError(smap[14]);
             precursor_pg.setQscore(smap[2]);
             precursor_pg.setRepAbsCharge(precursor_log_mz_peak.abs_charge);
-            precursor_pg.updateMonoMassAndIsotopeIntensities();
+            precursor_pg.updateMonoMassAndIsotopeIntensities(tols_[0]);
             int ms1_scan_number = iter->first;
             Size index_copy (index);
             while(index_copy != 0 && getScanNumber(map, index_copy--) != ms1_scan_number);

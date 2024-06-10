@@ -72,7 +72,7 @@ namespace OpenMS
     /**
            @brief add monoisotopic indices of peaks by offset and discard negative isotope peaks. Total intensity is also updated
     */
-    void updateMonoMassAndIsotopeIntensities();
+    void updateMonoMassAndIsotopeIntensities(double tol);
 
     /**
            @brief Update setQscore. Cosine and SNRs are also updated.
@@ -281,12 +281,14 @@ namespace OpenMS
     void updateSNR_(float mul_factor);
     /// clear peaks
     void clear_();
-    /// update per charge intensities, noise power, and squared intensities. used for SNR estimation
+    /// calculate per isotope intensities. When abs_charge == 0, all peaks are considered
+    void getPerIsotopeIntensities_(std::vector<float>& intensities, int& min_isotope_index, int& max_isotope_index, int abs_charge, int min_negative_isotope_index, double tol);
+      /// update per charge intensities, noise power, and squared intensities. used for SNR estimation
     void updatePerChargeInformation_(const std::vector<LogMzPeak>& noisy_peaks, const double tol, const bool is_last);
     /// update the charge range using the calculated per charge information
     void updateChargeRange_();
     /// update per charge cosine values
-    void updatePerChargeCos_(const FLASHDeconvHelperStructs::PrecalculatedAveragine& avg);
+    void updatePerChargeCos_(const FLASHDeconvHelperStructs::PrecalculatedAveragine& avg, double tol);
 
     /**
      * calculate noisy peak power. The goal of this function is to group noisy peaks that are possibly from the same molecule and sum their intensities before calculate power
