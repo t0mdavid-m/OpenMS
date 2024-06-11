@@ -12,80 +12,120 @@
 
 namespace OpenMS
 {
-inline const Size max_node_cntr = 500;
+  inline const Size max_node_cntr = 500;
 
-FLASHExtenderAlgorithm::FLASHExtenderAlgorithm(): DefaultParamHandler("FLASHExtenderAlgorithm"), ProgressLogger()
-{
-  setDefaultParams_();
-}
+  FLASHExtenderAlgorithm::FLASHExtenderAlgorithm(): DefaultParamHandler("FLASHExtenderAlgorithm"), ProgressLogger()
+  {
+    setDefaultParams_();
+  }
 
-FLASHExtenderAlgorithm::FLASHExtenderAlgorithm(const FLASHExtenderAlgorithm& other): DefaultParamHandler(other), ProgressLogger(other)
-{
-}
+  FLASHExtenderAlgorithm& FLASHExtenderAlgorithm::operator=(const FLASHExtenderAlgorithm& rhs)
+  {
+    if (this == &rhs) return *this;
 
-FLASHExtenderAlgorithm& FLASHExtenderAlgorithm::operator=(const FLASHExtenderAlgorithm& rhs)
-{
-  if (this == &rhs) return *this;
+    DefaultParamHandler::operator=(rhs);
+    return *this;
+  }
 
-  DefaultParamHandler::operator=(rhs);
-  return *this;
-}
+  void FLASHExtenderAlgorithm::setDefaultParams_()
+  {
+    defaults_.setValue("flanking_mass_tol", 700.0, "Flanking mass tolerance in Da.");
 
-void FLASHExtenderAlgorithm::setDefaultParams_()
-{
-  defaults_.setValue("max_tag_count", 500,
-                     "Maximum number of the tags per length (lengths set by -min_length and -max_length options). The tags with different amino acid "
-                     "combinations are all treated separately. E.g., "
-                     "TII, TIL, TLI, TLL are distinct tags even though they have the same mass differences. "
-                     "but are counted as four different tags. ");
-  defaults_.setMinInt("max_tag_count", 0);
+    defaults_.setValue("fdr", 1.0, "Protein FDR threshold.");
+    defaults_.setMaxFloat("fdr", 1.0);
+    defaults_.setMinFloat("fdr", 0.01);
 
-  defaults_.setValue(
-    "min_length", 4,
-    "Minimum length of a tag. Each mass gap contributes to a single length (even if a mass gap is represented by multiple amino acids). ");
-  defaults_.setMaxInt("min_length", 30);
-  defaults_.setMinInt("min_length", 3);
+    defaults_.setValue("keep_decoy", "false", "Keep decoy proteins.");
+    defaults_.addTag("keep_decoy", "advanced");
+    defaults_.setValidStrings("keep_decoy", {"true", "false"});
 
-  defaults_.setValue(
-    "max_length", 10,
-    "Maximum length of a tag. Each mass gap contributes to a single length (even if a mass gap is represented by multiple amino acids). ");
-  defaults_.setMaxInt("max_length", 30);
-  defaults_.setMinInt("max_length", 3);
+    defaultsToParam_();
+  }
 
-  defaults_.setValue("flanking_mass_tol", 700.0, "Flanking mass tolerance in Da.");
-  defaults_.setValue("max_iso_error_count", 0, "Maximum isotope error count per tag.");
-  defaults_.setMaxInt("max_iso_error_count", 2);
-  defaults_.setMinInt("max_iso_error_count", 0);
-  defaults_.addTag("max_iso_error_count", "advanced");
-  defaults_.setValue("min_matched_aa", 5, "Minimum number of amino acids in matched proteins, covered by tags.");
+  void FLASHExtenderAlgorithm::updateMembers_()
+  {
+  }
 
-  defaults_.setValue("fdr", 1.0, "Protein FDR threshold.");
-  defaults_.setMaxFloat("fdr", 1.0);
-  defaults_.setMinFloat("fdr", 0.01);
 
-  defaults_.setValue("keep_decoy", "false", "Keep decoy proteins.");
-  defaults_.addTag("keep_decoy", "advanced");
-  defaults_.setValidStrings("keep_decoy", {"true", "false"});
+  int FLASHExtenderAlgorithm::getVertex_(int peak_index, int pro_index, int score, int num_mod, int layer) const
+  {
+    return (((peak_index * (pro_length_ + 1) + pro_index) * (max_mod_cntr_ + 1) + num_mod) * (max_path_score_ - min_path_score_ + 1)
+           + (score - min_path_score_)) * (max_layer_ + 1) + layer;
+  }
 
-  defaultsToParam_();
-}
+  int FLASHExtenderAlgorithm::getPeakIndex_(int vertex) const
+  {
+    return (vertex / (max_layer_ + 1) / (max_path_score_ - min_path_score_ + 1) / (max_mod_cntr_ + 1)) / (pro_length_ + 1);
+  }
 
-void FLASHExtenderAlgorithm::updateMembers_()
-{
-}
+  int FLASHExtenderAlgorithm::getProIndex_(int vertex) const
+  {
+    return ((vertex / (max_layer_ + 1) / (max_path_score_ - min_path_score_ + 1) / (max_mod_cntr_ + 1))) % (pro_length_ + 1);
+  }
 
-/*
-int FLASHExtenderAlgorithm::getVertex_(int index, int path_score, int level, int iso_level) const
-{
-  return ((index * (max_tag_length_ + 1) + level) * (max_iso_in_tag_ + 1) + iso_level) * (max_path_score_ - min_path_score_ + 1)
-         + (path_score - min_path_score_);
-}
+  int FLASHExtenderAlgorithm::getScore_(int vertex) const
+  {
+    return 0;
+  }
 
-int FLASHExtenderAlgorithm::getIndex_(int vertex) const
-{
-  return ((vertex / (max_path_score_ - min_path_score_ + 1)) / (max_iso_in_tag_ + 1)) / (max_tag_length_ + 1);
-}
-*/
+  int FLASHExtenderAlgorithm::getModNumber_(int vertex) const
+  {
+    return 0;
+  }
 
+  void FLASHExtenderAlgorithm::constructSubDAG_(FLASHHelperClasses::DAG& dag, boost::dynamic_bitset<>& visited,
+                                           int vertex1, int peak_index2, int pro_index2, int layer, bool allow_truncation)
+  {
+    if (!visited[vertex1]) return;
+    int peak_index1 = getPeakIndex_(vertex1);
+    int score1 = getScore_(vertex1);
+    int num_mod1 = getModNumber_(vertex1);
+    int pro_index1 = getProIndex_(vertex1);
+
+    if (peak_index1 == peak_index2 && pro_index1 == pro_index2)
+    {
+      for (int score = score1 - 1; score >= min_path_score_; score--)
+      {
+        int vertex = getVertex_(peak_index1, pro_index1, score, num_mod1, layer);
+         // if lower scoring path exist, delete. keep the best score per num_mod
+        visited[vertex] = false;
+      }
+      return;
+    }
+
+    if (allow_truncation)
+    {
+      for (int pro_index = pro_index1 + 1; pro_index <= pro_index2 ; pro_index++)
+      {
+        int vertex2 = getVertex_(peak_index1, pro_index, score1, num_mod1, layer);
+        if (visited[vertex2]) return;
+        visited[vertex2] = true;
+        constructSubDAG_(dag, visited, vertex2, peak_index2, pro_index2, layer);
+      }
+      return;
+    }
+
+    double delta_mass1 = peak_masses_[peak_index1] - pro_masses_[pro_index1];
+
+    for (int peak_index = peak_index1 + 1; peak_index <= peak_index2 ; peak_index++)
+    {
+      int score = score1 + peak_scores_[peak_index];
+      for (int pro_index = pro_index1 + 1; pro_index <= pro_index2; pro_index++)
+      {
+        double delta_mass = peak_masses_[peak_index] - pro_masses_[pro_index];
+        if (delta_mass - delta_mass1 > max_mod_mass_) break;
+        if (delta_mass1 - delta_mass > max_mod_mass_) continue;
+        int num_mod = num_mod1;
+        if (std::abs(delta_mass - delta_mass1) > tol_ * peak_masses_[peak_index1]) num_mod ++;
+        if (num_mod > max_mod_cntr_) continue;
+        if (peak_index1 == peak_index2 && pro_index1 == pro_index2) layer = 0; // for sink, go to the layer 0
+        int vertex2 = getVertex_(peak_index, pro_index, score, num_mod, layer);
+        if (visited[vertex2]) return;
+        visited[vertex2] = true;
+        constructSubDAG_(dag, visited, vertex2, peak_index2, pro_index2, layer);
+      }
+    }
+
+  }
 
 } // namespace OpenMS

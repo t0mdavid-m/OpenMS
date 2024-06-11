@@ -62,16 +62,7 @@ namespace OpenMS
     return ((vertex / (max_path_score_ - min_path_score_ + 1)) / (max_iso_in_tag_ + 1)) / (max_tag_length_ + 1);
   }
 
-  void FLASHTaggerAlgorithm::connectEdge_(FLASHHelperClasses::DAG_& dag, int vertex1, int vertex2, boost::dynamic_bitset<>& visited)
-  {
-    if (vertex1 < 0 || vertex2 < 0 || vertex1 >= (int)visited.size() || vertex2 >= (int)visited.size()) return;
-    if (! visited[vertex2]) return;
-
-    dag.addEdge(vertex1, vertex2);
-    visited[vertex1] = true;
-  }
-
-  void FLASHTaggerAlgorithm::constructDAG_(FLASHHelperClasses::DAG_& dag,
+  void FLASHTaggerAlgorithm::constructDAG_(FLASHHelperClasses::DAG& dag,
                                            const std::vector<double>& mzs,
                                            const std::vector<int>& scores,
                                            int length,
@@ -92,7 +83,7 @@ namespace OpenMS
       int vertex1 = getVertex_(end_index, scores[end_index], 0, 0);
       int vertex2 = getVertex_(0, 0, 0, 0);
 
-      connectEdge_(dag, vertex1, vertex2, visited);
+      dag.addEdge(vertex1, vertex2, visited); // move to DAG?
 
       // from an edge i, j to class edge.  for each i, j make a unique key. key to an edge.
 
@@ -111,7 +102,6 @@ namespace OpenMS
 
           aas = getAA_(l, r, tol, n);
           if (aas.empty()) continue;
-
 
           // end_index, current_index to amino acid strings.
           if (edge_aa_map_.find(end_index) == edge_aa_map_.end()) { edge_aa_map_[end_index] = std::map<int, std::vector<String>>(); }
@@ -136,7 +126,7 @@ namespace OpenMS
 
                 vertex1 = getVertex_(end_index, score, lvl + 1, g + n);
                 vertex2 = getVertex_(current_index, score - edge_score, lvl, g);
-                connectEdge_(dag, vertex1, vertex2, visited);
+                dag.addEdge(vertex1, vertex2, visited);
               }
             }
           }
@@ -152,7 +142,7 @@ namespace OpenMS
           {
             vertex1 = (int)getVertex_((int)mzs.size() - 1, score, length, g);
             vertex2 = (int)getVertex_(end_index, score, length, g);
-            connectEdge_(dag, vertex1, vertex2, visited);
+            dag.addEdge(vertex1, vertex2, visited);
           }
         }
       }
@@ -435,7 +425,7 @@ namespace OpenMS
 
     for (int length = min_tag_length_; length <= max_tag_length_; length++)
     {
-      FLASHHelperClasses::DAG_ dag((int)_mzs.size() * (1 + max_tag_length_) * (1 + max_iso_in_tag_) * (1 + max_path_score_ - min_path_score_));
+      FLASHHelperClasses::DAG dag((int)_mzs.size() * (1 + max_tag_length_) * (1 + max_iso_in_tag_) * (1 + max_path_score_ - min_path_score_));
       constructDAG_(dag, _mzs, _scores, length, ppm);
 
       std::set<FLASHHelperClasses::Tag> _tagSet;

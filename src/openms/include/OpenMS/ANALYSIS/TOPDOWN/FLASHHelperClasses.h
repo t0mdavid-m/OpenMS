@@ -257,10 +257,10 @@ namespace OpenMS
       Size length_;
     };
 
-    class OPENMS_DLLAPI DAG_
+    class OPENMS_DLLAPI DAG
     {
     public:
-      explicit DAG_(int vertice_count): vertex_count_(vertice_count), adj_list_(vertice_count)
+      explicit DAG(int vertice_count): vertex_count_(vertice_count), adj_list_(vertice_count)
       {
       }
 
@@ -269,9 +269,12 @@ namespace OpenMS
         return vertex_count_;
       }
 
-      void addEdge(int src, int dest)
+      void addEdge(int vertex1, int vertex2, boost::dynamic_bitset<>& visited)
       {
-        adj_list_[src].push_back(dest); //
+        if (vertex1 < 0 || vertex2 < 0 || vertex1 >= (int)visited.size() || vertex2 >= (int)visited.size()) return;
+        if (! visited[vertex2]) return;
+        visited[vertex1] = true;
+        adj_list_[vertex1].push_back(vertex2); //
       }
 
       void findAllPaths(int source, int sink, std::vector<std::vector<int>>& all_paths, int max_count)
