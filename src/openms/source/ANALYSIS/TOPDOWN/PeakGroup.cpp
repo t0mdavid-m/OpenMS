@@ -76,41 +76,18 @@ namespace OpenMS
   void PeakGroup::updatePerChargeCos_(const FLASHDeconvHelperStructs::PrecalculatedAveragine& avg, double tol)
   {
     auto iso_dist = avg.get(monoisotopic_mass_);
-    auto current_per_isotope_intensities = std::vector<float>(getIsotopeIntensities().size() + min_negative_isotope_index_, .0f);
+    auto current_per_isotope_intensities = std::vector<float>(getIsotopeIntensities().size(), .0f);
 
-    if (min_abs_charge_ == max_abs_charge_)
-      setChargeIsotopeCosine(min_abs_charge_, getIsotopeCosine());
+    if (min_abs_charge_ == max_abs_charge_) setChargeIsotopeCosine(min_abs_charge_, getIsotopeCosine());
     else
     {
       for (int abs_charge = min_abs_charge_; abs_charge <= max_abs_charge_; abs_charge++)
       {
-        std::fill(current_per_isotope_intensities.begin(), current_per_isotope_intensities.end(), .0f);
-        int min_isotope_index = (int)current_per_isotope_intensities.size();
-        int max_isotope_index = -1; // this is inclusive!!
-
-        for (const auto& peak : logMzpeaks_)
-        {
-          if (peak.abs_charge != abs_charge)
-          {
-            continue;
-          }
-
-          if (peak.isotopeIndex >= (int)current_per_isotope_intensities.size())
-          {
-            continue;
-          }
-
-          if (peak.isotopeIndex < 0)
-          {
-            continue;
-          }
-          current_per_isotope_intensities[peak.isotopeIndex] += peak.intensity;
-          min_isotope_index = min_isotope_index < peak.isotopeIndex ? min_isotope_index : peak.isotopeIndex;
-          max_isotope_index = max_isotope_index < peak.isotopeIndex ? peak.isotopeIndex : max_isotope_index;
-        }
-
-        float cos_score = SpectralDeconvolution::getCosine(current_per_isotope_intensities, min_isotope_index, max_isotope_index, iso_dist, 0, SpectralDeconvolution::min_iso_size,
-                                                           target_decoy_type_ == PeakGroup::TargetDecoyType::noise_decoy);
+        int min_isotope_index, max_isotope_index;
+        getPerIsotopeIntensities_(current_per_isotope_intensities, min_isotope_index, max_isotope_index, abs_charge, 0, tol);
+        float cos_score
+          = SpectralDeconvolution::getCosine(current_per_isotope_intensities, min_isotope_index, max_isotope_index, iso_dist, 0,
+                                             SpectralDeconvolution::min_iso_size, target_decoy_type_ == PeakGroup::TargetDecoyType::noise_decoy);
         setChargeIsotopeCosine(abs_charge, cos_score); //
       }
     }
@@ -663,9 +640,20 @@ namespace OpenMS
                                             int min_negative_isotope_index,
                                             double tol)
   {
-    std::fill(intensities.begin(), intensities.end(), .0f);
-    min_isotope_index = (int)intensities.size();
+    int da_tol = (int)(tol * logMzpeaks_[0].getUnchargedMass() / 2.0);
+
+    min_isotope_index = 1e5;
     max_isotope_index = -1; // this is inclusive!!
+
+    for (const auto& p : logMzpeaks_)
+    {
+      max_isotope_index = max_isotope_index < p.isotopeIndex ? p.isotopeIndex : max_isotope_index;
+      min_isotope_index = min_isotope_index < p.isotopeIndex ? min_isotope_index : p.isotopeIndex;
+    }
+    intensities = std::vector<float>(max_isotope_index + 1 + da_tol - min_negative_isotope_index_, .0f);
+    std::fill(intensities.begin(), intensities.end(), .0f);
+
+    double denom = 2.0 * std::pow(da_tol / 2.355, 2.0) / iso_da_distance_;
 
     for (const auto& peak : logMzpeaks_)
     {
@@ -675,16 +663,12 @@ namespace OpenMS
 
       if (peak.isotopeIndex < 0) { continue; }
 
-      int da_tol = (int)(tol * peak.getUnchargedMass()) / 10;
-
-      for (int margin = -da_tol; margin <= da_tol; da_tol++)
+      for (int margin = -da_tol; margin <= da_tol; margin++)
       {
         int index = peak.isotopeIndex + margin - min_negative_isotope_index;
         if (index < 0 || index >= intensities.size()) continue;
-        intensities[peak.isotopeIndex + margin - min_negative_isotope_index] += peak.intensity;
+        intensities[index] += denom > 0 ? peak.intensity * exp(- margin * margin / denom) : peak.intensity;
       }
-      min_isotope_index = min_isotope_index < peak.isotopeIndex ? min_isotope_index : peak.isotopeIndex;
-      max_isotope_index = max_isotope_index < peak.isotopeIndex ? peak.isotopeIndex : max_isotope_index;
     }
 
     if (min_negative_isotope_index != 0)
@@ -697,56 +681,33 @@ namespace OpenMS
 
         if (peak.isotopeIndex - min_negative_isotope_index < 0) { continue; }
 
-        int da_tol = (int)(tol * peak.getUnchargedMass()) / 10;
-
-        for (int margin = -da_tol; margin <= da_tol; da_tol++)
+        for (int margin = -da_tol; margin <= da_tol; margin++)
         {
           int index = peak.isotopeIndex + margin - min_negative_isotope_index;
           if (index < 0 || index >= intensities.size()) continue;
-          intensities[peak.isotopeIndex + margin - min_negative_isotope_index] += peak.intensity;
+          intensities[index] += denom > 0 ? peak.intensity * exp(- margin * margin / denom) : peak.intensity;
         }
-
-        min_isotope_index = min_isotope_index < peak.isotopeIndex ? min_isotope_index : peak.isotopeIndex;
-        max_isotope_index = max_isotope_index < peak.isotopeIndex ? peak.isotopeIndex : max_isotope_index;
       }
-
-      min_isotope_index -= min_negative_isotope_index;
-      max_isotope_index -= min_negative_isotope_index;
     }
   }
 
   void PeakGroup::updateMonoMassAndIsotopeIntensities(double tol)
   {
     if (logMzpeaks_.size() == 0) { return; }
-    int min_isotope_index, max_isotope_index = 0;
+    int min_isotope_index, max_isotope_index;
     std::sort(logMzpeaks_.begin(), logMzpeaks_.end());
-    for (const auto& p : logMzpeaks_)
-    {
-      max_isotope_index = max_isotope_index < p.isotopeIndex ? p.isotopeIndex : max_isotope_index;
-    }
 
-    per_isotope_int_ = std::vector<float>(max_isotope_index + 1 - min_negative_isotope_index_, .0f);
     intensity_ = .0;
     double nominator = .0;
+
+    getPerIsotopeIntensities_(per_isotope_int_, min_isotope_index, max_isotope_index, 0, min_negative_isotope_index_, tol);
 
     for (const auto& p : logMzpeaks_)
     {
       float pi = p.intensity;
-      if (p.isotopeIndex < 0)
-      {
-        continue;
-      }
-      per_isotope_int_[p.isotopeIndex - min_negative_isotope_index_] += pi;
+      if (p.isotopeIndex - min_negative_isotope_index_ < 0) { continue; }
       nominator += pi * (p.getUnchargedMass() - p.isotopeIndex * iso_da_distance_);
       intensity_ += pi;
-    }
-    for (const auto& p : negative_iso_peaks_)
-    {
-      if (p.isotopeIndex - min_negative_isotope_index_ < 0)
-      {
-        continue;
-      }
-      per_isotope_int_[p.isotopeIndex - min_negative_isotope_index_] += p.intensity;
     }
 
     monoisotopic_mass_ = nominator / intensity_;
