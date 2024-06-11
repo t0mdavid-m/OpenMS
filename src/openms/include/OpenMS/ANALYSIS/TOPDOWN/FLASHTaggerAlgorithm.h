@@ -1,4 +1,4 @@
-// Copyright (c) 2002-2023, The OpenMS Team -- EKU Tuebingen, ETH Zurich, and FU Berlin
+// Copyright (c) 2002-2024, The OpenMS Team -- EKU Tuebingen, ETH Zurich, and FU Berlin
 // SPDX-License-Identifier: BSD-3-Clause
 //
 // --------------------------------------------------------------------------
@@ -48,8 +48,6 @@ namespace OpenMS
       @brief
       Decoy or MS level 1 spectra are removed by this process.
       Overlapping PeakGroups in merged spectra are also removed.
-      This function triggers the void run(const DeconvolvedSpectrum& dspec, double ppm) function using 
-      merged spectrum and ppm
 
       @param deconvolved_spectra spectra deconvolved by FLASHDeconv.
       @param ppm The acceptable ppm tolerance for mass
@@ -59,13 +57,13 @@ namespace OpenMS
     void run(const std::vector<DeconvolvedSpectrum>& deconvolved_spectra, double ppm, const std::vector<FASTAFile::FASTAEntry>& fasta_entry);
 
     void getProteinHits(std::vector<ProteinHit>& hits) const;
-    void getProteinHitsMatchedBy(const FLASHDeconvHelperStructs::Tag& tag, std::vector<ProteinHit>& hits) const;
-    void getTagsMatchingTo(const ProteinHit& hit, std::vector<FLASHDeconvHelperStructs::Tag>& tags) const;
-    void getTags(bool matched, std::vector<FLASHDeconvHelperStructs::Tag>& tags) const;
+    void getProteinHitsMatchedBy(const FLASHHelperClasses::Tag& tag, std::vector<ProteinHit>& hits) const;
+    void getTagsMatchingTo(const ProteinHit& hit, std::vector<FLASHHelperClasses::Tag>& tags) const;
+    void getTags(bool matched, std::vector<FLASHHelperClasses::Tag>& tags) const;
 
     int getProteinIndex(const ProteinHit& hit) const;
 
-    void getMatchedPositionsAndFlankingMassDiffs(std::vector<int>& positions, std::vector<double>& masses, const ProteinHit& hit, const FLASHDeconvHelperStructs::Tag& tag) const;
+    void getMatchedPositionsAndFlankingMassDiffs(std::vector<int>& positions, std::vector<double>& masses, const ProteinHit& hit, const FLASHHelperClasses::Tag& tag) const;
 
   protected:
     void updateMembers_() override;
@@ -73,7 +71,6 @@ namespace OpenMS
     void setDefaultParams_();
 
   private:
-    class DAG_;
     /**
      @brief makes three vectors containing monoisotopic mass and score and scan numbers of each peakgroups.
      This function triggers the void run(const DeconvolvedSpectrum& dspec, double ppm) function using
@@ -83,7 +80,7 @@ namespace OpenMS
       @param ppm The acceptable ppm tolerance for mass.
        @param tags found tags
     */
-     void getTags_(const DeconvolvedSpectrum& dspec, double ppm, std::vector<FLASHDeconvHelperStructs::Tag>& tags);
+     void getTags_(const DeconvolvedSpectrum& dspec, double ppm, std::vector<FLASHHelperClasses::Tag>& tags);
     /**
       @brief makes three vectors containing monoisotopic mass and score and scan numbers of each peakgroups.
 
@@ -91,17 +88,17 @@ namespace OpenMS
       @param ppm The acceptable ppm tolerance for mass.
         @param tags found tags
     */
-    void getTags_(const std::vector<double>& mzs, const std::vector<int>& scores, int scan, double ppm, std::vector<FLASHDeconvHelperStructs::Tag>& tags);
+    void getTags_(const std::vector<double>& mzs, const std::vector<int>& scores, int scan, double ppm, std::vector<FLASHHelperClasses::Tag>& tags);
 
-    void constructDAG_(FLASHTaggerAlgorithm::DAG_& dag, const std::vector<double>& mzs, const std::vector<int>& scores, int length, double tol);
+    void constructDAG_(FLASHHelperClasses::DAG_& dag, const std::vector<double>& mzs, const std::vector<int>& scores, int length, double tol);
     std::vector<Residue> getAA_(double l, double r, double tol, int iso_offset = 0) const;
     void updateEdgeMasses_();
     int getVertex_(int index, int path_score, int level, int iso_level) const;
     int getIndex_(int vertex) const;
 
-    void updateTagSet_(std::set<FLASHDeconvHelperStructs::Tag>& tag_set, std::map<String, std::vector<FLASHDeconvHelperStructs::Tag>>& seq_tag, const std::vector<int>& path, const std::vector<double>& mzs, const std::vector<int>& scores, int scan, double ppm);
+    void updateTagSet_(std::set<FLASHHelperClasses::Tag>& tag_set, std::map<String, std::vector<FLASHHelperClasses::Tag>>& seq_tag, const std::vector<int>& path, const std::vector<double>& mzs, const std::vector<int>& scores, int scan, double ppm);
 
-    static void connectEdge_(FLASHTaggerAlgorithm::DAG_& dag, int vertex1, int vertex2, boost::dynamic_bitset<>& visited);
+    static void connectEdge_(FLASHHelperClasses::DAG_& dag, int vertex1, int vertex2, boost::dynamic_bitset<>& visited);
 
     static Size find_with_X_(const std::string_view& A, const String& B, Size pos = 0);
 
@@ -109,7 +106,7 @@ namespace OpenMS
     std::map<double, std::vector<Residue>> aa_mass_map_;
     std::map<int, std::map<int, std::vector<String>>> edge_aa_map_;
 
-    std::vector<FLASHDeconvHelperStructs::Tag> tags_; // from scan to tags
+    std::vector<FLASHHelperClasses::Tag> tags_; // from scan to tags
     std::vector<ProteinHit> protein_hits_;
     std::vector<std::vector<int>> matching_tags_indices_; // outer vector index = hit index
     std::vector<std::vector<int>> matching_hits_indices_; // outer vector index = tag index

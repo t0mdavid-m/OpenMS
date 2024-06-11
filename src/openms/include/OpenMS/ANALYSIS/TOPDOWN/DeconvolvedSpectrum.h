@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include <OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvHelperStructs.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/KERNEL/MSSpectrum.h>
 #include <iomanip>
@@ -29,7 +29,7 @@ namespace OpenMS
   class OPENMS_DLLAPI DeconvolvedSpectrum
   {
   public:
-    typedef FLASHDeconvHelperStructs::LogMzPeak LogMzPeak;
+    typedef FLASHHelperClasses::LogMzPeak LogMzPeak;
 
     /// default constructor
     DeconvolvedSpectrum() = default;
@@ -99,10 +99,10 @@ namespace OpenMS
     const Precursor::ActivationMethod& getActivationMethod() const;
 
     /// return isobaric  quantities
-    FLASHDeconvHelperStructs::IsobaricQuantities getQuantities() const;
+    FLASHHelperClasses::IsobaricQuantities getQuantities() const;
 
     /// set isobaric quantities
-    void setQuantities(const FLASHDeconvHelperStructs::IsobaricQuantities& quantities);
+    void setQuantities(const FLASHHelperClasses::IsobaricQuantities& quantities);
 
     /// set precursor for MSn for n>1
     void setPrecursor(const Precursor& precursor);
@@ -172,6 +172,6 @@ namespace OpenMS
     int scan_number_ = 0, precursor_scan_number_ = 0;
     double cv_ = 1e5;
     /// isobaric quantities
-    FLASHDeconvHelperStructs::IsobaricQuantities quantities_;
+    FLASHHelperClasses::IsobaricQuantities quantities_;
   };
 } // namespace OpenMS

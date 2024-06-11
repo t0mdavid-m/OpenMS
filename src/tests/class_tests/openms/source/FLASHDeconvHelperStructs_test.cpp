@@ -9,30 +9,30 @@
 #include <OpenMS/CONCEPT/ClassTest.h>
 
 ///////////////////////////
-#include <OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvHelperStructs.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
 ///////////////////////////
 
 using namespace OpenMS;
 using namespace std;
 
-typedef FLASHDeconvHelperStructs::LogMzPeak LogMzPeak;
-typedef FLASHDeconvHelperStructs::PrecalculatedAveragine PrecalculatedAveragine;
+typedef FLASHHelperClasses::LogMzPeak LogMzPeak;
+typedef FLASHHelperClasses::PrecalculatedAveragine PrecalculatedAveragine;
 
 START_TEST(FLASHDeconvHelperStructs, "$Id$")
 
 /////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////
 
-FLASHDeconvHelperStructs* ptr = 0;
-FLASHDeconvHelperStructs* null_ptr = 0;
-START_SECTION(FLASHDeconvHelperStructs())
+FLASHHelperClasses* ptr = 0;
+FLASHHelperClasses* null_ptr = 0;
+START_SECTION(FLASHHelperClasses())
 {
-  ptr = new FLASHDeconvHelperStructs();
+  ptr = new FLASHHelperClasses();
   TEST_NOT_EQUAL(ptr, null_ptr)
 }
 END_SECTION
 
-START_SECTION(~FLASHDeconvHelperStructs())
+START_SECTION(~FLASHHelperClasses())
 {
   delete ptr;
 }
@@ -42,8 +42,8 @@ END_SECTION
 START_SECTION((static double getLogMz(const double mz, const bool positive)))
 {
   double mz = 1300;
-  double tmp_lmz1 = OpenMS::FLASHDeconvHelperStructs::getLogMz(mz, true);
-  double tmp_lmz2 = OpenMS::FLASHDeconvHelperStructs::getLogMz(mz, false);
+  double tmp_lmz1 = OpenMS::FLASHHelperClasses::getLogMz(mz, true);
+  double tmp_lmz2 = OpenMS::FLASHHelperClasses::getLogMz(mz, false);
   TOLERANCE_ABSOLUTE(0.1);
   TEST_REAL_SIMILAR(tmp_lmz1, 7.169344415063863);
   TEST_REAL_SIMILAR(tmp_lmz2, 7.170119121465);
@@ -52,8 +52,8 @@ END_SECTION
 
 START_SECTION((static double getChargeMass(const bool positive)))
 {
-  double temp_pos = OpenMS::FLASHDeconvHelperStructs::getChargeMass(true);
-  double temp_neg = OpenMS::FLASHDeconvHelperStructs::getChargeMass(false);
+  double temp_pos = OpenMS::FLASHHelperClasses::getChargeMass(true);
+  double temp_neg = OpenMS::FLASHHelperClasses::getChargeMass(false);
   TEST_REAL_SIMILAR(temp_pos, Constants::PROTON_MASS_U);
   TEST_REAL_SIMILAR(temp_neg, -Constants::PROTON_MASS_U);
 }

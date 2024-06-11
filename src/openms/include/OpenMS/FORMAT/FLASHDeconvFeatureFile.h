@@ -9,7 +9,7 @@
 
 #pragma once
 
-#include <OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvHelperStructs.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/config.h>
 #include <iomanip>
@@ -33,7 +33,7 @@ namespace OpenMS
     static void writeTopFDFeatureHeader(std::fstream& fs, uint ms_level);
 
     /// write the features in regular file output
-    static void writeFeatures(const std::vector<FLASHDeconvHelperStructs::MassFeature>& mass_features, const String& file_name, std::fstream& fs, bool report_decoy = false);
+    static void writeFeatures(const std::vector<FLASHHelperClasses::MassFeature>& mass_features, const String& file_name, std::fstream& fs, bool report_decoy = false);
 
     /**
      * @brief Find mass features and write features in TopFD format files.
@@ -45,7 +45,7 @@ namespace OpenMS
      * @param ms_level ms level
      */
 
-    static void writeTopFDFeatures(const std::vector<FLASHDeconvHelperStructs::MassFeature>& mass_features, const std::map<int, PeakGroup>& precursor_peak_groups,
+    static void writeTopFDFeatures(const std::vector<FLASHHelperClasses::MassFeature>& mass_features, const std::map<int, PeakGroup>& precursor_peak_groups,
                                    const std::map<int, double>& scan_rt_map, const String& file_name, std::fstream& fs, uint ms_level);
 
   };

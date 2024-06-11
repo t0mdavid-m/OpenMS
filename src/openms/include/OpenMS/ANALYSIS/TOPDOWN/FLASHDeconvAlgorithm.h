@@ -9,7 +9,7 @@
 #pragma once
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
-#include <OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvHelperStructs.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
 #include <OpenMS/DATASTRUCTURES/DefaultParamHandler.h>
@@ -58,10 +58,10 @@ namespace OpenMS
      * @param deconvolved_spectra the deconvolved spectra will be stored in here
      * @param deconvolved_feature tje deconvolved features wll be strored in here
      */
-    void run(MSExperiment& map, std::vector<DeconvolvedSpectrum>& deconvolved_spectra, std::vector<FLASHDeconvHelperStructs::MassFeature>& deconvolved_feature);
+    void run(MSExperiment& map, std::vector<DeconvolvedSpectrum>& deconvolved_spectra, std::vector<FLASHHelperClasses::MassFeature>& deconvolved_feature);
 
     /// get calculated averagine. Call after calculateAveragine is called.
-    const FLASHDeconvHelperStructs::PrecalculatedAveragine& getAveragine();
+    const FLASHHelperClasses::PrecalculatedAveragine& getAveragine();
 
     /// get noise decoy weight
     double getNoiseDecoyWeight()
@@ -128,7 +128,7 @@ namespace OpenMS
     void runSpectralDeconvolution_(MSExperiment& map, std::vector<DeconvolvedSpectrum>& deconvolved_spectra);
 
     /// run feature finding to get deconvolved features
-    void runFeatureFinding_(std::vector<DeconvolvedSpectrum>& deconvolved_spectra, std::vector<FLASHDeconvHelperStructs::MassFeature>& deconvolved_features);
+    void runFeatureFinding_(std::vector<DeconvolvedSpectrum>& deconvolved_spectra, std::vector<FLASHHelperClasses::MassFeature>& deconvolved_features);
 
     /// with found deconvolved features, update QScores for masses that are contained in features.
     static void updatePrecursorQScores_(std::vector<DeconvolvedSpectrum>& deconvolved_spectra, int ms_level);

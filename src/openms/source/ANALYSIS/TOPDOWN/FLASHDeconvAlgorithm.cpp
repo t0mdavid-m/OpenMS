@@ -348,14 +348,14 @@ namespace OpenMS
   }
 
 
-  const FLASHDeconvHelperStructs::PrecalculatedAveragine& FLASHDeconvAlgorithm::getAveragine()
+  const FLASHHelperClasses::PrecalculatedAveragine& FLASHDeconvAlgorithm::getAveragine()
   {
     return sd_.getAveragine();
   }
 
   void FLASHDeconvAlgorithm::run(MSExperiment& map,
                                  std::vector<DeconvolvedSpectrum>& deconvolved_spectra,
-                                 std::vector<FLASHDeconvHelperStructs::MassFeature>& deconvolved_features)
+                                 std::vector<FLASHHelperClasses::MassFeature>& deconvolved_features)
   {
     // initialize
     precursor_map_for_ida_ = FLASHIda::parseFLASHIdaLog(ida_log_file_); // ms1 scan -> mass, charge ,score, mz range, precursor int, mass int, color
@@ -440,7 +440,7 @@ namespace OpenMS
         {
           if (abs(start_mz - smap[3]) < .001 && abs(end_mz - smap[4]) < .001)
           {
-            FLASHDeconvHelperStructs::LogMzPeak precursor_log_mz_peak;
+            FLASHHelperClasses::LogMzPeak precursor_log_mz_peak;
             precursor_log_mz_peak.abs_charge = std::abs((int)smap[1]);
             precursor_log_mz_peak.is_positive = (int)smap[1] > 0;
             precursor_log_mz_peak.isotopeIndex = 0;
@@ -559,7 +559,7 @@ namespace OpenMS
           if (pg[0].mz > end_mz || pg.back().mz < start_mz) { continue; }
 
           double max_intensity = .0;
-          const FLASHDeconvHelperStructs::LogMzPeak* tmp_precursor = nullptr;
+          const FLASHHelperClasses::LogMzPeak* tmp_precursor = nullptr;
 
           int c = int(.5 + pg.getMonoMass() / start_mz);
           for (auto& tmp_peak : pg)
@@ -630,7 +630,7 @@ namespace OpenMS
   }
 
   void FLASHDeconvAlgorithm::runFeatureFinding_(std::vector<DeconvolvedSpectrum>& deconvolved_spectra,
-                                                std::vector<FLASHDeconvHelperStructs::MassFeature>& deconvolved_features)
+                                                std::vector<FLASHHelperClasses::MassFeature>& deconvolved_features)
   {
     if (merge_spec_ == 2) return;
 

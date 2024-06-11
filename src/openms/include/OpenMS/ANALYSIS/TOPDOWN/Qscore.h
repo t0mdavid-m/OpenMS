@@ -9,7 +9,7 @@
 #pragma once
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
-#include <OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvHelperStructs.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
 #include <OpenMS/KERNEL/Peak1D.h>
 #include <OpenMS/METADATA/Precursor.h>
 
@@ -31,7 +31,7 @@ namespace OpenMS
   class OPENMS_DLLAPI Qscore
   {
   public:
-    typedef FLASHDeconvHelperStructs::LogMzPeak LogMzPeak;
+    typedef FLASHHelperClasses::LogMzPeak LogMzPeak;
 
     /// get QScore for a peak group of specific abs_charge
     static double getQscore(const PeakGroup* pg, const MSSpectrum& spectrum);

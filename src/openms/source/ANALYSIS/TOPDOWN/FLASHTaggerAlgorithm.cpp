@@ -1,4 +1,4 @@
-// Copyright (c) 2002-2023, The OpenMS Team -- EKU Tuebingen, ETH Zurich, and FU Berlin
+// Copyright (c) 2002-2024, The OpenMS Team -- EKU Tuebingen, ETH Zurich, and FU Berlin
 // SPDX-License-Identifier: BSD-3-Clause
 //
 // --------------------------------------------------------------------------
@@ -8,73 +8,11 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
-#include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
 #include <utility>
 
 namespace OpenMS
 {
   inline const Size max_node_cntr = 500;
-  class FLASHTaggerAlgorithm::DAG_
-  {
-  private:
-    int vertex_count_;
-    // 0, 1, 2, ... ,vertex_count - 1
-    std::vector<std::vector<int>> adj_list_; //
-
-  public:
-    explicit DAG_(int vertice_count): vertex_count_(vertice_count), adj_list_(vertice_count)
-    {
-    }
-
-    int size() const
-    {
-      return vertex_count_;
-    }
-
-    void addEdge(int src, int dest)
-    {
-      adj_list_[src].push_back(dest); //
-    }
-
-    void findAllPaths(int source, int sink, std::vector<std::vector<int>>& all_paths, int max_count)
-    {
-      boost::dynamic_bitset<> visited(vertex_count_);
-      std::vector<int> path;
-
-      findAllPaths_(source, sink, visited, path, all_paths, max_count); // reverse traveling
-    }
-
-  private:
-    void findAllPaths_(int current,
-                       int destination,
-                       boost::dynamic_bitset<>& visited,
-                       std::vector<int>& path,
-                       std::vector<std::vector<int>>& all_paths,
-                       int max_count)
-    {
-      if ((int)all_paths.size() >= max_count) return;
-      visited[current] = true;
-      path.push_back(current);
-
-      if (current == destination)
-      {
-        // add the current path
-        all_paths.push_back(path);
-      }
-      else
-      {
-        // Recursively explore neighbors
-        for (const auto& neighbor : adj_list_[current])
-        {
-          if (! visited[neighbor]) { findAllPaths_(neighbor, destination, visited, path, all_paths, max_count); }
-        }
-      }
-
-      // Backtrack
-      visited[current] = false;
-      path.pop_back();
-    }
-  };
 
   std::vector<Residue> FLASHTaggerAlgorithm::getAA_(double l, double r, double tol, int iso_offset) const
   {
@@ -124,7 +62,7 @@ namespace OpenMS
     return ((vertex / (max_path_score_ - min_path_score_ + 1)) / (max_iso_in_tag_ + 1)) / (max_tag_length_ + 1);
   }
 
-  void FLASHTaggerAlgorithm::connectEdge_(FLASHTaggerAlgorithm::DAG_& dag, int vertex1, int vertex2, boost::dynamic_bitset<>& visited)
+  void FLASHTaggerAlgorithm::connectEdge_(FLASHHelperClasses::DAG_& dag, int vertex1, int vertex2, boost::dynamic_bitset<>& visited)
   {
     if (vertex1 < 0 || vertex2 < 0 || vertex1 >= (int)visited.size() || vertex2 >= (int)visited.size()) return;
     if (! visited[vertex2]) return;
@@ -133,7 +71,7 @@ namespace OpenMS
     visited[vertex1] = true;
   }
 
-  void FLASHTaggerAlgorithm::constructDAG_(FLASHTaggerAlgorithm::DAG_& dag,
+  void FLASHTaggerAlgorithm::constructDAG_(FLASHHelperClasses::DAG_& dag,
                                            const std::vector<double>& mzs,
                                            const std::vector<int>& scores,
                                            int length,
@@ -309,7 +247,7 @@ namespace OpenMS
     {
       if (dspec.empty() || dspec.isDecoy() || dspec.getOriginalSpectrum().getMSLevel() == 1) continue;
       nextProgress();
-      auto tags = std::vector<FLASHDeconvHelperStructs::Tag>();
+      auto tags = std::vector<FLASHHelperClasses::Tag>();
       tags.reserve(max_tag_count_ * max_tag_length_);
       getTags_(dspec, ppm, tags);
       tags_.insert(tags_.end(), tags.begin(), tags.end());
@@ -322,7 +260,7 @@ namespace OpenMS
     runMatching_(fasta_entry);
   }
 
-  void FLASHTaggerAlgorithm::getTags_(const DeconvolvedSpectrum& dspec, double ppm, std::vector<FLASHDeconvHelperStructs::Tag>& tags)
+  void FLASHTaggerAlgorithm::getTags_(const DeconvolvedSpectrum& dspec, double ppm, std::vector<FLASHHelperClasses::Tag>& tags)
   {
     std::vector<double> mzs;
     std::vector<int> scores;
@@ -349,8 +287,8 @@ namespace OpenMS
     getTags_(mzs, scores, dspec.getScanNumber(), ppm, tags);
   }
 
-  void FLASHTaggerAlgorithm::updateTagSet_(std::set<FLASHDeconvHelperStructs::Tag>& tag_set,
-                                           std::map<String, std::vector<FLASHDeconvHelperStructs::Tag>>& seq_tag,
+  void FLASHTaggerAlgorithm::updateTagSet_(std::set<FLASHHelperClasses::Tag>& tag_set,
+                                           std::map<String, std::vector<FLASHHelperClasses::Tag>>& seq_tag,
                                            const std::vector<int>& path,
                                            const std::vector<double>& mzs,
                                            const std::vector<int>& scores,
@@ -416,7 +354,7 @@ namespace OpenMS
       }
       if (pass)
       {
-        auto direct_tag = FLASHDeconvHelperStructs::Tag(seq, flanking_mass, -1, tag_mzs, tag_scores, scan);
+        auto direct_tag = FLASHHelperClasses::Tag(seq, flanking_mass, -1, tag_mzs, tag_scores, scan);
         tag_set.insert(direct_tag);
         seq_tag[seq].push_back(direct_tag);
       }
@@ -436,7 +374,7 @@ namespace OpenMS
       }
       if (pass)
       {
-        auto reverse_tag = FLASHDeconvHelperStructs::Tag(rev_seq, -1, flanking_mass, rev_tag_mzs, rev_tag_scores, scan);
+        auto reverse_tag = FLASHHelperClasses::Tag(rev_seq, -1, flanking_mass, rev_tag_mzs, rev_tag_scores, scan);
         tag_set.insert(reverse_tag);
         seq_tag[rev_seq].push_back(reverse_tag);
       }
@@ -447,7 +385,7 @@ namespace OpenMS
                                       const std::vector<int>& scores,
                                       int scan,
                                       double ppm,
-                                      std::vector<FLASHDeconvHelperStructs::Tag>& tags)
+                                      std::vector<FLASHHelperClasses::Tag>& tags)
   {
     if (max_tag_count_ == 0) return;
 
@@ -492,15 +430,15 @@ namespace OpenMS
     min_path_score_ = std::min(min_path_score_, std::max(min_vertex_score, min_vertex_score) * (min_tag_length_ - 2));
     min_path_score_ = std::max(0, min_path_score_);
 
-    std::set<FLASHDeconvHelperStructs::Tag> tagSet;
-    std::map<String, std::vector<FLASHDeconvHelperStructs::Tag>> seq_tag;
+    std::set<FLASHHelperClasses::Tag> tagSet;
+    std::map<String, std::vector<FLASHHelperClasses::Tag>> seq_tag;
 
     for (int length = min_tag_length_; length <= max_tag_length_; length++)
     {
-      FLASHTaggerAlgorithm::DAG_ dag((int)_mzs.size() * (1 + max_tag_length_) * (1 + max_iso_in_tag_) * (1 + max_path_score_ - min_path_score_));
+      FLASHHelperClasses::DAG_ dag((int)_mzs.size() * (1 + max_tag_length_) * (1 + max_iso_in_tag_) * (1 + max_path_score_ - min_path_score_));
       constructDAG_(dag, _mzs, _scores, length, ppm);
 
-      std::set<FLASHDeconvHelperStructs::Tag> _tagSet;
+      std::set<FLASHHelperClasses::Tag> _tagSet;
       for (int score = max_path_score_; score >= min_path_score_ && (int)_tagSet.size() < max_tag_count_; score--)
       {
         std::vector<std::vector<int>> all_paths;
@@ -529,7 +467,7 @@ namespace OpenMS
     }
 
     std::sort(tags.begin(), tags.end(),
-              [](const FLASHDeconvHelperStructs::Tag& a, const FLASHDeconvHelperStructs::Tag& b) { return a.getScore() > b.getScore(); });
+              [](const FLASHHelperClasses::Tag& a, const FLASHHelperClasses::Tag& b) { return a.getScore() > b.getScore(); });
   }
 
   Size FLASHTaggerAlgorithm::find_with_X_(const std::string_view& A, const String& B, Size pos) // allow a single X. pos is in A
@@ -762,7 +700,7 @@ namespace OpenMS
     hits.insert(hits.end(), protein_hits_.begin(), protein_hits_.end());
   }
 
-  void FLASHTaggerAlgorithm::getProteinHitsMatchedBy(const FLASHDeconvHelperStructs::Tag& tag, std::vector<ProteinHit>& hits) const
+  void FLASHTaggerAlgorithm::getProteinHitsMatchedBy(const FLASHHelperClasses::Tag& tag, std::vector<ProteinHit>& hits) const
   {
     int index = tag.getIndex();
 
@@ -774,7 +712,7 @@ namespace OpenMS
     }
   }
 
-  void FLASHTaggerAlgorithm::getTags(bool matched, std::vector<FLASHDeconvHelperStructs::Tag>& tags) const
+  void FLASHTaggerAlgorithm::getTags(bool matched, std::vector<FLASHHelperClasses::Tag>& tags) const
   {
     for (int i = 0; i < (int)tags_.size(); i++)
     {
@@ -784,7 +722,7 @@ namespace OpenMS
     }
   }
 
-  void FLASHTaggerAlgorithm::getMatchedPositionsAndFlankingMassDiffs(std::vector<int>& positions, std::vector<double>& masses, const ProteinHit& hit, const FLASHDeconvHelperStructs::Tag& tag) const
+  void FLASHTaggerAlgorithm::getMatchedPositionsAndFlankingMassDiffs(std::vector<int>& positions, std::vector<double>& masses, const ProteinHit& hit, const FLASHHelperClasses::Tag& tag) const
   {
     Size pos = 0;
     std::vector<int> indices;
@@ -815,7 +753,7 @@ namespace OpenMS
     }
   }
 
-  void FLASHTaggerAlgorithm::getTagsMatchingTo(const ProteinHit& hit, std::vector<FLASHDeconvHelperStructs::Tag>& tags) const
+  void FLASHTaggerAlgorithm::getTagsMatchingTo(const ProteinHit& hit, std::vector<FLASHHelperClasses::Tag>& tags) const
   {
     int index = getProteinIndex(hit);
     if (index < 0) return;

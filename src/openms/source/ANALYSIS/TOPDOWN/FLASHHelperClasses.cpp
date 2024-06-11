@@ -6,13 +6,13 @@
 // $Authors: Kyowon Jeong, Jihyung Kim $
 // --------------------------------------------------------------------------
 
-#include <OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvHelperStructs.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
 #include <OpenMS/CHEMISTRY/ModificationsDB.h>
 #include <utility>
 
 namespace OpenMS
 {
-  FLASHDeconvHelperStructs::PrecalculatedAveragine::PrecalculatedAveragine(const double min_mass, const double max_mass, const double delta, CoarseIsotopePatternGenerator& generator,
+FLASHHelperClasses::PrecalculatedAveragine::PrecalculatedAveragine(const double min_mass, const double max_mass, const double delta, CoarseIsotopePatternGenerator& generator,
                                                                            const bool use_RNA_averagine) :
       mass_interval_(delta),
       min_mass_(min_mass)
@@ -112,70 +112,70 @@ namespace OpenMS
     }
   }
 
-  Size FLASHDeconvHelperStructs::PrecalculatedAveragine::massToIndex_(const double mass) const
+  Size FLASHHelperClasses::PrecalculatedAveragine::massToIndex_(const double mass) const
   {
     Size i = (Size)round(std::max(.0, mass - min_mass_) / mass_interval_);
     i = std::min(i, isotopes_.size() - 1);
     return i;
   }
 
-  IsotopeDistribution FLASHDeconvHelperStructs::PrecalculatedAveragine::get(const double mass) const
+  IsotopeDistribution FLASHHelperClasses::PrecalculatedAveragine::get(const double mass) const
   {
     return isotopes_[massToIndex_(mass)];
   }
 
-  size_t FLASHDeconvHelperStructs::PrecalculatedAveragine::getMaxIsotopeIndex() const
+  size_t FLASHHelperClasses::PrecalculatedAveragine::getMaxIsotopeIndex() const
   {
     return max_isotope_index_;
   }
 
-  Size FLASHDeconvHelperStructs::PrecalculatedAveragine::getLeftCountFromApex(const double mass) const
+  Size FLASHHelperClasses::PrecalculatedAveragine::getLeftCountFromApex(const double mass) const
   {
     return (Size)left_count_from_apex_[massToIndex_(mass)];
   }
 
-  double FLASHDeconvHelperStructs::PrecalculatedAveragine::getAverageMassDelta(const double mass) const
+  double FLASHHelperClasses::PrecalculatedAveragine::getAverageMassDelta(const double mass) const
   {
     return average_mono_mass_difference_[massToIndex_(mass)];
   }
 
-  double FLASHDeconvHelperStructs::PrecalculatedAveragine::getMostAbundantMassDelta(const double mass) const
+  double FLASHHelperClasses::PrecalculatedAveragine::getMostAbundantMassDelta(const double mass) const
   {
     return abundant_mono_mass_difference_[massToIndex_(mass)];
   }
 
-  double FLASHDeconvHelperStructs::PrecalculatedAveragine::getSNRMultiplicationFactor(const double mass) const
+  double FLASHHelperClasses::PrecalculatedAveragine::getSNRMultiplicationFactor(const double mass) const
   {
     return snr_mul_factor_[massToIndex_(mass)];
   }
 
-  Size FLASHDeconvHelperStructs::PrecalculatedAveragine::getRightCountFromApex(const double mass) const
+  Size FLASHHelperClasses::PrecalculatedAveragine::getRightCountFromApex(const double mass) const
   {
     return (Size)right_count_from_apex_[massToIndex_(mass)];
   }
 
-  Size FLASHDeconvHelperStructs::PrecalculatedAveragine::getApexIndex(const double mass) const
+  Size FLASHHelperClasses::PrecalculatedAveragine::getApexIndex(const double mass) const
   {
     return apex_index_[massToIndex_(mass)];
   }
 
-  Size FLASHDeconvHelperStructs::PrecalculatedAveragine::getLastIndex(const double mass) const
+  Size FLASHHelperClasses::PrecalculatedAveragine::getLastIndex(const double mass) const
   {
     Size index = massToIndex_(mass);
     return apex_index_[index] + right_count_from_apex_[index];
   }
 
-  void FLASHDeconvHelperStructs::PrecalculatedAveragine::setMaxIsotopeIndex(const int index)
+  void FLASHHelperClasses::PrecalculatedAveragine::setMaxIsotopeIndex(const int index)
   {
     max_isotope_index_ = index;
   }
 
-  FLASHDeconvHelperStructs::LogMzPeak::LogMzPeak(const Peak1D& peak, const bool positive) :
+  FLASHHelperClasses::LogMzPeak::LogMzPeak(const Peak1D& peak, const bool positive) :
       mz(peak.getMZ()), intensity(peak.getIntensity()), logMz(getLogMz(peak.getMZ(), positive)), abs_charge(0), is_positive(positive), isotopeIndex(0)
   {
   }
 
-  double FLASHDeconvHelperStructs::LogMzPeak::getUnchargedMass() const
+  double FLASHHelperClasses::LogMzPeak::getUnchargedMass() const
   {
     if (abs_charge == 0)
     {
@@ -188,7 +188,7 @@ namespace OpenMS
     return mass;
   }
 
-  bool FLASHDeconvHelperStructs::LogMzPeak::operator<(const LogMzPeak& a) const
+  bool FLASHHelperClasses::LogMzPeak::operator<(const LogMzPeak& a) const
   {
     if (this->logMz == a.logMz)
     {
@@ -197,7 +197,7 @@ namespace OpenMS
     return this->logMz < a.logMz;
   }
 
-  bool FLASHDeconvHelperStructs::LogMzPeak::operator>(const LogMzPeak& a) const
+  bool FLASHHelperClasses::LogMzPeak::operator>(const LogMzPeak& a) const
   {
     if (this->logMz == a.logMz)
     {
@@ -206,74 +206,74 @@ namespace OpenMS
     return this->logMz > a.logMz;
   }
 
-  bool FLASHDeconvHelperStructs::LogMzPeak::operator==(const LogMzPeak& a) const
+  bool FLASHHelperClasses::LogMzPeak::operator==(const LogMzPeak& a) const
   {
     return this->logMz == a.logMz && this->intensity == a.intensity;
   }
 
 
-  float FLASHDeconvHelperStructs::getChargeMass(const bool positive_ioniziation_mode)
+  float FLASHHelperClasses::getChargeMass(const bool positive_ioniziation_mode)
   {
     return (float)(positive_ioniziation_mode ? Constants::PROTON_MASS_U : -Constants::PROTON_MASS_U);
   }
 
-  double FLASHDeconvHelperStructs::getLogMz(const double mz, const bool positive)
+  double FLASHHelperClasses::getLogMz(const double mz, const bool positive)
   {
     return std::log(mz - getChargeMass(positive));
   }
 
-  bool FLASHDeconvHelperStructs::IsobaricQuantities::empty() const
+  bool FLASHHelperClasses::IsobaricQuantities::empty() const
   {
     return quantities.empty();
   }
-  FLASHDeconvHelperStructs::Tag::Tag(String seq, double n_mass, double c_mass, std::vector<double>& mzs, std::vector<int>& scores,  int scan) :
+  FLASHHelperClasses::Tag::Tag(String seq, double n_mass, double c_mass, std::vector<double>& mzs, std::vector<int>& scores,  int scan) :
       seq_(std::move(seq)), n_mass_(n_mass), c_mass_(c_mass), mzs_(mzs), scores_(scores), scan_(scan), length_(mzs.size() - 1)
   {
   }
 
-  String FLASHDeconvHelperStructs::Tag::getSequence() const
+  String FLASHHelperClasses::Tag::getSequence() const
   {
     return seq_;
   }
 
-  Size FLASHDeconvHelperStructs::Tag::getLength() const
+  Size FLASHHelperClasses::Tag::getLength() const
   {
     return length_;
   }
 
 
-  const std::vector<double>& FLASHDeconvHelperStructs::Tag::getMzs() const
+  const std::vector<double>& FLASHHelperClasses::Tag::getMzs() const
   {
     return mzs_;
   }
 
-  double FLASHDeconvHelperStructs::Tag::getNtermMass() const
+  double FLASHHelperClasses::Tag::getNtermMass() const
   {
     return n_mass_;
   }
 
-  double FLASHDeconvHelperStructs::Tag::getCtermMass() const
+  double FLASHHelperClasses::Tag::getCtermMass() const
   {
     return c_mass_;
   }
 
-  int FLASHDeconvHelperStructs::Tag::getScore() const
+  int FLASHHelperClasses::Tag::getScore() const
   {
     return std::accumulate(scores_.begin(), scores_.end(), 0);
   }
 
-  int FLASHDeconvHelperStructs::Tag::getScore(int pos) const
+  int FLASHHelperClasses::Tag::getScore(int pos) const
   {
     if (pos < 0 || pos >= scores_.size()) return 0;
     return scores_[pos];
   }
 
-  int FLASHDeconvHelperStructs::Tag::getScan() const
+  int FLASHHelperClasses::Tag::getScan() const
   {
     return scan_;
   }
 
-  bool FLASHDeconvHelperStructs::Tag::operator<(const Tag& a) const
+  bool FLASHHelperClasses::Tag::operator<(const Tag& a) const
   {
     if (this->c_mass_ == a.c_mass_)
     {
@@ -284,7 +284,7 @@ namespace OpenMS
     return this->c_mass_ < a.c_mass_;
   }
 
-  bool FLASHDeconvHelperStructs::Tag::operator>(const Tag& a) const
+  bool FLASHHelperClasses::Tag::operator>(const Tag& a) const
   {
     if (this->c_mass_ == a.c_mass_)
     {
@@ -295,13 +295,13 @@ namespace OpenMS
     return this->c_mass_ > a.c_mass_;
   }
 
-  bool FLASHDeconvHelperStructs::Tag::operator==(const Tag& a) const
+  bool FLASHHelperClasses::Tag::operator==(const Tag& a) const
   {
     return this->seq_ == a.seq_ && this->n_mass_ == a.n_mass_ && this->c_mass_ == a.c_mass_;
   }
 
 
-  String FLASHDeconvHelperStructs::Tag::toString() const
+  String FLASHHelperClasses::Tag::toString() const
   {
     String ret;
     if (n_mass_ >= 0)

@@ -6,8 +6,8 @@ set(sources_list
         DeconvolvedSpectrum.cpp
         SpectralDeconvolution.cpp
         FLASHDeconvAlgorithm.cpp
-        FLASHDeconvHelperStructs.cpp
-        FLASHExtender.cpp
+        FLASHHelperClasses.cpp
+        FLASHExtenderAlgorithm.cpp
         FLASHIda.cpp
         FLASHIdaBridgeFunctions.cpp
         MassFeatureTrace.cpp

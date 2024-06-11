@@ -40,7 +40,7 @@ namespace OpenMS
 
   }
 
-  void FLASHDeconvFeatureFile::writeFeatures(const std::vector<FLASHDeconvHelperStructs::MassFeature>& mass_features, const String& file_name, std::fstream& fs, bool report_decoy)
+  void FLASHDeconvFeatureFile::writeFeatures(const std::vector<FLASHHelperClasses::MassFeature>& mass_features, const String& file_name, std::fstream& fs, bool report_decoy)
   {
     for (auto& mass_feature : mass_features)
     {
@@ -99,7 +99,7 @@ namespace OpenMS
     }
   }
 
-  void FLASHDeconvFeatureFile::writeTopFDFeatures(const std::vector<FLASHDeconvHelperStructs::MassFeature>& mass_features, const std::map<int, PeakGroup>& precursor_peak_groups,
+  void FLASHDeconvFeatureFile::writeTopFDFeatures(const std::vector<FLASHHelperClasses::MassFeature>& mass_features, const std::map<int, PeakGroup>& precursor_peak_groups,
                                                   const std::map<int, double>& scan_rt_map, const String& file_name, std::fstream& fs, uint ms_level)
   {
     int topid = 1;

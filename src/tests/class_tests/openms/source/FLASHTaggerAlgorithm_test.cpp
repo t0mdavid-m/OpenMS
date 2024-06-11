@@ -113,7 +113,7 @@ START_SECTION(run())
   std::vector<FASTAFile::FASTAEntry> fasta_entry;
   fasta_file.load("C:\\Users\\qlcsk\\Desktop\\jkvision\\openms\\pyFLASHDeconv\\uniprot-mg1655-filtered-reviewed_yes.fasta", fasta_entry);
   tagger.run(deconvolved_spectra, tol, fasta_entry);
-  std::vector<FLASHDeconvHelperStructs::Tag> tag;
+  std::vector<FLASHHelperClasses::Tag> tag;
   tagger.getTags(true, tag);
   TEST_EQUAL(tag.size(),114)
 }

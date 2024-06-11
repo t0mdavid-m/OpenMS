@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include <OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvHelperStructs.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
 #include <OpenMS/DATASTRUCTURES/Matrix.h>
 
 namespace OpenMS
@@ -24,8 +24,8 @@ namespace OpenMS
 
   class OPENMS_DLLAPI PeakGroup
   {
-    typedef FLASHDeconvHelperStructs::LogMzPeak LogMzPeak;
-    typedef FLASHDeconvHelperStructs::PrecalculatedAveragine PrecalculatedAveragine;
+    typedef FLASHHelperClasses::LogMzPeak LogMzPeak;
+    typedef FLASHHelperClasses::PrecalculatedAveragine PrecalculatedAveragine;
 
   public:
     /// target decoy type of PeakGroup. This specifies if a PeakGroup is a target (0), charge decoy (1), noise decoy (2), or isotope decoy (3). Added non_specific (4) to allow all types in some functions
@@ -86,7 +86,7 @@ namespace OpenMS
            @param is_last if this is set, it means that Qscore calculation is at its last iteration. More detailed noise power calculation is activated and mono mass is not recalibrated.
            @return returns isotope offset after isotope cosine calculation
       */
-    int updateQscore(const std::vector<LogMzPeak>& noisy_peaks, const MSSpectrum& spec, const FLASHDeconvHelperStructs::PrecalculatedAveragine& avg, double min_cos, double tol, bool is_low_charge, int allowed_iso_error, const bool is_last = false);
+    int updateQscore(const std::vector<LogMzPeak>& noisy_peaks, const MSSpectrum& spec, const FLASHHelperClasses::PrecalculatedAveragine& avg, double min_cos, double tol, bool is_low_charge, int allowed_iso_error, const bool is_last = false);
 
     /**
      * @brief given a monoisotopic mass, recruit raw peaks from the raw input spectrum and add to this peakGroup. This is a bit time-consuming and is done for only a small number of selected
@@ -97,7 +97,7 @@ namespace OpenMS
      * @param mono_mass monoisotopic mass
      * @return returns the noisy peaks for this peakgroup - i.e., the raw peaks within the range of this peakGroup that are not matched to any istope of this peakGroup mass.
      */
-    std::vector<LogMzPeak> recruitAllPeaksInSpectrum(const MSSpectrum& spec, double tol, const FLASHDeconvHelperStructs::PrecalculatedAveragine& avg, double mono_mass);
+    std::vector<LogMzPeak> recruitAllPeaksInSpectrum(const MSSpectrum& spec, double tol, const FLASHHelperClasses::PrecalculatedAveragine& avg, double mono_mass);
 
     /// determine is an mz is a signal of this peakgroup. Input tol is ppm tolerance (e.g., 10.0 for 10ppm tolerance). Assume logMzPeaks are sorted.
     bool isSignalMZ(double mz, double tol) const;
@@ -242,29 +242,29 @@ namespace OpenMS
 
 
     /// iterators for the signal LogMz peaks in this PeakGroup
-    std::vector<FLASHDeconvHelperStructs::LogMzPeak>::const_iterator begin() const noexcept;
-    std::vector<FLASHDeconvHelperStructs::LogMzPeak>::const_iterator end() const noexcept;
+    std::vector<FLASHHelperClasses::LogMzPeak>::const_iterator begin() const noexcept;
+    std::vector<FLASHHelperClasses::LogMzPeak>::const_iterator end() const noexcept;
 
-    std::vector<FLASHDeconvHelperStructs::LogMzPeak>::iterator begin() noexcept;
-    std::vector<FLASHDeconvHelperStructs::LogMzPeak>::iterator end() noexcept;
+    std::vector<FLASHHelperClasses::LogMzPeak>::iterator begin() noexcept;
+    std::vector<FLASHHelperClasses::LogMzPeak>::iterator end() noexcept;
 
-    const FLASHDeconvHelperStructs::LogMzPeak& operator[](Size i) const;
+    const FLASHHelperClasses::LogMzPeak& operator[](Size i) const;
 
     /// iterators for the noisy LogMz peaks in this PeakGroup
-    std::vector<FLASHDeconvHelperStructs::LogMzPeak>::const_iterator getNoisePeakBegin() const noexcept;
-    std::vector<FLASHDeconvHelperStructs::LogMzPeak>::const_iterator getNoisePeakEnd() const noexcept;
+    std::vector<FLASHHelperClasses::LogMzPeak>::const_iterator getNoisePeakBegin() const noexcept;
+    std::vector<FLASHHelperClasses::LogMzPeak>::const_iterator getNoisePeakEnd() const noexcept;
 
-    std::vector<FLASHDeconvHelperStructs::LogMzPeak>::iterator getNoisePeakBegin() noexcept;
-    std::vector<FLASHDeconvHelperStructs::LogMzPeak>::iterator getNoisePeakEnd() noexcept;
+    std::vector<FLASHHelperClasses::LogMzPeak>::iterator getNoisePeakBegin() noexcept;
+    std::vector<FLASHHelperClasses::LogMzPeak>::iterator getNoisePeakEnd() noexcept;
 
     /// vector operators for the LogMzPeaks in this PeakGroup
-    void push_back(const FLASHDeconvHelperStructs::LogMzPeak& pg);
-    FLASHDeconvHelperStructs::LogMzPeak& back();
+    void push_back(const FLASHHelperClasses::LogMzPeak& pg);
+    FLASHHelperClasses::LogMzPeak& back();
     Size size() const noexcept;
 
     void reserve(Size n);
     bool empty() const;
-    void swap(std::vector<FLASHDeconvHelperStructs::LogMzPeak>& x);
+    void swap(std::vector<FLASHHelperClasses::LogMzPeak>& x);
     void sort();
   private:
     /// update chargefit score and also update per charge intensities here.
@@ -288,7 +288,7 @@ namespace OpenMS
     /// update the charge range using the calculated per charge information
     void updateChargeRange_();
     /// update per charge cosine values
-    void updatePerChargeCos_(const FLASHDeconvHelperStructs::PrecalculatedAveragine& avg, double tol);
+    void updatePerChargeCos_(const FLASHHelperClasses::PrecalculatedAveragine& avg, double tol);
 
     /**
      * calculate noisy peak power. The goal of this function is to group noisy peaks that are possibly from the same molecule and sum their intensities before calculate power
@@ -301,9 +301,9 @@ namespace OpenMS
     std::vector<Matrix<float>> dl_matrices_;
 
     /// log Mz peaks
-    std::vector<FLASHDeconvHelperStructs::LogMzPeak> logMzpeaks_;
+    std::vector<FLASHHelperClasses::LogMzPeak> logMzpeaks_;
     /// negative isotope index peaks
-    std::vector<FLASHDeconvHelperStructs::LogMzPeak> negative_iso_peaks_;
+    std::vector<FLASHHelperClasses::LogMzPeak> negative_iso_peaks_;
     /// per charge SNR, isotope cosine, and intensity vectors
     std::vector<float> per_charge_sum_signal_squared_;
     std::vector<float> per_charge_noise_pwr_;

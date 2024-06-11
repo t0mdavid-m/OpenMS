@@ -60,7 +60,7 @@ START_SECTION(int getScanNumber())
 }
 END_SECTION
 std::vector<DeconvolvedSpectrum> deconvolved_spectra;
-std::vector<FLASHDeconvHelperStructs::MassFeature> deconvolved_features;
+std::vector<FLASHHelperClasses::MassFeature> deconvolved_features;
 
 START_SECTION(void run())
 {
@@ -70,7 +70,7 @@ START_SECTION(void run())
 }
 END_SECTION
 
-START_SECTION(FLASHDeconvHelperStructs::PrecalculatedAveragine& getAveragine())
+START_SECTION(FLASHHelperClasses::PrecalculatedAveragine& getAveragine())
 {
   TEST_EQUAL(fd_algo.getAveragine().getMaxIsotopeIndex(), 199);
   TEST_EQUAL(fd_algo.getAveragine().getLeftCountFromApex(50), 2);

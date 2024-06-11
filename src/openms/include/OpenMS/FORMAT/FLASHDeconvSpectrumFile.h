@@ -7,10 +7,9 @@
 // --------------------------------------------------------------------------
 #pragma once
 
-#include <OpenMS/config.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
-#include <OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvHelperStructs.h>
-
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
+#include <OpenMS/config.h>
 #include <iomanip>
 
 namespace OpenMS
@@ -59,7 +58,7 @@ namespace OpenMS
     static void writeDeconvolvedMasses(DeconvolvedSpectrum& dspec,
                                        std::fstream& fs,
                                        const String& file_name,
-                                       const FLASHDeconvHelperStructs::PrecalculatedAveragine& avg,
+                                       const FLASHHelperClasses::PrecalculatedAveragine& avg,
                                        double tol,
                                        bool write_detail,
                                        bool record_decoy, double noise_decoy_weight);

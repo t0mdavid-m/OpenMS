@@ -79,11 +79,11 @@ namespace OpenMS
     {
       return out_spec;
     }
-    double charge_mass_offset = (double)abs(to_charge) * FLASHDeconvHelperStructs::getChargeMass(to_charge >= 0);
+    double charge_mass_offset = (double)abs(to_charge) * FLASHHelperClasses::getChargeMass(to_charge >= 0);
     std::unordered_set<double> deconvolved_mzs;
     std::stringstream val {};
 
-    val << "tol=" << tol << ";massoffset=" << std::to_string(charge_mass_offset) << ";chargemass=" << std::to_string(FLASHDeconvHelperStructs::getChargeMass(peak_groups_[0].isPositive()));
+    val << "tol=" << tol << ";massoffset=" << std::to_string(charge_mass_offset) << ";chargemass=" << std::to_string(FLASHHelperClasses::getChargeMass(peak_groups_[0].isPositive()));
     if (!precursor_peak_group_.empty())
     {
       val << ";precursorscan=" << precursor_scan_number_ << ";precursormass=" << std::to_string(precursor_peak_group_.getMonoMass());
@@ -170,7 +170,7 @@ namespace OpenMS
         {
           continue;
         }
-        out_spec.emplace_back(p.getMZ() + charge_mass_offset - FLASHDeconvHelperStructs::getChargeMass(to_charge >= 0), p.getIntensity());
+        out_spec.emplace_back(p.getMZ() + charge_mass_offset - FLASHHelperClasses::getChargeMass(to_charge >= 0), p.getIntensity());
       }
     }
     out_spec.sortByPosition();
@@ -369,12 +369,12 @@ namespace OpenMS
     return false;
   }
 
-  FLASHDeconvHelperStructs::IsobaricQuantities DeconvolvedSpectrum::getQuantities() const
+  FLASHHelperClasses::IsobaricQuantities DeconvolvedSpectrum::getQuantities() const
   {
     return quantities_;
   }
 
-  void DeconvolvedSpectrum::setQuantities(const FLASHDeconvHelperStructs::IsobaricQuantities& quantities)
+  void DeconvolvedSpectrum::setQuantities(const FLASHHelperClasses::IsobaricQuantities& quantities)
   {
     quantities_ = quantities;
   }

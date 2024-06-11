@@ -66,7 +66,7 @@ TopDownIsobaricQuantification::TopDownIsobaricQuantification() : DefaultParamHan
     only_fully_quantified_ = param_.getValue("only_fully_quantified").toString() == "true";
   }
 
-  void TopDownIsobaricQuantification::quantify(const MSExperiment& exp, std::vector<DeconvolvedSpectrum>& deconvolved_spectra, const std::vector<FLASHDeconvHelperStructs::MassFeature>& mass_features)
+  void TopDownIsobaricQuantification::quantify(const MSExperiment& exp, std::vector<DeconvolvedSpectrum>& deconvolved_spectra, const std::vector<FLASHHelperClasses::MassFeature>& mass_features)
   {
     // set the parameters for this method
     // Param extract_param(getParam_().copy("extraction:", true));
@@ -248,7 +248,7 @@ TopDownIsobaricQuantification::TopDownIsobaricQuantification() : DefaultParamHan
       if (min_intensity > 0) // at least one channel quantified
       {
         intensity_clusters[cluster_index].push_back(intensities);
-        FLASHDeconvHelperStructs::IsobaricQuantities iq;
+        FLASHHelperClasses::IsobaricQuantities iq;
         iq.scan = scan;
         iq.quantities = intensities;
         iq.merged_quantities = intensities;
@@ -285,7 +285,7 @@ TopDownIsobaricQuantification::TopDownIsobaricQuantification() : DefaultParamHan
       double min_intensity = only_fully_quantified_? *std::min_element(intensities.begin(), intensities.end()) : *std::max_element(intensities.begin(), intensities.end());
       if (min_intensity > 0) // all channel quantified
       {
-        FLASHDeconvHelperStructs::IsobaricQuantities iq = dspec.getQuantities();
+        FLASHHelperClasses::IsobaricQuantities iq = dspec.getQuantities();
         iq.merged_quantities = intensities;
         dspec.setQuantities(iq);
       }

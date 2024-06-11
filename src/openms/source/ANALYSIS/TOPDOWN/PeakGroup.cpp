@@ -59,7 +59,7 @@ namespace OpenMS
   float PeakGroup::getAbsPPMError_(const LogMzPeak& p) const
   {
     auto mass = (float)(monoisotopic_mass_ + p.isotopeIndex * iso_da_distance_);
-    return (float)(abs(mass / (float)p.abs_charge + FLASHDeconvHelperStructs::getChargeMass(p.is_positive) - p.mz) / p.mz * 1e6);
+    return (float)(abs(mass / (float)p.abs_charge + FLASHHelperClasses::getChargeMass(p.is_positive) - p.mz) / p.mz * 1e6);
   }
 
   float PeakGroup::getAbsDaError_(const LogMzPeak& p) const
@@ -73,7 +73,7 @@ namespace OpenMS
     return min_negative_isotope_index_;
   }
 
-  void PeakGroup::updatePerChargeCos_(const FLASHDeconvHelperStructs::PrecalculatedAveragine& avg, double tol)
+  void PeakGroup::updatePerChargeCos_(const FLASHHelperClasses::PrecalculatedAveragine& avg, double tol)
   {
     auto iso_dist = avg.get(monoisotopic_mass_);
     auto current_per_isotope_intensities = std::vector<float>(getIsotopeIntensities().size(), .0f);
@@ -95,7 +95,7 @@ namespace OpenMS
 
   int PeakGroup::updateQscore(const std::vector<LogMzPeak>& noisy_peaks,
                               const MSSpectrum& spec,
-                              const FLASHDeconvHelperStructs::PrecalculatedAveragine& avg,
+                              const FLASHHelperClasses::PrecalculatedAveragine& avg,
                               double min_cos,
                               double tol,
                               bool is_low_charge,
@@ -141,7 +141,7 @@ namespace OpenMS
     return h_offset;
   }
 
-  float PeakGroup::getNoisePeakPower_(const std::vector<FLASHDeconvHelperStructs::LogMzPeak>& noisy_peaks, const int z, const double tol) const
+  float PeakGroup::getNoisePeakPower_(const std::vector<FLASHHelperClasses::LogMzPeak>& noisy_peaks, const int z, const double tol) const
   {
     if (noisy_peaks.empty()) return 0;
     const Size max_noisy_peak_number = 40; // too many noise peaks will slow down the process
@@ -497,9 +497,9 @@ namespace OpenMS
     else { sort(); }
   }
 
-  std::vector<FLASHDeconvHelperStructs::LogMzPeak> PeakGroup::recruitAllPeaksInSpectrum(const MSSpectrum& spec,
+  std::vector<FLASHHelperClasses::LogMzPeak> PeakGroup::recruitAllPeaksInSpectrum(const MSSpectrum& spec,
                                                                                         const double tol,
-                                                                                        const FLASHDeconvHelperStructs::PrecalculatedAveragine& avg,
+                                                                                        const FLASHHelperClasses::PrecalculatedAveragine& avg,
                                                                                         double mono_mass)
   {
     const double mul_tol = .8; // not all peaks within tolerance are considered as signal peaks.
@@ -531,8 +531,8 @@ namespace OpenMS
     {
       if (c <= 0) { break; }
 
-      double cmz = (mono_mass) / c + FLASHDeconvHelperStructs::getChargeMass(is_positive_);
-      double left_mz = (mono_mass - (1 - min_negative_isotope_index_) * iso_da_distance_) / c + FLASHDeconvHelperStructs::getChargeMass(is_positive_);
+      double cmz = (mono_mass) / c + FLASHHelperClasses::getChargeMass(is_positive_);
+      double left_mz = (mono_mass - (1 - min_negative_isotope_index_) * iso_da_distance_) / c + FLASHHelperClasses::getChargeMass(is_positive_);
       Size index = spec.findNearest(left_mz * (1 - tol * mul_tol));
       double iso_delta = iso_da_distance_ / c;
 
@@ -1007,37 +1007,37 @@ namespace OpenMS
     qscore2D_ = fqscore;
   }
 
-  std::vector<FLASHDeconvHelperStructs::LogMzPeak>::const_iterator PeakGroup::begin() const noexcept
+  std::vector<FLASHHelperClasses::LogMzPeak>::const_iterator PeakGroup::begin() const noexcept
   {
     return logMzpeaks_.begin();
   }
 
-  std::vector<FLASHDeconvHelperStructs::LogMzPeak>::const_iterator PeakGroup::end() const noexcept
+  std::vector<FLASHHelperClasses::LogMzPeak>::const_iterator PeakGroup::end() const noexcept
   {
     return logMzpeaks_.end();
   }
 
-  std::vector<FLASHDeconvHelperStructs::LogMzPeak>::iterator PeakGroup::begin() noexcept
+  std::vector<FLASHHelperClasses::LogMzPeak>::iterator PeakGroup::begin() noexcept
   {
     return logMzpeaks_.begin();
   }
 
-  std::vector<FLASHDeconvHelperStructs::LogMzPeak>::iterator PeakGroup::end() noexcept
+  std::vector<FLASHHelperClasses::LogMzPeak>::iterator PeakGroup::end() noexcept
   {
     return logMzpeaks_.end();
   }
 
-  const FLASHDeconvHelperStructs::LogMzPeak& PeakGroup::operator[](const Size i) const
+  const FLASHHelperClasses::LogMzPeak& PeakGroup::operator[](const Size i) const
   {
     return logMzpeaks_[i];
   }
 
-  void PeakGroup::push_back(const FLASHDeconvHelperStructs::LogMzPeak& pg)
+  void PeakGroup::push_back(const FLASHHelperClasses::LogMzPeak& pg)
   {
     logMzpeaks_.push_back(pg);
   }
 
-  FLASHDeconvHelperStructs::LogMzPeak& PeakGroup::back()
+  FLASHHelperClasses::LogMzPeak& PeakGroup::back()
   {
     return logMzpeaks_.back();
   }
@@ -1062,7 +1062,7 @@ namespace OpenMS
     return logMzpeaks_.empty();
   }
 
-  void PeakGroup::swap(std::vector<FLASHDeconvHelperStructs::LogMzPeak>& x)
+  void PeakGroup::swap(std::vector<FLASHHelperClasses::LogMzPeak>& x)
   {
     logMzpeaks_.swap(x);
   }

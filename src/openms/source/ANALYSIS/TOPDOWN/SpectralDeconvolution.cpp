@@ -87,10 +87,10 @@ namespace OpenMS
 
     auto precursor = spec.getPrecursors()[0];
     double target_precursor_mass
-      = (precursor.getMZ() - FLASHDeconvHelperStructs::getChargeMass(target_precursor_charge_ > 0)) * std::abs(target_precursor_charge_);
+      = (precursor.getMZ() - FLASHHelperClasses::getChargeMass(target_precursor_charge_ > 0)) * std::abs(target_precursor_charge_);
     precursor.setCharge(target_precursor_charge_);
     PeakGroup precursorPeakGroup(1, std::abs(target_precursor_charge_), target_precursor_charge_ > 0);
-    precursorPeakGroup.push_back(FLASHDeconvHelperStructs::LogMzPeak());
+    precursorPeakGroup.push_back(FLASHHelperClasses::LogMzPeak());
     precursorPeakGroup.setMonoisotopicMass(target_precursor_mass);
     precursorPeakGroup.setSNR(1.0);
 
@@ -215,7 +215,7 @@ namespace OpenMS
     target_precursor_charge_ = param_.getValue("precursor_charge");
   }
 
-  const FLASHDeconvHelperStructs::PrecalculatedAveragine& SpectralDeconvolution::getAveragine()
+  const FLASHHelperClasses::PrecalculatedAveragine& SpectralDeconvolution::getAveragine()
   {
     return avg_;
   }
@@ -229,7 +229,7 @@ namespace OpenMS
     auto max_isotope = std::max(200, (int)iso.size());
 
     generator.setMaxIsotope(max_isotope);
-    avg_ = FLASHDeconvHelperStructs::PrecalculatedAveragine(50, current_max_mass_, 25, generator, use_RNA_averagine);
+    avg_ = FLASHHelperClasses::PrecalculatedAveragine(50, current_max_mass_, 25, generator, use_RNA_averagine);
     avg_.setMaxIsotopeIndex((int)(max_isotope - 1));
   }
 
@@ -1248,7 +1248,7 @@ namespace OpenMS
       {
         bool is_overlap = false;
         double mass1 = dspec[i].getMonoMass();
-        int repz1 = (int)round(mass1 / (pmz - FLASHDeconvHelperStructs::getChargeMass(is_positive_)));
+        int repz1 = (int)round(mass1 / (pmz - FLASHHelperClasses::getChargeMass(is_positive_)));
         const double high_snr = 10;
         if (dspec[i].getSNR() > high_snr && dspec[i].getChargeSNR(repz1) > high_snr) // if signal is almost perfect, skip the filtration
           continue;
@@ -1257,7 +1257,7 @@ namespace OpenMS
         {
           if (i == j) { continue; }
           double mass2 = dspec[j].getMonoMass();
-          int repz2 = (int)round(mass2 / (pmz - FLASHDeconvHelperStructs::getChargeMass(is_positive_)));
+          int repz2 = (int)round(mass2 / (pmz - FLASHHelperClasses::getChargeMass(is_positive_)));
           if (repz1 == repz2) { continue; }
 
           if (dspec[i].getChargeSNR(repz1) > dspec[j].getChargeSNR(repz2)) { continue; }

@@ -13,6 +13,7 @@
 #include <OpenMS/CHEMISTRY/ISOTOPEDISTRIBUTION/IsotopeDistribution.h>
 #include <OpenMS/CONCEPT/Constants.h>
 #include <OpenMS/FILTERING/DATAREDUCTION/MassTraceDetection.h>
+#include <boost/dynamic_bitset.hpp>
 
 namespace OpenMS
 {
@@ -26,8 +27,8 @@ namespace OpenMS
    * @see SpectralDeconvolution
    */
 
-  struct OPENMS_DLLAPI FLASHDeconvHelperStructs
-  {
+  struct OPENMS_DLLAPI FLASHHelperClasses
+{
     /// @brief Averagine patterns pre-calculated for speed up. Other variables are also calculated for fast cosine calculation
     class OPENMS_DLLAPI PrecalculatedAveragine
     {
@@ -254,6 +255,65 @@ namespace OpenMS
       int scan_;
       int index_;
       Size length_;
+    };
+
+    class OPENMS_DLLAPI DAG_
+    {
+    public:
+      explicit DAG_(int vertice_count): vertex_count_(vertice_count), adj_list_(vertice_count)
+      {
+      }
+
+      int size() const
+      {
+        return vertex_count_;
+      }
+
+      void addEdge(int src, int dest)
+      {
+        adj_list_[src].push_back(dest); //
+      }
+
+      void findAllPaths(int source, int sink, std::vector<std::vector<int>>& all_paths, int max_count)
+      {
+        boost::dynamic_bitset<> visited(vertex_count_);
+        std::vector<int> path;
+
+        findAllPaths_(source, sink, visited, path, all_paths, max_count); // reverse traveling
+      }
+    private:
+      int vertex_count_;
+      // 0, 1, 2, ... ,vertex_count - 1
+      std::vector<std::vector<int>> adj_list_; //
+      void findAllPaths_(int current,
+                         int destination,
+                         boost::dynamic_bitset<>& visited,
+                         std::vector<int>& path,
+                         std::vector<std::vector<int>>& all_paths,
+                         int max_count)
+      {
+        if ((int)all_paths.size() >= max_count) return;
+        visited[current] = true;
+        path.push_back(current);
+
+        if (current == destination)
+        {
+          // add the current path
+          all_paths.push_back(path);
+        }
+        else
+        {
+          // Recursively explore neighbors
+          for (const auto& neighbor : adj_list_[current])
+          {
+            if (! visited[neighbor]) { findAllPaths_(neighbor, destination, visited, path, all_paths, max_count); }
+          }
+        }
+
+        // Backtrack
+        visited[current] = false;
+        path.pop_back();
+      }
     };
 
     /**

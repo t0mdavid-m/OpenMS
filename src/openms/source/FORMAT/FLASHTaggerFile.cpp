@@ -35,7 +35,7 @@ namespace OpenMS
   {
     for (int c = 0; c < 2; c++)
     {
-      auto tags = std::vector<FLASHDeconvHelperStructs::Tag>();
+      auto tags = std::vector<FLASHHelperClasses::Tag>();
       tagger.getTags(c == 0, tags);
       for (const auto& tag : tags)
       {
@@ -98,7 +98,7 @@ namespace OpenMS
       String tagindices = "";
       String scans = "";
       int cntr = 0;
-      std::vector<FLASHDeconvHelperStructs::Tag> tags;
+      std::vector<FLASHHelperClasses::Tag> tags;
       std::set<int> sns;
       tagger.getTagsMatchingTo(hit, tags);
       for (const auto& tag : tags)

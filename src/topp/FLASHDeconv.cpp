@@ -294,7 +294,7 @@ protected:
     mzml.load(in_file, map);
 
     std::vector<DeconvolvedSpectrum> deconvolved_spectra;
-    std::vector<FLASHDeconvHelperStructs::MassFeature> deconvolved_features;
+    std::vector<FLASHHelperClasses::MassFeature> deconvolved_features;
     std::map<int, double> scan_rt_map;
     std::map<int, PeakGroup> msNscan_to_precursor_pg;
 

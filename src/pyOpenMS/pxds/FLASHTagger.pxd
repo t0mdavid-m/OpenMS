@@ -4,7 +4,7 @@ from DefaultParamHandler cimport *
 from FASTAFile cimport *
 from libcpp.vector cimport vector as libcpp_vector
 from DeconvolvedSpectrum cimport *
-from FLASHDeconvHelperStructs cimport Tag
+from FLASHHelperClasses cimport Tag
 from ProteinHit cimport ProteinHit
 
 cdef extern from "<OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>" namespace "OpenMS":

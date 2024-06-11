@@ -9,7 +9,7 @@
 #pragma once
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
-#include <OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvHelperStructs.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/DATASTRUCTURES/DefaultParamHandler.h>
 #include <OpenMS/DATASTRUCTURES/Matrix.h>
@@ -33,8 +33,8 @@ namespace OpenMS
   class OPENMS_DLLAPI SpectralDeconvolution : public DefaultParamHandler
   {
   public:
-    typedef FLASHDeconvHelperStructs::PrecalculatedAveragine PrecalculatedAveragine;
-    typedef FLASHDeconvHelperStructs::LogMzPeak LogMzPeak;
+    typedef FLASHHelperClasses::PrecalculatedAveragine PrecalculatedAveragine;
+    typedef FLASHHelperClasses::LogMzPeak LogMzPeak;
 
     /// default constructor
     SpectralDeconvolution();
@@ -168,7 +168,7 @@ namespace OpenMS
     PeakGroup::TargetDecoyType target_decoy_type_ = PeakGroup::TargetDecoyType::target;
 
     /// precalculated averagine distributions for fast averagine generation
-    FLASHDeconvHelperStructs::PrecalculatedAveragine avg_;
+    FLASHHelperClasses::PrecalculatedAveragine avg_;
 
     /// mass bins that are targeted for FLASHIda global targeting mode
     boost::dynamic_bitset<> target_mass_bins_;

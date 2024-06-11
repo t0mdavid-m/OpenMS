@@ -36,7 +36,7 @@ namespace OpenMS
     defaultsToParam_();
   }
 
-  std::vector<FLASHDeconvHelperStructs::MassFeature> MassFeatureTrace::findFeaturesAndUpdateQscore2D(const PrecalculatedAveragine& averagine, std::vector<DeconvolvedSpectrum>& deconvolved_spectra,
+  std::vector<FLASHHelperClasses::MassFeature> MassFeatureTrace::findFeaturesAndUpdateQscore2D(const PrecalculatedAveragine& averagine, std::vector<DeconvolvedSpectrum>& deconvolved_spectra,
                                                                                                      int ms_level, bool is_decoy)
   {
     static uint findex = 1;
@@ -45,7 +45,7 @@ namespace OpenMS
     int min_abs_charge = INT_MAX;
     int max_abs_charge = INT_MIN;
     bool is_positive = true;
-    std::vector<FLASHDeconvHelperStructs::MassFeature> mass_features;
+    std::vector<FLASHHelperClasses::MassFeature> mass_features;
     std::map<double, Size> rt_index_map;
 
     std::map<int, int> prev_scans;
@@ -188,7 +188,7 @@ namespace OpenMS
         if (findex > 0)
           pg->setQscore2D(qscore_2D);
       }
-      FLASHDeconvHelperStructs::MassFeature mass_feature;
+      FLASHHelperClasses::MassFeature mass_feature;
       mass_feature.iso_offset = offset;
       mass += offset * Constants::ISOTOPE_MASSDIFF_55K_U;
 

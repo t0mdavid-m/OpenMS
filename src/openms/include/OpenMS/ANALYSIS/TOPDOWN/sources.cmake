@@ -6,8 +6,8 @@ set(sources_list_h
         DeconvolvedSpectrum.h
         SpectralDeconvolution.h
         FLASHDeconvAlgorithm.h
-        FLASHDeconvHelperStructs.h
-        FLASHExtender.h
+        FLASHHelperClasses.h
+        FLASHExtenderAlgorithm.h
         FLASHIda.h
         FLASHIdaBridgeFunctions.h
         MassFeatureTrace.h
