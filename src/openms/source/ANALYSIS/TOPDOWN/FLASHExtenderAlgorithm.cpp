@@ -47,20 +47,20 @@ namespace OpenMS
   }
 
 
-  int FLASHExtenderAlgorithm::getVertex_(int peak_index, int pro_index, int score, int num_mod, int layer) const
+  int FLASHExtenderAlgorithm::getVertex_(int node_index, int pro_index, int score, int num_mod) const
   {
-    return (((peak_index * (pro_length_ + 1) + pro_index) * (max_mod_cntr_ + 1) + num_mod) * (max_path_score_ - min_path_score_ + 1)
-           + (score - min_path_score_)) * (max_layer_ + 1) + layer;
+    return ((node_index * (pro_length_ + 1) + pro_index) * (max_mod_cntr_ + 1) + num_mod) * (max_path_score_ - min_path_score_ + 1)
+           + (score - min_path_score_);
   }
 
-  int FLASHExtenderAlgorithm::getPeakIndex_(int vertex) const
+  int FLASHExtenderAlgorithm::getNodeIndex_(int vertex) const
   {
-    return (vertex / (max_layer_ + 1) / (max_path_score_ - min_path_score_ + 1) / (max_mod_cntr_ + 1)) / (pro_length_ + 1);
+    return (vertex / (max_path_score_ - min_path_score_ + 1) / (max_mod_cntr_ + 1)) / (pro_length_ + 1);
   }
 
   int FLASHExtenderAlgorithm::getProIndex_(int vertex) const
   {
-    return ((vertex / (max_layer_ + 1) / (max_path_score_ - min_path_score_ + 1) / (max_mod_cntr_ + 1))) % (pro_length_ + 1);
+    return ((vertex / (max_path_score_ - min_path_score_ + 1) / (max_mod_cntr_ + 1))) % (pro_length_ + 1);
   }
 
   int FLASHExtenderAlgorithm::getScore_(int vertex) const
@@ -73,59 +73,115 @@ namespace OpenMS
     return 0;
   }
 
-  void FLASHExtenderAlgorithm::constructSubDAG_(FLASHHelperClasses::DAG& dag, boost::dynamic_bitset<>& visited,
-                                           int vertex1, int peak_index2, int pro_index2, int layer, bool allow_truncation)
+  //void FLASHExtenderAlgorithm::constructVertices_()
+
+  void FLASHExtenderAlgorithm::constructDAG_(FLASHHelperClasses::DAG& dag, std::vector<int>& sinks)
   {
-    if (!visited[vertex1]) return;
-    int peak_index1 = getPeakIndex_(vertex1);
-    int score1 = getScore_(vertex1);
-    int num_mod1 = getModNumber_(vertex1);
-    int pro_index1 = getProIndex_(vertex1);
+    auto visited = boost::dynamic_bitset<>(dag.size());
+    sinks.resize(max_mod_cntr_, 0);
+    std::vector<int> tag_node_starts, tag_pro_starts, tag_node_ends, tag_pro_ends;
 
-    if (peak_index1 == peak_index2 && pro_index1 == pro_index2)
+    // TODO get node and protein indices for tag start end positions
+    if (tag_node_starts.empty()) return;
+
+    int src = getVertex_(0, 0, 0, 0);
+    connectBetweenTags(dag, visited, sinks, src, tag_node_starts, tag_pro_starts, tag_node_ends, tag_pro_ends);
+  }
+
+  void FLASHExtenderAlgorithm::connectBetweenTags(FLASHHelperClasses::DAG& dag, boost::dynamic_bitset<>& visited, std::vector<int>& sinks, int vertex, std::vector<int>& tag_node_starts, std::vector<int>& tag_pro_starts, std::vector<int>& tag_node_ends, std::vector<int>& tag_pro_ends)
+  {
+    int node_index = getNodeIndex_(vertex);
+    int pro_index = getProIndex_(vertex);
+
+    if (node_index == tag_node_ends.back() && pro_index == tag_pro_ends.back()) // end of the last tag
     {
-      for (int score = score1 - 1; score >= min_path_score_; score--)
-      {
-        int vertex = getVertex_(peak_index1, pro_index1, score, num_mod1, layer);
-         // if lower scoring path exist, delete. keep the best score per num_mod
-        visited[vertex] = false;
-      }
+      extendBetweenTags(dag, visited, sinks,
+                        vertex, -1, -1, true);
       return;
     }
 
-    if (allow_truncation)
+    std::vector<int> next_vertices(max_mod_cntr_, 0);
+
+    auto node_start_itr = std::find(tag_node_starts.begin(), tag_node_starts.end(), node_index);
+    auto pro_start_itr = std::find(tag_pro_starts.begin(), tag_pro_starts.end(), pro_index);
+    auto node_end_itr = std::find(tag_node_ends.begin(), tag_node_ends.end(), node_index);
+    auto pro_end_itr = std::find(tag_pro_ends.begin(), tag_pro_ends.end(), pro_index);
+
+    if (node_start_itr != tag_node_starts.end() && pro_start_itr != tag_pro_starts.end()) // within tag
     {
-      for (int pro_index = pro_index1 + 1; pro_index <= pro_index2 ; pro_index++)
+      int node_end = tag_node_ends[std::distance(tag_node_starts.begin(), node_start_itr)];
+      int pro_end = tag_node_ends[std::distance(tag_pro_starts.begin(), pro_start_itr)];
+      extendBetweenTags(dag, visited, next_vertices,
+                         vertex, node_end, pro_end, true);
+    }
+    else if (node_end_itr != tag_node_ends.end() && pro_end_itr != tag_pro_ends.end()) // between tag. Never after the last tag.
+    {
+      int node_start = tag_node_starts[std::distance(tag_node_ends.begin(), node_end_itr) + 1];
+      int pro_start = tag_node_ends[std::distance(tag_pro_ends.begin(), pro_end_itr) + 1];
+      extendBetweenTags(dag, visited, next_vertices,
+                        vertex, node_start, pro_start, false);
+    }
+
+    for (auto next_vertex : next_vertices)
+    {
+      if (next_vertex == 0) continue;
+      connectBetweenTags(dag, visited, sinks, next_vertex, tag_node_starts, tag_pro_starts, tag_node_ends, tag_pro_ends);
+    }
+  }
+
+  void FLASHExtenderAlgorithm::extendBetweenTags(FLASHHelperClasses::DAG& dag, boost::dynamic_bitset<>& visited, std::vector<int>& sinks,
+                                           int vertex, int node_index, int pro_index, bool within_tag)
+  {
+    if (!visited[vertex]) return;
+    int node_index1 = getNodeIndex_(vertex);
+    int score1 = getScore_(vertex);
+    int num_mod1 = getModNumber_(vertex);
+    int pro_index1 = getProIndex_(vertex);
+
+    for (int score = score1 + 1; score <= max_path_score_; score++)
+    {
+      // if the starting point has already taken by a higher scoring path, don't go further.
+      int higher_score_vertex = getVertex_(node_index1, pro_index1, score, num_mod1);
+      if (visited[higher_score_vertex]) return;
+    }
+
+    if (node_index1 == node_index && pro_index1 == pro_index)
+    {
+      sinks[num_mod1] = vertex;
+      return;
+    }
+
+    if (vertex == 0)
+    {
+      for (int pro_i = pro_index1 + 1; pro_i <= pro_index; pro_i++)
       {
-        int vertex2 = getVertex_(peak_index1, pro_index, score1, num_mod1, layer);
-        if (visited[vertex2]) return;
+        int vertex2 = getVertex_(node_index1, pro_i, score1, num_mod1);
         visited[vertex2] = true;
-        constructSubDAG_(dag, visited, vertex2, peak_index2, pro_index2, layer);
+        extendBetweenTags(dag, visited, sinks, vertex2, node_index, pro_index);
       }
       return;
     }
 
-    double delta_mass1 = peak_masses_[peak_index1] - pro_masses_[pro_index1];
+    double delta_mass1 = node_masses_[node_index1] - pro_masses_[pro_index1];
+    double delta_mass2 = node_masses_[node_index] - pro_masses_[pro_index];
+    if (std::abs(delta_mass2 - delta_mass1) > max_mod_mass_ * max_mod_cntr_ + 1.0) return;
 
-    for (int peak_index = peak_index1 + 1; peak_index <= peak_index2 ; peak_index++)
+    for (int node_i = node_index1 + 1; node_i <= node_index; node_i++)
     {
-      int score = score1 + peak_scores_[peak_index];
-      for (int pro_index = pro_index1 + 1; pro_index <= pro_index2; pro_index++)
+      int score = score1 + node_scores_[node_i];
+      for (int pro_i = pro_index1 + 1; pro_i <= pro_index; pro_i++)
       {
-        double delta_mass = peak_masses_[peak_index] - pro_masses_[pro_index];
+        double delta_mass = node_masses_[node_i] - pro_masses_[pro_i];
         if (delta_mass - delta_mass1 > max_mod_mass_) break;
         if (delta_mass1 - delta_mass > max_mod_mass_) continue;
         int num_mod = num_mod1;
-        if (std::abs(delta_mass - delta_mass1) > tol_ * peak_masses_[peak_index1]) num_mod ++;
+        if (std::abs(delta_mass - delta_mass1) > tol_ * node_masses_[node_index1]) num_mod ++;
+        if (within_tag && num_mod != num_mod1) continue; // on tag layer. No additional mod allowed.
         if (num_mod > max_mod_cntr_) continue;
-        if (peak_index1 == peak_index2 && pro_index1 == pro_index2) layer = 0; // for sink, go to the layer 0
-        int vertex2 = getVertex_(peak_index, pro_index, score, num_mod, layer);
-        if (visited[vertex2]) return;
-        visited[vertex2] = true;
-        constructSubDAG_(dag, visited, vertex2, peak_index2, pro_index2, layer);
+        int next_vertex = getVertex_(node_i, pro_i, score, num_mod);
+        visited[next_vertex] = true;
+        extendBetweenTags(dag, visited, sinks, next_vertex, node_index, pro_index);
       }
     }
-
   }
-
 } // namespace OpenMS
