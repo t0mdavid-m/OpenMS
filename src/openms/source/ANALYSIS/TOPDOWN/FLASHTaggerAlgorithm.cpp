@@ -34,7 +34,6 @@ namespace OpenMS
       else if (iter->first - diff2 > abs_tol) { break; }
       iter++;
     }
-
     return ret;
   }
 
@@ -220,37 +219,29 @@ namespace OpenMS
     max_edge_mass_ = aa_mass_map_.rbegin()->first + max_iso_in_tag_ * Constants::C13C12_MASSDIFF_U;
   }
 
-  void FLASHTaggerAlgorithm::run(const std::vector<DeconvolvedSpectrum>& deconvolved_spectra,
-                                 double ppm,
-                                 const std::vector<FASTAFile::FASTAEntry>& fasta_entry)
+  const MSSpectrum& FLASHTaggerAlgorithm::getSpectrum() const
+  {
+    return spec_;
+  }
+
+  void FLASHTaggerAlgorithm::run(const DeconvolvedSpectrum& deconvolved_spectrum, double ppm, const std::vector<FASTAFile::FASTAEntry>& fasta_entry)
   {
     setLogType(CMD);
-    int cntr = 0;
-    for (const auto& dspec : deconvolved_spectra)
-    {
-      if (dspec.empty() || dspec.isDecoy() || dspec.getOriginalSpectrum().getMSLevel() == 1) continue;
-      cntr++;
-    }
-    startProgress(0, (SignedSize)cntr, "running FLASHTagger: finding tags");
 
-    for (const auto& dspec : deconvolved_spectra)
-    {
-      if (dspec.empty() || dspec.isDecoy() || dspec.getOriginalSpectrum().getMSLevel() == 1) continue;
-      nextProgress();
-      auto tags = std::vector<FLASHHelperClasses::Tag>();
-      tags.reserve(max_tag_count_ * max_tag_length_);
-      getTags_(dspec, ppm, tags);
-      tags_.insert(tags_.end(), tags.begin(), tags.end());
-    }
+    if (deconvolved_spectrum.empty() || deconvolved_spectrum.isDecoy() || deconvolved_spectrum.getOriginalSpectrum().getMSLevel() == 1) return;
+
+    auto tags = std::vector<FLASHHelperClasses::Tag>();
+    tags.reserve(max_tag_count_ * max_tag_length_);
+    getTags_(deconvolved_spectrum, ppm);
+
     int index = 0;
     for (auto& tag : tags_)
       tag.setIndex(index++);
-    endProgress();
 
     runMatching_(fasta_entry);
   }
 
-  void FLASHTaggerAlgorithm::getTags_(const DeconvolvedSpectrum& dspec, double ppm, std::vector<FLASHHelperClasses::Tag>& tags)
+  void FLASHTaggerAlgorithm::getTags_(const DeconvolvedSpectrum& dspec, double ppm)
   {
     std::vector<double> mzs;
     std::vector<int> scores;
@@ -271,10 +262,10 @@ namespace OpenMS
     for (auto& pg : dspec)
     {
       mzs.push_back(pg.getMonoMass());
-      int score = (int)round(20 * log10(std::max(1e-6, pg.getQscore() / std::max(1e-6, (1.0 - random_hit_prob)))));
+      int score = (int)round(10 * log10(std::max(1e-6, pg.getQscore() / std::max(1e-6, (1.0 - random_hit_prob)))));
       scores.push_back(score);
     }
-    getTags_(mzs, scores, dspec.getScanNumber(), ppm, tags);
+    getTags_(mzs, scores, dspec.getScanNumber(), ppm);
   }
 
   void FLASHTaggerAlgorithm::updateTagSet_(std::set<FLASHHelperClasses::Tag>& tag_set,
@@ -371,16 +362,12 @@ namespace OpenMS
     }
   }
 
-  void FLASHTaggerAlgorithm::getTags_(const std::vector<double>& mzs,
-                                      const std::vector<int>& scores,
-                                      int scan,
-                                      double ppm,
-                                      std::vector<FLASHHelperClasses::Tag>& tags)
+  void FLASHTaggerAlgorithm::getTags_(const std::vector<double>& mzs, const std::vector<int>& scores, int scan, double ppm)
   {
     if (max_tag_count_ == 0) return;
 
-    std::vector<double> _mzs;
     std::vector<int> _scores;
+    std::vector<double> _mzs;
     int threshold;
 
     if (mzs.size() >= max_node_cntr)
@@ -402,12 +389,15 @@ namespace OpenMS
 
     _mzs.push_back(.0);
     _scores.push_back(0);
+    spec_.reserve(_mzs.size());
     for (int i = 0; i < (int)mzs.size(); i++)
     {
       if (scores[i] < threshold) continue;
       _mzs.push_back(mzs[i]);
       _scores.push_back(scores[i]);
+      spec_.emplace_back(mzs[i], scores[i]);
     }
+
     // filtration of top 500 masses is done
 
     int max_vertex_score = *std::max_element(_scores.begin(), _scores.end());
@@ -451,12 +441,12 @@ namespace OpenMS
       for (const auto& tag : tagSet)
       {
         if ((int)tag.getLength() != length) continue;
-        tags.push_back(tag);
+        tags_.push_back(tag);
         if (++count == max_tag_count_) break;
       }
     }
 
-    std::sort(tags.begin(), tags.end(),
+    std::sort(tags_.begin(), tags_.end(),
               [](const FLASHHelperClasses::Tag& a, const FLASHHelperClasses::Tag& b) { return a.getScore() > b.getScore(); });
   }
 
@@ -489,133 +479,128 @@ namespace OpenMS
 
     // for each tag, find the possible start and end locations in the protein sequence. If C term, they are negative values to specify values are from
     // the end of the protein
-  #pragma omp parallel for default(none) shared(end_loc, start_loc)
     for (int i = 0; i < (int)tags_.size(); i++)
     {
       const auto& tag = tags_[i];
       auto flanking_mass = std::max(tag.getNtermMass(), tag.getCtermMass());
-
       start_loc[i] = std::max(0, int(floor(flanking_mass - flanking_mass_tol_) / aa_mass_map_.rbegin()->first));
       end_loc[i] = int(ceil(flanking_mass + flanking_mass_tol_) / aa_mass_map_.begin()->first) + (int)tag.getLength() + 1;
     }
 
     // int min_hit_tag_score = max_path_score_;
     startProgress(0, (SignedSize)fasta_entry.size(), "running FLASHTagger: searching database");
-    for (int n = 0; n < 2; n++)
+
+  #pragma omp parallel for default(none) shared(pairs, fasta_entry, start_loc, end_loc)
+    for (int i = 0; i < (int)fasta_entry.size(); i++)
     {
-  #pragma omp parallel for default(none) shared(pairs, fasta_entry, start_loc, end_loc, n)
-      for (int i = 0; i < (int)fasta_entry.size(); i++)
+      const auto& fe = fasta_entry[i];
+      bool is_decoy = false;
+      if (fe.identifier.hasPrefix("DECOY")) { is_decoy = true; }
+
+      nextProgress();
+      std::vector<int> matched_tag_indices;
+      auto x_pos = fe.sequence.find('X');
+      std::map<Size, int> matched_pos_score;
+      // find range, match allowing X.
+      for (int j = 0; j < (int)tags_.size(); j++)
       {
-        const auto& fe = fasta_entry[i];
-        bool is_decoy = false;
-        if (fe.identifier.hasPrefix("DECOY")) { is_decoy = true; }
+        auto& tag = tags_[j];
 
-        if (is_decoy && n == 0) continue;
-        if ((! is_decoy) && n > 0) continue;
-        nextProgress();
-        std::vector<int> matched_tag_indices;
-        auto x_pos = fe.sequence.find('X');
-        std::map<Size, int> matched_pos_score;
-        // find range, match allowing X.
-        for (int j = 0; j < (int)tags_.size(); j++)
+        bool isNterm = tag.getNtermMass() > 0;
+
+        int s, t;
+        if (isNterm) { s = start_loc[j]; }
+        else { s = std::max(0, int(fe.sequence.length()) - 1 - end_loc[j]); }
+        t = std::min(end_loc[j] - start_loc[j], int(fe.sequence.length()) - s);
+        if (t < (int)tag.getLength()) continue;
+        const auto sub_seq = std::string_view(fe.sequence.data() + s, t);
+
+        auto uppercase_tag_seq = tag.getSequence().toUpper();
+        std::vector<int> positions;
+        Size tpos = 0;
+        while (true)
         {
-          auto& tag = tags_[j];
-          // if (is_decoy && (tag.getScore() < min_hit_tag_score)) continue; //
-          bool isNterm = tag.getNtermMass() > 0;
+          tpos = sub_seq.find(uppercase_tag_seq, tpos);
+          if (tpos == std::string_view::npos) break;
+          positions.push_back((int)tpos + s);
+          tpos++;
+        }
 
-          int s, t;
-          if (isNterm) { s = start_loc[j]; }
-          else { s = std::max(0, int(fe.sequence.length()) - 1 - end_loc[j]); }
-          t = std::min(end_loc[j] - start_loc[j], int(fe.sequence.length()) - s);
-          if (t < (int)tag.getLength()) continue;
-          const auto sub_seq = std::string_view(fe.sequence.data() + s, t);
-
-          auto uppercase_tag_seq = tag.getSequence().toUpper();
-          std::vector<int> positions;
-          Size tpos = 0;
+        if (positions.empty() && (int)x_pos >= s && (int)x_pos <= s + t) // only if perfect hits are not found and X exists
+        {
+          tpos = 0;
           while (true)
           {
-            tpos = sub_seq.find(uppercase_tag_seq, tpos);
+            tpos = find_with_X_(sub_seq, uppercase_tag_seq, tpos);
             if (tpos == std::string_view::npos) break;
             positions.push_back((int)tpos + s);
             tpos++;
           }
+        }
 
-          if (positions.empty() && (int)x_pos >= s && (int)x_pos <= s + t) // only if perfect hits are not found and X exists
+        bool matched = false;
+        for (const auto& pos : positions)
+        {
+          if (tag.getNtermMass() > 0 && pos >= 0)
           {
-            tpos = 0;
-            while (true)
-            {
-              tpos = find_with_X_(sub_seq, uppercase_tag_seq, tpos);
-              if (tpos == std::string_view::npos) break;
-              positions.push_back((int)tpos + s);
-              tpos++;
-            }
+            auto nterm = fe.sequence.substr(0, std::min(pos, (int)fe.sequence.length()));
+            if (x_pos != String::npos) { nterm.erase(remove(nterm.begin(), nterm.end(), 'X'), nterm.end()); }
+            double aamass = nterm.empty() ? 0 : AASequence::fromString(nterm).getMonoWeight(Residue::Internal);
+            if (std::abs(tag.getNtermMass() - aamass) > flanking_mass_tol_) continue;
           }
-
-          bool matched = false;
-          for (const auto& pos : positions)
+          else if (tag.getCtermMass() > 0 && pos + tag.getSequence().length() < fe.sequence.length())
           {
-            if (tag.getNtermMass() > 0 && pos >= 0)
-            {
-              auto nterm = fe.sequence.substr(0, std::min(pos, (int)fe.sequence.length()));
-              if (x_pos != String::npos) { nterm.erase(remove(nterm.begin(), nterm.end(), 'X'), nterm.end()); }
-              double aamass = nterm.empty() ? 0 : AASequence::fromString(nterm).getMonoWeight(Residue::Internal);
-              if (std::abs(tag.getNtermMass() - aamass) > flanking_mass_tol_) continue;
-            }
-            else if (tag.getCtermMass() > 0 && pos + tag.getSequence().length() < fe.sequence.length())
-            {
-              auto cterm = fe.sequence.substr(pos + tag.getSequence().length());
-              if (x_pos != String::npos) cterm.erase(remove(cterm.begin(), cterm.end(), 'X'), cterm.end());
-              double aamass = cterm.empty() ? 0 : AASequence::fromString(cterm).getMonoWeight(Residue::Internal);
-              if (std::abs(tag.getCtermMass() - aamass) > flanking_mass_tol_) continue;
-            }
-            else
-              continue;
-
-            for (int off = 0; off < (int)tag.getLength(); off++)
-            {
-              int score = tag.getScore(off);
-              auto iter = matched_pos_score.find(pos + off);
-              if (iter != matched_pos_score.end()) score = std::max(score, iter->second);
-              matched_pos_score[pos + off] = score;
-              matched = true;
-            }
-          }
-          if (matched)
-          {
-            matched_tag_indices.push_back(j); // tag indices
+            auto cterm = fe.sequence.substr(pos + tag.getSequence().length());
+            if (x_pos != String::npos) cterm.erase(remove(cterm.begin(), cterm.end(), 'X'), cterm.end());
+            double aamass = cterm.empty() ? 0 : AASequence::fromString(cterm).getMonoWeight(Residue::Internal);
+            if (std::abs(tag.getCtermMass() - aamass) > flanking_mass_tol_) continue;
           }
           else
             continue;
-          // #pragma omp critical
-          // if (! is_decoy) min_hit_tag_score = std::min(min_hit_tag_score, tag.getScore());
-        }
-        if (matched_tag_indices.empty()) continue;
 
-        int match_cntr = 0;
-        int match_score = 0;
-        for (const auto& ps : matched_pos_score)
+          for (int off = 0; off < (int)tag.getLength(); off++)
+          {
+            int score = tag.getScore(off);
+            auto iter = matched_pos_score.find(pos + off);
+            if (iter != matched_pos_score.end()) score = std::max(score, iter->second);
+            matched_pos_score[pos + off] = score;
+            matched = true;
+          }
+        }
+        if (matched)
         {
-          if (fe.sequence[ps.first] == 'X') continue;
-          match_cntr++;
-          match_score += ps.second;
+          matched_tag_indices.push_back(j); // tag indices
         }
+        else
+          continue;
+        // #pragma omp critical
+        // if (! is_decoy) min_hit_tag_score = std::min(min_hit_tag_score, tag.getScore());
+      }
+      if (matched_tag_indices.empty()) continue;
 
-        if (match_cntr < min_cov_aa_) continue;
-        //(double score, UInt rank, String accession, String sequence)
-        ProteinHit hit(0, 0, fe.identifier, fe.sequence); //
-        hit.setDescription(fe.description);
-        hit.setMetaValue("MatchedAA", match_cntr);
-        hit.setMetaValue("IsDecoy", is_decoy ? 1 : 0);
-        hit.setCoverage(double(match_cntr) / (double)fe.sequence.length());
-        hit.setScore(match_score);
+      int match_cntr = 0;
+      int match_score = 0;
+      for (const auto& ps : matched_pos_score)
+      {
+        if (fe.sequence[ps.first] == 'X') continue;
+        match_cntr++;
+        match_score += ps.second;
+      }
+
+      if (match_cntr < min_cov_aa_) continue;
+      //(double score, UInt rank, String accession, String sequence)
+      ProteinHit hit(0, 0, fe.identifier, fe.sequence); //
+      hit.setDescription(fe.description);
+      hit.setMetaValue("MatchedAA", match_cntr);
+      hit.setMetaValue("IsDecoy", is_decoy ? 1 : 0);
+      hit.setCoverage(double(match_cntr) / (double)fe.sequence.length());
+      hit.setScore(match_score);
   #pragma omp critical
-        {
-          pairs.emplace_back(hit, matched_tag_indices);
-        }
+      {
+        pairs.emplace_back(hit, matched_tag_indices);
       }
     }
+
     endProgress();
 
     matching_tags_indices_ = std::vector<std::vector<int>>();
@@ -636,8 +621,7 @@ namespace OpenMS
     {
       if (fe.identifier.hasPrefix("DECOY")) decoy_mul++;
     }
-    if (decoy_mul > 0)
-      decoy_mul /= (double)fasta_entry.size() - decoy_mul; //
+    if (decoy_mul > 0) decoy_mul /= (double)fasta_entry.size() - decoy_mul; //
 
     std::sort(pairs.begin(), pairs.end(),
               [](const std::pair<ProteinHit, std::vector<int>>& left, const std::pair<ProteinHit, std::vector<int>>& right) {
@@ -712,7 +696,10 @@ namespace OpenMS
     }
   }
 
-  void FLASHTaggerAlgorithm::getMatchedPositionsAndFlankingMassDiffs(std::vector<int>& positions, std::vector<double>& masses, const ProteinHit& hit, const FLASHHelperClasses::Tag& tag) const
+  void FLASHTaggerAlgorithm::getMatchedPositionsAndFlankingMassDiffs(std::vector<int>& positions,
+                                                                     std::vector<double>& masses,
+                                                                     const ProteinHit& hit,
+                                                                     const FLASHHelperClasses::Tag& tag) const
   {
     Size pos = 0;
     std::vector<int> indices;

@@ -9,6 +9,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHExtenderAlgorithm.h>
 #include <OpenMS/APPLICATIONS/TOPPBase.h>
 #include <OpenMS/FORMAT/FASTAFile.h>
 #include <OpenMS/FORMAT/FLASHTaggerFile.h>
@@ -24,10 +25,10 @@ using namespace std;
 //-------------------------------------------------------------
 // We do not want this class to show up in the docu:
 
-class TOPPFLASHTagger : public TOPPBase
+class TOPPFLASHTnT : public TOPPBase
 {
 public:
-  TOPPFLASHTagger(): TOPPBase("FLASHTagger", "FLASHTagger to generate de novo sequence tags from TDP spectrum.", false)
+  TOPPFLASHTnT(): TOPPBase("FLASHTnT", "FLASHTnT to generate de novo sequence tags from TDP spectrum and match them against proteome DB for proteoform identification.", false)
   {
   }
 
@@ -48,12 +49,12 @@ protected:
     registerOutputFile_("out_tag", "<file>", "", "Default output tag level tsv file containing matched tags");
     setValidFormats_("out_tag", ListUtils::create<String>("tsv"));
 
-    registerSubsection_("Tagger", "FLASHTagger algorithm parameters");
+    registerSubsection_("TnT", "FLASHTnT algorithm parameters");
   }
 
   Param getSubsectionDefaults_(const String& prefix) const override
   {
-    if (prefix == "Tagger")
+    if (prefix == "TnT")
     {
       auto tagger_param = FLASHTaggerAlgorithm().getDefaults();
       return tagger_param;
@@ -87,7 +88,15 @@ protected:
     mzml.setLogType(log_type_);
     mzml.load(in_file, map);
 
-    std::vector<DeconvolvedSpectrum> deconvolved_spectra;
+    auto tagger_param = getParam_().copy("TnT:", true);
+
+    OPENMS_LOG_INFO << "Finding sequence tags from deconvolved MS2 spectra ..." << endl;
+
+    FASTAFile fasta_file;
+    std::vector<FASTAFile::FASTAEntry> fasta_entry;
+    fasta_file.load(in_fasta, fasta_entry);
+
+
     double tol(10);
     // Run FLASHDeconvAlgorithm here!
     OPENMS_LOG_INFO << "Processing : " << in_file << endl;
@@ -143,25 +152,18 @@ protected:
         dspec.push_back(peak);
       }
       dspec.sort();
-      deconvolved_spectra.push_back(dspec);
-    }
-    // Run tagger
-    FLASHTaggerAlgorithm tagger;
-
-    auto tagger_param = getParam_().copy("Tagger:", true);
-
-    if ((int)tagger_param.getValue("max_tag_count") > 0)
-    {
-      OPENMS_LOG_INFO << "Finding sequence tags from deconvolved MS2 spectra ..." << endl;
-
-      FASTAFile fasta_file;
-      std::vector<FASTAFile::FASTAEntry> fasta_entry;
-      fasta_file.load(in_fasta, fasta_entry);
-
+      FLASHTaggerAlgorithm tagger;
+      // Run tagger
       tagger.setParameters(tagger_param);
-      tagger.run(deconvolved_spectra, tol, fasta_entry);
-      OPENMS_LOG_INFO << "FLASHTagger run complete. Now writing the results in output files ..." << endl;
+      tagger.run(dspec, tol, fasta_entry);
 
+      FLASHExtenderAlgorithm extender;
+      extender.run(dspec, tagger);
+    }
+
+    OPENMS_LOG_INFO << "FLASHTnT run complete. Now writing the results in output files ..." << endl;
+
+      /*
       if (! out_tag_file.empty())
       {
         fstream out_tagger_stream = fstream(out_tag_file, fstream::out);
@@ -177,7 +179,8 @@ protected:
         FLASHTaggerFile::writeProteins(tagger, out_tagger_stream);
         out_tagger_stream.close();
       }
-    }
+       */
+
     return EXECUTION_OK;
   }
 };
@@ -185,6 +188,6 @@ protected:
 // the actual main function needed to create an executable
 int main(int argc, const char** argv)
 {
-  TOPPFLASHTagger tool;
+  TOPPFLASHTnT tool;
   return tool.main(argc, argv);
 }

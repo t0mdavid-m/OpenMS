@@ -111,7 +111,7 @@ namespace OpenMS
 
       for (const auto& sn : sns)
       {
-        if (! scans.empty()) scans += ";";
+        if (! scans.empty()) scans += ";"; // BIG TODO per spectrum search.
         scans += std::to_string(sn);
       }
 
