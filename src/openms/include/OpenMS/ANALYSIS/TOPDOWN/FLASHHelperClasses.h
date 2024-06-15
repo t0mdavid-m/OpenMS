@@ -260,7 +260,7 @@ namespace OpenMS
     class OPENMS_DLLAPI DAG
     {
     public:
-      explicit DAG(int vertice_count): vertex_count_(vertice_count), adj_list_(vertice_count)
+      explicit DAG(int vertice_count): vertex_count_(vertice_count)
       {
       }
 
@@ -287,7 +287,7 @@ namespace OpenMS
     private:
       int vertex_count_;
       // 0, 1, 2, ... ,vertex_count - 1
-      std::vector<std::vector<int>> adj_list_; //
+      std::map<int, std::vector<int>> adj_list_; //
       void findAllPaths_(int current,
                          int destination,
                          boost::dynamic_bitset<>& visited,

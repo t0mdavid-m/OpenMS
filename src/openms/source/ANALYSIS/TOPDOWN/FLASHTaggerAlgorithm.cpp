@@ -262,7 +262,7 @@ namespace OpenMS
     for (auto& pg : dspec)
     {
       mzs.push_back(pg.getMonoMass());
-      int score = (int)round(10 * log10(std::max(1e-6, pg.getQscore() / std::max(1e-6, (1.0 - random_hit_prob)))));
+      int score = (int)round(20 * log10(std::max(1e-6, pg.getQscore() / std::max(1e-6, (1.0 - random_hit_prob)))));
       scores.push_back(score);
     }
     getTags_(mzs, scores, dspec.getScanNumber(), ppm);
