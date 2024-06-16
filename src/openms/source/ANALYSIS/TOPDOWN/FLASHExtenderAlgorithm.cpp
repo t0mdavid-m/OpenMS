@@ -58,7 +58,7 @@ int FLASHExtenderAlgorithm::getVertex_(int node_index, int pro_index, int score,
 {
   return ((node_index * (pro_length_ + 1) + pro_index) * (max_mod_cntr_ + 1) + num_mod)
            * (max_path_score_ - min_path_score_ + 1) // TODO min_path_score_ how to?
-         + (std::min(max_path_score_, score) - min_path_score_);
+         + (score - min_path_score_);
 }
 
 int FLASHExtenderAlgorithm::getNodeIndex_(int vertex) const
@@ -83,7 +83,7 @@ int FLASHExtenderAlgorithm::getModNumber_(int vertex) const
 
 void FLASHExtenderAlgorithm::run(const DeconvolvedSpectrum& dspec, const FLASHTaggerAlgorithm& tagger)
 {
-  ion_types_str_ = std::vector<String>({"b-ion"});
+  ion_types_str_ = std::vector<String>({"b-ion", "c-ion"});
   tol_ = 5e-6;
   max_mod_cntr_ = 1;
 
@@ -148,10 +148,17 @@ void FLASHExtenderAlgorithm::run(const DeconvolvedSpectrum& dspec, const FLASHTa
     node_scores_.push_back(0);
     node_masses_.push_back(0);
 
+    max_path_score_ = 0;
+    min_path_score_ = 0;
+
     for (int i = 0; i < tspec.size(); i++)
     {
       double mass = tspec[i].getMZ();
       int score = (int)tspec[i].getIntensity();
+
+      if (score > 0) max_path_score_ += score;
+      else min_path_score_ += score;
+
       double prev_mass = node_masses_.back();
       int prev_score = node_scores_.back();
       if (mass - prev_mass < tol_ * mass) // they are the same
@@ -165,10 +172,8 @@ void FLASHExtenderAlgorithm::run(const DeconvolvedSpectrum& dspec, const FLASHTa
       }
       node_masses_.push_back(mass);
       node_scores_.push_back(score);
-    }
 
-    max_path_score_ = 500; // TODO what if it hits the ceiling?
-    min_path_score_ = 0;   // TODO what if it hits the ceiling?
+    }
 
 //#pragma omp parallel for default(none) shared(k, tagger, hits, dspec, prefix_shifts, suffix_shifts)
     for (int i = 0; i < (int)hits.size(); i++)
@@ -180,7 +185,7 @@ void FLASHExtenderAlgorithm::run(const DeconvolvedSpectrum& dspec, const FLASHTa
       auto seq = hit.getSequence();
 
       if (k == 0) seq = seq.reverse();
-      pro_length_ = seq.length();
+      pro_length_ = seq.length() + 1;
       for (const auto& aa : seq)
       {
         pro_masses_.push_back(pro_masses_.back() + AASequence::fromString(aa).getMonoWeight(Residue::Internal));
@@ -287,24 +292,25 @@ void FLASHExtenderAlgorithm::run(const DeconvolvedSpectrum& dspec, const FLASHTa
             tag_node_starts.push_back(highest_score_start);
             tag_pro_starts.push_back(pos);
             tag_node_ends.push_back(highest_score_end);
-            tag_pro_ends.push_back(pos + tag.getLength());
+            tag_pro_ends.push_back(pos + tag.getLength()); // this can be much faster...
           }
         }
       }
 
       constructDAG_(dag, sinks, tag_node_starts, tag_pro_starts, tag_node_ends, tag_pro_ends);
       std::vector<std::vector<int>> all_paths;
+      int src = getVertex_(0, 0, 0, 0);
       for (int sink : sinks)
       {
-        if (sink == 0) continue;
-        dag.findAllPaths(sink, 0, all_paths, 1);
+        if (sink == getVertex_(0, 0, 0, 0)) continue;
+        dag.findAllPaths(sink, src, all_paths, 1);
         std::cout<<getModNumber_(sink)<<std::endl;
       }
       for (auto& path : all_paths)
       {
         for (int v : path)
         {
-          std::cout << node_masses_[getNodeIndex_(v)] << " " << pro_masses_[getProIndex_(v)] << std::endl;
+          std::cout << node_masses_[getNodeIndex_(v)] << " " << pro_masses_[getProIndex_(v)] << " " << getScore_(v) << std::endl;
         }
         std::cout << std::endl;
       }
@@ -326,6 +332,7 @@ void FLASHExtenderAlgorithm::constructDAG_(FLASHHelperClasses::DAG& dag,
   if (tag_node_starts.empty()) return;
 
   int src = getVertex_(0, 0, 0, 0);
+
   visited[src] = true;
   connectBetweenTags(dag, visited, sinks, src, tag_node_starts, tag_pro_starts, tag_node_ends, tag_pro_ends);
 }
@@ -357,6 +364,7 @@ void FLASHExtenderAlgorithm::connectBetweenTags(FLASHHelperClasses::DAG& dag,
     if (tag_node_ends[i] == node_index && tag_pro_ends[i] == pro_index) tag_end_index = i;
   }
 
+  int src = getVertex_(0, 0, 0, 0);
   if (tag_start_index >= 0) // within tag
   {
     std::vector<int> next_vertices(max_mod_cntr_ + 1, 0);
@@ -367,11 +375,11 @@ void FLASHExtenderAlgorithm::connectBetweenTags(FLASHHelperClasses::DAG& dag,
 
     for (auto next_vertex : next_vertices)
     {
-      if (next_vertex == 0) continue;
+      if (next_vertex == src) continue;
       connectBetweenTags(dag, visited, sinks, next_vertex, tag_node_starts, tag_pro_starts, tag_node_ends, tag_pro_ends);
     }
   }
-  else if (vertex == 0 || tag_end_index >= 0) // between tag. Never after the last tag.
+  else if (vertex == src || tag_end_index >= 0) // between tag. Never after the last tag.
   {
     for (int tag_index = 0; tag_index < tag_node_starts.size(); tag_index++) // for all reachable tag starting point, run extension
     {
@@ -384,7 +392,7 @@ void FLASHExtenderAlgorithm::connectBetweenTags(FLASHHelperClasses::DAG& dag,
 
       for (auto next_vertex : next_vertices)
       {
-        if (next_vertex == 0) continue;
+        if (next_vertex == src) continue;
         connectBetweenTags(dag, visited, sinks, next_vertex, tag_node_starts, tag_pro_starts, tag_node_ends, tag_pro_ends);
       }
     }
@@ -405,10 +413,10 @@ void FLASHExtenderAlgorithm::extendBetweenTags(FLASHHelperClasses::DAG& dag,
   int score1 = getScore_(vertex);
   int num_mod1 = getModNumber_(vertex);
 
-  if (node_index < 0)
+  if (node_index < 0 && go_diagonal)
   {
     sinks[num_mod1] = vertex;
-    pro_index = std::min(pro_index1 + 5, (int)pro_masses_.size() - 1); // if sink is not specified, stretch up to five amino acids.
+    pro_index = std::min(pro_index1 + 10, (int)pro_masses_.size() - 1); // if sink is not specified, stretch up to ten amino acids.
   }
   else if (node_index1 > node_index || pro_index1 > pro_index)
     return;
@@ -426,15 +434,15 @@ void FLASHExtenderAlgorithm::extendBetweenTags(FLASHHelperClasses::DAG& dag,
     return;
   }
 
-  if (vertex == 0)
+  if (vertex == getVertex_(0, 0, 0, 0))
   {
     for (int pro_i = pro_index1 + 1; pro_i <= pro_index; pro_i++)
     {
       int vertex2 = getVertex_(node_index1, pro_i, score1, num_mod1);
+
       dag.addEdge(vertex2, vertex, visited);
-      extendBetweenTags(dag, visited, sinks, vertex2, node_index, pro_index);
+      extendBetweenTags(dag, visited, sinks, vertex2, node_index, pro_index, go_diagonal);
     }
-    return;
   }
 
   double delta_mass1 = node_masses_[node_index1] - pro_masses_[pro_index1];
@@ -446,11 +454,12 @@ void FLASHExtenderAlgorithm::extendBetweenTags(FLASHHelperClasses::DAG& dag,
     if (std::abs(delta_mass - delta_mass1) > max_mod_mass_ * max_mod_cntr_ + 1.0) return;
     if (go_diagonal)
     {
-      if (std::abs(delta_mass - delta_mass1) > tol_ * node_masses_[node_index1]) return;
+      if (std::abs(delta_mass - delta_mass1) > tol_ * node_masses_[node_index]) return;
     }
   }
   for (int node_i = node_index1 + 1; node_i <= (node_index < 0 ? (int)node_scores_.size() - 1 : node_index); node_i++)
   {
+    if (node_index < 0 && node_scores_[node_i] < 0) continue;
     int score = score1 + node_scores_[node_i];
     for (int pro_i = pro_index1 + 1; pro_i <= pro_index; pro_i++)
     {
@@ -459,16 +468,15 @@ void FLASHExtenderAlgorithm::extendBetweenTags(FLASHHelperClasses::DAG& dag,
       if (delta_mass - delta_mass1 > max_mod_mass_) continue;
       if (delta_mass1 - delta_mass > max_mod_mass_) continue;
       int num_mod = num_mod1;
-      if (std::abs(delta_mass - delta_mass1) > tol_ * node_masses_[node_index1])
+      if (std::abs(delta_mass - delta_mass1) > tol_ * node_masses_[node_i])
       {
         num_mod++;
       }
-      if (go_diagonal && num_mod != num_mod1) continue; // on tag layer. No additional mod allowed.
+      if (go_diagonal && num_mod != num_mod1) continue; //
       if (num_mod > max_mod_cntr_) continue;
       int next_vertex = getVertex_(node_i, pro_i, score, num_mod);
-
       dag.addEdge(next_vertex, vertex, visited);
-      extendBetweenTags(dag, visited, sinks, next_vertex, node_index, pro_index);
+      extendBetweenTags(dag, visited, sinks, next_vertex, node_index, pro_index, go_diagonal);
     }
   }
 }
