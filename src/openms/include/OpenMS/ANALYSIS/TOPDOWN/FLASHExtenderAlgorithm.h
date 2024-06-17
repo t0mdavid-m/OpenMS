@@ -62,7 +62,6 @@ namespace OpenMS
     void extendBetweenTags(FLASHHelperClasses::DAG& dag, boost::dynamic_bitset<>& visited, std::vector<int>& sinks,
                           int vertex, int node_index, int pro_index, bool go_diagonal = false);
 
-    std::map<String, Residue::ResidueType> res_type_names_;
     std::vector<int> node_scores_;
     std::vector<double> node_masses_;
     std::vector<double> pro_masses_;
@@ -75,6 +74,6 @@ namespace OpenMS
     int max_path_score_ = 0;
     int min_path_score_ = 0;
     double fdr_ = 1.0;
-    double max_mod_mass_ = 500.0;
+    double max_mod_mass_ = 100.0;
   };
 } // namespace OpenMS

@@ -47,11 +47,6 @@ void FLASHExtenderAlgorithm::setDefaultParams_()
 
 void FLASHExtenderAlgorithm::updateMembers_()
 {
-  for (Size i = 0; i < Residue::SizeOfResidueType; i++)
-  {
-    auto res_type = Residue::ResidueType(i);
-    res_type_names_[Residue::getResidueTypeName(res_type)] = res_type;
-  }
 }
 
 int FLASHExtenderAlgorithm::getVertex_(int node_index, int pro_index, int score, int num_mod) const
@@ -83,7 +78,9 @@ int FLASHExtenderAlgorithm::getModNumber_(int vertex) const
 
 void FLASHExtenderAlgorithm::run(const DeconvolvedSpectrum& dspec, const FLASHTaggerAlgorithm& tagger)
 {
-  ion_types_str_ = std::vector<String>({"b-ion", "c-ion"});
+  setLogType(CMD);
+
+  ion_types_str_ = std::vector<String>({"c-ion", "b-ion", "y-ion", "z-ion"}); // why ion type order matter? fix TODO
   tol_ = 5e-6;
   max_mod_cntr_ = 1;
 
@@ -91,6 +88,8 @@ void FLASHExtenderAlgorithm::run(const DeconvolvedSpectrum& dspec, const FLASHTa
   std::vector<double> mzs;
   std::vector<int> scores;
   tagger.getProteinHits(hits);
+  startProgress(0, (SignedSize)hits.size() * 3, "running FLASHExtender ...");
+
   auto spec = tagger.getSpectrum();
 
   std::vector<double> prefix_shifts;
@@ -99,16 +98,20 @@ void FLASHExtenderAlgorithm::run(const DeconvolvedSpectrum& dspec, const FLASHTa
   Residue empty;
   for (const auto& ion_str : ion_types_str_)
   {
-    auto res_type_ = res_type_names_[ion_str];
-    auto letter = Residue::residueTypeToIonLetter(res_type_);
-    double shift = empty.getMonoWeight(res_type_) + Residue::getInternalToFull().getMonoWeight();
-
-    if (letter == "a" || letter == "b" || letter == "c") { prefix_shifts.push_back(shift); }
-    else { suffix_shifts.push_back(shift); }
+    if (ion_str == "a-ion") { prefix_shifts.push_back(Residue::getInternalToAIon().getMonoWeight()); }
+    else if (ion_str == "b-ion") { prefix_shifts.push_back(Residue::getInternalToBIon().getMonoWeight()); }
+    else if (ion_str == "c-ion") { prefix_shifts.push_back(Residue::getInternalToCIon().getMonoWeight()); }
+    else if (ion_str == "x-ion") { suffix_shifts.push_back(Residue::getInternalToXIon().getMonoWeight()); }
+    else if (ion_str == "y-ion") { suffix_shifts.push_back(Residue::getInternalToYIon().getMonoWeight()); }
+    else if (ion_str == "z-ion") { suffix_shifts.push_back(Residue::getInternalToZIon().getMonoWeight()); }
+    else
+    {
+      continue; // TODO warn
+    }
   }
 
   // 0 for suffix 1 for prefix 2 for suffix and prefix if precursor mass is available
-  for (int k = 0; k < 2; k++) // TODO make it 3
+  for (int k = 0; k < 3; k++) // TODO make it 3
   {
     MSSpectrum tspec;
     node_scores_.clear();
@@ -117,25 +120,25 @@ void FLASHExtenderAlgorithm::run(const DeconvolvedSpectrum& dspec, const FLASHTa
     {
       if (k == 0)
       {
-        for (auto shift : suffix_shifts)
+        for (const auto& shift : suffix_shifts)
         {
           tspec.emplace_back(p.getMZ() - shift, p.getIntensity());
         }
       }
       else if (k == 1)
       {
-        for (auto shift : prefix_shifts)
+        for (const auto& shift : prefix_shifts)
         {
           tspec.emplace_back(p.getMZ() - shift, p.getIntensity());
         }
       }
       else if (precursor_mass_ > 0)
       {
-        for (auto shift : prefix_shifts)
+        for (auto& shift : prefix_shifts)
         {
           tspec.emplace_back(p.getMZ() - shift, p.getIntensity());
         }
-        for (auto shift : suffix_shifts)
+        for (const auto& shift : suffix_shifts)
         {
           tspec.emplace_back(precursor_mass_ - Residue::getInternalToFull().getMonoWeight() - (p.getMZ() - shift),
                              p.getIntensity()); // TODO check after all
@@ -144,26 +147,28 @@ void FLASHExtenderAlgorithm::run(const DeconvolvedSpectrum& dspec, const FLASHTa
     }
     if (tspec.empty()) continue;
     tspec.sortByPosition();
+
     // score, mz makes the nodes. merge with tolerance.
     node_scores_.push_back(0);
     node_masses_.push_back(0);
 
-    max_path_score_ = 0;
-    min_path_score_ = 0;
+    max_path_score_ = 1000;
+    min_path_score_ = -100;
 
     for (int i = 0; i < tspec.size(); i++)
     {
       double mass = tspec[i].getMZ();
       int score = (int)tspec[i].getIntensity();
 
-      if (score > 0) max_path_score_ += score;
-      else min_path_score_ += score;
+      //if (score > 0) max_path_score_ += score;
+      //else min_path_score_ += score;
 
       double prev_mass = node_masses_.back();
       int prev_score = node_scores_.back();
-      if (mass - prev_mass < tol_ * mass) // they are the same
+      if (mass - prev_mass < 2 * tol_ * mass) // they are the same
       {
-        if (prev_score < score)
+
+        if (score > 0)
         {
           node_masses_.pop_back();
           node_scores_.pop_back();
@@ -172,12 +177,12 @@ void FLASHExtenderAlgorithm::run(const DeconvolvedSpectrum& dspec, const FLASHTa
       }
       node_masses_.push_back(mass);
       node_scores_.push_back(score);
-
     }
 
-//#pragma omp parallel for default(none) shared(k, tagger, hits, dspec, prefix_shifts, suffix_shifts)
+    // #pragma omp parallel for default(none) shared(k, tagger, hits, dspec, prefix_shifts, suffix_shifts)
     for (int i = 0; i < (int)hits.size(); i++)
     {
+      nextProgress();
       auto hit = hits[i];
       // protein masses
       pro_masses_.clear();
@@ -185,11 +190,11 @@ void FLASHExtenderAlgorithm::run(const DeconvolvedSpectrum& dspec, const FLASHTa
       auto seq = hit.getSequence();
 
       if (k == 0) seq = seq.reverse();
-      pro_length_ = seq.length() + 1;
       for (const auto& aa : seq)
       {
         pro_masses_.push_back(pro_masses_.back() + AASequence::fromString(aa).getMonoWeight(Residue::Internal));
       }
+      pro_length_ = pro_masses_.size();
 
       std::vector<int> tag_node_starts, tag_pro_starts, tag_node_ends, tag_pro_ends;
       std::vector<FLASHHelperClasses::Tag> tags;
@@ -197,13 +202,31 @@ void FLASHExtenderAlgorithm::run(const DeconvolvedSpectrum& dspec, const FLASHTa
 
       tagger.getTagsMatchingTo(hit, tags);
 
+      std::set<String> tag_strings;
+      for (const auto& tag : tags)
+      {
+        tag_strings.insert(tag.getSequence());
+      }
+
       FLASHHelperClasses::DAG dag(
         (int)(node_scores_.size() * (1 + pro_masses_.size()) * (1 + max_mod_cntr_) * (1 + max_path_score_ - min_path_score_)));
 
       for (const auto& tag : tags)
       {
+        bool skip = false;
+        for (const auto& tag_string : tag_strings)
+        {
+          if (tag.getSequence() == tag_string) continue;
+          if (tag_string.hasSubstring(tag.getSequence()))
+          {
+            skip = true;
+            break;
+          }
+        }
+        if (skip) continue;
         if (k == 0 && tag.getCtermMass() <= 0) continue;
         if (k == 1 && tag.getNtermMass() <= 0) continue;
+        if (k == 2 && precursor_mass_ <= 0) continue;
 
         std::vector<int> positions;
         std::vector<double> masses;
@@ -213,23 +236,25 @@ void FLASHExtenderAlgorithm::run(const DeconvolvedSpectrum& dspec, const FLASHTa
 
         for (int j = 0; j < positions.size(); j++)
         {
-          int pos = positions[j]; // AASequence::fromString(aa).getMonoWeight(Residue::Internal));
+          int pos = positions[j];
           std::vector<double> start_masses, end_masses;
           if (tag.getCtermMass() >= 0) // suffix
           {
             if (precursor_mass_ == 0)
             {
-              pos = seq.length() - pos; // invert pos
+              pos = pro_length_ - 1 - pos; // invert pos
             }
-            for (auto shift : suffix_shifts)
+            for (const auto& shift : suffix_shifts)
             {
               double start_mass = tag_masses[0] - shift;
               double end_mass = tag_masses.back() - shift;
+
               if (precursor_mass_ > 0)
               {
                 start_mass = precursor_mass_ - Residue::getInternalToFull().getMonoWeight() - start_mass;
                 end_mass = precursor_mass_ - Residue::getInternalToFull().getMonoWeight() - end_mass;
               }
+
               start_masses.push_back(start_mass);
               end_masses.push_back(end_mass);
             }
@@ -290,33 +315,48 @@ void FLASHExtenderAlgorithm::run(const DeconvolvedSpectrum& dspec, const FLASHTa
             if (highest_score_start < 0 || highest_score_end < 0) continue;
 
             tag_node_starts.push_back(highest_score_start);
-            tag_pro_starts.push_back(pos);
             tag_node_ends.push_back(highest_score_end);
-            tag_pro_ends.push_back(pos + tag.getLength()); // this can be much faster...
+            if (k == 0) // suffix inverted
+            {
+              tag_pro_starts.push_back(pos - tag.getLength());
+              tag_pro_ends.push_back(pos); // this can be much faster...
+            }
+            else
+            {
+              tag_pro_starts.push_back(pos);
+              tag_pro_ends.push_back(pos + tag.getLength()); // this can be much faster...
+            }
+            // std::cout<< node_masses_[tag_node_starts.back()] << " " << node_masses_[tag_node_ends.back()] << " " <<
+            //   pro_masses_[tag_pro_starts.back()] << " " << pro_masses_[tag_pro_ends.back()] << std::endl;
           }
         }
       }
 
       constructDAG_(dag, sinks, tag_node_starts, tag_pro_starts, tag_node_ends, tag_pro_ends);
+
       std::vector<std::vector<int>> all_paths;
       int src = getVertex_(0, 0, 0, 0);
       for (int sink : sinks)
       {
         if (sink == getVertex_(0, 0, 0, 0)) continue;
         dag.findAllPaths(sink, src, all_paths, 1);
-        std::cout<<getModNumber_(sink)<<std::endl;
       }
+      if (all_paths.empty()) continue;
+      std::cout << hit.getAccession() << std::endl;
       for (auto& path : all_paths)
       {
+        std::cout << path.size() << std::endl;
         for (int v : path)
         {
-          std::cout << node_masses_[getNodeIndex_(v)] << " " << pro_masses_[getProIndex_(v)] << " " << getScore_(v) << std::endl;
+          std::cout << node_masses_[getNodeIndex_(v)] << " " << pro_masses_[getProIndex_(v)] << " " << getModNumber_(v) << " " << getScore_(v)
+                    << std::endl;
         }
         std::cout << std::endl;
       }
       // precursor_mass_
     } // add positive proteoforms all?
   }
+  endProgress();
 }
 
 void FLASHExtenderAlgorithm::constructDAG_(FLASHHelperClasses::DAG& dag,
@@ -327,6 +367,7 @@ void FLASHExtenderAlgorithm::constructDAG_(FLASHHelperClasses::DAG& dag,
                                            std::vector<int>& tag_pro_ends)
 {
   auto visited = boost::dynamic_bitset<>(dag.size());
+
   sinks.resize(max_mod_cntr_ + 1, 0);
 
   if (tag_node_starts.empty()) return;
@@ -412,6 +453,7 @@ void FLASHExtenderAlgorithm::extendBetweenTags(FLASHHelperClasses::DAG& dag,
   int pro_index1 = getProIndex_(vertex);
   int score1 = getScore_(vertex);
   int num_mod1 = getModNumber_(vertex);
+  if (num_mod1 == max_mod_cntr_) go_diagonal = true;
 
   if (node_index < 0 && go_diagonal)
   {
@@ -441,6 +483,7 @@ void FLASHExtenderAlgorithm::extendBetweenTags(FLASHHelperClasses::DAG& dag,
       int vertex2 = getVertex_(node_index1, pro_i, score1, num_mod1);
 
       dag.addEdge(vertex2, vertex, visited);
+      if (!visited[vertex2]) continue;
       extendBetweenTags(dag, visited, sinks, vertex2, node_index, pro_index, go_diagonal);
     }
   }
@@ -454,7 +497,7 @@ void FLASHExtenderAlgorithm::extendBetweenTags(FLASHHelperClasses::DAG& dag,
     if (std::abs(delta_mass - delta_mass1) > max_mod_mass_ * max_mod_cntr_ + 1.0) return;
     if (go_diagonal)
     {
-      if (std::abs(delta_mass - delta_mass1) > tol_ * node_masses_[node_index]) return;
+      if (std::abs(delta_mass - delta_mass1) > 2 * tol_ * node_masses_[node_index]) return;
     }
   }
   for (int node_i = node_index1 + 1; node_i <= (node_index < 0 ? (int)node_scores_.size() - 1 : node_index); node_i++)
@@ -468,14 +511,13 @@ void FLASHExtenderAlgorithm::extendBetweenTags(FLASHHelperClasses::DAG& dag,
       if (delta_mass - delta_mass1 > max_mod_mass_) continue;
       if (delta_mass1 - delta_mass > max_mod_mass_) continue;
       int num_mod = num_mod1;
-      if (std::abs(delta_mass - delta_mass1) > tol_ * node_masses_[node_i])
-      {
-        num_mod++;
-      }
+      if (std::abs(delta_mass - delta_mass1) > 2 * tol_ * node_masses_[node_i]) { num_mod++; }
       if (go_diagonal && num_mod != num_mod1) continue; //
       if (num_mod > max_mod_cntr_) continue;
       int next_vertex = getVertex_(node_i, pro_i, score, num_mod);
       dag.addEdge(next_vertex, vertex, visited);
+      if (!visited[next_vertex]) continue;
+
       extendBetweenTags(dag, visited, sinks, next_vertex, node_index, pro_index, go_diagonal);
     }
   }
