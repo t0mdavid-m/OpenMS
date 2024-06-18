@@ -267,50 +267,50 @@ struct OPENMS_DLLAPI FLASHHelperClasses
   class OPENMS_DLLAPI DAG
   {
   public:
-    explicit DAG(int vertice_count): vertex_count_(vertice_count)
+    explicit DAG(Size vertice_count): vertex_count_(vertice_count)
     {
     }
 
-    int size() const
+    Size size() const
     {
       return vertex_count_;
     }
 
-    void addEdge(int vertex1, int vertex2, boost::dynamic_bitset<>& visited)
+    void addEdge(Size vertex1, Size vertex2, boost::dynamic_bitset<>& visited)
     {
-      if (vertex1 < 0 || vertex2 < 0 || vertex1 >= (int)visited.size() || vertex2 >= (int)visited.size()) return;
+      if (vertex1 >= visited.size() || vertex2 >= visited.size()) return;
       if (! visited[vertex2]) return;
       visited[vertex1] = true;
       adj_list_[vertex1].insert(vertex2); //
     }
 
-    bool hasEdge(int vertex1, int vertex2) const
+    bool hasEdge(Size vertex1, Size vertex2) const
     {
       auto iter = adj_list_.find(vertex1);
       if (iter == adj_list_.end()) return false;
       return iter->second.find(vertex2) != iter->second.end();
     }
 
-    void findAllPaths(int source, int sink, std::vector<std::vector<int>>& all_paths, int max_count)
+    void findAllPaths(Size source, Size sink, std::vector<std::vector<Size>>& all_paths, Size max_count)
     {
       boost::dynamic_bitset<> visited(vertex_count_);
-      std::vector<int> path;
+      std::vector<Size> path;
 
       findAllPaths_(source, sink, visited, path, all_paths, max_count); // reverse traveling
     }
 
   private:
-    int vertex_count_;
+    Size vertex_count_;
     // 0, 1, 2, ... ,vertex_count - 1
-    std::map<int, std::set<int>> adj_list_; //
-    void findAllPaths_(int current,
-                       int destination,
+    std::map<Size, std::set<Size>> adj_list_; //
+    void findAllPaths_(Size current,
+                       Size destination,
                        boost::dynamic_bitset<>& visited,
-                       std::vector<int>& path,
-                       std::vector<std::vector<int>>& all_paths,
-                       int max_count)
+                       std::vector<Size>& path,
+                       std::vector<std::vector<Size>>& all_paths,
+                       Size max_count)
     {
-      if ((int)all_paths.size() >= max_count) return;
+      if (all_paths.size() >= max_count) return;
 
       visited[current] = true;
       path.push_back(current);
@@ -318,7 +318,7 @@ struct OPENMS_DLLAPI FLASHHelperClasses
       if (current == destination) { all_paths.push_back(path);}
       else
       {
-        for (int i : adj_list_[current])
+        for (Size i : adj_list_[current])
         {
           if (! visited[i]) { findAllPaths_(i, destination, visited, path, all_paths, max_count); }
         }

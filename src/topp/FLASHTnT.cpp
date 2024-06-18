@@ -164,7 +164,7 @@ protected:
 
       FLASHExtenderAlgorithm extender;
       extender.setParameters(extender_param);
-      extender.run(dspec, tagger);
+      extender.run(tagger);
     }
 
     OPENMS_LOG_INFO << "FLASHTnT run complete. Now writing the results in output files ..." << endl;

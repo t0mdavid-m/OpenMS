@@ -50,13 +50,13 @@ namespace OpenMS
     }
   }
 
-  int FLASHTaggerAlgorithm::getVertex_(int index, int path_score, int level, int iso_level) const
+  Size FLASHTaggerAlgorithm::getVertex_(int index, int path_score, int level, int iso_level) const
   {
     return ((index * (max_tag_length_ + 1) + level) * (max_iso_in_tag_ + 1) + iso_level) * (max_path_score_ - min_path_score_ + 1)
            + (path_score - min_path_score_);
   }
 
-  int FLASHTaggerAlgorithm::getIndex_(int vertex) const
+  int FLASHTaggerAlgorithm::getIndex_(Size vertex) const
   {
     return ((vertex / (max_path_score_ - min_path_score_ + 1)) / (max_iso_in_tag_ + 1)) / (max_tag_length_ + 1);
   }
@@ -79,8 +79,8 @@ namespace OpenMS
       auto r = mzs[end_index];
 
       // first, make edge from r to source.
-      int vertex1 = getVertex_(end_index, scores[end_index], 0, 0);
-      int vertex2 = getVertex_(0, 0, 0, 0);
+      Size vertex1 = getVertex_(end_index, scores[end_index], 0, 0);
+      Size vertex2 = getVertex_(0, 0, 0, 0);
 
       dag.addEdge(vertex1, vertex2, visited); // move to DAG?
 
@@ -139,8 +139,8 @@ namespace OpenMS
         {
           for (int score = min_path_score_; score <= max_path_score_; score++)
           {
-            vertex1 = (int)getVertex_((int)mzs.size() - 1, score, length, g);
-            vertex2 = (int)getVertex_(end_index, score, length, g);
+            vertex1 = getVertex_((int)mzs.size() - 1, score, length, g);
+            vertex2 = getVertex_(end_index, score, length, g);
             dag.addEdge(vertex1, vertex2, visited);
           }
         }
@@ -187,7 +187,7 @@ namespace OpenMS
     defaults_.setMaxInt("max_length", 30);
     defaults_.setMinInt("max_length", 3);
 
-    defaults_.setValue("flanking_mass_tol", 700.0, "Flanking mass tolerance in Da.");
+    defaults_.setValue("flanking_mass_tol", 70000.0, "Flanking mass tolerance in Da.");
     defaults_.setValue("max_iso_error_count", 0, "Maximum isotope error count per tag.");
     defaults_.setMaxInt("max_iso_error_count", 2);
     defaults_.setMinInt("max_iso_error_count", 0);
@@ -261,7 +261,7 @@ namespace OpenMS
 
     for (auto& pg : dspec)
     {
-      int score = (int)round(10 * log10(std::max(1e-6, pg.getQscore() / std::max(1e-6, (1.0 - random_hit_prob)))));
+      int score = (int)round(5 * log10(std::max(1e-6, pg.getQscore() / std::max(1e-6, (1.0 - random_hit_prob)))));
       //if (score <= -5) continue;
       scores.push_back(score);
       mzs.push_back(pg.getMonoMass());
@@ -271,7 +271,7 @@ namespace OpenMS
 
   void FLASHTaggerAlgorithm::updateTagSet_(std::set<FLASHHelperClasses::Tag>& tag_set,
                                            std::map<String, std::vector<FLASHHelperClasses::Tag>>& seq_tag,
-                                           const std::vector<int>& path,
+                                           const std::vector<Size>& path,
                                            const std::vector<double>& mzs,
                                            const std::vector<int>& scores,
                                            int scan,
@@ -294,12 +294,12 @@ namespace OpenMS
       {
         auto& edge_aa = edge_aa_map_[i1];
         std::vector<String> tmp_seqs;
-        tmp_seqs.reserve(seqs.size());
+        tmp_seqs.reserve(seqs.size() * edge_aa[i2].size());
         for (const auto& tmp_seq : seqs)
         {
           for (const auto& seq : edge_aa[i2])
           {
-            tmp_seqs.push_back(seq + tmp_seq);
+            tmp_seqs.emplace_back(seq + tmp_seq);
           }
         }
         seqs = tmp_seqs;
@@ -314,11 +314,16 @@ namespace OpenMS
       }
     }
 
-    std::vector<double> rev_tag_mzs(tag_mzs);
-    std::reverse(rev_tag_mzs.begin(), rev_tag_mzs.end());
+    std::vector<double> rev_tag_mzs;
+    rev_tag_mzs.reserve(tag_mzs.size());
+    std::vector<int> rev_tag_scores;
+    rev_tag_scores.reserve(tag_scores.size());
 
-    std::vector<int> rev_tag_scores(tag_scores);
-    std::reverse(rev_tag_scores.begin(), rev_tag_scores.end());
+    for (int i = tag_mzs.size() - 1; i >= 0; i--)
+    {
+      rev_tag_mzs.push_back(tag_mzs[i]);
+      rev_tag_scores.push_back(tag_scores[i]);
+    }
 
     for (const auto& seq : seqs)
     {
@@ -416,17 +421,17 @@ namespace OpenMS
 
     for (int length = min_tag_length_; length <= max_tag_length_; length++)
     {
-      FLASHHelperClasses::DAG dag((int)_mzs.size() * (1 + max_tag_length_) * (1 + max_iso_in_tag_) * (1 + max_path_score_ - min_path_score_));
+      FLASHHelperClasses::DAG dag(_mzs.size() * (1 + max_tag_length_) * (1 + max_iso_in_tag_) * (1 + max_path_score_ - min_path_score_));
       constructDAG_(dag, _mzs, _scores, length, ppm);
 
       std::set<FLASHHelperClasses::Tag> _tagSet;
       for (int score = max_path_score_; score >= min_path_score_ && (int)_tagSet.size() < max_tag_count_; score--)
       {
-        std::vector<std::vector<int>> all_paths;
+        std::vector<std::vector<Size>> all_paths;
         all_paths.reserve(max_tag_count_);
         for (int g = 0; g <= max_iso_in_tag_; g++)
         {
-          dag.findAllPaths(getVertex_((int)_mzs.size() - 1, score, length, g), getVertex_(0, 0, 0, 0), all_paths, max_tag_count_);
+          dag.findAllPaths(getVertex_(_mzs.size() - 1, score, length, g), getVertex_(0, 0, 0, 0), all_paths, max_tag_count_);
         }
         for (const auto& path : all_paths)
         {

@@ -44,7 +44,7 @@ namespace OpenMS
     /// assignment operator
     FLASHExtenderAlgorithm& operator=(const FLASHExtenderAlgorithm& other);
 
-    void run(const DeconvolvedSpectrum& dspec, const FLASHTaggerAlgorithm& tagger);
+    void run(const FLASHTaggerAlgorithm& tagger);
 
   protected:
     void updateMembers_() override;
@@ -52,15 +52,15 @@ namespace OpenMS
     void setDefaultParams_();
   private:
 
-    int getVertex_(int node_index, int pro_index, int score, int num_mod) const;
-    int getNodeIndex_(int vertex) const;
-    int getProIndex_(int vertex) const;
-    int getModNumber_(int vertex) const;
-    int getScore_(int vertex) const;
-    void constructDAG_(FLASHHelperClasses::DAG& dag, std::set<int>& sinks, std::vector<int>& tag_node_starts, std::vector<int>& tag_pro_starts, std::vector<int>& tag_node_ends, std::vector<int>& tag_pro_ends);
-    void connectBetweenTags(FLASHHelperClasses::DAG& dag, boost::dynamic_bitset<>& visited, std::set<int>& sinks, int vertex, std::vector<int>& tag_node_starts, std::vector<int>& tag_pro_starts, std::vector<int>& tag_node_ends, std::vector<int>& tag_pro_ends);
-    void extendBetweenTags(FLASHHelperClasses::DAG& dag, boost::dynamic_bitset<>& visited, std::set<int>& sinks,
-                          int vertex, int node_index, int pro_index, int diagonal_counter);
+    Size getVertex_(int node_index, int pro_index, int score, int num_mod) const;
+    int getNodeIndex_(Size vertex) const;
+    int getProIndex_(Size vertex) const;
+    int getModNumber_(Size vertex) const;
+    int getScore_(Size vertex) const;
+    void constructDAG_(FLASHHelperClasses::DAG& dag, std::set<Size>& sinks, std::vector<int>& tag_node_starts, std::vector<int>& tag_pro_starts, std::vector<int>& tag_node_ends, std::vector<int>& tag_pro_ends);
+    void connectBetweenTags(FLASHHelperClasses::DAG& dag, boost::dynamic_bitset<>& visited, std::set<Size>& sinks, Size vertex, std::vector<int>& tag_node_starts, std::vector<int>& tag_pro_starts, std::vector<int>& tag_node_ends, std::vector<int>& tag_pro_ends);
+    void extendBetweenTags(FLASHHelperClasses::DAG& dag, boost::dynamic_bitset<>& visited, std::set<Size>& sinks,
+                           Size vertex, int node_index, int pro_index, int diagonal_counter);
 
     std::vector<int> node_scores_;
     std::vector<double> node_masses_;

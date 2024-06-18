@@ -92,10 +92,10 @@ namespace OpenMS
     void constructDAG_(FLASHHelperClasses::DAG& dag, const std::vector<double>& mzs, const std::vector<int>& scores, int length, double tol);
     std::vector<Residue> getAA_(double l, double r, double tol, int iso_offset = 0) const;
     void updateEdgeMasses_();
-    int getVertex_(int index, int path_score, int level, int iso_level) const;
-    int getIndex_(int vertex) const;
+    Size getVertex_(int index, int path_score, int level, int iso_level) const;
+    int getIndex_(Size vertex) const;
 
-    void updateTagSet_(std::set<FLASHHelperClasses::Tag>& tag_set, std::map<String, std::vector<FLASHHelperClasses::Tag>>& seq_tag, const std::vector<int>& path, const std::vector<double>& mzs, const std::vector<int>& scores, int scan, double ppm);
+    void updateTagSet_(std::set<FLASHHelperClasses::Tag>& tag_set, std::map<String, std::vector<FLASHHelperClasses::Tag>>& seq_tag, const std::vector<Size>& path, const std::vector<double>& mzs, const std::vector<int>& scores, int scan, double ppm);
 
     static Size find_with_X_(const std::string_view& A, const String& B, Size pos = 0);
 
