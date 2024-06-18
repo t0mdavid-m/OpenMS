@@ -261,9 +261,10 @@ namespace OpenMS
 
     for (auto& pg : dspec)
     {
-      mzs.push_back(pg.getMonoMass());
-      int score = (int)round(20 * log10(std::max(1e-6, pg.getQscore() / std::max(1e-6, (1.0 - random_hit_prob)))));
+      int score = (int)round(10 * log10(std::max(1e-6, pg.getQscore() / std::max(1e-6, (1.0 - random_hit_prob)))));
+      //if (score <= -5) continue;
       scores.push_back(score);
+      mzs.push_back(pg.getMonoMass());
     }
     getTags_(mzs, scores, dspec.getScanNumber(), ppm);
   }
@@ -476,7 +477,7 @@ namespace OpenMS
     std::vector<std::pair<ProteinHit, std::vector<int>>> pairs;
     std::vector<int> start_loc(tags_.size(), 0);
     std::vector<int> end_loc(tags_.size(), 0);
-
+    std::sort(tags_.rbegin(), tags_.rend());
     // for each tag, find the possible start and end locations in the protein sequence. If C term, they are negative values to specify values are from
     // the end of the protein
     for (int i = 0; i < (int)tags_.size(); i++)
@@ -502,9 +503,17 @@ namespace OpenMS
       auto x_pos = fe.sequence.find('X');
       std::map<Size, int> matched_pos_score;
       // find range, match allowing X.
+      std::set<double> matched_masses;
       for (int j = 0; j < (int)tags_.size(); j++)
       {
         auto& tag = tags_[j];
+
+        auto A = tag.getMzs();
+        bool isSubset = std::includes(matched_masses.begin(), matched_masses.end(), A.begin(), A.end());
+        if (isSubset)
+        {
+          continue;
+        }
 
         bool isNterm = tag.getNtermMass() > 0;
 
@@ -569,6 +578,8 @@ namespace OpenMS
         }
         if (matched)
         {
+#pragma omp critical
+          matched_masses.insert(tag.getMzs().begin(), tag.getMzs().end());
           matched_tag_indices.push_back(j); // tag indices
         }
         else

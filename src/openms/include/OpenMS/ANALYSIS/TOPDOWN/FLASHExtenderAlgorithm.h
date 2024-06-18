@@ -57,10 +57,10 @@ namespace OpenMS
     int getProIndex_(int vertex) const;
     int getModNumber_(int vertex) const;
     int getScore_(int vertex) const;
-    void constructDAG_(FLASHHelperClasses::DAG& dag, std::vector<int>& sinks, std::vector<int>& tag_node_starts, std::vector<int>& tag_pro_starts, std::vector<int>& tag_node_ends, std::vector<int>& tag_pro_ends);
-    void connectBetweenTags(FLASHHelperClasses::DAG& dag, boost::dynamic_bitset<>& visited, std::vector<int>& sinks, int vertex, std::vector<int>& tag_node_starts, std::vector<int>& tag_pro_starts, std::vector<int>& tag_node_ends, std::vector<int>& tag_pro_ends);
-    void extendBetweenTags(FLASHHelperClasses::DAG& dag, boost::dynamic_bitset<>& visited, std::vector<int>& sinks,
-                          int vertex, int node_index, int pro_index, bool go_diagonal = false);
+    void constructDAG_(FLASHHelperClasses::DAG& dag, std::set<int>& sinks, std::vector<int>& tag_node_starts, std::vector<int>& tag_pro_starts, std::vector<int>& tag_node_ends, std::vector<int>& tag_pro_ends);
+    void connectBetweenTags(FLASHHelperClasses::DAG& dag, boost::dynamic_bitset<>& visited, std::set<int>& sinks, int vertex, std::vector<int>& tag_node_starts, std::vector<int>& tag_pro_starts, std::vector<int>& tag_node_ends, std::vector<int>& tag_pro_ends);
+    void extendBetweenTags(FLASHHelperClasses::DAG& dag, boost::dynamic_bitset<>& visited, std::set<int>& sinks,
+                          int vertex, int node_index, int pro_index, int diagonal_counter);
 
     std::vector<int> node_scores_;
     std::vector<double> node_masses_;
@@ -74,6 +74,6 @@ namespace OpenMS
     int max_path_score_ = 0;
     int min_path_score_ = 0;
     double fdr_ = 1.0;
-    double max_mod_mass_ = 100.0;
+    double max_mod_mass_ = 500.0;
   };
 } // namespace OpenMS

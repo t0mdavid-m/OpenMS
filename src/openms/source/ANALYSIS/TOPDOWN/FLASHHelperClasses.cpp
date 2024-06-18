@@ -275,24 +275,24 @@ FLASHHelperClasses::PrecalculatedAveragine::PrecalculatedAveragine(const double 
 
   bool FLASHHelperClasses::Tag::operator<(const Tag& a) const
   {
-    if (this->c_mass_ == a.c_mass_)
+    if (this->length_ == a.length_)
     {
-      if (this->n_mass_ == a.n_mass_)
-        return this->seq_ < a.seq_;
-      return this->n_mass_ < a.n_mass_;
+      if (this->seq_ == a.seq_)
+        return (this->c_mass_ + this->n_mass_) < (a.c_mass_ + a.n_mass_);
+      return this->seq_ < a.seq_;
     }
-    return this->c_mass_ < a.c_mass_;
+    return this->length_ < a.length_;
   }
 
   bool FLASHHelperClasses::Tag::operator>(const Tag& a) const
   {
-    if (this->c_mass_ == a.c_mass_)
+    if (this->length_ == a.length_)
     {
-      if (this->n_mass_ == a.n_mass_)
-        return this->seq_ > a.seq_;
-      return this->n_mass_ > a.n_mass_;
+      if (this->seq_ == a.seq_)
+        return (this->c_mass_ + this->n_mass_) > (a.c_mass_ + a.n_mass_);
+      return this->seq_ > a.seq_;
     }
-    return this->c_mass_ > a.c_mass_;
+    return this->length_ > a.length_;
   }
 
   bool FLASHHelperClasses::Tag::operator==(const Tag& a) const

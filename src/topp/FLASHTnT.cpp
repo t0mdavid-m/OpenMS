@@ -49,14 +49,19 @@ protected:
     registerOutputFile_("out_tag", "<file>", "", "Default output tag level tsv file containing matched tags");
     setValidFormats_("out_tag", ListUtils::create<String>("tsv"));
 
-    registerSubsection_("TnT", "FLASHTnT algorithm parameters");
+    registerSubsection_("TAG", "FLASHTagger algorithm parameters");
+    registerSubsection_("EX", "FLASHExtender algorithm parameters");
   }
 
   Param getSubsectionDefaults_(const String& prefix) const override
   {
-    if (prefix == "TnT")
+    if (prefix == "TAG")
     {
       auto tagger_param = FLASHTaggerAlgorithm().getDefaults();
+      return tagger_param;
+    }else if (prefix == "EX")
+    {
+      auto tagger_param = FLASHExtenderAlgorithm().getDefaults();
       return tagger_param;
     }
     else { throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "Unknown subsection", prefix); }
@@ -88,8 +93,8 @@ protected:
     mzml.setLogType(log_type_);
     mzml.load(in_file, map);
 
-    auto tagger_param = getParam_().copy("TnT:", true);
-
+    auto tagger_param = getParam_().copy("TAG:", true);
+    auto extender_param = getParam_().copy("EX:", true);
     OPENMS_LOG_INFO << "Finding sequence tags from deconvolved MS2 spectra ..." << endl;
 
     FASTAFile fasta_file;
@@ -158,6 +163,7 @@ protected:
       tagger.run(dspec, tol, fasta_entry);
 
       FLASHExtenderAlgorithm extender;
+      extender.setParameters(extender_param);
       extender.run(dspec, tagger);
     }
 
