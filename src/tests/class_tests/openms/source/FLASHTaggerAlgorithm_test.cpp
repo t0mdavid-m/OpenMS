@@ -42,7 +42,7 @@ END_SECTION
 PeakMap map;
 MzMLFile().load(OPENMS_GET_TEST_DATA_PATH("SIGMAmAb_ECDHCD_nativeTD_1_deconv.mzML"), map);
 
-std::vector<DeconvolvedSpectrum> deconvolved_spectra;
+DeconvolvedSpectrum deconvolved_spectrum;
 double tol(10);
 // run FLASHDeconvAlgorithm here!
 
@@ -99,7 +99,7 @@ for (int index = 0; index < map.size(); index++)
     dspec.push_back(peak);
   }
   dspec.sort();
-  deconvolved_spectra.push_back(dspec);
+  deconvolved_spectrum = dspec;
 }
 // Run tagger
 FLASHTaggerAlgorithm tagger;
@@ -112,7 +112,7 @@ START_SECTION(run())
   FASTAFile fasta_file;
   std::vector<FASTAFile::FASTAEntry> fasta_entry;
   fasta_file.load("C:\\Users\\qlcsk\\Desktop\\jkvision\\openms\\pyFLASHDeconv\\uniprot-mg1655-filtered-reviewed_yes.fasta", fasta_entry);
-  tagger.run(deconvolved_spectra, tol, fasta_entry);
+  tagger.run(deconvolved_spectrum, tol, fasta_entry);
   std::vector<FLASHHelperClasses::Tag> tag;
   tagger.getTags(true, tag);
   TEST_EQUAL(tag.size(),114)

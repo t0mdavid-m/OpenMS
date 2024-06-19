@@ -310,7 +310,7 @@ struct OPENMS_DLLAPI FLASHHelperClasses
                        std::vector<std::vector<Size>>& all_paths,
                        Size max_count)
     {
-      if (all_paths.size() >= max_count) return;
+      if (max_count > 0 && all_paths.size() >= max_count) return;
 
       visited[current] = true;
       path.push_back(current);
