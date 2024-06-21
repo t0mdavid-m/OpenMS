@@ -51,6 +51,7 @@ namespace OpenMS
     /// implemented for DefaultParamHandler
     void setDefaultParams_();
   private:
+    void define_nodes_(const FLASHTaggerAlgorithm& tagger, int mode);
     void run_(const FLASHTaggerAlgorithm& tagger, const ProteinHit& hit,
               std::vector<std::vector<Size>>& all_paths, int mode); // per hit
     Size getVertex_(int node_index, int pro_index, int score, int num_mod) const;
@@ -65,8 +66,9 @@ namespace OpenMS
 
     std::vector<String> ion_types_str_;
     std::map<int, std::vector<int>> node_score_map_;
+    //std::map<int, std::vector<bool>> node_is_cterm_map_;
     std::map<int, std::vector<double>> node_mass_map_;
-    std::vector<double> pro_masses_;
+    std::map<int, std::vector<double>> pro_masses_map_;
     std::vector<double> prefix_shifts_;
     std::vector<double> suffix_shifts_;
 

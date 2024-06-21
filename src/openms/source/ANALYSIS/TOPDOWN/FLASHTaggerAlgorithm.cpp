@@ -12,7 +12,7 @@
 
 namespace OpenMS
 {
-  inline const Size max_node_cntr = 500;
+  inline const Size max_node_cntr = 400;
 
   std::vector<Residue> FLASHTaggerAlgorithm::getAA_(double l, double r, double tol, int iso_offset) const
   {
