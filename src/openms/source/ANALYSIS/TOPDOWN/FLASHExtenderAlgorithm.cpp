@@ -205,10 +205,9 @@ void FLASHExtenderAlgorithm::run_(const FLASHTaggerAlgorithm& tagger,
           }
         }
 
-
         if (mode == 0) // suffix inverted
         {
-          if (pos - tag.getLength() >= 0)
+          if (pos - tag.getLength() >= 0 && pos < node_scores.size())
           {
             tag_pro_starts.push_back(pos - tag.getLength());
             tag_pro_ends.push_back(pos); // this can be much faster...
@@ -218,19 +217,17 @@ void FLASHExtenderAlgorithm::run_(const FLASHTaggerAlgorithm& tagger,
         }
         else
         {
-          tag_pro_starts.push_back(pos);
-          tag_pro_ends.push_back(pos + tag.getLength()); // this can be much faster...
-          tag_node_starts.push_back(highest_score_start);
-          tag_node_ends.push_back(highest_score_end);
+          if(pos >= 0 && pos + tag.getLength() < node_scores.size())
+          {
+            tag_pro_starts.push_back(pos);
+            tag_pro_ends.push_back(pos + tag.getLength()); // this can be much faster...
+            tag_node_starts.push_back(highest_score_start);
+            tag_node_ends.push_back(highest_score_end);
+          }
         }
       }
     }
   }
-
-  // for (int i=0;i<tag_pro_starts.size();i++)
-  //{
-  //   std::cout<< tag_pro_starts[i] << " " <<tag_pro_ends[i] << " " <<tag_node_starts[i] << " " <<tag_node_ends[i] << " " <<std::endl;
-  // }
 
 
   // std::cout<<"start points done"<<std::endl;
@@ -242,14 +239,14 @@ void FLASHExtenderAlgorithm::run_(const FLASHTaggerAlgorithm& tagger,
   int min_mod = max_mod_cntr_;
   for (Size sink : sinks)
   {
-    if (getModNumber_(sink) > 1 || sink == src || getScore_(sink) < max_score) continue;
+    if (sink == src || getScore_(sink) < max_score) continue; // getModNumber_(sink) == 0 ||
     max_score = getScore_(sink);
     min_mod = std::min(min_mod, getModNumber_(sink));
   }
 
   for (Size sink : sinks)
   {
-    if (getModNumber_(sink) > 1 || sink == src || getScore_(sink) < max_score) continue; // || getModNumber_(sink) > min_mod
+    if (sink == src || getScore_(sink) < max_score) continue; // || getModNumber_(sink) > min_mod
     best_sinks.insert(sink);
   }
   // #pragma omp critical
@@ -363,6 +360,7 @@ void FLASHExtenderAlgorithm::run(const FLASHTaggerAlgorithm& tagger)
         }
         score = std::max(0, score);
         score += std::max(0, prev_score);
+        //score += prev_score;
       }
       node_masses.push_back(mass);
       node_scores.push_back(score);
@@ -396,7 +394,7 @@ void FLASHExtenderAlgorithm::run(const FLASHTaggerAlgorithm& tagger)
           std::cout << getNodeIndex_(v) << " " << node_mass_map_[mode][getNodeIndex_(v)] << " " << pro_masses_[getProIndex_(v)] << " "
                     << getModNumber_(v) << " " << getScore_(v) << std::endl;
         }
-        std::cout << std::endl;
+        std::cout << hit.getAccession() << std::endl;
         break;
       }
     }
@@ -413,7 +411,6 @@ void FLASHExtenderAlgorithm::constructDAG_(FLASHHelperClasses::DAG& dag,
                                            int mode)
 {
   auto visited = boost::dynamic_bitset<>(dag.size());
-  auto visited_destinations = boost::dynamic_bitset<>(dag.size());
   if (tag_node_starts.empty()) return;
 
   Size src = getVertex_(0, 0, 0, 0);
@@ -464,12 +461,14 @@ void FLASHExtenderAlgorithm::connectBetweenTags(FLASHHelperClasses::DAG& dag,
       if (pro_end == tag_pro_ends[i]) { node_end = std::max(tag_node_ends[i], node_end); }
       i++;
     }
+    //pro_end = tag_pro_ends[tag_start_index];
+    //node_end = tag_node_ends[tag_start_index];
 
-    int mod_num = getModNumber_(vertex);
-    for (int mn = 0; mn <= mod_num; mn++)
-      if (visited_tag_edges.find(getVertex_(node_end, pro_end, 0, mn)) != visited_tag_edges.end()) return;
+    //int mod_num = getModNumber_(vertex);
 
-    visited_tag_edges.insert(getVertex_(node_end, pro_end, 0, mod_num));
+    //if (visited_tag_edges.find(getVertex_(node_end, pro_end, 1, mod_num)) != visited_tag_edges.end()) return;
+
+    //visited_tag_edges.insert(getVertex_(node_end, pro_end, 1, mod_num));
     std::set<Size> next_vertices;
 
     extendBetweenTags(dag, visited, next_vertices, vertex, node_end, pro_end, 1e5, mode);
@@ -502,9 +501,10 @@ void FLASHExtenderAlgorithm::connectBetweenTags(FLASHHelperClasses::DAG& dag,
       if (is_visited_start) continue;
       visited_tag_edges.insert(getVertex_(node_start, pro_start, 0, mod_num));
 
-
       std::set<Size> next_vertices;
       extendBetweenTags(dag, visited, next_vertices, vertex, node_start, pro_start, 0, mode);
+
+      //std::cout <<node_start << " and " << pro_start << ": " << node_mass_map_[mode][node_index] << " to " <<  node_mass_map_[mode][node_start] << " " << pro_masses_[pro_index] << " to " <<  pro_masses_[pro_start] << " " << next_vertices.size() << std::endl;
 
       for (auto next_vertex : next_vertices)
       {
