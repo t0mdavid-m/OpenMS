@@ -293,7 +293,7 @@ struct OPENMS_DLLAPI FLASHHelperClasses
 
     void findAllPaths(Size source, Size sink, std::vector<std::vector<Size>>& all_paths, Size max_count)
     {
-      boost::dynamic_bitset<> visited(vertex_count_);
+      std::unordered_set<Size> visited;
       std::vector<Size> path;
 
       findAllPaths_(source, sink, visited, path, all_paths, max_count); // reverse traveling
@@ -305,14 +305,14 @@ struct OPENMS_DLLAPI FLASHHelperClasses
     std::map<Size, std::set<Size>> adj_list_; //
     void findAllPaths_(Size current,
                        Size destination,
-                       boost::dynamic_bitset<>& visited,
+                       std::unordered_set<Size>& visited,
                        std::vector<Size>& path,
                        std::vector<std::vector<Size>>& all_paths,
                        Size max_count)
     {
       if (max_count > 0 && all_paths.size() >= max_count) return;
 
-      visited[current] = true;
+      visited.insert(current);
       path.push_back(current);
 
       if (current == destination) { all_paths.push_back(path);}
@@ -320,13 +320,13 @@ struct OPENMS_DLLAPI FLASHHelperClasses
       {
         for (Size i : adj_list_[current])
         {
-          if (! visited[i]) { findAllPaths_(i, destination, visited, path, all_paths, max_count); }
+          if (visited.find(i) == visited.end()) { findAllPaths_(i, destination, visited, path, all_paths, max_count); }
         }
       }
 
       // Backtrack
       path.pop_back();
-      visited[current] = false;
+      visited.erase(current);
     }
   };
 

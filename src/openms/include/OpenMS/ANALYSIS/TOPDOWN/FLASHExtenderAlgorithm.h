@@ -52,32 +52,34 @@ namespace OpenMS
     void setDefaultParams_();
   private:
     void get_pro_masses_(const ProteinHit& hit, std::vector<double>& pro_masses, int mode);
-    void calcualte_precursor_mass_(const std::vector<MSSpectrum>& node_spectrum_list,
+    double calcualte_precursor_mass_(const std::vector<MSSpectrum>& node_spectrum_list,
                                   const std::vector<std::vector<double>>& pro_masses_list, const std::map<int, std::vector<Size>>& best_paths);
-    void define_nodes_(const FLASHTaggerAlgorithm& tagger, MSSpectrum& node_spec, MSSpectrum& tol_spec, double max_mass, int mode);
+    void define_nodes_(const FLASHTaggerAlgorithm& tagger, MSSpectrum& node_spec, MSSpectrum& tol_spec, double max_mass, double precursor_mass, int mode);
     void run_(const FLASHTaggerAlgorithm& tagger, const ProteinHit& hit,
               const MSSpectrum& node_spec, const MSSpectrum& tol_spec, const std::vector<double>& pro_masses,
+              boost::dynamic_bitset<>& visited, const double precursor_mass,
               std::vector<std::vector<Size>>& all_paths, int mode); // per hit
     Size getVertex_(int node_index, int pro_index, int score, int num_mod, Size pro_length) const;
     int getNodeIndex_(Size vertex, Size pro_length) const;
     int getProIndex_(Size vertex, Size pro_length) const;
     int getModNumber_(Size vertex) const;
     int getScore_(Size vertex) const;
-    void constructDAG_(FLASHHelperClasses::DAG& dag, std::set<Size>& sinks, const MSSpectrum& node_spec, const MSSpectrum& tol_spec, const std::vector<double>& pro_masses, const std::vector<std::vector<int>>& tag_edges, int mode);
-    void connectBetweenTags_(FLASHHelperClasses::DAG& dag, boost::dynamic_bitset<>& visited, std::set<Size>& visited_tag_edges, std::set<Size>& sinks, Size vertex, const MSSpectrum& node_spec, const MSSpectrum& tol_spec, const std::vector<double>& pro_masses, const std::vector<std::vector<int>>& tag_edges, int mode);
-    void extendBetweenTags_(FLASHHelperClasses::DAG& dag, boost::dynamic_bitset<>& visited, std::set<Size>& sinks,
+    void constructDAG_(FLASHHelperClasses::DAG& dag, std::unordered_set<Size>& sinks, boost::dynamic_bitset<>& visited, const MSSpectrum& node_spec, const MSSpectrum& tol_spec, const std::vector<double>& pro_masses, const std::vector<std::vector<int>>& tag_edges, int mode);
+    void connectBetweenTags_(FLASHHelperClasses::DAG& dag, boost::dynamic_bitset<>& visited, std::unordered_set<Size>& visited_tag_edges, std::unordered_set<Size>& sinks, Size vertex, const MSSpectrum& node_spec, const MSSpectrum& tol_spec, const std::vector<double>& pro_masses, const std::vector<std::vector<int>>& tag_edges, int mode);
+    void extendBetweenTags_(FLASHHelperClasses::DAG& dag, boost::dynamic_bitset<>& visited, std::unordered_set<Size>& sinks,
                            Size vertex, int node_index, int pro_index, int diagonal_counter, const MSSpectrum& node_spec, const MSSpectrum& tol_spec, const std::vector<double>& pro_masses, int mode);
 
     std::vector<String> ion_types_str_;
     std::vector<double> prefix_shifts_;
     std::vector<double> suffix_shifts_;
+    std::vector<ProteinHit> proteoform_hits_;
 
     double tol_;
-    double precursor_mass_ = .0;
     int max_mod_cntr_ = 0;
-    int max_path_score_ = 0;
-    int min_path_score_ = 0;
+    const int max_path_score_ = 250;
+    const int min_path_score_ = -10;
     double fdr_ = 1.0;
     double max_mod_mass_ = 500.0;
+    double precursor_mass_ = 0;
   };
 } // namespace OpenMS
