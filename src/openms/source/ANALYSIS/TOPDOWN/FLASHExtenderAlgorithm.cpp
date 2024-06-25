@@ -78,7 +78,7 @@ int FLASHExtenderAlgorithm::getModNumber_(Size vertex) const
 
 double FLASHExtenderAlgorithm::calcualte_precursor_mass_(const std::vector<MSSpectrum>& node_spectrum_list,
                                                        const std::vector<std::vector<double>>& pro_masses_list,
-                                                       const std::map<int, std::vector<Size>>& best_paths)
+                                                       const std::map<int, std::vector<Size>>& best_paths) // take the hits. Just calculate the mass of truncated protein. Then add modification masses if they are disjoint. If they overlap and the same mass, we have a single one. If they are overlapping but different, we add all of them. the max mod count is also adjusted.
 {
   double precursor_mass = .0;
   if (node_spectrum_list.size() < 2 || pro_masses_list.size() < 2) return precursor_mass;
@@ -386,7 +386,7 @@ void FLASHExtenderAlgorithm::run(const FLASHTaggerAlgorithm& tagger)
 {
   setLogType(CMD);
 
-  ion_types_str_ = std::vector<String>({"b-ion", "c-ion", "y-ion", "z-ion"});
+  ion_types_str_ = std::vector<String>({"b-ion", "c-ion", "y-ion", "z-ion"});//, "z-p1-ion", "z-p2-ion"
   tol_ = 5e-6;
   std::vector<ProteinHit> hits;
   std::vector<double> mzs;
@@ -414,16 +414,20 @@ void FLASHExtenderAlgorithm::run(const FLASHTaggerAlgorithm& tagger)
   for (int i = 0; i < std::min(10, (int)hits.size()); i++)
   {
     nextProgress();
-    auto hit = hits[i];
+    auto& hit = hits[i];
     int total_score = 0;
+    int total_match_cntr = 0;
+    std::map<int, std::map<std::pair<Size, Size>, double>> mod_map;
+    int protein_start_position = 0, protein_end_position = hit.getSequence().size() - 1;
 
     std::map<int, std::vector<Size>> best_paths;
     std::vector<MSSpectrum> node_spectrum_list;
     std::vector<std::vector<double>> pro_masses_list;
     boost::dynamic_bitset<> visited;
     double precursor_mass = precursor_mass_;
+    int max_mode = 0;
 
-    for (int mode = 0; mode < 3; mode++)
+    for (int mode = 0; mode < 3; mode++) //
     {
       if (mode == 2 && precursor_mass <= 0)
       {
@@ -449,25 +453,99 @@ void FLASHExtenderAlgorithm::run(const FLASHTaggerAlgorithm& tagger)
       run_(tagger, hit, node_spec, tol_spec, pro_masses, visited, precursor_mass, all_paths, mode);
 
       // maybe filter out paths
-      int score = 0;
+      int score, match_cntr;
 #pragma omp critical
       for (const auto& path : all_paths)
       {
         best_paths[mode] = path;
         score = getScore_(path[0]);
-
-        std::cout << hit.getAccession() << " " << path.size() << " " << score <<  std::endl;
-        for (auto iter = path.rbegin(); iter != path.rend(); iter++)
+        match_cntr = path.size() - 1;
+        double prev_mass_shift = 0;
+        int prev_mod_count = 0;
+        Size pre_pro_index = 0;
+        for (auto iter = path.rbegin() + 1; iter != path.rend(); iter++)
         {
-          //std::cout <<  node_spec[getNodeIndex_(*iter, pro_masses.size())].getMZ() << " "  << pro_masses[getProIndex_(*iter, pro_masses.size())] << std::endl; //
-        }
+          auto pro_index = getProIndex_(*iter, pro_masses.size());
+          auto node_index = getNodeIndex_(*iter, pro_masses.size());
+          auto mass_shift = node_spec[node_index].getMZ() - pro_masses[pro_index];
+          auto mod_count = getModNumber_(*iter);
 
+          if (node_index == 0)
+          {
+            if (mode > 0) protein_start_position = pro_index;
+            if (mode == 0) protein_end_position = hit.getSequence().size() - 1 - pro_index;
+          }
+
+          if (mod_count != prev_mod_count)
+          {
+            double mod_mass = mass_shift - prev_mass_shift;
+            Size start = mode > 0? pre_pro_index :  hit.getSequence().size() - 1 - pro_index;
+            Size end = mode > 0? pro_index :  hit.getSequence().size() - 1 - pre_pro_index;
+            std::pair<Size, Size> range(start, end);
+            mod_map[mode][range] = mod_mass;
+          }
+          prev_mod_count = mod_count;
+          pre_pro_index = pro_index;
+          prev_mass_shift = mass_shift;
+        }
+        max_mode = mode;
         break;
       }
-      if (mode == 2) total_score = score;
+      if (max_mode == 2) {
+        total_score = score;
+        total_match_cntr = match_cntr;
+      }
       else
+      {
         total_score += score;
+        total_match_cntr += match_cntr;
+      }
     }
+
+    std::vector<int> mod_starts, mod_ends;
+    std::vector<double> mod_masses;
+    if (max_mode == 2) // if the last mode was done...
+    {
+      if (mod_map.find(max_mode) != mod_map.end()) // we have modifications
+      {
+        for (const auto& mod : mod_map[max_mode])
+        {
+          int mod_start = mod.first.first;
+          int mod_end = mod.first.second;
+          double mod_mass = mod.second;
+          mod_starts.push_back(mod_start);
+          mod_ends.push_back(mod_end);
+          mod_masses.push_back(mod_mass);
+        }
+      }
+    }
+    else
+    {
+      for (const auto& mods : mod_map)
+      {
+        for (const auto& mod : mods.second)
+        {
+          int mod_start = mod.first.first;
+          int mod_end = mod.first.second;
+          double mod_mass = mod.second;
+          mod_starts.push_back(mod_start);
+          mod_ends.push_back(mod_end);
+          mod_masses.push_back(mod_mass);
+        }
+      }
+    }
+
+    hit.setMetaValue("Modifications", mod_masses);
+    hit.setMetaValue("ModificationStarts", mod_starts);
+    hit.setMetaValue("ModificationEnds", mod_ends);
+    hit.setMetaValue("MatchedAA", total_match_cntr);
+    hit.setCoverage((double)total_match_cntr/hit.getSequence().size());
+//ProteoformIndex	Scan	ProteinAccession	ProteinDescription	ProteinSequence	MatchedAminoAcidCount	Coverage(%)	StartPosition	EndPosition	Score	Modifications	ModificationStarts	ModificationEnds
+    hit.setScore(total_score);
+    hit.setMetaValue("StartPosition", protein_start_position);
+    hit.setMetaValue("EndPosition", protein_end_position);
+    std::cout<<hit.getAccession()<<"\t"<< hit.getDescription()<<"\t"<<hit.getMetaValue("MatchedAA") <<"\t"<< 100 * hit.getCoverage() <<"\t"<< hit.getMetaValue("StartPosition") <<"\t"<<hit.getMetaValue("EndPosition")
+              <<"\t"<<hit.getScore() <<"\t"<<hit.getMetaValue("Modifications") <<"\t"<<hit.getMetaValue("ModificationStarts") <<"\t"  << hit.getMetaValue("ModificationEnds")   <<std::endl;
   } // add positive proteoforms all?
 
   endProgress();

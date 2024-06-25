@@ -198,7 +198,7 @@ namespace OpenMS
     defaults_.setMaxFloat("fdr", 1.0);
     defaults_.setMinFloat("fdr", 0.01);
 
-    defaults_.setValue("keep_decoy", "false", "Keep decoy proteins.");
+    defaults_.setValue("keep_decoy", "true", "Keep decoy proteins.");
     defaults_.addTag("keep_decoy", "advanced");
     defaults_.setValidStrings("keep_decoy", {"true", "false"});
 
