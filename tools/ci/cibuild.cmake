@@ -39,9 +39,6 @@ ${VAR_NAME}=$ENV{${VAR_NAME}}"
   endif()
 endmacro()
 
-# include the InstallRequiredSystemLibraries to ensure system dependencies are prepared
-include(InstallRequiredSystemLibraries)
-
 # same but for multiple variables
 macro(add_env_vars_to_cache_if_exists VAR_NAMES)
   foreach(VAR_NAME ${VAR_NAMES})
