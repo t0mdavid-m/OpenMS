@@ -44,7 +44,17 @@ namespace OpenMS
     /// assignment operator
     FLASHExtenderAlgorithm& operator=(const FLASHExtenderAlgorithm& other);
 
-    void run(const FLASHTaggerAlgorithm& tagger);
+    void run(const FLASHTaggerAlgorithm& tagger, double ppm);
+
+    void getProteoforms(std::vector<ProteinHit>& hits) const
+    {
+      for (const auto& hit : proteoform_hits_)
+      {
+        hits.push_back(hit);
+      }
+    }
+
+    void getProteoformHitsMatchedBy(const FLASHHelperClasses::Tag& tag, std::vector<ProteinHit>& hits) const;
 
   protected:
     void updateMembers_() override;
@@ -52,13 +62,12 @@ namespace OpenMS
     void setDefaultParams_();
   private:
     void get_pro_masses_(const ProteinHit& hit, std::vector<double>& pro_masses, int mode);
-    double calcualte_precursor_mass_(const std::vector<MSSpectrum>& node_spectrum_list,
-                                  const std::vector<std::vector<double>>& pro_masses_list, const std::map<int, std::vector<Size>>& best_paths);
+    double calcualte_precursor_mass_(const ProteinHit& hit, int protein_start_position, int protein_end_position, const std::vector<int>& mod_starts, const std::vector<int>& mod_ends, const std::vector<double>& mod_masses) const;
     void define_nodes_(const FLASHTaggerAlgorithm& tagger, MSSpectrum& node_spec, MSSpectrum& tol_spec, double max_mass, double precursor_mass, int mode);
     void run_(const FLASHTaggerAlgorithm& tagger, const ProteinHit& hit,
               const MSSpectrum& node_spec, const MSSpectrum& tol_spec, const std::vector<double>& pro_masses,
-              boost::dynamic_bitset<>& visited, const double precursor_mass,
-              std::vector<std::vector<Size>>& all_paths, int mode); // per hit
+              boost::dynamic_bitset<>& visited, double precursor_mass,
+              std::map<int, std::vector<Size>>& all_paths_per_mode, int mode); // per hit
     Size getVertex_(int node_index, int pro_index, int score, int num_mod, Size pro_length) const;
     int getNodeIndex_(Size vertex, Size pro_length) const;
     int getProIndex_(Size vertex, Size pro_length) const;
@@ -73,12 +82,14 @@ namespace OpenMS
     std::vector<double> prefix_shifts_;
     std::vector<double> suffix_shifts_;
     std::vector<ProteinHit> proteoform_hits_;
+    std::map<int, std::vector<int>> matching_hits_indices_;
 
     double tol_;
     int max_mod_cntr_ = 0;
-    const int max_path_score_ = 250;
-    const int min_path_score_ = -10;
-    double fdr_ = 1.0;
+    const int max_path_score_ = 400;
+    const int min_path_score_ = -20;
+    // double fdr_ = 1.0;
+    // bool keep_decoy_ = false;
     double max_mod_mass_ = 500.0;
     double precursor_mass_ = 0;
   };

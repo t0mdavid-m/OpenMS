@@ -57,13 +57,14 @@ namespace OpenMS
     void run(const DeconvolvedSpectrum& deconvolved_spectrum, double ppm, const std::vector<FASTAFile::FASTAEntry>& fasta_entry);
 
     const MSSpectrum& getSpectrum() const;
-    void getProteinHits(std::vector<ProteinHit>& hits) const;
-    void getProteinHitsMatchedBy(const FLASHHelperClasses::Tag& tag, std::vector<ProteinHit>& hits) const;
     void getTagsMatchingTo(const ProteinHit& hit, std::vector<FLASHHelperClasses::Tag>& tags) const;
-    void getTags(bool matched, std::vector<FLASHHelperClasses::Tag>& tags) const;
-    int getProteinIndex(const ProteinHit& hit) const;
-
+    void getTags(std::vector<FLASHHelperClasses::Tag>& tags) const;
     void getMatchedPositionsAndFlankingMassDiffs(std::vector<int>& positions, std::vector<double>& masses, const ProteinHit& hit, const FLASHHelperClasses::Tag& tag) const;
+    void getProteinHits(std::vector<ProteinHit>& hits, int max_target_count) const;
+    double getDecoyFactor() const
+    {
+      return decoy_factor_;
+    }
 
   protected:
     void updateMembers_() override;
@@ -106,10 +107,7 @@ namespace OpenMS
 
     std::vector<FLASHHelperClasses::Tag> tags_; // from scan to tags
     std::vector<ProteinHit> protein_hits_;
-    std::vector<std::vector<int>> matching_tags_indices_; // outer vector index = hit index
-    std::vector<std::vector<int>> matching_hits_indices_; // outer vector index = tag index
     void runMatching_(const std::vector<FASTAFile::FASTAEntry>& fasta_entry);
-    void calculate_qvalue_(const std::vector<FASTAFile::FASTAEntry>& fasta_entry, std::vector<std::pair<ProteinHit, std::vector<int>>>& pairs);
 
     int max_tag_count_ = 0;
     int min_tag_length_ = 0;
@@ -118,9 +116,10 @@ namespace OpenMS
     int max_path_score_ = 0;
     int min_path_score_ = 0;
     int min_cov_aa_ = 5;
-    double fdr_ = 1.0;
-    bool keep_decoy_ = false;
+    //double fdr_ = 1.0;
+    //bool keep_decoy_ = false;
+    double decoy_factor_ = 0;
     double max_edge_mass_ = 0;
-    double flanking_mass_tol_ = 200.0;
+    double flanking_mass_tol_ = 50000.0;
   };
 } // namespace OpenMS

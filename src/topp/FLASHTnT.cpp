@@ -49,6 +49,12 @@ protected:
     registerOutputFile_("out_tag", "<file>", "", "Default output tag level tsv file containing matched tags");
     setValidFormats_("out_tag", ListUtils::create<String>("tsv"));
 
+    registerDoubleOption_("fdr", "value", 1.0, "Proteoform FDR threshold.", false, false);
+    setMinFloat_("fdr", 0.01);
+    setMaxFloat_("fdr", 1.0);
+
+    registerFlag_("keep_decoy", "Keep decoy proteoforms.", false);
+
     registerSubsection_("TAG", "FLASHTagger algorithm parameters");
     registerSubsection_("EX", "FLASHExtender algorithm parameters");
   }
@@ -100,12 +106,28 @@ protected:
     FASTAFile fasta_file;
     std::vector<FASTAFile::FASTAEntry> fasta_entry;
     fasta_file.load(in_fasta, fasta_entry);
-
-
+    std::vector<ProteinHit> proteoform_hits;
+    double decoy_factor = 0;
+    double fdr = getDoubleOption_("fdr");
+    bool keep_decoy = getFlag_("keep_decoy");
     double tol(10);
     // Run FLASHDeconvAlgorithm here!
     OPENMS_LOG_INFO << "Processing : " << in_file << endl;
 
+    fstream out_tagger_stream;
+    fstream out_protein_stream;
+
+    if (! out_tag_file.empty())
+    {
+      out_tagger_stream = fstream(out_tag_file, fstream::out);
+      FLASHTaggerFile::writeTagHeader(out_tagger_stream);
+    }
+
+    if (! out_protein_file.empty())
+    {
+      out_protein_stream = fstream(out_protein_file, fstream::out);
+      FLASHTaggerFile::writeProteinHeader(out_protein_stream);
+    }
     // collect statistics for information
     for (int index = 0; index < map.size(); index++)
     {
@@ -157,35 +179,58 @@ protected:
         dspec.push_back(peak);
       }
       dspec.sort();
+
       FLASHTaggerAlgorithm tagger;
       // Run tagger
       tagger.setParameters(tagger_param);
       tagger.run(dspec, tol, fasta_entry);
-
+      decoy_factor = tagger.getDecoyFactor();
       FLASHExtenderAlgorithm extender;
+
       extender.setParameters(extender_param);
-      extender.run(tagger);
+      extender.run(tagger, tol);
+      extender.getProteoforms(proteoform_hits);
+      if (! out_tag_file.empty())
+      {
+        FLASHTaggerFile::writeTags(tagger, extender, out_tagger_stream);
+      }
+    }
+
+    std::sort(proteoform_hits.begin(), proteoform_hits.end(),
+              [](const ProteinHit& left, const ProteinHit& right) {
+                return left.getScore() > right.getScore();
+              });
+
+    double taget_count = 0;
+    double decoy_count = 0;
+    std::vector<ProteinHit> filtered_proteoform_hits;
+    filtered_proteoform_hits.reserve(proteoform_hits.size());
+
+    for (auto& hit : proteoform_hits)
+    {
+      bool is_decoy = hit.getAccession().hasPrefix("DECOY");
+      if (is_decoy) decoy_count++;
+      else taget_count++;
+
+      double qvalue = decoy_factor != 0 ? (decoy_count / (decoy_count + taget_count)) : -1.0; // TODO make the minima thing
+      hit.setMetaValue("qvalue", qvalue);
+      if (!keep_decoy && is_decoy) continue;
+      if (fdr < 1 && qvalue > fdr) continue;
+      filtered_proteoform_hits.push_back(hit);
+    }
+
+    if (! out_protein_file.empty())
+    {
+      FLASHTaggerFile::writeProteins(filtered_proteoform_hits, out_protein_stream);
+      out_protein_stream.close();
+    }
+
+    if (! out_tag_file.empty())
+    {
+      out_tagger_stream.close();
     }
 
     OPENMS_LOG_INFO << "FLASHTnT run complete. Now writing the results in output files ..." << endl;
-
-      /*
-      if (! out_tag_file.empty())
-      {
-        fstream out_tagger_stream = fstream(out_tag_file, fstream::out);
-        FLASHTaggerFile::writeTagHeader(out_tagger_stream);
-        FLASHTaggerFile::writeTags(tagger, out_tagger_stream);
-        out_tagger_stream.close();
-      }
-
-      if (! out_protein_file.empty())
-      {
-        fstream out_tagger_stream = fstream(out_protein_file, fstream::out);
-        FLASHTaggerFile::writeProteinHeader(out_tagger_stream);
-        FLASHTaggerFile::writeProteins(tagger, out_tagger_stream);
-        out_tagger_stream.close();
-      }
-       */
 
     return EXECUTION_OK;
   }

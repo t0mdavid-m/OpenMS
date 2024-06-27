@@ -168,7 +168,7 @@ namespace OpenMS
 
   void FLASHTaggerAlgorithm::setDefaultParams_()
   {
-    defaults_.setValue("max_tag_count", 500,
+    defaults_.setValue("max_tag_count", 200,
                        "Maximum number of the tags per length (lengths set by -min_length and -max_length options). The tags with different amino acid "
                        "combinations are all treated separately. E.g., "
                        "TII, TIL, TLI, TLL are distinct tags even though they have the same mass differences. "
@@ -182,25 +182,17 @@ namespace OpenMS
     defaults_.setMinInt("min_length", 3);
 
     defaults_.setValue(
-      "max_length", 10,
+      "max_length", 9,
       "Maximum length of a tag. Each mass gap contributes to a single length (even if a mass gap is represented by multiple amino acids). ");
     defaults_.setMaxInt("max_length", 30);
     defaults_.setMinInt("max_length", 3);
 
-    defaults_.setValue("flanking_mass_tol", 70000.0, "Flanking mass tolerance in Da.");
+    defaults_.setValue("flanking_mass_tol", 10000.0, "Flanking mass tolerance in Da.");
     defaults_.setValue("max_iso_error_count", 0, "Maximum isotope error count per tag.");
     defaults_.setMaxInt("max_iso_error_count", 2);
     defaults_.setMinInt("max_iso_error_count", 0);
     defaults_.addTag("max_iso_error_count", "advanced");
     defaults_.setValue("min_matched_aa", 5, "Minimum number of amino acids in matched proteins, covered by tags.");
-
-    defaults_.setValue("fdr", 1.0, "Protein FDR threshold.");
-    defaults_.setMaxFloat("fdr", 1.0);
-    defaults_.setMinFloat("fdr", 0.01);
-
-    defaults_.setValue("keep_decoy", "true", "Keep decoy proteins.");
-    defaults_.addTag("keep_decoy", "advanced");
-    defaults_.setValidStrings("keep_decoy", {"true", "false"});
 
     defaultsToParam_();
   }
@@ -212,9 +204,8 @@ namespace OpenMS
     max_tag_length_ = param_.getValue("max_length");
     max_iso_in_tag_ = param_.getValue("max_iso_error_count");
     min_cov_aa_ = (int)param_.getValue("min_matched_aa");
-    fdr_ = param_.getValue("fdr");
+    //fdr_ = param_.getValue("fdr");
     flanking_mass_tol_ = param_.getValue("flanking_mass_tol");
-    keep_decoy_ = param_.getValue("keep_decoy").toString() == "true";
     updateEdgeMasses_();
     max_edge_mass_ = aa_mass_map_.rbegin()->first + max_iso_in_tag_ * Constants::C13C12_MASSDIFF_U;
   }
@@ -261,7 +252,7 @@ namespace OpenMS
 
     for (auto& pg : dspec)
     {
-      int score = (int)round(5 * log10(std::max(1e-6, pg.getQscore() / std::max(1e-6, (1.0 - random_hit_prob)))));
+      int score = (int)round(10 * log10(std::max(1e-6, pg.getQscore() / std::max(1e-6, (1.0 - random_hit_prob)))));
       //if (score <= -5) continue;
       scores.push_back(score);
       mzs.push_back(pg.getMonoMass());
@@ -483,26 +474,41 @@ namespace OpenMS
     std::vector<int> start_loc(tags_.size(), 0);
     std::vector<int> end_loc(tags_.size(), 0);
     std::sort(tags_.rbegin(), tags_.rend());
+    int scan = 0;
     // for each tag, find the possible start and end locations in the protein sequence. If C term, they are negative values to specify values are from
     // the end of the protein
     for (int i = 0; i < (int)tags_.size(); i++)
     {
       const auto& tag = tags_[i];
+      scan = tag.getScan();
       auto flanking_mass = std::max(tag.getNtermMass(), tag.getCtermMass());
       start_loc[i] = std::max(0, int(floor(flanking_mass - flanking_mass_tol_) / aa_mass_map_.rbegin()->first));
       end_loc[i] = int(ceil(flanking_mass + flanking_mass_tol_) / aa_mass_map_.begin()->first) + (int)tag.getLength() + 1;
     }
 
     // int min_hit_tag_score = max_path_score_;
-    startProgress(0, (SignedSize)fasta_entry.size(), "running FLASHTagger: searching database");
+    startProgress(0, (SignedSize)fasta_entry.size(), "Running FLASHTagger: searching database");
 
-  #pragma omp parallel for default(none) shared(pairs, fasta_entry, start_loc, end_loc)
+    double taget_count = 0;
+    double decoy_count = 0;
+
+    for (const auto& fe : fasta_entry)
+    {
+      if (fe.identifier.hasPrefix("DECOY"))
+      {
+        decoy_count++;
+      }
+      else
+      {
+        taget_count++;
+      }
+      decoy_factor_ = decoy_count / taget_count;
+    }
+
+  #pragma omp parallel for default(none) shared(pairs, fasta_entry, taget_count, decoy_count, start_loc, end_loc, scan)
     for (int i = 0; i < (int)fasta_entry.size(); i++)
     {
       const auto& fe = fasta_entry[i];
-      bool is_decoy = false;
-      if (fe.identifier.hasPrefix("DECOY")) { is_decoy = true; }
-
       nextProgress();
       std::vector<int> matched_tag_indices;
       auto x_pos = fe.sequence.find('X');
@@ -589,8 +595,6 @@ namespace OpenMS
         }
         else
           continue;
-        // #pragma omp critical
-        // if (! is_decoy) min_hit_tag_score = std::min(min_hit_tag_score, tag.getScore());
       }
       if (matched_tag_indices.empty()) continue;
 
@@ -604,11 +608,11 @@ namespace OpenMS
       }
 
       if (match_cntr < min_cov_aa_) continue;
-      //(double score, UInt rank, String accession, String sequence)
+
       ProteinHit hit(0, 0, fe.identifier, fe.sequence); //
       hit.setDescription(fe.description);
+      hit.setMetaValue("Scan", scan);
       hit.setMetaValue("MatchedAA", match_cntr);
-      hit.setMetaValue("IsDecoy", is_decoy ? 1 : 0);
       hit.setCoverage(double(match_cntr) / (double)fe.sequence.length());
       hit.setScore(match_score);
   #pragma omp critical
@@ -619,96 +623,36 @@ namespace OpenMS
 
     endProgress();
 
-    matching_tags_indices_ = std::vector<std::vector<int>>();
-    matching_hits_indices_ = std::vector<std::vector<int>>(tags_.size());
-    matching_tags_indices_.reserve(pairs.size());
-
-    calculate_qvalue_(fasta_entry, pairs);
-  }
-
-  void FLASHTaggerAlgorithm::calculate_qvalue_(const std::vector<FASTAFile::FASTAEntry>& fasta_entry,
-                                               std::vector<std::pair<ProteinHit, std::vector<int>>>& pairs) // fix tomorrow.
-  {
-    if (pairs.empty()) return;
-    double cum_target_count = 0;
-    double cum_decoy_count = 0;
-    double decoy_mul = 0;
-    for (const auto& fe : fasta_entry)
-    {
-      if (fe.identifier.hasPrefix("DECOY")) decoy_mul++;
-    }
-    if (decoy_mul > 0) decoy_mul /= (double)fasta_entry.size() - decoy_mul; //
+    protein_hits_.reserve(pairs.size());
 
     std::sort(pairs.begin(), pairs.end(),
               [](const std::pair<ProteinHit, std::vector<int>>& left, const std::pair<ProteinHit, std::vector<int>>& right) {
                 return left.first.getScore() > right.first.getScore();
               });
-
     for (auto& [hit, indices] : pairs)
     {
-      bool is_decoy = (int)hit.getMetaValue("IsDecoy") > 0;
-      if (is_decoy) { cum_decoy_count += 1.0 / decoy_mul; }
-      else { cum_target_count++; }
-
-      double qvalue = decoy_mul != 0 ? (cum_decoy_count / (cum_target_count + cum_decoy_count)) : -1.0;
-      hit.setMetaValue("qvalue", qvalue);
-    }
-
-    double min_qvalue = 1;
-    for (auto iter = pairs.rbegin(); iter != pairs.rend(); iter++)
-    {
-      min_qvalue = std::min(min_qvalue, (double)iter->first.getMetaValue("qvalue"));
-      iter->first.setMetaValue("qvalue", min_qvalue);
-    }
-
-    protein_hits_.reserve(pairs.size());
-
-    for (const auto& [hit, indices] : pairs)
-    {
-      double qvalue = (double)hit.getMetaValue("qvalue");
-      if (qvalue > fdr_) continue;
-      if ((int)hit.getMetaValue("IsDecoy") > 0 && ! keep_decoy_) continue;
-
+      hit.setMetaValue("TagIndices", indices);
       protein_hits_.push_back(hit);
-      matching_tags_indices_.push_back(indices);
-      for (const auto& index : indices)
-      {
-        matching_hits_indices_[index].push_back((int)protein_hits_.size() - 1);
-      }
     }
   }
 
-  int FLASHTaggerAlgorithm::getProteinIndex(const ProteinHit& hit) const
+  void FLASHTaggerAlgorithm::getProteinHits(std::vector<ProteinHit>& hits, int max_target_ount) const
   {
-    auto iter = std::find(protein_hits_.begin(), protein_hits_.end(), hit);
-    if (iter == protein_hits_.end()) return -1;
-    return (int)std::distance(protein_hits_.begin(), iter);
-  }
-
-  void FLASHTaggerAlgorithm::getProteinHits(std::vector<ProteinHit>& hits) const
-  {
-    hits.insert(hits.end(), protein_hits_.begin(), protein_hits_.end());
-  }
-
-  void FLASHTaggerAlgorithm::getProteinHitsMatchedBy(const FLASHHelperClasses::Tag& tag, std::vector<ProteinHit>& hits) const
-  {
-    int index = tag.getIndex();
-
-    if (index < 0 || (int)matching_hits_indices_.size() <= index) return;
-
-    for (auto i : matching_hits_indices_[index])
+    hits.reserve(protein_hits_.size());
+    int count = 0;
+    for (const auto& hit : protein_hits_)
     {
-      hits.push_back(protein_hits_[i]);
+      hits.push_back(hit);
+      if (hit.getAccession().hasPrefix("DECOY")) continue;
+      if (max_target_ount > 0 && count++ >= max_target_ount) break;
     }
   }
 
-  void FLASHTaggerAlgorithm::getTags(bool matched, std::vector<FLASHHelperClasses::Tag>& tags) const
+  void FLASHTaggerAlgorithm::getTags(std::vector<FLASHHelperClasses::Tag>& tags) const
   {
-    for (int i = 0; i < (int)tags_.size(); i++)
+    for (const auto& tag : tags_)
     {
-      if (matched && matching_hits_indices_[i].empty()) continue;
-      if (! matched && ! matching_hits_indices_[i].empty()) continue;
-      tags.push_back(tags_[i]);
+      tags.push_back(tag);
     }
   }
 
@@ -748,9 +692,8 @@ namespace OpenMS
 
   void FLASHTaggerAlgorithm::getTagsMatchingTo(const ProteinHit& hit, std::vector<FLASHHelperClasses::Tag>& tags) const
   {
-    int index = getProteinIndex(hit);
-    if (index < 0) return;
-    for (auto i : matching_tags_indices_[index])
+    const std::vector<int>& indices = hit.getMetaValue("TagIndices");
+    for (auto i : indices)
     {
       tags.push_back(tags_[i]);
     }

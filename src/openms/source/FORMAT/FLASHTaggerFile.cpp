@@ -7,6 +7,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHExtenderAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
 #include <OpenMS/FORMAT/FLASHTaggerFile.h>
 
@@ -26,21 +27,24 @@ namespace OpenMS
   /// write header line for topFD feature file
   void FLASHTaggerFile::writeProteinHeader(std::fstream& fs)
   {
-    fs << "ProteinIndex\tProteinAccession\tProteinDescription\tProteinSequence\tMatchedAminoAcidCount\tCoverage(%)"
-          "\tProteinScore\tProteinQvalue\tTagCount\tTagIndices\tScans\n";
+    fs << "ProteoformIndex\tScan\tProteinAccession\tProteinDescription\tProteinSequence\tMatchedAminoAcidCount\tCoverage(%)\tStartPosition\tEndPosition"
+          "\tProteoformScore\tProteoformQvalue\tTagCount\tTagIndices\tModifications\tModificationStarts\tModificationEnds\n";
   }
 
   /// write the features in regular file output
-  void FLASHTaggerFile::writeTags(const FLASHTaggerAlgorithm& tagger, std::fstream& fs)
+  void FLASHTaggerFile::writeTags(const FLASHTaggerAlgorithm& tagger, const FLASHExtenderAlgorithm& extender, std::fstream& fs)
   {
+    auto tags = std::vector<FLASHHelperClasses::Tag>();
+    tagger.getTags(tags);
+
     for (int c = 0; c < 2; c++)
     {
-      auto tags = std::vector<FLASHHelperClasses::Tag>();
-      tagger.getTags(c == 0, tags);
       for (const auto& tag : tags)
       {
         auto hits = std::vector<ProteinHit>();
-        tagger.getProteinHitsMatchedBy(tag, hits);
+        extender.getProteoformHitsMatchedBy(tag, hits);
+        if (c == 0 && hits.empty()) continue;
+        if (c == 1 && !hits.empty()) continue;
 
         String acc = "";
         String description = "";
@@ -62,7 +66,7 @@ namespace OpenMS
             proteindescription = " ";
           }
           description += proteindescription;
-          hitindices += std::to_string(tagger.getProteinIndex(hit));
+          hitindices += (String)hit.getMetaValue("Index");
 
           auto pos = std::vector<int>();
           auto masses = std::vector<double>();
@@ -77,47 +81,54 @@ namespace OpenMS
 
         for (const auto& mz : tag.getMzs())
         {
-          fs << std::to_string(mz) << ",";
+          fs << std::to_string(mz) << ";";
         }
         fs << "\t";
         for (auto i = 0; i < tag.getLength(); i++)
         {
-          fs << std::to_string(tag.getScore(i)) << ",";
+          fs << std::to_string(tag.getScore(i)) << ";";
         }
         fs << "\n";
       }
     }
   }
 
-  void FLASHTaggerFile::writeProteins(const FLASHTaggerAlgorithm& tagger, std::fstream& fs)
+  void FLASHTaggerFile::writeProteins(const std::vector<ProteinHit>& hits, std::fstream& fs)
   {
-    auto hits = std::vector<ProteinHit>();
-    tagger.getProteinHits(hits);
     for (const auto& hit : hits)
     {
-      String tagindices = "";
-      String scans = "";
+      if (!hit.metaValueExists("Index")) continue;
+      String tagindices = "", modmasses = "", modstarts="", modeends="";
+
       int cntr = 0;
       std::vector<FLASHHelperClasses::Tag> tags;
-      std::set<int> sns;
-      tagger.getTagsMatchingTo(hit, tags);
-      for (const auto& tag : tags)
+      for (const auto& index : (std::vector<int>)hit.getMetaValue("TagIndices"))
       {
         if (! tagindices.empty()) tagindices += ";";
-        tagindices += std::to_string(tag.getIndex());
-        sns.insert(tag.getScan());
+        tagindices += std::to_string(index);
         cntr++;
       }
 
-      for (const auto& sn : sns)
+      std::vector<double> mod_masses = hit.getMetaValue("Modifications");
+      std::vector<int> mod_starts = hit.getMetaValue("ModificationStarts");
+      std::vector<int> mod_ends = hit.getMetaValue("ModificationEnds");
+
+      for (int i = 0; i < mod_masses.size(); i++)
       {
-        if (! scans.empty()) scans += ";"; // BIG TODO per spectrum search.
-        scans += std::to_string(sn);
+        if (! modmasses.empty()) modmasses += ";";
+        modmasses += std::to_string(mod_masses[i]);
+
+        if (! mod_starts.empty()) modstarts += ";";
+        modstarts += std::to_string(mod_starts[i]);
+
+        if (! mod_ends.empty()) modeends += ";";
+        modeends += std::to_string(mod_ends[i]);
       }
 
-      fs << tagger.getProteinIndex(hit) << "\t" << hit.getAccession() << "\t" << hit.getDescription() << "\t" << hit.getSequence() << "\t"
-         << hit.getMetaValue("MatchedAA") << "\t" << 100.0 * hit.getCoverage() << "\t" << hit.getScore() << "\t"
-         << std::to_string((hit.metaValueExists("qvalue") ? (double)hit.getMetaValue("qvalue") : -1)) << "\t" << cntr << "\t" << tagindices << "\t" << scans << "\n";
+      fs << hit.getMetaValue("Index") << "\t" << hit.getMetaValue("Scan") << "\t" << hit.getAccession() << "\t" << hit.getDescription() << "\t" << hit.getSequence() << "\t"
+         << hit.getMetaValue("MatchedAA") << "\t" << 100.0 * hit.getCoverage() << "\t" << hit.getMetaValue("StartPosition") <<"\t"<<hit.getMetaValue("EndPosition")  << "\t"
+         << hit.getScore() << "\t" << std::to_string((hit.metaValueExists("qvalue") ? (double)hit.getMetaValue("qvalue") : -1)) << "\t" << cntr << "\t" << tagindices << "\t"
+         << modmasses <<"\t"<<modstarts <<"\t"  << modeends << "\n";
       }
     }
   } // namespace OpenMS
