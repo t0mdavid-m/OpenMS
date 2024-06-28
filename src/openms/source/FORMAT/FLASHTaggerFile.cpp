@@ -102,7 +102,7 @@ namespace OpenMS
 
       int cntr = 0;
       std::vector<FLASHHelperClasses::Tag> tags;
-      std::vector<int> indices = (std::vector<int>)hit.getMetaValue("TagIndices");
+      std::vector<int> indices = (std::vector<int>)hit.getMetaValue("TagIndices").INT_LIST();
       for (const int& index : indices)
       {
         if (! tagindices.empty()) tagindices += ";";
