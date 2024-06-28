@@ -12,6 +12,8 @@
 #include <OpenMS/config.h>
 #include <iomanip>
 #include <iostream>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTAlgorithm.h>
 
 namespace OpenMS
 {
@@ -25,7 +27,7 @@ namespace OpenMS
     static void writeProteinHeader(std::fstream& fs);
 
     /// write the features in regular file output
-    static void writeTags(const FLASHTaggerAlgorithm& tagger, const FLASHExtenderAlgorithm& extender, std::fstream& fs);
+    static void writeTags(const FLASHTnTAlgorithm& tnt, double flanking_mass_tol, std::fstream& fs);
 
     static void writeProteins(const std::vector<ProteinHit>& hits, std::fstream& fs);
   };

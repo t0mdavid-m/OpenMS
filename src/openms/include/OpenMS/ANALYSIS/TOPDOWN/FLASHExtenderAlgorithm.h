@@ -44,7 +44,7 @@ namespace OpenMS
     /// assignment operator
     FLASHExtenderAlgorithm& operator=(const FLASHExtenderAlgorithm& other);
 
-    void run(const FLASHTaggerAlgorithm& tagger, double ppm);
+    void run(const FLASHTaggerAlgorithm& tagger, double flanking_mass_tol, double ppm);
 
     void getProteoforms(std::vector<ProteinHit>& hits) const
     {
@@ -54,15 +54,13 @@ namespace OpenMS
       }
     }
 
-    void getProteoformHitsMatchedBy(const FLASHHelperClasses::Tag& tag, std::vector<ProteinHit>& hits) const;
-
   protected:
     void updateMembers_() override;
     /// implemented for DefaultParamHandler
     void setDefaultParams_();
   private:
     void get_pro_masses_(const ProteinHit& hit, std::vector<double>& pro_masses, int mode);
-    double calcualte_precursor_mass_(const ProteinHit& hit, int protein_start_position, int protein_end_position, const std::vector<int>& mod_starts, const std::vector<int>& mod_ends, const std::vector<double>& mod_masses) const;
+    double calculate_precursor_mass_(const ProteinHit& hit, int protein_start_position, int protein_end_position, const std::vector<int>& mod_starts, const std::vector<int>& mod_ends, const std::vector<double>& mod_masses) const;
     void define_nodes_(const FLASHTaggerAlgorithm& tagger, MSSpectrum& node_spec, MSSpectrum& tol_spec, double max_mass, double precursor_mass, int mode);
     void run_(const FLASHTaggerAlgorithm& tagger, const ProteinHit& hit,
               const MSSpectrum& node_spec, const MSSpectrum& tol_spec, const std::vector<double>& pro_masses,
@@ -82,9 +80,9 @@ namespace OpenMS
     std::vector<double> prefix_shifts_;
     std::vector<double> suffix_shifts_;
     std::vector<ProteinHit> proteoform_hits_;
-    std::map<int, std::vector<int>> matching_hits_indices_;
+    std::vector<FLASHHelperClasses::Tag> tags_;
 
-    double tol_;
+    double tol_, flanking_mass_tol_;
     int max_mod_cntr_ = 0;
     const int max_path_score_ = 400;
     const int min_path_score_ = -20;

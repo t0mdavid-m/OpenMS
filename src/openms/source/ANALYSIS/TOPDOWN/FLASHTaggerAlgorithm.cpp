@@ -217,7 +217,7 @@ namespace OpenMS
 
   void FLASHTaggerAlgorithm::run(const DeconvolvedSpectrum& deconvolved_spectrum, double ppm, const std::vector<FASTAFile::FASTAEntry>& fasta_entry)
   {
-    setLogType(CMD);
+    //setLogType(CMD);
 
     if (deconvolved_spectrum.empty() || deconvolved_spectrum.isDecoy() || deconvolved_spectrum.getOriginalSpectrum().getMSLevel() == 1) return;
 
@@ -658,8 +658,9 @@ namespace OpenMS
 
   void FLASHTaggerAlgorithm::getMatchedPositionsAndFlankingMassDiffs(std::vector<int>& positions,
                                                                      std::vector<double>& masses,
+                                                                     double flanking_mass_tol,
                                                                      const ProteinHit& hit,
-                                                                     const FLASHHelperClasses::Tag& tag) const
+                                                                     const FLASHHelperClasses::Tag& tag)
   {
     Size pos = 0;
     std::vector<int> indices;
@@ -684,19 +685,9 @@ namespace OpenMS
         if (x_pos != String::npos) cterm.erase(remove(cterm.begin(), cterm.end(), 'X'), cterm.end());
         delta_mass = tag.getCtermMass() - (cterm.empty() ? 0 : AASequence::fromString(cterm).getMonoWeight(Residue::Internal));
       }
-      if (std::abs(delta_mass) > flanking_mass_tol_) continue;
+      if (std::abs(delta_mass) > flanking_mass_tol) continue;
       masses.push_back(delta_mass);
       positions.push_back((int)pos);
     }
   }
-
-  void FLASHTaggerAlgorithm::getTagsMatchingTo(const ProteinHit& hit, std::vector<FLASHHelperClasses::Tag>& tags) const
-  {
-    const std::vector<int>& indices = hit.getMetaValue("TagIndices");
-    for (auto i : indices)
-    {
-      tags.push_back(tags_[i]);
-    }
-  }
-
 } // namespace OpenMS

@@ -7,8 +7,6 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
-#include <OpenMS/ANALYSIS/TOPDOWN/FLASHExtenderAlgorithm.h>
-#include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
 #include <OpenMS/FORMAT/FLASHTaggerFile.h>
 
 namespace OpenMS
@@ -32,17 +30,17 @@ namespace OpenMS
   }
 
   /// write the features in regular file output
-  void FLASHTaggerFile::writeTags(const FLASHTaggerAlgorithm& tagger, const FLASHExtenderAlgorithm& extender, std::fstream& fs)
+  void FLASHTaggerFile::writeTags(const FLASHTnTAlgorithm& tnt, double flanking_mass_tol, std::fstream& fs)
   {
     auto tags = std::vector<FLASHHelperClasses::Tag>();
-    tagger.getTags(tags);
+    tnt.getTags(tags);
 
     for (int c = 0; c < 2; c++)
     {
       for (const auto& tag : tags)
       {
         auto hits = std::vector<ProteinHit>();
-        extender.getProteoformHitsMatchedBy(tag, hits);
+        tnt.getProteoformHitsMatchedBy(tag, hits);
         if (c == 0 && hits.empty()) continue;
         if (c == 1 && !hits.empty()) continue;
 
@@ -70,7 +68,7 @@ namespace OpenMS
 
           auto pos = std::vector<int>();
           auto masses = std::vector<double>();
-          tagger.getMatchedPositionsAndFlankingMassDiffs(pos, masses, hit, tag);
+          FLASHTaggerAlgorithm::getMatchedPositionsAndFlankingMassDiffs(pos, masses, flanking_mass_tol, hit, tag);
           if (pos.size() != 0) { positions += std::to_string(pos[0]); }
           if (masses.size() != 0) { delta_masses += std::to_string(masses[0]); }
         }
