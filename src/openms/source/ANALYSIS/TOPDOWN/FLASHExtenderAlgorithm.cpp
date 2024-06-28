@@ -398,9 +398,11 @@ void FLASHExtenderAlgorithm::run_(const FLASHTaggerAlgorithm& tagger,
     for (const auto& path : paths[num_mod])
     {
       auto iter = all_paths_per_mode.find(num_mod);
+      //std::cout<<mode << " "   << num_mod << " "   << getScore_(path[0])<<std::endl;
       if (iter == all_paths_per_mode.end() || iter->second.size() < path.size()) all_paths_per_mode[num_mod] = path;
     }
   }
+  //std::cout<< getScore_(all_paths_per_mode[0][0]) << " * " << getScore_(all_paths_per_mode[1][0]) << std::endl;
 }
 
 void FLASHExtenderAlgorithm::run(const FLASHTaggerAlgorithm& tagger, double ppm)
@@ -496,8 +498,9 @@ void FLASHExtenderAlgorithm::run(const FLASHTaggerAlgorithm& tagger, double ppm)
           for (const auto& [mod, path] : paths_c->second)
           {
             if (path.empty()) continue;
+            if (max_score >= getScore_(path[0])) continue;
+            max_score = getScore_(path[0]);
             best_paths[0] = path;
-            break;
           }
         }
         else if (cscores.empty()) // only n term
@@ -505,8 +508,9 @@ void FLASHExtenderAlgorithm::run(const FLASHTaggerAlgorithm& tagger, double ppm)
           for (const auto& [mod, path] : paths_n->second)
           {
             if (path.empty()) continue;
+            if (max_score >= getScore_(path[0])) continue;
+            max_score = getScore_(path[0]);
             best_paths[1] = path;
-            break;
           }
         }
         else // both terms
@@ -529,12 +533,14 @@ void FLASHExtenderAlgorithm::run(const FLASHTaggerAlgorithm& tagger, double ppm)
       }
       else if (mode == 2)
       {
+        int max_score = 0;
         const auto paths = all_paths.find(2);
         for (const auto& [mod, path] : paths->second)
         {
           if (path.empty()) continue;
+          if (max_score >= getScore_(path[0])) continue;
+          max_score = getScore_(path[0]);
           best_paths[2] = path;
-          break;
         }
 
         mod_starts.clear();
@@ -569,7 +575,7 @@ void FLASHExtenderAlgorithm::run(const FLASHTaggerAlgorithm& tagger, double ppm)
         auto mass_shift = node_spec[node_index].getMZ() - pro_masses[pro_index];
         auto mod_count = getModNumber_(*iter);
 
-       //std::cout<< hit.getDescription() << " " << mode << " " << getScore_(*iter) << " " << node_index << " " <<  pro_index << " " << pro_masses[pro_index] << " " << node_spec[node_index].getMZ() << " " <<  mod_count << " " <<  mass_shift <<  std::endl;
+       //std::cout<< hit.getAccession() << " " << mode << " " << getScore_(*iter) << " " << node_index << " " <<  pro_index << " " << pro_masses[pro_index] << " " << node_spec[node_index].getMZ() << " " <<  mod_count  <<  std::endl;
 
         if (node_index == 0)
         {
@@ -707,7 +713,7 @@ void FLASHExtenderAlgorithm::connectBetweenTags_(FLASHHelperClasses::DAG& dag,
   {
     std::unordered_set<Size> reachable_vertices;
 
-    for (int tag_index = 0; tag_index < tag_node_starts.size(); tag_index++) // for all reachable tag starting point, run extension
+    for (Size tag_index = 0; tag_index < tag_node_starts.size(); tag_index++) // for all reachable tag starting point, run extension
     {
       int node_start = tag_node_starts[tag_index];
       int pro_start = tag_pro_starts[tag_index];

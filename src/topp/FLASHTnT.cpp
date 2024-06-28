@@ -190,38 +190,55 @@ protected:
       extender.setParameters(extender_param);
       extender.run(tagger, tol);
       extender.getProteoforms(proteoform_hits);
-      if (! out_tag_file.empty())
-      {
-        FLASHTaggerFile::writeTags(tagger, extender, out_tagger_stream);
-      }
+      if (! out_tag_file.empty()) { FLASHTaggerFile::writeTags(tagger, extender, out_tagger_stream); }
     }
 
     std::sort(proteoform_hits.begin(), proteoform_hits.end(),
-              [](const ProteinHit& left, const ProteinHit& right) {
-                return left.getScore() > right.getScore();
-              });
+              [](const ProteinHit& left, const ProteinHit& right) { return left.getScore() > right.getScore(); });
 
-    double taget_count = 0;
-    double decoy_count = 0;
-    std::vector<ProteinHit> filtered_proteoform_hits;
-    filtered_proteoform_hits.reserve(proteoform_hits.size());
-
-    for (auto& hit : proteoform_hits)
+    if (decoy_factor > 0)
     {
-      bool is_decoy = hit.getAccession().hasPrefix("DECOY");
-      if (is_decoy) decoy_count++;
-      else taget_count++;
+      double taget_count = 0;
+      double decoy_count = 0;
 
-      double qvalue = decoy_factor != 0 ? (decoy_count / (decoy_count + taget_count)) : -1.0; // TODO make the minima thing
-      hit.setMetaValue("qvalue", qvalue);
-      if (!keep_decoy && is_decoy) continue;
-      if (fdr < 1 && qvalue > fdr) continue;
-      filtered_proteoform_hits.push_back(hit);
+      std::vector<ProteinHit> filtered_proteoform_hits;
+      filtered_proteoform_hits.reserve(proteoform_hits.size());
+      std::map<double, double> map_qvalue;
+
+      for (auto& hit : proteoform_hits)
+      {
+        bool is_decoy = hit.getAccession().hasPrefix("DECOY");
+        if (is_decoy) decoy_count += 1.0/decoy_factor;
+        else
+          taget_count++;
+
+        double tmp_qvalue = decoy_count / (decoy_count + taget_count);
+        map_qvalue[hit.getScore()] = std::min(1.0, tmp_qvalue);
+      }
+
+      double cummin = 1.0;
+      for (auto&& rit = map_qvalue.begin(); rit != map_qvalue.end(); ++rit)
+      {
+        cummin = std::min(rit->second, cummin);
+        rit->second = cummin;
+      }
+
+      for (auto& hit : proteoform_hits)
+      {
+        bool is_decoy = hit.getAccession().hasPrefix("DECOY");
+        double qvalue = map_qvalue[hit.getScore()];
+        hit.setMetaValue("qvalue", qvalue);
+        if (! keep_decoy && is_decoy) continue;
+        if (fdr < 1 && qvalue > fdr) continue;
+
+        filtered_proteoform_hits.push_back(hit);
+      }
+      proteoform_hits.swap(filtered_proteoform_hits);
     }
 
     if (! out_protein_file.empty())
     {
-      FLASHTaggerFile::writeProteins(filtered_proteoform_hits, out_protein_stream);
+      FLASHTaggerFile::writeProteins(proteoform_hits, out_protein_stream);
       out_protein_stream.close();
     }
 

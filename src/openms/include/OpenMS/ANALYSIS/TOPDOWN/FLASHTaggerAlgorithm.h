@@ -116,8 +116,6 @@ namespace OpenMS
     int max_path_score_ = 0;
     int min_path_score_ = 0;
     int min_cov_aa_ = 5;
-    //double fdr_ = 1.0;
-    //bool keep_decoy_ = false;
     double decoy_factor_ = 0;
     double max_edge_mass_ = 0;
     double flanking_mass_tol_ = 50000.0;
