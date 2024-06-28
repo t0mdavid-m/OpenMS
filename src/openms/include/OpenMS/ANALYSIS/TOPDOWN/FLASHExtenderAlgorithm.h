@@ -71,9 +71,9 @@ namespace OpenMS
     int getProIndex_(Size vertex, Size pro_length) const;
     int getModNumber_(Size vertex) const;
     int getScore_(Size vertex) const;
-    void constructDAG_(FLASHHelperClasses::DAG& dag, std::unordered_set<Size>& sinks, boost::dynamic_bitset<>& visited, const MSSpectrum& node_spec, const MSSpectrum& tol_spec, const std::vector<double>& pro_masses, const std::vector<std::vector<int>>& tag_edges, int mode);
-    void connectBetweenTags_(FLASHHelperClasses::DAG& dag, boost::dynamic_bitset<>& visited, std::unordered_set<Size>& visited_tag_edges, std::unordered_set<Size>& sinks, Size vertex, const MSSpectrum& node_spec, const MSSpectrum& tol_spec, const std::vector<double>& pro_masses, const std::vector<std::vector<int>>& tag_edges, int mode);
-    void extendBetweenTags_(FLASHHelperClasses::DAG& dag, boost::dynamic_bitset<>& visited, std::unordered_set<Size>& sinks,
+    void constructDAG_(FLASHHelperClasses::DAG& dag, std::set<Size>& sinks, boost::dynamic_bitset<>& visited, const MSSpectrum& node_spec, const MSSpectrum& tol_spec, const std::vector<double>& pro_masses, const std::vector<std::vector<int>>& tag_edges, int mode);
+    void connectBetweenTags_(FLASHHelperClasses::DAG& dag, boost::dynamic_bitset<>& visited, std::set<Size>& visited_tag_edges, std::set<Size>& sinks, Size vertex, const MSSpectrum& node_spec, const MSSpectrum& tol_spec, const std::vector<double>& pro_masses, const std::vector<std::vector<int>>& tag_edges, int mode);
+    void extendBetweenTags_(FLASHHelperClasses::DAG& dag, boost::dynamic_bitset<>& visited, std::set<Size>& sinks,
                            Size vertex, int node_index, int pro_index, int diagonal_counter, const MSSpectrum& node_spec, const MSSpectrum& tol_spec, const std::vector<double>& pro_masses, int mode);
 
     std::vector<String> ion_types_str_;

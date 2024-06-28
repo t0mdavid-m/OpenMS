@@ -33,12 +33,10 @@ FLASHTnTAlgorithm& FLASHTnTAlgorithm::operator=(const FLASHTnTAlgorithm& rhs)
 
 void FLASHTnTAlgorithm::setDefaultParams_()
 {
-  defaults_.setValue("fdr", 1.0,
-                     "Protein level FDR");
+  defaults_.setValue("fdr", 1.0, "Protein level FDR");
   defaults_.setMinFloat("fdr", 0.0);
 
-  defaults_.setValue("keep_decoy", "false",
-                     "To keep decoy hits");
+  defaults_.setValue("keep_decoy", "false", "To keep decoy hits");
   defaults_.setValidStrings("keep_decoy", {"true", "false"});
 
   defaults_.insert("tag:", FLASHTaggerAlgorithm().getDefaults());
@@ -63,7 +61,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   {
     auto spec = map[index];
     nextProgress();
-    if (spec.getMSLevel() != 2) continue;
+    if (spec.getMSLevel() == 1) continue;
     int scan = FLASHDeconvAlgorithm::getScanNumber(map, index); // TODO precursor
     DeconvolvedSpectrum dspec(scan);
     dspec.setOriginalSpectrum(spec);
@@ -84,6 +82,20 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       auto token = q_str.substr(pos, pos_t - pos);
       qscores.push_back(stod(token));
       pos = pos_t + 1;
+    }
+
+    int s_loc_pre_s = deconv_meta_str.find("precursorscan=") + 14;
+    int s_loc_pre_e = deconv_meta_str.find(";", s_loc_pre_s);
+    int precursor_scan = stoi(deconv_meta_str.substr(s_loc_pre_s, s_loc_pre_e - s_loc_pre_s));
+
+    if (precursor_scan > 0)
+    {
+      int s_loc_prem_s = deconv_meta_str.find("precursormass=") + 14;
+      int s_loc_prem_e = deconv_meta_str.find(";", s_loc_prem_s);
+      double precursor_mass = stod(deconv_meta_str.substr(s_loc_prem_s, s_loc_prem_e - s_loc_prem_s));
+      PeakGroup pg;
+      pg.setMonoisotopicMass(precursor_mass);
+      dspec.setPrecursorPeakGroup(pg);
     }
 
     int s_loc_s = deconv_meta_str.find("snr=") + 4;
@@ -153,8 +165,12 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     hit.setMetaValue("TagIndices", tag_indices);
   }
 
-  std::sort(proteoform_hits_.begin(), proteoform_hits_.end(),
-            [](const ProteinHit& left, const ProteinHit& right) { return left.getScore() > right.getScore(); });
+  //std::cout<<tags_.size()<<" " << proteoform_hits_.size()<<std::endl;
+  std::sort(proteoform_hits_.begin(), proteoform_hits_.end(), [](const ProteinHit& left, const ProteinHit& right) {
+    return left.getScore() == right.getScore() ? (left.getCoverage() == right.getCoverage() ? (left.getMetaValue("Scan") > right.getMetaValue("Scan"))
+                                                                                            : (left.getCoverage() > right.getCoverage()))
+                                               : (left.getScore() > right.getScore());
+  });
 
   if (decoy_factor_ > 0)
   {
@@ -196,7 +212,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
 
     proteoform_hits_.swap(filtered_proteoform_hits);
   }
-
+  //std::cout<<tags_.size()<<" " << proteoform_hits_.size()<<std::endl; //
   // define proteoform index and tag to proteoform indices.
   int proteoform_index = 0;
   for (auto& hit : proteoform_hits_)

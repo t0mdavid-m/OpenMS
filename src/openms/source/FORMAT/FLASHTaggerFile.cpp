@@ -116,10 +116,10 @@ namespace OpenMS
         if (! modmasses.empty()) modmasses += ";";
         modmasses += std::to_string(mod_masses[i]);
 
-        if (! mod_starts.empty()) modstarts += ";";
+        if (! modstarts.empty()) modstarts += ";";
         modstarts += std::to_string(mod_starts[i]);
 
-        if (! mod_ends.empty()) modeends += ";";
+        if (! modeends.empty()) modeends += ";";
         modeends += std::to_string(mod_ends[i]);
       }
 
