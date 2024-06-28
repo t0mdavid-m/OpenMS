@@ -43,13 +43,13 @@ protected:
     registerInputFile_("fasta", "<file>", "", "Input proteome database file (fasta)");
     setValidFormats_("fasta", ListUtils::create<String>("fasta"));
 
-    registerOutputFile_("out_protein", "<file>", "", "Default output protein level tsv file containing matched proteins");
-    setValidFormats_("out_protein", ListUtils::create<String>("tsv"));
+    registerOutputFile_("out_pro", "<file>", "", "Default output proteoform level tsv file containing matched proteins");
+    setValidFormats_("out_pro", ListUtils::create<String>("tsv"));
 
     registerOutputFile_("out_tag", "<file>", "", "Default output tag level tsv file containing matched tags");
     setValidFormats_("out_tag", ListUtils::create<String>("tsv"));
 
-    registerDoubleOption_("fdr", "value", 1.0, "Proteoform FDR threshold.", false, false);
+    registerDoubleOption_("fdr", "value", 1.0, "Protein level FDR threshold.", false, false);
     setMinFloat_("fdr", 0.01);
     setMaxFloat_("fdr", 1.0);
 
@@ -85,7 +85,7 @@ protected:
     String in_fasta = getStringOption_("fasta");
 
     String out_tag_file = getStringOption_("out_tag");
-    String out_protein_file = getStringOption_("out_protein");
+    String out_protein_file = getStringOption_("out_pro");
 
     //-------------------------------------------------------------
     // reading input

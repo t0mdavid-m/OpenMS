@@ -168,12 +168,12 @@ namespace OpenMS
 
   void FLASHTaggerAlgorithm::setDefaultParams_()
   {
-    defaults_.setValue("max_tag_count", 200,
+    defaults_.setValue("max_count", 200,
                        "Maximum number of the tags per length (lengths set by -min_length and -max_length options). The tags with different amino acid "
                        "combinations are all treated separately. E.g., "
                        "TII, TIL, TLI, TLL are distinct tags even though they have the same mass differences. "
                        "but are counted as four different tags. ");
-    defaults_.setMinInt("max_tag_count", 0);
+    defaults_.setMinInt("max_count", 0);
 
     defaults_.setValue(
       "min_length", 4,
@@ -199,7 +199,7 @@ namespace OpenMS
 
   void FLASHTaggerAlgorithm::updateMembers_()
   {
-    max_tag_count_ = param_.getValue("max_tag_count");
+    max_tag_count_ = param_.getValue("max_count");
     min_tag_length_ = param_.getValue("min_length");
     max_tag_length_ = param_.getValue("max_length");
     max_iso_in_tag_ = param_.getValue("max_iso_error_count");

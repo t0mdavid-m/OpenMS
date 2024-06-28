@@ -28,7 +28,7 @@ namespace OpenMS
   void FLASHTaggerFile::writeProteinHeader(std::fstream& fs)
   {
     fs << "ProteoformIndex\tScan\tProteinAccession\tProteinDescription\tProteinSequence\tMatchedAminoAcidCount\tCoverage(%)\tStartPosition\tEndPosition"
-          "\tProteoformScore\tProteoformQvalue\tTagCount\tTagIndices\tModifications\tModificationStarts\tModificationEnds\n";
+          "\tTagCount\tTagIndices\tModificationCount\tModifications\tModificationStarts\tModificationEnds\tProteoformScore\tProteinLevelQvalue\n";
   }
 
   /// write the features in regular file output
@@ -127,8 +127,8 @@ namespace OpenMS
 
       fs << hit.getMetaValue("Index") << "\t" << hit.getMetaValue("Scan") << "\t" << hit.getAccession() << "\t" << hit.getDescription() << "\t" << hit.getSequence() << "\t"
          << hit.getMetaValue("MatchedAA") << "\t" << 100.0 * hit.getCoverage() << "\t" << hit.getMetaValue("StartPosition") <<"\t"<<hit.getMetaValue("EndPosition")  << "\t"
-         << hit.getScore() << "\t" << std::to_string((hit.metaValueExists("qvalue") ? (double)hit.getMetaValue("qvalue") : -1)) << "\t" << cntr << "\t" << tagindices << "\t"
-         << modmasses <<"\t"<<modstarts <<"\t"  << modeends << "\n";
+         <<  cntr << "\t" << tagindices << "\t"
+         << mod_masses.size() <<"\t"<< modmasses <<"\t"<<modstarts <<"\t"  << modeends << "\t" << hit.getScore() << "\t" << std::to_string((hit.metaValueExists("qvalue") ? (double)hit.getMetaValue("qvalue") : -1)) << "\n";
       }
     }
   } // namespace OpenMS
