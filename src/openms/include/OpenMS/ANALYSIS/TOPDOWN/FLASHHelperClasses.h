@@ -253,7 +253,6 @@ struct OPENMS_DLLAPI FLASHHelperClasses
     String toString() const;
     const std::vector<double>& getMzs() const;
 
-
   private:
     String seq_;
     double n_mass_ = -1, c_mass_ = -1;

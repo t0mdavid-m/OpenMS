@@ -25,8 +25,8 @@ namespace OpenMS
     static void writeProteinHeader(std::fstream& fs);
 
     /// write the features in regular file output
-    static void writeTags(const FLASHTaggerAlgorithm& tagger, std::fstream& fs);
+    static void writeTags(const FLASHTaggerAlgorithm& tagger, const FLASHExtenderAlgorithm& extender, std::fstream& fs);
 
-    static void writeProteins(const FLASHTaggerAlgorithm& tagger, std::fstream& fs);
+    static void writeProteins(const std::vector<ProteinHit>& hits, std::fstream& fs);
   };
 } // namespace OpenMS
