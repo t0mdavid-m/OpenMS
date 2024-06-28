@@ -692,7 +692,7 @@ namespace OpenMS
 
   void FLASHTaggerAlgorithm::getTagsMatchingTo(const ProteinHit& hit, std::vector<FLASHHelperClasses::Tag>& tags) const
   {
-    const std::vector<int>& indices = hit.getMetaValue("TagIndices");
+    const std::vector<int>& indices = hit.getMetaValue("TagIndices").toIntList();
     for (auto i : indices)
     {
       tags.push_back(tags_[i]);
