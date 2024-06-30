@@ -89,6 +89,6 @@ namespace OpenMS
     // double fdr_ = 1.0;
     // bool keep_decoy_ = false;
     double max_mod_mass_ = 500.0;
-    double precursor_mass_ = 0;
+    double precursor_mass_ = -1;
   };
 } // namespace OpenMS

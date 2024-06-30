@@ -25,7 +25,7 @@ namespace OpenMS
   /// write header line for topFD feature file
   void FLASHTaggerFile::writeProteinHeader(std::fstream& fs)
   {
-    fs << "ProteoformIndex\tScan\tProteinAccession\tProteinDescription\tProteinSequence\tMatchedAminoAcidCount\tCoverage(%)\tStartPosition\tEndPosition"
+    fs << "ProteoformIndex\tScan\tProteinAccession\tProteinDescription\tProteoformMass\tProteinSequence\tMatchedAminoAcidCount\tCoverage(%)\tStartPosition\tEndPosition"
           "\tTagCount\tTagIndices\tModificationCount\tModifications\tModificationStarts\tModificationEnds\tProteoformScore\tProteinLevelQvalue\n";
   }
 
@@ -123,8 +123,14 @@ namespace OpenMS
         modeends += std::to_string(mod_ends[i]);
       }
 
-      fs << hit.getMetaValue("Index") << "\t" << hit.getMetaValue("Scan") << "\t" << hit.getAccession() << "\t" << hit.getDescription() << "\t" << hit.getSequence() << "\t"
-         << hit.getMetaValue("MatchedAA") << "\t" << 100.0 * hit.getCoverage() << "\t" << hit.getMetaValue("StartPosition") <<"\t"<<hit.getMetaValue("EndPosition")  << "\t"
+      int start = hit.getMetaValue("StartPosition");
+      int end = hit.getMetaValue("EndPosition");
+
+      int start_in_seq = start < 0? 0: start;
+      int end_in_seq = end < 0? hit.getSequence().size() : end;
+
+      fs << hit.getMetaValue("Index") << "\t" << hit.getMetaValue("Scan") << "\t" << hit.getAccession() << "\t" << hit.getDescription() << "\t" <<  hit.getMetaValue("Mass") << "\t" << hit.getSequence().substr(start_in_seq, end_in_seq - start_in_seq) << "\t"
+         << hit.getMetaValue("MatchedAA") << "\t" << 100.0 * hit.getCoverage() << "\t" << start<<"\t"<< end  << "\t"
          <<  cntr << "\t" << tagindices << "\t"
          << mod_masses.size() <<"\t"<< modmasses <<"\t"<<modstarts <<"\t"  << modeends << "\t" << hit.getScore() << "\t" << std::to_string((hit.metaValueExists("qvalue") ? (double)hit.getMetaValue("qvalue") : -1)) << "\n";
       }

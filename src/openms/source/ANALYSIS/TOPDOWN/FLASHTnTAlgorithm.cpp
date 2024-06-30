@@ -63,6 +63,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     nextProgress();
     if (spec.getMSLevel() == 1) continue;
     int scan = FLASHDeconvAlgorithm::getScanNumber(map, index); // TODO precursor
+    //if (scan != 6487) continue; // 
     DeconvolvedSpectrum dspec(scan);
     dspec.setOriginalSpectrum(spec);
     String deconv_meta_str = spec.getMetaValue("DeconvMassInfo").toString();

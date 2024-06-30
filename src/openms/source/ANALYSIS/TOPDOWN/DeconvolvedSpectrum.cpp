@@ -75,10 +75,10 @@ namespace OpenMS
   {
     auto out_spec = MSSpectrum(spec_);
     out_spec.clear(false);
-    if ((spec_.getMSLevel() > min_ms_level && precursor_peak_group_.empty()) || empty())
-    {
-      return out_spec;
-    }
+   // if ((spec_.getMSLevel() > min_ms_level && precursor_peak_group_.empty()) || empty())
+   // {
+    //  return out_spec;
+   // }
     double charge_mass_offset = (double)abs(to_charge) * FLASHHelperClasses::getChargeMass(to_charge >= 0);
     std::unordered_set<double> deconvolved_mzs;
     std::stringstream val {};

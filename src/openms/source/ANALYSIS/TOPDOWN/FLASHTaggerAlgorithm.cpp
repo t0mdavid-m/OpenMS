@@ -224,11 +224,13 @@ namespace OpenMS
     auto tags = std::vector<FLASHHelperClasses::Tag>();
     tags.reserve(max_tag_count_ * max_tag_length_);
 
-    if (!deconvolved_spectrum.getPrecursorPeakGroup().empty())
+    if (deconvolved_spectrum.getPrecursorPeakGroup().getMonoMass() > 0)
     {
       spec_.setMetaValue("PrecursorMass", deconvolved_spectrum.getPrecursorPeakGroup().getMonoMass());
     }
     getTags_(deconvolved_spectrum, ppm);
+
+    std::sort(tags_.rbegin(), tags_.rend());
 
     int index = 0;
     for (auto& tag : tags_)
@@ -478,7 +480,6 @@ namespace OpenMS
     std::vector<std::pair<ProteinHit, std::vector<int>>> pairs;
     std::vector<int> start_loc(tags_.size(), 0);
     std::vector<int> end_loc(tags_.size(), 0);
-    std::sort(tags_.rbegin(), tags_.rend());
     int scan = 0;
     // for each tag, find the possible start and end locations in the protein sequence. If C term, they are negative values to specify values are from
     // the end of the protein
@@ -510,7 +511,7 @@ namespace OpenMS
       decoy_factor_ = decoy_count / taget_count;
     }
 
-  #pragma omp parallel for default(none) shared(pairs, fasta_entry, taget_count, decoy_count, start_loc, end_loc, scan)
+  #pragma omp parallel for default(none) shared(pairs, fasta_entry, taget_count, decoy_count, start_loc, end_loc, scan, std::cout)
     for (int i = 0; i < (int)fasta_entry.size(); i++)
     {
       const auto& fe = fasta_entry[i];
@@ -597,8 +598,6 @@ namespace OpenMS
           matched_masses.insert(tag.getMzs().begin(), tag.getMzs().end());
           matched_tag_indices.push_back(j); // tag indices
         }
-        else
-          continue;
       }
       if (matched_tag_indices.empty()) continue;
 
