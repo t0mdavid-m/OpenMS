@@ -217,12 +217,17 @@ namespace OpenMS
 
   void FLASHTaggerAlgorithm::run(const DeconvolvedSpectrum& deconvolved_spectrum, double ppm, const std::vector<FASTAFile::FASTAEntry>& fasta_entry)
   {
-    setLogType(CMD);
+    //setLogType(CMD);
 
     if (deconvolved_spectrum.empty() || deconvolved_spectrum.isDecoy() || deconvolved_spectrum.getOriginalSpectrum().getMSLevel() == 1) return;
 
     auto tags = std::vector<FLASHHelperClasses::Tag>();
     tags.reserve(max_tag_count_ * max_tag_length_);
+
+    if (!deconvolved_spectrum.getPrecursorPeakGroup().empty())
+    {
+      spec_.setMetaValue("PrecursorMass", deconvolved_spectrum.getPrecursorPeakGroup().getMonoMass());
+    }
     getTags_(deconvolved_spectrum, ppm);
 
     int index = 0;
@@ -589,7 +594,6 @@ namespace OpenMS
         }
         if (matched)
         {
-#pragma omp critical
           matched_masses.insert(tag.getMzs().begin(), tag.getMzs().end());
           matched_tag_indices.push_back(j); // tag indices
         }
@@ -625,15 +629,18 @@ namespace OpenMS
 
     protein_hits_.reserve(pairs.size());
 
-    std::sort(pairs.begin(), pairs.end(),
-              [](const std::pair<ProteinHit, std::vector<int>>& left, const std::pair<ProteinHit, std::vector<int>>& right) {
-                return left.first.getScore() > right.first.getScore();
-              });
     for (auto& [hit, indices] : pairs)
     {
       hit.setMetaValue("TagIndices", indices);
       protein_hits_.push_back(hit);
     }
+
+    std::sort(protein_hits_.begin(), protein_hits_.end(), [](const ProteinHit& left, const ProteinHit& right) {
+      return left.getScore() == right.getScore() ? (left.getCoverage() == right.getCoverage() ? (left.getAccession() > right.getAccession())
+                                                                                              : (left.getCoverage() > right.getCoverage()))
+                                                 : (left.getScore() > right.getScore());
+    });
+
   }
 
   void FLASHTaggerAlgorithm::getProteinHits(std::vector<ProteinHit>& hits, int max_target_ount) const
@@ -658,8 +665,9 @@ namespace OpenMS
 
   void FLASHTaggerAlgorithm::getMatchedPositionsAndFlankingMassDiffs(std::vector<int>& positions,
                                                                      std::vector<double>& masses,
+                                                                     double flanking_mass_tol,
                                                                      const ProteinHit& hit,
-                                                                     const FLASHHelperClasses::Tag& tag) const
+                                                                     const FLASHHelperClasses::Tag& tag)
   {
     Size pos = 0;
     std::vector<int> indices;
@@ -684,19 +692,9 @@ namespace OpenMS
         if (x_pos != String::npos) cterm.erase(remove(cterm.begin(), cterm.end(), 'X'), cterm.end());
         delta_mass = tag.getCtermMass() - (cterm.empty() ? 0 : AASequence::fromString(cterm).getMonoWeight(Residue::Internal));
       }
-      if (std::abs(delta_mass) > flanking_mass_tol_) continue;
+      if (std::abs(delta_mass) > flanking_mass_tol) continue;
       masses.push_back(delta_mass);
       positions.push_back((int)pos);
     }
   }
-
-  void FLASHTaggerAlgorithm::getTagsMatchingTo(const ProteinHit& hit, std::vector<FLASHHelperClasses::Tag>& tags) const
-  {
-    const std::vector<int>& indices = hit.getMetaValue("TagIndices").toIntList();
-    for (auto i : indices)
-    {
-      tags.push_back(tags_[i]);
-    }
-  }
-
 } // namespace OpenMS

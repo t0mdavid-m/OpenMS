@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: BSD-3-Clause
 //
 // --------------------------------------------------------------------------
-// $Maintainer: Kyowon Jeong, Jaekwan Kim $
-// $Authors: Kyowon Jeong, Jaekwan Kim $
+// $Maintainer: Kyowon Jeong$
+// $Authors: Kyowon Jeong $
 // --------------------------------------------------------------------------
 
 #pragma once
@@ -57,9 +57,8 @@ namespace OpenMS
     void run(const DeconvolvedSpectrum& deconvolved_spectrum, double ppm, const std::vector<FASTAFile::FASTAEntry>& fasta_entry);
 
     const MSSpectrum& getSpectrum() const;
-    void getTagsMatchingTo(const ProteinHit& hit, std::vector<FLASHHelperClasses::Tag>& tags) const;
     void getTags(std::vector<FLASHHelperClasses::Tag>& tags) const;
-    void getMatchedPositionsAndFlankingMassDiffs(std::vector<int>& positions, std::vector<double>& masses, const ProteinHit& hit, const FLASHHelperClasses::Tag& tag) const;
+    static void getMatchedPositionsAndFlankingMassDiffs(std::vector<int>& positions, std::vector<double>& masses, double flanking_mass_tol, const ProteinHit& hit, const FLASHHelperClasses::Tag& tag);
     void getProteinHits(std::vector<ProteinHit>& hits, int max_target_count) const;
     double getDecoyFactor() const
     {
@@ -89,7 +88,6 @@ namespace OpenMS
         @param tags found tags
     */
     void getTags_(const std::vector<double>& mzs, const std::vector<int>& scores, int scan, double ppm);
-
     void constructDAG_(FLASHHelperClasses::DAG& dag, const std::vector<double>& mzs, const std::vector<int>& scores, int length, double tol);
     std::vector<Residue> getAA_(double l, double r, double tol, int iso_offset = 0) const;
     void updateEdgeMasses_();

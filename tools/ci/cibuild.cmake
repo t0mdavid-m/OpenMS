@@ -39,12 +39,6 @@ ${VAR_NAME}=$ENV{${VAR_NAME}}"
   endif()
 endmacro()
 
-#### Install System runtime libraries into /bin, so NSIS picks them up; this saves us from shipping a VC-Redist.exe with the installer
-set(CMAKE_INSTALL_OPENMP_LIBRARIES TRUE)
-set (CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION ${INSTALL_LIB_DIR})
-include(InstallRequiredSystemLibraries)
-
-
 # same but for multiple variables
 macro(add_env_vars_to_cache_if_exists VAR_NAMES)
   foreach(VAR_NAME ${VAR_NAMES})

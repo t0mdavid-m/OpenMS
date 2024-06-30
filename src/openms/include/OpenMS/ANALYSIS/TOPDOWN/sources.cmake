@@ -10,6 +10,7 @@ set(sources_list_h
         FLASHExtenderAlgorithm.h
         FLASHIda.h
         FLASHIdaBridgeFunctions.h
+        FLASHTnTAlgorithm.h
         MassFeatureTrace.h
         PeakGroup.h
         Qscore.h

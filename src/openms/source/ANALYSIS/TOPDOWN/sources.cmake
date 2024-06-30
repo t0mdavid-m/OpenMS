@@ -10,6 +10,7 @@ set(sources_list
         FLASHExtenderAlgorithm.cpp
         FLASHIda.cpp
         FLASHIdaBridgeFunctions.cpp
+        FLASHTnTAlgorithm.cpp
         MassFeatureTrace.cpp
         PeakGroup.cpp
         Qscore.cpp

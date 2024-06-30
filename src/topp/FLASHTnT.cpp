@@ -7,9 +7,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
-#include <OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvAlgorithm.h>
-#include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
-#include <OpenMS/ANALYSIS/TOPDOWN/FLASHExtenderAlgorithm.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTAlgorithm.h>
 #include <OpenMS/APPLICATIONS/TOPPBase.h>
 #include <OpenMS/FORMAT/FASTAFile.h>
 #include <OpenMS/FORMAT/FLASHTaggerFile.h>
@@ -28,7 +26,10 @@ using namespace std;
 class TOPPFLASHTnT : public TOPPBase
 {
 public:
-  TOPPFLASHTnT(): TOPPBase("FLASHTnT", "FLASHTnT to generate de novo sequence tags from TDP spectrum and match them against proteome DB for proteoform identification.", false)
+  TOPPFLASHTnT():
+      TOPPBase("FLASHTnT",
+               "FLASHTnT to generate de novo sequence tags from TDP spectrum and match them against proteome DB for proteoform identification.",
+               false)
   {
   }
 
@@ -49,26 +50,15 @@ protected:
     registerOutputFile_("out_tag", "<file>", "", "Default output tag level tsv file containing matched tags");
     setValidFormats_("out_tag", ListUtils::create<String>("tsv"));
 
-    registerDoubleOption_("fdr", "value", 1.0, "Protein level FDR threshold.", false, false);
-    setMinFloat_("fdr", 0.01);
-    setMaxFloat_("fdr", 1.0);
-
-    registerFlag_("keep_decoy", "Keep decoy proteoforms.", false);
-
-    registerSubsection_("TAG", "FLASHTagger algorithm parameters");
-    registerSubsection_("EX", "FLASHExtender algorithm parameters");
+    registerSubsection_("tnt", "FLASHTnT algorithm parameters");
   }
 
   Param getSubsectionDefaults_(const String& prefix) const override
   {
-    if (prefix == "TAG")
+    if (prefix == "tnt")
     {
-      auto tagger_param = FLASHTaggerAlgorithm().getDefaults();
-      return tagger_param;
-    }else if (prefix == "EX")
-    {
-      auto tagger_param = FLASHExtenderAlgorithm().getDefaults();
-      return tagger_param;
+      auto tnt_param = FLASHTnTAlgorithm().getDefaults();
+      return tnt_param;
     }
     else { throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "Unknown subsection", prefix); }
   }
@@ -99,18 +89,14 @@ protected:
     mzml.setLogType(log_type_);
     mzml.load(in_file, map);
 
-    auto tagger_param = getParam_().copy("TAG:", true);
-    auto extender_param = getParam_().copy("EX:", true);
+    auto tnt_param = getParam_().copy("tnt:", true);
+    double flanking_mass_tol = tnt_param.getValue("tag:flanking_mass_tol");
     OPENMS_LOG_INFO << "Finding sequence tags from deconvolved MS2 spectra ..." << endl;
 
     FASTAFile fasta_file;
     std::vector<FASTAFile::FASTAEntry> fasta_entry;
     fasta_file.load(in_fasta, fasta_entry);
     std::vector<ProteinHit> proteoform_hits;
-    double decoy_factor = 0;
-    double fdr = getDoubleOption_("fdr");
-    bool keep_decoy = getFlag_("keep_decoy");
-    double tol(10);
     // Run FLASHDeconvAlgorithm here!
     OPENMS_LOG_INFO << "Processing : " << in_file << endl;
 
@@ -128,112 +114,15 @@ protected:
       out_protein_stream = fstream(out_protein_file, fstream::out);
       FLASHTaggerFile::writeProteinHeader(out_protein_stream);
     }
-    // collect statistics for information
-    for (int index = 0; index < map.size(); index++)
+
+    FLASHTnTAlgorithm tnt;
+    tnt.setParameters(tnt_param);
+    tnt.run(map, fasta_entry, flanking_mass_tol);
+    tnt.getProteoforms(proteoform_hits);
+
+    if (! out_tag_file.empty())
     {
-      auto spec = map[index];
-      if (spec.getMSLevel() != 2) continue;
-      int scan = FLASHDeconvAlgorithm::getScanNumber(map, index);
-      DeconvolvedSpectrum dspec(scan);
-      dspec.setOriginalSpectrum(spec);
-      String deconv_meta_str = spec.getMetaValue("DeconvMassInfo").toString();
-      int tol_loc_s = deconv_meta_str.find("tol=") + 4;
-      int tol_loc_e = deconv_meta_str.find(";", tol_loc_s);
-      tol = stod(deconv_meta_str.substr(tol_loc_s, tol_loc_e - tol_loc_s));
-
-      int q_loc_s = deconv_meta_str.find("qscore=") + 7;
-      int q_loc_e = deconv_meta_str.find(";", q_loc_s);
-      auto q_str = deconv_meta_str.substr(q_loc_s, q_loc_e - q_loc_s);
-      Size pos = 0;
-      std::vector<double> qscores;
-      while (true)
-      {
-        Size pos_t = q_str.find(",", pos);
-        if (pos_t == String::npos) break;
-        auto token = q_str.substr(pos, pos_t - pos);
-        qscores.push_back(stod(token));
-        pos = pos_t + 1;
-      }
-
-      int s_loc_s = deconv_meta_str.find("snr=") + 4;
-      int s_loc_e = deconv_meta_str.find(";", s_loc_s);
-      auto s_str = deconv_meta_str.substr(s_loc_s, s_loc_e - s_loc_s);
-      pos = 0;
-      std::vector<float> snrs;
-      while (true)
-      {
-        Size pos_t = s_str.find(",", pos);
-        if (pos_t == String::npos) break;
-        auto token = s_str.substr(pos, pos_t - pos);
-        snrs.push_back(stof(token));
-        pos = pos_t + 1;
-      }
-
-      for (int i = 0; i < spec.size(); i++)
-      {
-        PeakGroup peak;
-        peak.setQscore(qscores[i]);
-        peak.setSNR(snrs[i]);
-        peak.setMonoisotopicMass(spec[i].getMZ());
-        peak.setScanNumber(scan);
-        dspec.push_back(peak);
-      }
-      dspec.sort();
-
-      FLASHTaggerAlgorithm tagger;
-      // Run tagger
-      tagger.setParameters(tagger_param);
-      tagger.run(dspec, tol, fasta_entry);
-      decoy_factor = tagger.getDecoyFactor();
-      FLASHExtenderAlgorithm extender;
-
-      extender.setParameters(extender_param);
-      extender.run(tagger, tol);
-      extender.getProteoforms(proteoform_hits);
-      if (! out_tag_file.empty()) { FLASHTaggerFile::writeTags(tagger, extender, out_tagger_stream); }
-    }
-
-    std::sort(proteoform_hits.begin(), proteoform_hits.end(),
-              [](const ProteinHit& left, const ProteinHit& right) { return left.getScore() > right.getScore(); });
-
-    if (decoy_factor > 0)
-    {
-      double taget_count = 0;
-      double decoy_count = 0;
-
-      std::vector<ProteinHit> filtered_proteoform_hits;
-      filtered_proteoform_hits.reserve(proteoform_hits.size());
-      std::map<double, double> map_qvalue;
-
-      for (auto& hit : proteoform_hits)
-      {
-        bool is_decoy = hit.getAccession().hasPrefix("DECOY");
-        if (is_decoy) decoy_count += 1.0/decoy_factor;
-        else
-          taget_count++;
-
-        double tmp_qvalue = decoy_count / (decoy_count + taget_count);
-        map_qvalue[hit.getScore()] = std::min(1.0, tmp_qvalue);
-      }
-
-      double cummin = 1.0;
-      for (auto&& rit = map_qvalue.begin(); rit != map_qvalue.end(); ++rit)
-      {
-        cummin = std::min(rit->second, cummin);
-        rit->second = cummin;
-      }
-
-      for (auto& hit : proteoform_hits)
-      {
-        bool is_decoy = hit.getAccession().hasPrefix("DECOY");
-        double qvalue = map_qvalue[hit.getScore()];
-        hit.setMetaValue("qvalue", qvalue);
-        if (! keep_decoy && is_decoy) continue;
-        if (fdr < 1 && qvalue > fdr) continue;
-
-        filtered_proteoform_hits.push_back(hit);
-      }
-      proteoform_hits.swap(filtered_proteoform_hits);
+      FLASHTaggerFile::writeTags(tnt, flanking_mass_tol, out_tagger_stream);
     }
 
     if (! out_protein_file.empty())
@@ -242,10 +131,7 @@ protected:
       out_protein_stream.close();
     }
 
-    if (! out_tag_file.empty())
-    {
-      out_tagger_stream.close();
-    }
+    if (! out_tag_file.empty()) { out_tagger_stream.close(); }
 
     OPENMS_LOG_INFO << "FLASHTnT run complete. Now writing the results in output files ..." << endl;
 
