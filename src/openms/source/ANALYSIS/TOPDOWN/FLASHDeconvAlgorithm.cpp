@@ -71,10 +71,16 @@ namespace OpenMS
     defaults_.setValue("merging_method", 0,
                        "Method for spectra merging before deconvolution. 0: No merging  1: Average gaussian method to perform moving gaussian "
                        "averaging of spectra per MS level. Effective to increase "
-                       "proteoform ID sensitivity (in particular for Q-TOF datasets). For MSn, only the ones from the same precursor mass (subject to tolerance) are averaged. 2: Block method to perform merging of all spectra into a single "
+                       "proteoform ID sensitivity (in particular for Q-TOF datasets). For MSn, only the ones from the same precursor mass (subject to tolerance set by SD:tol) are averaged. 2: Block method to perform merging of all spectra into a single "
                        "one per MS level (e.g., for NativeMS datasets).");
     defaults_.setMinInt("merging_method", 0);
     defaults_.setMaxInt("merging_method", 2);
+
+    defaults_.setValue("merging_min_ms_level", 1, "Min MS level for merging");
+    defaults_.setValue("merging_max_ms_level", 2, "Max MS level for merging");
+    defaults_.setMinInt("merging_min_ms_level", 1);
+    defaults_.setMinInt("merging_max_ms_level", 1);
+
 
     auto sd_defaults = SpectralDeconvolution().getDefaults();
     sd_defaults.remove("allowed_isotope_error");
@@ -174,8 +180,9 @@ namespace OpenMS
     Param sm_param = merger.getDefaults();
     sm_param.setValue("mz_binning_width", tols_[ms_level - 1]);
     sm_param.setValue("mz_binning_width_unit", "ppm");
-
-    if (merge_spec_ == 1)
+    int min_ms_level = param_.getValue("merging_min_ms_level");
+    int max_ms_level = param_.getValue("merging_max_ms_level");
+    if (merge_spec_ == 1 && ms_level >= min_ms_level && ms_level <= max_ms_level)
     {
       if (ms_level == 1)
       {
@@ -207,9 +214,9 @@ namespace OpenMS
           }
         }
         // merge MS n using precursor method
-        OPENMS_LOG_INFO << "Averaging MS" << ms_level << " spectra from the same deconvolved precursor masses... " << std::endl;
+        OPENMS_LOG_INFO << "Merging MS" << ms_level << " spectra from the same deconvolved precursor masses... " << std::endl;
         sm_param.setValue("precursor_method:mz_tolerance", 0.2);
-        sm_param.setValue("precursor_method:rt_tolerance", 5.0);
+        sm_param.setValue("precursor_method:rt_tolerance", 30.0);
         merger.setParameters(sm_param);
         map.sortSpectra();
         merger.mergeSpectraPrecursors(map);

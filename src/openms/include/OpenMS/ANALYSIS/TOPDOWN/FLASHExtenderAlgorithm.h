@@ -59,10 +59,10 @@ namespace OpenMS
     /// implemented for DefaultParamHandler
     void setDefaultParams_();
   private:
-    void get_pro_masses_(const ProteinHit& hit, std::vector<double>& pro_masses, int mode);
-    double calculate_precursor_mass_(const ProteinHit& hit, int protein_start_position, int protein_end_position, const std::vector<int>& mod_starts, const std::vector<int>& mod_ends, const std::vector<double>& mod_masses) const;
+    static void get_pro_masses_(const ProteinHit& hit, std::vector<double>& pro_masses, int mode);
+    static double calculate_precursor_mass_(const ProteinHit& hit, int protein_start_position, int protein_end_position, const std::vector<int>& mod_starts, const std::vector<int>& mod_ends, const std::vector<double>& mod_masses) ;
     void define_nodes_(const FLASHTaggerAlgorithm& tagger, MSSpectrum& node_spec, MSSpectrum& tol_spec, double max_mass, double precursor_mass, int mode);
-    void run_(const FLASHTaggerAlgorithm& tagger, const ProteinHit& hit,
+    void run_(const ProteinHit& hit,
               const MSSpectrum& node_spec, const MSSpectrum& tol_spec, const std::vector<double>& pro_masses,
               boost::dynamic_bitset<>& visited, double precursor_mass,
               std::map<int, std::vector<Size>>& all_paths_per_mode, int mode); // per hit

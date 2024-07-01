@@ -79,12 +79,12 @@ namespace OpenMS
 
         for (const auto& mz : tag.getMzs())
         {
-          fs << std::to_string(mz) << ";";
+          fs << std::to_string(mz) << ",";
         }
         fs << "\t";
         for (auto i = 0; i < tag.getLength(); i++)
         {
-          fs << std::to_string(tag.getScore(i)) << ";";
+          fs << std::to_string(tag.getScore(i)) << ",";
         }
         fs << "\n";
       }
