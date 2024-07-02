@@ -50,31 +50,31 @@ jobs:
             compiler: cl.exe
             compiler_ver: default
 
-          - os: macos-13
-            # Since the appleclang version is dependent on the XCode versions that are installed
-            #  on the GH runners, use this as the choice for a specific version
-            # TODO currently unused but XCode/appleclang is the default
-            compiler: xcode
-            # TODO implement support for other versions
-            compiler_ver: 14.2
+          # - os: macos-13
+          #   # Since the appleclang version is dependent on the XCode versions that are installed
+          #   #  on the GH runners, use this as the choice for a specific version
+          #   # TODO currently unused but XCode/appleclang is the default
+          #   compiler: xcode
+          #   # TODO implement support for other versions
+          #   compiler_ver: 14.2
 
-          - os: macos-14
-            # Since the appleclang version is dependent on the XCode versions that are installed
-            #  on the GH runners, use this as the choice for a specific version
-            # TODO currently unused but XCode/appleclang is the default
-            compiler: xcode
-            # TODO implement support for other versions
-            compiler_ver: 15.0.1
+          # - os: macos-14
+          #   # Since the appleclang version is dependent on the XCode versions that are installed
+          #   #  on the GH runners, use this as the choice for a specific version
+          #   # TODO currently unused but XCode/appleclang is the default
+          #   compiler: xcode
+          #   # TODO implement support for other versions
+          #   compiler_ver: 15.0.1
 
-          # Make sure the compilers are available in that version on the GH runners
-          # We are not installing anything.
-          - os: ubuntu-22.04
-            compiler: g++
-            compiler_ver: 11
+          # # Make sure the compilers are available in that version on the GH runners
+          # # We are not installing anything.
+          # - os: ubuntu-22.04
+          #   compiler: g++
+          #   compiler_ver: 11
 
-          - os: ubuntu-22.04
-            compiler: clang++
-            compiler_ver: 15
+          # - os: ubuntu-22.04
+          #   compiler: clang++
+          #   compiler_ver: 15
     outputs:
       version_number: ${{ steps.create_changelog.outputs.version_number }}
 
@@ -481,562 +481,562 @@ jobs:
         path: |
           ${{ github.workspace }}/OpenMS/bld/doc/documentation.zip
 
-    - name: Generate KNIME descriptors and payloads
-    # We never want to build the KNIME update site on our second Ubuntu + Clang matrix entry even if inputs.knime is true, so we check for that specific os + compiler combo
-      if: steps.set-vars.outputs.pkg_type != 'none' || ( inputs.knime && !(startsWith(matrix.os, 'ubuntu') && startsWith(matrix.compiler, 'clang++') ) )
-      shell: bash
-      run: |
-        cd $GITHUB_WORKSPACE/OpenMS/bld/
-        # TODO use CTest or script to upload to CDash?
-        cmake -DSEARCH_ENGINES_DIRECTORY="$GITHUB_WORKSPACE/_thirdparty" -DENABLE_PREPARE_KNIME_PACKAGE=ON .
-        cmake --build . --target prepare_knime_package
+  #   - name: Generate KNIME descriptors and payloads
+  #   # We never want to build the KNIME update site on our second Ubuntu + Clang matrix entry even if inputs.knime is true, so we check for that specific os + compiler combo
+  #     if: steps.set-vars.outputs.pkg_type != 'none' || ( inputs.knime && !(startsWith(matrix.os, 'ubuntu') && startsWith(matrix.compiler, 'clang++') ) )
+  #     shell: bash
+  #     run: |
+  #       cd $GITHUB_WORKSPACE/OpenMS/bld/
+  #       # TODO use CTest or script to upload to CDash?
+  #       cmake -DSEARCH_ENGINES_DIRECTORY="$GITHUB_WORKSPACE/_thirdparty" -DENABLE_PREPARE_KNIME_PACKAGE=ON .
+  #       cmake --build . --target prepare_knime_package
         
-    - name: Upload KNIME payload and descriptors as artifacts
-    # We never want to build the KNIME update site on our second Ubuntu + Clang matrix entry even if inputs.knime is true, so we check for that specific os + compiler combo
-      if: steps.set-vars.outputs.pkg_type != 'none' ||  ( inputs.knime && !(startsWith(matrix.os, 'ubuntu') && startsWith(matrix.compiler, 'clang++') ) )
-      uses: actions/upload-artifact@v4
-      with:
-        name: ${{ format('knime-{0}{1}', steps.set-vars.outputs.tp_folder, runner.arch == 'arm64' && '-arm64' || '') }}
-        path: ${{ github.workspace }}/OpenMS/bld/knime/**/*
+  #   - name: Upload KNIME payload and descriptors as artifacts
+  #   # We never want to build the KNIME update site on our second Ubuntu + Clang matrix entry even if inputs.knime is true, so we check for that specific os + compiler combo
+  #     if: steps.set-vars.outputs.pkg_type != 'none' ||  ( inputs.knime && !(startsWith(matrix.os, 'ubuntu') && startsWith(matrix.compiler, 'clang++') ) )
+  #     uses: actions/upload-artifact@v4
+  #     with:
+  #       name: ${{ format('knime-{0}{1}', steps.set-vars.outputs.tp_folder, runner.arch == 'arm64' && '-arm64' || '') }}
+  #       path: ${{ github.workspace }}/OpenMS/bld/knime/**/*
 
-  deploy-installer:
-    if: github.ref == 'refs/heads/nightly' || contains(github.ref, 'release/') || inputs.package
-    runs-on: ubuntu-latest
-    needs: build-and-test
-    outputs:
-      release_text_contents: ${{ steps.mk_release_txt.outputs.release_text_contents }}
+  # deploy-installer:
+  #   if: github.ref == 'refs/heads/nightly' || contains(github.ref, 'release/') || inputs.package
+  #   runs-on: ubuntu-latest
+  #   needs: build-and-test
+  #   outputs:
+  #     release_text_contents: ${{ steps.mk_release_txt.outputs.release_text_contents }}
 
 
-    steps:
-      - name: Extract branch/PR infos
-        shell: bash
-        run: echo "RUN_NAME=${{ github.event.pull_request && github.event.number || github.ref_name }}" >> $GITHUB_ENV
+  #   steps:
+  #     - name: Extract branch/PR infos
+  #       shell: bash
+  #       run: echo "RUN_NAME=${{ github.event.pull_request && github.event.number || github.ref_name }}" >> $GITHUB_ENV
       
-      # WOW, you cannot download with wildcard. INCREDIBLY ANNOYING https://github.com/actions/download-artifact/issues/6
-      # Maybe in the next 3 years......
-      - name: Download macOS installer artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: installer-MacOS
+  #     # WOW, you cannot download with wildcard. INCREDIBLY ANNOYING https://github.com/actions/download-artifact/issues/6
+  #     # Maybe in the next 3 years......
+  #     - name: Download macOS installer artifacts
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: installer-MacOS
 
-      - name: Download macOS Silicon installer artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: installer-MacOS-arm64
+  #     - name: Download macOS Silicon installer artifacts
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: installer-MacOS-arm64
 
-      - name: Download win installer artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: installer-Windows
+  #     - name: Download win installer artifacts
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: installer-Windows
           
-      - name: Download lnx installer artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: installer-Linux
+  #     - name: Download lnx installer artifacts
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: installer-Linux
 
-      - name: Download source archive as artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: OpenMS-${{ steps.create_changelog.outputs.version_number }}.tar.gz
+  #     - name: Download source archive as artifact
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: OpenMS-${{ steps.create_changelog.outputs.version_number }}.tar.gz
 
-      - name: Download changelog as artifact
-        if: inputs.do_release
-        uses: actions/download-artifact@v4
-        with:
-          name: changelog.txt
+  #     - name: Download changelog as artifact
+  #       if: inputs.do_release
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: changelog.txt
       
-      - name: Upload installer
-        shell: bash
-        env:
-          PASS: ${{ secrets.ARCHIVE_RRSYNC_SSH }}
-          USER: ${{ secrets.ARCHIVE_RRSYNC_USER }}
-          HOST: ${{ secrets.ARCHIVE_RRSYNC_HOST }}
-        run: |
-          echo "Upload"
-          if [[ "${{ github.ref_name }}" == "nightly" ]]; then
-            folder=nightly
-          elif [[ "${{ github.ref_name }}" == release/* ]]; then
-            folder=${{ github.ref_name }}
-          else
-            folder=experimental/${{ github.ref_name }}
-          fi
-          echo "Uploading installers to: " $folder
+  #     - name: Upload installer
+  #       shell: bash
+  #       env:
+  #         PASS: ${{ secrets.ARCHIVE_RRSYNC_SSH }}
+  #         USER: ${{ secrets.ARCHIVE_RRSYNC_USER }}
+  #         HOST: ${{ secrets.ARCHIVE_RRSYNC_HOST }}
+  #       run: |
+  #         echo "Upload"
+  #         if [[ "${{ github.ref_name }}" == "nightly" ]]; then
+  #           folder=nightly
+  #         elif [[ "${{ github.ref_name }}" == release/* ]]; then
+  #           folder=${{ github.ref_name }}
+  #         else
+  #           folder=experimental/${{ github.ref_name }}
+  #         fi
+  #         echo "Uploading installers to: " $folder
 
-          mkdir -p ~/.ssh/
-          echo "$PASS" > ~/.ssh/private.key
-          sudo chmod 600 ~/.ssh/private.key
-          rsync --progress -avz -e "ssh -i ~/.ssh/private.key -o StrictHostKeyChecking=no" $GITHUB_WORKSPACE/* "$USER@$HOST:/OpenMSInstaller/${folder}"
+  #         mkdir -p ~/.ssh/
+  #         echo "$PASS" > ~/.ssh/private.key
+  #         sudo chmod 600 ~/.ssh/private.key
+  #         rsync --progress -avz -e "ssh -i ~/.ssh/private.key -o StrictHostKeyChecking=no" $GITHUB_WORKSPACE/* "$USER@$HOST:/OpenMSInstaller/${folder}"
         
-      - name: Make installer latest
-        if: inputs.mark_as_latest
-        shell: bash
-        env:
-          PASS: ${{ secrets.ARCHIVE_RRSYNC_SSH }}
-          USER: ${{ secrets.ARCHIVE_RRSYNC_USER }}
-          HOST: ${{ secrets.ARCHIVE_RRSYNC_HOST }}
-        run: |
-          if [[ "${{ github.ref_name }}" == release/* ]]; then
-            folder=${{ github.ref_name }}
-          else
-            echo refusing to mark non-release branch as latest
-            exit 1
-          fi
+  #     - name: Make installer latest
+  #       if: inputs.mark_as_latest
+  #       shell: bash
+  #       env:
+  #         PASS: ${{ secrets.ARCHIVE_RRSYNC_SSH }}
+  #         USER: ${{ secrets.ARCHIVE_RRSYNC_USER }}
+  #         HOST: ${{ secrets.ARCHIVE_RRSYNC_HOST }}
+  #       run: |
+  #         if [[ "${{ github.ref_name }}" == release/* ]]; then
+  #           folder=${{ github.ref_name }}
+  #         else
+  #           echo refusing to mark non-release branch as latest
+  #           exit 1
+  #         fi
 
-          mkdir -p ~/.ssh/
-          echo "$PASS" > ~/.ssh/private.key
-          sudo chmod 600 ~/.ssh/private.key
-          ln -s ./$folder latest  #create link to the release folder
-          rsync --progress -avz -e "ssh -i ~/.ssh/private.key -o StrictHostKeyChecking=no" latest "$USER@$HOST:/OpenMSInstaller/release"
+  #         mkdir -p ~/.ssh/
+  #         echo "$PASS" > ~/.ssh/private.key
+  #         sudo chmod 600 ~/.ssh/private.key
+  #         ln -s ./$folder latest  #create link to the release folder
+  #         rsync --progress -avz -e "ssh -i ~/.ssh/private.key -o StrictHostKeyChecking=no" latest "$USER@$HOST:/OpenMSInstaller/release"
 
-      - name: create RELEASE_TEXT
-        id: mk_release_txt
-        if: inputs.do_release
-        shell: bash
-        run: |
-            #TODO Handle changelog_params
-            ## Header
-            cat > releaseTextHeader.txt << EOF
-            Dear OpenMS-Users,
+  #     - name: create RELEASE_TEXT
+  #       id: mk_release_txt
+  #       if: inputs.do_release
+  #       shell: bash
+  #       run: |
+  #           #TODO Handle changelog_params
+  #           ## Header
+  #           cat > releaseTextHeader.txt << EOF
+  #           Dear OpenMS-Users,
 
-            we are proud to announce the release of OpenMS ${{ needs.build-and-test.outputs.version_number }}. Grab it <a href="https://abibuilder.cs.uni-tuebingen.de/archive/openms/OpenMSInstaller/release/${{ needs.build-and-test.outputs.version_number }}">here</a>
+  #           we are proud to announce the release of OpenMS ${{ needs.build-and-test.outputs.version_number }}. Grab it <a href="https://abibuilder.cs.uni-tuebingen.de/archive/openms/OpenMSInstaller/release/${{ needs.build-and-test.outputs.version_number }}">here</a>
 
-            In the following you find all important changes to the previous version:
+  #           In the following you find all important changes to the previous version:
 
-            EOF
+  #           EOF
 
-            ## Header
-            cat > releaseTextParamHeader.txt << EOF
+  #           ## Header
+  #           cat > releaseTextParamHeader.txt << EOF
 
-            Additionally, the following changes were made to parameters of our TOPP tools:
+  #           Additionally, the following changes were made to parameters of our TOPP tools:
 
-            EOF
+  #           EOF
 
-            ##Footer
-            cat > releaseTextFooter.txt << EOF
+  #           ##Footer
+  #           cat > releaseTextFooter.txt << EOF
 
-            Best regards,
-            The OpenMS-Developers
+  #           Best regards,
+  #           The OpenMS-Developers
 
-            EOF
-            RELEASE_TEXT=$(cat releaseTextHeader.txt $GITHUB_WORKSPACE/changelog.txt releaseTextFooter.txt)
-            RELEASE_TEXT_ESCAPED_QUOTES="${RELEASE_TEXT//\"/\\\"}"
-            cat releaseTextHeader.txt $GITHUB_WORKSPACE/changelog.txt releaseTextFooter.txt > RELEASE_TEXT_GH.md
-            echo release_text_contents=`base64 -w0 RELEASE_TEXT_GH.md` >> $GITHUB_OUTPUT
+  #           EOF
+  #           RELEASE_TEXT=$(cat releaseTextHeader.txt $GITHUB_WORKSPACE/changelog.txt releaseTextFooter.txt)
+  #           RELEASE_TEXT_ESCAPED_QUOTES="${RELEASE_TEXT//\"/\\\"}"
+  #           cat releaseTextHeader.txt $GITHUB_WORKSPACE/changelog.txt releaseTextFooter.txt > RELEASE_TEXT_GH.md
+  #           echo release_text_contents=`base64 -w0 RELEASE_TEXT_GH.md` >> $GITHUB_OUTPUT
       
-      - name: run GHA release action.
-        id: create_release
-        if: inputs.do_release
-        uses: ncipollo/release-action@v1.14.0
-        with: 
-          bodyFile: RELEASE_TEXT_GH.md
-          tag: ${{ github.ref_name }}
-          draft: true
-          artifactErrorsFailBuild: true
-          makeLatest: ${{ inputs.mark_as_latest }}
-          artifacts:
-            ${{ github.workspace }}/*.exe, ${{ github.workspace }}/*.deb, ${{ github.workspace }}/*.pkg, ${{ github.workspace }}/*.tar.gz
+  #     - name: run GHA release action.
+  #       id: create_release
+  #       if: inputs.do_release
+  #       uses: ncipollo/release-action@v1.14.0
+  #       with: 
+  #         bodyFile: RELEASE_TEXT_GH.md
+  #         tag: ${{ github.ref_name }}
+  #         draft: true
+  #         artifactErrorsFailBuild: true
+  #         makeLatest: ${{ inputs.mark_as_latest }}
+  #         artifacts:
+  #           ${{ github.workspace }}/*.exe, ${{ github.workspace }}/*.deb, ${{ github.workspace }}/*.pkg, ${{ github.workspace }}/*.tar.gz
 
 
-  deploy-docs:
-    if: github.ref == 'refs/heads/nightly' || contains(github.ref, 'release/') || inputs.package
-    runs-on: ubuntu-latest
-    needs: build-and-test
-    steps:
-      - name: Extract branch/PR infos
-        shell: bash
-        run: echo "RUN_NAME=${{ github.event.pull_request && github.event.number || github.ref_name }}" >> $GITHUB_ENV
+  # deploy-docs:
+  #   if: github.ref == 'refs/heads/nightly' || contains(github.ref, 'release/') || inputs.package
+  #   runs-on: ubuntu-latest
+  #   needs: build-and-test
+  #   steps:
+  #     - name: Extract branch/PR infos
+  #       shell: bash
+  #       run: echo "RUN_NAME=${{ github.event.pull_request && github.event.number || github.ref_name }}" >> $GITHUB_ENV
     
-      - name: Download Documentation
-        uses: actions/download-artifact@v4
-        with:
-          name: documentation
-          path: docs
+  #     - name: Download Documentation
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: documentation
+  #         path: docs
 
-      - name: Upload Documentation
-        shell: bash
-        env:
-          PASS: ${{ secrets.ARCHIVE_RRSYNC_SSH }}
-          USER: ${{ secrets.ARCHIVE_RRSYNC_USER }}
-          HOST: ${{ secrets.ARCHIVE_RRSYNC_HOST }}
-        run: |
-          unzip $GITHUB_WORKSPACE/docs/documentation.zip -d $GITHUB_WORKSPACE/docs
-          rm $GITHUB_WORKSPACE/docs/documentation.zip
-          echo "Upload"
-          if [[ "${{ github.ref_name }}" == "nightly" ]]; then
-            folder=nightly
-          elif [[ "${{ github.ref_name }}" == release/* ]]; then
-            folder=release/${{ github.ref_name }}
-          else
-            folder=experimental/${{ github.ref_name }}
-          fi
+  #     - name: Upload Documentation
+  #       shell: bash
+  #       env:
+  #         PASS: ${{ secrets.ARCHIVE_RRSYNC_SSH }}
+  #         USER: ${{ secrets.ARCHIVE_RRSYNC_USER }}
+  #         HOST: ${{ secrets.ARCHIVE_RRSYNC_HOST }}
+  #       run: |
+  #         unzip $GITHUB_WORKSPACE/docs/documentation.zip -d $GITHUB_WORKSPACE/docs
+  #         rm $GITHUB_WORKSPACE/docs/documentation.zip
+  #         echo "Upload"
+  #         if [[ "${{ github.ref_name }}" == "nightly" ]]; then
+  #           folder=nightly
+  #         elif [[ "${{ github.ref_name }}" == release/* ]]; then
+  #           folder=release/${{ github.ref_name }}
+  #         else
+  #           folder=experimental/${{ github.ref_name }}
+  #         fi
 
-          mkdir -p ~/.ssh/
-          echo "$PASS" > ~/.ssh/private.key
-          sudo chmod 600 ~/.ssh/private.key
+  #         mkdir -p ~/.ssh/
+  #         echo "$PASS" > ~/.ssh/private.key
+  #         sudo chmod 600 ~/.ssh/private.key
 
-          # Upload documentation
-          rsync --progress -avz -e "ssh -i ~/.ssh/private.key -o StrictHostKeyChecking=no" $GITHUB_WORKSPACE/docs/ "$USER@$HOST:/Documentation/${folder}"
+  #         # Upload documentation
+  #         rsync --progress -avz -e "ssh -i ~/.ssh/private.key -o StrictHostKeyChecking=no" $GITHUB_WORKSPACE/docs/ "$USER@$HOST:/Documentation/${folder}"
 
-      - name: Make documentation latest
-        if: inputs.mark_as_latest
-        shell: bash
-        env:
-          PASS: ${{ secrets.ARCHIVE_RRSYNC_SSH }}
-          USER: ${{ secrets.ARCHIVE_RRSYNC_USER }}
-          HOST: ${{ secrets.ARCHIVE_RRSYNC_HOST }}
-        run: |
-          if [[ "${{ github.ref_name }}" == release/* ]]; then
-            folder=${{ github.ref_name }}
-          else
-            echo refusing to mark non-release branch as latest
-            exit 1
-          fi
+  #     - name: Make documentation latest
+  #       if: inputs.mark_as_latest
+  #       shell: bash
+  #       env:
+  #         PASS: ${{ secrets.ARCHIVE_RRSYNC_SSH }}
+  #         USER: ${{ secrets.ARCHIVE_RRSYNC_USER }}
+  #         HOST: ${{ secrets.ARCHIVE_RRSYNC_HOST }}
+  #       run: |
+  #         if [[ "${{ github.ref_name }}" == release/* ]]; then
+  #           folder=${{ github.ref_name }}
+  #         else
+  #           echo refusing to mark non-release branch as latest
+  #           exit 1
+  #         fi
 
-          mkdir -p ~/.ssh/
-          echo "$PASS" > ~/.ssh/private.key
-          sudo chmod 600 ~/.ssh/private.key
-          ln -s ./$folder latest  #we can use the same link from above.
-          rsync --progress -avz -e "ssh -i ~/.ssh/private.key -o StrictHostKeyChecking=no" latest "$USER@$HOST:/Documentation/release
+  #         mkdir -p ~/.ssh/
+  #         echo "$PASS" > ~/.ssh/private.key
+  #         sudo chmod 600 ~/.ssh/private.key
+  #         ln -s ./$folder latest  #we can use the same link from above.
+  #         rsync --progress -avz -e "ssh -i ~/.ssh/private.key -o StrictHostKeyChecking=no" latest "$USER@$HOST:/Documentation/release
       
-        # TODO create softlinks to latest nightly
-        # TODO create and upload file hashes, at least for release candidate
+  #       # TODO create softlinks to latest nightly
+  #       # TODO create and upload file hashes, at least for release candidate
 
         
-  build-deploy-knime-updatesite:
-    env:
-      KNIME: 5.1
-      JAVA_VER: 17
-      PLUGIN_BUILD: ${{ github.workspace }}/plugin-build
-      PLUGIN_SOURCE: ${{ github.workspace }}/plugin-source
-    if: github.ref == 'refs/heads/nightly' || contains(github.ref, 'release/') || inputs.knime
-    runs-on: ubuntu-latest
-    needs: build-and-test
-    steps:
-      - name: Extract branch/PR infos
-        shell: bash
-        run: echo "RUN_NAME=${{ github.event.pull_request && github.event.number || github.ref_name }}" >> $GITHUB_ENV
+  # build-deploy-knime-updatesite:
+  #   env:
+  #     KNIME: 5.1
+  #     JAVA_VER: 17
+  #     PLUGIN_BUILD: ${{ github.workspace }}/plugin-build
+  #     PLUGIN_SOURCE: ${{ github.workspace }}/plugin-source
+  #   if: github.ref == 'refs/heads/nightly' || contains(github.ref, 'release/') || inputs.knime
+  #   runs-on: ubuntu-latest
+  #   needs: build-and-test
+  #   steps:
+  #     - name: Extract branch/PR infos
+  #       shell: bash
+  #       run: echo "RUN_NAME=${{ github.event.pull_request && github.event.number || github.ref_name }}" >> $GITHUB_ENV
 
-      # WOW, you cannot download with wildcard. INCREDIBLY ANNOYING https://github.com/actions/download-artifact/issues/6
-      # Maybe in the next 3 years......
-      - name: Download macOS installer artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: knime-MacOS
-          path: ${{ env.PLUGIN_SOURCE }}
-      - name: Download macOS Silicon installer artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: knime-MacOS-arm64
-          path: ${{ env.PLUGIN_SOURCE }}
-      - name: Download win installer artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: knime-Windows
-          path: ${{ env.PLUGIN_SOURCE }}
+  #     # WOW, you cannot download with wildcard. INCREDIBLY ANNOYING https://github.com/actions/download-artifact/issues/6
+  #     # Maybe in the next 3 years......
+  #     - name: Download macOS installer artifacts
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: knime-MacOS
+  #         path: ${{ env.PLUGIN_SOURCE }}
+  #     - name: Download macOS Silicon installer artifacts
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: knime-MacOS-arm64
+  #         path: ${{ env.PLUGIN_SOURCE }}
+  #     - name: Download win installer artifacts
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: knime-Windows
+  #         path: ${{ env.PLUGIN_SOURCE }}
 
-      - name: Download lnx installer artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: knime-Linux
-          path: ${{ env.PLUGIN_SOURCE }}
+  #     - name: Download lnx installer artifacts
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: knime-Linux
+  #         path: ${{ env.PLUGIN_SOURCE }}
 
-      # Should be the default. 
-      - name: Set up JDK
-        uses: actions/setup-java@v4
-        with:
-          java-version: ${{ env.JAVA_VER }}
-          distribution: 'temurin'
+  #     # Should be the default. 
+  #     - name: Set up JDK
+  #       uses: actions/setup-java@v4
+  #       with:
+  #         java-version: ${{ env.JAVA_VER }}
+  #         distribution: 'temurin'
 
-      - name: Generate KNIME plugin sources
-        shell: bash
-        run: |
-            ## Setup functions
+  #     - name: Generate KNIME plugin sources
+  #       shell: bash
+  #       run: |
+  #           ## Setup functions
 
-            function replace_qualifier {
-              find $1 -name MANIFEST.MF -exec sed -i -e "s/qualifier/$2/g" {} \;
-            }
+  #           function replace_qualifier {
+  #             find $1 -name MANIFEST.MF -exec sed -i -e "s/qualifier/$2/g" {} \;
+  #           }
 
-            ## replace only first occurence of SNAPSHOT (second is the version of the parent pom).
-            function replace_snapshot {
-              find $1 -name pom.xml -exec sed -i -e "1 h;1! H;\$! d;$ {g;s/-SNAPSHOT/\.$2/;}" {} \;
-            }
+  #           ## replace only first occurence of SNAPSHOT (second is the version of the parent pom).
+  #           function replace_snapshot {
+  #             find $1 -name pom.xml -exec sed -i -e "1 h;1! H;\$! d;$ {g;s/-SNAPSHOT/\.$2/;}" {} \;
+  #           }
 
-            ## Setup variables
-            ## GKN git clone (see SCM subfolder settings above)
-            GKN_PLUGIN_PATH=${GITHUB_WORKSPACE}/GenericKnimeNodes
-            git clone -q https://github.com/genericworkflownodes/GenericKnimeNodes/ --branch develop --single-branch $GKN_PLUGIN_PATH
+  #           ## Setup variables
+  #           ## GKN git clone (see SCM subfolder settings above)
+  #           GKN_PLUGIN_PATH=${GITHUB_WORKSPACE}/GenericKnimeNodes
+  #           git clone -q https://github.com/genericworkflownodes/GenericKnimeNodes/ --branch develop --single-branch $GKN_PLUGIN_PATH
 
-            ## Create folders
-            mkdir ${PLUGIN_BUILD}
-            PLUGIN_SOURCE_CONTRIB_PLUGINS=${PLUGIN_SOURCE}/de.openms.feature/contributing-plugins
-            mkdir -p ${PLUGIN_SOURCE_CONTRIB_PLUGINS}
-            PLUGIN_SOURCE_THIRDPARTY_CONTRIB_PLUGINS=${PLUGIN_SOURCE}/de.openms.thirdparty.feature/contributing-plugins
-            mkdir -p ${PLUGIN_SOURCE_THIRDPARTY_CONTRIB_PLUGINS}
+  #           ## Create folders
+  #           mkdir ${PLUGIN_BUILD}
+  #           PLUGIN_SOURCE_CONTRIB_PLUGINS=${PLUGIN_SOURCE}/de.openms.feature/contributing-plugins
+  #           mkdir -p ${PLUGIN_SOURCE_CONTRIB_PLUGINS}
+  #           PLUGIN_SOURCE_THIRDPARTY_CONTRIB_PLUGINS=${PLUGIN_SOURCE}/de.openms.thirdparty.feature/contributing-plugins
+  #           mkdir -p ${PLUGIN_SOURCE_THIRDPARTY_CONTRIB_PLUGINS}
 
-            ## We check exemplarily in de.openms.lib. It should never happen that one platform produced one plugin but not the other.
-            pushd ${PLUGIN_SOURCE}/de.openms.feature/de.openms.lib/
-              amount=$(ls -1 payload | wc -l)
-              if [ $amount -le 2 ]; then
-                  echo "Not enough payloads for each platform. Aborting..."
-                  exit 1
-              fi
-            popd
+  #           ## We check exemplarily in de.openms.lib. It should never happen that one platform produced one plugin but not the other.
+  #           pushd ${PLUGIN_SOURCE}/de.openms.feature/de.openms.lib/
+  #             amount=$(ls -1 payload | wc -l)
+  #             if [ $amount -le 2 ]; then
+  #                 echo "Not enough payloads for each platform. Aborting..."
+  #                 exit 1
+  #             fi
+  #           popd
 
-            ## Clone the contributing plugins into the plugin source folder and update their "last modified" date to
-            ## the last git commit
-            pushd ${PLUGIN_SOURCE_CONTRIB_PLUGINS}
+  #           ## Clone the contributing plugins into the plugin source folder and update their "last modified" date to
+  #           ## the last git commit
+  #           pushd ${PLUGIN_SOURCE_CONTRIB_PLUGINS}
 
-              git clone -q https://github.com/OpenMS/de.openms.knime --branch develop --single-branch .
-              CONTRIBUTING_DATE=$(git log -1 --format="%cd" --date="format:%Y%m%d%H%M")
-              echo "Setting qualifier/SNAPSHOT for de.openms.knime contrib plugins to ${CONTRIBUTING_DATE}!"
-              git log -1 --format="%cd" --date=iso
+  #             git clone -q https://github.com/OpenMS/de.openms.knime --branch develop --single-branch .
+  #             CONTRIBUTING_DATE=$(git log -1 --format="%cd" --date="format:%Y%m%d%H%M")
+  #             echo "Setting qualifier/SNAPSHOT for de.openms.knime contrib plugins to ${CONTRIBUTING_DATE}!"
+  #             git log -1 --format="%cd" --date=iso
               
-              # TODO just iterate over all folders?
-              replace_qualifier de.openms.knime.startupCheck ${CONTRIBUTING_DATE}
-              replace_qualifier de.openms.knime.mzTab ${CONTRIBUTING_DATE}
-              replace_qualifier de.openms.knime.textexporter_reader ${CONTRIBUTING_DATE}
-              replace_qualifier de.openms.knime.importers ${CONTRIBUTING_DATE}
-              replace_qualifier de.openms.knime.qchandling ${CONTRIBUTING_DATE}
-              replace_qualifier de.openms.thirdparty.knime.startupCheck ${CONTRIBUTING_DATE}
-              replace_snapshot de.openms.knime.startupCheck ${CONTRIBUTING_DATE}
-              replace_snapshot de.openms.knime.mzTab ${CONTRIBUTING_DATE}
-              replace_snapshot de.openms.knime.textexporter_reader ${CONTRIBUTING_DATE}
-              replace_snapshot de.openms.knime.importers ${CONTRIBUTING_DATE}
-              replace_snapshot de.openms.knime.qchandling ${CONTRIBUTING_DATE}
-              replace_snapshot de.openms.thirdparty.knime.startupCheck ${CONTRIBUTING_DATE}
+  #             # TODO just iterate over all folders?
+  #             replace_qualifier de.openms.knime.startupCheck ${CONTRIBUTING_DATE}
+  #             replace_qualifier de.openms.knime.mzTab ${CONTRIBUTING_DATE}
+  #             replace_qualifier de.openms.knime.textexporter_reader ${CONTRIBUTING_DATE}
+  #             replace_qualifier de.openms.knime.importers ${CONTRIBUTING_DATE}
+  #             replace_qualifier de.openms.knime.qchandling ${CONTRIBUTING_DATE}
+  #             replace_qualifier de.openms.thirdparty.knime.startupCheck ${CONTRIBUTING_DATE}
+  #             replace_snapshot de.openms.knime.startupCheck ${CONTRIBUTING_DATE}
+  #             replace_snapshot de.openms.knime.mzTab ${CONTRIBUTING_DATE}
+  #             replace_snapshot de.openms.knime.textexporter_reader ${CONTRIBUTING_DATE}
+  #             replace_snapshot de.openms.knime.importers ${CONTRIBUTING_DATE}
+  #             replace_snapshot de.openms.knime.qchandling ${CONTRIBUTING_DATE}
+  #             replace_snapshot de.openms.thirdparty.knime.startupCheck ${CONTRIBUTING_DATE}
               
-              # move to thirdparty feature so they get installed together
-              mv de.openms.thirdparty.knime.startupCheck ${PLUGIN_SOURCE_THIRDPARTY_CONTRIB_PLUGINS}/de.openms.thirdparty.knime.startupCheck
-              rm -r .git
-              rm -r de.openms.knime.startupCheck.test
+  #             # move to thirdparty feature so they get installed together
+  #             mv de.openms.thirdparty.knime.startupCheck ${PLUGIN_SOURCE_THIRDPARTY_CONTRIB_PLUGINS}/de.openms.thirdparty.knime.startupCheck
+  #             rm -r .git
+  #             rm -r de.openms.knime.startupCheck.test
 
-            popd
+  #           popd
 
-            ## New contrib plugin: de.openms.knime.dynamicJSViewers
-            git clone -q https://github.com/genericworkflownodes/de.openms.knime.dynamicJSViewers --branch master --single-branch
-            pushd de.openms.knime.dynamicJSViewers
-              CONTRIBUTING_DATE=$(git log -1 --format="%cd" --date="format:%Y%m%d%H%M")
-            popd
+  #           ## New contrib plugin: de.openms.knime.dynamicJSViewers
+  #           git clone -q https://github.com/genericworkflownodes/de.openms.knime.dynamicJSViewers --branch master --single-branch
+  #           pushd de.openms.knime.dynamicJSViewers
+  #             CONTRIBUTING_DATE=$(git log -1 --format="%cd" --date="format:%Y%m%d%H%M")
+  #           popd
 
-            mv de.openms.knime.dynamicJSViewers/de.openms.knime.dynamicJSViewers.feature ${PLUGIN_SOURCE}/
-            mkdir ${PLUGIN_SOURCE}/de.openms.knime.dynamicJSViewers.feature/contributing-plugins
-            rm -rf ${PLUGIN_SOURCE}/de.openms.knime.dynamicJSViewers.feature/.settings
-            mv de.openms.knime.dynamicJSViewers/de.openms.knime.dynamicJSViewers ${PLUGIN_SOURCE}/de.openms.knime.dynamicJSViewers.feature/contributing-plugins/
+  #           mv de.openms.knime.dynamicJSViewers/de.openms.knime.dynamicJSViewers.feature ${PLUGIN_SOURCE}/
+  #           mkdir ${PLUGIN_SOURCE}/de.openms.knime.dynamicJSViewers.feature/contributing-plugins
+  #           rm -rf ${PLUGIN_SOURCE}/de.openms.knime.dynamicJSViewers.feature/.settings
+  #           mv de.openms.knime.dynamicJSViewers/de.openms.knime.dynamicJSViewers ${PLUGIN_SOURCE}/de.openms.knime.dynamicJSViewers.feature/contributing-plugins/
 
-            pushd ${PLUGIN_SOURCE}/de.openms.knime.dynamicJSViewers.feature/contributing-plugins/
-              echo "Setting qualifier/SNAPSHOT for de.openms.knime.dynamicJSViewers to ${CONTRIBUTING_DATE}"
-              replace_qualifier de.openms.knime.dynamicJSViewers ${CONTRIBUTING_DATE}
-              replace_snapshot de.openms.knime.dynamicJSViewers ${CONTRIBUTING_DATE}
-            popd
+  #           pushd ${PLUGIN_SOURCE}/de.openms.knime.dynamicJSViewers.feature/contributing-plugins/
+  #             echo "Setting qualifier/SNAPSHOT for de.openms.knime.dynamicJSViewers to ${CONTRIBUTING_DATE}"
+  #             replace_qualifier de.openms.knime.dynamicJSViewers ${CONTRIBUTING_DATE}
+  #             replace_snapshot de.openms.knime.dynamicJSViewers ${CONTRIBUTING_DATE}
+  #           popd
 
-            rm -rf de.openms.knime.dynamicJSViewers
+  #           rm -rf de.openms.knime.dynamicJSViewers
 
-            # build the plugin source code
-            cd ${GKN_PLUGIN_PATH}
-            ant -Dplugin.dir=${PLUGIN_SOURCE} -Dgenerate.extra.arguments="-r -u" -Dcustom.plugin.generator.target=${PLUGIN_BUILD}
+  #           # build the plugin source code
+  #           cd ${GKN_PLUGIN_PATH}
+  #           ant -Dplugin.dir=${PLUGIN_SOURCE} -Dgenerate.extra.arguments="-r -u" -Dcustom.plugin.generator.target=${PLUGIN_BUILD}
 
-      - name: Build KNIME update site
-        shell: bash
-        run: |
-          # fix folder structure
-          mv ${PLUGIN_BUILD}/.mvn ./
-          mv ${PLUGIN_BUILD}/* ./
+  #     - name: Build KNIME update site
+  #       shell: bash
+  #       run: |
+  #         # fix folder structure
+  #         mv ${PLUGIN_BUILD}/.mvn ./
+  #         mv ${PLUGIN_BUILD}/* ./
 
-          git clone --depth 1 --branch master https://github.com/genericworkflownodes/buildresources
+  #         git clone --depth 1 --branch master https://github.com/genericworkflownodes/buildresources
 
-          # a special class that maps node names from old openms to openms thirdparty (we should be able to remove it future releases)
-          cp buildresources/de.openms.thirdparty/src/de/openms/thirdparty/knime/OpenMSNodeFactoryClassMapper.java de.openms.thirdparty/src/de/openms/thirdparty/knime/
-          # insert contents of the snippet before </plugin> in the plugin.xml. The snippet registers the class mapper.
-          cat buildresources/de.openms.thirdparty/plugin.xml.snippet
-          f1="$(cat buildresources/de.openms.thirdparty/plugin.xml.snippet)"
-          awk -vf1="$f1" '/<\/plugin>/{print f1;print;next}1' de.openms.thirdparty/plugin.xml > buildresources/my.tmp && mv buildresources/my.tmp de.openms.thirdparty/plugin.xml
+  #         # a special class that maps node names from old openms to openms thirdparty (we should be able to remove it future releases)
+  #         cp buildresources/de.openms.thirdparty/src/de/openms/thirdparty/knime/OpenMSNodeFactoryClassMapper.java de.openms.thirdparty/src/de/openms/thirdparty/knime/
+  #         # insert contents of the snippet before </plugin> in the plugin.xml. The snippet registers the class mapper.
+  #         cat buildresources/de.openms.thirdparty/plugin.xml.snippet
+  #         f1="$(cat buildresources/de.openms.thirdparty/plugin.xml.snippet)"
+  #         awk -vf1="$f1" '/<\/plugin>/{print f1;print;next}1' de.openms.thirdparty/plugin.xml > buildresources/my.tmp && mv buildresources/my.tmp de.openms.thirdparty/plugin.xml
 
-          rm -r buildresources
-          rm -r plugin-build
+  #         rm -r buildresources
+  #         rm -r plugin-build
 
-          # remove maven pom.xmls since we will do a full pomless build. poms are only necessary if you want to develop on a single plugin, e.g., in eclipse.
-          find . -mindepth 2 -name "pom.xml*" -exec rm {} \;
+  #         # remove maven pom.xmls since we will do a full pomless build. poms are only necessary if you want to develop on a single plugin, e.g., in eclipse.
+  #         find . -mindepth 2 -name "pom.xml*" -exec rm {} \;
 
-          # Build update site. Downloads necessary plugins from the dependency update sites from KNIME and GKN (for the correct KNIME version)
-          mvn --no-transfer-progress "-Dknime.version=${KNIME}" "-Djava.majorversion=${JAVA_VER}" "-Dgkn.update.site=https://abibuilder.cs.uni-tuebingen.de/archive/gkn/updateSite/${KNIME}/" clean verify
+  #         # Build update site. Downloads necessary plugins from the dependency update sites from KNIME and GKN (for the correct KNIME version)
+  #         mvn --no-transfer-progress "-Dknime.version=${KNIME}" "-Djava.majorversion=${JAVA_VER}" "-Dgkn.update.site=https://abibuilder.cs.uni-tuebingen.de/archive/gkn/updateSite/${KNIME}/" clean verify
 
-      - name: Upload KNIME update site
-        shell: bash
-        env:
-          PASS: ${{ secrets.ARCHIVE_RRSYNC_SSH }}
-          USER: ${{ secrets.ARCHIVE_RRSYNC_USER }}
-          HOST: ${{ secrets.ARCHIVE_RRSYNC_HOST }}
-        run: |
-          echo "Upload"
-          if [[ "${{ github.ref_name }}" == "nightly" ]]; then
-            folder=nightly
-          elif [[ "${{ github.ref_name }}" == release/* ]]; then
-            folder=release/${{ github.ref_name }}
-          else
-            folder=experimental/${{ github.ref_name }}
-          fi
-          echo "Uploading KNIME site to:" $folder
+  #     - name: Upload KNIME update site
+  #       shell: bash
+  #       env:
+  #         PASS: ${{ secrets.ARCHIVE_RRSYNC_SSH }}
+  #         USER: ${{ secrets.ARCHIVE_RRSYNC_USER }}
+  #         HOST: ${{ secrets.ARCHIVE_RRSYNC_HOST }}
+  #       run: |
+  #         echo "Upload"
+  #         if [[ "${{ github.ref_name }}" == "nightly" ]]; then
+  #           folder=nightly
+  #         elif [[ "${{ github.ref_name }}" == release/* ]]; then
+  #           folder=release/${{ github.ref_name }}
+  #         else
+  #           folder=experimental/${{ github.ref_name }}
+  #         fi
+  #         echo "Uploading KNIME site to:" $folder
 
-          # correct permissions of files to upload
-          chmod -R o+r $GITHUB_WORKSPACE/de.openms.update/target/repository/*
-          chmod o+x $GITHUB_WORKSPACE/de.openms.update/target/repository/features
-          chmod o+x $GITHUB_WORKSPACE/de.openms.update/target/repository/plugins
+  #         # correct permissions of files to upload
+  #         chmod -R o+r $GITHUB_WORKSPACE/de.openms.update/target/repository/*
+  #         chmod o+x $GITHUB_WORKSPACE/de.openms.update/target/repository/features
+  #         chmod o+x $GITHUB_WORKSPACE/de.openms.update/target/repository/plugins
           
-          #Load private key into file
-          mkdir -p ~/.ssh/
-          echo "$PASS" > ~/.ssh/private.key
-          sudo chmod 600 ~/.ssh/private.key
-          rsync --progress -avz -e "ssh -i ~/.ssh/private.key -o StrictHostKeyChecking=no" $GITHUB_WORKSPACE/de.openms.update/target/repository/* "$USER@$HOST:/knime-plugin/updateSite/$folder/"
+  #         #Load private key into file
+  #         mkdir -p ~/.ssh/
+  #         echo "$PASS" > ~/.ssh/private.key
+  #         sudo chmod 600 ~/.ssh/private.key
+  #         rsync --progress -avz -e "ssh -i ~/.ssh/private.key -o StrictHostKeyChecking=no" $GITHUB_WORKSPACE/de.openms.update/target/repository/* "$USER@$HOST:/knime-plugin/updateSite/$folder/"
 
-      - name: Make KNIME installer latest
-        if: inputs.mark_as_latest
-        shell: bash
-        env:
-          PASS: ${{ secrets.ARCHIVE_RRSYNC_SSH }}
-          USER: ${{ secrets.ARCHIVE_RRSYNC_USER }}
-          HOST: ${{ secrets.ARCHIVE_RRSYNC_HOST }}
-        run: |
-          echo "Upload"
-          if [[ "${{ github.ref_name }}" == release/* ]]; then
-            folder=${{ github.ref_name }}
-          else
-            echo refusing to mark non-release branch as latest
-            exit 1
-          fi
+  #     - name: Make KNIME installer latest
+  #       if: inputs.mark_as_latest
+  #       shell: bash
+  #       env:
+  #         PASS: ${{ secrets.ARCHIVE_RRSYNC_SSH }}
+  #         USER: ${{ secrets.ARCHIVE_RRSYNC_USER }}
+  #         HOST: ${{ secrets.ARCHIVE_RRSYNC_HOST }}
+  #       run: |
+  #         echo "Upload"
+  #         if [[ "${{ github.ref_name }}" == release/* ]]; then
+  #           folder=${{ github.ref_name }}
+  #         else
+  #           echo refusing to mark non-release branch as latest
+  #           exit 1
+  #         fi
 
-          mkdir -p ~/.ssh/
-          echo "$PASS" > ~/.ssh/private.key
-          sudo chmod 600 ~/.ssh/private.key
-          ln -s ./$folder latest  #create link to the release folder
-          rsync --progress -avz -e "ssh -i ~/.ssh/private.key -o StrictHostKeyChecking=no" latest "$USER@$HOST:/knime-plugin/updateSite/release
+  #         mkdir -p ~/.ssh/
+  #         echo "$PASS" > ~/.ssh/private.key
+  #         sudo chmod 600 ~/.ssh/private.key
+  #         ln -s ./$folder latest  #create link to the release folder
+  #         rsync --progress -avz -e "ssh -i ~/.ssh/private.key -o StrictHostKeyChecking=no" latest "$USER@$HOST:/knime-plugin/updateSite/release
 
-  do-release:
-    if: inputs.do_release
-    runs-on: ubuntu-latest
-    needs: [build-deploy-knime-updatesite,deploy-installer, build-and-test]
-    permissions: write-all
-    steps:
+  # do-release:
+  #   if: inputs.do_release
+  #   runs-on: ubuntu-latest
+  #   needs: [build-deploy-knime-updatesite,deploy-installer, build-and-test]
+  #   permissions: write-all
+  #   steps:
     
-      - name: get a token so that we can update the tags
-        uses: actions/create-github-app-token@v1
-        id: app-token
-        with:
-          app-id: ${{ vars.OPENMS_GITHUB_APP_ID }}
-          private-key: ${{ secrets.OPENMS_GITHUB_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
+  #     - name: get a token so that we can update the tags
+  #       uses: actions/create-github-app-token@v1
+  #       id: app-token
+  #       with:
+  #         app-id: ${{ vars.OPENMS_GITHUB_APP_ID }}
+  #         private-key: ${{ secrets.OPENMS_GITHUB_APP_PRIVATE_KEY }}
+  #         owner: ${{ github.repository_owner }}
 
-      - name: Extract branch/PR infos
-        shell: bash
-        run: echo "RUN_NAME=${{ github.event.pull_request && github.event.number || github.ref_name }}" >> $GITHUB_ENV
+  #     - name: Extract branch/PR infos
+  #       shell: bash
+  #       run: echo "RUN_NAME=${{ github.event.pull_request && github.event.number || github.ref_name }}" >> $GITHUB_ENV
     
-      # NB we create the tag for the OpenMS repo next in a separate action.
-      - id: bash_create_tags
-        name: create tags for other repos
-        shell: bash
-        env: 
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: |
-          function createGitTag() {
-            REPO=$1
-            SHA=$2
-            gh api \
-              --method POST \
-              -H "Accept: application/vnd.github+json" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              /repos/${REPO}/git/refs \
-              -f ref="refs/tags/${{ env.RUN_NAME }}" \
-            -f sha="${SHA}"
-          }
+  #     # NB we create the tag for the OpenMS repo next in a separate action.
+  #     - id: bash_create_tags
+  #       name: create tags for other repos
+  #       shell: bash
+  #       env: 
+  #         GH_TOKEN: ${{ steps.app-token.outputs.token }}
+  #       run: |
+  #         function createGitTag() {
+  #           REPO=$1
+  #           SHA=$2
+  #           gh api \
+  #             --method POST \
+  #             -H "Accept: application/vnd.github+json" \
+  #             -H "X-GitHub-Api-Version: 2022-11-28" \
+  #             /repos/${REPO}/git/refs \
+  #             -f ref="refs/tags/${{ env.RUN_NAME }}" \
+  #           -f sha="${SHA}"
+  #         }
           
-          function updateGitTag() {
-            REPO=$1
-            SHA=$2
+  #         function updateGitTag() {
+  #           REPO=$1
+  #           SHA=$2
 
-            gh api \
-              --method PATCH \
-              -H "Accept: application/vnd.github+json" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              /repos/${REPO}/git/refs/tags/${{ env.RUN_NAME }} \
-              -f sha="${SHA}" \
-              -F force=true
-          }
-          DEOPENMS_SHA=$(curl -s -X GET https://api.github.com/repos/OpenMS/de.openms.knime/git/ref/heads/develop |jq -r '.object.sha')
-          GKN_SHA=$(curl -s -X GET https://api.github.com/repos/genericworkflownodes/GenericKnimeNodes/git/ref/heads/develop |jq -r '.object.sha')
-          JSViewer_SHA=$(curl -s -X GET https://api.github.com/repos/genericworkflownodes/de.openms.knime.dynamicJSViewers/git/ref/heads/master |jq -r '.object.sha')
-          CONTRIB_SHA=$(curl -s -X GET https://api.github.com/repos/OpenMS/OpenMS/contents/contrib\?ref\=${{ github.sha }} | jq -r ".sha")
-          THIRDPARTY_SHA=$(curl -s -X GET https://api.github.com/repos/OpenMS/OpenMS/contents/THIRDPARTY\?ref\=${{ github.sha }} | jq -r ".sha")
-          PYDOCS_SHA=$(curl -s -X GET https://api.github.com/repos/OpenMS/OpenMS/contents/src/pyOpenMS/pyopenms-docs\?ref\=${{ github.sha }} | jq -r ".sha")
-          TUTORIAL_SHA=$(curl https://api.github.com/repos/OpenMS/Tutorials/git/refs/heads/master | jq -r ".object.sha")
-          DOCS_SHA=$(curl https://api.github.com/repos/OpenMS/OpenMS-docs/git/refs/heads/develop | jq -r ".object.sha")
+  #           gh api \
+  #             --method PATCH \
+  #             -H "Accept: application/vnd.github+json" \
+  #             -H "X-GitHub-Api-Version: 2022-11-28" \
+  #             /repos/${REPO}/git/refs/tags/${{ env.RUN_NAME }} \
+  #             -f sha="${SHA}" \
+  #             -F force=true
+  #         }
+  #         DEOPENMS_SHA=$(curl -s -X GET https://api.github.com/repos/OpenMS/de.openms.knime/git/ref/heads/develop |jq -r '.object.sha')
+  #         GKN_SHA=$(curl -s -X GET https://api.github.com/repos/genericworkflownodes/GenericKnimeNodes/git/ref/heads/develop |jq -r '.object.sha')
+  #         JSViewer_SHA=$(curl -s -X GET https://api.github.com/repos/genericworkflownodes/de.openms.knime.dynamicJSViewers/git/ref/heads/master |jq -r '.object.sha')
+  #         CONTRIB_SHA=$(curl -s -X GET https://api.github.com/repos/OpenMS/OpenMS/contents/contrib\?ref\=${{ github.sha }} | jq -r ".sha")
+  #         THIRDPARTY_SHA=$(curl -s -X GET https://api.github.com/repos/OpenMS/OpenMS/contents/THIRDPARTY\?ref\=${{ github.sha }} | jq -r ".sha")
+  #         PYDOCS_SHA=$(curl -s -X GET https://api.github.com/repos/OpenMS/OpenMS/contents/src/pyOpenMS/pyopenms-docs\?ref\=${{ github.sha }} | jq -r ".sha")
+  #         TUTORIAL_SHA=$(curl https://api.github.com/repos/OpenMS/Tutorials/git/refs/heads/master | jq -r ".object.sha")
+  #         DOCS_SHA=$(curl https://api.github.com/repos/OpenMS/OpenMS-docs/git/refs/heads/develop | jq -r ".object.sha")
 
-          createGitTag OpenMS/contrib $CONTRIB_SHA  || updateGitTag OpenMS/contrib $CONTRIB_SHA 
-          createGitTag OpenMS/pyopenms-docs $PYDOCS_SHA  || updateGitTag OpenMS/pyopenms-docs $PYDOCS_SHA 
-          createGitTag OpenMS/THIRDPARTY $THIRDPARTY_SHA  || updateGitTag OpenMS/THIRDPARTY $THIRDPARTY_SHA 
-          createGitTag OpenMS/Tutorials $TUTORIAL_SHA  || updateGitTag OpenMS/Tutorials $TUTORIAL_SHA 
-          createGitTag OpenMS/OpenMS-docs $DOCS_SHA  || updateGitTag OpenMS/OpenMS-docs $DOCS_SHA 
-          createGitTag OpenMS/de.openms.knime $DEOPENMS_SHA  || updateGitTag OpenMS/de.openms.knime $DEOPENMS_SHA 
+  #         createGitTag OpenMS/contrib $CONTRIB_SHA  || updateGitTag OpenMS/contrib $CONTRIB_SHA 
+  #         createGitTag OpenMS/pyopenms-docs $PYDOCS_SHA  || updateGitTag OpenMS/pyopenms-docs $PYDOCS_SHA 
+  #         createGitTag OpenMS/THIRDPARTY $THIRDPARTY_SHA  || updateGitTag OpenMS/THIRDPARTY $THIRDPARTY_SHA 
+  #         createGitTag OpenMS/Tutorials $TUTORIAL_SHA  || updateGitTag OpenMS/Tutorials $TUTORIAL_SHA 
+  #         createGitTag OpenMS/OpenMS-docs $DOCS_SHA  || updateGitTag OpenMS/OpenMS-docs $DOCS_SHA 
+  #         createGitTag OpenMS/de.openms.knime $DEOPENMS_SHA  || updateGitTag OpenMS/de.openms.knime $DEOPENMS_SHA 
           
-          #FIXME reenable these after we get the correct access permissions
-          #createGitTag genericworkflownodes/de.openms.knime.dynamicJSViewers $JSViewer_SHA || updateGitTag genericworkflownodes/de.openms.knime.dynamicJSViewers $GKN_SHA 
+  #         #FIXME reenable these after we get the correct access permissions
+  #         #createGitTag genericworkflownodes/de.openms.knime.dynamicJSViewers $JSViewer_SHA || updateGitTag genericworkflownodes/de.openms.knime.dynamicJSViewers $GKN_SHA 
 
-      - name: Merge to Develop
-        if: inputs.mark_as_latest
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const { repo, owner } = context.repo;
-            const result = await github.rest.pulls.create({
-              title: 'Merge latest release into develop',
-              owner,
-              repo,
-              head: '${{ github.ref_name }}',
-              base: 'develop',
-              body: [
-                'This PR is auto-generated by',
-                '[actions/github-script](https://github.com/actions/github-script).'
-              ].join('\n')
-            });
-            github.rest.issues.addLabels({
-              owner,
-              repo,
-              issue_number: result.data.number,
-              labels: ['feature', 'automated pr']
-            });
+  #     - name: Merge to Develop
+  #       if: inputs.mark_as_latest
+  #       uses: actions/github-script@v7
+  #       with:
+  #         script: |
+  #           const { repo, owner } = context.repo;
+  #           const result = await github.rest.pulls.create({
+  #             title: 'Merge latest release into develop',
+  #             owner,
+  #             repo,
+  #             head: '${{ github.ref_name }}',
+  #             base: 'develop',
+  #             body: [
+  #               'This PR is auto-generated by',
+  #               '[actions/github-script](https://github.com/actions/github-script).'
+  #             ].join('\n')
+  #           });
+  #           github.rest.issues.addLabels({
+  #             owner,
+  #             repo,
+  #             issue_number: result.data.number,
+  #             labels: ['feature', 'automated pr']
+  #           });
 
-  create-website-update:
-    if: inputs.announce_release
-    runs-on: ubuntu-latest
-    needs: [deploy-installer, build-and-test]
-    permissions: write-all
-    steps:
+  # create-website-update:
+  #   if: inputs.announce_release
+  #   runs-on: ubuntu-latest
+  #   needs: [deploy-installer, build-and-test]
+  #   permissions: write-all
+  #   steps:
 
-      - name: get a token so that we can update the website
-        uses: actions/create-github-app-token@v1
-        id: app-token
-        with:
-          app-id: ${{ vars.OPENMS_GITHUB_APP_ID }}
-          private-key: ${{ secrets.OPENMS_GITHUB_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
+  #     - name: get a token so that we can update the website
+  #       uses: actions/create-github-app-token@v1
+  #       id: app-token
+  #       with:
+  #         app-id: ${{ vars.OPENMS_GITHUB_APP_ID }}
+  #         private-key: ${{ secrets.OPENMS_GITHUB_APP_PRIVATE_KEY }}
+  #         owner: ${{ github.repository_owner }}
 
-      - name: checkout website
-        uses: actions/checkout@v4
-        with:
-          path: OpenMS-website
-          repository: OpenMS/OpenMS-website
-          token: ${{ steps.app-token.outputs.token }}
+  #     - name: checkout website
+  #       uses: actions/checkout@v4
+  #       with:
+  #         path: OpenMS-website
+  #         repository: OpenMS/OpenMS-website
+  #         token: ${{ steps.app-token.outputs.token }}
 
-      - name: create text for website and update it.
-        shell: bash
-        env: 
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run:  |
-            echo '${{ needs.deploy-installer.outputs.release_text_contents }}' | base64 -d >> OpenMS-website/content/en/news/release${{ needs.build-and-test.outputs.version_number }}.md
-            pushd OpenMS-website
-              git config --local user.email "action@github.com"
-              git config --local user.name "GitHub Action"
-              git checkout -b "releaseannouncement${{ needs.build-and-test.outputs.version_number }}"
-              git add content/en/news/release${{ needs.build-and-test.outputs.version_number }}.md
-            	git commit -am "Announce release ${{ needs.build-and-test.outputs.version_number }}"
-              git push --set-upstream origin releaseannouncement${{ needs.build-and-test.outputs.version_number }}
-              gh pr create --title "Release announcement for ${{ needs.build-and-test.outputs.version_number }}" --body "announces ${{ needs.build-and-test.outputs.version_number }}"
-            popd
+  #     - name: create text for website and update it.
+  #       shell: bash
+  #       env: 
+  #         GH_TOKEN: ${{ steps.app-token.outputs.token }}
+  #       run:  |
+  #           echo '${{ needs.deploy-installer.outputs.release_text_contents }}' | base64 -d >> OpenMS-website/content/en/news/release${{ needs.build-and-test.outputs.version_number }}.md
+  #           pushd OpenMS-website
+  #             git config --local user.email "action@github.com"
+  #             git config --local user.name "GitHub Action"
+  #             git checkout -b "releaseannouncement${{ needs.build-and-test.outputs.version_number }}"
+  #             git add content/en/news/release${{ needs.build-and-test.outputs.version_number }}.md
+  #           	git commit -am "Announce release ${{ needs.build-and-test.outputs.version_number }}"
+  #             git push --set-upstream origin releaseannouncement${{ needs.build-and-test.outputs.version_number }}
+  #             gh pr create --title "Release announcement for ${{ needs.build-and-test.outputs.version_number }}" --body "announces ${{ needs.build-and-test.outputs.version_number }}"
+  #           popd
