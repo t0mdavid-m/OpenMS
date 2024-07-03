@@ -448,7 +448,7 @@ void FLASHExtenderAlgorithm::run(const FLASHTaggerAlgorithm& tagger, double flan
   }
 
 #pragma omp parallel for default(none) shared(hits, tagger, std::cout)
-  for (Size i = 0; i < hits.size(); i++)
+  for (int i = 0; i < hits.size(); i++)
   {
     nextProgress();
     auto& hit = hits[i];
