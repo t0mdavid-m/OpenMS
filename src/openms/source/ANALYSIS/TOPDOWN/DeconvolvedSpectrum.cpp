@@ -75,6 +75,8 @@ namespace OpenMS
   {
     auto out_spec = MSSpectrum(spec_);
     out_spec.clear(false);
+
+    (void)min_ms_level; // Explicitly unused parameter
    // if ((spec_.getMSLevel() > min_ms_level && precursor_peak_group_.empty()) || empty())
    // {
     //  return out_spec;
