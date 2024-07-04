@@ -241,7 +241,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   for (auto& hit : proteoform_hits_)
   {
     hit.setMetaValue("Index", proteoform_index);
-    for (int tag_index : (std::vector<int>)hit.getMetaValue("TagIndices"))
+    for (int tag_index : (std::vector<int>)hit.getMetaValue("TagIndices").toIntList())
     {
       matching_hits_indices_[tag_index].push_back(proteoform_index);
     }
