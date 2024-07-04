@@ -43,21 +43,7 @@ void FLASHExtenderAlgorithm::updateMembers_()
   max_mod_mass_ = param_.getValue("max_mass_shift");
   // fdr_ = param_.getValue("fdr");
   //  keep_decoy_ = param_.getValue("keep_decoy") == "true";
-
-  ion_types_str_.clear();
-
-  std::vector<std::string> ion_strs = param_.getValue("ion_type");
-  for (const auto& ion_str : ion_strs)
-  {
-    if (ion_str == "a") { ion_types_str_.emplace_back("a-ion"); }
-    else if (ion_str == "b") { ion_types_str_.emplace_back("b-ion"); }
-    else if (ion_str == "c") { ion_types_str_.emplace_back("c-ion"); }
-    else if (ion_str == "x") { ion_types_str_.emplace_back("x-ion"); }
-    else if (ion_str == "y") { ion_types_str_.emplace_back("y-ion"); }
-    else if (ion_str == "z") { ion_types_str_.emplace_back("z-ion"); }
-    else if (ion_str == "zp1") { ion_types_str_.emplace_back("zp1-ion"); }
-    else if (ion_str == "zp2") { ion_types_str_.emplace_back("zp2-ion"); }
-  }
+  // std::vector<std::string> ion_strs = param_.getValue("ion_type");
 }
 
 Size FLASHExtenderAlgorithm::getVertex_(int node_index, int pro_index, int score, int num_mod, Size pro_length) const
@@ -68,22 +54,22 @@ Size FLASHExtenderAlgorithm::getVertex_(int node_index, int pro_index, int score
 
 int FLASHExtenderAlgorithm::getNodeIndex_(Size vertex, Size pro_length) const
 {
-  return (vertex / (max_path_score_ - min_path_score_ + 1) / (max_mod_cntr_ + 1)) / (pro_length + 1);
+  return ((int)vertex / (max_path_score_ - min_path_score_ + 1) / (max_mod_cntr_ + 1)) / ((int)pro_length + 1);
 }
 
 int FLASHExtenderAlgorithm::getProIndex_(Size vertex, Size pro_length) const
 {
-  return ((vertex / (max_path_score_ - min_path_score_ + 1) / (max_mod_cntr_ + 1))) % (pro_length + 1);
+  return (((int)vertex / (max_path_score_ - min_path_score_ + 1) / (max_mod_cntr_ + 1))) % ((int)pro_length + 1);
 }
 
 int FLASHExtenderAlgorithm::getScore_(Size vertex) const
 {
-  return vertex % (max_path_score_ - min_path_score_ + 1) + min_path_score_;
+  return (int)vertex % (max_path_score_ - min_path_score_ + 1) + min_path_score_;
 }
 
 int FLASHExtenderAlgorithm::getModNumber_(Size vertex) const
 {
-  return (vertex / (max_path_score_ - min_path_score_ + 1)) % (max_mod_cntr_ + 1);
+  return ((int)vertex / (max_path_score_ - min_path_score_ + 1)) % (max_mod_cntr_ + 1);
 }
 
 // take the hits. Just calculate the mass of truncated protein. Then add modification masses if they are disjoint. If they overlap and the same mass,
@@ -99,6 +85,7 @@ double FLASHExtenderAlgorithm::calculate_precursor_mass_(const ProteinHit& hit,
   if (protein_start_position < 0 || protein_end_position < 0) return precursor_mass;
   auto seq = hit.getSequence();
 
+  precursor_mass = 0;
   for (int i = protein_start_position; i < protein_end_position; i++)
   {
     if (seq[i] == 'X') continue;
@@ -147,7 +134,8 @@ void FLASHExtenderAlgorithm::get_pro_masses_(const ProteinHit& hit, std::vector<
   for (const auto& aa : seq)
   {
     if (aa == 'X') pro_masses.push_back(pro_masses.back()); // repeat the previous mass
-    else pro_masses.push_back(pro_masses.back() + AASequence::fromString(aa, true).getMonoWeight(Residue::Internal));
+    else
+      pro_masses.push_back(pro_masses.back() + AASequence::fromString(aa, true).getMonoWeight(Residue::Internal));
   }
 }
 
@@ -238,8 +226,9 @@ void FLASHExtenderAlgorithm::define_nodes_(const FLASHTaggerAlgorithm& tagger,
         node_spec.pop_back();
         tol_spec.pop_back();
       }
-      score = std::max(.0f, score);
-      score += std::max(.0f, prev_score);
+      //score = std::max(.0f, score);
+      //score += 1 + std::max(.0f, prev_score);
+      score = 1 + std::max(prev_score, score);
     }
 
     node_spec.emplace_back(mass, score);
@@ -263,10 +252,15 @@ void FLASHExtenderAlgorithm::run_(const ProteinHit& hit,
   std::set<Size> sinks;
 
   const std::vector<int>& indices = hit.getMetaValue("TagIndices");
-
   tags.reserve(indices.size());
+  int max_tag_length = 3;
   for (auto i : indices)
   {
+    max_tag_length = std::max(max_tag_length, (int)tags_[i].getLength());
+  }
+  for (auto i : indices)
+  {
+    if (tags_[i].getLength() < std::min(4, max_tag_length - 3)) continue;
     tags.push_back(tags_[i]);
   }
 
@@ -274,7 +268,6 @@ void FLASHExtenderAlgorithm::run_(const ProteinHit& hit,
     edge.reserve(tags.size() * 2);
 
   FLASHHelperClasses::DAG dag((1 + node_spec.size()) * (1 + pro_masses.size()) * (1 + max_mod_cntr_) * (1 + max_path_score_ - min_path_score_));
-
   for (const auto& tag : tags)
   {
     // std::cout<<mode<< " "  << tags.size() << " " << tag.getNtermMass() << " "  <<tag.getCtermMass() << " "  <<precursor_mass<< " " <<
@@ -336,7 +329,9 @@ void FLASHExtenderAlgorithm::run_(const ProteinHit& hit,
       int highest_score_start = node_spec.findHighestInWindow(start_masses[l], delta_start, delta_start);
       int highest_score_end = node_spec.findHighestInWindow(end_masses[l], delta_end, delta_end);
 
-      if (highest_score_start < 0 || highest_score_end < 0 || highest_score_start >= (int)node_spec.size() || highest_score_end >= (int)node_spec.size()) continue;
+      if (highest_score_start < 0 || highest_score_end < 0 || highest_score_start >= (int)node_spec.size()
+          || highest_score_end >= (int)node_spec.size())
+        continue;
       for (int pos : positions)
       {
         if (mode == 0) // suffix inverted
@@ -363,29 +358,27 @@ void FLASHExtenderAlgorithm::run_(const ProteinHit& hit,
       }
     }
 
-    if (tag_edges.empty() || tag_edges[0].empty()) continue;
+    // if (tag_edges.empty() || tag_edges[0].empty()) continue;
 
-//    if (! tag_edges.empty() && ! tag_edges[0].empty())
-//    {
-//      std::cout << hit.getAccession() << " " << mode << " " << tag.toString() << std::endl;
-//      auto seq = hit.getSequence();
-//      if (mode == 0) seq = seq.reverse();
-//      std::cout << seq.substr(tag_edges[0].back(), tag_edges[1].back() - tag_edges[0].back()) << "\n";
-//
-//
-//      std::cout << node_spec[tag_edges[2].back()].getMZ() << " * " << node_spec[tag_edges[3].back()].getMZ();  std::cout << std::endl;
-//      std::cout << pro_masses[tag_edges[0].back()] << " ** " << pro_masses[tag_edges[1].back()] << " : " << tag_edges[0].back() << "  " << tag_edges[1].back();
-//      std::cout << std::endl;
-//
-//      std::cout << pro_masses[tag_edges[1].back()] - pro_masses[tag_edges[0].back()] << " vs. "
-//                << node_spec[tag_edges[3].back()].getMZ() - node_spec[tag_edges[2].back()].getMZ();
-//
-//      std::cout << std::endl;
-//    }
+    //    if (! tag_edges.empty() && ! tag_edges[0].empty())
+    //    {
+    //      std::cout << hit.getAccession() << " " << mode << " " << tag.toString() << std::endl;
+    //      auto seq = hit.getSequence();
+    //      if (mode == 0) seq = seq.reverse();
+    //      std::cout << seq.substr(tag_edges[0].back(), tag_edges[1].back() - tag_edges[0].back()) << "\n";
+    //
+    //
+    //      std::cout << node_spec[tag_edges[2].back()].getMZ() << " * " << node_spec[tag_edges[3].back()].getMZ();  std::cout << std::endl;
+    //      std::cout << pro_masses[tag_edges[0].back()] << " ** " << pro_masses[tag_edges[1].back()] << " : " << tag_edges[0].back() << "  " <<
+    //      tag_edges[1].back(); std::cout << std::endl;
+    //
+    //      std::cout << pro_masses[tag_edges[1].back()] - pro_masses[tag_edges[0].back()] << " vs. "
+    //                << node_spec[tag_edges[3].back()].getMZ() - node_spec[tag_edges[2].back()].getMZ();
+    //
+    //      std::cout << std::endl;
+    //    }
   }
-
-  constructDAG_(dag, sinks, visited, node_spec, tol_spec, pro_masses, tag_edges, mode);
-
+  constructDAG_(dag, sinks, visited, node_spec, tol_spec, pro_masses, tag_edges, mode, ! tags.empty());
   Size src = getVertex_(0, 0, 0, 0, pro_masses.size());
   std::vector<int> max_scores(max_mod_cntr_ + 1, 0);
   for (Size sink : sinks)
@@ -402,7 +395,7 @@ void FLASHExtenderAlgorithm::run_(const ProteinHit& hit,
     int num_mod = getModNumber_(sink);
     if (sink == src || getScore_(sink) < max_scores[num_mod]) continue; //
     if (precursor_mass > 0 && getNodeIndex_(sink, pro_masses.size()) + 1 < (int)node_spec.size()) continue;
-    dag.findAllPaths(sink, src, paths[num_mod], 5);
+    dag.findAllPaths(sink, src, paths[num_mod], 20);
   }
 
   for (int num_mod = 0; num_mod <= max_mod_cntr_; num_mod++)
@@ -414,44 +407,49 @@ void FLASHExtenderAlgorithm::run_(const ProteinHit& hit,
       if (iter == all_paths_per_mode.end() || iter->second.size() < path.size()) all_paths_per_mode[num_mod] = path;
     }
   }
-
 }
 
-void FLASHExtenderAlgorithm::run(const FLASHTaggerAlgorithm& tagger, double flanking_mass_tol, double ppm)
+void FLASHExtenderAlgorithm::run(const FLASHTaggerAlgorithm& tagger, double flanking_mass_tol, double ppm, bool multiple_hits_per_spec)
 {
   // setLogType(CMD);
-  flanking_mass_tol_ = flanking_mass_tol;
-  tol_ = ppm / 1e6;
-  tags_.clear();
-  tagger.getTags(tags_);
-  std::vector<double> mzs;
-  std::vector<int> scores;
-  std::vector<ProteinHit> hits;
-  tagger.getProteinHits(hits, max_hit_count);
-  proteoform_hits_.reserve(hits.size());
-  if (tagger.getSpectrum().metaValueExists("PrecursorMass")) { precursor_mass_ = tagger.getSpectrum().getMetaValue("PrecursorMass"); }
-
-  startProgress(0, (int)hits.size(), "running FLASHExtender ...");
+  ion_types_str_ = param_.getValue("ion_type").toStringVector();
 
   Residue empty;
   for (const auto& ion_str : ion_types_str_)
   {
-    if (ion_str == "a-ion") { prefix_shifts_.push_back(Residue::getInternalToAIon().getMonoWeight()); }
-    else if (ion_str == "b-ion") { prefix_shifts_.push_back(Residue::getInternalToBIon().getMonoWeight()); }
-    else if (ion_str == "c-ion") { prefix_shifts_.push_back(Residue::getInternalToCIon().getMonoWeight()); }
-    else if (ion_str == "x-ion") { suffix_shifts_.push_back(Residue::getInternalToXIon().getMonoWeight()); }
-    else if (ion_str == "y-ion") { suffix_shifts_.push_back(Residue::getInternalToYIon().getMonoWeight()); }
-    else if (ion_str == "z-ion") { suffix_shifts_.push_back(Residue::getInternalToZIon().getMonoWeight()); }
-    else if (ion_str == "zp1-ion") { suffix_shifts_.push_back(Residue::getInternalToZp1Ion().getMonoWeight()); }
-    else if (ion_str == "zp2-ion") { suffix_shifts_.push_back(Residue::getInternalToZp2Ion().getMonoWeight()); }
+    if (ion_str == "a") { prefix_shifts_.push_back(Residue::getInternalToAIon().getMonoWeight()); }
+    else if (ion_str == "b") { prefix_shifts_.push_back(Residue::getInternalToBIon().getMonoWeight()); }
+    else if (ion_str == "c") { prefix_shifts_.push_back(Residue::getInternalToCIon().getMonoWeight()); }
+    else if (ion_str == "x") { suffix_shifts_.push_back(Residue::getInternalToXIon().getMonoWeight()); }
+    else if (ion_str == "y") { suffix_shifts_.push_back(Residue::getInternalToYIon().getMonoWeight()); }
+    else if (ion_str == "z") { suffix_shifts_.push_back(Residue::getInternalToZIon().getMonoWeight()); }
+    else if (ion_str == "zp1") { suffix_shifts_.push_back(Residue::getInternalToZp1Ion().getMonoWeight()); }
+    else if (ion_str == "zp2") { suffix_shifts_.push_back(Residue::getInternalToZp2Ion().getMonoWeight()); }
     else { continue; }
   }
 
-#pragma omp parallel for default(none) shared(hits, tagger, std::cout)
+  flanking_mass_tol_ = flanking_mass_tol;
+  tol_ = ppm / 1e6;
+  tags_.clear();
+  proteoform_hits_.clear();
+
+  tagger.getTags(tags_);
+  if (tags_.empty()) return;
+  std::vector<double> mzs;
+  std::vector<int> scores;
+  std::vector<ProteinHit> hits;
+  tagger.getProteinHits(hits, max_hit_count);
+  if (hits.empty()) return;
+  proteoform_hits_.reserve(hits.size());
+  if (tagger.getSpectrum().metaValueExists("PrecursorMass")) { precursor_mass_ = tagger.getSpectrum().getMetaValue("PrecursorMass"); }
+  startProgress(0, (int)hits.size(), "running FLASHExtender ...");
+
+#pragma omp parallel for default(none) shared(hits, tagger, multiple_hits_per_spec, std::cout)
   for (Size i = 0; i < hits.size(); i++)
   {
     nextProgress();
     auto& hit = hits[i];
+
     int total_score = 0;
     int total_match_cntr = 0;
     std::vector<int> mod_starts, mod_ends;
@@ -563,86 +561,85 @@ void FLASHExtenderAlgorithm::run(const FLASHTaggerAlgorithm& tagger, double flan
         mod_ends.clear();
         mod_masses.clear();
       }
-      if (best_paths.empty()) continue;
-      auto& path = best_paths[mode];
-
-      if (path.empty()) continue;
-
-      if (mode < 2)
+      if (mode == 0) continue;
+      total_score = 0;
+      total_match_cntr = 0;
+      for (int m = mode == 2 ? 2 : 0; m <= mode; m++)
       {
-        total_score += getScore_(path[0]);
-        total_match_cntr += (int)path.size() - 1;
-      }
-      else
-      {
-        protein_end_position = getProIndex_(path[0], pro_masses.size());
-        total_score = getScore_(path[0]);
-        total_match_cntr = (int)path.size() - 1;
-      }
+        if (best_paths.empty() || best_paths.find(m) == best_paths.end() || best_paths[m].empty()) continue;
+        auto& best_path = best_paths[m];
+        total_score += getScore_(best_path[0]);
+        total_match_cntr += (int)best_path.size() - 1;
 
-      double prev_mass_shift = 0;
-      int prev_mod_count = 0;
-      Size pre_pro_index = 0;
-      for (auto iter = path.rbegin(); iter != path.rend(); iter++)
-      {
-        auto pro_index = getProIndex_(*iter, pro_masses.size());
-        auto node_index = getNodeIndex_(*iter, pro_masses.size());
-        auto mass_shift = node_spec[node_index].getMZ() - pro_masses[pro_index];
-        auto mod_count = getModNumber_(*iter);
-
-//        std::cout << hit.getAccession() << " mode " << mode << " input pre " << precursor_mass_ << " cal pre " << precursor_mass << " score "
-//                  << getScore_(*iter) << " " << node_index << " " << pro_index << " in " <<  node_spec.size() << " " << pro_masses.size()<< " " << pro_masses[pro_index] << " " << node_spec[node_index].getMZ()
-//                  << " " << mod_count << std::endl;
-
-        if (node_index == 0)
+        double prev_mass_shift = 0;
+        int prev_mod_count = 0;
+        int pre_pro_index = 0;
+        for (auto iter = best_path.rbegin(); iter != best_path.rend(); iter++)
         {
-          if (mode > 0) protein_start_position = pro_index;
-          if (mode == 0) protein_end_position = (int)hit.getSequence().size() - pro_index;
-        }
+          auto pro_index = getProIndex_(*iter, pro_masses.size());
+          auto node_index = getNodeIndex_(*iter, pro_masses.size());
+          auto mass_shift = node_spec[node_index].getMZ() - pro_masses[pro_index];
+          auto mod_count = getModNumber_(*iter);
 
-        if (mode == 0) max_cterm_rindex = std::max(max_cterm_rindex, pro_index);
-        if (mode == 1) max_nterm_index = std::max(max_nterm_index, pro_index);
+          //            std::cout << hit.getAccession() << " mode " << m << " input pre " << precursor_mass_ << " cal pre " << precursor_mass << "
+          //            score"
+          //                      << getScore_(*iter) << " " << node_index << " " << pro_index << " in " <<  node_spec.size() << " " <<
+          //                      pro_masses.size()<< " " << pro_masses[pro_index] << " " << node_spec[node_index].getMZ()
+          //                      << " " << mod_count << std::endl;
 
-        if (mod_count != prev_mod_count)
-        {
-          double mod_mass = mass_shift - prev_mass_shift;
-          Size start = mode > 0 ? pre_pro_index : hit.getSequence().size() - 1 - pro_index;
-          Size end = mode > 0 ? pro_index : hit.getSequence().size() - 1 - pre_pro_index;
-          mod_starts.push_back(start);
-          mod_ends.push_back(end);
-          mod_masses.push_back(mod_mass);
+          if (node_index == 0)
+          {
+            if (m > 0) protein_start_position = pro_index;
+            if (m == 0) protein_end_position = (int)hit.getSequence().size() - pro_index;
+          }
+
+          if (m == 0) max_cterm_rindex = std::max(max_cterm_rindex, pro_index);
+          if (m == 1) max_nterm_index = std::max(max_nterm_index, pro_index);
+
+          if (mod_count != prev_mod_count)
+          {
+            double mod_mass = mass_shift - prev_mass_shift;
+            int start = m > 0 ? pre_pro_index : (int)hit.getSequence().size() - 1 - pro_index;
+            int end = m > 0 ? pro_index : (int)hit.getSequence().size() - 1 - pre_pro_index;
+            mod_starts.push_back(start);
+            mod_ends.push_back(end);
+            mod_masses.push_back(mod_mass);
+          }
+          prev_mod_count = mod_count;
+          pre_pro_index = pro_index;
+          prev_mass_shift = mass_shift;
         }
-        prev_mod_count = mod_count;
-        pre_pro_index = pro_index;
-        prev_mass_shift = mass_shift;
       }
     }
-
     if (total_score <= 0) continue;
-    //if (precursor_mass_ > 0 && (protein_start_position < 0 || protein_end_position < 0)) continue; // if precursor mass is specified, the truncation should be defined. If it cannot be defined, that is due to insufficient max modification count.
+
+    // std::cout<<hit.getAccession()<< " " << total_score << " " << hit.getScore() <<std::endl;
+    //  if (precursor_mass < 0) continue; // if precursor mass is not specified, skip
     hit.setMetaValue("Modifications", mod_masses);
     hit.setMetaValue("ModificationStarts", mod_starts);
     hit.setMetaValue("ModificationEnds", mod_ends);
     hit.setMetaValue("MatchedAA", total_match_cntr);
-    hit.setCoverage((double)total_match_cntr / hit.getSequence().size());
+    hit.setCoverage((double)total_match_cntr / (double)hit.getSequence().size());
     hit.setScore(total_score);
     hit.setMetaValue("StartPosition", protein_start_position);
     hit.setMetaValue("EndPosition", protein_end_position);
     hit.setMetaValue("Mass", precursor_mass < 0 ? precursor_mass_ : precursor_mass);
-    //hit.setMetaValue("Proforma", string)
+    hit.setMetaValue("RT", tagger.getSpectrum().getRT());
+    // hit.setMetaValue("Proforma", string)
 #pragma omp critical
     {
       bool insert = true;
 
-      if (precursor_mass_ > 0 && !proteoform_hits_.empty()) //when precursor_mass_ is not specified
+      if (! multiple_hits_per_spec && ! proteoform_hits_.empty()) // when multiple hits are not allowed
       {
         if (proteoform_hits_.back().getScore() >= hit.getScore()) insert = false;
-        else proteoform_hits_.pop_back();
+        else
+          proteoform_hits_.pop_back();
       }
-      if (insert) proteoform_hits_.push_back(hit);
-    }
-   }
 
+      if (insert) { proteoform_hits_.push_back(hit); }
+    }
+  }
   endProgress();
 }
 
@@ -653,16 +650,17 @@ void FLASHExtenderAlgorithm::constructDAG_(FLASHHelperClasses::DAG& dag,
                                            const MSSpectrum& tol_spec,
                                            const std::vector<double>& pro_masses,
                                            const std::vector<std::vector<int>>& tag_edges,
-                                           int mode)
+                                           int mode,
+                                           bool use_tags)
 {
-  if (tag_edges.empty()) return;
+  // if (tag_edges.empty()) return;
   if (visited.size() < dag.size()) visited.resize(dag.size());
   visited.reset();
   Size src = getVertex_(0, 0, 0, 0, pro_masses.size());
   visited[src] = true;
   std::set<Size> visited_tag_edges;
 
-  connectBetweenTags_(dag, visited, visited_tag_edges, sinks, src, node_spec, tol_spec, pro_masses, tag_edges, mode);
+  connectBetweenTags_(dag, visited, visited_tag_edges, sinks, src, node_spec, tol_spec, pro_masses, tag_edges, mode, use_tags);
 }
 
 void FLASHExtenderAlgorithm::connectBetweenTags_(FLASHHelperClasses::DAG& dag,
@@ -674,9 +672,9 @@ void FLASHExtenderAlgorithm::connectBetweenTags_(FLASHHelperClasses::DAG& dag,
                                                  const MSSpectrum& tol_spec,
                                                  const std::vector<double>& pro_masses,
                                                  const std::vector<std::vector<int>>& tag_edges,
-                                                 int mode)
+                                                 int mode,
+                                                 bool use_tags)
 {
-  if (tag_edges.size() < 4) return;
   int node_index = getNodeIndex_(vertex, pro_masses.size());
   int pro_index = getProIndex_(vertex, pro_masses.size());
 
@@ -687,8 +685,8 @@ void FLASHExtenderAlgorithm::connectBetweenTags_(FLASHHelperClasses::DAG& dag,
   const auto& tag_pro_ends = tag_edges[1];
   const auto& tag_node_starts = tag_edges[2];
   const auto& tag_node_ends = tag_edges[3];
-
-  for (int i = 0; i < tag_pro_starts.size(); i++)
+  // use_tags = !tag_pro_starts.empty();
+  for (int i = 0; i < (int)tag_pro_starts.size(); i++)
   {
     if (tag_start_index < 0 && tag_node_starts[i] == node_index && tag_pro_starts[i] == pro_index) { tag_start_index = i; }
     if (tag_end_index < 0 && tag_node_ends[i] == node_index && tag_pro_ends[i] == pro_index) { tag_end_index = i; }
@@ -699,7 +697,7 @@ void FLASHExtenderAlgorithm::connectBetweenTags_(FLASHHelperClasses::DAG& dag,
   if (tag_start_index >= 0) // within tag
   {
     int node_end = -1;
-    int i = tag_start_index;
+    Size i = tag_start_index;
     int pro_end = -1;
     while ((i < tag_node_starts.size()) && (tag_node_starts[i] == node_index) && (tag_pro_starts[i] == pro_index))
     {
@@ -720,7 +718,7 @@ void FLASHExtenderAlgorithm::connectBetweenTags_(FLASHHelperClasses::DAG& dag,
     for (auto next_vertex : next_vertices)
     {
       if (next_vertex == src) continue;
-      connectBetweenTags_(dag, visited, visited_tag_edges, sinks, next_vertex, node_spec, tol_spec, pro_masses, tag_edges, mode);
+      connectBetweenTags_(dag, visited, visited_tag_edges, sinks, next_vertex, node_spec, tol_spec, pro_masses, tag_edges, mode, use_tags);
     }
   }
 
@@ -753,13 +751,13 @@ void FLASHExtenderAlgorithm::connectBetweenTags_(FLASHHelperClasses::DAG& dag,
       for (auto next_vertex : next_vertices)
       {
         if (next_vertex == src) continue;
-        connectBetweenTags_(dag, visited, visited_tag_edges, sinks, next_vertex, node_spec, tol_spec, pro_masses, tag_edges, mode);
+        connectBetweenTags_(dag, visited, visited_tag_edges, sinks, next_vertex, node_spec, tol_spec, pro_masses, tag_edges, mode, use_tags);
         reachable_vertices.insert(next_vertex);
       }
     }
-    if (vertex != src && reachable_vertices.empty())
+    if ((vertex != src || ! use_tags) && reachable_vertices.empty())
     {
-      extendBetweenTags_(dag, visited, sinks, vertex, -1, -1, mode < 2 ? 1e5 : 0, node_spec, tol_spec, pro_masses, mode);
+      extendBetweenTags_(dag, visited, sinks, vertex, -1, -1, mode < 2 && use_tags ? 1e5 : 0, node_spec, tol_spec, pro_masses, mode);
       // if (mode == 2) extendBetweenTags_(dag, visited, sinks, vertex,  node_spec.size() - 1, pro_masses.size() - 1, 1e5, node_spec, tol_spec,
       // pro_masses, mode);
     }
@@ -786,6 +784,12 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(FLASHHelperClasses::DAG& dag,
   if (num_mod1 == max_mod_cntr_) diagonal_counter = 1e5;
   double node_mass1 = node_spec[node_index1].getMZ();
   auto src = getVertex_(0, 0, 0, 0, pro_masses.size());
+
+  if (node_index < 0)
+  {
+    pro_index = mode < 2 ? std::min(pro_index1 + 10, (int)pro_masses.size() - 1)
+                         : ((int)pro_masses.size() - 1); // if sink is not specified, stretch up to 10 amino acids.
+  }
 
   if (vertex == src)
   {
@@ -824,10 +828,7 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(FLASHHelperClasses::DAG& dag,
 
   if (node_index < 0)
   {
-    if (vertex != src)
-      sinks.insert(vertex);
-    pro_index = mode < 2 ? std::min(pro_index1 + 50, (int)pro_masses.size() - 1)
-                         : ((int)pro_masses.size() - 1); // if sink is not specified, stretch up to fifty amino acids.
+    if (vertex != src) sinks.insert(vertex);
   }
 
   else if (node_index1 > node_index || pro_index1 > pro_index)
@@ -840,7 +841,7 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(FLASHHelperClasses::DAG& dag,
   }
   for (int node_i = node_index1 + 1; node_i <= (node_index < 0 ? ((int)node_spec.size() - 1) : node_index); node_i++)
   {
-    if (node_index < 0 && node_spec[node_i].getIntensity() < 0) continue;
+    if (node_index < 0 && node_spec[node_i].getIntensity() < 0 && diagonal_counter > 0) continue;
     int score = score1 + (int)node_spec[node_i].getIntensity();
     double t_node_mass = node_spec[node_i].getMZ();
     double t_margin = tol_spec[node_i].getIntensity();
@@ -862,7 +863,7 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(FLASHHelperClasses::DAG& dag,
       }
       Size next_vertex = getVertex_(node_i, pro_i, score, num_mod, pro_masses.size());
       dag.addEdge(next_vertex, vertex, visited);
-      //if( mode == 2) std::cout<<node_spec[getNodeIndex_(next_vertex, pro_masses.size())].getMZ()<<std::endl;
+      // if( mode == 2) std::cout<<node_spec[getNodeIndex_(next_vertex, pro_masses.size())].getMZ()<<std::endl;
       if (! visited[next_vertex]) continue;
 
       int next_diagonal_counter = diagonal_counter;

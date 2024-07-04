@@ -250,12 +250,24 @@ struct OPENMS_DLLAPI FLASHHelperClasses
     {
       index_ = i;
     }
+    float getRetentionTime() const
+    {
+      return rt_;
+    }
+
+    void setRetentionTime(float i)
+    {
+      rt_ = i;
+    }
+
+
     String toString() const;
     const std::vector<double>& getMzs() const;
 
   private:
     String seq_;
     double n_mass_ = -1, c_mass_ = -1;
+    float rt_ = -1;
     std::vector<double> mzs_;
     std::vector<int> scores_;
     int scan_;

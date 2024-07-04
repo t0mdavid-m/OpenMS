@@ -17,8 +17,8 @@
 
 namespace OpenMS
 {
-  class OPENMS_DLLAPI FLASHTaggerFile
-  {
+  class OPENMS_DLLAPI FLASHTnTFile
+{
   public:
     /// write header line for regular file output
     static void writeTagHeader(std::fstream& fs);

@@ -35,6 +35,9 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   defaults_.setValue("fdr", 1.0, "Protein level FDR");
   defaults_.setMinFloat("fdr", 0.0);
 
+  defaults_.setValue("allow_multi_hits", "false", "Allow multiple hits per spectrum");
+  defaults_.setValidStrings("allow_multi_hits", {"true", "false"});
+
   defaults_.setValue("keep_decoy", "false", "To keep decoy hits");
   defaults_.setValidStrings("keep_decoy", {"true", "false"});
 
@@ -49,12 +52,15 @@ void FLASHTnTAlgorithm::updateMembers_()
   extender_param_ = param_.copy("ex:", true);
   fdr_ = param_.getValue("fdr");
   keep_decoy_ = param_.getValue("keep_decoy").toString() == "true";
+  multiple_hits_per_spec_ = param_.getValue("allow_multi_hits").toString() == "true";
 }
 
 void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile::FASTAEntry>& fasta_entry, double flanking_mass_tol)
 {
   setLogType(CMD);
   startProgress(0, (SignedSize)map.size(), "Running FLASHTnT ...");
+  int max_tag_length = tagger_param_.getValue("max_length");
+  int min_tag_length = tagger_param_.getValue("min_length");
   // collect statistics for information
   for (int index = 0; index < map.size(); index++)
   {
@@ -63,7 +69,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     if (spec.getMSLevel() == 1) continue;
     int scan = FLASHDeconvAlgorithm::getScanNumber(map, index); // TODO precursor
 
-    //if (scan != 8621) continue; //
+    // if (scan != 2780) continue; //
     DeconvolvedSpectrum dspec(scan);
     dspec.setOriginalSpectrum(spec);
     String deconv_meta_str = spec.getMetaValue("DeconvMassInfo").toString();
@@ -127,15 +133,31 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     FLASHTaggerAlgorithm tagger;
     // Run tagger
     tagger.setParameters(tagger_param_);
-    tagger.run(dspec, tol, fasta_entry);
-    tagger.getTags(tags_);
-    decoy_factor_ = tagger.getDecoyFactor();
+    tagger.run(dspec, tol);
     FLASHExtenderAlgorithm extender;
-
     extender.setParameters(extender_param_);
-    extender.run(tagger, flanking_mass_tol, tol);
-    extender.getProteoforms(proteoform_hits_);
-    // if (! out_tag_file.empty()) { FLASHTaggerFile::writeTags(tagger, extender, out_tagger_stream); }
+    tagger.getTags(tags_);
+
+    if (multiple_hits_per_spec_)
+    {
+      tagger.runMatching(fasta_entry);
+      extender.run(tagger, flanking_mass_tol, tol, multiple_hits_per_spec_);
+      extender.getProteoforms(proteoform_hits_);
+    }
+    else
+    {
+      for (int tag_length = max_tag_length; tag_length >= min_tag_length; tag_length--)
+      {
+        tagger.runMatching(fasta_entry, tag_length);
+        extender.run(tagger, flanking_mass_tol, tol, multiple_hits_per_spec_);
+        extender.getProteoforms(proteoform_hits_);
+        if (extender.hasProteoforms()) break;
+      }
+    }
+
+    decoy_factor_ = tagger.getDecoyFactor();
+
+    // if (! out_tag_file.empty()) { FLASHTnTFile::writeTags(tagger, extender, out_tagger_stream); }
   }
   endProgress();
   // redefine tag index and proteoform to tag indics
@@ -166,7 +188,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     hit.setMetaValue("TagIndices", tag_indices);
   }
 
-  //std::cout<<tags_.size()<<" " << proteoform_hits_.size()<<std::endl;
+  // std::cout<<tags_.size()<<" " << proteoform_hits_.size()<<std::endl;
   std::sort(proteoform_hits_.begin(), proteoform_hits_.end(), [](const ProteinHit& left, const ProteinHit& right) {
     return left.getScore() == right.getScore() ? (left.getCoverage() == right.getCoverage() ? (left.getMetaValue("Scan") > right.getMetaValue("Scan"))
                                                                                             : (left.getCoverage() > right.getCoverage()))
@@ -213,8 +235,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
 
     proteoform_hits_.swap(filtered_proteoform_hits);
   }
-  //std::cout<<tags_.size()<<" " << proteoform_hits_.size()<<std::endl; //
-  // define proteoform index and tag to proteoform indices.
+  // std::cout<<tags_.size()<<" " << proteoform_hits_.size()<<std::endl; //
+  //  define proteoform index and tag to proteoform indices.
   int proteoform_index = 0;
   for (auto& hit : proteoform_hits_)
   {

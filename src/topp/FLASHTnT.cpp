@@ -10,7 +10,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTAlgorithm.h>
 #include <OpenMS/APPLICATIONS/TOPPBase.h>
 #include <OpenMS/FORMAT/FASTAFile.h>
-#include <OpenMS/FORMAT/FLASHTaggerFile.h>
+#include <OpenMS/FORMAT/FLASHTnTFile.h>
 #include <OpenMS/FORMAT/FileTypes.h>
 #include <OpenMS/FORMAT/MzMLFile.h>
 #include <QFileInfo>
@@ -106,13 +106,13 @@ protected:
     if (! out_tag_file.empty())
     {
       out_tagger_stream = fstream(out_tag_file, fstream::out);
-      FLASHTaggerFile::writeTagHeader(out_tagger_stream);
+      FLASHTnTFile::writeTagHeader(out_tagger_stream);
     }
 
     if (! out_protein_file.empty())
     {
       out_protein_stream = fstream(out_protein_file, fstream::out);
-      FLASHTaggerFile::writeProteinHeader(out_protein_stream);
+      FLASHTnTFile::writeProteinHeader(out_protein_stream);
     }
 
     FLASHTnTAlgorithm tnt;
@@ -121,13 +121,12 @@ protected:
     tnt.getProteoforms(proteoform_hits);
 
     if (! out_tag_file.empty())
-    {
-      FLASHTaggerFile::writeTags(tnt, flanking_mass_tol, out_tagger_stream);
+    { FLASHTnTFile::writeTags(tnt, flanking_mass_tol, out_tagger_stream);
     }
 
     if (! out_protein_file.empty())
     {
-      FLASHTaggerFile::writeProteins(proteoform_hits, out_protein_stream);
+      FLASHTnTFile::writeProteins(proteoform_hits, out_protein_stream);
       out_protein_stream.close();
     }
 
