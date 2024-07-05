@@ -12,6 +12,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
 #include <OpenMS/CHEMISTRY/Residue.h>
 #include <OpenMS/CHEMISTRY/ResidueDB.h>
+#include <OpenMS/CHEMISTRY/ResidueModification.h>
 #include <OpenMS/DATASTRUCTURES/DefaultParamHandler.h>
 #include <OpenMS/FORMAT/FASTAFile.h>
 #include <OpenMS/METADATA/ProteinHit.h>
@@ -59,12 +60,21 @@ public:
     return ! proteoform_hits_.empty();
   }
 
+  void setModificationMap(const std::map<double, std::vector<ResidueModification>>& mod_map)
+  {
+    mod_map_ = mod_map;
+  }
+
+  const static int multi_ion_score = 1;
+
 protected:
   void updateMembers_() override;
   /// implemented for DefaultParamHandler
   void setDefaultParams_();
 
 private:
+  std::map<double, std::vector<ResidueModification>> mod_map_; // modification mass to modification index. To use find nearest function
+
   static void get_pro_masses_(const ProteinHit& hit, std::vector<double>& pro_masses, int mode);
   static double calculate_precursor_mass_(const ProteinHit& hit,
                                           int protein_start_position,
@@ -118,13 +128,14 @@ private:
                           const MSSpectrum& tol_spec,
                           const std::vector<double>& pro_masses,
                           int mode);
+  Size getLength_(const std::vector<Size>& path, const std::vector<double>& pro_masses) const;
+  Size getProteinSpan_(const std::vector<Size>& path, const std::vector<double>& pro_masses) const;
 
   std::vector<std::string> ion_types_str_;
   std::vector<double> prefix_shifts_;
   std::vector<double> suffix_shifts_;
   std::vector<ProteinHit> proteoform_hits_;
   std::vector<FLASHHelperClasses::Tag> tags_;
-
   double tol_, flanking_mass_tol_;
   int max_mod_cntr_ = 0;
   const int max_path_score_ = 300;

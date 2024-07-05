@@ -10,6 +10,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHExtenderAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTAlgorithm.h>
+#include <OpenMS/CHEMISTRY/ModificationsDB.h>
 
 namespace OpenMS
 {
@@ -61,6 +62,18 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   startProgress(0, (SignedSize)map.size(), "Running FLASHTnT ...");
   int max_tag_length = tagger_param_.getValue("max_length");
   int min_tag_length = tagger_param_.getValue("min_length");
+  double max_diff_mass = (double)extender_param_.getValue("max_mass_shift") + 1.0;
+  std::map<double, std::vector<ResidueModification>> mod_map;
+  const auto inst = ModificationsDB::getInstance();  // give this from outside ...
+  std::vector<String> mod_strs;
+  inst->getAllSearchModifications(mod_strs);
+  for (int i = 0; i < mod_strs.size(); i++)
+  {
+    const auto mod = *inst->getModification(mod_strs[i]);
+    if (mod.getDiffMonoMass() > max_diff_mass) continue;
+    mod_map[mod.getDiffMonoMass()].push_back(mod);
+  }
+
   // collect statistics for information
   for (int index = 0; index < map.size(); index++)
   {
@@ -69,7 +82,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     if (spec.getMSLevel() == 1) continue;
     int scan = FLASHDeconvAlgorithm::getScanNumber(map, index);
 
-    //if (scan != 12295) continue; //TODO
+    //if (scan != 2279) continue; //TODO
     DeconvolvedSpectrum dspec(scan);
     dspec.setOriginalSpectrum(spec);
     String deconv_meta_str = spec.getMetaValue("DeconvMassInfo").toString();
@@ -136,6 +149,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     tagger.run(dspec, tol);
     FLASHExtenderAlgorithm extender;
     extender.setParameters(extender_param_);
+    extender.setModificationMap(mod_map);
     tagger.getTags(tags_);
 
     if (multiple_hits_per_spec_)

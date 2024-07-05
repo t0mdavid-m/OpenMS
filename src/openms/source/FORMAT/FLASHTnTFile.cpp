@@ -24,9 +24,8 @@ void FLASHTnTFile::writeTagHeader(std::fstream& fs)
 /// write header line for topFD feature file
 void FLASHTnTFile::writeProteinHeader(std::fstream& fs)
 {
-  fs << "ProteoformIndex\tScan\tRetentionTime\tProteinAccession\tProteinDescription\tProteoformMass\tDatabaseSequence\tProteinSequence\tProforma\tMat"
-        "chedAminoAcidCount\tCoverage(%)\tStartPosition\tEndPosition"
-        "\tTagCount\tTagIndices\tModCount\tModMass\tModStart\tModEnd\tScore\tProteinLevelQvalue\n";
+  fs << "ProteoformIndex\tScan\tRetentionTime\tProteinAccession\tProteinDescription\tProteoformMass\tDatabaseSequence\tProteinSequence\tProforma\tMatchedAminoAcidCount\tCoverage(%)\tStartPosition\tEndPosition"
+        "\tTagCount\tTagIndices\tModCount\tModMass\tModID\tModAccession\tModStart\tModEnd\tScore\tProteinLevelQvalue\n";
 }
 
 /// write the features in regular file output
@@ -94,7 +93,7 @@ void FLASHTnTFile::writeProteins(const std::vector<ProteinHit>& hits, std::fstre
   for (const auto& hit : hits)
   {
     if (! hit.metaValueExists("Index")) continue;
-    String tagindices = "", modmasses = "", modstarts = "", modeends = "";
+    String tagindices = "", modmasses = "", modstarts = "", modends = "", modids = "", modaccs = "";
 
     int cntr = 0;
     std::vector<FLASHHelperClasses::Tag> tags;
@@ -109,6 +108,8 @@ void FLASHTnTFile::writeProteins(const std::vector<ProteinHit>& hits, std::fstre
     std::vector<double> mod_masses = hit.getMetaValue("Modifications");
     std::vector<int> mod_starts = hit.getMetaValue("ModificationStarts");
     std::vector<int> mod_ends = hit.getMetaValue("ModificationEnds");
+    std::vector<String> mod_ids = hit.getMetaValue("ModificationIDs");
+    std::vector<String> mod_accs = hit.getMetaValue("ModificationACCs");
 
     for (int i = 0; i < mod_masses.size(); i++)
     {
@@ -118,8 +119,14 @@ void FLASHTnTFile::writeProteins(const std::vector<ProteinHit>& hits, std::fstre
       if (! modstarts.empty()) modstarts += ";";
       modstarts += std::to_string(mod_starts[i]);
 
-      if (! modeends.empty()) modeends += ";";
-      modeends += std::to_string(mod_ends[i]);
+      if (! modends.empty()) modends += ";";
+      modends += std::to_string(mod_ends[i]);
+
+      if (! modids.empty()) modids += ";";
+      modids += mod_ids[i];
+
+      if (! modaccs.empty()) modaccs += ";";
+      modaccs += mod_accs[i];
     }
 
     int start = hit.getMetaValue("StartPosition");
@@ -130,10 +137,10 @@ void FLASHTnTFile::writeProteins(const std::vector<ProteinHit>& hits, std::fstre
     String proformaStr = "";
 
     fs << hit.getMetaValue("Index") << "\t" << hit.getMetaValue("Scan") << "\t" << hit.getMetaValue("RT") << "\t" << hit.getAccession() << "\t"
-       << hit.getDescription() << "\t" << hit.getMetaValue("Mass") << "\t" << hit.getSequence() << "\t"
+       << hit.getDescription() << "\t" << hit.getMetaValue("Mass")  << "\t" << hit.getSequence() << "\t"
        << hit.getSequence().substr(start_in_seq, end_in_seq - start_in_seq) << "\t" << proformaStr << "\t" << hit.getMetaValue("MatchedAA") << "\t"
        << 100.0 * hit.getCoverage() << "\t" << start << "\t" << end << "\t" << cntr << "\t" << tagindices << "\t" << mod_masses.size() << "\t"
-       << modmasses << "\t" << modstarts << "\t" << modeends << "\t" << hit.getScore() << "\t"
+       << modmasses << "\t" << modids << "\t" <<  modaccs << "\t" <<  modstarts << "\t" << modends << "\t" << hit.getScore() << "\t"
        << std::to_string((hit.metaValueExists("qvalue") ? (double)hit.getMetaValue("qvalue") : -1)) << "\n";
   }
 }

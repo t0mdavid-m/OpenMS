@@ -364,7 +364,7 @@ void FLASHTaggerAlgorithm::getTags_(const DeconvolvedSpectrum& dspec, double ppm
   for (auto& pg : dspec)
   {
     int score =// (int)round(5 * log10(std::max(1e-1, pg.getQscore() / std::max(1e-1, (1.0 - pg.getQscore())))));
-      (int)round(5 * pg.getQscore());
+      (int)round(max_score * pg.getQscore());
     // if (score <= -5) continue;
     scores.push_back(score);
     mzs.push_back(pg.getMonoMass());
