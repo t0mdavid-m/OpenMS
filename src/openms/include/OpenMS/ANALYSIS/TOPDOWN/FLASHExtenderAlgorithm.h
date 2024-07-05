@@ -127,7 +127,7 @@ private:
 
   double tol_, flanking_mass_tol_;
   int max_mod_cntr_ = 0;
-  const int max_path_score_ = 400;
+  const int max_path_score_ = 300;
   const int min_path_score_ = -20;
   double max_mod_mass_ = 500.0;
   double precursor_mass_ = -1;

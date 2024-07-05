@@ -162,7 +162,7 @@ void FLASHExtenderAlgorithm::define_nodes_(const FLASHTaggerAlgorithm& tagger,
         double mass = p.getMZ() - shift;
         if (mass <= 0 || mass > max_mass + 1) continue;
         t_node_spec.emplace_back(mass, p.getIntensity());
-        t_tol_spec.emplace_back(mass, 2 * tol_ * mass);
+        t_tol_spec.emplace_back(mass, 2 * tol_ * p.getMZ());
       }
     }
     else if (mode == 1)
@@ -172,7 +172,7 @@ void FLASHExtenderAlgorithm::define_nodes_(const FLASHTaggerAlgorithm& tagger,
         double mass = p.getMZ() - shift;
         if (mass <= 0 || mass > max_mass + 1) continue;
         t_node_spec.emplace_back(mass, p.getIntensity());
-        t_tol_spec.emplace_back(mass, 2 * tol_ * mass);
+        t_tol_spec.emplace_back(mass, 2 * tol_ * p.getMZ());
       }
     }
     else if (mode == 2 && precursor_mass > 0)
@@ -182,22 +182,21 @@ void FLASHExtenderAlgorithm::define_nodes_(const FLASHTaggerAlgorithm& tagger,
         double mass = p.getMZ() - shift;
         if (mass <= 0 || mass >= precursor_mass - Residue::getInternalToFull().getMonoWeight()) continue;
         t_node_spec.emplace_back(mass, p.getIntensity());
-        t_tol_spec.emplace_back(mass, 2 * tol_ * mass);
+        t_tol_spec.emplace_back(mass, 2 * tol_ * p.getMZ());
       }
       for (const auto& shift : suffix_shifts_)
       {
         double mass = p.getMZ() - shift;
         if (mass <= 0 || mass >= precursor_mass - Residue::getInternalToFull().getMonoWeight()) continue;
         t_node_spec.emplace_back(precursor_mass - Residue::getInternalToFull().getMonoWeight() - mass, p.getIntensity());
-        t_tol_spec.emplace_back(precursor_mass - Residue::getInternalToFull().getMonoWeight() - mass, 2 * tol_ * mass);
+        t_tol_spec.emplace_back(precursor_mass - Residue::getInternalToFull().getMonoWeight() - mass, 2 * tol_ * p.getMZ());
       }
     }
   }
   if (precursor_mass > 0)
   {
     t_node_spec.emplace_back(precursor_mass - Residue::getInternalToFull().getMonoWeight(), 1);
-    t_tol_spec.emplace_back(precursor_mass - Residue::getInternalToFull().getMonoWeight(),
-                            2 * tol_ * (precursor_mass - Residue::getInternalToFull().getMonoWeight()));
+    t_tol_spec.emplace_back(precursor_mass - Residue::getInternalToFull().getMonoWeight(), 2 * tol_ * precursor_mass);
   }
 
   t_node_spec.sortByPosition();
@@ -214,25 +213,26 @@ void FLASHExtenderAlgorithm::define_nodes_(const FLASHTaggerAlgorithm& tagger,
     const auto& p = t_node_spec[k];
     double mass = p.getMZ();
     float score = p.getIntensity();
-
+    double margin = k == 0 ? .0 : std::max(t_tol_spec[k].getIntensity(), t_tol_spec[k - 1].getIntensity());
     // if (score > 0) max_path_score_ += score;
     // else min_path_score_ += score;
 
-    if (mass - node_spec.back().getMZ() < t_tol_spec[k].getIntensity()) // they are the same
+    if (mass - node_spec.back().getMZ() < margin) // they are the same
     {
       float prev_score = node_spec.back().getIntensity();
+      margin += mass - node_spec.back().getMZ();
+      mass = (mass + node_spec.back().getMZ()) / 2.0;
       if (node_spec.size() > 1)
       {
         node_spec.pop_back();
         tol_spec.pop_back();
       }
-      //score = std::max(.0f, score);
-      //score += 1 + std::max(.0f, prev_score);
+
       score = 1 + std::max(prev_score, score);
     }
 
     node_spec.emplace_back(mass, score);
-    tol_spec.emplace_back(mass, t_tol_spec[k].getIntensity());
+    tol_spec.emplace_back(mass, margin);
   }
   node_spec.sortByPosition();
   tol_spec.sortByPosition();
@@ -460,9 +460,10 @@ void FLASHExtenderAlgorithm::run(const FLASHTaggerAlgorithm& tagger, double flan
     boost::dynamic_bitset<> visited;
     double precursor_mass = -1;
 
-    std::map<int, std::map<int, std::vector<Size>>> all_paths; // mode, num_mod, path
-    std::map<int, std::vector<Size>> best_paths;               // mode, best paths
-
+    std::map<int, std::map<int, std::vector<Size>>> all_path_map; // mode, num_mod, path
+    std::map<int, std::vector<Size>> best_path_map;               // mode, best paths
+    std::map<int, MSSpectrum> node_spec_map;          // mode, best paths
+    std::map<int, std::vector<double>> pro_mass_map;
     for (int mode = 0; mode < 3; mode++) //
     {
       if (mode == 2 && precursor_mass <= 0)
@@ -473,23 +474,25 @@ void FLASHExtenderAlgorithm::run(const FLASHTaggerAlgorithm& tagger, double flan
         if (precursor_mass <= 0) break;
       }
 
-      std::vector<double> pro_masses;
-      MSSpectrum node_spec, tol_spec;
+      auto& pro_masses = pro_mass_map[mode] = std::vector<double>();
+      auto& node_spec = node_spec_map[mode] = MSSpectrum();
+      MSSpectrum tol_spec;
+
       get_pro_masses_(hit, pro_masses, mode);
       define_nodes_(tagger, node_spec, tol_spec, pro_masses.back(), precursor_mass, mode);
       if (visited.empty())
         visited = boost::dynamic_bitset<>((1 + tagger.getSpectrum().size() * ion_types_str_.size()) * (1 + pro_masses.size()) * (2 + max_mod_cntr_)
                                           * (1 + max_path_score_ - min_path_score_));
-      run_(hit, node_spec, tol_spec, pro_masses, visited, precursor_mass, all_paths[mode], mode);
+      run_(hit, node_spec, tol_spec, pro_masses, visited, precursor_mass, all_path_map[mode], mode);
 
       if (mode < 2)
       {
-        const auto paths_c = all_paths.find(0);
-        const auto paths_n = all_paths.find(1);
+        const auto paths_c = all_path_map.find(0);
+        const auto paths_n = all_path_map.find(1);
 
         std::map<int, int> nscores, cscores; // mod and score
 
-        if (paths_n != all_paths.end())
+        if (paths_n != all_path_map.end())
         {
           for (const auto& [mod, path] : paths_n->second)
           {
@@ -497,7 +500,7 @@ void FLASHExtenderAlgorithm::run(const FLASHTaggerAlgorithm& tagger, double flan
             nscores[mod] = getScore_(path[0]);
           }
         }
-        if (paths_c != all_paths.end())
+        if (paths_c != all_path_map.end())
         {
           for (const auto& [mod, path] : paths_c->second)
           {
@@ -514,7 +517,7 @@ void FLASHExtenderAlgorithm::run(const FLASHTaggerAlgorithm& tagger, double flan
             if (path.empty()) continue;
             if (max_score >= getScore_(path[0])) continue;
             max_score = getScore_(path[0]);
-            best_paths[0] = path;
+            best_path_map[0] = path;
           }
         }
         else if (cscores.empty()) // only n term
@@ -524,7 +527,7 @@ void FLASHExtenderAlgorithm::run(const FLASHTaggerAlgorithm& tagger, double flan
             if (path.empty()) continue;
             if (max_score >= getScore_(path[0])) continue;
             max_score = getScore_(path[0]);
-            best_paths[1] = path;
+            best_path_map[1] = path;
           }
         }
         else // both terms
@@ -537,10 +540,10 @@ void FLASHExtenderAlgorithm::run(const FLASHTaggerAlgorithm& tagger, double flan
               if (nscores.find(mn) == nscores.end()) continue;
               int sum_score = nscores[mn] + cscores[mc];
 
-              if (max_score > sum_score) continue;
+              if (max_score >= sum_score) continue;
               max_score = sum_score;
-              best_paths[0] = paths_c->second[mc];
-              best_paths[1] = paths_n->second[mn];
+              best_path_map[0] = paths_c->second[mc];
+              best_path_map[1] = paths_n->second[mn];
             }
           }
         }
@@ -548,13 +551,13 @@ void FLASHExtenderAlgorithm::run(const FLASHTaggerAlgorithm& tagger, double flan
       else if (mode == 2)
       {
         int max_score = 0;
-        const auto paths = all_paths.find(2);
+        const auto paths = all_path_map.find(2);
         for (const auto& [mod, path] : paths->second)
         {
           if (path.empty()) continue;
           if (max_score >= getScore_(path[0])) continue;
           max_score = getScore_(path[0]);
-          best_paths[2] = path;
+          best_path_map[2] = path;
         }
 
         mod_starts.clear();
@@ -564,10 +567,14 @@ void FLASHExtenderAlgorithm::run(const FLASHTaggerAlgorithm& tagger, double flan
       if (mode == 0) continue;
       total_score = 0;
       total_match_cntr = 0;
+
       for (int m = mode == 2 ? 2 : 0; m <= mode; m++)
       {
-        if (best_paths.empty() || best_paths.find(m) == best_paths.end() || best_paths[m].empty()) continue;
-        auto& best_path = best_paths[m];
+        if (best_path_map.empty() || best_path_map.find(m) == best_path_map.end() || best_path_map[m].empty()) continue;
+        auto& best_path = best_path_map[m];
+        auto& t_pro_masses = pro_mass_map[m];
+        auto& t_node_spec = node_spec_map[m];
+
         total_score += getScore_(best_path[0]);
         total_match_cntr += (int)best_path.size() - 1;
 
@@ -576,16 +583,15 @@ void FLASHExtenderAlgorithm::run(const FLASHTaggerAlgorithm& tagger, double flan
         int pre_pro_index = 0;
         for (auto iter = best_path.rbegin(); iter != best_path.rend(); iter++)
         {
-          auto pro_index = getProIndex_(*iter, pro_masses.size());
-          auto node_index = getNodeIndex_(*iter, pro_masses.size());
-          auto mass_shift = node_spec[node_index].getMZ() - pro_masses[pro_index];
+          auto pro_index = getProIndex_(*iter, t_pro_masses.size());
+          auto node_index = getNodeIndex_(*iter, t_pro_masses.size());
+          auto mass_shift = t_node_spec[node_index].getMZ() - t_pro_masses[pro_index];
           auto mod_count = getModNumber_(*iter);
 
-          //            std::cout << hit.getAccession() << " mode " << m << " input pre " << precursor_mass_ << " cal pre " << precursor_mass << "
-          //            score"
-          //                      << getScore_(*iter) << " " << node_index << " " << pro_index << " in " <<  node_spec.size() << " " <<
-          //                      pro_masses.size()<< " " << pro_masses[pro_index] << " " << node_spec[node_index].getMZ()
-          //                      << " " << mod_count << std::endl;
+//          std::cout << hit.getAccession() << " mode " << m << " input pre " << precursor_mass_ << " cal pre " << precursor_mass << "score"
+//                    << getScore_(*iter) << " " << node_index << " " << pro_index << " in " <<  t_node_spec.size() << " " <<
+//            t_pro_masses.size()<< " masses " << t_pro_masses[pro_index] << " " << t_node_spec[node_index].getMZ() << " " << t_pro_masses[pro_index]  -  t_node_spec[node_index].getMZ()
+//                    << " " << mod_count << std::endl;
 
           if (node_index == 0)
           {
@@ -811,7 +817,7 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(FLASHHelperClasses::DAG& dag,
   {
     double node_mass = node_spec[node_index].getMZ();
     delta_mass = node_mass - pro_masses[pro_index];
-    margin = 2 * tol_spec[node_index].getIntensity(); // give some margin
+    margin = 2 * std::max(tol_spec[node_index].getIntensity(), tol_spec[node_index1].getIntensity()); // give some margin
     if (std::abs(delta_mass - delta_mass1) > max_mod_mass_ * (max_mod_cntr_ - num_mod1) + margin) { return; }
     if (diagonal_counter > 0)
     {
@@ -844,16 +850,21 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(FLASHHelperClasses::DAG& dag,
     if (node_index < 0 && node_spec[node_i].getIntensity() < 0 && diagonal_counter > 0) continue;
     int score = score1 + (int)node_spec[node_i].getIntensity();
     double t_node_mass = node_spec[node_i].getMZ();
-    double t_margin = tol_spec[node_i].getIntensity();
+    double t_margin = std::max(tol_spec[node_i].getIntensity(), tol_spec[node_index1].getIntensity());
 
     for (int pro_i = pro_index1 + (pro_index1 == 0 ? 0 : 1); pro_i <= pro_index; pro_i++) //
     {
       double t_delta_mass = t_node_mass - pro_masses[pro_i];
-      if (t_delta_mass - delta_mass1 > max_mod_mass_ + t_margin) continue;
-      if (delta_mass1 - t_delta_mass > max_mod_mass_ + t_margin) break;
+      double delta_delta = t_delta_mass - delta_mass1;
+      if (delta_delta > max_mod_mass_ + t_margin) continue;
+      if (-delta_delta > max_mod_mass_ + t_margin) break;
 
       int num_mod = num_mod1;
-      if (std::abs(t_delta_mass - delta_mass1) > t_margin) { num_mod++; }
+      if (std::abs(delta_delta) > t_margin)
+      {
+        if (abs(delta_delta) < t_margin + 0.036386) continue;
+        num_mod++;
+      }
 
       if (diagonal_counter > 0 && num_mod != num_mod1) continue; //
       if (num_mod > max_mod_cntr_) continue;
@@ -863,14 +874,13 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(FLASHHelperClasses::DAG& dag,
       }
       Size next_vertex = getVertex_(node_i, pro_i, score, num_mod, pro_masses.size());
       dag.addEdge(next_vertex, vertex, visited);
-      // if( mode == 2) std::cout<<node_spec[getNodeIndex_(next_vertex, pro_masses.size())].getMZ()<<std::endl;
+
       if (! visited[next_vertex]) continue;
 
       int next_diagonal_counter = diagonal_counter;
       if (diagonal_counter > 0) next_diagonal_counter--;
       else if (num_mod != num_mod1)
         next_diagonal_counter = 1;
-
       extendBetweenTags_(dag, visited, sinks, next_vertex, node_index, pro_index, next_diagonal_counter, node_spec, tol_spec, pro_masses, mode);
     }
   }
