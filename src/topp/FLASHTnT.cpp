@@ -38,14 +38,17 @@ protected:
   // it gets automatically called on tool execution
   void registerOptionsAndFlags_() override
   {
-    registerInputFile_("in", "<file>", "", "Input file (deconv.mzML from FLASHDeconv mzML output)");
+    registerInputFile_("in", "<file>", "", "Input file (deconv.mzML from FLASHDeconv mzML output)", true);
     setValidFormats_("in", ListUtils::create<String>("mzML"));
 
-    registerInputFile_("fasta", "<file>", "", "Input proteome database file (fasta)");
+    registerInputFile_("fasta", "<file>", "", "Input proteome database file (fasta)", true);
     setValidFormats_("fasta", ListUtils::create<String>("fasta"));
 
-    registerOutputFile_("out_pro", "<file>", "", "Default output proteoform level tsv file containing matched proteins");
+    registerOutputFile_("out_pro", "<file>", "", "Default output Proteoform level tsv file containing Proteoform IDs", true);
     setValidFormats_("out_pro", ListUtils::create<String>("tsv"));
+
+    registerOutputFile_("out_prsm", "<file>", "", "Default output PrSM level tsv file containing PrSMs");
+    setValidFormats_("out_prsm", ListUtils::create<String>("tsv"));
 
     registerOutputFile_("out_tag", "<file>", "", "Default output tag level tsv file containing matched tags");
     setValidFormats_("out_tag", ListUtils::create<String>("tsv"));
@@ -75,7 +78,8 @@ protected:
     String in_fasta = getStringOption_("fasta");
 
     String out_tag_file = getStringOption_("out_tag");
-    String out_protein_file = getStringOption_("out_pro");
+    String out_prsm_file = getStringOption_("out_prsm");
+    String out_pro_file = getStringOption_("out_pro");
 
     //-------------------------------------------------------------
     // reading input
@@ -91,6 +95,7 @@ protected:
 
     auto tnt_param = getParam_().copy("tnt:", true);
     double flanking_mass_tol = tnt_param.getValue("tag:flanking_mass_tol");
+    double pro_fdr = tnt_param.getValue("pro_fdr");
     OPENMS_LOG_INFO << "Finding sequence tags from deconvolved MS2 spectra ..." << endl;
 
     FASTAFile fasta_file;
@@ -101,7 +106,8 @@ protected:
     OPENMS_LOG_INFO << "Processing : " << in_file << endl;
 
     fstream out_tagger_stream;
-    fstream out_protein_stream;
+    fstream out_prsm_stream;
+    fstream out_pro_stream;
 
     if (! out_tag_file.empty())
     {
@@ -109,10 +115,16 @@ protected:
       FLASHTnTFile::writeTagHeader(out_tagger_stream);
     }
 
-    if (! out_protein_file.empty())
+    if (! out_prsm_file.empty())
     {
-      out_protein_stream = fstream(out_protein_file, fstream::out);
-      FLASHTnTFile::writeProteinHeader(out_protein_stream);
+      out_prsm_stream = fstream(out_prsm_file, fstream::out);
+      FLASHTnTFile::writePrSMHeader(out_prsm_stream);
+    }
+
+    if (! out_pro_file.empty())
+    {
+      out_pro_stream = fstream(out_pro_file, fstream::out);
+      FLASHTnTFile::writeProHeader(out_pro_stream);
     }
 
     FLASHTnTAlgorithm tnt;
@@ -121,16 +133,22 @@ protected:
     tnt.getProteoforms(proteoform_hits);
 
     if (! out_tag_file.empty())
-    { FLASHTnTFile::writeTags(tnt, flanking_mass_tol, out_tagger_stream);
-    }
-
-    if (! out_protein_file.empty())
     {
-      FLASHTnTFile::writeProteins(proteoform_hits, out_protein_stream);
-      out_protein_stream.close();
+      FLASHTnTFile::writeTags(tnt, flanking_mass_tol, out_tagger_stream);
+      out_tagger_stream.close();
     }
 
-    if (! out_tag_file.empty()) { out_tagger_stream.close(); }
+    if (! out_prsm_file.empty())
+    {
+      FLASHTnTFile::writePrSMs(proteoform_hits, out_prsm_stream);
+      out_prsm_stream.close();
+    }
+
+    if (! out_pro_file.empty())
+    {
+      FLASHTnTFile::writeProteoforms(proteoform_hits, out_pro_stream, pro_fdr);
+      out_pro_stream.close();
+    }
 
     OPENMS_LOG_INFO << "FLASHTnT run complete. Now writing the results in output files ..." << endl;
 

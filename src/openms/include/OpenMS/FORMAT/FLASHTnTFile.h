@@ -20,15 +20,20 @@ namespace OpenMS
   class OPENMS_DLLAPI FLASHTnTFile
 {
   public:
-    /// write header line for regular file output
+    /// write header line for tag output file
     static void writeTagHeader(std::fstream& fs);
 
-    /// write header line for topFD feature file
-    static void writeProteinHeader(std::fstream& fs);
+    /// write header line for PrSM output file
+    static void writePrSMHeader(std::fstream& fs);
+
+    /// write header line for Proteoform output file
+    static void writeProHeader(std::fstream& fs);
 
     /// write the features in regular file output
     static void writeTags(const FLASHTnTAlgorithm& tnt, double flanking_mass_tol, std::fstream& fs);
 
-    static void writeProteins(const std::vector<ProteinHit>& hits, std::fstream& fs);
+    static void writePrSMs(const std::vector<ProteinHit>& hits, std::fstream& fs);
+
+    static void writeProteoforms(const std::vector<ProteinHit>& hits, std::fstream& fs, double pro_fdr);
   };
 } // namespace OpenMS

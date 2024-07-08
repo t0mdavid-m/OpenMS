@@ -72,11 +72,14 @@ protected:
 
 private:
   Param tagger_param_, extender_param_;
-  double decoy_factor_ = 0, fdr_ = 1;
+  double decoy_factor_ = 0, prsm_fdr_ = 1, pro_fdr_ = 1;
   bool keep_decoy_ = false;
+  bool keep_underdetermined_ = true;
   bool multiple_hits_per_spec_ = false;
   std::vector<ProteinHit> proteoform_hits_;
   std::vector<FLASHHelperClasses::Tag> tags_;
   std::map<int, std::vector<int>> matching_hits_indices_;
+  bool areConsistent_(const ProteinHit& a, const ProteinHit& b, double tol) const;
+  void markRepresentativeProteoformHits_(double tol);
 };
 } // namespace OpenMS

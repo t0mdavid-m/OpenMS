@@ -21,11 +21,18 @@ void FLASHTnTFile::writeTagHeader(std::fstream& fs)
         "ength\tDeNovoScore\tMasses\tMassScores\n";
 }
 
-/// write header line for topFD feature file
-void FLASHTnTFile::writeProteinHeader(std::fstream& fs)
+/// write header line for PrSM file
+void FLASHTnTFile::writePrSMHeader(std::fstream& fs)
 {
   fs << "ProteoformIndex\tScan\tRetentionTime\tProteinAccession\tProteinDescription\tProteoformMass\tDatabaseSequence\tProteinSequence\tProforma\tMatchedAminoAcidCount\tCoverage(%)\tStartPosition\tEndPosition"
-        "\tTagCount\tTagIndices\tModCount\tModMass\tModID\tModAccession\tModStart\tModEnd\tScore\tProteinLevelQvalue\n";
+        "\tTagCount\tTagIndices\tModCount\tModMass\tModID\tModAccession\tModStart\tModEnd\tScore\tPrSMLevelQvalue\tProteoformLevelQvalue\n";
+}
+
+/// write header line for Proteoform file
+void FLASHTnTFile::writeProHeader(std::fstream& fs)
+{
+  fs << "ProteoformIndex\tScan\tRetentionTime\tProteinAccession\tProteinDescription\tProteoformMass\tDatabaseSequence\tProteinSequence\tProforma\tMatchedAminoAcidCount\tCoverage(%)\tStartPosition\tEndPosition"
+        "\tTagCount\tTagIndices\tModCount\tModMass\tModID\tModAccession\tModStart\tModEnd\tScore\tProteoformLevelQvalue\n";
 }
 
 /// write the features in regular file output
@@ -88,7 +95,7 @@ void FLASHTnTFile::writeTags(const FLASHTnTAlgorithm& tnt, double flanking_mass_
   }
 }
 
-void FLASHTnTFile::writeProteins(const std::vector<ProteinHit>& hits, std::fstream& fs)
+void FLASHTnTFile::writePrSMs(const std::vector<ProteinHit>& hits, std::fstream& fs)
 {
   for (const auto& hit : hits)
   {
@@ -117,10 +124,10 @@ void FLASHTnTFile::writeProteins(const std::vector<ProteinHit>& hits, std::fstre
       modmasses += std::to_string(mod_masses[i]);
 
       if (! modstarts.empty()) modstarts += ";";
-      modstarts += std::to_string(mod_starts[i]);
+      modstarts += std::to_string(mod_starts[i] + 1);
 
       if (! modends.empty()) modends += ";";
-      modends += std::to_string(mod_ends[i]);
+      modends += std::to_string(mod_ends[i] + 1);
 
       if (! modids.empty()) modids += ";";
       modids += mod_ids[i];
@@ -132,7 +139,7 @@ void FLASHTnTFile::writeProteins(const std::vector<ProteinHit>& hits, std::fstre
     int start = hit.getMetaValue("StartPosition");
     int end = hit.getMetaValue("EndPosition");
 
-    int start_in_seq = start < 0 ? 0 : start;
+    int start_in_seq = start < 0 ? 0 : (start - 1);
     int end_in_seq = end < 0 ? hit.getSequence().size() : end;
     String proformaStr = "";
 
@@ -141,7 +148,68 @@ void FLASHTnTFile::writeProteins(const std::vector<ProteinHit>& hits, std::fstre
        << hit.getSequence().substr(start_in_seq, end_in_seq - start_in_seq) << "\t" << proformaStr << "\t" << hit.getMetaValue("MatchedAA") << "\t"
        << 100.0 * hit.getCoverage() << "\t" << start << "\t" << end << "\t" << cntr << "\t" << tagindices << "\t" << mod_masses.size() << "\t"
        << modmasses << "\t" << modids << "\t" <<  modaccs << "\t" <<  modstarts << "\t" << modends << "\t" << hit.getScore() << "\t"
-       << std::to_string((hit.metaValueExists("qvalue") ? (double)hit.getMetaValue("qvalue") : -1)) << "\n";
+       << std::to_string((hit.metaValueExists("qvalue") ? (double)hit.getMetaValue("qvalue") : -1)) <<  "\t" << std::to_string((hit.metaValueExists("proqvalue") ? (double)hit.getMetaValue("proqvalue") : -1)) <<"\n";
   }
 }
+
+
+void FLASHTnTFile::writeProteoforms(const std::vector<ProteinHit>& hits, std::fstream& fs, double pro_fdr)
+{
+  for (const auto& hit : hits)
+  {
+    if (! hit.metaValueExists("Index")) continue;
+    if (! hit.metaValueExists("Representative")) continue;
+    if (hit.metaValueExists("proqvalue") && (double) hit.getMetaValue("proqvalue") > pro_fdr) continue;
+    String tagindices = "", modmasses = "", modstarts = "", modends = "", modids = "", modaccs = "";
+
+    int cntr = 0;
+    std::vector<FLASHHelperClasses::Tag> tags;
+    std::vector<int> indices = (std::vector<int>)hit.getMetaValue("TagIndices").toIntList();
+    for (const int& index : indices)
+    {
+      if (! tagindices.empty()) tagindices += ";";
+      tagindices += std::to_string(index);
+      cntr++;
+    }
+
+    std::vector<double> mod_masses = hit.getMetaValue("Modifications");
+    std::vector<int> mod_starts = hit.getMetaValue("ModificationStarts");
+    std::vector<int> mod_ends = hit.getMetaValue("ModificationEnds");
+    std::vector<String> mod_ids = hit.getMetaValue("ModificationIDs");
+    std::vector<String> mod_accs = hit.getMetaValue("ModificationACCs");
+
+    for (int i = 0; i < mod_masses.size(); i++)
+    {
+      if (! modmasses.empty()) modmasses += ";";
+      modmasses += std::to_string(mod_masses[i]);
+
+      if (! modstarts.empty()) modstarts += ";";
+      modstarts += std::to_string(mod_starts[i] + 1);
+
+      if (! modends.empty()) modends += ";";
+      modends += std::to_string(mod_ends[i] + 1);
+
+      if (! modids.empty()) modids += ";";
+      modids += mod_ids[i];
+
+      if (! modaccs.empty()) modaccs += ";";
+      modaccs += mod_accs[i];
+    }
+
+    int start = hit.getMetaValue("StartPosition");
+    int end = hit.getMetaValue("EndPosition");
+
+    int start_in_seq = start < 0 ? 0 : (start - 1);
+    int end_in_seq = end < 0 ? hit.getSequence().size() : end;
+    String proformaStr = "";
+
+    fs << hit.getMetaValue("Index") << "\t" << hit.getMetaValue("Scan") << "\t" << hit.getMetaValue("RT") << "\t" << hit.getAccession() << "\t"
+       << hit.getDescription() << "\t" << hit.getMetaValue("Mass")  << "\t" << hit.getSequence() << "\t"
+       << hit.getSequence().substr(start_in_seq, end_in_seq - start_in_seq) << "\t" << proformaStr << "\t" << hit.getMetaValue("MatchedAA") << "\t"
+       << 100.0 * hit.getCoverage() << "\t" << start << "\t" << end << "\t" << cntr << "\t" << tagindices << "\t" << mod_masses.size() << "\t"
+       << modmasses << "\t" << modids << "\t" <<  modaccs << "\t" <<  modstarts << "\t" << modends << "\t" << hit.getScore() << "\t"
+       << std::to_string((hit.metaValueExists("proqvalue") ? (double)hit.getMetaValue("proqvalue") : -1)) << "\n";
+  }
+}
+
 } // namespace OpenMS

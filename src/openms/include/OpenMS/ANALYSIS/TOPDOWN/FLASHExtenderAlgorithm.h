@@ -75,15 +75,15 @@ protected:
 private:
   std::map<double, std::vector<ResidueModification>> mod_map_; // modification mass to modification index. To use find nearest function
 
-  static void get_pro_masses_(const ProteinHit& hit, std::vector<double>& pro_masses, int mode);
+
+  static void getProMasses(const ProteinHit& hit, std::vector<double>& pro_masses, int mode);
   static double calculate_precursor_mass_(const ProteinHit& hit,
                                           int protein_start_position,
                                           int protein_end_position,
                                           const std::vector<int>& mod_starts,
                                           const std::vector<int>& mod_ends,
                                           const std::vector<double>& mod_masses);
-  void
-  define_nodes_(const FLASHTaggerAlgorithm& tagger, MSSpectrum& node_spec, MSSpectrum& tol_spec, double max_mass, double precursor_mass, int mode);
+  void defineNodes(const FLASHTaggerAlgorithm& tagger, MSSpectrum& node_spec, MSSpectrum& tol_spec, double max_mass, double precursor_mass, int mode);
   void run_(const ProteinHit& hit,
             const MSSpectrum& node_spec,
             const MSSpectrum& tol_spec,

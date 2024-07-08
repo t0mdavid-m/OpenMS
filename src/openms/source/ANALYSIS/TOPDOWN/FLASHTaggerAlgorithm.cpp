@@ -316,7 +316,7 @@ void FLASHTaggerAlgorithm::updateMembers_()
   min_cov_aa_ = (int)param_.getValue("min_matched_aa");
   max_aa_in_gap_ = param_.getValue("max_aa_in_gap");
   max_gap_count_ = param_.getValue("allow_gap").toString() == "true" ? 1 : 0;
-  // fdr_ = param_.getValue("fdr");
+  // prsm_fdr_ = param_.getValue("fdr");
   flanking_mass_tol_ = param_.getValue("flanking_mass_tol");
   updateEdgeMasses_();
   max_edge_mass_ = max_iso_in_tag_ * Constants::C13C12_MASSDIFF_U;
