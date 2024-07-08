@@ -315,8 +315,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         {
           std::vector<double> mod_masses = hit.getMetaValue("Modifications");
           if (mod_masses.size() != mod) continue;
-          if (k == 0 && ((int)hit.getMetaValue("StartPosition") < 0 || (int)hit.getMetaValue("EndPosition") < 0)) continue;
-          else if (k == 1 && ((int)hit.getMetaValue("StartPosition") > 0 && (int)hit.getMetaValue("EndPosition") > 0)) continue;
+          if (k == 0 && ((double)hit.getMetaValue("Mass") < 0 || (int)hit.getMetaValue("StartPosition") < 0 || (int)hit.getMetaValue("EndPosition") < 0)) continue;
+          else if (k == 1 && ((double)hit.getMetaValue("Mass") > 0 && (int)hit.getMetaValue("StartPosition") > 0 && (int)hit.getMetaValue("EndPosition") > 0)) continue;
 
           bool is_decoy = hit.getAccession().hasPrefix("DECOY");
           bool is_rep = hit.metaValueExists("Representative");
@@ -357,9 +357,9 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         {
           std::vector<double> mod_masses = hit.getMetaValue("Modifications");
           if (mod_masses.size() != mod) continue;
-          if (k == 0 && ((int)hit.getMetaValue("StartPosition") < 0 || (int)hit.getMetaValue("EndPosition") < 0)) continue;
-          else if (k == 1 && ((int)hit.getMetaValue("StartPosition") > 0 && (int)hit.getMetaValue("EndPosition") > 0)) continue;
-
+          if (k == 0 && ((double)hit.getMetaValue("Mass") < 0 || (int)hit.getMetaValue("StartPosition") < 0 || (int)hit.getMetaValue("EndPosition") < 0)) continue;
+          else if (k == 1 && ((double)hit.getMetaValue("Mass") > 0 && (int)hit.getMetaValue("StartPosition") > 0 && (int)hit.getMetaValue("EndPosition") > 0)) continue;
+          
           bool is_decoy = hit.getAccession().hasPrefix("DECOY");
           double qvalue = map_qvalue[hit.getScore()];
           hit.setMetaValue("qvalue", qvalue);
