@@ -24,14 +24,14 @@ void FLASHTnTFile::writeTagHeader(std::fstream& fs)
 /// write header line for PrSM file
 void FLASHTnTFile::writePrSMHeader(std::fstream& fs)
 {
-  fs << "ProteoformIndex\tScan\tRetentionTime\tProteinAccession\tProteinDescription\tProteoformMass\tDatabaseSequence\tProteinSequence\tProforma\tMatchedAminoAcidCount\tCoverage(%)\tStartPosition\tEndPosition"
+  fs << "ProteoformIndex\tScan\tRetentionTime\tNumMass\tProteinAccession\tProteinDescription\tProteoformMass\tDatabaseSequence\tProteinSequence\tProforma\tMatchedAminoAcidCount\tCoverage(%)\tStartPosition\tEndPosition"
         "\tTagCount\tTagIndices\tModCount\tModMass\tModID\tModAccession\tModStart\tModEnd\tScore\tPrSMLevelQvalue\tProteoformLevelQvalue\n";
 }
 
 /// write header line for Proteoform file
 void FLASHTnTFile::writeProHeader(std::fstream& fs)
 {
-  fs << "ProteoformIndex\tScan\tRetentionTime\tProteinAccession\tProteinDescription\tProteoformMass\tDatabaseSequence\tProteinSequence\tProforma\tMatchedAminoAcidCount\tCoverage(%)\tStartPosition\tEndPosition"
+  fs << "ProteoformIndex\tScan\tRetentionTime\tNumMass\tProteinAccession\tProteinDescription\tProteoformMass\tDatabaseSequence\tProteinSequence\tProforma\tMatchedAminoAcidCount\tCoverage(%)\tStartPosition\tEndPosition"
         "\tTagCount\tTagIndices\tModCount\tModMass\tModID\tModAccession\tModStart\tModEnd\tScore\tProteoformLevelQvalue\n";
 }
 
@@ -86,7 +86,7 @@ void FLASHTnTFile::writeTags(const FLASHTnTAlgorithm& tnt, double flanking_mass_
         fs << std::to_string(mz) << ",";
       }
       fs << "\t";
-      for (auto i = 0; i < tag.getLength(); i++)
+      for (auto i = 0; i <= tag.getLength(); i++)
       {
         fs << std::to_string(tag.getScore(i)) << ",";
       }
@@ -143,7 +143,7 @@ void FLASHTnTFile::writePrSMs(const std::vector<ProteinHit>& hits, std::fstream&
     int end_in_seq = end < 0 ? hit.getSequence().size() : end;
     String proformaStr = "";
 
-    fs << hit.getMetaValue("Index") << "\t" << hit.getMetaValue("Scan") << "\t" << hit.getMetaValue("RT") << "\t" << hit.getAccession() << "\t"
+    fs << hit.getMetaValue("Index") << "\t" << hit.getMetaValue("Scan") << "\t" << hit.getMetaValue("RT")<< "\t" << hit.getMetaValue("NumMass") << "\t" << hit.getAccession() << "\t"
        << hit.getDescription() << "\t" << hit.getMetaValue("Mass")  << "\t" << hit.getSequence() << "\t"
        << hit.getSequence().substr(start_in_seq, end_in_seq - start_in_seq) << "\t" << proformaStr << "\t" << hit.getMetaValue("MatchedAA") << "\t"
        << 100.0 * hit.getCoverage() << "\t" << start << "\t" << end << "\t" << cntr << "\t" << tagindices << "\t" << mod_masses.size() << "\t"
@@ -203,7 +203,7 @@ void FLASHTnTFile::writeProteoforms(const std::vector<ProteinHit>& hits, std::fs
     int end_in_seq = end < 0 ? hit.getSequence().size() : end;
     String proformaStr = "";
 
-    fs << hit.getMetaValue("Index") << "\t" << hit.getMetaValue("Scan") << "\t" << hit.getMetaValue("RT") << "\t" << hit.getAccession() << "\t"
+    fs << hit.getMetaValue("Index") << "\t" << hit.getMetaValue("Scan") << "\t" << hit.getMetaValue("RT") << "\t" << hit.getMetaValue("NumMass") << "\t" << hit.getAccession() << "\t"
        << hit.getDescription() << "\t" << hit.getMetaValue("Mass")  << "\t" << hit.getSequence() << "\t"
        << hit.getSequence().substr(start_in_seq, end_in_seq - start_in_seq) << "\t" << proformaStr << "\t" << hit.getMetaValue("MatchedAA") << "\t"
        << 100.0 * hit.getCoverage() << "\t" << start << "\t" << end << "\t" << cntr << "\t" << tagindices << "\t" << mod_masses.size() << "\t"

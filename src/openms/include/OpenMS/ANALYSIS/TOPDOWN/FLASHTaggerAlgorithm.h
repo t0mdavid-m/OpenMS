@@ -68,7 +68,7 @@ public:
   {
     return decoy_factor_;
   }
-  const static int max_score = 5;
+  const static int max_score = 8;
 protected:
   void updateMembers_() override;
   /// implemented for DefaultParamHandler

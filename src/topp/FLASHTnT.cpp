@@ -102,7 +102,7 @@ protected:
     std::vector<FASTAFile::FASTAEntry> fasta_entry;
     fasta_file.load(in_fasta, fasta_entry);
     std::vector<ProteinHit> proteoform_hits;
-    // Run FLASHDeconvAlgorithm here!
+    // Run here!
     OPENMS_LOG_INFO << "Processing : " << in_file << endl;
 
     fstream out_tagger_stream;

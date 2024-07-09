@@ -12,7 +12,7 @@
 
 namespace OpenMS
 {
-inline const Size max_node_cntr = 500;
+inline const Size max_node_cntr = 400;
 
 std::vector<Residue> FLASHTaggerAlgorithm::getAA_(double l, double r, double tol, int iso_offset) const
 {
@@ -286,7 +286,7 @@ void FLASHTaggerAlgorithm::setDefaultParams_()
   defaults_.setMaxInt("max_length", 30);
   defaults_.setMinInt("max_length", 3);
 
-  defaults_.setValue("flanking_mass_tol", 10000.0, "Flanking mass tolerance in Da.");
+  defaults_.setValue("flanking_mass_tol", 1000000.0, "Flanking mass tolerance in Da.");
   defaults_.setValue("max_iso_error_count", 0, "Maximum isotope error count per tag.");
 
   defaults_.setValue("allow_iso_error", "false", "Allow up to one isotope error in each tag.");
@@ -363,7 +363,7 @@ void FLASHTaggerAlgorithm::getTags_(const DeconvolvedSpectrum& dspec, double ppm
 
   for (auto& pg : dspec)
   {
-    int score =// (int)round(5 * log10(std::max(1e-1, pg.getQscore() / std::max(1e-1, (1.0 - pg.getQscore())))));
+    int score = // (int)round(5 * log10(std::max(1e-1, pg.getQscore() / std::max(1e-1, (1.0 - pg.getQscore())))));
       (int)round(max_score * pg.getQscore());
     // if (score <= -5) continue;
     scores.push_back(score);
@@ -390,7 +390,7 @@ void FLASHTaggerAlgorithm::updateTagSet_(std::set<FLASHHelperClasses::Tag>& tag_
 
   for (int j = 1; j < (int)path.size(); j++)
   {
-    int i1 = getIndex_(path[j - 1]); // c term size
+    int i1 = getIndex_(path[j - 1]); // c term side
     int i2 = getIndex_(path[j]);     // n term side
 
     if (edge_aa_map_.find(i1) != edge_aa_map_.end() && edge_aa_map_[i1].find(i2) != edge_aa_map_[i1].end())
@@ -623,7 +623,8 @@ void FLASHTaggerAlgorithm::runMatching(const std::vector<FASTAFile::FASTAEntry>&
     nextProgress();
     std::vector<int> matched_tag_indices;
     auto x_pos = fe.sequence.find('X');
-    std::map<Size, int> matched_pos_score;
+    std::map<Size, int> matched_protein_pos_score;
+    // std::map<Size, double> matched_protein_pos_mass;
     // find range, match allowing X.
     std::set<double> matched_masses;
     for (int j = 0; j < (int)tags_.size(); j++)
@@ -686,12 +687,21 @@ void FLASHTaggerAlgorithm::runMatching(const std::vector<FASTAFile::FASTAEntry>&
         else
           continue;
 
-        for (int off = 0; off < (int)tag.getLength(); off++)
+        for (int off = 0; off <= (int)tag.getLength(); off++)
         {
+          if (matched_masses.find(tag.getMzs()[off]) != matched_masses.end()) continue;
           int score = tag.getScore(off);
-          auto iter = matched_pos_score.find(pos + off);
-          if (iter != matched_pos_score.end()) score = std::max(score, iter->second);
-          matched_pos_score[pos + off] = score;
+
+          auto iter = matched_protein_pos_score.find(pos + off);
+          if (iter == matched_protein_pos_score.end())
+          {
+            // if (score < iter->second) continue;
+            matched_protein_pos_score[pos + off] = 0;
+          }
+
+          matched_protein_pos_score[pos + off] += score;
+          // matched_protein_pos_mass[pos + off] = tag.getMzs()[off];
+
           matched = true;
         }
       }
@@ -707,9 +717,12 @@ void FLASHTaggerAlgorithm::runMatching(const std::vector<FASTAFile::FASTAEntry>&
     double match_score = 0;
     double max_match_score = 0; // sum over consecutive aas
     int prev_position = -1;
-    for (const auto& ps : matched_pos_score)
+    // std::set<double> counted;
+    for (const auto& ps : matched_protein_pos_score)
     {
       if (fe.sequence[ps.first] == 'X') continue;
+      // if (counted.find(matched_protein_pos_mass[ps.first]) != counted.end()) continue;
+      // counted.insert(matched_protein_pos_mass[ps.first]);
       match_cntr++;
       if (ps.first - prev_position < 3) { match_score += ps.second; }
       else
@@ -719,8 +732,8 @@ void FLASHTaggerAlgorithm::runMatching(const std::vector<FASTAFile::FASTAEntry>&
       prev_position = ps.first;
     }
 
-    if (match_cntr < min_cov_aa_) continue;
-    // if (fe.identifier.hasSubstring("P0A7U7")) std::cout<<fe.identifier<<std::endl;
+    if (match_cntr < min_cov_aa_ + 1) continue;
+
     ProteinHit hit(0, 0, fe.identifier, fe.sequence); //
     hit.setDescription(fe.description);
     hit.setMetaValue("Scan", scan);
@@ -740,8 +753,11 @@ void FLASHTaggerAlgorithm::runMatching(const std::vector<FASTAFile::FASTAEntry>&
   for (auto& [hit, indices] : pairs)
   {
     hit.setMetaValue("TagIndices", indices);
-    // if (hit.getAccession().hasSubstring("P0A7U7")) std::cout<<hit.getAccession()<< " / " << std::endl;
     protein_hits_.push_back(hit);
+    // if (!hit.getAccession().hasPrefix("DECOY")) {
+    //   std::cout<<hit.getAccession()<< " " << hit.getScore() << std::endl;
+    //   for (auto i : indices) std::cout<< tags_[i].toString()<<std::endl;
+    // }
   }
   std::sort(protein_hits_.begin(), protein_hits_.end(), [](const ProteinHit& left, const ProteinHit& right) {
     return left.getScore() == right.getScore()

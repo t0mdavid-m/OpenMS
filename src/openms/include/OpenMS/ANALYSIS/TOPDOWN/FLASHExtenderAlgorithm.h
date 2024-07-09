@@ -138,9 +138,10 @@ private:
   std::vector<FLASHHelperClasses::Tag> tags_;
   double tol_, flanking_mass_tol_;
   int max_mod_cntr_ = 0;
-  const int max_path_score_ = 300;
-  const int min_path_score_ = -20;
+  const int max_path_score_ = 400;
+  const int min_path_score_ = -10;
   double max_mod_mass_ = 500.0;
   double precursor_mass_ = -1;
+  //bool tmp = true;
 };
 } // namespace OpenMS
