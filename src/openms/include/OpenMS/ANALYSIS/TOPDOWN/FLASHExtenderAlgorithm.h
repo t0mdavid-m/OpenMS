@@ -77,7 +77,7 @@ private:
 
 
   static void getProMasses(const ProteinHit& hit, std::vector<double>& pro_masses, int mode);
-  static double calculate_precursor_mass_(const ProteinHit& hit,
+  static double calculatePrecursorMass_(const ProteinHit& hit,
                                           int protein_start_position,
                                           int protein_end_position,
                                           const std::vector<int>& mod_starts,
@@ -90,7 +90,7 @@ private:
             const std::vector<double>& pro_masses,
             boost::dynamic_bitset<>& visited,
             double precursor_mass,
-            std::map<int, std::vector<Size>>& all_paths_per_mode,
+            std::map<int, std::vector<Size>>& all_paths_per_mode, int max_mod_cntr_for_last_mode,
             int mode); // per hit
   Size getVertex_(int node_index, int pro_index, int score, int num_mod, Size pro_length) const;
   int getNodeIndex_(Size vertex, Size pro_length) const;
@@ -103,7 +103,7 @@ private:
                      const MSSpectrum& node_spec,
                      const MSSpectrum& tol_spec,
                      const std::vector<double>& pro_masses,
-                     const std::vector<std::vector<int>>& tag_edges,
+                     const std::vector<std::vector<int>>& tag_edges, int max_mod_cntr_for_last_mode,
                      int mode,
                      bool use_tags);
   void connectBetweenTags_(FLASHHelperClasses::DAG& dag,
@@ -114,7 +114,7 @@ private:
                            const MSSpectrum& node_spec,
                            const MSSpectrum& tol_spec,
                            const std::vector<double>& pro_masses,
-                           const std::vector<std::vector<int>>& tag_edges,
+                           const std::vector<std::vector<int>>& tag_edges, int max_mod_cntr_for_last_mode,
                            int mode,
                            bool use_tags);
   void extendBetweenTags_(FLASHHelperClasses::DAG& dag,
@@ -126,7 +126,7 @@ private:
                           int diagonal_counter,
                           const MSSpectrum& node_spec,
                           const MSSpectrum& tol_spec,
-                          const std::vector<double>& pro_masses,
+                          const std::vector<double>& pro_masses, int max_mod_cntr_for_last_mode,
                           int mode);
   Size getLength_(const std::vector<Size>& path, const std::vector<double>& pro_masses) const;
   Size getProteinSpan_(const std::vector<Size>& path, const std::vector<double>& pro_masses) const;

@@ -286,7 +286,8 @@ void FLASHTaggerAlgorithm::setDefaultParams_()
   defaults_.setMaxInt("max_length", 30);
   defaults_.setMinInt("max_length", 3);
 
-  defaults_.setValue("flanking_mass_tol", 1000000.0, "Flanking mass tolerance in Da.");
+  defaults_.setValue("flanking_mass_tol", 10000000.0, "Flanking mass tolerance (the flanking mass minus protein mass up to the matching amino acid) in Da. This limits the possible terminal modification mass.");
+
   defaults_.setValue("max_iso_error_count", 0, "Maximum isotope error count per tag.");
 
   defaults_.setValue("allow_iso_error", "false", "Allow up to one isotope error in each tag.");
@@ -584,7 +585,7 @@ Size FLASHTaggerAlgorithm::find_with_X_(const std::string_view& A, const String&
 }
 
 // Make output struct containing all information about matched entries and tags, coverage, score etc.
-void FLASHTaggerAlgorithm::runMatching(const std::vector<FASTAFile::FASTAEntry>& fasta_entry, int tag_length)
+void FLASHTaggerAlgorithm::runMatching(const std::vector<FASTAFile::FASTAEntry>& fasta_entry, double max_mod_mass, int tag_length)
 {
   std::vector<std::pair<ProteinHit, std::vector<int>>> pairs;
   std::vector<int> start_loc(tags_.size(), 0);
@@ -616,14 +617,16 @@ void FLASHTaggerAlgorithm::runMatching(const std::vector<FASTAFile::FASTAEntry>&
     decoy_factor_ = decoy_count / taget_count;
   }
 
-#pragma omp parallel for default(none) shared(pairs, fasta_entry, taget_count, decoy_count, start_loc, end_loc, scan, tag_length, std::cout)
+#pragma omp parallel for default(none) shared(pairs, fasta_entry, taget_count, decoy_count, start_loc, end_loc, scan, tag_length,max_mod_mass, std::cout)
   for (int i = 0; i < (int)fasta_entry.size(); i++)
   {
     const auto& fe = fasta_entry[i];
     nextProgress();
     std::vector<int> matched_tag_indices;
     auto x_pos = fe.sequence.find('X');
-    std::map<Size, int> matched_protein_pos_score;
+    std::set<Size> matched_positions;
+
+    std::map<double, std::map<double, int>> nterm_to_mzscore, cterm_to_mzscore;
     // std::map<Size, double> matched_protein_pos_mass;
     // find range, match allowing X.
     std::set<double> matched_masses;
@@ -675,35 +678,43 @@ void FLASHTaggerAlgorithm::runMatching(const std::vector<FASTAFile::FASTAEntry>&
           auto nterm = fe.sequence.substr(0, std::min(pos, (int)fe.sequence.length()));
           if (x_pos != String::npos) { nterm.erase(remove(nterm.begin(), nterm.end(), 'X'), nterm.end()); }
           double aamass = nterm.empty() ? 0 : AASequence::fromString(nterm).getMonoWeight(Residue::Internal);
-          if (std::abs(tag.getNtermMass() - aamass) > flanking_mass_tol_) continue;
+          double flanking_mass = tag.getNtermMass() - aamass;
+          if (std::abs(flanking_mass) > flanking_mass_tol_) continue;
+          if (max_mod_mass > 0 && flanking_mass > max_mod_mass) continue;
+
+          if (nterm_to_mzscore.find(flanking_mass) == nterm_to_mzscore.end()) nterm_to_mzscore[flanking_mass] = std::map<double, int>();
+          for (int off = 0; off <= (int)tag.getLength(); off++)
+          {
+            double mz = tag.getMzs()[off];
+            int score = tag.getScore(off);
+            nterm_to_mzscore[flanking_mass][mz] = score;
+          }
         }
         else if (tag.getCtermMass() > 0 && pos + tag.getSequence().length() < fe.sequence.length())
         {
           auto cterm = fe.sequence.substr(pos + tag.getSequence().length());
           if (x_pos != String::npos) cterm.erase(remove(cterm.begin(), cterm.end(), 'X'), cterm.end());
           double aamass = cterm.empty() ? 0 : AASequence::fromString(cterm).getMonoWeight(Residue::Internal);
-          if (std::abs(tag.getCtermMass() - aamass) > flanking_mass_tol_) continue;
+          double flanking_mass = tag.getCtermMass() - aamass;
+          if (std::abs(flanking_mass) > flanking_mass_tol_) continue;
+          if (max_mod_mass > 0 && flanking_mass > max_mod_mass) continue;
+
+          if (cterm_to_mzscore.find(flanking_mass) == cterm_to_mzscore.end()) cterm_to_mzscore[flanking_mass] = std::map<double, int>();
+          for (int off = 0; off <= (int)tag.getLength(); off++)
+          {
+            double mz = tag.getMzs()[off];
+            int score = tag.getScore(off);
+            cterm_to_mzscore[flanking_mass][mz] = score;
+          }
         }
         else
           continue;
 
         for (int off = 0; off <= (int)tag.getLength(); off++)
         {
-          if (matched_masses.find(tag.getMzs()[off]) != matched_masses.end()) continue;
-          int score = tag.getScore(off);
-
-          auto iter = matched_protein_pos_score.find(pos + off);
-          if (iter == matched_protein_pos_score.end())
-          {
-            // if (score < iter->second) continue;
-            matched_protein_pos_score[pos + off] = 0;
-          }
-
-          matched_protein_pos_score[pos + off] += score;
-          // matched_protein_pos_mass[pos + off] = tag.getMzs()[off];
-
-          matched = true;
+          matched_positions.insert(pos + off);
         }
+        matched = true;
       }
       if (matched)
       {
@@ -714,32 +725,60 @@ void FLASHTaggerAlgorithm::runMatching(const std::vector<FASTAFile::FASTAEntry>&
     if (matched_tag_indices.empty()) continue;
 
     int match_cntr = 0;
-    double match_score = 0;
-    double max_match_score = 0; // sum over consecutive aas
-    int prev_position = -1;
-    // std::set<double> counted;
-    for (const auto& ps : matched_protein_pos_score)
+    for (const auto& ps : matched_positions)
     {
-      if (fe.sequence[ps.first] == 'X') continue;
-      // if (counted.find(matched_protein_pos_mass[ps.first]) != counted.end()) continue;
-      // counted.insert(matched_protein_pos_mass[ps.first]);
+      if (fe.sequence[ps] == 'X') continue;
       match_cntr++;
-      if (ps.first - prev_position < 3) { match_score += ps.second; }
-      else
-        match_score = ps.second;
-
-      max_match_score = std::max(max_match_score, match_score);
-      prev_position = ps.first;
     }
 
     if (match_cntr < min_cov_aa_ + 1) continue;
+
+    double match_score = 0;
+    double max_match_score = 0;
+    double total_max_match_score = 0;
+    double prev_fm = -1;
+    // std::set<double> counted;
+
+    for (const auto& [fm, mzscore] : nterm_to_mzscore)
+    {
+      int score = 0;
+      for (const auto& pair : mzscore) {
+        score += pair.second;
+      }
+
+      if (fm - prev_fm > max_mod_mass) match_score = score;
+      else match_score += score;
+
+      max_match_score = std::max(max_match_score, match_score);
+      prev_fm = fm;
+    }
+
+    total_max_match_score = max_match_score;
+    max_match_score = 0;
+    match_score = 0;
+    prev_fm = -1;
+
+    for (const auto& [fm, mzscore] : cterm_to_mzscore)
+    {
+      int score = 0;
+      for (const auto& pair : mzscore) {
+        score += pair.second;
+      }
+
+      if (fm - prev_fm > max_mod_mass) match_score = score;
+      else match_score += score;
+
+      max_match_score = std::max(max_match_score, match_score);
+      prev_fm = fm;
+    }
+    total_max_match_score += max_match_score;
 
     ProteinHit hit(0, 0, fe.identifier, fe.sequence); //
     hit.setDescription(fe.description);
     hit.setMetaValue("Scan", scan);
     hit.setMetaValue("MatchedAA", match_cntr);
     hit.setCoverage(double(match_cntr) / (double)fe.sequence.length());
-    hit.setScore(max_match_score);
+    hit.setScore(total_max_match_score);
 #pragma omp critical
     {
       pairs.emplace_back(hit, matched_tag_indices);

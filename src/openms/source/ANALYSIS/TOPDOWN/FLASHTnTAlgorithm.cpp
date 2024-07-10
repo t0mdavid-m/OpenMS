@@ -139,7 +139,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   int max_tag_length = tagger_param_.getValue("max_length");
   int min_tag_length = tagger_param_.getValue("min_length");
   int max_mod_cntr = extender_param_.getValue("max_mod_count");
-  double max_diff_mass = (double)extender_param_.getValue("max_mod_mass") + 1.0;
+  double max_mod_mass = (double)extender_param_.getValue("max_mod_mass") + 1.0;
   std::map<double, std::vector<ResidueModification>> mod_map;
   const auto inst = ModificationsDB::getInstance(); // give this from outside ...
   std::vector<String> mod_strs;
@@ -147,7 +147,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   for (int i = 0; i < mod_strs.size(); i++)
   {
     const auto mod = *inst->getModification(mod_strs[i]);
-    if (std::abs(mod.getDiffMonoMass()) > max_diff_mass) continue;
+    if (std::abs(mod.getDiffMonoMass()) > max_mod_mass) continue;
     mod_map[mod.getDiffMonoMass()].push_back(mod);
   }
   double precursor_tol = -1;
@@ -239,7 +239,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
 
     if (multiple_hits_per_spec_)
     {
-      tagger.runMatching(fasta_entry);
+      tagger.runMatching(fasta_entry, max_mod_mass);
       extender.run(tagger, flanking_mass_tol, tol, multiple_hits_per_spec_);
       extender.getProteoforms(proteoform_hits_);
     }
@@ -248,7 +248,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       for (int tag_length = max_tag_length; tag_length >= min_tag_length; tag_length--)
       {
         // std::cout << scan<< std::endl;
-        tagger.runMatching(fasta_entry, tag_length);
+        tagger.runMatching(fasta_entry, max_mod_mass, tag_length);
         // std::cout<<2<<std::endl;
         extender.run(tagger, flanking_mass_tol, tol, multiple_hits_per_spec_);
         // std::cout<<3<<std::endl;

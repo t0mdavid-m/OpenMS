@@ -55,7 +55,7 @@ public:
 
   */
   void run(const DeconvolvedSpectrum& deconvolved_spectrum, double ppm);
-  void runMatching(const std::vector<FASTAFile::FASTAEntry>& fasta_entry, int tag_length = 0);
+  void runMatching(const std::vector<FASTAFile::FASTAEntry>& fasta_entry, double max_mod_mass = 0, int tag_length = 0);
   const MSSpectrum& getSpectrum() const;
   void getTags(std::vector<FLASHHelperClasses::Tag>& tags, int tag_length = 0) const;
   static void getMatchedPositionsAndFlankingMassDiffs(std::vector<int>& positions,
