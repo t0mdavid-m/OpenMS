@@ -810,7 +810,7 @@ void FLASHExtenderAlgorithm::connectBetweenTags_(FLASHHelperClasses::DAG& dag,
     }
 
     std::set<Size> next_vertices;
-    extendBetweenTags_(dag, visited, next_vertices, vertex, node_end, pro_end, 1e5, node_spec, tol_spec, pro_masses, max_mod_cntr_for_last_mode, mode);
+    extendBetweenTags_(dag, visited, next_vertices, vertex, node_end, pro_end, 0, node_spec, tol_spec, pro_masses, max_mod_cntr_for_last_mode, mode);
 
     for (auto next_vertex : next_vertices)
     {
@@ -864,9 +864,9 @@ void FLASHExtenderAlgorithm::connectBetweenTags_(FLASHHelperClasses::DAG& dag,
 void FLASHExtenderAlgorithm::extendBetweenTags_(FLASHHelperClasses::DAG& dag,
                                                 boost::dynamic_bitset<>& visited,
                                                 std::set<Size>& sinks,
-                                                Size vertex,
-                                                const int node_index,
-                                                int pro_index,
+                                                Size start_vertex,
+                                                const int end_node_index,
+                                                int end_pro_index,
                                                 int diagonal_counter,
                                                 const MSSpectrum& node_spec,
                                                 const MSSpectrum& tol_spec,
@@ -874,90 +874,92 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(FLASHHelperClasses::DAG& dag,
                                                 int max_mod_cntr_for_last_mode,
                                                 int mode)
 {
-  if (! visited[vertex]) return;
+  if (! visited[start_vertex]) return;
   int max_mod_cntr = max_mod_cntr_for_last_mode >= 0 ? max_mod_cntr_for_last_mode : max_mod_cntr_;
-  int node_index1 = getNodeIndex_(vertex, pro_masses.size());
-  int pro_index1 = getProIndex_(vertex, pro_masses.size());
-  int score1 = getScore_(vertex);
-  int num_mod1 = getModNumber_(vertex);
-  if (num_mod1 == max_mod_cntr) diagonal_counter = 1e5;
-  double node_mass1 = node_spec[node_index1].getMZ();
+  int start_node_index = getNodeIndex_(start_vertex, pro_masses.size());
+  int start_pro_index = getProIndex_(start_vertex, pro_masses.size());
+  int start_score = getScore_(start_vertex);
+  int start_num_mod = getModNumber_(start_vertex);
+  if (start_num_mod == max_mod_cntr) diagonal_counter = 1e5;
+  double start_node_mass = node_spec[start_node_index].getMZ();
   auto src = getVertex_(0, 0, 0, 0, pro_masses.size());
 
-  if (node_index < 0)
+  if (end_node_index < 0)
   {
-    pro_index = mode < 2 ? std::min(pro_index1 + 10, (int)pro_masses.size() - 1)
+    end_pro_index = mode < 2 ? std::min(start_pro_index + 10, (int)pro_masses.size() - 1)
                          : ((int)pro_masses.size() - 1); // if sink is not specified, stretch up to 10 amino acids.
   }
 
-  if (vertex == src)
+  if (start_vertex == src)
   {
-    for (int pro_i = pro_index1 + 1; pro_i <= pro_index; pro_i++)
+    for (int pro_i = start_pro_index + 1; pro_i <= end_pro_index; pro_i++)
     {
       Size vertex2 = getVertex_(0, pro_i, 0, 0, pro_masses.size()); //
-      dag.addEdge(vertex2, vertex, visited);
+      dag.addEdge(vertex2, start_vertex, visited);
 
       if (vertex2 >= visited.size() || ! visited[vertex2]) continue;
-      extendBetweenTags_(dag, visited, sinks, vertex2, node_index, pro_index, diagonal_counter, node_spec, tol_spec, pro_masses, max_mod_cntr_for_last_mode, mode);
+      extendBetweenTags_(dag, visited, sinks, vertex2, end_node_index, end_pro_index, diagonal_counter, node_spec, tol_spec, pro_masses, max_mod_cntr_for_last_mode, mode);
     }
   }
-  // if(tmp) std::cout<< "aaaa2" << " " << node_index << " " << node_index1<<" " <<node_spec.size()<<" " << tol_spec.size() <<
-  //            " " << pro_index << " " << pro_masses.size()<< std::endl;
-  double delta_mass1 = node_mass1 - pro_masses[pro_index1];
-  double delta_mass;
+  // if(tmp) std::cout<< "aaaa2" << " " << end_node_index << " " << start_node_index<<" " <<node_spec.size()<<" " << tol_spec.size() <<
+  //            " " << end_pro_index << " " << pro_masses.size()<< std::endl;
+  double start_delta_mass = start_node_mass - pro_masses[start_pro_index];
+  double end_delta_mass;
   double margin;
 
-  if (node_index >= 0)
+  if (end_node_index >= 0)
   {
-    double node_mass = node_spec[node_index].getMZ();
-    delta_mass = node_mass - pro_masses[pro_index];
-    margin = 2 * std::max(tol_spec[node_index].getIntensity(), tol_spec[node_index1].getIntensity()); // give some margin
-    if (std::abs(delta_mass - delta_mass1) > max_mod_mass_ * (max_mod_cntr - num_mod1) + margin) { return; }
-    if (diagonal_counter > 0)
+    double end_node_mass = node_spec[end_node_index].getMZ();
+    end_delta_mass = end_node_mass - pro_masses[end_pro_index];
+    margin = std::max(tol_spec[end_node_index].getIntensity(), tol_spec[start_node_index].getIntensity());
+    if (std::abs(end_delta_mass - start_delta_mass) > max_mod_mass_ * (max_mod_cntr - start_num_mod) + margin) { return; }
+
+    if (std::abs(end_delta_mass - start_delta_mass) > margin)
     {
-      if (std::abs(delta_mass - delta_mass1) > margin) return;
+      if (diagonal_counter > 0) return;
     }
+    else  diagonal_counter = 1e5; // if the start and end points make a diagonal line, go through the diagonal line.
   }
-  for (int score = score1 + 1; score <= max_path_score_; score++)
+  for (int score = start_score + 1; score <= max_path_score_; score++)
   {
     // if the starting point has already taken by a higher scoring path, don't go further.
-    for (int nm = 0; nm <= num_mod1; nm++)
+    for (int nm = 0; nm <= start_num_mod; nm++)
     {
-      Size higher_score_vertex = getVertex_(node_index1, pro_index1, score, nm, pro_masses.size());
+      Size higher_score_vertex = getVertex_(start_node_index, start_pro_index, score, nm, pro_masses.size());
       if (higher_score_vertex >= visited.size()) continue;
       if (visited[higher_score_vertex]) return;
     }
   }
 
-  if (node_index < 0)
+  if (end_node_index < 0)
   {
-    if (vertex != src) sinks.insert(vertex);
+    if (start_vertex != src) sinks.insert(start_vertex);
   }
 
-  else if (node_index1 > node_index || pro_index1 > pro_index)
+  else if (start_node_index > end_node_index || start_pro_index > end_pro_index)
     return;
 
-  if (node_index1 == node_index && pro_index1 == pro_index && vertex != src)
+  if (start_node_index == end_node_index && start_pro_index == end_pro_index && start_vertex != src)
   {
-    sinks.insert(vertex);
+    sinks.insert(start_vertex);
     return;
   }
 
-  for (int node_i = node_index1 + 1; node_i <= (node_index < 0 ? ((int)node_spec.size() - 1) : node_index); node_i++)
+  for (int node_i = start_node_index + 1; node_i <= (end_node_index < 0 ? ((int)node_spec.size() - 1) : end_node_index); node_i++)
   {
-    if (node_index < 0 && node_spec[node_i].getIntensity() < 0 && diagonal_counter > 0) continue;
-    int score = score1 + (int)node_spec[node_i].getIntensity();
+    if (end_node_index < 0 && node_spec[node_i].getIntensity() < 0 && diagonal_counter > 0) continue;
+    int score = start_score + (int)node_spec[node_i].getIntensity();
     double t_node_mass = node_spec[node_i].getMZ();
-    double t_margin = std::max(tol_spec[node_i].getIntensity(), tol_spec[node_index1].getIntensity());
+    double t_margin = std::max(tol_spec[node_i].getIntensity(), tol_spec[start_node_index].getIntensity());
 
-    for (int pro_i = pro_index1 + (pro_index1 == 0 ? 0 : 1); pro_i <= pro_index; pro_i++) //
+    for (int pro_i = start_pro_index + (start_pro_index == 0 ? 0 : 1); pro_i <= end_pro_index; pro_i++) //
     {
       double t_delta_mass = t_node_mass - pro_masses[pro_i];
-      double delta_delta = t_delta_mass - delta_mass1;
+      double delta_delta = t_delta_mass - start_delta_mass;
       if (delta_delta > max_mod_mass_ + t_margin) continue;
       if (-delta_delta > max_mod_mass_ + t_margin) break;
 
-      int num_mod = num_mod1;
+      int num_mod = start_num_mod;
       int new_score = score;
       if (std::abs(delta_delta) > t_margin)
       {
@@ -965,14 +967,14 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(FLASHHelperClasses::DAG& dag,
         num_mod++;
       }
 
-      if (diagonal_counter > 0 && num_mod != num_mod1) continue; //
+      if (diagonal_counter > 0 && num_mod != start_num_mod) continue; //
       if (num_mod > max_mod_cntr) continue;
-      if (node_index >= 0)
+      if (end_node_index >= 0)
       {
-        if (std::abs(t_delta_mass - delta_mass) > max_mod_mass_ * (max_mod_cntr - num_mod) + margin) continue;
+        if (std::abs(t_delta_mass - end_delta_mass) > max_mod_mass_ * (max_mod_cntr - num_mod) + margin) continue;
       }
 
-      if (num_mod != num_mod1)
+      if (num_mod != start_num_mod)
       {
         new_score -= 1 + 2 * (multi_ion_score + FLASHTaggerAlgorithm::max_score); // at least two best scoring peaks should exist
         auto iter = mod_map_.lower_bound(delta_delta - t_margin);
@@ -982,25 +984,25 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(FLASHHelperClasses::DAG& dag,
         } // if it was not found in unimod, subtract more
       }
       if (new_score < min_path_score_) continue;
-      if (node_index < 0 && new_score < 0) continue;
+      if (end_node_index < 0 && new_score < 0) continue;
       Size next_vertex = getVertex_(node_i, pro_i, new_score, num_mod, pro_masses.size());
       if (next_vertex >= visited.size()) continue;
 
-      dag.addEdge(next_vertex, vertex, visited);
+      dag.addEdge(next_vertex, start_vertex, visited);
 
       if (! visited[next_vertex]) continue;
 
       int next_diagonal_counter = diagonal_counter;
       if (diagonal_counter > 0) next_diagonal_counter--;
-      else if (num_mod != num_mod1)
+      else if (num_mod != start_num_mod)
         next_diagonal_counter = 1;
-//       if(node_index < 0) std::cout<< "cccc" <<vertex << " "
-//                                    << next_vertex << " " << node_spec[getNodeIndex_(vertex, pro_masses.size())].getMZ() << " "
-//                                    << pro_masses[pro_index1] << " to "
+//       if(end_node_index < 0) std::cout<< "cccc" <<start_vertex << " "
+//                                    << next_vertex << " " << node_spec[getNodeIndex_(start_vertex, pro_masses.size())].getMZ() << " "
+//                                    << pro_masses[start_pro_index] << " to "
 //                                    << node_spec[getNodeIndex_(next_vertex, pro_masses.size())].getMZ() << " " << pro_masses[pro_i]
-//                             << " to "  << node_index << " " << pro_masses[pro_index] << " " << next_diagonal_counter << std::endl;
-      extendBetweenTags_(dag, visited, sinks, next_vertex, node_index, pro_index, next_diagonal_counter, node_spec, tol_spec, pro_masses, max_mod_cntr_for_last_mode, mode);
-      // if(node_index < 0) std::cout<< "dddd" << std::endl;
+//                             << " to "  << end_node_index << " " << pro_masses[end_pro_index] << " " << next_diagonal_counter << std::endl;
+      extendBetweenTags_(dag, visited, sinks, next_vertex, end_node_index, end_pro_index, next_diagonal_counter, node_spec, tol_spec, pro_masses, max_mod_cntr_for_last_mode, mode);
+      // if(end_node_index < 0) std::cout<< "dddd" << std::endl;
     }
   }
 }
