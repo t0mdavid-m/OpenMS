@@ -286,7 +286,7 @@ void FLASHTaggerAlgorithm::setDefaultParams_()
   defaults_.setMaxInt("max_length", 30);
   defaults_.setMinInt("max_length", 3);
 
-  defaults_.setValue("flanking_mass_tol", 10000000.0, "Flanking mass tolerance (the flanking mass minus protein mass up to the matching amino acid) in Da. This limits the possible terminal modification mass.");
+  defaults_.setValue("flanking_mass_tol", 1000000.0, "Flanking mass tolerance (the flanking mass minus protein mass up to the matching amino acid) in Da. This limits the possible terminal modification mass.");
 
   defaults_.setValue("max_iso_error_count", 0, "Maximum isotope error count per tag.");
 
@@ -626,7 +626,7 @@ void FLASHTaggerAlgorithm::runMatching(const std::vector<FASTAFile::FASTAEntry>&
     auto x_pos = fe.sequence.find('X');
     std::set<Size> matched_positions;
 
-    std::map<double, std::map<double, int>> nterm_to_mzscore, cterm_to_mzscore;
+    std::map<int, std::map<int, int>> nterm_to_mzscore, cterm_to_mzscore;
     // std::map<Size, double> matched_protein_pos_mass;
     // find range, match allowing X.
     std::set<double> matched_masses;
@@ -682,12 +682,16 @@ void FLASHTaggerAlgorithm::runMatching(const std::vector<FASTAFile::FASTAEntry>&
           if (std::abs(flanking_mass) > flanking_mass_tol_) continue;
           if (max_mod_mass > 0 && flanking_mass > max_mod_mass) continue;
 
-          if (nterm_to_mzscore.find(flanking_mass) == nterm_to_mzscore.end()) nterm_to_mzscore[flanking_mass] = std::map<double, int>();
+          int nominal_flanking_mass = SpectralDeconvolution::getNominalMass(flanking_mass);
+          if (nterm_to_mzscore.find(nominal_flanking_mass) == nterm_to_mzscore.end()) nterm_to_mzscore[nominal_flanking_mass] = std::map<int, int>();
+          auto& sub_map = nterm_to_mzscore[nominal_flanking_mass];
+
           for (int off = 0; off <= (int)tag.getLength(); off++)
           {
-            double mz = tag.getMzs()[off];
+            int mz = SpectralDeconvolution::getNominalMass(tag.getMzs()[off]);
             int score = tag.getScore(off);
-            nterm_to_mzscore[flanking_mass][mz] = score;
+            if (sub_map.find(mz) == sub_map.end()) sub_map[mz] = 0;
+            sub_map[mz] = std::max(sub_map[mz], score);
           }
         }
         else if (tag.getCtermMass() > 0 && pos + tag.getSequence().length() < fe.sequence.length())
@@ -699,12 +703,16 @@ void FLASHTaggerAlgorithm::runMatching(const std::vector<FASTAFile::FASTAEntry>&
           if (std::abs(flanking_mass) > flanking_mass_tol_) continue;
           if (max_mod_mass > 0 && flanking_mass > max_mod_mass) continue;
 
-          if (cterm_to_mzscore.find(flanking_mass) == cterm_to_mzscore.end()) cterm_to_mzscore[flanking_mass] = std::map<double, int>();
+          int nominal_flanking_mass = SpectralDeconvolution::getNominalMass(flanking_mass);
+          if (cterm_to_mzscore.find(nominal_flanking_mass) == cterm_to_mzscore.end()) cterm_to_mzscore[nominal_flanking_mass] = std::map<int, int>();
+          auto& sub_map = cterm_to_mzscore[nominal_flanking_mass];
+
           for (int off = 0; off <= (int)tag.getLength(); off++)
           {
-            double mz = tag.getMzs()[off];
+            int mz = SpectralDeconvolution::getNominalMass(tag.getMzs()[off]);
             int score = tag.getScore(off);
-            cterm_to_mzscore[flanking_mass][mz] = score;
+            if (sub_map.find(mz) == sub_map.end()) sub_map[mz] = 0;
+            sub_map[mz] = std::max(sub_map[mz], score);
           }
         }
         else
@@ -737,41 +745,58 @@ void FLASHTaggerAlgorithm::runMatching(const std::vector<FASTAFile::FASTAEntry>&
     double max_match_score = 0;
     double total_max_match_score = 0;
     double prev_fm = -1;
-    // std::set<double> counted;
 
+    std::set<int> counted;
     for (const auto& [fm, mzscore] : nterm_to_mzscore)
     {
-      int score = 0;
-      for (const auto& pair : mzscore) {
-        score += pair.second;
+      if (fm - prev_fm > 0)
+      {
+        match_score = 0;
+        counted.clear();
       }
 
-      if (fm - prev_fm > max_mod_mass) match_score = score;
-      else match_score += score;
+      int score = 0;
+      for (const auto& pair : mzscore)
+      {
+        if (counted.find(pair.first) != counted.end()) continue;
+        counted.insert(pair.first);
+        score += pair.second;
+      }
+      //std::cout<< fe.identifier << " " << std::to_string (fm) << " " << score << std::endl;
 
+      match_score += score;
       max_match_score = std::max(max_match_score, match_score);
       prev_fm = fm;
     }
-
     total_max_match_score = max_match_score;
     max_match_score = 0;
     match_score = 0;
     prev_fm = -1;
+    counted.clear();
 
     for (const auto& [fm, mzscore] : cterm_to_mzscore)
     {
+      if (fm - prev_fm > 0) // always...
+      {
+        match_score = 0;
+        counted.clear();
+      }
+
       int score = 0;
-      for (const auto& pair : mzscore) {
+      for (const auto& pair : mzscore)
+      {
+        if (counted.find(pair.first) != counted.end()) continue;
+        counted.insert(pair.first);
         score += pair.second;
       }
 
-      if (fm - prev_fm > max_mod_mass) match_score = score;
-      else match_score += score;
-
+      match_score += score;
       max_match_score = std::max(max_match_score, match_score);
       prev_fm = fm;
     }
-    total_max_match_score += max_match_score;
+    total_max_match_score = std::max(total_max_match_score, max_match_score);
+
+    //std::cout<<fe.identifier << " score2:  " << total_max_match_score<<std::endl;
 
     ProteinHit hit(0, 0, fe.identifier, fe.sequence); //
     hit.setDescription(fe.description);
