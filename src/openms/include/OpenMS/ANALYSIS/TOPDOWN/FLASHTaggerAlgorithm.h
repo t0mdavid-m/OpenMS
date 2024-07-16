@@ -55,9 +55,15 @@ public:
 
   */
   void run(const DeconvolvedSpectrum& deconvolved_spectrum, double ppm);
-  void runMatching(const std::vector<FASTAFile::FASTAEntry>& fasta_entry, double max_mod_mass = 0, int tag_length = 0);
+  void runMatching(const std::vector<FASTAFile::FASTAEntry>& fasta_entry,
+                   const DeconvolvedSpectrum& deconvolved_spectrum,
+                   const std::vector<boost::dynamic_bitset<>>& vectorized_fasta_entry,
+                   const std::vector<boost::dynamic_bitset<>>& reversed_vectorized_fasta_entry,
+                   double max_mod_mass = 0, int tag_length = 0);
   const MSSpectrum& getSpectrum() const;
   void getTags(std::vector<FLASHHelperClasses::Tag>& tags, int tag_length = 0) const;
+  static int getPeakGroupScore(const PeakGroup& peak_group);
+
   static void getMatchedPositionsAndFlankingMassDiffs(std::vector<int>& positions,
                                                       std::vector<double>& masses,
                                                       double flanking_mass_tol,
@@ -68,7 +74,7 @@ public:
   {
     return decoy_factor_;
   }
-  const static int max_score = 8;
+  const static int max_peak_group_score = 8;
 protected:
   void updateMembers_() override;
   /// implemented for DefaultParamHandler
@@ -98,6 +104,13 @@ private:
   void updateEdgeMasses_();
   Size getVertex_(int index, int path_score, int level, int iso_level, int gap_level) const;
   int getIndex_(Size vertex) const;
+
+  void getScoreAndMatchCount_(const boost::dynamic_bitset<>& spec_vec, const boost::dynamic_bitset<>& pro_vec,
+                              //const boost::dynamic_bitset<>& mask_pro_vec,
+                              const std::set<int>& spec_pro_diffs,
+                              std::vector<int>& spec_scores,
+                              int& max_score, int& match_cntr) const;
+
 
   void updateTagSet_(std::set<FLASHHelperClasses::Tag>& tag_set,
                      std::map<String, std::vector<FLASHHelperClasses::Tag>>& seq_tag,

@@ -104,7 +104,8 @@ void FLASHTnTFile::writePrSMs(const std::vector<ProteinHit>& hits, std::fstream&
 
     int cntr = 0;
     std::vector<FLASHHelperClasses::Tag> tags;
-    std::vector<int> indices = (std::vector<int>)hit.getMetaValue("TagIndices").toIntList();
+    std::vector<int> indices;
+    if (hit.metaValueExists("TagIndices")) indices = (std::vector<int>)hit.getMetaValue("TagIndices").toIntList();
     for (const int& index : indices)
     {
       if (! tagindices.empty()) tagindices += ";";
@@ -164,7 +165,8 @@ void FLASHTnTFile::writeProteoforms(const std::vector<ProteinHit>& hits, std::fs
 
     int cntr = 0;
     std::vector<FLASHHelperClasses::Tag> tags;
-    std::vector<int> indices = (std::vector<int>)hit.getMetaValue("TagIndices").toIntList();
+    std::vector<int> indices;
+    if (hit.metaValueExists("TagIndices")) indices = (std::vector<int>)hit.getMetaValue("TagIndices").toIntList();
     for (const int& index : indices)
     {
       if (! tagindices.empty()) tagindices += ";";

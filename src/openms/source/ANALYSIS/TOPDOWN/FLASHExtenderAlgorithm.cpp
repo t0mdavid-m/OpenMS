@@ -12,7 +12,6 @@
 
 namespace OpenMS
 {
-inline const int max_hit_count = 10;
 inline const bool debug = false;
 FLASHExtenderAlgorithm::FLASHExtenderAlgorithm(): DefaultParamHandler("FLASHExtenderAlgorithm"), ProgressLogger()
 {
@@ -179,14 +178,13 @@ Size FLASHExtenderAlgorithm::getProteinSpan_(const std::vector<Size>& path, cons
   return len;
 }
 
-void FLASHExtenderAlgorithm::defineNodes(const FLASHTaggerAlgorithm& tagger,
+void FLASHExtenderAlgorithm::defineNodes(const MSSpectrum& spec,
                                          MSSpectrum& node_spec,
                                          MSSpectrum& tol_spec,
                                          double max_mass,
                                          double precursor_mass,
                                          int mode)
 {
-  const auto& spec = tagger.getSpectrum();
   // 0 for suffix 1 for prefix 2 for suffix and prefix if precursor mass is available
   MSSpectrum t_node_spec, t_tol_spec;
 
@@ -293,20 +291,23 @@ void FLASHExtenderAlgorithm::run_(const ProteinHit& hit,
   std::vector<FLASHHelperClasses::Tag> tags;
   std::set<Size> sinks;
 
-  const std::vector<int>& indices = hit.getMetaValue("TagIndices");
-  tags.reserve(indices.size());
-  int max_tag_length = 3;
-  for (auto i : indices)
+  if (hit.metaValueExists("TagIndices"))
   {
-    max_tag_length = std::max(max_tag_length, (int)tags_[i].getLength());
+    const std::vector<int>& indices = hit.getMetaValue("TagIndices");
+    tags.reserve(indices.size());
+    int max_tag_length = 3;
+    for (auto i : indices)
+    {
+      max_tag_length = std::max(max_tag_length, (int)tags_[i].getLength());
+    }
+    for (auto i : indices)
+    {
+      if (tags_[i].getLength() < std::min(4, max_tag_length - 3)) continue;
+      tags.push_back(tags_[i]);
+    }
+    for (auto& edge : tag_edges)
+      edge.reserve(tags.size() * 2);
   }
-  for (auto i : indices)
-  {
-    if (tags_[i].getLength() < std::min(4, max_tag_length - 3)) continue;
-    tags.push_back(tags_[i]);
-  }
-  for (auto& edge : tag_edges)
-    edge.reserve(tags.size() * 2);
 
   FLASHHelperClasses::DAG dag((1 + node_spec.size()) * (1 + pro_masses.size()) * (1 + max_mod_cntr_) * (1 + max_path_score_ - min_path_score_));
 
@@ -455,8 +456,9 @@ void FLASHExtenderAlgorithm::run_(const ProteinHit& hit,
   }
 }
 
-void FLASHExtenderAlgorithm::run(const FLASHTaggerAlgorithm& tagger, double flanking_mass_tol, double ppm, bool multiple_hits_per_spec)
+void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits, const std::vector<FLASHHelperClasses::Tag>& tags, const MSSpectrum& spec, double flanking_mass_tol, double ppm, bool multiple_hits_per_spec)
 {
+  if (hits.empty()) return;
   // setLogType(CMD);
   ion_types_str_ = param_.getValue("ion_type").toStringVector();
 
@@ -476,26 +478,23 @@ void FLASHExtenderAlgorithm::run(const FLASHTaggerAlgorithm& tagger, double flan
 
   flanking_mass_tol_ = flanking_mass_tol;
   tol_ = ppm / 1e6;
-  tags_.clear();
   proteoform_hits_.clear();
 
-  tagger.getTags(tags_);
-  if (tags_.empty()) return;
+  tags_ = tags;
+  //if (tags_.empty()) return;
   std::vector<double> mzs;
   std::vector<int> scores;
-  std::vector<ProteinHit> hits;
-  tagger.getProteinHits(hits, max_hit_count);
-  if (hits.empty()) return;
+
   proteoform_hits_.reserve(hits.size());
-  if (tagger.getSpectrum().metaValueExists("PrecursorMass")) { precursor_mass_ = tagger.getSpectrum().getMetaValue("PrecursorMass"); }
+  if (spec.metaValueExists("PrecursorMass")) { precursor_mass_ = spec.getMetaValue("PrecursorMass"); }
   startProgress(0, (int)hits.size(), "running FLASHExtender ...");
 
-#pragma omp parallel for default(none) shared(hits, tagger, multiple_hits_per_spec, std::cout)
+#pragma omp parallel for default(none) shared(hits, spec, multiple_hits_per_spec, std::cout)
   for (Size i = 0; i < hits.size(); i++)
   {
     nextProgress();
     auto& hit = hits[i];
-   // std::cout<<hit.getAccession()<< " " << hit.getScore() << std::endl; // TODO
+   // std::cout<<hit.getAccession()<< " " << hit.getScore() << std::endl; //
     double total_score = 0;
     int total_match_cntr = 0;
     std::vector<int> mod_starts, mod_ends;
@@ -529,9 +528,9 @@ void FLASHExtenderAlgorithm::run(const FLASHTaggerAlgorithm& tagger, double flan
       MSSpectrum tol_spec;
 
       getProMasses(hit, pro_masses, mode);
-      defineNodes(tagger, node_spec, tol_spec, pro_masses.back(), precursor_mass, mode);
+      defineNodes(spec, node_spec, tol_spec, pro_masses.back(), precursor_mass, mode);
       if (visited.empty())
-        visited = boost::dynamic_bitset<>((1 + tagger.getSpectrum().size() * ion_types_str_.size()) *
+        visited = boost::dynamic_bitset<>((1 + spec.size() * ion_types_str_.size()) *
                                           (1 + pro_masses.size()) * (2 + max_mod_cntr_)
                                           * (1 + max_path_score_ - min_path_score_));
       //std::cout<<hit.getAccession()<< " " << hit.getDescription() << " " <<  hit.getScore() << " " << mode<< std::endl;
@@ -720,8 +719,8 @@ void FLASHExtenderAlgorithm::run(const FLASHTaggerAlgorithm& tagger, double flan
     hit.setMetaValue("StartPosition", protein_start_position);
     hit.setMetaValue("EndPosition", protein_end_position);
     hit.setMetaValue("Mass", precursor_mass);
-    hit.setMetaValue("RT", tagger.getSpectrum().getRT());
-    hit.setMetaValue("NumMass", tagger.getSpectrum().size());
+    hit.setMetaValue("RT", spec.getRT());
+    hit.setMetaValue("NumMass", spec.size());
     // hit.setMetaValue("Proforma", string)
 #pragma omp critical
     {
@@ -976,11 +975,11 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(FLASHHelperClasses::DAG& dag,
 
       if (num_mod != start_num_mod)
       {
-        new_score -= 1 + 2 * (multi_ion_score + FLASHTaggerAlgorithm::max_score); // at least two best scoring peaks should exist
+        new_score -= 1 + 2 * (multi_ion_score + FLASHTaggerAlgorithm::max_peak_group_score); // at least two best scoring peaks should exist
         auto iter = mod_map_.lower_bound(delta_delta - t_margin);
         if (std::abs(delta_delta - iter->first) > t_margin)
         {
-          new_score -= multi_ion_score + FLASHTaggerAlgorithm::max_score;
+          new_score -= multi_ion_score + FLASHTaggerAlgorithm::max_peak_group_score;
         } // if it was not found in unimod, subtract more
       }
       if (new_score < min_path_score_) continue;
