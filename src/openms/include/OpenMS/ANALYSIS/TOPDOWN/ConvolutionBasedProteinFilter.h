@@ -63,6 +63,7 @@ public:
   void getProteinHits(std::vector<ProteinHit>& hits, int max_target_count) const;
   static void vectorizeFasta(const std::vector<FASTAFile::FASTAEntry>& fasta_entry,
                              std::vector<boost::dynamic_bitset<>>& vectorized_fasta_entry,
+                             std::vector<std::map<int, double>>& mass_map,
                              bool reverse);
 protected:
   void updateMembers_() override;

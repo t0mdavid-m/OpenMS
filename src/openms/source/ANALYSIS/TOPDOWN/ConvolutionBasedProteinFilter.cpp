@@ -52,23 +52,34 @@ const MSSpectrum& ConvolutionBasedProteinFilter::getSpectrum() const
 }
 
 void ConvolutionBasedProteinFilter::vectorizeFasta(const std::vector<FASTAFile::FASTAEntry>& fasta_entry,
-                                                   std::vector<boost::dynamic_bitset<>>& vectorized_fasta_entry, bool reverse)
+                                                   std::vector<boost::dynamic_bitset<>>& vectorized_fasta_entry,
+                                                   std::vector<std::map<int, double>>& mass_map,
+                                                   bool reverse)
 {
   vectorized_fasta_entry.reserve(fasta_entry.size());
+  mass_map.reserve(fasta_entry.size());
   for (const auto & i : fasta_entry)
   {
     auto seq = i.sequence;
     seq.erase(remove(seq.begin(), seq.end(), 'X'), seq.end()); // remove all X
     boost::dynamic_bitset<> vec(1 + SpectralDeconvolution::getNominalMass(AASequence::fromString(seq).getMonoWeight(Residue::Internal)));
-    int nmass = 0;
-    vec[nmass] = true;
+    //int l = 4000;
+    //boost::dynamic_bitset<> vec(l);
 
+    std::map<int, double> masses;
+    double nmass = 0;
+    vec[0] = true;
+    masses[reverse? seq.size() : 0] = .0;
     for (Size j = 0; j < seq.size(); j++)
     {
       Size index = reverse? (seq.size() - j - 1): j;
-      nmass += SpectralDeconvolution::getNominalMass(AASequence::fromString(seq[index]).getMonoWeight(Residue::Internal));
-      vec[nmass] = true;
+      nmass += AASequence::fromString(seq[index]).getMonoWeight(Residue::Internal);
+      masses[index + (reverse? 0 : 1)] = nmass;
+      vec[SpectralDeconvolution::getNominalMass(nmass)] = true;
+      //vec[(l/2 + SpectralDeconvolution::getNominalMass(nmass)) % l] = true;
     }
+
+    mass_map.push_back(masses);
     vectorized_fasta_entry.push_back(vec);
   }
 }
@@ -109,12 +120,15 @@ void ConvolutionBasedProteinFilter::runMatching(const DeconvolvedSpectrum& decon
   boost::dynamic_bitset<> spec_vec(1 + SpectralDeconvolution::getNominalMass(deconvolved_spectrum[deconvolved_spectrum.size() - 1].getMonoMass()));
   std::vector<int> spec_scores(spec_vec.size(), 0);
 
+  spec_vec[0] = true;
+  spec_scores[0] = 1;
   for (const auto& pg : deconvolved_spectrum)
   {
-    int mn = SpectralDeconvolution::getNominalMass(pg.getMonoMass());
+    int mn = SpectralDeconvolution::getNominalMass(pg.getMonoMass());//SpectralDeconvolution::getNominalMass(deconvolved_spectrum[deconvolved_spectrum.size() - 1].getMonoMass() - pg.getMonoMass());
     spec_vec[mn] = true;
     spec_scores[mn] = FLASHTaggerAlgorithm::getPeakGroupScore(pg);
   }
+
   startProgress(0, (SignedSize)fasta_entry.size(), "Running Protein filter: searching database");
 
 #pragma omp parallel for default(none) shared(fasta_entry, vectorized_fasta_entry, reversed_vectorized_fasta_entry, spec_vec,spec_scores, tag_length, scan,  std::cout)
@@ -131,7 +145,7 @@ void ConvolutionBasedProteinFilter::runMatching(const DeconvolvedSpectrum& decon
     int match_cntr = n_match_cntr + c_match_cntr;//std::max(n_match_cntr, c_match_cntr);
     int max_score = n_max_score + c_max_score;//std::max(n_max_score, c_max_score);
 
-   // if (match_cntr < tag_length + 1) continue;
+    if (match_cntr < 6) continue;
 
     ProteinHit hit(0, 0, fe.identifier, fe.sequence); //
     hit.setDescription(fe.description);

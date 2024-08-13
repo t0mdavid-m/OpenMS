@@ -45,7 +45,10 @@ public:
   /// assignment operator
   FLASHExtenderAlgorithm& operator=(const FLASHExtenderAlgorithm& other);
 
-  void run(std::vector<ProteinHit>& hits, const std::vector<FLASHHelperClasses::Tag>& tags, const MSSpectrum& spec, double flanking_mass_tol, double ppm, bool multiple_hits_per_spec);
+  void run(std::vector<ProteinHit>& hits, const std::vector<FLASHHelperClasses::Tag>& tags,
+           const DeconvolvedSpectrum& dspec,
+           const MSSpectrum& spec,
+           double flanking_mass_tol, double ppm, bool multiple_hits_per_spec);
 
   void getProteoforms(std::vector<ProteinHit>& hits) const
   {
@@ -83,7 +86,8 @@ private:
                                           const std::vector<int>& mod_starts,
                                           const std::vector<int>& mod_ends,
                                           const std::vector<double>& mod_masses);
-  void defineNodes(const MSSpectrum& spec, MSSpectrum& node_spec, MSSpectrum& tol_spec, double max_mass, double precursor_mass, int mode);
+  void defineNodes(const DeconvolvedSpectrum& dspec,//const MSSpectrum& spec,
+                   MSSpectrum& node_spec, MSSpectrum& tol_spec, double max_mass, double precursor_mass, int mode);
   void run_(const ProteinHit& hit,
             const MSSpectrum& node_spec,
             const MSSpectrum& tol_spec,

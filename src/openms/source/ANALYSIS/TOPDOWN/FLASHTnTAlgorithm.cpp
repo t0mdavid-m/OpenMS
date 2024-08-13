@@ -154,21 +154,19 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   }
   double precursor_tol = -1;
   std::vector<boost::dynamic_bitset<>> vectorized_fasta_entry, rev_vectorized_fasta_entry;
-  ConvolutionBasedProteinFilter::vectorizeFasta(fasta_entry, vectorized_fasta_entry, false);
-  ConvolutionBasedProteinFilter::vectorizeFasta(fasta_entry, rev_vectorized_fasta_entry, true);
+  std::vector<std::map<int, double>> mass_map, rev_mass_map;
+  ConvolutionBasedProteinFilter::vectorizeFasta(fasta_entry, vectorized_fasta_entry, mass_map, false);
+  ConvolutionBasedProteinFilter::vectorizeFasta(fasta_entry, rev_vectorized_fasta_entry, rev_mass_map, true);
 
   std::vector<std::map<int,std::set<Size>>> fasta_index, rev_fasta_index;
-  //std::cout<<"Indexing start" << std::flush;
-  //ConvolutionBasedProteinFilter::indexFasta(fasta_entry, fasta_index, rev_fasta_index);
-  //std::cout<<" ... done"<<std::endl;
-  // collect statistics for information
+
   for (int index = 0; index < map.size(); index++)
   {
     auto spec = map[index];
     nextProgress();
     int scan = FLASHDeconvAlgorithm::getScanNumber(map, index);
 
-    if (scan > 1600) continue; // TODO
+    //if (scan > 1600) continue; // TODO
     if (spec.getMSLevel() == 1 && precursor_tol > 0) { continue; }
 
     DeconvolvedSpectrum dspec(scan);
@@ -236,7 +234,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     }
     dspec.sort();
 
-    if (dspec.empty()) continue;
+    if (dspec.size() < 5) continue;
 
     FLASHTaggerAlgorithm tagger;
     // Run tagger
@@ -249,31 +247,33 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     tagger.getTags(tags_);
     std::vector<ProteinHit> hits;
     std::vector<FLASHHelperClasses::Tag> tags;
-    bool tmp = false;
+    bool hit_by_tag = false;
     if (multiple_hits_per_spec_)
     {
-      tagger.runMatching(fasta_entry, dspec,  vectorized_fasta_entry, rev_vectorized_fasta_entry, max_mod_mass);
+      tagger.runMatching(fasta_entry, dspec,  vectorized_fasta_entry, rev_vectorized_fasta_entry, mass_map, rev_mass_map, max_mod_mass);
       tagger.getTags(tags);
       tagger.getProteinHits(hits, max_hit_count);
-      tmp |= !hits.empty();
-      extender.run(hits, tags, tagger.getSpectrum(), flanking_mass_tol, tol, multiple_hits_per_spec_);
+      hit_by_tag |= !hits.empty();
+      extender.run(hits, tags, dspec,
+                   tagger.getSpectrum(), flanking_mass_tol, tol, multiple_hits_per_spec_);
       extender.getProteoforms(proteoform_hits_);
     }
     else
     {
       for (int tag_length = max_tag_length; tag_length >= min_tag_length; tag_length--)
       {
-        tagger.runMatching(fasta_entry, dspec,  vectorized_fasta_entry, rev_vectorized_fasta_entry, max_mod_mass);
+        tagger.runMatching(fasta_entry, dspec,  vectorized_fasta_entry, rev_vectorized_fasta_entry, mass_map, rev_mass_map, max_mod_mass);
         tagger.getTags(tags);
-        tmp |= !hits.empty();
+        hit_by_tag |= !hits.empty();
         tagger.getProteinHits(hits, max_hit_count);
-        extender.run(hits, tags, tagger.getSpectrum(), flanking_mass_tol, tol, multiple_hits_per_spec_);
+        extender.run(hits, tags, dspec,
+                     tagger.getSpectrum(), flanking_mass_tol, tol, multiple_hits_per_spec_);
         extender.getProteoforms(proteoform_hits_);
         if (extender.hasProteoforms()) break;
       }
     }
 
-    if (false && !tmp && !extender.hasProteoforms())
+    if (false && !hit_by_tag && !extender.hasProteoforms())
     {
       ConvolutionBasedProteinFilter filter;
       hits.clear();
@@ -281,9 +281,9 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       //std::cout<<1<<std::endl;
       filter.runMatching(dspec, fasta_entry, vectorized_fasta_entry, rev_vectorized_fasta_entry,
                          max_mod_mass, min_tag_length);
-      //std::cout<<2<<std::endl;
       filter.getProteinHits(hits, max_hit_count);
-      extender.run(hits, tags, tagger.getSpectrum(), flanking_mass_tol, tol, multiple_hits_per_spec_);
+      //std::cout<<2<<std::endl;
+      extender.run(hits, tags, dspec, tagger.getSpectrum(), flanking_mass_tol, tol, multiple_hits_per_spec_);
       //std::cout<<3<<std::endl;
 
       extender.getProteoforms(proteoform_hits_);
