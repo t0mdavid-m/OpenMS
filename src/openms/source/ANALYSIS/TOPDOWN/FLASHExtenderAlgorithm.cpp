@@ -12,7 +12,7 @@
 
 namespace OpenMS
 {
-inline const bool debug = true;
+inline const bool debug = false;
 FLASHExtenderAlgorithm::FLASHExtenderAlgorithm(): DefaultParamHandler("FLASHExtenderAlgorithm"), ProgressLogger()
 {
   setDefaultParams_();
