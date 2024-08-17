@@ -65,6 +65,9 @@ public:
                              std::vector<boost::dynamic_bitset<>>& vectorized_fasta_entry,
                              std::vector<std::map<int, double>>& mass_map,
                              bool reverse);
+
+  static const int multi_factor_for_vectorization = 20;
+
 protected:
   void updateMembers_() override;
   /// implemented for DefaultParamHandler

@@ -12,7 +12,6 @@
 
 namespace OpenMS
 {
-
 ConvolutionBasedProteinFilter::ConvolutionBasedProteinFilter(): DefaultParamHandler("FLASHTaggerAlgorithm"), ProgressLogger()
 {
   setDefaultParams_();
@@ -62,7 +61,7 @@ void ConvolutionBasedProteinFilter::vectorizeFasta(const std::vector<FASTAFile::
   {
     auto seq = i.sequence;
     seq.erase(remove(seq.begin(), seq.end(), 'X'), seq.end()); // remove all X
-    boost::dynamic_bitset<> vec(1 + SpectralDeconvolution::getNominalMass(AASequence::fromString(seq).getMonoWeight(Residue::Internal)));
+    boost::dynamic_bitset<> vec(1 + round(multi_factor_for_vectorization * AASequence::fromString(seq).getMonoWeight(Residue::Internal)));
     //int l = 4000;
     //boost::dynamic_bitset<> vec(l);
 
@@ -75,7 +74,7 @@ void ConvolutionBasedProteinFilter::vectorizeFasta(const std::vector<FASTAFile::
       Size index = reverse? (seq.size() - j - 1): j;
       nmass += AASequence::fromString(seq[index]).getMonoWeight(Residue::Internal);
       masses[index + (reverse? 0 : 1)] = nmass;
-      vec[SpectralDeconvolution::getNominalMass(nmass)] = true;
+      vec[round(multi_factor_for_vectorization * nmass)] = true;
       //vec[(l/2 + SpectralDeconvolution::getNominalMass(nmass)) % l] = true;
     }
 

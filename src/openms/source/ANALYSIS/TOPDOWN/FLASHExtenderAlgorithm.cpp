@@ -648,9 +648,11 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits, const std::vecto
           auto mod_count = getModNumber_(*iter);
           if (debug)
           {
-            std::cout << hit.getAccession() << " mode " << m << " input pre " << precursor_mass_ << " cal pre " << precursor_mass << "score"
-                      << getScore_(*iter) << " " << node_index << " " << pro_index << " in " << t_node_spec.size() << " " << t_pro_masses.size()
-                      << " masses " << t_pro_masses[pro_index] << " " << t_node_spec[node_index].getMZ() << " " << mass_shift << " " << mod_count
+            // Residue::getInternalToFull().getMonoWeight()
+            std::cout << hit.getAccession() << "\tmode\t" << m << "\tinput pre\t" << precursor_mass_ << "\tcal pre\t"
+                      << precursor_mass << "\tscore\t"
+                      << getScore_(*iter) << "\t" << node_index << "\t" << pro_index << "\tin\t" << t_node_spec.size() << "\t" << t_pro_masses.size()
+                      << "\tmasses\t" << t_pro_masses[pro_index] << "\t" << t_node_spec[node_index].getMZ() << "\t" << mass_shift << "\t" << mod_count
                       << std::endl;
           }
           if (node_index == 0)
@@ -893,7 +895,7 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(FLASHHelperClasses::DAG& dag,
                              : ((int)pro_masses.size() - 1); // if sink is not specified, stretch up to 10 amino acids.
   }
 
-  // make the range of truncation well...  make use of the positiopnal information
+  // make the range of truncation well...  make use of the positional information
   if (start_vertex == src)
   {
     for (int pro_i = start_pro_index + 1; pro_i <= end_pro_index; pro_i++) // change later
@@ -905,8 +907,6 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(FLASHHelperClasses::DAG& dag,
       extendBetweenTags_(dag, visited, sinks, vertex2, end_node_index, end_pro_index, diagonal_counter, node_spec, tol_spec, pro_masses, max_mod_cntr_for_last_mode, mode);
     }
   }
-  // if(tmp) std::cout<< "aaaa2" << " " << end_node_index << " " << start_node_index<<" " <<node_spec.size()<<" " << tol_spec.size() <<
-  //            " " << end_pro_index << " " << pro_masses.size()<< std::endl;
   double start_delta_mass = start_node_mass - pro_masses[start_pro_index];
   double end_delta_mass;
   double margin;

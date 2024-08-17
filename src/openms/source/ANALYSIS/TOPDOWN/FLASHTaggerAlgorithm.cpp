@@ -6,6 +6,7 @@
 // $Authors: Kyowon Jeong$
 // --------------------------------------------------------------------------
 
+#include <OpenMS/ANALYSIS/TOPDOWN/ConvolutionBasedProteinFilter.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
 #include <utility>
@@ -670,7 +671,7 @@ void FLASHTaggerAlgorithm::runMatching(const std::vector<FASTAFile::FASTAEntry>&
 
   boost::dynamic_bitset<> spec_vec;
   std::vector<int> spec_scores;
-  Size spec_vec_size = 1 + SpectralDeconvolution::getNominalMass(deconvolved_spectrum[deconvolved_spectrum.size() - 1].getMonoMass());
+  Size spec_vec_size = 1 + round(ConvolutionBasedProteinFilter::multi_factor_for_vectorization * deconvolved_spectrum[deconvolved_spectrum.size() - 1].getMonoMass());
 
 #pragma omp parallel for default(none)                                                                                                     \
   shared(mass_map, rev_mass_map, spec_vec_size, spec_vec, spec_scores, deconvolved_spectrum, pairs, fasta_entry, taget_count, decoy_count, \
@@ -731,7 +732,7 @@ void FLASHTaggerAlgorithm::runMatching(const std::vector<FASTAFile::FASTAEntry>&
           double flanking_mass = n_term_mass - tag.getNtermMass();
           if (std::abs(flanking_mass) > flanking_mass_tol_) continue;
           if (max_mod_mass > 0 && flanking_mass < -max_mod_mass) continue;
-          n_spec_pro_diffs.insert(SpectralDeconvolution::getNominalMass(flanking_mass));
+          n_spec_pro_diffs.insert(round(ConvolutionBasedProteinFilter::multi_factor_for_vectorization * flanking_mass));
         }
         else if (!isNterm && pos + tag.getSequence().length() < seq.length())
         {
@@ -739,7 +740,7 @@ void FLASHTaggerAlgorithm::runMatching(const std::vector<FASTAFile::FASTAEntry>&
           double flanking_mass = c_term_mass - tag.getCtermMass();
           if (std::abs(flanking_mass) > flanking_mass_tol_) continue;
           if (max_mod_mass > 0 && flanking_mass < -max_mod_mass) continue;
-          c_spec_pro_diffs.insert(SpectralDeconvolution::getNominalMass(flanking_mass));
+          c_spec_pro_diffs.insert(round(ConvolutionBasedProteinFilter::multi_factor_for_vectorization * flanking_mass));
         }
         else
           continue;
@@ -766,7 +767,7 @@ void FLASHTaggerAlgorithm::runMatching(const std::vector<FASTAFile::FASTAEntry>&
       spec_scores[0] = 1;
       for (const auto& pg : deconvolved_spectrum)
       {
-        int mn = SpectralDeconvolution::getNominalMass(pg.getMonoMass());
+        int mn = round(ConvolutionBasedProteinFilter::multi_factor_for_vectorization * pg.getMonoMass());
         spec_vec[mn] = true;
         spec_scores[mn] = FLASHTaggerAlgorithm::getPeakGroupScore(pg);
       }
