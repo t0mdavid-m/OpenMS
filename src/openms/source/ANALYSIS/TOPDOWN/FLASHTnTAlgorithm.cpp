@@ -134,6 +134,7 @@ void FLASHTnTAlgorithm::markRepresentativeProteoformHits_(double tol)
   }
 }
 
+
 void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile::FASTAEntry>& fasta_entry, double flanking_mass_tol)
 {
   setLogType(CMD);
@@ -154,9 +155,10 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   }
   double precursor_tol = -1;
   std::vector<boost::dynamic_bitset<>> vectorized_fasta_entry, rev_vectorized_fasta_entry;
+  std::vector<std::vector<int>> vectorized_fasta_entry_indices, rev_vectorized_fasta_entry_indices;
   std::vector<std::map<int, double>> mass_map, rev_mass_map;
-  ConvolutionBasedProteinFilter::vectorizeFasta(fasta_entry, vectorized_fasta_entry, mass_map, false);
-  ConvolutionBasedProteinFilter::vectorizeFasta(fasta_entry, rev_vectorized_fasta_entry, rev_mass_map, true);
+  ConvolutionBasedProteinFilter::vectorizeFasta(fasta_entry, vectorized_fasta_entry, vectorized_fasta_entry_indices, mass_map, false);
+  ConvolutionBasedProteinFilter::vectorizeFasta(fasta_entry, rev_vectorized_fasta_entry, rev_vectorized_fasta_entry_indices, rev_mass_map, true);
 
   std::vector<std::map<int,std::set<Size>>> fasta_index, rev_fasta_index;
 
@@ -166,7 +168,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     nextProgress();
     int scan = FLASHDeconvAlgorithm::getScanNumber(map, index);
 
-    //if (scan > 1600) continue; // TODO
+    //if (scan > 1300) continue; // TODO
     if (spec.getMSLevel() == 1 && precursor_tol > 0) { continue; }
 
     DeconvolvedSpectrum dspec(scan);
@@ -279,7 +281,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       hits.clear();
       tags.clear();
       //std::cout<<1<<std::endl;
-      filter.runMatching(dspec, fasta_entry, vectorized_fasta_entry, rev_vectorized_fasta_entry,
+
+      filter.runMatching(dspec, fasta_entry, vectorized_fasta_entry_indices, rev_vectorized_fasta_entry_indices,
                          max_mod_mass, min_tag_length);
       filter.getProteinHits(hits, max_hit_count);
       //std::cout<<2<<std::endl;

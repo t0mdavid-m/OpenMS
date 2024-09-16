@@ -56,25 +56,26 @@ public:
   */
 
   void runMatching(const DeconvolvedSpectrum& deconvolved_spectrum, const std::vector<FASTAFile::FASTAEntry>& fasta_entry,
-                   const std::vector<boost::dynamic_bitset<>>& vectorized_fasta_entry,
-                   const std::vector<boost::dynamic_bitset<>>& reversed_vectorized_fasta_entry,
+                   const std::vector<std::vector<int>>& vectorized_fasta_entry_indices,
+                   const std::vector<std::vector<int>>& reversed_vectorized_fasta_entry_indices,
                    double max_mod_mass = 0, int tag_length = 0);
   const MSSpectrum& getSpectrum() const;
   void getProteinHits(std::vector<ProteinHit>& hits, int max_target_count) const;
   static void vectorizeFasta(const std::vector<FASTAFile::FASTAEntry>& fasta_entry,
                              std::vector<boost::dynamic_bitset<>>& vectorized_fasta_entry,
+                             std::vector<std::vector<int>>& vectorized_fasta_entry_indices,
                              std::vector<std::map<int, double>>& mass_map,
                              bool reverse);
 
-  static const int multi_factor_for_vectorization = 20;
-
+  static const int multi_factor_for_vectorization = 10;
 protected:
   void updateMembers_() override;
   /// implemented for DefaultParamHandler
   void setDefaultParams_();
 
 private:
-  void GetScoreAndMatchCount_(const boost::dynamic_bitset<>& spec_vec, const boost::dynamic_bitset<>& pro_vec, std::vector<int>& spec_scores, int& max_score, int& match_cntr) const;
+  void GetScoreAndMatchCount_(const std::vector<int>& spec_indices,
+                              const std::vector<int>& pro_indices, std::vector<int>& spec_scores, int& max_score, int& match_cntr) const;
 
   MSSpectrum spec_;
   std::set<const Residue*> aas_ = ResidueDB::getInstance()->getResidues("Natural20");
