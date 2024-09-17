@@ -93,8 +93,8 @@ void ConvolutionBasedProteinFilter::vectorizeFasta(const std::vector<FASTAFile::
     vectorized_fasta_entry_indices.push_back(vec_indices);
   }
 }
-// #include <immintrin.h> // for SIMD intrinsics
-#include <arm_neon.h> // for NEON SIMD intrinsics
+
+#include <Eigen/Dense>
 #include <vector>
 
 void ConvolutionBasedProteinFilter::GetScoreAndMatchCount_(const std::vector<int>& spec_indices,
@@ -105,9 +105,10 @@ void ConvolutionBasedProteinFilter::GetScoreAndMatchCount_(const std::vector<int
 {
   // Step 1: Extract indices of set bits from spec_vec and pro_vec
   // Step 2: Prepare a score and match counter map (or array)
+
   int result_size = 1 + spec_indices.back() + pro_indices.back();
-  std::vector<short> scores(result_size, 0);
-  std::vector<short> matches(result_size, 0);
+  Eigen::Matrix<short, Eigen::Dynamic, 1> scores = Eigen::Matrix<short, Eigen::Dynamic, 1>::Zero(result_size);
+  Eigen::Matrix<short, Eigen::Dynamic, 1> matches = Eigen::Matrix<short, Eigen::Dynamic, 1>::Zero(result_size);
 
   // Step 3: Convolve the indices using SIMD to speed up score and match count updates
   for (size_t i = 0; i < pro_indices.size(); ++i)
@@ -118,20 +119,9 @@ void ConvolutionBasedProteinFilter::GetScoreAndMatchCount_(const std::vector<int
 
       if (index_sum + 8 <= result_size)  // Processing 8 elements at a time (for 16-bit integers)
       {
-        // Use SIMD to process 8 elements at a time
-        int16x8_t score_val = vdupq_n_s16(spec_scores[j]);  // Broadcast the score value
-
-        // Load current scores and matches at the target index_sum
-        int16x8_t current_scores = vld1q_s16(&scores[index_sum]);
-        int16x8_t current_matches = vld1q_s16(&matches[index_sum]);
-
-        // Increment the scores and matches using SIMD
-        int16x8_t new_scores = vaddq_s16(current_scores, score_val);
-        int16x8_t new_matches = vaddq_s16(current_matches, vdupq_n_s16(1));
-
-        // Store the updated scores and matches
-        vst1q_s16(&scores[index_sum], new_scores);
-        vst1q_s16(&matches[index_sum], new_matches);
+        // Use Eigen's block operations to vectorize the addition with 16-bit integers
+        scores.segment<8>(index_sum) += Eigen::Matrix<short, 8, 1>::Constant(spec_scores[j]);
+        matches.segment<8>(index_sum) += Eigen::Matrix<short, 8, 1>::Ones();
       }
       else
       {
@@ -141,6 +131,43 @@ void ConvolutionBasedProteinFilter::GetScoreAndMatchCount_(const std::vector<int
       }
     }
   }
+
+  // int result_size = 1 + spec_indices.back() + pro_indices.back();
+  // std::vector<short> scores(result_size, 0);
+  // std::vector<short> matches(result_size, 0);
+
+  // // Step 3: Convolve the indices using SIMD to speed up score and match count updates
+  // for (size_t i = 0; i < pro_indices.size(); ++i)
+  // {
+  //   for (size_t j = 0; j < spec_indices.size(); ++j)
+  //   {
+  //     size_t index_sum = pro_indices[i] + spec_indices[j];
+
+  //     if (index_sum + 8 <= result_size)  // Processing 8 elements at a time (for 16-bit integers)
+  //     {
+  //       // Use SIMD to process 8 elements at a time
+  //       int16x8_t score_val = vdupq_n_s16(spec_scores[j]);  // Broadcast the score value
+
+  //       // Load current scores and matches at the target index_sum
+  //       int16x8_t current_scores = vld1q_s16(&scores[index_sum]);
+  //       int16x8_t current_matches = vld1q_s16(&matches[index_sum]);
+
+  //       // Increment the scores and matches using SIMD
+  //       int16x8_t new_scores = vaddq_s16(current_scores, score_val);
+  //       int16x8_t new_matches = vaddq_s16(current_matches, vdupq_n_s16(1));
+
+  //       // Store the updated scores and matches
+  //       vst1q_s16(&scores[index_sum], new_scores);
+  //       vst1q_s16(&matches[index_sum], new_matches);
+  //     }
+  //     else
+  //     {
+  //       // For leftovers or small cases, handle the score and match count normally
+  //       scores[index_sum] += spec_scores[j];
+  //       matches[index_sum]++;
+  //     }
+  //   }
+  // }
 
   // Step 4: Find the maximum score and its corresponding match count
   max_score = 0;
