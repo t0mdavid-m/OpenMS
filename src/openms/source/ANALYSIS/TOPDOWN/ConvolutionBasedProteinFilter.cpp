@@ -9,6 +9,8 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/ConvolutionBasedProteinFilter.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
+#include <Eigen/Dense>
+#include <vector>
 
 namespace OpenMS
 {
@@ -94,8 +96,7 @@ void ConvolutionBasedProteinFilter::vectorizeFasta(const std::vector<FASTAFile::
   }
 }
 
-#include <Eigen/Dense>
-#include <vector>
+
 
 void ConvolutionBasedProteinFilter::GetScoreAndMatchCount_(const std::vector<int>& spec_indices,
                                                            const std::vector<int>& pro_indices,
