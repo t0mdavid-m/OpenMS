@@ -669,8 +669,8 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits, const std::vecto
           if (mod_count != prev_mod_count)
           {
             double mod_mass = mass_shift - prev_mass_shift;
-            int start = m > 0 ? pre_pro_index : (int)hit.getSequence().size() - 1 - pro_index;
-            int end = m > 0 ? pro_index : (int)hit.getSequence().size() - 1 - pre_pro_index;
+            int start = m > 0 ? (pre_pro_index - 1) : ((int)hit.getSequence().size() - 1 - pro_index);
+            int end = m > 0 ? (pro_index - 1) : ((int)hit.getSequence().size() - 1 - pre_pro_index);
             mod_starts.push_back(start + 1);
             mod_ends.push_back(end);
             mod_masses.push_back(mod_mass);
