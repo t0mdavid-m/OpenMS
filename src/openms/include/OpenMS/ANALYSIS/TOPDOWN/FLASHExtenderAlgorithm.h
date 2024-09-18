@@ -89,6 +89,7 @@ private:
   void defineNodes(const DeconvolvedSpectrum& dspec,//const MSSpectrum& spec,
                    MSSpectrum& node_spec, MSSpectrum& tol_spec, double max_mass, double precursor_mass, int mode);
   void run_(const ProteinHit& hit,
+            const std::vector<FLASHHelperClasses::Tag>& matched_tags,
             const MSSpectrum& node_spec,
             const MSSpectrum& tol_spec,
             const std::vector<double>& pro_masses,
