@@ -776,9 +776,11 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
             if (! mass_matched) continue;
             break;
           }
-          if (mass_matched) continue;
-          tag_matched = false;
-          break;
+          if (mass_matched)
+          {
+            tag_matched = true;
+            break;
+          }
         }
         if (! tag_matched) to_exclude_tag_indices.insert(tag_indices[j]);
       }
