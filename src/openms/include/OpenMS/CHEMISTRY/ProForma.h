@@ -1,3 +1,10 @@
+// Copyright (c) 2002-present, The OpenMS Team -- EKU Tuebingen, ETH Zurich, and FU Berlin
+// SPDX-License-Identifier: BSD-3-Clause
+//
+// --------------------------------------------------------------------------
+// $Maintainer: Ayesha Feroz $
+// $Authors: Ayesha Feroz, Tom Müller$
+// --------------------------------------------------------------------------
 #ifndef OPENMS_CHEMISTRY_PROFORMA_H
 #define OPENMS_CHEMISTRY_PROFORMA_H
 
@@ -17,6 +24,7 @@ namespace OpenMS
         bool ambiguous_start = false;
         bool stop_position = false;
         std::string modification_name;
+        std::pair<size_t, size_t> range = {0, 0};
     };
 
     class OPENMS_DLLAPI ProForma
@@ -48,6 +56,8 @@ namespace OpenMS
         void parseDeltaMassNotation(const std::string& modString, size_t& pos, size_t residue_pos);
         void parseNTerminalModification(const std::string& modString, size_t& pos);
         void parseCTerminalModification(const std::string& modString, size_t& pos);
+        // NEW: Parsing method for range modifications
+        void parseRangeModification(const std::string& modString, size_t& pos);
         void throwParseError(const std::string& message) const;
         void validateCVModification(const std::string& modification);
     };
