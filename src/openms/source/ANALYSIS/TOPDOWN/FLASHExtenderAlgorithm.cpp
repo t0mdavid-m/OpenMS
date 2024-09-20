@@ -746,12 +746,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
         if (tag.getNtermMass() > 0 && m == 0) continue;
         if (tag.getCtermMass() > 0 && m == 1) continue;
 
-        std::vector<int> positions;
-        std::vector<double> masses;
-        FLASHTaggerAlgorithm::getMatchedPositionsAndFlankingMassDiffs(positions, masses, flanking_mass_tol_, hit, tag);
-
         bool tag_matched = false;
-        bool tag_seq_matched = false;
         for (auto iter = best_path.rbegin(); iter != best_path.rend(); iter++) // compare against each path
         {
           auto node_index = getNodeIndex_(*iter, pro_masses.size());
@@ -778,28 +773,20 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
               break;
             }
           }
-          if(tag_matched)
+          if (tag_matched)
           {
+            std::vector<int> positions;
+            std::vector<double> masses;
+            FLASHTaggerAlgorithm::getMatchedPositionsAndFlankingMassDiffs(positions, masses, flanking_mass_tol_, hit, tag);
+
             int pro_index = getProIndex_(*iter, pro_masses.size());
             if (m == 0) pro_index = hit.getSequence().length() - pro_index;
             if (tag.getCtermMass() > 0) pro_index -= tag.getSequence().length();
-//            if (hit.getDescription() == "Standard")
-//            {
-//              std::cout<<m << " "<< (tag.getCtermMass() > 0? "C" : "N") << " " << tag.getSequence() << " " << pro_index<<std::endl;
-//              for (auto pp : positions) std::cout<<pp<<" * ";
-//              std::cout<<std::endl;
-//            }
-
-            if (std::find(positions.begin(), positions.end(), pro_index) != positions.end())
-            {
-              tag_seq_matched = true;
-              //if (hit.getDescription() == "Standard") std::cout<< pro_index << " found "<<std::endl;
-              break;
-            }
-            tag_seq_matched = false;
+            tag_matched = std::find(positions.begin(), positions.end(), pro_index) != positions.end();
+            break;
           }
         }
-        if (! tag_seq_matched) to_exclude_tag_indices.insert(tag_indices[j]);
+        if (! tag_matched) to_exclude_tag_indices.insert(tag_indices[j]);
       }
     }
 
