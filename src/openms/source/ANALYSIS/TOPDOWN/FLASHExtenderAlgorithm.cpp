@@ -413,6 +413,12 @@ void FLASHExtenderAlgorithm::run_(const ProteinHit& hit,
   }
 
   constructDAG_(dag, sinks, visited, node_spec, tol_spec, pro_masses, tag_edges, max_mod_cntr_for_last_mode, mode, tag_found);
+//  if (mode < 2 && tag_found && sinks.empty())
+//  {
+//    tag_edges.clear();
+//    tag_edges.resize(4, std::vector<int>());
+//    constructDAG_(dag, sinks, visited, node_spec, tol_spec, pro_masses, tag_edges, max_mod_cntr_for_last_mode, mode, false); // TODO
+//  }
 
   Size src = getVertex_(0, 0, 0, 0, pro_masses.size());
   std::vector<int> max_scores(max_mod_cntr_ + 1, 0);
@@ -464,6 +470,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
   // setLogType(CMD);
   ion_types_str_ = param_.getValue("ion_type").toStringVector();
 
+  //for (auto pg : dspec) std::cout<<pg.getMonoMass() << " " << pg.getQscore() <<std::endl;
   Residue empty;
   for (const auto& ion_str : ion_types_str_)
   {
@@ -489,6 +496,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
 
   proteoform_hits_.reserve(hits.size());
   if (spec.metaValueExists("PrecursorMass")) { precursor_mass_ = spec.getMetaValue("PrecursorMass"); }
+  //precursor_mass_ = 32318.90; //
   startProgress(0, (int)hits.size(), "running FLASHExtender ...");
 
 #pragma omp parallel for default(none) shared(hits, dspec, spec, multiple_hits_per_spec, std::cout)
@@ -601,9 +609,31 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
           for (int mc = 0; mc <= max_mod_cntr_; mc++)
           {
             if (cscores.find(mc) == cscores.end()) continue;
+
+//            int pro_end = 0;
+//            for (auto iter = paths_c->second[mc].rbegin(); iter != paths_c->second[mc].rend(); iter++)
+//            {
+//              auto pro_index = getProIndex_(*iter, pro_mass_map[0].size());
+//              auto node_index = getNodeIndex_(*iter, pro_mass_map[0].size());
+//              if (node_index != 0) break;
+//              pro_end = (int)hit.getSequence().size() - pro_index;
+//            }
+
             for (int mn = 0; mc + mn <= max_mod_cntr_; mn++)
             {
               if (nscores.find(mn) == nscores.end()) continue;
+
+//              int pro_start = 0;
+//              for (auto iter = paths_n->second[mn].rbegin(); iter != paths_n->second[mn].rend(); iter++)
+//              {
+//                auto pro_index = getProIndex_(*iter, pro_mass_map[1].size());
+//                auto node_index = getNodeIndex_(*iter, pro_mass_map[1].size());
+//                if (node_index != 0) break;
+//                pro_start = pro_index;
+//              }
+//              //std::cout<<pro_start << " " << pro_end<< std::endl;
+//              if (pro_start >= pro_end) continue;
+
               int sum_score = nscores[mn] + cscores[mc];
 
               if (max_score >= sum_score) continue;
@@ -679,6 +709,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
           if (m == 0) max_cterm_rindex = std::max(max_cterm_rindex, pro_index);
           if (m == 1) max_nterm_index = std::max(max_nterm_index, pro_index);
           if (m == 2) protein_end_position = pro_index;
+
           if (mod_count != prev_mod_count)
           {
             double mod_mass = mass_shift - prev_mass_shift;
@@ -697,7 +728,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
       }
     }
     if (total_score <= 0) continue;
-    // std::cout<<hit.getAccession()<< " " << total_score << " " << hit.getScore() <<std::endl;
+
     //  if (precursor_mass < 0) continue; // if precursor mass is not specified, skip
     for (int k = 0; k < mod_masses.size(); k++)
     {
@@ -795,8 +826,11 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
       if (to_exclude_tag_indices.find(index) != to_exclude_tag_indices.end()) continue;
       refined_tag_indices.push_back(index);
     }
+    if (refined_tag_indices.empty()) continue;
 
     protein_start_position += protein_start_position >= 0 ? 1 : 0;
+    if (protein_start_position >= 0 && protein_end_position >= 0 && protein_start_position >= protein_end_position) continue;
+
     hit.setMetaValue("ModificationIDs", mod_ids);
     hit.setMetaValue("ModificationACCs", mod_accs);
     hit.setMetaValue("Modifications", mod_masses);
@@ -851,6 +885,7 @@ void FLASHExtenderAlgorithm::constructDAG_(FLASHHelperClasses::DAG& dag,
   Size src = getVertex_(0, 0, 0, 0, pro_masses.size());
   visited[src] = true;
   std::set<Size> visited_tag_edges;
+
   connectBetweenTags_(dag, visited, visited_tag_edges, sinks, src, node_spec, tol_spec, pro_masses, tag_edges, max_mod_cntr_for_last_mode, mode,
                       use_tags);
 }
@@ -984,15 +1019,12 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(FLASHHelperClasses::DAG& dag,
   if (start_num_mod == max_mod_cntr) diagonal_counter = 1e5;
   double start_node_mass = node_spec[start_node_index].getMZ();
   auto src = getVertex_(0, 0, 0, 0, pro_masses.size());
-  if (end_node_index < 0)
-  {
-    end_pro_index = mode < 2 ? std::min(start_pro_index + 20, (int)pro_masses.size() - 1)
-                             : ((int)pro_masses.size() - 1); // if sink is not specified, stretch up to 20 amino acids.
-  }
+
   // make the range of truncation well...  make use of the positional information
   if (start_vertex == src)
   {
-    for (int pro_i = start_pro_index + 1; pro_i <= std::min(end_pro_index + 100, ((int)pro_masses.size() - 1)); pro_i++) // change later
+    int end_i = end_pro_index < 0? (int)pro_masses.size() - 1 : end_pro_index;
+    for (int pro_i = start_pro_index + 1; pro_i <= end_i; pro_i++) // change later
     {
       Size vertex2 = getVertex_(0, pro_i, 0, 0, pro_masses.size()); //
       dag.addEdge(vertex2, start_vertex, visited);
@@ -1002,6 +1034,13 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(FLASHHelperClasses::DAG& dag,
                          max_mod_cntr_for_last_mode, mode);
     }
   }
+
+  if (end_node_index < 0)
+  {
+    end_pro_index = mode < 2 ? std::min(start_pro_index + 20, (int)pro_masses.size() - 1)
+                             : ((int)pro_masses.size() - 1); // if sink is not specified, stretch up to 20 amino acids.
+  }
+
   double start_delta_mass = start_node_mass - pro_masses[start_pro_index];
   double end_delta_mass;
   double margin;
@@ -1087,7 +1126,7 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(FLASHHelperClasses::DAG& dag,
           new_score -= multi_ion_score + FLASHTaggerAlgorithm::max_peak_group_score;
         } // if it was not found in unimod, subtract more
       }
-      if (new_score < min_path_score_) continue;
+      //if (new_score < min_path_score_) continue;
       if (end_node_index < 0 && new_score < 0) continue;
       Size next_vertex = getVertex_(node_i, pro_i, new_score, num_mod, pro_masses.size());
       if (next_vertex >= visited.size()) continue;
