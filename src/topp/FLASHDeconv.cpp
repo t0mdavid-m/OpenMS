@@ -6,6 +6,7 @@
 // $Authors: Kyowon Jeong, Jihyung Kim $
 // --------------------------------------------------------------------------
 //#define TRAIN_OUT
+#define DEEP_LEARNING
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvAlgorithm.h>
 #include <OpenMS/APPLICATIONS/TOPPBase.h>
@@ -287,6 +288,11 @@ protected:
 
     for (auto& deconvolved_spectrum : deconvolved_spectra)
     {
+      //for (auto& pg : deconvolved_spectrum)
+      //{
+     //   pg.getDLVector(deconvolved_spectrum.getOriginalSpectrum(), 11, 13, fd.getAveragine(), 10.0, 3);
+     // }
+
       uint ms_level = deconvolved_spectrum.getOriginalSpectrum().getMSLevel();
       if (per_ms_level_deconv_spec_count.find(ms_level) == per_ms_level_deconv_spec_count.end())
         per_ms_level_deconv_spec_count[ms_level] = 0;

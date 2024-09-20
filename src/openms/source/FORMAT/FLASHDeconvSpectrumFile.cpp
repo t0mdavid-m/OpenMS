@@ -74,7 +74,7 @@ namespace OpenMS
 
       if (write_detail)
       {
-        auto noisy_peaks = pg.recruitAllPeaksInSpectrum(dspec.getOriginalSpectrum(), tol * 1e-6, avg, pg.getMonoMass());
+        auto noisy_peaks = pg.recruitAllPeaksInSpectrum(dspec.getOriginalSpectrum(), tol * 1e-6, avg, pg.getMonoMass(), false);
 
         std::sort(noisy_peaks.begin(), noisy_peaks.end());
         fs << std::fixed << std::setprecision(2);

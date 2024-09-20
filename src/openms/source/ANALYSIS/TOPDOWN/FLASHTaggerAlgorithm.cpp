@@ -839,14 +839,12 @@ void FLASHTaggerAlgorithm::getMatchedPositionsAndFlankingMassDiffs(std::vector<i
                                                                    const ProteinHit& hit,
                                                                    const FLASHHelperClasses::Tag& tag)
 {
-  Size pos = 0;
   std::vector<int> indices;
   const auto& seq = hit.getSequence();
   auto tagseq = tag.getSequence().toUpper();
-  while (true)
+  Size pos = find_with_X_(seq, tagseq);
+  while (pos != String::npos)
   {
-    pos = find_with_X_(seq, tagseq, pos + 1);
-    if (pos == String::npos) break;
     double delta_mass = .0;
 
     auto x_pos = seq.find('X');
@@ -862,9 +860,13 @@ void FLASHTaggerAlgorithm::getMatchedPositionsAndFlankingMassDiffs(std::vector<i
       if (x_pos != String::npos) cterm.erase(remove(cterm.begin(), cterm.end(), 'X'), cterm.end());
       delta_mass = tag.getCtermMass() - (cterm.empty() ? 0 : AASequence::fromString(cterm).getMonoWeight(Residue::Internal));
     }
-    if (std::abs(delta_mass) > flanking_mass_tol) continue;
-    masses.push_back(delta_mass);
-    positions.push_back((int)pos);
+
+    if (std::abs(delta_mass) <= flanking_mass_tol)
+    {
+      masses.push_back(delta_mass);
+      positions.push_back((int)pos);
+    }
+    pos = find_with_X_(seq, tagseq, pos + 1);
   }
 }
 } // namespace OpenMS

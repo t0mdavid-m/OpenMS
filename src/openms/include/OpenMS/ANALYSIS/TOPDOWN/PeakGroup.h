@@ -97,7 +97,7 @@ namespace OpenMS
      * @param mono_mass monoisotopic mass
      * @return returns the noisy peaks for this peakgroup - i.e., the raw peaks within the range of this peakGroup that are not matched to any istope of this peakGroup mass.
      */
-    std::vector<LogMzPeak> recruitAllPeaksInSpectrum(const MSSpectrum& spec, double tol, const FLASHHelperClasses::PrecalculatedAveragine& avg, double mono_mass);
+    std::vector<LogMzPeak> recruitAllPeaksInSpectrum(const MSSpectrum& spec, double tol, const FLASHHelperClasses::PrecalculatedAveragine& avg, double mono_mass, bool renew_signal_peaks = true);
 
     /// determine is an mz is a signal of this peakgroup. Input tol is ppm tolerance (e.g., 10.0 for 10ppm tolerance). Assume logMzPeaks are sorted.
     bool isSignalMZ(double mz, double tol) const;
@@ -266,6 +266,9 @@ namespace OpenMS
     bool empty() const;
     void swap(std::vector<FLASHHelperClasses::LogMzPeak>& x);
     void sort();
+
+    std::tuple<std::vector<double>, std::vector<double>> getDLVector(const MSSpectrum& spec, const Size charge_count, const Size isotope_count, const FLASHHelperClasses::PrecalculatedAveragine& avg, double tol, const Size bin_size = 1);
+
   private:
     /// update chargefit score and also update per charge intensities here.
     void updateChargeFitScoreAndChargeIntensities_(bool is_low_charge);
@@ -298,7 +301,6 @@ namespace OpenMS
      * @return calculated noise power
      */
     float getNoisePeakPower_(const std::vector<LogMzPeak>& noisy_peaks, const int z, const double tol) const;
-    std::vector<Matrix<float>> dl_matrices_;
 
     /// log Mz peaks
     std::vector<FLASHHelperClasses::LogMzPeak> logMzpeaks_;

@@ -733,6 +733,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
     for (int m = final_mode == 2 ? 2 : 0; m <= final_mode; m++)
     {
       std::vector<Size> best_path;
+      const auto& pro_masses = pro_mass_map[m];
       if (best_path_map.empty() || best_path_map.find(m) == best_path_map.end() || best_path_map[m].empty())
         ;
       else
@@ -741,48 +742,64 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
       for (int j = 0; j < matched_tags.size(); j++) // for each tag
       {
         auto tag = matched_tags[j];
+
         if (tag.getNtermMass() > 0 && m == 0) continue;
         if (tag.getCtermMass() > 0 && m == 1) continue;
-        bool tag_matched = true;
-        for (const double mass : tag.getMzs()) // for each mass in each tag
-        {
-          bool mass_matched = false;
-          for (auto iter = best_path.rbegin(); iter != best_path.rend(); iter++) // compare against each path
-          {
-            auto node_index = getNodeIndex_(*iter, pro_mass_map[m].size());
-            double node_mz = node_spec_map[m][node_index].getMZ();
-            if (tag.getNtermMass() > 0)
-            {
-              for (const auto& shift : prefix_shifts_)
-              {
-                double t_mass = mass - shift;
-                if (std::abs(t_mass - node_mz) > std::max(t_mass, node_mz) * tol_ * 2) continue;
-                mass_matched = true;
-                break;
-              }
-            }
-            else
-            {
-              for (const auto& shift : suffix_shifts_)
-              {
-                double t_mass = mass - shift;
-                if (m == 2 && precursor_mass > 0) t_mass = precursor_mass - Residue::getInternalToFull().getMonoWeight() - t_mass;
-                if (std::abs(t_mass - node_mz) > std::max(t_mass, node_mz) * tol_ * 2) continue;
-                mass_matched = true;
-                break;
-              }
-            }
 
-            if (! mass_matched) continue;
-            break;
-          }
-          if (mass_matched)
+        std::vector<int> positions;
+        std::vector<double> masses;
+        FLASHTaggerAlgorithm::getMatchedPositionsAndFlankingMassDiffs(positions, masses, flanking_mass_tol_, hit, tag);
+
+        bool tag_matched = false;
+        bool tag_seq_matched = false;
+        for (auto iter = best_path.rbegin(); iter != best_path.rend(); iter++) // compare against each path
+        {
+          auto node_index = getNodeIndex_(*iter, pro_masses.size());
+          double node_mz = node_spec_map[m][node_index].getMZ();
+
+          if (tag.getNtermMass() > 0)
           {
-            tag_matched = true;
-            break;
+            for (const auto& shift : prefix_shifts_)
+            {
+              double t_mass = tag.getNtermMass() - shift;
+              if (std::abs(t_mass - node_mz) > 1.1) continue;
+              tag_matched = true;
+              break;
+            }
+          }
+          else
+          {
+            for (const auto& shift : suffix_shifts_)
+            {
+              double t_mass = tag.getCtermMass() - shift;
+              if (m == 2 && precursor_mass > 0) t_mass = precursor_mass - Residue::getInternalToFull().getMonoWeight() - t_mass;
+              if (std::abs(t_mass - node_mz) > 1.1) continue;
+              tag_matched = true;
+              break;
+            }
+          }
+          if(tag_matched)
+          {
+            int pro_index = getProIndex_(*iter, pro_masses.size());
+            if (m == 0) pro_index = hit.getSequence().length() - pro_index;
+            if (tag.getCtermMass() > 0) pro_index -= tag.getSequence().length();
+//            if (hit.getDescription() == "Standard")
+//            {
+//              std::cout<<m << " "<< (tag.getCtermMass() > 0? "C" : "N") << " " << tag.getSequence() << " " << pro_index<<std::endl;
+//              for (auto pp : positions) std::cout<<pp<<" * ";
+//              std::cout<<std::endl;
+//            }
+
+            if (std::find(positions.begin(), positions.end(), pro_index) != positions.end())
+            {
+              tag_seq_matched = true;
+              //if (hit.getDescription() == "Standard") std::cout<< pro_index << " found "<<std::endl;
+              break;
+            }
+            tag_seq_matched = false;
           }
         }
-        if (! tag_matched) to_exclude_tag_indices.insert(tag_indices[j]);
+        if (! tag_seq_matched) to_exclude_tag_indices.insert(tag_indices[j]);
       }
     }
 
