@@ -41,10 +41,10 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   defaults_.setValue("pro_fdr", 1.0, "Proteoform level FDR");
   defaults_.setMinFloat("pro_fdr", 0.0);
 
-  defaults_.setValue("allow_multi_hits", "false", "Allow multiple hits per spectrum");
+  defaults_.setValue("allow_multi_hits", "true", "Allow multiple hits per spectrum");
   defaults_.setValidStrings("allow_multi_hits", {"true", "false"});
 
-  defaults_.setValue("keep_underdetermined", "false",
+  defaults_.setValue("keep_underdetermined", "true",
                      "To keep underdetermined proteoform hits (i.e., proteoforms without total mass or start end positions");
   defaults_.setValidStrings("keep_underdetermined", {"true", "false"});
 
