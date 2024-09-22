@@ -664,19 +664,14 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
           auto mass_shift = t_node_spec[node_index].getMZ() - t_pro_masses[pro_index];
           auto mod_count = getModNumber_(*iter);
 
-          if (debug)
-          {
-            // Residue::getInternalToFull().getMonoWeight()
-            std::cout << hit.getAccession() << "\tmode\t" << m << "\tinput pre\t" << precursor_mass_ << "\tcal pre\t" << precursor_mass << "\tscore\t"
-                      << getScore_(*iter) << "\t" << node_index << "\t" << pro_index << "\tin\t" << t_node_spec.size() << "\t" << t_pro_masses.size()
-                      << "\tmasses\t" << t_pro_masses.back() << "\t" << t_pro_masses[pro_index] << "\t" << t_node_spec[node_index].getMZ() << "\t"
-                      << mass_shift << "\t" << mod_count << std::endl;
-          }
           if (node_index == 0)
           {
             if (m > 0) protein_start_position = pro_index;
             if (m == 0) protein_end_position = (int)hit.getSequence().size() - pro_index;
-            if (mod_count == 0) prev_mass_shift = mass_shift;
+            if (mod_count == 0)
+            {
+              prev_mass_shift = mass_shift;
+            }
           }
           else
           {
@@ -689,7 +684,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
           if (m == 2) protein_end_position = pro_index;
           if (mod_count != prev_mod_count)
           {
-            double mod_mass = mass_shift - prev_mass_shift;
+            double mod_mass = mass_shift - prev_mass_shift; // calculate this based on node spec mz - protein!!
             int start = m > 0 ? (pre_pro_index - 1) : ((int)hit.getSequence().size() - 1 - pro_index);
             int end = m > 0 ? (pro_index - 1) : ((int)hit.getSequence().size() - 1 - pre_pro_index);
             mod_starts.push_back(start + 1);
@@ -697,6 +692,16 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
             mod_masses.push_back(mod_mass);
             mod_tols.push_back(tol_spec[node_index].getIntensity());
           }
+
+          if (debug)
+          {
+            // Residue::getInternalToFull().getMonoWeight()
+            std::cout << hit.getAccession() << "\tmode\t" << m << "\tinput pre\t" << precursor_mass_ << "\tcal pre\t" << precursor_mass << "\tscore\t"
+                      << getScore_(*iter) << "\t" << node_index << "\t" << pro_index << "\tin\t" << t_node_spec.size() << "\t" << t_pro_masses.size()
+                      << "\tmasses\t" << t_pro_masses.back() << "\t" << t_pro_masses[pro_index] << "\t" << t_node_spec[node_index].getMZ() << "\t tolspec: " << tol_spec[node_index].getIntensity() << " tol: " << t_node_spec[node_index].getMZ() / 1e5 <<  "\t"
+                      << mass_shift << "\t" << mod_count << std::endl;
+          }
+
           prev_mod_count = mod_count;
           pre_pro_index = pro_index;
           if (mod_count > 0) prev_mass_shift = mass_shift;
@@ -1023,7 +1028,7 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(FLASHHelperClasses::DAG& dag,
   {
     double end_node_mass = node_spec[end_node_index].getMZ();
     end_delta_mass = end_node_mass - pro_masses[end_pro_index];
-    margin = std::max(tol_spec[end_node_index].getIntensity(), tol_spec[start_node_index].getIntensity());
+    margin = tol_spec[end_node_index].getIntensity();//std::min(tol_spec[end_node_index].getIntensity(), tol_spec[start_node_index].getIntensity());
     if (std::abs(end_delta_mass - start_delta_mass) > max_mod_mass_ * (max_mod_cntr - start_num_mod) + margin) { return; }
 
     if (std::abs(end_delta_mass - start_delta_mass) > margin)
@@ -1067,7 +1072,7 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(FLASHHelperClasses::DAG& dag,
     if (end_node_index < 0 && node_spec[node_i].getIntensity() < 0 && diagonal_counter > 0) continue;
     int score = start_score + (int)node_spec[node_i].getIntensity();
     double t_node_mass = node_spec[node_i].getMZ();
-    double t_margin = std::max(tol_spec[node_i].getIntensity(), tol_spec[start_node_index].getIntensity());
+    double t_margin = tol_spec[node_i].getIntensity();//std::min(tol_spec[node_i].getIntensity(), tol_spec[start_node_index].getIntensity());
 
     for (int pro_i = start_pro_index + (start_pro_index == 0 ? 0 : 1); pro_i <= end_pro_index; pro_i++) //
     {
