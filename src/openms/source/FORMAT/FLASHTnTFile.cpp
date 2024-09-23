@@ -126,12 +126,12 @@ String generateProFormaString(const String& sequence,
       if (! mod_accs[i].empty()) { range_mod += ":" + mod_accs[i]; }
 
       range_mod += "]";
-      range_modifications[{mod_starts[i], mod_ends[i]}] = range_mod;
+      range_modifications[{mod_starts[i] - 1, mod_ends[i] - 1}] = range_mod;
     }
     else
     {
       // For single position modifications, add them directly
-      proforma.addModification(mod_starts[i], mod_ids[i], mod_masses[i]);
+      proforma.addModification(mod_starts[i] - 1, mod_ids[i], mod_masses[i]);
     }
   }
 
@@ -205,8 +205,8 @@ void OpenMS::FLASHTnTFile::writePrSMs(const std::vector<ProteinHit>& hits, std::
     int end_in_seq = end < 0 ? hit.getSequence().size() : end;
 
     // Use ProForma for sequence generation
-    String proformaStr = "";//generateProFormaString(hit.getSequence().substr(start_in_seq, end_in_seq - start_in_seq), mod_masses, mod_starts, mod_ends,
-                                              //  mod_ids, mod_accs);
+    String proformaStr = generateProFormaString(hit.getSequence().substr(start_in_seq, end_in_seq - start_in_seq), mod_masses, mod_starts, mod_ends,
+                                                mod_ids, mod_accs);
 
     fs << hit.getMetaValue("Index") << "\t" << hit.getMetaValue("Scan") << "\t" << hit.getMetaValue("RT") << "\t" << hit.getMetaValue("NumMass")
        << "\t" << hit.getAccession() << "\t" << hit.getDescription() << "\t" << hit.getMetaValue("Mass") << "\t" << hit.getSequence() << "\t"
@@ -269,8 +269,8 @@ void OpenMS::FLASHTnTFile::writeProteoforms(const std::vector<ProteinHit>& hits,
     int end_in_seq = end < 0 ? hit.getSequence().size() : end;
 
     // Use ProForma to generate ProForma string
-    String proformaStr = "";//generateProFormaString(hit.getSequence().substr(start_in_seq, end_in_seq - start_in_seq), mod_masses, mod_starts, mod_ends,
-                                              //  mod_ids, mod_accs);
+    String proformaStr = generateProFormaString(hit.getSequence().substr(start_in_seq, end_in_seq - start_in_seq), mod_masses, mod_starts, mod_ends,
+                                                mod_ids, mod_accs);
 
     fs << hit.getMetaValue("Index") << "\t" << hit.getMetaValue("Scan") << "\t" << hit.getMetaValue("RT") << "\t" << hit.getMetaValue("NumMass")
        << "\t" << hit.getAccession() << "\t" << hit.getDescription() << "\t" << hit.getMetaValue("Mass") << "\t" << hit.getSequence() << "\t"
