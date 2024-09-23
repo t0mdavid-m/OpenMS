@@ -186,10 +186,10 @@ void OpenMS::FLASHTnTFile::writePrSMs(const std::vector<ProteinHit>& hits, std::
       modmasses += std::to_string(mod_masses[i]);
 
       if (! modstarts.empty()) modstarts += ";";
-      modstarts += std::to_string(mod_starts[i]);
+      modstarts += std::to_string(mod_starts[i] + 1);
 
       if (! modends.empty()) modends += ";";
-      modends += std::to_string(mod_ends[i]);
+      modends += std::to_string(mod_ends[i] + 1);
 
       if (! modids.empty()) modids += ";";
       modids += mod_ids[i];
@@ -205,8 +205,8 @@ void OpenMS::FLASHTnTFile::writePrSMs(const std::vector<ProteinHit>& hits, std::
     int end_in_seq = end < 0 ? hit.getSequence().size() : end;
 
     // Use ProForma for sequence generation
-    String proformaStr = generateProFormaString(hit.getSequence().substr(start_in_seq, end_in_seq - start_in_seq), mod_masses, mod_starts, mod_ends,
-                                                mod_ids, mod_accs);
+    String proformaStr = "";//generateProFormaString(hit.getSequence().substr(start_in_seq, end_in_seq - start_in_seq), mod_masses, mod_starts, mod_ends,
+                                              //  mod_ids, mod_accs);
 
     fs << hit.getMetaValue("Index") << "\t" << hit.getMetaValue("Scan") << "\t" << hit.getMetaValue("RT") << "\t" << hit.getMetaValue("NumMass")
        << "\t" << hit.getAccession() << "\t" << hit.getDescription() << "\t" << hit.getMetaValue("Mass") << "\t" << hit.getSequence() << "\t"
@@ -250,10 +250,10 @@ void OpenMS::FLASHTnTFile::writeProteoforms(const std::vector<ProteinHit>& hits,
       modmasses += std::to_string(mod_masses[i]);
 
       if (! modstarts.empty()) modstarts += ";";
-      modstarts += std::to_string(mod_starts[i]); // Changed i + 1 to i to ensure correct 0-based indexing for ProForma modification start/end positions
+      modstarts += std::to_string(mod_starts[i] + 1);
 
       if (! modends.empty()) modends += ";";
-      modends += std::to_string(mod_ends[i]); // Changed i + 1 to i to ensure correct 0-based indexing for ProForma modification start/end positions
+      modends += std::to_string(mod_ends[i] + 1);
 
       if (! modids.empty()) modids += ";";
       modids += mod_ids[i];
@@ -269,8 +269,8 @@ void OpenMS::FLASHTnTFile::writeProteoforms(const std::vector<ProteinHit>& hits,
     int end_in_seq = end < 0 ? hit.getSequence().size() : end;
 
     // Use ProForma to generate ProForma string
-    String proformaStr = generateProFormaString(hit.getSequence().substr(start_in_seq, end_in_seq - start_in_seq), mod_masses, mod_starts, mod_ends,
-                                                mod_ids, mod_accs);
+    String proformaStr = "";//generateProFormaString(hit.getSequence().substr(start_in_seq, end_in_seq - start_in_seq), mod_masses, mod_starts, mod_ends,
+                                              //  mod_ids, mod_accs);
 
     fs << hit.getMetaValue("Index") << "\t" << hit.getMetaValue("Scan") << "\t" << hit.getMetaValue("RT") << "\t" << hit.getMetaValue("NumMass")
        << "\t" << hit.getAccession() << "\t" << hit.getDescription() << "\t" << hit.getMetaValue("Mass") << "\t" << hit.getSequence() << "\t"
