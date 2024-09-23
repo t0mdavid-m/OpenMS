@@ -41,12 +41,12 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   defaults_.setValue("pro_fdr", 1.0, "Proteoform level FDR");
   defaults_.setMinFloat("pro_fdr", 0.0);
 
-  defaults_.setValue("allow_multi_hits", "false", "Allow multiple hits per spectrum");
-  defaults_.setValidStrings("allow_multi_hits", {"true", "false"});
+  defaults_.setValue("only_single_hit", "false", "Allow only a single hit per spectrum");
+  defaults_.setValidStrings("only_single_hit", {"true", "false"});
 
-  defaults_.setValue("keep_underdetermined", "false",
-                     "To keep underdetermined proteoform hits (i.e., proteoforms without total mass or start end positions");
-  defaults_.setValidStrings("keep_underdetermined", {"true", "false"});
+  defaults_.setValue("discard_underdetermined", "false",
+                     "To discard underdetermined proteoform hits (i.e., proteoforms without total mass or start end positions");
+  defaults_.setValidStrings("discard_underdetermined", {"true", "false"});
 
   defaults_.setValue("keep_decoy", "false", "To keep decoy hits");
   defaults_.setValidStrings("keep_decoy", {"true", "false"});
@@ -63,8 +63,8 @@ void FLASHTnTAlgorithm::updateMembers_()
   prsm_fdr_ = param_.getValue("prsm_fdr");
   pro_fdr_ = param_.getValue("pro_fdr");
   keep_decoy_ = param_.getValue("keep_decoy").toString() == "true";
-  keep_underdetermined_ = param_.getValue("keep_underdetermined").toString() == "true";
-  multiple_hits_per_spec_ = param_.getValue("allow_multi_hits").toString() == "true";
+  keep_underdetermined_ = param_.getValue("discard_underdetermined").toString() == "false";
+  multiple_hits_per_spec_ = param_.getValue("only_single_hit").toString() == "false";
 }
 
 bool FLASHTnTAlgorithm::areConsistent_(const ProteinHit& a, const ProteinHit& b, double tol) const

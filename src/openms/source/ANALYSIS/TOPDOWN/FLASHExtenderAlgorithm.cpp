@@ -692,7 +692,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
             // Residue::getInternalToFull().getMonoWeight()
             std::cout << hit.getAccession() << "\tmode\t" << m << "\tinput pre\t" << precursor_mass_ << "\tcal pre\t" << precursor_mass << "\tscore\t"
                       << getScore_(*iter) << "\t" << node_index << "\t" << pro_index << "\tin\t" << t_node_spec.size() << "\t" << t_pro_masses.size()
-                      << "\tmasses\t" << t_pro_masses.back() << "\t" << t_pro_masses[pro_index] << "\t" << t_node_spec[node_index].getMZ() << "\t tolspec: " << tol_spec[node_index].getIntensity() << " tol: " << t_node_spec[node_index].getMZ() / 1e5 <<  "\t"
+                      << "\tmasses\t" << t_pro_masses.back() << "\t" << t_pro_masses[pro_index] << "\t" << t_node_spec[node_index].getMZ() << " node score " << t_node_spec[node_index].getIntensity() << "\t tolspec: " << tol_spec[node_index].getIntensity() << " tol: " << t_node_spec[node_index].getMZ() / 1e5 <<  "\t"
                       << mass_shift << "\t" << mod_count << std::endl;
           }
 

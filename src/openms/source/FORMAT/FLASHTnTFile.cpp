@@ -26,7 +26,7 @@ void FLASHTnTFile::writeTagHeader(std::fstream& fs)
 void FLASHTnTFile::writePrSMHeader(std::fstream& fs)
 {
   fs << "ProteoformIndex\tScan\tRetentionTime\tNumMass\tProteinAccession\tProteinDescription\tProteoformMass\tDatabaseSequence\tProteinSequence\tProf"
-        "orma\tMatchedAminoAcidCount\tCoverage(%)\tStartPosition\tEndPosition"
+        "orma\tMatchingFragments\tCoverage(%)\tStartPosition\tEndPosition"
         "\tTagCount\tTagIndices\tModCount\tModMass\tModID\tModAccession\tModStart\tModEnd\tScore\tPrSMLevelQvalue\tProteoformLevelQvalue\n";
 }
 
@@ -34,7 +34,7 @@ void FLASHTnTFile::writePrSMHeader(std::fstream& fs)
 void FLASHTnTFile::writeProHeader(std::fstream& fs)
 {
   fs << "ProteoformIndex\tScan\tRetentionTime\tNumMass\tProteinAccession\tProteinDescription\tProteoformMass\tDatabaseSequence\tProteinSequence\tProf"
-        "orma\tMatchedAminoAcidCount\tCoverage(%)\tStartPosition\tEndPosition"
+        "orma\tMatchingFragments\tCoverage(%)\tStartPosition\tEndPosition"
         "\tTagCount\tTagIndices\tModCount\tModMass\tModID\tModAccession\tModStart\tModEnd\tScore\tProteoformLevelQvalue\n";
 }
 
