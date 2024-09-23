@@ -155,7 +155,6 @@ String generateProFormaString(const String& sequence,
 
 
 
-
 void OpenMS::FLASHTnTFile::writePrSMs(const std::vector<ProteinHit>& hits, std::fstream& fs)
 {
   for (const auto& hit : hits)
@@ -205,8 +204,8 @@ void OpenMS::FLASHTnTFile::writePrSMs(const std::vector<ProteinHit>& hits, std::
     int end_in_seq = end < 0 ? hit.getSequence().size() : end;
 
     // Use ProForma for sequence generation
-    String proformaStr = generateProFormaString(hit.getSequence().substr(start_in_seq, end_in_seq - start_in_seq), mod_masses, mod_starts, mod_ends,
-                                                mod_ids, mod_accs);
+    String proformaStr = "";//generateProFormaString(hit.getSequence().substr(start_in_seq, end_in_seq - start_in_seq), mod_masses, mod_starts, mod_ends,
+                                                //mod_ids, mod_accs);
 
     fs << hit.getMetaValue("Index") << "\t" << hit.getMetaValue("Scan") << "\t" << hit.getMetaValue("RT") << "\t" << hit.getMetaValue("NumMass")
        << "\t" << hit.getAccession() << "\t" << hit.getDescription() << "\t" << hit.getMetaValue("Mass") << "\t" << hit.getSequence() << "\t"
@@ -269,8 +268,8 @@ void OpenMS::FLASHTnTFile::writeProteoforms(const std::vector<ProteinHit>& hits,
     int end_in_seq = end < 0 ? hit.getSequence().size() : end;
 
     // Use ProForma to generate ProForma string
-    String proformaStr = generateProFormaString(hit.getSequence().substr(start_in_seq, end_in_seq - start_in_seq), mod_masses, mod_starts, mod_ends,
-                                                mod_ids, mod_accs);
+    String proformaStr = "";//generateProFormaString(hit.getSequence().substr(start_in_seq, end_in_seq - start_in_seq), mod_masses, mod_starts, mod_ends,
+                                                //mod_ids, mod_accs);
 
     fs << hit.getMetaValue("Index") << "\t" << hit.getMetaValue("Scan") << "\t" << hit.getMetaValue("RT") << "\t" << hit.getMetaValue("NumMass")
        << "\t" << hit.getAccession() << "\t" << hit.getDescription() << "\t" << hit.getMetaValue("Mass") << "\t" << hit.getSequence() << "\t"

@@ -513,7 +513,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
 
     std::map<int, std::map<int, std::vector<Size>>> all_path_map; // mode, num_mod, path
     std::map<int, std::vector<Size>> best_path_map;               // mode, best paths
-    std::map<int, MSSpectrum> node_spec_map;                      // mode, best paths
+    std::map<int, MSSpectrum> node_spec_map, tol_spec_map;                      // mode, best paths
 
     int final_mode;
     std::map<int, std::vector<double>> pro_mass_map;
@@ -543,7 +543,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
 
       auto& pro_masses = pro_mass_map[mode] = std::vector<double>();
       auto& node_spec = node_spec_map[mode] = MSSpectrum();
-      MSSpectrum tol_spec;
+      auto& tol_spec = tol_spec_map[mode] = MSSpectrum();
 
       getProMasses(hit, pro_masses, mode);
       defineNodes(dspec, node_spec, tol_spec, pro_masses.back(), precursor_mass, mode);
@@ -656,6 +656,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
         double prev_mass_shift = 0;
         int prev_mod_count = 0;
         int pre_pro_index = 0;
+        int pre_node_index = 0;
 
         for (auto iter = best_path.rbegin(); iter != best_path.rend(); iter++)
         {
@@ -668,6 +669,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
           {
             if (m > 0) protein_start_position = pro_index;
             if (m == 0) protein_end_position = (int)hit.getSequence().size() - pro_index;
+            if (mod_count == 0) prev_mass_shift = mass_shift;
           }
 
           int pro_seq_index = m > 0? pro_index : ((int)hit.getSequence().size() - pro_index);
@@ -679,12 +681,27 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
           if (mod_count != prev_mod_count)
           {
             double mod_mass = mass_shift - prev_mass_shift; // calculate this based on node spec mz - protein!!
-            int start = m > 0 ? (pre_pro_index - 1) : ((int)hit.getSequence().size() - 1 - pro_index);
             int end = m > 0 ? (pro_index - 1) : ((int)hit.getSequence().size() - 1 - pre_pro_index);
+            int start = m > 0 ? (pre_pro_index - 1) : ((int)hit.getSequence().size() - 1 - pro_index);
+
+            for (int pi = pre_pro_index + 1; pi < pro_index; pi++)
+            {
+              double pm = mass_shift + t_pro_masses[pi];
+              for (int ni = pre_node_index + 1; ni < node_index; ni++)
+              {
+                double nm = t_node_spec[ni].getMZ();
+                if (std::abs(pm - nm) > tol_spec_map[m][ni].getIntensity()) continue;
+                int t_end = m > 0 ? (pi - 1) : ((int)hit.getSequence().size() - 1 - pre_pro_index);
+                int t_start = m > 0 ? (pre_pro_index - 1) : ((int)hit.getSequence().size() - 1 - pi);
+                end = std::min(t_end, end);
+                start = std::max(start, t_start);
+              }
+            }
+
             mod_starts.push_back(start + 1);
             mod_ends.push_back(end);
             mod_masses.push_back(mod_mass);
-            mod_tols.push_back(tol_spec[node_index].getIntensity());
+            mod_tols.push_back(tol_spec_map[m][node_index].getIntensity());
           }
 
           if (debug)
@@ -692,14 +709,15 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
             // Residue::getInternalToFull().getMonoWeight()
             std::cout << hit.getAccession() << "\tmode\t" << m << "\tinput pre\t" << precursor_mass_ << "\tcal pre\t" << precursor_mass << "\tscore\t"
                       << getScore_(*iter) << "\t" << node_index << "\t" << pro_index << "\tin\t" << t_node_spec.size() << "\t" << t_pro_masses.size()
-                      << "\tmasses\t" << t_pro_masses.back() << "\t" << t_pro_masses[pro_index] << "\t" << t_node_spec[node_index].getMZ() << " node score " << t_node_spec[node_index].getIntensity() << "\t tolspec: " << tol_spec[node_index].getIntensity() << " tol: " << t_node_spec[node_index].getMZ() / 1e5 <<  "\t"
+                      << "\tmasses\t" << t_pro_masses.back() << "\t" << t_pro_masses[pro_index] << "\t" << t_node_spec[node_index].getMZ() << " node score " << t_node_spec[node_index].getIntensity() << "\t tolspec: " << tol_spec_map[m][node_index].getIntensity() << " tol: " << t_node_spec[node_index].getMZ() / 1e5 <<  "\t"
                       << mass_shift << "\t" << mod_count << std::endl;
           }
 
           prev_mod_count = mod_count;
           pre_pro_index = pro_index;
-          //if (mod_count > 0)
-          prev_mass_shift = mass_shift;
+          pre_node_index = node_index;
+          if (mod_count > 0)
+            prev_mass_shift = mass_shift;
         }
         final_mode = m;
       }
@@ -741,7 +759,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
     for (int m = (final_mode == 2 ? 2 : 0); m <= (final_mode == 2 ? 2 : 1); m++)
     {
       std::vector<Size> best_path;
-      const auto& pro_masses = pro_mass_map[m];
+      const auto& t_pro_masses = pro_mass_map[m];
       if (best_path_map.empty() || best_path_map.find(m) == best_path_map.end() || best_path_map[m].empty())
         ;
       else
@@ -757,7 +775,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
         bool tag_matched = false;
         for (auto iter = best_path.rbegin(); iter != best_path.rend(); iter++) // compare against each path
         {
-          auto node_index = getNodeIndex_(*iter, pro_masses.size());
+          auto node_index = getNodeIndex_(*iter, t_pro_masses.size());
           double node_mz = node_spec_map[m][node_index].getMZ();
 
           if (tag.getNtermMass() > 0)
@@ -787,7 +805,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
             std::vector<double> masses;
             FLASHTaggerAlgorithm::getMatchedPositionsAndFlankingMassDiffs(positions, masses, flanking_mass_tol_, hit, tag);
 
-            int pro_index = getProIndex_(*iter, pro_masses.size());
+            int pro_index = getProIndex_(*iter, t_pro_masses.size());
             if (m == 0) pro_index = hit.getSequence().length() - pro_index;
             if (tag.getCtermMass() > 0) pro_index -= tag.getSequence().length();
             tag_matched = std::find(positions.begin(), positions.end(), pro_index) != positions.end();
@@ -1007,11 +1025,11 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(FLASHHelperClasses::DAG& dag,
   int start_score = getScore_(start_vertex);
   int start_num_mod = getModNumber_(start_vertex);
   if (start_num_mod == max_mod_cntr) diagonal_counter = 1e5;
-  double start_node_mass = node_spec[start_node_index].getMZ();
+  //double start_node_mass = node_spec[start_node_index].getMZ();
   auto src = getVertex_(0, 0, 0, 0, pro_masses.size());
   if (end_node_index < 0)
   {
-    end_pro_index = mode < 2 ? std::min(start_pro_index + 20, (int)pro_masses.size() - 1)
+    end_pro_index = (mode < 2 && diagonal_counter == 0) ? std::min(start_pro_index + 20, (int)pro_masses.size() - 1)
                              : ((int)pro_masses.size() - 1); // if sink is not specified, stretch up to 20 amino acids.
   }
   // make the range of truncation well...  make use of the positional information
