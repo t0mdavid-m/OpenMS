@@ -668,16 +668,10 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
           {
             if (m > 0) protein_start_position = pro_index;
             if (m == 0) protein_end_position = (int)hit.getSequence().size() - pro_index;
-            //if (mod_count == 0)
-            //{
-            //  prev_mass_shift = mass_shift;
-            //}
           }
-          else
-          {
-            int pro_seq_index = m > 0? pro_index : ((int)hit.getSequence().size() - pro_index);
-            if (pro_seq_index > 0 && pro_seq_index < hit.getSequence().size()) matched_positions.insert(pro_seq_index);
-          }
+
+          int pro_seq_index = m > 0? pro_index : ((int)hit.getSequence().size() - pro_index);
+          matched_positions.insert(pro_seq_index);
 
           if (m == 0) max_cterm_rindex = std::max(max_cterm_rindex, pro_index);
           if (m == 1) max_nterm_index = std::max(max_nterm_index, pro_index);
@@ -812,10 +806,17 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
     }
     if (refined_tag_indices.empty()) continue;
 
+    int total_match_cntr = 0;
+
+    for (const int pos : matched_positions)
+    {
+      if (pos <= protein_start_position || pos >= protein_end_position) continue;
+      total_match_cntr++;
+    }
+
     protein_start_position += protein_start_position >= 0 ? 1 : 0;
     if (protein_start_position >= 0 && protein_end_position >= 0 && protein_start_position >= protein_end_position) continue;
 
-    int total_match_cntr = matched_positions.size();
     hit.setMetaValue("ModificationIDs", mod_ids);
     hit.setMetaValue("ModificationACCs", mod_accs);
     hit.setMetaValue("Modifications", mod_masses);
