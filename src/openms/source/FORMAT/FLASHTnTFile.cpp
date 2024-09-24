@@ -98,59 +98,88 @@ void FLASHTnTFile::writeTags(const FLASHTnTAlgorithm& tnt, double flanking_mass_
   }
 }
 
-String generateProFormaString(const String& sequence,
-                              const std::vector<double>& mod_masses,
-                              const std::vector<int>& mod_starts,
-                              const std::vector<int>& mod_ends,
-                              const std::vector<String>& mod_ids,
-                              const std::vector<String>& mod_accs)
-{
-  ProForma proforma(AASequence::fromString(sequence)); // Create ProForma object
-
-  // Map to hold ranges that require parentheses
-  std::map<std::pair<int, int>, String> range_modifications;
-
-  // Loop through modifications and add them to the sequence
-  for (size_t i = 0; i < mod_masses.size(); ++i)
-  {
-    // Check if the modification applies to a range
-    if (mod_starts[i] != mod_ends[i])
+    String generateProFormaString(const String& sequence,
+                                  const std::vector<double>& mod_masses,
+                                  const std::vector<int>& mod_starts,
+                                  const std::vector<int>& mod_ends,
+                                  const std::vector<String>& mod_ids,
+                                  const std::vector<String>& mod_accs)
     {
-      // Mark range modifications using round brackets
-      String range_mod = "(" + sequence.substr(mod_starts[i], mod_ends[i] - mod_starts[i]) + ")[";
+        {
+            // Print inputs to debug
+            std::cout << "Sequence: " << sequence << std::endl;
+            std::cout << "mod_masses: ";
+            for (auto &mass: mod_masses) std::cout << mass << " ";
+            std::cout << std::endl;
 
-      // Add modification information
-      if (! mod_ids[i].empty()) { range_mod += mod_ids[i]; }
-      else if (mod_masses[i] != 0.0) { range_mod += (mod_masses[i] > 0 ? "+" : "") + std::to_string(mod_masses[i]); }
+            std::cout << "mod_starts: ";
+            for (auto &start: mod_starts) std::cout << start << " ";
+            std::cout << std::endl;
 
-      if (! mod_accs[i].empty()) { range_mod += ":" + mod_accs[i]; }
+            std::cout << "mod_ends: ";
+            for (auto &end: mod_ends) std::cout << end << " ";
+            std::cout << std::endl;
 
-      range_mod += "]";
-      range_modifications[{mod_starts[i] - 1, mod_ends[i] - 1}] = range_mod;
+            std::cout << "mod_ids: ";
+            for (auto &id: mod_ids) std::cout << id << " ";
+            std::cout << std::endl;
+
+            std::cout << "mod_accs: ";
+            for (auto &acc: mod_accs) std::cout << acc << " ";
+            std::cout << std::endl;
+        }
+        ProForma proforma(AASequence::fromString(sequence)); // Create ProForma object
+
+        // Map to hold ranges that require parentheses
+        std::map<std::pair<int, int>, String> range_modifications;
+
+        // Loop through modifications and add them to the sequence
+        for (size_t i = 0; i < mod_masses.size(); ++i)
+        {
+
+            // Check if the modification applies to a range
+            if (mod_starts[i] != mod_ends[i])
+            {
+                // Mark range modifications using round brackets
+                String range_mod = "(" + sequence.substr(mod_starts[i], mod_ends[i] - mod_starts[i]) + ")[";
+
+                // Add modification information
+                if (!mod_ids[i].empty()) { range_mod += mod_ids[i]; }
+                else if (mod_masses[i] != 0.0) { range_mod += (mod_masses[i] > 0 ? "+" : "") + std::to_string(mod_masses[i]); }
+
+                if (!mod_accs[i].empty()) { range_mod += ":" + mod_accs[i]; }
+
+                range_mod += "]";
+                range_modifications[{mod_starts[i] - 1, mod_ends[i] - 1}] = range_mod;
+            }
+            else
+            {
+                // For single position modifications, add them directly
+                proforma.addModification(mod_starts[i] - 1, mod_ids[i], mod_masses[i]);
+            }
+        }
+
+        // Build the ProForma string with range modifications
+        String proforma_str = proforma.toProFormaString();
+
+        // Insert range modifications into the ProForma string
+        for (const auto& range_mod : range_modifications)
+        {
+            // Start and end positions of the modification range
+            int start_pos = range_mod.first.first; // Start of the range (0-indexed)
+            int end_pos = range_mod.first.second;  // End of the range (0-indexed)
+
+            // Modify the string starting from the end of the range to avoid shifting issues
+            for (int i = end_pos; i >= start_pos; --i)
+            {
+                // Insert modification at position i
+                proforma_str.insert(i, range_mod.second);
+            }
+        }
+
+        return proforma_str; // Return the final ProForma string
     }
-    else
-    {
-      // For single position modifications, add them directly
-      proforma.addModification(mod_starts[i] - 1, mod_ids[i], mod_masses[i]);
-    }
-  }
 
-  // Build the ProForma string with range modifications
-  String proforma_str = proforma.toProFormaString();
-
-  // Insert range modifications into the ProForma string
-  for (const auto& range_mod : range_modifications)
-  {
-    // Insert the range modification at the correct position
-    int start_pos = range_mod.first.first; // Start of the range
-    int end_pos = range_mod.first.second;  // End of the range
-
-    // Find where to insert the range modification in the ProForma string
-    proforma_str.insert(start_pos, range_mod.second);
-  }
-
-  return proforma_str; // Return the final ProForma string
-}
 
 
 
@@ -185,10 +214,12 @@ void OpenMS::FLASHTnTFile::writePrSMs(const std::vector<ProteinHit>& hits, std::
       modmasses += std::to_string(mod_masses[i]);
 
       if (! modstarts.empty()) modstarts += ";";
-      modstarts += std::to_string(mod_starts[i] + 1);
+      //modstarts += std::to_string(mod_starts[i] + 1);
+        modstarts += std::to_string(mod_starts[i] - 1);
 
       if (! modends.empty()) modends += ";";
-      modends += std::to_string(mod_ends[i] + 1);
+      //modends += std::to_string(mod_ends[i] + 1);
+        modends += std::to_string(mod_ends[i] - 1);
 
       if (! modids.empty()) modids += ";";
       modids += mod_ids[i];
@@ -204,8 +235,8 @@ void OpenMS::FLASHTnTFile::writePrSMs(const std::vector<ProteinHit>& hits, std::
     int end_in_seq = end < 0 ? hit.getSequence().size() : end;
 
     // Use ProForma for sequence generation
-    String proformaStr = "";//generateProFormaString(hit.getSequence().substr(start_in_seq, end_in_seq - start_in_seq), mod_masses, mod_starts, mod_ends,
-                                                //mod_ids, mod_accs);
+    String proformaStr = generateProFormaString(hit.getSequence().substr(start_in_seq, end_in_seq - start_in_seq), mod_masses, mod_starts, mod_ends,
+                                                mod_ids, mod_accs);
 
     fs << hit.getMetaValue("Index") << "\t" << hit.getMetaValue("Scan") << "\t" << hit.getMetaValue("RT") << "\t" << hit.getMetaValue("NumMass")
        << "\t" << hit.getAccession() << "\t" << hit.getDescription() << "\t" << hit.getMetaValue("Mass") << "\t" << hit.getSequence() << "\t"
@@ -249,10 +280,13 @@ void OpenMS::FLASHTnTFile::writeProteoforms(const std::vector<ProteinHit>& hits,
       modmasses += std::to_string(mod_masses[i]);
 
       if (! modstarts.empty()) modstarts += ";";
-      modstarts += std::to_string(mod_starts[i] + 1);
+      //modstarts += std::to_string(mod_starts[i] + 1);
+      modstarts += std::to_string(mod_starts[i] - 1);
 
       if (! modends.empty()) modends += ";";
-      modends += std::to_string(mod_ends[i] + 1);
+      //modends += std::to_string(mod_ends[i] + 1);
+        modends += std::to_string(mod_ends[i] - 1);
+
 
       if (! modids.empty()) modids += ";";
       modids += mod_ids[i];
@@ -268,8 +302,8 @@ void OpenMS::FLASHTnTFile::writeProteoforms(const std::vector<ProteinHit>& hits,
     int end_in_seq = end < 0 ? hit.getSequence().size() : end;
 
     // Use ProForma to generate ProForma string
-    String proformaStr = "";//generateProFormaString(hit.getSequence().substr(start_in_seq, end_in_seq - start_in_seq), mod_masses, mod_starts, mod_ends,
-                                                //mod_ids, mod_accs);
+    String proformaStr = generateProFormaString(hit.getSequence().substr(start_in_seq, end_in_seq - start_in_seq), mod_masses, mod_starts, mod_ends,
+                                                mod_ids, mod_accs);
 
     fs << hit.getMetaValue("Index") << "\t" << hit.getMetaValue("Scan") << "\t" << hit.getMetaValue("RT") << "\t" << hit.getMetaValue("NumMass")
        << "\t" << hit.getAccession() << "\t" << hit.getDescription() << "\t" << hit.getMetaValue("Mass") << "\t" << hit.getSequence() << "\t"
