@@ -151,19 +151,19 @@ void OpenMS::FLASHTnTFile::writePrSMs(const std::vector<ProteinHit>& hits, std::
 
     for (size_t i = 0; i < mod_masses.size(); i++) // Fixed signed/unsigned comparison issue
     {
-      if (! modmasses.empty()) modmasses += ";";
+      if (i > 0) 
+      {
+          modmasses += ";";
+          modstarts += ";";
+          modends += ";";
+          modids += ";";
+          modaccs += ";";
+      }
+
       modmasses += std::to_string(mod_masses[i]);
-
-      if (! modstarts.empty()) modstarts += ";";
       modstarts += std::to_string(mod_starts[i] + 1);
-
-      if (! modends.empty()) modends += ";";
       modends += std::to_string(mod_ends[i] + 1);
-
-      if (! modids.empty()) modids += ";";
       modids += mod_ids[i];
-
-      if (! modaccs.empty()) modaccs += ";";
       modaccs += mod_accs[i];
     }
 
@@ -214,19 +214,19 @@ void OpenMS::FLASHTnTFile::writeProteoforms(const std::vector<ProteinHit>& hits,
 
     for (size_t i = 0; i < mod_masses.size(); i++) // Fixed signed/unsigned comparison issue
     {
-      if (! modmasses.empty()) modmasses += ";";
+      if (i > 0) 
+      {
+          modmasses += ";";
+          modstarts += ";";
+          modends += ";";
+          modids += ";";
+          modaccs += ";";
+      }
+      
       modmasses += std::to_string(mod_masses[i]);
-
-      if (! modstarts.empty()) modstarts += ";";
       modstarts += std::to_string(mod_starts[i] + 1);
-
-      if (! modends.empty()) modends += ";";
       modends += std::to_string(mod_ends[i] + 1);
-
-      if (! modids.empty()) modids += ";";
       modids += mod_ids[i];
-
-      if (! modaccs.empty()) modaccs += ";";
       modaccs += mod_accs[i];
     }
 
