@@ -317,30 +317,30 @@ namespace OpenMS
       }
 
       bool in_range = false;
-      size_t range_start = 0;
+      //size_t range_start = 0;
       size_t range_end = 0;
-
+      String mod_name;
       for (size_t i = 1; i <= sequence_.size(); ++i)
       {
         auto it = modifications_.find(i);
 
         // Open range if applicable
-        if (it != modifications_.end() && it->second.range.first == i && !in_range)
+        if (it != modifications_.end() && it->second.range.first == i && it->second.range.second != i && !in_range)
         {
-          range_start = it->second.range.first;
+          //range_start = it->second.range.first;
           range_end = it->second.range.second;
           ss << "(";  // Open range
           in_range = true;
         }
-
         // Add the current residue
         ss << sequence_.getResidue(i - 1).getOneLetterCode();
 
         // Handle non-range modifications
-        if (!in_range && it != modifications_.end() && it->second.range.first == 0)
+        if (!in_range && it != modifications_.end() && it->second.range.first == it->second.range.second)
         {
           if (!it->second.modification_name.empty())
           {
+            mod_name = it->second.modification_name;
             ss << "[" << it->second.modification_name << "]";
           }
           else if (it->second.mass_shift != 0.0)
@@ -358,9 +358,10 @@ namespace OpenMS
         if (in_range && i == range_end)
         {
           ss << ")";  // Close range after the last residue in the range
-          if (!it->second.modification_name.empty())
+          if (!mod_name.empty())
           {
-            ss << "[" << it->second.modification_name << "]";
+            ss << "[" << mod_name << "]";
+            mod_name = "";
           }
           in_range = false;  // End the range
         }
@@ -400,8 +401,9 @@ namespace OpenMS
       }
     }
 
-    void ProForma::addModification(size_t position, const std::string& mod_id, double mass_shift)
+    // N term mod : start_pos = 0. Modification after the first a.a. : start_pos = 1
+    void ProForma::addModification(size_t start_pos, size_t end_pos, const std::string& mod_id, double mass_shift)
     {
-      modifications_[position] = {mass_shift, false, false, mod_id};
+      modifications_[start_pos] = {mass_shift, false, false, mod_id, std::pair<size_t, size_t>(start_pos, end_pos)};
     }
     }

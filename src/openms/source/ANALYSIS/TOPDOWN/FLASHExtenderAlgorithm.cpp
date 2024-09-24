@@ -1010,7 +1010,7 @@ namespace OpenMS
     auto src = getVertex_(0, 0, 0, 0, pro_masses.size());
     if (end_node_index < 0)
     {
-      end_pro_index = (mode < 2 && start_num_mod < max_mod_cntr) ? std::min(start_pro_index + 20, (int)pro_masses.size() - 1)
+      end_pro_index = (start_num_mod < max_mod_cntr) ? std::min(start_pro_index + 20, (int)pro_masses.size() - 1)
                                : ((int)pro_masses.size() - 1); // if sink is not specified, stretch up to 20 amino acids.
     }
     // make the range of truncation well...  make use of the positional information

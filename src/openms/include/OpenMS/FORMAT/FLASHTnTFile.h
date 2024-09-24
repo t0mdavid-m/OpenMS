@@ -34,6 +34,13 @@ namespace OpenMS
 
     static void writePrSMs(const std::vector<ProteinHit>& hits, std::fstream& fs);
 
+    static String generateProFormaString_(const String& sequence, int seq_start, int seq_end,
+                                  const std::vector<double>& mod_masses,
+                                  const std::vector<int>& mod_starts,
+                                  const std::vector<int>& mod_ends,
+                                  const std::vector<String>& mod_ids,
+                                  const std::vector<String>& mod_accs);
+
     static void writeProteoforms(const std::vector<ProteinHit>& hits, std::fstream& fs, double pro_fdr);
   };
 } // namespace OpenMS

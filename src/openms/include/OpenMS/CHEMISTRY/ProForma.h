@@ -40,7 +40,7 @@ namespace OpenMS
         std::string toProFormaString() const;
 
         // Add a modification to the sequence at a specific position
-        void addModification(size_t position, const std::string& mod_id, double mass_shift);
+        void addModification(size_t start_pos, size_t end_pos, const std::string& mod_id, double mass_shift);
 
         // Remove a modification at a specific position
         void removeModification(size_t position);
