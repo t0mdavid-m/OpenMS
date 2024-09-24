@@ -319,7 +319,8 @@ namespace OpenMS
       bool in_range = false;
       //size_t range_start = 0;
       size_t range_end = 0;
-      String mod_name;
+      std::stringstream mod_name;
+
       for (size_t i = 1; i <= sequence_.size(); ++i)
       {
         auto it = modifications_.find(i);
@@ -335,17 +336,21 @@ namespace OpenMS
         // Add the current residue
         ss << sequence_.getResidue(i - 1).getOneLetterCode();
 
-        // Handle non-range modifications
-        if (!in_range && it != modifications_.end() && it->second.range.first == it->second.range.second)
+        if (it != modifications_.end())
         {
           if (!it->second.modification_name.empty())
           {
-            mod_name = it->second.modification_name;
-            ss << "[" << it->second.modification_name << "]";
+            mod_name << "[" << it->second.modification_name << "]";
           }
           else if (it->second.mass_shift != 0.0)
           {
-            ss << "[" << (it->second.mass_shift > 0 ? "+" : "") << it->second.mass_shift << "]";
+            mod_name << "[" << (it->second.mass_shift > 0 ? "+" : "") << it->second.mass_shift << "]";
+          }
+
+          if (it->second.range.first == it->second.range.second)
+          {
+            ss << mod_name.str();
+            mod_name.clear();
           }
 
           if (it->second.ambiguous_start)
@@ -358,10 +363,11 @@ namespace OpenMS
         if (in_range && i == range_end)
         {
           ss << ")";  // Close range after the last residue in the range
-          if (!mod_name.empty())
+          String mod_name_str = mod_name.str();
+          mod_name.clear();
+          if (!mod_name_str.empty())
           {
-            ss << "[" << mod_name << "]";
-            mod_name = "";
+            ss << "[" << mod_name_str << "]";
           }
           in_range = false;  // End the range
         }

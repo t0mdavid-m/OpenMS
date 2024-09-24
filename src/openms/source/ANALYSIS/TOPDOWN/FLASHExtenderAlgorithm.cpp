@@ -687,21 +687,22 @@ namespace OpenMS
               mod_ends.push_back(end);
               mod_masses.push_back(mod_mass);
               mod_tols.push_back(tol_spec_map[m][node_index].getIntensity());
+
             }
 
             if (debug)
             {
               std::cout << hit.getAccession() << "\tmode\t" << m << "\tinput pre\t" << precursor_mass_ << "\tcal pre\t" << precursor_mass << "\tscore\t"
                         << getScore_(*iter) << "\t" << node_index << "\t" << pro_index << "\tin\t" << t_node_spec.size() << "\t" << t_pro_masses.size()
-                        << "\tmasses\t" << t_pro_masses.back() << "\t" << t_pro_masses[pro_index] << "\t" << t_node_spec[node_index].getMZ() << " node score " << t_node_spec[node_index].getIntensity() << "\t tolspec: " << tol_spec_map[m][node_index].getIntensity() << " tol: " << t_node_spec[node_index].getMZ() / 1e5 <<  "\t"
+                        << "\tmasses\t" << t_pro_masses.back() << "\t" << t_pro_masses[pro_index] << "\t" << std::to_string(t_node_spec[node_index].getMZ()) << " node score " << t_node_spec[node_index].getIntensity() << "\t tolspec: " << tol_spec_map[m][node_index].getIntensity() << " tol: " << t_node_spec[node_index].getMZ() / 1e5 <<  "\t"
                         << mass_shift << "\t" << mod_count << std::endl;
             }
 
+            if (mod_count > 0 && prev_mod_count != mod_count)
+              prev_mass_shift = mass_shift;
             prev_mod_count = mod_count;
             pre_pro_index = pro_index;
             pre_node_index = node_index;
-            if (mod_count > 0)
-              prev_mass_shift = mass_shift;
           }
           final_mode = m;
         }

@@ -271,6 +271,13 @@ namespace OpenMS
     // merge spectra if the merging option is turned on (> 0)
     filterLowPeaks_(map);
     startProgress(0, (SignedSize)map.size(), "running FLASHDeconv");
+    std::map<double, int> rt_scan_map;
+    for (Size index = 0; index < map.size(); index++)
+    {
+      int scan_number = getScanNumber(map, index);
+      rt_scan_map[map[index].getRT()] = scan_number;
+    }
+
     for (uint ms_level = 1; ms_level <= current_max_ms_level_; ms_level++)
     {
       if (ms_level > 1)
@@ -292,7 +299,7 @@ namespace OpenMS
       // run Spectral deconvolution
       for (Size index = 0; index < map.size(); index++)
       {
-        int scan_number = getScanNumber(map, index);
+        int scan_number = rt_scan_map.find(map[index].getRT()) == rt_scan_map.end()? getScanNumber(map, index) : rt_scan_map[map[index].getRT()];//getScanNumber(map, index);
         auto spec = map[index];
 
         if (ms_level != spec.getMSLevel()) { continue; }
