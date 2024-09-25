@@ -38,8 +38,7 @@ namespace OpenMS
                                   const std::vector<double>& mod_masses,
                                   const std::vector<int>& mod_starts,
                                   const std::vector<int>& mod_ends,
-                                  const std::vector<String>& mod_ids,
-                                  const std::vector<String>& mod_accs);
+                                  const std::vector<String>& mod_ids);
 
     static void writeProteoforms(const std::vector<ProteinHit>& hits, std::fstream& fs, double pro_fdr);
   };
