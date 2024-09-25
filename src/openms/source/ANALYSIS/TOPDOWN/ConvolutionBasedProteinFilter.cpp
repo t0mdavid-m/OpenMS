@@ -254,7 +254,6 @@ void ConvolutionBasedProteinFilter::runMatching(const DeconvolvedSpectrum& decon
                                                 const std::vector<FASTAFile::FASTAEntry>& fasta_entry,
                                                 const std::vector<std::vector<int>>& vectorized_fasta_entry_indices,
                                                 const std::vector<std::vector<int>>& reversed_vectorized_fasta_entry_indices,
-                                                double max_mod_mass,
                                                 int tag_length)
 {
   int scan = deconvolved_spectrum.getScanNumber();

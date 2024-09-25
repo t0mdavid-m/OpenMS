@@ -283,7 +283,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       //std::cout<<1<<std::endl;
 
       filter.runMatching(dspec, fasta_entry, vectorized_fasta_entry_indices, rev_vectorized_fasta_entry_indices,
-                         max_mod_mass, min_tag_length);
+                         min_tag_length);
       filter.getProteinHits(hits, max_hit_count);
       //std::cout<<2<<std::endl;
       extender.run(hits, tags, dspec, tagger.getSpectrum(), flanking_mass_tol, tol, multiple_hits_per_spec_);
