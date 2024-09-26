@@ -466,7 +466,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
   startProgress(0, (int)hits.size(), "running FLASHExtender ...");
 
 #pragma omp parallel for default(none) shared(hits, dspec, spec, multiple_hits_per_spec, std::cout)
-  for (int i = 0; i < hits.size(); i++)
+  for (int i = 0; i < ((int) hits.size()); i++)
   {
     nextProgress();
     auto& hit = hits[i];
