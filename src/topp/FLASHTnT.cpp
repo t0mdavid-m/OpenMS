@@ -95,6 +95,8 @@ protected:
 
     auto tnt_param = getParam_().copy("tnt:", true);
     double flanking_mass_tol = tnt_param.getValue("tag:flanking_mass_tol");
+    double max_mod_mass = tnt_param.getValue("ex:max_mod_mass");
+    int max_mod_count = tnt_param.getValue("ex:max_mod_count");
     double pro_fdr = tnt_param.getValue("pro_fdr");
     OPENMS_LOG_INFO << "Finding sequence tags from deconvolved MS2 spectra ..." << endl;
 
@@ -134,7 +136,7 @@ protected:
 
     if (! out_tag_file.empty())
     {
-      FLASHTnTFile::writeTags(tnt, flanking_mass_tol, out_tagger_stream);
+      FLASHTnTFile::writeTags(tnt, max_mod_count * max_mod_mass + 1, out_tagger_stream);
       out_tagger_stream.close();
     }
 

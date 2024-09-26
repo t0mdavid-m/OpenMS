@@ -85,7 +85,8 @@ private:
                                           int protein_end_position,
                                           const std::vector<int>& mod_starts,
                                           const std::vector<int>& mod_ends,
-                                          const std::vector<double>& mod_masses);
+                                          const std::vector<double>& mod_masses,
+                                          double& total_mod_mass);
   void defineNodes(const DeconvolvedSpectrum& dspec,//const MSSpectrum& spec,
                    MSSpectrum& node_spec, MSSpectrum& tol_spec, double max_mass, double precursor_mass, int mode);
   void run_(const ProteinHit& hit,
@@ -94,7 +95,8 @@ private:
             const MSSpectrum& tol_spec,
             const std::vector<double>& pro_masses,
             boost::dynamic_bitset<>& visited,
-            double precursor_mass,
+            const double precursor_mass,
+            const double total_mod_mass,
             std::map<int, std::vector<Size>>& all_paths_per_mode, int max_mod_cntr_for_last_mode,
             int mode); // per hit
   Size getVertex_(int node_index, int pro_index, int score, int num_mod, Size pro_length) const;
@@ -108,7 +110,9 @@ private:
                      const MSSpectrum& node_spec,
                      const MSSpectrum& tol_spec,
                      const std::vector<double>& pro_masses,
-                     const std::vector<std::vector<int>>& tag_edges, int max_mod_cntr_for_last_mode,
+                     const std::vector<std::vector<int>>& tag_edges,
+                     const double total_mod_mass,
+                     int max_mod_cntr_for_last_mode,
                      int mode,
                      bool use_tags);
   void connectBetweenTags_(FLASHHelperClasses::DAG& dag,
@@ -120,7 +124,9 @@ private:
                            const MSSpectrum& node_spec,
                            const MSSpectrum& tol_spec,
                            const std::vector<double>& pro_masses,
-                           const std::vector<std::vector<int>>& tag_edges, int max_mod_cntr_for_last_mode,
+                           const std::vector<std::vector<int>>& tag_edges,
+                           const double total_mod_mass,
+                           int max_mod_cntr_for_last_mode,
                            int mode,
                            bool use_tags);
   void extendBetweenTags_(FLASHHelperClasses::DAG& dag,
@@ -133,7 +139,9 @@ private:
                           double cumulative_shift,
                           const MSSpectrum& node_spec,
                           const MSSpectrum& tol_spec,
-                          const std::vector<double>& pro_masses, int max_mod_cntr_for_last_mode,
+                          const std::vector<double>& pro_masses,
+                          const double total_mod_mass,
+                          int max_mod_cntr_for_last_mode,
                           int mode);
   Size getLength_(const std::vector<Size>& path, const std::vector<double>& pro_masses) const;
   Size getProteinSpan_(const std::vector<Size>& path, const std::vector<double>& pro_masses) const;

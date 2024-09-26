@@ -69,7 +69,7 @@ public:
   static void getMatchedPositionsAndFlankingMassDiffs(std::vector<int>& positions,
                                                       std::vector<double>& masses,
                                                       double flanking_mass_tol,
-                                                      const ProteinHit& hit,
+                                                      const String& seq,
                                                       const FLASHHelperClasses::Tag& tag);
   void getProteinHits(std::vector<ProteinHit>& hits, int max_target_count) const;
   double getDecoyFactor() const

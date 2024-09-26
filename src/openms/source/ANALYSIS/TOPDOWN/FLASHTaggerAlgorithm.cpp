@@ -836,11 +836,10 @@ void FLASHTaggerAlgorithm::getTags(std::vector<FLASHHelperClasses::Tag>& tags, i
 void FLASHTaggerAlgorithm::getMatchedPositionsAndFlankingMassDiffs(std::vector<int>& positions,
                                                                    std::vector<double>& masses,
                                                                    double flanking_mass_tol,
-                                                                   const ProteinHit& hit,
+                                                                   const String& seq, //
                                                                    const FLASHHelperClasses::Tag& tag)
 {
   std::vector<int> indices;
-  const auto& seq = hit.getSequence();
   auto tagseq = tag.getSequence().toUpper();
   Size pos = find_with_X_(seq, tagseq);
   while (pos != String::npos)

@@ -75,9 +75,25 @@ void FLASHTnTFile::writeTags(const FLASHTnTAlgorithm& tnt, double flanking_mass_
 
         auto pos = std::vector<int>();
         auto masses = std::vector<double>();
-        FLASHTaggerAlgorithm::getMatchedPositionsAndFlankingMassDiffs(pos, masses, flanking_mass_tol, hit, tag);
-        if (pos.size() != 0) { positions += std::to_string(pos[0]); }
-        if (masses.size() != 0) { delta_masses += std::to_string(masses[0]); }
+        auto pos_in_truncated = std::vector<int>();
+        auto masses_in_truncated = std::vector<double>();
+
+        int protein_start_position = hit.getMetaValue("StartPosition");
+        int protein_end_position = hit.getMetaValue("EndPosition");
+        protein_start_position--;
+        String seq = hit.getSequence();
+        FLASHTaggerAlgorithm::getMatchedPositionsAndFlankingMassDiffs(pos, masses, 1e10, seq, tag);
+
+        if (protein_end_position >= 0) seq = seq.substr(0, protein_end_position);
+        if (protein_start_position >= 0) seq = seq.substr(protein_start_position);
+        FLASHTaggerAlgorithm::getMatchedPositionsAndFlankingMassDiffs(pos_in_truncated, masses_in_truncated, flanking_mass_tol, seq, tag);
+        for (int i = 0; i < pos.size(); i++)
+        {
+          if (pos[i] - (protein_start_position < 0? 0 : protein_start_position) != pos_in_truncated[0]) continue;
+          positions += std::to_string(pos[i]);
+          delta_masses += std::to_string(masses[i]);
+          break;
+        }
       }
 
       fs << tag.getIndex() << "\t" << tag.getScan() << "\t" << tag.getRetentionTime() << "\t" << hitindices << "\t" << acc << "\t" << description
@@ -150,13 +166,13 @@ void OpenMS::FLASHTnTFile::writePrSMs(const std::vector<ProteinHit>& hits, std::
 
     for (size_t i = 0; i < mod_masses.size(); i++) // Fixed signed/unsigned comparison issue
     {
-      if (i > 0) 
+      if (i > 0)
       {
-          modmasses += ";";
-          modstarts += ";";
-          modends += ";";
-          modids += ";";
-          modaccs += ";";
+        modmasses += ";";
+        modstarts += ";";
+        modends += ";";
+        modids += ";";
+        modaccs += ";";
       }
 
       modmasses += std::to_string(mod_masses[i]);
@@ -213,15 +229,15 @@ void OpenMS::FLASHTnTFile::writeProteoforms(const std::vector<ProteinHit>& hits,
 
     for (size_t i = 0; i < mod_masses.size(); i++) // Fixed signed/unsigned comparison issue
     {
-      if (i > 0) 
+      if (i > 0)
       {
-          modmasses += ";";
-          modstarts += ";";
-          modends += ";";
-          modids += ";";
-          modaccs += ";";
+        modmasses += ";";
+        modstarts += ";";
+        modends += ";";
+        modids += ";";
+        modaccs += ";";
       }
-      
+
       modmasses += std::to_string(mod_masses[i]);
       modstarts += std::to_string(mod_starts[i] + 1);
       modends += std::to_string(mod_ends[i] + 1);
