@@ -18,6 +18,6 @@ cdef extern from "<OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>" namespace "O
         # copy constructor
         FLASHTaggerAlgorithm(FLASHTaggerAlgorithm &) except + nogil
         
-        void run(libcpp_vector[DeconvolvedSpectrum] & dspecs, double ppm) except + nogil
+        void run(DeconvolvedSpectrum & deconvolved_spectrum, double ppm) except + nogil
 
 
