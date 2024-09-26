@@ -483,8 +483,7 @@ namespace OpenMS
     startProgress(0, (int)hits.size(), "running FLASHExtender ...");
 
   #pragma omp parallel for default(none) shared(hits, dspec, spec, multiple_hits_per_spec, std::cout)
-    int hit_size = (int) hits.size();
-    for (int i = 0; i < hit_size; i++)
+    for (int i = 0; i < ((int) hits.size()); i++)
     {
       nextProgress();
       auto& hit = hits[i];
