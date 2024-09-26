@@ -803,9 +803,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
     }
     if (refined_tag_indices.empty()) continue;
 
-    int total_match_cntr = 0;
-
-    total_match_cntr += (int) matched_positions.size;
+    int total_match_cntr = (int) matched_positions.size();
     protein_start_position += protein_start_position >= 0 ? 1 : 0;
     if (protein_start_position >= 0 && protein_end_position >= 0 && protein_start_position >= protein_end_position) continue;
 
