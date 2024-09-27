@@ -90,7 +90,7 @@ void FLASHTnTFile::writeTags(const FLASHTnTAlgorithm& tnt, double flanking_mass_
         for (int i = 0; i < pos.size(); i++)
         {
           if (pos[i] - (protein_start_position < 0? 0 : protein_start_position) != pos_in_truncated[0]) continue;
-          positions += std::to_string(pos[i]);
+          positions += std::to_string(pos[i]+1);
           delta_masses += std::to_string(masses[i]);
           break;
         }
