@@ -118,9 +118,10 @@ private:
   void connectBetweenTags_(FLASHHelperClasses::DAG& dag,
                            boost::dynamic_bitset<>& visited,
                            std::set<Size>& visited_tag_edges,
-                             std::map<Size, double>& sinks,
+                           std::map<Size, double>& sinks,
                            Size vertex,
                            double cumulative_shift,
+                           std::map<Size, int>& node_max_score_map,
                            const MSSpectrum& node_spec,
                            const MSSpectrum& tol_spec,
                            const std::vector<double>& pro_masses,
@@ -137,10 +138,11 @@ private:
                           int end_pro_index,
                           int diagonal_counter,
                           double cumulative_shift,
+                          std::map<Size, int>& node_max_score_map,
                           const MSSpectrum& node_spec,
                           const MSSpectrum& tol_spec,
                           const std::vector<double>& pro_masses,
-                          const double total_mod_mass,
+                          double total_mod_mass,
                           int max_mod_cntr_for_last_mode,
                           int mode);
   Size getLength_(const std::vector<Size>& path, const std::vector<double>& pro_masses) const;
@@ -153,7 +155,7 @@ private:
   std::vector<FLASHHelperClasses::Tag> tags_;
   double tol_, flanking_mass_tol_;
   int max_mod_cntr_ = 0;
-  const int max_path_score_ = 400;
+  int max_path_score_ = 1000;
   const int min_path_score_ = -10;
   double max_mod_mass_ = 500.0;
   double precursor_mass_ = -1;

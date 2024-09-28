@@ -1084,16 +1084,16 @@ std::tuple<std::vector<double>, std::vector<double>> PeakGroup::getDLVector(cons
                                                                             const Size charge_count,
                                                                             const Size isotope_count,
                                                                             const FLASHHelperClasses::PrecalculatedAveragine& avg,
-                                                                            double tol,
-                                                                            const Size bin_count)
+                                                                            double tol)
 {
+  //assert(isotope_count > 3 && charge_count > 0);
   std::tuple<std::vector<double>, std::vector<double>> sig_noise;
   auto noisy_peaks = recruitAllPeaksInSpectrum(spec, tol * 1e-6, avg, getMonoMass(), false);
 
-  int apex_iso_index = avg.getApexIndex(getMonoMass());
+  const int apex_iso_index = avg.getApexIndex(getMonoMass());
   int apex_charge = -1;
   double z_intensity = 0;
-
+  double max_intensity = 0;
   for (int z = min_abs_charge_; z<= max_abs_charge_; z++)
   {
     double z_i = getChargeIntensity(z);
@@ -1110,7 +1110,7 @@ std::tuple<std::vector<double>, std::vector<double>> PeakGroup::getDLVector(cons
 
   auto& [sig, noise] = sig_noise;
   sig.resize(charge_count * isotope_count, .0);
-  noise.resize(charge_count * isotope_count * bin_count, .0);
+  noise.resize(charge_count * isotope_count, .0);
 
   for (const auto& p : logMzpeaks_)
   {
@@ -1119,10 +1119,11 @@ std::tuple<std::vector<double>, std::vector<double>> PeakGroup::getDLVector(cons
 
     int z_index = p.abs_charge - apex_charge + charge_count / 2;
     int iso_index = p.isotopeIndex - apex_iso_index + isotope_count / 2;
-    int v_index = z_index * charge_count + iso_index;
+    int v_index = z_index * isotope_count + iso_index;
     //std::cout<<p.abs_charge << " " << p.isotopeIndex << " apexz " << apex_charge << " apexi " << apex_iso_index <<  " into " << v_index << std::endl;
 
     sig[v_index] += p.intensity;
+    max_intensity = std::max(max_intensity, sig[v_index]);
   }
 
   for (const auto& p : noisy_peaks)
@@ -1133,14 +1134,39 @@ std::tuple<std::vector<double>, std::vector<double>> PeakGroup::getDLVector(cons
     int z_index = p.abs_charge - apex_charge + charge_count / 2;
     int iso_index = p.isotopeIndex - apex_iso_index + isotope_count / 2;
 
-    int bin = floor((p.getUnchargedMass() - getMonoMass() - iso_da_distance_ * p.isotopeIndex) / (iso_da_distance_ / bin_count));
-    int v_index = z_index * charge_count * bin_count + iso_index * bin_count + bin;
-    //std::cout<< p.getUnchargedMass() << " " << getMonoMass() + iso_da_distance_ * p.isotopeIndex << " " <<
+    //int bin = floor((p.getUnchargedMass() - getMonoMass() - iso_da_distance_ * p.isotopeIndex) / (iso_da_distance_ / bin_count));
+    int v_index = z_index * isotope_count + iso_index;
+    if (sig[v_index] > 0)
+    {
+      bool too_close = false;
+      for (int off = -1; off < 2; off ++)
+      {
+        if (off + p.isotopeIndex < 0) continue;
+        double correct_mass = getMonoMass() + (off + p.isotopeIndex) * iso_da_distance_;
+        if (std::abs(p.getUnchargedMass() - correct_mass) < .2)
+        {
+          too_close = true;
+          break;
+        }
+      }
+      if (too_close) continue;
+    }
+      //std::cout<< p.getUnchargedMass() << " " << getMonoMass() + iso_da_distance_ * p.isotopeIndex << " " <<
     //  p.getUnchargedMass() - getMonoMass() - iso_da_distance_ * p.isotopeIndex << " " << bin << std::endl;
 
     //std::cout<<p.abs_charge << " " << p.isotopeIndex << " apexz " << apex_charge << " apexi " << apex_iso_index <<  " into " << v_index << std::endl;
 
     noise[v_index] += p.intensity;
+  }
+
+  for (auto& s : sig)
+  {
+    s /= max_intensity;
+  }
+
+  for (auto& n : noise)
+  {
+    n /= max_intensity;
   }
 
   return sig_noise;

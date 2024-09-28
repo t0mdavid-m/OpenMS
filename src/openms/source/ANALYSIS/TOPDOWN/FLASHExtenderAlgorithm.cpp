@@ -45,18 +45,18 @@ void FLASHExtenderAlgorithm::updateMembers_()
 
 Size FLASHExtenderAlgorithm::getVertex_(int node_index, int pro_index, int score, int num_mod, Size pro_length) const
 {
-  return ((node_index * (pro_length + 1) + pro_index) * (max_mod_cntr_ + 1) + num_mod) * (max_path_score_ - min_path_score_ + 1)
+  return ((node_index * (pro_length) + pro_index) * (max_mod_cntr_ + 1) + num_mod) * (max_path_score_ - min_path_score_ + 1)
          + (std::min(max_path_score_, std::max(min_path_score_, score)) - min_path_score_);
 }
 
 int FLASHExtenderAlgorithm::getNodeIndex_(Size vertex, Size pro_length) const
 {
-  return (vertex / (max_path_score_ - min_path_score_ + 1) / ((Size)max_mod_cntr_ + 1)) / (pro_length + 1);
+  return (vertex / (max_path_score_ - min_path_score_ + 1) / ((Size)max_mod_cntr_ + 1)) / (pro_length);
 }
 
 int FLASHExtenderAlgorithm::getProIndex_(Size vertex, Size pro_length) const
 {
-  return ((vertex / (max_path_score_ - min_path_score_ + 1) / (max_mod_cntr_ + 1))) % (pro_length + 1);
+  return ((vertex / (max_path_score_ - min_path_score_ + 1) / (max_mod_cntr_ + 1))) % (pro_length);
 }
 
 int FLASHExtenderAlgorithm::getScore_(Size vertex) const
@@ -436,6 +436,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
 {
   if (hits.empty()) return;
   // setLogType(CMD);
+
   ion_types_str_ = param_.getValue("ion_type").toStringVector();
 
   Residue empty;
@@ -470,7 +471,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
   {
     nextProgress();
     auto& hit = hits[i];
-    double total_score = 0;
+    int total_score = 0;
     double resulting_total_mod_mass = 0;
     std::vector<int> mod_starts, mod_ends, refined_tag_indices;
     std::vector<double> mod_masses, mod_tols;
@@ -518,6 +519,8 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
 
       getProMasses(hit, pro_masses, mode);
       defineNodes(dspec, node_spec, tol_spec, pro_masses.back(), precursor_mass, mode);
+
+      //std::cout<<max_path_score_ << std::endl;
       if (visited.empty())
         visited = boost::dynamic_bitset<>((1 + dspec.size() * ion_types_str_.size()) * (1 + pro_masses.size()) * (2 + max_mod_cntr_)
                                           * (1 + max_path_score_ - min_path_score_));
@@ -867,8 +870,10 @@ void FLASHExtenderAlgorithm::constructDAG_(FLASHHelperClasses::DAG& dag,
   visited[src] = true;
   std::set<Size> visited_tag_edges;
   std::map<Size, double> sink_map;
-  connectBetweenTags_(dag, visited, visited_tag_edges, sink_map, src, 0, node_spec, tol_spec, pro_masses, tag_edges, total_mod_mass,
+  std::map<Size, int> node_max_score_map;
+  connectBetweenTags_(dag, visited, visited_tag_edges, sink_map, src, 0, node_max_score_map, node_spec, tol_spec, pro_masses, tag_edges, total_mod_mass,
                       max_mod_cntr_for_last_mode, mode, use_tags);
+
   for (const auto& sink : sink_map)
   {
     sinks.insert(sink.first);
@@ -881,6 +886,7 @@ void FLASHExtenderAlgorithm::connectBetweenTags_(FLASHHelperClasses::DAG& dag,
                                                  std::map<Size, double>& sinks,
                                                  Size vertex,
                                                  double cumulative_shift,
+                                                 std::map<Size, int>& node_max_score_map,
                                                  const MSSpectrum& node_spec,
                                                  const MSSpectrum& tol_spec,
                                                  const std::vector<double>& pro_masses,
@@ -927,13 +933,13 @@ void FLASHExtenderAlgorithm::connectBetweenTags_(FLASHHelperClasses::DAG& dag,
     }
 
     std::map<Size, double> next_vertices;
-    extendBetweenTags_(dag, visited, next_vertices, vertex, node_end, pro_end, 0, cumulative_shift, node_spec, tol_spec, pro_masses,
+    extendBetweenTags_(dag, visited, next_vertices, vertex, node_end, pro_end, 0, cumulative_shift, node_max_score_map, node_spec, tol_spec, pro_masses,
                        total_mod_mass, max_mod_cntr_for_last_mode, mode);
 
     for (const auto& [next_vertex, next_cumulative_shift] : next_vertices)
     {
       if (next_vertex == src) continue;
-      connectBetweenTags_(dag, visited, visited_tag_edges, sinks, next_vertex, next_cumulative_shift, node_spec, tol_spec, pro_masses, tag_edges,
+      connectBetweenTags_(dag, visited, visited_tag_edges, sinks, next_vertex, next_cumulative_shift, node_max_score_map, node_spec, tol_spec, pro_masses, tag_edges,
                           total_mod_mass, max_mod_cntr_for_last_mode, mode, use_tags);
     }
   }
@@ -964,20 +970,21 @@ void FLASHExtenderAlgorithm::connectBetweenTags_(FLASHHelperClasses::DAG& dag,
       visited_tag_edges.insert(getVertex_(node_start, pro_start, 0, mod_num, pro_masses.size()));
 
       std::map<Size, double> next_vertices;
-      extendBetweenTags_(dag, visited, next_vertices, vertex, node_start, pro_start, 0, cumulative_shift, node_spec, tol_spec, pro_masses,
+
+      extendBetweenTags_(dag, visited, next_vertices, vertex, node_start, pro_start, 0, cumulative_shift, node_max_score_map, node_spec, tol_spec, pro_masses,
                          total_mod_mass, max_mod_cntr_for_last_mode, mode);
 
       for (const auto& [next_vertex, next_cumulative_shift] : next_vertices)
       {
         if (next_vertex == src) continue;
-        connectBetweenTags_(dag, visited, visited_tag_edges, sinks, next_vertex, next_cumulative_shift, node_spec, tol_spec, pro_masses, tag_edges,
+        connectBetweenTags_(dag, visited, visited_tag_edges, sinks, next_vertex, next_cumulative_shift, node_max_score_map, node_spec, tol_spec, pro_masses, tag_edges,
                             total_mod_mass, max_mod_cntr_for_last_mode, mode, use_tags);
         reachable_vertices.insert(next_vertex);
       }
     }
     if ((vertex != src || ! use_tags) && reachable_vertices.empty())
     {
-      extendBetweenTags_(dag, visited, sinks, vertex, -1, -1, mode < 2 && use_tags ? 1e5 : 0, cumulative_shift, node_spec, tol_spec, pro_masses,
+      extendBetweenTags_(dag, visited, sinks, vertex, -1, -1, mode < 2 && use_tags ? 1e5 : 0, cumulative_shift, node_max_score_map, node_spec, tol_spec, pro_masses,
                          total_mod_mass, max_mod_cntr_for_last_mode, mode);
       // if (mode == 2) extendBetweenTags_(dag, visited, sinks, vertex,  node_spec.size() - 1, pro_masses.size() - 1, 1e5, node_spec, tol_spec,
       // pro_masses, mode);
@@ -988,11 +995,12 @@ void FLASHExtenderAlgorithm::connectBetweenTags_(FLASHHelperClasses::DAG& dag,
 void FLASHExtenderAlgorithm::extendBetweenTags_(FLASHHelperClasses::DAG& dag,
                                                 boost::dynamic_bitset<>& visited,
                                                 std::map<Size, double>& sinks,
-                                                Size start_vertex,
+                                                const Size start_vertex,
                                                 const int end_node_index,
                                                 int end_pro_index,
                                                 int diagonal_counter,
                                                 double cumulative_shift,
+                                                std::map<Size, int>& node_max_score_map,
                                                 const MSSpectrum& node_spec,
                                                 const MSSpectrum& tol_spec,
                                                 const std::vector<double>& pro_masses,
@@ -1013,8 +1021,8 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(FLASHHelperClasses::DAG& dag,
   auto src = getVertex_(0, 0, 0, 0, pro_masses.size());
   if (end_node_index < 0)
   {
-    end_pro_index = (start_num_mod < max_mod_cntr && diagonal_counter == 0) ? std::min(start_pro_index + 50, (int)pro_masses.size() - 1)
-                                                                            : ((int)pro_masses.size() - 1); // if sink is not specified, stretch up to 20 amino acids.
+    // end_pro_index = std::min(start_pro_index + 50, (int)pro_masses.size() - 1);
+    end_pro_index = ((start_num_mod < max_mod_cntr) && diagonal_counter == 0) ? std::min(start_pro_index + 50, (int)pro_masses.size() - 1) : ((int)pro_masses.size() - 1); // if sink is not specified, stretch up to 20 amino acids.
   }
   // make the range of truncation well...  make use of the positional information
   if (start_vertex == src)
@@ -1025,7 +1033,7 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(FLASHHelperClasses::DAG& dag,
       dag.addEdge(vertex2, start_vertex, visited);
 
       if (vertex2 >= visited.size() || ! visited[vertex2]) continue;
-      extendBetweenTags_(dag, visited, sinks, vertex2, end_node_index, end_pro_index, diagonal_counter, -pro_masses[pro_i], node_spec, tol_spec,
+      extendBetweenTags_(dag, visited, sinks, vertex2, end_node_index, end_pro_index, diagonal_counter, -pro_masses[pro_i], node_max_score_map, node_spec, tol_spec,
                          pro_masses, total_mod_mass - pro_masses[pro_i], max_mod_cntr_for_last_mode, mode);
     }
   }
@@ -1046,6 +1054,21 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(FLASHHelperClasses::DAG& dag,
     else
       diagonal_counter = 1e5; // if the start and end points make a diagonal line, go through the diagonal line.
   }
+
+  for (int nm = 0; nm <= start_num_mod; nm++)
+  {
+    Size zero_score_vertex = getVertex_(start_node_index, start_pro_index, 0, nm, pro_masses.size());
+    if (node_max_score_map.find(zero_score_vertex) != node_max_score_map.end())
+    {
+      if(node_max_score_map[zero_score_vertex] > start_score)
+      {
+        return;
+      }
+    }
+  }
+  node_max_score_map[getVertex_(start_node_index, start_pro_index, 0, start_num_mod, pro_masses.size())] = start_score;
+
+  /*
   for (int score = start_score + 1; score <= max_path_score_; score++)
   {
     // if the starting point has already taken by a higher scoring path, don't go further.
@@ -1056,7 +1079,7 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(FLASHHelperClasses::DAG& dag,
       if (visited[higher_score_vertex]) return;
     }
   }
-
+*/
   if (end_node_index < 0)
   {
     if (start_vertex != src) sinks[start_vertex] = cumulative_shift;
@@ -1121,11 +1144,13 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(FLASHHelperClasses::DAG& dag,
           new_score -= multi_ion_score + FLASHTaggerAlgorithm::max_peak_group_score;
         } // if it was not found in unimod, subtract more
       }
-      // if (new_score < min_path_score_) continue;
+      new_score = std::min(new_score, max_path_score_);
+      //if (new_score < min_path_score_) continue;
       if (end_node_index < 0 && new_score < 0) continue;
       Size next_vertex = getVertex_(node_i, pro_i, new_score, num_mod, pro_masses.size());
       if (next_vertex >= visited.size()) continue;
 
+      if(new_score >= max_path_score_ && !sinks.empty() && visited[next_vertex]) continue;
       dag.addEdge(next_vertex, start_vertex, visited);
 
       if (! visited[next_vertex]) continue;
@@ -1134,7 +1159,7 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(FLASHHelperClasses::DAG& dag,
       if (diagonal_counter > 0) next_diagonal_counter--;
       else if (num_mod != start_num_mod)
         next_diagonal_counter = 1;
-      extendBetweenTags_(dag, visited, sinks, next_vertex, end_node_index, end_pro_index, next_diagonal_counter, new_cumulative_shift, node_spec,
+      extendBetweenTags_(dag, visited, sinks, next_vertex, end_node_index, end_pro_index, next_diagonal_counter, new_cumulative_shift, node_max_score_map, node_spec,
                          tol_spec, pro_masses, total_mod_mass, max_mod_cntr_for_last_mode, mode);
     }
   }

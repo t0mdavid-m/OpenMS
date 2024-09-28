@@ -5,8 +5,8 @@
 // $Maintainer: Kyowon Jeong, Jihyung Kim $
 // $Authors: Kyowon Jeong, Jihyung Kim $
 // --------------------------------------------------------------------------
-//#define TRAIN_OUT
-#define DEEP_LEARNING
+// #define TRAIN_OUT
+//#define DEEP_LEARNING
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvAlgorithm.h>
 #include <OpenMS/APPLICATIONS/TOPPBase.h>
@@ -47,11 +47,17 @@ See https://openms.de/FLASHDeconv for more information.
 */
 class TOPPFLASHDeconv : public TOPPBase
 {
+
+  const int charge_count = 11;
+  const int iso_count = 13;
+
 public:
-  TOPPFLASHDeconv() :
-      TOPPBase("FLASHDeconv", "Ultra-fast high-quality deconvolution enables online processing of top-down MS data", true,
-               {Citation {"Jeong K, Kim J, Gaikwad M et al.", "FLASHDeconv: Ultrafast, High-Quality Feature Deconvolution for Top-Down Proteomics", "Cell Syst 2020 Feb 26;10(2):213-218.e6",
-                          "10.1016/j.cels.2020.01.003"}})
+  TOPPFLASHDeconv():
+      TOPPBase("FLASHDeconv",
+               "Ultra-fast high-quality deconvolution enables online processing of top-down MS data",
+               true,
+               {Citation {"Jeong K, Kim J, Gaikwad M et al.", "FLASHDeconv: Ultrafast, High-Quality Feature Deconvolution for Top-Down Proteomics",
+                          "Cell Syst 2020 Feb 26;10(2):213-218.e6", "10.1016/j.cels.2020.01.003"}})
   {
   }
 
@@ -66,7 +72,9 @@ protected:
     registerOutputFile_("out", "<file>", "", "Default output tsv file containing deconvolved features");
     setValidFormats_("out", ListUtils::create<String>("tsv"));
 
-    registerOutputFile_("out_spec1", "<file>", "", "Output tsv file containing deconvolved MS1 spectra. Likewise, use -out_spec2, ..., -out_spec4 to specify tsv files for MS2, ..., MS4.", false);
+    registerOutputFile_(
+      "out_spec1", "<file>", "",
+      "Output tsv file containing deconvolved MS1 spectra. Likewise, use -out_spec2, ..., -out_spec4 to specify tsv files for MS2, ..., MS4.", false);
     setValidFormats_("out_spec1", ListUtils::create<String>("tsv"));
 
     registerOutputFile_("out_spec2", "<file>", "", "Output tsv file containing deconvolved MS2 spectra.", false, true);
@@ -85,15 +93,17 @@ protected:
     setValidFormats_("out_quant", ListUtils::create<String>("tsv"));
 
     registerOutputFile_("out_annotated_mzml", "<file>", "",
-                        "Output mzml file containing annotated spectra. For each annotated peak, monoisotopic mass, charge, and isotope index are stored as meta data. Unannotated peaks are also "
+                        "Output mzml file containing annotated spectra. For each annotated peak, monoisotopic mass, charge, and isotope index are "
+                        "stored as meta data. Unannotated peaks are also "
                         "copied as well without meta data.",
                         false);
     setValidFormats_("out_annotated_mzml", ListUtils::create<String>("mzML"));
 
-    registerOutputFile_("out_msalign1", "<file>", "",
-                        "Output msalign (topFD and ProMex compatible) file containing MS1 deconvolved spectra. Likewise, use -out_msalign2 for MS2 spectra."
-                        " The file names for MS1 and MS2 should end with ms1.msalign and ms2.msalgin respectively to be able to be recognized by TopPIC GUI. ",
-                        false);
+    registerOutputFile_(
+      "out_msalign1", "<file>", "",
+      "Output msalign (topFD and ProMex compatible) file containing MS1 deconvolved spectra. Likewise, use -out_msalign2 for MS2 spectra."
+      " The file names for MS1 and MS2 should end with ms1.msalign and ms2.msalgin respectively to be able to be recognized by TopPIC GUI. ",
+      false);
     setValidFormats_("out_msalign1", ListUtils::create<String>("msalign"), false);
 
     registerOutputFile_("out_msalign2", "<file>", "",
@@ -130,7 +140,8 @@ protected:
 
     registerFlag_("keep_empty_out", "If set, empty output files (e.g., *.tsv file when no feature was generated) are kept.");
 
-    registerIntOption_("mzml_mass_charge", "<0:uncharged 1: +1 charged -1: -1 charged>", 0, "Charge state of deconvolved masses in mzml output (specified by out_mzml)", false, true);
+    registerIntOption_("mzml_mass_charge", "<0:uncharged 1: +1 charged -1: -1 charged>", 0,
+                       "Charge state of deconvolved masses in mzml output (specified by out_mzml)", false, true);
     setMinInt_("mzml_mass_charge", -1);
     setMaxInt_("mzml_mass_charge", 1);
 
@@ -180,10 +191,7 @@ protected:
       auto fd_param = FLASHDeconvAlgorithm().getDefaults();
       return fd_param.copy("iq:", true);
     }
-    else
-    {
-      throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "Unknown subsection", prefix);
-    }
+    else { throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "Unknown subsection", prefix); }
   }
 
   // the main_ function is called after all parameters are read
@@ -198,7 +206,8 @@ protected:
     String out_file = getStringOption_("out");
     // String in_train_file {};
     bool keep_empty_out = getFlag_("keep_empty_out");
-    auto out_spec_file = StringList {getStringOption_("out_spec1"), getStringOption_("out_spec2"), getStringOption_("out_spec3"), getStringOption_("out_spec4")};
+    auto out_spec_file
+      = StringList {getStringOption_("out_spec1"), getStringOption_("out_spec2"), getStringOption_("out_spec3"), getStringOption_("out_spec4")};
 
     auto out_topfd_file = StringList {getStringOption_("out_msalign1"), getStringOption_("out_msalign2")};
     auto out_topfd_feature_file = StringList {getStringOption_("out_feature1"), getStringOption_("out_feature2")};
@@ -281,79 +290,68 @@ protected:
     for (auto& it : map)
     {
       uint ms_level = it.getMSLevel();
-      if (per_ms_level_spec_count.find(ms_level) == per_ms_level_spec_count.end())
-        per_ms_level_spec_count[ms_level] = 0;
+      if (per_ms_level_spec_count.find(ms_level) == per_ms_level_spec_count.end()) per_ms_level_spec_count[ms_level] = 0;
       per_ms_level_spec_count[ms_level]++;
     }
 
     for (auto& deconvolved_spectrum : deconvolved_spectra)
     {
-      //for (auto& pg : deconvolved_spectrum)
-      //{
-     //   pg.getDLVector(deconvolved_spectrum.getOriginalSpectrum(), 11, 13, fd.getAveragine(), 10.0, 3);
-     // }
-
       uint ms_level = deconvolved_spectrum.getOriginalSpectrum().getMSLevel();
-      if (per_ms_level_deconv_spec_count.find(ms_level) == per_ms_level_deconv_spec_count.end())
-        per_ms_level_deconv_spec_count[ms_level] = 0;
-      if (per_ms_level_mass_count.find(ms_level) == per_ms_level_mass_count.end())
-        per_ms_level_mass_count[ms_level] = 0;
+      if (per_ms_level_deconv_spec_count.find(ms_level) == per_ms_level_deconv_spec_count.end()) per_ms_level_deconv_spec_count[ms_level] = 0;
+      if (per_ms_level_mass_count.find(ms_level) == per_ms_level_mass_count.end()) per_ms_level_mass_count[ms_level] = 0;
 
       per_ms_level_deconv_spec_count[ms_level]++;
       per_ms_level_mass_count[ms_level] += (int)deconvolved_spectrum.size();
       scan_rt_map[deconvolved_spectrum.getScanNumber()] = deconvolved_spectrum.getOriginalSpectrum().getRT();
-      if (ms_level > 1 && !deconvolved_spectrum.getPrecursorPeakGroup().empty())
+      if (ms_level > 1 && ! deconvolved_spectrum.getPrecursorPeakGroup().empty())
       {
         msNscan_to_precursor_pg[deconvolved_spectrum.getScanNumber()] = deconvolved_spectrum.getPrecursorPeakGroup();
       }
     }
-/*
-    for (auto& deconvolved_spectrum : deconvolved_spectra)
-    {
-      uint ms_level = deconvolved_spectrum.getOriginalSpectrum().getMSLevel();
-      if (ms_level != 1) continue;
-
-      const int max_count = 10;
-      double threshold = 0;
-      double mass = 0;
-      double intensity_sum = 0;
-
-      if (deconvolved_spectrum.size() > max_count)
-      {
-        std::vector<float> intensites;
-        intensites.reserve(deconvolved_spectrum.size());
-        for (const auto& pg : deconvolved_spectrum)
+    /*
+        for (auto& deconvolved_spectrum : deconvolved_spectra)
         {
-          intensites.push_back(pg.getIntensity());
-        }
-        std::sort(intensites.rbegin(), intensites.rend());
-        threshold = intensites[max_count];
-      }
+          uint ms_level = deconvolved_spectrum.getOriginalSpectrum().getMSLevel();
+          if (ms_level != 1) continue;
 
-      for (const auto& pg : deconvolved_spectrum)
-      {
-        if (pg.getIntensity() < threshold) continue;
-        mass += pg.getMonoMass() * pg.getIntensity();
-        intensity_sum += pg.getIntensity();
-      }
-      if (intensity_sum <= 0)  std::cout<< deconvolved_spectrum.getOriginalSpectrum().getRT()<<" " <<  0 << "\n";
-      std::cout << deconvolved_spectrum.getOriginalSpectrum().getRT()<< " " <<  mass / intensity_sum << "\n";
-    }
-*/
+          const int max_count = 10;
+          double threshold = 0;
+          double mass = 0;
+          double intensity_sum = 0;
+
+          if (deconvolved_spectrum.size() > max_count)
+          {
+            std::vector<float> intensites;
+            intensites.reserve(deconvolved_spectrum.size());
+            for (const auto& pg : deconvolved_spectrum)
+            {
+              intensites.push_back(pg.getIntensity());
+            }
+            std::sort(intensites.rbegin(), intensites.rend());
+            threshold = intensites[max_count];
+          }
+
+          for (const auto& pg : deconvolved_spectrum)
+          {
+            if (pg.getIntensity() < threshold) continue;
+            mass += pg.getMonoMass() * pg.getIntensity();
+            intensity_sum += pg.getIntensity();
+          }
+          if (intensity_sum <= 0)  std::cout<< deconvolved_spectrum.getOriginalSpectrum().getRT()<<" " <<  0 << "\n";
+          std::cout << deconvolved_spectrum.getOriginalSpectrum().getRT()<< " " <<  mass / intensity_sum << "\n";
+        }
+    */
     for (auto& val : per_ms_level_deconv_spec_count)
     {
-      OPENMS_LOG_INFO << "So far, FLASHDeconv found " << per_ms_level_mass_count[val.first] << " masses in " << val.second << " MS" << val.first << " spectra out of "
-                      << per_ms_level_spec_count[val.first] << endl;
+      OPENMS_LOG_INFO << "So far, FLASHDeconv found " << per_ms_level_mass_count[val.first] << " masses in " << val.second << " MS" << val.first
+                      << " spectra out of " << per_ms_level_spec_count[val.first] << endl;
     }
-    if (!deconvolved_features.empty())
-    {
-      OPENMS_LOG_INFO << "Mass tracer found " << deconvolved_features.size() << " features" << endl;
-    }
+    if (! deconvolved_features.empty()) { OPENMS_LOG_INFO << "Mass tracer found " << deconvolved_features.size() << " features" << endl; }
 
     OPENMS_LOG_INFO << "FLASHDeconv run complete. Now writing the results in output files ..." << endl;
     // Write output files
     // default feature deconvolution tsv output
-    if (keep_empty_out || !deconvolved_features.empty())
+    if (keep_empty_out || ! deconvolved_features.empty())
     {
       OPENMS_LOG_INFO << "writing feature tsv ..." << endl;
       fstream out_stream;
@@ -363,16 +361,19 @@ protected:
       out_stream.close();
     }
     // Per ms level spectrum deconvolution tsv output
-    if (!out_spec_file.empty())
+    if (! out_spec_file.empty())
     {
       std::vector<fstream> out_spec_streams = std::vector<fstream>(out_spec_file.size());
 #ifdef TRAIN_OUT
       std::vector<fstream> out_train_streams = std::vector<fstream>(out_spec_file.size());
 #endif
 
+#ifdef DEEP_LEARNING
+      std::vector<fstream> out_dl_streams = std::vector<fstream>(out_spec_file.size());
+#endif
       for (Size i = 0; i < out_spec_file.size(); i++)
       {
-        if (out_spec_file[i].empty() || (!keep_empty_out && per_ms_level_deconv_spec_count.find(i + 1) == per_ms_level_deconv_spec_count.end()))
+        if (out_spec_file[i].empty() || (! keep_empty_out && per_ms_level_deconv_spec_count.find(i + 1) == per_ms_level_deconv_spec_count.end()))
           continue;
         OPENMS_LOG_INFO << "writing spectrum tsv for MS level " << (i + 1) << " ..." << endl;
 
@@ -382,21 +383,79 @@ protected:
         out_train_streams[i].open(out_spec_file[i] + "_train.csv", fstream::out);
         Qscore::writeAttCsvForQscoreTrainingHeader(out_train_streams[i]);
 #endif
+#ifdef DEEP_LEARNING
+        out_dl_streams[i].open(out_spec_file[i] + "_dl.csv", fstream::out);
+        out_dl_streams[i] << "Index,";
+        for (int n = 0; n < 2; n++)
+        {
+          String header = n == 0? "S" : "N";
+          for (int z = 0; z < charge_count; z++)
+          {
+            for (int j = 0; j < iso_count; j++)
+            {
+              out_dl_streams[i] <<header<<"_"<<z<<"_"<<j<<",";
+            }
+          }
+        }
+        out_dl_streams[i] << "Class\n";
+#endif
       }
 
+#ifdef DEEP_LEARNING
+      std::map<int, int> dl_index;
+
+#endif
       std::map<int, DeconvolvedSpectrum> target_spec_map;
       for (auto& deconvolved_spectrum : deconvolved_spectra)
       {
         uint ms_level = deconvolved_spectrum.getOriginalSpectrum().getMSLevel();
-        if (out_spec_file[ms_level - 1].empty())
-          continue;
-        if (deconvolved_spectrum.isDecoy())
-          continue;
-        if (report_decoy)
-          target_spec_map[deconvolved_spectrum.getScanNumber()] = deconvolved_spectrum;
-        FLASHDeconvSpectrumFile::writeDeconvolvedMasses(deconvolved_spectrum, out_spec_streams[ms_level - 1], in_file, fd.getAveragine(), tols[ms_level - 1], write_detail, report_decoy, 1.0);
+        if (out_spec_file[ms_level - 1].empty()) continue;
+        if (deconvolved_spectrum.isDecoy()) continue;
+        if (report_decoy) target_spec_map[deconvolved_spectrum.getScanNumber()] = deconvolved_spectrum;
+        FLASHDeconvSpectrumFile::writeDeconvolvedMasses(deconvolved_spectrum, out_spec_streams[ms_level - 1], in_file, fd.getAveragine(),
+                                                        tols[ms_level - 1], write_detail, report_decoy, 1.0);
 #ifdef TRAIN_OUT
         Qscore::writeAttCsvForQscoreTraining(deconvolved_spectrum, out_train_streams[ms_level - 1]);
+#endif
+#ifdef DEEP_LEARNING
+        for (auto& pg : deconvolved_spectrum)
+        {
+          if (dl_index.find(ms_level) == dl_index.end()) dl_index[ms_level] = 1;
+          out_dl_streams[ms_level - 1] << dl_index[ms_level]++ << ",";
+          // if (pg.getQscore2D() < .9) continue;
+          const auto& [sig, noise]
+            = pg.getDLVector(deconvolved_spectrum.getOriginalSpectrum(), charge_count, iso_count, fd.getAveragine(), tols[ms_level - 1]);
+          for (const auto s : sig)
+          {
+            out_dl_streams[ms_level - 1] << s << ",";
+          }
+          for (const auto n : noise)
+          {
+            out_dl_streams[ms_level - 1] << n << ",";
+          }
+          out_dl_streams[ms_level - 1] << pg.getTargetDecoyType() << "\n";
+
+          /*
+          int index = 1;
+          std::cout << "s" << index << "=[";
+
+          for (int j = 0; j < sig.size(); j++)
+          {
+            if (j % iso_count == 0) std::cout << "\n";
+            std::cout << sig[j] << ",";
+          }
+          std::cout << "];\n";
+
+          std::cout << "n" << index++ << "=[";
+          // int v_index = z_index * isotope_count * bin_count + iso_index * bin_count + bin;
+
+          for (int j = 0; j < noise.size(); j++)
+          {
+            if (j % iso_count == 0) std::cout << "\n";
+            std::cout << noise[j] << ",";
+          }
+          std::cout << "];\n";*/
+        }
 #endif
       }
 
@@ -406,54 +465,75 @@ protected:
         for (auto& deconvolved_spectrum : deconvolved_spectra)
         {
           uint ms_level = deconvolved_spectrum.getOriginalSpectrum().getMSLevel();
-          if (out_spec_file[ms_level - 1].empty())
-            continue;
-          if (!deconvolved_spectrum.isDecoy())
-            continue;
-          FLASHDeconvSpectrumFile::writeDeconvolvedMasses(deconvolved_spectrum, out_spec_streams[ms_level - 1], in_file, fd.getAveragine(), tols[ms_level - 1], write_detail, report_decoy,
-                                                          noise_decoy_weight);
+          if (out_spec_file[ms_level - 1].empty()) continue;
+          if (! deconvolved_spectrum.isDecoy()) continue;
+          FLASHDeconvSpectrumFile::writeDeconvolvedMasses(deconvolved_spectrum, out_spec_streams[ms_level - 1], in_file, fd.getAveragine(),
+                                                          tols[ms_level - 1], write_detail, report_decoy, noise_decoy_weight);
 #ifdef TRAIN_OUT
           Qscore::writeAttCsvForQscoreTraining(deconvolved_spectrum, out_train_streams[ms_level - 1]);
+#endif
+#ifdef DEEP_LEARNING
+          for (auto& pg : deconvolved_spectrum)
+          {
+            if (dl_index.find(ms_level) == dl_index.end()) dl_index[ms_level] = 1;
+            out_dl_streams[ms_level - 1] << dl_index[ms_level]++ << ",";
+            const auto& [sig, noise]
+              = pg.getDLVector(deconvolved_spectrum.getOriginalSpectrum(), charge_count, iso_count, fd.getAveragine(), tols[ms_level - 1]);
+            for (const auto s : sig)
+            {
+              out_dl_streams[ms_level - 1] << s << ",";
+            }
+            for (const auto n : noise)
+            {
+              out_dl_streams[ms_level - 1] << n << ",";
+            }
+            out_dl_streams[ms_level - 1] << pg.getTargetDecoyType()<< "\n";
+          }
 #endif
         }
       }
 
       for (Size i = 0; i < out_spec_file.size(); i++)
       {
-        if (out_spec_file[i].empty() || (!keep_empty_out && per_ms_level_deconv_spec_count.find(i + 1) == per_ms_level_deconv_spec_count.end()))
+        if (out_spec_file[i].empty() || (! keep_empty_out && per_ms_level_deconv_spec_count.find(i + 1) == per_ms_level_deconv_spec_count.end()))
           continue;
         out_spec_streams[i].close();
 #ifdef TRAIN_OUT
         out_train_streams[i].close();
 #endif
+#ifdef DEEP_LEARNING
+        out_dl_streams[i].close();
+#endif
       }
     }
     // topFD feature output
-    if (!out_topfd_feature_file.empty())
+    if (! out_topfd_feature_file.empty())
     {
       std::vector<fstream> out_topfd_feature_streams;
       out_topfd_feature_streams = std::vector<fstream>(out_topfd_feature_file.size());
       for (Size i = 0; i < out_topfd_feature_file.size(); i++)
       {
-        if (out_topfd_feature_file[i].empty() || (!keep_empty_out && per_ms_level_deconv_spec_count.find(i + 1) == per_ms_level_deconv_spec_count.end()))
+        if (out_topfd_feature_file[i].empty()
+            || (! keep_empty_out && per_ms_level_deconv_spec_count.find(i + 1) == per_ms_level_deconv_spec_count.end()))
           continue;
         OPENMS_LOG_INFO << "writing topfd *.feature for MS level " << (i + 1) << " ..." << endl;
 
         out_topfd_feature_streams[i].open(out_topfd_feature_file[i], fstream::out);
         FLASHDeconvFeatureFile::writeTopFDFeatureHeader(out_topfd_feature_streams[i], i + 1);
-        FLASHDeconvFeatureFile::writeTopFDFeatures(deconvolved_features, msNscan_to_precursor_pg, scan_rt_map, in_file, out_topfd_feature_streams[i], i + 1);
+        FLASHDeconvFeatureFile::writeTopFDFeatures(deconvolved_features, msNscan_to_precursor_pg, scan_rt_map, in_file, out_topfd_feature_streams[i],
+                                                   i + 1);
         out_topfd_feature_streams[i].close();
       }
     }
 
     // topFD msalign output
-    if (!out_topfd_file.empty())
+    if (! out_topfd_file.empty())
     {
       auto out_topfd_streams = std::vector<fstream>(out_topfd_file.size());
 
       for (Size i = 0; i < out_topfd_file.size(); i++)
       {
-        if (out_topfd_file[i].empty() || (!keep_empty_out && per_ms_level_deconv_spec_count.find(i + 1) == per_ms_level_deconv_spec_count.end()))
+        if (out_topfd_file[i].empty() || (! keep_empty_out && per_ms_level_deconv_spec_count.find(i + 1) == per_ms_level_deconv_spec_count.end()))
           continue;
         OPENMS_LOG_INFO << "writing topfd *.msalign for MS level " << (i + 1) << " ..." << endl;
 
@@ -464,22 +544,22 @@ protected:
       for (auto& deconvolved_spectrum : deconvolved_spectra)
       {
         uint ms_level = deconvolved_spectrum.getOriginalSpectrum().getMSLevel();
-        if (out_topfd_file[ms_level - 1].empty())
-          continue;
+        if (out_topfd_file[ms_level - 1].empty()) continue;
 
-        FLASHDeconvSpectrumFile::writeTopFD(deconvolved_spectrum, out_topfd_streams[ms_level - 1], in_file, topfd_snr_threshold, 1, per_ms_level_deconv_spec_count.begin()->first, false, false);
+        FLASHDeconvSpectrumFile::writeTopFD(deconvolved_spectrum, out_topfd_streams[ms_level - 1], in_file, topfd_snr_threshold, 1,
+                                            per_ms_level_deconv_spec_count.begin()->first, false, false);
       }
 
       for (Size i = 0; i < out_topfd_file.size(); i++)
       {
-        if (out_topfd_file[i].empty() || (!keep_empty_out && per_ms_level_deconv_spec_count.find(i + 1) == per_ms_level_deconv_spec_count.end()))
+        if (out_topfd_file[i].empty() || (! keep_empty_out && per_ms_level_deconv_spec_count.find(i + 1) == per_ms_level_deconv_spec_count.end()))
           continue;
         out_topfd_streams[i].close();
       }
     }
 
     // isobaric quantification output
-    if (!out_quant_file.empty())
+    if (! out_quant_file.empty())
     {
       OPENMS_LOG_INFO << "writing quantification tsv ..." << endl;
       fstream out_quant_stream;
@@ -488,7 +568,7 @@ protected:
       out_quant_stream.close();
     }
     // mzML output
-    if (!out_anno_mzml_file.empty() || !out_mzml_file.empty())
+    if (! out_anno_mzml_file.empty() || ! out_mzml_file.empty())
     {
       FLASHDeconvSpectrumFile::writeMzML(map, deconvolved_spectra, out_mzml_file, out_anno_mzml_file, mzml_charge, tols);
     }
