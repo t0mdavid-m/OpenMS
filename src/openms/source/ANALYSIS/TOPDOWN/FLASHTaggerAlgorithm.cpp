@@ -611,6 +611,7 @@ void FLASHTaggerAlgorithm::getTags_(const std::vector<double>& mzs, const std::v
 
 Size FLASHTaggerAlgorithm::find_with_X_(const std::string_view& A, const String& B, Size pos) // allow a single X. pos is in A
 {
+  if (A.length() <= B.length()) return String::npos;
   for (size_t i = pos; i <= A.length() - B.length(); ++i)
   {
     bool match = true;

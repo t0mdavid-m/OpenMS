@@ -435,7 +435,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
                                  bool multiple_hits_per_spec)
 {
   if (hits.empty()) return;
-  // setLogType(CMD);
+   //setLogType(CMD);
 
   ion_types_str_ = param_.getValue("ion_type").toStringVector();
 
@@ -615,6 +615,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
       matched_positions.clear();
       // find the best paths per mode. Mode 0 and 1 should be considered together (since the modification counts for N C term paths should be summed
       // up).
+
       for (int m = mode == 2 ? 2 : 0; m <= mode; m++)
       {
         if (best_path_map.empty() || best_path_map.find(m) == best_path_map.end() || best_path_map[m].empty()) continue;
@@ -704,6 +705,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
     if (protein_start_position >= 0 && protein_end_position >=0 && protein_start_position > protein_end_position) continue;
     if (total_score <= 0 || (final_mode == 2 && precursor_mass > 0 && std::abs(resulting_total_mod_mass - total_mod_mass) > 1.0)) continue;
 
+
     //  if (precursor_mass < 0) continue; // if precursor mass is not specified, skip
     for (int k = 0; k < mod_masses.size(); k++)
     {
@@ -746,14 +748,12 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
 
       for (int j = 0; j < matched_tags.size(); j++) // for each tag
       {
-
         auto tag = matched_tags[j];
         if ((tag.getNtermMass() > 0 && m == 0) || (tag.getCtermMass() > 0 && m == 1))
         {
           continue;
         }
         bool tag_matched = false;
-
         for (auto iter = best_path.rbegin(); iter != best_path.rend(); iter++) // compare against each path
         {
           auto node_index = getNodeIndex_(*iter, t_pro_masses.size());
@@ -780,12 +780,13 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
               break;
             }
           }
+
           if (tag_matched)
           {
-
             std::vector<int> positions;
             std::vector<double> masses;
             String seq = hit.getSequence();
+
             if (protein_end_position >= 0)
               seq = seq.substr(0, protein_end_position);
             if (protein_start_position >= 0)
@@ -794,6 +795,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
             tag_matched = !positions.empty();
             break;
           }
+
         }
         if (! tag_matched) to_exclude_tag_indices.insert(tag_indices[j]);
       }
@@ -814,7 +816,6 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
     {
       if (std::abs(total_mod_mass - resulting_total_mod_mass) > 1.1) continue;
     }
-
     hit.setMetaValue("ModificationIDs", mod_ids);
     hit.setMetaValue("ModificationACCs", mod_accs);
     hit.setMetaValue("Modifications", mod_masses);
