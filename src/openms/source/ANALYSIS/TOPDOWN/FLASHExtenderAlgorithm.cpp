@@ -262,7 +262,7 @@ void FLASHExtenderAlgorithm::defineNodes(const DeconvolvedSpectrum& dspec,
 
       score = multi_ion_score + std::max(prev_score, score);
     }
-
+    if (mass <= 0) continue;
     node_spec.emplace_back(mass, score);
     tol_spec.emplace_back(mass, margin);
   }
@@ -943,6 +943,7 @@ void FLASHExtenderAlgorithm::connectBetweenTags_(FLASHHelperClasses::DAG& dag,
       connectBetweenTags_(dag, visited, visited_tag_edges, sinks, next_vertex, next_cumulative_shift, node_max_score_map, node_spec, tol_spec, pro_masses, tag_edges,
                           total_mod_mass, max_mod_cntr_for_last_mode, mode, use_tags);
     }
+
   }
 
   if (vertex == src || tag_end_index >= 0) // between tag.
@@ -1069,18 +1070,6 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(FLASHHelperClasses::DAG& dag,
   }
   node_max_score_map[getVertex_(start_node_index, start_pro_index, 0, start_num_mod, pro_masses.size())] = start_score;
 
-  /*
-  for (int score = start_score + 1; score <= max_path_score_; score++)
-  {
-    // if the starting point has already taken by a higher scoring path, don't go further.
-    for (int nm = 0; nm <= start_num_mod; nm++)
-    {
-      Size higher_score_vertex = getVertex_(start_node_index, start_pro_index, score, nm, pro_masses.size());
-      if (higher_score_vertex >= visited.size()) continue;
-      if (visited[higher_score_vertex]) return;
-    }
-  }
-*/
   if (end_node_index < 0)
   {
     if (start_vertex != src) sinks[start_vertex] = cumulative_shift;
@@ -1098,7 +1087,6 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(FLASHHelperClasses::DAG& dag,
     sinks[start_vertex] = cumulative_shift;
     return;
   }
-
   for (int node_i = start_node_index + 1; node_i <= (end_node_index < 0 ? ((int)node_spec.size() - 1) : end_node_index); node_i++)
   {
     if (end_node_index < 0 && node_spec[node_i].getIntensity() < 0 && diagonal_counter > 0) continue;
@@ -1128,7 +1116,6 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(FLASHHelperClasses::DAG& dag,
           if (std::abs(t_node_mass - pro_masses[pro_i] - new_cumulative_shift) > t_margin) continue;
         }
       }
-
       if (diagonal_counter > 0 && num_mod != start_num_mod) continue; //
       if (num_mod > max_mod_cntr) continue;
       if (end_node_index >= 0)
@@ -1160,6 +1147,7 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(FLASHHelperClasses::DAG& dag,
       if (diagonal_counter > 0) next_diagonal_counter--;
       else if (num_mod != start_num_mod)
         next_diagonal_counter = 1;
+
       extendBetweenTags_(dag, visited, sinks, next_vertex, end_node_index, end_pro_index, next_diagonal_counter, new_cumulative_shift, node_max_score_map, node_spec,
                          tol_spec, pro_masses, total_mod_mass, max_mod_cntr_for_last_mode, mode);
     }
