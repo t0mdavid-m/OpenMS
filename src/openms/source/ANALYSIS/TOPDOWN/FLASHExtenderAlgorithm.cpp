@@ -435,7 +435,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
                                  bool multiple_hits_per_spec)
 {
   if (hits.empty()) return;
-   //setLogType(CMD);
+  // setLogType(CMD);
 
   ion_types_str_ = param_.getValue("ion_type").toStringVector();
 
