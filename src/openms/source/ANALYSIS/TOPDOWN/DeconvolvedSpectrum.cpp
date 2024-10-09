@@ -330,6 +330,11 @@ namespace OpenMS
     peak_groups_.push_back(pg);
   }
 
+  void DeconvolvedSpectrum::emplace_back(const PeakGroup& pg)
+  {
+    peak_groups_.emplace_back(pg);
+  }
+
   void DeconvolvedSpectrum::pop_back()
   {
     peak_groups_.pop_back();

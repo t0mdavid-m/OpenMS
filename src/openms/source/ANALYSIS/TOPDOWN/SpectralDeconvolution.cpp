@@ -107,7 +107,7 @@ namespace OpenMS
   {
     // First prepare for decoy runs.
     iso_da_distance_ = target_decoy_type_ == PeakGroup::noise_decoy
-                         ? Constants::ISOTOPE_MASSDIFF_55K_U * sqrt(13.0) / 5
+                         ? Constants::ISOTOPE_MASSDIFF_55K_U * sqrt(19.0) / 2.5
                          : Constants::ISOTOPE_MASSDIFF_55K_U; // sqrt(13.0)/5.0 Da is used instead of C13 - C12 to make sure masses detected with this
                                                               // nonsensical mass difference are not true.
     previously_deconved_peak_masses_for_decoy_.clear();
@@ -913,7 +913,12 @@ namespace OpenMS
       auto per_mass_abs_charge_ranges = updateMassBins_(mz_bin_intensities);
       getCandidatePeakGroups_(per_mass_abs_charge_ranges);
     }
-    else { deconvolved_spectrum_ = *target_dspec_for_decoy_calculation_; }
+    else { deconvolved_spectrum_.clear();
+      for (const auto& pg : *target_dspec_for_decoy_calculation_)
+      {
+        deconvolved_spectrum_.emplace_back(pg);
+      }
+    }
     scoreAndFilterPeakGroups_();
   }
 
@@ -922,13 +927,13 @@ namespace OpenMS
     double tol = tolerance_[ms_level_ - 1];
     auto selected = boost::dynamic_bitset<>(deconvolved_spectrum_.size());
 
-  #pragma omp parallel for default(none) shared(tol, selected)
+  #pragma omp parallel for default(none) shared(tol, selected, std::cout)
     for (int i = 0; i < (int)deconvolved_spectrum_.size(); i++)
     {
       int offset = 0;
       auto& peak_group = deconvolved_spectrum_[i];
 
-      auto prev_peak_group(peak_group);
+      const auto prev_peak_group(peak_group);
       peak_group.setTargetDecoyType(target_decoy_type_);
       bool is_isotope_decoy = target_decoy_type_ == PeakGroup::TargetDecoyType::isotope_decoy;
       int window_width = is_isotope_decoy ? 0 : -1;
@@ -970,9 +975,9 @@ namespace OpenMS
 
       if (is_isotope_decoy)
       {
-        if (prev_peak_group.getIsotopeCosine() * (1 - .0026) > peak_group.getIsotopeCosine()) // a magic number to generate isotope decoy masses.
-          continue;
-        peak_group.setQscore(prev_peak_group.getQscore());
+        //if (std::abs(prev_peak_group.getIsotopeCosine() - peak_group.getIsotopeCosine()) > .05) continue;
+        if (prev_peak_group.getIsotopeCosine() <= peak_group.getIsotopeCosine()) continue;
+        if (prev_peak_group.getIsotopeCosine() * (1 - .01)  > peak_group.getIsotopeCosine()) continue;
       }
 
       if (! target_mono_masses_.empty())
@@ -1067,13 +1072,21 @@ namespace OpenMS
       selected[i] = true;
     }
 
-    filtered_peak_groups.reserve(selected.count());
+    selected_count = selected.count();
+    if (selected_count == 0)
+    {
+      deconvolved_spectrum_.clear();
+      return;
+    }
+
+    filtered_peak_groups.reserve(selected_count);
     index = selected.find_first();
 
     while (index != selected.npos)
     {
       filtered_peak_groups.push_back(deconvolved_spectrum_[index]);
       index = selected.find_next(index);
+      auto peak_group = filtered_peak_groups.back();
     }
 
     deconvolved_spectrum_.setPeakGroups(filtered_peak_groups);

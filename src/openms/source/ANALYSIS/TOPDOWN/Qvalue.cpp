@@ -11,6 +11,20 @@
 
 namespace OpenMS
 {
+  Matrix<double> getDistVector(const std::vector<double>& values, Size num_bin, double minv, double maxv)
+  {
+    Matrix<double> ret(num_bin, 1, .0);
+    for (const auto& v : values)
+    {
+      if (v >= maxv) continue;
+      if (v < minv) continue;
+
+      Size bin = Size((v - minv) / (maxv - minv) * num_bin);
+      ret.setValue(bin, 0, ret.getValue(bin, 0) + 1);
+    }
+    return ret;
+  }
+
   double Qvalue::updatePeakGroupQvalues(std::vector<DeconvolvedSpectrum>& deconvolved_spectra) // per ms level + precursor update as well.
   {
     double noise_weight = 1;
@@ -77,7 +91,7 @@ namespace OpenMS
 
       double sum = 0;
       double max_score_for_weight_calculation = .5;
-      double min_score_for_weight_calculation = .2;
+      double min_score_for_weight_calculation = .1;
       double iso_sum = std::accumulate(dscore_iso.begin(), dscore_iso.end(), .0);
       double noise_sum = std::accumulate(dscore_noise.begin(), dscore_noise.end(), .0);
 
@@ -86,22 +100,44 @@ namespace OpenMS
         sum += dscore_iso[i];
         if (sum > iso_sum * .8 || dscore_iso[i] < .5)
         {
-          max_score_for_weight_calculation = dscore_iso[i];
+          max_score_for_weight_calculation = std::min(max_score_for_weight_calculation, dscore_iso[i]);
           break;
         }
       }
 
-      sum = 0;
-      for (double i : dscore_noise)
+//      sum = 0;
+//      for (double i : dscore_noise)
+//      {
+//        sum += i;
+//        if (sum > noise_sum * .1 || i > .2)
+//        {
+//          min_score_for_weight_calculation = std::max(min_score_for_weight_calculation, i);
+//          break;
+//        }
+//      }
+
+      Size num_bin = std::min(Size(50), dscore_noise.size()/10);
+      auto qscore_vec = getDistVector(qscores, num_bin, min_score_for_weight_calculation, max_score_for_weight_calculation);
+      auto qscore_charge_vec = getDistVector(dscore_charge, num_bin, min_score_for_weight_calculation, max_score_for_weight_calculation);
+      auto qscore_noise_vec = getDistVector(dscore_noise, num_bin, min_score_for_weight_calculation, max_score_for_weight_calculation);
+      auto qscore_iso_vec = getDistVector(dscore_iso, num_bin, min_score_for_weight_calculation, max_score_for_weight_calculation);
+
+      for (int r = 0; r < qscore_vec.rows(); r++)
       {
-        sum += i;
-        if (sum > noise_sum * .1 || i > .2)
-        {
-          min_score_for_weight_calculation = i;
-          break;
-        }
+        double v = qscore_vec.getValue(r, 0);
+        v -= qscore_iso_vec.getValue(r, 0) + qscore_charge_vec.getValue(r, 0);
+        //v = std::max(v, .0);
+        qscore_vec.setValue(r, 0, v);
       }
 
+      auto calculated_vec = qscore_noise_vec.completeOrthogonalDecomposition().pseudoInverse() * qscore_vec;
+      noise_weight = calculated_vec.sum();
+      if (isnan(noise_weight)) noise_weight = 1.0;
+      noise_weight = std::max(noise_weight, 0.01);
+      //noise_weight = std::min(noise_weight, qscore_vec.sum() / qscore_noise_vec.sum());
+
+     // std::cout<<noise_weight << std::endl;
+      /*
       double a = 0, b = 0;
       for (double i : qscores)
       {
@@ -111,7 +147,7 @@ namespace OpenMS
           break;
         b++;
       }
-
+      //std::cout<< min_score_for_weight_calculation << " to " << max_score_for_weight_calculation << " total " << b;
       for (double i : dscore_charge)
       {
         if (i < min_score_for_weight_calculation)
@@ -120,7 +156,7 @@ namespace OpenMS
           break;
         b--;
       }
-
+      //std::cout<< " charge removed " << b;
       for (double i : dscore_iso)
       {
         if (i < min_score_for_weight_calculation)
@@ -129,7 +165,7 @@ namespace OpenMS
           break;
         b--;
       }
-
+      //std::cout<< " iso removed " << b;
       for (double i : dscore_noise)
       {
         if (i < min_score_for_weight_calculation)
@@ -138,16 +174,19 @@ namespace OpenMS
           break;
         a++;
       }
-
+      */
+      //std::cout<< " total noise " << a << " ratio " << b/a << std::endl;
       std::sort(qscores.rbegin(), qscores.rend());
       std::sort(dscore_iso.rbegin(), dscore_iso.rend());
       std::sort(dscore_noise.rbegin(), dscore_noise.rend());
       std::sort(dscore_charge.rbegin(), dscore_charge.rend());
 
-      noise_weight = b / a;
+
+      //noise_weight = noise_weight * noise_weight;
       auto& map_qvalue = qscore_qvalue_map[ms_level];
       double nom_i = 0, nom_c = 0, nom_n = 0;
       Size j_i = 0, j_c = 0, j_n = 0;
+
       for (Size i = 0; i < qscores.size(); i++)
       {
         double ts = qscores[i];

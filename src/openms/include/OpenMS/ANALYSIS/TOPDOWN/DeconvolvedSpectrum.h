@@ -137,6 +137,7 @@ namespace OpenMS
     const PeakGroup& operator[](Size i) const;
     PeakGroup& operator[](Size i);
     void push_back(const PeakGroup& pg);
+    void emplace_back(const PeakGroup& pg);
     void pop_back();
     PeakGroup& back();
     Size size() const noexcept;
