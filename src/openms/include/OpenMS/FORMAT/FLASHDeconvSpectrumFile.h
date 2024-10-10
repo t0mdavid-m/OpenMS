@@ -40,6 +40,7 @@ namespace OpenMS
           @param fs file stream to the output file
           @param file_name the output file name that the deconvolved masses will be written.
           @param avg averagine information to calculate monoisotopic and average mass difference within this function. In PeakGroup (peaks of DeconvolvedSpectrum) only monoisotopic mass is recorded. To write both monoisotopic and average masses, their mass difference should be calculated using this averagine information.
+          @param decoy_avg averagine for noise decoy
           @param tol mass tolerance
           @param write_detail if this is set, more detailed information on each mass will be written in the output file.
           @param record_decoy if set true, decoy and qvalue information will be written.
@@ -59,6 +60,7 @@ namespace OpenMS
                                        std::fstream& fs,
                                        const String& file_name,
                                        const FLASHHelperClasses::PrecalculatedAveragine& avg,
+                                       const FLASHHelperClasses::PrecalculatedAveragine& decoy_avg,
                                        double tol,
                                        bool write_detail,
                                        bool record_decoy, double noise_decoy_weight);

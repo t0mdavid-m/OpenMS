@@ -22,7 +22,9 @@ namespace OpenMS
   /// high and low charges are differently deconvolved. This value determines the (inclusive) threshold for low charge.
   inline const int low_charge_ = 10; // 10 inclusive
   inline const double tol_div_factor = 2.5;                           // use narrow tolerance for deconvolution and at the end use the input tolerance to filter out overlapping masses.
-
+ // inline const double noise_iso_delta_centroid = .9444;
+  //inline const double noise_iso_delta_profile = 2.8333,
+  //                    noise_iso_delta_centroid = .9444;//.9444; // 2.0556 .9444 1.0625
   SpectralDeconvolution::SpectralDeconvolution(): DefaultParamHandler("SpectralDeconvolution")
   {
     defaults_.setValue("tol", DoubleList {10.0, 10.0},
@@ -107,7 +109,7 @@ namespace OpenMS
   {
     // First prepare for decoy runs.
     iso_da_distance_ = target_decoy_type_ == PeakGroup::noise_decoy
-                         ? Constants::ISOTOPE_MASSDIFF_55K_U * sqrt(19.0) / 2.5
+                         ? Constants::ISOTOPE_MASSDIFF_55K_U * noise_iso_delta_//1.0263//.975//sqrt(19.0) / 2.5  // between 1 and 1.0526
                          : Constants::ISOTOPE_MASSDIFF_55K_U; // sqrt(13.0)/5.0 Da is used instead of C13 - C12 to make sure masses detected with this
                                                               // nonsensical mass difference are not true.
     previously_deconved_peak_masses_for_decoy_.clear();
@@ -220,7 +222,7 @@ namespace OpenMS
     return avg_;
   }
 
-  void SpectralDeconvolution::calculateAveragine(const bool use_RNA_averagine)
+  void SpectralDeconvolution::calculateAveragine(const bool use_RNA_averagine, const bool is_centroid)
   {
     CoarseIsotopePatternGenerator generator(300);
 
@@ -229,7 +231,7 @@ namespace OpenMS
     auto max_isotope = std::max(200, (int)iso.size());
 
     generator.setMaxIsotope(max_isotope);
-    avg_ = FLASHHelperClasses::PrecalculatedAveragine(50, current_max_mass_, 25, generator, use_RNA_averagine);
+    avg_ = FLASHHelperClasses::PrecalculatedAveragine(50, current_max_mass_, 25, generator, use_RNA_averagine, target_decoy_type_ == PeakGroup::noise_decoy? noise_iso_delta_ : -1, is_centroid);
     avg_.setMaxIsotopeIndex((int)(max_isotope - 1));
   }
 
@@ -240,7 +242,7 @@ namespace OpenMS
     int charge_range = current_max_charge_;
     for (int i = 0; i < charge_range; i++)
     {
-      filter_.push_back(-log(i + 1)); //+
+      filter_.push_back(-log(i + (target_decoy_type_ == PeakGroup::TargetDecoyType::noise_decoy? 2 : 1)));// + log(target_decoy_type_ == PeakGroup::TargetDecoyType::noise_decoy? (1.0 / sqrt(2.0) ) : 1) * (i % 2 == 0? -1 : 1)); //+
     }
 
     harmonic_filter_matrix_ = Matrix<double>(harmonic_charges_.size(), charge_range, .0);
@@ -823,7 +825,11 @@ namespace OpenMS
   {
     target_decoy_type_ = target_decoy_type;
     target_dspec_for_decoy_calculation_ = &target_dspec_for_decoy_calcualtion;
+
+    bool is_centroid = target_dspec_for_decoy_calcualtion.getOriginalSpectrum().empty()
+                       || (target_dspec_for_decoy_calcualtion.getOriginalSpectrum().getType(false) == SpectrumSettings::CENTROID);
   }
+
 
   // spectral deconvolution main function
   void SpectralDeconvolution::generatePeakGroupsFromSpectrum_()
@@ -1033,12 +1039,8 @@ namespace OpenMS
     deconvolved_spectrum_.setPeakGroups(filtered_peak_groups);
     deconvolved_spectrum_.sort();
 
-    removeOverlappingPeakGroups(deconvolved_spectrum_, 0, PeakGroup::TargetDecoyType::non_specific);
+    removeOverlappingPeakGroups_(deconvolved_spectrum_, 0, PeakGroup::TargetDecoyType::non_specific);
     removeChargeErrorPeakGroups_(deconvolved_spectrum_, target_decoy_type_);
-    removeOverlappingPeakGroups(deconvolved_spectrum_, tol, target_decoy_type_);
-
-    removeExcludedMasses_(deconvolved_spectrum_, previously_deconved_peak_masses_for_decoy_);
-    removeExcludedMasses_(deconvolved_spectrum_, excluded_masses_);
 
     // final harmonics removal
     selected = boost::dynamic_bitset<>(deconvolved_spectrum_.size());
@@ -1090,6 +1092,11 @@ namespace OpenMS
     }
 
     deconvolved_spectrum_.setPeakGroups(filtered_peak_groups);
+    removeOverlappingPeakGroups_(deconvolved_spectrum_, tol, target_decoy_type_);
+
+    removeExcludedMasses_(deconvolved_spectrum_, previously_deconved_peak_masses_for_decoy_);
+    removeExcludedMasses_(deconvolved_spectrum_, excluded_masses_);
+
   }
 
   float SpectralDeconvolution::getIsotopeCosineAndIsoOffset(double mono_mass,
@@ -1130,8 +1137,7 @@ namespace OpenMS
     {
       if (target_decoy_type != PeakGroup::TargetDecoyType::isotope_decoy && window_width >= 0 && abs(tmp_offset - iso_int_shift) > window_width)
         continue;
-      float tmp_cos = getCosine(per_isotope_intensities, min_isotope_index, max_isotope_index, iso, tmp_offset, min_iso_size,
-                                target_decoy_type == PeakGroup::TargetDecoyType::noise_decoy);
+      float tmp_cos = getCosine(per_isotope_intensities, min_isotope_index, max_isotope_index, iso, tmp_offset, min_iso_size);
       offset_cos.emplace_back(tmp_offset, tmp_cos);
     }
 
@@ -1178,25 +1184,15 @@ namespace OpenMS
                                          int a_end,
                                          const IsotopeDistribution& b,
                                          int offset,
-                                         int min_iso_len,
-                                         bool decoy)
+                                         int min_iso_len)
   {
-    float n = .0, a_norm = .0, b_norm = decoy ? .0 : 1.0f;
+    float n = .0, a_norm = .0, b_norm = 1.0f;
     a_start = std::max(0, a_start);
     a_end = std::min((int)a.size(), a_end);
 
     if (a_end - a_start < min_iso_len) { return 0; }
 
     float max_intensity = 0;
-
-    if (decoy)
-    {
-      for (int i = 0; i < (int)b.size(); i++)
-      {
-        int ni = (i % 2 == 0 ? i + 1 : i - 1) % (int)b.size();
-        b_norm += b[ni].getIntensity() * b[ni].getIntensity();
-      }
-    }
 
     for (int j = a_start; j < a_end; j++)
     {
@@ -1215,13 +1211,7 @@ namespace OpenMS
       else if (i >= (int)b.size() || i < 0 || b[i].getIntensity() <= 0) { continue; }
       else
       {
-        if (decoy)
-        {
-          int ni = (i % 2 == 0 ? i + 1 : i - 1) % (int)b.size();
-          n += a[j] * b[ni].getIntensity(); //
-        }
-        else
-          n += a[j] * b[i].getIntensity();
+        n += a[j] * b[i].getIntensity();
       }
     }
 
@@ -1300,7 +1290,7 @@ namespace OpenMS
     dspec.setPeakGroups(filtered_pg_vec);
   }
 
-  void SpectralDeconvolution::removeOverlappingPeakGroups(DeconvolvedSpectrum& dspec, double tol, PeakGroup::TargetDecoyType target_decoy_type)
+  void SpectralDeconvolution::removeOverlappingPeakGroups_(DeconvolvedSpectrum& dspec, double tol, PeakGroup::TargetDecoyType target_decoy_type)
   {
     if (dspec.empty()) { return; }
 

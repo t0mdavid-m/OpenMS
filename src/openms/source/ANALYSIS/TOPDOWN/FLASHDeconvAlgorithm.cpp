@@ -321,7 +321,7 @@ namespace OpenMS
 
         if (report_decoy_)
         {
-  #pragma omp parallel sections default(none) shared(spec, scan_number, precursor_pg)
+  #pragma omp parallel sections default(none) shared(spec, scan_number, precursor_pg, deconvolved_spectrum)
           {
   #pragma omp section
             sd_charge_decoy_.performSpectrumDeconvolution(spec, scan_number, precursor_pg);
@@ -367,6 +367,12 @@ namespace OpenMS
     return sd_.getAveragine();
   }
 
+  const FLASHHelperClasses::PrecalculatedAveragine& FLASHDeconvAlgorithm::getDecoyAveragine()
+  {
+    if (!report_decoy_) return getAveragine();
+    return sd_noise_decoy_.getAveragine();
+  }
+
   void FLASHDeconvAlgorithm::run(MSExperiment& map,
                                  std::vector<DeconvolvedSpectrum>& deconvolved_spectra,
                                  std::vector<FLASHHelperClasses::MassFeature>& deconvolved_features)
@@ -385,17 +391,24 @@ namespace OpenMS
 
     if (report_decoy_)
     {
-      sd_noise_decoy_.setParameters(sd_param);
-      sd_noise_decoy_.setAveragine(avg);
+      bool is_centroid = true;
+      for (auto& it : map)
+      {
+        if (it.empty()) continue;
+        is_centroid = it.getType(false) == SpectrumSettings::CENTROID;
+        break;
+      }
+                                            sd_noise_decoy_.setParameters(sd_param);
       sd_noise_decoy_.setTargetDecoyType(PeakGroup::TargetDecoyType::noise_decoy, sd_.getDeconvolvedSpectrum()); // noise
+      sd_noise_decoy_.calculateAveragine(use_RNA_averagine_, is_centroid); // for noise, averagine needs to be calculated differently.
 
       sd_isotope_decoy_.setParameters(sd_param);
-      sd_isotope_decoy_.setAveragine(avg);
       sd_isotope_decoy_.setTargetDecoyType(PeakGroup::TargetDecoyType::isotope_decoy, sd_.getDeconvolvedSpectrum()); // isotope
+      sd_isotope_decoy_.setAveragine(avg);
 
       sd_charge_decoy_.setParameters(sd_param);
-      sd_charge_decoy_.setAveragine(avg);
       sd_charge_decoy_.setTargetDecoyType(PeakGroup::TargetDecoyType::charge_decoy, sd_.getDeconvolvedSpectrum()); // charge
+      sd_charge_decoy_.setAveragine(avg);
     }
 
     setLogType(CMD);

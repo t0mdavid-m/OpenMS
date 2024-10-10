@@ -63,6 +63,10 @@ namespace OpenMS
     /// get calculated averagine. Call after calculateAveragine is called.
     const FLASHHelperClasses::PrecalculatedAveragine& getAveragine();
 
+    /// get calculated decoy averagine. Call after calculateAveragine is called.
+    const FLASHHelperClasses::PrecalculatedAveragine& getDecoyAveragine();
+
+
     /// get noise decoy weight
     double getNoiseDecoyWeight()
     {

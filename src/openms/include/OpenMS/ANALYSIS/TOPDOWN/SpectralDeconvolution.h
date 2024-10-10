@@ -79,8 +79,9 @@ namespace OpenMS
 
     /** @brief precalculate averagine (for predefined mass bins) to speed up averagine generation
         @param use_RNA_averagine if set, averagine for RNA (nucleotides) is calculated
+        @param is_centroid this is for noise averagine calculation. For noise, centroid and profile averagines are different.
      */
-    void calculateAveragine(bool use_RNA_averagine);
+    void calculateAveragine(bool use_RNA_averagine, const bool is_centroid = true);
 
     /// convert double to nominal mass
     static int getNominalMass(double mass);
@@ -92,9 +93,8 @@ namespace OpenMS
      * @param b vector b
      * @param offset element index offset between a and b
      * @param min_iso_len minimum isotope size. If isotope size is less than this, return 0
-     * @param decoy if set, distorted isotope pattern is used
      */
-    static float getCosine(const std::vector<float>& a, int a_start, int a_end, const IsotopeDistribution& b, int offset, int min_iso_len, bool decoy = false);
+    static float getCosine(const std::vector<float>& a, int a_start, int a_end, const IsotopeDistribution& b, int offset, int min_iso_len);
 
 
     /** @brief Examine intensity distribution over isotope indices. Also determines the most plausible isotope index or, monoisotopic mono_mass
@@ -120,9 +120,6 @@ namespace OpenMS
      */
     void setTargetDecoyType(PeakGroup::TargetDecoyType target_decoy_type, const DeconvolvedSpectrum& target_dspec_for_decoy_calcualtion);
 
-    /// filter out overlapping masses
-    static void removeOverlappingPeakGroups(DeconvolvedSpectrum& dspec, double tol, PeakGroup::TargetDecoyType target_decoy_type = PeakGroup::TargetDecoyType::target);
-
     /// minimum isotopologue count in a peak group
     const static int min_iso_size = 2;
 
@@ -131,8 +128,6 @@ namespace OpenMS
 
   private:
     /// FLASHDeconv parameters
-
-
 
     /// allowed isotope error in deconvolved mass to calculate qvalue
     int allowed_iso_error_ = 1;
@@ -149,6 +144,8 @@ namespace OpenMS
     double current_max_mass_;
     /// max mass is max_mass for MS1 and 50 for MS2
     double current_min_mass_;
+    /// isotope distance for noise decoy
+    double noise_iso_delta_ = .9444;
     /// minimum number of peaks supporting a mass minus one
     const static int min_support_peak_count_ = 2;
     /// tolerance in ppm for each MS level
@@ -247,6 +244,9 @@ namespace OpenMS
 
     /// Generate peak groups from the input spectrum
     void generatePeakGroupsFromSpectrum_();
+
+    /// filter out overlapping masses
+    void removeOverlappingPeakGroups_(DeconvolvedSpectrum& dspec, double tol, PeakGroup::TargetDecoyType target_decoy_type = PeakGroup::TargetDecoyType::target);
 
     /** @brief Update mass_bins_. It select candidate mass bins using the universal pattern, eliminate possible harmonic masses. This function does not perform deisotoping
         @param mz_intensities per mz bin intensity

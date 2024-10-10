@@ -21,7 +21,7 @@ namespace OpenMS
   inline std::default_random_engine generator_;
   inline std::uniform_real_distribution<double> distribution_(0.0,1.0);
 
-  void FLASHDeconvSpectrumFile::writeDeconvolvedMasses(DeconvolvedSpectrum& dspec, std::fstream& fs, const String& file_name, const FLASHHelperClasses::PrecalculatedAveragine& avg, double tol,
+  void FLASHDeconvSpectrumFile::writeDeconvolvedMasses(DeconvolvedSpectrum& dspec, std::fstream& fs, const String& file_name, const FLASHHelperClasses::PrecalculatedAveragine& avg, const FLASHHelperClasses::PrecalculatedAveragine& decoy_avg, double tol,
                                                        const bool write_detail, const bool report_decoy, const double noise_decoy_weight)
   {
     static std::vector<uint> indices {};
@@ -54,8 +54,9 @@ namespace OpenMS
         }
       }
 
+      auto avg_ = pg.getTargetDecoyType() == PeakGroup::TargetDecoyType::noise_decoy? decoy_avg : avg;
       const double mono_mass = pg.getMonoMass();
-      const double avg_mass = pg.getMonoMass() + avg.getAverageMassDelta(mono_mass);
+      const double avg_mass = pg.getMonoMass() + avg_.getAverageMassDelta(mono_mass);
       const double intensity = pg.getIntensity();
 
       auto charge_range = pg.getAbsChargeRange();
@@ -74,7 +75,7 @@ namespace OpenMS
 
       if (write_detail)
       {
-        auto noisy_peaks = pg.recruitAllPeaksInSpectrum(dspec.getOriginalSpectrum(), tol * 1e-6, avg, pg.getMonoMass(), false);
+        auto noisy_peaks = pg.recruitAllPeaksInSpectrum(dspec.getOriginalSpectrum(), tol * 1e-6, avg_, pg.getMonoMass(), false);
 
         std::sort(noisy_peaks.begin(), noisy_peaks.end());
         fs << std::fixed << std::setprecision(2);

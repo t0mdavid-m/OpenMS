@@ -143,7 +143,7 @@ CoarseIsotopePatternGenerator generator = CoarseIsotopePatternGenerator();
 PrecalculatedAveragine p_avg_test;
 START_SECTION(([FLASHDeconvHelperStructs::PrecalculatedAveragine] PrecalculatedAveragine(const double min_mass, const double max_mass, const double delta, CoarseIsotopePatternGenerator& generator, const bool use_RNA_averagine)))
 {
-  p_avg_test = PrecalculatedAveragine(50, 100, 25, generator, false);
+  p_avg_test = PrecalculatedAveragine(50, 100, 25, generator, false, -1);
   Size temp_a_idx = p_avg_test.getApexIndex(75);
   double temp_m_diff = p_avg_test.getAverageMassDelta(75);
   TEST_EQUAL(temp_a_idx, 0);

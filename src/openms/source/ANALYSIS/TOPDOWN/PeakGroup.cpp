@@ -87,7 +87,7 @@ void PeakGroup::updatePerChargeCos_(const FLASHHelperClasses::PrecalculatedAvera
       getPerIsotopeIntensities_(current_per_isotope_intensities, min_isotope_index, max_isotope_index, abs_charge, 0, tol);
       float cos_score
         = SpectralDeconvolution::getCosine(current_per_isotope_intensities, min_isotope_index, max_isotope_index, iso_dist, 0,
-                                           SpectralDeconvolution::min_iso_size, target_decoy_type_ == PeakGroup::TargetDecoyType::noise_decoy);
+                                           SpectralDeconvolution::min_iso_size);
       setChargeIsotopeCosine(abs_charge, cos_score); //
     }
   }
