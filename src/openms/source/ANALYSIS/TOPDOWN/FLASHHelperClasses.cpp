@@ -301,7 +301,7 @@ FLASHHelperClasses::PrecalculatedAveragine::PrecalculatedAveragine(const double 
     {
       if (this->seq_ == a.seq_)
         return (this->c_mass_ + this->n_mass_) < (a.c_mass_ + a.n_mass_);
-      return this->seq_ < a.seq_;
+      return this->seq_ > a.seq_;
     }
     return this->length_ < a.length_;
   }
@@ -312,7 +312,7 @@ FLASHHelperClasses::PrecalculatedAveragine::PrecalculatedAveragine(const double 
     {
       if (this->seq_ == a.seq_)
         return (this->c_mass_ + this->n_mass_) > (a.c_mass_ + a.n_mass_);
-      return this->seq_ > a.seq_;
+      return this->seq_ < a.seq_;
     }
     return this->length_ > a.length_;
   }

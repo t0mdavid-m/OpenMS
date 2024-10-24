@@ -51,15 +51,25 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   defaults_.setValue("keep_decoy", "false", "To keep decoy hits");
   defaults_.setValidStrings("keep_decoy", {"true", "false"});
 
-  defaults_.insert("tag:", FLASHTaggerAlgorithm().getDefaults());
-  defaults_.insert("ex:", FLASHExtenderAlgorithm().getDefaults());
+  defaults_.setValue("ion_type", std::vector<std::string> {"b", "y"}, "Ion types to consider");
+  defaults_.setValidStrings("ion_type", {"b", "c", "a", "y", "z", "x", "zp1", "zp2"});
+
+  auto tparam = FLASHTaggerAlgorithm().getDefaults();
+  tparam.remove("ion_type");
+  defaults_.insert("tag:", tparam);
+  auto eparam = FLASHExtenderAlgorithm().getDefaults();
+  eparam.remove("ion_type");
+
+  defaults_.insert("ex:", eparam);
   defaultsToParam_();
 }
 
 void FLASHTnTAlgorithm::updateMembers_()
 {
   tagger_param_ = param_.copy("tag:", true);
+  tagger_param_.setValue("ion_type", param_.getValue("ion_type"));
   extender_param_ = param_.copy("ex:", true);
+  extender_param_.setValue("ion_type", param_.getValue("ion_type"));
   prsm_fdr_ = param_.getValue("prsm_fdr");
   pro_fdr_ = param_.getValue("pro_fdr");
   keep_decoy_ = param_.getValue("keep_decoy").toString() == "true";

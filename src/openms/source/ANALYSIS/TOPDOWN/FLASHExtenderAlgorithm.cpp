@@ -439,9 +439,9 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
 
   ion_types_str_ = param_.getValue("ion_type").toStringVector();
 
-  Residue empty;
   for (const auto& ion_str : ion_types_str_)
   {
+
     if (ion_str == "a") { prefix_shifts_.push_back(Residue::getInternalToAIon().getMonoWeight()); }
     else if (ion_str == "b") { prefix_shifts_.push_back(Residue::getInternalToBIon().getMonoWeight()); }
     else if (ion_str == "c") { prefix_shifts_.push_back(Residue::getInternalToCIon().getMonoWeight()); }
