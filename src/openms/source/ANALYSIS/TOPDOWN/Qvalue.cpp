@@ -141,7 +141,7 @@ namespace OpenMS
         noise_weight = calculated_vec_non_negative.row(0)[0];
       }
 
-      if (isnan(noise_weight)) noise_weight = 1.0;
+      if (std::isnan(noise_weight)) noise_weight = 1.0;
       noise_weight = std::max(noise_weight, 0.01);
       //noise_weight = (qscore_noise_vec.completeOrthogonalDecomposition().pseudoInverse() * qscore_vec);
 
