@@ -39,7 +39,7 @@ MSExperiment createPeakMapWithRTs(std::vector<double> RTs)
 
 MSExperiment setMSLevel(MSExperiment exp, std::vector<int> ms_levels)
 {
-  for (int i = 0; i < ms_levels.size(); ++i)
+  for (size_t i = 0; i < ms_levels.size(); ++i)
   {
     exp[i].setMSLevel(ms_levels[i]);
   }
@@ -1213,6 +1213,136 @@ START_SECTION((int getPrecursorSpectrum(int zero_based_index) const))
 }
 END_SECTION
 
+START_SECTION((ConstIterator getFirstProductSpectrum(ConstIterator iterator) const))
+{
+  PeakMap exp;
+  exp.resize(5);
+
+  // Set MS levels
+  exp[0].setMSLevel(1);
+  exp[1].setMSLevel(2);
+  exp[2].setMSLevel(1);
+  exp[3].setMSLevel(2);
+  exp[4].setMSLevel(2);
+
+  // Set NativeIDs
+  exp[0].setNativeID("scan=1");
+  exp[1].setNativeID("scan=2");
+  exp[2].setNativeID("scan=3");
+  exp[3].setNativeID("scan=4");
+  exp[4].setNativeID("scan=5");
+
+  // Set up the 'spectrum_ref' in the precursors of the product spectra
+  Precursor precursor1;
+  precursor1.setMetaValue("spectrum_ref", "scan=1"); // Reference to exp[0]
+  exp[1].getPrecursors().push_back(precursor1);
+
+  Precursor precursor2;
+  precursor2.setMetaValue("spectrum_ref", "scan=3"); // Reference to exp[2]
+  exp[3].getPrecursors().push_back(precursor2);
+
+  Precursor precursor3;
+  precursor3.setMetaValue("spectrum_ref", "scan=3"); // Another reference to exp[2]
+  exp[4].getPrecursors().push_back(precursor3);
+
+  // Test getFirstProductSpectrum
+
+  // From exp[0], expect to get exp[1] as the first product spectrum
+  TEST_EQUAL(exp.getFirstProductSpectrum(exp.begin()) == exp.begin() + 1, true)
+
+  // From exp[1], expect to get spectra_.end() since there is no higher MS level
+  TEST_EQUAL(exp.getFirstProductSpectrum(exp.begin() + 1) == exp.end(), true)
+
+  // From exp[2], expect to get exp[3] as the first product spectrum
+  TEST_EQUAL(exp.getFirstProductSpectrum(exp.begin() + 2) == exp.begin() + 3, true)
+
+  // From exp[3], expect to get spectra_.end() since there is no higher MS level
+  TEST_EQUAL(exp.getFirstProductSpectrum(exp.begin() + 3) == exp.end(), true)
+
+  // From exp[4], expect to get spectra_.end()
+  TEST_EQUAL(exp.getFirstProductSpectrum(exp.begin() + 4) == exp.end(), true)
+
+  // Test when iterator is spectra_.end()
+  TEST_EQUAL(exp.getFirstProductSpectrum(exp.end()) == exp.end(), true)
+
+  // Now change the MS levels to only MS1 spectra
+  for (Size i = 0; i < exp.size(); ++i)
+  {
+    exp[i].setMSLevel(1);
+  }
+
+  // Test again with only MS1 spectra
+  TEST_EQUAL(exp.getFirstProductSpectrum(exp.begin()) == exp.end(), true)
+  TEST_EQUAL(exp.getFirstProductSpectrum(exp.begin() + 1) == exp.end(), true)
+  TEST_EQUAL(exp.getFirstProductSpectrum(exp.begin() + 2) == exp.end(), true)
+  TEST_EQUAL(exp.getFirstProductSpectrum(exp.begin() + 3) == exp.end(), true)
+  TEST_EQUAL(exp.getFirstProductSpectrum(exp.begin() + 4) == exp.end(), true)
+}
+END_SECTION
+
+START_SECTION((int getFirstProductSpectrum(int zero_based_index) const))
+{
+  PeakMap exp;
+  exp.resize(5);
+
+  // Set MS levels
+  exp[0].setMSLevel(1);
+  exp[1].setMSLevel(2);
+  exp[2].setMSLevel(1);
+  exp[3].setMSLevel(2);
+  exp[4].setMSLevel(2);
+
+  // Set NativeIDs
+  exp[0].setNativeID("scan=1");
+  exp[1].setNativeID("scan=2");
+  exp[2].setNativeID("scan=3");
+  exp[3].setNativeID("scan=4");
+  exp[4].setNativeID("scan=5");
+
+  // Set up the 'spectrum_ref' in the precursors of the product spectra
+  Precursor precursor1;
+  precursor1.setMetaValue("spectrum_ref", "scan=1"); // Reference to exp[0]
+  exp[1].getPrecursors().push_back(precursor1);
+
+  Precursor precursor2;
+  precursor2.setMetaValue("spectrum_ref", "scan=3"); // Reference to exp[2]
+  exp[3].getPrecursors().push_back(precursor2);
+
+  Precursor precursor3;
+  precursor3.setMetaValue("spectrum_ref", "scan=3"); // Another reference to exp[2]
+  exp[4].getPrecursors().push_back(precursor3);
+
+  // Test getFirstProductSpectrum
+
+  // From index 0, expect to get index 1
+  TEST_EQUAL(exp.getFirstProductSpectrum(0) == 1, true)
+
+  // From index 1, expect to get -1 (no higher MS level with reference)
+  TEST_EQUAL(exp.getFirstProductSpectrum(1) == -1, true)
+
+  // From index 2, expect to get index 3
+  TEST_EQUAL(exp.getFirstProductSpectrum(2) == 3, true)
+
+  // From index 3, expect to get -1
+  TEST_EQUAL(exp.getFirstProductSpectrum(3) == -1, true)
+
+  // From index 4, expect to get -1
+  TEST_EQUAL(exp.getFirstProductSpectrum(4) == -1, true)
+
+  // Now change the MS levels to only MS1 spectra
+  for (Size i = 0; i < exp.size(); ++i)
+  {
+    exp[i].setMSLevel(1);
+  }
+
+  // Test again with only MS1 spectra
+  TEST_EQUAL(exp.getFirstProductSpectrum(0) == -1, true)
+  TEST_EQUAL(exp.getFirstProductSpectrum(1) == -1, true)
+  TEST_EQUAL(exp.getFirstProductSpectrum(2) == -1, true)
+  TEST_EQUAL(exp.getFirstProductSpectrum(3) == -1, true)
+  TEST_EQUAL(exp.getFirstProductSpectrum(4) == -1, true)
+}
+END_SECTION
 
 START_SECTION((bool clearMetaDataArrays()))
 {
@@ -1539,6 +1669,281 @@ START_SECTION( std::ostream& operator<<(std::ostream& os, const MSExperiment& ch
   TEST_EQUAL(String(os.str()).hasSubstring("MSCHROMATOGRAM BEGIN"), true);
   TEST_EQUAL(String(os.str()).hasSubstring("47.11"), true);
   TEST_EQUAL(String(os.str()).hasSubstring("10.77"), true);
+}
+END_SECTION
+
+START_SECTION((template<class MzReductionFunctionType> std::vector<std::vector<MSExperiment::CoordinateType>> aggregate(const std::vector<std::pair<RangeMZ, RangeRT>>& mz_rt_ranges, unsigned int ms_level, MzReductionFunctionType func_mz_reduction) const))
+{
+    // Create test experiment with known data
+    PeakMap exp;
+    exp.resize(4);
+
+    // First spectrum (MS1) at RT=1.0
+    exp[0] = MSSpectrum{
+        {100.0, 1000.0},
+        {200.0, 2000.0},
+        {300.0, 3000.0}
+    };    
+    exp[0].setRT(1.0);
+    exp[0].setMSLevel(1);
+
+    // Second spectrum (MS2) at RT=2.0
+    exp[1] = MSSpectrum{
+      {150.0, 1500.0},
+      {250.0, 2500.0}
+    };
+    exp[1].setRT(2.0);
+    exp[1].setMSLevel(2);
+
+    // Third spectrum (MS1) at RT=3.0
+    exp[2] = MSSpectrum{
+        {100.0, 1100.0},
+        {200.0, 2100.0},
+        {300.0, 3100.0}
+    };
+    exp[2].setRT(3.0);
+    exp[2].setMSLevel(1);
+
+    // Fourth spectrum (MS1) at RT=4.0
+    exp[3] = MSSpectrum{
+        {100.0, 1200.0},
+        {200.0, 2200.0},
+        {300.0, 3200.0}
+    };
+    exp[3].setRT(4.0);
+    exp[3].setMSLevel(1);
+
+    exp.updateRanges();
+
+    // Test: Normal case - MS1 spectra
+    {
+        std::vector<std::pair<RangeMZ, RangeRT>> ranges;
+        // Range 1: covers first peak of first and third spectrum
+        ranges.push_back(std::make_pair(
+            RangeMZ(90.0, 110.0),
+            RangeRT(0.0, 3.5)
+        ));
+        // Range 2: covers second peak of all MS1 spectra
+        ranges.push_back(std::make_pair(
+            RangeMZ(190.0, 210.0),
+            RangeRT(0.0, 5.0)
+        ));
+
+        // Simple intensity reduction function
+        auto result = exp.aggregate(ranges, 1, 
+          [](MSSpectrum::ConstIterator begin_it, MSSpectrum::ConstIterator /*end_it*/)->double // return first intensity of peaks in m/z range 
+          { 
+            return begin_it->getIntensity();
+          });
+
+        // Check results
+        TEST_EQUAL(result.size(), 2);
+        
+        // Check Range 1 results
+        TEST_EQUAL(result[0].size(), 2);  // Should cover 2 spectra
+        TEST_EQUAL(result[0][0], 1000.0); // First spectrum intensity
+        TEST_EQUAL(result[0][1], 1100.0); // Third spectrum intensity
+        
+        // Check Range 2 results
+        TEST_EQUAL(result[1].size(), 3);   // Should cover 3 spectra
+        TEST_EQUAL(result[1][0], 2000.0);  // First spectrum intensity
+        TEST_EQUAL(result[1][1], 2100.0);  // Third spectrum intensity
+        TEST_EQUAL(result[1][2], 2200.0);  // Fourth spectrum intensity
+    }
+
+    // Test 4: MS2 spectra
+    {
+        std::vector<std::pair<RangeMZ, RangeRT>> ranges;
+        ranges.push_back(std::make_pair(
+            RangeMZ(140.0, 160.0),
+            RangeRT(1.5, 2.5)
+        ));
+
+        auto result = exp.aggregate(ranges, 2, 
+          [](const MSSpectrum::ConstIterator begin_it, const MSSpectrum::ConstIterator /*end_it*/)->double // return first intensity of peaks in m/z range 
+          { 
+            return begin_it->getIntensity();
+          });
+
+        TEST_EQUAL(result.size(), 1);
+        TEST_EQUAL(result[0].size(), 1);
+        TEST_EQUAL(result[0][0], 1500.0);
+    }
+
+    // Test 5: Complex reduction function (average intensity)
+    {
+        std::vector<std::pair<RangeMZ, RangeRT>> ranges;
+        ranges.push_back(std::make_pair(
+            RangeMZ(90.0, 310.0),  // Covers all peaks
+            RangeRT(0.0, 5.0)      // Covers all spectra
+        ));
+
+        // mean intensity in m/z range
+        auto result = exp.aggregate(ranges, 1, 
+            [](const MSSpectrum::ConstIterator begin_it, const MSSpectrum::ConstIterator end_it) 
+            { 
+                if (begin_it == end_it) return 0.0; // Check for empty range before accumulation
+
+                double acc = std::accumulate(begin_it, end_it, 0.0, 
+                    [](double a, const Peak1D& b) { return a + b.getIntensity(); });
+
+                return acc / static_cast<double>(std::distance(begin_it, end_it));
+            });
+        TEST_EQUAL(result.size(), 1);
+        TEST_EQUAL(result[0].size(), 3);
+        TEST_REAL_SIMILAR(result[0][0], 2000.0);  // Average of first spectrum
+        TEST_REAL_SIMILAR(result[0][1], 2100.0);  // Average of third spectrum
+        TEST_REAL_SIMILAR(result[0][2], 2200.0);  // Average of fourth spectrum
+    }
+}
+END_SECTION
+
+START_SECTION((template<class MzReductionFunctionType> std::vector<MSChromatogram> extractXICs(const std::vector<std::pair<RangeMZ, RangeRT>>& mz_rt_ranges, unsigned int ms_level, MzReductionFunctionType func_mz_reduction = SumIntensityReduction()) const))
+{
+    // Create test experiment with known data
+    PeakMap exp;
+    exp.resize(4);
+
+    // First spectrum (MS1) at RT=1.0
+    exp[0] = MSSpectrum{
+        {100.0, 1000.0},
+        {200.0, 2000.0},
+        {300.0, 3000.0}
+    };
+    exp[0].setRT(1.0);
+    exp[0].setMSLevel(1);
+
+    // Second spectrum (MS2) at RT=2.0
+    exp[1] = MSSpectrum{
+        {150.0, 1500.0},
+        {250.0, 2500.0}
+    };
+    exp[1].setRT(2.0);
+    exp[1].setMSLevel(2);
+
+    // Third spectrum (MS1) at RT=3.0
+    exp[2] = MSSpectrum{
+        {100.0, 1100.0},
+        {200.0, 2100.0},
+        {300.0, 3100.0}
+    };
+    exp[2].setRT(3.0);
+    exp[2].setMSLevel(1);
+
+    // Fourth spectrum (MS1) at RT=4.0
+    exp[3] = MSSpectrum{
+        {100.0, 1200.0},
+        {200.0, 2200.0},
+        {300.0, 3200.0}
+    };
+    exp[3].setRT(4.0);
+    exp[3].setMSLevel(1);
+
+    // Update the ranges of the experiment
+    exp.updateRanges();
+
+    // Test 1: Normal case - MS1 spectra using default reduction function
+    {
+        std::vector<std::pair<RangeMZ, RangeRT>> ranges;
+        // Range 1: covers first peak of all MS1 spectra
+        ranges.push_back(std::make_pair(
+            RangeMZ(90.0, 110.0),
+            RangeRT(0.0, 5.0)
+        ));
+        // Range 2: covers second peak of all MS1 spectra
+        ranges.push_back(std::make_pair(
+            RangeMZ(190.0, 210.0),
+            RangeRT(0.0, 5.0)
+        ));
+
+        // Use default reduction function (SumIntensityReduction)
+        auto chromatograms = exp.extractXICs(ranges, 1);
+
+        // Check results
+        TEST_EQUAL(chromatograms.size(), 2);
+
+        // Check Range 1 chromatogram
+        TEST_EQUAL(chromatograms[0].size(), 3); // Should cover 3 spectra
+        TEST_REAL_SIMILAR(chromatograms[0][0].getRT(), 1.0);
+        TEST_REAL_SIMILAR(chromatograms[0][0].getIntensity(), 1000.0);
+
+        TEST_REAL_SIMILAR(chromatograms[0][1].getRT(), 3.0);
+        TEST_REAL_SIMILAR(chromatograms[0][1].getIntensity(), 1100.0);
+
+        TEST_REAL_SIMILAR(chromatograms[0][2].getRT(), 4.0);
+        TEST_REAL_SIMILAR(chromatograms[0][2].getIntensity(), 1200.0);
+
+        // Check m/z value of the chromatogram
+        TEST_REAL_SIMILAR(chromatograms[0].getProduct().getMZ(), (90.0 + 110.0) / 2.0);
+
+        // Check Range 2 chromatogram
+        TEST_EQUAL(chromatograms[1].size(), 3); // Should cover 3 spectra
+        TEST_REAL_SIMILAR(chromatograms[1][0].getRT(), 1.0);
+        TEST_REAL_SIMILAR(chromatograms[1][0].getIntensity(), 2000.0);
+
+        TEST_REAL_SIMILAR(chromatograms[1][1].getRT(), 3.0);
+        TEST_REAL_SIMILAR(chromatograms[1][1].getIntensity(), 2100.0);
+
+        TEST_REAL_SIMILAR(chromatograms[1][2].getRT(), 4.0);
+        TEST_REAL_SIMILAR(chromatograms[1][2].getIntensity(), 2200.0);
+
+        // Check m/z value of the chromatogram
+        TEST_REAL_SIMILAR(chromatograms[1].getProduct().getMZ(), (190.0 + 210.0) / 2.0);
+    }
+
+    // Test 2: MS2 spectra
+    {
+        std::vector<std::pair<RangeMZ, RangeRT>> ranges;
+        ranges.push_back(std::make_pair(
+            RangeMZ(140.0, 160.0),
+            RangeRT(1.5, 2.5)
+        ));
+
+        auto chromatograms = exp.extractXICs(ranges, 2);
+
+        TEST_EQUAL(chromatograms.size(), 1);
+        TEST_EQUAL(chromatograms[0].size(), 1);
+        TEST_REAL_SIMILAR(chromatograms[0][0].getRT(), 2.0);
+        TEST_REAL_SIMILAR(chromatograms[0][0].getIntensity(), 1500.0);
+
+        // Check m/z value of the chromatogram
+        TEST_REAL_SIMILAR(chromatograms[0].getProduct().getMZ(), (140.0 + 160.0) / 2.0);
+    }
+
+    // Test 3: Custom reduction function (average intensity)
+    {
+        std::vector<std::pair<RangeMZ, RangeRT>> ranges;
+        ranges.push_back(std::make_pair(
+            RangeMZ(90.0, 310.0),  // Covers all peaks
+            RangeRT(0.0, 5.0)      // Covers all spectra
+        ));
+
+        // Mean intensity in m/z range
+        auto chromatograms = exp.extractXICs(ranges, 1,
+            [](MSSpectrum::ConstIterator begin_it, MSSpectrum::ConstIterator end_it) -> double
+            {
+                if (begin_it == end_it) return 0.0;
+
+                double acc = std::accumulate(begin_it, end_it, 0.0,
+                    [](double a, const Peak1D& b) { return a + b.getIntensity(); });
+                return acc / static_cast<double>(std::distance(begin_it, end_it));
+            });
+
+        TEST_EQUAL(chromatograms.size(), 1);
+        TEST_EQUAL(chromatograms[0].size(), 3);
+
+        TEST_REAL_SIMILAR(chromatograms[0][0].getRT(), 1.0);
+        TEST_REAL_SIMILAR(chromatograms[0][0].getIntensity(), 2000.0); // Average of [1000, 2000, 3000]
+
+        TEST_REAL_SIMILAR(chromatograms[0][1].getRT(), 3.0);
+        TEST_REAL_SIMILAR(chromatograms[0][1].getIntensity(), 2100.0); // Average of [1100, 2100, 3100]
+
+        TEST_REAL_SIMILAR(chromatograms[0][2].getRT(), 4.0);
+        TEST_REAL_SIMILAR(chromatograms[0][2].getIntensity(), 2200.0); // Average of [1200, 2200, 3200]
+
+        // Check m/z value of the chromatogram
+        TEST_REAL_SIMILAR(chromatograms[0].getProduct().getMZ(), (90.0 + 310.0) / 2.0);
+    }
 }
 END_SECTION
 
