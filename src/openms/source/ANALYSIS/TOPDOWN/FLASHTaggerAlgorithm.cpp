@@ -163,8 +163,12 @@ void FLASHTaggerAlgorithm::constructDAG_(FLASHHelperClasses::DAG& dag,
     Size vertex1 = getVertex_(end_index, scores[end_index], 0, 0, 0);
     Size vertex2 = getVertex_(0, 0, 0, 0, 0);
 
-    dag.addEdge(vertex1, vertex2, visited); // move to DAG?
-
+    bool connected = dag.addEdge(vertex1, vertex2, visited); // move to DAG?
+    if (! connected)
+    {
+      end_index++;
+      continue;
+    }
     // from an edge i, j to class edge.  for each i, j make a unique key. key to an edge.
 
     while (start_index < end_index && r - mzs[start_index] > max_edge_mass_)
@@ -417,7 +421,7 @@ void FLASHTaggerAlgorithm::run(const DeconvolvedSpectrum& deconvolved_spectrum, 
 int FLASHTaggerAlgorithm::getPeakGroupScore(const PeakGroup& peak_group)
 {
   // (int)round(5 * log10(std::max(1e-1, pg.getQscore() / std::max(1e-1, (1.0 - pg.getQscore())))));
-  return (int)round(max_peak_group_score * peak_group.getQscore());
+  return std::max(1, (int)round(max_peak_group_score * peak_group.getQscore()));
 }
 
 void FLASHTaggerAlgorithm::getTags_(const DeconvolvedSpectrum& dspec, double ppm, int mode) // mode 0 : common 1 : n 2 : c term

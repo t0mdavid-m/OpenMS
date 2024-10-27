@@ -51,7 +51,7 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   defaults_.setValue("keep_decoy", "false", "To keep decoy hits");
   defaults_.setValidStrings("keep_decoy", {"true", "false"});
 
-  defaults_.setValue("ion_type", std::vector<std::string> {"b", "y"}, "Ion types to consider");
+  defaults_.setValue("ion_type", std::vector<std::string> {"b", "y"}, "Ion types to consider. Write from the most to the least dominant ion types");
   defaults_.setValidStrings("ion_type", {"b", "c", "a", "y", "z", "x", "zp1", "zp2"});
 
   auto tparam = FLASHTaggerAlgorithm().getDefaults();

@@ -288,12 +288,13 @@ struct OPENMS_DLLAPI FLASHHelperClasses
       return vertex_count_;
     }
 
-    void addEdge(Size vertex1, Size vertex2, boost::dynamic_bitset<>& visited)
+    bool addEdge(Size vertex1, Size vertex2, boost::dynamic_bitset<>& visited)
     {
-      if (vertex1 >= visited.size() || vertex2 >= visited.size()) return;
-      if (! visited[vertex2]) return;
+      if (vertex1 >= visited.size() || vertex2 >= visited.size()) return false;
+      if (! visited[vertex2]) return false;
       visited[vertex1] = true;
       adj_list_[vertex1].insert(vertex2); //
+      return true;
     }
 
     bool hasEdge(Size vertex1, Size vertex2) const
