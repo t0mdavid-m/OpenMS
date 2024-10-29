@@ -620,9 +620,9 @@ START_SECTION((double toDouble() const))
   s = "47218.890000001";
   TEST_EQUAL(String(s.toDouble()),"4.7218890000001e04");
   s = "nan";
-  TEST_EQUAL(std::isnan(s.toDouble()),true);
-  s = "NaN";
-  TEST_EQUAL(std::isnan(s.toDouble()),true);
+  TEST_TRUE(std::isnan(s.toDouble()));
+  s = "NaN"; // used in INI files, for Java compatibility
+  TEST_TRUE(std::isnan(s.toDouble()));
   s = "not a number";
   TEST_EXCEPTION_WITH_MESSAGE(Exception::ConversionError, s.toDouble(), String("Could not convert string '") + s + "' to a double value")
 END_SECTION
