@@ -242,10 +242,11 @@ START_SECTION((String(long double ld, bool full_precision = true)))
   String s2(17.012345L, false); // suffix L indicates long double
   TEST_EQUAL(s2, "17.012")
   // test denormals
-  long double denorm = 1.0e-320;
+  long double denorm = std::numeric_limits<long double>::min() / 10;
   assert(std::fpclassify(denorm) == FP_SUBNORMAL);
-  TEST_EQUAL(String(denorm, true), "9.999888671826829e-321")
-  TEST_EQUAL(String(denorm, false), "1.0e-320")
+  // we cannot test `long double` since it's size is very platform dependent
+  // TEST_EQUAL(String(denorm, true), "9.999888671826829e-321")
+  //TEST_EQUAL(String(denorm, false), "1.0e-320")
   
   // we need this special 'NaN' since the default 'nan' is not recognized by downstream tools
   // such as any Java-based tool (e.g. KNIME) trying to parse our output files
