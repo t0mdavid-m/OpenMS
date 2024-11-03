@@ -13,7 +13,7 @@
 
 namespace OpenMS
 {
-inline const bool debug = true;
+inline const bool debug = false;
 FLASHExtenderAlgorithm::FLASHExtenderAlgorithm(): DefaultParamHandler("FLASHExtenderAlgorithm"), ProgressLogger()
 {
   setDefaultParams_();
@@ -614,7 +614,6 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
           max_score = getScore_(path[0]);
           best_path_map[2] = path;
         }
-        refined_tag_indices.clear();
         mod_starts.clear();
         mod_ends.clear();
         mod_masses.clear();
@@ -767,11 +766,11 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
     // remove unmatched tags.
     std::set<int> to_exclude_tag_indices;
 
-    for (int m : used_mode)
+    for (int m = (used_mode.back() == 2 ? 2 : 0); m <= (used_mode.back() == 2 ? 2 : 1); m++)
     {
       std::vector<Size> best_path;
       const auto& t_pro_masses = hi.pro_mass_map_[m];
-      if (best_path_map.empty() || best_path_map.find(m) == best_path_map.end() || best_path_map[m].empty())
+      if (std::find(used_mode.begin(), used_mode.end(), m) == used_mode.end() || best_path_map.empty() || best_path_map.find(m) == best_path_map.end() || best_path_map[m].empty())
         ;
       else
         best_path = best_path_map[m];
