@@ -284,6 +284,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         if (extender.hasProteoforms()) break;
       }
     }
+    std::cout<<1<<std::endl;
 
     if (false && !hit_by_tag && !extender.hasProteoforms())
     {
@@ -307,6 +308,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   }
   endProgress();
   // redefine tag index and proteoform to tag indics
+  std::cout<<2<<std::endl;
   std::map<int, int> scan_index_offset;
   int offset = 0;
   for (auto& tag : tags_)
@@ -334,7 +336,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     }
     hit.setMetaValue("TagIndices", tag_indices);
   }
-
+  std::cout<<3<<std::endl;
   markRepresentativeProteoformHits_(precursor_tol);
 
   std::sort(proteoform_hits_.begin(), proteoform_hits_.end(), [](const ProteinHit& left, const ProteinHit& right) {
@@ -342,7 +344,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
                                                                                             : (left.getCoverage() > right.getCoverage()))
                                                : (left.getScore() > right.getScore());
   });
-
+  std::cout<<4<<std::endl;
   if (decoy_factor_ > 0 || !keep_underdetermined_)
   {
     std::vector<ProteinHit> filtered_proteoform_hits;
@@ -445,7 +447,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     }
     proteoform_hits_.swap(filtered_proteoform_hits);
   }
-
+  std::cout<<5<<std::endl;
   std::sort(proteoform_hits_.begin(), proteoform_hits_.end(),
             [](const ProteinHit& left, const ProteinHit& right) { return left.getMetaValue("RT") < right.getMetaValue("RT"); });
 
@@ -460,6 +462,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     }
     proteoform_index++;
   }
+  std::cout<<6<<std::endl;
 }
 
 void FLASHTnTAlgorithm::getProteoformHitsMatchedBy(const FLASHHelperClasses::Tag& tag, std::vector<ProteinHit>& hits) const

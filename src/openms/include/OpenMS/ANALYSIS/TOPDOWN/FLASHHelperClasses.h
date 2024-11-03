@@ -279,6 +279,9 @@ struct OPENMS_DLLAPI FLASHHelperClasses
   class OPENMS_DLLAPI DAG
   {
   public:
+    DAG()
+    {
+    }
     explicit DAG(Size vertice_count): vertex_count_(vertice_count)
     {
     }

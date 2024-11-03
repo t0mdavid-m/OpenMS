@@ -76,76 +76,68 @@ protected:
   void setDefaultParams_();
 
 private:
+  struct OPENMS_DLLAPI HitInformation
+  {
+  public:
+    boost::dynamic_bitset<> visited_;
+    FLASHHelperClasses::DAG dag_;
+    std::map<int, MSSpectrum> node_spec_map_, tol_spec_map_;
+    std::map<int, std::vector<double>> pro_mass_map_;
+    int mode_;
+    int protein_start_position_ = -1, protein_end_position_ = -1;
+    double calculated_precursor_mass_ = -1;
+  };
+
   std::map<double, std::vector<ResidueModification>> mod_map_; // modification mass to modification index. To use find nearest function
 
+  static void getProMasses_(const ProteinHit& hit, std::vector<double>& pro_masses, int mode);
 
-  static void getProMasses(const ProteinHit& hit, std::vector<double>& pro_masses, int mode);
-  static double calculatePrecursorMass_(const ProteinHit& hit,
-                                          int protein_start_position,
-                                          int protein_end_position,
+  void calculatePrecursorMass_(const ProteinHit& hit, HitInformation& hi,
                                           const std::vector<int>& mod_starts,
                                           const std::vector<int>& mod_ends,
-                                          const std::vector<double>& mod_masses,
-                                          double& total_mod_mass);
-  void defineNodes(const DeconvolvedSpectrum& dspec,//const MSSpectrum& spec,
-                   MSSpectrum& node_spec, MSSpectrum& tol_spec, double max_mass, double precursor_mass, int mode);
-  void run_(const ProteinHit& hit,
+                                          const std::vector<double>& mod_masses);
+
+  void defineNodes_(const DeconvolvedSpectrum& dspec, HitInformation& hi,
+                   double max_mass);
+  void run_(const ProteinHit& hit, HitInformation& hi,
             const std::vector<FLASHHelperClasses::Tag>& matched_tags,
-            const MSSpectrum& node_spec,
-            const MSSpectrum& tol_spec,
-            const std::vector<double>& pro_masses,
-            boost::dynamic_bitset<>& visited,
-            const double precursor_mass,
-            const double total_mod_mass,
-            std::map<int, std::vector<Size>>& all_paths_per_mode, int max_mod_cntr_for_last_mode,
-            int mode); // per hit
-  Size getVertex_(int node_index, int pro_index, int score, int num_mod, Size pro_length) const;
-  int getNodeIndex_(Size vertex, Size pro_length) const;
-  int getProIndex_(Size vertex, Size pro_length) const;
+            std::map<int, std::vector<Size>>& all_paths_per_mode, int max_mod_cntr_for_last_mode); // per hit
+
+  Size getVertex_(int node_index, int pro_index, int score, int num_mod, Size pro_mass_size) const;
+  int getNodeIndex_(Size vertex, Size pro_mass_size) const;
+  int getProIndex_(Size vertex, Size pro_mass_size) const;
   int getModNumber_(Size vertex) const;
   int getScore_(Size vertex) const;
-  void constructDAG_(FLASHHelperClasses::DAG& dag,
-                     std::set<Size>& sinks,
-                     boost::dynamic_bitset<>& visited,
-                     const MSSpectrum& node_spec,
-                     const MSSpectrum& tol_spec,
-                     const std::vector<double>& pro_masses,
+  void constructDAG_(std::set<Size>& sinks,
+                     HitInformation& hi,
                      const std::vector<std::vector<int>>& tag_edges,
-                     const double total_mod_mass,
                      int max_mod_cntr_for_last_mode,
-                     int mode,
                      bool use_tags);
-  void connectBetweenTags_(FLASHHelperClasses::DAG& dag,
-                           boost::dynamic_bitset<>& visited,
-                           std::set<Size>& visited_tag_edges,
-                           std::map<Size, double>& sinks,
+
+  void connectBetweenTags_(std::set<Size>& visited_tag_edges,
+                           HitInformation& hi,
+                           std::map<Size, std::tuple<double, double>>& sinks,
                            Size vertex,
+                           double truncation_mass,
                            double cumulative_shift,
                            std::map<Size, std::map<double, int>>& node_max_score_map,
-                           const MSSpectrum& node_spec,
-                           const MSSpectrum& tol_spec,
-                           const std::vector<double>& pro_masses,
                            const std::vector<std::vector<int>>& tag_edges,
-                           const double total_mod_mass,
                            int max_mod_cntr_for_last_mode,
-                           int mode,
                            bool use_tags);
-  void extendBetweenTags_(FLASHHelperClasses::DAG& dag,
-                          boost::dynamic_bitset<>& visited,
-                          std::map<Size, double>& sinks,
+
+  void extendBetweenTags_(std::map<Size, std::tuple<double, double>>& sinks,
+                          HitInformation& hi,
                           Size start_vertex,
                           int end_node_index,
                           int end_pro_index,
                           int diagonal_counter,
-                          double cumulative_shift,
+                          double truncation_mass,
+                          double cumulative_mod_mass,
                           std::map<Size, std::map<double, int>>& node_max_score_map,
-                          const MSSpectrum& node_spec,
-                          const MSSpectrum& tol_spec,
-                          const std::vector<double>& pro_masses,
-                          double total_mod_mass,
-                          int max_mod_cntr_for_last_mode,
-                          int mode);
-  double getSpecMassSpan_(const MSSpectrum& node_spec, const std::vector<Size>& path, const std::vector<double>& pro_masses) const;
+                          int max_mod_cntr_for_last_mode);
+
+  int getProteinLength_(const std::vector<Size>& path, const std::vector<double>& pro_masses) const;
+  double getSpecMassSpan_(const std::vector<Size>& path, const MSSpectrum& node_spec, int pro_mass_size) const;
   double getProteinMassSpan_(const std::vector<Size>& path, const std::vector<double>& pro_masses) const;
 
   std::vector<std::string> ion_types_str_;
@@ -154,11 +146,13 @@ private:
   std::vector<ProteinHit> proteoform_hits_;
   std::vector<FLASHHelperClasses::Tag> tags_;
   double tol_, flanking_mass_tol_;
+
+
   int max_mod_cntr_ = 0;
-  int max_path_score_ = 1000;
+  std::vector<int> start_pro_indices_;
+  const int max_path_score_ = 1200;
   const int min_path_score_ = -100;
   double max_mod_mass_ = 500.0;
-  double precursor_mass_ = -1;
-  //bool tmp = true;
+  double given_precursor_mass_ = -1;
 };
 } // namespace OpenMS
