@@ -729,7 +729,6 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
         }
       }
     }
-
     if (hi.protein_start_position_ >= 0 && hi.protein_end_position_ >= 0 && hi.protein_start_position_ > hi.protein_end_position_)
     {
       continue;
@@ -763,9 +762,9 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
       mod_accs.push_back(mod_acc);
     }
 
+    if (used_mode.empty()) continue;
     // remove unmatched tags.
     std::set<int> to_exclude_tag_indices;
-
     for (int m = (used_mode.back() == 2 ? 2 : 0); m <= (used_mode.back() == 2 ? 2 : 1); m++)
     {
       std::vector<Size> best_path;
