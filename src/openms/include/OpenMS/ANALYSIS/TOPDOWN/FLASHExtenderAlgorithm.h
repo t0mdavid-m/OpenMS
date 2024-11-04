@@ -120,7 +120,7 @@ private:
                            Size vertex,
                            double truncation_mass,
                            double cumulative_shift,
-                           std::map<Size, std::map<double, int>>& node_max_score_map,
+                           std::map<Size, std::map<int, int>>& node_max_score_map,
                            const std::vector<std::vector<int>>& tag_edges,
                            int max_mod_cntr_for_last_mode,
                            bool use_tags);
@@ -133,7 +133,7 @@ private:
                           int diagonal_counter,
                           double truncation_mass,
                           double cumulative_mod_mass,
-                          std::map<Size, std::map<double, int>>& node_max_score_map,
+                          std::map<Size, std::map<int, int>>& node_max_score_map,
                           int max_mod_cntr_for_last_mode);
 
   int getProteinLength_(const std::vector<Size>& path, const std::vector<double>& pro_masses) const;
