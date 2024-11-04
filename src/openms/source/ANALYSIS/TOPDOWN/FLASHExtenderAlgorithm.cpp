@@ -1086,7 +1086,7 @@ void FLASHExtenderAlgorithm::connectBetweenTags_(std::set<Size>& visited_tag_edg
 
       if (hi.mode_ != 2)
       {
-        extendBetweenTags_(sinks, hi, vertex, -2, -1, use_tags ? 1e5 : 0, truncation_mass, cumulative_mod_mass, node_max_score_map,
+        extendBetweenTags_(sinks, hi, vertex, -1, -1, use_tags ? 1e5 : 0, truncation_mass, cumulative_mod_mass, node_max_score_map,
                            max_mod_cntr_for_last_mode);
       }
       else
