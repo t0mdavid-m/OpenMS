@@ -510,7 +510,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
       matched_tags.push_back(tags_[index]);
     }
 
-    std::set<int> matched_positions;
+    std::map<int, std::set<int>> matched_position_map;
     for (hi.mode_ = 0; hi.mode_ <= 2; hi.mode_++)
     {
       start_pro_indices_.clear();
@@ -605,6 +605,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
       {
         int max_score = 0;
         const auto paths = all_path_map.find(2);
+
         for (const auto& [mod, path] : paths->second)
         {
           if (path.empty()) continue;
@@ -619,7 +620,6 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
       }
       if (hi.mode_ == 0) continue;
       total_score = 0;
-      matched_positions.clear();
       // find the best paths per mode. Mode 0 and 1 should be considered together (since the modification counts for N C term paths should be summed
       // up).
 
@@ -653,7 +653,9 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
 
           int pro_seq_index = m > 0 ? pro_index : ((int)hit.getSequence().size() - pro_index);
           if (node_index > 0 && t_node_spec[node_index].getMZ() != hi.calculated_precursor_mass_ - Residue::getInternalToFull().getMonoWeight())
-            matched_positions.insert(pro_seq_index);
+          {
+            matched_position_map[m].insert(pro_seq_index);
+          }
 
           if (m == 0) max_cterm_rindex = std::max(max_cterm_rindex, pro_index);
           if (m == 1) max_nterm_index = std::max(max_nterm_index, pro_index);
@@ -777,7 +779,8 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
 
     if (used_mode.empty()) continue;
     // remove unmatched tags.
-    std::set<int> to_exclude_tag_indices;
+    std::set<int> to_exclude_tag_indices, matched_positions;
+
     for (int m = (used_mode.back() == 2 ? 2 : 0); m <= (used_mode.back() == 2 ? 2 : 1); m++)
     {
       std::vector<Size> best_path;
@@ -788,6 +791,11 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
       else
         best_path = best_path_map[m];
 
+      if (std::find(used_mode.begin(), used_mode.end(), m) != used_mode.end())
+      {
+        for (int pos : matched_position_map[m])
+          matched_positions.insert(pos);
+      }
       for (int j = 0; j < matched_tags.size(); j++) // for each tag
       {
         auto tag = matched_tags[j];
@@ -847,22 +855,20 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
 
     if (refined_tag_indices.empty()) continue;
 
-    int total_match_cntr = (int)matched_positions.size();
     hi.protein_start_position_ += hi.protein_start_position_ >= 0 ? 1 : 0;
-
     hit.setMetaValue("ModificationIDs", mod_ids); // TODO matching masses vs. all masses?
     hit.setMetaValue("ModificationACCs", mod_accs);
     hit.setMetaValue("Modifications", mod_masses);
     hit.setMetaValue("ModificationStarts", mod_starts);
     hit.setMetaValue("ModificationEnds", mod_ends);
-    hit.setMetaValue("MatchedAA", total_match_cntr);
+    hit.setMetaValue("MatchedAA", matched_positions.size());
     hit.setMetaValue("TagIndices", refined_tag_indices);
 
     double protein_len = hit.getSequence().size();
     if (hi.protein_end_position_ > 0) { protein_len -= (protein_len - hi.protein_end_position_); }
     if (hi.protein_start_position_ > 0) { protein_len -= hi.protein_start_position_ - 1; }
 
-    hit.setCoverage((double)total_match_cntr / protein_len);
+    hit.setCoverage((double)matched_positions.size() / protein_len);
     hit.setScore(total_score);
     hit.setMetaValue("StartPosition", hi.protein_start_position_);
     hit.setMetaValue("EndPosition", hi.protein_end_position_);
@@ -905,14 +911,13 @@ void FLASHExtenderAlgorithm::constructDAG_(std::set<Size>& sinks,
   for (const auto& sink : sink_map)
   {
     sinks.insert(sink.first);
-//    if (hi.mode_ == 2)
-//    {
-//      const auto & [t, c] = sink.second;
-//      std::cout<< t << " " << c << std::endl;
-//      std::cout<< std::to_string(hi.node_spec_map_[2][getNodeIndex_(sink.first, hi.pro_mass_map_[2].size())].getMZ() -
-//      hi.pro_mass_map_[2][getProIndex_(sink.first, hi.pro_mass_map_[2].size())]) << std::endl;
-//    }
-
+    //    if (hi.mode_ == 2)
+    //    {
+    //      const auto & [t, c] = sink.second;
+    //      std::cout<< t << " " << c << std::endl;
+    //      std::cout<< std::to_string(hi.node_spec_map_[2][getNodeIndex_(sink.first, hi.pro_mass_map_[2].size())].getMZ() -
+    //      hi.pro_mass_map_[2][getProIndex_(sink.first, hi.pro_mass_map_[2].size())]) << std::endl;
+    //    }
   }
 }
 
@@ -1093,7 +1098,9 @@ void FLASHExtenderAlgorithm::connectBetweenTags_(std::set<Size>& visited_tag_edg
       {
         for (int j = 0; j < pro_masses.size(); j++)
         {
-          if (std::abs(hi.calculated_precursor_mass_ - pro_masses[j]) > max_mod_mass_ * (max_mod_cntr_ - getModNumber_(vertex))) continue;
+          if (std::abs(hi.calculated_precursor_mass_ + truncation_mass - pro_masses[j]) > max_mod_mass_ * (max_mod_cntr_ - getModNumber_(vertex)))
+            continue;
+          // std::cout<<hi.calculated_precursor_mass_<<  " " << pro_masses[j] << std::endl;
           extendBetweenTags_(sinks, hi, vertex, hi.node_spec_map_[2].size() - 1, j, 0, truncation_mass, cumulative_mod_mass, node_max_score_map,
                              max_mod_cntr_for_last_mode);
         }
@@ -1288,7 +1295,8 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(std::map<Size, std::tuple<double
         {
           for (int pi = std::max(pro_i, hi.protein_end_position_ - 5); pi < std::min(hi.protein_end_position_ + 5, (int)pro_masses.size()); pi++)
           {
-            double corrected_mod_mass =  hi.calculated_precursor_mass_ - Residue::getInternalToFull().getMonoWeight() - pro_masses[pi] + truncation_mass;
+            double corrected_mod_mass
+              = hi.calculated_precursor_mass_ - Residue::getInternalToFull().getMonoWeight() - pro_masses[pi] + truncation_mass;
             double delta = corrected_mod_mass - next_cumulative_mod_mass;
             if (delta > 1.1) continue;
             if (delta < -1.1) break;

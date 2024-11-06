@@ -58,6 +58,8 @@ namespace OpenMS
     void runMatching(const DeconvolvedSpectrum& deconvolved_spectrum, const std::vector<FASTAFile::FASTAEntry>& fasta_entry,
                      const std::vector<std::vector<int>>& vectorized_fasta_entry_indices,
                      const std::vector<std::vector<int>>& reversed_vectorized_fasta_entry_indices,
+                     const std::vector<std::vector<Size>>& bit_protein_indices,
+                     const std::vector<std::vector<Size>>& reversed_bit_protein_indices,
                      int tag_length = 0);
     const MSSpectrum& getSpectrum() const;
     void getProteinHits(std::vector<ProteinHit>& hits, int max_target_count) const;
@@ -65,9 +67,10 @@ namespace OpenMS
                                std::vector<boost::dynamic_bitset<>>& vectorized_fasta_entry,
                                std::vector<std::vector<int>>& vectorized_fasta_entry_indices,
                                std::vector<std::map<int, double>>& mass_map,
+                               std::vector<std::vector<Size>>& bit_protein_indices,
                                bool reverse);
 
-    static const int multi_factor_for_vectorization = 10;
+    static const int multi_factor_for_vectorization = 1;
   protected:
     void updateMembers_() override;
     /// implemented for DefaultParamHandler
