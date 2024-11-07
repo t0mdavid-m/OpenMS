@@ -108,8 +108,6 @@ void MSstatsFile::constructFile_(const String& retention_time_summarization_meth
                                          LineType& peptideseq_to_prefix_to_intensities) const
 
 {
-  // sanity check that the triples (peptide_sequence, precursor_charge, run) only appears once
-  set<tuple<String, String, String> > peptideseq_precursor_charge_run;
 
   for (const auto &peptideseq : peptideseq_quantifyable)
   {
@@ -133,7 +131,8 @@ void MSstatsFile::constructFile_(const String& retention_time_summarization_meth
           intensities.insert(get<0>(p));
         }
       }
-      peptideseq_precursor_charge_run.emplace(line.first.sequence(), line.first.precursor_charge(), line.first.run());
+      tuple<String, String, String> tpl = make_tuple(
+          line.first.sequence(), line.first.precursor_charge(), line.first.run());
 
       // If the rt summarization method is set to manual, we simply output all it,rt pairs
       if (rt_summarization_manual)
