@@ -61,7 +61,7 @@ public:
                    const std::vector<boost::dynamic_bitset<>>& reversed_vectorized_fasta_entry,
                    const std::vector<std::map<int, double>>& mass_map,
                    const std::vector<std::map<int, double>>& rev_mass_map,
-                   double max_mod_mass = 0, int tag_length = 0);
+                   double max_mod_mass = 0);
   const MSSpectrum& getSpectrum() const;
   void getTags(std::vector<FLASHHelperClasses::Tag>& tags, int tag_length = 0) const;
   static int getPeakGroupScore(const PeakGroup& peak_group);
@@ -151,6 +151,6 @@ private:
   int min_cov_aa_ = 5;
   double decoy_factor_ = 0;
   double max_edge_mass_ = 0;
-  double flanking_mass_tol_ = 50000.0;
+  double flanking_mass_tol_ = -1;
 };
 } // namespace OpenMS

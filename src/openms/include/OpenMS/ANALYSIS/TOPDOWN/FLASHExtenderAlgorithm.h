@@ -92,10 +92,9 @@ private:
 
   static void getProMasses_(const ProteinHit& hit, std::vector<double>& pro_masses, int mode);
 
-  void calculatePrecursorMass_(const ProteinHit& hit, HitInformation& hi,
-                                          const std::vector<int>& mod_starts,
-                                          const std::vector<int>& mod_ends,
-                                          const std::vector<double>& mod_masses);
+  void calculatePrecursorMass_(const ProteinHit& hit,
+                               const std::map<int, std::vector<Size>>& best_path_map,
+                               HitInformation& hi);
 
   void defineNodes_(const DeconvolvedSpectrum& dspec, HitInformation& hi,
                    double max_mass);

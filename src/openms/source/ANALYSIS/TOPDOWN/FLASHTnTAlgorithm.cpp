@@ -79,19 +79,6 @@ void FLASHTnTAlgorithm::updateMembers_()
 
 bool FLASHTnTAlgorithm::areConsistent_(const ProteinHit& a, const ProteinHit& b, double tol) const
 {
-  //   hit.setMetaValue("ModificationIDs", mod_ids);
-  //    hit.setMetaValue("ModificationACCs", mod_accs);
-  //    hit.setMetaValue("Modifications", mod_masses);
-  //    hit.setMetaValue("ModificationStarts", mod_starts);
-  //    hit.setMetaValue("ModificationEnds", mod_ends);
-  //    hit.setMetaValue("MatchedAA", total_match_cntr);
-  //    hit.setCoverage((double)total_match_cntr / (double)hit.getSequence().size());
-  //    hit.setScore(total_score);
-  //    hit.setMetaValue("StartPosition", protein_start_position);
-  //    hit.setMetaValue("EndPosition", protein_end_position);
-  //    hit.setMetaValue("Mass", precursor_mass);
-  //    hit.setMetaValue("RT", tagger.getSpectrum().getRT());
-
   double mass1 = a.getMetaValue("Mass");
   double mass2 = b.getMetaValue("Mass");
   if (std::abs(mass1 - mass2) > std::max(mass1, mass2) * tol / 1e6 * 2) return false;
@@ -261,47 +248,29 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     std::vector<ProteinHit> hits;
     std::vector<FLASHHelperClasses::Tag> tags;
     bool hit_by_tag = false;
-    if (multiple_hits_per_spec_)
-    {
-      tagger.runMatching(fasta_entry, dspec,  vectorized_fasta_entry, rev_vectorized_fasta_entry, mass_map, rev_mass_map, max_mod_mass);
-      tagger.getTags(tags);
-      tagger.getProteinHits(hits, max_hit_count);
-      hit_by_tag |= !hits.empty();
-      extender.run(hits, tags, dspec,
-                   tagger.getSpectrum(), flanking_mass_tol, tol, multiple_hits_per_spec_);
-      extender.getProteoforms(proteoform_hits_);
-    }
-    else
-    {
-      for (int tag_length = max_tag_length; tag_length >= min_tag_length; tag_length--)
-      {
-        tagger.runMatching(fasta_entry, dspec,  vectorized_fasta_entry, rev_vectorized_fasta_entry, mass_map, rev_mass_map, max_mod_mass);
-        tagger.getTags(tags);
-        hit_by_tag |= !hits.empty();
-        tagger.getProteinHits(hits, max_hit_count);
-        extender.run(hits, tags, dspec,
-                     tagger.getSpectrum(), flanking_mass_tol, tol, multiple_hits_per_spec_);
-        extender.getProteoforms(proteoform_hits_);
-        if (extender.hasProteoforms()) break;
-      }
-    }
+    bool proteoform_found = false;
 
-    if (false && !hit_by_tag && !extender.hasProteoforms()) // TODO
-    {
-      ConvolutionBasedProteinFilter filter;
-      hits.clear();
-      tags.clear();
-      //std::cout<<1<<std::endl;
+    tagger.runMatching(fasta_entry, dspec,  vectorized_fasta_entry, rev_vectorized_fasta_entry, mass_map, rev_mass_map, max_mod_mass);
+    tagger.getTags(tags);
+    tagger.getProteinHits(hits, max_hit_count);
+    hit_by_tag |= !hits.empty();
+    extender.run(hits, tags, dspec,
+                 tagger.getSpectrum(), flanking_mass_tol, tol, multiple_hits_per_spec_);
+    extender.getProteoforms(proteoform_hits_);
+    proteoform_found = extender.hasProteoforms();
 
-      filter.runMatching(dspec, fasta_entry, vectorized_fasta_entry_indices, rev_vectorized_fasta_entry_indices,
-                         bit_protein_indices, rev_bit_protein_indices,min_tag_length);
-      filter.getProteinHits(hits, max_hit_count);
-      //std::cout<<2<<std::endl;
-      extender.run(hits, tags, dspec, tagger.getSpectrum(), flanking_mass_tol, tol, multiple_hits_per_spec_);
-      //std::cout<<3<<std::endl;
-
-      extender.getProteoforms(proteoform_hits_);
-    }
+//    if (false && !hit_by_tag && !proteoform_found) // TODO
+//    {
+//      ConvolutionBasedProteinFilter filter;
+//      hits.clear();
+//      tags.clear();
+//
+//      filter.runMatching(dspec, fasta_entry, vectorized_fasta_entry_indices, rev_vectorized_fasta_entry_indices,
+//                         bit_protein_indices, rev_bit_protein_indices,min_tag_length);
+//      filter.getProteinHits(hits, max_hit_count);
+//      extender.run(hits, tags, dspec, tagger.getSpectrum(), flanking_mass_tol, tol, multiple_hits_per_spec_);
+//      extender.getProteoforms(proteoform_hits_);
+//    }
 
     decoy_factor_ = tagger.getDecoyFactor();
     // if (! out_tag_file.empty()) { FLASHTnTFile::writeTags(tagger, extender, out_tagger_stream); }
@@ -337,7 +306,6 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   }
 
   markRepresentativeProteoformHits_(precursor_tol);
-
   std::sort(proteoform_hits_.begin(), proteoform_hits_.end(), [](const ProteinHit& left, const ProteinHit& right) {
     return left.getScore() == right.getScore() ? (left.getCoverage() == right.getCoverage() ? (left.getMetaValue("Scan") > right.getMetaValue("Scan"))
                                                                                             : (left.getCoverage() > right.getCoverage()))
@@ -446,7 +414,6 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     }
     proteoform_hits_.swap(filtered_proteoform_hits);
   }
-
   std::sort(proteoform_hits_.begin(), proteoform_hits_.end(),
             [](const ProteinHit& left, const ProteinHit& right) { return left.getMetaValue("RT") < right.getMetaValue("RT"); });
 
