@@ -13,6 +13,8 @@
   #include <omp.h>
 #endif
 
+#pragma warning(disable : 4189)
+
 namespace OpenMS
 {
   /// harmonic charge factors that will be considered for harmonic mass reduction.
