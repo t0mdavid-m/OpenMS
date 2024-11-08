@@ -316,7 +316,7 @@ void FLASHTaggerAlgorithm::setDefaultParams_()
 
   defaults_.setValue("min_matched_aa", 3, "Minimum number of amino acids in matched proteins, covered by tags.");
   defaults_.addTag("min_matched_aa", "advanced");
-  
+
   defaults_.setValue("allow_gap", "false", "Allow a mass gap (a mass representing multiple consecutive amino acids) in each tag.");
   defaults_.setValidStrings("allow_gap", {"true", "false"});
   defaults_.addTag("allow_gap", "advanced");

@@ -181,11 +181,11 @@ void FLASHExtenderAlgorithm::defineNodes_(const DeconvolvedSpectrum& dspec, HitI
   {
     if (hi.mode_ == 0)
     {
-      int score_offset = 1; // give score disadvantage for non major ions.
+      int score_offset = 0; // give score disadvantage for non major ions.
       for (const auto& shift : suffix_shifts_)
       {
         double mass = pg.getMonoMass() - shift;
-        score_offset--;
+        //score_offset--;
         if (mass <= 0 || mass > max_mass + 1) continue;
         t_node_spec.emplace_back(mass, std::max(1, score_offset + FLASHTaggerAlgorithm::getPeakGroupScore(pg)));
         t_tol_spec.emplace_back(mass, tol_ * pg.getMonoMass());
@@ -193,11 +193,11 @@ void FLASHExtenderAlgorithm::defineNodes_(const DeconvolvedSpectrum& dspec, HitI
     }
     else if (hi.mode_ == 1)
     {
-      int score_offset = 1; // give score disadvantage for non major ions.
+      int score_offset = 0; // give score disadvantage for non major ions.
       for (const auto& shift : prefix_shifts_)
       {
         double mass = pg.getMonoMass() - shift;
-        score_offset--;
+        //score_offset--;
         if (mass <= 0 || mass > max_mass + 1) continue;
         t_node_spec.emplace_back(mass, std::max(1, score_offset + FLASHTaggerAlgorithm::getPeakGroupScore(pg)));
         t_tol_spec.emplace_back(mass, tol_ * pg.getMonoMass());
@@ -205,20 +205,20 @@ void FLASHExtenderAlgorithm::defineNodes_(const DeconvolvedSpectrum& dspec, HitI
     }
     else if (hi.mode_ == 2 && hi.calculated_precursor_mass_ > 0)
     {
-      int score_offset = 1; // give score disadvantage for non major ions.
+      int score_offset = 0; // give score disadvantage for non major ions.
       for (const auto& shift : prefix_shifts_)
       {
         double mass = pg.getMonoMass() - shift;
-        score_offset--;
+        //score_offset--;
         if (mass <= 0 || mass >= hi.calculated_precursor_mass_ - Residue::getInternalToFull().getMonoWeight()) continue;
         t_node_spec.emplace_back(mass, std::max(1, score_offset + FLASHTaggerAlgorithm::getPeakGroupScore(pg)));
         t_tol_spec.emplace_back(mass, tol_ * pg.getMonoMass());
       }
-      score_offset = 1; // give score disadvantage for non major ions.
+      score_offset = 0; // give score disadvantage for non major ions.
       for (const auto& shift : suffix_shifts_)
       {
         double mass = pg.getMonoMass() - shift;
-        score_offset--;
+        //score_offset--;
         if (mass <= 0 || mass >= hi.calculated_precursor_mass_ - Residue::getInternalToFull().getMonoWeight()) continue;
         t_node_spec.emplace_back(hi.calculated_precursor_mass_ - Residue::getInternalToFull().getMonoWeight() - mass,
                                  std::max(1, score_offset + FLASHTaggerAlgorithm::getPeakGroupScore(pg)));
