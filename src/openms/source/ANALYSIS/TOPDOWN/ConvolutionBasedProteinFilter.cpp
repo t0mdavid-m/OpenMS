@@ -12,6 +12,9 @@
 #include <queue>
 #include <vector>
 #include <Eigen/Sparse>
+
+#pragma warning(disable : 4100)
+
 namespace OpenMS
 {
 ConvolutionBasedProteinFilter::ConvolutionBasedProteinFilter(): DefaultParamHandler("FLASHTaggerAlgorithm"), ProgressLogger()
