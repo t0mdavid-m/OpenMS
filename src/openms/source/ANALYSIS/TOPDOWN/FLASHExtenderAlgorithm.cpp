@@ -288,6 +288,14 @@ void FLASHExtenderAlgorithm::run_(const ProteinHit& hit,
   std::set<Size> sinks;
   std::vector<int> indices;
 
+  std::set<String> upper_case_seqs;
+
+  for (const auto& tag : matched_tags)
+  {
+    if (std::any_of(tag.getSequence().begin(), tag.getSequence().end(), ::islower)) continue;
+    upper_case_seqs.insert(tag.getSequence());
+  }
+
   if (! matched_tags.empty())
   {
     for (auto& edge : tag_edges)
@@ -303,6 +311,10 @@ void FLASHExtenderAlgorithm::run_(const ProteinHit& hit,
     // if (mode == 0 && tag.getCtermMass() < 0) continue;
     // if (mode == 1 && tag.getNtermMass() < 0) continue;
     if (hi.mode_ == 2 && hi.calculated_precursor_mass_ <= 0) continue;
+    auto upper_seq = tag.getSequence().toUpper();
+    bool has_lower_case = std::any_of(tag.getSequence().begin(), tag.getSequence().end(), ::islower) ;
+    if (has_lower_case && upper_case_seqs.find(upper_seq) != upper_case_seqs.end()) continue;
+    
     tag_found = true;
     std::vector<int> positions;
     std::vector<double> masses;
@@ -311,13 +323,18 @@ void FLASHExtenderAlgorithm::run_(const ProteinHit& hit,
     auto tag_masses = tag.getMzs();
     std::sort(tag_masses.begin(), tag_masses.end());
 
+    double seq_mass = 0;
+    if (has_lower_case)
+    {
+      seq_mass = AASequence::fromString(upper_seq, true).getMonoWeight(Residue::Internal);
+    }
     std::vector<double> start_masses, end_masses, start_tols, end_tols;
     if (tag.getCtermMass() >= 0) // suffix
     {
       for (const auto& shift : suffix_shifts_)
       {
         double start_mass = tag_masses[0] - shift;
-        double end_mass = tag_masses.back() - shift;
+        double end_mass = seq_mass > 0 ? seq_mass + start_mass : tag_masses.back() - shift;
 
         start_tols.push_back(start_mass * tol_);
         end_tols.push_back(end_mass * tol_);
@@ -341,7 +358,7 @@ void FLASHExtenderAlgorithm::run_(const ProteinHit& hit,
       for (const auto& shift : prefix_shifts_)
       {
         double start_mass = tag_masses[0] - shift;
-        double end_mass = tag_masses.back() - shift;
+        double end_mass = seq_mass > 0 ? seq_mass + start_mass : tag_masses.back() - shift;
         start_tols.push_back(start_mass * tol_);
         end_tols.push_back(end_mass * tol_);
 
@@ -806,6 +823,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
       for (int j = 0; j < matched_tags.size(); j++) // for each tag
       {
         auto tag = matched_tags[j];
+
         if ((tag.getNtermMass() > 0 && m == 0) || (tag.getCtermMass() > 0 && m == 1)) { continue; }
         bool tag_matched = false;
         for (auto iter = best_path.rbegin(); iter != best_path.rend(); iter++) // compare against each path
@@ -844,6 +862,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
 
             if (hi.protein_end_position_ >= 0) seq = seq.substr(0, hi.protein_end_position_);
             if (hi.protein_start_position_ >= 0) seq = seq.substr(hi.protein_start_position_);
+
             FLASHTaggerAlgorithm::getMatchedPositionsAndFlankingMassDiffs(positions, masses, max_mod_mass_ * max_mod_cntr_ + 1, seq, tag);
             tag_matched = ! positions.empty();
             break;
