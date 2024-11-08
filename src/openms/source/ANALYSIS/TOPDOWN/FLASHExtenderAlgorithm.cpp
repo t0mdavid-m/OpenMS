@@ -1106,7 +1106,7 @@ void FLASHExtenderAlgorithm::connectBetweenTags_(std::set<Size>& visited_tag_edg
         {
           if (std::abs(hi.calculated_precursor_mass_ + truncation_mass - pro_masses[j]) > max_mod_mass_ * (max_mod_cntr_ - getModNumber_(vertex)))
             continue;
-          // std::cout<<hi.calculated_precursor_mass_<<  " " << pro_masses[j] << std::endl;
+
           extendBetweenTags_(sinks, hi, vertex, hi.node_spec_map_[2].size() - 1, j, 0, truncation_mass, cumulative_mod_mass, node_max_score_map,
                              max_mod_cntr_for_last_mode);
         }
@@ -1150,7 +1150,7 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(std::map<Size, std::tuple<double
         end_pro_index++;
     else
       end_pro_index = ((start_num_mod < max_mod_cntr) && diagonal_counter == 0)
-                        ? start_pro_index + 50
+                        ? start_pro_index + max_extension_stretch_
                         : ((int)pro_masses.size() - 1); // if sink is not specified, stretch up to 50 amino acids.
     end_pro_index = std::min(end_pro_index, (int)pro_masses.size() - 1);
   }
@@ -1203,7 +1203,7 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(std::map<Size, std::tuple<double
 
         if (end_node_index >= 0
             && std::abs(node_spec[end_node_index].getMZ() - pro_masses[end_pro_index] + pro_masses[pro_i])
-                 > max_mod_mass_ * max_mod_cntr + tol_spec[end_node_index].getIntensity() + 1.1)
+                 > max_mod_mass_ * (max_mod_cntr - start_num_mod) + tol_spec[end_node_index].getIntensity() + 1.1)
         {
           continue;
         }

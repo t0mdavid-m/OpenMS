@@ -284,7 +284,7 @@ FLASHTaggerAlgorithm& FLASHTaggerAlgorithm::operator=(const FLASHTaggerAlgorithm
 
 void FLASHTaggerAlgorithm::setDefaultParams_()
 {
-  defaults_.setValue("max_count", 500,
+  defaults_.setValue("max_count", 300,
                      "Maximum number of the tags per length (lengths set by -min_length and -max_length options). The tags with different amino acid "
                      "combinations but with the same masses are counted once. E.g., "
                      "TII, TIL, TLI, TLL are distinct tags even though they have the same mass differences. "

@@ -151,6 +151,7 @@ private:
   std::vector<int> start_pro_indices_;
   const int max_path_score_ = 1200;
   const int min_path_score_ = -100;
+  const int max_extension_stretch_ = 50;
   double max_mod_mass_ = 500.0;
   double given_precursor_mass_ = -1;
 };
