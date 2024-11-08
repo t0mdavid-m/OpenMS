@@ -459,7 +459,7 @@ void FLASHExtenderAlgorithm::run_(const ProteinHit& hit,
 
       if (iter == all_paths_per_mode.end())
       {
-        double mod_mass = std::abs(mass - getProteinMassSpan_(path, pro_masses));
+        //double mod_mass = std::abs(mass - getProteinMassSpan_(path, pro_masses));
 
         all_paths_per_mode[num_mod] = path;
         // std::cout << mod_mass  << " " << getScore_(path[0]) << " max " << num_mod << " " << max_scores[num_mod]<< std::endl;
@@ -561,8 +561,8 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
       }
 
       auto& pro_masses = hi.pro_mass_map_[hi.mode_] = std::vector<double>();
-      auto& node_spec = hi.node_spec_map_[hi.mode_] = MSSpectrum();
-      auto& tol_spec = hi.tol_spec_map_[hi.mode_] = MSSpectrum();
+     // auto& node_spec = hi.node_spec_map_[hi.mode_] = MSSpectrum();
+      //auto& tol_spec = hi.tol_spec_map_[hi.mode_] = MSSpectrum();
 
       getProMasses_(hit, pro_masses, hi.mode_);
       defineNodes_(dspec, hi, pro_masses.back());
@@ -671,7 +671,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
         int pre_pro_index = 0;
         int pre_node_index = 0;
         double mod_mass = 0, total_mod_mass = 0;
-        int total_mod_count = getModNumber_(*best_path.begin());
+        //int total_mod_count = getModNumber_(*best_path.begin());
 
         for (auto iter = best_path.rbegin(); iter != best_path.rend(); iter++)
         {

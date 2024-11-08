@@ -136,8 +136,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
 {
   setLogType(CMD);
   startProgress(0, (SignedSize)map.size(), "Running FLASHTnT ...");
-  int max_tag_length = tagger_param_.getValue("max_length");
-  int min_tag_length = tagger_param_.getValue("min_length");
+  //int max_tag_length = tagger_param_.getValue("max_length");
+  //int min_tag_length = tagger_param_.getValue("min_length");
   int max_mod_cntr = extender_param_.getValue("max_mod_count");
   double max_mod_mass = max_mod_cntr * (double)extender_param_.getValue("max_mod_mass") + 1.0;
   std::map<double, std::vector<ResidueModification>> mod_map;
