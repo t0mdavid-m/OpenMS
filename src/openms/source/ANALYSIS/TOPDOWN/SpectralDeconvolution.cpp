@@ -828,8 +828,8 @@ namespace OpenMS
     target_decoy_type_ = target_decoy_type;
     target_dspec_for_decoy_calculation_ = &target_dspec_for_decoy_calcualtion;
 
-    bool is_centroid = target_dspec_for_decoy_calcualtion.getOriginalSpectrum().empty()
-                       || (target_dspec_for_decoy_calcualtion.getOriginalSpectrum().getType(false) == SpectrumSettings::CENTROID);
+    //bool is_centroid = target_dspec_for_decoy_calcualtion.getOriginalSpectrum().empty()
+    //                   || (target_dspec_for_decoy_calcualtion.getOriginalSpectrum().getType(false) == SpectrumSettings::CENTROID);
   }
 
 

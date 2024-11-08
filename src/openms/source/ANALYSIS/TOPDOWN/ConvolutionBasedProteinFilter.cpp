@@ -147,43 +147,6 @@ void ConvolutionBasedProteinFilter::GetScoreAndMatchCount_(const std::vector<int
     }
   }
 
-  // int result_size = 1 + spec_indices.back() + pro_indices.back();
-  // std::vector<short> scores(result_size, 0);
-  // std::vector<short> matches(result_size, 0);
-
-  // // Step 3: Convolve the indices using SIMD to speed up score and match count updates
-  // for (size_t i = 0; i < pro_indices.size(); ++i)
-  // {
-  //   for (size_t j = 0; j < spec_indices.size(); ++j)
-  //   {
-  //     size_t index_sum = pro_indices[i] + spec_indices[j];
-
-  //     if (index_sum + 8 <= result_size)  // Processing 8 elements at a time (for 16-bit integers)
-  //     {
-  //       // Use SIMD to process 8 elements at a time
-  //       int16x8_t score_val = vdupq_n_s16(spec_scores[j]);  // Broadcast the score value
-
-  //       // Load current scores and matches at the target index_sum
-  //       int16x8_t current_scores = vld1q_s16(&scores[index_sum]);
-  //       int16x8_t current_matches = vld1q_s16(&matches[index_sum]);
-
-  //       // Increment the scores and matches using SIMD
-  //       int16x8_t new_scores = vaddq_s16(current_scores, score_val);
-  //       int16x8_t new_matches = vaddq_s16(current_matches, vdupq_n_s16(1));
-
-  //       // Store the updated scores and matches
-  //       vst1q_s16(&scores[index_sum], new_scores);
-  //       vst1q_s16(&matches[index_sum], new_matches);
-  //     }
-  //     else
-  //     {
-  //       // For leftovers or small cases, handle the score and match count normally
-  //       scores[index_sum] += spec_scores[j];
-  //       matches[index_sum]++;
-  //     }
-  //   }
-  // }
-
   // Step 4: Find the maximum score and its corresponding match count
   max_score = 0;
   match_cntr = 0;
@@ -198,81 +161,17 @@ void ConvolutionBasedProteinFilter::GetScoreAndMatchCount_(const std::vector<int
     }
   }
 
-  //  std::vector<int> scores(spec_vec.size() + pro_vec.size(), 0); // for SIMD-friendly access
-  //  std::vector<int> matches(spec_vec.size() + pro_vec.size(), 0); // same for matches
-  //
-  //  Size pro_vec_index = pro_vec.find_first();
-  //  while (pro_vec_index != pro_vec.npos)
-  //  {
-  //    Size spec_vec_index = spec_vec.find_first();
-  //    while (spec_vec_index != spec_vec.npos)
-  //    {
-  //      Size index_sum = spec_vec_index + pro_vec_index;
-  //
-  //      // NEON parallel addition for spec_scores
-  //      // Assuming both spec_scores and scores are aligned and contiguous
-  //      int32x4_t score_val = vdupq_n_s32(spec_scores[spec_vec_index]);  // Broadcast score value
-  //      int32x4_t current_score = vld1q_s32(&scores[index_sum]);         // Load current scores
-  //      int32x4_t new_score = vaddq_s32(current_score, score_val);       // Vector add
-  //      vst1q_s32(&scores[index_sum], new_score);                        // Store result
-  //
-  //      matches[index_sum]++;  // Simple increment, can be NEON-optimized similarly
-  //
-  //      spec_vec_index = spec_vec.find_next(spec_vec_index);
-  //    }
-  //    pro_vec_index = pro_vec.find_next(pro_vec_index);
-  //  }
-  //
-  //  max_score = 0;
-  //  match_cntr = 0;
-  //  for (Size i = 0; i < scores.size(); ++i)
-  //  {
-  //    if (scores[i] > max_score)
-  //    {
-  //      max_score = scores[i];
-  //      match_cntr = matches[i];
-  //    }
-  //  }
-
-
-  //  std::map<Size, int> scores;
-  //  std::map<Size, int> matches;
-  //
-  //  Size pro_vec_index = pro_vec.find_first();
-  //  while (pro_vec_index != pro_vec.npos)
-  //  {
-  //    Size spec_vec_index = spec_vec.find_first();
-  //    while (spec_vec_index != spec_vec.npos)
-  //    {
-  //      if (scores.find(spec_vec_index + pro_vec_index) == scores.end())
-  //      {
-  //        scores[spec_vec_index + pro_vec_index] = 0;
-  //        matches[spec_vec_index + pro_vec_index] = 0;
-  //      }
-  ////      scores[spec_vec_index + pro_vec_index] += spec_scores[spec_vec_index];
-  ////      matches[spec_vec_index + pro_vec_index] ++;
-  //      spec_vec_index = spec_vec.find_next(spec_vec_index);
-  //    }
-  //    pro_vec_index = pro_vec.find_next(pro_vec_index);
-  //  }
-  //  max_score = 0;
-  //  match_cntr = 0;
-  //  for (const auto& [i, s] : scores)
-  //  {
-  //    if (max_score > s) continue;
-  //    max_score = s;
-  //    match_cntr = matches[i];
-  //  }
 }
 
 // Make output struct containing all information about matched entries and tags, coverage, score etc.
 void ConvolutionBasedProteinFilter::runMatching(const DeconvolvedSpectrum& deconvolved_spectrum,
                                                 const std::vector<FASTAFile::FASTAEntry>& fasta_entry,
-                                                const std::vector<std::vector<int>>& vectorized_fasta_entry_indices,
-                                                const std::vector<std::vector<int>>& reversed_vectorized_fasta_entry_indices,
-                                                const std::vector<std::vector<Size>>& bit_protein_indices,
-                                                const std::vector<std::vector<Size>>& reversed_bit_protein_indices,
-                                                int tag_length)
+                                               // const std::vector<std::vector<int>>& vectorized_fasta_entry_indices,
+                                                //const std::vector<std::vector<int>>& reversed_vectorized_fasta_entry_indices,
+                                                const std::vector<std::vector<Size>>& bit_protein_indices
+                                               // const std::vector<std::vector<Size>>& reversed_bit_protein_indices,
+                                               // int tag_length
+                                                )
 {
   int scan = deconvolved_spectrum.getScanNumber();
   protein_hits_.clear();
