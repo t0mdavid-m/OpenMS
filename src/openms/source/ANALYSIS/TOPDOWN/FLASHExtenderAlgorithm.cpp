@@ -314,7 +314,7 @@ void FLASHExtenderAlgorithm::run_(const ProteinHit& hit,
     auto upper_seq = tag.getSequence().toUpper();
     bool has_lower_case = std::any_of(tag.getSequence().begin(), tag.getSequence().end(), ::islower) ;
     if (has_lower_case && upper_case_seqs.find(upper_seq) != upper_case_seqs.end()) continue;
-    
+
     tag_found = true;
     std::vector<int> positions;
     std::vector<double> masses;
@@ -334,7 +334,12 @@ void FLASHExtenderAlgorithm::run_(const ProteinHit& hit,
       for (const auto& shift : suffix_shifts_)
       {
         double start_mass = tag_masses[0] - shift;
-        double end_mass = seq_mass > 0 ? seq_mass + start_mass : tag_masses.back() - shift;
+        double end_mass = tag_masses.back() - shift;
+
+        if (seq_mass > 0)
+        {
+          if (std::abs(start_mass + seq_mass - end_mass) > end_mass * tol_ * 2) end_mass = start_mass + seq_mass;
+        }
 
         start_tols.push_back(start_mass * tol_);
         end_tols.push_back(end_mass * tol_);
@@ -358,10 +363,15 @@ void FLASHExtenderAlgorithm::run_(const ProteinHit& hit,
       for (const auto& shift : prefix_shifts_)
       {
         double start_mass = tag_masses[0] - shift;
-        double end_mass = seq_mass > 0 ? seq_mass + start_mass : tag_masses.back() - shift;
+        double end_mass = tag_masses.back() - shift;
+
+        if (seq_mass > 0)
+        {
+          if (std::abs(start_mass + seq_mass - end_mass) > end_mass * tol_ * 2) end_mass = start_mass + seq_mass;
+        }
+
         start_tols.push_back(start_mass * tol_);
         end_tols.push_back(end_mass * tol_);
-
         start_masses.push_back(start_mass);
         end_masses.push_back(end_mass);
       }
