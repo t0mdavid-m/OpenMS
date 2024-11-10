@@ -390,7 +390,8 @@ namespace OpenMS
         // for low charges, check isotope peak presence.
         if (! pass_first_check && abs_charge <= low_charge_)
         { // for low charges
-          for (int d = 1; d >= -1; d -= 2)
+          //-1 :
+          for (int d = 1; d >= (avg_.getApexIndex(mz * abs_charge) > 0 ? -1 : 1); d -= 2)
           {
             bool iso_exist = false;
             int next_iso_bin = 0;
@@ -428,6 +429,8 @@ namespace OpenMS
 
                 const int hdiff = (int)round((double)(next_iso_bin - mz_bin_index)) / hc * (hc / 2);
                 const int next_harmonic_iso_bin = (int)mz_bin_index + hdiff; //(int)getBinNumber_(log_mz + hdiff, mz_bin_min_value_, bin_mul_factor);
+                //if (next_iso_bin == next_harmonic_iso_bin) break;
+                //if ((int)mz_bin_index == next_harmonic_iso_bin) continue;
                 // check if there are harmonic peaks between the current peak and the next isotope peak.
 
                 // no perfect filtration. Just obvious ones are filtered out by checking if a peak is in the harmonic position and the intensity ratio

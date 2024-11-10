@@ -25,7 +25,7 @@ namespace OpenMS
                                                        const bool write_detail, const bool report_decoy, const double noise_decoy_weight)
   {
     static std::vector<uint> indices {};
-
+    std::stringstream ss;
     if (dspec.empty())
     {
       return;
@@ -36,6 +36,28 @@ namespace OpenMS
       indices.push_back(1);
     }
     uint& index = indices[dspec.getOriginalSpectrum().getMSLevel() - 1];
+
+    std::stringstream precursor_ss;
+    if (dspec.getOriginalSpectrum().getMSLevel() > 1)
+    {
+      precursor_ss << dspec.getPrecursorScanNumber() << "\t"
+                   << (dspec.getPrecursorPeakGroup().getFeatureIndex() == 0 ? "nan" : std::to_string(dspec.getPrecursorPeakGroup().getFeatureIndex()))
+                   << "\t" << std::to_string(dspec.getPrecursor().getMZ()) << "\t" << dspec.getPrecursor().getIntensity() << "\t"
+                   << dspec.getPrecursor().getCharge() << "\t";
+
+      if (dspec.getPrecursorPeakGroup().empty())
+      {
+        precursor_ss << "nan\tnan\tnan\tnan\t";
+        if (report_decoy) precursor_ss << "nan\t";
+      }
+      else
+      {
+        precursor_ss << dspec.getPrecursorPeakGroup().getChargeSNR(dspec.getPrecursor().getCharge()) << "\t"
+                     << std::to_string(dspec.getPrecursorPeakGroup().getMonoMass()) << "\t"
+                     << std::to_string(dspec.getPrecursorPeakGroup().getQscore()) << "\t" << dspec.getPrecursorPeakGroup().getQscore2D() << "\t";
+        if (report_decoy) { precursor_ss << dspec.getPrecursorPeakGroup().getQvalue() << "\t"; }
+      }
+    }
 
     for (int i = 0; i < dspec.size(); i++)
     {
@@ -54,7 +76,7 @@ namespace OpenMS
         }
       }
 
-      auto avg_ = pg.getTargetDecoyType() == PeakGroup::TargetDecoyType::noise_decoy? decoy_avg : avg;
+      const auto& avg_ = pg.getTargetDecoyType() == PeakGroup::TargetDecoyType::noise_decoy? decoy_avg : avg;
       const double mono_mass = pg.getMonoMass();
       const double avg_mass = pg.getMonoMass() + avg_.getAverageMassDelta(mono_mass);
       const double intensity = pg.getIntensity();
@@ -64,13 +86,13 @@ namespace OpenMS
       int max_charge = pg.isPositive() ? std::get<1>(charge_range) : -std::get<0>(charge_range);
 
       pg.setIndex(index);
-      fs << index++ << "\t" << file_name << "\t" << pg.getScanNumber() << "\t" << (pg.getFeatureIndex() == 0 ? "nan" : std::to_string(pg.getFeatureIndex())) << "\t";
+      ss << index++ << "\t" << file_name << "\t" << pg.getScanNumber() << "\t" << (pg.getFeatureIndex() == 0 ? "nan" : std::to_string(pg.getFeatureIndex())) << "\t";
 
       if (report_decoy)
       {
-        fs << pg.getTargetDecoyType() << "\t";
+        ss << pg.getTargetDecoyType() << "\t";
       }
-      fs << std::to_string(dspec.getOriginalSpectrum().getRT()) << "\t" << dspec.size() << "\t" << std::to_string(avg_mass) << "\t" << std::to_string(mono_mass) << "\t" << intensity << "\t"
+      ss << std::to_string(dspec.getOriginalSpectrum().getRT()) << "\t" << dspec.size() << "\t" << std::to_string(avg_mass) << "\t" << std::to_string(mono_mass) << "\t" << intensity << "\t"
          << min_charge << "\t" << max_charge << "\t" << pg.size() << "\t";
 
       if (write_detail)
@@ -78,153 +100,134 @@ namespace OpenMS
         auto noisy_peaks = pg.recruitAllPeaksInSpectrum(dspec.getOriginalSpectrum(), tol * 1e-6, avg_, pg.getMonoMass(), false);
 
         std::sort(noisy_peaks.begin(), noisy_peaks.end());
-        fs << std::fixed << std::setprecision(2);
+        ss << std::fixed << std::setprecision(2);
         for (auto& p : pg)
         {
-          fs << std::to_string(p.mz) << " ";
+          ss << std::to_string(p.mz) << " ";
         }
 
-        fs << "\t";
-        fs << std::fixed << std::setprecision(1);
+        ss << "\t";
+        ss << std::fixed << std::setprecision(1);
         for (auto& p : pg)
         {
-          fs << p.intensity << " ";
+          ss << p.intensity << " ";
         }
 
-        fs << "\t";
-        fs << std::setprecision(-1);
+        ss << "\t";
+        ss << std::setprecision(-1);
         for (auto& p : pg)
         {
-          fs << (p.is_positive ? p.abs_charge : -p.abs_charge) << " ";
+          ss << (p.is_positive ? p.abs_charge : -p.abs_charge) << " ";
         }
 
-        fs << "\t";
+        ss << "\t";
         for (auto& p : pg)
         {
-          fs << p.getUnchargedMass() << " ";
+          ss << p.getUnchargedMass() << " ";
         }
 
-        fs << "\t";
+        ss << "\t";
         for (auto& p : pg)
         {
-          fs << p.isotopeIndex << " ";
+          ss << p.isotopeIndex << " ";
         }
 
-        fs << "\t";
-        fs << std::setprecision(2);
+        ss << "\t";
+        ss << std::setprecision(2);
         for (auto& p : pg)
         {
           double average_mass = pg.getMonoMass() + p.isotopeIndex * pg.getIsotopeDaDistance();
           double mass_error = (average_mass / p.abs_charge + FLASHHelperClasses::getChargeMass(p.is_positive) - p.mz) / p.mz;
-          fs << 1e6 * mass_error << " ";
+          ss << 1e6 * mass_error << " ";
         }
-        fs << std::setprecision(-1);
-        fs << "\t";
-        fs << std::fixed << std::setprecision(2);
+        ss << std::setprecision(-1);
+        ss << "\t";
+        ss << std::fixed << std::setprecision(2);
         for (auto& np : noisy_peaks)
         {
-          fs << std::to_string(np.mz) << " ";
+          ss << std::to_string(np.mz) << " ";
         }
 
-        fs << "\t";
-        fs << std::fixed << std::setprecision(1);
+        ss << "\t";
+        ss << std::fixed << std::setprecision(1);
         for (auto& np : noisy_peaks)
         {
-          fs << np.intensity << " ";
+          ss << np.intensity << " ";
         }
 
-        fs << "\t";
-        fs << std::setprecision(-1);
+        ss << "\t";
+        ss << std::setprecision(-1);
         for (auto& np : noisy_peaks)
         {
-          fs << (np.is_positive ? np.abs_charge : -np.abs_charge) << " ";
+          ss << (np.is_positive ? np.abs_charge : -np.abs_charge) << " ";
         }
 
-        fs << "\t";
+        ss << "\t";
         for (auto& np : noisy_peaks)
         {
-          fs << np.getUnchargedMass() << " ";
+          ss << np.getUnchargedMass() << " ";
         }
 
-        fs << "\t";
+        ss << "\t";
         for (auto& np : noisy_peaks)
         {
-          fs << np.isotopeIndex << " ";
+          ss << np.isotopeIndex << " ";
         }
 
-        fs << "\t";
-        fs << std::setprecision(2);
+        ss << "\t";
+        ss << std::setprecision(2);
         for (auto& np : noisy_peaks)
         {
           double average_mass = pg.getMonoMass() + np.isotopeIndex * pg.getIsotopeDaDistance();
           double mass_error = (average_mass / np.abs_charge + FLASHHelperClasses::getChargeMass(np.is_positive) - np.mz) / np.mz;
-          fs << 1e6 * mass_error << " ";
+          ss << 1e6 * mass_error << " ";
         }
-        fs << std::setprecision(-1);
-        fs << "\t";
+        ss << std::setprecision(-1);
+        ss << "\t";
       }
+
       if (dspec.getOriginalSpectrum().getMSLevel() > 1)
       {
-        // PrecursorScanNum	PrecursorMz	PrecursorIntensity PrecursorCharge	PrecursorMonoMass		PrecursorQscore
-        fs << dspec.getPrecursorScanNumber() << "\t" << (dspec.getPrecursorPeakGroup().getFeatureIndex() == 0 ? "nan" : std::to_string(dspec.getPrecursorPeakGroup().getFeatureIndex())) << "\t"
-           << std::to_string(dspec.getPrecursor().getMZ()) << "\t" << dspec.getPrecursor().getIntensity() << "\t" << dspec.getPrecursor().getCharge() << "\t";
-
-        if (dspec.getPrecursorPeakGroup().empty())
-        {
-          fs << "nan\tnan\tnan\tnan\t";
-          if (report_decoy)
-            fs << "nan\t";
-        }
-        else
-        {
-          fs << dspec.getPrecursorPeakGroup().getChargeSNR(dspec.getPrecursor().getCharge()) << "\t" << std::to_string(dspec.getPrecursorPeakGroup().getMonoMass()) << "\t"
-             << std::to_string(dspec.getPrecursorPeakGroup().getQscore()) << "\t" << dspec.getPrecursorPeakGroup().getQscore2D() << "\t";
-          if (report_decoy)
-          {
-            fs << dspec.getPrecursorPeakGroup().getQvalue() << "\t";
-          }
-        }
+        ss << precursor_ss.str();
       }
-      fs << pg.getIsotopeCosine() << "\t" << pg.getChargeIsotopeCosine(pg.getRepAbsCharge()) << "\t" << pg.getChargeScore() << "\t";
+      ss << pg.getIsotopeCosine() << "\t" << pg.getChargeIsotopeCosine(pg.getRepAbsCharge()) << "\t" << pg.getChargeScore() << "\t";
 
       auto max_qscore_mz_range = pg.getRepMzRange();
-      fs << pg.getSNR() << "\t" << pg.getChargeSNR(pg.getRepAbsCharge()) << "\t" << pg.getAvgPPMError() << "\t" << (pg.isPositive() ? pg.getRepAbsCharge() : -pg.getRepAbsCharge()) << "\t"
+      ss << pg.getSNR() << "\t" << pg.getChargeSNR(pg.getRepAbsCharge()) << "\t" << pg.getAvgPPMError() << "\t" << (pg.isPositive() ? pg.getRepAbsCharge() : -pg.getRepAbsCharge()) << "\t"
          << std::to_string(std::get<0>(max_qscore_mz_range)) << "\t" << std::to_string(std::get<1>(max_qscore_mz_range)) << "\t" << std::to_string(pg.getQscore()) << "\t"
          << std::to_string(pg.getQscore2D());
 
-
       if (report_decoy)
       {
-        fs << "\t" << pg.getQvalue();
+        ss << "\t" << pg.getQvalue();
       }
 
       if (write_detail)
       {
-        fs << "\t" << std::setprecision(-1);
+        ss << "\t" << std::setprecision(-1);
 
         for (int i = std::get<0>(charge_range); i <= std::get<1>(charge_range); i++)
         {
-          fs << pg.getChargeIntensity(i);
+          ss << pg.getChargeIntensity(i);
 
           if (i < std::get<1>(charge_range))
-          {
-            fs << ";";
+          { ss << ";";
           }
         }
-        fs << "\t";
+        ss << "\t";
 
         auto iso_intensities = pg.getIsotopeIntensities();
         for (size_t i = 0; i < iso_intensities.size(); i++)
         {
-          fs << iso_intensities[i];
+          ss << iso_intensities[i];
           if (i < iso_intensities.size() - 1)
-          {
-            fs << ";";
+          { ss << ";";
           }
         }
       }
-      fs << "\n";
+      ss << "\n";
     }
+    fs << ss.str();
   }
 
   void FLASHDeconvSpectrumFile::writeDeconvolvedMassesHeader(std::fstream& fs, const uint ms_level, const bool detail, const bool report_decoy)
@@ -319,7 +322,8 @@ namespace OpenMS
 
   void FLASHDeconvSpectrumFile::writeIsobaricQuantification(std::fstream& fs, std::vector<DeconvolvedSpectrum>& deconvolved_spectra)
   {
-    fs << "Scan\tPrecursorScan\tPrecursorMass\tPrecursorSNR";
+    std::stringstream ss;
+    ss << "Scan\tPrecursorScan\tPrecursorMass\tPrecursorSNR";
     bool begin = true;
     for (auto& dspec : deconvolved_spectra)
     {
@@ -335,46 +339,47 @@ namespace OpenMS
       {
         for (Size i = 0; i < quant.quantities.size(); i++)
         {
-          fs << "\tQuantForCh" << (i + 1);
+          ss << "\tQuantForCh" << (i + 1);
         }
         for (Size i = 0; i < quant.quantities.size(); i++)
         {
-          fs << "\tNormalizedQuantForCh" << (i + 1);
+          ss << "\tNormalizedQuantForCh" << (i + 1);
         }
         for (Size i = 0; i < quant.quantities.size(); i++)
         {
-          fs << "\tMergedQuantForCh" << (i + 1);
+          ss << "\tMergedQuantForCh" << (i + 1);
         }
         for (Size i = 0; i < quant.quantities.size(); i++)
         {
-          fs << "\tNormalizedMergedQuantForCh" << (i + 1);
+          ss << "\tNormalizedMergedQuantForCh" << (i + 1);
         }
-        fs << "\n";
+        ss << "\n";
         begin = false;
       }
-      fs << scan << "\t" << dspec.getPrecursorScanNumber() << "\t" << std::to_string(dspec.getPrecursorPeakGroup().getMonoMass()) << "\t" << dspec.getPrecursorPeakGroup().getChargeSNR(dspec.getPrecursorCharge());
+      ss << scan << "\t" << dspec.getPrecursorScanNumber() << "\t" << std::to_string(dspec.getPrecursorPeakGroup().getMonoMass()) << "\t" << dspec.getPrecursorPeakGroup().getChargeSNR(dspec.getPrecursorCharge());
       double sum = 0;
       for (auto q : quant.quantities)
       {
-        fs << "\t" << std::to_string(q);
+        ss << "\t" << std::to_string(q);
         sum += q;
       }
       for (auto q : quant.quantities)
       {
-        fs << "\t" << std::to_string(q / sum);
+        ss << "\t" << std::to_string(q / sum);
       }
       sum = 0;
       for (auto q : quant.merged_quantities)
       {
-        fs << "\t" << std::to_string(q);
+        ss << "\t" << std::to_string(q);
         sum += q;
       }
       for (auto q : quant.merged_quantities)
       {
-        fs << "\t" << std::to_string(q / sum);
+        ss << "\t" << std::to_string(q / sum);
       }
-      fs << "\n";
+      ss << "\n";
     }
+    fs << ss.str();
   }
 
   void FLASHDeconvSpectrumFile::writeMzML(const MSExperiment& map, std::vector<DeconvolvedSpectrum>& deconvolved_spectra, const String& deconvolved_mzML_file, const String& annotated_mzML_file,
@@ -397,21 +402,16 @@ namespace OpenMS
       annotated_map.clear(false);
     }
 
-    uint current_min_ms_level = 0;
-    for (auto& deconvolved_spectrum : deconvolved_spectra)
+#pragma omp parallel for default(none) shared(deconvolved_spectra, annotated_mzML_file, annotated_map, deconvolved_mzML_file, deconvolved_map, mzml_charge,tols,  std::cout)
+    for (Size i = 0; i < deconvolved_spectra.size(); i++)
     {
-      uint ms_level = deconvolved_spectrum.getOriginalSpectrum().getMSLevel();
-      if (current_min_ms_level == 0 || current_min_ms_level > ms_level)
-        current_min_ms_level = ms_level;
-    }
-
-    for (auto& deconvolved_spectrum : deconvolved_spectra)
-    {
-      auto deconvolved_mzML = deconvolved_spectrum.toSpectrum(mzml_charge, current_min_ms_level, tols[deconvolved_spectrum.getOriginalSpectrum().getMSLevel() - 1], false);
+      auto& deconvolved_spectrum = deconvolved_spectra[i];
+      auto deconvolved_mzML = deconvolved_spectrum.toSpectrum(mzml_charge, tols[deconvolved_spectrum.getOriginalSpectrum().getMSLevel() - 1], false);
       if (!deconvolved_mzML_file.empty())
       {
         if (deconvolved_mzML.empty())
           continue;
+#pragma omp critical
         deconvolved_map.addSpectrum(deconvolved_mzML);
       }
       if (!annotated_mzML_file.empty())
@@ -420,6 +420,7 @@ namespace OpenMS
         anno_spec.sortByPosition();
         std::stringstream val {};
 
+        size_t pindex = 0;
         for (auto& pg : deconvolved_spectrum)
         {
           if (pg.empty())
@@ -430,8 +431,26 @@ namespace OpenMS
           for (size_t k = 0; k < pg.size(); k++)
           {
             auto& p = pg[k];
-            auto pindex = anno_spec.findNearest(p.mz);
-            val << pindex;
+
+            // Increment the pindex while it points to values less than p.mz
+            while (pindex < anno_spec.size() - 1 && anno_spec[pindex].getMZ() < p.mz)
+            {
+              pindex++;
+            }
+
+            // Now pindex points to the nearest or exact match (or the closest higher value)
+            // Check the nearest by comparing current and previous index
+            size_t nearest_index = pindex;
+            if (anno_spec[pindex].getMZ() != p.mz)
+            {
+              if (pindex > 0 && std::abs(anno_spec[pindex - 1].getMZ() - p.mz) < std::abs(anno_spec[pindex].getMZ() - p.mz))
+              {
+                nearest_index = pindex - 1;
+              }
+            }
+
+            val << nearest_index;
+
             if (k < pg.size() - 1)
             {
               val << ",";
@@ -440,10 +459,15 @@ namespace OpenMS
           val << ";";
         }
         anno_spec.setMetaValue("DeconvMassPeakIndices", val.str());
+
+#pragma omp critical
         annotated_map.addSpectrum(anno_spec);
       }
     }
-
+    annotated_map.sortChromatograms();
+    annotated_map.sortSpectra();
+    deconvolved_map.sortChromatograms();
+    deconvolved_map.sortSpectra();
     if (!deconvolved_mzML_file.empty())
     {
       MzMLFile mzml_file;
@@ -470,6 +494,7 @@ namespace OpenMS
   void FLASHDeconvSpectrumFile::writeTopFD(DeconvolvedSpectrum& dspec, std::fstream& fs, const String& filename, const double snr_threshold, const double qval_threshold, const uint min_ms_level,
                                            const bool randomize_precursor_mass, const bool randomize_fragment_mass)
   {
+    std::stringstream ss;
     UInt ms_level = dspec.getOriginalSpectrum().getMSLevel();
     if (ms_level > min_ms_level)
     {
@@ -485,8 +510,8 @@ namespace OpenMS
       return;
     }
 
-    fs << std::fixed << std::setprecision(2);
-    fs << "BEGIN IONS\n"
+    ss << std::fixed << std::setprecision(2);
+    ss << "BEGIN IONS\n"
        << "ID=" << dspec.getScanNumber() << "\n"
        << "FILE_NAME=" << filename << "\n"
        << "NATIVE_ID=" << dspec.getOriginalSpectrum().getNativeID() << "\n"
@@ -501,9 +526,9 @@ namespace OpenMS
       double precursor_mass = dspec.getPrecursorPeakGroup().getMonoMass();
       if (dspec.getActivationMethod() < Precursor::ActivationMethod::SIZE_OF_ACTIVATIONMETHOD)
       {
-        fs << "ACTIVATION=" << Precursor::NamesOfActivationMethodShort[dspec.getActivationMethod()] << "\n";
+        ss << "ACTIVATION=" << Precursor::NamesOfActivationMethodShort[dspec.getActivationMethod()] << "\n";
       }
-      fs << "MS_ONE_ID=" << dspec.getPrecursorScanNumber() << "\n"
+      ss << "MS_ONE_ID=" << dspec.getPrecursorScanNumber() << "\n"
          << "MS_ONE_SCAN=" << dspec.getPrecursorScanNumber() << "\n"
          << "PRECURSOR_MZ=" << std::to_string(dspec.getPrecursor().getMZ()) << "\n"
          << "PRECURSOR_CHARGE=" << (int)(dspec.getPrecursorCharge()) << "\n"
@@ -511,7 +536,7 @@ namespace OpenMS
          << "PRECURSOR_INTENSITY=" << dspec.getPrecursor().getIntensity() << "\n";
     }
 
-    fs << std::setprecision(-1);
+    ss << std::setprecision(-1);
 
     double qscore_threshold = 0;
     std::vector<double> qscores;
@@ -536,15 +561,16 @@ namespace OpenMS
         continue;
       }
 
-      fs << std::fixed << std::setprecision(2);
-      fs << std::to_string(pg.getMonoMass() + (randomize_fragment_mass ? (((double)rand() / (RAND_MAX)) * 200.0 - 100.0) : .0)) << "\t" << pg.getIntensity() << "\t"
+      ss << std::fixed << std::setprecision(2);
+      ss << std::to_string(pg.getMonoMass() + (randomize_fragment_mass ? (((double)rand() / (RAND_MAX)) * 200.0 - 100.0) : .0)) << "\t" << pg.getIntensity() << "\t"
          << (pg.isPositive() ? std::get<1>(pg.getAbsChargeRange()) : -std::get<1>(pg.getAbsChargeRange())) << "\n";
-      fs << std::setprecision(-1);
+      ss << std::setprecision(-1);
       if (++size >= topFD_max_peak_count_)
       {
         break;
       }
     }
-    fs << "END IONS\n\n";
+    ss << "END IONS\n\n";
+    fs << ss.str();
   }
 } // namespace OpenMS

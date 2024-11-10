@@ -71,12 +71,11 @@ namespace OpenMS
   }*/
 
 
-  MSSpectrum DeconvolvedSpectrum::toSpectrum(const int to_charge, uint min_ms_level, double tol, bool retain_undeconvolved)
+  MSSpectrum DeconvolvedSpectrum::toSpectrum(const int to_charge, double tol, bool retain_undeconvolved)
   {
     auto out_spec = MSSpectrum(spec_);
     out_spec.clear(false);
 
-    (void)min_ms_level; // Explicitly unused parameter
    // if ((spec_.getMSLevel() > min_ms_level && precursor_peak_group_.empty()) || empty())
    // {
     //  return out_spec;
@@ -96,6 +95,7 @@ namespace OpenMS
     }
 
     val << ";peaks=";
+    out_spec.reserve(size());
     for (auto& pg : *this)
     {
       if (pg.empty())

@@ -351,11 +351,13 @@ protected:
     OPENMS_LOG_INFO << "FLASHDeconv run complete. Now writing the results in output files ..." << endl;
     // Write output files
     // default feature deconvolution tsv output
+
     if (keep_empty_out || ! deconvolved_features.empty())
     {
       OPENMS_LOG_INFO << "writing feature tsv ..." << endl;
       fstream out_stream;
       out_stream.open(out_file, fstream::out);
+
       FLASHDeconvFeatureFile::writeHeader(out_stream, report_decoy);
       FLASHDeconvFeatureFile::writeFeatures(deconvolved_features, in_file, out_stream, report_decoy);
       out_stream.close();
@@ -378,6 +380,7 @@ protected:
         OPENMS_LOG_INFO << "writing spectrum tsv for MS level " << (i + 1) << " ..." << endl;
 
         out_spec_streams[i].open(out_spec_file[i], fstream::out);
+
         FLASHDeconvSpectrumFile::writeDeconvolvedMassesHeader(out_spec_streams[i], i + 1, write_detail, report_decoy);
 #ifdef TRAIN_OUT
         out_train_streams[i].open(out_spec_file[i] + "_train.csv", fstream::out);
@@ -405,6 +408,7 @@ protected:
       std::map<int, int> dl_index;
 
 #endif
+
       std::map<int, DeconvolvedSpectrum> target_spec_map;
       for (auto& deconvolved_spectrum : deconvolved_spectra)
       {
@@ -458,7 +462,6 @@ protected:
         }
 #endif
       }
-
       if (report_decoy)
       {
         double noise_decoy_weight = fd.getNoiseDecoyWeight();
@@ -492,7 +495,6 @@ protected:
 #endif
         }
       }
-
       for (Size i = 0; i < out_spec_file.size(); i++)
       {
         if (out_spec_file[i].empty() || (! keep_empty_out && per_ms_level_deconv_spec_count.find(i + 1) == per_ms_level_deconv_spec_count.end()))
@@ -525,7 +527,6 @@ protected:
         out_topfd_feature_streams[i].close();
       }
     }
-
     // topFD msalign output
     if (! out_topfd_file.empty())
     {
@@ -557,7 +558,6 @@ protected:
         out_topfd_streams[i].close();
       }
     }
-
     // isobaric quantification output
     if (! out_quant_file.empty())
     {
@@ -572,7 +572,6 @@ protected:
     {
       FLASHDeconvSpectrumFile::writeMzML(map, deconvolved_spectra, out_mzml_file, out_anno_mzml_file, mzml_charge, tols);
     }
-
     return EXECUTION_OK;
   }
 };
