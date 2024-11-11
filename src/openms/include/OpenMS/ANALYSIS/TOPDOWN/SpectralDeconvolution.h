@@ -145,7 +145,7 @@ namespace OpenMS
     /// max mass is max_mass for MS1 and 50 for MS2
     double current_min_mass_;
     /// isotope distance for noise decoy
-    double noise_iso_delta_ = .9444;
+    double noise_iso_delta_ = .9444; // should be described in the FDR paper
     /// minimum number of peaks supporting a mass minus one
     const static int min_support_peak_count_ = 2;
     /// tolerance in ppm for each MS level
@@ -156,8 +156,7 @@ namespace OpenMS
     DoubleList min_isotope_cosine_;
     /// SNR threshold for each MS level
     DoubleList min_snr_;
-    /// Q value threshold for each MS level
-    DoubleList max_qvalue_;
+
     /// the peak group vector from normal run. This is used when dummy masses are generated.
     const DeconvolvedSpectrum* target_dspec_for_decoy_calculation_;
 
@@ -174,7 +173,7 @@ namespace OpenMS
     /// mass bins that are excluded for FLASHIda global targeting mode
     std::vector<double> excluded_masses_;
 
-    /// mass bins that are previsouly deconvolved and excluded for dummy mass generation
+    /// mass bins that are previously deconvolved and excluded for dummy mass generation
     boost::dynamic_bitset<> previously_deconved_mass_bins_for_decoy_;
     std::vector<double> previously_deconved_peak_masses_for_decoy_;
 
@@ -192,9 +191,6 @@ namespace OpenMS
     /// This stores the patterns for harmonic reduction
     Matrix<double> harmonic_filter_matrix_;
 
-    /// isotope dalton distance
-    double iso_da_distance_;
-
     /// This stores the "universal pattern" in binned dimension
     std::vector<int> bin_offsets_;
     /// This stores the patterns for harmonic reduction in binned dimension
@@ -206,6 +202,9 @@ namespace OpenMS
 
     /// current ms Level
     uint ms_level_;
+
+    /// isotope dalton distance
+    double iso_da_distance_;
 
     int target_precursor_charge_ = 0;
     double target_precursor_mz_ = 0;
@@ -234,7 +233,6 @@ namespace OpenMS
         @param mz_bin_intensities intensity per mz bin
      */
     void updateMzBins_(Size bin_number, std::vector<float>& mz_bin_intensities);
-
 
     /// get mass value for input mass bin
     double getMassFromMassBin_(Size mass_bin, double bin_mul_factor) const;

@@ -94,7 +94,7 @@ namespace OpenMS
     /// current maximum MS level - i.e., for MS2, this is the precursor charge
     UInt current_max_ms_level_ = 0;
 
-    /// currment minimum MS level.
+    /// current minimum MS level.
     UInt current_min_ms_level_ = 0;
 
     /// the number of preceding full scans from which MS2 precursor mass will be searched.

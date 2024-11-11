@@ -84,9 +84,9 @@ bool FLASHTnTAlgorithm::areConsistent_(const ProteinHit& a, const ProteinHit& b,
   if (mass1 * mass2 < 0) return false;
   if (mass1 > 0 && mass2 > 0 && std::abs(mass1 - mass2) > std::max(mass1, mass2) * tol / 1e6 * 2) return false;
 
-  double rt1 = a.getMetaValue("RT");
-  double rt2 = b.getMetaValue("RT");
-  if (std::abs(rt1 - rt2) < 30.0) return true; // if rts are within 30 sec, true
+  //double rt1 = a.getMetaValue("RT");
+  //double rt2 = b.getMetaValue("RT");
+  //if (std::abs(rt1 - rt2) < 30.0) return true; // if rts are within 30 sec, true
 
   if (a.metaValueExists("mod_masses") && b.metaValueExists("mod_masses"))
   {
@@ -94,11 +94,28 @@ bool FLASHTnTAlgorithm::areConsistent_(const ProteinHit& a, const ProteinHit& b,
     std::vector<double> mod_masses2 = b.getMetaValue("mod_masses");
     if (mod_masses1.size() != mod_masses2.size()) return false;
     else
-      return true;
+    {
+      std::vector<int> mod_starts1 = a.getMetaValue("ModificationStarts");
+      std::vector<int> mod_starts2 = b.getMetaValue("ModificationStarts");
+      std::vector<int> mod_ends1 = a.getMetaValue("ModificationEnds");
+      std::vector<int> mod_ends2 = b.getMetaValue("ModificationEnds");
+
+      for (Size i = 0; i < mod_masses1.size(); i++)
+      {
+        if (std::abs(mod_masses1[i] - mod_masses2[i]) > std::max(mod_masses1[i], mod_masses2[i]) * tol / 1e6 * 2)
+        {
+          return false;
+        }
+        else if (mod_starts1[i] > mod_ends2[i] || mod_starts2[i] > mod_ends1[i])
+        {
+          return false;
+        }
+      }
+    }
+    return true;
   }
   else if (! a.metaValueExists("mod_masses") && ! a.metaValueExists("mod_masses"))
     return true;
-  // TODO check the modification locations etc.
   return false;
 }
 

@@ -59,10 +59,7 @@ namespace OpenMS
                        "Minimum charge SNR (the SNR of the isotope pattern of a specific charge) thresholds for MS1, 2, ... (e.g., -min_snr 1.0 0.6 to "
                        "specify 1.0 and 0.6 for MS1 and MS2, respectively)");
     defaults_.addTag("min_snr", "advanced");
-    defaults_.setValue("max_qvalue", DoubleList {1.0, 1.0},
-                       "Qvalue thresholds for MS1, 2, ... Effective only when FDR estimation is active. (e.g., -max_qvalue 0.1 0.2 to specify 0.1 and "
-                       "0.2 for MS1 and MS2, respectively)");
-    defaults_.addTag("max_qvalue", "advanced");
+
     defaults_.setValue("allowed_isotope_error", 1,
                        "Allowed isotope index error for decoy and qvalue report. If it is set to 2, for example, +-2 isotope errors are "
                        "not counted as false. Beta version.");
@@ -211,8 +208,6 @@ namespace OpenMS
 
     min_isotope_cosine_ = param_.getValue("min_cos");
     min_snr_ = param_.getValue("min_snr");
-    max_qvalue_ = param_.getValue("max_qvalue");
-
     allowed_iso_error_ = param_.getValue("allowed_isotope_error");
 
     target_precursor_mz_ = param_.getValue("precursor_mz");
@@ -327,7 +322,7 @@ namespace OpenMS
     size_t h_charge_size = harmonic_charges_.size();
     long bin_end = (long)mass_bins_.size();
 
-    auto support_peak_count = std::vector<unsigned short>(mass_bins_.size(), 0); // per mass bin how many peaks are present
+    auto support_peak_count = std::vector<unsigned short>(mass_bins_.size(), 0); // per mass bin how many peaks are present to support that mass bin
 
     // to calculate continuous charges, the previous charge value per mass should be stored
     auto prev_charges = std::vector<unsigned short>(mass_bins_.size(), current_max_charge_ + 2);
@@ -640,7 +635,7 @@ namespace OpenMS
   Matrix<int> SpectralDeconvolution::updateMassBins_(const std::vector<float>& mz_intensities)
   {
     std::vector<float> mass_intensities;
-    updateCandidateMassBins_(mass_intensities, mz_intensities);
+    updateCandidateMassBins_(mass_intensities, mz_intensities); // universal pattern matching
 
     auto per_mass_abs_charge_ranges = filterMassBins_(mass_intensities);
 
@@ -878,6 +873,7 @@ namespace OpenMS
     updateMzBins_(mz_bin_number, mz_bin_intensities);
     mass_bins_ = boost::dynamic_bitset<>(mass_bin_number);
 
+    //for FDR estimation
     if (! previously_deconved_peak_masses_for_decoy_.empty())
     {
       std::sort(previously_deconved_peak_masses_for_decoy_.begin(), previously_deconved_peak_masses_for_decoy_.end());
@@ -896,6 +892,7 @@ namespace OpenMS
       }
     }
 
+    // for targeted deconvolution
     if (! target_mono_masses_.empty())
     {
       target_mass_bins_.reset();
@@ -919,12 +916,17 @@ namespace OpenMS
       }
     }
 
+    // to speed up isotope decoy generation
     if (target_decoy_type_ != PeakGroup::isotope_decoy)
     {
-      auto per_mass_abs_charge_ranges = updateMassBins_(mz_bin_intensities);
+      // main algorithm to generate mass bins
+      const auto per_mass_abs_charge_ranges = updateMassBins_(mz_bin_intensities);
+      // main algorithm to generate peak groups
       getCandidatePeakGroups_(per_mass_abs_charge_ranges);
     }
-    else { deconvolved_spectrum_.clear();
+    else
+    {
+      deconvolved_spectrum_.clear();
       for (const auto& pg : *target_dspec_for_decoy_calculation_)
       {
         deconvolved_spectrum_.emplace_back(pg);

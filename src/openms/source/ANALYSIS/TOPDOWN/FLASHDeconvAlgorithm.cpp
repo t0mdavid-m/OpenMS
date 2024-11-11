@@ -71,7 +71,8 @@ namespace OpenMS
     defaults_.setValue("merging_method", 0,
                        "Method for spectra merging before deconvolution. 0: No merging  1: Average gaussian method to perform moving gaussian "
                        "averaging of spectra per MS level. Effective to increase "
-                       "proteoform ID sensitivity (in particular for Q-TOF datasets). For MSn, only the ones from the same precursor mass (subject to tolerance set by SD:tol) are averaged. 2: Block method to perform merging of all spectra into a single "
+                       "proteoform ID sensitivity (in particular for Q-TOF datasets). For MSn, only the ones from the same precursor mass "
+                       "(subject to tolerance set by SD:tol) are averaged. 2: Block method to perform merging of all spectra into a single "
                        "one per MS level (e.g., for NativeMS datasets).");
     defaults_.setMinInt("merging_method", 0);
     defaults_.setMaxInt("merging_method", 2);
@@ -195,6 +196,7 @@ namespace OpenMS
       {
         // For ms n, first find precursors for all ms n. then make a tmp map having the precursor masses as precursor
         std::map<String, std::vector<Precursor>> original_precursor_map;
+        // open mp here? TODO
         for (Size i = 0; i < map.size(); i++)
         {
           auto spec = map[i];
@@ -280,7 +282,7 @@ namespace OpenMS
 
     for (uint ms_level = 1; ms_level <= current_max_ms_level_; ms_level++)
     {
-      if (ms_level > 1)
+      if (ms_level > 1) // TODO maybe this can go after merge_spec > 0
       {
         // here, register precursor peak groups to the ms2 spectra.
         findPrecursorPeakGroupsForMSnSpectra_(map, deconvolved_spectra, ms_level);
@@ -398,7 +400,8 @@ namespace OpenMS
         is_centroid = it.getType(false) == SpectrumSettings::CENTROID;
         break;
       }
-                                            sd_noise_decoy_.setParameters(sd_param);
+
+      sd_noise_decoy_.setParameters(sd_param);
       sd_noise_decoy_.setTargetDecoyType(PeakGroup::TargetDecoyType::noise_decoy, sd_.getDeconvolvedSpectrum()); // noise
       sd_noise_decoy_.calculateAveragine(use_RNA_averagine_, is_centroid); // for noise, averagine needs to be calculated differently.
 
