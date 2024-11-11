@@ -81,7 +81,8 @@ bool FLASHTnTAlgorithm::areConsistent_(const ProteinHit& a, const ProteinHit& b,
 {
   double mass1 = a.getMetaValue("Mass");
   double mass2 = b.getMetaValue("Mass");
-  if (std::abs(mass1 - mass2) > std::max(mass1, mass2) * tol / 1e6 * 2) return false;
+  if (mass1 * mass2 < 0) return false;
+  if (mass1 > 0 && mass2 > 0 && std::abs(mass1 - mass2) > std::max(mass1, mass2) * tol / 1e6 * 2) return false;
 
   double rt1 = a.getMetaValue("RT");
   double rt2 = b.getMetaValue("RT");
@@ -109,7 +110,7 @@ void FLASHTnTAlgorithm::markRepresentativeProteoformHits_(double tol)
   std::map<String, std::vector<ProteinHit>> proteoform_map;
   for (auto& hit : proteoform_hits_)
   {
-    String acc = hit.getAccession();
+    const auto& acc = hit.getAccession();
 
     if (proteoform_map.find(acc) != proteoform_map.end())
     {
