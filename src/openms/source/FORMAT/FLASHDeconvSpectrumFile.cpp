@@ -403,7 +403,7 @@ namespace OpenMS
     }
 
 #pragma omp parallel for default(none) shared(deconvolved_spectra, annotated_mzML_file, annotated_map, deconvolved_mzML_file, deconvolved_map, mzml_charge,tols,  std::cout)
-    for (Size i = 0; i < deconvolved_spectra.size(); i++)
+    for (int i = 0; i < (int) deconvolved_spectra.size(); i++)
     {
       auto& deconvolved_spectrum = deconvolved_spectra[i];
       auto deconvolved_mzML = deconvolved_spectrum.toSpectrum(mzml_charge, tols[deconvolved_spectrum.getOriginalSpectrum().getMSLevel() - 1], false);
