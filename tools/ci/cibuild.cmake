@@ -13,6 +13,8 @@ set(CTEST_BUILD_CONFIGURATION "$ENV{BUILD_TYPE}")
 set(CTEST_CMAKE_GENERATOR "$ENV{CMAKE_GENERATOR}")
 # custom build flags
 set(CTEST_BUILD_FLAGS "$ENV{BUILD_FLAGS}")
+# Limit targets
+set(TARGETS_TO_BUILD "$ENV{TARGETS_TO_BUILD}")
 
 # cdash server (fu-berlin) SSL certificate sometimes is revoked. Keeps CI running.
 set (CTEST_CURL_OPTIONS       CURLOPT_SSL_VERIFYHOST_OFF CURLOPT_SSL_VERIFYPEER_OFF )
@@ -164,16 +166,23 @@ ctest_update()
 ctest_configure (BUILD "${CTEST_BINARY_DIRECTORY}" OPTIONS "${OWN_OPTIONS}" RETURN_VALUE _configure_ret)
 ctest_submit(PARTS Update Configure)
 
-# we only build when we do non-style testing and we may have special targets like pyopenms
-if("$ENV{ENABLE_STYLE_TESTING}" STREQUAL "OFF")
-  if("$ENV{PYOPENMS}" STREQUAL "ON")
-    ctest_build(BUILD "${CTEST_BINARY_DIRECTORY}" TARGET "pyopenms" NUMBER_ERRORS _build_errors)
-  else()
-    ctest_build(BUILD "${CTEST_BINARY_DIRECTORY}" NUMBER_ERRORS _build_errors)
-    ctest_submit(PARTS Build)
-  endif()
+# Check if specific targets are provided; otherwise, use default behavior
+if(NOT TARGETS_TO_BUILD STREQUAL "")
+  foreach(TARGET ${TARGETS_TO_BUILD})
+    ctest_build(BUILD "${CTEST_BINARY_DIRECTORY}" TARGET ${TARGET} NUMBER_ERRORS _build_errors)
+  endforeach()
 else()
-  set(_build_errors 0)
+  # we only build when we do non-style testing and we may have special targets like pyopenms
+  if("$ENV{ENABLE_STYLE_TESTING}" STREQUAL "OFF")
+    if("$ENV{PYOPENMS}" STREQUAL "ON")
+      ctest_build(BUILD "${CTEST_BINARY_DIRECTORY}" TARGET "pyopenms" NUMBER_ERRORS _build_errors)
+    else()
+      ctest_build(BUILD "${CTEST_BINARY_DIRECTORY}" NUMBER_ERRORS _build_errors)
+      ctest_submit(PARTS Build)
+    endif()
+  else()
+    set(_build_errors 0)
+  endif()
 endif()
 
 string(REPLACE "+" "%2B" BUILD_NAME_SAFE ${CTEST_BUILD_NAME})
