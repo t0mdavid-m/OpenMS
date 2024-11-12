@@ -888,7 +888,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
       refined_tag_indices.push_back(index);
     }
 
-    if (refined_tag_indices.empty()) continue;
+    if (refined_tag_indices.empty() || total_score <= 0) continue;
 
     hi.protein_start_position_ += hi.protein_start_position_ >= 0 ? 1 : 0;
     hit.setMetaValue("ModificationIDs", mod_ids); // TODO matching masses vs. all masses?
