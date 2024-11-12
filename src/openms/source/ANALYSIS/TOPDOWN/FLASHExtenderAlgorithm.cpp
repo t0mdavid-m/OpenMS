@@ -907,9 +907,12 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
     hit.setScore(total_score);
     hit.setMetaValue("StartPosition", hi.protein_start_position_);
     hit.setMetaValue("EndPosition", hi.protein_end_position_);
+    hit.setMetaValue("GivenMass", given_precursor_mass_);
     hit.setMetaValue("Mass", hi.calculated_precursor_mass_);
     hit.setMetaValue("RT", spec.getRT());
     hit.setMetaValue("NumMass", spec.size());
+    hit.setMetaValue("PrecursorScore", dspec.getPrecursorPeakGroup().getQscore2D());
+
     // hit.setMetaValue("Proforma", string)
 #pragma omp critical
     {

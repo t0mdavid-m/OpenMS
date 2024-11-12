@@ -184,12 +184,12 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     nextProgress();
     int scan = FLASHDeconvAlgorithm::getScanNumber(map, index);
 
-    //if (scan > 1300) continue; // TODO
     if (spec.getMSLevel() == 1 && precursor_tol > 0) { continue; }
 
     DeconvolvedSpectrum dspec(scan);
     dspec.setOriginalSpectrum(spec);
     String deconv_meta_str = spec.getMetaValue("DeconvMassInfo").toString();
+
     int tol_loc_s = deconv_meta_str.find("tol=") + 4;
     int tol_loc_e = deconv_meta_str.find(";", tol_loc_s);
 
@@ -199,6 +199,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       precursor_tol = tol;
       continue;
     }
+
     int q_loc_s = deconv_meta_str.find("qscore=") + 7;
     int q_loc_e = deconv_meta_str.find(";", q_loc_s);
     auto q_str = deconv_meta_str.substr(q_loc_s, q_loc_e - q_loc_s);
@@ -211,20 +212,6 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       auto token = q_str.substr(pos, pos_t - pos);
       qscores.push_back(stod(token));
       pos = pos_t + 1;
-    }
-
-    int s_loc_pre_s = deconv_meta_str.find("precursorscan=") + 14;
-    int s_loc_pre_e = deconv_meta_str.find(";", s_loc_pre_s);
-    int precursor_scan = stoi(deconv_meta_str.substr(s_loc_pre_s, s_loc_pre_e - s_loc_pre_s));
-
-    if (precursor_scan > 0)
-    {
-      int s_loc_prem_s = deconv_meta_str.find("precursormass=") + 14;
-      int s_loc_prem_e = deconv_meta_str.find(";", s_loc_prem_s);
-      double precursor_mass = stod(deconv_meta_str.substr(s_loc_prem_s, s_loc_prem_e - s_loc_prem_s));
-      PeakGroup pg;
-      pg.setMonoisotopicMass(precursor_mass);
-      dspec.setPrecursorPeakGroup(pg);
     }
 
     int s_loc_s = deconv_meta_str.find("snr=") + 4;
@@ -241,7 +228,28 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       pos = pos_t + 1;
     }
 
-    for (int i = 0; i < spec.size(); i++)
+    int s_loc_pre_s = deconv_meta_str.find("precursorscan=") + 14;
+    int s_loc_pre_e = deconv_meta_str.find(";", s_loc_pre_s);
+    int precursor_scan = stoi(deconv_meta_str.substr(s_loc_pre_s, s_loc_pre_e - s_loc_pre_s));
+
+    if (precursor_scan > 0)
+    {
+      int s_loc_prem_s = deconv_meta_str.find("precursormass=") + 14;
+      int s_loc_prem_e = deconv_meta_str.find(";", s_loc_prem_s);
+      double precursor_mass = stod(deconv_meta_str.substr(s_loc_prem_s, s_loc_prem_e - s_loc_prem_s));
+      PeakGroup pg;
+      pg.setMonoisotopicMass(precursor_mass);
+      if (deconv_meta_str.hasSubstring("precursorscore="))
+      {
+        int s_loc_preq_s = deconv_meta_str.find("precursorscore=") + 15;
+        int s_loc_preq_e = deconv_meta_str.find(";", s_loc_preq_s);
+        double precursor_qscore = stod(deconv_meta_str.substr(s_loc_preq_s, s_loc_preq_e - s_loc_preq_s));
+        pg.setQscore2D(precursor_qscore);
+      }
+      dspec.setPrecursorPeakGroup(pg);
+    }
+
+    for (Size i = 0; i < spec.size(); i++)
     {
       PeakGroup peak;
       peak.setQscore(qscores[i]);
@@ -253,12 +261,10 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     dspec.sort();
 
     if (dspec.size() < 5) continue;
-
     FLASHTaggerAlgorithm tagger;
     // Run tagger
     tagger.setParameters(tagger_param_);
     tagger.run(dspec, tol);
-
     FLASHExtenderAlgorithm extender;
     extender.setParameters(extender_param_);
     extender.setModificationMap(mod_map);
@@ -271,12 +277,12 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     tagger.runMatching(fasta_entry, dspec,  vectorized_fasta_entry, rev_vectorized_fasta_entry, mass_map, rev_mass_map, max_mod_mass);
     tagger.getTags(tags);
     tagger.getProteinHits(hits, max_hit_count);
+
     hit_by_tag |= !hits.empty();
     extender.run(hits, tags, dspec,
                  tagger.getSpectrum(), flanking_mass_tol, tol, multiple_hits_per_spec_);
     extender.getProteoforms(proteoform_hits_);
     proteoform_found = extender.hasProteoforms();
-
 //    if (false && !hit_by_tag && !proteoform_found) // TODO
 //    {
 //      ConvolutionBasedProteinFilter filter;

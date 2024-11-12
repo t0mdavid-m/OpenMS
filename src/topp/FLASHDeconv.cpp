@@ -6,7 +6,7 @@
 // $Authors: Kyowon Jeong, Jihyung Kim $
 // --------------------------------------------------------------------------
 //#define TRAIN_OUT
-//#define DEEP_LEARNING
+#define DEEP_LEARNING
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvAlgorithm.h>
 #include <OpenMS/APPLICATIONS/TOPPBase.h>
@@ -388,7 +388,7 @@ protected:
 #endif
 #ifdef DEEP_LEARNING
         out_dl_streams[i].open(out_spec_file[i] + "_dl.csv", fstream::out);
-        out_dl_streams[i] << "Index,";
+        out_dl_streams[i] << "FeatureIndex,Index,";
         for (int n = 0; n < 2; n++)
         {
           String header = n == 0? "S" : "N";
@@ -424,6 +424,7 @@ protected:
 #ifdef DEEP_LEARNING
         for (auto& pg : deconvolved_spectrum)
         {
+          out_dl_streams[ms_level - 1] << (pg.getFeatureIndex() > 0 ? pg.getFeatureIndex() : -1) << ",";
           if (dl_index.find(ms_level) == dl_index.end()) dl_index[ms_level] = 1;
           out_dl_streams[ms_level - 1] << dl_index[ms_level]++ << ",";
           // if (pg.getQscore2D() < .9) continue;
@@ -478,6 +479,7 @@ protected:
 #ifdef DEEP_LEARNING
           for (auto& pg : deconvolved_spectrum)
           {
+            out_dl_streams[ms_level - 1] << (pg.getFeatureIndex() > 0 ? pg.getFeatureIndex() : -1) << ",";
             if (dl_index.find(ms_level) == dl_index.end()) dl_index[ms_level] = 1;
             out_dl_streams[ms_level - 1] << dl_index[ms_level]++ << ",";
             const auto& [sig, noise]

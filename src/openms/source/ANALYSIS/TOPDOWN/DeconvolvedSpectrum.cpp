@@ -87,11 +87,12 @@ namespace OpenMS
     val << "tol=" << tol << ";massoffset=" << std::to_string(charge_mass_offset) << ";chargemass=" << std::to_string(FLASHHelperClasses::getChargeMass(peak_groups_[0].isPositive()));
     if (!precursor_peak_group_.empty())
     {
-      val << ";precursorscan=" << precursor_scan_number_ << ";precursormass=" << std::to_string(precursor_peak_group_.getMonoMass());
+      val << ";precursorscan=" << precursor_scan_number_ << ";precursormass=" << std::to_string(precursor_peak_group_.getMonoMass())
+          << ";precursorscore=" << std::to_string(precursor_peak_group_.getQscore2D());
     }
     else
     {
-      val << ";precursorscan=0;precursormass=0";
+      val << ";precursorscan=0;precursormass=0;precursorscore=0";
     }
 
     val << ";peaks=";
