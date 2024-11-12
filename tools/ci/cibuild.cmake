@@ -168,8 +168,15 @@ ctest_submit(PARTS Update Configure)
 
 # Check if specific targets are provided; otherwise, use default behavior
 if(NOT TARGETS_TO_BUILD STREQUAL "")
-  foreach(TARGET ${TARGETS_TO_BUILD})
+  message(STATUS "Building specified targets: ${TARGETS_TO_BUILD}")
+  string(REPLACE " " ";" TARGET_LIST ${TARGETS_TO_BUILD})  # Convert space-separated list to CMake list
+
+  foreach(TARGET ${TARGET_LIST})
+    message(STATUS "Building target: ${TARGET}")
     ctest_build(BUILD "${CTEST_BINARY_DIRECTORY}" TARGET ${TARGET} NUMBER_ERRORS _build_errors)
+    if(_build_errors)
+      message(FATAL_ERROR "Build failed for target: ${TARGET}")
+    endif()
   endforeach()
 else()
   # we only build when we do non-style testing and we may have special targets like pyopenms
