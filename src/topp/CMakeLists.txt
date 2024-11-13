@@ -42,8 +42,13 @@ target_link_libraries(${PROJECT_NAME} OpenMS) # Link the executable with OpenMS
     target_link_libraries(${i} OpenMS)
   endif()  
   
-  # we also want to install each topp tool
-  install_tool(${i})
+  # Check if the TOPP tool was built
+  if(EXISTS "${CMAKE_BINARY_DIR}/bin/${i}${CMAKE_EXECUTABLE_SUFFIX}")
+    install_tool(${i})
+  else()
+    message(STATUS "Tool ${i} was not built or does not exist in the output directory and will not be installed.")
+  endif()
+
   if (OPENMP_FOUND AND NOT MSVC)
     set_target_properties(${i} PROPERTIES LINK_FLAGS ${OpenMP_CXX_FLAGS})
   endif()
