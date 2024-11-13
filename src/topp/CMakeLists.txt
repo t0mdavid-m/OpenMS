@@ -58,8 +58,12 @@ endforeach(i)
 if(WITH_GUI)
   foreach(i ${TOPP_executables_with_GUIlib})
     add_executable(${i} ${i}.cpp)
-    # we also want to install each topp tool
-    install_tool(${i})
+    # Check if the TOPP tool was built
+      if(EXISTS "${CMAKE_BINARY_DIR}/bin/${i}${CMAKE_EXECUTABLE_SUFFIX}")
+      install_tool(${i})
+    else()
+      message(STATUS "Tool ${i} was not built or does not exist in the output directory and will not be installed.")
+    endif()
     target_link_libraries(${i} OpenMS OpenMS_GUI)
   endforeach(i)
 
