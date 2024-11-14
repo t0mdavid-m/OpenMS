@@ -61,7 +61,7 @@ void ConvolutionBasedProteinFilter::vectorizeFasta(const std::vector<FASTAFile::
                                                    std::vector<boost::dynamic_bitset<>>& vectorized_fasta_entry,
                                                    std::vector<std::vector<int>>& vectorized_fasta_entry_indices,
                                                    std::vector<std::map<int, double>>& mass_map,
-                                                   std::vector<std::vector<Size>>& bit_protein_indices,
+                                                  // std::vector<std::vector<Size>>& bit_protein_indices,
                                                    bool reverse)
 {
   vectorized_fasta_entry.reserve(fasta_entry.size());
@@ -101,14 +101,14 @@ void ConvolutionBasedProteinFilter::vectorizeFasta(const std::vector<FASTAFile::
     vectorized_fasta_entry_indices.push_back(vec_indices);
   }
 
-  bit_protein_indices.resize(max_vec_size);
-  for (int fasta_index = 0; fasta_index < vectorized_fasta_entry_indices.size(); fasta_index++)
-  {
-    for (const auto vindex : vectorized_fasta_entry_indices[fasta_index])
-    {
-      bit_protein_indices[vindex].push_back(fasta_index);
-    }
-  }
+//  bit_protein_indices.resize(max_vec_size);
+//  for (int fasta_index = 0; fasta_index < vectorized_fasta_entry_indices.size(); fasta_index++)
+//  {
+//    for (const auto vindex : vectorized_fasta_entry_indices[fasta_index])
+//    {
+//      bit_protein_indices[vindex].push_back(fasta_index);
+//    }
+//  }
 }
 
 

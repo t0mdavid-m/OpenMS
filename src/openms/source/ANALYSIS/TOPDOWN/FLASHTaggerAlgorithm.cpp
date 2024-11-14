@@ -556,9 +556,6 @@ void FLASHTaggerAlgorithm::getScoreAndMatchCount_(const boost::dynamic_bitset<>&
                                                   int& max_score,
                                                   int& match_cntr) const
 {
-  // std::vector<int> scores(spec_vec.size() + pro_vec.size(), 0);
-  // std::vector<int> matches(spec_vec.size() + pro_vec.size(), 0);
-
   max_score = 0;
   match_cntr = 0;
 
@@ -575,9 +572,9 @@ void FLASHTaggerAlgorithm::getScoreAndMatchCount_(const boost::dynamic_bitset<>&
       cntr++;
       score += spec_scores[spec_vec_index];
     }
-    if (cntr > match_cntr)
+    if (cntr >= match_cntr)
     {
-      max_score = score;
+      max_score = std::max(max_score, score);
       match_cntr = cntr;
     }
   }
@@ -778,7 +775,7 @@ void FLASHTaggerAlgorithm::runMatching(const std::vector<FASTAFile::FASTAEntry>&
       if (t < (int)tag.getLength()) continue;
       const auto sub_seq = std::string_view(seq.data() + s, t);
 
-      const auto uppercase_tag_seq = tag.getSequence().toUpper();
+      const auto& uppercase_tag_seq = tag.getUppercaseSequence();
       std::vector<int> positions;
       Size tpos = 0;
       while (true)
@@ -825,6 +822,7 @@ void FLASHTaggerAlgorithm::runMatching(const std::vector<FASTAFile::FASTAEntry>&
     int match_cntr;
     int match_score1 = 0, match_score2 = 0;
     int match_cntr1 = 0, match_cntr2 = 0;
+
 #pragma omp critical
     if (spec_scores.empty())
     {
@@ -846,7 +844,6 @@ void FLASHTaggerAlgorithm::runMatching(const std::vector<FASTAFile::FASTAEntry>&
 
     match_cntr = match_cntr1 + match_cntr2;
     if (match_cntr < min_cov_aa_) continue;
-
     ProteinHit hit(std::max(match_score1, match_score2), 0, fe.identifier, fe.sequence); //
     hit.setDescription(fe.description);
     hit.setMetaValue("Scan", scan);
@@ -908,27 +905,33 @@ void FLASHTaggerAlgorithm::getMatchedPositionsAndFlankingMassDiffs(std::vector<i
                                                                    const FLASHHelperClasses::Tag& tag)
 {
   std::vector<int> indices;
-  const auto tagseq = tag.getSequence().toUpper();
+  const auto& tagseq = tag.getUppercaseSequence();
   Size pos = find_with_X_(seq, tagseq);
   while (pos != String::npos)
   {
-    double delta_mass = .0;
+    double delta_mass = - flanking_mass_tol - 1;
 
     auto x_pos = seq.find('X');
     if (tag.getNtermMass() > 0)
     {
       auto nterm = seq.substr(0, pos);
-      if (x_pos != String::npos) { nterm.erase(remove(nterm.begin(), nterm.end(), 'X'), nterm.end()); }
-      delta_mass = tag.getNtermMass() - (nterm.empty() ? 0 : AASequence::fromString(nterm).getMonoWeight(Residue::Internal));
+      if (! nterm.empty())
+      {
+        if (x_pos != String::npos) { nterm.erase(remove(nterm.begin(), nterm.end(), 'X'), nterm.end()); }
+        delta_mass = tag.getNtermMass() - (nterm.empty() ? 0 : AASequence::fromString(nterm).getMonoWeight(Residue::Internal));
+      }
     }
     else
     {
       auto cterm = seq.substr(pos + tag.getSequence().length());
-      if (x_pos != String::npos) cterm.erase(remove(cterm.begin(), cterm.end(), 'X'), cterm.end());
-      delta_mass = tag.getCtermMass() - (cterm.empty() ? 0 : AASequence::fromString(cterm).getMonoWeight(Residue::Internal));
+      if (! cterm.empty())
+      {
+        if (x_pos != String::npos) cterm.erase(remove(cterm.begin(), cterm.end(), 'X'), cterm.end());
+        delta_mass = tag.getCtermMass() - (cterm.empty() ? 0 : AASequence::fromString(cterm).getMonoWeight(Residue::Internal));
+      }
     }
 
-    if (flanking_mass_tol < 0 || std::abs(delta_mass) <= flanking_mass_tol)
+    if (delta_mass != - flanking_mass_tol - 1 && (flanking_mass_tol < 0 || std::abs(delta_mass) <= flanking_mass_tol))
     {
       masses.push_back(delta_mass);
       positions.push_back((int)pos);

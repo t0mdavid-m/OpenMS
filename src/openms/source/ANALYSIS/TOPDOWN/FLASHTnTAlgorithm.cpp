@@ -172,9 +172,9 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   std::vector<boost::dynamic_bitset<>> vectorized_fasta_entry, rev_vectorized_fasta_entry;
   std::vector<std::vector<int>> vectorized_fasta_entry_indices, rev_vectorized_fasta_entry_indices;
   std::vector<std::map<int, double>> mass_map, rev_mass_map;
-  std::vector<std::vector<Size>> bit_protein_indices, rev_bit_protein_indices;
-  ConvolutionBasedProteinFilter::vectorizeFasta(fasta_entry, vectorized_fasta_entry, vectorized_fasta_entry_indices, mass_map, bit_protein_indices, false);
-  ConvolutionBasedProteinFilter::vectorizeFasta(fasta_entry, rev_vectorized_fasta_entry, rev_vectorized_fasta_entry_indices, rev_mass_map, rev_bit_protein_indices, true);
+  //std::vector<std::vector<Size>> bit_protein_indices, rev_bit_protein_indices;
+  ConvolutionBasedProteinFilter::vectorizeFasta(fasta_entry, vectorized_fasta_entry, vectorized_fasta_entry_indices, mass_map, false);
+  ConvolutionBasedProteinFilter::vectorizeFasta(fasta_entry, rev_vectorized_fasta_entry, rev_vectorized_fasta_entry_indices, rev_mass_map, true);
 
   std::vector<std::map<int,std::set<Size>>> fasta_index, rev_fasta_index;
 

@@ -14,6 +14,7 @@
 namespace OpenMS
 {
 inline const bool debug = false;
+inline const double i2f_mass = Residue::getInternalToFull().getMonoWeight();
 FLASHExtenderAlgorithm::FLASHExtenderAlgorithm(): DefaultParamHandler("FLASHExtenderAlgorithm"), ProgressLogger()
 {
   setDefaultParams_();
@@ -118,7 +119,7 @@ void FLASHExtenderAlgorithm::calculatePrecursorMass_(const ProteinHit& hit,
       hi.calculated_precursor_mass_ += hi.pro_mass_map_[0].back() - (hi.pro_mass_map_[0][proi] + hi.pro_mass_map_[1][proj]);
     }
    }
-  if (hi.calculated_precursor_mass_ > 0) hi.calculated_precursor_mass_ += Residue::getInternalToFull().getMonoWeight();
+  if (hi.calculated_precursor_mass_ > 0) hi.calculated_precursor_mass_ += i2f_mass;
 }
 
 void FLASHExtenderAlgorithm::getProMasses_(const ProteinHit& hit, std::vector<double>& pro_masses, int mode)
@@ -210,7 +211,7 @@ void FLASHExtenderAlgorithm::defineNodes_(const DeconvolvedSpectrum& dspec, HitI
       {
         double mass = pg.getMonoMass() - shift;
         //score_offset--;
-        if (mass <= 0 || mass >= hi.calculated_precursor_mass_ - Residue::getInternalToFull().getMonoWeight()) continue;
+        if (mass <= 0 || mass >= hi.calculated_precursor_mass_ - i2f_mass) continue;
         t_node_spec.emplace_back(mass, std::max(1, score_offset + FLASHTaggerAlgorithm::getPeakGroupScore(pg)));
         t_tol_spec.emplace_back(mass, tol_ * pg.getMonoMass());
       }
@@ -219,10 +220,10 @@ void FLASHExtenderAlgorithm::defineNodes_(const DeconvolvedSpectrum& dspec, HitI
       {
         double mass = pg.getMonoMass() - shift;
         //score_offset--;
-        if (mass <= 0 || mass >= hi.calculated_precursor_mass_ - Residue::getInternalToFull().getMonoWeight()) continue;
-        t_node_spec.emplace_back(hi.calculated_precursor_mass_ - Residue::getInternalToFull().getMonoWeight() - mass,
+        if (mass <= 0 || mass >= hi.calculated_precursor_mass_ - i2f_mass) continue;
+        t_node_spec.emplace_back(hi.calculated_precursor_mass_ - i2f_mass - mass,
                                  std::max(1, score_offset + FLASHTaggerAlgorithm::getPeakGroupScore(pg)));
-        t_tol_spec.emplace_back(hi.calculated_precursor_mass_ - Residue::getInternalToFull().getMonoWeight() - mass, tol_ * pg.getMonoMass());
+        t_tol_spec.emplace_back(hi.calculated_precursor_mass_ - i2f_mass - mass, tol_ * pg.getMonoMass());
       }
     }
   }
@@ -270,8 +271,8 @@ void FLASHExtenderAlgorithm::defineNodes_(const DeconvolvedSpectrum& dspec, HitI
 
   if (hi.calculated_precursor_mass_ > 0)
   {
-    node_spec.emplace_back(hi.calculated_precursor_mass_ - Residue::getInternalToFull().getMonoWeight(), 1);
-    tol_spec.emplace_back(hi.calculated_precursor_mass_ - Residue::getInternalToFull().getMonoWeight(), tol_ * hi.calculated_precursor_mass_);
+    node_spec.emplace_back(hi.calculated_precursor_mass_ - i2f_mass, 1);
+    tol_spec.emplace_back(hi.calculated_precursor_mass_ - i2f_mass, tol_ * hi.calculated_precursor_mass_);
   }
 
   node_spec.sortByPosition();
@@ -286,8 +287,6 @@ void FLASHExtenderAlgorithm::run_(const ProteinHit& hit,
 {
   std::vector<std::vector<int>> tag_edges(4); // pro start end indices and node start end indices
   std::set<Size> sinks;
-  std::vector<int> indices;
-
   std::set<String> upper_case_seqs;
 
   for (const auto& tag : matched_tags)
@@ -299,7 +298,9 @@ void FLASHExtenderAlgorithm::run_(const ProteinHit& hit,
   if (! matched_tags.empty())
   {
     for (auto& edge : tag_edges)
+    {
       edge.reserve(matched_tags.size() * 2);
+    }
   }
   const auto& node_spec = hi.node_spec_map_[hi.mode_];
   const auto& pro_masses = hi.pro_mass_map_[hi.mode_];
@@ -308,10 +309,8 @@ void FLASHExtenderAlgorithm::run_(const ProteinHit& hit,
   bool tag_found = false;
   for (const auto& tag : matched_tags)
   {
-    // if (mode == 0 && tag.getCtermMass() < 0) continue;
-    // if (mode == 1 && tag.getNtermMass() < 0) continue;
     if (hi.mode_ == 2 && hi.calculated_precursor_mass_ <= 0) continue;
-    auto upper_seq = tag.getSequence().toUpper();
+    const auto& upper_seq = tag.getUppercaseSequence();
     bool has_lower_case = std::any_of(tag.getSequence().begin(), tag.getSequence().end(), ::islower) ;
     if (has_lower_case && upper_case_seqs.find(upper_seq) != upper_case_seqs.end()) continue;
 
@@ -346,8 +345,8 @@ void FLASHExtenderAlgorithm::run_(const ProteinHit& hit,
 
         if (hi.mode_ == 2)
         {
-          start_mass = hi.calculated_precursor_mass_ - Residue::getInternalToFull().getMonoWeight() - start_mass;
-          end_mass = hi.calculated_precursor_mass_ - Residue::getInternalToFull().getMonoWeight() - end_mass;
+          start_mass = hi.calculated_precursor_mass_ - i2f_mass - start_mass;
+          end_mass = hi.calculated_precursor_mass_ - i2f_mass - end_mass;
           start_masses.push_back(end_mass);
           end_masses.push_back(start_mass);
         }
@@ -450,7 +449,7 @@ void FLASHExtenderAlgorithm::run_(const ProteinHit& hit,
       int pro_len = getProteinLength_(path, pro_masses);
 
       if (hi.mode_ == 2 && hi.calculated_precursor_mass_ > 0
-          && std::abs(hi.calculated_precursor_mass_ - Residue::getInternalToFull().getMonoWeight() - mass) > 1.1)
+          && std::abs(hi.calculated_precursor_mass_ - i2f_mass - mass) > 1.1)
       {
         continue;
       }
@@ -518,7 +517,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
 
   startProgress(0, (int)hits.size(), "running FLASHExtender ...");
 
-#pragma omp parallel for default(none) shared(hits, dspec, spec, multiple_hits_per_spec, std::cout)
+#pragma omp parallel for default(none) shared(hits, dspec, spec, multiple_hits_per_spec, i2f_mass, std::cout)
   for (int i = 0; i < ((int)hits.size()); i++)
   {
     nextProgress();
@@ -688,7 +687,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
           }
 
           int pro_seq_index = m > 0 ? pro_index : ((int)hit.getSequence().size() - pro_index);
-          if (node_index > 0 && t_node_spec[node_index].getMZ() != hi.calculated_precursor_mass_ - Residue::getInternalToFull().getMonoWeight())
+          if (node_index > 0 && t_node_spec[node_index].getMZ() != hi.calculated_precursor_mass_ - i2f_mass)
           {
             matched_position_map[m].insert(pro_seq_index);
           }
@@ -857,7 +856,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
             {
               double t_mass = tag.getCtermMass() - shift;
               if (m == 2 && hi.calculated_precursor_mass_ > 0)
-                t_mass = hi.calculated_precursor_mass_ - Residue::getInternalToFull().getMonoWeight() - t_mass;
+                t_mass = hi.calculated_precursor_mass_ - i2f_mass - t_mass;
               if (std::abs(t_mass - node_mz) > 1.1) continue;
               tag_matched = true;
               break;
@@ -1159,17 +1158,17 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(std::map<Size, std::tuple<double
                                                 const int max_mod_cntr_for_last_mode)
 {
   // TODO N term mod vs. 1st amino acid mod distinction
-
   if (! hi.visited_[start_vertex]) return;
   const auto& pro_masses = hi.pro_mass_map_[hi.mode_];
+  const auto pro_mass_size = pro_masses.size();
   int max_mod_cntr = max_mod_cntr_for_last_mode >= 0 ? max_mod_cntr_for_last_mode : max_mod_cntr_;
-  int start_node_index = getNodeIndex_(start_vertex, pro_masses.size());
-  int start_pro_index = getProIndex_(start_vertex, pro_masses.size());
+  int start_node_index = getNodeIndex_(start_vertex, pro_mass_size);
+  int start_pro_index = getProIndex_(start_vertex, pro_mass_size);
   int start_score = getScore_(start_vertex);
   int start_num_mod = getModNumber_(start_vertex);
   if (start_num_mod == max_mod_cntr) diagonal_counter = 1e5;
-  // double start_node_mass = node_spec[start_node_index].getMZ();
-  auto src = getVertex_(0, 0, 0, 0, pro_masses.size());
+
+  auto src = getVertex_(0, 0, 0, 0, pro_mass_size);
   const auto& node_spec = hi.node_spec_map_.at(hi.mode_);
   const auto& tol_spec = hi.tol_spec_map_.at(hi.mode_);
 
@@ -1177,14 +1176,14 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(std::map<Size, std::tuple<double
   {
     end_pro_index = 0;
     if (hi.protein_end_position_ >= 0)
-      while (end_pro_index < pro_masses.size()
+      while (end_pro_index < pro_mass_size
              && pro_masses[end_pro_index] - pro_masses[hi.protein_end_position_ - 1] < max_mod_mass_ * (max_mod_cntr - start_num_mod) - 1)
         end_pro_index++;
     else
       end_pro_index = ((start_num_mod < max_mod_cntr) && diagonal_counter == 0)
                         ? start_pro_index + max_extension_stretch_
-                        : ((int)pro_masses.size() - 1); // if sink is not specified, stretch up to 50 amino acids.
-    end_pro_index = std::min(end_pro_index, (int)pro_masses.size() - 1);
+                        : ((int)pro_mass_size - 1); // if sink is not specified, stretch up to 50 amino acids.
+    end_pro_index = std::min(end_pro_index, (int)pro_mass_size - 1);
   }
   // make the range of truncation well...  make use of the positional information
   if (start_vertex == src)
@@ -1192,12 +1191,12 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(std::map<Size, std::tuple<double
     if (false && ! start_pro_indices_.empty())
     {
       int pro_i_start = start_pro_index + 1;
-      int pro_i_end = std::min(end_pro_index + 50, ((int)pro_masses.size() - 1));
+      int pro_i_end = std::min(end_pro_index + 50, ((int)pro_mass_size - 1));
 
       for (const auto& si : start_pro_indices_)
       {
         double m = pro_masses[si];
-        for (pro_i_end = si + 1; pro_i_end < pro_masses.size(); pro_i_end++)
+        for (pro_i_end = si + 1; pro_i_end < pro_mass_size; pro_i_end++)
         {
           if (pro_masses[pro_i_end] > m + max_mod_mass_ * max_mod_cntr) break;
         }
@@ -1206,12 +1205,12 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(std::map<Size, std::tuple<double
           if (pro_masses[pro_i_start] < m - max_mod_mass_ * max_mod_cntr) break;
         }
         pro_i_start = std::max(pro_i_start, 1);
-        pro_i_end = std::min(pro_i_end, (int)pro_masses.size() - 1);
-        end_pro_index = std::min(pro_i_end + 50, (int)pro_masses.size() - 1);
+        pro_i_end = std::min(pro_i_end, (int)pro_mass_size - 1);
+        end_pro_index = std::min(pro_i_end + 50, (int)pro_mass_size - 1);
 
         for (int pro_i = pro_i_start; pro_i <= pro_i_end; pro_i++) // change later
         {
-          Size vertex2 = getVertex_(0, pro_i, 0, 0, pro_masses.size()); //
+          Size vertex2 = getVertex_(0, pro_i, 0, 0, pro_mass_size); //
           bool connected = hi.dag_.addEdge(vertex2, start_vertex, hi.visited_);
 
           if (vertex2 >= hi.visited_.size() || ! connected) continue;
@@ -1230,8 +1229,6 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(std::map<Size, std::tuple<double
         if (hi.protein_start_position_ >= 0
             && pro_masses[hi.protein_start_position_] - pro_masses[pro_i] > max_mod_mass_ * (max_mod_cntr - start_num_mod) + 1.1)
           continue;
-        // if (hi.protein_end_position_ >= 0 && pro_masses[hi.protein_end_position_] - pro_masses[pro_i] > max_mod_mass_ * (max_mod_cntr -
-        // start_num_mod) - 1) break;
 
         if (end_node_index >= 0
             && std::abs(node_spec[end_node_index].getMZ() - pro_masses[end_pro_index] + pro_masses[pro_i])
@@ -1239,7 +1236,7 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(std::map<Size, std::tuple<double
         {
           continue;
         }
-        Size vertex2 = getVertex_(0, pro_i, 0, 0, pro_masses.size()); //
+        Size vertex2 = getVertex_(0, pro_i, 0, 0, pro_mass_size); //
         bool connected = hi.dag_.addEdge(vertex2, start_vertex, hi.visited_);
 
         if (vertex2 >= hi.visited_.size() || ! connected) continue;
@@ -1265,16 +1262,17 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(std::map<Size, std::tuple<double
   }
 
   bool same_score_node = false;
-  int key_to_score_map = (int)start_pro_index * pro_masses.size() + end_pro_index + 1; // - truncation_mass; //
+  int key_to_score_map = (int)start_pro_index * pro_mass_size + end_pro_index + 1; // - truncation_mass; //
   for (int nm = 0; nm <= start_num_mod; nm++)
   {
-    Size zero_score_vertex = getVertex_(start_node_index, start_pro_index, 0, nm, pro_masses.size());
+    Size zero_score_vertex = getVertex_(start_node_index, start_pro_index, 0, nm, pro_mass_size);
     if (node_max_score_map.find(zero_score_vertex) != node_max_score_map.end())
     {
-      if (node_max_score_map[zero_score_vertex].find(key_to_score_map) != node_max_score_map[zero_score_vertex].end())
+      auto& kts = node_max_score_map[zero_score_vertex];
+      if (kts.find(key_to_score_map) != kts.end())
       {
-        if (node_max_score_map[zero_score_vertex][key_to_score_map] > start_score) { return; }
-        else if (key_to_score_map != 0 && node_max_score_map[zero_score_vertex][key_to_score_map] == start_score)
+        if (kts[key_to_score_map] > start_score) { return; }
+        else if (key_to_score_map != 0 && kts[key_to_score_map] == start_score)
           same_score_node = true;
       }
     }
@@ -1300,7 +1298,7 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(std::map<Size, std::tuple<double
 
   if (start_num_mod > 0 && same_score_node) return; // exclude truncation
 
-  node_max_score_map[getVertex_(start_node_index, start_pro_index, 0, start_num_mod, pro_masses.size())][key_to_score_map] = start_score;
+  node_max_score_map[getVertex_(start_node_index, start_pro_index, 0, start_num_mod, pro_mass_size)][key_to_score_map] = start_score;
 
   for (int node_i = start_node_index + 1; node_i <= (end_node_index < 0 ? ((int)node_spec.size() - 1) : end_node_index); node_i++)
   {
@@ -1325,17 +1323,17 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(std::map<Size, std::tuple<double
         if (std::abs(delta_delta) < 0.036386 - t_margin) continue;
         if (std::abs(delta_delta) > 0.036386 + t_margin && std::abs(delta_delta) < 0.947630 - t_margin) continue;
         num_mod++;
-        if (diagonal_counter > 0) continue; //
         if (num_mod > max_mod_cntr) continue;
+        if (diagonal_counter > 0) continue; //
 
         next_cumulative_mod_mass = t_delta_mass + truncation_mass;
 
         if (hi.mode_ == 2)
         {
-          for (int pi = std::max(pro_i, hi.protein_end_position_ - 5); pi < std::min(hi.protein_end_position_ + 5, (int)pro_masses.size()); pi++)
+          for (int pi = std::max(pro_i, hi.protein_end_position_ - 5); pi < std::min(hi.protein_end_position_ + 5, (int)pro_mass_size); pi++)
           {
             double corrected_mod_mass
-              = hi.calculated_precursor_mass_ - Residue::getInternalToFull().getMonoWeight() - pro_masses[pi] + truncation_mass;
+              = hi.calculated_precursor_mass_ - i2f_mass - pro_masses[pi] + truncation_mass;
             double delta = corrected_mod_mass - next_cumulative_mod_mass;
             if (delta > 1.1) continue;
             if (delta < -1.1) break;
@@ -1356,15 +1354,11 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(std::map<Size, std::tuple<double
 
       next_score = std::min(next_score, max_path_score_);
       next_score = std::max(next_score, min_path_score_);
-      // if (next_score < min_path_score_) continue;
-      // if (end_node_index < 0 && next_score < 0) continue;
-      auto next_vertex = getVertex_(node_i, pro_i, next_score, num_mod, pro_masses.size());
+      auto next_vertex = getVertex_(node_i, pro_i, next_score, num_mod, pro_mass_size);
       if (next_vertex >= hi.visited_.size()) continue;
 
       if (next_score >= max_path_score_ && ! sinks.empty() && hi.visited_[next_vertex]) continue;
-
-      bool connected = hi.dag_.addEdge(next_vertex, start_vertex, hi.visited_);
-      if (! connected) continue;
+      if (!hi.dag_.addEdge(next_vertex, start_vertex, hi.visited_)) continue;
 
       int next_diagonal_counter = diagonal_counter;
       if (diagonal_counter > 0) next_diagonal_counter--;

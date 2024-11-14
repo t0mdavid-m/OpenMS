@@ -251,11 +251,17 @@ FLASHHelperClasses::PrecalculatedAveragine::PrecalculatedAveragine(const double 
   FLASHHelperClasses::Tag::Tag(String seq, double n_mass, double c_mass, std::vector<double>& mzs, std::vector<int>& scores,  int scan) :
       seq_(std::move(seq)), n_mass_(n_mass), c_mass_(c_mass), mzs_(mzs), scores_(scores), scan_(scan), length_(mzs.size() - 1)
   {
+    upper_seq_ = seq_.toUpper();
   }
 
-  String FLASHHelperClasses::Tag::getSequence() const
+  const String& FLASHHelperClasses::Tag::getSequence() const
   {
     return seq_;
+  }
+
+  const String& FLASHHelperClasses::Tag::getUppercaseSequence() const
+  {
+    return upper_seq_;
   }
 
   Size FLASHHelperClasses::Tag::getLength() const

@@ -235,7 +235,8 @@ struct OPENMS_DLLAPI FLASHHelperClasses
     bool operator>(const Tag& a) const;
     bool operator==(const Tag& other) const;
 
-    String getSequence() const;
+    const String& getSequence() const;
+    const String& getUppercaseSequence() const;
     double getNtermMass() const;
     double getCtermMass() const;
     Size getLength() const;
@@ -266,7 +267,7 @@ struct OPENMS_DLLAPI FLASHHelperClasses
     const std::vector<double>& getMzs() const;
 
   private:
-    String seq_;
+    String seq_, upper_seq_;
     double n_mass_ = -1, c_mass_ = -1;
     float rt_ = -1;
     std::vector<double> mzs_;
