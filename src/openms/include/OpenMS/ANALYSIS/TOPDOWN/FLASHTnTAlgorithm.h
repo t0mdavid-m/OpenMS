@@ -54,7 +54,7 @@ public:
     @param fasta_entry fasta entry to searched against
 
   */
-  void run(const MSExperiment& map, const std::vector<FASTAFile::FASTAEntry>& fasta_entry, double flanking_mass_tol);
+  void run(const MSExperiment& map, const std::vector<FASTAFile::FASTAEntry>& fasta_entry);
   void getProteoformHitsMatchedBy(const FLASHHelperClasses::Tag& tag, std::vector<ProteinHit>& hits) const;
   void getTags(std::vector<FLASHHelperClasses::Tag>& tags) const;
   void getProteoforms(std::vector<ProteinHit>& hits) const

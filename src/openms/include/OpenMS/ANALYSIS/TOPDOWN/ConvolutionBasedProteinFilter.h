@@ -68,7 +68,7 @@ namespace OpenMS
                                std::vector<boost::dynamic_bitset<>>& vectorized_fasta_entry,
                                std::vector<std::vector<int>>& vectorized_fasta_entry_indices,
                                std::vector<std::map<int, double>>& mass_map,
-                               //std::vector<std::vector<Size>>& bit_protein_indices,
+                               // std::vector<std::vector<Size>>& bit_protein_indices,
                                bool reverse);
 
     static const int multi_factor_for_vectorization = 1;

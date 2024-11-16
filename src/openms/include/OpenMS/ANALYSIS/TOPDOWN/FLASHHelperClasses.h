@@ -294,7 +294,7 @@ struct OPENMS_DLLAPI FLASHHelperClasses
 
     bool addEdge(Size vertex1, Size vertex2, boost::dynamic_bitset<>& visited)
     {
-      if (vertex1 >= visited.size() || vertex2 >= visited.size()) return false;
+      if (vertex1 >= vertex_count_ || vertex2 >= vertex_count_) return false;
       if (! visited[vertex2]) return false;
       visited[vertex1] = true;
       adj_list_[vertex1].insert(vertex2); //

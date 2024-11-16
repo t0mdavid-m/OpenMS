@@ -109,10 +109,13 @@ private:
   Size getVertex_(int index, int path_score, int level, int iso_level, int gap_level) const;
   int getIndex_(Size vertex) const;
 
-  void getScoreAndMatchCount_(const boost::dynamic_bitset<>& spec_vec, const boost::dynamic_bitset<>& pro_vec,
+  void indexFasta_(const std::vector<FASTAFile::FASTAEntry>& fasta_entry);
+
+  void getScoreAndMatchCount_(const std::vector<Size>& spec_vec,
+                              const boost::dynamic_bitset<>& pro_vec,
                               //const boost::dynamic_bitset<>& mask_pro_vec,
                               const std::set<int>& spec_pro_diffs,
-                              std::vector<int>& spec_scores,
+                              const std::vector<int>& spec_scores,
                               int& max_score, int& match_cntr) const;
 
 
@@ -139,6 +142,7 @@ private:
   std::set<double> n_term_shifts_;
   std::set<double> c_term_shifts_;
 
+  std::map<String, std::set<Size>> indexed_fasta_;
   bool consider_diff_ion_jumps_ = false;
   int max_tag_count_ = 0;
   int min_tag_length_ = 0;
@@ -149,8 +153,8 @@ private:
   int max_gap_count_ = 0;
   int max_aa_in_gap_ = 2;
   int min_cov_aa_ = 5;
-  double decoy_factor_ = 0;
+  double decoy_factor_ = -1;
   double max_edge_mass_ = 0;
-  double flanking_mass_tol_ = -1;
+  //double flanking_mass_tol_ = -1;
 };
 } // namespace OpenMS

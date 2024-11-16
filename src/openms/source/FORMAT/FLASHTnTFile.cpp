@@ -83,17 +83,20 @@ void FLASHTnTFile::writeTags(const FLASHTnTAlgorithm& tnt, double flanking_mass_
         int protein_end_position = hit.getMetaValue("EndPosition");
         protein_start_position--;
         String seq = hit.getSequence();
-        FLASHTaggerAlgorithm::getMatchedPositionsAndFlankingMassDiffs(pos, masses, 1e10, seq, tag);
+        FLASHTaggerAlgorithm::getMatchedPositionsAndFlankingMassDiffs(pos, masses, -1, seq, tag);
 
         if (protein_end_position >= 0) seq = seq.substr(0, protein_end_position);
         if (protein_start_position >= 0) seq = seq.substr(protein_start_position);
         FLASHTaggerAlgorithm::getMatchedPositionsAndFlankingMassDiffs(pos_in_truncated, masses_in_truncated, flanking_mass_tol, seq, tag);
-        for (int i = 0; i < pos.size(); i++)
+        if (!pos_in_truncated.empty())
         {
-          if (pos[i] - (protein_start_position < 0? 0 : protein_start_position) != pos_in_truncated[0]) continue;
-          positions += std::to_string(pos[i]+1);
-          delta_masses += std::to_string(masses[i]);
-          break;
+          for (int i = 0; i < pos.size(); i++)
+          {
+            if (pos[i] - (protein_start_position < 0 ? 0 : protein_start_position) != pos_in_truncated[0]) continue;
+            positions += std::to_string(pos[i] + 1);
+            delta_masses += std::to_string(masses[i]);
+            break;
+          }
         }
       }
 

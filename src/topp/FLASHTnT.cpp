@@ -94,7 +94,6 @@ protected:
     mzml.load(in_file, map);
 
     auto tnt_param = getParam_().copy("tnt:", true);
-    double flanking_mass_tol = tnt_param.getValue("tag:flanking_mass_tol");
     double max_mod_mass = tnt_param.getValue("ex:max_mod_mass");
     int max_mod_count = tnt_param.getValue("ex:max_mod_count");
     double pro_fdr = tnt_param.getValue("pro_fdr");
@@ -131,28 +130,25 @@ protected:
 
     FLASHTnTAlgorithm tnt;
     tnt.setParameters(tnt_param);
-    tnt.run(map, fasta_entry, flanking_mass_tol);
+    tnt.run(map, fasta_entry);
     tnt.getProteoforms(proteoform_hits);
 
+    OPENMS_LOG_INFO << "FLASHTnT run complete. Now writing the results in output files ..." << endl;
     if (! out_tag_file.empty())
     {
       FLASHTnTFile::writeTags(tnt, max_mod_count * max_mod_mass + 1, out_tagger_stream);
       out_tagger_stream.close();
     }
-
     if (! out_prsm_file.empty())
     {
       FLASHTnTFile::writePrSMs(proteoform_hits, out_prsm_stream);
       out_prsm_stream.close();
     }
-
     if (! out_pro_file.empty())
     {
       FLASHTnTFile::writeProteoforms(proteoform_hits, out_pro_stream, pro_fdr);
       out_pro_stream.close();
     }
-
-    OPENMS_LOG_INFO << "FLASHTnT run complete. Now writing the results in output files ..." << endl;
 
     return EXECUTION_OK;
   }

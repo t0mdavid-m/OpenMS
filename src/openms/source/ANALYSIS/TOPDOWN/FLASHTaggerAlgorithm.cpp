@@ -129,14 +129,14 @@ void FLASHTaggerAlgorithm::updateEdgeMasses_()
   }
 }
 
-Size FLASHTaggerAlgorithm::getVertex_(int index, int path_score, int level, int diff_ion_jump, int gap_level) const
+inline Size FLASHTaggerAlgorithm::getVertex_(int index, int path_score, int level, int diff_ion_jump, int gap_level) const
 {
   return (((index * (max_tag_length_ + 1) + level) * ((consider_diff_ion_jumps_ ? 1 : 0) + 1) + diff_ion_jump) * (max_gap_count_ + 1) + gap_level)
            * (max_path_score_ - min_path_score_ + 1)
          + (path_score - min_path_score_);
 }
 
-int FLASHTaggerAlgorithm::getIndex_(Size vertex) const
+inline int FLASHTaggerAlgorithm::getIndex_(Size vertex) const
 {
   return (((int)vertex / (max_path_score_ - min_path_score_ + 1)) / (max_gap_count_ + 1)) / ((consider_diff_ion_jumps_ ? 1 : 0) + 1)
          / (max_tag_length_ + 1);
@@ -303,10 +303,10 @@ void FLASHTaggerAlgorithm::setDefaultParams_()
   defaults_.setMaxInt("max_length", 30);
   defaults_.setMinInt("max_length", 3);
 
-  defaults_.setValue("flanking_mass_tol", -1,
-                     "Flanking mass tolerance (the flanking mass minus protein mass up to the matching amino acid) in Da. This limits the possible "
-                     "terminal modification mass. Set to a positive value to activate.");
-  defaults_.addTag("flanking_mass_tol", "advanced");
+//  defaults_.setValue("flanking_mass_tol", -1,
+//                     "Flanking mass tolerance (the flanking mass minus protein mass up to the matching amino acid) in Da. This limits the possible "
+//                     "terminal modification mass. Set to a positive value to activate.");
+//  defaults_.addTag("flanking_mass_tol", "advanced");
 
   defaults_.setValue("max_iso_error_count", 0, "Maximum isotope error count per tag.");
 
@@ -381,7 +381,7 @@ void FLASHTaggerAlgorithm::updateMembers_()
   max_aa_in_gap_ = param_.getValue("max_aa_in_gap");
   max_gap_count_ = param_.getValue("allow_gap").toString() == "true" ? 1 : 0;
   // prsm_fdr_ = param_.getValue("fdr");
-  flanking_mass_tol_ = param_.getValue("flanking_mass_tol");
+  //flanking_mass_tol_ = param_.getValue("flanking_mass_tol");
   updateEdgeMasses_();
   max_edge_mass_ = consider_diff_ion_jumps_ ? (EmpiricalFormula("H4O2").getMonoWeight()) : 0;
   max_edge_mass_ += gap_mass_map_.empty() ? aa_mass_map_.rbegin()->first : std::max(aa_mass_map_.rbegin()->first, gap_mass_map_.rbegin()->first);
@@ -397,7 +397,6 @@ void FLASHTaggerAlgorithm::run(const DeconvolvedSpectrum& deconvolved_spectrum, 
   // setLogType(CMD);
 
   if (deconvolved_spectrum.empty() || deconvolved_spectrum.isDecoy() || deconvolved_spectrum.getOriginalSpectrum().getMSLevel() == 1) return;
-
 
   auto tags = std::vector<FLASHHelperClasses::Tag>();
   tags.reserve(max_tag_count_ * max_tag_length_);
@@ -418,6 +417,42 @@ void FLASHTaggerAlgorithm::run(const DeconvolvedSpectrum& deconvolved_spectrum, 
   {
     tag.setIndex(index++);
     tag.setRetentionTime(deconvolved_spectrum.getOriginalSpectrum().getRT());
+  }
+}
+
+void FLASHTaggerAlgorithm::indexFasta_(const std::vector<FASTAFile::FASTAEntry>& fasta_entry)
+{
+  if (!indexed_fasta_.empty()) return;
+  std::vector<String> keys = {""};
+  keys.reserve( std::pow(aas_.size(), min_tag_length_) + 1);
+  for (Size d = 0; d < min_tag_length_; d++)
+  {
+    auto t_keys = keys;
+    for (const auto& aa : aas_)
+    {
+      const auto& aaStr = aa->toString();
+      for (const auto& key : t_keys)
+      {
+        if (key.length() != d) continue;
+        keys.push_back(key + aaStr);
+      }
+    }
+  }
+
+#pragma omp parallel for default(none) shared(keys, fasta_entry, std::cout)
+  for (Size i = 0 ; i < keys.size(); i++)
+  {
+    const auto& key = keys[i];
+    if (key.length() < min_tag_length_) continue;
+    std::set<Size> value;
+    for (Size j = 0 ; j < fasta_entry.size(); j++)
+    {
+      if (!fasta_entry[j].sequence.hasSubstring(key)) continue;
+      value.insert(j);
+    }
+    //std::cout<<key<< " " << value.size()<<std::endl;
+#pragma omp critical
+    indexed_fasta_[key] = value;
   }
 }
 
@@ -548,11 +583,11 @@ void FLASHTaggerAlgorithm::updateTagSet_(std::set<FLASHHelperClasses::Tag>& tag_
   }
 }
 
-void FLASHTaggerAlgorithm::getScoreAndMatchCount_(const boost::dynamic_bitset<>& spec_vec,
+void FLASHTaggerAlgorithm::getScoreAndMatchCount_(const std::vector<Size>& spec_vec,
                                                   const boost::dynamic_bitset<>& pro_vec,
                                                   // const boost::dynamic_bitset<>& mask_pro_vec,
                                                   const std::set<int>& spec_pro_diffs,
-                                                  std::vector<int>& spec_scores,
+                                                  const std::vector<int>& spec_scores,
                                                   int& max_score,
                                                   int& match_cntr) const
 {
@@ -563,14 +598,15 @@ void FLASHTaggerAlgorithm::getScoreAndMatchCount_(const boost::dynamic_bitset<>&
   {
     int score = 0;
     int cntr = 0;
-    for (Size spec_vec_index = spec_vec.find_first(); spec_vec_index != spec_vec.npos; spec_vec_index = spec_vec.find_next(spec_vec_index))
+    for (int i = 0; i < spec_vec.size(); i++)
     {
+      Size spec_vec_index = spec_vec[i];
       int index = d + (int)spec_vec_index;
       if (index < 0) continue;
       if (index >= pro_vec.size()) break;
       if (! pro_vec[index]) continue;
       cntr++;
-      score += spec_scores[spec_vec_index];
+      score += spec_scores.at(i);
     }
     if (cntr >= match_cntr)
     {
@@ -704,46 +740,39 @@ void FLASHTaggerAlgorithm::runMatching(const std::vector<FASTAFile::FASTAEntry>&
                                        const std::vector<std::map<int, double>>& rev_mass_map,
                                        double max_mod_mass)
 {
+
+  //indexFasta_(fasta_entry);
   std::vector<std::pair<ProteinHit, std::vector<int>>> pairs;
-  std::vector<int> start_loc(tags_.size(), 0);
-  std::vector<int> end_loc(tags_.size(), 0);
+  //std::set<Size> matched_fasta_entries;
   int scan = 0;
   protein_hits_.clear();
-  // for each tag, find the possible start and end locations in the protein sequence. If C term, they are negative values to specify values are from
-  // the end of the protein
-  for (int i = 0; i < (int)tags_.size(); i++)
-  {
-    const auto& tag = tags_[i];
-    scan = tag.getScan();
-    auto flanking_mass = std::max(tag.getNtermMass(), tag.getCtermMass());
-    start_loc[i] = flanking_mass_tol_ >= 0 ? std::max(0, int(floor(flanking_mass - flanking_mass_tol_) / aa_mass_map_.rbegin()->first)) : 0;
-    end_loc[i]
-      = flanking_mass_tol_ >= 0 ? int(ceil(flanking_mass + flanking_mass_tol_) / aa_mass_map_.begin()->first) + (int)tag.getLength() + 1 : -1; // TODO
-  }
 
   // int min_hit_tag_score = max_path_score_;
   startProgress(0, (SignedSize)fasta_entry.size(), "Running FLASHTagger: searching database");
 
-  double taget_count = 0;
-  double decoy_count = 0;
-
-  for (const auto& fe : fasta_entry)
+  if (decoy_factor_ < 0)
   {
-    if (fe.identifier.hasPrefix("DECOY")) { decoy_count++; }
-    else { taget_count++; }
-    decoy_factor_ = decoy_count / taget_count;
+    double taget_count = 0;
+    double decoy_count = 0;
+    for (const auto& fe : fasta_entry)
+    {
+      if (fe.identifier.hasPrefix("DECOY")) { decoy_count++; }
+      else { taget_count++; }
+      decoy_factor_ = decoy_count / taget_count;
+    }
   }
 
-  boost::dynamic_bitset<> spec_vec;
+  std::vector<Size> spec_vec;
   std::vector<int> spec_scores;
-  Size spec_vec_size
-    = 1 + round(ConvolutionBasedProteinFilter::multi_factor_for_vectorization * deconvolved_spectrum[deconvolved_spectrum.size() - 1].getMonoMass());
+  //Size spec_vec_size
+  //  = 1 + round(ConvolutionBasedProteinFilter::multi_factor_for_vectorization * deconvolved_spectrum[deconvolved_spectrum.size() - 1].getMonoMass());
 
 #pragma omp parallel for default(none)                                                                                                     \
-  shared(mass_map, rev_mass_map, spec_vec_size, spec_vec, spec_scores, deconvolved_spectrum, pairs, fasta_entry, taget_count, decoy_count, \
-           start_loc, end_loc, scan, max_mod_mass, vectorized_fasta_entry, reversed_vectorized_fasta_entry, std::cout)
-  for (int i = 0; i < (int)fasta_entry.size(); i++)
+  shared(mass_map, rev_mass_map, spec_vec, spec_scores, deconvolved_spectrum, pairs, fasta_entry, \
+           scan, max_mod_mass, vectorized_fasta_entry, reversed_vectorized_fasta_entry, std::cout)
+  for (int i = 0; i < fasta_entry.size(); i++)
   {
+    //if (matched_fasta_entries.find((Size)i) == matched_fasta_entries.end()) continue; // TODO make it faster
     const auto& fe = fasta_entry[i];
     nextProgress();
     std::vector<int> matched_tag_indices;
@@ -768,21 +797,14 @@ void FLASHTaggerAlgorithm::runMatching(const std::vector<FASTAFile::FASTAEntry>&
 
       bool isNterm = tag.getNtermMass() > 0;
 
-      int s, t;
-      if (isNterm) { s = start_loc[j]; }
-      else { s = end_loc[j] >= 0? std::max(0, int(seq.length()) - 1 - end_loc[j]) : 0; }
-      t = end_loc[j] >= 0? std::min(end_loc[j] - start_loc[j], int(seq.length()) - s) : int(seq.length()) - s;
-      if (t < (int)tag.getLength()) continue;
-      const auto sub_seq = std::string_view(seq.data() + s, t);
-
       const auto& uppercase_tag_seq = tag.getUppercaseSequence();
       std::vector<int> positions;
       Size tpos = 0;
       while (true)
       {
-        tpos = sub_seq.find(uppercase_tag_seq, tpos);
+        tpos = seq.find(uppercase_tag_seq, tpos);
         if (tpos == std::string_view::npos) break;
-        positions.push_back((int)tpos + s);
+        positions.push_back((int)tpos);
         tpos++;
       }
 
@@ -795,7 +817,6 @@ void FLASHTaggerAlgorithm::runMatching(const std::vector<FASTAFile::FASTAEntry>&
         {
           n_term_mass = pro_masses.at(pos);
           double flanking_mass = n_term_mass - tag.getNtermMass();
-          if (flanking_mass_tol_ >= 0 && std::abs(flanking_mass) > flanking_mass_tol_) continue;
           if (max_mod_mass > 0 && flanking_mass < -max_mod_mass) continue;
           n_spec_pro_diffs.insert(round(ConvolutionBasedProteinFilter::multi_factor_for_vectorization * flanking_mass));
         }
@@ -803,7 +824,6 @@ void FLASHTaggerAlgorithm::runMatching(const std::vector<FASTAFile::FASTAEntry>&
         {
           c_term_mass = rev_pro_masses.at(pos + tag.getSequence().length());
           double flanking_mass = c_term_mass - tag.getCtermMass();
-          if (flanking_mass_tol_ >= 0 && std::abs(flanking_mass) > flanking_mass_tol_) continue;
           if (max_mod_mass > 0 && flanking_mass < -max_mod_mass) continue;
           c_spec_pro_diffs.insert(round(ConvolutionBasedProteinFilter::multi_factor_for_vectorization * flanking_mass));
         }
@@ -826,16 +846,18 @@ void FLASHTaggerAlgorithm::runMatching(const std::vector<FASTAFile::FASTAEntry>&
 #pragma omp critical
     if (spec_scores.empty())
     {
-      spec_vec = boost::dynamic_bitset<>(spec_vec_size);
-      spec_scores = std::vector<int>(spec_vec_size, 0);
+      //spec_vec = boost::dynamic_bitset<>(deconvolved_spectrum.size());
+      //spec_scores = std::vector<int>(spec_vec_size, 0);
+      spec_vec.reserve(deconvolved_spectrum.size() + 1);
+      spec_scores.reserve(deconvolved_spectrum.size() + 1);
 
-      spec_vec[0] = true;
-      spec_scores[0] = 1;
+      spec_vec.push_back(0);
+      spec_scores.push_back(1);
       for (const auto& pg : deconvolved_spectrum)
       {
-        int mn = round(ConvolutionBasedProteinFilter::multi_factor_for_vectorization * pg.getMonoMass());
-        spec_vec[mn] = true;
-        spec_scores[mn] = FLASHTaggerAlgorithm::getPeakGroupScore(pg);
+        Size mn = round(ConvolutionBasedProteinFilter::multi_factor_for_vectorization * pg.getMonoMass());
+        spec_vec.push_back(mn);
+        spec_scores.push_back(FLASHTaggerAlgorithm::getPeakGroupScore(pg));
       }
     }
 

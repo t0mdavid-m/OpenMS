@@ -150,7 +150,7 @@ void FLASHTnTAlgorithm::markRepresentativeProteoformHits_(double tol)
 }
 
 
-void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile::FASTAEntry>& fasta_entry, double flanking_mass_tol)
+void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile::FASTAEntry>& fasta_entry)
 {
   setLogType(CMD);
   startProgress(0, (SignedSize)map.size(), "Running FLASHTnT ...");
@@ -280,7 +280,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
 
     hit_by_tag |= !hits.empty();
     extender.run(hits, tags, dspec,
-                 tagger.getSpectrum(), flanking_mass_tol, tol, multiple_hits_per_spec_);
+                 tagger.getSpectrum(), tol, multiple_hits_per_spec_);
     extender.getProteoforms(proteoform_hits_);
     proteoform_found = extender.hasProteoforms();
 //    if (false && !hit_by_tag && !proteoform_found) // TODO

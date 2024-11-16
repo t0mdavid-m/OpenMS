@@ -47,8 +47,7 @@ public:
 
   void run(std::vector<ProteinHit>& hits, const std::vector<FLASHHelperClasses::Tag>& tags,
            const DeconvolvedSpectrum& dspec,
-           const MSSpectrum& spec,
-           double flanking_mass_tol, double ppm, bool multiple_hits_per_spec);
+           const MSSpectrum& spec, double ppm, bool multiple_hits_per_spec);
 
   void getProteoforms(std::vector<ProteinHit>& hits) const
   {
@@ -144,13 +143,13 @@ private:
   std::vector<double> suffix_shifts_;
   std::vector<ProteinHit> proteoform_hits_;
   std::vector<FLASHHelperClasses::Tag> tags_;
-  double tol_, flanking_mass_tol_;
+  double tol_;
 
 
   int max_mod_cntr_ = 0;
   std::vector<int> start_pro_indices_;
   const int max_path_score_ = 1200;
-  const int min_path_score_ = -100;
+  const int min_path_score_ = -20;
   const int max_extension_stretch_ = 50;
   double max_mod_mass_ = 500.0;
   double given_precursor_mass_ = -1;
