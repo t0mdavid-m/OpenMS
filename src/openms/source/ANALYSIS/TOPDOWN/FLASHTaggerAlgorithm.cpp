@@ -583,7 +583,7 @@ void FLASHTaggerAlgorithm::updateTagSet_(std::set<FLASHHelperClasses::Tag>& tag_
   }
 }
 
-void FLASHTaggerAlgorithm::getScoreAndMatchCount_(const std::vector<Size>& spec_vec,
+void FLASHTaggerAlgorithm::getScoreAndMatchCount_(const std::vector<int>& spec_vec,
                                                   const boost::dynamic_bitset<>& pro_vec,
                                                   // const boost::dynamic_bitset<>& mask_pro_vec,
                                                   const std::set<int>& spec_pro_diffs,
@@ -593,20 +593,18 @@ void FLASHTaggerAlgorithm::getScoreAndMatchCount_(const std::vector<Size>& spec_
 {
   max_score = 0;
   match_cntr = 0;
-
   for (int d : spec_pro_diffs)
   {
     int score = 0;
     int cntr = 0;
     for (int i = 0; i < spec_vec.size(); i++)
     {
-      Size spec_vec_index = spec_vec[i];
-      int index = d + (int)spec_vec_index;
+      int index = d + spec_vec[i];
       if (index < 0) continue;
       if (index >= pro_vec.size()) break;
       if (! pro_vec[index]) continue;
       cntr++;
-      score += spec_scores.at(i);
+      score += spec_scores[i];
     }
     if (cntr >= match_cntr)
     {
@@ -762,7 +760,7 @@ void FLASHTaggerAlgorithm::runMatching(const std::vector<FASTAFile::FASTAEntry>&
     }
   }
 
-  std::vector<Size> spec_vec;
+  std::vector<int> spec_vec;
   std::vector<int> spec_scores;
   //Size spec_vec_size
   //  = 1 + round(ConvolutionBasedProteinFilter::multi_factor_for_vectorization * deconvolved_spectrum[deconvolved_spectrum.size() - 1].getMonoMass());
@@ -809,7 +807,7 @@ void FLASHTaggerAlgorithm::runMatching(const std::vector<FASTAFile::FASTAEntry>&
       }
 
       bool matched = false;
-      double n_term_mass = 0, c_term_mass = 0;
+      double n_term_mass, c_term_mass;
 
       for (const auto& pos : positions)
       {

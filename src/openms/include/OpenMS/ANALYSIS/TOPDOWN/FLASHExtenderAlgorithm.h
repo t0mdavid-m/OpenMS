@@ -137,6 +137,7 @@ private:
   int getProteinLength_(const std::vector<Size>& path, const std::vector<double>& pro_masses) const;
   double getSpecMassSpan_(const std::vector<Size>& path, const MSSpectrum& node_spec, int pro_mass_size) const;
   double getProteinMassSpan_(const std::vector<Size>& path, const std::vector<double>& pro_masses) const;
+  int getModifiedAACount_(const std::vector<Size>& path) const;
 
   std::vector<std::string> ion_types_str_;
   std::vector<double> prefix_shifts_;

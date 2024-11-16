@@ -157,6 +157,17 @@ double FLASHExtenderAlgorithm::getProteinMassSpan_(const std::vector<Size>& path
   return std::abs(maxmass - minmass);
 }
 
+int FLASHExtenderAlgorithm::getModifiedAACount_(const std::vector<Size>& path) const
+{
+  int cntr = 0;
+  for (auto vertex : path)
+  {
+    if (getModNumber_(vertex) == 0) continue;
+    cntr ++;
+  }
+  return cntr;
+}
+
 int FLASHExtenderAlgorithm::getProteinLength_(const std::vector<Size>& path, const std::vector<double>& pro_masses) const
 {
   int minindex = 0, maxindex = 0;
@@ -437,7 +448,7 @@ void FLASHExtenderAlgorithm::run_(const ProteinHit& hit,
     int num_mod = getModNumber_(sink);
     if (sink == src || getScore_(sink) < max_scores[num_mod]) continue; //
     if (hi.calculated_precursor_mass_ > 0 && getNodeIndex_(sink, pro_masses.size()) < (int)node_spec.size() - 1) continue;
-    std::vector<std::vector<Size>> sub_paths;
+    //std::vector<std::vector<Size>> sub_paths;
     hi.dag_.findAllPaths(sink, src, paths[num_mod], 0);
   }
   for (int num_mod = 0; num_mod <= max_mod_cntr_; num_mod++)
@@ -458,21 +469,26 @@ void FLASHExtenderAlgorithm::run_(const ProteinHit& hit,
 
       if (iter == all_paths_per_mode.end())
       {
-        //double mod_mass = std::abs(mass - getProteinMassSpan_(path, pro_masses));
-
         all_paths_per_mode[num_mod] = path;
         // std::cout << mod_mass  << " " << getScore_(path[0]) << " max " << num_mod << " " << max_scores[num_mod]<< std::endl;
       }
       else
       {
-        double mod_mass_ = std::abs(getSpecMassSpan_(iter->second, node_spec, pro_masses.size()) - getProteinMassSpan_(iter->second, pro_masses));
-        double mod_mass = std::abs(mass - pro_mass);
+        double mod_mass_ = num_mod == 0 ? 0 : std::abs(getSpecMassSpan_(iter->second, node_spec, pro_masses.size()) - getProteinMassSpan_(iter->second, pro_masses));
+        double mod_mass = num_mod == 0 ? 0 : std::abs(mass - pro_mass);
         if (mod_mass_ < mod_mass) continue;
 
-        if (mod_mass_ > mod_mass || pro_len < getProteinLength_(iter->second, pro_masses))
+        // Prefer the path with smaller mod mass
+        if (mod_mass_ > mod_mass ||
+            (mod_mass_ == mod_mass &&
+             (getProteinLength_(iter->second, pro_masses) < pro_len ||
+              (getProteinLength_(iter->second, pro_masses) == pro_len &&
+               getModifiedAACount_(path) < getModifiedAACount_(iter->second)))))
         {
-          all_paths_per_mode[num_mod] = path; // prefer small mod mass
+          all_paths_per_mode[num_mod] = path;
         }
+
+
       }
     }
   }

@@ -111,7 +111,7 @@ private:
 
   void indexFasta_(const std::vector<FASTAFile::FASTAEntry>& fasta_entry);
 
-  void getScoreAndMatchCount_(const std::vector<Size>& spec_vec,
+  void getScoreAndMatchCount_(const std::vector<int>& spec_vec,
                               const boost::dynamic_bitset<>& pro_vec,
                               //const boost::dynamic_bitset<>& mask_pro_vec,
                               const std::set<int>& spec_pro_diffs,

@@ -297,15 +297,15 @@ struct OPENMS_DLLAPI FLASHHelperClasses
       if (vertex1 >= vertex_count_ || vertex2 >= vertex_count_) return false;
       if (! visited[vertex2]) return false;
       visited[vertex1] = true;
-      adj_list_[vertex1].insert(vertex2); //
+      adj_list_for_speed_up_[vertex2].insert(vertex1); //
       return true;
     }
 
     bool hasEdge(Size vertex1, Size vertex2) const
     {
-      auto iter = adj_list_.find(vertex1);
-      if (iter == adj_list_.end()) return false;
-      return iter->second.find(vertex2) != iter->second.end();
+      auto iter = adj_list_for_speed_up_.find(vertex2);
+      if (iter == adj_list_for_speed_up_.end()) return false;
+      return iter->second.find(vertex1) != iter->second.end();
     }
 
     void findAllPaths(Size source, Size sink, std::vector<std::vector<Size>>& all_paths, Size max_count)
@@ -313,13 +313,29 @@ struct OPENMS_DLLAPI FLASHHelperClasses
       std::unordered_set<Size> visited;
       std::vector<Size> path;
 
+      if (adj_list_.empty())
+      {
+        for (const auto& [v2, vertices] : adj_list_for_speed_up_)
+        {
+          for (const auto& v1 : vertices)
+          {
+            adj_list_[v1].push_back(v2);
+          }
+        }
+        for (auto& v : adj_list_)
+        {
+          std::sort(v.second.begin(), v.second.end());
+        }
+      }
+
       findAllPaths_(source, sink, visited, path, all_paths, max_count); // reverse traveling
     }
 
   private:
     Size vertex_count_;
     // 0, 1, 2, ... ,vertex_count - 1
-    std::map<Size, std::set<Size>> adj_list_; //
+    std::map<Size, std::vector<Size>> adj_list_; //
+    std::unordered_map<Size, std::unordered_set<Size>> adj_list_for_speed_up_; // vertex swapped for fast stroing of edges
     void findAllPaths_(Size current,
                        Size destination,
                        std::unordered_set<Size>& visited,
