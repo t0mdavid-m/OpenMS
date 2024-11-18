@@ -420,7 +420,6 @@ namespace OpenMS
         anno_spec.sortByPosition();
         std::stringstream val {};
 
-        size_t pindex = 0;
         for (auto& pg : deconvolved_spectrum)
         {
           if (pg.empty())
@@ -428,6 +427,7 @@ namespace OpenMS
             continue;
           }
           val << std::to_string(pg.getMonoMass()) << ":";
+          size_t pindex = 0;
           for (size_t k = 0; k < pg.size(); k++)
           {
             auto& p = pg[k];
