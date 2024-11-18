@@ -402,16 +402,13 @@ namespace OpenMS
       annotated_map.clear(false);
     }
 
-#pragma omp parallel for default(none) shared(deconvolved_spectra, annotated_mzML_file, annotated_map, deconvolved_mzML_file, deconvolved_map, mzml_charge,tols,  std::cout)
-    for (int i = 0; i < (int) deconvolved_spectra.size(); i++)
+    for (auto & deconvolved_spectrum : deconvolved_spectra)
     {
-      auto& deconvolved_spectrum = deconvolved_spectra[i];
       auto deconvolved_mzML = deconvolved_spectrum.toSpectrum(mzml_charge, tols[deconvolved_spectrum.getOriginalSpectrum().getMSLevel() - 1], false);
       if (!deconvolved_mzML_file.empty())
       {
         if (deconvolved_mzML.empty())
           continue;
-#pragma omp critical
         deconvolved_map.addSpectrum(deconvolved_mzML);
       }
       if (!annotated_mzML_file.empty())
@@ -420,7 +417,6 @@ namespace OpenMS
         anno_spec.sortByPosition();
         std::stringstream val {};
 
-        size_t pindex = 0;
         for (auto& pg : deconvolved_spectrum)
         {
           if (pg.empty())
@@ -428,6 +424,7 @@ namespace OpenMS
             continue;
           }
           val << std::to_string(pg.getMonoMass()) << ":";
+          size_t pindex = 0;
           for (size_t k = 0; k < pg.size(); k++)
           {
             auto& p = pg[k];
@@ -437,9 +434,6 @@ namespace OpenMS
             {
               pindex++;
             }
-
-            // Now pindex points to the nearest or exact match (or the closest higher value)
-            // Check the nearest by comparing current and previous index
             size_t nearest_index = pindex;
             if (anno_spec[pindex].getMZ() != p.mz)
             {
@@ -459,15 +453,10 @@ namespace OpenMS
           val << ";";
         }
         anno_spec.setMetaValue("DeconvMassPeakIndices", val.str());
-
-#pragma omp critical
         annotated_map.addSpectrum(anno_spec);
       }
     }
-    annotated_map.sortChromatograms();
-    annotated_map.sortSpectra();
-    deconvolved_map.sortChromatograms();
-    deconvolved_map.sortSpectra();
+
     if (!deconvolved_mzML_file.empty())
     {
       MzMLFile mzml_file;

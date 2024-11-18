@@ -742,7 +742,7 @@ void FLASHTaggerAlgorithm::runMatching(const std::vector<FASTAFile::FASTAEntry>&
   //indexFasta_(fasta_entry);
   std::vector<std::pair<ProteinHit, std::vector<int>>> pairs;
   //std::set<Size> matched_fasta_entries;
-  int scan = 0;
+  int scan = deconvolved_spectrum.getScanNumber();
   protein_hits_.clear();
 
   // int min_hit_tag_score = max_path_score_;
