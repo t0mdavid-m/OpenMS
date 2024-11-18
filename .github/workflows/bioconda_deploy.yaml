@@ -43,7 +43,7 @@ jobs:
 
       - name: Update bioconda-utils
         run: |
-          conda activate bioconda
+          mamba activate bioconda
           mamba install -y bioconda-utils
 
       - name: Lint Bioconda packages
