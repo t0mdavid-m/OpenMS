@@ -135,6 +135,12 @@ namespace OpenMS
     case Residue::Unannotated:
       return "unannotated";
 
+    case Residue::Zp1Ion:
+      return "z+1-ion";
+
+    case Residue::Zp2Ion:
+      return "z+2-ion";
+      
     default:
       cerr << "Error: Residue::getResidueTypeName - residue type has no name. The developer should add a residue name to Residue.cpp" << endl;
     }
