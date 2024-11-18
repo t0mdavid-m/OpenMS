@@ -20,12 +20,12 @@ jobs:
         with:
           activate-environment: bioconda
           auto-update-conda: true
-          use-mamba: false
+          use-mamba: true
           #environment-file: environment.yml # Replace with your Conda environment file if necessary
           python-version: 3.9
           mamba-version: "*"
           channels: conda-forge,bioconda,defaults
-          channel-priority: strict
+          channel-priority: true
           
       - name: Prepare output directory
         run: |
