@@ -29,11 +29,6 @@ jobs:
           channels: conda-forge,bioconda,defaults
           channel-priority: true
           
-      - name: Prepare output directory
-        run: |
-          mkdir -p output/noarch
-          touch output/noarch/repodata.json
-
       - name: Clone Bioconda recipes repository
         run: |
           git clone https://github.com/OpenMS/bioconda-recipes.git bioconda-recipes
@@ -43,8 +38,15 @@ jobs:
           git checkout -b temp-branch
           git rebase bioconda/master
 
+      - name: Prepare output directory
+        run: |
+          ls -l
+          mkdir -p output/noarch
+          touch output/noarch/repodata.json          
+
       - name: Lint Bioconda packages
         run: |
+          ls -l
           conda install bioconda-utils -y
           bioconda-utils lint --packages pyopenms openms-meta
 
