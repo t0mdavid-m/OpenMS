@@ -44,7 +44,9 @@ jobs:
           git rebase bioconda/master
 
       - name: Lint Bioconda packages
-        run: bioconda-utils lint --packages pyopenms openms-meta
+        run: |
+          conda install bioconda-utils -y
+          bioconda-utils lint --packages pyopenms openms-meta
 
       - name: Build openms-meta package
         run: |
