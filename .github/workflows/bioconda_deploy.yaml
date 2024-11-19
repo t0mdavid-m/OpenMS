@@ -34,6 +34,11 @@ jobs:
           mkdir -p $GITHUB_WORKSPACE/output/noarch
           touch $GITHUB_WORKSPACE/output/noarch/repodata.json
           ls -l
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
           
       - name: Clone Bioconda recipes repository and add our changes (e.g., version with 'dev') on top of it
         run: |
