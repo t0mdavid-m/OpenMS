@@ -35,13 +35,13 @@ jobs:
           touch $GITHUB_WORKSPACE/output/noarch/repodata.json
           ls -l
           
-      - name: Clone Bioconda recipes repository
+      - name: Clone Bioconda recipes repository and add our changes (e.g., version with 'dev') on top of it
         run: |
           git clone https://github.com/OpenMS/bioconda-recipes.git bioconda-recipes
           cd bioconda-recipes
+          git checkout -b nightly origin/nightly
           git remote add bioconda https://github.com/bioconda/bioconda-recipes.git
           git fetch bioconda master
-          git checkout -b temp-branch
           git rebase bioconda/master         
 
       - name: Lint Bioconda packages
