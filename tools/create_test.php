@@ -2,7 +2,7 @@
 # --------------------------------------------------------------------------
 #                   OpenMS -- Open-Source Mass Spectrometry
 # --------------------------------------------------------------------------
-# Copyright The OpenMS Team -- Eberhard Karls University Tuebingen,
+# Copyright OpenMS Inc. -- Eberhard Karls University Tuebingen,
 # ETH Zurich, and Freie Universitaet Berlin 2002-2023.
 #
 # This software is released under a three-clause BSD license:
@@ -66,7 +66,7 @@ $class_info = getClassInfo($path, $file, 0);
 // --------------------------------------------------------------------------
 //                   OpenMS -- Open-Source Mass Spectrometry               
 // --------------------------------------------------------------------------
-// Copyright The OpenMS Team -- Eberhard Karls University Tuebingen,
+// Copyright OpenMS Inc. -- Eberhard Karls University Tuebingen,
 // ETH Zurich, and Freie Universitaet Berlin 2002-<?php print date("Y");?>.
 // 
 // This software is released under a three-clause BSD license:

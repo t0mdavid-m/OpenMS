@@ -9,7 +9,7 @@
 # Inspired by Julien Schueller <schueller at phimeca dot com>
 #
 #=============================================================================
-# Copyright The OpenMS Team -- Eberhard Karls University Tuebingen,
+# Copyright OpenMS Inc. -- Eberhard Karls University Tuebingen,
 # ETH Zurich, and Freie Universitaet Berlin 2002-2023.
 #
 # This software is released under a three-clause BSD license:
