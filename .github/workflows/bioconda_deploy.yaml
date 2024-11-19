@@ -16,16 +16,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Set up Conda
-        uses: conda-incubator/setup-miniconda@v3
-        with:
-          activate-environment: bioconda
-          auto-update-conda: true
-          use-mamba: true
-          #environment-file: environment.yml # Replace with your Conda environment file if necessary
-          python-version: 3.9
-          mamba-version: "*"
-          channels: conda-forge,bioconda,defaults
-          channel-priority: true
+        run: |
+          conda config --add channels defaults
+          conda config --add channels bioconda
+          conda config --add channels conda-forge
+          conda config --set channel_priority strict
+          conda clean --all --yes
+          conda create --name bioconda-deploy
+          conda activate bioconda-deploy
+          conda install -y bioconda-utils
           
       - name: Prepare output directory
         run: |
@@ -40,11 +39,6 @@ jobs:
           git fetch bioconda master
           git checkout -b temp-branch
           git rebase bioconda/master
-
-      - name: Update bioconda-utils
-        run: |
-          mamba activate bioconda
-          mamba install -y bioconda-utils
 
       - name: Lint Bioconda packages
         run: bioconda-utils lint --packages pyopenms openms-meta
