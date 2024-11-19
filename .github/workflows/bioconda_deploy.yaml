@@ -36,6 +36,7 @@ jobs:
           conda install bioconda-utils -y
           conda index $GITHUB_WORKSPACE/output
           ls -l
+          ls -l $GITHUB_WORKSPACE/output
 
       - name: Configure Git
         run: |
@@ -51,7 +52,7 @@ jobs:
           git fetch bioconda master
           git rebase bioconda/master         
 
-      - name: Lint Bioconda packages
+      - name: Lint and build OpenMS Bioconda packages
         run: |
           cd bioconda-recipes
           bioconda-utils lint --packages pyopenms openms-meta
@@ -62,10 +63,12 @@ jobs:
         run: |
           cd bioconda-recipes
           bioconda-utils build --docker --mulled-test --pkg_dir $GITHUB_WORKSPACE/output --packages pyopenms
+          conda index $WORKSPACE/output
 
       - name: Upload Conda packages
         run: |
           cd bioconda-recipes
+          ls -l $WORKSPACE/output
           anaconda -v -t ${{ secrets.ANACONDA_TOKEN }} upload -u openms --no-progress --force $GITHUB_WORKSPACE/output/linux-64/*.tar.bz2
 
       - name: Check upload status
