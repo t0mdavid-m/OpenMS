@@ -30,9 +30,11 @@ jobs:
           channel-priority: true
 
       - name: Prepare output directory
-        run: |          
+        run: |       
           mkdir -p $GITHUB_WORKSPACE/output/noarch
           touch $GITHUB_WORKSPACE/output/noarch/repodata.json
+          conda install bioconda-utils -y
+          conda index $GITHUB_WORKSPACE/output
           ls -l
 
       - name: Configure Git
@@ -52,11 +54,10 @@ jobs:
       - name: Lint Bioconda packages
         run: |
           cd bioconda-recipes
-          conda install bioconda-utils -y
           bioconda-utils lint --packages pyopenms openms-meta
           bioconda-utils build --docker --pkg_dir $GITHUB_WORKSPACE/output --packages openms-meta
-          conda index $GITHUB_WORKSPACE/output
-
+          conda index $WORKSPACE/output
+          
       - name: Build pyopenms package
         run: |
           cd bioconda-recipes
