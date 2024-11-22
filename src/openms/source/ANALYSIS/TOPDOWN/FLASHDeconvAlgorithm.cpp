@@ -472,8 +472,8 @@ namespace OpenMS
       std::sort(sampled_tols.begin(), sampled_tols.end());
 
       double tol = find_threshold(std::accumulate(sampled_tols.begin(), sampled_tols.end(), .0) / sampled_tols.size(), .9);//sampled_tols[sampled_tols.size() / 2] * 2;//  std::accumulate(sampled_tols.begin() + sampled_tols.size() / 10, sampled_tols.end() - sampled_tols.size() / 10, .0) / (sampled_tols.size() - sampled_tols.size() / 5);//
-      tols_[ms_level - 1] = tol;//
-      OPENMS_LOG_INFO<< "done. Determined tolerance: " << std::to_string(tols_[ms_level - 1] ) << " ppm. You may test around this tolerance for better results." << std::endl;
+      tols_[ms_level - 1] = tol;
+      OPENMS_LOG_INFO<< "done. Determined tolerance: " <<tols_[ms_level - 1] << " ppm. You may test around this tolerance for better results." << std::endl;
       sd_param.setValue("tol", tols_);
     }
     sd_param.setValue("tol", tols_);
