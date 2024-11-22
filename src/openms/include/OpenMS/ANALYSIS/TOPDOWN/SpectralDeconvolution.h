@@ -83,6 +83,12 @@ namespace OpenMS
      */
     void calculateAveragine(bool use_RNA_averagine, const bool is_centroid = true);
 
+    /// when estimating tolerance, max_mass_dalton_tolerance_ should be large
+    void setToleranceEstimation()
+    {
+      max_mass_dalton_tolerance_ = 100;
+    }
+
     /// convert double to nominal mass
     static int getNominalMass(double mass);
 
@@ -208,6 +214,9 @@ namespace OpenMS
 
     int target_precursor_charge_ = 0;
     double target_precursor_mz_ = 0;
+
+    /// this is additional mass tolerance in Da to get more high signal-to-ratio peaks in this candidate peakgroup finding
+    double max_mass_dalton_tolerance_ = .16;
 
     /** @brief static function that converts bin to value
         @param bin bin number

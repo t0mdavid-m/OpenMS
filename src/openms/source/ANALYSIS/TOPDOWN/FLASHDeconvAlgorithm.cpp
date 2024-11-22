@@ -430,16 +430,18 @@ namespace OpenMS
       tols_[ms_level - 1] = 200;
       OPENMS_LOG_INFO<< "Determining tolerance for MS" << ms_level <<" ... ";
       auto sd = SpectralDeconvolution();
+      auto sd_param_t = sd_param;
       sd.setAveragine(avg);
 
-      sd_param.setValue("tol", tols_);
-      sd.setParameters(sd_param);
+      sd_param_t.setValue("min_charge", 1); // better to include charge 1 to determine ppm error.
+      sd_param_t.setValue("tol", tols_);
+      sd.setParameters(sd_param_t);
+      sd.setToleranceEstimation();
 
       const int sample_count = 40;
       int sample_rate = map.size() / sample_count;
       int count = 0;
-      DeconvolvedSpectrum t_dspec;
-      t_dspec.reserve(map.size() / sample_rate + 1);
+      std::vector<double> sampled_tols;
       for (const auto & spec : map)
       {
         if (ms_level != spec.getMSLevel()) { continue; }
@@ -452,29 +454,24 @@ namespace OpenMS
         if(deconvolved_spectrum.empty()) continue;
         for (const auto& pg : deconvolved_spectrum)
         {
-          t_dspec.push_back(pg);
+          if (pg.getQscore() < .8) continue;
+          sampled_tols.push_back(std::abs(pg.getAvgPPMError()));
         }
       }
-      if (t_dspec.size() < 6)
+      if (sampled_tols.size() < 6)
       {
         OPENMS_LOG_INFO << "failed. Cannot be determined - no MS" << ms_level << " spectrum. Set to 10ppm (default tolerance)." << std::endl;
         tols_[ms_level - 1] = 10;
         continue;
       }
-      t_dspec.sortByQscore();
-      std::vector<double> sampled_tols;
-      count = 0;
-      for (const auto& pg : t_dspec)
-      {
-        sampled_tols.push_back(std::abs(pg.getAvgPPMError()));
-        if (count++ > (int)t_dspec.size() / 2) break;
-      }
+
       std::sort(sampled_tols.begin(), sampled_tols.end());
 
-      double tol = find_threshold(std::accumulate(sampled_tols.begin(), sampled_tols.end(), .0) / sampled_tols.size(), .9);//sampled_tols[sampled_tols.size() / 2] * 2;//  std::accumulate(sampled_tols.begin() + sampled_tols.size() / 10, sampled_tols.end() - sampled_tols.size() / 10, .0) / (sampled_tols.size() - sampled_tols.size() / 5);//
+      int margin = 0;
+      double tol = find_threshold(std::accumulate(sampled_tols.begin() +margin, sampled_tols.end() - margin, .0) / (sampled_tols.size() - margin * 2), .9);//sampled_tols[sampled_tols.size() / 2] * 2;//  std::accumulate(sampled_tols.begin() + sampled_tols.size() / 10, sampled_tols.end() - sampled_tols.size() / 10, .0) / (sampled_tols.size() - sampled_tols.size() / 5);//
       tols_[ms_level - 1] = tol;
       OPENMS_LOG_INFO<< "done. Determined tolerance: " <<tols_[ms_level - 1] << " ppm. You may test around this tolerance for better results." << std::endl;
-      sd_param.setValue("tol", tols_);
+      //sd_param.setValue("tol", tols_);
     }
     sd_param.setValue("tol", tols_);
     sd_.setParameters(sd_param);

@@ -19,8 +19,6 @@ namespace OpenMS
 {
   /// harmonic charge factors that will be considered for harmonic mass reduction.
   inline const std::vector<int> harmonic_charges_ {2, 3, 5, 7, 11};
-  /// this is additional mass tolerance in Da to get more high signal-to-ratio peaks in this candidate peakgroup finding
-  inline const double max_mass_dalton_tolerance_ = .16;
   /// high and low charges are differently deconvolved. This value determines the (inclusive) threshold for low charge.
   inline const int low_charge_ = 10; // 10 inclusive
   inline const double tol_div_factor = 2.5;                           // use narrow tolerance for deconvolution and at the end use the input tolerance to filter out overlapping masses.
@@ -55,7 +53,7 @@ namespace OpenMS
                        "Cosine similarity thresholds between avg. and observed isotope pattern for MS1, 2, ... (e.g., -min_cos 0.3 0.6 to specify 0.3 "
                        "and 0.6 for MS1 and MS2, respectively)");
     defaults_.addTag("min_cos", "advanced");
-    defaults_.setValue("min_snr", DoubleList {.8, .8},
+    defaults_.setValue("min_snr", DoubleList {1, .8},
                        "Minimum charge SNR (the SNR of the isotope pattern of a specific charge) thresholds for MS1, 2, ... (e.g., -min_snr 1.0 0.6 to "
                        "specify 1.0 and 0.6 for MS1 and MS2, respectively)");
     defaults_.addTag("min_snr", "advanced");
