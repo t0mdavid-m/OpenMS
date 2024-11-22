@@ -30,7 +30,7 @@ namespace OpenMS
   SpectralDeconvolution::SpectralDeconvolution(): DefaultParamHandler("SpectralDeconvolution")
   {
     defaults_.setValue("tol", DoubleList {10.0, 10.0},
-                       "ppm tolerance for MS1, 2, ... (e.g., -tol 10.0 5.0 to specify 10.0 and 5.0 ppm for MS1 and MS2, respectively)");
+                       "ppm tolerance for MS1, 2, ... (e.g., -tol 10.0 5.0 to specify 10.0 and 5.0 ppm for MS1 and MS2, respectively). If you set this to a negative number (e.g., -1), tolerance will be estimated automatically.");
 
     defaults_.setValue("min_mass", 50.0, "Minimum mass (Da)");
     defaults_.setValue("max_mass", 100000.0, "Maximum mass (Da)");
