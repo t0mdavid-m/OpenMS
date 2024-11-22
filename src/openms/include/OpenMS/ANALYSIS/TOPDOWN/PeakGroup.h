@@ -240,6 +240,8 @@ namespace OpenMS
     /// get feature index of this peak group
     uint getFeatureIndex() const;
 
+    /// get ppm errors of all peaks
+    std::vector<float> getPPMErrors() const;
 
     /// iterators for the signal LogMz peaks in this PeakGroup
     std::vector<FLASHHelperClasses::LogMzPeak>::const_iterator begin() const noexcept;
@@ -277,9 +279,9 @@ namespace OpenMS
     /// update avg Da error
     void updateAvgDaError_();
     /// get ppm error of a logMzPeak
-    float getAbsPPMError_(const LogMzPeak& p) const;
+    float getPPMError_(const LogMzPeak& p) const;
     /// get Da error of a logMzPeak from the closest isotope
-    float getAbsDaError_(const LogMzPeak& p) const;
+    float getDaError_(const LogMzPeak& p) const;
     /// using signal and total (signal + noise) power, update SNR value
     void updateSNR_(float mul_factor);
     /// clear peaks

@@ -285,7 +285,7 @@ protected:
     OPENMS_LOG_INFO << "Processing : " << in_file << endl;
 
     fd.run(map, deconvolved_spectra, deconvolved_features);
-
+    tols = fd.getTolerances();
     // collect statistics for information
     for (auto& it : map)
     {

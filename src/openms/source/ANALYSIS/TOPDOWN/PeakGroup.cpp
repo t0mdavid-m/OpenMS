@@ -41,7 +41,7 @@ void PeakGroup::updateAvgPPMError_()
   avg_ppm_error_ = 0;
   for (const auto& p : *this)
   {
-    avg_ppm_error_ += getAbsPPMError_(p);
+    avg_ppm_error_ += std::abs(getPPMError_(p));
   }
   avg_ppm_error_ /= (float)size();
 }
@@ -51,21 +51,21 @@ void PeakGroup::updateAvgDaError_()
   avg_da_error_ = .0f;
   for (auto& p : *this)
   {
-    avg_da_error_ += getAbsDaError_(p);
+    avg_da_error_ += std::abs(getDaError_(p));
   }
   avg_da_error_ /= size();
 }
 
-float PeakGroup::getAbsPPMError_(const LogMzPeak& p) const
+float PeakGroup::getPPMError_(const LogMzPeak& p) const
 {
   auto mass = (float)(monoisotopic_mass_ + p.isotopeIndex * iso_da_distance_);
-  return (float)(abs(mass / (float)p.abs_charge + FLASHHelperClasses::getChargeMass(p.is_positive) - p.mz) / p.mz * 1e6);
+  return (float)((mass / (float)p.abs_charge + FLASHHelperClasses::getChargeMass(p.is_positive) - p.mz) / p.mz * 1e6);
 }
 
-float PeakGroup::getAbsDaError_(const LogMzPeak& p) const
+float PeakGroup::getDaError_(const LogMzPeak& p) const
 {
   auto mass = (float)(monoisotopic_mass_ + p.isotopeIndex * iso_da_distance_);
-  return (float)(abs(mass - p.getUnchargedMass()));
+  return (float)((mass - p.getUnchargedMass()));
 }
 
 int PeakGroup::getMinNegativeIsotopeIndex() const
@@ -92,6 +92,18 @@ void PeakGroup::updatePerChargeCos_(const FLASHHelperClasses::PrecalculatedAvera
     }
   }
 }
+
+std::vector<float> PeakGroup::getPPMErrors() const
+{
+  std::vector<float> ret;
+  ret.reserve(size());
+  for(const auto& p : logMzpeaks_)
+  {
+    ret.push_back(getPPMError_(p));
+  }
+  return ret;
+}
+
 
 int PeakGroup::updateQscore(const std::vector<LogMzPeak>& noisy_peaks,
                             const MSSpectrum& spec,
@@ -141,6 +153,7 @@ int PeakGroup::updateQscore(const std::vector<LogMzPeak>& noisy_peaks,
   return h_offset;
 }
 
+// TODO maybe charge range may not be determined first and reduce calls of this function...
 float PeakGroup::getNoisePeakPower_(const std::vector<FLASHHelperClasses::LogMzPeak>& noisy_peaks, const int z, const double tol) const
 {
   if (noisy_peaks.empty()) return 0;
@@ -152,7 +165,7 @@ float PeakGroup::getNoisePeakPower_(const std::vector<FLASHHelperClasses::LogMzP
   all_peaks.reserve(max_noisy_peak_number + logMzpeaks_.size());
 
   int noise_peak_count = std::count_if(noisy_peaks.begin(), noisy_peaks.end(), [&](const auto& noisy_peak) {
-    return noisy_peak.abs_charge == z || (noisy_peak.abs_charge >= min_abs_charge_ && noisy_peak.abs_charge <= max_abs_charge_);
+    return noisy_peak.abs_charge == z;
   });
 
 //  int noise_peak_count = 0;
@@ -171,7 +184,7 @@ float PeakGroup::getNoisePeakPower_(const std::vector<FLASHHelperClasses::LogMzP
     for (const auto& noisy_peak : noisy_peaks)
     {
       if (z > 0 && noisy_peak.abs_charge != z) continue;
-      if (noisy_peak.abs_charge < min_abs_charge_ || noisy_peak.abs_charge > max_abs_charge_) continue;
+      //if (noisy_peak.abs_charge < min_abs_charge_ || noisy_peak.abs_charge > max_abs_charge_) continue;
       intensities.push_back(noisy_peak.intensity);
     }
 
@@ -179,11 +192,12 @@ float PeakGroup::getNoisePeakPower_(const std::vector<FLASHHelperClasses::LogMzP
     threshold = intensities[max_noisy_peak_number];
   }
 
+
   // filter peaks and check which mzs are signal and which are noise.
   for (const auto& noisy_peak : noisy_peaks)
   {
     if ((z > 0 && noisy_peak.abs_charge != z) || noisy_peak.intensity < threshold) continue;
-    if (noisy_peak.abs_charge < min_abs_charge_ || noisy_peak.abs_charge > max_abs_charge_) continue;
+    //if (noisy_peak.abs_charge < min_abs_charge_ || noisy_peak.abs_charge > max_abs_charge_) continue;
     all_peaks.emplace_back(Peak1D(noisy_peak.getUnchargedMass(), noisy_peak.intensity), false);
   }
 
@@ -192,7 +206,7 @@ float PeakGroup::getNoisePeakPower_(const std::vector<FLASHHelperClasses::LogMzP
   for (const auto& peak : logMzpeaks_)
   {
     if ((z > 0 && peak.abs_charge != z) || peak.intensity < threshold) continue;
-    if (peak.abs_charge < min_abs_charge_ || peak.abs_charge > max_abs_charge_) continue;
+    //if (peak.abs_charge < min_abs_charge_ || peak.abs_charge > max_abs_charge_) continue;
     all_peaks.emplace_back(Peak1D(peak.getUnchargedMass(), peak.intensity), true);
   }
 
@@ -204,13 +218,13 @@ float PeakGroup::getNoisePeakPower_(const std::vector<FLASHHelperClasses::LogMzP
   std::vector<std::vector<Size>> per_bin_edges(max_bin_number);
   std::vector<int> per_bin_start_index(max_bin_number, -2); // -2 means bin is empty. -1 means bin is used. zero or positive = edge index
   std::map<float, Size> max_intensity_sum_to_bin;
+  const std::vector<double> div_factors {1.0, 2.0, 3.0}; // allow two skips for each bin
 
   for (Size k = 0; k < max_bin_number; k++)
   {
     per_bin_edges[k] = std::vector<Size>(all_peaks.size(), 0);
   }
   // first collect all possible edges. An edge means mass difference between two peaks.
-  const std::vector<double> div_factors {1.0, 2.0, 3.0}; // allow two skips for each bin
   for (Size i = 0; i < all_peaks.size(); i++)
   {
     const auto& [p1, p1_signal] = all_peaks[i];
@@ -418,7 +432,7 @@ float PeakGroup::getNoisePeakPower_(const std::vector<FLASHHelperClasses::LogMzP
 void PeakGroup::updatePerChargeInformation_(const std::vector<LogMzPeak>& noisy_peaks, const double tol, const bool is_last)
 {
   per_charge_sum_signal_squared_ = std::vector<float>(1 + max_abs_charge_, .0f);
-  per_charge_int_ = std::vector<float>(1 + max_abs_charge_, .0);
+  per_charge_int_ = std::vector<float>(1 + max_abs_charge_, .0f);
   int max_iso = 0;
 
   // calculate per charge intensity, and per charge sum of signal intensity squared

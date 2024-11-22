@@ -156,8 +156,10 @@ namespace OpenMS
     threshold_mower_filter.setParameters(t_filter_param);
     threshold_mower_filter.filterPeakMap(map);
 
-    for (auto& it : map)
+#pragma omp parallel for default(none), shared(map)
+    for (int i = 0; i < map.size(); i++)
     {
+      auto& it = map[i];
       if (it.empty()) continue;
       Size count = it.getType(false) == SpectrumSettings::CENTROID ? max_peak_count_for_centroid_ : max_peak_count_for_profile_;
       it.sortByIntensity(true);
@@ -268,10 +270,13 @@ namespace OpenMS
     return scan_number;
   }
 
+  std::vector<double> FLASHDeconvAlgorithm::getTolerances() const
+  {
+    return tols_;
+  }
+
   void FLASHDeconvAlgorithm::runSpectralDeconvolution_(MSExperiment& map, std::vector<DeconvolvedSpectrum>& deconvolved_spectra)
   {
-    // merge spectra if the merging option is turned on (> 0)
-    filterLowPeaks_(map);
     startProgress(0, (SignedSize)map.size(), "running FLASHDeconv");
     std::map<double, int> rt_scan_map;
     for (Size index = 0; index < map.size(); index++)
@@ -298,11 +303,11 @@ namespace OpenMS
         }
       }
 
-      // run Spectral deconvolution
+        // run Spectral deconvolution
       for (Size index = 0; index < map.size(); index++)
       {
         int scan_number = rt_scan_map.find(map[index].getRT()) == rt_scan_map.end()? getScanNumber(map, index) : rt_scan_map[map[index].getRT()];//getScanNumber(map, index);
-        auto spec = map[index];
+        const auto& spec = map[index];
 
         if (ms_level != spec.getMSLevel()) { continue; }
         nextProgress();
@@ -314,7 +319,6 @@ namespace OpenMS
           precursor_pg = native_id_precursor_peak_group_map_[native_id];
 
         // now do it
-
         sd_.performSpectrumDeconvolution(spec, scan_number, precursor_pg);
 
         auto& deconvolved_spectrum = sd_.getDeconvolvedSpectrum();
@@ -383,24 +387,88 @@ namespace OpenMS
     precursor_map_for_ida_ = FLASHIda::parseFLASHIdaLog(ida_log_file_); // ms1 scan -> mass, charge ,score, mz range, precursor int, mass int, color
 
     updateMSLevels_(map);
+    filterLowPeaks_(map);
+
+
 
     sd_ = SpectralDeconvolution();
     Param sd_param = param_.copy("SD:", true);
     sd_param.setValue("allowed_isotope_error", param_.getValue("allowed_isotope_error"));
-    sd_.setParameters(sd_param);
+    OPENMS_LOG_INFO<< "Calculating Averagines ... " << std::flush;
     sd_.calculateAveragine(use_RNA_averagine_);
-    auto avg = sd_.getAveragine();
+    OPENMS_LOG_INFO<< "Done" << std::endl;
+    const auto& avg = sd_.getAveragine();
+
+    bool is_centroid = true;
+    for (auto& it : map)
+    {
+      if (it.empty()) continue;
+      is_centroid = it.getType(false) == SpectrumSettings::CENTROID;
+      break;
+    }
+
+    // determine tolerance in case tolerance input is negative
+    for (uint ms_level = 1; ms_level <= current_max_ms_level_; ms_level++)
+    {
+      if (tols_[ms_level - 1] > 0) continue;
+      tols_[ms_level - 1] = 200;
+      OPENMS_LOG_INFO<< "Determining tolerance for MS" << ms_level <<" ... ";
+      auto sd = SpectralDeconvolution();
+      sd.setAveragine(avg);
+
+      sd_param.setValue("tol", tols_);
+      sd.setParameters(sd_param);
+
+      const int sample_count = 50;
+      int sample_rate = map.size() / sample_count;
+      int count = 0;
+      DeconvolvedSpectrum t_dspec;
+      t_dspec.reserve(map.size() / sample_rate + 1);
+      for (const auto & spec : map)
+      {
+        if (ms_level != spec.getMSLevel()) { continue; }
+        if (spec.empty()) { continue; }
+        if (count++ % sample_rate != 0) continue;
+        PeakGroup precursor_pg;
+        sd.performSpectrumDeconvolution(spec, 0, precursor_pg);
+
+        const auto& deconvolved_spectrum = sd.getDeconvolvedSpectrum();
+        if(deconvolved_spectrum.empty()) continue;
+        for (const auto& pg : deconvolved_spectrum)
+        {
+          t_dspec.push_back(pg);
+        }
+      }
+      if (t_dspec.size() < 6)
+      {
+        OPENMS_LOG_INFO << "failed. Cannot be determined - no MS" << ms_level << " spectrum. Set to 10ppm (default tolerance)." << std::endl;
+        tols_[ms_level - 1] = 10;
+        continue;
+      }
+      t_dspec.sortByQscore();
+      std::vector<double> sampled_tols;
+      count = 0;
+      for (const auto& pg : t_dspec)
+      {
+        //getPPMErrors
+        for (auto error: pg.getPPMErrors())
+        {
+          sampled_tols.push_back(std::abs(error));
+        }
+        if (count++ > (int)t_dspec.size() / 2) break;
+      }
+      std::sort(sampled_tols.begin(), sampled_tols.end());
+
+      double tol = sampled_tols[(sampled_tols.size() - 1) / 2] * (is_centroid? 2 : 1.0/1.5); // profile - peaks are wide, use median div by 1.5. centroid - peak is picked. multiply by 2. Numbers are from experience..
+      tols_[ms_level - 1] = std::max(1.0, round(tol)); //
+      OPENMS_LOG_INFO<< "done. Determined tolerance: " << std::to_string(tols_[ms_level - 1] ) << " ppm. You may test around this tolerance for better results." << std::endl;
+      sd_param.setValue("tol", tols_);
+    }
+    sd_param.setValue("tol", tols_);
+    sd_.setParameters(sd_param);
 
     if (report_decoy_)
     {
-      bool is_centroid = true;
-      for (auto& it : map)
-      {
-        if (it.empty()) continue;
-        is_centroid = it.getType(false) == SpectrumSettings::CENTROID;
-        break;
-      }
-
       sd_noise_decoy_.setParameters(sd_param);
       sd_noise_decoy_.setTargetDecoyType(PeakGroup::TargetDecoyType::noise_decoy, sd_.getDeconvolvedSpectrum()); // noise
       sd_noise_decoy_.calculateAveragine(use_RNA_averagine_, is_centroid); // for noise, averagine needs to be calculated differently.

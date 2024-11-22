@@ -81,7 +81,7 @@ namespace OpenMS
       const double avg_mass = pg.getMonoMass() + avg_.getAverageMassDelta(mono_mass);
       const double intensity = pg.getIntensity();
 
-      auto charge_range = pg.getAbsChargeRange();
+      const auto& charge_range = pg.getAbsChargeRange();
       int min_charge = pg.isPositive() ? std::get<0>(charge_range) : -std::get<1>(charge_range);
       int max_charge = pg.isPositive() ? std::get<1>(charge_range) : -std::get<0>(charge_range);
 
@@ -192,7 +192,7 @@ namespace OpenMS
       }
       ss << pg.getIsotopeCosine() << "\t" << pg.getChargeIsotopeCosine(pg.getRepAbsCharge()) << "\t" << pg.getChargeScore() << "\t";
 
-      auto max_qscore_mz_range = pg.getRepMzRange();
+      const auto& max_qscore_mz_range = pg.getRepMzRange();
       ss << pg.getSNR() << "\t" << pg.getChargeSNR(pg.getRepAbsCharge()) << "\t" << pg.getAvgPPMError() << "\t" << (pg.isPositive() ? pg.getRepAbsCharge() : -pg.getRepAbsCharge()) << "\t"
          << std::to_string(std::get<0>(max_qscore_mz_range)) << "\t" << std::to_string(std::get<1>(max_qscore_mz_range)) << "\t" << std::to_string(pg.getQscore()) << "\t"
          << std::to_string(pg.getQscore2D());
@@ -206,22 +206,24 @@ namespace OpenMS
       {
         ss << "\t" << std::setprecision(-1);
 
-        for (int i = std::get<0>(charge_range); i <= std::get<1>(charge_range); i++)
+        for (int j = min_charge; j <= max_charge; j++)
         {
-          ss << pg.getChargeIntensity(i);
+          ss << pg.getChargeIntensity(j);
 
-          if (i < std::get<1>(charge_range))
-          { ss << ";";
+          if (j < max_charge)
+          {
+            ss << ";";
           }
         }
         ss << "\t";
 
-        auto iso_intensities = pg.getIsotopeIntensities();
-        for (size_t i = 0; i < iso_intensities.size(); i++)
+        const auto& iso_intensities = pg.getIsotopeIntensities();
+        for (size_t j = 0; j < iso_intensities.size(); j++)
         {
-          ss << iso_intensities[i];
-          if (i < iso_intensities.size() - 1)
-          { ss << ";";
+          ss << iso_intensities[j];
+          if (j < iso_intensities.size() - 1)
+          {
+            ss << ";";
           }
         }
       }

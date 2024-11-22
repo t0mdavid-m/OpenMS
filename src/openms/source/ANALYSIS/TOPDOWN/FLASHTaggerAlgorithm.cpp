@@ -395,7 +395,6 @@ const MSSpectrum& FLASHTaggerAlgorithm::getSpectrum() const
 void FLASHTaggerAlgorithm::run(const DeconvolvedSpectrum& deconvolved_spectrum, double ppm)
 {
   // setLogType(CMD);
-
   if (deconvolved_spectrum.empty() || deconvolved_spectrum.isDecoy() || deconvolved_spectrum.getOriginalSpectrum().getMSLevel() == 1) return;
 
   auto tags = std::vector<FLASHHelperClasses::Tag>();

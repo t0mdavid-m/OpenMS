@@ -84,6 +84,7 @@ void FLASHExtenderAlgorithm::calculatePrecursorMass_(const ProteinHit& hit,
   const auto& bp1 = best_path_map.at(1);
 
   int max_score = 0;
+  double min_tol = 1000;
   Size pro_size = hi.pro_mass_map_[0].size();
   int min_excessive_aa = pro_size;
   for(auto iter0 = bp0.rbegin(); iter0 != bp0.rend(); iter0++)
@@ -104,12 +105,20 @@ void FLASHExtenderAlgorithm::calculatePrecursorMass_(const ProteinHit& hit,
     if (excessive_aa < min_excessive_aa)
     {
       max_score = 0;
+      min_tol = 1000;
       min_excessive_aa = excessive_aa;
     }
 
     int score = getScore_(*iter0) + getScore_(*iter1);
     if (max_score > score) continue;
 
+    if (max_score == score)
+    {
+      double tol = std::max(hi.tol_spec_map_.at(0)[getNodeIndex_(*iter0, pro_size)].getIntensity(),
+        hi.tol_spec_map_.at(1)[getNodeIndex_(*iter1, pro_size)].getIntensity());
+      if (tol > min_tol) continue;
+      min_tol = tol;
+    }
     max_score = score;
     hi.calculated_precursor_mass_ = hi.node_spec_map_.at(0)[getNodeIndex_(*iter0, pro_size)].getMZ()
                                     + hi.node_spec_map_.at(1)[getNodeIndex_(*iter1, pro_size)].getMZ();
@@ -118,7 +127,7 @@ void FLASHExtenderAlgorithm::calculatePrecursorMass_(const ProteinHit& hit,
     {
       hi.calculated_precursor_mass_ += hi.pro_mass_map_[0].back() - (hi.pro_mass_map_[0][proi] + hi.pro_mass_map_[1][proj]);
     }
-   }
+  }
   if (hi.calculated_precursor_mass_ > 0) hi.calculated_precursor_mass_ += i2f_mass;
 }
 
@@ -348,7 +357,7 @@ void FLASHExtenderAlgorithm::run_(const ProteinHit& hit,
 
         if (seq_mass > 0)
         {
-          if (std::abs(start_mass + seq_mass - end_mass) > end_mass * tol_ * 2) end_mass = start_mass + seq_mass;
+          if (std::abs(start_mass + seq_mass - end_mass) > end_mass * tol_) end_mass = start_mass + seq_mass;
         }
 
         start_tols.push_back(start_mass * tol_);
@@ -377,7 +386,7 @@ void FLASHExtenderAlgorithm::run_(const ProteinHit& hit,
 
         if (seq_mass > 0)
         {
-          if (std::abs(start_mass + seq_mass - end_mass) > end_mass * tol_ * 2) end_mass = start_mass + seq_mass;
+          if (std::abs(start_mass + seq_mass - end_mass) > end_mass * tol_) end_mass = start_mass + seq_mass;
         }
 
         start_tols.push_back(start_mass * tol_);
@@ -751,7 +760,10 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
           pre_pro_index = pro_index;
           pre_node_index = node_index;
         }
-
+        if (debug)
+        {
+          std::cout<<std::endl;
+        }
         int mode_score = getScore_(best_path[0]);
         if (m == 1 && hi.protein_start_position_ >= 0 && hi.protein_end_position_ >= 0 && hi.protein_start_position_ >= hi.protein_end_position_)
         {
@@ -776,6 +788,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
         }
       }
     }
+
     if (hi.protein_start_position_ >= 0 && hi.protein_end_position_ >= 0 && hi.protein_start_position_ > hi.protein_end_position_) { continue; }
 
     const auto t_mod_masses = mod_masses, t_mod_tols = mod_tols;
@@ -800,7 +813,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
     for (int k = 0; k < mod_masses.size(); k++)
     {
       auto mod_mass = mod_masses[k];
-      auto iter = mod_map_.lower_bound(mod_mass - mod_tols[k] * 2);
+      auto iter = mod_map_.lower_bound(mod_mass - mod_tols[k]);
       String mod_id = "";
       String mod_acc = "";
       std::set<int> mod_int_acc;
@@ -1273,7 +1286,7 @@ void FLASHExtenderAlgorithm::extendBetweenTags_(std::map<Size, std::tuple<double
   }
 
   bool same_score_node = false;
-  int key_to_score_map = (int)start_pro_index * pro_mass_size + end_pro_index + 1; // - truncation_mass; //
+  int key_to_score_map = (int)start_pro_index * pro_mass_size + end_pro_index; // - truncation_mass; //
   for (int nm = 0; nm <= start_num_mod; nm++)
   {
     Size zero_score_vertex = getVertex_(start_node_index, start_pro_index, 0, nm, pro_mass_size);

@@ -52,6 +52,8 @@ namespace OpenMS
     /// destructor
     ~FLASHDeconvAlgorithm() = default;
 
+    std::vector<double> getTolerances() const;
+
     /**
      * @brief Run FLASHDeconv algorithm for @p map and store @p deconvolved_spectra and @p deconvolved_feature
      * @param map the dataset

@@ -939,8 +939,9 @@ namespace OpenMS
   {
     double tol = tolerance_[ms_level_ - 1];
     auto selected = boost::dynamic_bitset<>(deconvolved_spectrum_.size());
+    double snr_threshold = min_snr_[ms_level_ - 1];
 
-  #pragma omp parallel for default(none) shared(tol, selected, std::cout)
+  #pragma omp parallel for default(none) shared(tol, selected, snr_threshold, std::cout)
     for (int i = 0; i < (int)deconvolved_spectrum_.size(); i++)
     {
       int offset = 0;
@@ -969,8 +970,14 @@ namespace OpenMS
         offset = peak_group.updateQscore(noisy_peaks, deconvolved_spectrum_.getOriginalSpectrum(), avg_, min_isotope_cosine_[ms_level_ - 1], tol,
                                          (z1 + z2) < 2 * low_charge_, allowed_iso_error_, false);
 
+        //if(peak_group.getChargeSNR(peak_group.getRepAbsCharge()) < snr_threshold * .5) // to speed up
+        //  break;
+
         if (offset == 0 || is_isotope_decoy)
         {
+          if(peak_group.getChargeSNR(peak_group.getRepAbsCharge()) < snr_threshold) // to speed up
+            break;
+
           peak_group.updateQscore(noisy_peaks, deconvolved_spectrum_.getOriginalSpectrum(), avg_, min_isotope_cosine_[ms_level_ - 1], tol,
                                   (z1 + z2) < 2 * low_charge_, allowed_iso_error_, true);
           mass_determined = true;
@@ -1010,7 +1017,6 @@ namespace OpenMS
         }
       }
 
-      double snr_threshold = min_snr_[ms_level_ - 1];
       if (! peak_group.isTargeted()
           && (peak_group.getChargeSNR(peak_group.getRepAbsCharge()) < snr_threshold)) // snr check prevents harmonics or noise.
       {
@@ -1053,16 +1059,19 @@ namespace OpenMS
     selected = boost::dynamic_bitset<>(deconvolved_spectrum_.size());
     filtered_peak_groups = std::vector<PeakGroup>();
 
-  #pragma omp parallel for default(none) shared(filtered_peak_groups, tol, selected, harmonic_charges_)
+  #pragma omp parallel for default(none) shared(tol, selected, harmonic_charges_)
     for (int i = 0; i < (int)deconvolved_spectrum_.size(); i++)
     {
-      auto peak_group = deconvolved_spectrum_[i];
+      const auto& peak_group = deconvolved_spectrum_[i];
       bool pass = true;
       const auto& [z1, z2] = peak_group.getAbsChargeRange();
 
       for (auto hz : harmonic_charges_)
       {
+        //if (z1 * hz > current_max_charge_) break;
         PeakGroup pg(std::min(current_max_charge_, z1 * hz), std::min(current_max_charge_, z2 * hz), is_positive_);
+        const auto& [z1_, z2_] = pg.getAbsChargeRange();
+        if (z2 - z1 > z2_ - z1_) break; // if harmonic charges are too high stop
         pg.setTargetDecoyType(peak_group.getTargetDecoyType());
         pg.setMonoisotopicMass(peak_group.getMonoMass() * hz);
         auto nps = pg.recruitAllPeaksInSpectrum(deconvolved_spectrum_.getOriginalSpectrum(), tol, avg_, pg.getMonoMass());
@@ -1095,7 +1104,7 @@ namespace OpenMS
     {
       filtered_peak_groups.push_back(deconvolved_spectrum_[index]);
       index = selected.find_next(index);
-      auto peak_group = filtered_peak_groups.back();
+      //auto peak_group = filtered_peak_groups.back();
     }
 
     deconvolved_spectrum_.setPeakGroups(filtered_peak_groups);
@@ -1285,7 +1294,7 @@ namespace OpenMS
       if (target_decoy_type != PeakGroup::TargetDecoyType::non_specific && dspec[i].getTargetDecoyType() != target_decoy_type) { continue; }
       if ((ms_level_ == 1 && dspec[i].getRepAbsCharge() < min_abs_charge_) || dspec[i].getRepAbsCharge() > max_abs_charge_) { continue; }
 
-      double mul_factor = .5;
+      const double mul_factor = .5;
       if (! dspec[i].isTargeted() &&                                    // z1 != z2 &&
           overlap_intensity[i] >= dspec[i].getIntensity() * mul_factor) // If the overlapped intensity takes more than mul_factor * total intensity then
                                                                         // it is a peakgroup with a charge error. the smaller, the harsher
