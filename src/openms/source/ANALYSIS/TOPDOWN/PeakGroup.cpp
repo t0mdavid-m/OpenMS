@@ -41,9 +41,10 @@ void PeakGroup::updateAvgPPMError_()
   avg_ppm_error_ = 0;
   for (const auto& p : *this)
   {
-    avg_ppm_error_ += std::abs(getPPMError_(p));
+    avg_ppm_error_ += (getPPMError_(p));
   }
   avg_ppm_error_ /= (float)size();
+  avg_ppm_error_ = std::abs(avg_ppm_error_);
 }
 
 void PeakGroup::updateAvgDaError_()
@@ -92,18 +93,6 @@ void PeakGroup::updatePerChargeCos_(const FLASHHelperClasses::PrecalculatedAvera
     }
   }
 }
-
-std::vector<float> PeakGroup::getPPMErrors() const
-{
-  std::vector<float> ret;
-  ret.reserve(size());
-  for(const auto& p : logMzpeaks_)
-  {
-    ret.push_back(getPPMError_(p));
-  }
-  return ret;
-}
-
 
 int PeakGroup::updateQscore(const std::vector<LogMzPeak>& noisy_peaks,
                             const MSSpectrum& spec,

@@ -240,9 +240,6 @@ namespace OpenMS
     /// get feature index of this peak group
     uint getFeatureIndex() const;
 
-    /// get ppm errors of all peaks
-    std::vector<float> getPPMErrors() const;
-
     /// iterators for the signal LogMz peaks in this PeakGroup
     std::vector<FLASHHelperClasses::LogMzPeak>::const_iterator begin() const noexcept;
     std::vector<FLASHHelperClasses::LogMzPeak>::const_iterator end() const noexcept;

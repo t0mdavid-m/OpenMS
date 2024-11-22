@@ -389,8 +389,6 @@ namespace OpenMS
     updateMSLevels_(map);
     filterLowPeaks_(map);
 
-
-
     sd_ = SpectralDeconvolution();
     Param sd_param = param_.copy("SD:", true);
     sd_param.setValue("allowed_isotope_error", param_.getValue("allowed_isotope_error"));
@@ -450,16 +448,12 @@ namespace OpenMS
       count = 0;
       for (const auto& pg : t_dspec)
       {
-        //getPPMErrors
-        for (auto error: pg.getPPMErrors())
-        {
-          sampled_tols.push_back(std::abs(error));
-        }
+        sampled_tols.push_back(std::abs(pg.getAvgPPMError()));
         if (count++ > (int)t_dspec.size() / 2) break;
       }
       std::sort(sampled_tols.begin(), sampled_tols.end());
-
-      double tol = sampled_tols[(sampled_tols.size() - 1) / 2] * (is_centroid? 2 : 1.0/1.5); // profile - peaks are wide, use median div by 1.5. centroid - peak is picked. multiply by 2. Numbers are from experience..
+      //std::cout<< sampled_tols[(Size)(sampled_tols.size() * .9)] << " " << std::accumulate(sampled_tols.begin() + sampled_tols.size() / 10, sampled_tols.end() - sampled_tols.size() / 10, .0) / (sampled_tols.size() - sampled_tols.size() / 5)<< std::endl;
+      double tol = std::accumulate(sampled_tols.begin() + sampled_tols.size() / 10, sampled_tols.end() - sampled_tols.size() / 10, .0) / (sampled_tols.size() - sampled_tols.size() / 5) * 12;//
       tols_[ms_level - 1] = std::max(1.0, round(tol)); //
       OPENMS_LOG_INFO<< "done. Determined tolerance: " << std::to_string(tols_[ms_level - 1] ) << " ppm. You may test around this tolerance for better results." << std::endl;
       sd_param.setValue("tol", tols_);
