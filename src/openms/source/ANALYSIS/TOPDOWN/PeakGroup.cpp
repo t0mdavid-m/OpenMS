@@ -39,22 +39,54 @@ bool PeakGroup::operator==(const PeakGroup& a) const
 void PeakGroup::updateAvgPPMError_()
 {
   avg_ppm_error_ = 0;
+  int cntr = 0;
+  int i = 0;
+  int i_cntr = 0;
+  double i_error = 0;
   for (const auto& p : *this)
   {
-    avg_ppm_error_ += (getPPMError_(p));
+    if (i != p.isotopeIndex)
+    {
+      if (i_cntr > 0) avg_ppm_error_ += std::abs(i_error / i_cntr);
+      i = p.isotopeIndex;
+      i_cntr = 0;
+      i_error = 0;
+      cntr++;
+    }
+    i_cntr ++;
+    i_error += getPPMError_(p);
   }
-  avg_ppm_error_ /= (float)size();
+  if (i_cntr > 0) avg_ppm_error_ += std::abs(i_error / i_cntr);
+  cntr++;
+  avg_ppm_error_ /= cntr;
   avg_ppm_error_ = std::abs(avg_ppm_error_);
 }
 
 void PeakGroup::updateAvgDaError_()
 {
   avg_da_error_ = .0f;
-  for (auto& p : *this)
+
+  int cntr = 0;
+  int i = 0;
+  int i_cntr = 0;
+  double i_error = 0;
+  for (const auto& p : *this)
   {
-    avg_da_error_ += std::abs(getDaError_(p));
+    if (i != p.isotopeIndex)
+    {
+      if (i_cntr > 0) avg_da_error_ += std::abs(i_error / i_cntr);
+      i = p.isotopeIndex;
+      i_cntr = 0;
+      i_error = 0;
+      cntr++;
+    }
+    i_cntr ++;
+    i_error += getDaError_(p);
   }
-  avg_da_error_ /= size();
+  if (i_cntr > 0) avg_da_error_ += std::abs(i_error / i_cntr);
+  cntr++;
+  avg_da_error_ /= cntr;
+  avg_da_error_ = std::abs(avg_da_error_);
 }
 
 float PeakGroup::getPPMError_(const LogMzPeak& p) const

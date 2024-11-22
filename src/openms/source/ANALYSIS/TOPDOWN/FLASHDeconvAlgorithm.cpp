@@ -379,6 +379,24 @@ namespace OpenMS
     return sd_noise_decoy_.getAveragine();
   }
 
+  double poisson_pmf(int k, double lambda) {
+    // Calculate the probability mass function for Poisson distribution
+    return (pow(lambda, k) * exp(-lambda)) / tgamma(k + 1);
+  }
+
+  int find_threshold(double lambda, double target_cdf) {
+    double cumulative_prob = 0.0;
+    int t = 0;
+
+    // Sum Poisson probabilities until cumulative probability >= target_cdf (0.9)
+    while (cumulative_prob < target_cdf) {
+      cumulative_prob += poisson_pmf(t, lambda);
+      t++;
+    }
+
+    return t - 1;  // The threshold t where CDF(t) >= 0.9
+  }
+
   void FLASHDeconvAlgorithm::run(MSExperiment& map,
                                  std::vector<DeconvolvedSpectrum>& deconvolved_spectra,
                                  std::vector<FLASHHelperClasses::MassFeature>& deconvolved_features)
@@ -417,7 +435,7 @@ namespace OpenMS
       sd_param.setValue("tol", tols_);
       sd.setParameters(sd_param);
 
-      const int sample_count = 50;
+      const int sample_count = 40;
       int sample_rate = map.size() / sample_count;
       int count = 0;
       DeconvolvedSpectrum t_dspec;
@@ -452,9 +470,9 @@ namespace OpenMS
         if (count++ > (int)t_dspec.size() / 2) break;
       }
       std::sort(sampled_tols.begin(), sampled_tols.end());
-      //std::cout<< sampled_tols[(Size)(sampled_tols.size() * .9)] << " " << std::accumulate(sampled_tols.begin() + sampled_tols.size() / 10, sampled_tols.end() - sampled_tols.size() / 10, .0) / (sampled_tols.size() - sampled_tols.size() / 5)<< std::endl;
-      double tol = std::accumulate(sampled_tols.begin() + sampled_tols.size() / 10, sampled_tols.end() - sampled_tols.size() / 10, .0) / (sampled_tols.size() - sampled_tols.size() / 5) * 12;//
-      tols_[ms_level - 1] = std::max(1.0, round(tol)); //
+
+      double tol = find_threshold(std::accumulate(sampled_tols.begin(), sampled_tols.end(), .0) / sampled_tols.size(), .9);//sampled_tols[sampled_tols.size() / 2] * 2;//  std::accumulate(sampled_tols.begin() + sampled_tols.size() / 10, sampled_tols.end() - sampled_tols.size() / 10, .0) / (sampled_tols.size() - sampled_tols.size() / 5);//
+      tols_[ms_level - 1] = tol;//
       OPENMS_LOG_INFO<< "done. Determined tolerance: " << std::to_string(tols_[ms_level - 1] ) << " ppm. You may test around this tolerance for better results." << std::endl;
       sd_param.setValue("tol", tols_);
     }
