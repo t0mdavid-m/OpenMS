@@ -145,7 +145,15 @@ namespace OpenMS
     /// register the precursor peak group (or mass) if possible for MSn (n>1) spectrum.
     void findPrecursorPeakGroupsForMSnSpectra_(const MSExperiment& map, const std::vector<DeconvolvedSpectrum>& deconvolved_spectra, uint ms_level);
 
+    /// determine tolerance
+    void determineTolerance_(const MSExperiment& map, const Param& sd_param, const FLASHHelperClasses::PrecalculatedAveragine& avg, int ms_level);
+
+    /// get histogram
+    static std::vector<int> getHistogram_(const std::vector<double>& data, double min_range, double max_range, double bin_size);
+
     /// filter low intensity peaks
     static void filterLowPeaks_(MSExperiment& map);
+
+
   };
 } // namespace OpenMS

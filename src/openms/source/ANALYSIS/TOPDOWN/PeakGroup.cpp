@@ -47,17 +47,24 @@ void PeakGroup::updateAvgPPMError_()
   {
     if (i != p.isotopeIndex)
     {
-      if (i_cntr > 0) avg_ppm_error_ += std::abs(i_error / i_cntr);
+      if (i_cntr > 0)
+      {
+        avg_ppm_error_ += std::abs(i_error / i_cntr);
+        cntr++;
+      }
       i = p.isotopeIndex;
       i_cntr = 0;
       i_error = 0;
-      cntr++;
+
     }
     i_cntr ++;
-    i_error += getPPMError_(p);
+    i_error += getPPMError(p);
   }
-  if (i_cntr > 0) avg_ppm_error_ += std::abs(i_error / i_cntr);
-  cntr++;
+  if (i_cntr > 0)
+  {
+    avg_ppm_error_ += std::abs(i_error / i_cntr);
+    cntr++;
+  }
   avg_ppm_error_ /= cntr;
   avg_ppm_error_ = std::abs(avg_ppm_error_);
 }
@@ -74,22 +81,29 @@ void PeakGroup::updateAvgDaError_()
   {
     if (i != p.isotopeIndex)
     {
-      if (i_cntr > 0) avg_da_error_ += std::abs(i_error / i_cntr);
+      if (i_cntr > 0)
+      {
+        avg_da_error_ += std::abs(i_error / i_cntr);
+        cntr++;
+      }
       i = p.isotopeIndex;
       i_cntr = 0;
       i_error = 0;
-      cntr++;
+
     }
     i_cntr ++;
     i_error += getDaError_(p);
   }
-  if (i_cntr > 0) avg_da_error_ += std::abs(i_error / i_cntr);
-  cntr++;
+  if (i_cntr > 0)
+  {
+    avg_da_error_ += std::abs(i_error / i_cntr);
+    cntr++;
+  }
   avg_da_error_ /= cntr;
   avg_da_error_ = std::abs(avg_da_error_);
 }
 
-float PeakGroup::getPPMError_(const LogMzPeak& p) const
+float PeakGroup::getPPMError(const LogMzPeak& p) const
 {
   auto mass = (float)(monoisotopic_mass_ + p.isotopeIndex * iso_da_distance_);
   return (float)((mass / (float)p.abs_charge + FLASHHelperClasses::getChargeMass(p.is_positive) - p.mz) / p.mz * 1e6);

@@ -16,6 +16,8 @@
 #include <OpenMS/FILTERING/TRANSFORMERS/SpectraMerger.h>
 #include <OpenMS/FILTERING/TRANSFORMERS/ThresholdMower.h>
 #include <OpenMS/METADATA/SpectrumLookup.h>
+#include <OpenMS/MATH/STATISTICS/GaussFitter.h>
+
 #ifdef _OPENMP
   #include <omp.h>
 #endif
@@ -379,22 +381,95 @@ namespace OpenMS
     return sd_noise_decoy_.getAveragine();
   }
 
-  double poisson_pmf(int k, double lambda) {
-    // Calculate the probability mass function for Poisson distribution
-    return (pow(lambda, k) * exp(-lambda)) / tgamma(k + 1);
+  std::vector<int> FLASHDeconvAlgorithm::getHistogram_(const std::vector<double>& data, double min_range, double max_range, double bin_size)
+  {
+    int num_bins = static_cast<int>((max_range - min_range) / bin_size) + 1;
+    std::vector<int> bins(num_bins, 0);
+
+    // Populate the bins
+    for (double value : data) {
+      if (value >= min_range && value <= max_range) {
+        int bin_index = static_cast<int>((value - min_range) / bin_size);
+        bins[bin_index]++;
+      }
+    }
+    return bins;
   }
 
-  int find_threshold(double lambda, double target_cdf) {
-    double cumulative_prob = 0.0;
-    int t = 0;
+  void FLASHDeconvAlgorithm::determineTolerance_(const MSExperiment& map, const Param& sd_param, const FLASHHelperClasses::PrecalculatedAveragine& avg, int ms_level)
+  {
+    OPENMS_LOG_INFO<< "Determining tolerance for MS" << ms_level <<" ... ";
+    auto sd = SpectralDeconvolution();
+    auto sd_param_t = sd_param;
+    sd.setAveragine(avg);
+    tols_[ms_level - 1] = 200;
+    sd_param_t.setValue("min_charge", 1); // better to include charge 1 to determine ppm error.
+    sd_param_t.setValue("tol", tols_);
+    sd.setParameters(sd_param_t);
+    sd.setToleranceEstimation();
 
-    // Sum Poisson probabilities until cumulative probability >= target_cdf (0.9)
-    while (cumulative_prob < target_cdf) {
-      cumulative_prob += poisson_pmf(t, lambda);
-      t++;
+    //const int sample_count = 20;
+    int sample_rate = 100;//map.size() / sample_count;
+    int count = 0;
+    std::vector<double> sampled_tols;
+    for (const auto & spec : map)
+    {
+      if (ms_level != spec.getMSLevel()) { continue; }
+      if (spec.empty()) { continue; }
+      if (count++ % sample_rate != 0) continue;
+      PeakGroup precursor_pg;
+      sd.performSpectrumDeconvolution(spec, 0, precursor_pg);
+
+      const auto& deconvolved_spectrum = sd.getDeconvolvedSpectrum(); // estimate both.
+      if(deconvolved_spectrum.empty()) continue;
+      for (const auto& pg : deconvolved_spectrum)
+      {
+        if (pg.getQscore() < .8 || pg.getMonoMass() > 2e4) continue; // large masses introduce bias (due to truncation due to isotope distance)
+        int i = 0;
+        int i_cntr = 0;
+        double i_error = 0;
+        for (const auto& p : pg) // TODO make this as a function in PeakGroup ... 
+        {
+          if (i != p.isotopeIndex)
+          {
+            if (i_cntr > 0)
+            {
+              sampled_tols.push_back(i_error / i_cntr);
+            }
+            i = p.isotopeIndex;
+            i_cntr = 0;
+            i_error = 0;
+          }
+          i_cntr ++;
+          i_error += pg.getPPMError(p);
+        }
+        if (i_cntr > 0)
+        {
+          sampled_tols.push_back(i_error / i_cntr);
+        }
+      }
     }
 
-    return t - 1;  // The threshold t where CDF(t) >= 0.9
+    if (sampled_tols.size() < 6)
+    {
+      OPENMS_LOG_INFO << "failed. Cannot be determined - no MS" << ms_level << " spectrum. Set to 10ppm (default tolerance)." << std::endl;
+      tols_[ms_level - 1] = 10;
+      return;
+    }
+
+    const auto& bins = getHistogram_(sampled_tols, -100, 100, 1);
+    // Calculate mean using std::accumulate
+
+    std::vector<DPosition<2>> points;
+    for (int b = -100; b <= 100; b++)
+    {
+      points.emplace_back(b, bins[b + 100]);
+    }
+    Math::GaussFitter fitter;
+    auto fit = fitter.fit(points);
+
+    tols_[ms_level - 1] = round(fit.sigma * 2.17 * 2); // 97% area under curve in gaussian
+    OPENMS_LOG_INFO<< "done. Determined tolerance: " <<tols_[ms_level - 1] << " ppm. You may test around this tolerance for better results." << std::endl;
   }
 
   void FLASHDeconvAlgorithm::run(MSExperiment& map,
@@ -427,52 +502,9 @@ namespace OpenMS
     for (uint ms_level = 1; ms_level <= current_max_ms_level_; ms_level++)
     {
       if (tols_[ms_level - 1] > 0) continue;
-      tols_[ms_level - 1] = 200;
-      OPENMS_LOG_INFO<< "Determining tolerance for MS" << ms_level <<" ... ";
-      auto sd = SpectralDeconvolution();
-      auto sd_param_t = sd_param;
-      sd.setAveragine(avg);
-
-      sd_param_t.setValue("min_charge", 1); // better to include charge 1 to determine ppm error.
-      sd_param_t.setValue("tol", tols_);
-      sd.setParameters(sd_param_t);
-      sd.setToleranceEstimation();
-
-      const int sample_count = 40;
-      int sample_rate = map.size() / sample_count;
-      int count = 0;
-      std::vector<double> sampled_tols;
-      for (const auto & spec : map)
-      {
-        if (ms_level != spec.getMSLevel()) { continue; }
-        if (spec.empty()) { continue; }
-        if (count++ % sample_rate != 0) continue;
-        PeakGroup precursor_pg;
-        sd.performSpectrumDeconvolution(spec, 0, precursor_pg);
-
-        const auto& deconvolved_spectrum = sd.getDeconvolvedSpectrum();
-        if(deconvolved_spectrum.empty()) continue;
-        for (const auto& pg : deconvolved_spectrum)
-        {
-          if (pg.getQscore() < .8) continue;
-          sampled_tols.push_back(std::abs(pg.getAvgPPMError()));
-        }
-      }
-      if (sampled_tols.size() < 6)
-      {
-        OPENMS_LOG_INFO << "failed. Cannot be determined - no MS" << ms_level << " spectrum. Set to 10ppm (default tolerance)." << std::endl;
-        tols_[ms_level - 1] = 10;
-        continue;
-      }
-
-      std::sort(sampled_tols.begin(), sampled_tols.end());
-
-      int margin = 0;
-      double tol = find_threshold(std::accumulate(sampled_tols.begin() +margin, sampled_tols.end() - margin, .0) / (sampled_tols.size() - margin * 2), .9);//sampled_tols[sampled_tols.size() / 2] * 2;//  std::accumulate(sampled_tols.begin() + sampled_tols.size() / 10, sampled_tols.end() - sampled_tols.size() / 10, .0) / (sampled_tols.size() - sampled_tols.size() / 5);//
-      tols_[ms_level - 1] = tol;
-      OPENMS_LOG_INFO<< "done. Determined tolerance: " <<tols_[ms_level - 1] << " ppm. You may test around this tolerance for better results." << std::endl;
-      //sd_param.setValue("tol", tols_);
+      determineTolerance_(map, sd_param, avg, ms_level);
     }
+
     sd_param.setValue("tol", tols_);
     sd_.setParameters(sd_param);
 

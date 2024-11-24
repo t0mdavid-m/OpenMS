@@ -216,7 +216,8 @@ namespace OpenMS
      * set peakGroup q value
      */
     void setQvalue(double q);
-
+    /// get ppm error of a logMzPeak
+    float getPPMError(const LogMzPeak& p) const;
     /// set distance between consecutive isotopes
     void setIsotopeDaDistance(double d);
 
@@ -275,8 +276,7 @@ namespace OpenMS
     void updateAvgPPMError_();
     /// update avg Da error
     void updateAvgDaError_();
-    /// get ppm error of a logMzPeak
-    float getPPMError_(const LogMzPeak& p) const;
+
     /// get Da error of a logMzPeak from the closest isotope
     float getDaError_(const LogMzPeak& p) const;
     /// using signal and total (signal + noise) power, update SNR value
