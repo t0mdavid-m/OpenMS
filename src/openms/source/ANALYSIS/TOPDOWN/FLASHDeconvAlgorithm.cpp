@@ -201,7 +201,7 @@ namespace OpenMS
         // For ms n, first find precursors for all ms n. then make a tmp map having the precursor masses as precursor
         std::map<String, std::vector<Precursor>> original_precursor_map;
 #pragma omp parallel for default(none), shared(map, ms_level, original_precursor_map)
-        for (Size i = 0; i < map.size(); i++)
+        for (int i = 0; i < (int) map.size(); i++)
         {
           auto spec = map[i];
           if (spec.getMSLevel() != ms_level) continue;
