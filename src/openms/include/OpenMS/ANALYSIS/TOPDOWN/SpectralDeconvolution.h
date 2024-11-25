@@ -187,20 +187,20 @@ namespace OpenMS
     std::vector<LogMzPeak> log_mz_peaks_;
     /// selected_peak_groups_ stores the deconvolved mass peak groups
     DeconvolvedSpectrum deconvolved_spectrum_;
-    /// mass_bins_ stores the selected bins for this spectrum + overlapped spectrum (previous a few spectra).
-    boost::dynamic_bitset<> mass_bins_;
-    /// mz_bins_ stores the binned log mz peaks
-    boost::dynamic_bitset<> mz_bins_;
+    /// binned_log_masses_ stores the selected bins for this spectrum + overlapped spectrum (previous a few spectra).
+    boost::dynamic_bitset<> binned_log_masses_;
+    /// binned_log_mz_peaks_ stores the binned log mz peaks
+    boost::dynamic_bitset<> binned_log_mz_peaks_;
 
     /// This stores the "universal pattern"
-    std::vector<double> filter_;
+    std::vector<double> universal_pattern_;
     /// This stores the patterns for harmonic reduction
-    Matrix<double> harmonic_filter_matrix_;
+    Matrix<double> harmonic_pattern_matrix_;
 
     /// This stores the "universal pattern" in binned dimension
-    std::vector<int> bin_offsets_;
+    std::vector<int> binned_universal_pattern_;
     /// This stores the patterns for harmonic reduction in binned dimension
-    Matrix<int> harmonic_bin_offset_matrix_;
+    Matrix<int> binned_harmonic_patterns;
 
     /// minimum mass and mz values representing the first bin of massBin and mzBin, respectively: to save memory space
     double mass_bin_min_value_;
@@ -239,9 +239,9 @@ namespace OpenMS
 
     /** @brief generate mz bins and intensity per mz bin from log mz peaks
         @param bin_number number of mz bins
-        @param mz_bin_intensities intensity per mz bin
+        @param binned_log_mz_peak_intensities intensity per mz bin
      */
-    void updateMzBins_(Size bin_number, std::vector<float>& mz_bin_intensities);
+    void binLogMzPeaks_(const Size bin_number, std::vector<float>& binned_log_mz_peak_intensities);
 
     /// get mass value for input mass bin
     double getMassFromMassBin_(Size mass_bin, double bin_mul_factor) const;
@@ -255,7 +255,7 @@ namespace OpenMS
     /// filter out overlapping masses
     void removeOverlappingPeakGroups_(DeconvolvedSpectrum& dspec, double tol, PeakGroup::TargetDecoyType target_decoy_type = PeakGroup::TargetDecoyType::target);
 
-    /** @brief Update mass_bins_. It select candidate mass bins using the universal pattern, eliminate possible harmonic masses. This function does not perform deisotoping
+    /** @brief Update binned_log_masses_. It select candidate mass bins using the universal pattern, eliminate possible harmonic masses. This function does not perform deisotoping
         @param mz_intensities per mz bin intensity
         @return a matrix containing charge ranges for all found masses
      */
@@ -267,13 +267,13 @@ namespace OpenMS
      */
     Matrix<int> filterMassBins_(const std::vector<float>& mass_intensities);
 
-    /** @brief Subfunction of updateMassBins_. It select candidate masses and update mass_bins_ using the universal pattern, eliminate possible harmonic masses
+    /** @brief Subfunction of updateMassBins_. It select candidate masses and update binned_log_masses_ using the universal pattern, eliminate possible harmonic masses
         @param mass_intensities mass bin intensities which are updated in this function
         @param mz_intensities mz bin intensities
      */
     void updateCandidateMassBins_(std::vector<float>& mass_intensities, const std::vector<float>& mz_intensities);
 
-    /** @brief For selected masses in mass_bins_, select the peaks from the original spectrum. Also isotopic peaks are clustered in this function.
+    /** @brief For selected masses in binned_log_masses_, select the peaks from the original spectrum. Also isotopic peaks are clustered in this function.
         @param per_mass_abs_charge_ranges charge range per mass
      */
     void getCandidatePeakGroups_(const Matrix<int>& per_mass_abs_charge_ranges);

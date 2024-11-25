@@ -402,14 +402,13 @@ namespace OpenMS
     auto sd = SpectralDeconvolution();
     auto sd_param_t = sd_param;
     sd.setAveragine(avg);
-    tols_[ms_level - 1] = 200;
+    tols_[ms_level - 1] = 200; // maximum tolerance
     sd_param_t.setValue("min_charge", 1); // better to include charge 1 to determine ppm error.
     sd_param_t.setValue("tol", tols_);
     sd.setParameters(sd_param_t);
     sd.setToleranceEstimation();
 
-    // const int sample_count = 20;
-    int sample_rate = 100; // map.size() / sample_count;
+    int sample_rate = 100; //
     int count = 0;
     std::vector<double> sampled_tols;
     for (const auto& spec : map)
@@ -424,7 +423,7 @@ namespace OpenMS
       if (deconvolved_spectrum.empty()) continue;
       for (const auto& pg : deconvolved_spectrum)
       {
-        if (pg.getQscore() < .8 || pg.getMonoMass() > 2e4)
+        if (pg.getQscore() < .8 || pg.getMonoMass() > 2e4) // TODO automatically find the good mass threshold
           continue; // false or large masses introduce bias (due to truncation due to isotope distance)
         for (auto error : pg.getMassErrors())
         {
