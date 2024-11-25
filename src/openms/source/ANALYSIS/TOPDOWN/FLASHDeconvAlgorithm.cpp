@@ -200,7 +200,7 @@ namespace OpenMS
       {
         // For ms n, first find precursors for all ms n. then make a tmp map having the precursor masses as precursor
         std::map<String, std::vector<Precursor>> original_precursor_map;
-        // open mp here? TODO
+#pragma omp parallel for default(none), shared(map, ms_level, original_precursor_map)
         for (Size i = 0; i < map.size(); i++)
         {
           auto spec = map[i];
@@ -398,7 +398,7 @@ namespace OpenMS
 
   void FLASHDeconvAlgorithm::determineTolerance_(const MSExperiment& map, const Param& sd_param, const FLASHHelperClasses::PrecalculatedAveragine& avg, int ms_level)
   {
-    OPENMS_LOG_INFO<< "Determining tolerance for MS" << ms_level <<" ... ";
+    OPENMS_LOG_INFO << "Determining tolerance for MS" << ms_level << " ... ";
     auto sd = SpectralDeconvolution();
     auto sd_param_t = sd_param;
     sd.setAveragine(avg);
@@ -408,11 +408,11 @@ namespace OpenMS
     sd.setParameters(sd_param_t);
     sd.setToleranceEstimation();
 
-    //const int sample_count = 20;
-    int sample_rate = 100;//map.size() / sample_count;
+    // const int sample_count = 20;
+    int sample_rate = 100; // map.size() / sample_count;
     int count = 0;
     std::vector<double> sampled_tols;
-    for (const auto & spec : map)
+    for (const auto& spec : map)
     {
       if (ms_level != spec.getMSLevel()) { continue; }
       if (spec.empty()) { continue; }
@@ -421,31 +421,14 @@ namespace OpenMS
       sd.performSpectrumDeconvolution(spec, 0, precursor_pg);
 
       const auto& deconvolved_spectrum = sd.getDeconvolvedSpectrum(); // estimate both.
-      if(deconvolved_spectrum.empty()) continue;
+      if (deconvolved_spectrum.empty()) continue;
       for (const auto& pg : deconvolved_spectrum)
       {
-        if (pg.getQscore() < .8 || pg.getMonoMass() > 2e4) continue; // large masses introduce bias (due to truncation due to isotope distance)
-        int i = 0;
-        int i_cntr = 0;
-        double i_error = 0;
-        for (const auto& p : pg) // TODO make this as a function in PeakGroup ... 
+        if (pg.getQscore() < .8 || pg.getMonoMass() > 2e4)
+          continue; // false or large masses introduce bias (due to truncation due to isotope distance)
+        for (auto error : pg.getMassErrors())
         {
-          if (i != p.isotopeIndex)
-          {
-            if (i_cntr > 0)
-            {
-              sampled_tols.push_back(i_error / i_cntr);
-            }
-            i = p.isotopeIndex;
-            i_cntr = 0;
-            i_error = 0;
-          }
-          i_cntr ++;
-          i_error += pg.getPPMError(p);
-        }
-        if (i_cntr > 0)
-        {
-          sampled_tols.push_back(i_error / i_cntr);
+          sampled_tols.push_back(error);
         }
       }
     }
@@ -457,19 +440,36 @@ namespace OpenMS
       return;
     }
 
-    const auto& bins = getHistogram_(sampled_tols, -100, 100, 1);
-    // Calculate mean using std::accumulate
-
-    std::vector<DPosition<2>> points;
-    for (int b = -100; b <= 100; b++)
+    try
     {
-      points.emplace_back(b, bins[b + 100]);
-    }
-    Math::GaussFitter fitter;
-    auto fit = fitter.fit(points);
+      const int l = -100, r = 100, bin_size = 1;
+      const auto& bins = getHistogram_(sampled_tols, l, r, bin_size);
+      // Calculate mean using std::accumulate
 
-    tols_[ms_level - 1] = round(fit.sigma * 2.17 * 2); // 97% area under curve in gaussian
-    OPENMS_LOG_INFO<< "done. Determined tolerance: " <<tols_[ms_level - 1] << " ppm. You may test around this tolerance for better results." << std::endl;
+      std::vector<DPosition<2>> points;
+      for (int b = l; b <= r; b += bin_size)
+      {
+        points.emplace_back(b, bins[b - l]);
+      }
+      Math::GaussFitter fitter;
+      const auto fit = fitter.fit(points);
+
+      tols_[ms_level - 1] = round(fit.sigma * 2.17 * 2); // 97% area under curve in gaussian
+      OPENMS_LOG_INFO << "done. Determined tolerance: " << tols_[ms_level - 1] << " ppm. You may test around this tolerance for better results."
+                      << std::endl;
+    }
+    catch (const Exception::UnableToFit& e)
+    {
+      // Handle the exception and issue a warning
+      OPENMS_LOG_INFO << "failed. Cannot be determined - Gaussian fitting failure. Set to 10ppm (default tolerance)." << std::endl;
+      tols_[ms_level - 1] = 10;
+    }
+    catch (const std::exception& e)
+    {
+      // Handle other exceptions if necessary
+      OPENMS_LOG_INFO << "failed. Cannot be determined - Gaussian fitting failure. Set to 10ppm (default tolerance)." << std::endl;
+      tols_[ms_level - 1] = 10;
+    }
   }
 
   void FLASHDeconvAlgorithm::run(MSExperiment& map,

@@ -216,8 +216,7 @@ namespace OpenMS
      * set peakGroup q value
      */
     void setQvalue(double q);
-    /// get ppm error of a logMzPeak
-    float getPPMError(const LogMzPeak& p) const;
+
     /// set distance between consecutive isotopes
     void setIsotopeDaDistance(double d);
 
@@ -257,6 +256,8 @@ namespace OpenMS
     std::vector<FLASHHelperClasses::LogMzPeak>::iterator getNoisePeakBegin() noexcept;
     std::vector<FLASHHelperClasses::LogMzPeak>::iterator getNoisePeakEnd() noexcept;
 
+    std::vector<float> getMassErrors(bool ppm = true) const;
+
     /// vector operators for the LogMzPeaks in this PeakGroup
     void push_back(const FLASHHelperClasses::LogMzPeak& pg);
     FLASHHelperClasses::LogMzPeak& back();
@@ -273,10 +274,9 @@ namespace OpenMS
     /// update chargefit score and also update per charge intensities here.
     void updateChargeFitScoreAndChargeIntensities_(bool is_low_charge);
     /// update avg ppm error
-    void updateAvgPPMError_();
+    void updateAvgMassError_();
     /// update avg Da error
-    void updateAvgDaError_();
-
+    float getPPMError_(const LogMzPeak& p) const;
     /// get Da error of a logMzPeak from the closest isotope
     float getDaError_(const LogMzPeak& p) const;
     /// using signal and total (signal + noise) power, update SNR value
