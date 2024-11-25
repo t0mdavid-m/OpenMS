@@ -439,7 +439,7 @@ void FLASHTaggerAlgorithm::indexFasta_(const std::vector<FASTAFile::FASTAEntry>&
   }
 
 #pragma omp parallel for default(none) shared(keys, fasta_entry, std::cout)
-  for (Size i = 0 ; i < keys.size(); i++)
+  for (int i = 0 ; i < (int) keys.size(); i++)
   {
     const auto& key = keys[i];
     if (key.length() < min_tag_length_) continue;
