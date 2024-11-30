@@ -219,7 +219,7 @@ namespace OpenMS
     }
 
     QTextStream source(&file);
-    source.setCodec("UTF-8");
+    source.setAutoDetectUnicode(true);
     Size line_count = 0;
     json mod_obj;
     try
@@ -276,7 +276,7 @@ namespace OpenMS
     }
 
     QTextStream source(&file);
-    source.setCodec("UTF-8");
+    source.setAutoDetectUnicode(true);
     Size line_count = 1;
     String line = source.readLine();
     while (line[0] == '#') // skip leading comments
