@@ -152,7 +152,7 @@ private:
   int min_path_score_ = 0;
   int max_gap_count_ = 0;
   int max_aa_in_gap_ = 2;
-  int min_cov_aa_ = 5;
+  int min_cov_aa_ = 3;
   double decoy_factor_ = -1;
   double max_edge_mass_ = 0;
   //double flanking_mass_tol_ = -1;

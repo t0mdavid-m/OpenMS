@@ -285,21 +285,18 @@ FLASHTaggerAlgorithm& FLASHTaggerAlgorithm::operator=(const FLASHTaggerAlgorithm
 void FLASHTaggerAlgorithm::setDefaultParams_()
 {
   defaults_.setValue("max_count", 300,
-                     "Maximum number of the tags per length (lengths set by -min_length and -max_length options). The tags with different amino acid "
-                     "combinations but with the same masses are counted once. E.g., "
-                     "TII, TIL, TLI, TLL are distinct tags even though they have the same mass differences. "
-                     "but are counted as one tag. ");
+                     "Maximum number of tags per length, defined by the -min_length and -max_length options. Tags with different amino acid combinations but identical masses are counted once (e.g., TII, TIL, TLI, and TLL are distinct but counted as one).");
   defaults_.setMinInt("max_count", 0);
 
   defaults_.setValue(
     "min_length", 4,
-    "Minimum length of a tag. Each mass gap contributes to a single length (even if a mass gap is represented by multiple amino acids). ");
+    "Minimum tag length, where each mass gap contributes one unit of length (even if represented by multiple amino acids). For instance, the length of TA[255]G is 4.");
   defaults_.setMaxInt("min_length", 9);
-  defaults_.setMinInt("min_length", 1);
+  defaults_.setMinInt("min_length", 3);
 
   defaults_.setValue(
     "max_length", 8,
-    "Maximum length of a tag. Each mass gap contributes to a single length (even if a mass gap is represented by multiple amino acids). ");
+    "Maximum tag length, where each mass gap contributes one unit of length (even if represented by multiple amino acids). For instance, the length of TA[255]G is 4.");
   defaults_.setMaxInt("max_length", 30);
   defaults_.setMinInt("max_length", 3);
 
@@ -308,25 +305,25 @@ void FLASHTaggerAlgorithm::setDefaultParams_()
 //                     "terminal modification mass. Set to a positive value to activate.");
 //  defaults_.addTag("flanking_mass_tol", "advanced");
 
-  defaults_.setValue("max_iso_error_count", 0, "Maximum isotope error count per tag.");
+  //defaults_.setValue("max_iso_error_count", 0, "Maximum isotope error count allowed per tag.");
 
   // defaults_.setValue("allow_iso_error", "false", "Allow up to one isotope error in each tag.");
   // defaults_.setValidStrings("allow_iso_error", {"true", "false"});
   // defaults_.addTag("allow_iso_error", "advanced");
 
-  defaults_.setValue("min_matched_aa", 3, "Minimum number of amino acids in matched proteins, covered by tags.");
-  defaults_.addTag("min_matched_aa", "advanced");
+//  defaults_.setValue("min_matched_aa", 3, "Minimum number of amino acids in matched proteins covered by tags.");
+//  defaults_.addTag("min_matched_aa", "advanced");
 
-  defaults_.setValue("allow_gap", "false", "Allow a mass gap (a mass representing multiple consecutive amino acids) in each tag.");
+  defaults_.setValue("allow_gap", "false", "Allows mass gaps (representing multiple consecutive amino acids) in tags.");
   defaults_.setValidStrings("allow_gap", {"true", "false"});
   defaults_.addTag("allow_gap", "advanced");
 
-  defaults_.setValue("max_aa_in_gap", 2, "Maximum amino acid count in a mass gap.");
+  defaults_.setValue("max_aa_in_gap", 2, "Maximum number of amino acids in a mass gap.");
   defaults_.setMaxInt("max_aa_in_gap", 3);
   defaults_.setMinInt("max_aa_in_gap", 2);
   defaults_.addTag("max_aa_in_gap", "advanced");
 
-  defaults_.setValue("ion_type", std::vector<std::string> {"b", "y"}, "Ion types to consider");
+  defaults_.setValue("ion_type", std::vector<std::string> {"b", "y"}, "Specifies ion types to consider.");
   defaults_.setValidStrings("ion_type", {"b", "c", "a", "y", "z", "x", "zp1", "zp2"});
 
   defaultsToParam_();
@@ -377,7 +374,7 @@ void FLASHTaggerAlgorithm::updateMembers_()
   // std::cout<<common_shifts_.size() << " " << c_term_shifts_.size() << " " << n_term_shifts_.size()<<std::endl;
 
   consider_diff_ion_jumps_ = common_shifts_.size() > 1 || n_term_shifts_.size() > 1 || c_term_shifts_.size() > 1;
-  min_cov_aa_ = (int)param_.getValue("min_matched_aa");
+  //min_cov_aa_ = (int)param_.getValue("min_matched_aa");
   max_aa_in_gap_ = param_.getValue("max_aa_in_gap");
   max_gap_count_ = param_.getValue("allow_gap").toString() == "true" ? 1 : 0;
   // prsm_fdr_ = param_.getValue("fdr");

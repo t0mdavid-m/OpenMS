@@ -27,7 +27,7 @@ void FLASHTnTFile::writePrSMHeader(std::fstream& fs)
 {
   fs << "ProteoformIndex\tScan\tRetentionTime\tNumMass\tProteinAccession\tProteinDescription\tPrecursorMass\tProteoformMass\tDatabaseSequence\tProteinSequence\tProf"
         "orma\tMatchingFragments\tCoverage(%)\tStartPosition\tEndPosition"
-        "\tTagCount\tTagIndices\tModCount\tModMass\tModID\tModAccession\tModStart\tModEnd\tPrecursorQscore\tScore\tPrSMLevelQvalue\tProteoformLevelQvalue\n";
+        "\tTagCount\tTagIndices\tModCount\tModMass\tModID\tModAccession\tModStart\tModEnd\tPrecursorQscore\tScore\tPrSMLevelQvalue\tProteoformLevelQvalue\tClass\n";
 }
 
 /// write header line for Proteoform file
@@ -35,7 +35,7 @@ void FLASHTnTFile::writeProHeader(std::fstream& fs)
 {
   fs << "ProteoformIndex\tScan\tRetentionTime\tNumMass\tProteinAccession\tProteinDescription\tPrecursorMass\tProteoformMass\tDatabaseSequence\tProteinSequence\tProf"
         "orma\tMatchingFragments\tCoverage(%)\tStartPosition\tEndPosition"
-        "\tTagCount\tTagIndices\tModCount\tModMass\tModID\tModAccession\tModStart\tModEnd\tPrecursorQscore\tScore\tProteoformLevelQvalue\n";
+        "\tTagCount\tTagIndices\tModCount\tModMass\tModID\tModAccession\tModStart\tModEnd\tPrecursorQscore\tScore\tProteoformLevelQvalue\tClass\n";
 }
 
 /// write the features in regular file output
@@ -196,7 +196,6 @@ void OpenMS::FLASHTnTFile::writePrSMs(const std::vector<ProteinHit>& hits, std::
 
     // Use ProForma for sequence generation
     String proformaStr = generateProFormaString_(hit.getSequence(), start_in_seq, end_in_seq, mod_masses, mod_starts, mod_ends, mod_ids);
-
     ss << hit.getMetaValue("Index") << "\t" << hit.getMetaValue("Scan") << "\t" << hit.getMetaValue("RT") << "\t" << hit.getMetaValue("NumMass")
        << "\t" << hit.getAccession() << "\t" << hit.getDescription() << "\t" << hit.getMetaValue("GivenMass")  << "\t" << hit.getMetaValue("Mass") << "\t" << hit.getSequence() << "\t"
        << hit.getSequence().substr(start_in_seq, end_in_seq - start_in_seq) << "\t" << proformaStr << "\t" << hit.getMetaValue("MatchedAA") << "\t"

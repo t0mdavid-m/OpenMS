@@ -66,7 +66,7 @@ protected:
   // it gets automatically called on tool execution
   void registerOptionsAndFlags_() override
   {
-    registerInputFile_("in", "<file>", "", "Input file (mzML)");
+    registerInputFile_("in", "<file>", "", "Input file in mzML format. ");
     setValidFormats_("in", ListUtils::create<String>("mzML"));
 
     registerOutputFile_("out", "<file>", "", "Default output tsv file containing deconvolved features");
@@ -74,41 +74,37 @@ protected:
 
     registerOutputFile_(
       "out_spec1", "<file>", "",
-      "Output tsv file containing deconvolved MS1 spectra. Likewise, use -out_spec2, ..., -out_spec4 to specify tsv files for MS2, ..., MS4.", false);
+      "Output tsv file for deconvolved MS1 spectra. Use -out_spec2, ..., -out_spec4 for MS2, ..., MS4 spectra.", false);
     setValidFormats_("out_spec1", ListUtils::create<String>("tsv"));
 
-    registerOutputFile_("out_spec2", "<file>", "", "Output tsv file containing deconvolved MS2 spectra.", false, true);
+    registerOutputFile_("out_spec2", "<file>", "", "Output TSV files for deconvolved MS2 spectra.", false, true);
     setValidFormats_("out_spec2", ListUtils::create<String>("tsv"));
 
-    registerOutputFile_("out_spec3", "<file>", "", "Output tsv file containing deconvolved MS3 spectra.", false, true);
+    registerOutputFile_("out_spec3", "<file>", "", "Output TSV files for deconvolved MS3 spectra.", false, true);
     setValidFormats_("out_spec3", ListUtils::create<String>("tsv"));
 
-    registerOutputFile_("out_spec4", "<file>", "", "Output tsv file containing deconvolved MS4 spectra.", false, true);
+    registerOutputFile_("out_spec4", "<file>", "", "Output TSV files for deconvolved MS4 spectra.", false, true);
     setValidFormats_("out_spec4", ListUtils::create<String>("tsv"));
 
-    registerOutputFile_("out_mzml", "<file>", "", "Output mzml file containing deconvolved spectra (of all MS levels)", false);
+    registerOutputFile_("out_mzml", "<file>", "", "Output mzML file containing deconvolved spectra (for all MS levels).", false);
     setValidFormats_("out_mzml", ListUtils::create<String>("mzML"));
 
-    registerOutputFile_("out_quant", "<file>", "", "Output tsv file containing isobaric quantification results for MS2 only", false);
+    registerOutputFile_("out_quant", "<file>", "", "Output tsv file with isobaric quantification results for MS2 spectra.", false);
     setValidFormats_("out_quant", ListUtils::create<String>("tsv"));
 
     registerOutputFile_("out_annotated_mzml", "<file>", "",
-                        "Output mzml file containing annotated spectra. For each annotated peak, monoisotopic mass, charge, and isotope index are "
-                        "stored as meta data. Unannotated peaks are also "
-                        "copied as well without meta data.",
+                        "Output annotated mzML file with monoisotopic mass, charge, and isotope index metadata for peaks. Unannotated peaks are also retained without metadata.",
                         false);
     setValidFormats_("out_annotated_mzml", ListUtils::create<String>("mzML"));
 
     registerOutputFile_(
       "out_msalign1", "<file>", "",
-      "Output msalign (topFD and ProMex compatible) file containing MS1 deconvolved spectra. Likewise, use -out_msalign2 for MS2 spectra."
-      " The file names for MS1 and MS2 should end with ms1.msalign and ms2.msalgin respectively to be able to be recognized by TopPIC GUI. ",
+      "Output msalign (TopFD and ProMex compatible) file for MS1 deconvolved spectra. Ensure filename ends with ms1.msalign for TopPIC GUI compatibility (e.g., result_ms1.msalign; refer to TopPIC input formats).",
       false);
     setValidFormats_("out_msalign1", ListUtils::create<String>("msalign"), false);
 
     registerOutputFile_("out_msalign2", "<file>", "",
-                        "Output msalign (topFD and ProMex compatible) file containing MS2 deconvolved spectra."
-                        " The file name should end with ms2.msalign to be able to be recognized by TopPIC GUI. ",
+                        "Output msalign (TopFD and ProMex compatible) file for MS2 deconvolved spectra. Ensure filename ends with ms2.msalign for TopPIC GUI compatibility (e.g., result_ms2.msalign; refer to TopPIC input formats).",
                         false, true);
     setValidFormats_("out_msalign2", ListUtils::create<String>("msalign"), false);
     //
@@ -125,40 +121,36 @@ protected:
     //    setValidFormats_("out_msalign4", ListUtils::create<String>("msalign"), false);
 
     registerOutputFile_("out_feature1", "<file>", "",
-                        "Output feature (topFD compatible) file containing MS1 deconvolved features. Likewise, use -out_feature2 for MS2 features. "
-                        "The MS1 and MS2 feature files are necessary for TopPIC feature intensity output.",
+                        "Output feature file (TopFD compatible) for MS1 spectra. It is needed for TopPIC feature intensity output (refer to TopPIC input formats).",
                         false);
 
     setValidFormats_("out_feature1", ListUtils::create<String>("feature"), false);
 
     registerOutputFile_("out_feature2", "<file>", "",
-                        "Output feature (topFD compatible) file containing MS2 deconvolved features. "
-                        "The MS1 and MS2 feature files are necessary for TopPIC feature intensity output.",
+                        "Output feature file (TopFD compatible) for MS2 spectra. It is needed for TopPIC feature intensity output (refer to TopPIC input formats).",
                         false, true);
 
     setValidFormats_("out_feature2", ListUtils::create<String>("feature"), false);
 
-    registerFlag_("keep_empty_out", "If set, empty output files (e.g., *.tsv file when no feature was generated) are kept.");
+    registerFlag_("keep_empty_out", "Retain empty output files (e.g., *.tsv files with no features).");
 
     registerIntOption_("mzml_mass_charge", "<0:uncharged 1: +1 charged -1: -1 charged>", 0,
-                       "Charge state of deconvolved masses in mzml output (specified by out_mzml)", false, true);
+                       "Charge state of deconvolved masses in mzML output specified by -out_mzml.", false, true);
     setMinInt_("mzml_mass_charge", -1);
     setMaxInt_("mzml_mass_charge", 1);
 
     registerFlag_("write_detail",
-                  "To write peak information per deconvolved mass in detail or not in tsv files for deconvolved spectra. "
-                  "If set to 1, all peak information (m/z, intensity, charge and isotope index) per mass is reported.",
+                  "Include detailed peak information (m/z, intensity, charge, isotope index) for each deconvolved mass in the output spectrum tsv files specified by out_spec* options.",
                   false);
 
+    //registerDoubleOption_("precursor_snr", "<snr value>", 1.0, "Precursor SNR threshold for TopFD MS2 msalign TSV files.", false, true);
 
-    registerDoubleOption_("precursor_snr", "<snr value>", 1.0, "Precursor SNR threshold for TopFD MS2 msalign tsv files.", false, true);
+    registerDoubleOption_("min_mz", "<m/z value>", -1.0, "Specify the minimum m/z values for peaks considered during deconvolution. Negative values disable the threshold.", false, true);
+    registerDoubleOption_("max_mz", "<m/z value>", -1.0, "Specify the maximum m/z values for peaks considered during deconvolution. Negative values disable the threshold.", false, true);
+    registerDoubleOption_("min_rt", "<RT value>", -1.0, "Specify the minimum retention time (in seconds) for spectra considered during deconvolution. Negative values disable the threshold.", false, true);
+    registerDoubleOption_("max_rt", "<RT value>", -1.0, "Specify the maximum retention time (in seconds) for spectra considered during deconvolution. Negative values disable the threshold.", false, true);
 
-    registerDoubleOption_("min_mz", "<m/z value>", -1.0, "If set to positive value, minimum m/z to deconvolve.", false, true);
-    registerDoubleOption_("max_mz", "<m/z value>", -1.0, "If set to positive value, maximum m/z to deconvolve.", false, true);
-    registerDoubleOption_("min_rt", "<RT value>", -1.0, "If set to positive value, minimum RT (in second) to deconvolve.", false, true);
-    registerDoubleOption_("max_rt", "<RT value>", -1.0, "If set to positive value, maximum RT (in second) to deconvolve.", false, true);
-
-    registerIntOption_("max_ms_level", "<MS level>", -1.0, "If set to positive value, maximum MS level (inclusive) to deconvolve.", false, true);
+    registerIntOption_("max_ms_level", "<MS level>", -1.0, "Set the maximum MS level (inclusive) for deconvolution. Negative values disable the threshold.", false, true);
 
     registerSubsection_("FD", "FLASHDeconv algorithm parameters");
     registerSubsection_("SD", "Spectral deconvolution parameters");
@@ -232,7 +224,7 @@ protected:
     Param fd_param;
     fd_param.insert("", tmp_fd_param);
     bool report_decoy = tmp_fd_param.getValue("report_FDR") != "false";
-    double topfd_snr_threshold = tmp_fd_param.getValue("ida_log").toString().empty() ? getDoubleOption_("precursor_snr") : .0;
+    double topfd_snr_threshold = 0;// tmp_fd_param.getValue("ida_log").toString().empty() ? getDoubleOption_("precursor_snr") : .0;
 
     tmp_fd_param = getParam_().copy("SD:", false);
     fd_param.insert("", tmp_fd_param);
@@ -308,39 +300,6 @@ protected:
         msNscan_to_precursor_pg[deconvolved_spectrum.getScanNumber()] = deconvolved_spectrum.getPrecursorPeakGroup();
       }
     }
-    /*
-        for (auto& deconvolved_spectrum : deconvolved_spectra)
-        {
-          uint ms_level = deconvolved_spectrum.getOriginalSpectrum().getMSLevel();
-          if (ms_level != 1) continue;
-
-          const int max_count = 10;
-          double threshold = 0;
-          double mass = 0;
-          double intensity_sum = 0;
-
-          if (deconvolved_spectrum.size() > max_count)
-          {
-            std::vector<float> intensites;
-            intensites.reserve(deconvolved_spectrum.size());
-            for (const auto& pg : deconvolved_spectrum)
-            {
-              intensites.push_back(pg.getIntensity());
-            }
-            std::sort(intensites.rbegin(), intensites.rend());
-            threshold = intensites[max_count];
-          }
-
-          for (const auto& pg : deconvolved_spectrum)
-          {
-            if (pg.getIntensity() < threshold) continue;
-            mass += pg.getMonoMass() * pg.getIntensity();
-            intensity_sum += pg.getIntensity();
-          }
-          if (intensity_sum <= 0)  std::cout<< deconvolved_spectrum.getOriginalSpectrum().getRT()<<" " <<  0 << "\n";
-          std::cout << deconvolved_spectrum.getOriginalSpectrum().getRT()<< " " <<  mass / intensity_sum << "\n";
-        }
-    */
     for (auto& val : per_ms_level_deconv_spec_count)
     {
       OPENMS_LOG_INFO << "So far, FLASHDeconv found " << per_ms_level_mass_count[val.first] << " masses in " << val.second << " MS" << val.first

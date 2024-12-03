@@ -28,38 +28,39 @@ namespace OpenMS
   SpectralDeconvolution::SpectralDeconvolution(): DefaultParamHandler("SpectralDeconvolution")
   {
     defaults_.setValue("tol", DoubleList {10.0, 10.0},
-                       "ppm tolerance for MS1, 2, ... (e.g., -tol 10.0 5.0 to specify 10.0 and 5.0 ppm for MS1 and MS2, respectively). If you set this to a negative number (e.g., -1), tolerance will be estimated automatically.");
+                       "PPM Tolerance for MS1, 2, ...: Specify the tolerance values in parts per million (ppm) using the this option. For example, -tol 10.0 5.0 sets the tolerance to 10.0 ppm for MS1 and 5.0 ppm for MS2. "
+                       "If a negative value (e.g., -1) is provided, the tolerance will be estimated automatically by a tolerance estimation algorithm.");
 
     defaults_.setValue("min_mass", 50.0, "Minimum mass (Da)");
     defaults_.setValue("max_mass", 100000.0, "Maximum mass (Da)");
 
-    defaults_.setValue("min_charge", 1, "Minimum charge state for MS1 spectra (can be negative for negative mode)");
-    defaults_.setValue("max_charge", 100, "Maximum charge state for spectra (can be negative for negative mode)");
+    defaults_.setValue("min_charge", 1, "Minimum charge state for MS1 spectra (can be negative for negative mode). For MSn (n > 1), minimum charge is fixed to 1.");
+    defaults_.setValue("max_charge", 100, "Maximum charge state for spectra (can be negative for negative mode). Apart from min_charge, this option applies to all MS levelss.");
 
     defaults_.setValue("precursor_charge", 0,
-                       "Charge state of the target precursor. All precursor charge for MSn is fixed to this value. "
-                       "For MSn, the maximum mass and charge values are upper bounded by this parameter.");
+                       "Charge state of the target precursor. All precursor charge for MSn (n > 1) is fixed to this value. When precursor m/z is provided within the input mzML file or is specified using precursor_mz option, "
+                       "precursor mass is calculated accordingly.");
     defaults_.setMinInt("precursor_charge", 0);
     // defaults_.addTag("precursor_charge", "advanced");
 
     defaults_.setValue(
       "precursor_mz", 0.0,
-      "Target precursor m/z value. This option must be used with -target_precursor_charge option. Otherwise, it will be ignored. "
-      "If -precursor_charge option is used but this option is not used, the precursor m/z value written in MS2 spectra will be used by default. ");
+      "Target precursor m/z value. This option must be used in combination with the -precursor_charge option; otherwise, it will be ignored. "
+      "If the -precursor_charge option is specified but this option is not, the precursor m/z value from the input mzML file will be used as the default.");
     defaults_.setMinFloat("precursor_mz", 0.0);
     defaults_.addTag("precursor_mz", "advanced");
 
     defaults_.setValue("min_cos", DoubleList {.85, .85},
-                       "Cosine similarity thresholds between avg. and observed isotope pattern for MS1, 2, ... (e.g., -min_cos 0.3 0.6 to specify 0.3 "
-                       "and 0.6 for MS1 and MS2, respectively)");
+                       "Cosine similarity thresholds between avg. and observed isotope pattern for MS1, 2, ...: e.g., -min_cos 0.3 0.6 to specify 0.3 "
+                       "and 0.6 for MS1 and MS2, respectively.");
     defaults_.addTag("min_cos", "advanced");
     defaults_.setValue("min_snr", DoubleList {1, .8},
-                       "Minimum charge SNR (the SNR of the isotope pattern of a specific charge) thresholds for MS1, 2, ... (e.g., -min_snr 1.0 0.6 to "
-                       "specify 1.0 and 0.6 for MS1 and MS2, respectively)");
+                       "Minimum charge SNR (the SNR of the isotope pattern of a specific charge) thresholds for MS1, 2, ...: e.g., -min_snr 1.0 0.6 to "
+                       "specify 1.0 and 0.6 for MS1 and MS2, respectively.");
     defaults_.addTag("min_snr", "advanced");
 
     defaults_.setValue("allowed_isotope_error", 1,
-                       "Allowed isotope index error for decoy and qvalue report. If it is set to 2, for example, +-2 isotope errors are "
+                       "Allowed isotope index error for decoy and qvalue (FDR) report. If it is set to 2, for example, +-2 isotope errors are "
                        "not counted as false. Beta version.");
     defaults_.addTag("allowed_isotope_error", "advanced");
 

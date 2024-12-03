@@ -30,10 +30,10 @@ FLASHExtenderAlgorithm& FLASHExtenderAlgorithm::operator=(const FLASHExtenderAlg
 
 void FLASHExtenderAlgorithm::setDefaultParams_()
 {
-  defaults_.setValue("max_mod_mass", 500.0, "Maximum mass shift for modifications.");
-  defaults_.setValue("max_mod_count", 2, "Maximum number of blind modification per terminal. Per protein, it doubles.");
+  defaults_.setValue("max_mod_mass", 500.0, "Maximum mass shift allowed for modifications.");
+  defaults_.setValue("max_mod_count", 2, "Maximum number of blind modifications.");
 
-  defaults_.setValue("ion_type", std::vector<std::string> {"b", "y"}, "Ion types to consider. Write from the most to the least dominant ion types");
+  defaults_.setValue("ion_type", std::vector<std::string> {"b", "y"}, "Specifies ion types to consider");
   defaults_.setValidStrings("ion_type", {"b", "c", "a", "y", "z", "x", "zp1", "zp2"});
 
   defaultsToParam_();
@@ -514,7 +514,7 @@ void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
   // setLogType(CMD);
 
   ion_types_str_ = param_.getValue("ion_type").toStringVector();
-
+  std::sort(ion_types_str_.begin(), ion_types_str_.end());
   for (const auto& ion_str : ion_types_str_)
   {
     if (ion_str == "a") { prefix_shifts_.push_back(Residue::getInternalToAIon().getMonoWeight()); }

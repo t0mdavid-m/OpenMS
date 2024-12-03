@@ -38,19 +38,19 @@ protected:
   // it gets automatically called on tool execution
   void registerOptionsAndFlags_() override
   {
-    registerInputFile_("in", "<file>", "", "Input file (deconv.mzML from FLASHDeconv mzML output)", true);
+    registerInputFile_("in", "<file>", "", "Input file (deconv.mzML from FLASHDeconv mzML output).", true);
     setValidFormats_("in", ListUtils::create<String>("mzML"));
 
     registerInputFile_("fasta", "<file>", "", "Input proteome database file (fasta)", true);
     setValidFormats_("fasta", ListUtils::create<String>("fasta"));
 
-    registerOutputFile_("out_pro", "<file>", "", "Default output Proteoform level tsv file containing Proteoform IDs", true);
+    registerOutputFile_("out_pro", "<file>", "", "Output proteoform-level tsv file containing proteoform IDs. ", true);
     setValidFormats_("out_pro", ListUtils::create<String>("tsv"));
 
-    registerOutputFile_("out_prsm", "<file>", "", "Default output PrSM level tsv file containing PrSMs");
+    registerOutputFile_("out_prsm", "<file>", "", "Output PrSM-level tsv file containing PrSMs.");
     setValidFormats_("out_prsm", ListUtils::create<String>("tsv"));
 
-    registerOutputFile_("out_tag", "<file>", "", "Default output tag level tsv file containing matched tags");
+    registerOutputFile_("out_tag", "<file>", "", "Output tag-level tsv file containing matched tags.");
     setValidFormats_("out_tag", ListUtils::create<String>("tsv"));
 
     registerSubsection_("tnt", "FLASHTnT algorithm parameters");

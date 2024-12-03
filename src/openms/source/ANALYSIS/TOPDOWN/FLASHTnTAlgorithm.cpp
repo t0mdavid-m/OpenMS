@@ -35,23 +35,23 @@ FLASHTnTAlgorithm& FLASHTnTAlgorithm::operator=(const FLASHTnTAlgorithm& rhs)
 
 void FLASHTnTAlgorithm::setDefaultParams_()
 {
-  defaults_.setValue("prsm_fdr", 1.0, "PrSM level FDR");
+  defaults_.setValue("prsm_fdr", 1.0, "Specifies the PrSM-level FDR.");
   defaults_.setMinFloat("prsm_fdr", 0.0);
 
-  defaults_.setValue("pro_fdr", 1.0, "Proteoform level FDR");
+  defaults_.setValue("pro_fdr", 1.0, "Specifies the proteoform-level FDR.");
   defaults_.setMinFloat("pro_fdr", 0.0);
 
-  defaults_.setValue("only_single_hit", "false", "Allow only a single hit per spectrum");
+  defaults_.setValue("only_single_hit", "false", "Allows only a single hit per spectrum.");
   defaults_.setValidStrings("only_single_hit", {"true", "false"});
 
   defaults_.setValue("discard_underdetermined", "false",
-                     "To discard underdetermined proteoform hits (i.e., proteoforms without total mass or start end positions");
+                     "Discards underdetermined proteoform IDs (e.g., those without total mass or start/end positions).");
   defaults_.setValidStrings("discard_underdetermined", {"true", "false"});
 
-  defaults_.setValue("keep_decoy", "false", "To keep decoy hits");
+  defaults_.setValue("keep_decoy", "false", "Retains decoy hits in the results.");
   defaults_.setValidStrings("keep_decoy", {"true", "false"});
 
-  defaults_.setValue("ion_type", std::vector<std::string> {"b", "y"}, "Ion types to consider. Write from the most to the least dominant ion types");
+  defaults_.setValue("ion_type", std::vector<std::string> {"b", "y"}, "Specifies ion types to consider.");
   defaults_.setValidStrings("ion_type", {"b", "c", "a", "y", "z", "x", "zp1", "zp2"});
 
   auto tparam = FLASHTaggerAlgorithm().getDefaults();

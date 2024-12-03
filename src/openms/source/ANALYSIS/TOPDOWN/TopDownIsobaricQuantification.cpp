@@ -41,15 +41,13 @@ TopDownIsobaricQuantification::TopDownIsobaricQuantification() : DefaultParamHan
 
   void TopDownIsobaricQuantification::setDefaultParams_()
   {
-    defaults_.setValue("type", "none", "Isobaric Quantitation method used in the experiment.");
+    defaults_.setValue("type", "none", "Specifies the isobaric quantification method used in the experiment.");
     defaults_.setValidStrings("type", {"none", "itraq4plex", "itraq8plex", "tmt10plex", "tmt11plex", "tmt16plex", "tmt18plex", "tmt6plex"});
     defaults_.setValue("isotope_correction", "true",
-                       "Enable isotope correction (highly recommended). "
-                       "Note that you need to provide a correct isotope correction matrix "
-                       "otherwise the tool will fail or produce invalid results.");
+                       "Enable isotope correction (highly recommended).");
     defaults_.setValidStrings("isotope_correction", {"true", "false"});
-    defaults_.setValue("reporter_mz_tol", 2e-3, "m/z tolerance in Th from the expected position of reporter ion m/zs.");
-    defaults_.setValue("only_fully_quantified", "false", "Use only the fully quantified spectra in which non-zero intensity report ions are found for all channels.");
+    defaults_.setValue("reporter_mz_tol", 2e-3, "Specifies the m/z tolerance (in Th) for reporter ion detection.");
+    defaults_.setValue("only_fully_quantified", "false", "Restricts analysis to spectra that are fully quantified, meaning all channels have non-zero intensity reporter ions.");
     defaults_.setValidStrings("only_fully_quantified", {"true", "false"});
     defaultsToParam_();
   }
