@@ -98,7 +98,6 @@ namespace OpenMS
     */
     //      @param avg averagine information to calculate monoisotopic and average mass difference
     static void writeTopFD(DeconvolvedSpectrum& dspec, std::fstream& fs, const String& filename,
-                           const double snr_threshold = 1.0,
                            const double qval_threshold = 1.0,
                            const uint min_ms_level = 1,
                            bool randomize_precursor_mass = false,

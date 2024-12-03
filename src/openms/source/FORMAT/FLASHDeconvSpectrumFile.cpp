@@ -482,14 +482,14 @@ namespace OpenMS
     fs << "####################### Parameters ######################\n";
   }
 
-  void FLASHDeconvSpectrumFile::writeTopFD(DeconvolvedSpectrum& dspec, std::fstream& fs, const String& filename, const double snr_threshold, const double qval_threshold, const uint min_ms_level,
+  void FLASHDeconvSpectrumFile::writeTopFD(DeconvolvedSpectrum& dspec, std::fstream& fs, const String& filename, const double qval_threshold, const uint min_ms_level,
                                            const bool randomize_precursor_mass, const bool randomize_fragment_mass)
   {
     std::stringstream ss;
     UInt ms_level = dspec.getOriginalSpectrum().getMSLevel();
     if (ms_level > min_ms_level)
     {
-      if (dspec.getPrecursorPeakGroup().empty() || dspec.getPrecursorPeakGroup().getChargeSNR(dspec.getPrecursor().getCharge()) < snr_threshold ||
+      if (dspec.getPrecursorPeakGroup().empty() ||
           dspec.getPrecursorPeakGroup().getQvalue() > qval_threshold)
       {
         return;

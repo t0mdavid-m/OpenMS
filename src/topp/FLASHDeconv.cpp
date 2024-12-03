@@ -224,7 +224,7 @@ protected:
     Param fd_param;
     fd_param.insert("", tmp_fd_param);
     bool report_decoy = tmp_fd_param.getValue("report_FDR") != "false";
-    double topfd_snr_threshold = 0;// tmp_fd_param.getValue("ida_log").toString().empty() ? getDoubleOption_("precursor_snr") : .0;
+    //double topfd_snr_threshold = 0;// tmp_fd_param.getValue("ida_log").toString().empty() ? getDoubleOption_("precursor_snr") : .0;
 
     tmp_fd_param = getParam_().copy("SD:", false);
     fd_param.insert("", tmp_fd_param);
@@ -508,7 +508,7 @@ protected:
         uint ms_level = deconvolved_spectrum.getOriginalSpectrum().getMSLevel();
         if (out_topfd_file[ms_level - 1].empty()) continue;
 
-        FLASHDeconvSpectrumFile::writeTopFD(deconvolved_spectrum, out_topfd_streams[ms_level - 1], in_file, topfd_snr_threshold, 1,
+        FLASHDeconvSpectrumFile::writeTopFD(deconvolved_spectrum, out_topfd_streams[ms_level - 1], in_file, 1,
                                             per_ms_level_deconv_spec_count.begin()->first, false, false);
       }
 
