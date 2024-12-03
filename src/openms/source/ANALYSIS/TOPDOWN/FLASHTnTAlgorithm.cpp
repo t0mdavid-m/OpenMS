@@ -45,7 +45,7 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   defaults_.setValidStrings("only_single_hit", {"true", "false"});
 
   defaults_.setValue("discard_underdetermined", "false",
-                     "Discards underdetermined proteoform IDs (e.g., those without total mass or start/end positions).");
+                     "Discards underdetermined proteoform IDs (e.g., those without exact precursor masses or start/end positions).");
   defaults_.setValidStrings("discard_underdetermined", {"true", "false"});
 
   defaults_.setValue("keep_decoy", "false", "Retains decoy hits in the results.");
