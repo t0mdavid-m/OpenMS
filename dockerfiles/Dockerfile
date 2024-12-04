@@ -79,7 +79,8 @@ FROM ubuntu:22.04 AS library
 ARG INSTALL_DIR
 ARG CONTRIB_BUILD_DIR
 
-RUN apt-get update \
+RUN add-apt-repository universe \
+  && apt-get update \
   && apt-get install -y --no-install-recommends --no-install-suggests \
     qtbase6-dev \
     libqt6opengl6-dev \
