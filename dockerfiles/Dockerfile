@@ -62,6 +62,7 @@ EOF
 # adding thirdparty binaries to the PATH so they will be picked up by the build system
 ENV PATH="${THIRDPARTY_DIR}/LuciPHOr2:${THIRDPARTY_DIR}/MSGFPlus:${THIRDPARTY_DIR}/ThermoRawFileParser:${THIRDPARTY_DIR}/Comet:${THIRDPARTY_DIR}/Fido:${THIRDPARTY_DIR}/MaRaCluster:${THIRDPARTY_DIR}/Percolator:${THIRDPARTY_DIR}/SpectraST:${THIRDPARTY_DIR}/XTandem:${THIRDPARTY_DIR}/Sage:${PATH}"
 RUN cmake \
+    -DQt6_DIR="/usr/lib/x86_64-linux-gnu/cmake/Qt6" \
     -DCMAKE_BUILD_TYPE='Release' \
     -DCMAKE_PREFIX_PATH="${CONTRIB_BUILD_DIR}/;/usr/;/usr/local" \
     -DCMAKE_INSTALL_PREFIX=${INSTALL_DIR} \
@@ -115,7 +116,6 @@ ARG INSTALL_DIR
 
 COPY --from=build ${INSTALL_DIR}/bin ${INSTALL_DIR}/bin
 ENV PATH="${INSTALL_DIR}/bin:${PATH}"
-ENV Qt6_DIR="/usr/lib/x86_64-linux-gnu/cmake/Qt6"
 
 LABEL software="OpenMS (tools)"
 
