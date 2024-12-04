@@ -115,6 +115,7 @@ ARG INSTALL_DIR
 
 COPY --from=build ${INSTALL_DIR}/bin ${INSTALL_DIR}/bin
 ENV PATH="${INSTALL_DIR}/bin:${PATH}"
+ENV Qt6_DIR="/usr/lib/x86_64-linux-gnu/cmake/Qt6"
 
 LABEL software="OpenMS (tools)"
 
