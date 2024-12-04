@@ -100,34 +100,44 @@ endif()
 
 #------------------------------------------------------------------------------
 # Find NumPy headers
-exec_program(${Python_EXECUTABLE}
-    ARGS "-c \"import numpy; print(numpy.get_include())\""
+execute_process(
+    COMMAND ${Python_EXECUTABLE} -c "import numpy; print(numpy.get_include())"
     OUTPUT_VARIABLE NUMPY_INCLUDE_DIR
-    RETURN_VALUE NUMPY_NOT_FOUND
-    )
-if(NUMPY_NOT_FOUND)
-    message(FATAL_ERROR "NumPy headers not found")
+    ERROR_VARIABLE NUMPY_ERROR
+    RESULT_VARIABLE NUMPY_INCLUDE_DIR_NOT_FOUND
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+
+if (NUMPY_INCLUDE_DIR_NOT_FOUND)
+    message(FATAL_ERROR "Failed to find numpy include directory: ${NUMPY_ERROR}")
 endif()
 
+
 # Find Python headers
-exec_program(${Python_EXECUTABLE}
-    ARGS "-c \"import sysconfig; print(sysconfig.get_paths()['include'])\""
+execute_process(
+    COMMAND ${Python_EXECUTABLE} -c "import sysconfig; print(sysconfig.get_paths()['include'])"
     OUTPUT_VARIABLE PYTHON_INCLUDE_DIRS
-    RETURN_VALUE PYTHON_INCLUDE_DIRS_NOT_FOUND
-    )
-if(PYTHON_INCLUDE_DIRS_NOT_FOUND)
-    message(FATAL_ERROR "Python headers not found")
+    ERROR_VARIABLE PYTHON_INCLUDE_DIRS_ERROR
+    RESULT_VARIABLE PYTHON_INCLUDE_DIRS_NOT_FOUND
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+
+if (PYTHON_INCLUDE_DIRS_NOT_FOUND)
+    message(FATAL_ERROR "Python headers not found: ${PYTHON_INCLUDE_DIRS_ERROR}")
 endif()
 
 
 # Get suffix for python C(++) extensions
-exec_program(${Python_EXECUTABLE}
-    ARGS "-c \"import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))\""
+execute_process(
+    COMMAND ${Python_EXECUTABLE} -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))"
     OUTPUT_VARIABLE PYTHON_EXT_SUFFIX
-    RETURN_VALUE PYTHON_EXT_SUFFIX_NOT_FOUND
-    )
+    ERROR_VARIABLE PYTHON_EXT_SUFFIX_ERROR
+    RESULT_VARIABLE PYTHON_EXT_SUFFIX_NOT_FOUND
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+
 if(PYTHON_EXT_SUFFIX_NOT_FOUND)
-    message(FATAL_ERROR "Could not determine suffix for Python C extensions.")
+    message(FATAL_ERROR "Could not determine suffix for Python C extensions: ${PYTHON_EXT_SUFFIX_ERROR}")
 endif()
 
 
@@ -292,15 +302,14 @@ endif()
 #------------------------------------------------------------------------------
 # collection of include dirs that is necessary to compile pyOpenMS
 
-# Find Qt5 includes for pyOpenMS
+# Find Qt6 includes for pyOpenMS
 find_package(Qt6 COMPONENTS Core Network REQUIRED)
 get_target_property(QT_QMAKE_EXECUTABLE Qt6::qmake IMPORTED_LOCATION)
-exec_program(${QT_QMAKE_EXECUTABLE} ARGS "-query QT_INSTALL_HEADERS" OUTPUT_VARIABLE QTHEADERS)
+execute_process(COMMAND ${QT_QMAKE_EXECUTABLE} -query QT_INSTALL_HEADERS  OUTPUT_VARIABLE QTHEADERS OUTPUT_STRIP_TRAILING_WHITESPACE)
 set(QT_INCLUDE_DIR ${QTHEADERS} CACHE INTERNAL "" FORCE)
-exec_program(${QT_QMAKE_EXECUTABLE} ARGS "-v" OUTPUT_VARIABLE QT_QMAKE_VERSION_INFO)
-exec_program(${QT_QMAKE_EXECUTABLE} ARGS "-query QT_INSTALL_LIBS" OUTPUT_VARIABLE QT_INSTALL_LIBS)
-exec_program(${QT_QMAKE_EXECUTABLE} ARGS "-query QT_INSTALL_BINS" OUTPUT_VARIABLE QT_INSTALL_BINS)
-
+execute_process(COMMAND ${QT_QMAKE_EXECUTABLE} -v OUTPUT_VARIABLE QT_QMAKE_VERSION_INFO OUTPUT_STRIP_TRAILING_WHITESPACE)
+execute_process(COMMAND ${QT_QMAKE_EXECUTABLE} -query QT_INSTALL_LIBS OUTPUT_VARIABLE QT_INSTALL_LIBS OUTPUT_STRIP_TRAILING_WHITESPACE)
+execute_process(COMMAND ${QT_QMAKE_EXECUTABLE} -query QT_INSTALL_BINS OUTPUT_VARIABLE QT_INSTALL_BINS OUTPUT_STRIP_TRAILING_WHITESPACE)
 
 set(PYOPENMS_INCLUDE_DIRS
   ${OpenSwathAlgo_INCLUDE_DIRECTORIES}
