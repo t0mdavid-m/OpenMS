@@ -26,7 +26,7 @@ RUN apt-get update \
     && add-apt-repository universe \
     && apt-get update \
     && apt-get install -y --no-install-recommends --no-install-suggests \
-    qtbase6-dev \
+    qt6-base-dev \
     libqt6opengl6-dev \
     libsvm3 \
     libzip4 \
