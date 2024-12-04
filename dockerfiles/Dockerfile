@@ -79,9 +79,11 @@ FROM ubuntu:22.04 AS library
 ARG INSTALL_DIR
 ARG CONTRIB_BUILD_DIR
 
-RUN add-apt-repository universe \
-  && apt-get update \
-  && apt-get install -y --no-install-recommends --no-install-suggests \
+RUN apt-get update \
+    && apt-get install -y software-properties-common \
+    && add-apt-repository universe \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends --no-install-suggests \
     qtbase6-dev \
     libqt6opengl6-dev \
     libsvm3 \
