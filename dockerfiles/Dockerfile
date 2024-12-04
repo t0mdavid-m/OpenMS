@@ -80,14 +80,18 @@ ARG INSTALL_DIR
 ARG CONTRIB_BUILD_DIR
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends --no-install-suggests \
-    libqt5opengl5 \
+    && apt-get install -y software-properties-common \
+    && add-apt-repository universe \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends --no-install-suggests \
+    qtbase6-dev \
+    libqt6opengl6-dev \
     libsvm3 \
     libzip4 \
     zlib1g \
     libbz2-1.0 \
     libgomp1 \
-    libqt5svg5 \
+    libqt6svg6-dev \
     libxerces-c3.2 \
     coinor-libcoinmp1v5 \
     libboost-date-time1.74-dev  \
@@ -111,6 +115,7 @@ ARG INSTALL_DIR
 
 COPY --from=build ${INSTALL_DIR}/bin ${INSTALL_DIR}/bin
 ENV PATH="${INSTALL_DIR}/bin:${PATH}"
+ENV Qt6_DIR="/usr/lib/x86_64-linux-gnu/cmake/Qt6"
 
 LABEL software="OpenMS (tools)"
 
@@ -156,7 +161,7 @@ RUN apt-get update \
     # we need Xvfb to run a small subset of tests (eg. TOPP_INIUpdater)
     xvfb \
     # needed for TSGDialog_test and TOPPView_test
-    libqt5test5 \
+    libqt6test6 \
   && rm -rf /var/lib/apt/lists/*
 
 # installing cmake
