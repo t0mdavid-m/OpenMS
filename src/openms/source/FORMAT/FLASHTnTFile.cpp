@@ -27,7 +27,7 @@ void FLASHTnTFile::writePrSMHeader(std::fstream& fs)
 {
   fs << "ProteoformIndex\tScan\tRetentionTime\tNumMass\tProteinAccession\tProteinDescription\tPrecursorMass\tProteoformMass\tDatabaseSequence\tProteinSequence\tProf"
         "orma\tMatchingFragments\tCoverage(%)\tStartPosition\tEndPosition"
-        "\tTagCount\tTagIndices\tModCount\tModMass\tModID\tModAccession\tModStart\tModEnd\tPrecursorQscore\tScore\tPrSMLevelQvalue\tProteoformLevelQvalue\tClass\n";
+        "\tTagCount\tTagIndices\tModCount\tModMass\tModID\tModAccession\tModStart\tModEnd\tPrecursorQscore\tScore\tPrSMLevelQvalue\tProteoformLevelQvalue\n";
 }
 
 /// write header line for Proteoform file
@@ -35,7 +35,7 @@ void FLASHTnTFile::writeProHeader(std::fstream& fs)
 {
   fs << "ProteoformIndex\tScan\tRetentionTime\tNumMass\tProteinAccession\tProteinDescription\tPrecursorMass\tProteoformMass\tDatabaseSequence\tProteinSequence\tProf"
         "orma\tMatchingFragments\tCoverage(%)\tStartPosition\tEndPosition"
-        "\tTagCount\tTagIndices\tModCount\tModMass\tModID\tModAccession\tModStart\tModEnd\tPrecursorQscore\tScore\tProteoformLevelQvalue\tClass\n";
+        "\tTagCount\tTagIndices\tModCount\tModMass\tModID\tModAccession\tModStart\tModEnd\tPrecursorQscore\tScore\tProteoformLevelQvalue\n";
 }
 
 /// write the features in regular file output
