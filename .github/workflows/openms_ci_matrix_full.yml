@@ -237,7 +237,6 @@ jobs:
           sudo apt-get -qq install -y qtbase5-dev libqt5svg5-dev libqt5opengl5-dev
           sudo apt-get -qq install -y libeigen3-dev libboost-random-dev libboost-regex-dev libboost-iostreams-dev \
            libboost-date-time-dev libboost-math-dev libxerces-c-dev zlib1g-dev libsvm-dev libbz2-dev coinor-libcoinmp-dev libhdf5-dev
-
           echo "cmake_prefix=" >> $GITHUB_OUTPUT
           ## always run doxygen on Ubuntu to detect Doxygen errors
           sudo apt-get -qq install -y doxygen ghostscript graphviz
@@ -348,6 +347,15 @@ jobs:
       run: |
           # do not fail immediately
           set +e
+
+          # Generate the CWL descriptors if we are going to build a package
+          if [ ${{steps.set-vars.outputs.pkg_type }} != "none" ]; then
+            python -m venv openms-cwl
+            source openms-cwl/bin/activate
+            pip install -q cwltool
+            export ENABLE_CWL=ON
+          fi
+
           mkdir $GITHUB_WORKSPACE/OpenMS/bld/
           ${{ steps.set-vars.outputs.xvfb }} ctest --output-on-failure -V -S ../OpenMS/OpenMS/tools/ci/cibuild.cmake
           retVal=$?
@@ -371,6 +379,7 @@ jobs:
           BUILD_NAME: "${{ steps.extract_branch.outputs.RUN_NAME }}-${{ steps.set-vars.outputs.tp_folder }}-${{ runner.arch }}-${{ matrix.compiler }}-${{ matrix.compiler_ver }}-class-topp-${{ github.run_number }}"
           ENABLE_STYLE_TESTING: "OFF"
           ENABLE_TOPP_TESTING: "ON"
+          PACKAGE_TYPE: ${{ steps.set-vars.outputs.pkg_type }}
           ENABLE_CLASS_TESTING: "ON"
           ENABLE_DOCS: ${{ steps.set-vars.outputs.enable_docs }}
           ENABLE_GCC_WERROR: "OFF" # TODO think about that
