@@ -1055,7 +1055,7 @@ uint PeakGroup::getIndex() const
   return index_;
 }
 
-uint PeakGroup::getFeatureIndex() const
+int PeakGroup::getFeatureIndex() const
 {
   return findex_;
 }

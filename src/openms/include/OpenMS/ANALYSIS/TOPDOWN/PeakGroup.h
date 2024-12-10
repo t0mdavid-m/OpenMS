@@ -238,7 +238,7 @@ namespace OpenMS
     /// get index of this peak group
     uint getIndex() const;
     /// get feature index of this peak group
-    uint getFeatureIndex() const;
+    int getFeatureIndex() const;
 
     /// iterators for the signal LogMz peaks in this PeakGroup
     std::vector<FLASHHelperClasses::LogMzPeak>::const_iterator begin() const noexcept;
