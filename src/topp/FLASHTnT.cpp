@@ -53,15 +53,48 @@ protected:
     registerOutputFile_("out_tag", "<file>", "", "Output tag-level tsv file containing matched tags.");
     setValidFormats_("out_tag", ListUtils::create<String>("tsv"));
 
-    registerSubsection_("tnt", "FLASHTnT algorithm parameters");
+    // Register PrSM-level FDR parameter
+    registerDoubleOption_("prsm_fdr", "Specifies the PrSM-level FDR.", 1.0, "Specifies the PrSM-level FDR.", false);
+    setMinFloat_("prsm_fdr", 0.0);
+
+    // Register proteoform-level FDR parameter
+    registerDoubleOption_("pro_fdr", "Specifies the proteoform-level FDR.", 1.0, "Specifies the proteoform-level FDR.", false);
+    setMinFloat_("pro_fdr", 0.0);
+
+    // Register single-hit-only option
+    registerStringOption_("only_single_hit", "Allows only a single hit per spectrum.", "false", "Allows only a single hit per spectrum.", false);
+    setValidStrings_("only_single_hit", {"true", "false"});
+
+    // Register underdetermined proteoform discard option
+    registerStringOption_("discard_underdetermined", 
+                          "Discards underdetermined proteoform IDs (e.g., those without exact precursor masses or start/end positions).",
+                          "false", 
+                          "Discards underdetermined proteoform IDs (e.g., those without exact precursor masses or start/end positions).", false);
+    setValidStrings_("discard_underdetermined", {"true", "false"});
+
+    // Register decoy retention option
+    registerStringOption_("keep_decoy", "Retains decoy hits in the results.", "false", "Retains decoy hits in the results.", false);
+    setValidStrings_("keep_decoy", {"true", "false"});
+
+    // Register ion type parameter
+    registerStringList_("ion_type", "Specifies ion types to consider.", ListUtils::toStringList(std::vector<std::string>{"b", "y"}), "Specifies ion types to consider.", false);
+    setValidStrings_("ion_type", {"b", "c", "a", "y", "z", "x", "zp1", "zp2"});
+
+    registerSubsection_("tag", "Tag algorithm parameters");
+    registerSubsection_("ex", "Extension algorithm parameters");
+
   }
 
   Param getSubsectionDefaults_(const String& prefix) const override
   {
-    if (prefix == "tnt")
+    if (prefix == "tag")
     {
       auto tnt_param = FLASHTnTAlgorithm().getDefaults();
-      return tnt_param;
+      return tnt_param.copy("tag:", true);
+    }
+    else if (prefix == "ex") {
+      auto tnt_param = FLASHTnTAlgorithm().getDefaults();
+      return tnt_param.copy("ex:", true);
     }
     else { throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "Unknown subsection", prefix); }
   }
@@ -93,7 +126,17 @@ protected:
     mzml.setLogType(log_type_);
     mzml.load(in_file, map);
 
-    auto tnt_param = getParam_().copy("tnt:", true);
+    auto tnt_param = getParam_();
+    tnt_param.remove("in");
+    tnt_param.remove("fasta");
+    tnt_param.remove("out_tag");
+    tnt_param.remove("out_prsm");
+    tnt_param.remove("log");
+    tnt_param.remove("debug");
+    tnt_param.remove("threads");
+    tnt_param.remove("no_progress");
+    tnt_param.remove("force");
+    tnt_param.remove("test");
     double max_mod_mass = tnt_param.getValue("ex:max_mod_mass");
     int max_mod_count = tnt_param.getValue("ex:max_mod_count");
     double pro_fdr = tnt_param.getValue("pro_fdr");
