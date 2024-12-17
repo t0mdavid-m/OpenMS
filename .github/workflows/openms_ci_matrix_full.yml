@@ -379,7 +379,6 @@ jobs:
           BUILD_NAME: "${{ steps.extract_branch.outputs.RUN_NAME }}-${{ steps.set-vars.outputs.tp_folder }}-${{ runner.arch }}-${{ matrix.compiler }}-${{ matrix.compiler_ver }}-class-topp-${{ github.run_number }}"
           ENABLE_STYLE_TESTING: "OFF"
           ENABLE_TOPP_TESTING: "ON"
-          PACKAGE_TYPE: ${{ steps.set-vars.outputs.pkg_type }}
           ENABLE_CLASS_TESTING: "ON"
           ENABLE_DOCS: ${{ steps.set-vars.outputs.enable_docs }}
           ENABLE_GCC_WERROR: "OFF" # TODO think about that
