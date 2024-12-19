@@ -397,6 +397,7 @@ namespace OpenMS
     sd.setAveragine(avg);
     tols_[ms_level - 1] = 200; // maximum tolerance
     sd_param_t.setValue("min_charge", 1); // better to include charge 1 to determine ppm error.
+    sd_param_t.setValue("min_mass", 50.0); // better to include small masses to determine ppm error.
     sd_param_t.setValue("tol", tols_);
     sd.setParameters(sd_param_t);
     sd.setToleranceEstimation();
@@ -786,7 +787,7 @@ namespace OpenMS
 
     if (report_decoy_)
     {
-      auto decoy_deconvolved_features = mass_tracer.findFeaturesAndUpdateQscore2D(sd_.getAveragine(), deconvolved_spectra, current_min_ms_level_, true);
+      const auto& decoy_deconvolved_features = mass_tracer.findFeaturesAndUpdateQscore2D(sd_.getAveragine(), deconvolved_spectra, current_min_ms_level_, true);
       deconvolved_features.insert(deconvolved_features.end(), decoy_deconvolved_features.begin(), decoy_deconvolved_features.end());
     }
 
@@ -807,20 +808,20 @@ namespace OpenMS
         feature_index_set[findex].push_back(i);
       }
 
-      for (auto& element : feature_index_set)
+      for (const auto& element : feature_index_set)
       {
         std::vector<DeconvolvedSpectrum> tmp_dspec;
         tmp_dspec.reserve(element.second.size());
         for (Size i : element.second)
           tmp_dspec.push_back(deconvolved_spectra[i]);
 
-        auto df = mass_tracer.findFeaturesAndUpdateQscore2D(sd_.getAveragine(), tmp_dspec, ms_level, false);
+        const auto& df = mass_tracer.findFeaturesAndUpdateQscore2D(sd_.getAveragine(), tmp_dspec, ms_level, false);
         deconvolved_features.insert(deconvolved_features.end(), df.begin(), df.end());
 
         if (report_decoy_)
         {
-          auto df_decoy = mass_tracer.findFeaturesAndUpdateQscore2D(sd_.getAveragine(), tmp_dspec, ms_level, true);
-          deconvolved_features.insert(deconvolved_features.end(), df.begin(), df.end());
+          const auto& df_decoy = mass_tracer.findFeaturesAndUpdateQscore2D(sd_.getAveragine(), tmp_dspec, ms_level, true);
+          deconvolved_features.insert(deconvolved_features.end(), df_decoy.begin(), df_decoy.end());
         }
 
         Size j = 0;
