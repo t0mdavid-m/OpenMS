@@ -47,10 +47,10 @@ See https://openms.de/FLASHDeconv for more information.
 */
 class TOPPFLASHDeconv : public TOPPBase
 {
-
+#ifdef DEEP_LEARNING
   const int charge_count = 11;
   const int iso_count = 13;
-
+#endif
 public:
   TOPPFLASHDeconv():
       TOPPBase("FLASHDeconv",
@@ -347,7 +347,7 @@ protected:
 #endif
 #ifdef DEEP_LEARNING
         out_dl_streams[i].open(out_spec_file[i] + "_dl.csv", fstream::out);
-        out_dl_streams[i] << "FeatureIndex,Index,";
+        out_dl_streams[i] << "FeatureIndex,Index,RTdelta,";
         for (int n = 0; n < 2; n++)
         {
           String header = n == 0? "S" : "N";
@@ -381,11 +381,21 @@ protected:
         Qscore::writeAttCsvForQscoreTraining(deconvolved_spectrum, out_train_streams[ms_level - 1]);
 #endif
 #ifdef DEEP_LEARNING
+        double rt = deconvolved_spectrum.getOriginalSpectrum().getRT();
         for (auto& pg : deconvolved_spectrum)
         {
-          out_dl_streams[ms_level - 1] << (pg.getFeatureIndex() > 0 ? pg.getFeatureIndex() : -1) << ",";
+          int feature_index = (pg.getFeatureIndex() > 0 ? pg.getFeatureIndex() : -1);
+          double rt_delta = .0;
+          if (feature_index >= 0)
+          {
+            const auto& mt = deconvolved_features[feature_index - 1].mt;
+            rt_delta = mt[mt.findMaxByIntPeak()].getRT() - rt;
+          }
+
+          out_dl_streams[ms_level - 1] << feature_index << ",";
           if (dl_index.find(ms_level) == dl_index.end()) dl_index[ms_level] = 1;
-          out_dl_streams[ms_level - 1] << dl_index[ms_level]++ << ",";
+          out_dl_streams[ms_level - 1] << dl_index[ms_level]++ << "," << rt_delta << ",";
+
           // if (pg.getQscore2D() < .9) continue;
           const auto& [sig, noise]
             = pg.getDLVector(deconvolved_spectrum.getOriginalSpectrum(), charge_count, iso_count, fd.getAveragine(), tols[ms_level - 1]);
@@ -436,11 +446,22 @@ protected:
           Qscore::writeAttCsvForQscoreTraining(deconvolved_spectrum, out_train_streams[ms_level - 1]);
 #endif
 #ifdef DEEP_LEARNING
+          //deconvolved_features
+          double rt = deconvolved_spectrum.getOriginalSpectrum().getRT();
           for (auto& pg : deconvolved_spectrum)
           {
-            out_dl_streams[ms_level - 1] << (pg.getFeatureIndex() > 0 ? pg.getFeatureIndex() : -1) << ",";
+            int feature_index = (pg.getFeatureIndex() > 0 ? pg.getFeatureIndex() : -1);
+            double rt_delta = .0;
+            if (feature_index >= 0)
+            {
+              const auto& mt = deconvolved_features[feature_index - 1].mt;
+              rt_delta = mt[mt.findMaxByIntPeak()].getRT() - rt;
+            }
+
+            out_dl_streams[ms_level - 1] << feature_index << ",";
             if (dl_index.find(ms_level) == dl_index.end()) dl_index[ms_level] = 1;
-            out_dl_streams[ms_level - 1] << dl_index[ms_level]++ << ",";
+            out_dl_streams[ms_level - 1] << dl_index[ms_level]++ << "," << rt_delta << ",";
+
             const auto& [sig, noise]
               = pg.getDLVector(deconvolved_spectrum.getOriginalSpectrum(), charge_count, iso_count, fd.getAveragine(), tols[ms_level - 1]);
             for (const auto s : sig)
