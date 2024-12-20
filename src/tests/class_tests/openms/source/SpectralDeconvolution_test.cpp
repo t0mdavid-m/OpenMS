@@ -109,6 +109,9 @@ START_SECTION(DeconvolvedSpectrum& getDeconvolvedSpectrum())
   fd_algo.performSpectrumDeconvolution(input[3], 4, PeakGroup());
 
   DeconvolvedSpectrum d_ms1_spec = fd_algo.getDeconvolvedSpectrum();
+  for (auto pg : d_ms1_spec) {
+    std::cout << pg.getMonoMass() << std::endl;
+  }
   TEST_EQUAL(d_ms1_spec.size(), 6);
 }
 END_SECTION
