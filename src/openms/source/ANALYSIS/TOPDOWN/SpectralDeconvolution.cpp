@@ -1241,6 +1241,7 @@ namespace OpenMS
     std::vector<PeakGroup> filtered_pg_vec;
     filtered_pg_vec.reserve(dspec.size());
     std::vector<float> overlap_intensity(dspec.size(), .0f);
+    dspec.sort();
 
     for (Size i = 0; i < dspec.size(); i++)
     {
@@ -1306,7 +1307,7 @@ namespace OpenMS
   void SpectralDeconvolution::removeOverlappingPeakGroups_(DeconvolvedSpectrum& dspec, double tol, PeakGroup::TargetDecoyType target_decoy_type)
   {
     if (dspec.empty()) { return; }
-
+    dspec.sort();
     std::vector<PeakGroup> filtered_pg_vec; //
     filtered_pg_vec.reserve(dspec.size());
 
@@ -1364,6 +1365,7 @@ namespace OpenMS
     if (excluded_masses.empty()) return;
     std::vector<PeakGroup> filtered_pg_vec; //
     filtered_pg_vec.reserve(dspec.size());
+    dspec.sort();
 
     for (const auto& peak_group : dspec)
     {
