@@ -328,7 +328,7 @@ namespace OpenMS
     bool is_targeted_ = false;
     /// information on the deconvolved mass
     double monoisotopic_mass_ = -1.0;
-    float intensity_ = 0; // total intensity
+    float intensity_ = 0.f; // total intensity
     /// index to specify if this peak_group is a target (0), an isotope decoy (1), a noise (2), or a charge decoy (3)
     PeakGroup::TargetDecoyType target_decoy_type_ = target;
     /// up to which negative isotope index should be considered. By considereing negative istoopes, one can reduce isotope index error.
@@ -338,14 +338,14 @@ namespace OpenMS
     double iso_da_distance_ = Constants::ISOTOPE_MASSDIFF_55K_U;
     /// scoring variables
     int max_snr_abs_charge_ = -1;
-    float isotope_cosine_score_ = 0;
-    float charge_score_ = 0;
-    double qscore_ = .0f;
+    float isotope_cosine_score_ = 0.f;
+    float charge_score_ = 0.f;
+    double qscore_ = .0;
     double qscore2D_ = -1.0f;
-    float avg_ppm_error_ = 0;
-    float avg_da_error_ = 0;
-    float snr_ = 0;
+    float avg_ppm_error_ = 0.f;
+    float avg_da_error_ = 0.f;
+    float snr_ = 0.f;
     /// q value
-    float qvalue_ = 1;
+    float qvalue_ = 1.f;
   };
 } // namespace OpenMS

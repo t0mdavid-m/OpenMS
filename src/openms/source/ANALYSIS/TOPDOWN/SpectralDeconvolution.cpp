@@ -1311,7 +1311,7 @@ namespace OpenMS
     filtered_pg_vec.reserve(dspec.size());
 
     double start_mass = dspec[0].getMonoMass();
-    float local_max_SNR = -1.0;
+    float local_max_SNR = -1.0f;
     Size local_max_index = 0;
     Size last_local_max_index = dspec.size();
 
@@ -1328,7 +1328,7 @@ namespace OpenMS
         }
         last_local_max_index = local_max_index;
         start_mass = mass;
-        local_max_SNR = -1.0;
+        local_max_SNR = -1.0f;
       }
 
       float snr = dspec[i].getSNR();
