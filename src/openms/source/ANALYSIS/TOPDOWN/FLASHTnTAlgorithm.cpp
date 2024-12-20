@@ -410,9 +410,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
           if (k == 0
               && ((double)hit.getMetaValue("Mass") < 0 || (int)hit.getMetaValue("StartPosition") < 0 || (int)hit.getMetaValue("EndPosition") < 0))
             continue;
-          else if (k == 1
-                   && ((double)hit.getMetaValue("Mass") > 0 && (int)hit.getMetaValue("StartPosition") > 0
-                       && (int)hit.getMetaValue("EndPosition") > 0))
+          if (k == 1 && ((double)hit.getMetaValue("Mass") > 0 && (int)hit.getMetaValue("StartPosition") > 0
+                         && (int)hit.getMetaValue("EndPosition") > 0))
             continue;
 
           bool is_decoy = hit.getAccession().hasPrefix("DECOY");
@@ -452,6 +451,13 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     }
     proteoform_index++;
   }
+
+  // TODO
+  // per scan, get the scan number and the precursor mass - maybe given or maybe deconvolved.
+  // get all protoeforms - mass and score.
+  // get all combinations with a certain tolerance.
+  // record the best ranking combination(s) along with summed score (can score be non overlapping?) and mass difference
+
 }
 
 void FLASHTnTAlgorithm::getProteoformHitsMatchedBy(const FLASHHelperClasses::Tag& tag, std::vector<ProteinHit>& hits) const
