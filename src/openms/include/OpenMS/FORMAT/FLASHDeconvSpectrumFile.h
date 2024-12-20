@@ -90,7 +90,6 @@ namespace OpenMS
       @param dspec deconvolved spectrum to write
       @param fs file stream to the output file
       @param filename mzml file name
-      @param snr_threshold SNR threshold to filter out low SNR precursors. Even if a PeakGroup has a high deconvolution quality, it should be still discarded for identification when its precursor SNR (SNR within the isolation window) is too low.
       @param qval_threshold qvalue threshold to filter out high qvalue precursors.
       @param min_ms_level min ms level of the dataset
       @param randomize_precursor_mass if set, a random number between -100 to 100 is added to precursor mass

@@ -49,9 +49,8 @@ public:
     Decoy or MS level 1 spectra are removed by this process.
     Overlapping PeakGroups in merged spectra are also removed.
 
-    @param deconvolved_spectra spectra deconvolved by FLASHDeconv.
+    @param deconvolved_spectrum spectrum deconvolved by FLASHDeconv.
     @param ppm The acceptable ppm tolerance for mass
-    @param fasta_entry fasta entry to searched against
 
   */
   void run(const DeconvolvedSpectrum& deconvolved_spectrum, double ppm);

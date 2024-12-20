@@ -95,6 +95,7 @@ namespace OpenMS
      * @param tol ppm tolerance
      * @param avg precalculated averagine
      * @param mono_mass monoisotopic mass
+     * @param renew_signal_peaks Whether or not the signal peaks should be renewed during recruitment
      * @return returns the noisy peaks for this peakgroup - i.e., the raw peaks within the range of this peakGroup that are not matched to any istope of this peakGroup mass.
      */
     std::vector<LogMzPeak> recruitAllPeaksInSpectrum(const MSSpectrum& spec, double tol, const FLASHHelperClasses::PrecalculatedAveragine& avg, double mono_mass, bool renew_signal_peaks = true);

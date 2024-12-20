@@ -49,10 +49,9 @@ namespace OpenMS
       Decoy or MS level 1 spectra are removed by this process.
       Overlapping PeakGroups in merged spectra are also removed.
 
-      @param deconvolved_spectra spectra deconvolved by FLASHDeconv.
-      @param ppm The acceptable ppm tolerance for mass
+      @param deconvolved_spectrum spectrum deconvolved by FLASHDeconv.
       @param fasta_entry fasta entry to searched against
-
+      @param bit_protein_indices the bitwise indices of the protein
     */
 
     void runMatching(const DeconvolvedSpectrum& deconvolved_spectrum, const std::vector<FASTAFile::FASTAEntry>& fasta_entry,
