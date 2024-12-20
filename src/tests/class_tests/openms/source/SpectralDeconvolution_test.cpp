@@ -109,7 +109,7 @@ START_SECTION(DeconvolvedSpectrum& getDeconvolvedSpectrum())
   fd_algo.performSpectrumDeconvolution(input[3], 4, PeakGroup());
 
   DeconvolvedSpectrum d_ms1_spec = fd_algo.getDeconvolvedSpectrum();
-  TEST_EQUAL(d_ms1_spec.size(), 5);
+  TEST_EQUAL(d_ms1_spec.size(), 6);
 }
 END_SECTION
 
