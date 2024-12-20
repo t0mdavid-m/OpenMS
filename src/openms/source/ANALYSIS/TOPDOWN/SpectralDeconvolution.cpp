@@ -1049,7 +1049,7 @@ namespace OpenMS
     deconvolved_spectrum_.setPeakGroups(filtered_peak_groups);
     deconvolved_spectrum_.sort();
 
-    // removeOverlappingPeakGroups_(deconvolved_spectrum_, 0, PeakGroup::TargetDecoyType::non_specific);
+    removeOverlappingPeakGroups_(deconvolved_spectrum_, 0, PeakGroup::TargetDecoyType::non_specific);
     removeChargeErrorPeakGroups_(deconvolved_spectrum_, target_decoy_type_);
 
     // final harmonics removal
@@ -1105,7 +1105,7 @@ namespace OpenMS
     }
 
     deconvolved_spectrum_.setPeakGroups(filtered_peak_groups);
-    removeOverlappingPeakGroups_(deconvolved_spectrum_, tol, target_decoy_type_);
+    // removeOverlappingPeakGroups_(deconvolved_spectrum_, tol, target_decoy_type_);
 
     removeExcludedMasses_(deconvolved_spectrum_, previously_deconved_peak_masses_for_decoy_);
     removeExcludedMasses_(deconvolved_spectrum_, excluded_masses_);
