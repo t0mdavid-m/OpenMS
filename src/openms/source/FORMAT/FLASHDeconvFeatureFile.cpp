@@ -45,7 +45,7 @@ namespace OpenMS
     std::stringstream ss;
     for (auto& mass_feature : mass_features)
     {
-      auto mt = mass_feature.mt;
+      const auto& mt = mass_feature.mt;
       double mass = mt.getCentroidMZ() + mass_feature.iso_offset * Constants::ISOTOPE_MASSDIFF_55K_U;
       double avg_mass = mass_feature.avg_mass;
       double sum_intensity = .0;
