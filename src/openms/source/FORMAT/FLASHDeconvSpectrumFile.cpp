@@ -476,9 +476,10 @@ namespace OpenMS
   {
     fs << "#FLASHDeconv generated msalign file\n";
     fs << "####################### Parameters ######################\n";
-    fs << "#Maximum charge:                              \t" << param.getValue("max_charge") << "\n";
-    fs << "#Maximum monoisotopic mass:                   \t" << param.getValue("max_mass") << " Dalton\n";
-    fs << "#Peak error tolerance:                        \t" << param.getValue("tol") << " ppm\n";
+    for (const auto& p : param)
+    {
+      fs << "#" << p.name << ": " << p.value << "\n";
+    }
     fs << "####################### Parameters ######################\n";
   }
 
@@ -500,13 +501,13 @@ namespace OpenMS
     {
       return;
     }
-
     ss << std::fixed << std::setprecision(2);
     ss << "BEGIN IONS\n"
-       << "ID=" << dspec.getScanNumber() << "\n"
        << "FILE_NAME=" << filename << "\n"
-       << "NATIVE_ID=" << dspec.getOriginalSpectrum().getNativeID() << "\n"
-       << "FRACTION_ID=" << 0 << "\n"
+       << "SPECTRUM_ID=" << dspec.getScanNumber() - 1 << "\n"
+       << "TITLE=" << "Scan_" << dspec.getScanNumber() << "\n"
+       //<< "NATIVE_ID=" << dspec.getOriginalSpectrum().getNativeID() << "\n"
+       //<< "FRACTION_ID=" << 0 << "\n"
        << "SCANS=" << dspec.getScanNumber() << "\n"
        << "RETENTION_TIME=" << dspec.getOriginalSpectrum().getRT() << "\n"
        << "LEVEL=" << dspec.getOriginalSpectrum().getMSLevel() << "\n";
@@ -514,17 +515,35 @@ namespace OpenMS
 
     if (ms_level > 1)
     {
+      //
+
+      // MS_ONE_ID=0
+      // MS_ONE_SCAN=1
+      // PRECURSOR_WINDOW_BEGIN=530.11
+      // PRECURSOR_WINDOW_END=535.11
+      // ACTIVATION=CID
+      // PRECURSOR_MZ=532.44460
+      // PRECURSOR_CHARGE=11
+      // PRECURSOR_MASS=5845.81056
+      // PRECURSOR_INTENSITY=7202.10
+      // PRECURSOR_FEATURE_ID=911
+
       double precursor_mass = dspec.getPrecursorPeakGroup().getMonoMass();
-      if (dspec.getActivationMethod() < Precursor::ActivationMethod::SIZE_OF_ACTIVATIONMETHOD)
+
+      ss << "MS_ONE_ID=" << dspec.getPrecursorScanNumber() - 1 << "\n"
+         << "MS_ONE_SCAN=" << dspec.getPrecursorScanNumber() << "\n"
+        << "PRECURSOR_WINDOW_BEGIN=" << dspec.getPrecursor().getIsolationWindowLowerOffset() + dspec.getPrecursor().getMZ() << "\n"
+         << "PRECURSOR_WINDOW_END=" << dspec.getPrecursor().getIsolationWindowUpperOffset() + dspec.getPrecursor().getMZ() << "\n";
+
+        if (dspec.getActivationMethod() < Precursor::ActivationMethod::SIZE_OF_ACTIVATIONMETHOD)
       {
         ss << "ACTIVATION=" << Precursor::NamesOfActivationMethodShort[dspec.getActivationMethod()] << "\n";
       }
-      ss << "MS_ONE_ID=" << dspec.getPrecursorScanNumber() << "\n"
-         << "MS_ONE_SCAN=" << dspec.getPrecursorScanNumber() << "\n"
-         << "PRECURSOR_MZ=" << std::to_string(dspec.getPrecursor().getMZ()) << "\n"
+       ss << "PRECURSOR_MZ=" << std::to_string(dspec.getPrecursor().getMZ()) << "\n"
          << "PRECURSOR_CHARGE=" << (int)(dspec.getPrecursorCharge()) << "\n"
          << "PRECURSOR_MASS=" << std::to_string(precursor_mass + (randomize_precursor_mass ? (((double)rand() / (RAND_MAX)) * 200.0 - 100.0) : .0)) << "\n" // random number between 0 and 100.
-         << "PRECURSOR_INTENSITY=" << dspec.getPrecursor().getIntensity() << "\n";
+         << "PRECURSOR_INTENSITY=" << dspec.getPrecursor().getIntensity() << "\n"
+         << "PRECURSOR_FEATURE_ID=" << dspec.getPrecursorPeakGroup().getFeatureIndex() << "\n";
     }
 
     ss << std::setprecision(-1);

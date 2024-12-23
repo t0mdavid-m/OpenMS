@@ -131,6 +131,7 @@ protected:
     tnt_param.remove("fasta");
     tnt_param.remove("out_tag");
     tnt_param.remove("out_prsm");
+    tnt_param.remove("out_pro");
     tnt_param.remove("log");
     tnt_param.remove("debug");
     tnt_param.remove("threads");
