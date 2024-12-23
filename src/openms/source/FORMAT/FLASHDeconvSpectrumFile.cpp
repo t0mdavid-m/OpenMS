@@ -532,7 +532,7 @@ namespace OpenMS
 
       ss << "MS_ONE_ID=" << dspec.getPrecursorScanNumber() - 1 << "\n"
          << "MS_ONE_SCAN=" << dspec.getPrecursorScanNumber() << "\n"
-        << "PRECURSOR_WINDOW_BEGIN=" << dspec.getPrecursor().getIsolationWindowLowerOffset() + dspec.getPrecursor().getMZ() << "\n"
+        << "PRECURSOR_WINDOW_BEGIN=" << -dspec.getPrecursor().getIsolationWindowLowerOffset() + dspec.getPrecursor().getMZ() << "\n"
          << "PRECURSOR_WINDOW_END=" << dspec.getPrecursor().getIsolationWindowUpperOffset() + dspec.getPrecursor().getMZ() << "\n";
 
         if (dspec.getActivationMethod() < Precursor::ActivationMethod::SIZE_OF_ACTIVATIONMETHOD)
