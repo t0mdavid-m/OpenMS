@@ -62,19 +62,17 @@ protected:
     setMinFloat_("pro_fdr", 0.0);
 
     // Register single-hit-only option
-    registerStringOption_("only_single_hit", "Allows only a single hit per spectrum.", "false", "Allows only a single hit per spectrum.", false);
-    setValidStrings_("only_single_hit", {"true", "false"});
+    registerFlag_("only_single_hit", "Allows only a single hit per spectrum.", "Allows only a single hit per spectrum.");
+    //setValidStrings_("only_single_hit", {"true", "false"});
 
     // Register underdetermined proteoform discard option
-    registerStringOption_("discard_underdetermined", 
-                          "Discards underdetermined proteoform IDs (e.g., those without exact precursor masses or start/end positions).",
-                          "false", 
-                          "Discards underdetermined proteoform IDs (e.g., those without exact precursor masses or start/end positions).", false);
-    setValidStrings_("discard_underdetermined", {"true", "false"});
+    registerFlag_("discard_underdetermined",
+                          "Discards underdetermined proteoform IDs (e.g., those without exact precursor masses or start/end positions).");
+    //setValidStrings_("discard_underdetermined", {"true", "false"});
 
     // Register decoy retention option
-    registerStringOption_("keep_decoy", "Retains decoy hits in the results.", "false", "Retains decoy hits in the results.", false);
-    setValidStrings_("keep_decoy", {"true", "false"});
+    registerFlag_("keep_decoy", "Retains decoy hits in the results.");
+    //setValidStrings_("keep_decoy", {"true", "false"});
 
     // Register ion type parameter
     registerStringList_("ion_type", "Specifies ion types to consider.", ListUtils::toStringList(std::vector<std::string>{"b", "y"}), "Specifies ion types to consider.", false);
