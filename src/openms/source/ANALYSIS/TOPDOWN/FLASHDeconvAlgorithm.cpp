@@ -37,7 +37,7 @@ namespace OpenMS
     defaults_.setValidStrings("report_FDR", {"true", "false"});
 
     defaults_.setValue("allowed_isotope_error", 0,
-                       "Tolerance for isotope index errors when calculating FDR. For instance, setting a value of 2 permits the inclusion of up to ±2 isotope errors as valid matches. Beta version.");
+                       "Tolerance for isotope index errors when calculating FDR. For instance, setting a value of 2 permits the inclusion of up to 2 isotope errors as valid matches. Beta version.");
     defaults_.addTag("allowed_isotope_error", "advanced");
 
     defaults_.setValue("use_RNA_averagine", "false", "Use the RNA (nucleotide) averagine model for deconvolution.");

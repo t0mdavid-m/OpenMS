@@ -515,19 +515,6 @@ namespace OpenMS
 
     if (ms_level > 1)
     {
-      //
-
-      // MS_ONE_ID=0
-      // MS_ONE_SCAN=1
-      // PRECURSOR_WINDOW_BEGIN=530.11
-      // PRECURSOR_WINDOW_END=535.11
-      // ACTIVATION=CID
-      // PRECURSOR_MZ=532.44460
-      // PRECURSOR_CHARGE=11
-      // PRECURSOR_MASS=5845.81056
-      // PRECURSOR_INTENSITY=7202.10
-      // PRECURSOR_FEATURE_ID=911
-
       double precursor_mass = dspec.getPrecursorPeakGroup().getMonoMass();
 
       ss << "MS_ONE_ID=" << dspec.getPrecursorScanNumber() - 1 << "\n"

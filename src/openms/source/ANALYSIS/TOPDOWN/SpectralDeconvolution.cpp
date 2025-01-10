@@ -60,8 +60,7 @@ namespace OpenMS
     defaults_.addTag("min_snr", "advanced");
 
     defaults_.setValue("allowed_isotope_error", 1,
-                       "Allowed isotope index error for decoy and qvalue (FDR) report. If it is set to 2, for example, +-2 isotope errors are "
-                       "not counted as false. Beta version.");
+                       "Tolerance for isotope index errors when calculating FDR. For instance, setting a value of 2 permits the inclusion of up to 2 isotope errors as valid matches. Beta version.");
     defaults_.addTag("allowed_isotope_error", "advanced");
 
     defaultsToParam_();
