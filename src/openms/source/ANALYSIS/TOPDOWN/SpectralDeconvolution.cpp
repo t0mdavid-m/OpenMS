@@ -60,8 +60,7 @@ namespace OpenMS
     defaults_.addTag("min_snr", "advanced");
 
     defaults_.setValue("allowed_isotope_error", 1,
-                       "Allowed isotope index error for decoy and qvalue (FDR) report. If it is set to 2, for example, +-2 isotope errors are "
-                       "not counted as false. Beta version.");
+                       "Tolerance for isotope index errors when calculating FDR. For instance, setting a value of 2 permits the inclusion of up to 2 isotope errors as valid matches. Beta version.");
     defaults_.addTag("allowed_isotope_error", "advanced");
 
     defaultsToParam_();
@@ -1241,6 +1240,7 @@ namespace OpenMS
     std::vector<PeakGroup> filtered_pg_vec;
     filtered_pg_vec.reserve(dspec.size());
     std::vector<float> overlap_intensity(dspec.size(), .0f);
+    //dspec.sort();
 
     for (Size i = 0; i < dspec.size(); i++)
     {
@@ -1306,7 +1306,7 @@ namespace OpenMS
   void SpectralDeconvolution::removeOverlappingPeakGroups_(DeconvolvedSpectrum& dspec, double tol, PeakGroup::TargetDecoyType target_decoy_type)
   {
     if (dspec.empty()) { return; }
-
+    //dspec.sort();
     std::vector<PeakGroup> filtered_pg_vec; //
     filtered_pg_vec.reserve(dspec.size());
 
@@ -1364,6 +1364,7 @@ namespace OpenMS
     if (excluded_masses.empty()) return;
     std::vector<PeakGroup> filtered_pg_vec; //
     filtered_pg_vec.reserve(dspec.size());
+    //spec.sort();
 
     for (const auto& peak_group : dspec)
     {

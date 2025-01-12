@@ -152,6 +152,7 @@ void FLASHTnTAlgorithm::markRepresentativeProteoformHits_(double tol)
 
 void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile::FASTAEntry>& fasta_entry)
 {
+  //std::cout<<param_<<std::endl;
   setLogType(CMD);
   startProgress(0, (SignedSize)map.size(), "Running FLASHTnT ...");
   //int max_tag_length = tagger_param_.getValue("max_length");

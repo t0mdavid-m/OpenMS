@@ -103,6 +103,8 @@ namespace OpenMS
       double tmp_qscore_2D = 1.0;
       int min_feature_abs_charge = INT_MAX; // min feature charge
       int max_feature_abs_charge = INT_MIN; // max feature charge
+      int min_scan_number = INT_MAX; // min feature charge
+      int max_scan_number = INT_MIN; // max feature charge
 
       auto per_isotope_intensity = std::vector<float>(averagine.getMaxIsotopeIndex(), .0f);
       auto per_charge_intensity = std::vector<float>(charge_range + min_abs_charge + 1, .0f);
@@ -130,6 +132,9 @@ namespace OpenMS
         min_feature_abs_charge = min_feature_abs_charge < z1 ? min_feature_abs_charge : z1;
         max_feature_abs_charge = max_feature_abs_charge > z2 ? max_feature_abs_charge : z2;
         int scan = dspec.getScanNumber();
+        min_scan_number = std::min(min_scan_number, scan);
+        max_scan_number = std::max(max_scan_number, scan);
+
         if (prev_scan != 0 && (prev_scans[scan] <= prev_scan)) // only when consecutive scans are connected.
         {
           tmp_qscore_2D *= (1.0 - pg->getQscore());
@@ -203,8 +208,10 @@ namespace OpenMS
       mass_feature.per_charge_intensity = per_charge_intensity;
       mass_feature.per_isotope_intensity = per_isotope_intensity;
 
-      mass_feature.rep_mz = rep_pg.getMonoMass();
+      mass_feature.rep_mz = mass_feature.avg_mass / rep_pg.getRepAbsCharge();
       mass_feature.scan_number = rep_pg.getScanNumber();
+      mass_feature.min_scan_number = min_scan_number;
+      mass_feature.max_scan_number = max_scan_number;
       mass_feature.rep_charge = rep_pg.getRepAbsCharge();
       mass_feature.index = findex;
       mass_feature.is_decoy = is_decoy;

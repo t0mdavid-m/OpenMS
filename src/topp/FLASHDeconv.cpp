@@ -271,7 +271,6 @@ protected:
     std::vector<DeconvolvedSpectrum> deconvolved_spectra;
     std::vector<FLASHHelperClasses::MassFeature> deconvolved_features;
     std::map<int, double> scan_rt_map;
-    std::map<int, PeakGroup> msNscan_to_precursor_pg;
 
     // Run FLASHDeconvAlgorithm here!
     OPENMS_LOG_INFO << "Processing : " << in_file << endl;
@@ -295,10 +294,6 @@ protected:
       per_ms_level_deconv_spec_count[ms_level]++;
       per_ms_level_mass_count[ms_level] += (int)deconvolved_spectrum.size();
       scan_rt_map[deconvolved_spectrum.getScanNumber()] = deconvolved_spectrum.getOriginalSpectrum().getRT();
-      if (ms_level > 1 && ! deconvolved_spectrum.getPrecursorPeakGroup().empty())
-      {
-        msNscan_to_precursor_pg[deconvolved_spectrum.getScanNumber()] = deconvolved_spectrum.getPrecursorPeakGroup();
-      }
     }
     for (auto& val : per_ms_level_deconv_spec_count)
     {
@@ -490,7 +485,24 @@ protected:
 #endif
       }
     }
-    // topFD feature output
+
+    // mzML output
+    if (! out_anno_mzml_file.empty() || ! out_mzml_file.empty())
+    {
+      FLASHDeconvSpectrumFile::writeMzML(map, deconvolved_spectra, out_mzml_file, out_anno_mzml_file, mzml_charge, tols);
+    }
+
+    // isobaric quantification output
+    if (! out_quant_file.empty())
+    {
+      OPENMS_LOG_INFO << "writing quantification tsv ..." << endl;
+      fstream out_quant_stream;
+      out_quant_stream.open(out_quant_file, fstream::out);
+      FLASHDeconvSpectrumFile::writeIsobaricQuantification(out_quant_stream, deconvolved_spectra);
+      out_quant_stream.close();
+    }
+
+    // topFD feature output - it should be at the end since zero feature IDs are redefined for TopPIC feature indices.
     if (! out_topfd_feature_file.empty())
     {
       std::vector<fstream> out_topfd_feature_streams;
@@ -504,7 +516,7 @@ protected:
 
         out_topfd_feature_streams[i].open(out_topfd_feature_file[i], fstream::out);
         FLASHDeconvFeatureFile::writeTopFDFeatureHeader(out_topfd_feature_streams[i], i + 1);
-        FLASHDeconvFeatureFile::writeTopFDFeatures(deconvolved_features, msNscan_to_precursor_pg, scan_rt_map, in_file, out_topfd_feature_streams[i],
+        FLASHDeconvFeatureFile::writeTopFDFeatures(deconvolved_spectra, deconvolved_features, scan_rt_map, in_file, out_topfd_feature_streams[i],
                                                    i + 1);
         out_topfd_feature_streams[i].close();
       }
@@ -540,20 +552,7 @@ protected:
         out_topfd_streams[i].close();
       }
     }
-    // isobaric quantification output
-    if (! out_quant_file.empty())
-    {
-      OPENMS_LOG_INFO << "writing quantification tsv ..." << endl;
-      fstream out_quant_stream;
-      out_quant_stream.open(out_quant_file, fstream::out);
-      FLASHDeconvSpectrumFile::writeIsobaricQuantification(out_quant_stream, deconvolved_spectra);
-      out_quant_stream.close();
-    }
-    // mzML output
-    if (! out_anno_mzml_file.empty() || ! out_mzml_file.empty())
-    {
-      FLASHDeconvSpectrumFile::writeMzML(map, deconvolved_spectra, out_mzml_file, out_anno_mzml_file, mzml_charge, tols);
-    }
+
     return EXECUTION_OK;
   }
 };

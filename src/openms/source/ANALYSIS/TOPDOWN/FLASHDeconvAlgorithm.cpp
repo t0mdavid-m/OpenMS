@@ -37,7 +37,7 @@ namespace OpenMS
     defaults_.setValidStrings("report_FDR", {"true", "false"});
 
     defaults_.setValue("allowed_isotope_error", 0,
-                       "Tolerance for isotope index errors when calculating FDR. For instance, setting a value of 2 permits the inclusion of up to ±2 isotope errors as valid matches. Beta version.");
+                       "Tolerance for isotope index errors when calculating FDR. For instance, setting a value of 2 permits the inclusion of up to 2 isotope errors as valid matches. Beta version.");
     defaults_.addTag("allowed_isotope_error", "advanced");
 
     defaults_.setValue("use_RNA_averagine", "false", "Use the RNA (nucleotide) averagine model for deconvolution.");
@@ -45,12 +45,12 @@ namespace OpenMS
     defaults_.addTag("use_RNA_averagine", "advanced");
 
     defaults_.setValue(
-      "preceding_MS1_count", 3,
-      "Number of preceding MS1 spectra to search for precursor peaks when determining MS2 precursors. For MS2 spectrum, the mass of precursor ion should be determined for better deconvolution. "
-      "If the mass of precursor ion is not found in the immediately preceding MS1 spectrum, previous MS1 spectra may be used instead. "
-      "This parameter determines up to how many previous MS1 spectra will be searched.");
-    defaults_.setMinInt("preceding_MS1_count", 1);
-    defaults_.addTag("preceding_MS1_count", "advanced");
+      "precursor_MS1_window", 3,
+      "Number of MS1 spectra around each MS2 spectrum to search for precursor peaks when determining the MS2 precursors. For MS2 spectrum, the mass of precursor ion should be determined for better deconvolution and reliable identification. "
+      "If the mass of precursor ion is not found in the immediately preceding MS1 spectrum, previous or next MS1 spectra may be used instead. "
+      "This parameter determines up to how many MS1 spectra around each MS2 spectrum will be searched.");
+    defaults_.setMinInt("precursor_MS1_window", 1);
+    defaults_.addTag("precursor_MS1_window", "advanced");
 
     defaults_.setValue(
       "isolation_window", 5.0,
@@ -111,7 +111,7 @@ namespace OpenMS
 
     tols_ = param_.getValue("SD:tol");
     min_cos_ = param_.getValue("SD:min_cos");
-    preceding_MS1_count_ = param_.getValue("preceding_MS1_count");
+    precursor_MS1_window_ = param_.getValue("precursor_MS1_window");
     use_RNA_averagine_ = param_.getValue("use_RNA_averagine") != "false";
     report_decoy_ = param_.getValue("report_FDR") != "false";
 
@@ -551,68 +551,61 @@ namespace OpenMS
       cv = std::stod(filter_str.substr(pos + 3, end - pos));
     }
 
-    auto iter = precursor_map_for_ida_.lower_bound(scan_number);
-
-    while (iter != precursor_map_for_ida_.begin()
-           && native_id_precursor_peak_group_map_.find(map[index].getNativeID()) == native_id_precursor_peak_group_map_.end())
+    for (auto iter = precursor_map_for_ida_.lower_bound(scan_number); iter != precursor_map_for_ida_.begin()
+           && native_id_precursor_peak_group_map_.find(map[index].getNativeID()) == native_id_precursor_peak_group_map_.end(); iter--)
     {
       if (iter->first > scan_number || iter == precursor_map_for_ida_.end())
       {
-        iter--;
         continue;
       }
-      if (iter->first < scan_number - preceding_MS1_count_ - 500) // for FLASHIda, give more buffer scans
+      if (iter->first < scan_number - precursor_MS1_window_ - 500) // for FLASHIda, give more buffer scans
       {
         return;
       }
 
-      if (iter != precursor_map_for_ida_.end())
+      for (auto& smap : iter->second)
       {
-        for (auto& smap : iter->second)
+        if (abs(start_mz - smap[3]) < .001 && abs(end_mz - smap[4]) < .001)
         {
-          if (abs(start_mz - smap[3]) < .001 && abs(end_mz - smap[4]) < .001)
+          FLASHHelperClasses::LogMzPeak precursor_log_mz_peak;
+          precursor_log_mz_peak.abs_charge = std::abs((int)smap[1]);
+          precursor_log_mz_peak.is_positive = (int)smap[1] > 0;
+          precursor_log_mz_peak.isotopeIndex = 0;
+          precursor_log_mz_peak.mass = smap[0];
+          precursor_log_mz_peak.intensity = smap[6];
+
+          PeakGroup precursor_pg(precursor_log_mz_peak.abs_charge, precursor_log_mz_peak.abs_charge, true);
+          precursor_pg.push_back(precursor_log_mz_peak);
+          precursor_pg.setAbsChargeRange(std::abs((int)smap[7]), std::abs((int)smap[8]));
+          precursor_pg.setChargeIsotopeCosine(precursor_log_mz_peak.abs_charge, smap[9]);
+          precursor_pg.setChargeSNR(precursor_log_mz_peak.abs_charge, smap[10]); // cnsr
+          precursor_pg.setIsotopeCosine(smap[11]);
+          precursor_pg.setSNR(smap[12]);
+          precursor_pg.setChargeScore(smap[13]);
+          precursor_pg.setAvgPPMError(smap[14]);
+          precursor_pg.setQscore(smap[2]);
+          precursor_pg.setRepAbsCharge(precursor_log_mz_peak.abs_charge);
+          precursor_pg.updateMonoMassAndIsotopeIntensities(tols_[0]);
+          int ms1_scan_number = iter->first;
+          Size index_copy (index);
+          while(index_copy != 0 && getScanNumber(map, index_copy--) != ms1_scan_number);
+
+          auto filter_str2 = map[index_copy].getMetaValue("filter string").toString(); // this part is messy. Make a function to parse CV from map
+          Size pos2 = filter_str2.find("cv=");
+          double cv_match = 1e5;
+
+          if (pos2 != String::npos)
           {
-            FLASHHelperClasses::LogMzPeak precursor_log_mz_peak;
-            precursor_log_mz_peak.abs_charge = std::abs((int)smap[1]);
-            precursor_log_mz_peak.is_positive = (int)smap[1] > 0;
-            precursor_log_mz_peak.isotopeIndex = 0;
-            precursor_log_mz_peak.mass = smap[0];
-            precursor_log_mz_peak.intensity = smap[6];
-
-            PeakGroup precursor_pg(precursor_log_mz_peak.abs_charge, precursor_log_mz_peak.abs_charge, true);
-            precursor_pg.push_back(precursor_log_mz_peak);
-            precursor_pg.setAbsChargeRange(std::abs((int)smap[7]), std::abs((int)smap[8]));
-            precursor_pg.setChargeIsotopeCosine(precursor_log_mz_peak.abs_charge, smap[9]);
-            precursor_pg.setChargeSNR(precursor_log_mz_peak.abs_charge, smap[10]); // cnsr
-            precursor_pg.setIsotopeCosine(smap[11]);
-            precursor_pg.setSNR(smap[12]);
-            precursor_pg.setChargeScore(smap[13]);
-            precursor_pg.setAvgPPMError(smap[14]);
-            precursor_pg.setQscore(smap[2]);
-            precursor_pg.setRepAbsCharge(precursor_log_mz_peak.abs_charge);
-            precursor_pg.updateMonoMassAndIsotopeIntensities(tols_[0]);
-            int ms1_scan_number = iter->first;
-            Size index_copy (index);
-            while(index_copy != 0 && getScanNumber(map, index_copy--) != ms1_scan_number);
-
-            auto filter_str2 = map[index_copy].getMetaValue("filter string").toString(); // this part is messy. Make a function to parse CV from map
-            Size pos2 = filter_str2.find("cv=");
-            double cv_match = 1e5;
-
-            if (pos2 != String::npos)
-            {
-              Size end2 = filter_str2.find(" ", pos2);
-              if (end2 == String::npos) end2 = filter_str2.length() - 1;
-              cv_match = std::stod(filter_str2.substr(pos2 + 3, end2 - pos2));
-            }
-            if (std::abs(cv_match - cv) > 1e-5) continue;
-
-            native_id_precursor_peak_group_map_[map[index].getNativeID()] = precursor_pg;
-            break;
+            Size end2 = filter_str2.find(" ", pos2);
+            if (end2 == String::npos) end2 = filter_str2.length() - 1;
+            cv_match = std::stod(filter_str2.substr(pos2 + 3, end2 - pos2));
           }
+          if (std::abs(cv_match - cv) > 1e-5) continue;
+
+          native_id_precursor_peak_group_map_[map[index].getNativeID()] = precursor_pg;
+          break;
         }
       }
-      --iter;
     }
   }
 
@@ -625,7 +618,7 @@ namespace OpenMS
       auto spec = map[index]; // MS2 index
       if (spec.getMSLevel() != ms_level) { continue; }
 
-      int scan_number = getScanNumber(map, index);
+      //int scan_number = getScanNumber(map, index);
       String native_id = spec.getNativeID();
 
       auto filter_str = spec.getMetaValue("filter string").toString();
@@ -640,25 +633,34 @@ namespace OpenMS
       }
 
       // find all candidate scan numbers from ms_level - 1
-      int num_preceding = ms_level == 2 ? preceding_MS1_count_ : 1;
+      int num_precursor_window = ms_level == 2 ? precursor_MS1_window_ : 1;
       auto index_copy = index;
-      while (index_copy > 0 && num_preceding > 0)
+      while (index_copy > 0 && num_precursor_window > 0)
       {
         index_copy--;
-        if (map[index_copy].getMSLevel() == ms_level - 1) { num_preceding--; }
+        if (map[index_copy].getMSLevel() == ms_level - 1) { num_precursor_window--; }
       }
 
       int b_scan_number = getScanNumber(map, index_copy);
+      index_copy = index;
+      num_precursor_window = ms_level == 2 ? precursor_MS1_window_ : 0;
+      while (index_copy < map.size() - 1 && num_precursor_window > 0)
+      {
+        index_copy++;
+        if (map[index_copy].getMSLevel() == ms_level - 1) { num_precursor_window--; }
+      }
 
+      int a_scan_number = getScanNumber(map, index_copy);
       // then find deconvolved spectra within the scan numbers.
       auto diter = std::lower_bound(deconvolved_spectra.begin(), deconvolved_spectra.end(), DeconvolvedSpectrum(b_scan_number));
+      auto aiter = std::lower_bound(deconvolved_spectra.begin(), deconvolved_spectra.end(), DeconvolvedSpectrum(a_scan_number));
 
       if (diter == deconvolved_spectra.end()) continue;
 
       std::vector<DeconvolvedSpectrum> survey_scans;
 
       // exclude decoy ones and cv mismatches
-      while (diter < deconvolved_spectra.end() && diter->getScanNumber() < scan_number)
+      while (diter < deconvolved_spectra.end() && diter <= aiter)
       {
         if ((diter->getOriginalSpectrum().getMSLevel() == ms_level - 1) && (! diter->isDecoy()) && (std::abs(diter->getCV() - cv) < 1e-5)) { survey_scans.push_back(*diter); }
         diter++;

@@ -100,7 +100,7 @@ namespace OpenMS
     UInt current_min_ms_level_ = 0;
 
     /// the number of preceding full scans from which MS2 precursor mass will be searched.
-    int preceding_MS1_count_ = 0;
+    int precursor_MS1_window_ = 0;
 
     /// FLASHIda log file name
     String ida_log_file_;

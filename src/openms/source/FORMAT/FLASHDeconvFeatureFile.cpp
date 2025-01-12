@@ -28,14 +28,17 @@ namespace OpenMS
 
   void FLASHDeconvFeatureFile::writeTopFDFeatureHeader(std::fstream& fs, uint ms_level)
   {
+    //  //File_name	Fraction_ID	Spectrum_ID	Scans	MS_one_ID	MS_one_scans	Fraction_feature_ID	Fraction_feature_intensity
+    // Fraction_feature_score	Fraction_feature_min_time	Fraction_feature_max_time
+    // Fraction_feature_apex_time	Precursor_monoisotopic_mz	Precursor_average_mz	Precursor_charge	Precursor_intensity
+
     if (ms_level == 1)
     {
-      fs << "Sample_ID\tID\tMass\tIntensity\tTime_begin\tTime_end\tTime_apex\tMinimum_charge_state\tMaximum_charge_state\tMinimum_fraction_id\tMaximum_fraction_id\n";
+      fs << "File_name\tFraction_ID\tFeature_ID\tMass\tIntensity\tMin_time\tMax_time\tMin_scan\tMax_scan\tMin_charge\tMax_charge\tApex_time\tApex_scan\tApex_intensity\tRep_charge\tRep_average_mz\tEnvelope_num\tEC_score\n";
     }
     else
     {
-      fs << "Spec_ID\tFraction_ID\tFile_name\tScans\tMS_one_ID\tMS_one_scans\tPrecursor_mass\tPrecursor_intensity\tFraction_feature_ID\tFraction_feature_intensity\tFraction_feature_"
-               "score\tFraction_feature_time_apex\tSample_feature_ID\tSample_feature_intensity\n";
+      fs << "File_name\tFraction_ID\tSpectrum_ID\tScans\tMS_one_ID\tMS_one_scans\tFraction_feature_ID\tFraction_feature_intensity\tFraction_feature_score\tFraction_feature_min_time\tFraction_feature_max_time\tFraction_feature_apex_time\tPrecursor_monoisotopic_mz\tPrecursor_average_mz\tPrecursor_charge\tPrecursor_intensity\n";
     }
 
   }
@@ -98,87 +101,107 @@ namespace OpenMS
     fs << ss.str();
   }
 
-  void FLASHDeconvFeatureFile::writeTopFDFeatures(const std::vector<FLASHHelperClasses::MassFeature>& mass_features, const std::map<int, PeakGroup>& precursor_peak_groups,
+  void FLASHDeconvFeatureFile::writeTopFDFeatures(std::vector<DeconvolvedSpectrum>& deconvolved_spectra, const std::vector<FLASHHelperClasses::MassFeature>& mass_features,
                                                   const std::map<int, double>& scan_rt_map, const String& file_name, std::fstream& fs, uint ms_level)
   {
     std::stringstream ss;
-    int topid = 1;
-    std::unordered_map<int, int> mtid_topid;
+    static std::map<int, uint> msNscan_to_feature_index;
 
-    for (Size l = 0; l < mass_features.size(); l++)
+    if (ms_level == 1)
     {
-      const auto& mass_feature = mass_features[l];
-      if (mass_feature.is_decoy) continue;
-      double sum_intensity = .0;
-      for (const auto& m : mass_feature.mt)
+      uint max_feature_index = 0;
+      for (const auto& mass_feature : mass_features)
       {
-        sum_intensity += m.getIntensity();
+        if (mass_feature.ms_level != 1 || mass_feature.is_decoy) continue;
+        double sum_intensity = .0;
+
+        for (const auto& m : mass_feature.mt)
+        {
+          sum_intensity += m.getIntensity();
+        }
+
+        const auto& apex = mass_feature.mt[mass_feature.mt.findMaxByIntPeak()];
+        ss << file_name << "\t0\t" << mass_feature.index << "\t" << std::to_string(mass_feature.mt.getCentroidMZ()) << "\t" << std::to_string(sum_intensity) << "\t" << std::to_string(mass_feature.mt.begin()->getRT())
+           << "\t" << std::to_string(mass_feature.mt.rbegin()->getRT()) << "\t" << mass_feature.min_scan_number << "\t" << mass_feature.max_scan_number << "\t"
+           << mass_feature.min_charge << "\t" << mass_feature.max_charge << "\t" << std::to_string(apex.getRT()) << "\t" << mass_feature.scan_number << "\t"
+           << std::to_string(apex.getIntensity()) << "\t" << mass_feature.rep_charge << "\t" << mass_feature.rep_mz << "\t0\t0\n";
+
+        max_feature_index = std::max(max_feature_index, mass_feature.index);
       }
 
-      if (ms_level == 1)
+      for (auto& dspec : deconvolved_spectra)
       {
-        ss << "0\t" << topid << "\t" << mass_feature.mt.getCentroidMZ() << "\t" << sum_intensity << "\t" << mass_feature.mt.begin()->getRT() << "\t" << mass_feature.mt.rbegin()->getRT() << "\t"
-              << mass_feature.mt[mass_feature.mt.findMaxByIntPeak()].getRT() << "\t" << mass_feature.min_charge << "\t" << mass_feature.max_charge << "\t0\t0\n";
-        mtid_topid[(int)l] = topid;
-      }
+        if (dspec.getOriginalSpectrum().getMSLevel() == 1 || dspec.getPrecursorPeakGroup().empty()) continue;
+        if (dspec.getPrecursorPeakGroup().getFeatureIndex() != 0) continue;
+        auto pg = dspec.getPrecursorPeakGroup();
 
-      topid++;
+        int ms2_scan_number = dspec.getScanNumber();
+        double rt = scan_rt_map.at(pg.getScanNumber());
+        const auto& [z, Z] = pg.getAbsChargeRange();
+        pg.setFeatureIndex(++max_feature_index);
+        dspec.setPrecursorPeakGroup(pg);
+
+        double rep_mz = 0;
+        double p_int = 0;
+
+        for (const auto& p : pg)
+        {
+          if (p.abs_charge != pg.getRepAbsCharge()) continue;
+          if (p.intensity < p_int) continue;
+          p_int = p.intensity;
+          rep_mz = p.mz;
+        }
+
+        ss << file_name << "\t0\t" << max_feature_index << "\t" << std::to_string(pg.getMonoMass()) << "\t" << std::to_string(pg.getIntensity()) << "\t" << std::to_string(rt)
+           << "\t" << std::to_string(rt) << "\t" << pg.getScanNumber() << "\t" << pg.getScanNumber() << "\t"
+           << z << "\t" << Z << "\t" << std::to_string(rt) << "\t" << pg.getScanNumber() << "\t"
+           << std::to_string(pg.getIntensity()) << "\t" << pg.getRepAbsCharge() << "\t" << std::to_string(rep_mz) << "\t0\t0\n";
+      }
     }
 
-    for (const auto& precursor : precursor_peak_groups)
+    if (ms_level == 2)
     {
-      int ms1_scan_number = precursor.second.getScanNumber();
-      int ms2_scan_number = precursor.first;
-      double rt = scan_rt_map.at(ms2_scan_number);
-      bool selected = false;
-      int selected_index;
-      for (Size l = 0; l < mass_features.size(); l++)
+      for (auto& dspec : deconvolved_spectra)
       {
-        const auto& mass_feature = mass_features[l];
-        if (mass_feature.is_decoy) continue;
-        const auto& mt = mass_feature.mt;
-        if (abs(precursor.second.getMonoMass() - mt.getCentroidMZ()) > 1.5)
-        {
-          continue;
-        }
-        if (rt < mt.begin()->getRT() || rt > mt.rbegin()->getRT())
-        {
-          continue;
-        }
-        selected = true;
-        selected_index = (int)l;
-        break;
-      }
+        if (dspec.getOriginalSpectrum().getMSLevel() == 1 || dspec.getPrecursorPeakGroup().empty()) continue;
+        if (dspec.getPrecursorPeakGroup().getFeatureIndex() == 0) continue;
+        auto pg = dspec.getPrecursorPeakGroup();
+        int ms2_scan_number = dspec.getScanNumber();
+        ss << file_name << "\t0\t" << ms2_scan_number - 1 << "\t" << ms2_scan_number << "\t" << pg.getScanNumber() - 1 << "\t" << pg.getScanNumber() << "\t" << pg.getFeatureIndex() << "\t";
 
-      if (selected)
-      {
-        if (ms_level > 1)
+        if (pg.getFeatureIndex() < mass_features.size() + 1)
         {
+          const auto& mass_feature = mass_features[pg.getFeatureIndex() - 1];
+          const auto& apex = mass_feature.mt[mass_feature.mt.findMaxByIntPeak()];
           double sum_intensity = .0;
-          for (const auto& m : mass_features[selected_index].mt)
+
+          for (const auto& m : mass_feature.mt)
           {
             sum_intensity += m.getIntensity();
           }
-          ss << ms2_scan_number << "\t0\t" << file_name << "\t" << ms2_scan_number << "\t" << ms1_scan_number << "\t" << ms1_scan_number << "\t" << precursor.second.getMonoMass() << "\t"
-                << precursor.second.getIntensity() << "\t" << mtid_topid[selected_index] << "\t" << sum_intensity << "\t-1000\t"
-                << mass_features[selected_index].mt[mass_features[selected_index].mt.findMaxByIntPeak()].getRT() << "\t" << topid << "\t" << sum_intensity << "\n";
+          ss << std::to_string(sum_intensity) << "\t0\t" << std::to_string(mass_feature.mt.begin()->getRT())
+             << "\t" << std::to_string(mass_feature.mt.rbegin()->getRT()) << "\t" << std::to_string(apex.getRT()) << "\t" << std::to_string(mass_feature.mt.getCentroidMZ())
+             << "\t" << std::to_string(mass_feature.rep_mz) << "\t" << mass_feature.rep_charge << "\t" << std::to_string(dspec.getPrecursor().getIntensity()) << "\n";
         }
-        continue;
-      }
+        else
+        {
+          double rt = scan_rt_map.at(pg.getScanNumber());
+          double rep_mz = 0;
+          double p_int = 0;
 
-      const auto& crange = precursor.second.getAbsChargeRange();
+          for (const auto& p : pg)
+          {
+            if (p.abs_charge != pg.getRepAbsCharge()) continue;
+            if (p.intensity < p_int) continue;
+            p_int = p.intensity;
+            rep_mz = p.mz;
+          }
 
-      if (ms_level == 1)
-      {
-        ss << "0\t" << topid << "\t" << precursor.second.getMonoMass() << "\t" << precursor.second.getIntensity() << "\t" << rt - 1 << "\t" << rt + 1 << "\t" << rt << "\t"
-              << (precursor.second.isPositive() ? std::get<0>(crange) : -std::get<1>(crange)) << "\t" << (precursor.second.isPositive() ? std::get<1>(crange) : -std::get<0>(crange)) << "\t0\t0\n";
+          ss << std::to_string(pg.getIntensity()) << "\t0\t" << std::to_string(rt)
+             << "\t" << std::to_string(rt) << "\t" << std::to_string(rt) << "\t" << std::to_string(pg.getMonoMass())
+             << "\t" << std::to_string(rep_mz) << "\t" << pg.getRepAbsCharge() << "\t" << std::to_string(dspec.getPrecursor().getIntensity()) << "\n";
+        }
       }
-      else
-      {
-        ss << ms2_scan_number << "\t0\t" << file_name << "\t" << ms2_scan_number << "\t" << ms1_scan_number << "\t" << ms1_scan_number << "\t" << precursor.second.getMonoMass() << "\t"
-              << precursor.second.getIntensity() << "\t" << topid << "\t" << precursor.second.getIntensity() << "\t-1000\t" << rt << "\t" << topid << "\t" << precursor.second.getIntensity() << "\n";
-      }
-      topid++;
     }
     fs << ss.str();
   }
