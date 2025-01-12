@@ -135,7 +135,6 @@ namespace OpenMS
         if (dspec.getPrecursorPeakGroup().getFeatureIndex() != 0) continue;
         auto pg = dspec.getPrecursorPeakGroup();
 
-        int ms2_scan_number = dspec.getScanNumber();
         double rt = scan_rt_map.at(pg.getScanNumber());
         const auto& [z, Z] = pg.getAbsChargeRange();
         pg.setFeatureIndex(++max_feature_index);
