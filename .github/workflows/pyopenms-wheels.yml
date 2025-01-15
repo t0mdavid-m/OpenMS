@@ -107,8 +107,6 @@ jobs:
 
           # clean previous pyopenms libs
           find . -name "_pyopenms*.pyd" -exec rm -rf {} \;
-          # clean conda cache
-          conda clean --all --yes
           # reset the path
           PATH=$RESET_PATH
 
