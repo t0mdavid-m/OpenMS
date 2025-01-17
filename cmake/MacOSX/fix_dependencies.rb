@@ -107,7 +107,7 @@ end
 ###############################################################################
 def fixLoadPath(oldpath,libpath,target)
   debug "#{$install_name_tool} -change #{oldpath} #{$executableId}#{libpath} #{target}"
-  `#{$install_name_tool} -change #{oldpath} #{$executableId}#{libpath} #{target}`
+  `#{$install_name_tool} -change #{oldpath} #{$executableId}#{libpath} #{target}` 2>&1 | grep -v "changes being made to the file will invalidate the code signature"
 end
 
 ###############################################################################
@@ -115,6 +115,7 @@ def fixId(target, libname)
   debug "#{$install_name_tool} -id #{$executableId}#{libname} #{target}"
   `#{$install_name_tool} -id #{$executableId}#{libname} #{target}`
 end
+
 
 ###############################################################################
 def handleDependencies(otool_out, targetPath, currentLib, rpaths)
