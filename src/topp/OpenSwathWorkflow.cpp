@@ -740,6 +740,12 @@ protected:
     cp_irt.rt_extraction_window = -1; // extract the whole RT range for iRT measurements
     cp_irt.mz_extraction_window = getDoubleOption_("irt_mz_extraction_window");
     cp_irt.im_extraction_window = getDoubleOption_("irt_im_extraction_window");
+
+    if ( (cp_irt.im_extraction_window == -1) & (cp.im_extraction_window != -1) )
+    {
+      OPENMS_LOG_WARN << "Warning: -irt_im_extraction_window is not set, this will lead to no ion mobility calibration" << std::endl;
+    }
+
     cp_irt.ppm                  = getStringOption_("irt_mz_extraction_window_unit") == "ppm";
 
     ChromExtractParams cp_ms1 = cp;
