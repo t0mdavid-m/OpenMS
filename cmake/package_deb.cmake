@@ -53,7 +53,6 @@ set(CPACK_DEBIAN_ARCHIVE_TYPE "gnutar")
 ## We usually do not want to ship things like stdlib or glibc. Could mess up a system slighlty, when installed system wide
 #include(InstallRequiredSystemLibraries)
 
-
 # Don't add RPATH
 SET(CMAKE_SKIP_INSTALL_RPATH TRUE)
 

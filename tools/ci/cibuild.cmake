@@ -23,6 +23,7 @@ set(CTEST_CUSTOM_MAXIMUM_NUMBER_OF_WARNINGS 1000)
 set (CTEST_CUSTOM_WARNING_EXCEPTION
     # Suppress warnings imported from qt
     ".*qsharedpointer_impl.h:595:43.*"
+    ".*src/openms/extern/.*"
     )
 
 message(STATUS "CTEST_SOURCE_DIRECTORY: ${CTEST_SOURCE_DIRECTORY}")
@@ -94,6 +95,7 @@ set(VARS_TO_LOAD
   "MT_ENABLE_OPENMP"
   "NO_DEPENDENCIES"
   "SEARCH_ENGINES_DIRECTORY"
+  "SIGNING_IDENTITY"
   "PACKAGE_TYPE"
   "PYOPENMS"
   "PY_MEMLEAK_DISABLE"
