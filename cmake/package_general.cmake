@@ -76,7 +76,7 @@ elseif(APPLE)
   set(POST_EXCLUDE "")
 else()
   set(EXCLUDE "")
-  set(POST_EXCLUDE ".*/ld-linux-.*" ".*/linux-vdso.*" ".*/libm\\..*" ".*/libc\\..*" ".*/libpthread\\..*" ".*/libdl\\..*" ".*/libQt5.*")
+  set(POST_EXCLUDE ".*/ld-linux-.*" ".*/linux-vdso.*" ".*/libm\\..*" ".*/libc\\..*" ".*/libpthread\\..*" ".*/libdl\\..*" ".*/libQt6.*")
 endif()
 
 # TODO check if we can reduce the permissions
