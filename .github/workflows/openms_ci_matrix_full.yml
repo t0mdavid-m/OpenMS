@@ -697,7 +697,7 @@ jobs:
           HOST: ${{ secrets.ARCHIVE_RRSYNC_HOST }}
         run: |
           if [[ "${{ github.ref_name }}" == release/* ]]; then
-            folder=${{ github.ref_name }}
+            folder=${{ github.ref_name#release/ }}
           else
             echo refusing to mark non-release branch as latest
             exit 1
