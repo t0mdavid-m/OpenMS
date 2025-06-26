@@ -88,6 +88,7 @@ FLASHIda::FLASHIda(char* arg)
     }
     rt_window_ = inputs["RT_window"][0];
     qscore_threshold_ = inputs["score_threshold"][0];
+    tqscore_threshold = inputs["tqscore_threshold"][0];
     snr_threshold_ = 1;
     targeting_mode_ = (int)(inputs["target_mode"][0]);
     if (targeting_mode_ == 1) { std::cout << ss.str() << "file(s) is(are) used for inclusion mode\n"; }
