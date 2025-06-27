@@ -511,6 +511,7 @@ FLASHIda::FLASHIda(char* arg)
 
           if (selection_phase < selection_phase_end - 1)
           { // first, select masses under tqscore threshold
+            std::cout << tqscore_exceeding_mass_rt_map_.size() << std::endl;
             if (tqscore_exceeding_mass_rt_map_.find(nominal_mass) != tqscore_exceeding_mass_rt_map_.end()
                 || tqscore_exceeding_mz_rt_map_.find(integer_mz) != tqscore_exceeding_mz_rt_map_.end())
             {
