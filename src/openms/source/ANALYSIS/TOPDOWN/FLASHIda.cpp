@@ -315,6 +315,7 @@ FLASHIda::FLASHIda(char* arg)
     std::unordered_map<int, double> new_mass_qscore_map_;
     std::unordered_map<int, double> t_mass_qscore_map_;
 
+    // exclusion mode
     if (targeting_mode_ == 2)
     {
       for (const auto& [mass, rts] : target_mass_rt_map_)
@@ -335,6 +336,7 @@ FLASHIda::FLASHIda(char* arg)
       }
     }
 
+    // remove expired entries for tqscore_exceeding_mz_rt_map_
     for (const auto& [m, r] : tqscore_exceeding_mz_rt_map_)
     {
       if (rt - r > rt_window_) { continue; }
@@ -343,6 +345,7 @@ FLASHIda::FLASHIda(char* arg)
     new_mz_rt_map_.swap(tqscore_exceeding_mz_rt_map_);
     std::unordered_map<int, double>().swap(new_mz_rt_map_);
 
+    // remove expired entries for tqscore_exceeding_mass_rt_map_
     for (const auto& [m, r] : tqscore_exceeding_mass_rt_map_)
     {
       if (rt - r > rt_window_) { continue; }
@@ -351,80 +354,40 @@ FLASHIda::FLASHIda(char* arg)
     new_mass_rt_map_.swap(tqscore_exceeding_mass_rt_map_);
     std::unordered_map<int, double>().swap(new_mass_rt_map_);
 
+    // remove expired entries for all_mass_rt_map_, mass_qscore_map_
     for (const auto& item : all_mass_rt_map_)
     {
       if (rt - item.second > rt_window_) { continue; }
       new_all_mass_rt_map_[item.first] = item.second;
-
-      // auto inter = new_mass_qscore_map_.find(item.first);
-
       new_mass_qscore_map_[item.first] = mass_qscore_map_[item.first];
     }
     new_all_mass_rt_map_.swap(all_mass_rt_map_);
     std::unordered_map<int, double>().swap(new_all_mass_rt_map_);
-
     new_mass_qscore_map_.swap(mass_qscore_map_);
     std::unordered_map<int, double>().swap(new_mass_qscore_map_);
 
-   /* double min_cv_mass = 0;
-    double max_cv_mass = 1e100;
-
-    auto filter_str = deconvolved_spectrum_.getOriginalSpectrum().getMetaValue("filter string").toString();
-    Size pos = filter_str.find("cv=");
-    double cv;
-
-    if (pos != String::npos) // get the preferred mass ranges accding to CV values.
-    {
-      Size end = filter_str.find(" ", pos);
-      if (end == String::npos) end = filter_str.length() - 1;
-      cv = std::stod(filter_str.substr(pos + 3, end - pos));
-
-      if (cv < cv_to_mass_.begin()->first)
-      {
-        min_cv_mass = cv_to_mass_.begin()->second[0];
-        max_cv_mass = cv_to_mass_.begin()->second[1];
-      }
-      else if (cv > cv_to_mass_.rbegin()->first)
-      {
-        min_cv_mass = cv_to_mass_.rbegin()->second[0];
-        max_cv_mass = cv_to_mass_.rbegin()->second[1];
-      }
-      else
-      {
-        auto loc = cv_to_mass_.lower_bound(cv);
-        if (loc != cv_to_mass_.end())
-        {
-          min_cv_mass = loc->second[0];
-          max_cv_mass = loc->second[1];
-        }
-      }
-    }*/
-
     const int selection_phase_start = 0;
     const int selection_phase_end = 2; // inclusive
-    // When selection_phase == 0, consider only the masses whose tqscore did not exceed total qscore threshold. min_cv_mass to max_cv_mass are preferred
+    // When selection_phase == 0, consider only the masses whose tqscore did not exceed total qscore threshold. 
     // when selection_phase == 1, consider all other masses for selection but the same m/z is avoided
     // when selection_phase == 2, consider all.
     // for target inclusive masses, qscore precursor snr threshold is not applied.
     // In all phase, for target exclusive mode, all the exclusive masses are excluded. For target inclusive mode, only the target masses are considered.
 
-    for (int iteration = targeting_mode_ == 2 ? 0 : 1; iteration < 2;
-         iteration++) // for mass exclusion, first collect masses with exclusion list. Then collect without exclusion. This works the best
+    for (int iteration = targeting_mode_ == 2 ? 0 : 1; iteration < 2; iteration++) 
+    // for mass exclusion, first collect masses with exclusion list. Then collect without exclusion. This works the best
     {
       for (int selection_phase = selection_phase_start; selection_phase <= selection_phase_end; selection_phase++)
       {
+        // Iterate over candidates (sorted by qscore)
         for (const auto& pg : deconvolved_spectrum_)
         {
+          // dont acquire the same mass multiple times
           if (selected_peak_groups_.size() >= mass_count) { break; }
 
           int charge = pg.getRepAbsCharge();
           double qscore = std::min(.9, pg.getQscore());
           double mass = pg.getMonoMass();
-
-          //if (selection_phase == selection_phase_start)
-          //{
-          //  if (mass < min_cv_mass || mass > max_cv_mass) continue;
-          //}
 
           auto [mz1, mz2] = pg.getRepMzRange();
 
@@ -439,7 +402,9 @@ FLASHIda::FLASHIda(char* arg)
           double qscore_threshold = qscore_threshold_;
           double tqscore_factor_for_exclusion = 1.0;
           int integer_mz = (int)round(center_mz);
+          
 
+          // Only triggered in exclusion mode
           if (iteration == 0)
           {
             auto inter = t_mass_qscore_map_.find(nominal_mass);
@@ -447,7 +412,8 @@ FLASHIda::FLASHIda(char* arg)
             if (1 - tqscore_factor_for_exclusion > tqscore_threshold) { continue; }
           }
 
-          if (targeting_mode_ == 1 && target_masses_.size() > 0) // inclusive mode
+          // Inclusion mode
+          if (targeting_mode_ == 1 && target_masses_.size() > 0) 
           {
             double delta = 2 * tol_[0] * mass * 1e-6;
             auto ub = std::upper_bound(target_masses_.begin(), target_masses_.end(), mass + delta);
@@ -473,7 +439,8 @@ FLASHIda::FLASHIda(char* arg)
             }
             else { continue; }
           }
-          else if (targeting_mode_ == 3 && excluded_masses_.size() > 0) // inclusive mode
+          // deep mode
+          else if (targeting_mode_ == 3 && excluded_masses_.size() > 0)
           {
             bool to_exclude = false;
             double delta = 2 * tol_[0] * mass * 1e-6;
@@ -496,7 +463,7 @@ FLASHIda::FLASHIda(char* arg)
             if (to_exclude) { continue; }
           }
 
-          //if (qscore < qscore_threshold) { break; }
+          if (qscore < qscore_threshold) { break; }
 
           if (pg.getChargeSNR(charge) < snr_threshold) { continue; }
 
@@ -508,28 +475,35 @@ FLASHIda::FLASHIda(char* arg)
               continue;
             }
           }
-
+          
+          // selection phase 0, skip masses over tqscore threshold
           if (selection_phase < selection_phase_end - 1)
-          { // first, select masses under tqscore threshold
-            std::cout << tqscore_exceeding_mass_rt_map_.size() << std::endl;
+          { 
             if (tqscore_exceeding_mass_rt_map_.find(nominal_mass) != tqscore_exceeding_mass_rt_map_.end()
                 || tqscore_exceeding_mz_rt_map_.find(integer_mz) != tqscore_exceeding_mz_rt_map_.end())
             {
               continue;
             }
           }
+          
+          // decision made : peak group will be acquired
 
+          // save mass acquisition
           all_mass_rt_map_[nominal_mass] = rt;
+          
+          // Compute total qscore
           auto inter = mass_qscore_map_.find(nominal_mass);
           if (inter == mass_qscore_map_.end()) { mass_qscore_map_[nominal_mass] = 1 - qscore; }
           else { mass_qscore_map_[nominal_mass] *= 1 - qscore; }
 
+          // Add to exclusion list if neccessary
           if (1 - mass_qscore_map_[nominal_mass] * tqscore_factor_for_exclusion > tqscore_threshold)
           {
             tqscore_exceeding_mass_rt_map_[nominal_mass] = rt;
             tqscore_exceeding_mz_rt_map_[integer_mz] = rt;
           }
 
+          // Store acquisition
           id_mass_map_[window_id_] = nominal_mass;
           id_mz_map_[window_id_] = integer_mz;
           id_qscore_map_[window_id_] = qscore;
