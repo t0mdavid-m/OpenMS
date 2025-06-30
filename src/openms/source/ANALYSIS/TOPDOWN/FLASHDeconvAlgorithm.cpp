@@ -502,8 +502,9 @@ void FLASHDeconvAlgorithm::run(MSExperiment& map,
 }
 
 // currently only MS2 precursors
-void FLASHDeconvAlgorithm::findPrecursorPeakGroupsFormIdaLog_(const MSExperiment& map, Size index, double start_mz, double end_mz)
+void FLASHDeconvAlgorithm::findPrecursorPeakGroupsFormIdaLog_(const MSExperiment& map, Size index, double mz)
 {
+  // std::cout << mz << std::endl;
   if (precursor_map_for_ida_.empty()) return;
 
   int scan_number = getScanNumber(map, index);
@@ -518,22 +519,37 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsFormIdaLog_(const MSExperiment
     cv = std::stod(filter_str.substr(pos + 3, end - pos));
   }
 
+  // Traverser precursor map in reverse
   for (auto iter = precursor_map_for_ida_.lower_bound(scan_number); iter != precursor_map_for_ida_.begin()
                                                                     && native_id_precursor_peak_group_map_.find(map[index].getNativeID()) == native_id_precursor_peak_group_map_.end(); iter--)
   {
+    // Skip skip scans higher than ms2 scan number
     if (iter->first > scan_number || iter == precursor_map_for_ida_.end())
     {
       continue;
     }
+    // Limit difference from previous scans
     if (iter->first < scan_number - precursor_MS1_window_ - 500) // for FLASHIda, give more buffer scans
     {
       return;
     }
 
+    // std::cout << "----" << std::endl;
+    // std::cout << mz << std::endl;
+    // std::cout << "_" << std::endl;
+    // for each scan check precursors
     for (auto& smap : iter->second)
     {
-      if (abs(start_mz - smap[3]) < .001 && abs(end_mz - smap[4]) < .001)
+      
+      // std::cout << (smap[3]+smap[4])/2 << std::endl;
+      // std::cout << abs(mz - ((smap[3]+smap[4])/2)) << std::endl;
+      // std::cout << "readout" << std::endl;
+
+      if (abs(mz - ((smap[3]+smap[4])/2)) < .001)
       {
+        // std::cout << iter->first << std::endl;
+        // std::cout << "detected" << std::endl;
+
         FLASHHelperClasses::LogMzPeak precursor_log_mz_peak;
         precursor_log_mz_peak.abs_charge = std::abs((int)smap[1]);
         precursor_log_mz_peak.is_positive = (int)smap[1] > 0;
@@ -636,6 +652,7 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
 
     double start_mz = 0;
     double end_mz = 0;
+    double precursor_mz = 0;
     for (auto& precursor : spec.getPrecursors())
     {
       double loffset = precursor.getIsolationWindowLowerOffset();
@@ -645,6 +662,7 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
 
       start_mz = loffset > 100.0 ? loffset : -loffset + precursor.getMZ();
       end_mz = uoffest > 100.0 ? uoffest : uoffest + precursor.getMZ();
+      precursor_mz = precursor.getMZ();
     }
     double max_score = -1.0;
 
@@ -686,7 +704,7 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
 
     if (native_id_precursor_peak_group_map_.find(native_id) == native_id_precursor_peak_group_map_.end())
     {
-      findPrecursorPeakGroupsFormIdaLog_(map, index, start_mz, end_mz);
+      findPrecursorPeakGroupsFormIdaLog_(map, index, precursor_mz);
     }
   }
 }

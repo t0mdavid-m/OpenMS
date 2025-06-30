@@ -140,7 +140,7 @@ namespace OpenMS
     static void updatePrecursorQScores_(std::vector<DeconvolvedSpectrum>& deconvolved_spectra, int ms_level);
 
     /// find precursor peak groups from FLASHIda log file
-    void findPrecursorPeakGroupsFormIdaLog_(const MSExperiment& map, Size index, double start_mz, double end_mz);
+    void findPrecursorPeakGroupsFormIdaLog_(const MSExperiment& map, Size index, double mz);
 
     /// register the precursor peak group (or mass) if possible for MSn (n>1) spectrum.
     void findPrecursorPeakGroupsForMSnSpectra_(const MSExperiment& map, const std::vector<DeconvolvedSpectrum>& deconvolved_spectra, uint ms_level);
