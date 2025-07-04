@@ -383,7 +383,7 @@ FLASHIda::FLASHIda(char* arg)
     // for target inclusive masses, qscore precursor snr threshold is not applied.
     // In all phase, for target exclusive mode, all the exclusive masses are excluded. For target inclusive mode, only the target masses are considered.
 
-    for (int iteration = (targeting_mode_ == 2 || targeting_mode_ == 4) ? 0 : 1; iteration < 2; iteration++) 
+    for (int iteration = targeting_mode_ == 2 ? 0 : 1; iteration < 2; iteration++) 
     // for mass exclusion, first collect masses with exclusion list. Then collect without exclusion. This works the best
     {
       for (int selection_phase = selection_phase_start; selection_phase <= selection_phase_end; selection_phase++)
