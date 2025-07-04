@@ -94,6 +94,7 @@ FLASHIda::FLASHIda(char* arg)
     if (targeting_mode_ == 1) { std::cout << ss.str() << "file(s) is(are) used for inclusion mode\n"; }
     else if (targeting_mode_ == 2) { std::cout << ss.str() << "file(s) is(are) used for in-depth mode\n"; }
     else if (targeting_mode_ == 3) { std::cout << ss.str() << "file(s) is(are) used for exclusion mode\n"; }
+    else if (targeting_mode_ == 4) { std::cout << ss.str() << "file(s) is(are) used for inclusion mode with charge state targeting\n"; }
     Param sd_defaults = SpectralDeconvolution().getDefaults();
 
     sd_defaults.setValue("min_charge", (int)inputs["min_charge"][0]);
@@ -119,6 +120,7 @@ FLASHIda::FLASHIda(char* arg)
         double rt = .0;
         double mass;
         double qscore;
+        int charge;
         while (std::getline(instream, line))
         {
           if (line.find("0 targets") != line.npos) { continue; }
@@ -143,12 +145,19 @@ FLASHIda::FLASHIda(char* arg)
             n = line.substr(st, ed - st + 1);
             qscore = atof(n.c_str());
 
-            if (targeting_mode_ == 1 || targeting_mode_ == 2)
+            st = line.find("Z=") + 2;
+            ed = line.find('\t', st);
+            n = line.substr(st, ed - st + 1);
+            charge = n.toInt();
+
+            if (targeting_mode_ == 1 || targeting_mode_ == 2 || targeting_mode_ == 4)
             {
               if (target_mass_rt_map_.find(mass) == target_mass_rt_map_.end()) { target_mass_rt_map_[mass] = std::vector<double>(); }
               target_mass_rt_map_[mass].push_back(rt * 60.0);
               if (target_mass_qscore_map_.find(mass) == target_mass_qscore_map_.end()) { target_mass_qscore_map_[mass] = std::vector<double>(); }
               target_mass_qscore_map_[mass].push_back(qscore);
+              if (target_mass_charge_map_.find(mass) == target_mass_charge_map_.end()) { target_mass_charge_map_[mass] = std::vector<int>(); }
+              target_mass_charge_map_[mass].push_back(charge);
             }
           }
           else if (line.hasPrefix("AllMass"))
@@ -205,7 +214,7 @@ FLASHIda::FLASHIda(char* arg)
           mass = atof(results[5].c_str());
           qscore = atof(results[3].c_str());
 
-          if (targeting_mode_ == 1 || targeting_mode_ == 2)
+          if (targeting_mode_ == 1 || targeting_mode_ == 2 || targeting_mode_ == 4)
           {
             if (target_mass_rt_map_.find(mass) == target_mass_rt_map_.end()) { target_mass_rt_map_[mass] = std::vector<double>(); }
             rt = atof(results[0].c_str());
@@ -252,7 +261,7 @@ FLASHIda::FLASHIda(char* arg)
 
     target_masses_.clear();
     excluded_masses_.clear();
-    if (targeting_mode_ == 1)
+    if (targeting_mode_ == 1 || targeting_mode_ == 4)
     {
       for (const auto& [mass, rts] : target_mass_rt_map_)
       {
@@ -374,7 +383,7 @@ FLASHIda::FLASHIda(char* arg)
     // for target inclusive masses, qscore precursor snr threshold is not applied.
     // In all phase, for target exclusive mode, all the exclusive masses are excluded. For target inclusive mode, only the target masses are considered.
 
-    for (int iteration = targeting_mode_ == 2 ? 0 : 1; iteration < 2; iteration++) 
+    for (int iteration = (targeting_mode_ == 2 || targeting_mode_ == 4) ? 0 : 1; iteration < 2; iteration++) 
     // for mass exclusion, first collect masses with exclusion list. Then collect without exclusion. This works the best
     {
       for (int selection_phase = selection_phase_start; selection_phase <= selection_phase_end; selection_phase++)
@@ -413,7 +422,7 @@ FLASHIda::FLASHIda(char* arg)
           }
 
           // Inclusion mode
-          if (targeting_mode_ == 1 && target_masses_.size() > 0) 
+          if ((targeting_mode_ == 1 || targeting_mode_ == 4) && target_masses_.size() > 0) 
           {
             double delta = 2 * tol_[0] * mass * 1e-6;
             auto ub = std::upper_bound(target_masses_.begin(), target_masses_.end(), mass + delta);
@@ -424,6 +433,23 @@ FLASHIda::FLASHIda(char* arg)
               {
                 if (std::abs(*ub - mass) < delta) // target is detected.
                 {
+                  if (targeting_mode_ == 4) {
+                    // Check if charge state matches
+                    auto it = target_mass_charge_map_.find(mass);
+                    if (it != target_mass_charge_map_.end())
+                    {
+                      const std::vector<int>& charges = it->second;
+                      if (std::find(charges.begin(), charges.end(), charge) == charges.end())
+                      {
+                        // Exclude if charge state does not match
+                        break;
+                      }
+                    }
+                    else {
+                      // Exclude if charge states cannot be found
+                      break;
+                    }
+                  }
                   target_matched = true;
                 }
                 if (mass - *ub > delta) { break; }

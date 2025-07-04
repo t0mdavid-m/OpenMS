@@ -215,11 +215,12 @@ namespace OpenMS
     /// how many masses will be selected per ms level? - determined from C# side
     IntList mass_count_;
 
-    int targeting_mode_ = 0; /// 0 no targeting 1 inclusive 2 exclusive
+    int targeting_mode_ = 0; /// 0 no targeting 1 inclusive 2 exclusive 3 deep
 
     /// maps for global inclusion targeting
     std::map<double, std::vector<double>> target_mass_rt_map_;
     std::map<double, std::vector<double>> target_mass_qscore_map_;
+    std::map<double, std::vector<int>> target_mass_charge_map_;
     std::vector<double> target_masses_; /// current target masses. updated per spectrum
 
     // For the possibility of removal each window is given an id, starting at zero (needed for FAIMS support)
