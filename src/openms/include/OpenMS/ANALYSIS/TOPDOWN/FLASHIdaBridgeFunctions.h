@@ -60,6 +60,17 @@ namespace OpenMS
                                                 int ms_level,
                                                 char *name,
                                                 char *cv);
+    
+  extern "C" OPENMS_DLLAPI bool IsDifferentiallyAbundant(FLASHIda *object,
+                                                double *mzs,
+                                                double *ints,
+                                                int length,
+                                                double rt_min,
+                                                int ms_level,
+                                                char *name,
+                                                char *cv,
+                                                char *type,
+                                                double reporter_mz_tol);
 
   /// bridges getIsolationWindows in FLASHIda class to C# FLASHIda side
   extern "C" OPENMS_DLLAPI void GetIsolationWindows(FLASHIda *object,

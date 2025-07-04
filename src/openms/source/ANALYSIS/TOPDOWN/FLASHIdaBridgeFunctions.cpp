@@ -60,6 +60,16 @@ namespace OpenMS
     return 0;
   }
 
+  bool IsDifferentiallyAbundant(FLASHIda *pObject, double *mzs, double *ints, int length, double rt_min, int msLevel, char *name, char *cv, char* type, double reporter_mz_tol)
+  {
+    if (pObject != nullptr)
+    {
+      return pObject->isDifferentiallyAbundant(mzs, ints, length, rt_min * 60.0, msLevel, name, cv, type, reporter_mz_tol);
+    }
+    return 0;
+  }
+
+
   double GetRepresentativeMass(FLASHIda *pObject)
   {
     return pObject->getRepresentativeMass();

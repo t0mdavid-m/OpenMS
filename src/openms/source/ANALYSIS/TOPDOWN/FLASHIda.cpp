@@ -233,6 +233,19 @@ FLASHIda::FLASHIda(char* arg)
     std::cout << sd_defaults << std::endl;
   }
 
+  bool FLASHIda::isDifferentiallyAbundant(const double* mzs,
+                              const double* ints,
+                              const int length,
+                              const double rt,
+                              const int ms_level,
+                              const char* name,
+                              const char* cv,
+                              char *type,
+                              double reporter_mz_tol)
+  {
+    return false;
+  }
+
   int FLASHIda::getPeakGroups(const double* mzs,
                               const double* ints,
                               const int length,

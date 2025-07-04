@@ -78,6 +78,29 @@ namespace OpenMS
            @param ms_level ms level
            @param name spectrum name
            @param cv CV values when FAIMS is used
+           @param type type for isobaric quantification
+           @param reporter_mz_tol reporter ion mz tolerance for isobaric quantification
+           @return number of acquired peak groups
+      */
+    bool isDifferentiallyAbundant(const double* mzs,
+                            const double* ints,
+                            const int length,
+                            const double rt,
+                            const int ms_level,
+                            const char* name,
+                            const char* cv,
+                            char *type,
+                            double reporter_mz_tol);
+
+    /**
+           @brief get peak groups (deconvolved masses) from input spectrum, specified by mzs and intensities (due to C# interface it is necessary)
+           @param mzs mz values of the input spectrum
+           @param intensities intensities of the input spectrum
+           @param length length of mzs and ints
+           @param rt Retention time in seconds
+           @param ms_level ms level
+           @param name spectrum name
+           @param cv CV values when FAIMS is used
            @return number of acquired peak groups
       */
     int getPeakGroups(const double *mzs,
