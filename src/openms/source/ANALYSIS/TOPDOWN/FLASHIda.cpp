@@ -243,6 +243,15 @@ FLASHIda::FLASHIda(char* arg)
                               char *type,
                               double reporter_mz_tol)
   {
+    (void)mzs;
+    (void)ints;
+    (void)length;
+    (void)rt;
+    (void)ms_level;
+    (void)name;
+    (void)cv;
+    (void)type;
+    (void)reporter_mz_tol;
     return false;
   }
 
