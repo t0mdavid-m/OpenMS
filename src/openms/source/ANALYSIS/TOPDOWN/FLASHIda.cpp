@@ -458,7 +458,7 @@ FLASHIda::FLASHIda(char* arg)
                 {
                   if (targeting_mode_ == 4) {
                     // Check if charge state matches
-                    auto it = target_mass_charge_map_.find(*ub);
+                    auto it = target_mass_charge_map_.find(mass);
                     if (it != target_mass_charge_map_.end())
                     {
                       const std::vector<int>& charges = it->second;
