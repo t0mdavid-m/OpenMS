@@ -464,11 +464,15 @@ FLASHIda::FLASHIda(char* arg)
                       if (std::find(charges.begin(), charges.end(), charge) == charges.end())
                       {
                         // Exclude if charge state does not match
+                        if (ub == target_masses_.begin()) { break; }
+                        ub--;
                         continue;
                       }
                     }
                     else {
                       // Exclude if charge states cannot be found
+                      if (ub == target_masses_.begin()) { break; }
+                      ub--;
                       continue;
                     }
                   }
