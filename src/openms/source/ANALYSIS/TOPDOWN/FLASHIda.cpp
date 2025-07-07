@@ -292,7 +292,7 @@ FLASHIda::FLASHIda(char* arg)
           // if (std::abs(rt - prt) < rt_window_)
           // {
             target_masses_.push_back(mass);
-            break;
+            // break;
           // }
         // }
       }
