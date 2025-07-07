@@ -287,14 +287,14 @@ FLASHIda::FLASHIda(char* arg)
     {
       for (const auto& [mass, rts] : target_mass_rt_map_)
       {
-        for (double prt : rts)
-        {
+        // for (double prt : rts)
+        // {
           // if (std::abs(rt - prt) < rt_window_)
           // {
             target_masses_.push_back(mass);
             break;
           // }
-        }
+        // }
       }
       std::sort(target_masses_.begin(), target_masses_.end());
       fd_.setTargetMasses(target_masses_, false);
