@@ -444,7 +444,6 @@ FLASHIda::FLASHIda(char* arg)
           }
 
           // Inclusion mode
-          std::cout << target_masses_.size() << std::endl;
           if ((targeting_mode_ == 1 || targeting_mode_ == 4) && target_masses_.size() > 0) 
           {
             double delta = 2 * tol_[0] * mass * 1e-6;
