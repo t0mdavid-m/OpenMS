@@ -36,6 +36,7 @@
 #include <OpenMS/ANALYSIS/QUANTITATION/IsobaricChannelExtractor.h>
 #include <OpenMS/ANALYSIS/QUANTITATION/IsobaricQuantifier.h>
 #include <OpenMS/ANALYSIS/QUANTITATION/TMTSixPlexQuantitationMethod.h>
+#include <OpenMS/KERNEL/ConsensusMap.h> 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/Qscore.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
@@ -256,25 +257,27 @@ FLASHIda::FLASHIda(char* arg)
 
     // 2. Configure the TMT-6plex quantitation method and channel extractor
     TMTSixPlexQuantitationMethod quant_method;
-    IsobaricChannelExtractor channel_extractor(quant_method.get());
+    IsobaricChannelExtractor channel_extractor(&quant_method);
 
     Param p = channel_extractor.getParameters();
     p.setValue("reporter_mass_shift", reporter_mz_tol);   // same name as pyOpenMS
     channel_extractor.setParameters(p);
 
     // 3. Extract reporter-ion channels into a ConsensusMap
-    ConsensusMap cmap;
-    channel_extractor.extractChannels(exp, cmap);
+    ConsensusMap consensus_map_raw;
+    channel_extractor.extractChannels(exp, consensus_map_raw);
 
     // 4. Collect m/z-intensity pairs from the ConsensusFeatures
     std::vector<std::pair<double, double>> mz_int;
     mz_int.reserve(quant_method.getNumberOfChannels());
 
-    for (const auto& cf : cmap)
+    for (const auto& cf : consensus_map_raw)
     {
-        for (ConsensusFeature::HandleIterator it = cf.begin(); it != cf.end(); ++it)
+        float max_int = 0;
+        for (auto& i : cf)
         {
-            mz_int.emplace_back(it->getMZ(), it->getIntensity());
+            max_int = std::max(max_int, i.getIntensity());
+            mz_int.emplace_back(i.getMZ(), max_int);
         }
     }
 
