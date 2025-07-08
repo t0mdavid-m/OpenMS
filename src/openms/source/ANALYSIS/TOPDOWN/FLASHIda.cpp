@@ -278,6 +278,8 @@ FLASHIda::FLASHIda(char* arg)
     std::vector<std::pair<double, double>> mz_int;
     mz_int.reserve(quant_method.getNumberOfChannels());
 
+    std::cout << "start" << std::endl;
+
     for (const auto& cf : consensus_map_raw)
     {
         float max_int = 0;
@@ -285,11 +287,15 @@ FLASHIda::FLASHIda(char* arg)
         {
             max_int = std::max(max_int, i.getIntensity());
             mz_int.emplace_back(i.getMZ(), max_int);
+            std::cout << i.getMZ() << std::endl;
+            std::cout << max_int << std::endl;
+
         }
     }
 
     if (mz_int.size() != quant_method.getNumberOfChannels())
     {
+        std::cout << "bail 1" << std::endl;
         // Something went wrong – bail out early.
         return false;
     }
@@ -307,6 +313,7 @@ FLASHIda::FLASHIda(char* arg)
     if (std::any_of(intensities.begin(), intensities.end(),
                     [](double x){ return x < 1e-3; }))
     {
+        std::cout << "bail 2" << std::endl;
         return false;
     }
 
@@ -317,6 +324,8 @@ FLASHIda::FLASHIda(char* arg)
                                                 intensities.end(), 0.0) / 3.0;
 
     const double fold_change = sample1_mean / sample2_mean;
+    std::cout << fold_change << std::endl;
+    std::cout << "bail 3" << std::endl;
     return fold_change > 1.5;
 
   }
