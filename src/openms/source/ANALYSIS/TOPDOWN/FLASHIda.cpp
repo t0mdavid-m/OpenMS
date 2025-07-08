@@ -32,6 +32,10 @@
 // $Authors: Kyowon Jeong $
 // --------------------------------------------------------------------------
 
+
+#include <OpenMS/ANALYSIS/QUANTITATION/IsobaricChannelExtractor.h>
+#include <OpenMS/ANALYSIS/QUANTITATION/IsobaricQuantifier.h>
+#include <OpenMS/ANALYSIS/QUANTITATION/TMTSixPlexQuantitationMethod.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/Qscore.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
@@ -243,16 +247,68 @@ FLASHIda::FLASHIda(char* arg)
                               char *type,
                               double reporter_mz_tol)
   {
-    (void)mzs;
-    (void)ints;
-    (void)length;
-    (void)rt;
-    (void)ms_level;
-    (void)name;
+    auto spec = makeMSSpectrum_(mzs, ints, length, rt, ms_level, name);
     (void)cv;
     (void)type;
-    (void)reporter_mz_tol;
-    return false;
+
+    MSExperiment exp;
+    exp.addSpectrum(spec);
+
+    // 2. Configure the TMT-6plex quantitation method and channel extractor
+    TMTSixPlexQuantitationMethod quant_method;
+    IsobaricChannelExtractor channel_extractor(quant_method.get());
+
+    Param p = channel_extractor.getParameters();
+    p.setValue("reporter_mass_shift", reporter_mz_tol);   // same name as pyOpenMS
+    channel_extractor.setParameters(p);
+
+    // 3. Extract reporter-ion channels into a ConsensusMap
+    ConsensusMap cmap;
+    channel_extractor.extractChannels(exp, cmap);
+
+    // 4. Collect m/z-intensity pairs from the ConsensusFeatures
+    std::vector<std::pair<double, double>> mz_int;
+    mz_int.reserve(quant_method.getNumberOfChannels());
+
+    for (const auto& cf : cmap)
+    {
+        for (ConsensusFeature::HandleIterator it = cf.begin(); it != cf.end(); ++it)
+        {
+            mz_int.emplace_back(it->getMZ(), it->getIntensity());
+        }
+    }
+
+    if (mz_int.size() != quant_method.getNumberOfChannels())
+    {
+        // Something went wrong – bail out early.
+        return false;
+    }
+
+    // 5. Sort by m/z to ensure channel order (126-131)
+    std::sort(mz_int.begin(), mz_int.end(),
+              [](const auto& a, const auto& b){ return a.first < b.first; });
+
+    // 6. Split into two samples (first 3 vs. last 3 channels)
+    std::vector<double> intensities;
+    intensities.reserve(mz_int.size());
+    for (const auto& p2 : mz_int) intensities.push_back(p2.second);
+
+    // Reject spectra with missing / too-low reporter peaks
+    if (std::any_of(intensities.begin(), intensities.end(),
+                    [](double x){ return x < 1e-3; }))
+    {
+        return false;
+    }
+
+    const double sample1_mean = std::accumulate(intensities.begin(),
+                                                intensities.begin() + 3, 0.0) / 3.0;
+
+    const double sample2_mean = std::accumulate(intensities.begin() + 3,
+                                                intensities.end(), 0.0) / 3.0;
+
+    const double fold_change = sample1_mean / sample2_mean;
+    return fold_change > 1.5;
+
   }
 
   int FLASHIda::getPeakGroups(const double* mzs,
