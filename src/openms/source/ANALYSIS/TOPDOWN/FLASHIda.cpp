@@ -41,6 +41,8 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/Qscore.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
 #include <OpenMS/KERNEL/MSSpectrum.h>
+#include <OpenMS/METADATA/Precursor.h>
+#include <OpenMS/METADATA/SpectrumSettings.h> 
 #include <sstream>
 #ifdef _OPENMP
   #include <omp.h>
@@ -249,6 +251,11 @@ FLASHIda::FLASHIda(char* arg)
                               double reporter_mz_tol)
   {
     auto spec = makeMSSpectrum_(mzs, ints, length, rt, ms_level, name);
+
+    // Create and set precursor with HCD activation
+    OpenMS::Precursor precursor;
+    precursor.setActivationMethods({OpenMS::Precursor::ActivationMethod::HCD});
+    spec.setPrecursors({precursor});
     (void)cv;
     (void)type;
 
