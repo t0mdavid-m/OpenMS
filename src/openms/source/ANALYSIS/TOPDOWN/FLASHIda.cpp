@@ -282,13 +282,12 @@ FLASHIda::FLASHIda(char* arg)
 
     for (const auto& cf : consensus_map_raw)
     {
-        float max_int = 0;
         for (auto& i : cf)
         {
-            max_int = std::max(max_int, i.getIntensity());
-            mz_int.emplace_back(i.getMZ(), max_int);
+            mz_int.emplace_back(i.getMZ(), i.getIntensity());
             std::cout << i.getMZ() << std::endl;
-            std::cout << max_int << std::endl;
+            std::cout << i.getIntensity() << std::endl;
+            std::cout << "--" << std::endl;
 
         }
     }
