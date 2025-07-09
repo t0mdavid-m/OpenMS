@@ -525,12 +525,12 @@ FLASHIda::FLASHIda(char* arg)
                   if (targeting_mode_ == 4) {
                     // Check if charge state matches
                     auto it = target_mass_charge_map_.find(*ub);
-                    std::cout << "Charges for mass " << *ub << ": ";
-                    for (const auto& c : charges) std::cout << c << " ";
-                    std::cout << std::endl;
                     if (it != target_mass_charge_map_.end())
                     {
                       std::vector<int>& charges = it->second;
+                      std::cout << "Charges for mass " << *ub << ": ";
+                      for (const auto& c : charges) std::cout << c << " ";
+                      std::cout << std::endl;
                       if (std::find(charges.begin(), charges.end(), charge) == charges.end())
                       {
                         // Exclude if charge state does not match
