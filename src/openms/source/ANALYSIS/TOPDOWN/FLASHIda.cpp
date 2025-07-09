@@ -316,7 +316,9 @@ FLASHIda::FLASHIda(char* arg)
                                                 intensities.end(), 0.0) / 3.0;
 
     const double fold_change = sample1_mean / sample2_mean;
-    return fold_change > 1.5;
+
+    double threshold = 1.5;
+    return (fold_change > threshold) || ((1/fold_change) > threshold);
 
   }
 
