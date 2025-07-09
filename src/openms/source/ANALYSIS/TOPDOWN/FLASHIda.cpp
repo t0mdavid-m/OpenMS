@@ -527,13 +527,19 @@ FLASHIda::FLASHIda(char* arg)
                     auto it = target_mass_charge_map_.find(*ub);
                     if (it != target_mass_charge_map_.end())
                     {
-                      const std::vector<int>& charges = it->second;
+                      std::vector<int>& charges = it->second;
                       if (std::find(charges.begin(), charges.end(), charge) == charges.end())
                       {
                         // Exclude if charge state does not match
                         if (ub == target_masses_.begin()) { break; }
                         ub--;
                         continue;
+                      }
+                      else {
+                        auto it = std::find(charges.begin(), charges.end(), charge);
+                        if (it != charges.end()) {
+                          charges.erase(it);
+                        }
                       }
                     }
                     else {
