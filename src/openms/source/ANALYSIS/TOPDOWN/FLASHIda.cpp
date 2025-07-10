@@ -402,6 +402,7 @@ FLASHIda::FLASHIda(char* arg)
     trigger_right_isolation_mzs_.reserve(mass_count);
     trigger_ids_.clear();
     trigger_ids_.reserve(mass_count);
+    std::vector<int>* charges;
 
     selected_peak_groups_.reserve(mass_count_.size());
     std::set<double> current_selected_mzs;    // current selected mzs
@@ -527,22 +528,13 @@ FLASHIda::FLASHIda(char* arg)
                     auto it = target_mass_charge_map_.find(*ub);
                     if (it != target_mass_charge_map_.end())
                     {
-                      std::vector<int>& charges = it->second;
-                      std::cout << "Charges for mass " << *ub << ": ";
-                      for (const auto& c : charges) std::cout << c << " ";
-                      std::cout << std::endl;
-                      if (std::find(charges.begin(), charges.end(), charge) == charges.end())
+                      charges = &it->second;
+                      if (std::find(charges->begin(), charges->end(), charge) == charges->end())
                       {
                         // Exclude if charge state does not match
                         if (ub == target_masses_.begin()) { break; }
                         ub--;
                         continue;
-                      }
-                      else {
-                        auto it = std::find(charges.begin(), charges.end(), charge);
-                        if (it != charges.end()) {
-                          charges.erase(it);
-                        }
                       }
                     }
                     else {
@@ -629,6 +621,14 @@ FLASHIda::FLASHIda(char* arg)
           {
             tqscore_exceeding_mass_rt_map_[nominal_mass] = rt;
             tqscore_exceeding_mz_rt_map_[integer_mz] = rt;
+          }
+
+
+          if (targeting_mode_ == 4 && charges != nullptr) {
+            auto it = std::find(charges->begin(), charges->end(), charge);
+            if (it != charges->end()) {
+              charges->erase(it);
+            }
           }
 
           // Store acquisition
