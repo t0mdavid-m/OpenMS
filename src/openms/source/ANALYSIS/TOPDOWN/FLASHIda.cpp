@@ -318,7 +318,7 @@ FLASHIda::FLASHIda(char* arg)
         intensities.begin()+3, intensities.end(), [](double x){ return x < 1e-3; }
       );
       if (first_sample_missing && second_sample_missing) {
-        return false
+        return false;
       }
     } 
 
