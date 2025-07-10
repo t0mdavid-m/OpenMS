@@ -246,39 +246,39 @@ FLASHIda::FLASHIda(char* arg)
                               const double rt,
                               const int ms_level,
                               const char* name,
-                              const char* cv,
-                              char *type,
-                              double reporter_mz_tol)
+                              double reporter_mz_tol,
+                              double fold_change_threshold,
+                              bool only_one_condition
+                              )
   {
+    // Create spectrum
     auto spec = makeMSSpectrum_(mzs, ints, length, rt, ms_level, name);
 
-    // Create and set precursor with HCD activation
+    // Set precursor with HCD activation - neccessary for channel extractor
     OpenMS::Precursor precursor;
     precursor.setActivationMethods({OpenMS::Precursor::ActivationMethod::HCD});
     spec.setPrecursors({precursor});
 
-    (void)cv;
-    (void)type;
-
+    // Create experiment
     MSExperiment exp;
     exp.addSpectrum(spec);
 
-    // 2. Configure the TMT-6plex quantitation method and channel extractor
+    // TODO: Variable channel extractors
     TMTSixPlexQuantitationMethod quant_method;
     IsobaricChannelExtractor channel_extractor(&quant_method);
 
+    // Set parameters
     Param p = channel_extractor.getParameters();
-    p.setValue("reporter_mass_shift", reporter_mz_tol);   // same name as pyOpenMS
+    p.setValue("reporter_mass_shift", reporter_mz_tol);
     channel_extractor.setParameters(p);
 
-    // 3. Extract reporter-ion channels into a ConsensusMap
+    // Extract reporter-ion channels into a ConsensusMap
     ConsensusMap consensus_map_raw;
     channel_extractor.extractChannels(exp, consensus_map_raw);
 
-    // 4. Collect m/z-intensity pairs from the ConsensusFeatures
+    // Collect m/z-intensity pairs from the ConsensusFeatures
     std::vector<std::pair<double, double>> mz_int;
     mz_int.reserve(quant_method.getNumberOfChannels());
-
     for (const auto& cf : consensus_map_raw)
     {
         for (auto& i : cf)
@@ -287,27 +287,40 @@ FLASHIda::FLASHIda(char* arg)
         }
     }
 
+    // Something went wrong – bail out early
     if (mz_int.size() != quant_method.getNumberOfChannels())
     {
-        // Something went wrong – bail out early.
+        std::cout << "FLASHIda - channel extraction failed..." << std::endl;
         return false;
     }
 
-    // 5. Sort by m/z to ensure channel order (126-131)
+    // Sort by m/z to ensure channel order
     std::sort(mz_int.begin(), mz_int.end(),
               [](const auto& a, const auto& b){ return a.first < b.first; });
 
-    // 6. Split into two samples (first 3 vs. last 3 channels)
+    // Extract intensities
     std::vector<double> intensities;
     intensities.reserve(mz_int.size());
     for (const auto& p2 : mz_int) intensities.push_back(p2.second);
 
     // Reject spectra with missing / too-low reporter peaks
-    if (std::any_of(intensities.begin(), intensities.end(),
+    if (!only_one_condition && std::any_of(intensities.begin(), intensities.end(),
                     [](double x){ return x < 1e-3; }))
     {
         return false;
     }
+    // TODO: Make configurable
+    else if (only_one_condition) {
+      bool first_sample_missing = std::any_of(
+        intensities.begin(), intensities.begin()+3, [](double x){ return x < 1e-3; }
+      );
+      bool second_sample_missing = std::any_of(
+        intensities.begin()+3, intensities.end(), [](double x){ return x < 1e-3; }
+      );
+      if (first_sample_missing && second_sample_missing) {
+        return false
+      }
+    } 
 
     const double sample1_mean = std::accumulate(intensities.begin(),
                                                 intensities.begin() + 3, 0.0) / 3.0;
@@ -317,8 +330,7 @@ FLASHIda::FLASHIda(char* arg)
 
     const double fold_change = sample1_mean / sample2_mean;
 
-    double threshold = 1.5;
-    return (fold_change > threshold) || ((1/fold_change) > threshold);
+    return (fold_change > fold_change_threshold) || ((1/fold_change) > fold_change_threshold);
 
   }
 

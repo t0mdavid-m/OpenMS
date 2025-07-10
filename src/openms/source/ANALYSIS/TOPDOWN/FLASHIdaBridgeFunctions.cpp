@@ -60,11 +60,11 @@ namespace OpenMS
     return 0;
   }
 
-  bool IsDifferentiallyAbundant(FLASHIda *pObject, double *mzs, double *ints, int length, double rt_min, int msLevel, char *name, char *cv, char* type, double reporter_mz_tol)
+  bool IsDifferentiallyAbundant(FLASHIda *pObject, double *mzs, double *ints, int length, double rt_min, int msLevel, char *name, double reporter_mz_tol, double fold_change_threshold, bool only_one_condition)
   {
     if (pObject != nullptr)
     {
-      return pObject->isDifferentiallyAbundant(mzs, ints, length, rt_min * 60.0, msLevel, name, cv, type, reporter_mz_tol);
+      return pObject->isDifferentiallyAbundant(mzs, ints, length, rt_min * 60.0, msLevel, name, reporter_mz_tol, fold_change_threshold, only_one_condition);
     }
     return 0;
   }

@@ -77,9 +77,9 @@ namespace OpenMS
            @param rt Retention time in seconds
            @param ms_level ms level
            @param name spectrum name
-           @param cv CV values when FAIMS is used
-           @param type type for isobaric quantification
            @param reporter_mz_tol reporter ion mz tolerance for isobaric quantification
+           @param fold_change_threshold the threshold value for when something is considered a fold change 
+           @param only_one_condition whether or not a missing condition should be considered as differentially abundant
            @return number of acquired peak groups
       */
     bool isDifferentiallyAbundant(const double* mzs,
@@ -88,9 +88,9 @@ namespace OpenMS
                             const double rt,
                             const int ms_level,
                             const char* name,
-                            const char* cv,
-                            char *type,
-                            double reporter_mz_tol);
+                            double reporter_mz_tol,
+                            double fold_change_threshold,
+                            bool only_one_condition);
 
     /**
            @brief get peak groups (deconvolved masses) from input spectrum, specified by mzs and intensities (due to C# interface it is necessary)
