@@ -320,6 +320,9 @@ FLASHIda::FLASHIda(char* arg)
       if (first_sample_missing && second_sample_missing) {
         return false;
       }
+      else if (first_sample_missing || second_sample_missing) {
+        return true;
+      }
     } 
 
     const double sample1_mean = std::accumulate(intensities.begin(),
