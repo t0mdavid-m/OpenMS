@@ -303,14 +303,8 @@ FLASHIda::FLASHIda(char* arg)
     intensities.reserve(mz_int.size());
     for (const auto& p2 : mz_int) intensities.push_back(p2.second);
 
-    // Reject spectra with missing / too-low reporter peaks
-    if (!only_one_condition && std::any_of(intensities.begin(), intensities.end(),
-                    [](double x){ return x < 1e-3; }))
-    {
-        return false;
-    }
     // TODO: Make configurable
-    else if (only_one_condition) {
+    if (only_one_condition) {
       bool first_sample_missing = std::any_of(
         intensities.begin(), intensities.begin()+3, [](double x){ return x < 1e-3; }
       );
@@ -323,7 +317,14 @@ FLASHIda::FLASHIda(char* arg)
       else if (first_sample_missing || second_sample_missing) {
         return true;
       }
-    } 
+    }
+
+    // Reject spectra with missing / too-low reporter peaks
+    if (!only_one_condition && std::any_of(intensities.begin(), intensities.end(),
+                    [](double x){ return x < 1e-3; }))
+    {
+        return false;
+    }
 
     const double sample1_mean = std::accumulate(intensities.begin(),
                                                 intensities.begin() + 3, 0.0) / 3.0;
