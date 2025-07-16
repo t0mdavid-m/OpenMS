@@ -305,16 +305,31 @@ FLASHIda::FLASHIda(char* arg)
 
     // TODO: Make configurable
     if (only_one_condition) {
-      bool first_sample_missing = std::any_of(
+      bool first_sample_present = std::none_of(
         intensities.begin(), intensities.begin()+3, [](double x){ return x < 1e-3; }
       );
-      bool second_sample_missing = std::any_of(
+      bool second_sample_present = std::none_of(
         intensities.begin()+3, intensities.end(), [](double x){ return x < 1e-3; }
       );
+      bool first_sample_missing = std::all_of(
+        intensities.begin(), intensities.begin()+3, [](double x){ return x < 1e-3; }
+      );
+      bool second_sample_missing = std::all_of(
+        intensities.begin()+3, intensities.end(), [](double x){ return x < 1e-3; }
+      );
+      // No signal
       if (first_sample_missing && second_sample_missing) {
         return false;
       }
-      else if (first_sample_missing || second_sample_missing) {
+      // Both are incomplete
+      else if (!first_sample_present && !second_sample_present) {
+        return false;
+      }
+      // One signal
+      else if (
+        (first_sample_missing || second_sample_missing)
+        && (first_sample_present || second_sample_present)
+      ) {
         return true;
       }
     }
