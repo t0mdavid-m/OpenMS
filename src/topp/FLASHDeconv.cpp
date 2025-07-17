@@ -278,12 +278,14 @@ protected:
     fd.run(map, deconvolved_spectra, deconvolved_features);
     tols = fd.getTolerances();
     // collect statistics for information
+    Size idx = 0;
     for (auto& it : map)
     {
       uint ms_level = it.getMSLevel();
       if (per_ms_level_spec_count.find(ms_level) == per_ms_level_spec_count.end()) per_ms_level_spec_count[ms_level] = 0;
       per_ms_level_spec_count[ms_level]++;
-      scan_rt_map[it.getNativeID()] = it.getRT();
+      scan_rt_map[fd.getScanNumber(map, idx)] = it.getRT();
+      idx++;
     }
 
     for (auto& deconvolved_spectrum : deconvolved_spectra)
