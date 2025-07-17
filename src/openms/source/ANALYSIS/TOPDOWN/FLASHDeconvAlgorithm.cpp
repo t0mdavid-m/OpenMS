@@ -666,13 +666,6 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
     }
     double max_score = -1.0;
 
-    findPrecursorPeakGroupsFormIdaLog_(map, index, precursor_mz);
-
-    if (native_id_precursor_peak_group_map_.find(native_id) != native_id_precursor_peak_group_map_.end())
-    {
-      continue;
-    }
-
     for (int i = (int)survey_scans.size() - 1; i >= 0; i--)
     {
       auto precursor_spectrum = survey_scans[i];
@@ -709,7 +702,10 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
       if (native_id_precursor_peak_group_map_.find(native_id) != native_id_precursor_peak_group_map_.end()) { break; }
     }
 
-
+    if (native_id_precursor_peak_group_map_.find(native_id) == native_id_precursor_peak_group_map_.end())
+    {
+      findPrecursorPeakGroupsFormIdaLog_(map, index, precursor_mz);
+    }
   }
 }
 
