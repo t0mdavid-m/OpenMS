@@ -283,6 +283,7 @@ protected:
       uint ms_level = it.getMSLevel();
       if (per_ms_level_spec_count.find(ms_level) == per_ms_level_spec_count.end()) per_ms_level_spec_count[ms_level] = 0;
       per_ms_level_spec_count[ms_level]++;
+      scan_rt_map[it.getNativeID()] = it.getRT();
     }
 
     for (auto& deconvolved_spectrum : deconvolved_spectra)
@@ -293,7 +294,6 @@ protected:
 
       per_ms_level_deconv_spec_count[ms_level]++;
       per_ms_level_mass_count[ms_level] += (int)deconvolved_spectrum.size();
-      scan_rt_map[deconvolved_spectrum.getScanNumber()] = deconvolved_spectrum.getOriginalSpectrum().getRT();
     }
     for (auto& val : per_ms_level_deconv_spec_count)
     {
