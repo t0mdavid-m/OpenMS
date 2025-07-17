@@ -134,9 +134,11 @@ namespace OpenMS
         if (dspec.getPrecursorPeakGroup().getFeatureIndex() != 0) continue;
         auto pg = dspec.getPrecursorPeakGroup();
         
+        std::cout << "---" << std::endl;
         std::cout << "Scan Number: " << dspec.getScanNumber() << std::endl;
         std::cout << "Scan Number Precursor: " << pg.getScanNumber() << std::endl;
         double rt = scan_rt_map.at(pg.getScanNumber())/60.0;
+        std::cout << "###" << std::endl;
         const auto& [z, Z] = pg.getAbsChargeRange();
         pg.setFeatureIndex(++max_feature_index);
         dspec.setPrecursorPeakGroup(pg);
