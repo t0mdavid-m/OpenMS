@@ -41,26 +41,26 @@ namespace OpenMS
     std::stringstream precursor_ss;
     if (dspec.getOriginalSpectrum().getMSLevel() > 1)
     {
-      Precursor precursor = dspec.getOriginalSpectrum().getPrecursors()[0];
-      double loffset = precursor.getIsolationWindowLowerOffset();
-      double uoffest = precursor.getIsolationWindowUpperOffset();
-      double start_mz = loffset > 100.0 ? loffset : -loffset + precursor.getMZ();
-      double end_mz = uoffest > 100.0 ? uoffest : uoffest + precursor.getMZ();
       precursor_ss << dspec.getPrecursorScanNumber() << "\t"
                    << (dspec.getPrecursorPeakGroup().getFeatureIndex() == 0 ? "nan" : std::to_string(dspec.getPrecursorPeakGroup().getFeatureIndex()))
                    << "\t" << std::to_string(dspec.getPrecursor().getMZ()) << "\t" << dspec.getPrecursor().getIntensity() << "\t"
-                   << dspec.getPrecursor().getCharge() << "\t" << start_mz << "\t" << end_mz << "\t";
+                   << dspec.getPrecursor().getCharge() << "\t";
 
       if (dspec.getPrecursorPeakGroup().empty())
       {
-        precursor_ss << "nan\tnan\tnan\tnan\t";
+        precursor_ss << "nan\tnan\tnan\tnan\tnan\tnan\t";
         if (report_decoy) precursor_ss << "nan\t";
       }
       else
       {
+        Precursor precursor = dspec.getOriginalSpectrum().getPrecursors()[0];
+        double loffset = precursor.getIsolationWindowLowerOffset();
+        double uoffest = precursor.getIsolationWindowUpperOffset();
+        double start_mz = loffset > 100.0 ? loffset : -loffset + precursor.getMZ();
+        double end_mz = uoffest > 100.0 ? uoffest : uoffest + precursor.getMZ();
         precursor_ss << dspec.getPrecursorPeakGroup().getChargeSNR(dspec.getPrecursor().getCharge()) << "\t"
                      << std::to_string(dspec.getPrecursorPeakGroup().getMonoMass()) << "\t"
-                     << std::to_string(dspec.getPrecursorPeakGroup().getQscore()) << "\t" << dspec.getPrecursorPeakGroup().getQscore2D() << "\t";
+                     << std::to_string(dspec.getPrecursorPeakGroup().getQscore()) << "\t" << dspec.getPrecursorPeakGroup().getQscore2D() << "\t" << start_mz << "\t" << end_mz << "\t";
         if (report_decoy) { precursor_ss << dspec.getPrecursorPeakGroup().getQvalue() << "\t"; }
       }
     }
@@ -273,7 +273,7 @@ namespace OpenMS
               "SumIntensity\tMinCharge\tMaxCharge\t"
               "PeakCount\tPeakMZs\tPeakIntensities\tPeakCharges\tPeakMasses\tPeakIsotopeIndices\tPeakPPMErrors\t"
               "NoisePeakMZs\tNoisePeakIntensities\tNoisePeakCharges\tNoisePeakMasses\tNoisePeakIsotopeIndices\tNoisePeakPPMErrors\t"
-              "PrecursorScanNum\tPrecursorFeatureIndex\tPrecursorMz\tPrecursorIntensity\tPrecursorCharge\tPrecursorSNR\tPrecursorMonoisotopicMass\tPrecursorQscore\tPrecursorQscore2D\t";
+              "PrecursorScanNum\tPrecursorFeatureIndex\tPrecursorMz\tPrecursorIntensity\tPrecursorCharge\tPrecursorSNR\tPrecursorMonoisotopicMass\tPrecursorQscore\tPrecursorQscore2D\tPrecursorIsolationWindowStart\tPrecursorIsolationWindowEnd\t";
         if (report_decoy)
         {
           fs << "PrecursorQvalue\t";
