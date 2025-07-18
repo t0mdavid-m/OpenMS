@@ -41,10 +41,15 @@ namespace OpenMS
     std::stringstream precursor_ss;
     if (dspec.getOriginalSpectrum().getMSLevel() > 1)
     {
+      Precursor precursor = dspec.getOriginalSpectrum().getPrecursors()[0];
+      double loffset = precursor.getIsolationWindowLowerOffset();
+      double uoffest = precursor.getIsolationWindowUpperOffset();
+      double start_mz = loffset > 100.0 ? loffset : -loffset + precursor.getMZ();
+      double end_mz = uoffest > 100.0 ? uoffest : uoffest + precursor.getMZ();
       precursor_ss << dspec.getPrecursorScanNumber() << "\t"
                    << (dspec.getPrecursorPeakGroup().getFeatureIndex() == 0 ? "nan" : std::to_string(dspec.getPrecursorPeakGroup().getFeatureIndex()))
                    << "\t" << std::to_string(dspec.getPrecursor().getMZ()) << "\t" << dspec.getPrecursor().getIntensity() << "\t"
-                   << dspec.getPrecursor().getCharge() << "\t";
+                   << dspec.getPrecursor().getCharge() << "\t" << start_mz << "\t" << end_mz << "\t";
 
       if (dspec.getPrecursorPeakGroup().empty())
       {
@@ -309,7 +314,7 @@ namespace OpenMS
         fs << "RetentionTime\tMassCountInSpec\tAverageMass\tMonoisotopicMass\t"
               "SumIntensity\tMinCharge\tMaxCharge\t"
               "PeakCount\t"
-              "PrecursorScanNum\tPrecursorFeatureIndex\tPrecursorMz\tPrecursorIntensity\tPrecursorCharge\tPrecursorSNR\tPrecursorMonoisotopicMass\tPrecursorQscore\tPrecursorQscore2D\t";
+              "PrecursorScanNum\tPrecursorFeatureIndex\tPrecursorMz\tPrecursorIntensity\tPrecursorCharge\tPrecursorSNR\tPrecursorMonoisotopicMass\tPrecursorQscore\tPrecursorQscore2D\tPrecursorIsolationWindowStart\tPrecursorIsolationWindowEnd\t";
         if (report_decoy)
         {
           fs << "PrecursorQvalue\t";
