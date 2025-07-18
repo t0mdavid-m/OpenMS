@@ -241,6 +241,7 @@ namespace OpenMS
 
   void FLASHDeconvSpectrumFile::writeDeconvolvedMassesHeader(std::fstream& fs, const uint ms_level, const bool detail, const bool report_decoy)
   {
+    std::cout << "header???" << std::endl; 
     if (detail)
     {
       if (ms_level == 1)
