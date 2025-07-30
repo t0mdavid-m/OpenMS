@@ -509,6 +509,10 @@ FLASHIda::FLASHIda(char* arg)
     {
       for (int selection_phase = selection_phase_start; selection_phase <= selection_phase_end; selection_phase++)
       {
+        if (selection_phase > 0) {
+          break;
+        }
+
         // Iterate over candidates (sorted by qscore)
         for (const auto& pg : deconvolved_spectrum_)
         {
@@ -516,7 +520,7 @@ FLASHIda::FLASHIda(char* arg)
           if (selected_peak_groups_.size() >= mass_count) { break; }
 
           int charge = pg.getRepAbsCharge();
-          double qscore = std::min(.9, pg.getQscore());
+          double qscore = pg.getQscore();
           double mass = pg.getMonoMass();
 
           auto [mz1, mz2] = pg.getRepMzRange();
@@ -616,6 +620,7 @@ FLASHIda::FLASHIda(char* arg)
 
           if (qscore < qscore_threshold) { break; }
 
+          // TODO: Check
           if (pg.getChargeSNR(charge) < snr_threshold) { continue; }
 
           if (current_selected_mzs.find(center_mz) != current_selected_mzs.end()) // mz has been triggered
@@ -637,18 +642,25 @@ FLASHIda::FLASHIda(char* arg)
             }
           }
           
-          // decision made : peak group will be acquired
-
           // save mass acquisition
           all_mass_rt_map_[nominal_mass] = rt;
           
           // Compute total qscore
           auto inter = mass_qscore_map_.find(nominal_mass);
-          if (inter == mass_qscore_map_.end()) { mass_qscore_map_[nominal_mass] = 1 - qscore; }
-          else { mass_qscore_map_[nominal_mass] *= 1 - qscore; }
+          if (inter == mass_qscore_map_.end()) 
+          { 
+            mass_qscore_map_[nominal_mass] = qscore; 
+          }
+          else {
+            // If mass has previously been acquired with higher qscore, skip
+            if (qscore < mass_qscore_map_[nominal_mass]) {
+              continue;
+            } 
+            mass_qscore_map_[nominal_mass] = qscore; 
+          }
 
           // Add to exclusion list if neccessary
-          if (1 - mass_qscore_map_[nominal_mass] * tqscore_factor_for_exclusion > tqscore_threshold)
+          if (mass_qscore_map_[nominal_mass] > tqscore_threshold)
           {
             tqscore_exceeding_mass_rt_map_[nominal_mass] = rt;
             tqscore_exceeding_mz_rt_map_[integer_mz] = rt;
