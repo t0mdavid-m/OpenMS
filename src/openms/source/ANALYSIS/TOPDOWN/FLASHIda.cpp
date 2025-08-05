@@ -303,20 +303,28 @@ FLASHIda::FLASHIda(char* arg)
     intensities.reserve(mz_int.size());
     for (const auto& p2 : mz_int) intensities.push_back(p2.second);
 
+    for (auto intensity : intensities) {
+      std::cout << intensity << std::endl; 
+    }
+
     // TODO: Make configurable
     if (only_one_condition) {
       bool first_sample_present = std::none_of(
         intensities.begin(), intensities.begin()+3, [](double x){ return x < 1e-3; }
       );
+      std::cout << first_sample_present << std:endl;
       bool second_sample_present = std::none_of(
         intensities.begin()+3, intensities.end(), [](double x){ return x < 1e-3; }
       );
+      std::cout << second_sample_present << std:endl;
       bool first_sample_missing = std::all_of(
         intensities.begin(), intensities.begin()+3, [](double x){ return x < 1e-3; }
       );
+      std::cout << first_sample_missing << std:endl;
       bool second_sample_missing = std::all_of(
         intensities.begin()+3, intensities.end(), [](double x){ return x < 1e-3; }
       );
+      std::cout << second_sample_missing << std:endl;
       // No signal
       if (first_sample_missing && second_sample_missing) {
         return false;
