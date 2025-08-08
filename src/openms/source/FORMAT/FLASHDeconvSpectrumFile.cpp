@@ -43,7 +43,7 @@ namespace OpenMS
     {
       precursor_ss << dspec.getPrecursorScanNumber() << "\t"
                    << (dspec.getPrecursorPeakGroup().getFeatureIndex() == 0 ? "nan" : std::to_string(dspec.getPrecursorPeakGroup().getFeatureIndex()))
-                   << "\t" << std::to_string(dspec.getPrecursor().getMZ()) << "\t" << dspec.getPrecursor().getIntensity() << "\t" << dspec.getPrecursorPeakGroup().getChargeIntensity(dspec.getPrecursorPeakGroup().getRepAbsCharge()) << "\t"
+                   << "\t" << std::to_string(dspec.getPrecursor().getMZ()) << "\t" << dspec.getPrecursor().getIntensity() << "\t" << dspec.getPrecursorPeakGroup().getIntensity() << "\t"
                    << dspec.getPrecursor().getCharge() << "\t";
 
       if (dspec.getPrecursorPeakGroup().empty())
