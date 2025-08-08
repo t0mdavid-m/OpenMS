@@ -555,7 +555,7 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsFormIdaLog_(const MSExperiment
         precursor_log_mz_peak.is_positive = (int)smap[1] > 0;
         precursor_log_mz_peak.isotopeIndex = 0;
         precursor_log_mz_peak.mass = smap[0];
-        precursor_log_mz_peak.intensity = smap[6];
+        precursor_log_mz_peak.intensity = smap[5];
 
         PeakGroup precursor_pg(precursor_log_mz_peak.abs_charge, precursor_log_mz_peak.abs_charge, true);
         precursor_pg.push_back(precursor_log_mz_peak);
