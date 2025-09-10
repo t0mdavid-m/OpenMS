@@ -61,6 +61,7 @@ namespace OpenMS
         precursor_ss << dspec.getPrecursorPeakGroup().getChargeSNR(dspec.getPrecursor().getCharge()) << "\t"
                      << std::to_string(dspec.getPrecursorPeakGroup().getMonoMass()) << "\t"
                      << std::to_string(dspec.getPrecursorPeakGroup().getQscore()) << "\t" << dspec.getPrecursorPeakGroup().getQscore2D() << "\t" << start_mz << "\t" << end_mz << "\t";
+        precursor_ss << dspec.getPrecursor().getActivationEnergy() << "\t";
         if (report_decoy) { precursor_ss << dspec.getPrecursorPeakGroup().getQvalue() << "\t"; }
       }
     }
@@ -273,7 +274,7 @@ namespace OpenMS
               "SumIntensity\tMinCharge\tMaxCharge\t"
               "PeakCount\tPeakMZs\tPeakIntensities\tPeakCharges\tPeakMasses\tPeakIsotopeIndices\tPeakPPMErrors\t"
               "NoisePeakMZs\tNoisePeakIntensities\tNoisePeakCharges\tNoisePeakMasses\tNoisePeakIsotopeIndices\tNoisePeakPPMErrors\t"
-              "PrecursorScanNum\tPrecursorFeatureIndex\tPrecursorMz\tPrecursorIntensity\tPrecursorPGIntensity\tPrecursorCharge\tPrecursorSNR\tPrecursorMonoisotopicMass\tPrecursorQscore\tPrecursorQscore2D\tPrecursorIsolationWindowStart\tPrecursorIsolationWindowEnd\t";
+              "PrecursorScanNum\tPrecursorFeatureIndex\tPrecursorMz\tPrecursorIntensity\tPrecursorPGIntensity\tPrecursorCharge\tPrecursorSNR\tPrecursorMonoisotopicMass\tPrecursorQscore\tPrecursorQscore2D\tPrecursorIsolationWindowStart\tPrecursorIsolationWindowEnd\tActivationEnergy\t";
         if (report_decoy)
         {
           fs << "PrecursorQvalue\t";
