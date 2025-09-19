@@ -183,6 +183,27 @@ namespace OpenMS
     /// get all ID scores
     std::unordered_map<int, std::unordered_map<int, float>> getAllIDscores() const;
 
+    /// get best QScore across all charge states
+    float getBestQScore() const;
+
+    /// get charge state with best QScore
+    int getBestQScoreCharge() const;
+
+    /// get best IDScore for HCD=29 across all charge states
+    float getBestIDScoreHCD29() const;
+
+    /// get charge state with best IDScore for HCD=29
+    int getBestIDScoreHCD29Charge() const;
+
+    /// get best IDScore across all charge states and HCD values
+    float getBestIDScore() const;
+
+    /// get charge state with best IDScore (global maximum)
+    int getBestIDScoreCharge() const;
+
+    /// get HCD value with best IDScore (global maximum)
+    int getBestIDScoreHCD() const;
+
     /// get Q score
     double getQscore() const;
 

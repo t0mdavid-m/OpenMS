@@ -203,7 +203,9 @@ namespace OpenMS
       const auto& max_qscore_mz_range = pg.getRepMzRange();
       ss << pg.getSNR() << "\t" << pg.getChargeSNR(pg.getRepAbsCharge()) << "\t" << pg.getAvgPPMError() << "\t" << (pg.isPositive() ? pg.getRepAbsCharge() : -pg.getRepAbsCharge()) << "\t"
          << std::to_string(std::get<0>(max_qscore_mz_range)) << "\t" << std::to_string(std::get<1>(max_qscore_mz_range)) << "\t" << std::to_string(pg.getQscore()) << "\t"
-         << std::to_string(pg.getQscore2D()) << "\t" << std::to_string(pg.getAllIDscores()[pg.getRepAbsCharge()][29]);
+         << std::to_string(pg.getQscore2D()) << "\t" << std::to_string(pg.getAllIDscores()[pg.getRepAbsCharge()][29]) << "\t"
+         << std::to_string(pg.getBestQScore()) << "\t" << pg.getBestQScoreCharge() << "\t" << std::to_string(pg.getBestIDScoreHCD29()) << "\t"
+         << pg.getBestIDScoreHCD29Charge() << "\t" << std::to_string(pg.getBestIDScore()) << "\t" << pg.getBestIDScoreCharge() << "\t" << pg.getBestIDScoreHCD();
 
       if (report_decoy)
       {
@@ -256,7 +258,8 @@ namespace OpenMS
               "SumIntensity\tMinCharge\tMaxCharge\t"
               "PeakCount\tPeakMZs\tPeakIntensities\tPeakCharges\tPeakMasses\tPeakIsotopeIndices\tPeakPPMErrors\t"
               "NoisePeakMZs\tNoisePeakIntensities\tNoisePeakCharges\tNoisePeakMasses\tNoisePeakIsotopeIndices\tNoisePeakPPMErrors\t"
-              "IsotopeCosine\tChargeCosine\tChargeScore\tMassSNR\tChargeSNR\tAveragePPMError\tRepresentativeCharge\tRepresentativeMzStart\tRepresentativeMzEnd\tQscore\tQscore2D\tIDscore\t";
+              "IsotopeCosine\tChargeCosine\tChargeScore\tMassSNR\tChargeSNR\tAveragePPMError\tRepresentativeCharge\tRepresentativeMzStart\tRepresentativeMzEnd\tQscore\tQscore2D\tIDscore\t"
+              "BestQScore\tBestQScoreCharge\tBestIDScoreHCD29\tBestIDScoreHCD29Charge\tBestIDScore\tBestIDScoreCharge\tBestIDScoreHCD\t";
         if (report_decoy)
         {
           fs << "Qvalue\t";
@@ -279,7 +282,8 @@ namespace OpenMS
         {
           fs << "PrecursorQvalue\t";
         }
-        fs << "IsotopeCosine\tChargeCosine\tChargeScore\tMassSNR\tChargeSNR\tAveragePPMError\tRepresentativeCharge\tRepresentativeMzStart\tRepresentativeMzEnd\tQscore\tQscore2D\t";
+        fs << "IsotopeCosine\tChargeCosine\tChargeScore\tMassSNR\tChargeSNR\tAveragePPMError\tRepresentativeCharge\tRepresentativeMzStart\tRepresentativeMzEnd\tQscore\tQscore2D\tIDscore\t"
+              "BestQScore\tBestQScoreCharge\tBestIDScoreHCD29\tBestIDScoreHCD29Charge\tBestIDScore\tBestIDScoreCharge\tBestIDScoreHCD\t";
         if (report_decoy)
         {
           fs << "Qvalue\t";
@@ -299,7 +303,8 @@ namespace OpenMS
         fs << "RetentionTime\tMassCountInSpec\tAverageMass\tMonoisotopicMass\t"
               "SumIntensity\tMinCharge\tMaxCharge\t"
               "PeakCount\t"
-              "IsotopeCosine\tChargeCosine\tChargeScore\tMassSNR\tChargeSNR\tAveragePPMError\tRepresentativeCharge\tRepresentativeMzStart\tRepresentativeMzEnd\tQscore\tQscore2D\t";
+              "IsotopeCosine\tChargeCosine\tChargeScore\tMassSNR\tChargeSNR\tAveragePPMError\tRepresentativeCharge\tRepresentativeMzStart\tRepresentativeMzEnd\tQscore\tQscore2D\tIDscore\t"
+              "BestQScore\tBestQScoreCharge\tBestIDScoreHCD29\tBestIDScoreHCD29Charge\tBestIDScore\tBestIDScoreCharge\tBestIDScoreHCD\t";
         if (report_decoy)
         {
           fs << "Qvalue";
@@ -321,7 +326,8 @@ namespace OpenMS
         {
           fs << "PrecursorQvalue\t";
         }
-        fs << "IsotopeCosine\tChargeCosine\tChargeScore\tMassSNR\tChargeSNR\tAveragePPMError\tRepresentativeCharge\tRepresentativeMzStart\tRepresentativeMzEnd\tQscore\tQscore2D\t";
+        fs << "IsotopeCosine\tChargeCosine\tChargeScore\tMassSNR\tChargeSNR\tAveragePPMError\tRepresentativeCharge\tRepresentativeMzStart\tRepresentativeMzEnd\tQscore\tQscore2D\tIDscore\t"
+              "BestQScore\tBestQScoreCharge\tBestIDScoreHCD29\tBestIDScoreHCD29Charge\tBestIDScore\tBestIDScoreCharge\tBestIDScoreHCD\t";
         if (report_decoy)
         {
           fs << "Qvalue\t";
