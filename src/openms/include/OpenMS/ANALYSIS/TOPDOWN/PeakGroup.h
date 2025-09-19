@@ -177,6 +177,12 @@ namespace OpenMS
     /// get representative charge
     int getRepAbsCharge() const;
 
+    /// get all Q scores
+    std::unordered_map<int, float> getAllQscores() const;
+
+    /// get all ID scores
+    std::unordered_map<int, std::unordered_map<int, float>> getAllIDscores() const;
+
     /// get Q score
     double getQscore() const;
 
@@ -339,6 +345,8 @@ namespace OpenMS
     float charge_score_ = 0.f;
     /// quality score
     double qscore_ = .0;
+    std::unordered_map<int, float>  qscores_;
+    std::unordered_map<int, std::unordered_map<int, float>>  idscores_;
     /// quality score when considering correlation between masses within the same feature.
     double qscore2D_ = -1.0f;
     float avg_ppm_error_ = 0.f;

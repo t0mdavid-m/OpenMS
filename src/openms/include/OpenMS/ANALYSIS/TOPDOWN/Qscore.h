@@ -34,7 +34,9 @@ namespace OpenMS
     typedef FLASHHelperClasses::LogMzPeak LogMzPeak;
 
     /// get QScore for a peak group of specific abs_charge
-    static double getQscore(const PeakGroup* pg);
+    static std::unordered_map<int, float> getQscores(const PeakGroup* pg);
+
+    static std::unordered_map<int, std::unordered_map<int, float>> getIDscores(const PeakGroup* pg);
 
     static void writeAttCsvForQscoreTraining(const DeconvolvedSpectrum& deconvolved_spectrum, std::fstream& f);
 
@@ -42,7 +44,7 @@ namespace OpenMS
 
   private:
     /// convert a peak group to a feature vector for setQscore calculation
-    static std::vector<double> toFeatureVector_(const PeakGroup* pg);
+    static std::vector<double> toFeatureVector_(const PeakGroup* pg, int charge);
 
     static std::vector<double> weight_centroid_;
   };

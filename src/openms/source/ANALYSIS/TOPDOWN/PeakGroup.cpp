@@ -158,7 +158,9 @@ int PeakGroup::updateQscore(const std::vector<LogMzPeak>& noisy_peaks,
     if (getChargeSNR(abs_charge) > getChargeSNR(max_snr_abs_charge_)) { max_snr_abs_charge_ = abs_charge; }
   }
 
-  qscore_ = Qscore::getQscore(this);
+  qscores_ = Qscore::getQscores(this);
+  idscores_ = Qscore::getIDscores(this);
+  qscore_ = getAllQscores()[getRepAbsCharge()];
   return h_offset;
 }
 
@@ -874,6 +876,16 @@ float PeakGroup::getIsotopeCosine() const
 int PeakGroup::getRepAbsCharge() const
 {
   return max_snr_abs_charge_;
+}
+
+std::unordered_map<int, float> PeakGroup::getAllQscores() const
+{
+  return qscores_;
+}
+
+std::unordered_map<int, std::unordered_map<int, float>> PeakGroup::getAllIDscores() const
+{
+  return idscores_;
 }
 
 double PeakGroup::getQscore() const
