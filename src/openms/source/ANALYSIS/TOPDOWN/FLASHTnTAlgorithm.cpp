@@ -257,7 +257,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
 
     if(dspec.size() > max_node_cntr_)
     {
-      dspec.sortByQscore();
+      dspec.sortByQscore2D();
       std::vector<PeakGroup> filtered_peaks;
       filtered_peaks.reserve(max_node_cntr_);
       for (const auto& pg : dspec)

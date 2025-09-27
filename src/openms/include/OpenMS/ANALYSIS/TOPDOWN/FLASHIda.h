@@ -255,6 +255,9 @@ namespace OpenMS
 
     /// precursor SNR threshold
     double snr_threshold_ = 1;
+    bool use_idscore_ = false;
+    bool consider_all_Charge_states_ = false;
+    int hcd_energy_ = -1;
 
     /// mass tolerance
     DoubleList tol_;

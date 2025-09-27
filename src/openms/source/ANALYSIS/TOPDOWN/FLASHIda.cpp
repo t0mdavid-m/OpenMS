@@ -111,6 +111,11 @@ FLASHIda::FLASHIda(char* arg)
     sd_defaults.setValue("tol", inputs["tol"]);
     tol_ = std::vector<double>(inputs["tol"]);
 
+
+    use_idscore_ = inputs["IDScore"];
+    consider_all_Charge_states_ = inputs["AllCharges"];
+    hcd_energy_ = (int)inputs["HCDEnergy"];
+
     auto mass_count_double = inputs["max_mass_count"];
 
     for (double j : mass_count_double)
@@ -431,7 +436,20 @@ FLASHIda::FLASHIda(char* arg)
 
   void FLASHIda::filterPeakGroupsUsingMassExclusion_(const int ms_level, const double rt)
   {
-    deconvolved_spectrum_.sortByQscore();
+    if (use_idscore_ && consider_all_Charge_states_) {
+      deconvolved_spectrum_.sortByIDScoreAllCharges();
+    }
+    else if (use_idscore_ && !consider_all_Charge_states_) {
+      deconvolved_spectrum_.sortByIDScoreRepresentative();
+
+    }
+    else if (!use_idscore_ && consider_all_Charge_states_) {
+      deconvolved_spectrum_.sortByQScoreAllCharges();
+    }
+    else {
+      deconvolved_spectrum_.sortByQscore();
+    }
+    
     Size mass_count = (Size)mass_count_[ms_level - 1];
     trigger_charges.clear();
     trigger_charges.reserve(mass_count);
@@ -450,8 +468,8 @@ FLASHIda::FLASHIda(char* arg)
     std::unordered_map<int, double> new_mz_rt_map_;
     std::unordered_map<int, double> new_mass_rt_map_;
     std::unordered_map<int, double> new_all_mass_rt_map_;
-    std::unordered_map<int, double> new_mass_qscore_map_;
-    std::unordered_map<int, double> t_mass_qscore_map_;
+    std::unordered_map<int, double> new_mass_score_map_;
+    std::unordered_map<int, double> t_mass_score_map_;
 
     // exclusion mode
     if (targeting_mode_ == 2)
@@ -466,9 +484,9 @@ FLASHIda::FLASHIda(char* arg)
           double qscore = qscores[i];
           if (std::abs(rt - prt) < rt_window_)
           {
-            auto inter = t_mass_qscore_map_.find(nominal_mass);
-            if (inter == t_mass_qscore_map_.end()) { t_mass_qscore_map_[nominal_mass] = 1 - qscore; }
-            else { t_mass_qscore_map_[nominal_mass] *= 1 - qscore; }
+            auto inter = t_mass_score_map_.find(nominal_mass);
+            if (inter == t_mass_score_map_.end()) { t_mass_score_map_[nominal_mass] = 1 - qscore; }
+            else { t_mass_score_map_[nominal_mass] *= 1 - qscore; }
           }
         }
       }
@@ -497,12 +515,12 @@ FLASHIda::FLASHIda(char* arg)
     {
       if (rt - item.second > rt_window_) { continue; }
       new_all_mass_rt_map_[item.first] = item.second;
-      new_mass_qscore_map_[item.first] = mass_qscore_map_[item.first];
+      new_mass_score_map_[item.first] = mass_qscore_map_[item.first];
     }
     new_all_mass_rt_map_.swap(all_mass_rt_map_);
     std::unordered_map<int, double>().swap(new_all_mass_rt_map_);
-    new_mass_qscore_map_.swap(mass_qscore_map_);
-    std::unordered_map<int, double>().swap(new_mass_qscore_map_);
+    new_mass_score_map_.swap(mass_qscore_map_);
+    std::unordered_map<int, double>().swap(new_mass_score_map_);
 
     const int selection_phase_start = 0;
     const int selection_phase_end = 2; // inclusive
@@ -517,6 +535,8 @@ FLASHIda::FLASHIda(char* arg)
     {
       for (int selection_phase = selection_phase_start; selection_phase <= selection_phase_end; selection_phase++)
       {
+        // Currently we want to acquire without "fluff" 
+        // TODO: We can use this to squeeze out the final bit of performance
         if (selection_phase > 0) {
           break;
         }
@@ -549,8 +569,8 @@ FLASHIda::FLASHIda(char* arg)
           // Only triggered in exclusion mode
           if (iteration == 0)
           {
-            auto inter = t_mass_qscore_map_.find(nominal_mass);
-            if (inter != t_mass_qscore_map_.end()) { tqscore_factor_for_exclusion = t_mass_qscore_map_[nominal_mass]; }
+            auto inter = t_mass_score_map_.find(nominal_mass);
+            if (inter != t_mass_score_map_.end()) { tqscore_factor_for_exclusion = t_mass_score_map_[nominal_mass]; }
             if (1 - tqscore_factor_for_exclusion > tqscore_threshold) { continue; }
           }
 

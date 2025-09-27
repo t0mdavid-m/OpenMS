@@ -7,6 +7,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
+#include <algorithm>
 
 namespace OpenMS
 {
@@ -347,8 +348,56 @@ namespace OpenMS
     std::sort(peak_groups_.begin(), peak_groups_.end());
   }
 
-  void DeconvolvedSpectrum::sortByQscore()
+  void DeconvolvedSpectrum::sortByQscore2D()
   {
     std::sort(peak_groups_.begin(), peak_groups_.end(), [](const PeakGroup& p1, const PeakGroup& p2) { return p1.getQscore2D() > p2.getQscore2D(); });
   }
+
+  void DeconvolvedSpectrum::sortByQscore()
+  {
+    std::sort(peak_groups_.begin(), peak_groups_.end(), [](const PeakGroup& p1, const PeakGroup& p2) { return p1.getQscore() > p2.getQscore(); });
+  }
+
+  void DeconvolvedSpectrum::sortByQScoreAllCharges()
+  {
+    std::sort(peak_groups_.begin(), peak_groups_.end(), [](const PeakGroup& p1, const PeakGroup& p2) { return p1.getBestQScore() > p2.getBestQScore(); });
+  }
+
+  void DeconvolvedSpectrum::sortByIDScoreRepresentative()
+  {
+    std::sort(peak_groups_.begin(), peak_groups_.end(), [](const PeakGroup& p1, const PeakGroup& p2) {
+      int rep_charge1 = p1.getRepAbsCharge();
+      int rep_charge2 = p2.getRepAbsCharge();
+      
+      auto all_idscores1 = p1.getAllIDscores();
+      auto all_idscores2 = p2.getAllIDscores();
+      
+      float best_idscore1 = 0.0f;
+      float best_idscore2 = 0.0f;
+      
+      // Find best IDScore for representative charge in p1
+      auto charge_it1 = all_idscores1.find(rep_charge1);
+      if (charge_it1 != all_idscores1.end()) {
+        for (const auto& hcd_score : charge_it1->second) {
+          best_idscore1 = std::max(best_idscore1, hcd_score.second);
+        }
+      }
+      
+      // Find best IDScore for representative charge in p2
+      auto charge_it2 = all_idscores2.find(rep_charge2);
+      if (charge_it2 != all_idscores2.end()) {
+        for (const auto& hcd_score : charge_it2->second) {
+          best_idscore2 = std::max(best_idscore2, hcd_score.second);
+        }
+      }
+      
+      return best_idscore1 > best_idscore2;
+    });
+  }
+
+  void DeconvolvedSpectrum::sortByIDScoreAllCharges()
+  {
+    std::sort(peak_groups_.begin(), peak_groups_.end(), [](const PeakGroup& p1, const PeakGroup& p2) { return p1.getBestIDScore() > p2.getBestIDScore(); });
+  }
+
 } // namespace OpenMS

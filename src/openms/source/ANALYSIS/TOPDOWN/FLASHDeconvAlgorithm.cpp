@@ -318,7 +318,7 @@ void FLASHDeconvAlgorithm::runSpectralDeconvolution_(MSExperiment& map, std::vec
 #pragma omp section
           sd_signal_decoy_.performSpectrumDeconvolution(spec, scan_number, precursor_pg);
         }
-        deconvolved_spectrum.sortByQscore();
+        deconvolved_spectrum.sortByQscore2D();
 
         deconvolved_spectrum.reserve(deconvolved_spectrum.size() + sd_signal_decoy_.getDeconvolvedSpectrum().size()
                                      + sd_noise_decoy_.getDeconvolvedSpectrum().size());
