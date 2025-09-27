@@ -395,9 +395,29 @@ namespace OpenMS
     });
   }
 
+  void DeconvolvedSpectrum::sortByIDScoreRepresentative(int hcd_energy)
+  {
+    std::sort(peak_groups_.begin(), peak_groups_.end(), [hcd_energy](const PeakGroup& p1, const PeakGroup& p2) {
+      int rep_charge1 = p1.getRepAbsCharge();
+      int rep_charge2 = p2.getRepAbsCharge();
+      
+      float idscore1 = p1.getIDScoreForChargeAndHCD(rep_charge1, hcd_energy);
+      float idscore2 = p2.getIDScoreForChargeAndHCD(rep_charge2, hcd_energy);
+      
+      return idscore1 > idscore2;
+    });
+  }
+
   void DeconvolvedSpectrum::sortByIDScoreAllCharges()
   {
     std::sort(peak_groups_.begin(), peak_groups_.end(), [](const PeakGroup& p1, const PeakGroup& p2) { return p1.getBestIDScore() > p2.getBestIDScore(); });
+  }
+
+  void DeconvolvedSpectrum::sortByIDScoreAllCharges(int hcd_energy)
+  {
+    std::sort(peak_groups_.begin(), peak_groups_.end(), [hcd_energy](const PeakGroup& p1, const PeakGroup& p2) {
+      return p1.getBestIDScoreForHCD(hcd_energy) > p2.getBestIDScoreForHCD(hcd_energy);
+    });
   }
 
 } // namespace OpenMS

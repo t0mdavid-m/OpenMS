@@ -189,11 +189,14 @@ namespace OpenMS
     /// get charge state with best QScore
     int getBestQScoreCharge() const;
 
-    /// get best IDScore for HCD=29 across all charge states
-    float getBestIDScoreHCD29() const;
+    /// get IDScore for specific charge state and HCD energy
+    float getIDScoreForChargeAndHCD(int abs_charge, int hcd_energy) const;
 
-    /// get charge state with best IDScore for HCD=29
-    int getBestIDScoreHCD29Charge() const;
+    /// get best IDScore across all charge states for specific HCD energy
+    float getBestIDScoreForHCD(int hcd_energy) const;
+
+    /// get charge state with best IDScore for specific HCD energy
+    int getBestIDScoreChargeForHCD(int hcd_energy) const;
 
     /// get best IDScore across all charge states and HCD values
     float getBestIDScore() const;

@@ -204,8 +204,8 @@ namespace OpenMS
       ss << pg.getSNR() << "\t" << pg.getChargeSNR(pg.getRepAbsCharge()) << "\t" << pg.getAvgPPMError() << "\t" << (pg.isPositive() ? pg.getRepAbsCharge() : -pg.getRepAbsCharge()) << "\t"
          << std::to_string(std::get<0>(max_qscore_mz_range)) << "\t" << std::to_string(std::get<1>(max_qscore_mz_range)) << "\t" << std::to_string(pg.getQscore()) << "\t"
          << std::to_string(pg.getQscore2D()) << "\t" << std::to_string(pg.getAllIDscores()[pg.getRepAbsCharge()][29]) << "\t"
-         << std::to_string(pg.getBestQScore()) << "\t" << pg.getBestQScoreCharge() << "\t" << std::to_string(pg.getBestIDScoreHCD29()) << "\t"
-         << pg.getBestIDScoreHCD29Charge() << "\t" << std::to_string(pg.getBestIDScore()) << "\t" << pg.getBestIDScoreCharge() << "\t" << pg.getBestIDScoreHCD();
+         << std::to_string(pg.getBestQScore()) << "\t" << pg.getBestQScoreCharge() << "\t" << std::to_string(pg.getBestIDScoreForHCD(29)) << "\t"
+         << pg.getBestIDScoreChargeForHCD(29) << "\t" << std::to_string(pg.getBestIDScore()) << "\t" << pg.getBestIDScoreCharge() << "\t" << pg.getBestIDScoreHCD();
 
       if (report_decoy)
       {

@@ -1255,85 +1255,62 @@ float PeakGroup::getBestQScore() const
   return (it != qscores_.end()) ? it->second : 0.0f;
 }
 
-int PeakGroup::getBestIDScoreHCD29Charge() const
+float PeakGroup::getIDScoreForChargeAndHCD(int abs_charge, int hcd_energy) const
 {
-  if (idscores_.empty())
-  {
+  auto charge_it = idscores_.find(abs_charge);
+  if (charge_it == idscores_.end()) {
+    return 0.0f;
+  }
+  
+  auto hcd_it = charge_it->second.find(hcd_energy);
+  return (hcd_it != charge_it->second.end()) ? hcd_it->second : 0.0f;
+}
+
+float PeakGroup::getBestIDScoreForHCD(int hcd_energy) const
+{
+  if (idscores_.empty()) {
+    return 0.0f;
+  }
+  
+  float max_score = 0.0f;
+  for (const auto& [charge, hcd_map] : idscores_) {
+    auto hcd_it = hcd_map.find(hcd_energy);
+    if (hcd_it != hcd_map.end()) {
+      max_score = std::max(max_score, hcd_it->second);
+    }
+  }
+  return max_score;
+}
+
+int PeakGroup::getBestIDScoreChargeForHCD(int hcd_energy) const
+{
+  if (idscores_.empty()) {
     return -1;
   }
   
   float max_score = 0.0f;
   std::vector<int> best_charges;
   
-  // Find charges with maximum IDScore for HCD=29
-  for (const auto& [charge, hcd_map] : idscores_)
-  {
-    auto hcd29_it = hcd_map.find(29);
-    if (hcd29_it != hcd_map.end())
-    {
-      float score = hcd29_it->second;
-      if (score > max_score)
-      {
+  // Find charges with maximum IDScore for specified HCD
+  for (const auto& [charge, hcd_map] : idscores_) {
+    auto hcd_it = hcd_map.find(hcd_energy);
+    if (hcd_it != hcd_map.end()) {
+      float score = hcd_it->second;
+      if (score > max_score) {
         max_score = score;
         best_charges.clear();
         best_charges.push_back(charge);
-      }
-      else if (score == max_score && score > 0.0f)
-      {
+      } else if (score == max_score && score > 0.0f) {
         best_charges.push_back(charge);
       }
     }
   }
   
-  if (best_charges.empty() || max_score == 0.0f)
-  {
+  if (best_charges.empty() || max_score == 0.0f) {
     return -1;
   }
   
-  // Handle ties by selecting charge closest to representative charge
-  if (best_charges.size() == 1)
-  {
-    return best_charges[0];
-  }
-  
-  int rep_charge = getRepAbsCharge();
-  if (rep_charge <= 0)
-  {
-    return best_charges[0]; // Fallback if no representative charge available
-  }
-  
-  int best_charge = best_charges[0];
-  int min_distance = std::abs(best_charges[0] - rep_charge);
-  
-  for (int charge : best_charges)
-  {
-    int distance = std::abs(charge - rep_charge);
-    if (distance < min_distance)
-    {
-      min_distance = distance;
-      best_charge = charge;
-    }
-  }
-  
-  return best_charge;
-}
-
-float PeakGroup::getBestIDScoreHCD29() const
-{
-  int best_charge = getBestIDScoreHCD29Charge();
-  if (best_charge == -1)
-  {
-    return 0.0f;
-  }
-  
-  auto charge_it = idscores_.find(best_charge);
-  if (charge_it == idscores_.end())
-  {
-    return 0.0f;
-  }
-  
-  auto hcd29_it = charge_it->second.find(29);
-  return (hcd29_it != charge_it->second.end()) ? hcd29_it->second : 0.0f;
+  return best_charges[0];
 }
 
 int PeakGroup::getBestIDScoreCharge() const
