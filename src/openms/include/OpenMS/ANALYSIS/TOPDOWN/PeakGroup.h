@@ -195,6 +195,9 @@ namespace OpenMS
     /// get best IDScore across all charge states for specific HCD energy
     float getBestIDScoreForHCD(int hcd_energy) const;
 
+    /// get best IDScore for specific charge across all HCD values
+    float getBestIDScoreForCharge(int abs_charge) const;
+
     /// get charge state with best IDScore for specific HCD energy
     int getBestIDScoreChargeForHCD(int hcd_energy) const;
 

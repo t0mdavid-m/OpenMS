@@ -1282,6 +1282,24 @@ float PeakGroup::getBestIDScoreForHCD(int hcd_energy) const
   return max_score;
 }
 
+float PeakGroup::getBestIDScoreForCharge(int abs_charge) const
+{
+  if (idscores_.empty()) {
+    return 0.0f;
+  }
+  
+  auto charge_it = idscores_.find(abs_charge);
+  if (charge_it == idscores_.end()) {
+    return 0.0f;
+  }
+  
+  float max_score = 0.0f;
+  for (const auto& [hcd_energy, score] : charge_it->second) {
+    max_score = std::max(max_score, score);
+  }
+  return max_score;
+}
+
 int PeakGroup::getBestIDScoreChargeForHCD(int hcd_energy) const
 {
   if (idscores_.empty()) {

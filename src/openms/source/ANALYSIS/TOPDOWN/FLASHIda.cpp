@@ -554,36 +554,40 @@ FLASHIda::FLASHIda(char* arg)
           if (selected_peak_groups_.size() >= mass_count) { break; }
 
           int charge;
+          int hcd = hcd_energy_;
           double score;
           
           if (use_idscore_ && consider_all_Charge_states_ && hcd_energy_ < 0) {
-            score = pg.getBestIDScore();
             charge = pg.getBestIDScoreCharge();
+            score = pg.getBestIDScore();
+            hcd = pg.getBestIDScoreHCD();
           }
           else if (use_idscore_ && consider_all_Charge_states_) {
-            score = pg.getBestIDScoreForHCD(hcd_energy_);
             charge = pg.getBestIDScoreChargeForHCD(hcd_energy_);
+            score = pg.getBestIDScoreForHCD(hcd_energy_);
           }
-          // else if (use_idscore_ && !consider_all_Charge_states_ && hcd_energy_ < 0) {
-          //   score = pg.getIDScoreForChargeAndHCD
-          //   deconvolved_spectrum_.sortByIDScoreRepresentative();
-          // }
-          // else if (use_idscore_ && !consider_all_Charge_states_) {
-          //   deconvolved_spectrum_.sortByIDScoreRepresentative(hcd_energy_);
-          // }
-          // else if (!use_idscore_ && consider_all_Charge_states_) {
-          //   deconvolved_spectrum_.sortByQScoreAllCharges();
-          // }
-          // else {
-          //   score = pg.getQscore();
-          //   charge = pg.getRepAbsCharge();
-          // }
+          else if (use_idscore_ && !consider_all_Charge_states_ && hcd_energy_ < 0) {
+            charge = pg.getRepAbsCharge();
+            score = pg.getBestIDScoreForCharge(charge);
+          }
+          else if (use_idscore_ && !consider_all_Charge_states_) {
+            charge = pg.getRepAbsCharge();
+            score = pg.getIDScoreForChargeAndHCD(charge, hcd_energy_);
+          }
+          else if (!use_idscore_ && consider_all_Charge_states_) {
+            charge = pg.getBestQScoreCharge();
+            score = pg.getBestQScore();
+          }
+          else {
+            charge = pg.getRepAbsCharge();
+            score = pg.getQscore();
+          }
           
           
           
           double mass = pg.getMonoMass();
 
-          auto [mz1, mz2] = pg.getRepMzRange();
+          auto [mz1, mz2] = pg.getMzRange(charge);
 
           double center_mz = (mz1 + mz2) / 2.0;
 
