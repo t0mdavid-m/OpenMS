@@ -145,6 +145,7 @@ namespace OpenMS
                              double *ppm_errors,
                              double *precursor_intensities,
                              double *peakgroup_intensities,
+                             int* hcs,
                              int *ids);
     /**
            @brief Remove a given precursor from the exclusion list by id (needed for FAIMS)
@@ -219,6 +220,8 @@ namespace OpenMS
     DeconvolvedSpectrum selected_peak_groups_;
     /// peakGroup charges to be triggered
     std::vector<int> trigger_charges;
+    std::vector<int> trigger_hcds;
+    std::vector<float> trigger_scores;
     /// peakGroup isolation window ranges
     std::vector<double> trigger_left_isolation_mzs_;
     std::vector<double> trigger_right_isolation_mzs_;

@@ -457,7 +457,11 @@ FLASHIda::FLASHIda(char* arg)
     
     Size mass_count = (Size)mass_count_[ms_level - 1];
     trigger_charges.clear();
+    trigger_hcds.clear();
+    trigger_scores.clear();
     trigger_charges.reserve(mass_count);
+    trigger_hcds.reserve(mass_count);
+    trigger_scores.reserve(mass_count);
     trigger_left_isolation_mzs_.clear();
     trigger_left_isolation_mzs_.reserve(mass_count);
     trigger_right_isolation_mzs_.clear();
@@ -554,8 +558,8 @@ FLASHIda::FLASHIda(char* arg)
           if (selected_peak_groups_.size() >= mass_count) { break; }
 
           int charge;
-          int hcd = hcd_energy_;
           double score;
+          int hcd = hcd_energy_;
           
           if (use_idscore_ && consider_all_Charge_states_ && hcd_energy_ < 0) {
             charge = pg.getBestIDScoreCharge();
@@ -569,6 +573,7 @@ FLASHIda::FLASHIda(char* arg)
           else if (use_idscore_ && !consider_all_Charge_states_ && hcd_energy_ < 0) {
             charge = pg.getRepAbsCharge();
             score = pg.getBestIDScoreForCharge(charge);
+            hcd = pg.getBestHCDForCharge(charge);
           }
           else if (use_idscore_ && !consider_all_Charge_states_) {
             charge = pg.getRepAbsCharge();
@@ -582,8 +587,6 @@ FLASHIda::FLASHIda(char* arg)
             charge = pg.getRepAbsCharge();
             score = pg.getQscore();
           }
-          
-          
           
           double mass = pg.getMonoMass();
 
@@ -708,28 +711,42 @@ FLASHIda::FLASHIda(char* arg)
           
           // save mass acquisition
           all_mass_rt_map_[nominal_mass] = rt;
-          
-          // Compute total qscore
-          auto inter = mass_qscore_map_.find(nominal_mass);
-          if (inter == mass_qscore_map_.end()) 
-          { 
-            mass_qscore_map_[nominal_mass] = score; 
+
+          if (!use_idscore_) {
+            // Compute total qscore
+            auto inter = mass_qscore_map_.find(nominal_mass);
+            if (inter == mass_qscore_map_.end()) 
+            { 
+              mass_qscore_map_[nominal_mass] = score; 
+            }
+            else {
+              // If mass has previously been acquired with higher qscore, skip
+              if (score < mass_qscore_map_[nominal_mass]) {
+                continue;
+              } 
+              mass_qscore_map_[nominal_mass] = score; 
+            }
+
+            // Add to exclusion list if neccessary
+            if (mass_qscore_map_[nominal_mass] > tqscore_threshold)
+            {
+              tqscore_exceeding_mass_rt_map_[nominal_mass] = rt;
+              tqscore_exceeding_mz_rt_map_[integer_mz] = rt;
+            }
           }
           else {
-            // If mass has previously been acquired with higher qscore, skip
-            if (score < mass_qscore_map_[nominal_mass]) {
-              continue;
-            } 
-            mass_qscore_map_[nominal_mass] = score; 
-          }
+            // Compute total qscore
+            auto inter = mass_qscore_map_.find(nominal_mass);
+            if (inter == mass_qscore_map_.end()) { mass_qscore_map_[nominal_mass] = 1 - score; }
+            else { mass_qscore_map_[nominal_mass] *= 1 - score; }
 
-          // Add to exclusion list if neccessary
-          if (mass_qscore_map_[nominal_mass] > tqscore_threshold)
-          {
-            tqscore_exceeding_mass_rt_map_[nominal_mass] = rt;
-            tqscore_exceeding_mz_rt_map_[integer_mz] = rt;
+            // Add to exclusion list if neccessary
+            if (1 - mass_qscore_map_[nominal_mass] * tqscore_factor_for_exclusion > tqscore_threshold)
+            {
+              tqscore_exceeding_mass_rt_map_[nominal_mass] = rt;
+              tqscore_exceeding_mz_rt_map_[integer_mz] = rt;
+            }
           }
-
 
           if (targeting_mode_ == 4 && charges != nullptr) {
             auto it = std::find(charges->begin(), charges->end(), charge);
@@ -747,6 +764,8 @@ FLASHIda::FLASHIda(char* arg)
 
           selected_peak_groups_.push_back(pg);
           trigger_charges.push_back(charge);
+          trigger_hcds.push_back(hcd);
+          trigger_scores.push_back(score);
 
           trigger_left_isolation_mzs_.push_back(mz1);
           trigger_right_isolation_mzs_.push_back(mz2);
@@ -851,6 +870,7 @@ FLASHIda::FLASHIda(char* arg)
                                      double* ppm_errors,
                                      double* precursor_intensities,
                                      double* peakgroup_intensities,
+                                     int* hcds,
                                      int* ids)
   {
     // std::sort(selected_peak_groups_.begin(), selected_peak_groups_.end(), QscoreComparator_);
@@ -867,7 +887,7 @@ FLASHIda::FLASHIda(char* arg)
       wstart[i] = trigger_left_isolation_mzs_[i]; // std::get<0>(mz_range) - optimal_window_margin_;
       wend[i] = trigger_right_isolation_mzs_[i];  // std::get<1>(mz_range) + optimal_window_margin_;
 
-      qscores[i] = Qscore::getQscores(&peakgroup)[charges[i]];
+      qscores[i] = trigger_scores[i];
       mono_masses[i] = peakgroup.getMonoMass();
       chare_cos[i] = peakgroup.getChargeIsotopeCosine(charges[i]);
       charge_snrs[i] = peakgroup.getChargeSNR(charges[i]);
@@ -877,6 +897,7 @@ FLASHIda::FLASHIda(char* arg)
       ppm_errors[i] = peakgroup.getAvgPPMError();
       peakgroup_intensities[i] = peakgroup.getIntensity();
       precursor_intensities[i] = peakgroup.getChargeIntensity(charges[i]);
+      hcds[i] = trigger_hcds[i];
       ids[i] = trigger_ids_[i];
     }
   }

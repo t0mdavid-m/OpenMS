@@ -1475,4 +1475,34 @@ float PeakGroup::getBestIDScore() const
   return (hcd_it != charge_it->second.end()) ? hcd_it->second : 0.0f;
 }
 
+int PeakGroup::getBestHCDForCharge(int abs_charge) const
+{
+  if (idscores_.empty()) {
+    return -1;
+  }
+  
+  auto charge_it = idscores_.find(abs_charge);
+  if (charge_it == idscores_.end()) {
+    return -1;
+  }
+  
+  float max_score = -1.0f;
+  std::vector<int> best_hcds;
+  
+  // Find HCD values with maximum IDScore for specified charge
+  for (const auto& [hcd, score] : charge_it->second) {
+    if (score > max_score) {
+      max_score = score;
+      best_hcds.clear();
+      best_hcds.push_back(hcd);
+    }
+  }
+  
+  if (best_hcds.empty()) {
+    return -1;
+  }
+
+  return best_hcds[0];
+}
+
 } // namespace OpenMS
