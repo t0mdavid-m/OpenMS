@@ -88,6 +88,7 @@ namespace OpenMS
                                                     double *ppm_errors,
                                                     double *precursor_intensities,
                                                     double *peakgroup_intensities,
+                                                    int *hcds,
                                                     int *ids);
 
   // bridges removeFromExclusionList in FLASHida class to C# FLASHIda side

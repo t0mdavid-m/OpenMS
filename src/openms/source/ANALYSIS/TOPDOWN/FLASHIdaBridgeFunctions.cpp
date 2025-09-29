@@ -91,6 +91,7 @@ namespace OpenMS
                            double *ppm_errors,
                            double *precursor_intensities,
                            double *peakgroup_intensities,
+                           int *hcds,
                            int *ids
   )
   {
@@ -106,6 +107,7 @@ namespace OpenMS
                                    charge_snrs, iso_cos, snrs, charge_scores, ppm_errors,
                                    precursor_intensities,
                                    peakgroup_intensities,
+                                   hcds,
                                    ids);
     }
   }

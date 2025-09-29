@@ -145,7 +145,7 @@ namespace OpenMS
                              double *ppm_errors,
                              double *precursor_intensities,
                              double *peakgroup_intensities,
-                             int* hcs,
+                             int* hcds,
                              int *ids);
     /**
            @brief Remove a given precursor from the exclusion list by id (needed for FAIMS)
