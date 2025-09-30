@@ -111,7 +111,9 @@ FLASHIda::FLASHIda(char* arg)
     sd_defaults.setValue("tol", inputs["tol"]);
     tol_ = std::vector<double>(inputs["tol"]);
 
-
+    std::cout << inputs["IDScore"][0] << std::endl;
+    std::cout << inputs["AllCharges"][0] << std::endl;
+    std::cout << inputs["HCDEnergy"][0] << std::endl;
     use_idscore_ = (bool)inputs["IDScore"][0];
     consider_all_Charge_states_ = (bool)inputs["AllCharges"][0];
     hcd_energy_ = (int)inputs["HCDEnergy"][0];
