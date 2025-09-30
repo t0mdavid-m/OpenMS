@@ -62,7 +62,7 @@ FLASHIda::FLASHIda(char* arg)
     std::unordered_map<std::string, std::vector<double>> inputs;
     std::vector<String> log_files;
     std::vector<String> out_files; /// add tsv for exclusion list in the future.
-    std::cout << 'debug1' << std::endl;
+    std::cout << "debug1" << std::endl;
     char* token = std::strtok(arg, " ");
     std::cout << token << std::endl;
     std::string key;
