@@ -21,7 +21,7 @@
 namespace OpenMS
 {
 /**
-@brief De novo sequence tag finding algorithm for Top Down proteomics. The sequence tags are
+@brief De novo sequence tag finding and database matching algorithm for Top Down proteomics. The sequence tags are
  generated on deconvolved spectrum (DeconvolvedSpectrum instance) quickly in the descending order of
  scores. The typical length of a tag ranges from 3 to 5 (user specified) and the tags are used to
  filter out protein candidates from the input fasta entries.
@@ -55,16 +55,22 @@ public:
   void run(const DeconvolvedSpectrum& deconvolved_spectrum, double ppm);
 
   /**
-   *@brief  Match the tags against protein sequences in the input fasta entry.
+   *@brief Match the tags against protein sequences.
    * The maximum modification mass is used to skip protein sequences that do not match with
    * tag flanking masses.
-   * @param fasta_entry fasta entries from the input proteome database in fasta format
+   * @param hits protein hits to search against
    * @param deconvolved_spectrum deconvolved spectrum from FLASHDeconv
+   * @param spec_vec
+   * @param vec_pro vector of protein prefix masses
+   * @param rev_vec_pro vector of protein suffix masses
    * @param max_mod_mass maximum modification mass (a positive number)
    */
-  void runMatching(const std::vector<FASTAFile::FASTAEntry>& fasta_entry,
-                   const DeconvolvedSpectrum& deconvolved_spectrum,
-                   double max_mod_mass = 0);
+  static void runMatching(std::vector<ProteinHit>& hits,
+                          const DeconvolvedSpectrum& deconvolved_spectrum,
+                          const std::vector<int> spec_vec,
+                          const std::vector<std::unordered_set<int>>& vec_pro,
+                          const std::vector<std::unordered_set<int>>& rev_vec_pro,
+                          const double max_mod_mass = 0);
 
   /**
    * @brief fill tags with the length of @p tag_length in @p tags
@@ -75,7 +81,6 @@ public:
 
   /// get the node score from peakgroup
   static int getNodeScore(const PeakGroup& peak_group);
-
 
   /**
   * Fill matched protein sequence positions and corresponding flankiing masses
@@ -91,22 +96,6 @@ public:
                                                       double flanking_mass_tol,
                                                       const String& seq,
                                                       const FLASHHelperClasses::Tag& tag);
-
-  /**
-   * fill the protein hits, up to @p max_target_count hits. The hits are selected
-   * from the high to low scoring ones.
-   * After collecting max_target_count hits, if more hits are found with the same score,
-   * they are also filled.
-   * @param hits
-   * @param max_target_count
-   */
-  void fillProteinHits(std::vector<ProteinHit>& hits, int max_target_count) const;
-
-  /// get decoy factor for FDR estimation; decoy factor is the size ratio between target and decoy.
-  double getDecoyFactor() const
-  {
-    return decoy_factor_;
-  }
 
   /// maximum node score for tag generation and extension
   const static int max_node_score = 8;
@@ -142,12 +131,11 @@ private:
   Size getVertex_(int index, int path_score, int level, int iso_level, int gap_level) const;
   int getIndex_(Size vertex) const;
 
-  void getScoreAndMatchCount_(const std::vector<int>& spec_vec,
-                              const boost::dynamic_bitset<>& pro_vec,
-                              //const boost::dynamic_bitset<>& mask_pro_vec,
-                              const std::set<int>& spec_pro_diffs,
+  static void getScoreAndMatchCount_(const std::vector<int>& spec_vec,
+                              const std::unordered_set<int>& pro_vec,
+                              const std::vector<int>& spec_pro_diffs,
                               const std::vector<int>& spec_scores,
-                              int& max_score, int& match_cntr) const;
+                              int& max_score);
 
 
   void updateTagSet_(std::set<FLASHHelperClasses::Tag>& tag_set,
@@ -158,20 +146,14 @@ private:
                      int scan,
                      double ppm, int mode);
 
-  //static std::vector<boost::dynamic_bitset<>> vectorized_fasta_entry_, rev_vectorized_fasta_entry_;
-  //static std::vector<std::map<int, double>> mass_map_, rev_mass_map_;
-
-  static void vectorizeFasta_(const std::vector<FASTAFile::FASTAEntry>& fasta_entry, bool reverse);
-
   static Size find_with_X_(const std::string_view& A, const String& B, Size pos = 0);
 
-  std::set<const Residue*> aas_ = ResidueDB::getInstance()->getResidues("Natural20");
+  std::set<const Residue*> aas_ = ResidueDB::getInstance()->getResidues("Natural19WithoutI");
   std::map<double, std::vector<Residue>> aa_mass_map_;
   std::map<double, std::vector<std::vector<Residue>>> gap_mass_map_;
   std::map<int, std::map<int, std::vector<String>>> edge_aa_map_;
 
   std::vector<FLASHHelperClasses::Tag> tags_; // from scan to tags
-  std::vector<ProteinHit> protein_hits_;
 
   std::set<double> common_shifts_;
   std::set<double> n_term_shifts_;
@@ -179,7 +161,7 @@ private:
 
   std::map<String, std::set<Size>> indexed_fasta_;
   bool consider_diff_ion_jumps_ = false;
-  std::vector<Size> max_tag_counts_ {0, 0, 0, 100, 500, 1000}; // tag count for length 0, 1, 2, 3, 4, 5
+  std::vector<Size> max_tag_counts_ {0, 0, 0, 50, 100, 200}; // tag count for length 0, 1, 2, 3, 4, 5
 
   int min_tag_length_ = 0;
   int max_tag_length_ = 0;
@@ -188,8 +170,6 @@ private:
   int min_path_score_ = 0;
   int max_gap_count_ = 0;
   int max_aa_in_gap_ = 2;
-  int min_cov_aa_ = 3;
-  double decoy_factor_ = -1;
   double max_edge_mass_ = 0;
 };
 } // namespace OpenMS

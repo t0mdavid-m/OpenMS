@@ -1,11 +1,11 @@
-// Copyright (c) 2002-present, The OpenMS Team -- EKU Tuebingen, ETH Zurich, and FU Berlin
+// Copyright (c) 2002-present, OpenMS Inc. -- EKU Tuebingen, ETH Zurich, and FU Berlin
 // SPDX-License-Identifier: BSD-3-Clause
 //
 // --------------------------------------------------------------------------
 // $Maintainer: Kyowon Jeong, Jihyung Kim $
 // $Authors: Kyowon Jeong, Jihyung Kim $
 // --------------------------------------------------------------------------
-// #define TRAIN_OUT  //
+//#define TRAIN_OUT  //
 //#define DEEP_LEARNING
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvAlgorithm.h>
@@ -15,6 +15,9 @@
 #include <OpenMS/FORMAT/FileTypes.h>
 #include <OpenMS/FORMAT/MzMLFile.h>
 #include <QFileInfo>
+#ifdef DEEP_LEARNING
+  #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroupScoring.h>
+#endif
 #ifdef TRAIN_OUT
   #include <OpenMS/ANALYSIS/TOPDOWN/Qscore.h>
 #endif
@@ -107,18 +110,6 @@ protected:
                         "Output msalign (TopFD and ProMex compatible) file for MS2 deconvolved spectra. Ensure filename ends with ms2.msalign for TopPIC GUI compatibility (e.g., result_ms2.msalign; refer to TopPIC input formats).",
                         false, true);
     setValidFormats_("out_msalign2", ListUtils::create<String>("msalign"), false);
-    //
-    //    registerOutputFile_("out_msalign3", "<file>", "",
-    //                        "Output msalign (topFD and ProMex compatible) file containing MS3 deconvolved spectra."
-    //                        " The file name should end with ms3.msalign to be able to be recognized by TopPIC GUI. ",
-    //                        false);
-    //    setValidFormats_("out_msalign3", ListUtils::create<String>("msalign"), false);
-    //
-    //    registerOutputFile_("out_msalign4", "<file>", "",
-    //                        "Output msalign (topFD and ProMex compatible) file containing MS4 deconvolved spectra."
-    //                        " The file name should end with ms4.msalign to be able to be recognized by TopPIC GUI. ",
-    //                        false);
-    //    setValidFormats_("out_msalign4", ListUtils::create<String>("msalign"), false);
 
     registerOutputFile_("out_feature1", "<file>", "",
                         "Output feature file (TopFD compatible) for MS1 spectra. It is needed for TopPIC feature intensity output (refer to TopPIC input formats).",
@@ -278,24 +269,25 @@ protected:
     fd.run(map, deconvolved_spectra, deconvolved_features);
     tols = fd.getTolerances();
     // collect statistics for information
-    Size idx = 0;
     for (auto& it : map)
     {
       uint ms_level = it.getMSLevel();
       if (per_ms_level_spec_count.find(ms_level) == per_ms_level_spec_count.end()) per_ms_level_spec_count[ms_level] = 0;
       per_ms_level_spec_count[ms_level]++;
-      scan_rt_map[fd.getScanNumber(map, idx)] = it.getRT();
-      idx++;
     }
 
     for (auto& deconvolved_spectrum : deconvolved_spectra)
     {
       uint ms_level = deconvolved_spectrum.getOriginalSpectrum().getMSLevel();
+      scan_rt_map[deconvolved_spectrum.getScanNumber()] = deconvolved_spectrum.getOriginalSpectrum().getRT();
+
+      if (deconvolved_spectrum.empty()) continue;
       if (per_ms_level_deconv_spec_count.find(ms_level) == per_ms_level_deconv_spec_count.end()) per_ms_level_deconv_spec_count[ms_level] = 0;
       if (per_ms_level_mass_count.find(ms_level) == per_ms_level_mass_count.end()) per_ms_level_mass_count[ms_level] = 0;
 
       per_ms_level_deconv_spec_count[ms_level]++;
       per_ms_level_mass_count[ms_level] += (int)deconvolved_spectrum.size();
+
     }
     for (auto& val : per_ms_level_deconv_spec_count)
     {
@@ -356,13 +348,16 @@ protected:
             }
           }
         }
-        out_dl_streams[i] << "Class\n";
+        for (int n = 0; n < PeakGroupScoring::getQscoreFeatureCount(); n++)
+        {
+          out_dl_streams[i] << "F"<<n<<",";
+        }
+        out_dl_streams[i] << "Charge,Qscore,Class\n";
 #endif
       }
 
 #ifdef DEEP_LEARNING
       std::map<int, int> dl_index;
-
 #endif
 
       for (auto& deconvolved_spectrum : deconvolved_spectra)
@@ -401,7 +396,14 @@ protected:
           {
             out_dl_streams[ms_level - 1] << n << ",";
           }
-          out_dl_streams[ms_level - 1] << pg.getTargetDecoyType() << "\n";
+
+          const auto fv = PeakGroupScoring::toFeatureVector(&pg);
+          for (int n = 0; n < PeakGroupScoring::getQscoreFeatureCount(); n++)
+          {
+            out_dl_streams[ms_level - 1] << fv[n] <<",";
+          }
+
+          out_dl_streams[ms_level - 1] << pg.getRepAbsCharge() << ","<< pg.getQscore2D() << "," <<pg.getTargetDecoyType() << "\n";
 
           /*
           int index = 1;
