@@ -329,9 +329,13 @@ FLASHIda::FLASHIda(char* arg)
     std::unordered_map<std::string, std::vector<double>> inputs;
     std::vector<String> log_files;
     std::vector<String> out_files; /// add tsv for exclusion list in the future.
-    std::cout << "debug1" << std::endl;
-    char* token = std::strtok(arg, " ");
-    std::cout << token << std::endl;
+
+    // Make a copy of the input string since strtok modifies it in place
+    // This is necessary when called from Python where the buffer may be read-only
+    std::string arg_copy(arg);
+    char* arg_mutable = &arg_copy[0];
+
+    char* token = std::strtok(arg_mutable, " ");
     std::string key;
     std::stringstream ss {};
 
@@ -419,12 +423,22 @@ FLASHIda::FLASHIda(char* arg)
       sd_defaults.setValue("min_snr", min_snr_values);
     }
 
-    std::cout << inputs["IDScore"][0] << std::endl;
-    std::cout << inputs["AllCharges"][0] << std::endl;
-    std::cout << inputs["HCDEnergy"][0] << std::endl;
-    use_idscore_ = (bool)inputs["IDScore"][0];
-    consider_all_Charge_states_ = (bool)inputs["AllCharges"][0];
-    hcd_energy_ = (int)inputs["HCDEnergy"][0];
+    // Set defaults for optional IDScore parameters
+    use_idscore_ = false;
+    consider_all_Charge_states_ = false;
+    hcd_energy_ = -1;
+    if (inputs.find("IDScore") != inputs.end() && !inputs["IDScore"].empty())
+    {
+      use_idscore_ = (bool)inputs["IDScore"][0];
+    }
+    if (inputs.find("AllCharges") != inputs.end() && !inputs["AllCharges"].empty())
+    {
+      consider_all_Charge_states_ = (bool)inputs["AllCharges"][0];
+    }
+    if (inputs.find("HCDEnergy") != inputs.end() && !inputs["HCDEnergy"].empty())
+    {
+      hcd_energy_ = (int)inputs["HCDEnergy"][0];
+    }
 
     auto mass_count_double = inputs["max_mass_count"];
 

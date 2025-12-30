@@ -880,6 +880,86 @@ namespace OpenMS
     return std::max(qscore_, qscore2D_);
   }
 
+  std::unordered_map<int, float> PeakGroup::getAllQscores() const
+  {
+    return qscores_;
+  }
+
+  std::unordered_map<int, std::unordered_map<int, float>> PeakGroup::getAllIDscores() const
+  {
+    return idscores_;
+  }
+
+  int PeakGroup::getBestQScoreCharge() const
+  {
+    if (qscores_.empty())
+    {
+      return -1;
+    }
+
+    float max_score = 0.0f;
+    std::vector<int> best_charges;
+
+    // Find maximum score and collect all charges with that score
+    for (const auto& [charge, score] : qscores_)
+    {
+      if (score > max_score)
+      {
+        max_score = score;
+        best_charges.clear();
+        best_charges.push_back(charge);
+      }
+      else if (score == max_score)
+      {
+        best_charges.push_back(charge);
+      }
+    }
+
+    if (best_charges.empty())
+    {
+      return -1;
+    }
+
+    // Handle ties by selecting charge closest to representative charge
+    if (best_charges.size() == 1)
+    {
+      return best_charges[0];
+    }
+
+    int rep_charge = getRepAbsCharge();
+    if (rep_charge <= 0)
+    {
+      return best_charges[0]; // Fallback if no representative charge available
+    }
+
+    int best_charge = best_charges[0];
+    int min_distance = std::abs(best_charges[0] - rep_charge);
+
+    for (int charge : best_charges)
+    {
+      int distance = std::abs(charge - rep_charge);
+      if (distance < min_distance)
+      {
+        min_distance = distance;
+        best_charge = charge;
+      }
+    }
+
+    return best_charge;
+  }
+
+  float PeakGroup::getBestQScore() const
+  {
+    int best_charge = getBestQScoreCharge();
+    if (best_charge == -1)
+    {
+      return 0.0f;
+    }
+
+    auto it = qscores_.find(best_charge);
+    return (it != qscores_.end()) ? it->second : 0.0f;
+  }
+
   void PeakGroup::setFeatureIndex(uint findex)
   {
     findex_ = findex;
@@ -1172,5 +1252,255 @@ namespace OpenMS
     }
 
     return sig_noise;
+  }
+
+  float PeakGroup::getIDScoreForChargeAndHCD(int abs_charge, int hcd_energy) const
+  {
+    auto charge_it = idscores_.find(abs_charge);
+    if (charge_it == idscores_.end()) {
+      return 0.0f;
+    }
+
+    auto hcd_it = charge_it->second.find(hcd_energy);
+    return (hcd_it != charge_it->second.end()) ? hcd_it->second : 0.0f;
+  }
+
+  float PeakGroup::getBestIDScoreForHCD(int hcd_energy) const
+  {
+    if (idscores_.empty()) {
+      return 0.0f;
+    }
+
+    float max_score = 0.0f;
+    for (const auto& [charge, hcd_map] : idscores_) {
+      auto hcd_it = hcd_map.find(hcd_energy);
+      if (hcd_it != hcd_map.end()) {
+        max_score = std::max(max_score, hcd_it->second);
+      }
+    }
+    return max_score;
+  }
+
+  float PeakGroup::getBestIDScoreForCharge(int abs_charge) const
+  {
+    if (idscores_.empty()) {
+      return 0.0f;
+    }
+
+    auto charge_it = idscores_.find(abs_charge);
+    if (charge_it == idscores_.end()) {
+      return 0.0f;
+    }
+
+    float max_score = 0.0f;
+    for (const auto& [hcd_energy, score] : charge_it->second) {
+      max_score = std::max(max_score, score);
+    }
+    return max_score;
+  }
+
+  int PeakGroup::getBestIDScoreChargeForHCD(int hcd_energy) const
+  {
+    if (idscores_.empty()) {
+      return -1;
+    }
+
+    float max_score = 0.0f;
+    std::vector<int> best_charges;
+
+    // Find charges with maximum IDScore for specified HCD
+    for (const auto& [charge, hcd_map] : idscores_) {
+      auto hcd_it = hcd_map.find(hcd_energy);
+      if (hcd_it != hcd_map.end()) {
+        float score = hcd_it->second;
+        if (score > max_score) {
+          max_score = score;
+          best_charges.clear();
+          best_charges.push_back(charge);
+        } else if (score == max_score && score > 0.0f) {
+          best_charges.push_back(charge);
+        }
+      }
+    }
+
+    if (best_charges.empty() || max_score == 0.0f) {
+      return -1;
+    }
+
+    return best_charges[0];
+  }
+
+  int PeakGroup::getBestIDScoreCharge() const
+  {
+    if (idscores_.empty())
+    {
+      return -1;
+    }
+
+    float max_score = 0.0f;
+    std::vector<int> best_charges;
+
+    // Find the global maximum IDScore and collect contributing charges
+    for (const auto& [charge, hcd_map] : idscores_)
+    {
+      for (const auto& [hcd, score] : hcd_map)
+      {
+        if (score > max_score)
+        {
+          max_score = score;
+          best_charges.clear();
+          best_charges.push_back(charge);
+        }
+        else if (score == max_score && score > 0.0f)
+        {
+          // Check if this charge is already in best_charges to avoid duplicates
+          if (std::find(best_charges.begin(), best_charges.end(), charge) == best_charges.end())
+          {
+            best_charges.push_back(charge);
+          }
+        }
+      }
+    }
+
+    if (best_charges.empty() || max_score == 0.0f)
+    {
+      return -1;
+    }
+
+    // Handle ties by selecting charge closest to representative charge
+    if (best_charges.size() == 1)
+    {
+      return best_charges[0];
+    }
+
+    int rep_charge = getRepAbsCharge();
+    if (rep_charge <= 0)
+    {
+      return best_charges[0]; // Fallback if no representative charge available
+    }
+
+    int best_charge = best_charges[0];
+    int min_distance = std::abs(best_charges[0] - rep_charge);
+
+    for (int charge : best_charges)
+    {
+      int distance = std::abs(charge - rep_charge);
+      if (distance < min_distance)
+      {
+        min_distance = distance;
+        best_charge = charge;
+      }
+    }
+
+    return best_charge;
+  }
+
+  int PeakGroup::getBestIDScoreHCD() const
+  {
+    if (idscores_.empty())
+    {
+      return -1;
+    }
+
+    float max_score = 0.0f;
+    std::vector<int> best_hcds;
+
+    // Find the global maximum IDScore and collect contributing HCD values
+    for (const auto& [charge, hcd_map] : idscores_)
+    {
+      for (const auto& [hcd, score] : hcd_map)
+      {
+        if (score > max_score)
+        {
+          max_score = score;
+          best_hcds.clear();
+          best_hcds.push_back(hcd);
+        }
+        else if (score == max_score && score > 0.0f)
+        {
+          // Check if this HCD is already in best_hcds to avoid duplicates
+          if (std::find(best_hcds.begin(), best_hcds.end(), hcd) == best_hcds.end())
+          {
+            best_hcds.push_back(hcd);
+          }
+        }
+      }
+    }
+
+    if (best_hcds.empty() || max_score == 0.0f)
+    {
+      return -1;
+    }
+
+    // Handle ties by selecting HCD closest to 29 (commonly used value)
+    if (best_hcds.size() == 1)
+    {
+      return best_hcds[0];
+    }
+
+    int best_hcd = best_hcds[0];
+    int min_distance = std::abs(best_hcds[0] - 29);
+
+    for (int hcd : best_hcds)
+    {
+      int distance = std::abs(hcd - 29);
+      if (distance < min_distance)
+      {
+        min_distance = distance;
+        best_hcd = hcd;
+      }
+    }
+
+    return best_hcd;
+  }
+
+  float PeakGroup::getBestIDScore() const
+  {
+    int best_charge = getBestIDScoreCharge();
+    int best_hcd = getBestIDScoreHCD();
+
+    if (best_charge == -1 || best_hcd == -1)
+    {
+      return 0.0f;
+    }
+
+    auto charge_it = idscores_.find(best_charge);
+    if (charge_it == idscores_.end())
+    {
+      return 0.0f;
+    }
+
+    auto hcd_it = charge_it->second.find(best_hcd);
+    return (hcd_it != charge_it->second.end()) ? hcd_it->second : 0.0f;
+  }
+
+  int PeakGroup::getBestHCDForCharge(int abs_charge) const
+  {
+    if (idscores_.empty()) {
+      return -1;
+    }
+
+    auto charge_it = idscores_.find(abs_charge);
+    if (charge_it == idscores_.end()) {
+      return -1;
+    }
+
+    float max_score = -1.0f;
+    std::vector<int> best_hcds;
+
+    // Find HCD values with maximum IDScore for specified charge
+    for (const auto& [hcd, score] : charge_it->second) {
+      if (score > max_score) {
+        max_score = score;
+        best_hcds.clear();
+        best_hcds.push_back(hcd);
+      }
+    }
+
+    if (best_hcds.empty()) {
+      return -1;
+    }
+
+    return best_hcds[0];
   }
 } // namespace OpenMS

@@ -34,7 +34,10 @@ namespace OpenMS
     /// get the number of features used for Qsocre
     static int getQscoreFeatureCount();
 
-    /// get QScore for a peak group of specific abs_charge
+    /// get QScore for a peak group using representative charge
+    static double getQscore(const PeakGroup* pg);
+
+    /// get QScores for all charges in a peak group
     static std::unordered_map<int, float> getQscores(const PeakGroup* pg);
 
     static std::unordered_map<int, std::unordered_map<int, float>> getIDscores(const PeakGroup* pg);
