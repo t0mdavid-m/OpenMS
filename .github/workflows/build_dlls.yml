@@ -219,7 +219,7 @@ jobs:
           # add third-party binaries to PATH
           # use flat THIRDPARTY structure
           mkdir -p _thirdparty
-          cp -R OpenMS/THIRDPARTY/${{ steps.set-vars.outputs.tp_folder }}/64bit/* _thirdparty/
+          cp -R OpenMS/THIRDPARTY/${{ steps.set-vars.outputs.tp_folder }}/x86_64/* _thirdparty/
           cp -R OpenMS/THIRDPARTY/All/* _thirdparty/
           # add third-party binaries to PATH
           for thirdpartytool in '${{ github.workspace }}/_thirdparty'/*
