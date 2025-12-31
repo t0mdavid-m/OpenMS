@@ -115,11 +115,11 @@ jobs:
 
     - name: Install Qt (Windows)
       if: startsWith(matrix.os, 'windows')
-      uses: jurplel/install-qt-action@v3
+      uses: jurplel/install-qt-action@v4
       with:
-        version: '5.15.2' # 5.12.7 is broken https://bugreports.qt.io/browse/QTBUG-81715, > 5.15.2 is not available on official archives (https://github.com/miurahr/aqtinstall/issues/636)
+        version: '6.8.3'
+        arch: 'win64_msvc2022_64'
         cache: 'false'
-        aqtversion: '==3.1.*'
         archives: 'qtsvg qtimageformats qtbase'
 
     - name: Setup build tools (and system contrib on Linux and Mac)
@@ -145,8 +145,8 @@ jobs:
         fi
         
         if [[ "${{ matrix.os }}" == windows-* ]]; then
-          # Qt5_DIR set by Install Qt5 step
-          echo "cmake_prefix=$Qt5_DIR/lib/cmake;$Qt5_DIR" >> $GITHUB_OUTPUT
+          # Qt6 is found automatically via Qt6_DIR env var set by install-qt-action
+          echo "cmake_prefix=" >> $GITHUB_OUTPUT
           choco install 7zip ccache ninja cmake -y --no-progress
           ## GH CLI "SHOULD BE" installed. Sometimes I had to manually install nonetheless. Super weird.
           # https://github.com/actions/runner-images/blob/main/images/win/scripts/Installers/Install-GitHub-CLI.ps1
