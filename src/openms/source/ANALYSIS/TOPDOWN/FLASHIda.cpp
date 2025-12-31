@@ -328,7 +328,8 @@ FLASHIda::FLASHIda(char* arg)
   #endif
     std::unordered_map<std::string, std::vector<double>> inputs;
     std::vector<String> log_files;
-    std::vector<String> out_files; /// add tsv for exclusion list in the future.
+    std::vector<String> out_files;
+    std::vector<String> tsv_files;  ///< TSV inclusion list files
 
     // Make a copy of the input string since strtok modifies it in place
     // This is necessary when called from Python where the buffer may be read-only
@@ -353,6 +354,11 @@ FLASHIda::FLASHIda(char* arg)
         out_files.push_back(token_string);
         ss << token_string << " ";
       }
+      else if (token_string.hasSuffix(".tsv"))
+      {
+        tsv_files.push_back(token_string);
+        ss << token_string << " ";
+      }
       else
       {
         double num = atof(token_string.c_str());
@@ -374,7 +380,7 @@ FLASHIda::FLASHIda(char* arg)
     if (targeting_mode_ == 1) { std::cout << ss.str() << "file(s) is(are) used for inclusion mode\n"; }
     else if (targeting_mode_ == 2) { std::cout << ss.str() << "file(s) is(are) used for in-depth mode\n"; }
     else if (targeting_mode_ == 3) { std::cout << ss.str() << "file(s) is(are) used for exclusion mode\n"; }
-    else if (targeting_mode_ == 4) { std::cout << ss.str() << "file(s) is(are) used for inclusion mode with charge state targeting\n"; }
+    // Mode 4 removed - functionality merged into mode 1
     Param sd_defaults = SpectralDeconvolution().getDefaults();
 
     sd_defaults.setValue("min_charge", (int)inputs["min_charge"][0]);
@@ -439,6 +445,10 @@ FLASHIda::FLASHIda(char* arg)
     {
       hcd_energy_ = (int)inputs["HCDEnergy"][0];
     }
+    if (inputs.find("tie_threshold") != inputs.end() && !inputs["tie_threshold"].empty())
+    {
+      tie_threshold_ = inputs["tie_threshold"][0];
+    }
 
     auto mass_count_double = inputs["max_mass_count"];
 
@@ -486,7 +496,7 @@ FLASHIda::FLASHIda(char* arg)
             n = line.substr(st, ed - st + 1);
             charge = n.toInt();
 
-            if (targeting_mode_ == 1 || targeting_mode_ == 2 || targeting_mode_ == 4)
+            if (targeting_mode_ == 1 || targeting_mode_ == 2)  // Mode 4 merged into mode 1
             {
               if (target_mass_rt_map_.find(mass) == target_mass_rt_map_.end()) { target_mass_rt_map_[mass] = std::vector<double>(); }
               target_mass_rt_map_[mass].push_back(rt * 60.0);
@@ -550,7 +560,7 @@ FLASHIda::FLASHIda(char* arg)
           mass = atof(results[5].c_str());
           qscore = atof(results[3].c_str());
 
-          if (targeting_mode_ == 1 || targeting_mode_ == 2 || targeting_mode_ == 4)
+          if (targeting_mode_ == 1 || targeting_mode_ == 2)  // Mode 4 merged into mode 1
           {
             if (target_mass_rt_map_.find(mass) == target_mass_rt_map_.end()) { target_mass_rt_map_[mass] = std::vector<double>(); }
             rt = atof(results[0].c_str());
@@ -561,6 +571,16 @@ FLASHIda::FLASHIda(char* arg)
         }
         instream.close();
       }
+    }
+
+    // Parse TSV inclusion list files (auto-detected for mode 1)
+    if (targeting_mode_ == 1 && !tsv_files.empty())
+    {
+      for (const auto& tsv_file : tsv_files)
+      {
+        parseInclusionListTSV_(tsv_file);
+      }
+      std::cout << inclusion_targets_.size() << " targets loaded from TSV inclusion list\n";
     }
 
     fd_.setParameters(sd_defaults);
@@ -718,19 +738,38 @@ FLASHIda::FLASHIda(char* arg)
 
     target_masses_.clear();
     excluded_masses_.clear();
-    if (targeting_mode_ == 1 || targeting_mode_ == 4)
+    if (targeting_mode_ == 1)  // Unified inclusion mode (merged mode 4 functionality)
     {
-      for (const auto& [mass, rts] : target_mass_rt_map_)
+      active_targets_.clear();
+      target_priority_map_.clear();
+
+      if (!inclusion_targets_.empty())  // TSV-based targets
       {
-        // for (double prt : rts)
-        // {
-          // if (std::abs(rt - prt) < rt_window_)
-          // {
-            target_masses_.push_back(mass);
-            // break;
-          // }
-        // }
+        for (const auto& target : inclusion_targets_)
+        {
+          if (target.isActiveAt(rt))
+          {
+            active_targets_.push_back(&target);
+            target_masses_.push_back(target.mass);
+
+            // Build priority map for tie-breaking (use highest priority for each nominal mass)
+            int nominal = SpectralDeconvolution::getNominalMass(target.mass);
+            if (target_priority_map_.find(nominal) == target_priority_map_.end()
+                || target.priority > target_priority_map_[nominal])
+            {
+              target_priority_map_[nominal] = target.priority;
+            }
+          }
+        }
       }
+      else  // Legacy .log/.out targets (existing behavior)
+      {
+        for (const auto& [mass, rts] : target_mass_rt_map_)
+        {
+          target_masses_.push_back(mass);
+        }
+      }
+
       std::sort(target_masses_.begin(), target_masses_.end());
       fd_.setTargetMasses(target_masses_, false);
     }
@@ -778,7 +817,24 @@ FLASHIda::FLASHIda(char* arg)
     else {
       deconvolved_spectrum_.sortByQscore();
     }
-    
+
+    // Apply priority tie-breaking when TSV targets are loaded
+    if (targeting_mode_ == 1 && !inclusion_targets_.empty())
+    {
+      std::stable_sort(deconvolved_spectrum_.begin(), deconvolved_spectrum_.end(),
+        [this](const PeakGroup& a, const PeakGroup& b) {
+          if (std::abs(a.getQscore() - b.getQscore()) < tie_threshold_)
+          {
+            int nom_a = SpectralDeconvolution::getNominalMass(a.getMonoMass());
+            int nom_b = SpectralDeconvolution::getNominalMass(b.getMonoMass());
+            int pri_a = target_priority_map_.count(nom_a) ? target_priority_map_.at(nom_a) : 0;
+            int pri_b = target_priority_map_.count(nom_b) ? target_priority_map_.at(nom_b) : 0;
+            return pri_a > pri_b;  // Higher priority first
+          }
+          return a.getQscore() > b.getQscore();
+        });
+    }
+
     Size mass_count = (Size)mass_count_[ms_level - 1];
     trigger_charges.clear();
     trigger_hcds.clear();
@@ -937,40 +993,53 @@ FLASHIda::FLASHIda(char* arg)
             if (1 - tqscore_factor_for_exclusion > tqscore_threshold) { continue; }
           }
 
-          // Inclusion mode
-          if ((targeting_mode_ == 1 || targeting_mode_ == 4) && target_masses_.size() > 0) 
+          // Inclusion mode (unified: supports TSV-based targets and legacy .log/.out targets)
+          if (targeting_mode_ == 1 && target_masses_.size() > 0)
           {
             double delta = 2 * tol_[0] * mass * 1e-6;
             auto ub = std::upper_bound(target_masses_.begin(), target_masses_.end(), mass + delta);
 
-            while (! target_matched)
+            while (!target_matched)
             {
               if (ub != target_masses_.end())
               {
                 if (std::abs(*ub - mass) < delta) // target is detected.
                 {
-                  if (targeting_mode_ == 4) {
-                    // Check if charge state matches
+                  // Check charge matching for both TSV and legacy modes
+                  if (!inclusion_targets_.empty())  // TSV mode: check active_targets_ with charge
+                  {
+                    for (const auto* t : active_targets_)
+                    {
+                      if (std::abs(t->mass - *ub) < 1e-6 && t->matchesCharge(charge))
+                      {
+                        target_matched = true;
+                        break;
+                      }
+                    }
+                  }
+                  else if (!target_mass_charge_map_.empty())  // Legacy .log mode with charge
+                  {
                     auto it = target_mass_charge_map_.find(*ub);
                     if (it != target_mass_charge_map_.end())
                     {
                       charges = &it->second;
-                      if (std::find(charges->begin(), charges->end(), charge) == charges->end())
+                      if (std::find(charges->begin(), charges->end(), charge) != charges->end())
                       {
-                        // Exclude if charge state does not match
-                        if (ub == target_masses_.begin()) { break; }
-                        ub--;
-                        continue;
+                        target_matched = true;
                       }
                     }
-                    else {
-                      // Exclude if charge states cannot be found
-                      if (ub == target_masses_.begin()) { break; }
-                      ub--;
-                      continue;
-                    }
                   }
-                  target_matched = true;
+                  else  // Legacy mode without charge (mass-only matching)
+                  {
+                    target_matched = true;
+                  }
+
+                  if (!target_matched)
+                  {
+                    if (ub == target_masses_.begin()) { break; }
+                    ub--;
+                    continue;
+                  }
                 }
                 if (mass - *ub > delta) { break; }
               }
@@ -1072,7 +1141,8 @@ FLASHIda::FLASHIda(char* arg)
             }
           }
 
-          if (targeting_mode_ == 4 && charges != nullptr) {
+          // For legacy .log mode with charge targeting, remove this charge from list
+          if (targeting_mode_ == 1 && charges != nullptr) {
             auto it = std::find(charges->begin(), charges->end(), charge);
             if (it != charges->end()) {
               charges->erase(it);
@@ -2379,5 +2449,56 @@ FLASHIda::FLASHIda(char* arg)
     std::cout << "Used precursor size : " << precursor_map_for_real_time_acquisition.size() << " precursor masses : " << mass_cntr << std::endl;
 
     return precursor_map_for_real_time_acquisition;
+  }
+
+  void FLASHIda::parseInclusionListTSV_(const String& filename)
+  {
+    std::ifstream instream(filename);
+    if (!instream.good())
+    {
+      throw Exception::FileNotFound(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, filename);
+    }
+
+    String line;
+    bool header_skipped = false;
+
+    while (std::getline(instream, line))
+    {
+      line = line.trim();
+      if (line.empty() || line.hasPrefix("#")) continue;
+
+      StringList cells;
+      line.split('\t', cells);
+
+      // Skip header row (check if first cell looks like "mass" header)
+      if (!header_skipped && cells.size() > 0 && cells[0].toLower() == "mass")
+      {
+        header_skipped = true;
+        continue;
+      }
+
+      // Expect 5 columns: mass, charge, rt_start, rt_end, priority
+      if (cells.size() < 5)
+      {
+        OPENMS_LOG_WARN << "Skipping malformed line (expected 5 columns): " << line << std::endl;
+        continue;
+      }
+
+      InclusionTarget target;
+      target.mass = cells[0].toDouble();
+      // Charge: -1 or empty means "any charge"
+      String charge_str = cells[1].trim();
+      target.charge = (charge_str.empty() || charge_str == "-1") ? -1 : cells[1].toInt();
+      // RT values in minutes, convert to seconds
+      target.rt_start = cells[2].toDouble() * 60.0;
+      target.rt_end = cells[3].toDouble() * 60.0;
+      target.priority = cells[4].toInt();
+
+      inclusion_targets_.push_back(target);
+    }
+
+    // Sort by mass for efficient binary search later
+    std::sort(inclusion_targets_.begin(), inclusion_targets_.end(),
+      [](const InclusionTarget& a, const InclusionTarget& b) { return a.mass < b.mass; });
   }
 } // namespace OpenMS

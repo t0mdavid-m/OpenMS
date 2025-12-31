@@ -184,6 +184,27 @@ namespace OpenMS
     };
 
     /**
+     * @brief Structure for TSV-based inclusion target
+     *
+     * Represents a single target from a TSV inclusion list with mass, charge,
+     * RT range, and priority for tie-breaking during precursor selection.
+     */
+    struct InclusionTarget
+    {
+      double mass;        ///< Target monoisotopic mass
+      int charge;         ///< Charge state (-1 = any charge)
+      double rt_start;    ///< RT window start (seconds)
+      double rt_end;      ///< RT window end (seconds)
+      int priority;       ///< Tie-breaking priority (higher = preferred)
+
+      /// Check if current RT is within the target's active window
+      bool isActiveAt(double rt) const { return rt >= rt_start && rt <= rt_end; }
+
+      /// Check if charge matches (true if target charge is -1 or matches)
+      bool matchesCharge(int c) const { return charge == -1 || charge == c; }
+    };
+
+    /**
      * @brief Deconvolute a spectrum and find sequence tags with database matches
      *
      * This method performs spectrum deconvolution using the FLASHDeconv algorithm,
@@ -447,6 +468,12 @@ namespace OpenMS
     void filterPeakGroupsUsingMassExclusion_(int ms_level, double rt);
 
     /**
+         @brief parse TSV inclusion list file
+         @param filename path to TSV file with columns: mass, charge, rt_start, rt_end, priority
+    */
+    void parseInclusionListTSV_(const String& filename);
+
+    /**
          @brief generate MSSpectrum class using mzs and intensities. mzs and intensities and other information are
          provided by Thermo iAPI
          @param mzs m/z values
@@ -504,6 +531,12 @@ namespace OpenMS
     /// maps for global exclusion
     std::map<double, std::vector<double>> exclusion_rt_masses_map_; /// if rt == 0, its mapped masses are always excluded.
     std::vector<double> excluded_masses_; /// current target masses. updated per spectrum
+
+    /// TSV-based inclusion targets
+    std::vector<InclusionTarget> inclusion_targets_;  ///< All targets loaded from TSV file
+    std::vector<const InclusionTarget*> active_targets_;  ///< Current active targets (filtered by RT)
+    std::map<int, int> target_priority_map_;  ///< nominal_mass → priority for tie-breaking
+    double tie_threshold_ = 0.01;  ///< qscore difference threshold for priority tie-breaking
 
     /// precursor SNR threshold
     double snr_threshold_ = 1;
