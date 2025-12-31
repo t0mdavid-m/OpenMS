@@ -1172,6 +1172,7 @@ namespace OpenMS
     double max_s_intensity = 0;
     //double avg_sum = 0;
     const auto& avg_iso = avg.get(getMonoMass());
+    (void)avg_iso;  // Suppress unused variable warning - code using this is commented out
 
     //for(auto i : avg_iso) avg_sum += i.getIntensity();
 
