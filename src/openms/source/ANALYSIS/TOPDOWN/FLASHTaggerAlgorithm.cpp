@@ -691,7 +691,6 @@ void FLASHTaggerAlgorithm::runMatching(std::vector<ProteinHit>& hits,
   spec_scores.push_back(1);
   for (const auto& pg : deconvolved_spectrum)
   {
-    int mn = int(round(pg.getMonoMass()));
     spec_scores.push_back(FLASHTaggerAlgorithm::getNodeScore(pg));
   }
 
