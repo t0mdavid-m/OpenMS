@@ -261,6 +261,7 @@ jobs:
           ENABLE_TOPP_TESTING: "OFF"
           ENABLE_CLASS_TESTING: "OFF"
           ENABLE_DOCS: "OFF"
+          ENABLE_ONNX: "OFF"
           ENABLE_GCC_WERROR: "OFF" # TODO think about that
           SEARCH_ENGINES_DIRECTORY: ${{ github.workspace }}/_thirdparty
           WITH_GUI: "OFF"
