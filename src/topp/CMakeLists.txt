@@ -15,6 +15,12 @@ cmake_minimum_required(VERSION 3.15 FATAL_ERROR)
 # 1. either as single MyToolName.cpp file
 # 2. via a subfolder MyToolName/ with MyToolName/MyToolName.cpp and (optionally) additional header/source files
 include(executables.cmake)
+
+# Remove DLModel if ONNX is not enabled (it requires onnxruntime headers)
+if(NOT ENABLE_ONNX)
+  list(REMOVE_ITEM TOPP_executables DLModel)
+endif()
+
 foreach(i ${TOPP_executables})  
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/${i})
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/${i})
