@@ -1447,6 +1447,9 @@ FLASHIda::FLASHIda(char* arg)
                                    std::vector<int>& ptm_end_positions,
                                    std::vector<double>& ptm_masses)
   {
+    // Suppress unused parameter warning - PTM detection handled by FLASHExtender
+    (void)ptm_mass_threshold;
+
     // Clear output vectors
     matched_fragment_indices.clear();
     ptm_start_positions.clear();
