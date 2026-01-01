@@ -449,6 +449,14 @@ FLASHIda::FLASHIda(char* arg)
     {
       tie_threshold_ = inputs["tie_threshold"][0];
     }
+    if (inputs.find("strict_inclusion") != inputs.end() && !inputs["strict_inclusion"].empty())
+    {
+      strict_inclusion_ = (bool)inputs["strict_inclusion"][0];
+    }
+    if (targeting_mode_ == 1)
+    {
+      std::cout << "Inclusion mode: " << (strict_inclusion_ ? "strict" : "non-strict") << "\n";
+    }
 
     auto mass_count_double = inputs["max_mass_count"];
 
@@ -925,10 +933,15 @@ FLASHIda::FLASHIda(char* arg)
     {
       for (int selection_phase = selection_phase_start; selection_phase <= selection_phase_end; selection_phase++)
       {
-        // Currently we want to acquire without "fluff" 
-        // TODO: We can use this to squeeze out the final bit of performance
-        if (selection_phase > 0) {
-          break;
+        // Phase 0: targets (for inclusion mode) or tqscore-filtered masses
+        // Phase 1: non-targets (only if non-strict inclusion mode and targets exist)
+        if (selection_phase > 0)
+        {
+          // Allow phase 1 only for non-strict inclusion mode with active targets
+          if (!(targeting_mode_ == 1 && !strict_inclusion_ && target_masses_.size() > 0 && selection_phase == 1))
+          {
+            break;
+          }
         }
 
         // Iterate over candidates (sorted by qscore)
@@ -1052,7 +1065,12 @@ FLASHIda::FLASHIda(char* arg)
               snr_threshold = 0.0;
               qscore_threshold = 0.0; // stop exclusion for targets. todo tqscore lowest first? charge change.
             }
-            else { continue; }
+            else if (selection_phase == 0)
+            {
+              // Phase 0: only targets (strict behavior)
+              continue;
+            }
+            // Phase 1: non-targets proceed with default thresholds
           }
           // deep mode
           else if (targeting_mode_ == 3 && excluded_masses_.size() > 0)

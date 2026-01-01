@@ -537,6 +537,7 @@ namespace OpenMS
     std::vector<const InclusionTarget*> active_targets_;  ///< Current active targets (filtered by RT)
     std::map<int, int> target_priority_map_;  ///< nominal_mass → priority for tie-breaking
     double tie_threshold_ = 0.01;  ///< qscore difference threshold for priority tie-breaking
+    bool strict_inclusion_ = true;  ///< If true, only acquire targets in inclusion mode; if false, non-targets can fill remaining slots
 
     /// precursor SNR threshold
     double snr_threshold_ = 1;
