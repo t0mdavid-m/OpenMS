@@ -289,7 +289,11 @@ jobs:
       run: |
         short_sha=$(echo "${{ github.sha }}" | cut -c1-7)
         cd $GITHUB_WORKSPACE/OpenMS/bld/bin
-        7z a build_files_${short_sha}.zip OpenMS.dll OpenSwathAlgo.dll FLASHDeconv.exe
+        # Copy Qt6 DLLs from Qt installation
+        QT_BIN_DIR="${Qt6_DIR}/../../../bin"
+        cp "$QT_BIN_DIR/Qt6Core.dll" .
+        cp "$QT_BIN_DIR/Qt6Network.dll" .
+        7z a build_files_${short_sha}.zip OpenMS.dll OpenSwathAlgo.dll FLASHDeconv.exe Qt6Core.dll Qt6Network.dll
     
     - name: Upload selected bin artifacts as artifact
       uses: actions/upload-artifact@v4
