@@ -1109,6 +1109,11 @@ FLASHIda::FLASHIda(char* arg)
             }
             // Phase 1: non-targets proceed with default thresholds
           }
+          else if (targeting_mode_ == 1 && strict_inclusion_)
+          {
+            // Strict inclusion mode with no active targets - skip all candidates
+            continue;
+          }
           // deep mode
           else if (targeting_mode_ == 3 && excluded_masses_.size() > 0)
           {
