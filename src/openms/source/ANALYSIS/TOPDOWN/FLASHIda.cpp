@@ -893,7 +893,7 @@ FLASHIda::FLASHIda(char* arg)
     trigger_right_isolation_mzs_.reserve(mass_count);
     trigger_ids_.clear();
     trigger_ids_.reserve(mass_count);
-    std::vector<int>* charges;
+    std::vector<int>* charges = nullptr;
 
     selected_peak_groups_.reserve(mass_count_.size());
     std::set<double> current_selected_mzs;    // current selected mzs
