@@ -138,4 +138,16 @@ namespace OpenMS
       pObject->getAllMonoisotopicMasses(masses, length);
     }
   }
+
+  bool ProcessMS2ForTagBasedTargeting(FLASHIda *pObject, double *mzs, double *ints,
+                                      int length, double rt_min, int msLevel,
+                                      char *name, char *cv)
+  {
+    if (pObject != nullptr)
+    {
+      return pObject->processMS2ForTagBasedTargeting(mzs, ints, length,
+                                                      rt_min * 60.0, msLevel, name, cv);
+    }
+    return false;
+  }
 }

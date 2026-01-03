@@ -100,6 +100,16 @@ namespace OpenMS
 
   extern "C" OPENMS_DLLAPI double GetRepresentativeMass(FLASHIda *pObject);
 
+  /// bridges processMS2ForTagBasedTargeting in FLASHIda class to C# FLASHIda side
+  extern "C" OPENMS_DLLAPI bool ProcessMS2ForTagBasedTargeting(FLASHIda *object,
+                                                                double *mzs,
+                                                                double *ints,
+                                                                int length,
+                                                                double rt_min,
+                                                                int ms_level,
+                                                                char *name,
+                                                                char *cv);
+
   /// keeps the precalculated averagine to calculate average masses from monoisotopic masses
   static FLASHHelperClasses::PrecalculatedAveragine avg;
 }

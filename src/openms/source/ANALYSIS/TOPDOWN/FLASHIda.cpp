@@ -52,6 +52,7 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <iomanip>
 #include <set>
 #include <sstream>
 #include <unordered_set>
@@ -2684,6 +2685,13 @@ FLASHIda::FLASHIda(char* arg)
 
     std::cout << "Added " << masses.size() << " dynamic target masses (RT window: "
               << rt << "-" << (rt + rt_window_) << "s)\n";
+    std::cout << "  Masses: ";
+    for (Size i = 0; i < masses.size(); ++i)
+    {
+      if (i > 0) std::cout << ", ";
+      std::cout << std::fixed << std::setprecision(4) << masses[i];
+    }
+    std::cout << std::endl;
   }
 
   bool FLASHIda::processMS2ForTagBasedTargeting(const double* mzs,
