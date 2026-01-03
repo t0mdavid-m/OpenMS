@@ -28,8 +28,8 @@
 // ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 // --------------------------------------------------------------------------
-// $Maintainer: Kyowon Jeong$
-// $Authors: Kyowon Jeong $
+// $Maintainer: Tom David Müller$
+// $Authors: Kyowon Jeong, Tom David Müller $
 // --------------------------------------------------------------------------
 
 
@@ -51,6 +51,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <set>
 #include <sstream>
 #include <unordered_set>
@@ -330,6 +331,8 @@ FLASHIda::FLASHIda(char* arg)
     std::vector<String> log_files;
     std::vector<String> out_files;
     std::vector<String> tsv_files;  ///< TSV inclusion list files
+    std::vector<String> fasta_files;  ///< FASTA files for tag-based targeting
+    std::vector<String> ptm_files;    ///< PTM TSV files for target expansion
 
     // Make a copy of the input string since strtok modifies it in place
     // This is necessary when called from Python where the buffer may be read-only
@@ -354,9 +357,19 @@ FLASHIda::FLASHIda(char* arg)
         out_files.push_back(token_string);
         ss << token_string << " ";
       }
+      else if (token_string.hasSuffix(".ptm.tsv"))
+      {
+        ptm_files.push_back(token_string);
+        ss << token_string << " ";
+      }
       else if (token_string.hasSuffix(".tsv"))
       {
         tsv_files.push_back(token_string);
+        ss << token_string << " ";
+      }
+      else if (token_string.hasSuffix(".fasta") || token_string.hasSuffix(".fa"))
+      {
+        fasta_files.push_back(token_string);
         ss << token_string << " ";
       }
       else
@@ -589,6 +602,29 @@ FLASHIda::FLASHIda(char* arg)
         parseInclusionListTSV_(tsv_file);
       }
       std::cout << inclusion_targets_.size() << " targets loaded from TSV inclusion list\n";
+    }
+
+    // Load FASTA files for tag-based targeting
+    if (!fasta_files.empty())
+    {
+      for (const auto& fasta_file : fasta_files)
+      {
+        std::vector<FASTAFile::FASTAEntry> entries;
+        FASTAFile().load(fasta_file, entries);
+        target_protein_database_.insert(target_protein_database_.end(), entries.begin(), entries.end());
+      }
+      std::cout << target_protein_database_.size() << " protein entries loaded for tag-based targeting\n";
+      tag_based_targeting_enabled_ = true;
+    }
+
+    // Load PTM TSV files for target expansion
+    for (const auto& ptm_file : ptm_files)
+    {
+      parseTargetPTMsTSV_(ptm_file);
+    }
+    if (!target_ptms_.empty())
+    {
+      std::cout << target_ptms_.size() << " PTM modifications loaded for target expansion\n";
     }
 
     fd_.setParameters(sd_defaults);
@@ -2522,4 +2558,282 @@ FLASHIda::FLASHIda(char* arg)
     std::sort(inclusion_targets_.begin(), inclusion_targets_.end(),
       [](const InclusionTarget& a, const InclusionTarget& b) { return a.mass < b.mass; });
   }
+
+  void FLASHIda::parseTargetPTMsTSV_(const String& filename)
+  {
+    std::ifstream instream(filename);
+    if (!instream.good())
+    {
+      throw Exception::FileNotFound(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, filename);
+    }
+
+    String line;
+    bool header_skipped = false;
+
+    while (std::getline(instream, line))
+    {
+      line = line.trim();
+      if (line.empty() || line.hasPrefix("#")) continue;
+
+      StringList cells;
+      line.split('\t', cells);
+
+      // Skip header row (check if first cell looks like "name" header)
+      if (!header_skipped && cells.size() > 0 && cells[0].toLower() == "name")
+      {
+        header_skipped = true;
+        continue;
+      }
+
+      // Expect 3 columns: name, mass, max_count
+      if (cells.size() < 3)
+      {
+        OPENMS_LOG_WARN << "Skipping malformed PTM line (expected 3 columns): " << line << std::endl;
+        continue;
+      }
+
+      TargetPTM ptm;
+      ptm.name = cells[0].trim();
+      ptm.mass = cells[1].toDouble();
+      ptm.max_count = cells[2].toInt();
+
+      target_ptms_.push_back(ptm);
+    }
+  }
+
+  std::vector<double> FLASHIda::generatePTMCombinations_(double base_mass,
+                                                         const std::vector<TargetPTM>& ptms) const
+  {
+    std::vector<double> result;
+    result.push_back(base_mass);  // Include unmodified
+
+    if (ptms.empty())
+    {
+      return result;
+    }
+
+    // Use iterative approach to generate all combinations
+    // For each PTM, generate 0 to max_count occurrences
+    std::function<void(Size, double)> generate;
+    generate = [&](Size ptm_idx, double current_mass) {
+      if (ptm_idx >= ptms.size())
+      {
+        result.push_back(current_mass);
+        return;
+      }
+
+      const TargetPTM& ptm = ptms[ptm_idx];
+      for (int count = 0; count <= ptm.max_count; ++count)
+      {
+        double new_mass = current_mass + count * ptm.mass;
+        generate(ptm_idx + 1, new_mass);
+      }
+    };
+
+    // Generate all combinations starting from base mass
+    generate(0, base_mass);
+
+    // Remove duplicates (masses within 0.01 Da are considered equal)
+    std::sort(result.begin(), result.end());
+    result.erase(std::unique(result.begin(), result.end(),
+      [](double a, double b) { return std::abs(a - b) < 0.01; }), result.end());
+
+    return result;
+  }
+
+  void FLASHIda::addDynamicTargets_(const std::vector<double>& masses,
+                                    double rt,
+                                    int priority)
+  {
+    for (double mass : masses)
+    {
+      InclusionTarget target;
+      target.mass = mass;
+      target.charge = -1;  // Any charge
+      target.rt_start = rt;
+      target.rt_end = rt + rt_window_;
+      target.priority = priority;
+
+      inclusion_targets_.push_back(target);
+
+      // Also add to target_masses_ for current spectrum if in inclusion mode
+      if (targeting_mode_ == 1)
+      {
+        target_masses_.push_back(mass);
+
+        // Update priority map
+        int nominal = SpectralDeconvolution::getNominalMass(mass);
+        if (target_priority_map_.find(nominal) == target_priority_map_.end()
+            || priority > target_priority_map_[nominal])
+        {
+          target_priority_map_[nominal] = priority;
+        }
+      }
+    }
+
+    // Re-sort target_masses_ for binary search
+    if (!target_masses_.empty())
+    {
+      std::sort(target_masses_.begin(), target_masses_.end());
+      fd_.setTargetMasses(target_masses_, false);
+    }
+
+    // Re-sort inclusion_targets_ by mass
+    std::sort(inclusion_targets_.begin(), inclusion_targets_.end(),
+      [](const InclusionTarget& a, const InclusionTarget& b) { return a.mass < b.mass; });
+
+    std::cout << "Added " << masses.size() << " dynamic target masses (RT window: "
+              << rt << "-" << (rt + rt_window_) << "s)\n";
+  }
+
+  bool FLASHIda::processMS2ForTagBasedTargeting(const double* mzs,
+                                                 const double* ints,
+                                                 int length,
+                                                 double rt,
+                                                 int ms_level,
+                                                 const char* name,
+                                                 const char* cv)
+  {
+    // Early exit if tag-based targeting not enabled
+    if (!tag_based_targeting_enabled_ || target_protein_database_.empty())
+    {
+      return false;
+    }
+
+    // Only process MS2 spectra
+    if (ms_level != 2)
+    {
+      return false;
+    }
+
+    // Create MSSpectrum from input arrays
+    auto spec = makeMSSpectrum_(mzs, ints, length, rt, ms_level, name);
+    if (cv != nullptr)
+    {
+      spec.setMetaValue("filter string", DataValue("cv=" + std::string(cv)));
+    }
+
+    // Perform deconvolution
+    PeakGroup empty;
+    fd_.performSpectrumDeconvolution(spec, 0, empty);
+    DeconvolvedSpectrum dspec = fd_.getDeconvolvedSpectrum();
+
+    if (dspec.empty())
+    {
+      return false;
+    }
+
+    // Sort deconvolved spectrum by mass
+    dspec.sort();
+
+    // Create and configure tagger with minimum length
+    FLASHTaggerAlgorithm tagger;
+    Param tagger_param = tagger.getDefaults();
+    tagger_param.setValue("min_tag_length", min_tag_length_for_targeting_);
+    tagger.setParameters(tagger_param);
+
+    // Run tag generation
+    tagger.run(dspec, tag_matching_tolerance_ppm_);
+
+    // Get the generated tags
+    std::vector<FLASHHelperClasses::Tag> tags;
+    tagger.fillTags(tags);
+
+    if (tags.empty())
+    {
+      return false;
+    }
+
+    // Prepare protein sequences for matching (replace I with L for matching)
+    std::vector<String> protein_seqs;
+    protein_seqs.reserve(target_protein_database_.size());
+    for (const auto& fe : target_protein_database_)
+    {
+      String seq = fe.sequence;
+      std::replace(seq.begin(), seq.end(), 'I', 'L');
+      protein_seqs.push_back(seq);
+    }
+
+    // Match tags against target protein database
+    std::set<Size> matched_protein_indices;
+    for (const auto& tag : tags)
+    {
+      for (Size protein_idx = 0; protein_idx < protein_seqs.size(); ++protein_idx)
+      {
+        const String& pseq = protein_seqs[protein_idx];
+
+        std::vector<int> positions;
+        std::vector<double> flanking_mass_diffs;
+
+        FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(
+          positions,
+          flanking_mass_diffs,
+          max_flanking_mass_diff_,
+          pseq,
+          tag);
+
+        if (!positions.empty())
+        {
+          matched_protein_indices.insert(protein_idx);
+        }
+      }
+    }
+
+    if (matched_protein_indices.empty())
+    {
+      return false;
+    }
+
+    // Target protein detected! Expand target masses with PTM combinations
+    std::vector<double> new_targets;
+    for (Size protein_idx : matched_protein_indices)
+    {
+      const String& seq = target_protein_database_[protein_idx].sequence;
+
+      // Calculate base mass of the protein using AASequence
+      AASequence aa_seq = AASequence::fromString(seq);
+      double base_mass = aa_seq.getMonoWeight();
+
+      // Generate PTM combinations
+      std::vector<double> ptm_masses = generatePTMCombinations_(base_mass, target_ptms_);
+      new_targets.insert(new_targets.end(), ptm_masses.begin(), ptm_masses.end());
+    }
+
+    // Remove duplicates and already-tracked masses
+    std::sort(new_targets.begin(), new_targets.end());
+    new_targets.erase(std::unique(new_targets.begin(), new_targets.end(),
+      [](double a, double b) { return std::abs(a - b) < 0.01; }), new_targets.end());
+
+    // Filter out masses already in expanded set
+    std::vector<double> truly_new_targets;
+    for (double mass : new_targets)
+    {
+      int nominal = SpectralDeconvolution::getNominalMass(mass);
+      bool already_tracked = false;
+      for (double tracked : expanded_target_masses_)
+      {
+        if (std::abs(SpectralDeconvolution::getNominalMass(tracked) - nominal) <= 1)
+        {
+          already_tracked = true;
+          break;
+        }
+      }
+      if (!already_tracked)
+      {
+        truly_new_targets.push_back(mass);
+        expanded_target_masses_.insert(mass);
+      }
+    }
+
+    if (truly_new_targets.empty())
+    {
+      return true; // Target protein was detected, but all masses already tracked
+    }
+
+    // Add to dynamic inclusion list
+    addDynamicTargets_(truly_new_targets, rt, 100); // High priority
+
+    return true;
+  }
+
 } // namespace OpenMS

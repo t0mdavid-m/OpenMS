@@ -40,6 +40,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
 #include <OpenMS/FORMAT/FASTAFile.h>
+#include <set>
 
 namespace OpenMS
 {
@@ -202,6 +203,18 @@ namespace OpenMS
 
       /// Check if charge matches (true if target charge is -1 or matches)
       bool matchesCharge(int c) const { return charge == -1 || charge == c; }
+    };
+
+    /**
+     * @brief Structure for PTM modifications with combinatorial limits for target expansion
+     *
+     * Used by tag-based targeting to generate PTM mass combinations for dynamic inclusion lists.
+     */
+    struct TargetPTM
+    {
+      String name;      ///< Modification name (e.g., "acetylation")
+      double mass;      ///< Delta mass in Da
+      int max_count;    ///< Maximum occurrences on single proteoform
     };
 
     /**
@@ -436,6 +449,33 @@ namespace OpenMS
                                                      std::vector<double>& prefix_masses,
                                                      std::vector<double>& suffix_masses);
 
+    /**
+     * @brief Process MS2 spectrum for protein family detection and inclusion list expansion
+     *
+     * This DLL bridge function performs real-time tag-based targeting:
+     * 1. Deconvolves the MS2 spectrum
+     * 2. Extracts sequence tags (minimum length 3)
+     * 3. Matches tags against the target protein database
+     * 4. If match found: Expands target masses using PTM combinations
+     * 5. Adds expanded masses to dynamic inclusion list
+     *
+     * @param mzs m/z values of the input spectrum
+     * @param ints intensities of the input spectrum
+     * @param length number of peaks in the spectrum
+     * @param rt retention time in seconds
+     * @param ms_level MS level of the spectrum (must be 2)
+     * @param name spectrum name
+     * @param cv CV value for FAIMS (can be nullptr)
+     * @return true if target protein detected and targets expanded, false otherwise
+     */
+    bool processMS2ForTagBasedTargeting(const double* mzs,
+                                        const double* ints,
+                                        int length,
+                                        double rt,
+                                        int ms_level,
+                                        const char* name,
+                                        const char* cv);
+
   private:
     /// PeakGroup comparator for soring by QScore
     /*struct
@@ -472,6 +512,31 @@ namespace OpenMS
          @param filename path to TSV file with columns: mass, charge, rt_start, rt_end, priority
     */
     void parseInclusionListTSV_(const String& filename);
+
+    /**
+         @brief parse TSV file containing PTM modifications for target expansion
+         @param filename path to TSV file with columns: name, mass, max_count
+    */
+    void parseTargetPTMsTSV_(const String& filename);
+
+    /**
+         @brief Generate all PTM mass combinations for a base protein mass
+         @param base_mass base protein mass
+         @param ptms vector of PTMs with max counts
+         @return vector of all possible modified masses
+    */
+    std::vector<double> generatePTMCombinations_(double base_mass,
+                                                 const std::vector<TargetPTM>& ptms) const;
+
+    /**
+         @brief Add expanded target masses to the dynamic inclusion list
+         @param masses vector of masses to add
+         @param rt current retention time (targets active for rt_window_ seconds)
+         @param priority priority for the new targets
+    */
+    void addDynamicTargets_(const std::vector<double>& masses,
+                            double rt,
+                            int priority);
 
     /**
          @brief generate MSSpectrum class using mzs and intensities. mzs and intensities and other information are
@@ -538,6 +603,15 @@ namespace OpenMS
     std::map<int, int> target_priority_map_;  ///< nominal_mass → priority for tie-breaking
     double tie_threshold_ = 0.01;  ///< qscore difference threshold for priority tie-breaking
     bool strict_inclusion_ = true;  ///< If true, only acquire targets in inclusion mode; if false, non-targets can fill remaining slots
+
+    /// Tag-based protein family targeting
+    std::vector<FASTAFile::FASTAEntry> target_protein_database_;  ///< Target protein family entries
+    std::vector<TargetPTM> target_ptms_;                          ///< PTM modifications for mass expansion
+    bool tag_based_targeting_enabled_ = false;                    ///< Flag indicating tag-based mode active
+    int min_tag_length_for_targeting_ = 3;                        ///< Minimum tag length for matching
+    double tag_matching_tolerance_ppm_ = 10.0;                    ///< Mass tolerance for tag matching
+    double max_flanking_mass_diff_ = 500.0;                       ///< Max flanking mass diff for tag matches
+    std::set<double> expanded_target_masses_;                     ///< Track already-expanded masses (avoid duplicates)
 
     /// precursor SNR threshold
     double snr_threshold_ = 1;
