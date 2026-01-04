@@ -618,6 +618,12 @@ FLASHIda::FLASHIda(char* arg)
       tag_based_targeting_enabled_ = true;
     }
 
+    // Parse max_ptm_count if provided (default 3)
+    if (inputs.find("max_ptm_count") != inputs.end() && !inputs["max_ptm_count"].empty())
+    {
+      max_total_ptm_count_ = (int)inputs["max_ptm_count"][0];
+    }
+
     // Load PTM TSV files for target expansion
     for (const auto& ptm_file : ptm_files)
     {
@@ -625,7 +631,8 @@ FLASHIda::FLASHIda(char* arg)
     }
     if (!target_ptms_.empty())
     {
-      std::cout << target_ptms_.size() << " PTM modifications loaded for target expansion\n";
+      std::cout << target_ptms_.size() << " PTM modifications loaded for target expansion (max "
+                << max_total_ptm_count_ << " total per proteoform)\n";
     }
 
     fd_.setParameters(sd_defaults);
@@ -2619,9 +2626,9 @@ FLASHIda::FLASHIda(char* arg)
     }
 
     // Use iterative approach to generate all combinations
-    // For each PTM, generate 0 to max_count occurrences
-    std::function<void(Size, double)> generate;
-    generate = [&](Size ptm_idx, double current_mass) {
+    // For each PTM, generate 0 to max_count occurrences, respecting global max
+    std::function<void(Size, double, int)> generate;
+    generate = [&](Size ptm_idx, double current_mass, int total_count) {
       if (ptm_idx >= ptms.size())
       {
         result.push_back(current_mass);
@@ -2631,13 +2638,15 @@ FLASHIda::FLASHIda(char* arg)
       const TargetPTM& ptm = ptms[ptm_idx];
       for (int count = 0; count <= ptm.max_count; ++count)
       {
+        int new_total = total_count + count;
+        if (new_total > max_total_ptm_count_) break;  // Prune: exceeds global max
         double new_mass = current_mass + count * ptm.mass;
-        generate(ptm_idx + 1, new_mass);
+        generate(ptm_idx + 1, new_mass, new_total);
       }
     };
 
     // Generate all combinations starting from base mass
-    generate(0, base_mass);
+    generate(0, base_mass, 0);
 
     // Remove duplicates (masses within 0.01 Da are considered equal)
     std::sort(result.begin(), result.end());

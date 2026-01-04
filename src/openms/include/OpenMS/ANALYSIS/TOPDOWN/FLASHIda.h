@@ -614,6 +614,7 @@ namespace OpenMS
     double tag_matching_tolerance_ppm_ = 10.0;                    ///< Mass tolerance for tag matching
     double max_flanking_mass_diff_ = 500.0;                       ///< Max flanking mass diff for tag matches
     std::set<double> expanded_target_masses_;                     ///< Track already-expanded masses (avoid duplicates)
+    int max_total_ptm_count_ = 3;                                 ///< Maximum total PTM modifications per proteoform
 
     /// precursor SNR threshold
     double snr_threshold_ = 1;
