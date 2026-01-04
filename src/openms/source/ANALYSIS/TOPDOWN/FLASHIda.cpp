@@ -1589,13 +1589,22 @@ FLASHIda::FLASHIda(char* arg)
       }
     }
 
-    if (all_matches.empty()) return 0;
+    if (all_matches.empty())
+    {
+      std::cout << "[getAmbiguityEnclosingIons] No fragment matches found" << std::endl;
+      return 0;
+    }
+    std::cout << "[getAmbiguityEnclosingIons] Found " << all_matches.size() << " fragment matches" << std::endl;
 
     // 3. Detect PTM sites
     std::vector<PTMSite> ptm_sites;
     detectPTMSites(all_matches, protein_sequence, 5.0, ptm_sites);
 
-    if (ptm_sites.empty()) return 0;
+    if (ptm_sites.empty())
+    {
+      std::cout << "[getAmbiguityEnclosingIons] No PTM sites detected" << std::endl;
+      return 0;
+    }
 
     // DEBUG: Print PTM sites with sequence substrings for validation
     std::cout << "[getAmbiguityEnclosingIons] Detected " << ptm_sites.size() << " PTM sites:" << std::endl;
@@ -1604,9 +1613,11 @@ FLASHIda::FLASHIda(char* arg)
       int start_idx = std::max(0, site.start_position - 1);  // 1-based to 0-based
       int end_idx = std::min(static_cast<int>(protein_sequence.size()), site.end_position);
       String subsequence = protein_sequence.substr(start_idx, end_idx - start_idx);
+      bool is_ambiguous = site.start_position != site.end_position;
       std::cout << "  PTM [" << site.start_position << "-" << site.end_position << "] "
                 << "\"" << subsequence << "\" "
-                << std::showpos << site.mass_shift << std::noshowpos << " Da" << std::endl;
+                << std::showpos << site.mass_shift << std::noshowpos << " Da"
+                << (is_ambiguous ? " (AMBIGUOUS)" : " (localized)") << std::endl;
     }
 
     // 4. Collect unique enclosing ions (deduplicated by peak_index)
