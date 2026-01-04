@@ -192,4 +192,22 @@ namespace OpenMS
       pObject->clearMS2Deconvolution();
     }
   }
+
+  int GetTopFragmentMatches(FLASHIda *pObject,
+                            char *protein_sequence,
+                            int n,
+                            double *masses,
+                            double *qscores,
+                            int *charges,
+                            double *window_starts,
+                            double *window_ends)
+  {
+    if (pObject != nullptr && protein_sequence != nullptr)
+    {
+      return pObject->getTopFragmentMatches(
+          String(protein_sequence), n, masses, qscores, charges,
+          window_starts, window_ends);
+    }
+    return 0;
+  }
 }

@@ -1423,6 +1423,115 @@ FLASHIda::FLASHIda(char* arg)
     ms2_deconv_rt_ = -1.0;
   }
 
+  int FLASHIda::getTopFragmentMatches(const String& protein_sequence,
+                                      int n,
+                                      double* masses,
+                                      double* qscores,
+                                      int* charges,
+                                      double* window_starts,
+                                      double* window_ends)
+  {
+    // 1. Validate state
+    if (!ms2_deconv_valid_ || ms2_deconvolved_spectrum_.empty() || protein_sequence.empty())
+    {
+      return 0;
+    }
+
+    // 2. Get MS2 tolerance from constructor
+    double ppm_tolerance = tol_[1];
+
+    // 3. Calculate theoretical fragment masses
+    std::vector<String> ion_types = {"b", "y"};
+    std::vector<double> prefix_masses, suffix_masses, prefix_shifts, suffix_shifts;
+    calculateTheoreticalFragmentMasses(protein_sequence, ion_types,
+                                       prefix_masses, suffix_masses,
+                                       prefix_shifts, suffix_shifts);
+
+    // 4. Collect matches with qscores
+    struct MatchResult {
+      double mass;
+      double qscore;
+      int charge;
+      double window_start;
+      double window_end;
+    };
+    std::vector<MatchResult> all_matches;
+
+    for (const auto& pg : ms2_deconvolved_spectrum_)
+    {
+      double observed_mass = pg.getMonoMass();
+
+      // Try prefix (b-ion) and suffix (y-ion) matching
+      int best_idx;
+      double best_theo, best_diff, best_shift;
+
+      bool prefix_match = findBestMatch(observed_mass, prefix_masses, prefix_shifts, ppm_tolerance,
+                                        best_idx, best_theo, best_diff, best_shift);
+      bool suffix_match = findBestMatch(observed_mass, suffix_masses, suffix_shifts, ppm_tolerance,
+                                        best_idx, best_theo, best_diff, best_shift);
+
+      if (prefix_match || suffix_match)
+      {
+        MatchResult match;
+        match.mass = observed_mass;
+        match.qscore = pg.getQscore();
+        match.charge = pg.getRepAbsCharge();
+
+        // Get isolation window from m/z range (same as getBestMS2Masses)
+        auto [mz1, mz2] = pg.getMzRange(match.charge);
+        match.window_start = mz1;
+        match.window_end = mz2;
+
+        all_matches.push_back(match);
+      }
+    }
+
+    // 5. Sort by qscore (descending)
+    std::sort(all_matches.begin(), all_matches.end(),
+              [](const MatchResult& a, const MatchResult& b) {
+                return a.qscore > b.qscore;
+              });
+
+    // 6. Copy top n to output arrays
+    int count = std::min(n, static_cast<int>(all_matches.size()));
+    for (int i = 0; i < count; ++i)
+    {
+      masses[i] = all_matches[i].mass;
+      qscores[i] = all_matches[i].qscore;
+      charges[i] = all_matches[i].charge;
+      window_starts[i] = all_matches[i].window_start;
+      window_ends[i] = all_matches[i].window_end;
+    }
+
+    return count;
+  }
+
+  int FLASHIda::getTopFragmentMatchesPy(const String& protein_sequence,
+                                        int n,
+                                        std::vector<double>& masses,
+                                        std::vector<double>& qscores,
+                                        std::vector<int>& charges,
+                                        std::vector<double>& window_starts,
+                                        std::vector<double>& window_ends)
+  {
+    masses.resize(n);
+    qscores.resize(n);
+    charges.resize(n);
+    window_starts.resize(n);
+    window_ends.resize(n);
+
+    int count = getTopFragmentMatches(protein_sequence, n, masses.data(), qscores.data(),
+                                      charges.data(), window_starts.data(), window_ends.data());
+
+    masses.resize(count);
+    qscores.resize(count);
+    charges.resize(count);
+    window_starts.resize(count);
+    window_ends.resize(count);
+
+    return count;
+  }
+
   double FLASHIda::getRepresentativeMass()
   {/*
     const int max_count = 10;

@@ -232,6 +232,42 @@ namespace OpenMS
     void clearMS2Deconvolution();
 
     /**
+     * @brief Get top fragment ion matches against a protein sequence, sorted by qscore
+     *
+     * Performs direct fragment matching using stored MS2 deconvolution results.
+     * Uses MS2 tolerance from constructor (tol_[1]).
+     * Only returns peaks that match theoretical b/y fragments of the sequence.
+     * Requires deconvolveMS2() to be called first.
+     *
+     * @param protein_sequence the protein sequence to match against
+     * @param n maximum number of matches to return
+     * @param masses output: observed monoisotopic masses
+     * @param qscores output: qscores of matched peaks
+     * @param charges output: charges of matched peaks
+     * @param window_starts output: isolation window start m/z values
+     * @param window_ends output: isolation window end m/z values
+     * @return number of matches found (may be less than n)
+     */
+    int getTopFragmentMatches(const String& protein_sequence,
+                              int n,
+                              double* masses,
+                              double* qscores,
+                              int* charges,
+                              double* window_starts,
+                              double* window_ends);
+
+    /**
+     * @brief Python-friendly overload of getTopFragmentMatches
+     */
+    int getTopFragmentMatchesPy(const String& protein_sequence,
+                                int n,
+                                std::vector<double>& masses,
+                                std::vector<double>& qscores,
+                                std::vector<int>& charges,
+                                std::vector<double>& window_starts,
+                                std::vector<double>& window_ends);
+
+    /**
            @brief parse FLASHIda log file
            @param in_log_file input log file
            @return parsed information : scan number - percursor information
