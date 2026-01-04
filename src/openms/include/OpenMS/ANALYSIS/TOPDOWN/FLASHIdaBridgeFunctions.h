@@ -111,6 +111,31 @@ namespace OpenMS
                                                                 char *cv,
                                                                 double precursor_mass);
 
+  /// bridges deconvolveMS2 in FLASHIda class to C# FLASHIda side
+  extern "C" OPENMS_DLLAPI int DeconvolveMS2(FLASHIda *object,
+                                             double *mzs,
+                                             double *ints,
+                                             int length,
+                                             double rt_min);
+
+  /// bridges getBestMS2Masses in FLASHIda class to C# FLASHIda side
+  extern "C" OPENMS_DLLAPI int GetBestMS2Masses(FLASHIda *object,
+                                                int n,
+                                                double *masses,
+                                                double *qscores,
+                                                int *charges,
+                                                double *window_starts,
+                                                double *window_ends);
+
+  /// bridges hasMS2Deconvolution in FLASHIda class to C# FLASHIda side
+  extern "C" OPENMS_DLLAPI bool HasMS2Deconvolution(FLASHIda *object);
+
+  /// bridges getMS2PeakGroupCount in FLASHIda class to C# FLASHIda side
+  extern "C" OPENMS_DLLAPI int GetMS2PeakGroupCount(FLASHIda *object);
+
+  /// bridges clearMS2Deconvolution in FLASHIda class to C# FLASHIda side
+  extern "C" OPENMS_DLLAPI void ClearMS2Deconvolution(FLASHIda *object);
+
   /// keeps the precalculated averagine to calculate average masses from monoisotopic masses
   static FLASHHelperClasses::PrecalculatedAveragine avg;
 }

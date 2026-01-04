@@ -151,4 +151,49 @@ namespace OpenMS
     }
     return false;
   }
+
+  int DeconvolveMS2(FLASHIda *pObject, double *mzs, double *ints, int length, double rt_min)
+  {
+    if (pObject != nullptr)
+    {
+      return pObject->deconvolveMS2(mzs, ints, length, rt_min * 60.0);
+    }
+    return 0;
+  }
+
+  int GetBestMS2Masses(FLASHIda *pObject, int n, double *masses, double *qscores,
+                       int *charges, double *window_starts, double *window_ends)
+  {
+    if (pObject != nullptr)
+    {
+      return pObject->getBestMS2Masses(n, masses, qscores, charges, window_starts, window_ends);
+    }
+    return 0;
+  }
+
+  bool HasMS2Deconvolution(FLASHIda *pObject)
+  {
+    if (pObject != nullptr)
+    {
+      return pObject->hasMS2Deconvolution();
+    }
+    return false;
+  }
+
+  int GetMS2PeakGroupCount(FLASHIda *pObject)
+  {
+    if (pObject != nullptr)
+    {
+      return pObject->getMS2PeakGroupCount();
+    }
+    return 0;
+  }
+
+  void ClearMS2Deconvolution(FLASHIda *pObject)
+  {
+    if (pObject != nullptr)
+    {
+      pObject->clearMS2Deconvolution();
+    }
+  }
 }

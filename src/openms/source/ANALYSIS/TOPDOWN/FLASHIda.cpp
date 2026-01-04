@@ -1303,6 +1303,126 @@ FLASHIda::FLASHIda(char* arg)
     return deconvolved_spectrum_.size();
   }
 
+  int FLASHIda::deconvolveMS2(const double* mzs,
+                              const double* ints,
+                              int length,
+                              double rt)
+  {
+    // Clear previous state
+    ms2_deconvolved_spectrum_.clear();
+    ms2_deconv_valid_ = false;
+    ms2_deconv_rt_ = rt;
+
+    if (length == 0)
+    {
+      return 0;
+    }
+
+    // Create MSSpectrum from input
+    auto spec = makeMSSpectrum_(mzs, ints, length, rt, 2, "ms2_spectrum");
+
+    // Perform deconvolution
+    PeakGroup empty;
+    fd_.performSpectrumDeconvolution(spec, 0, empty);
+    ms2_deconvolved_spectrum_ = fd_.getDeconvolvedSpectrum();
+
+    if (ms2_deconvolved_spectrum_.empty())
+    {
+      return 0;
+    }
+
+    // Sort by qscore (highest first) for getBestMS2Masses
+    ms2_deconvolved_spectrum_.sortByQscore();
+    ms2_deconv_valid_ = true;
+
+    return static_cast<int>(ms2_deconvolved_spectrum_.size());
+  }
+
+  int FLASHIda::deconvolveMS2Py(const std::vector<double>& mzs,
+                                const std::vector<double>& ints,
+                                double rt)
+  {
+    if (mzs.empty() || mzs.size() != ints.size())
+    {
+      return 0;
+    }
+    return deconvolveMS2(mzs.data(), ints.data(), static_cast<int>(mzs.size()), rt);
+  }
+
+  int FLASHIda::getBestMS2Masses(int n,
+                                 double* masses,
+                                 double* qscores,
+                                 int* charges,
+                                 double* window_starts,
+                                 double* window_ends)
+  {
+    if (!ms2_deconv_valid_ || ms2_deconvolved_spectrum_.empty())
+    {
+      return 0;
+    }
+
+    int count = std::min(n, static_cast<int>(ms2_deconvolved_spectrum_.size()));
+
+    for (int i = 0; i < count; ++i)
+    {
+      const auto& pg = ms2_deconvolved_spectrum_[i];
+      masses[i] = pg.getMonoMass();
+      qscores[i] = pg.getQscore();
+
+      int charge = pg.getRepAbsCharge();
+      charges[i] = charge;
+
+      // Get isolation window from m/z range
+      auto [mz1, mz2] = pg.getMzRange(charge);
+      window_starts[i] = mz1;
+      window_ends[i] = mz2;
+    }
+
+    return count;
+  }
+
+  int FLASHIda::getBestMS2MassesPy(int n,
+                                   std::vector<double>& masses,
+                                   std::vector<double>& qscores,
+                                   std::vector<int>& charges,
+                                   std::vector<double>& window_starts,
+                                   std::vector<double>& window_ends)
+  {
+    masses.resize(n);
+    qscores.resize(n);
+    charges.resize(n);
+    window_starts.resize(n);
+    window_ends.resize(n);
+
+    int count = getBestMS2Masses(n, masses.data(), qscores.data(), charges.data(),
+                                 window_starts.data(), window_ends.data());
+
+    masses.resize(count);
+    qscores.resize(count);
+    charges.resize(count);
+    window_starts.resize(count);
+    window_ends.resize(count);
+
+    return count;
+  }
+
+  bool FLASHIda::hasMS2Deconvolution() const
+  {
+    return ms2_deconv_valid_;
+  }
+
+  int FLASHIda::getMS2PeakGroupCount() const
+  {
+    return ms2_deconv_valid_ ? static_cast<int>(ms2_deconvolved_spectrum_.size()) : 0;
+  }
+
+  void FLASHIda::clearMS2Deconvolution()
+  {
+    ms2_deconvolved_spectrum_.clear();
+    ms2_deconv_valid_ = false;
+    ms2_deconv_rt_ = -1.0;
+  }
+
   double FLASHIda::getRepresentativeMass()
   {/*
     const int max_count = 10;
@@ -1423,18 +1543,12 @@ FLASHIda::FLASHIda(char* arg)
     tags.clear();
     matches.clear();
 
-    // Create MSSpectrum from input arrays
-    auto spec = makeMSSpectrum_(mzs, ints, length, rt, ms_level, "spectrum");
-
-    // Perform deconvolution
-    PeakGroup empty;
-    fd_.performSpectrumDeconvolution(spec, 0, empty);
-    DeconvolvedSpectrum dspec = fd_.getDeconvolvedSpectrum();
-
-    if (dspec.empty())
+    // Require deconvolveMS2() to be called first
+    if (!ms2_deconv_valid_)
     {
       return 0;
     }
+    DeconvolvedSpectrum dspec = ms2_deconvolved_spectrum_;
 
     // Sort deconvolved spectrum by mass
     dspec.sort();
@@ -1552,23 +1666,17 @@ FLASHIda::FLASHIda(char* arg)
     ptm_end_positions.clear();
     ptm_masses.clear();
 
-    if (protein_sequence.empty() || length == 0)
+    if (protein_sequence.empty())
     {
       return 0;
     }
 
-    // Create MSSpectrum from input arrays
-    auto spec = makeMSSpectrum_(mzs, ints, length, rt, 2, "ms2_spectrum");
-
-    // Perform deconvolution
-    PeakGroup empty;
-    fd_.performSpectrumDeconvolution(spec, 0, empty);
-    DeconvolvedSpectrum dspec = fd_.getDeconvolvedSpectrum();
-
-    if (dspec.empty())
+    // Require deconvolveMS2() to be called first
+    if (!ms2_deconv_valid_)
     {
       return 0;
     }
+    DeconvolvedSpectrum dspec = ms2_deconvolved_spectrum_;
 
     // Sort deconvolved spectrum by mass
     dspec.sort();
@@ -1816,23 +1924,17 @@ FLASHIda::FLASHIda(char* arg)
     coverage = 0.0;
     total_score = 0.0;
 
-    if (protein_sequence.empty() || length == 0)
+    if (protein_sequence.empty())
     {
       return 0;
     }
 
-    // Create MSSpectrum from input arrays
-    auto spec = makeMSSpectrum_(mzs, ints, length, rt, 2, "ms2_spectrum");
-
-    // Perform deconvolution
-    PeakGroup empty;
-    fd_.performSpectrumDeconvolution(spec, 0, empty);
-    DeconvolvedSpectrum dspec = fd_.getDeconvolvedSpectrum();
-
-    if (dspec.empty())
+    // Require deconvolveMS2() to be called first
+    if (!ms2_deconv_valid_)
     {
       return 0;
     }
+    DeconvolvedSpectrum dspec = ms2_deconvolved_spectrum_;
 
     // Sort deconvolved spectrum by mass
     dspec.sort();

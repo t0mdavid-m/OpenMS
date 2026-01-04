@@ -163,6 +163,75 @@ namespace OpenMS
     int GetAllPeakGroupSize();
 
     /**
+     * @brief Deconvolve an MS2 spectrum and store the result for subsequent operations
+     *
+     * After calling this, getSequenceTagsAndMatches() and identifyProteoform()
+     * will automatically use the stored deconvolution instead of re-deconvolving.
+     *
+     * @param mzs m/z values of the input spectrum
+     * @param ints intensities of the input spectrum
+     * @param length number of peaks
+     * @param rt retention time in seconds
+     * @return number of peak groups found
+     */
+    int deconvolveMS2(const double* mzs,
+                      const double* ints,
+                      int length,
+                      double rt);
+
+    /**
+     * @brief Python-friendly overload of deconvolveMS2
+     */
+    int deconvolveMS2Py(const std::vector<double>& mzs,
+                        const std::vector<double>& ints,
+                        double rt);
+
+    /**
+     * @brief Get the top N MS2 masses with isolation window info
+     *
+     * Requires prior call to deconvolveMS2(). Returns masses sorted by qscore.
+     *
+     * @param n maximum number of masses to return
+     * @param masses output: monoisotopic masses
+     * @param qscores output: quality scores
+     * @param charges output: representative charges
+     * @param window_starts output: isolation window start m/z
+     * @param window_ends output: isolation window end m/z
+     * @return actual number of masses returned
+     */
+    int getBestMS2Masses(int n,
+                         double* masses,
+                         double* qscores,
+                         int* charges,
+                         double* window_starts,
+                         double* window_ends);
+
+    /**
+     * @brief Python-friendly overload of getBestMS2Masses
+     */
+    int getBestMS2MassesPy(int n,
+                           std::vector<double>& masses,
+                           std::vector<double>& qscores,
+                           std::vector<int>& charges,
+                           std::vector<double>& window_starts,
+                           std::vector<double>& window_ends);
+
+    /**
+     * @brief Check if MS2 deconvolution data is available
+     */
+    bool hasMS2Deconvolution() const;
+
+    /**
+     * @brief Get number of peak groups in stored MS2 deconvolution
+     */
+    int getMS2PeakGroupCount() const;
+
+    /**
+     * @brief Clear stored MS2 deconvolution
+     */
+    void clearMS2Deconvolution();
+
+    /**
            @brief parse FLASHIda log file
            @param in_log_file input log file
            @return parsed information : scan number - percursor information
@@ -561,6 +630,14 @@ namespace OpenMS
     DeconvolvedSpectrum deconvolved_spectrum_;
     /// selected peak groups out of deconvolved_spectrum_
     DeconvolvedSpectrum selected_peak_groups_;
+
+    /// MS2 deconvolved spectrum storage (mirrors deconvolved_spectrum_ for MS1)
+    DeconvolvedSpectrum ms2_deconvolved_spectrum_;
+    /// Retention time of stored MS2 deconvolution (for validation)
+    double ms2_deconv_rt_ = -1.0;
+    /// Flag indicating if MS2 deconvolution is valid
+    bool ms2_deconv_valid_ = false;
+
     /// peakGroup charges to be triggered
     std::vector<int> trigger_charges;
     std::vector<int> trigger_hcds;
