@@ -1614,18 +1614,46 @@ FLASHIda::FLASHIda(char* arg)
 
     for (const auto& site : ptm_sites)
     {
+      // Find best left-bound y-ion (closest to ambiguity, best qscore for ties)
+      const FragmentIonMatch* best_left = nullptr;
       for (const auto& m : all_matches)
       {
-        // Left enclosing: fragment_index < start_position
-        // Right enclosing: fragment_index > end_position
-        if (m.fragment_index < site.start_position || m.fragment_index > site.end_position)
+        if (!m.is_prefix && m.fragment_index < site.start_position)
         {
-          if (used_peaks.find(m.peak_index) == used_peaks.end())
+          if (!best_left ||
+              m.fragment_index > best_left->fragment_index ||
+              (m.fragment_index == best_left->fragment_index && m.score > best_left->score))
           {
-            used_peaks.insert(m.peak_index);
-            enclosing_ions.push_back({m.score, m.peak_index});
+            best_left = &m;
           }
         }
+      }
+
+      // Find best right-bound b-ion (closest to ambiguity, best qscore for ties)
+      const FragmentIonMatch* best_right = nullptr;
+      for (const auto& m : all_matches)
+      {
+        if (m.is_prefix && m.fragment_index > site.end_position)
+        {
+          if (!best_right ||
+              m.fragment_index < best_right->fragment_index ||
+              (m.fragment_index == best_right->fragment_index && m.score > best_right->score))
+          {
+            best_right = &m;
+          }
+        }
+      }
+
+      // Add to output (deduplicated across ambiguities)
+      if (best_left && used_peaks.find(best_left->peak_index) == used_peaks.end())
+      {
+        used_peaks.insert(best_left->peak_index);
+        enclosing_ions.push_back({best_left->score, best_left->peak_index});
+      }
+      if (best_right && used_peaks.find(best_right->peak_index) == used_peaks.end())
+      {
+        used_peaks.insert(best_right->peak_index);
+        enclosing_ions.push_back({best_right->score, best_right->peak_index});
       }
     }
 
