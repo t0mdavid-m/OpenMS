@@ -456,7 +456,7 @@ namespace OpenMS
      * 1. Deconvolves the MS2 spectrum
      * 2. Extracts sequence tags (minimum length 3)
      * 3. Matches tags against the target protein database
-     * 4. If match found: Expands target masses using PTM combinations
+     * 4. If match found: Expands target masses using PTM combinations from precursor mass
      * 5. Adds expanded masses to dynamic inclusion list
      *
      * @param mzs m/z values of the input spectrum
@@ -466,6 +466,7 @@ namespace OpenMS
      * @param ms_level MS level of the spectrum (must be 2)
      * @param name spectrum name
      * @param cv CV value for FAIMS (can be nullptr)
+     * @param precursor_mass monoisotopic mass of the precursor (from iAPI)
      * @return true if target protein detected and targets expanded, false otherwise
      */
     bool processMS2ForTagBasedTargeting(const double* mzs,
@@ -474,7 +475,8 @@ namespace OpenMS
                                         double rt,
                                         int ms_level,
                                         const char* name,
-                                        const char* cv);
+                                        const char* cv,
+                                        double precursor_mass);
 
   private:
     /// PeakGroup comparator for soring by QScore

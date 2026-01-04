@@ -141,12 +141,13 @@ namespace OpenMS
 
   bool ProcessMS2ForTagBasedTargeting(FLASHIda *pObject, double *mzs, double *ints,
                                       int length, double rt_min, int msLevel,
-                                      char *name, char *cv)
+                                      char *name, char *cv, double precursor_mass)
   {
     if (pObject != nullptr)
     {
       return pObject->processMS2ForTagBasedTargeting(mzs, ints, length,
-                                                      rt_min * 60.0, msLevel, name, cv);
+                                                      rt_min * 60.0, msLevel, name, cv,
+                                                      precursor_mass);
     }
     return false;
   }

@@ -108,7 +108,8 @@ namespace OpenMS
                                                                 double rt_min,
                                                                 int ms_level,
                                                                 char *name,
-                                                                char *cv);
+                                                                char *cv,
+                                                                double precursor_mass);
 
   /// keeps the precalculated averagine to calculate average masses from monoisotopic masses
   static FLASHHelperClasses::PrecalculatedAveragine avg;

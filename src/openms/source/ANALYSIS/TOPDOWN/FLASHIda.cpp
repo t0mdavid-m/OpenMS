@@ -2688,7 +2688,8 @@ FLASHIda::FLASHIda(char* arg)
                                                  double rt,
                                                  int ms_level,
                                                  const char* name,
-                                                 const char* cv)
+                                                 const char* cv,
+                                                 double precursor_mass)
   {
     // Early exit if tag-based targeting not enabled
     if (!tag_based_targeting_enabled_ || target_protein_database_.empty())
@@ -2781,17 +2782,11 @@ FLASHIda::FLASHIda(char* arg)
     }
 
     // Target protein detected! Expand target masses with PTM combinations
+    // Use precursor mass from iAPI as base (not theoretical protein mass)
     std::vector<double> new_targets;
-    for (Size protein_idx : matched_protein_indices)
+    if (precursor_mass > 0)
     {
-      const String& seq = target_protein_database_[protein_idx].sequence;
-
-      // Calculate base mass of the protein using AASequence
-      AASequence aa_seq = AASequence::fromString(seq);
-      double base_mass = aa_seq.getMonoWeight();
-
-      // Generate PTM combinations
-      std::vector<double> ptm_masses = generatePTMCombinations_(base_mass, target_ptms_);
+      std::vector<double> ptm_masses = generatePTMCombinations_(precursor_mass, target_ptms_);
       new_targets.insert(new_targets.end(), ptm_masses.begin(), ptm_masses.end());
     }
 
