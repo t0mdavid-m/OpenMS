@@ -2851,7 +2851,7 @@ FLASHIda::FLASHIda(char* arg)
     }
 
     // Add to dynamic inclusion list
-    addDynamicTargets_(truly_new_targets, rt, 100); // High priority
+    addDynamicTargets_(truly_new_targets, ms2_deconv_rt_, 100); // High priority
 
     return true;
   }
