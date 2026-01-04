@@ -142,6 +142,18 @@ namespace OpenMS
                                                       double *window_starts,
                                                       double *window_ends);
 
+  /// bridges getAmbiguityEnclosingIons in FLASHIda class to C# FLASHIda side
+  /// Returns unique fragment ions enclosing PTM ambiguity regions, sorted by qscore
+  /// Requires DeconvolveMS2() to be called first
+  extern "C" OPENMS_DLLAPI int GetAmbiguityEnclosingIons(FLASHIda *object,
+                                                          char *protein_sequence,
+                                                          int n,
+                                                          double *masses,
+                                                          double *qscores,
+                                                          int *charges,
+                                                          double *window_starts,
+                                                          double *window_ends);
+
   /// keeps the precalculated averagine to calculate average masses from monoisotopic masses
   static FLASHHelperClasses::PrecalculatedAveragine avg;
 }

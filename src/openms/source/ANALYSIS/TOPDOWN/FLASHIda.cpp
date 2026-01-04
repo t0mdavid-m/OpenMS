@@ -1532,6 +1532,122 @@ FLASHIda::FLASHIda(char* arg)
     return count;
   }
 
+  int FLASHIda::getAmbiguityEnclosingIons(const String& protein_sequence,
+                                          int n,
+                                          double* masses,
+                                          double* qscores,
+                                          int* charges,
+                                          double* window_starts,
+                                          double* window_ends)
+  {
+    if (!ms2_deconv_valid_ || ms2_deconvolved_spectrum_.empty() || protein_sequence.empty())
+    {
+      return 0;
+    }
+
+    double ppm_tolerance = tol_[1];
+    int seq_len = static_cast<int>(protein_sequence.size());
+
+    // 1. Calculate theoretical fragment masses (reuse existing helper)
+    std::vector<String> ion_types = {"b", "y"};
+    std::vector<double> prefix_masses_theo, suffix_masses_theo, prefix_shifts, suffix_shifts;
+    calculateTheoreticalFragmentMasses(protein_sequence, ion_types,
+                                       prefix_masses_theo, suffix_masses_theo,
+                                       prefix_shifts, suffix_shifts);
+
+    // 2. Match observed peaks to theoretical fragments
+    std::vector<FragmentIonMatch> all_matches;
+    for (Size peak_idx = 0; peak_idx < ms2_deconvolved_spectrum_.size(); ++peak_idx)
+    {
+      const auto& pg = ms2_deconvolved_spectrum_[peak_idx];
+      double observed_mass = pg.getMonoMass();
+      float score = static_cast<float>(pg.getQscore());
+
+      int best_prefix_idx = -1, best_suffix_idx = -1;
+      double best_prefix_theo = 0, best_suffix_theo = 0;
+      double best_prefix_diff = 0, best_suffix_diff = 0;
+      double best_prefix_shift = 0, best_suffix_shift = 0;
+
+      bool prefix_match = findBestMatch(observed_mass, prefix_masses_theo, prefix_shifts, ppm_tolerance,
+                                        best_prefix_idx, best_prefix_theo, best_prefix_diff, best_prefix_shift);
+      bool suffix_match = findBestMatch(observed_mass, suffix_masses_theo, suffix_shifts, ppm_tolerance,
+                                        best_suffix_idx, best_suffix_theo, best_suffix_diff, best_suffix_shift);
+
+      if (prefix_match || suffix_match)
+      {
+        bool use_prefix = prefix_match && (!suffix_match ||
+            std::abs(best_prefix_diff)/best_prefix_theo <= std::abs(best_suffix_diff)/best_suffix_theo);
+
+        FragmentIonMatch match;
+        match.peak_index = static_cast<int>(peak_idx);
+        match.observed_mass = observed_mass;
+        match.score = score;
+        match.fragment_index = use_prefix ? (best_prefix_idx + 1) : (seq_len - best_suffix_idx);
+        match.is_prefix = use_prefix;
+        all_matches.push_back(match);
+      }
+    }
+
+    if (all_matches.empty()) return 0;
+
+    // 3. Detect PTM sites
+    std::vector<PTMSite> ptm_sites;
+    detectPTMSites(all_matches, protein_sequence, 5.0, ptm_sites);
+
+    if (ptm_sites.empty()) return 0;
+
+    // DEBUG: Print PTM sites with sequence substrings for validation
+    std::cout << "[getAmbiguityEnclosingIons] Detected " << ptm_sites.size() << " PTM sites:" << std::endl;
+    for (const auto& site : ptm_sites)
+    {
+      int start_idx = std::max(0, site.start_position - 1);  // 1-based to 0-based
+      int end_idx = std::min(static_cast<int>(protein_sequence.size()), site.end_position);
+      String subsequence = protein_sequence.substr(start_idx, end_idx - start_idx);
+      std::cout << "  PTM [" << site.start_position << "-" << site.end_position << "] "
+                << "\"" << subsequence << "\" "
+                << std::showpos << site.mass_shift << std::noshowpos << " Da" << std::endl;
+    }
+
+    // 4. Collect unique enclosing ions (deduplicated by peak_index)
+    std::set<int> used_peaks;
+    std::vector<std::pair<float, int>> enclosing_ions; // (qscore, peak_index)
+
+    for (const auto& site : ptm_sites)
+    {
+      for (const auto& m : all_matches)
+      {
+        // Left enclosing: fragment_index < start_position
+        // Right enclosing: fragment_index > end_position
+        if (m.fragment_index < site.start_position || m.fragment_index > site.end_position)
+        {
+          if (used_peaks.find(m.peak_index) == used_peaks.end())
+          {
+            used_peaks.insert(m.peak_index);
+            enclosing_ions.push_back({m.score, m.peak_index});
+          }
+        }
+      }
+    }
+
+    // 5. Sort by qscore descending and fill output arrays
+    std::sort(enclosing_ions.begin(), enclosing_ions.end(),
+              [](const auto& a, const auto& b) { return a.first > b.first; });
+
+    int count = std::min(n, static_cast<int>(enclosing_ions.size()));
+    for (int i = 0; i < count; ++i)
+    {
+      const auto& pg = ms2_deconvolved_spectrum_[enclosing_ions[i].second];
+      masses[i] = pg.getMonoMass();
+      qscores[i] = enclosing_ions[i].first;
+      charges[i] = pg.getRepAbsCharge();
+      auto [mz1, mz2] = pg.getMzRange(charges[i]);
+      window_starts[i] = mz1;
+      window_ends[i] = mz2;
+    }
+
+    return count;
+  }
+
   double FLASHIda::getRepresentativeMass()
   {/*
     const int max_count = 10;

@@ -268,6 +268,31 @@ namespace OpenMS
                                 std::vector<double>& window_ends);
 
     /**
+     * @brief Get unique fragment ions that enclose PTM ambiguity regions
+     *
+     * Identifies PTM sites and returns the best fragment ions that bracket
+     * ambiguity regions. Returns deduplicated ions sorted by qscore.
+     * Useful for MS3 targeting to resolve PTM localization.
+     * Requires deconvolveMS2() to be called first.
+     *
+     * @param protein_sequence the protein sequence to analyze
+     * @param n maximum number of ions to return
+     * @param masses output: monoisotopic masses
+     * @param qscores output: quality scores
+     * @param charges output: representative charges
+     * @param window_starts output: isolation window start m/z
+     * @param window_ends output: isolation window end m/z
+     * @return number of enclosing ions found
+     */
+    int getAmbiguityEnclosingIons(const String& protein_sequence,
+                                  int n,
+                                  double* masses,
+                                  double* qscores,
+                                  int* charges,
+                                  double* window_starts,
+                                  double* window_ends);
+
+    /**
            @brief parse FLASHIda log file
            @param in_log_file input log file
            @return parsed information : scan number - percursor information
