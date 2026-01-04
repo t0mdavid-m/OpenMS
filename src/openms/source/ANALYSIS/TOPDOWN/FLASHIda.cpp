@@ -1583,6 +1583,7 @@ FLASHIda::FLASHIda(char* arg)
         match.observed_mass = observed_mass;
         match.score = score;
         match.fragment_index = use_prefix ? (best_prefix_idx + 1) : (seq_len - best_suffix_idx);
+        match.theoretical_mass = use_prefix ? best_prefix_theo : best_suffix_theo;
         match.is_prefix = use_prefix;
         all_matches.push_back(match);
       }
