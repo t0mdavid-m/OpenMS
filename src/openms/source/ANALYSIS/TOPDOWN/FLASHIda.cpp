@@ -412,6 +412,16 @@ FLASHIda::FLASHIda(char* arg)
     sd_defaults.setValue("tol", tol_values);
     tol_ = std::vector<double>(tol_values);
 
+    // Use MS2 tolerance (second value) for tag matching
+    if (tol_.size() >= 2)
+    {
+      tag_matching_tolerance_ppm_ = tol_[1];
+    }
+    else if (tol_.size() == 1)
+    {
+      tag_matching_tolerance_ppm_ = tol_[0];
+    }
+
     // Pass precursor parameters if provided (needed for MS2 deconvolution)
     if (inputs.find("precursor_mz") != inputs.end() && !inputs["precursor_mz"].empty())
     {
@@ -629,9 +639,18 @@ FLASHIda::FLASHIda(char* arg)
     {
       min_tag_length_for_targeting_ = (int)inputs["min_tag_length"][0];
     }
+
+    // Parse max_flanking_mass_diff if provided (default 50000.0)
+    if (inputs.find("max_flanking_mass_diff") != inputs.end() && !inputs["max_flanking_mass_diff"].empty())
+    {
+      max_flanking_mass_diff_ = inputs["max_flanking_mass_diff"][0];
+    }
+
     if (tag_based_targeting_enabled_)
     {
-      std::cout << "Tag-based targeting: min_tag_length=" << min_tag_length_for_targeting_ << "\n";
+      std::cout << "Tag-based targeting: min_tag_length=" << min_tag_length_for_targeting_
+                << ", tolerance=" << tag_matching_tolerance_ppm_ << " ppm"
+                << ", max_flanking_mass_diff=" << max_flanking_mass_diff_ << " Da\n";
     }
 
     // Load PTM TSV files for target expansion
