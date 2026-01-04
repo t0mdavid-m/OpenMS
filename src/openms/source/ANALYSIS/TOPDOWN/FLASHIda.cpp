@@ -624,6 +624,16 @@ FLASHIda::FLASHIda(char* arg)
       max_total_ptm_count_ = (int)inputs["max_ptm_count"][0];
     }
 
+    // Parse min_tag_length if provided (default 3)
+    if (inputs.find("min_tag_length") != inputs.end() && !inputs["min_tag_length"].empty())
+    {
+      min_tag_length_for_targeting_ = (int)inputs["min_tag_length"][0];
+    }
+    if (tag_based_targeting_enabled_)
+    {
+      std::cout << "Tag-based targeting: min_tag_length=" << min_tag_length_for_targeting_ << "\n";
+    }
+
     // Load PTM TSV files for target expansion
     for (const auto& ptm_file : ptm_files)
     {
