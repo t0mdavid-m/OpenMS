@@ -287,30 +287,20 @@ namespace OpenMS
     };
 
     /**
-     * @brief Deconvolute a spectrum and find sequence tags with database matches
+     * @brief Find sequence tags with database matches from stored MS2 deconvolution
      *
-     * This method performs spectrum deconvolution using the FLASHDeconv algorithm,
-     * generates sequence tags using FLASHTagger, and matches them against a protein database.
+     * Generates sequence tags using FLASHTagger and matches them against a protein database.
+     * Requires deconvolveMS2() to be called first.
      *
-     * @param mzs m/z values of the input spectrum
-     * @param ints intensities of the input spectrum
-     * @param length number of peaks in the spectrum
-     * @param rt retention time in seconds
-     * @param ms_level MS level of the spectrum
      * @param fasta_entries protein database entries to match against
      * @param tagger_param parameters for the FLASHTagger algorithm (optional, uses defaults if empty)
      * @param tags output vector of detected sequence tags
      * @param matches output vector of tag matches to database entries
      * @param ppm_tolerance mass tolerance in ppm for tag matching (default 10.0)
      * @param max_flanking_mass_diff maximum allowed flanking mass difference for a match (default 500.0 Da)
-     * @return number of tags found
+     * @return number of tags found, or 0 if deconvolveMS2() was not called
      */
-    int getSequenceTagsAndMatches(const double* mzs,
-                                  const double* ints,
-                                  int length,
-                                  double rt,
-                                  int ms_level,
-                                  const std::vector<FASTAFile::FASTAEntry>& fasta_entries,
+    int getSequenceTagsAndMatches(const std::vector<FASTAFile::FASTAEntry>& fasta_entries,
                                   const Param& tagger_param,
                                   std::vector<FLASHHelperClasses::Tag>& tags,
                                   std::vector<TagMatch>& matches,
@@ -318,18 +308,14 @@ namespace OpenMS
                                   double max_flanking_mass_diff = 500.0);
 
     /**
-     * @brief Identify proteoform from MS2 spectrum against a single protein sequence
+     * @brief Identify proteoform from stored MS2 deconvolution against a single protein sequence
      *
      * Implements the core FLASHTnT identification workflow:
-     * 1. Deconvolves the MS2 spectrum to get monoisotopic masses
+     * 1. Uses stored MS2 deconvolution results (requires deconvolveMS2() first)
      * 2. Calculates theoretical fragment masses from protein sequence
      * 3. Matches observed masses against theoretical fragments
      * 4. Identifies PTM positions based on mass differences
      *
-     * @param mzs m/z values of the input MS2 spectrum
-     * @param ints intensities of the input MS2 spectrum
-     * @param length number of peaks in the spectrum
-     * @param rt retention time in seconds
      * @param protein_sequence the protein sequence to match against
      * @param ppm_tolerance mass tolerance in ppm (default 10.0)
      * @param ion_types ion types to consider (default {"b", "y"})
@@ -338,13 +324,9 @@ namespace OpenMS
      * @param ptm_start_positions output: start positions of PTM localization ranges (1-based)
      * @param ptm_end_positions output: end positions of PTM localization ranges (1-based)
      * @param ptm_masses output: mass shifts at each PTM position
-     * @return number of matched fragment ions
+     * @return number of matched fragment ions, or 0 if deconvolveMS2() was not called
      */
-    int identifyProteoform(const double* mzs,
-                           const double* ints,
-                           int length,
-                           double rt,
-                           const String& protein_sequence,
+    int identifyProteoform(const String& protein_sequence,
                            double ppm_tolerance,
                            const std::vector<String>& ion_types,
                            double ptm_mass_threshold,
@@ -358,11 +340,8 @@ namespace OpenMS
      *
      * Extended version providing more detailed match information including
      * peak indices, theoretical masses, ion types, and PTM localization ranges.
+     * Requires deconvolveMS2() to be called first.
      *
-     * @param mzs m/z values of the input MS2 spectrum
-     * @param ints intensities of the input MS2 spectrum
-     * @param length number of peaks in the spectrum
-     * @param rt retention time in seconds
      * @param protein_sequence the protein sequence to match against
      * @param ppm_tolerance mass tolerance in ppm
      * @param ion_types ion types to consider
@@ -376,13 +355,9 @@ namespace OpenMS
      * @param ptm_masses output: mass shift for each PTM
      * @param coverage output: sequence coverage (0.0-1.0)
      * @param total_score output: total identification score
-     * @return number of matched ions
+     * @return number of matched ions, or 0 if deconvolveMS2() was not called
      */
-    int identifyProteoformExtended(const double* mzs,
-                                   const double* ints,
-                                   int length,
-                                   double rt,
-                                   const String& protein_sequence,
+    int identifyProteoformExtended(const String& protein_sequence,
                                    double ppm_tolerance,
                                    const std::vector<String>& ion_types,
                                    int max_ptm_count,
@@ -395,57 +370,6 @@ namespace OpenMS
                                    std::vector<double>& ptm_masses,
                                    double& coverage,
                                    double& total_score);
-
-    // ============ Python-friendly overloads using vectors ============
-
-    /**
-     * @brief Python-friendly overload of getSequenceTagsAndMatches using vectors
-     */
-    int getSequenceTagsAndMatchesPy(const std::vector<double>& mzs,
-                                    const std::vector<double>& ints,
-                                    double rt,
-                                    int ms_level,
-                                    const std::vector<FASTAFile::FASTAEntry>& fasta_entries,
-                                    const Param& tagger_param,
-                                    std::vector<FLASHHelperClasses::Tag>& tags,
-                                    std::vector<TagMatch>& matches,
-                                    double ppm_tolerance = 10.0,
-                                    double max_flanking_mass_diff = 500.0);
-
-    /**
-     * @brief Python-friendly overload of identifyProteoform using vectors
-     */
-    int identifyProteoformPy(const std::vector<double>& mzs,
-                             const std::vector<double>& ints,
-                             double rt,
-                             const String& protein_sequence,
-                             double ppm_tolerance,
-                             const std::vector<String>& ion_types,
-                             double ptm_mass_threshold,
-                             std::vector<int>& matched_fragment_indices,
-                             std::vector<int>& ptm_start_positions,
-                             std::vector<int>& ptm_end_positions,
-                             std::vector<double>& ptm_masses);
-
-    /**
-     * @brief Python-friendly overload of identifyProteoformExtended using vectors
-     */
-    int identifyProteoformExtendedPy(const std::vector<double>& mzs,
-                                     const std::vector<double>& ints,
-                                     double rt,
-                                     const String& protein_sequence,
-                                     double ppm_tolerance,
-                                     const std::vector<String>& ion_types,
-                                     int max_ptm_count,
-                                     double max_ptm_mass,
-                                     std::vector<int>& matched_peak_indices,
-                                     std::vector<double>& matched_theoretical_masses,
-                                     std::vector<bool>& matched_ion_types,
-                                     std::vector<int>& ptm_start_positions,
-                                     std::vector<int>& ptm_end_positions,
-                                     std::vector<double>& ptm_masses,
-                                     double& coverage,
-                                     double& total_score);
 
     /**
      * @brief Identify proteoform from pre-deconvolved masses (core identification function)
@@ -519,33 +443,19 @@ namespace OpenMS
                                                      std::vector<double>& suffix_masses);
 
     /**
-     * @brief Process MS2 spectrum for protein family detection and inclusion list expansion
+     * @brief Process stored MS2 deconvolution for protein family detection and inclusion list expansion
      *
      * This DLL bridge function performs real-time tag-based targeting:
-     * 1. Deconvolves the MS2 spectrum
+     * 1. Uses stored MS2 deconvolution results (requires deconvolveMS2() first)
      * 2. Extracts sequence tags (minimum length 3)
      * 3. Matches tags against the target protein database
      * 4. If match found: Expands target masses using PTM combinations from precursor mass
      * 5. Adds expanded masses to dynamic inclusion list
      *
-     * @param mzs m/z values of the input spectrum
-     * @param ints intensities of the input spectrum
-     * @param length number of peaks in the spectrum
-     * @param rt retention time in seconds
-     * @param ms_level MS level of the spectrum (must be 2)
-     * @param name spectrum name
-     * @param cv CV value for FAIMS (can be nullptr)
      * @param precursor_mass monoisotopic mass of the precursor (from iAPI)
      * @return true if target protein detected and targets expanded, false otherwise
      */
-    bool processMS2ForTagBasedTargeting(const double* mzs,
-                                        const double* ints,
-                                        int length,
-                                        double rt,
-                                        int ms_level,
-                                        const char* name,
-                                        const char* cv,
-                                        double precursor_mass);
+    bool processMS2ForTagBasedTargeting(double precursor_mass);
 
   private:
     /// PeakGroup comparator for soring by QScore

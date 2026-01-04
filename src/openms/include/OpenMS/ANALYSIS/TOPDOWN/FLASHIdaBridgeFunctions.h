@@ -101,14 +101,8 @@ namespace OpenMS
   extern "C" OPENMS_DLLAPI double GetRepresentativeMass(FLASHIda *pObject);
 
   /// bridges processMS2ForTagBasedTargeting in FLASHIda class to C# FLASHIda side
+  /// Requires DeconvolveMS2() to be called first
   extern "C" OPENMS_DLLAPI bool ProcessMS2ForTagBasedTargeting(FLASHIda *object,
-                                                                double *mzs,
-                                                                double *ints,
-                                                                int length,
-                                                                double rt_min,
-                                                                int ms_level,
-                                                                char *name,
-                                                                char *cv,
                                                                 double precursor_mass);
 
   /// bridges deconvolveMS2 in FLASHIda class to C# FLASHIda side

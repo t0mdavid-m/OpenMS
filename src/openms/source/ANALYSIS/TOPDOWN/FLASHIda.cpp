@@ -1527,12 +1527,7 @@ FLASHIda::FLASHIda(char* arg)
   }
 
 
-  int FLASHIda::getSequenceTagsAndMatches(const double* mzs,
-                                          const double* ints,
-                                          int length,
-                                          double rt,
-                                          int ms_level,
-                                          const std::vector<FASTAFile::FASTAEntry>& fasta_entries,
+  int FLASHIda::getSequenceTagsAndMatches(const std::vector<FASTAFile::FASTAEntry>& fasta_entries,
                                           const Param& tagger_param,
                                           std::vector<FLASHHelperClasses::Tag>& tags,
                                           std::vector<TagMatch>& matches,
@@ -1644,11 +1639,7 @@ FLASHIda::FLASHIda(char* arg)
    * @param ptm_masses output: mass shifts at each PTM position
    * @return number of matched amino acids
    */
-  int FLASHIda::identifyProteoform(const double* mzs,
-                                   const double* ints,
-                                   int length,
-                                   double rt,
-                                   const String& protein_sequence,
+  int FLASHIda::identifyProteoform(const String& protein_sequence,
                                    double ppm_tolerance,
                                    const std::vector<String>& ion_types,
                                    double ptm_mass_threshold,
@@ -1896,11 +1887,7 @@ FLASHIda::FLASHIda(char* arg)
    * @param total_score output: total identification score
    * @return number of matched ions
    */
-  int FLASHIda::identifyProteoformExtended(const double* mzs,
-                                           const double* ints,
-                                           int length,
-                                           double rt,
-                                           const String& protein_sequence,
+  int FLASHIda::identifyProteoformExtended(const String& protein_sequence,
                                            double ppm_tolerance,
                                            const std::vector<String>& ion_types,
                                            int max_ptm_count,
@@ -2098,91 +2085,6 @@ FLASHIda::FLASHIda(char* arg)
     }
 
     return static_cast<int>(all_matches.size());
-  }
-
-  // ============ Python-friendly overloads using vectors ============
-
-  int FLASHIda::getSequenceTagsAndMatchesPy(const std::vector<double>& mzs,
-                                            const std::vector<double>& ints,
-                                            double rt,
-                                            int ms_level,
-                                            const std::vector<FASTAFile::FASTAEntry>& fasta_entries,
-                                            const Param& tagger_param,
-                                            std::vector<FLASHHelperClasses::Tag>& tags,
-                                            std::vector<TagMatch>& matches,
-                                            double ppm_tolerance,
-                                            double max_flanking_mass_diff)
-  {
-    if (mzs.empty() || mzs.size() != ints.size())
-    {
-      return 0;
-    }
-    return getSequenceTagsAndMatches(mzs.data(), ints.data(), static_cast<int>(mzs.size()),
-                                     rt, ms_level, fasta_entries, tagger_param,
-                                     tags, matches, ppm_tolerance, max_flanking_mass_diff);
-  }
-
-  int FLASHIda::identifyProteoformPy(const std::vector<double>& mzs,
-                                     const std::vector<double>& ints,
-                                     double rt,
-                                     const String& protein_sequence,
-                                     double ppm_tolerance,
-                                     const std::vector<String>& ion_types,
-                                     double ptm_mass_threshold,
-                                     std::vector<int>& matched_fragment_indices,
-                                     std::vector<int>& ptm_start_positions,
-                                     std::vector<int>& ptm_end_positions,
-                                     std::vector<double>& ptm_masses)
-  {
-    if (mzs.empty() || mzs.size() != ints.size())
-    {
-      matched_fragment_indices.clear();
-      ptm_start_positions.clear();
-      ptm_end_positions.clear();
-      ptm_masses.clear();
-      return 0;
-    }
-    return identifyProteoform(mzs.data(), ints.data(), static_cast<int>(mzs.size()),
-                              rt, protein_sequence, ppm_tolerance, ion_types,
-                              ptm_mass_threshold, matched_fragment_indices,
-                              ptm_start_positions, ptm_end_positions, ptm_masses);
-  }
-
-  int FLASHIda::identifyProteoformExtendedPy(const std::vector<double>& mzs,
-                                             const std::vector<double>& ints,
-                                             double rt,
-                                             const String& protein_sequence,
-                                             double ppm_tolerance,
-                                             const std::vector<String>& ion_types,
-                                             int max_ptm_count,
-                                             double max_ptm_mass,
-                                             std::vector<int>& matched_peak_indices,
-                                             std::vector<double>& matched_theoretical_masses,
-                                             std::vector<bool>& matched_ion_types,
-                                             std::vector<int>& ptm_start_positions,
-                                             std::vector<int>& ptm_end_positions,
-                                             std::vector<double>& ptm_masses,
-                                             double& coverage,
-                                             double& total_score)
-  {
-    if (mzs.empty() || mzs.size() != ints.size())
-    {
-      matched_peak_indices.clear();
-      matched_theoretical_masses.clear();
-      matched_ion_types.clear();
-      ptm_start_positions.clear();
-      ptm_end_positions.clear();
-      ptm_masses.clear();
-      coverage = 0.0;
-      total_score = 0.0;
-      return 0;
-    }
-    return identifyProteoformExtended(mzs.data(), ints.data(), static_cast<int>(mzs.size()),
-                                      rt, protein_sequence, ppm_tolerance, ion_types,
-                                      max_ptm_count, max_ptm_mass,
-                                      matched_peak_indices, matched_theoretical_masses,
-                                      matched_ion_types, ptm_start_positions,
-                                      ptm_end_positions, ptm_masses, coverage, total_score);
   }
 
   /**
@@ -2825,14 +2727,7 @@ FLASHIda::FLASHIda(char* arg)
     std::cout << std::endl;
   }
 
-  bool FLASHIda::processMS2ForTagBasedTargeting(const double* mzs,
-                                                 const double* ints,
-                                                 int length,
-                                                 double rt,
-                                                 int ms_level,
-                                                 const char* name,
-                                                 const char* cv,
-                                                 double precursor_mass)
+  bool FLASHIda::processMS2ForTagBasedTargeting(double precursor_mass)
   {
     // Early exit if tag-based targeting not enabled
     if (!tag_based_targeting_enabled_ || target_protein_database_.empty())
@@ -2840,24 +2735,14 @@ FLASHIda::FLASHIda(char* arg)
       return false;
     }
 
-    // Only process MS2 spectra
-    if (ms_level != 2)
+    // Require deconvolveMS2() to be called first
+    if (!ms2_deconv_valid_)
     {
       return false;
     }
 
-    // Create MSSpectrum from input arrays
-    auto spec = makeMSSpectrum_(mzs, ints, length, rt, ms_level, name);
-    if (cv != nullptr)
-    {
-      spec.setMetaValue("filter string", DataValue("cv=" + std::string(cv)));
-    }
-
-    // Perform deconvolution
-    PeakGroup empty;
-    fd_.performSpectrumDeconvolution(spec, 0, empty);
-    DeconvolvedSpectrum dspec = fd_.getDeconvolvedSpectrum();
-
+    // Use stored MS2 deconvolution
+    DeconvolvedSpectrum dspec = ms2_deconvolved_spectrum_;
     if (dspec.empty())
     {
       return false;
