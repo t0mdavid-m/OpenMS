@@ -2618,7 +2618,7 @@ FLASHIda::FLASHIda(char* arg)
                                                          const std::vector<TargetPTM>& ptms) const
   {
     std::vector<double> result;
-    result.push_back(base_mass);  // Include unmodified
+    // Unmodified base mass intentionally excluded - only PTM-modified forms
 
     if (ptms.empty())
     {
@@ -2631,7 +2631,10 @@ FLASHIda::FLASHIda(char* arg)
     generate = [&](Size ptm_idx, double current_mass, int total_count) {
       if (ptm_idx >= ptms.size())
       {
-        result.push_back(current_mass);
+        if (total_count > 0)  // Only include modified forms
+        {
+          result.push_back(current_mass);
+        }
         return;
       }
 
