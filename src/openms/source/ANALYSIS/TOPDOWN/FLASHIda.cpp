@@ -2651,6 +2651,10 @@ FLASHIda::FLASHIda(char* arg)
                                     double rt,
                                     int priority)
   {
+    // Add new targets to inclusion list
+    // Note: target_masses_ and fd_.setTargetMasses() are managed by getPeakGroups()
+    // which clears and rebuilds them from inclusion_targets_ on each MS1 scan.
+    // We only need to add to inclusion_targets_ here.
     for (double mass : masses)
     {
       InclusionTarget target;
@@ -2661,30 +2665,9 @@ FLASHIda::FLASHIda(char* arg)
       target.priority = priority;
 
       inclusion_targets_.push_back(target);
-
-      // Also add to target_masses_ for current spectrum if in inclusion mode
-      if (targeting_mode_ == 1)
-      {
-        target_masses_.push_back(mass);
-
-        // Update priority map
-        int nominal = SpectralDeconvolution::getNominalMass(mass);
-        if (target_priority_map_.find(nominal) == target_priority_map_.end()
-            || priority > target_priority_map_[nominal])
-        {
-          target_priority_map_[nominal] = priority;
-        }
-      }
     }
 
-    // Re-sort target_masses_ for binary search
-    if (!target_masses_.empty())
-    {
-      std::sort(target_masses_.begin(), target_masses_.end());
-      fd_.setTargetMasses(target_masses_, false);
-    }
-
-    // Re-sort inclusion_targets_ by mass
+    // Re-sort inclusion_targets_ by mass for efficient lookup
     std::sort(inclusion_targets_.begin(), inclusion_targets_.end(),
       [](const InclusionTarget& a, const InclusionTarget& b) { return a.mass < b.mass; });
 
@@ -2742,7 +2725,7 @@ FLASHIda::FLASHIda(char* arg)
     // Create and configure tagger with minimum length
     FLASHTaggerAlgorithm tagger;
     Param tagger_param = tagger.getDefaults();
-    tagger_param.setValue("min_tag_length", min_tag_length_for_targeting_);
+    tagger_param.setValue("min_length", min_tag_length_for_targeting_);
     tagger.setParameters(tagger_param);
 
     // Run tag generation
