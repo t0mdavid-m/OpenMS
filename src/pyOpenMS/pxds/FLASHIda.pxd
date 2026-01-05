@@ -178,6 +178,31 @@ cdef extern from "<OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>" namespace "OpenMS":
             #   :param prefix_masses: output cumulative masses from N-terminus
             #   :param suffix_masses: output cumulative masses from C-terminus
 
+        # Python-friendly method for getting PTM ambiguity enclosing ions
+        int getAmbiguityEnclosingIonsPy(String & protein_sequence,
+                                        int n,
+                                        libcpp_vector[double] & masses,
+                                        libcpp_vector[double] & qscores,
+                                        libcpp_vector[int] & charges,
+                                        libcpp_vector[double] & window_starts,
+                                        libcpp_vector[double] & window_ends) except + nogil
+            # wrap-doc:
+            #   Get unique fragment ions that enclose PTM ambiguity regions.
+            #
+            #   Identifies PTM sites and returns the best fragment ions that bracket
+            #   ambiguity regions. Returns deduplicated ions sorted by qscore.
+            #   Useful for MS3 targeting to resolve PTM localization.
+            #   Requires deconvolveMS2() to be called first.
+            #
+            #   :param protein_sequence: the protein sequence to analyze
+            #   :param n: maximum number of ions to return
+            #   :param masses: output monoisotopic masses
+            #   :param qscores: output quality scores
+            #   :param charges: output representative charges
+            #   :param window_starts: output isolation window start m/z
+            #   :param window_ends: output isolation window end m/z
+            #   :returns: number of enclosing ions found
+
 cdef extern from "<OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>" namespace "OpenMS::FLASHIda":
 
     cdef cppclass FLASHIdaTagMatch "OpenMS::FLASHIda::TagMatch":

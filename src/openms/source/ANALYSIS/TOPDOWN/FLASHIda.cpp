@@ -1688,6 +1688,100 @@ FLASHIda::FLASHIda(char* arg)
     return count;
   }
 
+  int FLASHIda::getAmbiguityEnclosingIonsPy(const String& protein_sequence,
+                                            int n,
+                                            std::vector<double>& masses,
+                                            std::vector<double>& qscores,
+                                            std::vector<int>& charges,
+                                            std::vector<double>& window_starts,
+                                            std::vector<double>& window_ends)
+  {
+    masses.resize(n);
+    qscores.resize(n);
+    charges.resize(n);
+    window_starts.resize(n);
+    window_ends.resize(n);
+
+    int count = getAmbiguityEnclosingIons(protein_sequence, n, masses.data(), qscores.data(),
+                                          charges.data(), window_starts.data(), window_ends.data());
+
+    masses.resize(count);
+    qscores.resize(count);
+    charges.resize(count);
+    window_starts.resize(count);
+    window_ends.resize(count);
+
+    return count;
+  }
+
+  int FLASHIda::getSequenceTagsAndMatchesPy(const std::vector<double>& mzs,
+                                            const std::vector<double>& ints,
+                                            double rt,
+                                            int /*ms_level*/,
+                                            const std::vector<FASTAFile::FASTAEntry>& fasta_entries,
+                                            const Param& tagger_param,
+                                            std::vector<FLASHHelperClasses::Tag>& tags,
+                                            std::vector<TagMatch>& matches,
+                                            double ppm_tolerance,
+                                            double max_flanking_mass_diff)
+  {
+    // Deconvolve the spectrum first
+    deconvolveMS2Py(mzs, ints, rt);
+
+    // Call the underlying method
+    return getSequenceTagsAndMatches(fasta_entries, tagger_param, tags, matches,
+                                      ppm_tolerance, max_flanking_mass_diff);
+  }
+
+  int FLASHIda::identifyProteoformPy(const std::vector<double>& mzs,
+                                     const std::vector<double>& ints,
+                                     double rt,
+                                     const String& protein_sequence,
+                                     double ppm_tolerance,
+                                     const std::vector<String>& ion_types,
+                                     double ptm_mass_threshold,
+                                     std::vector<int>& matched_fragment_indices,
+                                     std::vector<int>& ptm_start_positions,
+                                     std::vector<int>& ptm_end_positions,
+                                     std::vector<double>& ptm_masses)
+  {
+    // Deconvolve the spectrum first
+    deconvolveMS2Py(mzs, ints, rt);
+
+    // Call the underlying method
+    return identifyProteoform(protein_sequence, ppm_tolerance, ion_types, ptm_mass_threshold,
+                              matched_fragment_indices, ptm_start_positions,
+                              ptm_end_positions, ptm_masses);
+  }
+
+  int FLASHIda::identifyProteoformExtendedPy(const std::vector<double>& mzs,
+                                             const std::vector<double>& ints,
+                                             double rt,
+                                             const String& protein_sequence,
+                                             double ppm_tolerance,
+                                             const std::vector<String>& ion_types,
+                                             int max_ptm_count,
+                                             double max_ptm_mass,
+                                             std::vector<int>& matched_peak_indices,
+                                             std::vector<double>& matched_theoretical_masses,
+                                             std::vector<bool>& matched_ion_types,
+                                             std::vector<int>& ptm_start_positions,
+                                             std::vector<int>& ptm_end_positions,
+                                             std::vector<double>& ptm_masses,
+                                             double& coverage,
+                                             double& total_score)
+  {
+    // Deconvolve the spectrum first
+    deconvolveMS2Py(mzs, ints, rt);
+
+    // Call the underlying method
+    return identifyProteoformExtended(protein_sequence, ppm_tolerance, ion_types,
+                                       max_ptm_count, max_ptm_mass,
+                                       matched_peak_indices, matched_theoretical_masses,
+                                       matched_ion_types, ptm_start_positions,
+                                       ptm_end_positions, ptm_masses, coverage, total_score);
+  }
+
   double FLASHIda::getRepresentativeMass()
   {/*
     const int max_count = 10;
