@@ -35,6 +35,7 @@
 #pragma once
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHExtenderAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
@@ -628,6 +629,44 @@ namespace OpenMS
     bool processMS2ForTagBasedTargeting(double precursor_mass);
 
   private:
+    /// Internal struct for fragment match results from tag-based matching
+    struct TagBasedFragmentMatch {
+      int peak_index;           ///< Index in ms2_deconvolved_spectrum_
+      double observed_mass;     ///< Monoisotopic mass
+      double theoretical_mass;  ///< Theoretical mass
+      double qscore;            ///< Quality score from PeakGroup
+      int charge;               ///< Charge state
+      int fragment_index;       ///< 1-based position in protein sequence
+      bool is_prefix;           ///< true = b-ion (prefix), false = y-ion (suffix)
+      double ppm_error;         ///< ppm error from match
+    };
+
+    /// Internal struct for PTM site information from FLASHExtender
+    struct PTMSite {
+      int position;        ///< Position in protein sequence (1-based, midpoint)
+      int start_position;  ///< Start of the region where PTM could be localized (1-based)
+      int end_position;    ///< End of the region where PTM could be localized (1-based)
+      double mass_shift;   ///< Observed mass shift (modification mass)
+    };
+
+    /**
+     * @brief Run FLASHTagger+FLASHExtender workflow to get matched fragments
+     *
+     * Uses the stored MS2 deconvolution (ms2_deconvolved_spectrum_) to:
+     * 1. Generate sequence tags via FLASHTagger
+     * 2. Validate tags match the protein sequence
+     * 3. Run FLASHExtender for path-based matching
+     * 4. Extract matched fragments with qscores, charges, and positions
+     *
+     * @param protein_sequence the protein sequence to match against
+     * @param matches output: vector of matched fragments sorted by qscore descending
+     * @param ptm_sites optional output: PTM sites detected by FLASHExtender
+     * @return number of matches found
+     */
+    int runTagBasedFragmentMatching_(const String& protein_sequence,
+                                      std::vector<TagBasedFragmentMatch>& matches,
+                                      std::vector<PTMSite>* ptm_sites = nullptr);
+
     /// PeakGroup comparator for soring by QScore
     /*struct
     {
