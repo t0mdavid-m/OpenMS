@@ -1760,8 +1760,6 @@ FLASHIda::FLASHIda(char* arg)
     calculatePTMAdjustedFragmentMasses(protein_sequence, local_ptm_sites, b_ion_shift, y_ion_shift,
                                         prefix_masses, suffix_masses);
 
-    int seq_len = static_cast<int>(protein_sequence.size());
-
     // 10. Match observed masses against PTM-adjusted theoretical masses
     for (Size peak_idx = 0; peak_idx < ms2_deconvolved_spectrum_.size(); ++peak_idx)
     {
