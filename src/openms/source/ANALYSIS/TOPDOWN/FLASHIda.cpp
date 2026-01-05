@@ -2134,6 +2134,162 @@ FLASHIda::FLASHIda(char* arg)
     return count;
   }
 
+  int FLASHIda::getTerminalFragmentIons(
+      const String& protein_sequence,
+      int n,
+      double* masses,
+      double* qscores,
+      int* charges,
+      double* window_starts,
+      double* window_ends,
+      bool* is_b_ions)
+  {
+    // Run fragment matching to get all matches
+    std::vector<TagBasedFragmentMatch> matches;
+    runTagBasedFragmentMatching_(protein_sequence, matches);
+
+    if (matches.empty()) return 0;
+
+    // Separate into b-ions and y-ions
+    std::vector<TagBasedFragmentMatch> b_ions, y_ions;
+    for (const auto& m : matches)
+    {
+      if (m.is_prefix) b_ions.push_back(m);
+      else y_ions.push_back(m);
+    }
+
+    std::cout << "[getTerminalFragmentIons] Found " << b_ions.size() << " b-ions and "
+              << y_ions.size() << " y-ions" << std::endl;
+
+    // Sort b-ions by fragment_index descending (rightmost first), then qscore descending
+    std::sort(b_ions.begin(), b_ions.end(), [](const auto& a, const auto& b) {
+      if (a.fragment_index != b.fragment_index) return a.fragment_index > b.fragment_index;
+      return a.qscore > b.qscore;
+    });
+
+    // Sort y-ions by fragment_index descending (leftmost first), then qscore descending
+    std::sort(y_ions.begin(), y_ions.end(), [](const auto& a, const auto& b) {
+      if (a.fragment_index != b.fragment_index) return a.fragment_index > b.fragment_index;
+      return a.qscore > b.qscore;
+    });
+
+    if (!b_ions.empty())
+    {
+      std::cout << "[getTerminalFragmentIons] Top b-ions (rightmost): ";
+      for (size_t i = 0; i < std::min(b_ions.size(), size_t(3)); ++i)
+      {
+        std::cout << "b" << b_ions[i].fragment_index << " ";
+      }
+      std::cout << std::endl;
+    }
+    if (!y_ions.empty())
+    {
+      std::cout << "[getTerminalFragmentIons] Top y-ions (leftmost): ";
+      for (size_t i = 0; i < std::min(y_ions.size(), size_t(3)); ++i)
+      {
+        std::cout << "y" << y_ions[i].fragment_index << " ";
+      }
+      std::cout << std::endl;
+    }
+
+    // Interleave output: b, y, b, y, ...
+    int count = 0;
+    size_t idx_b = 0, idx_y = 0;
+
+    while (count < n && (idx_b < b_ions.size() || idx_y < y_ions.size()))
+    {
+      const TagBasedFragmentMatch* selected = nullptr;
+      bool is_b = false;
+
+      if (count % 2 == 0)  // Even indices: prefer b-ion
+      {
+        if (idx_b < b_ions.size()) {
+          selected = &b_ions[idx_b++];
+          is_b = true;
+        } else if (idx_y < y_ions.size()) {
+          selected = &y_ions[idx_y++];
+          is_b = false;
+        }
+      }
+      else  // Odd indices: prefer y-ion
+      {
+        if (idx_y < y_ions.size()) {
+          selected = &y_ions[idx_y++];
+          is_b = false;
+        } else if (idx_b < b_ions.size()) {
+          selected = &b_ions[idx_b++];
+          is_b = true;
+        }
+      }
+
+      if (selected)
+      {
+        masses[count] = selected->observed_mass;
+        qscores[count] = selected->qscore;
+        charges[count] = selected->charge;
+        is_b_ions[count] = is_b;
+
+        // Get isolation window from deconvolved spectrum
+        auto mz_range = ms2_deconvolved_spectrum_[selected->peak_index].getMzRange(selected->charge);
+        window_starts[count] = mz_range.first;
+        window_ends[count] = mz_range.second;
+
+        ++count;
+      }
+    }
+
+    std::cout << "[getTerminalFragmentIons] Returning " << count << " interleaved ions:" << std::endl;
+    for (int i = 0; i < count; ++i)
+    {
+      std::cout << "  " << (is_b_ions[i] ? "b" : "y") << " mass=" << masses[i]
+                << " qscore=" << qscores[i] << " charge=" << charges[i] << std::endl;
+    }
+
+    return count;
+  }
+
+  int FLASHIda::getTerminalFragmentIonsPy(
+      const String& protein_sequence,
+      int n,
+      std::vector<double>& masses,
+      std::vector<double>& qscores,
+      std::vector<int>& charges,
+      std::vector<double>& window_starts,
+      std::vector<double>& window_ends,
+      std::vector<int>& is_b_ions)
+  {
+    masses.resize(n);
+    qscores.resize(n);
+    charges.resize(n);
+    window_starts.resize(n);
+    window_ends.resize(n);
+
+    // Use raw bool array for the C-style function
+    std::unique_ptr<bool[]> is_b_temp(new bool[n]);
+
+    int count = getTerminalFragmentIons(
+        protein_sequence, n,
+        masses.data(), qscores.data(), charges.data(),
+        window_starts.data(), window_ends.data(),
+        is_b_temp.get());
+
+    // Resize to actual count
+    masses.resize(count);
+    qscores.resize(count);
+    charges.resize(count);
+    window_starts.resize(count);
+    window_ends.resize(count);
+
+    // Convert bool array to int vector (1 for b-ion, 0 for y-ion)
+    is_b_ions.resize(count);
+    for (int i = 0; i < count; ++i)
+    {
+      is_b_ions[i] = is_b_temp[i] ? 1 : 0;
+    }
+
+    return count;
+  }
+
   int FLASHIda::getSequenceTagsAndMatchesPy(const std::vector<double>& mzs,
                                             const std::vector<double>& ints,
                                             double rt,

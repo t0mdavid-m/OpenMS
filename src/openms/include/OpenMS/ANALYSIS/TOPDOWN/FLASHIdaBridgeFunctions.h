@@ -154,6 +154,21 @@ namespace OpenMS
                                                           double *window_starts,
                                                           double *window_ends);
 
+  /// Get terminal (innermost) fragment ions
+  /// For b-ions: returns those with highest fragment_index (extend toward C-terminus)
+  /// For y-ions: returns those with highest fragment_index (extend toward N-terminus)
+  /// Output: interleaved [top_b, top_y, second_b, second_y, ...]
+  /// Requires DeconvolveMS2() to be called first
+  extern "C" OPENMS_DLLAPI int GetTerminalFragmentIons(FLASHIda *object,
+                                                        char *protein_sequence,
+                                                        int n,
+                                                        double *masses,
+                                                        double *qscores,
+                                                        int *charges,
+                                                        double *window_starts,
+                                                        double *window_ends,
+                                                        bool *is_b_ions);
+
   /// keeps the precalculated averagine to calculate average masses from monoisotopic masses
   static FLASHHelperClasses::PrecalculatedAveragine avg;
 }

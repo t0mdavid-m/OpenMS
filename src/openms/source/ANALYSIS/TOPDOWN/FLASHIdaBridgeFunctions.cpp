@@ -228,4 +228,23 @@ namespace OpenMS
     }
     return 0;
   }
+
+  int GetTerminalFragmentIons(FLASHIda *pObject,
+                              char *protein_sequence,
+                              int n,
+                              double *masses,
+                              double *qscores,
+                              int *charges,
+                              double *window_starts,
+                              double *window_ends,
+                              bool *is_b_ions)
+  {
+    if (pObject != nullptr && protein_sequence != nullptr)
+    {
+      return pObject->getTerminalFragmentIons(
+          String(protein_sequence), n, masses, qscores, charges,
+          window_starts, window_ends, is_b_ions);
+    }
+    return 0;
+  }
 }

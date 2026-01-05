@@ -313,6 +313,49 @@ namespace OpenMS
                                     std::vector<double>& window_ends);
 
     /**
+     * @brief Get terminal (innermost) fragment ions sorted by sequence position
+     *
+     * Returns fragment ions that extend furthest toward the opposite terminus:
+     * - b-ions: sorted by highest fragment_index (rightmost, closest to C-terminus)
+     * - y-ions: sorted by highest fragment_index (leftmost, closest to N-terminus)
+     *
+     * Output is interleaved: [top_b, top_y, 2nd_b, 2nd_y, ...]
+     * Requires DeconvolveMS2() to be called first.
+     *
+     * @param protein_sequence The protein sequence to match against
+     * @param n Maximum number of results to return
+     * @param masses Output: observed monoisotopic masses
+     * @param qscores Output: quality scores
+     * @param charges Output: charge states
+     * @param window_starts Output: isolation window start m/z
+     * @param window_ends Output: isolation window end m/z
+     * @param is_b_ions Output: true if b-ion, false if y-ion
+     * @return Number of results returned (may be < n)
+     */
+    int getTerminalFragmentIons(const String& protein_sequence,
+                                int n,
+                                double* masses,
+                                double* qscores,
+                                int* charges,
+                                double* window_starts,
+                                double* window_ends,
+                                bool* is_b_ions);
+
+    /**
+     * @brief Python-friendly overload of getTerminalFragmentIons
+     *
+     * @param is_b_ions Output: 1 if b-ion, 0 if y-ion (uses int for Python compatibility)
+     */
+    int getTerminalFragmentIonsPy(const String& protein_sequence,
+                                  int n,
+                                  std::vector<double>& masses,
+                                  std::vector<double>& qscores,
+                                  std::vector<int>& charges,
+                                  std::vector<double>& window_starts,
+                                  std::vector<double>& window_ends,
+                                  std::vector<int>& is_b_ions);
+
+    /**
            @brief parse FLASHIda log file
            @param in_log_file input log file
            @return parsed information : scan number - percursor information
