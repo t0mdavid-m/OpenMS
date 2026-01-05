@@ -902,6 +902,7 @@ FLASHIda::FLASHIda(char* arg)
     // Apply priority tie-breaking when TSV targets are loaded
     if (targeting_mode_ == 1 && !inclusion_targets_.empty())
     {
+      std::cout << "sorting" << std::endl;
       std::stable_sort(deconvolved_spectrum_.begin(), deconvolved_spectrum_.end(),
         [this](const PeakGroup& a, const PeakGroup& b) {
           if (std::abs(a.getQscore() - b.getQscore()) < tie_threshold_)
@@ -910,6 +911,7 @@ FLASHIda::FLASHIda(char* arg)
             int nom_b = SpectralDeconvolution::getNominalMass(b.getMonoMass());
             int pri_a = target_priority_map_.count(nom_a) ? target_priority_map_.at(nom_a) : 0;
             int pri_b = target_priority_map_.count(nom_b) ? target_priority_map_.at(nom_b) : 0;
+            std::cout << "a" << nom_a << pri_a << "b" << nom_b << pri_b << std::endl;
             return pri_a > pri_b;  // Higher priority first
           }
           return a.getQscore() > b.getQscore();
