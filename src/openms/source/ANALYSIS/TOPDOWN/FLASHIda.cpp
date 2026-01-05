@@ -50,6 +50,7 @@
 #include <OpenMS/METADATA/SpectrumSettings.h>
 
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <functional>
 #include <iomanip>
@@ -228,6 +229,93 @@ namespace
     }
 
     return best_index >= 0;
+  }
+
+  /// Calculate theoretical fragment masses with PTM adjustments from FLASHExtender
+  /// For each PTM at positions [start, end], fragments containing that region get the PTM mass added
+  void calculatePTMAdjustedFragmentMasses(
+      const String& sequence,
+      const std::vector<FLASHIda::PTMSite>& ptm_sites,
+      double b_ion_shift,
+      double y_ion_shift,
+      std::vector<double>& prefix_masses,
+      std::vector<double>& suffix_masses)
+  {
+    // Clean sequence (replace I with L for mass calculation)
+    String clean_seq = sequence;
+    std::replace(clean_seq.begin(), clean_seq.end(), 'I', 'L');
+
+    int seq_len = static_cast<int>(clean_seq.size());
+    prefix_masses.clear();
+    suffix_masses.clear();
+    prefix_masses.reserve(seq_len);
+    suffix_masses.reserve(seq_len);
+
+    // For each position, calculate cumulative PTM mass contribution
+    // A b-ion at position i (b_i) contains residues 1..i
+    // It should include PTM mass if the PTM starts at or before position i
+    // For ambiguous PTMs [S,E], we use start_position as the conservative cutoff
+    std::vector<double> ptm_at_or_before(seq_len + 1, 0.0);
+    for (const auto& ptm : ptm_sites)
+    {
+      // PTM affects all b-ions from b(start_position) onwards
+      for (int i = ptm.start_position; i <= seq_len; ++i)
+      {
+        ptm_at_or_before[i] += ptm.mass_shift;
+      }
+    }
+
+    // Calculate prefix masses (b-ions) with PTM adjustment
+    double cumulative_mass = 0.0;
+    for (int i = 0; i < seq_len; ++i)
+    {
+      char aa = clean_seq[i];
+      if (aa != 'X')
+      {
+        const Residue* res = ResidueDB::getInstance()->getResidue(aa);
+        if (res != nullptr)
+        {
+          cumulative_mass += res->getMonoWeight(Residue::Internal);
+        }
+      }
+      // b_{i+1} covers positions 1..(i+1), add PTM if start <= i+1
+      double ptm_contribution = ptm_at_or_before[i + 1];
+      prefix_masses.push_back(cumulative_mass + ptm_contribution + b_ion_shift);
+    }
+
+    // For y-ions: y_n covers positions (L-n+1)..L
+    // y_n should include PTM if the PTM region overlaps with (L-n+1)..L
+    // Using end_position as the cutoff: include PTM if end_position >= (L-n+1)
+    // i.e., n >= L - end_position + 1
+    std::vector<double> ptm_for_suffix(seq_len + 1, 0.0);
+    for (const auto& ptm : ptm_sites)
+    {
+      // y_n includes PTM if n >= L - end_position + 1, i.e., n > L - end_position
+      int min_n = seq_len - ptm.end_position + 1;
+      for (int n = min_n; n <= seq_len; ++n)
+      {
+        ptm_for_suffix[n] += ptm.mass_shift;
+      }
+    }
+
+    // Calculate suffix masses (y-ions) with PTM adjustment
+    cumulative_mass = 0.0;
+    for (int i = seq_len - 1; i >= 0; --i)
+    {
+      char aa = clean_seq[i];
+      if (aa != 'X')
+      {
+        const Residue* res = ResidueDB::getInstance()->getResidue(aa);
+        if (res != nullptr)
+        {
+          cumulative_mass += res->getMonoWeight(Residue::Internal);
+        }
+      }
+      // This is y_{seq_len - i} (e.g., i=seq_len-1 gives y_1)
+      int y_number = seq_len - i;
+      double ptm_contribution = ptm_for_suffix[y_number];
+      suffix_masses.push_back(cumulative_mass + ptm_contribution + y_ion_shift);
+    }
   }
 
   /// Detect PTM sites from mass differences between matched fragments
@@ -1652,33 +1740,73 @@ FLASHIda::FLASHIda(char* arg)
       }
     }
 
-    // 8. Now extract matched fragments using theoretical mass matching
-    //    (FLASHExtender validated the match, now get individual fragment details)
-    std::vector<String> ion_types = {"b", "y"};
-    std::vector<double> prefix_masses, suffix_masses, prefix_shifts, suffix_shifts;
-    calculateTheoreticalFragmentMasses(protein_sequence, ion_types, prefix_masses, suffix_masses, prefix_shifts, suffix_shifts);
+    // 8. Build local PTM sites for fragment matching
+    std::vector<PTMSite> local_ptm_sites;
+    for (Size i = 0; i < mod_masses.size(); ++i)
+    {
+      PTMSite site;
+      site.start_position = mod_starts[i];
+      site.end_position = mod_ends[i];
+      site.position = (site.start_position + site.end_position) / 2;
+      site.mass_shift = mod_masses[i];
+      local_ptm_sites.push_back(site);
+    }
+
+    // 9. Calculate PTM-adjusted theoretical fragment masses
+    //    These masses already include PTM contributions based on FLASHExtender's detection
+    double b_ion_shift = getPrefixIonShift("b");
+    double y_ion_shift = getSuffixIonShift("y");
+    std::vector<double> prefix_masses, suffix_masses;
+    calculatePTMAdjustedFragmentMasses(protein_sequence, local_ptm_sites, b_ion_shift, y_ion_shift,
+                                        prefix_masses, suffix_masses);
 
     int seq_len = static_cast<int>(protein_sequence.size());
 
+    // 10. Match observed masses against PTM-adjusted theoretical masses
     for (Size peak_idx = 0; peak_idx < ms2_deconvolved_spectrum_.size(); ++peak_idx)
     {
       const auto& pg = ms2_deconvolved_spectrum_[peak_idx];
       double observed_mass = pg.getMonoMass();
 
+      // Find best matching prefix (b-ion)
       int best_prefix_idx = -1;
-      double best_prefix_theo = 0, best_prefix_diff = 0, best_prefix_shift = 0;
-      bool prefix_match = findBestMatch(observed_mass, prefix_masses, prefix_shifts, ppm_tolerance,
-                                        best_prefix_idx, best_prefix_theo, best_prefix_diff, best_prefix_shift);
-
-      int best_suffix_idx = -1;
-      double best_suffix_theo = 0, best_suffix_diff = 0, best_suffix_shift = 0;
-      bool suffix_match = findBestMatch(observed_mass, suffix_masses, suffix_shifts, ppm_tolerance,
-                                        best_suffix_idx, best_suffix_theo, best_suffix_diff, best_suffix_shift);
-
-      if (prefix_match || suffix_match)
+      double best_prefix_ppm = ppm_tolerance;
+      double best_prefix_theo = 0;
+      for (Size i = 0; i < prefix_masses.size(); ++i)
       {
-        bool use_prefix = prefix_match && (!suffix_match ||
-          std::abs(best_prefix_diff) / best_prefix_theo < std::abs(best_suffix_diff) / best_suffix_theo);
+        double theo_mass = prefix_masses[i];
+        if (theo_mass <= 0) continue;
+        double ppm_error = std::abs(observed_mass - theo_mass) / theo_mass * 1e6;
+        if (ppm_error < best_prefix_ppm)
+        {
+          best_prefix_ppm = ppm_error;
+          best_prefix_idx = static_cast<int>(i);
+          best_prefix_theo = theo_mass;
+        }
+      }
+
+      // Find best matching suffix (y-ion)
+      int best_suffix_idx = -1;
+      double best_suffix_ppm = ppm_tolerance;
+      double best_suffix_theo = 0;
+      for (Size i = 0; i < suffix_masses.size(); ++i)
+      {
+        double theo_mass = suffix_masses[i];
+        if (theo_mass <= 0) continue;
+        double ppm_error = std::abs(observed_mass - theo_mass) / theo_mass * 1e6;
+        if (ppm_error < best_suffix_ppm)
+        {
+          best_suffix_ppm = ppm_error;
+          best_suffix_idx = static_cast<int>(i);
+          best_suffix_theo = theo_mass;
+        }
+      }
+
+      // Choose best match (prefer lower ppm error)
+      if (best_prefix_idx >= 0 || best_suffix_idx >= 0)
+      {
+        bool use_prefix = best_prefix_idx >= 0 &&
+                          (best_suffix_idx < 0 || best_prefix_ppm < best_suffix_ppm);
 
         TagBasedFragmentMatch match;
         match.peak_index = static_cast<int>(peak_idx);
@@ -1688,24 +1816,25 @@ FLASHIda::FLASHIda(char* arg)
 
         if (use_prefix)
         {
-          match.fragment_index = best_prefix_idx + 1;
+          match.fragment_index = best_prefix_idx + 1;  // 1-based b-ion index
           match.is_prefix = true;
           match.theoretical_mass = best_prefix_theo;
-          match.ppm_error = std::abs(best_prefix_diff) / best_prefix_theo * 1e6;
+          match.ppm_error = best_prefix_ppm;
         }
         else
         {
-          match.fragment_index = seq_len - best_suffix_idx;
+          // suffix_masses[i] corresponds to y_{i+1} (0-indexed to 1-indexed)
+          match.fragment_index = best_suffix_idx + 1;  // 1-based y-ion index
           match.is_prefix = false;
           match.theoretical_mass = best_suffix_theo;
-          match.ppm_error = std::abs(best_suffix_diff) / best_suffix_theo * 1e6;
+          match.ppm_error = best_suffix_ppm;
         }
 
         matches.push_back(match);
       }
     }
 
-    // 9. Sort by qscore descending
+    // 11. Sort by qscore descending
     std::sort(matches.begin(), matches.end(),
               [](const TagBasedFragmentMatch& a, const TagBasedFragmentMatch& b) {
                 return a.qscore > b.qscore;
@@ -1828,39 +1957,125 @@ FLASHIda::FLASHIda(char* arg)
     }
 
     // Collect unique enclosing ions (deduplicated by peak_index)
+    // Enclosing ions bracket the PTM ambiguity region for MS3 targeting:
+    // - Left bracket: fragment ending just before PTM (unmodified mass)
+    // - Right bracket: fragment just including PTM (modified mass)
     std::set<int> used_peaks;
     std::vector<std::pair<float, int>> enclosing_ions; // (qscore, peak_index)
+    int seq_len = static_cast<int>(protein_sequence.size());
 
     for (const auto& site : ptm_sites)
     {
-      // Find best left-bound y-ion (closest to ambiguity from left)
+      // Left bracket: largest unmodified fragment (doesn't contain PTM)
+      // - b-ion: b_{S-1} or smaller (fragment_index <= S-1)
+      // - y-ion: y_n where (L-n+1) > E, i.e., n <= L-E (fragment_index <= L-E)
       const TagBasedFragmentMatch* best_left = nullptr;
+      int best_left_distance = INT_MAX;
       for (const auto& m : tag_matches)
       {
-        if (!m.is_prefix && m.fragment_index < site.start_position)
+        bool is_left_bracket = false;
+        int distance_to_ptm = 0;
+
+        if (m.is_prefix)
         {
-          if (!best_left ||
-              m.fragment_index > best_left->fragment_index ||
-              (m.fragment_index == best_left->fragment_index && m.qscore > best_left->qscore))
+          // b-ion: covers positions 1..fragment_index
+          // Unmodified if fragment_index < S (doesn't include PTM start)
+          if (m.fragment_index < site.start_position)
+          {
+            is_left_bracket = true;
+            distance_to_ptm = site.start_position - m.fragment_index;
+          }
+        }
+        else
+        {
+          // y-ion: y_n covers positions (L-n+1)..L
+          // Unmodified if (L-n+1) > E, i.e., n < L-E+1, i.e., fragment_index <= L-E
+          int max_y_for_unmodified = seq_len - site.end_position;
+          if (m.fragment_index <= max_y_for_unmodified)
+          {
+            is_left_bracket = true;
+            // Distance is how far from the boundary
+            distance_to_ptm = max_y_for_unmodified - m.fragment_index + 1;
+          }
+        }
+
+        if (is_left_bracket)
+        {
+          // Prefer closest to PTM boundary (smallest distance), then highest qscore
+          if (distance_to_ptm < best_left_distance ||
+              (distance_to_ptm == best_left_distance && (!best_left || m.qscore > best_left->qscore)))
           {
             best_left = &m;
+            best_left_distance = distance_to_ptm;
           }
         }
       }
 
-      // Find best right-bound b-ion (closest to ambiguity from right)
+      // Right bracket: smallest modified fragment (just includes PTM)
+      // - b-ion: b_E or larger (fragment_index >= E)
+      // - y-ion: y_n where (L-n+1) <= S, i.e., n >= L-S+1 (fragment_index >= L-S+1)
       const TagBasedFragmentMatch* best_right = nullptr;
+      int best_right_distance = INT_MAX;
       for (const auto& m : tag_matches)
       {
-        if (m.is_prefix && m.fragment_index > site.end_position)
+        bool is_right_bracket = false;
+        int distance_to_ptm = 0;
+
+        if (m.is_prefix)
         {
-          if (!best_right ||
-              m.fragment_index < best_right->fragment_index ||
-              (m.fragment_index == best_right->fragment_index && m.qscore > best_right->qscore))
+          // b-ion: covers positions 1..fragment_index
+          // Modified if fragment_index >= E (includes entire PTM region)
+          if (m.fragment_index >= site.end_position)
           {
-            best_right = &m;
+            is_right_bracket = true;
+            distance_to_ptm = m.fragment_index - site.end_position;
           }
         }
+        else
+        {
+          // y-ion: y_n covers positions (L-n+1)..L
+          // Modified if (L-n+1) <= S, i.e., n >= L-S+1
+          int min_y_for_modified = seq_len - site.start_position + 1;
+          if (m.fragment_index >= min_y_for_modified)
+          {
+            is_right_bracket = true;
+            distance_to_ptm = m.fragment_index - min_y_for_modified;
+          }
+        }
+
+        if (is_right_bracket)
+        {
+          // Prefer closest to PTM boundary (smallest distance), then highest qscore
+          if (distance_to_ptm < best_right_distance ||
+              (distance_to_ptm == best_right_distance && (!best_right || m.qscore > best_right->qscore)))
+          {
+            best_right = &m;
+            best_right_distance = distance_to_ptm;
+          }
+        }
+      }
+
+      // Debug output for this PTM site
+      std::cout << "[getAmbiguityEnclosingIons] PTM [" << site.start_position << "-" << site.end_position << "]:" << std::endl;
+      if (best_left)
+      {
+        std::cout << "  Left bracket: " << (best_left->is_prefix ? "b" : "y") << best_left->fragment_index
+                  << " (mass: " << std::fixed << std::setprecision(2) << best_left->observed_mass
+                  << ", qscore: " << best_left->qscore << ")" << std::endl;
+      }
+      else
+      {
+        std::cout << "  Left bracket: none found" << std::endl;
+      }
+      if (best_right)
+      {
+        std::cout << "  Right bracket: " << (best_right->is_prefix ? "b" : "y") << best_right->fragment_index
+                  << " (mass: " << std::fixed << std::setprecision(2) << best_right->observed_mass
+                  << ", qscore: " << best_right->qscore << ")" << std::endl;
+      }
+      else
+      {
+        std::cout << "  Right bracket: none found" << std::endl;
       }
 
       // Add to output (deduplicated)
