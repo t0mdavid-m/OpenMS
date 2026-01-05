@@ -253,13 +253,13 @@ namespace
 
     // For each position, calculate cumulative PTM mass contribution
     // A b-ion at position i (b_i) contains residues 1..i
-    // It should include PTM mass if the PTM starts at or before position i
-    // For ambiguous PTMs [S,E], we use start_position as the conservative cutoff
+    // For ambiguous PTMs [S,E], use end_position as cutoff to be consistent with y-ions
+    // This ensures b_E+ are modified (definitely contain PTM regardless of exact position)
     std::vector<double> ptm_at_or_before(seq_len + 1, 0.0);
     for (const auto& ptm : ptm_sites)
     {
-      // PTM affects all b-ions from b(start_position) onwards
-      for (int i = ptm.start_position; i <= seq_len; ++i)
+      // PTM affects all b-ions from b(end_position) onwards (definitely contain PTM)
+      for (int i = ptm.end_position; i <= seq_len; ++i)
       {
         ptm_at_or_before[i] += ptm.mass_shift;
       }
@@ -284,14 +284,14 @@ namespace
     }
 
     // For y-ions: y_n covers positions (L-n+1)..L
-    // y_n should include PTM if the PTM region overlaps with (L-n+1)..L
-    // Using end_position as the cutoff: include PTM if end_position >= (L-n+1)
-    // i.e., n >= L - end_position + 1
+    // y_n definitely contains PTM [S,E] if it covers position S (start_position)
+    // That means (L-n+1) <= S, i.e., n >= L - S + 1
+    // This is consistent with b-ion logic: only mark as modified if definitely contains PTM
     std::vector<double> ptm_for_suffix(seq_len + 1, 0.0);
     for (const auto& ptm : ptm_sites)
     {
-      // y_n includes PTM if n >= L - end_position + 1, i.e., n > L - end_position
-      int min_n = seq_len - ptm.end_position + 1;
+      // y_n includes PTM if n >= L - start_position + 1 (definitely contains PTM)
+      int min_n = seq_len - ptm.start_position + 1;
       for (int n = min_n; n <= seq_len; ++n)
       {
         ptm_for_suffix[n] += ptm.mass_shift;
