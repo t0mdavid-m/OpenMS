@@ -1474,7 +1474,7 @@ FLASHIda::FLASHIda(char* arg)
       {
         MatchResult match;
         match.mass = observed_mass;
-        match.qscore = pg.getQscore();
+        match.qscore = pg.getChargeIntensity(pg.getRepAbsCharge());
         match.charge = pg.getRepAbsCharge();
 
         // Get isolation window from m/z range (same as getBestMS2Masses)
