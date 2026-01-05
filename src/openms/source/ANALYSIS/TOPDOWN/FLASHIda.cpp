@@ -640,6 +640,12 @@ FLASHIda::FLASHIda(char* arg)
       min_tag_length_for_targeting_ = (int)inputs["min_tag_length"][0];
     }
 
+    // Parse max_tag_length if provided (default 8)
+    if (inputs.find("max_tag_length") != inputs.end() && !inputs["max_tag_length"].empty())
+    {
+      max_tag_length_for_targeting_ = (int)inputs["max_tag_length"][0];
+    }
+
     // Parse max_flanking_mass_diff if provided (default 50000.0)
     if (inputs.find("max_flanking_mass_diff") != inputs.end() && !inputs["max_flanking_mass_diff"].empty())
     {
@@ -649,6 +655,7 @@ FLASHIda::FLASHIda(char* arg)
     if (tag_based_targeting_enabled_)
     {
       std::cout << "Tag-based targeting: min_tag_length=" << min_tag_length_for_targeting_
+                << ", max_tag_length=" << max_tag_length_for_targeting_
                 << ", tolerance=" << tag_matching_tolerance_ppm_ << " ppm"
                 << ", max_flanking_mass_diff=" << max_flanking_mass_diff_ << " Da\n";
     }
@@ -3110,10 +3117,11 @@ FLASHIda::FLASHIda(char* arg)
     // Sort deconvolved spectrum by mass
     dspec.sort();
 
-    // Create and configure tagger with minimum length
+    // Create and configure tagger with tag length parameters
     FLASHTaggerAlgorithm tagger;
     Param tagger_param = tagger.getDefaults();
     tagger_param.setValue("min_length", min_tag_length_for_targeting_);
+    tagger_param.setValue("max_length", max_tag_length_for_targeting_);
     tagger.setParameters(tagger_param);
 
     // Run tag generation
