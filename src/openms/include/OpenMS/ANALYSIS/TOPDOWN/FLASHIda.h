@@ -58,6 +58,14 @@ namespace OpenMS
     typedef FLASHHelperClasses::PrecalculatedAveragine PrecalculatedAveragine;
     typedef FLASHHelperClasses::LogMzPeak LogMzPeak;
 
+    /// Structure representing a PTM site detected by FLASHExtender
+    struct PTMSite {
+      int position;        ///< Position in protein sequence (1-based, midpoint)
+      int start_position;  ///< Start of the region where PTM could be localized (1-based)
+      int end_position;    ///< End of the region where PTM could be localized (1-based)
+      double mass_shift;   ///< Observed mass shift (modification mass)
+    };
+
     /// constructor that takes string input argument
     explicit FLASHIda(char *arg);
 
@@ -639,14 +647,6 @@ namespace OpenMS
       int fragment_index;       ///< 1-based position in protein sequence
       bool is_prefix;           ///< true = b-ion (prefix), false = y-ion (suffix)
       double ppm_error;         ///< ppm error from match
-    };
-
-    /// Internal struct for PTM site information from FLASHExtender
-    struct PTMSite {
-      int position;        ///< Position in protein sequence (1-based, midpoint)
-      int start_position;  ///< Start of the region where PTM could be localized (1-based)
-      int end_position;    ///< End of the region where PTM could be localized (1-based)
-      double mass_shift;   ///< Observed mass shift (modification mass)
     };
 
     /**
