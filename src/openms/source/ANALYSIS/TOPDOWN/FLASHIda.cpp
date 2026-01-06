@@ -1893,6 +1893,7 @@ FLASHIda::FLASHIda(char* arg)
                                       double* window_starts,
                                       double* window_ends)
   {
+    std::cout << "Matching fragments!" << std::endl;
     // Use tag-based matching workflow (FLASHTagger + FLASHExtender)
     std::vector<TagBasedFragmentMatch> matches;
     runTagBasedFragmentMatching_(protein_sequence, matches);
@@ -3724,7 +3725,7 @@ FLASHIda::FLASHIda(char* arg)
     std::set<Size> matched_protein_indices;
     for (const auto& tag : tags)
     {
-      // std::cout << tag.getSequence() << std::endl;
+      std::cout << tag.getSequence() << std::endl;
       for (Size protein_idx = 0; protein_idx < protein_seqs.size(); ++protein_idx)
       {
         const String& pseq = protein_seqs[protein_idx];
