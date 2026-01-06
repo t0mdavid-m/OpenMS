@@ -1425,13 +1425,16 @@ FLASHIda::FLASHIda(char* arg)
     // Create MSSpectrum from input
     auto spec = makeMSSpectrum_(mzs, ints, length, rt, 2, "ms2_spectrum");
 
-    // Create precursor PeakGroup with the known monoisotopic mass from MS1
+    // Create precursor PeakGroup - only set if precursor_mass > 0
     PeakGroup precursor_pg;
-    precursor_pg.setMonoisotopicMass(precursor_mass);
-    precursor_pg.setQscore(1.0);  // Known precursor from MS1, high confidence
-    precursor_pg.setSNR(1.0);
+    if (precursor_mass > 0)
+    {
+      precursor_pg.setMonoisotopicMass(precursor_mass);
+      precursor_pg.setQscore(1.0);  // Known precursor from MS1, high confidence
+      precursor_pg.setSNR(1.0);
+    }
 
-    // Perform deconvolution with precursor info
+    // Perform deconvolution (empty precursor_pg if mass <= 0)
     fd_.performSpectrumDeconvolution(spec, 0, precursor_pg);
     ms2_deconvolved_spectrum_ = fd_.getDeconvolvedSpectrum();
 
