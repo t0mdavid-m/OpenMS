@@ -1467,8 +1467,8 @@ FLASHIda::FLASHIda(char* arg)
 
       // Get isolation window from m/z range
       auto [mz1, mz2] = pg.getMzRange(charge);
-      window_starts[i] = mz1;
-      window_ends[i] = mz2;
+      window_starts[i] = mz1 - optimal_window_margin_;
+      window_ends[i] = mz2 + optimal_window_margin_;
     }
 
     return count;
@@ -1916,8 +1916,8 @@ FLASHIda::FLASHIda(char* arg)
       charges[i] = m.charge;
 
       auto [mz1, mz2] = pg.getMzRange(m.charge);
-      window_starts[i] = mz1;
-      window_ends[i] = mz2;
+      window_starts[i] = mz1 - optimal_window_margin_;
+      window_ends[i] = mz2 + optimal_window_margin_;
     }
 
     return count;
@@ -2112,8 +2112,8 @@ FLASHIda::FLASHIda(char* arg)
       qscores[i] = enclosing_ions[i].first;
       charges[i] = pg.getRepAbsCharge();
       auto [mz1, mz2] = pg.getMzRange(charges[i]);
-      window_starts[i] = mz1;
-      window_ends[i] = mz2;
+      window_starts[i] = mz1 - optimal_window_margin_;
+      window_ends[i] = mz2 + optimal_window_margin_;
     }
 
     return count;
@@ -2242,8 +2242,8 @@ FLASHIda::FLASHIda(char* arg)
 
         // Get isolation window from deconvolved spectrum
         auto [mz_start, mz_end] = ms2_deconvolved_spectrum_[selected->peak_index].getMzRange(selected->charge);
-        window_starts[count] = mz_start;
-        window_ends[count] = mz_end;
+        window_starts[count] = mz_start - optimal_window_margin_;
+        window_ends[count] = mz_end + optimal_window_margin_;
 
         ++count;
       }
