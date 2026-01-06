@@ -1842,7 +1842,7 @@ FLASHIda::FLASHIda(char* arg)
         TagBasedFragmentMatch match;
         match.peak_index = static_cast<int>(peak_idx);
         match.observed_mass = observed_mass;
-        match.qscore = pg.getChargeIntensity(a.getRepAbsCharge());
+        match.qscore = pg.getChargeIntensity(pg.getRepAbsCharge());
         match.charge = pg.getRepAbsCharge();
 
         if (use_prefix)
