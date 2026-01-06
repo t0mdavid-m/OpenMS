@@ -1673,11 +1673,12 @@ FLASHIda::FLASHIda(char* arg)
     const auto& best_hit = proteoform_hits[0];
 
     // Print matched proteoform sequence (using FLASHExtender truncation info)
+    // Note: FLASHExtender positions are 1-based, convert to 0-based for substr
     int start_pos = -1, end_pos = -1;
     if (best_hit.metaValueExists("StartPosition"))
-      start_pos = best_hit.getMetaValue("StartPosition") - 1;
+      start_pos = static_cast<int>(best_hit.getMetaValue("StartPosition")) - 1;
     if (best_hit.metaValueExists("EndPosition"))
-      end_pos = best_hit.getMetaValue("EndPosition") - 1;
+      end_pos = static_cast<int>(best_hit.getMetaValue("EndPosition")) - 1;
 
     if (start_pos >= 0 && end_pos >= 0 && end_pos > start_pos)
     {
@@ -1710,8 +1711,11 @@ FLASHIda::FLASHIda(char* arg)
         best_hit.metaValueExists("ModificationEnds"))
     {
       mod_masses = best_hit.getMetaValue("Modifications");
-      mod_starts = best_hit.getMetaValue("ModificationStarts") - 1;
-      mod_ends = best_hit.getMetaValue("ModificationEnds") - 1;
+      mod_starts = best_hit.getMetaValue("ModificationStarts");
+      mod_ends = best_hit.getMetaValue("ModificationEnds");
+      // Convert from 1-based to 0-based positions
+      for (auto& pos : mod_starts) pos -= 1;
+      for (auto& pos : mod_ends) pos -= 1;
     }
 
     // Print diagnostic output for PTM sites
