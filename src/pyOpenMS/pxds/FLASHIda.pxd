@@ -33,7 +33,8 @@ cdef extern from "<OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>" namespace "OpenMS":
                                         libcpp_vector[Tag] & tags,
                                         libcpp_vector[FLASHIdaTagMatch] & matches,
                                         double ppm_tolerance,
-                                        double max_flanking_mass_diff) except + nogil
+                                        double max_flanking_mass_diff,
+                                        double precursor_mass) except + nogil
             # wrap-doc:
             #   Deconvolute a spectrum and find sequence tags with database matches.
             #
@@ -50,12 +51,14 @@ cdef extern from "<OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>" namespace "OpenMS":
             #   :param matches: output vector of tag matches to database entries
             #   :param ppm_tolerance: mass tolerance in ppm for tag matching
             #   :param max_flanking_mass_diff: maximum allowed flanking mass difference
+            #   :param precursor_mass: precursor monoisotopic mass (from MS1 deconvolution)
             #   :returns: number of tags found
 
         # Python-friendly proteoform identification
         int identifyProteoformPy(libcpp_vector[double] & mzs,
                                  libcpp_vector[double] & ints,
                                  double rt,
+                                 double precursor_mass,
                                  String & protein_sequence,
                                  double ppm_tolerance,
                                  libcpp_vector[String] & ion_types,
@@ -75,6 +78,7 @@ cdef extern from "<OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>" namespace "OpenMS":
             #   :param mzs: m/z values of the input MS2 spectrum
             #   :param ints: intensities of the input MS2 spectrum
             #   :param rt: retention time in seconds
+            #   :param precursor_mass: precursor monoisotopic mass (from MS1 deconvolution)
             #   :param protein_sequence: the protein sequence to match against
             #   :param ppm_tolerance: mass tolerance in ppm
             #   :param ion_types: ion types to consider (e.g., ["b", "y"])
@@ -89,6 +93,7 @@ cdef extern from "<OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>" namespace "OpenMS":
         int identifyProteoformExtendedPy(libcpp_vector[double] & mzs,
                                          libcpp_vector[double] & ints,
                                          double rt,
+                                         double precursor_mass,
                                          String & protein_sequence,
                                          double ppm_tolerance,
                                          libcpp_vector[String] & ion_types,
@@ -111,6 +116,7 @@ cdef extern from "<OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>" namespace "OpenMS":
             #   :param mzs: m/z values of the input MS2 spectrum
             #   :param ints: intensities of the input MS2 spectrum
             #   :param rt: retention time in seconds
+            #   :param precursor_mass: precursor monoisotopic mass (from MS1 deconvolution)
             #   :param protein_sequence: the protein sequence to match against
             #   :param ppm_tolerance: mass tolerance in ppm
             #   :param ion_types: ion types to consider

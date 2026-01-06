@@ -1409,7 +1409,8 @@ FLASHIda::FLASHIda(char* arg)
   int FLASHIda::deconvolveMS2(const double* mzs,
                               const double* ints,
                               int length,
-                              double rt)
+                              double rt,
+                              double precursor_mass)
   {
     // Clear previous state
     ms2_deconvolved_spectrum_.clear();
@@ -1424,9 +1425,14 @@ FLASHIda::FLASHIda(char* arg)
     // Create MSSpectrum from input
     auto spec = makeMSSpectrum_(mzs, ints, length, rt, 2, "ms2_spectrum");
 
-    // Perform deconvolution
-    PeakGroup empty;
-    fd_.performSpectrumDeconvolution(spec, 0, empty);
+    // Create precursor PeakGroup with the known monoisotopic mass from MS1
+    PeakGroup precursor_pg;
+    precursor_pg.setMonoisotopicMass(precursor_mass);
+    precursor_pg.setQscore(1.0);  // Known precursor from MS1, high confidence
+    precursor_pg.setSNR(1.0);
+
+    // Perform deconvolution with precursor info
+    fd_.performSpectrumDeconvolution(spec, 0, precursor_pg);
     ms2_deconvolved_spectrum_ = fd_.getDeconvolvedSpectrum();
 
     if (ms2_deconvolved_spectrum_.empty())
@@ -1443,13 +1449,14 @@ FLASHIda::FLASHIda(char* arg)
 
   int FLASHIda::deconvolveMS2Py(const std::vector<double>& mzs,
                                 const std::vector<double>& ints,
-                                double rt)
+                                double rt,
+                                double precursor_mass)
   {
     if (mzs.empty() || mzs.size() != ints.size())
     {
       return 0;
     }
-    return deconvolveMS2(mzs.data(), ints.data(), static_cast<int>(mzs.size()), rt);
+    return deconvolveMS2(mzs.data(), ints.data(), static_cast<int>(mzs.size()), rt, precursor_mass);
   }
 
   int FLASHIda::getBestMS2Masses(int n,
@@ -2324,10 +2331,11 @@ FLASHIda::FLASHIda(char* arg)
                                             std::vector<FLASHHelperClasses::Tag>& tags,
                                             std::vector<TagMatch>& matches,
                                             double ppm_tolerance,
-                                            double max_flanking_mass_diff)
+                                            double max_flanking_mass_diff,
+                                            double precursor_mass)
   {
-    // Deconvolve the spectrum first
-    deconvolveMS2Py(mzs, ints, rt);
+    // Deconvolve the spectrum first with precursor mass
+    deconvolveMS2Py(mzs, ints, rt, precursor_mass);
 
     // Call the underlying method
     return getSequenceTagsAndMatches(fasta_entries, tagger_param, tags, matches,
@@ -2337,6 +2345,7 @@ FLASHIda::FLASHIda(char* arg)
   int FLASHIda::identifyProteoformPy(const std::vector<double>& mzs,
                                      const std::vector<double>& ints,
                                      double rt,
+                                     double precursor_mass,
                                      const String& protein_sequence,
                                      double ppm_tolerance,
                                      const std::vector<String>& ion_types,
@@ -2346,8 +2355,8 @@ FLASHIda::FLASHIda(char* arg)
                                      std::vector<int>& ptm_end_positions,
                                      std::vector<double>& ptm_masses)
   {
-    // Deconvolve the spectrum first
-    deconvolveMS2Py(mzs, ints, rt);
+    // Deconvolve the spectrum first with precursor mass
+    deconvolveMS2Py(mzs, ints, rt, precursor_mass);
 
     // Call the underlying method
     return identifyProteoform(protein_sequence, ppm_tolerance, ion_types, ptm_mass_threshold,
@@ -2358,6 +2367,7 @@ FLASHIda::FLASHIda(char* arg)
   int FLASHIda::identifyProteoformExtendedPy(const std::vector<double>& mzs,
                                              const std::vector<double>& ints,
                                              double rt,
+                                             double precursor_mass,
                                              const String& protein_sequence,
                                              double ppm_tolerance,
                                              const std::vector<String>& ion_types,
@@ -2372,8 +2382,8 @@ FLASHIda::FLASHIda(char* arg)
                                              double& coverage,
                                              double& total_score)
   {
-    // Deconvolve the spectrum first
-    deconvolveMS2Py(mzs, ints, rt);
+    // Deconvolve the spectrum first with precursor mass
+    deconvolveMS2Py(mzs, ints, rt, precursor_mass);
 
     // Call the underlying method
     return identifyProteoformExtended(protein_sequence, ppm_tolerance, ion_types,
