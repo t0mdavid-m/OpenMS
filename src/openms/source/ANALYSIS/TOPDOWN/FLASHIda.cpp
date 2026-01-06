@@ -1429,6 +1429,8 @@ FLASHIda::FLASHIda(char* arg)
     PeakGroup precursor_pg;
     if (precursor_mass > 0)
     {
+      // Add a dummy LogMzPeak so PeakGroup::empty() returns false
+      precursor_pg.push_back(FLASHHelperClasses::LogMzPeak());
       precursor_pg.setMonoisotopicMass(precursor_mass);
       precursor_pg.setQscore(1.0);  // Known precursor from MS1, high confidence
       precursor_pg.setSNR(1.0);
