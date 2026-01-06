@@ -1451,6 +1451,10 @@ FLASHIda::FLASHIda(char* arg)
     }
 
     int count = std::min(n, static_cast<int>(ms2_deconvolved_spectrum_.size()));
+    std::sort(ms2_deconvolved_spectrum_.begin(), ms2_deconvolved_spectrum_.end(),
+    [](const PeakGroup& a, const PeakGroup& b) {
+      return a.getChargeIntensity(a.getRepAbsCharge()) > b.getChargeIntensity(b.getRepAbsCharge());
+    });
 
     for (int i = 0; i < count; ++i)
     {
