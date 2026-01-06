@@ -1678,7 +1678,8 @@ FLASHIda::FLASHIda(char* arg)
     if (best_hit.metaValueExists("StartPosition"))
       start_pos = static_cast<int>(best_hit.getMetaValue("StartPosition")) - 1;
     if (best_hit.metaValueExists("EndPosition"))
-      end_pos = static_cast<int>(best_hit.getMetaValue("EndPosition")) - 1;
+      // TODO: Why not end??
+      end_pos = static_cast<int>(best_hit.getMetaValue("EndPosition"));
 
     if (start_pos >= 0 && end_pos >= 0 && end_pos > start_pos)
     {
@@ -1713,9 +1714,9 @@ FLASHIda::FLASHIda(char* arg)
       mod_masses = best_hit.getMetaValue("Modifications");
       mod_starts = best_hit.getMetaValue("ModificationStarts");
       mod_ends = best_hit.getMetaValue("ModificationEnds");
-      // Convert from 1-based to 0-based positions
-      for (auto& pos : mod_starts) pos -= 1;
-      for (auto& pos : mod_ends) pos -= 1;
+      // Convert positions - TODO: Why??
+      for (auto& pos : mod_starts) pos += 1;
+      for (auto& pos : mod_ends) pos += 1;
     }
 
     // Print diagnostic output for PTM sites
