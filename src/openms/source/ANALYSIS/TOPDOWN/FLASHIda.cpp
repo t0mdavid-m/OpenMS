@@ -2254,9 +2254,9 @@ FLASHIda::FLASHIda(char* arg)
         is_b_ions[count] = is_b;
 
         // Get isolation window from deconvolved spectrum
-        auto mz_range = ms2_deconvolved_spectrum_[selected->peak_index].getMzRange(selected->charge);
-        window_starts[count] = mz_range.first;
-        window_ends[count] = mz_range.second;
+        auto [mz_start, mz_end] = ms2_deconvolved_spectrum_[selected->peak_index].getMzRange(selected->charge);
+        window_starts[count] = mz_start;
+        window_ends[count] = mz_end;
 
         ++count;
       }
