@@ -1752,15 +1752,39 @@ FLASHIda::FLASHIda(char* arg)
       local_ptm_sites.push_back(site);
     }
 
-    // 9. Calculate PTM-adjusted theoretical fragment masses
-    //    These masses already include PTM contributions based on FLASHExtender's detection
+    // 9. Handle truncation: use truncated sequence if FLASHExtender detected it
+    String matching_sequence = protein_sequence;
+
+    if (start_pos >= 0 && end_pos > start_pos)
+    {
+      // Use truncated sequence for fragment matching
+      matching_sequence = protein_sequence.substr(start_pos, end_pos - start_pos);
+
+      // Adjust PTM positions to be relative to truncated sequence
+      for (auto& site : local_ptm_sites)
+      {
+        site.start_position -= start_pos;
+        site.end_position -= start_pos;
+        site.position -= start_pos;
+
+        // Clamp to valid range within truncated sequence
+        site.start_position = std::max(1, site.start_position);
+        site.end_position = std::min(static_cast<int>(matching_sequence.size()), site.end_position);
+      }
+
+      std::cout << "[runTagBasedFragmentMatching_] Using truncated sequence for matching ("
+                << matching_sequence.size() << " aa, offset " << start_pos << ")" << std::endl;
+    }
+
+    // 10. Calculate PTM-adjusted theoretical fragment masses
+    //     These masses already include PTM contributions based on FLASHExtender's detection
     double b_ion_shift = getPrefixIonShift("b");
     double y_ion_shift = getSuffixIonShift("y");
     std::vector<double> prefix_masses, suffix_masses;
-    calculatePTMAdjustedFragmentMasses(protein_sequence, local_ptm_sites, b_ion_shift, y_ion_shift,
+    calculatePTMAdjustedFragmentMasses(matching_sequence, local_ptm_sites, b_ion_shift, y_ion_shift,
                                         prefix_masses, suffix_masses);
 
-    // 10. Match observed masses against PTM-adjusted theoretical masses
+    // 11. Match observed masses against PTM-adjusted theoretical masses
     for (Size peak_idx = 0; peak_idx < ms2_deconvolved_spectrum_.size(); ++peak_idx)
     {
       const auto& pg = ms2_deconvolved_spectrum_[peak_idx];
