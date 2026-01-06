@@ -1985,16 +1985,15 @@ FLASHIda::FLASHIda(char* arg)
 
     // Collect unique enclosing ions (deduplicated by peak_index)
     // Enclosing ions bracket the PTM ambiguity region for MS3 targeting:
-    // - Left bracket: fragment ending just before PTM (unmodified mass)
-    // - Right bracket: fragment just including PTM (modified mass)
+    // - Left bracket: fragment ending just before PTM 
+    // - Right bracket: fragment just including PTM 
     std::set<int> used_peaks;
     std::vector<std::pair<float, int>> enclosing_ions; // (qscore, peak_index)
     int seq_len = static_cast<int>(protein_sequence.size());
 
     for (const auto& site : ptm_sites)
     {
-      // Left bracket: largest unmodified fragment (doesn't contain PTM)
-      // - b-ion: b_{S-1} or smaller (fragment_index <= S-1)
+      // Left bracket: largest fragment
       // - y-ion: y_n where (L-n+1) > E, i.e., n <= L-E (fragment_index <= L-E)
       const TagBasedFragmentMatch* best_left = nullptr;
       int best_left_distance = INT_MAX;
@@ -2003,26 +2002,15 @@ FLASHIda::FLASHIda(char* arg)
         bool is_left_bracket = false;
         int distance_to_ptm = 0;
 
-        if (m.is_prefix)
-        {
-          // b-ion: covers positions 1..fragment_index
-          // Unmodified if fragment_index < S (doesn't include PTM start)
-          if (m.fragment_index < site.start_position)
-          {
-            is_left_bracket = true;
-            distance_to_ptm = site.start_position - m.fragment_index;
-          }
-        }
-        else
+        if (!m.is_prefix)
         {
           // y-ion: y_n covers positions (L-n+1)..L
-          // Unmodified if (L-n+1) > E, i.e., n < L-E+1, i.e., fragment_index <= L-E
-          int max_y_for_unmodified = seq_len - site.end_position;
-          if (m.fragment_index <= max_y_for_unmodified)
+          int max_y = seq_len - site.end_position;
+          if (m.fragment_index <= max_y)
           {
             is_left_bracket = true;
             // Distance is how far from the boundary
-            distance_to_ptm = max_y_for_unmodified - m.fragment_index + 1;
+            distance_to_ptm = max_y - m.fragment_index + 1;
           }
         }
 
@@ -2039,7 +2027,6 @@ FLASHIda::FLASHIda(char* arg)
       }
 
       // Right bracket: smallest modified fragment (just includes PTM)
-      // - b-ion: b_E or larger (fragment_index >= E)
       // - y-ion: y_n where (L-n+1) <= S, i.e., n >= L-S+1 (fragment_index >= L-S+1)
       const TagBasedFragmentMatch* best_right = nullptr;
       int best_right_distance = INT_MAX;
@@ -2056,17 +2043,6 @@ FLASHIda::FLASHIda(char* arg)
           {
             is_right_bracket = true;
             distance_to_ptm = m.fragment_index - site.end_position;
-          }
-        }
-        else
-        {
-          // y-ion: y_n covers positions (L-n+1)..L
-          // Modified if (L-n+1) <= S, i.e., n >= L-S+1
-          int min_y_for_modified = seq_len - site.start_position + 1;
-          if (m.fragment_index >= min_y_for_modified)
-          {
-            is_right_bracket = true;
-            distance_to_ptm = m.fragment_index - min_y_for_modified;
           }
         }
 
