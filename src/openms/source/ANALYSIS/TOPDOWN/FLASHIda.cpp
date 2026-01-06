@@ -1842,7 +1842,7 @@ FLASHIda::FLASHIda(char* arg)
         TagBasedFragmentMatch match;
         match.peak_index = static_cast<int>(peak_idx);
         match.observed_mass = observed_mass;
-        match.qscore = pg.getQscore();
+        match.qscore = pg.getChargeIntensity(a.getRepAbsCharge());
         match.charge = pg.getRepAbsCharge();
 
         if (use_prefix)
@@ -1904,6 +1904,7 @@ FLASHIda::FLASHIda(char* arg)
 
     // Already sorted by qscore descending
     int count = std::min(n, static_cast<int>(matches.size()));
+
 
     for (int i = 0; i < count; ++i)
     {
