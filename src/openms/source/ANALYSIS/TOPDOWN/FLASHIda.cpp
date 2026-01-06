@@ -1151,13 +1151,14 @@ FLASHIda::FLASHIda(char* arg)
 
           mz1 -= optimal_window_margin_;
           mz2 += optimal_window_margin_;
+          int integer_mz = (int)round(center_mz);
 
           int nominal_mass = SpectralDeconvolution::getNominalMass(mass);
           bool target_matched = false;
           double snr_threshold = snr_threshold_;
           double qscore_threshold = qscore_threshold_;
           double tqscore_factor_for_exclusion = 1.0;
-          int integer_mz = (int)round(center_mz);
+          
           
 
           // Only triggered in exclusion mode
@@ -1185,8 +1186,21 @@ FLASHIda::FLASHIda(char* arg)
                   {
                     for (const auto* t : active_targets_)
                     {
-                      if (std::abs(t->mass - *ub) < 1e-6 && t->matchesCharge(charge))
+                      if (t->charge < 0) {
+                        target_matched = true;
+                        break;
+                      }
+                      auto [min_charge, max_charge] = pg.getAbsChargeRange();
+                      if ((t->charge >= min_charge) && (t->charge <= max_charge))
                       {
+                        // Update with matched charge
+                        charge = t->charge
+                        [mz1, mz2] = pg.getMzRange(charge);
+                        center_mz = (mz1 + mz2) / 2.0;
+                        mz1 -= optimal_window_margin_;
+                        mz2 += optimal_window_margin_;
+                        integer_mz = (int)round(center_mz);
+                        
                         target_matched = true;
                         break;
                       }
