@@ -1194,8 +1194,8 @@ FLASHIda::FLASHIda(char* arg)
                       if ((t->charge >= min_charge) && (t->charge <= max_charge))
                       {
                         // Update with matched charge
-                        charge = t->charge
-                        [mz1, mz2] = pg.getMzRange(charge);
+                        charge = t->charge;
+                        std::tie(mz1, mz2) = pg.getMzRange(charge);
                         center_mz = (mz1 + mz2) / 2.0;
                         mz1 -= optimal_window_margin_;
                         mz2 += optimal_window_margin_;
