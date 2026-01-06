@@ -2005,12 +2005,12 @@ FLASHIda::FLASHIda(char* arg)
         if (!m.is_prefix)
         {
           // y-ion: y_n covers positions (L-n+1)..L
-          int max_y = seq_len - site.end_position;
-          if (m.fragment_index <= max_y)
+          int min_y = seq_len - site.end_position;
+          if (m.fragment_index >= min_y)
           {
             is_left_bracket = true;
             // Distance is how far from the boundary
-            distance_to_ptm = max_y - m.fragment_index + 1;
+            distance_to_ptm = min_y - m.fragment_index + 1;
           }
         }
 
@@ -2039,7 +2039,7 @@ FLASHIda::FLASHIda(char* arg)
         {
           // b-ion: covers positions 1..fragment_index
           // Modified if fragment_index >= E (includes entire PTM region)
-          if (m.fragment_index >= site.end_position)
+          if (m.fragment_index >= site.end_position-1)
           {
             is_right_bracket = true;
             distance_to_ptm = m.fragment_index - site.end_position;
