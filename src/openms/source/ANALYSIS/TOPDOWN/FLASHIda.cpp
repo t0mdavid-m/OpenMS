@@ -1729,7 +1729,7 @@ FLASHIda::FLASHIda(char* arg)
                                       int* charges,
                                       double* window_starts,
                                       double* window_ends,
-                                      bool* is_b_ions,
+                                      char* ion_types,
                                       int* fragment_indices)
   {
     std::cout << "Matching fragments!" << std::endl;
@@ -1749,7 +1749,7 @@ FLASHIda::FLASHIda(char* arg)
       masses[i] = m.observed_mass;
       qscores[i] = m.qscore;
       charges[i] = m.charge;
-      is_b_ions[i] = m.is_prefix;
+      ion_types[i] = m.is_prefix ? 'b' : 'y';
       fragment_indices[i] = m.fragment_index;
 
       auto [mz1, mz2] = pg.getMzRange(m.charge);
@@ -1808,7 +1808,7 @@ FLASHIda::FLASHIda(char* arg)
                                           int* charges,
                                           double* window_starts,
                                           double* window_ends,
-                                          bool* is_b_ions,
+                                          char* ion_types,
                                           int* fragment_indices)
   {
     // Get fragment matches AND PTM sites from FLASHExtender
@@ -1970,7 +1970,7 @@ FLASHIda::FLASHIda(char* arg)
       masses[i] = pg.getMonoMass();
       qscores[i] = ion.qscore;
       charges[i] = pg.getRepAbsCharge();
-      is_b_ions[i] = ion.is_prefix;
+      ion_types[i] = ion.is_prefix ? 'b' : 'y';
       fragment_indices[i] = ion.fragment_index;
       auto [mz1, mz2] = pg.getMzRange(charges[i]);
       window_starts[i] = mz1 - optimal_window_margin_;
@@ -2029,7 +2029,7 @@ FLASHIda::FLASHIda(char* arg)
       int* charges,
       double* window_starts,
       double* window_ends,
-      bool* is_b_ions,
+      char* ion_types,
       int* fragment_indices)
   {
     // Run fragment matching to get all matches
@@ -2115,7 +2115,7 @@ FLASHIda::FLASHIda(char* arg)
         masses[count] = selected->observed_mass;
         qscores[count] = selected->qscore;
         charges[count] = selected->charge;
-        is_b_ions[count] = is_b;
+        ion_types[count] = is_b ? 'b' : 'y';
         fragment_indices[count] = selected->fragment_index;
 
         // Get isolation window from deconvolved spectrum
@@ -2130,7 +2130,7 @@ FLASHIda::FLASHIda(char* arg)
     std::cout << "[getTerminalFragmentIons] Returning " << count << " interleaved ions:" << std::endl;
     for (int i = 0; i < count; ++i)
     {
-      std::cout << "  " << (is_b_ions[i] ? "b" : "y") << fragment_indices[i] << " mass=" << masses[i]
+      std::cout << "  " << ion_types[i] << fragment_indices[i] << " mass=" << masses[i]
                 << " qscore=" << qscores[i] << " charge=" << charges[i] << std::endl;
     }
 

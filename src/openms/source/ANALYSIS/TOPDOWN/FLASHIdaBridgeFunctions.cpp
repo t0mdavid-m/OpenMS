@@ -201,14 +201,14 @@ namespace OpenMS
                             int *charges,
                             double *window_starts,
                             double *window_ends,
-                            bool *is_b_ions,
+                            char *ion_types,
                             int *fragment_indices)
   {
     if (pObject != nullptr && protein_sequence != nullptr)
     {
       return pObject->getTopFragmentMatches(
           String(protein_sequence), n, masses, qscores, charges,
-          window_starts, window_ends, is_b_ions, fragment_indices);
+          window_starts, window_ends, ion_types, fragment_indices);
     }
     return 0;
   }
@@ -221,14 +221,14 @@ namespace OpenMS
                                 int *charges,
                                 double *window_starts,
                                 double *window_ends,
-                                bool *is_b_ions,
+                                char *ion_types,
                                 int *fragment_indices)
   {
     if (pObject != nullptr && protein_sequence != nullptr)
     {
       return pObject->getAmbiguityEnclosingIons(
           String(protein_sequence), n, masses, qscores, charges,
-          window_starts, window_ends, is_b_ions, fragment_indices);
+          window_starts, window_ends, ion_types, fragment_indices);
     }
     return 0;
   }
@@ -241,14 +241,14 @@ namespace OpenMS
                               int *charges,
                               double *window_starts,
                               double *window_ends,
-                              bool *is_b_ions,
+                              char *ion_types,
                               int *fragment_indices)
   {
     if (pObject != nullptr && protein_sequence != nullptr)
     {
       return pObject->getTerminalFragmentIons(
           String(protein_sequence), n, masses, qscores, charges,
-          window_starts, window_ends, is_b_ions, fragment_indices);
+          window_starts, window_ends, ion_types, fragment_indices);
     }
     return 0;
   }

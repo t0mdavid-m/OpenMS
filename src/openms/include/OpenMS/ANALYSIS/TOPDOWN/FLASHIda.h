@@ -270,7 +270,7 @@ namespace OpenMS
                               int* charges,
                               double* window_starts,
                               double* window_ends,
-                              bool* is_b_ions,
+                              char* ion_types,
                               int* fragment_indices);
 
     /**
@@ -310,7 +310,7 @@ namespace OpenMS
                                   int* charges,
                                   double* window_starts,
                                   double* window_ends,
-                                  bool* is_b_ions,
+                                  char* ion_types,
                                   int* fragment_indices);
 
     /**
@@ -353,7 +353,7 @@ namespace OpenMS
                                 int* charges,
                                 double* window_starts,
                                 double* window_ends,
-                                bool* is_b_ions,
+                                char* ion_types,
                                 int* fragment_indices);
 
     /**

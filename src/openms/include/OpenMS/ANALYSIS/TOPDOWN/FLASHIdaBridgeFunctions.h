@@ -143,7 +143,7 @@ namespace OpenMS
                                                       int *charges,
                                                       double *window_starts,
                                                       double *window_ends,
-                                                      bool *is_b_ions,
+                                                      char *ion_types,
                                                       int *fragment_indices);
 
   /// bridges getAmbiguityEnclosingIons in FLASHIda class to C# FLASHIda side
@@ -157,7 +157,7 @@ namespace OpenMS
                                                           int *charges,
                                                           double *window_starts,
                                                           double *window_ends,
-                                                          bool *is_b_ions,
+                                                          char *ion_types,
                                                           int *fragment_indices);
 
   /// Get terminal (innermost) fragment ions
@@ -173,7 +173,7 @@ namespace OpenMS
                                                         int *charges,
                                                         double *window_starts,
                                                         double *window_ends,
-                                                        bool *is_b_ions,
+                                                        char *ion_types,
                                                         int *fragment_indices);
 
   /// keeps the precalculated averagine to calculate average masses from monoisotopic masses
