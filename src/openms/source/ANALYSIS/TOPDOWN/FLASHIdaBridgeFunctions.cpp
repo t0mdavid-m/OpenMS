@@ -148,11 +148,11 @@ namespace OpenMS
     return false;
   }
 
-  int DeconvolveMS2(FLASHIda *pObject, double *mzs, double *ints, int length, double rt_min, double precursor_mass)
+  int DeconvolveMS2(FLASHIda *pObject, double *mzs, double *ints, int length, double rt_min, double precursor_mass, int precursor_charge)
   {
     if (pObject != nullptr)
     {
-      return pObject->deconvolveMS2(mzs, ints, length, rt_min * 60.0, precursor_mass);
+      return pObject->deconvolveMS2(mzs, ints, length, rt_min * 60.0, precursor_mass, precursor_charge);
     }
     return 0;
   }

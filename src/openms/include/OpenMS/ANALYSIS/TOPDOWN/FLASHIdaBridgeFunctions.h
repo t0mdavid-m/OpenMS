@@ -111,7 +111,8 @@ namespace OpenMS
                                              double *ints,
                                              int length,
                                              double rt_min,
-                                             double precursor_mass);
+                                             double precursor_mass,
+                                             int precursor_charge);
 
   /// bridges getBestMS2Masses in FLASHIda class to C# FLASHIda side
   extern "C" OPENMS_DLLAPI int GetBestMS2Masses(FLASHIda *object,

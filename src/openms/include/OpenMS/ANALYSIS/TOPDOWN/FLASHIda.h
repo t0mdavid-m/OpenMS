@@ -181,14 +181,16 @@ namespace OpenMS
      * @param ints intensities of the input spectrum
      * @param length number of peaks
      * @param rt retention time in seconds
-     * @param precursor_mass precursor monoisotopic mass (from MS1 deconvolution)
+     * @param precursor_mass precursor monoisotopic mass (from MS1 deconvolution), <= 0 means no precursor
+     * @param precursor_charge precursor charge state (positive for positive mode), 0 means no precursor
      * @return number of peak groups found
      */
     int deconvolveMS2(const double* mzs,
                       const double* ints,
                       int length,
                       double rt,
-                      double precursor_mass);
+                      double precursor_mass,
+                      int precursor_charge);
 
     /**
      * @brief Python-friendly overload of deconvolveMS2
@@ -196,7 +198,8 @@ namespace OpenMS
     int deconvolveMS2Py(const std::vector<double>& mzs,
                         const std::vector<double>& ints,
                         double rt,
-                        double precursor_mass);
+                        double precursor_mass,
+                        int precursor_charge);
 
     /**
      * @brief Get the top N MS2 masses with isolation window info
@@ -572,6 +575,7 @@ namespace OpenMS
      * @param ppm_tolerance mass tolerance in ppm for tag matching
      * @param max_flanking_mass_diff maximum allowed flanking mass difference
      * @param precursor_mass precursor monoisotopic mass (from MS1 deconvolution)
+     * @param precursor_charge precursor charge state (positive for positive mode)
      * @return number of tags found
      */
     int getSequenceTagsAndMatchesPy(const std::vector<double>& mzs,
@@ -584,7 +588,8 @@ namespace OpenMS
                                     std::vector<TagMatch>& matches,
                                     double ppm_tolerance,
                                     double max_flanking_mass_diff,
-                                    double precursor_mass);
+                                    double precursor_mass,
+                                    int precursor_charge);
 
     /**
      * @brief Python-friendly proteoform identification
@@ -595,6 +600,7 @@ namespace OpenMS
      * @param ints intensities of the input MS2 spectrum
      * @param rt retention time in seconds
      * @param precursor_mass precursor monoisotopic mass (from MS1 deconvolution)
+     * @param precursor_charge precursor charge state (positive for positive mode)
      * @param protein_sequence the protein sequence to match against
      * @param ppm_tolerance mass tolerance in ppm
      * @param ion_types ion types to consider (e.g., {"b", "y"})
@@ -609,6 +615,7 @@ namespace OpenMS
                              const std::vector<double>& ints,
                              double rt,
                              double precursor_mass,
+                             int precursor_charge,
                              const String& protein_sequence,
                              double ppm_tolerance,
                              const std::vector<String>& ion_types,
@@ -627,6 +634,7 @@ namespace OpenMS
      * @param ints intensities of the input MS2 spectrum
      * @param rt retention time in seconds
      * @param precursor_mass precursor monoisotopic mass (from MS1 deconvolution)
+     * @param precursor_charge precursor charge state (positive for positive mode)
      * @param protein_sequence the protein sequence to match against
      * @param ppm_tolerance mass tolerance in ppm
      * @param ion_types ion types to consider
@@ -646,6 +654,7 @@ namespace OpenMS
                                      const std::vector<double>& ints,
                                      double rt,
                                      double precursor_mass,
+                                     int precursor_charge,
                                      const String& protein_sequence,
                                      double ppm_tolerance,
                                      const std::vector<String>& ion_types,

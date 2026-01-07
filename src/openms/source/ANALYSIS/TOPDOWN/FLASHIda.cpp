@@ -1410,7 +1410,8 @@ FLASHIda::FLASHIda(char* arg)
                               const double* ints,
                               int length,
                               double rt,
-                              double precursor_mass)
+                              double precursor_mass,
+                              int precursor_charge)
   {
     // Clear previous state
     ms2_deconvolved_spectrum_.clear();
@@ -1425,18 +1426,33 @@ FLASHIda::FLASHIda(char* arg)
     // Create MSSpectrum from input
     auto spec = makeMSSpectrum_(mzs, ints, length, rt, 2, "ms2_spectrum");
 
-    // Create precursor PeakGroup - only set if precursor_mass > 0
+    // Create precursor PeakGroup - only set if precursor_mass > 0 AND precursor_charge != 0
     PeakGroup precursor_pg;
-    if (precursor_mass > 0)
+    if (precursor_mass > 0 && precursor_charge != 0)
     {
-      // Add a dummy LogMzPeak so PeakGroup::empty() returns false
+      int abs_charge = std::abs(precursor_charge);
+      bool is_positive = precursor_charge > 0;
+
+      // Calculate precursor m/z from mass and charge
+      double charge_mass = FLASHHelperClasses::getChargeMass(is_positive);
+      double precursor_mz = (precursor_mass + abs_charge * charge_mass) / abs_charge;
+
+      // Set precursor on the MSSpectrum (required for deconvolution mass range calculation)
+      Precursor precursor;
+      precursor.setMZ(precursor_mz);
+      precursor.setCharge(precursor_charge);
+      spec.getPrecursors().push_back(precursor);
+
+      // Construct PeakGroup with proper charge range and polarity
+      precursor_pg = PeakGroup(abs_charge, abs_charge, is_positive);
       precursor_pg.push_back(FLASHHelperClasses::LogMzPeak());
       precursor_pg.setMonoisotopicMass(precursor_mass);
+      precursor_pg.setRepAbsCharge(abs_charge);
       precursor_pg.setQscore(1.0);  // Known precursor from MS1, high confidence
       precursor_pg.setSNR(1.0);
     }
 
-    // Perform deconvolution (empty precursor_pg if mass <= 0)
+    // Perform deconvolution (empty precursor_pg if mass <= 0 or charge == 0)
     fd_.performSpectrumDeconvolution(spec, 0, precursor_pg);
     ms2_deconvolved_spectrum_ = fd_.getDeconvolvedSpectrum();
 
@@ -1455,13 +1471,14 @@ FLASHIda::FLASHIda(char* arg)
   int FLASHIda::deconvolveMS2Py(const std::vector<double>& mzs,
                                 const std::vector<double>& ints,
                                 double rt,
-                                double precursor_mass)
+                                double precursor_mass,
+                                int precursor_charge)
   {
     if (mzs.empty() || mzs.size() != ints.size())
     {
       return 0;
     }
-    return deconvolveMS2(mzs.data(), ints.data(), static_cast<int>(mzs.size()), rt, precursor_mass);
+    return deconvolveMS2(mzs.data(), ints.data(), static_cast<int>(mzs.size()), rt, precursor_mass, precursor_charge);
   }
 
   int FLASHIda::getBestMS2Masses(int n,
@@ -2337,10 +2354,11 @@ FLASHIda::FLASHIda(char* arg)
                                             std::vector<TagMatch>& matches,
                                             double ppm_tolerance,
                                             double max_flanking_mass_diff,
-                                            double precursor_mass)
+                                            double precursor_mass,
+                                            int precursor_charge)
   {
-    // Deconvolve the spectrum first with precursor mass
-    deconvolveMS2Py(mzs, ints, rt, precursor_mass);
+    // Deconvolve the spectrum first with precursor mass and charge
+    deconvolveMS2Py(mzs, ints, rt, precursor_mass, precursor_charge);
 
     // Call the underlying method
     return getSequenceTagsAndMatches(fasta_entries, tagger_param, tags, matches,
@@ -2351,6 +2369,7 @@ FLASHIda::FLASHIda(char* arg)
                                      const std::vector<double>& ints,
                                      double rt,
                                      double precursor_mass,
+                                     int precursor_charge,
                                      const String& protein_sequence,
                                      double ppm_tolerance,
                                      const std::vector<String>& ion_types,
@@ -2360,8 +2379,8 @@ FLASHIda::FLASHIda(char* arg)
                                      std::vector<int>& ptm_end_positions,
                                      std::vector<double>& ptm_masses)
   {
-    // Deconvolve the spectrum first with precursor mass
-    deconvolveMS2Py(mzs, ints, rt, precursor_mass);
+    // Deconvolve the spectrum first with precursor mass and charge
+    deconvolveMS2Py(mzs, ints, rt, precursor_mass, precursor_charge);
 
     // Call the underlying method
     return identifyProteoform(protein_sequence, ppm_tolerance, ion_types, ptm_mass_threshold,
@@ -2373,6 +2392,7 @@ FLASHIda::FLASHIda(char* arg)
                                              const std::vector<double>& ints,
                                              double rt,
                                              double precursor_mass,
+                                             int precursor_charge,
                                              const String& protein_sequence,
                                              double ppm_tolerance,
                                              const std::vector<String>& ion_types,
@@ -2387,8 +2407,8 @@ FLASHIda::FLASHIda(char* arg)
                                              double& coverage,
                                              double& total_score)
   {
-    // Deconvolve the spectrum first with precursor mass
-    deconvolveMS2Py(mzs, ints, rt, precursor_mass);
+    // Deconvolve the spectrum first with precursor mass and charge
+    deconvolveMS2Py(mzs, ints, rt, precursor_mass, precursor_charge);
 
     // Call the underlying method
     return identifyProteoformExtended(protein_sequence, ppm_tolerance, ion_types,
