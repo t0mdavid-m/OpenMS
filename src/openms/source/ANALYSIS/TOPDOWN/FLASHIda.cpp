@@ -85,8 +85,6 @@ namespace
     if (ion_type == "y") return Residue::getInternalToYIon().getMonoWeight();
     if (ion_type == "x") return Residue::getInternalToXIon().getMonoWeight();
     if (ion_type == "z") return Residue::getInternalToZIon().getMonoWeight();
-    if (ion_type == "zp1") return Residue::getInternalToZp1Ion().getMonoWeight();
-    if (ion_type == "zp2") return Residue::getInternalToZp2Ion().getMonoWeight();
     return Residue::getInternalToYIon().getMonoWeight(); // default to y
   }
 
