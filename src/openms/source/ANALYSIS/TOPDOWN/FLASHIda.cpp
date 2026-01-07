@@ -3667,10 +3667,11 @@ FLASHIda::FLASHIda(char* arg)
       }
 
       const TargetPTM& ptm = ptms[ptm_idx];
-      for (int count = 0; count <= ptm.max_count; ++count)
+      // Generate both negative and positive mass shifts: -max_count to +max_count
+      for (int count = -ptm.max_count; count <= ptm.max_count; ++count)
       {
-        int new_total = total_count + count;
-        if (new_total > max_total_ptm_count_) break;  // Prune: exceeds global max
+        int new_total = total_count + std::abs(count);  // Track absolute count for pruning
+        if (new_total > max_total_ptm_count_) continue;  // Skip if exceeds global max
         double new_mass = current_mass + count * ptm.mass;
         generate(ptm_idx + 1, new_mass, new_total);
       }
