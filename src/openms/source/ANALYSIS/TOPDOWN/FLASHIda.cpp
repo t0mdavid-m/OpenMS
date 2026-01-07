@@ -1938,7 +1938,9 @@ FLASHIda::FLASHIda(char* arg)
                                       double* qscores,
                                       int* charges,
                                       double* window_starts,
-                                      double* window_ends)
+                                      double* window_ends,
+                                      bool* is_b_ions,
+                                      int* fragment_indices)
   {
     std::cout << "Matching fragments!" << std::endl;
     // Use tag-based matching workflow (FLASHTagger + FLASHExtender)
@@ -1957,6 +1959,8 @@ FLASHIda::FLASHIda(char* arg)
       masses[i] = m.observed_mass;
       qscores[i] = m.qscore;
       charges[i] = m.charge;
+      is_b_ions[i] = m.is_prefix;
+      fragment_indices[i] = m.fragment_index;
 
       auto [mz1, mz2] = pg.getMzRange(m.charge);
       window_starts[i] = mz1 - optimal_window_margin_;
@@ -1972,7 +1976,9 @@ FLASHIda::FLASHIda(char* arg)
                                         std::vector<double>& qscores,
                                         std::vector<int>& charges,
                                         std::vector<double>& window_starts,
-                                        std::vector<double>& window_ends)
+                                        std::vector<double>& window_ends,
+                                        std::vector<int>& is_b_ions,
+                                        std::vector<int>& fragment_indices)
   {
     masses.resize(n);
     qscores.resize(n);
@@ -1980,14 +1986,27 @@ FLASHIda::FLASHIda(char* arg)
     window_starts.resize(n);
     window_ends.resize(n);
 
+    // Use raw bool array for the C-style function
+    std::unique_ptr<bool[]> is_b_temp(new bool[n]);
+    fragment_indices.resize(n);
+
     int count = getTopFragmentMatches(protein_sequence, n, masses.data(), qscores.data(),
-                                      charges.data(), window_starts.data(), window_ends.data());
+                                      charges.data(), window_starts.data(), window_ends.data(),
+                                      is_b_temp.get(), fragment_indices.data());
 
     masses.resize(count);
     qscores.resize(count);
     charges.resize(count);
     window_starts.resize(count);
     window_ends.resize(count);
+    fragment_indices.resize(count);
+
+    // Convert bool array to int vector (1 for b-ion, 0 for y-ion)
+    is_b_ions.resize(count);
+    for (int i = 0; i < count; ++i)
+    {
+      is_b_ions[i] = is_b_temp[i] ? 1 : 0;
+    }
 
     return count;
   }
@@ -1998,7 +2017,9 @@ FLASHIda::FLASHIda(char* arg)
                                           double* qscores,
                                           int* charges,
                                           double* window_starts,
-                                          double* window_ends)
+                                          double* window_ends,
+                                          bool* is_b_ions,
+                                          int* fragment_indices)
   {
     // Get fragment matches AND PTM sites from FLASHExtender
     std::vector<TagBasedFragmentMatch> tag_matches;
@@ -2034,10 +2055,12 @@ FLASHIda::FLASHIda(char* arg)
 
     // Collect unique enclosing ions (deduplicated by peak_index)
     // Enclosing ions bracket the PTM ambiguity region for MS3 targeting:
-    // - Left bracket: fragment ending just before PTM 
-    // - Right bracket: fragment just including PTM 
+    // - Left bracket: fragment ending just before PTM
+    // - Right bracket: fragment just including PTM
     std::set<int> used_peaks;
-    std::vector<std::pair<float, int>> enclosing_ions; // (qscore, peak_index)
+    // Store (qscore, peak_index, is_prefix, fragment_index)
+    struct EnclosingIon { float qscore; int peak_index; bool is_prefix; int fragment_index; };
+    std::vector<EnclosingIon> enclosing_ions;
     int seq_len = static_cast<int>(protein_sequence.size());
 
     for (const auto& site : ptm_sites)
@@ -2134,26 +2157,31 @@ FLASHIda::FLASHIda(char* arg)
       if (best_left && used_peaks.find(best_left->peak_index) == used_peaks.end())
       {
         used_peaks.insert(best_left->peak_index);
-        enclosing_ions.push_back({static_cast<float>(best_left->qscore), best_left->peak_index});
+        enclosing_ions.push_back({static_cast<float>(best_left->qscore), best_left->peak_index,
+                                  best_left->is_prefix, best_left->fragment_index});
       }
       if (best_right && used_peaks.find(best_right->peak_index) == used_peaks.end())
       {
         used_peaks.insert(best_right->peak_index);
-        enclosing_ions.push_back({static_cast<float>(best_right->qscore), best_right->peak_index});
+        enclosing_ions.push_back({static_cast<float>(best_right->qscore), best_right->peak_index,
+                                  best_right->is_prefix, best_right->fragment_index});
       }
     }
 
     // Sort by qscore descending and fill output arrays
     std::sort(enclosing_ions.begin(), enclosing_ions.end(),
-              [](const auto& a, const auto& b) { return a.first > b.first; });
+              [](const auto& a, const auto& b) { return a.qscore > b.qscore; });
 
     int count = std::min(n, static_cast<int>(enclosing_ions.size()));
     for (int i = 0; i < count; ++i)
     {
-      const auto& pg = ms2_deconvolved_spectrum_[enclosing_ions[i].second];
+      const auto& ion = enclosing_ions[i];
+      const auto& pg = ms2_deconvolved_spectrum_[ion.peak_index];
       masses[i] = pg.getMonoMass();
-      qscores[i] = enclosing_ions[i].first;
+      qscores[i] = ion.qscore;
       charges[i] = pg.getRepAbsCharge();
+      is_b_ions[i] = ion.is_prefix;
+      fragment_indices[i] = ion.fragment_index;
       auto [mz1, mz2] = pg.getMzRange(charges[i]);
       window_starts[i] = mz1 - optimal_window_margin_;
       window_ends[i] = mz2 + optimal_window_margin_;
@@ -2168,7 +2196,9 @@ FLASHIda::FLASHIda(char* arg)
                                             std::vector<double>& qscores,
                                             std::vector<int>& charges,
                                             std::vector<double>& window_starts,
-                                            std::vector<double>& window_ends)
+                                            std::vector<double>& window_ends,
+                                            std::vector<int>& is_b_ions,
+                                            std::vector<int>& fragment_indices)
   {
     masses.resize(n);
     qscores.resize(n);
@@ -2176,14 +2206,27 @@ FLASHIda::FLASHIda(char* arg)
     window_starts.resize(n);
     window_ends.resize(n);
 
+    // Use raw bool array for the C-style function
+    std::unique_ptr<bool[]> is_b_temp(new bool[n]);
+    fragment_indices.resize(n);
+
     int count = getAmbiguityEnclosingIons(protein_sequence, n, masses.data(), qscores.data(),
-                                          charges.data(), window_starts.data(), window_ends.data());
+                                          charges.data(), window_starts.data(), window_ends.data(),
+                                          is_b_temp.get(), fragment_indices.data());
 
     masses.resize(count);
     qscores.resize(count);
     charges.resize(count);
     window_starts.resize(count);
     window_ends.resize(count);
+    fragment_indices.resize(count);
+
+    // Convert bool array to int vector (1 for b-ion, 0 for y-ion)
+    is_b_ions.resize(count);
+    for (int i = 0; i < count; ++i)
+    {
+      is_b_ions[i] = is_b_temp[i] ? 1 : 0;
+    }
 
     return count;
   }
@@ -2196,7 +2239,8 @@ FLASHIda::FLASHIda(char* arg)
       int* charges,
       double* window_starts,
       double* window_ends,
-      bool* is_b_ions)
+      bool* is_b_ions,
+      int* fragment_indices)
   {
     // Run fragment matching to get all matches
     std::vector<TagBasedFragmentMatch> matches;
@@ -2282,6 +2326,7 @@ FLASHIda::FLASHIda(char* arg)
         qscores[count] = selected->qscore;
         charges[count] = selected->charge;
         is_b_ions[count] = is_b;
+        fragment_indices[count] = selected->fragment_index;
 
         // Get isolation window from deconvolved spectrum
         auto [mz_start, mz_end] = ms2_deconvolved_spectrum_[selected->peak_index].getMzRange(selected->charge);
@@ -2295,7 +2340,7 @@ FLASHIda::FLASHIda(char* arg)
     std::cout << "[getTerminalFragmentIons] Returning " << count << " interleaved ions:" << std::endl;
     for (int i = 0; i < count; ++i)
     {
-      std::cout << "  " << (is_b_ions[i] ? "b" : "y") << " mass=" << masses[i]
+      std::cout << "  " << (is_b_ions[i] ? "b" : "y") << fragment_indices[i] << " mass=" << masses[i]
                 << " qscore=" << qscores[i] << " charge=" << charges[i] << std::endl;
     }
 
@@ -2310,7 +2355,8 @@ FLASHIda::FLASHIda(char* arg)
       std::vector<int>& charges,
       std::vector<double>& window_starts,
       std::vector<double>& window_ends,
-      std::vector<int>& is_b_ions)
+      std::vector<int>& is_b_ions,
+      std::vector<int>& fragment_indices)
   {
     masses.resize(n);
     qscores.resize(n);
@@ -2320,12 +2366,13 @@ FLASHIda::FLASHIda(char* arg)
 
     // Use raw bool array for the C-style function
     std::unique_ptr<bool[]> is_b_temp(new bool[n]);
+    fragment_indices.resize(n);
 
     int count = getTerminalFragmentIons(
         protein_sequence, n,
         masses.data(), qscores.data(), charges.data(),
         window_starts.data(), window_ends.data(),
-        is_b_temp.get());
+        is_b_temp.get(), fragment_indices.data());
 
     // Resize to actual count
     masses.resize(count);
@@ -2333,6 +2380,7 @@ FLASHIda::FLASHIda(char* arg)
     charges.resize(count);
     window_starts.resize(count);
     window_ends.resize(count);
+    fragment_indices.resize(count);
 
     // Convert bool array to int vector (1 for b-ion, 0 for y-ion)
     is_b_ions.resize(count);

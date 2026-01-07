@@ -142,7 +142,9 @@ namespace OpenMS
                                                       double *qscores,
                                                       int *charges,
                                                       double *window_starts,
-                                                      double *window_ends);
+                                                      double *window_ends,
+                                                      bool *is_b_ions,
+                                                      int *fragment_indices);
 
   /// bridges getAmbiguityEnclosingIons in FLASHIda class to C# FLASHIda side
   /// Returns unique fragment ions enclosing PTM ambiguity regions, sorted by qscore
@@ -154,7 +156,9 @@ namespace OpenMS
                                                           double *qscores,
                                                           int *charges,
                                                           double *window_starts,
-                                                          double *window_ends);
+                                                          double *window_ends,
+                                                          bool *is_b_ions,
+                                                          int *fragment_indices);
 
   /// Get terminal (innermost) fragment ions
   /// For b-ions: returns those with highest fragment_index (extend toward C-terminus)
@@ -169,7 +173,8 @@ namespace OpenMS
                                                         int *charges,
                                                         double *window_starts,
                                                         double *window_ends,
-                                                        bool *is_b_ions);
+                                                        bool *is_b_ions,
+                                                        int *fragment_indices);
 
   /// keeps the precalculated averagine to calculate average masses from monoisotopic masses
   static FLASHHelperClasses::PrecalculatedAveragine avg;

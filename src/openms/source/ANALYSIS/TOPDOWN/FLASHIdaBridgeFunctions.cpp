@@ -200,13 +200,15 @@ namespace OpenMS
                             double *qscores,
                             int *charges,
                             double *window_starts,
-                            double *window_ends)
+                            double *window_ends,
+                            bool *is_b_ions,
+                            int *fragment_indices)
   {
     if (pObject != nullptr && protein_sequence != nullptr)
     {
       return pObject->getTopFragmentMatches(
           String(protein_sequence), n, masses, qscores, charges,
-          window_starts, window_ends);
+          window_starts, window_ends, is_b_ions, fragment_indices);
     }
     return 0;
   }
@@ -218,13 +220,15 @@ namespace OpenMS
                                 double *qscores,
                                 int *charges,
                                 double *window_starts,
-                                double *window_ends)
+                                double *window_ends,
+                                bool *is_b_ions,
+                                int *fragment_indices)
   {
     if (pObject != nullptr && protein_sequence != nullptr)
     {
       return pObject->getAmbiguityEnclosingIons(
           String(protein_sequence), n, masses, qscores, charges,
-          window_starts, window_ends);
+          window_starts, window_ends, is_b_ions, fragment_indices);
     }
     return 0;
   }
@@ -237,13 +241,14 @@ namespace OpenMS
                               int *charges,
                               double *window_starts,
                               double *window_ends,
-                              bool *is_b_ions)
+                              bool *is_b_ions,
+                              int *fragment_indices)
   {
     if (pObject != nullptr && protein_sequence != nullptr)
     {
       return pObject->getTerminalFragmentIons(
           String(protein_sequence), n, masses, qscores, charges,
-          window_starts, window_ends, is_b_ions);
+          window_starts, window_ends, is_b_ions, fragment_indices);
     }
     return 0;
   }

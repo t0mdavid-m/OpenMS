@@ -269,7 +269,9 @@ namespace OpenMS
                               double* qscores,
                               int* charges,
                               double* window_starts,
-                              double* window_ends);
+                              double* window_ends,
+                              bool* is_b_ions,
+                              int* fragment_indices);
 
     /**
      * @brief Python-friendly overload of getTopFragmentMatches
@@ -280,7 +282,9 @@ namespace OpenMS
                                 std::vector<double>& qscores,
                                 std::vector<int>& charges,
                                 std::vector<double>& window_starts,
-                                std::vector<double>& window_ends);
+                                std::vector<double>& window_ends,
+                                std::vector<int>& is_b_ions,
+                                std::vector<int>& fragment_indices);
 
     /**
      * @brief Get unique fragment ions that enclose PTM ambiguity regions
@@ -305,7 +309,9 @@ namespace OpenMS
                                   double* qscores,
                                   int* charges,
                                   double* window_starts,
-                                  double* window_ends);
+                                  double* window_ends,
+                                  bool* is_b_ions,
+                                  int* fragment_indices);
 
     /**
      * @brief Python-friendly overload of getAmbiguityEnclosingIons
@@ -316,7 +322,9 @@ namespace OpenMS
                                     std::vector<double>& qscores,
                                     std::vector<int>& charges,
                                     std::vector<double>& window_starts,
-                                    std::vector<double>& window_ends);
+                                    std::vector<double>& window_ends,
+                                    std::vector<int>& is_b_ions,
+                                    std::vector<int>& fragment_indices);
 
     /**
      * @brief Get terminal (innermost) fragment ions sorted by sequence position
@@ -345,12 +353,14 @@ namespace OpenMS
                                 int* charges,
                                 double* window_starts,
                                 double* window_ends,
-                                bool* is_b_ions);
+                                bool* is_b_ions,
+                                int* fragment_indices);
 
     /**
      * @brief Python-friendly overload of getTerminalFragmentIons
      *
      * @param is_b_ions Output: 1 if b-ion, 0 if y-ion (uses int for Python compatibility)
+     * @param fragment_indices Output: 1-based fragment index (e.g., b3=3, y5=5)
      */
     int getTerminalFragmentIonsPy(const String& protein_sequence,
                                   int n,
@@ -359,7 +369,8 @@ namespace OpenMS
                                   std::vector<int>& charges,
                                   std::vector<double>& window_starts,
                                   std::vector<double>& window_ends,
-                                  std::vector<int>& is_b_ions);
+                                  std::vector<int>& is_b_ions,
+                                  std::vector<int>& fragment_indices);
 
     /**
            @brief parse FLASHIda log file

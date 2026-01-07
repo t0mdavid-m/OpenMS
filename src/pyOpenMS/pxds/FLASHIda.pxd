@@ -190,6 +190,33 @@ cdef extern from "<OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>" namespace "OpenMS":
             #   :param prefix_masses: output cumulative masses from N-terminus
             #   :param suffix_masses: output cumulative masses from C-terminus
 
+        # Python-friendly method for getting top fragment matches
+        int getTopFragmentMatchesPy(String & protein_sequence,
+                                    int n,
+                                    libcpp_vector[double] & masses,
+                                    libcpp_vector[double] & qscores,
+                                    libcpp_vector[int] & charges,
+                                    libcpp_vector[double] & window_starts,
+                                    libcpp_vector[double] & window_ends,
+                                    libcpp_vector[int] & is_b_ions,
+                                    libcpp_vector[int] & fragment_indices) except + nogil
+            # wrap-doc:
+            #   Get top fragment ions matching the protein sequence.
+            #
+            #   Returns top n fragment ions sorted by qscore.
+            #   Requires deconvolveMS2() to be called first.
+            #
+            #   :param protein_sequence: the protein sequence to match against
+            #   :param n: maximum number of ions to return
+            #   :param masses: output monoisotopic masses
+            #   :param qscores: output quality scores
+            #   :param charges: output representative charges
+            #   :param window_starts: output isolation window start m/z
+            #   :param window_ends: output isolation window end m/z
+            #   :param is_b_ions: output 1 if b-ion, 0 if y-ion
+            #   :param fragment_indices: output 1-based fragment index (b3=3, y5=5)
+            #   :returns: number of matches found
+
         # Python-friendly method for getting PTM ambiguity enclosing ions
         int getAmbiguityEnclosingIonsPy(String & protein_sequence,
                                         int n,
@@ -197,7 +224,9 @@ cdef extern from "<OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>" namespace "OpenMS":
                                         libcpp_vector[double] & qscores,
                                         libcpp_vector[int] & charges,
                                         libcpp_vector[double] & window_starts,
-                                        libcpp_vector[double] & window_ends) except + nogil
+                                        libcpp_vector[double] & window_ends,
+                                        libcpp_vector[int] & is_b_ions,
+                                        libcpp_vector[int] & fragment_indices) except + nogil
             # wrap-doc:
             #   Get unique fragment ions that enclose PTM ambiguity regions.
             #
@@ -213,7 +242,37 @@ cdef extern from "<OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>" namespace "OpenMS":
             #   :param charges: output representative charges
             #   :param window_starts: output isolation window start m/z
             #   :param window_ends: output isolation window end m/z
+            #   :param is_b_ions: output 1 if b-ion, 0 if y-ion
+            #   :param fragment_indices: output 1-based fragment index (b3=3, y5=5)
             #   :returns: number of enclosing ions found
+
+        # Python-friendly method for getting terminal fragment ions
+        int getTerminalFragmentIonsPy(String & protein_sequence,
+                                      int n,
+                                      libcpp_vector[double] & masses,
+                                      libcpp_vector[double] & qscores,
+                                      libcpp_vector[int] & charges,
+                                      libcpp_vector[double] & window_starts,
+                                      libcpp_vector[double] & window_ends,
+                                      libcpp_vector[int] & is_b_ions,
+                                      libcpp_vector[int] & fragment_indices) except + nogil
+            # wrap-doc:
+            #   Get terminal (innermost) fragment ions.
+            #
+            #   Returns fragment ions that extend furthest toward the opposite terminus.
+            #   Output is interleaved: [top_b, top_y, 2nd_b, 2nd_y, ...]
+            #   Requires deconvolveMS2() to be called first.
+            #
+            #   :param protein_sequence: the protein sequence to match against
+            #   :param n: maximum number of ions to return
+            #   :param masses: output monoisotopic masses
+            #   :param qscores: output quality scores
+            #   :param charges: output representative charges
+            #   :param window_starts: output isolation window start m/z
+            #   :param window_ends: output isolation window end m/z
+            #   :param is_b_ions: output 1 if b-ion, 0 if y-ion
+            #   :param fragment_indices: output 1-based fragment index (b3=3, y5=5)
+            #   :returns: number of ions found
 
 cdef extern from "<OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>" namespace "OpenMS::FLASHIda":
 
