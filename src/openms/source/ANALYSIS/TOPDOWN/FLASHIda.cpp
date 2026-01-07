@@ -1414,7 +1414,7 @@ FLASHIda::FLASHIda(char* arg)
     int count = std::min(n, static_cast<int>(ms2_deconvolved_spectrum_.size()));
     std::sort(ms2_deconvolved_spectrum_.begin(), ms2_deconvolved_spectrum_.end(),
     [](const PeakGroup& a, const PeakGroup& b) {
-      return a.getChargeIntensity(a.getRepAbsCharge()) > b.getChargeIntensity(b.getRepAbsCharge());
+      return a.getChargeIntensity(a.getMaxIntensityAbsCharge()) > b.getChargeIntensity(b.getMaxIntensityAbsCharge());
     });
 
     for (int i = 0; i < count; ++i)
@@ -1423,7 +1423,7 @@ FLASHIda::FLASHIda(char* arg)
       masses[i] = pg.getMonoMass();
       qscores[i] = pg.getQscore();
 
-      int charge = pg.getRepAbsCharge();
+      int charge = pg.getMaxIntensityAbsCharge();
       charges[i] = charge;
 
       // Get isolation window from m/z range
@@ -1793,8 +1793,8 @@ FLASHIda::FLASHIda(char* arg)
         TagBasedFragmentMatch match;
         match.peak_index = static_cast<int>(peak_idx);
         match.observed_mass = observed_mass;
-        match.qscore = pg.getChargeIntensity(pg.getRepAbsCharge());
-        match.charge = pg.getRepAbsCharge();
+        match.qscore = pg.getChargeIntensity(pg.getMaxIntensityAbsCharge());
+        match.charge = pg.getMaxIntensityAbsCharge();
         match.fragment_index = best_frag_idx;
         match.ion_type = best_ion_type;
         match.theoretical_mass = best_theo;
@@ -2077,7 +2077,7 @@ FLASHIda::FLASHIda(char* arg)
       const auto& pg = ms2_deconvolved_spectrum_[ion.peak_index];
       masses[i] = pg.getMonoMass();
       qscores[i] = ion.qscore;
-      charges[i] = pg.getRepAbsCharge();
+      charges[i] = pg.getMaxIntensityAbsCharge();
       ion_types[i] = ion.ion_type;
       fragment_indices[i] = ion.fragment_index;
       auto [mz1, mz2] = pg.getMzRange(charges[i]);

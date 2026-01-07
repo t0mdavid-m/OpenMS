@@ -870,6 +870,22 @@ namespace OpenMS
     return max_snr_abs_charge_;
   }
 
+  int PeakGroup::getMaxIntensityAbsCharge() const
+  {
+    int max_int_charge = min_abs_charge_;
+    float max_intensity = 0.0f;
+    for (int c = min_abs_charge_; c <= max_abs_charge_; ++c)
+    {
+      float intensity = getChargeIntensity(c);
+      if (intensity > max_intensity)
+      {
+        max_intensity = intensity;
+        max_int_charge = c;
+      }
+    }
+    return max_int_charge;
+  }
+
   double PeakGroup::getQscore() const
   {
     return qscore_;

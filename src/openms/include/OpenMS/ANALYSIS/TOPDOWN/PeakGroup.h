@@ -171,8 +171,11 @@ namespace OpenMS
     /// get the density of the peaks within charge and isotope range
     float getPeakOccupancy() const;
 
-    /// get representative charge
+    /// get representative charge (max SNR)
     int getRepAbsCharge() const;
+
+    /// get charge with maximum intensity
+    int getMaxIntensityAbsCharge() const;
 
     /// get all Q scores
     std::unordered_map<int, float> getAllQscores() const;
