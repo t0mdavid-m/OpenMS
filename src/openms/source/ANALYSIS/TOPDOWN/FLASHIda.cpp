@@ -1577,6 +1577,8 @@ FLASHIda::FLASHIda(char* arg)
     // 1. Copy and sort deconvolved spectrum
     DeconvolvedSpectrum dspec = ms2_deconvolved_spectrum_;
     dspec.sort();
+    double precursor_mass = dspec.getPrecursorPeakGroup().getMonoMass();
+    std::cout << "PM=" << precursor_mass << std::endl;
     for (const auto& pg : dspec)
     {
       double mono_mass = pg.getMonoMass();
