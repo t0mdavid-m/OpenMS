@@ -54,6 +54,7 @@
 #include <cmath>
 #include <functional>
 #include <iomanip>
+#include <map>
 #include <set>
 #include <sstream>
 #include <unordered_set>
@@ -89,6 +90,23 @@ namespace
     return Residue::getInternalToYIon().getMonoWeight(); // default to y
   }
 
+  /// Map fragmentation method name to ion types (case-insensitive via lowercase)
+  inline std::vector<std::string> getIonTypesForFragmentationMethod(const String& method)
+  {
+    String lower_method = method;
+    std::transform(lower_method.begin(), lower_method.end(), lower_method.begin(), ::tolower);
+
+    if (lower_method == "hcd") return {"b", "y"};
+    if (lower_method == "etd") return {"c", "z"};
+    if (lower_method == "uvpd") return {"a", "b", "c", "x", "y", "z"};
+    return {"b", "y"};  // default to HCD
+  }
+
+  /// Check if ion type is a prefix (N-terminal) ion
+  inline bool isPrefixIon(char ion_type)
+  {
+    return ion_type == 'a' || ion_type == 'b' || ion_type == 'c';
+  }
 
   // PTMSite is now defined as FLASHIda::PTMSite in the header file
   using PTMSite = FLASHIda::PTMSite;
@@ -178,6 +196,122 @@ namespace
       int y_number = seq_len - i;
       double ptm_contribution = ptm_for_suffix[y_number];
       suffix_masses.push_back(cumulative_mass + ptm_contribution + y_ion_shift);
+    }
+  }
+
+
+  /// Calculate theoretical fragment masses for multiple ion types with PTM adjustments
+  /// @param sequence the protein sequence
+  /// @param ptm_sites PTM sites from FLASHExtender
+  /// @param ion_types vector of ion type strings (e.g., {"a", "b", "c", "x", "y", "z"})
+  /// @param fragment_masses_map output: map from ion type char to vector of masses
+  void calculatePTMAdjustedFragmentMassesMulti(
+      const String& sequence,
+      const std::vector<FLASHIda::PTMSite>& ptm_sites,
+      const std::vector<std::string>& ion_types,
+      std::map<char, std::vector<double>>& fragment_masses_map)
+  {
+    fragment_masses_map.clear();
+
+    // Clean sequence (replace I with L for mass calculation)
+    String clean_seq = sequence;
+    std::replace(clean_seq.begin(), clean_seq.end(), 'I', 'L');
+    int seq_len = static_cast<int>(clean_seq.size());
+
+    // Separate prefix and suffix ion types
+    std::vector<std::string> prefix_ions, suffix_ions;
+    for (const auto& ion : ion_types)
+    {
+      if (ion == "a" || ion == "b" || ion == "c") prefix_ions.push_back(ion);
+      else if (ion == "x" || ion == "y" || ion == "z") suffix_ions.push_back(ion);
+    }
+
+    // Pre-calculate PTM contributions for prefix ions (b-ion style)
+    std::vector<double> ptm_at_or_before(seq_len + 1, 0.0);
+    for (const auto& ptm : ptm_sites)
+    {
+      for (int i = ptm.end_position; i <= seq_len; ++i)
+      {
+        ptm_at_or_before[i] += ptm.mass_shift;
+      }
+    }
+
+    // Pre-calculate PTM contributions for suffix ions (y-ion style)
+    std::vector<double> ptm_for_suffix(seq_len + 1, 0.0);
+    for (const auto& ptm : ptm_sites)
+    {
+      int min_n = seq_len - ptm.start_position + 1;
+      for (int n = min_n; n <= seq_len; ++n)
+      {
+        ptm_for_suffix[n] += ptm.mass_shift;
+      }
+    }
+
+    // Calculate base cumulative mass for prefix direction (N→C)
+    std::vector<double> prefix_base_masses;
+    prefix_base_masses.reserve(seq_len);
+    double cumulative_mass = 0.0;
+    for (int i = 0; i < seq_len; ++i)
+    {
+      char aa = clean_seq[i];
+      if (aa != 'X')
+      {
+        const Residue* res = ResidueDB::getInstance()->getResidue(aa);
+        if (res != nullptr)
+        {
+          cumulative_mass += res->getMonoWeight(Residue::Internal);
+        }
+      }
+      double ptm_contribution = ptm_at_or_before[i + 1];
+      prefix_base_masses.push_back(cumulative_mass + ptm_contribution);
+    }
+
+    // Calculate base cumulative mass for suffix direction (C→N)
+    std::vector<double> suffix_base_masses;
+    suffix_base_masses.reserve(seq_len);
+    cumulative_mass = 0.0;
+    for (int i = seq_len - 1; i >= 0; --i)
+    {
+      char aa = clean_seq[i];
+      if (aa != 'X')
+      {
+        const Residue* res = ResidueDB::getInstance()->getResidue(aa);
+        if (res != nullptr)
+        {
+          cumulative_mass += res->getMonoWeight(Residue::Internal);
+        }
+      }
+      int y_number = seq_len - i;
+      double ptm_contribution = ptm_for_suffix[y_number];
+      suffix_base_masses.push_back(cumulative_mass + ptm_contribution);
+    }
+
+    // Apply ion-specific shifts for each prefix ion type
+    for (const auto& ion : prefix_ions)
+    {
+      double shift = getPrefixIonShift(ion);
+      char ion_char = ion[0];
+      std::vector<double> masses;
+      masses.reserve(seq_len);
+      for (double base_mass : prefix_base_masses)
+      {
+        masses.push_back(base_mass + shift);
+      }
+      fragment_masses_map[ion_char] = std::move(masses);
+    }
+
+    // Apply ion-specific shifts for each suffix ion type
+    for (const auto& ion : suffix_ions)
+    {
+      double shift = getSuffixIonShift(ion);
+      char ion_char = ion[0];
+      std::vector<double> masses;
+      masses.reserve(seq_len);
+      for (double base_mass : suffix_base_masses)
+      {
+        masses.push_back(base_mass + shift);
+      }
+      fragment_masses_map[ion_char] = std::move(masses);
     }
   }
 
@@ -1344,7 +1478,8 @@ FLASHIda::FLASHIda(char* arg)
 
   int FLASHIda::runTagBasedFragmentMatching_(const String& protein_sequence,
                                               std::vector<TagBasedFragmentMatch>& matches,
-                                              std::vector<PTMSite>* ptm_sites)
+                                              std::vector<PTMSite>* ptm_sites,
+                                              const String& fragmentation_method)
   {
     matches.clear();
     if (ptm_sites != nullptr)
@@ -1370,9 +1505,9 @@ FLASHIda::FLASHIda(char* arg)
 
     // 2. Run FLASHTagger to generate sequence tags
     double ppm_tolerance = tol_[1];
+    std::vector<std::string> ion_types_str = getIonTypesForFragmentationMethod(fragmentation_method);
     FLASHTaggerAlgorithm tagger;
     Param tagger_param = tagger.getDefaults();
-    std::vector<std::string> ion_types_str = {"b", "y"};
     tagger_param.setValue("ion_type", ion_types_str);
     tagger.setParameters(tagger_param);
     tagger.run(dspec, ppm_tolerance);
@@ -1618,82 +1753,51 @@ FLASHIda::FLASHIda(char* arg)
                 << matching_sequence.size() << " aa, offset " << start_pos << ")" << std::endl;
     }
 
-    // 10. Calculate PTM-adjusted theoretical fragment masses
-    //     These masses already include PTM contributions based on FLASHExtender's detection
-    double b_ion_shift = getPrefixIonShift("b");
-    double y_ion_shift = getSuffixIonShift("y");
-    std::vector<double> prefix_masses, suffix_masses;
-    calculatePTMAdjustedFragmentMasses(matching_sequence, local_ptm_sites, b_ion_shift, y_ion_shift,
-                                        prefix_masses, suffix_masses);
+    // 10. Calculate PTM-adjusted theoretical fragment masses for all configured ion types
+    std::map<char, std::vector<double>> fragment_masses_map;
+    calculatePTMAdjustedFragmentMassesMulti(matching_sequence, local_ptm_sites, ion_types_str, fragment_masses_map);
 
-    // 11. Match observed masses against PTM-adjusted theoretical masses
+    // 11. Match observed masses against PTM-adjusted theoretical masses (all ion types)
     for (Size peak_idx = 0; peak_idx < ms2_deconvolved_spectrum_.size(); ++peak_idx)
     {
       const auto& pg = ms2_deconvolved_spectrum_[peak_idx];
       double observed_mass = pg.getMonoMass();
 
-      // Find best matching prefix (b-ion)
-      int best_prefix_idx = -1;
-      double best_prefix_ppm = ppm_tolerance;
-      double best_prefix_theo = 0;
-      for (Size i = 0; i < prefix_masses.size(); ++i)
+      // Find best match across all configured ion types
+      char best_ion_type = '\0';
+      int best_frag_idx = -1;
+      double best_ppm = ppm_tolerance;
+      double best_theo = 0;
+
+      for (const auto& [ion_char, masses] : fragment_masses_map)
       {
-        double theo_mass = prefix_masses[i];
-        if (theo_mass <= 0) continue;
-        double ppm_error = std::abs(observed_mass - theo_mass) / theo_mass * 1e6;
-        if (ppm_error < best_prefix_ppm)
+        for (Size i = 0; i < masses.size(); ++i)
         {
-          best_prefix_ppm = ppm_error;
-          best_prefix_idx = static_cast<int>(i);
-          best_prefix_theo = theo_mass;
+          double theo_mass = masses[i];
+          if (theo_mass <= 0) continue;
+          double ppm_error = std::abs(observed_mass - theo_mass) / theo_mass * 1e6;
+          if (ppm_error < best_ppm)
+          {
+            best_ppm = ppm_error;
+            best_ion_type = ion_char;
+            best_frag_idx = static_cast<int>(i) + 1;  // 1-based index
+            best_theo = theo_mass;
+          }
         }
       }
 
-      // Find best matching suffix (y-ion)
-      int best_suffix_idx = -1;
-      double best_suffix_ppm = ppm_tolerance;
-      double best_suffix_theo = 0;
-      for (Size i = 0; i < suffix_masses.size(); ++i)
+      // Store best match if found
+      if (best_ion_type != '\0')
       {
-        double theo_mass = suffix_masses[i];
-        if (theo_mass <= 0) continue;
-        double ppm_error = std::abs(observed_mass - theo_mass) / theo_mass * 1e6;
-        if (ppm_error < best_suffix_ppm)
-        {
-          best_suffix_ppm = ppm_error;
-          best_suffix_idx = static_cast<int>(i);
-          best_suffix_theo = theo_mass;
-        }
-      }
-
-      // Choose best match (prefer lower ppm error)
-      if (best_prefix_idx >= 0 || best_suffix_idx >= 0)
-      {
-        bool use_prefix = best_prefix_idx >= 0 &&
-                          (best_suffix_idx < 0 || best_prefix_ppm < best_suffix_ppm);
-
         TagBasedFragmentMatch match;
         match.peak_index = static_cast<int>(peak_idx);
         match.observed_mass = observed_mass;
         match.qscore = pg.getChargeIntensity(pg.getRepAbsCharge());
         match.charge = pg.getRepAbsCharge();
-
-        if (use_prefix)
-        {
-          match.fragment_index = best_prefix_idx + 1;  // 1-based b-ion index
-          match.is_prefix = true;
-          match.theoretical_mass = best_prefix_theo;
-          match.ppm_error = best_prefix_ppm;
-        }
-        else
-        {
-          // suffix_masses[i] corresponds to y_{i+1} (0-indexed to 1-indexed)
-          match.fragment_index = best_suffix_idx + 1;  // 1-based y-ion index
-          match.is_prefix = false;
-          match.theoretical_mass = best_suffix_theo;
-          match.ppm_error = best_suffix_ppm;
-        }
-
+        match.fragment_index = best_frag_idx;
+        match.ion_type = best_ion_type;
+        match.theoretical_mass = best_theo;
+        match.ppm_error = best_ppm;
         matches.push_back(match);
       }
     }
@@ -1710,7 +1814,7 @@ FLASHIda::FLASHIda(char* arg)
     for (Size i = 0; i < display_count; ++i)
     {
       const auto& m = matches[i];
-      std::cout << "  " << (m.is_prefix ? "b" : "y") << m.fragment_index
+      std::cout << "  " << m.ion_type << m.fragment_index
                 << " - " << std::fixed << std::setprecision(2) << m.observed_mass << " Da"
                 << " (qscore: " << std::setprecision(2) << m.qscore << ")" << std::endl;
     }
@@ -1730,12 +1834,13 @@ FLASHIda::FLASHIda(char* arg)
                                       double* window_starts,
                                       double* window_ends,
                                       char* ion_types,
-                                      int* fragment_indices)
+                                      int* fragment_indices,
+                                      const String& fragmentation_method)
   {
     std::cout << "Matching fragments!" << std::endl;
     // Use tag-based matching workflow (FLASHTagger + FLASHExtender)
     std::vector<TagBasedFragmentMatch> matches;
-    runTagBasedFragmentMatching_(protein_sequence, matches);
+    runTagBasedFragmentMatching_(protein_sequence, matches, nullptr, fragmentation_method);
 
     // Already sorted by qscore descending
     int count = std::min(n, static_cast<int>(matches.size()));
@@ -1749,7 +1854,7 @@ FLASHIda::FLASHIda(char* arg)
       masses[i] = m.observed_mass;
       qscores[i] = m.qscore;
       charges[i] = m.charge;
-      ion_types[i] = m.is_prefix ? 'b' : 'y';
+      ion_types[i] = m.ion_type;
       fragment_indices[i] = m.fragment_index;
 
       auto [mz1, mz2] = pg.getMzRange(m.charge);
@@ -1809,12 +1914,13 @@ FLASHIda::FLASHIda(char* arg)
                                           double* window_starts,
                                           double* window_ends,
                                           char* ion_types,
-                                          int* fragment_indices)
+                                          int* fragment_indices,
+                                          const String& fragmentation_method)
   {
     // Get fragment matches AND PTM sites from FLASHExtender
     std::vector<TagBasedFragmentMatch> tag_matches;
     std::vector<PTMSite> ptm_sites;
-    int match_count = runTagBasedFragmentMatching_(protein_sequence, tag_matches, &ptm_sites);
+    int match_count = runTagBasedFragmentMatching_(protein_sequence, tag_matches, &ptm_sites, fragmentation_method);
 
     if (match_count == 0)
     {
@@ -1848,8 +1954,8 @@ FLASHIda::FLASHIda(char* arg)
     // - Left bracket: fragment ending just before PTM
     // - Right bracket: fragment just including PTM
     std::set<int> used_peaks;
-    // Store (qscore, peak_index, is_prefix, fragment_index)
-    struct EnclosingIon { float qscore; int peak_index; bool is_prefix; int fragment_index; };
+    // Store (qscore, peak_index, ion_type, fragment_index)
+    struct EnclosingIon { float qscore; int peak_index; char ion_type; int fragment_index; };
     std::vector<EnclosingIon> enclosing_ions;
     int seq_len = static_cast<int>(protein_sequence.size());
 
@@ -1864,9 +1970,9 @@ FLASHIda::FLASHIda(char* arg)
         bool is_left_bracket = false;
         int distance_to_ptm = 0;
 
-        if (!m.is_prefix)
+        if (!isPrefixIon(m.ion_type))
         {
-          // y-ion: y_n covers positions (L-n+1)..L
+          // suffix ion (y, x, z): covers positions (L-n+1)..L
           int min_y = seq_len - site.end_position;
           if (m.fragment_index >= min_y)
           {
@@ -1897,9 +2003,9 @@ FLASHIda::FLASHIda(char* arg)
         bool is_right_bracket = false;
         int distance_to_ptm = 0;
 
-        if (m.is_prefix)
+        if (isPrefixIon(m.ion_type))
         {
-          // b-ion: covers positions 1..fragment_index
+          // prefix ion (b, a, c): covers positions 1..fragment_index
           // Modified if fragment_index >= E (includes entire PTM region)
           if (m.fragment_index >= site.end_position-1)
           {
@@ -1924,7 +2030,7 @@ FLASHIda::FLASHIda(char* arg)
       std::cout << "[getAmbiguityEnclosingIons] PTM [" << site.start_position << "-" << site.end_position << "]:" << std::endl;
       if (best_left)
       {
-        std::cout << "  Left bracket: " << (best_left->is_prefix ? "b" : "y") << best_left->fragment_index
+        std::cout << "  Left bracket: " << best_left->ion_type << best_left->fragment_index
                   << " (mass: " << std::fixed << std::setprecision(2) << best_left->observed_mass
                   << ", qscore: " << best_left->qscore << ")" << std::endl;
       }
@@ -1934,7 +2040,7 @@ FLASHIda::FLASHIda(char* arg)
       }
       if (best_right)
       {
-        std::cout << "  Right bracket: " << (best_right->is_prefix ? "b" : "y") << best_right->fragment_index
+        std::cout << "  Right bracket: " << best_right->ion_type << best_right->fragment_index
                   << " (mass: " << std::fixed << std::setprecision(2) << best_right->observed_mass
                   << ", qscore: " << best_right->qscore << ")" << std::endl;
       }
@@ -1948,13 +2054,13 @@ FLASHIda::FLASHIda(char* arg)
       {
         used_peaks.insert(best_left->peak_index);
         enclosing_ions.push_back({static_cast<float>(best_left->qscore), best_left->peak_index,
-                                  best_left->is_prefix, best_left->fragment_index});
+                                  best_left->ion_type, best_left->fragment_index});
       }
       if (best_right && used_peaks.find(best_right->peak_index) == used_peaks.end())
       {
         used_peaks.insert(best_right->peak_index);
         enclosing_ions.push_back({static_cast<float>(best_right->qscore), best_right->peak_index,
-                                  best_right->is_prefix, best_right->fragment_index});
+                                  best_right->ion_type, best_right->fragment_index});
       }
     }
 
@@ -1970,7 +2076,7 @@ FLASHIda::FLASHIda(char* arg)
       masses[i] = pg.getMonoMass();
       qscores[i] = ion.qscore;
       charges[i] = pg.getRepAbsCharge();
-      ion_types[i] = ion.is_prefix ? 'b' : 'y';
+      ion_types[i] = ion.ion_type;
       fragment_indices[i] = ion.fragment_index;
       auto [mz1, mz2] = pg.getMzRange(charges[i]);
       window_starts[i] = mz1 - optimal_window_margin_;
@@ -2030,83 +2136,79 @@ FLASHIda::FLASHIda(char* arg)
       double* window_starts,
       double* window_ends,
       char* ion_types,
-      int* fragment_indices)
+      int* fragment_indices,
+      const String& fragmentation_method)
   {
     // Run fragment matching to get all matches
     std::vector<TagBasedFragmentMatch> matches;
-    runTagBasedFragmentMatching_(protein_sequence, matches);
+    runTagBasedFragmentMatching_(protein_sequence, matches, nullptr, fragmentation_method);
 
     if (matches.empty()) return 0;
 
-    // Separate into b-ions and y-ions
-    std::vector<TagBasedFragmentMatch> b_ions, y_ions;
+    // Separate into prefix ions (a, b, c) and suffix ions (x, y, z)
+    std::vector<TagBasedFragmentMatch> prefix_ions, suffix_ions;
     for (const auto& m : matches)
     {
-      if (m.is_prefix) b_ions.push_back(m);
-      else y_ions.push_back(m);
+      if (isPrefixIon(m.ion_type)) prefix_ions.push_back(m);
+      else suffix_ions.push_back(m);
     }
 
-    std::cout << "[getTerminalFragmentIons] Found " << b_ions.size() << " b-ions and "
-              << y_ions.size() << " y-ions" << std::endl;
+    std::cout << "[getTerminalFragmentIons] Found " << prefix_ions.size() << " prefix ions and "
+              << suffix_ions.size() << " suffix ions" << std::endl;
 
-    // Sort b-ions by fragment_index descending (rightmost first), then qscore descending
-    std::sort(b_ions.begin(), b_ions.end(), [](const auto& a, const auto& b) {
+    // Sort prefix ions by fragment_index descending (rightmost first), then qscore descending
+    std::sort(prefix_ions.begin(), prefix_ions.end(), [](const auto& a, const auto& b) {
       if (a.fragment_index != b.fragment_index) return a.fragment_index > b.fragment_index;
       return a.qscore > b.qscore;
     });
 
-    // Sort y-ions by fragment_index descending (leftmost first), then qscore descending
-    std::sort(y_ions.begin(), y_ions.end(), [](const auto& a, const auto& b) {
+    // Sort suffix ions by fragment_index descending (leftmost first), then qscore descending
+    std::sort(suffix_ions.begin(), suffix_ions.end(), [](const auto& a, const auto& b) {
       if (a.fragment_index != b.fragment_index) return a.fragment_index > b.fragment_index;
       return a.qscore > b.qscore;
     });
 
-    if (!b_ions.empty())
+    if (!prefix_ions.empty())
     {
-      std::cout << "[getTerminalFragmentIons] Top b-ions (rightmost): ";
-      for (size_t i = 0; i < std::min(b_ions.size(), size_t(3)); ++i)
+      std::cout << "[getTerminalFragmentIons] Top prefix ions (rightmost): ";
+      for (size_t i = 0; i < std::min(prefix_ions.size(), size_t(3)); ++i)
       {
-        std::cout << "b" << b_ions[i].fragment_index << " ";
+        std::cout << prefix_ions[i].ion_type << prefix_ions[i].fragment_index << " ";
       }
       std::cout << std::endl;
     }
-    if (!y_ions.empty())
+    if (!suffix_ions.empty())
     {
-      std::cout << "[getTerminalFragmentIons] Top y-ions (leftmost): ";
-      for (size_t i = 0; i < std::min(y_ions.size(), size_t(3)); ++i)
+      std::cout << "[getTerminalFragmentIons] Top suffix ions (leftmost): ";
+      for (size_t i = 0; i < std::min(suffix_ions.size(), size_t(3)); ++i)
       {
-        std::cout << "y" << y_ions[i].fragment_index << " ";
+        std::cout << suffix_ions[i].ion_type << suffix_ions[i].fragment_index << " ";
       }
       std::cout << std::endl;
     }
 
-    // Interleave output: b, y, b, y, ...
+    // Interleave output: prefix, suffix, prefix, suffix, ...
     int count = 0;
-    size_t idx_b = 0, idx_y = 0;
+    size_t idx_prefix = 0, idx_suffix = 0;
 
-    while (count < n && (idx_b < b_ions.size() || idx_y < y_ions.size()))
+    while (count < n && (idx_prefix < prefix_ions.size() || idx_suffix < suffix_ions.size()))
     {
       const TagBasedFragmentMatch* selected = nullptr;
-      bool is_b = false;
 
-      if (count % 2 == 0)  // Even indices: prefer b-ion
+      if (count % 2 == 0)  // Even indices: prefer prefix ion
       {
-        if (idx_b < b_ions.size()) {
-          selected = &b_ions[idx_b++];
-          is_b = true;
-        } else if (idx_y < y_ions.size()) {
-          selected = &y_ions[idx_y++];
-          is_b = false;
+        if (idx_prefix < prefix_ions.size()) {
+          selected = &prefix_ions[idx_prefix++];
+        } else if (idx_suffix < suffix_ions.size()) {
+          selected = &suffix_ions[idx_suffix++];
         }
       }
-      else  // Odd indices: prefer y-ion
+      else  // Odd indices: prefer suffix ion
       {
-        if (idx_y < y_ions.size()) {
-          selected = &y_ions[idx_y++];
-          is_b = false;
-        } else if (idx_b < b_ions.size()) {
-          selected = &b_ions[idx_b++];
-          is_b = true;
+        if (idx_suffix < suffix_ions.size()) {
+          selected = &suffix_ions[idx_suffix++];
+        } else if (idx_prefix < prefix_ions.size()) {
+          selected = &prefix_ions[idx_prefix++];
         }
       }
 
@@ -2115,7 +2217,7 @@ FLASHIda::FLASHIda(char* arg)
         masses[count] = selected->observed_mass;
         qscores[count] = selected->qscore;
         charges[count] = selected->charge;
-        ion_types[count] = is_b ? 'b' : 'y';
+        ion_types[count] = selected->ion_type;
         fragment_indices[count] = selected->fragment_index;
 
         // Get isolation window from deconvolved spectrum

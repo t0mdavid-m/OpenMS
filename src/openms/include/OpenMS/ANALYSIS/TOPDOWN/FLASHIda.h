@@ -271,7 +271,8 @@ namespace OpenMS
                               double* window_starts,
                               double* window_ends,
                               char* ion_types,
-                              int* fragment_indices);
+                              int* fragment_indices,
+                              const String& fragmentation_method = "HCD");
 
     /**
      * @brief Python-friendly overload of getTopFragmentMatches
@@ -311,7 +312,8 @@ namespace OpenMS
                                   double* window_starts,
                                   double* window_ends,
                                   char* ion_types,
-                                  int* fragment_indices);
+                                  int* fragment_indices,
+                                  const String& fragmentation_method = "HCD");
 
     /**
      * @brief Python-friendly overload of getAmbiguityEnclosingIons
@@ -354,7 +356,8 @@ namespace OpenMS
                                 double* window_starts,
                                 double* window_ends,
                                 char* ion_types,
-                                int* fragment_indices);
+                                int* fragment_indices,
+                                const String& fragmentation_method = "HCD");
 
     /**
      * @brief Python-friendly overload of getTerminalFragmentIons
@@ -451,7 +454,7 @@ namespace OpenMS
       double qscore;            ///< Quality score from PeakGroup
       int charge;               ///< Charge state
       int fragment_index;       ///< 1-based position in protein sequence
-      bool is_prefix;           ///< true = b-ion (prefix), false = y-ion (suffix)
+      char ion_type;            ///< Ion type: 'a', 'b', 'c', 'x', 'y', or 'z'
       double ppm_error;         ///< ppm error from match
     };
 
@@ -471,7 +474,8 @@ namespace OpenMS
      */
     int runTagBasedFragmentMatching_(const String& protein_sequence,
                                       std::vector<TagBasedFragmentMatch>& matches,
-                                      std::vector<PTMSite>* ptm_sites = nullptr);
+                                      std::vector<PTMSite>* ptm_sites = nullptr,
+                                      const String& fragmentation_method = "HCD");
 
     /// PeakGroup comparator for soring by QScore
     /*struct

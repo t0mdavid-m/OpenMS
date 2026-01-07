@@ -202,13 +202,15 @@ namespace OpenMS
                             double *window_starts,
                             double *window_ends,
                             char *ion_types,
-                            int *fragment_indices)
+                            int *fragment_indices,
+                            char *fragmentation_method)
   {
     if (pObject != nullptr && protein_sequence != nullptr)
     {
+      String frag_method = (fragmentation_method != nullptr) ? String(fragmentation_method) : "HCD";
       return pObject->getTopFragmentMatches(
           String(protein_sequence), n, masses, qscores, charges,
-          window_starts, window_ends, ion_types, fragment_indices);
+          window_starts, window_ends, ion_types, fragment_indices, frag_method);
     }
     return 0;
   }
@@ -222,13 +224,15 @@ namespace OpenMS
                                 double *window_starts,
                                 double *window_ends,
                                 char *ion_types,
-                                int *fragment_indices)
+                                int *fragment_indices,
+                                char *fragmentation_method)
   {
     if (pObject != nullptr && protein_sequence != nullptr)
     {
+      String frag_method = (fragmentation_method != nullptr) ? String(fragmentation_method) : "HCD";
       return pObject->getAmbiguityEnclosingIons(
           String(protein_sequence), n, masses, qscores, charges,
-          window_starts, window_ends, ion_types, fragment_indices);
+          window_starts, window_ends, ion_types, fragment_indices, frag_method);
     }
     return 0;
   }
@@ -242,13 +246,15 @@ namespace OpenMS
                               double *window_starts,
                               double *window_ends,
                               char *ion_types,
-                              int *fragment_indices)
+                              int *fragment_indices,
+                              char *fragmentation_method)
   {
     if (pObject != nullptr && protein_sequence != nullptr)
     {
+      String frag_method = (fragmentation_method != nullptr) ? String(fragmentation_method) : "HCD";
       return pObject->getTerminalFragmentIons(
           String(protein_sequence), n, masses, qscores, charges,
-          window_starts, window_ends, ion_types, fragment_indices);
+          window_starts, window_ends, ion_types, fragment_indices, frag_method);
     }
     return 0;
   }

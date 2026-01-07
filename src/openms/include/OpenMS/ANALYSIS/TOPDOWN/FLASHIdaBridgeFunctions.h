@@ -135,6 +135,7 @@ namespace OpenMS
   /// bridges getTopFragmentMatches in FLASHIda class to C# FLASHIda side
   /// Returns top n fragment ions matching the protein sequence, sorted by qscore
   /// Requires DeconvolveMS2() to be called first
+  /// @param fragmentation_method "HCD", "ETD", or "UVPD" - determines which ion types to match
   extern "C" OPENMS_DLLAPI int GetTopFragmentMatches(FLASHIda *object,
                                                       char *protein_sequence,
                                                       int n,
@@ -144,11 +145,13 @@ namespace OpenMS
                                                       double *window_starts,
                                                       double *window_ends,
                                                       char *ion_types,
-                                                      int *fragment_indices);
+                                                      int *fragment_indices,
+                                                      char *fragmentation_method);
 
   /// bridges getAmbiguityEnclosingIons in FLASHIda class to C# FLASHIda side
   /// Returns unique fragment ions enclosing PTM ambiguity regions, sorted by qscore
   /// Requires DeconvolveMS2() to be called first
+  /// @param fragmentation_method "HCD", "ETD", or "UVPD" - determines which ion types to match
   extern "C" OPENMS_DLLAPI int GetAmbiguityEnclosingIons(FLASHIda *object,
                                                           char *protein_sequence,
                                                           int n,
@@ -158,13 +161,15 @@ namespace OpenMS
                                                           double *window_starts,
                                                           double *window_ends,
                                                           char *ion_types,
-                                                          int *fragment_indices);
+                                                          int *fragment_indices,
+                                                          char *fragmentation_method);
 
   /// Get terminal (innermost) fragment ions
-  /// For b-ions: returns those with highest fragment_index (extend toward C-terminus)
-  /// For y-ions: returns those with highest fragment_index (extend toward N-terminus)
-  /// Output: interleaved [top_b, top_y, second_b, second_y, ...]
+  /// For prefix ions (a,b,c): returns those with highest fragment_index (extend toward C-terminus)
+  /// For suffix ions (x,y,z): returns those with highest fragment_index (extend toward N-terminus)
+  /// Output: interleaved [top_prefix, top_suffix, second_prefix, second_suffix, ...]
   /// Requires DeconvolveMS2() to be called first
+  /// @param fragmentation_method "HCD", "ETD", or "UVPD" - determines which ion types to match
   extern "C" OPENMS_DLLAPI int GetTerminalFragmentIons(FLASHIda *object,
                                                         char *protein_sequence,
                                                         int n,
@@ -174,7 +179,8 @@ namespace OpenMS
                                                         double *window_starts,
                                                         double *window_ends,
                                                         char *ion_types,
-                                                        int *fragment_indices);
+                                                        int *fragment_indices,
+                                                        char *fragmentation_method);
 
   /// keeps the precalculated averagine to calculate average masses from monoisotopic masses
   static FLASHHelperClasses::PrecalculatedAveragine avg;
