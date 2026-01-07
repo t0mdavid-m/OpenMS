@@ -1920,9 +1920,9 @@ FLASHIda::FLASHIda(char* arg)
                                           const String& fragmentation_method)
   {
     // Get fragment matches AND PTM sites from FLASHExtender
-    std::vector<TagBasedFragmentMatch> tag_matches;
+    std::vector<TagBasedFragmentMatch> fragment_ion_match;
     std::vector<PTMSite> ptm_sites;
-    int match_count = runTagBasedFragmentMatching_(protein_sequence, tag_matches, &ptm_sites, fragmentation_method);
+    int match_count = runTagBasedFragmentMatching_(protein_sequence, fragment_ion_match, &ptm_sites, fragmentation_method);
 
     if (match_count == 0)
     {
@@ -1967,7 +1967,7 @@ FLASHIda::FLASHIda(char* arg)
       // - y-ion: y_n where (L-n+1) > E, i.e., n <= L-E (fragment_index <= L-E)
       const TagBasedFragmentMatch* best_left = nullptr;
       int best_left_distance = INT_MAX;
-      for (const auto& m : tag_matches)
+      for (const auto& m : fragment_ion_match)
       {
         bool is_left_bracket = false;
         int distance_to_ptm = 0;
@@ -1975,7 +1975,7 @@ FLASHIda::FLASHIda(char* arg)
         if (!isPrefixIon(m.ion_type))
         {
           // suffix ion (y, x, z): covers positions (L-n+1)..L
-          int min_y = seq_len - site.end_position;
+          int min_y = seq_len - site.start_position;
           if (m.fragment_index >= min_y)
           {
             is_left_bracket = true;
@@ -2000,7 +2000,7 @@ FLASHIda::FLASHIda(char* arg)
       // - y-ion: y_n where (L-n+1) <= S, i.e., n >= L-S+1 (fragment_index >= L-S+1)
       const TagBasedFragmentMatch* best_right = nullptr;
       int best_right_distance = INT_MAX;
-      for (const auto& m : tag_matches)
+      for (const auto& m : fragment_ion_match)
       {
         bool is_right_bracket = false;
         int distance_to_ptm = 0;
