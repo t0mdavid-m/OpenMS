@@ -1577,6 +1577,11 @@ FLASHIda::FLASHIda(char* arg)
     // 1. Copy and sort deconvolved spectrum
     DeconvolvedSpectrum dspec = ms2_deconvolved_spectrum_;
     dspec.sort();
+    for (const auto& pg : dspec)
+    {
+      double mono_mass = pg.getMonoMass();
+      std::cout << mono_mass << std::endl;
+    }
 
     // 2. Run FLASHTagger to generate sequence tags
     double ppm_tolerance = tol_[1];
