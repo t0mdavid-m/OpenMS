@@ -1983,12 +1983,12 @@ FLASHIda::FLASHIda(char* arg)
         if (!isPrefixIon(m.ion_type))
         {
           // suffix ion (y, x, z): covers positions (L-n+1)..L
-          int min_y = seq_len - site.start_position;
+          int min_y = seq_len - site.end_position;
           if (m.fragment_index >= min_y)
           {
             is_left_bracket = true;
             // Distance is how far from the boundary
-            distance_to_ptm = min_y - m.fragment_index + 1;
+            distance_to_ptm = m.fragment_index + 1 - min_y;
           }
         }
 
