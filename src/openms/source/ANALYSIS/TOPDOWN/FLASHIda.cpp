@@ -1881,13 +1881,13 @@ FLASHIda::FLASHIda(char* arg)
     window_starts.resize(n);
     window_ends.resize(n);
 
-    // Use raw bool array for the C-style function
-    std::unique_ptr<bool[]> is_b_temp(new bool[n]);
+    // Use raw char array for the C-style function
+    std::unique_ptr<char[]> ion_types_temp(new char[n]);
     fragment_indices.resize(n);
 
     int count = getTopFragmentMatches(protein_sequence, n, masses.data(), qscores.data(),
                                       charges.data(), window_starts.data(), window_ends.data(),
-                                      is_b_temp.get(), fragment_indices.data());
+                                      ion_types_temp.get(), fragment_indices.data(), "HCD");
 
     masses.resize(count);
     qscores.resize(count);
@@ -1896,11 +1896,12 @@ FLASHIda::FLASHIda(char* arg)
     window_ends.resize(count);
     fragment_indices.resize(count);
 
-    // Convert bool array to int vector (1 for b-ion, 0 for y-ion)
+    // Convert char array to int vector (1 for prefix ion, 0 for suffix ion)
     is_b_ions.resize(count);
     for (int i = 0; i < count; ++i)
     {
-      is_b_ions[i] = is_b_temp[i] ? 1 : 0;
+      char c = ion_types_temp[i];
+      is_b_ions[i] = (c == 'a' || c == 'b' || c == 'c') ? 1 : 0;
     }
 
     return count;
@@ -2102,13 +2103,13 @@ FLASHIda::FLASHIda(char* arg)
     window_starts.resize(n);
     window_ends.resize(n);
 
-    // Use raw bool array for the C-style function
-    std::unique_ptr<bool[]> is_b_temp(new bool[n]);
+    // Use raw char array for the C-style function
+    std::unique_ptr<char[]> ion_types_temp(new char[n]);
     fragment_indices.resize(n);
 
     int count = getAmbiguityEnclosingIons(protein_sequence, n, masses.data(), qscores.data(),
                                           charges.data(), window_starts.data(), window_ends.data(),
-                                          is_b_temp.get(), fragment_indices.data());
+                                          ion_types_temp.get(), fragment_indices.data(), "HCD");
 
     masses.resize(count);
     qscores.resize(count);
@@ -2117,11 +2118,12 @@ FLASHIda::FLASHIda(char* arg)
     window_ends.resize(count);
     fragment_indices.resize(count);
 
-    // Convert bool array to int vector (1 for b-ion, 0 for y-ion)
+    // Convert char array to int vector (1 for prefix ion, 0 for suffix ion)
     is_b_ions.resize(count);
     for (int i = 0; i < count; ++i)
     {
-      is_b_ions[i] = is_b_temp[i] ? 1 : 0;
+      char c = ion_types_temp[i];
+      is_b_ions[i] = (c == 'a' || c == 'b' || c == 'c') ? 1 : 0;
     }
 
     return count;
@@ -2256,15 +2258,15 @@ FLASHIda::FLASHIda(char* arg)
     window_starts.resize(n);
     window_ends.resize(n);
 
-    // Use raw bool array for the C-style function
-    std::unique_ptr<bool[]> is_b_temp(new bool[n]);
+    // Use raw char array for the C-style function
+    std::unique_ptr<char[]> ion_types_temp(new char[n]);
     fragment_indices.resize(n);
 
     int count = getTerminalFragmentIons(
         protein_sequence, n,
         masses.data(), qscores.data(), charges.data(),
         window_starts.data(), window_ends.data(),
-        is_b_temp.get(), fragment_indices.data());
+        ion_types_temp.get(), fragment_indices.data(), "HCD");
 
     // Resize to actual count
     masses.resize(count);
@@ -2274,11 +2276,12 @@ FLASHIda::FLASHIda(char* arg)
     window_ends.resize(count);
     fragment_indices.resize(count);
 
-    // Convert bool array to int vector (1 for b-ion, 0 for y-ion)
+    // Convert char array to int vector (1 for prefix ion, 0 for suffix ion)
     is_b_ions.resize(count);
     for (int i = 0; i < count; ++i)
     {
-      is_b_ions[i] = is_b_temp[i] ? 1 : 0;
+      char c = ion_types_temp[i];
+      is_b_ions[i] = (c == 'a' || c == 'b' || c == 'c') ? 1 : 0;
     }
 
     return count;
