@@ -97,7 +97,10 @@ namespace
     std::transform(lower_method.begin(), lower_method.end(), lower_method.begin(), ::tolower);
 
     if (lower_method == "hcd") return {"b", "y"};
+    if (lower_method == "cid") return {"b", "y"};
     if (lower_method == "etd") return {"c", "z"};
+    if (lower_method == "ethcd") return {"b", "c", "y", "z"};
+    if (lower_method == "etcid") return {"b", "c", "y", "z"};
     if (lower_method == "uvpd") return {"a", "b", "c", "x", "y", "z"};
     return {"b", "y"};  // default to HCD
   }
