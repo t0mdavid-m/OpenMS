@@ -1519,8 +1519,10 @@ FLASHIda::FLASHIda(char* arg)
     if (tags.empty())
     {
       // No tags found - return empty
+      std::cout << "no-tags" << std::endl;
       return 0;
     }
+    std::cout << "tags" << std::endl;
 
     // 3. Create ProteinHit with proper metadata for matching
     String clean_seq = protein_sequence;
@@ -1547,8 +1549,10 @@ FLASHIda::FLASHIda(char* arg)
     if (tag_positions.empty())
     {
       // No tags match the protein - return empty
+      std::cout << "no-matching-tags" << std::endl;
       return 0;
     }
+    std::cout << "matching-tags" << std::endl;
 
     hit.setMetaValue("TagIndices", std::vector<int>(tag_indices_set.begin(), tag_indices_set.end()));
     hit.setMetaValue("TagPositions", tag_positions);
@@ -1624,8 +1628,10 @@ FLASHIda::FLASHIda(char* arg)
 
     if (hits.empty())
     {
+      std::cout << "no-hits" << std::endl;
       return 0;
     }
+    std::cout << "no-matching-hits" << std::endl;
 
     // 7. Run FLASHExtender for path-based validation
     FLASHExtenderAlgorithm extender;
@@ -1639,8 +1645,10 @@ FLASHIda::FLASHIda(char* arg)
 
     if (proteoform_hits.empty())
     {
+      std::cout << "no-proteoform-hits" << std::endl;
       return 0;
     }
+    std::cout << "matching-proteoform-hits" << std::endl;
 
     // === Diagnostic Output: Proteoform and PTM sites ===
     const auto& best_hit = proteoform_hits[0];
