@@ -14,7 +14,7 @@
 namespace OpenMS
   {
   inline const int multi_ion_score = 1;
-  inline const bool debug = false;
+  inline const bool debug = true;
   inline const double i2f_mass = Residue::getInternalToFull().getMonoWeight();
   FLASHExtenderAlgorithm::FLASHExtenderAlgorithm(): DefaultParamHandler("FLASHExtenderAlgorithm"), ProgressLogger()
   {
