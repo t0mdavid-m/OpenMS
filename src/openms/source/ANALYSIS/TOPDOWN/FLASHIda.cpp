@@ -1660,7 +1660,10 @@ FLASHIda::FLASHIda(char* arg)
     std::vector<std::unordered_set<int>> rev_vec_pro = {rev_vec};
 
     // 6. Run FLASHTagger matching
-    double max_mod_mass = 500.0;
+    double max_mod_mass = 700.0;
+    std::cout << "max_mod_mass=" << max_mod_mass << std::endl;
+    std::cout << "ion_types_str=" << ion_types_str << std::endl;
+
     FLASHTaggerAlgorithm::runMatching(hits, dspec, spec_vec, vec_pro, rev_vec_pro, max_mod_mass);
 
     if (hits.empty())
@@ -1668,7 +1671,7 @@ FLASHIda::FLASHIda(char* arg)
       std::cout << "no-hits" << std::endl;
       return 0;
     }
-    std::cout << "no-matching-hits" << std::endl;
+    std::cout << "matching-hits" << std::endl;
 
     // 7. Run FLASHExtender for path-based validation
     FLASHExtenderAlgorithm extender;
