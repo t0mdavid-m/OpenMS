@@ -1662,7 +1662,11 @@ FLASHIda::FLASHIda(char* arg)
     // 6. Run FLASHTagger matching
     double max_mod_mass = 700.0;
     std::cout << "max_mod_mass=" << max_mod_mass << std::endl;
-    std::cout << "ion_types_str=" << ion_types_str << std::endl;
+    std::cout << "ion_types_str=";
+    for (const auto& ion : ion_types_str) {
+      std::cout << ion << " ";
+    }
+    std::cout << std::endl;
 
     FLASHTaggerAlgorithm::runMatching(hits, dspec, spec_vec, vec_pro, rev_vec_pro, max_mod_mass);
 
