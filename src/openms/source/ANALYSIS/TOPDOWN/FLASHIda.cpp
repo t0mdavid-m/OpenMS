@@ -1660,7 +1660,7 @@ FLASHIda::FLASHIda(char* arg)
     std::vector<std::unordered_set<int>> rev_vec_pro = {rev_vec};
 
     // 6. Run FLASHTagger matching
-    double max_mod_mass = 500.0;
+    double max_mod_mass = 700.0;
     FLASHTaggerAlgorithm::runMatching(hits, dspec, spec_vec, vec_pro, rev_vec_pro, max_mod_mass);
 
     if (hits.empty())
@@ -1674,6 +1674,7 @@ FLASHIda::FLASHIda(char* arg)
     FLASHExtenderAlgorithm extender;
     Param extender_param = extender.getDefaults();
     extender_param.setValue("ion_type", ion_types_str);
+    extender_param.setValue("max_mod_mass", max_mod_mass);
     extender.setParameters(extender_param);
     extender.run(hits, dspec, spec_vec, vec_pro, rev_vec_pro, tags, ppm_tolerance, false);
 
