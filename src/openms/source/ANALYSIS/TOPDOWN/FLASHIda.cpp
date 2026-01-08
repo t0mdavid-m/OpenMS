@@ -1660,7 +1660,7 @@ FLASHIda::FLASHIda(char* arg)
     std::vector<std::unordered_set<int>> rev_vec_pro = {rev_vec};
 
     // 6. Run FLASHTagger matching
-    double max_mod_mass = 700.0;
+    double max_mod_mass = 500.0;
     FLASHTaggerAlgorithm::runMatching(hits, dspec, spec_vec, vec_pro, rev_vec_pro, max_mod_mass);
 
     if (hits.empty())
