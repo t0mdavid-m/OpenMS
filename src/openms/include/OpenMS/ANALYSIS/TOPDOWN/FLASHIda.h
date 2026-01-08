@@ -627,6 +627,7 @@ namespace OpenMS
     double snr_threshold_ = 1;
     bool use_idscore_ = false;
     bool consider_all_Charge_states_ = false;
+    bool ms3_all_charges_ = false;  ///< If true, output all charge states for MS3 fragment ions
     int hcd_energy_ = -1;
 
     /// mass tolerance

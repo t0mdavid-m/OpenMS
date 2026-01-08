@@ -465,6 +465,10 @@ FLASHIda::FLASHIda(char* arg)
     {
       consider_all_Charge_states_ = (bool)inputs["AllCharges"][0];
     }
+    if (inputs.find("MS3AllCharges") != inputs.end() && !inputs["MS3AllCharges"].empty())
+    {
+      ms3_all_charges_ = (bool)inputs["MS3AllCharges"][0];
+    }
     if (inputs.find("HCDEnergy") != inputs.end() && !inputs["HCDEnergy"].empty())
     {
       hcd_energy_ = (int)inputs["HCDEnergy"][0];
@@ -1411,28 +1415,61 @@ FLASHIda::FLASHIda(char* arg)
       return 0;
     }
 
-    int count = std::min(n, static_cast<int>(ms2_deconvolved_spectrum_.size()));
     std::sort(ms2_deconvolved_spectrum_.begin(), ms2_deconvolved_spectrum_.end(),
     [](const PeakGroup& a, const PeakGroup& b) {
       return a.getChargeIntensity(a.getMaxIntensityAbsCharge()) > b.getChargeIntensity(b.getMaxIntensityAbsCharge());
     });
 
-    for (int i = 0; i < count; ++i)
+    int output_idx = 0;
+    for (Size pg_idx = 0; pg_idx < ms2_deconvolved_spectrum_.size() && output_idx < n; ++pg_idx)
     {
-      const auto& pg = ms2_deconvolved_spectrum_[i];
-      masses[i] = pg.getMonoMass();
-      qscores[i] = pg.getQscore();
+      const auto& pg = ms2_deconvolved_spectrum_[pg_idx];
+      double mono_mass = pg.getMonoMass();
 
-      int charge = pg.getMaxIntensityAbsCharge();
-      charges[i] = charge;
+      if (ms3_all_charges_)
+      {
+        // Collect all charges with non-zero intensity and sort by intensity descending
+        auto [min_c, max_c] = pg.getAbsChargeRange();
+        std::vector<std::pair<float, int>> charge_intensities;  // (intensity, charge)
+        for (int c = min_c; c <= max_c; ++c)
+        {
+          float intensity = pg.getChargeIntensity(c);
+          if (intensity > 0)
+          {
+            charge_intensities.emplace_back(intensity, c);
+          }
+        }
+        std::sort(charge_intensities.begin(), charge_intensities.end(),
+                  [](const auto& a, const auto& b) { return a.first > b.first; });
 
-      // Get isolation window from m/z range
-      auto [mz1, mz2] = pg.getMzRange(charge);
-      window_starts[i] = mz1 - optimal_window_margin_;
-      window_ends[i] = mz2 + optimal_window_margin_;
+        for (const auto& [intensity, c] : charge_intensities)
+        {
+          if (output_idx >= n) break;
+          masses[output_idx] = mono_mass;
+          qscores[output_idx] = intensity;
+          charges[output_idx] = c;
+          auto [mz1, mz2] = pg.getMzRange(c);
+          window_starts[output_idx] = mz1 - optimal_window_margin_;
+          window_ends[output_idx] = mz2 + optimal_window_margin_;
+          ++output_idx;
+        }
+        if (output_idx >= n) break;
+      }
+      else
+      {
+        // Single charge behavior (most intense charge)
+        int charge = pg.getMaxIntensityAbsCharge();
+        masses[output_idx] = mono_mass;
+        qscores[output_idx] = pg.getQscore();
+        charges[output_idx] = charge;
+        auto [mz1, mz2] = pg.getMzRange(charge);
+        window_starts[output_idx] = mz1 - optimal_window_margin_;
+        window_ends[output_idx] = mz2 + optimal_window_margin_;
+        ++output_idx;
+      }
     }
 
-    return count;
+    return output_idx;
   }
 
   int FLASHIda::getBestMS2MassesPy(int n,
@@ -1843,27 +1880,59 @@ FLASHIda::FLASHIda(char* arg)
     std::vector<TagBasedFragmentMatch> matches;
     runTagBasedFragmentMatching_(protein_sequence, matches, nullptr, fragmentation_method);
 
-    // Already sorted by qscore descending
-    int count = std::min(n, static_cast<int>(matches.size()));
-
-
-    for (int i = 0; i < count; ++i)
+    int output_idx = 0;
+    for (size_t i = 0; i < matches.size() && output_idx < n; ++i)
     {
       const auto& m = matches[i];
       const auto& pg = ms2_deconvolved_spectrum_[m.peak_index];
 
-      masses[i] = m.observed_mass;
-      qscores[i] = m.qscore;
-      charges[i] = m.charge;
-      ion_types[i] = m.ion_type;
-      fragment_indices[i] = m.fragment_index;
+      if (ms3_all_charges_)
+      {
+        // Collect all charges with non-zero intensity and sort by intensity descending
+        auto [min_c, max_c] = pg.getAbsChargeRange();
+        std::vector<std::pair<float, int>> charge_intensities;  // (intensity, charge)
+        for (int c = min_c; c <= max_c; ++c)
+        {
+          float intensity = pg.getChargeIntensity(c);
+          if (intensity > 0)
+          {
+            charge_intensities.emplace_back(intensity, c);
+          }
+        }
+        std::sort(charge_intensities.begin(), charge_intensities.end(),
+                  [](const auto& a, const auto& b) { return a.first > b.first; });
 
-      auto [mz1, mz2] = pg.getMzRange(m.charge);
-      window_starts[i] = mz1 - optimal_window_margin_;
-      window_ends[i] = mz2 + optimal_window_margin_;
+        for (const auto& [intensity, c] : charge_intensities)
+        {
+          if (output_idx >= n) break;
+          masses[output_idx] = m.observed_mass;
+          qscores[output_idx] = intensity;
+          charges[output_idx] = c;
+          ion_types[output_idx] = m.ion_type;
+          fragment_indices[output_idx] = m.fragment_index;
+          auto [mz1, mz2] = pg.getMzRange(c);
+          window_starts[output_idx] = mz1 - optimal_window_margin_;
+          window_ends[output_idx] = mz2 + optimal_window_margin_;
+          ++output_idx;
+        }
+        if (output_idx >= n) break;
+      }
+      else
+      {
+        // Single charge behavior
+        masses[output_idx] = m.observed_mass;
+        qscores[output_idx] = m.qscore;
+        charges[output_idx] = m.charge;
+        ion_types[output_idx] = m.ion_type;
+        fragment_indices[output_idx] = m.fragment_index;
+        auto [mz1, mz2] = pg.getMzRange(m.charge);
+        window_starts[output_idx] = mz1 - optimal_window_margin_;
+        window_ends[output_idx] = mz2 + optimal_window_margin_;
+        ++output_idx;
+      }
     }
 
-    return count;
+    return output_idx;
   }
 
   int FLASHIda::getTopFragmentMatchesPy(const String& protein_sequence,
@@ -2070,22 +2139,61 @@ FLASHIda::FLASHIda(char* arg)
     std::sort(enclosing_ions.begin(), enclosing_ions.end(),
               [](const auto& a, const auto& b) { return a.qscore > b.qscore; });
 
-    int count = std::min(n, static_cast<int>(enclosing_ions.size()));
-    for (int i = 0; i < count; ++i)
+    int output_idx = 0;
+    for (size_t i = 0; i < enclosing_ions.size() && output_idx < n; ++i)
     {
       const auto& ion = enclosing_ions[i];
       const auto& pg = ms2_deconvolved_spectrum_[ion.peak_index];
-      masses[i] = pg.getMonoMass();
-      qscores[i] = ion.qscore;
-      charges[i] = pg.getMaxIntensityAbsCharge();
-      ion_types[i] = ion.ion_type;
-      fragment_indices[i] = ion.fragment_index;
-      auto [mz1, mz2] = pg.getMzRange(charges[i]);
-      window_starts[i] = mz1 - optimal_window_margin_;
-      window_ends[i] = mz2 + optimal_window_margin_;
+      double mono_mass = pg.getMonoMass();
+
+      if (ms3_all_charges_)
+      {
+        // Collect all charges with non-zero intensity and sort by intensity descending
+        auto [min_c, max_c] = pg.getAbsChargeRange();
+        std::vector<std::pair<float, int>> charge_intensities;  // (intensity, charge)
+        for (int c = min_c; c <= max_c; ++c)
+        {
+          float intensity = pg.getChargeIntensity(c);
+          if (intensity > 0)
+          {
+            charge_intensities.emplace_back(intensity, c);
+          }
+        }
+        std::sort(charge_intensities.begin(), charge_intensities.end(),
+                  [](const auto& a, const auto& b) { return a.first > b.first; });
+
+        for (const auto& [intensity, c] : charge_intensities)
+        {
+          if (output_idx >= n) break;
+          masses[output_idx] = mono_mass;
+          qscores[output_idx] = intensity;
+          charges[output_idx] = c;
+          ion_types[output_idx] = ion.ion_type;
+          fragment_indices[output_idx] = ion.fragment_index;
+          auto [mz1, mz2] = pg.getMzRange(c);
+          window_starts[output_idx] = mz1 - optimal_window_margin_;
+          window_ends[output_idx] = mz2 + optimal_window_margin_;
+          ++output_idx;
+        }
+        if (output_idx >= n) break;
+      }
+      else
+      {
+        // Single charge behavior
+        int charge = pg.getMaxIntensityAbsCharge();
+        masses[output_idx] = mono_mass;
+        qscores[output_idx] = ion.qscore;
+        charges[output_idx] = charge;
+        ion_types[output_idx] = ion.ion_type;
+        fragment_indices[output_idx] = ion.fragment_index;
+        auto [mz1, mz2] = pg.getMzRange(charge);
+        window_starts[output_idx] = mz1 - optimal_window_margin_;
+        window_ends[output_idx] = mz2 + optimal_window_margin_;
+        ++output_idx;
+      }
     }
 
-    return count;
+    return output_idx;
   }
 
   int FLASHIda::getAmbiguityEnclosingIonsPy(const String& protein_sequence,
@@ -2191,14 +2299,15 @@ FLASHIda::FLASHIda(char* arg)
     }
 
     // Interleave output: prefix, suffix, prefix, suffix, ...
-    int count = 0;
+    int output_idx = 0;
     size_t idx_prefix = 0, idx_suffix = 0;
+    bool select_prefix = true;  // Start with prefix
 
-    while (count < n && (idx_prefix < prefix_ions.size() || idx_suffix < suffix_ions.size()))
+    while (output_idx < n && (idx_prefix < prefix_ions.size() || idx_suffix < suffix_ions.size()))
     {
       const TagBasedFragmentMatch* selected = nullptr;
 
-      if (count % 2 == 0)  // Even indices: prefer prefix ion
+      if (select_prefix)  // Prefer prefix ion
       {
         if (idx_prefix < prefix_ions.size()) {
           selected = &prefix_ions[idx_prefix++];
@@ -2206,7 +2315,7 @@ FLASHIda::FLASHIda(char* arg)
           selected = &suffix_ions[idx_suffix++];
         }
       }
-      else  // Odd indices: prefer suffix ion
+      else  // Prefer suffix ion
       {
         if (idx_suffix < suffix_ions.size()) {
           selected = &suffix_ions[idx_suffix++];
@@ -2217,29 +2326,64 @@ FLASHIda::FLASHIda(char* arg)
 
       if (selected)
       {
-        masses[count] = selected->observed_mass;
-        qscores[count] = selected->qscore;
-        charges[count] = selected->charge;
-        ion_types[count] = selected->ion_type;
-        fragment_indices[count] = selected->fragment_index;
+        const auto& pg = ms2_deconvolved_spectrum_[selected->peak_index];
 
-        // Get isolation window from deconvolved spectrum
-        auto [mz_start, mz_end] = ms2_deconvolved_spectrum_[selected->peak_index].getMzRange(selected->charge);
-        window_starts[count] = mz_start - optimal_window_margin_;
-        window_ends[count] = mz_end + optimal_window_margin_;
+        if (ms3_all_charges_)
+        {
+          // Collect all charges with non-zero intensity and sort by intensity descending
+          auto [min_c, max_c] = pg.getAbsChargeRange();
+          std::vector<std::pair<float, int>> charge_intensities;  // (intensity, charge)
+          for (int c = min_c; c <= max_c; ++c)
+          {
+            float intensity = pg.getChargeIntensity(c);
+            if (intensity > 0)
+            {
+              charge_intensities.emplace_back(intensity, c);
+            }
+          }
+          std::sort(charge_intensities.begin(), charge_intensities.end(),
+                    [](const auto& a, const auto& b) { return a.first > b.first; });
 
-        ++count;
+          for (const auto& [intensity, c] : charge_intensities)
+          {
+            if (output_idx >= n) break;
+            masses[output_idx] = selected->observed_mass;
+            qscores[output_idx] = intensity;
+            charges[output_idx] = c;
+            ion_types[output_idx] = selected->ion_type;
+            fragment_indices[output_idx] = selected->fragment_index;
+            auto [mz1, mz2] = pg.getMzRange(c);
+            window_starts[output_idx] = mz1 - optimal_window_margin_;
+            window_ends[output_idx] = mz2 + optimal_window_margin_;
+            ++output_idx;
+          }
+          if (output_idx >= n) break;
+        }
+        else
+        {
+          // Single charge behavior
+          masses[output_idx] = selected->observed_mass;
+          qscores[output_idx] = selected->qscore;
+          charges[output_idx] = selected->charge;
+          ion_types[output_idx] = selected->ion_type;
+          fragment_indices[output_idx] = selected->fragment_index;
+          auto [mz_start, mz_end] = pg.getMzRange(selected->charge);
+          window_starts[output_idx] = mz_start - optimal_window_margin_;
+          window_ends[output_idx] = mz_end + optimal_window_margin_;
+          ++output_idx;
+        }
       }
+      select_prefix = !select_prefix;  // Alternate between prefix and suffix
     }
 
-    std::cout << "[getTerminalFragmentIons] Returning " << count << " interleaved ions:" << std::endl;
-    for (int i = 0; i < count; ++i)
+    std::cout << "[getTerminalFragmentIons] Returning " << output_idx << " interleaved ions:" << std::endl;
+    for (int i = 0; i < output_idx; ++i)
     {
       std::cout << "  " << ion_types[i] << fragment_indices[i] << " mass=" << masses[i]
                 << " qscore=" << qscores[i] << " charge=" << charges[i] << std::endl;
     }
 
-    return count;
+    return output_idx;
   }
 
   int FLASHIda::getTerminalFragmentIonsPy(
