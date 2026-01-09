@@ -2145,15 +2145,24 @@ FLASHIda::FLASHIda(char* arg)
     std::sort(ptm_brackets.begin(), ptm_brackets.end(),
               [](const auto& a, const auto& b) { return a.priority > b.priority; });
 
-    // Helper to check if ion crosses another PTM boundary
-    auto crosses_other_ptm = [&](const EnclosingIon& ion, const PTMBrackets& current) -> bool {
-      for (const auto& other : ptm_brackets)
-      {
+    // Helper to check if ion covers a PTM
+    auto covers_ptm = [&](const EnclosingIon& ion, const PTMBrackets& ptm) -> bool {
+      if (isPrefixIon(ion.ion_type)) {
+        return ion.c_terminal_pos >= ptm.ptm_start;  // Prefix covers if C-term >= PTM start
+      } else {
+        return ion.n_terminal_pos <= ptm.ptm_end;    // Suffix covers if N-term <= PTM end
+      }
+    };
+
+    // Helper to check if secondary covers an ADDITIONAL PTM that primary doesn't
+    auto crosses_additional_ptm = [&](const EnclosingIon& secondary,
+                                       const EnclosingIon& primary,
+                                       const PTMBrackets& current) -> bool {
+      for (const auto& other : ptm_brackets) {
         if (&other == &current) continue;
-        // For suffix ions: skip if N-terminal end <= other PTM start
-        if (!isPrefixIon(ion.ion_type) && ion.n_terminal_pos <= other.ptm_start) return true;
-        // For prefix ions: skip if C-terminal end >= other PTM end
-        if (isPrefixIon(ion.ion_type) && ion.c_terminal_pos >= other.ptm_end) return true;
+        if (covers_ptm(secondary, other) && !covers_ptm(primary, other)) {
+          return true;  // Secondary covers a PTM that primary doesn't
+        }
       }
       return false;
     };
@@ -2236,7 +2245,7 @@ FLASHIda::FLASHIda(char* arg)
 
     std::cout << "[getAmbiguityEnclosingIons] After Phase 1: " << output_idx << " ions output" << std::endl;
 
-    // Phase 2: Secondary brackets (additional ions that don't cross other PTM boundaries)
+    // Phase 2: Secondary brackets (additional ions that don't cover ADDITIONAL PTMs)
     std::cout << "[getAmbiguityEnclosingIons] Output Phase 2: Secondary brackets" << std::endl;
     for (size_t ion_idx = 1; output_idx < n; ++ion_idx)
     {
@@ -2245,25 +2254,29 @@ FLASHIda::FLASHIda(char* arg)
       {
         if (output_idx >= n) break;
 
-        // Output secondary left bracket if available and doesn't cross other PTM
-        if (ion_idx < brackets.left_ions.size())
+        // Output secondary left bracket if available and doesn't cover additional PTM
+        if (ion_idx < brackets.left_ions.size() && !brackets.left_ions.empty())
         {
-          const auto& ion = brackets.left_ions[ion_idx];
-          if (used_peaks.find(ion.peak_index) == used_peaks.end() && !crosses_other_ptm(ion, brackets))
+          const auto& secondary = brackets.left_ions[ion_idx];
+          const auto& primary = brackets.left_ions[0];
+          if (used_peaks.find(secondary.peak_index) == used_peaks.end() &&
+              !crosses_additional_ptm(secondary, primary, brackets))
           {
-            output_ion(ion);
+            output_ion(secondary);
             any_output = true;
           }
         }
         if (output_idx >= n) break;
 
-        // Output secondary right bracket
-        if (ion_idx < brackets.right_ions.size())
+        // Output secondary right bracket if available and doesn't cover additional PTM
+        if (ion_idx < brackets.right_ions.size() && !brackets.right_ions.empty())
         {
-          const auto& ion = brackets.right_ions[ion_idx];
-          if (used_peaks.find(ion.peak_index) == used_peaks.end() && !crosses_other_ptm(ion, brackets))
+          const auto& secondary = brackets.right_ions[ion_idx];
+          const auto& primary = brackets.right_ions[0];
+          if (used_peaks.find(secondary.peak_index) == used_peaks.end() &&
+              !crosses_additional_ptm(secondary, primary, brackets))
           {
-            output_ion(ion);
+            output_ion(secondary);
             any_output = true;
           }
         }
