@@ -2036,129 +2036,134 @@ FLASHIda::FLASHIda(char* arg)
                 << (is_ambiguous ? " (AMBIGUOUS)" : " (localized)") << std::endl;
     }
 
-    // Collect unique enclosing ions (deduplicated by peak_index)
-    // Enclosing ions bracket the PTM ambiguity region for MS3 targeting:
-    // - Left bracket: fragment ending just before PTM
-    // - Right bracket: fragment just including PTM
+    // New data structures for interleaved PTM site output
+    struct EnclosingIon {
+      float qscore;
+      int peak_index;
+      char ion_type;
+      int fragment_index;
+      int n_terminal_pos;  // For boundary checking: (L-fragment_index+1) for suffix, 1 for prefix
+      int c_terminal_pos;  // For boundary checking: L for suffix, fragment_index for prefix
+    };
+
+    struct PTMBrackets {
+      std::vector<EnclosingIon> left_ions;   // All valid left brackets, sorted by distance (closest first)
+      std::vector<EnclosingIon> right_ions;  // All valid right brackets, sorted by distance (closest first)
+      int ptm_start;
+      int ptm_end;
+      float priority;
+    };
+
     std::set<int> used_peaks;
-    // Store (qscore, peak_index, ion_type, fragment_index)
-    struct EnclosingIon { float qscore; int peak_index; char ion_type; int fragment_index; };
-    std::vector<EnclosingIon> enclosing_ions;
+    std::vector<PTMBrackets> ptm_brackets;
     int seq_len = static_cast<int>(protein_sequence.size());
 
+    // Collect ALL valid brackets per PTM site
     for (const auto& site : ptm_sites)
     {
-      // Left bracket: largest fragment
-      // - y-ion: y_n where (L-n+1) > E, i.e., n <= L-E (fragment_index <= L-E)
-      const TagBasedFragmentMatch* best_left = nullptr;
-      int best_left_distance = INT_MAX;
+      PTMBrackets brackets;
+      brackets.ptm_start = site.start_position;
+      brackets.ptm_end = site.end_position;
+
+      // Collect ALL valid left brackets (suffix ions), sorted by distance to PTM
+      std::vector<std::pair<int, const TagBasedFragmentMatch*>> left_candidates;  // (distance, match)
       for (const auto& m : fragment_ion_match)
       {
-        bool is_left_bracket = false;
-        int distance_to_ptm = 0;
-
-        if (!isPrefixIon(m.ion_type))
+        if (!isPrefixIon(m.ion_type))  // suffix ion (y, x, z)
         {
-          // suffix ion (y, x, z): covers positions (L-n+1)..L
+          // suffix ion covers positions (L-n+1)..L where n=fragment_index
           int min_y = seq_len - site.end_position;
           if (m.fragment_index >= min_y)
           {
-            is_left_bracket = true;
-            // Distance is how far from the boundary
-            distance_to_ptm = m.fragment_index + 1 - min_y;
-          }
-        }
-
-        if (is_left_bracket)
-        {
-          // Prefer closest to PTM boundary (smallest distance), then highest qscore
-          if (distance_to_ptm < best_left_distance ||
-              (distance_to_ptm == best_left_distance && (!best_left || m.qscore > best_left->qscore)))
-          {
-            best_left = &m;
-            best_left_distance = distance_to_ptm;
+            int distance = m.fragment_index + 1 - min_y;
+            left_candidates.emplace_back(distance, &m);
           }
         }
       }
+      std::sort(left_candidates.begin(), left_candidates.end());  // Sort by distance (closest first)
 
-      // Right bracket: smallest modified fragment (just includes PTM)
-      // - y-ion: y_n where (L-n+1) <= S, i.e., n >= L-S+1 (fragment_index >= L-S+1)
-      const TagBasedFragmentMatch* best_right = nullptr;
-      int best_right_distance = INT_MAX;
+      for (const auto& [dist, m] : left_candidates)
+      {
+        int n_term = seq_len - m->fragment_index + 1;  // N-terminal position
+        brackets.left_ions.push_back({static_cast<float>(m->qscore), m->peak_index, m->ion_type,
+                                      m->fragment_index, n_term, seq_len});
+      }
+
+      // Collect ALL valid right brackets (prefix ions), sorted by distance to PTM
+      std::vector<std::pair<int, const TagBasedFragmentMatch*>> right_candidates;
       for (const auto& m : fragment_ion_match)
       {
-        bool is_right_bracket = false;
-        int distance_to_ptm = 0;
-
-        if (isPrefixIon(m.ion_type))
+        if (isPrefixIon(m.ion_type))  // prefix ion (b, a, c)
         {
-          // prefix ion (b, a, c): covers positions 1..fragment_index
-          // Modified if fragment_index >= E (includes entire PTM region)
-          if (m.fragment_index >= site.end_position-1)
+          // prefix ion covers positions 1..fragment_index
+          if (m.fragment_index >= site.end_position - 1)
           {
-            is_right_bracket = true;
-            distance_to_ptm = m.fragment_index - site.end_position;
-          }
-        }
-
-        if (is_right_bracket)
-        {
-          // Prefer closest to PTM boundary (smallest distance), then highest qscore
-          if (distance_to_ptm < best_right_distance ||
-              (distance_to_ptm == best_right_distance && (!best_right || m.qscore > best_right->qscore)))
-          {
-            best_right = &m;
-            best_right_distance = distance_to_ptm;
+            int distance = m.fragment_index - site.end_position;
+            right_candidates.emplace_back(distance, &m);
           }
         }
       }
+      std::sort(right_candidates.begin(), right_candidates.end());
+
+      for (const auto& [dist, m] : right_candidates)
+      {
+        brackets.right_ions.push_back({static_cast<float>(m->qscore), m->peak_index, m->ion_type,
+                                       m->fragment_index, 1, m->fragment_index});
+      }
+
+      // Priority = max qscore of primary brackets
+      brackets.priority = 0.0f;
+      if (!brackets.left_ions.empty()) brackets.priority = std::max(brackets.priority, brackets.left_ions[0].qscore);
+      if (!brackets.right_ions.empty()) brackets.priority = std::max(brackets.priority, brackets.right_ions[0].qscore);
 
       // Debug output for this PTM site
       std::cout << "[getAmbiguityEnclosingIons] PTM [" << site.start_position << "-" << site.end_position << "]:" << std::endl;
-      if (best_left)
+      if (!brackets.left_ions.empty())
       {
-        std::cout << "  Left bracket: " << best_left->ion_type << best_left->fragment_index
-                  << " (mass: " << std::fixed << std::setprecision(2) << best_left->observed_mass
-                  << ", qscore: " << best_left->qscore << ")" << std::endl;
+        std::cout << "  Left bracket (primary): " << brackets.left_ions[0].ion_type << brackets.left_ions[0].fragment_index
+                  << " (qscore: " << brackets.left_ions[0].qscore << ", total candidates: " << brackets.left_ions.size() << ")" << std::endl;
       }
       else
       {
         std::cout << "  Left bracket: none found" << std::endl;
       }
-      if (best_right)
+      if (!brackets.right_ions.empty())
       {
-        std::cout << "  Right bracket: " << best_right->ion_type << best_right->fragment_index
-                  << " (mass: " << std::fixed << std::setprecision(2) << best_right->observed_mass
-                  << ", qscore: " << best_right->qscore << ")" << std::endl;
+        std::cout << "  Right bracket (primary): " << brackets.right_ions[0].ion_type << brackets.right_ions[0].fragment_index
+                  << " (qscore: " << brackets.right_ions[0].qscore << ", total candidates: " << brackets.right_ions.size() << ")" << std::endl;
       }
       else
       {
         std::cout << "  Right bracket: none found" << std::endl;
       }
 
-      // Add to output (deduplicated)
-      if (best_left && used_peaks.find(best_left->peak_index) == used_peaks.end())
-      {
-        used_peaks.insert(best_left->peak_index);
-        enclosing_ions.push_back({static_cast<float>(best_left->qscore), best_left->peak_index,
-                                  best_left->ion_type, best_left->fragment_index});
-      }
-      if (best_right && used_peaks.find(best_right->peak_index) == used_peaks.end())
-      {
-        used_peaks.insert(best_right->peak_index);
-        enclosing_ions.push_back({static_cast<float>(best_right->qscore), best_right->peak_index,
-                                  best_right->ion_type, best_right->fragment_index});
-      }
+      if (!brackets.left_ions.empty() || !brackets.right_ions.empty())
+        ptm_brackets.push_back(brackets);
     }
 
-    // Sort by qscore descending and fill output arrays
-    std::sort(enclosing_ions.begin(), enclosing_ions.end(),
-              [](const auto& a, const auto& b) { return a.qscore > b.qscore; });
+    // Sort PTM sites by priority (highest first)
+    std::sort(ptm_brackets.begin(), ptm_brackets.end(),
+              [](const auto& a, const auto& b) { return a.priority > b.priority; });
 
+    // Helper to check if ion crosses another PTM boundary
+    auto crosses_other_ptm = [&](const EnclosingIon& ion, const PTMBrackets& current) -> bool {
+      for (const auto& other : ptm_brackets)
+      {
+        if (&other == &current) continue;
+        // For suffix ions: skip if N-terminal end <= other PTM start
+        if (!isPrefixIon(ion.ion_type) && ion.n_terminal_pos <= other.ptm_start) return true;
+        // For prefix ions: skip if C-terminal end >= other PTM end
+        if (isPrefixIon(ion.ion_type) && ion.c_terminal_pos >= other.ptm_end) return true;
+      }
+      return false;
+    };
+
+    // Helper to output one ion (handles MS3AllCharges)
     int output_idx = 0;
-    for (size_t i = 0; i < enclosing_ions.size() && output_idx < n; ++i)
-    {
-      const auto& ion = enclosing_ions[i];
+    auto output_ion = [&](const EnclosingIon& ion) {
+      if (used_peaks.find(ion.peak_index) != used_peaks.end()) return;  // Already output
+      used_peaks.insert(ion.peak_index);
+
       const auto& pg = ms2_deconvolved_spectrum_[ion.peak_index];
       double mono_mass = pg.getMonoMass();
 
@@ -2166,7 +2171,7 @@ FLASHIda::FLASHIda(char* arg)
       {
         // Collect all charges with non-zero intensity and sort by intensity descending
         auto [min_c, max_c] = pg.getAbsChargeRange();
-        std::vector<std::pair<float, int>> charge_intensities;  // (intensity, charge)
+        std::vector<std::pair<float, int>> charge_intensities;
         for (int c = min_c; c <= max_c; ++c)
         {
           float intensity = pg.getChargeIntensity(c);
@@ -2191,7 +2196,6 @@ FLASHIda::FLASHIda(char* arg)
           window_ends[output_idx] = mz2 + optimal_window_margin_;
           ++output_idx;
         }
-        if (output_idx >= n) break;
       }
       else
       {
@@ -2207,7 +2211,67 @@ FLASHIda::FLASHIda(char* arg)
         window_ends[output_idx] = mz2 + optimal_window_margin_;
         ++output_idx;
       }
+    };
+
+    std::cout << "[getAmbiguityEnclosingIons] Output Phase 1: Primary brackets for " << ptm_brackets.size() << " PTM sites" << std::endl;
+
+    // Phase 1: Primary brackets (first ion per PTM site)
+    for (auto& brackets : ptm_brackets)
+    {
+      if (output_idx >= n) break;
+
+      // Output primary left bracket
+      if (!brackets.left_ions.empty())
+      {
+        output_ion(brackets.left_ions[0]);
+      }
+      if (output_idx >= n) break;
+
+      // Output primary right bracket
+      if (!brackets.right_ions.empty())
+      {
+        output_ion(brackets.right_ions[0]);
+      }
     }
+
+    std::cout << "[getAmbiguityEnclosingIons] After Phase 1: " << output_idx << " ions output" << std::endl;
+
+    // Phase 2: Secondary brackets (additional ions that don't cross other PTM boundaries)
+    std::cout << "[getAmbiguityEnclosingIons] Output Phase 2: Secondary brackets" << std::endl;
+    for (size_t ion_idx = 1; output_idx < n; ++ion_idx)
+    {
+      bool any_output = false;
+      for (auto& brackets : ptm_brackets)
+      {
+        if (output_idx >= n) break;
+
+        // Output secondary left bracket if available and doesn't cross other PTM
+        if (ion_idx < brackets.left_ions.size())
+        {
+          const auto& ion = brackets.left_ions[ion_idx];
+          if (used_peaks.find(ion.peak_index) == used_peaks.end() && !crosses_other_ptm(ion, brackets))
+          {
+            output_ion(ion);
+            any_output = true;
+          }
+        }
+        if (output_idx >= n) break;
+
+        // Output secondary right bracket
+        if (ion_idx < brackets.right_ions.size())
+        {
+          const auto& ion = brackets.right_ions[ion_idx];
+          if (used_peaks.find(ion.peak_index) == used_peaks.end() && !crosses_other_ptm(ion, brackets))
+          {
+            output_ion(ion);
+            any_output = true;
+          }
+        }
+      }
+      if (!any_output) break;  // No more secondary ions available
+    }
+
+    std::cout << "[getAmbiguityEnclosingIons] Total output: " << output_idx << " ions" << std::endl;
 
     return output_idx;
   }
