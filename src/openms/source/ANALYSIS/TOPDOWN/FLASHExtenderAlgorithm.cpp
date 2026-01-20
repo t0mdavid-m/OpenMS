@@ -597,12 +597,12 @@ namespace OpenMS
         int max_mod_cntr_for_last_mode = -1;
         if (hi.mode_ == 2 && hi.calculated_precursor_mass_ <= 0)
         { // const ProteinHit& hit,
-          if (max_nterm_index + max_cterm_rindex >= (int)hit.getSequence().size()) calculatePrecursorMass_(hit, best_path_map, hi);
+          // Disabled: ion pair detection would override actual precursor mass
+          // if (max_nterm_index + max_cterm_rindex >= (int)hit.getSequence().size()) calculatePrecursorMass_(hit, best_path_map, hi);
           max_mod_cntr_for_last_mode = std::min(max_blind_mod_cntr_, (int)mod_starts.size() + 1);
 
-          if (hi.calculated_precursor_mass_ <= 0) hi.calculated_precursor_mass_ = given_precursor_mass_;
-          else
-            precursor_by_fragment = true;
+          // Always use actual precursor mass
+          hi.calculated_precursor_mass_ = given_precursor_mass_;
           if (hi.calculated_precursor_mass_ <= 0) break;
         }
 
