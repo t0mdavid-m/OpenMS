@@ -36,6 +36,9 @@ namespace OpenMS
 
     defaults_.setValue("ion_type", std::vector<std::string> {"b", "y"}, "Specifies ion types to consider");
     defaults_.setValidStrings("ion_type", {"b", "c", "a", "y", "z", "x", "zp1", "zp2"});
+    defaults_.setValue("skip_precursor_inference", "false", "Set to skip precursor mass inference with complimentary fragment ion pairs. Precursor masses inferred from MSn-1 will be used in MSn");
+    defaults_.setValidStrings("skip_precursor_inference", {"true", "false"});
+    defaults_.addTag("skip_precursor_inference", "advanced");
 
     defaultsToParam_();
   }
@@ -44,6 +47,7 @@ namespace OpenMS
   {
     max_blind_mod_cntr_ = param_.getValue("max_mod_count");
     max_mod_mass_ = param_.getValue("max_mod_mass");
+    skip_precursor_inference_ = param_.getValue("skip_precursor_inference") == "false";
   }
 
   inline Size FLASHExtenderAlgorithm::getVertex_(int node_index, int pro_index, int score, int num_blind_mod, int num_var_mod, Size pro_mass_size) const
@@ -596,13 +600,14 @@ namespace OpenMS
       {
         int max_mod_cntr_for_last_mode = -1;
         if (hi.mode_ == 2 && hi.calculated_precursor_mass_ <= 0)
-        { // const ProteinHit& hit,
-          // Disabled: ion pair detection would override actual precursor mass
-          // if (max_nterm_index + max_cterm_rindex >= (int)hit.getSequence().size()) calculatePrecursorMass_(hit, best_path_map, hi);
+        {
+          if (!skip_precursor_inference_ && max_nterm_index + max_cterm_rindex >= (int)hit.getSequence().size()) calculatePrecursorMass_(hit, best_path_map, hi);
           max_mod_cntr_for_last_mode = std::min(max_blind_mod_cntr_, (int)mod_starts.size() + 1);
 
-          // Always use actual precursor mass
-          hi.calculated_precursor_mass_ = given_precursor_mass_;
+          if (hi.calculated_precursor_mass_ <= 0) hi.calculated_precursor_mass_ = given_precursor_mass_;
+          else
+            precursor_by_fragment = true;
+
           if (hi.calculated_precursor_mass_ <= 0) break;
         }
 
