@@ -63,6 +63,10 @@ public:
       hits.push_back(hit);
     }
   }
+  double getMaxTotalModificationMass() const
+  {
+    return max_total_mod_mass_;
+  }
 
 protected:
   void updateMembers_() override;
@@ -75,6 +79,7 @@ private:
   double decoy_factor_ = 0, prsm_fdr_ = 1;
   /// how many nodes (massses) will be used
   Size max_node_cntr_ = 300;
+  double max_total_mod_mass_ = 0;
 
   bool keep_decoy_ = false;
   bool keep_underdetermined_ = true;

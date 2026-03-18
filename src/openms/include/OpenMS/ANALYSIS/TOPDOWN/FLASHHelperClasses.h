@@ -228,13 +228,71 @@ namespace OpenMS
       bool operator==(const LogMzPeak& other) const;
     };
 
+    class OPENMS_DLLAPI MassTag
+    {
+    public:
+      /// constructor
+      explicit MassTag(const String& full_seq, const std::vector<int>& positions, int scan);
+
+      /// copy constructor
+      MassTag(const MassTag&) = default;
+
+      /// destructor
+      ~MassTag() = default;
+
+      bool operator<(const MassTag& a) const;
+      bool operator>(const MassTag& a) const;
+      bool operator==(const MassTag& other) const;
+
+      [[nodiscard]] const String& getSequence() const;
+      [[nodiscard]] double getNtermMass() const;
+      [[nodiscard]] double getCtermMass() const;
+      Size getLength() const;
+      int getScore() const;
+      int getScore(int pos) const;
+      int getScan() const;
+      int getIndex() const
+      {
+        return index_;
+      }
+
+      void setIndex(int i)
+      {
+        index_ = i;
+      }
+
+      float getRetentionTime() const
+      {
+        return rt_;
+      }
+
+      void setRetentionTime(float i)
+      {
+        rt_ = i;
+      }
+
+      String toString() const;
+      const std::vector<double>& getMzs() const;
+
+    private:
+      double n_mass_ = -1, c_mass_ = -1;
+      String seq_;
+      float rt_ = -1;
+      int scan_;
+      std::vector<int> positions_;
+      std::vector<double> masses_;
+      int index_;
+      Size length_;
+    };
+
+
     /// Sequence tag used for FLASHTaggerAlgorithm. No mass gap is allowed in the seq.
     /// The mass gap containing tag should be enumerated into multiple Tag instances from outside.
     class OPENMS_DLLAPI Tag
     {
     public:
       /// constructor
-      explicit Tag(String seq, double n_mass, double c_mass, std::vector<double>& mzs, std::vector<int>& scores, int scan);
+      explicit Tag(const String& seq, double n_mass, double c_mass, const std::vector<double>& mzs, const std::vector<int>& scores, int scan);
 
       /// copy constructor
       Tag(const Tag&) = default;

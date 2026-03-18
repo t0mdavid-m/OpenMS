@@ -247,7 +247,7 @@ namespace OpenMS
   {
     return quantities.empty();
   }
-  FLASHHelperClasses::Tag::Tag(String seq, double n_mass, double c_mass, std::vector<double>& mzs, std::vector<int>& scores,  int scan) :
+  FLASHHelperClasses::Tag::Tag(const String& seq, double n_mass, double c_mass, const std::vector<double>& mzs, const std::vector<int>& scores,  int scan) :
       seq_(std::move(seq)), n_mass_(n_mass), c_mass_(c_mass), mzs_(mzs), scores_(scores), scan_(scan), length_(mzs.size() - 1)
   {
     upper_seq_ = seq_.toUpper();
@@ -371,4 +371,50 @@ namespace OpenMS
 
     return ret;
   }
-} // namespace OpenMS
+
+  FLASHHelperClasses::MassTag::MassTag(const String& full_seq, const std::vector<int>& positions, int scan)
+  {
+    if (positions.size() < 2) return;
+    seq_ = std::move(full_seq);
+    positions_ = positions;
+    scan = scan_;
+    //is_n_term_ = positions[0] < positions[1];
+
+
+// String seq_, upper_seq_;
+    //       float rt_ = -1;
+    //       int scan_;
+    //       std::vector<int> positions_;
+    //       int index_;
+    //       Size length_;
+
+  }
+
+  bool FLASHHelperClasses::MassTag::operator<(const MassTag& a) const
+  {
+  }
+
+  bool FLASHHelperClasses::MassTag::operator>(const MassTag& a) const
+  {
+  }
+
+  bool FLASHHelperClasses::MassTag::operator==(const MassTag& a) const
+  {
+  }
+
+    const String& FLASHHelperClasses::MassTag::getSequence() const
+    {
+      return seq_;
+    }
+
+    Size FLASHHelperClasses::MassTag::getLength() const
+    {
+      return length_;
+    }
+
+    int FLASHHelperClasses::MassTag::getScan() const
+    {
+      return scan_;
+    }
+
+  } // namespace OpenMS

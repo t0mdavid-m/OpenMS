@@ -53,34 +53,15 @@ protected:
     registerOutputFile_("out_tag", "<file>", "", "Output tag-level tsv file containing matched tags.");
     setValidFormats_("out_tag", ListUtils::create<String>("tsv"));
 
-    // Register PrSM-level FDR parameter
-    registerDoubleOption_("prsm_fdr", "Specifies the PrSM-level FDR.", 1.0, "Specifies the PrSM-level FDR.", false);
-    setMinFloat_("prsm_fdr", 0.0);
+    auto tnt_param = FLASHTnTAlgorithm().getDefaults();
+    tnt_param.removeAll("tag:");
+    tnt_param.removeAll("ex:");
 
-    // Register proteoform-level FDR parameter
-    registerDoubleOption_("pro_fdr", "Specifies the proteoform-level FDR.", 1.0, "Specifies the proteoform-level FDR.", false);
-    setMinFloat_("pro_fdr", 0.0);
+    registerFullParam_(tnt_param);
 
-    // Register single-hit-only option
-    registerFlag_("only_single_hit", "Allows only a single hit per spectrum.", "Allows only a single hit per spectrum.");
-    //setValidStrings_("only_single_hit", {"true", "false"});
-
-    // Register underdetermined proteoform discard option
-    registerFlag_("discard_underdetermined",
-                          "Discards underdetermined proteoform IDs (e.g., those without exact precursor masses or start/end positions).");
-    //setValidStrings_("discard_underdetermined", {"true", "false"});
-
-    // Register decoy retention option
-    registerFlag_("keep_decoy", "Retains decoy hits in the results.");
-    //setValidStrings_("keep_decoy", {"true", "false"});
-
-    // Register ion type parameter
-    registerStringList_("ion_type", "Specifies ion types to consider.", ListUtils::toStringList(std::vector<std::string>{"b", "y"}), "Specifies ion types to consider.", false);
-    setValidStrings_("ion_type", {"b", "c", "a", "y", "z", "x", "zp1", "zp2"});
-
+    //registerSubsection_("tnt", "TnT algorithm parameters");
     registerSubsection_("tag", "Tag algorithm parameters");
     registerSubsection_("ex", "Extension algorithm parameters");
-
   }
 
   Param getSubsectionDefaults_(const String& prefix) const override
@@ -136,8 +117,7 @@ protected:
     tnt_param.remove("no_progress");
     tnt_param.remove("force");
     tnt_param.remove("test");
-    double max_mod_mass = tnt_param.getValue("ex:max_mod_mass");
-    int max_mod_count = tnt_param.getValue("ex:max_mod_count");
+
     double pro_fdr = tnt_param.getValue("pro_fdr");
     OPENMS_LOG_INFO << "Finding sequence tags from deconvolved spectra ..." << endl;
 
@@ -178,7 +158,8 @@ protected:
     OPENMS_LOG_INFO << "FLASHTnT run complete. Now writing the results in output files ..." << endl;
     if (! out_tag_file.empty())
     {
-      FLASHTnTFile::writeTags(tnt, max_mod_count * max_mod_mass + 1, out_tagger_stream);
+      /// TODO flanking_mass_tol should be calculated within FLASHTagger
+      FLASHTnTFile::writeTags(tnt, tnt.getMaxTotalModificationMass(), out_tagger_stream);
       out_tagger_stream.close();
     }
     if (! out_prsm_file.empty())

@@ -287,6 +287,7 @@ void FLASHTaggerAlgorithm::setDefaultParams_()
 //  defaults_.setValue("max_count", 400,
 //                     "Maximum number of tags per length, defined by the -min_length and -max_length options. Tags with different amino acid combinations but identical masses are counted once (e.g., TII, TIL, TLI, and TLL are distinct but counted as one).");
 //  defaults_.setMinInt("max_count", 0);
+  defaults_.setValue("fixed_mod", std::vector<std::string> {""}, "Specifies the fixed modifications.");
 
   defaults_.setValue(
     "min_length", 3,

@@ -10,13 +10,14 @@ set(sources_list
         FLASHExtenderAlgorithm.cpp
         FLASHIda.cpp
         FLASHIdaBridgeFunctions.cpp
+        FLASHGappedTaggerAlgorithm.cpp
+        FLASHTaggerAlgorithm.cpp
         FLASHTnTAlgorithm.cpp
         MassFeatureTrace.cpp
         PeakGroup.cpp
         PeakGroupScoring.cpp
         Qvalue.cpp
         TopDownIsobaricQuantification.cpp
-        FLASHTaggerAlgorithm.cpp
 )
 
 ### add path to the filenames

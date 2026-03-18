@@ -1,4 +1,4 @@
-// Copyright (c) 2002-2024, The OpenMS Team -- EKU Tuebingen, ETH Zurich, and FU Berlin
+// Copyright (c) 2002-2026, The OpenMS Team -- EKU Tuebingen, ETH Zurich, and FU Berlin
 // SPDX-License-Identifier: BSD-3-Clause
 //
 // --------------------------------------------------------------------------
@@ -8,6 +8,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHExtenderAlgorithm.h>
+#include <OpenMS/CHEMISTRY/ModificationsDB.h>
 #include <queue>
 #include <utility>
 
@@ -31,8 +32,12 @@ namespace OpenMS
 
   void FLASHExtenderAlgorithm::setDefaultParams_()
   {
-    defaults_.setValue("max_mod_mass", 500.0, "Maximum mass shift allowed for modifications.");
-    defaults_.setValue("max_mod_count", 2, "Maximum number of blind modifications.");
+    defaults_.setValue("fixed_mod", std::vector<std::string> {""}, "Specifies the fixed modifications.");
+    defaults_.setValue("var_mod", std::vector<std::string> {""}, "Specifies the fixed modifications.");
+
+    defaults_.setValue("max_var_mod_count", 0, "Maximum number of variable modifications per proteoform.");
+    defaults_.setValue("max_blind_mod_count", 2, "Maximum number of blind modifications per proteoform.");
+    defaults_.setValue("max_mod_mass", 500.0, "Maximum absolute mass of blind modifications.");
 
     defaults_.setValue("ion_type", std::vector<std::string> {"b", "y"}, "Specifies ion types to consider");
     defaults_.setValidStrings("ion_type", {"b", "c", "a", "y", "z", "x", "zp1", "zp2"});
@@ -45,9 +50,26 @@ namespace OpenMS
 
   void FLASHExtenderAlgorithm::updateMembers_()
   {
-    max_blind_mod_cntr_ = param_.getValue("max_mod_count");
+    max_blind_mod_cntr_ = param_.getValue("max_blind_mod_count");
     max_mod_mass_ = param_.getValue("max_mod_mass");
     skip_precursor_inference_ = param_.getValue("skip_precursor_inference") == "false";
+
+    const auto inst = ModificationsDB::getInstance();
+    candidate_blind_mod_map_.clear();
+    std::vector<String> mod_strs;
+    inst->getAllSearchModifications(mod_strs);
+    for (const auto & mod_str : mod_strs)
+    {
+      const auto mod = *inst->getModification(mod_str);
+      if (std::abs(mod.getDiffMonoMass()) > max_mod_mass_) continue;
+      candidate_blind_mod_map_[mod.getDiffMonoMass()].push_back(mod);
+    }
+    auto vmodstrs = param_.getValue("var_mod").toStringVector();
+    auto fmodstrs = param_.getValue("fixed_mod").toStringVector();
+
+    //var_mods_
+
+    max_var_mod_cntr_ = var_mods_.empty()? 0 : (int)param_.getValue("max_var_mod_count");
   }
 
   inline Size FLASHExtenderAlgorithm::getVertex_(int node_index, int pro_index, int score, int num_blind_mod, int num_var_mod, Size pro_mass_size) const
@@ -538,6 +560,11 @@ namespace OpenMS
     // setLogType(CMD);
     //
     //var_mods_[27.994915	] = ResidueModification();
+    auto mod = ModificationsDB::getInstance()->getModification("Carbamidomethyl (M)");
+    //mod->getTermSpecificity() == ResidueModification::PROTEIN_N_TERM
+    // mod.getOrigin() char
+
+
     ion_types_str_ = param_.getValue("ion_type").toStringVector();
     std::sort(ion_types_str_.begin(), ion_types_str_.end());
     for (const auto& ion_str : ion_types_str_)
@@ -1365,7 +1392,6 @@ namespace OpenMS
         const double t_delta_mass = t_node_mass - pro_mass;
         const double delta_delta = t_delta_mass - cumulative_mod_mass + truncation_mass;
 
-        // 빠른 탈출: 범위 밖이면 continue / break
         if (delta_delta > max_mod_with_margin) continue;
         if (delta_delta < -max_mod_with_margin) break;
 

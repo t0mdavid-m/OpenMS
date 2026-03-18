@@ -55,11 +55,25 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   defaults_.setValue("ion_type", std::vector<std::string> {"b", "y"}, "Specifies ion types to consider.");
   defaults_.setValidStrings("ion_type", {"b", "c", "a", "y", "z", "x", "zp1", "zp2"});
 
+  defaults_.setValue("fixed_mod", std::vector<std::string> {""}, "Specifies the fixed modifications.");
+  defaults_.setValue("var_mod", std::vector<std::string> {""}, "Specifies the fixed modifications.");
+
+  defaults_.setValue("max_var_mod_count", 3, "Maximum number of variable modifications per proteoform.");
+  defaults_.setValue("max_blind_mod_count", 2, "Maximum number of blind modifications per proteoform.");
+  defaults_.setValue("max_mod_mass", 500.0, "Maximum absolute mass of blind modifications.");
+
   auto tparam = FLASHTaggerAlgorithm().getDefaults();
   tparam.remove("ion_type");
+  tparam.remove("fixed_mod");
   defaults_.insert("tag:", tparam);
+
   auto eparam = FLASHExtenderAlgorithm().getDefaults();
   eparam.remove("ion_type");
+  eparam.remove("max_var_mod_count");
+  eparam.remove("max_blind_mod_count");
+  eparam.remove("max_mod_mass");
+  eparam.remove("fixed_mod");
+  eparam.remove("var_mod");
 
   defaults_.insert("ex:", eparam);
   defaultsToParam_();
@@ -69,12 +83,23 @@ void FLASHTnTAlgorithm::updateMembers_()
 {
   tagger_param_ = param_.copy("tag:", true);
   tagger_param_.setValue("ion_type", param_.getValue("ion_type"));
+  tagger_param_.setValue("fixed_mod", param_.getValue("fixed_mod"));
+
   extender_param_ = param_.copy("ex:", true);
   extender_param_.setValue("ion_type", param_.getValue("ion_type"));
+  extender_param_.setValue("max_var_mod_count", param_.getValue("max_var_mod_count"));
+  extender_param_.setValue("max_blind_mod_count", param_.getValue("max_blind_mod_count"));
+  extender_param_.setValue("max_mod_mass", param_.getValue("max_mod_mass"));
+  extender_param_.setValue("fixed_mod", param_.getValue("fixed_mod"));
+  extender_param_.setValue("var_mod", param_.getValue("var_mod"));
+
   prsm_fdr_ = param_.getValue("prsm_fdr");
   keep_decoy_ = param_.getValue("keep_decoy").toString() == "true";
   keep_underdetermined_ = param_.getValue("discard_underdetermined").toString() == "false";
   multiple_hits_per_spec_ = param_.getValue("only_single_hit").toString() == "false";
+
+  max_total_mod_mass_ = (double)param_.getValue("max_blind_mod_count") * (double)extender_param_.getValue("max_mod_mass") + 1.1; /// TODO
+
 }
 
 bool FLASHTnTAlgorithm::areConsistent_(const ProteinHit& a, const ProteinHit& b, double tol)
@@ -249,11 +274,8 @@ void FLASHTnTAlgorithm::vectorizeProteinSequence_(const std::vector<std::string>
 void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile::FASTAEntry>& original_fasta_entry)
 {
   setLogType(CMD);
+  int max_blind_mod_count = param_.getValue("max_blind_mod_count");
 
-  int max_mod_cntr = extender_param_.getValue("max_mod_count");
-  double max_mod_mass = max_mod_cntr * (double)extender_param_.getValue("max_mod_mass") + 1.0;
-  std::map<double, std::vector<ResidueModification>> blind_mod_map;
-  const auto inst = ModificationsDB::getInstance();             // give this from outside ...
   std::map<String, std::vector<Size>> tag_to_protein_indices;   // tag to protein index in fasta
   std::map<String, std::vector<Size>> tag_to_protein_positions; // tag to protein position
   std::map<String, std::vector<double>> tag_to_n_flanking_masses, tag_to_c_flanking_masses; // tag to protein flanking masses
@@ -288,15 +310,6 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     }
 
     decoy_factor_ = decoy_count / taget_count;
-  }
-
-  std::vector<String> mod_strs;
-  inst->getAllSearchModifications(mod_strs);
-  for (int i = 0; i < mod_strs.size(); i++)
-  {
-    const auto mod = *inst->getModification(mod_strs[i]);
-    if (std::abs(mod.getDiffMonoMass()) > max_mod_mass) continue;
-    blind_mod_map[mod.getDiffMonoMass()].push_back(mod);
   }
 
   double precursor_tol = -1, tol;
@@ -492,13 +505,13 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         if (tag.getNtermMass() >= 0 && pps[i] > 0 && pps[i] <= pseq.length() + seq.length())
         {
           double nmass = tag_to_n_flanking_masses[seq][i];
-          if (tag.getNtermMass() > nmass + max_mod_mass + 200) continue;
+          if (tag.getNtermMass() > nmass + max_total_mod_mass_ + 200) continue;
           pi_to_n_flanking_masses[pis[i]].insert((int)round(nmass - tag.getNtermMass()));
         }
         if (tag.getCtermMass() >= 0 && pps[i] + seq.length() >= 0 && pseq.length() > pps[i] + seq.length())
         {
           double cmass = tag_to_c_flanking_masses[seq][i];
-          if (tag.getCtermMass() > cmass + max_mod_mass + 200) continue;
+          if (tag.getCtermMass() > cmass + max_total_mod_mass_ + 200) continue;
           pi_to_c_flanking_masses[pis[i]].insert((int)round(cmass - tag.getCtermMass()));
         }
 
@@ -545,7 +558,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       spec_vec.push_back(mn);
     }
 
-    FLASHTaggerAlgorithm::runMatching(hits, dspec, spec_vec, vec_pro, rev_vec_pro, max_mod_mass);
+    FLASHTaggerAlgorithm::runMatching(hits, dspec, spec_vec, vec_pro, rev_vec_pro, max_total_mod_mass_);
 
     std::sort(hits.begin(), hits.end(), [](const ProteinHit& left, const ProteinHit& right) {
       return left.getScore() == right.getScore() ? (left.getCoverage() == right.getCoverage() ? (left.getDescription() > right.getDescription())
@@ -557,7 +570,6 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
 
     FLASHExtenderAlgorithm extender;
     extender.setParameters(extender_param_);
-    extender.setCandidateBlindModificationMap(blind_mod_map);
 
     extender.run(hits, dspec, spec_vec, vec_pro, rev_vec_pro, tags_, tol, multiple_hits_per_spec_);
 
@@ -581,7 +593,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
 
     for (int k = 0; k < (keep_underdetermined_ ? 2 : 1); k++)
     {
-      for (Size mod = 0; mod <= max_mod_cntr; mod++)
+      for (Size mod = 0; mod <= max_blind_mod_count; mod++)
       {
         double taget_count = 0;
         double decoy_count = 0;

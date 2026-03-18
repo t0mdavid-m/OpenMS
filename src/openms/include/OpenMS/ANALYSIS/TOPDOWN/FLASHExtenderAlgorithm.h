@@ -70,25 +70,6 @@ public:
     }
   }
 
-  /// set modification map to be considered for blind modification search. Note that they are not for variable modification search.
-  /// The mass shifts found by blind modifications matching to the masses of these modifications are annotated.
-  void setCandidateBlindModificationMap(const std::map<double, std::vector<ResidueModification>>& mod_map)
-  {
-      candidate_blind_mod_map_ = mod_map;
-  }
-
-    /// set variable modifications to be considered for variable modification search.
-    void setVariableModificationMap(const std::map<double, ResidueModification>& var_mods)
-    {
-        var_mods_ = var_mods;
-    }
-
-    /// set terminal modifications to be considered for variable modification search.
-    void setTerminalModificationMap(const std::map<double, ResidueModification>& terminal_mods)
-    {
-        terminal_mods_ = terminal_mods;
-    }
-
 protected:
   void updateMembers_() override;
   /// implemented for DefaultParamHandler
@@ -119,7 +100,7 @@ private:
 
   /// modification mass to modification index. To use find nearest function
   std::map<double, std::vector<ResidueModification>> candidate_blind_mod_map_;
-  std::map<double, ResidueModification> var_mods_, terminal_mods_;
+  std::map<char, std::map<double, std::vector<ResidueModification>>> var_mods_;
 
   /** get protein prefix or suffix masses (depending on the mode)
    * @param hit protein hit

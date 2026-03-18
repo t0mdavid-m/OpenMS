@@ -10,13 +10,14 @@ set(sources_list_h
         FLASHExtenderAlgorithm.h
         FLASHIda.h
         FLASHIdaBridgeFunctions.h
+        FLASHGappedTaggerAlgorithm.h
+        FLASHTaggerAlgorithm.h
         FLASHTnTAlgorithm.h
         MassFeatureTrace.h
         PeakGroup.h
         PeakGroupScoring.h
         Qvalue.h
         TopDownIsobaricQuantification.h
-        FLASHTaggerAlgorithm.h
 )
 
 ### add path to the filenames
