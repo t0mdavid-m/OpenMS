@@ -41,6 +41,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
 #include <OpenMS/FORMAT/FASTAFile.h>
+#include <map>
 #include <set>
 
 namespace OpenMS
@@ -445,6 +446,122 @@ namespace OpenMS
      */
     bool processMS2ForTagBasedTargeting(double precursor_mass);
 
+    // ========== Parameter Optimization / Exploration API ==========
+
+    /// Parameters for a single exploration scan
+    struct ScanParamSet {
+      int collision_energy = 0;
+      std::string activation_type = "HCD";  ///< "HCD", "ETD", "UVPD", "EThcD"
+      int resolution = 0;                    ///< Orbitrap resolution (0 = use default)
+      double reaction_time = 0.0;            ///< ETD reaction time in ms (0 = N/A)
+    };
+
+    /// User-configured ranges for parameter exploration
+    struct ExplorationConfig {
+      int ce_min = 15;
+      int ce_max = 40;
+      int ce_step = 10;
+      std::vector<std::string> activation_types = {"HCD"};
+      int max_explorations = 5;         ///< cap per precursor
+      // Quality metric weights (user-configurable)
+      double w_mass_count = 1.0;        ///< weight for # deconvolved masses
+      double w_qscore_count = 1.0;      ///< weight for # masses above qscore threshold
+      double qscore_threshold = 0.5;    ///< threshold for "good quality" masses
+      double w_precursor_remaining = -1.0; ///< negative = penalize leftover precursor
+      double w_fragment_matches = 1.0;  ///< weight for # mapped fragment ions
+    };
+
+    /**
+     * @brief Create an exploration group and get recommended scan parameters
+     *
+     * C++ selects specific parameter combinations within the user-configured ranges.
+     * Creates an internal ExplorationGroup to accumulate results.
+     *
+     * @param precursor_mass monoisotopic mass of the precursor
+     * @param precursor_charge charge state of the precursor
+     * @param ms_level MS level of the exploration scans (2 for MS2, 3 for MS3, etc.)
+     * @param group_id unique ID for this exploration group (assigned by caller)
+     * @param collision_energies output: CE values for each exploration scan
+     * @param activation_types output: activation type strings (packed, 16 chars each)
+     * @param resolutions output: resolution values for each exploration scan
+     * @param reaction_times output: ETD reaction times for each exploration scan
+     * @param max_count maximum number of exploration scans to return
+     * @return number of exploration parameter sets created
+     */
+    int getExplorationScanParams(double precursor_mass,
+                                  int precursor_charge,
+                                  int ms_level,
+                                  int group_id,
+                                  int* collision_energies,
+                                  char* activation_types,
+                                  int* resolutions,
+                                  double* reaction_times,
+                                  int max_count);
+
+    /**
+     * @brief Add an exploration scan result and deconvolve it
+     *
+     * Deconvolves the spectrum and stores the result in the exploration group.
+     *
+     * @param group_id exploration group ID
+     * @param param_index index of this parameter set within the group
+     * @param mzs m/z values
+     * @param ints intensity values
+     * @param length number of peaks
+     * @param rt retention time in seconds
+     * @param collision_energy the CE used for this scan
+     * @param activation_type the activation method used
+     * @param resolution the resolution used
+     * @param precursor_mass precursor monoisotopic mass
+     * @param precursor_charge precursor charge state
+     * @return 0 = WAITING (more results expected), 1 = READY (all collected), -1 = error
+     */
+    int addExplorationResult(int group_id,
+                              int param_index,
+                              const double* mzs,
+                              const double* ints,
+                              int length,
+                              double rt,
+                              int collision_energy,
+                              const char* activation_type,
+                              int resolution,
+                              double precursor_mass,
+                              int precursor_charge);
+
+    /**
+     * @brief Get the optimal parameters from a completed exploration group
+     *
+     * Compares all accumulated results using the configurable quality metric.
+     * Loads the best deconvolution into ms2_deconvolved_spectrum_ for downstream use.
+     *
+     * @param group_id exploration group ID
+     * @param best_collision_energy output: optimal CE
+     * @param best_activation_type output: optimal activation type (null-terminated)
+     * @param best_resolution output: optimal resolution
+     * @param best_quality_score output: quality score of the best result
+     * @param all_quality_scores output: quality scores for all exploration results (indexed by param_index)
+     * @param max_scores maximum size of all_quality_scores array
+     * @return index of the best parameter set, or -1 on error
+     */
+    int getOptimalParams(int group_id,
+                          int* best_collision_energy,
+                          char* best_activation_type,
+                          int* best_resolution,
+                          double* best_quality_score,
+                          double* all_quality_scores,
+                          int max_scores);
+
+    /**
+     * @brief Free memory for a completed exploration group
+     */
+    void clearExplorationGroup(int group_id);
+
+    /// Set the exploration configuration (from constructor string or programmatically)
+    void setExplorationConfig(const ExplorationConfig& config);
+
+    /// Get the current exploration configuration
+    const ExplorationConfig& getExplorationConfig() const;
+
   private:
     /// Internal struct for fragment match results from tag-based matching
     struct TagBasedFragmentMatch {
@@ -645,6 +762,45 @@ namespace OpenMS
       {-0.0, {14000.0, 16000.0}},
       {10.0, {15000.0, 16500.0}},
     };
+
+    // ========== Parameter Optimization / Exploration internals ==========
+
+    /// Result of a single exploration scan after deconvolution
+    struct ExplorationResult {
+      ScanParamSet params;
+      DeconvolvedSpectrum deconvolved;
+      double quality_score = 0.0;       ///< composite metric
+      int mass_count = 0;               ///< total deconvolved masses
+      int qscore_passing_count = 0;     ///< masses above threshold
+      double precursor_remaining = 0.0; ///< residual precursor intensity
+      int fragment_match_count = 0;     ///< mapped fragment ions (if sequence known)
+    };
+
+    /// Group of exploration scans for one precursor
+    struct ExplorationGroup {
+      double precursor_mass = 0.0;
+      int precursor_charge = 0;
+      int ms_level = 2;
+      std::vector<ScanParamSet> planned_params;
+      std::map<int, ExplorationResult> results;  ///< paramIndex -> result
+      int expected_count = 0;
+      bool isComplete() const { return (int)results.size() >= expected_count; }
+    };
+
+    /// Active exploration groups, keyed by group_id
+    std::unordered_map<int, ExplorationGroup> exploration_groups_;
+
+    /// Exploration configuration (from constructor or setExplorationConfig)
+    ExplorationConfig exploration_config_;
+
+    /// Select specific parameter combinations within configured ranges
+    std::vector<ScanParamSet> selectExplorationParams_(double precursor_mass,
+                                                        int precursor_charge,
+                                                        int ms_level) const;
+
+    /// Compute composite quality score for an exploration result
+    double computeExplorationQuality_(const DeconvolvedSpectrum& deconv,
+                                       double precursor_mass) const;
 
   };
 }

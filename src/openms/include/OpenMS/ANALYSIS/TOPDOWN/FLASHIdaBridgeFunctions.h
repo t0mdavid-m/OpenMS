@@ -182,6 +182,38 @@ namespace OpenMS
                                                         int *fragment_indices,
                                                         char *fragmentation_method);
 
+  // ========== Parameter Optimization / Exploration bridge functions ==========
+
+  /// Create exploration group and get recommended scan parameters
+  /// activation_types_packed uses 16-char fixed-width slots
+  /// Returns number of exploration parameter sets created
+  extern "C" OPENMS_DLLAPI int GetExplorationScanParams(
+      FLASHIda *object,
+      double precursor_mass, int precursor_charge,
+      int ms_level, int group_id,
+      int *collision_energies, char *activation_types_packed,
+      int *resolutions, double *reaction_times, int max_count);
+
+  /// Add an exploration scan result (deconvolves and stores)
+  /// Returns 0=WAITING, 1=READY, -1=error
+  extern "C" OPENMS_DLLAPI int AddExplorationResult(
+      FLASHIda *object, int group_id, int param_index,
+      double *mzs, double *ints, int length, double rt_min,
+      int collision_energy, char *activation_type, int resolution,
+      double precursor_mass, int precursor_charge);
+
+  /// Get optimal parameters from completed exploration group
+  /// Returns best param_index, or -1 on error
+  extern "C" OPENMS_DLLAPI int GetOptimalParams(
+      FLASHIda *object, int group_id,
+      int *best_collision_energy, char *best_activation_type,
+      int *best_resolution, double *best_quality_score,
+      double *all_quality_scores, int max_scores);
+
+  /// Free memory for a completed exploration group
+  extern "C" OPENMS_DLLAPI void ClearExplorationGroup(
+      FLASHIda *object, int group_id);
+
   /// keeps the precalculated averagine to calculate average masses from monoisotopic masses
   static FLASHHelperClasses::PrecalculatedAveragine avg;
 }

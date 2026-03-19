@@ -52,7 +52,9 @@
 #include <algorithm>
 #include <climits>
 #include <cmath>
+#include <cstring>
 #include <functional>
+#include <limits>
 #include <iomanip>
 #include <map>
 #include <set>
@@ -662,6 +664,62 @@ FLASHIda::FLASHIda(char* arg)
                 << ", max_tag_length=" << max_tag_length_for_targeting_
                 << ", tolerance=" << tag_matching_tolerance_ppm_ << " ppm"
                 << ", max_flanking_mass_diff=" << max_flanking_mass_diff_ << " Da\n";
+    }
+
+    // Parse exploration config parameters
+    if (inputs.find("exploration_ce_min") != inputs.end() && !inputs["exploration_ce_min"].empty())
+    {
+      exploration_config_.ce_min = (int)inputs["exploration_ce_min"][0];
+    }
+    if (inputs.find("exploration_ce_max") != inputs.end() && !inputs["exploration_ce_max"].empty())
+    {
+      exploration_config_.ce_max = (int)inputs["exploration_ce_max"][0];
+    }
+    if (inputs.find("exploration_ce_step") != inputs.end() && !inputs["exploration_ce_step"].empty())
+    {
+      exploration_config_.ce_step = (int)inputs["exploration_ce_step"][0];
+    }
+    if (inputs.find("exploration_max") != inputs.end() && !inputs["exploration_max"].empty())
+    {
+      exploration_config_.max_explorations = (int)inputs["exploration_max"][0];
+    }
+    if (inputs.find("exploration_w_mass_count") != inputs.end() && !inputs["exploration_w_mass_count"].empty())
+    {
+      exploration_config_.w_mass_count = inputs["exploration_w_mass_count"][0];
+    }
+    if (inputs.find("exploration_w_qscore_count") != inputs.end() && !inputs["exploration_w_qscore_count"].empty())
+    {
+      exploration_config_.w_qscore_count = inputs["exploration_w_qscore_count"][0];
+    }
+    if (inputs.find("exploration_qscore_threshold") != inputs.end() && !inputs["exploration_qscore_threshold"].empty())
+    {
+      exploration_config_.qscore_threshold = inputs["exploration_qscore_threshold"][0];
+    }
+    if (inputs.find("exploration_w_precursor_remaining") != inputs.end() && !inputs["exploration_w_precursor_remaining"].empty())
+    {
+      exploration_config_.w_precursor_remaining = inputs["exploration_w_precursor_remaining"][0];
+    }
+    if (inputs.find("exploration_w_fragment_matches") != inputs.end() && !inputs["exploration_w_fragment_matches"].empty())
+    {
+      exploration_config_.w_fragment_matches = inputs["exploration_w_fragment_matches"][0];
+    }
+    // Activation types: space-separated list under key "exploration_activation_types"
+    // Parsed as numeric tokens, but we handle them specially: values 1=HCD, 2=ETD, 3=UVPD, 4=EThcD
+    if (inputs.find("exploration_activation_types") != inputs.end() && !inputs["exploration_activation_types"].empty())
+    {
+      exploration_config_.activation_types.clear();
+      for (double v : inputs["exploration_activation_types"])
+      {
+        int code = (int)v;
+        switch (code)
+        {
+          case 1: exploration_config_.activation_types.push_back("HCD"); break;
+          case 2: exploration_config_.activation_types.push_back("ETD"); break;
+          case 3: exploration_config_.activation_types.push_back("UVPD"); break;
+          case 4: exploration_config_.activation_types.push_back("EThcD"); break;
+          default: exploration_config_.activation_types.push_back("HCD"); break;
+        }
+      }
     }
 
     // Load PTM TSV files for target expansion
@@ -1512,6 +1570,271 @@ FLASHIda::FLASHIda(char* arg)
     ms2_deconvolved_spectrum_.clear();
     ms2_deconv_valid_ = false;
     ms2_deconv_rt_ = -1.0;
+  }
+
+  // ========== Parameter Optimization / Exploration ==========
+
+  void FLASHIda::setExplorationConfig(const ExplorationConfig& config)
+  {
+    exploration_config_ = config;
+  }
+
+  const FLASHIda::ExplorationConfig& FLASHIda::getExplorationConfig() const
+  {
+    return exploration_config_;
+  }
+
+  std::vector<FLASHIda::ScanParamSet> FLASHIda::selectExplorationParams_(
+    double /*precursor_mass*/,
+    int /*precursor_charge*/,
+    int /*ms_level*/) const
+  {
+    std::vector<ScanParamSet> params;
+
+    // Generate CE steps × activation types, capped at max_explorations
+    for (const auto& act : exploration_config_.activation_types)
+    {
+      for (int ce = exploration_config_.ce_min;
+           ce <= exploration_config_.ce_max;
+           ce += std::max(1, exploration_config_.ce_step))
+      {
+        ScanParamSet p;
+        p.collision_energy = ce;
+        p.activation_type = act;
+        p.resolution = 0;  // default
+        p.reaction_time = 0.0;
+        params.push_back(p);
+
+        if ((int)params.size() >= exploration_config_.max_explorations)
+        {
+          return params;
+        }
+      }
+    }
+    return params;
+  }
+
+  double FLASHIda::computeExplorationQuality_(
+    const DeconvolvedSpectrum& deconv,
+    double precursor_mass) const
+  {
+    int mass_count = static_cast<int>(deconv.size());
+    int qscore_passing = 0;
+    double precursor_remaining = 0.0;
+
+    double tol_da = precursor_mass * exploration_config_.qscore_threshold * 1e-6;
+    // Use MS2 tolerance if available
+    if (tol_.size() >= 2)
+    {
+      tol_da = precursor_mass * tol_[1] * 1e-6;
+    }
+
+    for (Size i = 0; i < deconv.size(); ++i)
+    {
+      const auto& pg = deconv[i];
+      if (pg.getQscore() >= exploration_config_.qscore_threshold)
+      {
+        ++qscore_passing;
+      }
+      // Check if this peak is the residual precursor
+      double mass_diff = std::abs(pg.getMonoMass() - precursor_mass);
+      if (mass_diff < tol_da)
+      {
+        // Use intensity of the precursor peak group
+        precursor_remaining = pg.getIntensity();
+      }
+    }
+
+    double score = exploration_config_.w_mass_count * mass_count
+                 + exploration_config_.w_qscore_count * qscore_passing
+                 + exploration_config_.w_precursor_remaining * precursor_remaining;
+    // fragment_match_count would require a protein sequence; left at 0 for now
+    return score;
+  }
+
+  int FLASHIda::getExplorationScanParams(
+    double precursor_mass,
+    int precursor_charge,
+    int ms_level,
+    int group_id,
+    int* collision_energies,
+    char* activation_types,
+    int* resolutions,
+    double* reaction_times,
+    int max_count)
+  {
+    auto params = selectExplorationParams_(precursor_mass, precursor_charge, ms_level);
+
+    // Cap to max_count
+    int count = std::min((int)params.size(), max_count);
+
+    // Create the exploration group
+    ExplorationGroup group;
+    group.precursor_mass = precursor_mass;
+    group.precursor_charge = precursor_charge;
+    group.ms_level = ms_level;
+    group.expected_count = count;
+    group.planned_params.assign(params.begin(), params.begin() + count);
+
+    exploration_groups_[group_id] = std::move(group);
+
+    // Fill output arrays
+    for (int i = 0; i < count; ++i)
+    {
+      collision_energies[i] = params[i].collision_energy;
+      resolutions[i] = params[i].resolution;
+      reaction_times[i] = params[i].reaction_time;
+
+      // Pack activation type into 16-char slots
+      const auto& act = params[i].activation_type;
+      char* slot = activation_types + i * 16;
+      std::memset(slot, 0, 16);
+      std::strncpy(slot, act.c_str(), 15);
+    }
+
+    return count;
+  }
+
+  int FLASHIda::addExplorationResult(
+    int group_id,
+    int param_index,
+    const double* mzs,
+    const double* ints,
+    int length,
+    double rt,
+    int collision_energy,
+    const char* activation_type,
+    int resolution,
+    double precursor_mass,
+    int precursor_charge)
+  {
+    auto it = exploration_groups_.find(group_id);
+    if (it == exploration_groups_.end())
+    {
+      return -1;  // unknown group
+    }
+
+    ExplorationGroup& group = it->second;
+
+    // Deconvolve the spectrum
+    auto spec = makeMSSpectrum_(mzs, ints, length, rt, group.ms_level, "exploration");
+
+    PeakGroup precursor_pg;
+    if (precursor_mass > 0 && precursor_charge != 0)
+    {
+      int abs_charge = std::abs(precursor_charge);
+      bool is_positive = precursor_charge > 0;
+      double charge_mass = FLASHHelperClasses::getChargeMass(is_positive);
+      double precursor_mz = (precursor_mass + abs_charge * charge_mass) / abs_charge;
+
+      Precursor precursor;
+      precursor.setMZ(precursor_mz);
+      precursor.setCharge(precursor_charge);
+      spec.getPrecursors().push_back(precursor);
+
+      precursor_pg = PeakGroup(abs_charge, abs_charge, is_positive);
+      precursor_pg.push_back(FLASHHelperClasses::LogMzPeak());
+      precursor_pg.setMonoisotopicMass(precursor_mass);
+      precursor_pg.setRepAbsCharge(abs_charge);
+      precursor_pg.setQscore(1.0);
+      precursor_pg.setSNR(1.0);
+    }
+
+    fd_.performSpectrumDeconvolution(spec, 0, precursor_pg);
+    DeconvolvedSpectrum deconv = fd_.getDeconvolvedSpectrum();
+
+    // Build the result
+    ExplorationResult result;
+    result.params.collision_energy = collision_energy;
+    result.params.activation_type = (activation_type != nullptr) ? std::string(activation_type) : "HCD";
+    result.params.resolution = resolution;
+    result.deconvolved = std::move(deconv);
+    result.mass_count = static_cast<int>(result.deconvolved.size());
+
+    // Compute per-result metrics
+    int qscore_passing = 0;
+    for (Size i = 0; i < result.deconvolved.size(); ++i)
+    {
+      if (result.deconvolved[i].getQscore() >= exploration_config_.qscore_threshold)
+      {
+        ++qscore_passing;
+      }
+    }
+    result.qscore_passing_count = qscore_passing;
+    result.quality_score = computeExplorationQuality_(result.deconvolved, group.precursor_mass);
+
+    group.results[param_index] = std::move(result);
+
+    return group.isComplete() ? 1 : 0;
+  }
+
+  int FLASHIda::getOptimalParams(
+    int group_id,
+    int* best_collision_energy,
+    char* best_activation_type,
+    int* best_resolution,
+    double* best_quality_score,
+    double* all_quality_scores,
+    int max_scores)
+  {
+    auto it = exploration_groups_.find(group_id);
+    if (it == exploration_groups_.end())
+    {
+      return -1;
+    }
+
+    const ExplorationGroup& group = it->second;
+    if (group.results.empty())
+    {
+      return -1;
+    }
+
+    int best_index = -1;
+    double best_score = -std::numeric_limits<double>::max();
+
+    for (const auto& kv : group.results)
+    {
+      int idx = kv.first;
+      const ExplorationResult& res = kv.second;
+
+      if (idx < max_scores && all_quality_scores != nullptr)
+      {
+        all_quality_scores[idx] = res.quality_score;
+      }
+
+      if (res.quality_score > best_score)
+      {
+        best_score = res.quality_score;
+        best_index = idx;
+      }
+    }
+
+    if (best_index >= 0)
+    {
+      const ExplorationResult& best = group.results.at(best_index);
+
+      if (best_collision_energy) *best_collision_energy = best.params.collision_energy;
+      if (best_resolution) *best_resolution = best.params.resolution;
+      if (best_quality_score) *best_quality_score = best_score;
+
+      if (best_activation_type)
+      {
+        std::memset(best_activation_type, 0, 16);
+        std::strncpy(best_activation_type, best.params.activation_type.c_str(), 15);
+      }
+
+      // Load the best deconvolution into ms2_deconvolved_spectrum_ for downstream use
+      ms2_deconvolved_spectrum_ = best.deconvolved;
+      ms2_deconvolved_spectrum_.sortByQscore();
+      ms2_deconv_valid_ = true;
+    }
+
+    return best_index;
+  }
+
+  void FLASHIda::clearExplorationGroup(int group_id)
+  {
+    exploration_groups_.erase(group_id);
   }
 
   int FLASHIda::runTagBasedFragmentMatching_(const String& protein_sequence,

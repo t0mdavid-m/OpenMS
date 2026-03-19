@@ -258,4 +258,60 @@ namespace OpenMS
     }
     return 0;
   }
+
+  // ========== Parameter Optimization / Exploration bridge functions ==========
+
+  int GetExplorationScanParams(FLASHIda *pObject,
+                               double precursor_mass, int precursor_charge,
+                               int ms_level, int group_id,
+                               int *collision_energies, char *activation_types_packed,
+                               int *resolutions, double *reaction_times, int max_count)
+  {
+    if (pObject != nullptr)
+    {
+      return pObject->getExplorationScanParams(
+          precursor_mass, precursor_charge, ms_level, group_id,
+          collision_energies, activation_types_packed,
+          resolutions, reaction_times, max_count);
+    }
+    return 0;
+  }
+
+  int AddExplorationResult(FLASHIda *pObject, int group_id, int param_index,
+                           double *mzs, double *ints, int length, double rt_min,
+                           int collision_energy, char *activation_type, int resolution,
+                           double precursor_mass, int precursor_charge)
+  {
+    if (pObject != nullptr)
+    {
+      return pObject->addExplorationResult(
+          group_id, param_index, mzs, ints, length, rt_min * 60.0,
+          collision_energy, activation_type, resolution,
+          precursor_mass, precursor_charge);
+    }
+    return -1;
+  }
+
+  int GetOptimalParams(FLASHIda *pObject, int group_id,
+                       int *best_collision_energy, char *best_activation_type,
+                       int *best_resolution, double *best_quality_score,
+                       double *all_quality_scores, int max_scores)
+  {
+    if (pObject != nullptr)
+    {
+      return pObject->getOptimalParams(
+          group_id, best_collision_energy, best_activation_type,
+          best_resolution, best_quality_score,
+          all_quality_scores, max_scores);
+    }
+    return -1;
+  }
+
+  void ClearExplorationGroup(FLASHIda *pObject, int group_id)
+  {
+    if (pObject != nullptr)
+    {
+      pObject->clearExplorationGroup(group_id);
+    }
+  }
 }
