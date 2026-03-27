@@ -392,14 +392,20 @@ namespace OpenMS
 
   bool FLASHHelperClasses::MassTag::operator<(const MassTag& a) const
   {
+    (void)a;
+    return false;
   }
 
   bool FLASHHelperClasses::MassTag::operator>(const MassTag& a) const
   {
+    (void)a;
+    return false;
   }
 
   bool FLASHHelperClasses::MassTag::operator==(const MassTag& a) const
   {
+    (void)a;
+    return false;
   }
 
     const String& FLASHHelperClasses::MassTag::getSequence() const
