@@ -560,7 +560,7 @@ namespace OpenMS
     // setLogType(CMD);
     //
     //var_mods_[27.994915	] = ResidueModification();
-    auto mod = ModificationsDB::getInstance()->getModification("Carbamidomethyl (M)");
+    // auto mod = ModificationsDB::getInstance()->getModification("Carbamidomethyl (M)");
     //mod->getTermSpecificity() == ResidueModification::PROTEIN_N_TERM
     // mod.getOrigin() char
 
