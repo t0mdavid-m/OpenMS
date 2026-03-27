@@ -3361,8 +3361,6 @@ FLASHIda::FLASHIda(char* arg)
       snr_threshold_ = 1;
       fd_.setParameters(sd_defaults);
       fd_.calculateAveragine(false);
-
-      std::cout << sd_defaults << std::endl;
     }
     catch (const nlohmann::json::exception& e)
     {
