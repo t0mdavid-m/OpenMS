@@ -58,6 +58,7 @@
 #include <set>
 #include <sstream>
 #include <unordered_set>
+#include <nlohmann/json.hpp>
 #ifdef _OPENMP
   #include <omp.h>
 #endif
@@ -328,6 +329,15 @@ FLASHIda::FLASHIda(char* arg)
   #ifdef _OPENMP
     omp_set_num_threads(4);
   #endif
+
+    // Phase 1: Auto-detect JSON format (starts with '{') vs legacy space-delimited
+    std::string arg_str(arg);
+    if (!arg_str.empty() && arg_str[0] == '{')
+    {
+      parseJSONConfig_(arg_str);
+      return;
+    }
+
     std::unordered_map<std::string, std::vector<double>> inputs;
     std::vector<String> log_files;
     std::vector<String> out_files;
@@ -3076,6 +3086,288 @@ FLASHIda::FLASHIda(char* arg)
     addDynamicTargets_(truly_new_targets, ms2_deconv_rt_, 100); // High priority
 
     return true;
+  }
+
+  void FLASHIda::parseJSONConfig_(const std::string& json_str)
+  {
+    try
+    {
+      using json = nlohmann::json;
+      json config = json::parse(json_str);
+
+      // --- deconvolution section ---
+      auto deconv = config.value("deconvolution", json::object());
+      qscore_threshold_ = deconv.value("score_threshold", 0.0);
+      tqscore_threshold = deconv.value("tqscore_threshold", 0.9);
+      int min_charge = deconv.value("min_charge", 4);
+      int max_charge = deconv.value("max_charge", 50);
+      double min_mass = deconv.value("min_mass", 500.0);
+      double max_mass = deconv.value("max_mass", 50000.0);
+
+      DoubleList tol_values;
+      if (deconv.contains("tol") && deconv["tol"].is_array())
+      {
+        for (const auto& v : deconv["tol"])
+          tol_values.push_back(v.get<double>());
+      }
+      if (tol_values.empty())
+        tol_values = {10.0, 10.0};
+      if (tol_values.size() == 1)
+        tol_values.push_back(tol_values[0]);
+      tol_ = std::vector<double>(tol_values);
+
+      // Use MS2 tolerance for tag matching
+      if (tol_.size() >= 2)
+        tag_matching_tolerance_ppm_ = tol_[1];
+      else if (tol_.size() == 1)
+        tag_matching_tolerance_ppm_ = tol_[0];
+
+      // --- precursor_selection section ---
+      auto ps = config.value("precursor_selection", json::object());
+      auto mass_count_arr = ps.value("max_mass_count", std::vector<int>{1});
+      for (int j : mass_count_arr)
+        mass_count_.push_back(j);
+
+      rt_window_ = ps.value("RT_window", 180.0);
+      targeting_mode_ = ps.value("target_mode", 0);
+      use_idscore_ = ps.value("IDScore", false);
+      consider_all_Charge_states_ = ps.value("AllCharges", false);
+      ms3_all_charges_ = ps.value("MS3AllCharges", false);
+      hcd_energy_ = ps.value("HCDEnergy", -1);
+      strict_inclusion_ = ps.value("strict_inclusion", false);
+      tie_threshold_ = ps.value("tie_threshold", 0.1);
+
+      if (targeting_mode_ == 1)
+        std::cout << "Inclusion mode: " << (strict_inclusion_ ? "strict" : "non-strict") << "\n";
+
+      // --- tagging section ---
+      auto tagging = config.value("tagging", json::object());
+      min_tag_length_for_targeting_ = tagging.value("min_tag_length", 3);
+      max_tag_length_for_targeting_ = tagging.value("max_tag_length", 8);
+      max_total_ptm_count_ = tagging.value("max_ptm_count", 3);
+      max_flanking_mass_diff_ = tagging.value("max_flanking_mass_diff", 50000.0);
+
+      // --- files section ---
+      auto files = config.value("files", json::object());
+
+      // Target log files
+      std::vector<String> log_files;
+      if (files.contains("target_logs") && files["target_logs"].is_array())
+      {
+        for (const auto& f : files["target_logs"])
+          log_files.push_back(f.get<std::string>());
+      }
+
+      // FASTA files
+      std::vector<String> fasta_files;
+      if (files.contains("fasta") && !files["fasta"].get<std::string>().empty())
+        fasta_files.push_back(files["fasta"].get<std::string>());
+
+      // TSV inclusion list
+      std::vector<String> tsv_files;
+      if (files.contains("inclusion_list") && !files["inclusion_list"].get<std::string>().empty())
+        tsv_files.push_back(files["inclusion_list"].get<std::string>());
+
+      // PTM list
+      std::vector<String> ptm_files;
+      if (files.contains("ptm_list") && !files["ptm_list"].get<std::string>().empty())
+        ptm_files.push_back(files["ptm_list"].get<std::string>());
+
+      // --- Build SpectralDeconvolution Param (must match legacy path exactly) ---
+      Param sd_defaults = SpectralDeconvolution().getDefaults();
+      sd_defaults.setValue("min_charge", min_charge);
+      sd_defaults.setValue("max_charge", max_charge);
+      sd_defaults.setValue("min_mass", min_mass);
+      sd_defaults.setValue("max_mass", max_mass);
+      sd_defaults.setValue("tol", tol_values);
+
+      // --- Load target log files (same as legacy path) ---
+      std::stringstream ss{};
+      for (const auto& log_file : log_files)
+      {
+        ss << log_file << " ";
+        std::ifstream instream(log_file);
+        if (instream.good())
+        {
+          String line;
+          double rt = .0, mass, qscore;
+          int charge;
+          while (std::getline(instream, line))
+          {
+            if (line.find("0 targets") != line.npos)
+              continue;
+            if (line.hasPrefix("MS1"))
+            {
+              Size st = line.find("RT ") + 3;
+              Size ed = line.find('(') - 2;
+              String n = line.substr(st, ed - st + 1);
+              rt = atof(n.c_str());
+            }
+            if (line.hasPrefix("Mass"))
+            {
+              Size st = 5;
+              Size ed = line.find('\t');
+              String n = line.substr(st, ed - st + 1);
+              mass = atof(n.c_str());
+
+              st = line.find("Score=") + 6;
+              ed = line.find('\t', st);
+              n = line.substr(st, ed - st + 1);
+              qscore = atof(n.c_str());
+
+              st = line.find("Z=") + 2;
+              ed = line.find('\t', st);
+              n = line.substr(st, ed - st + 1);
+              charge = n.toInt();
+
+              if (targeting_mode_ == 1 || targeting_mode_ == 2)
+              {
+                if (target_mass_rt_map_.find(mass) == target_mass_rt_map_.end())
+                  target_mass_rt_map_[mass] = std::vector<double>();
+                target_mass_rt_map_[mass].push_back(rt * 60.0);
+                if (target_mass_qscore_map_.find(mass) == target_mass_qscore_map_.end())
+                  target_mass_qscore_map_[mass] = std::vector<double>();
+                target_mass_qscore_map_[mass].push_back(qscore);
+                if (target_mass_charge_map_.find(mass) == target_mass_charge_map_.end())
+                  target_mass_charge_map_[mass] = std::vector<int>();
+                target_mass_charge_map_[mass].push_back(charge);
+              }
+            }
+            else if (line.hasPrefix("AllMass"))
+            {
+              if (targeting_mode_ == 3)
+              {
+                Size st = 8;
+                Size ed = line.size();
+                String n = line.substr(st, ed - st + 1);
+                std::stringstream tmp_stream(n);
+                String str;
+                std::vector<double> results;
+                while (getline(tmp_stream, str, ' '))
+                  results.push_back(atof(str.c_str()));
+                if (exclusion_rt_masses_map_.find(rt * 60.0) == exclusion_rt_masses_map_.end())
+                  exclusion_rt_masses_map_[rt * 60.0] = std::vector<double>();
+                for (double m : results)
+                  exclusion_rt_masses_map_[rt * 60.0].push_back(m);
+              }
+            }
+          }
+          instream.close();
+        }
+      }
+
+      if (targeting_mode_ == 1)
+        std::cout << ss.str() << "file(s) is(are) used for inclusion mode\n";
+      else if (targeting_mode_ == 2)
+        std::cout << ss.str() << "file(s) is(are) used for in-depth mode\n";
+      else if (targeting_mode_ == 3)
+        std::cout << ss.str() << "file(s) is(are) used for exclusion mode\n";
+
+      // Parse TSV inclusion list files
+      if (targeting_mode_ == 1 && !tsv_files.empty())
+      {
+        for (const auto& tsv_file : tsv_files)
+          parseInclusionListTSV_(tsv_file);
+        std::cout << inclusion_targets_.size() << " targets loaded from TSV inclusion list\n";
+      }
+
+      // Load FASTA files for tag-based targeting
+      if (!fasta_files.empty())
+      {
+        for (const auto& fasta_file : fasta_files)
+        {
+          std::vector<FASTAFile::FASTAEntry> entries;
+          FASTAFile().load(fasta_file, entries);
+          target_protein_database_.insert(target_protein_database_.end(), entries.begin(), entries.end());
+        }
+        std::cout << target_protein_database_.size() << " protein entries loaded for tag-based targeting\n";
+        tag_based_targeting_enabled_ = true;
+      }
+
+      if (tag_based_targeting_enabled_)
+      {
+        std::cout << "Tag-based targeting: min_tag_length=" << min_tag_length_for_targeting_
+                  << ", max_tag_length=" << max_tag_length_for_targeting_
+                  << ", tolerance=" << tag_matching_tolerance_ppm_ << " ppm"
+                  << ", max_flanking_mass_diff=" << max_flanking_mass_diff_ << " Da\n";
+      }
+
+      // Load PTM TSV files
+      for (const auto& ptm_file : ptm_files)
+        parseTargetPTMsTSV_(ptm_file);
+      if (!target_ptms_.empty())
+      {
+        std::cout << target_ptms_.size() << " PTM modifications loaded for target expansion (max "
+                  << max_total_ptm_count_ << " total per proteoform)\n";
+      }
+
+      // --- Store new JSON-only sections for future phases ---
+
+      // quantification
+      auto quant = config.value("quantification", json::object());
+      quant_enabled_ = quant.value("enabled", false);
+      reporter_mz_tol_ = quant.value("reporter_mz_tol", 0.002);
+      fold_change_threshold_ = quant.value("fold_change_threshold", 1.4);
+
+      // faims
+      auto faims = config.value("faims", json::object());
+      if (faims.contains("cv_values") && faims["cv_values"].is_array())
+      {
+        for (const auto& v : faims["cv_values"])
+          faims_cv_values_.push_back(v.get<double>());
+      }
+      max_cv_skip_ = faims.value("max_cv_skip", 0);
+
+      // ms_settings
+      auto ms_settings = config.value("ms_settings", json::object());
+      auto ms1 = ms_settings.value("ms1", json::object());
+      ms1_analyzer_ = ms1.value("analyzer", "");
+      ms1_first_mass_ = ms1.value("first_mass", 0.0);
+      ms1_last_mass_ = ms1.value("last_mass", 0.0);
+      ms1_resolution_ = ms1.value("resolution", 0);
+      ms1_agc_target_ = ms1.value("agc_target", 0);
+      ms1_max_it_ = ms1.value("max_it", 0.0);
+
+      ms2_configs_.clear();
+      if (ms_settings.contains("ms2") && ms_settings["ms2"].is_array())
+      {
+        for (const auto& m : ms_settings["ms2"])
+        {
+          MS2ConfigJson cfg;
+          cfg.analyzer = m.value("analyzer", "");
+          cfg.activation = m.value("activation", "");
+          cfg.collision_energy = m.value("collision_energy", 0);
+          cfg.resolution = m.value("resolution", 0);
+          ms2_configs_.push_back(cfg);
+        }
+      }
+
+      // scheduling
+      auto sched = config.value("scheduling", json::object());
+      auto ct = sched.value("cycle_time", json::object());
+      cycle_time_enabled_ = ct.value("enabled", false);
+      cycle_time_ms_ = ct.value("value_ms", 60000.0);
+      auto to = sched.value("scan_timeout", json::object());
+      timeout_enabled_ = to.value("enabled", false);
+      timeout_ms_ = to.value("value_ms", 30000.0);
+
+      // exploration
+      auto expl = config.value("exploration", json::object());
+      exploration_enabled_ = expl.value("enabled", false);
+      exploration_max_depth_ = expl.value("max_depth", 1);
+      exploration_max_variants_ = expl.value("max_variants", 5);
+
+      // --- Initialize SpectralDeconvolution (must match legacy path) ---
+      snr_threshold_ = 1;
+      fd_.setParameters(sd_defaults);
+      fd_.calculateAveragine(false);
+
+      std::cout << sd_defaults << std::endl;
+    }
+    catch (const nlohmann::json::exception& e)
+    {
+      std::cerr << "FLASHIda JSON config parse error: " << e.what() << std::endl;
+    }
   }
 
 } // namespace OpenMS

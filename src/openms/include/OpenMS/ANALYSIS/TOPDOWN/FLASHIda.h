@@ -646,5 +646,38 @@ namespace OpenMS
       {10.0, {15000.0, 16500.0}},
     };
 
+    /// Parse JSON configuration string (Phase 1: replaces legacy space-delimited format)
+    void parseJSONConfig_(const std::string& json_str);
+
+    // --- Phase 1 JSON-only member variables (stored for future phases) ---
+
+    // ms_settings (stored for Phase 3+ scan command construction)
+    std::string ms1_analyzer_;
+    double ms1_first_mass_ = 0, ms1_last_mass_ = 0, ms1_max_it_ = 0;
+    int ms1_resolution_ = 0, ms1_agc_target_ = 0;
+
+    struct MS2ConfigJson
+    {
+      std::string analyzer, activation;
+      int collision_energy = 0, resolution = 0;
+    };
+    std::vector<MS2ConfigJson> ms2_configs_;
+
+    // scheduling (stored for Phase 3)
+    bool cycle_time_enabled_ = false, timeout_enabled_ = false;
+    double cycle_time_ms_ = 60000.0, timeout_ms_ = 30000.0;
+
+    // exploration (stored for Phase 7)
+    bool exploration_enabled_ = false;
+    int exploration_max_depth_ = 1, exploration_max_variants_ = 5;
+
+    // quantification (stored — currently passed per-call via IsDifferentiallyAbundant)
+    bool quant_enabled_ = false;
+    double reporter_mz_tol_ = 0.002, fold_change_threshold_ = 1.4;
+
+    // FAIMS
+    std::vector<double> faims_cv_values_;
+    int max_cv_skip_ = 0;
+
   };
 }
