@@ -2638,6 +2638,19 @@ FLASHIda::FLASHIda(char* arg)
     return spec;
   }
 
+  int FLASHIda::getConfigInt(const std::string& key) const
+  {
+    if (key == "targeting_mode") return targeting_mode_;
+    if (key == "hcd_energy") return hcd_energy_;
+    return 0;
+  }
+
+  double FLASHIda::getConfigDouble(const std::string& key) const
+  {
+    if (key == "rt_window") return rt_window_;
+    return 0.0;
+  }
+
   std::map<int, std::vector<std::vector<float>>> FLASHIda::parseFLASHIdaLog(const String& in_log_file)
   {
     std::map<int, std::vector<std::vector<float>>>

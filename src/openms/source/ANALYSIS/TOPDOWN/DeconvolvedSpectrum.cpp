@@ -142,7 +142,43 @@ namespace OpenMS
       out_spec.getPrecursors().clear();
       out_spec.getPrecursors().emplace_back(precursor);
     }
+    if (opt_metadata_)
+    {
+      out_spec.setMetaValue("optimization_group_id",
+                            static_cast<int>(opt_metadata_->group_id));
+      out_spec.setMetaValue("optimization_collision_energy",
+                            opt_metadata_->collision_energy);
+      out_spec.setMetaValue("optimization_is_best_variant",
+                            opt_metadata_->is_best_variant ? std::string("true") : std::string("false"));
+      out_spec.setMetaValue("optimization_quality_score",
+                            opt_metadata_->fragmentation_quality_score);
+      out_spec.setMetaValue("optimization_precursor_mass",
+                            opt_metadata_->precursor_mass);
+    }
     return out_spec;
+  }
+
+  OptimizationMetadata& DeconvolvedSpectrum::getOrCreateOptimizationMetadata()
+  {
+    if (!opt_metadata_)
+    {
+      opt_metadata_ = OptimizationMetadata{};
+    }
+    return *opt_metadata_;
+  }
+
+  const OptimizationMetadata* DeconvolvedSpectrum::getOptimizationMetadata() const
+  {
+    if (opt_metadata_)
+    {
+      return &(*opt_metadata_);
+    }
+    return nullptr;
+  }
+
+  bool DeconvolvedSpectrum::hasOptimizationMetadata() const
+  {
+    return opt_metadata_.has_value();
   }
 
   const MSSpectrum& DeconvolvedSpectrum::getOriginalSpectrum() const

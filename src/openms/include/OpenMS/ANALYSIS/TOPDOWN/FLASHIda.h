@@ -375,6 +375,12 @@ namespace OpenMS
                                   std::vector<int>& is_b_ions,
                                   std::vector<int>& fragment_indices);
 
+    /// Retrieve an integer config value by key (for bridge functions)
+    int getConfigInt(const std::string& key) const;
+
+    /// Retrieve a double config value by key (for bridge functions)
+    double getConfigDouble(const std::string& key) const;
+
     /**
            @brief parse FLASHIda log file
            @param in_log_file input log file

@@ -237,6 +237,24 @@ namespace OpenMS
     return 0;
   }
 
+  int GetConfigInt(FLASHIda *pObject, const char *key)
+  {
+    if (pObject != nullptr && key != nullptr)
+    {
+      return pObject->getConfigInt(std::string(key));
+    }
+    return 0;
+  }
+
+  double GetConfigDouble(FLASHIda *pObject, const char *key)
+  {
+    if (pObject != nullptr && key != nullptr)
+    {
+      return pObject->getConfigDouble(std::string(key));
+    }
+    return 0.0;
+  }
+
   int GetTerminalFragmentIons(FLASHIda *pObject,
                               char *protein_sequence,
                               int n,

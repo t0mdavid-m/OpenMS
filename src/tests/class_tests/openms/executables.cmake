@@ -448,6 +448,7 @@ set(analysis_executables_list
   ConsensusMapMergerAlgorithm_test
   #DataAccessHelper_test
   # DeconvolvedSpectrum_test
+  DeconvolvedSpectrum_OptimizationMetadata_test
   FalseDiscoveryRate_test
   FeatureDeconvolution_test
   FeatureDistance_test

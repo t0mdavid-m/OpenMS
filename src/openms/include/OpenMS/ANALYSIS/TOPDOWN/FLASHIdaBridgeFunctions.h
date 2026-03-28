@@ -182,6 +182,12 @@ namespace OpenMS
                                                         int *fragment_indices,
                                                         char *fragmentation_method);
 
+  /// Retrieve an integer config value by key string (e.g., "targeting_mode", "hcd_energy")
+  extern "C" OPENMS_DLLAPI int GetConfigInt(FLASHIda *object, const char *key);
+
+  /// Retrieve a double config value by key string (e.g., "rt_window")
+  extern "C" OPENMS_DLLAPI double GetConfigDouble(FLASHIda *object, const char *key);
+
   /// keeps the precalculated averagine to calculate average masses from monoisotopic masses
   static FLASHHelperClasses::PrecalculatedAveragine avg;
 }
