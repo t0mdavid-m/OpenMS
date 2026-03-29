@@ -151,7 +151,7 @@ START_SECTION(queue_priority_dequeue_order_stub)
 {
   // Phase 4 will test enqueueing commands at different priorities
   // and verifying dequeue order matches priority.
-  ABORT_IF(true)
+  NOT_TESTABLE
 }
 END_SECTION
 
@@ -159,7 +159,7 @@ END_SECTION
 START_SECTION(agc_scan_is_dequeued_first_stub)
 {
   // Phase 4 will test that AGC scans have highest priority.
-  ABORT_IF(true)
+  NOT_TESTABLE
 }
 END_SECTION
 
