@@ -122,6 +122,8 @@ START_SECTION(tracking_ids_sequential_unique)
     int id = ida->getNextTrackingId();
     TEST_EQUAL(seen.count(id), 0)
     TEST_EQUAL(id > prev, true)
+    // Verify ID stays within base-36 4-char range (36^4 = 1679616)
+    TEST_EQUAL(id < 1679616, true)
     seen.insert(id);
     prev = id;
   }
