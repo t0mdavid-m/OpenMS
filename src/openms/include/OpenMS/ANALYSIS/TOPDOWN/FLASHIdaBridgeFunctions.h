@@ -188,6 +188,16 @@ namespace OpenMS
   /// Retrieve a double config value by key string (e.g., "rt_window")
   extern "C" OPENMS_DLLAPI double GetConfigDouble(FLASHIda *object, const char *key);
 
+  /// Process an incoming scan (Phase 3 stub: logs [TRACK-CREATE] and returns 0)
+  extern "C" OPENMS_DLLAPI int ProcessScan(FLASHIda *obj, double *mzs, double *ints,
+      int length, double rt_min, int ms_level, const char *scan_description);
+
+  /// Dequeue the next scan command by priority. Returns 1 if command filled.
+  extern "C" OPENMS_DLLAPI int GetNextScanCommand(FLASHIda *obj, ScanCommand *output);
+
+  /// Get the next monotonically increasing tracking ID (thread-safe)
+  extern "C" OPENMS_DLLAPI int GetNextTrackingId(FLASHIda *obj);
+
   /// keeps the precalculated averagine to calculate average masses from monoisotopic masses
   static FLASHHelperClasses::PrecalculatedAveragine avg;
 }

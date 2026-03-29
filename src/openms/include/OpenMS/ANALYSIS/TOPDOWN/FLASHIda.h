@@ -41,10 +41,56 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
 #include <OpenMS/FORMAT/FASTAFile.h>
+#include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <cstring>
+#include <deque>
+#include <mutex>
 #include <set>
+#include <unordered_map>
 
 namespace OpenMS
 {
+  /// Maximum number of isolation stages per scan command
+  static constexpr int MAX_ISOLATION_STAGES = 10;
+
+  /// Blittable struct representing one isolation stage in a multi-stage MS2/MS3 scan.
+  /// Layout: 5 doubles (40) + 2 int32 (8) + char[32] (32) = 80 bytes.
+  struct OPENMS_DLLAPI IsolationStage
+  {
+    double precursor_mz;         ///< Center m/z for isolation window
+    double isolation_width;      ///< Full width of isolation window (Da)
+    double collision_energy;     ///< Normalized collision energy (%)
+    double reaction_time;        ///< Ion/ion reaction time (ms), 0 = not used
+    double reagent_max_it;       ///< Reagent max injection time (ms), 0 = not used
+    int32_t reagent_agc_target;  ///< Reagent AGC target, 0 = not used
+    int32_t charge_state;        ///< Precursor charge state (0 = unknown)
+    char activation_type[32];    ///< Activation method (e.g., "HCD", "ETD", "EThcD")
+  };
+  static_assert(sizeof(IsolationStage) == 80, "IsolationStage must be 80 bytes for P/Invoke");
+
+  /// Blittable struct representing a complete scan command for the instrument.
+  /// Layout: 8 int32 (32) + 3 doubles (24) + char[32] (32) + char[256] (256) + stages (800) = 1144.
+  struct OPENMS_DLLAPI ScanCommand
+  {
+    int32_t scan_id;             ///< Unique tracking ID (base-36 encoded for scan description)
+    int32_t msn_level;           ///< MS level: 1 = MS1, 2 = MS2, 3 = MS3
+    int32_t priority;            ///< Queue priority: 0 = highest, 3 = lowest
+    int32_t is_agc;              ///< 1 if this is an AGC calibration scan, 0 otherwise
+    int32_t num_stages;          ///< Number of valid isolation stages (0 for MS1)
+    int32_t orbitrap_resolution; ///< Orbitrap resolution (e.g., 120000)
+    int32_t agc_target;          ///< AGC target value
+    int32_t pad1;                ///< Padding for 8-byte alignment
+    double first_mass;           ///< Scan range start (m/z)
+    double last_mass;            ///< Scan range end (m/z)
+    double max_it;               ///< Maximum injection time (ms)
+    char analyzer[32];           ///< Mass analyzer name (e.g., "Orbitrap", "IonTrap")
+    char scan_description[256];  ///< Human-readable description (includes tracking ID)
+    IsolationStage stages[MAX_ISOLATION_STAGES]; ///< Isolation stages array
+  };
+  static_assert(sizeof(ScanCommand) == 1144, "ScanCommand must be 1144 bytes for P/Invoke");
+
   /**
    * @brief FLASHIda class for real time deconvolution
    * This class contains functions to perform deconvolution (by SpectralDeconvolution) for the spectrum received from Thermo iAPI.
@@ -381,6 +427,19 @@ namespace OpenMS
     /// Retrieve a double config value by key (for bridge functions)
     double getConfigDouble(const std::string& key) const;
 
+    /// Process an incoming scan and enqueue resulting commands (Phase 3 stub: logs and returns 0)
+    int processScan(const double* mzs, const double* ints, int length,
+                    double rt_min, int ms_level, const char* scan_description);
+
+    /// Dequeue the next scan command by priority. Returns 1 if command filled, 0 if error.
+    int getNextScanCommand(ScanCommand& out);
+
+    /// Get the next monotonically increasing tracking ID (thread-safe)
+    int getNextTrackingId();
+
+    /// Test-only accessor for encodeBase36_ (static, no state dependency)
+    static std::string encodeBase36ForTest(int v) { return encodeBase36_(v); }
+
     /**
            @brief parse FLASHIda log file
            @param in_log_file input log file
@@ -654,6 +713,41 @@ namespace OpenMS
 
     /// Parse JSON configuration string (Phase 1: replaces legacy space-delimited format)
     void parseJSONConfig_(const std::string& json_str);
+
+    // --- Phase 3: Scan command queue infrastructure ---
+
+    /// Encode an integer as a 4-character base-36 string (0-9, a-z)
+    static std::string encodeBase36_(int value);
+
+    /// Get next tracking ID (not thread-safe; caller must hold queue_mutex_)
+    int nextTrackingIdInt_();
+
+    /// Create an MS1 survey scan command from current config
+    ScanCommand makeMS1Command_() const;
+
+    /// Create an AGC calibration scan command
+    ScanCommand makeAGCCommand_() const;
+
+    /// Check if an AGC scan is needed (Phase 3 stub: returns false)
+    bool needsAGCScan_() const;
+
+    /// Remove expired commands from pending_scan_map_ (Phase 3 stub: no-op, uses timeout_ms_)
+    void cleanupExpiredCommands_();
+
+    /// Priority queues: index 0 = highest priority, 3 = lowest
+    std::deque<ScanCommand> queues_[4];
+
+    /// Mutex protecting queues_, tracking_id_counter_, pending_scan_map_
+    mutable std::mutex queue_mutex_;
+
+    /// Monotonically increasing tracking ID counter
+    int tracking_id_counter_ = 0;
+
+    /// Map of tracking ID → ScanCommand for pending (in-flight) scans
+    std::unordered_map<int, ScanCommand> pending_scan_map_;
+
+    /// Timestamp of last MS1 scan (for cycle time logic)
+    std::chrono::steady_clock::time_point last_ms1_time_ = std::chrono::steady_clock::now();
 
     // --- Phase 1 JSON-only member variables (stored for future phases) ---
 

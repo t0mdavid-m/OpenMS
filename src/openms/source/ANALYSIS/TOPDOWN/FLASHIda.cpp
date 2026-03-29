@@ -3381,4 +3381,143 @@ FLASHIda::FLASHIda(char* arg)
     }
   }
 
+  // --- Phase 3: Scan command queue and tracking ---
+
+  std::string FLASHIda::encodeBase36_(int value)
+  {
+    static const char digits[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+    char buf[5] = {'0', '0', '0', '0', '\0'};
+    for (int i = 3; i >= 0; --i)
+    {
+      buf[i] = digits[value % 36];
+      value /= 36;
+    }
+    return std::string(buf);
+  }
+
+  int FLASHIda::nextTrackingIdInt_()
+  {
+    int id = tracking_id_counter_++;
+    // Wrap at 36^4 - 1 = 1679615 to stay within 4-char base-36 range
+    if (tracking_id_counter_ > 1679615)
+      tracking_id_counter_ = 0;
+    return id;
+  }
+
+  bool FLASHIda::needsAGCScan_() const
+  {
+    // Phase 3 stub: AGC scheduling deferred to Phase 4
+    return false;
+  }
+
+  ScanCommand FLASHIda::makeMS1Command_() const
+  {
+    ScanCommand cmd{};
+    cmd.msn_level = 1;
+    cmd.priority = 3; // lowest priority — MS1 is the fallback
+    cmd.is_agc = 0;
+    cmd.num_stages = 0;
+    cmd.orbitrap_resolution = ms1_resolution_;
+    cmd.agc_target = ms1_agc_target_;
+    cmd.first_mass = ms1_first_mass_;
+    cmd.last_mass = ms1_last_mass_;
+    cmd.max_it = ms1_max_it_;
+
+    // Copy analyzer string safely
+    std::strncpy(cmd.analyzer, ms1_analyzer_.c_str(), sizeof(cmd.analyzer) - 1);
+    cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';
+
+    std::strncpy(cmd.scan_description, "MS1 survey scan", sizeof(cmd.scan_description) - 1);
+    cmd.scan_description[sizeof(cmd.scan_description) - 1] = '\0';
+
+    return cmd;
+  }
+
+  ScanCommand FLASHIda::makeAGCCommand_() const
+  {
+    ScanCommand cmd{};
+    cmd.msn_level = 1;
+    cmd.priority = 0; // highest priority — AGC is time-critical
+    cmd.is_agc = 1;
+    cmd.num_stages = 0;
+    cmd.orbitrap_resolution = 0;
+    cmd.agc_target = 0;
+    cmd.first_mass = 0;
+    cmd.last_mass = 0;
+    cmd.max_it = 0;
+    std::strncpy(cmd.analyzer, "IonTrap", sizeof(cmd.analyzer) - 1);
+    cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';
+    std::strncpy(cmd.scan_description, "AGC calibration", sizeof(cmd.scan_description) - 1);
+    cmd.scan_description[sizeof(cmd.scan_description) - 1] = '\0';
+
+    return cmd;
+  }
+
+  void FLASHIda::cleanupExpiredCommands_()
+  {
+    // Phase 3 stub: no-op. In Phase 5+, this will iterate pending_scan_map_
+    // and remove entries older than timeout_ms_ milliseconds.
+  }
+
+  int FLASHIda::processScan(const double* mzs, const double* ints, int length,
+                             double rt_min, int ms_level, const char* scan_description)
+  {
+    // Suppress unused parameter warnings (stub — deconvolution deferred to Phase 4)
+    (void)mzs;
+    (void)ints;
+    (void)length;
+    (void)rt_min;
+    (void)ms_level;
+
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    int id = nextTrackingIdInt_();
+    std::string id_str = encodeBase36_(id);
+
+    std::cout << "[TRACK-CREATE] id=" << id_str
+              << " ms_level=" << ms_level
+              << " rt=" << rt_min
+              << " desc=" << (scan_description ? scan_description : "")
+              << std::endl;
+
+    return 0; // Phase 3 stub: no commands enqueued yet
+  }
+
+  int FLASHIda::getNextScanCommand(ScanCommand& out)
+  {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+
+    // Step 1: AGC scan if needed (Phase 3 stub: never true)
+    if (needsAGCScan_())
+    {
+      out = makeAGCCommand_();
+      out.scan_id = nextTrackingIdInt_();
+      return 1;
+    }
+
+    // Step 2: Cleanup expired commands (Phase 3 stub: no-op)
+    cleanupExpiredCommands_();
+
+    // Step 3: Dequeue by priority (0 = highest → 3 = lowest)
+    for (int p = 0; p < 4; ++p)
+    {
+      if (!queues_[p].empty())
+      {
+        out = queues_[p].front();
+        queues_[p].pop_front();
+        return 1;
+      }
+    }
+
+    // Step 4: Fallback — return an MS1 survey scan
+    out = makeMS1Command_();
+    out.scan_id = nextTrackingIdInt_();
+    return 1;
+  }
+
+  int FLASHIda::getNextTrackingId()
+  {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    return nextTrackingIdInt_();
+  }
+
 } // namespace OpenMS

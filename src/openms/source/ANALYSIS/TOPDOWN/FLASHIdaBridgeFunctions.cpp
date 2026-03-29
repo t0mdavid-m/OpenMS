@@ -255,6 +255,34 @@ namespace OpenMS
     return 0.0;
   }
 
+  int ProcessScan(FLASHIda *pObject, double *mzs, double *ints,
+                  int length, double rt_min, int ms_level, const char *scan_description)
+  {
+    if (pObject != nullptr)
+    {
+      return pObject->processScan(mzs, ints, length, rt_min, ms_level, scan_description);
+    }
+    return -1;
+  }
+
+  int GetNextScanCommand(FLASHIda *pObject, ScanCommand *output)
+  {
+    if (pObject != nullptr && output != nullptr)
+    {
+      return pObject->getNextScanCommand(*output);
+    }
+    return 0;
+  }
+
+  int GetNextTrackingId(FLASHIda *pObject)
+  {
+    if (pObject != nullptr)
+    {
+      return pObject->getNextTrackingId();
+    }
+    return -1;
+  }
+
   int GetTerminalFragmentIons(FLASHIda *pObject,
                               char *protein_sequence,
                               int n,
