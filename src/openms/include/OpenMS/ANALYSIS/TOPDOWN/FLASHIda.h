@@ -71,7 +71,7 @@ namespace OpenMS
   static_assert(sizeof(IsolationStage) == 80, "IsolationStage must be 80 bytes for P/Invoke");
 
   /// Blittable struct representing a complete scan command for the instrument.
-  /// Layout: 8 int32 (32) + 3 doubles (24) + char[32] (32) + char[256] (256) + stages (800) = 1144.
+  /// Layout: 8 int32 (32) + 3 doubles (24) + char[32] (32) + char[256] (256) + stages (800) + uint64 (8) = 1152.
   struct OPENMS_DLLAPI ScanCommand
   {
     int32_t scan_id;             ///< Unique tracking ID (base-36 encoded for scan description)
@@ -88,8 +88,9 @@ namespace OpenMS
     char analyzer[32];           ///< Mass analyzer name (e.g., "Orbitrap", "IonTrap")
     char scan_description[256];  ///< Human-readable description (includes tracking ID)
     IsolationStage stages[MAX_ISOLATION_STAGES]; ///< Isolation stages array
+    uint64_t enqueue_timestamp_ms; ///< Timestamp when command was enqueued (steady_clock ms)
   };
-  static_assert(sizeof(ScanCommand) == 1144, "ScanCommand must be 1144 bytes for P/Invoke");
+  static_assert(sizeof(ScanCommand) == 1152, "ScanCommand must be 1152 bytes for P/Invoke");
 
   /**
    * @brief FLASHIda class for real time deconvolution
@@ -440,6 +441,13 @@ namespace OpenMS
     /// Test-only accessor for encodeBase36_ (static, no state dependency)
     static std::string encodeBase36ForTest(int v) { return encodeBase36_(v); }
 
+    /// Test-only: push a command into the priority queue (thread-safe)
+    void pushCommandForTest(ScanCommand cmd)
+    {
+      std::lock_guard<std::mutex> lock(queue_mutex_);
+      pushCommand_(cmd);
+    }
+
     /**
            @brief parse FLASHIda log file
            @param in_log_file input log file
@@ -719,6 +727,9 @@ namespace OpenMS
     /// Encode an integer as a 4-character base-36 string (0-9, a-z)
     static std::string encodeBase36_(int value);
 
+    /// Decode a 4-character base-36 string back to integer
+    int decodeBase36_(const std::string& s) const;
+
     /// Get next tracking ID (not thread-safe; caller must hold queue_mutex_)
     int nextTrackingIdInt_();
 
@@ -728,11 +739,37 @@ namespace OpenMS
     /// Create an AGC calibration scan command
     ScanCommand makeAGCCommand_() const;
 
-    /// Check if an AGC scan is needed (Phase 3 stub: returns false)
+    /// Check if an AGC scan is needed based on agc_interval_ms_
     bool needsAGCScan_() const;
 
-    /// Remove expired commands from pending_scan_map_ (Phase 3 stub: no-op, uses timeout_ms_)
+    /// Remove expired commands from pending_scan_map_ using timeout_ms_
     void cleanupExpiredCommands_();
+
+    // --- Phase 4: processScan helpers ---
+
+    /// Build MS2 ScanCommand from a PeakGroup (isolation window + MS2 config)
+    ScanCommand buildMS2Command_(const PeakGroup& pg, int charge, int hcd);
+
+    /// Build MS3 ScanCommand from MS2 context + fragment target
+    ScanCommand buildMS3Command_(const ScanCommand& ms2_ctx, double frag_mz, int frag_charge, double iso_width);
+
+    /// Push command into appropriate priority queue (caller must hold queue_mutex_)
+    void pushCommand_(ScanCommand cmd);
+
+    /// Select MS3 fragment targets from last MS2 deconvolution
+    std::vector<std::tuple<double, int, double>> selectMS3Targets_();
+
+    /// Push follow-up MS2 at priority 2 (quant mode)
+    void pushFollowUpMS2_(const ScanCommand& ctx);
+
+    /// Push conditional follow-up MS2 at priority 2
+    void pushConditionalFollowUp_(const ScanCommand& ctx);
+
+    /// Phase 7 stub: process exploration result
+    void feedExplorationResult_(const ScanCommand& ctx);
+
+    /// Process MS2 scan: tracking resolution, deconv, routing
+    int processMS2Path_(const double* mzs, const double* ints, int length, double rt_min, const char* scan_desc);
 
     /// Priority queues: index 0 = highest priority, 3 = lowest
     std::deque<ScanCommand> queues_[4];
@@ -748,6 +785,21 @@ namespace OpenMS
 
     /// Timestamp of last MS1 scan (for cycle time logic)
     std::chrono::steady_clock::time_point last_ms1_time_ = std::chrono::steady_clock::now();
+
+    // --- Phase 4: MS3, conditional MS2, AGC scheduling ---
+
+    // MS3 configuration (parsed from JSON "ms3" section)
+    bool ms3_enabled_ = false;
+    int ms3_mode_ = 0;           ///< 0=disabled, 1=SourceCID, 2=SPS, 3=HCD-triggered, 4=EThcD
+    int max_ms3_per_ms2_ = 4;
+    std::string ms3_protein_sequence_;
+
+    // Conditional MS2
+    bool conditional_ms2_enabled_ = false;
+
+    // AGC scheduling
+    mutable std::chrono::steady_clock::time_point last_agc_time_;
+    uint64_t agc_interval_ms_ = 30000;  ///< default 30s, from scheduling.agc_interval_seconds
 
     // --- Phase 1 JSON-only member variables (stored for future phases) ---
 

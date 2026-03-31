@@ -45,6 +45,7 @@ int main()
   std::printf("ScanCommand.analyzer.offset=%zu\n", offsetof(ScanCommand, analyzer));
   std::printf("ScanCommand.scan_description.offset=%zu\n", offsetof(ScanCommand, scan_description));
   std::printf("ScanCommand.stages.offset=%zu\n", offsetof(ScanCommand, stages));
+  std::printf("ScanCommand.enqueue_timestamp_ms.offset=%zu\n", offsetof(ScanCommand, enqueue_timestamp_ms));
 
   std::printf("LAYOUT_CHECK_PASSED\n");
   return 0;

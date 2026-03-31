@@ -450,6 +450,7 @@ set(analysis_executables_list
   # DeconvolvedSpectrum_test
   DeconvolvedSpectrum_OptimizationMetadata_test
   FLASHIdaQueueTracking_test
+  FLASHIda_ProcessScan_test
   ScanCommandLayout_test
   FalseDiscoveryRate_test
   FeatureDeconvolution_test
