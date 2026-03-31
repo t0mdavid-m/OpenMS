@@ -3583,11 +3583,11 @@ FLASHIda::FLASHIda(char* arg)
       activation = ms2_configs_[0].activation;
       ce = ms2_configs_[0].collision_energy;
     }
-    // For HCD activation, override with scoring-derived energy if available
-    if (activation == "HCD" && hcd > 0)
-      ce = hcd;
+    // For HCD activation, use hcd as fallback only when config CE is unset
     if (activation == "HCD" && ce <= 0)
-      ce = 29;  // default HCD energy
+    {
+      ce = (hcd > 0) ? hcd : 29;
+    }
     cmd.stages[0].collision_energy = static_cast<double>(ce);
     std::strncpy(cmd.stages[0].activation_type, activation.c_str(), sizeof(cmd.stages[0].activation_type) - 1);
     cmd.stages[0].activation_type[sizeof(cmd.stages[0].activation_type) - 1] = '\0';
