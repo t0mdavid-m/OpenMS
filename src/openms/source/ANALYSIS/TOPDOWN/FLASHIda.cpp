@@ -3592,11 +3592,11 @@ FLASHIda::FLASHIda(char* arg)
     std::strncpy(cmd.stages[0].activation_type, activation.c_str(), sizeof(cmd.stages[0].activation_type) - 1);
     cmd.stages[0].activation_type[sizeof(cmd.stages[0].activation_type) - 1] = '\0';
 
-    // Scan description with tracking ID
+    // Scan description with tracking ID — format matches old C# path: _{id}|{mass:.2f}@{charge}
     std::string id_str = encodeBase36_(id);
-    std::string desc = id_str + " MS2 mz=" + std::to_string(center_mz)
-                       + " z=" + std::to_string(charge)
-                       + " mass=" + std::to_string(pg.getMonoMass());
+    char desc_buf[256];
+    std::snprintf(desc_buf, sizeof(desc_buf), "_%d|%.2f@%d", id, pg.getMonoMass(), charge);
+    std::string desc(desc_buf);
     std::strncpy(cmd.scan_description, desc.c_str(), sizeof(cmd.scan_description) - 1);
     cmd.scan_description[sizeof(cmd.scan_description) - 1] = '\0';
 
@@ -3799,13 +3799,17 @@ FLASHIda::FLASHIda(char* arg)
   {
     int commands_pushed = 0;
 
-    // Step 1: Decode tracking ID from scan_description first 4 chars
+    // Step 1: Decode tracking ID from scan_description format: _{id}|{mass}@{charge}
     std::string desc_str = scan_desc ? scan_desc : "";
-    if (desc_str.size() < 4)
+    if (desc_str.empty() || desc_str[0] != '_')
       return 0;
 
-    std::string id_str = desc_str.substr(0, 4);
-    int tracking_id = decodeBase36_(id_str);
+    Size pipe_pos = desc_str.find('|');
+    if (pipe_pos == std::string::npos)
+      return 0;
+
+    std::string id_str = desc_str.substr(1, pipe_pos - 1);
+    int tracking_id = std::stoi(id_str);
 
     // Step 2: Look up pending scan context
     auto it = pending_scan_map_.find(tracking_id);
