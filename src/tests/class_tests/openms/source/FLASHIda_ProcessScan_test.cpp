@@ -341,17 +341,34 @@ START_SECTION(processScan_ms1_returns_commands)
     spec.setRT(0.0668);
 
     PeakGroup empty;
-    fd.performSpectrumDeconvolution(spec, 0, empty);
-    auto dspec = fd.getDeconvolvedSpectrum();
     std::cout << "DIAG: spec has " << spec.size() << " peaks, mz range ["
               << spec.front().getMZ() << ", " << spec.back().getMZ() << "]" << std::endl;
+    std::cout << "DIAG: max_mass=" << (double)fd.getParameters().getValue("max_mass")
+              << " min_mass=" << (double)fd.getParameters().getValue("min_mass")
+              << " min_charge=" << (int)fd.getParameters().getValue("min_charge")
+              << " max_charge=" << (int)fd.getParameters().getValue("max_charge") << std::endl;
+
+    fd.performSpectrumDeconvolution(spec, 0, empty);
+    auto dspec = fd.getDeconvolvedSpectrum();
     std::cout << "DIAG: deconvolution found " << dspec.size() << " peak groups" << std::endl;
+    std::cout << "DIAG: original spectrum size after deconv=" << dspec.getOriginalSpectrum().size() << std::endl;
     for (Size i = 0; i < std::min(dspec.size(), (Size)5); i++)
     {
       std::cout << "DIAG: PG[" << i << "] mass=" << dspec[i].getMonoMass()
                 << " charge=" << dspec[i].getRepAbsCharge()
                 << " qscore=" << dspec[i].getQscore() << std::endl;
     }
+
+    // Also try with legacy constructor for comparison
+    std::string legacy_config = "max_mass_count 3 score_threshold 0 min_charge 4 max_charge 50 "
+                                "min_mass 500 max_mass 50000 RT_window 180 tol 10 10 "
+                                "tqscore_threshold 0.9 target_mode 0 IDScore 0 AllCharges 0 "
+                                "HCDEnergy 29 strict_inclusion 0 tie_threshold 0.1 MS3AllCharges 1 "
+                                "min_tag_length 3 max_tag_length 8 max_ptm_count 3 max_flanking_mass_diff 50000 ";
+    FLASHIda* ida_legacy = new FLASHIda(const_cast<char*>(legacy_config.c_str()));
+    int n_legacy = ida_legacy->processScan(ms1_mzs, ms1_ints, ms1_length, 0.0668, 1, "ms1_legacy");
+    std::cout << "DIAG: legacy constructor processScan returned " << n_legacy << " commands" << std::endl;
+    delete ida_legacy;
   }
 
   FLASHIda* ida = new FLASHIda(const_cast<char*>(standard_json));
