@@ -448,6 +448,13 @@ namespace OpenMS
       pushCommand_(cmd);
     }
 
+    /// Test-only accessor: number of entries in pending_scan_map_
+    size_t getPendingScanMapSizeForTest() const
+    {
+      std::lock_guard<std::mutex> lock(queue_mutex_);
+      return pending_scan_map_.size();
+    }
+
     /**
            @brief parse FLASHIda log file
            @param in_log_file input log file

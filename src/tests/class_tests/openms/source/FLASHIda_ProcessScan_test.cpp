@@ -84,6 +84,161 @@ namespace
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" }
   })";
 
+  // Config with IDScore=true, AllCharges=false (activates sortByIDScoreRepresentative)
+  const char* idscore_json = R"({
+    "deconvolution": {
+      "score_threshold": 0.0, "tqscore_threshold": 0.9,
+      "min_charge": 4, "max_charge": 50,
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
+    },
+    "precursor_selection": {
+      "max_mass_count": [3], "RT_window": 180, "target_mode": 0,
+      "IDScore": true, "AllCharges": false, "MS3AllCharges": false,
+      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    },
+    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
+    "faims": { "cv_values": [-50], "max_cv_skip": 0 },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
+      "ms2": [
+        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
+        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "resolution": 120000 }
+      ]
+    },
+    "scheduling": {
+      "cycle_time": { "enabled": false, "value_ms": 60000 },
+      "scan_timeout": { "enabled": true, "value_ms": 30000 },
+      "agc_interval_seconds": 30
+    },
+    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
+    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" }
+  })";
+
+  // Config with IDScore=true, AllCharges=true (activates sortByIDScoreAllCharges)
+  const char* idscore_allcharges_json = R"({
+    "deconvolution": {
+      "score_threshold": 0.0, "tqscore_threshold": 0.9,
+      "min_charge": 4, "max_charge": 50,
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
+    },
+    "precursor_selection": {
+      "max_mass_count": [3], "RT_window": 180, "target_mode": 0,
+      "IDScore": true, "AllCharges": true, "MS3AllCharges": false,
+      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    },
+    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
+    "faims": { "cv_values": [-50], "max_cv_skip": 0 },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
+      "ms2": [
+        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
+        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "resolution": 120000 }
+      ]
+    },
+    "scheduling": {
+      "cycle_time": { "enabled": false, "value_ms": 60000 },
+      "scan_timeout": { "enabled": true, "value_ms": 30000 },
+      "agc_interval_seconds": 30
+    },
+    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
+    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" }
+  })";
+
+  // Config with IDScore=false, AllCharges=true (activates sortByQScoreAllCharges)
+  const char* qscore_allcharges_json = R"({
+    "deconvolution": {
+      "score_threshold": 0.0, "tqscore_threshold": 0.9,
+      "min_charge": 4, "max_charge": 50,
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
+    },
+    "precursor_selection": {
+      "max_mass_count": [3], "RT_window": 180, "target_mode": 0,
+      "IDScore": false, "AllCharges": true, "MS3AllCharges": false,
+      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    },
+    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
+    "faims": { "cv_values": [-50], "max_cv_skip": 0 },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
+      "ms2": [
+        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
+        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "resolution": 120000 }
+      ]
+    },
+    "scheduling": {
+      "cycle_time": { "enabled": false, "value_ms": 60000 },
+      "scan_timeout": { "enabled": true, "value_ms": 30000 },
+      "agc_interval_seconds": 30
+    },
+    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
+    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" }
+  })";
+
+  // Config with quantification enabled and 2 MS2 configs (HCD+ETD, required for quant path)
+  const char* quant_json = R"({
+    "deconvolution": {
+      "score_threshold": 0.0, "tqscore_threshold": 0.9,
+      "min_charge": 4, "max_charge": 50,
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
+    },
+    "precursor_selection": {
+      "max_mass_count": [3], "RT_window": 180, "target_mode": 0,
+      "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
+      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    },
+    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "quantification": { "enabled": true, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
+    "faims": { "cv_values": [-50], "max_cv_skip": 0 },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
+      "ms2": [
+        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
+        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "resolution": 120000 }
+      ]
+    },
+    "scheduling": {
+      "cycle_time": { "enabled": false, "value_ms": 60000 },
+      "scan_timeout": { "enabled": true, "value_ms": 30000 },
+      "agc_interval_seconds": 30
+    },
+    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
+    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" }
+  })";
+
+  // Config with tag-based targeting enabled via valid FASTA path, 2 MS2 configs
+  const char* tag_targeting_json = R"({
+    "deconvolution": {
+      "score_threshold": 0.0, "tqscore_threshold": 0.9,
+      "min_charge": 4, "max_charge": 50,
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
+    },
+    "precursor_selection": {
+      "max_mass_count": [3], "RT_window": 180, "target_mode": 0,
+      "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
+      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    },
+    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
+    "faims": { "cv_values": [-50], "max_cv_skip": 0 },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
+      "ms2": [
+        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
+        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "resolution": 120000 }
+      ]
+    },
+    "scheduling": {
+      "cycle_time": { "enabled": false, "value_ms": 60000 },
+      "scan_timeout": { "enabled": true, "value_ms": 30000 },
+      "agc_interval_seconds": 30
+    },
+    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
+    "files": { "target_logs": [], "fasta": "../../FlashIDA/test-data/configs/test_fasta.fasta", "inclusion_list": "", "ptm_list": "" }
+  })";
+
   // Config with conditional MS2 enabled
   const char* conditional_json = R"({
     "deconvolution": {
@@ -119,6 +274,8 @@ namespace
   // TSV file paths relative to the OpenMS build directory (CTest working dir)
   const std::string ms1_tsv_path = "../../FlashIDA/test-data/spectra/ms1_standard.txt";
   const std::string ms2_tsv_path = "../../FlashIDA/test-data/spectra/ms2_hcd_fragment.txt";
+  const std::string ms2_tmt_tsv_path = "../../FlashIDA/test-data/spectra/ms2_quant_tmt.txt";
+  const std::string fasta_path = "../../FlashIDA/test-data/configs/test_fasta.fasta";
 
   struct ScanData
   {
@@ -356,19 +513,21 @@ START_SECTION(processScan_ms3_commands)
   // MS3 commands pushed depends on deconvolution results. We test the structure.
   if (ms2_result > 0)
   {
-    // Drain all priority-1 commands
+    // Drain priority-1, then assert MS3 exists
     ScanCommand out{};
     while (true)
     {
       int r = ida->getNextScanCommand(out);
       if (r == 0 || out.priority != 1) break;
     }
-    // If MS3 was pushed, should be priority 3 with 2 stages
-    if (out.msn_level == 3)
-    {
-      TEST_EQUAL(out.priority, 3)
-      TEST_EQUAL(out.num_stages, 2)
-    }
+    TEST_EQUAL(out.msn_level, 3)
+    TEST_EQUAL(out.priority, 3)
+    TEST_EQUAL(out.num_stages, 2)
+  }
+  else
+  {
+    // Data-dependent: deconvolution found 0 fragments. Log but don't fail.
+    STATUS("MS2 deconvolution produced 0 MS3 targets (data-dependent)")
   }
 
   delete ida;
@@ -431,6 +590,169 @@ START_SECTION(cleanup_expired_commands)
                                      2, cmd.scan_description);
   // Should succeed (entry found in pending_scan_map_)
   // ms2_result can be 0 (no follow-ups) but shouldn't crash
+  TEST_EQUAL(ms2_result >= 0, true)
+
+  // Verify pending_scan_map_ entry was erased by first resolution
+  int ms2_result2 = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
+                                      (int)ms2.mzs.size(), ms2.rt,
+                                      2, cmd.scan_description);
+  // Second resolution with same tracking ID should find nothing (entry erased)
+  TEST_EQUAL(ms2_result2, 0)
+
+  // Also verify via accessor: pending_scan_map_ should have (total - 1) entries
+  // (we resolved one, rest are still pending)
+  TEST_EQUAL(ida->getPendingScanMapSizeForTest(), (size_t)(total - 1))
+
+  delete ida;
+}
+END_SECTION
+
+// P4-U02: All 4 scoring branches execute without error
+START_SECTION(processScan_scoring_branches)
+{
+  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  if (ms1_scans.empty()) { NOT_TESTABLE; break; }
+
+  // 4 configs: standard (QScore rep), idscore (IDScore rep), idscore_allcharges, qscore_allcharges
+  FLASHIda* ida_qscore = new FLASHIda(const_cast<char*>(standard_json));
+  FLASHIda* ida_idscore = new FLASHIda(const_cast<char*>(idscore_json));
+  FLASHIda* ida_idscore_all = new FLASHIda(const_cast<char*>(idscore_allcharges_json));
+  FLASHIda* ida_qscore_all = new FLASHIda(const_cast<char*>(qscore_allcharges_json));
+
+  int total_qscore = pushAllScans(ida_qscore, ms1_scans);
+  int total_idscore = pushAllScans(ida_idscore, ms1_scans);
+  int total_idscore_all = pushAllScans(ida_idscore_all, ms1_scans);
+  int total_qscore_all = pushAllScans(ida_qscore_all, ms1_scans);
+
+  // All 4 branches must produce > 0 commands
+  TEST_EQUAL(total_qscore > 0, true)
+  TEST_EQUAL(total_idscore > 0, true)
+  TEST_EQUAL(total_idscore_all > 0, true)
+  TEST_EQUAL(total_qscore_all > 0, true)
+
+  // Dequeue first command from each — must have valid precursor_mz
+  ScanCommand cmd{};
+
+  ida_qscore->getNextScanCommand(cmd);
+  TEST_EQUAL(cmd.stages[0].precursor_mz > 0, true)
+
+  ida_idscore->getNextScanCommand(cmd);
+  TEST_EQUAL(cmd.stages[0].precursor_mz > 0, true)
+
+  ida_idscore_all->getNextScanCommand(cmd);
+  TEST_EQUAL(cmd.stages[0].precursor_mz > 0, true)
+
+  ida_qscore_all->getNextScanCommand(cmd);
+  TEST_EQUAL(cmd.stages[0].precursor_mz > 0, true)
+
+  delete ida_qscore;
+  delete ida_idscore;
+  delete ida_idscore_all;
+  delete ida_qscore_all;
+}
+END_SECTION
+
+// P4-U03: Mass exclusion reduces command count on second pass
+START_SECTION(processScan_mass_exclusion)
+{
+  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  if (ms1_scans.empty()) { NOT_TESTABLE; break; }
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(standard_json));
+
+  // Pass 1: push all scans
+  int total_pass1 = pushAllScans(ida, ms1_scans);
+  TEST_EQUAL(total_pass1 > 0, true)
+
+  // Dequeue all commands (triggers mass exclusion map population)
+  ScanCommand cmd{};
+  for (int i = 0; i < total_pass1; i++)
+  {
+    ida->getNextScanCommand(cmd);
+  }
+
+  // Pass 2: push same scans again at same RTs (within RT_window=180s)
+  int total_pass2 = pushAllScans(ida, ms1_scans);
+
+  // Excluded masses should reduce count (or equal if all were already excluded)
+  TEST_EQUAL(total_pass2 <= total_pass1, true)
+
+  delete ida;
+}
+END_SECTION
+
+// P4-U07: Quantification follow-up routing
+START_SECTION(processScan_quant_followup)
+{
+  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  auto ms2_tmt_scans = loadTsvScans(ms2_tmt_tsv_path);
+  if (ms1_scans.empty() || ms2_tmt_scans.empty()) { NOT_TESTABLE; break; }
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(quant_json));
+
+  // Push MS1 scans to generate MS2 commands
+  int total = pushAllScans(ida, ms1_scans);
+  TEST_EQUAL(total > 0, true)
+
+  // Dequeue one MS2 command
+  ScanCommand ms2_cmd{};
+  ida->getNextScanCommand(ms2_cmd);
+  TEST_EQUAL(ms2_cmd.msn_level, 2)
+
+  // Push MS2 return with TMT reporter data
+  const auto& ms2 = ms2_tmt_scans[0];
+  int ms2_result = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
+                                     (int)ms2.mzs.size(), ms2.rt,
+                                     2, ms2_cmd.scan_description);
+  // Should not crash; follow-up depends on fold-change calculation
+  TEST_EQUAL(ms2_result >= 0, true)
+
+  // If quant follow-up was pushed, drain priority-1 and check for priority-2 ETD follow-up
+  if (ms2_result > 0)
+  {
+    ScanCommand out{};
+    while (true)
+    {
+      int r = ida->getNextScanCommand(out);
+      if (r == 0 || out.priority != 1) break;
+    }
+    // Quant follow-up should be priority 2 with ETD activation
+    if (out.priority == 2)
+    {
+      TEST_STRING_EQUAL(std::string(out.stages[0].activation_type), "ETD")
+    }
+  }
+
+  delete ida;
+}
+END_SECTION
+
+// P4-U08: Tag-based targeting code path executes without crash
+START_SECTION(processScan_tag_targeting)
+{
+  // Guard: check fasta file exists
+  {
+    std::ifstream fasta_check(fasta_path);
+    if (! fasta_check.good()) { NOT_TESTABLE; break; }
+  }
+  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  auto ms2_scans = loadTsvScans(ms2_tsv_path);
+  if (ms1_scans.empty() || ms2_scans.empty()) { NOT_TESTABLE; break; }
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(tag_targeting_json));
+
+  // Push MS1 scans
+  int total = pushAllScans(ida, ms1_scans);
+  TEST_EQUAL(total > 0, true)
+
+  // Dequeue one MS2 command
+  ScanCommand ms2_cmd{};
+  ida->getNextScanCommand(ms2_cmd);
+  TEST_EQUAL(ms2_cmd.msn_level, 2)
+
+  // Push MS2 return (HCD fragment data)
+  const auto& ms2 = ms2_scans[0];
+  int ms2_result = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
+                                     (int)ms2.mzs.size(), ms2.rt,
+                                     2, ms2_cmd.scan_description);
+  // Code path executes without crash
   TEST_EQUAL(ms2_result >= 0, true)
 
   delete ida;
