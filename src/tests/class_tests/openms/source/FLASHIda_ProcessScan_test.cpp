@@ -12,9 +12,15 @@
 
 #include <OpenMS/CONCEPT/ClassTest.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
+#include <OpenMS/KERNEL/MSSpectrum.h>
 
 #include <string>
 #include <cstring>
+#include <iostream>
+#include <algorithm>
 
 using namespace OpenMS;
 
@@ -314,14 +320,41 @@ START_TEST(FLASHIda_ProcessScan, "$Id$")
 // P4-U01: MS1 processScan returns > 0 commands for real spectral data
 START_SECTION(processScan_ms1_returns_commands)
 {
+  // Diagnostic: test deconvolution directly to isolate the issue
+  {
+    SpectralDeconvolution fd;
+    Param sd_defaults = fd.getDefaults();
+    sd_defaults.setValue("min_charge", 4);
+    sd_defaults.setValue("max_charge", 50);
+    sd_defaults.setValue("min_mass", 500.0);
+    sd_defaults.setValue("max_mass", 50000.0);
+    sd_defaults.setValue("tol", DoubleList{10.0, 10.0});
+    fd.setParameters(sd_defaults);
+    fd.calculateAveragine(false);
+
+    MSSpectrum spec;
+    for (int i = 0; i < ms1_length; i++)
+    {
+      if (ms1_ints[i] > 0) spec.emplace_back(ms1_mzs[i], ms1_ints[i]);
+    }
+    spec.setMSLevel(1);
+    spec.setRT(0.0668);
+
+    PeakGroup empty;
+    fd.performSpectrumDeconvolution(spec, 0, empty);
+    auto dspec = fd.getDeconvolvedSpectrum();
+    std::cout << "DIAG: spec has " << spec.size() << " peaks, mz range ["
+              << spec.front().getMZ() << ", " << spec.back().getMZ() << "]" << std::endl;
+    std::cout << "DIAG: deconvolution found " << dspec.size() << " peak groups" << std::endl;
+    for (Size i = 0; i < std::min(dspec.size(), (Size)5); i++)
+    {
+      std::cout << "DIAG: PG[" << i << "] mass=" << dspec[i].getMonoMass()
+                << " charge=" << dspec[i].getRepAbsCharge()
+                << " qscore=" << dspec[i].getQscore() << std::endl;
+    }
+  }
+
   FLASHIda* ida = new FLASHIda(const_cast<char*>(standard_json));
-
-  // Diagnostic: call getPeakGroups directly to see deconvolution output
-  int pg_count = ida->getPeakGroups(ms1_mzs, ms1_ints, ms1_length, 0.0668, 1, "ms1_diag", nullptr);
-  std::cout << "DIAG: getPeakGroups returned " << pg_count << " peak groups" << std::endl;
-  std::cout << "DIAG: ms1_length=" << ms1_length << " first_mz=" << ms1_mzs[0]
-            << " last_mz=" << ms1_mzs[ms1_length-1] << std::endl;
-
   int n = ida->processScan(ms1_mzs, ms1_ints, ms1_length, 0.0668, 1, "ms1_test");
   std::cout << "DIAG: processScan returned " << n << " commands" << std::endl;
   TEST_EQUAL(n > 0, true)
