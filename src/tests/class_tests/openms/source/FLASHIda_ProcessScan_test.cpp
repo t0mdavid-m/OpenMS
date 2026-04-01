@@ -12,15 +12,9 @@
 
 #include <OpenMS/CONCEPT/ClassTest.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
-#include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
-#include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
-#include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
-#include <OpenMS/KERNEL/MSSpectrum.h>
 
 #include <string>
 #include <cstring>
-#include <iostream>
-#include <algorithm>
 
 using namespace OpenMS;
 
@@ -320,60 +314,8 @@ START_TEST(FLASHIda_ProcessScan, "$Id$")
 // P4-U01: MS1 processScan returns > 0 commands for real spectral data
 START_SECTION(processScan_ms1_returns_commands)
 {
-  // Diagnostic: test deconvolution directly to isolate the issue
-  {
-    SpectralDeconvolution fd;
-    Param sd_defaults = fd.getDefaults();
-    sd_defaults.setValue("min_charge", 4);
-    sd_defaults.setValue("max_charge", 50);
-    sd_defaults.setValue("min_mass", 500.0);
-    sd_defaults.setValue("max_mass", 50000.0);
-    sd_defaults.setValue("tol", DoubleList{10.0, 10.0});
-    fd.setParameters(sd_defaults);
-    fd.calculateAveragine(false);
-
-    MSSpectrum spec;
-    for (int i = 0; i < ms1_length; i++)
-    {
-      if (ms1_ints[i] > 0) spec.emplace_back(ms1_mzs[i], ms1_ints[i]);
-    }
-    spec.setMSLevel(1);
-    spec.setRT(0.0668);
-
-    PeakGroup empty;
-    std::cout << "DIAG: spec has " << spec.size() << " peaks, mz range ["
-              << spec.front().getMZ() << ", " << spec.back().getMZ() << "]" << std::endl;
-    std::cout << "DIAG: max_mass=" << (double)fd.getParameters().getValue("max_mass")
-              << " min_mass=" << (double)fd.getParameters().getValue("min_mass")
-              << " min_charge=" << (int)fd.getParameters().getValue("min_charge")
-              << " max_charge=" << (int)fd.getParameters().getValue("max_charge") << std::endl;
-
-    fd.performSpectrumDeconvolution(spec, 0, empty);
-    auto dspec = fd.getDeconvolvedSpectrum();
-    std::cout << "DIAG: deconvolution found " << dspec.size() << " peak groups" << std::endl;
-    std::cout << "DIAG: original spectrum size after deconv=" << dspec.getOriginalSpectrum().size() << std::endl;
-    for (Size i = 0; i < std::min(dspec.size(), (Size)5); i++)
-    {
-      std::cout << "DIAG: PG[" << i << "] mass=" << dspec[i].getMonoMass()
-                << " charge=" << dspec[i].getRepAbsCharge()
-                << " qscore=" << dspec[i].getQscore() << std::endl;
-    }
-
-    // Also try with legacy constructor for comparison
-    std::string legacy_config = "max_mass_count 3 score_threshold 0 min_charge 4 max_charge 50 "
-                                "min_mass 500 max_mass 50000 RT_window 180 tol 10 10 "
-                                "tqscore_threshold 0.9 target_mode 0 IDScore 0 AllCharges 0 "
-                                "HCDEnergy 29 strict_inclusion 0 tie_threshold 0.1 MS3AllCharges 1 "
-                                "min_tag_length 3 max_tag_length 8 max_ptm_count 3 max_flanking_mass_diff 50000 ";
-    FLASHIda* ida_legacy = new FLASHIda(const_cast<char*>(legacy_config.c_str()));
-    int n_legacy = ida_legacy->processScan(ms1_mzs, ms1_ints, ms1_length, 0.0668, 1, "ms1_legacy");
-    std::cout << "DIAG: legacy constructor processScan returned " << n_legacy << " commands" << std::endl;
-    delete ida_legacy;
-  }
-
   FLASHIda* ida = new FLASHIda(const_cast<char*>(standard_json));
   int n = ida->processScan(ms1_mzs, ms1_ints, ms1_length, 0.0668, 1, "ms1_test");
-  std::cout << "DIAG: processScan returned " << n << " commands" << std::endl;
   TEST_EQUAL(n > 0, true)
   // Should be at most max_mass_count (3)
   TEST_EQUAL(n <= 3, true)

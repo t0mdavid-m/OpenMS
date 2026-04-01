@@ -7,6 +7,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
+#include <cmath>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
 #ifdef _OPENMP
@@ -776,7 +777,7 @@ namespace OpenMS
 
           if (observed_mz - max_mz > (double)right_index * iso_delta + mz_delta) { break; }
 
-          if (abs(mz_diff - tmp_i * iso_delta) < mz_delta) // if peak is signal
+          if (std::abs(mz_diff - tmp_i * iso_delta) < mz_delta) // if peak is signal
           {
             const Size bin = peak_bin_numbers[peak_index] + bin_offset;
             if (bin < mass_bin_size && ! (bin < excluded_mass_bins_for_decoy_runs_.size() && excluded_mass_bins_for_decoy_runs_[bin]))
@@ -796,7 +797,7 @@ namespace OpenMS
           int tmp_i = (int)round(mz_diff / iso_delta);
 
           if (max_mz - observed_mz > (float)left_index * iso_delta + mz_delta) { break; }
-          if (abs(mz_diff - tmp_i * iso_delta) < mz_delta)
+          if (std::abs(mz_diff - tmp_i * iso_delta) < mz_delta)
           {
             const Size bin = peak_bin_numbers[peak_index] + bin_offset;
             if (bin < mass_bin_size && ! (bin < excluded_mass_bins_for_decoy_runs_.size() && excluded_mass_bins_for_decoy_runs_[bin]))
@@ -834,7 +835,7 @@ namespace OpenMS
         {
           p.isotopeIndex = (int)round((p.getUnchargedMass() - t_mass) / iso_da_distance_);
 
-          if (abs(t_mass - p.getUnchargedMass() + iso_da_distance_ * p.isotopeIndex) > iso_tolerance) { continue; }
+          if (std::abs(t_mass - p.getUnchargedMass() + iso_da_distance_ * p.isotopeIndex) > iso_tolerance) { continue; }
           p.isotopeIndex += apex_index;
           new_peaks.push_back(p);
           min_off = min_off > p.isotopeIndex ? p.isotopeIndex : min_off;
