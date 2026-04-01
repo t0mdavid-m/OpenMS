@@ -315,7 +315,15 @@ START_TEST(FLASHIda_ProcessScan, "$Id$")
 START_SECTION(processScan_ms1_returns_commands)
 {
   FLASHIda* ida = new FLASHIda(const_cast<char*>(standard_json));
+
+  // Diagnostic: call getPeakGroups directly to see deconvolution output
+  int pg_count = ida->getPeakGroups(ms1_mzs, ms1_ints, ms1_length, 0.0668, 1, "ms1_diag", nullptr);
+  std::cout << "DIAG: getPeakGroups returned " << pg_count << " peak groups" << std::endl;
+  std::cout << "DIAG: ms1_length=" << ms1_length << " first_mz=" << ms1_mzs[0]
+            << " last_mz=" << ms1_mzs[ms1_length-1] << std::endl;
+
   int n = ida->processScan(ms1_mzs, ms1_ints, ms1_length, 0.0668, 1, "ms1_test");
+  std::cout << "DIAG: processScan returned " << n << " commands" << std::endl;
   TEST_EQUAL(n > 0, true)
   // Should be at most max_mass_count (3)
   TEST_EQUAL(n <= 3, true)
