@@ -3605,6 +3605,20 @@ FLASHIda::FLASHIda(char* arg)
       std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
 
+    // Precursor scoring data for diagnostic TSV output
+    cmd.qscore = pg.getQscore();
+    cmd.mono_mass = pg.getMonoMass();
+    cmd.charge_cos = pg.getChargeIsotopeCosine(std::abs(charge));
+    cmd.charge_snr = pg.getChargeSNR(std::abs(charge));
+    cmd.iso_cos = pg.getIsotopeCosine();
+    cmd.snr = pg.getSNR();
+    cmd.charge_score = pg.getChargeScore();
+    cmd.ppm_error = pg.getAvgPPMError();
+    cmd.precursor_intensity = pg.getChargeIntensity(std::abs(charge));
+    cmd.peakgroup_intensity = pg.getIntensity();
+    cmd.hcd_energy = (hcd > 0) ? hcd : ce;
+    cmd.pad2 = 0;
+
     // Store in pending map for MS2 tracking resolution
     pending_scan_map_[id] = cmd;
 

@@ -71,7 +71,8 @@ namespace OpenMS
   static_assert(sizeof(IsolationStage) == 80, "IsolationStage must be 80 bytes for P/Invoke");
 
   /// Blittable struct representing a complete scan command for the instrument.
-  /// Layout: 8 int32 (32) + 3 doubles (24) + char[32] (32) + char[256] (256) + stages (800) + uint64 (8) = 1152.
+  /// Layout: 8 int32 (32) + 3 doubles (24) + char[32] (32) + char[256] (256) + stages (800) + uint64 (8)
+  ///       + 10 doubles (80) + 2 int32 (8) = 1240.
   struct OPENMS_DLLAPI ScanCommand
   {
     int32_t scan_id;             ///< Unique tracking ID (base-36 encoded for scan description)
@@ -89,8 +90,22 @@ namespace OpenMS
     char scan_description[256];  ///< Human-readable description (includes tracking ID)
     IsolationStage stages[MAX_ISOLATION_STAGES]; ///< Isolation stages array
     uint64_t enqueue_timestamp_ms; ///< Timestamp when command was enqueued (steady_clock ms)
+
+    // Precursor scoring data (populated by buildMS2Command_ for diagnostic output)
+    double qscore;                  ///< Quality score from PeakGroup::getQscore()
+    double mono_mass;               ///< Monoisotopic mass from PeakGroup::getMonoMass()
+    double charge_cos;              ///< Charge isotope cosine from PeakGroup::getChargeIsotopeCosine(charge)
+    double charge_snr;              ///< Charge SNR from PeakGroup::getChargeSNR(charge)
+    double iso_cos;                 ///< Isotope cosine from PeakGroup::getIsotopeCosine()
+    double snr;                     ///< Total SNR from PeakGroup::getSNR()
+    double charge_score;            ///< Charge score from PeakGroup::getChargeScore()
+    double ppm_error;               ///< Avg PPM error from PeakGroup::getAvgPPMError()
+    double precursor_intensity;     ///< Per-charge intensity from PeakGroup::getChargeIntensity(charge)
+    double peakgroup_intensity;     ///< Total peak group intensity from PeakGroup::getIntensity()
+    int32_t hcd_energy;             ///< HCD collision energy
+    int32_t pad2;                   ///< Alignment padding
   };
-  static_assert(sizeof(ScanCommand) == 1152, "ScanCommand must be 1152 bytes for P/Invoke");
+  static_assert(sizeof(ScanCommand) == 1240, "ScanCommand must be 1240 bytes for P/Invoke");
 
   /**
    * @brief FLASHIda class for real time deconvolution

@@ -46,6 +46,18 @@ int main()
   std::printf("ScanCommand.scan_description.offset=%zu\n", offsetof(ScanCommand, scan_description));
   std::printf("ScanCommand.stages.offset=%zu\n", offsetof(ScanCommand, stages));
   std::printf("ScanCommand.enqueue_timestamp_ms.offset=%zu\n", offsetof(ScanCommand, enqueue_timestamp_ms));
+  std::printf("ScanCommand.qscore.offset=%zu\n", offsetof(ScanCommand, qscore));
+  std::printf("ScanCommand.mono_mass.offset=%zu\n", offsetof(ScanCommand, mono_mass));
+  std::printf("ScanCommand.charge_cos.offset=%zu\n", offsetof(ScanCommand, charge_cos));
+  std::printf("ScanCommand.charge_snr.offset=%zu\n", offsetof(ScanCommand, charge_snr));
+  std::printf("ScanCommand.iso_cos.offset=%zu\n", offsetof(ScanCommand, iso_cos));
+  std::printf("ScanCommand.snr.offset=%zu\n", offsetof(ScanCommand, snr));
+  std::printf("ScanCommand.charge_score.offset=%zu\n", offsetof(ScanCommand, charge_score));
+  std::printf("ScanCommand.ppm_error.offset=%zu\n", offsetof(ScanCommand, ppm_error));
+  std::printf("ScanCommand.precursor_intensity.offset=%zu\n", offsetof(ScanCommand, precursor_intensity));
+  std::printf("ScanCommand.peakgroup_intensity.offset=%zu\n", offsetof(ScanCommand, peakgroup_intensity));
+  std::printf("ScanCommand.hcd_energy.offset=%zu\n", offsetof(ScanCommand, hcd_energy));
+  std::printf("ScanCommand.pad2.offset=%zu\n", offsetof(ScanCommand, pad2));
 
   std::printf("LAYOUT_CHECK_PASSED\n");
   return 0;
