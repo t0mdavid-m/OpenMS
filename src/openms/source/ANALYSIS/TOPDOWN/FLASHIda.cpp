@@ -3424,6 +3424,13 @@ FLASHIda::FLASHIda(char* arg)
     return static_cast<uint64_t>(elapsed) > agc_interval_ms_;
   }
 
+  uint64_t FLASHIda::msSinceLastMS1_() const
+  {
+    auto now = std::chrono::steady_clock::now();
+    return static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(now - last_ms1_time_).count());
+  }
+
   ScanCommand FLASHIda::makeMS1Command_() const
   {
     ScanCommand cmd{};
@@ -3455,10 +3462,10 @@ FLASHIda::FLASHIda(char* arg)
     cmd.is_agc = 1;
     cmd.num_stages = 0;
     cmd.orbitrap_resolution = 0;
-    cmd.agc_target = 0;
-    cmd.first_mass = 0;
-    cmd.last_mass = 0;
-    cmd.max_it = 0;
+    cmd.agc_target = ms1_agc_target_;
+    cmd.first_mass = ms1_first_mass_;
+    cmd.last_mass = ms1_last_mass_;
+    cmd.max_it = ms1_max_it_;
     std::strncpy(cmd.analyzer, "IonTrap", sizeof(cmd.analyzer) - 1);
     cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';
     std::strncpy(cmd.scan_description, "AGC calibration", sizeof(cmd.scan_description) - 1);
@@ -3502,6 +3509,8 @@ FLASHIda::FLASHIda(char* arg)
 
     if (ms_level == 1)
     {
+      last_ms1_time_ = std::chrono::steady_clock::now();
+
       // MS1 path: deconvolve, score, filter, select top-N, push MS2 commands
       int n = getPeakGroups(mzs, ints, length, rt_min, 1, "ms1", nullptr);
       int commands_pushed = 0;
@@ -3592,12 +3601,11 @@ FLASHIda::FLASHIda(char* arg)
     std::strncpy(cmd.stages[0].activation_type, activation.c_str(), sizeof(cmd.stages[0].activation_type) - 1);
     cmd.stages[0].activation_type[sizeof(cmd.stages[0].activation_type) - 1] = '\0';
 
-    // Scan description with tracking ID — format matches old C# path: _{id}|{mass:.2f}@{charge}
+    // Scan description with tracking ID — base-36 format: {base36}|{mass:.2f}@{charge}
     std::string id_str = encodeBase36_(id);
     char desc_buf[256];
-    std::snprintf(desc_buf, sizeof(desc_buf), "_%d|%.2f@%d", id, pg.getMonoMass(), charge);
-    std::string desc(desc_buf);
-    std::strncpy(cmd.scan_description, desc.c_str(), sizeof(cmd.scan_description) - 1);
+    std::snprintf(desc_buf, sizeof(desc_buf), "%s|%.2f@%d", id_str.c_str(), pg.getMonoMass(), charge);
+    std::strncpy(cmd.scan_description, desc_buf, sizeof(cmd.scan_description) - 1);
     cmd.scan_description[sizeof(cmd.scan_description) - 1] = '\0';
 
     // Timestamp
@@ -3632,7 +3640,8 @@ FLASHIda::FLASHIda(char* arg)
     return cmd;
   }
 
-  ScanCommand FLASHIda::buildMS3Command_(const ScanCommand& ms2_ctx, double frag_mz, int frag_charge, double iso_width)
+  ScanCommand FLASHIda::buildMS3Command_(const ScanCommand& ms2_ctx, double frag_mz, int frag_charge, double iso_width,
+                                          char ion_type, int frag_index)
   {
     ScanCommand cmd{};
     int id = nextTrackingIdInt_();
@@ -3662,16 +3671,24 @@ FLASHIda::FLASHIda(char* arg)
     std::strncpy(cmd.stages[1].activation_type, "HCD", sizeof(cmd.stages[1].activation_type) - 1);
     cmd.stages[1].activation_type[sizeof(cmd.stages[1].activation_type) - 1] = '\0';
 
-    // Description
+    // Description — base-36 format with optional ion annotation (modes 3/4)
     std::string id_str = encodeBase36_(id);
-    std::string desc = id_str + " MS3 frag_mz=" + std::to_string(frag_mz)
-                       + " z=" + std::to_string(frag_charge);
-    std::strncpy(cmd.scan_description, desc.c_str(), sizeof(cmd.scan_description) - 1);
+    char desc_buf[256];
+    if (ion_type != '\0' && frag_index > 0)
+      std::snprintf(desc_buf, sizeof(desc_buf), "%s|MS3 %c%d mz=%.2f z=%d",
+                    id_str.c_str(), ion_type, frag_index, frag_mz, frag_charge);
+    else
+      std::snprintf(desc_buf, sizeof(desc_buf), "%s|MS3 mz=%.2f z=%d",
+                    id_str.c_str(), frag_mz, frag_charge);
+    std::strncpy(cmd.scan_description, desc_buf, sizeof(cmd.scan_description) - 1);
     cmd.scan_description[sizeof(cmd.scan_description) - 1] = '\0';
 
     cmd.enqueue_timestamp_ms = static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
+
+    // D6: Store in pending map for future MS3 resolution
+    pending_scan_map_[id] = cmd;
 
     std::cout << "[TRACK-CREATE] id=" << id_str
               << " ms_level=3"
@@ -3687,9 +3704,9 @@ FLASHIda::FLASHIda(char* arg)
     queues_[p].push_back(cmd);
   }
 
-  std::vector<std::tuple<double, int, double>> FLASHIda::selectMS3Targets_()
+  std::vector<FLASHIda::MS3Target> FLASHIda::selectMS3Targets_()
   {
-    std::vector<std::tuple<double, int, double>> targets;
+    std::vector<MS3Target> targets;
     if (!ms3_enabled_ || ms3_mode_ == 0 || !ms2_deconv_valid_)
       return targets;
 
@@ -3726,7 +3743,7 @@ FLASHIda::FLASHIda(char* arg)
     {
       double center_mz = (wstarts[i] + wends[i]) / 2.0;
       double iso_width = wends[i] - wstarts[i];
-      targets.emplace_back(center_mz, charges[i], iso_width);
+      targets.push_back({center_mz, charges[i], iso_width, ion_types[i], frag_indices[i]});
     }
     return targets;
   }
@@ -3750,8 +3767,9 @@ FLASHIda::FLASHIda(char* arg)
     cmd.stages[0].activation_type[sizeof(cmd.stages[0].activation_type) - 1] = '\0';
 
     std::string id_str = encodeBase36_(cmd.scan_id);
-    std::string desc = id_str + " MS2-followup mz=" + std::to_string(cmd.stages[0].precursor_mz);
-    std::strncpy(cmd.scan_description, desc.c_str(), sizeof(cmd.scan_description) - 1);
+    char desc_buf[256];
+    std::snprintf(desc_buf, sizeof(desc_buf), "%s|followup mz=%.2f", id_str.c_str(), cmd.stages[0].precursor_mz);
+    std::strncpy(cmd.scan_description, desc_buf, sizeof(cmd.scan_description) - 1);
     cmd.scan_description[sizeof(cmd.scan_description) - 1] = '\0';
 
     cmd.enqueue_timestamp_ms = static_cast<uint64_t>(
@@ -3785,8 +3803,9 @@ FLASHIda::FLASHIda(char* arg)
     cmd.stages[0].activation_type[sizeof(cmd.stages[0].activation_type) - 1] = '\0';
 
     std::string id_str = encodeBase36_(cmd.scan_id);
-    std::string desc = id_str + " MS2-conditional mz=" + std::to_string(cmd.stages[0].precursor_mz);
-    std::strncpy(cmd.scan_description, desc.c_str(), sizeof(cmd.scan_description) - 1);
+    char desc_buf[256];
+    std::snprintf(desc_buf, sizeof(desc_buf), "%s|conditional mz=%.2f", id_str.c_str(), cmd.stages[0].precursor_mz);
+    std::strncpy(cmd.scan_description, desc_buf, sizeof(cmd.scan_description) - 1);
     cmd.scan_description[sizeof(cmd.scan_description) - 1] = '\0';
 
     cmd.enqueue_timestamp_ms = static_cast<uint64_t>(
@@ -3813,17 +3832,17 @@ FLASHIda::FLASHIda(char* arg)
   {
     int commands_pushed = 0;
 
-    // Step 1: Decode tracking ID from scan_description format: _{id}|{mass}@{charge}
+    // Step 1: Decode tracking ID from scan_description format: {base36_id}|{payload}
     std::string desc_str = scan_desc ? scan_desc : "";
-    if (desc_str.empty() || desc_str[0] != '_')
+    if (desc_str.empty())
       return 0;
 
     Size pipe_pos = desc_str.find('|');
     if (pipe_pos == std::string::npos)
       return 0;
 
-    std::string id_str = desc_str.substr(1, pipe_pos - 1);
-    int tracking_id = std::stoi(id_str);
+    std::string id_str = desc_str.substr(0, pipe_pos);
+    int tracking_id = decodeBase36_(id_str);
 
     // Step 2: Look up pending scan context
     auto it = pending_scan_map_.find(tracking_id);
@@ -3849,12 +3868,13 @@ FLASHIda::FLASHIda(char* arg)
 
     // Step 4: Route by mode
     // Tag-based targeting
+    bool tags_found = false;
     if (tag_based_targeting_enabled_ && precursor_mass > 0)
     {
-      processMS2ForTagBasedTargeting(precursor_mass);
+      tags_found = processMS2ForTagBasedTargeting(precursor_mass);
     }
 
-    // Quantification follow-up
+    // Quantification follow-up (independent of tags)
     if (quant_enabled_ && ms2_configs_.size() >= 2)
     {
       if (isDifferentiallyAbundant(mzs, ints, length, rt_min, 2, "ms2_quant",
@@ -3865,8 +3885,8 @@ FLASHIda::FLASHIda(char* arg)
       }
     }
 
-    // Conditional MS2 follow-up
-    if (conditional_ms2_enabled_ && ms2_configs_.size() >= 2)
+    // Conditional MS2 follow-up — only when tags detected
+    if (conditional_ms2_enabled_ && ms2_configs_.size() >= 2 && tags_found)
     {
       pushConditionalFollowUp_(ctx);
       commands_pushed++;
@@ -3882,9 +3902,10 @@ FLASHIda::FLASHIda(char* arg)
     if (ms3_enabled_ && ms3_mode_ > 0)
     {
       auto ms3_targets = selectMS3Targets_();
-      for (const auto& [frag_mz, frag_charge, iso_width] : ms3_targets)
+      for (const auto& t : ms3_targets)
       {
-        ScanCommand ms3_cmd = buildMS3Command_(ctx, frag_mz, frag_charge, iso_width);
+        ScanCommand ms3_cmd = buildMS3Command_(ctx, t.center_mz, t.charge, t.iso_width,
+                                                t.ion_type, t.frag_index);
         pushCommand_(ms3_cmd);
         commands_pushed++;
       }
@@ -3908,13 +3929,39 @@ FLASHIda::FLASHIda(char* arg)
       out = makeAGCCommand_();
       out.scan_id = nextTrackingIdInt_();
       last_agc_time_ = std::chrono::steady_clock::now();
+
+      // Scan description with base-36 tracking ID
+      std::string id_str = encodeBase36_(out.scan_id);
+      char desc_buf[128];
+      std::snprintf(desc_buf, sizeof(desc_buf), "%s|AGC calibration", id_str.c_str());
+      std::strncpy(out.scan_description, desc_buf, sizeof(out.scan_description) - 1);
+      out.scan_description[sizeof(out.scan_description) - 1] = '\0';
+
+      std::cout << "[TRACK-CREATE] id=" << id_str << " ms_level=1 type=agc" << std::endl;
       return 1;
     }
 
-    // Step 2: Cleanup expired commands
+    // Step 2: Cycle time — force MS1 if too long since last survey scan
+    if (cycle_time_enabled_ && msSinceLastMS1_() > static_cast<uint64_t>(cycle_time_ms_))
+    {
+      out = makeMS1Command_();
+      out.scan_id = nextTrackingIdInt_();
+      last_ms1_time_ = std::chrono::steady_clock::now();
+
+      std::string id_str = encodeBase36_(out.scan_id);
+      char desc_buf[128];
+      std::snprintf(desc_buf, sizeof(desc_buf), "%s|MS1 survey", id_str.c_str());
+      std::strncpy(out.scan_description, desc_buf, sizeof(out.scan_description) - 1);
+      out.scan_description[sizeof(out.scan_description) - 1] = '\0';
+
+      std::cout << "[TRACK-CREATE] id=" << id_str << " ms_level=1 type=cycle_time" << std::endl;
+      return 1;
+    }
+
+    // Step 3: Cleanup expired commands
     cleanupExpiredCommands_();
 
-    // Step 3: Dequeue by priority (0 = highest → 3 = lowest)
+    // Step 4: Dequeue by priority (0 = highest → 3 = lowest)
     for (int p = 0; p < 4; ++p)
     {
       if (!queues_[p].empty())
@@ -3925,7 +3972,7 @@ FLASHIda::FLASHIda(char* arg)
       }
     }
 
-    // Step 4: Queue empty — no commands to dequeue
+    // Step 5: Queue empty — no commands to dequeue
     return 0;
   }
 

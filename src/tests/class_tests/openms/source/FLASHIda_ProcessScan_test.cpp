@@ -239,7 +239,7 @@ namespace
     "files": { "target_logs": [], "fasta": "../../FlashIDA/test-data/configs/test_fasta.fasta", "inclusion_list": "", "ptm_list": "" }
   })";
 
-  // Config with conditional MS2 enabled
+  // Config with conditional MS2 enabled (no FASTA — tags cannot be found)
   const char* conditional_json = R"({
     "deconvolution": {
       "score_threshold": 0.0, "tqscore_threshold": 0.9,
@@ -268,6 +268,129 @@ namespace
     },
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "conditional_ms2": true,
+    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" }
+  })";
+
+  // Config with cycle_time enabled and value_ms=0 (always triggers), AGC suppressed
+  const char* cycle_time_json = R"({
+    "deconvolution": {
+      "score_threshold": 0.0, "tqscore_threshold": 0.9,
+      "min_charge": 4, "max_charge": 50,
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
+    },
+    "precursor_selection": {
+      "max_mass_count": [3], "RT_window": 180, "target_mode": 0,
+      "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
+      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    },
+    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
+    "faims": { "cv_values": [-50], "max_cv_skip": 0 },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
+      "ms2": [
+        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }
+      ]
+    },
+    "scheduling": {
+      "cycle_time": { "enabled": true, "value_ms": 0 },
+      "scan_timeout": { "enabled": true, "value_ms": 30000 },
+      "agc_interval_seconds": 999999
+    },
+    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
+    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" }
+  })";
+
+  // Config with agc_interval_seconds=0 (AGC triggers immediately)
+  const char* agc_fast_json = R"({
+    "deconvolution": {
+      "score_threshold": 0.0, "tqscore_threshold": 0.9,
+      "min_charge": 4, "max_charge": 50,
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
+    },
+    "precursor_selection": {
+      "max_mass_count": [3], "RT_window": 180, "target_mode": 0,
+      "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
+      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    },
+    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
+    "faims": { "cv_values": [-50], "max_cv_skip": 0 },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
+      "ms2": [
+        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }
+      ]
+    },
+    "scheduling": {
+      "cycle_time": { "enabled": false, "value_ms": 60000 },
+      "scan_timeout": { "enabled": true, "value_ms": 30000 },
+      "agc_interval_seconds": 0
+    },
+    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
+    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" }
+  })";
+
+  // Config with conditional MS2 + tag targeting + FASTA (tags CAN be found)
+  const char* conditional_with_tags_json = R"({
+    "deconvolution": {
+      "score_threshold": 0.0, "tqscore_threshold": 0.9,
+      "min_charge": 4, "max_charge": 50,
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
+    },
+    "precursor_selection": {
+      "max_mass_count": [3], "RT_window": 180, "target_mode": 0,
+      "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
+      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    },
+    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
+    "faims": { "cv_values": [-50], "max_cv_skip": 0 },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
+      "ms2": [
+        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
+        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "resolution": 120000 }
+      ]
+    },
+    "scheduling": {
+      "cycle_time": { "enabled": false, "value_ms": 60000 },
+      "scan_timeout": { "enabled": true, "value_ms": 30000 },
+      "agc_interval_seconds": 30
+    },
+    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
+    "conditional_ms2": true,
+    "files": { "target_logs": [], "fasta": "../../FlashIDA/test-data/configs/test_fasta.fasta", "inclusion_list": "", "ptm_list": "" }
+  })";
+
+  // Config with quantification + low fold_change_threshold (any reporter ratio triggers)
+  const char* quant_sensitive_json = R"({
+    "deconvolution": {
+      "score_threshold": 0.0, "tqscore_threshold": 0.9,
+      "min_charge": 4, "max_charge": 50,
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
+    },
+    "precursor_selection": {
+      "max_mass_count": [3], "RT_window": 180, "target_mode": 0,
+      "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
+      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    },
+    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "quantification": { "enabled": true, "reporter_mz_tol": 0.002, "fold_change_threshold": 0.01 },
+    "faims": { "cv_values": [-50], "max_cv_skip": 0 },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
+      "ms2": [
+        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
+        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "resolution": 120000 }
+      ]
+    },
+    "scheduling": {
+      "cycle_time": { "enabled": false, "value_ms": 60000 },
+      "scan_timeout": { "enabled": true, "value_ms": 30000 },
+      "agc_interval_seconds": 30
+    },
+    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" }
   })";
 
@@ -405,6 +528,14 @@ START_SECTION(processScan_command_fields)
   TEST_EQUAL(cmd.stages[0].precursor_mz >= 500.0, true)
   TEST_EQUAL(cmd.stages[0].precursor_mz <= 2000.0, true)
 
+  // D1: Scan description format — 4-char base-36 ID, then |
+  std::string desc(cmd.scan_description);
+  auto pipe_pos = desc.find('|');
+  TEST_EQUAL(pipe_pos != std::string::npos, true)
+  TEST_EQUAL(pipe_pos, 4)  // 4-char base-36 ID
+  std::string id_part = desc.substr(0, pipe_pos);
+  TEST_EQUAL(id_part.find_first_not_of("0123456789abcdefghijklmnopqrstuvwxyz") == std::string::npos, true)
+
   delete ida;
 }
 END_SECTION
@@ -448,13 +579,18 @@ START_SECTION(processScan_empty_spectrum)
 }
 END_SECTION
 
-// P4-U06: conditional MS2 follow-up is pushed at priority 2
+// P4-U06: conditional MS2 follow-up is pushed at priority 2 (requires tag detection)
 START_SECTION(processScan_conditional_ms2_followup)
 {
+  {
+    std::ifstream fasta_check(fasta_path);
+    if (! fasta_check.good()) { NOT_TESTABLE; break; }
+  }
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
   auto ms2_scans = loadTsvScans(ms2_tsv_path);
   if (ms1_scans.empty() || ms2_scans.empty()) { NOT_TESTABLE; break; }
-  FLASHIda* ida = new FLASHIda(const_cast<char*>(conditional_json));
+  // Uses conditional_with_tags_json: conditional_ms2=true + FASTA for tag detection
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(conditional_with_tags_json));
 
   // Push all MS1 scans
   int total = pushAllScans(ida, ms1_scans);
@@ -466,7 +602,7 @@ START_SECTION(processScan_conditional_ms2_followup)
   TEST_EQUAL(ms2_cmd.msn_level, 2)
   TEST_EQUAL(ms2_cmd.priority, 1)
 
-  // Process MS2 return — should push conditional follow-up at priority 2
+  // Process MS2 return — tags found → conditional follow-up at priority 2
   const auto& ms2 = ms2_scans[0];
   int ms2_result = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
                                      (int)ms2.mzs.size(), ms2.rt,
@@ -484,11 +620,16 @@ START_SECTION(processScan_conditional_ms2_followup)
   TEST_EQUAL(out.priority, 2)
   TEST_EQUAL(out.msn_level, 2)
 
+  // D1: Conditional follow-up uses base-36|conditional format
+  std::string cond_desc(out.scan_description);
+  TEST_EQUAL(cond_desc.find("|conditional") != std::string::npos, true)
+  TEST_EQUAL(cond_desc.find("|conditional"), 4)  // After 4-char base-36 ID
+
   delete ida;
 }
 END_SECTION
 
-// P4-U07: MS3 commands are pushed at priority 3
+// P4-U07: MS3 commands are pushed at priority 3 — hard positive (golden file confirms)
 START_SECTION(processScan_ms3_commands)
 {
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
@@ -505,30 +646,31 @@ START_SECTION(processScan_ms3_commands)
   ida->getNextScanCommand(ms2_cmd);
   TEST_EQUAL(ms2_cmd.msn_level, 2)
 
-  // Process MS2 return — may push MS3 commands if fragments found
+  // Process MS2 return — golden file confirms MS3 targets are produced
   const auto& ms2 = ms2_scans[0];
   int ms2_result = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
                                      (int)ms2.mzs.size(), ms2.rt,
                                      2, ms2_cmd.scan_description);
-  // MS3 commands pushed depends on deconvolution results. We test the structure.
-  if (ms2_result > 0)
+  TEST_EQUAL(ms2_result > 0, true)
+
+  // Drain remaining MS2 commands, then find MS3 commands
+  ScanCommand out{};
+  int ms3_count = 0;
+  while (ida->getNextScanCommand(out) == 1)
   {
-    // Drain priority-1, then assert MS3 exists
-    ScanCommand out{};
-    while (true)
+    if (out.msn_level == 3)
     {
-      int r = ida->getNextScanCommand(out);
-      if (r == 0 || out.priority != 1) break;
+      ms3_count++;
+      TEST_EQUAL(out.priority, 3)  // MS3 at lowest priority
+      TEST_EQUAL(out.num_stages, 2)  // MS2 precursor + fragment target
+
+      // D1: MS3 scan description uses base-36|MS3 format
+      std::string ms3_desc(out.scan_description);
+      TEST_EQUAL(ms3_desc.find("|MS3") != std::string::npos, true)
+      TEST_EQUAL(ms3_desc.find("|MS3"), 4)  // After 4-char base-36 ID
     }
-    TEST_EQUAL(out.msn_level, 3)
-    TEST_EQUAL(out.priority, 3)
-    TEST_EQUAL(out.num_stages, 2)
   }
-  else
-  {
-    // Data-dependent: deconvolution found 0 fragments. Log but don't fail.
-    STATUS("MS2 deconvolution produced 0 MS3 targets (data-dependent)")
-  }
+  TEST_EQUAL(ms3_count > 0, true)
 
   delete ida;
 }
@@ -547,15 +689,20 @@ START_SECTION(decodeBase36_roundtrip)
 
   ScanCommand cmd{};
   ida->getNextScanCommand(cmd);
-  // scan_description starts with 4-char base36 tracking ID
+  // scan_description: {4-char base-36}|{payload}
   std::string desc(cmd.scan_description);
-  TEST_EQUAL(desc.size() >= 4, true)
+  TEST_EQUAL(desc.size() >= 5, true)  // 4 chars + pipe
+  TEST_EQUAL(desc[4], '|')
   std::string id_str = desc.substr(0, 4);
   // Verify the ID is valid base-36
   for (char c : id_str)
   {
     TEST_EQUAL((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z'), true)
   }
+
+  // Roundtrip: decoding the base-36 ID should give back cmd.scan_id
+  int decoded_id = ida->decodeBase36ForTest(id_str);
+  TEST_EQUAL(decoded_id, cmd.scan_id)
 
   delete ida;
 }
@@ -673,20 +820,21 @@ START_SECTION(processScan_mass_exclusion)
   // Pass 2: push same scans again at same RTs (within RT_window=180s)
   int total_pass2 = pushAllScans(ida, ms1_scans);
 
-  // Excluded masses should reduce count (or equal if all were already excluded)
-  TEST_EQUAL(total_pass2 <= total_pass1, true)
+  // Same data within RT window — exclusion MUST strictly reduce count
+  TEST_EQUAL(total_pass2 < total_pass1, true)
 
   delete ida;
 }
 END_SECTION
 
-// P4-U07: Quantification follow-up routing
+// P4-U07: Quantification follow-up routing — hard positive with sensitive threshold
 START_SECTION(processScan_quant_followup)
 {
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
   auto ms2_tmt_scans = loadTsvScans(ms2_tmt_tsv_path);
   if (ms1_scans.empty() || ms2_tmt_scans.empty()) { NOT_TESTABLE; break; }
-  FLASHIda* ida = new FLASHIda(const_cast<char*>(quant_json));
+  // Use quant_sensitive_json with fold_change_threshold=0.01 to trigger on any reporter ratio
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(quant_sensitive_json));
 
   // Push MS1 scans to generate MS2 commands
   int total = pushAllScans(ida, ms1_scans);
@@ -702,24 +850,22 @@ START_SECTION(processScan_quant_followup)
   int ms2_result = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
                                      (int)ms2.mzs.size(), ms2.rt,
                                      2, ms2_cmd.scan_description);
-  // Should not crash; follow-up depends on fold-change calculation
-  TEST_EQUAL(ms2_result >= 0, true)
+  // With fold_change_threshold=0.01, any reporter ion ratio should trigger
+  TEST_EQUAL(ms2_result, 1)  // Exactly 1 quant follow-up per MS2
 
-  // If quant follow-up was pushed, drain priority-1 and check for priority-2 ETD follow-up
-  if (ms2_result > 0)
+  // Drain priority-1 commands, find priority-2 ETD follow-up
+  ScanCommand out{};
+  bool found_followup = false;
+  while (true)
   {
-    ScanCommand out{};
-    while (true)
-    {
-      int r = ida->getNextScanCommand(out);
-      if (r == 0 || out.priority != 1) break;
-    }
-    // Quant follow-up should be priority 2 with ETD activation
-    if (out.priority == 2)
-    {
-      TEST_STRING_EQUAL(std::string(out.stages[0].activation_type), "ETD")
-    }
+    int r = ida->getNextScanCommand(out);
+    if (r == 0) break;
+    if (out.priority != 1) { found_followup = true; break; }
   }
+  TEST_EQUAL(found_followup, true)
+  TEST_STRING_EQUAL(std::string(out.stages[0].activation_type), "ETD")
+  TEST_EQUAL(out.msn_level, 2)
+  TEST_EQUAL(out.priority, 2)  // Follow-up priority
 
   delete ida;
 }
@@ -752,8 +898,135 @@ START_SECTION(processScan_tag_targeting)
   int ms2_result = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
                                      (int)ms2.mzs.size(), ms2.rt,
                                      2, ms2_cmd.scan_description);
-  // Code path executes without crash
-  TEST_EQUAL(ms2_result >= 0, true)
+  // tag_targeting_json has no quant/conditional/ms3 — tag targeting updates internal state
+  // but pushes 0 follow-up commands
+  TEST_EQUAL(ms2_result, 0)
+
+  delete ida;
+}
+END_SECTION
+
+// P4-U14: Cycle time forces MS1 when cycle_time_ms exceeded
+START_SECTION(processScan_cycle_time_enforcement)
+{
+  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  if (ms1_scans.empty()) { NOT_TESTABLE; break; }
+  // cycle_time_json: cycle_time.enabled=true, value_ms=0 (any elapsed time triggers)
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(cycle_time_json));
+
+  int total = pushAllScans(ida, ms1_scans);
+  TEST_EQUAL(total > 0, true)
+
+  // With cycle_time_ms=0, ANY elapsed time triggers a cycle-time MS1
+  // getNextScanCommand should return a cycle-time forced MS1 (before queued MS2s)
+  ScanCommand cmd{};
+  int r = ida->getNextScanCommand(cmd);
+  TEST_EQUAL(r, 1)
+  TEST_EQUAL(cmd.msn_level, 1)  // Cycle-time forced MS1
+  TEST_EQUAL(cmd.priority, 3)   // MS1 commands get priority 3
+
+  // Scan description should be base-36 format: XXXX|MS1 survey
+  std::string desc(cmd.scan_description);
+  TEST_EQUAL(desc.find("|MS1 survey") != std::string::npos, true)
+  TEST_EQUAL(desc.find("|MS1 survey"), 4)
+
+  delete ida;
+}
+END_SECTION
+
+// P4-U15: AGC command uses ms1 config values (not hardcoded zeros)
+START_SECTION(agc_command_values)
+{
+  // agc_fast_json: agc_interval_seconds=0 triggers AGC immediately
+  // ms1.agc_target=800000, ms1.max_it=246
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(agc_fast_json));
+
+  ScanCommand cmd{};
+  int r = ida->getNextScanCommand(cmd);
+  TEST_EQUAL(r, 1)
+  TEST_EQUAL(cmd.is_agc, 1)
+  TEST_EQUAL(cmd.msn_level, 1)
+  TEST_EQUAL(cmd.agc_target, 800000)  // From ms_settings.ms1.agc_target
+  TEST_EQUAL(cmd.max_it, 246)         // From ms_settings.ms1.max_it
+  TEST_STRING_EQUAL(std::string(cmd.analyzer), "IonTrap")
+  TEST_EQUAL(cmd.priority, 0)
+
+  // Scan description: base-36 format XXXX|AGC calibration
+  std::string desc(cmd.scan_description);
+  TEST_EQUAL(desc.find("|AGC calibration") != std::string::npos, true)
+  TEST_EQUAL(desc.find("|AGC calibration"), 4)
+
+  delete ida;
+}
+END_SECTION
+
+// P4-U17: Conditional MS2 does NOT fire when no FASTA is loaded (no tags possible)
+START_SECTION(processScan_conditional_ms2_requires_tags)
+{
+  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  auto ms2_scans = loadTsvScans(ms2_tsv_path);
+  if (ms1_scans.empty() || ms2_scans.empty()) { NOT_TESTABLE; break; }
+  // conditional_json has conditional_ms2=true but fasta="" — no tag targeting possible
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(conditional_json));
+
+  int total = pushAllScans(ida, ms1_scans);
+  TEST_EQUAL(total > 0, true)
+
+  ScanCommand ms2_cmd{};
+  ida->getNextScanCommand(ms2_cmd);
+
+  const auto& ms2 = ms2_scans[0];
+  int ms2_result = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
+                                     (int)ms2.mzs.size(), ms2.rt,
+                                     2, ms2_cmd.scan_description);
+  // Without FASTA, tags cannot be found — conditional must NOT fire
+  TEST_EQUAL(ms2_result, 0)
+
+  delete ida;
+}
+END_SECTION
+
+// P4-U19: Tag targeting + conditional MS2 produces follow-up commands
+START_SECTION(processScan_tag_targeting_produces_followups)
+{
+  {
+    std::ifstream fasta_check(fasta_path);
+    if (! fasta_check.good()) { NOT_TESTABLE; break; }
+  }
+  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  auto ms2_scans = loadTsvScans(ms2_tsv_path);
+  if (ms1_scans.empty() || ms2_scans.empty()) { NOT_TESTABLE; break; }
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(conditional_with_tags_json));
+
+  // Push all 50 MS1 scans
+  int total = pushAllScans(ida, ms1_scans);
+  TEST_EQUAL(total > 0, true)
+
+  // Dequeue one MS2 command
+  ScanCommand ms2_cmd{};
+  ida->getNextScanCommand(ms2_cmd);
+  TEST_EQUAL(ms2_cmd.msn_level, 2)
+  TEST_EQUAL(ms2_cmd.priority, 1)
+
+  // Push MS2 return — should find tags and trigger conditional follow-up
+  const auto& ms2 = ms2_scans[0];
+  int ms2_result = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
+                                     (int)ms2.mzs.size(), ms2.rt,
+                                     2, ms2_cmd.scan_description);
+  // Golden file continuity_tag_ms2return.json confirms: tags found → follow-ups produced
+  TEST_EQUAL(ms2_result > 0, true)
+
+  // Drain priority-1 commands, find priority-2 conditional follow-up
+  ScanCommand out{};
+  while (true)
+  {
+    int r = ida->getNextScanCommand(out);
+    if (r == 0 || out.priority != 1) break;
+  }
+  TEST_EQUAL(out.priority, 2)
+  TEST_EQUAL(out.msn_level, 2)
+  // Conditional follow-up uses second MS2 config (ETD)
+  TEST_STRING_EQUAL(std::string(out.stages[0].activation_type), "ETD")
 
   delete ida;
 }

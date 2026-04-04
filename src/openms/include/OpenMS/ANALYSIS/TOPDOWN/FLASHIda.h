@@ -470,6 +470,12 @@ namespace OpenMS
       return pending_scan_map_.size();
     }
 
+    /// Test-only accessor: decode base-36 string to int
+    int decodeBase36ForTest(const std::string& s) const
+    {
+      return decodeBase36_(s);
+    }
+
     /**
            @brief parse FLASHIda log file
            @param in_log_file input log file
@@ -764,6 +770,9 @@ namespace OpenMS
     /// Check if an AGC scan is needed based on agc_interval_ms_
     bool needsAGCScan_() const;
 
+    /// Milliseconds since last MS1 scan (for cycle time enforcement)
+    uint64_t msSinceLastMS1_() const;
+
     /// Remove expired commands from pending_scan_map_ using timeout_ms_
     void cleanupExpiredCommands_();
 
@@ -772,14 +781,25 @@ namespace OpenMS
     /// Build MS2 ScanCommand from a PeakGroup (isolation window + MS2 config)
     ScanCommand buildMS2Command_(const PeakGroup& pg, int charge, int hcd);
 
+    /// MS3 target with optional ion annotation (modes 3/4)
+    struct MS3Target
+    {
+      double center_mz;
+      int charge;
+      double iso_width;
+      char ion_type;   ///< 'b', 'y', etc. or '\0' for modes 1/2
+      int frag_index;  ///< fragment position, 0 if unknown
+    };
+
     /// Build MS3 ScanCommand from MS2 context + fragment target
-    ScanCommand buildMS3Command_(const ScanCommand& ms2_ctx, double frag_mz, int frag_charge, double iso_width);
+    ScanCommand buildMS3Command_(const ScanCommand& ms2_ctx, double frag_mz, int frag_charge, double iso_width,
+                                  char ion_type = '\0', int frag_index = 0);
 
     /// Push command into appropriate priority queue (caller must hold queue_mutex_)
     void pushCommand_(ScanCommand cmd);
 
     /// Select MS3 fragment targets from last MS2 deconvolution
-    std::vector<std::tuple<double, int, double>> selectMS3Targets_();
+    std::vector<MS3Target> selectMS3Targets_();
 
     /// Push follow-up MS2 at priority 2 (quant mode)
     void pushFollowUpMS2_(const ScanCommand& ctx);
