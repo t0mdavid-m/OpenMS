@@ -72,7 +72,7 @@ namespace OpenMS
 
   /// Blittable struct representing a complete scan command for the instrument.
   /// Layout: 8 int32 (32) + 3 doubles (24) + char[32] (32) + char[256] (256) + stages (800) + uint64 (8)
-  ///       + 10 doubles (80) + 2 int32 (8) = 1240.
+  ///       + 10 doubles (80) + 2 int32 (8) + 1 double (8) = 1248.
   struct OPENMS_DLLAPI ScanCommand
   {
     int32_t scan_id;             ///< Unique tracking ID (base-36 encoded for scan description)
@@ -104,8 +104,9 @@ namespace OpenMS
     double peakgroup_intensity;     ///< Total peak group intensity from PeakGroup::getIntensity()
     int32_t hcd_energy;             ///< HCD collision energy
     int32_t pad2;                   ///< Alignment padding
+    double faims_cv;                ///< FAIMS compensation voltage (0.0 if non-FAIMS)
   };
-  static_assert(sizeof(ScanCommand) == 1240, "ScanCommand must be 1240 bytes for P/Invoke");
+  static_assert(sizeof(ScanCommand) == 1248, "ScanCommand must be 1248 bytes for P/Invoke");
 
   /**
    * @brief FLASHIda class for real time deconvolution
@@ -443,9 +444,10 @@ namespace OpenMS
     /// Retrieve a double config value by key (for bridge functions)
     double getConfigDouble(const std::string& key) const;
 
-    /// Process an incoming scan and enqueue resulting commands (Phase 3 stub: logs and returns 0)
+    /// Process an incoming scan and enqueue resulting commands
     int processScan(const double* mzs, const double* ints, int length,
-                    double rt_min, int ms_level, const char* scan_description);
+                    double rt_min, int ms_level, const char* scan_description,
+                    double faims_cv = 0.0);
 
     /// Dequeue the next scan command by priority. Returns 1 if command filled, 0 if error.
     int getNextScanCommand(ScanCommand& out);
@@ -869,9 +871,22 @@ namespace OpenMS
     bool quant_enabled_ = false;
     double reporter_mz_tol_ = 0.002, fold_change_threshold_ = 1.4;
 
-    // FAIMS
+    // FAIMS configuration (from JSON)
     std::vector<double> faims_cv_values_;
     int max_cv_skip_ = 0;
+    int cv_precursor_threshold_ = 15;   ///< MassThreshold from C# (default 15)
+
+    // FAIMS per-CV adaptive skip state (Phase 6)
+    bool faims_enabled_ = false;        ///< true when faims_cv_values_ has 2+ entries
+    std::vector<int> cv_skip_amount_;   ///< per-CV: current skip spacing (doubles on low precursor count)
+    std::vector<int> cv_skip_count_;    ///< per-CV: current skip counter
+    int current_cv_index_ = 0;         ///< round-robin cycling index into faims_cv_values_
+
+    /// Update per-CV adaptive skip policy after MS1 deconvolution (port of C# ScanScheduler.updateCV)
+    void updateCVSkip_(double cv, int precursor_count);
+
+    /// Advance to next non-skipped CV and return its value (port of C# getFAIMSMS1Scan cycling loop)
+    double advanceToNextCV_();
 
   };
 }

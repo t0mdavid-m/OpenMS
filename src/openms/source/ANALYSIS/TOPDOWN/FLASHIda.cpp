@@ -3340,6 +3340,17 @@ FLASHIda::FLASHIda(char* arg)
           faims_cv_values_.push_back(v.get<double>());
       }
       max_cv_skip_ = faims.value("max_cv_skip", 0);
+      cv_precursor_threshold_ = faims.value("cv_precursor_threshold", 15);
+
+      // Initialize per-CV adaptive skip state
+      faims_enabled_ = (faims_cv_values_.size() > 1);
+      if (faims_enabled_)
+      {
+        int n = static_cast<int>(faims_cv_values_.size());
+        cv_skip_amount_.resize(n, 0);
+        cv_skip_count_.resize(n, 0);
+        current_cv_index_ = 0;
+      }
 
       // ms_settings
       auto ms_settings = config.value("ms_settings", json::object());
@@ -3502,8 +3513,85 @@ FLASHIda::FLASHIda(char* arg)
     }
   }
 
+  // ---- Phase 6: FAIMS CV adaptive skip state machine ----
+  //
+  // Behavioral audit of C# ScanScheduler (reference implementation):
+  //
+  // Q1. CV advance trigger: updateCV() called after every MS1 deconvolution with
+  //     the CV of that scan and precursor count. getFAIMSMS1Scan() does actual cycling.
+  // Q2. Threshold comparison: precursors < MassThreshold (strictly less than). Default=15.
+  // Q3. Skip counter: CVSkipAmount[pos] doubles (min=1, cap=MaxCVSkip).
+  //     CVSkipCount[pos] resets to 0 in BOTH branches of updateCV().
+  //     In getFAIMSMS1Scan(), CVSkipCount[i]++ when skipping.
+  // Q4. Forced cycle: when CVSkipAmount >= MaxCVSkip, skip amount stops growing.
+  //     CV is visited when CVSkipCount >= CVSkipAmount (counter exhausted).
+  // Q5. CV transition: getFAIMSMS1Scan() enqueues AGC+MS1 for next CV.
+  // Q6. Call order: deconvolve → create MS2s → updateCV(cv, precursors) → getFAIMSMS1Scan(true).
+  // Q7. Cycling: forward only (currentCV++), wraps at end. Increment-first (index 0 skipped on first call).
+  // Q8. Single CV: Flash.cs uses UnifiedScanProcessor, ScanScheduler with UseFAIMS=false.
+  // Q9. Non-FAIMS: faims_cv = 0.0 on all commands.
+
+  void FLASHIda::updateCVSkip_(double cv, int precursor_count)
+  {
+    if (!faims_enabled_) return;
+
+    // Find position for this CV value
+    int pos = -1;
+    for (int i = 0; i < static_cast<int>(faims_cv_values_.size()); ++i)
+    {
+      if (faims_cv_values_[i] == cv) { pos = i; break; }
+    }
+    if (pos < 0) return;  // unknown CV
+
+    if (precursor_count < cv_precursor_threshold_)  // strictly < (audit Q2)
+    {
+      if (cv_skip_amount_[pos] < max_cv_skip_)
+      {
+        cv_skip_amount_[pos] *= 2;                  // double spacing (audit Q3)
+        if (cv_skip_amount_[pos] <= 0)
+          cv_skip_amount_[pos] = 1;                 // min = 1
+        if (cv_skip_amount_[pos] > max_cv_skip_)
+          cv_skip_amount_[pos] = max_cv_skip_;      // cap at max
+      }
+      cv_skip_count_[pos] = 0;                      // reset in BOTH branches (audit Q3)
+    }
+    else
+    {
+      cv_skip_amount_[pos] = 0;                     // high precursor count: reset
+      cv_skip_count_[pos] = 0;
+    }
+  }
+
+  double FLASHIda::advanceToNextCV_()
+  {
+    int n = static_cast<int>(faims_cv_values_.size());
+    // Safety bound (C# uses while(true); we bound to n iterations)
+    for (int attempts = 0; attempts < n; ++attempts)
+    {
+      current_cv_index_++;                           // increment-first (audit Q7)
+      if (current_cv_index_ >= n)
+        current_cv_index_ = 0;                       // wrap (audit Q7)
+
+      if (cv_skip_count_[current_cv_index_] < cv_skip_amount_[current_cv_index_])
+      {
+        cv_skip_count_[current_cv_index_]++;         // skip this CV (audit Q3)
+        OPENMS_LOG_DEBUG << "[FAIMS] Skipping CV=" << faims_cv_values_[current_cv_index_]
+                         << " (" << cv_skip_count_[current_cv_index_]
+                         << "/" << cv_skip_amount_[current_cv_index_] << ")" << std::endl;
+      }
+      else
+      {
+        OPENMS_LOG_DEBUG << "[FAIMS] Changed to CV=" << faims_cv_values_[current_cv_index_] << std::endl;
+        return faims_cv_values_[current_cv_index_];  // use this CV
+      }
+    }
+    // Fallback: all CVs being skipped — use current anyway
+    return faims_cv_values_[current_cv_index_];
+  }
+
   int FLASHIda::processScan(const double* mzs, const double* ints, int length,
-                             double rt_min, int ms_level, const char* scan_description)
+                             double rt_min, int ms_level, const char* scan_description,
+                             double faims_cv)
   {
     std::lock_guard<std::mutex> lock(queue_mutex_);
 
@@ -3512,15 +3600,43 @@ FLASHIda::FLASHIda(char* arg)
       last_ms1_time_ = std::chrono::steady_clock::now();
 
       // MS1 path: deconvolve, score, filter, select top-N, push MS2 commands
+      double parent_cv = faims_enabled_ ? faims_cv : 0.0;
+
       int n = getPeakGroups(mzs, ints, length, rt_min, 1, "ms1", nullptr);
       int commands_pushed = 0;
       for (int i = 0; i < n; i++)
       {
         ScanCommand cmd = buildMS2Command_(selected_peak_groups_[i],
                                            trigger_charges[i], trigger_hcds[i]);
+        cmd.faims_cv = parent_cv;  // MS2 carries parent MS1's CV
         pushCommand_(cmd);
         commands_pushed++;
       }
+
+      // FAIMS CV cycling: update skip policy, advance to next CV, push MS1
+      if (faims_enabled_)
+      {
+        double current_cv = faims_cv_values_[current_cv_index_];
+        updateCVSkip_(current_cv, commands_pushed);
+
+        double next_cv = advanceToNextCV_();
+        ScanCommand ms1 = makeMS1Command_();
+        ms1.faims_cv = next_cv;
+        ms1.scan_id = nextTrackingIdInt_();
+        ms1.priority = 0;  // priority 0 to send before pending MS2s
+
+        std::string id_str = encodeBase36_(ms1.scan_id);
+        std::snprintf(ms1.scan_description, sizeof(ms1.scan_description),
+                      "%s|CV transition MS1 CV=%.1f", id_str.c_str(), next_cv);
+
+        auto now = std::chrono::steady_clock::now();
+        ms1.enqueue_timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now.time_since_epoch()).count();
+
+        pushCommand_(ms1);
+        std::cout << "[TRACK-CREATE] id=" << id_str << " ms_level=1 type=cv_transition cv=" << next_cv << std::endl;
+      }
+
       return commands_pushed;
     }
     else if (ms_level == 2)
@@ -3927,6 +4043,7 @@ FLASHIda::FLASHIda(char* arg)
     if (needsAGCScan_())
     {
       out = makeAGCCommand_();
+      out.faims_cv = faims_enabled_ ? faims_cv_values_[current_cv_index_] : 0.0;
       out.scan_id = nextTrackingIdInt_();
       last_agc_time_ = std::chrono::steady_clock::now();
 
@@ -3945,6 +4062,7 @@ FLASHIda::FLASHIda(char* arg)
     if (cycle_time_enabled_ && msSinceLastMS1_() > static_cast<uint64_t>(cycle_time_ms_))
     {
       out = makeMS1Command_();
+      out.faims_cv = faims_enabled_ ? faims_cv_values_[current_cv_index_] : 0.0;
       out.scan_id = nextTrackingIdInt_();
       last_ms1_time_ = std::chrono::steady_clock::now();
 
@@ -3968,12 +4086,39 @@ FLASHIda::FLASHIda(char* arg)
       {
         out = queues_[p].front();
         queues_[p].pop_front();
+        // faims_cv already set at creation time (MS2 → parent CV, CV-transition MS1 → next CV)
         return 1;
       }
     }
 
-    // Step 5: Queue empty — no commands to dequeue
-    return 0;
+    // Step 5: Queue empty — provide MS1 fallback (replaces C# ScanScheduler)
+    if (faims_enabled_)
+    {
+      double next_cv = advanceToNextCV_();
+      out = makeMS1Command_();
+      out.faims_cv = next_cv;
+      out.scan_id = nextTrackingIdInt_();
+      last_ms1_time_ = std::chrono::steady_clock::now();
+
+      std::string id_str = encodeBase36_(out.scan_id);
+      std::snprintf(out.scan_description, sizeof(out.scan_description),
+                    "%s|MS1 survey CV=%.1f", id_str.c_str(), next_cv);
+      std::cout << "[TRACK-CREATE] id=" << id_str << " ms_level=1 type=faims_fallback cv=" << next_cv << std::endl;
+      return 1;
+    }
+
+    out = makeMS1Command_();
+    out.faims_cv = 0.0;
+    out.scan_id = nextTrackingIdInt_();
+    last_ms1_time_ = std::chrono::steady_clock::now();
+
+    {
+      std::string id_str = encodeBase36_(out.scan_id);
+      std::snprintf(out.scan_description, sizeof(out.scan_description),
+                    "%s|MS1 survey", id_str.c_str());
+      std::cout << "[TRACK-CREATE] id=" << id_str << " ms_level=1 type=fallback" << std::endl;
+    }
+    return 1;
   }
 
   int FLASHIda::getNextTrackingId()

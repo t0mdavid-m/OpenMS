@@ -449,6 +449,7 @@ set(analysis_executables_list
   #DataAccessHelper_test
   # DeconvolvedSpectrum_test
   DeconvolvedSpectrum_OptimizationMetadata_test
+  FLASHIdaFAIMS_test
   FLASHIdaQueueTracking_test
   FLASHIda_ProcessScan_test
   ScanCommandLayout_test

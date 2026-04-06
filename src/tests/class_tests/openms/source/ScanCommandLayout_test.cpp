@@ -58,6 +58,7 @@ int main()
   std::printf("ScanCommand.peakgroup_intensity.offset=%zu\n", offsetof(ScanCommand, peakgroup_intensity));
   std::printf("ScanCommand.hcd_energy.offset=%zu\n", offsetof(ScanCommand, hcd_energy));
   std::printf("ScanCommand.pad2.offset=%zu\n", offsetof(ScanCommand, pad2));
+  std::printf("ScanCommand.faims_cv.offset=%zu\n", offsetof(ScanCommand, faims_cv));
 
   std::printf("LAYOUT_CHECK_PASSED\n");
   return 0;

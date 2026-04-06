@@ -256,11 +256,12 @@ namespace OpenMS
   }
 
   int ProcessScan(FLASHIda *pObject, double *mzs, double *ints,
-                  int length, double rt_min, int ms_level, const char *scan_description)
+                  int length, double rt_min, int ms_level, const char *scan_description,
+                  double faims_cv)
   {
     if (pObject != nullptr)
     {
-      return pObject->processScan(mzs, ints, length, rt_min, ms_level, scan_description);
+      return pObject->processScan(mzs, ints, length, rt_min, ms_level, scan_description, faims_cv);
     }
     return -1;
   }
