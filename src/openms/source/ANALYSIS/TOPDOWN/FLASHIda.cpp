@@ -3393,40 +3393,43 @@ FLASHIda::FLASHIda(char* arg)
       {
         throw std::runtime_error("FLASHIda: missing required 'selection_strategy' in JSON config");
       }
-      auto& ss = config["selection_strategy"];
-      for (auto& [key, val] : ss.items())
+      const auto& sel_strategy = config["selection_strategy"];
+      for (auto it = sel_strategy.begin(); it != sel_strategy.end(); ++it)
       {
-        if (key.substr(0, 2) == "ms" && key.size() > 2)
+        std::string ms_key = it.key();
+        if (ms_key.substr(0, 2) == "ms" && ms_key.size() > 2)
         {
-          int level = std::stoi(key.substr(2));
+          int level = std::stoi(ms_key.substr(2));
+          const auto& level_obj = it.value();
           MSLevelConfig cfg;
           // Selection metric
-          std::string sel_str = val.value("selection", level == 1 ? std::string("qscore") : std::string("intensity"));
+          std::string sel_str = level_obj.value("selection", level == 1 ? std::string("qscore") : std::string("intensity"));
           if (sel_str == "intensity") cfg.selection = SelectionMetric::Intensity;
           else if (sel_str == "qscore") cfg.selection = SelectionMetric::QScore;
           else if (sel_str == "none") cfg.selection = SelectionMetric::None;
           else cfg.selection = SelectionMetric::Intensity;
           // Max targets (with aliases)
-          cfg.max_targets = val.value("max_targets",
-              val.value("max_precursors",
-              val.value("max_fragments", 10)));
+          cfg.max_targets = level_obj.value("max_targets",
+              level_obj.value("max_precursors",
+              level_obj.value("max_fragments", 10)));
           // Exploration (optional, MS2+ only)
-          if (val.contains("exploration") && level > 1)
+          if (level_obj.contains("exploration") && level > 1)
           {
-            auto& ex = val["exploration"];
-            std::string met_str = ex.value("metric", std::string("none"));
+            const auto& expl_obj = level_obj["exploration"];
+            std::string met_str = expl_obj.value("metric", std::string("none"));
             if (met_str == "mass_count") cfg.exploration = ExplorationMetric::MassCount;
             else if (met_str == "remaining_precursor") cfg.exploration = ExplorationMetric::RemainingPrecursor;
             else if (met_str == "fragment_count") cfg.exploration = ExplorationMetric::FragmentCount;
             else cfg.exploration = ExplorationMetric::None;
-            cfg.ce_min = ex.value("ce_min", 20.0);
-            cfg.ce_max = ex.value("ce_max", 40.0);
-            cfg.ce_step = ex.value("ce_step", 5.0);
-            cfg.activation = ex.value("activation", std::string("HCD"));
-            if (ex.contains("overrides"))
+            cfg.ce_min = expl_obj.value("ce_min", 20.0);
+            cfg.ce_max = expl_obj.value("ce_max", 40.0);
+            cfg.ce_step = expl_obj.value("ce_step", 5.0);
+            cfg.activation = expl_obj.value("activation", std::string("HCD"));
+            if (expl_obj.contains("overrides"))
             {
-              for (auto& [okey, oval] : ex["overrides"].items())
-                cfg.overrides[okey] = oval.get<std::string>();
+              const auto& ov_obj = expl_obj["overrides"];
+              for (auto ov_it = ov_obj.begin(); ov_it != ov_obj.end(); ++ov_it)
+                cfg.overrides[ov_it.key()] = ov_it.value().get<std::string>();
             }
           }
           level_configs_[level] = cfg;
@@ -3434,9 +3437,9 @@ FLASHIda::FLASHIda(char* arg)
       }
       // Compute convenience boolean
       exploration_enabled_ = false;
-      for (const auto& [level, cfg] : level_configs_)
+      for (auto lc_it = level_configs_.begin(); lc_it != level_configs_.end(); ++lc_it)
       {
-        if (hasExploration(cfg)) { exploration_enabled_ = true; break; }
+        if (hasExploration(lc_it->second)) { exploration_enabled_ = true; break; }
       }
 
       // --- Initialize SpectralDeconvolution (must match legacy path) ---
@@ -4043,11 +4046,13 @@ FLASHIda::FLASHIda(char* arg)
   void FLASHIda::applyOverrides_(ScanCommand& cmd,
       const std::unordered_map<std::string, std::string>& overrides) const
   {
-    for (const auto& [key, val] : overrides)
+    for (auto ov_it = overrides.begin(); ov_it != overrides.end(); ++ov_it)
     {
-      if (key == "agc_target") cmd.agc_target = static_cast<int32_t>(std::stod(val));
-      else if (key == "max_injection_time_ms") cmd.max_it = std::stod(val);
-      else if (key == "isolation_width") cmd.stages[0].isolation_width = std::stod(val);
+      const auto& okey = ov_it->first;
+      const auto& oval = ov_it->second;
+      if (okey == "agc_target") cmd.agc_target = static_cast<int32_t>(std::stod(oval));
+      else if (okey == "max_injection_time_ms") cmd.max_it = std::stod(oval);
+      else if (okey == "isolation_width") cmd.stages[0].isolation_width = std::stod(oval);
     }
   }
 
