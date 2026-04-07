@@ -87,6 +87,11 @@ namespace
       "fasta": "",
       "inclusion_list": "",
       "ptm_list": ""
+    },
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_precursors": 1 },
+      "ms2": { "selection": "intensity" },
+      "ms3": { "selection": "none" }
     }
   })";
 
@@ -160,6 +165,11 @@ namespace
       "fasta": "",
       "inclusion_list": "",
       "ptm_list": ""
+    },
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_precursors": 1 },
+      "ms2": { "selection": "intensity" },
+      "ms3": { "selection": "none" }
     }
   })";
 
@@ -232,6 +242,11 @@ namespace
       "fasta": "",
       "inclusion_list": "",
       "ptm_list": ""
+    },
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_precursors": 1 },
+      "ms2": { "selection": "intensity" },
+      "ms3": { "selection": "none" }
     }
   })";
 

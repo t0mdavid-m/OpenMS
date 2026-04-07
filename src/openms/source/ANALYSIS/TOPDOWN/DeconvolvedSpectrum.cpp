@@ -154,6 +154,8 @@ namespace OpenMS
                             opt_metadata_->fragmentation_quality_score);
       out_spec.setMetaValue("optimization_precursor_mass",
                             opt_metadata_->precursor_mass);
+      out_spec.setMetaValue("optimization_exploration_metric",
+                            static_cast<int>(opt_metadata_->exploration_metric));
     }
     return out_spec;
   }

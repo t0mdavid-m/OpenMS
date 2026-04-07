@@ -29,6 +29,7 @@ namespace OpenMS
     bool is_best_variant = false;
     int rank = 0;
     int msn_level_optimized = 0;
+    int exploration_metric = 0;  ///< ExplorationMetric enum cast to int
     int parent_tracking_id = 0;
     double collision_energy = 0;
     double isolation_width = 0;

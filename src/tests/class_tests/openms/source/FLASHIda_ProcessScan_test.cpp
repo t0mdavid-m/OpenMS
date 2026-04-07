@@ -50,7 +50,12 @@ namespace
       "agc_interval_seconds": 30
     },
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" }
+    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms2": { "selection": "intensity" },
+      "ms3": { "selection": "none" }
+    }
   })";
 
   // Config with MS3 mode 1 (SourceCID) enabled
@@ -81,7 +86,12 @@ namespace
     },
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "ms3": { "enabled": true, "mode": 1, "max_per_ms2": 2, "protein_sequence": "" },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" }
+    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms2": { "selection": "intensity" },
+      "ms3": { "selection": "intensity" }
+    }
   })";
 
   // Config with IDScore=true, AllCharges=false (activates sortByIDScoreRepresentative)
@@ -112,7 +122,12 @@ namespace
       "agc_interval_seconds": 30
     },
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" }
+    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms2": { "selection": "intensity" },
+      "ms3": { "selection": "none" }
+    }
   })";
 
   // Config with IDScore=true, AllCharges=true (activates sortByIDScoreAllCharges)
@@ -143,7 +158,12 @@ namespace
       "agc_interval_seconds": 30
     },
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" }
+    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms2": { "selection": "intensity" },
+      "ms3": { "selection": "none" }
+    }
   })";
 
   // Config with IDScore=false, AllCharges=true (activates sortByQScoreAllCharges)
@@ -174,7 +194,12 @@ namespace
       "agc_interval_seconds": 30
     },
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" }
+    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms2": { "selection": "intensity" },
+      "ms3": { "selection": "none" }
+    }
   })";
 
   // Config with quantification enabled and 2 MS2 configs (HCD+ETD, required for quant path)
@@ -205,7 +230,12 @@ namespace
       "agc_interval_seconds": 30
     },
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" }
+    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms2": { "selection": "intensity" },
+      "ms3": { "selection": "none" }
+    }
   })";
 
   // Config with tag-based targeting enabled via valid FASTA path, 2 MS2 configs
@@ -236,7 +266,12 @@ namespace
       "agc_interval_seconds": 30
     },
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
-    "files": { "target_logs": [], "fasta": "../../FlashIDA/test-data/configs/test_fasta.fasta", "inclusion_list": "", "ptm_list": "" }
+    "files": { "target_logs": [], "fasta": "../../FlashIDA/test-data/configs/test_fasta.fasta", "inclusion_list": "", "ptm_list": "" },
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms2": { "selection": "intensity" },
+      "ms3": { "selection": "none" }
+    }
   })";
 
   // Config with conditional MS2 enabled (no FASTA — tags cannot be found)
@@ -268,7 +303,12 @@ namespace
     },
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "conditional_ms2": true,
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" }
+    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms2": { "selection": "intensity" },
+      "ms3": { "selection": "none" }
+    }
   })";
 
   // Config with cycle_time enabled and value_ms=0 (always triggers), AGC suppressed
@@ -298,7 +338,12 @@ namespace
       "agc_interval_seconds": 999999
     },
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" }
+    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms2": { "selection": "intensity" },
+      "ms3": { "selection": "none" }
+    }
   })";
 
   // Config with agc_interval_seconds=0 (AGC triggers immediately)
@@ -328,7 +373,12 @@ namespace
       "agc_interval_seconds": 0
     },
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" }
+    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms2": { "selection": "intensity" },
+      "ms3": { "selection": "none" }
+    }
   })";
 
   // Config with conditional MS2 + tag targeting + FASTA (tags CAN be found)
@@ -360,7 +410,12 @@ namespace
     },
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "conditional_ms2": true,
-    "files": { "target_logs": [], "fasta": "../../FlashIDA/test-data/configs/test_fasta.fasta", "inclusion_list": "", "ptm_list": "" }
+    "files": { "target_logs": [], "fasta": "../../FlashIDA/test-data/configs/test_fasta.fasta", "inclusion_list": "", "ptm_list": "" },
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms2": { "selection": "intensity" },
+      "ms3": { "selection": "none" }
+    }
   })";
 
   // Config with quantification + low fold_change_threshold (any reporter ratio triggers)
@@ -391,7 +446,12 @@ namespace
       "agc_interval_seconds": 30
     },
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" }
+    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms2": { "selection": "intensity" },
+      "ms3": { "selection": "none" }
+    }
   })";
 
   // TSV file paths relative to the OpenMS build directory (CTest working dir)

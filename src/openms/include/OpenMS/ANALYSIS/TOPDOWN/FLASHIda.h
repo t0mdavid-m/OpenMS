@@ -819,8 +819,9 @@ namespace OpenMS
     /// Push conditional follow-up MS2 at priority 2
     void pushConditionalFollowUp_(const ScanCommand& ctx);
 
-    /// Phase 7 stub: process exploration result
-    void feedExplorationResult_(const ScanCommand& ctx);
+    /// Process returning exploration variant: score, select winner, trigger next level
+    void feedExplorationResult_(int group_id, int variant_index,
+                                const DeconvolvedSpectrum& ms2_deconv, double rt);
 
     /// Process MS2 scan: tracking resolution, deconv, routing
     int processMS2Path_(const double* mzs, const double* ints, int length, double rt_min, const char* scan_desc);
@@ -873,9 +874,89 @@ namespace OpenMS
     bool cycle_time_enabled_ = false, timeout_enabled_ = false;
     double cycle_time_ms_ = 60000.0, timeout_ms_ = 30000.0;
 
-    // exploration (stored for Phase 7)
+    // --- Phase 7: Selection and exploration config ---
+
+    /// Selection metric: how targets are ranked for MSn+1
+    enum class SelectionMetric
+    {
+      None = 0,    ///< No selection at this level — don't select targets for MSn+1
+      Intensity,   ///< Rank by raw intensity
+      QScore       ///< Rank by deconvolution quality score
+    };
+
+    /// Exploration metric: what to optimize during CE sweep (MS2+ only)
+    enum class ExplorationMetric
+    {
+      None = 0,            ///< No exploration at this level (default)
+      MassCount,           ///< Optimize for most deconvolved masses
+      RemainingPrecursor,  ///< Optimize for least remaining precursor intensity
+      FragmentCount        ///< Optimize for most fragment ions
+    };
+
+    /// Per-level config: selection (required) + exploration (optional, MS2+ only)
+    struct MSLevelConfig
+    {
+      SelectionMetric selection = SelectionMetric::Intensity;
+      int max_targets = 10;
+
+      ExplorationMetric exploration = ExplorationMetric::None;
+      double ce_min = 20.0;
+      double ce_max = 40.0;
+      double ce_step = 5.0;
+      std::string activation = "HCD";
+      std::unordered_map<std::string, std::string> overrides;
+    };
+
+    /// Returns true if this level has exploration enabled
+    static bool hasExploration(const MSLevelConfig& cfg)
+    {
+      return cfg.exploration != ExplorationMetric::None;
+    }
+
+    /// Single variant in an exploration CE sweep
+    struct ExplorationVariant
+    {
+      int variant_index = -1;
+      double collision_energy = 0.0;
+      std::string activation_type;
+      std::string tracking_id;
+      double score = -1.0;
+      float tic_coverage = 0.0f;
+      int fragment_count = 0;
+      bool received = false;
+      DeconvolvedSpectrum result{0};
+    };
+
+    /// Group of CE variants for one precursor at one MSn level
+    struct ExplorationGroup
+    {
+      int group_id = 0;
+      int msn_level = 2;
+      ExplorationMetric exploration_metric = ExplorationMetric::MassCount;
+      std::string parent_tracking_id;
+      double precursor_mz = 0.0;
+      double precursor_mass = 0.0;
+      int precursor_charge = 0;
+      double isolation_width = 0.0;
+      double faims_cv = 0.0;
+      uint64_t start_ms = 0;
+      std::vector<ExplorationVariant> variants;
+      int winner_index = -1;
+      bool complete = false;
+    };
+
+    /// Lookup reference from tracking ID to exploration group + variant
+    struct VariantRef
+    {
+      int group_id;
+      int variant_index;
+    };
+
+    /// Per-level config indexed by MSn level (1, 2, 3, ...)
+    std::unordered_map<int, MSLevelConfig> level_configs_;
+
+    /// Convenience flag: true if any level has exploration != None
     bool exploration_enabled_ = false;
-    int exploration_max_depth_ = 1, exploration_max_variants_ = 5;
 
     // quantification (stored — currently passed per-call via IsDifferentiallyAbundant)
     bool quant_enabled_ = false;
@@ -897,6 +978,102 @@ namespace OpenMS
 
     /// Advance to next non-skipped CV and return its value (port of C# getFAIMSMS1Scan cycling loop)
     double advanceToNextCV_();
+
+    // --- Phase 7: Exploration engine state and methods ---
+
+    /// Active exploration groups (group_id -> ExplorationGroup)
+    std::unordered_map<int, ExplorationGroup> active_exploration_groups_;
+
+    /// Next group ID (monotonically increasing, protected by queue_mutex_)
+    int next_exploration_group_id_ = 1;
+
+    /// Maps tracking_id (int) -> {group_id, variant_index} for variant result routing
+    std::unordered_map<int, VariantRef> variant_tracking_to_group_;
+
+    /// Get config for a given MSn level; returns default (selection=None, exploration=None) if unconfigured
+    const MSLevelConfig& getLevelConfig_(int msn_level) const
+    {
+      static const MSLevelConfig default_config{SelectionMetric::None, 10,
+          ExplorationMetric::None, 20.0, 40.0, 5.0, "HCD", {}};
+      auto it = level_configs_.find(msn_level);
+      return (it != level_configs_.end()) ? it->second : default_config;
+    }
+
+    // parseLevelConfig_, parseSelectionMetric_, parseExplorationMetric_ are
+    // implemented as file-scope helpers in FLASHIda.cpp (avoid nlohmann/json in header)
+
+    /// Generate CE variant values from min/max/step
+    std::vector<double> buildCEVariants_(double ce_min, double ce_max, double ce_step) const;
+
+    /// Build MS2 command with explicit CE and activation (for exploration variants)
+    ScanCommand buildMS2Command_(double precursor_mz, int charge, double ce, const std::string& activation);
+
+    /// Apply exploration parameter overrides to a ScanCommand
+    void applyOverrides_(ScanCommand& cmd, const std::unordered_map<std::string, std::string>& overrides) const;
+
+    /// Create exploration group with CE variants and enqueue at priority 0
+    void initiateExploration_(int msn_level, double precursor_mz, double precursor_mass,
+                              int precursor_charge, double faims_cv);
+
+    /// Generic MSn+1 follow-up after MSn processing
+    void initiateNextLevel_(int msn_level, const DeconvolvedSpectrum& result, double faims_cv);
+
+    /// Dispatch to metric-specific scorer
+    double computeExplorationScore_(ExplorationMetric metric, const DeconvolvedSpectrum& spec) const;
+
+    /// Score: number of deconvolved masses
+    double computeMassCount_(const DeconvolvedSpectrum& spec) const;
+
+    /// Score: fragmentation efficiency (higher = less remaining precursor)
+    double computeRemainingPrecursorScore_(const DeconvolvedSpectrum& spec) const;
+
+    /// Score: number of fragment ions
+    double computeFragmentCount_(const DeconvolvedSpectrum& spec) const;
+
+    /// Compute TIC coverage for metadata
+    float computeTICCoverage_(const DeconvolvedSpectrum& spec) const;
+
+  public:
+    // --- Phase 7: Test-only helpers ---
+
+    /// Test-only: get number of active exploration groups
+    int getActiveExplorationGroupCountForTest() const
+    {
+      std::lock_guard<std::mutex> lock(queue_mutex_);
+      return static_cast<int>(active_exploration_groups_.size());
+    }
+
+    /// Test-only: get exploration group by ID (caller must ensure group exists)
+    ExplorationGroup getExplorationGroupForTest(int group_id) const
+    {
+      std::lock_guard<std::mutex> lock(queue_mutex_);
+      return active_exploration_groups_.at(group_id);
+    }
+
+    /// Test-only: get level config for a given MSn level
+    const MSLevelConfig& getLevelConfigForTest(int level) const { return getLevelConfig_(level); }
+
+    /// Test-only: get queue size for a given priority
+    size_t getQueueSizeForTest(int priority) const
+    {
+      std::lock_guard<std::mutex> lock(queue_mutex_);
+      return queues_[priority].size();
+    }
+
+    /// Test-only: directly call initiateExploration_
+    void initiateExplorationForTest(int msn_level, double mz, double mass, int charge, double cv)
+    {
+      std::lock_guard<std::mutex> lock(queue_mutex_);
+      initiateExploration_(msn_level, mz, mass, charge, cv);
+    }
+
+    /// Test-only: directly call feedExplorationResult_
+    void feedExplorationResultForTest(int group_id, int variant_index,
+                                      const DeconvolvedSpectrum& ds, double rt)
+    {
+      std::lock_guard<std::mutex> lock(queue_mutex_);
+      feedExplorationResult_(group_id, variant_index, ds, rt);
+    }
 
   };
 }

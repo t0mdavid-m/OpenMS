@@ -3388,11 +3388,56 @@ FLASHIda::FLASHIda(char* arg)
       agc_interval_ms_ = static_cast<uint64_t>(agc_interval_sec * 1000.0);
       last_agc_time_ = std::chrono::steady_clock::now();
 
-      // exploration
-      auto expl = config.value("exploration", json::object());
-      exploration_enabled_ = expl.value("enabled", false);
-      exploration_max_depth_ = expl.value("max_depth", 1);
-      exploration_max_variants_ = expl.value("max_variants", 5);
+      // --- Phase 7: selection_strategy (required) ---
+      if (!config.contains("selection_strategy"))
+      {
+        throw std::runtime_error("FLASHIda: missing required 'selection_strategy' in JSON config");
+      }
+      auto& ss = config["selection_strategy"];
+      for (auto& [key, val] : ss.items())
+      {
+        if (key.substr(0, 2) == "ms" && key.size() > 2)
+        {
+          int level = std::stoi(key.substr(2));
+          MSLevelConfig cfg;
+          // Selection metric
+          std::string sel_str = val.value("selection", level == 1 ? std::string("qscore") : std::string("intensity"));
+          if (sel_str == "intensity") cfg.selection = SelectionMetric::Intensity;
+          else if (sel_str == "qscore") cfg.selection = SelectionMetric::QScore;
+          else if (sel_str == "none") cfg.selection = SelectionMetric::None;
+          else cfg.selection = SelectionMetric::Intensity;
+          // Max targets (with aliases)
+          cfg.max_targets = val.value("max_targets",
+              val.value("max_precursors",
+              val.value("max_fragments", 10)));
+          // Exploration (optional, MS2+ only)
+          if (val.contains("exploration") && level > 1)
+          {
+            auto& ex = val["exploration"];
+            std::string met_str = ex.value("metric", std::string("none"));
+            if (met_str == "mass_count") cfg.exploration = ExplorationMetric::MassCount;
+            else if (met_str == "remaining_precursor") cfg.exploration = ExplorationMetric::RemainingPrecursor;
+            else if (met_str == "fragment_count") cfg.exploration = ExplorationMetric::FragmentCount;
+            else cfg.exploration = ExplorationMetric::None;
+            cfg.ce_min = ex.value("ce_min", 20.0);
+            cfg.ce_max = ex.value("ce_max", 40.0);
+            cfg.ce_step = ex.value("ce_step", 5.0);
+            cfg.activation = ex.value("activation", std::string("HCD"));
+            if (ex.contains("overrides"))
+            {
+              for (auto& [okey, oval] : ex["overrides"].items())
+                cfg.overrides[okey] = oval.get<std::string>();
+            }
+          }
+          level_configs_[level] = cfg;
+        }
+      }
+      // Compute convenience boolean
+      exploration_enabled_ = false;
+      for (const auto& [level, cfg] : level_configs_)
+      {
+        if (hasExploration(cfg)) { exploration_enabled_ = true; break; }
+      }
 
       // --- Initialize SpectralDeconvolution (must match legacy path) ---
       snr_threshold_ = 1;
@@ -3611,6 +3656,19 @@ FLASHIda::FLASHIda(char* arg)
         cmd.faims_cv = parent_cv;  // MS2 carries parent MS1's CV
         pushCommand_(cmd);
         commands_pushed++;
+      }
+
+      // Phase 7: Initiate exploration for selected precursors if MS2 exploration is enabled
+      if (hasExploration(getLevelConfig_(2)))
+      {
+        for (int i = 0; i < n; i++)
+        {
+          auto [mz1, mz2] = selected_peak_groups_[i].getMzRange(trigger_charges[i]);
+          double center_mz = (mz1 + mz2) / 2.0;
+          initiateExploration_(2, center_mz,
+              selected_peak_groups_[i].getMonoMass(),
+              trigger_charges[i], parent_cv);
+        }
       }
 
       // FAIMS CV cycling: update skip policy, advance to next CV, push MS1
@@ -3936,11 +3994,286 @@ FLASHIda::FLASHIda(char* arg)
               << std::endl;
   }
 
-  void FLASHIda::feedExplorationResult_(const ScanCommand& ctx)
+  // --- Phase 7: Exploration engine implementation ---
+
+  std::vector<double> FLASHIda::buildCEVariants_(double ce_min, double ce_max, double ce_step) const
   {
-    // Phase 7 stub: log and return
-    std::string id_str = encodeBase36_(ctx.scan_id);
-    std::cout << "[EXPLORATION-STUB] id=" << id_str << " — exploration deferred to Phase 7" << std::endl;
+    std::vector<double> ces;
+    for (double ce = ce_min; ce <= ce_max + 1e-9; ce += ce_step)
+      ces.push_back(ce);
+    return ces;
+  }
+
+  ScanCommand FLASHIda::buildMS2Command_(double precursor_mz, int charge, double ce,
+                                          const std::string& activation)
+  {
+    ScanCommand cmd{};
+    cmd.msn_level = 2;
+    cmd.priority = 1;
+    cmd.is_agc = 0;
+    cmd.num_stages = 1;
+    cmd.scan_id = nextTrackingIdInt_();
+
+    if (!ms2_configs_.empty())
+    {
+      std::strncpy(cmd.analyzer, ms2_configs_[0].analyzer.c_str(), sizeof(cmd.analyzer) - 1);
+      cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';
+      cmd.orbitrap_resolution = ms2_configs_[0].resolution;
+    }
+    cmd.first_mass = ms1_first_mass_;
+    cmd.last_mass = ms1_last_mass_;
+    cmd.max_it = ms1_max_it_;
+    cmd.agc_target = ms1_agc_target_;
+
+    cmd.stages[0].precursor_mz = precursor_mz;
+    cmd.stages[0].isolation_width = 2.0;
+    cmd.stages[0].collision_energy = ce;
+    cmd.stages[0].charge_state = charge;
+    std::strncpy(cmd.stages[0].activation_type, activation.c_str(),
+                 sizeof(cmd.stages[0].activation_type) - 1);
+    cmd.stages[0].activation_type[sizeof(cmd.stages[0].activation_type) - 1] = '\0';
+
+    cmd.enqueue_timestamp_ms = static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+
+    return cmd;
+  }
+
+  void FLASHIda::applyOverrides_(ScanCommand& cmd,
+      const std::unordered_map<std::string, std::string>& overrides) const
+  {
+    for (const auto& [key, val] : overrides)
+    {
+      if (key == "agc_target") cmd.agc_target = static_cast<int32_t>(std::stod(val));
+      else if (key == "max_injection_time_ms") cmd.max_it = std::stod(val);
+      else if (key == "isolation_width") cmd.stages[0].isolation_width = std::stod(val);
+    }
+  }
+
+  void FLASHIda::initiateExploration_(int msn_level, double precursor_mz,
+      double precursor_mass, int precursor_charge, double faims_cv)
+  {
+    const auto& cfg = getLevelConfig_(msn_level);
+    if (!hasExploration(cfg)) return;
+
+    std::vector<double> ces = buildCEVariants_(cfg.ce_min, cfg.ce_max, cfg.ce_step);
+    if (ces.empty()) return;
+
+    ExplorationGroup group;
+    group.group_id = next_exploration_group_id_++;
+    group.msn_level = msn_level;
+    group.exploration_metric = cfg.exploration;
+    group.precursor_mz = precursor_mz;
+    group.precursor_mass = precursor_mass;
+    group.precursor_charge = precursor_charge;
+    group.isolation_width = 2.0;
+    group.faims_cv = faims_cv;
+    group.start_ms = static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+
+    for (int i = 0; i < static_cast<int>(ces.size()); ++i)
+    {
+      ExplorationVariant v;
+      v.variant_index = i;
+      v.collision_energy = ces[i];
+      v.activation_type = cfg.activation;
+
+      ScanCommand cmd = buildMS2Command_(precursor_mz, precursor_charge, ces[i], cfg.activation);
+      cmd.priority = 0;
+      cmd.faims_cv = faims_cv;
+      applyOverrides_(cmd, cfg.overrides);
+
+      int id_int = cmd.scan_id;
+      std::string id_str = encodeBase36_(id_int);
+      v.tracking_id = id_str;
+      std::snprintf(cmd.scan_description, sizeof(cmd.scan_description),
+                   "%s|EXPL CE=%.1f %.2f@%d", id_str.c_str(),
+                   ces[i], precursor_mass, precursor_charge);
+
+      group.variants.push_back(v);
+      variant_tracking_to_group_[id_int] = {group.group_id, i};
+      queues_[0].push_back(cmd);
+
+      std::cout << "[TRACK-CREATE] id=" << id_str
+                << " ms_level=" << msn_level << " type=exploration"
+                << " CE=" << ces[i] << std::endl;
+    }
+
+    active_exploration_groups_[group.group_id] = std::move(group);
+  }
+
+  double FLASHIda::computeExplorationScore_(ExplorationMetric metric,
+      const DeconvolvedSpectrum& spec) const
+  {
+    switch (metric)
+    {
+      case ExplorationMetric::MassCount:
+        return computeMassCount_(spec);
+      case ExplorationMetric::RemainingPrecursor:
+        return computeRemainingPrecursorScore_(spec);
+      case ExplorationMetric::FragmentCount:
+        return computeFragmentCount_(spec);
+      default:
+        return computeMassCount_(spec);
+    }
+  }
+
+  double FLASHIda::computeMassCount_(const DeconvolvedSpectrum& spec) const
+  {
+    return static_cast<double>(spec.size());
+  }
+
+  double FLASHIda::computeRemainingPrecursorScore_(const DeconvolvedSpectrum& spec) const
+  {
+    if (spec.empty()) return 0.0;
+    double tic = 0.0;
+    for (Size i = 0; i < spec.size(); ++i)
+      tic += spec[i].getIntensity();
+    return tic;
+  }
+
+  double FLASHIda::computeFragmentCount_(const DeconvolvedSpectrum& spec) const
+  {
+    return static_cast<double>(spec.size());
+  }
+
+  float FLASHIda::computeTICCoverage_(const DeconvolvedSpectrum& spec) const
+  {
+    if (spec.empty()) return 0.0f;
+    float total = 0.0f;
+    for (Size i = 0; i < spec.size(); ++i)
+      total += static_cast<float>(spec[i].getIntensity());
+    return total > 0.0f ? 1.0f : 0.0f;
+  }
+
+  void FLASHIda::feedExplorationResult_(int group_id, int variant_index,
+      const DeconvolvedSpectrum& ms2_deconv, double rt)
+  {
+    (void)rt;
+    auto git = active_exploration_groups_.find(group_id);
+    if (git == active_exploration_groups_.end()) return;
+    ExplorationGroup& group = git->second;
+
+    if (variant_index < 0 || variant_index >= static_cast<int>(group.variants.size())) return;
+    ExplorationVariant& v = group.variants[variant_index];
+    if (v.received) return;
+
+    v.result = ms2_deconv;
+    v.score = computeExplorationScore_(group.exploration_metric, ms2_deconv);
+    v.tic_coverage = computeTICCoverage_(ms2_deconv);
+    v.fragment_count = static_cast<int>(ms2_deconv.size());
+    v.received = true;
+
+    auto& meta = v.result.getOrCreateOptimizationMetadata();
+    meta.group_id = group.group_id;
+    meta.variant_index = variant_index;
+    meta.total_variants = static_cast<int>(group.variants.size());
+    meta.is_best_variant = false;
+    meta.msn_level_optimized = group.msn_level;
+    meta.exploration_metric = static_cast<int>(group.exploration_metric);
+    meta.collision_energy = v.collision_energy;
+    meta.activation_type = v.activation_type;
+    meta.precursor_mass = group.precursor_mass;
+    meta.precursor_charge = group.precursor_charge;
+    meta.fragmentation_quality_score = v.score;
+    meta.tic_coverage = v.tic_coverage;
+    meta.fragment_count = v.fragment_count;
+    meta.start_ms = group.start_ms;
+    meta.complete_ms = static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+    meta.exploration_scans = static_cast<int>(group.variants.size());
+
+    bool all_received = std::all_of(group.variants.begin(), group.variants.end(),
+                                    [](const ExplorationVariant& x){ return x.received; });
+    if (!all_received) return;
+
+    int best_idx = 0;
+    double best_score = group.variants[0].score;
+    for (int i = 1; i < static_cast<int>(group.variants.size()); ++i)
+    {
+      if (group.variants[i].score > best_score)
+      {
+        best_score = group.variants[i].score;
+        best_idx = i;
+      }
+    }
+    group.winner_index = best_idx;
+    group.complete = true;
+    group.variants[best_idx].result.getOrCreateOptimizationMetadata().is_best_variant = true;
+
+    std::cout << "[EXPL-WINNER] group=" << group.group_id
+              << " winner_idx=" << best_idx
+              << " CE=" << group.variants[best_idx].collision_energy
+              << " score=" << best_score << std::endl;
+
+    const auto& level_config = getLevelConfig_(group.msn_level);
+    if (!level_config.overrides.empty())
+    {
+      ScanCommand prod_cmd = buildMS2Command_(
+          group.precursor_mz, group.precursor_charge,
+          group.variants[best_idx].collision_energy,
+          group.variants[best_idx].activation_type);
+      prod_cmd.faims_cv = group.faims_cv;
+      prod_cmd.priority = 1;
+      queues_[1].push_back(prod_cmd);
+
+      std::string prod_id = encodeBase36_(prod_cmd.scan_id);
+      std::cout << "[TRACK-CREATE] id=" << prod_id
+                << " ms_level=" << group.msn_level << " type=production"
+                << std::endl;
+    }
+    else
+    {
+      initiateNextLevel_(group.msn_level,
+          group.variants[best_idx].result, group.faims_cv);
+    }
+
+    for (const auto& vr : group.variants)
+      variant_tracking_to_group_.erase(decodeBase36_(vr.tracking_id));
+
+    active_exploration_groups_.erase(git);
+  }
+
+  void FLASHIda::initiateNextLevel_(int msn_level, const DeconvolvedSpectrum& result,
+      double faims_cv)
+  {
+    int next_level = msn_level + 1;
+    const auto& next_cfg = getLevelConfig_(next_level);
+    if (next_cfg.selection == SelectionMetric::None) return;
+
+    std::vector<std::pair<double, double>> targets;  // (mass, intensity)
+    for (Size i = 0; i < result.size(); ++i)
+      targets.push_back({result[i].getMonoMass(), static_cast<double>(result[i].getIntensity())});
+
+    std::sort(targets.begin(), targets.end(),
+              [](const auto& a, const auto& b){ return a.second > b.second; });
+    int num_targets = std::min(static_cast<int>(targets.size()), next_cfg.max_targets);
+
+    if (hasExploration(next_cfg))
+    {
+      for (int ti = 0; ti < num_targets; ++ti)
+        initiateExploration_(next_level, targets[ti].first, 0.0, 0, faims_cv);
+    }
+    else
+    {
+      for (int ti = 0; ti < num_targets; ++ti)
+      {
+        ScanCommand cmd = buildMS2Command_(targets[ti].first, 0,
+            next_cfg.ce_min, next_cfg.activation);
+        cmd.msn_level = next_level;
+        cmd.faims_cv = faims_cv;
+        cmd.priority = 1;
+        pushCommand_(cmd);
+
+        std::string id_str = encodeBase36_(cmd.scan_id);
+        std::cout << "[TRACK-CREATE] id=" << id_str
+                  << " ms_level=" << next_level << " type=next_level"
+                  << std::endl;
+      }
+    }
   }
 
   int FLASHIda::processMS2Path_(const double* mzs, const double* ints, int length,
@@ -3959,6 +4292,26 @@ FLASHIda::FLASHIda(char* arg)
 
     std::string id_str = desc_str.substr(0, pipe_pos);
     int tracking_id = decodeBase36_(id_str);
+
+    // Phase 7: Check if this is an exploration variant (before pending_scan_map_)
+    auto vit = variant_tracking_to_group_.find(tracking_id);
+    if (vit != variant_tracking_to_group_.end())
+    {
+      int gid = vit->second.group_id;
+      int vidx = vit->second.variant_index;
+      variant_tracking_to_group_.erase(vit);
+
+      // Deconvolve the MS2 result for scoring
+      DeconvolvedSpectrum ms2_deconv(tracking_id);
+      if (mzs != nullptr && ints != nullptr && length > 0)
+      {
+        deconvolveMS2(mzs, ints, length, rt_min, 0.0, 0);
+        ms2_deconv = ms2_deconvolved_spectrum_;
+      }
+
+      feedExplorationResult_(gid, vidx, ms2_deconv, rt_min);
+      return commands_pushed;
+    }
 
     // Step 2: Look up pending scan context
     auto it = pending_scan_map_.find(tracking_id);
@@ -4008,15 +4361,16 @@ FLASHIda::FLASHIda(char* arg)
       commands_pushed++;
     }
 
-    // Exploration (Phase 7 stub)
-    if (exploration_enabled_)
+    // Step 5: MS3 targeting — uses level_configs_ when exploration is configured,
+    // falls back to legacy ms3_enabled_ path for standard MS3 targeting
+    if (hasExploration(getLevelConfig_(3)))
     {
-      feedExplorationResult_(ctx);
+      // MS3 exploration: create exploration groups for top fragments
+      initiateNextLevel_(2, ms2_deconvolved_spectrum_, ctx.faims_cv);
     }
-
-    // Step 5: MS3 targeting
-    if (ms3_enabled_ && ms3_mode_ > 0)
+    else if (ms3_enabled_ && ms3_mode_ > 0)
     {
+      // Legacy MS3 targeting (non-exploration)
       auto ms3_targets = selectMS3Targets_();
       for (const auto& t : ms3_targets)
       {
@@ -4025,6 +4379,11 @@ FLASHIda::FLASHIda(char* arg)
         pushCommand_(ms3_cmd);
         commands_pushed++;
       }
+    }
+    else if (getLevelConfig_(3).selection != SelectionMetric::None && !ms3_enabled_)
+    {
+      // New selection_strategy MS3 targeting (no exploration, not legacy)
+      initiateNextLevel_(2, ms2_deconvolved_spectrum_, ctx.faims_cv);
     }
 
     std::cout << "[TRACK-RESOLVE] id=" << id_str
@@ -4059,7 +4418,10 @@ FLASHIda::FLASHIda(char* arg)
     }
 
     // Step 2: Cycle time — force MS1 if too long since last survey scan
-    if (cycle_time_enabled_ && msSinceLastMS1_() > static_cast<uint64_t>(cycle_time_ms_))
+    // Suppressed while any exploration group is active (Phase 7)
+    bool exploration_active = !active_exploration_groups_.empty();
+    if (cycle_time_enabled_ && !exploration_active
+        && msSinceLastMS1_() > static_cast<uint64_t>(cycle_time_ms_))
     {
       out = makeMS1Command_();
       out.faims_cv = faims_enabled_ ? faims_cv_values_[current_cv_index_] : 0.0;
