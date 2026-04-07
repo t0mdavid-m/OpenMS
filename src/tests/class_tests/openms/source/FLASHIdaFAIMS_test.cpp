@@ -260,20 +260,23 @@ START_SECTION(cv_cycling_order_matches_config)
 {
   FLASHIda* ida = createFaims3CV();
 
-  // getNextScanCommand on empty queue triggers advanceToNextCV_() in fallback path.
-  // With current_cv_index_ starting at 0 and increment-first cycling:
-  //   first call -> index 1 -> CV -50
-  //   second call -> index 2 -> CV -60
-  //   third call -> index 0 (wrap) -> CV -40
-  //   fourth call -> index 1 -> CV -50 (full cycle verified)
+  // Each processScan at MS1 level pushes a CV-transition MS1 into the queue.
+  // current_cv_index_ starts at 0; advanceToNextCV_ increments first:
+  //   1st processScan -> advance to index 1 -> CV-transition MS1 with CV -50
+  //   2nd processScan -> advance to index 2 -> CV-transition MS1 with CV -60
+  //   3rd processScan -> advance to index 0 (wrap) -> CV-transition MS1 with CV -40
+  //   4th processScan -> advance to index 1 -> CV-transition MS1 with CV -50
   std::vector<double> expected_cvs = {-50, -60, -40, -50};
   for (size_t i = 0; i < expected_cvs.size(); ++i)
   {
+    ida->processScan(nullptr, nullptr, 0, (double)(i + 1), 1, "ms1", expected_cvs[i]);
     ScanCommand cmd{};
     int result = ida->getNextScanCommand(cmd);
     TEST_EQUAL(result, 1)
     TEST_EQUAL(cmd.msn_level, 1)
-    TEST_REAL_SIMILAR(cmd.faims_cv, expected_cvs[i])
+    TEST_REAL_SIMILAR(cmd.faims_cv, expected_cvs[(i + 1) % expected_cvs.size()])
+    // Drain any remaining
+    while (ida->getNextScanCommand(cmd) == 1) {}
   }
 
   delete ida;
@@ -285,45 +288,28 @@ START_SECTION(adaptive_cv_skip_low_precursor)
 {
   FLASHIda* ida = createFaimsSkip();
 
-  // Push a command with CV=-40 (index 0) that has 0 precursors (simulated via
-  // calling processScan with empty spectrum -> 0 commands_pushed -> triggers updateCVSkip_
-  // with precursor_count=0 which is < 15 threshold -> doubles CVSkipAmount[0] from 0 to 1)
+  // processScan with empty spectrum -> 0 precursors < threshold 15
+  // -> updateCVSkip_ doubles CVSkipAmount[0] from 0 to 1
+  // -> advanceToNextCV_: index 1 -> CV -50 (CVSkipAmount[1]=0, no skip)
   ida->processScan(nullptr, nullptr, 0, 1.0, 1, "ms1", -40.0);
 
-  // Now drain the queue — the CV transition MS1 was pushed by processScan.
-  // It should have advanced from CV index 0 to index 1 (CV -50).
   ScanCommand cmd{};
   int result = ida->getNextScanCommand(cmd);
   TEST_EQUAL(result, 1)
   TEST_EQUAL(cmd.msn_level, 1)
   TEST_REAL_SIMILAR(cmd.faims_cv, -50.0)  // advanced to next CV
 
-  // Push another empty scan at CV=-50 (index 1)
+  // Drain remaining
+  while (ida->getNextScanCommand(cmd) == 1) {}
+
+  // Second empty scan at CV=-50 -> CVSkipAmount[1] doubles 0->1
+  // advanceToNextCV_ from index 1: index 2 -> CV -60 (amount=0, use it)
   ida->processScan(nullptr, nullptr, 0, 2.0, 1, "ms1", -50.0);
 
-  // Drain — should advance to next CV.
-  // CV -40 (index 0) now has CVSkipAmount[0]=1, CVSkipCount[0]=0.
-  // advanceToNextCV_: index 2 -> CV -60 (CVSkipAmount[2]=1, skip), then
-  // index 0 -> CV -40 (CVSkipAmount[0]=1, CVSkipCount[0]=0 < 1, skip it, CVSkipCount=1),
-  // then index 1 -> CV -50 (CVSkipAmount[1]=1, CVSkipCount[1]=0 < 1, skip).
-  // With safety bound of 3 iterations, we end up at whatever CV we land on.
-  // Actually: after the second processScan at CV=-50, updateCVSkip_ sets CVSkipAmount[1] *= 2 = 0*2=0 -> min 1 -> 1.
-  // So all three CVs now have CVSkipAmount=1.
-  // advanceToNextCV_ from current_cv_index_=1:
-  //   index 2: CVSkipCount[2]=0 < CVSkipAmount[2]=1 -> skip, count becomes 1
-  //   index 0: CVSkipCount[0]=0 < CVSkipAmount[0]=1 -> skip, count becomes 1
-  //   index 1: CVSkipCount[1]=0 < CVSkipAmount[1]=1 -> skip, count becomes 1
-  //   safety fallback: returns CV at current_cv_index_=1 = -50
-  // Hmm, all skipped. This is the edge case. Let's just verify the command is valid.
   result = ida->getNextScanCommand(cmd);
   TEST_EQUAL(result, 1)
   TEST_EQUAL(cmd.msn_level, 1)
-  // The CV value should be one of the configured CVs
-  bool valid_cv = (std::abs(cmd.faims_cv - (-40.0)) < 0.01 ||
-                   std::abs(cmd.faims_cv - (-50.0)) < 0.01 ||
-                   std::abs(cmd.faims_cv - (-60.0)) < 0.01);
-  TEST_EQUAL(valid_cv, true)
-  (void)valid_cv;
+  TEST_REAL_SIMILAR(cmd.faims_cv, -60.0)  // advanced to CV -60
 
   delete ida;
 }
@@ -332,28 +318,24 @@ END_SECTION
 // P6-U03: CV skip limit enforced — after max_cv_skip, CV is still visited
 START_SECTION(cv_skip_limit_enforced)
 {
-  FLASHIda* ida = createFaimsSkip();  // max_cv_skip=2
+  FLASHIda* ida = createFaimsSkip();  // max_cv_skip=2, 3 CVs
 
-  // Drive 5 cycles with empty spectra at each CV to build up skip amounts.
-  // Each empty scan (0 precursors < 15) will double CVSkipAmount until it hits max_cv_skip=2.
-  for (int cycle = 0; cycle < 5; ++cycle)
-  {
-    ida->processScan(nullptr, nullptr, 0, (double)(cycle + 1), 1, "ms1", -40.0);
-    // Drain all pending commands
-    ScanCommand drain{};
-    while (ida->getNextScanCommand(drain) == 1 && drain.msn_level != 0) {}
-  }
-
-  // After 5 cycles, CVSkipAmount[0] should be capped at 2 (max_cv_skip).
-  // The CV should still be reachable — skip counters exhaust after max_cv_skip iterations.
-  // Drain commands and verify we see CV=-40 eventually (it's not permanently skipped).
+  // Drive multiple cycles with empty spectra to build up skip amounts for all CVs.
+  // After enough cycles, all CVSkipAmounts should be capped at 2.
+  // But the skip counters exhaust, so all CVs are still reachable.
   std::set<double> seen_cvs;
-  for (int i = 0; i < 20; ++i)
+  for (int cycle = 0; cycle < 15; ++cycle)
   {
-    ScanCommand cmd{};
-    int result = ida->getNextScanCommand(cmd);
-    if (result == 1)
-      seen_cvs.insert(cmd.faims_cv);
+    // Rotate through CVs
+    double cv = (cycle % 3 == 0) ? -40.0 : (cycle % 3 == 1) ? -50.0 : -60.0;
+    ida->processScan(nullptr, nullptr, 0, (double)(cycle + 1), 1, "ms1", cv);
+
+    // Drain and record CV values
+    ScanCommand drain{};
+    while (ida->getNextScanCommand(drain) == 1)
+    {
+      seen_cvs.insert(drain.faims_cv);
+    }
   }
 
   // All 3 CVs should appear — none permanently blocked
@@ -365,17 +347,17 @@ START_SECTION(cv_skip_limit_enforced)
 }
 END_SECTION
 
-// P6-U04: MS2 commands carry parent MS1's CV, MS1 fallback carries cycling CV
-START_SECTION(ms2_carries_parent_cv_ms1_carries_cycling_cv)
+// P6-U04: MS2 commands carry parent MS1's CV
+START_SECTION(ms2_carries_parent_cv)
 {
   FLASHIda* ida = createFaims3CV();
 
-  // Push a command to the queue with CV=-40 set explicitly (simulating an MS2 from parent MS1 at CV=-40)
+  // Push an MS2 with parent CV=-40 set at build time
   ScanCommand ms2{};
   ms2.msn_level = 2;
   ms2.priority = 1;
   ms2.scan_id = 999;
-  ms2.faims_cv = -40.0;  // parent MS1's CV, set at build time
+  ms2.faims_cv = -40.0;
   ida->pushCommandForTest(ms2);
 
   // Dequeue the MS2 — it should retain its parent CV
@@ -385,12 +367,9 @@ START_SECTION(ms2_carries_parent_cv_ms1_carries_cycling_cv)
   TEST_EQUAL(out.msn_level, 2)
   TEST_REAL_SIMILAR(out.faims_cv, -40.0)  // parent CV preserved
 
-  // Now dequeue again — queue empty, should get MS1 fallback with cycling CV
+  // Queue is now empty — returns 0
   result = ida->getNextScanCommand(out);
-  TEST_EQUAL(result, 1)
-  TEST_EQUAL(out.msn_level, 1)
-  // Cycling CV: starts at index 0, first advance -> index 1 -> CV -50
-  TEST_REAL_SIMILAR(out.faims_cv, -50.0)
+  TEST_EQUAL(result, 0)
 
   delete ida;
 }
@@ -401,7 +380,7 @@ START_SECTION(cv_transition_ms1_before_ms2s)
 {
   FLASHIda* ida = createFaims3CV();
 
-  // Push an MS2 at priority 2 with parent CV=-40
+  // Push two MS2s at priority 2 with parent CV=-40
   ScanCommand ms2_a{};
   ms2_a.msn_level = 2;
   ms2_a.priority = 2;
@@ -416,14 +395,10 @@ START_SECTION(cv_transition_ms1_before_ms2s)
   ms2_b.faims_cv = -40.0;
   ida->pushCommandForTest(ms2_b);
 
-  // Now simulate processScan at CV=-40 with empty spectrum.
-  // This will push a CV-transition MS1 at priority 0 (for the NEXT CV).
+  // processScan at CV=-40 pushes a CV-transition MS1 at priority 0 for next CV
   ida->processScan(nullptr, nullptr, 0, 1.0, 1, "ms1", -40.0);
 
-  // Dequeue order should be:
-  // 1. CV-transition MS1 (priority 0) — at next CV (index 1 = -50)
-  // 2. MS2 (priority 2) — parent CV -40
-  // 3. MS2 (priority 2) — parent CV -40
+  // Dequeue order: CV-transition MS1 (prio 0), then MS2s (prio 2)
   ScanCommand out{};
 
   ida->getNextScanCommand(out);
@@ -457,18 +432,13 @@ START_SECTION(non_faims_cv_is_zero)
 
   // Dequeue MS2
   ScanCommand out{};
-  ida->getNextScanCommand(out);
+  int result = ida->getNextScanCommand(out);
+  TEST_EQUAL(result, 1)
   TEST_REAL_SIMILAR(out.faims_cv, 0.0)
 
-  // Dequeue fallback MS1
-  ida->getNextScanCommand(out);
-  TEST_EQUAL(out.msn_level, 1)
-  TEST_REAL_SIMILAR(out.faims_cv, 0.0)
-
-  // Another fallback MS1
-  ida->getNextScanCommand(out);
-  TEST_EQUAL(out.msn_level, 1)
-  TEST_REAL_SIMILAR(out.faims_cv, 0.0)
+  // Queue empty -> returns 0
+  result = ida->getNextScanCommand(out);
+  TEST_EQUAL(result, 0)
 
   delete ida;
 }

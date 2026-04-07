@@ -4091,34 +4091,11 @@ FLASHIda::FLASHIda(char* arg)
       }
     }
 
-    // Step 5: Queue empty — provide MS1 fallback (replaces C# ScanScheduler)
-    if (faims_enabled_)
-    {
-      double next_cv = advanceToNextCV_();
-      out = makeMS1Command_();
-      out.faims_cv = next_cv;
-      out.scan_id = nextTrackingIdInt_();
-      last_ms1_time_ = std::chrono::steady_clock::now();
-
-      std::string id_str = encodeBase36_(out.scan_id);
-      std::snprintf(out.scan_description, sizeof(out.scan_description),
-                    "%s|MS1 survey CV=%.1f", id_str.c_str(), next_cv);
-      std::cout << "[TRACK-CREATE] id=" << id_str << " ms_level=1 type=faims_fallback cv=" << next_cv << std::endl;
-      return 1;
-    }
-
-    out = makeMS1Command_();
-    out.faims_cv = 0.0;
-    out.scan_id = nextTrackingIdInt_();
-    last_ms1_time_ = std::chrono::steady_clock::now();
-
-    {
-      std::string id_str = encodeBase36_(out.scan_id);
-      std::snprintf(out.scan_description, sizeof(out.scan_description),
-                    "%s|MS1 survey", id_str.c_str());
-      std::cout << "[TRACK-CREATE] id=" << id_str << " ms_level=1 type=fallback" << std::endl;
-    }
-    return 1;
+    // Step 5: Queue empty — no commands available
+    // The FAIMS CV-transition MS1 is pushed into the queue by processScan(),
+    // so it will be dequeued in Step 4 on the next call. The C# while-loop
+    // in ProcessSpectrum depends on returning 0 to stop draining.
+    return 0;
   }
 
   int FLASHIda::getNextTrackingId()

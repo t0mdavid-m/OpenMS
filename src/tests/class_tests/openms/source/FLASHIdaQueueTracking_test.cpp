@@ -131,15 +131,13 @@ START_SECTION(tracking_ids_sequential_unique)
 }
 END_SECTION
 
-// P3-U07: empty queue returns MS1 fallback (Phase 6: replaces C# ScanScheduler fallback)
-START_SECTION(empty_queue_returns_ms1_fallback)
+// P3-U07: empty queue returns 0 (no commands)
+START_SECTION(empty_queue_returns_zero)
 {
   FLASHIda* ida = createTestInstance();
   ScanCommand cmd{};
   int result = ida->getNextScanCommand(cmd);
-  TEST_EQUAL(result, 1)  // Returns MS1 fallback (not 0 — Phase 6 change)
-  TEST_EQUAL(cmd.msn_level, 1)
-  TEST_REAL_SIMILAR(cmd.faims_cv, 0.0)  // Non-FAIMS mode: CV is 0
+  TEST_EQUAL(result, 0)  // Queue empty, no commands
   delete ida;
 }
 END_SECTION
