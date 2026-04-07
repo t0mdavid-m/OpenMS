@@ -105,34 +105,33 @@ Boost (multiple components), Qt6, Xerces-C (XML), Eigen3 (linear algebra), SQLit
 
 GitHub Actions in `.github/workflows/`. Main pipeline: `openms_ci_matrix_full.yml` (Windows MSVC, macOS Intel/ARM, Ubuntu GCC/Clang). CDash dashboard at cdash.seqan.de.
 
-## FLASHIda Development (Phase 7 — Exploration Engine)
+## FLASHIda Development (Phase 8 — Cleanup + Documentation)
 
 This fork's `flashida-v9-bridge` branch is the active C++ development branch for FLASHIda. All C++ changes go here. The `build-dlls` workflow auto-triggers on push and produces `OpenMS.dll` for the C# side.
 
-### Key files for Phase 7
+### Key files for Phase 8
 
 All in `src/openms/{include,source}/OpenMS/ANALYSIS/TOPDOWN/`:
-- **FLASHIda.h** — Main header. Contains `ScanCommand` struct (1248 bytes, `static_assert` at line ~109), enums, and class definition. Phase 7 adds: `SelectionMetric`, `ExplorationMetric` enums, `MSLevelConfig` struct, `ExplorationGroup`/`ExplorationVariant` structs, `level_configs_` map, `variant_tracking_to_group_` map.
-- **FLASHIda.cpp** — Implementation (~3800 lines). `processScan()` is the main entry point (MS1/MS2 routing). Phase 7 adds: `parseLevelConfig_()`, `initiateExploration_()`, `feedExplorationResult_()`, `computeExplorationScore_()`, `initiateNextLevel_()`, `buildCEVariants_()`, `applyOverrides_()`.
-- **FLASHIdaBridgeFunctions.cpp/.h** — C bridge exports consumed by C# P/Invoke. Phase 7 does not add new exports.
-- **OptimizationMetadata.h** — 18-field struct for recording exploration outcomes. Already exists from Phase 2. `DeconvolvedSpectrum` carries `optional<OptimizationMetadata>`.
+- **FLASHIdaBridgeFunctions.h** — Remove 18 `extern "C" OPENMS_DLLAPI` declarations. Leave exactly 5: `CreateFLASHIda`, `DisposeFLASHIda`, `ProcessScan` (with `double faims_cv`), `GetNextScanCommand`, `GetNextTrackingId`.
+- **FLASHIdaBridgeFunctions.cpp** — Remove 18 function bodies. Leave 5 keepers only.
+- **FLASHIda.h** — Remove orphaned private method declarations (`getPeakGroupSize_`, `fillIsolationWindows_`, `deconvolveMS2_`, `resetScanState_`, `parseLegacy_`). **Do NOT remove** Phase 7 exploration methods (16 production + 6 ForTest helpers — see Phase 8 plan Step 4).
+- **FLASHIda.cpp** — Remove `parseLegacy_()` definition + `else parseLegacy_(arg)` branch in constructor. Remove orphaned private method bodies. Throw `std::invalid_argument` for non-JSON input.
+- **OptimizationMetadata.h** — 19-field struct (field 19 `exploration_metric` added in Phase 7). No changes in Phase 8.
 
-### Test file for Phase 7
+### Test files
 
-- New: `src/tests/class_tests/openms/source/FLASHIda_exploration_test.cpp`
-- Register in: `src/tests/class_tests/openms/executables.cmake`
-- Existing test binaries (must all remain in CI): `DeconvolvedSpectrum_OptimizationMetadata_test`, `FLASHIdaQueueTracking_test`, `FLASHIda_ProcessScan_test`, `ScanCommandLayout_test`, `FLASHIdaFAIMS_test`
+- **Existing (6 binaries, must all remain in CI):** `DeconvolvedSpectrum_OptimizationMetadata_test`, `FLASHIdaQueueTracking_test`, `FLASHIda_ProcessScan_test`, `ScanCommandLayout_test`, `FLASHIdaFAIMS_test`, `FLASHIda_exploration_test`
+- **New (Phase 8):** `src/tests/class_tests/openms/source/FLASHIda_LegacyConfig_test.cpp` — P8-U04 (legacy config rejection)
+- **Register in:** `src/tests/class_tests/openms/executables.cmake` — add `FLASHIda_LegacyConfig_test`
 
 ### Critical constraints
 
-- `IsolationStage.collision_energy` is `double` — all CE variables must be `double`, not `int`
-- `IsolationStage.activation_type` is `char[32]` — use 32-byte buffers
-- `ScanCommand` is 1248 bytes — do not change without the 6-file lockstep rule
-- MSVC `/WX` treats warnings as errors — use `(void)var;` for unused-in-release variables
+- `ScanCommand` is 1248 bytes — Phase 8 does NOT modify the struct
+- MSVC `/WX` treats warnings as errors — removing bridge functions may expose unused parameters (`C4100`) or unused variables (`C4189`); fix with `(void)var;` cast, never by commenting out singleton initializers
+- `parseJSONConfig_()` has `std::stringstream ss` at line ~3198 — use descriptive variable names, not `ss`/`it`/`cfg`
+- Test helpers follow `nameForTest()` pattern
 - `DeconvolvedSpectrum(int scan_number)` — constructor takes scan_number, NOT ms_level
-- `toSpectrum()` returns `MSSpectrum` by value and requires at least one PeakGroup
-- Test helpers follow `nameForTest()` pattern: `encodeBase36ForTest()`, `pushCommandForTest()`, `decodeBase36ForTest()`, `updateCVSkipForTest()`, `getCVSkipAmountForTest()`
 
-### Build batching
+### Build #4 (final)
 
-Phase 7 + Phase 8 = Build #4 (final). Batch all changes before pushing to `flashida-v9-bridge`. Each push triggers a ~40 min DLL build. Verify GCC compilation locally before pushing (MSVC has stricter warnings).
+Phase 7 C++ already shipped. Phase 8 C++ changes (dead code removal, legacy config rejection) are the remaining batch. Push once to `flashida-v9-bridge`, wait ~40 min for DLL build. Verify GCC compilation locally before pushing (MSVC has stricter warnings).
