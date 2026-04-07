@@ -455,6 +455,45 @@ namespace OpenMS
     /// Get the next monotonically increasing tracking ID (thread-safe)
     int getNextTrackingId();
 
+    // --- Phase 7: Public types for selection and exploration ---
+
+    /// Selection metric: how targets are ranked for MSn+1
+    enum class SelectionMetric
+    {
+      None = 0,    ///< No selection at this level — don't select targets for MSn+1
+      Intensity,   ///< Rank by raw intensity
+      QScore       ///< Rank by deconvolution quality score
+    };
+
+    /// Exploration metric: what to optimize during CE sweep (MS2+ only)
+    enum class ExplorationMetric
+    {
+      None = 0,            ///< No exploration at this level (default)
+      MassCount,           ///< Optimize for most deconvolved masses
+      RemainingPrecursor,  ///< Optimize for least remaining precursor intensity
+      FragmentCount        ///< Optimize for most fragment ions
+    };
+
+    /// Per-level config: selection (required) + exploration (optional, MS2+ only)
+    struct MSLevelConfig
+    {
+      SelectionMetric selection = SelectionMetric::Intensity;
+      int max_targets = 10;
+
+      ExplorationMetric exploration = ExplorationMetric::None;
+      double ce_min = 20.0;
+      double ce_max = 40.0;
+      double ce_step = 5.0;
+      std::string activation = "HCD";
+      std::unordered_map<std::string, std::string> overrides;
+    };
+
+    /// Returns true if this level has exploration enabled
+    static bool hasExploration(const MSLevelConfig& cfg)
+    {
+      return cfg.exploration != ExplorationMetric::None;
+    }
+
     /// Test-only accessor for encodeBase36_ (static, no state dependency)
     static std::string encodeBase36ForTest(int v) { return encodeBase36_(v); }
 
@@ -874,44 +913,7 @@ namespace OpenMS
     bool cycle_time_enabled_ = false, timeout_enabled_ = false;
     double cycle_time_ms_ = 60000.0, timeout_ms_ = 30000.0;
 
-    // --- Phase 7: Selection and exploration config ---
-
-    /// Selection metric: how targets are ranked for MSn+1
-    enum class SelectionMetric
-    {
-      None = 0,    ///< No selection at this level — don't select targets for MSn+1
-      Intensity,   ///< Rank by raw intensity
-      QScore       ///< Rank by deconvolution quality score
-    };
-
-    /// Exploration metric: what to optimize during CE sweep (MS2+ only)
-    enum class ExplorationMetric
-    {
-      None = 0,            ///< No exploration at this level (default)
-      MassCount,           ///< Optimize for most deconvolved masses
-      RemainingPrecursor,  ///< Optimize for least remaining precursor intensity
-      FragmentCount        ///< Optimize for most fragment ions
-    };
-
-    /// Per-level config: selection (required) + exploration (optional, MS2+ only)
-    struct MSLevelConfig
-    {
-      SelectionMetric selection = SelectionMetric::Intensity;
-      int max_targets = 10;
-
-      ExplorationMetric exploration = ExplorationMetric::None;
-      double ce_min = 20.0;
-      double ce_max = 40.0;
-      double ce_step = 5.0;
-      std::string activation = "HCD";
-      std::unordered_map<std::string, std::string> overrides;
-    };
-
-    /// Returns true if this level has exploration enabled
-    static bool hasExploration(const MSLevelConfig& cfg)
-    {
-      return cfg.exploration != ExplorationMetric::None;
-    }
+    // --- Phase 7: Selection and exploration config (private state below, public types above) ---
 
     /// Single variant in an exploration CE sweep
     struct ExplorationVariant
