@@ -478,6 +478,16 @@ namespace OpenMS
       return decodeBase36_(s);
     }
 
+    /// Test-only: directly call updateCVSkip_ to test threshold behavior
+    void updateCVSkipForTest(double cv, int precursor_count)
+    {
+      std::lock_guard<std::mutex> lock(queue_mutex_);
+      updateCVSkip_(cv, precursor_count);
+    }
+
+    /// Test-only: get the current CV skip amount for a given CV index
+    int getCVSkipAmountForTest(size_t index) const { return cv_skip_amount_[index]; }
+
     /**
            @brief parse FLASHIda log file
            @param in_log_file input log file

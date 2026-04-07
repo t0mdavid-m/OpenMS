@@ -266,15 +266,19 @@ START_SECTION(cv_cycling_order_matches_config)
   //   2nd processScan -> advance to index 2 -> CV-transition MS1 with CV -60
   //   3rd processScan -> advance to index 0 (wrap) -> CV-transition MS1 with CV -40
   //   4th processScan -> advance to index 1 -> CV-transition MS1 with CV -50
-  std::vector<double> expected_cvs = {-50, -60, -40, -50};
+
+  // Input: what the instrument scanned at (starts at initial CV -40, then follows transitions)
+  std::vector<double> input_cvs = {-40.0, -50.0, -60.0, -40.0};
+  // Output: what advanceToNextCV_ pushes as CV-transition MS1
+  std::vector<double> expected_cvs = {-50.0, -60.0, -40.0, -50.0};
   for (size_t i = 0; i < expected_cvs.size(); ++i)
   {
-    ida->processScan(nullptr, nullptr, 0, (double)(i + 1), 1, "ms1", expected_cvs[i]);
+    ida->processScan(nullptr, nullptr, 0, (double)(i + 1), 1, "ms1", input_cvs[i]);
     ScanCommand cmd{};
     int result = ida->getNextScanCommand(cmd);
     TEST_EQUAL(result, 1)
     TEST_EQUAL(cmd.msn_level, 1)
-    TEST_REAL_SIMILAR(cmd.faims_cv, expected_cvs[(i + 1) % expected_cvs.size()])
+    TEST_REAL_SIMILAR(cmd.faims_cv, expected_cvs[i])
     // Drain any remaining
     while (ida->getNextScanCommand(cmd) == 1) {}
   }
@@ -310,6 +314,35 @@ START_SECTION(adaptive_cv_skip_low_precursor)
   TEST_EQUAL(result, 1)
   TEST_EQUAL(cmd.msn_level, 1)
   TEST_REAL_SIMILAR(cmd.faims_cv, -60.0)  // advanced to CV -60
+
+  delete ida;
+}
+END_SECTION
+
+// P6-U02b: Threshold boundary — precursor_count at threshold does NOT trigger skip
+START_SECTION(adaptive_cv_skip_threshold_boundary)
+{
+  FLASHIda* ida = createFaimsSkip();  // threshold=15, max_cv_skip=2
+
+  // Precursor count = 14 (below threshold) -> should double skip amount 0->1
+  ida->updateCVSkipForTest(-40.0, 14);
+  TEST_EQUAL(ida->getCVSkipAmountForTest(0), 1)
+
+  // Precursor count = 15 (at threshold, NOT strictly less) -> should RESET to 0
+  ida->updateCVSkipForTest(-40.0, 15);
+  TEST_EQUAL(ida->getCVSkipAmountForTest(0), 0)
+
+  // Precursor count = 14 -> doubles 0->1 again
+  ida->updateCVSkipForTest(-40.0, 14);
+  TEST_EQUAL(ida->getCVSkipAmountForTest(0), 1)
+
+  // Precursor count = 14 -> doubles 1->2
+  ida->updateCVSkipForTest(-40.0, 14);
+  TEST_EQUAL(ida->getCVSkipAmountForTest(0), 2)
+
+  // Precursor count = 14 -> would double to 4 but capped at max_cv_skip=2
+  ida->updateCVSkipForTest(-40.0, 14);
+  TEST_EQUAL(ida->getCVSkipAmountForTest(0), 2)
 
   delete ida;
 }
@@ -418,27 +451,20 @@ START_SECTION(cv_transition_ms1_before_ms2s)
 }
 END_SECTION
 
-// P6-U06: Non-FAIMS mode — faims_cv is 0.0 on all commands
-START_SECTION(non_faims_cv_is_zero)
+// P6-U06: Non-FAIMS mode — processScan does not push CV-transition MS1
+START_SECTION(non_faims_no_cv_transition)
 {
   FLASHIda* ida = createNonFaims();
 
-  // Push an MS2 command (no FAIMS CV set -> default 0.0)
-  ScanCommand ms2{};
-  ms2.msn_level = 2;
-  ms2.priority = 1;
-  ms2.scan_id = 42;
-  ida->pushCommandForTest(ms2);
+  // Call processScan with non-FAIMS config (single CV = faims_enabled_=false).
+  // With null spectrum data, produces 0 MS2 commands.
+  // Key check: faims_enabled_=false means NO CV-transition MS1 is pushed.
+  ida->processScan(nullptr, nullptr, 0, 1.0, 1, "ms1", 0.0);
 
-  // Dequeue MS2
+  // Queue should be empty — no CV-transition MS1, no MS2 commands
   ScanCommand out{};
   int result = ida->getNextScanCommand(out);
-  TEST_EQUAL(result, 1)
-  TEST_REAL_SIMILAR(out.faims_cv, 0.0)
-
-  // Queue empty -> returns 0
-  result = ida->getNextScanCommand(out);
-  TEST_EQUAL(result, 0)
+  TEST_EQUAL(result, 0)  // nothing queued = non-FAIMS behavior confirmed
 
   delete ida;
 }
