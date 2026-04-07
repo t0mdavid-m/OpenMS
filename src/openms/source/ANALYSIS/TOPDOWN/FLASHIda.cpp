@@ -3412,8 +3412,8 @@ FLASHIda::FLASHIda(char* arg)
           cfg.max_targets = level_obj.value("max_targets",
               level_obj.value("max_precursors",
               level_obj.value("max_fragments", 10)));
-          // Exploration (optional, MS2+ only)
-          if (level_obj.contains("exploration") && level > 1)
+          // Exploration (optional, MS2+ only; guard against JSON null)
+          if (level_obj.contains("exploration") && !level_obj["exploration"].is_null() && level > 1)
           {
             const auto& expl_obj = level_obj["exploration"];
             std::string met_str = expl_obj.value("metric", std::string("none"));
