@@ -454,6 +454,42 @@ namespace
     }
   })";
 
+  // Config with agc_interval_seconds=9999 to disable timer-based AGC.
+  // Only idle cycle (empty queue) produces AGC/MS1 pairs.
+  const char* idle_cycle_json = R"({
+    "deconvolution": {
+      "score_threshold": 0.0, "tqscore_threshold": 0.9,
+      "min_charge": 4, "max_charge": 50,
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
+    },
+    "precursor_selection": {
+      "max_mass_count": [3], "RT_window": 180, "target_mode": 0,
+      "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
+      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    },
+    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
+    "faims": { "cv_values": [-50], "max_cv_skip": 0 },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
+      "ms2": [
+        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }
+      ]
+    },
+    "scheduling": {
+      "cycle_time": { "enabled": false, "value_ms": 60000 },
+      "scan_timeout": { "enabled": true, "value_ms": 30000 },
+      "agc_interval_seconds": 9999
+    },
+    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
+    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms2": { "selection": "intensity" },
+      "ms3": { "selection": "none" }
+    }
+  })";
+
   // TSV file paths relative to the OpenMS build directory (CTest working dir)
   const std::string ms1_tsv_path = "../../FlashIDA/test-data/spectra/ms1_standard.txt";
   const std::string ms2_tsv_path = "../../FlashIDA/test-data/spectra/ms2_hcd_fragment.txt";
@@ -1087,6 +1123,104 @@ START_SECTION(processScan_tag_targeting_produces_followups)
   TEST_EQUAL(out.msn_level, 2)
   // Conditional follow-up uses second MS2 config (ETD)
   TEST_STRING_EQUAL(std::string(out.stages[0].activation_type), "ETD")
+
+  delete ida;
+}
+END_SECTION
+
+// Idle cycle: empty queue produces alternating AGC then MS1, 3 full iterations
+START_SECTION(idle_cycle_agc_then_ms1)
+{
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(idle_cycle_json));
+
+  // No processScan — queue is empty from the start.
+  // Each getNextScanCommand call on an empty queue should produce an AGC (returned
+  // immediately) and push an MS1 at priority 0 into the queue. The next call
+  // dequeues that MS1.  So 6 calls = 3 AGC + 3 MS1, strictly alternating.
+  ScanCommand cmd{};
+
+  for (int iter = 0; iter < 3; ++iter)
+  {
+    // Odd call: AGC
+    int r1 = ida->getNextScanCommand(cmd);
+    TEST_EQUAL(r1, 1)
+    TEST_EQUAL(cmd.is_agc, 1)
+    TEST_EQUAL(cmd.msn_level, 1)
+    TEST_EQUAL(cmd.agc_target, 800000)
+    TEST_EQUAL(cmd.priority, 0)
+
+    // Scan description: XXXX|AGC calibration
+    std::string agc_desc(cmd.scan_description);
+    TEST_EQUAL(agc_desc.find("|AGC calibration") != std::string::npos, true)
+    TEST_EQUAL(agc_desc.find("|AGC calibration"), 4)
+
+    // Even call: MS1
+    int r2 = ida->getNextScanCommand(cmd);
+    TEST_EQUAL(r2, 1)
+    TEST_EQUAL(cmd.is_agc, 0)
+    TEST_EQUAL(cmd.msn_level, 1)
+    TEST_EQUAL(cmd.orbitrap_resolution, 120000)
+    TEST_EQUAL(cmd.priority, 0)
+
+    // Scan description: XXXX|MS1 survey
+    std::string ms1_desc(cmd.scan_description);
+    TEST_EQUAL(ms1_desc.find("|MS1 survey") != std::string::npos, true)
+    TEST_EQUAL(ms1_desc.find("|MS1 survey"), 4)
+  }
+
+  delete ida;
+}
+END_SECTION
+
+// Idle cycle MS1 at priority 0 beats queued MS2 at priority 1
+START_SECTION(idle_ms1_priority_beats_ms2)
+{
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(idle_cycle_json));
+
+  // Push an MS2 at priority 1
+  ScanCommand ms2_a{};
+  ms2_a.msn_level = 2;
+  ms2_a.priority = 1;
+  ms2_a.scan_id = 42;
+  ms2_a.faims_cv = -50.0;
+  ida->pushCommandForTest(ms2_a);
+
+  // First getNextScanCommand: MS2 at priority 1 (queue not empty, no idle cycle)
+  ScanCommand out{};
+  int r = ida->getNextScanCommand(out);
+  TEST_EQUAL(r, 1)
+  TEST_EQUAL(out.msn_level, 2)
+  TEST_EQUAL(out.scan_id, 42)
+  TEST_EQUAL(out.priority, 1)
+
+  // Second call: queue empty -> idle cycle fires: returns AGC, pushes MS1 at prio 0
+  r = ida->getNextScanCommand(out);
+  TEST_EQUAL(r, 1)
+  TEST_EQUAL(out.is_agc, 1)
+  TEST_EQUAL(out.msn_level, 1)
+  TEST_EQUAL(out.priority, 0)
+
+  // Now push another MS2 at priority 1 WHILE the idle MS1 sits at priority 0
+  ScanCommand ms2_b{};
+  ms2_b.msn_level = 2;
+  ms2_b.priority = 1;
+  ms2_b.scan_id = 43;
+  ms2_b.faims_cv = -50.0;
+  ida->pushCommandForTest(ms2_b);
+
+  // Third call: MS1 at priority 0 beats MS2 at priority 1
+  r = ida->getNextScanCommand(out);
+  TEST_EQUAL(r, 1)
+  TEST_EQUAL(out.is_agc, 0)
+  TEST_EQUAL(out.msn_level, 1)
+  TEST_EQUAL(out.priority, 0)
+
+  // Fourth call: MS2 at priority 1 is dequeued
+  r = ida->getNextScanCommand(out);
+  TEST_EQUAL(r, 1)
+  TEST_EQUAL(out.msn_level, 2)
+  TEST_EQUAL(out.scan_id, 43)
+  TEST_EQUAL(out.priority, 1)
 
   delete ida;
 }
