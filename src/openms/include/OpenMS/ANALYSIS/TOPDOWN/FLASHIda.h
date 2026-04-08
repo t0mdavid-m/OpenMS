@@ -494,8 +494,8 @@ namespace OpenMS
       return cfg.exploration != ExplorationMetric::None;
     }
 
-    /// Test-only accessor for encodeBase36_ (static, no state dependency)
-    static std::string encodeBase36ForTest(int v) { return encodeBase36_(v); }
+    /// Test-only accessor for encodeTracking_ (static, no state dependency)
+    static std::string encodeTrackingForTest(int v) { return encodeTracking_(v); }
 
     /// Test-only: push a command into the priority queue (thread-safe)
     void pushCommandForTest(ScanCommand cmd)
@@ -511,10 +511,10 @@ namespace OpenMS
       return pending_scan_map_.size();
     }
 
-    /// Test-only accessor: decode base-36 string to int
-    int decodeBase36ForTest(const std::string& s) const
+    /// Test-only accessor: decode tracking string to int
+    int decodeTrackingForTest(const std::string& s) const
     {
-      return decodeBase36_(s);
+      return decodeTracking_(s);
     }
 
     /// Test-only: directly call updateCVSkip_ to test threshold behavior
@@ -803,11 +803,11 @@ namespace OpenMS
 
     // --- Phase 3: Scan command queue infrastructure ---
 
-    /// Encode an integer as a 4-character base-36 string (0-9, a-z)
-    static std::string encodeBase36_(int value);
+    /// Encode an integer as a 3-character base-94 string (all printable ASCII 0x21-0x7E)
+    static std::string encodeTracking_(int value);
 
-    /// Decode a 4-character base-36 string back to integer
-    int decodeBase36_(const std::string& s) const;
+    /// Decode a 3-character base-94 string back to integer
+    int decodeTracking_(const std::string& s) const;
 
     /// Get next tracking ID (not thread-safe; caller must hold queue_mutex_)
     int nextTrackingIdInt_();
@@ -870,6 +870,9 @@ namespace OpenMS
 
     /// Mutex protecting queues_, tracking_id_counter_, pending_scan_map_
     mutable std::mutex queue_mutex_;
+
+    /// All 94 printable ASCII characters (0x21–0x7E) used as tracking ID alphabet
+    static const std::string tracking_alphabet_;
 
     /// Monotonically increasing tracking ID counter
     int tracking_id_counter_ = 0;

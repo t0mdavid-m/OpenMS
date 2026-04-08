@@ -320,6 +320,9 @@ namespace
 
 } // anonymous namespace
 
+// Static member definition: all 94 printable ASCII characters (0x21–0x7E)
+const std::string FLASHIda::tracking_alphabet_ = "!\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+
 /// optimal window margin
 inline const double optimal_window_margin_ = .4;
 
@@ -3103,23 +3106,24 @@ FLASHIda::FLASHIda(char* arg)
 
   // --- Phase 3: Scan command queue and tracking ---
 
-  std::string FLASHIda::encodeBase36_(int value)
+  std::string FLASHIda::encodeTracking_(int value)
   {
-    static const char digits[] = "0123456789abcdefghijklmnopqrstuvwxyz";
-    char buf[5] = {'0', '0', '0', '0', '\0'};
-    for (int i = 3; i >= 0; --i)
+    const int base = static_cast<int>(tracking_alphabet_.size());
+    char buf[4] = {tracking_alphabet_[0], tracking_alphabet_[0], tracking_alphabet_[0], '\0'};
+    for (int i = 2; i >= 0; --i)
     {
-      buf[i] = digits[value % 36];
-      value /= 36;
+      buf[i] = tracking_alphabet_[value % base];
+      value /= base;
     }
     return std::string(buf);
   }
 
   int FLASHIda::nextTrackingIdInt_()
   {
+    const int base = static_cast<int>(tracking_alphabet_.size());
+    const int max_id = base * base * base - 1;
     int id = tracking_id_counter_++;
-    // Wrap at 36^4 - 1 = 1679615 to stay within 4-char base-36 range
-    if (tracking_id_counter_ > 1679615)
+    if (tracking_id_counter_ > max_id)
       tracking_id_counter_ = 0;
     return id;
   }
@@ -3196,7 +3200,7 @@ FLASHIda::FLASHIda(char* arg)
       if (it->second.enqueue_timestamp_ms > 0 &&
           (now_ms - it->second.enqueue_timestamp_ms) > static_cast<uint64_t>(timeout_ms_))
       {
-        std::string id_str = encodeBase36_(it->first);
+        std::string id_str = encodeTracking_(it->first);
         std::cout << "[TRACK-EXPIRE] id=" << id_str
                   << " age_ms=" << (now_ms - it->second.enqueue_timestamp_ms)
                   << std::endl;
@@ -3334,7 +3338,7 @@ FLASHIda::FLASHIda(char* arg)
         ms1.scan_id = nextTrackingIdInt_();
         ms1.priority = 0;  // priority 0 to send before pending MS2s
 
-        std::string id_str = encodeBase36_(ms1.scan_id);
+        std::string id_str = encodeTracking_(ms1.scan_id);
         std::snprintf(ms1.scan_description, sizeof(ms1.scan_description),
                       "%s|CV transition MS1 CV=%.1f", id_str.c_str(), next_cv);
 
@@ -3355,18 +3359,17 @@ FLASHIda::FLASHIda(char* arg)
     return 0;
   }
 
-  int FLASHIda::decodeBase36_(const std::string& s) const
+  int FLASHIda::decodeTracking_(const std::string& s) const
   {
-    int result = 0;
+    const int base = static_cast<int>(tracking_alphabet_.size());
+    int value = 0;
     for (char c : s)
     {
-      result *= 36;
-      if (c >= '0' && c <= '9')
-        result += c - '0';
-      else if (c >= 'a' && c <= 'z')
-        result += 10 + (c - 'a');
+      Size pos = tracking_alphabet_.find(c);
+      if (pos == std::string::npos) return -1;
+      value = value * base + static_cast<int>(pos);
     }
-    return result;
+    return value;
   }
 
   ScanCommand FLASHIda::buildMS2Command_(const PeakGroup& pg, int charge, int hcd)
@@ -3427,7 +3430,7 @@ FLASHIda::FLASHIda(char* arg)
     cmd.stages[0].activation_type[sizeof(cmd.stages[0].activation_type) - 1] = '\0';
 
     // Scan description with tracking ID — base-36 format: {base36}|{mass:.2f}@{charge}
-    std::string id_str = encodeBase36_(id);
+    std::string id_str = encodeTracking_(id);
     char desc_buf[256];
     std::snprintf(desc_buf, sizeof(desc_buf), "%s|%.2f@%d", id_str.c_str(), pg.getMonoMass(), charge);
     std::strncpy(cmd.scan_description, desc_buf, sizeof(cmd.scan_description) - 1);
@@ -3497,7 +3500,7 @@ FLASHIda::FLASHIda(char* arg)
     cmd.stages[1].activation_type[sizeof(cmd.stages[1].activation_type) - 1] = '\0';
 
     // Description — base-36 format with optional ion annotation (modes 3/4)
-    std::string id_str = encodeBase36_(id);
+    std::string id_str = encodeTracking_(id);
     char desc_buf[256];
     if (ion_type != '\0' && frag_index > 0)
       std::snprintf(desc_buf, sizeof(desc_buf), "%s|MS3 %c%d mz=%.2f z=%d",
@@ -3591,7 +3594,7 @@ FLASHIda::FLASHIda(char* arg)
                  sizeof(cmd.stages[0].activation_type) - 1);
     cmd.stages[0].activation_type[sizeof(cmd.stages[0].activation_type) - 1] = '\0';
 
-    std::string id_str = encodeBase36_(cmd.scan_id);
+    std::string id_str = encodeTracking_(cmd.scan_id);
     char desc_buf[256];
     std::snprintf(desc_buf, sizeof(desc_buf), "%s|followup mz=%.2f", id_str.c_str(), cmd.stages[0].precursor_mz);
     std::strncpy(cmd.scan_description, desc_buf, sizeof(cmd.scan_description) - 1);
@@ -3627,7 +3630,7 @@ FLASHIda::FLASHIda(char* arg)
                  sizeof(cmd.stages[0].activation_type) - 1);
     cmd.stages[0].activation_type[sizeof(cmd.stages[0].activation_type) - 1] = '\0';
 
-    std::string id_str = encodeBase36_(cmd.scan_id);
+    std::string id_str = encodeTracking_(cmd.scan_id);
     char desc_buf[256];
     std::snprintf(desc_buf, sizeof(desc_buf), "%s|conditional mz=%.2f", id_str.c_str(), cmd.stages[0].precursor_mz);
     std::strncpy(cmd.scan_description, desc_buf, sizeof(cmd.scan_description) - 1);
@@ -3739,7 +3742,7 @@ FLASHIda::FLASHIda(char* arg)
       applyOverrides_(cmd, cfg.overrides);
 
       int id_int = cmd.scan_id;
-      std::string id_str = encodeBase36_(id_int);
+      std::string id_str = encodeTracking_(id_int);
       v.tracking_id = id_str;
       std::snprintf(cmd.scan_description, sizeof(cmd.scan_description),
                    "%s|EXPL CE=%.1f %.2f@%d", id_str.c_str(),
@@ -3873,7 +3876,7 @@ FLASHIda::FLASHIda(char* arg)
       prod_cmd.priority = 1;
       queues_[1].push_back(prod_cmd);
 
-      std::string prod_id = encodeBase36_(prod_cmd.scan_id);
+      std::string prod_id = encodeTracking_(prod_cmd.scan_id);
       std::cout << "[TRACK-CREATE] id=" << prod_id
                 << " ms_level=" << group.msn_level << " type=production"
                 << std::endl;
@@ -3885,7 +3888,7 @@ FLASHIda::FLASHIda(char* arg)
     }
 
     for (const auto& vr : group.variants)
-      variant_tracking_to_group_.erase(decodeBase36_(vr.tracking_id));
+      variant_tracking_to_group_.erase(decodeTracking_(vr.tracking_id));
 
     active_exploration_groups_.erase(git);
   }
@@ -3921,7 +3924,7 @@ FLASHIda::FLASHIda(char* arg)
         cmd.priority = 1;
         pushCommand_(cmd);
 
-        std::string id_str = encodeBase36_(cmd.scan_id);
+        std::string id_str = encodeTracking_(cmd.scan_id);
         std::cout << "[TRACK-CREATE] id=" << id_str
                   << " ms_level=" << next_level << " type=next_level"
                   << std::endl;
@@ -3944,7 +3947,7 @@ FLASHIda::FLASHIda(char* arg)
       return 0;
 
     std::string id_str = desc_str.substr(0, pipe_pos);
-    int tracking_id = decodeBase36_(id_str);
+    int tracking_id = decodeTracking_(id_str);
 
     // Phase 7: Check if this is an exploration variant (before pending_scan_map_)
     auto vit = variant_tracking_to_group_.find(tracking_id);
@@ -4060,7 +4063,7 @@ FLASHIda::FLASHIda(char* arg)
       last_agc_time_ = std::chrono::steady_clock::now();
 
       // Scan description with base-36 tracking ID
-      std::string id_str = encodeBase36_(out.scan_id);
+      std::string id_str = encodeTracking_(out.scan_id);
       char desc_buf[128];
       std::snprintf(desc_buf, sizeof(desc_buf), "%s|AGC calibration", id_str.c_str());
       std::strncpy(out.scan_description, desc_buf, sizeof(out.scan_description) - 1);
@@ -4081,7 +4084,7 @@ FLASHIda::FLASHIda(char* arg)
       out.scan_id = nextTrackingIdInt_();
       last_ms1_time_ = std::chrono::steady_clock::now();
 
-      std::string id_str = encodeBase36_(out.scan_id);
+      std::string id_str = encodeTracking_(out.scan_id);
       char desc_buf[128];
       std::snprintf(desc_buf, sizeof(desc_buf), "%s|MS1 survey", id_str.c_str());
       std::strncpy(out.scan_description, desc_buf, sizeof(out.scan_description) - 1);
@@ -4116,7 +4119,7 @@ FLASHIda::FLASHIda(char* arg)
       agc_cmd.scan_id = nextTrackingIdInt_();
       last_agc_time_ = std::chrono::steady_clock::now();
 
-      std::string agc_id_str = encodeBase36_(agc_cmd.scan_id);
+      std::string agc_id_str = encodeTracking_(agc_cmd.scan_id);
       char agc_desc_buf[128];
       std::snprintf(agc_desc_buf, sizeof(agc_desc_buf), "%s|AGC calibration", agc_id_str.c_str());
       std::strncpy(agc_cmd.scan_description, agc_desc_buf, sizeof(agc_cmd.scan_description) - 1);
@@ -4131,7 +4134,7 @@ FLASHIda::FLASHIda(char* arg)
       ms1_cmd.priority = 0;
       last_ms1_time_ = std::chrono::steady_clock::now();
 
-      std::string ms1_id_str = encodeBase36_(ms1_cmd.scan_id);
+      std::string ms1_id_str = encodeTracking_(ms1_cmd.scan_id);
       char ms1_desc_buf[128];
       std::snprintf(ms1_desc_buf, sizeof(ms1_desc_buf), "%s|MS1 survey", ms1_id_str.c_str());
       std::strncpy(ms1_cmd.scan_description, ms1_desc_buf, sizeof(ms1_cmd.scan_description) - 1);
