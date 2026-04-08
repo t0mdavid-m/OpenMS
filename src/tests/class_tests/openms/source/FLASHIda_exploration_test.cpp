@@ -563,7 +563,8 @@ START_SECTION(exploration_variants_priority_0)
     TEST_EQUAL(cmd.priority, 0)
     TEST_EQUAL(cmd.is_agc, 0)
     std::string desc(cmd.scan_description);
-    TEST_EQUAL(desc.find("|EXPL CE=") != std::string::npos, true)
+    TEST_EQUAL(desc.size() >= 4, true)
+    TEST_EQUAL(desc[3], 'E')
   }
 
   // Queue should be empty now — idle cycle returns AGC
@@ -618,7 +619,8 @@ START_SECTION(cycle_time_suppression_during_exploration)
   TEST_EQUAL(cmd.msn_level, 2)  // exploration variant, not MS1
   TEST_EQUAL(cmd.priority, 0)
   std::string desc(cmd.scan_description);
-  TEST_EQUAL(desc.find("|EXPL CE=") != std::string::npos, true)
+  TEST_EQUAL(desc.size() >= 4, true)
+  TEST_EQUAL(desc[3], 'E')
 
   delete ida;
 }

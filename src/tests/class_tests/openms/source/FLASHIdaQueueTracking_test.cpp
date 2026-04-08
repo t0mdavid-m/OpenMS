@@ -104,15 +104,19 @@ START_TEST(FLASHIdaQueueTracking, "$Id$")
 
 /////////////////////////////////////////////////////////////
 
-// P3-U05: encodeBase36_ correctness
-START_SECTION(encodeBase36_correctness)
+// P3-U05: encodeTracking_ correctness (base-94, 3-char, alphabet '!' to '~')
+START_SECTION(encodeTracking_correctness)
 {
-  TEST_STRING_EQUAL(FLASHIda::encodeBase36ForTest(0), "0000")
-  TEST_STRING_EQUAL(FLASHIda::encodeBase36ForTest(35), "000z")
-  TEST_STRING_EQUAL(FLASHIda::encodeBase36ForTest(36), "0010")
-  TEST_STRING_EQUAL(FLASHIda::encodeBase36ForTest(1679615), "zzzz")
-  // Mid-range value
-  TEST_STRING_EQUAL(FLASHIda::encodeBase36ForTest(1296), "0100")
+  // encode(0) = "!!!" (all zeros in base-94)
+  TEST_STRING_EQUAL(FLASHIda::encodeTrackingForTest(0), "!!!")
+  // encode(1) = "!!"" (last char advances to index 1 = '"')
+  TEST_STRING_EQUAL(FLASHIda::encodeTrackingForTest(1), "!!\"")
+  // encode(94) = "!"!" (middle char advances to index 1 = '"')
+  TEST_STRING_EQUAL(FLASHIda::encodeTrackingForTest(94), "!\"!")
+  // encode(830583) = "~~~" (max value: 94^3 - 1)
+  TEST_STRING_EQUAL(FLASHIda::encodeTrackingForTest(830583), "~~~")
+  // encode(8836) = '"!!' (94*94 = 8836, first char advances to index 1 = '"')
+  TEST_STRING_EQUAL(FLASHIda::encodeTrackingForTest(8836), "\"!!")
 }
 END_SECTION
 
@@ -127,8 +131,8 @@ START_SECTION(tracking_ids_sequential_unique)
     int id = ida->getNextTrackingId();
     TEST_EQUAL(seen.count(id), 0)
     TEST_EQUAL(id > prev, true)
-    // Verify ID stays within base-36 4-char range (36^4 = 1679616)
-    TEST_EQUAL(id < 1679616, true)
+    // Verify ID stays within base-94 3-char range (94^3 = 830584)
+    TEST_EQUAL(id < 830584, true)
     seen.insert(id);
     prev = id;
   }

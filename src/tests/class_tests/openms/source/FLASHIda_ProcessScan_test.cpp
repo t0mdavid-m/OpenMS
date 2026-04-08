@@ -586,8 +586,8 @@ START_SECTION(processScan_commands_dequeued)
     TEST_EQUAL(cmd.stages[0].precursor_mz > 0, true)
     TEST_EQUAL(cmd.stages[0].isolation_width > 0, true)
     TEST_EQUAL(cmd.stages[0].charge_state >= 4, true)
-    // Scan description starts with 4-char tracking ID
-    TEST_EQUAL(std::strlen(cmd.scan_description) >= 4, true)
+    // Scan description starts with 3-char tracking ID + type code
+    TEST_EQUAL(std::strlen(cmd.scan_description) >= 3, true)
     // Enqueue timestamp should be set
     TEST_EQUAL(cmd.enqueue_timestamp_ms > 0, true)
   }
@@ -625,13 +625,15 @@ START_SECTION(processScan_command_fields)
   TEST_EQUAL(cmd.stages[0].precursor_mz >= 500.0, true)
   TEST_EQUAL(cmd.stages[0].precursor_mz <= 2000.0, true)
 
-  // D1: Scan description format — 4-char base-36 ID, then |
+  // D1: Scan description format — 3-char base-94 ID, then type code
   std::string desc(cmd.scan_description);
-  auto pipe_pos = desc.find('|');
-  TEST_EQUAL(pipe_pos != std::string::npos, true)
-  TEST_EQUAL(pipe_pos, 4)  // 4-char base-36 ID
-  std::string id_part = desc.substr(0, pipe_pos);
-  TEST_EQUAL(id_part.find_first_not_of("0123456789abcdefghijklmnopqrstuvwxyz") == std::string::npos, true)
+  TEST_EQUAL(desc.size() >= 4, true)
+  std::string id_part = desc.substr(0, 3);
+  for (char c : id_part)
+  {
+    TEST_EQUAL(c >= 0x21 && c <= 0x7E, true)
+  }
+  TEST_EQUAL(desc[3], 'R')  // recording MS2
 
   delete ida;
 }
@@ -717,10 +719,10 @@ START_SECTION(processScan_conditional_ms2_followup)
   TEST_EQUAL(out.priority, 2)
   TEST_EQUAL(out.msn_level, 2)
 
-  // D1: Conditional follow-up uses base-36|conditional format
+  // D1: Conditional follow-up uses 3-char ID + type code 'C'
   std::string cond_desc(out.scan_description);
-  TEST_EQUAL(cond_desc.find("|conditional") != std::string::npos, true)
-  TEST_EQUAL(cond_desc.find("|conditional"), 4)  // After 4-char base-36 ID
+  TEST_EQUAL(cond_desc.size() >= 4, true)
+  TEST_EQUAL(cond_desc[3], 'C')
 
   delete ida;
 }
@@ -762,10 +764,10 @@ START_SECTION(processScan_ms3_commands)
       TEST_EQUAL(out.priority, 3)  // MS3 at lowest priority
       TEST_EQUAL(out.num_stages, 2)  // MS2 precursor + fragment target
 
-      // D1: MS3 scan description uses base-36|MS3 format
+      // D1: MS3 scan description uses 3-char ID + type code 'R' (recording)
       std::string ms3_desc(out.scan_description);
-      TEST_EQUAL(ms3_desc.find("|MS3") != std::string::npos, true)
-      TEST_EQUAL(ms3_desc.find("|MS3"), 4)  // After 4-char base-36 ID
+      TEST_EQUAL(ms3_desc.size() >= 4, true)
+      TEST_EQUAL(ms3_desc[3], 'R')  // MS3 recording
     }
   }
   TEST_EQUAL(ms3_count > 0, true)
@@ -774,8 +776,8 @@ START_SECTION(processScan_ms3_commands)
 }
 END_SECTION
 
-// P4-U08: decodeBase36 roundtrips with encodeBase36
-START_SECTION(decodeBase36_roundtrip)
+// P4-U08: decodeTracking roundtrips with encodeTracking
+START_SECTION(decodeTracking_roundtrip)
 {
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
   if (ms1_scans.empty()) { NOT_TESTABLE; break; }
@@ -787,19 +789,18 @@ START_SECTION(decodeBase36_roundtrip)
 
   ScanCommand cmd{};
   ida->getNextScanCommand(cmd);
-  // scan_description: {4-char base-36}|{payload}
+  // scan_description: {3-char base-94}{type_code}{payload}
   std::string desc(cmd.scan_description);
-  TEST_EQUAL(desc.size() >= 5, true)  // 4 chars + pipe
-  TEST_EQUAL(desc[4], '|')
-  std::string id_str = desc.substr(0, 4);
-  // Verify the ID is valid base-36
+  TEST_EQUAL(desc.size() >= 4, true)  // 3-char ID + type code
+  std::string id_str = desc.substr(0, 3);
+  // Verify the ID is valid base-94 (printable ASCII 0x21-0x7E)
   for (char c : id_str)
   {
-    TEST_EQUAL((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z'), true)
+    TEST_EQUAL(c >= 0x21 && c <= 0x7E, true)
   }
 
-  // Roundtrip: decoding the base-36 ID should give back cmd.scan_id
-  int decoded_id = ida->decodeBase36ForTest(id_str);
+  // Roundtrip: decoding the base-94 ID should give back cmd.scan_id
+  int decoded_id = ida->decodeTrackingForTest(id_str);
   TEST_EQUAL(decoded_id, cmd.scan_id)
 
   delete ida;
@@ -1023,10 +1024,10 @@ START_SECTION(processScan_cycle_time_enforcement)
   TEST_EQUAL(cmd.msn_level, 1)  // Cycle-time forced MS1
   TEST_EQUAL(cmd.priority, 3)   // MS1 commands get priority 3
 
-  // Scan description should be base-36 format: XXXX|MS1 survey
+  // Scan description: 3-char ID + type code 'S' for MS1 survey
   std::string desc(cmd.scan_description);
-  TEST_EQUAL(desc.find("|MS1 survey") != std::string::npos, true)
-  TEST_EQUAL(desc.find("|MS1 survey"), 4)
+  TEST_EQUAL(desc.size() >= 4, true)
+  TEST_EQUAL(desc[3], 'S')
 
   delete ida;
 }
@@ -1049,10 +1050,10 @@ START_SECTION(agc_command_values)
   TEST_STRING_EQUAL(std::string(cmd.analyzer), "IonTrap")
   TEST_EQUAL(cmd.priority, 0)
 
-  // Scan description: base-36 format XXXX|AGC calibration
+  // Scan description: 3-char ID + type code 'A' for AGC calibration
   std::string desc(cmd.scan_description);
-  TEST_EQUAL(desc.find("|AGC calibration") != std::string::npos, true)
-  TEST_EQUAL(desc.find("|AGC calibration"), 4)
+  TEST_EQUAL(desc.size() >= 4, true)
+  TEST_EQUAL(desc[3], 'A')
 
   delete ida;
 }
@@ -1151,10 +1152,10 @@ START_SECTION(idle_cycle_agc_then_ms1)
     TEST_EQUAL(cmd.agc_target, 800000)
     TEST_EQUAL(cmd.priority, 0)
 
-    // Scan description: XXXX|AGC calibration
+    // Scan description: 3-char ID + type code 'A' for AGC calibration
     std::string agc_desc(cmd.scan_description);
-    TEST_EQUAL(agc_desc.find("|AGC calibration") != std::string::npos, true)
-    TEST_EQUAL(agc_desc.find("|AGC calibration"), 4)
+    TEST_EQUAL(agc_desc.size() >= 4, true)
+    TEST_EQUAL(agc_desc[3], 'A')
 
     // Even call: MS1
     int r2 = ida->getNextScanCommand(cmd);
@@ -1164,10 +1165,10 @@ START_SECTION(idle_cycle_agc_then_ms1)
     TEST_EQUAL(cmd.orbitrap_resolution, 120000)
     TEST_EQUAL(cmd.priority, 0)
 
-    // Scan description: XXXX|MS1 survey
+    // Scan description: 3-char ID + type code 'S' for MS1 survey
     std::string ms1_desc(cmd.scan_description);
-    TEST_EQUAL(ms1_desc.find("|MS1 survey") != std::string::npos, true)
-    TEST_EQUAL(ms1_desc.find("|MS1 survey"), 4)
+    TEST_EQUAL(ms1_desc.size() >= 4, true)
+    TEST_EQUAL(ms1_desc[3], 'S')
   }
 
   delete ida;
