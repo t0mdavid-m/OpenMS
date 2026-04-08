@@ -39,7 +39,15 @@ namespace OpenMS
   FLASHIda *CreateFLASHIda(char *arg)
   {
     std::cout << " FLASHIda creating ... " << std::endl;
-    return new FLASHIda(arg);
+    try
+    {
+      return new FLASHIda(arg);
+    }
+    catch (const std::exception& e)
+    {
+      std::cerr << "CreateFLASHIda error: " << e.what() << std::endl;
+      return nullptr;
+    }
   }
 
   void DisposeFLASHIda(FLASHIda *pObject)
