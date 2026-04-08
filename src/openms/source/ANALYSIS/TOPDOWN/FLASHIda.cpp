@@ -552,23 +552,34 @@ FLASHIda::FLASHIda(char* arg)
 
   void FLASHIda::filterPeakGroupsUsingMassExclusion_(const int ms_level, const double rt)
   {
-    if (use_idscore_ && consider_all_Charge_states_ && hcd_energy_ < 0) {
-      deconvolved_spectrum_.sortByIDScoreAllCharges();
+    // IDScore replaces QScore but not intensity
+    if (use_idscore_)
+    {
+      if (consider_all_Charge_states_ && hcd_energy_ < 0) {
+        deconvolved_spectrum_.sortByIDScoreAllCharges();
+      }
+      else if (consider_all_Charge_states_) {
+        deconvolved_spectrum_.sortByIDScoreAllCharges(hcd_energy_);
+      }
+      else if (hcd_energy_ < 0) {
+        deconvolved_spectrum_.sortByIDScoreRepresentative();
+      }
+      else {
+        deconvolved_spectrum_.sortByIDScoreRepresentative(hcd_energy_);
+      }
     }
-    else if (use_idscore_ && consider_all_Charge_states_) {
-      deconvolved_spectrum_.sortByIDScoreAllCharges(hcd_energy_);
+    else if (getLevelConfig_(ms_level).selection == SelectionMetric::Intensity)
+    {
+      deconvolved_spectrum_.sortByIntensity();
     }
-    else if (use_idscore_ && !consider_all_Charge_states_ && hcd_energy_ < 0) {
-      deconvolved_spectrum_.sortByIDScoreRepresentative();
-    }
-    else if (use_idscore_ && !consider_all_Charge_states_) {
-      deconvolved_spectrum_.sortByIDScoreRepresentative(hcd_energy_);
-    }
-    else if (!use_idscore_ && consider_all_Charge_states_) {
-      deconvolved_spectrum_.sortByQScoreAllCharges();
-    }
-    else {
-      deconvolved_spectrum_.sortByQscore();
+    else
+    {
+      if (consider_all_Charge_states_) {
+        deconvolved_spectrum_.sortByQScoreAllCharges();
+      }
+      else {
+        deconvolved_spectrum_.sortByQscore();
+      }
     }
 
     // Apply priority tie-breaking when TSV targets are loaded
@@ -588,7 +599,7 @@ FLASHIda::FLASHIda(char* arg)
         });
     }
 
-    Size mass_count = (Size)mass_count_[ms_level - 1];
+    Size mass_count = (Size)getLevelConfig_(ms_level).max_targets;
     trigger_charges.clear();
     trigger_hcds.clear();
     trigger_scores.clear();
@@ -603,7 +614,7 @@ FLASHIda::FLASHIda(char* arg)
     trigger_ids_.reserve(mass_count);
     std::vector<int>* charges = nullptr;
 
-    selected_peak_groups_.reserve(mass_count_.size());
+    selected_peak_groups_.reserve(mass_count);
     std::set<double> current_selected_mzs;    // current selected mzs
     std::set<double> current_selected_masses; // current selected mzs
 
@@ -2788,10 +2799,6 @@ FLASHIda::FLASHIda(char* arg)
 
       // --- precursor_selection section ---
       auto ps = config.value("precursor_selection", json::object());
-      auto mass_count_arr = ps.value("max_mass_count", std::vector<int>{1});
-      for (int j : mass_count_arr)
-        mass_count_.push_back(j);
-
       rt_window_ = ps.value("RT_window", 180.0);
       targeting_mode_ = ps.value("target_mode", 0);
       use_idscore_ = ps.value("IDScore", false);
@@ -3298,6 +3305,10 @@ FLASHIda::FLASHIda(char* arg)
     if (ms_level == 1)
     {
       last_ms1_time_ = std::chrono::steady_clock::now();
+
+      // Selection=none: skip MS1 precursor selection entirely
+      if (getLevelConfig_(1).selection == SelectionMetric::None)
+        return 0;
 
       // MS1 path: deconvolve, score, filter, select top-N, push MS2 commands
       double parent_cv = faims_enabled_ ? faims_cv : 0.0;

@@ -739,9 +739,6 @@ namespace OpenMS
     double qscore_threshold_;
     /// retention time window - determined from C# side
     double rt_window_;
-    /// how many masses will be selected per ms level? - determined from C# side
-    IntList mass_count_;
-
     int targeting_mode_ = 0; /// 0 no targeting 1 inclusive 2 exclusive 3 deep
 
     /// maps for global inclusion targeting
