@@ -136,13 +136,14 @@ START_SECTION(tracking_ids_sequential_unique)
 }
 END_SECTION
 
-// P3-U07: empty queue returns 0 (no commands)
-START_SECTION(empty_queue_returns_zero)
+// P3-U07: empty queue returns idle AGC (never returns 0)
+START_SECTION(empty_queue_returns_idle_agc)
 {
   FLASHIda* ida = createTestInstance();
   ScanCommand cmd{};
   int result = ida->getNextScanCommand(cmd);
-  TEST_EQUAL(result, 0)  // Queue empty, no commands
+  TEST_EQUAL(result, 1)  // Queue empty, idle cycle returns AGC
+  TEST_EQUAL(cmd.is_agc, 1)
   delete ida;
 }
 END_SECTION
@@ -185,9 +186,10 @@ START_SECTION(queue_priority_dequeue_order)
   TEST_EQUAL(out.scan_id, 100)  // priority 3
   TEST_EQUAL(out.priority, 3)
 
-  // Queue empty — should return 0
-  int empty_result = ida->getNextScanCommand(out);
-  TEST_EQUAL(empty_result, 0)
+  // Queue empty — idle cycle returns AGC (never returns 0)
+  int idle_result = ida->getNextScanCommand(out);
+  TEST_EQUAL(idle_result, 1)
+  TEST_EQUAL(out.is_agc, 1)
 
   delete ida;
 }
@@ -258,7 +260,8 @@ START_SECTION(timeout_cleanup_no_crash)
   // Calling getNextScanCommand (which calls cleanupExpiredCommands_) should not crash.
   ScanCommand cmd{};
   int result = ida->getNextScanCommand(cmd);
-  TEST_EQUAL(result, 0)  // Queue empty, returns 0
+  TEST_EQUAL(result, 1)  // Queue empty, idle cycle returns AGC
+  TEST_EQUAL(cmd.is_agc, 1)
   delete ida;
 }
 END_SECTION

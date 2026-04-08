@@ -566,10 +566,11 @@ START_SECTION(exploration_variants_priority_0)
     TEST_EQUAL(desc.find("|EXPL CE=") != std::string::npos, true)
   }
 
-  // Queue should be empty now
-  ScanCommand empty{};
-  int result = ida->getNextScanCommand(empty);
-  TEST_EQUAL(result, 0)
+  // Queue should be empty now — idle cycle returns AGC
+  ScanCommand idle{};
+  int result = ida->getNextScanCommand(idle);
+  TEST_EQUAL(result, 1)
+  TEST_EQUAL(idle.is_agc, 1)
 
   delete ida;
 }

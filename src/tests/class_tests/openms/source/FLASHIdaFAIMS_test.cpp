@@ -294,8 +294,8 @@ START_SECTION(cv_cycling_order_matches_config)
     TEST_EQUAL(result, 1)
     TEST_EQUAL(cmd.msn_level, 1)
     TEST_REAL_SIMILAR(cmd.faims_cv, expected_cvs[i])
-    // Drain any remaining
-    while (ida->getNextScanCommand(cmd) == 1) {}
+    // Drain queued commands; stop at idle AGC
+    while (ida->getNextScanCommand(cmd) == 1) { if (cmd.is_agc) break; }
   }
 
   delete ida;
@@ -319,7 +319,7 @@ START_SECTION(adaptive_cv_skip_low_precursor)
   TEST_REAL_SIMILAR(cmd.faims_cv, -50.0)  // advanced to next CV
 
   // Drain remaining
-  while (ida->getNextScanCommand(cmd) == 1) {}
+  while (ida->getNextScanCommand(cmd) == 1) { if (cmd.is_agc) break; }
 
   // Second empty scan at CV=-50 -> CVSkipAmount[1] doubles 0->1
   // advanceToNextCV_ from index 1: index 2 -> CV -60 (amount=0, use it)
@@ -383,6 +383,7 @@ START_SECTION(cv_skip_limit_enforced)
     while (ida->getNextScanCommand(drain) == 1)
     {
       seen_cvs.insert(drain.faims_cv);
+      if (drain.is_agc) break; // idle cycle = queue empty
     }
   }
 
@@ -415,9 +416,10 @@ START_SECTION(ms2_carries_parent_cv)
   TEST_EQUAL(out.msn_level, 2)
   TEST_REAL_SIMILAR(out.faims_cv, -40.0)  // parent CV preserved
 
-  // Queue is now empty — returns 0
+  // Queue is now empty — idle cycle returns AGC
   result = ida->getNextScanCommand(out);
-  TEST_EQUAL(result, 0)
+  TEST_EQUAL(result, 1)
+  TEST_EQUAL(out.is_agc, 1)
 
   delete ida;
 }
@@ -479,7 +481,8 @@ START_SECTION(non_faims_no_cv_transition)
   // Queue should be empty — no CV-transition MS1, no MS2 commands
   ScanCommand out{};
   int result = ida->getNextScanCommand(out);
-  TEST_EQUAL(result, 0)  // nothing queued = non-FAIMS behavior confirmed
+  TEST_EQUAL(result, 1)  // idle cycle returns AGC = non-FAIMS behavior confirmed
+  TEST_EQUAL(out.is_agc, 1)
 
   delete ida;
 }

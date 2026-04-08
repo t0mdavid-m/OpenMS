@@ -592,9 +592,10 @@ START_SECTION(processScan_commands_dequeued)
     TEST_EQUAL(cmd.enqueue_timestamp_ms > 0, true)
   }
 
-  // Queue empty — next call returns 0
-  int empty_result = ida->getNextScanCommand(cmd);
-  TEST_EQUAL(empty_result, 0)
+  // Queue empty — idle cycle returns AGC (never returns 0)
+  int idle_result = ida->getNextScanCommand(cmd);
+  TEST_EQUAL(idle_result, 1)
+  TEST_EQUAL(cmd.is_agc, 1)
 
   delete ida;
 }
@@ -710,7 +711,7 @@ START_SECTION(processScan_conditional_ms2_followup)
   while (true)
   {
     int r = ida->getNextScanCommand(out);
-    if (r == 0 || out.priority != 1) break;
+    if (r == 0 || out.is_agc || out.priority != 1) break;
   }
   // Should get priority-2 conditional follow-up
   TEST_EQUAL(out.priority, 2)
@@ -754,6 +755,7 @@ START_SECTION(processScan_ms3_commands)
   int ms3_count = 0;
   while (ida->getNextScanCommand(out) == 1)
   {
+    if (out.is_agc) break; // idle cycle = queue empty
     if (out.msn_level == 3)
     {
       ms3_count++;
@@ -955,7 +957,7 @@ START_SECTION(processScan_quant_followup)
   while (true)
   {
     int r = ida->getNextScanCommand(out);
-    if (r == 0) break;
+    if (r == 0 || out.is_agc) break; // idle cycle = queue empty
     if (out.priority != 1) { found_followup = true; break; }
   }
   TEST_EQUAL(found_followup, true)
@@ -1117,7 +1119,7 @@ START_SECTION(processScan_tag_targeting_produces_followups)
   while (true)
   {
     int r = ida->getNextScanCommand(out);
-    if (r == 0 || out.priority != 1) break;
+    if (r == 0 || out.is_agc || out.priority != 1) break;
   }
   TEST_EQUAL(out.priority, 2)
   TEST_EQUAL(out.msn_level, 2)
