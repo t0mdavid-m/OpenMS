@@ -294,8 +294,10 @@ START_SECTION(cv_cycling_order_matches_config)
     TEST_EQUAL(result, 1)
     TEST_EQUAL(cmd.msn_level, 1)
     TEST_REAL_SIMILAR(cmd.faims_cv, expected_cvs[i])
-    // Drain queued commands; stop at idle AGC
-    while (ida->getNextScanCommand(cmd) == 1) { if (cmd.is_agc) break; }
+    // Drain queued commands; stop at idle AGC + consume following idle MS1
+    while (ida->getNextScanCommand(cmd) == 1) {
+      if (cmd.is_agc) { ida->getNextScanCommand(cmd); break; }
+    }
   }
 
   delete ida;
@@ -318,8 +320,10 @@ START_SECTION(adaptive_cv_skip_low_precursor)
   TEST_EQUAL(cmd.msn_level, 1)
   TEST_REAL_SIMILAR(cmd.faims_cv, -50.0)  // advanced to next CV
 
-  // Drain remaining
-  while (ida->getNextScanCommand(cmd) == 1) { if (cmd.is_agc) break; }
+  // Drain remaining; consume idle AGC + following idle MS1
+  while (ida->getNextScanCommand(cmd) == 1) {
+    if (cmd.is_agc) { ida->getNextScanCommand(cmd); break; }
+  }
 
   // Second empty scan at CV=-50 -> CVSkipAmount[1] doubles 0->1
   // advanceToNextCV_ from index 1: index 2 -> CV -60 (amount=0, use it)
@@ -382,8 +386,8 @@ START_SECTION(cv_skip_limit_enforced)
     ScanCommand drain{};
     while (ida->getNextScanCommand(drain) == 1)
     {
+      if (drain.is_agc) { ida->getNextScanCommand(drain); break; } // consume idle AGC + MS1
       seen_cvs.insert(drain.faims_cv);
-      if (drain.is_agc) break; // idle cycle = queue empty
     }
   }
 
