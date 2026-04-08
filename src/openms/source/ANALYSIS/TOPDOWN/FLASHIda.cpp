@@ -3926,16 +3926,12 @@ FLASHIda::FLASHIda(char* arg)
   {
     int commands_pushed = 0;
 
-    // Step 1: Decode tracking ID from scan_description format: {base36_id}|{payload}
+    // Step 1: Decode tracking ID from scan_description — fixed position chars 0-2
     std::string desc_str = scan_desc ? scan_desc : "";
-    if (desc_str.empty())
+    if (desc_str.size() < 3)
       return 0;
 
-    Size pipe_pos = desc_str.find('|');
-    if (pipe_pos == std::string::npos)
-      return 0;
-
-    std::string id_str = desc_str.substr(0, pipe_pos);
+    std::string id_str = desc_str.substr(0, 3);
     int tracking_id = decodeTracking_(id_str);
 
     // Phase 7: Check if this is an exploration variant (before pending_scan_map_)
