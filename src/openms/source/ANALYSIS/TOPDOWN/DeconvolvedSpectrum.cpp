@@ -475,4 +475,9 @@ namespace OpenMS
     });
   }
 
+  void DeconvolvedSpectrum::sortByIntensity()
+  {
+    std::sort(peak_groups_.begin(), peak_groups_.end(), [](const PeakGroup& p1, const PeakGroup& p2) { return p1.getMaxChargeIntensity() > p2.getMaxChargeIntensity(); });
+  }
+
 } // namespace OpenMS

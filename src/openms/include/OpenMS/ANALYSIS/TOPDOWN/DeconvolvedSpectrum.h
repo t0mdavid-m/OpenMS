@@ -172,6 +172,8 @@ namespace OpenMS
     void sortByIDScoreAllCharges();
     /// sort by IDScore across all charge states for a specific HCD energy
     void sortByIDScoreAllCharges(int hcd_energy);
+    /// Sort by most intense charge state per peak group (descending)
+    void sortByIntensity();
 
     /// comparison operators
     bool operator<(const DeconvolvedSpectrum& a) const;

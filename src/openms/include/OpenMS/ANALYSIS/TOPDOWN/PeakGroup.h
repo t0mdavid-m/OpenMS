@@ -144,6 +144,9 @@ namespace OpenMS
     /// get intensity
     float getIntensity() const;
 
+    /// Returns the intensity of the most intense charge state
+    float getMaxChargeIntensity() const;
+
     /// get per abs_charge SNR
     float getChargeSNR(int abs_charge) const;
 

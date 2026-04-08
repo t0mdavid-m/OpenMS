@@ -861,6 +861,19 @@ namespace OpenMS
     return intensity_;
   }
 
+  float PeakGroup::getMaxChargeIntensity() const
+  {
+    float max_int = 0.0f;
+    for (int c = min_abs_charge_; c <= max_abs_charge_; c++)
+    {
+      if (c >= 0 && c < (int)per_charge_int_.size() && per_charge_int_[c] > max_int)
+      {
+        max_int = per_charge_int_[c];
+      }
+    }
+    return max_int;
+  }
+
   float PeakGroup::getIsotopeCosine() const
   {
     return isotope_cosine_score_;
