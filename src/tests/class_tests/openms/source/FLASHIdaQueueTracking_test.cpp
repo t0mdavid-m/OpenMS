@@ -147,6 +147,7 @@ START_SECTION(empty_queue_returns_idle_agc)
   ScanCommand cmd{};
   int result = ida->getNextScanCommand(cmd);
   TEST_EQUAL(result, 1)  // Queue empty, idle cycle returns AGC
+  TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
   TEST_EQUAL(cmd.is_agc, 1)
   delete ida;
 }
@@ -179,20 +180,24 @@ START_SECTION(queue_priority_dequeue_order)
   // Dequeue should return priority 1, then 2, then 3
   ScanCommand out{};
   ida->getNextScanCommand(out);
+  TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
   TEST_EQUAL(out.scan_id, 101)  // priority 1
   TEST_EQUAL(out.priority, 1)
 
   ida->getNextScanCommand(out);
+  TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
   TEST_EQUAL(out.scan_id, 102)  // priority 2
   TEST_EQUAL(out.priority, 2)
 
   ida->getNextScanCommand(out);
+  TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
   TEST_EQUAL(out.scan_id, 100)  // priority 3
   TEST_EQUAL(out.priority, 3)
 
   // Queue empty — idle cycle returns AGC (never returns 0)
   int idle_result = ida->getNextScanCommand(out);
   TEST_EQUAL(idle_result, 1)
+  TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
   TEST_EQUAL(out.is_agc, 1)
 
   delete ida;
@@ -249,6 +254,7 @@ START_SECTION(agc_scan_is_dequeued_first)
   ScanCommand out{};
   ida->getNextScanCommand(out);
   TEST_EQUAL(out.is_agc, 1)
+  TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
   TEST_STRING_EQUAL(std::string(out.analyzer), "IonTrap")
   TEST_EQUAL(out.msn_level, 1)
 
@@ -265,6 +271,7 @@ START_SECTION(timeout_cleanup_no_crash)
   ScanCommand cmd{};
   int result = ida->getNextScanCommand(cmd);
   TEST_EQUAL(result, 1)  // Queue empty, idle cycle returns AGC
+  TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
   TEST_EQUAL(cmd.is_agc, 1)
   delete ida;
 }

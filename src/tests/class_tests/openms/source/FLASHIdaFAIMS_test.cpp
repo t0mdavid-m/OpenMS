@@ -292,11 +292,13 @@ START_SECTION(cv_cycling_order_matches_config)
     ScanCommand cmd{};
     int result = ida->getNextScanCommand(cmd);
     TEST_EQUAL(result, 1)
+    TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
     TEST_EQUAL(cmd.msn_level, 1)
     TEST_REAL_SIMILAR(cmd.faims_cv, expected_cvs[i])
     // Drain queued commands; stop at idle AGC + consume following idle MS1
     while (ida->getNextScanCommand(cmd) == 1) {
-      if (cmd.is_agc) { ida->getNextScanCommand(cmd); break; }
+      TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
+      if (cmd.is_agc) { ida->getNextScanCommand(cmd); TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true) break; }
     }
   }
 
@@ -317,12 +319,14 @@ START_SECTION(adaptive_cv_skip_low_precursor)
   ScanCommand cmd{};
   int result = ida->getNextScanCommand(cmd);
   TEST_EQUAL(result, 1)
+  TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
   TEST_EQUAL(cmd.msn_level, 1)
   TEST_REAL_SIMILAR(cmd.faims_cv, -50.0)  // advanced to next CV
 
   // Drain remaining; consume idle AGC + following idle MS1
   while (ida->getNextScanCommand(cmd) == 1) {
-    if (cmd.is_agc) { ida->getNextScanCommand(cmd); break; }
+    TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
+    if (cmd.is_agc) { ida->getNextScanCommand(cmd); TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true) break; }
   }
 
   // Second empty scan at CV=-50 -> CVSkipAmount[1] doubles 0->1
@@ -331,6 +335,7 @@ START_SECTION(adaptive_cv_skip_low_precursor)
 
   result = ida->getNextScanCommand(cmd);
   TEST_EQUAL(result, 1)
+  TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
   TEST_EQUAL(cmd.msn_level, 1)
   TEST_REAL_SIMILAR(cmd.faims_cv, -60.0)  // advanced to CV -60
 
@@ -386,7 +391,8 @@ START_SECTION(cv_skip_limit_enforced)
     ScanCommand drain{};
     while (ida->getNextScanCommand(drain) == 1)
     {
-      if (drain.is_agc) { ida->getNextScanCommand(drain); break; } // consume idle AGC + MS1
+      TEST_EQUAL(std::strlen(drain.scan_description) <= 15, true)
+      if (drain.is_agc) { ida->getNextScanCommand(drain); TEST_EQUAL(std::strlen(drain.scan_description) <= 15, true) break; } // consume idle AGC + MS1
       seen_cvs.insert(drain.faims_cv);
     }
   }
@@ -417,12 +423,14 @@ START_SECTION(ms2_carries_parent_cv)
   ScanCommand out{};
   int result = ida->getNextScanCommand(out);
   TEST_EQUAL(result, 1)
+  TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
   TEST_EQUAL(out.msn_level, 2)
   TEST_REAL_SIMILAR(out.faims_cv, -40.0)  // parent CV preserved
 
   // Queue is now empty — idle cycle returns AGC
   result = ida->getNextScanCommand(out);
   TEST_EQUAL(result, 1)
+  TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
   TEST_EQUAL(out.is_agc, 1)
 
   delete ida;
@@ -456,15 +464,18 @@ START_SECTION(cv_transition_ms1_before_ms2s)
   ScanCommand out{};
 
   ida->getNextScanCommand(out);
+  TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
   TEST_EQUAL(out.msn_level, 1)
   TEST_EQUAL(out.priority, 0)
   TEST_REAL_SIMILAR(out.faims_cv, -50.0)  // CV transition to next CV
 
   ida->getNextScanCommand(out);
+  TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
   TEST_EQUAL(out.msn_level, 2)
   TEST_REAL_SIMILAR(out.faims_cv, -40.0)  // parent CV preserved
 
   ida->getNextScanCommand(out);
+  TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
   TEST_EQUAL(out.msn_level, 2)
   TEST_REAL_SIMILAR(out.faims_cv, -40.0)  // parent CV preserved
 
@@ -486,6 +497,7 @@ START_SECTION(non_faims_no_cv_transition)
   ScanCommand out{};
   int result = ida->getNextScanCommand(out);
   TEST_EQUAL(result, 1)  // idle cycle returns AGC = non-FAIMS behavior confirmed
+  TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
   TEST_EQUAL(out.is_agc, 1)
 
   delete ida;

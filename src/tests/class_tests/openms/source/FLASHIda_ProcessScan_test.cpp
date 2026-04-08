@@ -578,6 +578,7 @@ START_SECTION(processScan_commands_dequeued)
   {
     int result = ida->getNextScanCommand(cmd);
     TEST_EQUAL(result, 1)
+    TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
     TEST_EQUAL(cmd.msn_level, 2)
     TEST_EQUAL(cmd.priority, 1)
     TEST_EQUAL(cmd.num_stages, 1)
@@ -595,6 +596,7 @@ START_SECTION(processScan_commands_dequeued)
   // Queue empty — idle cycle returns AGC (never returns 0)
   int idle_result = ida->getNextScanCommand(cmd);
   TEST_EQUAL(idle_result, 1)
+  TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
   TEST_EQUAL(cmd.is_agc, 1)
 
   delete ida;
@@ -612,6 +614,7 @@ START_SECTION(processScan_command_fields)
 
   ScanCommand cmd{};
   ida->getNextScanCommand(cmd);
+  TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
 
   // Analyzer from ms2_configs_[0]
   TEST_STRING_EQUAL(std::string(cmd.analyzer), "Orbitrap")
@@ -654,6 +657,7 @@ START_SECTION(processScan_ms2_path)
   // Dequeue one MS2 command to get its scan description (contains tracking ID)
   ScanCommand ms2_cmd{};
   ida->getNextScanCommand(ms2_cmd);
+  TEST_EQUAL(std::strlen(ms2_cmd.scan_description) <= 15, true)
   TEST_EQUAL(ms2_cmd.msn_level, 2)
 
   // Now process MS2 return with the tracking ID in scan description
@@ -698,6 +702,7 @@ START_SECTION(processScan_conditional_ms2_followup)
   // Dequeue first MS2
   ScanCommand ms2_cmd{};
   ida->getNextScanCommand(ms2_cmd);
+  TEST_EQUAL(std::strlen(ms2_cmd.scan_description) <= 15, true)
   TEST_EQUAL(ms2_cmd.msn_level, 2)
   TEST_EQUAL(ms2_cmd.priority, 1)
 
@@ -713,6 +718,7 @@ START_SECTION(processScan_conditional_ms2_followup)
   while (true)
   {
     int r = ida->getNextScanCommand(out);
+    TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
     if (r == 0 || out.is_agc || out.priority != 1) break;
   }
   // Should get priority-2 conditional follow-up
@@ -743,6 +749,7 @@ START_SECTION(processScan_ms3_commands)
   // Dequeue first MS2
   ScanCommand ms2_cmd{};
   ida->getNextScanCommand(ms2_cmd);
+  TEST_EQUAL(std::strlen(ms2_cmd.scan_description) <= 15, true)
   TEST_EQUAL(ms2_cmd.msn_level, 2)
 
   // Process MS2 return — golden file confirms MS3 targets are produced
@@ -757,6 +764,7 @@ START_SECTION(processScan_ms3_commands)
   int ms3_count = 0;
   while (ida->getNextScanCommand(out) == 1)
   {
+    TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
     if (out.is_agc) break; // idle cycle = queue empty
     if (out.msn_level == 3)
     {
@@ -789,6 +797,7 @@ START_SECTION(decodeTracking_roundtrip)
 
   ScanCommand cmd{};
   ida->getNextScanCommand(cmd);
+  TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
   // scan_description: {3-char base-94}{type_code}{payload}
   std::string desc(cmd.scan_description);
   TEST_EQUAL(desc.size() >= 4, true)  // 3-char ID + type code
@@ -825,6 +834,7 @@ START_SECTION(cleanup_expired_commands)
   for (int i = 0; i < total; i++)
   {
     ida->getNextScanCommand(cmd);
+    TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
   }
 
   // The pending_scan_map_ entries have timestamps. cleanupExpiredCommands_
@@ -880,15 +890,19 @@ START_SECTION(processScan_scoring_branches)
   ScanCommand cmd{};
 
   ida_qscore->getNextScanCommand(cmd);
+  TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
   TEST_EQUAL(cmd.stages[0].precursor_mz > 0, true)
 
   ida_idscore->getNextScanCommand(cmd);
+  TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
   TEST_EQUAL(cmd.stages[0].precursor_mz > 0, true)
 
   ida_idscore_all->getNextScanCommand(cmd);
+  TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
   TEST_EQUAL(cmd.stages[0].precursor_mz > 0, true)
 
   ida_qscore_all->getNextScanCommand(cmd);
+  TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
   TEST_EQUAL(cmd.stages[0].precursor_mz > 0, true)
 
   delete ida_qscore;
@@ -914,6 +928,7 @@ START_SECTION(processScan_mass_exclusion)
   for (int i = 0; i < total_pass1; i++)
   {
     ida->getNextScanCommand(cmd);
+    TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
   }
 
   // Pass 2: push same scans again at same RTs (within RT_window=180s)
@@ -942,6 +957,7 @@ START_SECTION(processScan_quant_followup)
   // Dequeue one MS2 command
   ScanCommand ms2_cmd{};
   ida->getNextScanCommand(ms2_cmd);
+  TEST_EQUAL(std::strlen(ms2_cmd.scan_description) <= 15, true)
   TEST_EQUAL(ms2_cmd.msn_level, 2)
 
   // Push MS2 return with TMT reporter data
@@ -958,6 +974,7 @@ START_SECTION(processScan_quant_followup)
   while (true)
   {
     int r = ida->getNextScanCommand(out);
+    TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
     if (r == 0 || out.is_agc) break; // idle cycle = queue empty
     if (out.priority != 1) { found_followup = true; break; }
   }
@@ -990,6 +1007,7 @@ START_SECTION(processScan_tag_targeting)
   // Dequeue one MS2 command
   ScanCommand ms2_cmd{};
   ida->getNextScanCommand(ms2_cmd);
+  TEST_EQUAL(std::strlen(ms2_cmd.scan_description) <= 15, true)
   TEST_EQUAL(ms2_cmd.msn_level, 2)
 
   // Push MS2 return (HCD fragment data)
@@ -1021,6 +1039,7 @@ START_SECTION(processScan_cycle_time_enforcement)
   ScanCommand cmd{};
   int r = ida->getNextScanCommand(cmd);
   TEST_EQUAL(r, 1)
+  TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
   TEST_EQUAL(cmd.msn_level, 1)  // Cycle-time forced MS1
   TEST_EQUAL(cmd.priority, 3)   // MS1 commands get priority 3
 
@@ -1043,6 +1062,7 @@ START_SECTION(agc_command_values)
   ScanCommand cmd{};
   int r = ida->getNextScanCommand(cmd);
   TEST_EQUAL(r, 1)
+  TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
   TEST_EQUAL(cmd.is_agc, 1)
   TEST_EQUAL(cmd.msn_level, 1)
   TEST_EQUAL(cmd.agc_target, 800000)  // From ms_settings.ms1.agc_target
@@ -1073,6 +1093,7 @@ START_SECTION(processScan_conditional_ms2_requires_tags)
 
   ScanCommand ms2_cmd{};
   ida->getNextScanCommand(ms2_cmd);
+  TEST_EQUAL(std::strlen(ms2_cmd.scan_description) <= 15, true)
 
   const auto& ms2 = ms2_scans[0];
   int ms2_result = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
@@ -1104,6 +1125,7 @@ START_SECTION(processScan_tag_targeting_produces_followups)
   // Dequeue one MS2 command
   ScanCommand ms2_cmd{};
   ida->getNextScanCommand(ms2_cmd);
+  TEST_EQUAL(std::strlen(ms2_cmd.scan_description) <= 15, true)
   TEST_EQUAL(ms2_cmd.msn_level, 2)
   TEST_EQUAL(ms2_cmd.priority, 1)
 
@@ -1120,6 +1142,7 @@ START_SECTION(processScan_tag_targeting_produces_followups)
   while (true)
   {
     int r = ida->getNextScanCommand(out);
+    TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
     if (r == 0 || out.is_agc || out.priority != 1) break;
   }
   TEST_EQUAL(out.priority, 2)
@@ -1147,6 +1170,7 @@ START_SECTION(idle_cycle_agc_then_ms1)
     // Odd call: AGC
     int r1 = ida->getNextScanCommand(cmd);
     TEST_EQUAL(r1, 1)
+    TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
     TEST_EQUAL(cmd.is_agc, 1)
     TEST_EQUAL(cmd.msn_level, 1)
     TEST_EQUAL(cmd.agc_target, 800000)
@@ -1160,6 +1184,7 @@ START_SECTION(idle_cycle_agc_then_ms1)
     // Even call: MS1
     int r2 = ida->getNextScanCommand(cmd);
     TEST_EQUAL(r2, 1)
+    TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
     TEST_EQUAL(cmd.is_agc, 0)
     TEST_EQUAL(cmd.msn_level, 1)
     TEST_EQUAL(cmd.orbitrap_resolution, 120000)
@@ -1192,6 +1217,7 @@ START_SECTION(idle_ms1_priority_beats_ms2)
   ScanCommand out{};
   int r = ida->getNextScanCommand(out);
   TEST_EQUAL(r, 1)
+  TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
   TEST_EQUAL(out.msn_level, 2)
   TEST_EQUAL(out.scan_id, 42)
   TEST_EQUAL(out.priority, 1)
@@ -1199,6 +1225,7 @@ START_SECTION(idle_ms1_priority_beats_ms2)
   // Second call: queue empty -> idle cycle fires: returns AGC, pushes MS1 at prio 0
   r = ida->getNextScanCommand(out);
   TEST_EQUAL(r, 1)
+  TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
   TEST_EQUAL(out.is_agc, 1)
   TEST_EQUAL(out.msn_level, 1)
   TEST_EQUAL(out.priority, 0)
@@ -1214,6 +1241,7 @@ START_SECTION(idle_ms1_priority_beats_ms2)
   // Third call: MS1 at priority 0 beats MS2 at priority 1
   r = ida->getNextScanCommand(out);
   TEST_EQUAL(r, 1)
+  TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
   TEST_EQUAL(out.is_agc, 0)
   TEST_EQUAL(out.msn_level, 1)
   TEST_EQUAL(out.priority, 0)
@@ -1221,6 +1249,7 @@ START_SECTION(idle_ms1_priority_beats_ms2)
   // Fourth call: MS2 at priority 1 is dequeued
   r = ida->getNextScanCommand(out);
   TEST_EQUAL(r, 1)
+  TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
   TEST_EQUAL(out.msn_level, 2)
   TEST_EQUAL(out.scan_id, 43)
   TEST_EQUAL(out.priority, 1)

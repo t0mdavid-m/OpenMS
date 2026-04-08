@@ -559,6 +559,7 @@ START_SECTION(exploration_variants_priority_0)
     ScanCommand cmd{};
     int result = ida->getNextScanCommand(cmd);
     TEST_EQUAL(result, 1)
+    TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
     TEST_EQUAL(cmd.msn_level, 2)
     TEST_EQUAL(cmd.priority, 0)
     TEST_EQUAL(cmd.is_agc, 0)
@@ -571,6 +572,7 @@ START_SECTION(exploration_variants_priority_0)
   ScanCommand idle{};
   int result = ida->getNextScanCommand(idle);
   TEST_EQUAL(result, 1)
+  TEST_EQUAL(std::strlen(idle.scan_description) <= 15, true)
   TEST_EQUAL(idle.is_agc, 1)
 
   delete ida;
@@ -616,6 +618,7 @@ START_SECTION(cycle_time_suppression_during_exploration)
   ScanCommand cmd{};
   int result = ida->getNextScanCommand(cmd);
   TEST_EQUAL(result, 1)
+  TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
   TEST_EQUAL(cmd.msn_level, 2)  // exploration variant, not MS1
   TEST_EQUAL(cmd.priority, 0)
   std::string desc(cmd.scan_description);
@@ -638,6 +641,7 @@ START_SECTION(ms1_resumes_after_exploration_completes)
   {
     ScanCommand drain{};
     ida->getNextScanCommand(drain);
+    TEST_EQUAL(std::strlen(drain.scan_description) <= 15, true)
   }
 
   // Feed all 5 results to complete the group
@@ -654,6 +658,7 @@ START_SECTION(ms1_resumes_after_exploration_completes)
   ScanCommand cmd{};
   int result = ida->getNextScanCommand(cmd);
   TEST_EQUAL(result, 1)
+  TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
   TEST_EQUAL(cmd.msn_level, 1)
   TEST_EQUAL(cmd.is_agc, 0)
 
@@ -704,6 +709,7 @@ START_SECTION(ms3_selection_no_exploration_standard_targeting)
   {
     ScanCommand drain{};
     ida->getNextScanCommand(drain);
+    TEST_EQUAL(std::strlen(drain.scan_description) <= 15, true)
   }
 
   // Feed 5 variants: variant 3 (CE=35.0) wins with 4 peak groups
@@ -727,6 +733,7 @@ START_SECTION(ms3_selection_no_exploration_standard_targeting)
   int result = ida->getNextScanCommand(cmd);
   if (result == 1)
   {
+    TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
     TEST_EQUAL(cmd.msn_level, 3)
     TEST_EQUAL(cmd.priority, 1)
   }
