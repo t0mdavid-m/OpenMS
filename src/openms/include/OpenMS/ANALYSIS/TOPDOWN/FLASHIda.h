@@ -75,7 +75,7 @@ namespace OpenMS
   ///       + 10 doubles (80) + 2 int32 (8) + 1 double (8) = 1248.
   struct OPENMS_DLLAPI ScanCommand
   {
-    int32_t scan_id;             ///< Unique tracking ID (base-36 encoded for scan description)
+    int32_t scan_id;             ///< Unique tracking ID (encoded as 3-char string in scan description)
     int32_t msn_level;           ///< MS level: 1 = MS1, 2 = MS2, 3 = MS3
     int32_t priority;            ///< Queue priority: 0 = highest, 3 = lowest
     int32_t is_agc;              ///< 1 if this is an AGC calibration scan, 0 otherwise
