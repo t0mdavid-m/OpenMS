@@ -3159,7 +3159,7 @@ FLASHIda::FLASHIda(char* arg)
     std::strncpy(cmd.analyzer, ms1_analyzer_.c_str(), sizeof(cmd.analyzer) - 1);
     cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';
 
-    std::strncpy(cmd.scan_description, "MS1 survey scan", sizeof(cmd.scan_description) - 1);
+    std::strncpy(cmd.scan_description, "S", sizeof(cmd.scan_description) - 1);
     cmd.scan_description[sizeof(cmd.scan_description) - 1] = '\0';
 
     return cmd;
@@ -3179,7 +3179,7 @@ FLASHIda::FLASHIda(char* arg)
     cmd.max_it = ms1_max_it_;
     std::strncpy(cmd.analyzer, "IonTrap", sizeof(cmd.analyzer) - 1);
     cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';
-    std::strncpy(cmd.scan_description, "AGC calibration", sizeof(cmd.scan_description) - 1);
+    std::strncpy(cmd.scan_description, "A", sizeof(cmd.scan_description) - 1);
     cmd.scan_description[sizeof(cmd.scan_description) - 1] = '\0';
 
     return cmd;
@@ -3339,8 +3339,7 @@ FLASHIda::FLASHIda(char* arg)
         ms1.priority = 0;  // priority 0 to send before pending MS2s
 
         std::string id_str = encodeTracking_(ms1.scan_id);
-        std::snprintf(ms1.scan_description, sizeof(ms1.scan_description),
-                      "%s|CV transition MS1 CV=%.1f", id_str.c_str(), next_cv);
+        std::snprintf(ms1.scan_description, 16, "%sS", id_str.c_str());
 
         auto now = std::chrono::steady_clock::now();
         ms1.enqueue_timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -3429,12 +3428,9 @@ FLASHIda::FLASHIda(char* arg)
     std::strncpy(cmd.stages[0].activation_type, activation.c_str(), sizeof(cmd.stages[0].activation_type) - 1);
     cmd.stages[0].activation_type[sizeof(cmd.stages[0].activation_type) - 1] = '\0';
 
-    // Scan description with tracking ID — base-36 format: {base36}|{mass:.2f}@{charge}
+    // Scan description: {3-char ID}R{mass_kDa:.1f}@{charge}
     std::string id_str = encodeTracking_(id);
-    char desc_buf[256];
-    std::snprintf(desc_buf, sizeof(desc_buf), "%s|%.2f@%d", id_str.c_str(), pg.getMonoMass(), charge);
-    std::strncpy(cmd.scan_description, desc_buf, sizeof(cmd.scan_description) - 1);
-    cmd.scan_description[sizeof(cmd.scan_description) - 1] = '\0';
+    std::snprintf(cmd.scan_description, 16, "%sR%.1f@%d", id_str.c_str(), pg.getMonoMass() / 1000.0, charge);
 
     // Timestamp
     cmd.enqueue_timestamp_ms = static_cast<uint64_t>(
@@ -3499,17 +3495,15 @@ FLASHIda::FLASHIda(char* arg)
     std::strncpy(cmd.stages[1].activation_type, "HCD", sizeof(cmd.stages[1].activation_type) - 1);
     cmd.stages[1].activation_type[sizeof(cmd.stages[1].activation_type) - 1] = '\0';
 
-    // Description — base-36 format with optional ion annotation (modes 3/4)
+    // Description: {3-char ID}R{frag_mass_kDa:.1f}@{frag_charge}[{ion_type}{frag_index}]
     std::string id_str = encodeTracking_(id);
-    char desc_buf[256];
+    double frag_mass_kda = frag_mz * frag_charge / 1000.0;
     if (ion_type != '\0' && frag_index > 0)
-      std::snprintf(desc_buf, sizeof(desc_buf), "%s|MS3 %c%d mz=%.2f z=%d",
-                    id_str.c_str(), ion_type, frag_index, frag_mz, frag_charge);
+      std::snprintf(cmd.scan_description, 16, "%sR%.1f@%d%c%d",
+                    id_str.c_str(), frag_mass_kda, frag_charge, ion_type, frag_index);
     else
-      std::snprintf(desc_buf, sizeof(desc_buf), "%s|MS3 mz=%.2f z=%d",
-                    id_str.c_str(), frag_mz, frag_charge);
-    std::strncpy(cmd.scan_description, desc_buf, sizeof(cmd.scan_description) - 1);
-    cmd.scan_description[sizeof(cmd.scan_description) - 1] = '\0';
+      std::snprintf(cmd.scan_description, 16, "%sR%.1f@%d",
+                    id_str.c_str(), frag_mass_kda, frag_charge);
 
     cmd.enqueue_timestamp_ms = static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -3595,10 +3589,8 @@ FLASHIda::FLASHIda(char* arg)
     cmd.stages[0].activation_type[sizeof(cmd.stages[0].activation_type) - 1] = '\0';
 
     std::string id_str = encodeTracking_(cmd.scan_id);
-    char desc_buf[256];
-    std::snprintf(desc_buf, sizeof(desc_buf), "%s|followup mz=%.2f", id_str.c_str(), cmd.stages[0].precursor_mz);
-    std::strncpy(cmd.scan_description, desc_buf, sizeof(cmd.scan_description) - 1);
-    cmd.scan_description[sizeof(cmd.scan_description) - 1] = '\0';
+    std::snprintf(cmd.scan_description, 16, "%sF%.1f@%d",
+                  id_str.c_str(), cmd.mono_mass / 1000.0, cmd.stages[0].charge_state);
 
     cmd.enqueue_timestamp_ms = static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -3631,10 +3623,8 @@ FLASHIda::FLASHIda(char* arg)
     cmd.stages[0].activation_type[sizeof(cmd.stages[0].activation_type) - 1] = '\0';
 
     std::string id_str = encodeTracking_(cmd.scan_id);
-    char desc_buf[256];
-    std::snprintf(desc_buf, sizeof(desc_buf), "%s|conditional mz=%.2f", id_str.c_str(), cmd.stages[0].precursor_mz);
-    std::strncpy(cmd.scan_description, desc_buf, sizeof(cmd.scan_description) - 1);
-    cmd.scan_description[sizeof(cmd.scan_description) - 1] = '\0';
+    std::snprintf(cmd.scan_description, 16, "%sC%.1f@%d",
+                  id_str.c_str(), cmd.mono_mass / 1000.0, cmd.stages[0].charge_state);
 
     cmd.enqueue_timestamp_ms = static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -3744,9 +3734,8 @@ FLASHIda::FLASHIda(char* arg)
       int id_int = cmd.scan_id;
       std::string id_str = encodeTracking_(id_int);
       v.tracking_id = id_str;
-      std::snprintf(cmd.scan_description, sizeof(cmd.scan_description),
-                   "%s|EXPL CE=%.1f %.2f@%d", id_str.c_str(),
-                   ces[i], precursor_mass, precursor_charge);
+      std::snprintf(cmd.scan_description, 16, "%sE%.1f@%d",
+                   id_str.c_str(), precursor_mass / 1000.0, precursor_charge);
 
       group.variants.push_back(v);
       variant_tracking_to_group_[id_int] = {group.group_id, i};
@@ -4062,12 +4051,9 @@ FLASHIda::FLASHIda(char* arg)
       out.scan_id = nextTrackingIdInt_();
       last_agc_time_ = std::chrono::steady_clock::now();
 
-      // Scan description with base-36 tracking ID
+      // Scan description: {3-char ID}A
       std::string id_str = encodeTracking_(out.scan_id);
-      char desc_buf[128];
-      std::snprintf(desc_buf, sizeof(desc_buf), "%s|AGC calibration", id_str.c_str());
-      std::strncpy(out.scan_description, desc_buf, sizeof(out.scan_description) - 1);
-      out.scan_description[sizeof(out.scan_description) - 1] = '\0';
+      std::snprintf(out.scan_description, 16, "%sA", id_str.c_str());
 
       std::cout << "[TRACK-CREATE] id=" << id_str << " ms_level=1 type=agc" << std::endl;
       return 1;
@@ -4085,10 +4071,7 @@ FLASHIda::FLASHIda(char* arg)
       last_ms1_time_ = std::chrono::steady_clock::now();
 
       std::string id_str = encodeTracking_(out.scan_id);
-      char desc_buf[128];
-      std::snprintf(desc_buf, sizeof(desc_buf), "%s|MS1 survey", id_str.c_str());
-      std::strncpy(out.scan_description, desc_buf, sizeof(out.scan_description) - 1);
-      out.scan_description[sizeof(out.scan_description) - 1] = '\0';
+      std::snprintf(out.scan_description, 16, "%sS", id_str.c_str());
 
       std::cout << "[TRACK-CREATE] id=" << id_str << " ms_level=1 type=cycle_time" << std::endl;
       return 1;
@@ -4120,10 +4103,7 @@ FLASHIda::FLASHIda(char* arg)
       last_agc_time_ = std::chrono::steady_clock::now();
 
       std::string agc_id_str = encodeTracking_(agc_cmd.scan_id);
-      char agc_desc_buf[128];
-      std::snprintf(agc_desc_buf, sizeof(agc_desc_buf), "%s|AGC calibration", agc_id_str.c_str());
-      std::strncpy(agc_cmd.scan_description, agc_desc_buf, sizeof(agc_cmd.scan_description) - 1);
-      agc_cmd.scan_description[sizeof(agc_cmd.scan_description) - 1] = '\0';
+      std::snprintf(agc_cmd.scan_description, 16, "%sA", agc_id_str.c_str());
 
       std::cout << "[TRACK-CREATE] id=" << agc_id_str << " ms_level=1 type=idle_agc" << std::endl;
 
@@ -4135,10 +4115,7 @@ FLASHIda::FLASHIda(char* arg)
       last_ms1_time_ = std::chrono::steady_clock::now();
 
       std::string ms1_id_str = encodeTracking_(ms1_cmd.scan_id);
-      char ms1_desc_buf[128];
-      std::snprintf(ms1_desc_buf, sizeof(ms1_desc_buf), "%s|MS1 survey", ms1_id_str.c_str());
-      std::strncpy(ms1_cmd.scan_description, ms1_desc_buf, sizeof(ms1_cmd.scan_description) - 1);
-      ms1_cmd.scan_description[sizeof(ms1_cmd.scan_description) - 1] = '\0';
+      std::snprintf(ms1_cmd.scan_description, 16, "%sS", ms1_id_str.c_str());
 
       std::cout << "[TRACK-CREATE] id=" << ms1_id_str << " ms_level=1 type=idle_ms1" << std::endl;
 
