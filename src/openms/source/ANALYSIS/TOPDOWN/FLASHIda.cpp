@@ -4106,11 +4106,45 @@ FLASHIda::FLASHIda(char* arg)
       }
     }
 
-    // Step 5: Queue empty — no commands available
-    // The FAIMS CV-transition MS1 is pushed into the queue by processScan(),
-    // so it will be dequeued in Step 4 on the next call. The C# while-loop
-    // in ProcessSpectrum depends on returning 0 to stop draining.
-    return 0;
+    // Step 5: Idle cycle — queue empty, keep the instrument busy with AGC + MS1
+    // Create an AGC command (returned immediately) and push an MS1 at priority 0
+    // into the queue so the next dequeue returns it before any MS2s (priority 1+).
+    {
+      // 5a: AGC
+      ScanCommand agc_cmd = makeAGCCommand_();
+      agc_cmd.faims_cv = faims_enabled_ ? faims_cv_values_[current_cv_index_] : 0.0;
+      agc_cmd.scan_id = nextTrackingIdInt_();
+      last_agc_time_ = std::chrono::steady_clock::now();
+
+      std::string agc_id_str = encodeBase36_(agc_cmd.scan_id);
+      char agc_desc_buf[128];
+      std::snprintf(agc_desc_buf, sizeof(agc_desc_buf), "%s|AGC calibration", agc_id_str.c_str());
+      std::strncpy(agc_cmd.scan_description, agc_desc_buf, sizeof(agc_cmd.scan_description) - 1);
+      agc_cmd.scan_description[sizeof(agc_cmd.scan_description) - 1] = '\0';
+
+      std::cout << "[TRACK-CREATE] id=" << agc_id_str << " ms_level=1 type=idle_agc" << std::endl;
+
+      // 5b: MS1 — override priority to 0 (makeMS1Command_ defaults to 3)
+      ScanCommand ms1_cmd = makeMS1Command_();
+      ms1_cmd.faims_cv = faims_enabled_ ? faims_cv_values_[current_cv_index_] : 0.0;
+      ms1_cmd.scan_id = nextTrackingIdInt_();
+      ms1_cmd.priority = 0;
+      last_ms1_time_ = std::chrono::steady_clock::now();
+
+      std::string ms1_id_str = encodeBase36_(ms1_cmd.scan_id);
+      char ms1_desc_buf[128];
+      std::snprintf(ms1_desc_buf, sizeof(ms1_desc_buf), "%s|MS1 survey", ms1_id_str.c_str());
+      std::strncpy(ms1_cmd.scan_description, ms1_desc_buf, sizeof(ms1_cmd.scan_description) - 1);
+      ms1_cmd.scan_description[sizeof(ms1_cmd.scan_description) - 1] = '\0';
+
+      std::cout << "[TRACK-CREATE] id=" << ms1_id_str << " ms_level=1 type=idle_ms1" << std::endl;
+
+      // Push MS1 into priority-0 queue for next dequeue call
+      queues_[0].push_back(ms1_cmd);
+
+      out = agc_cmd;
+      return 1;
+    }
   }
 
   int FLASHIda::getNextTrackingId()
