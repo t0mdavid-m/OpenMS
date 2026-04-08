@@ -30,7 +30,7 @@ namespace
       "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
     },
     "precursor_selection": {
-      "max_mass_count": [3], "RT_window": 180, "target_mode": 0,
+      "RT_window": 180, "target_mode": 0,
       "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
@@ -66,7 +66,7 @@ namespace
       "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
     },
     "precursor_selection": {
-      "max_mass_count": [3], "RT_window": 180, "target_mode": 0,
+      "RT_window": 180, "target_mode": 0,
       "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
@@ -102,7 +102,7 @@ namespace
       "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
     },
     "precursor_selection": {
-      "max_mass_count": [3], "RT_window": 180, "target_mode": 0,
+      "RT_window": 180, "target_mode": 0,
       "IDScore": true, "AllCharges": false, "MS3AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
@@ -138,7 +138,7 @@ namespace
       "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
     },
     "precursor_selection": {
-      "max_mass_count": [3], "RT_window": 180, "target_mode": 0,
+      "RT_window": 180, "target_mode": 0,
       "IDScore": true, "AllCharges": true, "MS3AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
@@ -174,7 +174,7 @@ namespace
       "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
     },
     "precursor_selection": {
-      "max_mass_count": [3], "RT_window": 180, "target_mode": 0,
+      "RT_window": 180, "target_mode": 0,
       "IDScore": false, "AllCharges": true, "MS3AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
@@ -210,7 +210,7 @@ namespace
       "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
     },
     "precursor_selection": {
-      "max_mass_count": [3], "RT_window": 180, "target_mode": 0,
+      "RT_window": 180, "target_mode": 0,
       "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
@@ -246,7 +246,7 @@ namespace
       "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
     },
     "precursor_selection": {
-      "max_mass_count": [3], "RT_window": 180, "target_mode": 0,
+      "RT_window": 180, "target_mode": 0,
       "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
@@ -282,7 +282,7 @@ namespace
       "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
     },
     "precursor_selection": {
-      "max_mass_count": [3], "RT_window": 180, "target_mode": 0,
+      "RT_window": 180, "target_mode": 0,
       "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
@@ -319,7 +319,7 @@ namespace
       "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
     },
     "precursor_selection": {
-      "max_mass_count": [3], "RT_window": 180, "target_mode": 0,
+      "RT_window": 180, "target_mode": 0,
       "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
@@ -354,7 +354,7 @@ namespace
       "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
     },
     "precursor_selection": {
-      "max_mass_count": [3], "RT_window": 180, "target_mode": 0,
+      "RT_window": 180, "target_mode": 0,
       "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
@@ -389,7 +389,7 @@ namespace
       "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
     },
     "precursor_selection": {
-      "max_mass_count": [3], "RT_window": 180, "target_mode": 0,
+      "RT_window": 180, "target_mode": 0,
       "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
@@ -426,7 +426,7 @@ namespace
       "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
     },
     "precursor_selection": {
-      "max_mass_count": [3], "RT_window": 180, "target_mode": 0,
+      "RT_window": 180, "target_mode": 0,
       "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
@@ -463,7 +463,7 @@ namespace
       "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
     },
     "precursor_selection": {
-      "max_mass_count": [3], "RT_window": 180, "target_mode": 0,
+      "RT_window": 180, "target_mode": 0,
       "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
@@ -485,6 +485,147 @@ namespace
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms2": { "selection": "intensity" },
+      "ms3": { "selection": "none" }
+    }
+  })";
+
+  // Config with intensity-based MS1 selection
+  const char* intensity_selection_json = R"({
+    "deconvolution": {
+      "score_threshold": 0.0, "tqscore_threshold": 0.9,
+      "min_charge": 4, "max_charge": 50,
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
+    },
+    "precursor_selection": {
+      "RT_window": 180, "target_mode": 0,
+      "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
+      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    },
+    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
+    "faims": { "cv_values": [-50], "max_cv_skip": 0 },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
+      "ms2": [
+        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
+        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "resolution": 120000 }
+      ]
+    },
+    "scheduling": {
+      "cycle_time": { "enabled": false, "value_ms": 60000 },
+      "scan_timeout": { "enabled": true, "value_ms": 30000 },
+      "agc_interval_seconds": 30
+    },
+    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
+    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+    "selection_strategy": {
+      "ms1": { "selection": "intensity", "max_precursors": 3 },
+      "ms2": { "selection": "intensity" },
+      "ms3": { "selection": "none" }
+    }
+  })";
+
+  // Config with selection=none at MS1
+  const char* none_selection_json = R"({
+    "deconvolution": {
+      "score_threshold": 0.0, "tqscore_threshold": 0.9,
+      "min_charge": 4, "max_charge": 50,
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
+    },
+    "precursor_selection": {
+      "RT_window": 180, "target_mode": 0,
+      "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
+      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    },
+    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
+    "faims": { "cv_values": [-50], "max_cv_skip": 0 },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
+      "ms2": [
+        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }
+      ]
+    },
+    "scheduling": {
+      "cycle_time": { "enabled": false, "value_ms": 60000 },
+      "scan_timeout": { "enabled": true, "value_ms": 30000 },
+      "agc_interval_seconds": 30
+    },
+    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
+    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+    "selection_strategy": {
+      "ms1": { "selection": "none", "max_precursors": 3 },
+      "ms2": { "selection": "intensity" },
+      "ms3": { "selection": "none" }
+    }
+  })";
+
+  // Config with max_precursors=1 (cap test)
+  const char* max1_json = R"({
+    "deconvolution": {
+      "score_threshold": 0.0, "tqscore_threshold": 0.9,
+      "min_charge": 4, "max_charge": 50,
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
+    },
+    "precursor_selection": {
+      "RT_window": 180, "target_mode": 0,
+      "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
+      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    },
+    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
+    "faims": { "cv_values": [-50], "max_cv_skip": 0 },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
+      "ms2": [
+        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }
+      ]
+    },
+    "scheduling": {
+      "cycle_time": { "enabled": false, "value_ms": 60000 },
+      "scan_timeout": { "enabled": true, "value_ms": 30000 },
+      "agc_interval_seconds": 30
+    },
+    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
+    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_precursors": 1 },
+      "ms2": { "selection": "intensity" },
+      "ms3": { "selection": "none" }
+    }
+  })";
+
+  // Config with max_precursors=5 (cap test)
+  const char* max5_json = R"({
+    "deconvolution": {
+      "score_threshold": 0.0, "tqscore_threshold": 0.9,
+      "min_charge": 4, "max_charge": 50,
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
+    },
+    "precursor_selection": {
+      "RT_window": 180, "target_mode": 0,
+      "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
+      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    },
+    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
+    "faims": { "cv_values": [-50], "max_cv_skip": 0 },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
+      "ms2": [
+        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }
+      ]
+    },
+    "scheduling": {
+      "cycle_time": { "enabled": false, "value_ms": 60000 },
+      "scan_timeout": { "enabled": true, "value_ms": 30000 },
+      "agc_interval_seconds": 30
+    },
+    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
+    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_precursors": 5 },
       "ms2": { "selection": "intensity" },
       "ms3": { "selection": "none" }
     }
@@ -1259,5 +1400,75 @@ START_SECTION(idle_ms1_priority_beats_ms2)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
+
+// Intensity selection: MS1 precursors should be ordered by max charge intensity
+START_SECTION(processScan_ms1_intensity_selection)
+{
+  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  if (ms1_scans.empty()) { NOT_TESTABLE; break; }
+  FLASHIda* ida_qscore = new FLASHIda(const_cast<char*>(standard_json));
+  FLASHIda* ida_intensity = new FLASHIda(const_cast<char*>(intensity_selection_json));
+
+  int n_qscore = pushAllScans(ida_qscore, ms1_scans);
+  int n_intensity = pushAllScans(ida_intensity, ms1_scans);
+
+  TEST_EQUAL(n_qscore > 0, true)
+  TEST_EQUAL(n_intensity > 0, true)
+
+  ScanCommand cmd_q{};
+  ScanCommand cmd_i{};
+  int q_count = 0, i_count = 0;
+  while (ida_qscore->getNextScanCommand(&cmd_q)) q_count++;
+  while (ida_intensity->getNextScanCommand(&cmd_i)) i_count++;
+
+  TEST_EQUAL(q_count > 0, true)
+  TEST_EQUAL(i_count > 0, true)
+
+  delete ida_qscore;
+  delete ida_intensity;
+}
+END_SECTION
+
+// Selection=none: MS1 should produce 0 commands
+START_SECTION(processScan_ms1_none_selection)
+{
+  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  if (ms1_scans.empty()) { NOT_TESTABLE; break; }
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(none_selection_json));
+
+  int total = pushAllScans(ida, ms1_scans);
+  TEST_EQUAL(total, 0)
+
+  ScanCommand cmd{};
+  TEST_EQUAL(ida->getNextScanCommand(&cmd), false)
+
+  delete ida;
+}
+END_SECTION
+
+// max_precursors cap: max=1 <= max=3 <= max=5
+START_SECTION(processScan_ms1_max_precursors_cap)
+{
+  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  if (ms1_scans.empty()) { NOT_TESTABLE; break; }
+
+  FLASHIda* ida1 = new FLASHIda(const_cast<char*>(max1_json));
+  FLASHIda* ida3 = new FLASHIda(const_cast<char*>(standard_json));
+  FLASHIda* ida5 = new FLASHIda(const_cast<char*>(max5_json));
+
+  int total1 = pushAllScans(ida1, ms1_scans);
+  int total3 = pushAllScans(ida3, ms1_scans);
+  int total5 = pushAllScans(ida5, ms1_scans);
+
+  TEST_EQUAL(total1 > 0, true)
+  TEST_EQUAL(total3 >= total1, true)
+  TEST_EQUAL(total5 >= total3, true)
+  TEST_EQUAL(total1 <= (int)ms1_scans.size(), true)
+
+  delete ida1;
+  delete ida3;
+  delete ida5;
+}
+END_SECTION
 
 END_TEST

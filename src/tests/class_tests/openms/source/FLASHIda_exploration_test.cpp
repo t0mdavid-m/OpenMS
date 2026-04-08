@@ -30,7 +30,6 @@ namespace
       "tol": [10, 10]
     },
     "precursor_selection": {
-      "max_mass_count": [3],
       "RT_window": 180,
       "target_mode": 0,
       "IDScore": false,
@@ -120,7 +119,6 @@ namespace
       "tol": [10, 10]
     },
     "precursor_selection": {
-      "max_mass_count": [3],
       "RT_window": 180,
       "target_mode": 0,
       "IDScore": false,
@@ -220,7 +218,6 @@ namespace
       "tol": [10, 10]
     },
     "precursor_selection": {
-      "max_mass_count": [3],
       "RT_window": 180,
       "target_mode": 0,
       "IDScore": false,
@@ -310,7 +307,6 @@ namespace
       "tol": [10, 10]
     },
     "precursor_selection": {
-      "max_mass_count": [3],
       "RT_window": 180,
       "target_mode": 0,
       "IDScore": false,
@@ -401,7 +397,6 @@ namespace
       "tol": [10, 10]
     },
     "precursor_selection": {
-      "max_mass_count": [3],
       "RT_window": 180,
       "target_mode": 0,
       "IDScore": false,

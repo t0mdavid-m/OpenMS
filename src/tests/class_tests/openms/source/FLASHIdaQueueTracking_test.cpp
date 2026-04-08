@@ -28,7 +28,6 @@ namespace
       "tol": [10, 10]
     },
     "precursor_selection": {
-      "max_mass_count": [1],
       "RT_window": 180,
       "target_mode": 0,
       "IDScore": false,
@@ -215,7 +214,7 @@ START_SECTION(agc_scan_is_dequeued_first)
       "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
     },
     "precursor_selection": {
-      "max_mass_count": [1], "RT_window": 180, "target_mode": 0,
+      "RT_window": 180, "target_mode": 0,
       "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
