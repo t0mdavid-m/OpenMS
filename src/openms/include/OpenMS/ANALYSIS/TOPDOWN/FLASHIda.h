@@ -37,6 +37,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHExtenderAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
@@ -44,7 +45,6 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <cstring>
 #include <deque>
 #include <mutex>
 #include <set>
@@ -52,61 +52,6 @@
 
 namespace OpenMS
 {
-  /// Maximum number of isolation stages per scan command
-  static constexpr int MAX_ISOLATION_STAGES = 10;
-
-  /// Blittable struct representing one isolation stage in a multi-stage MS2/MS3 scan.
-  /// Layout: 5 doubles (40) + 2 int32 (8) + char[32] (32) = 80 bytes.
-  struct OPENMS_DLLAPI IsolationStage
-  {
-    double precursor_mz;         ///< Center m/z for isolation window
-    double isolation_width;      ///< Full width of isolation window (Da)
-    double collision_energy;     ///< Normalized collision energy (%)
-    double reaction_time;        ///< Ion/ion reaction time (ms), 0 = not used
-    double reagent_max_it;       ///< Reagent max injection time (ms), 0 = not used
-    int32_t reagent_agc_target;  ///< Reagent AGC target, 0 = not used
-    int32_t charge_state;        ///< Precursor charge state (0 = unknown)
-    char activation_type[32];    ///< Activation method (e.g., "HCD", "ETD", "EThcD")
-  };
-  static_assert(sizeof(IsolationStage) == 80, "IsolationStage must be 80 bytes for P/Invoke");
-
-  /// Blittable struct representing a complete scan command for the instrument.
-  /// Layout: 8 int32 (32) + 3 doubles (24) + char[32] (32) + char[256] (256) + stages (800) + uint64 (8)
-  ///       + 10 doubles (80) + 2 int32 (8) + 1 double (8) = 1248.
-  struct OPENMS_DLLAPI ScanCommand
-  {
-    int32_t scan_id;             ///< Unique tracking ID (encoded as 3-char string in scan description)
-    int32_t msn_level;           ///< MS level: 1 = MS1, 2 = MS2, 3 = MS3
-    int32_t priority;            ///< Queue priority: 0 = highest, 3 = lowest
-    int32_t is_agc;              ///< 1 if this is an AGC calibration scan, 0 otherwise
-    int32_t num_stages;          ///< Number of valid isolation stages (0 for MS1)
-    int32_t orbitrap_resolution; ///< Orbitrap resolution (e.g., 120000)
-    int32_t agc_target;          ///< AGC target value
-    int32_t pad1;                ///< Padding for 8-byte alignment
-    double first_mass;           ///< Scan range start (m/z)
-    double last_mass;            ///< Scan range end (m/z)
-    double max_it;               ///< Maximum injection time (ms)
-    char analyzer[32];           ///< Mass analyzer name (e.g., "Orbitrap", "IonTrap")
-    char scan_description[256];  ///< Human-readable description (includes tracking ID)
-    IsolationStage stages[MAX_ISOLATION_STAGES]; ///< Isolation stages array
-    uint64_t enqueue_timestamp_ms; ///< Timestamp when command was enqueued (steady_clock ms)
-
-    // Precursor scoring data (populated by buildMS2Command_ for diagnostic output)
-    double qscore;                  ///< Quality score from PeakGroup::getQscore()
-    double mono_mass;               ///< Monoisotopic mass from PeakGroup::getMonoMass()
-    double charge_cos;              ///< Charge isotope cosine from PeakGroup::getChargeIsotopeCosine(charge)
-    double charge_snr;              ///< Charge SNR from PeakGroup::getChargeSNR(charge)
-    double iso_cos;                 ///< Isotope cosine from PeakGroup::getIsotopeCosine()
-    double snr;                     ///< Total SNR from PeakGroup::getSNR()
-    double charge_score;            ///< Charge score from PeakGroup::getChargeScore()
-    double ppm_error;               ///< Avg PPM error from PeakGroup::getAvgPPMError()
-    double precursor_intensity;     ///< Per-charge intensity from PeakGroup::getChargeIntensity(charge)
-    double peakgroup_intensity;     ///< Total peak group intensity from PeakGroup::getIntensity()
-    int32_t hcd_energy;             ///< HCD collision energy
-    int32_t pad2;                   ///< Alignment padding
-    double faims_cv;                ///< FAIMS compensation voltage (0.0 if non-FAIMS)
-  };
-  static_assert(sizeof(ScanCommand) == 1248, "ScanCommand must be 1248 bytes for P/Invoke");
 
   /**
    * @brief FLASHIda class for real time deconvolution

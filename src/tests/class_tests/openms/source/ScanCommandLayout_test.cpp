@@ -10,7 +10,7 @@
 // Outputs sizeof and offsetof values in a parseable format.
 // Used by CI to verify C++/C# struct layout agreement.
 
-#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <cstddef>
 #include <cstdio>
 

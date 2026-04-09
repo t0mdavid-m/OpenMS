@@ -9,6 +9,7 @@ set(sources_list_h
         FLASHHelperClasses.h
         FLASHExtenderAlgorithm.h
         FLASHIda.h
+        FLASHIda/ScanCommand.h
         FLASHIdaBridgeFunctions.h
         FLASHGappedTaggerAlgorithm.h
         FLASHTaggerAlgorithm.h
