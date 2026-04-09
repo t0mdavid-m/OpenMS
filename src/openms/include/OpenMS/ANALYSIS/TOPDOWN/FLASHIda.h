@@ -37,6 +37,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHExtenderAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
@@ -258,7 +259,7 @@ namespace OpenMS
      * @brief Get top fragment ion matches against a protein sequence, sorted by qscore
      *
      * Performs direct fragment matching using stored MS2 deconvolution results.
-     * Uses MS2 tolerance from constructor (tol_[1]).
+     * Uses MS2 tolerance from config (config_.level(2).tolerance_ppm).
      * Only returns peaks that match theoretical b/y fragments of the sequence.
      * Requires deconvolveMS2() to be called first.
      *
@@ -400,44 +401,7 @@ namespace OpenMS
     /// Get the next monotonically increasing tracking ID (thread-safe)
     int getNextTrackingId();
 
-    // --- Phase 7: Public types for selection and exploration ---
-
-    /// Selection metric: how targets are ranked for MSn+1
-    enum class SelectionMetric
-    {
-      None = 0,    ///< No selection at this level — don't select targets for MSn+1
-      Intensity,   ///< Rank by raw intensity
-      QScore       ///< Rank by deconvolution quality score
-    };
-
-    /// Exploration metric: what to optimize during CE sweep (MS2+ only)
-    enum class ExplorationMetric
-    {
-      None = 0,            ///< No exploration at this level (default)
-      MassCount,           ///< Optimize for most deconvolved masses
-      RemainingPrecursor,  ///< Optimize for least remaining precursor intensity
-      FragmentCount        ///< Optimize for most fragment ions
-    };
-
-    /// Per-level config: selection (required) + exploration (optional, MS2+ only)
-    struct MSLevelConfig
-    {
-      SelectionMetric selection = SelectionMetric::Intensity;
-      int max_targets = 10;
-
-      ExplorationMetric exploration = ExplorationMetric::None;
-      double ce_min = 20.0;
-      double ce_max = 40.0;
-      double ce_step = 5.0;
-      std::string activation = "HCD";
-      std::unordered_map<std::string, std::string> overrides;
-    };
-
-    /// Returns true if this level has exploration enabled
-    static bool hasExploration(const MSLevelConfig& cfg)
-    {
-      return cfg.exploration != ExplorationMetric::None;
-    }
+    // SelectionMetric, ExplorationMetric, MSLevelConfig are now in FLASHIda/Config.h
 
     /// Test-only accessor for encodeTracking_ (static, no state dependency)
     static std::string encodeTrackingForTest(int v) { return encodeTracking_(v); }
@@ -543,6 +507,9 @@ namespace OpenMS
     bool processMS2ForTagBasedTargeting(double precursor_mass);
 
   private:
+    /// Configuration object (owns all parsed config values)
+    Config config_;
+
     /// Internal struct for fragment match results from tag-based matching
     struct TagBasedFragmentMatch {
       int peak_index;           ///< Index in ms2_deconvolved_spectrum_
@@ -676,15 +643,7 @@ namespace OpenMS
     /// SpectralDeconvolution class for deconvolution
     SpectralDeconvolution fd_;
 
-    /// total QScore threshold
-    //double tqscore_threshold = .99;
-    double tqscore_threshold;
-
-    /// q score threshold - determined from C# side
-    double qscore_threshold_;
-    /// retention time window - determined from C# side
-    double rt_window_;
-    int targeting_mode_ = 0; /// 0 no targeting 1 inclusive 2 exclusive 3 deep
+    // targeting_mode_, rt_window_, qscore_threshold_, tqscore_threshold moved to Config
 
     /// maps for global inclusion targeting
     std::map<double, std::vector<double>> target_mass_rt_map_;
@@ -702,30 +661,20 @@ namespace OpenMS
     /// TSV-based inclusion targets
     std::vector<InclusionTarget> inclusion_targets_;  ///< All targets loaded from TSV file
     std::vector<const InclusionTarget*> active_targets_;  ///< Current active targets (filtered by RT)
-    std::map<int, int> target_priority_map_;  ///< nominal_mass → priority for tie-breaking
-    double tie_threshold_ = 0.1;  ///< qscore difference threshold for priority tie-breaking
-    bool strict_inclusion_ = true;  ///< If true, only acquire targets in inclusion mode; if false, non-targets can fill remaining slots
+    std::map<int, int> target_priority_map_;  ///< nominal_mass -> priority for tie-breaking
 
     /// Tag-based protein family targeting
     std::vector<FASTAFile::FASTAEntry> target_protein_database_;  ///< Target protein family entries
     std::vector<TargetPTM> target_ptms_;                          ///< PTM modifications for mass expansion
-    bool tag_based_targeting_enabled_ = false;                    ///< Flag indicating tag-based mode active
-    int min_tag_length_for_targeting_ = 3;                        ///< Minimum tag length for matching
-    int max_tag_length_for_targeting_ = 8;                        ///< Maximum tag length for matching
-    double tag_matching_tolerance_ppm_ = 10.0;                    ///< Mass tolerance for tag matching
-    double max_flanking_mass_diff_ = 50000.0;                       ///< Max flanking mass diff for tag matches
     std::set<double> expanded_target_masses_;                     ///< Track already-expanded masses (avoid duplicates)
-    int max_total_ptm_count_ = 3;                                 ///< Maximum total PTM modifications per proteoform
 
-    /// precursor SNR threshold
-    double snr_threshold_ = 1;
-    bool use_idscore_ = false;
-    bool consider_all_Charge_states_ = false;
-    bool ms3_all_charges_ = false;  ///< If true, output all charge states for MS3 fragment ions
-    int hcd_energy_ = -1;
+    // tie_threshold_, strict_inclusion_, tag_based_targeting_enabled_,
+    // min/max_tag_length_for_targeting_, tag_matching_tolerance_ppm_,
+    // max_flanking_mass_diff_, max_total_ptm_count_, snr_threshold_,
+    // use_idscore_, consider_all_Charge_states_, ms3_all_charges_,
+    // hcd_energy_ moved to Config
 
-    /// mass tolerance
-    DoubleList tol_;
+    // tol_ removed: tolerance is now in config_.level(N).tolerance_ppm
 
     std::map<double, std::vector<double>> cv_to_mass_ = {
       {-80.0, {2400.0, 2900.0}},
@@ -740,8 +689,7 @@ namespace OpenMS
       {10.0, {15000.0, 16500.0}},
     };
 
-    /// Parse JSON configuration string (Phase 1: replaces legacy space-delimited format)
-    void parseJSONConfig_(const std::string& json_str);
+    // parseJSONConfig_ removed: parsing logic moved to Config class
 
     // --- Phase 3: Scan command queue infrastructure ---
 
@@ -826,37 +774,15 @@ namespace OpenMS
     std::chrono::steady_clock::time_point last_ms1_time_ = std::chrono::steady_clock::now();
 
     // --- Phase 4: MS3, conditional MS2, AGC scheduling ---
+    // ms3_enabled_, ms3_mode_, max_ms3_per_ms2_, ms3_protein_sequence_ moved to Config
+    // conditional_ms2_enabled_ moved to Config (derived from levels_[2].scans.size() >= 2)
+    // ms1_analyzer_, ms1_first/last_mass_, ms1_resolution_, ms1_agc_target_, ms1_max_it_ moved to Config
+    // ms2_configs_ (MS2ConfigJson) moved to Config (now MSLevelConfig::scans)
+    // cycle_time_enabled_, timeout_enabled_, cycle_time_ms_, timeout_ms_ moved to Config
+    // agc_interval_ms_ moved to Config
 
-    // MS3 configuration (parsed from JSON "ms3" section)
-    bool ms3_enabled_ = false;
-    int ms3_mode_ = 0;           ///< 0=disabled, 1=SourceCID, 2=SPS, 3=HCD-triggered, 4=EThcD
-    int max_ms3_per_ms2_ = 4;
-    std::string ms3_protein_sequence_;
-
-    // Conditional MS2
-    bool conditional_ms2_enabled_ = false;
-
-    // AGC scheduling
+    // AGC scheduling (runtime state only)
     mutable std::chrono::steady_clock::time_point last_agc_time_;
-    uint64_t agc_interval_ms_ = 30000;  ///< default 30s, from scheduling.agc_interval_seconds
-
-    // --- Phase 1 JSON-only member variables (stored for future phases) ---
-
-    // ms_settings (stored for Phase 3+ scan command construction)
-    std::string ms1_analyzer_;
-    double ms1_first_mass_ = 0, ms1_last_mass_ = 0, ms1_max_it_ = 0;
-    int ms1_resolution_ = 0, ms1_agc_target_ = 0;
-
-    struct MS2ConfigJson
-    {
-      std::string analyzer, activation;
-      int collision_energy = 0, resolution = 0;
-    };
-    std::vector<MS2ConfigJson> ms2_configs_;
-
-    // scheduling (stored for Phase 3)
-    bool cycle_time_enabled_ = false, timeout_enabled_ = false;
-    double cycle_time_ms_ = 60000.0, timeout_ms_ = 30000.0;
 
     // --- Phase 7: Selection and exploration config (private state below, public types above) ---
 
@@ -899,23 +825,11 @@ namespace OpenMS
       int variant_index;
     };
 
-    /// Per-level config indexed by MSn level (1, 2, 3, ...)
-    std::unordered_map<int, MSLevelConfig> level_configs_;
+    // level_configs_, exploration_enabled_, quant_enabled_, reporter_mz_tol_,
+    // fold_change_threshold_, faims_cv_values_, max_cv_skip_, cv_precursor_threshold_,
+    // faims_enabled_ moved to Config
 
-    /// Convenience flag: true if any level has exploration != None
-    bool exploration_enabled_ = false;
-
-    // quantification (stored — currently passed per-call via IsDifferentiallyAbundant)
-    bool quant_enabled_ = false;
-    double reporter_mz_tol_ = 0.002, fold_change_threshold_ = 1.4;
-
-    // FAIMS configuration (from JSON)
-    std::vector<double> faims_cv_values_;
-    int max_cv_skip_ = 0;
-    int cv_precursor_threshold_ = 15;   ///< MassThreshold from C# (default 15)
-
-    // FAIMS per-CV adaptive skip state (Phase 6)
-    bool faims_enabled_ = false;        ///< true when faims_cv_values_ has 2+ entries
+    // FAIMS per-CV adaptive skip state (Phase 6, runtime state stays here)
     std::vector<int> cv_skip_amount_;   ///< per-CV: current skip spacing (doubles on low precursor count)
     std::vector<int> cv_skip_count_;    ///< per-CV: current skip counter
     int current_cv_index_ = 0;         ///< round-robin cycling index into faims_cv_values_
@@ -937,17 +851,7 @@ namespace OpenMS
     /// Maps tracking_id (int) -> {group_id, variant_index} for variant result routing
     std::unordered_map<int, VariantRef> variant_tracking_to_group_;
 
-    /// Get config for a given MSn level; returns default (selection=None, exploration=None) if unconfigured
-    const MSLevelConfig& getLevelConfig_(int msn_level) const
-    {
-      static const MSLevelConfig default_config{SelectionMetric::None, 10,
-          ExplorationMetric::None, 20.0, 40.0, 5.0, "HCD", {}};
-      auto it = level_configs_.find(msn_level);
-      return (it != level_configs_.end()) ? it->second : default_config;
-    }
-
-    // parseLevelConfig_, parseSelectionMetric_, parseExplorationMetric_ are
-    // implemented as file-scope helpers in FLASHIda.cpp (avoid nlohmann/json in header)
+    // getLevelConfig_ removed: use config_.level(n) instead
 
     /// Generate CE variant values from min/max/step
     std::vector<double> buildCEVariants_(double ce_min, double ce_max, double ce_step) const;
@@ -998,7 +902,10 @@ namespace OpenMS
     }
 
     /// Test-only: get level config for a given MSn level
-    const MSLevelConfig& getLevelConfigForTest(int level) const { return getLevelConfig_(level); }
+    const MSLevelConfig& getLevelConfigForTest(int level) const { return config_.level(level); }
+
+    /// Test-only: access the Config object directly
+    const Config& getConfigForTest() const { return config_; }
 
     /// Test-only: get queue size for a given priority
     size_t getQueueSizeForTest(int priority) const

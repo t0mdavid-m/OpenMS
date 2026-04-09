@@ -512,7 +512,7 @@ START_SECTION(exploration_group_creation)
   TEST_EQUAL(group.complete, false)
   TEST_EQUAL(group.winner_index, -1)
   TEST_EQUAL(static_cast<int>(group.exploration_metric),
-             static_cast<int>(FLASHIda::ExplorationMetric::MassCount))
+             static_cast<int>(ExplorationMetric::MassCount))
 
   // Verify exactly 5 CE variants: 20.0, 25.0, 30.0, 35.0, 40.0
   TEST_EQUAL(static_cast<int>(group.variants.size()), 5)
@@ -765,7 +765,7 @@ START_SECTION(optimization_metadata_populated)
   TEST_EQUAL(meta->total_variants, 5)
   TEST_REAL_SIMILAR(meta->collision_energy, 20.0)
   TEST_STRING_EQUAL(meta->activation_type, "HCD")
-  TEST_EQUAL(meta->exploration_metric, static_cast<int>(FLASHIda::ExplorationMetric::MassCount))
+  TEST_EQUAL(meta->exploration_metric, static_cast<int>(ExplorationMetric::MassCount))
   TEST_EQUAL(meta->is_best_variant, false)  // winner not determined yet
   TEST_REAL_SIMILAR(meta->fragmentation_quality_score, 3.0)  // mass_count = size = 3
   TEST_EQUAL(meta->exploration_scans, 5)
@@ -818,11 +818,11 @@ START_SECTION(no_ms2_exploration_ms3_exploration_immediate)
 
   // Verify MS2 has no exploration
   auto ms2_cfg = ida->getLevelConfigForTest(2);
-  TEST_EQUAL(static_cast<int>(ms2_cfg.exploration), static_cast<int>(FLASHIda::ExplorationMetric::None))
+  TEST_EQUAL(static_cast<int>(ms2_cfg.exploration), static_cast<int>(ExplorationMetric::None))
 
   // Verify MS3 has exploration
   auto ms3_cfg = ida->getLevelConfigForTest(3);
-  TEST_EQUAL(static_cast<int>(ms3_cfg.exploration), static_cast<int>(FLASHIda::ExplorationMetric::FragmentCount))
+  TEST_EQUAL(static_cast<int>(ms3_cfg.exploration), static_cast<int>(ExplorationMetric::FragmentCount))
 
   // No MS2 exploration groups should ever exist
   TEST_EQUAL(ida->getActiveExplorationGroupCountForTest(), 0)
@@ -839,20 +839,20 @@ START_SECTION(selection_metric_controls_config)
   FLASHIda* ida = new FLASHIda(const_cast<char*>(exploration_config));
 
   auto ms1_cfg = ida->getLevelConfigForTest(1);
-  TEST_EQUAL(static_cast<int>(ms1_cfg.selection), static_cast<int>(FLASHIda::SelectionMetric::QScore))
+  TEST_EQUAL(static_cast<int>(ms1_cfg.selection), static_cast<int>(SelectionMetric::QScore))
   TEST_EQUAL(ms1_cfg.max_targets, 3)
 
   auto ms2_cfg = ida->getLevelConfigForTest(2);
-  TEST_EQUAL(static_cast<int>(ms2_cfg.selection), static_cast<int>(FLASHIda::SelectionMetric::Intensity))
+  TEST_EQUAL(static_cast<int>(ms2_cfg.selection), static_cast<int>(SelectionMetric::Intensity))
   TEST_EQUAL(ms2_cfg.max_targets, 3)
-  TEST_EQUAL(static_cast<int>(ms2_cfg.exploration), static_cast<int>(FLASHIda::ExplorationMetric::MassCount))
+  TEST_EQUAL(static_cast<int>(ms2_cfg.exploration), static_cast<int>(ExplorationMetric::MassCount))
   TEST_REAL_SIMILAR(ms2_cfg.ce_min, 20.0)
   TEST_REAL_SIMILAR(ms2_cfg.ce_max, 40.0)
   TEST_REAL_SIMILAR(ms2_cfg.ce_step, 5.0)
   TEST_STRING_EQUAL(ms2_cfg.activation, "HCD")
 
   auto ms3_cfg = ida->getLevelConfigForTest(3);
-  TEST_EQUAL(static_cast<int>(ms3_cfg.selection), static_cast<int>(FLASHIda::SelectionMetric::None))
+  TEST_EQUAL(static_cast<int>(ms3_cfg.selection), static_cast<int>(SelectionMetric::None))
 
   (void)ms1_cfg;
   (void)ms2_cfg;

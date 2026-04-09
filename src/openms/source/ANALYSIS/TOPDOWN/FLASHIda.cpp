@@ -58,7 +58,6 @@
 #include <set>
 #include <sstream>
 #include <unordered_set>
-#include <nlohmann/json.hpp>
 #ifdef _OPENMP
   #include <omp.h>
 #endif
@@ -327,19 +326,151 @@ const std::string FLASHIda::tracking_alphabet_ = "!\"#$%&'()*+,-./0123456789:;<=
 inline const double optimal_window_margin_ = .4;
 
 /// constructor
-FLASHIda::FLASHIda(char* arg)
+FLASHIda::FLASHIda(char* arg) :
+    config_(std::string(arg))
 {
   #ifdef _OPENMP
     omp_set_num_threads(4);
   #endif
 
-    // Config must be JSON (legacy space-delimited format removed in Phase 8)
-    std::string arg_str(arg);
-    if (arg_str.empty() || arg_str[0] != '{')
+    // --- Build SpectralDeconvolution Param from Config ---
+    Param sd_defaults = SpectralDeconvolution().getDefaults();
+    sd_defaults.setValue("min_charge", config_.deconvolution().min_charge);
+    sd_defaults.setValue("max_charge", config_.deconvolution().max_charge);
+    sd_defaults.setValue("min_mass", config_.deconvolution().min_mass);
+    sd_defaults.setValue("max_mass", config_.deconvolution().max_mass);
+    DoubleList tol_values = {config_.level(1).tolerance_ppm, config_.level(2).tolerance_ppm};
+    sd_defaults.setValue("tol", tol_values);
+    fd_.setParameters(sd_defaults);
+    fd_.calculateAveragine(false);
+
+    // --- Initialize FAIMS adaptive skip state ---
+    if (config_.faims().enabled)
     {
-      throw std::invalid_argument("FLASHIda: config must be JSON (starts with '{')");
+      int n = static_cast<int>(config_.faims().cv_values.size());
+      cv_skip_amount_.resize(n, 0);
+      cv_skip_count_.resize(n, 0);
+      current_cv_index_ = 0;
     }
-    parseJSONConfig_(arg_str);
+
+    // --- Initialize AGC timing ---
+    last_agc_time_ = std::chrono::steady_clock::now();
+
+    // --- Load target log files ---
+    const auto& targeting = config_.targeting();
+    std::stringstream log_files_msg{};
+    for (const auto& log_file : targeting.target_log_files)
+    {
+      log_files_msg << log_file << " ";
+      std::ifstream instream(log_file);
+      if (instream.good())
+      {
+        String line;
+        double rt = .0, mass, qscore;
+        int charge;
+        while (std::getline(instream, line))
+        {
+          if (line.find("0 targets") != line.npos)
+            continue;
+          if (line.hasPrefix("MS1"))
+          {
+            Size st = line.find("RT ") + 3;
+            Size ed = line.find('(') - 2;
+            String n = line.substr(st, ed - st + 1);
+            rt = atof(n.c_str());
+          }
+          if (line.hasPrefix("Mass"))
+          {
+            Size st = 5;
+            Size ed = line.find('\t');
+            String n = line.substr(st, ed - st + 1);
+            mass = atof(n.c_str());
+
+            st = line.find("Score=") + 6;
+            ed = line.find('\t', st);
+            n = line.substr(st, ed - st + 1);
+            qscore = atof(n.c_str());
+
+            st = line.find("Z=") + 2;
+            ed = line.find('\t', st);
+            n = line.substr(st, ed - st + 1);
+            charge = n.toInt();
+
+            if (targeting.mode == 1 || targeting.mode == 2)
+            {
+              if (target_mass_rt_map_.find(mass) == target_mass_rt_map_.end())
+                target_mass_rt_map_[mass] = std::vector<double>();
+              target_mass_rt_map_[mass].push_back(rt * 60.0);
+              if (target_mass_qscore_map_.find(mass) == target_mass_qscore_map_.end())
+                target_mass_qscore_map_[mass] = std::vector<double>();
+              target_mass_qscore_map_[mass].push_back(qscore);
+              if (target_mass_charge_map_.find(mass) == target_mass_charge_map_.end())
+                target_mass_charge_map_[mass] = std::vector<int>();
+              target_mass_charge_map_[mass].push_back(charge);
+            }
+          }
+          else if (line.hasPrefix("AllMass"))
+          {
+            if (targeting.mode == 3)
+            {
+              Size st = 8;
+              Size ed = line.size();
+              String n = line.substr(st, ed - st + 1);
+              std::stringstream tmp_stream(n);
+              String str;
+              std::vector<double> results;
+              while (getline(tmp_stream, str, ' '))
+                results.push_back(atof(str.c_str()));
+              if (exclusion_rt_masses_map_.find(rt * 60.0) == exclusion_rt_masses_map_.end())
+                exclusion_rt_masses_map_[rt * 60.0] = std::vector<double>();
+              for (double m : results)
+                exclusion_rt_masses_map_[rt * 60.0].push_back(m);
+            }
+          }
+        }
+        instream.close();
+      }
+    }
+
+    if (targeting.mode == 1)
+      std::cout << log_files_msg.str() << "file(s) is(are) used for inclusion mode\n";
+    else if (targeting.mode == 2)
+      std::cout << log_files_msg.str() << "file(s) is(are) used for in-depth mode\n";
+    else if (targeting.mode == 3)
+      std::cout << log_files_msg.str() << "file(s) is(are) used for exclusion mode\n";
+
+    // Parse TSV inclusion list files
+    if (targeting.mode == 1 && !targeting.inclusion_list_file.empty())
+    {
+      parseInclusionListTSV_(targeting.inclusion_list_file);
+      std::cout << inclusion_targets_.size() << " targets loaded from TSV inclusion list\n";
+    }
+
+    // Load FASTA files for tag-based targeting
+    if (!targeting.fasta_file.empty())
+    {
+      std::vector<FASTAFile::FASTAEntry> entries;
+      FASTAFile().load(targeting.fasta_file, entries);
+      target_protein_database_.insert(target_protein_database_.end(), entries.begin(), entries.end());
+      std::cout << target_protein_database_.size() << " protein entries loaded for tag-based targeting\n";
+    }
+
+    if (!target_protein_database_.empty())
+    {
+      std::cout << "Tag-based targeting: min_tag_length=" << targeting.min_tag_length
+                << ", max_tag_length=" << targeting.max_tag_length
+                << ", tolerance=" << targeting.tag_matching_tolerance_ppm << " ppm"
+                << ", max_flanking_mass_diff=" << targeting.max_flanking_mass_diff << " Da\n";
+    }
+
+    // Load PTM TSV files
+    if (!targeting.ptm_list_file.empty())
+      parseTargetPTMsTSV_(targeting.ptm_list_file);
+    if (!target_ptms_.empty())
+    {
+      std::cout << target_ptms_.size() << " PTM modifications loaded for target expansion (max "
+                << targeting.max_total_ptm_count << " total per proteoform)\n";
+    }
   }
 
   bool FLASHIda::isDifferentiallyAbundant(const double* mzs,
@@ -491,7 +622,7 @@ FLASHIda::FLASHIda(char* arg)
 
     target_masses_.clear();
     excluded_masses_.clear();
-    if (targeting_mode_ == 1)  // Unified inclusion mode (merged mode 4 functionality)
+    if (config_.targeting().mode == 1)  // Unified inclusion mode (merged mode 4 functionality)
     {
       active_targets_.clear();
       target_priority_map_.clear();
@@ -526,11 +657,11 @@ FLASHIda::FLASHIda(char* arg)
       std::sort(target_masses_.begin(), target_masses_.end());
       fd_.setTargetMasses(target_masses_, false);
     }
-    else if (targeting_mode_ == 3)
+    else if (config_.targeting().mode == 3)
     {
       for (const auto& [prt, masses] : exclusion_rt_masses_map_)
       {
-        if (std::abs(rt - prt) >= rt_window_ && prt != 0) continue;
+        if (std::abs(rt - prt) >= config_.targeting().rt_window && prt != 0) continue;
         for (double mass : masses)
         {
           excluded_masses_.push_back(mass);
@@ -553,28 +684,28 @@ FLASHIda::FLASHIda(char* arg)
   void FLASHIda::filterPeakGroupsUsingMassExclusion_(const int ms_level, const double rt)
   {
     // IDScore replaces QScore but not intensity
-    if (use_idscore_)
+    if (config_.targeting().use_idscore)
     {
-      if (consider_all_Charge_states_ && hcd_energy_ < 0) {
+      if (config_.targeting().consider_all_charges && config_.targeting().hcd_energy < 0) {
         deconvolved_spectrum_.sortByIDScoreAllCharges();
       }
-      else if (consider_all_Charge_states_) {
-        deconvolved_spectrum_.sortByIDScoreAllCharges(hcd_energy_);
+      else if (config_.targeting().consider_all_charges) {
+        deconvolved_spectrum_.sortByIDScoreAllCharges(config_.targeting().hcd_energy);
       }
-      else if (hcd_energy_ < 0) {
+      else if (config_.targeting().hcd_energy < 0) {
         deconvolved_spectrum_.sortByIDScoreRepresentative();
       }
       else {
-        deconvolved_spectrum_.sortByIDScoreRepresentative(hcd_energy_);
+        deconvolved_spectrum_.sortByIDScoreRepresentative(config_.targeting().hcd_energy);
       }
     }
-    else if (getLevelConfig_(ms_level).selection == SelectionMetric::Intensity)
+    else if (config_.level(ms_level).selection == SelectionMetric::Intensity)
     {
       deconvolved_spectrum_.sortByIntensity();
     }
     else
     {
-      if (consider_all_Charge_states_) {
+      if (config_.targeting().consider_all_charges) {
         deconvolved_spectrum_.sortByQScoreAllCharges();
       }
       else {
@@ -583,11 +714,11 @@ FLASHIda::FLASHIda(char* arg)
     }
 
     // Apply priority tie-breaking when TSV targets are loaded
-    if (targeting_mode_ == 1 && !inclusion_targets_.empty())
+    if (config_.targeting().mode == 1 && !inclusion_targets_.empty())
     {
       std::stable_sort(deconvolved_spectrum_.begin(), deconvolved_spectrum_.end(),
         [this](const PeakGroup& a, const PeakGroup& b) {
-          if (std::abs(a.getQscore() - b.getQscore()) < tie_threshold_)
+          if (std::abs(a.getQscore() - b.getQscore()) < config_.targeting().tie_threshold)
           {
             int nom_a = SpectralDeconvolution::getNominalMass(a.getMonoMass());
             int nom_b = SpectralDeconvolution::getNominalMass(b.getMonoMass());
@@ -599,7 +730,7 @@ FLASHIda::FLASHIda(char* arg)
         });
     }
 
-    Size mass_count = (Size)getLevelConfig_(ms_level).max_targets;
+    Size mass_count = (Size)config_.level(ms_level).max_targets;
     trigger_charges.clear();
     trigger_hcds.clear();
     trigger_scores.clear();
@@ -626,7 +757,7 @@ FLASHIda::FLASHIda(char* arg)
 
     // exclusion mode
     // TODO: Update IDScore bla, currently only qscore
-    if (targeting_mode_ == 2)
+    if (config_.targeting().mode == 2)
     {
       for (const auto& [mass, rts] : target_mass_rt_map_)
       {
@@ -636,7 +767,7 @@ FLASHIda::FLASHIda(char* arg)
         {
           double prt = rts[i];
           double qscore = qscores[i];
-          if (std::abs(rt - prt) < rt_window_)
+          if (std::abs(rt - prt) < config_.targeting().rt_window)
           {
             auto inter = t_mass_score_map_.find(nominal_mass);
             if (inter == t_mass_score_map_.end()) { t_mass_score_map_[nominal_mass] = 1 - qscore; }
@@ -649,7 +780,7 @@ FLASHIda::FLASHIda(char* arg)
     // remove expired entries for tqscore_exceeding_mz_rt_map_
     for (const auto& [m, r] : tqscore_exceeding_mz_rt_map_)
     {
-      if (rt - r > rt_window_) { continue; }
+      if (rt - r > config_.targeting().rt_window) { continue; }
       new_mz_rt_map_[m] = r;
     }
     new_mz_rt_map_.swap(tqscore_exceeding_mz_rt_map_);
@@ -658,7 +789,7 @@ FLASHIda::FLASHIda(char* arg)
     // remove expired entries for tqscore_exceeding_mass_rt_map_
     for (const auto& [m, r] : tqscore_exceeding_mass_rt_map_)
     {
-      if (rt - r > rt_window_) { continue; }
+      if (rt - r > config_.targeting().rt_window) { continue; }
       new_mass_rt_map_[m] = r;
     }
     new_mass_rt_map_.swap(tqscore_exceeding_mass_rt_map_);
@@ -667,7 +798,7 @@ FLASHIda::FLASHIda(char* arg)
     // remove expired entries for all_mass_rt_map_, mass_qscore_map_
     for (const auto& item : all_mass_rt_map_)
     {
-      if (rt - item.second > rt_window_) { continue; }
+      if (rt - item.second > config_.targeting().rt_window) { continue; }
       new_all_mass_rt_map_[item.first] = item.second;
       new_mass_score_map_[item.first] = mass_qscore_map_[item.first];
     }
@@ -684,7 +815,7 @@ FLASHIda::FLASHIda(char* arg)
     // for target inclusive masses, qscore precursor snr threshold is not applied.
     // In all phase, for target exclusive mode, all the exclusive masses are excluded. For target inclusive mode, only the target masses are considered.
 
-    for (int iteration = targeting_mode_ == 2 ? 0 : 1; iteration < 2; iteration++) 
+    for (int iteration = config_.targeting().mode == 2 ? 0 : 1; iteration < 2; iteration++) 
     // for mass exclusion, first collect masses with exclusion list. Then collect without exclusion. This works the best
     {
       for (int selection_phase = selection_phase_start; selection_phase <= selection_phase_end; selection_phase++)
@@ -694,7 +825,7 @@ FLASHIda::FLASHIda(char* arg)
         if (selection_phase > 0)
         {
           // Allow phase 1 only for non-strict inclusion mode with active targets
-          if (!(targeting_mode_ == 1 && !strict_inclusion_ && target_masses_.size() > 0 && selection_phase == 1))
+          if (!(config_.targeting().mode == 1 && !config_.targeting().strict_inclusion && target_masses_.size() > 0 && selection_phase == 1))
           {
             break;
           }
@@ -708,27 +839,27 @@ FLASHIda::FLASHIda(char* arg)
 
           int charge;
           double score;
-          int hcd = hcd_energy_;
+          int hcd = config_.targeting().hcd_energy;
           
-          if (use_idscore_ && consider_all_Charge_states_ && hcd_energy_ < 0) {
+          if (config_.targeting().use_idscore && config_.targeting().consider_all_charges && config_.targeting().hcd_energy < 0) {
             charge = pg.getBestIDScoreCharge();
             score = pg.getBestIDScore();
             hcd = pg.getBestIDScoreHCD();
           }
-          else if (use_idscore_ && consider_all_Charge_states_) {
-            charge = pg.getBestIDScoreChargeForHCD(hcd_energy_);
-            score = pg.getBestIDScoreForHCD(hcd_energy_);
+          else if (config_.targeting().use_idscore && config_.targeting().consider_all_charges) {
+            charge = pg.getBestIDScoreChargeForHCD(config_.targeting().hcd_energy);
+            score = pg.getBestIDScoreForHCD(config_.targeting().hcd_energy);
           }
-          else if (use_idscore_ && !consider_all_Charge_states_ && hcd_energy_ < 0) {
+          else if (config_.targeting().use_idscore && !config_.targeting().consider_all_charges && config_.targeting().hcd_energy < 0) {
             charge = pg.getRepAbsCharge();
             score = pg.getBestIDScoreForCharge(charge);
             hcd = pg.getBestHCDForCharge(charge);
           }
-          else if (use_idscore_ && !consider_all_Charge_states_) {
+          else if (config_.targeting().use_idscore && !config_.targeting().consider_all_charges) {
             charge = pg.getRepAbsCharge();
-            score = pg.getIDScoreForChargeAndHCD(charge, hcd_energy_);
+            score = pg.getIDScoreForChargeAndHCD(charge, config_.targeting().hcd_energy);
           }
-          else if (!use_idscore_ && consider_all_Charge_states_) {
+          else if (!config_.targeting().use_idscore && config_.targeting().consider_all_charges) {
             charge = pg.getBestQScoreCharge();
             score = pg.getBestQScore();
           }
@@ -749,8 +880,8 @@ FLASHIda::FLASHIda(char* arg)
 
           int nominal_mass = SpectralDeconvolution::getNominalMass(mass);
           bool target_matched = false;
-          double snr_threshold = snr_threshold_;
-          double qscore_threshold = qscore_threshold_;
+          double snr_threshold = config_.targeting().snr_threshold;
+          double qscore_threshold = config_.targeting().qscore_threshold;
           double tqscore_factor_for_exclusion = 1.0;
           
           
@@ -760,13 +891,13 @@ FLASHIda::FLASHIda(char* arg)
           {
             auto inter = t_mass_score_map_.find(nominal_mass);
             if (inter != t_mass_score_map_.end()) { tqscore_factor_for_exclusion = t_mass_score_map_[nominal_mass]; }
-            if (1 - tqscore_factor_for_exclusion > tqscore_threshold) { continue; }
+            if (1 - tqscore_factor_for_exclusion > config_.targeting().tqscore_threshold) { continue; }
           }
 
           // Inclusion mode (unified: supports TSV-based targets and legacy .log/.out targets)
-          if (targeting_mode_ == 1 && target_masses_.size() > 0)
+          if (config_.targeting().mode == 1 && target_masses_.size() > 0)
           {
-            double delta = 2 * tol_[0] * mass * 1e-6;
+            double delta = 2 * config_.level(1).tolerance_ppm * mass * 1e-6;
             auto ub = std::upper_bound(target_masses_.begin(), target_masses_.end(), mass + delta);
 
             while (!target_matched)
@@ -842,16 +973,16 @@ FLASHIda::FLASHIda(char* arg)
             }
             // Phase 1: non-targets proceed with default thresholds
           }
-          else if (targeting_mode_ == 1 && strict_inclusion_)
+          else if (config_.targeting().mode == 1 && config_.targeting().strict_inclusion)
           {
             // Strict inclusion mode with no active targets - skip all candidates
             continue;
           }
           // deep mode
-          else if (targeting_mode_ == 3 && excluded_masses_.size() > 0)
+          else if (config_.targeting().mode == 3 && excluded_masses_.size() > 0)
           {
             bool to_exclude = false;
-            double delta = 2 * tol_[0] * mass * 1e-6;
+            double delta = 2 * config_.level(1).tolerance_ppm * mass * 1e-6;
             auto ub = std::upper_bound(excluded_masses_.begin(), excluded_masses_.end(), mass + delta);
 
             while (! to_exclude)
@@ -898,7 +1029,7 @@ FLASHIda::FLASHIda(char* arg)
           // save mass acquisition
           all_mass_rt_map_[nominal_mass] = rt;
 
-          if (!use_idscore_) {
+          if (!config_.targeting().use_idscore) {
             // Compute total qscore
             auto inter = mass_qscore_map_.find(nominal_mass);
             if (inter == mass_qscore_map_.end()) 
@@ -914,7 +1045,7 @@ FLASHIda::FLASHIda(char* arg)
             }
 
             // Add to exclusion list if neccessary
-            if (mass_qscore_map_[nominal_mass] > tqscore_threshold)
+            if (mass_qscore_map_[nominal_mass] > config_.targeting().tqscore_threshold)
             {
               tqscore_exceeding_mass_rt_map_[nominal_mass] = rt;
               tqscore_exceeding_mz_rt_map_[integer_mz] = rt;
@@ -927,7 +1058,7 @@ FLASHIda::FLASHIda(char* arg)
             else { mass_qscore_map_[nominal_mass] *= 1 - score; }
 
             // Add to exclusion list if neccessary
-            if (1 - mass_qscore_map_[nominal_mass] * tqscore_factor_for_exclusion > tqscore_threshold)
+            if (1 - mass_qscore_map_[nominal_mass] * tqscore_factor_for_exclusion > config_.targeting().tqscore_threshold)
             {
               tqscore_exceeding_mass_rt_map_[nominal_mass] = rt;
               tqscore_exceeding_mz_rt_map_[integer_mz] = rt;
@@ -935,7 +1066,7 @@ FLASHIda::FLASHIda(char* arg)
           }
 
           // For legacy .log mode with charge targeting, remove this charge from list
-          if (targeting_mode_ == 1 && charges != nullptr) {
+          if (config_.targeting().mode == 1 && charges != nullptr) {
             auto it = std::find(charges->begin(), charges->end(), charge);
             if (it != charges->end()) {
               charges->erase(it);
@@ -1098,7 +1229,7 @@ FLASHIda::FLASHIda(char* arg)
       const auto& pg = ms2_deconvolved_spectrum_[pg_idx];
       double mono_mass = pg.getMonoMass();
 
-      if (ms3_all_charges_)
+      if (config_.targeting().ms3_all_charges)
       {
         // Collect all charges with non-zero intensity and sort by intensity descending
         auto [min_c, max_c] = pg.getAbsChargeRange();
@@ -1214,7 +1345,7 @@ FLASHIda::FLASHIda(char* arg)
     }
 
     // 2. Run FLASHTagger to generate sequence tags
-    double ppm_tolerance = tol_[1];
+    double ppm_tolerance = config_.level(2).tolerance_ppm;
     std::vector<std::string> ion_types_str = getIonTypesForFragmentationMethod(fragmentation_method);
     FLASHTaggerAlgorithm tagger;
     Param tagger_param = tagger.getDefaults();
@@ -1574,7 +1705,7 @@ FLASHIda::FLASHIda(char* arg)
       const auto& m = matches[i];
       const auto& pg = ms2_deconvolved_spectrum_[m.peak_index];
 
-      if (ms3_all_charges_)
+      if (config_.targeting().ms3_all_charges)
       {
         // Collect all charges with non-zero intensity and sort by intensity descending
         auto [min_c, max_c] = pg.getAbsChargeRange();
@@ -1848,7 +1979,7 @@ FLASHIda::FLASHIda(char* arg)
       const auto& pg = ms2_deconvolved_spectrum_[ion.peak_index];
       double mono_mass = pg.getMonoMass();
 
-      if (ms3_all_charges_)
+      if (config_.targeting().ms3_all_charges)
       {
         // Collect all charges with non-zero intensity and sort by intensity descending
         auto [min_c, max_c] = pg.getAbsChargeRange();
@@ -2093,7 +2224,7 @@ FLASHIda::FLASHIda(char* arg)
       {
         const auto& pg = ms2_deconvolved_spectrum_[selected->peak_index];
 
-        if (ms3_all_charges_)
+        if (config_.targeting().ms3_all_charges)
         {
           // Collect all charges with non-zero intensity and sort by intensity descending
           auto [min_c, max_c] = pg.getAbsChargeRange();
@@ -2302,15 +2433,12 @@ FLASHIda::FLASHIda(char* arg)
 
   int FLASHIda::getConfigInt(const std::string& key) const
   {
-    if (key == "targeting_mode") return targeting_mode_;
-    if (key == "hcd_energy") return hcd_energy_;
-    return 0;
+    return config_.getInt(key);
   }
 
   double FLASHIda::getConfigDouble(const std::string& key) const
   {
-    if (key == "rt_window") return rt_window_;
-    return 0.0;
+    return config_.getDouble(key);
   }
 
   std::map<int, std::vector<std::vector<float>>> FLASHIda::parseFLASHIdaLog(const String& in_log_file)
@@ -2581,7 +2709,7 @@ FLASHIda::FLASHIda(char* arg)
       for (int count = -ptm.max_count; count <= ptm.max_count; ++count)
       {
         int new_total = total_count + std::abs(count);  // Track absolute count for pruning
-        if (new_total > max_total_ptm_count_) continue;  // Skip if exceeds global max
+        if (new_total > config_.targeting().max_total_ptm_count) continue;  // Skip if exceeds global max
         double new_mass = current_mass + count * ptm.mass;
         generate(ptm_idx + 1, new_mass, new_total);
       }
@@ -2612,7 +2740,7 @@ FLASHIda::FLASHIda(char* arg)
       target.mass = mass;
       target.charge = -1;  // Any charge
       target.rt_start = rt;
-      target.rt_end = rt + rt_window_;
+      target.rt_end = rt + config_.targeting().rt_window;
       target.priority = priority;
 
       inclusion_targets_.push_back(target);
@@ -2623,7 +2751,7 @@ FLASHIda::FLASHIda(char* arg)
       [](const InclusionTarget& a, const InclusionTarget& b) { return a.mass < b.mass; });
 
     std::cout << "Added " << masses.size() << " dynamic target masses (RT window: "
-              << rt << "-" << (rt + rt_window_) << "s)\n";
+              << rt << "-" << (rt + config_.targeting().rt_window) << "s)\n";
     std::cout << "  Masses: ";
     for (Size i = 0; i < masses.size(); ++i)
     {
@@ -2636,7 +2764,7 @@ FLASHIda::FLASHIda(char* arg)
   bool FLASHIda::processMS2ForTagBasedTargeting(double precursor_mass)
   {
     // Early exit if tag-based targeting not enabled
-    if (!tag_based_targeting_enabled_ || target_protein_database_.empty())
+    if (target_protein_database_.empty())
     {
       return false;
     }
@@ -2660,12 +2788,12 @@ FLASHIda::FLASHIda(char* arg)
     // Create and configure tagger with tag length parameters
     FLASHTaggerAlgorithm tagger;
     Param tagger_param = tagger.getDefaults();
-    tagger_param.setValue("min_length", min_tag_length_for_targeting_);
-    tagger_param.setValue("max_length", max_tag_length_for_targeting_);
+    tagger_param.setValue("min_length", config_.targeting().min_tag_length);
+    tagger_param.setValue("max_length", config_.targeting().max_tag_length);
     tagger.setParameters(tagger_param);
 
     // Run tag generation
-    tagger.run(dspec, tag_matching_tolerance_ppm_);
+    tagger.run(dspec, config_.targeting().tag_matching_tolerance_ppm);
 
     // Get the generated tags
     std::vector<FLASHHelperClasses::Tag> tags;
@@ -2701,7 +2829,7 @@ FLASHIda::FLASHIda(char* arg)
         FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(
           positions,
           flanking_mass_diffs,
-          max_flanking_mass_diff_,
+          config_.targeting().max_flanking_mass_diff,
           pseq,
           tag);
 
@@ -2763,353 +2891,7 @@ FLASHIda::FLASHIda(char* arg)
     return true;
   }
 
-  void FLASHIda::parseJSONConfig_(const std::string& json_str)
-  {
-    try
-    {
-      using json = nlohmann::json;
-      json config = json::parse(json_str);
-
-      // --- deconvolution section ---
-      auto deconv = config.value("deconvolution", json::object());
-      qscore_threshold_ = deconv.value("score_threshold", 0.0);
-      tqscore_threshold = deconv.value("tqscore_threshold", 0.9);
-      int min_charge = deconv.value("min_charge", 4);
-      int max_charge = deconv.value("max_charge", 50);
-      double min_mass = deconv.value("min_mass", 500.0);
-      double max_mass = deconv.value("max_mass", 50000.0);
-
-      DoubleList tol_values;
-      if (deconv.contains("tol") && deconv["tol"].is_array())
-      {
-        for (const auto& v : deconv["tol"])
-          tol_values.push_back(v.get<double>());
-      }
-      if (tol_values.empty())
-        tol_values = {10.0, 10.0};
-      if (tol_values.size() == 1)
-        tol_values.push_back(tol_values[0]);
-      tol_ = std::vector<double>(tol_values);
-
-      // Use MS2 tolerance for tag matching
-      if (tol_.size() >= 2)
-        tag_matching_tolerance_ppm_ = tol_[1];
-      else if (tol_.size() == 1)
-        tag_matching_tolerance_ppm_ = tol_[0];
-
-      // --- precursor_selection section ---
-      auto ps = config.value("precursor_selection", json::object());
-      rt_window_ = ps.value("RT_window", 180.0);
-      targeting_mode_ = ps.value("target_mode", 0);
-      use_idscore_ = ps.value("IDScore", false);
-      consider_all_Charge_states_ = ps.value("AllCharges", false);
-      ms3_all_charges_ = ps.value("MS3AllCharges", false);
-      hcd_energy_ = ps.value("HCDEnergy", -1);
-      strict_inclusion_ = ps.value("strict_inclusion", false);
-      tie_threshold_ = ps.value("tie_threshold", 0.1);
-
-      if (targeting_mode_ == 1)
-        std::cout << "Inclusion mode: " << (strict_inclusion_ ? "strict" : "non-strict") << "\n";
-
-      // --- tagging section ---
-      auto tagging = config.value("tagging", json::object());
-      min_tag_length_for_targeting_ = tagging.value("min_tag_length", 3);
-      max_tag_length_for_targeting_ = tagging.value("max_tag_length", 8);
-      max_total_ptm_count_ = tagging.value("max_ptm_count", 3);
-      max_flanking_mass_diff_ = tagging.value("max_flanking_mass_diff", 50000.0);
-
-      // --- files section ---
-      auto files = config.value("files", json::object());
-
-      // Target log files
-      std::vector<String> log_files;
-      if (files.contains("target_logs") && files["target_logs"].is_array())
-      {
-        for (const auto& f : files["target_logs"])
-          log_files.push_back(f.get<std::string>());
-      }
-
-      // FASTA files
-      std::vector<String> fasta_files;
-      if (files.contains("fasta") && !files["fasta"].get<std::string>().empty())
-        fasta_files.push_back(files["fasta"].get<std::string>());
-
-      // TSV inclusion list
-      std::vector<String> tsv_files;
-      if (files.contains("inclusion_list") && !files["inclusion_list"].get<std::string>().empty())
-        tsv_files.push_back(files["inclusion_list"].get<std::string>());
-
-      // PTM list
-      std::vector<String> ptm_files;
-      if (files.contains("ptm_list") && !files["ptm_list"].get<std::string>().empty())
-        ptm_files.push_back(files["ptm_list"].get<std::string>());
-
-      // --- Build SpectralDeconvolution Param (must match legacy path exactly) ---
-      Param sd_defaults = SpectralDeconvolution().getDefaults();
-      sd_defaults.setValue("min_charge", min_charge);
-      sd_defaults.setValue("max_charge", max_charge);
-      sd_defaults.setValue("min_mass", min_mass);
-      sd_defaults.setValue("max_mass", max_mass);
-      sd_defaults.setValue("tol", tol_values);
-
-      // --- Load target log files (same as legacy path) ---
-      std::stringstream ss{};
-      for (const auto& log_file : log_files)
-      {
-        ss << log_file << " ";
-        std::ifstream instream(log_file);
-        if (instream.good())
-        {
-          String line;
-          double rt = .0, mass, qscore;
-          int charge;
-          while (std::getline(instream, line))
-          {
-            if (line.find("0 targets") != line.npos)
-              continue;
-            if (line.hasPrefix("MS1"))
-            {
-              Size st = line.find("RT ") + 3;
-              Size ed = line.find('(') - 2;
-              String n = line.substr(st, ed - st + 1);
-              rt = atof(n.c_str());
-            }
-            if (line.hasPrefix("Mass"))
-            {
-              Size st = 5;
-              Size ed = line.find('\t');
-              String n = line.substr(st, ed - st + 1);
-              mass = atof(n.c_str());
-
-              st = line.find("Score=") + 6;
-              ed = line.find('\t', st);
-              n = line.substr(st, ed - st + 1);
-              qscore = atof(n.c_str());
-
-              st = line.find("Z=") + 2;
-              ed = line.find('\t', st);
-              n = line.substr(st, ed - st + 1);
-              charge = n.toInt();
-
-              if (targeting_mode_ == 1 || targeting_mode_ == 2)
-              {
-                if (target_mass_rt_map_.find(mass) == target_mass_rt_map_.end())
-                  target_mass_rt_map_[mass] = std::vector<double>();
-                target_mass_rt_map_[mass].push_back(rt * 60.0);
-                if (target_mass_qscore_map_.find(mass) == target_mass_qscore_map_.end())
-                  target_mass_qscore_map_[mass] = std::vector<double>();
-                target_mass_qscore_map_[mass].push_back(qscore);
-                if (target_mass_charge_map_.find(mass) == target_mass_charge_map_.end())
-                  target_mass_charge_map_[mass] = std::vector<int>();
-                target_mass_charge_map_[mass].push_back(charge);
-              }
-            }
-            else if (line.hasPrefix("AllMass"))
-            {
-              if (targeting_mode_ == 3)
-              {
-                Size st = 8;
-                Size ed = line.size();
-                String n = line.substr(st, ed - st + 1);
-                std::stringstream tmp_stream(n);
-                String str;
-                std::vector<double> results;
-                while (getline(tmp_stream, str, ' '))
-                  results.push_back(atof(str.c_str()));
-                if (exclusion_rt_masses_map_.find(rt * 60.0) == exclusion_rt_masses_map_.end())
-                  exclusion_rt_masses_map_[rt * 60.0] = std::vector<double>();
-                for (double m : results)
-                  exclusion_rt_masses_map_[rt * 60.0].push_back(m);
-              }
-            }
-          }
-          instream.close();
-        }
-      }
-
-      if (targeting_mode_ == 1)
-        std::cout << ss.str() << "file(s) is(are) used for inclusion mode\n";
-      else if (targeting_mode_ == 2)
-        std::cout << ss.str() << "file(s) is(are) used for in-depth mode\n";
-      else if (targeting_mode_ == 3)
-        std::cout << ss.str() << "file(s) is(are) used for exclusion mode\n";
-
-      // Parse TSV inclusion list files
-      if (targeting_mode_ == 1 && !tsv_files.empty())
-      {
-        for (const auto& tsv_file : tsv_files)
-          parseInclusionListTSV_(tsv_file);
-        std::cout << inclusion_targets_.size() << " targets loaded from TSV inclusion list\n";
-      }
-
-      // Load FASTA files for tag-based targeting
-      if (!fasta_files.empty())
-      {
-        for (const auto& fasta_file : fasta_files)
-        {
-          std::vector<FASTAFile::FASTAEntry> entries;
-          FASTAFile().load(fasta_file, entries);
-          target_protein_database_.insert(target_protein_database_.end(), entries.begin(), entries.end());
-        }
-        std::cout << target_protein_database_.size() << " protein entries loaded for tag-based targeting\n";
-        tag_based_targeting_enabled_ = true;
-      }
-
-      if (tag_based_targeting_enabled_)
-      {
-        std::cout << "Tag-based targeting: min_tag_length=" << min_tag_length_for_targeting_
-                  << ", max_tag_length=" << max_tag_length_for_targeting_
-                  << ", tolerance=" << tag_matching_tolerance_ppm_ << " ppm"
-                  << ", max_flanking_mass_diff=" << max_flanking_mass_diff_ << " Da\n";
-      }
-
-      // Load PTM TSV files
-      for (const auto& ptm_file : ptm_files)
-        parseTargetPTMsTSV_(ptm_file);
-      if (!target_ptms_.empty())
-      {
-        std::cout << target_ptms_.size() << " PTM modifications loaded for target expansion (max "
-                  << max_total_ptm_count_ << " total per proteoform)\n";
-      }
-
-      // --- Store new JSON-only sections for future phases ---
-
-      // ms3
-      auto ms3 = config.value("ms3", json::object());
-      ms3_enabled_ = ms3.value("enabled", false);
-      ms3_mode_ = ms3.value("mode", 0);
-      max_ms3_per_ms2_ = ms3.value("max_per_ms2", 4);
-      ms3_protein_sequence_ = ms3.value("protein_sequence", "");
-
-      // conditional ms2
-      conditional_ms2_enabled_ = config.value("conditional_ms2", false);
-
-      // quantification
-      auto quant = config.value("quantification", json::object());
-      quant_enabled_ = quant.value("enabled", false);
-      reporter_mz_tol_ = quant.value("reporter_mz_tol", 0.002);
-      fold_change_threshold_ = quant.value("fold_change_threshold", 1.4);
-
-      // faims
-      auto faims = config.value("faims", json::object());
-      if (faims.contains("cv_values") && faims["cv_values"].is_array())
-      {
-        for (const auto& v : faims["cv_values"])
-          faims_cv_values_.push_back(v.get<double>());
-      }
-      max_cv_skip_ = faims.value("max_cv_skip", 0);
-      cv_precursor_threshold_ = faims.value("cv_precursor_threshold", 15);
-
-      // Initialize per-CV adaptive skip state
-      faims_enabled_ = (faims_cv_values_.size() > 1);
-      if (faims_enabled_)
-      {
-        int n = static_cast<int>(faims_cv_values_.size());
-        cv_skip_amount_.resize(n, 0);
-        cv_skip_count_.resize(n, 0);
-        current_cv_index_ = 0;
-      }
-
-      // ms_settings
-      auto ms_settings = config.value("ms_settings", json::object());
-      auto ms1 = ms_settings.value("ms1", json::object());
-      ms1_analyzer_ = ms1.value("analyzer", "");
-      ms1_first_mass_ = ms1.value("first_mass", 0.0);
-      ms1_last_mass_ = ms1.value("last_mass", 0.0);
-      ms1_resolution_ = ms1.value("resolution", 0);
-      ms1_agc_target_ = ms1.value("agc_target", 0);
-      ms1_max_it_ = ms1.value("max_it", 0.0);
-
-      ms2_configs_.clear();
-      if (ms_settings.contains("ms2") && ms_settings["ms2"].is_array())
-      {
-        for (const auto& m : ms_settings["ms2"])
-        {
-          MS2ConfigJson cfg;
-          cfg.analyzer = m.value("analyzer", "");
-          cfg.activation = m.value("activation", "");
-          cfg.collision_energy = m.value("collision_energy", 0);
-          cfg.resolution = m.value("resolution", 0);
-          ms2_configs_.push_back(cfg);
-        }
-      }
-
-      // scheduling
-      auto sched = config.value("scheduling", json::object());
-      auto ct = sched.value("cycle_time", json::object());
-      cycle_time_enabled_ = ct.value("enabled", false);
-      cycle_time_ms_ = ct.value("value_ms", 60000.0);
-      auto to = sched.value("scan_timeout", json::object());
-      timeout_enabled_ = to.value("enabled", false);
-      timeout_ms_ = to.value("value_ms", 30000.0);
-      double agc_interval_sec = sched.value("agc_interval_seconds", 30.0);
-      agc_interval_ms_ = static_cast<uint64_t>(agc_interval_sec * 1000.0);
-      last_agc_time_ = std::chrono::steady_clock::now();
-
-      // --- Phase 7: selection_strategy (required) ---
-      if (!config.contains("selection_strategy"))
-      {
-        throw std::runtime_error("FLASHIda: missing required 'selection_strategy' in JSON config");
-      }
-      const auto& sel_strategy = config["selection_strategy"];
-      for (auto it = sel_strategy.begin(); it != sel_strategy.end(); ++it)
-      {
-        std::string ms_key = it.key();
-        if (ms_key.substr(0, 2) == "ms" && ms_key.size() > 2)
-        {
-          int level = std::stoi(ms_key.substr(2));
-          const auto& level_obj = it.value();
-          MSLevelConfig cfg;
-          // Selection metric
-          std::string sel_str = level_obj.value("selection", level == 1 ? std::string("qscore") : std::string("intensity"));
-          if (sel_str == "intensity") cfg.selection = SelectionMetric::Intensity;
-          else if (sel_str == "qscore") cfg.selection = SelectionMetric::QScore;
-          else if (sel_str == "none") cfg.selection = SelectionMetric::None;
-          else cfg.selection = SelectionMetric::Intensity;
-          // Max targets (with aliases)
-          cfg.max_targets = level_obj.value("max_targets",
-              level_obj.value("max_precursors",
-              level_obj.value("max_fragments", 10)));
-          // Exploration (optional, MS2+ only; guard against JSON null)
-          if (level_obj.contains("exploration") && !level_obj["exploration"].is_null() && level > 1)
-          {
-            const auto& expl_obj = level_obj["exploration"];
-            std::string met_str = expl_obj.value("metric", std::string("none"));
-            if (met_str == "mass_count") cfg.exploration = ExplorationMetric::MassCount;
-            else if (met_str == "remaining_precursor") cfg.exploration = ExplorationMetric::RemainingPrecursor;
-            else if (met_str == "fragment_count") cfg.exploration = ExplorationMetric::FragmentCount;
-            else cfg.exploration = ExplorationMetric::None;
-            cfg.ce_min = expl_obj.value("ce_min", 20.0);
-            cfg.ce_max = expl_obj.value("ce_max", 40.0);
-            cfg.ce_step = expl_obj.value("ce_step", 5.0);
-            cfg.activation = expl_obj.value("activation", std::string("HCD"));
-            if (expl_obj.contains("overrides"))
-            {
-              const auto& ov_obj = expl_obj["overrides"];
-              for (auto ov_it = ov_obj.begin(); ov_it != ov_obj.end(); ++ov_it)
-                cfg.overrides[ov_it.key()] = ov_it.value().get<std::string>();
-            }
-          }
-          level_configs_[level] = cfg;
-        }
-      }
-      // Compute convenience boolean
-      exploration_enabled_ = false;
-      for (auto lc_it = level_configs_.begin(); lc_it != level_configs_.end(); ++lc_it)
-      {
-        if (hasExploration(lc_it->second)) { exploration_enabled_ = true; break; }
-      }
-
-      // --- Initialize SpectralDeconvolution (must match legacy path) ---
-      snr_threshold_ = 1;
-      fd_.setParameters(sd_defaults);
-      fd_.calculateAveragine(false);
-    }
-    catch (const nlohmann::json::exception& e)
-    {
-      std::cerr << "FLASHIda JSON config parse error: " << e.what() << std::endl;
-    }
-  }
+  // parseJSONConfig_ removed: parsing logic moved to Config class
 
   // --- Phase 3: Scan command queue and tracking ---
 
@@ -3139,7 +2921,7 @@ FLASHIda::FLASHIda(char* arg)
   {
     auto now = std::chrono::steady_clock::now();
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_agc_time_).count();
-    return static_cast<uint64_t>(elapsed) > agc_interval_ms_;
+    return static_cast<uint64_t>(elapsed) > config_.scheduling().agc_interval_ms;
   }
 
   uint64_t FLASHIda::msSinceLastMS1_() const
@@ -3156,14 +2938,14 @@ FLASHIda::FLASHIda(char* arg)
     cmd.priority = 3; // lowest priority — MS1 is the fallback
     cmd.is_agc = 0;
     cmd.num_stages = 0;
-    cmd.orbitrap_resolution = ms1_resolution_;
-    cmd.agc_target = ms1_agc_target_;
-    cmd.first_mass = ms1_first_mass_;
-    cmd.last_mass = ms1_last_mass_;
-    cmd.max_it = ms1_max_it_;
+    cmd.orbitrap_resolution = config_.level(1).scans[0].resolution;
+    cmd.agc_target = config_.level(1).scans[0].agc_target;
+    cmd.first_mass = config_.level(1).scans[0].first_mass;
+    cmd.last_mass = config_.level(1).scans[0].last_mass;
+    cmd.max_it = config_.level(1).scans[0].max_it;
 
     // Copy analyzer string safely
-    std::strncpy(cmd.analyzer, ms1_analyzer_.c_str(), sizeof(cmd.analyzer) - 1);
+    std::strncpy(cmd.analyzer, config_.level(1).scans[0].analyzer.c_str(), sizeof(cmd.analyzer) - 1);
     cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';
 
     std::strncpy(cmd.scan_description, "S", sizeof(cmd.scan_description) - 1);
@@ -3180,10 +2962,10 @@ FLASHIda::FLASHIda(char* arg)
     cmd.is_agc = 1;
     cmd.num_stages = 0;
     cmd.orbitrap_resolution = 0;
-    cmd.agc_target = ms1_agc_target_;
-    cmd.first_mass = ms1_first_mass_;
-    cmd.last_mass = ms1_last_mass_;
-    cmd.max_it = ms1_max_it_;
+    cmd.agc_target = config_.level(1).scans[0].agc_target;
+    cmd.first_mass = config_.level(1).scans[0].first_mass;
+    cmd.last_mass = config_.level(1).scans[0].last_mass;
+    cmd.max_it = config_.level(1).scans[0].max_it;
     std::strncpy(cmd.analyzer, "IonTrap", sizeof(cmd.analyzer) - 1);
     cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';
     std::strncpy(cmd.scan_description, "A", sizeof(cmd.scan_description) - 1);
@@ -3194,7 +2976,7 @@ FLASHIda::FLASHIda(char* arg)
 
   void FLASHIda::cleanupExpiredCommands_()
   {
-    if (!timeout_enabled_)
+    if (!config_.scheduling().timeout_enabled)
       return;
 
     auto now_ms = static_cast<uint64_t>(
@@ -3205,7 +2987,7 @@ FLASHIda::FLASHIda(char* arg)
     while (it != pending_scan_map_.end())
     {
       if (it->second.enqueue_timestamp_ms > 0 &&
-          (now_ms - it->second.enqueue_timestamp_ms) > static_cast<uint64_t>(timeout_ms_))
+          (now_ms - it->second.enqueue_timestamp_ms) > static_cast<uint64_t>(config_.scheduling().timeout_ms))
       {
         std::string id_str = encodeTracking_(it->first);
         std::cout << "[TRACK-EXPIRE] id=" << id_str
@@ -3240,25 +3022,25 @@ FLASHIda::FLASHIda(char* arg)
 
   void FLASHIda::updateCVSkip_(double cv, int precursor_count)
   {
-    if (!faims_enabled_) return;
+    if (!config_.faims().enabled) return;
 
     // Find position for this CV value
     int pos = -1;
-    for (int i = 0; i < static_cast<int>(faims_cv_values_.size()); ++i)
+    for (int i = 0; i < static_cast<int>(config_.faims().cv_values.size()); ++i)
     {
-      if (faims_cv_values_[i] == cv) { pos = i; break; }
+      if (config_.faims().cv_values[i] == cv) { pos = i; break; }
     }
     if (pos < 0) return;  // unknown CV
 
-    if (precursor_count < cv_precursor_threshold_)  // strictly < (audit Q2)
+    if (precursor_count < config_.faims().precursor_threshold)  // strictly < (audit Q2)
     {
-      if (cv_skip_amount_[pos] < max_cv_skip_)
+      if (cv_skip_amount_[pos] < config_.faims().max_cv_skip)
       {
         cv_skip_amount_[pos] *= 2;                  // double spacing (audit Q3)
         if (cv_skip_amount_[pos] <= 0)
           cv_skip_amount_[pos] = 1;                 // min = 1
-        if (cv_skip_amount_[pos] > max_cv_skip_)
-          cv_skip_amount_[pos] = max_cv_skip_;      // cap at max
+        if (cv_skip_amount_[pos] > config_.faims().max_cv_skip)
+          cv_skip_amount_[pos] = config_.faims().max_cv_skip;      // cap at max
       }
       cv_skip_count_[pos] = 0;                      // reset in BOTH branches (audit Q3)
     }
@@ -3271,7 +3053,7 @@ FLASHIda::FLASHIda(char* arg)
 
   double FLASHIda::advanceToNextCV_()
   {
-    int n = static_cast<int>(faims_cv_values_.size());
+    int n = static_cast<int>(config_.faims().cv_values.size());
     // Safety bound (C# uses while(true); we bound to n iterations)
     for (int attempts = 0; attempts < n; ++attempts)
     {
@@ -3282,18 +3064,18 @@ FLASHIda::FLASHIda(char* arg)
       if (cv_skip_count_[current_cv_index_] < cv_skip_amount_[current_cv_index_])
       {
         cv_skip_count_[current_cv_index_]++;         // skip this CV (audit Q3)
-        OPENMS_LOG_DEBUG << "[FAIMS] Skipping CV=" << faims_cv_values_[current_cv_index_]
+        OPENMS_LOG_DEBUG << "[FAIMS] Skipping CV=" << config_.faims().cv_values[current_cv_index_]
                          << " (" << cv_skip_count_[current_cv_index_]
                          << "/" << cv_skip_amount_[current_cv_index_] << ")" << std::endl;
       }
       else
       {
-        OPENMS_LOG_DEBUG << "[FAIMS] Changed to CV=" << faims_cv_values_[current_cv_index_] << std::endl;
-        return faims_cv_values_[current_cv_index_];  // use this CV
+        OPENMS_LOG_DEBUG << "[FAIMS] Changed to CV=" << config_.faims().cv_values[current_cv_index_] << std::endl;
+        return config_.faims().cv_values[current_cv_index_];  // use this CV
       }
     }
     // Fallback: all CVs being skipped — use current anyway
-    return faims_cv_values_[current_cv_index_];
+    return config_.faims().cv_values[current_cv_index_];
   }
 
   int FLASHIda::processScan(const double* mzs, const double* ints, int length,
@@ -3307,11 +3089,11 @@ FLASHIda::FLASHIda(char* arg)
       last_ms1_time_ = std::chrono::steady_clock::now();
 
       // Selection=none: skip MS1 precursor selection entirely
-      if (getLevelConfig_(1).selection == SelectionMetric::None)
+      if (config_.level(1).selection == SelectionMetric::None)
         return 0;
 
       // MS1 path: deconvolve, score, filter, select top-N, push MS2 commands
-      double parent_cv = faims_enabled_ ? faims_cv : 0.0;
+      double parent_cv = config_.faims().enabled ? faims_cv : 0.0;
 
       int n = getPeakGroups(mzs, ints, length, rt_min, 1, "ms1", nullptr);
       int commands_pushed = 0;
@@ -3325,7 +3107,7 @@ FLASHIda::FLASHIda(char* arg)
       }
 
       // Phase 7: Initiate exploration for selected precursors if MS2 exploration is enabled
-      if (hasExploration(getLevelConfig_(2)))
+      if (config_.hasExploration(2))
       {
         for (int i = 0; i < n; i++)
         {
@@ -3338,9 +3120,9 @@ FLASHIda::FLASHIda(char* arg)
       }
 
       // FAIMS CV cycling: update skip policy, advance to next CV, push MS1
-      if (faims_enabled_)
+      if (config_.faims().enabled)
       {
-        double current_cv = faims_cv_values_[current_cv_index_];
+        double current_cv = config_.faims().cv_values[current_cv_index_];
         updateCVSkip_(current_cv, commands_pushed);
 
         double next_cv = advanceToNextCV_();
@@ -3393,23 +3175,23 @@ FLASHIda::FLASHIda(char* arg)
     cmd.num_stages = 1;
 
     // Use first MS2 config for resolution and analyzer
-    if (!ms2_configs_.empty())
+    if (!config_.level(2).scans.empty())
     {
-      cmd.orbitrap_resolution = ms2_configs_[0].resolution;
-      std::strncpy(cmd.analyzer, ms2_configs_[0].analyzer.c_str(), sizeof(cmd.analyzer) - 1);
+      cmd.orbitrap_resolution = config_.level(2).scans[0].resolution;
+      std::strncpy(cmd.analyzer, config_.level(2).scans[0].analyzer.c_str(), sizeof(cmd.analyzer) - 1);
       cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';
     }
     else
     {
-      cmd.orbitrap_resolution = ms1_resolution_;
-      std::strncpy(cmd.analyzer, ms1_analyzer_.c_str(), sizeof(cmd.analyzer) - 1);
+      cmd.orbitrap_resolution = config_.level(1).scans[0].resolution;
+      std::strncpy(cmd.analyzer, config_.level(1).scans[0].analyzer.c_str(), sizeof(cmd.analyzer) - 1);
       cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';
     }
 
-    cmd.agc_target = ms1_agc_target_;
-    cmd.first_mass = ms1_first_mass_;
-    cmd.last_mass = ms1_last_mass_;
-    cmd.max_it = ms1_max_it_;
+    cmd.agc_target = config_.level(1).scans[0].agc_target;
+    cmd.first_mass = config_.level(1).scans[0].first_mass;
+    cmd.last_mass = config_.level(1).scans[0].last_mass;
+    cmd.max_it = config_.level(1).scans[0].max_it;
 
     // Isolation window from peak group m/z range
     auto [mz1, mz2] = pg.getMzRange(charge);
@@ -3425,10 +3207,10 @@ FLASHIda::FLASHIda(char* arg)
     // Activation type and collision energy
     std::string activation = "HCD";
     int ce = 0;
-    if (!ms2_configs_.empty())
+    if (!config_.level(2).scans.empty())
     {
-      activation = ms2_configs_[0].activation;
-      ce = ms2_configs_[0].collision_energy;
+      activation = config_.level(2).scans[0].activation;
+      ce = config_.level(2).scans[0].collision_energy;
     }
     // For HCD activation, use hcd as fallback only when config CE is unset
     if (activation == "HCD" && ce <= 0)
@@ -3540,10 +3322,10 @@ FLASHIda::FLASHIda(char* arg)
   std::vector<FLASHIda::MS3Target> FLASHIda::selectMS3Targets_()
   {
     std::vector<MS3Target> targets;
-    if (!ms3_enabled_ || ms3_mode_ == 0 || !ms2_deconv_valid_)
+    if (config_.targeting().ms3_mode == 0 || !ms2_deconv_valid_)
       return targets;
 
-    const int n = max_ms3_per_ms2_;
+    const int n = config_.level(3).max_targets;
     std::vector<double> masses(n), qscores(n), wstarts(n), wends(n);
     std::vector<int> charges(n);
     std::vector<char> ion_types(n, '\0');
@@ -3551,23 +3333,23 @@ FLASHIda::FLASHIda(char* arg)
 
     int count = 0;
 
-    if (ms3_mode_ == 1 || ms3_mode_ == 2)
+    if (config_.targeting().ms3_mode == 1 || config_.targeting().ms3_mode == 2)
     {
       // Mode 1 (SourceCID) and Mode 2 (SPS): Use getBestMS2Masses
       count = getBestMS2Masses(n, masses.data(), qscores.data(), charges.data(),
                                wstarts.data(), wends.data());
     }
-    else if (ms3_mode_ == 3 && !ms3_protein_sequence_.empty())
+    else if (config_.targeting().ms3_mode == 3 && !config_.targeting().protein_sequence.empty())
     {
       // Mode 3 (HCD-triggered): Use getTopFragmentMatches
-      count = getTopFragmentMatches(ms3_protein_sequence_, n, masses.data(), qscores.data(),
+      count = getTopFragmentMatches(config_.targeting().protein_sequence, n, masses.data(), qscores.data(),
                                     charges.data(), wstarts.data(), wends.data(),
                                     ion_types.data(), frag_indices.data(), "HCD");
     }
-    else if (ms3_mode_ == 4 && !ms3_protein_sequence_.empty())
+    else if (config_.targeting().ms3_mode == 4 && !config_.targeting().protein_sequence.empty())
     {
       // Mode 4 (EThcD-triggered): Use getTerminalFragmentIons
-      count = getTerminalFragmentIons(ms3_protein_sequence_, n, masses.data(), qscores.data(),
+      count = getTerminalFragmentIons(config_.targeting().protein_sequence, n, masses.data(), qscores.data(),
                                       charges.data(), wstarts.data(), wends.data(),
                                       ion_types.data(), frag_indices.data(), "EThcD");
     }
@@ -3583,7 +3365,7 @@ FLASHIda::FLASHIda(char* arg)
 
   void FLASHIda::pushFollowUpMS2_(const ScanCommand& ctx)
   {
-    if (ms2_configs_.size() < 2)
+    if (config_.level(2).scans.size() < 2)
       return;
 
     ScanCommand cmd = ctx;
@@ -3591,11 +3373,11 @@ FLASHIda::FLASHIda(char* arg)
     cmd.priority = 2;
 
     // Use second MS2 config for follow-up
-    std::strncpy(cmd.analyzer, ms2_configs_[1].analyzer.c_str(), sizeof(cmd.analyzer) - 1);
+    std::strncpy(cmd.analyzer, config_.level(2).scans[1].analyzer.c_str(), sizeof(cmd.analyzer) - 1);
     cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';
-    cmd.orbitrap_resolution = ms2_configs_[1].resolution;
-    cmd.stages[0].collision_energy = static_cast<double>(ms2_configs_[1].collision_energy);
-    std::strncpy(cmd.stages[0].activation_type, ms2_configs_[1].activation.c_str(),
+    cmd.orbitrap_resolution = config_.level(2).scans[1].resolution;
+    cmd.stages[0].collision_energy = static_cast<double>(config_.level(2).scans[1].collision_energy);
+    std::strncpy(cmd.stages[0].activation_type, config_.level(2).scans[1].activation.c_str(),
                  sizeof(cmd.stages[0].activation_type) - 1);
     cmd.stages[0].activation_type[sizeof(cmd.stages[0].activation_type) - 1] = '\0';
 
@@ -3617,7 +3399,7 @@ FLASHIda::FLASHIda(char* arg)
 
   void FLASHIda::pushConditionalFollowUp_(const ScanCommand& ctx)
   {
-    if (ms2_configs_.size() < 2)
+    if (config_.level(2).scans.size() < 2)
       return;
 
     ScanCommand cmd = ctx;
@@ -3625,11 +3407,11 @@ FLASHIda::FLASHIda(char* arg)
     cmd.priority = 2;
 
     // Use second MS2 config for conditional follow-up
-    std::strncpy(cmd.analyzer, ms2_configs_[1].analyzer.c_str(), sizeof(cmd.analyzer) - 1);
+    std::strncpy(cmd.analyzer, config_.level(2).scans[1].analyzer.c_str(), sizeof(cmd.analyzer) - 1);
     cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';
-    cmd.orbitrap_resolution = ms2_configs_[1].resolution;
-    cmd.stages[0].collision_energy = static_cast<double>(ms2_configs_[1].collision_energy);
-    std::strncpy(cmd.stages[0].activation_type, ms2_configs_[1].activation.c_str(),
+    cmd.orbitrap_resolution = config_.level(2).scans[1].resolution;
+    cmd.stages[0].collision_energy = static_cast<double>(config_.level(2).scans[1].collision_energy);
+    std::strncpy(cmd.stages[0].activation_type, config_.level(2).scans[1].activation.c_str(),
                  sizeof(cmd.stages[0].activation_type) - 1);
     cmd.stages[0].activation_type[sizeof(cmd.stages[0].activation_type) - 1] = '\0';
 
@@ -3669,16 +3451,16 @@ FLASHIda::FLASHIda(char* arg)
     cmd.num_stages = 1;
     cmd.scan_id = nextTrackingIdInt_();
 
-    if (!ms2_configs_.empty())
+    if (!config_.level(2).scans.empty())
     {
-      std::strncpy(cmd.analyzer, ms2_configs_[0].analyzer.c_str(), sizeof(cmd.analyzer) - 1);
+      std::strncpy(cmd.analyzer, config_.level(2).scans[0].analyzer.c_str(), sizeof(cmd.analyzer) - 1);
       cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';
-      cmd.orbitrap_resolution = ms2_configs_[0].resolution;
+      cmd.orbitrap_resolution = config_.level(2).scans[0].resolution;
     }
-    cmd.first_mass = ms1_first_mass_;
-    cmd.last_mass = ms1_last_mass_;
-    cmd.max_it = ms1_max_it_;
-    cmd.agc_target = ms1_agc_target_;
+    cmd.first_mass = config_.level(1).scans[0].first_mass;
+    cmd.last_mass = config_.level(1).scans[0].last_mass;
+    cmd.max_it = config_.level(1).scans[0].max_it;
+    cmd.agc_target = config_.level(1).scans[0].agc_target;
 
     cmd.stages[0].precursor_mz = precursor_mz;
     cmd.stages[0].isolation_width = 2.0;
@@ -3711,8 +3493,8 @@ FLASHIda::FLASHIda(char* arg)
   void FLASHIda::initiateExploration_(int msn_level, double precursor_mz,
       double precursor_mass, int precursor_charge, double faims_cv)
   {
-    const auto& cfg = getLevelConfig_(msn_level);
-    if (!hasExploration(cfg)) return;
+    const auto& cfg = config_.level(msn_level);
+    if (!config_.hasExploration(msn_level)) return;
 
     std::vector<double> ces = buildCEVariants_(cfg.ce_min, cfg.ce_max, cfg.ce_step);
     if (ces.empty()) return;
@@ -3735,9 +3517,9 @@ FLASHIda::FLASHIda(char* arg)
       ExplorationVariant v;
       v.variant_index = i;
       v.collision_energy = ces[i];
-      v.activation_type = cfg.activation;
+      v.activation_type = cfg.exploration_activation;
 
-      ScanCommand cmd = buildMS2Command_(precursor_mz, precursor_charge, ces[i], cfg.activation);
+      ScanCommand cmd = buildMS2Command_(precursor_mz, precursor_charge, ces[i], cfg.exploration_activation);
       cmd.priority = 0;
       cmd.faims_cv = faims_cv;
       applyOverrides_(cmd, cfg.overrides);
@@ -3865,7 +3647,7 @@ FLASHIda::FLASHIda(char* arg)
               << " CE=" << group.variants[best_idx].collision_energy
               << " score=" << best_score << std::endl;
 
-    const auto& level_config = getLevelConfig_(group.msn_level);
+    const auto& level_config = config_.level(group.msn_level);
     if (!level_config.overrides.empty())
     {
       ScanCommand prod_cmd = buildMS2Command_(
@@ -3897,7 +3679,7 @@ FLASHIda::FLASHIda(char* arg)
       double faims_cv)
   {
     int next_level = msn_level + 1;
-    const auto& next_cfg = getLevelConfig_(next_level);
+    const auto& next_cfg = config_.level(next_level);
     if (next_cfg.selection == SelectionMetric::None) return;
 
     std::vector<std::pair<double, double>> targets;  // (mass, intensity)
@@ -3908,7 +3690,7 @@ FLASHIda::FLASHIda(char* arg)
               [](const auto& a, const auto& b){ return a.second > b.second; });
     int num_targets = std::min(static_cast<int>(targets.size()), next_cfg.max_targets);
 
-    if (hasExploration(next_cfg))
+    if (config_.hasExploration(next_level))
     {
       for (int ti = 0; ti < num_targets; ++ti)
         initiateExploration_(next_level, targets[ti].first, 0.0, 0, faims_cv);
@@ -3918,7 +3700,7 @@ FLASHIda::FLASHIda(char* arg)
       for (int ti = 0; ti < num_targets; ++ti)
       {
         ScanCommand cmd = buildMS2Command_(targets[ti].first, 0,
-            next_cfg.ce_min, next_cfg.activation);
+            next_cfg.ce_min, next_cfg.exploration_activation);
         cmd.msn_level = next_level;
         cmd.faims_cv = faims_cv;
         cmd.priority = 1;
@@ -3990,16 +3772,16 @@ FLASHIda::FLASHIda(char* arg)
     // Step 4: Route by mode
     // Tag-based targeting
     bool tags_found = false;
-    if (tag_based_targeting_enabled_ && precursor_mass > 0)
+    if ((!target_protein_database_.empty()) && precursor_mass > 0)
     {
       tags_found = processMS2ForTagBasedTargeting(precursor_mass);
     }
 
     // Quantification follow-up (independent of tags)
-    if (quant_enabled_ && ms2_configs_.size() >= 2)
+    if (config_.quantification().enabled && config_.level(2).scans.size() >= 2)
     {
       if (isDifferentiallyAbundant(mzs, ints, length, rt_min, 2, "ms2_quant",
-                                    reporter_mz_tol_, fold_change_threshold_, false))
+                                    config_.quantification().reporter_mz_tol, config_.quantification().fold_change_threshold, false))
       {
         pushFollowUpMS2_(ctx);
         commands_pushed++;
@@ -4007,20 +3789,20 @@ FLASHIda::FLASHIda(char* arg)
     }
 
     // Conditional MS2 follow-up — only when tags detected
-    if (conditional_ms2_enabled_ && ms2_configs_.size() >= 2 && tags_found)
+    if (config_.level(2).scans.size() >= 2 && tags_found)
     {
       pushConditionalFollowUp_(ctx);
       commands_pushed++;
     }
 
-    // Step 5: MS3 targeting — uses level_configs_ when exploration is configured,
-    // falls back to legacy ms3_enabled_ path for standard MS3 targeting
-    if (hasExploration(getLevelConfig_(3)))
+    // Step 5: MS3 targeting — uses config levels when exploration is configured,
+    // falls back to legacy MS3 targeting path for standard MS3 targeting
+    if (config_.hasExploration(3))
     {
       // MS3 exploration: create exploration groups for top fragments
       initiateNextLevel_(2, ms2_deconvolved_spectrum_, ctx.faims_cv);
     }
-    else if (ms3_enabled_ && ms3_mode_ > 0)
+    else if (config_.targeting().ms3_mode > 0)
     {
       // Legacy MS3 targeting (non-exploration)
       auto ms3_targets = selectMS3Targets_();
@@ -4032,7 +3814,7 @@ FLASHIda::FLASHIda(char* arg)
         commands_pushed++;
       }
     }
-    else if (getLevelConfig_(3).selection != SelectionMetric::None && !ms3_enabled_)
+    else if (config_.level(3).selection != SelectionMetric::None && !(config_.targeting().ms3_mode > 0))
     {
       // New selection_strategy MS3 targeting (no exploration, not legacy)
       initiateNextLevel_(2, ms2_deconvolved_spectrum_, ctx.faims_cv);
@@ -4054,7 +3836,7 @@ FLASHIda::FLASHIda(char* arg)
     if (needsAGCScan_())
     {
       out = makeAGCCommand_();
-      out.faims_cv = faims_enabled_ ? faims_cv_values_[current_cv_index_] : 0.0;
+      out.faims_cv = config_.faims().enabled ? config_.faims().cv_values[current_cv_index_] : 0.0;
       out.scan_id = nextTrackingIdInt_();
       last_agc_time_ = std::chrono::steady_clock::now();
 
@@ -4069,11 +3851,11 @@ FLASHIda::FLASHIda(char* arg)
     // Step 2: Cycle time — force MS1 if too long since last survey scan
     // Suppressed while any exploration group is active (Phase 7)
     bool exploration_active = !active_exploration_groups_.empty();
-    if (cycle_time_enabled_ && !exploration_active
-        && msSinceLastMS1_() > static_cast<uint64_t>(cycle_time_ms_))
+    if (config_.scheduling().cycle_time_enabled && !exploration_active
+        && msSinceLastMS1_() > static_cast<uint64_t>(config_.scheduling().cycle_time_ms))
     {
       out = makeMS1Command_();
-      out.faims_cv = faims_enabled_ ? faims_cv_values_[current_cv_index_] : 0.0;
+      out.faims_cv = config_.faims().enabled ? config_.faims().cv_values[current_cv_index_] : 0.0;
       out.scan_id = nextTrackingIdInt_();
       last_ms1_time_ = std::chrono::steady_clock::now();
 
@@ -4105,7 +3887,7 @@ FLASHIda::FLASHIda(char* arg)
     {
       // 5a: AGC
       ScanCommand agc_cmd = makeAGCCommand_();
-      agc_cmd.faims_cv = faims_enabled_ ? faims_cv_values_[current_cv_index_] : 0.0;
+      agc_cmd.faims_cv = config_.faims().enabled ? config_.faims().cv_values[current_cv_index_] : 0.0;
       agc_cmd.scan_id = nextTrackingIdInt_();
       last_agc_time_ = std::chrono::steady_clock::now();
 
@@ -4116,7 +3898,7 @@ FLASHIda::FLASHIda(char* arg)
 
       // 5b: MS1 — override priority to 0 (makeMS1Command_ defaults to 3)
       ScanCommand ms1_cmd = makeMS1Command_();
-      ms1_cmd.faims_cv = faims_enabled_ ? faims_cv_values_[current_cv_index_] : 0.0;
+      ms1_cmd.faims_cv = config_.faims().enabled ? config_.faims().cv_values[current_cv_index_] : 0.0;
       ms1_cmd.scan_id = nextTrackingIdInt_();
       ms1_cmd.priority = 0;
       last_ms1_time_ = std::chrono::steady_clock::now();
