@@ -10,6 +10,7 @@ set(sources_list
         FLASHExtenderAlgorithm.cpp
         FLASHIda.cpp
         FLASHIda/Config.cpp
+        FLASHIda/FAIMS.cpp
         FLASHIdaBridgeFunctions.cpp
         FLASHGappedTaggerAlgorithm.cpp
         FLASHTaggerAlgorithm.cpp

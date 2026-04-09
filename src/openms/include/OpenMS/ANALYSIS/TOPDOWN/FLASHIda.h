@@ -38,6 +38,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHExtenderAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FAIMS.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
@@ -425,16 +426,6 @@ namespace OpenMS
     {
       return decodeTracking_(s);
     }
-
-    /// Test-only: directly call updateCVSkip_ to test threshold behavior
-    void updateCVSkipForTest(double cv, int precursor_count)
-    {
-      std::lock_guard<std::mutex> lock(queue_mutex_);
-      updateCVSkip_(cv, precursor_count);
-    }
-
-    /// Test-only: get the current CV skip amount for a given CV index
-    int getCVSkipAmountForTest(size_t index) const { return cv_skip_amount_[index]; }
 
     /**
            @brief parse FLASHIda log file
@@ -827,18 +818,9 @@ namespace OpenMS
 
     // level_configs_, exploration_enabled_, quant_enabled_, reporter_mz_tol_,
     // fold_change_threshold_, faims_cv_values_, max_cv_skip_, cv_precursor_threshold_,
-    // faims_enabled_ moved to Config
+    // faims_enabled_ moved to Config; FAIMS runtime state moved to FAIMS class
 
-    // FAIMS per-CV adaptive skip state (Phase 6, runtime state stays here)
-    std::vector<int> cv_skip_amount_;   ///< per-CV: current skip spacing (doubles on low precursor count)
-    std::vector<int> cv_skip_count_;    ///< per-CV: current skip counter
-    int current_cv_index_ = 0;         ///< round-robin cycling index into faims_cv_values_
-
-    /// Update per-CV adaptive skip policy after MS1 deconvolution (port of C# ScanScheduler.updateCV)
-    void updateCVSkip_(double cv, int precursor_count);
-
-    /// Advance to next non-skipped CV and return its value (port of C# getFAIMSMS1Scan cycling loop)
-    double advanceToNextCV_();
+    FAIMS faims_;   ///< FAIMS CV cycling state machine
 
     // --- Phase 7: Exploration engine state and methods ---
 

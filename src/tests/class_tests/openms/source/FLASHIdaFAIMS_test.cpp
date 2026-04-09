@@ -8,6 +8,8 @@
 
 #include <OpenMS/CONCEPT/ClassTest.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FAIMS.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 
 #include <vector>
 #include <set>
@@ -343,29 +345,29 @@ END_SECTION
 // P6-U02b: Threshold boundary — precursor_count at threshold does NOT trigger skip
 START_SECTION(adaptive_cv_skip_threshold_boundary)
 {
-  FLASHIda* ida = createFaimsSkip();  // threshold=15, max_cv_skip=2
+  // Construct FAIMS directly from the skip config (threshold=15, max_cv_skip=2, CVs=[-40,-50,-60])
+  Config cfg(std::string(faims_skip_config));
+  FAIMS faims(cfg);
 
   // Precursor count = 14 (below threshold) -> should double skip amount 0->1
-  ida->updateCVSkipForTest(-40.0, 14);
-  TEST_EQUAL(ida->getCVSkipAmountForTest(0), 1)
+  faims.updateSkip(-40.0, 14);
+  TEST_EQUAL(faims.cvSkipAmount(0), 1)
 
   // Precursor count = 15 (at threshold, NOT strictly less) -> should RESET to 0
-  ida->updateCVSkipForTest(-40.0, 15);
-  TEST_EQUAL(ida->getCVSkipAmountForTest(0), 0)
+  faims.updateSkip(-40.0, 15);
+  TEST_EQUAL(faims.cvSkipAmount(0), 0)
 
   // Precursor count = 14 -> doubles 0->1 again
-  ida->updateCVSkipForTest(-40.0, 14);
-  TEST_EQUAL(ida->getCVSkipAmountForTest(0), 1)
+  faims.updateSkip(-40.0, 14);
+  TEST_EQUAL(faims.cvSkipAmount(0), 1)
 
   // Precursor count = 14 -> doubles 1->2
-  ida->updateCVSkipForTest(-40.0, 14);
-  TEST_EQUAL(ida->getCVSkipAmountForTest(0), 2)
+  faims.updateSkip(-40.0, 14);
+  TEST_EQUAL(faims.cvSkipAmount(0), 2)
 
   // Precursor count = 14 -> would double to 4 but capped at max_cv_skip=2
-  ida->updateCVSkipForTest(-40.0, 14);
-  TEST_EQUAL(ida->getCVSkipAmountForTest(0), 2)
-
-  delete ida;
+  faims.updateSkip(-40.0, 14);
+  TEST_EQUAL(faims.cvSkipAmount(0), 2)
 }
 END_SECTION
 

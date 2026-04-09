@@ -10,6 +10,7 @@ set(sources_list_h
         FLASHExtenderAlgorithm.h
         FLASHIda.h
         FLASHIda/Config.h
+        FLASHIda/FAIMS.h
         FLASHIda/ScanCommand.h
         FLASHIdaBridgeFunctions.h
         FLASHGappedTaggerAlgorithm.h

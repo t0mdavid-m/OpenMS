@@ -327,7 +327,8 @@ inline const double optimal_window_margin_ = .4;
 
 /// constructor
 FLASHIda::FLASHIda(char* arg) :
-    config_(std::string(arg))
+    config_(std::string(arg)),
+    faims_(config_)
 {
   #ifdef _OPENMP
     omp_set_num_threads(4);
@@ -343,15 +344,6 @@ FLASHIda::FLASHIda(char* arg) :
     sd_defaults.setValue("tol", tol_values);
     fd_.setParameters(sd_defaults);
     fd_.calculateAveragine(false);
-
-    // --- Initialize FAIMS adaptive skip state ---
-    if (config_.faims().enabled)
-    {
-      int n = static_cast<int>(config_.faims().cv_values.size());
-      cv_skip_amount_.resize(n, 0);
-      cv_skip_count_.resize(n, 0);
-      current_cv_index_ = 0;
-    }
 
     // --- Initialize AGC timing ---
     last_agc_time_ = std::chrono::steady_clock::now();
@@ -3020,64 +3012,6 @@ FLASHIda::FLASHIda(char* arg) :
   // Q8. Single CV: Flash.cs uses UnifiedScanProcessor, ScanScheduler with UseFAIMS=false.
   // Q9. Non-FAIMS: faims_cv = 0.0 on all commands.
 
-  void FLASHIda::updateCVSkip_(double cv, int precursor_count)
-  {
-    if (!config_.faims().enabled) return;
-
-    // Find position for this CV value
-    int pos = -1;
-    for (int i = 0; i < static_cast<int>(config_.faims().cv_values.size()); ++i)
-    {
-      if (config_.faims().cv_values[i] == cv) { pos = i; break; }
-    }
-    if (pos < 0) return;  // unknown CV
-
-    if (precursor_count < config_.faims().precursor_threshold)  // strictly < (audit Q2)
-    {
-      if (cv_skip_amount_[pos] < config_.faims().max_cv_skip)
-      {
-        cv_skip_amount_[pos] *= 2;                  // double spacing (audit Q3)
-        if (cv_skip_amount_[pos] <= 0)
-          cv_skip_amount_[pos] = 1;                 // min = 1
-        if (cv_skip_amount_[pos] > config_.faims().max_cv_skip)
-          cv_skip_amount_[pos] = config_.faims().max_cv_skip;      // cap at max
-      }
-      cv_skip_count_[pos] = 0;                      // reset in BOTH branches (audit Q3)
-    }
-    else
-    {
-      cv_skip_amount_[pos] = 0;                     // high precursor count: reset
-      cv_skip_count_[pos] = 0;
-    }
-  }
-
-  double FLASHIda::advanceToNextCV_()
-  {
-    int n = static_cast<int>(config_.faims().cv_values.size());
-    // Safety bound (C# uses while(true); we bound to n iterations)
-    for (int attempts = 0; attempts < n; ++attempts)
-    {
-      current_cv_index_++;                           // increment-first (audit Q7)
-      if (current_cv_index_ >= n)
-        current_cv_index_ = 0;                       // wrap (audit Q7)
-
-      if (cv_skip_count_[current_cv_index_] < cv_skip_amount_[current_cv_index_])
-      {
-        cv_skip_count_[current_cv_index_]++;         // skip this CV (audit Q3)
-        OPENMS_LOG_DEBUG << "[FAIMS] Skipping CV=" << config_.faims().cv_values[current_cv_index_]
-                         << " (" << cv_skip_count_[current_cv_index_]
-                         << "/" << cv_skip_amount_[current_cv_index_] << ")" << std::endl;
-      }
-      else
-      {
-        OPENMS_LOG_DEBUG << "[FAIMS] Changed to CV=" << config_.faims().cv_values[current_cv_index_] << std::endl;
-        return config_.faims().cv_values[current_cv_index_];  // use this CV
-      }
-    }
-    // Fallback: all CVs being skipped — use current anyway
-    return config_.faims().cv_values[current_cv_index_];
-  }
-
   int FLASHIda::processScan(const double* mzs, const double* ints, int length,
                              double rt_min, int ms_level, const char* scan_description,
                              double faims_cv)
@@ -3120,12 +3054,12 @@ FLASHIda::FLASHIda(char* arg) :
       }
 
       // FAIMS CV cycling: update skip policy, advance to next CV, push MS1
-      if (config_.faims().enabled)
+      if (faims_.isEnabled())
       {
-        double current_cv = config_.faims().cv_values[current_cv_index_];
-        updateCVSkip_(current_cv, commands_pushed);
+        double current_cv = faims_.currentCV();
+        faims_.updateSkip(current_cv, commands_pushed);
 
-        double next_cv = advanceToNextCV_();
+        double next_cv = faims_.advanceToNextCV();
         ScanCommand ms1 = makeMS1Command_();
         ms1.faims_cv = next_cv;
         ms1.scan_id = nextTrackingIdInt_();
@@ -3836,7 +3770,7 @@ FLASHIda::FLASHIda(char* arg) :
     if (needsAGCScan_())
     {
       out = makeAGCCommand_();
-      out.faims_cv = config_.faims().enabled ? config_.faims().cv_values[current_cv_index_] : 0.0;
+      out.faims_cv = faims_.isEnabled() ? faims_.currentCV() : 0.0;
       out.scan_id = nextTrackingIdInt_();
       last_agc_time_ = std::chrono::steady_clock::now();
 
@@ -3855,7 +3789,7 @@ FLASHIda::FLASHIda(char* arg) :
         && msSinceLastMS1_() > static_cast<uint64_t>(config_.scheduling().cycle_time_ms))
     {
       out = makeMS1Command_();
-      out.faims_cv = config_.faims().enabled ? config_.faims().cv_values[current_cv_index_] : 0.0;
+      out.faims_cv = faims_.isEnabled() ? faims_.currentCV() : 0.0;
       out.scan_id = nextTrackingIdInt_();
       last_ms1_time_ = std::chrono::steady_clock::now();
 
@@ -3887,7 +3821,7 @@ FLASHIda::FLASHIda(char* arg) :
     {
       // 5a: AGC
       ScanCommand agc_cmd = makeAGCCommand_();
-      agc_cmd.faims_cv = config_.faims().enabled ? config_.faims().cv_values[current_cv_index_] : 0.0;
+      agc_cmd.faims_cv = faims_.isEnabled() ? faims_.currentCV() : 0.0;
       agc_cmd.scan_id = nextTrackingIdInt_();
       last_agc_time_ = std::chrono::steady_clock::now();
 
@@ -3898,7 +3832,7 @@ FLASHIda::FLASHIda(char* arg) :
 
       // 5b: MS1 — override priority to 0 (makeMS1Command_ defaults to 3)
       ScanCommand ms1_cmd = makeMS1Command_();
-      ms1_cmd.faims_cv = config_.faims().enabled ? config_.faims().cv_values[current_cv_index_] : 0.0;
+      ms1_cmd.faims_cv = faims_.isEnabled() ? faims_.currentCV() : 0.0;
       ms1_cmd.scan_id = nextTrackingIdInt_();
       ms1_cmd.priority = 0;
       last_ms1_time_ = std::chrono::steady_clock::now();
