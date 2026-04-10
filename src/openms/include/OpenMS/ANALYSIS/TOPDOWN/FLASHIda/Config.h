@@ -133,8 +133,10 @@ namespace OpenMS
     double qscore_threshold = 0.0;
     double tqscore_threshold = 0.9;
     double snr_threshold = 1.0;
+    bool ms3_enabled = false;           ///< Explicit ms3.enabled flag from JSON
     int ms3_mode = 0;                  ///< 0=disabled, 1=SourceCID, 2=SPS, 3=HCD-triggered, 4=EThcD
     std::string protein_sequence;
+    bool conditional_ms2_enabled = false; ///< Explicit conditional_ms2 flag from JSON
     std::vector<std::string> target_log_files;
     std::string fasta_file;
     std::string inclusion_list_file;

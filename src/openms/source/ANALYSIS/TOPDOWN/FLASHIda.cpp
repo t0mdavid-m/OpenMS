@@ -473,8 +473,8 @@ FLASHIda::FLASHIda(char* arg) :
       }
     }
 
-    // Conditional MS2 follow-up -- only when tags detected
-    if (config_.level(2).scans.size() >= 2 && tags_found)
+    // Conditional MS2 follow-up -- only when tags detected AND explicitly enabled
+    if (config_.targeting().conditional_ms2_enabled && config_.level(2).scans.size() >= 2 && tags_found)
     {
       queue_.push(queue_.buildConditionalFollowUp(ctx));
       commands_pushed++;
@@ -488,7 +488,7 @@ FLASHIda::FLASHIda(char* arg) :
       auto cmds = exploration_.initiateNextLevel(2, deconv_.storedMS2(), ctx.faims_cv, queue_);
       for (auto& c : cmds) queue_.push(c);
     }
-    else if (config_.targeting().ms3_mode > 0)
+    else if (config_.targeting().ms3_enabled && config_.targeting().ms3_mode > 0)
     {
       // Legacy MS3 targeting (non-exploration)
       auto ms3_targets = selectMS3Targets_();

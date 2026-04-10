@@ -849,7 +849,7 @@ START_SECTION(selection_metric_controls_config)
   TEST_REAL_SIMILAR(ms2_cfg.ce_min, 20.0)
   TEST_REAL_SIMILAR(ms2_cfg.ce_max, 40.0)
   TEST_REAL_SIMILAR(ms2_cfg.ce_step, 5.0)
-  TEST_STRING_EQUAL(ms2_cfg.activation, "HCD")
+  TEST_STRING_EQUAL(ms2_cfg.exploration_activation, "HCD")
 
   auto ms3_cfg = ida->getLevelConfigForTest(3);
   TEST_EQUAL(static_cast<int>(ms3_cfg.selection), static_cast<int>(SelectionMetric::None))

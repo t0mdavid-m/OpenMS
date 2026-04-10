@@ -130,16 +130,14 @@ namespace OpenMS
 
     // --- ms3 section ---
     auto ms3 = config.value("ms3", json::object());
+    targeting_.ms3_enabled = ms3.value("enabled", false);
     targeting_.ms3_mode = ms3.value("mode", 0);
     targeting_.protein_sequence = ms3.value("protein_sequence", "");
     // ms3 max_per_ms2 -> levels_[3].max_targets (set after selection_strategy parsing)
     int ms3_max_per_ms2 = ms3.value("max_per_ms2", 4);
 
-    // --- conditional_ms2 (derived from ms2 scan count, stored for backward compat) ---
-    // conditional_ms2 flag from JSON is now redundant; actual conditional MS2
-    // support is derived from levels_[2].scans.size() >= 2.
-    // We still read it silently so unknown keys don't cause parse errors.
-    (void)config.value("conditional_ms2", false);
+    // --- conditional_ms2 ---
+    targeting_.conditional_ms2_enabled = config.value("conditional_ms2", false);
 
     // --- quantification ---
     auto quant = config.value("quantification", json::object());
