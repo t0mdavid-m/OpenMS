@@ -950,7 +950,7 @@ START_SECTION(decodeTracking_roundtrip)
   }
 
   // Roundtrip: decoding the base-94 ID should give back cmd.scan_id
-  int decoded_id = ida->decodeTrackingForTest(id_str);
+  int decoded_id = ida->getQueueForTest().decode(id_str);
   TEST_EQUAL(decoded_id, cmd.scan_id)
 
   delete ida;
@@ -998,7 +998,7 @@ START_SECTION(cleanup_expired_commands)
 
   // Also verify via accessor: pending_scan_map_ should have (total - 1) entries
   // (we resolved one, rest are still pending)
-  TEST_EQUAL(ida->getPendingScanMapSizeForTest(), (size_t)(total - 1))
+  TEST_EQUAL(ida->getQueueForTest().pendingScanMapSize(), (size_t)(total - 1))
 
   delete ida;
 }

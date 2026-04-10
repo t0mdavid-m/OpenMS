@@ -8,6 +8,7 @@
 
 #include <OpenMS/CONCEPT/ClassTest.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 
 #include <set>
 #include <string>
@@ -107,15 +108,15 @@ START_TEST(FLASHIdaQueueTracking, "$Id$")
 START_SECTION(encodeTracking_correctness)
 {
   // encode(0) = "!!!" (all zeros in base-94)
-  TEST_STRING_EQUAL(FLASHIda::encodeTrackingForTest(0), "!!!")
+  TEST_STRING_EQUAL(ScanCommandQueue::encode(0), "!!!")
   // encode(1) = "!!"" (last char advances to index 1 = '"')
-  TEST_STRING_EQUAL(FLASHIda::encodeTrackingForTest(1), "!!\"")
+  TEST_STRING_EQUAL(ScanCommandQueue::encode(1), "!!\"")
   // encode(94) = "!"!" (middle char advances to index 1 = '"')
-  TEST_STRING_EQUAL(FLASHIda::encodeTrackingForTest(94), "!\"!")
+  TEST_STRING_EQUAL(ScanCommandQueue::encode(94), "!\"!")
   // encode(830583) = "~~~" (max value: 94^3 - 1)
-  TEST_STRING_EQUAL(FLASHIda::encodeTrackingForTest(830583), "~~~")
+  TEST_STRING_EQUAL(ScanCommandQueue::encode(830583), "~~~")
   // encode(8836) = '"!!' (94*94 = 8836, first char advances to index 1 = '"')
-  TEST_STRING_EQUAL(FLASHIda::encodeTrackingForTest(8836), "\"!!")
+  TEST_STRING_EQUAL(ScanCommandQueue::encode(8836), "\"!!")
 }
 END_SECTION
 

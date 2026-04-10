@@ -11,6 +11,7 @@ set(sources_list
         FLASHIda.cpp
         FLASHIda/Config.cpp
         FLASHIda/FAIMS.cpp
+        FLASHIda/ScanCommandQueue.cpp
         FLASHIdaBridgeFunctions.cpp
         FLASHGappedTaggerAlgorithm.cpp
         FLASHTaggerAlgorithm.cpp

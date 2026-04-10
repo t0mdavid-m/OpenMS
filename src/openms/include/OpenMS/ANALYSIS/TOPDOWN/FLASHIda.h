@@ -40,6 +40,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FAIMS.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
@@ -404,28 +405,14 @@ namespace OpenMS
 
     // SelectionMetric, ExplorationMetric, MSLevelConfig are now in FLASHIda/Config.h
 
-    /// Test-only accessor for encodeTracking_ (static, no state dependency)
-    static std::string encodeTrackingForTest(int v) { return encodeTracking_(v); }
-
-    /// Test-only: push a command into the priority queue (thread-safe)
+    /// Test-only: push a command into the priority queue (delegates to queue_)
     void pushCommandForTest(ScanCommand cmd)
     {
-      std::lock_guard<std::mutex> lock(queue_mutex_);
-      pushCommand_(cmd);
+      queue_.push(cmd);
     }
 
-    /// Test-only accessor: number of entries in pending_scan_map_
-    size_t getPendingScanMapSizeForTest() const
-    {
-      std::lock_guard<std::mutex> lock(queue_mutex_);
-      return pending_scan_map_.size();
-    }
-
-    /// Test-only accessor: decode tracking string to int
-    int decodeTrackingForTest(const std::string& s) const
-    {
-      return decodeTracking_(s);
-    }
+    /// Test-only accessor: access the ScanCommandQueue directly
+    ScanCommandQueue& getQueueForTest() { return queue_; }
 
     /**
            @brief parse FLASHIda log file
@@ -500,6 +487,9 @@ namespace OpenMS
   private:
     /// Configuration object (owns all parsed config values)
     Config config_;
+
+    /// Scan command queue (owns queue, tracking IDs, pending map, command builders)
+    ScanCommandQueue queue_;
 
     /// Internal struct for fragment match results from tag-based matching
     struct TagBasedFragmentMatch {
@@ -682,62 +672,15 @@ namespace OpenMS
 
     // parseJSONConfig_ removed: parsing logic moved to Config class
 
-    // --- Phase 3: Scan command queue infrastructure ---
+    // Phase 3 scan command queue infrastructure moved to ScanCommandQueue
 
-    /// Encode an integer as a 3-character base-94 string (all printable ASCII 0x21-0x7E)
-    static std::string encodeTracking_(int value);
+    // Phase 4 command building moved to ScanCommandQueue (except selectMS3Targets_)
 
-    /// Decode a 3-character base-94 string back to integer
-    int decodeTracking_(const std::string& s) const;
-
-    /// Get next tracking ID (not thread-safe; caller must hold queue_mutex_)
-    int nextTrackingIdInt_();
-
-    /// Create an MS1 survey scan command from current config
-    ScanCommand makeMS1Command_() const;
-
-    /// Create an AGC calibration scan command
-    ScanCommand makeAGCCommand_() const;
-
-    /// Check if an AGC scan is needed based on agc_interval_ms_
-    bool needsAGCScan_() const;
-
-    /// Milliseconds since last MS1 scan (for cycle time enforcement)
-    uint64_t msSinceLastMS1_() const;
-
-    /// Remove expired commands from pending_scan_map_ using timeout_ms_
-    void cleanupExpiredCommands_();
-
-    // --- Phase 4: processScan helpers ---
-
-    /// Build MS2 ScanCommand from a PeakGroup (isolation window + MS2 config)
-    ScanCommand buildMS2Command_(const PeakGroup& pg, int charge, int hcd);
-
-    /// MS3 target with optional ion annotation (modes 3/4)
-    struct MS3Target
-    {
-      double center_mz;
-      int charge;
-      double iso_width;
-      char ion_type;   ///< 'b', 'y', etc. or '\0' for modes 1/2
-      int frag_index;  ///< fragment position, 0 if unknown
-    };
-
-    /// Build MS3 ScanCommand from MS2 context + fragment target
-    ScanCommand buildMS3Command_(const ScanCommand& ms2_ctx, double frag_mz, int frag_charge, double iso_width,
-                                  char ion_type = '\0', int frag_index = 0);
-
-    /// Push command into appropriate priority queue (caller must hold queue_mutex_)
-    void pushCommand_(ScanCommand cmd);
+    /// MS3Target typedef from ScanCommandQueue (used by selectMS3Targets_)
+    using MS3Target = ScanCommandQueue::MS3Target;
 
     /// Select MS3 fragment targets from last MS2 deconvolution
     std::vector<MS3Target> selectMS3Targets_();
-
-    /// Push follow-up MS2 at priority 2 (quant mode)
-    void pushFollowUpMS2_(const ScanCommand& ctx);
-
-    /// Push conditional follow-up MS2 at priority 2
-    void pushConditionalFollowUp_(const ScanCommand& ctx);
 
     /// Process returning exploration variant: score, select winner, trigger next level
     void feedExplorationResult_(int group_id, int variant_index,
@@ -746,34 +689,12 @@ namespace OpenMS
     /// Process MS2 scan: tracking resolution, deconv, routing
     int processMS2Path_(const double* mzs, const double* ints, int length, double rt_min, const char* scan_desc);
 
-    /// Priority queues: index 0 = highest priority, 3 = lowest
-    std::deque<ScanCommand> queues_[4];
+    // Queue data members moved to ScanCommandQueue
 
-    /// Mutex protecting queues_, tracking_id_counter_, pending_scan_map_
-    mutable std::mutex queue_mutex_;
+    /// Mutex protecting exploration state and processMS2Path_ (replaces old queue_mutex_)
+    mutable std::mutex mutex_;
 
-    /// All 94 printable ASCII characters (0x21–0x7E) used as tracking ID alphabet
-    static const std::string tracking_alphabet_;
-
-    /// Monotonically increasing tracking ID counter
-    int tracking_id_counter_ = 0;
-
-    /// Map of tracking ID → ScanCommand for pending (in-flight) scans
-    std::unordered_map<int, ScanCommand> pending_scan_map_;
-
-    /// Timestamp of last MS1 scan (for cycle time logic)
-    std::chrono::steady_clock::time_point last_ms1_time_ = std::chrono::steady_clock::now();
-
-    // --- Phase 4: MS3, conditional MS2, AGC scheduling ---
-    // ms3_enabled_, ms3_mode_, max_ms3_per_ms2_, ms3_protein_sequence_ moved to Config
-    // conditional_ms2_enabled_ moved to Config (derived from levels_[2].scans.size() >= 2)
-    // ms1_analyzer_, ms1_first/last_mass_, ms1_resolution_, ms1_agc_target_, ms1_max_it_ moved to Config
-    // ms2_configs_ (MS2ConfigJson) moved to Config (now MSLevelConfig::scans)
-    // cycle_time_enabled_, timeout_enabled_, cycle_time_ms_, timeout_ms_ moved to Config
-    // agc_interval_ms_ moved to Config
-
-    // AGC scheduling (runtime state only)
-    mutable std::chrono::steady_clock::time_point last_agc_time_;
+    // Phase 4 config values moved to Config; AGC runtime state moved to ScanCommandQueue
 
     // --- Phase 7: Selection and exploration config (private state below, public types above) ---
 
@@ -827,7 +748,7 @@ namespace OpenMS
     /// Active exploration groups (group_id -> ExplorationGroup)
     std::unordered_map<int, ExplorationGroup> active_exploration_groups_;
 
-    /// Next group ID (monotonically increasing, protected by queue_mutex_)
+    /// Next group ID (monotonically increasing, protected by mutex_)
     int next_exploration_group_id_ = 1;
 
     /// Maps tracking_id (int) -> {group_id, variant_index} for variant result routing
@@ -838,11 +759,7 @@ namespace OpenMS
     /// Generate CE variant values from min/max/step
     std::vector<double> buildCEVariants_(double ce_min, double ce_max, double ce_step) const;
 
-    /// Build MS2 command with explicit CE and activation (for exploration variants)
-    ScanCommand buildMS2Command_(double precursor_mz, int charge, double ce, const std::string& activation);
-
-    /// Apply exploration parameter overrides to a ScanCommand
-    void applyOverrides_(ScanCommand& cmd, const std::unordered_map<std::string, std::string>& overrides) const;
+    // buildMS2Command_(mz, z, ce, act) and applyOverrides_ moved to ScanCommandQueue
 
     /// Create exploration group with CE variants and enqueue at priority 0
     void initiateExploration_(int msn_level, double precursor_mz, double precursor_mass,
@@ -872,14 +789,14 @@ namespace OpenMS
     /// Test-only: get number of active exploration groups
     int getActiveExplorationGroupCountForTest() const
     {
-      std::lock_guard<std::mutex> lock(queue_mutex_);
+      std::lock_guard<std::mutex> lock(mutex_);
       return static_cast<int>(active_exploration_groups_.size());
     }
 
     /// Test-only: get exploration group by ID (caller must ensure group exists)
     ExplorationGroup getExplorationGroupForTest(int group_id) const
     {
-      std::lock_guard<std::mutex> lock(queue_mutex_);
+      std::lock_guard<std::mutex> lock(mutex_);
       return active_exploration_groups_.at(group_id);
     }
 
@@ -889,17 +806,16 @@ namespace OpenMS
     /// Test-only: access the Config object directly
     const Config& getConfigForTest() const { return config_; }
 
-    /// Test-only: get queue size for a given priority
+    /// Test-only: get queue size for a given priority (delegates to queue_)
     size_t getQueueSizeForTest(int priority) const
     {
-      std::lock_guard<std::mutex> lock(queue_mutex_);
-      return queues_[priority].size();
+      return queue_.queueSize(priority);
     }
 
     /// Test-only: directly call initiateExploration_
     void initiateExplorationForTest(int msn_level, double mz, double mass, int charge, double cv)
     {
-      std::lock_guard<std::mutex> lock(queue_mutex_);
+      std::lock_guard<std::mutex> lock(mutex_);
       initiateExploration_(msn_level, mz, mass, charge, cv);
     }
 
@@ -907,7 +823,7 @@ namespace OpenMS
     void feedExplorationResultForTest(int group_id, int variant_index,
                                       const DeconvolvedSpectrum& ds, double rt)
     {
-      std::lock_guard<std::mutex> lock(queue_mutex_);
+      std::lock_guard<std::mutex> lock(mutex_);
       feedExplorationResult_(group_id, variant_index, ds, rt);
     }
 
