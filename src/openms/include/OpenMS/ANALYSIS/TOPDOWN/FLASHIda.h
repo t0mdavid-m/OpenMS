@@ -35,7 +35,6 @@
 #pragma once
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
-#include <OpenMS/ANALYSIS/TOPDOWN/FLASHExtenderAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Deconvolution.h>
@@ -46,9 +45,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Quantification.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
-#include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
-#include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -71,7 +68,6 @@ namespace OpenMS
     typedef FLASHHelperClasses::PrecalculatedAveragine PrecalculatedAveragine;
     typedef FLASHHelperClasses::LogMzPeak LogMzPeak;
 
-    /// PTMSite is now defined in FragmentAnalysis.h
     using PTMSite = FragmentAnalysis::PTMSite;
 
     /// constructor that takes string input argument
@@ -88,86 +84,6 @@ namespace OpenMS
 
     /// assignment operator
     FLASHIda& operator=(const FLASHIda& fd) = default;
-
-    /**
-           @brief get peak groups (deconvolved masses) from input spectrum, specified by mzs and intensities (due to C# interface it is necessary)
-           @param mzs mz values of the input spectrum
-           @param intensities intensities of the input spectrum
-           @param length length of mzs and ints
-           @param rt Retention time in seconds
-           @param ms_level ms level
-           @param name spectrum name
-           @param cv CV values when FAIMS is used
-           @return number of acquired peak groups
-      */
-    int getPeakGroups(const double *mzs,
-                      const double *intensities,
-                      int length,
-                      double rt,
-                      int ms_level,
-                      const char *name,
-                      const char *cv)
-    {
-      return selection_.filterAndRank(mzs, intensities, length, rt, ms_level, cv);
-    }
-
-    /**
-           @brief get isolation windows using FLASHDeconv algorithm. Many parameters are in primitive types so they can be passed to C# FLASHIda side.
-           All parameters are for isolation windows.
-           @param window_start window start mzs
-           @param window_end window end mzs
-           @param qscores QScores of windows
-           @param charges charges of windows
-           @param min_charges minimum charges
-           @param max_charges maximum charges
-           @param mono_masses monoisotopic masses
-           @param charge_cos charge cosine scores
-           @param charge_snrs charge SNRs or precursor SNRs
-           @param iso_cos mass cosine scores
-           @param snrs mass SNRs
-           @param charge_scores charge distribution scores
-           @param ppm_errors average PPM errors
-           @param precursor_intensities precursor peak intensities
-           @param peakgroup_intensities precursor mass intensities
-           @param ids precursor IDs
-      */
-    void getIsolationWindows(double *window_start,
-                             double *window_end,
-                             double *qscores,
-                             int *charges,
-                             int *min_charges,
-                             int *max_charges,
-                             double *mono_masses,
-                             double *charge_cos,
-                             double *charge_snrs,
-                             double *iso_cos,
-                             double *snrs, double *charge_scores,
-                             double *ppm_errors,
-                             double *precursor_intensities,
-                             double *peakgroup_intensities,
-                             int* hcds,
-                             int *ids)
-    {
-      selection_.getIsolationWindows(window_start, window_end, qscores, charges,
-                                     min_charges, max_charges, mono_masses, charge_cos,
-                                     charge_snrs, iso_cos, snrs, charge_scores,
-                                     ppm_errors, precursor_intensities, peakgroup_intensities,
-                                     hcds, ids);
-    }
-    /**
-           @brief Remove a given precursor from the exclusion list by id (needed for FAIMS)
-           @param id id of precursor
-      */
-    void removeFromExlusionList(int id)
-    {
-      selection_.removeFromExclusionList(id);
-    }
-
-    double getRepresentativeMass();
-
-    void getAllMonoisotopicMasses(double *masses, int length);
-
-    int GetAllPeakGroupSize();
 
     // Fragment analysis methods delegate to fragments_ component.
     // C-pointer overloads are kept as non-inline methods for binary compatibility.
@@ -256,8 +172,6 @@ namespace OpenMS
     /// Get the next monotonically increasing tracking ID (thread-safe)
     int getNextTrackingId();
 
-    // SelectionMetric, ExplorationMetric, MSLevelConfig are now in FLASHIda/Config.h
-
     /// Test-only: push a command into the priority queue (delegates to queue_)
     void pushCommandForTest(ScanCommand cmd)
     {
@@ -273,8 +187,6 @@ namespace OpenMS
            @return parsed information : scan number - percursor information
     **/
     static std::map<int, std::vector<std::vector<float>>> parseFLASHIdaLog(const String& in_log_file);
-
-    // TagMatch, InclusionTarget, TargetPTM structs moved to PrecursorSelection
 
     /**
      * @brief Process stored MS2 deconvolution for protein family detection and inclusion list expansion
@@ -296,10 +208,6 @@ namespace OpenMS
     /// Scan command queue (owns queue, tracking IDs, pending map, command builders)
     ScanCommandQueue queue_;
 
-    // TagBasedFragmentMatch and runTagBasedFragmentMatching_ moved to FragmentAnalysis
-
-    // Mass exclusion maps, targeting maps, filter/parse methods moved to PrecursorSelection
-
     /// Deconvolution engine (owns SpectralDeconvolution, MS1 result, MS2 result)
     Deconvolution deconv_;
 
@@ -312,25 +220,6 @@ namespace OpenMS
     /// Isobaric quantification (TMT reporter-ion differential abundance test)
     Quantification quant_;
 
-    std::map<double, std::vector<double>> cv_to_mass_ = {
-      {-80.0, {2400.0, 2900.0}},
-      {-70.0, {3500.0, 4000.0}},
-      {-60.0, {4500.0, 5000.0}},
-      {-50.0, {5100.0, 6500.0}},
-      {-40.0, {7500.0, 10000.0}},
-      {-30.0, {11000.0, 14000.0}},
-      {-20.0, {12000.0, 15000.0}},
-      {-10.0, {13000.0, 15500.0}},
-      {-0.0, {14000.0, 16000.0}},
-      {10.0, {15000.0, 16500.0}},
-    };
-
-    // parseJSONConfig_ removed: parsing logic moved to Config class
-
-    // Phase 3 scan command queue infrastructure moved to ScanCommandQueue
-
-    // Phase 4 command building moved to ScanCommandQueue (except selectMS3Targets_)
-
     /// MS3Target typedef from ScanCommandQueue (used by selectMS3Targets_)
     using MS3Target = ScanCommandQueue::MS3Target;
 
@@ -340,27 +229,15 @@ namespace OpenMS
     /// Process MS2 scan: tracking resolution, deconv, routing
     int processMS2Path_(const double* mzs, const double* ints, int length, double rt_min, const char* scan_desc);
 
-    // Queue data members moved to ScanCommandQueue
-
-    /// Mutex protecting processMS2Path_ and getNextScanCommand (replaces old queue_mutex_)
+    /// Mutex protecting processMS2Path_ and getNextScanCommand
     mutable std::mutex mutex_;
-
-    // Phase 4 config values moved to Config; AGC runtime state moved to ScanCommandQueue
-
-    // level_configs_, exploration_enabled_, quant_enabled_, reporter_mz_tol_,
-    // fold_change_threshold_, faims_cv_values_, max_cv_skip_, cv_precursor_threshold_,
-    // faims_enabled_ moved to Config; FAIMS runtime state moved to FAIMS class
 
     FAIMS faims_;   ///< FAIMS CV cycling state machine
 
     /// Exploration CE sweep engine (owns groups, variants, scoring)
     Exploration exploration_;
 
-    // Exploration structs, state, and methods moved to Exploration class
-
   public:
-    // --- Phase 7: Test-only helpers ---
-
     /// Test-only: get number of active exploration groups (delegates to exploration_)
     int getActiveExplorationGroupCountForTest() const
     {

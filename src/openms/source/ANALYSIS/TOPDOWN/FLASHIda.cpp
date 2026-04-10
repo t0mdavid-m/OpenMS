@@ -48,10 +48,6 @@
 namespace OpenMS
 {
 
-// Anonymous namespace: fragment analysis helpers moved to FLASHIda/FragmentAnalysis.cpp
-
-// tracking_alphabet_ moved to ScanCommandQueue.cpp
-
 /// constructor
 FLASHIda::FLASHIda(char* arg) :
     config_(std::string(arg)),
@@ -66,31 +62,6 @@ FLASHIda::FLASHIda(char* arg) :
   #ifdef _OPENMP
     omp_set_num_threads(4);
   #endif
-
-    // AGC timing initialized in ScanCommandQueue constructor
-    // Targeting/file-loading (log files, FASTA, TSV) moved to PrecursorSelection constructor
-  }
-
-  // isDifferentiallyAbundant() moved to Quantification component
-
-  // getPeakGroups() now inline in header, delegates to selection_.filterAndRank()
-
-  // filterPeakGroupsUsingMassExclusion_() moved to PrecursorSelection
-
-  // removeFromExlusionList() now inline in header, delegates to selection_.removeFromExclusionList()
-
-  void FLASHIda::getAllMonoisotopicMasses(double* masses, int length)
-  {
-    int len = std::min(length, (int)deconv_.deconvolvedMS1().size());
-    for (int i = 0; i < len; i++)
-    {
-      masses[i] = deconv_.deconvolvedMS1()[i].getMonoMass();
-    }
-  }
-
-  int FLASHIda::GetAllPeakGroupSize()
-  {
-    return deconv_.deconvolvedMS1().size();
   }
 
   // Fragment analysis: C-pointer overloads delegate to fragments_ + deconv_.storedMS2()
@@ -102,9 +73,6 @@ FLASHIda::FLASHIda(char* arg) :
     return fragments_.getBestMS2Masses(n, masses, qscores, charges, window_starts, window_ends,
                                        deconv_.storedMS2());
   }
-
-  // getBestMS2MassesPy is inline in header, delegates via fragments_ + deconv_.storedMS2()
-
 
   int FLASHIda::getTopFragmentMatches(const String& protein_sequence, int n,
                                       double* masses, double* qscores, int* charges,
@@ -118,8 +86,6 @@ FLASHIda::FLASHIda(char* arg) :
                                             deconv_.storedMS2(), fragmentation_method);
   }
 
-  // getTopFragmentMatchesPy is inline in header
-
   int FLASHIda::getTerminalFragmentIons(const String& protein_sequence, int n,
                                         double* masses, double* qscores, int* charges,
                                         double* window_starts, double* window_ends,
@@ -132,8 +98,6 @@ FLASHIda::FLASHIda(char* arg) :
                                               deconv_.storedMS2(), fragmentation_method);
   }
 
-  // getTerminalFragmentIonsPy is inline in header
-
   int FLASHIda::getAmbiguityEnclosingIons(const String& protein_sequence, int n,
                                           double* masses, double* qscores, int* charges,
                                           double* window_starts, double* window_ends,
@@ -145,53 +109,6 @@ FLASHIda::FLASHIda(char* arg) :
                                                 window_starts, window_ends, ion_types, fragment_indices,
                                                 deconv_.storedMS2(), fragmentation_method);
   }
-
-  // getAmbiguityEnclosingIonsPy is inline in header
-
-
-  double FLASHIda::getRepresentativeMass()
-  {/*
-    const int max_count = 10;
-    double threshold = 0;
-    double mass = 0;
-    double intensity_sum = 0;
-
-    if (deconv_.deconvolvedMS1().size() > max_count)
-    {
-      std::vector<float> intensites;
-      intensites.reserve(deconv_.deconvolvedMS1().size());
-      for (const auto& pg : deconv_.deconvolvedMS1())
-      {
-        intensites.push_back(pg.getIntensity());
-      }
-      std::sort(intensites.rbegin(), intensites.rend());
-      threshold = intensites[max_count];
-    }
-
-    for (const auto& pg : deconv_.deconvolvedMS1())
-    {
-      if (pg.getIntensity() < threshold) continue;
-      mass += pg.getMonoMass() * pg.getIntensity();
-      intensity_sum += pg.getIntensity();
-    }
-    if (intensity_sum <= 0) return 0;
-    return mass / intensity_sum;
-    */
-    auto filter_str = deconv_.deconvolvedMS1().getOriginalSpectrum().getMetaValue("filter string").toString();
-    Size pos = filter_str.find("cv=");
-    double cv;
-
-    if (pos != String::npos) // get the preferred mass ranges accding to CV values.
-    {
-      Size end = filter_str.find(" ", pos);
-      if (end == String::npos) end = filter_str.length() - 1;
-      cv = std::stod(filter_str.substr(pos + 3, end - pos));
-      return cv;
-    }
-    return -100;
-  }
-
-  // getIsolationWindows() now inline in header, delegates to selection_.getIsolationWindows()
 
   int FLASHIda::getConfigInt(const std::string& key) const
   {
@@ -349,14 +266,7 @@ FLASHIda::FLASHIda(char* arg) :
     return precursor_map_for_real_time_acquisition;
   }
 
-  // parseInclusionListTSV_(), parseTargetPTMsTSV_(), generatePTMCombinations_(),
-  // addDynamicTargets_(), processMS2ForTagBasedTargeting() moved to PrecursorSelection
-
-  // parseJSONConfig_ removed: parsing logic moved to Config class
-
-  // Phase 3 scan command queue and tracking methods moved to ScanCommandQueue.cpp
-
-  // ---- Phase 6: FAIMS CV adaptive skip state machine ----
+  // ---- FAIMS CV adaptive skip state machine ----
   //
   // Behavioral audit of C# ScanScheduler (reference implementation):
   //
@@ -404,7 +314,7 @@ FLASHIda::FLASHIda(char* arg) :
         commands_pushed++;
       }
 
-      // Phase 7: Initiate exploration for selected precursors if MS2 exploration is enabled
+      // Initiate exploration for selected precursors if MS2 exploration is enabled
       if (config_.hasExploration(2))
       {
         for (int i = 0; i < n; i++)
@@ -450,14 +360,6 @@ FLASHIda::FLASHIda(char* arg) :
     return 0;
   }
 
-  // decodeTracking_ moved to ScanCommandQueue::decode()
-
-  // buildMS2Command_(PeakGroup, charge, hcd) moved to ScanCommandQueue::buildMS2()
-
-  // buildMS3Command_ moved to ScanCommandQueue::buildMS3()
-
-  // pushCommand_ moved to ScanCommandQueue::push()
-
   std::vector<FLASHIda::MS3Target> FLASHIda::selectMS3Targets_()
   {
     std::vector<MS3Target> targets;
@@ -502,11 +404,6 @@ FLASHIda::FLASHIda(char* arg) :
     return targets;
   }
 
-  // pushFollowUpMS2_ and pushConditionalFollowUp_ moved to
-  // ScanCommandQueue::buildFollowUpMS2() and ScanCommandQueue::buildConditionalFollowUp()
-
-  // --- Phase 7: Exploration engine moved to FLASHIda/Exploration.h/.cpp ---
-
   int FLASHIda::processMS2Path_(const double* mzs, const double* ints, int length,
                                  double rt_min, const char* scan_desc)
   {
@@ -520,7 +417,7 @@ FLASHIda::FLASHIda(char* arg) :
     std::string id_str = desc_str.substr(0, 3);
     int tracking_id = queue_.decode(id_str);
 
-    // Phase 7: Check if this is an exploration variant (before pending scan lookup)
+    // Check if this is an exploration variant (before pending scan lookup)
     if (exploration_.isExplorationVariant(tracking_id))
     {
       // Deconvolve the MS2 result for scoring
@@ -639,7 +536,7 @@ FLASHIda::FLASHIda(char* arg) :
     }
 
     // Step 2: Cycle time -- force MS1 if too long since last survey scan
-    // Suppressed while any exploration group is active (Phase 7)
+    // Suppressed while any exploration group is active
     bool exploration_active = exploration_.activeGroupCount() > 0;
     if (config_.scheduling().cycle_time_enabled && !exploration_active
         && queue_.msSinceLastMS1() > static_cast<uint64_t>(config_.scheduling().cycle_time_ms))
