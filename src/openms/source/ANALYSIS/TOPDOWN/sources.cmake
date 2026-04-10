@@ -15,6 +15,7 @@ set(sources_list
         FLASHIda/FAIMS.cpp
         FLASHIda/FragmentAnalysis.cpp
         FLASHIda/PrecursorSelection.cpp
+        FLASHIda/Quantification.cpp
         FLASHIda/ScanCommandQueue.cpp
         FLASHIdaBridgeFunctions.cpp
         FLASHGappedTaggerAlgorithm.cpp

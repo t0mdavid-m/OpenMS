@@ -15,6 +15,7 @@ set(sources_list_h
         FLASHIda/FAIMS.h
         FLASHIda/FragmentAnalysis.h
         FLASHIda/PrecursorSelection.h
+        FLASHIda/Quantification.h
         FLASHIda/ScanCommand.h
         FLASHIda/ScanCommandQueue.h
         FLASHIdaBridgeFunctions.h

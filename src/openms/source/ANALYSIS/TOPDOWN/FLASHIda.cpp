@@ -33,13 +33,7 @@
 // --------------------------------------------------------------------------
 
 
-#include <OpenMS/ANALYSIS/QUANTITATION/IsobaricChannelExtractor.h>
-#include <OpenMS/ANALYSIS/QUANTITATION/IsobaricQuantifier.h>
-#include <OpenMS/ANALYSIS/QUANTITATION/TMTSixPlexQuantitationMethod.h>
-#include <OpenMS/KERNEL/ConsensusMap.h> 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
-#include <OpenMS/KERNEL/MSSpectrum.h>
-#include <OpenMS/METADATA/Precursor.h>
 
 #include <algorithm>
 #include <climits>
@@ -65,6 +59,7 @@ FLASHIda::FLASHIda(char* arg) :
     deconv_(config_),
     fragments_(config_),
     selection_(config_, deconv_),
+    quant_(config_),
     faims_(config_),
     exploration_(config_)
 {
@@ -76,133 +71,7 @@ FLASHIda::FLASHIda(char* arg) :
     // Targeting/file-loading (log files, FASTA, TSV) moved to PrecursorSelection constructor
   }
 
-  bool FLASHIda::isDifferentiallyAbundant(const double* mzs,
-                              const double* ints,
-                              const int length,
-                              const double rt,
-                              const int ms_level,
-                              const char* name,
-                              double reporter_mz_tol,
-                              double fold_change_threshold,
-                              bool only_one_condition
-                              )
-  {
-    // Create spectrum
-    MSSpectrum spec;
-    for (int i = 0; i < length; i++)
-    {
-      if (ints[i] > 0) { spec.emplace_back(mzs[i], ints[i]); }
-    }
-    spec.setMSLevel(ms_level);
-    spec.setName(name);
-    spec.setRT(rt);
-
-    // Set precursor with HCD activation - neccessary for channel extractor
-    OpenMS::Precursor precursor;
-    precursor.setActivationMethods({OpenMS::Precursor::ActivationMethod::HCD});
-    spec.setPrecursors({precursor});
-
-    // Create experiment
-    MSExperiment exp;
-    exp.addSpectrum(spec);
-
-    // TODO: Variable channel extractors
-    TMTSixPlexQuantitationMethod quant_method;
-    IsobaricChannelExtractor channel_extractor(&quant_method);
-
-    // Set parameters
-    Param p = channel_extractor.getParameters();
-    p.setValue("reporter_mass_shift", reporter_mz_tol);
-    channel_extractor.setParameters(p);
-
-    // Extract reporter-ion channels into a ConsensusMap
-    ConsensusMap consensus_map_raw;
-    channel_extractor.extractChannels(exp, consensus_map_raw);
-
-    // Collect m/z-intensity pairs from the ConsensusFeatures
-    std::vector<std::pair<double, double>> mz_int;
-    mz_int.reserve(quant_method.getNumberOfChannels());
-    for (const auto& cf : consensus_map_raw)
-    {
-        for (auto& i : cf)
-        {
-            mz_int.emplace_back(i.getMZ(), i.getIntensity());
-        }
-    }
-
-    // Something went wrong – bail out early
-    if (mz_int.size() != quant_method.getNumberOfChannels())
-    {
-        std::cout << "FLASHIda - channel extraction failed..." << std::endl;
-        return false;
-    }
-
-    // Sort by m/z to ensure channel order
-    std::sort(mz_int.begin(), mz_int.end(),
-              [](const auto& a, const auto& b){ return a.first < b.first; });
-
-    // Extract intensities
-    std::vector<double> intensities;
-    intensities.reserve(mz_int.size());
-    for (const auto& p2 : mz_int) intensities.push_back(p2.second);
-
-    for (auto intensity : intensities) {
-      std::cout << intensity << std::endl; 
-    }
-
-    // TODO: Make configurable
-    if (only_one_condition) {
-      bool first_sample_present = std::none_of(
-        intensities.begin(), intensities.begin()+3, [](double x){ return x < 1e-3; }
-      );
-      std::cout << first_sample_present << std::endl;
-      bool second_sample_present = std::none_of(
-        intensities.begin()+3, intensities.end(), [](double x){ return x < 1e-3; }
-      );
-      std::cout << second_sample_present << std::endl;
-      bool first_sample_missing = std::all_of(
-        intensities.begin(), intensities.begin()+3, [](double x){ return x < 1e-3; }
-      );
-      std::cout << first_sample_missing << std::endl;
-      bool second_sample_missing = std::all_of(
-        intensities.begin()+3, intensities.end(), [](double x){ return x < 1e-3; }
-      );
-      std::cout << second_sample_missing << std::endl;
-      // No signal
-      if (first_sample_missing && second_sample_missing) {
-        return false;
-      }
-      // Both are incomplete
-      else if (!first_sample_present && !second_sample_present) {
-        return false;
-      }
-      // One signal
-      else if (
-        (first_sample_missing || second_sample_missing)
-        && (first_sample_present || second_sample_present)
-      ) {
-        return true;
-      }
-    }
-
-    // Reject spectra with missing / too-low reporter peaks
-    if (!only_one_condition && std::any_of(intensities.begin(), intensities.end(),
-                    [](double x){ return x < 1e-3; }))
-    {
-        return false;
-    }
-
-    const double sample1_mean = std::accumulate(intensities.begin(),
-                                                intensities.begin() + 3, 0.0) / 3.0;
-
-    const double sample2_mean = std::accumulate(intensities.begin() + 3,
-                                                intensities.end(), 0.0) / 3.0;
-
-    const double fold_change = sample1_mean / sample2_mean;
-
-    return (fold_change > fold_change_threshold) || ((1/fold_change) > fold_change_threshold);
-
-  }
+  // isDifferentiallyAbundant() moved to Quantification component
 
   // getPeakGroups() now inline in header, delegates to selection_.filterAndRank()
 
@@ -699,8 +568,8 @@ FLASHIda::FLASHIda(char* arg) :
     // Quantification follow-up (independent of tags)
     if (config_.quantification().enabled && config_.level(2).scans.size() >= 2)
     {
-      if (isDifferentiallyAbundant(mzs, ints, length, rt_min, 2, "ms2_quant",
-                                    config_.quantification().reporter_mz_tol, config_.quantification().fold_change_threshold, false))
+      if (quant_.isDifferentiallyAbundant(mzs, ints, length, rt_min, 2, "ms2_quant",
+                                          config_.quantification().reporter_mz_tol, config_.quantification().fold_change_threshold, false))
       {
         queue_.push(queue_.buildFollowUpMS2(ctx));
         commands_pushed++;

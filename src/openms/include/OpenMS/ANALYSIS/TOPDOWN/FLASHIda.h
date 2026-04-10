@@ -43,6 +43,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FAIMS.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/PrecursorSelection.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Quantification.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
@@ -87,29 +88,6 @@ namespace OpenMS
 
     /// assignment operator
     FLASHIda& operator=(const FLASHIda& fd) = default;
-
-    /**
-           @brief get peak groups (deconvolved masses) from input spectrum, specified by mzs and intensities (due to C# interface it is necessary)
-           @param mzs mz values of the input spectrum
-           @param intensities intensities of the input spectrum
-           @param length length of mzs and ints
-           @param rt Retention time in seconds
-           @param ms_level ms level
-           @param name spectrum name
-           @param reporter_mz_tol reporter ion mz tolerance for isobaric quantification
-           @param fold_change_threshold the threshold value for when something is considered a fold change 
-           @param only_one_condition whether or not a missing condition should be considered as differentially abundant
-           @return number of acquired peak groups
-      */
-    bool isDifferentiallyAbundant(const double* mzs,
-                            const double* ints,
-                            const int length,
-                            const double rt,
-                            const int ms_level,
-                            const char* name,
-                            double reporter_mz_tol,
-                            double fold_change_threshold,
-                            bool only_one_condition);
 
     /**
            @brief get peak groups (deconvolved masses) from input spectrum, specified by mzs and intensities (due to C# interface it is necessary)
@@ -330,6 +308,9 @@ namespace OpenMS
 
     /// Precursor selection, targeting, mass exclusion (owns all selection state)
     PrecursorSelection selection_;
+
+    /// Isobaric quantification (TMT reporter-ion differential abundance test)
+    Quantification quant_;
 
     std::map<double, std::vector<double>> cv_to_mass_ = {
       {-80.0, {2400.0, 2900.0}},
