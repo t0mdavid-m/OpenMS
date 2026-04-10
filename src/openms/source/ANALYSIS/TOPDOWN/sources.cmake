@@ -10,6 +10,7 @@ set(sources_list
         FLASHExtenderAlgorithm.cpp
         FLASHIda.cpp
         FLASHIda/Config.cpp
+        FLASHIda/Exploration.cpp
         FLASHIda/FAIMS.cpp
         FLASHIda/ScanCommandQueue.cpp
         FLASHIdaBridgeFunctions.cpp
