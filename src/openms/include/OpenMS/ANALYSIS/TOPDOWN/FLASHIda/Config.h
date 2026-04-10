@@ -135,6 +135,7 @@ namespace OpenMS
     double snr_threshold = 1.0;
     bool ms3_enabled = false;           ///< Explicit ms3.enabled flag from JSON
     int ms3_mode = 0;                  ///< 0=disabled, 1=SourceCID, 2=SPS, 3=HCD-triggered, 4=EThcD
+    int max_ms3_per_ms2 = 4;           ///< Legacy ms3.max_per_ms2 (Branch 2 only)
     std::string protein_sequence;
     bool conditional_ms2_enabled = false; ///< Explicit conditional_ms2 flag from JSON
     std::vector<std::string> target_log_files;

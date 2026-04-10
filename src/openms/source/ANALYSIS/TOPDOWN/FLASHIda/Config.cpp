@@ -260,14 +260,10 @@ namespace OpenMS
       }
     }
 
-    // Apply ms3 max_per_ms2 to levels_[3].max_targets if level 3 exists
-    if (levels_.find(3) != levels_.end())
-    {
-      // Only override if ms3.max_per_ms2 was set and level 3's max_targets
-      // is still the default (10), otherwise selection_strategy takes precedence
-      if (ms3_max_per_ms2 != 4 || levels_[3].max_targets == 10)
-        levels_[3].max_targets = ms3_max_per_ms2;
-    }
+    // Store ms3 max_per_ms2 separately — it applies only to the legacy
+    // selectMS3Targets_ path (Branch 2), NOT to initiateNextLevel (Branch 3).
+    // Branch 3 uses levels_[3].max_targets from selection_strategy.
+    targeting_.max_ms3_per_ms2 = ms3_max_per_ms2;
 
     // Set per-level tolerance values
     for (auto& [lvl, cfg] : levels_)

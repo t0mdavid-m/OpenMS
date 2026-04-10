@@ -366,7 +366,7 @@ FLASHIda::FLASHIda(char* arg) :
     if (config_.targeting().ms3_mode == 0 || !deconv_.hasStoredMS2())
       return targets;
 
-    const int n = config_.level(3).max_targets;
+    const int n = config_.targeting().max_ms3_per_ms2;
     std::vector<double> masses(n), qscores(n), wstarts(n), wends(n);
     std::vector<int> charges(n);
     std::vector<char> ion_types(n, '\0');
