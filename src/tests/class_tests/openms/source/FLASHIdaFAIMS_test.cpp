@@ -346,8 +346,8 @@ END_SECTION
 START_SECTION(adaptive_cv_skip_threshold_boundary)
 {
   // Construct FAIMS directly from the skip config (threshold=15, max_cv_skip=2, CVs=[-40,-50,-60])
-  Config cfg(std::string(faims_skip_config));
-  FAIMS faims(cfg);
+  Config cfg{std::string(faims_skip_config)};
+  FAIMS faims{cfg};
 
   // Precursor count = 14 (below threshold) -> should double skip amount 0->1
   faims.updateSkip(-40.0, 14);
