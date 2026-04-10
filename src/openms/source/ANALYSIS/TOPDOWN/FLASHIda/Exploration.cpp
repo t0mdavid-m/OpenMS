@@ -119,6 +119,7 @@ namespace OpenMS
   std::vector<ScanCommand> Exploration::feedResult(int tracking_id,
       const DeconvolvedSpectrum& ms2_deconv, double rt, ScanCommandQueue& queue)
   {
+    (void)rt;
     std::vector<ScanCommand> commands;
 
     // Look up the variant reference
