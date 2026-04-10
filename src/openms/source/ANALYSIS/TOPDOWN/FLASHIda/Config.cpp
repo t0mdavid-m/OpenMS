@@ -98,7 +98,7 @@ namespace OpenMS
     targeting_.mode = ps.value("target_mode", 0);
     targeting_.use_idscore = ps.value("IDScore", false);
     targeting_.consider_all_charges = ps.value("AllCharges", false);
-    targeting_.ms3_all_charges = ps.value("MS3AllCharges", false);
+    targeting_.ms3_all_charges = ps.value("MS3AllCharges", false);  // also checked from ms3 section below
     targeting_.hcd_energy = ps.value("HCDEnergy", -1);
     targeting_.strict_inclusion = ps.value("strict_inclusion", false);
     targeting_.tie_threshold = ps.value("tie_threshold", 0.1);
@@ -130,18 +130,22 @@ namespace OpenMS
 
     // --- ms3 section ---
     auto ms3 = config.value("ms3", json::object());
-    targeting_.ms3_enabled = ms3.value("enabled", false);
+    targeting_.ms3_enabled = ms3.value("enabled", ms3.value("active", false));
     targeting_.ms3_mode = ms3.value("mode", 0);
     targeting_.protein_sequence = ms3.value("protein_sequence", "");
     // ms3 max_per_ms2 -> levels_[3].max_targets (set after selection_strategy parsing)
     int ms3_max_per_ms2 = ms3.value("max_per_ms2", 4);
+    // ms3.all_charges overrides precursor_selection.MS3AllCharges if present
+    if (ms3.contains("all_charges"))
+      targeting_.ms3_all_charges = ms3.value("all_charges", false);
 
-    // --- conditional_ms2 ---
-    targeting_.conditional_ms2_enabled = config.value("conditional_ms2", false);
+    // --- conditional_ms2 (check top-level and tagging section) ---
+    targeting_.conditional_ms2_enabled = config.value("conditional_ms2",
+        tagging.value("conditional_ms2", false));
 
     // --- quantification ---
     auto quant = config.value("quantification", json::object());
-    quant_.enabled = quant.value("enabled", false);
+    quant_.enabled = quant.value("enabled", quant.value("active", false));
     quant_.reporter_mz_tol = quant.value("reporter_mz_tol", 0.002);
     quant_.fold_change_threshold = quant.value("fold_change_threshold", 1.4);
 
