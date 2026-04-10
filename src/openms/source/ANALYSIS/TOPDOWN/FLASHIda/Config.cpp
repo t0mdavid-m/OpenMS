@@ -130,7 +130,7 @@ namespace OpenMS
 
     // --- ms3 section ---
     auto ms3 = config.value("ms3", json::object());
-    targeting_.ms3_enabled = ms3.value("enabled", ms3.value("active", false));
+    targeting_.ms3_enabled = ms3.value("enabled", false);
     targeting_.ms3_mode = ms3.value("mode", 0);
     targeting_.protein_sequence = ms3.value("protein_sequence", "");
     // ms3 max_per_ms2 -> levels_[3].max_targets (set after selection_strategy parsing)
