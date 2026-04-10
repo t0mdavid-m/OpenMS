@@ -490,7 +490,7 @@ FLASHIda::FLASHIda(char* arg) :
     }
     else if (config_.targeting().ms3_enabled && config_.targeting().ms3_mode > 0)
     {
-      // Legacy MS3 targeting (non-exploration)
+      // Legacy MS3 targeting (non-exploration, requires explicit ms3.enabled=true)
       auto ms3_targets = selectMS3Targets_();
       for (const auto& t : ms3_targets)
       {
@@ -500,7 +500,7 @@ FLASHIda::FLASHIda(char* arg) :
         commands_pushed++;
       }
     }
-    else if (config_.level(3).selection != SelectionMetric::None && !(config_.targeting().ms3_mode > 0))
+    else if (config_.level(3).selection != SelectionMetric::None && !config_.targeting().ms3_enabled)
     {
       // New selection_strategy MS3 targeting (no exploration, not legacy)
       auto cmds = exploration_.initiateNextLevel(2, deconv_.storedMS2(), ctx.faims_cv, queue_);
