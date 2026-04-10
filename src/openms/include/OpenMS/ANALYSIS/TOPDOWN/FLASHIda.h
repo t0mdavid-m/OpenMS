@@ -41,19 +41,17 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Deconvolution.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Exploration.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FAIMS.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/PrecursorSelection.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
-#include <OpenMS/FORMAT/FASTAFile.h>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <deque>
 #include <mutex>
-#include <set>
-#include <unordered_map>
 
 namespace OpenMS
 {
@@ -134,7 +132,10 @@ namespace OpenMS
                       double rt,
                       int ms_level,
                       const char *name,
-                      const char *cv);
+                      const char *cv)
+    {
+      return selection_.filterAndRank(mzs, intensities, length, rt, ms_level, cv);
+    }
 
     /**
            @brief get isolation windows using FLASHDeconv algorithm. Many parameters are in primitive types so they can be passed to C# FLASHIda side.
@@ -171,12 +172,22 @@ namespace OpenMS
                              double *precursor_intensities,
                              double *peakgroup_intensities,
                              int* hcds,
-                             int *ids);
+                             int *ids)
+    {
+      selection_.getIsolationWindows(window_start, window_end, qscores, charges,
+                                     min_charges, max_charges, mono_masses, charge_cos,
+                                     charge_snrs, iso_cos, snrs, charge_scores,
+                                     ppm_errors, precursor_intensities, peakgroup_intensities,
+                                     hcds, ids);
+    }
     /**
            @brief Remove a given precursor from the exclusion list by id (needed for FAIMS)
            @param id id of precursor
       */
-    void removeFromExlusionList(int id);
+    void removeFromExlusionList(int id)
+    {
+      selection_.removeFromExclusionList(id);
+    }
 
     double getRepresentativeMass();
 
@@ -378,68 +389,20 @@ namespace OpenMS
     **/
     static std::map<int, std::vector<std::vector<float>>> parseFLASHIdaLog(const String& in_log_file);
 
-    /**
-     * @brief Structure to hold a sequence tag match result
-     */
-    struct TagMatch
-    {
-      String tag_sequence;        ///< The sequence tag string
-      double n_term_mass;         ///< N-terminal flanking mass
-      double c_term_mass;         ///< C-terminal flanking mass
-      double tag_score;           ///< Score of the tag
-      int protein_index;          ///< Index in the FASTA file
-      String protein_accession;   ///< Protein accession
-      int match_position;         ///< Position in the protein sequence where tag matches
-      double flanking_mass_diff;  ///< Difference between tag flanking mass and protein flanking mass
-    };
-
-    /**
-     * @brief Structure for TSV-based inclusion target
-     *
-     * Represents a single target from a TSV inclusion list with mass, charge,
-     * RT range, and priority for tie-breaking during precursor selection.
-     */
-    struct InclusionTarget
-    {
-      double mass;        ///< Target monoisotopic mass
-      int charge;         ///< Charge state (-1 = any charge)
-      double rt_start;    ///< RT window start (seconds)
-      double rt_end;      ///< RT window end (seconds)
-      int priority;       ///< Tie-breaking priority (higher = preferred)
-
-      /// Check if current RT is within the target's active window
-      bool isActiveAt(double rt) const { return rt >= rt_start && rt <= rt_end; }
-
-      /// Check if charge matches (true if target charge is -1 or matches)
-      bool matchesCharge(int c) const { return charge == -1 || charge == c; }
-    };
-
-    /**
-     * @brief Structure for PTM modifications with combinatorial limits for target expansion
-     *
-     * Used by tag-based targeting to generate PTM mass combinations for dynamic inclusion lists.
-     */
-    struct TargetPTM
-    {
-      String name;      ///< Modification name (e.g., "acetylation")
-      double mass;      ///< Delta mass in Da
-      int max_count;    ///< Maximum occurrences on single proteoform
-    };
+    // TagMatch, InclusionTarget, TargetPTM structs moved to PrecursorSelection
 
     /**
      * @brief Process stored MS2 deconvolution for protein family detection and inclusion list expansion
      *
-     * This DLL bridge function performs real-time tag-based targeting:
-     * 1. Uses stored MS2 deconvolution results (requires deconvolveMS2() first)
-     * 2. Extracts sequence tags (minimum length 3)
-     * 3. Matches tags against the target protein database
-     * 4. If match found: Expands target masses using PTM combinations from precursor mass
-     * 5. Adds expanded masses to dynamic inclusion list
+     * Delegates to PrecursorSelection::processMS2ForTagBasedTargeting().
      *
      * @param precursor_mass monoisotopic mass of the precursor (from iAPI)
      * @return true if target protein detected and targets expanded, false otherwise
      */
-    bool processMS2ForTagBasedTargeting(double precursor_mass);
+    bool processMS2ForTagBasedTargeting(double precursor_mass)
+    {
+      return selection_.processMS2ForTagBasedTargeting(precursor_mass);
+    }
 
   private:
     /// Configuration object (owns all parsed config values)
@@ -479,114 +442,13 @@ namespace OpenMS
                                       std::vector<PTMSite>* ptm_sites = nullptr,
                                       const String& fragmentation_method = "HCD");
 
-    /// PeakGroup comparator for soring by QScore
-    /*struct
-    {
-      bool operator()(const PeakGroup& a, const PeakGroup& b) const
-      {
-        return a.getQScore() > b.getQScore();
-      }
-    } QscoreComparator_;
-*/
-    /// Maps that are necessary for mass exclusion
-    std::unordered_map<int, double> tqscore_exceeding_mz_rt_map_; /// integer mz value vs. retention time with tqscore exceeding total qscore threshold
-    std::unordered_map<int, double> tqscore_exceeding_mass_rt_map_; /// integer mass value vs. retention time with tqscore exceeding total qscore threshold
-    std::unordered_map<int, double> all_mass_rt_map_; /// mz value vs. retention time for all acquired precursors
-    std::unordered_map<int, double> mass_qscore_map_; /// mass value vs. total qscore for all acquired precursors
-
-
-
-    /// Maps that are neccessary for selectively disabling mass exclusion (needed for FAIMS support)
-    std::unordered_map<int, int> id_mass_map_;
-    std::unordered_map<int, int> id_mz_map_;
-    std::unordered_map<int, double> id_qscore_map_;
-
-
-    /**
-         @brief discard peak groups using mass exclusion
-         @param ms_level MS level
-         @param rt Retention time
-    */
-    void filterPeakGroupsUsingMassExclusion_(int ms_level, double rt);
-
-    /**
-         @brief parse TSV inclusion list file
-         @param filename path to TSV file with columns: mass, charge, rt_start, rt_end, priority
-    */
-    void parseInclusionListTSV_(const String& filename);
-
-    /**
-         @brief parse TSV file containing PTM modifications for target expansion
-         @param filename path to TSV file with columns: name, mass, max_count
-    */
-    void parseTargetPTMsTSV_(const String& filename);
-
-    /**
-         @brief Generate all PTM mass combinations for a base protein mass
-         @param base_mass base protein mass
-         @param ptms vector of PTMs with max counts
-         @return vector of all possible modified masses
-    */
-    std::vector<double> generatePTMCombinations_(double base_mass,
-                                                 const std::vector<TargetPTM>& ptms) const;
-
-    /**
-         @brief Add expanded target masses to the dynamic inclusion list
-         @param masses vector of masses to add
-         @param rt current retention time (targets active for rt_window_ seconds)
-         @param priority priority for the new targets
-    */
-    void addDynamicTargets_(const std::vector<double>& masses,
-                            double rt,
-                            int priority);
+    // Mass exclusion maps, targeting maps, filter/parse methods moved to PrecursorSelection
 
     /// Deconvolution engine (owns SpectralDeconvolution, MS1 result, MS2 result)
     Deconvolution deconv_;
 
-    /// selected peak groups out of MS1 deconvolution (filtered subset for triggering)
-    DeconvolvedSpectrum selected_peak_groups_;
-
-    /// peakGroup charges to be triggered
-    std::vector<int> trigger_charges;
-    std::vector<int> trigger_hcds;
-    std::vector<float> trigger_scores;
-    /// peakGroup isolation window ranges
-    std::vector<double> trigger_left_isolation_mzs_;
-    std::vector<double> trigger_right_isolation_mzs_;
-    std::vector<int> trigger_ids_;
-
-    // targeting_mode_, rt_window_, qscore_threshold_, tqscore_threshold moved to Config
-
-    /// maps for global inclusion targeting
-    std::map<double, std::vector<double>> target_mass_rt_map_;
-    std::map<double, std::vector<double>> target_mass_qscore_map_;
-    std::map<double, std::vector<int>> target_mass_charge_map_;
-    std::vector<double> target_masses_; /// current target masses. updated per spectrum
-
-    // For the possibility of removal each window is given an id, starting at zero (needed for FAIMS support)
-    int window_id_ = 0;
-
-    /// maps for global exclusion
-    std::map<double, std::vector<double>> exclusion_rt_masses_map_; /// if rt == 0, its mapped masses are always excluded.
-    std::vector<double> excluded_masses_; /// current target masses. updated per spectrum
-
-    /// TSV-based inclusion targets
-    std::vector<InclusionTarget> inclusion_targets_;  ///< All targets loaded from TSV file
-    std::vector<const InclusionTarget*> active_targets_;  ///< Current active targets (filtered by RT)
-    std::map<int, int> target_priority_map_;  ///< nominal_mass -> priority for tie-breaking
-
-    /// Tag-based protein family targeting
-    std::vector<FASTAFile::FASTAEntry> target_protein_database_;  ///< Target protein family entries
-    std::vector<TargetPTM> target_ptms_;                          ///< PTM modifications for mass expansion
-    std::set<double> expanded_target_masses_;                     ///< Track already-expanded masses (avoid duplicates)
-
-    // tie_threshold_, strict_inclusion_, tag_based_targeting_enabled_,
-    // min/max_tag_length_for_targeting_, tag_matching_tolerance_ppm_,
-    // max_flanking_mass_diff_, max_total_ptm_count_, snr_threshold_,
-    // use_idscore_, consider_all_Charge_states_, ms3_all_charges_,
-    // hcd_energy_ moved to Config
-
-    // tol_ removed: tolerance is now in config_.level(N).tolerance_ppm
+    /// Precursor selection, targeting, mass exclusion (owns all selection state)
+    PrecursorSelection selection_;
 
     std::map<double, std::vector<double>> cv_to_mass_ = {
       {-80.0, {2400.0, 2900.0}},

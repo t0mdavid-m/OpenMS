@@ -13,6 +13,7 @@ set(sources_list_h
         FLASHIda/Deconvolution.h
         FLASHIda/Exploration.h
         FLASHIda/FAIMS.h
+        FLASHIda/PrecursorSelection.h
         FLASHIda/ScanCommand.h
         FLASHIda/ScanCommandQueue.h
         FLASHIdaBridgeFunctions.h
