@@ -69,6 +69,7 @@ namespace OpenMS
     typedef FLASHHelperClasses::LogMzPeak LogMzPeak;
 
     using PTMSite = FragmentAnalysis::PTMSite;
+    using TagMatch = PrecursorSelection::TagMatch;
 
     /// constructor that takes string input argument
     explicit FLASHIda(char *arg);
