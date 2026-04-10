@@ -13,6 +13,7 @@ set(sources_list
         FLASHIda/Deconvolution.cpp
         FLASHIda/Exploration.cpp
         FLASHIda/FAIMS.cpp
+        FLASHIda/FragmentAnalysis.cpp
         FLASHIda/PrecursorSelection.cpp
         FLASHIda/ScanCommandQueue.cpp
         FLASHIdaBridgeFunctions.cpp

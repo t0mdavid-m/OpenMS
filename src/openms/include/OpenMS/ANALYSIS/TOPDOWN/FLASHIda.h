@@ -41,6 +41,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Deconvolution.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Exploration.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FAIMS.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/PrecursorSelection.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
@@ -69,13 +70,8 @@ namespace OpenMS
     typedef FLASHHelperClasses::PrecalculatedAveragine PrecalculatedAveragine;
     typedef FLASHHelperClasses::LogMzPeak LogMzPeak;
 
-    /// Structure representing a PTM site detected by FLASHExtender
-    struct PTMSite {
-      int position;        ///< Position in protein sequence (1-based, midpoint)
-      int start_position;  ///< Start of the region where PTM could be localized (1-based)
-      int end_position;    ///< End of the region where PTM could be localized (1-based)
-      double mass_shift;   ///< Observed mass shift (modification mass)
-    };
+    /// PTMSite is now defined in FragmentAnalysis.h
+    using PTMSite = FragmentAnalysis::PTMSite;
 
     /// constructor that takes string input argument
     explicit FLASHIda(char *arg);
@@ -195,164 +191,75 @@ namespace OpenMS
 
     int GetAllPeakGroupSize();
 
-    /**
-     * @brief Get the top N MS2 masses with isolation window info
-     *
-     * Requires prior call to deconvolveMS2(). Returns masses sorted by qscore.
-     *
-     * @param n maximum number of masses to return
-     * @param masses output: monoisotopic masses
-     * @param qscores output: quality scores
-     * @param charges output: representative charges
-     * @param window_starts output: isolation window start m/z
-     * @param window_ends output: isolation window end m/z
-     * @return actual number of masses returned
-     */
-    int getBestMS2Masses(int n,
-                         double* masses,
-                         double* qscores,
-                         int* charges,
-                         double* window_starts,
-                         double* window_ends);
+    // Fragment analysis methods delegate to fragments_ component.
+    // C-pointer overloads are kept as non-inline methods for binary compatibility.
 
-    /**
-     * @brief Python-friendly overload of getBestMS2Masses
-     */
-    int getBestMS2MassesPy(int n,
-                           std::vector<double>& masses,
-                           std::vector<double>& qscores,
-                           std::vector<int>& charges,
-                           std::vector<double>& window_starts,
-                           std::vector<double>& window_ends);
+    int getBestMS2Masses(int n, double* masses, double* qscores, int* charges,
+                         double* window_starts, double* window_ends);
 
-    /**
-     * @brief Get top fragment ion matches against a protein sequence, sorted by qscore
-     *
-     * Performs direct fragment matching using stored MS2 deconvolution results.
-     * Uses MS2 tolerance from config (config_.level(2).tolerance_ppm).
-     * Only returns peaks that match theoretical b/y fragments of the sequence.
-     * Requires deconvolveMS2() to be called first.
-     *
-     * @param protein_sequence the protein sequence to match against
-     * @param n maximum number of matches to return
-     * @param masses output: observed monoisotopic masses
-     * @param qscores output: qscores of matched peaks
-     * @param charges output: charges of matched peaks
-     * @param window_starts output: isolation window start m/z values
-     * @param window_ends output: isolation window end m/z values
-     * @return number of matches found (may be less than n)
-     */
-    int getTopFragmentMatches(const String& protein_sequence,
-                              int n,
-                              double* masses,
-                              double* qscores,
-                              int* charges,
-                              double* window_starts,
-                              double* window_ends,
-                              char* ion_types,
-                              int* fragment_indices,
+    int getTopFragmentMatches(const String& protein_sequence, int n,
+                              double* masses, double* qscores, int* charges,
+                              double* window_starts, double* window_ends,
+                              char* ion_types, int* fragment_indices,
                               const String& fragmentation_method = "HCD");
 
-    /**
-     * @brief Python-friendly overload of getTopFragmentMatches
-     */
-    int getTopFragmentMatchesPy(const String& protein_sequence,
-                                int n,
-                                std::vector<double>& masses,
-                                std::vector<double>& qscores,
-                                std::vector<int>& charges,
-                                std::vector<double>& window_starts,
-                                std::vector<double>& window_ends,
-                                std::vector<int>& is_b_ions,
-                                std::vector<int>& fragment_indices);
-
-    /**
-     * @brief Get unique fragment ions that enclose PTM ambiguity regions
-     *
-     * Identifies PTM sites and returns the best fragment ions that bracket
-     * ambiguity regions. Returns deduplicated ions sorted by qscore.
-     * Useful for MS3 targeting to resolve PTM localization.
-     * Requires deconvolveMS2() to be called first.
-     *
-     * @param protein_sequence the protein sequence to analyze
-     * @param n maximum number of ions to return
-     * @param masses output: monoisotopic masses
-     * @param qscores output: quality scores
-     * @param charges output: representative charges
-     * @param window_starts output: isolation window start m/z
-     * @param window_ends output: isolation window end m/z
-     * @return number of enclosing ions found
-     */
-    int getAmbiguityEnclosingIons(const String& protein_sequence,
-                                  int n,
-                                  double* masses,
-                                  double* qscores,
-                                  int* charges,
-                                  double* window_starts,
-                                  double* window_ends,
-                                  char* ion_types,
-                                  int* fragment_indices,
-                                  const String& fragmentation_method = "HCD");
-
-    /**
-     * @brief Python-friendly overload of getAmbiguityEnclosingIons
-     */
-    int getAmbiguityEnclosingIonsPy(const String& protein_sequence,
-                                    int n,
-                                    std::vector<double>& masses,
-                                    std::vector<double>& qscores,
-                                    std::vector<int>& charges,
-                                    std::vector<double>& window_starts,
-                                    std::vector<double>& window_ends,
-                                    std::vector<int>& is_b_ions,
-                                    std::vector<int>& fragment_indices);
-
-    /**
-     * @brief Get terminal (innermost) fragment ions sorted by sequence position
-     *
-     * Returns fragment ions that extend furthest toward the opposite terminus:
-     * - b-ions: sorted by highest fragment_index (rightmost, closest to C-terminus)
-     * - y-ions: sorted by highest fragment_index (leftmost, closest to N-terminus)
-     *
-     * Output is interleaved: [top_b, top_y, 2nd_b, 2nd_y, ...]
-     * Requires DeconvolveMS2() to be called first.
-     *
-     * @param protein_sequence The protein sequence to match against
-     * @param n Maximum number of results to return
-     * @param masses Output: observed monoisotopic masses
-     * @param qscores Output: quality scores
-     * @param charges Output: charge states
-     * @param window_starts Output: isolation window start m/z
-     * @param window_ends Output: isolation window end m/z
-     * @param is_b_ions Output: true if b-ion, false if y-ion
-     * @return Number of results returned (may be < n)
-     */
-    int getTerminalFragmentIons(const String& protein_sequence,
-                                int n,
-                                double* masses,
-                                double* qscores,
-                                int* charges,
-                                double* window_starts,
-                                double* window_ends,
-                                char* ion_types,
-                                int* fragment_indices,
+    int getTerminalFragmentIons(const String& protein_sequence, int n,
+                                double* masses, double* qscores, int* charges,
+                                double* window_starts, double* window_ends,
+                                char* ion_types, int* fragment_indices,
                                 const String& fragmentation_method = "HCD");
 
-    /**
-     * @brief Python-friendly overload of getTerminalFragmentIons
-     *
-     * @param is_b_ions Output: 1 if b-ion, 0 if y-ion (uses int for Python compatibility)
-     * @param fragment_indices Output: 1-based fragment index (e.g., b3=3, y5=5)
-     */
-    int getTerminalFragmentIonsPy(const String& protein_sequence,
-                                  int n,
-                                  std::vector<double>& masses,
-                                  std::vector<double>& qscores,
-                                  std::vector<int>& charges,
-                                  std::vector<double>& window_starts,
+    int getAmbiguityEnclosingIons(const String& protein_sequence, int n,
+                                  double* masses, double* qscores, int* charges,
+                                  double* window_starts, double* window_ends,
+                                  char* ion_types, int* fragment_indices,
+                                  const String& fragmentation_method = "HCD");
+
+    // ──────────────────────────────────────────────────
+    // Python API forwards -- delegates to components.
+    // Update FLASHIda.pxd if signatures change.
+    // ──────────────────────────────────────────────────
+    int getBestMS2MassesPy(int n, std::vector<double>& masses, std::vector<double>& qscores,
+                           std::vector<int>& charges, std::vector<double>& window_starts,
+                           std::vector<double>& window_ends)
+    {
+      return fragments_.getBestMS2MassesPy(n, masses, qscores, charges, window_starts, window_ends,
+                                            deconv_.storedMS2());
+    }
+
+    int getTopFragmentMatchesPy(const String& protein_sequence, int n,
+                                std::vector<double>& masses, std::vector<double>& qscores,
+                                std::vector<int>& charges, std::vector<double>& window_starts,
+                                std::vector<double>& window_ends,
+                                std::vector<int>& is_b_ions, std::vector<int>& fragment_indices)
+    {
+      return fragments_.getTopFragmentMatchesPy(protein_sequence, n, masses, qscores, charges,
+                                                 window_starts, window_ends, is_b_ions,
+                                                 fragment_indices, deconv_.storedMS2());
+    }
+
+    int getTerminalFragmentIonsPy(const String& protein_sequence, int n,
+                                  std::vector<double>& masses, std::vector<double>& qscores,
+                                  std::vector<int>& charges, std::vector<double>& window_starts,
                                   std::vector<double>& window_ends,
-                                  std::vector<int>& is_b_ions,
-                                  std::vector<int>& fragment_indices);
+                                  std::vector<int>& is_b_ions, std::vector<int>& fragment_indices)
+    {
+      return fragments_.getTerminalFragmentIonsPy(protein_sequence, n, masses, qscores, charges,
+                                                   window_starts, window_ends, is_b_ions,
+                                                   fragment_indices, deconv_.storedMS2());
+    }
+
+    int getAmbiguityEnclosingIonsPy(const String& protein_sequence, int n,
+                                    std::vector<double>& masses, std::vector<double>& qscores,
+                                    std::vector<int>& charges, std::vector<double>& window_starts,
+                                    std::vector<double>& window_ends,
+                                    std::vector<int>& is_b_ions, std::vector<int>& fragment_indices)
+    {
+      return fragments_.getAmbiguityEnclosingIonsPy(protein_sequence, n, masses, qscores, charges,
+                                                     window_starts, window_ends, is_b_ions,
+                                                     fragment_indices, deconv_.storedMS2());
+    }
+    // ──────────────────────────────────────────────────
 
     /// Retrieve an integer config value by key (for bridge functions)
     int getConfigInt(const std::string& key) const;
@@ -411,41 +318,15 @@ namespace OpenMS
     /// Scan command queue (owns queue, tracking IDs, pending map, command builders)
     ScanCommandQueue queue_;
 
-    /// Internal struct for fragment match results from tag-based matching
-    struct TagBasedFragmentMatch {
-      int peak_index;           ///< Index in ms2_deconvolved_spectrum_
-      double observed_mass;     ///< Monoisotopic mass
-      double theoretical_mass;  ///< Theoretical mass
-      double qscore;            ///< Quality score from PeakGroup
-      int charge;               ///< Charge state
-      int fragment_index;       ///< 1-based position in protein sequence
-      char ion_type;            ///< Ion type: 'a', 'b', 'c', 'x', 'y', or 'z'
-      double ppm_error;         ///< ppm error from match
-    };
-
-    /**
-     * @brief Run FLASHTagger+FLASHExtender workflow to get matched fragments
-     *
-     * Uses the stored MS2 deconvolution (ms2_deconvolved_spectrum_) to:
-     * 1. Generate sequence tags via FLASHTagger
-     * 2. Validate tags match the protein sequence
-     * 3. Run FLASHExtender for path-based matching
-     * 4. Extract matched fragments with qscores, charges, and positions
-     *
-     * @param protein_sequence the protein sequence to match against
-     * @param matches output: vector of matched fragments sorted by qscore descending
-     * @param ptm_sites optional output: PTM sites detected by FLASHExtender
-     * @return number of matches found
-     */
-    int runTagBasedFragmentMatching_(const String& protein_sequence,
-                                      std::vector<TagBasedFragmentMatch>& matches,
-                                      std::vector<PTMSite>* ptm_sites = nullptr,
-                                      const String& fragmentation_method = "HCD");
+    // TagBasedFragmentMatch and runTagBasedFragmentMatching_ moved to FragmentAnalysis
 
     // Mass exclusion maps, targeting maps, filter/parse methods moved to PrecursorSelection
 
     /// Deconvolution engine (owns SpectralDeconvolution, MS1 result, MS2 result)
     Deconvolution deconv_;
+
+    /// Fragment analysis (tag-based matching, MS2 mass queries, PTM ambiguity)
+    FragmentAnalysis fragments_;
 
     /// Precursor selection, targeting, mass exclusion (owns all selection state)
     PrecursorSelection selection_;
