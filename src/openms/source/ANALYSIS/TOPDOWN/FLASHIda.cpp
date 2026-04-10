@@ -328,23 +328,13 @@ inline const double optimal_window_margin_ = .4;
 FLASHIda::FLASHIda(char* arg) :
     config_(std::string(arg)),
     queue_(config_),
+    deconv_(config_),
     faims_(config_),
     exploration_(config_)
 {
   #ifdef _OPENMP
     omp_set_num_threads(4);
   #endif
-
-    // --- Build SpectralDeconvolution Param from Config ---
-    Param sd_defaults = SpectralDeconvolution().getDefaults();
-    sd_defaults.setValue("min_charge", config_.deconvolution().min_charge);
-    sd_defaults.setValue("max_charge", config_.deconvolution().max_charge);
-    sd_defaults.setValue("min_mass", config_.deconvolution().min_mass);
-    sd_defaults.setValue("max_mass", config_.deconvolution().max_mass);
-    DoubleList tol_values = {config_.level(1).tolerance_ppm, config_.level(2).tolerance_ppm};
-    sd_defaults.setValue("tol", tol_values);
-    fd_.setParameters(sd_defaults);
-    fd_.calculateAveragine(false);
 
     // AGC timing initialized in ScanCommandQueue constructor
 
@@ -477,7 +467,14 @@ FLASHIda::FLASHIda(char* arg) :
                               )
   {
     // Create spectrum
-    auto spec = makeMSSpectrum_(mzs, ints, length, rt, ms_level, name);
+    MSSpectrum spec;
+    for (int i = 0; i < length; i++)
+    {
+      if (ints[i] > 0) { spec.emplace_back(mzs[i], ints[i]); }
+    }
+    spec.setMSLevel(ms_level);
+    spec.setName(name);
+    spec.setRT(rt);
 
     // Set precursor with HCD activation - neccessary for channel extractor
     OpenMS::Precursor precursor;
@@ -594,23 +591,11 @@ FLASHIda::FLASHIda(char* arg) :
                               const char* name,
                               const char* cv)
   {
-    // int ret[2] = {0,0};
-    auto spec = makeMSSpectrum_(mzs, ints, length, rt, ms_level, name);
-    if (cv != nullptr) { spec.setMetaValue("filter string", DataValue("cv=" + std::string(cv))); }
-    // selected_peak_groups_ = DeconvolvedSpectrum(spec, 1);
-    if (ms_level == 1)
-    {
-      // current_max_mass_ = max_mass;
-      // currentChargeRange = chargeRange;
-    }
-    else
+    if (ms_level != 1)
     {
       return 0;
-      // TODO precursor infor here
+      // TODO precursor info here
     }
-
-    std::vector<DeconvolvedSpectrum> tmp;
-    PeakGroup empty;
 
     target_masses_.clear();
     excluded_masses_.clear();
@@ -647,7 +632,7 @@ FLASHIda::FLASHIda(char* arg) :
       }
 
       std::sort(target_masses_.begin(), target_masses_.end());
-      fd_.setTargetMasses(target_masses_, false);
+      deconv_.engine().setTargetMasses(target_masses_, false);
     }
     else if (config_.targeting().mode == 3)
     {
@@ -663,13 +648,11 @@ FLASHIda::FLASHIda(char* arg) :
     }
 
     selected_peak_groups_.clear();
-    deconvolved_spectrum_.clear();
 
-    fd_.performSpectrumDeconvolution(spec, 0, empty);
-    deconvolved_spectrum_ = fd_.getDeconvolvedSpectrum();
+    // Deconvolve MS1 spectrum (result stored in deconv_.deconvolvedMS1())
+    deconv_.deconvolveMS1(mzs, ints, length, rt, cv);
     // per spec deconvolution
     FLASHIda::filterPeakGroupsUsingMassExclusion_(ms_level, rt);
-    // spec.clear(true);
     return (int)selected_peak_groups_.size();
   }
 
@@ -679,36 +662,36 @@ FLASHIda::FLASHIda(char* arg) :
     if (config_.targeting().use_idscore)
     {
       if (config_.targeting().consider_all_charges && config_.targeting().hcd_energy < 0) {
-        deconvolved_spectrum_.sortByIDScoreAllCharges();
+        deconv_.deconvolvedMS1().sortByIDScoreAllCharges();
       }
       else if (config_.targeting().consider_all_charges) {
-        deconvolved_spectrum_.sortByIDScoreAllCharges(config_.targeting().hcd_energy);
+        deconv_.deconvolvedMS1().sortByIDScoreAllCharges(config_.targeting().hcd_energy);
       }
       else if (config_.targeting().hcd_energy < 0) {
-        deconvolved_spectrum_.sortByIDScoreRepresentative();
+        deconv_.deconvolvedMS1().sortByIDScoreRepresentative();
       }
       else {
-        deconvolved_spectrum_.sortByIDScoreRepresentative(config_.targeting().hcd_energy);
+        deconv_.deconvolvedMS1().sortByIDScoreRepresentative(config_.targeting().hcd_energy);
       }
     }
     else if (config_.level(ms_level).selection == SelectionMetric::Intensity)
     {
-      deconvolved_spectrum_.sortByIntensity();
+      deconv_.deconvolvedMS1().sortByIntensity();
     }
     else
     {
       if (config_.targeting().consider_all_charges) {
-        deconvolved_spectrum_.sortByQScoreAllCharges();
+        deconv_.deconvolvedMS1().sortByQScoreAllCharges();
       }
       else {
-        deconvolved_spectrum_.sortByQscore();
+        deconv_.deconvolvedMS1().sortByQscore();
       }
     }
 
     // Apply priority tie-breaking when TSV targets are loaded
     if (config_.targeting().mode == 1 && !inclusion_targets_.empty())
     {
-      std::stable_sort(deconvolved_spectrum_.begin(), deconvolved_spectrum_.end(),
+      std::stable_sort(deconv_.deconvolvedMS1().begin(), deconv_.deconvolvedMS1().end(),
         [this](const PeakGroup& a, const PeakGroup& b) {
           if (std::abs(a.getQscore() - b.getQscore()) < config_.targeting().tie_threshold)
           {
@@ -824,7 +807,7 @@ FLASHIda::FLASHIda(char* arg) :
         }
 
         // Iterate over candidates (sorted by qscore)
-        for (const auto& pg : deconvolved_spectrum_)
+        for (const auto& pg : deconv_.deconvolvedMS1())
         {
           // dont acquire the same mass multiple times
           if (selected_peak_groups_.size() >= mass_count) { break; }
@@ -1111,91 +1094,16 @@ FLASHIda::FLASHIda(char* arg) :
 
   void FLASHIda::getAllMonoisotopicMasses(double* masses, int length)
   {
-    int len = std::min(length, (int)deconvolved_spectrum_.size());
+    int len = std::min(length, (int)deconv_.deconvolvedMS1().size());
     for (int i = 0; i < len; i++)
     {
-      masses[i] = deconvolved_spectrum_[i].getMonoMass();
+      masses[i] = deconv_.deconvolvedMS1()[i].getMonoMass();
     }
   }
 
   int FLASHIda::GetAllPeakGroupSize()
   {
-    return deconvolved_spectrum_.size();
-  }
-
-  int FLASHIda::deconvolveMS2(const double* mzs,
-                              const double* ints,
-                              int length,
-                              double rt,
-                              double precursor_mass,
-                              int precursor_charge)
-  {
-    // Clear previous state
-    ms2_deconvolved_spectrum_.clear();
-    ms2_deconv_valid_ = false;
-    ms2_deconv_rt_ = rt;
-
-    if (length == 0)
-    {
-      return 0;
-    }
-
-    // Create MSSpectrum from input
-    auto spec = makeMSSpectrum_(mzs, ints, length, rt, 2, "ms2_spectrum");
-
-    // Create precursor PeakGroup - only set if precursor_mass > 0 AND precursor_charge != 0
-    PeakGroup precursor_pg;
-    if (precursor_mass > 0 && precursor_charge != 0)
-    {
-      int abs_charge = std::abs(precursor_charge);
-      bool is_positive = precursor_charge > 0;
-
-      // Calculate precursor m/z from mass and charge
-      double charge_mass = FLASHHelperClasses::getChargeMass(is_positive);
-      double precursor_mz = (precursor_mass + abs_charge * charge_mass) / abs_charge;
-
-      // Set precursor on the MSSpectrum (required for deconvolution mass range calculation)
-      Precursor precursor;
-      precursor.setMZ(precursor_mz);
-      precursor.setCharge(precursor_charge);
-      spec.getPrecursors().push_back(precursor);
-
-      // Construct PeakGroup with proper charge range and polarity
-      precursor_pg = PeakGroup(abs_charge, abs_charge, is_positive);
-      precursor_pg.push_back(FLASHHelperClasses::LogMzPeak());
-      precursor_pg.setMonoisotopicMass(precursor_mass);
-      precursor_pg.setRepAbsCharge(abs_charge);
-      precursor_pg.setQscore(1.0);  // Known precursor from MS1, high confidence
-      precursor_pg.setSNR(1.0);
-    }
-
-    // Perform deconvolution (empty precursor_pg if mass <= 0 or charge == 0)
-    fd_.performSpectrumDeconvolution(spec, 0, precursor_pg);
-    ms2_deconvolved_spectrum_ = fd_.getDeconvolvedSpectrum();
-
-    if (ms2_deconvolved_spectrum_.empty())
-    {
-      return 0;
-    }
-
-    // Sort by qscore (highest first) for getBestMS2Masses
-    ms2_deconvolved_spectrum_.sortByQscore();
-    ms2_deconv_valid_ = true;
-
-    return static_cast<int>(ms2_deconvolved_spectrum_.size());
-  }
-
-  int FLASHIda::deconvolveMS2Py(const std::vector<double>& mzs,
-                                const std::vector<double>& ints,
-                                double rt,
-                                double precursor_mass,
-                                int precursor_charge)
-  {
-    if (mzs.empty() || mzs.size() != ints.size())
-    {
-      return 0;
-    }
-    return deconvolveMS2(mzs.data(), ints.data(), static_cast<int>(mzs.size()), rt, precursor_mass, precursor_charge);
+    return deconv_.deconvolvedMS1().size();
   }
 
   int FLASHIda::getBestMS2Masses(int n,
@@ -1205,20 +1113,20 @@ FLASHIda::FLASHIda(char* arg) :
                                  double* window_starts,
                                  double* window_ends)
   {
-    if (!ms2_deconv_valid_ || ms2_deconvolved_spectrum_.empty())
+    if (!deconv_.hasStoredMS2() || deconv_.storedMS2().empty())
     {
       return 0;
     }
 
-    std::sort(ms2_deconvolved_spectrum_.begin(), ms2_deconvolved_spectrum_.end(),
+    std::sort(deconv_.storedMS2().begin(), deconv_.storedMS2().end(),
     [](const PeakGroup& a, const PeakGroup& b) {
       return a.getChargeIntensity(a.getMaxIntensityAbsCharge()) > b.getChargeIntensity(b.getMaxIntensityAbsCharge());
     });
 
     int output_idx = 0;
-    for (Size pg_idx = 0; pg_idx < ms2_deconvolved_spectrum_.size() && output_idx < n; ++pg_idx)
+    for (Size pg_idx = 0; pg_idx < deconv_.storedMS2().size() && output_idx < n; ++pg_idx)
     {
-      const auto& pg = ms2_deconvolved_spectrum_[pg_idx];
+      const auto& pg = deconv_.storedMS2()[pg_idx];
       double mono_mass = pg.getMonoMass();
 
       if (config_.targeting().ms3_all_charges)
@@ -1292,23 +1200,6 @@ FLASHIda::FLASHIda(char* arg) :
     return count;
   }
 
-  bool FLASHIda::hasMS2Deconvolution() const
-  {
-    return ms2_deconv_valid_;
-  }
-
-  int FLASHIda::getMS2PeakGroupCount() const
-  {
-    return ms2_deconv_valid_ ? static_cast<int>(ms2_deconvolved_spectrum_.size()) : 0;
-  }
-
-  void FLASHIda::clearMS2Deconvolution()
-  {
-    ms2_deconvolved_spectrum_.clear();
-    ms2_deconv_valid_ = false;
-    ms2_deconv_rt_ = -1.0;
-  }
-
   int FLASHIda::runTagBasedFragmentMatching_(const String& protein_sequence,
                                               std::vector<TagBasedFragmentMatch>& matches,
                                               std::vector<PTMSite>* ptm_sites,
@@ -1320,13 +1211,13 @@ FLASHIda::FLASHIda(char* arg) :
       ptm_sites->clear();
     }
 
-    if (!ms2_deconv_valid_ || ms2_deconvolved_spectrum_.empty() || protein_sequence.empty())
+    if (!deconv_.hasStoredMS2() || deconv_.storedMS2().empty() || protein_sequence.empty())
     {
       return 0;
     }
 
     // 1. Copy and sort deconvolved spectrum
-    DeconvolvedSpectrum dspec = ms2_deconvolved_spectrum_;
+    DeconvolvedSpectrum dspec = deconv_.storedMS2();
     dspec.sort();
     double precursor_mass = dspec.getPrecursorPeakGroup().getMonoMass();
     std::cout << "PM=" << precursor_mass << std::endl;
@@ -1607,9 +1498,9 @@ FLASHIda::FLASHIda(char* arg) :
     calculatePTMAdjustedFragmentMassesMulti(matching_sequence, local_ptm_sites, ion_types_str, fragment_masses_map);
 
     // 11. Match observed masses against PTM-adjusted theoretical masses (all ion types)
-    for (Size peak_idx = 0; peak_idx < ms2_deconvolved_spectrum_.size(); ++peak_idx)
+    for (Size peak_idx = 0; peak_idx < deconv_.storedMS2().size(); ++peak_idx)
     {
-      const auto& pg = ms2_deconvolved_spectrum_[peak_idx];
+      const auto& pg = deconv_.storedMS2()[peak_idx];
       double observed_mass = pg.getMonoMass();
 
       // Find best match across all configured ion types
@@ -1695,7 +1586,7 @@ FLASHIda::FLASHIda(char* arg) :
     for (size_t i = 0; i < matches.size() && output_idx < n; ++i)
     {
       const auto& m = matches[i];
-      const auto& pg = ms2_deconvolved_spectrum_[m.peak_index];
+      const auto& pg = deconv_.storedMS2()[m.peak_index];
 
       if (config_.targeting().ms3_all_charges)
       {
@@ -1968,7 +1859,7 @@ FLASHIda::FLASHIda(char* arg) :
       if (used_peaks.find(ion.peak_index) != used_peaks.end()) return;  // Already output
       used_peaks.insert(ion.peak_index);
 
-      const auto& pg = ms2_deconvolved_spectrum_[ion.peak_index];
+      const auto& pg = deconv_.storedMS2()[ion.peak_index];
       double mono_mass = pg.getMonoMass();
 
       if (config_.targeting().ms3_all_charges)
@@ -2214,7 +2105,7 @@ FLASHIda::FLASHIda(char* arg) :
 
       if (selected)
       {
-        const auto& pg = ms2_deconvolved_spectrum_[selected->peak_index];
+        const auto& pg = deconv_.storedMS2()[selected->peak_index];
 
         if (config_.targeting().ms3_all_charges)
         {
@@ -2327,11 +2218,11 @@ FLASHIda::FLASHIda(char* arg) :
     double mass = 0;
     double intensity_sum = 0;
 
-    if (deconvolved_spectrum_.size() > max_count)
+    if (deconv_.deconvolvedMS1().size() > max_count)
     {
       std::vector<float> intensites;
-      intensites.reserve(deconvolved_spectrum_.size());
-      for (const auto& pg : deconvolved_spectrum_)
+      intensites.reserve(deconv_.deconvolvedMS1().size());
+      for (const auto& pg : deconv_.deconvolvedMS1())
       {
         intensites.push_back(pg.getIntensity());
       }
@@ -2339,7 +2230,7 @@ FLASHIda::FLASHIda(char* arg) :
       threshold = intensites[max_count];
     }
 
-    for (const auto& pg : deconvolved_spectrum_)
+    for (const auto& pg : deconv_.deconvolvedMS1())
     {
       if (pg.getIntensity() < threshold) continue;
       mass += pg.getMonoMass() * pg.getIntensity();
@@ -2348,7 +2239,7 @@ FLASHIda::FLASHIda(char* arg) :
     if (intensity_sum <= 0) return 0;
     return mass / intensity_sum;
     */
-    auto filter_str = deconvolved_spectrum_.getOriginalSpectrum().getMetaValue("filter string").toString();
+    auto filter_str = deconv_.deconvolvedMS1().getOriginalSpectrum().getMetaValue("filter string").toString();
     Size pos = filter_str.find("cv=");
     double cv;
 
@@ -2407,20 +2298,6 @@ FLASHIda::FLASHIda(char* arg) :
       hcds[i] = trigger_hcds[i];
       ids[i] = trigger_ids_[i];
     }
-  }
-
-  MSSpectrum FLASHIda::makeMSSpectrum_(const double* mzs, const double* ints, const int length, const double rt, const int ms_level, const char* name)
-  {
-    auto spec = MSSpectrum();
-    for (int i = 0; i < length; i++)
-    {
-      if (ints[i] <= 0) { continue; }
-      spec.emplace_back(mzs[i], ints[i]);
-    }
-    spec.setMSLevel(ms_level);
-    spec.setName(name);
-    spec.setRT(rt);
-    return spec;
   }
 
   int FLASHIda::getConfigInt(const std::string& key) const
@@ -2723,7 +2600,7 @@ FLASHIda::FLASHIda(char* arg) :
                                     int priority)
   {
     // Add new targets to inclusion list
-    // Note: target_masses_ and fd_.setTargetMasses() are managed by getPeakGroups()
+    // Note: target_masses_ and deconv_.engine().setTargetMasses() are managed by getPeakGroups()
     // which clears and rebuilds them from inclusion_targets_ on each MS1 scan.
     // We only need to add to inclusion_targets_ here.
     for (double mass : masses)
@@ -2762,13 +2639,13 @@ FLASHIda::FLASHIda(char* arg) :
     }
 
     // Require deconvolveMS2() to be called first
-    if (!ms2_deconv_valid_)
+    if (!deconv_.hasStoredMS2())
     {
       return false;
     }
 
     // Use stored MS2 deconvolution
-    DeconvolvedSpectrum dspec = ms2_deconvolved_spectrum_;
+    DeconvolvedSpectrum dspec = deconv_.storedMS2();
     if (dspec.empty())
     {
       return false;
@@ -2878,7 +2755,7 @@ FLASHIda::FLASHIda(char* arg) :
     }
 
     // Add to dynamic inclusion list
-    addDynamicTargets_(truly_new_targets, ms2_deconv_rt_, 100); // High priority
+    addDynamicTargets_(truly_new_targets, deconv_.storedMS2RT(), 100); // High priority
 
     return true;
   }
@@ -2990,7 +2867,7 @@ FLASHIda::FLASHIda(char* arg) :
   std::vector<FLASHIda::MS3Target> FLASHIda::selectMS3Targets_()
   {
     std::vector<MS3Target> targets;
-    if (config_.targeting().ms3_mode == 0 || !ms2_deconv_valid_)
+    if (config_.targeting().ms3_mode == 0 || !deconv_.hasStoredMS2())
       return targets;
 
     const int n = config_.level(3).max_targets;
@@ -3056,8 +2933,8 @@ FLASHIda::FLASHIda(char* arg) :
       DeconvolvedSpectrum ms2_deconv(tracking_id);
       if (mzs != nullptr && ints != nullptr && length > 0)
       {
-        deconvolveMS2(mzs, ints, length, rt_min, 0.0, 0);
-        ms2_deconv = ms2_deconvolved_spectrum_;
+        deconv_.deconvolveMS2(mzs, ints, length, rt_min, 0.0, 0);
+        ms2_deconv = deconv_.storedMS2();
       }
 
       auto cmds = exploration_.feedResult(tracking_id, ms2_deconv, rt_min, queue_);
@@ -3084,7 +2961,7 @@ FLASHIda::FLASHIda(char* arg) :
                        - precursor_charge * FLASHHelperClasses::getChargeMass(true);
     }
 
-    deconvolveMS2(mzs, ints, length, rt_min, precursor_mass, precursor_charge);
+    deconv_.deconvolveMS2(mzs, ints, length, rt_min, precursor_mass, precursor_charge);
 
     // Step 4: Route by mode
     // Tag-based targeting
@@ -3117,7 +2994,7 @@ FLASHIda::FLASHIda(char* arg) :
     if (config_.hasExploration(3))
     {
       // MS3 exploration: create exploration groups for top fragments
-      auto cmds = exploration_.initiateNextLevel(2, ms2_deconvolved_spectrum_, ctx.faims_cv, queue_);
+      auto cmds = exploration_.initiateNextLevel(2, deconv_.storedMS2(), ctx.faims_cv, queue_);
       for (auto& c : cmds) queue_.push(c);
     }
     else if (config_.targeting().ms3_mode > 0)
@@ -3135,7 +3012,7 @@ FLASHIda::FLASHIda(char* arg) :
     else if (config_.level(3).selection != SelectionMetric::None && !(config_.targeting().ms3_mode > 0))
     {
       // New selection_strategy MS3 targeting (no exploration, not legacy)
-      auto cmds = exploration_.initiateNextLevel(2, ms2_deconvolved_spectrum_, ctx.faims_cv, queue_);
+      auto cmds = exploration_.initiateNextLevel(2, deconv_.storedMS2(), ctx.faims_cv, queue_);
       for (auto& c : cmds) queue_.push(c);
     }
 
