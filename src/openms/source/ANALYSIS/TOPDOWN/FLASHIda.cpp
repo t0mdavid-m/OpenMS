@@ -730,12 +730,12 @@ FLASHIda::FLASHIda(char* arg) :
     }
 
     // Quantification follow-up (independent of tags)
-    if (config_.quantification().enabled && config_.level(2).scans.size() >= 2)
+    if (config_.quantification().enabled && !config_.quantification().follow_up_scan.activation.empty())
     {
       if (quant_.isDifferentiallyAbundant(mzs, ints, length, rt_min, 2, "ms2_quant",
                                           config_.quantification().reporter_mz_tol, config_.quantification().fold_change_threshold, false))
       {
-        auto followup = queue_.buildFollowUpMS2(ctx);
+        auto followup = queue_.buildFollowUp(ctx, config_.quantification().follow_up_scan, 'F');
         queue_.push(followup);
         child_ids.push_back(ScanCommandQueue::encode(followup.scan_id));
         commands_pushed++;
@@ -743,9 +743,9 @@ FLASHIda::FLASHIda(char* arg) :
     }
 
     // Conditional MS2 follow-up -- only when tags detected AND explicitly enabled
-    if (config_.targeting().conditional_ms2_enabled && config_.level(2).scans.size() >= 2 && tags_found)
+    if (config_.targeting().conditional_ms2_enabled && tags_found)
     {
-      auto cond = queue_.buildConditionalFollowUp(ctx);
+      auto cond = queue_.buildFollowUp(ctx, config_.targeting().tagging_follow_up_scan, 'C');
       queue_.push(cond);
       child_ids.push_back(ScanCommandQueue::encode(cond.scan_id));
       commands_pushed++;

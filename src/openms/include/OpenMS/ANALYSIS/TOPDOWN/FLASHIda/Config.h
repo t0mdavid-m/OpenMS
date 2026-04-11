@@ -151,6 +151,7 @@ namespace OpenMS
     double tag_matching_tolerance_ppm = 10.0;
     double max_flanking_mass_diff = 50000.0;
     int max_total_ptm_count = 3;
+    ScanConfig tagging_follow_up_scan;  ///< Follow-up scan config for conditional MS2
   };
 
   /// Isobaric quantification configuration
@@ -159,6 +160,7 @@ namespace OpenMS
     bool enabled = false;
     double reporter_mz_tol = 0.002;
     double fold_change_threshold = 1.4;
+    ScanConfig follow_up_scan;  ///< Follow-up scan config for quant follow-up MS2
   };
 
   /// Runtime file paths (set by C# or user override in JSON)

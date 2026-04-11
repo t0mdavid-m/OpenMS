@@ -77,11 +77,9 @@ namespace OpenMS
     /// Create an AGC calibration scan command
     ScanCommand makeAGC() const;
 
-    /// Build follow-up MS2 at priority 2 (quant mode). Returns the command; caller pushes.
-    ScanCommand buildFollowUpMS2(const ScanCommand& ctx);
-
-    /// Build conditional follow-up MS2 at priority 2. Returns the command; caller pushes.
-    ScanCommand buildConditionalFollowUp(const ScanCommand& ctx);
+    /// Build follow-up MS2 at priority 2 using the given scan config and description suffix.
+    /// Returns the command; caller pushes.
+    ScanCommand buildFollowUp(const ScanCommand& ctx, const ScanConfig& follow_up_config, char suffix);
 
     /// Apply exploration parameter overrides to a ScanCommand
     void applyOverrides(ScanCommand& cmd, const std::unordered_map<std::string, std::string>& overrides) const;

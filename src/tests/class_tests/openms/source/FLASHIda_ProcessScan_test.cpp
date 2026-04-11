@@ -286,14 +286,16 @@ namespace
       "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
-    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "tagging": {
+      "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000,
+      "follow_up_scan": { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "resolution": 120000 }
+    },
     "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
     "faims": { "cv_values": [-50], "max_cv_skip": 0 },
     "ms_settings": {
       "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
       "ms2": [
-        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
-        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "resolution": 120000 }
+        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }
       ]
     },
     "scheduling": {
@@ -393,14 +395,16 @@ namespace
       "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
-    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "tagging": {
+      "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000,
+      "follow_up_scan": { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "resolution": 120000 }
+    },
     "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
     "faims": { "cv_values": [-50], "max_cv_skip": 0 },
     "ms_settings": {
       "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
       "ms2": [
-        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
-        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "resolution": 120000 }
+        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }
       ]
     },
     "scheduling": {
@@ -431,13 +435,15 @@ namespace
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
-    "quantification": { "enabled": true, "reporter_mz_tol": 0.002, "fold_change_threshold": 0.01 },
+    "quantification": {
+      "enabled": true, "reporter_mz_tol": 0.002, "fold_change_threshold": 0.01,
+      "follow_up_scan": { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "resolution": 120000 }
+    },
     "faims": { "cv_values": [-50], "max_cv_skip": 0 },
     "ms_settings": {
       "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
       "ms2": [
-        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
-        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "resolution": 120000 }
+        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }
       ]
     },
     "scheduling": {

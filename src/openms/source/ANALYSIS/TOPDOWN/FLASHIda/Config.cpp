@@ -128,6 +128,19 @@ namespace OpenMS
     targeting_.max_total_ptm_count = tagging.value("max_ptm_count", 3);
     targeting_.max_flanking_mass_diff = tagging.value("max_flanking_mass_diff", 50000.0);
 
+    if (tagging.contains("follow_up_scan"))
+    {
+      auto fus = tagging["follow_up_scan"];
+      targeting_.tagging_follow_up_scan.analyzer = fus.value("analyzer", "Orbitrap");
+      targeting_.tagging_follow_up_scan.activation = fus.value("activation", "");
+      targeting_.tagging_follow_up_scan.collision_energy = fus.value("collision_energy", 0);
+      targeting_.tagging_follow_up_scan.resolution = fus.value("resolution", 0);
+      targeting_.tagging_follow_up_scan.agc_target = fus.value("agc_target", 0);
+      targeting_.tagging_follow_up_scan.first_mass = fus.value("first_mass", 0.0);
+      targeting_.tagging_follow_up_scan.last_mass = fus.value("last_mass", 0.0);
+      targeting_.tagging_follow_up_scan.max_it = fus.value("max_it", 0.0);
+    }
+
     // --- files section (paths only; loading stays in FLASHIda) ---
     auto files = config.value("files", json::object());
 
@@ -163,6 +176,19 @@ namespace OpenMS
     quant_.enabled = quant.value("enabled", quant.value("active", false));
     quant_.reporter_mz_tol = quant.value("reporter_mz_tol", 0.002);
     quant_.fold_change_threshold = quant.value("fold_change_threshold", 1.4);
+
+    if (quant.contains("follow_up_scan"))
+    {
+      auto fus = quant["follow_up_scan"];
+      quant_.follow_up_scan.analyzer = fus.value("analyzer", "Orbitrap");
+      quant_.follow_up_scan.activation = fus.value("activation", "");
+      quant_.follow_up_scan.collision_energy = fus.value("collision_energy", 0);
+      quant_.follow_up_scan.resolution = fus.value("resolution", 0);
+      quant_.follow_up_scan.agc_target = fus.value("agc_target", 0);
+      quant_.follow_up_scan.first_mass = fus.value("first_mass", 0.0);
+      quant_.follow_up_scan.last_mass = fus.value("last_mass", 0.0);
+      quant_.follow_up_scan.max_it = fus.value("max_it", 0.0);
+    }
 
     // --- faims ---
     auto faims_section = config.value("faims", json::object());
@@ -316,6 +342,10 @@ namespace OpenMS
           "IDScore and exploration cannot both be enabled. "
           "IDScore determines optimal HCD analytically; "
           "exploration determines it empirically via CE sweep.");
+
+    if (targeting_.conditional_ms2_enabled && targeting_.tagging_follow_up_scan.activation.empty())
+      throw std::invalid_argument(
+          "Conditional MS2 is enabled but tagging.follow_up_scan is not configured.");
 
     for (const auto& [lvl, cfg] : levels_)
     {

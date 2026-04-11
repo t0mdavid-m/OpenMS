@@ -297,27 +297,24 @@ namespace OpenMS
     return cmd;
   }
 
-  ScanCommand ScanCommandQueue::buildFollowUpMS2(const ScanCommand& ctx)
+  ScanCommand ScanCommandQueue::buildFollowUp(const ScanCommand& ctx,
+      const ScanConfig& follow_up_config, char suffix)
   {
-    if (config_.level(2).scans.size() < 2)
-      return ctx;  // no second MS2 config available
-
     ScanCommand cmd = ctx;
     cmd.scan_id = nextTrackingIdInt_();
     cmd.priority = 2;
 
-    // Use second MS2 config for follow-up
-    std::strncpy(cmd.analyzer, config_.level(2).scans[1].analyzer.c_str(), sizeof(cmd.analyzer) - 1);
+    std::strncpy(cmd.analyzer, follow_up_config.analyzer.c_str(), sizeof(cmd.analyzer) - 1);
     cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';
-    cmd.orbitrap_resolution = config_.level(2).scans[1].resolution;
-    cmd.stages[0].collision_energy = static_cast<double>(config_.level(2).scans[1].collision_energy);
-    std::strncpy(cmd.stages[0].activation_type, config_.level(2).scans[1].activation.c_str(),
+    cmd.orbitrap_resolution = follow_up_config.resolution;
+    cmd.stages[0].collision_energy = static_cast<double>(follow_up_config.collision_energy);
+    std::strncpy(cmd.stages[0].activation_type, follow_up_config.activation.c_str(),
                  sizeof(cmd.stages[0].activation_type) - 1);
     cmd.stages[0].activation_type[sizeof(cmd.stages[0].activation_type) - 1] = '\0';
 
     std::string id_str = encode(cmd.scan_id);
-    std::snprintf(cmd.scan_description, 16, "%sF%.1f@%d",
-                  id_str.c_str(), cmd.mono_mass / 1000.0, cmd.stages[0].charge_state);
+    std::snprintf(cmd.scan_description, 16, "%s%c%.1f@%d",
+                  id_str.c_str(), suffix, cmd.mono_mass / 1000.0, cmd.stages[0].charge_state);
 
     cmd.enqueue_timestamp_ms = static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -326,42 +323,7 @@ namespace OpenMS
     pending_scan_map_[cmd.scan_id] = cmd;
 
     std::cout << "[TRACK-CREATE] id=" << id_str
-              << " ms_level=2 type=followup"
-              << std::endl;
-
-    return cmd;
-  }
-
-  ScanCommand ScanCommandQueue::buildConditionalFollowUp(const ScanCommand& ctx)
-  {
-    if (config_.level(2).scans.size() < 2)
-      return ctx;  // no second MS2 config available
-
-    ScanCommand cmd = ctx;
-    cmd.scan_id = nextTrackingIdInt_();
-    cmd.priority = 2;
-
-    // Use second MS2 config for conditional follow-up
-    std::strncpy(cmd.analyzer, config_.level(2).scans[1].analyzer.c_str(), sizeof(cmd.analyzer) - 1);
-    cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';
-    cmd.orbitrap_resolution = config_.level(2).scans[1].resolution;
-    cmd.stages[0].collision_energy = static_cast<double>(config_.level(2).scans[1].collision_energy);
-    std::strncpy(cmd.stages[0].activation_type, config_.level(2).scans[1].activation.c_str(),
-                 sizeof(cmd.stages[0].activation_type) - 1);
-    cmd.stages[0].activation_type[sizeof(cmd.stages[0].activation_type) - 1] = '\0';
-
-    std::string id_str = encode(cmd.scan_id);
-    std::snprintf(cmd.scan_description, 16, "%sC%.1f@%d",
-                  id_str.c_str(), cmd.mono_mass / 1000.0, cmd.stages[0].charge_state);
-
-    cmd.enqueue_timestamp_ms = static_cast<uint64_t>(
-      std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count());
-
-    pending_scan_map_[cmd.scan_id] = cmd;
-
-    std::cout << "[TRACK-CREATE] id=" << id_str
-              << " ms_level=2 type=conditional"
+              << " ms_level=2 type=followup_" << suffix
               << std::endl;
 
     return cmd;
