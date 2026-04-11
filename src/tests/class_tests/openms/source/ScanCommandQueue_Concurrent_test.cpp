@@ -85,6 +85,8 @@ START_SECTION(concurrent_push_dequeue)
       auto cmd = queue.dequeue();
       if (cmd.has_value())
         dequeued_count.fetch_add(1);
+      else
+        std::this_thread::yield();  // avoid starving producers
     }
   };
 
@@ -169,14 +171,16 @@ START_SECTION(concurrent_build_resolve)
     int local_resolved = 0;
     while (local_resolved < N)
     {
+      bool made_progress = false;
       for (int i = 0; i < N; ++i)
       {
         int id = built_ids[i].load(std::memory_order_acquire);
-        if (id < 0) continue;  // not yet built
+        if (id < 0) continue;  // not yet built or already resolved
         auto result = queue.resolvePending(id);
         if (result.has_value())
         {
           local_resolved++;
+          made_progress = true;
           // Try resolving again — must return nullopt (exactly-once guarantee)
           auto duplicate = queue.resolvePending(id);
           if (duplicate.has_value())
@@ -184,6 +188,8 @@ START_SECTION(concurrent_build_resolve)
           built_ids[i].store(-2, std::memory_order_relaxed);  // mark as resolved
         }
       }
+      if (!made_progress)
+        std::this_thread::yield();  // avoid starving builder
     }
     resolved_count.store(local_resolved);
   };
@@ -232,6 +238,7 @@ START_SECTION(concurrent_push_cleanup)
     while (!done.load())
     {
       queue.cleanupExpired();
+      std::this_thread::yield();  // avoid starving pusher
     }
     // Final cleanup
     queue.cleanupExpired();
