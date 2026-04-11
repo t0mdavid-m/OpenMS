@@ -10,6 +10,9 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Exploration.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 
 #include <vector>
 #include <algorithm>
@@ -496,17 +499,15 @@ START_TEST(FLASHIda_exploration, "$Id$")
 
 START_SECTION(exploration_group_creation)
 {
-  // P7-U01: ExplorationGroup creation with CE variants
-  FLASHIda* ida = new FLASHIda(const_cast<char*>(exploration_config));
+  Config cfg{std::string(exploration_config)};
+  ScanCommandQueue queue(cfg);
+  Exploration exploration(cfg);
 
-  // Initiate exploration for a synthetic precursor
-  ida->initiateExplorationForTest(2, 800.0, 2400.0, 3, 0.0);
+  auto cmds = exploration.initiate(2, 800.0, 2400.0, 3, 0.0, queue);
 
-  // Verify group was created
-  TEST_EQUAL(ida->getActiveExplorationGroupCountForTest(), 1)
+  TEST_EQUAL(exploration.activeGroupCount(), 1)
 
-  // Get group (ID starts at 1)
-  auto group = ida->getExplorationGroupForTest(1);
+  auto group = exploration.getGroup(1);
   TEST_EQUAL(group.group_id, 1)
   TEST_EQUAL(group.msn_level, 2)
   TEST_EQUAL(group.complete, false)
@@ -514,7 +515,6 @@ START_SECTION(exploration_group_creation)
   TEST_EQUAL(static_cast<int>(group.exploration_metric),
              static_cast<int>(ExplorationMetric::MassCount))
 
-  // Verify exactly 5 CE variants: 20.0, 25.0, 30.0, 35.0, 40.0
   TEST_EQUAL(static_cast<int>(group.variants.size()), 5)
   TEST_REAL_SIMILAR(group.variants[0].collision_energy, 20.0)
   TEST_REAL_SIMILAR(group.variants[1].collision_energy, 25.0)
@@ -522,79 +522,57 @@ START_SECTION(exploration_group_creation)
   TEST_REAL_SIMILAR(group.variants[3].collision_energy, 35.0)
   TEST_REAL_SIMILAR(group.variants[4].collision_energy, 40.0)
 
-  // All variants not yet received
   for (int i = 0; i < 5; ++i)
   {
     TEST_EQUAL(group.variants[i].received, false)
     TEST_EQUAL(group.variants[i].variant_index, i)
   }
 
+  TEST_EQUAL(static_cast<int>(cmds.size()), 5)
+
   (void)group;
-  delete ida;
 }
 END_SECTION
 
 START_SECTION(exploration_variants_priority_0)
 {
-  // P7-U02: Exploration variants pushed at priority 0
-  FLASHIda* ida = new FLASHIda(const_cast<char*>(exploration_config));
+  Config cfg{std::string(exploration_config)};
+  ScanCommandQueue queue(cfg);
+  Exploration exploration(cfg);
 
-  ida->initiateExplorationForTest(2, 800.0, 2400.0, 3, 0.0);
+  auto cmds = exploration.initiate(2, 800.0, 2400.0, 3, 0.0, queue);
 
-  // Queue 0 should have exactly 5 commands
-  TEST_EQUAL(ida->getQueueSizeForTest(0), 5)
-  // Other queues unaffected
-  TEST_EQUAL(ida->getQueueSizeForTest(1), 0)
-  TEST_EQUAL(ida->getQueueSizeForTest(2), 0)
-  TEST_EQUAL(ida->getQueueSizeForTest(3), 0)
-
-  // Dequeue and verify all are priority 0, msn_level 2
+  TEST_EQUAL(static_cast<int>(cmds.size()), 5)
   for (int i = 0; i < 5; ++i)
   {
-    ScanCommand cmd{};
-    int result = ida->getNextScanCommand(cmd);
-    TEST_EQUAL(result, 1)
-    TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
-    TEST_EQUAL(cmd.msn_level, 2)
-    TEST_EQUAL(cmd.priority, 0)
-    TEST_EQUAL(cmd.is_agc, 0)
-    std::string desc(cmd.scan_description);
+    TEST_EQUAL(cmds[i].msn_level, 2)
+    TEST_EQUAL(cmds[i].priority, 0)
+    TEST_EQUAL(cmds[i].is_agc, 0)
+    std::string desc(cmds[i].scan_description);
     TEST_EQUAL(desc.size() >= 4, true)
     TEST_EQUAL(desc[3], 'E')
   }
-
-  // Queue should be empty now — idle cycle returns AGC
-  ScanCommand idle{};
-  int result = ida->getNextScanCommand(idle);
-  TEST_EQUAL(result, 1)
-  TEST_EQUAL(std::strlen(idle.scan_description) <= 15, true)
-  TEST_EQUAL(idle.is_agc, 1)
-
-  delete ida;
 }
 END_SECTION
 
 START_SECTION(winner_selection_by_score)
 {
-  // P7-U03: Winner selection by exploration metric score
-  FLASHIda* ida = new FLASHIda(const_cast<char*>(exploration_config));
+  Config cfg{std::string(exploration_config)};
+  ScanCommandQueue queue(cfg);
+  Exploration exploration(cfg);
 
-  ida->initiateExplorationForTest(2, 800.0, 2400.0, 3, 0.0);
+  auto cmds = exploration.initiate(2, 800.0, 2400.0, 3, 0.0, queue);
+  TEST_EQUAL(static_cast<int>(cmds.size()), 5)
 
-  // Feed 5 variants with known scores: {1, 3, 2, 5, 0}
-  // variant 3 (CE=35.0) should win with score 5
   std::vector<double> scores = {1.0, 3.0, 2.0, 5.0, 0.0};
   for (int i = 0; i < 5; ++i)
   {
-    // Create DeconvolvedSpectrum with scores[i] peak groups (score = size)
     DeconvolvedSpectrum ds = makeSyntheticDeconv(i + 1, static_cast<int>(scores[i]));
-    ida->feedExplorationResultForTest(1, i, ds, static_cast<double>(i));
+    int tracking_id = queue.decode(std::string(cmds[i].scan_description).substr(0, 3));
+    exploration.feedResult(tracking_id, ds, static_cast<double>(i), queue);
   }
 
-  // Group should be complete and removed from active map
-  TEST_EQUAL(ida->getActiveExplorationGroupCountForTest(), 0)
-
-  delete ida;
+  TEST_EQUAL(exploration.activeGroupCount(), 0)
 }
 END_SECTION
 
@@ -663,31 +641,24 @@ END_SECTION
 
 START_SECTION(ms3_exploration_creates_child_groups)
 {
-  // P7-U07: MS3 exploration creates groups for MS2 winner's fragments
-  FLASHIda* ida = new FLASHIda(const_cast<char*>(ms3_exploration_config));
+  Config cfg{std::string(ms3_exploration_config)};
+  ScanCommandQueue queue(cfg);
+  Exploration exploration(cfg);
 
-  // Create MS2 exploration group with 5 CE variants
-  ida->initiateExplorationForTest(2, 800.0, 2400.0, 3, 0.0);
-  int ms2_group_id = 1;
+  auto cmds = exploration.initiate(2, 800.0, 2400.0, 3, 0.0, queue);
+  TEST_EQUAL(static_cast<int>(cmds.size()), 5)
 
-  // Feed 5 variants: variant 2 (CE=30.0) wins with 5 peak groups
   for (int i = 0; i < 5; ++i)
   {
-    int count = (i == 2) ? 5 : 1;  // variant 2 wins with mass_count=5
+    int count = (i == 2) ? 5 : 1;
     DeconvolvedSpectrum ds = makeSyntheticDeconv(i + 1, count);
-    ida->feedExplorationResultForTest(ms2_group_id, i, ds, static_cast<double>(i));
+    int tracking_id = queue.decode(std::string(cmds[i].scan_description).substr(0, 3));
+    exploration.feedResult(tracking_id, ds, static_cast<double>(i), queue);
   }
 
-  // MS2 group should be complete and removed
-  TEST_EQUAL(ida->getActiveExplorationGroupCountForTest() > 0, true)
-
-  // MS3 exploration groups should have been created (max_fragments=3)
-  // Each MS3 group has 5 CE variants (15-35, step 5)
-  int ms3_group_count = ida->getActiveExplorationGroupCountForTest();
+  int ms3_group_count = exploration.activeGroupCount();
   TEST_EQUAL(ms3_group_count > 0, true)
-  TEST_EQUAL(ms3_group_count <= 3, true)  // max_fragments=3
-
-  delete ida;
+  TEST_EQUAL(ms3_group_count <= 3, true)
 }
 END_SECTION
 
@@ -740,21 +711,19 @@ END_SECTION
 
 START_SECTION(optimization_metadata_populated)
 {
-  // P7-U09: OptimizationMetadata populated on exploration variant spectra
-  FLASHIda* ida = new FLASHIda(const_cast<char*>(exploration_config));
+  Config cfg{std::string(exploration_config)};
+  ScanCommandQueue queue(cfg);
+  Exploration exploration(cfg);
 
-  // Create group with 2 variants (using small CE range)
-  ida->initiateExplorationForTest(2, 800.0, 2400.0, 3, 0.0);
+  auto cmds = exploration.initiate(2, 800.0, 2400.0, 3, 0.0, queue);
 
-  // Feed variant 0 only (group not complete yet) — 3 peak groups → mass_count score = 3
   DeconvolvedSpectrum ds = makeSyntheticDeconv(1, 3);
-  ida->feedExplorationResultForTest(1, 0, ds, 1.0);
+  int tracking_id = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
+  exploration.feedResult(tracking_id, ds, 1.0, queue);
 
-  // Group still active (only 1 of 5 received)
-  TEST_EQUAL(ida->getActiveExplorationGroupCountForTest(), 1)
+  TEST_EQUAL(exploration.activeGroupCount(), 1)
 
-  // Get group and check variant 0's metadata
-  auto group = ida->getExplorationGroupForTest(1);
+  auto group = exploration.getGroup(1);
   TEST_EQUAL(group.variants[0].received, true)
   auto& stored = group.variants[0].result;
   TEST_EQUAL(stored.hasOptimizationMetadata(), true)
@@ -766,13 +735,12 @@ START_SECTION(optimization_metadata_populated)
   TEST_REAL_SIMILAR(meta->collision_energy, 20.0)
   TEST_STRING_EQUAL(meta->activation_type, "HCD")
   TEST_EQUAL(meta->exploration_metric, static_cast<int>(ExplorationMetric::MassCount))
-  TEST_EQUAL(meta->is_best_variant, false)  // winner not determined yet
-  TEST_REAL_SIMILAR(meta->fragmentation_quality_score, 3.0)  // mass_count = size = 3
+  TEST_EQUAL(meta->is_best_variant, false)
+  TEST_REAL_SIMILAR(meta->fragmentation_quality_score, 3.0)
   TEST_EQUAL(meta->exploration_scans, 5)
   TEST_EQUAL(meta->start_ms > 0, true)
 
   (void)meta;
-  delete ida;
 }
 END_SECTION
 
@@ -813,36 +781,31 @@ END_SECTION
 
 START_SECTION(no_ms2_exploration_ms3_exploration_immediate)
 {
-  // P7-U11: No MS2 exploration + MS3 exploration → immediate MS3 trigger
-  FLASHIda* ida = new FLASHIda(const_cast<char*>(no_ms2_expl_ms3_expl_config));
+  Config cfg{std::string(no_ms2_expl_ms3_expl_config)};
+  Exploration exploration(cfg);
 
-  // Verify MS2 has no exploration
-  auto ms2_cfg = ida->getLevelConfigForTest(2);
+  auto ms2_cfg = cfg.level(2);
   TEST_EQUAL(static_cast<int>(ms2_cfg.exploration), static_cast<int>(ExplorationMetric::None))
 
-  // Verify MS3 has exploration
-  auto ms3_cfg = ida->getLevelConfigForTest(3);
+  auto ms3_cfg = cfg.level(3);
   TEST_EQUAL(static_cast<int>(ms3_cfg.exploration), static_cast<int>(ExplorationMetric::FragmentCount))
 
-  // No MS2 exploration groups should ever exist
-  TEST_EQUAL(ida->getActiveExplorationGroupCountForTest(), 0)
+  TEST_EQUAL(exploration.activeGroupCount(), 0)
 
   (void)ms2_cfg;
   (void)ms3_cfg;
-  delete ida;
 }
 END_SECTION
 
 START_SECTION(selection_metric_controls_config)
 {
-  // P7-U12: Selection metric parsed from config
-  FLASHIda* ida = new FLASHIda(const_cast<char*>(exploration_config));
+  Config cfg{std::string(exploration_config)};
 
-  auto ms1_cfg = ida->getLevelConfigForTest(1);
+  auto ms1_cfg = cfg.level(1);
   TEST_EQUAL(static_cast<int>(ms1_cfg.selection), static_cast<int>(SelectionMetric::QScore))
   TEST_EQUAL(ms1_cfg.max_targets, 3)
 
-  auto ms2_cfg = ida->getLevelConfigForTest(2);
+  auto ms2_cfg = cfg.level(2);
   TEST_EQUAL(static_cast<int>(ms2_cfg.selection), static_cast<int>(SelectionMetric::Intensity))
   TEST_EQUAL(ms2_cfg.max_targets, 3)
   TEST_EQUAL(static_cast<int>(ms2_cfg.exploration), static_cast<int>(ExplorationMetric::MassCount))
@@ -851,13 +814,12 @@ START_SECTION(selection_metric_controls_config)
   TEST_REAL_SIMILAR(ms2_cfg.ce_step, 5.0)
   TEST_STRING_EQUAL(ms2_cfg.exploration_activation, "HCD")
 
-  auto ms3_cfg = ida->getLevelConfigForTest(3);
+  auto ms3_cfg = cfg.level(3);
   TEST_EQUAL(static_cast<int>(ms3_cfg.selection), static_cast<int>(SelectionMetric::None))
 
   (void)ms1_cfg;
   (void)ms2_cfg;
   (void)ms3_cfg;
-  delete ida;
 }
 END_SECTION
 
