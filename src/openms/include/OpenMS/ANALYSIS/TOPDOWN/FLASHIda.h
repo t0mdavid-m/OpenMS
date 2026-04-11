@@ -50,6 +50,8 @@
 #include <chrono>
 #include <cstdint>
 #include <deque>
+#include <fstream>
+#include <iomanip>
 #include <mutex>
 
 namespace OpenMS
@@ -75,16 +77,16 @@ namespace OpenMS
     explicit FLASHIda(char *arg);
 
     /// destructor
-    ~FLASHIda() = default;
+    ~FLASHIda();
 
-    /// copy constructor
-    FLASHIda(const FLASHIda& ) = default;
+    /// copy constructor (deleted: ofstreams are non-copyable)
+    FLASHIda(const FLASHIda&) = delete;
 
     /// move constructor
     FLASHIda(FLASHIda&& other) = default;
 
-    /// assignment operator
-    FLASHIda& operator=(const FLASHIda& fd) = default;
+    /// assignment operator (deleted: ofstreams are non-copyable)
+    FLASHIda& operator=(const FLASHIda&) = delete;
 
     // Fragment analysis methods delegate to fragments_ component.
     // C-pointer overloads are kept as non-inline methods for binary compatibility.
@@ -237,6 +239,32 @@ namespace OpenMS
 
     /// Exploration CE sweep engine (owns groups, variants, scoring)
     Exploration exploration_;
+
+    // --- Logging file streams (append-only, crash-safe) ---
+    std::ofstream ida_log_stream_;
+    std::ofstream commands_tsv_stream_;
+    std::ofstream results_tsv_stream_;
+
+    /// Steady-clock reference for timestamps
+    std::chrono::steady_clock::time_point engine_start_time_;
+
+    /// Write IDA log entry for MS1 deconvolution results
+    void writeIDALogEntry_(double rt, const std::string& tracking_id,
+                           const std::vector<ScanCommand>& ms2_commands);
+
+    /// Write one TSV row for a dequeued scan command
+    void writeScanCommandRow_(const ScanCommand& cmd);
+
+    /// Write one TSV row for a processScan result
+    void writeScanResultRow_(const std::string& tracking_id, double rt,
+                             int mass_count, int commands_pushed,
+                             const std::vector<std::string>& child_ids,
+                             int tag_count, const std::string& matched_protein,
+                             const std::string& proteoform_sequence,
+                             uint64_t enqueue_ts);
+
+    /// Derive scan_type string from scan_description
+    static std::string scanTypeFromDescription_(const ScanCommand& cmd);
 
   public:
     /// Test-only: get number of active exploration groups (delegates to exploration_)

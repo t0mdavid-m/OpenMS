@@ -62,6 +62,46 @@ FLASHIda::FLASHIda(char* arg) :
   #ifdef _OPENMP
     omp_set_num_threads(4);
   #endif
+
+    engine_start_time_ = std::chrono::steady_clock::now();
+
+    const auto& rt_cfg = config_.runtime();
+    if (!rt_cfg.ida_log_path.empty())
+    {
+      ida_log_stream_.open(rt_cfg.ida_log_path, std::ios::app);
+    }
+    if (!rt_cfg.scan_commands_path.empty())
+    {
+      commands_tsv_stream_.open(rt_cfg.scan_commands_path, std::ios::app);
+      if (commands_tsv_stream_.is_open())
+      {
+        commands_tsv_stream_ << "tracking_id\tms_level\tscan_type\tenqueue_ts\tpriority\t"
+                             << "faims_cv\tmono_mass\tcharge\tprecursor_mz\tisolation_width\t"
+                             << "collision_energy\tactivation\tqscore\tcharge_cos\tcharge_snr\t"
+                             << "iso_cos\tsnr\tcharge_score\tppm_error\tprecursor_intensity\t"
+                             << "peakgroup_intensity\thcd_energy\tparent_tracking_id\t"
+                             << "ion_type\tion_index\n";
+        commands_tsv_stream_.flush();
+      }
+    }
+    if (!rt_cfg.scan_results_path.empty())
+    {
+      results_tsv_stream_.open(rt_cfg.scan_results_path, std::ios::app);
+      if (results_tsv_stream_.is_open())
+      {
+        results_tsv_stream_ << "tracking_id\tresolve_ts\tduration_ms\trt\t"
+                            << "mass_count\tcommands_pushed\tchild_ids\t"
+                            << "tag_count\tmatched_protein\tproteoform_sequence\n";
+        results_tsv_stream_.flush();
+      }
+    }
+  }
+
+  FLASHIda::~FLASHIda()
+  {
+    if (ida_log_stream_.is_open()) ida_log_stream_.close();
+    if (commands_tsv_stream_.is_open()) commands_tsv_stream_.close();
+    if (results_tsv_stream_.is_open()) results_tsv_stream_.close();
   }
 
   // Fragment analysis: C-pointer overloads delegate to fragments_ + deconv_.storedMS2()
@@ -118,6 +158,177 @@ FLASHIda::FLASHIda(char* arg) :
   double FLASHIda::getConfigDouble(const std::string& key) const
   {
     return config_.getDouble(key);
+  }
+
+  // ---- Logging writer implementations ----
+
+  void FLASHIda::writeIDALogEntry_(double rt,
+                                    const std::string& tracking_id,
+                                    const std::vector<ScanCommand>& ms2_commands)
+  {
+    if (!ida_log_stream_.is_open()) return;
+
+    // MS1 header line
+    ida_log_stream_ << "MS1 Scan# 0"
+                    << " RT " << std::fixed << std::setprecision(4) << rt
+                    << " (Access ID " << tracking_id << ") - "
+                    << ms2_commands.size() << " targets\n";
+
+    for (const auto& cmd : ms2_commands)
+    {
+      double w1 = 0, w2 = 0;
+      int charge = 0;
+      if (cmd.num_stages > 0)
+      {
+        double center = cmd.stages[0].precursor_mz;
+        double half_width = cmd.stages[0].isolation_width / 2.0;
+        w1 = center - half_width;
+        w2 = center + half_width;
+        charge = cmd.stages[0].charge_state;
+      }
+
+      ida_log_stream_ << "Mass=" << std::defaultfloat << cmd.mono_mass
+                      << "\tZ=" << charge
+                      << "\tScore=" << std::fixed << std::setprecision(5) << cmd.qscore
+                      << "\tWindow=[" << std::setprecision(4) << w1 << "-" << w2 << "]"
+                      << "\tPrecursorIntensity=" << std::setprecision(5) << cmd.precursor_intensity
+                      << "\tPrecursorMassIntensity=" << std::setprecision(5) << cmd.peakgroup_intensity
+                      << "\tFeatures=["
+                        << std::setprecision(6) << cmd.charge_cos << ","
+                        << cmd.charge_snr << ","
+                        << cmd.iso_cos << ","
+                        << cmd.snr << ","
+                        << cmd.charge_score << ","
+                        << cmd.ppm_error << "]"
+                      << "\tChargeRange=[" << charge << "-" << charge << "]"
+                      << "\tHCD=" << cmd.hcd_energy << "\n";
+    }
+
+    // AllMass line
+    const auto& selected = selection_.selectedPeakGroups();
+    ida_log_stream_ << "AllMass=";
+    for (size_t i = 0; i < selected.size(); i++)
+    {
+      if (i > 0) ida_log_stream_ << " ";
+      ida_log_stream_ << std::defaultfloat << selected[i].getMonoMass();
+    }
+    ida_log_stream_ << "\n";
+    ida_log_stream_.flush();
+  }
+
+  std::string FLASHIda::scanTypeFromDescription_(const ScanCommand& cmd)
+  {
+    if (std::strlen(cmd.scan_description) < 4)
+      return "unknown";
+    switch (cmd.scan_description[3])
+    {
+      case 'S': return "survey";
+      case 'A': return "agc";
+      case 'R': return "recording";
+      case 'F': return "followup";
+      case 'C': return "conditional";
+      case 'E': return "exploration";
+      default: return "unknown";
+    }
+  }
+
+  void FLASHIda::writeScanCommandRow_(const ScanCommand& cmd)
+  {
+    if (!commands_tsv_stream_.is_open()) return;
+
+    std::string id_str = ScanCommandQueue::encode(cmd.scan_id);
+    std::string scan_type = scanTypeFromDescription_(cmd);
+
+    int charge = (cmd.num_stages > 0) ? cmd.stages[0].charge_state : 0;
+    double precursor_mz = (cmd.num_stages > 0) ? cmd.stages[0].precursor_mz : 0.0;
+    double iso_width = (cmd.num_stages > 0) ? cmd.stages[0].isolation_width : 0.0;
+    double col_energy = (cmd.num_stages > 0) ? cmd.stages[0].collision_energy : 0.0;
+    std::string activation;
+    if (cmd.num_stages > 0)
+      activation = cmd.stages[0].activation_type;
+
+    std::string parent_id;
+    std::string ion_type;
+    int ion_index = 0;
+    if (cmd.msn_level == 3 && std::strlen(cmd.scan_description) > 4)
+    {
+      std::string desc(cmd.scan_description);
+      auto at_pos = desc.find('@');
+      if (at_pos != std::string::npos)
+      {
+        size_t pos = at_pos + 1;
+        while (pos < desc.size() && (std::isdigit(desc[pos]) || desc[pos] == '-'))
+          pos++;
+        if (pos < desc.size() && std::isalpha(desc[pos]))
+        {
+          ion_type = std::string(1, desc[pos]);
+          pos++;
+          if (pos < desc.size())
+            ion_index = std::atoi(desc.c_str() + pos);
+        }
+      }
+    }
+
+    commands_tsv_stream_ << id_str << "\t"
+                         << cmd.msn_level << "\t"
+                         << scan_type << "\t"
+                         << cmd.enqueue_timestamp_ms << "\t"
+                         << cmd.priority << "\t"
+                         << cmd.faims_cv << "\t"
+                         << cmd.mono_mass << "\t"
+                         << charge << "\t"
+                         << precursor_mz << "\t"
+                         << iso_width << "\t"
+                         << col_energy << "\t"
+                         << activation << "\t"
+                         << cmd.qscore << "\t"
+                         << cmd.charge_cos << "\t"
+                         << cmd.charge_snr << "\t"
+                         << cmd.iso_cos << "\t"
+                         << cmd.snr << "\t"
+                         << cmd.charge_score << "\t"
+                         << cmd.ppm_error << "\t"
+                         << cmd.precursor_intensity << "\t"
+                         << cmd.peakgroup_intensity << "\t"
+                         << cmd.hcd_energy << "\t"
+                         << parent_id << "\t"
+                         << ion_type << "\t"
+                         << ion_index << "\n";
+    commands_tsv_stream_.flush();
+  }
+
+  void FLASHIda::writeScanResultRow_(const std::string& tracking_id, double rt,
+                                      int mass_count, int commands_pushed,
+                                      const std::vector<std::string>& child_ids,
+                                      int tag_count, const std::string& matched_protein,
+                                      const std::string& proteoform_sequence,
+                                      uint64_t enqueue_ts)
+  {
+    if (!results_tsv_stream_.is_open()) return;
+
+    auto now = std::chrono::steady_clock::now();
+    uint64_t resolve_ts = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()).count();
+    uint64_t duration = (enqueue_ts > 0) ? (resolve_ts - enqueue_ts) : 0;
+
+    std::string child_str;
+    for (size_t i = 0; i < child_ids.size(); i++)
+    {
+      if (i > 0) child_str += ";";
+      child_str += child_ids[i];
+    }
+
+    results_tsv_stream_ << tracking_id << "\t"
+                        << resolve_ts << "\t"
+                        << duration << "\t"
+                        << rt << "\t"
+                        << mass_count << "\t"
+                        << commands_pushed << "\t"
+                        << child_str << "\t"
+                        << tag_count << "\t"
+                        << matched_protein << "\t"
+                        << proteoform_sequence << "\n";
+    results_tsv_stream_.flush();
   }
 
   std::map<int, std::vector<std::vector<float>>> FLASHIda::parseFLASHIdaLog(const String& in_log_file)
@@ -306,13 +517,28 @@ FLASHIda::FLASHIda(char* arg) :
       const auto& sel_charges = selection_.triggerCharges();
       const auto& sel_hcds = selection_.triggerHcds();
       int commands_pushed = 0;
+      std::vector<ScanCommand> ms2_commands;
       for (int i = 0; i < n; i++)
       {
         ScanCommand cmd = queue_.buildMS2(selected[i], sel_charges[i], sel_hcds[i]);
         cmd.faims_cv = parent_cv;  // MS2 carries parent MS1's CV
         queue_.push(cmd);
+        ms2_commands.push_back(cmd);
         commands_pushed++;
       }
+
+      // IDA log entry
+      std::string ms1_desc = scan_description ? std::string(scan_description) : "";
+      std::string ms1_id = (ms1_desc.size() >= 3) ? ms1_desc.substr(0, 3) : "ms1";
+      writeIDALogEntry_(rt_min, ms1_id, ms2_commands);
+
+      // Results TSV entry for MS1
+      std::vector<std::string> child_ids;
+      for (const auto& c : ms2_commands)
+        child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
+      int all_mass_count = static_cast<int>(selected.size());
+      writeScanResultRow_(ms1_id, rt_min, all_mass_count, commands_pushed,
+                          child_ids, 0, "", "", 0);
 
       // Initiate exploration for selected precursors if MS2 exploration is enabled
       if (config_.hasExploration(2))
@@ -357,7 +583,31 @@ FLASHIda::FLASHIda(char* arg) :
     {
       return processMS2Path_(mzs, ints, length, rt_min, scan_description);
     }
-    return 0;
+    // MS3 (or higher): log result, no follow-up commands
+    {
+      std::string desc_str = scan_description ? std::string(scan_description) : "";
+      std::string ms3_id = (desc_str.size() >= 3) ? desc_str.substr(0, 3) : "";
+      uint64_t enqueue_ts = 0;
+      if (!ms3_id.empty())
+      {
+        int tid = queue_.decode(ms3_id);
+        auto peeked = queue_.peekPending(tid);
+        if (peeked.has_value())
+          enqueue_ts = peeked->enqueue_timestamp_ms;
+        queue_.resolvePending(tid);
+      }
+
+      int ms3_mass_count = 0;
+      if (mzs != nullptr && ints != nullptr && length > 0)
+      {
+        deconv_.deconvolveMS2(mzs, ints, length, rt_min, 0.0, 0);
+        ms3_mass_count = deconv_.hasStoredMS2() ? static_cast<int>(deconv_.storedMS2().size()) : 0;
+      }
+
+      writeScanResultRow_(ms3_id, rt_min, ms3_mass_count, 0,
+                          {}, 0, "", "", enqueue_ts);
+      return 0;
+    }
   }
 
   std::vector<FLASHIda::MS3Target> FLASHIda::selectMS3Targets_()
@@ -433,7 +683,14 @@ FLASHIda::FLASHIda(char* arg) :
       return commands_pushed;
     }
 
-    // Step 2: Look up pending scan context via queue
+    // Step 2: Peek enqueue timestamp before resolving (resolve removes from pending map)
+    uint64_t enqueue_ts = 0;
+    {
+      auto peeked = queue_.peekPending(tracking_id);
+      if (peeked.has_value())
+        enqueue_ts = peeked->enqueue_timestamp_ms;
+    }
+
     auto resolved = queue_.resolvePending(tracking_id);
     if (!resolved.has_value())
     {
@@ -441,6 +698,7 @@ FLASHIda::FLASHIda(char* arg) :
       return 0;
     }
     ScanCommand ctx = resolved.value();
+    std::vector<std::string> child_ids;
 
     // Step 3: Deconvolve MS2 with precursor context
     double precursor_mass = 0;
@@ -468,7 +726,9 @@ FLASHIda::FLASHIda(char* arg) :
       if (quant_.isDifferentiallyAbundant(mzs, ints, length, rt_min, 2, "ms2_quant",
                                           config_.quantification().reporter_mz_tol, config_.quantification().fold_change_threshold, false))
       {
-        queue_.push(queue_.buildFollowUpMS2(ctx));
+        auto followup = queue_.buildFollowUpMS2(ctx);
+        queue_.push(followup);
+        child_ids.push_back(ScanCommandQueue::encode(followup.scan_id));
         commands_pushed++;
       }
     }
@@ -476,7 +736,9 @@ FLASHIda::FLASHIda(char* arg) :
     // Conditional MS2 follow-up -- only when tags detected AND explicitly enabled
     if (config_.targeting().conditional_ms2_enabled && config_.level(2).scans.size() >= 2 && tags_found)
     {
-      queue_.push(queue_.buildConditionalFollowUp(ctx));
+      auto cond = queue_.buildConditionalFollowUp(ctx);
+      queue_.push(cond);
+      child_ids.push_back(ScanCommandQueue::encode(cond.scan_id));
       commands_pushed++;
     }
 
@@ -486,7 +748,11 @@ FLASHIda::FLASHIda(char* arg) :
     {
       // MS3 exploration: create exploration groups for top fragments
       auto cmds = exploration_.initiateNextLevel(2, deconv_.storedMS2(), ctx.faims_cv, queue_);
-      for (auto& c : cmds) queue_.push(c);
+      for (auto& c : cmds)
+      {
+        queue_.push(c);
+        child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
+      }
     }
     else if (config_.targeting().ms3_enabled && config_.targeting().ms3_mode > 0)
     {
@@ -497,6 +763,7 @@ FLASHIda::FLASHIda(char* arg) :
         ScanCommand ms3_cmd = queue_.buildMS3(ctx, t.center_mz, t.charge, t.iso_width,
                                                t.ion_type, t.frag_index);
         queue_.push(ms3_cmd);
+        child_ids.push_back(ScanCommandQueue::encode(ms3_cmd.scan_id));
         commands_pushed++;
       }
     }
@@ -504,8 +771,18 @@ FLASHIda::FLASHIda(char* arg) :
     {
       // New selection_strategy MS3 targeting (no exploration, not legacy)
       auto cmds = exploration_.initiateNextLevel(2, deconv_.storedMS2(), ctx.faims_cv, queue_);
-      for (auto& c : cmds) queue_.push(c);
+      for (auto& c : cmds)
+      {
+        queue_.push(c);
+        child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
+      }
     }
+
+    int ms2_mass_count = deconv_.hasStoredMS2() ? static_cast<int>(deconv_.storedMS2().size()) : 0;
+    int tag_count = tags_found ? 1 : 0;
+
+    writeScanResultRow_(id_str, rt_min, ms2_mass_count, commands_pushed,
+                        child_ids, tag_count, "", "", enqueue_ts);
 
     std::cout << "[TRACK-RESOLVE] id=" << id_str
               << " rt=" << rt_min
@@ -532,6 +809,7 @@ FLASHIda::FLASHIda(char* arg) :
       std::snprintf(out.scan_description, 16, "%sA", id_str.c_str());
 
       std::cout << "[TRACK-CREATE] id=" << id_str << " ms_level=1 type=agc" << std::endl;
+      writeScanCommandRow_(out);
       return 1;
     }
 
@@ -550,6 +828,7 @@ FLASHIda::FLASHIda(char* arg) :
       std::snprintf(out.scan_description, 16, "%sS", id_str.c_str());
 
       std::cout << "[TRACK-CREATE] id=" << id_str << " ms_level=1 type=cycle_time" << std::endl;
+      writeScanCommandRow_(out);
       return 1;
     }
 
@@ -562,6 +841,7 @@ FLASHIda::FLASHIda(char* arg) :
     {
       out = dequeued.value();
       // faims_cv already set at creation time (MS2 -> parent CV, CV-transition MS1 -> next CV)
+      writeScanCommandRow_(out);
       return 1;
     }
 
@@ -596,6 +876,7 @@ FLASHIda::FLASHIda(char* arg) :
       queue_.push(ms1_cmd);
 
       out = agc_cmd;
+      writeScanCommandRow_(out);
       return 1;
     }
   }

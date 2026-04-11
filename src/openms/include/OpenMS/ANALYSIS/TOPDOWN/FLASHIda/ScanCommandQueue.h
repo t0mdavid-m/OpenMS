@@ -113,6 +113,15 @@ namespace OpenMS
     /// Look up and remove a pending scan by tracking ID. Returns nullopt if not found.
     std::optional<ScanCommand> resolvePending(int id);
 
+    /// Look up a pending command by tracking ID without removing it
+    std::optional<ScanCommand> peekPending(int id) const
+    {
+      std::lock_guard<std::mutex> lock(queue_mutex_);
+      auto it = pending_scan_map_.find(id);
+      if (it == pending_scan_map_.end()) return std::nullopt;
+      return it->second;
+    }
+
     /// Remove expired commands from pending_scan_map_ using timeout_ms
     void cleanupExpired();
 
