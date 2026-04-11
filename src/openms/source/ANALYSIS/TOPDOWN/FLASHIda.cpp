@@ -516,16 +516,38 @@ FLASHIda::FLASHIda(char* arg) :
       const auto& sel_hcds = selection_.triggerHcds();
       int commands_pushed = 0;
       std::vector<ScanCommand> ms2_commands;
-      for (int i = 0; i < n; i++)
+
+      if (config_.hasExploration(2))
       {
-        ScanConfig ms2_config = config_.level(2).scans[0];
-        if (config_.targeting().use_idscore)
-          ms2_config.collision_energy = sel_hcds[i];
-        ScanCommand cmd = queue_.buildMS2(selected[i], sel_charges[i], ms2_config);
-        cmd.faims_cv = parent_cv;  // MS2 carries parent MS1's CV
-        queue_.push(cmd);
-        ms2_commands.push_back(cmd);
-        commands_pushed++;
+        // Exploration path: initiate CE sweep variants INSTEAD of regular MS2
+        for (int i = 0; i < n; i++)
+        {
+          auto cmds = exploration_.initiate(2, selected[i], sel_charges[i], parent_cv, queue_);
+          for (auto& c : cmds)
+          {
+            queue_.push(c);
+            ms2_commands.push_back(c);
+            commands_pushed++;
+          }
+        }
+      }
+      else
+      {
+        // Normal path: push MS2 for each precursor, for each scan config
+        for (int i = 0; i < n; i++)
+        {
+          for (const auto& sc : config_.level(2).scans)
+          {
+            ScanConfig ms2_config = sc;
+            if (config_.targeting().use_idscore)
+              ms2_config.collision_energy = sel_hcds[i];
+            ScanCommand cmd = queue_.buildMS2(selected[i], sel_charges[i], ms2_config);
+            cmd.faims_cv = parent_cv;  // MS2 carries parent MS1's CV
+            queue_.push(cmd);
+            ms2_commands.push_back(cmd);
+            commands_pushed++;
+          }
+        }
       }
 
       // IDA log entry
@@ -540,16 +562,6 @@ FLASHIda::FLASHIda(char* arg) :
       int all_mass_count = static_cast<int>(selected.size());
       writeScanResultRow_(ms1_id, rt_min, all_mass_count, commands_pushed,
                           child_ids, 0, "", "", 0);
-
-      // Initiate exploration for selected precursors if MS2 exploration is enabled
-      if (config_.hasExploration(2))
-      {
-        for (int i = 0; i < n; i++)
-        {
-          auto cmds = exploration_.initiate(2, selected[i], sel_charges[i], parent_cv, queue_);
-          for (auto& c : cmds) queue_.push(c);
-        }
-      }
 
       // FAIMS CV cycling: update skip policy, advance to next CV, push MS1
       if (faims_.isEnabled())
