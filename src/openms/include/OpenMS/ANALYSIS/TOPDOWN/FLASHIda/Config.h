@@ -202,6 +202,9 @@ namespace OpenMS
     const QuantConfig& quantification() const { return quant_; }
     const RuntimeConfig& runtime() const { return runtime_; }
 
+    /// Validate configuration consistency; throws std::invalid_argument on conflict
+    void validate() const;
+
     /// Access the full levels map (for iteration)
     const std::map<int, MSLevelConfig>& levels() const { return levels_; }
 

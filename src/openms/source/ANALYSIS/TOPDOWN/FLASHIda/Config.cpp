@@ -290,6 +290,26 @@ namespace OpenMS
 
     // SNR threshold (hardcoded in original parseJSONConfig_)
     targeting_.snr_threshold = 1.0;
+
+    validate();
+  }
+
+  void Config::validate() const
+  {
+    if (targeting_.use_idscore && exploration_enabled_)
+      throw std::invalid_argument(
+          "IDScore and exploration cannot both be enabled. "
+          "IDScore determines optimal HCD analytically; "
+          "exploration determines it empirically via CE sweep.");
+
+    for (const auto& [lvl, cfg] : levels_)
+    {
+      if (cfg.exploration != ExplorationMetric::None && cfg.scans.size() != 1)
+        throw std::invalid_argument(
+            "Exploration at level " + std::to_string(lvl) +
+            " requires exactly one scan config, got " +
+            std::to_string(cfg.scans.size()) + ".");
+    }
   }
 
   const MSLevelConfig& Config::level(int msn_level) const
