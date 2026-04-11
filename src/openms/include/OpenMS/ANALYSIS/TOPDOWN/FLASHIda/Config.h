@@ -158,6 +158,14 @@ namespace OpenMS
     double fold_change_threshold = 1.4;
   };
 
+  /// Runtime file paths (set by C# or user override in JSON)
+  struct OPENMS_DLLAPI RuntimeConfig
+  {
+    std::string ida_log_path;
+    std::string scan_commands_path;
+    std::string scan_results_path;
+  };
+
   /**
    * @brief Owns all configuration parsing and storage for FLASHIda.
    *
@@ -192,6 +200,7 @@ namespace OpenMS
     const SchedulingConfig& scheduling() const { return scheduling_; }
     const TargetingConfig& targeting() const { return targeting_; }
     const QuantConfig& quantification() const { return quant_; }
+    const RuntimeConfig& runtime() const { return runtime_; }
 
     /// Access the full levels map (for iteration)
     const std::map<int, MSLevelConfig>& levels() const { return levels_; }
@@ -203,6 +212,7 @@ namespace OpenMS
     SchedulingConfig scheduling_;
     TargetingConfig targeting_;
     QuantConfig quant_;
+    RuntimeConfig runtime_;
     bool exploration_enabled_ = false;
 
     static const MSLevelConfig default_level_;

@@ -282,6 +282,12 @@ namespace OpenMS
       }
     }
 
+    // --- runtime section (file paths, optional) ---
+    auto rt_section = config.value("runtime", json::object());
+    runtime_.ida_log_path = rt_section.value("ida_log_path", std::string{});
+    runtime_.scan_commands_path = rt_section.value("scan_commands_path", std::string{});
+    runtime_.scan_results_path = rt_section.value("scan_results_path", std::string{});
+
     // SNR threshold (hardcoded in original parseJSONConfig_)
     targeting_.snr_threshold = 1.0;
   }
