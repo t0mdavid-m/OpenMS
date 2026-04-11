@@ -276,20 +276,6 @@ namespace OpenMS
     static std::string scanTypeFromDescription_(const ScanCommand& cmd);
 
   public:
-    /// Test-only: get number of active exploration groups (delegates to exploration_)
-    int getActiveExplorationGroupCountForTest() const
-    {
-      std::lock_guard<std::mutex> lock(analysis_mutex_);
-      return exploration_.activeGroupCount();
-    }
-
-    /// Test-only: get exploration group by ID (delegates to exploration_)
-    Exploration::ExplorationGroup getExplorationGroupForTest(int group_id) const
-    {
-      std::lock_guard<std::mutex> lock(analysis_mutex_);
-      return exploration_.getGroup(group_id);
-    }
-
     /// Test-only: get level config for a given MSn level
     const MSLevelConfig& getLevelConfigForTest(int level) const { return config_.level(level); }
 
@@ -301,33 +287,6 @@ namespace OpenMS
     {
       return queue_.queueSize(priority);
     }
-
-    /// Test-only: directly call exploration_.initiate() and push results
-    void initiateExplorationForTest(int msn_level, double mz, double mass, int charge, double cv)
-    {
-      std::lock_guard<std::mutex> lock(analysis_mutex_);
-      auto cmds = exploration_.initiate(msn_level, mz, mass, charge, cv, queue_);
-      for (auto& c : cmds) queue_.push(c);
-      exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);
-    }
-
-    /// Test-only: directly call exploration_.feedResult() and push results
-    void feedExplorationResultForTest(int group_id, int variant_index,
-                                      const DeconvolvedSpectrum& ds, double rt)
-    {
-      // feedResult takes a tracking_id; for backward compat we look up
-      // the variant's tracking_id from the group.
-      std::lock_guard<std::mutex> lock(analysis_mutex_);
-      auto group = exploration_.getGroup(group_id);
-      if (variant_index < 0 || variant_index >= static_cast<int>(group.variants.size())) return;
-      int tracking_id = queue_.decode(group.variants[variant_index].tracking_id);
-      auto cmds = exploration_.feedResult(tracking_id, ds, rt, queue_);
-      for (auto& c : cmds) queue_.push(c);
-      exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);
-    }
-
-    /// Test-only: access the Exploration object directly
-    Exploration& getExplorationForTest() { return exploration_; }
 
   };
 }
