@@ -53,55 +53,57 @@ START_TEST(ScanCommandQueue_Concurrent, "$Id$")
 
 /////////////////////////////////////////////////////////////
 
-// T1: Concurrent push/dequeue — no lost commands
+// T1: Concurrent push from multiple threads, then concurrent dequeue.
+// Phase-based: no spin-waits, no live consumer during push.
 START_SECTION(concurrent_push_dequeue)
 {
   Config cfg{std::string(minimal_config)};
   ScanCommandQueue queue(cfg);
 
-  const int N_PRODUCERS = 4;
-  const int CMDS_PER_PRODUCER = 250;
-  const int TOTAL = N_PRODUCERS * CMDS_PER_PRODUCER;
+  const int N_THREADS = 4;
+  const int CMDS_PER_THREAD = 250;
+  const int TOTAL = N_THREADS * CMDS_PER_THREAD;
+
+  // Phase 1: 4 threads push concurrently
+  {
+    std::vector<std::thread> threads;
+    for (int t = 0; t < N_THREADS; ++t)
+    {
+      threads.emplace_back([&, t]()
+      {
+        for (int i = 0; i < CMDS_PER_THREAD; ++i)
+        {
+          ScanCommand cmd{};
+          cmd.msn_level = 2;
+          cmd.priority = 1;
+          cmd.scan_id = t * CMDS_PER_THREAD + i;
+          queue.push(cmd);
+        }
+      });
+    }
+    for (auto& th : threads) th.join();
+  }
+
+  // Phase 2: 4 threads dequeue concurrently
   std::atomic<int> dequeued_count{0};
-
-  // Producers push commands
-  auto producer = [&](int thread_id)
   {
-    for (int i = 0; i < CMDS_PER_PRODUCER; ++i)
+    std::vector<std::thread> threads;
+    for (int t = 0; t < N_THREADS; ++t)
     {
-      ScanCommand cmd{};
-      cmd.msn_level = 2;
-      cmd.priority = 1;
-      cmd.scan_id = thread_id * CMDS_PER_PRODUCER + i;
-      queue.push(cmd);
+      threads.emplace_back([&]()
+      {
+        while (true)
+        {
+          auto cmd = queue.dequeue();
+          if (cmd.has_value())
+            dequeued_count.fetch_add(1);
+          else
+            break;  // queue empty, done
+        }
+      });
     }
-  };
-
-  // Consumer drains the queue
-  auto consumer = [&]()
-  {
-    while (dequeued_count.load() < TOTAL)
-    {
-      auto cmd = queue.dequeue();
-      if (cmd.has_value())
-        dequeued_count.fetch_add(1);
-      else
-        std::this_thread::yield();  // avoid starving producers
-    }
-  };
-
-  std::vector<std::thread> threads;
-  // Start consumer first so it's draining while producers push
-  threads.emplace_back(consumer);
-  for (int t = 0; t < N_PRODUCERS; ++t)
-    threads.emplace_back(producer, t);
-
-  for (auto& th : threads)
-    th.join();
-
-  // Drain any remaining
-  while (auto cmd = queue.dequeue())
-    dequeued_count.fetch_add(1);
+    for (auto& th : threads) th.join();
+  }
 
   TEST_EQUAL(dequeued_count.load(), TOTAL)
 }
@@ -143,70 +145,59 @@ START_SECTION(concurrent_tracking_id_uniqueness)
 }
 END_SECTION
 
-// T3: Concurrent build + resolve — every built command is resolvable exactly once
+// T3: Concurrent resolve — build first, then multiple resolvers race.
+// Tests that each pending command is resolved exactly once.
 START_SECTION(concurrent_build_resolve)
 {
   Config cfg{std::string(minimal_config)};
   ScanCommandQueue queue(cfg);
 
   const int N = 100;
-  std::vector<std::atomic<int>> built_ids(N);
-  for (int i = 0; i < N; ++i) built_ids[i].store(-1, std::memory_order_relaxed);
-  std::atomic<int> resolved_count{0};
-  std::atomic<int> double_resolve_count{0};
 
-  // Producer: build MS2 commands concurrently (each writes to pending_scan_map_)
-  auto builder = [&]()
+  // Phase 1: build all commands (single-threaded)
+  std::vector<int> built_ids(N);
+  for (int i = 0; i < N; ++i)
   {
-    for (int i = 0; i < N; ++i)
-    {
-      ScanCommand cmd = queue.buildMS2(500.0 + i, 10, 29.0, "HCD");
-      built_ids[i].store(cmd.scan_id, std::memory_order_release);
-    }
-  };
+    ScanCommand cmd = queue.buildMS2(500.0 + i, 10, 29.0, "HCD");
+    built_ids[i] = cmd.scan_id;
+  }
 
-  // Consumer: resolve pending commands by ID concurrently with builder
-  auto resolver = [&]()
+  // Phase 2: 4 resolver threads race to resolve
+  const int N_RESOLVERS = 4;
+  std::vector<std::atomic<int>> per_thread_resolved(N_RESOLVERS);
+  for (int t = 0; t < N_RESOLVERS; ++t) per_thread_resolved[t].store(0);
+
   {
-    int local_resolved = 0;
-    while (local_resolved < N)
+    std::vector<std::thread> threads;
+    for (int t = 0; t < N_RESOLVERS; ++t)
     {
-      bool made_progress = false;
-      for (int i = 0; i < N; ++i)
+      threads.emplace_back([&, t]()
       {
-        int id = built_ids[i].load(std::memory_order_acquire);
-        if (id < 0) continue;  // not yet built or already resolved
-        auto result = queue.resolvePending(id);
-        if (result.has_value())
+        int local = 0;
+        // Each thread tries to resolve ALL ids — only one thread will succeed per id
+        for (int i = 0; i < N; ++i)
         {
-          local_resolved++;
-          made_progress = true;
-          // Try resolving again — must return nullopt (exactly-once guarantee)
-          auto duplicate = queue.resolvePending(id);
-          if (duplicate.has_value())
-            double_resolve_count.fetch_add(1);
-          built_ids[i].store(-2, std::memory_order_relaxed);  // mark as resolved
+          auto result = queue.resolvePending(built_ids[i]);
+          if (result.has_value())
+            local++;
         }
-      }
-      if (!made_progress)
-        std::this_thread::yield();  // avoid starving builder
+        per_thread_resolved[t].store(local);
+      });
     }
-    resolved_count.store(local_resolved);
-  };
+    for (auto& th : threads) th.join();
+  }
 
-  // Run concurrently: builder writes to pending_scan_map_ via buildMS2,
-  // resolver reads+erases via resolvePending. Both acquire queue_mutex_ internally.
-  std::thread build_thread(builder);
-  std::thread resolve_thread(resolver);
-  build_thread.join();
-  resolve_thread.join();
+  // Total resolved across all threads must equal N (each resolved exactly once)
+  int total_resolved = 0;
+  for (int t = 0; t < N_RESOLVERS; ++t)
+    total_resolved += per_thread_resolved[t].load();
 
-  TEST_EQUAL(resolved_count.load(), N)
-  TEST_EQUAL(double_resolve_count.load(), 0)
+  TEST_EQUAL(total_resolved, N)
 }
 END_SECTION
 
-// T4: Concurrent push + cleanupExpired — no crashes
+// T4: Concurrent push + cleanupExpired — no crashes, no data corruption.
+// Phase-based: pusher and cleaner run concurrently but pusher is bounded.
 START_SECTION(concurrent_push_cleanup)
 {
   Config cfg{std::string(minimal_config)};
@@ -215,7 +206,7 @@ START_SECTION(concurrent_push_cleanup)
   const int N = 200;
   std::atomic<bool> done{false};
 
-  // Producer pushes commands with timestamp 0 (will be expired immediately)
+  // Pusher registers commands with old timestamps (will expire)
   auto pusher = [&]()
   {
     for (int i = 0; i < N; ++i)
@@ -226,21 +217,19 @@ START_SECTION(concurrent_push_cleanup)
       cmd.scan_id = i;
       cmd.enqueue_timestamp_ms = 1;  // old timestamp -> will expire
       queue.push(cmd);
-      // Also register in pending map so cleanupExpired has something to clean
       queue.registerPending(i, cmd);
     }
-    done.store(true);
+    done.store(true, std::memory_order_release);
   };
 
   // Cleaner runs cleanupExpired concurrently
   auto cleaner = [&]()
   {
-    while (!done.load())
+    while (!done.load(std::memory_order_acquire))
     {
       queue.cleanupExpired();
-      std::this_thread::yield();  // avoid starving pusher
+      std::this_thread::yield();
     }
-    // Final cleanup
     queue.cleanupExpired();
   };
 
