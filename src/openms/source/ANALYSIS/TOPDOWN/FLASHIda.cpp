@@ -503,8 +503,6 @@ FLASHIda::FLASHIda(char* arg) :
 
     if (ms_level == 1)
     {
-      queue_.recordMS1Time();
-
       // Selection=none: skip MS1 precursor selection entirely
       if (config_.level(1).selection == SelectionMetric::None)
         return 0;
@@ -840,6 +838,8 @@ FLASHIda::FLASHIda(char* arg) :
     if (dequeued.has_value())
     {
       out = dequeued.value();
+      if (out.msn_level == 1 && out.is_agc == 0)
+        queue_.recordMS1Time();
       // faims_cv already set at creation time (MS2 -> parent CV, CV-transition MS1 -> next CV)
       writeScanCommandRow_(out);
       return 1;
@@ -865,7 +865,6 @@ FLASHIda::FLASHIda(char* arg) :
       ms1_cmd.faims_cv = faims_.isEnabled() ? faims_.currentCV() : 0.0;
       ms1_cmd.scan_id = queue_.nextTrackingId();
       ms1_cmd.priority = 0;
-      queue_.recordMS1Time();
 
       std::string ms1_id_str = ScanCommandQueue::encode(ms1_cmd.scan_id);
       std::snprintf(ms1_cmd.scan_description, 16, "%sS", ms1_id_str.c_str());
