@@ -308,6 +308,7 @@ namespace OpenMS
       std::lock_guard<std::mutex> lock(analysis_mutex_);
       auto cmds = exploration_.initiate(msn_level, mz, mass, charge, cv, queue_);
       for (auto& c : cmds) queue_.push(c);
+      exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);
     }
 
     /// Test-only: directly call exploration_.feedResult() and push results
@@ -322,6 +323,7 @@ namespace OpenMS
       int tracking_id = queue_.decode(group.variants[variant_index].tracking_id);
       auto cmds = exploration_.feedResult(tracking_id, ds, rt, queue_);
       for (auto& c : cmds) queue_.push(c);
+      exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);
     }
 
     /// Test-only: access the Exploration object directly

@@ -154,12 +154,13 @@ START_SECTION(concurrent_build_resolve)
 
   const int N = 100;
 
-  // Phase 1: build all commands (single-threaded)
+  // Phase 1: build all commands and register in pending map (single-threaded)
   std::vector<int> built_ids(N);
   for (int i = 0; i < N; ++i)
   {
     ScanCommand cmd = queue.buildMS2(500.0 + i, 10, 29.0, "HCD");
     built_ids[i] = cmd.scan_id;
+    queue.registerPending(cmd.scan_id, cmd);
   }
 
   // Phase 2: 4 resolver threads race to resolve
