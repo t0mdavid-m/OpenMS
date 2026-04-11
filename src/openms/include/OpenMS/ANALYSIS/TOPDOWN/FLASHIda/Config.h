@@ -73,6 +73,9 @@ namespace OpenMS
     double first_mass = 0;
     double last_mass = 0;
     double max_it = 0;
+
+    /// Apply string-keyed overrides to matching fields (exploration overrides)
+    void applyOverrides(const std::unordered_map<std::string, std::string>& overrides);
   };
 
   /// Per-MSn-level configuration: selection + optional exploration

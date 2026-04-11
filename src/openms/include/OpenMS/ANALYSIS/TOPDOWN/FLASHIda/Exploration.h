@@ -80,6 +80,7 @@ namespace OpenMS
       double precursor_mz = 0.0;
       double precursor_mass = 0.0;
       int precursor_charge = 0;
+      PeakGroup precursor_pg;
       double isolation_width = 0.0;
       double faims_cv = 0.0;
       uint64_t start_ms = 0;
@@ -99,9 +100,8 @@ namespace OpenMS
     explicit Exploration(const Config& config);
 
     /// Create exploration group with CE variants. Returns commands for the caller to push.
-    std::vector<ScanCommand> initiate(int msn_level, double precursor_mz, double precursor_mass,
-                                      int precursor_charge, double faims_cv,
-                                      ScanCommandQueue& queue);
+    std::vector<ScanCommand> initiate(int msn_level, const PeakGroup& pg, int charge,
+                                      double faims_cv, ScanCommandQueue& queue);
 
     /// Process returning exploration variant: score, select winner, trigger next level.
     /// Returns commands for the caller to push.

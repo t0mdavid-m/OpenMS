@@ -167,7 +167,7 @@ namespace OpenMS
     return cmd;
   }
 
-  ScanCommand ScanCommandQueue::buildMS2(const PeakGroup& pg, int charge, int hcd)
+  ScanCommand ScanCommandQueue::buildMS2(const PeakGroup& pg, int charge, const ScanConfig& scan_config)
   {
     ScanCommand cmd{};
     int id = nextTrackingIdInt_();
@@ -177,20 +177,12 @@ namespace OpenMS
     cmd.is_agc = 0;
     cmd.num_stages = 1;
 
-    // Use first MS2 config for resolution and analyzer
-    if (!config_.level(2).scans.empty())
-    {
-      cmd.orbitrap_resolution = config_.level(2).scans[0].resolution;
-      std::strncpy(cmd.analyzer, config_.level(2).scans[0].analyzer.c_str(), sizeof(cmd.analyzer) - 1);
-      cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';
-    }
-    else
-    {
-      cmd.orbitrap_resolution = config_.level(1).scans[0].resolution;
-      std::strncpy(cmd.analyzer, config_.level(1).scans[0].analyzer.c_str(), sizeof(cmd.analyzer) - 1);
-      cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';
-    }
+    // Resolution and analyzer from the provided ScanConfig
+    cmd.orbitrap_resolution = scan_config.resolution;
+    std::strncpy(cmd.analyzer, scan_config.analyzer.c_str(), sizeof(cmd.analyzer) - 1);
+    cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';
 
+    // Instrument defaults from MS1 config
     cmd.agc_target = config_.level(1).scans[0].agc_target;
     cmd.first_mass = config_.level(1).scans[0].first_mass;
     cmd.last_mass = config_.level(1).scans[0].last_mass;
@@ -207,21 +199,10 @@ namespace OpenMS
     cmd.stages[0].isolation_width = iso_width;
     cmd.stages[0].charge_state = charge;
 
-    // Activation type and collision energy
-    std::string activation = "HCD";
-    int ce = 0;
-    if (!config_.level(2).scans.empty())
-    {
-      activation = config_.level(2).scans[0].activation;
-      ce = config_.level(2).scans[0].collision_energy;
-    }
-    // For HCD activation, use hcd as fallback only when config CE is unset
-    if (activation == "HCD" && ce <= 0)
-    {
-      ce = (hcd > 0) ? hcd : 29;
-    }
-    cmd.stages[0].collision_energy = static_cast<double>(ce);
-    std::strncpy(cmd.stages[0].activation_type, activation.c_str(), sizeof(cmd.stages[0].activation_type) - 1);
+    // CE and activation from scan_config
+    cmd.stages[0].collision_energy = static_cast<double>(scan_config.collision_energy);
+    std::strncpy(cmd.stages[0].activation_type, scan_config.activation.c_str(),
+                 sizeof(cmd.stages[0].activation_type) - 1);
     cmd.stages[0].activation_type[sizeof(cmd.stages[0].activation_type) - 1] = '\0';
 
     // Scan description: {3-char ID}R{mass_kDa:.1f}@{charge}
@@ -244,7 +225,7 @@ namespace OpenMS
     cmd.ppm_error = pg.getAvgPPMError();
     cmd.precursor_intensity = pg.getChargeIntensity(std::abs(charge));
     cmd.peakgroup_intensity = pg.getIntensity();
-    cmd.hcd_energy = (hcd > 0) ? hcd : ce;
+    cmd.hcd_energy = scan_config.collision_energy;
     cmd.pad2 = 0;
 
     // Store in pending map for MS2 tracking resolution
@@ -256,42 +237,6 @@ namespace OpenMS
               << " z=" << charge
               << " mass=" << pg.getMonoMass()
               << std::endl;
-
-    return cmd;
-  }
-
-  ScanCommand ScanCommandQueue::buildMS2(double precursor_mz, int charge, double ce,
-                                          const std::string& activation)
-  {
-    ScanCommand cmd{};
-    cmd.msn_level = 2;
-    cmd.priority = 1;
-    cmd.is_agc = 0;
-    cmd.num_stages = 1;
-    cmd.scan_id = nextTrackingIdInt_();
-
-    if (!config_.level(2).scans.empty())
-    {
-      std::strncpy(cmd.analyzer, config_.level(2).scans[0].analyzer.c_str(), sizeof(cmd.analyzer) - 1);
-      cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';
-      cmd.orbitrap_resolution = config_.level(2).scans[0].resolution;
-    }
-    cmd.first_mass = config_.level(1).scans[0].first_mass;
-    cmd.last_mass = config_.level(1).scans[0].last_mass;
-    cmd.max_it = config_.level(1).scans[0].max_it;
-    cmd.agc_target = config_.level(1).scans[0].agc_target;
-
-    cmd.stages[0].precursor_mz = precursor_mz;
-    cmd.stages[0].isolation_width = 2.0;
-    cmd.stages[0].collision_energy = ce;
-    cmd.stages[0].charge_state = charge;
-    std::strncpy(cmd.stages[0].activation_type, activation.c_str(),
-                 sizeof(cmd.stages[0].activation_type) - 1);
-    cmd.stages[0].activation_type[sizeof(cmd.stages[0].activation_type) - 1] = '\0';
-
-    cmd.enqueue_timestamp_ms = static_cast<uint64_t>(
-      std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count());
 
     return cmd;
   }

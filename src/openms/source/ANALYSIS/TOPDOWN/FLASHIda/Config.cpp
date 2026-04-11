@@ -53,6 +53,21 @@ namespace OpenMS
     10.0                          // tolerance_ppm
   };
 
+  void ScanConfig::applyOverrides(const std::unordered_map<std::string, std::string>& overrides)
+  {
+    for (const auto& [key, val] : overrides)
+    {
+      if (key == "analyzer") analyzer = val;
+      else if (key == "activation") activation = val;
+      else if (key == "collision_energy") collision_energy = static_cast<int>(std::stod(val));
+      else if (key == "resolution") resolution = static_cast<int>(std::stod(val));
+      else if (key == "agc_target") agc_target = static_cast<int>(std::stod(val));
+      else if (key == "first_mass") first_mass = std::stod(val);
+      else if (key == "last_mass") last_mass = std::stod(val);
+      else if (key == "max_it") max_it = std::stod(val);
+    }
+  }
+
   Config::Config(const std::string& json_str)
   {
     // Reject non-JSON input

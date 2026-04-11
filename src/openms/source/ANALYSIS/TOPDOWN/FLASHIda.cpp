@@ -518,7 +518,10 @@ FLASHIda::FLASHIda(char* arg) :
       std::vector<ScanCommand> ms2_commands;
       for (int i = 0; i < n; i++)
       {
-        ScanCommand cmd = queue_.buildMS2(selected[i], sel_charges[i], sel_hcds[i]);
+        ScanConfig ms2_config = config_.level(2).scans[0];
+        if (config_.targeting().use_idscore)
+          ms2_config.collision_energy = sel_hcds[i];
+        ScanCommand cmd = queue_.buildMS2(selected[i], sel_charges[i], ms2_config);
         cmd.faims_cv = parent_cv;  // MS2 carries parent MS1's CV
         queue_.push(cmd);
         ms2_commands.push_back(cmd);
@@ -543,11 +546,7 @@ FLASHIda::FLASHIda(char* arg) :
       {
         for (int i = 0; i < n; i++)
         {
-          auto [mz1, mz2] = selected[i].getMzRange(sel_charges[i]);
-          double center_mz = (mz1 + mz2) / 2.0;
-          auto cmds = exploration_.initiate(2, center_mz,
-              selected[i].getMonoMass(),
-              sel_charges[i], parent_cv, queue_);
+          auto cmds = exploration_.initiate(2, selected[i], sel_charges[i], parent_cv, queue_);
           for (auto& c : cmds) queue_.push(c);
         }
       }

@@ -38,6 +38,7 @@
 #include <chrono>
 #include <cstdio>
 #include <iostream>
+#include <numeric>
 
 namespace OpenMS
 {
@@ -55,9 +56,8 @@ namespace OpenMS
     return ces;
   }
 
-  std::vector<ScanCommand> Exploration::initiate(int msn_level, double precursor_mz,
-      double precursor_mass, int precursor_charge, double faims_cv,
-      ScanCommandQueue& queue)
+  std::vector<ScanCommand> Exploration::initiate(int msn_level, const PeakGroup& pg, int charge,
+      double faims_cv, ScanCommandQueue& queue)
   {
     std::vector<ScanCommand> commands;
 
@@ -67,18 +67,28 @@ namespace OpenMS
     std::vector<double> ces = buildCEVariants_(cfg.ce_min, cfg.ce_max, cfg.ce_step);
     if (ces.empty()) return commands;
 
+    // Compute precursor_mz from PeakGroup
+    auto [mz1, mz2] = pg.getMzRange(charge);
+    double precursor_mz = (mz1 + mz2) / 2.0;
+    double precursor_mass = pg.getMonoMass();
+    if (precursor_mass <= 0) precursor_mass = precursor_mz;  // defensive fallback
+
     ExplorationGroup group;
     group.group_id = next_group_id_++;
     group.msn_level = msn_level;
     group.exploration_metric = cfg.exploration;
     group.precursor_mz = precursor_mz;
     group.precursor_mass = precursor_mass;
-    group.precursor_charge = precursor_charge;
-    group.isolation_width = 2.0;
+    group.precursor_charge = charge;
+    group.precursor_pg = pg;
     group.faims_cv = faims_cv;
     group.start_ms = static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
+
+    // Build base ScanConfig from the level's primary scan config, then apply overrides
+    ScanConfig base_config = cfg.scans[0];
+    base_config.applyOverrides(cfg.overrides);
 
     for (int i = 0; i < static_cast<int>(ces.size()); ++i)
     {
@@ -87,16 +97,19 @@ namespace OpenMS
       v.collision_energy = ces[i];
       v.activation_type = cfg.exploration_activation;
 
-      ScanCommand cmd = queue.buildMS2(precursor_mz, precursor_charge, ces[i], cfg.exploration_activation);
+      ScanConfig variant_config = base_config;
+      variant_config.collision_energy = static_cast<int>(ces[i]);
+      variant_config.activation = cfg.exploration_activation;
+
+      ScanCommand cmd = queue.buildMS2(pg, charge, variant_config);
       cmd.priority = 0;
       cmd.faims_cv = faims_cv;
-      queue.applyOverrides(cmd, cfg.overrides);
 
       int id_int = cmd.scan_id;
       std::string id_str = ScanCommandQueue::encode(id_int);
       v.tracking_id = id_str;
       std::snprintf(cmd.scan_description, 16, "%sE%.1f@%d",
-                   id_str.c_str(), precursor_mass / 1000.0, precursor_charge);
+                   id_str.c_str(), precursor_mass / 1000.0, charge);
 
       group.variants.push_back(v);
       variant_tracking_map_[id_int] = {group.group_id, i};
@@ -191,10 +204,11 @@ namespace OpenMS
     const auto& level_config = config_.level(group.msn_level);
     if (!level_config.overrides.empty())
     {
-      ScanCommand prod_cmd = queue.buildMS2(
-          group.precursor_mz, group.precursor_charge,
-          group.variants[best_idx].collision_energy,
-          group.variants[best_idx].activation_type);
+      ScanConfig prod_config = level_config.scans[0];
+      prod_config.collision_energy = static_cast<int>(group.variants[best_idx].collision_energy);
+      prod_config.activation = group.variants[best_idx].activation_type;
+
+      ScanCommand prod_cmd = queue.buildMS2(group.precursor_pg, group.precursor_charge, prod_config);
       prod_cmd.faims_cv = group.faims_cv;
       prod_cmd.priority = 1;
 
@@ -228,28 +242,27 @@ namespace OpenMS
     const auto& next_cfg = config_.level(next_level);
     if (next_cfg.selection == SelectionMetric::None) return commands;
 
-    std::vector<std::pair<double, double>> targets;  // (mass, intensity)
-    for (Size i = 0; i < result.size(); ++i)
-      targets.push_back({result[i].getMonoMass(), static_cast<double>(result[i].getIntensity())});
-
-    std::sort(targets.begin(), targets.end(),
-              [](const auto& a, const auto& b){ return a.second > b.second; });
-    int num_targets = std::min(static_cast<int>(targets.size()), next_cfg.max_targets);
+    // Build index array sorted by intensity (descending)
+    std::vector<int> indices(result.size());
+    std::iota(indices.begin(), indices.end(), 0);
+    std::sort(indices.begin(), indices.end(),
+              [&result](int a, int b){ return result[a].getIntensity() > result[b].getIntensity(); });
+    int num_targets = std::min(static_cast<int>(indices.size()), next_cfg.max_targets);
 
     if (config_.hasExploration(next_level))
     {
       for (int ti = 0; ti < num_targets; ++ti)
       {
-        auto sub_cmds = initiate(next_level, targets[ti].first, 0.0, 0, faims_cv, queue);
+        auto sub_cmds = initiate(next_level, result[indices[ti]], 0, faims_cv, queue);
         commands.insert(commands.end(), sub_cmds.begin(), sub_cmds.end());
       }
     }
     else
     {
+      ScanConfig next_scan_config = next_cfg.scans.empty() ? ScanConfig{} : next_cfg.scans[0];
       for (int ti = 0; ti < num_targets; ++ti)
       {
-        ScanCommand cmd = queue.buildMS2(targets[ti].first, 0,
-            next_cfg.ce_min, next_cfg.exploration_activation);
+        ScanCommand cmd = queue.buildMS2(result[indices[ti]], 0, next_scan_config);
         cmd.msn_level = next_level;
         cmd.faims_cv = faims_cv;
         cmd.priority = 1;

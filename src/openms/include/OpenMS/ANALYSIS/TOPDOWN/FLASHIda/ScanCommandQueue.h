@@ -64,11 +64,8 @@ namespace OpenMS
 
     // --- Building ---
 
-    /// Build MS2 ScanCommand from a PeakGroup (isolation window + MS2 config)
-    ScanCommand buildMS2(const PeakGroup& pg, int charge, int hcd);
-
-    /// Build MS2 ScanCommand with explicit CE and activation (for exploration variants)
-    ScanCommand buildMS2(double precursor_mz, int charge, double ce, const std::string& activation);
+    /// Build MS2 ScanCommand from a PeakGroup + ScanConfig (unified factory)
+    ScanCommand buildMS2(const PeakGroup& pg, int charge, const ScanConfig& scan_config);
 
     /// Build MS3 ScanCommand from MS2 context + fragment target
     ScanCommand buildMS3(const ScanCommand& ms2_ctx, double frag_mz, int frag_charge, double iso_width,

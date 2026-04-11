@@ -297,7 +297,14 @@ namespace OpenMS
     void initiateExplorationForTest(int msn_level, double mz, double mass, int charge, double cv)
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      auto cmds = exploration_.initiate(msn_level, mz, mass, charge, cv, queue_);
+      // Build a synthetic PeakGroup with one LogMzPeak so getMzRange(charge) returns (mz, mz)
+      PeakGroup pg(charge, charge, true);
+      pg.setMonoisotopicMass(mass);
+      FLASHHelperClasses::LogMzPeak lp;
+      lp.mz = mz;
+      lp.abs_charge = charge;
+      pg.push_back(lp);
+      auto cmds = exploration_.initiate(msn_level, pg, charge, cv, queue_);
       for (auto& c : cmds) queue_.push(c);
     }
 
