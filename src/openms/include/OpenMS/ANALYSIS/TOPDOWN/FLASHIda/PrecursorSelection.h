@@ -123,11 +123,11 @@ namespace OpenMS
      * @param length number of peaks
      * @param rt retention time in seconds
      * @param ms_level MS level
-     * @param cv FAIMS CV string (may be nullptr)
+     * @param faims_cv FAIMS CV value (0.0 if FAIMS not enabled)
      * @return number of selected peak groups
      */
     int filterAndRank(const double* mzs, const double* ints, int length,
-                      double rt, int ms_level, const char* cv);
+                      double rt, int ms_level, double faims_cv);
 
     /// Access selected peak groups after filterAndRank (const)
     const DeconvolvedSpectrum& selectedPeakGroups() const { return selected_peak_groups_; }

@@ -59,10 +59,10 @@ namespace OpenMS
   }
 
   DeconvolvedSpectrum Deconvolution::deconvolveMS1(const double* mzs, const double* ints,
-                                                    int length, double rt, const char* cv)
+                                                    int length, double rt, double faims_cv)
   {
     auto spec = makeMSSpectrum_(mzs, ints, length, rt, 1, "ms1_spectrum");
-    if (cv != nullptr) { spec.setMetaValue("filter string", DataValue("cv=" + std::string(cv))); }
+    if (faims_cv != 0.0) { spec.setMetaValue("filter string", DataValue("cv=" + std::to_string(faims_cv))); }
 
     PeakGroup empty;
     fd_.performSpectrumDeconvolution(spec, 0, empty);

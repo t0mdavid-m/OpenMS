@@ -512,7 +512,7 @@ FLASHIda::FLASHIda(char* arg) :
       // MS1 path: deconvolve, score, filter, select top-N, push MS2 commands
       double parent_cv = config_.faims().enabled ? faims_cv : 0.0;
 
-      int n = selection_.filterAndRank(mzs, ints, length, rt_min, 1, nullptr);
+      int n = selection_.filterAndRank(mzs, ints, length, rt_min, 1, faims_cv);
       const auto& selected = selection_.selectedPeakGroups();
       const auto& sel_charges = selection_.triggerCharges();
       const auto& sel_hcds = selection_.triggerHcds();

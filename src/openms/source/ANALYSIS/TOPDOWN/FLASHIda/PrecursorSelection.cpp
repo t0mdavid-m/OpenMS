@@ -174,7 +174,7 @@ namespace OpenMS
   }
 
   int PrecursorSelection::filterAndRank(const double* mzs, const double* ints, int length,
-                                        double rt, int ms_level, const char* cv)
+                                        double rt, int ms_level, double faims_cv)
   {
     if (ms_level != 1)
     {
@@ -234,7 +234,7 @@ namespace OpenMS
     selected_peak_groups_.clear();
 
     // Deconvolve MS1 spectrum (result stored in deconv_.deconvolvedMS1())
-    deconv_.deconvolveMS1(mzs, ints, length, rt, cv);
+    deconv_.deconvolveMS1(mzs, ints, length, rt, faims_cv);
     // per spec deconvolution
     filterPeakGroupsUsingMassExclusion_(ms_level, rt);
     return (int)selected_peak_groups_.size();

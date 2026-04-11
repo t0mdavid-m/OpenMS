@@ -65,11 +65,11 @@ namespace OpenMS
      * @param ints intensities
      * @param length number of peaks
      * @param rt retention time in seconds
-     * @param cv FAIMS CV string (may be nullptr)
+     * @param faims_cv FAIMS CV value (0.0 if FAIMS not enabled)
      * @return deconvolved spectrum (also accessible via deconvolvedMS1())
      */
     DeconvolvedSpectrum deconvolveMS1(const double* mzs, const double* ints, int length,
-                                      double rt, const char* cv);
+                                      double rt, double faims_cv);
 
     /**
      * @brief Deconvolve an MS2 spectrum, store result, return peak-group count
