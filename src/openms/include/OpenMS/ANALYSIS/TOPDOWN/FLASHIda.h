@@ -232,8 +232,17 @@ namespace OpenMS
     /// Process MS2 scan: tracking resolution, deconv, routing
     int processMS2Path_(const double* mzs, const double* ints, int length, double rt_min, const char* scan_desc);
 
-    /// Mutex protecting processMS2Path_ and getNextScanCommand
-    mutable std::mutex mutex_;
+    /// Mutex protecting analysis state: deconv_, selection_, exploration_, faims_, quant_, fragments_.
+    /// Also protects logging streams: writeScanResultRow_/writeIDALogEntry_ are called with this lock
+    /// already held (from processScan). writeScanCommandRow_ acquires it internally (called from
+    /// getNextScanCommand which does NOT hold this lock).
+    mutable std::mutex analysis_mutex_;
+
+    /// Atomic flag: true when any exploration group is active (set by processScan, read by getNextScanCommand)
+    std::atomic<bool> exploration_active_{false};
+
+    /// Atomic FAIMS CV: current CV value (set by processScan after advanceToNextCV, read by getNextScanCommand)
+    std::atomic<double> current_faims_cv_{0.0};
 
     FAIMS faims_;   ///< FAIMS CV cycling state machine
 
@@ -270,14 +279,14 @@ namespace OpenMS
     /// Test-only: get number of active exploration groups (delegates to exploration_)
     int getActiveExplorationGroupCountForTest() const
     {
-      std::lock_guard<std::mutex> lock(mutex_);
+      std::lock_guard<std::mutex> lock(analysis_mutex_);
       return exploration_.activeGroupCount();
     }
 
     /// Test-only: get exploration group by ID (delegates to exploration_)
     Exploration::ExplorationGroup getExplorationGroupForTest(int group_id) const
     {
-      std::lock_guard<std::mutex> lock(mutex_);
+      std::lock_guard<std::mutex> lock(analysis_mutex_);
       return exploration_.getGroup(group_id);
     }
 
@@ -296,7 +305,7 @@ namespace OpenMS
     /// Test-only: directly call exploration_.initiate() and push results
     void initiateExplorationForTest(int msn_level, double mz, double mass, int charge, double cv)
     {
-      std::lock_guard<std::mutex> lock(mutex_);
+      std::lock_guard<std::mutex> lock(analysis_mutex_);
       auto cmds = exploration_.initiate(msn_level, mz, mass, charge, cv, queue_);
       for (auto& c : cmds) queue_.push(c);
     }
@@ -307,7 +316,7 @@ namespace OpenMS
     {
       // feedResult takes a tracking_id; for backward compat we look up
       // the variant's tracking_id from the group.
-      std::lock_guard<std::mutex> lock(mutex_);
+      std::lock_guard<std::mutex> lock(analysis_mutex_);
       auto group = exploration_.getGroup(group_id);
       if (variant_index < 0 || variant_index >= static_cast<int>(group.variants.size())) return;
       int tracking_id = queue_.decode(group.variants[variant_index].tracking_id);
