@@ -52,9 +52,15 @@ namespace OpenMS
   /**
    * @brief Manages scan command building, priority queuing, and tracking ID encoding for FLASHIda.
    *
-   * Thread-safe: all queue operations and tracking ID generation are protected by an internal mutex.
-   * Building methods (buildMS2, buildMS3, etc.) produce ScanCommand values and register them
-   * in the pending scan map. The caller (orchestrator) pushes built commands into the queue.
+   * Fully thread-safe: every public method that touches mutable state acquires queue_mutex_ internally.
+   * Callers never need to hold an external lock. Building methods (buildMS2, buildMS3, etc.) produce
+   * ScanCommand values, register them in the pending scan map, and return by value.
+   *
+   * Methods that do NOT acquire queue_mutex_ (safe without locking):
+   * - makeMS1(), makeAGC(): const, only read config_ (immutable after construction)
+   * - encode(): static pure function
+   * - decode(): reads static const tracking_alphabet_ only
+   * - applyOverrides(): operates on caller's ScanCommand, no queue state access
    */
   class OPENMS_DLLAPI ScanCommandQueue
   {

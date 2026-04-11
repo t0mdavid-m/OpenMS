@@ -100,6 +100,7 @@ namespace OpenMS
 
   bool ScanCommandQueue::needsAGC() const
   {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
     auto now = std::chrono::steady_clock::now();
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_agc_time_).count();
     return static_cast<uint64_t>(elapsed) > config_.scheduling().agc_interval_ms;
@@ -107,6 +108,7 @@ namespace OpenMS
 
   uint64_t ScanCommandQueue::msSinceLastMS1() const
   {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
     auto now = std::chrono::steady_clock::now();
     return static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(now - last_ms1_time_).count());
@@ -114,11 +116,13 @@ namespace OpenMS
 
   void ScanCommandQueue::recordMS1Time()
   {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
     last_ms1_time_ = std::chrono::steady_clock::now();
   }
 
   void ScanCommandQueue::recordAGCTime()
   {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
     last_agc_time_ = std::chrono::steady_clock::now();
   }
 
@@ -169,6 +173,7 @@ namespace OpenMS
 
   ScanCommand ScanCommandQueue::buildMS2(const PeakGroup& pg, int charge, int hcd)
   {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
     ScanCommand cmd{};
     int id = nextTrackingIdInt_();
     cmd.scan_id = id;
@@ -263,6 +268,7 @@ namespace OpenMS
   ScanCommand ScanCommandQueue::buildMS2(double precursor_mz, int charge, double ce,
                                           const std::string& activation)
   {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
     ScanCommand cmd{};
     cmd.msn_level = 2;
     cmd.priority = 1;
@@ -299,6 +305,7 @@ namespace OpenMS
   ScanCommand ScanCommandQueue::buildMS3(const ScanCommand& ms2_ctx, double frag_mz, int frag_charge, double iso_width,
                                           char ion_type, int frag_index)
   {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
     ScanCommand cmd{};
     int id = nextTrackingIdInt_();
     cmd.scan_id = id;
@@ -354,6 +361,7 @@ namespace OpenMS
 
   ScanCommand ScanCommandQueue::buildFollowUpMS2(const ScanCommand& ctx)
   {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
     if (config_.level(2).scans.size() < 2)
       return ctx;  // no second MS2 config available
 
@@ -389,6 +397,7 @@ namespace OpenMS
 
   ScanCommand ScanCommandQueue::buildConditionalFollowUp(const ScanCommand& ctx)
   {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
     if (config_.level(2).scans.size() < 2)
       return ctx;  // no second MS2 config available
 
@@ -426,12 +435,14 @@ namespace OpenMS
 
   void ScanCommandQueue::push(ScanCommand cmd)
   {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
     int p = std::clamp(cmd.priority, 0, 3);
     queues_[p].push_back(cmd);
   }
 
   std::optional<ScanCommand> ScanCommandQueue::dequeue()
   {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
     for (int p = 0; p < 4; ++p)
     {
       if (!queues_[p].empty())
@@ -446,11 +457,13 @@ namespace OpenMS
 
   void ScanCommandQueue::registerPending(int id, ScanCommand cmd)
   {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
     pending_scan_map_[id] = cmd;
   }
 
   std::optional<ScanCommand> ScanCommandQueue::resolvePending(int id)
   {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
     auto it = pending_scan_map_.find(id);
     if (it == pending_scan_map_.end())
       return std::nullopt;
@@ -461,9 +474,11 @@ namespace OpenMS
 
   void ScanCommandQueue::cleanupExpired()
   {
+    // config_ is const ref, immutable after construction — no lock needed for this check
     if (!config_.scheduling().timeout_enabled)
       return;
 
+    std::lock_guard<std::mutex> lock(queue_mutex_);
     auto now_ms = static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
