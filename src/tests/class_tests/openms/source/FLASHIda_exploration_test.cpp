@@ -186,7 +186,7 @@ namespace
       "ptm_list": ""
     },
     "ms3": {
-      "protein_sequence": "MKWVTFISLLLLFSSAYSRGVFRR"
+      "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
     },
     "conditional_ms2": false,
     "selection_strategy": {
@@ -281,7 +281,7 @@ namespace
       "ptm_list": ""
     },
     "ms3": {
-      "protein_sequence": "MKWVTFISLLLLFSSAYSRGVFRR"
+      "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
     },
     "conditional_ms2": false,
     "selection_strategy": {
@@ -640,6 +640,7 @@ namespace
 
   const std::string ms1_tsv_path = "../../FlashIDA/test-data/spectra/ms1_standard.txt";
   const std::string ms2_tsv_path = "../../FlashIDA/test-data/spectra/ms2_hcd_fragment.txt";
+  const std::string ms2_cytc_path = "../../FlashIDA/test-data/spectra/ms2_cytc_scan149.txt";
 } // anonymous namespace
 
 
@@ -819,7 +820,7 @@ END_SECTION
 START_SECTION(ms3_exploration_creates_child_groups)
 {
   // Load real MS2 spectrum data for fragment matching
-  auto ms2_scans = loadTsvScans(ms2_tsv_path);
+  auto ms2_scans = loadTsvScans(ms2_cytc_path);
   ABORT_IF(ms2_scans.empty());
   const auto& ms2_data = ms2_scans[0];
 

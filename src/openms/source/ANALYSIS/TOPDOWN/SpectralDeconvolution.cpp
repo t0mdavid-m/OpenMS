@@ -992,11 +992,12 @@ namespace OpenMS
   void SpectralDeconvolution::scoreAndFilterPeakGroups_()
   {
     double tol = tolerance_[ms_level_ - 1];
-    auto selected = boost::dynamic_bitset<>(deconvolved_spectrum_.size());
+    const int num_peak_groups = static_cast<int>(deconvolved_spectrum_.size());
+    auto selected = boost::dynamic_bitset<>(num_peak_groups);
     double snr_threshold = min_snr_[ms_level_ - 1];
 
-  #pragma omp parallel for default(none) shared(tol, selected, snr_threshold, std::cout)
-    for (int i = 0; i < (int)deconvolved_spectrum_.size(); i++)
+  #pragma omp parallel for default(none) shared(tol, selected, snr_threshold, num_peak_groups, std::cout)
+    for (int i = 0; i < num_peak_groups; i++)
     {
       int offset = 0;
       auto& peak_group = deconvolved_spectrum_[i];
@@ -1099,11 +1100,12 @@ namespace OpenMS
     removeChargeErrorPeakGroups_(deconvolved_spectrum_, target_decoy_type_);
 
     // final harmonics removal
-    selected = boost::dynamic_bitset<>(deconvolved_spectrum_.size());
+    const int num_harmonics = static_cast<int>(deconvolved_spectrum_.size());
+    selected = boost::dynamic_bitset<>(num_harmonics);
     filtered_peak_groups = std::vector<PeakGroup>();
 
-  #pragma omp parallel for default(none) shared(tol, selected, harmonic_charges_)
-    for (int i = 0; i < (int)deconvolved_spectrum_.size(); i++)
+  #pragma omp parallel for default(none) shared(tol, selected, harmonic_charges_, num_harmonics)
+    for (int i = 0; i < num_harmonics; i++)
     {
       const auto& peak_group = deconvolved_spectrum_[i];
       bool pass = true;

@@ -456,6 +456,7 @@ set(analysis_executables_list
   FLASHIda_exploration_test
   FLASHIda_LegacyConfig_test
   FLASHIda_Logging_test
+  FragmentAnalysis_test
   ScanCommandQueue_Concurrent_test
   FalseDiscoveryRate_test
   FeatureDeconvolution_test
