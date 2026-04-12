@@ -9,6 +9,7 @@
 #include <OpenMS/CONCEPT/ClassTest.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 
 #include <atomic>
 #include <set>
@@ -155,10 +156,19 @@ START_SECTION(concurrent_build_resolve)
   const int N = 100;
 
   // Phase 1: build all commands and register in pending map (single-threaded)
+  ScanConfig sc;
+  sc.collision_energy = 29;
+  sc.activation = "HCD";
   std::vector<int> built_ids(N);
   for (int i = 0; i < N; ++i)
   {
-    ScanCommand cmd = queue.buildMS2(500.0 + i, 10, 29.0, "HCD");
+    PeakGroup pg(10, 10, true);
+    pg.setMonoisotopicMass(500.0 + i);
+    FLASHHelperClasses::LogMzPeak lp;
+    lp.mz = 500.0 + i;
+    lp.abs_charge = 10;
+    pg.push_back(lp);
+    ScanCommand cmd = queue.buildMS2(pg, 10, sc);
     built_ids[i] = cmd.scan_id;
     queue.registerPending(cmd.scan_id, cmd);
   }

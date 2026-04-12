@@ -494,6 +494,18 @@ namespace
     }
   })";
 
+  // Helper: create a synthetic PeakGroup with a single peak at the given mz/mass/charge.
+  PeakGroup makeSyntheticPeakGroup(double mz, double mass, int charge)
+  {
+    PeakGroup pg(charge, charge, true);
+    pg.setMonoisotopicMass(mass);
+    FLASHHelperClasses::LogMzPeak lp;
+    lp.mz = mz;
+    lp.abs_charge = charge;
+    pg.push_back(lp);
+    return pg;
+  }
+
   // Helper: create synthetic DeconvolvedSpectrum with N peak groups.
   // Score = spec.size() (mass_count metric counts peak groups).
   DeconvolvedSpectrum makeSyntheticDeconv(int scan_number, int num_peak_groups)
@@ -571,7 +583,8 @@ START_SECTION(exploration_group_creation)
   ScanCommandQueue queue(cfg);
   Exploration exploration(cfg);
 
-  auto cmds = exploration.initiate(2, 800.0, 2400.0, 3, 0.0, queue);
+  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
 
   TEST_EQUAL(exploration.activeGroupCount(), 1)
 
@@ -608,7 +621,8 @@ START_SECTION(exploration_variants_priority_0)
   ScanCommandQueue queue(cfg);
   Exploration exploration(cfg);
 
-  auto cmds = exploration.initiate(2, 800.0, 2400.0, 3, 0.0, queue);
+  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
 
   TEST_EQUAL(static_cast<int>(cmds.size()), 5)
   for (int i = 0; i < 5; ++i)
@@ -629,7 +643,8 @@ START_SECTION(winner_selection_by_score)
   ScanCommandQueue queue(cfg);
   Exploration exploration(cfg);
 
-  auto cmds = exploration.initiate(2, 800.0, 2400.0, 3, 0.0, queue);
+  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
   TEST_EQUAL(static_cast<int>(cmds.size()), 5)
 
   std::vector<double> scores = {1.0, 3.0, 2.0, 5.0, 0.0};
@@ -730,7 +745,8 @@ START_SECTION(ms3_exploration_creates_child_groups)
   ScanCommandQueue queue(cfg);
   Exploration exploration(cfg);
 
-  auto cmds = exploration.initiate(2, 800.0, 2400.0, 3, 0.0, queue);
+  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
   TEST_EQUAL(static_cast<int>(cmds.size()), 5)
 
   for (int i = 0; i < 5; ++i)
@@ -808,7 +824,8 @@ START_SECTION(optimization_metadata_populated)
   ScanCommandQueue queue(cfg);
   Exploration exploration(cfg);
 
-  auto cmds = exploration.initiate(2, 800.0, 2400.0, 3, 0.0, queue);
+  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
 
   DeconvolvedSpectrum ds = makeSyntheticDeconv(1, 3);
   int tracking_id = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
