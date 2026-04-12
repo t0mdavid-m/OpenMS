@@ -128,7 +128,7 @@ namespace OpenMS
     targeting_.max_total_ptm_count = tagging.value("max_ptm_count", 3);
     targeting_.max_flanking_mass_diff = tagging.value("max_flanking_mass_diff", 50000.0);
 
-    if (tagging.contains("follow_up_scan"))
+    if (tagging.contains("follow_up_scan") && tagging["follow_up_scan"].is_object())
     {
       auto fus = tagging["follow_up_scan"];
       targeting_.tagging_follow_up_scan.analyzer = fus.value("analyzer", "Orbitrap");
@@ -177,7 +177,7 @@ namespace OpenMS
     quant_.reporter_mz_tol = quant.value("reporter_mz_tol", 0.002);
     quant_.fold_change_threshold = quant.value("fold_change_threshold", 1.4);
 
-    if (quant.contains("follow_up_scan"))
+    if (quant.contains("follow_up_scan") && quant["follow_up_scan"].is_object())
     {
       auto fus = quant["follow_up_scan"];
       quant_.follow_up_scan.analyzer = fus.value("analyzer", "Orbitrap");
