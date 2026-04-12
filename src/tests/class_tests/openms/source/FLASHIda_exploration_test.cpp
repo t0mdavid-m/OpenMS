@@ -24,7 +24,11 @@ using namespace OpenMS;
 
 namespace
 {
+  // Horse heart cytochrome c sequence (104 AA) — matches ms2_hcd_fragment.txt test spectrum
+  const char* cytochrome_c_sequence = "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE";
+
   // Base JSON config with MS2 exploration enabled (mass_count, CE 20-40 step 5)
+  // Uses cytochrome c sequence to match ms2_hcd_fragment.txt test spectrum
   const char* exploration_config = R"({
     "deconvolution": {
       "score_threshold": 0.0,
@@ -89,13 +93,13 @@ namespace
       "ptm_list": ""
     },
     "ms3": {
-      "protein_sequence": ""
+      "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
     },
     "conditional_ms2": false,
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 3 },
       "ms2": {
-        "selection": "none",
+        "selection": "intensity",
         "max_targets": 3,
         "exploration": {
           "metric": "mass_count",
@@ -814,6 +818,11 @@ END_SECTION
 
 START_SECTION(ms3_exploration_creates_child_groups)
 {
+  // Load real MS2 spectrum data for fragment matching
+  auto ms2_scans = loadTsvScans(ms2_tsv_path);
+  ABORT_IF(ms2_scans.empty());
+  const auto& ms2_data = ms2_scans[0];
+
   Config cfg{std::string(ms3_exploration_config)};
   ScanCommandQueue queue(cfg);
   Deconvolution deconv(cfg);
@@ -824,12 +833,13 @@ START_SECTION(ms3_exploration_creates_child_groups)
   auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
   TEST_EQUAL(static_cast<int>(cmds.size()), 5)
 
+  // Feed real MS2 spectrum data for all variants — the winner's deconvolved result
+  // will be fragment-matched against cytochrome c in initiateNextLevel
   for (int i = 0; i < 5; ++i)
   {
-    int count = (i == 2) ? 5 : 1;
-    DeconvolvedSpectrum ds = makeSyntheticDeconv(i + 1, count);
     int tracking_id = queue.decode(std::string(cmds[i].scan_description).substr(0, 3));
-    exploration.feedResultForTest(tracking_id, ds, static_cast<double>(i), queue);
+    exploration.feedResult(tracking_id, ms2_data.mzs.data(), ms2_data.ints.data(),
+                           static_cast<int>(ms2_data.mzs.size()), ms2_data.rt, queue);
   }
 
   int ms3_group_count = exploration.activeGroupCount();
