@@ -632,50 +632,6 @@ FLASHIda::FLASHIda(char* arg) :
     }
   }
 
-  std::vector<FLASHIda::MS3Target> FLASHIda::selectMS3Targets_()
-  {
-    std::vector<MS3Target> targets;
-    if (config_.targeting().ms3_mode == 0 || !deconv_.hasStoredMS2())
-      return targets;
-
-    const int n = config_.targeting().max_ms3_per_ms2;
-    std::vector<double> masses(n), qscores(n), wstarts(n), wends(n);
-    std::vector<int> charges(n);
-    std::vector<char> ion_types(n, '\0');
-    std::vector<int> frag_indices(n, 0);
-
-    int count = 0;
-
-    if (config_.targeting().ms3_mode == 1 || config_.targeting().ms3_mode == 2)
-    {
-      // Mode 1 (SourceCID) and Mode 2 (SPS): Use getBestMS2Masses
-      count = fragments_.getBestMS2Masses(n, masses.data(), qscores.data(), charges.data(),
-                                          wstarts.data(), wends.data(), deconv_.storedMS2());
-    }
-    else if (config_.targeting().ms3_mode == 3 && !config_.targeting().protein_sequence.empty())
-    {
-      // Mode 3 (HCD-triggered): Use getTopFragmentMatches
-      count = fragments_.getTopFragmentMatches(config_.targeting().protein_sequence, n, masses.data(), qscores.data(),
-                                               charges.data(), wstarts.data(), wends.data(),
-                                               ion_types.data(), frag_indices.data(), deconv_.storedMS2(), "HCD");
-    }
-    else if (config_.targeting().ms3_mode == 4 && !config_.targeting().protein_sequence.empty())
-    {
-      // Mode 4 (EThcD-triggered): Use getTerminalFragmentIons
-      count = fragments_.getTerminalFragmentIons(config_.targeting().protein_sequence, n, masses.data(), qscores.data(),
-                                                  charges.data(), wstarts.data(), wends.data(),
-                                                  ion_types.data(), frag_indices.data(), deconv_.storedMS2(), "EThcD");
-    }
-
-    for (int i = 0; i < count; i++)
-    {
-      double center_mz = (wstarts[i] + wends[i]) / 2.0;
-      double iso_width = wends[i] - wstarts[i];
-      targets.push_back({center_mz, charges[i], iso_width, ion_types[i], frag_indices[i]});
-    }
-    return targets;
-  }
-
   int FLASHIda::processMS2Path_(const double* mzs, const double* ints, int length,
                                  double rt_min, const char* scan_desc)
   {
@@ -761,39 +717,15 @@ FLASHIda::FLASHIda(char* arg) :
       commands_pushed++;
     }
 
-    // Step 5: MS3 targeting -- uses config levels when exploration is configured,
-    // falls back to legacy MS3 targeting path for standard MS3 targeting
-    if (config_.hasExploration(3))
+    // Step 5: MS3 targeting via selection_strategy
+    if (config_.level(2).selection != SelectionMetric::None)
     {
-      // MS3 exploration: create exploration groups for top fragments
       auto cmds = exploration_.initiateNextLevel(2, deconv_.storedMS2(), ctx.faims_cv, queue_);
       for (auto& c : cmds)
       {
         queue_.push(c);
         child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
-      }
-    }
-    else if (config_.targeting().ms3_enabled && config_.targeting().ms3_mode > 0)
-    {
-      // Legacy MS3 targeting (non-exploration, requires explicit ms3.enabled=true)
-      auto ms3_targets = selectMS3Targets_();
-      for (const auto& t : ms3_targets)
-      {
-        ScanCommand ms3_cmd = queue_.buildMS3(ctx, t.center_mz, t.charge, t.iso_width,
-                                               t.ion_type, t.frag_index);
-        queue_.push(ms3_cmd);
-        child_ids.push_back(ScanCommandQueue::encode(ms3_cmd.scan_id));
         commands_pushed++;
-      }
-    }
-    else if (config_.level(3).selection != SelectionMetric::None && !config_.targeting().ms3_enabled)
-    {
-      // New selection_strategy MS3 targeting (no exploration, not legacy)
-      auto cmds = exploration_.initiateNextLevel(2, deconv_.storedMS2(), ctx.faims_cv, queue_);
-      for (auto& c : cmds)
-      {
-        queue_.push(c);
-        child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
       }
     }
 
