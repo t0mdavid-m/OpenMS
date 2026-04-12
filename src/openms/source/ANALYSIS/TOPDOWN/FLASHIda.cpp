@@ -57,7 +57,7 @@ FLASHIda::FLASHIda(char* arg) :
     selection_(config_, deconv_),
     quant_(config_),
     faims_(config_),
-    exploration_(config_, deconv_)
+    exploration_(config_, deconv_, fragments_)
 {
   #ifdef _OPENMP
     omp_set_num_threads(4);
@@ -95,7 +95,8 @@ FLASHIda::FLASHIda(char* arg) :
       {
         results_tsv_stream_ << "tracking_id\tresolve_ts\tduration_ms\trt\t"
                             << "mass_count\tcommands_pushed\tchild_ids\t"
-                            << "tag_count\tmatched_protein\tproteoform_sequence\n";
+                            << "tag_count\tmatched_protein\tproteoform_sequence\t"
+                            << "tic_coverage\tfragment_count\n";
         results_tsv_stream_.flush();
       }
     }
@@ -307,7 +308,8 @@ FLASHIda::FLASHIda(char* arg) :
                                       const std::vector<std::string>& child_ids,
                                       int tag_count, const std::string& matched_protein,
                                       const std::string& proteoform_sequence,
-                                      uint64_t enqueue_ts)
+                                      uint64_t enqueue_ts,
+                                      float tic_coverage, int fragment_count)
   {
     if (!results_tsv_stream_.is_open()) return;
 
@@ -332,7 +334,9 @@ FLASHIda::FLASHIda(char* arg) :
                         << child_str << "\t"
                         << tag_count << "\t"
                         << matched_protein << "\t"
-                        << proteoform_sequence << "\n";
+                        << proteoform_sequence << "\t"
+                        << tic_coverage << "\t"
+                        << fragment_count << "\n";
     results_tsv_stream_.flush();
   }
 
@@ -690,6 +694,11 @@ FLASHIda::FLASHIda(char* arg) :
     {
       auto cmds = exploration_.feedResult(tracking_id, mzs, ints, length, rt_min, queue_);
       for (auto& c : cmds) queue_.push(c);
+
+      int expl_mass_count = deconv_.hasStoredMS2() ? static_cast<int>(deconv_.storedMS2().size()) : 0;
+      writeScanResultRow_(id_str, rt_min, expl_mass_count, static_cast<int>(cmds.size()),
+                          {}, 0, "", "", 0);
+
       return commands_pushed;
     }
 

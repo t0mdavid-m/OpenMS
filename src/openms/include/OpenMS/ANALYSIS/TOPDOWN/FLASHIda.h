@@ -270,7 +270,8 @@ namespace OpenMS
                              const std::vector<std::string>& child_ids,
                              int tag_count, const std::string& matched_protein,
                              const std::string& proteoform_sequence,
-                             uint64_t enqueue_ts);
+                             uint64_t enqueue_ts,
+                             float tic_coverage = 0.0f, int fragment_count = 0);
 
     /// Derive scan_type string from scan_description
     static std::string scanTypeFromDescription_(const ScanCommand& cmd);
