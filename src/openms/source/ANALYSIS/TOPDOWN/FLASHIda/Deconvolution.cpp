@@ -70,7 +70,7 @@ namespace OpenMS
     return deconvolved_spectrum_;
   }
 
-  int Deconvolution::deconvolveMS2(const double* mzs, const double* ints, int length,
+  int Deconvolution::deconvolveMSn(const double* mzs, const double* ints, int length,
                                     double rt, double precursor_mass, int precursor_charge)
   {
     // Clear previous state
@@ -136,7 +136,7 @@ namespace OpenMS
     {
       return 0;
     }
-    return deconvolveMS2(mzs.data(), ints.data(), static_cast<int>(mzs.size()),
+    return deconvolveMSn(mzs.data(), ints.data(), static_cast<int>(mzs.size()),
                          rt, precursor_mass, precursor_charge);
   }
 

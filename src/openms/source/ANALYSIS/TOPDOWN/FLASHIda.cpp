@@ -513,7 +513,7 @@ FLASHIda::FLASHIda(char* arg) :
         return 0;
 
       // MS1 path: deconvolve, score, filter, select top-N, push MS2 commands
-      double parent_cv = config_.faims().enabled ? faims_cv : 0.0;
+      double parent_cv = faims_cv;
 
       int n = selection_.filterAndRank(mzs, ints, length, rt_min, 1, faims_cv);
       const auto& selected = selection_.selectedPeakGroups();
@@ -618,7 +618,7 @@ FLASHIda::FLASHIda(char* arg) :
       int ms3_mass_count = 0;
       if (mzs != nullptr && ints != nullptr && length > 0)
       {
-        deconv_.deconvolveMS2(mzs, ints, length, rt_min, 0.0, 0);
+        deconv_.deconvolveMSn(mzs, ints, length, rt_min, 0.0, 0);
         ms3_mass_count = deconv_.hasStoredMS2() ? static_cast<int>(deconv_.storedMS2().size()) : 0;
       }
 
@@ -692,7 +692,7 @@ FLASHIda::FLASHIda(char* arg) :
       DeconvolvedSpectrum ms2_deconv(tracking_id);
       if (mzs != nullptr && ints != nullptr && length > 0)
       {
-        deconv_.deconvolveMS2(mzs, ints, length, rt_min, 0.0, 0);
+        deconv_.deconvolveMSn(mzs, ints, length, rt_min, 0.0, 0);
         ms2_deconv = deconv_.storedMS2();
       }
 
@@ -728,7 +728,7 @@ FLASHIda::FLASHIda(char* arg) :
                        - precursor_charge * FLASHHelperClasses::getChargeMass(true);
     }
 
-    deconv_.deconvolveMS2(mzs, ints, length, rt_min, precursor_mass, precursor_charge);
+    deconv_.deconvolveMSn(mzs, ints, length, rt_min, precursor_mass, precursor_charge);
 
     // Step 4: Route by mode
     // Tag-based targeting

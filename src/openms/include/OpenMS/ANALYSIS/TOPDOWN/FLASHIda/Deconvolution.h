@@ -72,7 +72,7 @@ namespace OpenMS
                                       double rt, double faims_cv);
 
     /**
-     * @brief Deconvolve an MS2 spectrum, store result, return peak-group count
+     * @brief Deconvolve an MSn (n>1) spectrum, store result, return peak-group count
      * @param mzs m/z values
      * @param ints intensities
      * @param length number of peaks
@@ -81,7 +81,7 @@ namespace OpenMS
      * @param precursor_charge precursor charge (0 means no precursor)
      * @return number of peak groups found
      */
-    int deconvolveMS2(const double* mzs, const double* ints, int length,
+    int deconvolveMSn(const double* mzs, const double* ints, int length,
                       double rt, double precursor_mass, int precursor_charge);
 
     /**

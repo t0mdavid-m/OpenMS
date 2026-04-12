@@ -903,7 +903,7 @@ namespace OpenMS
       return false;
     }
 
-    // Require deconvolveMS2() to be called first
+    // Require deconvolveMSn() to be called first
     if (!deconv_.hasStoredMS2())
     {
       return false;

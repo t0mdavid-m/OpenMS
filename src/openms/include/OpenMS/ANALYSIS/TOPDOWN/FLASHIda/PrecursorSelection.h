@@ -157,7 +157,7 @@ namespace OpenMS
      * @brief Process stored MS2 deconvolution for protein family detection and inclusion list expansion
      *
      * Performs real-time tag-based targeting:
-     * 1. Uses stored MS2 deconvolution results (requires deconvolveMS2() first)
+     * 1. Uses stored MS2 deconvolution results (requires deconvolveMSn() first)
      * 2. Extracts sequence tags (minimum length 3)
      * 3. Matches tags against the target protein database
      * 4. If match found: Expands target masses using PTM combinations from precursor mass
