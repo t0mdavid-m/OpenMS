@@ -65,6 +65,10 @@ FLASHIda::FLASHIda(char* arg) :
 
     engine_start_time_ = std::chrono::steady_clock::now();
 
+    // Initialize FAIMS CV atomic for getNextScanCommand reads.
+    // relaxed is safe: no other thread can observe this object before construction completes.
+    current_faims_cv_.store(faims_.isEnabled() ? faims_.currentCV() : 0.0, std::memory_order_relaxed);
+
     const auto& rt_cfg = config_.runtime();
     if (!rt_cfg.ida_log_path.empty())
     {
@@ -234,6 +238,7 @@ FLASHIda::FLASHIda(char* arg) :
 
   void FLASHIda::writeScanCommandRow_(const ScanCommand& cmd)
   {
+    std::lock_guard<std::mutex> lock(analysis_mutex_);
     if (!commands_tsv_stream_.is_open()) return;
 
     std::string id_str = ScanCommandQueue::encode(cmd.scan_id);
@@ -499,7 +504,7 @@ FLASHIda::FLASHIda(char* arg) :
                              double rt_min, int ms_level, const char* scan_description,
                              double faims_cv)
   {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> lock(analysis_mutex_);
 
     if (ms_level == 1)
     {
@@ -585,6 +590,10 @@ FLASHIda::FLASHIda(char* arg) :
         queue_.push(ms1);
         std::cout << "[TRACK-CREATE] id=" << id_str << " ms_level=1 type=cv_transition cv=" << next_cv << std::endl;
       }
+
+      // Update atomics for lock-free reads by getNextScanCommand
+      exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);
+      current_faims_cv_.store(faims_.isEnabled() ? faims_.currentCV() : 0.0, std::memory_order_release);
 
       return commands_pushed;
     }
@@ -798,18 +807,22 @@ FLASHIda::FLASHIda(char* arg) :
               << " commands=" << commands_pushed
               << std::endl;
 
+    // Update atomic for lock-free reads by getNextScanCommand
+    exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);
+
     return commands_pushed;
   }
 
   int FLASHIda::getNextScanCommand(ScanCommand& out)
   {
-    std::lock_guard<std::mutex> lock(mutex_);
+    // No analysis_mutex_ acquired — queue methods lock internally, exploration/FAIMS via atomics
+    double faims_cv = faims_.isEnabled() ? current_faims_cv_.load(std::memory_order_acquire) : 0.0;
 
     // Step 1: AGC scan if needed
     if (queue_.needsAGC())
     {
       out = queue_.makeAGC();
-      out.faims_cv = faims_.isEnabled() ? faims_.currentCV() : 0.0;
+      out.faims_cv = faims_cv;
       out.scan_id = queue_.nextTrackingId();
       queue_.recordAGCTime();
 
@@ -824,12 +837,11 @@ FLASHIda::FLASHIda(char* arg) :
 
     // Step 2: Cycle time -- force MS1 if too long since last survey scan
     // Suppressed while any exploration group is active
-    bool exploration_active = exploration_.activeGroupCount() > 0;
-    if (config_.scheduling().cycle_time_enabled && !exploration_active
+    if (config_.scheduling().cycle_time_enabled && !exploration_active_.load(std::memory_order_acquire)
         && queue_.msSinceLastMS1() > static_cast<uint64_t>(config_.scheduling().cycle_time_ms))
     {
       out = queue_.makeMS1();
-      out.faims_cv = faims_.isEnabled() ? faims_.currentCV() : 0.0;
+      out.faims_cv = faims_cv;
       out.scan_id = queue_.nextTrackingId();
       queue_.recordMS1Time();
 
@@ -862,7 +874,7 @@ FLASHIda::FLASHIda(char* arg) :
     {
       // 5a: AGC
       ScanCommand agc_cmd = queue_.makeAGC();
-      agc_cmd.faims_cv = faims_.isEnabled() ? faims_.currentCV() : 0.0;
+      agc_cmd.faims_cv = faims_cv;
       agc_cmd.scan_id = queue_.nextTrackingId();
       queue_.recordAGCTime();
 
@@ -873,7 +885,7 @@ FLASHIda::FLASHIda(char* arg) :
 
       // 5b: MS1 -- override priority to 0 (makeMS1 defaults to 3)
       ScanCommand ms1_cmd = queue_.makeMS1();
-      ms1_cmd.faims_cv = faims_.isEnabled() ? faims_.currentCV() : 0.0;
+      ms1_cmd.faims_cv = faims_cv;
       ms1_cmd.scan_id = queue_.nextTrackingId();
       ms1_cmd.priority = 0;
 
