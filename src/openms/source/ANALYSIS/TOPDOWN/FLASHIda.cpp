@@ -603,7 +603,115 @@ FLASHIda::FLASHIda(char* arg) :
     }
     else if (ms_level == 2)
     {
-      return processMS2Path_(mzs, ints, length, rt_min, scan_description);
+      int commands_pushed = 0;
+
+      // Step 1: Decode tracking ID from scan_description -- fixed position chars 0-2
+      std::string desc_str = scan_description ? scan_description : "";
+      if (desc_str.size() < 3)
+        return 0;
+
+      std::string id_str = desc_str.substr(0, 3);
+      int tracking_id = queue_.decode(id_str);
+
+      // Check if this is an exploration variant (before pending scan lookup)
+      if (exploration_.isExplorationVariant(tracking_id))
+      {
+        auto cmds = exploration_.feedResult(tracking_id, mzs, ints, length, rt_min, queue_);
+        for (auto& c : cmds) queue_.push(c);
+
+        int expl_mass_count = deconv_.hasStoredMS2() ? static_cast<int>(deconv_.storedMS2().size()) : 0;
+        writeScanResultRow_(id_str, rt_min, expl_mass_count, static_cast<int>(cmds.size()),
+                            {}, 0, "", "", 0);
+
+        return commands_pushed;
+      }
+
+      // Step 2: Peek enqueue timestamp before resolving (resolve removes from pending map)
+      uint64_t enqueue_ts = 0;
+      {
+        auto peeked = queue_.peekPending(tracking_id);
+        if (peeked.has_value())
+          enqueue_ts = peeked->enqueue_timestamp_ms;
+      }
+
+      auto resolved = queue_.resolvePending(tracking_id);
+      if (!resolved.has_value())
+      {
+        std::cout << "[TRACK-RESOLVE] id=" << id_str << " status=not_found" << std::endl;
+        return 0;
+      }
+      ScanCommand ctx = resolved.value();
+      std::vector<std::string> child_ids;
+
+      // Step 3: Deconvolve MS2 with precursor context
+      double precursor_mass = 0;
+      int precursor_charge = 0;
+      if (ctx.num_stages > 0)
+      {
+        precursor_charge = ctx.stages[0].charge_state;
+        precursor_mass = ctx.stages[0].precursor_mz * precursor_charge
+                         - precursor_charge * FLASHHelperClasses::getChargeMass(true);
+      }
+
+      deconv_.deconvolveMSn(mzs, ints, length, rt_min, precursor_mass, precursor_charge);
+
+      // Step 4: Route by mode
+      // Tag-based targeting
+      bool tags_found = false;
+      if (selection_.hasTargetProteinDatabase() && precursor_mass > 0)
+      {
+        tags_found = selection_.processMS2ForTagBasedTargeting(precursor_mass);
+      }
+
+      // Quantification follow-up (independent of tags)
+      if (config_.quantification().enabled && !config_.quantification().follow_up_scan.activation.empty())
+      {
+        if (quant_.isDifferentiallyAbundant(mzs, ints, length, rt_min, 2, "ms2_quant",
+                                            config_.quantification().reporter_mz_tol, config_.quantification().fold_change_threshold, false))
+        {
+          auto followup = queue_.buildFollowUp(ctx, config_.quantification().follow_up_scan, 'F');
+          queue_.push(followup);
+          child_ids.push_back(ScanCommandQueue::encode(followup.scan_id));
+          commands_pushed++;
+        }
+      }
+
+      // Conditional MS2 follow-up -- only when tags detected AND explicitly enabled
+      if (config_.targeting().conditional_ms2_enabled && tags_found)
+      {
+        auto cond = queue_.buildFollowUp(ctx, config_.targeting().tagging_follow_up_scan, 'C');
+        queue_.push(cond);
+        child_ids.push_back(ScanCommandQueue::encode(cond.scan_id));
+        commands_pushed++;
+      }
+
+      // Step 5: MS3 targeting via selection_strategy
+      if (config_.level(2).selection != SelectionMetric::None)
+      {
+        auto cmds = exploration_.initiateNextLevel(2, deconv_.storedMS2(), ctx.faims_cv, queue_);
+        for (auto& c : cmds)
+        {
+          queue_.push(c);
+          child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
+          commands_pushed++;
+        }
+      }
+
+      int ms2_mass_count = deconv_.hasStoredMS2() ? static_cast<int>(deconv_.storedMS2().size()) : 0;
+      int tag_count = tags_found ? 1 : 0;
+
+      writeScanResultRow_(id_str, rt_min, ms2_mass_count, commands_pushed,
+                          child_ids, tag_count, "", "", enqueue_ts);
+
+      std::cout << "[TRACK-RESOLVE] id=" << id_str
+                << " rt=" << rt_min
+                << " commands=" << commands_pushed
+                << std::endl;
+
+      // Update atomic for lock-free reads by getNextScanCommand
+      exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);
+
+      return commands_pushed;
     }
     // MS3 (or higher): log result, no follow-up commands
     {
@@ -630,120 +738,6 @@ FLASHIda::FLASHIda(char* arg) :
                           {}, 0, "", "", enqueue_ts);
       return 0;
     }
-  }
-
-  int FLASHIda::processMS2Path_(const double* mzs, const double* ints, int length,
-                                 double rt_min, const char* scan_desc)
-  {
-    int commands_pushed = 0;
-
-    // Step 1: Decode tracking ID from scan_description -- fixed position chars 0-2
-    std::string desc_str = scan_desc ? scan_desc : "";
-    if (desc_str.size() < 3)
-      return 0;
-
-    std::string id_str = desc_str.substr(0, 3);
-    int tracking_id = queue_.decode(id_str);
-
-    // Check if this is an exploration variant (before pending scan lookup)
-    if (exploration_.isExplorationVariant(tracking_id))
-    {
-      auto cmds = exploration_.feedResult(tracking_id, mzs, ints, length, rt_min, queue_);
-      for (auto& c : cmds) queue_.push(c);
-
-      int expl_mass_count = deconv_.hasStoredMS2() ? static_cast<int>(deconv_.storedMS2().size()) : 0;
-      writeScanResultRow_(id_str, rt_min, expl_mass_count, static_cast<int>(cmds.size()),
-                          {}, 0, "", "", 0);
-
-      return commands_pushed;
-    }
-
-    // Step 2: Peek enqueue timestamp before resolving (resolve removes from pending map)
-    uint64_t enqueue_ts = 0;
-    {
-      auto peeked = queue_.peekPending(tracking_id);
-      if (peeked.has_value())
-        enqueue_ts = peeked->enqueue_timestamp_ms;
-    }
-
-    auto resolved = queue_.resolvePending(tracking_id);
-    if (!resolved.has_value())
-    {
-      std::cout << "[TRACK-RESOLVE] id=" << id_str << " status=not_found" << std::endl;
-      return 0;
-    }
-    ScanCommand ctx = resolved.value();
-    std::vector<std::string> child_ids;
-
-    // Step 3: Deconvolve MS2 with precursor context
-    double precursor_mass = 0;
-    int precursor_charge = 0;
-    if (ctx.num_stages > 0)
-    {
-      precursor_charge = ctx.stages[0].charge_state;
-      precursor_mass = ctx.stages[0].precursor_mz * precursor_charge
-                       - precursor_charge * FLASHHelperClasses::getChargeMass(true);
-    }
-
-    deconv_.deconvolveMSn(mzs, ints, length, rt_min, precursor_mass, precursor_charge);
-
-    // Step 4: Route by mode
-    // Tag-based targeting
-    bool tags_found = false;
-    if (selection_.hasTargetProteinDatabase() && precursor_mass > 0)
-    {
-      tags_found = selection_.processMS2ForTagBasedTargeting(precursor_mass);
-    }
-
-    // Quantification follow-up (independent of tags)
-    if (config_.quantification().enabled && !config_.quantification().follow_up_scan.activation.empty())
-    {
-      if (quant_.isDifferentiallyAbundant(mzs, ints, length, rt_min, 2, "ms2_quant",
-                                          config_.quantification().reporter_mz_tol, config_.quantification().fold_change_threshold, false))
-      {
-        auto followup = queue_.buildFollowUp(ctx, config_.quantification().follow_up_scan, 'F');
-        queue_.push(followup);
-        child_ids.push_back(ScanCommandQueue::encode(followup.scan_id));
-        commands_pushed++;
-      }
-    }
-
-    // Conditional MS2 follow-up -- only when tags detected AND explicitly enabled
-    if (config_.targeting().conditional_ms2_enabled && tags_found)
-    {
-      auto cond = queue_.buildFollowUp(ctx, config_.targeting().tagging_follow_up_scan, 'C');
-      queue_.push(cond);
-      child_ids.push_back(ScanCommandQueue::encode(cond.scan_id));
-      commands_pushed++;
-    }
-
-    // Step 5: MS3 targeting via selection_strategy
-    if (config_.level(2).selection != SelectionMetric::None)
-    {
-      auto cmds = exploration_.initiateNextLevel(2, deconv_.storedMS2(), ctx.faims_cv, queue_);
-      for (auto& c : cmds)
-      {
-        queue_.push(c);
-        child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
-        commands_pushed++;
-      }
-    }
-
-    int ms2_mass_count = deconv_.hasStoredMS2() ? static_cast<int>(deconv_.storedMS2().size()) : 0;
-    int tag_count = tags_found ? 1 : 0;
-
-    writeScanResultRow_(id_str, rt_min, ms2_mass_count, commands_pushed,
-                        child_ids, tag_count, "", "", enqueue_ts);
-
-    std::cout << "[TRACK-RESOLVE] id=" << id_str
-              << " rt=" << rt_min
-              << " commands=" << commands_pushed
-              << std::endl;
-
-    // Update atomic for lock-free reads by getNextScanCommand
-    exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);
-
-    return commands_pushed;
   }
 
   int FLASHIda::getNextScanCommand(ScanCommand& out)

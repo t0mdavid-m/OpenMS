@@ -223,15 +223,6 @@ namespace OpenMS
     /// Isobaric quantification (TMT reporter-ion differential abundance test)
     Quantification quant_;
 
-    /// MS3Target typedef from ScanCommandQueue (used by selectMS3Targets_)
-    using MS3Target = ScanCommandQueue::MS3Target;
-
-    /// Select MS3 fragment targets from last MS2 deconvolution
-    std::vector<MS3Target> selectMS3Targets_();
-
-    /// Process MS2 scan: tracking resolution, deconv, routing
-    int processMS2Path_(const double* mzs, const double* ints, int length, double rt_min, const char* scan_desc);
-
     /// Mutex protecting analysis state: deconv_, selection_, exploration_, faims_, quant_, fragments_.
     /// Also protects logging streams: writeScanResultRow_/writeIDALogEntry_ are called with this lock
     /// already held (from processScan). writeScanCommandRow_ acquires it internally (called from
