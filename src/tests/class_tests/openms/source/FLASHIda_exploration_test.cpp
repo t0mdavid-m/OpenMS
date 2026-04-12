@@ -10,6 +10,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Deconvolution.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Exploration.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
@@ -581,7 +582,8 @@ START_SECTION(exploration_group_creation)
 {
   Config cfg{std::string(exploration_config)};
   ScanCommandQueue queue(cfg);
-  Exploration exploration(cfg);
+  Deconvolution deconv(cfg);
+  Exploration exploration(cfg, deconv);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
@@ -619,7 +621,8 @@ START_SECTION(exploration_variants_priority_0)
 {
   Config cfg{std::string(exploration_config)};
   ScanCommandQueue queue(cfg);
-  Exploration exploration(cfg);
+  Deconvolution deconv(cfg);
+  Exploration exploration(cfg, deconv);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
@@ -641,7 +644,8 @@ START_SECTION(winner_selection_by_score)
 {
   Config cfg{std::string(exploration_config)};
   ScanCommandQueue queue(cfg);
-  Exploration exploration(cfg);
+  Deconvolution deconv(cfg);
+  Exploration exploration(cfg, deconv);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
@@ -652,7 +656,7 @@ START_SECTION(winner_selection_by_score)
   {
     DeconvolvedSpectrum ds = makeSyntheticDeconv(i + 1, static_cast<int>(scores[i]));
     int tracking_id = queue.decode(std::string(cmds[i].scan_description).substr(0, 3));
-    exploration.feedResult(tracking_id, ds, static_cast<double>(i), queue);
+    exploration.feedResultForTest(tracking_id, ds, static_cast<double>(i), queue);
   }
 
   TEST_EQUAL(exploration.activeGroupCount(), 0)
@@ -743,7 +747,8 @@ START_SECTION(ms3_exploration_creates_child_groups)
 {
   Config cfg{std::string(ms3_exploration_config)};
   ScanCommandQueue queue(cfg);
-  Exploration exploration(cfg);
+  Deconvolution deconv(cfg);
+  Exploration exploration(cfg, deconv);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
@@ -754,7 +759,7 @@ START_SECTION(ms3_exploration_creates_child_groups)
     int count = (i == 2) ? 5 : 1;
     DeconvolvedSpectrum ds = makeSyntheticDeconv(i + 1, count);
     int tracking_id = queue.decode(std::string(cmds[i].scan_description).substr(0, 3));
-    exploration.feedResult(tracking_id, ds, static_cast<double>(i), queue);
+    exploration.feedResultForTest(tracking_id, ds, static_cast<double>(i), queue);
   }
 
   int ms3_group_count = exploration.activeGroupCount();
@@ -822,14 +827,15 @@ START_SECTION(optimization_metadata_populated)
 {
   Config cfg{std::string(exploration_config)};
   ScanCommandQueue queue(cfg);
-  Exploration exploration(cfg);
+  Deconvolution deconv(cfg);
+  Exploration exploration(cfg, deconv);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
 
   DeconvolvedSpectrum ds = makeSyntheticDeconv(1, 3);
   int tracking_id = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
-  exploration.feedResult(tracking_id, ds, 1.0, queue);
+  exploration.feedResultForTest(tracking_id, ds, 1.0, queue);
 
   TEST_EQUAL(exploration.activeGroupCount(), 1)
 
@@ -892,7 +898,8 @@ END_SECTION
 START_SECTION(no_ms2_exploration_ms3_exploration_immediate)
 {
   Config cfg{std::string(no_ms2_expl_ms3_expl_config)};
-  Exploration exploration(cfg);
+  Deconvolution deconv(cfg);
+  Exploration exploration(cfg, deconv);
 
   auto ms2_cfg = cfg.level(2);
   TEST_EQUAL(static_cast<int>(ms2_cfg.exploration), static_cast<int>(ExplorationMetric::None))

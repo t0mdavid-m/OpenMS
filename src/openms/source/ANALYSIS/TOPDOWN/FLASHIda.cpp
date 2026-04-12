@@ -57,7 +57,7 @@ FLASHIda::FLASHIda(char* arg) :
     selection_(config_, deconv_),
     quant_(config_),
     faims_(config_),
-    exploration_(config_)
+    exploration_(config_, deconv_)
 {
   #ifdef _OPENMP
     omp_set_num_threads(4);
@@ -688,15 +688,7 @@ FLASHIda::FLASHIda(char* arg) :
     // Check if this is an exploration variant (before pending scan lookup)
     if (exploration_.isExplorationVariant(tracking_id))
     {
-      // Deconvolve the MS2 result for scoring
-      DeconvolvedSpectrum ms2_deconv(tracking_id);
-      if (mzs != nullptr && ints != nullptr && length > 0)
-      {
-        deconv_.deconvolveMSn(mzs, ints, length, rt_min, 0.0, 0);
-        ms2_deconv = deconv_.storedMS2();
-      }
-
-      auto cmds = exploration_.feedResult(tracking_id, ms2_deconv, rt_min, queue_);
+      auto cmds = exploration_.feedResult(tracking_id, mzs, ints, length, rt_min, queue_);
       for (auto& c : cmds) queue_.push(c);
       return commands_pushed;
     }

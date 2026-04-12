@@ -43,8 +43,8 @@
 namespace OpenMS
 {
 
-  Exploration::Exploration(const Config& config)
-    : config_(config)
+  Exploration::Exploration(const Config& config, Deconvolution& deconv)
+    : config_(config), deconv_(deconv)
   {
   }
 
@@ -129,6 +129,37 @@ namespace OpenMS
   }
 
   std::vector<ScanCommand> Exploration::feedResult(int tracking_id,
+      const double* mzs, const double* ints, int length,
+      double rt, ScanCommandQueue& queue)
+  {
+    // Look up the group to get correct precursor context for deconvolution
+    auto vit = variant_tracking_map_.find(tracking_id);
+    if (vit == variant_tracking_map_.end()) return {};
+
+    int group_id = vit->second.group_id;
+    auto git = active_groups_.find(group_id);
+    if (git == active_groups_.end()) return {};
+    const ExplorationGroup& group = git->second;
+
+    // Deconvolve with correct precursor context from the group
+    DeconvolvedSpectrum ms2_deconv(tracking_id);
+    if (mzs != nullptr && ints != nullptr && length > 0)
+    {
+      deconv_.deconvolveMSn(mzs, ints, length, rt,
+                            group.precursor_mass, group.precursor_charge);
+      ms2_deconv = deconv_.storedMS2();
+    }
+
+    return feedResultImpl_(tracking_id, ms2_deconv, rt, queue);
+  }
+
+  std::vector<ScanCommand> Exploration::feedResultForTest(int tracking_id,
+      const DeconvolvedSpectrum& ms2_deconv, double rt, ScanCommandQueue& queue)
+  {
+    return feedResultImpl_(tracking_id, ms2_deconv, rt, queue);
+  }
+
+  std::vector<ScanCommand> Exploration::feedResultImpl_(int tracking_id,
       const DeconvolvedSpectrum& ms2_deconv, double rt, ScanCommandQueue& queue)
   {
     (void)rt;

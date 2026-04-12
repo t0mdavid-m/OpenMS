@@ -36,6 +36,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Deconvolution.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 
@@ -96,17 +97,23 @@ namespace OpenMS
       int variant_index;
     };
 
-    /// Construct with a reference to the shared Config
-    explicit Exploration(const Config& config);
+    /// Construct with a reference to the shared Config and Deconvolution engine
+    explicit Exploration(const Config& config, Deconvolution& deconv);
 
     /// Create exploration group with CE variants. Returns commands for the caller to push.
     std::vector<ScanCommand> initiate(int msn_level, const PeakGroup& pg, int charge,
                                       double faims_cv, ScanCommandQueue& queue);
 
-    /// Process returning exploration variant: score, select winner, trigger next level.
-    /// Returns commands for the caller to push.
-    std::vector<ScanCommand> feedResult(int tracking_id, const DeconvolvedSpectrum& ms2_deconv,
+    /// Process returning exploration variant: deconvolve with correct precursor context,
+    /// score, select winner, trigger next level. Returns commands for the caller to push.
+    std::vector<ScanCommand> feedResult(int tracking_id,
+                                        const double* mzs, const double* ints, int length,
                                         double rt, ScanCommandQueue& queue);
+
+    /// Test-only: feed a pre-deconvolved result (bypasses deconvolution)
+    std::vector<ScanCommand> feedResultForTest(int tracking_id,
+                                               const DeconvolvedSpectrum& ms2_deconv,
+                                               double rt, ScanCommandQueue& queue);
 
     /// Check whether a tracking_id belongs to an exploration variant
     bool isExplorationVariant(int tracking_id) const;
@@ -123,6 +130,7 @@ namespace OpenMS
 
   private:
     const Config& config_;
+    Deconvolution& deconv_;
 
     /// Active exploration groups (group_id -> ExplorationGroup)
     std::unordered_map<int, ExplorationGroup> active_groups_;
@@ -132,6 +140,10 @@ namespace OpenMS
 
     /// Next group ID (monotonically increasing)
     int next_group_id_ = 1;
+
+    /// Shared implementation: process a deconvolved spectrum for a tracked variant
+    std::vector<ScanCommand> feedResultImpl_(int tracking_id, const DeconvolvedSpectrum& ms2_deconv,
+                                             double rt, ScanCommandQueue& queue);
 
     /// Generate CE variant values from min/max/step
     std::vector<double> buildCEVariants_(double ce_min, double ce_max, double ce_step) const;
