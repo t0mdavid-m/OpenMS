@@ -834,13 +834,15 @@ START_SECTION(ms3_exploration_creates_child_groups)
   auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
   TEST_EQUAL(static_cast<int>(cmds.size()), 5)
 
-  // Feed real MS2 spectrum data for all variants — the winner's deconvolved result
-  // will be fragment-matched against cytochrome c in initiateNextLevel
+  // Deconvolve once without precursor constraint (test has no matched MS1)
+  deconv.deconvolveMSn(ms2_data.mzs.data(), ms2_data.ints.data(),
+                        static_cast<int>(ms2_data.mzs.size()), ms2_data.rt, 0.0, 0);
+  DeconvolvedSpectrum ms2_deconv = deconv.storedMS2();
+
   for (int i = 0; i < 5; ++i)
   {
     int tracking_id = queue.decode(std::string(cmds[i].scan_description).substr(0, 3));
-    exploration.feedResult(tracking_id, ms2_data.mzs.data(), ms2_data.ints.data(),
-                           static_cast<int>(ms2_data.mzs.size()), ms2_data.rt, queue);
+    exploration.feedResultForTest(tracking_id, ms2_deconv, ms2_data.rt, queue);
   }
 
   int ms3_group_count = exploration.activeGroupCount();
