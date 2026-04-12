@@ -104,7 +104,7 @@ START_SECTION(([EXTRA] Config rejects IDScore + exploration combo))
     }
   })";
   bool threw = false;
-  try { Config cfg(std::string(json)); }
+  try { Config cfg{std::string(json)}; }
   catch (const std::invalid_argument&) { threw = true; }
   TEST_EQUAL(threw, true)
   (void)threw;
@@ -134,7 +134,7 @@ START_SECTION(([EXTRA] Config rejects exploration with multiple scan configs))
     }
   })";
   bool threw = false;
-  try { Config cfg(std::string(json)); }
+  try { Config cfg{std::string(json)}; }
   catch (const std::invalid_argument&) { threw = true; }
   TEST_EQUAL(threw, true)
   (void)threw;
@@ -162,7 +162,7 @@ START_SECTION(([EXTRA] Config rejects conditional_ms2 without tagging follow_up_
     }
   })";
   bool threw = false;
-  try { Config cfg(std::string(json)); }
+  try { Config cfg{std::string(json)}; }
   catch (const std::invalid_argument&) { threw = true; }
   TEST_EQUAL(threw, true)
   (void)threw;

@@ -235,6 +235,22 @@ namespace OpenMS
       }
     }
 
+    // MS3 scan configs -> levels_[3].scans[0..N]
+    if (ms_settings.contains("ms3") && ms_settings["ms3"].is_array())
+    {
+      if (levels_.find(3) == levels_.end())
+        levels_[3] = MSLevelConfig{};
+      for (const auto& m : ms_settings["ms3"])
+      {
+        ScanConfig ms3_scan;
+        ms3_scan.analyzer = m.value("analyzer", "");
+        ms3_scan.activation = m.value("activation", "");
+        ms3_scan.collision_energy = m.value("collision_energy", 0);
+        ms3_scan.resolution = m.value("resolution", 0);
+        levels_[3].scans.push_back(ms3_scan);
+      }
+    }
+
     // --- scheduling ---
     auto sched = config.value("scheduling", json::object());
     auto ct = sched.value("cycle_time", json::object());

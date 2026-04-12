@@ -160,6 +160,14 @@ namespace
           "collision_energy": 29,
           "resolution": 120000
         }
+      ],
+      "ms3": [
+        {
+          "analyzer": "Orbitrap",
+          "activation": "CID",
+          "collision_energy": 25,
+          "resolution": 120000
+        }
       ]
     },
     "scheduling": {
@@ -436,6 +444,14 @@ namespace
           "analyzer": "Orbitrap",
           "activation": "HCD",
           "collision_energy": 29,
+          "resolution": 120000
+        }
+      ],
+      "ms3": [
+        {
+          "analyzer": "Orbitrap",
+          "activation": "CID",
+          "collision_energy": 25,
           "resolution": 120000
         }
       ]
