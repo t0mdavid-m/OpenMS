@@ -71,11 +71,11 @@ namespace OpenMS
     // --- Building ---
 
     /// Build MS2 ScanCommand from a PeakGroup + ScanConfig (unified factory)
-    ScanCommand buildMS2(const PeakGroup& pg, int charge, const ScanConfig& scan_config);
+    ScanCommand buildMS2(const PeakGroup& pg, int charge, const ScanConfig& scan_config, int priority = 1);
 
     /// Build MS3 ScanCommand from MS2 context + fragment target
     ScanCommand buildMS3(const ScanCommand& ms2_ctx, double frag_mz, int frag_charge, double iso_width,
-                         char ion_type = '\0', int frag_index = 0);
+                         char ion_type = '\0', int frag_index = 0, int priority = 3);
 
     /// Create an MS1 survey scan command from current config
     ScanCommand makeMS1() const;
@@ -85,7 +85,7 @@ namespace OpenMS
 
     /// Build follow-up MS2 at priority 2 using the given scan config and description suffix.
     /// Returns the command; caller pushes.
-    ScanCommand buildFollowUp(const ScanCommand& ctx, const ScanConfig& follow_up_config, char suffix);
+    ScanCommand buildFollowUp(const ScanCommand& ctx, const ScanConfig& follow_up_config, char suffix, int priority = 2);
 
     /// Apply exploration parameter overrides to a ScanCommand
     void applyOverrides(ScanCommand& cmd, const std::unordered_map<std::string, std::string>& overrides) const;

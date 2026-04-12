@@ -101,8 +101,7 @@ namespace OpenMS
       variant_config.collision_energy = static_cast<int>(ces[i]);
       variant_config.activation = cfg.exploration_activation;
 
-      ScanCommand cmd = queue.buildMS2(pg, charge, variant_config);
-      cmd.priority = 0;
+      ScanCommand cmd = queue.buildMS2(pg, charge, variant_config, 0);
       cmd.faims_cv = faims_cv;
 
       int id_int = cmd.scan_id;

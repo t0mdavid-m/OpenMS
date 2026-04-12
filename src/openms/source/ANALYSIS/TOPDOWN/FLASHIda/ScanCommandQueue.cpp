@@ -171,14 +171,14 @@ namespace OpenMS
     return cmd;
   }
 
-  ScanCommand ScanCommandQueue::buildMS2(const PeakGroup& pg, int charge, const ScanConfig& scan_config)
+  ScanCommand ScanCommandQueue::buildMS2(const PeakGroup& pg, int charge, const ScanConfig& scan_config, int priority)
   {
     std::lock_guard<std::mutex> lock(queue_mutex_);
     ScanCommand cmd{};
     int id = nextTrackingIdInt_();
     cmd.scan_id = id;
     cmd.msn_level = 2;
-    cmd.priority = 1;
+    cmd.priority = priority;
     cmd.is_agc = 0;
     cmd.num_stages = 1;
 
@@ -247,14 +247,14 @@ namespace OpenMS
   }
 
   ScanCommand ScanCommandQueue::buildMS3(const ScanCommand& ms2_ctx, double frag_mz, int frag_charge, double iso_width,
-                                          char ion_type, int frag_index)
+                                          char ion_type, int frag_index, int priority)
   {
     std::lock_guard<std::mutex> lock(queue_mutex_);
     ScanCommand cmd{};
     int id = nextTrackingIdInt_();
     cmd.scan_id = id;
     cmd.msn_level = 3;
-    cmd.priority = 3;  // lowest priority for MS3
+    cmd.priority = priority;
     cmd.is_agc = 0;
     cmd.num_stages = 2;
 
@@ -304,12 +304,12 @@ namespace OpenMS
   }
 
   ScanCommand ScanCommandQueue::buildFollowUp(const ScanCommand& ctx,
-      const ScanConfig& follow_up_config, char suffix)
+      const ScanConfig& follow_up_config, char suffix, int priority)
   {
     std::lock_guard<std::mutex> lock(queue_mutex_);
     ScanCommand cmd = ctx;
     cmd.scan_id = nextTrackingIdInt_();
-    cmd.priority = 2;
+    cmd.priority = priority;
 
     std::strncpy(cmd.analyzer, follow_up_config.analyzer.c_str(), sizeof(cmd.analyzer) - 1);
     cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';
