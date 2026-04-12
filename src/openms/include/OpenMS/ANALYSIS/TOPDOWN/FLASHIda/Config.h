@@ -48,9 +48,11 @@ namespace OpenMS
   /// Selection metric: how targets are ranked for MSn+1
   enum class SelectionMetric
   {
-    None = 0,    ///< No selection at this level -- don't select targets for MSn+1
-    Intensity,   ///< Rank by raw intensity
-    QScore       ///< Rank by deconvolution quality score
+    None = 0,              ///< No selection at this level -- don't select targets for MSn+1
+    Intensity,             ///< Rank by raw intensity
+    QScore,                ///< Rank by deconvolution quality score
+    TerminalFragments,     ///< Innermost b/y ions, interleaved
+    AmbiguityResolution    ///< PTM-site bracketing ions
   };
 
   /// Exploration metric: what to optimize during CE sweep (MS2+ only)
@@ -92,6 +94,7 @@ namespace OpenMS
     std::string exploration_activation = "HCD";
     std::unordered_map<std::string, std::string> overrides;
     double tolerance_ppm = 10.0;
+    double remaining_precursor_target = 0.1;  ///< Target remaining precursor ratio (0.1 = 10%)
   };
 
   /// Deconvolution engine parameters
@@ -131,14 +134,10 @@ namespace OpenMS
     double rt_window = 180.0;
     bool use_idscore = false;
     bool consider_all_charges = false;
-    bool ms3_all_charges = false;
     int hcd_energy = -1;
     double qscore_threshold = 0.0;
     double tqscore_threshold = 0.9;
     double snr_threshold = 1.0;
-    bool ms3_enabled = false;           ///< Explicit ms3.enabled flag from JSON
-    int ms3_mode = 0;                  ///< 0=disabled, 1=SourceCID, 2=SPS, 3=HCD-triggered, 4=EThcD
-    int max_ms3_per_ms2 = 4;           ///< Legacy ms3.max_per_ms2 (Branch 2 only)
     std::string protein_sequence;
     bool conditional_ms2_enabled = false; ///< Explicit conditional_ms2 flag from JSON
     std::vector<std::string> target_log_files;

@@ -90,16 +90,6 @@ namespace OpenMS
     /// Apply exploration parameter overrides to a ScanCommand
     void applyOverrides(ScanCommand& cmd, const std::unordered_map<std::string, std::string>& overrides) const;
 
-    /// MS3 target with optional ion annotation (modes 3/4)
-    struct MS3Target
-    {
-      double center_mz;
-      int charge;
-      double iso_width;
-      char ion_type;   ///< 'b', 'y', etc. or '\0' for modes 1/2
-      int frag_index;  ///< fragment position, 0 if unknown
-    };
-
     // --- Queue ops (all thread-safe) ---
 
     /// Push command into appropriate priority queue

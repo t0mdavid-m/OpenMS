@@ -50,7 +50,8 @@ namespace OpenMS
     20.0, 40.0, 5.0,              // ce_min, ce_max, ce_step
     "HCD",                        // exploration_activation
     {},                           // overrides
-    10.0                          // tolerance_ppm
+    10.0,                         // tolerance_ppm
+    0.1                           // remaining_precursor_target
   };
 
   void ScanConfig::applyOverrides(const std::unordered_map<std::string, std::string>& overrides)
@@ -113,7 +114,6 @@ namespace OpenMS
     targeting_.mode = ps.value("target_mode", 0);
     targeting_.use_idscore = ps.value("IDScore", false);
     targeting_.consider_all_charges = ps.value("AllCharges", false);
-    targeting_.ms3_all_charges = ps.value("MS3AllCharges", false);  // also checked from ms3 section below
     targeting_.hcd_energy = ps.value("HCDEnergy", -1);
     targeting_.strict_inclusion = ps.value("strict_inclusion", false);
     targeting_.tie_threshold = ps.value("tie_threshold", 0.1);
@@ -158,14 +158,17 @@ namespace OpenMS
 
     // --- ms3 section ---
     auto ms3 = config.value("ms3", json::object());
-    targeting_.ms3_enabled = ms3.value("enabled", false);
-    targeting_.ms3_mode = ms3.value("mode", 0);
     targeting_.protein_sequence = ms3.value("protein_sequence", "");
-    // ms3 max_per_ms2 -> levels_[3].max_targets (set after selection_strategy parsing)
-    int ms3_max_per_ms2 = ms3.value("max_per_ms2", 4);
-    // ms3.all_charges overrides precursor_selection.MS3AllCharges if present
-    if (ms3.contains("all_charges"))
-      targeting_.ms3_all_charges = ms3.value("all_charges", false);
+
+    // Reject legacy MS3 keys — force migration to selection_strategy
+    static const std::vector<std::string> legacy_ms3_keys = {"enabled", "active", "mode", "all_charges", "max_per_ms2"};
+    for (const auto& key : legacy_ms3_keys)
+    {
+      if (ms3.contains(key))
+        throw std::invalid_argument(
+            "Config: ms3." + key + " is no longer supported. "
+            "Migrate MS3 targeting to selection_strategy.ms2.");
+    }
 
     // --- conditional_ms2 (check top-level and tagging section) ---
     targeting_.conditional_ms2_enabled = config.value("conditional_ms2",
@@ -287,6 +290,8 @@ namespace OpenMS
         if (sel_str == "intensity") cfg.selection = SelectionMetric::Intensity;
         else if (sel_str == "qscore") cfg.selection = SelectionMetric::QScore;
         else if (sel_str == "none") cfg.selection = SelectionMetric::None;
+        else if (sel_str == "terminal_fragments") cfg.selection = SelectionMetric::TerminalFragments;
+        else if (sel_str == "ambiguity_resolution") cfg.selection = SelectionMetric::AmbiguityResolution;
         else cfg.selection = SelectionMetric::Intensity;
 
         // Max targets
@@ -305,6 +310,7 @@ namespace OpenMS
           cfg.ce_max = expl_obj.value("ce_max", 40.0);
           cfg.ce_step = expl_obj.value("ce_step", 5.0);
           cfg.exploration_activation = expl_obj.value("activation", std::string("HCD"));
+          cfg.remaining_precursor_target = expl_obj.value("remaining_precursor_target", 0.1);
           if (expl_obj.contains("overrides"))
           {
             const auto& ov_obj = expl_obj["overrides"];
@@ -314,11 +320,6 @@ namespace OpenMS
         }
       }
     }
-
-    // Store ms3 max_per_ms2 separately — it applies only to the legacy
-    // selectMS3Targets_ path (Branch 2), NOT to initiateNextLevel (Branch 3).
-    // Branch 3 uses levels_[3].max_targets from selection_strategy.
-    targeting_.max_ms3_per_ms2 = ms3_max_per_ms2;
 
     // Set per-level tolerance values
     for (auto& [lvl, cfg] : levels_)
@@ -368,6 +369,23 @@ namespace OpenMS
             "Exploration at level " + std::to_string(lvl) +
             " requires exactly one scan config, got " +
             std::to_string(cfg.scans.size()) + ".");
+    }
+
+    for (const auto& [lvl, cfg] : levels_)
+    {
+      if (cfg.exploration == ExplorationMetric::FragmentCount && targeting_.protein_sequence.empty())
+        throw std::invalid_argument(
+            "ExplorationMetric::FragmentCount at level " + std::to_string(lvl) +
+            " requires a non-empty protein_sequence in the ms3 config section.");
+    }
+
+    for (const auto& [lvl, cfg] : levels_)
+    {
+      if (lvl >= 2 && cfg.selection != SelectionMetric::None && targeting_.protein_sequence.empty())
+        throw std::invalid_argument(
+            "SelectionMetric at level " + std::to_string(lvl) +
+            " requires a non-empty protein_sequence in the ms3 config section. "
+            "Fragment matching is the default for all MSn>=2 selection.");
     }
   }
 

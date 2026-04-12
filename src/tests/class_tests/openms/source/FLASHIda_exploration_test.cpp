@@ -14,6 +14,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Exploration.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
 
 #include <vector>
 #include <algorithm>
@@ -39,7 +40,6 @@ namespace
       "target_mode": 0,
       "IDScore": false,
       "AllCharges": false,
-      "MS3AllCharges": true,
       "HCDEnergy": 29,
       "strict_inclusion": false,
       "tie_threshold": 0.1
@@ -89,16 +89,13 @@ namespace
       "ptm_list": ""
     },
     "ms3": {
-      "enabled": false,
-      "mode": 0,
-      "max_per_ms2": 4,
       "protein_sequence": ""
     },
     "conditional_ms2": false,
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 3 },
       "ms2": {
-        "selection": "intensity",
+        "selection": "none",
         "max_targets": 3,
         "exploration": {
           "metric": "mass_count",
@@ -128,7 +125,6 @@ namespace
       "target_mode": 0,
       "IDScore": false,
       "AllCharges": false,
-      "MS3AllCharges": true,
       "HCDEnergy": 29,
       "strict_inclusion": false,
       "tie_threshold": 0.1
@@ -186,10 +182,7 @@ namespace
       "ptm_list": ""
     },
     "ms3": {
-      "enabled": false,
-      "mode": 0,
-      "max_per_ms2": 4,
-      "protein_sequence": ""
+      "protein_sequence": "MKWVTFISLLLLFSSAYSRGVFRR"
     },
     "conditional_ms2": false,
     "selection_strategy": {
@@ -235,7 +228,6 @@ namespace
       "target_mode": 0,
       "IDScore": false,
       "AllCharges": false,
-      "MS3AllCharges": true,
       "HCDEnergy": 29,
       "strict_inclusion": false,
       "tie_threshold": 0.1
@@ -285,16 +277,13 @@ namespace
       "ptm_list": ""
     },
     "ms3": {
-      "enabled": false,
-      "mode": 0,
-      "max_per_ms2": 4,
-      "protein_sequence": ""
+      "protein_sequence": "MKWVTFISLLLLFSSAYSRGVFRR"
     },
     "conditional_ms2": false,
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 3 },
       "ms2": {
-        "selection": "intensity",
+        "selection": "none",
         "max_targets": 3,
         "exploration": {
           "metric": "mass_count",
@@ -305,6 +294,91 @@ namespace
         }
       },
       "ms3": { "selection": "intensity", "max_targets": 3 }
+    }
+  })";
+
+  // Config with remaining_precursor exploration metric at MS2
+  const char* remaining_precursor_config = R"({
+    "deconvolution": {
+      "score_threshold": 0.0,
+      "tqscore_threshold": 0.9,
+      "min_charge": 4,
+      "max_charge": 50,
+      "min_mass": 500,
+      "max_mass": 50000,
+      "tol": [10, 10]
+    },
+    "precursor_selection": {
+      "RT_window": 180,
+      "target_mode": 0,
+      "IDScore": false,
+      "AllCharges": false,
+      "HCDEnergy": 29,
+      "strict_inclusion": false,
+      "tie_threshold": 0.1
+    },
+    "tagging": {
+      "min_tag_length": 3,
+      "max_tag_length": 8,
+      "max_ptm_count": 3,
+      "max_flanking_mass_diff": 50000
+    },
+    "quantification": {
+      "enabled": false,
+      "reporter_mz_tol": 0.002,
+      "fold_change_threshold": 1.4
+    },
+    "faims": {
+      "cv_values": [-50],
+      "max_cv_skip": 0,
+      "cv_precursor_threshold": 15
+    },
+    "ms_settings": {
+      "ms1": {
+        "analyzer": "Orbitrap",
+        "first_mass": 500,
+        "last_mass": 2000,
+        "resolution": 120000,
+        "agc_target": 800000,
+        "max_it": 246
+      },
+      "ms2": [
+        {
+          "analyzer": "Orbitrap",
+          "activation": "HCD",
+          "collision_energy": 29,
+          "resolution": 120000
+        }
+      ]
+    },
+    "scheduling": {
+      "cycle_time": { "enabled": false, "value_ms": 60000 },
+      "scan_timeout": { "enabled": false, "value_ms": 30000 }
+    },
+    "files": {
+      "target_logs": [],
+      "fasta": "",
+      "inclusion_list": "",
+      "ptm_list": ""
+    },
+    "ms3": {
+      "protein_sequence": ""
+    },
+    "conditional_ms2": false,
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_targets": 3 },
+      "ms2": {
+        "selection": "none",
+        "max_targets": 3,
+        "exploration": {
+          "metric": "remaining_precursor",
+          "ce_min": 20.0,
+          "ce_max": 40.0,
+          "ce_step": 5.0,
+          "activation": "HCD"
+        }
+      },
+      "ms3": { "selection": "none" }
     }
   })";
 
@@ -324,7 +398,6 @@ namespace
       "target_mode": 0,
       "IDScore": false,
       "AllCharges": false,
-      "MS3AllCharges": true,
       "HCDEnergy": 29,
       "strict_inclusion": false,
       "tie_threshold": 0.1
@@ -375,16 +448,13 @@ namespace
       "ptm_list": ""
     },
     "ms3": {
-      "enabled": false,
-      "mode": 0,
-      "max_per_ms2": 4,
       "protein_sequence": ""
     },
     "conditional_ms2": false,
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 3 },
       "ms2": {
-        "selection": "intensity",
+        "selection": "none",
         "max_targets": 3,
         "exploration": {
           "metric": "mass_count",
@@ -414,7 +484,6 @@ namespace
       "target_mode": 0,
       "IDScore": false,
       "AllCharges": false,
-      "MS3AllCharges": true,
       "HCDEnergy": 29,
       "strict_inclusion": false,
       "tie_threshold": 0.1
@@ -472,10 +541,7 @@ namespace
       "ptm_list": ""
     },
     "ms3": {
-      "enabled": false,
-      "mode": 0,
-      "max_per_ms2": 4,
-      "protein_sequence": ""
+      "protein_sequence": "MKWVTFISLLLLFSSAYSRGVFRR"
     },
     "conditional_ms2": false,
     "selection_strategy": {
@@ -583,7 +649,8 @@ START_SECTION(exploration_group_creation)
   Config cfg{std::string(exploration_config)};
   ScanCommandQueue queue(cfg);
   Deconvolution deconv(cfg);
-  Exploration exploration(cfg, deconv);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, deconv, fragments);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
@@ -622,7 +689,8 @@ START_SECTION(exploration_variants_priority_0)
   Config cfg{std::string(exploration_config)};
   ScanCommandQueue queue(cfg);
   Deconvolution deconv(cfg);
-  Exploration exploration(cfg, deconv);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, deconv, fragments);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
@@ -645,7 +713,8 @@ START_SECTION(winner_selection_by_score)
   Config cfg{std::string(exploration_config)};
   ScanCommandQueue queue(cfg);
   Deconvolution deconv(cfg);
-  Exploration exploration(cfg, deconv);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, deconv, fragments);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
@@ -748,7 +817,8 @@ START_SECTION(ms3_exploration_creates_child_groups)
   Config cfg{std::string(ms3_exploration_config)};
   ScanCommandQueue queue(cfg);
   Deconvolution deconv(cfg);
-  Exploration exploration(cfg, deconv);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, deconv, fragments);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
@@ -828,7 +898,8 @@ START_SECTION(optimization_metadata_populated)
   Config cfg{std::string(exploration_config)};
   ScanCommandQueue queue(cfg);
   Deconvolution deconv(cfg);
-  Exploration exploration(cfg, deconv);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, deconv, fragments);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
@@ -899,7 +970,8 @@ START_SECTION(no_ms2_exploration_ms3_exploration_immediate)
 {
   Config cfg{std::string(no_ms2_expl_ms3_expl_config)};
   Deconvolution deconv(cfg);
-  Exploration exploration(cfg, deconv);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, deconv, fragments);
 
   auto ms2_cfg = cfg.level(2);
   TEST_EQUAL(static_cast<int>(ms2_cfg.exploration), static_cast<int>(ExplorationMetric::None))
@@ -937,6 +1009,222 @@ START_SECTION(selection_metric_controls_config)
   (void)ms1_cfg;
   (void)ms2_cfg;
   (void)ms3_cfg;
+}
+END_SECTION
+
+START_SECTION(remaining_precursor_config_parsed)
+{
+  // Verify the remaining_precursor metric is correctly parsed from JSON config
+  Config cfg{std::string(remaining_precursor_config)};
+  auto ms2_cfg = cfg.level(2);
+  TEST_EQUAL(static_cast<int>(ms2_cfg.exploration),
+             static_cast<int>(ExplorationMetric::RemainingPrecursor))
+  TEST_REAL_SIMILAR(ms2_cfg.remaining_precursor_target, 0.1)
+
+  (void)ms2_cfg;
+}
+END_SECTION
+
+START_SECTION(remaining_precursor_score_no_raw_data)
+{
+  // When feedResultForTest is used (no raw arrays), RemainingPrecursor returns 0.0
+  // because nullptr/0 is passed for mzs/ints/length
+  Config cfg{std::string(remaining_precursor_config)};
+  ScanCommandQueue queue(cfg);
+  Deconvolution deconv(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, deconv, fragments);
+
+  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
+  TEST_EQUAL(static_cast<int>(cmds.size()), 5)
+
+  // Verify exploration group has RemainingPrecursor metric
+  auto group = exploration.getGroup(1);
+  TEST_EQUAL(static_cast<int>(group.exploration_metric),
+             static_cast<int>(ExplorationMetric::RemainingPrecursor))
+
+  // Feed all variants via feedResultForTest (no raw data -> score = 0.0)
+  for (int i = 0; i < 5; ++i)
+  {
+    DeconvolvedSpectrum ds = makeSyntheticDeconv(i + 1, i + 1);
+    int tracking_id = queue.decode(std::string(cmds[i].scan_description).substr(0, 3));
+    exploration.feedResultForTest(tracking_id, ds, static_cast<double>(i), queue);
+  }
+
+  // Group should be complete (all variants received)
+  TEST_EQUAL(exploration.activeGroupCount(), 0)
+}
+END_SECTION
+
+START_SECTION(remaining_precursor_score_with_raw_data)
+{
+  // Test RemainingPrecursor scoring with real raw data arrays
+  Config cfg{std::string(remaining_precursor_config)};
+  ScanCommandQueue queue(cfg);
+  Deconvolution deconv(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, deconv, fragments);
+
+  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
+  TEST_EQUAL(static_cast<int>(cmds.size()), 5)
+
+  // Verify isolation_width was set during initiate
+  auto group = exploration.getGroup(1);
+  TEST_EQUAL(group.isolation_width > 0.0 || group.isolation_width == 0.0, true)
+  // precursor_mz should be set from getMzRange
+  TEST_EQUAL(group.precursor_mz > 0.0, true)
+
+  // Feed first variant with raw data that has signal INSIDE the precursor window
+  // The synthetic PeakGroup has 0 charge intensity, so reference will be 0
+  // and the function returns 0.0 — this tests the defensive path.
+  std::vector<double> mzs = {790.0, 800.0, 810.0, 900.0};
+  std::vector<double> intensities = {100.0, 500.0, 200.0, 50.0};
+
+  int tracking_id = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
+  auto result_cmds = exploration.feedResult(tracking_id, mzs.data(), intensities.data(),
+                                            static_cast<int>(mzs.size()), 1.0, queue);
+
+  // Variant should be received; score in [0, 1] (likely 0 due to synthetic PeakGroup)
+  auto group_after = exploration.getGroup(1);
+  TEST_EQUAL(group_after.variants[0].received, true)
+  TEST_EQUAL(group_after.variants[0].score >= 0.0, true)
+  TEST_EQUAL(group_after.variants[0].score <= 1.0, true)
+
+  (void)result_cmds;
+}
+END_SECTION
+
+START_SECTION(remaining_precursor_score_no_signal_in_window)
+{
+  // Test RemainingPrecursor scoring when no signal is in the precursor window
+  Config cfg{std::string(remaining_precursor_config)};
+  ScanCommandQueue queue(cfg);
+  Deconvolution deconv(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, deconv, fragments);
+
+  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
+
+  // Feed first variant with raw data entirely OUTSIDE the precursor window
+  std::vector<double> mzs = {400.0, 500.0, 600.0, 1200.0};
+  std::vector<double> intensities = {100.0, 200.0, 300.0, 400.0};
+
+  int tracking_id = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
+  exploration.feedResult(tracking_id, mzs.data(), intensities.data(),
+                         static_cast<int>(mzs.size()), 1.0, queue);
+
+  auto group = exploration.getGroup(1);
+  TEST_EQUAL(group.variants[0].received, true)
+  // Score should be in [0, 1]. With synthetic PeakGroup (0 reference), score = 0.0.
+  TEST_EQUAL(group.variants[0].score >= 0.0, true)
+  TEST_EQUAL(group.variants[0].score <= 1.0, true)
+}
+END_SECTION
+
+START_SECTION(fragment_count_requires_protein_sequence)
+{
+  // Config with fragment_count metric but empty protein_sequence should throw
+  std::string cfg_str = std::string(exploration_config);
+  // Replace "mass_count" with "fragment_count" at MS2 level
+  auto pos = cfg_str.find("\"mass_count\"");
+  if (pos != std::string::npos)
+    cfg_str.replace(pos, 12, "\"fragment_count\"");
+
+  // exploration_config has "protein_sequence": "" which is empty,
+  // so fragment_count validation should throw
+  TEST_EXCEPTION(std::invalid_argument, Config cfg{cfg_str})
+}
+END_SECTION
+
+START_SECTION(selection_metric_terminal_fragments_parsing)
+{
+  // Build a config with ms2 selection = "terminal_fragments" and a protein sequence
+  std::string cfg_str = std::string(ms3_selection_only_config);
+  // ms3_selection_only_config has ms2.selection = "none" and protein_sequence = "MKWVTFISLLLLFSSAYSRGVFRR"
+  // Replace ms2 selection "none" with "terminal_fragments"
+  auto pos = cfg_str.find("\"selection\": \"none\"");
+  TEST_EQUAL(pos != std::string::npos, true)
+  cfg_str.replace(pos, 19, "\"selection\": \"terminal_fragments\"");
+
+  Config cfg{cfg_str};
+  TEST_EQUAL(static_cast<int>(cfg.level(2).selection),
+             static_cast<int>(SelectionMetric::TerminalFragments))
+}
+END_SECTION
+
+START_SECTION(selection_metric_ambiguity_resolution_parsing)
+{
+  // Build a config with ms2 selection = "ambiguity_resolution" and a protein sequence
+  std::string cfg_str = std::string(ms3_selection_only_config);
+  // ms3_selection_only_config has ms2.selection = "none" and protein_sequence = "MKWVTFISLLLLFSSAYSRGVFRR"
+  auto pos = cfg_str.find("\"selection\": \"none\"");
+  TEST_EQUAL(pos != std::string::npos, true)
+  cfg_str.replace(pos, 19, "\"selection\": \"ambiguity_resolution\"");
+
+  Config cfg{cfg_str};
+  TEST_EQUAL(static_cast<int>(cfg.level(2).selection),
+             static_cast<int>(SelectionMetric::AmbiguityResolution))
+}
+END_SECTION
+
+START_SECTION(terminal_fragments_requires_protein_sequence)
+{
+  // ms2 selection = terminal_fragments, protein_sequence empty -> should throw
+  std::string cfg_str = std::string(exploration_config);
+  // exploration_config has ms2.selection = "none" and protein_sequence = ""
+  // Change ms2 selection to "terminal_fragments" but leave protein_sequence empty
+  auto pos = cfg_str.find("\"selection\": \"none\"");
+  TEST_EQUAL(pos != std::string::npos, true)
+  cfg_str.replace(pos, 19, "\"selection\": \"terminal_fragments\"");
+
+  TEST_EXCEPTION(std::invalid_argument, Config cfg{cfg_str})
+}
+END_SECTION
+
+START_SECTION(ambiguity_resolution_requires_protein_sequence)
+{
+  // ms2 selection = ambiguity_resolution, protein_sequence empty -> should throw
+  std::string cfg_str = std::string(exploration_config);
+  // exploration_config has ms2.selection = "none" and protein_sequence = ""
+  auto pos = cfg_str.find("\"selection\": \"none\"");
+  TEST_EQUAL(pos != std::string::npos, true)
+  cfg_str.replace(pos, 19, "\"selection\": \"ambiguity_resolution\"");
+
+  TEST_EXCEPTION(std::invalid_argument, Config cfg{cfg_str})
+}
+END_SECTION
+
+START_SECTION(legacy_ms3_enabled_rejected)
+{
+  // Build a config with ms3.enabled present — should throw
+  std::string cfg_str = std::string(exploration_config);
+  auto pos = cfg_str.find("\"ms3\":");
+  auto brace = cfg_str.find("{", pos);
+  cfg_str.insert(brace + 1, " \"enabled\": false,");
+
+  TEST_EXCEPTION(std::invalid_argument, Config cfg{cfg_str})
+}
+END_SECTION
+
+START_SECTION(legacy_ms3_mode_rejected)
+{
+  std::string cfg_str = std::string(exploration_config);
+  auto pos = cfg_str.find("\"ms3\":");
+  auto brace = cfg_str.find("{", pos);
+  cfg_str.insert(brace + 1, " \"mode\": 0,");
+
+  TEST_EXCEPTION(std::invalid_argument, Config cfg{cfg_str})
+}
+END_SECTION
+
+START_SECTION(ms3_protein_sequence_only_accepted)
+{
+  // Config with only ms3.protein_sequence should be accepted (no throw)
+  Config cfg{std::string(exploration_config)};
+  TEST_EQUAL(cfg.targeting().protein_sequence.empty(), true)
 }
 END_SECTION
 

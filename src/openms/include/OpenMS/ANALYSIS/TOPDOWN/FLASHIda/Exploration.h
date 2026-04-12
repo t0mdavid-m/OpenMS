@@ -37,6 +37,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Deconvolution.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 
@@ -97,8 +98,8 @@ namespace OpenMS
       int variant_index;
     };
 
-    /// Construct with a reference to the shared Config and Deconvolution engine
-    explicit Exploration(const Config& config, Deconvolution& deconv);
+    /// Construct with a reference to the shared Config, Deconvolution engine, and FragmentAnalysis
+    explicit Exploration(const Config& config, Deconvolution& deconv, FragmentAnalysis& fragments);
 
     /// Create exploration group with CE variants. Returns commands for the caller to push.
     std::vector<ScanCommand> initiate(int msn_level, const PeakGroup& pg, int charge,
@@ -131,6 +132,7 @@ namespace OpenMS
   private:
     const Config& config_;
     Deconvolution& deconv_;
+    FragmentAnalysis& fragments_;
 
     /// Active exploration groups (group_id -> ExplorationGroup)
     std::unordered_map<int, ExplorationGroup> active_groups_;
@@ -143,19 +145,23 @@ namespace OpenMS
 
     /// Shared implementation: process a deconvolved spectrum for a tracked variant
     std::vector<ScanCommand> feedResultImpl_(int tracking_id, const DeconvolvedSpectrum& ms2_deconv,
+                                             const double* mzs, const double* ints, int length,
                                              double rt, ScanCommandQueue& queue);
 
     /// Generate CE variant values from min/max/step
     std::vector<double> buildCEVariants_(double ce_min, double ce_max, double ce_step) const;
 
     /// Dispatch to metric-specific scorer
-    double computeExplorationScore_(ExplorationMetric metric, const DeconvolvedSpectrum& spec) const;
+    double computeExplorationScore_(ExplorationMetric metric, const DeconvolvedSpectrum& spec,
+                                    const ExplorationGroup& group,
+                                    const double* mzs, const double* ints, int length) const;
 
     /// Score: number of deconvolved masses
     double computeMassCount_(const DeconvolvedSpectrum& spec) const;
 
     /// Score: fragmentation efficiency (higher = less remaining precursor)
-    double computeRemainingPrecursorScore_(const DeconvolvedSpectrum& spec) const;
+    double computeRemainingPrecursorScore_(const ExplorationGroup& group,
+                                           const double* mzs, const double* ints, int length) const;
 
     /// Score: number of fragment ions
     double computeFragmentCount_(const DeconvolvedSpectrum& spec) const;

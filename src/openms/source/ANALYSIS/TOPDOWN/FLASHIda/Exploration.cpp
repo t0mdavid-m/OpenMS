@@ -36,15 +36,15 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <iostream>
-#include <numeric>
 
 namespace OpenMS
 {
 
-  Exploration::Exploration(const Config& config, Deconvolution& deconv)
-    : config_(config), deconv_(deconv)
+  Exploration::Exploration(const Config& config, Deconvolution& deconv, FragmentAnalysis& fragments)
+    : config_(config), deconv_(deconv), fragments_(fragments)
   {
   }
 
@@ -67,9 +67,10 @@ namespace OpenMS
     std::vector<double> ces = buildCEVariants_(cfg.ce_min, cfg.ce_max, cfg.ce_step);
     if (ces.empty()) return commands;
 
-    // Compute precursor_mz from PeakGroup
+    // Compute precursor_mz and isolation_width from PeakGroup
     auto [mz1, mz2] = pg.getMzRange(charge);
     double precursor_mz = (mz1 + mz2) / 2.0;
+    double isolation_width = mz2 - mz1;
     double precursor_mass = pg.getMonoMass();
     if (precursor_mass <= 0) precursor_mass = precursor_mz;  // defensive fallback
 
@@ -79,6 +80,7 @@ namespace OpenMS
     group.exploration_metric = cfg.exploration;
     group.precursor_mz = precursor_mz;
     group.precursor_mass = precursor_mass;
+    group.isolation_width = isolation_width;
     group.precursor_charge = charge;
     group.precursor_pg = pg;
     group.faims_cv = faims_cv;
@@ -150,17 +152,19 @@ namespace OpenMS
       ms2_deconv = deconv_.storedMS2();
     }
 
-    return feedResultImpl_(tracking_id, ms2_deconv, rt, queue);
+    return feedResultImpl_(tracking_id, ms2_deconv, mzs, ints, length, rt, queue);
   }
 
   std::vector<ScanCommand> Exploration::feedResultForTest(int tracking_id,
       const DeconvolvedSpectrum& ms2_deconv, double rt, ScanCommandQueue& queue)
   {
-    return feedResultImpl_(tracking_id, ms2_deconv, rt, queue);
+    return feedResultImpl_(tracking_id, ms2_deconv, nullptr, nullptr, 0, rt, queue);
   }
 
   std::vector<ScanCommand> Exploration::feedResultImpl_(int tracking_id,
-      const DeconvolvedSpectrum& ms2_deconv, double rt, ScanCommandQueue& queue)
+      const DeconvolvedSpectrum& ms2_deconv,
+      const double* mzs, const double* ints, int length,
+      double rt, ScanCommandQueue& queue)
   {
     (void)rt;
     std::vector<ScanCommand> commands;
@@ -183,7 +187,7 @@ namespace OpenMS
     if (v.received) return commands;
 
     v.result = ms2_deconv;
-    v.score = computeExplorationScore_(group.exploration_metric, ms2_deconv);
+    v.score = computeExplorationScore_(group.exploration_metric, ms2_deconv, group, mzs, ints, length);
     v.tic_coverage = computeTICCoverage_(ms2_deconv);
     v.fragment_count = static_cast<int>(ms2_deconv.size());
     v.received = true;
@@ -272,30 +276,82 @@ namespace OpenMS
     const auto& next_cfg = config_.level(next_level);
     if (next_cfg.selection == SelectionMetric::None) return commands;
 
-    // Build index array sorted by intensity (descending)
-    std::vector<int> indices(result.size());
-    std::iota(indices.begin(), indices.end(), 0);
-    std::sort(indices.begin(), indices.end(),
-              [&result](int a, int b){ return result[a].getIntensity() > result[b].getIntensity(); });
-    int num_targets = std::min(static_cast<int>(indices.size()), next_cfg.max_targets);
+    const auto& seq = config_.targeting().protein_sequence;
+    int num_targets = next_cfg.max_targets;
+
+    // Get fragment ion targets via FragmentAnalysis
+    DeconvolvedSpectrum result_copy = result;
+    const int max_frags = 100;
+    std::vector<double> masses(max_frags), qscores(max_frags);
+    std::vector<double> wstarts(max_frags), wends(max_frags);
+    std::vector<int> charges(max_frags);
+    std::vector<char> ion_types(max_frags, '\0');
+    std::vector<int> frag_indices(max_frags, 0);
+
+    int found = 0;
+
+    switch (next_cfg.selection)
+    {
+      case SelectionMetric::Intensity:
+      case SelectionMetric::QScore:
+        found = fragments_.getTopFragmentMatches(seq, max_frags,
+            masses.data(), qscores.data(), charges.data(),
+            wstarts.data(), wends.data(),
+            ion_types.data(), frag_indices.data(), result_copy);
+        break;
+      case SelectionMetric::TerminalFragments:
+        found = fragments_.getTerminalFragmentIons(seq, max_frags,
+            masses.data(), qscores.data(), charges.data(),
+            wstarts.data(), wends.data(),
+            ion_types.data(), frag_indices.data(), result_copy);
+        break;
+      case SelectionMetric::AmbiguityResolution:
+        found = fragments_.getAmbiguityEnclosingIons(seq, max_frags,
+            masses.data(), qscores.data(), charges.data(),
+            wstarts.data(), wends.data(),
+            ion_types.data(), frag_indices.data(), result_copy);
+        break;
+      default:
+        break;
+    }
+
+    num_targets = std::min(num_targets, found);
+
+    // Build commands for each selected fragment target
+    ScanConfig next_scan_config = next_cfg.scans.empty() ? ScanConfig{} : next_cfg.scans[0];
 
     if (config_.hasExploration(next_level))
     {
+      // Recursive exploration at next level
       for (int ti = 0; ti < num_targets; ++ti)
       {
-        auto sub_cmds = initiate(next_level, result[indices[ti]], 0, faims_cv, queue);
+        PeakGroup frag_pg(std::abs(charges[ti]), std::abs(charges[ti]), true);
+        frag_pg.setMonoisotopicMass(masses[ti]);
+        FLASHHelperClasses::LogMzPeak lp;
+        lp.mz = (wstarts[ti] + wends[ti]) / 2.0;
+        lp.abs_charge = std::abs(charges[ti]);
+        frag_pg.push_back(lp);
+
+        auto sub_cmds = initiate(next_level, frag_pg, std::abs(charges[ti]), faims_cv, queue);
         commands.insert(commands.end(), sub_cmds.begin(), sub_cmds.end());
       }
     }
     else
     {
-      ScanConfig next_scan_config = next_cfg.scans.empty() ? ScanConfig{} : next_cfg.scans[0];
+      // Direct command building for each fragment target
       for (int ti = 0; ti < num_targets; ++ti)
       {
-        ScanCommand cmd = queue.buildMS2(result[indices[ti]], 0, next_scan_config);
+        // Build as PeakGroup for the buildMS2 factory
+        PeakGroup frag_pg(std::abs(charges[ti]), std::abs(charges[ti]), true);
+        frag_pg.setMonoisotopicMass(masses[ti]);
+        FLASHHelperClasses::LogMzPeak lp;
+        lp.mz = (wstarts[ti] + wends[ti]) / 2.0;
+        lp.abs_charge = std::abs(charges[ti]);
+        frag_pg.push_back(lp);
+
+        ScanCommand cmd = queue.buildMS2(frag_pg, std::abs(charges[ti]), next_scan_config, 1);
         cmd.msn_level = next_level;
         cmd.faims_cv = faims_cv;
-        cmd.priority = 1;
 
         std::string id_str = ScanCommandQueue::encode(cmd.scan_id);
         std::cout << "[TRACK-CREATE] id=" << id_str
@@ -320,14 +376,16 @@ namespace OpenMS
   }
 
   double Exploration::computeExplorationScore_(ExplorationMetric metric,
-      const DeconvolvedSpectrum& spec) const
+      const DeconvolvedSpectrum& spec,
+      const ExplorationGroup& group,
+      const double* mzs, const double* ints, int length) const
   {
     switch (metric)
     {
       case ExplorationMetric::MassCount:
         return computeMassCount_(spec);
       case ExplorationMetric::RemainingPrecursor:
-        return computeRemainingPrecursorScore_(spec);
+        return computeRemainingPrecursorScore_(group, mzs, ints, length);
       case ExplorationMetric::FragmentCount:
         return computeFragmentCount_(spec);
       default:
@@ -340,18 +398,63 @@ namespace OpenMS
     return static_cast<double>(spec.size());
   }
 
-  double Exploration::computeRemainingPrecursorScore_(const DeconvolvedSpectrum& spec) const
+  double Exploration::computeRemainingPrecursorScore_(const ExplorationGroup& group,
+      const double* mzs, const double* ints, int length) const
   {
-    if (spec.empty()) return 0.0;
-    double tic = 0.0;
-    for (Size i = 0; i < spec.size(); ++i)
-      tic += spec[i].getIntensity();
-    return tic;
+    if (length <= 0 || mzs == nullptr || ints == nullptr)
+      return 0.0;
+
+    // Sum intensity within the precursor isolation window
+    double iso_half = group.isolation_width / 2.0;
+    double mz_low = group.precursor_mz - iso_half;
+    double mz_high = group.precursor_mz + iso_half;
+
+    double remaining_intensity = 0.0;
+    for (int i = 0; i < length; ++i)
+    {
+      if (mzs[i] >= mz_low && mzs[i] <= mz_high)
+        remaining_intensity += ints[i];
+    }
+
+    // Reference: charge-specific intensity from the precursor PeakGroup
+    double reference = group.precursor_pg.getChargeIntensity(
+        std::abs(group.precursor_charge));
+    if (reference <= 0.0)
+      reference = group.precursor_pg.getIntensity();
+    if (reference <= 0.0)
+      return 0.0;
+
+    double ratio = remaining_intensity / reference;
+    // Score = 1 - ratio, clamped to [0, 1]. Higher = less remaining = better fragmentation.
+    double score = 1.0 - ratio;
+    if (score < 0.0) score = 0.0;
+    if (score > 1.0) score = 1.0;
+    return score;
   }
 
   double Exploration::computeFragmentCount_(const DeconvolvedSpectrum& spec) const
   {
-    return static_cast<double>(spec.size());
+    const auto& seq = config_.targeting().protein_sequence;
+    if (seq.empty() || spec.empty())
+      return 0.0;
+
+    DeconvolvedSpectrum spec_copy = spec;
+
+    const int max_matches = 100;
+    std::vector<double> masses(max_matches), qscores(max_matches);
+    std::vector<double> wstarts(max_matches), wends(max_matches);
+    std::vector<int> charges(max_matches);
+    std::vector<char> ion_types(max_matches, '\0');
+    std::vector<int> frag_indices(max_matches, 0);
+
+    int count = fragments_.getTopFragmentMatches(
+        seq, max_matches,
+        masses.data(), qscores.data(), charges.data(),
+        wstarts.data(), wends.data(),
+        ion_types.data(), frag_indices.data(),
+        spec_copy);
+
+    return static_cast<double>(count);
   }
 
   float Exploration::computeTICCoverage_(const DeconvolvedSpectrum& spec) const

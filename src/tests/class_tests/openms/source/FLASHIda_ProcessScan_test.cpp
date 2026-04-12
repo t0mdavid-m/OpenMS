@@ -31,7 +31,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
+      "IDScore": false, "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
@@ -53,12 +53,12 @@ namespace
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "intensity" },
+      "ms2": { "selection": "none" },
       "ms3": { "selection": "none" }
     }
   })";
 
-  // Config with MS3 mode 1 (SourceCID) enabled
+  // Config with MS3 targeting enabled via selection_strategy
   const char* ms3_mode1_json = R"({
     "deconvolution": {
       "score_threshold": 0.0, "tqscore_threshold": 0.9,
@@ -67,7 +67,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
+      "IDScore": false, "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
@@ -85,12 +85,12 @@ namespace
       "agc_interval_seconds": 30
     },
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
-    "ms3": { "enabled": true, "mode": 1, "max_per_ms2": 2, "protein_sequence": "" },
+    "ms3": { "protein_sequence": "MKWVTFISLLLLFSSAYSRGVFRR" },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "intensity" },
-      "ms3": { "selection": "intensity" }
+      "ms2": { "selection": "intensity", "max_targets": 3 },
+      "ms3": { "selection": "intensity", "max_targets": 2 }
     }
   })";
 
@@ -103,7 +103,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": true, "AllCharges": false, "MS3AllCharges": false,
+      "IDScore": true, "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
@@ -125,7 +125,7 @@ namespace
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "intensity" },
+      "ms2": { "selection": "none" },
       "ms3": { "selection": "none" }
     }
   })";
@@ -139,7 +139,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": true, "AllCharges": true, "MS3AllCharges": false,
+      "IDScore": true, "AllCharges": true,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
@@ -161,7 +161,7 @@ namespace
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "intensity" },
+      "ms2": { "selection": "none" },
       "ms3": { "selection": "none" }
     }
   })";
@@ -175,7 +175,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": true, "MS3AllCharges": false,
+      "IDScore": false, "AllCharges": true,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
@@ -197,7 +197,7 @@ namespace
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "intensity" },
+      "ms2": { "selection": "none" },
       "ms3": { "selection": "none" }
     }
   })";
@@ -211,7 +211,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
+      "IDScore": false, "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
@@ -233,7 +233,7 @@ namespace
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "intensity" },
+      "ms2": { "selection": "none" },
       "ms3": { "selection": "none" }
     }
   })";
@@ -247,7 +247,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
+      "IDScore": false, "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
@@ -269,7 +269,7 @@ namespace
     "files": { "target_logs": [], "fasta": "../../FlashIDA/test-data/configs/test_fasta.fasta", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "intensity" },
+      "ms2": { "selection": "none" },
       "ms3": { "selection": "none" }
     }
   })";
@@ -283,7 +283,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
+      "IDScore": false, "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "tagging": {
@@ -308,7 +308,7 @@ namespace
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "intensity" },
+      "ms2": { "selection": "none" },
       "ms3": { "selection": "none" }
     }
   })";
@@ -322,7 +322,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
+      "IDScore": false, "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
@@ -343,7 +343,7 @@ namespace
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "intensity" },
+      "ms2": { "selection": "none" },
       "ms3": { "selection": "none" }
     }
   })";
@@ -357,7 +357,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
+      "IDScore": false, "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
@@ -378,7 +378,7 @@ namespace
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "intensity" },
+      "ms2": { "selection": "none" },
       "ms3": { "selection": "none" }
     }
   })";
@@ -392,7 +392,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
+      "IDScore": false, "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "tagging": {
@@ -417,7 +417,7 @@ namespace
     "files": { "target_logs": [], "fasta": "../../FlashIDA/test-data/configs/test_fasta.fasta", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "intensity" },
+      "ms2": { "selection": "none" },
       "ms3": { "selection": "none" }
     }
   })";
@@ -431,7 +431,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
+      "IDScore": false, "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
@@ -455,7 +455,7 @@ namespace
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "intensity" },
+      "ms2": { "selection": "none" },
       "ms3": { "selection": "none" }
     }
   })";
@@ -470,7 +470,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
+      "IDScore": false, "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
@@ -491,7 +491,7 @@ namespace
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "intensity" },
+      "ms2": { "selection": "none" },
       "ms3": { "selection": "none" }
     }
   })";
@@ -505,7 +505,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
+      "IDScore": false, "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
@@ -527,7 +527,7 @@ namespace
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "intensity", "max_targets": 3 },
-      "ms2": { "selection": "intensity" },
+      "ms2": { "selection": "none" },
       "ms3": { "selection": "none" }
     }
   })";
@@ -541,7 +541,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
+      "IDScore": false, "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
@@ -562,7 +562,7 @@ namespace
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "none", "max_targets": 3 },
-      "ms2": { "selection": "intensity" },
+      "ms2": { "selection": "none" },
       "ms3": { "selection": "none" }
     }
   })";
@@ -576,7 +576,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
+      "IDScore": false, "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
@@ -597,7 +597,7 @@ namespace
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 1 },
-      "ms2": { "selection": "intensity" },
+      "ms2": { "selection": "none" },
       "ms3": { "selection": "none" }
     }
   })";
@@ -611,7 +611,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
+      "IDScore": false, "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
@@ -632,7 +632,7 @@ namespace
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 5 },
-      "ms2": { "selection": "intensity" },
+      "ms2": { "selection": "none" },
       "ms3": { "selection": "none" }
     }
   })";

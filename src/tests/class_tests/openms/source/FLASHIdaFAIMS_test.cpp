@@ -35,7 +35,6 @@ namespace
       "target_mode": 0,
       "IDScore": false,
       "AllCharges": false,
-      "MS3AllCharges": true,
       "HCDEnergy": 29,
       "strict_inclusion": false,
       "tie_threshold": 0.1
@@ -91,7 +90,7 @@ namespace
     },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 1 },
-      "ms2": { "selection": "intensity" },
+      "ms2": { "selection": "none" },
       "ms3": { "selection": "none" }
     }
   })";
@@ -112,7 +111,6 @@ namespace
       "target_mode": 0,
       "IDScore": false,
       "AllCharges": false,
-      "MS3AllCharges": true,
       "HCDEnergy": 29,
       "strict_inclusion": false,
       "tie_threshold": 0.1
@@ -168,7 +166,7 @@ namespace
     },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 1 },
-      "ms2": { "selection": "intensity" },
+      "ms2": { "selection": "none" },
       "ms3": { "selection": "none" }
     }
   })";
@@ -189,7 +187,6 @@ namespace
       "target_mode": 0,
       "IDScore": false,
       "AllCharges": false,
-      "MS3AllCharges": true,
       "HCDEnergy": 29,
       "strict_inclusion": false,
       "tie_threshold": 0.1
@@ -244,7 +241,7 @@ namespace
     },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 1 },
-      "ms2": { "selection": "intensity" },
+      "ms2": { "selection": "none" },
       "ms3": { "selection": "none" }
     }
   })";

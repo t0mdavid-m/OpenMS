@@ -337,47 +337,15 @@ namespace
       const auto& pg = stored_ms2[pg_idx];
       double mono_mass = pg.getMonoMass();
 
-      if (config_.targeting().ms3_all_charges)
-      {
-        // Collect all charges with non-zero intensity and sort by intensity descending
-        auto [min_c, max_c] = pg.getAbsChargeRange();
-        std::vector<std::pair<float, int>> charge_intensities;  // (intensity, charge)
-        for (int c = min_c; c <= max_c; ++c)
-        {
-          float intensity = pg.getChargeIntensity(c);
-          if (intensity > 0)
-          {
-            charge_intensities.emplace_back(intensity, c);
-          }
-        }
-        std::sort(charge_intensities.begin(), charge_intensities.end(),
-                  [](const auto& a, const auto& b) { return a.first > b.first; });
-
-        for (const auto& [intensity, c] : charge_intensities)
-        {
-          if (output_idx >= n) break;
-          masses[output_idx] = mono_mass;
-          qscores[output_idx] = intensity;
-          charges[output_idx] = c;
-          auto [mz1, mz2] = pg.getMzRange(c);
-          window_starts[output_idx] = mz1 - optimal_window_margin_;
-          window_ends[output_idx] = mz2 + optimal_window_margin_;
-          ++output_idx;
-        }
-        if (output_idx >= n) break;
-      }
-      else
-      {
-        // Single charge behavior (most intense charge)
-        int charge = pg.getMaxIntensityAbsCharge();
-        masses[output_idx] = mono_mass;
-        qscores[output_idx] = pg.getQscore();
-        charges[output_idx] = charge;
-        auto [mz1, mz2] = pg.getMzRange(charge);
-        window_starts[output_idx] = mz1 - optimal_window_margin_;
-        window_ends[output_idx] = mz2 + optimal_window_margin_;
-        ++output_idx;
-      }
+      // Single charge behavior (most intense charge)
+      int charge = pg.getMaxIntensityAbsCharge();
+      masses[output_idx] = mono_mass;
+      qscores[output_idx] = pg.getQscore();
+      charges[output_idx] = charge;
+      auto [mz1, mz2] = pg.getMzRange(charge);
+      window_starts[output_idx] = mz1 - optimal_window_margin_;
+      window_ends[output_idx] = mz2 + optimal_window_margin_;
+      ++output_idx;
     }
 
     return output_idx;
@@ -799,50 +767,16 @@ namespace
       const auto& m = matches[i];
       const auto& pg = stored_ms2[m.peak_index];
 
-      if (config_.targeting().ms3_all_charges)
-      {
-        // Collect all charges with non-zero intensity and sort by intensity descending
-        auto [min_c, max_c] = pg.getAbsChargeRange();
-        std::vector<std::pair<float, int>> charge_intensities;  // (intensity, charge)
-        for (int c = min_c; c <= max_c; ++c)
-        {
-          float intensity = pg.getChargeIntensity(c);
-          if (intensity > 0)
-          {
-            charge_intensities.emplace_back(intensity, c);
-          }
-        }
-        std::sort(charge_intensities.begin(), charge_intensities.end(),
-                  [](const auto& a, const auto& b) { return a.first > b.first; });
-
-        for (const auto& [intensity, c] : charge_intensities)
-        {
-          if (output_idx >= n) break;
-          masses[output_idx] = m.observed_mass;
-          qscores[output_idx] = intensity;
-          charges[output_idx] = c;
-          ion_types[output_idx] = m.ion_type;
-          fragment_indices[output_idx] = m.fragment_index;
-          auto [mz1, mz2] = pg.getMzRange(c);
-          window_starts[output_idx] = mz1 - optimal_window_margin_;
-          window_ends[output_idx] = mz2 + optimal_window_margin_;
-          ++output_idx;
-        }
-        if (output_idx >= n) break;
-      }
-      else
-      {
-        // Single charge behavior
-        masses[output_idx] = m.observed_mass;
-        qscores[output_idx] = m.qscore;
-        charges[output_idx] = m.charge;
-        ion_types[output_idx] = m.ion_type;
-        fragment_indices[output_idx] = m.fragment_index;
-        auto [mz1, mz2] = pg.getMzRange(m.charge);
-        window_starts[output_idx] = mz1 - optimal_window_margin_;
-        window_ends[output_idx] = mz2 + optimal_window_margin_;
-        ++output_idx;
-      }
+      // Single charge behavior
+      masses[output_idx] = m.observed_mass;
+      qscores[output_idx] = m.qscore;
+      charges[output_idx] = m.charge;
+      ion_types[output_idx] = m.ion_type;
+      fragment_indices[output_idx] = m.fragment_index;
+      auto [mz1, mz2] = pg.getMzRange(m.charge);
+      window_starts[output_idx] = mz1 - optimal_window_margin_;
+      window_ends[output_idx] = mz2 + optimal_window_margin_;
+      ++output_idx;
     }
 
     return output_idx;
@@ -1066,7 +1000,7 @@ namespace
       return false;
     };
 
-    // Helper to output one ion (handles MS3AllCharges)
+    // Helper to output one ion (single most-intense charge)
     int output_idx = 0;
     auto output_ion = [&](const EnclosingIon& ion) {
       if (used_peaks.find(ion.peak_index) != used_peaks.end()) return;  // Already output
@@ -1075,50 +1009,16 @@ namespace
       const auto& pg = stored_ms2[ion.peak_index];
       double mono_mass = pg.getMonoMass();
 
-      if (config_.targeting().ms3_all_charges)
-      {
-        // Collect all charges with non-zero intensity and sort by intensity descending
-        auto [min_c, max_c] = pg.getAbsChargeRange();
-        std::vector<std::pair<float, int>> charge_intensities;
-        for (int c = min_c; c <= max_c; ++c)
-        {
-          float intensity = pg.getChargeIntensity(c);
-          if (intensity > 0)
-          {
-            charge_intensities.emplace_back(intensity, c);
-          }
-        }
-        std::sort(charge_intensities.begin(), charge_intensities.end(),
-                  [](const auto& a, const auto& b) { return a.first > b.first; });
-
-        for (const auto& [intensity, c] : charge_intensities)
-        {
-          if (output_idx >= n) break;
-          masses[output_idx] = mono_mass;
-          qscores[output_idx] = intensity;
-          charges[output_idx] = c;
-          ion_types[output_idx] = ion.ion_type;
-          fragment_indices[output_idx] = ion.fragment_index;
-          auto [mz1, mz2] = pg.getMzRange(c);
-          window_starts[output_idx] = mz1 - optimal_window_margin_;
-          window_ends[output_idx] = mz2 + optimal_window_margin_;
-          ++output_idx;
-        }
-      }
-      else
-      {
-        // Single charge behavior
-        int charge = pg.getMaxIntensityAbsCharge();
-        masses[output_idx] = mono_mass;
-        qscores[output_idx] = ion.qscore;
-        charges[output_idx] = charge;
-        ion_types[output_idx] = ion.ion_type;
-        fragment_indices[output_idx] = ion.fragment_index;
-        auto [mz1, mz2] = pg.getMzRange(charge);
-        window_starts[output_idx] = mz1 - optimal_window_margin_;
-        window_ends[output_idx] = mz2 + optimal_window_margin_;
-        ++output_idx;
-      }
+      int charge = pg.getMaxIntensityAbsCharge();
+      masses[output_idx] = mono_mass;
+      qscores[output_idx] = ion.qscore;
+      charges[output_idx] = charge;
+      ion_types[output_idx] = ion.ion_type;
+      fragment_indices[output_idx] = ion.fragment_index;
+      auto [mz1, mz2] = pg.getMzRange(charge);
+      window_starts[output_idx] = mz1 - optimal_window_margin_;
+      window_ends[output_idx] = mz2 + optimal_window_margin_;
+      ++output_idx;
     };
 
     std::cout << "[getAmbiguityEnclosingIons] Output Phase 1: Primary brackets for " << ptm_brackets.size() << " PTM sites" << std::endl;
@@ -1322,50 +1222,16 @@ namespace
       {
         const auto& pg = stored_ms2[selected->peak_index];
 
-        if (config_.targeting().ms3_all_charges)
-        {
-          // Collect all charges with non-zero intensity and sort by intensity descending
-          auto [min_c, max_c] = pg.getAbsChargeRange();
-          std::vector<std::pair<float, int>> charge_intensities;  // (intensity, charge)
-          for (int c = min_c; c <= max_c; ++c)
-          {
-            float intensity = pg.getChargeIntensity(c);
-            if (intensity > 0)
-            {
-              charge_intensities.emplace_back(intensity, c);
-            }
-          }
-          std::sort(charge_intensities.begin(), charge_intensities.end(),
-                    [](const auto& a, const auto& b) { return a.first > b.first; });
-
-          for (const auto& [intensity, c] : charge_intensities)
-          {
-            if (output_idx >= n) break;
-            masses[output_idx] = selected->observed_mass;
-            qscores[output_idx] = intensity;
-            charges[output_idx] = c;
-            ion_types[output_idx] = selected->ion_type;
-            fragment_indices[output_idx] = selected->fragment_index;
-            auto [mz1, mz2] = pg.getMzRange(c);
-            window_starts[output_idx] = mz1 - optimal_window_margin_;
-            window_ends[output_idx] = mz2 + optimal_window_margin_;
-            ++output_idx;
-          }
-          if (output_idx >= n) break;
-        }
-        else
-        {
-          // Single charge behavior
-          masses[output_idx] = selected->observed_mass;
-          qscores[output_idx] = selected->qscore;
-          charges[output_idx] = selected->charge;
-          ion_types[output_idx] = selected->ion_type;
-          fragment_indices[output_idx] = selected->fragment_index;
-          auto [mz_start, mz_end] = pg.getMzRange(selected->charge);
-          window_starts[output_idx] = mz_start - optimal_window_margin_;
-          window_ends[output_idx] = mz_end + optimal_window_margin_;
-          ++output_idx;
-        }
+        // Single charge behavior
+        masses[output_idx] = selected->observed_mass;
+        qscores[output_idx] = selected->qscore;
+        charges[output_idx] = selected->charge;
+        ion_types[output_idx] = selected->ion_type;
+        fragment_indices[output_idx] = selected->fragment_index;
+        auto [mz_start, mz_end] = pg.getMzRange(selected->charge);
+        window_starts[output_idx] = mz_start - optimal_window_margin_;
+        window_ends[output_idx] = mz_end + optimal_window_margin_;
+        ++output_idx;
       }
       select_prefix = !select_prefix;  // Alternate between prefix and suffix
     }

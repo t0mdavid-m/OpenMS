@@ -45,7 +45,7 @@ namespace
     "files": {},
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 10 },
-      "ms2": { "selection": "intensity" }
+      "ms2": { "selection": "none" }
     }
   })";
 }

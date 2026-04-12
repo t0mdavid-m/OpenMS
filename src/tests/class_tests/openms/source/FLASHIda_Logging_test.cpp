@@ -23,16 +23,15 @@ using namespace OpenMS;
 namespace
 {
   // Helper: build JSON config string with runtime paths
-  // If enable_ms3=true, adds MS3 mode 1 config with selection_strategy ms3 = intensity
+  // enable_ms3 parameter is retained for API compat but MS3 is now only
+  // activated via selection_strategy — these tests focus on logging TSV format.
   std::string buildJsonWithRuntime(const std::string& ida_log_path,
                                    const std::string& commands_path,
                                    const std::string& results_path,
-                                   bool enable_ms3 = false)
+                                   bool /*enable_ms3*/ = false)
   {
-    std::string ms3_block = enable_ms3
-      ? R"("ms3": { "enabled": true, "mode": 1, "max_per_ms2": 2, "protein_sequence": "" },)"
-      : "";
-    std::string ms3_selection = enable_ms3 ? "\"intensity\"" : "\"none\"";
+    std::string ms3_block;  // no ms3 block needed (protein_sequence defaults to "")
+    std::string ms3_selection = "\"none\"";
 
     std::ostringstream oss;
     oss << R"({
@@ -43,7 +42,7 @@ namespace
       },
       "precursor_selection": {
         "RT_window": 180, "target_mode": 0,
-        "IDScore": false, "AllCharges": false, "MS3AllCharges": false,
+        "IDScore": false, "AllCharges": false,
         "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
       },
       "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
@@ -65,7 +64,7 @@ namespace
       "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
       "selection_strategy": {
         "ms1": { "selection": "qscore", "max_targets": 5 },
-        "ms2": { "selection": "intensity" },
+        "ms2": { "selection": "none" },
         "ms3": { "selection": )" << ms3_selection << R"( }
       },
       "runtime": {
