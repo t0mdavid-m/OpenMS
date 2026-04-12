@@ -95,10 +95,10 @@ namespace
     },
     "conditional_ms2": false,
     "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms1": { "selection": "qscore", "max_targets": 3 },
       "ms2": {
         "selection": "intensity",
-        "max_fragments": 3,
+        "max_targets": 3,
         "exploration": {
           "metric": "mass_count",
           "ce_min": 20.0,
@@ -192,10 +192,10 @@ namespace
     },
     "conditional_ms2": false,
     "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms1": { "selection": "qscore", "max_targets": 3 },
       "ms2": {
         "selection": "intensity",
-        "max_fragments": 3,
+        "max_targets": 3,
         "exploration": {
           "metric": "mass_count",
           "ce_min": 20.0,
@@ -206,7 +206,7 @@ namespace
       },
       "ms3": {
         "selection": "intensity",
-        "max_fragments": 3,
+        "max_targets": 3,
         "exploration": {
           "metric": "fragment_count",
           "ce_min": 15.0,
@@ -291,10 +291,10 @@ namespace
     },
     "conditional_ms2": false,
     "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms1": { "selection": "qscore", "max_targets": 3 },
       "ms2": {
         "selection": "intensity",
-        "max_fragments": 3,
+        "max_targets": 3,
         "exploration": {
           "metric": "mass_count",
           "ce_min": 20.0,
@@ -303,7 +303,7 @@ namespace
           "activation": "HCD"
         }
       },
-      "ms3": { "selection": "intensity", "max_fragments": 3 }
+      "ms3": { "selection": "intensity", "max_targets": 3 }
     }
   })";
 
@@ -381,10 +381,10 @@ namespace
     },
     "conditional_ms2": false,
     "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms1": { "selection": "qscore", "max_targets": 3 },
       "ms2": {
         "selection": "intensity",
-        "max_fragments": 3,
+        "max_targets": 3,
         "exploration": {
           "metric": "mass_count",
           "ce_min": 20.0,
@@ -478,11 +478,11 @@ namespace
     },
     "conditional_ms2": false,
     "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_precursors": 3 },
-      "ms2": { "selection": "intensity", "max_fragments": 3 },
+      "ms1": { "selection": "qscore", "max_targets": 3 },
+      "ms2": { "selection": "intensity", "max_targets": 3 },
       "ms3": {
         "selection": "intensity",
-        "max_fragments": 3,
+        "max_targets": 3,
         "exploration": {
           "metric": "fragment_count",
           "ce_min": 15.0,

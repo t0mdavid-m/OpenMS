@@ -52,7 +52,7 @@ namespace
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms1": { "selection": "qscore", "max_targets": 3 },
       "ms2": { "selection": "intensity" },
       "ms3": { "selection": "none" }
     }
@@ -88,7 +88,7 @@ namespace
     "ms3": { "enabled": true, "mode": 1, "max_per_ms2": 2, "protein_sequence": "" },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms1": { "selection": "qscore", "max_targets": 3 },
       "ms2": { "selection": "intensity" },
       "ms3": { "selection": "intensity" }
     }
@@ -124,7 +124,7 @@ namespace
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms1": { "selection": "qscore", "max_targets": 3 },
       "ms2": { "selection": "intensity" },
       "ms3": { "selection": "none" }
     }
@@ -160,7 +160,7 @@ namespace
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms1": { "selection": "qscore", "max_targets": 3 },
       "ms2": { "selection": "intensity" },
       "ms3": { "selection": "none" }
     }
@@ -196,7 +196,7 @@ namespace
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms1": { "selection": "qscore", "max_targets": 3 },
       "ms2": { "selection": "intensity" },
       "ms3": { "selection": "none" }
     }
@@ -232,7 +232,7 @@ namespace
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms1": { "selection": "qscore", "max_targets": 3 },
       "ms2": { "selection": "intensity" },
       "ms3": { "selection": "none" }
     }
@@ -268,7 +268,7 @@ namespace
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "../../FlashIDA/test-data/configs/test_fasta.fasta", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms1": { "selection": "qscore", "max_targets": 3 },
       "ms2": { "selection": "intensity" },
       "ms3": { "selection": "none" }
     }
@@ -307,7 +307,7 @@ namespace
     "conditional_ms2": true,
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms1": { "selection": "qscore", "max_targets": 3 },
       "ms2": { "selection": "intensity" },
       "ms3": { "selection": "none" }
     }
@@ -342,7 +342,7 @@ namespace
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms1": { "selection": "qscore", "max_targets": 3 },
       "ms2": { "selection": "intensity" },
       "ms3": { "selection": "none" }
     }
@@ -377,7 +377,7 @@ namespace
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms1": { "selection": "qscore", "max_targets": 3 },
       "ms2": { "selection": "intensity" },
       "ms3": { "selection": "none" }
     }
@@ -416,7 +416,7 @@ namespace
     "conditional_ms2": true,
     "files": { "target_logs": [], "fasta": "../../FlashIDA/test-data/configs/test_fasta.fasta", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms1": { "selection": "qscore", "max_targets": 3 },
       "ms2": { "selection": "intensity" },
       "ms3": { "selection": "none" }
     }
@@ -454,7 +454,7 @@ namespace
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms1": { "selection": "qscore", "max_targets": 3 },
       "ms2": { "selection": "intensity" },
       "ms3": { "selection": "none" }
     }
@@ -490,7 +490,7 @@ namespace
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms1": { "selection": "qscore", "max_targets": 3 },
       "ms2": { "selection": "intensity" },
       "ms3": { "selection": "none" }
     }
@@ -526,7 +526,7 @@ namespace
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
-      "ms1": { "selection": "intensity", "max_precursors": 3 },
+      "ms1": { "selection": "intensity", "max_targets": 3 },
       "ms2": { "selection": "intensity" },
       "ms3": { "selection": "none" }
     }
@@ -561,13 +561,13 @@ namespace
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
-      "ms1": { "selection": "none", "max_precursors": 3 },
+      "ms1": { "selection": "none", "max_targets": 3 },
       "ms2": { "selection": "intensity" },
       "ms3": { "selection": "none" }
     }
   })";
 
-  // Config with max_precursors=1 (cap test)
+  // Config with max_targets=1 (cap test)
   const char* max1_json = R"({
     "deconvolution": {
       "score_threshold": 0.0, "tqscore_threshold": 0.9,
@@ -596,13 +596,13 @@ namespace
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_precursors": 1 },
+      "ms1": { "selection": "qscore", "max_targets": 1 },
       "ms2": { "selection": "intensity" },
       "ms3": { "selection": "none" }
     }
   })";
 
-  // Config with max_precursors=5 (cap test)
+  // Config with max_targets=5 (cap test)
   const char* max5_json = R"({
     "deconvolution": {
       "score_threshold": 0.0, "tqscore_threshold": 0.9,
@@ -631,7 +631,7 @@ namespace
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_precursors": 5 },
+      "ms1": { "selection": "qscore", "max_targets": 5 },
       "ms2": { "selection": "intensity" },
       "ms3": { "selection": "none" }
     }
@@ -1452,8 +1452,8 @@ START_SECTION(processScan_ms1_none_selection)
 }
 END_SECTION
 
-// max_precursors cap: max=1 <= max=3 <= max=5
-START_SECTION(processScan_ms1_max_precursors_cap)
+// max_targets cap: max=1 <= max=3 <= max=5
+START_SECTION(processScan_ms1_max_targets_cap)
 {
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
   if (ms1_scans.empty()) { NOT_TESTABLE; break; }

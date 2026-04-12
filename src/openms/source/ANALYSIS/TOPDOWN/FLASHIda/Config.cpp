@@ -289,10 +289,8 @@ namespace OpenMS
         else if (sel_str == "none") cfg.selection = SelectionMetric::None;
         else cfg.selection = SelectionMetric::Intensity;
 
-        // Max targets (with aliases)
-        cfg.max_targets = level_obj.value("max_targets",
-            level_obj.value("max_precursors",
-            level_obj.value("max_fragments", 10)));
+        // Max targets
+        cfg.max_targets = level_obj.value("max_targets", 10);
 
         // Exploration (optional, MS2+ only; guard against JSON null)
         if (level_obj.contains("exploration") && !level_obj["exploration"].is_null() && level_num > 1)

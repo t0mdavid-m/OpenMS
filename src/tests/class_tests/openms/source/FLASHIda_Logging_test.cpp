@@ -64,7 +64,7 @@ namespace
       )" << ms3_block << R"(
       "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
       "selection_strategy": {
-        "ms1": { "selection": "qscore", "max_precursors": 5 },
+        "ms1": { "selection": "qscore", "max_targets": 5 },
         "ms2": { "selection": "intensity" },
         "ms3": { "selection": )" << ms3_selection << R"( }
       },

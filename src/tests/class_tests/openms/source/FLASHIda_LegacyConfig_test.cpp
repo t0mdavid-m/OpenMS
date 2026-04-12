@@ -99,7 +99,7 @@ START_SECTION(([EXTRA] Config rejects IDScore + exploration combo))
     "scheduling": { "cycle_time": { "enabled": false }, "scan_timeout": { "enabled": false }, "agc_interval_seconds": 30 },
     "files": {},
     "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms1": { "selection": "qscore", "max_targets": 3 },
       "ms2": { "selection": "intensity", "exploration": { "metric": "mass_count", "ce_min": 20, "ce_max": 40, "ce_step": 5, "activation": "HCD" } }
     }
   })";
@@ -129,7 +129,7 @@ START_SECTION(([EXTRA] Config rejects exploration with multiple scan configs))
     "scheduling": { "cycle_time": { "enabled": false }, "scan_timeout": { "enabled": false }, "agc_interval_seconds": 30 },
     "files": {},
     "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms1": { "selection": "qscore", "max_targets": 3 },
       "ms2": { "selection": "intensity", "exploration": { "metric": "mass_count", "ce_min": 20, "ce_max": 40, "ce_step": 5, "activation": "HCD" } }
     }
   })";
@@ -157,7 +157,7 @@ START_SECTION(([EXTRA] Config rejects conditional_ms2 without tagging follow_up_
     "scheduling": { "cycle_time": { "enabled": false }, "scan_timeout": { "enabled": false }, "agc_interval_seconds": 30 },
     "files": {},
     "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_precursors": 3 },
+      "ms1": { "selection": "qscore", "max_targets": 3 },
       "ms2": { "selection": "intensity" }
     }
   })";

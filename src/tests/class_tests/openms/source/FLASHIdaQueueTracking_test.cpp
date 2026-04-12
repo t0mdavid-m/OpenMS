@@ -87,7 +87,7 @@ namespace
       "ptm_list": ""
     },
     "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_precursors": 1 },
+      "ms1": { "selection": "qscore", "max_targets": 1 },
       "ms2": { "selection": "intensity" },
       "ms3": { "selection": "none" }
     }
@@ -234,7 +234,7 @@ START_SECTION(agc_scan_is_dequeued_first)
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_precursors": 1 },
+      "ms1": { "selection": "qscore", "max_targets": 1 },
       "ms2": { "selection": "intensity" },
       "ms3": { "selection": "none" }
     }

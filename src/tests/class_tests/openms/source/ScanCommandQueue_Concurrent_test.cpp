@@ -44,7 +44,7 @@ namespace
     },
     "files": {},
     "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_precursors": 10 },
+      "ms1": { "selection": "qscore", "max_targets": 10 },
       "ms2": { "selection": "intensity" }
     }
   })";
