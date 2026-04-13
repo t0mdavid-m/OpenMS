@@ -512,6 +512,7 @@ FLASHIda::FLASHIda(char* arg) :
 
     if (ms_level == 1)
     {
+      std::cout << config_.level(1).selection << std::endl;
       // Selection=none: skip MS1 precursor selection entirely
       if (config_.level(1).selection == SelectionMetric::None)
         return 0;
@@ -526,6 +527,9 @@ FLASHIda::FLASHIda(char* arg) :
       int commands_pushed = 0;
       std::vector<ScanCommand> ms2_commands;
 
+      std::cout << ms2_commands.size() << std::endl;
+      std::cout << config_.hasExploration(2) << std::endl;
+      
       if (config_.hasExploration(2))
       {
         // Exploration path: initiate CE sweep variants INSTEAD of regular MS2
