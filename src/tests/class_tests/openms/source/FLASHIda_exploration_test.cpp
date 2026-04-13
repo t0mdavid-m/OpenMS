@@ -105,8 +105,7 @@ namespace
           "metric": "mass_count",
           "ce_min": 20.0,
           "ce_max": 40.0,
-          "ce_step": 5.0,
-          "activation": "HCD"
+          "ce_step": 5.0
         }
       },
       "ms3": { "selection": "none" }
@@ -198,8 +197,7 @@ namespace
           "metric": "mass_count",
           "ce_min": 20.0,
           "ce_max": 40.0,
-          "ce_step": 5.0,
-          "activation": "HCD"
+          "ce_step": 5.0
         }
       },
       "ms3": {
@@ -209,8 +207,7 @@ namespace
           "metric": "fragment_count",
           "ce_min": 15.0,
           "ce_max": 35.0,
-          "ce_step": 5.0,
-          "activation": "CID"
+          "ce_step": 5.0
         }
       }
     }
@@ -293,8 +290,7 @@ namespace
           "metric": "mass_count",
           "ce_min": 20.0,
           "ce_max": 40.0,
-          "ce_step": 5.0,
-          "activation": "HCD"
+          "ce_step": 5.0
         }
       },
       "ms3": { "selection": "intensity", "max_targets": 3 }
@@ -378,8 +374,7 @@ namespace
           "metric": "remaining_precursor",
           "ce_min": 20.0,
           "ce_max": 40.0,
-          "ce_step": 5.0,
-          "activation": "HCD"
+          "ce_step": 5.0
         }
       },
       "ms3": { "selection": "none" }
@@ -464,8 +459,7 @@ namespace
           "metric": "mass_count",
           "ce_min": 20.0,
           "ce_max": 40.0,
-          "ce_step": 5.0,
-          "activation": "HCD"
+          "ce_step": 5.0
         }
       },
       "ms3": { "selection": "none" }
@@ -558,8 +552,7 @@ namespace
           "metric": "fragment_count",
           "ce_min": 15.0,
           "ce_max": 35.0,
-          "ce_step": 5.0,
-          "activation": "CID"
+          "ce_step": 5.0
         }
       }
     }
@@ -1022,7 +1015,6 @@ START_SECTION(selection_metric_controls_config)
   TEST_REAL_SIMILAR(ms2_cfg.ce_min, 20.0)
   TEST_REAL_SIMILAR(ms2_cfg.ce_max, 40.0)
   TEST_REAL_SIMILAR(ms2_cfg.ce_step, 5.0)
-  TEST_STRING_EQUAL(ms2_cfg.exploration_activation, "HCD")
 
   auto ms3_cfg = cfg.level(3);
   TEST_EQUAL(static_cast<int>(ms3_cfg.selection), static_cast<int>(SelectionMetric::None))

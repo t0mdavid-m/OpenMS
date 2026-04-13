@@ -48,7 +48,6 @@ namespace OpenMS
     10,                           // max_targets
     ExplorationMetric::None,      // exploration
     20.0, 40.0, 5.0,              // ce_min, ce_max, ce_step
-    "HCD",                        // exploration_activation
     {},                           // overrides
     10.0,                         // tolerance_ppm
     0.1                           // remaining_precursor_target
@@ -309,7 +308,6 @@ namespace OpenMS
           cfg.ce_min = expl_obj.value("ce_min", 20.0);
           cfg.ce_max = expl_obj.value("ce_max", 40.0);
           cfg.ce_step = expl_obj.value("ce_step", 5.0);
-          cfg.exploration_activation = expl_obj.value("activation", std::string("HCD"));
           cfg.remaining_precursor_target = expl_obj.value("remaining_precursor_target", 0.1);
           if (expl_obj.contains("overrides"))
           {

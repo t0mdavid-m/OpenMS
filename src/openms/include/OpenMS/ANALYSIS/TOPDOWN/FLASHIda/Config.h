@@ -91,7 +91,6 @@ namespace OpenMS
     double ce_min = 20.0;
     double ce_max = 40.0;
     double ce_step = 5.0;
-    std::string exploration_activation = "HCD";
     std::unordered_map<std::string, std::string> overrides;
     double tolerance_ppm = 10.0;
     double remaining_precursor_target = 0.1;  ///< Target remaining precursor ratio (0.1 = 10%)

@@ -100,11 +100,10 @@ namespace OpenMS
       ExplorationVariant v;
       v.variant_index = i;
       v.collision_energy = ces[i];
-      v.activation_type = cfg.exploration_activation;
+      v.activation_type = base_config.activation;
 
       ScanConfig variant_config = base_config;
       variant_config.collision_energy = static_cast<int>(ces[i]);
-      variant_config.activation = cfg.exploration_activation;
 
       int expl_priority = (msn_level >= 3) ? 1 : 2;  // MS3 variants = p1, MS2 variants = p2
       ScanCommand cmd = queue.buildMS2(pg, charge, variant_config, expl_priority);
