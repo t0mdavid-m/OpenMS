@@ -996,7 +996,7 @@ namespace OpenMS
     auto selected = boost::dynamic_bitset<>(num_peak_groups);
     double snr_threshold = min_snr_[ms_level_ - 1];
 
-  #pragma omp parallel for default(none) shared(tol, selected, snr_threshold, num_peak_groups, std::cout)
+  #pragma omp parallel for default(none) shared(tol, selected, snr_threshold, num_peak_groups, std::cout) if(num_peak_groups > 100)
     for (int i = 0; i < num_peak_groups; i++)
     {
       int offset = 0;
@@ -1104,7 +1104,7 @@ namespace OpenMS
     selected = boost::dynamic_bitset<>(num_harmonics);
     filtered_peak_groups = std::vector<PeakGroup>();
 
-  #pragma omp parallel for default(none) shared(tol, selected, harmonic_charges_, num_harmonics)
+  #pragma omp parallel for default(none) shared(tol, selected, harmonic_charges_, num_harmonics) if(num_harmonics > 100)
     for (int i = 0; i < num_harmonics; i++)
     {
       const auto& peak_group = deconvolved_spectrum_[i];

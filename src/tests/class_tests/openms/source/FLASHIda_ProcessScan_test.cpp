@@ -702,7 +702,7 @@ START_TEST(FLASHIda_ProcessScan, "$Id$")
 START_SECTION(processScan_ms1_returns_commands)
 {
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
-  if (ms1_scans.empty()) { NOT_TESTABLE; break; }
+  ABORT_IF(ms1_scans.empty())
   FLASHIda* ida = new FLASHIda(const_cast<char*>(standard_json));
   int total = pushAllScans(ida, ms1_scans);
   TEST_EQUAL(total > 0, true)
@@ -714,7 +714,7 @@ END_SECTION
 START_SECTION(processScan_commands_dequeued)
 {
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
-  if (ms1_scans.empty()) { NOT_TESTABLE; break; }
+  ABORT_IF(ms1_scans.empty())
   FLASHIda* ida = new FLASHIda(const_cast<char*>(standard_json));
   int total = pushAllScans(ida, ms1_scans);
   TEST_EQUAL(total > 0, true)
@@ -754,7 +754,7 @@ END_SECTION
 START_SECTION(processScan_command_fields)
 {
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
-  if (ms1_scans.empty()) { NOT_TESTABLE; break; }
+  ABORT_IF(ms1_scans.empty())
   FLASHIda* ida = new FLASHIda(const_cast<char*>(standard_json));
   int total = pushAllScans(ida, ms1_scans);
   TEST_EQUAL(total > 0, true)
@@ -794,7 +794,7 @@ START_SECTION(processScan_ms2_path)
 {
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
   auto ms2_scans = loadTsvScans(ms2_tsv_path);
-  if (ms1_scans.empty() || ms2_scans.empty()) { NOT_TESTABLE; break; }
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
   FLASHIda* ida = new FLASHIda(const_cast<char*>(standard_json));
 
   // Push all MS1 scans to accumulate state and generate MS2 commands
@@ -834,11 +834,11 @@ START_SECTION(processScan_conditional_ms2_followup)
 {
   {
     std::ifstream fasta_check(fasta_path);
-    if (! fasta_check.good()) { NOT_TESTABLE; break; }
+    ABORT_IF(! fasta_check.good())
   }
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
   auto ms2_scans = loadTsvScans(ms2_tsv_path);
-  if (ms1_scans.empty() || ms2_scans.empty()) { NOT_TESTABLE; break; }
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
   // Uses conditional_with_tags_json: conditional_ms2=true + FASTA for tag detection
   FLASHIda* ida = new FLASHIda(const_cast<char*>(conditional_with_tags_json));
 
@@ -886,7 +886,7 @@ START_SECTION(processScan_ms3_commands)
 {
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
   auto ms2_scans = loadTsvScans(ms2_tsv_path);
-  if (ms1_scans.empty() || ms2_scans.empty()) { NOT_TESTABLE; break; }
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
   FLASHIda* ida = new FLASHIda(const_cast<char*>(ms3_mode1_json));
 
   // Push all MS1 scans
@@ -935,7 +935,7 @@ END_SECTION
 START_SECTION(decodeTracking_roundtrip)
 {
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
-  if (ms1_scans.empty()) { NOT_TESTABLE; break; }
+  ABORT_IF(ms1_scans.empty())
   FLASHIda* ida = new FLASHIda(const_cast<char*>(standard_json));
 
   // Test roundtrip via processScan → scan_description parsing
@@ -968,7 +968,7 @@ START_SECTION(cleanup_expired_commands)
 {
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
   auto ms2_scans = loadTsvScans(ms2_tsv_path);
-  if (ms1_scans.empty() || ms2_scans.empty()) { NOT_TESTABLE; break; }
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
   // Use timeout-enabled config
   FLASHIda* ida = new FLASHIda(const_cast<char*>(standard_json));
 
@@ -1014,7 +1014,7 @@ END_SECTION
 START_SECTION(processScan_scoring_branches)
 {
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
-  if (ms1_scans.empty()) { NOT_TESTABLE; break; }
+  ABORT_IF(ms1_scans.empty())
 
   // 4 configs: standard (QScore rep), idscore (IDScore rep), idscore_allcharges, qscore_allcharges
   FLASHIda* ida_qscore = new FLASHIda(const_cast<char*>(standard_json));
@@ -1063,7 +1063,7 @@ END_SECTION
 START_SECTION(processScan_mass_exclusion)
 {
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
-  if (ms1_scans.empty()) { NOT_TESTABLE; break; }
+  ABORT_IF(ms1_scans.empty())
   FLASHIda* ida = new FLASHIda(const_cast<char*>(standard_json));
 
   // Pass 1: push all scans
@@ -1093,7 +1093,7 @@ START_SECTION(processScan_quant_followup)
 {
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
   auto ms2_tmt_scans = loadTsvScans(ms2_tmt_tsv_path);
-  if (ms1_scans.empty() || ms2_tmt_scans.empty()) { NOT_TESTABLE; break; }
+  ABORT_IF(ms1_scans.empty() || ms2_tmt_scans.empty())
   // Use quant_sensitive_json with fold_change_threshold=0.01 to trigger on any reporter ratio
   FLASHIda* ida = new FLASHIda(const_cast<char*>(quant_sensitive_json));
 
@@ -1140,11 +1140,11 @@ START_SECTION(processScan_tag_targeting)
   // Guard: check fasta file exists
   {
     std::ifstream fasta_check(fasta_path);
-    if (! fasta_check.good()) { NOT_TESTABLE; break; }
+    ABORT_IF(! fasta_check.good())
   }
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
   auto ms2_scans = loadTsvScans(ms2_tsv_path);
-  if (ms1_scans.empty() || ms2_scans.empty()) { NOT_TESTABLE; break; }
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
   FLASHIda* ida = new FLASHIda(const_cast<char*>(tag_targeting_json));
 
   // Push MS1 scans
@@ -1174,7 +1174,7 @@ END_SECTION
 START_SECTION(processScan_cycle_time_enforcement)
 {
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
-  if (ms1_scans.empty()) { NOT_TESTABLE; break; }
+  ABORT_IF(ms1_scans.empty())
   // cycle_time_json: cycle_time.enabled=true, value_ms=0 (any elapsed time triggers)
   FLASHIda* ida = new FLASHIda(const_cast<char*>(cycle_time_json));
 
@@ -1231,7 +1231,7 @@ START_SECTION(processScan_conditional_ms2_requires_tags)
 {
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
   auto ms2_scans = loadTsvScans(ms2_tsv_path);
-  if (ms1_scans.empty() || ms2_scans.empty()) { NOT_TESTABLE; break; }
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
   // conditional_json has conditional_ms2=true but fasta="" — no tag targeting possible
   FLASHIda* ida = new FLASHIda(const_cast<char*>(conditional_json));
 
@@ -1258,11 +1258,11 @@ START_SECTION(processScan_tag_targeting_produces_followups)
 {
   {
     std::ifstream fasta_check(fasta_path);
-    if (! fasta_check.good()) { NOT_TESTABLE; break; }
+    ABORT_IF(! fasta_check.good())
   }
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
   auto ms2_scans = loadTsvScans(ms2_tsv_path);
-  if (ms1_scans.empty() || ms2_scans.empty()) { NOT_TESTABLE; break; }
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
   FLASHIda* ida = new FLASHIda(const_cast<char*>(conditional_with_tags_json));
 
   // Push all 50 MS1 scans
@@ -1411,7 +1411,7 @@ END_SECTION
 START_SECTION(processScan_ms1_intensity_selection)
 {
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
-  if (ms1_scans.empty()) { NOT_TESTABLE; break; }
+  ABORT_IF(ms1_scans.empty())
   FLASHIda* ida_qscore = new FLASHIda(const_cast<char*>(standard_json));
   FLASHIda* ida_intensity = new FLASHIda(const_cast<char*>(intensity_selection_json));
 
@@ -1439,7 +1439,7 @@ END_SECTION
 START_SECTION(processScan_ms1_none_selection)
 {
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
-  if (ms1_scans.empty()) { NOT_TESTABLE; break; }
+  ABORT_IF(ms1_scans.empty())
   FLASHIda* ida = new FLASHIda(const_cast<char*>(none_selection_json));
 
   int total = pushAllScans(ida, ms1_scans);
@@ -1456,7 +1456,7 @@ END_SECTION
 START_SECTION(processScan_ms1_max_targets_cap)
 {
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
-  if (ms1_scans.empty()) { NOT_TESTABLE; break; }
+  ABORT_IF(ms1_scans.empty())
 
   FLASHIda* ida1 = new FLASHIda(const_cast<char*>(max1_json));
   FLASHIda* ida3 = new FLASHIda(const_cast<char*>(standard_json));

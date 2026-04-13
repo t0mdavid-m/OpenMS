@@ -741,12 +741,13 @@ START_SECTION(cycle_time_suppression_during_exploration)
 {
   // P7-U05: MS1 cycle time suppression during active exploration
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
-  if (ms1_scans.empty()) { NOT_TESTABLE; break; }
+  ABORT_IF(ms1_scans.empty())
 
   FLASHIda* ida = new FLASHIda(const_cast<char*>(cycle_time_exploration_config));
 
   int total = pushAllMS1Scans(ida, ms1_scans);
-  if (total == 0) { delete ida; NOT_TESTABLE; break; }
+  if (total == 0) { delete ida; }
+  ABORT_IF(total == 0)
 
   // getNextScanCommand should return exploration variants (priority 0, msn_level 2)
   // NOT cycle-time MS1, because exploration is active
@@ -768,12 +769,13 @@ START_SECTION(ms1_resumes_after_exploration_completes)
   // P7-U06: MS1 cycle time injection resumes after exploration completes
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
   auto ms2_scans = loadTsvScans(ms2_tsv_path);
-  if (ms1_scans.empty() || ms2_scans.empty()) { NOT_TESTABLE; break; }
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
 
   FLASHIda* ida = new FLASHIda(const_cast<char*>(cycle_time_exploration_config));
 
   int total = pushAllMS1Scans(ida, ms1_scans);
-  if (total == 0) { delete ida; NOT_TESTABLE; break; }
+  if (total == 0) { delete ida; }
+  ABORT_IF(total == 0)
 
   // Drain all exploration variants and feed MS2 results back
   std::vector<ScanCommand> exploration_cmds;
@@ -856,12 +858,13 @@ START_SECTION(ms3_selection_no_exploration_standard_targeting)
   // P7-U08: MS3 with selection but no exploration -> standard MS3 commands
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
   auto ms2_scans = loadTsvScans(ms2_tsv_path);
-  if (ms1_scans.empty() || ms2_scans.empty()) { NOT_TESTABLE; break; }
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
 
   FLASHIda* ida = new FLASHIda(const_cast<char*>(ms3_selection_only_config));
 
   int total = pushAllMS1Scans(ida, ms1_scans);
-  if (total == 0) { delete ida; NOT_TESTABLE; break; }
+  if (total == 0) { delete ida; }
+  ABORT_IF(total == 0)
 
   // Drain exploration variants and feed MS2 results
   std::vector<ScanCommand> exploration_cmds;
