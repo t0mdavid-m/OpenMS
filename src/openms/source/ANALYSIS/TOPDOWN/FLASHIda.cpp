@@ -512,7 +512,7 @@ FLASHIda::FLASHIda(char* arg) :
 
     if (ms_level == 1)
     {
-      std::cout << config_.level(1).selection << std::endl;
+      std::cout << static_cast<int>(config_.level(1).selection) << std::endl;
       // Selection=none: skip MS1 precursor selection entirely
       if (config_.level(1).selection == SelectionMetric::None)
         return 0;
