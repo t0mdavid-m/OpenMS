@@ -68,7 +68,7 @@ namespace OpenMS
     fd_.performSpectrumDeconvolution(spec, 0, empty);
     deconvolved_spectrum_ = fd_.getDeconvolvedSpectrum();
     for (PeakGroup pg : deconvolved_spectrum_) {
-      std::cout << pg.getMonoMass();
+      std::cout << pg.getMonoMass() << ", ";
     }
     std::cout << std::endl;
     return deconvolved_spectrum_;
