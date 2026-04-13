@@ -1424,8 +1424,8 @@ START_SECTION(processScan_ms1_intensity_selection)
   ScanCommand cmd_q{};
   ScanCommand cmd_i{};
   int q_count = 0, i_count = 0;
-  while (ida_qscore->getNextScanCommand(cmd_q)) q_count++;
-  while (ida_intensity->getNextScanCommand(cmd_i)) i_count++;
+  while (ida_qscore->getNextScanCommand(cmd_q)) { if (cmd_q.is_agc) break; q_count++; }
+  while (ida_intensity->getNextScanCommand(cmd_i)) { if (cmd_i.is_agc) break; i_count++; }
 
   TEST_EQUAL(q_count > 0, true)
   TEST_EQUAL(i_count > 0, true)
@@ -1446,7 +1446,8 @@ START_SECTION(processScan_ms1_none_selection)
   TEST_EQUAL(total, 0)
 
   ScanCommand cmd{};
-  TEST_EQUAL(ida->getNextScanCommand(cmd), false)
+  TEST_EQUAL(ida->getNextScanCommand(cmd), true)  // idle cycle always returns 1
+  TEST_EQUAL(cmd.is_agc, 1)                       // first command is AGC = queue was empty
 
   delete ida;
 }
