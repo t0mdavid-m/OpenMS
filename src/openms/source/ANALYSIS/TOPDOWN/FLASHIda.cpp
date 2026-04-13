@@ -693,10 +693,11 @@ FLASHIda::FLASHIda(char* arg) :
       }
 
       // Step 5: MS3 targeting via selection_strategy
+      Exploration::NextLevelResult nlr;
       if (config_.level(2).selection != SelectionMetric::None)
       {
-        auto cmds = exploration_.initiateNextLevel(2, deconv_.storedMS2(), ctx.faims_cv, queue_, &ctx);
-        for (auto& c : cmds)
+        nlr = exploration_.initiateNextLevel(2, deconv_.storedMS2(), ctx.faims_cv, queue_, &ctx);
+        for (auto& c : nlr.commands)
         {
           queue_.push(c);
           child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
@@ -708,7 +709,8 @@ FLASHIda::FLASHIda(char* arg) :
       int tag_count = tags_found ? 1 : 0;
 
       writeScanResultRow_(id_str, rt_min, ms2_mass_count, commands_pushed,
-                          child_ids, tag_count, "", "", enqueue_ts);
+                          child_ids, tag_count, nlr.matched_protein, nlr.proteoform_sequence,
+                          enqueue_ts, nlr.tic_coverage, nlr.fragment_count);
 
       std::cout << "[TRACK-RESOLVE] id=" << id_str
                 << " rt=" << rt_min

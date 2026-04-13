@@ -99,6 +99,16 @@ namespace OpenMS
       int variant_index;
     };
 
+    /// Result of initiateNextLevel: commands plus fragment matching metadata
+    struct NextLevelResult
+    {
+      std::vector<ScanCommand> commands;
+      std::string matched_protein;
+      std::string proteoform_sequence;
+      float tic_coverage = 0.0f;
+      int fragment_count = 0;
+    };
+
     /// Construct with a reference to the shared Config, Deconvolution engine, and FragmentAnalysis
     explicit Exploration(const Config& config, Deconvolution& deconv, FragmentAnalysis& fragments);
 
@@ -122,11 +132,11 @@ namespace OpenMS
     /// Check whether a tracking_id belongs to an exploration variant
     bool isExplorationVariant(int tracking_id) const;
 
-    /// Generic MSn+1 follow-up after MSn processing. Returns commands for the caller to push.
+    /// Generic MSn+1 follow-up after MSn processing. Returns commands plus fragment matching metadata.
     /// @param ms_ctx  Optional originating MS2 ScanCommand (needed for buildMS3 when next_level >= 3)
-    std::vector<ScanCommand> initiateNextLevel(int msn_level, const DeconvolvedSpectrum& result,
-                                               double faims_cv, ScanCommandQueue& queue,
-                                               const ScanCommand* ms_ctx = nullptr);
+    NextLevelResult initiateNextLevel(int msn_level, const DeconvolvedSpectrum& result,
+                                      double faims_cv, ScanCommandQueue& queue,
+                                      const ScanCommand* ms_ctx = nullptr);
 
     /// Number of currently active exploration groups
     int activeGroupCount() const;

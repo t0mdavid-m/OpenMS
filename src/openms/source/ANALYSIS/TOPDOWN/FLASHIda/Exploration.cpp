@@ -258,10 +258,10 @@ namespace OpenMS
     }
     else
     {
-      auto next_cmds = initiateNextLevel(group.msn_level,
+      auto next_nlr = initiateNextLevel(group.msn_level,
           group.variants[best_idx].result, group.faims_cv, queue,
           &group.originating_cmd);
-      commands.insert(commands.end(), next_cmds.begin(), next_cmds.end());
+      commands.insert(commands.end(), next_nlr.commands.begin(), next_nlr.commands.end());
     }
 
     for (const auto& vr : group.variants)
@@ -271,16 +271,16 @@ namespace OpenMS
     return commands;
   }
 
-  std::vector<ScanCommand> Exploration::initiateNextLevel(int msn_level,
+  Exploration::NextLevelResult Exploration::initiateNextLevel(int msn_level,
       const DeconvolvedSpectrum& result, double faims_cv, ScanCommandQueue& queue,
       const ScanCommand* ms_ctx)
   {
-    std::vector<ScanCommand> commands;
+    NextLevelResult nlr;
 
     int next_level = msn_level + 1;
     const auto& this_cfg = config_.level(msn_level);
     const auto& next_cfg = config_.level(next_level);
-    if (this_cfg.selection == SelectionMetric::None) return commands;
+    if (this_cfg.selection == SelectionMetric::None) return nlr;
 
     const auto& seq = config_.targeting().protein_sequence;
     int num_targets = this_cfg.max_targets;
@@ -320,6 +320,23 @@ namespace OpenMS
         break;
     }
 
+    // Populate fragment matching metadata
+    nlr.fragment_count = found;
+    if (!seq.empty() && found > 0)
+    {
+      nlr.matched_protein = config_.targeting().fasta_file;
+      nlr.proteoform_sequence = seq;
+      // TIC coverage: sum of matched qscores / total spectrum intensity
+      double total_tic = 0.0;
+      for (Size i = 0; i < result.size(); ++i)
+        total_tic += result[i].getIntensity();
+      double matched_intensity = 0.0;
+      for (int i = 0; i < found; ++i)
+        matched_intensity += qscores[i];
+      if (total_tic > 0.0)
+        nlr.tic_coverage = static_cast<float>(matched_intensity / total_tic);
+    }
+
     num_targets = std::min(num_targets, found);
 
     // Build commands for each selected fragment target
@@ -338,7 +355,7 @@ namespace OpenMS
         frag_pg.push_back(lp);
 
         auto sub_cmds = initiate(next_level, frag_pg, std::abs(charges[ti]), faims_cv, queue, ms_ctx);
-        commands.insert(commands.end(), sub_cmds.begin(), sub_cmds.end());
+        nlr.commands.insert(nlr.commands.end(), sub_cmds.begin(), sub_cmds.end());
       }
     }
     else
@@ -377,11 +394,11 @@ namespace OpenMS
                   << " ms_level=" << next_level << " type=next_level"
                   << std::endl;
 
-        commands.push_back(cmd);
+        nlr.commands.push_back(cmd);
       }
     }
 
-    return commands;
+    return nlr;
   }
 
   int Exploration::activeGroupCount() const
