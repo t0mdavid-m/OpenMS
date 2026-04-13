@@ -689,7 +689,7 @@ START_SECTION(exploration_group_creation)
 }
 END_SECTION
 
-START_SECTION(exploration_variants_priority_0)
+START_SECTION(exploration_variants_priority_by_level)
 {
   Config cfg{std::string(exploration_config)};
   ScanCommandQueue queue(cfg);
@@ -835,6 +835,11 @@ START_SECTION(ms3_exploration_creates_child_groups)
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
   TEST_EQUAL(static_cast<int>(cmds.size()), 5)
+  // MS2-level exploration variants should have priority 2
+  for (int i = 0; i < 5; ++i)
+  {
+    TEST_EQUAL(cmds[i].priority, 2)
+  }
 
   // Deconvolve once without precursor constraint (test has no matched MS1)
   deconv.deconvolveMSn(ms2_data.mzs.data(), ms2_data.ints.data(),
