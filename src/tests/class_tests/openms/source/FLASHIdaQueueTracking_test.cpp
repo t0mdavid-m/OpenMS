@@ -244,7 +244,7 @@ START_SECTION(agc_scan_is_dequeued_first)
   // Push an MS2 command into the queue
   ScanCommand ms2_cmd{};
   ms2_cmd.msn_level = 2;
-  ms2_cmd.priority = 1;
+  ms2_cmd.priority = 2;
   ms2_cmd.scan_id = 200;
   ida->pushCommandForTest(ms2_cmd);
 

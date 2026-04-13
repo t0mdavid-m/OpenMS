@@ -770,21 +770,24 @@ FLASHIda::FLASHIda(char* arg) :
     }
 
     // Step 2: Cycle time -- force MS1 if too long since last survey scan
-    // Suppressed while any exploration group is active
+    // Suppressed while any exploration group is active.
+    // Queued at priority 0 (not returned immediately) so it goes through normal dequeue.
     if (config_.scheduling().cycle_time_enabled && !exploration_active_.load(std::memory_order_acquire)
         && queue_.msSinceLastMS1() > static_cast<uint64_t>(config_.scheduling().cycle_time_ms))
     {
-      out = queue_.makeMS1();
-      out.faims_cv = faims_cv;
-      out.scan_id = queue_.nextTrackingId();
+      ScanCommand ms1_cmd = queue_.makeMS1();
+      ms1_cmd.faims_cv = faims_cv;
+      ms1_cmd.scan_id = queue_.nextTrackingId();
+      ms1_cmd.priority = 0;
       queue_.recordMS1Time();
 
-      std::string id_str = ScanCommandQueue::encode(out.scan_id);
-      std::snprintf(out.scan_description, 16, "%sS", id_str.c_str());
+      std::string id_str = ScanCommandQueue::encode(ms1_cmd.scan_id);
+      std::snprintf(ms1_cmd.scan_description, 16, "%sS", id_str.c_str());
 
       std::cout << "[TRACK-CREATE] id=" << id_str << " ms_level=1 type=cycle_time" << std::endl;
-      writeScanCommandRow_(out);
-      return 1;
+      writeScanCommandRow_(ms1_cmd);
+      queue_.push(ms1_cmd);
+      // Fall through to Step 3 (cleanup) and Step 4 (dequeue)
     }
 
     // Step 3: Cleanup expired commands
@@ -803,8 +806,8 @@ FLASHIda::FLASHIda(char* arg) :
     }
 
     // Step 5: Idle cycle -- queue empty, keep the instrument busy with AGC + MS1
-    // Create an AGC command (returned immediately) and push an MS1 at priority 0
-    // into the queue so the next dequeue returns it before any MS2s (priority 1+).
+    // Create an AGC command (returned immediately) and push an MS1 at priority 3
+    // into the queue as a fallback scan (lowest priority, behind follow-ups/MS3/MS2).
     {
       // 5a: AGC
       ScanCommand agc_cmd = queue_.makeAGC();
@@ -817,18 +820,18 @@ FLASHIda::FLASHIda(char* arg) :
 
       std::cout << "[TRACK-CREATE] id=" << agc_id_str << " ms_level=1 type=idle_agc" << std::endl;
 
-      // 5b: MS1 -- override priority to 0 (makeMS1 defaults to 3)
+      // 5b: MS1 -- use default priority 3 (lowest, behind follow-ups/MS3/MS2)
       ScanCommand ms1_cmd = queue_.makeMS1();
       ms1_cmd.faims_cv = faims_cv;
       ms1_cmd.scan_id = queue_.nextTrackingId();
-      ms1_cmd.priority = 0;
+      ms1_cmd.priority = 3;
 
       std::string ms1_id_str = ScanCommandQueue::encode(ms1_cmd.scan_id);
       std::snprintf(ms1_cmd.scan_description, 16, "%sS", ms1_id_str.c_str());
 
       std::cout << "[TRACK-CREATE] id=" << ms1_id_str << " ms_level=1 type=idle_ms1" << std::endl;
 
-      // Push MS1 into priority-0 queue for next dequeue call
+      // Push MS1 into priority-3 queue for next dequeue call
       queue_.push(ms1_cmd);
 
       out = agc_cmd;

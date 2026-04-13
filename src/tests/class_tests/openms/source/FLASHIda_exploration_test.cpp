@@ -704,7 +704,7 @@ START_SECTION(exploration_variants_priority_0)
   for (int i = 0; i < 5; ++i)
   {
     TEST_EQUAL(cmds[i].msn_level, 2)
-    TEST_EQUAL(cmds[i].priority, 0)
+    TEST_EQUAL(cmds[i].priority, 2)  // MS2 exploration variants at priority 2
     TEST_EQUAL(cmds[i].is_agc, 0)
     std::string desc(cmds[i].scan_description);
     TEST_EQUAL(desc.size() >= 4, true)
@@ -749,13 +749,13 @@ START_SECTION(cycle_time_suppression_during_exploration)
   if (total == 0) { delete ida; }
   ABORT_IF(total == 0)
 
-  // getNextScanCommand should return exploration variants (priority 0, msn_level 2)
-  // NOT cycle-time MS1, because exploration is active
+  // getNextScanCommand should return exploration variants (priority 2, msn_level 2)
+  // NOT cycle-time MS1, because exploration is active (cycle-time suppressed)
   ScanCommand cmd{};
   int result = ida->getNextScanCommand(cmd);
   TEST_EQUAL(result, 1)
   TEST_EQUAL(cmd.msn_level, 2)
-  TEST_EQUAL(cmd.priority, 0)
+  TEST_EQUAL(cmd.priority, 2)
   std::string desc(cmd.scan_description);
   TEST_EQUAL(desc.size() >= 4, true)
   TEST_EQUAL(desc[3], 'E')

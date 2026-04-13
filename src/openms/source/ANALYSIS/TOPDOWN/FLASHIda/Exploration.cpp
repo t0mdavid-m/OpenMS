@@ -103,7 +103,8 @@ namespace OpenMS
       variant_config.collision_energy = static_cast<int>(ces[i]);
       variant_config.activation = cfg.exploration_activation;
 
-      ScanCommand cmd = queue.buildMS2(pg, charge, variant_config, 0);
+      int expl_priority = (msn_level >= 3) ? 1 : 2;  // MS3 variants = p1, MS2 variants = p2
+      ScanCommand cmd = queue.buildMS2(pg, charge, variant_config, expl_priority);
       cmd.faims_cv = faims_cv;
 
       int id_int = cmd.scan_id;
@@ -244,7 +245,7 @@ namespace OpenMS
 
       ScanCommand prod_cmd = queue.buildMS2(group.precursor_pg, group.precursor_charge, prod_config);
       prod_cmd.faims_cv = group.faims_cv;
-      prod_cmd.priority = 1;
+      prod_cmd.priority = 2;
 
       std::string prod_id = ScanCommandQueue::encode(prod_cmd.scan_id);
       std::cout << "[TRACK-CREATE] id=" << prod_id

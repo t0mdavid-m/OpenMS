@@ -410,7 +410,7 @@ START_SECTION(ms2_carries_parent_cv)
   // Push an MS2 with parent CV=-40 set at build time
   ScanCommand ms2{};
   ms2.msn_level = 2;
-  ms2.priority = 1;
+  ms2.priority = 2;
   ms2.scan_id = 999;
   ms2.faims_cv = -40.0;
   ida->pushCommandForTest(ms2);
