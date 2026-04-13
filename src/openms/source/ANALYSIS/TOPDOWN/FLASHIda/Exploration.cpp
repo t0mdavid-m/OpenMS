@@ -67,6 +67,11 @@ namespace OpenMS
     std::vector<double> ces = buildCEVariants_(cfg.ce_min, cfg.ce_max, cfg.ce_step);
     if (ces.empty()) return commands;
 
+    // Prepend CE=0 baseline for RemainingPrecursor metric
+    bool needs_baseline = (cfg.exploration == ExplorationMetric::RemainingPrecursor);
+    if (needs_baseline)
+      ces.insert(ces.begin(), 0.0);
+
     // Compute precursor_mz and isolation_width from PeakGroup
     auto [mz1, mz2] = pg.getMzRange(charge);
     double precursor_mz = (mz1 + mz2) / 2.0;
@@ -98,8 +103,9 @@ namespace OpenMS
     for (int i = 0; i < static_cast<int>(ces.size()); ++i)
     {
       ExplorationVariant v;
-      v.variant_index = i;
+      v.variant_index = (needs_baseline && i == 0) ? -1 : (needs_baseline ? i - 1 : i);
       v.collision_energy = ces[i];
+      v.is_baseline = (needs_baseline && i == 0);
       v.activation_type = base_config.activation;
 
       ScanConfig variant_config = base_config;
@@ -195,10 +201,35 @@ namespace OpenMS
     v.fragment_count = static_cast<int>(ms2_deconv.size());
     v.received = true;
 
+    // Handle baseline for RemainingPrecursor
+    if (v.is_baseline)
+    {
+      double iso_half = group.isolation_width / 2.0;
+      double mz_low = group.precursor_mz - iso_half;
+      double mz_high = group.precursor_mz + iso_half;
+      double baseline_sum = 0.0;
+      if (mzs != nullptr && ints != nullptr)
+      {
+        for (int bi = 0; bi < length; ++bi)
+        {
+          if (mzs[bi] >= mz_low && mzs[bi] <= mz_high)
+            baseline_sum += ints[bi];
+        }
+      }
+      group.baseline_intensity = baseline_sum;
+      group.has_baseline = true;
+      v.score = 0.0;  // baseline score not meaningful
+    }
+
+    // Count real (non-baseline) variants for metadata
+    int real_variant_count = 0;
+    for (const auto& vr : group.variants)
+      if (!vr.is_baseline) ++real_variant_count;
+
     // Populate per-variant metadata in the return info
     info.group_id = group.group_id;
-    info.variant_index = variant_index;
-    info.total_variants = static_cast<int>(group.variants.size());
+    info.variant_index = v.variant_index;
+    info.total_variants = real_variant_count;
     info.collision_energy = v.collision_energy;
     info.score = v.score;
     info.tic_coverage = v.tic_coverage;
@@ -207,8 +238,8 @@ namespace OpenMS
 
     auto& meta = v.result.getOrCreateOptimizationMetadata();
     meta.group_id = group.group_id;
-    meta.variant_index = variant_index;
-    meta.total_variants = static_cast<int>(group.variants.size());
+    meta.variant_index = v.variant_index;
+    meta.total_variants = real_variant_count;
     meta.is_best_variant = false;
     meta.msn_level_optimized = group.msn_level;
     meta.exploration_metric = static_cast<int>(group.exploration_metric);
@@ -223,22 +254,24 @@ namespace OpenMS
     meta.complete_ms = static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
-    meta.exploration_scans = static_cast<int>(group.variants.size());
+    meta.exploration_scans = real_variant_count;
 
     bool all_received = std::all_of(group.variants.begin(), group.variants.end(),
                                     [](const ExplorationVariant& x){ return x.received; });
     if (!all_received) return info;
 
-    int best_idx = 0;
-    double best_score = group.variants[0].score;
-    for (int i = 1; i < static_cast<int>(group.variants.size()); ++i)
+    int best_idx = -1;
+    double best_score = -1.0;
+    for (int i = 0; i < static_cast<int>(group.variants.size()); ++i)
     {
+      if (group.variants[i].is_baseline) continue;  // skip baseline
       if (group.variants[i].score > best_score)
       {
         best_score = group.variants[i].score;
         best_idx = i;
       }
     }
+    if (best_idx < 0) return info;  // shouldn't happen
     group.winner_index = best_idx;
     group.complete = true;
     group.variants[best_idx].result.getOrCreateOptimizationMetadata().is_best_variant = true;
@@ -450,7 +483,6 @@ namespace OpenMS
     if (length <= 0 || mzs == nullptr || ints == nullptr)
       return 0.0;
 
-    // Sum intensity within the precursor isolation window
     double iso_half = group.isolation_width / 2.0;
     double mz_low = group.precursor_mz - iso_half;
     double mz_high = group.precursor_mz + iso_half;
@@ -462,16 +494,20 @@ namespace OpenMS
         remaining_intensity += ints[i];
     }
 
-    // Reference: charge-specific intensity from the precursor PeakGroup
-    double reference = group.precursor_pg.getChargeIntensity(
-        std::abs(group.precursor_charge));
-    if (reference <= 0.0)
-      reference = group.precursor_pg.getIntensity();
-    if (reference <= 0.0)
-      return 0.0;
+    // Reference: baseline isolation-window intensity (CE=0 scan)
+    double reference;
+    if (group.has_baseline)
+    {
+      reference = group.baseline_intensity;
+      if (reference <= 0.0)
+        return 0.0;  // Baseline failed: ratio = 1/1, score = 0
+    }
+    else
+    {
+      return 0.0;  // Baseline not yet received: ratio = 1/1, score = 0
+    }
 
     double ratio = remaining_intensity / reference;
-    // Score = 1 - ratio, clamped to [0, 1]. Higher = less remaining = better fragmentation.
     double score = 1.0 - ratio;
     if (score < 0.0) score = 0.0;
     if (score > 1.0) score = 1.0;

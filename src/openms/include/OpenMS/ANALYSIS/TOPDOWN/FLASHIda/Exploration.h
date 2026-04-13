@@ -65,6 +65,7 @@ namespace OpenMS
       double collision_energy = 0.0;
       std::string activation_type;
       std::string tracking_id;
+      bool is_baseline = false;           ///< CE=0 reference scan for RemainingPrecursor
       double score = -1.0;
       float tic_coverage = 0.0f;
       int fragment_count = 0;
@@ -85,6 +86,8 @@ namespace OpenMS
       PeakGroup precursor_pg;
       double isolation_width = 0.0;
       double faims_cv = 0.0;
+      double baseline_intensity = 0.0;    ///< isolation-window intensity from CE=0 scan
+      bool has_baseline = false;           ///< whether baseline result has arrived
       uint64_t start_ms = 0;
       std::vector<ExplorationVariant> variants;
       int winner_index = -1;

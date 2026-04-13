@@ -1040,8 +1040,7 @@ END_SECTION
 
 START_SECTION(remaining_precursor_score_no_raw_data)
 {
-  // When feedResultForTest is used (no raw arrays), RemainingPrecursor returns 0.0
-  // because nullptr/0 is passed for mzs/ints/length
+  // RemainingPrecursor now prepends a CE=0 baseline scan: 1 baseline + 5 CE variants = 6
   Config cfg{std::string(remaining_precursor_config)};
   ScanCommandQueue queue(cfg);
   Deconvolution deconv(cfg);
@@ -1050,19 +1049,34 @@ START_SECTION(remaining_precursor_score_no_raw_data)
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
-  TEST_EQUAL(static_cast<int>(cmds.size()), 5)
+  TEST_EQUAL(static_cast<int>(cmds.size()), 6)
+
+  // Verify first command is CE=0 baseline
+  TEST_REAL_SIMILAR(cmds[0].stages[0].collision_energy, 0.0)
 
   // Verify exploration group has RemainingPrecursor metric
   auto group = exploration.getGroup(1);
   TEST_EQUAL(static_cast<int>(group.exploration_metric),
              static_cast<int>(ExplorationMetric::RemainingPrecursor))
+  // Baseline variant at index 0 should have is_baseline=true, variant_index=-1
+  TEST_EQUAL(group.variants[0].is_baseline, true)
+  TEST_EQUAL(group.variants[0].variant_index, -1)
+  // Non-baseline variants should have is_baseline=false
+  for (int i = 1; i < 6; ++i)
+  {
+    TEST_EQUAL(group.variants[i].is_baseline, false)
+    TEST_EQUAL(group.variants[i].variant_index, i - 1)
+  }
 
-  // Feed all variants via feedResultForTest (no raw data -> score = 0.0)
-  for (int i = 0; i < 5; ++i)
+  // Feed all 6 variants via feedResultForTest (no raw data -> all scores = 0.0)
+  for (int i = 0; i < 6; ++i)
   {
     DeconvolvedSpectrum ds = makeSyntheticDeconv(i + 1, i + 1);
     int tracking_id = queue.decode(std::string(cmds[i].scan_description).substr(0, 3));
-    exploration.feedResultForTest(tracking_id, ds, static_cast<double>(i), queue);
+    auto info = exploration.feedResultForTest(tracking_id, ds, static_cast<double>(i), queue);
+
+    // total_variants should exclude baseline (= 5 real variants)
+    TEST_EQUAL(info.total_variants, 5)
   }
 
   // Group should be complete (all variants received)
@@ -1072,7 +1086,7 @@ END_SECTION
 
 START_SECTION(remaining_precursor_score_with_raw_data)
 {
-  // Test RemainingPrecursor scoring with real raw data arrays
+  // Test RemainingPrecursor scoring with raw data: baseline CE=0 + CE>0 variants
   Config cfg{std::string(remaining_precursor_config)};
   ScanCommandQueue queue(cfg);
   Deconvolution deconv(cfg);
@@ -1081,37 +1095,46 @@ START_SECTION(remaining_precursor_score_with_raw_data)
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
-  TEST_EQUAL(static_cast<int>(cmds.size()), 5)
+  TEST_EQUAL(static_cast<int>(cmds.size()), 6)
 
-  // Verify isolation_width was set during initiate
   auto group = exploration.getGroup(1);
-  TEST_EQUAL(group.isolation_width > 0.0 || group.isolation_width == 0.0, true)
-  // precursor_mz should be set from getMzRange
   TEST_EQUAL(group.precursor_mz > 0.0, true)
 
-  // Feed first variant with raw data that has signal INSIDE the precursor window
-  // The synthetic PeakGroup has 0 charge intensity, so reference will be 0
-  // and the function returns 0.0 — this tests the defensive path.
-  std::vector<double> mzs = {790.0, 800.0, 810.0, 900.0};
-  std::vector<double> intensities = {100.0, 500.0, 200.0, 50.0};
+  // Feed CE=0 baseline with precursor-window signal (full intensity)
+  std::vector<double> baseline_mzs = {790.0, 800.0, 810.0, 900.0};
+  std::vector<double> baseline_ints = {100.0, 500.0, 200.0, 50.0};
+  // In-window sum depends on isolation_width; 800.0 is precursor_mz center.
 
-  int tracking_id = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
-  auto result_cmds = exploration.feedResult(tracking_id, mzs.data(), intensities.data(),
-                                            static_cast<int>(mzs.size()), 1.0, queue);
+  int baseline_tid = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
+  exploration.feedResult(baseline_tid, baseline_mzs.data(), baseline_ints.data(),
+                         static_cast<int>(baseline_mzs.size()), 0.5, queue);
 
-  // Variant should be received; score in [0, 1] (likely 0 due to synthetic PeakGroup)
-  auto group_after = exploration.getGroup(1);
-  TEST_EQUAL(group_after.variants[0].received, true)
-  TEST_EQUAL(group_after.variants[0].score >= 0.0, true)
-  TEST_EQUAL(group_after.variants[0].score <= 1.0, true)
+  // After baseline, group should have baseline_intensity set
+  auto group_after_baseline = exploration.getGroup(1);
+  TEST_EQUAL(group_after_baseline.has_baseline, true)
+  TEST_EQUAL(group_after_baseline.baseline_intensity >= 0.0, true)
 
-  (void)result_cmds;
+  // Feed second variant (CE=20) with reduced in-window signal (fragmentation removed some)
+  std::vector<double> frag_mzs = {790.0, 800.0, 810.0, 900.0};
+  std::vector<double> frag_ints = {50.0, 200.0, 100.0, 50.0};
+
+  int ce20_tid = queue.decode(std::string(cmds[1].scan_description).substr(0, 3));
+  auto ce20_info = exploration.feedResult(ce20_tid, frag_mzs.data(), frag_ints.data(),
+                                          static_cast<int>(frag_mzs.size()), 1.0, queue);
+
+  // If baseline had in-window signal, CE>0 variant should have a score
+  auto group_mid = exploration.getGroup(1);
+  TEST_EQUAL(group_mid.variants[1].received, true)
+  TEST_EQUAL(group_mid.variants[1].score >= 0.0, true)
+  TEST_EQUAL(group_mid.variants[1].score <= 1.0, true)
+
+  (void)ce20_info;
 }
 END_SECTION
 
 START_SECTION(remaining_precursor_score_no_signal_in_window)
 {
-  // Test RemainingPrecursor scoring when no signal is in the precursor window
+  // Feed CE=0 baseline with zero in-window signal. All subsequent variants should score 0.
   Config cfg{std::string(remaining_precursor_config)};
   ScanCommandQueue queue(cfg);
   Deconvolution deconv(cfg);
@@ -1120,20 +1143,33 @@ START_SECTION(remaining_precursor_score_no_signal_in_window)
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
+  TEST_EQUAL(static_cast<int>(cmds.size()), 6)
 
-  // Feed first variant with raw data entirely OUTSIDE the precursor window
+  // Feed baseline (CE=0) with raw data entirely OUTSIDE the precursor window
+  // -> baseline_intensity = 0 -> all subsequent scores = 0 (baseline failure)
   std::vector<double> mzs = {400.0, 500.0, 600.0, 1200.0};
   std::vector<double> intensities = {100.0, 200.0, 300.0, 400.0};
 
-  int tracking_id = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
-  exploration.feedResult(tracking_id, mzs.data(), intensities.data(),
-                         static_cast<int>(mzs.size()), 1.0, queue);
+  int baseline_tid = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
+  exploration.feedResult(baseline_tid, mzs.data(), intensities.data(),
+                         static_cast<int>(mzs.size()), 0.5, queue);
 
   auto group = exploration.getGroup(1);
-  TEST_EQUAL(group.variants[0].received, true)
-  // Score should be in [0, 1]. With synthetic PeakGroup (0 reference), score = 0.0.
-  TEST_EQUAL(group.variants[0].score >= 0.0, true)
-  TEST_EQUAL(group.variants[0].score <= 1.0, true)
+  TEST_EQUAL(group.has_baseline, true)
+  TEST_REAL_SIMILAR(group.baseline_intensity, 0.0)
+
+  // Feed CE=20 variant with signal inside the precursor window
+  // Since baseline = 0, score should be 0 (baseline failure path)
+  std::vector<double> frag_mzs = {790.0, 800.0, 810.0, 900.0};
+  std::vector<double> frag_ints = {100.0, 500.0, 200.0, 50.0};
+
+  int ce20_tid = queue.decode(std::string(cmds[1].scan_description).substr(0, 3));
+  exploration.feedResult(ce20_tid, frag_mzs.data(), frag_ints.data(),
+                         static_cast<int>(frag_mzs.size()), 1.0, queue);
+
+  auto group_after = exploration.getGroup(1);
+  TEST_EQUAL(group_after.variants[1].received, true)
+  TEST_REAL_SIMILAR(group_after.variants[1].score, 0.0)
 }
 END_SECTION
 
