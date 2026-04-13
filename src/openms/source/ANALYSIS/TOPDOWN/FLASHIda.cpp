@@ -96,7 +96,10 @@ FLASHIda::FLASHIda(char* arg) :
         results_tsv_stream_ << "tracking_id\tresolve_ts\tduration_ms\trt\t"
                             << "mass_count\tcommands_pushed\tchild_ids\t"
                             << "tag_count\tmatched_protein\tproteoform_sequence\t"
-                            << "tic_coverage\tfragment_count\n";
+                            << "tic_coverage\tfragment_count\t"
+                            << "exploration_group_id\texploration_metric\t"
+                            << "variant_index\ttotal_variants\t"
+                            << "collision_energy\texploration_score\n";
         results_tsv_stream_.flush();
       }
     }
@@ -309,7 +312,10 @@ FLASHIda::FLASHIda(char* arg) :
                                       int tag_count, const std::string& matched_protein,
                                       const std::string& proteoform_sequence,
                                       uint64_t enqueue_ts,
-                                      float tic_coverage, int fragment_count)
+                                      float tic_coverage, int fragment_count,
+                                      int exploration_group_id, int exploration_metric,
+                                      int variant_index, int total_variants,
+                                      double collision_energy, double exploration_score)
   {
     if (!results_tsv_stream_.is_open()) return;
 
@@ -336,7 +342,13 @@ FLASHIda::FLASHIda(char* arg) :
                         << matched_protein << "\t"
                         << proteoform_sequence << "\t"
                         << tic_coverage << "\t"
-                        << fragment_count << "\n";
+                        << fragment_count << "\t"
+                        << exploration_group_id << "\t"
+                        << exploration_metric << "\t"
+                        << variant_index << "\t"
+                        << total_variants << "\t"
+                        << collision_energy << "\t"
+                        << exploration_score << "\n";
     results_tsv_stream_.flush();
   }
 
@@ -624,12 +636,16 @@ FLASHIda::FLASHIda(char* arg) :
       // Check if this is an exploration variant (before pending scan lookup)
       if (exploration_.isExplorationVariant(tracking_id))
       {
-        auto cmds = exploration_.feedResult(tracking_id, mzs, ints, length, rt_min, queue_);
-        for (auto& c : cmds) queue_.push(c);
+        auto info = exploration_.feedResult(tracking_id, mzs, ints, length, rt_min, queue_);
+        for (auto& c : info.commands) queue_.push(c);
 
         int expl_mass_count = deconv_.hasStoredMS2() ? static_cast<int>(deconv_.storedMS2().size()) : 0;
-        writeScanResultRow_(id_str, rt_min, expl_mass_count, static_cast<int>(cmds.size()),
-                            {}, 0, "", "", 0);
+        writeScanResultRow_(id_str, rt_min, expl_mass_count, static_cast<int>(info.commands.size()),
+                            {}, 0, "", "", 0,
+                            info.tic_coverage, info.fragment_count,
+                            info.group_id, info.exploration_metric,
+                            info.variant_index, info.total_variants,
+                            info.collision_energy, info.score);
 
         return commands_pushed;
       }

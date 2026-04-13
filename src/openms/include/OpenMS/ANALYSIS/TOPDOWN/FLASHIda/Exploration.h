@@ -109,6 +109,20 @@ namespace OpenMS
       int fragment_count = 0;
     };
 
+    /// Result of feedResult: commands plus exploration per-variant metadata
+    struct FeedResultInfo
+    {
+      std::vector<ScanCommand> commands;
+      int group_id = -1;
+      int variant_index = -1;
+      int total_variants = 0;
+      double collision_energy = 0.0;
+      double score = -1.0;
+      float tic_coverage = 0.0f;
+      int fragment_count = 0;
+      int exploration_metric = 0;
+    };
+
     /// Construct with a reference to the shared Config, Deconvolution engine, and FragmentAnalysis
     explicit Exploration(const Config& config, Deconvolution& deconv, FragmentAnalysis& fragments);
 
@@ -119,15 +133,15 @@ namespace OpenMS
                                       const ScanCommand* ms_ctx = nullptr);
 
     /// Process returning exploration variant: deconvolve with correct precursor context,
-    /// score, select winner, trigger next level. Returns commands for the caller to push.
-    std::vector<ScanCommand> feedResult(int tracking_id,
-                                        const double* mzs, const double* ints, int length,
-                                        double rt, ScanCommandQueue& queue);
+    /// score, select winner, trigger next level. Returns FeedResultInfo with commands and metadata.
+    FeedResultInfo feedResult(int tracking_id,
+                              const double* mzs, const double* ints, int length,
+                              double rt, ScanCommandQueue& queue);
 
     /// Test-only: feed a pre-deconvolved result (bypasses deconvolution)
-    std::vector<ScanCommand> feedResultForTest(int tracking_id,
-                                               const DeconvolvedSpectrum& ms2_deconv,
-                                               double rt, ScanCommandQueue& queue);
+    FeedResultInfo feedResultForTest(int tracking_id,
+                                     const DeconvolvedSpectrum& ms2_deconv,
+                                     double rt, ScanCommandQueue& queue);
 
     /// Check whether a tracking_id belongs to an exploration variant
     bool isExplorationVariant(int tracking_id) const;
@@ -159,9 +173,9 @@ namespace OpenMS
     int next_group_id_ = 1;
 
     /// Shared implementation: process a deconvolved spectrum for a tracked variant
-    std::vector<ScanCommand> feedResultImpl_(int tracking_id, const DeconvolvedSpectrum& ms2_deconv,
-                                             const double* mzs, const double* ints, int length,
-                                             double rt, ScanCommandQueue& queue);
+    FeedResultInfo feedResultImpl_(int tracking_id, const DeconvolvedSpectrum& ms2_deconv,
+                                   const double* mzs, const double* ints, int length,
+                                   double rt, ScanCommandQueue& queue);
 
     /// Generate CE variant values from min/max/step
     std::vector<double> buildCEVariants_(double ce_min, double ce_max, double ce_step) const;

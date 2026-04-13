@@ -133,7 +133,7 @@ namespace OpenMS
     return variant_tracking_map_.find(tracking_id) != variant_tracking_map_.end();
   }
 
-  std::vector<ScanCommand> Exploration::feedResult(int tracking_id,
+  Exploration::FeedResultInfo Exploration::feedResult(int tracking_id,
       const double* mzs, const double* ints, int length,
       double rt, ScanCommandQueue& queue)
   {
@@ -158,23 +158,23 @@ namespace OpenMS
     return feedResultImpl_(tracking_id, ms2_deconv, mzs, ints, length, rt, queue);
   }
 
-  std::vector<ScanCommand> Exploration::feedResultForTest(int tracking_id,
+  Exploration::FeedResultInfo Exploration::feedResultForTest(int tracking_id,
       const DeconvolvedSpectrum& ms2_deconv, double rt, ScanCommandQueue& queue)
   {
     return feedResultImpl_(tracking_id, ms2_deconv, nullptr, nullptr, 0, rt, queue);
   }
 
-  std::vector<ScanCommand> Exploration::feedResultImpl_(int tracking_id,
+  Exploration::FeedResultInfo Exploration::feedResultImpl_(int tracking_id,
       const DeconvolvedSpectrum& ms2_deconv,
       const double* mzs, const double* ints, int length,
       double rt, ScanCommandQueue& queue)
   {
     (void)rt;
-    std::vector<ScanCommand> commands;
+    FeedResultInfo info;
 
     // Look up the variant reference
     auto vit = variant_tracking_map_.find(tracking_id);
-    if (vit == variant_tracking_map_.end()) return commands;
+    if (vit == variant_tracking_map_.end()) return info;
 
     int group_id = vit->second.group_id;
     int variant_index = vit->second.variant_index;
@@ -182,18 +182,28 @@ namespace OpenMS
 
     // Find the group
     auto git = active_groups_.find(group_id);
-    if (git == active_groups_.end()) return commands;
+    if (git == active_groups_.end()) return info;
     ExplorationGroup& group = git->second;
 
-    if (variant_index < 0 || variant_index >= static_cast<int>(group.variants.size())) return commands;
+    if (variant_index < 0 || variant_index >= static_cast<int>(group.variants.size())) return info;
     ExplorationVariant& v = group.variants[variant_index];
-    if (v.received) return commands;
+    if (v.received) return info;
 
     v.result = ms2_deconv;
     v.score = computeExplorationScore_(group.exploration_metric, ms2_deconv, group, mzs, ints, length);
     v.tic_coverage = computeTICCoverage_(ms2_deconv);
     v.fragment_count = static_cast<int>(ms2_deconv.size());
     v.received = true;
+
+    // Populate per-variant metadata in the return info
+    info.group_id = group.group_id;
+    info.variant_index = variant_index;
+    info.total_variants = static_cast<int>(group.variants.size());
+    info.collision_energy = v.collision_energy;
+    info.score = v.score;
+    info.tic_coverage = v.tic_coverage;
+    info.fragment_count = v.fragment_count;
+    info.exploration_metric = static_cast<int>(group.exploration_metric);
 
     auto& meta = v.result.getOrCreateOptimizationMetadata();
     meta.group_id = group.group_id;
@@ -217,7 +227,7 @@ namespace OpenMS
 
     bool all_received = std::all_of(group.variants.begin(), group.variants.end(),
                                     [](const ExplorationVariant& x){ return x.received; });
-    if (!all_received) return commands;
+    if (!all_received) return info;
 
     int best_idx = 0;
     double best_score = group.variants[0].score;
@@ -254,21 +264,21 @@ namespace OpenMS
                 << " ms_level=" << group.msn_level << " type=production"
                 << std::endl;
 
-      commands.push_back(prod_cmd);
+      info.commands.push_back(prod_cmd);
     }
     else
     {
       auto next_nlr = initiateNextLevel(group.msn_level,
           group.variants[best_idx].result, group.faims_cv, queue,
           &group.originating_cmd);
-      commands.insert(commands.end(), next_nlr.commands.begin(), next_nlr.commands.end());
+      info.commands.insert(info.commands.end(), next_nlr.commands.begin(), next_nlr.commands.end());
     }
 
     for (const auto& vr : group.variants)
       variant_tracking_map_.erase(queue.decode(vr.tracking_id));
 
     active_groups_.erase(git);
-    return commands;
+    return info;
   }
 
   Exploration::NextLevelResult Exploration::initiateNextLevel(int msn_level,
