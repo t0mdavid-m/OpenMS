@@ -73,8 +73,9 @@ namespace OpenMS
     /// Build MS2 ScanCommand from a PeakGroup + ScanConfig (unified factory)
     ScanCommand buildMS2(const PeakGroup& pg, int charge, const ScanConfig& scan_config, int priority = 2);
 
-    /// Build MS3 ScanCommand from MS2 context + fragment target
-    ScanCommand buildMS3(const ScanCommand& ms2_ctx, double frag_mz, int frag_charge, double iso_width,
+    /// Build MS3 ScanCommand from MS2 context + fragment target + MS3 config for CE/activation
+    ScanCommand buildMS3(const ScanCommand& ms2_ctx, const ScanConfig& ms3_config,
+                         double frag_mz, int frag_charge, double iso_width,
                          char ion_type = '\0', int frag_index = 0, int priority = 1);
 
     /// Create an MS1 survey scan command from current config

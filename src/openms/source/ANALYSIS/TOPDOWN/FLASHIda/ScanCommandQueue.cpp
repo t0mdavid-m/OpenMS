@@ -246,7 +246,8 @@ namespace OpenMS
     return cmd;
   }
 
-  ScanCommand ScanCommandQueue::buildMS3(const ScanCommand& ms2_ctx, double frag_mz, int frag_charge, double iso_width,
+  ScanCommand ScanCommandQueue::buildMS3(const ScanCommand& ms2_ctx, const ScanConfig& ms3_config,
+                                          double frag_mz, int frag_charge, double iso_width,
                                           char ion_type, int frag_index, int priority)
   {
     std::lock_guard<std::mutex> lock(queue_mutex_);
@@ -274,8 +275,8 @@ namespace OpenMS
     cmd.stages[1].precursor_mz = frag_mz;
     cmd.stages[1].isolation_width = iso_width;
     cmd.stages[1].charge_state = frag_charge;
-    cmd.stages[1].collision_energy = cmd.stages[0].collision_energy;
-    std::strncpy(cmd.stages[1].activation_type, "HCD", sizeof(cmd.stages[1].activation_type) - 1);
+    cmd.stages[1].collision_energy = static_cast<double>(ms3_config.collision_energy);
+    std::strncpy(cmd.stages[1].activation_type, ms3_config.activation.c_str(), sizeof(cmd.stages[1].activation_type) - 1);
     cmd.stages[1].activation_type[sizeof(cmd.stages[1].activation_type) - 1] = '\0';
 
     // Description: {3-char ID}R{frag_mass_kDa:.1f}@{frag_charge}[{ion_type}{frag_index}]

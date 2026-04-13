@@ -89,6 +89,7 @@ namespace OpenMS
       std::vector<ExplorationVariant> variants;
       int winner_index = -1;
       bool complete = false;
+      ScanCommand originating_cmd{};  ///< MS2 context for buildMS3 (stage 0)
     };
 
     /// Lookup reference from tracking ID to exploration group + variant
@@ -102,8 +103,10 @@ namespace OpenMS
     explicit Exploration(const Config& config, Deconvolution& deconv, FragmentAnalysis& fragments);
 
     /// Create exploration group with CE variants. Returns commands for the caller to push.
+    /// @param ms_ctx  Optional originating MS2 ScanCommand (needed for MS3 buildMS3 stage 0)
     std::vector<ScanCommand> initiate(int msn_level, const PeakGroup& pg, int charge,
-                                      double faims_cv, ScanCommandQueue& queue);
+                                      double faims_cv, ScanCommandQueue& queue,
+                                      const ScanCommand* ms_ctx = nullptr);
 
     /// Process returning exploration variant: deconvolve with correct precursor context,
     /// score, select winner, trigger next level. Returns commands for the caller to push.
@@ -120,8 +123,10 @@ namespace OpenMS
     bool isExplorationVariant(int tracking_id) const;
 
     /// Generic MSn+1 follow-up after MSn processing. Returns commands for the caller to push.
+    /// @param ms_ctx  Optional originating MS2 ScanCommand (needed for buildMS3 when next_level >= 3)
     std::vector<ScanCommand> initiateNextLevel(int msn_level, const DeconvolvedSpectrum& result,
-                                               double faims_cv, ScanCommandQueue& queue);
+                                               double faims_cv, ScanCommandQueue& queue,
+                                               const ScanCommand* ms_ctx = nullptr);
 
     /// Number of currently active exploration groups
     int activeGroupCount() const;

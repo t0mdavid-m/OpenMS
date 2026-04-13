@@ -695,7 +695,7 @@ FLASHIda::FLASHIda(char* arg) :
       // Step 5: MS3 targeting via selection_strategy
       if (config_.level(2).selection != SelectionMetric::None)
       {
-        auto cmds = exploration_.initiateNextLevel(2, deconv_.storedMS2(), ctx.faims_cv, queue_);
+        auto cmds = exploration_.initiateNextLevel(2, deconv_.storedMS2(), ctx.faims_cv, queue_, &ctx);
         for (auto& c : cmds)
         {
           queue_.push(c);

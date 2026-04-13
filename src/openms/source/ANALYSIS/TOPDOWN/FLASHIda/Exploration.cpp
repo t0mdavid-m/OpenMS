@@ -57,7 +57,7 @@ namespace OpenMS
   }
 
   std::vector<ScanCommand> Exploration::initiate(int msn_level, const PeakGroup& pg, int charge,
-      double faims_cv, ScanCommandQueue& queue)
+      double faims_cv, ScanCommandQueue& queue, const ScanCommand* ms_ctx)
   {
     std::vector<ScanCommand> commands;
 
@@ -87,6 +87,9 @@ namespace OpenMS
     group.start_ms = static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
+
+    // Capture originating MS2 context for buildMS3 (stage 0)
+    if (ms_ctx != nullptr) group.originating_cmd = *ms_ctx;
 
     // Build base ScanConfig from the level's primary scan config, then apply overrides
     ScanConfig base_config = cfg.scans[0];
@@ -257,7 +260,8 @@ namespace OpenMS
     else
     {
       auto next_cmds = initiateNextLevel(group.msn_level,
-          group.variants[best_idx].result, group.faims_cv, queue);
+          group.variants[best_idx].result, group.faims_cv, queue,
+          &group.originating_cmd);
       commands.insert(commands.end(), next_cmds.begin(), next_cmds.end());
     }
 
@@ -269,7 +273,8 @@ namespace OpenMS
   }
 
   std::vector<ScanCommand> Exploration::initiateNextLevel(int msn_level,
-      const DeconvolvedSpectrum& result, double faims_cv, ScanCommandQueue& queue)
+      const DeconvolvedSpectrum& result, double faims_cv, ScanCommandQueue& queue,
+      const ScanCommand* ms_ctx)
   {
     std::vector<ScanCommand> commands;
 
@@ -333,7 +338,7 @@ namespace OpenMS
         lp.abs_charge = std::abs(charges[ti]);
         frag_pg.push_back(lp);
 
-        auto sub_cmds = initiate(next_level, frag_pg, std::abs(charges[ti]), faims_cv, queue);
+        auto sub_cmds = initiate(next_level, frag_pg, std::abs(charges[ti]), faims_cv, queue, ms_ctx);
         commands.insert(commands.end(), sub_cmds.begin(), sub_cmds.end());
       }
     }
@@ -342,16 +347,30 @@ namespace OpenMS
       // Direct command building for each fragment target
       for (int ti = 0; ti < num_targets; ++ti)
       {
-        // Build as PeakGroup for the buildMS2 factory
-        PeakGroup frag_pg(std::abs(charges[ti]), std::abs(charges[ti]), true);
-        frag_pg.setMonoisotopicMass(masses[ti]);
-        FLASHHelperClasses::LogMzPeak lp;
-        lp.mz = (wstarts[ti] + wends[ti]) / 2.0;
-        lp.abs_charge = std::abs(charges[ti]);
-        frag_pg.push_back(lp);
+        double frag_mz = (wstarts[ti] + wends[ti]) / 2.0;
+        int frag_charge = std::abs(charges[ti]);
+        double iso_width = wends[ti] - wstarts[ti];
 
-        ScanCommand cmd = queue.buildMS2(frag_pg, std::abs(charges[ti]), next_scan_config, 1);
-        cmd.msn_level = next_level;
+        ScanCommand cmd;
+        if (next_level >= 3 && ms_ctx != nullptr)
+        {
+          // MS3: proper two-stage command via buildMS3 with config CE/activation
+          cmd = queue.buildMS3(*ms_ctx, next_scan_config, frag_mz, frag_charge, iso_width,
+                               ion_types[ti], frag_indices[ti], 1);
+        }
+        else
+        {
+          // MS2: single-stage command via buildMS2
+          PeakGroup frag_pg(frag_charge, frag_charge, true);
+          frag_pg.setMonoisotopicMass(masses[ti]);
+          FLASHHelperClasses::LogMzPeak lp;
+          lp.mz = frag_mz;
+          lp.abs_charge = frag_charge;
+          frag_pg.push_back(lp);
+
+          cmd = queue.buildMS2(frag_pg, frag_charge, next_scan_config, 1);
+          cmd.msn_level = next_level;
+        }
         cmd.faims_cv = faims_cv;
 
         std::string id_str = ScanCommandQueue::encode(cmd.scan_id);
