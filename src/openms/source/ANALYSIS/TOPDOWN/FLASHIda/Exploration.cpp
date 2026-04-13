@@ -273,20 +273,20 @@ namespace OpenMS
     std::vector<ScanCommand> commands;
 
     int next_level = msn_level + 1;
+    const auto& this_cfg = config_.level(msn_level);
     const auto& next_cfg = config_.level(next_level);
-    if (next_cfg.selection == SelectionMetric::None) return commands;
+    if (this_cfg.selection == SelectionMetric::None) return commands;
 
     const auto& seq = config_.targeting().protein_sequence;
-    int num_targets = next_cfg.max_targets;
+    int num_targets = this_cfg.max_targets;
 
     // Get fragment ion targets via FragmentAnalysis
     DeconvolvedSpectrum result_copy = result;
-    const int max_frags = 100;
-    std::vector<double> masses(max_frags), qscores(max_frags);
-    std::vector<double> wstarts(max_frags), wends(max_frags);
-    std::vector<int> charges(max_frags);
-    std::vector<char> ion_types(max_frags, '\0');
-    std::vector<int> frag_indices(max_frags, 0);
+    std::vector<double> masses(num_targets), qscores(num_targets);
+    std::vector<double> wstarts(num_targets), wends(num_targets);
+    std::vector<int> charges(num_targets);
+    std::vector<char> ion_types(num_targets, '\0');
+    std::vector<int> frag_indices(num_targets, 0);
 
     int found = 0;
 
@@ -294,19 +294,19 @@ namespace OpenMS
     {
       case SelectionMetric::Intensity:
       case SelectionMetric::QScore:
-        found = fragments_.getTopFragmentMatches(seq, max_frags,
+        found = fragments_.getTopFragmentMatches(seq, num_targets,
             masses.data(), qscores.data(), charges.data(),
             wstarts.data(), wends.data(),
             ion_types.data(), frag_indices.data(), result_copy);
         break;
       case SelectionMetric::TerminalFragments:
-        found = fragments_.getTerminalFragmentIons(seq, max_frags,
+        found = fragments_.getTerminalFragmentIons(seq, num_targets,
             masses.data(), qscores.data(), charges.data(),
             wstarts.data(), wends.data(),
             ion_types.data(), frag_indices.data(), result_copy);
         break;
       case SelectionMetric::AmbiguityResolution:
-        found = fragments_.getAmbiguityEnclosingIons(seq, max_frags,
+        found = fragments_.getAmbiguityEnclosingIons(seq, num_targets,
             masses.data(), qscores.data(), charges.data(),
             wstarts.data(), wends.data(),
             ion_types.data(), frag_indices.data(), result_copy);
@@ -318,7 +318,7 @@ namespace OpenMS
     num_targets = std::min(num_targets, found);
 
     // Build commands for each selected fragment target
-    ScanConfig next_scan_config = next_cfg.scans.empty() ? ScanConfig{} : next_cfg.scans[0];
+    ScanConfig next_scan_config = next_cfg.scans[0];
 
     if (config_.hasExploration(next_level))
     {
