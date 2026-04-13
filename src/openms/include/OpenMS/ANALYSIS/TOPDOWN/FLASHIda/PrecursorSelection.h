@@ -135,6 +135,9 @@ namespace OpenMS
     /// Access selected peak groups after filterAndRank (mutable)
     DeconvolvedSpectrum& selectedPeakGroups() { return selected_peak_groups_; }
 
+    /// Access full deconvolved MS1 spectrum (all peak groups, not just selected)
+    const DeconvolvedSpectrum& deconvolvedMS1() const { return deconv_.deconvolvedMS1(); }
+
     /// Access trigger charges populated by filterAndRank
     const std::vector<int>& triggerCharges() const { return trigger_charges_; }
 

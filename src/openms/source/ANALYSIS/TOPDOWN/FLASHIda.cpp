@@ -169,7 +169,8 @@ FLASHIda::FLASHIda(char* arg) :
 
   void FLASHIda::writeIDALogEntry_(double rt,
                                     const std::string& tracking_id,
-                                    const std::vector<ScanCommand>& ms2_commands)
+                                    const std::vector<ScanCommand>& ms2_commands,
+                                    const DeconvolvedSpectrum& all_peak_groups)
   {
     if (!ida_log_stream_.is_open()) return;
 
@@ -210,12 +211,11 @@ FLASHIda::FLASHIda(char* arg) :
     }
 
     // AllMass line
-    const auto& selected = selection_.selectedPeakGroups();
     ida_log_stream_ << "AllMass=";
-    for (size_t i = 0; i < selected.size(); i++)
+    for (size_t i = 0; i < all_peak_groups.size(); i++)
     {
       if (i > 0) ida_log_stream_ << " ";
-      ida_log_stream_ << std::defaultfloat << selected[i].getMonoMass();
+      ida_log_stream_ << std::defaultfloat << all_peak_groups[i].getMonoMass();
     }
     ida_log_stream_ << "\n";
     ida_log_stream_.flush();
@@ -570,7 +570,7 @@ FLASHIda::FLASHIda(char* arg) :
       // IDA log entry
       std::string ms1_desc = scan_description ? std::string(scan_description) : "";
       std::string ms1_id = (ms1_desc.size() >= 3) ? ms1_desc.substr(0, 3) : "ms1";
-      writeIDALogEntry_(rt_min, ms1_id, ms2_commands);
+      writeIDALogEntry_(rt_min, ms1_id, ms2_commands, selection_.deconvolvedMS1());
 
       // Results TSV entry for MS1
       std::vector<std::string> child_ids;
