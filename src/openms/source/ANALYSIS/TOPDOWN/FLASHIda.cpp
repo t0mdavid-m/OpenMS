@@ -512,6 +512,10 @@ FLASHIda::FLASHIda(char* arg) :
 
     if (ms_level == 1)
     {
+      std::string desc_str = scan_description ? scan_description : "";
+      if (desc_str.size() < 3)
+        return 0;
+
       std::cout << static_cast<int>(config_.level(1).selection) << std::endl;
       // Selection=none: skip MS1 precursor selection entirely
       if (config_.level(1).selection == SelectionMetric::None)
