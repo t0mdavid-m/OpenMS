@@ -653,8 +653,7 @@ FLASHIda::FLASHIda(char* arg) :
       if (ctx.num_stages > 0)
       {
         precursor_charge = ctx.stages[0].charge_state;
-        precursor_mass = ctx.stages[0].precursor_mz * precursor_charge
-                         - precursor_charge * FLASHHelperClasses::getChargeMass(true);
+        precursor_mass = ctx.mono_mass;
       }
 
       deconv_.deconvolveMSn(mzs, ints, length, rt_min, precursor_mass, precursor_charge);
