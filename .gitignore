@@ -40,4 +40,4 @@ OpenMS-build/*
 vcpkg_installed
 build-release/*
 build-debug/*
-doc/*
+doc/*CLAUDE.md

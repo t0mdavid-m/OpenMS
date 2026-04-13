@@ -1144,13 +1144,18 @@ START_SECTION(fragment_count_requires_protein_sequence)
 {
   // Config with fragment_count metric but empty protein_sequence should throw
   std::string cfg_str = std::string(exploration_config);
+  // Clear protein_sequence to test empty-sequence validation path
+  {
+    const std::string seq = "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE";
+    auto seq_pos = cfg_str.find(seq);
+    if (seq_pos != std::string::npos) cfg_str.erase(seq_pos, seq.size());
+  }
   // Replace "mass_count" with "fragment_count" at MS2 level
   auto pos = cfg_str.find("\"mass_count\"");
   if (pos != std::string::npos)
     cfg_str.replace(pos, 12, "\"fragment_count\"");
 
-  // exploration_config has "protein_sequence": "" which is empty,
-  // so fragment_count validation should throw
+  // fragment_count requires protein_sequence — should throw
   TEST_EXCEPTION(std::invalid_argument, Config cfg{cfg_str})
 }
 END_SECTION
@@ -1190,7 +1195,12 @@ START_SECTION(terminal_fragments_requires_protein_sequence)
 {
   // ms2 selection = terminal_fragments, protein_sequence empty -> should throw
   std::string cfg_str = std::string(exploration_config);
-  // exploration_config has ms2.selection = "none" and protein_sequence = ""
+  // Clear protein_sequence to test empty-sequence validation path
+  {
+    const std::string seq = "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE";
+    auto seq_pos = cfg_str.find(seq);
+    if (seq_pos != std::string::npos) cfg_str.erase(seq_pos, seq.size());
+  }
   // Change ms2 selection to "terminal_fragments" but leave protein_sequence empty
   auto pos = cfg_str.find("\"selection\": \"none\"");
   TEST_EQUAL(pos != std::string::npos, true)
@@ -1204,7 +1214,12 @@ START_SECTION(ambiguity_resolution_requires_protein_sequence)
 {
   // ms2 selection = ambiguity_resolution, protein_sequence empty -> should throw
   std::string cfg_str = std::string(exploration_config);
-  // exploration_config has ms2.selection = "none" and protein_sequence = ""
+  // Clear protein_sequence to test empty-sequence validation path
+  {
+    const std::string seq = "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE";
+    auto seq_pos = cfg_str.find(seq);
+    if (seq_pos != std::string::npos) cfg_str.erase(seq_pos, seq.size());
+  }
   auto pos = cfg_str.find("\"selection\": \"none\"");
   TEST_EQUAL(pos != std::string::npos, true)
   cfg_str.replace(pos, 19, "\"selection\": \"ambiguity_resolution\"");
@@ -1238,9 +1253,9 @@ END_SECTION
 
 START_SECTION(ms3_protein_sequence_only_accepted)
 {
-  // Config with only ms3.protein_sequence should be accepted (no throw)
+  // Config with ms3.protein_sequence should be accepted (no throw)
   Config cfg{std::string(exploration_config)};
-  TEST_EQUAL(cfg.targeting().protein_sequence.empty(), true)
+  TEST_EQUAL(cfg.targeting().protein_sequence.empty(), false)
 }
 END_SECTION
 
