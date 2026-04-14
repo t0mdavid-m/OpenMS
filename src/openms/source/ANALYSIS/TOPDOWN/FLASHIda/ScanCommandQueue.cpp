@@ -188,10 +188,12 @@ namespace OpenMS
     cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';
 
     // Instrument defaults from MS1 config
-    cmd.agc_target = config_.level(1).scans[0].agc_target;
     cmd.first_mass = config_.level(1).scans[0].first_mass;
     cmd.last_mass = config_.level(1).scans[0].last_mass;
-    cmd.max_it = config_.level(1).scans[0].max_it;
+    
+    // Scan properties directly from MS2 config
+    cmd.agc_target = config_.level(2).scans[0].agc_target;
+    cmd.max_it = config_.level(2).scans[0].max_it;
 
     // Isolation window from peak group m/z range
     auto [mz1, mz2] = pg.getMzRange(charge);
@@ -263,10 +265,12 @@ namespace OpenMS
     cmd.orbitrap_resolution = ms2_ctx.orbitrap_resolution;
     std::strncpy(cmd.analyzer, ms2_ctx.analyzer, sizeof(cmd.analyzer) - 1);
     cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';
-    cmd.agc_target = ms2_ctx.agc_target;
     cmd.first_mass = ms2_ctx.first_mass;
     cmd.last_mass = ms2_ctx.last_mass;
-    cmd.max_it = ms2_ctx.max_it;
+    
+    cmd.max_it = ms3_config.max_it;
+    cmd.agc_target = ms3_config.agc_target;
+
 
     // Stage 0: MS2 precursor (from MS2 context)
     cmd.stages[0] = ms2_ctx.stages[0];
