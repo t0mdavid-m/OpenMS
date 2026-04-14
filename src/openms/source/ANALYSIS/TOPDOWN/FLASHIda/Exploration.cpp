@@ -131,8 +131,17 @@ namespace OpenMS
       int id_int = cmd.scan_id;
       std::string id_str = ScanCommandQueue::encode(id_int);
       v.tracking_id = id_str;
-      std::snprintf(cmd.scan_description, 16, "%sE%.1f@%d",
-                   id_str.c_str(), precursor_mass / 1000.0, charge);
+      if (msn_level >= 3 && ion_type != '\0' && frag_index > 0)
+      {
+        double frag_mass_kda = precursor_mz * charge / 1000.0;
+        std::snprintf(cmd.scan_description, 16, "%sE%.1f@%d%c%d",
+                     id_str.c_str(), frag_mass_kda, charge, ion_type, frag_index);
+      }
+      else
+      {
+        std::snprintf(cmd.scan_description, 16, "%sE%.1f@%d",
+                     id_str.c_str(), precursor_mass / 1000.0, charge);
+      }
 
       group.variants.push_back(v);
       variant_tracking_map_[id_int] = {group.group_id, i};

@@ -718,7 +718,7 @@ START_SECTION(ms3_exploration_variants_use_buildMS3)
   ScanCommand ms2_ctx = queue.buildMS2(precursor_pg, 3, cfg.level(2).scans[0]);
 
   auto fragment_pg = makeSyntheticPeakGroup(500.0, 1000.0, 2);
-  auto cmds = exploration.initiate(3, fragment_pg, 2, -50.0, queue, &ms2_ctx);
+  auto cmds = exploration.initiate(3, fragment_pg, 2, -50.0, queue, &ms2_ctx, 'y', 5);
 
   TEST_EQUAL(static_cast<int>(cmds.size()), 5)
 
@@ -735,6 +735,18 @@ START_SECTION(ms3_exploration_variants_use_buildMS3)
   auto group = exploration.getGroup(1);
   TEST_EQUAL(group.msn_level, 3)
   TEST_EQUAL(group.originating_cmd.num_stages > 0, true)
+
+  // MS3 exploration descriptions must include fragment ion info
+  for (int i = 0; i < 5; ++i)
+  {
+    std::string desc(cmds[i].scan_description);
+    TEST_EQUAL(desc[3], 'E')  // exploration marker
+    // Description format: {ID}E{frag_mass_kDa}@{charge}{ion_type}{frag_index}
+    // Fragment mass = 500.0 * 2 / 1000.0 = 1.0 (from fragment_pg mz=500, charge=2)
+    // Should end with "y5"
+    std::string suffix = desc.substr(desc.size() - 2);
+    TEST_EQUAL(suffix, "y5")
+  }
 }
 END_SECTION
 
