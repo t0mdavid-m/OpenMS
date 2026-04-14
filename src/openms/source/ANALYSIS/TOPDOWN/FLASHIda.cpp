@@ -93,7 +93,7 @@ FLASHIda::FLASHIda(char* arg) :
       results_tsv_stream_.open(rt_cfg.scan_results_path, std::ios::app);
       if (results_tsv_stream_.is_open())
       {
-        results_tsv_stream_ << "tracking_id\tresolve_ts\tduration_ms\trt\t"
+        results_tsv_stream_ << "tracking_id\tresolve_ts\tduration_ms\treceived_ts\tduration_received_ms\trt\t"
                             << "mass_count\tcommands_pushed\tchild_ids\t"
                             << "tag_count\tmatched_protein\tproteoform_sequence\t"
                             << "tic_coverage\tfragment_count\t"
@@ -311,7 +311,7 @@ FLASHIda::FLASHIda(char* arg) :
                                       const std::vector<std::string>& child_ids,
                                       int tag_count, const std::string& matched_protein,
                                       const std::string& proteoform_sequence,
-                                      uint64_t enqueue_ts,
+                                      uint64_t enqueue_ts, uint64_t received_ts,
                                       float tic_coverage, int fragment_count,
                                       int exploration_group_id, int exploration_metric,
                                       int variant_index, int total_variants,
@@ -323,6 +323,7 @@ FLASHIda::FLASHIda(char* arg) :
     uint64_t resolve_ts = std::chrono::duration_cast<std::chrono::milliseconds>(
         now.time_since_epoch()).count();
     uint64_t duration = (enqueue_ts > 0) ? (resolve_ts - enqueue_ts) : 0;
+    uint64_t duration_received = (enqueue_ts > 0 && received_ts > 0) ? (received_ts - enqueue_ts) : 0;
 
     std::string child_str;
     for (size_t i = 0; i < child_ids.size(); i++)
@@ -334,6 +335,8 @@ FLASHIda::FLASHIda(char* arg) :
     results_tsv_stream_ << tracking_id << "\t"
                         << resolve_ts << "\t"
                         << duration << "\t"
+                        << received_ts << "\t"
+                        << duration_received << "\t"
                         << rt << "\t"
                         << mass_count << "\t"
                         << commands_pushed << "\t"
@@ -585,7 +588,7 @@ FLASHIda::FLASHIda(char* arg) :
         child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
       int all_mass_count = static_cast<int>(selected.size());
       writeScanResultRow_(ms1_id, rt_min, all_mass_count, commands_pushed,
-                          child_ids, 0, "", "", 0);
+                          child_ids, 0, "", "", 0, 0);
 
       // FAIMS CV cycling: update skip policy, advance to next CV, push MS1
       if (faims_.isEnabled())
@@ -632,7 +635,7 @@ FLASHIda::FLASHIda(char* arg) :
 
         int expl_mass_count = deconv_.hasStoredMS2() ? static_cast<int>(deconv_.storedMS2().size()) : 0;
         writeScanResultRow_(id_str, rt_min, expl_mass_count, static_cast<int>(info.commands.size()),
-                            {}, 0, info.matched_protein, info.proteoform_sequence, 0,
+                            {}, 0, info.matched_protein, info.proteoform_sequence, 0, 0,
                             info.tic_coverage, info.fragment_count,
                             info.group_id, info.exploration_metric,
                             info.variant_index, info.total_variants,
@@ -718,7 +721,7 @@ FLASHIda::FLASHIda(char* arg) :
 
       writeScanResultRow_(id_str, rt_min, ms2_mass_count, commands_pushed,
                           child_ids, tag_count, nlr.matched_protein, nlr.proteoform_sequence,
-                          enqueue_ts, nlr.tic_coverage, nlr.fragment_count);
+                          enqueue_ts, 0, nlr.tic_coverage, nlr.fragment_count);
 
       std::cout << "[TRACK-RESOLVE] id=" << id_str
                 << " rt=" << rt_min
@@ -748,7 +751,7 @@ FLASHIda::FLASHIda(char* arg) :
             ? static_cast<int>(deconv_.storedMS2().size()) : 0;
         writeScanResultRow_(ms3_id, rt_min, expl_mass_count,
                             static_cast<int>(info.commands.size()),
-                            {}, 0, info.matched_protein, info.proteoform_sequence, 0,
+                            {}, 0, info.matched_protein, info.proteoform_sequence, 0, 0,
                             info.tic_coverage, info.fragment_count,
                             info.group_id, info.exploration_metric,
                             info.variant_index, info.total_variants,
@@ -785,7 +788,7 @@ FLASHIda::FLASHIda(char* arg) :
       }
 
       writeScanResultRow_(ms3_id, rt_min, ms3_mass_count, 0,
-                          {}, 0, "", "", enqueue_ts);
+                          {}, 0, "", "", enqueue_ts, 0);
       return 0;
     }
   }

@@ -262,7 +262,7 @@ namespace OpenMS
                              const std::vector<std::string>& child_ids,
                              int tag_count, const std::string& matched_protein,
                              const std::string& proteoform_sequence,
-                             uint64_t enqueue_ts,
+                             uint64_t enqueue_ts, uint64_t received_ts,
                              float tic_coverage = 0.0f, int fragment_count = 0,
                              int exploration_group_id = -1, int exploration_metric = 0,
                              int variant_index = -1, int total_variants = 0,
