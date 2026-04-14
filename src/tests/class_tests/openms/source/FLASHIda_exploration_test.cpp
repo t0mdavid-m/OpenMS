@@ -786,13 +786,16 @@ START_SECTION(winner_selection_by_score)
   TEST_EQUAL(static_cast<int>(cmds.size()), 5)
 
   std::vector<double> scores = {1.0, 3.0, 2.0, 5.0, 0.0};
+  Exploration::FeedResultInfo last_info;
   for (int i = 0; i < 5; ++i)
   {
     DeconvolvedSpectrum ds = makeSyntheticDeconv(i + 1, static_cast<int>(scores[i]));
     int tracking_id = queue.decode(std::string(cmds[i].scan_description).substr(0, 3));
-    exploration.feedResultForTest(tracking_id, ds, static_cast<double>(i), queue);
+    last_info = exploration.feedResultForTest(tracking_id, ds, static_cast<double>(i), queue);
   }
 
+  // mass_count metric -> remaining_ratio should be -1.0 (N/A)
+  TEST_REAL_SIMILAR(last_info.remaining_ratio, -1.0)
   TEST_EQUAL(exploration.activeGroupCount(), 0)
 }
 END_SECTION
@@ -1144,6 +1147,7 @@ START_SECTION(remaining_precursor_score_no_raw_data)
 
     // total_variants should exclude baseline (= 5 real variants)
     TEST_EQUAL(info.total_variants, 5)
+    TEST_REAL_SIMILAR(info.remaining_ratio, -1.0)
   }
 
   // Group should be complete (all variants received)
@@ -1195,7 +1199,9 @@ START_SECTION(remaining_precursor_score_with_raw_data)
   TEST_EQUAL(group_mid.variants[1].score >= 0.0, true)
   TEST_EQUAL(group_mid.variants[1].score <= 1.0, true)
 
-  (void)ce20_info;
+  // remaining_ratio should be valid for RemainingPrecursor with raw data
+  TEST_EQUAL(ce20_info.remaining_ratio >= 0.0, true)
+  TEST_EQUAL(ce20_info.remaining_ratio <= 1.0, true)
 }
 END_SECTION
 
@@ -1231,12 +1237,13 @@ START_SECTION(remaining_precursor_score_no_signal_in_window)
   std::vector<double> frag_ints = {100.0, 500.0, 200.0, 50.0};
 
   int ce20_tid = queue.decode(std::string(cmds[1].scan_description).substr(0, 3));
-  exploration.feedResult(ce20_tid, frag_mzs.data(), frag_ints.data(),
-                         static_cast<int>(frag_mzs.size()), 1.0, queue);
+  auto ce20_info = exploration.feedResult(ce20_tid, frag_mzs.data(), frag_ints.data(),
+                                          static_cast<int>(frag_mzs.size()), 1.0, queue);
 
   auto group_after = exploration.getGroup(1);
   TEST_EQUAL(group_after.variants[1].received, true)
   TEST_REAL_SIMILAR(group_after.variants[1].score, 0.0)
+  TEST_REAL_SIMILAR(ce20_info.remaining_ratio, -1.0)
 }
 END_SECTION
 
@@ -1386,16 +1393,20 @@ START_SECTION(remaining_precursor_target_aware_scoring)
   auto info_perfect = exploration.feedResult(ce20_tid, baseline_mzs.data(), perfect_ints.data(),
                                               1, 1.0, queue);
   double score_perfect = info_perfect.score;
+  double ratio_perfect = info_perfect.remaining_ratio;
 
   std::vector<double> over_ints = {500.0};
   int ce25_tid = queue.decode(std::string(cmds[2].scan_description).substr(0, 3));
   auto info_over = exploration.feedResult(ce25_tid, baseline_mzs.data(), over_ints.data(),
                                            1, 2.0, queue);
   double score_over = info_over.score;
+  double ratio_over = info_over.remaining_ratio;
 
   TEST_EQUAL(score_perfect > score_over, true)
   TEST_REAL_SIMILAR(score_perfect, 1.0)
   TEST_REAL_SIMILAR(score_over, 0.6)
+  TEST_REAL_SIMILAR(ratio_perfect, 0.1)
+  TEST_REAL_SIMILAR(ratio_over, 0.5)
 
   (void)iso_half;
 }
