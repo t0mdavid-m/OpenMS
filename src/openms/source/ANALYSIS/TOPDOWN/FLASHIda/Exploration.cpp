@@ -509,6 +509,8 @@ namespace OpenMS
   double Exploration::computeRemainingPrecursorScore_(const ExplorationGroup& group,
       const double* mzs, const double* ints, int length, double* out_ratio) const
   {
+    if (out_ratio) *out_ratio = -1.0;
+
     if (length <= 0 || mzs == nullptr || ints == nullptr)
       return 0.0;
 
