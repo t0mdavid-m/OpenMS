@@ -59,6 +59,14 @@ int main()
   std::printf("ScanCommand.hcd_energy.offset=%zu\n", offsetof(ScanCommand, hcd_energy));
   std::printf("ScanCommand.pad2.offset=%zu\n", offsetof(ScanCommand, pad2));
   std::printf("ScanCommand.faims_cv.offset=%zu\n", offsetof(ScanCommand, faims_cv));
+  std::printf("ScanCommand.microscans.offset=%zu\n", offsetof(ScanCommand, microscans));
+  std::printf("ScanCommand.pad3.offset=%zu\n", offsetof(ScanCommand, pad3));
+  std::printf("ScanCommand.rf_lens.offset=%zu\n", offsetof(ScanCommand, rf_lens));
+  std::printf("ScanCommand.source_cid.offset=%zu\n", offsetof(ScanCommand, source_cid));
+  std::printf("ScanCommand.source_cid_scaling.offset=%zu\n", offsetof(ScanCommand, source_cid_scaling));
+  std::printf("ScanCommand.data_type.offset=%zu\n", offsetof(ScanCommand, data_type));
+  std::printf("ScanCommand.scan_rate.offset=%zu\n", offsetof(ScanCommand, scan_rate));
+  std::printf("ScanCommand.reserved_.offset=%zu\n", offsetof(ScanCommand, reserved_));
 
   std::printf("LAYOUT_CHECK_PASSED\n");
   return 0;
