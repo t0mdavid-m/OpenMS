@@ -262,14 +262,14 @@ namespace OpenMS
     cmd.num_stages = 2;
 
     // Copy analyzer/resolution from MS2 context
-    cmd.orbitrap_resolution = ms2_ctx.orbitrap_resolution;
-    std::strncpy(cmd.analyzer, ms2_ctx.analyzer, sizeof(cmd.analyzer) - 1);
-    cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';
     cmd.first_mass = ms2_ctx.first_mass;
     cmd.last_mass = ms2_ctx.last_mass;
     
     cmd.max_it = ms3_config.max_it;
     cmd.agc_target = ms3_config.agc_target;
+    cmd.orbitrap_resolution = ms3_config.resolution;
+    std::strncpy(cmd.analyzer, ms3_config.analyzer.c_str(), sizeof(cmd.analyzer) - 1);
+    cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';
 
 
     // Stage 0: MS2 precursor (from MS2 context)
