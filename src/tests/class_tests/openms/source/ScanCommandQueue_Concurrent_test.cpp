@@ -217,7 +217,7 @@ START_SECTION(concurrent_push_cleanup)
   const int N = 200;
   std::atomic<bool> done{false};
 
-  // Pusher registers commands with old timestamps (will expire)
+  // Pusher pushes commands with current timestamps (exercises concurrent push + cleanup)
   auto pusher = [&]()
   {
     for (int i = 0; i < N; ++i)
