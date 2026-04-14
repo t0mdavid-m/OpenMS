@@ -525,13 +525,27 @@ FLASHIda::FLASHIda(char* arg) :
   {
     std::lock_guard<std::mutex> lock(analysis_mutex_);
 
+    // Centralized tracking ID extraction — early return for instrument-triggered scans
+    std::string desc_str = scan_description ? std::string(scan_description) : "";
+    if (desc_str.size() < 3) return 0;
+    std::string id_str = desc_str.substr(0, 3);
+    int tracking_id = queue_.decode(id_str);
+
+    // Retrieve enqueue timestamp from pending map (set by push())
+    uint64_t enqueue_ts = 0;
+    {
+      auto peeked = queue_.peekPending(tracking_id);
+      if (peeked.has_value())
+        enqueue_ts = peeked->enqueue_timestamp_ms;
+    }
+
+    // Stamp received timestamp (instrument → C++ handoff)
+    uint64_t received_ts = static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+
     if (ms_level == 1)
     {
-      // Guard against method scans
-      std::string desc_str = scan_description ? scan_description : "";
-      if (desc_str.size() < 3)
-        return 0;
-
       // Selection=none: skip MS1 precursor selection entirely
       if (config_.level(1).selection == SelectionMetric::None)
         return 0;
@@ -578,17 +592,15 @@ FLASHIda::FLASHIda(char* arg) :
       }
 
       // IDA log entry
-      std::string ms1_desc = scan_description ? std::string(scan_description) : "";
-      std::string ms1_id = (ms1_desc.size() >= 3) ? ms1_desc.substr(0, 3) : "ms1";
-      writeIDALogEntry_(rt_min, ms1_id, ms2_commands, selection_.deconvolvedMS1());
+      writeIDALogEntry_(rt_min, id_str, ms2_commands, selection_.deconvolvedMS1());
 
       // Results TSV entry for MS1
       std::vector<std::string> child_ids;
       for (const auto& c : ms2_commands)
         child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
       int all_mass_count = static_cast<int>(selected.size());
-      writeScanResultRow_(ms1_id, rt_min, all_mass_count, commands_pushed,
-                          child_ids, 0, "", "", 0, 0);
+      writeScanResultRow_(id_str, rt_min, all_mass_count, commands_pushed,
+                          child_ids, 0, "", "", enqueue_ts, received_ts);
 
       // FAIMS CV cycling: update skip policy, advance to next CV, push MS1
       if (faims_.isEnabled())
@@ -619,14 +631,6 @@ FLASHIda::FLASHIda(char* arg) :
     {
       int commands_pushed = 0;
 
-      // Step 1: Decode tracking ID from scan_description -- fixed position chars 0-2
-      std::string desc_str = scan_description ? scan_description : "";
-      if (desc_str.size() < 3)
-        return 0;
-
-      std::string id_str = desc_str.substr(0, 3);
-      int tracking_id = queue_.decode(id_str);
-
       // Check if this is an exploration variant (before pending scan lookup)
       if (exploration_.isExplorationVariant(tracking_id))
       {
@@ -635,7 +639,7 @@ FLASHIda::FLASHIda(char* arg) :
 
         int expl_mass_count = deconv_.hasStoredMS2() ? static_cast<int>(deconv_.storedMS2().size()) : 0;
         writeScanResultRow_(id_str, rt_min, expl_mass_count, static_cast<int>(info.commands.size()),
-                            {}, 0, info.matched_protein, info.proteoform_sequence, 0, 0,
+                            {}, 0, info.matched_protein, info.proteoform_sequence, enqueue_ts, received_ts,
                             info.tic_coverage, info.fragment_count,
                             info.group_id, info.exploration_metric,
                             info.variant_index, info.total_variants,
@@ -643,14 +647,6 @@ FLASHIda::FLASHIda(char* arg) :
 
         exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);
         return static_cast<int>(info.commands.size());
-      }
-
-      // Step 2: Peek enqueue timestamp before resolving (resolve removes from pending map)
-      uint64_t enqueue_ts = 0;
-      {
-        auto peeked = queue_.peekPending(tracking_id);
-        if (peeked.has_value())
-          enqueue_ts = peeked->enqueue_timestamp_ms;
       }
 
       auto resolved = queue_.resolvePending(tracking_id);
@@ -721,7 +717,7 @@ FLASHIda::FLASHIda(char* arg) :
 
       writeScanResultRow_(id_str, rt_min, ms2_mass_count, commands_pushed,
                           child_ids, tag_count, nlr.matched_protein, nlr.proteoform_sequence,
-                          enqueue_ts, 0, nlr.tic_coverage, nlr.fragment_count);
+                          enqueue_ts, received_ts, nlr.tic_coverage, nlr.fragment_count);
 
       std::cout << "[TRACK-RESOLVE] id=" << id_str
                 << " rt=" << rt_min
@@ -735,12 +731,6 @@ FLASHIda::FLASHIda(char* arg) :
     }
     // MS3 (or higher)
     {
-      std::string desc_str = scan_description ? std::string(scan_description) : "";
-      std::string ms3_id = (desc_str.size() >= 3) ? desc_str.substr(0, 3) : "";
-      if (ms3_id.empty()) return 0;
-
-      int tracking_id = queue_.decode(ms3_id);
-
       // Route exploration variants to feedResult for scoring/winner selection
       if (exploration_.isExplorationVariant(tracking_id))
       {
@@ -749,9 +739,9 @@ FLASHIda::FLASHIda(char* arg) :
 
         int expl_mass_count = deconv_.hasStoredMS2()
             ? static_cast<int>(deconv_.storedMS2().size()) : 0;
-        writeScanResultRow_(ms3_id, rt_min, expl_mass_count,
+        writeScanResultRow_(id_str, rt_min, expl_mass_count,
                             static_cast<int>(info.commands.size()),
-                            {}, 0, info.matched_protein, info.proteoform_sequence, 0, 0,
+                            {}, 0, info.matched_protein, info.proteoform_sequence, enqueue_ts, received_ts,
                             info.tic_coverage, info.fragment_count,
                             info.group_id, info.exploration_metric,
                             info.variant_index, info.total_variants,
@@ -763,12 +753,6 @@ FLASHIda::FLASHIda(char* arg) :
       }
 
       // Non-exploration MS3: resolve pending, deconvolve with precursor context
-      uint64_t enqueue_ts = 0;
-      {
-        auto peeked = queue_.peekPending(tracking_id);
-        if (peeked.has_value())
-          enqueue_ts = peeked->enqueue_timestamp_ms;
-      }
       auto resolved = queue_.resolvePending(tracking_id);
 
       double precursor_mass = 0.0;
@@ -787,8 +771,8 @@ FLASHIda::FLASHIda(char* arg) :
             ? static_cast<int>(deconv_.storedMS2().size()) : 0;
       }
 
-      writeScanResultRow_(ms3_id, rt_min, ms3_mass_count, 0,
-                          {}, 0, "", "", enqueue_ts, 0);
+      writeScanResultRow_(id_str, rt_min, ms3_mass_count, 0,
+                          {}, 0, "", "", enqueue_ts, received_ts);
       return 0;
     }
   }
