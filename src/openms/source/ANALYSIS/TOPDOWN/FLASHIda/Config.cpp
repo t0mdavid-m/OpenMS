@@ -233,6 +233,8 @@ namespace OpenMS
         ms2_scan.activation = m.value("activation", "");
         ms2_scan.collision_energy = m.value("collision_energy", 0);
         ms2_scan.resolution = m.value("resolution", 0);
+        ms2_scan.agc_target = m.value("agc_target", 0);
+        ms2_scan.max_it = m.value("max_it", 0);
         levels_[2].scans.push_back(ms2_scan);
       }
     }
@@ -249,6 +251,8 @@ namespace OpenMS
         ms3_scan.activation = m.value("activation", "");
         ms3_scan.collision_energy = m.value("collision_energy", 0);
         ms3_scan.resolution = m.value("resolution", 0);
+        ms3_scan.agc_target = m.value("agc_target", 0);
+        ms3_scan.max_it = m.value("max_it", 0);
         levels_[3].scans.push_back(ms3_scan);
       }
     }
