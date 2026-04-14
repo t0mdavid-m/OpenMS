@@ -140,6 +140,14 @@ namespace OpenMS
     cmd.first_mass = config_.level(1).scans[0].first_mass;
     cmd.last_mass = config_.level(1).scans[0].last_mass;
     cmd.max_it = config_.level(1).scans[0].max_it;
+    cmd.microscans = config_.level(1).scans[0].microscans;
+    cmd.rf_lens = config_.level(1).scans[0].rf_lens;
+    cmd.source_cid = config_.level(1).scans[0].source_cid;
+    cmd.source_cid_scaling = config_.level(1).scans[0].source_cid_scaling;
+    std::strncpy(cmd.data_type, config_.level(1).scans[0].data_type.c_str(), sizeof(cmd.data_type) - 1);
+    cmd.data_type[sizeof(cmd.data_type) - 1] = '\0';
+    std::strncpy(cmd.scan_rate, config_.level(1).scans[0].scan_rate.c_str(), sizeof(cmd.scan_rate) - 1);
+    cmd.scan_rate[sizeof(cmd.scan_rate) - 1] = '\0';
 
     // Copy analyzer string safely
     std::strncpy(cmd.analyzer, config_.level(1).scans[0].analyzer.c_str(), sizeof(cmd.analyzer) - 1);
@@ -187,13 +195,23 @@ namespace OpenMS
     std::strncpy(cmd.analyzer, scan_config.analyzer.c_str(), sizeof(cmd.analyzer) - 1);
     cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';
 
-    // Instrument defaults from MS1 config
-    cmd.first_mass = config_.level(1).scans[0].first_mass;
-    cmd.last_mass = config_.level(1).scans[0].last_mass;
-    
-    // Scan properties directly from MS2 config
+    // Mass range from MS2 config (0 = unset, Thermo API inherits from method default)
+    cmd.first_mass = scan_config.first_mass;
+    cmd.last_mass = scan_config.last_mass;
+
+    // Scan properties from MS2 config
     cmd.agc_target = config_.level(2).scans[0].agc_target;
     cmd.max_it = config_.level(2).scans[0].max_it;
+
+    // New scan parameters from MS2 config
+    cmd.microscans = scan_config.microscans;
+    cmd.rf_lens = scan_config.rf_lens;
+    cmd.source_cid = scan_config.source_cid;
+    cmd.source_cid_scaling = scan_config.source_cid_scaling;
+    std::strncpy(cmd.data_type, scan_config.data_type.c_str(), sizeof(cmd.data_type) - 1);
+    cmd.data_type[sizeof(cmd.data_type) - 1] = '\0';
+    std::strncpy(cmd.scan_rate, scan_config.scan_rate.c_str(), sizeof(cmd.scan_rate) - 1);
+    cmd.scan_rate[sizeof(cmd.scan_rate) - 1] = '\0';
 
     // Isolation window from peak group m/z range
     auto [mz1, mz2] = pg.getMzRange(charge);
@@ -261,16 +279,25 @@ namespace OpenMS
     cmd.is_agc = 0;
     cmd.num_stages = 2;
 
-    // Copy analyzer/resolution from MS2 context
-    cmd.first_mass = ms2_ctx.first_mass;
-    cmd.last_mass = ms2_ctx.last_mass;
-    
+    // Mass range from MS3 config (0 = unset, Thermo API inherits from method default)
+    cmd.first_mass = ms3_config.first_mass;
+    cmd.last_mass = ms3_config.last_mass;
+
     cmd.max_it = ms3_config.max_it;
     cmd.agc_target = ms3_config.agc_target;
     cmd.orbitrap_resolution = ms3_config.resolution;
     std::strncpy(cmd.analyzer, ms3_config.analyzer.c_str(), sizeof(cmd.analyzer) - 1);
     cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';
 
+    // New scan parameters from MS3 config
+    cmd.microscans = ms3_config.microscans;
+    cmd.rf_lens = ms3_config.rf_lens;
+    cmd.source_cid = ms3_config.source_cid;
+    cmd.source_cid_scaling = ms3_config.source_cid_scaling;
+    std::strncpy(cmd.data_type, ms3_config.data_type.c_str(), sizeof(cmd.data_type) - 1);
+    cmd.data_type[sizeof(cmd.data_type) - 1] = '\0';
+    std::strncpy(cmd.scan_rate, ms3_config.scan_rate.c_str(), sizeof(cmd.scan_rate) - 1);
+    cmd.scan_rate[sizeof(cmd.scan_rate) - 1] = '\0';
 
     // Stage 0: MS2 precursor (from MS2 context)
     cmd.stages[0] = ms2_ctx.stages[0];
