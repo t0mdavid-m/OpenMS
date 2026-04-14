@@ -60,7 +60,7 @@ namespace OpenMS
 
   /// Blittable struct representing a complete scan command for the instrument.
   /// Layout: 1248 (existing) + 8 (microscans+pad3) + 24 (rf_lens+source_cid+source_cid_scaling)
-  ///       + 64 (data_type+scan_rate) + 704 (reserved) = 2048.
+  ///       + 64 (data_type+scan_rate) + 4 (parent_scan_id) + 700 (reserved) = 2048.
   struct OPENMS_DLLAPI ScanCommand
   {
     int32_t scan_id;             ///< Unique tracking ID (encoded as 3-char string in scan description)
