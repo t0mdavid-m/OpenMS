@@ -257,7 +257,7 @@ FLASHIda::FLASHIda(char* arg) :
     if (cmd.num_stages > 0)
       activation = cmd.stages[0].activation_type;
 
-    std::string parent_id;
+    std::string parent_id(cmd.parent_scan_id);
     std::string ion_type;
     int ion_index = 0;
     if (cmd.msn_level == 3 && std::strlen(cmd.scan_description) > 4)
