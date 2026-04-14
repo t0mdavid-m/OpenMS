@@ -596,7 +596,9 @@ FLASHIda::FLASHIda(char* arg) :
         // Exploration path: initiate CE sweep variants INSTEAD of regular MS2
         for (int i = 0; i < n; i++)
         {
-          auto cmds = exploration_.initiate(2, selected[i], sel_charges[i], faims_cv, queue_);
+          ScanCommand ms1_ctx{};
+          ms1_ctx.scan_id = tracking_id;
+          auto cmds = exploration_.initiate(2, selected[i], sel_charges[i], faims_cv, queue_, &ms1_ctx);
           for (auto& c : cmds)
           {
             std::string ms1_enc = ScanCommandQueue::encode(tracking_id);
