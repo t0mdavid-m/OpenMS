@@ -526,10 +526,8 @@ FLASHIda::FLASHIda(char* arg) :
     {
       // Guard against method scans
       std::string desc_str = scan_description ? scan_description : "";
-      std::cout << desc_str << std::endl;
-      std::cout << config_.level(1).selection << std::endl;
-      // if (desc_str.size() < 3)
-      //   return 0;
+      if (desc_str.size() < 3)
+        return 0;
 
       // Selection=none: skip MS1 precursor selection entirely
       if (config_.level(1).selection == SelectionMetric::None)
