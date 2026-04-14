@@ -99,7 +99,7 @@ FLASHIda::FLASHIda(char* arg) :
                             << "tic_coverage\tfragment_count\t"
                             << "exploration_group_id\texploration_metric\t"
                             << "variant_index\ttotal_variants\t"
-                            << "collision_energy\texploration_score\n";
+                            << "collision_energy\texploration_score\tremaining_ratio\n";
         results_tsv_stream_.flush();
       }
     }
@@ -315,7 +315,8 @@ FLASHIda::FLASHIda(char* arg) :
                                       float tic_coverage, int fragment_count,
                                       int exploration_group_id, int exploration_metric,
                                       int variant_index, int total_variants,
-                                      double collision_energy, double exploration_score)
+                                      double collision_energy, double exploration_score,
+                                      double remaining_ratio)
   {
     if (!results_tsv_stream_.is_open()) return;
 
@@ -351,7 +352,8 @@ FLASHIda::FLASHIda(char* arg) :
                         << variant_index << "\t"
                         << total_variants << "\t"
                         << collision_energy << "\t"
-                        << exploration_score << "\n";
+                        << exploration_score << "\t"
+                        << remaining_ratio << "\n";
     results_tsv_stream_.flush();
   }
 
@@ -643,7 +645,7 @@ FLASHIda::FLASHIda(char* arg) :
                             info.tic_coverage, info.fragment_count,
                             info.group_id, info.exploration_metric,
                             info.variant_index, info.total_variants,
-                            info.collision_energy, info.score);
+                            info.collision_energy, info.score, info.remaining_ratio);
 
         exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);
         return static_cast<int>(info.commands.size());
@@ -745,7 +747,7 @@ FLASHIda::FLASHIda(char* arg) :
                             info.tic_coverage, info.fragment_count,
                             info.group_id, info.exploration_metric,
                             info.variant_index, info.total_variants,
-                            info.collision_energy, info.score);
+                            info.collision_energy, info.score, info.remaining_ratio);
 
         exploration_active_.store(exploration_.activeGroupCount() > 0,
                                   std::memory_order_release);
