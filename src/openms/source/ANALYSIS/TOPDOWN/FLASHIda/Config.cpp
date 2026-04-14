@@ -309,7 +309,7 @@ namespace OpenMS
           cfg.ce_max = expl_obj.value("ce_max", 40.0);
           cfg.ce_step = expl_obj.value("ce_step", 5.0);
           cfg.remaining_precursor_target = expl_obj.value("remaining_precursor_target", 0.1);
-          if (expl_obj.contains("overrides"))
+          if (expl_obj.contains("overrides") && expl_obj["overrides"].is_object())
           {
             const auto& ov_obj = expl_obj["overrides"];
             for (auto ov_it = ov_obj.begin(); ov_it != ov_obj.end(); ++ov_it)
