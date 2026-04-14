@@ -819,20 +819,21 @@ FLASHIda::FLASHIda(char* arg) :
     // Step 2: Cycle time -- force MS1 if too long since last survey scan
     // Suppressed while any exploration group is active.
     // Queued at priority 0 (not returned immediately) so it goes through normal dequeue.
-    if (config_.scheduling().cycle_time_enabled && !exploration_active_.load(std::memory_order_acquire)
-        && queue_.msSinceLastMS1() > static_cast<uint64_t>(config_.scheduling().cycle_time_ms))
+    if (config_.scheduling().cycle_time_enabled 
+        && queue_.msSinceLastMS1() > static_cast<uint64_t>(config_.scheduling().cycle_time_ms)
+    )
     {
       ScanCommand ms1_cmd = queue_.makeMS1();
       ms1_cmd.faims_cv = faims_cv;
       ms1_cmd.scan_id = queue_.nextTrackingId();
       ms1_cmd.priority = 0;
+      ms1_cmd.scan_description[3] = 'C';
       queue_.recordMS1Time();
 
       std::string id_str = ScanCommandQueue::encode(ms1_cmd.scan_id);
       std::snprintf(ms1_cmd.scan_description, 16, "%sS", id_str.c_str());
 
       std::cout << "[TRACK-CREATE] id=" << id_str << " ms_level=1 type=cycle_time" << std::endl;
-      writeScanCommandRow_(ms1_cmd);
       queue_.push(ms1_cmd);
       // Fall through to Step 3 (cleanup) and Step 4 (dequeue)
     }
