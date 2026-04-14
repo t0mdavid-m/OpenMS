@@ -207,7 +207,8 @@ namespace OpenMS
     v.result = ms2_deconv;
     v.score = computeExplorationScore_(group.exploration_metric, ms2_deconv, group, mzs, ints, length);
     v.tic_coverage = computeTICCoverage_(ms2_deconv);
-    v.fragment_count = static_cast<int>(ms2_deconv.size());
+    auto frag = computeFragmentMatch_(ms2_deconv);
+    v.fragment_count = static_cast<int>(frag.count);
     v.received = true;
 
     // Handle baseline for RemainingPrecursor
@@ -244,6 +245,8 @@ namespace OpenMS
     info.tic_coverage = v.tic_coverage;
     info.fragment_count = v.fragment_count;
     info.exploration_metric = static_cast<int>(group.exploration_metric);
+    info.matched_protein = frag.matched_protein;
+    info.proteoform_sequence = frag.proteoform_sequence;
 
     auto& meta = v.result.getOrCreateOptimizationMetadata();
     meta.group_id = group.group_id;
@@ -484,7 +487,7 @@ namespace OpenMS
       case ExplorationMetric::RemainingPrecursor:
         return computeRemainingPrecursorScore_(group, mzs, ints, length);
       case ExplorationMetric::FragmentCount:
-        return computeFragmentCount_(spec);
+        return computeFragmentMatch_(spec).count;
       default:
         return computeMassCount_(spec);
     }
@@ -526,17 +529,19 @@ namespace OpenMS
     }
 
     double ratio = remaining_intensity / reference;
-    double score = 1.0 - ratio;
+    double target = config_.level(group.msn_level).remaining_precursor_target;
+    double deviation = std::abs(ratio - target);
+    double score = 1.0 - deviation;
     if (score < 0.0) score = 0.0;
-    if (score > 1.0) score = 1.0;
     return score;
   }
 
-  double Exploration::computeFragmentCount_(const DeconvolvedSpectrum& spec) const
+  Exploration::FragmentMatchResult Exploration::computeFragmentMatch_(const DeconvolvedSpectrum& spec) const
   {
+    FragmentMatchResult result;
     const auto& seq = config_.targeting().protein_sequence;
     if (seq.empty() || spec.empty())
-      return 0.0;
+      return result;
 
     DeconvolvedSpectrum spec_copy = spec;
 
@@ -554,7 +559,13 @@ namespace OpenMS
         ion_types.data(), frag_indices.data(),
         spec_copy);
 
-    return static_cast<double>(count);
+    result.count = static_cast<double>(count);
+    if (count > 0)
+    {
+      result.matched_protein = config_.targeting().fasta_file;
+      result.proteoform_sequence = seq;
+    }
+    return result;
   }
 
   float Exploration::computeTICCoverage_(const DeconvolvedSpectrum& spec) const

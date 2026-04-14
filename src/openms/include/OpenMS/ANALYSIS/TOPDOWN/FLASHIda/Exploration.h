@@ -124,6 +124,8 @@ namespace OpenMS
       float tic_coverage = 0.0f;
       int fragment_count = 0;
       int exploration_metric = 0;
+      std::string matched_protein;
+      std::string proteoform_sequence;
     };
 
     /// Construct with a reference to the shared Config, Deconvolution engine, and FragmentAnalysis
@@ -195,8 +197,16 @@ namespace OpenMS
     double computeRemainingPrecursorScore_(const ExplorationGroup& group,
                                            const double* mzs, const double* ints, int length) const;
 
-    /// Score: number of fragment ions
-    double computeFragmentCount_(const DeconvolvedSpectrum& spec) const;
+    /// Result of fragment matching: count + protein identification info
+    struct FragmentMatchResult
+    {
+      double count = 0.0;
+      std::string matched_protein;
+      std::string proteoform_sequence;
+    };
+
+    /// Score: number of matched fragment ions + protein info
+    FragmentMatchResult computeFragmentMatch_(const DeconvolvedSpectrum& spec) const;
 
     /// Compute TIC coverage for metadata
     float computeTICCoverage_(const DeconvolvedSpectrum& spec) const;

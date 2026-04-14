@@ -1359,6 +1359,106 @@ START_SECTION(ms3_protein_sequence_only_accepted)
 }
 END_SECTION
 
+START_SECTION(remaining_precursor_target_aware_scoring)
+{
+  Config cfg{std::string(remaining_precursor_config)};
+  ScanCommandQueue queue(cfg);
+  Deconvolution deconv(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, deconv, fragments);
+
+  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
+  TEST_EQUAL(static_cast<int>(cmds.size()), 6)
+
+  auto group = exploration.getGroup(1);
+  double iso_half = group.isolation_width / 2.0;
+  double mz_center = group.precursor_mz;
+
+  std::vector<double> baseline_mzs = {mz_center};
+  std::vector<double> baseline_ints = {1000.0};
+  int baseline_tid = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
+  exploration.feedResult(baseline_tid, baseline_mzs.data(), baseline_ints.data(),
+                         static_cast<int>(baseline_mzs.size()), 0.5, queue);
+
+  std::vector<double> perfect_ints = {100.0};
+  int ce20_tid = queue.decode(std::string(cmds[1].scan_description).substr(0, 3));
+  auto info_perfect = exploration.feedResult(ce20_tid, baseline_mzs.data(), perfect_ints.data(),
+                                              1, 1.0, queue);
+  double score_perfect = info_perfect.score;
+
+  std::vector<double> over_ints = {500.0};
+  int ce25_tid = queue.decode(std::string(cmds[2].scan_description).substr(0, 3));
+  auto info_over = exploration.feedResult(ce25_tid, baseline_mzs.data(), over_ints.data(),
+                                           1, 2.0, queue);
+  double score_over = info_over.score;
+
+  TEST_EQUAL(score_perfect > score_over, true)
+  TEST_REAL_SIMILAR(score_perfect, 1.0)
+  TEST_REAL_SIMILAR(score_over, 0.6)
+
+  (void)iso_half;
+}
+END_SECTION
+
+START_SECTION(fragment_match_propagated_in_feed_result)
+{
+  Config cfg{std::string(exploration_config)};
+  ScanCommandQueue queue(cfg);
+  Deconvolution deconv(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, deconv, fragments);
+
+  TEST_EQUAL(cfg.targeting().protein_sequence.empty(), false)
+
+  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
+
+  auto ms2_scans = loadTsvScans(ms2_cytc_path);
+  ABORT_IF(ms2_scans.empty())
+  const auto& ms2_data = ms2_scans[0];
+
+  int tracking_id = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
+  auto info = exploration.feedResult(tracking_id,
+      ms2_data.mzs.data(), ms2_data.ints.data(),
+      static_cast<int>(ms2_data.mzs.size()), ms2_data.rt, queue);
+
+  // Real cytochrome c spectrum should produce fragment matches
+  TEST_EQUAL(info.fragment_count > 0, true)
+  TEST_EQUAL(info.matched_protein.empty(), false)
+  TEST_EQUAL(info.proteoform_sequence.empty(), false)
+  TEST_STRING_EQUAL(info.proteoform_sequence, std::string(cytochrome_c_sequence))
+}
+END_SECTION
+
+START_SECTION(fragment_count_zero_without_protein_sequence)
+{
+  Config cfg{std::string(remaining_precursor_config)};
+  TEST_EQUAL(cfg.targeting().protein_sequence.empty(), true)
+
+  ScanCommandQueue queue(cfg);
+  Deconvolution deconv(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, deconv, fragments);
+
+  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
+  TEST_EQUAL(static_cast<int>(cmds.size()), 6)
+
+  DeconvolvedSpectrum baseline_ds = makeSyntheticDeconv(0, 1);
+  int baseline_tid = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
+  exploration.feedResultForTest(baseline_tid, baseline_ds, 0.0, queue);
+
+  DeconvolvedSpectrum ds = makeSyntheticDeconv(1, 5);
+  int tracking_id = queue.decode(std::string(cmds[1].scan_description).substr(0, 3));
+  auto info = exploration.feedResultForTest(tracking_id, ds, 1.0, queue);
+
+  TEST_EQUAL(info.fragment_count, 0)
+  TEST_EQUAL(info.matched_protein.empty(), true)
+  TEST_EQUAL(info.proteoform_sequence.empty(), true)
+}
+END_SECTION
+
 /////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////
 END_TEST
