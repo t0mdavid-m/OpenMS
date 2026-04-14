@@ -526,18 +526,18 @@ namespace OpenMS
     {
       reference = group.baseline_intensity;
       if (reference <= 0.0)
-        return 0.0;  // Baseline failed: ratio = 1/1, score = 0
+        return -1.0;  // Baseline failed: ratio = 1/1, score = 0
     }
     else
     {
-      return 0.0;  // Baseline not yet received: ratio = 1/1, score = 0
+      return -2.0;  // Baseline not yet received: ratio = 1/1, score = 0
     }
 
     double ratio = remaining_intensity / reference;
     double target = config_.level(group.msn_level).remaining_precursor_target;
     double deviation = std::abs(ratio - target);
     double score = 1.0 - deviation;
-    if (score < 0.0) score = 0.0;
+    if (score < 0.0) score = -3.0;
     return score;
   }
 
