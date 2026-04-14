@@ -77,7 +77,6 @@ namespace OpenMS
     double precursor_mz = (mz1 + mz2) / 2.0;
     double isolation_width = mz2 - mz1;
     double precursor_mass = pg.getMonoMass();
-    if (precursor_mass <= 0) precursor_mass = precursor_mz;  // defensive fallback
 
     ExplorationGroup group;
     group.group_id = next_group_id_++;

@@ -273,7 +273,7 @@ namespace OpenMS
 
     // Stage 1: Fragment target
     cmd.stages[1].precursor_mz = frag_mz;
-    cmd.stages[1].isolation_width = iso_width;
+    cmd.stages[1].isolation_width = std::max(iso_width, 2.0);
     cmd.stages[1].charge_state = frag_charge;
     cmd.stages[1].collision_energy = static_cast<double>(ms3_config.collision_energy);
     std::strncpy(cmd.stages[1].activation_type, ms3_config.activation.c_str(), sizeof(cmd.stages[1].activation_type) - 1);

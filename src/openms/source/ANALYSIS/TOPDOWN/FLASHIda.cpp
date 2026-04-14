@@ -524,34 +524,29 @@ FLASHIda::FLASHIda(char* arg) :
 
     if (ms_level == 1)
     {
+      // Guard against method scans
       std::string desc_str = scan_description ? scan_description : "";
       if (desc_str.size() < 3)
         return 0;
 
-      std::cout << static_cast<int>(config_.level(1).selection) << std::endl;
       // Selection=none: skip MS1 precursor selection entirely
       if (config_.level(1).selection == SelectionMetric::None)
         return 0;
 
       // MS1 path: deconvolve, score, filter, select top-N, push MS2 commands
-      double parent_cv = faims_cv;
-
       int n = selection_.filterAndRank(mzs, ints, length, rt_min, 1, faims_cv);
       const auto& selected = selection_.selectedPeakGroups();
       const auto& sel_charges = selection_.triggerCharges();
       const auto& sel_hcds = selection_.triggerHcds();
       int commands_pushed = 0;
       std::vector<ScanCommand> ms2_commands;
-
-      std::cout << ms2_commands.size() << std::endl;
-      std::cout << config_.hasExploration(2) << std::endl;
       
       if (config_.hasExploration(2))
       {
         // Exploration path: initiate CE sweep variants INSTEAD of regular MS2
         for (int i = 0; i < n; i++)
         {
-          auto cmds = exploration_.initiate(2, selected[i], sel_charges[i], parent_cv, queue_);
+          auto cmds = exploration_.initiate(2, selected[i], sel_charges[i], faims_cv, queue_);
           for (auto& c : cmds)
           {
             queue_.push(c);
@@ -571,7 +566,7 @@ FLASHIda::FLASHIda(char* arg) :
             if (config_.targeting().use_idscore)
               ms2_config.collision_energy = sel_hcds[i];
             ScanCommand cmd = queue_.buildMS2(selected[i], sel_charges[i], ms2_config);
-            cmd.faims_cv = parent_cv;  // MS2 carries parent MS1's CV
+            cmd.faims_cv = faims_cv;  // MS2 carries parent MS1's CV
             queue_.push(cmd);
             ms2_commands.push_back(cmd);
             commands_pushed++;
