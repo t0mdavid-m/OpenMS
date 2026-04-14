@@ -219,9 +219,9 @@ namespace OpenMS
 
     v.result = ms2_deconv;
     double remaining_ratio = -1.0;
-    v.score = computeExplorationScore_(group.exploration_metric, ms2_deconv, group, mzs, ints, length, &remaining_ratio);
+    FragmentMatchResult frag{};
+    v.score = computeExplorationScore_(group.exploration_metric, ms2_deconv, group, mzs, ints, length, &remaining_ratio, &frag);
     v.tic_coverage = computeTICCoverage_(ms2_deconv);
-    auto frag = computeFragmentMatch_(ms2_deconv);
     v.fragment_count = static_cast<int>(frag.count);
     v.received = true;
 
@@ -499,7 +499,7 @@ namespace OpenMS
       const DeconvolvedSpectrum& spec,
       const ExplorationGroup& group,
       const double* mzs, const double* ints, int length,
-      double* out_remaining_ratio) const
+      double* out_remaining_ratio, FragmentMatchResult* out_frag) const
   {
     switch (metric)
     {
@@ -508,7 +508,11 @@ namespace OpenMS
       case ExplorationMetric::RemainingPrecursor:
         return computeRemainingPrecursorScore_(group, mzs, ints, length, out_remaining_ratio);
       case ExplorationMetric::FragmentCount:
-        return computeFragmentMatch_(spec).count;
+      {
+        auto fmr = computeFragmentMatch_(spec);
+        if (out_frag) *out_frag = fmr;
+        return fmr.count;
+      }
       default:
         return computeMassCount_(spec);
     }

@@ -194,7 +194,8 @@ namespace OpenMS
     double computeExplorationScore_(ExplorationMetric metric, const DeconvolvedSpectrum& spec,
                                     const ExplorationGroup& group,
                                     const double* mzs, const double* ints, int length,
-                                    double* out_remaining_ratio = nullptr) const;
+                                    double* out_remaining_ratio = nullptr,
+                                    FragmentMatchResult* out_frag = nullptr) const;
 
     /// Score: number of deconvolved masses
     double computeMassCount_(const DeconvolvedSpectrum& spec) const;
