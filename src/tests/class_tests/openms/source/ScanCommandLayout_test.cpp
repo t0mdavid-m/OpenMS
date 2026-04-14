@@ -66,6 +66,7 @@ int main()
   std::printf("ScanCommand.source_cid_scaling.offset=%zu\n", offsetof(ScanCommand, source_cid_scaling));
   std::printf("ScanCommand.data_type.offset=%zu\n", offsetof(ScanCommand, data_type));
   std::printf("ScanCommand.scan_rate.offset=%zu\n", offsetof(ScanCommand, scan_rate));
+  std::printf("ScanCommand.parent_scan_id.offset=%zu\n", offsetof(ScanCommand, parent_scan_id));
   std::printf("ScanCommand.reserved_.offset=%zu\n", offsetof(ScanCommand, reserved_));
 
   std::printf("LAYOUT_CHECK_PASSED\n");

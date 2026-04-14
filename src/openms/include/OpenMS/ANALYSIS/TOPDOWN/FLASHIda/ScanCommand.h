@@ -100,7 +100,8 @@ namespace OpenMS
     double source_cid_scaling;     ///< Source CID scaling factor (0 = use method default)
     char data_type[32];            ///< Data type (e.g., "Centroid", "Profile"; empty = method default)
     char scan_rate[32];            ///< Scan rate (e.g., "Normal", "Turbo"; empty = method default)
-    char reserved_[704];           ///< Reserved for future fields (consume from here, never change total size)
+    char parent_scan_id[4];        ///< Parent scan's encoded tracking ID (3 chars + null; empty for MS1)
+    char reserved_[700];           ///< Reserved for future fields (consume from here, never change total size)
   };
   static_assert(sizeof(ScanCommand) == 2048, "ScanCommand must be 2048 bytes for P/Invoke");
 
