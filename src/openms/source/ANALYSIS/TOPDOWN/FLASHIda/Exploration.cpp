@@ -208,7 +208,8 @@ namespace OpenMS
     if (v.received) return info;
 
     v.result = ms2_deconv;
-    v.score = computeExplorationScore_(group.exploration_metric, ms2_deconv, group, mzs, ints, length);
+    double remaining_ratio = -1.0;
+    v.score = computeExplorationScore_(group.exploration_metric, ms2_deconv, group, mzs, ints, length, &remaining_ratio);
     v.tic_coverage = computeTICCoverage_(ms2_deconv);
     auto frag = computeFragmentMatch_(ms2_deconv);
     v.fragment_count = static_cast<int>(frag.count);
@@ -250,6 +251,7 @@ namespace OpenMS
     info.exploration_metric = static_cast<int>(group.exploration_metric);
     info.matched_protein = frag.matched_protein;
     info.proteoform_sequence = frag.proteoform_sequence;
+    info.remaining_ratio = remaining_ratio;
 
     auto& meta = v.result.getOrCreateOptimizationMetadata();
     meta.group_id = group.group_id;
@@ -483,14 +485,15 @@ namespace OpenMS
   double Exploration::computeExplorationScore_(ExplorationMetric metric,
       const DeconvolvedSpectrum& spec,
       const ExplorationGroup& group,
-      const double* mzs, const double* ints, int length) const
+      const double* mzs, const double* ints, int length,
+      double* out_remaining_ratio) const
   {
     switch (metric)
     {
       case ExplorationMetric::MassCount:
         return computeMassCount_(spec);
       case ExplorationMetric::RemainingPrecursor:
-        return computeRemainingPrecursorScore_(group, mzs, ints, length);
+        return computeRemainingPrecursorScore_(group, mzs, ints, length, out_remaining_ratio);
       case ExplorationMetric::FragmentCount:
         return computeFragmentMatch_(spec).count;
       default:
@@ -504,7 +507,7 @@ namespace OpenMS
   }
 
   double Exploration::computeRemainingPrecursorScore_(const ExplorationGroup& group,
-      const double* mzs, const double* ints, int length) const
+      const double* mzs, const double* ints, int length, double* out_ratio) const
   {
     if (length <= 0 || mzs == nullptr || ints == nullptr)
       return 0.0;
@@ -534,6 +537,7 @@ namespace OpenMS
     }
 
     double ratio = remaining_intensity / reference;
+    if (out_ratio) *out_ratio = ratio;
     double target = config_.level(group.msn_level).remaining_precursor_target;
     double deviation = std::abs(ratio - target);
     double score = 1.0 - deviation;

@@ -128,6 +128,7 @@ namespace OpenMS
       int exploration_metric = 0;
       std::string matched_protein;
       std::string proteoform_sequence;
+      double remaining_ratio = -1.0;  ///< Raw remaining_intensity / baseline_intensity (-1.0 = N/A)
     };
 
     /// Construct with a reference to the shared Config, Deconvolution engine, and FragmentAnalysis
@@ -191,14 +192,16 @@ namespace OpenMS
     /// Dispatch to metric-specific scorer
     double computeExplorationScore_(ExplorationMetric metric, const DeconvolvedSpectrum& spec,
                                     const ExplorationGroup& group,
-                                    const double* mzs, const double* ints, int length) const;
+                                    const double* mzs, const double* ints, int length,
+                                    double* out_remaining_ratio = nullptr) const;
 
     /// Score: number of deconvolved masses
     double computeMassCount_(const DeconvolvedSpectrum& spec) const;
 
     /// Score: fragmentation efficiency (higher = less remaining precursor)
     double computeRemainingPrecursorScore_(const ExplorationGroup& group,
-                                           const double* mzs, const double* ints, int length) const;
+                                           const double* mzs, const double* ints, int length,
+                                           double* out_ratio = nullptr) const;
 
     /// Result of fragment matching: count + protein identification info
     struct FragmentMatchResult
