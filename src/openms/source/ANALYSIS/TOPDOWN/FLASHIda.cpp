@@ -99,7 +99,8 @@ FLASHIda::FLASHIda(char* arg) :
                             << "tic_coverage\tfragment_count\t"
                             << "exploration_group_id\texploration_metric\t"
                             << "variant_index\ttotal_variants\t"
-                            << "collision_energy\texploration_score\tremaining_ratio\n";
+                            << "collision_energy\texploration_score\tremaining_ratio\t"
+                            << "deconv_masses\tdeconv_intensities\tparent_tracking_id\n";
         results_tsv_stream_.flush();
       }
     }
@@ -312,6 +313,8 @@ FLASHIda::FLASHIda(char* arg) :
                                       int tag_count, const std::string& matched_protein,
                                       const std::string& proteoform_sequence,
                                       uint64_t enqueue_ts, uint64_t received_ts,
+                                      const DeconvolvedSpectrum* deconv_spectrum,
+                                      const std::string& parent_tracking_id,
                                       float tic_coverage, int fragment_count,
                                       int exploration_group_id, int exploration_metric,
                                       int variant_index, int total_variants,
@@ -353,7 +356,28 @@ FLASHIda::FLASHIda(char* arg) :
                         << total_variants << "\t"
                         << collision_energy << "\t"
                         << exploration_score << "\t"
-                        << remaining_ratio << "\n";
+                        << remaining_ratio << "\t";
+
+    // Deconvolved masses and intensities (semicolon-delimited)
+    if (deconv_spectrum != nullptr && deconv_spectrum->size() > 0)
+    {
+      for (size_t i = 0; i < deconv_spectrum->size(); i++)
+      {
+        if (i > 0) results_tsv_stream_ << ";";
+        results_tsv_stream_ << (*deconv_spectrum)[i].getMonoMass();
+      }
+      results_tsv_stream_ << "\t";
+      for (size_t i = 0; i < deconv_spectrum->size(); i++)
+      {
+        if (i > 0) results_tsv_stream_ << ";";
+        results_tsv_stream_ << (*deconv_spectrum)[i].getIntensity();
+      }
+    }
+    else
+    {
+      results_tsv_stream_ << "\t";
+    }
+    results_tsv_stream_ << "\t" << parent_tracking_id << "\n";
     results_tsv_stream_.flush();
   }
 
@@ -568,6 +592,9 @@ FLASHIda::FLASHIda(char* arg) :
           auto cmds = exploration_.initiate(2, selected[i], sel_charges[i], faims_cv, queue_);
           for (auto& c : cmds)
           {
+            std::string ms1_enc = ScanCommandQueue::encode(tracking_id);
+            std::strncpy(c.parent_scan_id, ms1_enc.c_str(), 3);
+            c.parent_scan_id[3] = '\0';
             queue_.push(c);
             ms2_commands.push_back(c);
             commands_pushed++;
@@ -584,7 +611,7 @@ FLASHIda::FLASHIda(char* arg) :
             ScanConfig ms2_config = sc;
             if (config_.targeting().use_idscore)
               ms2_config.collision_energy = sel_hcds[i];
-            ScanCommand cmd = queue_.buildMS2(selected[i], sel_charges[i], ms2_config);
+            ScanCommand cmd = queue_.buildMS2(selected[i], sel_charges[i], ms2_config, 2, tracking_id);
             cmd.faims_cv = faims_cv;  // MS2 carries parent MS1's CV
             queue_.push(cmd);
             ms2_commands.push_back(cmd);
@@ -602,7 +629,8 @@ FLASHIda::FLASHIda(char* arg) :
         child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
       int all_mass_count = static_cast<int>(selected.size());
       writeScanResultRow_(id_str, rt_min, all_mass_count, commands_pushed,
-                          child_ids, 0, "", "", enqueue_ts, received_ts);
+                          child_ids, 0, "", "", enqueue_ts, received_ts,
+                          &deconv_.deconvolvedMS1(), "");
 
       // FAIMS CV cycling: update skip policy, advance to next CV, push MS1
       if (faims_.isEnabled())
@@ -640,8 +668,11 @@ FLASHIda::FLASHIda(char* arg) :
         for (auto& c : info.commands) queue_.push(c);
 
         int expl_mass_count = deconv_.hasStoredMS2() ? static_cast<int>(deconv_.storedMS2().size()) : 0;
+        const DeconvolvedSpectrum* ms2_spec = deconv_.hasStoredMS2() ? &deconv_.storedMS2() : nullptr;
+        std::string parent_id(info.parent_scan_id);
         writeScanResultRow_(id_str, rt_min, expl_mass_count, static_cast<int>(info.commands.size()),
                             {}, 0, info.matched_protein, info.proteoform_sequence, enqueue_ts, received_ts,
+                            ms2_spec, parent_id,
                             info.tic_coverage, info.fragment_count,
                             info.group_id, info.exploration_metric,
                             info.variant_index, info.total_variants,
@@ -716,10 +747,14 @@ FLASHIda::FLASHIda(char* arg) :
 
       int ms2_mass_count = deconv_.hasStoredMS2() ? static_cast<int>(deconv_.storedMS2().size()) : 0;
       int tag_count = tags_found ? 1 : 0;
+      const DeconvolvedSpectrum* ms2_spec = deconv_.hasStoredMS2() ? &deconv_.storedMS2() : nullptr;
+      std::string parent_id(ctx.parent_scan_id);
 
       writeScanResultRow_(id_str, rt_min, ms2_mass_count, commands_pushed,
                           child_ids, tag_count, nlr.matched_protein, nlr.proteoform_sequence,
-                          enqueue_ts, received_ts, nlr.tic_coverage, nlr.fragment_count);
+                          enqueue_ts, received_ts,
+                          ms2_spec, parent_id,
+                          nlr.tic_coverage, nlr.fragment_count);
 
       std::cout << "[TRACK-RESOLVE] id=" << id_str
                 << " rt=" << rt_min
@@ -741,9 +776,12 @@ FLASHIda::FLASHIda(char* arg) :
 
         int expl_mass_count = deconv_.hasStoredMS2()
             ? static_cast<int>(deconv_.storedMS2().size()) : 0;
+        const DeconvolvedSpectrum* ms3_spec = deconv_.hasStoredMS2() ? &deconv_.storedMS2() : nullptr;
+        std::string parent_id(info.parent_scan_id);
         writeScanResultRow_(id_str, rt_min, expl_mass_count,
                             static_cast<int>(info.commands.size()),
                             {}, 0, info.matched_protein, info.proteoform_sequence, enqueue_ts, received_ts,
+                            ms3_spec, parent_id,
                             info.tic_coverage, info.fragment_count,
                             info.group_id, info.exploration_metric,
                             info.variant_index, info.total_variants,
@@ -773,8 +811,13 @@ FLASHIda::FLASHIda(char* arg) :
             ? static_cast<int>(deconv_.storedMS2().size()) : 0;
       }
 
+      const DeconvolvedSpectrum* ms3_spec = deconv_.hasStoredMS2() ? &deconv_.storedMS2() : nullptr;
+      std::string parent_id;
+      if (resolved.has_value())
+        parent_id = std::string(resolved->parent_scan_id);
       writeScanResultRow_(id_str, rt_min, ms3_mass_count, 0,
-                          {}, 0, "", "", enqueue_ts, received_ts);
+                          {}, 0, "", "", enqueue_ts, received_ts,
+                          ms3_spec, parent_id);
       return 0;
     }
   }
