@@ -59,8 +59,8 @@ namespace OpenMS
   static_assert(sizeof(IsolationStage) == 80, "IsolationStage must be 80 bytes for P/Invoke");
 
   /// Blittable struct representing a complete scan command for the instrument.
-  /// Layout: 8 int32 (32) + 3 doubles (24) + char[32] (32) + char[256] (256) + stages (800) + uint64 (8)
-  ///       + 10 doubles (80) + 2 int32 (8) + 1 double (8) = 1248.
+  /// Layout: 1248 (existing) + 8 (microscans+pad3) + 24 (rf_lens+source_cid+source_cid_scaling)
+  ///       + 64 (data_type+scan_rate) + 704 (reserved) = 2048.
   struct OPENMS_DLLAPI ScanCommand
   {
     int32_t scan_id;             ///< Unique tracking ID (encoded as 3-char string in scan description)
@@ -93,7 +93,15 @@ namespace OpenMS
     int32_t hcd_energy;             ///< HCD collision energy
     int32_t pad2;                   ///< Alignment padding
     double faims_cv;                ///< FAIMS compensation voltage (0.0 if non-FAIMS)
+    int32_t microscans;            ///< Number of microscans (0 = use method default)
+    int32_t pad3;                  ///< Alignment padding
+    double rf_lens;                ///< RF lens voltage (0 = use method default)
+    double source_cid;             ///< Source CID energy (0 = use method default)
+    double source_cid_scaling;     ///< Source CID scaling factor (0 = use method default)
+    char data_type[32];            ///< Data type (e.g., "Centroid", "Profile"; empty = method default)
+    char scan_rate[32];            ///< Scan rate (e.g., "Normal", "Turbo"; empty = method default)
+    char reserved_[704];           ///< Reserved for future fields (consume from here, never change total size)
   };
-  static_assert(sizeof(ScanCommand) == 1248, "ScanCommand must be 1248 bytes for P/Invoke");
+  static_assert(sizeof(ScanCommand) == 2048, "ScanCommand must be 2048 bytes for P/Invoke");
 
 } // namespace OpenMS
