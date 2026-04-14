@@ -129,6 +129,7 @@ namespace OpenMS
       std::string matched_protein;
       std::string proteoform_sequence;
       double remaining_ratio = -1.0;  ///< Raw remaining_intensity / baseline_intensity (-1.0 = N/A)
+      char parent_scan_id[4]{};  ///< Parent's encoded tracking ID (from group's originating_cmd)
     };
 
     /// Construct with a reference to the shared Config, Deconvolution engine, and FragmentAnalysis

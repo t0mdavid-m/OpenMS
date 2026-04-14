@@ -38,6 +38,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <iostream>
 
 namespace OpenMS
@@ -252,6 +253,7 @@ namespace OpenMS
     info.matched_protein = frag.matched_protein;
     info.proteoform_sequence = frag.proteoform_sequence;
     info.remaining_ratio = remaining_ratio;
+    std::strncpy(info.parent_scan_id, group.originating_cmd.parent_scan_id, 4);
 
     auto& meta = v.result.getOrCreateOptimizationMetadata();
     meta.group_id = group.group_id;
