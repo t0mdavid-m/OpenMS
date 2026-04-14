@@ -99,9 +99,6 @@ namespace OpenMS
     /// Dequeue next command by priority (0 = highest). Returns nullopt if all queues empty.
     std::optional<ScanCommand> dequeue();
 
-    /// Register a pending (in-flight) scan command by tracking ID
-    void registerPending(int id, ScanCommand cmd);
-
     /// Look up and remove a pending scan by tracking ID. Returns nullopt if not found.
     std::optional<ScanCommand> resolvePending(int id);
 

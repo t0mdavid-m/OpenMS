@@ -234,11 +234,6 @@ namespace OpenMS
     std::string id_str = encode(id);
     std::snprintf(cmd.scan_description, 16, "%sR%.1f@%d", id_str.c_str(), pg.getMonoMass() / 1000.0, charge);
 
-    // Timestamp
-    cmd.enqueue_timestamp_ms = static_cast<uint64_t>(
-      std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count());
-
     // Precursor scoring data for diagnostic TSV output
     cmd.qscore = pg.getQscore();
     cmd.mono_mass = pg.getMonoMass();
@@ -252,9 +247,6 @@ namespace OpenMS
     cmd.peakgroup_intensity = pg.getIntensity();
     cmd.hcd_energy = scan_config.collision_energy;
     cmd.pad2 = 0;
-
-    // Store in pending map for MS2 tracking resolution
-    pending_scan_map_[id] = cmd;
 
     std::cout << "[TRACK-CREATE] id=" << id_str
               << " ms_level=2"
@@ -320,13 +312,6 @@ namespace OpenMS
       std::snprintf(cmd.scan_description, 16, "%sR%.1f@%d",
                     id_str.c_str(), frag_mass_kda, frag_charge);
 
-    cmd.enqueue_timestamp_ms = static_cast<uint64_t>(
-      std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count());
-
-    // D6: Store in pending map for future MS3 resolution
-    pending_scan_map_[id] = cmd;
-
     std::cout << "[TRACK-CREATE] id=" << id_str
               << " ms_level=3"
               << " frag_mz=" << frag_mz
@@ -355,12 +340,6 @@ namespace OpenMS
     std::snprintf(cmd.scan_description, 16, "%s%c%.1f@%d",
                   id_str.c_str(), suffix, cmd.mono_mass / 1000.0, cmd.stages[0].charge_state);
 
-    cmd.enqueue_timestamp_ms = static_cast<uint64_t>(
-      std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count());
-
-    pending_scan_map_[cmd.scan_id] = cmd;
-
     std::cout << "[TRACK-CREATE] id=" << id_str
               << " ms_level=2 type=followup_" << suffix
               << std::endl;
@@ -373,6 +352,10 @@ namespace OpenMS
   void ScanCommandQueue::push(ScanCommand cmd)
   {
     std::lock_guard<std::mutex> lock(queue_mutex_);
+    cmd.enqueue_timestamp_ms = static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+    pending_scan_map_[cmd.scan_id] = cmd;
     int p = std::clamp(cmd.priority, 0, 3);
     queues_[p].push_back(cmd);
   }
@@ -390,12 +373,6 @@ namespace OpenMS
       }
     }
     return std::nullopt;
-  }
-
-  void ScanCommandQueue::registerPending(int id, ScanCommand cmd)
-  {
-    std::lock_guard<std::mutex> lock(queue_mutex_);
-    pending_scan_map_[id] = cmd;
   }
 
   std::optional<ScanCommand> ScanCommandQueue::resolvePending(int id)

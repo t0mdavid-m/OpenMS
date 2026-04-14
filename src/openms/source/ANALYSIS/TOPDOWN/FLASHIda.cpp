@@ -602,10 +602,6 @@ FLASHIda::FLASHIda(char* arg) :
         std::string id_str = ScanCommandQueue::encode(ms1.scan_id);
         std::snprintf(ms1.scan_description, 16, "%sS", id_str.c_str());
 
-        auto now = std::chrono::steady_clock::now();
-        ms1.enqueue_timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            now.time_since_epoch()).count();
-
         queue_.push(ms1);
         std::cout << "[TRACK-CREATE] id=" << id_str << " ms_level=1 type=cv_transition cv=" << next_cv << std::endl;
       }

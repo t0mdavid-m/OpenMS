@@ -170,7 +170,7 @@ START_SECTION(concurrent_build_resolve)
     pg.push_back(lp);
     ScanCommand cmd = queue.buildMS2(pg, 10, sc);
     built_ids[i] = cmd.scan_id;
-    queue.registerPending(cmd.scan_id, cmd);
+    queue.push(cmd);
   }
 
   // Phase 2: 4 resolver threads race to resolve
@@ -226,9 +226,7 @@ START_SECTION(concurrent_push_cleanup)
       cmd.msn_level = 2;
       cmd.priority = 1;
       cmd.scan_id = i;
-      cmd.enqueue_timestamp_ms = 1;  // old timestamp -> will expire
       queue.push(cmd);
-      queue.registerPending(i, cmd);
     }
     done.store(true, std::memory_order_release);
   };
