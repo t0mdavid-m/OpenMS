@@ -788,7 +788,11 @@ FLASHIda::FLASHIda(char* arg) :
       if (exploration_.isExplorationVariant(tracking_id))
       {
         auto info = exploration_.feedResult(tracking_id, mzs, ints, length, rt_min, queue_);
-        for (auto& c : info.commands) queue_.push(c);
+        for (auto& c : info.commands)
+        {
+          std::strncpy(c.parent_scan_id, info.parent_scan_id, 4);
+          queue_.push(c);
+        }
 
         int expl_mass_count = deconv_.hasStoredMS2()
             ? static_cast<int>(deconv_.storedMS2().size()) : 0;
