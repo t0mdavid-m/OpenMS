@@ -328,26 +328,46 @@ START_SECTION(scan_commands_tsv_format)
   TEST_TRUE(tsv.colIndex("ion_index") >= 0);
 
   int ms_level_col = tsv.colIndex("ms_level");
-  int ion_type_col = tsv.colIndex("ion_type");
-  (void)ion_type_col;
+  int charge_col = tsv.colIndex("charge");
+  int activation_col = tsv.colIndex("activation");
+  int precursor_mz_col = tsv.colIndex("precursor_mz");
+  int iso_width_col = tsv.colIndex("isolation_width");
+  int col_energy_col = tsv.colIndex("collision_energy");
+
   bool found_ms2 = false;
   bool found_ms3 = false;
   for (const auto& row : tsv.rows)
   {
-    if (ms_level_col >= 0 && ms_level_col < (int)row.size())
+    if (ms_level_col < 0 || ms_level_col >= (int)row.size())
+      continue;
+
+    if (row[ms_level_col] == "2")
     {
-      if (row[ms_level_col] == "2") found_ms2 = true;
-      if (row[ms_level_col] == "3")
-      {
-        found_ms3 = true;
-        // MS3 rows should have scan_description with ion info
-        // ion_type may be empty if MS3 mode doesn't produce ion annotations
-      }
+      found_ms2 = true;
+      // MS2 rows: single stage, no semicolons
+      if (charge_col >= 0 && charge_col < (int)row.size())
+        TEST_TRUE(row[charge_col].find(';') == std::string::npos);
+      if (activation_col >= 0 && activation_col < (int)row.size())
+        TEST_TRUE(row[activation_col].find(';') == std::string::npos);
+    }
+
+    if (row[ms_level_col] == "3")
+    {
+      found_ms3 = true;
+      // MS3 rows: two stages, semicolons present
+      if (charge_col >= 0 && charge_col < (int)row.size())
+        TEST_TRUE(row[charge_col].find(';') != std::string::npos);
+      if (activation_col >= 0 && activation_col < (int)row.size())
+        TEST_TRUE(row[activation_col].find(';') != std::string::npos);
+      if (precursor_mz_col >= 0 && precursor_mz_col < (int)row.size())
+        TEST_TRUE(row[precursor_mz_col].find(';') != std::string::npos);
+      if (iso_width_col >= 0 && iso_width_col < (int)row.size())
+        TEST_TRUE(row[iso_width_col].find(';') != std::string::npos);
+      if (col_energy_col >= 0 && col_energy_col < (int)row.size())
+        TEST_TRUE(row[col_energy_col].find(';') != std::string::npos);
     }
   }
   TEST_TRUE(found_ms2);
-  // MS3 commands may or may not be produced depending on MS2 fragment data
-  // If they are produced, they should be in the TSV
   if (cycle.ms3_cmds.size() > 0)
   {
     TEST_TRUE(found_ms3);
