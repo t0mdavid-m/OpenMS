@@ -57,7 +57,8 @@ namespace OpenMS
   }
 
   std::vector<ScanCommand> Exploration::initiate(int msn_level, const PeakGroup& pg, int charge,
-      double faims_cv, ScanCommandQueue& queue, const ScanCommand* ms_ctx)
+      double faims_cv, ScanCommandQueue& queue, const ScanCommand* ms_ctx,
+      char ion_type, int frag_index)
   {
     std::vector<ScanCommand> commands;
 
@@ -94,6 +95,8 @@ namespace OpenMS
 
     // Capture originating MS2 context for buildMS3 (stage 0)
     if (ms_ctx != nullptr) group.originating_cmd = *ms_ctx;
+    group.fragment_ion_type = ion_type;
+    group.fragment_ion_index = frag_index;
 
     // Build base ScanConfig from the level's primary scan config, then apply overrides
     ScanConfig base_config = cfg.scans[0];
@@ -116,7 +119,7 @@ namespace OpenMS
       {
         cmd = queue.buildMS3(*ms_ctx, variant_config,
                              precursor_mz, charge, isolation_width,
-                             '\0', 0, expl_priority);
+                             ion_type, frag_index, expl_priority);
       }
       else
       {
@@ -305,7 +308,8 @@ namespace OpenMS
       {
         prod_cmd = queue.buildMS3(group.originating_cmd, prod_config,
                                    group.precursor_mz, group.precursor_charge,
-                                   group.isolation_width, '\0', 0, 1);
+                                   group.isolation_width,
+                                   group.fragment_ion_type, group.fragment_ion_index, 1);
       }
       else
       {
@@ -418,7 +422,8 @@ namespace OpenMS
         lp.abs_charge = std::abs(charges[ti]);
         frag_pg.push_back(lp);
 
-        auto sub_cmds = initiate(next_level, frag_pg, std::abs(charges[ti]), faims_cv, queue, ms_ctx);
+        auto sub_cmds = initiate(next_level, frag_pg, std::abs(charges[ti]), faims_cv, queue, ms_ctx,
+                                 ion_types[ti], frag_indices[ti]);
         nlr.commands.insert(nlr.commands.end(), sub_cmds.begin(), sub_cmds.end());
       }
     }

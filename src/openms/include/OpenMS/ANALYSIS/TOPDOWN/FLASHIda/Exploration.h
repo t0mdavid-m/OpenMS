@@ -93,6 +93,8 @@ namespace OpenMS
       int winner_index = -1;
       bool complete = false;
       ScanCommand originating_cmd{};  ///< MS2 context for buildMS3 (stage 0)
+      char fragment_ion_type = '\0';   ///< Fragment ion type (e.g. 'b', 'y') for MS3 scan description
+      int fragment_ion_index = 0;      ///< Fragment ion index for MS3 scan description
     };
 
     /// Lookup reference from tracking ID to exploration group + variant
@@ -135,7 +137,8 @@ namespace OpenMS
     /// @param ms_ctx  Optional originating MS2 ScanCommand (needed for MS3 buildMS3 stage 0)
     std::vector<ScanCommand> initiate(int msn_level, const PeakGroup& pg, int charge,
                                       double faims_cv, ScanCommandQueue& queue,
-                                      const ScanCommand* ms_ctx = nullptr);
+                                      const ScanCommand* ms_ctx = nullptr,
+                                      char ion_type = '\0', int frag_index = 0);
 
     /// Process returning exploration variant: deconvolve with correct precursor context,
     /// score, select winner, trigger next level. Returns FeedResultInfo with commands and metadata.
