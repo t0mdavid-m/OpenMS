@@ -636,13 +636,14 @@ FLASHIda::FLASHIda(char* arg) :
 
         int expl_mass_count = deconv_.hasStoredMS2() ? static_cast<int>(deconv_.storedMS2().size()) : 0;
         writeScanResultRow_(id_str, rt_min, expl_mass_count, static_cast<int>(info.commands.size()),
-                            {}, 0, "", "", 0,
+                            {}, 0, info.matched_protein, info.proteoform_sequence, 0,
                             info.tic_coverage, info.fragment_count,
                             info.group_id, info.exploration_metric,
                             info.variant_index, info.total_variants,
                             info.collision_energy, info.score);
 
-        return commands_pushed;
+        exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);
+        return static_cast<int>(info.commands.size());
       }
 
       // Step 2: Peek enqueue timestamp before resolving (resolve removes from pending map)
@@ -733,25 +734,58 @@ FLASHIda::FLASHIda(char* arg) :
 
       return commands_pushed;
     }
-    // MS3 (or higher): log result, no follow-up commands
+    // MS3 (or higher)
     {
       std::string desc_str = scan_description ? std::string(scan_description) : "";
       std::string ms3_id = (desc_str.size() >= 3) ? desc_str.substr(0, 3) : "";
-      uint64_t enqueue_ts = 0;
-      if (!ms3_id.empty())
+      if (ms3_id.empty()) return 0;
+
+      int tracking_id = queue_.decode(ms3_id);
+
+      // Route exploration variants to feedResult for scoring/winner selection
+      if (exploration_.isExplorationVariant(tracking_id))
       {
-        int tid = queue_.decode(ms3_id);
-        auto peeked = queue_.peekPending(tid);
+        auto info = exploration_.feedResult(tracking_id, mzs, ints, length, rt_min, queue_);
+        for (auto& c : info.commands) queue_.push(c);
+
+        int expl_mass_count = deconv_.hasStoredMS2()
+            ? static_cast<int>(deconv_.storedMS2().size()) : 0;
+        writeScanResultRow_(ms3_id, rt_min, expl_mass_count,
+                            static_cast<int>(info.commands.size()),
+                            {}, 0, info.matched_protein, info.proteoform_sequence, 0,
+                            info.tic_coverage, info.fragment_count,
+                            info.group_id, info.exploration_metric,
+                            info.variant_index, info.total_variants,
+                            info.collision_energy, info.score);
+
+        exploration_active_.store(exploration_.activeGroupCount() > 0,
+                                  std::memory_order_release);
+        return static_cast<int>(info.commands.size());
+      }
+
+      // Non-exploration MS3: resolve pending, deconvolve with precursor context
+      uint64_t enqueue_ts = 0;
+      {
+        auto peeked = queue_.peekPending(tracking_id);
         if (peeked.has_value())
           enqueue_ts = peeked->enqueue_timestamp_ms;
-        queue_.resolvePending(tid);
+      }
+      auto resolved = queue_.resolvePending(tracking_id);
+
+      double precursor_mass = 0.0;
+      int precursor_charge = 0;
+      if (resolved.has_value() && resolved->num_stages >= 2)
+      {
+        precursor_charge = resolved->stages[1].charge_state;
+        precursor_mass = resolved->mono_mass;
       }
 
       int ms3_mass_count = 0;
       if (mzs != nullptr && ints != nullptr && length > 0)
       {
-        deconv_.deconvolveMSn(mzs, ints, length, rt_min, 0.0, 0);
-        ms3_mass_count = deconv_.hasStoredMS2() ? static_cast<int>(deconv_.storedMS2().size()) : 0;
+        deconv_.deconvolveMSn(mzs, ints, length, rt_min, precursor_mass, precursor_charge);
+        ms3_mass_count = deconv_.hasStoredMS2()
+            ? static_cast<int>(deconv_.storedMS2().size()) : 0;
       }
 
       writeScanResultRow_(ms3_id, rt_min, ms3_mass_count, 0,

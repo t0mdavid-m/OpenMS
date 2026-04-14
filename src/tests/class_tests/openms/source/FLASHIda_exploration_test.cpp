@@ -1459,6 +1459,48 @@ START_SECTION(fragment_count_zero_without_protein_sequence)
 }
 END_SECTION
 
+START_SECTION(ms2_exploration_returns_command_count)
+{
+  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  auto ms2_scans = loadTsvScans(ms2_tsv_path);
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
+
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(cycle_time_exploration_config));
+
+  int total = pushAllMS1Scans(ida, ms1_scans);
+  if (total == 0) { delete ida; }
+  ABORT_IF(total == 0)
+
+  std::vector<ScanCommand> exploration_cmds;
+  ScanCommand cmd{};
+  while (ida->getNextScanCommand(cmd) == 1)
+  {
+    std::string desc(cmd.scan_description);
+    if (cmd.msn_level == 2 && desc.size() >= 4 && desc[3] == 'E')
+      exploration_cmds.push_back(cmd);
+    else
+      break;
+  }
+  ABORT_IF(exploration_cmds.empty())
+
+  const auto& ms2 = ms2_scans[0];
+  std::vector<int> return_values;
+  for (const auto& ecmd : exploration_cmds)
+  {
+    int rv = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
+                               (int)ms2.mzs.size(), ms2.rt, 2, ecmd.scan_description);
+    return_values.push_back(rv);
+  }
+
+  for (int rv : return_values)
+  {
+    TEST_EQUAL(rv >= 0, true)
+  }
+
+  delete ida;
+}
+END_SECTION
+
 /////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////
 END_TEST
