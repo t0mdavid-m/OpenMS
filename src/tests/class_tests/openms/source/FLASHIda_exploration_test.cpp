@@ -381,6 +381,101 @@ namespace
     }
   })";
 
+  // Config with remaining_precursor exploration metric at MS3
+  const char* ms3_remaining_precursor_config = R"({
+    "deconvolution": {
+      "score_threshold": 0.0,
+      "tqscore_threshold": 0.9,
+      "min_charge": 4,
+      "max_charge": 50,
+      "min_mass": 500,
+      "max_mass": 50000,
+      "tol": [10, 10]
+    },
+    "precursor_selection": {
+      "RT_window": 180,
+      "target_mode": 0,
+      "IDScore": false,
+      "AllCharges": false,
+      "HCDEnergy": 29,
+      "strict_inclusion": false,
+      "tie_threshold": 0.1
+    },
+    "tagging": {
+      "min_tag_length": 3,
+      "max_tag_length": 8,
+      "max_ptm_count": 3,
+      "max_flanking_mass_diff": 50000
+    },
+    "quantification": {
+      "enabled": false,
+      "reporter_mz_tol": 0.002,
+      "fold_change_threshold": 1.4
+    },
+    "faims": {
+      "cv_values": [-50],
+      "max_cv_skip": 0,
+      "cv_precursor_threshold": 15
+    },
+    "ms_settings": {
+      "ms1": {
+        "analyzer": "Orbitrap",
+        "first_mass": 500,
+        "last_mass": 2000,
+        "resolution": 120000,
+        "agc_target": 800000,
+        "max_it": 246
+      },
+      "ms2": [
+        {
+          "analyzer": "Orbitrap",
+          "activation": "HCD",
+          "collision_energy": 29,
+          "resolution": 120000
+        }
+      ],
+      "ms3": [
+        {
+          "analyzer": "Orbitrap",
+          "activation": "CID",
+          "collision_energy": 25,
+          "resolution": 120000
+        }
+      ]
+    },
+    "scheduling": {
+      "cycle_time": { "enabled": false, "value_ms": 60000 },
+      "scan_timeout": { "enabled": false, "value_ms": 30000 }
+    },
+    "files": {
+      "target_logs": [],
+      "fasta": "",
+      "inclusion_list": "",
+      "ptm_list": ""
+    },
+    "ms3": {
+      "protein_sequence": ""
+    },
+    "conditional_ms2": false,
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_targets": 3 },
+      "ms2": {
+        "selection": "none",
+        "max_targets": 3
+      },
+      "ms3": {
+        "selection": "none",
+        "max_targets": 3,
+        "exploration": {
+          "metric": "remaining_precursor",
+          "ce_min": 20.0,
+          "ce_max": 40.0,
+          "ce_step": 5.0
+        }
+      }
+    }
+  })";
+
   // Config with cycle time enabled + exploration
   const char* cycle_time_exploration_config = R"({
     "deconvolution": {
@@ -1521,6 +1616,58 @@ START_SECTION(ms2_exploration_returns_command_count)
   }
 
   delete ida;
+}
+END_SECTION
+
+START_SECTION(ms3_remaining_precursor_isolation_width)
+{
+  // MS3 RemainingPrecursor scoring requires non-zero isolation_width.
+  // Before the fix, initiate() computed width=0 from single-peak PeakGroups,
+  // causing all MS3 variants to score -1. The 2.0 Da floor fixes this.
+  Config cfg{std::string(ms3_remaining_precursor_config)};
+  ScanCommandQueue queue(cfg);
+  Deconvolution deconv(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, deconv, fragments);
+
+  // Create a narrow single-peak PeakGroup (simulates MS3 fragment target)
+  // getMzRange() returns (500.0, 500.0) -> width=0 before floor
+  auto fragment_pg = makeSyntheticPeakGroup(500.0, 1000.0, 2);
+  ScanCommand ms2_ctx = queue.buildMS2(makeSyntheticPeakGroup(800.0, 2400.0, 3), 3,
+                                        cfg.level(2).scans[0]);
+
+  auto cmds = exploration.initiate(3, fragment_pg, 2, 0.0, queue, &ms2_ctx);
+  // RemainingPrecursor: 1 baseline + 5 CE variants (20,25,30,35,40) = 6
+  TEST_EQUAL(static_cast<int>(cmds.size()), 6)
+
+  auto group = exploration.getGroup(1);
+  // isolation_width should be floored to 2.0 (not 0.0)
+  TEST_REAL_SIMILAR(group.isolation_width, 2.0)
+
+  double mz_center = group.precursor_mz;
+
+  // Feed baseline (CE=0) with signal at precursor center
+  std::vector<double> baseline_mzs = {mz_center};
+  std::vector<double> baseline_ints = {1000.0};
+  int baseline_tid = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
+  exploration.feedResult(baseline_tid, baseline_mzs.data(), baseline_ints.data(),
+                         static_cast<int>(baseline_mzs.size()), 0.5, queue);
+
+  auto group_after = exploration.getGroup(1);
+  TEST_EQUAL(group_after.has_baseline, true)
+  // With 2.0 Da window [499.0, 501.0], mz_center=500.0 is in-window
+  TEST_REAL_SIMILAR(group_after.baseline_intensity, 1000.0)
+
+  // Feed CE=20 variant with 100.0 intensity -> ratio = 0.1
+  std::vector<double> variant_ints = {100.0};
+  int ce20_tid = queue.decode(std::string(cmds[1].scan_description).substr(0, 3));
+  auto info = exploration.feedResult(ce20_tid, baseline_mzs.data(), variant_ints.data(),
+                                      1, 1.0, queue);
+
+  // Score should be real (not -1.0), ratio = 100/1000 = 0.1
+  TEST_REAL_SIMILAR(info.remaining_ratio, 0.1)
+  TEST_REAL_SIMILAR(info.score, 1.0)  // target=0.1, deviation=0.0, score=1.0
+  TEST_EQUAL(info.score > 0.0, true)
 }
 END_SECTION
 

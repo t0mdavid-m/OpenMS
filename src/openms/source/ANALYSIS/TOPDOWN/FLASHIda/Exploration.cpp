@@ -77,7 +77,7 @@ namespace OpenMS
     // Compute precursor_mz and isolation_width from PeakGroup
     auto [mz1, mz2] = pg.getMzRange(charge);
     double precursor_mz = (mz1 + mz2) / 2.0;
-    double isolation_width = mz2 - mz1;
+    double isolation_width = std::max(mz2 - mz1, 2.0);
     double precursor_mass = pg.getMonoMass();
 
     ExplorationGroup group;
@@ -430,12 +430,17 @@ namespace OpenMS
       // Recursive exploration at next level
       for (int ti = 0; ti < num_targets; ++ti)
       {
-        PeakGroup frag_pg(std::abs(charges[ti]), std::abs(charges[ti]), true);
+        int abs_charge = std::abs(charges[ti]);
+        PeakGroup frag_pg(abs_charge, abs_charge, true);
         frag_pg.setMonoisotopicMass(masses[ti]);
-        FLASHHelperClasses::LogMzPeak lp;
-        lp.mz = (wstarts[ti] + wends[ti]) / 2.0;
-        lp.abs_charge = std::abs(charges[ti]);
-        frag_pg.push_back(lp);
+        FLASHHelperClasses::LogMzPeak lp_lo;
+        lp_lo.mz = wstarts[ti];
+        lp_lo.abs_charge = abs_charge;
+        frag_pg.push_back(lp_lo);
+        FLASHHelperClasses::LogMzPeak lp_hi;
+        lp_hi.mz = wends[ti];
+        lp_hi.abs_charge = abs_charge;
+        frag_pg.push_back(lp_hi);
 
         auto sub_cmds = initiate(next_level, frag_pg, std::abs(charges[ti]), faims_cv, queue, ms_ctx,
                                  ion_types[ti], frag_indices[ti]);
