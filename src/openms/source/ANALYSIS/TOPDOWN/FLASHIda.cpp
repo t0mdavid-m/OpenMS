@@ -752,6 +752,9 @@ FLASHIda::FLASHIda(char* arg) :
         nlr = exploration_.initiateNextLevel(2, deconv_.storedMS2(), ctx.faims_cv, queue_, &ctx);
         for (auto& c : nlr.commands)
         {
+          std::string ms2_enc = ScanCommandQueue::encode(ctx.scan_id);
+          std::strncpy(c.parent_scan_id, ms2_enc.c_str(), 3);
+          c.parent_scan_id[3] = '\0';
           queue_.push(c);
           child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
           commands_pushed++;
