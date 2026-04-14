@@ -111,7 +111,17 @@ namespace OpenMS
       variant_config.collision_energy = static_cast<int>(ces[i]);
 
       int expl_priority = (msn_level >= 3) ? 1 : 2;  // MS3 variants = p1, MS2 variants = p2
-      ScanCommand cmd = queue.buildMS2(pg, charge, variant_config, expl_priority);
+      ScanCommand cmd;
+      if (msn_level >= 3 && ms_ctx != nullptr)
+      {
+        cmd = queue.buildMS3(*ms_ctx, variant_config,
+                             precursor_mz, charge, isolation_width,
+                             '\0', 0, expl_priority);
+      }
+      else
+      {
+        cmd = queue.buildMS2(pg, charge, variant_config, expl_priority);
+      }
       cmd.faims_cv = faims_cv;
 
       int id_int = cmd.scan_id;
@@ -287,9 +297,18 @@ namespace OpenMS
       prod_config.collision_energy = static_cast<int>(group.variants[best_idx].collision_energy);
       prod_config.activation = group.variants[best_idx].activation_type;
 
-      ScanCommand prod_cmd = queue.buildMS2(group.precursor_pg, group.precursor_charge, prod_config);
+      ScanCommand prod_cmd;
+      if (group.msn_level >= 3)
+      {
+        prod_cmd = queue.buildMS3(group.originating_cmd, prod_config,
+                                   group.precursor_mz, group.precursor_charge,
+                                   group.isolation_width, '\0', 0, 1);
+      }
+      else
+      {
+        prod_cmd = queue.buildMS2(group.precursor_pg, group.precursor_charge, prod_config, 2);
+      }
       prod_cmd.faims_cv = group.faims_cv;
-      prod_cmd.priority = 2;
 
       std::string prod_id = ScanCommandQueue::encode(prod_cmd.scan_id);
       std::cout << "[TRACK-CREATE] id=" << prod_id

@@ -706,6 +706,73 @@ START_SECTION(exploration_variants_priority_by_level)
 }
 END_SECTION
 
+START_SECTION(ms3_exploration_variants_use_buildMS3)
+{
+  Config cfg{std::string(ms3_exploration_config)};
+  ScanCommandQueue queue(cfg);
+  Deconvolution deconv(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, deconv, fragments);
+
+  auto precursor_pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  ScanCommand ms2_ctx = queue.buildMS2(precursor_pg, 3, cfg.level(2).scans[0]);
+
+  auto fragment_pg = makeSyntheticPeakGroup(500.0, 1000.0, 2);
+  auto cmds = exploration.initiate(3, fragment_pg, 2, -50.0, queue, &ms2_ctx);
+
+  TEST_EQUAL(static_cast<int>(cmds.size()), 5)
+
+  for (int i = 0; i < 5; ++i)
+  {
+    TEST_EQUAL(cmds[i].msn_level, 3)
+    TEST_EQUAL(cmds[i].num_stages, 2)
+    TEST_EQUAL(cmds[i].priority, 1)
+    TEST_REAL_SIMILAR(cmds[i].faims_cv, -50.0)
+  }
+
+  TEST_EQUAL(cmds[0].stages[0].charge_state, 3)
+
+  auto group = exploration.getGroup(1);
+  TEST_EQUAL(group.msn_level, 3)
+  TEST_EQUAL(group.originating_cmd.num_stages > 0, true)
+}
+END_SECTION
+
+START_SECTION(ms3_exploration_winner_selection_and_cleanup)
+{
+  Config cfg{std::string(ms3_exploration_config)};
+  ScanCommandQueue queue(cfg);
+  Deconvolution deconv(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, deconv, fragments);
+
+  auto precursor_pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  ScanCommand ms2_ctx = queue.buildMS2(precursor_pg, 3, cfg.level(2).scans[0]);
+
+  auto fragment_pg = makeSyntheticPeakGroup(500.0, 1000.0, 2);
+  auto cmds = exploration.initiate(3, fragment_pg, 2, -50.0, queue, &ms2_ctx);
+  TEST_EQUAL(static_cast<int>(cmds.size()), 5)
+  TEST_EQUAL(exploration.activeGroupCount(), 1)
+
+  std::vector<int> peak_counts = {2, 4, 6, 8, 3};
+  Exploration::FeedResultInfo last_info;
+  for (int i = 0; i < 5; ++i)
+  {
+    DeconvolvedSpectrum ds = makeSyntheticDeconv(i + 1, peak_counts[i]);
+    int tracking_id = queue.decode(std::string(cmds[i].scan_description).substr(0, 3));
+    last_info = exploration.feedResultForTest(tracking_id, ds, static_cast<double>(i), queue);
+  }
+
+  TEST_EQUAL(exploration.activeGroupCount(), 0)
+  TEST_REAL_SIMILAR(last_info.score, 8.0)
+
+  // ms3_exploration_config has no overrides, so feedResultImpl_() takes
+  // the initiateNextLevel path which produces 0 commands for synthetic data.
+  // MS3 command format (num_stages=2, priority=1) is verified in
+  // ms3_exploration_variants_use_buildMS3 via the initiate() path.
+}
+END_SECTION
+
 START_SECTION(winner_selection_by_score)
 {
   Config cfg{std::string(exploration_config)};
