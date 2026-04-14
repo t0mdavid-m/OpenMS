@@ -249,13 +249,20 @@ FLASHIda::FLASHIda(char* arg) :
     std::string id_str = ScanCommandQueue::encode(cmd.scan_id);
     std::string scan_type = scanTypeFromDescription_(cmd);
 
-    int charge = (cmd.num_stages > 0) ? cmd.stages[0].charge_state : 0;
-    double precursor_mz = (cmd.num_stages > 0) ? cmd.stages[0].precursor_mz : 0.0;
-    double iso_width = (cmd.num_stages > 0) ? cmd.stages[0].isolation_width : 0.0;
-    double col_energy = (cmd.num_stages > 0) ? cmd.stages[0].collision_energy : 0.0;
-    std::string activation;
-    if (cmd.num_stages > 0)
-      activation = cmd.stages[0].activation_type;
+    std::string charges, precursor_mzs, iso_widths, col_energies, activations;
+    for (int i = 0; i < cmd.num_stages; ++i)
+    {
+      if (i > 0) { charges += ";"; precursor_mzs += ";"; iso_widths += ";"; col_energies += ";"; activations += ";"; }
+      charges += std::to_string(cmd.stages[i].charge_state);
+      std::ostringstream mz_os, iw_os, ce_os;
+      mz_os << cmd.stages[i].precursor_mz;
+      iw_os << cmd.stages[i].isolation_width;
+      ce_os << cmd.stages[i].collision_energy;
+      precursor_mzs += mz_os.str();
+      iso_widths += iw_os.str();
+      col_energies += ce_os.str();
+      activations += cmd.stages[i].activation_type;
+    }
 
     std::string parent_id(cmd.parent_scan_id);
     std::string ion_type;
@@ -286,11 +293,11 @@ FLASHIda::FLASHIda(char* arg) :
                          << cmd.priority << "\t"
                          << cmd.faims_cv << "\t"
                          << cmd.mono_mass << "\t"
-                         << charge << "\t"
-                         << precursor_mz << "\t"
-                         << iso_width << "\t"
-                         << col_energy << "\t"
-                         << activation << "\t"
+                         << charges << "\t"
+                         << precursor_mzs << "\t"
+                         << iso_widths << "\t"
+                         << col_energies << "\t"
+                         << activations << "\t"
                          << cmd.qscore << "\t"
                          << cmd.charge_cos << "\t"
                          << cmd.charge_snr << "\t"
