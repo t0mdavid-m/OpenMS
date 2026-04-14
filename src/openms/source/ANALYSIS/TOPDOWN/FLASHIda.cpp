@@ -614,11 +614,11 @@ FLASHIda::FLASHIda(char* arg) :
         ms1.scan_id = queue_.nextTrackingId();
         ms1.priority = 0;  // priority 0 to send before pending MS2s
 
-        std::string id_str = ScanCommandQueue::encode(ms1.scan_id);
-        std::snprintf(ms1.scan_description, 16, "%sS", id_str.c_str());
+        std::string next_ms1_id = ScanCommandQueue::encode(ms1.scan_id);
+        std::snprintf(ms1.scan_description, 16, "%sS", next_ms1_id.c_str());
 
         queue_.push(ms1);
-        std::cout << "[TRACK-CREATE] id=" << id_str << " ms_level=1 type=cv_transition cv=" << next_cv << std::endl;
+        std::cout << "[TRACK-CREATE] id=" << next_ms1_id << " ms_level=1 type=cv_transition cv=" << next_cv << std::endl;
       }
 
       // Update atomics for lock-free reads by getNextScanCommand
