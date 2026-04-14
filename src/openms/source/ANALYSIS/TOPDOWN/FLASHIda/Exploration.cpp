@@ -262,7 +262,9 @@ namespace OpenMS
     info.matched_protein = frag.matched_protein;
     info.proteoform_sequence = frag.proteoform_sequence;
     info.remaining_ratio = remaining_ratio;
-    std::strncpy(info.parent_scan_id, group.originating_cmd.parent_scan_id, 4);
+    std::string parent_enc = ScanCommandQueue::encode(group.originating_cmd.scan_id);
+    std::strncpy(info.parent_scan_id, parent_enc.c_str(), 3);
+    info.parent_scan_id[3] = '\0';
 
     auto& meta = v.result.getOrCreateOptimizationMetadata();
     meta.group_id = group.group_id;
