@@ -71,7 +71,7 @@ namespace OpenMS
     // --- Building ---
 
     /// Build MS2 ScanCommand from a PeakGroup + ScanConfig (unified factory)
-    ScanCommand buildMS2(const PeakGroup& pg, int charge, const ScanConfig& scan_config, int priority = 2);
+    ScanCommand buildMS2(const PeakGroup& pg, int charge, const ScanConfig& scan_config, int priority = 2, int parent_scan_id = 0);
 
     /// Build MS3 ScanCommand from MS2 context + fragment target + MS3 config for CE/activation
     ScanCommand buildMS3(const ScanCommand& ms2_ctx, const ScanConfig& ms3_config,

@@ -179,7 +179,7 @@ namespace OpenMS
     return cmd;
   }
 
-  ScanCommand ScanCommandQueue::buildMS2(const PeakGroup& pg, int charge, const ScanConfig& scan_config, int priority)
+  ScanCommand ScanCommandQueue::buildMS2(const PeakGroup& pg, int charge, const ScanConfig& scan_config, int priority, int parent_scan_id)
   {
     std::lock_guard<std::mutex> lock(queue_mutex_);
     ScanCommand cmd{};
@@ -248,6 +248,14 @@ namespace OpenMS
     cmd.hcd_energy = scan_config.collision_energy;
     cmd.pad2 = 0;
 
+    // Parent tracking ID
+    if (parent_scan_id > 0)
+    {
+      std::string parent_enc = encode(parent_scan_id);
+      std::strncpy(cmd.parent_scan_id, parent_enc.c_str(), 3);
+      cmd.parent_scan_id[3] = '\0';
+    }
+
     std::cout << "[TRACK-CREATE] id=" << id_str
               << " ms_level=2"
               << " mz=" << center_mz
@@ -291,6 +299,11 @@ namespace OpenMS
     std::strncpy(cmd.scan_rate, ms3_config.scan_rate.c_str(), sizeof(cmd.scan_rate) - 1);
     cmd.scan_rate[sizeof(cmd.scan_rate) - 1] = '\0';
 
+    // Parent tracking ID from MS2 context
+    std::string parent_enc = encode(ms2_ctx.scan_id);
+    std::strncpy(cmd.parent_scan_id, parent_enc.c_str(), 3);
+    cmd.parent_scan_id[3] = '\0';
+
     // Stage 0: MS2 precursor (from MS2 context)
     cmd.stages[0] = ms2_ctx.stages[0];
 
@@ -327,6 +340,9 @@ namespace OpenMS
     ScanCommand cmd = ctx;
     cmd.scan_id = nextTrackingIdInt_();
     cmd.priority = priority;
+
+    // Follow-up inherits parent from the originating command
+    std::strncpy(cmd.parent_scan_id, ctx.parent_scan_id, 4);
 
     std::strncpy(cmd.analyzer, follow_up_config.analyzer.c_str(), sizeof(cmd.analyzer) - 1);
     cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';
