@@ -215,6 +215,12 @@ namespace OpenMS
     ms1_scan.resolution = ms1_json.value("resolution", 0);
     ms1_scan.agc_target = ms1_json.value("agc_target", 0);
     ms1_scan.max_it = ms1_json.value("max_it", 0.0);
+    ms1_scan.microscans = ms1_json.value("microscans", 0);
+    ms1_scan.rf_lens = ms1_json.value("rf_lens", 0.0);
+    ms1_scan.source_cid = ms1_json.value("source_cid", 0.0);
+    ms1_scan.source_cid_scaling = ms1_json.value("source_cid_scaling", 0.0);
+    ms1_scan.data_type = ms1_json.value("data_type", std::string(""));
+    ms1_scan.scan_rate = ms1_json.value("scan_rate", std::string(""));
 
     // Ensure levels_[1] exists before populating scans
     if (levels_.find(1) == levels_.end())
@@ -235,6 +241,14 @@ namespace OpenMS
         ms2_scan.resolution = m.value("resolution", 0);
         ms2_scan.agc_target = m.value("agc_target", 0);
         ms2_scan.max_it = m.value("max_it", 0);
+        ms2_scan.first_mass = m.value("first_mass", 0.0);
+        ms2_scan.last_mass = m.value("last_mass", 0.0);
+        ms2_scan.microscans = m.value("microscans", 0);
+        ms2_scan.rf_lens = m.value("rf_lens", 0.0);
+        ms2_scan.source_cid = m.value("source_cid", 0.0);
+        ms2_scan.source_cid_scaling = m.value("source_cid_scaling", 0.0);
+        ms2_scan.data_type = m.value("data_type", std::string(""));
+        ms2_scan.scan_rate = m.value("scan_rate", std::string(""));
         levels_[2].scans.push_back(ms2_scan);
       }
     }
@@ -253,6 +267,14 @@ namespace OpenMS
         ms3_scan.resolution = m.value("resolution", 0);
         ms3_scan.agc_target = m.value("agc_target", 0);
         ms3_scan.max_it = m.value("max_it", 0);
+        ms3_scan.first_mass = m.value("first_mass", 0.0);
+        ms3_scan.last_mass = m.value("last_mass", 0.0);
+        ms3_scan.microscans = m.value("microscans", 0);
+        ms3_scan.rf_lens = m.value("rf_lens", 0.0);
+        ms3_scan.source_cid = m.value("source_cid", 0.0);
+        ms3_scan.source_cid_scaling = m.value("source_cid_scaling", 0.0);
+        ms3_scan.data_type = m.value("data_type", std::string(""));
+        ms3_scan.scan_rate = m.value("scan_rate", std::string(""));
         levels_[3].scans.push_back(ms3_scan);
       }
     }

@@ -75,6 +75,12 @@ namespace OpenMS
     double first_mass = 0;
     double last_mass = 0;
     double max_it = 0;
+    int microscans = 0;
+    double rf_lens = 0;
+    double source_cid = 0;
+    double source_cid_scaling = 0;
+    std::string data_type;
+    std::string scan_rate;
 
     /// Apply string-keyed overrides to matching fields (exploration overrides)
     void applyOverrides(const std::unordered_map<std::string, std::string>& overrides);
