@@ -50,11 +50,136 @@ namespace OpenMS
   }
 
   std::vector<MS3FragmentMatcher::TheoreticalMass> MS3FragmentMatcher::computeTheoreticalMasses(
-    const std::string& /*subsequence*/,
-    const std::vector<std::string>& /*ion_types*/,
-    const std::vector<FragmentAnalysis::PTMSite>& /*ptm_sites*/)
+    const std::string& subsequence,
+    const std::vector<std::string>& ion_types,
+    const std::vector<FragmentAnalysis::PTMSite>& ptm_sites)
   {
-    return {}; // stub — implemented in Task 2
+    int n = static_cast<int>(subsequence.size());
+    if (n < 2) return {};
+
+    // Get residue masses (0-based indexing)
+    std::vector<double> res_mass(n, 0.0);
+    for (int i = 0; i < n; ++i)
+    {
+      const Residue* res = ResidueDB::getInstance()->getResidue(subsequence[i]);
+      if (res != nullptr)
+        res_mass[i] = res->getMonoWeight(Residue::Internal);
+    }
+
+    // Separate fixed and ambiguous PTMs (convert 1-based PTMSite to 0-based)
+    struct PTM0
+    {
+      int start;
+      int end;
+      double mass;
+      bool fixed;
+    };
+    std::vector<PTM0> ptms;
+    for (const auto& p : ptm_sites)
+    {
+      PTM0 pm;
+      pm.start = p.start_position - 1;
+      pm.end = p.end_position - 1;
+      pm.mass = p.mass_shift;
+      pm.fixed = (p.start_position == p.end_position);
+      ptms.push_back(pm);
+    }
+
+    // Pre-compute cumulative fixed PTM contributions
+    // fixed_prefix[i] = total fixed PTM mass at positions <= i
+    // fixed_suffix[i] = total fixed PTM mass at positions >= i
+    std::vector<double> fixed_prefix(n, 0.0);
+    std::vector<double> fixed_suffix(n, 0.0);
+    for (const auto& pm : ptms)
+    {
+      if (! pm.fixed) continue;
+      if (pm.start < 0 || pm.start >= n) continue;
+      for (int i = pm.start; i < n; ++i)
+        fixed_prefix[i] += pm.mass;
+      for (int i = 0; i <= pm.start; ++i)
+        fixed_suffix[i] += pm.mass;
+    }
+
+    std::vector<TheoreticalMass> result;
+
+    for (const auto& ion_type : ion_types)
+    {
+      bool is_prefix = isPrefixIonType(ion_type);
+      double shift = getIonShift(ion_type);
+
+      double cumulative = 0.0;
+      for (int i = 0; i < n - 1; ++i)
+      {
+        double base_mass;
+        int frag_start_0, frag_end_0; // 0-based inclusive range covered by this ion
+
+        if (is_prefix)
+        {
+          cumulative += res_mass[i];
+          base_mass = cumulative + shift + fixed_prefix[i];
+          frag_start_0 = 0;
+          frag_end_0 = i;
+        }
+        else
+        {
+          int idx = n - 1 - i;
+          cumulative += res_mass[idx];
+          base_mass = cumulative + shift + fixed_suffix[idx];
+          frag_start_0 = idx;
+          frag_end_0 = n - 1;
+        }
+
+        // Check ambiguous PTMs for this position
+        double ambiguous_delta = 0.0;
+        bool has_ambiguous = false;
+        for (const auto& pm : ptms)
+        {
+          if (pm.fixed) continue;
+          // Is the ambiguous range fully covered by this ion?
+          if (pm.start >= frag_start_0 && pm.end <= frag_end_0)
+          {
+            base_mass += pm.mass; // fully covered, always include
+          }
+          // Is it partially overlapping?
+          else if (pm.end >= frag_start_0 && pm.start <= frag_end_0)
+          {
+            ambiguous_delta += pm.mass;
+            has_ambiguous = true;
+          }
+          // else: no overlap, skip
+        }
+
+        int position = i + 1; // 1-based from the relevant terminus
+
+        if (has_ambiguous)
+        {
+          TheoreticalMass tm_with;
+          tm_with.mass = base_mass + ambiguous_delta;
+          tm_with.position = position;
+          tm_with.ion_type = ion_type;
+          tm_with.includes_ptm = true;
+          result.push_back(tm_with);
+
+          TheoreticalMass tm_without;
+          tm_without.mass = base_mass;
+          tm_without.position = position;
+          tm_without.ion_type = ion_type;
+          tm_without.includes_ptm = false;
+          result.push_back(tm_without);
+        }
+        else
+        {
+          TheoreticalMass tm;
+          tm.mass = base_mass;
+          tm.position = position;
+          tm.ion_type = ion_type;
+          tm.includes_ptm = false;
+          result.push_back(tm);
+        }
+      }
+    }
+
+    return result;
   }
 
   int MS3FragmentMatcher::matchSpectrum(
