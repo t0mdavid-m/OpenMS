@@ -99,6 +99,7 @@ namespace OpenMS
     double ce_step = 5.0;
     std::unordered_map<std::string, std::string> overrides;
     double tolerance_ppm = 10.0;
+    double exploration_tolerance_ppm = 10.0;  ///< Resolved exploration tolerance (from overrides or base tol)
     double remaining_precursor_target = 0.1;  ///< Target remaining precursor ratio (0.1 = 10%)
   };
 

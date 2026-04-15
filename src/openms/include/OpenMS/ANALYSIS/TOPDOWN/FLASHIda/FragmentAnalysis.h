@@ -123,7 +123,8 @@ namespace OpenMS
                               char* ion_types,
                               int* fragment_indices,
                               DeconvolvedSpectrum& stored_ms2,
-                              const String& fragmentation_method = "HCD");
+                              const String& fragmentation_method = "HCD",
+                              double tolerance_ppm = 0.0);
 
     /**
      * @brief Get terminal (innermost) fragment ions sorted by sequence position
@@ -157,7 +158,8 @@ namespace OpenMS
                                 char* ion_types,
                                 int* fragment_indices,
                                 DeconvolvedSpectrum& stored_ms2,
-                                const String& fragmentation_method = "HCD");
+                                const String& fragmentation_method = "HCD",
+                                double tolerance_ppm = 0.0);
 
     /**
      * @brief Get unique fragment ions that enclose PTM ambiguity regions
@@ -189,7 +191,8 @@ namespace OpenMS
                                   char* ion_types,
                                   int* fragment_indices,
                                   DeconvolvedSpectrum& stored_ms2,
-                                  const String& fragmentation_method = "HCD");
+                                  const String& fragmentation_method = "HCD",
+                                  double tolerance_ppm = 0.0);
 
     // ---------------------------------------------------------------
     // Python-friendly overloads
@@ -272,7 +275,8 @@ namespace OpenMS
                                     std::vector<TagBasedFragmentMatch>& matches,
                                     DeconvolvedSpectrum& stored_ms2,
                                     std::vector<PTMSite>* ptm_sites = nullptr,
-                                    const String& fragmentation_method = "HCD");
+                                    const String& fragmentation_method = "HCD",
+                                    double tolerance_ppm = 0.0);
   };
 
 } // namespace OpenMS

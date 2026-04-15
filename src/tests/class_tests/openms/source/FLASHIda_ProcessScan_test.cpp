@@ -27,7 +27,7 @@ namespace
     "deconvolution": {
       "score_threshold": 0.0, "tqscore_threshold": 0.9,
       "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
@@ -63,7 +63,7 @@ namespace
     "deconvolution": {
       "score_threshold": 0.0, "tqscore_threshold": 0.9,
       "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
@@ -99,7 +99,7 @@ namespace
     "deconvolution": {
       "score_threshold": 0.0, "tqscore_threshold": 0.9,
       "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
@@ -135,7 +135,7 @@ namespace
     "deconvolution": {
       "score_threshold": 0.0, "tqscore_threshold": 0.9,
       "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
@@ -171,7 +171,7 @@ namespace
     "deconvolution": {
       "score_threshold": 0.0, "tqscore_threshold": 0.9,
       "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
@@ -207,7 +207,7 @@ namespace
     "deconvolution": {
       "score_threshold": 0.0, "tqscore_threshold": 0.9,
       "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
@@ -243,7 +243,7 @@ namespace
     "deconvolution": {
       "score_threshold": 0.0, "tqscore_threshold": 0.9,
       "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
@@ -279,7 +279,7 @@ namespace
     "deconvolution": {
       "score_threshold": 0.0, "tqscore_threshold": 0.9,
       "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
@@ -318,7 +318,7 @@ namespace
     "deconvolution": {
       "score_threshold": 0.0, "tqscore_threshold": 0.9,
       "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
@@ -353,7 +353,7 @@ namespace
     "deconvolution": {
       "score_threshold": 0.0, "tqscore_threshold": 0.9,
       "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
@@ -388,7 +388,7 @@ namespace
     "deconvolution": {
       "score_threshold": 0.0, "tqscore_threshold": 0.9,
       "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
@@ -427,7 +427,7 @@ namespace
     "deconvolution": {
       "score_threshold": 0.0, "tqscore_threshold": 0.9,
       "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
@@ -466,7 +466,7 @@ namespace
     "deconvolution": {
       "score_threshold": 0.0, "tqscore_threshold": 0.9,
       "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
@@ -501,7 +501,7 @@ namespace
     "deconvolution": {
       "score_threshold": 0.0, "tqscore_threshold": 0.9,
       "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
@@ -537,7 +537,7 @@ namespace
     "deconvolution": {
       "score_threshold": 0.0, "tqscore_threshold": 0.9,
       "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
@@ -572,7 +572,7 @@ namespace
     "deconvolution": {
       "score_threshold": 0.0, "tqscore_threshold": 0.9,
       "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
@@ -607,7 +607,7 @@ namespace
     "deconvolution": {
       "score_threshold": 0.0, "tqscore_threshold": 0.9,
       "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10]
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,

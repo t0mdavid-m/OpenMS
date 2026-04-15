@@ -73,7 +73,7 @@ namespace
       "max_charge": 50,
       "min_mass": 500,
       "max_mass": 50000,
-      "tol": [10, 10]
+      "tol": [10, 10, 10]
     },
     "precursor_selection": {
       "RT_window": 180,
@@ -148,7 +148,7 @@ namespace
       "max_charge": 50,
       "min_mass": 500,
       "max_mass": 50000,
-      "tol": [10, 10]
+      "tol": [10, 10, 10]
     },
     "precursor_selection": {
       "RT_window": 180,
@@ -232,7 +232,7 @@ namespace
       "max_charge": 50,
       "min_mass": 500,
       "max_mass": 50000,
-      "tol": [10, 10]
+      "tol": [10, 10, 10]
     },
     "precursor_selection": {
       "RT_window": 180,
@@ -332,7 +332,7 @@ START_SECTION(getTopFragmentMatches_cytochrome_c)
   ABORT_IF(scans.empty())
 
   Config cfg{std::string(fragment_test_config)};
-  Deconvolution deconv(cfg);
+  Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
 
   // Deconvolve scan 149 (MS2, no precursor info)
   int pg_count = deconv.deconvolveMSn(scans[0].mzs.data(), scans[0].ints.data(),
@@ -367,7 +367,7 @@ START_SECTION(getTerminalFragmentIons_cytochrome_c)
   ABORT_IF(scans.empty())
 
   Config cfg{std::string(fragment_test_config)};
-  Deconvolution deconv(cfg);
+  Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
 
   deconv.deconvolveMSn(scans[0].mzs.data(), scans[0].ints.data(),
                         (int)scans[0].mzs.size(), scans[0].rt, 0.0, 0);
@@ -417,7 +417,7 @@ START_SECTION(getBestMS2Masses_returns_deconvolved_peaks)
   ABORT_IF(scans.empty())
 
   Config cfg{std::string(fragment_test_config)};
-  Deconvolution deconv(cfg);
+  Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
 
   deconv.deconvolveMSn(scans[0].mzs.data(), scans[0].ints.data(),
                         (int)scans[0].mzs.size(), scans[0].rt, 0.0, 0);
@@ -447,9 +447,9 @@ START_SECTION(fragment_count_populated_for_fragment_count_metric)
 
   Config cfg{std::string(fragment_count_exploration_config)};
   ScanCommandQueue queue(cfg);
-  Deconvolution deconv(cfg);
+  Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
   FragmentAnalysis fragments(cfg);
-  Exploration exploration(cfg, deconv, fragments);
+  Exploration exploration(cfg, fragments);
 
   // Deconvolve scan 149 to produce a spectrum with real fragment matches
   deconv.deconvolveMSn(scans[0].mzs.data(), scans[0].ints.data(),
@@ -480,9 +480,9 @@ START_SECTION(fragment_analysis_skipped_for_mass_count_metric)
 
   Config cfg{std::string(mass_count_exploration_config)};
   ScanCommandQueue queue(cfg);
-  Deconvolution deconv(cfg);
+  Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
   FragmentAnalysis fragments(cfg);
-  Exploration exploration(cfg, deconv, fragments);
+  Exploration exploration(cfg, fragments);
 
   // Deconvolve — same data as above, would produce matches if fragment analysis ran
   deconv.deconvolveMSn(scans[0].mzs.data(), scans[0].ints.data(),

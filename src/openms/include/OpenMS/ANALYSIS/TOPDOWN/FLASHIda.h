@@ -46,6 +46,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
+#include <OpenMS/DATASTRUCTURES/ListUtils.h>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -239,6 +240,9 @@ namespace OpenMS
 
     /// Exploration CE sweep engine (owns groups, variants, scoring)
     Exploration exploration_;
+
+    /// Build tolerance list from config for Deconvolution construction
+    static DoubleList buildToleranceList_(const Config& config);
 
     // --- Logging file streams (append-only, crash-safe) ---
     std::ofstream ida_log_stream_;

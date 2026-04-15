@@ -88,7 +88,7 @@ namespace OpenMS
     deconv_.min_mass = deconv.value("min_mass", 500.0);
     deconv_.max_mass = deconv.value("max_mass", 50000.0);
 
-    // Tolerance values: tol[0] -> MS1, tol[1] -> MS2+
+    // Tolerance values: one entry per MS level, indexed by level-1
     std::vector<double> tol_values;
     if (deconv.contains("tol") && deconv["tol"].is_array())
     {
@@ -100,12 +100,8 @@ namespace OpenMS
     if (tol_values.size() == 1)
       tol_values.push_back(tol_values[0]);
 
-    // Store tolerance per level (will be set on MSLevelConfig after level parsing)
-    double tol_ms1 = tol_values[0];
-    double tol_ms2 = tol_values.size() >= 2 ? tol_values[1] : tol_values[0];
-
-    // Use MS2 tolerance for tag matching
-    targeting_.tag_matching_tolerance_ppm = tol_ms2;
+    // Use MS2 tolerance for tag matching (index 1, guaranteed to exist)
+    targeting_.tag_matching_tolerance_ppm = tol_values.size() >= 2 ? tol_values[1] : tol_values[0];
 
     // --- precursor_selection section ---
     auto ps = config.value("precursor_selection", json::object());
@@ -345,10 +341,28 @@ namespace OpenMS
       }
     }
 
-    // Set per-level tolerance values
+    // Validate tol array length covers all configured MS levels
+    int max_level = 0;
+    for (const auto& [lvl, unused_cfg] : levels_)
+      max_level = std::max(max_level, lvl);
+    if (static_cast<int>(tol_values.size()) < max_level)
+      throw std::invalid_argument("deconvolution.tol must have at least "
+        + std::to_string(max_level) + " entries when MS" + std::to_string(max_level) + " is configured");
+
+    // Set per-level tolerance values (direct index)
     for (auto& [lvl, cfg] : levels_)
     {
-      cfg.tolerance_ppm = (lvl <= 1) ? tol_ms1 : tol_ms2;
+      cfg.tolerance_ppm = tol_values[lvl - 1];
+      // Default exploration tolerance to base; overrides (parsed above) take precedence
+      if (cfg.overrides.count("tolerance_ppm"))
+      {
+        cfg.exploration_tolerance_ppm = std::stod(cfg.overrides["tolerance_ppm"]);
+        cfg.overrides.erase("tolerance_ppm");
+      }
+      else
+      {
+        cfg.exploration_tolerance_ppm = tol_values[lvl - 1];
+      }
     }
 
     // Compute convenience boolean

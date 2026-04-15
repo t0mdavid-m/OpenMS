@@ -41,6 +41,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -132,8 +133,8 @@ namespace OpenMS
       char parent_scan_id[4]{};  ///< Parent's encoded tracking ID (from group's originating_cmd)
     };
 
-    /// Construct with a reference to the shared Config, Deconvolution engine, and FragmentAnalysis
-    explicit Exploration(const Config& config, Deconvolution& deconv, FragmentAnalysis& fragments);
+    /// Construct with a reference to the shared Config and FragmentAnalysis
+    explicit Exploration(const Config& config, FragmentAnalysis& fragments);
 
     /// Create exploration group with CE variants. Returns commands for the caller to push.
     /// @param ms_ctx  Optional originating MS2 ScanCommand (needed for MS3 buildMS3 stage 0)
@@ -170,8 +171,8 @@ namespace OpenMS
 
   private:
     const Config& config_;
-    Deconvolution& deconv_;
     FragmentAnalysis& fragments_;
+    std::unique_ptr<Deconvolution> exploration_deconv_;
 
     /// Active exploration groups (group_id -> ExplorationGroup)
     std::unordered_map<int, ExplorationGroup> active_groups_;
@@ -214,7 +215,7 @@ namespace OpenMS
                                            double* out_ratio = nullptr) const;
 
     /// Score: number of matched fragment ions + protein info
-    FragmentMatchResult computeFragmentMatch_(const DeconvolvedSpectrum& spec) const;
+    FragmentMatchResult computeFragmentMatch_(const DeconvolvedSpectrum& spec, int msn_level) const;
 
     /// Compute TIC coverage for metadata
     float computeTICCoverage_(const DeconvolvedSpectrum& spec) const;

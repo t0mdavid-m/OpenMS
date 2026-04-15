@@ -381,7 +381,8 @@ namespace
                                                      std::vector<TagBasedFragmentMatch>& matches,
                                                      DeconvolvedSpectrum& stored_ms2,
                                                      std::vector<PTMSite>* ptm_sites,
-                                                     const String& fragmentation_method)
+                                                     const String& fragmentation_method,
+                                                     double tolerance_ppm)
   {
     matches.clear();
     if (ptm_sites != nullptr)
@@ -406,7 +407,7 @@ namespace
     }
 
     // 2. Run FLASHTagger to generate sequence tags
-    double ppm_tolerance = config_.level(2).tolerance_ppm;
+    double ppm_tolerance = (tolerance_ppm > 0.0) ? tolerance_ppm : config_.level(2).tolerance_ppm;
     std::vector<std::string> ion_types_str = getIonTypesForFragmentationMethod(fragmentation_method);
     FLASHTaggerAlgorithm tagger;
     Param tagger_param = tagger.getDefaults();
@@ -755,12 +756,13 @@ namespace
                                               char* ion_types,
                                               int* fragment_indices,
                                               DeconvolvedSpectrum& stored_ms2,
-                                              const String& fragmentation_method)
+                                              const String& fragmentation_method,
+                                              double tolerance_ppm)
   {
     std::cout << "Matching fragments!" << std::endl;
     // Use tag-based matching workflow (FLASHTagger + FLASHExtender)
     std::vector<TagBasedFragmentMatch> matches;
-    runTagBasedFragmentMatching_(protein_sequence, matches, stored_ms2, nullptr, fragmentation_method);
+    runTagBasedFragmentMatching_(protein_sequence, matches, stored_ms2, nullptr, fragmentation_method, tolerance_ppm);
 
     int output_idx = 0;
     for (size_t i = 0; i < matches.size() && output_idx < n; ++i)
@@ -836,12 +838,13 @@ namespace
                                                   char* ion_types,
                                                   int* fragment_indices,
                                                   DeconvolvedSpectrum& stored_ms2,
-                                                  const String& fragmentation_method)
+                                                  const String& fragmentation_method,
+                                                  double tolerance_ppm)
   {
     // Get fragment matches AND PTM sites from FLASHExtender
     std::vector<TagBasedFragmentMatch> fragment_ion_match;
     std::vector<PTMSite> ptm_sites;
-    int match_count = runTagBasedFragmentMatching_(protein_sequence, fragment_ion_match, stored_ms2, &ptm_sites, fragmentation_method);
+    int match_count = runTagBasedFragmentMatching_(protein_sequence, fragment_ion_match, stored_ms2, &ptm_sites, fragmentation_method, tolerance_ppm);
 
     if (match_count == 0)
     {
@@ -1143,11 +1146,12 @@ namespace
       char* ion_types,
       int* fragment_indices,
       DeconvolvedSpectrum& stored_ms2,
-      const String& fragmentation_method)
+      const String& fragmentation_method,
+      double tolerance_ppm)
   {
     // Run fragment matching to get all matches
     std::vector<TagBasedFragmentMatch> matches;
-    runTagBasedFragmentMatching_(protein_sequence, matches, stored_ms2, nullptr, fragmentation_method);
+    runTagBasedFragmentMatching_(protein_sequence, matches, stored_ms2, nullptr, fragmentation_method, tolerance_ppm);
 
     if (matches.empty()) return 0;
 

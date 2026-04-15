@@ -37,6 +37,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
+#include <OpenMS/DATASTRUCTURES/ListUtils.h>
 #include <OpenMS/KERNEL/MSSpectrum.h>
 
 #include <vector>
@@ -56,8 +57,9 @@ namespace OpenMS
   class OPENMS_DLLAPI Deconvolution
   {
   public:
-    /// Constructor: initialise SpectralDeconvolution from config and precalculate averagine
-    explicit Deconvolution(const Config& config);
+    /// Constructor: initialise SpectralDeconvolution with explicit tolerance values
+    /// @param tolerance_ppm_values PPM tolerances indexed by MS level (index 0 = MS1, 1 = MS2, ...)
+    Deconvolution(const Config& config, const DoubleList& tolerance_ppm_values);
 
     /**
      * @brief Deconvolve an MS1 spectrum and return the result

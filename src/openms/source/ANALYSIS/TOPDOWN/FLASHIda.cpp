@@ -35,6 +35,8 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
 
+#include <OpenMS/DATASTRUCTURES/ListUtils.h>
+
 #include <algorithm>
 #include <climits>
 #include <cmath>
@@ -48,16 +50,24 @@
 namespace OpenMS
 {
 
+  DoubleList FLASHIda::buildToleranceList_(const Config& config)
+  {
+    DoubleList tol;
+    for (const auto& [lvl, cfg] : config.levels())
+      tol.push_back(cfg.tolerance_ppm);
+    return tol;
+  }
+
 /// constructor
 FLASHIda::FLASHIda(char* arg) :
     config_(std::string(arg)),
     queue_(config_),
-    deconv_(config_),
+    deconv_(config_, buildToleranceList_(config_)),
     fragments_(config_),
     selection_(config_, deconv_),
     quant_(config_),
     faims_(config_),
-    exploration_(config_, deconv_, fragments_)
+    exploration_(config_, fragments_)
 {
   #ifdef _OPENMP
     omp_set_num_threads(4);

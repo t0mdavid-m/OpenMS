@@ -28,7 +28,7 @@ namespace
       "max_charge": 50,
       "min_mass": 500,
       "max_mass": 50000,
-      "tol": [10, 10]
+      "tol": [10, 10, 10]
     },
     "precursor_selection": {
       "RT_window": 180,
@@ -104,7 +104,7 @@ namespace
       "max_charge": 50,
       "min_mass": 500,
       "max_mass": 50000,
-      "tol": [10, 10]
+      "tol": [10, 10, 10]
     },
     "precursor_selection": {
       "RT_window": 180,
@@ -180,7 +180,7 @@ namespace
       "max_charge": 50,
       "min_mass": 500,
       "max_mass": 50000,
-      "tol": [10, 10]
+      "tol": [10, 10, 10]
     },
     "precursor_selection": {
       "RT_window": 180,

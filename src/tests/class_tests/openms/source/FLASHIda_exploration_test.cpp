@@ -37,7 +37,7 @@ namespace
       "max_charge": 50,
       "min_mass": 500,
       "max_mass": 50000,
-      "tol": [10, 10]
+      "tol": [10, 10, 10]
     },
     "precursor_selection": {
       "RT_window": 180,
@@ -121,7 +121,7 @@ namespace
       "max_charge": 50,
       "min_mass": 500,
       "max_mass": 50000,
-      "tol": [10, 10]
+      "tol": [10, 10, 10]
     },
     "precursor_selection": {
       "RT_window": 180,
@@ -222,7 +222,7 @@ namespace
       "max_charge": 50,
       "min_mass": 500,
       "max_mass": 50000,
-      "tol": [10, 10]
+      "tol": [10, 10, 10]
     },
     "precursor_selection": {
       "RT_window": 180,
@@ -306,7 +306,7 @@ namespace
       "max_charge": 50,
       "min_mass": 500,
       "max_mass": 50000,
-      "tol": [10, 10]
+      "tol": [10, 10, 10]
     },
     "precursor_selection": {
       "RT_window": 180,
@@ -390,7 +390,7 @@ namespace
       "max_charge": 50,
       "min_mass": 500,
       "max_mass": 50000,
-      "tol": [10, 10]
+      "tol": [10, 10, 10]
     },
     "precursor_selection": {
       "RT_window": 180,
@@ -485,7 +485,7 @@ namespace
       "max_charge": 50,
       "min_mass": 500,
       "max_mass": 50000,
-      "tol": [10, 10]
+      "tol": [10, 10, 10]
     },
     "precursor_selection": {
       "RT_window": 180,
@@ -570,7 +570,7 @@ namespace
       "max_charge": 50,
       "min_mass": 500,
       "max_mass": 50000,
-      "tol": [10, 10]
+      "tol": [10, 10, 10]
     },
     "precursor_selection": {
       "RT_window": 180,
@@ -729,6 +729,110 @@ namespace
   const std::string ms1_tsv_path = "../../FlashIDA/test-data/spectra/ms1_standard.txt";
   const std::string ms2_tsv_path = "../../FlashIDA/test-data/spectra/ms2_hcd_fragment.txt";
   const std::string ms2_cytc_path = "../../FlashIDA/test-data/spectra/ms2_cytc_scan149.txt";
+
+  // Config with 3-entry tol and MS2 exploration tolerance override
+  const char* exploration_tolerance_config = R"({
+    "deconvolution": {
+      "score_threshold": 0.0,
+      "tqscore_threshold": 0.9,
+      "min_charge": 4,
+      "max_charge": 50,
+      "min_mass": 500,
+      "max_mass": 50000,
+      "tol": [10, 10, 20]
+    },
+    "precursor_selection": {
+      "RT_window": 180,
+      "target_mode": 0,
+      "IDScore": false,
+      "AllCharges": false,
+      "HCDEnergy": 29,
+      "strict_inclusion": false,
+      "tie_threshold": 0.1
+    },
+    "tagging": {
+      "min_tag_length": 3,
+      "max_tag_length": 8,
+      "max_ptm_count": 3,
+      "max_flanking_mass_diff": 50000
+    },
+    "quantification": {
+      "enabled": false,
+      "reporter_mz_tol": 0.002,
+      "fold_change_threshold": 1.4
+    },
+    "faims": {
+      "cv_values": [-50],
+      "max_cv_skip": 0,
+      "cv_precursor_threshold": 15
+    },
+    "ms_settings": {
+      "ms1": {
+        "analyzer": "Orbitrap",
+        "first_mass": 500,
+        "last_mass": 2000,
+        "resolution": 120000,
+        "agc_target": 800000,
+        "max_it": 246
+      },
+      "ms2": [
+        {
+          "analyzer": "Orbitrap",
+          "activation": "HCD",
+          "collision_energy": 29,
+          "resolution": 120000
+        }
+      ],
+      "ms3": [
+        {
+          "analyzer": "Orbitrap",
+          "activation": "CID",
+          "collision_energy": 25,
+          "resolution": 120000
+        }
+      ]
+    },
+    "scheduling": {
+      "cycle_time": { "enabled": false, "value_ms": 60000 },
+      "scan_timeout": { "enabled": false, "value_ms": 30000 }
+    },
+    "files": {
+      "target_logs": [],
+      "fasta": "",
+      "inclusion_list": "",
+      "ptm_list": ""
+    },
+    "ms3": {
+      "protein_sequence": ""
+    },
+    "conditional_ms2": false,
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_targets": 3 },
+      "ms2": {
+        "selection": "none",
+        "max_targets": 3,
+        "exploration": {
+          "metric": "mass_count",
+          "ce_min": 20.0,
+          "ce_max": 40.0,
+          "ce_step": 5.0,
+          "overrides": {
+            "tolerance_ppm": "15"
+          }
+        }
+      },
+      "ms3": {
+        "selection": "none",
+        "max_targets": 3,
+        "exploration": {
+          "metric": "mass_count",
+          "ce_min": 20.0,
+          "ce_max": 40.0,
+          "ce_step": 5.0
+        }
+      }
+    }
+  })";
 } // anonymous namespace
 
 
@@ -741,9 +845,9 @@ START_SECTION(exploration_group_creation)
 {
   Config cfg{std::string(exploration_config)};
   ScanCommandQueue queue(cfg);
-  Deconvolution deconv(cfg);
+  Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
   FragmentAnalysis fragments(cfg);
-  Exploration exploration(cfg, deconv, fragments);
+  Exploration exploration(cfg, fragments);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
@@ -781,9 +885,9 @@ START_SECTION(exploration_variants_priority_by_level)
 {
   Config cfg{std::string(exploration_config)};
   ScanCommandQueue queue(cfg);
-  Deconvolution deconv(cfg);
+  Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
   FragmentAnalysis fragments(cfg);
-  Exploration exploration(cfg, deconv, fragments);
+  Exploration exploration(cfg, fragments);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
@@ -805,9 +909,9 @@ START_SECTION(ms3_exploration_variants_use_buildMS3)
 {
   Config cfg{std::string(ms3_exploration_config)};
   ScanCommandQueue queue(cfg);
-  Deconvolution deconv(cfg);
+  Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
   FragmentAnalysis fragments(cfg);
-  Exploration exploration(cfg, deconv, fragments);
+  Exploration exploration(cfg, fragments);
 
   auto precursor_pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   ScanCommand ms2_ctx = queue.buildMS2(precursor_pg, 3, cfg.level(2).scans[0]);
@@ -849,9 +953,9 @@ START_SECTION(ms3_exploration_winner_selection_and_cleanup)
 {
   Config cfg{std::string(ms3_exploration_config)};
   ScanCommandQueue queue(cfg);
-  Deconvolution deconv(cfg);
+  Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
   FragmentAnalysis fragments(cfg);
-  Exploration exploration(cfg, deconv, fragments);
+  Exploration exploration(cfg, fragments);
 
   auto precursor_pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   ScanCommand ms2_ctx = queue.buildMS2(precursor_pg, 3, cfg.level(2).scans[0]);
@@ -884,9 +988,9 @@ START_SECTION(winner_selection_by_score)
 {
   Config cfg{std::string(exploration_config)};
   ScanCommandQueue queue(cfg);
-  Deconvolution deconv(cfg);
+  Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
   FragmentAnalysis fragments(cfg);
-  Exploration exploration(cfg, deconv, fragments);
+  Exploration exploration(cfg, fragments);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
@@ -998,9 +1102,9 @@ START_SECTION(ms3_exploration_creates_child_groups)
 
   Config cfg{std::string(ms3_exploration_config)};
   ScanCommandQueue queue(cfg);
-  Deconvolution deconv(cfg);
+  Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
   FragmentAnalysis fragments(cfg);
-  Exploration exploration(cfg, deconv, fragments);
+  Exploration exploration(cfg, fragments);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
@@ -1088,9 +1192,9 @@ START_SECTION(optimization_metadata_populated)
 {
   Config cfg{std::string(exploration_config)};
   ScanCommandQueue queue(cfg);
-  Deconvolution deconv(cfg);
+  Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
   FragmentAnalysis fragments(cfg);
-  Exploration exploration(cfg, deconv, fragments);
+  Exploration exploration(cfg, fragments);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
@@ -1160,9 +1264,9 @@ END_SECTION
 START_SECTION(no_ms2_exploration_ms3_exploration_immediate)
 {
   Config cfg{std::string(no_ms2_expl_ms3_expl_config)};
-  Deconvolution deconv(cfg);
+  Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
   FragmentAnalysis fragments(cfg);
-  Exploration exploration(cfg, deconv, fragments);
+  Exploration exploration(cfg, fragments);
 
   auto ms2_cfg = cfg.level(2);
   TEST_EQUAL(static_cast<int>(ms2_cfg.exploration), static_cast<int>(ExplorationMetric::None))
@@ -1220,9 +1324,9 @@ START_SECTION(remaining_precursor_score_no_raw_data)
   // RemainingPrecursor now prepends a CE=0 baseline scan: 1 baseline + 5 CE variants = 6
   Config cfg{std::string(remaining_precursor_config)};
   ScanCommandQueue queue(cfg);
-  Deconvolution deconv(cfg);
+  Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
   FragmentAnalysis fragments(cfg);
-  Exploration exploration(cfg, deconv, fragments);
+  Exploration exploration(cfg, fragments);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
@@ -1267,9 +1371,9 @@ START_SECTION(remaining_precursor_score_with_raw_data)
   // Test RemainingPrecursor scoring with raw data: baseline CE=0 + CE>0 variants
   Config cfg{std::string(remaining_precursor_config)};
   ScanCommandQueue queue(cfg);
-  Deconvolution deconv(cfg);
+  Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
   FragmentAnalysis fragments(cfg);
-  Exploration exploration(cfg, deconv, fragments);
+  Exploration exploration(cfg, fragments);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
@@ -1317,9 +1421,9 @@ START_SECTION(remaining_precursor_score_no_signal_in_window)
   // Feed CE=0 baseline with zero in-window signal. All subsequent variants should score 0.
   Config cfg{std::string(remaining_precursor_config)};
   ScanCommandQueue queue(cfg);
-  Deconvolution deconv(cfg);
+  Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
   FragmentAnalysis fragments(cfg);
-  Exploration exploration(cfg, deconv, fragments);
+  Exploration exploration(cfg, fragments);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
@@ -1477,9 +1581,9 @@ START_SECTION(remaining_precursor_target_aware_scoring)
 {
   Config cfg{std::string(remaining_precursor_config)};
   ScanCommandQueue queue(cfg);
-  Deconvolution deconv(cfg);
+  Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
   FragmentAnalysis fragments(cfg);
-  Exploration exploration(cfg, deconv, fragments);
+  Exploration exploration(cfg, fragments);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
@@ -1523,9 +1627,9 @@ START_SECTION(fragment_match_propagated_in_feed_result)
 {
   Config cfg{std::string(exploration_config)};
   ScanCommandQueue queue(cfg);
-  Deconvolution deconv(cfg);
+  Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
   FragmentAnalysis fragments(cfg);
-  Exploration exploration(cfg, deconv, fragments);
+  Exploration exploration(cfg, fragments);
 
   TEST_EQUAL(cfg.targeting().protein_sequence.empty(), false)
 
@@ -1555,9 +1659,9 @@ START_SECTION(fragment_count_zero_without_protein_sequence)
   TEST_EQUAL(cfg.targeting().protein_sequence.empty(), true)
 
   ScanCommandQueue queue(cfg);
-  Deconvolution deconv(cfg);
+  Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
   FragmentAnalysis fragments(cfg);
-  Exploration exploration(cfg, deconv, fragments);
+  Exploration exploration(cfg, fragments);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
@@ -1626,9 +1730,9 @@ START_SECTION(ms3_remaining_precursor_isolation_width)
   // causing all MS3 variants to score -1. The 2.0 Da floor fixes this.
   Config cfg{std::string(ms3_remaining_precursor_config)};
   ScanCommandQueue queue(cfg);
-  Deconvolution deconv(cfg);
+  Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
   FragmentAnalysis fragments(cfg);
-  Exploration exploration(cfg, deconv, fragments);
+  Exploration exploration(cfg, fragments);
 
   // Create a narrow single-peak PeakGroup (simulates MS3 fragment target)
   // getMzRange() returns (500.0, 500.0) -> width=0 before floor
@@ -1668,6 +1772,71 @@ START_SECTION(ms3_remaining_precursor_isolation_width)
   TEST_REAL_SIMILAR(info.remaining_ratio, 0.1)
   TEST_REAL_SIMILAR(info.score, 1.0)  // target=0.1, deviation=0.0, score=1.0
   TEST_EQUAL(info.score > 0.0, true)
+}
+END_SECTION
+
+START_SECTION(tol_three_entry_parsing)
+{
+  Config cfg{std::string(exploration_tolerance_config)};
+  // MS1 = 10, MS2 = 10, MS3 = 20
+  TEST_REAL_SIMILAR(cfg.level(1).tolerance_ppm, 10.0)
+  TEST_REAL_SIMILAR(cfg.level(2).tolerance_ppm, 10.0)
+  TEST_REAL_SIMILAR(cfg.level(3).tolerance_ppm, 20.0)
+}
+END_SECTION
+
+START_SECTION(exploration_tolerance_override)
+{
+  Config cfg{std::string(exploration_tolerance_config)};
+  // MS2 exploration has overrides.tolerance_ppm = "15"
+  TEST_REAL_SIMILAR(cfg.level(2).exploration_tolerance_ppm, 15.0)
+  // MS2 base tolerance is still 10
+  TEST_REAL_SIMILAR(cfg.level(2).tolerance_ppm, 10.0)
+  // MS3 exploration has no override -> falls back to tol[2] = 20
+  TEST_REAL_SIMILAR(cfg.level(3).exploration_tolerance_ppm, 20.0)
+  // tolerance_ppm should be removed from overrides map
+  TEST_EQUAL(cfg.level(2).overrides.count("tolerance_ppm"), 0u)
+}
+END_SECTION
+
+START_SECTION(exploration_tolerance_fallback)
+{
+  // exploration_config has exploration at MS2 but NO tolerance override
+  Config cfg{std::string(exploration_config)};
+  // exploration_tolerance_ppm should equal base tolerance
+  TEST_REAL_SIMILAR(cfg.level(2).exploration_tolerance_ppm, 10.0)
+  TEST_REAL_SIMILAR(cfg.level(2).tolerance_ppm, 10.0)
+}
+END_SECTION
+
+START_SECTION(tol_validation_insufficient_entries)
+{
+  // MS3 configured in selection_strategy but only 2 tol entries -> must throw
+  const char* insufficient_tol_config = R"({
+    "deconvolution": {
+      "min_charge": 4, "max_charge": 50,
+      "min_mass": 500, "max_mass": 50000,
+      "tol": [10, 10]
+    },
+    "precursor_selection": { "RT_window": 180 },
+    "tagging": {},
+    "quantification": { "enabled": false },
+    "faims": { "cv_values": [-50] },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000 },
+      "ms2": [{ "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }],
+      "ms3": [{ "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25, "resolution": 120000 }]
+    },
+    "scheduling": {},
+    "files": {},
+    "ms3": { "protein_sequence": "" },
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_targets": 3 },
+      "ms2": { "selection": "none", "max_targets": 3 },
+      "ms3": { "selection": "none", "max_targets": 3 }
+    }
+  })";
+  TEST_EXCEPTION(std::invalid_argument, Config cfg{std::string(insufficient_tol_config)})
 }
 END_SECTION
 

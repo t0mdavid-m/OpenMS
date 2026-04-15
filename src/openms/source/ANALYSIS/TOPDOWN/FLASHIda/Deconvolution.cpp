@@ -45,15 +45,14 @@
 namespace OpenMS
 {
 
-  Deconvolution::Deconvolution(const Config& config)
+  Deconvolution::Deconvolution(const Config& config, const DoubleList& tolerance_ppm_values)
   {
     Param sd_defaults = SpectralDeconvolution().getDefaults();
     sd_defaults.setValue("min_charge", config.deconvolution().min_charge);
     sd_defaults.setValue("max_charge", config.deconvolution().max_charge);
     sd_defaults.setValue("min_mass", config.deconvolution().min_mass);
     sd_defaults.setValue("max_mass", config.deconvolution().max_mass);
-    DoubleList tol_values = {config.level(1).tolerance_ppm, config.level(2).tolerance_ppm};
-    sd_defaults.setValue("tol", tol_values);
+    sd_defaults.setValue("tol", tolerance_ppm_values);
     fd_.setParameters(sd_defaults);
     fd_.calculateAveragine(false);
   }
