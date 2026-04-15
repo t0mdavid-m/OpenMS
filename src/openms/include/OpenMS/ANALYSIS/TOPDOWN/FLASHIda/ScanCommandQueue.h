@@ -99,6 +99,9 @@ namespace OpenMS
     /// Dequeue next command by priority (0 = highest). Returns nullopt if all queues empty.
     std::optional<ScanCommand> dequeue();
 
+    /// Register a bypass command (AGC, etc.) in pending_scan_map_ without queuing it
+    void registerPending(const ScanCommand& cmd);
+
     /// Look up and remove a pending scan by tracking ID. Returns nullopt if not found.
     std::optional<ScanCommand> resolvePending(int id);
 

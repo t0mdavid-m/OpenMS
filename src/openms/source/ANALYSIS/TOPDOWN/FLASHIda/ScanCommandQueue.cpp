@@ -371,7 +371,6 @@ namespace OpenMS
     cmd.enqueue_timestamp_ms = static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
-    pending_scan_map_[cmd.scan_id] = cmd;
     int p = std::clamp(cmd.priority, 0, 3);
     queues_[p].push_back(cmd);
   }
@@ -385,10 +384,20 @@ namespace OpenMS
       {
         ScanCommand cmd = queues_[p].front();
         queues_[p].pop_front();
+        cmd.dequeue_timestamp_ms = static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+        pending_scan_map_[cmd.scan_id] = cmd;
         return cmd;
       }
     }
     return std::nullopt;
+  }
+
+  void ScanCommandQueue::registerPending(const ScanCommand& cmd)
+  {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    pending_scan_map_[cmd.scan_id] = cmd;
   }
 
   std::optional<ScanCommand> ScanCommandQueue::resolvePending(int id)
