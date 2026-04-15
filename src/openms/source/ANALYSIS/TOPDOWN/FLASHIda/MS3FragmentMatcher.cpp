@@ -242,32 +242,132 @@ namespace OpenMS
   }
 
   std::string MS3FragmentMatcher::extractSubsequence(
-    const std::string& /*protein_sequence*/,
-    const ProteoformContext& /*ctx*/,
-    char /*fragment_ion_type*/,
-    int /*fragment_ion_index*/)
+    const std::string& protein_sequence,
+    const ProteoformContext& ctx,
+    char fragment_ion_type,
+    int fragment_ion_index)
   {
-    return ""; // stub — implemented in Task 4
+    if (ctx.region_start < 0 || ctx.region_end < 0) return "";
+    int proteoform_length = ctx.region_end - ctx.region_start;
+    if (fragment_ion_index <= 0 || fragment_ion_index > proteoform_length) return "";
+
+    int subseq_start_0based; // absolute position in protein_sequence
+    if (fragment_ion_type == 'b' || fragment_ion_type == 'a' || fragment_ion_type == 'c')
+    {
+      subseq_start_0based = ctx.region_start;
+    }
+    else // y, x, z
+    {
+      subseq_start_0based = ctx.region_end - fragment_ion_index;
+    }
+
+    if (subseq_start_0based < 0 ||
+        subseq_start_0based + fragment_ion_index > static_cast<int>(protein_sequence.size()))
+      return "";
+
+    return protein_sequence.substr(subseq_start_0based, fragment_ion_index);
   }
 
   std::vector<FragmentAnalysis::PTMSite> MS3FragmentMatcher::rebasePTMSites(
-    const std::vector<FragmentAnalysis::PTMSite>& /*ptm_sites*/,
-    int /*subseq_start_in_proteoform*/,
-    int /*subseq_length*/)
+    const std::vector<FragmentAnalysis::PTMSite>& ptm_sites,
+    int subseq_start_in_proteoform,
+    int subseq_length)
   {
-    return {}; // stub — implemented in Task 4
+    int subseq_end = subseq_start_in_proteoform + subseq_length - 1; // 1-based inclusive end
+
+    std::vector<FragmentAnalysis::PTMSite> result;
+    for (const auto& ptm : ptm_sites)
+    {
+      // No overlap — skip
+      if (ptm.end_position < subseq_start_in_proteoform || ptm.start_position > subseq_end)
+        continue;
+
+      FragmentAnalysis::PTMSite rebased;
+      rebased.start_position = std::max(ptm.start_position, subseq_start_in_proteoform)
+                               - subseq_start_in_proteoform + 1;
+      rebased.end_position = std::min(ptm.end_position, subseq_end)
+                             - subseq_start_in_proteoform + 1;
+      rebased.position = (rebased.start_position + rebased.end_position) / 2;
+      rebased.mass_shift = ptm.mass_shift;
+      result.push_back(rebased);
+    }
+    return result;
   }
 
   std::vector<double> MS3FragmentMatcher::calibrateAndScore(
-    const std::vector<const DeconvolvedSpectrum*>& /*variant_spectra*/,
-    const std::string& /*protein_sequence*/,
-    const ProteoformContext& /*ctx*/,
-    char /*fragment_ion_type*/,
-    int /*fragment_ion_index*/,
-    double /*loose_tolerance_ppm*/,
-    double /*tight_tolerance_ppm*/)
+    const std::vector<const DeconvolvedSpectrum*>& variant_spectra,
+    const std::string& protein_sequence,
+    const ProteoformContext& ctx,
+    char fragment_ion_type,
+    int fragment_ion_index,
+    double loose_tolerance_ppm,
+    double tight_tolerance_ppm)
   {
-    return {}; // stub — implemented in Task 4
+    std::vector<double> scores(variant_spectra.size(), 0.0);
+
+    // Extract subsequence
+    std::string subseq = extractSubsequence(protein_sequence, ctx, fragment_ion_type, fragment_ion_index);
+    if (subseq.empty()) return scores;
+
+    // Determine subsequence start in proteoform (1-based)
+    int proteoform_length = ctx.region_end - ctx.region_start;
+    int subseq_start_1based;
+    if (fragment_ion_type == 'b' || fragment_ion_type == 'a' || fragment_ion_type == 'c')
+      subseq_start_1based = 1;
+    else
+      subseq_start_1based = proteoform_length - fragment_ion_index + 1;
+
+    // Rebase PTMs
+    auto rebased_ptms = rebasePTMSites(ctx.ptm_sites, subseq_start_1based, fragment_ion_index);
+
+    // Ion types
+    auto ion_types = getMS3IonTypes(fragment_ion_type);
+
+    // Compute theoretical masses once
+    auto theoretical = computeTheoreticalMasses(subseq, ion_types, rebased_ptms);
+    if (theoretical.empty()) return scores;
+
+    // Pass 1: loose matching for calibration
+    std::vector<double> all_ppm_errors;
+    for (size_t vi = 0; vi < variant_spectra.size(); ++vi)
+    {
+      if (variant_spectra[vi] == nullptr || variant_spectra[vi]->empty()) continue;
+      matchSpectrum(*variant_spectra[vi], theoretical, loose_tolerance_ppm, &all_ppm_errors);
+    }
+
+    // Compute median ppm error
+    double correction_factor = 1.0;
+    if (! all_ppm_errors.empty())
+    {
+      std::sort(all_ppm_errors.begin(), all_ppm_errors.end());
+      double median_ppm;
+      size_t mid = all_ppm_errors.size() / 2;
+      if (all_ppm_errors.size() % 2 == 0)
+        median_ppm = (all_ppm_errors[mid - 1] + all_ppm_errors[mid]) / 2.0;
+      else
+        median_ppm = all_ppm_errors[mid];
+
+      correction_factor = 1.0 / (1.0 + median_ppm * 1e-6);
+    }
+
+    // Pass 2: apply correction, match at tight tolerance
+    for (size_t vi = 0; vi < variant_spectra.size(); ++vi)
+    {
+      if (variant_spectra[vi] == nullptr || variant_spectra[vi]->empty()) continue;
+
+      // Create corrected copy
+      DeconvolvedSpectrum corrected(0);
+      for (Size pi = 0; pi < variant_spectra[vi]->size(); ++pi)
+      {
+        PeakGroup pg = (*variant_spectra[vi])[pi];
+        pg.setMonoisotopicMass(pg.getMonoMass() * correction_factor);
+        corrected.push_back(pg);
+      }
+
+      scores[vi] = static_cast<double>(matchSpectrum(corrected, theoretical, tight_tolerance_ppm));
+    }
+
+    return scores;
   }
 
 } // namespace OpenMS

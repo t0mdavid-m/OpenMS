@@ -288,4 +288,136 @@ START_SECTION(matchSpectrum)
 }
 END_SECTION
 
+START_SECTION(extractSubsequence)
+{
+  std::string protein = "ABCDEFGHIJ"; // 10 residues
+
+  MS3FragmentMatcher::ProteoformContext ctx;
+  ctx.region_start = 2;  // 0-based: proteoform is residues 2-7 = "CDEFGH"
+  ctx.region_end = 8;
+
+  // b3: first 3 residues of proteoform = "CDE"
+  std::string b3 = MS3FragmentMatcher::extractSubsequence(protein, ctx, 'b', 3);
+  TEST_EQUAL(b3, "CDE")
+
+  // y3: last 3 residues of proteoform = "FGH"
+  std::string y3 = MS3FragmentMatcher::extractSubsequence(protein, ctx, 'y', 3);
+  TEST_EQUAL(y3, "FGH")
+
+  // Full proteoform as b6
+  std::string b6 = MS3FragmentMatcher::extractSubsequence(protein, ctx, 'b', 6);
+  TEST_EQUAL(b6, "CDEFGH")
+
+  // Invalid: index too large
+  std::string bad = MS3FragmentMatcher::extractSubsequence(protein, ctx, 'b', 7);
+  TEST_EQUAL(bad, "")
+
+  // a-precursor treated same as b-precursor
+  std::string a3 = MS3FragmentMatcher::extractSubsequence(protein, ctx, 'a', 3);
+  TEST_EQUAL(a3, "CDE")
+}
+END_SECTION
+
+START_SECTION(rebasePTMSites)
+{
+  // Proteoform has 10 residues, PTM at positions 3-5 (1-based, ambiguous)
+  FragmentAnalysis::PTMSite ptm;
+  ptm.start_position = 3;
+  ptm.end_position = 5;
+  ptm.position = 4;
+  ptm.mass_shift = 80.0;
+
+  // Fixed PTM at position 7
+  FragmentAnalysis::PTMSite fixed;
+  fixed.start_position = 7;
+  fixed.end_position = 7;
+  fixed.position = 7;
+  fixed.mass_shift = 42.0;
+
+  std::vector<FragmentAnalysis::PTMSite> ptms = {ptm, fixed};
+
+  // b5 subsequence: positions 1-5 in proteoform
+  auto rebased = MS3FragmentMatcher::rebasePTMSites(ptms, 1, 5);
+  TEST_EQUAL(rebased.size(), 1) // only the ambiguous PTM overlaps; fixed at 7 is outside
+  TEST_EQUAL(rebased[0].start_position, 3) // 3 - 1 + 1 = 3
+  TEST_EQUAL(rebased[0].end_position, 5)   // 5 - 1 + 1 = 5
+  TEST_REAL_SIMILAR(rebased[0].mass_shift, 80.0)
+
+  // y5 subsequence: positions 6-10 in proteoform
+  auto rebased_y = MS3FragmentMatcher::rebasePTMSites(ptms, 6, 5);
+  TEST_EQUAL(rebased_y.size(), 1) // only fixed PTM at 7 overlaps
+  TEST_EQUAL(rebased_y[0].start_position, 2) // 7 - 6 + 1 = 2
+  TEST_EQUAL(rebased_y[0].end_position, 2)
+  TEST_REAL_SIMILAR(rebased_y[0].mass_shift, 42.0)
+
+  // Partial overlap: subsequence positions 4-8
+  auto rebased_mid = MS3FragmentMatcher::rebasePTMSites(ptms, 4, 5);
+  TEST_EQUAL(rebased_mid.size(), 2) // both PTMs overlap
+  // Ambiguous PTM [3,5] clipped to [4,5], rebased to [1,2]
+  TEST_EQUAL(rebased_mid[0].start_position, 1)
+  TEST_EQUAL(rebased_mid[0].end_position, 2)
+  // Fixed PTM [7,7] rebased to [4,4]
+  TEST_EQUAL(rebased_mid[1].start_position, 4)
+  TEST_EQUAL(rebased_mid[1].end_position, 4)
+}
+END_SECTION
+
+START_SECTION(calibrateAndScore)
+{
+  // Build a known sequence and theoretical masses
+  std::string protein = "ACDEFGHIKLMNPQRSTVWY"; // 20 residues
+  MS3FragmentMatcher::ProteoformContext ctx;
+  ctx.region_start = 0;
+  ctx.region_end = 20;
+
+  // Pretend we're fragmenting b10: first 10 residues
+  char frag_type = 'b';
+  int frag_index = 10;
+
+  std::string subseq = MS3FragmentMatcher::extractSubsequence(protein, ctx, frag_type, frag_index);
+  TEST_EQUAL(subseq, "ACDEFGHIKL")
+
+  auto ion_types = MS3FragmentMatcher::getMS3IonTypes(frag_type);
+  auto theoretical = MS3FragmentMatcher::computeTheoreticalMasses(subseq, ion_types);
+
+  // Create two variant spectra:
+  // Variant 0: 5 matching masses with +50 ppm shift (simulating systematic instrument drift)
+  // Variant 1: 3 matching masses with the same shift
+  double shift_factor = 1.0 + 50.0e-6;
+
+  DeconvolvedSpectrum var0(0);
+  for (int i = 0; i < 5 && i < static_cast<int>(theoretical.size()); ++i)
+  {
+    PeakGroup pg(1, 1, true);
+    pg.setMonoisotopicMass(theoretical[i].mass * shift_factor);
+    var0.push_back(pg);
+  }
+
+  DeconvolvedSpectrum var1(0);
+  for (int i = 0; i < 3 && i < static_cast<int>(theoretical.size()); ++i)
+  {
+    PeakGroup pg(1, 1, true);
+    pg.setMonoisotopicMass(theoretical[i].mass * shift_factor);
+    var1.push_back(pg);
+  }
+
+  std::vector<const DeconvolvedSpectrum*> variants = {&var0, &var1};
+
+  auto scores = MS3FragmentMatcher::calibrateAndScore(
+    variants, protein, ctx, frag_type, frag_index,
+    MS3FragmentMatcher::LOOSE_TOLERANCE_PPM, 10.0);
+
+  TEST_EQUAL(scores.size(), 2)
+  // After calibration (corrects the 50 ppm shift), matching at 10 ppm should succeed
+  TEST_TRUE(scores[0] >= 4.0)  // variant 0 had 5 masses, should match most
+  TEST_TRUE(scores[1] >= 2.0)  // variant 1 had 3 masses
+  TEST_TRUE(scores[0] > scores[1]) // variant 0 should score higher
+
+  // Without calibration (tight tolerance only), same masses would NOT match
+  // Verify by testing matchSpectrum directly at 10 ppm with unshifted theoretical
+  int direct_count = MS3FragmentMatcher::matchSpectrum(var0, theoretical, 10.0);
+  TEST_EQUAL(direct_count, 0) // 50 ppm shift exceeds 10 ppm tolerance
+}
+END_SECTION
+
 END_TEST
