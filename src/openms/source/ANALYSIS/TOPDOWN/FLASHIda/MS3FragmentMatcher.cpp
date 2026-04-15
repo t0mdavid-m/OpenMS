@@ -183,12 +183,62 @@ namespace OpenMS
   }
 
   int MS3FragmentMatcher::matchSpectrum(
-    const DeconvolvedSpectrum& /*spectrum*/,
-    const std::vector<TheoreticalMass>& /*theoretical*/,
-    double /*tolerance_ppm*/,
-    std::vector<double>* /*ppm_errors*/)
+    const DeconvolvedSpectrum& spectrum,
+    const std::vector<TheoreticalMass>& theoretical,
+    double tolerance_ppm,
+    std::vector<double>* ppm_errors)
   {
-    return 0; // stub — implemented in Task 3
+    if (spectrum.empty() || theoretical.empty()) return 0;
+
+    // Sort theoretical masses for binary search
+    std::vector<size_t> sorted_idx(theoretical.size());
+    std::iota(sorted_idx.begin(), sorted_idx.end(), 0);
+    std::sort(sorted_idx.begin(), sorted_idx.end(),
+      [&theoretical](size_t a, size_t b) { return theoretical[a].mass < theoretical[b].mass; });
+
+    std::vector<bool> theo_used(theoretical.size(), false);
+    int match_count = 0;
+
+    // For each deconvolved mass, find closest unused theoretical mass within tolerance
+    for (Size si = 0; si < spectrum.size(); ++si)
+    {
+      double obs_mass = spectrum[si].getMonoMass();
+      double tol_da = obs_mass * tolerance_ppm * 1e-6;
+
+      int best_theo_idx = -1;
+      double best_ppm = tolerance_ppm + 1.0;
+
+      // Binary search for candidates
+      for (size_t k = 0; k < sorted_idx.size(); ++k)
+      {
+        size_t ti = sorted_idx[k];
+        if (theo_used[ti]) continue;
+        double theo_mass = theoretical[ti].mass;
+        if (theo_mass < obs_mass - tol_da) continue;
+        if (theo_mass > obs_mass + tol_da) break;
+
+        double ppm_err = std::abs((obs_mass - theo_mass) / theo_mass) * 1e6;
+        if (ppm_err < best_ppm)
+        {
+          best_ppm = ppm_err;
+          best_theo_idx = static_cast<int>(ti);
+        }
+      }
+
+      if (best_theo_idx >= 0)
+      {
+        theo_used[best_theo_idx] = true;
+        ++match_count;
+        if (ppm_errors)
+        {
+          double signed_ppm = (obs_mass - theoretical[best_theo_idx].mass)
+                              / theoretical[best_theo_idx].mass * 1e6;
+          ppm_errors->push_back(signed_ppm);
+        }
+      }
+    }
+
+    return match_count;
   }
 
   std::string MS3FragmentMatcher::extractSubsequence(

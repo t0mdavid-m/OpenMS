@@ -225,4 +225,67 @@ START_SECTION(computeTheoreticalMasses_ambiguous_ptm)
 }
 END_SECTION
 
+START_SECTION(matchSpectrum)
+{
+  // Build theoretical masses from a known sequence
+  std::string seq = "ACDEF";
+  auto theoretical = MS3FragmentMatcher::computeTheoreticalMasses(seq, {"b", "y"});
+  // 4 b-ions + 4 y-ions = 8 theoretical masses
+
+  // Create a synthetic spectrum with 3 exact matches (b1, b2, y1) + 1 non-match
+  std::vector<double> obs_masses;
+  obs_masses.push_back(theoretical[0].mass);  // b1 — exact match
+  obs_masses.push_back(theoretical[1].mass);  // b2 — exact match
+  obs_masses.push_back(theoretical[4].mass);  // y1 — exact match
+  obs_masses.push_back(99999.0);              // garbage — no match
+
+  DeconvolvedSpectrum spec(0);
+  for (double m : obs_masses)
+  {
+    PeakGroup pg(1, 1, true);
+    pg.setMonoisotopicMass(m);
+    spec.push_back(pg);
+  }
+
+  int count = MS3FragmentMatcher::matchSpectrum(spec, theoretical, 10.0);
+  TEST_EQUAL(count, 3)
+
+  // Test with ppm errors
+  std::vector<double> ppm_errors;
+  int count2 = MS3FragmentMatcher::matchSpectrum(spec, theoretical, 10.0, &ppm_errors);
+  TEST_EQUAL(count2, 3)
+  TEST_EQUAL(ppm_errors.size(), 3)
+  // Exact matches should have ~0 ppm error
+  for (double e : ppm_errors)
+    TEST_TRUE(std::abs(e) < 0.01)
+
+  // Test with a systematic shift (50 ppm)
+  double shift_factor = 1.0 + 50.0e-6;
+  DeconvolvedSpectrum shifted_spec(0);
+  for (double m : obs_masses)
+  {
+    PeakGroup pg(1, 1, true);
+    pg.setMonoisotopicMass(m * shift_factor);
+    shifted_spec.push_back(pg);
+  }
+
+  // At 10 ppm tolerance, shifted masses should NOT match
+  int count_tight = MS3FragmentMatcher::matchSpectrum(shifted_spec, theoretical, 10.0);
+  TEST_EQUAL(count_tight, 0)
+
+  // At 100 ppm tolerance, shifted masses should match
+  std::vector<double> shift_errors;
+  int count_loose = MS3FragmentMatcher::matchSpectrum(shifted_spec, theoretical, 100.0, &shift_errors);
+  TEST_EQUAL(count_loose, 3)
+  // ppm errors should be ~50
+  for (double e : shift_errors)
+    TEST_REAL_SIMILAR(e, 50.0)
+
+  // Empty inputs
+  DeconvolvedSpectrum empty_spec(0);
+  TEST_EQUAL(MS3FragmentMatcher::matchSpectrum(empty_spec, theoretical, 10.0), 0)
+  TEST_EQUAL(MS3FragmentMatcher::matchSpectrum(spec, {}, 10.0), 0)
+}
+END_SECTION
+
 END_TEST
