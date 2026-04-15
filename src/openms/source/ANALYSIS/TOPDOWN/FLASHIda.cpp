@@ -100,7 +100,7 @@ FLASHIda::FLASHIda(char* arg) :
                             << "exploration_group_id\texploration_metric\t"
                             << "variant_index\ttotal_variants\t"
                             << "collision_energy\texploration_score\tremaining_ratio\t"
-                            << "deconv_masses\tdeconv_intensities\tparent_tracking_id\n";
+                            << "deconv_masses\tdeconv_intensities\tdeconv_min_charge\tdeconv_max_charge\tparent_tracking_id\n";
         results_tsv_stream_.flush();
       }
     }
@@ -378,6 +378,19 @@ FLASHIda::FLASHIda(char* arg) :
       {
         if (i > 0) results_tsv_stream_ << ";";
         results_tsv_stream_ << (*deconv_spectrum)[i].getIntensity();
+      }
+      results_tsv_stream_ << "\t";
+      for (size_t i = 0; i < deconv_spectrum->size(); i++)
+      {
+        if (i > 0) results_tsv_stream_ << ";";
+        results_tsv_stream_ << std::get<0>((*deconv_spectrum)[i].getAbsChargeRange());
+      }
+      results_tsv_stream_ << "\t";
+      for (size_t i = 0; i < deconv_spectrum->size(); i++)
+      {
+        if (i > 0) results_tsv_stream_ << ";";
+        results_tsv_stream_ << std::get<1>((*deconv_spectrum)[i].getAbsChargeRange());
+
       }
     }
     else
