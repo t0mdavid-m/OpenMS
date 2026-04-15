@@ -729,7 +729,7 @@ namespace
               });
 
     // === Diagnostic Output: Matched fragment ions ===
-    std::cout << "[runTagBasedFragmentMatching_] Matched " << matches.size() << " fragment ions:" << std::endl;
+    std::cout << "[runTagBasedFragmentMatching_] Matched " << matches.size() << " fragment ions (" << dspec.size() << " masses):" << std::endl;
     Size display_count = std::min(Size(10), matches.size());
     for (Size i = 0; i < display_count; ++i)
     {
