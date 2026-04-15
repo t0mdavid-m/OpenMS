@@ -199,7 +199,7 @@ namespace
     },
     "files": {
       "target_logs": [],
-      "fasta": "",
+      "fasta": "cytochrome_c.fasta",
       "inclusion_list": "",
       "ptm_list": ""
     },
