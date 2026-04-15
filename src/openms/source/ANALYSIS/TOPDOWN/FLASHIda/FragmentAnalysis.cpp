@@ -573,6 +573,11 @@ namespace
       // TODO: Why not end??
       end_pos = static_cast<int>(best_hit.getMetaValue("EndPosition"));
 
+    // Cache proteoform region
+    last_proteoform_info_.region_start = start_pos;  // 0-based, or -1 if not found
+    last_proteoform_info_.region_end = end_pos;       // 0-based exclusive, or -1
+    last_proteoform_info_.ptm_sites.clear();
+
     if (start_pos >= 0 && end_pos >= 0 && end_pos > start_pos)
     {
       // Truncated proteoform detected by FLASHExtender
@@ -635,6 +640,18 @@ namespace
         site.mass_shift = mod_masses[i];
         ptm_sites->push_back(site);
       }
+    }
+
+    // Always cache PTM sites (regardless of whether ptm_sites output was requested)
+    last_proteoform_info_.ptm_sites.clear();
+    for (Size i = 0; i < mod_masses.size(); ++i)
+    {
+      PTMSite site;
+      site.start_position = mod_starts[i];
+      site.end_position = mod_ends[i];
+      site.position = (site.start_position + site.end_position) / 2;
+      site.mass_shift = mod_masses[i];
+      last_proteoform_info_.ptm_sites.push_back(site);
     }
 
     // 8. Build local PTM sites for fragment matching

@@ -65,6 +65,17 @@ namespace OpenMS
       double mass_shift;   ///< Observed mass shift (modification mass)
     };
 
+    /// Cached result from the last runTagBasedFragmentMatching_ call
+    struct ProteoformInfo
+    {
+      int region_start = -1;  ///< 0-based start position in protein sequence (-1 = full sequence)
+      int region_end = -1;    ///< 0-based exclusive end position (-1 = full sequence)
+      std::vector<PTMSite> ptm_sites; ///< 1-based positions relative to proteoform
+    };
+
+    /// Get the proteoform region and PTM sites from the last tag-based matching call
+    const ProteoformInfo& getLastProteoformInfo() const { return last_proteoform_info_; }
+
     /// Constructor: takes a reference to the shared Config
     explicit FragmentAnalysis(const Config& config);
 
@@ -241,6 +252,7 @@ namespace OpenMS
 
   private:
     const Config& config_;
+    ProteoformInfo last_proteoform_info_;
 
     /// Internal struct for fragment match results from tag-based matching
     struct TagBasedFragmentMatch
