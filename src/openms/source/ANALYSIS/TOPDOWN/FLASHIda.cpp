@@ -868,11 +868,18 @@ FLASHIda::FLASHIda(char* arg) :
       out.scan_id = queue_.nextTrackingId();
       queue_.recordAGCTime();
 
+      uint64_t now_ms = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count());
+      out.enqueue_timestamp_ms = now_ms;
+      out.dequeue_timestamp_ms = now_ms;
+
       // Scan description: {3-char ID}A
       std::string id_str = ScanCommandQueue::encode(out.scan_id);
       std::snprintf(out.scan_description, 16, "%sA", id_str.c_str());
 
       std::cout << "[TRACK-CREATE] id=" << id_str << " ms_level=1 type=agc" << std::endl;
+      queue_.registerPending(out);
       writeScanCommandRow_(out);
       return 1;
     }
@@ -924,6 +931,12 @@ FLASHIda::FLASHIda(char* arg) :
       agc_cmd.scan_id = queue_.nextTrackingId();
       queue_.recordAGCTime();
 
+      uint64_t now_ms = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count());
+      agc_cmd.enqueue_timestamp_ms = now_ms;
+      agc_cmd.dequeue_timestamp_ms = now_ms;
+
       std::string agc_id_str = ScanCommandQueue::encode(agc_cmd.scan_id);
       std::snprintf(agc_cmd.scan_description, 16, "%sA", agc_id_str.c_str());
 
@@ -944,6 +957,7 @@ FLASHIda::FLASHIda(char* arg) :
       queue_.push(ms1_cmd);
 
       out = agc_cmd;
+      queue_.registerPending(out);
       writeScanCommandRow_(out);
       return 1;
     }
