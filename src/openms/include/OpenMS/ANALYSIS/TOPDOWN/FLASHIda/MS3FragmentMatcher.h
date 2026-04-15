@@ -10,7 +10,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
-#include <OpenMS/OPENMS_DLLAPI.h>
+#include <OpenMS/config.h>
 
 #include <string>
 #include <vector>
