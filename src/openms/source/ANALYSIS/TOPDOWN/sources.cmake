@@ -14,6 +14,7 @@ set(sources_list
         FLASHIda/Exploration.cpp
         FLASHIda/FAIMS.cpp
         FLASHIda/FragmentAnalysis.cpp
+        FLASHIda/MS3FragmentMatcher.cpp
         FLASHIda/PrecursorSelection.cpp
         FLASHIda/Quantification.cpp
         FLASHIda/ScanCommandQueue.cpp
