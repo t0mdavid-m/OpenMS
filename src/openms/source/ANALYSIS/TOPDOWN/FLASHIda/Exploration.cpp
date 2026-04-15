@@ -506,24 +506,25 @@ namespace OpenMS
       const double* mzs, const double* ints, int length,
       double* out_remaining_ratio, FragmentMatchResult* out_frag) const
   {
+    FragmentMatchResult fmr;
     switch (metric)
     {
       case ExplorationMetric::MassCount:
-        auto fmr = computeFragmentMatch_(spec);
+        fmr = computeFragmentMatch_(spec);
         if (out_frag) *out_frag = fmr;
         return computeMassCount_(spec);
       case ExplorationMetric::RemainingPrecursor:
-        auto fmr = computeFragmentMatch_(spec);
+        fmr = computeFragmentMatch_(spec);
         if (out_frag) *out_frag = fmr;
         return computeRemainingPrecursorScore_(group, mzs, ints, length, out_remaining_ratio);
       case ExplorationMetric::FragmentCount:
       {
-        auto fmr = computeFragmentMatch_(spec);
+        fmr = computeFragmentMatch_(spec);
         if (out_frag) *out_frag = fmr;
         return fmr.count;
       }
       default:
-        auto fmr = computeFragmentMatch_(spec);
+        fmr = computeFragmentMatch_(spec);
         if (out_frag) *out_frag = fmr;
         return computeMassCount_(spec);
     }
