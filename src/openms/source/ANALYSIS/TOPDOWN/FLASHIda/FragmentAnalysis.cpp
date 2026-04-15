@@ -411,6 +411,7 @@ namespace
     FLASHTaggerAlgorithm tagger;
     Param tagger_param = tagger.getDefaults();
     tagger_param.setValue("ion_type", ion_types_str);
+    tagger_param.setValue("skip_precursor_inference", "true")
     tagger.setParameters(tagger_param);
     tagger.run(dspec, ppm_tolerance);
 
