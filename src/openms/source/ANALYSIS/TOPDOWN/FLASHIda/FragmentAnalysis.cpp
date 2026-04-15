@@ -411,7 +411,6 @@ namespace
     FLASHTaggerAlgorithm tagger;
     Param tagger_param = tagger.getDefaults();
     tagger_param.setValue("ion_type", ion_types_str);
-    tagger_param.setValue("skip_precursor_inference", "true");
     tagger.setParameters(tagger_param);
     tagger.run(dspec, ppm_tolerance);
 
@@ -547,6 +546,7 @@ namespace
     Param extender_param = extender.getDefaults();
     extender_param.setValue("ion_type", ion_types_str);
     extender_param.setValue("max_mod_mass", max_mod_mass);
+    extender_param.setValue("skip_precursor_inference", "true");
     extender.setParameters(extender_param);
     extender.run(hits, dspec, spec_vec, vec_pro, rev_vec_pro, tags, ppm_tolerance, false);
 
