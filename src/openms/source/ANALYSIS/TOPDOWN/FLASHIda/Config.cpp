@@ -46,10 +46,12 @@ namespace OpenMS
     {},                           // scans (empty)
     SelectionMetric::None,        // selection
     10,                           // max_targets
+    0,                            // min_charge (no filter)
     ExplorationMetric::None,      // exploration
     20.0, 40.0, 5.0,              // ce_min, ce_max, ce_step
     {},                           // overrides
     10.0,                         // tolerance_ppm
+    10.0,                         // exploration_tolerance_ppm
     0.1                           // remaining_precursor_target
   };
 
