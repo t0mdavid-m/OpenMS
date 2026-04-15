@@ -190,6 +190,14 @@ namespace OpenMS
     /// Generate CE variant values from min/max/step
     std::vector<double> buildCEVariants_(double ce_min, double ce_max, double ce_step) const;
 
+    /// Result of fragment matching: count + protein identification info
+    struct FragmentMatchResult
+    {
+      double count = 0.0;
+      std::string matched_protein;
+      std::string proteoform_sequence;
+    };
+
     /// Dispatch to metric-specific scorer
     double computeExplorationScore_(ExplorationMetric metric, const DeconvolvedSpectrum& spec,
                                     const ExplorationGroup& group,
@@ -204,14 +212,6 @@ namespace OpenMS
     double computeRemainingPrecursorScore_(const ExplorationGroup& group,
                                            const double* mzs, const double* ints, int length,
                                            double* out_ratio = nullptr) const;
-
-    /// Result of fragment matching: count + protein identification info
-    struct FragmentMatchResult
-    {
-      double count = 0.0;
-      std::string matched_protein;
-      std::string proteoform_sequence;
-    };
 
     /// Score: number of matched fragment ions + protein info
     FragmentMatchResult computeFragmentMatch_(const DeconvolvedSpectrum& spec) const;
