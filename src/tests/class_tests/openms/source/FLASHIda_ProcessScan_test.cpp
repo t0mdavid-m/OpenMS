@@ -1549,7 +1549,7 @@ START_SECTION(processScan_ms1_min_charge_filter)
   for (const auto& scan : scans)
   {
     ida.processScan(scan.mzs.data(), scan.ints.data(), (int)scan.mzs.size(),
-                    scan.rt, 1, -50.0);
+                    scan.rt, 1, ("scan_" + scan.scan_id).c_str(), -50.0);
   }
 
   // With min_charge=99, no precursor should pass the filter
