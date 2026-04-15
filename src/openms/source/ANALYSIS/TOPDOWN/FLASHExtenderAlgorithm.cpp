@@ -52,7 +52,7 @@ namespace OpenMS
   {
     max_blind_mod_cntr_ = param_.getValue("max_blind_mod_count");
     max_mod_mass_ = param_.getValue("max_mod_mass");
-    skip_precursor_inference_ = param_.getValue("skip_precursor_inference") == "false";
+    skip_precursor_inference_ = param_.getValue("skip_precursor_inference") == "true";
 
     const auto inst = ModificationsDB::getInstance();
     candidate_blind_mod_map_.clear();
