@@ -472,7 +472,7 @@ START_SECTION(fragment_count_populated_for_fragment_count_metric)
 }
 END_SECTION
 
-START_SECTION(fragment_analysis_skipped_for_mass_count_metric)
+START_SECTION(fragment_analysis_populated_for_mass_count_metric)
 {
   // Same real cytochrome c spectrum that produces fragment matches
   auto scans = loadTsvScans(ms2_cytc_path);
@@ -497,10 +497,10 @@ START_SECTION(fragment_analysis_skipped_for_mass_count_metric)
   int tracking_id = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
   auto info = exploration.feedResultForTest(tracking_id, deconv.storedMS2(), 1.0, queue);
 
-  // MassCount metric: fragment analysis should NOT have run
-  TEST_EQUAL(info.fragment_count, 0)
-  TEST_EQUAL(info.matched_protein.empty(), true)
-  TEST_EQUAL(info.proteoform_sequence.empty(), true)
+  // MassCount metric: fragment analysis still runs (populates metadata for all metrics)
+  TEST_EQUAL(info.fragment_count > 0, true)
+  TEST_EQUAL(info.matched_protein.empty(), false)
+  TEST_EQUAL(info.proteoform_sequence == cytochrome_c_seq, true)
 }
 END_SECTION
 
