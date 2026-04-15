@@ -318,6 +318,9 @@ namespace OpenMS
         // Max targets
         cfg.max_targets = level_obj.value("max_targets", 10);
 
+        // Minimum charge for target selection
+        cfg.min_charge = level_obj.value("min_charge", 0);
+
         // Exploration (optional, MS2+ only; guard against JSON null)
         if (level_obj.contains("exploration") && !level_obj["exploration"].is_null() && level_num > 1)
         {

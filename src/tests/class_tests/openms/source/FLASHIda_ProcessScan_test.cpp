@@ -1465,4 +1465,98 @@ START_SECTION(processScan_ms1_max_targets_cap)
 }
 END_SECTION
 
+START_SECTION(processScan_ms1_min_charge_filter)
+{
+  // Config identical to standard_json but with ms1.min_charge = 99
+  // This should filter out ALL precursors since no precursor has charge >= 99
+  const char* min_charge_json = R"({
+    "deconvolution": {
+      "score_threshold": 0.0,
+      "tqscore_threshold": 0.9,
+      "min_charge": 4,
+      "max_charge": 50,
+      "min_mass": 500,
+      "max_mass": 50000,
+      "tol": [10, 10]
+    },
+    "precursor_selection": {
+      "RT_window": 180,
+      "target_mode": 0,
+      "IDScore": false,
+      "AllCharges": false,
+      "HCDEnergy": 29,
+      "strict_inclusion": false,
+      "tie_threshold": 0.1
+    },
+    "tagging": {
+      "min_tag_length": 3,
+      "max_tag_length": 8,
+      "max_ptm_count": 3,
+      "max_flanking_mass_diff": 50000
+    },
+    "quantification": {
+      "enabled": false,
+      "reporter_mz_tol": 0.002,
+      "fold_change_threshold": 1.4
+    },
+    "faims": {
+      "cv_values": [-50],
+      "max_cv_skip": 0,
+      "cv_precursor_threshold": 15
+    },
+    "ms_settings": {
+      "ms1": {
+        "analyzer": "Orbitrap",
+        "first_mass": 500,
+        "last_mass": 2000,
+        "resolution": 120000,
+        "agc_target": 800000,
+        "max_it": 246
+      },
+      "ms2": [
+        {
+          "analyzer": "Orbitrap",
+          "activation": "HCD",
+          "collision_energy": 29,
+          "resolution": 120000
+        }
+      ]
+    },
+    "scheduling": {
+      "cycle_time": { "enabled": false, "value_ms": 60000 },
+      "scan_timeout": { "enabled": false, "value_ms": 30000 }
+    },
+    "files": {
+      "target_logs": [],
+      "fasta": "",
+      "inclusion_list": "",
+      "ptm_list": ""
+    },
+    "conditional_ms2": false,
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_targets": 3, "min_charge": 99 },
+      "ms2": { "selection": "none" },
+      "ms3": { "selection": "none" }
+    }
+  })";
+
+  FLASHIda ida(const_cast<char*>(min_charge_json));
+
+  // Load same MS1 scans that normally produce commands
+  auto scans = loadTsvScans("../../FlashIDA/test-data/ms1_standard.txt");
+  ABORT_IF(scans.empty())
+
+  for (const auto& scan : scans)
+  {
+    ida.processScan(scan.mzs.data(), scan.ints.data(), (int)scan.mzs.size(),
+                    scan.rt, 1, -50.0);
+  }
+
+  // With min_charge=99, no precursor should pass the filter
+  ScanCommand cmd{};
+  int result = ida.getNextScanCommand(cmd);
+  TEST_EQUAL(result, 0)  // no commands generated
+}
+END_SECTION
+
 END_TEST

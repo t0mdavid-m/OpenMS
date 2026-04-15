@@ -730,6 +730,89 @@ namespace
   const std::string ms2_tsv_path = "../../FlashIDA/test-data/spectra/ms2_hcd_fragment.txt";
   const std::string ms2_cytc_path = "../../FlashIDA/test-data/spectra/ms2_cytc_scan149.txt";
 
+  // Config with ms2.min_charge set impossibly high — all fragments should be filtered
+  const char* ms2_min_charge_config = R"({
+    "deconvolution": {
+      "score_threshold": 0.0,
+      "tqscore_threshold": 0.9,
+      "min_charge": 1,
+      "max_charge": 50,
+      "min_mass": 100,
+      "max_mass": 50000,
+      "tol": [10, 10, 10]
+    },
+    "precursor_selection": {
+      "RT_window": 180,
+      "target_mode": 0,
+      "IDScore": false,
+      "AllCharges": false,
+      "HCDEnergy": 29,
+      "strict_inclusion": false,
+      "tie_threshold": 0.1
+    },
+    "tagging": {
+      "min_tag_length": 3,
+      "max_tag_length": 8,
+      "max_ptm_count": 3,
+      "max_flanking_mass_diff": 50000
+    },
+    "quantification": {
+      "enabled": false,
+      "reporter_mz_tol": 0.002,
+      "fold_change_threshold": 1.4
+    },
+    "faims": {
+      "cv_values": [-50],
+      "max_cv_skip": 0,
+      "cv_precursor_threshold": 15
+    },
+    "ms_settings": {
+      "ms1": {
+        "analyzer": "Orbitrap",
+        "first_mass": 500,
+        "last_mass": 2000,
+        "resolution": 120000,
+        "agc_target": 800000,
+        "max_it": 246
+      },
+      "ms2": [
+        {
+          "analyzer": "Orbitrap",
+          "activation": "HCD",
+          "collision_energy": 29,
+          "resolution": 120000
+        }
+      ],
+      "ms3": [
+        {
+          "analyzer": "Orbitrap",
+          "activation": "HCD",
+          "collision_energy": 35,
+          "resolution": 60000
+        }
+      ]
+    },
+    "scheduling": {
+      "cycle_time": { "enabled": false, "value_ms": 60000 },
+      "scan_timeout": { "enabled": false, "value_ms": 30000 }
+    },
+    "files": {
+      "target_logs": [],
+      "fasta": "",
+      "inclusion_list": "",
+      "ptm_list": ""
+    },
+    "ms3": {
+      "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
+    },
+    "conditional_ms2": false,
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_targets": 3 },
+      "ms2": { "selection": "intensity", "max_targets": 3, "min_charge": 99 },
+      "ms3": { "selection": "none" }
+    }
+  })";
+
   // Config with 3-entry tol and MS2 exploration tolerance override
   const char* exploration_tolerance_config = R"({
     "deconvolution": {
@@ -1837,6 +1920,35 @@ START_SECTION(tol_validation_insufficient_entries)
     }
   })";
   TEST_EXCEPTION(std::invalid_argument, Config cfg{std::string(insufficient_tol_config)})
+}
+END_SECTION
+
+START_SECTION(initiateNextLevel_ms2_min_charge_filters_fragments)
+{
+  Config cfg{std::string(ms2_min_charge_config)};
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+
+  // Load real MS2 spectrum that normally produces fragment matches
+  auto scans = loadTsvScans(ms2_tsv_path);
+  ABORT_IF(scans.empty())
+
+  // Deconvolve the MS2 spectrum
+  Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
+  for (const auto& scan : scans)
+  {
+    deconv.deconvolveMSn(scan.mzs.data(), scan.ints.data(), (int)scan.mzs.size(),
+                         scan.rt, 12000.0, 10);
+  }
+
+  auto precursor_pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  ScanCommand ms2_ctx = queue.buildMS2(precursor_pg, 3, cfg.level(2).scans[0]);
+
+  // initiateNextLevel processes MS2 results and picks fragments for MS3
+  // With ms2.min_charge=99, ALL fragments should be filtered out
+  auto nlr = exploration.initiateNextLevel(2, deconv.storedMS2(), -50.0, queue, &ms2_ctx);
+  TEST_EQUAL(static_cast<int>(nlr.commands.size()), 0)  // no commands — all fragments filtered by charge
 }
 END_SECTION
 

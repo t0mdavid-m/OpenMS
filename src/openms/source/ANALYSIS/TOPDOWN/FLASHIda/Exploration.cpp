@@ -472,12 +472,16 @@ namespace OpenMS
     // Build commands for each selected fragment target
     ScanConfig next_scan_config = next_cfg.scans[0];
 
+    int charge_floor = this_cfg.min_charge;
+
     if (config_.hasExploration(next_level))
     {
       // Recursive exploration at next level
       for (int ti = 0; ti < num_targets; ++ti)
       {
         int abs_charge = std::abs(charges[ti]);
+        if (charge_floor > 0 && abs_charge < charge_floor)
+          continue;
         PeakGroup frag_pg(abs_charge, abs_charge, true);
         frag_pg.setMonoisotopicMass(masses[ti]);
         FLASHHelperClasses::LogMzPeak lp_lo;
@@ -501,6 +505,8 @@ namespace OpenMS
       {
         double frag_mz = (wstarts[ti] + wends[ti]) / 2.0;
         int frag_charge = std::abs(charges[ti]);
+        if (charge_floor > 0 && frag_charge < charge_floor)
+          continue;
         double iso_width = wends[ti] - wstarts[ti];
 
         ScanCommand cmd;

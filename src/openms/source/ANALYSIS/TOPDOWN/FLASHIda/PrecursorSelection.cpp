@@ -427,6 +427,10 @@ namespace OpenMS
             score = pg.getQscore();
           }
 
+          // Per-level charge filter: ms1.min_charge controls what MS1 picks
+          if (config_.level(ms_level).min_charge > 0 && charge < config_.level(ms_level).min_charge)
+            continue;
+
           double mass = pg.getMonoMass();
 
           auto [mz1, mz2] = pg.getMzRange(charge);

@@ -92,6 +92,7 @@ namespace OpenMS
     std::vector<ScanConfig> scans;  ///< [0]=primary, [1]=conditional follow-up
     SelectionMetric selection = SelectionMetric::Intensity;
     int max_targets = 10;
+    int min_charge = 0;  ///< Minimum charge for target selection (0 = no filter)
 
     ExplorationMetric exploration = ExplorationMetric::None;
     double ce_min = 20.0;
