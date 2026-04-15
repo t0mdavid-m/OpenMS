@@ -46,6 +46,7 @@ int main()
   std::printf("ScanCommand.scan_description.offset=%zu\n", offsetof(ScanCommand, scan_description));
   std::printf("ScanCommand.stages.offset=%zu\n", offsetof(ScanCommand, stages));
   std::printf("ScanCommand.enqueue_timestamp_ms.offset=%zu\n", offsetof(ScanCommand, enqueue_timestamp_ms));
+  std::printf("ScanCommand.dequeue_timestamp_ms.offset=%zu\n", offsetof(ScanCommand, dequeue_timestamp_ms));
   std::printf("ScanCommand.qscore.offset=%zu\n", offsetof(ScanCommand, qscore));
   std::printf("ScanCommand.mono_mass.offset=%zu\n", offsetof(ScanCommand, mono_mass));
   std::printf("ScanCommand.charge_cos.offset=%zu\n", offsetof(ScanCommand, charge_cos));

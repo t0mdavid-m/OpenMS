@@ -59,8 +59,8 @@ namespace OpenMS
   static_assert(sizeof(IsolationStage) == 80, "IsolationStage must be 80 bytes for P/Invoke");
 
   /// Blittable struct representing a complete scan command for the instrument.
-  /// Layout: 1248 (existing) + 8 (microscans+pad3) + 24 (rf_lens+source_cid+source_cid_scaling)
-  ///       + 64 (data_type+scan_rate) + 4 (parent_scan_id) + 700 (reserved) = 2048.
+  /// Layout: 1248 (existing) + 8 (dequeue_timestamp_ms) + 8 (microscans+pad3) + 24 (rf_lens+source_cid+source_cid_scaling)
+  ///       + 64 (data_type+scan_rate) + 4 (parent_scan_id) + 692 (reserved) = 2048.
   struct OPENMS_DLLAPI ScanCommand
   {
     int32_t scan_id;             ///< Unique tracking ID (encoded as 3-char string in scan description)
@@ -77,7 +77,8 @@ namespace OpenMS
     char analyzer[32];           ///< Mass analyzer name (e.g., "Orbitrap", "IonTrap")
     char scan_description[256];  ///< Human-readable description (includes tracking ID)
     IsolationStage stages[MAX_ISOLATION_STAGES]; ///< Isolation stages array
-    uint64_t enqueue_timestamp_ms; ///< Timestamp when command was enqueued (steady_clock ms)
+    uint64_t enqueue_timestamp_ms;  ///< Timestamp when command was enqueued (steady_clock ms)
+    uint64_t dequeue_timestamp_ms;  ///< Timestamp when command was dequeued/sent to instrument (steady_clock ms)
 
     // Precursor scoring data (populated by buildMS2Command_ for diagnostic output)
     double qscore;                  ///< Quality score from PeakGroup::getQscore()
@@ -101,7 +102,7 @@ namespace OpenMS
     char data_type[32];            ///< Data type (e.g., "Centroid", "Profile"; empty = method default)
     char scan_rate[32];            ///< Scan rate (e.g., "Normal", "Turbo"; empty = method default)
     char parent_scan_id[4];        ///< Parent scan's encoded tracking ID (3 chars + null; empty for MS1)
-    char reserved_[700];           ///< Reserved for future fields (consume from here, never change total size)
+    char reserved_[692];           ///< Reserved for future fields (consume from here, never change total size)
   };
   static_assert(sizeof(ScanCommand) == 2048, "ScanCommand must be 2048 bytes for P/Invoke");
 
