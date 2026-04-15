@@ -49,6 +49,8 @@ namespace OpenMS
     0,                            // min_charge (no filter)
     ExplorationMetric::None,      // exploration
     20.0, 40.0, 5.0,              // ce_min, ce_max, ce_step
+    0.0, 0.0, 1.0,                // rt_min, rt_max, rt_step
+    {},                           // activations
     {},                           // overrides
     10.0,                         // tolerance_ppm
     10.0,                         // exploration_tolerance_ppm
@@ -345,6 +347,14 @@ namespace OpenMS
           cfg.ce_max = expl_obj.value("ce_max", 40.0);
           cfg.ce_step = expl_obj.value("ce_step", 5.0);
           cfg.remaining_precursor_target = expl_obj.value("remaining_precursor_target", 0.1);
+          cfg.rt_min = expl_obj.value("rt_min", 0.0);
+          cfg.rt_max = expl_obj.value("rt_max", 0.0);
+          cfg.rt_step = expl_obj.value("rt_step", 1.0);
+          if (expl_obj.contains("activations") && expl_obj["activations"].is_array())
+          {
+            for (const auto& a : expl_obj["activations"])
+              cfg.activations.push_back(a.get<std::string>());
+          }
           if (expl_obj.contains("overrides") && expl_obj["overrides"].is_object())
           {
             const auto& ov_obj = expl_obj["overrides"];
@@ -438,6 +448,33 @@ namespace OpenMS
             "SelectionMetric at level " + std::to_string(lvl) +
             " requires a non-empty protein_sequence in the ms3 config section. "
             "Fragment matching is the default for all MSn>=2 selection.");
+    }
+
+    // Validate that each exploration activation type has its required sweep range
+    for (const auto& [lvl, cfg] : levels_)
+    {
+      if (cfg.exploration == ExplorationMetric::None) continue;
+
+      // If activations is empty, default to base scan config activation
+      std::vector<std::string> acts = cfg.activations;
+      if (acts.empty() && !cfg.scans.empty())
+        acts.push_back(cfg.scans[0].activation);
+
+      for (const auto& act : acts)
+      {
+        bool needs_ce = (act == "HCD" || act == "CID" || act == "EThcD");
+        bool needs_rt = (act == "ETD" || act == "EThcD");
+
+        if (needs_ce && cfg.ce_max <= cfg.ce_min)
+          throw std::invalid_argument(
+              "Exploration activation '" + act + "' at level " + std::to_string(lvl) +
+              " requires ce_min < ce_max for CE sweep.");
+
+        if (needs_rt && cfg.rt_max <= cfg.rt_min)
+          throw std::invalid_argument(
+              "Exploration activation '" + act + "' at level " + std::to_string(lvl) +
+              " requires rt_min < rt_max for RT sweep.");
+      }
     }
   }
 
