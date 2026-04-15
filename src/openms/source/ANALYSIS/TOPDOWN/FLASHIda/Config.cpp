@@ -67,6 +67,9 @@ namespace OpenMS
       else if (key == "first_mass") first_mass = std::stod(val);
       else if (key == "last_mass") last_mass = std::stod(val);
       else if (key == "max_it") max_it = std::stod(val);
+      else if (key == "reaction_time") reaction_time = std::stod(val);
+      else if (key == "reagent_max_it") reagent_max_it = std::stod(val);
+      else if (key == "reagent_agc_target") reagent_agc_target = static_cast<int>(std::stod(val));
     }
   }
 
@@ -247,6 +250,9 @@ namespace OpenMS
         ms2_scan.source_cid_scaling = m.value("source_cid_scaling", 0.0);
         ms2_scan.data_type = m.value("data_type", std::string(""));
         ms2_scan.scan_rate = m.value("scan_rate", std::string(""));
+        ms2_scan.reaction_time = m.value("reaction_time", 0.0);
+        ms2_scan.reagent_max_it = m.value("reagent_max_it", 0.0);
+        ms2_scan.reagent_agc_target = m.value("reagent_agc_target", 0);
         levels_[2].scans.push_back(ms2_scan);
       }
     }
@@ -273,6 +279,9 @@ namespace OpenMS
         ms3_scan.source_cid_scaling = m.value("source_cid_scaling", 0.0);
         ms3_scan.data_type = m.value("data_type", std::string(""));
         ms3_scan.scan_rate = m.value("scan_rate", std::string(""));
+        ms3_scan.reaction_time = m.value("reaction_time", 0.0);
+        ms3_scan.reagent_max_it = m.value("reagent_max_it", 0.0);
+        ms3_scan.reagent_agc_target = m.value("reagent_agc_target", 0);
         levels_[3].scans.push_back(ms3_scan);
       }
     }

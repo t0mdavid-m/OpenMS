@@ -229,6 +229,9 @@ namespace OpenMS
     std::strncpy(cmd.stages[0].activation_type, scan_config.activation.c_str(),
                  sizeof(cmd.stages[0].activation_type) - 1);
     cmd.stages[0].activation_type[sizeof(cmd.stages[0].activation_type) - 1] = '\0';
+    cmd.stages[0].reaction_time = scan_config.reaction_time;
+    cmd.stages[0].reagent_max_it = scan_config.reagent_max_it;
+    cmd.stages[0].reagent_agc_target = scan_config.reagent_agc_target;
 
     // Scan description: {3-char ID}R{mass_kDa:.1f}@{charge}
     std::string id_str = encode(id);
@@ -314,6 +317,9 @@ namespace OpenMS
     cmd.stages[1].collision_energy = static_cast<double>(ms3_config.collision_energy);
     std::strncpy(cmd.stages[1].activation_type, ms3_config.activation.c_str(), sizeof(cmd.stages[1].activation_type) - 1);
     cmd.stages[1].activation_type[sizeof(cmd.stages[1].activation_type) - 1] = '\0';
+    cmd.stages[1].reaction_time = ms3_config.reaction_time;
+    cmd.stages[1].reagent_max_it = ms3_config.reagent_max_it;
+    cmd.stages[1].reagent_agc_target = ms3_config.reagent_agc_target;
 
     // Description: {3-char ID}R{frag_mass_kDa:.1f}@{frag_charge}[{ion_type}{frag_index}]
     std::string id_str = encode(id);

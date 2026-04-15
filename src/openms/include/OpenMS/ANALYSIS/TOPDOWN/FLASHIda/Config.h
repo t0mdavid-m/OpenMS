@@ -81,6 +81,9 @@ namespace OpenMS
     double source_cid_scaling = 0;
     std::string data_type;
     std::string scan_rate;
+    double reaction_time = 0;          ///< Ion/ion reaction time (ms), 0 = not used (ETD)
+    double reagent_max_it = 0;         ///< Reagent max injection time (ms), 0 = not used (ETD)
+    int reagent_agc_target = 0;        ///< Reagent AGC target, 0 = not used (ETD)
 
     /// Apply string-keyed overrides to matching fields (exploration overrides)
     void applyOverrides(const std::unordered_map<std::string, std::string>& overrides);
@@ -98,6 +101,10 @@ namespace OpenMS
     double ce_min = 20.0;
     double ce_max = 40.0;
     double ce_step = 5.0;
+    double rt_min = 0;                 ///< Reaction time sweep min (ms), 0 = no RT sweep
+    double rt_max = 0;                 ///< Reaction time sweep max (ms)
+    double rt_step = 1.0;              ///< Reaction time sweep step (ms)
+    std::vector<std::string> activations;  ///< Activation types to sweep (e.g. {"HCD","ETD"})
     std::unordered_map<std::string, std::string> overrides;
     double tolerance_ppm = 10.0;
     double exploration_tolerance_ppm = 10.0;  ///< Resolved exploration tolerance (from overrides or base tol)
