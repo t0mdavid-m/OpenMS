@@ -38,6 +38,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Deconvolution.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 
@@ -96,6 +97,7 @@ namespace OpenMS
       ScanCommand originating_cmd{};  ///< MS2 context for buildMS3 (stage 0)
       char fragment_ion_type = '\0';   ///< Fragment ion type (e.g. 'b', 'y') for MS3 scan description
       int fragment_ion_index = 0;      ///< Fragment ion index for MS3 scan description
+      MS3FragmentMatcher::ProteoformContext proteoform_ctx; ///< Cached MS2 proteoform for MS3 scoring
     };
 
     /// Lookup reference from tracking ID to exploration group + variant
@@ -141,7 +143,8 @@ namespace OpenMS
     std::vector<ScanCommand> initiate(int msn_level, const PeakGroup& pg, int charge,
                                       double faims_cv, ScanCommandQueue& queue,
                                       const ScanCommand* ms_ctx = nullptr,
-                                      char ion_type = '\0', int frag_index = 0);
+                                      char ion_type = '\0', int frag_index = 0,
+                                      const MS3FragmentMatcher::ProteoformContext& proto_ctx = {});
 
     /// Process returning exploration variant: deconvolve with correct precursor context,
     /// score, select winner, trigger next level. Returns FeedResultInfo with commands and metadata.

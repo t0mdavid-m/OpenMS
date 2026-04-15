@@ -33,6 +33,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Exploration.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
 
 #include <OpenMS/DATASTRUCTURES/ListUtils.h>
 
@@ -65,7 +66,8 @@ namespace OpenMS
 
   std::vector<ScanCommand> Exploration::initiate(int msn_level, const PeakGroup& pg, int charge,
       double faims_cv, ScanCommandQueue& queue, const ScanCommand* ms_ctx,
-      char ion_type, int frag_index)
+      char ion_type, int frag_index,
+      const MS3FragmentMatcher::ProteoformContext& proto_ctx)
   {
     std::vector<ScanCommand> commands;
 
@@ -104,6 +106,7 @@ namespace OpenMS
     if (ms_ctx != nullptr) group.originating_cmd = *ms_ctx;
     group.fragment_ion_type = ion_type;
     group.fragment_ion_index = frag_index;
+    group.proteoform_ctx = proto_ctx;
 
     // Build base ScanConfig from the level's primary scan config, then apply overrides
     ScanConfig base_config = cfg.scans[0];
@@ -296,6 +299,29 @@ namespace OpenMS
                                     [](const ExplorationVariant& x){ return x.received; });
     if (!all_received) return info;
 
+    // MS3 FragmentCount: batch re-score with calibrated subsequence matching
+    if (group.exploration_metric == ExplorationMetric::FragmentCount && group.msn_level >= 3)
+    {
+      std::vector<const DeconvolvedSpectrum*> variant_spectra;
+      for (auto& var : group.variants)
+        variant_spectra.push_back(var.received ? &var.result : nullptr);
+
+      auto calibrated_scores = MS3FragmentMatcher::calibrateAndScore(
+        variant_spectra,
+        config_.targeting().protein_sequence,
+        group.proteoform_ctx,
+        group.fragment_ion_type,
+        group.fragment_ion_index,
+        MS3FragmentMatcher::LOOSE_TOLERANCE_PPM,
+        config_.level(group.msn_level).tolerance_ppm);
+
+      for (size_t vi = 0; vi < calibrated_scores.size(); ++vi)
+      {
+        group.variants[vi].score = calibrated_scores[vi];
+        group.variants[vi].fragment_count = static_cast<int>(calibrated_scores[vi]);
+      }
+    }
+
     int best_idx = -1;
     double best_score = -1.0;
     for (int i = 0; i < static_cast<int>(group.variants.size()); ++i)
@@ -409,6 +435,21 @@ namespace OpenMS
         break;
     }
 
+    // Cache proteoform context for MS3 subsequence scoring
+    MS3FragmentMatcher::ProteoformContext proto_ctx;
+    if (next_level >= 3)
+    {
+      const auto& pinfo = fragments_.getLastProteoformInfo();
+      proto_ctx.region_start = pinfo.region_start;
+      proto_ctx.region_end = pinfo.region_end;
+      proto_ctx.ptm_sites = pinfo.ptm_sites;
+      // If no truncation detected, use full protein sequence bounds
+      if (proto_ctx.region_start < 0)
+        proto_ctx.region_start = 0;
+      if (proto_ctx.region_end < 0)
+        proto_ctx.region_end = static_cast<int>(seq.size());
+    }
+
     // Populate fragment matching metadata
     nlr.fragment_count = found;
     if (!seq.empty() && found > 0)
@@ -449,7 +490,7 @@ namespace OpenMS
         frag_pg.push_back(lp_hi);
 
         auto sub_cmds = initiate(next_level, frag_pg, std::abs(charges[ti]), faims_cv, queue, ms_ctx,
-                                 ion_types[ti], frag_indices[ti]);
+                                 ion_types[ti], frag_indices[ti], proto_ctx);
         nlr.commands.insert(nlr.commands.end(), sub_cmds.begin(), sub_cmds.end());
       }
     }
