@@ -155,7 +155,7 @@ START_SECTION(concurrent_build_resolve)
 
   const int N = 100;
 
-  // Phase 1: build all commands and register in pending map (single-threaded)
+  // Phase 1: build and push all commands (single-threaded)
   ScanConfig sc;
   sc.collision_energy = 29;
   sc.activation = "HCD";
@@ -171,6 +171,14 @@ START_SECTION(concurrent_build_resolve)
     ScanCommand cmd = queue.buildMS2(pg, 10, sc);
     built_ids[i] = cmd.scan_id;
     queue.push(cmd);
+  }
+
+  // Phase 1b: dequeue all commands so they enter pending_scan_map_
+  // (push() only enqueues; dequeue() stamps dequeue_timestamp_ms and inserts into map)
+  for (int i = 0; i < N; ++i)
+  {
+    auto dequeued = queue.dequeue();
+    TEST_EQUAL(dequeued.has_value(), true)
   }
 
   // Phase 2: 4 resolver threads race to resolve
