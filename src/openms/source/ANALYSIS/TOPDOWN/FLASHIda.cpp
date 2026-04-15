@@ -94,7 +94,8 @@ FLASHIda::FLASHIda(char* arg) :
                              << "collision_energy\tactivation\tqscore\tcharge_cos\tcharge_snr\t"
                              << "iso_cos\tsnr\tcharge_score\tppm_error\tprecursor_intensity\t"
                              << "peakgroup_intensity\thcd_energy\tparent_tracking_id\t"
-                             << "ion_type\tion_index\n";
+                             << "ion_type\tion_index\t"
+                             << "reaction_time\treagent_max_it\treagent_agc_target\n";
         commands_tsv_stream_.flush();
       }
     }
@@ -110,6 +111,7 @@ FLASHIda::FLASHIda(char* arg) :
                             << "exploration_group_id\texploration_metric\t"
                             << "variant_index\ttotal_variants\t"
                             << "collision_energy\texploration_score\tremaining_ratio\t"
+                            << "activation_type\treaction_time\t"
                             << "deconv_masses\tdeconv_intensities\tdeconv_min_charge\tdeconv_max_charge\tparent_tracking_id\t"
                             << "dequeue_ts\tqueue_duration_ms\tinstrument_duration_ms\tprocessing_duration_ms\n";
         results_tsv_stream_.flush();
@@ -261,9 +263,10 @@ FLASHIda::FLASHIda(char* arg) :
     std::string scan_type = scanTypeFromDescription_(cmd);
 
     std::string charges, precursor_mzs, iso_widths, col_energies, activations;
+    std::string reaction_times, reagent_max_its, reagent_agc_targets;
     for (int i = 0; i < cmd.num_stages; ++i)
     {
-      if (i > 0) { charges += ";"; precursor_mzs += ";"; iso_widths += ";"; col_energies += ";"; activations += ";"; }
+      if (i > 0) { charges += ";"; precursor_mzs += ";"; iso_widths += ";"; col_energies += ";"; activations += ";"; reaction_times += ";"; reagent_max_its += ";"; reagent_agc_targets += ";"; }
       charges += std::to_string(cmd.stages[i].charge_state);
       std::ostringstream mz_os, iw_os, ce_os;
       mz_os << cmd.stages[i].precursor_mz;
@@ -273,6 +276,12 @@ FLASHIda::FLASHIda(char* arg) :
       iso_widths += iw_os.str();
       col_energies += ce_os.str();
       activations += cmd.stages[i].activation_type;
+      std::ostringstream rt_os, rmi_os;
+      rt_os << cmd.stages[i].reaction_time;
+      rmi_os << cmd.stages[i].reagent_max_it;
+      reaction_times += rt_os.str();
+      reagent_max_its += rmi_os.str();
+      reagent_agc_targets += std::to_string(cmd.stages[i].reagent_agc_target);
     }
 
     std::string parent_id(cmd.parent_scan_id);
@@ -321,7 +330,10 @@ FLASHIda::FLASHIda(char* arg) :
                          << cmd.hcd_energy << "\t"
                          << parent_id << "\t"
                          << ion_type << "\t"
-                         << ion_index << "\n";
+                         << ion_index << "\t"
+                         << reaction_times << "\t"
+                         << reagent_max_its << "\t"
+                         << reagent_agc_targets << "\n";
     commands_tsv_stream_.flush();
   }
 
@@ -337,7 +349,9 @@ FLASHIda::FLASHIda(char* arg) :
                                       int exploration_group_id, int exploration_metric,
                                       int variant_index, int total_variants,
                                       double collision_energy, double exploration_score,
-                                      double remaining_ratio)
+                                      double remaining_ratio,
+                                      const std::string& activation_type,
+                                      double reaction_time)
   {
     if (!results_tsv_stream_.is_open()) return;
 
@@ -378,6 +392,8 @@ FLASHIda::FLASHIda(char* arg) :
                         << collision_energy << "\t"
                         << exploration_score << "\t"
                         << remaining_ratio << "\t";
+    results_tsv_stream_ << activation_type << "\t"
+                        << reaction_time << "\t";
 
     // Deconvolved masses and intensities (semicolon-delimited)
     if (deconv_spectrum != nullptr && deconv_spectrum->size() > 0)
@@ -724,7 +740,8 @@ FLASHIda::FLASHIda(char* arg) :
                             info.tic_coverage, info.fragment_count,
                             info.group_id, info.exploration_metric,
                             info.variant_index, info.total_variants,
-                            info.collision_energy, info.score, info.remaining_ratio);
+                            info.collision_energy, info.score, info.remaining_ratio,
+                            info.activation_type, info.reaction_time);
 
         exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);
         return static_cast<int>(info.commands.size());
@@ -840,7 +857,8 @@ FLASHIda::FLASHIda(char* arg) :
                             info.tic_coverage, info.fragment_count,
                             info.group_id, info.exploration_metric,
                             info.variant_index, info.total_variants,
-                            info.collision_energy, info.score, info.remaining_ratio);
+                            info.collision_energy, info.score, info.remaining_ratio,
+                            info.activation_type, info.reaction_time);
 
         exploration_active_.store(exploration_.activeGroupCount() > 0,
                                   std::memory_order_release);

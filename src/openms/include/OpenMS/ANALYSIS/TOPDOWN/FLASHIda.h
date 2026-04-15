@@ -273,7 +273,9 @@ namespace OpenMS
                              int exploration_group_id = -1, int exploration_metric = 0,
                              int variant_index = -1, int total_variants = 0,
                              double collision_energy = 0.0, double exploration_score = -1.0,
-                             double remaining_ratio = -1.0);
+                             double remaining_ratio = -1.0,
+                             const std::string& activation_type = "",
+                             double reaction_time = 0.0);
 
     /// Derive scan_type string from scan_description
     static std::string scanTypeFromDescription_(const ScanCommand& cmd);
