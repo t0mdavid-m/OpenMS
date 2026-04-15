@@ -65,6 +65,7 @@ namespace OpenMS
     {
       int variant_index = -1;
       double collision_energy = 0.0;
+      double reaction_time = 0.0;
       std::string activation_type;
       std::string tracking_id;
       bool is_baseline = false;           ///< CE=0 reference scan for RemainingPrecursor
@@ -125,6 +126,8 @@ namespace OpenMS
       int variant_index = -1;
       int total_variants = 0;
       double collision_energy = 0.0;
+      std::string activation_type;
+      double reaction_time = 0.0;
       double score = -1.0;
       float tic_coverage = 0.0f;
       int fragment_count = 0;
@@ -191,8 +194,16 @@ namespace OpenMS
                                    const double* mzs, const double* ints, int length,
                                    double rt, ScanCommandQueue& queue);
 
-    /// Generate CE variant values from min/max/step
-    std::vector<double> buildCEVariants_(double ce_min, double ce_max, double ce_step) const;
+    /// Parameters for one variant in a multi-activation sweep
+    struct VariantParams
+    {
+      std::string activation;
+      double collision_energy = 0.0;
+      double reaction_time = 0.0;
+    };
+
+    /// Generate variants across activation types with CE and/or RT sweep
+    std::vector<VariantParams> buildVariants_(const MSLevelConfig& cfg, const ScanConfig& base_config) const;
 
     /// Result of fragment matching: count + protein identification info
     struct FragmentMatchResult

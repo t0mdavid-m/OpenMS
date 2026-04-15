@@ -56,12 +56,60 @@ namespace OpenMS
     exploration_deconv_ = std::make_unique<Deconvolution>(config, expl_tol);
   }
 
-  std::vector<double> Exploration::buildCEVariants_(double ce_min, double ce_max, double ce_step) const
+  std::vector<Exploration::VariantParams> Exploration::buildVariants_(
+      const MSLevelConfig& cfg, const ScanConfig& base_config) const
   {
+    std::vector<VariantParams> variants;
+
+    // Determine which activations to sweep
+    std::vector<std::string> acts = cfg.activations;
+    if (acts.empty())
+      acts.push_back(base_config.activation);
+
+    // Build CE and RT value arrays
     std::vector<double> ces;
-    for (double ce = ce_min; ce <= ce_max + 1e-9; ce += ce_step)
+    for (double ce = cfg.ce_min; ce <= cfg.ce_max + 1e-9; ce += cfg.ce_step)
       ces.push_back(ce);
-    return ces;
+
+    std::vector<double> rts;
+    if (cfg.rt_max > cfg.rt_min)
+    {
+      for (double rt = cfg.rt_min; rt <= cfg.rt_max + 1e-9; rt += cfg.rt_step)
+        rts.push_back(rt);
+    }
+
+    for (const auto& act : acts)
+    {
+      bool sweep_ce = (act == "HCD" || act == "CID" || act == "EThcD");
+      bool sweep_rt = (act == "ETD" || act == "EThcD");
+
+      if (sweep_ce && sweep_rt)
+      {
+        // Cross-product (EThcD)
+        for (double ce : ces)
+          for (double rt : rts)
+            variants.push_back({act, ce, rt});
+      }
+      else if (sweep_ce)
+      {
+        // CE-only (HCD/CID)
+        for (double ce : ces)
+          variants.push_back({act, ce, base_config.reaction_time});
+      }
+      else if (sweep_rt)
+      {
+        // RT-only (ETD)
+        for (double rt : rts)
+          variants.push_back({act, static_cast<double>(base_config.collision_energy), rt});
+      }
+      else
+      {
+        // Unknown activation — single variant with base config values
+        variants.push_back({act, static_cast<double>(base_config.collision_energy), base_config.reaction_time});
+      }
+    }
+
+    return variants;
   }
 
   std::vector<ScanCommand> Exploration::initiate(int msn_level, const PeakGroup& pg, int charge,
@@ -74,13 +122,18 @@ namespace OpenMS
     const auto& cfg = config_.level(msn_level);
     if (!config_.hasExploration(msn_level)) return commands;
 
-    std::vector<double> ces = buildCEVariants_(cfg.ce_min, cfg.ce_max, cfg.ce_step);
-    if (ces.empty()) return commands;
+    // Build base ScanConfig from the level's primary scan config, then apply overrides
+    ScanConfig base_config = cfg.scans[0];
+    base_config.applyOverrides(cfg.overrides);
 
-    // Prepend CE=0 baseline for RemainingPrecursor metric
+    auto variant_params = buildVariants_(cfg, base_config);
+    if (variant_params.empty()) return commands;
+
+    // Prepend baseline variant for RemainingPrecursor metric
     bool needs_baseline = (cfg.exploration == ExplorationMetric::RemainingPrecursor);
     if (needs_baseline)
-      ces.insert(ces.begin(), 0.0);
+      variant_params.insert(variant_params.begin(),
+                            {base_config.activation, 0.0, base_config.reaction_time});
 
     // Compute precursor_mz and isolation_width from PeakGroup
     auto [mz1, mz2] = pg.getMzRange(charge);
@@ -108,22 +161,22 @@ namespace OpenMS
     group.fragment_ion_index = frag_index;
     group.proteoform_ctx = proto_ctx;
 
-    // Build base ScanConfig from the level's primary scan config, then apply overrides
-    ScanConfig base_config = cfg.scans[0];
-    base_config.applyOverrides(cfg.overrides);
-
-    for (int i = 0; i < static_cast<int>(ces.size()); ++i)
+    for (int i = 0; i < static_cast<int>(variant_params.size()); ++i)
     {
+      const auto& vp = variant_params[i];
       ExplorationVariant v;
       v.variant_index = (needs_baseline && i == 0) ? -1 : (needs_baseline ? i - 1 : i);
-      v.collision_energy = ces[i];
+      v.collision_energy = vp.collision_energy;
+      v.reaction_time = vp.reaction_time;
       v.is_baseline = (needs_baseline && i == 0);
-      v.activation_type = base_config.activation;
+      v.activation_type = vp.activation;
 
       ScanConfig variant_config = base_config;
-      variant_config.collision_energy = static_cast<int>(ces[i]);
+      variant_config.collision_energy = static_cast<int>(vp.collision_energy);
+      variant_config.reaction_time = vp.reaction_time;
+      variant_config.activation = vp.activation;
 
-      int expl_priority = (msn_level >= 3) ? 1 : 2;  // MS3 variants = p1, MS2 variants = p2
+      int expl_priority = (msn_level >= 3) ? 1 : 2;
       ScanCommand cmd;
       if (msn_level >= 3 && ms_ctx != nullptr)
       {
@@ -158,7 +211,9 @@ namespace OpenMS
 
       std::cout << "[TRACK-CREATE] id=" << id_str
                 << " ms_level=" << msn_level << " type=exploration"
-                << " CE=" << ces[i] << std::endl;
+                << " activation=" << vp.activation
+                << " CE=" << vp.collision_energy
+                << " RT=" << vp.reaction_time << std::endl;
     }
 
     active_groups_[group.group_id] = std::move(group);
@@ -264,6 +319,8 @@ namespace OpenMS
     info.variant_index = v.variant_index;
     info.total_variants = real_variant_count;
     info.collision_energy = v.collision_energy;
+    info.activation_type = v.activation_type;
+    info.reaction_time = v.reaction_time;
     info.score = v.score;
     info.tic_coverage = v.tic_coverage;
     info.fragment_count = v.fragment_count;
@@ -340,7 +397,9 @@ namespace OpenMS
 
     std::cout << "[EXPL-WINNER] group=" << group.group_id
               << " winner_idx=" << best_idx
+              << " activation=" << group.variants[best_idx].activation_type
               << " CE=" << group.variants[best_idx].collision_energy
+              << " RT=" << group.variants[best_idx].reaction_time
               << " score=" << best_score << std::endl;
 
     const auto& level_config = config_.level(group.msn_level);
@@ -348,6 +407,7 @@ namespace OpenMS
     {
       ScanConfig prod_config = level_config.scans[0];
       prod_config.collision_energy = static_cast<int>(group.variants[best_idx].collision_energy);
+      prod_config.reaction_time = group.variants[best_idx].reaction_time;
       prod_config.activation = group.variants[best_idx].activation_type;
 
       ScanCommand prod_cmd;
