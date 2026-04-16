@@ -310,6 +310,90 @@ namespace OpenMS
     return result;
   }
 
+  std::vector<double> MS3FragmentMatcher::computeProteinPrefixMasses(
+    const std::string& protein_sequence,
+    const std::vector<FragmentAnalysis::PTMSite>& ptm_sites,
+    int proteoform_start)
+  {
+    int n = static_cast<int>(protein_sequence.size());
+    std::vector<double> prefix(n + 1, 0.0);
+    for (int i = 0; i < n; ++i)
+    {
+      const Residue* res = ResidueDB::getInstance()->getResidue(protein_sequence[i]);
+      double mass = (res != nullptr) ? res->getMonoWeight(Residue::Internal) : 0.0;
+      for (const auto& ptm : ptm_sites)
+      {
+        if (ptm.start_position != ptm.end_position) continue;
+        int abs_pos = ptm.start_position - 1 + proteoform_start;
+        if (abs_pos == i) mass += ptm.mass_shift;
+      }
+      prefix[i + 1] = prefix[i] + mass;
+    }
+    return prefix;
+  }
+
+  void MS3FragmentMatcher::computeEquivalentIon(
+    const std::string& protein_sequence,
+    const ProteoformContext& ctx,
+    char precursor_ion_type,
+    int precursor_ion_index,
+    const std::string& ms3_ion_type,
+    int ms3_ion_index,
+    double ms3_theoretical_mass,
+    const std::vector<double>& protein_prefix_masses,
+    std::string& equiv_type,
+    int& equiv_index,
+    double& mass_offset)
+  {
+    int P = static_cast<int>(protein_sequence.size());
+    int start = ctx.region_start;
+    int end = ctx.region_end;
+    int N = precursor_ion_index;
+    bool ms3_is_prefix = isPrefixIonType(ms3_ion_type);
+
+    if (precursor_ion_type == 'b' || precursor_ion_type == 'a' || precursor_ion_type == 'c')
+    {
+      if (ms3_is_prefix)
+      {
+        equiv_type = ms3_ion_type;
+        equiv_index = start + ms3_ion_index;
+      }
+      else
+      {
+        equiv_type = "b";
+        equiv_index = start + N - ms3_ion_index;
+      }
+    }
+    else
+    {
+      if (!ms3_is_prefix && ms3_ion_type != "yb" && ms3_ion_type != "ya")
+      {
+        equiv_type = "y";
+        equiv_index = P - end + ms3_ion_index;
+      }
+      else
+      {
+        equiv_type = "y";
+        equiv_index = P - end + N - ms3_ion_index;
+      }
+    }
+
+    double equiv_shift = getIonShift(equiv_type);
+    double theo_equiv = 0.0;
+    if (equiv_type == "b" || equiv_type == "a")
+    {
+      if (equiv_index >= 0 && equiv_index <= P)
+        theo_equiv = protein_prefix_masses[equiv_index] + equiv_shift;
+    }
+    else if (equiv_type == "y")
+    {
+      if (equiv_index >= 0 && equiv_index <= P)
+        theo_equiv = (protein_prefix_masses[P] - protein_prefix_masses[P - equiv_index]) + equiv_shift;
+    }
+
+    mass_offset = theo_equiv - ms3_theoretical_mass;
+  }
+
   std::vector<double> MS3FragmentMatcher::calibrateAndScore(
     const std::vector<const DeconvolvedSpectrum*>& variant_spectra,
     const std::string& protein_sequence,
@@ -317,7 +401,8 @@ namespace OpenMS
     char fragment_ion_type,
     int fragment_ion_index,
     double loose_tolerance_ppm,
-    double tight_tolerance_ppm)
+    double tight_tolerance_ppm,
+    std::vector<MatchResult>* detailed_results)
   {
     std::vector<double> scores(variant_spectra.size(), 0.0);
 
@@ -417,6 +502,19 @@ namespace OpenMS
                 << correction_factor << std::endl;
     }
 
+    // Precompute protein prefix masses for detailed results
+    std::vector<double> protein_prefix;
+    if (detailed_results != nullptr)
+    {
+      protein_prefix = computeProteinPrefixMasses(protein_sequence, ctx.ptm_sites, ctx.region_start);
+      detailed_results->resize(variant_spectra.size());
+      for (size_t vi = 0; vi < variant_spectra.size(); ++vi)
+      {
+        (*detailed_results)[vi].ppm_offset = median_ppm;
+        (*detailed_results)[vi].correction_factor = correction_factor;
+      }
+    }
+
     // Pass 2: apply correction, match at tight tolerance
     for (size_t vi = 0; vi < variant_spectra.size(); ++vi)
     {
@@ -437,6 +535,29 @@ namespace OpenMS
 
       std::vector<MatchDetail> details;
       scores[vi] = static_cast<double>(matchSpectrum(corrected, theoretical, tight_tolerance_ppm, nullptr, &details));
+
+      if (detailed_results != nullptr)
+      {
+        auto& mr = (*detailed_results)[vi];
+        mr.matches.reserve(details.size());
+        for (const auto& md : details)
+        {
+          FragmentMatch fm;
+          fm.ms3_ion_type = md.ion_type;
+          fm.ms3_ion_index = md.position;
+          fm.observed_mass = md.observed_mass;
+          double offset = 0.0;
+          computeEquivalentIon(protein_sequence, ctx,
+                               fragment_ion_type, fragment_ion_index,
+                               md.ion_type, md.position, md.theoretical_mass,
+                               protein_prefix,
+                               fm.ms2_equiv_type, fm.ms2_equiv_index, offset);
+          fm.adjusted_mass = md.observed_mass + offset;
+          mr.matches.push_back(fm);
+        }
+        std::sort(mr.matches.begin(), mr.matches.end(),
+          [](const FragmentMatch& a, const FragmentMatch& b){ return a.observed_mass < b.observed_mass; });
+      }
 
       // --- Log: per-variant matches ---
       std::cout << "[calibrateAndScore] Variant " << vi << ": "
