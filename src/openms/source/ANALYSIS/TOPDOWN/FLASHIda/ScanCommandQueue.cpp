@@ -167,10 +167,11 @@ namespace OpenMS
     cmd.is_agc = 1;
     cmd.num_stages = 0;
     cmd.orbitrap_resolution = 0;
-    cmd.agc_target = config_.level(1).scans[0].agc_target;
+    cmd.agc_target = 30000;
     cmd.first_mass = config_.level(1).scans[0].first_mass;
     cmd.last_mass = config_.level(1).scans[0].last_mass;
-    cmd.max_it = config_.level(1).scans[0].max_it;
+    cmd.max_it = 1;
+    std::strncpy(cmd.scan_rate, "Turbo", sizeof(cmd.scan_rate) - 1);
     std::strncpy(cmd.analyzer, "IonTrap", sizeof(cmd.analyzer) - 1);
     cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';
     std::strncpy(cmd.scan_description, "A", sizeof(cmd.scan_description) - 1);
