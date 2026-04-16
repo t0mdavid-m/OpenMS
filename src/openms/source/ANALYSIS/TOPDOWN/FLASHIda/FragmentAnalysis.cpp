@@ -46,6 +46,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <sstream>
 #include <unordered_set>
 
 namespace OpenMS
@@ -1310,6 +1311,47 @@ namespace
     }
 
     return count;
+  }
+
+  std::string FragmentAnalysis::toProForma(const std::string& sequence,
+                                           const std::vector<PTMSite>& ptm_sites)
+  {
+    if (ptm_sites.empty()) return sequence;
+
+    std::vector<PTMSite> sorted_sites = ptm_sites;
+    std::sort(sorted_sites.begin(), sorted_sites.end(),
+              [](const PTMSite& a, const PTMSite& b) { return a.start_position > b.start_position; });
+
+    std::string result = sequence;
+    for (const auto& site : sorted_sites)
+    {
+      std::ostringstream mass_ss;
+      mass_ss << std::fixed << std::setprecision(4);
+      if (site.mass_shift >= 0)
+        mass_ss << "[+" << site.mass_shift << "]";
+      else
+        mass_ss << "[" << site.mass_shift << "]";
+      std::string mass_str = mass_ss.str();
+
+      if (site.start_position == site.end_position)
+      {
+        // Localized: insert after residue at 1-based position
+        int insert_pos = site.start_position;  // 1-based position -> insert at this index
+        if (insert_pos >= 0 && insert_pos <= static_cast<int>(result.size()))
+          result.insert(insert_pos, mass_str);
+      }
+      else
+      {
+        // Ambiguous: wrap region in parentheses
+        int end_idx = site.end_position;  // insert ')' + mass after this 1-based position
+        int start_idx = site.start_position - 1;  // insert '(' before this 1-based position (0-based)
+        if (end_idx >= 0 && end_idx <= static_cast<int>(result.size()))
+          result.insert(end_idx, ")" + mass_str);
+        if (start_idx >= 0 && start_idx <= static_cast<int>(result.size()))
+          result.insert(start_idx, "(");
+      }
+    }
+    return result;
   }
 
 } // namespace OpenMS
