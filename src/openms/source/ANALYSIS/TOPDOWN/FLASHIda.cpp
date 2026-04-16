@@ -451,6 +451,62 @@ FLASHIda::FLASHIda(char* arg) :
     results_tsv_stream_.flush();
   }
 
+  void FLASHIda::writeIdentificationRow_(
+    const std::string& tracking_id,
+    const Exploration::MS2Context& ctx,
+    const MS3FragmentMatcher::MatchResult& result)
+  {
+    // No lock — called from processScan() which already holds analysis_mutex_
+    if (!identification_tsv_stream_.is_open()) return;
+    if (result.matches.empty()) return;
+
+    std::ostringstream ms3_frags, ms3_masses, ms2_frags, ms2_masses;
+    ms3_frags << std::fixed << std::setprecision(4);
+    ms3_masses << std::fixed << std::setprecision(4);
+    ms2_frags << std::fixed << std::setprecision(4);
+    ms2_masses << std::fixed << std::setprecision(4);
+
+    for (size_t i = 0; i < result.matches.size(); ++i)
+    {
+      const auto& fm = result.matches[i];
+      if (i > 0)
+      {
+        ms3_frags << ";";
+        ms3_masses << ";";
+        ms2_frags << ";";
+        ms2_masses << ";";
+      }
+      ms3_frags << fm.ms3_ion_type << fm.ms3_ion_index;
+      ms3_masses << fm.observed_mass;
+      ms2_frags << fm.ms2_equiv_type << fm.ms2_equiv_index;
+      ms2_masses << fm.adjusted_mass;
+    }
+
+    std::string precursor_ion;
+    if (ctx.fragment_ion_type != '\0')
+      precursor_ion = std::string(1, ctx.fragment_ion_type) + std::to_string(ctx.fragment_ion_index);
+
+    identification_tsv_stream_
+      << tracking_id << "\t"
+      << ctx.proteoform_sequence << "\t"
+      << ctx.start_pos << "\t"
+      << ctx.end_pos << "\t"
+      << std::fixed << std::setprecision(2) << result.ppm_offset << "\t"
+      << std::setprecision(8) << result.correction_factor << "\t"
+      << std::setprecision(4) << ctx.ms1_precursor_mass << "\t"
+      << ctx.ms1_precursor_mz << "\t"
+      << ctx.ms1_precursor_charge << "\t"
+      << precursor_ion << "\t"
+      << ctx.fragment_mass << "\t"
+      << ctx.fragment_mz << "\t"
+      << ctx.fragment_charge << "\t"
+      << ms2_frags.str() << "\t"
+      << ms2_masses.str() << "\t"
+      << ms3_frags.str() << "\t"
+      << ms3_masses.str() << "\n";
+    identification_tsv_stream_.flush();
+  }
+
   std::map<int, std::vector<std::vector<float>>> FLASHIda::parseFLASHIdaLog(const String& in_log_file)
   {
     std::map<int, std::vector<std::vector<float>>>
@@ -889,6 +945,11 @@ FLASHIda::FLASHIda(char* arg) :
                             info.collision_energy, info.score, info.remaining_ratio,
                             info.activation_type, info.reaction_time);
 
+        if (!info.identification_result.matches.empty())
+        {
+          writeIdentificationRow_(id_str, info.ms2_context, info.identification_result);
+        }
+
         exploration_active_.store(exploration_.activeGroupCount() > 0,
                                   std::memory_order_release);
         return static_cast<int>(info.commands.size());
@@ -914,6 +975,39 @@ FLASHIda::FLASHIda(char* arg) :
       }
 
       const DeconvolvedSpectrum* ms3_spec = deconv_.hasStoredMS2() ? &deconv_.storedMS2() : nullptr;
+
+      // Identification: look up MS2 context from cache and run fragment matching
+      {
+        auto cache_it = ms2_context_cache_.find(tracking_id);
+        if (cache_it != ms2_context_cache_.end() && ms3_spec != nullptr && !ms3_spec->empty())
+        {
+          const auto& mc = cache_it->second;
+          MS3FragmentMatcher::ProteoformContext proto_ctx;
+          proto_ctx.region_start = mc.start_pos;
+          proto_ctx.region_end = mc.end_pos;
+          proto_ctx.ptm_sites = mc.ptm_sites;
+
+          std::vector<const DeconvolvedSpectrum*> spectra = {ms3_spec};
+          std::vector<MS3FragmentMatcher::MatchResult> detailed;
+          MS3FragmentMatcher::calibrateAndScore(
+            spectra,
+            config_.targeting().protein_sequence,
+            proto_ctx,
+            mc.fragment_ion_type,
+            mc.fragment_ion_index,
+            MS3FragmentMatcher::LOOSE_TOLERANCE_PPM,
+            config_.level(3).tolerance_ppm,
+            &detailed);
+
+          if (!detailed.empty() && !detailed[0].matches.empty())
+          {
+            writeIdentificationRow_(id_str, mc, detailed[0]);
+          }
+
+          ms2_context_cache_.erase(cache_it);
+        }
+      }
+
       std::string parent_id;
       if (resolved.has_value())
         parent_id = std::string(resolved->parent_scan_id);

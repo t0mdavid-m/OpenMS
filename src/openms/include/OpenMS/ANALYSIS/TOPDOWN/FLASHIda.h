@@ -225,9 +225,9 @@ namespace OpenMS
     Quantification quant_;
 
     /// Mutex protecting analysis state: deconv_, selection_, exploration_, faims_, quant_, fragments_.
-    /// Also protects logging streams: writeScanResultRow_/writeIDALogEntry_ are called with this lock
-    /// already held (from processScan). writeScanCommandRow_ acquires it internally (called from
-    /// getNextScanCommand which does NOT hold this lock).
+    /// Also protects logging streams: writeScanResultRow_/writeIDALogEntry_/writeIdentificationRow_
+    /// are called with this lock already held (from processScan). writeScanCommandRow_ acquires it
+    /// internally (called from getNextScanCommand which does NOT hold this lock).
     mutable std::mutex analysis_mutex_;
 
     /// Atomic flag: true when any exploration group is active (set by processScan, read by getNextScanCommand)
@@ -280,6 +280,11 @@ namespace OpenMS
                              double remaining_ratio = -1.0,
                              const std::string& activation_type = "",
                              double reaction_time = 0.0);
+
+    /// Write one identification.tsv row for an MS3 scan with matched fragments
+    void writeIdentificationRow_(const std::string& tracking_id,
+                                  const Exploration::MS2Context& ctx,
+                                  const MS3FragmentMatcher::MatchResult& result);
 
     /// Derive scan_type string from scan_description
     static std::string scanTypeFromDescription_(const ScanCommand& cmd);
