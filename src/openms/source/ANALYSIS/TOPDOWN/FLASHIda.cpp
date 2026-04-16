@@ -850,6 +850,12 @@ FLASHIda::FLASHIda(char* arg) :
                             info.collision_energy, info.score, info.remaining_ratio,
                             info.activation_type, info.reaction_time);
 
+        // Write MS2 identification row for exploration variant
+        if (!info.proteoform_sequence.empty() && !info.identification_result.fragments.empty())
+        {
+          writeIdentificationRow_(id_str, 2, 'E', info.ms2_context, info.identification_result);
+        }
+
         exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);
         return static_cast<int>(info.commands.size());
       }
@@ -933,6 +939,20 @@ FLASHIda::FLASHIda(char* arg) :
         }
       }
 
+      // Write MS2 identification row if proteoform was matched
+      if (!nlr.proteoform_sequence.empty() && !nlr.proteoform_match.fragments.empty())
+      {
+        Exploration::MS2Context ms2_ctx;
+        ms2_ctx.proteoform_sequence = nlr.proteoform_match.proteoform_sequence;
+        ms2_ctx.start_pos = nlr.proteoform_match.region_start;
+        ms2_ctx.end_pos = nlr.proteoform_match.region_end;
+        ms2_ctx.ptm_sites = nlr.proteoform_match.ptm_sites;
+        ms2_ctx.ms1_precursor_mass = ctx.mono_mass;
+        ms2_ctx.ms1_precursor_mz = ctx.stages[0].precursor_mz;
+        ms2_ctx.ms1_precursor_charge = ctx.stages[0].charge_state;
+        writeIdentificationRow_(id_str, 2, 'R', ms2_ctx, nlr.proteoform_match);
+      }
+
       int ms2_mass_count = deconv_.hasStoredMS2() ? static_cast<int>(deconv_.storedMS2().size()) : 0;
       int tag_count = tags_found ? 1 : 0;
       const DeconvolvedSpectrum* ms2_spec = deconv_.hasStoredMS2() ? &deconv_.storedMS2() : nullptr;
@@ -981,9 +1001,9 @@ FLASHIda::FLASHIda(char* arg) :
                             info.collision_energy, info.score, info.remaining_ratio,
                             info.activation_type, info.reaction_time);
 
-        if (!info.identification_result.matches.empty())
+        if (!info.identification_result.fragments.empty())
         {
-          writeIdentificationRow_(id_str, info.ms2_context, info.identification_result);
+          writeIdentificationRow_(id_str, 3, 'E', info.ms2_context, info.identification_result);
         }
 
         exploration_active_.store(exploration_.activeGroupCount() > 0,
@@ -1024,7 +1044,7 @@ FLASHIda::FLASHIda(char* arg) :
           proto_ctx.ptm_sites = mc.ptm_sites;
 
           std::vector<const DeconvolvedSpectrum*> spectra = {ms3_spec};
-          std::vector<MS3FragmentMatcher::MatchResult> detailed;
+          std::vector<FragmentAnalysis::ProteoformMatch> detailed;
           MS3FragmentMatcher::calibrateAndScore(
             spectra,
             config_.targeting().protein_sequence,
@@ -1035,9 +1055,9 @@ FLASHIda::FLASHIda(char* arg) :
             config_.level(3).tolerance_ppm,
             &detailed);
 
-          if (!detailed.empty() && !detailed[0].matches.empty())
+          if (!detailed.empty() && !detailed[0].fragments.empty())
           {
-            writeIdentificationRow_(id_str, mc, detailed[0]);
+            writeIdentificationRow_(id_str, 3, 'R', mc, detailed[0]);
           }
 
           ms2_context_cache_.erase(cache_it);
