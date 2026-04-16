@@ -848,10 +848,11 @@ FLASHIda::FLASHIda(char* arg) :
           std::strncpy(c.parent_scan_id, info.parent_scan_id, 4);
           queue_.push(c);
         }
-
-        int expl_mass_count = deconv_.hasStoredMS2()
-            ? static_cast<int>(deconv_.storedMS2().size()) : 0;
-        const DeconvolvedSpectrum* ms3_spec = deconv_.hasStoredMS2() ? &deconv_.storedMS2() : nullptr;
+        
+        const bool has_expl_ms3 = exploration_.exploration_deconv_ != nullptr &&
+                exploration_.exploration_deconv_->hasStoredMS2();
+        int expl_mass_count = has_expl_ms3 ? static_cast<int>(exploration_.exploration_deconv_->storedMS2().size()) : 0;
+        const DeconvolvedSpectrum* ms3_spec = has_expl_ms3 ? &exploration_.exploration_deconv_->storedMS2() : nullptr;
         std::string parent_id(info.parent_scan_id);
         writeScanResultRow_(id_str, rt_min, expl_mass_count,
                             static_cast<int>(info.commands.size()),
