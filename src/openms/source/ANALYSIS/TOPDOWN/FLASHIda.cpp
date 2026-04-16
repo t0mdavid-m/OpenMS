@@ -159,7 +159,7 @@ FLASHIda::FLASHIda(char* arg) :
                                       const String& fragmentation_method)
   {
     if (!deconv_.hasStoredMS2()) return 0;
-    FragmentAnalysis::FragmentMatchResult discard;
+    FragmentAnalysis::ProteoformMatch discard;
     return fragments_.getTopFragmentMatches(protein_sequence, n, masses, qscores, charges,
                                             window_starts, window_ends, ion_types, fragment_indices,
                                             deconv_.storedMS2(), discard, fragmentation_method);
@@ -172,7 +172,7 @@ FLASHIda::FLASHIda(char* arg) :
                                         const String& fragmentation_method)
   {
     if (!deconv_.hasStoredMS2()) return 0;
-    FragmentAnalysis::FragmentMatchResult discard;
+    FragmentAnalysis::ProteoformMatch discard;
     return fragments_.getTerminalFragmentIons(protein_sequence, n, masses, qscores, charges,
                                               window_starts, window_ends, ion_types, fragment_indices,
                                               deconv_.storedMS2(), discard, fragmentation_method);
@@ -185,7 +185,7 @@ FLASHIda::FLASHIda(char* arg) :
                                           const String& fragmentation_method)
   {
     if (!deconv_.hasStoredMS2()) return 0;
-    FragmentAnalysis::FragmentMatchResult discard;
+    FragmentAnalysis::ProteoformMatch discard;
     return fragments_.getAmbiguityEnclosingIons(protein_sequence, n, masses, qscores, charges,
                                                 window_starts, window_ends, ion_types, fragment_indices,
                                                 deconv_.storedMS2(), discard, fragmentation_method);
