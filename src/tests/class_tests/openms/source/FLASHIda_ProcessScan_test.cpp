@@ -1559,4 +1559,37 @@ START_SECTION(processScan_ms1_min_charge_filter)
 }
 END_SECTION
 
+START_SECTION(processScan_agc_scan_skipped)
+{
+  // Use agc_fast_json (agc_interval_seconds=0) to get an AGC command immediately
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(agc_fast_json));
+
+  // Get the AGC command the engine produces on init
+  ScanCommand agc_cmd{};
+  int r = ida->getNextScanCommand(agc_cmd);
+  TEST_EQUAL(r, 1)
+  TEST_EQUAL(agc_cmd.is_agc, 1)
+
+  // Load real MS1 peak data (non-trivial spectrum that would normally produce commands)
+  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(ms1_scans.empty())
+  const auto& scan = ms1_scans[0];
+
+  // Feed real peak data back with the AGC scan description — should be gated
+  int result = ida->processScan(scan.mzs.data(), scan.ints.data(),
+                                 (int)scan.mzs.size(), scan.rt, 1,
+                                 agc_cmd.scan_description);
+  TEST_EQUAL(result, 0)
+
+  // Verify no commands were generated
+  ScanCommand next_cmd{};
+  int has_cmd = ida->getNextScanCommand(next_cmd);
+  // Only expect the next idle-cycle AGC/MS1, not any MS2 from deconvolution
+  // If the gate works, the scan data was never processed, so no MS2 commands
+  TEST_EQUAL(has_cmd == 0 || next_cmd.is_agc == 1 || next_cmd.msn_level == 1, true)
+
+  delete ida;
+}
+END_SECTION
+
 END_TEST

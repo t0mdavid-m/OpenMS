@@ -683,6 +683,13 @@ FLASHIda::FLASHIda(char* arg) :
     std::string id_str = desc_str.substr(0, 3);
     int tracking_id = queue_.decode(id_str);
 
+    // Skip AGC scans — calibration-only, no data to process
+    if (desc_str.size() >= 4 && desc_str[3] == 'A')
+    {
+      queue_.resolvePending(tracking_id);
+      return 0;
+    }
+
     // Retrieve timestamps from pending map (enqueue set by push(), dequeue set by dequeue())
     uint64_t enqueue_ts = 0;
     uint64_t dequeue_ts = 0;
