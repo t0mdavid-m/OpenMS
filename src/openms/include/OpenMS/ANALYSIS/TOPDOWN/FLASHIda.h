@@ -248,6 +248,7 @@ namespace OpenMS
     std::ofstream ida_log_stream_;
     std::ofstream commands_tsv_stream_;
     std::ofstream results_tsv_stream_;
+    std::ofstream identification_tsv_stream_;
 
     /// Steady-clock reference for timestamps
     std::chrono::steady_clock::time_point engine_start_time_;

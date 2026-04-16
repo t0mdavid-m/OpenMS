@@ -182,6 +182,7 @@ namespace OpenMS
     std::string ida_log_path;
     std::string scan_commands_path;
     std::string scan_results_path;
+    std::string identification_path;
   };
 
   /**

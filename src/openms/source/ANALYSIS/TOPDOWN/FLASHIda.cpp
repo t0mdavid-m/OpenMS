@@ -117,6 +117,20 @@ FLASHIda::FLASHIda(char* arg) :
         results_tsv_stream_.flush();
       }
     }
+    if (!rt_cfg.identification_path.empty())
+    {
+      identification_tsv_stream_.open(rt_cfg.identification_path, std::ios::app);
+      if (identification_tsv_stream_.is_open())
+      {
+        identification_tsv_stream_ << "tracking_id\tproteoform\tstart_pos\tend_pos\t"
+                                   << "ppm_offset\tcorrection_factor\t"
+                                   << "ms1_precursor_mass\tms1_precursor_mz\tms1_precursor_charge\t"
+                                   << "ms2_precursor_ion\tms2_precursor_mass\tms2_precursor_mz\tms2_precursor_charge\t"
+                                   << "ms2_fragments\tms2_fragment_masses\t"
+                                   << "ms3_fragments\tms3_fragment_masses\n";
+        identification_tsv_stream_.flush();
+      }
+    }
   }
 
   FLASHIda::~FLASHIda()
@@ -124,6 +138,7 @@ FLASHIda::FLASHIda(char* arg) :
     if (ida_log_stream_.is_open()) ida_log_stream_.close();
     if (commands_tsv_stream_.is_open()) commands_tsv_stream_.close();
     if (results_tsv_stream_.is_open()) results_tsv_stream_.close();
+    if (identification_tsv_stream_.is_open()) identification_tsv_stream_.close();
   }
 
   // Fragment analysis: C-pointer overloads delegate to fragments_ + deconv_.storedMS2()
