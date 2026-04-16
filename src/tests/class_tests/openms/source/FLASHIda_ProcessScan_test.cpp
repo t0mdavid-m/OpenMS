@@ -17,6 +17,7 @@
 #include <string>
 #include <cstring>
 #include <vector>
+#include <thread>  // std::this_thread::sleep_for
 
 using namespace OpenMS;
 
@@ -1587,6 +1588,78 @@ START_SECTION(processScan_agc_scan_skipped)
   // Only expect the next idle-cycle AGC/MS1, not any MS2 from deconvolution
   // If the gate works, the scan data was never processed, so no MS2 commands
   TEST_EQUAL(has_cmd == 0 || next_cmd.is_agc == 1 || next_cmd.msn_level == 1, true)
+
+  delete ida;
+}
+END_SECTION
+
+// cleanupExpired should remove stale commands from priority queues, not pending map
+START_SECTION(cleanup_expired_drops_stale_queued_commands)
+{
+  // Use idle_cycle_json (timeout enabled, 30s) but we'll use pushCommandForTest
+  // with a 1ms-timeout config to verify expiry
+  const char* short_timeout_json = R"({
+    "deconvolution": {
+      "score_threshold": 0.0, "tqscore_threshold": 0.9,
+      "min_charge": 4, "max_charge": 50,
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
+    },
+    "precursor_selection": {
+      "RT_window": 180, "target_mode": 0,
+      "IDScore": false, "AllCharges": false,
+      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    },
+    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
+    "faims": { "cv_values": [-50], "max_cv_skip": 0 },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
+      "ms2": [
+        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }
+      ]
+    },
+    "scheduling": {
+      "cycle_time": { "enabled": false, "value_ms": 60000 },
+      "scan_timeout": { "enabled": true, "value_ms": 1 },
+      "agc_interval_seconds": 9999
+    },
+    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
+    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_targets": 3 },
+      "ms2": { "selection": "none" },
+      "ms3": { "selection": "none" }
+    }
+  })";
+
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(short_timeout_json));
+
+  // Push 3 MS2 commands at priority 2 via test helper
+  for (int i = 0; i < 3; ++i)
+  {
+    ScanCommand ms2{};
+    ms2.msn_level = 2;
+    ms2.priority = 2;
+    ms2.scan_id = ida->getQueueForTest().nextTrackingId();
+    ida->pushCommandForTest(ms2);
+  }
+
+  // Verify all 3 are in the queue
+  TEST_EQUAL(ida->getQueueSizeForTest(2), (size_t)3)
+
+  // Sleep 2ms to ensure commands exceed the 1ms timeout
+  std::this_thread::sleep_for(std::chrono::milliseconds(2));
+
+  // getNextScanCommand calls cleanupExpired in step 3.
+  // After cleanup, the queue should be empty — all 3 stale commands dropped.
+  // The idle cycle (step 5) will fire and return an AGC.
+  ScanCommand out{};
+  int r = ida->getNextScanCommand(out);
+  TEST_EQUAL(r, 1)
+  TEST_EQUAL(out.is_agc, 1)  // idle cycle AGC, not a stale MS2
+
+  // Queue at priority 2 should now be empty (stale commands dropped)
+  TEST_EQUAL(ida->getQueueSizeForTest(2), (size_t)0)
 
   delete ida;
 }

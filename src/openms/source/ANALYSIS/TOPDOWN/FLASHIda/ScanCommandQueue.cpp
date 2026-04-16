@@ -420,7 +420,6 @@ namespace OpenMS
 
   void ScanCommandQueue::cleanupExpired()
   {
-    // config_ is const ref, immutable after construction — no lock needed for this check
     if (!config_.scheduling().timeout_enabled)
       return;
 
@@ -429,21 +428,25 @@ namespace OpenMS
       std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
 
-    auto it = pending_scan_map_.begin();
-    while (it != pending_scan_map_.end())
+    for (int p = 0; p < 4; ++p)
     {
-      if (it->second.enqueue_timestamp_ms > 0 &&
-          (now_ms - it->second.enqueue_timestamp_ms) > static_cast<uint64_t>(config_.scheduling().timeout_ms))
+      auto it = queues_[p].begin();
+      while (it != queues_[p].end())
       {
-        std::string id_str = encode(it->first);
-        std::cout << "[TRACK-EXPIRE] id=" << id_str
-                  << " age_ms=" << (now_ms - it->second.enqueue_timestamp_ms)
-                  << std::endl;
-        it = pending_scan_map_.erase(it);
-      }
-      else
-      {
-        ++it;
+        if (it->enqueue_timestamp_ms > 0 &&
+            (now_ms - it->enqueue_timestamp_ms) > static_cast<uint64_t>(config_.scheduling().timeout_ms))
+        {
+          std::string id_str = encode(it->scan_id);
+          std::cout << "[TRACK-EXPIRE] id=" << id_str
+                    << " age_ms=" << (now_ms - it->enqueue_timestamp_ms)
+                    << " ms_level=" << it->msn_level
+                    << std::endl;
+          it = queues_[p].erase(it);
+        }
+        else
+        {
+          ++it;
+        }
       }
     }
   }
