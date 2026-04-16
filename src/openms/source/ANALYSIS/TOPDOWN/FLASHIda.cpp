@@ -687,10 +687,10 @@ FLASHIda::FLASHIda(char* arg) :
       std::vector<std::string> child_ids;
       for (const auto& c : ms2_commands)
         child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
-      int all_mass_count = static_cast<int>(selected.size());
+      int all_mass_count = static_cast<int>(selection_.deconvolvedMS1.size());
       writeScanResultRow_(id_str, rt_min, all_mass_count, commands_pushed,
                           child_ids, 0, "", "", enqueue_ts, dequeue_ts, received_ts,
-                          &deconv_.deconvolvedMS1(), "");
+                          selection_.deconvolvedMS1(), "");
 
       // FAIMS CV cycling: update skip policy, advance to next CV, push MS1
       if (faims_.isEnabled())
@@ -730,9 +730,11 @@ FLASHIda::FLASHIda(char* arg) :
           std::strncpy(c.parent_scan_id, info.parent_scan_id, 4);
           queue_.push(c);
         }
-
-        int expl_mass_count = deconv_.hasStoredMS2() ? static_cast<int>(deconv_.storedMS2().size()) : 0;
-        const DeconvolvedSpectrum* ms2_spec = deconv_.hasStoredMS2() ? &deconv_.storedMS2() : nullptr;
+        
+        const bool has_expl_ms2 = exploration_.exploration_deconv_ != nullptr &&
+                exploration_.exploration_deconv_->hasStoredMS2();
+        int expl_mass_count = has_expl_ms2 ? static_cast<int>(exploration_.exploration_deconv_->storedMS2().size()) : 0;
+        const DeconvolvedSpectrum* ms2_spec = has_expl_ms2 ? &exploration_.exploration_deconv_->storedMS2() : nullptr;
         std::string parent_id(info.parent_scan_id);
         writeScanResultRow_(id_str, rt_min, expl_mass_count, static_cast<int>(info.commands.size()),
                             {}, 0, info.matched_protein, info.proteoform_sequence, enqueue_ts, dequeue_ts, received_ts,

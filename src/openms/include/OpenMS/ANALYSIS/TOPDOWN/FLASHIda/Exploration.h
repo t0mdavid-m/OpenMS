@@ -60,6 +60,7 @@ namespace OpenMS
   class OPENMS_DLLAPI Exploration
   {
   public:
+    std::unique_ptr<Deconvolution> exploration_deconv_;
     /// Single variant in an exploration CE sweep
     struct ExplorationVariant
     {
@@ -178,7 +179,6 @@ namespace OpenMS
   private:
     const Config& config_;
     FragmentAnalysis& fragments_;
-    std::unique_ptr<Deconvolution> exploration_deconv_;
 
     /// Active exploration groups (group_id -> ExplorationGroup)
     std::unordered_map<int, ExplorationGroup> active_groups_;
