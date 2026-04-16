@@ -77,8 +77,7 @@ namespace
     return Residue::getInternalToYIon().getMonoWeight(); // default to y
   }
 
-  /// Map fragmentation method name to ion types (case-insensitive via lowercase)
-  inline std::vector<std::string> getIonTypesForFragmentationMethod(const String& method)
+  std::vector<std::string> FragmentAnalysis::getIonTypesForFragmentationMethod(const String& method)
   {
     String lower_method = method;
     std::transform(lower_method.begin(), lower_method.end(), lower_method.begin(), ::tolower);
@@ -408,7 +407,7 @@ namespace
 
     // 2. Run FLASHTagger to generate sequence tags
     double ppm_tolerance = (tolerance_ppm > 0.0) ? tolerance_ppm : config_.level(2).tolerance_ppm;
-    std::vector<std::string> ion_types_str = getIonTypesForFragmentationMethod(fragmentation_method);
+    std::vector<std::string> ion_types_str = FragmentAnalysis::getIonTypesForFragmentationMethod(fragmentation_method);
     FLASHTaggerAlgorithm tagger;
     Param tagger_param = tagger.getDefaults();
     tagger_param.setValue("ion_type", ion_types_str);
