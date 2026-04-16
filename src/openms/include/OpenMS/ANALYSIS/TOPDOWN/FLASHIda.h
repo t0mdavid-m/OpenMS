@@ -250,6 +250,9 @@ namespace OpenMS
     std::ofstream results_tsv_stream_;
     std::ofstream identification_tsv_stream_;
 
+    /// MS2 context cache keyed by MS3 tracking ID (for non-exploration identification)
+    std::unordered_map<int, Exploration::MS2Context> ms2_context_cache_;
+
     /// Steady-clock reference for timestamps
     std::chrono::steady_clock::time_point engine_start_time_;
 

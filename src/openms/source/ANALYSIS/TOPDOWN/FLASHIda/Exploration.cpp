@@ -333,6 +333,31 @@ namespace OpenMS
     std::strncpy(info.parent_scan_id, parent_enc.c_str(), 3);
     info.parent_scan_id[3] = '\0';
 
+    // Populate identification context from the group
+    info.ms2_context.proteoform_sequence = (group.proteoform_ctx.region_start >= 0)
+        ? config_.targeting().protein_sequence.substr(group.proteoform_ctx.region_start,
+            group.proteoform_ctx.region_end - group.proteoform_ctx.region_start)
+        : "";
+    info.ms2_context.start_pos = group.proteoform_ctx.region_start;
+    info.ms2_context.end_pos = group.proteoform_ctx.region_end;
+    info.ms2_context.ptm_sites = group.proteoform_ctx.ptm_sites;
+    info.ms2_context.fragment_ion_type = group.fragment_ion_type;
+    info.ms2_context.fragment_ion_index = group.fragment_ion_index;
+    if (group.originating_cmd.num_stages > 0)
+    {
+      info.ms2_context.ms1_precursor_mass = group.originating_cmd.mono_mass;
+      info.ms2_context.ms1_precursor_mz = group.originating_cmd.stages[0].precursor_mz;
+      info.ms2_context.ms1_precursor_charge = group.originating_cmd.stages[0].charge_state;
+    }
+    const auto& vcmd = group.variants[variant_index].cmd;
+    if (vcmd.num_stages >= 2)
+    {
+      info.ms2_context.fragment_mz = vcmd.stages[1].precursor_mz;
+      info.ms2_context.fragment_charge = vcmd.stages[1].charge_state;
+    }
+    info.ms2_context.fragment_mass = group.precursor_mass;
+    info.identification_result = group.variants[variant_index].identification_result;
+
     auto& meta = v.result.getOrCreateOptimizationMetadata();
     meta.group_id = group.group_id;
     meta.variant_index = v.variant_index;
@@ -364,6 +389,7 @@ namespace OpenMS
       for (auto& var : group.variants)
         variant_spectra.push_back(var.received ? &var.result : nullptr);
 
+      std::vector<MS3FragmentMatcher::MatchResult> detailed_results;
       auto calibrated_scores = MS3FragmentMatcher::calibrateAndScore(
         variant_spectra,
         config_.targeting().protein_sequence,
@@ -371,13 +397,19 @@ namespace OpenMS
         group.fragment_ion_type,
         group.fragment_ion_index,
         MS3FragmentMatcher::LOOSE_TOLERANCE_PPM,
-        config_.level(group.msn_level).tolerance_ppm);
+        config_.level(group.msn_level).tolerance_ppm,
+        &detailed_results);
 
       for (size_t vi = 0; vi < calibrated_scores.size(); ++vi)
       {
         group.variants[vi].score = calibrated_scores[vi];
         group.variants[vi].fragment_count = static_cast<int>(calibrated_scores[vi]);
+        if (vi < detailed_results.size())
+          group.variants[vi].identification_result = detailed_results[vi];
       }
+
+      // Re-populate identification_result after batch re-scoring updated it
+      info.identification_result = group.variants[variant_index].identification_result;
     }
 
     int best_idx = -1;
@@ -558,6 +590,27 @@ namespace OpenMS
         auto sub_cmds = initiate(next_level, frag_pg, std::abs(charges[ti]), faims_cv, queue, ms_ctx,
                                  ion_types[ti], frag_indices[ti], proto_ctx);
         nlr.commands.insert(nlr.commands.end(), sub_cmds.begin(), sub_cmds.end());
+
+        for (size_t sci = 0; sci < sub_cmds.size(); ++sci)
+        {
+          MS2Context mc;
+          mc.proteoform_sequence = nlr.proteoform_sequence;
+          mc.start_pos = proto_ctx.region_start;
+          mc.end_pos = proto_ctx.region_end;
+          mc.ptm_sites = proto_ctx.ptm_sites;
+          if (ms_ctx != nullptr)
+          {
+            mc.ms1_precursor_mass = ms_ctx->mono_mass;
+            mc.ms1_precursor_mz = ms_ctx->stages[0].precursor_mz;
+            mc.ms1_precursor_charge = ms_ctx->stages[0].charge_state;
+          }
+          mc.fragment_ion_type = ion_types[ti];
+          mc.fragment_ion_index = frag_indices[ti];
+          mc.fragment_mass = masses[ti];
+          mc.fragment_mz = (wstarts[ti] + wends[ti]) / 2.0;
+          mc.fragment_charge = std::abs(charges[ti]);
+          nlr.ms3_contexts.push_back(mc);
+        }
       }
     }
     else
@@ -599,6 +652,24 @@ namespace OpenMS
                   << std::endl;
 
         nlr.commands.push_back(cmd);
+
+        if (next_level >= 3 && ms_ctx != nullptr)
+        {
+          MS2Context mc;
+          mc.proteoform_sequence = nlr.proteoform_sequence;
+          mc.start_pos = proto_ctx.region_start;
+          mc.end_pos = proto_ctx.region_end;
+          mc.ptm_sites = proto_ctx.ptm_sites;
+          mc.ms1_precursor_mass = ms_ctx->mono_mass;
+          mc.ms1_precursor_mz = ms_ctx->stages[0].precursor_mz;
+          mc.ms1_precursor_charge = ms_ctx->stages[0].charge_state;
+          mc.fragment_ion_type = ion_types[ti];
+          mc.fragment_ion_index = frag_indices[ti];
+          mc.fragment_mass = masses[ti];
+          mc.fragment_mz = frag_mz;
+          mc.fragment_charge = frag_charge;
+          nlr.ms3_contexts.push_back(mc);
+        }
       }
     }
 

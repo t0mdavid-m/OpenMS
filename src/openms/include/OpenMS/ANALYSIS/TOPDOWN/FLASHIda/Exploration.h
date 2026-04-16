@@ -76,6 +76,24 @@ namespace OpenMS
       bool received = false;
       DeconvolvedSpectrum result{0};
       ScanCommand cmd;
+      MS3FragmentMatcher::MatchResult identification_result;  ///< Per-fragment match details (populated at batch eval)
+    };
+
+    /// Cached MS2 context for identification.tsv output from MS3 results
+    struct MS2Context
+    {
+      std::string proteoform_sequence;
+      int start_pos = 0;
+      int end_pos = 0;
+      std::vector<FragmentAnalysis::PTMSite> ptm_sites;
+      double ms1_precursor_mass = 0.0;
+      double ms1_precursor_mz = 0.0;
+      int ms1_precursor_charge = 0;
+      char fragment_ion_type = '\0';
+      int fragment_ion_index = 0;
+      double fragment_mass = 0.0;
+      double fragment_mz = 0.0;
+      int fragment_charge = 0;
     };
 
     /// Group of CE variants for one precursor at one MSn level
@@ -114,6 +132,7 @@ namespace OpenMS
     struct NextLevelResult
     {
       std::vector<ScanCommand> commands;
+      std::vector<MS2Context> ms3_contexts;  ///< Parallel to commands: one MS2Context per MS3 command
       std::string matched_protein;
       std::string proteoform_sequence;
       float tic_coverage = 0.0f;
@@ -138,6 +157,8 @@ namespace OpenMS
       std::string proteoform_sequence;
       double remaining_ratio = -1.0;  ///< Raw remaining_intensity / baseline_intensity (-1.0 = N/A)
       char parent_scan_id[4]{};  ///< Parent's encoded tracking ID (from group's originating_cmd)
+      MS3FragmentMatcher::MatchResult identification_result;  ///< Per-fragment match details for identification.tsv
+      MS2Context ms2_context;  ///< Cached MS2 context for this variant's group
     };
 
     /// Construct with a reference to the shared Config and FragmentAnalysis

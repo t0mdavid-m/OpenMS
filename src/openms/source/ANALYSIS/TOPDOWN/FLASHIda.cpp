@@ -830,6 +830,15 @@ FLASHIda::FLASHIda(char* arg) :
           child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
           commands_pushed++;
         }
+
+        // Cache MS2 context for each MS3 command (for non-exploration identification.tsv)
+        for (size_t ci = 0; ci < nlr.commands.size(); ++ci)
+        {
+          if (nlr.commands[ci].msn_level >= 3 && ci < nlr.ms3_contexts.size())
+          {
+            ms2_context_cache_[nlr.commands[ci].scan_id] = nlr.ms3_contexts[ci];
+          }
+        }
       }
 
       int ms2_mass_count = deconv_.hasStoredMS2() ? static_cast<int>(deconv_.storedMS2().size()) : 0;
