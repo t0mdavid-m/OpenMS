@@ -755,13 +755,14 @@ namespace
                                               char* ion_types,
                                               int* fragment_indices,
                                               DeconvolvedSpectrum& stored_ms2,
+                                              FragmentMatchResult& result,
                                               const String& fragmentation_method,
                                               double tolerance_ppm)
   {
     std::cout << "Matching fragments!" << std::endl;
     // Use tag-based matching workflow (FLASHTagger + FLASHExtender)
     std::vector<TagBasedFragmentMatch> matches;
-    runTagBasedFragmentMatching_(protein_sequence, matches, stored_ms2, nullptr, fragmentation_method, tolerance_ppm);
+    runTagBasedFragmentMatching_(protein_sequence, matches, stored_ms2, result, fragmentation_method, tolerance_ppm);
 
     int output_idx = 0;
     for (size_t i = 0; i < matches.size() && output_idx < n; ++i)
@@ -805,9 +806,10 @@ namespace
     std::unique_ptr<char[]> ion_types_temp(new char[n]);
     fragment_indices.resize(n);
 
+    FragmentMatchResult discard;
     int count = getTopFragmentMatches(protein_sequence, n, masses.data(), qscores.data(),
                                       charges.data(), window_starts.data(), window_ends.data(),
-                                      ion_types_temp.get(), fragment_indices.data(), stored_ms2, "HCD");
+                                      ion_types_temp.get(), fragment_indices.data(), stored_ms2, discard, "HCD");
 
     masses.resize(count);
     qscores.resize(count);
@@ -837,13 +839,13 @@ namespace
                                                   char* ion_types,
                                                   int* fragment_indices,
                                                   DeconvolvedSpectrum& stored_ms2,
+                                                  FragmentMatchResult& result,
                                                   const String& fragmentation_method,
                                                   double tolerance_ppm)
   {
     // Get fragment matches AND PTM sites from FLASHExtender
     std::vector<TagBasedFragmentMatch> fragment_ion_match;
-    std::vector<PTMSite> ptm_sites;
-    int match_count = runTagBasedFragmentMatching_(protein_sequence, fragment_ion_match, stored_ms2, &ptm_sites, fragmentation_method, tolerance_ppm);
+    int match_count = runTagBasedFragmentMatching_(protein_sequence, fragment_ion_match, stored_ms2, result, fragmentation_method, tolerance_ppm);
 
     if (match_count == 0)
     {
@@ -852,15 +854,15 @@ namespace
     }
     std::cout << "[getAmbiguityEnclosingIons] Found " << match_count << " fragment matches" << std::endl;
 
-    if (ptm_sites.empty())
+    if (result.ptm_sites.empty())
     {
       std::cout << "[getAmbiguityEnclosingIons] No PTM sites detected by FLASHExtender" << std::endl;
       return 0;
     }
 
     // Debug output for PTM sites
-    std::cout << "[getAmbiguityEnclosingIons] FLASHExtender detected " << ptm_sites.size() << " PTM sites:" << std::endl;
-    for (const auto& site : ptm_sites)
+    std::cout << "[getAmbiguityEnclosingIons] FLASHExtender detected " << result.ptm_sites.size() << " PTM sites:" << std::endl;
+    for (const auto& site : result.ptm_sites)
     {
       int start_idx = std::max(0, site.start_position - 1);
       int end_idx = std::min(static_cast<int>(protein_sequence.size()), site.end_position);
@@ -895,7 +897,7 @@ namespace
     int seq_len = static_cast<int>(protein_sequence.size());
 
     // Collect ALL valid brackets per PTM site
-    for (const auto& site : ptm_sites)
+    for (const auto& site : result.ptm_sites)
     {
       PTMBrackets brackets;
       brackets.ptm_start = site.start_position;
@@ -1112,9 +1114,10 @@ namespace
     std::unique_ptr<char[]> ion_types_temp(new char[n]);
     fragment_indices.resize(n);
 
+    FragmentMatchResult discard;
     int count = getAmbiguityEnclosingIons(protein_sequence, n, masses.data(), qscores.data(),
                                           charges.data(), window_starts.data(), window_ends.data(),
-                                          ion_types_temp.get(), fragment_indices.data(), stored_ms2, "HCD");
+                                          ion_types_temp.get(), fragment_indices.data(), stored_ms2, discard, "HCD");
 
     masses.resize(count);
     qscores.resize(count);
@@ -1145,12 +1148,13 @@ namespace
       char* ion_types,
       int* fragment_indices,
       DeconvolvedSpectrum& stored_ms2,
+      FragmentMatchResult& result,
       const String& fragmentation_method,
       double tolerance_ppm)
   {
     // Run fragment matching to get all matches
     std::vector<TagBasedFragmentMatch> matches;
-    runTagBasedFragmentMatching_(protein_sequence, matches, stored_ms2, nullptr, fragmentation_method, tolerance_ppm);
+    runTagBasedFragmentMatching_(protein_sequence, matches, stored_ms2, result, fragmentation_method, tolerance_ppm);
 
     if (matches.empty()) return 0;
 
@@ -1272,11 +1276,12 @@ namespace
     std::unique_ptr<char[]> ion_types_temp(new char[n]);
     fragment_indices.resize(n);
 
+    FragmentMatchResult discard;
     int count = getTerminalFragmentIons(
         protein_sequence, n,
         masses.data(), qscores.data(), charges.data(),
         window_starts.data(), window_ends.data(),
-        ion_types_temp.get(), fragment_indices.data(), stored_ms2, "HCD");
+        ion_types_temp.get(), fragment_indices.data(), stored_ms2, discard, "HCD");
 
     // Resize to actual count
     masses.resize(count);
