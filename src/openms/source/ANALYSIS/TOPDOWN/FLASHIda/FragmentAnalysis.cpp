@@ -742,6 +742,16 @@ namespace
     }
 
     result.total_match_count = static_cast<int>(matches.size());
+    result.fragments.clear();
+    result.fragments.reserve(matches.size());
+    for (const auto& m : matches)
+    {
+      ProteoformMatch::FragmentMatch fm;
+      fm.ion_type = std::string(1, m.ion_type);
+      fm.ion_index = m.fragment_index;
+      fm.observed_mass = m.observed_mass;
+      result.fragments.push_back(std::move(fm));
+    }
     return static_cast<int>(matches.size());
   }
 
