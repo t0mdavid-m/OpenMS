@@ -434,6 +434,7 @@ namespace OpenMS
     }
     else if (group.msn_level < 3)
     {
+      std::cout << "exploration call site" << std::endl;
       auto next_nlr = initiateNextLevel(group.msn_level,
           group.variants[best_idx].result, group.faims_cv, queue,
           &group.variants[best_idx].cmd);

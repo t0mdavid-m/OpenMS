@@ -803,6 +803,7 @@ FLASHIda::FLASHIda(char* arg) :
       Exploration::NextLevelResult nlr;
       if (config_.level(2).selection != SelectionMetric::None)
       {
+        std::cout << "flashida call site" << std::endl;
         nlr = exploration_.initiateNextLevel(2, deconv_.storedMS2(), ctx.faims_cv, queue_, &ctx);
         for (auto& c : nlr.commands)
         {
