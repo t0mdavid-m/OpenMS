@@ -232,7 +232,8 @@ FLASHIda::FLASHIda(char* arg) :
     for (size_t i = 0; i < all_peak_groups.size(); i++)
     {
       if (i > 0) ida_log_stream_ << " ";
-      ida_log_stream_ << std::defaultfloat << all_peak_groups[i].getMonoMass();
+      ida_log_stream_.precision(4);
+      ida_log_stream_ << std::fixed; << all_peak_groups[i].getMonoMass();
     }
     ida_log_stream_ << "\n";
     ida_log_stream_.flush();
