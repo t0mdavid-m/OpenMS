@@ -158,9 +158,10 @@ FLASHIda::FLASHIda(char* arg) :
                                       const String& fragmentation_method)
   {
     if (!deconv_.hasStoredMS2()) return 0;
+    FragmentAnalysis::FragmentMatchResult discard;
     return fragments_.getTopFragmentMatches(protein_sequence, n, masses, qscores, charges,
                                             window_starts, window_ends, ion_types, fragment_indices,
-                                            deconv_.storedMS2(), fragmentation_method);
+                                            deconv_.storedMS2(), discard, fragmentation_method);
   }
 
   int FLASHIda::getTerminalFragmentIons(const String& protein_sequence, int n,
@@ -170,9 +171,10 @@ FLASHIda::FLASHIda(char* arg) :
                                         const String& fragmentation_method)
   {
     if (!deconv_.hasStoredMS2()) return 0;
+    FragmentAnalysis::FragmentMatchResult discard;
     return fragments_.getTerminalFragmentIons(protein_sequence, n, masses, qscores, charges,
                                               window_starts, window_ends, ion_types, fragment_indices,
-                                              deconv_.storedMS2(), fragmentation_method);
+                                              deconv_.storedMS2(), discard, fragmentation_method);
   }
 
   int FLASHIda::getAmbiguityEnclosingIons(const String& protein_sequence, int n,
@@ -182,9 +184,10 @@ FLASHIda::FLASHIda(char* arg) :
                                           const String& fragmentation_method)
   {
     if (!deconv_.hasStoredMS2()) return 0;
+    FragmentAnalysis::FragmentMatchResult discard;
     return fragments_.getAmbiguityEnclosingIons(protein_sequence, n, masses, qscores, charges,
                                                 window_starts, window_ends, ion_types, fragment_indices,
-                                                deconv_.storedMS2(), fragmentation_method);
+                                                deconv_.storedMS2(), discard, fragmentation_method);
   }
 
   int FLASHIda::getConfigInt(const std::string& key) const
