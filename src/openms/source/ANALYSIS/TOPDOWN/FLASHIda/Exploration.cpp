@@ -432,7 +432,7 @@ namespace OpenMS
 
       info.commands.push_back(prod_cmd);
     }
-    else
+    else if (group.msn_level < 3)
     {
       auto next_nlr = initiateNextLevel(group.msn_level,
           group.variants[best_idx].result, group.faims_cv, queue,
