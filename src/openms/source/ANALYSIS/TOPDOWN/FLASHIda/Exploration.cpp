@@ -284,10 +284,10 @@ namespace OpenMS
 
     v.result = ms2_deconv;
     double remaining_ratio = -1.0;
-    FragmentMatchResult frag{};
+    FragmentAnalysis::FragmentMatchResult frag{};
     v.score = computeExplorationScore_(group.exploration_metric, ms2_deconv, group, mzs, ints, length, &remaining_ratio, &frag, v.activation_type);
     v.tic_coverage = computeTICCoverage_(ms2_deconv);
-    v.fragment_count = static_cast<int>(frag.count);
+    v.fragment_count = frag.total_match_count;
     v.received = true;
 
     // Handle baseline for RemainingPrecursor
@@ -508,6 +508,7 @@ namespace OpenMS
     std::vector<int> frag_indices(num_targets, 0);
 
     int found = 0;
+    FragmentAnalysis::FragmentMatchResult frag_result;
 
     switch (next_cfg.selection)
     {
@@ -516,19 +517,19 @@ namespace OpenMS
         found = fragments_.getTopFragmentMatches(seq, num_targets,
             masses.data(), qscores.data(), charges.data(),
             wstarts.data(), wends.data(),
-            ion_types.data(), frag_indices.data(), result_copy, scan_activation);
+            ion_types.data(), frag_indices.data(), result_copy, frag_result, scan_activation);
         break;
       case SelectionMetric::TerminalFragments:
         found = fragments_.getTerminalFragmentIons(seq, num_targets,
             masses.data(), qscores.data(), charges.data(),
             wstarts.data(), wends.data(),
-            ion_types.data(), frag_indices.data(), result_copy, scan_activation);
+            ion_types.data(), frag_indices.data(), result_copy, frag_result, scan_activation);
         break;
       case SelectionMetric::AmbiguityResolution:
         found = fragments_.getAmbiguityEnclosingIons(seq, num_targets,
             masses.data(), qscores.data(), charges.data(),
             wstarts.data(), wends.data(),
-            ion_types.data(), frag_indices.data(), result_copy, scan_activation);
+            ion_types.data(), frag_indices.data(), result_copy, frag_result, scan_activation);
         break;
       default:
         break;
@@ -538,10 +539,9 @@ namespace OpenMS
     MS3FragmentMatcher::ProteoformContext proto_ctx;
     if (next_level >= 3)
     {
-      const auto& pinfo = fragments_.getLastProteoformInfo();
-      proto_ctx.region_start = pinfo.region_start;
-      proto_ctx.region_end = pinfo.region_end;
-      proto_ctx.ptm_sites = pinfo.ptm_sites;
+      proto_ctx.region_start = frag_result.region_start;
+      proto_ctx.region_end = frag_result.region_end;
+      proto_ctx.ptm_sites = frag_result.ptm_sites;
       // If no truncation detected, use full protein sequence bounds
       if (proto_ctx.region_start < 0)
         proto_ctx.region_start = 0;
@@ -550,7 +550,7 @@ namespace OpenMS
     }
 
     // Populate fragment matching metadata
-    nlr.fragment_count = found;
+    nlr.fragment_count = frag_result.total_match_count;
     if (!seq.empty() && found > 0)
     {
       nlr.matched_protein = config_.targeting().fasta_file;
@@ -695,10 +695,10 @@ namespace OpenMS
       const DeconvolvedSpectrum& spec,
       const ExplorationGroup& group,
       const double* mzs, const double* ints, int length,
-      double* out_remaining_ratio, FragmentMatchResult* out_frag,
+      double* out_remaining_ratio, FragmentAnalysis::FragmentMatchResult* out_frag,
       const std::string& activation_type) const
   {
-    FragmentMatchResult fmr;
+    FragmentAnalysis::FragmentMatchResult fmr;
     switch (metric)
     {
       case ExplorationMetric::MassCount:
@@ -713,7 +713,7 @@ namespace OpenMS
       {
         fmr = computeFragmentMatch_(spec, group.msn_level, activation_type);
         if (out_frag) *out_frag = fmr;
-        return fmr.count;
+        return static_cast<double>(fmr.total_match_count);
       }
       default:
         fmr = computeFragmentMatch_(spec, group.msn_level, activation_type);
@@ -768,10 +768,10 @@ namespace OpenMS
     return score;
   }
 
-  Exploration::FragmentMatchResult Exploration::computeFragmentMatch_(const DeconvolvedSpectrum& spec, int msn_level,
-                                                                      const std::string& activation_type) const
+  FragmentAnalysis::FragmentMatchResult Exploration::computeFragmentMatch_(const DeconvolvedSpectrum& spec, int msn_level,
+                                                                           const std::string& activation_type) const
   {
-    FragmentMatchResult result;
+    FragmentAnalysis::FragmentMatchResult result;
     const auto& seq = config_.targeting().protein_sequence;
     if (seq.empty() || spec.empty())
       return result;
@@ -785,19 +785,17 @@ namespace OpenMS
     std::vector<char> ion_types(max_matches, '\0');
     std::vector<int> frag_indices(max_matches, 0);
 
-    int count = fragments_.getTopFragmentMatches(
+    fragments_.getTopFragmentMatches(
         seq, max_matches,
         masses.data(), qscores.data(), charges.data(),
         wstarts.data(), wends.data(),
         ion_types.data(), frag_indices.data(),
-        spec_copy, activation_type,
+        spec_copy, result, activation_type,
         config_.level(msn_level).exploration_tolerance_ppm);
 
-    result.count = static_cast<double>(count);
-    if (count > 0)
+    if (result.total_match_count > 0)
     {
       result.matched_protein = config_.targeting().fasta_file;
-      result.proteoform_sequence = seq;
     }
     return result;
   }
