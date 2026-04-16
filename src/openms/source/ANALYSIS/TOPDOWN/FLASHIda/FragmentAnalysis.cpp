@@ -379,15 +379,11 @@ namespace
   int FragmentAnalysis::runTagBasedFragmentMatching_(const String& protein_sequence,
                                                      std::vector<TagBasedFragmentMatch>& matches,
                                                      DeconvolvedSpectrum& stored_ms2,
-                                                     std::vector<PTMSite>* ptm_sites,
+                                                     FragmentMatchResult& result,
                                                      const String& fragmentation_method,
                                                      double tolerance_ppm)
   {
     matches.clear();
-    if (ptm_sites != nullptr)
-    {
-      ptm_sites->clear();
-    }
 
     if (stored_ms2.empty() || protein_sequence.empty())
     {
@@ -572,10 +568,10 @@ namespace
       // TODO: Why not end??
       end_pos = static_cast<int>(best_hit.getMetaValue("EndPosition"));
 
-    // Cache proteoform region
-    last_proteoform_info_.region_start = start_pos;  // 0-based, or -1 if not found
-    last_proteoform_info_.region_end = end_pos;       // 0-based exclusive, or -1
-    last_proteoform_info_.ptm_sites.clear();
+    // Populate proteoform region in result
+    result.region_start = start_pos;  // 0-based, or -1 if not found
+    result.region_end = end_pos;       // 0-based exclusive, or -1
+    result.proteoform_sequence = protein_sequence;
 
     if (start_pos >= 0 && end_pos >= 0 && end_pos > start_pos)
     {
@@ -627,22 +623,8 @@ namespace
                 << "\"" << subseq << "\"" << std::endl;
     }
 
-    // Populate ptm_sites output if requested
-    if (ptm_sites != nullptr)
-    {
-      for (Size i = 0; i < mod_masses.size(); ++i)
-      {
-        PTMSite site;
-        site.start_position = mod_starts[i];
-        site.end_position = mod_ends[i];
-        site.position = (site.start_position + site.end_position) / 2;
-        site.mass_shift = mod_masses[i];
-        ptm_sites->push_back(site);
-      }
-    }
-
-    // Always cache PTM sites (regardless of whether ptm_sites output was requested)
-    last_proteoform_info_.ptm_sites.clear();
+    // Populate PTM sites in result
+    result.ptm_sites.clear();
     for (Size i = 0; i < mod_masses.size(); ++i)
     {
       PTMSite site;
@@ -650,7 +632,7 @@ namespace
       site.end_position = mod_ends[i];
       site.position = (site.start_position + site.end_position) / 2;
       site.mass_shift = mod_masses[i];
-      last_proteoform_info_.ptm_sites.push_back(site);
+      result.ptm_sites.push_back(site);
     }
 
     // 8. Build local PTM sites for fragment matching
@@ -759,6 +741,7 @@ namespace
       std::cout << "  ... (" << (matches.size() - 10) << " more)" << std::endl;
     }
 
+    result.total_match_count = static_cast<int>(matches.size());
     return static_cast<int>(matches.size());
   }
 
