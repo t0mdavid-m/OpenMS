@@ -308,7 +308,7 @@ START_SECTION(calibrateAndScore_detailed_results)
   ds.push_back(pg);
 
   std::vector<const DeconvolvedSpectrum*> variants = {&ds};
-  std::vector<MS3FragmentMatcher::MatchResult> detailed;
+  std::vector<FragmentAnalysis::ProteoformMatch> detailed;
 
   auto scores = MS3FragmentMatcher::calibrateAndScore(
     variants, protein, ctx, frag_type, frag_index,
@@ -319,20 +319,20 @@ START_SECTION(calibrateAndScore_detailed_results)
   TEST_TRUE(scores[0] >= 1.0)  // at least 1 match
 
   TEST_EQUAL(detailed.size(), 1)
-  TEST_TRUE(detailed[0].matches.size() >= 1)
+  TEST_TRUE(detailed[0].fragments.size() >= 1)
 
   // Find the b2 match in the detailed results
   bool found_b2 = false;
-  for (const auto& fm : detailed[0].matches)
+  for (const auto& fm : detailed[0].fragments)
   {
-    if (fm.ms3_ion_type == "b" && fm.ms3_ion_index == 2)
+    if (fm.ion_type == "b" && fm.ion_index == 2)
     {
       found_b2 = true;
       // Observed mass should be close to theo_b2 (after calibration correction)
       TEST_REAL_SIMILAR(fm.observed_mass, theo_b2)
       // Equivalent: since start=0, b2 in MS3 maps to b2 in full protein
-      TEST_EQUAL(fm.ms2_equiv_type, "b")
-      TEST_EQUAL(fm.ms2_equiv_index, 2)
+      TEST_EQUAL(fm.equiv_type, "b")
+      TEST_EQUAL(fm.equiv_index, 2)
       // Adjusted mass should be close to observed + offset (offset ~0 since start=0)
       TEST_TRUE(fm.adjusted_mass > 0.0)
       break;

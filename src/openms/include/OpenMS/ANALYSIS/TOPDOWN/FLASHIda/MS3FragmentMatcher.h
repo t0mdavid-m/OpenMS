@@ -62,25 +62,6 @@ namespace OpenMS
       std::vector<FragmentAnalysis::PTMSite> ptm_sites; ///< 1-based positions relative to proteoform
     };
 
-    /// A matched MS3 fragment with its full-protein equivalent
-    struct FragmentMatch
-    {
-      std::string ms3_ion_type;     ///< Ion type in MS3 local space ("b", "y", "yb", "ya", "a")
-      int ms3_ion_index = 0;        ///< 1-based index in MS3 local space
-      double observed_mass = 0.0;   ///< Calibration-corrected deconvolved mass from MS3 spectrum
-      std::string ms2_equiv_type;   ///< Equivalent full-protein ion type ("b" or "y")
-      int ms2_equiv_index = 0;      ///< Equivalent full-protein ion index (1-based)
-      double adjusted_mass = 0.0;   ///< Mass offset-adjusted to full-protein equivalent
-    };
-
-    /// Per-variant identification result from calibrateAndScore
-    struct MatchResult
-    {
-      double ppm_offset = 0.0;                  ///< Median PPM error from calibration pass
-      double correction_factor = 1.0;            ///< 1/(1 + ppm_offset * 1e-6)
-      std::vector<FragmentMatch> matches;        ///< Matched fragments with full-protein equivalents
-    };
-
     /// Compile-time constant: loose tolerance for calibration pass
     static constexpr double LOOSE_TOLERANCE_PPM = 500.0;
 
@@ -139,7 +120,7 @@ namespace OpenMS
       int fragment_ion_index,
       double loose_tolerance_ppm,
       double tight_tolerance_ppm,
-      std::vector<MatchResult>* detailed_results = nullptr);
+      std::vector<FragmentAnalysis::ProteoformMatch>* detailed_results = nullptr);
 
     /// Compute the equivalent full-protein ion for an MS3 fragment match.
     static void computeEquivalentIon(

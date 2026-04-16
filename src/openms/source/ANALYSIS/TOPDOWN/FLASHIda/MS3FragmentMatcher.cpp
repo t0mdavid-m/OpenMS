@@ -402,7 +402,7 @@ namespace OpenMS
     int fragment_ion_index,
     double loose_tolerance_ppm,
     double tight_tolerance_ppm,
-    std::vector<MatchResult>* detailed_results)
+    std::vector<FragmentAnalysis::ProteoformMatch>* detailed_results)
   {
     std::vector<double> scores(variant_spectra.size(), 0.0);
 
@@ -539,24 +539,24 @@ namespace OpenMS
       if (detailed_results != nullptr)
       {
         auto& mr = (*detailed_results)[vi];
-        mr.matches.reserve(details.size());
+        mr.fragments.reserve(details.size());
         for (const auto& md : details)
         {
-          FragmentMatch fm;
-          fm.ms3_ion_type = md.ion_type;
-          fm.ms3_ion_index = md.position;
+          FragmentAnalysis::ProteoformMatch::FragmentMatch fm;
+          fm.ion_type = md.ion_type;
+          fm.ion_index = md.position;
           fm.observed_mass = md.observed_mass;
           double offset = 0.0;
           computeEquivalentIon(protein_sequence, ctx,
                                fragment_ion_type, fragment_ion_index,
                                md.ion_type, md.position, md.theoretical_mass,
                                protein_prefix,
-                               fm.ms2_equiv_type, fm.ms2_equiv_index, offset);
+                               fm.equiv_type, fm.equiv_index, offset);
           fm.adjusted_mass = md.observed_mass + offset;
-          mr.matches.push_back(fm);
+          mr.fragments.push_back(fm);
         }
-        std::sort(mr.matches.begin(), mr.matches.end(),
-          [](const FragmentMatch& a, const FragmentMatch& b){ return a.observed_mass < b.observed_mass; });
+        std::sort(mr.fragments.begin(), mr.fragments.end(),
+          [](const FragmentAnalysis::ProteoformMatch::FragmentMatch& a, const FragmentAnalysis::ProteoformMatch::FragmentMatch& b){ return a.observed_mass < b.observed_mass; });
       }
 
       // --- Log: per-variant matches ---
