@@ -193,6 +193,7 @@ namespace OpenMS
       int id_int = cmd.scan_id;
       std::string id_str = ScanCommandQueue::encode(id_int);
       v.tracking_id = id_str;
+      v.cmd = cmd;
       if (msn_level >= 3 && ion_type != '\0' && frag_index > 0)
       {
         double frag_mass_kda = precursor_mz * charge / 1000.0;
@@ -413,7 +414,7 @@ namespace OpenMS
       ScanCommand prod_cmd;
       if (group.msn_level >= 3)
       {
-        prod_cmd = queue.buildMS3(group.originating_cmd, prod_config,
+        prod_cmd = queue.buildMS3(group.variants[best_idx].cmd, prod_config,
                                    group.precursor_mz, group.precursor_charge,
                                    group.isolation_width,
                                    group.fragment_ion_type, group.fragment_ion_index, 1);
@@ -435,7 +436,7 @@ namespace OpenMS
     {
       auto next_nlr = initiateNextLevel(group.msn_level,
           group.variants[best_idx].result, group.faims_cv, queue,
-          &group.originating_cmd);
+          &group.variants[best_idx].cmd);
       info.commands.insert(info.commands.end(), next_nlr.commands.begin(), next_nlr.commands.end());
     }
 

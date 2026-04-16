@@ -75,6 +75,7 @@ namespace OpenMS
       int fragment_count = 0;
       bool received = false;
       DeconvolvedSpectrum result{0};
+      ScanCommand cmd;
     };
 
     /// Group of CE variants for one precursor at one MSn level
