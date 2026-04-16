@@ -239,8 +239,9 @@ namespace OpenMS
     double computeExplorationScore_(ExplorationMetric metric, const DeconvolvedSpectrum& spec,
                                     const ExplorationGroup& group,
                                     const double* mzs, const double* ints, int length,
-                                    double* out_remaining_ratio = nullptr,
-                                    FragmentMatchResult* out_frag = nullptr) const;
+                                    double* out_remaining_ratio,
+                                    FragmentMatchResult* out_frag,
+                                    const std::string& activation_type) const;
 
     /// Score: number of deconvolved masses
     double computeMassCount_(const DeconvolvedSpectrum& spec) const;
@@ -251,7 +252,8 @@ namespace OpenMS
                                            double* out_ratio = nullptr) const;
 
     /// Score: number of matched fragment ions + protein info
-    FragmentMatchResult computeFragmentMatch_(const DeconvolvedSpectrum& spec, int msn_level) const;
+    FragmentMatchResult computeFragmentMatch_(const DeconvolvedSpectrum& spec, int msn_level,
+                                              const std::string& activation_type) const;
 
     /// Compute TIC coverage for metadata
     float computeTICCoverage_(const DeconvolvedSpectrum& spec) const;

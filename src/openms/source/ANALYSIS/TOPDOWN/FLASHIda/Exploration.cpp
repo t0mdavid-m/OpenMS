@@ -285,7 +285,7 @@ namespace OpenMS
     v.result = ms2_deconv;
     double remaining_ratio = -1.0;
     FragmentMatchResult frag{};
-    v.score = computeExplorationScore_(group.exploration_metric, ms2_deconv, group, mzs, ints, length, &remaining_ratio, &frag);
+    v.score = computeExplorationScore_(group.exploration_metric, ms2_deconv, group, mzs, ints, length, &remaining_ratio, &frag, v.activation_type);
     v.tic_coverage = computeTICCoverage_(ms2_deconv);
     v.fragment_count = static_cast<int>(frag.count);
     v.received = true;
@@ -690,27 +690,28 @@ namespace OpenMS
       const DeconvolvedSpectrum& spec,
       const ExplorationGroup& group,
       const double* mzs, const double* ints, int length,
-      double* out_remaining_ratio, FragmentMatchResult* out_frag) const
+      double* out_remaining_ratio, FragmentMatchResult* out_frag,
+      const std::string& activation_type) const
   {
     FragmentMatchResult fmr;
     switch (metric)
     {
       case ExplorationMetric::MassCount:
-        fmr = computeFragmentMatch_(spec, group.msn_level);
+        fmr = computeFragmentMatch_(spec, group.msn_level, activation_type);
         if (out_frag) *out_frag = fmr;
         return computeMassCount_(spec);
       case ExplorationMetric::RemainingPrecursor:
-        fmr = computeFragmentMatch_(spec, group.msn_level);
+        fmr = computeFragmentMatch_(spec, group.msn_level, activation_type);
         if (out_frag) *out_frag = fmr;
         return computeRemainingPrecursorScore_(group, mzs, ints, length, out_remaining_ratio);
       case ExplorationMetric::FragmentCount:
       {
-        fmr = computeFragmentMatch_(spec, group.msn_level);
+        fmr = computeFragmentMatch_(spec, group.msn_level, activation_type);
         if (out_frag) *out_frag = fmr;
         return fmr.count;
       }
       default:
-        fmr = computeFragmentMatch_(spec, group.msn_level);
+        fmr = computeFragmentMatch_(spec, group.msn_level, activation_type);
         if (out_frag) *out_frag = fmr;
         return computeMassCount_(spec);
     }
@@ -762,7 +763,8 @@ namespace OpenMS
     return score;
   }
 
-  Exploration::FragmentMatchResult Exploration::computeFragmentMatch_(const DeconvolvedSpectrum& spec, int msn_level) const
+  Exploration::FragmentMatchResult Exploration::computeFragmentMatch_(const DeconvolvedSpectrum& spec, int msn_level,
+                                                                      const std::string& activation_type) const
   {
     FragmentMatchResult result;
     const auto& seq = config_.targeting().protein_sequence;
@@ -783,7 +785,7 @@ namespace OpenMS
         masses.data(), qscores.data(), charges.data(),
         wstarts.data(), wends.data(),
         ion_types.data(), frag_indices.data(),
-        spec_copy, "HCD",
+        spec_copy, activation_type,
         config_.level(msn_level).exploration_tolerance_ppm);
 
     result.count = static_cast<double>(count);
