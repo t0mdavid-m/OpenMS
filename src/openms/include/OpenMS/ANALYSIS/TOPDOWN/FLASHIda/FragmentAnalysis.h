@@ -65,16 +65,16 @@ namespace OpenMS
       double mass_shift;   ///< Observed mass shift (modification mass)
     };
 
-    /// Cached result from the last runTagBasedFragmentMatching_ call
-    struct ProteoformInfo
+    /// Complete result from a fragment matching operation
+    struct FragmentMatchResult
     {
-      int region_start = -1;  ///< 0-based start position in protein sequence (-1 = full sequence)
-      int region_end = -1;    ///< 0-based exclusive end position (-1 = full sequence)
-      std::vector<PTMSite> ptm_sites; ///< 1-based positions relative to proteoform
+      int total_match_count = 0;   ///< Total fragments matched (uncapped)
+      int region_start = -1;       ///< 0-based proteoform start (-1 = full sequence)
+      int region_end = -1;         ///< 0-based exclusive proteoform end (-1 = full sequence)
+      std::vector<PTMSite> ptm_sites;        ///< PTM sites from FLASHExtender
+      std::string matched_protein;           ///< Protein file/DB name
+      std::string proteoform_sequence;       ///< Matched protein sequence
     };
-
-    /// Get the proteoform region and PTM sites from the last tag-based matching call
-    const ProteoformInfo& getLastProteoformInfo() const { return last_proteoform_info_; }
 
     /// Map fragmentation method name to ion type strings for FLASHTagger/FLASHExtender.
     /// Case-insensitive. Returns {"b","y"} for HCD/CID, {"c","z"} for ETD,
@@ -140,6 +140,7 @@ namespace OpenMS
                               char* ion_types,
                               int* fragment_indices,
                               DeconvolvedSpectrum& stored_ms2,
+                              FragmentMatchResult& result,
                               const String& fragmentation_method = "HCD",
                               double tolerance_ppm = 0.0);
 
@@ -175,6 +176,7 @@ namespace OpenMS
                                 char* ion_types,
                                 int* fragment_indices,
                                 DeconvolvedSpectrum& stored_ms2,
+                                FragmentMatchResult& result,
                                 const String& fragmentation_method = "HCD",
                                 double tolerance_ppm = 0.0);
 
@@ -208,6 +210,7 @@ namespace OpenMS
                                   char* ion_types,
                                   int* fragment_indices,
                                   DeconvolvedSpectrum& stored_ms2,
+                                  FragmentMatchResult& result,
                                   const String& fragmentation_method = "HCD",
                                   double tolerance_ppm = 0.0);
 
@@ -258,7 +261,6 @@ namespace OpenMS
 
   private:
     const Config& config_;
-    ProteoformInfo last_proteoform_info_;
 
     /// Internal struct for fragment match results from tag-based matching
     struct TagBasedFragmentMatch
@@ -292,7 +294,7 @@ namespace OpenMS
     int runTagBasedFragmentMatching_(const String& protein_sequence,
                                     std::vector<TagBasedFragmentMatch>& matches,
                                     DeconvolvedSpectrum& stored_ms2,
-                                    std::vector<PTMSite>* ptm_sites = nullptr,
+                                    FragmentMatchResult& result,
                                     const String& fragmentation_method = "HCD",
                                     double tolerance_ppm = 0.0);
   };
