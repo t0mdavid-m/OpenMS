@@ -464,19 +464,4 @@ namespace OpenMS
     return queues_[priority].size();
   }
 
-  // --- Overrides ---
-
-  void ScanCommandQueue::applyOverrides(ScanCommand& cmd,
-      const std::unordered_map<std::string, std::string>& overrides) const
-  {
-    for (auto ov_it = overrides.begin(); ov_it != overrides.end(); ++ov_it)
-    {
-      const auto& okey = ov_it->first;
-      const auto& oval = ov_it->second;
-      if (okey == "agc_target") cmd.agc_target = static_cast<int32_t>(std::stod(oval));
-      else if (okey == "max_injection_time_ms") cmd.max_it = std::stod(oval);
-      else if (okey == "isolation_width") cmd.stages[0].isolation_width = std::stod(oval);
-    }
-  }
-
 } // namespace OpenMS

@@ -60,7 +60,6 @@ namespace OpenMS
    * - makeMS1(), makeAGC(): const, only read config_ (immutable after construction)
    * - encode(): static pure function
    * - decode(): reads static const tracking_alphabet_ only
-   * - applyOverrides(): operates on caller's ScanCommand, no queue state access
    */
   class OPENMS_DLLAPI ScanCommandQueue
   {
@@ -87,9 +86,6 @@ namespace OpenMS
     /// Build follow-up MS2 at priority 0 using the given scan config and description suffix.
     /// Returns the command; caller pushes.
     ScanCommand buildFollowUp(const ScanCommand& ctx, const ScanConfig& follow_up_config, char suffix, int priority = 0);
-
-    /// Apply exploration parameter overrides to a ScanCommand
-    void applyOverrides(ScanCommand& cmd, const std::unordered_map<std::string, std::string>& overrides) const;
 
     // --- Queue ops (all thread-safe) ---
 
