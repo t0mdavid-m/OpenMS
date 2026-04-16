@@ -12,6 +12,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iomanip>
+#include <iostream>
 #include <numeric>
 
 namespace OpenMS
@@ -186,7 +188,8 @@ namespace OpenMS
     const DeconvolvedSpectrum& spectrum,
     const std::vector<TheoreticalMass>& theoretical,
     double tolerance_ppm,
-    std::vector<double>* ppm_errors)
+    std::vector<double>* ppm_errors,
+    std::vector<MatchDetail>* match_details)
   {
     if (spectrum.empty() || theoretical.empty()) return 0;
 
@@ -208,7 +211,7 @@ namespace OpenMS
       int best_theo_idx = -1;
       double best_ppm = tolerance_ppm + 1.0;
 
-      // Binary search for candidates
+      // Scan sorted candidates within tolerance window
       for (size_t k = 0; k < sorted_idx.size(); ++k)
       {
         size_t ti = sorted_idx[k];
@@ -229,11 +232,24 @@ namespace OpenMS
       {
         theo_used[best_theo_idx] = true;
         ++match_count;
-        if (ppm_errors)
+
+        if (ppm_errors || match_details)
         {
           double signed_ppm = (obs_mass - theoretical[best_theo_idx].mass)
                               / theoretical[best_theo_idx].mass * 1e6;
-          ppm_errors->push_back(signed_ppm);
+          if (ppm_errors)
+            ppm_errors->push_back(signed_ppm);
+          if (match_details)
+          {
+            MatchDetail md;
+            md.observed_mass = obs_mass;
+            md.theoretical_mass = theoretical[best_theo_idx].mass;
+            md.ppm_error = signed_ppm;
+            md.position = theoretical[best_theo_idx].position;
+            md.ion_type = theoretical[best_theo_idx].ion_type;
+            md.includes_ptm = theoretical[best_theo_idx].includes_ptm;
+            match_details->push_back(md);
+          }
         }
       }
     }
@@ -327,6 +343,42 @@ namespace OpenMS
     auto theoretical = computeTheoreticalMasses(subseq, ion_types, rebased_ptms);
     if (theoretical.empty()) return scores;
 
+    // --- Log: precursor + subsequence ---
+    int prot_start_1based = ctx.region_start + subseq_start_1based;
+    int prot_end_1based = prot_start_1based + fragment_ion_index - 1;
+    std::string display_seq = subseq.size() > 30
+        ? subseq.substr(0, 27) + "..."
+        : subseq;
+    std::cout << "[calibrateAndScore] Precursor: " << fragment_ion_type << fragment_ion_index
+              << " -> subsequence (residues " << prot_start_1based << "-" << prot_end_1based
+              << " of " << protein_sequence.size() << ")" << std::endl;
+    std::cout << "[calibrateAndScore] Subsequence: " << display_seq << std::endl;
+
+    // --- Log: PTM sites ---
+    std::cout << "[calibrateAndScore] PTM sites in subsequence: " << rebased_ptms.size() << std::endl;
+    for (const auto& ptm : rebased_ptms)
+    {
+      int idx_start = std::max(0, ptm.start_position - 1);
+      int idx_len = std::min(ptm.end_position, static_cast<int>(subseq.size())) - idx_start;
+      std::string ptm_subseq = subseq.substr(idx_start, std::max(idx_len, 0));
+      if (ptm.start_position == ptm.end_position)
+        std::cout << "  Residue " << ptm.start_position << ": ";
+      else
+        std::cout << "  Residue " << ptm.start_position << "-" << ptm.end_position << ": ";
+      std::cout << std::showpos << std::fixed << std::setprecision(3) << ptm.mass_shift
+                << std::noshowpos << " Da \"" << ptm_subseq << "\"" << std::endl;
+    }
+
+    // --- Log: ion types + theoretical count ---
+    std::cout << "[calibrateAndScore] Ion types: ";
+    for (size_t i = 0; i < ion_types.size(); ++i)
+    {
+      if (i > 0) std::cout << ", ";
+      std::cout << ion_types[i];
+    }
+    std::cout << std::endl;
+    std::cout << "[calibrateAndScore] Theoretical masses: " << theoretical.size() << std::endl;
+
     // Pass 1: loose matching for calibration
     std::vector<double> all_ppm_errors;
     for (size_t vi = 0; vi < variant_spectra.size(); ++vi)
@@ -337,10 +389,10 @@ namespace OpenMS
 
     // Compute median ppm error
     double correction_factor = 1.0;
+    double median_ppm = 0.0;
     if (! all_ppm_errors.empty())
     {
       std::sort(all_ppm_errors.begin(), all_ppm_errors.end());
-      double median_ppm;
       size_t mid = all_ppm_errors.size() / 2;
       if (all_ppm_errors.size() % 2 == 0)
         median_ppm = (all_ppm_errors[mid - 1] + all_ppm_errors[mid]) / 2.0;
@@ -350,10 +402,29 @@ namespace OpenMS
       correction_factor = 1.0 / (1.0 + median_ppm * 1e-6);
     }
 
+    // --- Log: calibration stats ---
+    if (all_ppm_errors.empty())
+    {
+      std::cout << "[calibrateAndScore] Calibration: no matches at loose tolerance (skipping correction)"
+                << std::endl;
+    }
+    else
+    {
+      std::cout << "[calibrateAndScore] Calibration: " << all_ppm_errors.size()
+                << " matches at " << std::fixed << std::setprecision(0) << loose_tolerance_ppm
+                << " ppm, median error: " << std::showpos << std::setprecision(2) << median_ppm
+                << std::noshowpos << " ppm, correction: " << std::setprecision(8)
+                << correction_factor << std::endl;
+    }
+
     // Pass 2: apply correction, match at tight tolerance
     for (size_t vi = 0; vi < variant_spectra.size(); ++vi)
     {
-      if (variant_spectra[vi] == nullptr || variant_spectra[vi]->empty()) continue;
+      if (variant_spectra[vi] == nullptr || variant_spectra[vi]->empty())
+      {
+        std::cout << "[calibrateAndScore] Variant " << vi << ": (no spectrum)" << std::endl;
+        continue;
+      }
 
       // Create corrected copy
       DeconvolvedSpectrum corrected(0);
@@ -364,7 +435,35 @@ namespace OpenMS
         corrected.push_back(pg);
       }
 
-      scores[vi] = static_cast<double>(matchSpectrum(corrected, theoretical, tight_tolerance_ppm));
+      std::vector<MatchDetail> details;
+      scores[vi] = static_cast<double>(matchSpectrum(corrected, theoretical, tight_tolerance_ppm, nullptr, &details));
+
+      // --- Log: per-variant matches ---
+      std::cout << "[calibrateAndScore] Variant " << vi << ": "
+                << static_cast<int>(scores[vi]) << " matches ("
+                << variant_spectra[vi]->size() << " peaks, "
+                << theoretical.size() << " theoretical)" << std::endl;
+
+      // Sort by ion_type then position for readability
+      std::sort(details.begin(), details.end(),
+        [](const MatchDetail& a, const MatchDetail& b)
+        {
+          if (a.ion_type != b.ion_type) return a.ion_type < b.ion_type;
+          return a.position < b.position;
+        });
+
+      int show_count = std::min(static_cast<int>(details.size()), 10);
+      for (int di = 0; di < show_count; ++di)
+      {
+        const auto& md = details[di];
+        std::cout << "  " << md.ion_type << md.position
+                  << " - " << std::fixed << std::setprecision(2) << md.theoretical_mass
+                  << " Da -> " << md.observed_mass << " Da ("
+                  << std::showpos << std::setprecision(2) << md.ppm_error
+                  << std::noshowpos << " ppm)" << std::endl;
+      }
+      if (static_cast<int>(details.size()) > 10)
+        std::cout << "  ... (" << (details.size() - 10) << " more)" << std::endl;
     }
 
     return scores;

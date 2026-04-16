@@ -43,6 +43,17 @@ namespace OpenMS
       bool includes_ptm = false; ///< For ambiguous PTMs: true = mass includes PTM shift
     };
 
+    /// Detail of a single observed-to-theoretical match
+    struct MatchDetail
+    {
+      double observed_mass = 0.0;    ///< Observed (deconvolved) mass
+      double theoretical_mass = 0.0; ///< Matched theoretical mass
+      double ppm_error = 0.0;        ///< Signed ppm error: (obs - theo) / theo * 1e6
+      int position = 0;              ///< 1-based fragment index from relevant terminus
+      std::string ion_type;          ///< "a", "b", "y", "yb", "ya"
+      bool includes_ptm = false;     ///< Whether the matched theoretical includes an ambiguous PTM
+    };
+
     /// Cached proteoform context from MS2 tag-based matching
     struct ProteoformContext
     {
@@ -80,7 +91,8 @@ namespace OpenMS
       const DeconvolvedSpectrum& spectrum,
       const std::vector<TheoreticalMass>& theoretical,
       double tolerance_ppm,
-      std::vector<double>* ppm_errors = nullptr);
+      std::vector<double>* ppm_errors = nullptr,
+      std::vector<MatchDetail>* match_details = nullptr);
 
     // -- Subsequence extraction + PTM rebasing --
 

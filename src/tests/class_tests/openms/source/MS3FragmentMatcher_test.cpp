@@ -420,4 +420,58 @@ START_SECTION(calibrateAndScore)
 }
 END_SECTION
 
+START_SECTION(matchSpectrum_match_details)
+{
+  // Same setup as matchSpectrum test: "ACDEF" with b+y ions
+  std::string seq = "ACDEF";
+  auto theoretical = MS3FragmentMatcher::computeTheoreticalMasses(seq, {"b", "y"});
+
+  // Synthetic spectrum: 3 exact matches (b1, b2, y1) + 1 garbage
+  DeconvolvedSpectrum spec(0);
+  PeakGroup pg1(1, 1, true); pg1.setMonoisotopicMass(theoretical[0].mass); spec.push_back(pg1);
+  PeakGroup pg2(1, 1, true); pg2.setMonoisotopicMass(theoretical[1].mass); spec.push_back(pg2);
+  PeakGroup pg3(1, 1, true); pg3.setMonoisotopicMass(theoretical[4].mass); spec.push_back(pg3);
+  PeakGroup pg4(1, 1, true); pg4.setMonoisotopicMass(99999.0); spec.push_back(pg4);
+
+  std::vector<MS3FragmentMatcher::MatchDetail> details;
+  int count = MS3FragmentMatcher::matchSpectrum(spec, theoretical, 10.0, nullptr, &details);
+
+  TEST_EQUAL(count, 3)
+  TEST_EQUAL(details.size(), 3)
+
+  // Verify each detail has correct fields
+  for (const auto& md : details)
+  {
+    TEST_TRUE(! md.ion_type.empty())
+    TEST_TRUE(md.position >= 1)
+    TEST_TRUE(std::abs(md.ppm_error) < 0.01) // exact matches
+    TEST_REAL_SIMILAR(md.observed_mass, md.theoretical_mass) // exact matches
+    TEST_TRUE(! md.includes_ptm) // no PTMs in this sequence
+  }
+
+  // Check that we got the expected ion types (b1, b2, y1 — order depends on spectrum iteration)
+  int b_count = 0, y_count = 0;
+  for (const auto& md : details)
+  {
+    if (md.ion_type == "b") ++b_count;
+    if (md.ion_type == "y") ++y_count;
+  }
+  TEST_EQUAL(b_count, 2)
+  TEST_EQUAL(y_count, 1)
+
+  // Test with 50 ppm shift at 100 ppm tolerance
+  double shift_factor = 1.0 + 50.0e-6;
+  DeconvolvedSpectrum shifted_spec(0);
+  PeakGroup sp1(1, 1, true); sp1.setMonoisotopicMass(theoretical[0].mass * shift_factor); shifted_spec.push_back(sp1);
+  PeakGroup sp2(1, 1, true); sp2.setMonoisotopicMass(theoretical[1].mass * shift_factor); shifted_spec.push_back(sp2);
+
+  std::vector<MS3FragmentMatcher::MatchDetail> shift_details;
+  int shift_count = MS3FragmentMatcher::matchSpectrum(shifted_spec, theoretical, 100.0, nullptr, &shift_details);
+  TEST_EQUAL(shift_count, 2)
+  TEST_EQUAL(shift_details.size(), 2)
+  for (const auto& md : shift_details)
+    TEST_REAL_SIMILAR(md.ppm_error, 50.0)
+}
+END_SECTION
+
 END_TEST
