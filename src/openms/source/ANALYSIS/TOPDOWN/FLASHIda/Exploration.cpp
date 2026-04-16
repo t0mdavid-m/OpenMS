@@ -284,7 +284,7 @@ namespace OpenMS
 
     v.result = ms2_deconv;
     double remaining_ratio = -1.0;
-    FragmentAnalysis::FragmentMatchResult frag{};
+    FragmentAnalysis::ProteoformMatch frag{};
     v.score = computeExplorationScore_(group.exploration_metric, ms2_deconv, group, mzs, ints, length, &remaining_ratio, &frag, v.activation_type);
     v.tic_coverage = computeTICCoverage_(ms2_deconv);
     v.fragment_count = frag.total_match_count;
@@ -328,6 +328,7 @@ namespace OpenMS
     info.exploration_metric = static_cast<int>(group.exploration_metric);
     info.matched_protein = frag.matched_protein;
     info.proteoform_sequence = frag.proteoform_sequence;
+    info.identification_result = frag;
     info.remaining_ratio = remaining_ratio;
     std::string parent_enc = ScanCommandQueue::encode(group.originating_cmd.scan_id);
     std::strncpy(info.parent_scan_id, parent_enc.c_str(), 3);
@@ -389,7 +390,7 @@ namespace OpenMS
       for (auto& var : group.variants)
         variant_spectra.push_back(var.received ? &var.result : nullptr);
 
-      std::vector<MS3FragmentMatcher::MatchResult> detailed_results;
+      std::vector<FragmentAnalysis::ProteoformMatch> detailed_results;
       auto calibrated_scores = MS3FragmentMatcher::calibrateAndScore(
         variant_spectra,
         config_.targeting().protein_sequence,
@@ -508,7 +509,7 @@ namespace OpenMS
     std::vector<int> frag_indices(num_targets, 0);
 
     int found = 0;
-    FragmentAnalysis::FragmentMatchResult frag_result;
+    FragmentAnalysis::ProteoformMatch frag_result;
 
     switch (next_cfg.selection)
     {
@@ -551,6 +552,7 @@ namespace OpenMS
 
     // Populate fragment matching metadata
     nlr.fragment_count = frag_result.total_match_count;
+    nlr.proteoform_match = frag_result;
     if (!seq.empty() && found > 0)
     {
       nlr.matched_protein = config_.targeting().fasta_file;
@@ -695,10 +697,10 @@ namespace OpenMS
       const DeconvolvedSpectrum& spec,
       const ExplorationGroup& group,
       const double* mzs, const double* ints, int length,
-      double* out_remaining_ratio, FragmentAnalysis::FragmentMatchResult* out_frag,
+      double* out_remaining_ratio, FragmentAnalysis::ProteoformMatch* out_frag,
       const std::string& activation_type) const
   {
-    FragmentAnalysis::FragmentMatchResult fmr;
+    FragmentAnalysis::ProteoformMatch fmr;
     switch (metric)
     {
       case ExplorationMetric::MassCount:
@@ -768,10 +770,10 @@ namespace OpenMS
     return score;
   }
 
-  FragmentAnalysis::FragmentMatchResult Exploration::computeFragmentMatch_(const DeconvolvedSpectrum& spec, int msn_level,
-                                                                           const std::string& activation_type) const
+  FragmentAnalysis::ProteoformMatch Exploration::computeFragmentMatch_(const DeconvolvedSpectrum& spec, int msn_level,
+                                                                      const std::string& activation_type) const
   {
-    FragmentAnalysis::FragmentMatchResult result;
+    FragmentAnalysis::ProteoformMatch result;
     const auto& seq = config_.targeting().protein_sequence;
     if (seq.empty() || spec.empty())
       return result;

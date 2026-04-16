@@ -76,7 +76,7 @@ namespace OpenMS
       bool received = false;
       DeconvolvedSpectrum result{0};
       ScanCommand cmd;
-      MS3FragmentMatcher::MatchResult identification_result;  ///< Per-fragment match details (populated at batch eval)
+      FragmentAnalysis::ProteoformMatch identification_result;  ///< Per-fragment match details (populated at batch eval)
     };
 
     /// Cached MS2 context for identification.tsv output from MS3 results
@@ -137,6 +137,7 @@ namespace OpenMS
       std::string proteoform_sequence;
       float tic_coverage = 0.0f;
       int fragment_count = 0;
+      FragmentAnalysis::ProteoformMatch proteoform_match;  ///< Full fragment detail for identification
     };
 
     /// Result of feedResult: commands plus exploration per-variant metadata
@@ -157,7 +158,7 @@ namespace OpenMS
       std::string proteoform_sequence;
       double remaining_ratio = -1.0;  ///< Raw remaining_intensity / baseline_intensity (-1.0 = N/A)
       char parent_scan_id[4]{};  ///< Parent's encoded tracking ID (from group's originating_cmd)
-      MS3FragmentMatcher::MatchResult identification_result;  ///< Per-fragment match details for identification.tsv
+      FragmentAnalysis::ProteoformMatch identification_result;  ///< Per-fragment match details for identification.tsv
       MS2Context ms2_context;  ///< Cached MS2 context for this variant's group
     };
 
@@ -232,7 +233,7 @@ namespace OpenMS
                                     const ExplorationGroup& group,
                                     const double* mzs, const double* ints, int length,
                                     double* out_remaining_ratio,
-                                    FragmentAnalysis::FragmentMatchResult* out_frag,
+                                    FragmentAnalysis::ProteoformMatch* out_frag,
                                     const std::string& activation_type) const;
 
     /// Score: number of deconvolved masses
@@ -244,8 +245,8 @@ namespace OpenMS
                                            double* out_ratio = nullptr) const;
 
     /// Score: number of matched fragment ions + protein info
-    FragmentAnalysis::FragmentMatchResult computeFragmentMatch_(const DeconvolvedSpectrum& spec, int msn_level,
-                                                                const std::string& activation_type) const;
+    FragmentAnalysis::ProteoformMatch computeFragmentMatch_(const DeconvolvedSpectrum& spec, int msn_level,
+                                                           const std::string& activation_type) const;
 
     /// Compute TIC coverage for metadata
     float computeTICCoverage_(const DeconvolvedSpectrum& spec) const;
