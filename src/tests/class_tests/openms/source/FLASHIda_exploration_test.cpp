@@ -916,6 +916,91 @@ namespace
       }
     }
   })";
+
+  // Config with ETD exploration for activation type wiring test
+  const char* etd_exploration_config = R"({
+    "deconvolution": {
+      "score_threshold": 0.0,
+      "tqscore_threshold": 0.9,
+      "min_charge": 4,
+      "max_charge": 50,
+      "min_mass": 500,
+      "max_mass": 50000,
+      "tol": [10, 10, 10]
+    },
+    "precursor_selection": {
+      "RT_window": 180,
+      "target_mode": 0,
+      "IDScore": false,
+      "AllCharges": false,
+      "HCDEnergy": 29,
+      "strict_inclusion": false,
+      "tie_threshold": 0.1
+    },
+    "tagging": {
+      "min_tag_length": 3,
+      "max_tag_length": 8,
+      "max_ptm_count": 3,
+      "max_flanking_mass_diff": 50000
+    },
+    "quantification": {
+      "enabled": false,
+      "reporter_mz_tol": 0.002,
+      "fold_change_threshold": 1.4
+    },
+    "faims": {
+      "cv_values": [-50],
+      "max_cv_skip": 0,
+      "cv_precursor_threshold": 15
+    },
+    "ms_settings": {
+      "ms1": {
+        "analyzer": "Orbitrap",
+        "first_mass": 500,
+        "last_mass": 2000,
+        "resolution": 120000,
+        "agc_target": 800000,
+        "max_it": 246
+      },
+      "ms2": [
+        {
+          "analyzer": "Orbitrap",
+          "activation": "ETD",
+          "reaction_time": 10.0,
+          "resolution": 120000
+        }
+      ]
+    },
+    "scheduling": {
+      "cycle_time": { "enabled": false, "value_ms": 60000 },
+      "scan_timeout": { "enabled": false, "value_ms": 30000 }
+    },
+    "files": {
+      "target_logs": [],
+      "fasta": "",
+      "inclusion_list": "",
+      "ptm_list": ""
+    },
+    "ms3": {
+      "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
+    },
+    "conditional_ms2": false,
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_targets": 3 },
+      "ms2": {
+        "selection": "intensity",
+        "max_targets": 3,
+        "exploration": {
+          "metric": "mass_count",
+          "activations": ["ETD"],
+          "rt_min": 5.0,
+          "rt_max": 15.0,
+          "rt_step": 5.0
+        }
+      },
+      "ms3": { "selection": "none" }
+    }
+  })";
 } // anonymous namespace
 
 
@@ -1949,6 +2034,43 @@ START_SECTION(initiateNextLevel_ms2_min_charge_filters_fragments)
   // With ms2.min_charge=99, ALL fragments should be filtered out
   auto nlr = exploration.initiateNextLevel(2, deconv.storedMS2(), -50.0, queue, &ms2_ctx);
   TEST_EQUAL(static_cast<int>(nlr.commands.size()), 0)  // no commands — all fragments filtered by charge
+}
+END_SECTION
+
+START_SECTION(activation_type_wiring_in_scoring)
+{
+  // Verify that exploration scoring passes variant activation type through
+  // to fragment matching (not hardcoded "HCD").
+  // ETD config produces variants with activation_type="ETD", which maps to
+  // {c, z} ions — different from HCD's {b, y}.
+
+  Config cfg{std::string(etd_exploration_config)};
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+
+  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
+  TEST_EQUAL(cmds.size() > 0, true)
+
+  // Verify variants have ETD activation type
+  auto group = exploration.getGroup(1);
+  for (const auto& v : group.variants)
+  {
+    TEST_STRING_EQUAL(v.activation_type, "ETD")
+  }
+
+  // Feed result — this exercises the full scoring chain:
+  // feedResultImpl_ → computeExplorationScore_ → computeFragmentMatch_
+  // which now passes v.activation_type instead of hardcoded "HCD"
+  DeconvolvedSpectrum ds = makeSyntheticDeconv(1, 5);
+  int tracking_id = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
+  auto info = exploration.feedResultForTest(tracking_id, ds, 1.0, queue);
+
+  // The key assertion: feedResult completed without error and the activation type
+  // was correctly propagated through the chain.
+  TEST_EQUAL(info.activation_type, "ETD")
+  TEST_EQUAL(info.group_id > 0, true)
 }
 END_SECTION
 
