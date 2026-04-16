@@ -33,6 +33,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/PrecursorSelection.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
@@ -899,7 +900,7 @@ namespace OpenMS
     std::cout << std::endl;
   }
 
-  bool PrecursorSelection::processMS2ForTagBasedTargeting(double precursor_mass)
+  bool PrecursorSelection::processMS2ForTagBasedTargeting(double precursor_mass, const std::string& activation_type)
   {
     // Early exit if tag-based targeting not enabled
     if (target_protein_database_.empty())
@@ -928,6 +929,7 @@ namespace OpenMS
     Param tagger_param = tagger.getDefaults();
     tagger_param.setValue("min_length", config_.targeting().min_tag_length);
     tagger_param.setValue("max_length", config_.targeting().max_tag_length);
+    tagger_param.setValue("ion_type", FragmentAnalysis::getIonTypesForFragmentationMethod(activation_type));
     tagger.setParameters(tagger_param);
 
     // Run tag generation

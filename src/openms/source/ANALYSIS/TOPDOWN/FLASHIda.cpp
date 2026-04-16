@@ -846,7 +846,10 @@ FLASHIda::FLASHIda(char* arg) :
       bool tags_found = false;
       if (selection_.hasTargetProteinDatabase() && precursor_mass > 0)
       {
-        tags_found = selection_.processMS2ForTagBasedTargeting(precursor_mass);
+        std::string ms2_activation = (ctx.num_stages > 0)
+            ? std::string(ctx.stages[0].activation_type)
+            : config_.level(2).scans[0].activation;
+        tags_found = selection_.processMS2ForTagBasedTargeting(precursor_mass, ms2_activation);
       }
 
       // Quantification follow-up (independent of tags)

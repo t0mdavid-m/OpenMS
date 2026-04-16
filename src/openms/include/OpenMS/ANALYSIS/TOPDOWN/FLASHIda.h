@@ -200,9 +200,9 @@ namespace OpenMS
      * @param precursor_mass monoisotopic mass of the precursor (from iAPI)
      * @return true if target protein detected and targets expanded, false otherwise
      */
-    bool processMS2ForTagBasedTargeting(double precursor_mass)
+    bool processMS2ForTagBasedTargeting(double precursor_mass, const std::string& activation_type)
     {
-      return selection_.processMS2ForTagBasedTargeting(precursor_mass);
+      return selection_.processMS2ForTagBasedTargeting(precursor_mass, activation_type);
     }
 
   private:
