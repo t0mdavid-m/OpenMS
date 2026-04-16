@@ -281,10 +281,12 @@ namespace OpenMS
                              const std::string& activation_type = "",
                              double reaction_time = 0.0);
 
-    /// Write one identification.tsv row for an MS3 scan with matched fragments
+    /// Write one identification.tsv row for an MS2 or MS3 scan with matched fragments
     void writeIdentificationRow_(const std::string& tracking_id,
+                                  int ms_level,
+                                  char scan_mode,
                                   const Exploration::MS2Context& ctx,
-                                  const MS3FragmentMatcher::MatchResult& result);
+                                  const FragmentAnalysis::ProteoformMatch& match);
 
     /// Derive scan_type string from scan_description
     static std::string scanTypeFromDescription_(const ScanCommand& cmd);

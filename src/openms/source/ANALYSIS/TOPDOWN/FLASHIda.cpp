@@ -122,7 +122,8 @@ FLASHIda::FLASHIda(char* arg) :
       identification_tsv_stream_.open(rt_cfg.identification_path, std::ios::app);
       if (identification_tsv_stream_.is_open())
       {
-        identification_tsv_stream_ << "tracking_id\tproteoform\tstart_pos\tend_pos\t"
+        identification_tsv_stream_ << "ms_level\tscan_mode\t"
+                                   << "tracking_id\tproteoform\tstart_pos\tend_pos\t"
                                    << "ppm_offset\tcorrection_factor\t"
                                    << "ms1_precursor_mass\tms1_precursor_mz\tms1_precursor_charge\t"
                                    << "ms2_precursor_ion\tms2_precursor_mass\tms2_precursor_mz\tms2_precursor_charge\t"
@@ -455,54 +456,76 @@ FLASHIda::FLASHIda(char* arg) :
   }
 
   void FLASHIda::writeIdentificationRow_(
-    const std::string& tracking_id,
-    const Exploration::MS2Context& ctx,
-    const MS3FragmentMatcher::MatchResult& result)
+      const std::string& tracking_id,
+      int ms_level,
+      char scan_mode,
+      const Exploration::MS2Context& ctx,
+      const FragmentAnalysis::ProteoformMatch& match)
   {
-    // No lock — called from processScan() which already holds analysis_mutex_
     if (!identification_tsv_stream_.is_open()) return;
-    if (result.matches.empty()) return;
+    if (match.fragments.empty()) return;
 
-    std::ostringstream ms3_frags, ms3_masses, ms2_frags, ms2_masses;
-    ms3_frags << std::fixed << std::setprecision(4);
-    ms3_masses << std::fixed << std::setprecision(4);
+    std::string proforma = FragmentAnalysis::toProForma(
+        match.proteoform_sequence, match.ptm_sites);
+
+    std::ostringstream ms2_frags, ms2_masses;
     ms2_frags << std::fixed << std::setprecision(4);
     ms2_masses << std::fixed << std::setprecision(4);
 
-    for (size_t i = 0; i < result.matches.size(); ++i)
+    if (ms_level == 2)
     {
-      const auto& fm = result.matches[i];
-      if (i > 0)
+      for (size_t i = 0; i < match.fragments.size(); ++i)
       {
-        ms3_frags << ";";
-        ms3_masses << ";";
-        ms2_frags << ";";
-        ms2_masses << ";";
+        if (i > 0) { ms2_frags << ";"; ms2_masses << ";"; }
+        ms2_frags << match.fragments[i].ion_type << match.fragments[i].ion_index;
+        ms2_masses << match.fragments[i].observed_mass;
       }
-      ms3_frags << fm.ms3_ion_type << fm.ms3_ion_index;
-      ms3_masses << fm.observed_mass;
-      ms2_frags << fm.ms2_equiv_type << fm.ms2_equiv_index;
-      ms2_masses << fm.adjusted_mass;
+    }
+    else
+    {
+      for (size_t i = 0; i < match.fragments.size(); ++i)
+      {
+        if (i > 0) { ms2_frags << ";"; ms2_masses << ";"; }
+        ms2_frags << match.fragments[i].equiv_type << match.fragments[i].equiv_index;
+        ms2_masses << match.fragments[i].adjusted_mass;
+      }
+    }
+
+    std::ostringstream ms3_frags, ms3_masses;
+    ms3_frags << std::fixed << std::setprecision(4);
+    ms3_masses << std::fixed << std::setprecision(4);
+
+    if (ms_level == 3)
+    {
+      for (size_t i = 0; i < match.fragments.size(); ++i)
+      {
+        if (i > 0) { ms3_frags << ";"; ms3_masses << ";"; }
+        ms3_frags << match.fragments[i].ion_type << match.fragments[i].ion_index;
+        ms3_masses << match.fragments[i].observed_mass;
+      }
     }
 
     std::string precursor_ion;
-    if (ctx.fragment_ion_type != '\0')
-      precursor_ion = std::string(1, ctx.fragment_ion_type) + std::to_string(ctx.fragment_ion_index);
+    if (ms_level == 3 && ctx.fragment_ion_type != '\0')
+      precursor_ion = std::string(1, ctx.fragment_ion_type)
+                      + std::to_string(ctx.fragment_ion_index);
 
     identification_tsv_stream_
+      << ms_level << "\t"
+      << scan_mode << "\t"
       << tracking_id << "\t"
-      << ctx.proteoform_sequence << "\t"
-      << ctx.start_pos << "\t"
-      << ctx.end_pos << "\t"
-      << std::fixed << std::setprecision(2) << result.ppm_offset << "\t"
-      << std::setprecision(8) << result.correction_factor << "\t"
+      << proforma << "\t"
+      << match.region_start << "\t"
+      << match.region_end << "\t"
+      << std::fixed << std::setprecision(2) << match.ppm_offset << "\t"
+      << std::setprecision(8) << match.correction_factor << "\t"
       << std::setprecision(4) << ctx.ms1_precursor_mass << "\t"
       << ctx.ms1_precursor_mz << "\t"
       << ctx.ms1_precursor_charge << "\t"
       << precursor_ion << "\t"
-      << ctx.fragment_mass << "\t"
-      << ctx.fragment_mz << "\t"
-      << ctx.fragment_charge << "\t"
+      << (ms_level == 3 ? ctx.fragment_mass : 0.0) << "\t"
+      << (ms_level == 3 ? ctx.fragment_mz : 0.0) << "\t"
+      << (ms_level == 3 ? ctx.fragment_charge : 0) << "\t"
       << ms2_frags.str() << "\t"
       << ms2_masses.str() << "\t"
       << ms3_frags.str() << "\t"
