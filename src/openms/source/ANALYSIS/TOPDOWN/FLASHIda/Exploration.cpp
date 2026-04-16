@@ -495,7 +495,7 @@ namespace OpenMS
     int num_targets = this_cfg.max_targets;
 
     // Extract activation type from the scan command that produced this result
-    std::string scan_activation = (ms_ctx != nullptr)
+    std::string scan_activation = (ms_ctx != nullptr && ms_ctx->num_stages > 0)
         ? std::string(ms_ctx->stages[0].activation_type)
         : config_.level(msn_level).scans[0].activation;
 

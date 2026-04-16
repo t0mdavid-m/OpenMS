@@ -77,20 +77,6 @@ namespace
     return Residue::getInternalToYIon().getMonoWeight(); // default to y
   }
 
-  std::vector<std::string> FragmentAnalysis::getIonTypesForFragmentationMethod(const String& method)
-  {
-    String lower_method = method;
-    std::transform(lower_method.begin(), lower_method.end(), lower_method.begin(), ::tolower);
-
-    if (lower_method == "hcd") return {"b", "y"};
-    if (lower_method == "cid") return {"b", "y"};
-    if (lower_method == "etd") return {"c", "z"};
-    if (lower_method == "ethcd") return {"b", "c", "y", "z"};
-    if (lower_method == "etcid") return {"b", "c", "y", "z"};
-    if (lower_method == "uvpd") return {"a", "b", "c", "x", "y", "z"};
-    return {"b", "y"};  // default to HCD
-  }
-
   /// Check if ion type is a prefix (N-terminal) ion
   inline bool isPrefixIon(char ion_type)
   {
@@ -306,6 +292,20 @@ namespace
 
 } // anonymous namespace
 
+
+  std::vector<std::string> FragmentAnalysis::getIonTypesForFragmentationMethod(const String& method)
+  {
+    String lower_method = method;
+    std::transform(lower_method.begin(), lower_method.end(), lower_method.begin(), ::tolower);
+
+    if (lower_method == "hcd") return {"b", "y"};
+    if (lower_method == "cid") return {"b", "y"};
+    if (lower_method == "etd") return {"c", "z"};
+    if (lower_method == "ethcd") return {"b", "c", "y", "z"};
+    if (lower_method == "etcid") return {"b", "c", "y", "z"};
+    if (lower_method == "uvpd") return {"a", "b", "c", "x", "y", "z"};
+    return {"b", "y"};  // default to HCD
+  }
 
   FragmentAnalysis::FragmentAnalysis(const Config& config)
     : config_(config)
