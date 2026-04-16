@@ -687,10 +687,10 @@ FLASHIda::FLASHIda(char* arg) :
       std::vector<std::string> child_ids;
       for (const auto& c : ms2_commands)
         child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
-      int all_mass_count = static_cast<int>(selection_.deconvolvedMS1.size());
+      int all_mass_count = static_cast<int>(selection_.deconvolvedMS1().size());
       writeScanResultRow_(id_str, rt_min, all_mass_count, commands_pushed,
                           child_ids, 0, "", "", enqueue_ts, dequeue_ts, received_ts,
-                          selection_.deconvolvedMS1(), "");
+                          &selection_.deconvolvedMS1(), "");
 
       // FAIMS CV cycling: update skip policy, advance to next CV, push MS1
       if (faims_.isEnabled())
