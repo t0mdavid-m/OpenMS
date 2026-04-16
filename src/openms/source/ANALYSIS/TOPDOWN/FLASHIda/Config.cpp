@@ -69,6 +69,12 @@ namespace OpenMS
       else if (key == "first_mass") first_mass = std::stod(val);
       else if (key == "last_mass") last_mass = std::stod(val);
       else if (key == "max_it") max_it = std::stod(val);
+      else if (key == "microscans") microscans = static_cast<int>(std::stod(val));
+      else if (key == "rf_lens") rf_lens = std::stod(val);
+      else if (key == "source_cid") source_cid = std::stod(val);
+      else if (key == "source_cid_scaling") source_cid_scaling = std::stod(val);
+      else if (key == "data_type") data_type = val;
+      else if (key == "scan_rate") scan_rate = val;
       else if (key == "reaction_time") reaction_time = std::stod(val);
       else if (key == "reagent_max_it") reagent_max_it = std::stod(val);
       else if (key == "reagent_agc_target") reagent_agc_target = static_cast<int>(std::stod(val));
