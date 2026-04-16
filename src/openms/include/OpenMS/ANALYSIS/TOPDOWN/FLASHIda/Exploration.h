@@ -227,20 +227,12 @@ namespace OpenMS
     /// Generate variants across activation types with CE and/or RT sweep
     std::vector<VariantParams> buildVariants_(const MSLevelConfig& cfg, const ScanConfig& base_config) const;
 
-    /// Result of fragment matching: count + protein identification info
-    struct FragmentMatchResult
-    {
-      double count = 0.0;
-      std::string matched_protein;
-      std::string proteoform_sequence;
-    };
-
     /// Dispatch to metric-specific scorer
     double computeExplorationScore_(ExplorationMetric metric, const DeconvolvedSpectrum& spec,
                                     const ExplorationGroup& group,
                                     const double* mzs, const double* ints, int length,
                                     double* out_remaining_ratio,
-                                    FragmentMatchResult* out_frag,
+                                    FragmentAnalysis::FragmentMatchResult* out_frag,
                                     const std::string& activation_type) const;
 
     /// Score: number of deconvolved masses
@@ -252,8 +244,8 @@ namespace OpenMS
                                            double* out_ratio = nullptr) const;
 
     /// Score: number of matched fragment ions + protein info
-    FragmentMatchResult computeFragmentMatch_(const DeconvolvedSpectrum& spec, int msn_level,
-                                              const std::string& activation_type) const;
+    FragmentAnalysis::FragmentMatchResult computeFragmentMatch_(const DeconvolvedSpectrum& spec, int msn_level,
+                                                                const std::string& activation_type) const;
 
     /// Compute TIC coverage for metadata
     float computeTICCoverage_(const DeconvolvedSpectrum& spec) const;
