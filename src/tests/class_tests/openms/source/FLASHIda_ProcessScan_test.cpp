@@ -1665,4 +1665,48 @@ START_SECTION(cleanup_expired_drops_stale_queued_commands)
 }
 END_SECTION
 
+// MS1 and AGC scans should be resolved from pending_scan_map_ after processScan
+START_SECTION(ms1_agc_resolved_from_pending_map)
+{
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(idle_cycle_json));
+
+  // Idle cycle: returns AGC immediately, pushes MS1 at priority 3
+  ScanCommand agc_cmd{};
+  int r = ida->getNextScanCommand(agc_cmd);
+  TEST_EQUAL(r, 1)
+  TEST_EQUAL(agc_cmd.is_agc, 1)
+
+  // AGC is in pending map via registerPending
+  TEST_EQUAL(ida->getQueueForTest().pendingScanMapSize(), (size_t)1)
+
+  // Dequeue MS1 — now both AGC and MS1 are in pending map
+  ScanCommand ms1_cmd{};
+  r = ida->getNextScanCommand(ms1_cmd);
+  TEST_EQUAL(r, 1)
+  TEST_EQUAL(ms1_cmd.is_agc, 0)
+  TEST_EQUAL(ms1_cmd.msn_level, 1)
+  TEST_EQUAL(ida->getQueueForTest().pendingScanMapSize(), (size_t)2)
+
+  // processScan with AGC scan description — should resolve AGC from pending map
+  // AGC gate (desc[3]=='A') returns 0 and resolves at line 715
+  int n = ida->processScan(nullptr, nullptr, 0, 0.0, 1, agc_cmd.scan_description);
+  TEST_EQUAL(n, 0)
+  TEST_EQUAL(ida->getQueueForTest().pendingScanMapSize(), (size_t)1)
+
+  // processScan with MS1 scan description — should resolve MS1 from pending map
+  // Load real MS1 data to feed through the MS1 path
+  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(ms1_scans.empty())
+  const auto& scan = ms1_scans[0];
+  n = ida->processScan(scan.mzs.data(), scan.ints.data(),
+                       (int)scan.mzs.size(), scan.rt, 1,
+                       ms1_cmd.scan_description);
+  // n >= 0 (may or may not produce MS2 commands from a single scan)
+  TEST_EQUAL(n >= 0, true)
+  TEST_EQUAL(ida->getQueueForTest().pendingScanMapSize(), (size_t)0)
+
+  delete ida;
+}
+END_SECTION
+
 END_TEST

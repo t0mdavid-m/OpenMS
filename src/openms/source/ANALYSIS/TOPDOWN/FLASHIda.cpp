@@ -737,7 +737,10 @@ FLASHIda::FLASHIda(char* arg) :
     {
       // Selection=none: skip MS1 precursor selection entirely
       if (config_.level(1).selection == SelectionMetric::None)
+      {
+        queue_.resolvePending(tracking_id);
         return 0;
+      }
 
       // MS1 path: deconvolve, score, filter, select top-N, push MS2 commands
       int n = selection_.filterAndRank(mzs, ints, length, rt_min, 1, faims_cv);
@@ -796,6 +799,9 @@ FLASHIda::FLASHIda(char* arg) :
       writeScanResultRow_(id_str, rt_min, all_mass_count, commands_pushed,
                           child_ids, 0, "", "", enqueue_ts, dequeue_ts, received_ts,
                           &selection_.deconvolvedMS1(), "");
+
+      // Resolve MS1 from pending map (timestamps already captured via peekPending)
+      queue_.resolvePending(tracking_id);
 
       // FAIMS CV cycling: update skip policy, advance to next CV, push MS1
       if (faims_.isEnabled())
