@@ -494,6 +494,11 @@ namespace OpenMS
     const auto& seq = config_.targeting().protein_sequence;
     int num_targets = this_cfg.max_targets;
 
+    // Extract activation type from the scan command that produced this result
+    std::string scan_activation = (ms_ctx != nullptr)
+        ? std::string(ms_ctx->stages[0].activation_type)
+        : config_.level(msn_level).scans[0].activation;
+
     // Get fragment ion targets via FragmentAnalysis
     DeconvolvedSpectrum result_copy = result;
     std::vector<double> masses(num_targets), qscores(num_targets);
@@ -511,19 +516,19 @@ namespace OpenMS
         found = fragments_.getTopFragmentMatches(seq, num_targets,
             masses.data(), qscores.data(), charges.data(),
             wstarts.data(), wends.data(),
-            ion_types.data(), frag_indices.data(), result_copy);
+            ion_types.data(), frag_indices.data(), result_copy, scan_activation);
         break;
       case SelectionMetric::TerminalFragments:
         found = fragments_.getTerminalFragmentIons(seq, num_targets,
             masses.data(), qscores.data(), charges.data(),
             wstarts.data(), wends.data(),
-            ion_types.data(), frag_indices.data(), result_copy);
+            ion_types.data(), frag_indices.data(), result_copy, scan_activation);
         break;
       case SelectionMetric::AmbiguityResolution:
         found = fragments_.getAmbiguityEnclosingIons(seq, num_targets,
             masses.data(), qscores.data(), charges.data(),
             wstarts.data(), wends.data(),
-            ion_types.data(), frag_indices.data(), result_copy);
+            ion_types.data(), frag_indices.data(), result_copy, scan_activation);
         break;
       default:
         break;
