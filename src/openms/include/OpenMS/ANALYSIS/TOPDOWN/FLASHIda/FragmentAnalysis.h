@@ -65,8 +65,8 @@ namespace OpenMS
       double mass_shift;   ///< Observed mass shift (modification mass)
     };
 
-    /// Complete result from a fragment matching operation
-    struct FragmentMatchResult
+    /// Complete result from a fragment matching operation (MS2 or MS3)
+    struct ProteoformMatch
     {
       int total_match_count = 0;   ///< Total fragments matched (uncapped)
       int region_start = -1;       ///< 0-based proteoform start (-1 = full sequence)
@@ -74,7 +74,28 @@ namespace OpenMS
       std::vector<PTMSite> ptm_sites;        ///< PTM sites from FLASHExtender
       std::string matched_protein;           ///< Protein file/DB name
       std::string proteoform_sequence;       ///< Matched protein sequence
+
+      /// Detail of a single matched fragment ion (MS2 or MS3)
+      struct FragmentMatch
+      {
+        std::string ion_type;       ///< "b", "y", "a" (MS2); "b", "y", "yb", "ya", "a" (MS3 local)
+        int ion_index = 0;          ///< 1-based, proteoform-space (MS2) or subsequence-space (MS3)
+        double observed_mass = 0.0; ///< Deconvolved mass (calibrated for MS3)
+        std::string equiv_type;     ///< MS3 only: full-protein equivalent ion type ("b"/"y")
+        int equiv_index = 0;        ///< MS3 only: full-protein equivalent ion index
+        double adjusted_mass = 0.0; ///< MS3 only: offset-adjusted to full-protein
+      };
+      std::vector<FragmentMatch> fragments;  ///< All matched fragments with detail
+
+      double ppm_offset = 0.0;        ///< Median PPM error from calibration pass (MS3 only)
+      double correction_factor = 1.0;  ///< 1/(1 + ppm_offset * 1e-6) (MS3 only)
     };
+
+    /// Format a proteoform sequence with PTM annotations in ProForma notation.
+    /// Localized PTMs (start==end): PEPTK[+79.9663]IDE
+    /// Ambiguous PTMs (start!=end): PEP(TKI)[+79.9663]DE
+    static std::string toProForma(const std::string& sequence,
+                                  const std::vector<PTMSite>& ptm_sites);
 
     /// Map fragmentation method name to ion type strings for FLASHTagger/FLASHExtender.
     /// Case-insensitive. Returns {"b","y"} for HCD/CID, {"c","z"} for ETD,
@@ -140,7 +161,7 @@ namespace OpenMS
                               char* ion_types,
                               int* fragment_indices,
                               DeconvolvedSpectrum& stored_ms2,
-                              FragmentMatchResult& result,
+                              ProteoformMatch& result,
                               const String& fragmentation_method = "HCD",
                               double tolerance_ppm = 0.0);
 
@@ -176,7 +197,7 @@ namespace OpenMS
                                 char* ion_types,
                                 int* fragment_indices,
                                 DeconvolvedSpectrum& stored_ms2,
-                                FragmentMatchResult& result,
+                                ProteoformMatch& result,
                                 const String& fragmentation_method = "HCD",
                                 double tolerance_ppm = 0.0);
 
@@ -210,7 +231,7 @@ namespace OpenMS
                                   char* ion_types,
                                   int* fragment_indices,
                                   DeconvolvedSpectrum& stored_ms2,
-                                  FragmentMatchResult& result,
+                                  ProteoformMatch& result,
                                   const String& fragmentation_method = "HCD",
                                   double tolerance_ppm = 0.0);
 
@@ -294,7 +315,7 @@ namespace OpenMS
     int runTagBasedFragmentMatching_(const String& protein_sequence,
                                     std::vector<TagBasedFragmentMatch>& matches,
                                     DeconvolvedSpectrum& stored_ms2,
-                                    FragmentMatchResult& result,
+                                    ProteoformMatch& result,
                                     const String& fragmentation_method = "HCD",
                                     double tolerance_ppm = 0.0);
   };

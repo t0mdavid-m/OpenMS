@@ -379,7 +379,7 @@ namespace
   int FragmentAnalysis::runTagBasedFragmentMatching_(const String& protein_sequence,
                                                      std::vector<TagBasedFragmentMatch>& matches,
                                                      DeconvolvedSpectrum& stored_ms2,
-                                                     FragmentMatchResult& result,
+                                                     ProteoformMatch& result,
                                                      const String& fragmentation_method,
                                                      double tolerance_ppm)
   {
@@ -755,7 +755,7 @@ namespace
                                               char* ion_types,
                                               int* fragment_indices,
                                               DeconvolvedSpectrum& stored_ms2,
-                                              FragmentMatchResult& result,
+                                              ProteoformMatch& result,
                                               const String& fragmentation_method,
                                               double tolerance_ppm)
   {
@@ -806,7 +806,7 @@ namespace
     std::unique_ptr<char[]> ion_types_temp(new char[n]);
     fragment_indices.resize(n);
 
-    FragmentMatchResult discard;
+    ProteoformMatch discard;
     int count = getTopFragmentMatches(protein_sequence, n, masses.data(), qscores.data(),
                                       charges.data(), window_starts.data(), window_ends.data(),
                                       ion_types_temp.get(), fragment_indices.data(), stored_ms2, discard, "HCD");
@@ -839,7 +839,7 @@ namespace
                                                   char* ion_types,
                                                   int* fragment_indices,
                                                   DeconvolvedSpectrum& stored_ms2,
-                                                  FragmentMatchResult& result,
+                                                  ProteoformMatch& result,
                                                   const String& fragmentation_method,
                                                   double tolerance_ppm)
   {
@@ -1114,7 +1114,7 @@ namespace
     std::unique_ptr<char[]> ion_types_temp(new char[n]);
     fragment_indices.resize(n);
 
-    FragmentMatchResult discard;
+    ProteoformMatch discard;
     int count = getAmbiguityEnclosingIons(protein_sequence, n, masses.data(), qscores.data(),
                                           charges.data(), window_starts.data(), window_ends.data(),
                                           ion_types_temp.get(), fragment_indices.data(), stored_ms2, discard, "HCD");
@@ -1148,7 +1148,7 @@ namespace
       char* ion_types,
       int* fragment_indices,
       DeconvolvedSpectrum& stored_ms2,
-      FragmentMatchResult& result,
+      ProteoformMatch& result,
       const String& fragmentation_method,
       double tolerance_ppm)
   {
@@ -1276,7 +1276,7 @@ namespace
     std::unique_ptr<char[]> ion_types_temp(new char[n]);
     fragment_indices.resize(n);
 
-    FragmentMatchResult discard;
+    ProteoformMatch discard;
     int count = getTerminalFragmentIons(
         protein_sequence, n,
         masses.data(), qscores.data(), charges.data(),
