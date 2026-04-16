@@ -445,7 +445,7 @@ FLASHIda::FLASHIda(char* arg) :
     }
     else
     {
-      results_tsv_stream_ << "\t";
+      results_tsv_stream_ << "\t\t\t";
     }
     results_tsv_stream_ << "\t" << parent_tracking_id
                         << "\t" << dequeue_ts
