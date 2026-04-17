@@ -143,6 +143,13 @@ namespace OpenMS
     /// Result of feedResult: commands plus exploration per-variant metadata
     struct FeedResultInfo
     {
+      struct IdentificationRowInfo
+      {
+        std::string tracking_id;
+        FragmentAnalysis::ProteoformMatch identification_result;
+        MS2Context ms2_context;
+      };
+
       std::vector<ScanCommand> commands;
       int group_id = -1;
       int variant_index = -1;
@@ -160,6 +167,7 @@ namespace OpenMS
       char parent_scan_id[4]{};  ///< Parent's encoded tracking ID (from group's originating_cmd)
       FragmentAnalysis::ProteoformMatch identification_result;  ///< Per-fragment match details for identification.tsv
       MS2Context ms2_context;  ///< Cached MS2 context for this variant's group
+      std::vector<IdentificationRowInfo> additional_identification_rows;  ///< Extra calibrated rows for other variants in same completed exploration group
     };
 
     /// Construct with a reference to the shared Config and FragmentAnalysis

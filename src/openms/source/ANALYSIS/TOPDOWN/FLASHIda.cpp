@@ -1012,6 +1012,14 @@ FLASHIda::FLASHIda(char* arg) :
           writeIdentificationRow_(id_str, 3, 'E', info.ms2_context, info.identification_result);
         }
 
+        for (const auto& row : info.additional_identification_rows)
+        {
+          if (!row.identification_result.fragments.empty())
+          {
+            writeIdentificationRow_(row.tracking_id, 3, 'E', row.ms2_context, row.identification_result);
+          }
+        }
+
         exploration_active_.store(exploration_.activeGroupCount() > 0,
                                   std::memory_order_release);
         return static_cast<int>(info.commands.size());

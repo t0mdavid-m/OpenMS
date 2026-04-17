@@ -334,29 +334,36 @@ namespace OpenMS
     std::strncpy(info.parent_scan_id, parent_enc.c_str(), 3);
     info.parent_scan_id[3] = '\0';
 
-    // Populate identification context from the group
-    info.ms2_context.proteoform_sequence = (group.proteoform_ctx.region_start >= 0)
-        ? config_.targeting().protein_sequence.substr(group.proteoform_ctx.region_start,
-            group.proteoform_ctx.region_end - group.proteoform_ctx.region_start)
-        : "";
-    info.ms2_context.start_pos = group.proteoform_ctx.region_start;
-    info.ms2_context.end_pos = group.proteoform_ctx.region_end;
-    info.ms2_context.ptm_sites = group.proteoform_ctx.ptm_sites;
-    info.ms2_context.fragment_ion_type = group.fragment_ion_type;
-    info.ms2_context.fragment_ion_index = group.fragment_ion_index;
-    if (group.originating_cmd.num_stages > 0)
+    auto buildMS2ContextForVariant = [&](int group_variant_index)
     {
-      info.ms2_context.ms1_precursor_mass = group.originating_cmd.mono_mass;
-      info.ms2_context.ms1_precursor_mz = group.originating_cmd.stages[0].precursor_mz;
-      info.ms2_context.ms1_precursor_charge = group.originating_cmd.stages[0].charge_state;
-    }
-    const auto& vcmd = group.variants[variant_index].cmd;
-    if (vcmd.num_stages >= 2)
-    {
-      info.ms2_context.fragment_mz = vcmd.stages[1].precursor_mz;
-      info.ms2_context.fragment_charge = vcmd.stages[1].charge_state;
-    }
-    info.ms2_context.fragment_mass = group.precursor_mass;
+      MS2Context ctx;
+      ctx.proteoform_sequence = (group.proteoform_ctx.region_start >= 0)
+          ? config_.targeting().protein_sequence.substr(group.proteoform_ctx.region_start,
+              group.proteoform_ctx.region_end - group.proteoform_ctx.region_start)
+          : "";
+      ctx.start_pos = group.proteoform_ctx.region_start;
+      ctx.end_pos = group.proteoform_ctx.region_end;
+      ctx.ptm_sites = group.proteoform_ctx.ptm_sites;
+      ctx.fragment_ion_type = group.fragment_ion_type;
+      ctx.fragment_ion_index = group.fragment_ion_index;
+      if (group.originating_cmd.num_stages > 0)
+      {
+        ctx.ms1_precursor_mass = group.originating_cmd.mono_mass;
+        ctx.ms1_precursor_mz = group.originating_cmd.stages[0].precursor_mz;
+        ctx.ms1_precursor_charge = group.originating_cmd.stages[0].charge_state;
+      }
+
+      const auto& variant_cmd = group.variants[group_variant_index].cmd;
+      if (variant_cmd.num_stages >= 2)
+      {
+        ctx.fragment_mz = variant_cmd.stages[1].precursor_mz;
+        ctx.fragment_charge = variant_cmd.stages[1].charge_state;
+      }
+      ctx.fragment_mass = group.precursor_mass;
+      return ctx;
+    };
+
+    info.ms2_context = buildMS2ContextForVariant(variant_index);
 
     auto& meta = v.result.getOrCreateOptimizationMetadata();
     meta.group_id = group.group_id;
@@ -410,6 +417,20 @@ namespace OpenMS
 
       // Re-populate identification_result after batch re-scoring updated it
       info.identification_result = group.variants[variant_index].identification_result;
+
+      // Return calibrated identification rows for other variants in the completed group.
+      for (size_t vi = 0; vi < group.variants.size(); ++vi)
+      {
+        if (static_cast<int>(vi) == variant_index) continue;
+        const auto& gv = group.variants[vi];
+        if (gv.identification_result.fragments.empty()) continue;
+
+        FeedResultInfo::IdentificationRowInfo row;
+        row.tracking_id = gv.tracking_id;
+        row.identification_result = gv.identification_result;
+        row.ms2_context = buildMS2ContextForVariant(static_cast<int>(vi));
+        info.additional_identification_rows.push_back(row);
+      }
     }
 
     int best_idx = -1;
