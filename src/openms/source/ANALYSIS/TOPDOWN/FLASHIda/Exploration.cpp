@@ -357,7 +357,6 @@ namespace OpenMS
       info.ms2_context.fragment_charge = vcmd.stages[1].charge_state;
     }
     info.ms2_context.fragment_mass = group.precursor_mass;
-    info.identification_result = group.variants[variant_index].identification_result;
 
     auto& meta = v.result.getOrCreateOptimizationMetadata();
     meta.group_id = group.group_id;
