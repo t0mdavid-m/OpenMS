@@ -133,7 +133,7 @@ namespace OpenMS
     bool needs_baseline = (cfg.exploration == ExplorationMetric::RemainingPrecursor);
     if (needs_baseline)
       variant_params.insert(variant_params.begin(),
-                            {base_config.activation, 0.0, base_config.reaction_time});
+                            {base_config.activation, 0.0, 0.0});
 
     // Compute precursor_mz and isolation_width from PeakGroup
     auto [mz1, mz2] = pg.getMzRange(charge);
