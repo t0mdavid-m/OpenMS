@@ -345,10 +345,11 @@ START_SECTION(getTopFragmentMatches_cytochrome_c)
   int charges[20], frag_indices[20];
   char ion_types[20];
 
+  FragmentAnalysis::ProteoformMatch match_result;
   int found = fragments.getTopFragmentMatches(cytochrome_c_seq, 20,
                                                masses, qscores, charges,
                                                wstarts, wends, ion_types,
-                                               frag_indices, deconv.storedMS2());
+                                               frag_indices, deconv.storedMS2(), match_result);
   TEST_EQUAL(found > 0, true)
 
   for (int i = 0; i < found; ++i)
@@ -378,10 +379,11 @@ START_SECTION(getTerminalFragmentIons_cytochrome_c)
   int charges[20], frag_indices[20];
   char ion_types[20];
 
+  FragmentAnalysis::ProteoformMatch term_result;
   int found = fragments.getTerminalFragmentIons(cytochrome_c_seq, 10,
                                                  masses, qscores, charges,
                                                  wstarts, wends, ion_types,
-                                                 frag_indices, deconv.storedMS2());
+                                                 frag_indices, deconv.storedMS2(), term_result);
   TEST_EQUAL(found > 0, true)
 
   for (int i = 0; i < found; ++i)
@@ -403,10 +405,11 @@ START_SECTION(getTopFragmentMatches_empty_spectrum_returns_zero)
   int charges[20], frag_indices[20];
   char ion_types[20];
 
+  FragmentAnalysis::ProteoformMatch empty_result;
   int found = fragments.getTopFragmentMatches(cytochrome_c_seq, 20,
                                                masses, qscores, charges,
                                                wstarts, wends, ion_types,
-                                               frag_indices, ds);
+                                               frag_indices, ds, empty_result);
   TEST_EQUAL(found, 0)
 }
 END_SECTION
