@@ -611,7 +611,7 @@ namespace OpenMS
             // Add to exclusion list if neccessary
             if (mass_qscore_map_[nominal_mass] > config_.targeting().tqscore_threshold)
             {
-              tqscore_exceeding_mass_rt_map_[nominal_mass] = rt;
+              //tqscore_exceeding_mass_rt_map_[nominal_mass] = rt;
               tqscore_exceeding_mz_rt_map_[integer_mz] = rt;
             }
           }
