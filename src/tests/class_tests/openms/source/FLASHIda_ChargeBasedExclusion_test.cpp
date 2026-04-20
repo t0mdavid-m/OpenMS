@@ -262,4 +262,42 @@ START_SECTION(flag_on_diverse_charges_at_same_mass)
 }
 END_SECTION
 
+// CBE-06: Under the flag, entries aged past rt_window are evicted so a previously-
+// excluded (mass, charge) becomes eligible again on a later scan.
+START_SECTION(flag_on_rt_window_eviction_reenables_charge)
+{
+  auto scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(scans.empty())
+  const auto& s0 = scans.front();
+
+  FLASHIda ida(const_cast<char*>(base_on_json));
+
+  // First acquisition at rt=0 populates per-charge exclusion entries.
+  ida.processScan(s0.mzs.data(), s0.ints.data(),
+                  (int)s0.mzs.size(), 0.0, 1, "scan_0a");
+  int drained_first = 0;
+  ScanCommand cmd{};
+  while (ida.getNextScanCommand(cmd) == 1)
+  {
+    if (cmd.is_agc) { break; }
+    if (cmd.msn_level == 2) { drained_first++; }
+  }
+  TEST_EQUAL(drained_first > 0, true)
+
+  // Second acquisition at rt far past rt_window (default 180) — evictions fire,
+  // per-charge state is cleared, charges become eligible again.
+  ida.processScan(s0.mzs.data(), s0.ints.data(),
+                  (int)s0.mzs.size(), 1000.0, 1, "scan_0c");
+  int drained_second = 0;
+  while (ida.getNextScanCommand(cmd) == 1)
+  {
+    if (cmd.is_agc) { break; }
+    if (cmd.msn_level == 2) { drained_second++; }
+  }
+  // With eviction, the second scan should acquire the same number of charges as the first
+  // (not fewer — the exclusion state was cleared). Allow a small delta for edge effects.
+  TEST_EQUAL(drained_second >= drained_first, true)
+}
+END_SECTION
+
 END_TEST
