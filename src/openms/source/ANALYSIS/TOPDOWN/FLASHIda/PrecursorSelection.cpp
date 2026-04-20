@@ -593,7 +593,35 @@ namespace OpenMS
           // save mass acquisition
           all_mass_rt_map_[nominal_mass] = rt;
 
-          if (!config_.targeting().use_idscore) {
+          if (config_.targeting().charge_based_exclusion)
+          {
+            // Per-(mass, charge) accumulation. No mass-level writes — the mass is never globally excluded.
+            const auto key = std::make_pair(nominal_mass, charge);
+            if (!config_.targeting().use_idscore) {
+              auto inter = mass_charge_qscore_map_.find(key);
+              if (inter == mass_charge_qscore_map_.end())
+              {
+                mass_charge_qscore_map_[key] = score;
+              }
+              else {
+                mass_charge_qscore_map_[key] = std::max(inter->second, score);
+              }
+              if (mass_charge_qscore_map_[key] > config_.targeting().tqscore_threshold)
+              {
+                tqscore_exceeding_mass_charge_set_.insert(key);
+              }
+            }
+            else {
+              auto inter = mass_charge_qscore_map_.find(key);
+              if (inter == mass_charge_qscore_map_.end()) { mass_charge_qscore_map_[key] = 1 - score; }
+              else { mass_charge_qscore_map_[key] *= 1 - score; }
+              if (1 - mass_charge_qscore_map_[key] * tqscore_factor_for_exclusion > config_.targeting().tqscore_threshold)
+              {
+                tqscore_exceeding_mass_charge_set_.insert(key);
+              }
+            }
+          }
+          else if (!config_.targeting().use_idscore) {
             // Compute total qscore
             auto inter = mass_qscore_map_.find(nominal_mass);
             if (inter == mass_qscore_map_.end())
