@@ -452,6 +452,7 @@ set(analysis_executables_list
   FLASHIdaFAIMS_test
   FLASHIdaQueueTracking_test
   FLASHIda_ProcessScan_test
+  FLASHIda_ChargeBasedExclusion_test
   ScanCommandLayout_test
   FLASHIda_exploration_test
   FLASHIda_LegacyConfig_test
