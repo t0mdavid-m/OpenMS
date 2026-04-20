@@ -122,6 +122,7 @@ namespace OpenMS
     targeting_.mode = ps.value("target_mode", 0);
     targeting_.use_idscore = ps.value("IDScore", false);
     targeting_.consider_all_charges = ps.value("AllCharges", false);
+    targeting_.charge_based_exclusion = ps.value("ChargeBasedExclusion", false);
     targeting_.hcd_energy = ps.value("HCDEnergy", -1);
     targeting_.strict_inclusion = ps.value("strict_inclusion", false);
     targeting_.tie_threshold = ps.value("tie_threshold", 0.1);
