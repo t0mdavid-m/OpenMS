@@ -641,6 +641,7 @@ namespace OpenMS
           id_mass_map_[window_id_] = nominal_mass;
           id_mz_map_[window_id_] = integer_mz;
           id_qscore_map_[window_id_] = score;
+          id_charge_map_[window_id_] = charge;
           trigger_ids_.push_back(window_id_);
           window_id_++;
 
