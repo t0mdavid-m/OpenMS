@@ -213,10 +213,18 @@ namespace OpenMS
     std::unordered_map<int, double> all_mass_rt_map_;
     std::unordered_map<int, double> mass_qscore_map_;
 
+    /// Per-(nominal_mass, charge) cross-scan exclusion set (charge_based_exclusion flag).
+    std::set<std::pair<int, int>> tqscore_exceeding_mass_charge_set_;
+
+    /// Per-(nominal_mass, charge) qscore accumulator, parallel to mass_qscore_map_
+    /// but one level deeper. Only touched when charge_based_exclusion is on.
+    std::map<std::pair<int, int>, double> mass_charge_qscore_map_;
+
     /// Maps for selectively disabling mass exclusion (needed for FAIMS support)
     std::unordered_map<int, int> id_mass_map_;
     std::unordered_map<int, int> id_mz_map_;
     std::unordered_map<int, double> id_qscore_map_;
+    std::unordered_map<int, int> id_charge_map_;
 
     /// Window ID counter for FAIMS exclusion list removal
     int window_id_ = 0;
