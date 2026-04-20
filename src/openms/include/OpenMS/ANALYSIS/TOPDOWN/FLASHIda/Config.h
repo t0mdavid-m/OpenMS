@@ -148,6 +148,7 @@ namespace OpenMS
     double rt_window = 180.0;
     bool use_idscore = false;
     bool consider_all_charges = false;
+    bool charge_based_exclusion = false;  ///< Treat each (mass, charge) as an independent exclusion target (developer flag).
     int hcd_energy = -1;
     double qscore_threshold = 0.0;
     double tqscore_threshold = 0.9;
