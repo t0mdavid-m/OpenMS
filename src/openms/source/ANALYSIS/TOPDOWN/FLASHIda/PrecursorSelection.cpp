@@ -397,297 +397,339 @@ namespace OpenMS
           // dont acquire the same mass multiple times
           if (selected_peak_groups_.size() >= mass_count) { break; }
 
-          int charge;
-          double score;
-          int hcd = config_.targeting().hcd_energy;
-
-          if (config_.targeting().use_idscore && config_.targeting().consider_all_charges && config_.targeting().hcd_energy < 0) {
-            charge = pg.getBestIDScoreCharge();
-            score = pg.getBestIDScore();
-            hcd = pg.getBestIDScoreHCD();
-          }
-          else if (config_.targeting().use_idscore && config_.targeting().consider_all_charges) {
-            charge = pg.getBestIDScoreChargeForHCD(config_.targeting().hcd_energy);
-            score = pg.getBestIDScoreForHCD(config_.targeting().hcd_energy);
-          }
-          else if (config_.targeting().use_idscore && !config_.targeting().consider_all_charges && config_.targeting().hcd_energy < 0) {
-            charge = pg.getRepAbsCharge();
-            score = pg.getBestIDScoreForCharge(charge);
-            hcd = pg.getBestHCDForCharge(charge);
-          }
-          else if (config_.targeting().use_idscore && !config_.targeting().consider_all_charges) {
-            charge = pg.getRepAbsCharge();
-            score = pg.getIDScoreForChargeAndHCD(charge, config_.targeting().hcd_energy);
-          }
-          else if (!config_.targeting().use_idscore && config_.targeting().consider_all_charges) {
-            charge = pg.getBestQScoreCharge();
-            score = pg.getBestQScore();
-          }
-          else {
-            charge = pg.getRepAbsCharge();
-            score = pg.getQscore();
-          }
-
-          // Per-level charge filter: ms1.min_charge controls what MS1 picks
-          if (config_.level(ms_level).min_charge > 0 && charge < config_.level(ms_level).min_charge)
-            continue;
-
-          double mass = pg.getMonoMass();
-
-          auto [mz1, mz2] = pg.getMzRange(charge);
-
-          double center_mz = (mz1 + mz2) / 2.0;
-
-          mz1 -= optimal_window_margin_;
-          mz2 += optimal_window_margin_;
-          int integer_mz = (int)round(center_mz);
-
-          int nominal_mass = SpectralDeconvolution::getNominalMass(mass);
-          bool target_matched = false;
-          double snr_threshold = config_.targeting().snr_threshold;
-          double qscore_threshold = config_.targeting().qscore_threshold;
-          double tqscore_factor_for_exclusion = 1.0;
-
-
-
-          // Only triggered in exclusion mode
-          if (iteration == 0)
-          {
-            auto inter = t_mass_score_map_.find(nominal_mass);
-            if (inter != t_mass_score_map_.end()) { tqscore_factor_for_exclusion = t_mass_score_map_[nominal_mass]; }
-            if (1 - tqscore_factor_for_exclusion > config_.targeting().tqscore_threshold) { continue; }
-          }
-
-          // Inclusion mode (unified: supports TSV-based targets and legacy .log/.out targets)
-          if (config_.targeting().mode == 1 && target_masses_.size() > 0)
-          {
-            double delta = 2 * config_.level(1).tolerance_ppm * mass * 1e-6;
-            auto ub = std::upper_bound(target_masses_.begin(), target_masses_.end(), mass + delta);
-
-            while (!target_matched)
-            {
-              if (ub != target_masses_.end())
-              {
-                if (std::abs(*ub - mass) < delta) // target is detected.
-                {
-                  // Check charge matching for both TSV and legacy modes
-                  if (!inclusion_targets_.empty())  // TSV mode: check active_targets_ with charge
-                  {
-                    for (const auto* t : active_targets_)
-                    {
-                      if (t->charge < 0) {
-                        target_matched = true;
-                        break;
-                      }
-                      auto [min_charge, max_charge] = pg.getAbsChargeRange();
-                      if ((t->charge >= min_charge) && (t->charge <= max_charge))
-                      {
-                        // Update with matched charge
-                        charge = t->charge;
-                        std::tie(mz1, mz2) = pg.getMzRange(charge);
-                        center_mz = (mz1 + mz2) / 2.0;
-                        mz1 -= optimal_window_margin_;
-                        mz2 += optimal_window_margin_;
-                        integer_mz = (int)round(center_mz);
-
-                        target_matched = true;
-                        break;
-                      }
-                    }
-                  }
-                  else if (!target_mass_charge_map_.empty())  // Legacy .log mode with charge
-                  {
-                    auto it = target_mass_charge_map_.find(*ub);
-                    if (it != target_mass_charge_map_.end())
-                    {
-                      charges = &it->second;
-                      if (std::find(charges->begin(), charges->end(), charge) != charges->end())
-                      {
-                        target_matched = true;
-                      }
-                    }
-                  }
-                  else  // Legacy mode without charge (mass-only matching)
-                  {
-                    target_matched = true;
-                  }
-
-                  if (!target_matched)
-                  {
-                    if (ub == target_masses_.begin()) { break; }
-                    ub--;
-                    continue;
-                  }
-                }
-                if (mass - *ub > delta) { break; }
-              }
-              if (ub == target_masses_.begin()) { break; }
-              ub--;
-            }
-
-            if (target_matched)
-            {
-              snr_threshold = 0.0;
-              qscore_threshold = 0.0; // stop exclusion for targets. todo tqscore lowest first? charge change.
-            }
-            else if (selection_phase == 0)
-            {
-              // Phase 0: only targets (strict behavior)
-              continue;
-            }
-            // Phase 1: non-targets proceed with default thresholds
-          }
-          else if (config_.targeting().mode == 1 && config_.targeting().strict_inclusion)
-          {
-            // Strict inclusion mode with no active targets - skip all candidates
-            continue;
-          }
-          // deep mode
-          else if (config_.targeting().mode == 3 && excluded_masses_.size() > 0)
-          {
-            bool to_exclude = false;
-            double delta = 2 * config_.level(1).tolerance_ppm * mass * 1e-6;
-            auto ub = std::upper_bound(excluded_masses_.begin(), excluded_masses_.end(), mass + delta);
-
-            while (! to_exclude)
-            {
-              if (ub != excluded_masses_.end())
-              {
-                if (std::abs(*ub - mass) < delta) // target is detected.
-                {
-                  to_exclude = true;
-                }
-                if (mass - *ub > delta) { break; }
-              }
-              if (ub == excluded_masses_.begin()) { break; }
-              ub--;
-            }
-
-            if (to_exclude) { continue; }
-          }
-
-          if (score < qscore_threshold) { break; }
-
-          // TODO: Check
-          if (pg.getChargeSNR(charge) < snr_threshold) { continue; }
-
-          if (current_selected_mzs.find(center_mz) != current_selected_mzs.end()) // mz has been triggered
-          {
-            if (selection_phase < selection_phase_end) { continue; }
-            if (! target_matched && current_selected_masses.find(pg.getMonoMass()) == current_selected_masses.end()) // but mass is different
-            {
-              continue;
-            }
-          }
-
-          if (config_.targeting().charge_based_exclusion
-              && tqscore_exceeding_mass_charge_set_.count({nominal_mass, charge}) > 0)
-          {
-            continue;
-          }
-
-          // selection phase 0, skip masses over tqscore threshold
-          if (selection_phase < selection_phase_end - 1)
-          {
-            if (tqscore_exceeding_mass_rt_map_.find(nominal_mass) != tqscore_exceeding_mass_rt_map_.end()
-                || tqscore_exceeding_mz_rt_map_.find(integer_mz) != tqscore_exceeding_mz_rt_map_.end())
-            {
-              continue;
-            }
-          }
-
-          // save mass acquisition
-          all_mass_rt_map_[nominal_mass] = rt;
+          struct ChargeCandidate { int charge; double score; int hcd; };
+          std::vector<ChargeCandidate> charges_to_process;
 
           if (config_.targeting().charge_based_exclusion)
           {
-            // Per-(mass, charge) accumulation. No mass-level writes — the mass is never globally excluded.
-            const auto key = std::make_pair(nominal_mass, charge);
-            if (!config_.targeting().use_idscore) {
-              auto inter = mass_charge_qscore_map_.find(key);
-              if (inter == mass_charge_qscore_map_.end())
-              {
-                mass_charge_qscore_map_[key] = score;
-              }
-              else {
-                mass_charge_qscore_map_[key] = std::max(inter->second, score);
-              }
-              if (mass_charge_qscore_map_[key] > config_.targeting().tqscore_threshold)
-              {
-                tqscore_exceeding_mass_charge_set_.insert(key);
-              }
-            }
-            else {
-              auto inter = mass_charge_qscore_map_.find(key);
-              if (inter == mass_charge_qscore_map_.end()) { mass_charge_qscore_map_[key] = 1 - score; }
-              else { mass_charge_qscore_map_[key] *= 1 - score; }
-              if (1 - mass_charge_qscore_map_[key] * tqscore_factor_for_exclusion > config_.targeting().tqscore_threshold)
-              {
-                tqscore_exceeding_mass_charge_set_.insert(key);
-              }
-            }
-          }
-          else if (!config_.targeting().use_idscore) {
-            // Compute total qscore
-            auto inter = mass_qscore_map_.find(nominal_mass);
-            if (inter == mass_qscore_map_.end())
+            auto [min_c, max_c] = pg.getAbsChargeRange();
+            const auto& all_qs = pg.getAllQscores();
+            for (int c = min_c; c <= max_c; ++c)
             {
-              mass_qscore_map_[nominal_mass] = score;
+              if (all_qs.count(c) == 0) { continue; }
+              double s;
+              int h = config_.targeting().hcd_energy;
+              if (config_.targeting().use_idscore && config_.targeting().hcd_energy < 0)
+              {
+                s = pg.getBestIDScoreForCharge(c);
+                h = pg.getBestHCDForCharge(c);
+              }
+              else if (config_.targeting().use_idscore)
+              {
+                s = pg.getIDScoreForChargeAndHCD(c, config_.targeting().hcd_energy);
+              }
+              else
+              {
+                s = all_qs.at(c);
+              }
+              charges_to_process.push_back({c, s, h});
+            }
+            std::sort(charges_to_process.begin(), charges_to_process.end(),
+                      [](const ChargeCandidate& a, const ChargeCandidate& b) { return a.score > b.score; });
+          }
+          else
+          {
+            int charge;
+            double score;
+            int hcd = config_.targeting().hcd_energy;
+
+            if (config_.targeting().use_idscore && config_.targeting().consider_all_charges && config_.targeting().hcd_energy < 0) {
+              charge = pg.getBestIDScoreCharge();
+              score = pg.getBestIDScore();
+              hcd = pg.getBestIDScoreHCD();
+            }
+            else if (config_.targeting().use_idscore && config_.targeting().consider_all_charges) {
+              charge = pg.getBestIDScoreChargeForHCD(config_.targeting().hcd_energy);
+              score = pg.getBestIDScoreForHCD(config_.targeting().hcd_energy);
+            }
+            else if (config_.targeting().use_idscore && !config_.targeting().consider_all_charges && config_.targeting().hcd_energy < 0) {
+              charge = pg.getRepAbsCharge();
+              score = pg.getBestIDScoreForCharge(charge);
+              hcd = pg.getBestHCDForCharge(charge);
+            }
+            else if (config_.targeting().use_idscore && !config_.targeting().consider_all_charges) {
+              charge = pg.getRepAbsCharge();
+              score = pg.getIDScoreForChargeAndHCD(charge, config_.targeting().hcd_energy);
+            }
+            else if (!config_.targeting().use_idscore && config_.targeting().consider_all_charges) {
+              charge = pg.getBestQScoreCharge();
+              score = pg.getBestQScore();
             }
             else {
-              // If mass has previously been acquired with higher qscore, skip
-              if (score < mass_qscore_map_[nominal_mass]) {
+              charge = pg.getRepAbsCharge();
+              score = pg.getQscore();
+            }
+            charges_to_process.push_back({charge, score, hcd});
+          }
+
+          for (const auto& cc : charges_to_process)
+          {
+            if (selected_peak_groups_.size() >= mass_count) { break; }
+            int charge = cc.charge;
+            double score = cc.score;
+            int hcd = cc.hcd;
+
+            // Per-level charge filter: ms1.min_charge controls what MS1 picks
+            if (config_.level(ms_level).min_charge > 0 && charge < config_.level(ms_level).min_charge)
+              continue;
+
+            double mass = pg.getMonoMass();
+
+            auto [mz1, mz2] = pg.getMzRange(charge);
+
+            double center_mz = (mz1 + mz2) / 2.0;
+
+            mz1 -= optimal_window_margin_;
+            mz2 += optimal_window_margin_;
+            int integer_mz = (int)round(center_mz);
+
+            int nominal_mass = SpectralDeconvolution::getNominalMass(mass);
+            bool target_matched = false;
+            double snr_threshold = config_.targeting().snr_threshold;
+            double qscore_threshold = config_.targeting().qscore_threshold;
+            double tqscore_factor_for_exclusion = 1.0;
+
+
+
+            // Only triggered in exclusion mode
+            if (iteration == 0)
+            {
+              auto inter = t_mass_score_map_.find(nominal_mass);
+              if (inter != t_mass_score_map_.end()) { tqscore_factor_for_exclusion = t_mass_score_map_[nominal_mass]; }
+              if (1 - tqscore_factor_for_exclusion > config_.targeting().tqscore_threshold) { continue; }
+            }
+
+            // Inclusion mode (unified: supports TSV-based targets and legacy .log/.out targets)
+            if (config_.targeting().mode == 1 && target_masses_.size() > 0)
+            {
+              double delta = 2 * config_.level(1).tolerance_ppm * mass * 1e-6;
+              auto ub = std::upper_bound(target_masses_.begin(), target_masses_.end(), mass + delta);
+
+              while (!target_matched)
+              {
+                if (ub != target_masses_.end())
+                {
+                  if (std::abs(*ub - mass) < delta) // target is detected.
+                  {
+                    // Check charge matching for both TSV and legacy modes
+                    if (!inclusion_targets_.empty())  // TSV mode: check active_targets_ with charge
+                    {
+                      for (const auto* t : active_targets_)
+                      {
+                        if (t->charge < 0) {
+                          target_matched = true;
+                          break;
+                        }
+                        auto [min_charge, max_charge] = pg.getAbsChargeRange();
+                        if ((t->charge >= min_charge) && (t->charge <= max_charge))
+                        {
+                          // Update with matched charge
+                          charge = t->charge;
+                          std::tie(mz1, mz2) = pg.getMzRange(charge);
+                          center_mz = (mz1 + mz2) / 2.0;
+                          mz1 -= optimal_window_margin_;
+                          mz2 += optimal_window_margin_;
+                          integer_mz = (int)round(center_mz);
+
+                          target_matched = true;
+                          break;
+                        }
+                      }
+                    }
+                    else if (!target_mass_charge_map_.empty())  // Legacy .log mode with charge
+                    {
+                      auto it = target_mass_charge_map_.find(*ub);
+                      if (it != target_mass_charge_map_.end())
+                      {
+                        charges = &it->second;
+                        if (std::find(charges->begin(), charges->end(), charge) != charges->end())
+                        {
+                          target_matched = true;
+                        }
+                      }
+                    }
+                    else  // Legacy mode without charge (mass-only matching)
+                    {
+                      target_matched = true;
+                    }
+
+                    if (!target_matched)
+                    {
+                      if (ub == target_masses_.begin()) { break; }
+                      ub--;
+                      continue;
+                    }
+                  }
+                  if (mass - *ub > delta) { break; }
+                }
+                if (ub == target_masses_.begin()) { break; }
+                ub--;
+              }
+
+              if (target_matched)
+              {
+                snr_threshold = 0.0;
+                qscore_threshold = 0.0; // stop exclusion for targets. todo tqscore lowest first? charge change.
+              }
+              else if (selection_phase == 0)
+              {
+                // Phase 0: only targets (strict behavior)
                 continue;
               }
-              mass_qscore_map_[nominal_mass] = score;
+              // Phase 1: non-targets proceed with default thresholds
             }
-
-            // Add to exclusion list if neccessary
-            if (mass_qscore_map_[nominal_mass] > config_.targeting().tqscore_threshold)
+            else if (config_.targeting().mode == 1 && config_.targeting().strict_inclusion)
             {
-              tqscore_exceeding_mass_rt_map_[nominal_mass] = rt;
-              tqscore_exceeding_mz_rt_map_[integer_mz] = rt;
+              // Strict inclusion mode with no active targets - skip all candidates
+              continue;
             }
-          }
-          else {
-            // Compute total qscore
-            auto inter = mass_qscore_map_.find(nominal_mass);
-            if (inter == mass_qscore_map_.end()) { mass_qscore_map_[nominal_mass] = 1 - score; }
-            else { mass_qscore_map_[nominal_mass] *= 1 - score; }
-
-            // Add to exclusion list if neccessary
-            if (1 - mass_qscore_map_[nominal_mass] * tqscore_factor_for_exclusion > config_.targeting().tqscore_threshold)
+            // deep mode
+            else if (config_.targeting().mode == 3 && excluded_masses_.size() > 0)
             {
-              tqscore_exceeding_mass_rt_map_[nominal_mass] = rt;
-              tqscore_exceeding_mz_rt_map_[integer_mz] = rt;
+              bool to_exclude = false;
+              double delta = 2 * config_.level(1).tolerance_ppm * mass * 1e-6;
+              auto ub = std::upper_bound(excluded_masses_.begin(), excluded_masses_.end(), mass + delta);
+
+              while (! to_exclude)
+              {
+                if (ub != excluded_masses_.end())
+                {
+                  if (std::abs(*ub - mass) < delta) // target is detected.
+                  {
+                    to_exclude = true;
+                  }
+                  if (mass - *ub > delta) { break; }
+                }
+                if (ub == excluded_masses_.begin()) { break; }
+                ub--;
+              }
+
+              if (to_exclude) { continue; }
             }
-          }
 
-          // For legacy .log mode with charge targeting, remove this charge from list
-          if (config_.targeting().mode == 1 && charges != nullptr) {
-            auto it = std::find(charges->begin(), charges->end(), charge);
-            if (it != charges->end()) {
-              charges->erase(it);
+            if (score < qscore_threshold) { break; }
+
+            // TODO: Check
+            if (pg.getChargeSNR(charge) < snr_threshold) { continue; }
+
+            if (current_selected_mzs.find(center_mz) != current_selected_mzs.end()) // mz has been triggered
+            {
+              if (selection_phase < selection_phase_end) { continue; }
+              if (! target_matched && current_selected_masses.find(pg.getMonoMass()) == current_selected_masses.end()) // but mass is different
+              {
+                continue;
+              }
             }
-          }
 
-          // Store acquisition
-          id_mass_map_[window_id_] = nominal_mass;
-          id_mz_map_[window_id_] = integer_mz;
-          id_qscore_map_[window_id_] = score;
-          id_charge_map_[window_id_] = charge;
-          trigger_ids_.push_back(window_id_);
-          window_id_++;
+            if (config_.targeting().charge_based_exclusion
+                && tqscore_exceeding_mass_charge_set_.count({nominal_mass, charge}) > 0)
+            {
+              continue;
+            }
 
-          selected_peak_groups_.push_back(pg);
-          trigger_charges_.push_back(charge);
-          trigger_hcds_.push_back(hcd);
-          trigger_scores_.push_back(score);
+            // selection phase 0, skip masses over tqscore threshold
+            if (selection_phase < selection_phase_end - 1)
+            {
+              if (tqscore_exceeding_mass_rt_map_.find(nominal_mass) != tqscore_exceeding_mass_rt_map_.end()
+                  || tqscore_exceeding_mz_rt_map_.find(integer_mz) != tqscore_exceeding_mz_rt_map_.end())
+              {
+                continue;
+              }
+            }
 
-          trigger_left_isolation_mzs_.push_back(mz1);
-          trigger_right_isolation_mzs_.push_back(mz2);
-          current_selected_masses.insert(pg.getMonoMass());
-          current_selected_mzs.insert(center_mz);
+            // save mass acquisition
+            all_mass_rt_map_[nominal_mass] = rt;
+
+            if (config_.targeting().charge_based_exclusion)
+            {
+              // Per-(mass, charge) accumulation. No mass-level writes — the mass is never globally excluded.
+              const auto key = std::make_pair(nominal_mass, charge);
+              if (!config_.targeting().use_idscore) {
+                auto inter = mass_charge_qscore_map_.find(key);
+                if (inter == mass_charge_qscore_map_.end())
+                {
+                  mass_charge_qscore_map_[key] = score;
+                }
+                else {
+                  mass_charge_qscore_map_[key] = std::max(inter->second, score);
+                }
+                if (mass_charge_qscore_map_[key] > config_.targeting().tqscore_threshold)
+                {
+                  tqscore_exceeding_mass_charge_set_.insert(key);
+                }
+              }
+              else {
+                auto inter = mass_charge_qscore_map_.find(key);
+                if (inter == mass_charge_qscore_map_.end()) { mass_charge_qscore_map_[key] = 1 - score; }
+                else { mass_charge_qscore_map_[key] *= 1 - score; }
+                if (1 - mass_charge_qscore_map_[key] * tqscore_factor_for_exclusion > config_.targeting().tqscore_threshold)
+                {
+                  tqscore_exceeding_mass_charge_set_.insert(key);
+                }
+              }
+            }
+            else if (!config_.targeting().use_idscore) {
+              // Compute total qscore
+              auto inter = mass_qscore_map_.find(nominal_mass);
+              if (inter == mass_qscore_map_.end())
+              {
+                mass_qscore_map_[nominal_mass] = score;
+              }
+              else {
+                // If mass has previously been acquired with higher qscore, skip
+                if (score < mass_qscore_map_[nominal_mass]) {
+                  continue;
+                }
+                mass_qscore_map_[nominal_mass] = score;
+              }
+
+              // Add to exclusion list if neccessary
+              if (mass_qscore_map_[nominal_mass] > config_.targeting().tqscore_threshold)
+              {
+                tqscore_exceeding_mass_rt_map_[nominal_mass] = rt;
+                tqscore_exceeding_mz_rt_map_[integer_mz] = rt;
+              }
+            }
+            else {
+              // Compute total qscore
+              auto inter = mass_qscore_map_.find(nominal_mass);
+              if (inter == mass_qscore_map_.end()) { mass_qscore_map_[nominal_mass] = 1 - score; }
+              else { mass_qscore_map_[nominal_mass] *= 1 - score; }
+
+              // Add to exclusion list if neccessary
+              if (1 - mass_qscore_map_[nominal_mass] * tqscore_factor_for_exclusion > config_.targeting().tqscore_threshold)
+              {
+                tqscore_exceeding_mass_rt_map_[nominal_mass] = rt;
+                tqscore_exceeding_mz_rt_map_[integer_mz] = rt;
+              }
+            }
+
+            // For legacy .log mode with charge targeting, remove this charge from list
+            if (config_.targeting().mode == 1 && charges != nullptr) {
+              auto it = std::find(charges->begin(), charges->end(), charge);
+              if (it != charges->end()) {
+                charges->erase(it);
+              }
+            }
+
+            // Store acquisition
+            id_mass_map_[window_id_] = nominal_mass;
+            id_mz_map_[window_id_] = integer_mz;
+            id_qscore_map_[window_id_] = score;
+            id_charge_map_[window_id_] = charge;
+            trigger_ids_.push_back(window_id_);
+            window_id_++;
+
+            selected_peak_groups_.push_back(pg);
+            trigger_charges_.push_back(charge);
+            trigger_hcds_.push_back(hcd);
+            trigger_scores_.push_back(score);
+
+            trigger_left_isolation_mzs_.push_back(mz1);
+            trigger_right_isolation_mzs_.push_back(mz2);
+            current_selected_masses.insert(pg.getMonoMass());
+            current_selected_mzs.insert(center_mz);
+          }  // end for charges_to_process
         }
       }
     }
