@@ -580,6 +580,12 @@ namespace OpenMS
             }
           }
 
+          if (config_.targeting().charge_based_exclusion
+              && tqscore_exceeding_mass_charge_set_.count({nominal_mass, charge}) > 0)
+          {
+            continue;
+          }
+
           // selection phase 0, skip masses over tqscore threshold
           if (selection_phase < selection_phase_end - 1)
           {
