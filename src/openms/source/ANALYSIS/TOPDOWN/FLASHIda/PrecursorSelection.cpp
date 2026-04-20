@@ -756,6 +756,24 @@ namespace OpenMS
 
     // Remove qscore from further calculations
     if (mass_qscore_map_.find(nominal_mass) != mass_qscore_map_.end()) { mass_qscore_map_[nominal_mass] /= 1 - qscore; }
+
+    if (config_.targeting().charge_based_exclusion)
+    {
+      auto cit = id_charge_map_.find(id);
+      if (cit != id_charge_map_.end())
+      {
+        const auto key = std::make_pair(nominal_mass, cit->second);
+        tqscore_exceeding_mass_charge_set_.erase(key);
+        if (config_.targeting().use_idscore)
+        {
+          auto ait = mass_charge_qscore_map_.find(key);
+          if (ait != mass_charge_qscore_map_.end())
+          {
+            ait->second /= (1 - qscore);
+          }
+        }
+      }
+    }
   }
 
   void PrecursorSelection::getIsolationWindows(double* wstart,
