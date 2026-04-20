@@ -367,6 +367,31 @@ namespace OpenMS
     new_mass_score_map_.swap(mass_qscore_map_);
     std::unordered_map<int, double>().swap(new_mass_score_map_);
 
+    // remove expired entries for per-(mass, charge) state (charge_based_exclusion flag)
+    if (config_.targeting().charge_based_exclusion)
+    {
+      std::map<std::pair<int, int>, double> new_mass_charge_rt_map_;
+      std::set<std::pair<int, int>> new_mass_charge_set_;
+      std::map<std::pair<int, int>, double> new_mass_charge_qscore_map_;
+      for (const auto& [key, r] : mass_charge_rt_map_)
+      {
+        if (rt - r > config_.targeting().rt_window) { continue; }
+        new_mass_charge_rt_map_[key] = r;
+        if (tqscore_exceeding_mass_charge_set_.count(key) > 0)
+        {
+          new_mass_charge_set_.insert(key);
+        }
+        auto it = mass_charge_qscore_map_.find(key);
+        if (it != mass_charge_qscore_map_.end())
+        {
+          new_mass_charge_qscore_map_[key] = it->second;
+        }
+      }
+      new_mass_charge_rt_map_.swap(mass_charge_rt_map_);
+      new_mass_charge_set_.swap(tqscore_exceeding_mass_charge_set_);
+      new_mass_charge_qscore_map_.swap(mass_charge_qscore_map_);
+    }
+
     const int selection_phase_start = 0;
     const int selection_phase_end = 2; // inclusive
     // When selection_phase == 0, consider only the masses whose tqscore did not exceed total qscore threshold.
@@ -717,6 +742,10 @@ namespace OpenMS
             id_mz_map_[window_id_] = integer_mz;
             id_qscore_map_[window_id_] = score;
             id_charge_map_[window_id_] = charge;
+            if (config_.targeting().charge_based_exclusion)
+            {
+              mass_charge_rt_map_[{nominal_mass, charge}] = rt;
+            }
             trigger_ids_.push_back(window_id_);
             window_id_++;
 

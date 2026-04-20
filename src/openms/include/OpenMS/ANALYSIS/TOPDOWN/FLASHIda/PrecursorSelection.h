@@ -220,6 +220,11 @@ namespace OpenMS
     /// but one level deeper. Only touched when charge_based_exclusion is on.
     std::map<std::pair<int, int>, double> mass_charge_qscore_map_;
 
+    /// Per-(nominal_mass, charge) RT timestamp, parallel to all_mass_rt_map_ but
+    /// one level deeper. Enables RT-window eviction of the per-charge accumulator
+    /// and exclusion set. Only touched when charge_based_exclusion is on.
+    std::map<std::pair<int, int>, double> mass_charge_rt_map_;
+
     /// Maps for selectively disabling mass exclusion (needed for FAIMS support)
     std::unordered_map<int, int> id_mass_map_;
     std::unordered_map<int, int> id_mz_map_;
