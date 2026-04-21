@@ -34,6 +34,7 @@ set(PYOPENMS_DOMAINS
     kernel metadata chemistry analysis featurefinder
     format processing datastructures ml misc
     spectrum chromatogram experiment
+    flashida
 )
 
 # Set default build directory (may be overridden by PYOPENMS_USE_PREBUILT)
