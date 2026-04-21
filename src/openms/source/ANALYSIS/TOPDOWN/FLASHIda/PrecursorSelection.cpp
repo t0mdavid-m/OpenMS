@@ -38,6 +38,9 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 
+#include <numeric>
+#include <stdexcept>
+
 #include <algorithm>
 #include <cmath>
 #include <fstream>
@@ -172,6 +175,14 @@ namespace OpenMS
       std::cout << target_ptms_.size() << " PTM modifications loaded for target expansion (max "
                 << targeting.max_total_ptm_count << " total per proteoform)\n";
     }
+
+    // Initialize learned ranker if configured
+    if (config_.level(1).selection == SelectionMetric::LearnedRank
+        && !targeting.learned_ranker_model_path.empty())
+    {
+      learned_ranker_ = std::make_unique<LearnedRanker>(targeting.learned_ranker_model_path);
+      std::cout << "LearnedRanker initialized from model: " << targeting.learned_ranker_model_path << "\n";
+    }
   }
 
   int PrecursorSelection::filterAndRank(const double* mzs, const double* ints, int length,
@@ -237,11 +248,11 @@ namespace OpenMS
     // Deconvolve MS1 spectrum (result stored in deconv_.deconvolvedMS1())
     deconv_.deconvolveMS1(mzs, ints, length, rt, faims_cv);
     // per spec deconvolution
-    filterPeakGroupsUsingMassExclusion_(ms_level, rt);
+    filterPeakGroupsUsingMassExclusion_(ms_level, rt, faims_cv);
     return (int)selected_peak_groups_.size();
   }
 
-  void PrecursorSelection::filterPeakGroupsUsingMassExclusion_(const int ms_level, const double rt)
+  void PrecursorSelection::filterPeakGroupsUsingMassExclusion_(const int ms_level, const double rt, const double faims_cv)
   {
     // IDScore replaces QScore but not intensity
     if (config_.targeting().use_idscore)
@@ -262,6 +273,46 @@ namespace OpenMS
     else if (config_.level(ms_level).selection == SelectionMetric::Intensity)
     {
       deconv_.deconvolvedMS1().sortByIntensity();
+    }
+    else if (config_.level(ms_level).selection == SelectionMetric::LearnedRank)
+    {
+      if (!learned_ranker_)
+      {
+        throw std::runtime_error(
+          "PrecursorSelection: SelectionMetric::LearnedRank selected but learned_ranker_ not initialized "
+          "(missing or empty learned_ranker_model_path)");
+      }
+
+      // Build a vector of peak groups for scoring
+      std::vector<PeakGroup> pg_vec(deconv_.deconvolvedMS1().begin(),
+                                    deconv_.deconvolvedMS1().end());
+
+      // Populate global context for this scan
+      LearnedRankerGlobalContext ctx;
+      ctx.rt                      = static_cast<float>(rt);
+      ctx.faims_cv                = static_cast<float>(faims_cv);
+      ctx.queue_depth             = 0.0f;  // not tracked at this scope
+      ctx.elapsed_frac            = 0.0f;  // gradient length not available here
+      ctx.recent_id_density       = 0.0f;  // Plan 5B
+      ctx.time_since_last_id      = 0.0f;  // Plan 5B
+      ctx.mass_exclusion_map_size = static_cast<float>(all_mass_rt_map_.size());
+      ctx.targets_remaining       = static_cast<float>(target_masses_.size());
+
+      auto scores = learned_ranker_->score(pg_vec, ctx);
+
+      // Sort indices by score descending
+      std::vector<size_t> order(pg_vec.size());
+      std::iota(order.begin(), order.end(), 0);
+      std::sort(order.begin(), order.end(),
+                [&scores](size_t a, size_t b) { return scores[a] > scores[b]; });
+
+      // Reorder peak groups and push back to the DeconvolvedSpectrum
+      std::vector<PeakGroup> sorted_groups;
+      sorted_groups.reserve(pg_vec.size());
+      for (size_t i : order)
+        sorted_groups.push_back(std::move(pg_vec[i]));
+
+      deconv_.deconvolvedMS1().setPeakGroups(sorted_groups);
     }
     else
     {

@@ -37,10 +37,13 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Deconvolution.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/LearnedRanker.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
 #include <OpenMS/FORMAT/FASTAFile.h>
 
 #include <map>
+#include <memory>
+#include <numeric>
 #include <set>
 #include <unordered_map>
 #include <vector>
@@ -196,6 +199,9 @@ namespace OpenMS
     const Config& config_;
     Deconvolution& deconv_;
 
+    /// Trained ONNX-backed ranker (non-null only when SelectionMetric::LearnedRank is configured)
+    std::unique_ptr<LearnedRanker> learned_ranker_;
+
     /// Selected peak groups out of MS1 deconvolution (filtered subset for triggering)
     DeconvolvedSpectrum selected_peak_groups_{0};
 
@@ -255,7 +261,7 @@ namespace OpenMS
     std::set<double> expanded_target_masses_;
 
     /// Filter peak groups using mass exclusion logic
-    void filterPeakGroupsUsingMassExclusion_(int ms_level, double rt);
+    void filterPeakGroupsUsingMassExclusion_(int ms_level, double rt, double faims_cv);
 
     /// Parse TSV inclusion list file
     void parseInclusionListTSV_(const String& filename);
