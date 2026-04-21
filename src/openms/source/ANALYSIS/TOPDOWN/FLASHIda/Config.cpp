@@ -164,6 +164,8 @@ namespace OpenMS
       targeting_.inclusion_list_file = files["inclusion_list"].get<std::string>();
     if (files.contains("ptm_list") && !files["ptm_list"].get<std::string>().empty())
       targeting_.ptm_list_file = files["ptm_list"].get<std::string>();
+    if (files.contains("learned_ranker_model") && !files["learned_ranker_model"].get<std::string>().empty())
+      targeting_.learned_ranker_model_path = files["learned_ranker_model"].get<std::string>();
 
     // --- ms3 section ---
     auto ms3 = config.value("ms3", json::object());
@@ -333,6 +335,7 @@ namespace OpenMS
         else if (sel_str == "none") cfg.selection = SelectionMetric::None;
         else if (sel_str == "terminal_fragments") cfg.selection = SelectionMetric::TerminalFragments;
         else if (sel_str == "ambiguity_resolution") cfg.selection = SelectionMetric::AmbiguityResolution;
+        else if (sel_str == "learned_rank") cfg.selection = SelectionMetric::LearnedRank;
         else cfg.selection = SelectionMetric::Intensity;
 
         // Max targets

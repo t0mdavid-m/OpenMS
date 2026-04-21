@@ -52,7 +52,8 @@ namespace OpenMS
     Intensity,             ///< Rank by raw intensity
     QScore,                ///< Rank by deconvolution quality score
     TerminalFragments,     ///< Innermost b/y ions, interleaved
-    AmbiguityResolution    ///< PTM-site bracketing ions
+    AmbiguityResolution,   ///< PTM-site bracketing ions
+    LearnedRank            ///< Rank by a trained ONNX policy model (see TargetingConfig::learned_ranker_model_path)
   };
 
   /// Exploration metric: what to optimize during CE sweep (MS2+ only)
@@ -159,6 +160,7 @@ namespace OpenMS
     std::string fasta_file;
     std::string inclusion_list_file;
     std::string ptm_list_file;
+    std::string learned_ranker_model_path = "";  ///< Path to the trained ONNX policy for SelectionMetric::LearnedRank
     bool tag_based_enabled = false;
     int min_tag_length = 3;
     int max_tag_length = 8;
