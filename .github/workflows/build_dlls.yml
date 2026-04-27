@@ -19,6 +19,11 @@ on:
       - processscan-cleanup
   workflow_dispatch:
 
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
   build-and-test:
@@ -311,7 +316,7 @@ jobs:
           ${{ github.workspace }}/build_diagnostics/
 
     - name: Post build diagnostics summary as PR comment on failure
-      if: failure() && steps.build.outcome == 'failure' && github.event_name == 'pull_request'
+      if: failure() && steps.build.outcome == 'failure'
       uses: actions/github-script@v7
       with:
         script: |
@@ -319,29 +324,40 @@ jobs:
           const path = require('path');
           const diagDir = `${process.env.GITHUB_WORKSPACE}/build_diagnostics`;
           const want = ['CMakeError.log', 'CMakeOutput.log', 'build_output.log'];
-          let body = `### Build diagnostics for run ${context.runId} (${context.job}, ${{ matrix.os }})\n\n`;
+          let body = `### Build diagnostics for run ${context.runId} (${{ matrix.os }})\n\n`;
           for (const name of want) {
             const p = path.join(diagDir, name);
             if (fs.existsSync(p)) {
               let txt = fs.readFileSync(p, 'utf8');
-              // keep last ~6000 chars, GitHub comment limit ~65k
               const tail = txt.length > 6000 ? '... [truncated]\n' + txt.slice(-6000) : txt;
               body += `<details><summary>${name} (${txt.length} bytes)</summary>\n\n\`\`\`\n${tail}\n\`\`\`\n\n</details>\n\n`;
             } else {
               body += `_${name} not found_\n\n`;
             }
           }
-          // also list all files we collected
           if (fs.existsSync(diagDir)) {
             const files = fs.readdirSync(diagDir);
             body += `<details><summary>All collected files (${files.length})</summary>\n\n\`\`\`\n${files.join('\n')}\n\`\`\`\n\n</details>\n`;
           }
-          await github.rest.issues.createComment({
-            issue_number: context.issue.number,
+          // Find the PR for this commit (works for both push and pull_request events).
+          const prs = await github.rest.repos.listPullRequestsAssociatedWithCommit({
             owner: context.repo.owner,
             repo: context.repo.repo,
-            body: body,
+            commit_sha: context.sha,
           });
+          if (prs.data.length === 0) {
+            core.warning(`No PR associated with commit ${context.sha}; printing diagnostics to log instead.`);
+            core.info(body);
+            return;
+          }
+          for (const pr of prs.data) {
+            await github.rest.issues.createComment({
+              issue_number: pr.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body,
+            });
+          }
 
     - name: Zip and upload selected bin artifacts
       shell: bash
