@@ -196,12 +196,13 @@ jobs:
     - name: Download contrib build from archive (Windows)
       if: startsWith(matrix.os, 'windows') && steps.cache-contrib.outputs.cache-hit != 'true'
       shell: bash
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
+          set -eux
           cd OpenMS/contrib
-          # Download the file using the URL fetched from GitHub
-          gh release download -R OpenMS/contrib --pattern 'contrib_build-Windows.tar.gz'
+          # The OpenMS/contrib release asset is public; use curl directly to avoid
+          # depending on `gh` being on PATH (which the runner sometimes doesn't have).
+          curl -fL --retry 5 --retry-delay 5 -o contrib_build-Windows.tar.gz \
+            https://github.com/OpenMS/contrib/releases/latest/download/contrib_build-Windows.tar.gz
           # Extract the archive
           7z x -so contrib_build-Windows.tar.gz | 7z x -si -ttar
           rm contrib_build-Windows.tar.gz
