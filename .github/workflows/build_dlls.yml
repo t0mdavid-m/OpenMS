@@ -243,17 +243,24 @@ jobs:
           done
 
     - name: Build
+      id: build
       shell: bash
       run: |
           # do not fail immediately
           set +e
           mkdir $GITHUB_WORKSPACE/OpenMS/bld/
-          ${{ steps.set-vars.outputs.xvfb }} ctest --output-on-failure -V -S ../OpenMS/OpenMS/tools/ci/cibuild.cmake
-          retVal=$?
+          ${{ steps.set-vars.outputs.xvfb }} ctest --output-on-failure -V -S ../OpenMS/OpenMS/tools/ci/cibuild.cmake 2>&1 | tee $GITHUB_WORKSPACE/build_output.log
+          retVal=${PIPESTATUS[0]}
           if [ $retVal -ne 0 ]; then
               echo -e "\033[0;31m Errors in build:"
               # TODO upload logs as artifact?
               find $GITHUB_WORKSPACE/OpenMS/bld/ -name "LastBuild*" -type f -exec cat {} \;
+              # collect cmake/ctest error/log files for artifact upload
+              mkdir -p $GITHUB_WORKSPACE/build_diagnostics
+              find $GITHUB_WORKSPACE/OpenMS/bld/ -maxdepth 6 \
+                \( -name 'CMakeCache.txt' -o -name 'CMakeError.log' -o -name 'CMakeOutput.log' -o -name 'LastBuild*' -o -name 'LastConfigure*' -o -name 'LastUpdate*' -o -name '*.log' \) \
+                -exec cp -v {} $GITHUB_WORKSPACE/build_diagnostics/ \; 2>&1 | head -40 || true
+              cp $GITHUB_WORKSPACE/build_output.log $GITHUB_WORKSPACE/build_diagnostics/ 2>/dev/null || true
               # remove for next steps
               find $GITHUB_WORKSPACE/OpenMS/bld/ -name "LastBuild*" -type f -exec rm {} \;
           fi
@@ -294,13 +301,22 @@ jobs:
           WITH_THERMORAWFILEPARSER_TEST: "OFF"
           Eigen3_DIR: "${{ steps.tools-prefix.outputs.eigen_choco }}" # Eigen is installed on windows using choco
 
+    - name: Upload build diagnostics on failure
+      if: failure() && steps.build.outcome == 'failure'
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-diagnostics-${{ matrix.os }}
+        if-no-files-found: warn
+        path: |
+          ${{ github.workspace }}/build_diagnostics/
+
     - name: Zip and upload selected bin artifacts
       shell: bash
       run: |
         short_sha=$(echo "${{ github.sha }}" | cut -c1-7)
         cd $GITHUB_WORKSPACE/OpenMS/bld/bin
         7z a build_files_${short_sha}.zip OpenMS.dll OpenSwathAlgo.dll FLASHDeconv.exe Qt6Core.dll Qt6Network.dll
-    
+
     - name: Upload selected bin artifacts as artifact
       uses: actions/upload-artifact@v4
       with:
