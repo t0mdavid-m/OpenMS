@@ -11,6 +11,12 @@ on:
       - FIdevelop
       - flashida-v9-bridge
       - processscan-cleanup
+      - 'claude/**'
+  pull_request:
+    branches:
+      - flashida-v9-bridge
+      - FIdevelop
+      - processscan-cleanup
   workflow_dispatch:
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
