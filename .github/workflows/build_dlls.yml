@@ -323,16 +323,22 @@ jobs:
           const fs = require('fs');
           const path = require('path');
           const diagDir = `${process.env.GITHUB_WORKSPACE}/build_diagnostics`;
-          const want = ['CMakeError.log', 'CMakeOutput.log', 'build_output.log'];
           let body = `### Build diagnostics for run ${context.runId} (${{ matrix.os }})\n\n`;
+          // Pick LastConfigure_*.log and LastBuild_*.log dynamically (they have timestamp suffixes)
+          let dynamicFiles = [];
+          if (fs.existsSync(diagDir)) {
+            dynamicFiles = fs.readdirSync(diagDir).filter(f =>
+              f.startsWith('LastConfigure_') || f.startsWith('LastBuild_') ||
+              f.startsWith('LastUpdate_') || f.startsWith('LastSubmit_'));
+          }
+          const want = ['build_output.log', ...dynamicFiles, 'CMakeError.log', 'CMakeOutput.log'];
           for (const name of want) {
             const p = path.join(diagDir, name);
             if (fs.existsSync(p)) {
               let txt = fs.readFileSync(p, 'utf8');
-              const tail = txt.length > 6000 ? '... [truncated]\n' + txt.slice(-6000) : txt;
+              // Per-file budget so total comment stays under GitHub's 65k limit.
+              const tail = txt.length > 8000 ? '... [truncated]\n' + txt.slice(-8000) : txt;
               body += `<details><summary>${name} (${txt.length} bytes)</summary>\n\n\`\`\`\n${tail}\n\`\`\`\n\n</details>\n\n`;
-            } else {
-              body += `_${name} not found_\n\n`;
             }
           }
           if (fs.existsSync(diagDir)) {
