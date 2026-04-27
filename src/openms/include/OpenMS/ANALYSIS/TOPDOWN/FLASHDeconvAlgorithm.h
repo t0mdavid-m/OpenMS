@@ -56,9 +56,9 @@ namespace OpenMS
 
     /**
      * @brief Run FLASHDeconv algorithm for @p map and store @p deconvolved_spectra and @p deconvolved_feature
-     * @param map the dataset
-     * @param deconvolved_spectra the deconvolved spectra will be stored in here
-     * @param deconvolved_feature the deconvolved features wll be strored in here
+     * @param[in] map the dataset
+     * @param[out] deconvolved_spectra the deconvolved spectra will be stored in here
+     * @param[in] deconvolved_feature the deconvolved features wll be strored in here
      */
     void run(MSExperiment& map, std::vector<DeconvolvedSpectrum>& deconvolved_spectra, std::vector<FLASHHelperClasses::MassFeature>& deconvolved_feature);
 
@@ -99,7 +99,7 @@ namespace OpenMS
     UInt current_min_ms_level_ = 0;
 
     /// the number of preceding full scans from which MS2 precursor mass will be searched.
-    //int precursor_MS1_window_ = 0;
+    int precursor_MS1_window_ = 0;
 
     /// FLASHIda log file name
     String ida_log_file_;
@@ -120,12 +120,8 @@ namespace OpenMS
     double noise_decoy_weight_ = 1;
     /// FLASHIda parsing information is stored here: MS1 scan - information
     std::map<int, std::vector<std::vector<float>>> precursor_map_for_ida_;
-    /// a map from native ID to precursor peak
-    std::map<String, Precursor> native_id_precursor_peak_map_;
     /// a map from native ID to precursor peak group
     std::map<String, PeakGroup> native_id_precursor_peak_group_map_;
-    /// a map from native ID to precursor mass - intensity pair (within isolation window)
-    std::map<String, std::vector<std::tuple<double, double>>> native_id_precursor_mass_intensity_map_;
 
     /// read dataset to update ms level information
     void updateMSLevels_(MSExperiment& map);
@@ -135,6 +131,12 @@ namespace OpenMS
 
     /// run spectral deconvolution
     void runSpectralDeconvolution_(MSExperiment& map, std::vector<DeconvolvedSpectrum>& deconvolved_spectra);
+
+    /// find precursor scan number when peak group is not found
+    int findPrecursorScanNumber_(const MSExperiment& map, Size index, uint ms_level) const;
+
+    /// append decoy peak groups to deconvolved spectrum
+    void appendDecoyPeakGroups_(DeconvolvedSpectrum& deconvolved_spectrum, const MSSpectrum& spec, int scan_number, const PeakGroup& precursor_pg);
 
     /// run feature finding to get deconvolved features
     void runFeatureFinding_(std::vector<DeconvolvedSpectrum>& deconvolved_spectra, std::vector<FLASHHelperClasses::MassFeature>& deconvolved_features);
@@ -147,6 +149,18 @@ namespace OpenMS
 
     /// register the precursor peak group (or mass) if possible for MSn (n>1) spectrum.
     void findPrecursorPeakGroupsForMSnSpectra_(const MSExperiment& map, const std::vector<DeconvolvedSpectrum>& deconvolved_spectra, uint ms_level);
+
+    /// find scan number bounds for precursor search
+    std::pair<int, int> findScanNumberBounds_(const MSExperiment& map, Size index, uint ms_level) const;
+
+    /// collect survey scans within the given scan number bounds
+    std::vector<DeconvolvedSpectrum> collectSurveyScans_(const std::vector<DeconvolvedSpectrum>& deconvolved_spectra, int b_scan_number, int a_scan_number, uint ms_level) const;
+
+    /// get isolation window m/z range from precursors
+    std::pair<double, double> getIsolationWindowMzRange_(const MSSpectrum& spec) const;
+
+    /// find the best precursor peak group from survey scans within the isolation window
+    PeakGroup findBestPrecursorPeakGroup_(const std::vector<DeconvolvedSpectrum>& survey_scans, double start_mz, double end_mz) const;
 
     /// determine tolerance
     void determineTolerance_(const MSExperiment& map, const Param& sd_param, const FLASHHelperClasses::PrecalculatedAveragine& avg, uint ms_level);

@@ -24,6 +24,7 @@ set(sources_list_h
         FLASHTaggerAlgorithm.h
         FLASHTnTAlgorithm.h
         MassFeatureTrace.h
+        OptimizationMetadata.h
         PeakGroup.h
         PeakGroupScoring.h
         Qvalue.h

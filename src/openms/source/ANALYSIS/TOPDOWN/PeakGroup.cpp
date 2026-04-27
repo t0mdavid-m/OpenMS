@@ -7,7 +7,6 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
-#include <cmath>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroupScoring.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
 
@@ -54,7 +53,6 @@ namespace OpenMS
         i = p.isotopeIndex;
         i_cntr = 0;
         i_error = 0;
-
       }
       i_cntr ++;
       i_error += ppm ? getPPMError_(p) : getDaError_(p);
@@ -159,8 +157,6 @@ namespace OpenMS
       if (getChargeSNR(abs_charge) > getChargeSNR(max_snr_abs_charge_)) { max_snr_abs_charge_ = abs_charge; }
     }
 
-    qscores_ = PeakGroupScoring::getQscores(this);
-    idscores_ = PeakGroupScoring::getIDscores(this);
     qscore_ = PeakGroupScoring::getQscore(this);
     return h_offset;
   }
@@ -555,7 +551,7 @@ namespace OpenMS
 
         if (iso_index < min_isotope) { continue; }
 
-        if (std::abs(pmz - cmz - iso_index * iso_delta) <= pmz * tol * mul_tol)
+        if (abs(pmz - cmz - iso_index * iso_delta) <= pmz * tol * mul_tol)
         {
           auto p = LogMzPeak(spec[index], is_positive_);
           p.isotopeIndex = iso_index;
@@ -590,6 +586,87 @@ namespace OpenMS
     }
 
     return _noisy_peaks;
+  }
+
+  std::vector<FLASHHelperClasses::LogMzPeak> PeakGroup::getNoisyPeaks(const MSSpectrum& spec,
+                                                                       const double tol,
+                                                                       const FLASHHelperClasses::PrecalculatedAveragine& avg) const
+  {
+    // Const version of recruitAllPeaksInSpectrum for use in output functions
+    // Uses existing member values instead of modifying them
+    const double mul_tol = 0.8;
+    std::vector<LogMzPeak> noisy_peaks;
+
+    const double mono_mass = monoisotopic_mass_;
+    if (mono_mass < 0) { return noisy_peaks; }
+
+    if (max_abs_charge_ - min_abs_charge_ < max_abs_charge_ / 20)
+    {
+      return noisy_peaks;
+    }
+
+    int max_isotope = static_cast<int>(avg.getLastIndex(mono_mass));
+    int min_isotope = static_cast<int>(avg.getApexIndex(mono_mass) - avg.getLeftCountFromApex(mono_mass) + min_negative_isotope_index_);
+    min_isotope = std::max(min_negative_isotope_index_, min_isotope);
+
+    // Find max signal isotope from existing peaks (const access)
+    int max_signal_isotope = 0;
+    for (const auto& p : logMzpeaks_)
+    {
+      if (p.isotopeIndex >= 0)
+      {
+        max_signal_isotope = std::max(max_signal_isotope, p.isotopeIndex);
+      }
+    }
+
+    noisy_peaks.reserve(max_isotope * (max_abs_charge_ - min_abs_charge_ + 1) * 2);
+
+    for (int c = max_abs_charge_; c >= min_abs_charge_; c--)
+    {
+      if (c <= 0) { break; }
+      double cmz = mono_mass / c + FLASHHelperClasses::getChargeMass(is_positive_);
+      double left_mz = (mono_mass - (1 - min_negative_isotope_index_) * iso_da_distance_) / c + FLASHHelperClasses::getChargeMass(is_positive_);
+      Size index = spec.findNearest(left_mz * (1 - tol * mul_tol));
+      double iso_delta = iso_da_distance_ / c;
+
+      for (; index < spec.size(); index++)
+      {
+        float pint = spec[index].getIntensity();
+        if (pint <= 0) { continue; }
+        double pmz = spec[index].getMZ();
+        int iso_index = static_cast<int>(round((pmz - cmz) / iso_delta));
+        if (iso_index > max_isotope) { break; }
+        if (iso_index < min_isotope) { continue; }
+
+        // Only collect noisy peaks (those that don't match the isotope pattern tolerance)
+        if (!(abs(pmz - cmz - iso_index * iso_delta) <= pmz * tol * mul_tol))
+        {
+          if (iso_index >= 0)
+          {
+            auto p = LogMzPeak(spec[index], is_positive_);
+            int noise_iso_index = static_cast<int>(floor((pmz - cmz) / iso_delta));
+            p.isotopeIndex = noise_iso_index;
+            p.abs_charge = c;
+            noisy_peaks.push_back(p);
+          }
+        }
+      }
+
+      if (index >= spec.size()) { break; }
+    }
+
+    // Filter noisy peaks to only include those within signal isotope range
+    std::vector<LogMzPeak> filtered_noisy_peaks;
+    filtered_noisy_peaks.reserve(noisy_peaks.size());
+    for (const auto& p : noisy_peaks)
+    {
+      if (p.isotopeIndex <= max_signal_isotope)
+      {
+        filtered_noisy_peaks.push_back(p);
+      }
+    }
+
+    return filtered_noisy_peaks;
   }
 
   void PeakGroup::updateChargeFitScoreAndChargeIntensities_(bool is_low_charge)
@@ -651,6 +728,10 @@ namespace OpenMS
                                             int min_negative_isotope_index,
                                             double tol)
   {
+    // Compute Da tolerance from ppm tolerance using the first peak's uncharged mass.
+    // Assumption: all peaks in this group share similar mass, so the first peak is a
+    // representative for tolerance calculation. Division by 2.0 converts from full-width
+    // tolerance to half-width (radius) for the smoothing window.
     int da_tol = (int)(tol * logMzpeaks_[0].getUnchargedMass() / 2.0);
 
     min_isotope_index = 1e5;
@@ -664,6 +745,15 @@ namespace OpenMS
     intensities = std::vector<float>(max_isotope_index + 1 + da_tol - min_negative_isotope_index_, .0f);
     std::fill(intensities.begin(), intensities.end(), .0f);
 
+    // Gaussian smoothing denominator derivation:
+    // - Standard Gaussian: exp(-x²/(2σ²)), where FWHM = 2.355σ, so σ = FWHM/2.355
+    // - Here da_tol is treated as FWHM, giving σ = da_tol/2.355
+    // - The formula: denom = 2σ² / iso_da_distance_ = 2*(da_tol/2.355)² / iso_da_distance_
+    // - This scales the Gaussian width by isotope spacing, producing broader smoothing
+    //   that allows adjacent isotope peaks to blend together. This is intentional to
+    //   handle mass calibration errors and improve isotope pattern matching robustness.
+    // NOTE: This nonstandard scaling factor lacks formal validation. Consider adding
+    // unit tests demonstrating its impact on isotope deconvolution accuracy.
     double denom = 2.0 * std::pow(da_tol / 2.355, 2.0) / iso_da_distance_;
 
     for (const auto& peak : logMzpeaks_)
@@ -678,6 +768,10 @@ namespace OpenMS
       {
         int index = peak.isotopeIndex + margin - min_negative_isotope_index;
         if (index < 0 || index >= (int)intensities.size()) continue;
+        // Fallback when denom <= 0: can occur if da_tol is 0 (very small mass or tight tolerance)
+        // or iso_da_distance_ is 0/negative (degenerate isotope spacing). In such edge cases,
+        // skip Gaussian weighting and add raw intensity directly - safe because the smoothing
+        // window collapses to a single bin anyway.
         intensities[index] += denom > 0 ? float(peak.intensity * exp(-margin * margin / denom)) : peak.intensity;
       }
     }
@@ -696,6 +790,7 @@ namespace OpenMS
         {
           int index = peak.isotopeIndex + margin - min_negative_isotope_index;
           if (index < 0 || index >= (int)intensities.size()) continue;
+          // Same denom > 0 fallback as above for negative isotope peaks
           intensities[index] += denom > 0 ? float(peak.intensity * exp(-margin * margin / denom)) : peak.intensity;
         }
       }
@@ -861,19 +956,6 @@ namespace OpenMS
     return intensity_;
   }
 
-  float PeakGroup::getMaxChargeIntensity() const
-  {
-    float max_int = 0.0f;
-    for (int c = min_abs_charge_; c <= max_abs_charge_; c++)
-    {
-      if (c >= 0 && c < (int)per_charge_int_.size() && per_charge_int_[c] > max_int)
-      {
-        max_int = per_charge_int_[c];
-      }
-    }
-    return max_int;
-  }
-
   float PeakGroup::getIsotopeCosine() const
   {
     return isotope_cosine_score_;
@@ -884,22 +966,6 @@ namespace OpenMS
     return max_snr_abs_charge_;
   }
 
-  int PeakGroup::getMaxIntensityAbsCharge() const
-  {
-    int max_int_charge = min_abs_charge_;
-    float max_intensity = 0.0f;
-    for (int c = min_abs_charge_; c <= max_abs_charge_; ++c)
-    {
-      float intensity = getChargeIntensity(c);
-      if (intensity > max_intensity)
-      {
-        max_intensity = intensity;
-        max_int_charge = c;
-      }
-    }
-    return max_int_charge;
-  }
-
   double PeakGroup::getQscore() const
   {
     return qscore_;
@@ -908,86 +974,6 @@ namespace OpenMS
   double PeakGroup::getQscore2D() const
   {
     return std::max(qscore_, qscore2D_);
-  }
-
-  std::unordered_map<int, float> PeakGroup::getAllQscores() const
-  {
-    return qscores_;
-  }
-
-  std::unordered_map<int, std::unordered_map<int, float>> PeakGroup::getAllIDscores() const
-  {
-    return idscores_;
-  }
-
-  int PeakGroup::getBestQScoreCharge() const
-  {
-    if (qscores_.empty())
-    {
-      return -1;
-    }
-
-    float max_score = 0.0f;
-    std::vector<int> best_charges;
-
-    // Find maximum score and collect all charges with that score
-    for (const auto& [charge, score] : qscores_)
-    {
-      if (score > max_score)
-      {
-        max_score = score;
-        best_charges.clear();
-        best_charges.push_back(charge);
-      }
-      else if (score == max_score)
-      {
-        best_charges.push_back(charge);
-      }
-    }
-
-    if (best_charges.empty())
-    {
-      return -1;
-    }
-
-    // Handle ties by selecting charge closest to representative charge
-    if (best_charges.size() == 1)
-    {
-      return best_charges[0];
-    }
-
-    int rep_charge = getRepAbsCharge();
-    if (rep_charge <= 0)
-    {
-      return best_charges[0]; // Fallback if no representative charge available
-    }
-
-    int best_charge = best_charges[0];
-    int min_distance = std::abs(best_charges[0] - rep_charge);
-
-    for (int charge : best_charges)
-    {
-      int distance = std::abs(charge - rep_charge);
-      if (distance < min_distance)
-      {
-        min_distance = distance;
-        best_charge = charge;
-      }
-    }
-
-    return best_charge;
-  }
-
-  float PeakGroup::getBestQScore() const
-  {
-    int best_charge = getBestQScoreCharge();
-    if (best_charge == -1)
-    {
-      return 0.0f;
-    }
-
-    auto it = qscores_.find(best_charge);
-    return (it != qscores_.end()) ? it->second : 0.0f;
   }
 
   void PeakGroup::setFeatureIndex(uint findex)
@@ -1199,13 +1185,7 @@ namespace OpenMS
     const int apex_iso_index = avg.getApexIndex(getMonoMass());
     int apex_charge = -1;
     double z_intensity = 0;
-    double max_s_intensity = 0;
-    //double avg_sum = 0;
-    const auto& avg_iso = avg.get(getMonoMass());
-    (void)avg_iso;  // Suppress unused variable warning - code using this is commented out
-
-    //for(auto i : avg_iso) avg_sum += i.getIntensity();
-
+    double max_s_intensity = 0, max_n_intensity = 0;
     for (int z = min_abs_charge_; z<= max_abs_charge_; z++)
     {
       double z_i = getChargeIntensity(z);
@@ -1234,12 +1214,8 @@ namespace OpenMS
       int v_index = int(z_index * isotope_count + iso_index);
 
       sig[v_index] += p.intensity;
-      //sig[v_index] += p.intensity / (1e-3 + avg_iso[p.isotopeIndex].getIntensity());
-      //sig[v_index] += std::abs(p.intensity - avg_iso[p.isotopeIndex].getIntensity() * getChargeIntensity(p.abs_charge) / avg_sum);
       max_s_intensity = std::max(max_s_intensity, sig[v_index]);
     }
-    //max_s_intensity = sig[int(charge_count / 2) * isotope_count + int(isotope_count / 2)];
-    max_s_intensity = max_s_intensity <= 0? 1 : max_s_intensity;
 
     for (const auto& p : noisy_peaks)
     {
@@ -1265,9 +1241,8 @@ namespace OpenMS
         }
         if (too_close) continue;
       }
-      noise[v_index] += p.intensity;//
-      //noise[v_index] += p.intensity / (1e-3 + avg_iso[p.isotopeIndex].getIntensity());
-      //noise[v_index] += std::abs(p.intensity - avg_iso[p.isotopeIndex].getIntensity() * getChargeIntensity(p.abs_charge) / avg_sum);
+      noise[v_index] += p.intensity;
+      max_n_intensity = std::max(max_n_intensity, sig[v_index]);
     }
 
     if (max_s_intensity > 0)
@@ -1276,262 +1251,16 @@ namespace OpenMS
       {
         s /= max_s_intensity;
       }
+    }
+
+    if (max_n_intensity > 0)
+    {
       for (auto& n : noise)
       {
-        n /= max_s_intensity;
+        n /= max_n_intensity;
       }
     }
 
     return sig_noise;
-  }
-
-  float PeakGroup::getIDScoreForChargeAndHCD(int abs_charge, int hcd_energy) const
-  {
-    auto charge_it = idscores_.find(abs_charge);
-    if (charge_it == idscores_.end()) {
-      return 0.0f;
-    }
-
-    auto hcd_it = charge_it->second.find(hcd_energy);
-    return (hcd_it != charge_it->second.end()) ? hcd_it->second : 0.0f;
-  }
-
-  float PeakGroup::getBestIDScoreForHCD(int hcd_energy) const
-  {
-    if (idscores_.empty()) {
-      return 0.0f;
-    }
-
-    float max_score = 0.0f;
-    for (const auto& [charge, hcd_map] : idscores_) {
-      auto hcd_it = hcd_map.find(hcd_energy);
-      if (hcd_it != hcd_map.end()) {
-        max_score = std::max(max_score, hcd_it->second);
-      }
-    }
-    return max_score;
-  }
-
-  float PeakGroup::getBestIDScoreForCharge(int abs_charge) const
-  {
-    if (idscores_.empty()) {
-      return 0.0f;
-    }
-
-    auto charge_it = idscores_.find(abs_charge);
-    if (charge_it == idscores_.end()) {
-      return 0.0f;
-    }
-
-    float max_score = 0.0f;
-    for (const auto& [hcd_energy, score] : charge_it->second) {
-      max_score = std::max(max_score, score);
-    }
-    return max_score;
-  }
-
-  int PeakGroup::getBestIDScoreChargeForHCD(int hcd_energy) const
-  {
-    if (idscores_.empty()) {
-      return -1;
-    }
-
-    float max_score = 0.0f;
-    std::vector<int> best_charges;
-
-    // Find charges with maximum IDScore for specified HCD
-    for (const auto& [charge, hcd_map] : idscores_) {
-      auto hcd_it = hcd_map.find(hcd_energy);
-      if (hcd_it != hcd_map.end()) {
-        float score = hcd_it->second;
-        if (score > max_score) {
-          max_score = score;
-          best_charges.clear();
-          best_charges.push_back(charge);
-        } else if (score == max_score && score > 0.0f) {
-          best_charges.push_back(charge);
-        }
-      }
-    }
-
-    if (best_charges.empty() || max_score == 0.0f) {
-      return -1;
-    }
-
-    return best_charges[0];
-  }
-
-  int PeakGroup::getBestIDScoreCharge() const
-  {
-    if (idscores_.empty())
-    {
-      return -1;
-    }
-
-    float max_score = 0.0f;
-    std::vector<int> best_charges;
-
-    // Find the global maximum IDScore and collect contributing charges
-    for (const auto& [charge, hcd_map] : idscores_)
-    {
-      for (const auto& [hcd, score] : hcd_map)
-      {
-        if (score > max_score)
-        {
-          max_score = score;
-          best_charges.clear();
-          best_charges.push_back(charge);
-        }
-        else if (score == max_score && score > 0.0f)
-        {
-          // Check if this charge is already in best_charges to avoid duplicates
-          if (std::find(best_charges.begin(), best_charges.end(), charge) == best_charges.end())
-          {
-            best_charges.push_back(charge);
-          }
-        }
-      }
-    }
-
-    if (best_charges.empty() || max_score == 0.0f)
-    {
-      return -1;
-    }
-
-    // Handle ties by selecting charge closest to representative charge
-    if (best_charges.size() == 1)
-    {
-      return best_charges[0];
-    }
-
-    int rep_charge = getRepAbsCharge();
-    if (rep_charge <= 0)
-    {
-      return best_charges[0]; // Fallback if no representative charge available
-    }
-
-    int best_charge = best_charges[0];
-    int min_distance = std::abs(best_charges[0] - rep_charge);
-
-    for (int charge : best_charges)
-    {
-      int distance = std::abs(charge - rep_charge);
-      if (distance < min_distance)
-      {
-        min_distance = distance;
-        best_charge = charge;
-      }
-    }
-
-    return best_charge;
-  }
-
-  int PeakGroup::getBestIDScoreHCD() const
-  {
-    if (idscores_.empty())
-    {
-      return -1;
-    }
-
-    float max_score = 0.0f;
-    std::vector<int> best_hcds;
-
-    // Find the global maximum IDScore and collect contributing HCD values
-    for (const auto& [charge, hcd_map] : idscores_)
-    {
-      for (const auto& [hcd, score] : hcd_map)
-      {
-        if (score > max_score)
-        {
-          max_score = score;
-          best_hcds.clear();
-          best_hcds.push_back(hcd);
-        }
-        else if (score == max_score && score > 0.0f)
-        {
-          // Check if this HCD is already in best_hcds to avoid duplicates
-          if (std::find(best_hcds.begin(), best_hcds.end(), hcd) == best_hcds.end())
-          {
-            best_hcds.push_back(hcd);
-          }
-        }
-      }
-    }
-
-    if (best_hcds.empty() || max_score == 0.0f)
-    {
-      return -1;
-    }
-
-    // Handle ties by selecting HCD closest to 29 (commonly used value)
-    if (best_hcds.size() == 1)
-    {
-      return best_hcds[0];
-    }
-
-    int best_hcd = best_hcds[0];
-    int min_distance = std::abs(best_hcds[0] - 29);
-
-    for (int hcd : best_hcds)
-    {
-      int distance = std::abs(hcd - 29);
-      if (distance < min_distance)
-      {
-        min_distance = distance;
-        best_hcd = hcd;
-      }
-    }
-
-    return best_hcd;
-  }
-
-  float PeakGroup::getBestIDScore() const
-  {
-    int best_charge = getBestIDScoreCharge();
-    int best_hcd = getBestIDScoreHCD();
-
-    if (best_charge == -1 || best_hcd == -1)
-    {
-      return 0.0f;
-    }
-
-    auto charge_it = idscores_.find(best_charge);
-    if (charge_it == idscores_.end())
-    {
-      return 0.0f;
-    }
-
-    auto hcd_it = charge_it->second.find(best_hcd);
-    return (hcd_it != charge_it->second.end()) ? hcd_it->second : 0.0f;
-  }
-
-  int PeakGroup::getBestHCDForCharge(int abs_charge) const
-  {
-    if (idscores_.empty()) {
-      return -1;
-    }
-
-    auto charge_it = idscores_.find(abs_charge);
-    if (charge_it == idscores_.end()) {
-      return -1;
-    }
-
-    float max_score = -1.0f;
-    std::vector<int> best_hcds;
-
-    // Find HCD values with maximum IDScore for specified charge
-    for (const auto& [hcd, score] : charge_it->second) {
-      if (score > max_score) {
-        max_score = score;
-        best_hcds.clear();
-        best_hcds.push_back(hcd);
-      }
-    }
-
-    if (best_hcds.empty()) {
-      return -1;
-    }
-
-    return best_hcds[0];
   }
 } // namespace OpenMS

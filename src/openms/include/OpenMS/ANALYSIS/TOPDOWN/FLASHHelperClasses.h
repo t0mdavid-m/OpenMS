@@ -10,10 +10,15 @@
 
 #include <OpenMS/APPLICATIONS/TOPPBase.h>
 #include <OpenMS/CHEMISTRY/ISOTOPEDISTRIBUTION/CoarseIsotopePatternGenerator.h>
+#ifdef _MSC_VER
+using uint = unsigned int; // POSIX uint not available on MSVC; was provided transitively via Qt
+#endif
 #include <OpenMS/CHEMISTRY/ISOTOPEDISTRIBUTION/IsotopeDistribution.h>
 #include <OpenMS/CONCEPT/Constants.h>
+#include <OpenMS/CONCEPT/HashUtils.h>
 #include <OpenMS/FEATUREFINDER/MassTraceDetection.h>
 #include <boost/dynamic_bitset.hpp>
+#include <functional>
 
 namespace OpenMS
 {
@@ -70,12 +75,12 @@ namespace OpenMS
 
       /**
        @brief constructor with parameters such as mass ranges and bin size.
-       @param min_mass the averagine distributions will be calculated from this min_mass
-       @param max_mass to the max_mass
-       @param delta with the bin size delta
-       @param generator this generates (calculates) the distributions
-       @param use_RNA_averagine if set, nucleotide-based isotope patters are calculated
-       @param decoy_iso_distance if set to a positive value, nonsensical isotope patterns are generated - the distance between isotope = decoy_iso_distance * normal distance.
+       @param[in] min_mass the averagine distributions will be calculated from this min_mass
+       @param[in] max_mass to the max_mass
+       @param[in] delta with the bin size delta
+       @param[in] generator this generates (calculates) the distributions
+       @param[in] use_RNA_averagine if set, nucleotide-based isotope patters are calculated
+       @param[in] decoy_iso_distance if set to a positive value, nonsensical isotope patterns are generated - the distance between isotope = decoy_iso_distance * normal distance.
     */
       PrecalculatedAveragine(double min_mass, double max_mass, double delta, CoarseIsotopePatternGenerator& generator, bool use_RNA_averagine, double decoy_iso_distance = -1);
 
@@ -178,6 +183,7 @@ namespace OpenMS
       double precursor_mass;
       std::vector<double> quantities;
       std::vector<double> merged_quantities;
+      /// return true if no isobaric quantities have been stored
       bool empty() const;
     };
 
@@ -205,8 +211,8 @@ namespace OpenMS
 
       /**
         @brief constructor from Peak1D.
-        @param peak the original spectral peak
-        @param positive determines the charge carrier mass. Can be obtained by getChargeMass(true) for positive mode (Constants::PROTON_MASS_U) and
+        @param[in] peak the original spectral peak
+        @param[in] positive determines the charge carrier mass. Can be obtained by getChargeMass(true) for positive mode (Constants::PROTON_MASS_U) and
         getChargeMass(false) for negative mode
         (-Constants::PROTON_MASS_U)
       */
@@ -228,223 +234,44 @@ namespace OpenMS
       bool operator==(const LogMzPeak& other) const;
     };
 
-    class OPENMS_DLLAPI MassTag
-    {
-    public:
-      /// constructor
-      explicit MassTag(const String& full_seq, const std::vector<int>& positions, int scan);
-
-      /// copy constructor
-      MassTag(const MassTag&) = default;
-
-      /// destructor
-      ~MassTag() = default;
-
-      bool operator<(const MassTag& a) const;
-      bool operator>(const MassTag& a) const;
-      bool operator==(const MassTag& other) const;
-
-      [[nodiscard]] const String& getSequence() const;
-      [[nodiscard]] double getNtermMass() const;
-      [[nodiscard]] double getCtermMass() const;
-      Size getLength() const;
-      int getScore() const;
-      int getScore(int pos) const;
-      int getScan() const;
-      int getIndex() const
-      {
-        return index_;
-      }
-
-      void setIndex(int i)
-      {
-        index_ = i;
-      }
-
-      float getRetentionTime() const
-      {
-        return rt_;
-      }
-
-      void setRetentionTime(float i)
-      {
-        rt_ = i;
-      }
-
-      String toString() const;
-      const std::vector<double>& getMzs() const;
-
-    private:
-      double n_mass_ = -1, c_mass_ = -1;
-      String seq_;
-      float rt_ = -1;
-      int scan_;
-      std::vector<int> positions_;
-      std::vector<double> masses_;
-      int index_;
-      Size length_;
-    };
-
-
-    /// Sequence tag used for FLASHTaggerAlgorithm. No mass gap is allowed in the seq.
-    /// The mass gap containing tag should be enumerated into multiple Tag instances from outside.
-    class OPENMS_DLLAPI Tag
-    {
-    public:
-      /// constructor
-      explicit Tag(const String& seq, double n_mass, double c_mass, const std::vector<double>& mzs, const std::vector<int>& scores, int scan);
-
-      /// copy constructor
-      Tag(const Tag&) = default;
-
-      /// destructor
-      ~Tag() = default;
-
-      bool operator<(const Tag& a) const;
-      bool operator>(const Tag& a) const;
-      bool operator==(const Tag& other) const;
-
-      [[nodiscard]] const String& getSequence() const;
-      [[nodiscard]] const String& getUppercaseSequence() const;
-      [[nodiscard]] double getNtermMass() const;
-      [[nodiscard]] double getCtermMass() const;
-      Size getLength() const;
-      int getScore() const;
-      int getScore(int pos) const;
-      int getScan() const;
-      int getIndex() const
-      {
-        return index_;
-      }
-
-      void setIndex(int i)
-      {
-        index_ = i;
-      }
-
-      float getRetentionTime() const
-      {
-        return rt_;
-      }
-
-      void setRetentionTime(float i)
-      {
-        rt_ = i;
-      }
-
-      String toString() const;
-      const std::vector<double>& getMzs() const;
-
-    private:
-      String seq_, upper_seq_;
-      double n_mass_ = -1, c_mass_ = -1;
-      float rt_ = -1;
-      std::vector<double> mzs_;
-      std::vector<int> scores_;
-      int scan_;
-      int index_;
-      Size length_;
-    };
-
-    /// A generic Directed Acyclic Graph structure for FLASHTaggerAlgorithm and FLASHExtensionAlgorithm.
-    /// It is a 1-D graph so multiple dimension graph should be changed into 1-D to use this structure.
-    class OPENMS_DLLAPI DAG
-    {
-    public:
-      DAG()
-      {
-      }
-      explicit DAG(Size vertice_count): vertex_count_(vertice_count)
-      {
-      }
-
-      Size size() const
-      {
-        return vertex_count_;
-      }
-
-      bool addEdge(Size vertex1, Size vertex2, boost::dynamic_bitset<>& visited)
-      {
-        if (vertex1 >= vertex_count_ || vertex2 >= vertex_count_) return false;
-        if (! visited[vertex2]) return false;
-        visited[vertex1] = true;
-        adj_list_for_speed_up_[vertex2].insert(vertex1); //
-        return true;
-      }
-
-      /**
-       * Simple path finding algorithm on DAG
-       * @param source source
-       * @param sink sink
-       * @param all_paths the resulting paths
-       * @param max_count maximum path count
-       */
-      void findAllPaths(Size source, Size sink, std::vector<std::vector<Size>>& all_paths, Size max_count)
-      {
-        std::unordered_set<Size> visited;
-        std::vector<Size> path;
-
-        if (adj_list_.empty())
-        {
-          for (const auto& [v2, vertices] : adj_list_for_speed_up_)
-          {
-            for (const auto& v1 : vertices)
-            {
-              adj_list_[v1].push_back(v2);
-            }
-          }
-          for (auto& v : adj_list_)
-          {
-            std::sort(v.second.begin(), v.second.end());
-          }
-        }
-        findAllPaths_(source, sink, visited, path, all_paths, max_count); // reverse traveling
-      }
-
-    private:
-      Size vertex_count_;
-      // 0, 1, 2, ... ,vertex_count - 1
-      std::map<Size, std::vector<Size>> adj_list_; //
-      std::unordered_map<Size, std::unordered_set<Size>> adj_list_for_speed_up_; // vertex swapped for fast storing of edges
-      /// recursive part for the findAllPaths(..)
-      void findAllPaths_(Size current,
-                         Size destination,
-                         std::unordered_set<Size>& visited,
-                         std::vector<Size>& path,
-                         std::vector<std::vector<Size>>& all_paths,
-                         Size max_count)
-      {
-        if (max_count > 0 && all_paths.size() >= max_count) return;
-
-        visited.insert(current);
-        path.push_back(current);
-
-        if (current == destination) { all_paths.push_back(path);}
-        else
-        {
-          for (Size i : adj_list_[current])
-          {
-            if (visited.find(i) == visited.end()) { findAllPaths_(i, destination, visited, path, all_paths, max_count); }
-          }
-        }
-
-        // Backtrack
-        path.pop_back();
-        visited.erase(current);
-      }
-    };
-
     /**
        @brief calculate log mzs from mzs
-       @param mz mz
-       @param positive determines the charge carrier mass
+       @param[in] mz mz
+       @param[in] positive determines the charge carrier mass
      */
     static double getLogMz(double mz, bool positive);
 
     /**
        @brief get charge carrier mass : positive mode mass of (Constants\::PROTON_MASS_U) and negative mode mass of (-Constants\::PROTON_MASS_U)
-       @param positive_ioniziation_mode Determines the charge carrier mass (true = positive or false = negative)
+       @param[in] positive_ioniziation_mode Determines the charge carrier mass (true = positive or false = negative)
     */
     static float getChargeMass(bool positive_ioniziation_mode);
   };
 } // namespace OpenMS
+
+namespace std
+{
+  /// @brief Hash specialization for FLASHHelperClasses::MassFeature
+  template<>
+  struct hash<OpenMS::FLASHHelperClasses::MassFeature>
+  {
+    std::size_t operator()(const OpenMS::FLASHHelperClasses::MassFeature& mf) const noexcept
+    {
+      // Hash based on avg_mass (the field used in operator==)
+      return OpenMS::hash_float(mf.avg_mass);
+    }
+  };
+
+  /// @brief Hash specialization for FLASHHelperClasses::LogMzPeak
+  template<>
+  struct hash<OpenMS::FLASHHelperClasses::LogMzPeak>
+  {
+    std::size_t operator()(const OpenMS::FLASHHelperClasses::LogMzPeak& peak) const noexcept
+    {
+      // Hash based on logMz and intensity (the fields used in operator==)
+      std::size_t seed = OpenMS::hash_float(peak.logMz);
+      OpenMS::hash_combine(seed, OpenMS::hash_float(peak.intensity));
+      return seed;
+    }
+  };
+} // namespace std

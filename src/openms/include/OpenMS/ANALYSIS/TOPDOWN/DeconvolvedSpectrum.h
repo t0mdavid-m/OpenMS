@@ -9,11 +9,9 @@
 #pragma once
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
-#include <OpenMS/ANALYSIS/TOPDOWN/OptimizationMetadata.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/KERNEL/MSSpectrum.h>
 #include <iomanip>
-#include <optional>
 
 namespace OpenMS
 {
@@ -24,7 +22,7 @@ namespace OpenMS
        DeconvolvedSpectrum consists of PeakGroup instances representing masses.
        For MSn n>1, a PeakGroup representing the precursor mass is also added in this class. Properly assigning a precursor mass
        from the original precursor peak and its deconvolution result is very important in top down proteomics. This assignment is
-       performed here for conventional DIA acquired datasets. But for FLASHIda acquired datasets, the assignment is already done by FLASHIda.
+       performed here for conventional acquired datasets. But for FLASHIda acquired datasets, the assignment is already done by FLASHIda.
        So this class simply use the results from FLASHIda log file for assignment. The parsing of FLASHIda log file is done
        in FLASHDeconv tool class.
   */
@@ -38,7 +36,7 @@ namespace OpenMS
 
     /**
        @brief Constructor for DeconvolvedSpectrum. Takes the spectrum and scan number calculated from outside
-       @param scan_number scan number of the spectrum
+       @param[in] scan_number scan number of the spectrum
   */
     explicit DeconvolvedSpectrum(int scan_number);
 
@@ -55,9 +53,9 @@ namespace OpenMS
     DeconvolvedSpectrum& operator=(const DeconvolvedSpectrum& deconvolved_spectrum) = default;
 
     /// Convert DeconvolvedSpectrum to MSSpectrum (e.g., used to store in mzML format).
-    /// @param to_charge the charge of each peak in mzml output.
-    /// @param tol the ppm tolerance
-    /// @param retain_undeconvolved if set, undeconvolved peaks in the original peaks are output (assuming their abs charge == 1 and m/zs are adjusted with the to_charge parameter)
+    /// @param[in] to_charge the charge of each peak in mzml output.
+    /// @param[in] tol the ppm tolerance
+    /// @param[in] retain_undeconvolved if set, undeconvolved peaks in the original peaks are output (assuming their abs charge == 1 and m/zs are adjusted with the to_charge parameter)
     MSSpectrum toSpectrum(int to_charge, double tol = 10.0, bool retain_undeconvolved = false);
 
     /// original spectrum getter
@@ -66,31 +64,25 @@ namespace OpenMS
     /// get precursor peak group for MSn (n>1) spectrum. It returns an empty peak group if no peak group is registered (by registerPrecursor)
     const PeakGroup& getPrecursorPeakGroup() const;
 
-    /// get deconvolved precursor peak group for MSn (n>1) spectrum. It returns an empty peak group if no peak group is registered (by registerPrecursor)
-    const Precursor& getDeconvolvedPrecursor() const;
-
     /// precursor charge getter (set in registerPrecursor)
     int getPrecursorCharge() const;
 
     /// get precursor peak
     const Precursor& getPrecursor() const;
 
-    /// get CV for FAIMS
-    double getCV() const;
-
     /// get possible max mass of the deconvolved masses - for MS1, max mass specified by user
     /// for MSn, min value between max mass specified by the user and precursor mass
-    /// @param max_mass the max mass specified by the user
+    /// @param[in] max_mass the max mass specified by the user
     double getCurrentMaxMass(double max_mass) const;
 
     /// get possible min mass of the deconvolved masses - for MS1, min mass specified by user
     /// for MSn, 50.0
-    /// @param min_mass the min mass specified by the user
+    /// @param[in] min_mass the min mass specified by the user
     double getCurrentMinMass(double min_mass) const;
 
     /// get possible max charge of the deconvolved masses - for MS1, max charge specified by user
     /// for MSn, min value between max charge specified by the user and precursor charge
-    /// @param max_abs_charge the max absolute value of the charge specified by the user
+    /// @param[in] max_abs_charge the max absolute value of the charge specified by the user
     int getCurrentMaxAbsCharge(int max_abs_charge) const;
 
     /// get scan number of the original spectrum
@@ -103,21 +95,13 @@ namespace OpenMS
     const Precursor::ActivationMethod& getActivationMethod() const;
 
     /// return isobaric  quantities
-    const FLASHHelperClasses::IsobaricQuantities getQuantities() const;
-
-    const std::vector<std::tuple<double, double>>& getPrecursorMassIntensityMap() const
-    {
-      return precursor_mass_intensity_map_;
-    }
+    FLASHHelperClasses::IsobaricQuantities getQuantities() const;
 
     /// set isobaric quantities
     void setQuantities(const FLASHHelperClasses::IsobaricQuantities& quantities);
 
     /// set precursor for MSn for n>1
     void setPrecursor(const Precursor& precursor);
-
-    /// set deconvolved precursor for MSn for n>1
-    void setDeconvolvedPrecursor(const Precursor& precursor);
 
     /// set precursor scan number
     void setPrecursorScanNumber(int scan_number);
@@ -132,9 +116,7 @@ namespace OpenMS
     void setOriginalSpectrum(const MSSpectrum& spec);
 
     /// set peak groups in this spectrum
-    void setPeakGroups(const std::vector<PeakGroup>& x);
-
-    void setPrecursorMassIntensityMap(const std::vector<std::tuple<double, double>>& map);
+    void setPeakGroups(std::vector<PeakGroup>& x);
 
     /// iterators and vector operators for std::vector<PeakGroup> peak_groups_ in this spectrum
     std::vector<PeakGroup>::const_iterator begin() const noexcept;
@@ -160,20 +142,6 @@ namespace OpenMS
     void sort();
     /// sort by Qscore of peakGroups
     void sortByQscore();
-    // Feature level
-    void sortByQscore2D();
-    /// sort by QScore across all charge states (use best QScore from each PeakGroup)
-    void sortByQScoreAllCharges();
-    /// sort by IDScore for the representative charge state (use representative charge and best IDScore for that charge)
-    void sortByIDScoreRepresentative();
-    /// sort by IDScore for the representative charge state for a specific HCD energy
-    void sortByIDScoreRepresentative(int hcd_energy);
-    /// sort by IDScore across all charge states and HCD energies (use globally best IDScore from each PeakGroup)
-    void sortByIDScoreAllCharges();
-    /// sort by IDScore across all charge states for a specific HCD energy
-    void sortByIDScoreAllCharges(int hcd_energy);
-    /// Sort by most intense charge state per peak group (descending)
-    void sortByIntensity();
 
     /// comparison operators
     bool operator<(const DeconvolvedSpectrum& a) const;
@@ -181,15 +149,6 @@ namespace OpenMS
     bool operator>(const DeconvolvedSpectrum& a) const;
 
     bool operator==(const DeconvolvedSpectrum& a) const;
-
-    /// Returns a reference to the metadata, creating it if it does not exist.
-    OptimizationMetadata& getOrCreateOptimizationMetadata();
-
-    /// Returns a const pointer to the metadata, or nullptr if not present.
-    const OptimizationMetadata* getOptimizationMetadata() const;
-
-    /// Returns true if this spectrum carries OptimizationMetadata.
-    bool hasOptimizationMetadata() const;
 
   private:
     /// peak groups (deconvolved masses)
@@ -200,18 +159,11 @@ namespace OpenMS
     PeakGroup precursor_peak_group_;
     /// precursor raw peak (not deconvolved one)
     Precursor precursor_peak_;
-    /// precursor deconvolved peak
-    Precursor deconvolved_precursor_peak_;
-    /// precursor peak intensities within the isolation window
-    std::vector<std::tuple<double, double>> precursor_mass_intensity_map_;
     /// activation method for file output
     Precursor::ActivationMethod activation_method_ = Precursor::ActivationMethod::CID;
     /// scan number and precursor scan number
     int scan_number_ = 0, precursor_scan_number_ = 0;
-    double cv_ = 1e5;
     /// isobaric quantities
     FLASHHelperClasses::IsobaricQuantities quantities_;
-    /// optional optimization metadata (populated by Phase 7 exploration engine)
-    std::optional<OptimizationMetadata> opt_metadata_;
   };
 } // namespace OpenMS

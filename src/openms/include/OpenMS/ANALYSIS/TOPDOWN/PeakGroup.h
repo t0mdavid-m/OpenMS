@@ -9,7 +9,10 @@
 #pragma once
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
+#include <OpenMS/CONCEPT/HashUtils.h>
 #include <OpenMS/DATASTRUCTURES/Matrix.h>
+
+#include <functional>
 
 namespace OpenMS
 {
@@ -43,9 +46,9 @@ namespace OpenMS
 
     /**
            @brief Constructor specifying charge range
-           @param min_abs_charge min Charge
-           @param max_abs_charge max Charge
-           @param is_positive whether MS is positive mode
+           @param[in] min_abs_charge min Charge
+           @param[in] max_abs_charge max Charge
+           @param[in] is_positive whether MS is positive mode
     */
     explicit PeakGroup(int min_abs_charge, int max_abs_charge, bool is_positive);
 
@@ -75,13 +78,13 @@ namespace OpenMS
 
     /**
            @brief Update setQscore. Cosine and SNRs are also updated.
-           @param noisy_peaks noisy peaks to calculate setQscore
-           @param avg precalculated averagine
-           @param min_cos the peak groups with cosine score less than this will have setQscore 0.
-           @param tol ppm tolerance
-           @param is_low_charge if set, charge fit score calculation becomes less stroct
-           @param excluded_masses masses to exclude
-           @param is_last if this is set, it means that PeakGroupScoring calculation is at its last iteration. More detailed noise power calculation is activated and mono mass is not recalibrated.
+           @param[in] noisy_peaks noisy peaks to calculate setQscore
+           @param[in] avg precalculated averagine
+           @param[in] min_cos the peak groups with cosine score less than this will have setQscore 0.
+           @param[in] tol ppm tolerance
+           @param[in] is_low_charge if set, charge fit score calculation becomes less stroct
+           @param[in] excluded_masses masses to exclude
+           @param[in] is_last if this is set, it means that PeakGroupScoring calculation is at its last iteration. More detailed noise power calculation is activated and mono mass is not recalibrated.
            @return returns isotope offset after isotope cosine calculation
       */
     int updateQscore(const std::vector<LogMzPeak>& noisy_peaks, const FLASHHelperClasses::PrecalculatedAveragine& avg, double min_cos,
@@ -90,14 +93,24 @@ namespace OpenMS
     /**
      * @brief given a monoisotopic mass, recruit raw peaks from the raw input spectrum and add to this peakGroup. This is a bit time-consuming and is done for only a small number of selected
      * high-quality peakgroups.
-     * @param spec raw spectrum
-     * @param tol ppm tolerance
-     * @param avg precalculated averagine
-     * @param mono_mass monoisotopic mass
-     * @param renew_signal_peaks Whether or not the signal peaks should be renewed during recruitment
+     * @param[in] spec raw spectrum
+     * @param[in] tol ppm tolerance
+     * @param[in] avg precalculated averagine
+     * @param[in] mono_mass monoisotopic mass
+     * @param[in] renew_signal_peaks Whether or not the signal peaks should be renewed during recruitment
      * @return returns the noisy peaks for this peakgroup - i.e., the raw peaks within the range of this peakGroup that are not matched to any istope of this peakGroup mass.
      */
     std::vector<LogMzPeak> recruitAllPeaksInSpectrum(const MSSpectrum& spec, double tol, const FLASHHelperClasses::PrecalculatedAveragine& avg, double mono_mass, bool renew_signal_peaks = true);
+
+    /**
+     * @brief Get noisy peaks for this PeakGroup without modifying any state (const-safe).
+     * This is a const alternative to recruitAllPeaksInSpectrum(..., false) for use in output/write functions.
+     * @param[in] spec raw spectrum
+     * @param[in] tol ppm tolerance
+     * @param[in] avg precalculated averagine
+     * @return returns the noisy peaks - raw peaks within range that don't match the isotope pattern
+     */
+    std::vector<LogMzPeak> getNoisyPeaks(const MSSpectrum& spec, double tol, const FLASHHelperClasses::PrecalculatedAveragine& avg) const;
 
     /// set scan number
     void setScanNumber(int scan_number);
@@ -144,9 +157,6 @@ namespace OpenMS
     /// get intensity
     float getIntensity() const;
 
-    /// Returns the intensity of the most intense charge state
-    float getMaxChargeIntensity() const;
-
     /// get per abs_charge SNR
     float getChargeSNR(int abs_charge) const;
 
@@ -172,54 +182,36 @@ namespace OpenMS
     float getIsotopeCosine() const;
 
     /// get the density of the peaks within charge and isotope range
+    /**
+     * @brief Get the density of peaks within charge and isotope range.
+     * @return Peak occupancy value (0-1) representing the fraction of expected peaks that are present
+     */
     float getPeakOccupancy() const;
-
-    /// get representative charge (max SNR)
+    /// get representative charge
     int getRepAbsCharge() const;
 
-    /// get charge with maximum intensity
-    int getMaxIntensityAbsCharge() const;
-
-    /// get all Q scores
-    std::unordered_map<int, float> getAllQscores() const;
-
-    /// get all ID scores
-    std::unordered_map<int, std::unordered_map<int, float>> getAllIDscores() const;
-
-    /// get best QScore across all charge states
-    float getBestQScore() const;
-
-    /// get charge state with best QScore
-    int getBestQScoreCharge() const;
-
-    /// get IDScore for specific charge state and HCD energy
-    float getIDScoreForChargeAndHCD(int abs_charge, int hcd_energy) const;
-
-    /// get best IDScore across all charge states for specific HCD energy
-    float getBestIDScoreForHCD(int hcd_energy) const;
-
-    /// get best IDScore for specific charge across all HCD values
-    float getBestIDScoreForCharge(int abs_charge) const;
-
-    /// get HCD value with best IDScore for specific charge
-    int getBestHCDForCharge(int abs_charge) const;
-
-    /// get charge state with best IDScore for specific HCD energy
-    int getBestIDScoreChargeForHCD(int hcd_energy) const;
-
-    /// get best IDScore across all charge states and HCD values
-    float getBestIDScore() const;
-
-    /// get charge state with best IDScore (global maximum)
-    int getBestIDScoreCharge() const;
-
-    /// get HCD value with best IDScore (global maximum)
-    int getBestIDScoreHCD() const;
-
-    /// get Q score
+    /**
+     * @brief Get the one-dimensional quality score for this peak group.
+     *
+     * The Q-score represents the confidence/quality of the peak group based on
+     * isotope pattern matching, charge state consistency, and signal-to-noise ratio.
+     *
+     * @return Quality score in range [0, 1], where higher values indicate better quality.
+     *         Returns 0.0 if the score has not been calculated (default initialization).
+     */
     double getQscore() const;
 
-    /// get feature Q score
+    /**
+     * @brief Get the two-dimensional quality score incorporating feature-level information.
+     *
+     * The 2D Q-score extends the 1D score by incorporating additional dimensions such as
+     * retention time consistency, ion mobility correlation, or MS1-MS2 relationship.
+     * This score is typically set after feature tracing/grouping across scans.
+     *
+     * @return The maximum of the 1D Q-score and the 2D Q-score, in range [0, 1].
+     *         If the 2D score has not been set (initialized to -1.0), effectively returns
+     *         the 1D Q-score.
+     */
     double getQscore2D() const;
 
     /// get total SNR
@@ -268,15 +260,36 @@ namespace OpenMS
     /// set index of this peak group
     void setIndex(uint i);
 
-    /// set Q score 2D
+    /**
+     * @brief Set the two-dimensional quality score for this peak group.
+     *
+     * The 2D Q-score incorporates feature-level information such as retention time
+     * consistency or ion mobility correlation across multiple scans.
+     *
+     * @param[in] fqscore The 2D quality score to set, typically in range [0, 1].
+     */
     void setQscore2D(double fqscore);
 
-    /// set feature index
+    /**
+     * @brief Set the feature index for this peak group.
+     *
+     * Associates this peak group with a feature (traced isotope pattern across scans).
+     *
+     * @param[in] findex The feature index to assign to this peak group.
+     */
     void setFeatureIndex(uint findex);
 
     /// get index of this peak group
     uint getIndex() const;
-    /// get feature index of this peak group
+    /**
+     * @brief Get the feature index associated with this peak group.
+     *
+     * The feature index identifies which traced feature (isotope pattern across
+     * multiple scans) this peak group belongs to.
+     *
+     * @return The feature index. Returns 0 if no feature has been assigned
+     *         (default initialization).
+     */
     uint getFeatureIndex() const;
 
     /// iterators for the signal LogMz peaks in this PeakGroup
@@ -288,6 +301,17 @@ namespace OpenMS
 
     const FLASHHelperClasses::LogMzPeak& operator[](Size i) const;
 
+    /**
+     * @brief Get mass errors for each isotope index in this peak group.
+     *
+     * Calculates the average mass error for peaks at each isotope index,
+     * comparing observed masses to theoretical masses from the averagine model.
+     *
+     * @param[in] ppm If true (default), returns errors in parts-per-million (ppm).
+     *            If false, returns errors in Daltons (Da).
+     * @return Vector of average mass errors, one per unique isotope index present
+     *         in the peak group. Returns an empty vector if no peaks are present.
+     */
     std::vector<float> getMassErrors(bool ppm = true) const;
 
     /// vector operators for the LogMzPeaks in this PeakGroup
@@ -300,6 +324,16 @@ namespace OpenMS
     void swap(std::vector<FLASHHelperClasses::LogMzPeak>& x);
     void sort();
 
+    /**
+     * @brief Get deep learning feature vectors (signal and noise).
+     *
+     * @param[in] spec Raw spectrum to extract features from.
+     * @param[in] charge_count Number of charges to include in the feature vector.
+     * @param[in] isotope_count Number of isotopes to include in the feature vector.
+     * @param[in] avg Precalculated averagine model for theoretical isotope patterns.
+     * @param[in] tol Tolerance in ppm for peak matching.
+     * @return Tuple of (signal_vector, noise_vector) for ML model input.
+     */
     std::tuple<std::vector<double>, std::vector<double>> getDLVector(const MSSpectrum& spec, const Size charge_count, const Size isotope_count,
                                                                      const FLASHHelperClasses::PrecalculatedAveragine& avg, double tol);
 
@@ -327,9 +361,9 @@ namespace OpenMS
 
     /**
      * calculate noisy peak power. The goal of this function is to group noisy peaks that are possibly from the same molecule and sum their intensities before calculate power
-     * @param noisy_peaks noisy peaks to calculate power
-     * @param z charge
-     * @param tol ppm tolerance
+     * @param[in] noisy_peaks noisy peaks to calculate power
+     * @param[in] z charge
+     * @param[in] tol ppm tolerance
      * @return calculated noise power
      */
     float getNoisePeakPower_(const std::vector<LogMzPeak>& noisy_peaks, int z, double tol) const;
@@ -379,8 +413,6 @@ namespace OpenMS
     float charge_score_ = 0.f;
     /// quality score
     double qscore_ = .0;
-    std::unordered_map<int, float>  qscores_;
-    std::unordered_map<int, std::unordered_map<int, float>>  idscores_;
     /// quality score when considering correlation between masses within the same feature.
     double qscore2D_ = -1.0f;
     float avg_ppm_error_ = 0.f;
@@ -391,3 +423,19 @@ namespace OpenMS
     float qvalue_ = 1.f;
   };
 } // namespace OpenMS
+
+namespace std
+{
+  /// std::hash specialization for OpenMS::PeakGroup
+  /// Hashes all fields used in operator== (monoisotopic mass and intensity)
+  template<>
+  struct hash<OpenMS::PeakGroup>
+  {
+    std::size_t operator()(const OpenMS::PeakGroup& pg) const noexcept
+    {
+      std::size_t seed = OpenMS::hash_float(pg.getMonoMass());
+      OpenMS::hash_combine(seed, OpenMS::hash_float(pg.getIntensity()));
+      return seed;
+    }
+  };
+} // namespace std

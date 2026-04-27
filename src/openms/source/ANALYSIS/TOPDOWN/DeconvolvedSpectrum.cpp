@@ -7,7 +7,6 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
-#include <algorithm>
 
 namespace OpenMS
 {
@@ -142,45 +141,7 @@ namespace OpenMS
       out_spec.getPrecursors().clear();
       out_spec.getPrecursors().emplace_back(precursor);
     }
-    if (opt_metadata_)
-    {
-      out_spec.setMetaValue("optimization_group_id",
-                            static_cast<int>(opt_metadata_->group_id));
-      out_spec.setMetaValue("optimization_collision_energy",
-                            opt_metadata_->collision_energy);
-      out_spec.setMetaValue("optimization_is_best_variant",
-                            opt_metadata_->is_best_variant ? std::string("true") : std::string("false"));
-      out_spec.setMetaValue("optimization_quality_score",
-                            opt_metadata_->fragmentation_quality_score);
-      out_spec.setMetaValue("optimization_precursor_mass",
-                            opt_metadata_->precursor_mass);
-      out_spec.setMetaValue("optimization_exploration_metric",
-                            static_cast<int>(opt_metadata_->exploration_metric));
-    }
     return out_spec;
-  }
-
-  OptimizationMetadata& DeconvolvedSpectrum::getOrCreateOptimizationMetadata()
-  {
-    if (!opt_metadata_)
-    {
-      opt_metadata_ = OptimizationMetadata{};
-    }
-    return *opt_metadata_;
-  }
-
-  const OptimizationMetadata* DeconvolvedSpectrum::getOptimizationMetadata() const
-  {
-    if (opt_metadata_)
-    {
-      return &(*opt_metadata_);
-    }
-    return nullptr;
-  }
-
-  bool DeconvolvedSpectrum::hasOptimizationMetadata() const
-  {
-    return opt_metadata_.has_value();
   }
 
   const MSSpectrum& DeconvolvedSpectrum::getOriginalSpectrum() const
@@ -230,12 +191,6 @@ namespace OpenMS
     return precursor_peak_;
   }
 
-  const Precursor& DeconvolvedSpectrum::getDeconvolvedPrecursor() const
-  {
-    return deconvolved_precursor_peak_;
-  }
-
-
   int DeconvolvedSpectrum::getScanNumber() const
   {
     return scan_number_;
@@ -256,17 +211,6 @@ namespace OpenMS
     precursor_peak_ = precursor;
   }
 
-  void DeconvolvedSpectrum::setDeconvolvedPrecursor(const Precursor& precursor)
-  {
-    deconvolved_precursor_peak_ = precursor;
-  }
-
-  void DeconvolvedSpectrum::setPrecursorMassIntensityMap(const std::vector<std::tuple<double, double>>& map)
-  {
-    precursor_mass_intensity_map_ = map;
-  }
-
-
   void DeconvolvedSpectrum::setActivationMethod(const Precursor::ActivationMethod& method)
   {
     activation_method_ = method;
@@ -279,21 +223,7 @@ namespace OpenMS
 
   void DeconvolvedSpectrum::setOriginalSpectrum(const MSSpectrum& spec)
   {
-    auto filter_str = spec.getMetaValue("filter string").toString();
-    Size pos = filter_str.find("cv=");
-
-    if (pos != String::npos)
-    {
-      Size end = filter_str.find(" ", pos);
-      if (end == String::npos) end = filter_str.length() - 1;
-      cv_ = std::stod(filter_str.substr(pos + 3, end - pos));
-    }
     spec_ = spec;
-  }
-
-  double DeconvolvedSpectrum::getCV() const
-  {
-    return cv_;
   }
 
   void DeconvolvedSpectrum::setPrecursorScanNumber(const int scan_number)
@@ -382,7 +312,7 @@ namespace OpenMS
     return false;
   }
 
-  const FLASHHelperClasses::IsobaricQuantities DeconvolvedSpectrum::getQuantities() const
+  FLASHHelperClasses::IsobaricQuantities DeconvolvedSpectrum::getQuantities() const
   {
     return quantities_;
   }
@@ -392,7 +322,7 @@ namespace OpenMS
     quantities_ = quantities;
   }
 
-  void DeconvolvedSpectrum::setPeakGroups(const std::vector<PeakGroup>& x)
+  void DeconvolvedSpectrum::setPeakGroups(std::vector<PeakGroup>& x)
   {
     std::vector<PeakGroup>().swap(peak_groups_);
     peak_groups_ = x;
@@ -403,81 +333,8 @@ namespace OpenMS
     std::sort(peak_groups_.begin(), peak_groups_.end());
   }
 
-  void DeconvolvedSpectrum::sortByQscore2D()
+  void DeconvolvedSpectrum::sortByQscore()
   {
     std::sort(peak_groups_.begin(), peak_groups_.end(), [](const PeakGroup& p1, const PeakGroup& p2) { return p1.getQscore2D() > p2.getQscore2D(); });
   }
-
-  void DeconvolvedSpectrum::sortByQscore()
-  {
-    std::sort(peak_groups_.begin(), peak_groups_.end(), [](const PeakGroup& p1, const PeakGroup& p2) { return p1.getQscore() > p2.getQscore(); });
-  }
-
-  void DeconvolvedSpectrum::sortByQScoreAllCharges()
-  {
-    std::sort(peak_groups_.begin(), peak_groups_.end(), [](const PeakGroup& p1, const PeakGroup& p2) { return p1.getBestQScore() > p2.getBestQScore(); });
-  }
-
-  void DeconvolvedSpectrum::sortByIDScoreRepresentative()
-  {
-    std::sort(peak_groups_.begin(), peak_groups_.end(), [](const PeakGroup& p1, const PeakGroup& p2) {
-      int rep_charge1 = p1.getRepAbsCharge();
-      int rep_charge2 = p2.getRepAbsCharge();
-      
-      auto all_idscores1 = p1.getAllIDscores();
-      auto all_idscores2 = p2.getAllIDscores();
-      
-      float best_idscore1 = 0.0f;
-      float best_idscore2 = 0.0f;
-      
-      // Find best IDScore for representative charge in p1
-      auto charge_it1 = all_idscores1.find(rep_charge1);
-      if (charge_it1 != all_idscores1.end()) {
-        for (const auto& hcd_score : charge_it1->second) {
-          best_idscore1 = std::max(best_idscore1, hcd_score.second);
-        }
-      }
-      
-      // Find best IDScore for representative charge in p2
-      auto charge_it2 = all_idscores2.find(rep_charge2);
-      if (charge_it2 != all_idscores2.end()) {
-        for (const auto& hcd_score : charge_it2->second) {
-          best_idscore2 = std::max(best_idscore2, hcd_score.second);
-        }
-      }
-      
-      return best_idscore1 > best_idscore2;
-    });
-  }
-
-  void DeconvolvedSpectrum::sortByIDScoreRepresentative(int hcd_energy)
-  {
-    std::sort(peak_groups_.begin(), peak_groups_.end(), [hcd_energy](const PeakGroup& p1, const PeakGroup& p2) {
-      int rep_charge1 = p1.getRepAbsCharge();
-      int rep_charge2 = p2.getRepAbsCharge();
-      
-      float idscore1 = p1.getIDScoreForChargeAndHCD(rep_charge1, hcd_energy);
-      float idscore2 = p2.getIDScoreForChargeAndHCD(rep_charge2, hcd_energy);
-      
-      return idscore1 > idscore2;
-    });
-  }
-
-  void DeconvolvedSpectrum::sortByIDScoreAllCharges()
-  {
-    std::sort(peak_groups_.begin(), peak_groups_.end(), [](const PeakGroup& p1, const PeakGroup& p2) { return p1.getBestIDScore() > p2.getBestIDScore(); });
-  }
-
-  void DeconvolvedSpectrum::sortByIDScoreAllCharges(int hcd_energy)
-  {
-    std::sort(peak_groups_.begin(), peak_groups_.end(), [hcd_energy](const PeakGroup& p1, const PeakGroup& p2) {
-      return p1.getBestIDScoreForHCD(hcd_energy) > p2.getBestIDScoreForHCD(hcd_energy);
-    });
-  }
-
-  void DeconvolvedSpectrum::sortByIntensity()
-  {
-    std::sort(peak_groups_.begin(), peak_groups_.end(), [](const PeakGroup& p1, const PeakGroup& p2) { return p1.getMaxChargeIntensity() > p2.getMaxChargeIntensity(); });
-  }
-
 } // namespace OpenMS
