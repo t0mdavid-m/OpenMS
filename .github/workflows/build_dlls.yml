@@ -310,6 +310,39 @@ jobs:
         path: |
           ${{ github.workspace }}/build_diagnostics/
 
+    - name: Post build diagnostics summary as PR comment on failure
+      if: failure() && steps.build.outcome == 'failure' && github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const path = require('path');
+          const diagDir = `${process.env.GITHUB_WORKSPACE}/build_diagnostics`;
+          const want = ['CMakeError.log', 'CMakeOutput.log', 'build_output.log'];
+          let body = `### Build diagnostics for run ${context.runId} (${context.job}, ${{ matrix.os }})\n\n`;
+          for (const name of want) {
+            const p = path.join(diagDir, name);
+            if (fs.existsSync(p)) {
+              let txt = fs.readFileSync(p, 'utf8');
+              // keep last ~6000 chars, GitHub comment limit ~65k
+              const tail = txt.length > 6000 ? '... [truncated]\n' + txt.slice(-6000) : txt;
+              body += `<details><summary>${name} (${txt.length} bytes)</summary>\n\n\`\`\`\n${tail}\n\`\`\`\n\n</details>\n\n`;
+            } else {
+              body += `_${name} not found_\n\n`;
+            }
+          }
+          // also list all files we collected
+          if (fs.existsSync(diagDir)) {
+            const files = fs.readdirSync(diagDir);
+            body += `<details><summary>All collected files (${files.length})</summary>\n\n\`\`\`\n${files.join('\n')}\n\`\`\`\n\n</details>\n`;
+          }
+          await github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: body,
+          });
+
     - name: Zip and upload selected bin artifacts
       shell: bash
       run: |
