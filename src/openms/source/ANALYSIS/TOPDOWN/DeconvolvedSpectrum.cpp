@@ -337,4 +337,27 @@ namespace OpenMS
   {
     std::sort(peak_groups_.begin(), peak_groups_.end(), [](const PeakGroup& p1, const PeakGroup& p2) { return p1.getQscore2D() > p2.getQscore2D(); });
   }
+
+  OptimizationMetadata& DeconvolvedSpectrum::getOrCreateOptimizationMetadata()
+  {
+    if (!opt_metadata_)
+    {
+      opt_metadata_ = OptimizationMetadata{};
+    }
+    return *opt_metadata_;
+  }
+
+  const OptimizationMetadata* DeconvolvedSpectrum::getOptimizationMetadata() const
+  {
+    if (opt_metadata_)
+    {
+      return &(*opt_metadata_);
+    }
+    return nullptr;
+  }
+
+  bool DeconvolvedSpectrum::hasOptimizationMetadata() const
+  {
+    return opt_metadata_.has_value();
+  }
 } // namespace OpenMS

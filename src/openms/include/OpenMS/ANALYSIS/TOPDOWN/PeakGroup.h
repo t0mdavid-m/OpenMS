@@ -190,6 +190,9 @@ namespace OpenMS
     /// get representative charge
     int getRepAbsCharge() const;
 
+    /// get charge with maximum intensity
+    int getMaxIntensityAbsCharge() const;
+
     /**
      * @brief Get the one-dimensional quality score for this peak group.
      *

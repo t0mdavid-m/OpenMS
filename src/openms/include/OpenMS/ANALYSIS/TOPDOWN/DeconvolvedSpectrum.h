@@ -9,9 +9,11 @@
 #pragma once
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/OptimizationMetadata.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/KERNEL/MSSpectrum.h>
 #include <iomanip>
+#include <optional>
 
 namespace OpenMS
 {
@@ -150,6 +152,15 @@ namespace OpenMS
 
     bool operator==(const DeconvolvedSpectrum& a) const;
 
+    /// Returns a reference to the metadata, creating it if it does not exist.
+    OptimizationMetadata& getOrCreateOptimizationMetadata();
+
+    /// Returns a const pointer to the metadata, or nullptr if not present.
+    const OptimizationMetadata* getOptimizationMetadata() const;
+
+    /// Returns true if this spectrum carries OptimizationMetadata.
+    bool hasOptimizationMetadata() const;
+
   private:
     /// peak groups (deconvolved masses)
     std::vector<PeakGroup> peak_groups_;
@@ -165,5 +176,7 @@ namespace OpenMS
     int scan_number_ = 0, precursor_scan_number_ = 0;
     /// isobaric quantities
     FLASHHelperClasses::IsobaricQuantities quantities_;
+    /// optional optimization metadata (populated by Phase 7 exploration engine)
+    std::optional<OptimizationMetadata> opt_metadata_;
   };
 } // namespace OpenMS
