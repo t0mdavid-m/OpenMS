@@ -14,12 +14,24 @@
 namespace OpenMS
   {
     std::vector<double> PeakGroupScoring::weight_ { -21.0476, 1.5045, -0.1303, 0.183, 0.1834, 17.804};
+
+    // Weights for ID scoring - per HCD energy
+    static std::unordered_map<int, std::vector<double>> weight_idscore_ {
+      {21, { 4.4034,   2.2993,  1.1397, -5.3708  }},
+      {22, { 5.6630,   1.0324,  2.6398, -6.3672  }},
+      {23, { 5.2754,   2.6164,  1.4306, -6.3910  }},
+    };
     // Att0                21.0476
     // Att1                -1.5045
     // Att2                 0.1303
     // Att3                 -0.183
     // Att4                -0.1834
     // Intercept           -17.804
+
+    int PeakGroupScoring::getQscoreFeatureCount()
+    {
+      return weight_.size() - 1;
+    }
 
     /// calculate PeakGroupScoring using PeakGroup attributes
     double PeakGroupScoring::getQscore(const PeakGroup* pg)
@@ -30,7 +42,7 @@ namespace OpenMS
       }
 
       double score = weight_.back() + .5;
-      auto fv = toFeatureVector_(pg);
+      auto fv = toFeatureVector(pg);
 
       for (Size i = 0; i < weight_.size() - 1; i++)
       {
@@ -41,8 +53,66 @@ namespace OpenMS
       return qscore;
     }
 
+    /// calculate Qscores for all charges using PeakGroup attributes
+    std::unordered_map<int, float> PeakGroupScoring::getQscores(const PeakGroup* pg)
+    {
+      std::unordered_map<int, float> qscores;
+      if (pg->empty())
+      {
+        return qscores;
+      }
+
+      auto [min_charge, max_charge] = pg->getAbsChargeRange();
+
+      for (int c = min_charge; c <= max_charge; c++)
+      {
+        if (pg->getChargeIntensity(c) <= 0)
+        {
+          continue;
+        }
+
+        double score = weight_.back() + .5;
+        std::vector<double> fvector(5, .0);
+        int index = 0;
+        fvector[index++] = pg->getIsotopeCosine();
+        fvector[index++] = pg->getIsotopeCosine() - pg->getChargeIsotopeCosine(c);
+        fvector[index++] = log2(1 + pg->getChargeSNR(c));
+        fvector[index++] = log2(1 + pg->getChargeSNR(c)) - log2(1 + pg->getSNR());
+        fvector[index++] = pg->getAvgPPMError();
+
+        for (Size i = 0; i < weight_.size() - 1; i++)
+        {
+          score += fvector[i] * weight_[i];
+        }
+        double qscore = 1.0 / (1.0 + exp(score));
+        qscores[c] = qscore;
+      }
+
+      return qscores;
+    }
+
+    /// calculate ID scores for all charges and HCD energies
+    std::unordered_map<int, std::unordered_map<int, float>> PeakGroupScoring::getIDscores(const PeakGroup* pg)
+    {
+      std::unordered_map<int, std::unordered_map<int, float>> idscores;
+
+      auto qscores = pg->getAllQscores();
+      float mass = pg->getMonoMass();
+
+      for (const auto& [charge, qscore] : qscores)
+      {
+        for (const auto& [hcd, weights] : weight_idscore_)
+        {
+          auto affine = weights[0] * qscore + weights[1] * (mass / 20000) + weights[2] * (charge / 30.0) + weights[3];
+          auto idscore = 1.0 / (1.0 + exp(-affine));
+          idscores[charge][hcd] = idscore;
+        }
+      }
+      return idscores;
+    }
+
     /// convert PeakGroup into feature (attribute) vector
-    std::vector<double> PeakGroupScoring::toFeatureVector_(const PeakGroup* pg)
+    std::vector<double> PeakGroupScoring::toFeatureVector(const PeakGroup* pg)
     {
       std::vector<double> fvector(5, .0); // length of weights vector - 1, excluding the intercept weight.
       if (pg->empty())
@@ -65,7 +135,7 @@ namespace OpenMS
     void PeakGroupScoring::writeAttCsvForQscoreTrainingHeader(std::fstream& f)
     {
       PeakGroup pg;
-      Size att_count = toFeatureVector_(&pg).size();
+      Size att_count = toFeatureVector(&pg).size();
       for (Size i = 0; i < att_count; i++)
         f << "Att" << i << ",";
       f << "Class\n";
@@ -87,7 +157,7 @@ namespace OpenMS
       for (auto& pg : dspec)
       {
         bool target = pg.getTargetDecoyType() == PeakGroup::TargetDecoyType::target;
-        auto fv = toFeatureVector_(&pg);
+        auto fv = toFeatureVector(&pg);
 
         for (auto& item : fv)
         {
