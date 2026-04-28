@@ -161,16 +161,26 @@ jobs:
         if [[ "${{ matrix.os }}" == windows-* ]]; then
           # Qt6 is found automatically via Qt6_DIR env var set by install-qt-action
           echo "cmake_prefix=" >> $GITHUB_OUTPUT
-          choco install 7zip ccache ninja cmake -y --no-progress
+          # choco fetches packages over the public CDN and occasionally fails with
+          # transient network errors. Retry up to 3 times with exponential backoff.
+          choco_install() {
+            for attempt in 1 2 3; do
+              if choco install "$@" -y --no-progress; then return 0; fi
+              echo "choco install $* failed on attempt $attempt; sleeping then retrying"
+              sleep $((attempt * 10))
+            done
+            return 1
+          }
+          choco_install 7zip ccache ninja cmake
           ## GH CLI "SHOULD BE" installed. Sometimes I had to manually install nonetheless. Super weird.
           # https://github.com/actions/runner-images/blob/main/images/win/scripts/Installers/Install-GitHub-CLI.ps1
           echo "C:\Program Files (x86)\GitHub CLI" >> $GITHUB_PATH
           # Install eigen from choco
-          choco install eigen -y --no-progress
+          choco_install eigen
           echo "eigen_choco=C:\ProgramData\chocolatey\lib\eigen\share\cmake" >> $GITHUB_OUTPUT
 
           if [[ "${{ steps.set-vars.outputs.pkg_type }}" != "none" ]]; then
-            choco install doxygen.portable ghostscript graphviz -y --no-progress
+            choco_install doxygen.portable ghostscript graphviz
             # uses a custom NSIS, which provides 8-k string support and has UltraModernUI integrated already
             curl --no-progress-meter -L -o NSIS.tar.gz https://github.com/OpenMS/NSIS/raw/main/NSIS.tar.gz
             ## overwrite existing NSIS (which has only 1k-string support)
