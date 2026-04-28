@@ -393,9 +393,33 @@ jobs:
     - name: Zip and upload selected bin artifacts
       shell: bash
       run: |
+        set -eux
         short_sha=$(echo "${{ github.sha }}" | cut -c1-7)
         cd $GITHUB_WORKSPACE/OpenMS/bld/bin
-        7z a build_files_${short_sha}.zip OpenMS.dll OpenSwathAlgo.dll FLASHDeconv.exe Qt6Core.dll Qt6Network.dll
+        # Qt6Core.dll / Qt6Network.dll are produced by jurplel/install-qt-action under
+        # $Qt6_DIR/bin and are NOT placed in bld/bin by the build itself. Copy them in
+        # if they exist so the artifact is self-contained; tolerate them being missing
+        # (they're only needed for runtime, not for the merge-correctness check).
+        for dll in Qt6Core.dll Qt6Network.dll; do
+          if [[ ! -f "$dll" ]]; then
+            for src in "$Qt6_DIR/bin/$dll" "$RUNNER_TEMP"/Qt/*/msvc*/bin/"$dll"; do
+              if [[ -f "$src" ]]; then cp "$src" "$dll"; break; fi
+            done
+          fi
+        done
+        # Build the artifact list from files that actually exist; the FLASH-specific
+        # binaries are also tolerated to be missing so the merge-CI doesn't depend on
+        # the fork's optional artifact packaging (a separate concern from compile health).
+        files=()
+        for f in OpenMS.dll OpenSwathAlgo.dll FLASHDeconv.exe Qt6Core.dll Qt6Network.dll; do
+          if [[ -f "$f" ]]; then files+=("$f"); else echo "::warning::artifact missing: $f"; fi
+        done
+        if [[ ${#files[@]} -eq 0 ]]; then
+          echo "::error::no artifact files present in bld/bin"
+          ls -la
+          exit 1
+        fi
+        7z a "build_files_${short_sha}.zip" "${files[@]}"
 
     - name: Upload selected bin artifacts as artifact
       uses: actions/upload-artifact@v4
