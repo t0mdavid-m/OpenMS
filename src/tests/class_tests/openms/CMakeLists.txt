@@ -55,6 +55,47 @@ endforeach(_class_test)
 # StopWatch_test needs to be run alone to avoid timing errors
 set_tests_properties(StopWatch_test PROPERTIES RUN_SERIAL 1)
 
+# Percolator_subprocess_parity_test runs side-by-side comparisons against the
+# external `percolator` binary. Tests that need it are gated via the
+# PERCOLATOR_BINARY environment variable and skip silently when unset. Search
+# PATH first, then fall back to the repo's bundled THIRDPARTY/<os>/<arch>/
+# layout so local dev builds pick it up automatically.
+set(_percolator_thirdparty_hints)
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  list(APPEND _percolator_thirdparty_hints
+    "${OpenMS_SOURCE_DIR}/THIRDPARTY/Linux/${CMAKE_SYSTEM_PROCESSOR}/Percolator"
+    "${CMAKE_SOURCE_DIR}/THIRDPARTY/Linux/${CMAKE_SYSTEM_PROCESSOR}/Percolator")
+elseif (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+  list(APPEND _percolator_thirdparty_hints
+    "${OpenMS_SOURCE_DIR}/THIRDPARTY/MacOS/${CMAKE_SYSTEM_PROCESSOR}/Percolator"
+    "${CMAKE_SOURCE_DIR}/THIRDPARTY/MacOS/${CMAKE_SYSTEM_PROCESSOR}/Percolator")
+endif()
+find_program(PERCOLATOR_BINARY_FOR_TEST percolator
+  PATHS ENV PATH ${_percolator_thirdparty_hints})
+
+if (PERCOLATOR_BINARY_FOR_TEST)
+  set_tests_properties(Percolator_subprocess_parity_test PROPERTIES
+    ENVIRONMENT "PERCOLATOR_BINARY=${PERCOLATOR_BINARY_FOR_TEST}")
+  # Compute PercolatorAdapter path at configure time.
+  # TOPP tools are placed in ${CMAKE_BINARY_DIR}/bin/ (the root build dir's bin/),
+  # which is the same directory that the top-level CMakeLists sets as
+  # CMAKE_RUNTIME_OUTPUT_DIRECTORY. Generator expressions like $<TARGET_FILE:...>
+  # cannot be evaluated in ENVIRONMENT properties across sub-project boundaries.
+  if (WIN32)
+    set(_percolator_adapter_suffix ".exe")
+  else()
+    set(_percolator_adapter_suffix "")
+  endif()
+  set(_percolator_adapter_path "${CMAKE_BINARY_DIR}/bin/PercolatorAdapter${_percolator_adapter_suffix}")
+  set_tests_properties(PercolatorAdapter_parity_test PROPERTIES
+    ENVIRONMENT "PERCOLATOR_BINARY=${PERCOLATOR_BINARY_FOR_TEST};PERCOLATOR_ADAPTER_BINARY=${_percolator_adapter_path}")
+  message(STATUS "Percolator_subprocess_parity_test: enabled (found ${PERCOLATOR_BINARY_FOR_TEST})")
+  message(STATUS "PercolatorAdapter_parity_test: enabled (adapter at ${_percolator_adapter_path})")
+else()
+  message(STATUS "Percolator_subprocess_parity_test: subprocess sections skipped (percolator binary not on PATH nor in THIRDPARTY)")
+  message(STATUS "PercolatorAdapter_parity_test: subprocess sections skipped (percolator binary not on PATH nor in THIRDPARTY)")
+endif()
+
 #------------------------------------------------------------------------------
 # 2 - add link dependencies (TODO could be more finegrained for boost)
 foreach(t ${Boost_dependent_tests})
@@ -64,25 +105,101 @@ foreach(t ${Boost_dependent_tests})
 endforeach()
 
 target_link_libraries(Base64_test ZLIB::ZLIB)
+target_link_libraries(Libzip_test libzip::zip)
+target_link_libraries(ZipRandomAccessFile_test libzip::zip)
 target_link_libraries(LPWrapper_test CoinOR::CoinOR)
 target_link_libraries(SpectraSTSimilarityScore_test Eigen3::Eigen)
 target_link_libraries(BinnedSpectrum_test Eigen3::Eigen)
+target_link_libraries(BilinearInterpolation_test Eigen3::Eigen)
+target_link_libraries(MatrixEigen_test Eigen3::Eigen)
+target_link_libraries(MRMScoring_test Eigen3::Eigen)
+
 
 if (WITH_HDF5)
   target_link_libraries(HDF5_test HDF5::HDF5)
 endif()
 
-if (WITH_PARQUET)
-  target_link_libraries(Arrow_test 
-  Arrow::arrow_shared
-  Parquet::parquet_shared
+target_link_libraries(Arrow_test
+  ${OPENMS_ARROW_TARGET}
+  ${OPENMS_PARQUET_TARGET}
+)
+target_link_libraries(MSExperimentArrowExport_test
+  ${OPENMS_ARROW_TARGET}
+  ${OPENMS_PARQUET_TARGET}
+)
+target_link_libraries(ConsensusMapArrowExport_test
+  ${OPENMS_ARROW_TARGET}
+  ${OPENMS_PARQUET_TARGET}
+)
+target_link_libraries(QPXFile_test
+  ${OPENMS_ARROW_TARGET}
+  ${OPENMS_PARQUET_TARGET}
+)
+target_link_libraries(ProteinIdentificationArrowIO_test
+  ${OPENMS_ARROW_TARGET}
+  ${OPENMS_PARQUET_TARGET}
+)
+target_link_libraries(FeatureMapArrowIO_test
+  ${OPENMS_ARROW_TARGET}
+  ${OPENMS_PARQUET_TARGET}
+)
+target_link_libraries(ConsensusMapArrowIO_test
+  ${OPENMS_ARROW_TARGET}
+  ${OPENMS_PARQUET_TARGET}
+)
+target_link_libraries(Libzip_test
+  ${OPENMS_ARROW_TARGET}
+  ${OPENMS_PARQUET_TARGET}
+)
+target_link_libraries(ZipRandomAccessFile_test
+  ${OPENMS_ARROW_TARGET}
+  ${OPENMS_PARQUET_TARGET}
+)
+
+if (TARGET TransitionParquetFile_test)
+  target_link_libraries(TransitionParquetFile_test
+    ${OPENMS_ARROW_TARGET}
+    ${OPENMS_PARQUET_TARGET}
   )
-  target_link_libraries(QuantmsIO_test 
-  Arrow::arrow_shared
-  Parquet::parquet_shared
+endif()
+if (TARGET OpenSwathOSWParquetReader_test)
+  target_link_libraries(OpenSwathOSWParquetReader_test
+    ${OPENMS_ARROW_TARGET}
+    ${OPENMS_PARQUET_TARGET}
+  )
+endif()
+if (TARGET OpenSwathOSWParquetWriter_test)
+  target_link_libraries(OpenSwathOSWParquetWriter_test
+    ${OPENMS_ARROW_TARGET}
+    ${OPENMS_PARQUET_TARGET}
+  )
+endif()
+if (TARGET OpenSwathOSWParquetRoundTrip_test)
+  target_link_libraries(OpenSwathOSWParquetRoundTrip_test
+    ${OPENMS_ARROW_TARGET}
+    ${OPENMS_PARQUET_TARGET}
+  )
+endif()
+if (TARGET ArrowSchemaRegistry_test)
+  target_link_libraries(ArrowSchemaRegistry_test
+    ${OPENMS_ARROW_TARGET}
+    ${OPENMS_PARQUET_TARGET}
   )
 endif()
 
+if (TARGET BrukerTimsFile_test AND WITH_OPENTIMS)
+  target_link_libraries(BrukerTimsFile_test opentims::opentims_cpp sqlite3)
+endif()
+
+if (TARGET BrukerTimsFile_test AND OPENTIMS_DDA_TEST_DATA)
+  target_compile_definitions(BrukerTimsFile_test PRIVATE
+    OPENTIMS_DDA_TEST_DATA="${OPENTIMS_DDA_TEST_DATA}"
+    OPENTIMS_DIA_TEST_DATA="${OPENTIMS_DIA_TEST_DATA}"
+    OPENTIMS_TEST_FASTA="${OPENTIMS_TEST_FASTA}")
+  # This test loads real Bruker .d files (DDA + DIA) including frame aggregation
+  # and a peptide search engine run, so it needs a generous timeout.
+  set_tests_properties(BrukerTimsFile_test PROPERTIES TIMEOUT 1200)
+endif()
 
 #------------------------------------------------------------------------------
 # restore old compiler flags

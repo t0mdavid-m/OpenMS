@@ -7,7 +7,6 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
-#include <cmath>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
 #ifdef _OPENMP
@@ -37,8 +36,7 @@ namespace OpenMS
                        "Minimum charge state for MS1 spectra (can be negative for negative mode). For MSn (n > 1), minimum charge is fixed to 1.");
     defaults_.setValue(
       "max_charge", 100,
-      "Maximum charge state for spectra (can be negative for negative mode). Apart from min_charge, this option applies to all MS levelss.");
-
+      "Maximum charge state for spectra (can be negative for negative mode). Apart from min_charge, this option applies to all MS levels.");
     defaults_.setValue("precursor_charge", 0,
                        "Charge state of the target precursor. All precursor charge for MSn (n > 1) is fixed to this value. When precursor m/z is "
                        "provided within the input mzML file or is specified using precursor_mz option, "
@@ -92,18 +90,7 @@ namespace OpenMS
       return;
     }
 
-    // Get precursor from spectrum if available, otherwise create one from target parameters
-    Precursor precursor;
-    if (!spec.getPrecursors().empty())
-    {
-      precursor = spec.getPrecursors()[0];
-    }
-    else
-    {
-      // Create precursor from target parameters when spectrum has no precursors
-      precursor.setMZ(target_precursor_mz_);
-    }
-
+    auto precursor = spec.getPrecursors()[0];
     double target_precursor_mass
       = (precursor.getMZ() - FLASHHelperClasses::getChargeMass(target_precursor_charge_ > 0)) * std::abs(target_precursor_charge_);
     precursor.setCharge(target_precursor_charge_);
@@ -120,6 +107,76 @@ namespace OpenMS
     deconvolved_spectrum_.setPrecursorPeakGroup(precursorPeakGroup);
   }
 
+  void SpectralDeconvolution::prepareSignalDecoyExclusions_()
+  {
+    for (const auto& pg : *target_dspec_for_decoy_calculation_)
+    {
+      for (int i = 0; i <= 0; i++)
+      {
+        excluded_masses_for_decoy_runs_.push_back(pg.getMonoMass() + i * iso_da_distance_);
+        excluded_peak_masses_for_decoy_runs_.push_back(pg.getMonoMass() + avg_.getAverageMassDelta(pg.getMonoMass()) + i * iso_da_distance_);
+      }
+    }
+    std::sort(excluded_masses_for_decoy_runs_.begin(), excluded_masses_for_decoy_runs_.end());
+    excluded_masses_for_decoy_runs_.erase(unique(excluded_masses_for_decoy_runs_.begin(), excluded_masses_for_decoy_runs_.end()),
+                                          excluded_masses_for_decoy_runs_.end());
+
+    std::sort(excluded_peak_masses_for_decoy_runs_.begin(), excluded_peak_masses_for_decoy_runs_.end());
+    excluded_peak_masses_for_decoy_runs_.erase(unique(excluded_peak_masses_for_decoy_runs_.begin(), excluded_peak_masses_for_decoy_runs_.end()),
+                                               excluded_peak_masses_for_decoy_runs_.end());
+  }
+
+  void SpectralDeconvolution::prepareNoiseDecoySpectrum_(const MSSpectrum& spec)
+  {
+    std::set<double> signal_mzs;
+    for (const auto& pg : *target_dspec_for_decoy_calculation_)
+    {
+      for (const auto& p : pg)
+      {
+        signal_mzs.insert(p.mz);
+      }
+    }
+
+    auto nspec = spec;
+    nspec.clear(false);
+
+    for (const auto& p : spec)
+    {
+      if (signal_mzs.find(p.getMZ()) != signal_mzs.end()) { continue; }
+      nspec.push_back(p);
+    }
+    deconvolved_spectrum_.setOriginalSpectrum(nspec);
+  }
+
+  void SpectralDeconvolution::registerPrecursorForMSn_(const PeakGroup& precursor_peak_group)
+  {
+    for (const auto& precursor : deconvolved_spectrum_.getOriginalSpectrum().getPrecursors())
+    {
+      for (const auto& activation_method : precursor.getActivationMethods())
+      {
+        deconvolved_spectrum_.setActivationMethod(activation_method);
+        if (deconvolved_spectrum_.getActivationMethod() == Precursor::ActivationMethod::HCID)
+        {
+          deconvolved_spectrum_.setActivationMethod(Precursor::ActivationMethod::HCD);
+        }
+        break;
+      }
+      deconvolved_spectrum_.setPrecursor(precursor);
+    }
+
+    if (target_precursor_charge_ != 0 || target_precursor_mz_ > 0) { setTargetPrecursorCharge_(); }
+
+    if (deconvolved_spectrum_.getPrecursorPeakGroup().empty() && !precursor_peak_group.empty())
+    {
+      deconvolved_spectrum_.setPrecursorPeakGroup(precursor_peak_group);
+      deconvolved_spectrum_.setPrecursorScanNumber(precursor_peak_group.getScanNumber());
+      Precursor precursor(deconvolved_spectrum_.getPrecursor());
+      int abs_charge = (int)round(precursor_peak_group.getMonoMass() / precursor.getMZ());
+      precursor.setCharge(precursor_peak_group.isPositive() ? abs_charge : -abs_charge);
+      deconvolved_spectrum_.setPrecursor(precursor);
+    }
+  }
+
   // The main function called from outside. precursor_map_for_FLASHIda is used to read FLASHIda information
   void SpectralDeconvolution::performSpectrumDeconvolution(const MSSpectrum& spec, const int scan_number, const PeakGroup& precursor_peak_group)
   {
@@ -133,94 +190,24 @@ namespace OpenMS
     excluded_mass_bins_for_decoy_runs_.reset();
     excluded_masses_for_decoy_runs_.clear();
 
-    if (target_decoy_type_ == PeakGroup::signal_decoy) // charge decoy
-    {
-      for (const auto& pg : *target_dspec_for_decoy_calculation_) // pg are the target peak groups from normal spectrum deconvolution
-      {
-        for (int i = -0; i <= 0; i++)
-        {
-          excluded_masses_for_decoy_runs_.push_back(pg.getMonoMass() + i * iso_da_distance_);
-          excluded_peak_masses_for_decoy_runs_.push_back(pg.getMonoMass() + avg_.getAverageMassDelta(pg.getMonoMass()) + i * iso_da_distance_);
-        }
-      }
-      std::sort(excluded_masses_for_decoy_runs_.begin(), excluded_masses_for_decoy_runs_.end());
-      excluded_masses_for_decoy_runs_.erase( unique(excluded_masses_for_decoy_runs_.begin(), excluded_masses_for_decoy_runs_.end() ),
-                                            excluded_masses_for_decoy_runs_.end() );
-
-      std::sort(excluded_peak_masses_for_decoy_runs_.begin(), excluded_peak_masses_for_decoy_runs_.end());
-      excluded_peak_masses_for_decoy_runs_.erase( unique(excluded_peak_masses_for_decoy_runs_.begin(), excluded_peak_masses_for_decoy_runs_.end() ),
-                                                 excluded_peak_masses_for_decoy_runs_.end() );
-    }
+    if (target_decoy_type_ == PeakGroup::signal_decoy) { prepareSignalDecoyExclusions_(); }
 
     ms_level_ = spec.getMSLevel();
     deconvolved_spectrum_ = DeconvolvedSpectrum(scan_number);
     deconvolved_spectrum_.setOriginalSpectrum(spec);
 
-    // for noise decoy, we exclude all raw peaks used for the normal run
-    if (target_decoy_type_ == PeakGroup::noise_decoy)
-    {
-      std::set<double> signal_mzs;
-      for (const auto& pg : *target_dspec_for_decoy_calculation_)
-      {
-        for (const auto& p : pg)
-          signal_mzs.insert(p.mz);
-      }
+    if (target_decoy_type_ == PeakGroup::noise_decoy) { prepareNoiseDecoySpectrum_(spec); }
 
-      auto nspec = spec;
-      nspec.clear(false);
-
-      for (const auto& p : spec)
-      {
-        if (signal_mzs.find(p.getMZ()) != signal_mzs.end()) continue;
-        nspec.push_back(p);
-      }
-      deconvolved_spectrum_.setOriginalSpectrum(nspec);
-    }
-
-    // here register targeted peak mzs etc.
-    // for MSn (n>1) register precursor peak and peak group.
-    if (ms_level_ > 1)
-    {
-      for (const auto& precursor : deconvolved_spectrum_.getOriginalSpectrum().getPrecursors())
-      {
-        for (const auto& activation_method : precursor.getActivationMethods())
-        {
-          deconvolved_spectrum_.setActivationMethod(activation_method);
-          if (deconvolved_spectrum_.getActivationMethod() == Precursor::HCID) { deconvolved_spectrum_.setActivationMethod(Precursor::HCD); }
-          break;
-        }
-        deconvolved_spectrum_.setPrecursor(precursor);
-      }
-
-      if (target_precursor_charge_ != 0 || target_precursor_mz_ > 0) { setTargetPrecursorCharge_(); }
-
-      if (deconvolved_spectrum_.getPrecursorPeakGroup().empty())
-      {
-        if (! precursor_peak_group.empty())
-        {
-          deconvolved_spectrum_.setPrecursorPeakGroup(precursor_peak_group);
-          deconvolved_spectrum_.setPrecursorScanNumber(precursor_peak_group.getScanNumber());
-          Precursor precursor(deconvolved_spectrum_.getPrecursor());
-          int abs_charge = (int)round(precursor_peak_group.getMonoMass() / precursor.getMZ());
-          precursor.setCharge(precursor_peak_group.isPositive() ? abs_charge : -abs_charge);
-          deconvolved_spectrum_.setPrecursor(precursor);
-        }
-        else
-        {
-
-        }
-      }
-    }
+    if (ms_level_ > 1) { registerPrecursorForMSn_(precursor_peak_group); }
 
     // based on MS level, adjust charge and mass ranges. Precursor charge and mass determine those.
-    current_max_charge_ = deconvolved_spectrum_.getCurrentMaxAbsCharge(max_abs_charge_); //
+    current_max_charge_ = deconvolved_spectrum_.getCurrentMaxAbsCharge(max_abs_charge_);
     current_max_mass_ = deconvolved_spectrum_.getCurrentMaxMass(max_mass_);
     current_min_mass_ = deconvolved_spectrum_.getCurrentMinMass(min_mass_);
 
     // set universal pattern filter and harmonic pattern filters
     setFilters_();
     // LogMzPeaks are generated from raw peaks
-
     updateLogMzPeaks_();
     if (log_mz_peaks_.empty()) { return; }
 
@@ -777,7 +764,7 @@ namespace OpenMS
 
           if (observed_mz - max_mz > (double)right_index * iso_delta + mz_delta) { break; }
 
-          if (std::abs(mz_diff - tmp_i * iso_delta) < mz_delta) // if peak is signal
+          if (abs(mz_diff - tmp_i * iso_delta) < mz_delta) // if peak is signal
           {
             const Size bin = peak_bin_numbers[peak_index] + bin_offset;
             if (bin < mass_bin_size && ! (bin < excluded_mass_bins_for_decoy_runs_.size() && excluded_mass_bins_for_decoy_runs_[bin]))
@@ -797,7 +784,7 @@ namespace OpenMS
           int tmp_i = (int)round(mz_diff / iso_delta);
 
           if (max_mz - observed_mz > (float)left_index * iso_delta + mz_delta) { break; }
-          if (std::abs(mz_diff - tmp_i * iso_delta) < mz_delta)
+          if (abs(mz_diff - tmp_i * iso_delta) < mz_delta)
           {
             const Size bin = peak_bin_numbers[peak_index] + bin_offset;
             if (bin < mass_bin_size && ! (bin < excluded_mass_bins_for_decoy_runs_.size() && excluded_mass_bins_for_decoy_runs_[bin]))
@@ -835,7 +822,7 @@ namespace OpenMS
         {
           p.isotopeIndex = (int)round((p.getUnchargedMass() - t_mass) / iso_da_distance_);
 
-          if (std::abs(t_mass - p.getUnchargedMass() + iso_da_distance_ * p.isotopeIndex) > iso_tolerance) { continue; }
+          if (abs(t_mass - p.getUnchargedMass() + iso_da_distance_ * p.isotopeIndex) > iso_tolerance) { continue; }
           p.isotopeIndex += apex_index;
           new_peaks.push_back(p);
           min_off = min_off > p.isotopeIndex ? p.isotopeIndex : min_off;
@@ -992,12 +979,11 @@ namespace OpenMS
   void SpectralDeconvolution::scoreAndFilterPeakGroups_()
   {
     double tol = tolerance_[ms_level_ - 1];
-    const int num_peak_groups = static_cast<int>(deconvolved_spectrum_.size());
-    auto selected = boost::dynamic_bitset<>(num_peak_groups);
+    auto selected = boost::dynamic_bitset<>(deconvolved_spectrum_.size());
     double snr_threshold = min_snr_[ms_level_ - 1];
 
-  #pragma omp parallel for default(none) shared(tol, selected, snr_threshold, num_peak_groups, std::cout) if(num_peak_groups > 100)
-    for (int i = 0; i < num_peak_groups; i++)
+  #pragma omp parallel for default(none) shared(tol, selected, snr_threshold, std::cout)
+    for (int i = 0; i < (int)deconvolved_spectrum_.size(); i++)
     {
       int offset = 0;
       auto& peak_group = deconvolved_spectrum_[i];
@@ -1100,12 +1086,11 @@ namespace OpenMS
     removeChargeErrorPeakGroups_(deconvolved_spectrum_, target_decoy_type_);
 
     // final harmonics removal
-    const int num_harmonics = static_cast<int>(deconvolved_spectrum_.size());
-    selected = boost::dynamic_bitset<>(num_harmonics);
+    selected = boost::dynamic_bitset<>(deconvolved_spectrum_.size());
     filtered_peak_groups = std::vector<PeakGroup>();
 
-  #pragma omp parallel for default(none) shared(tol, selected, harmonic_charges_, num_harmonics) if(num_harmonics > 100)
-    for (int i = 0; i < num_harmonics; i++)
+  #pragma omp parallel for default(none) shared(tol, selected, harmonic_charges_)
+    for (int i = 0; i < (int)deconvolved_spectrum_.size(); i++)
     {
       const auto& peak_group = deconvolved_spectrum_[i];
       bool pass = true;

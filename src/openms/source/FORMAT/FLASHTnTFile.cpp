@@ -7,7 +7,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
-#include <OpenMS/CHEMISTRY/ProForma.h> // added for ProForma
+#include <OpenMS/CHEMISTRY/FlashIdaProForma.h> // fork's simple ProForma serializer (renamed to coexist with upstream's ProForma parser)
 #include <OpenMS/FORMAT/FLASHTnTFile.h>
 
 namespace OpenMS
@@ -132,7 +132,7 @@ String FLASHTnTFile::generateProFormaString_(const String& sequence,
   if (seq_start < 0) seq_start = 1;
   if (seq_end < 0) seq_end = sequence.length();
   const auto truncated_seq = sequence.substr(seq_start, seq_end - seq_start);
-  ProForma proforma(AASequence::fromString(truncated_seq)); // Create ProForma object
+  FlashIdaProForma proforma(AASequence::fromString(truncated_seq)); // Create ProForma object
 
   // Loop through modifications and add them to the sequence
   for (size_t i = 0; i < mod_masses.size(); ++i)

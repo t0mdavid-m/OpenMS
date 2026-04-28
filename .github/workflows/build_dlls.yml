@@ -11,7 +11,18 @@ on:
       - FIdevelop
       - flashida-v9-bridge
       - processscan-cleanup
+      - 'claude/**'
+  pull_request:
+    branches:
+      - flashida-v9-bridge
+      - FIdevelop
+      - processscan-cleanup
   workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
@@ -150,16 +161,26 @@ jobs:
         if [[ "${{ matrix.os }}" == windows-* ]]; then
           # Qt6 is found automatically via Qt6_DIR env var set by install-qt-action
           echo "cmake_prefix=" >> $GITHUB_OUTPUT
-          choco install 7zip ccache ninja cmake -y --no-progress
+          # choco fetches packages over the public CDN and occasionally fails with
+          # transient network errors. Retry up to 3 times with exponential backoff.
+          choco_install() {
+            for attempt in 1 2 3; do
+              if choco install "$@" -y --no-progress; then return 0; fi
+              echo "choco install $* failed on attempt $attempt; sleeping then retrying"
+              sleep $((attempt * 10))
+            done
+            return 1
+          }
+          choco_install 7zip ccache ninja cmake
           ## GH CLI "SHOULD BE" installed. Sometimes I had to manually install nonetheless. Super weird.
           # https://github.com/actions/runner-images/blob/main/images/win/scripts/Installers/Install-GitHub-CLI.ps1
           echo "C:\Program Files (x86)\GitHub CLI" >> $GITHUB_PATH
           # Install eigen from choco
-          choco install eigen -y --no-progress
+          choco_install eigen
           echo "eigen_choco=C:\ProgramData\chocolatey\lib\eigen\share\cmake" >> $GITHUB_OUTPUT
 
           if [[ "${{ steps.set-vars.outputs.pkg_type }}" != "none" ]]; then
-            choco install doxygen.portable ghostscript graphviz -y --no-progress
+            choco_install doxygen.portable ghostscript graphviz
             # uses a custom NSIS, which provides 8-k string support and has UltraModernUI integrated already
             curl --no-progress-meter -L -o NSIS.tar.gz https://github.com/OpenMS/NSIS/raw/main/NSIS.tar.gz
             ## overwrite existing NSIS (which has only 1k-string support)
@@ -190,12 +211,13 @@ jobs:
     - name: Download contrib build from archive (Windows)
       if: startsWith(matrix.os, 'windows') && steps.cache-contrib.outputs.cache-hit != 'true'
       shell: bash
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
+          set -eux
           cd OpenMS/contrib
-          # Download the file using the URL fetched from GitHub
-          gh release download -R OpenMS/contrib --pattern 'contrib_build-Windows.tar.gz'
+          # The OpenMS/contrib release asset is public; use curl directly to avoid
+          # depending on `gh` being on PATH (which the runner sometimes doesn't have).
+          curl -fL --retry 5 --retry-delay 5 -o contrib_build-Windows.tar.gz \
+            https://github.com/OpenMS/contrib/releases/latest/download/contrib_build-Windows.tar.gz
           # Extract the archive
           7z x -so contrib_build-Windows.tar.gz | 7z x -si -ttar
           rm contrib_build-Windows.tar.gz
@@ -236,17 +258,24 @@ jobs:
           done
 
     - name: Build
+      id: build
       shell: bash
       run: |
           # do not fail immediately
           set +e
           mkdir $GITHUB_WORKSPACE/OpenMS/bld/
-          ${{ steps.set-vars.outputs.xvfb }} ctest --output-on-failure -V -S ../OpenMS/OpenMS/tools/ci/cibuild.cmake
-          retVal=$?
+          ${{ steps.set-vars.outputs.xvfb }} ctest --output-on-failure -V -S ../OpenMS/OpenMS/tools/ci/cibuild.cmake 2>&1 | tee $GITHUB_WORKSPACE/build_output.log
+          retVal=${PIPESTATUS[0]}
           if [ $retVal -ne 0 ]; then
               echo -e "\033[0;31m Errors in build:"
               # TODO upload logs as artifact?
               find $GITHUB_WORKSPACE/OpenMS/bld/ -name "LastBuild*" -type f -exec cat {} \;
+              # collect cmake/ctest error/log files for artifact upload
+              mkdir -p $GITHUB_WORKSPACE/build_diagnostics
+              find $GITHUB_WORKSPACE/OpenMS/bld/ -maxdepth 6 \
+                \( -name 'CMakeCache.txt' -o -name 'CMakeError.log' -o -name 'CMakeOutput.log' -o -name 'LastBuild*' -o -name 'LastConfigure*' -o -name 'LastUpdate*' -o -name '*.log' \) \
+                -exec cp -v {} $GITHUB_WORKSPACE/build_diagnostics/ \; 2>&1 | head -40 || true
+              cp $GITHUB_WORKSPACE/build_output.log $GITHUB_WORKSPACE/build_diagnostics/ 2>/dev/null || true
               # remove for next steps
               find $GITHUB_WORKSPACE/OpenMS/bld/ -name "LastBuild*" -type f -exec rm {} \;
           fi
@@ -287,13 +316,124 @@ jobs:
           WITH_THERMORAWFILEPARSER_TEST: "OFF"
           Eigen3_DIR: "${{ steps.tools-prefix.outputs.eigen_choco }}" # Eigen is installed on windows using choco
 
+    - name: Upload build diagnostics on failure
+      if: failure() && steps.build.outcome == 'failure'
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-diagnostics-${{ matrix.os }}
+        if-no-files-found: warn
+        path: |
+          ${{ github.workspace }}/build_diagnostics/
+
+    - name: Post build diagnostics summary as PR comment on failure
+      if: failure() && steps.build.outcome == 'failure'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const path = require('path');
+          const diagDir = `${process.env.GITHUB_WORKSPACE}/build_diagnostics`;
+          let body = `### Build diagnostics for run ${context.runId} (${{ matrix.os }})\n\n`;
+          // Pick LastConfigure_*.log and LastBuild_*.log dynamically (they have timestamp suffixes)
+          let dynamicFiles = [];
+          if (fs.existsSync(diagDir)) {
+            dynamicFiles = fs.readdirSync(diagDir).filter(f =>
+              f.startsWith('LastConfigure_') || f.startsWith('LastBuild_') ||
+              f.startsWith('LastUpdate_') || f.startsWith('LastSubmit_'));
+          }
+          const want = ['build_output.log', ...dynamicFiles, 'CMakeError.log', 'CMakeOutput.log'];
+          // First: extract error-only lines from LastBuild_*.log so they survive truncation.
+          const buildLog = dynamicFiles.find(f => f.startsWith('LastBuild_'));
+          if (buildLog) {
+            const buildPath = path.join(diagDir, buildLog);
+            if (fs.existsSync(buildPath)) {
+              const txt = fs.readFileSync(buildPath, 'utf8');
+              const errLines = txt.split(/\r?\n/).filter(l =>
+                /\berror [A-Z]?\d+\b/i.test(l) || /^FAILED:/.test(l) || /\bfatal error\b/i.test(l));
+              if (errLines.length) {
+                const joined = errLines.join('\n');
+                const cap = joined.length > 16000 ? joined.slice(0, 16000) + '\n... [more truncated]' : joined;
+                body += `<details open><summary>Compile errors only (${errLines.length} lines, from ${buildLog})</summary>\n\n\`\`\`\n${cap}\n\`\`\`\n\n</details>\n\n`;
+              }
+            }
+          }
+          for (const name of want) {
+            const p = path.join(diagDir, name);
+            if (fs.existsSync(p)) {
+              let txt = fs.readFileSync(p, 'utf8');
+              // Per-file budget so total comment stays under GitHub's 65k limit.
+              const tail = txt.length > 8000 ? '... [truncated]\n' + txt.slice(-8000) : txt;
+              body += `<details><summary>${name} (${txt.length} bytes)</summary>\n\n\`\`\`\n${tail}\n\`\`\`\n\n</details>\n\n`;
+            }
+          }
+          if (fs.existsSync(diagDir)) {
+            const files = fs.readdirSync(diagDir);
+            body += `<details><summary>All collected files (${files.length})</summary>\n\n\`\`\`\n${files.join('\n')}\n\`\`\`\n\n</details>\n`;
+          }
+          // Find the PR for this commit (works for both push and pull_request events).
+          const prs = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            commit_sha: context.sha,
+          });
+          if (prs.data.length === 0) {
+            core.warning(`No PR associated with commit ${context.sha}; printing diagnostics to log instead.`);
+            core.info(body);
+            return;
+          }
+          for (const pr of prs.data) {
+            await github.rest.issues.createComment({
+              issue_number: pr.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body,
+            });
+          }
+
     - name: Zip and upload selected bin artifacts
       shell: bash
       run: |
+        # Note: deliberately not using `set -u` here; Qt6_DIR / RUNNER_TEMP can be
+        # unset depending on runner state, and we degrade gracefully in that case.
+        set -ex
         short_sha=$(echo "${{ github.sha }}" | cut -c1-7)
-        cd $GITHUB_WORKSPACE/OpenMS/bld/bin
-        7z a build_files_${short_sha}.zip OpenMS.dll OpenSwathAlgo.dll FLASHDeconv.exe Qt6Core.dll Qt6Network.dll
-    
+        cd "$GITHUB_WORKSPACE/OpenMS/bld/bin"
+        echo "=== bld/bin contents BEFORE Qt copy ==="
+        ls -la
+        echo "=== Qt env vars ==="
+        echo "Qt6_DIR=${Qt6_DIR:-<unset>}"
+        echo "RUNNER_TEMP=${RUNNER_TEMP:-<unset>}"
+        # Qt6Core.dll / Qt6Network.dll are produced by jurplel/install-qt-action under
+        # $Qt6_DIR/bin (and/or $RUNNER_TEMP/Qt/<ver>/msvc*/bin) and are NOT placed in
+        # bld/bin by the build itself. Copy them in if they exist so the artifact is
+        # self-contained; tolerate them being missing (they're only needed for runtime,
+        # not for the merge-correctness check).
+        shopt -s nullglob
+        for dll in Qt6Core.dll Qt6Network.dll; do
+          if [[ -f "$dll" ]]; then continue; fi
+          candidates=()
+          [[ -n "${Qt6_DIR:-}" ]] && candidates+=("$Qt6_DIR/bin/$dll")
+          if [[ -n "${RUNNER_TEMP:-}" ]]; then
+            candidates+=( "$RUNNER_TEMP"/Qt/*/msvc*/bin/"$dll" )
+          fi
+          for src in "${candidates[@]}"; do
+            if [[ -f "$src" ]]; then cp "$src" "$dll"; echo "copied $src"; break; fi
+          done
+        done
+        # Build the artifact list from files that actually exist; the FLASH-specific
+        # binaries are tolerated to be missing so the merge-CI doesn't depend on the
+        # fork's optional artifact packaging (a separate concern from compile health).
+        files=()
+        for f in OpenMS.dll OpenSwathAlgo.dll FLASHDeconv.exe Qt6Core.dll Qt6Network.dll; do
+          if [[ -f "$f" ]]; then files+=("$f"); else echo "::warning::artifact missing: $f"; fi
+        done
+        if [[ ${#files[@]} -eq 0 ]]; then
+          echo "::error::no artifact files present in bld/bin"
+          ls -la
+          exit 1
+        fi
+        7z a "build_files_${short_sha}.zip" "${files[@]}"
+
     - name: Upload selected bin artifacts as artifact
       uses: actions/upload-artifact@v4
       with:

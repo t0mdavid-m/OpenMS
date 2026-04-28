@@ -99,6 +99,12 @@ namespace OpenMS
      */
     std::vector<LogMzPeak> recruitAllPeaksInSpectrum(const MSSpectrum& spec, double tol, const FLASHHelperClasses::PrecalculatedAveragine& avg, double mono_mass, bool renew_signal_peaks = true);
 
+    /**
+     * @brief Const version of recruitAllPeaksInSpectrum used by output paths (e.g. FLASHDeconvSpectrumFile).
+     * Returns the noisy peaks - raw peaks within range that don't match the isotope pattern - without modifying member state.
+     */
+    std::vector<LogMzPeak> getNoisyPeaks(const MSSpectrum& spec, double tol, const FLASHHelperClasses::PrecalculatedAveragine& avg) const;
+
     /// set scan number
     void setScanNumber(int scan_number);
 

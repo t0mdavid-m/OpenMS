@@ -247,6 +247,7 @@ namespace OpenMS
   {
     return quantities.empty();
   }
+
   FLASHHelperClasses::Tag::Tag(const String& seq, double n_mass, double c_mass, const std::vector<double>& mzs, const std::vector<int>& scores,  int scan) :
       seq_(std::move(seq)), n_mass_(n_mass), c_mass_(c_mass), mzs_(mzs), scores_(scores), scan_(scan), length_(mzs.size() - 1)
   {
@@ -423,4 +424,5 @@ namespace OpenMS
       return scan_;
     }
 
-  } // namespace OpenMS
+
+} // namespace OpenMS
