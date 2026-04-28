@@ -332,6 +332,21 @@ jobs:
               f.startsWith('LastUpdate_') || f.startsWith('LastSubmit_'));
           }
           const want = ['build_output.log', ...dynamicFiles, 'CMakeError.log', 'CMakeOutput.log'];
+          // First: extract error-only lines from LastBuild_*.log so they survive truncation.
+          const buildLog = dynamicFiles.find(f => f.startsWith('LastBuild_'));
+          if (buildLog) {
+            const buildPath = path.join(diagDir, buildLog);
+            if (fs.existsSync(buildPath)) {
+              const txt = fs.readFileSync(buildPath, 'utf8');
+              const errLines = txt.split(/\r?\n/).filter(l =>
+                /\berror [A-Z]?\d+\b/i.test(l) || /^FAILED:/.test(l) || /\bfatal error\b/i.test(l));
+              if (errLines.length) {
+                const joined = errLines.join('\n');
+                const cap = joined.length > 16000 ? joined.slice(0, 16000) + '\n... [more truncated]' : joined;
+                body += `<details open><summary>Compile errors only (${errLines.length} lines, from ${buildLog})</summary>\n\n\`\`\`\n${cap}\n\`\`\`\n\n</details>\n\n`;
+              }
+            }
+          }
           for (const name of want) {
             const p = path.join(diagDir, name);
             if (fs.existsSync(p)) {
