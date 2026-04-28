@@ -13,7 +13,7 @@
 #include <OpenMS/FORMAT/FLASHTnTFile.h>
 #include <OpenMS/FORMAT/FileTypes.h>
 #include <OpenMS/FORMAT/MzMLFile.h>
-#include <QFileInfo>
+#include <QtCore/QFileInfo>
 
 using namespace OpenMS;
 using namespace std;
