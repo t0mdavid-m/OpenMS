@@ -18,6 +18,7 @@ ElementDB.cpp
 EmpiricalFormula.cpp
 EnzymaticDigestion.cpp
 EnzymeXMLDataProvider.cpp
+FlashIdaProForma.cpp
 HydrophobicityProfile.cpp
 ModificationDefinition.cpp
 ModificationDefinitionsSet.cpp

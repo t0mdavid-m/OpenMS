@@ -19,6 +19,7 @@ ElementDB.h
 EmpiricalFormula.h
 EnzymaticDigestion.h
 EnzymeXMLDataProvider.h
+FlashIdaProForma.h
 HydrophobicityProfile.h
 ModificationDataProvider.h
 ModificationDefinition.h
