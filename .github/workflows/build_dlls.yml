@@ -393,23 +393,36 @@ jobs:
     - name: Zip and upload selected bin artifacts
       shell: bash
       run: |
-        set -eux
+        # Note: deliberately not using `set -u` here; Qt6_DIR / RUNNER_TEMP can be
+        # unset depending on runner state, and we degrade gracefully in that case.
+        set -ex
         short_sha=$(echo "${{ github.sha }}" | cut -c1-7)
-        cd $GITHUB_WORKSPACE/OpenMS/bld/bin
+        cd "$GITHUB_WORKSPACE/OpenMS/bld/bin"
+        echo "=== bld/bin contents BEFORE Qt copy ==="
+        ls -la
+        echo "=== Qt env vars ==="
+        echo "Qt6_DIR=${Qt6_DIR:-<unset>}"
+        echo "RUNNER_TEMP=${RUNNER_TEMP:-<unset>}"
         # Qt6Core.dll / Qt6Network.dll are produced by jurplel/install-qt-action under
-        # $Qt6_DIR/bin and are NOT placed in bld/bin by the build itself. Copy them in
-        # if they exist so the artifact is self-contained; tolerate them being missing
-        # (they're only needed for runtime, not for the merge-correctness check).
+        # $Qt6_DIR/bin (and/or $RUNNER_TEMP/Qt/<ver>/msvc*/bin) and are NOT placed in
+        # bld/bin by the build itself. Copy them in if they exist so the artifact is
+        # self-contained; tolerate them being missing (they're only needed for runtime,
+        # not for the merge-correctness check).
+        shopt -s nullglob
         for dll in Qt6Core.dll Qt6Network.dll; do
-          if [[ ! -f "$dll" ]]; then
-            for src in "$Qt6_DIR/bin/$dll" "$RUNNER_TEMP"/Qt/*/msvc*/bin/"$dll"; do
-              if [[ -f "$src" ]]; then cp "$src" "$dll"; break; fi
-            done
+          if [[ -f "$dll" ]]; then continue; fi
+          candidates=()
+          [[ -n "${Qt6_DIR:-}" ]] && candidates+=("$Qt6_DIR/bin/$dll")
+          if [[ -n "${RUNNER_TEMP:-}" ]]; then
+            candidates+=( "$RUNNER_TEMP"/Qt/*/msvc*/bin/"$dll" )
           fi
+          for src in "${candidates[@]}"; do
+            if [[ -f "$src" ]]; then cp "$src" "$dll"; echo "copied $src"; break; fi
+          done
         done
         # Build the artifact list from files that actually exist; the FLASH-specific
-        # binaries are also tolerated to be missing so the merge-CI doesn't depend on
-        # the fork's optional artifact packaging (a separate concern from compile health).
+        # binaries are tolerated to be missing so the merge-CI doesn't depend on the
+        # fork's optional artifact packaging (a separate concern from compile health).
         files=()
         for f in OpenMS.dll OpenSwathAlgo.dll FLASHDeconv.exe Qt6Core.dll Qt6Network.dll; do
           if [[ -f "$f" ]]; then files+=("$f"); else echo "::warning::artifact missing: $f"; fi
