@@ -514,7 +514,7 @@ if((DEFINED OPENMS_TARGET AND TARGET ${OPENMS_TARGET}) OR TARGET OpenMS)
   # Split pyopenms tests into separate CTest entries for better CDash reporting.
   # Use -q (quiet) and --tb=short to avoid cluttering CDash with verbose passing output.
   # Override pyproject.toml's addopts which uses -v (verbose).
-  set(_PYTEST_ARGS -m pytest -o addopts=-q\ --tb=short)
+  set(_PYTEST_ARGS -m pytest)
 
   add_test(
     NAME pyopenms_unittests
