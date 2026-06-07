@@ -458,6 +458,14 @@ namespace OpenMS
             "Fragment matching is the default for all MSn>=2 selection.");
     }
 
+    // A level that selects targets for the next level must have a scan config there to build
+    // into; otherwise Exploration::initiateNextLevel would OOB-read next_cfg.scans[0].
+    for (const auto& [lvl, cfg] : levels_)
+      if (lvl < 3 && cfg.selection != SelectionMetric::None && level(lvl + 1).scans.empty())
+        throw std::invalid_argument(
+            "Selection at level " + std::to_string(lvl) + " targets MS" + std::to_string(lvl + 1) +
+            " but no ms_settings.ms" + std::to_string(lvl + 1) + " scan config is defined.");
+
     // Validate that each exploration activation type has its required sweep range
     for (const auto& [lvl, cfg] : levels_)
     {

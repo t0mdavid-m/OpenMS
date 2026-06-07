@@ -511,6 +511,11 @@ namespace OpenMS
     const auto& this_cfg = config_.level(msn_level);
     const auto& next_cfg = config_.level(next_level);
     if (this_cfg.selection == SelectionMetric::None) return nlr;
+    // Backstop for the Config::validate() rule: if the next level has no scan config or
+    // selects nothing, there is nothing to build (found is already 0). Avoids OOB on
+    // next_cfg.scans[0] (line 594) and this_cfg.scans[0] (line 521).
+    if (this_cfg.scans.empty() || next_cfg.scans.empty()
+        || next_cfg.selection == SelectionMetric::None) return nlr;
 
     const auto& seq = config_.targeting().protein_sequence;
     int num_targets = this_cfg.max_targets;
