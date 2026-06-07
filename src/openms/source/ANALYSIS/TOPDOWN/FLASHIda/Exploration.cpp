@@ -449,6 +449,19 @@ namespace OpenMS
     group.complete = true;
     group.variants[best_idx].result.getOrCreateOptimizationMetadata().is_best_variant = true;
 
+    // Report the WINNER's metrics in the returned info (not the last-received variant's, which is
+    // what was populated above before winner selection / batch re-scoring).
+    {
+      const ExplorationVariant& win = group.variants[best_idx];
+      info.score = best_score;
+      info.variant_index = win.variant_index;
+      info.collision_energy = win.collision_energy;
+      info.activation_type = win.activation_type;
+      info.reaction_time = win.reaction_time;
+      info.tic_coverage = win.tic_coverage;
+      info.fragment_count = win.fragment_count;
+    }
+
     std::cout << "[EXPL-WINNER] group=" << group.group_id
               << " winner_idx=" << best_idx
               << " activation=" << group.variants[best_idx].activation_type
@@ -580,7 +593,8 @@ namespace OpenMS
     nlr.proteoform_match = frag_result;
     if (!seq.empty() && found > 0)
     {
-      nlr.matched_protein = config_.targeting().fasta_file;
+      nlr.matched_protein = config_.targeting().fasta_file.empty()
+          ? config_.targeting().protein_sequence : config_.targeting().fasta_file;
       nlr.proteoform_sequence = seq;
       // TIC coverage: sum of matched qscores / total spectrum intensity
       double total_tic = 0.0;
@@ -822,7 +836,8 @@ namespace OpenMS
 
     if (result.total_match_count > 0)
     {
-      result.matched_protein = config_.targeting().fasta_file;
+      result.matched_protein = config_.targeting().fasta_file.empty()
+          ? config_.targeting().protein_sequence : config_.targeting().fasta_file;
     }
     return result;
   }

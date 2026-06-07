@@ -418,63 +418,6 @@ namespace OpenMS
     std::sort(peak_groups_.begin(), peak_groups_.end(), [](const PeakGroup& p1, const PeakGroup& p2) { return p1.getBestQScore() > p2.getBestQScore(); });
   }
 
-  void DeconvolvedSpectrum::sortByIDScoreRepresentative()
-  {
-    std::sort(peak_groups_.begin(), peak_groups_.end(), [](const PeakGroup& p1, const PeakGroup& p2) {
-      int rep_charge1 = p1.getRepAbsCharge();
-      int rep_charge2 = p2.getRepAbsCharge();
-      
-      auto all_idscores1 = p1.getAllIDscores();
-      auto all_idscores2 = p2.getAllIDscores();
-      
-      float best_idscore1 = 0.0f;
-      float best_idscore2 = 0.0f;
-      
-      // Find best IDScore for representative charge in p1
-      auto charge_it1 = all_idscores1.find(rep_charge1);
-      if (charge_it1 != all_idscores1.end()) {
-        for (const auto& hcd_score : charge_it1->second) {
-          best_idscore1 = std::max(best_idscore1, hcd_score.second);
-        }
-      }
-      
-      // Find best IDScore for representative charge in p2
-      auto charge_it2 = all_idscores2.find(rep_charge2);
-      if (charge_it2 != all_idscores2.end()) {
-        for (const auto& hcd_score : charge_it2->second) {
-          best_idscore2 = std::max(best_idscore2, hcd_score.second);
-        }
-      }
-      
-      return best_idscore1 > best_idscore2;
-    });
-  }
-
-  void DeconvolvedSpectrum::sortByIDScoreRepresentative(int hcd_energy)
-  {
-    std::sort(peak_groups_.begin(), peak_groups_.end(), [hcd_energy](const PeakGroup& p1, const PeakGroup& p2) {
-      int rep_charge1 = p1.getRepAbsCharge();
-      int rep_charge2 = p2.getRepAbsCharge();
-      
-      float idscore1 = p1.getIDScoreForChargeAndHCD(rep_charge1, hcd_energy);
-      float idscore2 = p2.getIDScoreForChargeAndHCD(rep_charge2, hcd_energy);
-      
-      return idscore1 > idscore2;
-    });
-  }
-
-  void DeconvolvedSpectrum::sortByIDScoreAllCharges()
-  {
-    std::sort(peak_groups_.begin(), peak_groups_.end(), [](const PeakGroup& p1, const PeakGroup& p2) { return p1.getBestIDScore() > p2.getBestIDScore(); });
-  }
-
-  void DeconvolvedSpectrum::sortByIDScoreAllCharges(int hcd_energy)
-  {
-    std::sort(peak_groups_.begin(), peak_groups_.end(), [hcd_energy](const PeakGroup& p1, const PeakGroup& p2) {
-      return p1.getBestIDScoreForHCD(hcd_energy) > p2.getBestIDScoreForHCD(hcd_energy);
-    });
-  }
-
   void DeconvolvedSpectrum::sortByIntensity()
   {
     std::sort(peak_groups_.begin(), peak_groups_.end(), [](const PeakGroup& p1, const PeakGroup& p2) { return p1.getMaxChargeIntensity() > p2.getMaxChargeIntensity(); });

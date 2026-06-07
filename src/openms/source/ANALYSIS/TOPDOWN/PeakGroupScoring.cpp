@@ -15,12 +15,6 @@ namespace OpenMS
   {
     std::vector<double> PeakGroupScoring::weight_ { -21.0476, 1.5045, -0.1303, 0.183, 0.1834, 17.804};
 
-    // Weights for ID scoring - per HCD energy
-    static std::unordered_map<int, std::vector<double>> weight_idscore_ {
-      {21, { 4.4034,   2.2993,  1.1397, -5.3708  }},
-      {22, { 5.6630,   1.0324,  2.6398, -6.3672  }},
-      {23, { 5.2754,   2.6164,  1.4306, -6.3910  }},
-    };
     // Att0                21.0476
     // Att1                -1.5045
     // Att2                 0.1303
@@ -89,26 +83,6 @@ namespace OpenMS
       }
 
       return qscores;
-    }
-
-    /// calculate ID scores for all charges and HCD energies
-    std::unordered_map<int, std::unordered_map<int, float>> PeakGroupScoring::getIDscores(const PeakGroup* pg)
-    {
-      std::unordered_map<int, std::unordered_map<int, float>> idscores;
-
-      auto qscores = pg->getAllQscores();
-      float mass = pg->getMonoMass();
-
-      for (const auto& [charge, qscore] : qscores)
-      {
-        for (const auto& [hcd, weights] : weight_idscore_)
-        {
-          auto affine = weights[0] * qscore + weights[1] * (mass / 20000) + weights[2] * (charge / 30.0) + weights[3];
-          auto idscore = 1.0 / (1.0 + exp(-affine));
-          idscores[charge][hcd] = idscore;
-        }
-      }
-      return idscores;
     }
 
     /// convert PeakGroup into feature (attribute) vector

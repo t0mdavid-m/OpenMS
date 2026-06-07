@@ -120,7 +120,6 @@ namespace OpenMS
     auto ps = config.value("precursor_selection", json::object());
     targeting_.rt_window = ps.value("RT_window", 180.0);
     targeting_.mode = ps.value("target_mode", 0);
-    targeting_.use_idscore = ps.value("IDScore", false);
     targeting_.consider_all_charges = ps.value("AllCharges", false);
     targeting_.charge_based_exclusion = ps.value("ChargeBasedExclusion", false);
     targeting_.hcd_energy = ps.value("HCDEnergy", -1);
@@ -422,12 +421,6 @@ namespace OpenMS
 
   void Config::validate() const
   {
-    if (targeting_.use_idscore && exploration_enabled_)
-      throw std::invalid_argument(
-          "IDScore and exploration cannot both be enabled. "
-          "IDScore determines optimal HCD analytically; "
-          "exploration determines it empirically via CE sweep.");
-
     if (targeting_.conditional_ms2_enabled && targeting_.tagging_follow_up_scan.activation.empty())
       throw std::invalid_argument(
           "Conditional MS2 is enabled but tagging.follow_up_scan is not configured.");

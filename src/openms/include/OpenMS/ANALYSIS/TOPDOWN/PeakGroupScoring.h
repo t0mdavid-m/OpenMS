@@ -40,8 +40,6 @@ namespace OpenMS
     /// get QScores for all charges in a peak group
     static std::unordered_map<int, float> getQscores(const PeakGroup* pg);
 
-    static std::unordered_map<int, std::unordered_map<int, float>> getIDscores(const PeakGroup* pg);
-
     /// Write Csv file for Qscore training.
     static void writeAttCsvForQscoreTraining(const DeconvolvedSpectrum& deconvolved_spectrum, std::fstream& f);
 

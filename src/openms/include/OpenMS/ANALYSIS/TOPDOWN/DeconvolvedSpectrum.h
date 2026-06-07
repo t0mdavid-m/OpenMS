@@ -164,14 +164,6 @@ namespace OpenMS
     void sortByQscore2D();
     /// sort by QScore across all charge states (use best QScore from each PeakGroup)
     void sortByQScoreAllCharges();
-    /// sort by IDScore for the representative charge state (use representative charge and best IDScore for that charge)
-    void sortByIDScoreRepresentative();
-    /// sort by IDScore for the representative charge state for a specific HCD energy
-    void sortByIDScoreRepresentative(int hcd_energy);
-    /// sort by IDScore across all charge states and HCD energies (use globally best IDScore from each PeakGroup)
-    void sortByIDScoreAllCharges();
-    /// sort by IDScore across all charge states for a specific HCD energy
-    void sortByIDScoreAllCharges(int hcd_energy);
     /// Sort by most intense charge state per peak group (descending)
     void sortByIntensity();
 

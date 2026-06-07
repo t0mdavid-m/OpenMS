@@ -183,38 +183,11 @@ namespace OpenMS
     /// get all Q scores
     std::unordered_map<int, float> getAllQscores() const;
 
-    /// get all ID scores
-    std::unordered_map<int, std::unordered_map<int, float>> getAllIDscores() const;
-
     /// get best QScore across all charge states
     float getBestQScore() const;
 
     /// get charge state with best QScore
     int getBestQScoreCharge() const;
-
-    /// get IDScore for specific charge state and HCD energy
-    float getIDScoreForChargeAndHCD(int abs_charge, int hcd_energy) const;
-
-    /// get best IDScore across all charge states for specific HCD energy
-    float getBestIDScoreForHCD(int hcd_energy) const;
-
-    /// get best IDScore for specific charge across all HCD values
-    float getBestIDScoreForCharge(int abs_charge) const;
-
-    /// get HCD value with best IDScore for specific charge
-    int getBestHCDForCharge(int abs_charge) const;
-
-    /// get charge state with best IDScore for specific HCD energy
-    int getBestIDScoreChargeForHCD(int hcd_energy) const;
-
-    /// get best IDScore across all charge states and HCD values
-    float getBestIDScore() const;
-
-    /// get charge state with best IDScore (global maximum)
-    int getBestIDScoreCharge() const;
-
-    /// get HCD value with best IDScore (global maximum)
-    int getBestIDScoreHCD() const;
 
     /// get Q score
     double getQscore() const;
@@ -380,7 +353,6 @@ namespace OpenMS
     /// quality score
     double qscore_ = .0;
     std::unordered_map<int, float>  qscores_;
-    std::unordered_map<int, std::unordered_map<int, float>>  idscores_;
     /// quality score when considering correlation between masses within the same feature.
     double qscore2D_ = -1.0f;
     float avg_ppm_error_ = 0.f;

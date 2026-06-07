@@ -243,23 +243,7 @@ namespace OpenMS
 
   void PrecursorSelection::filterPeakGroupsUsingMassExclusion_(const int ms_level, const double rt)
   {
-    // IDScore replaces QScore but not intensity
-    if (config_.targeting().use_idscore)
-    {
-      if (config_.targeting().consider_all_charges && config_.targeting().hcd_energy < 0) {
-        deconv_.deconvolvedMS1().sortByIDScoreAllCharges();
-      }
-      else if (config_.targeting().consider_all_charges) {
-        deconv_.deconvolvedMS1().sortByIDScoreAllCharges(config_.targeting().hcd_energy);
-      }
-      else if (config_.targeting().hcd_energy < 0) {
-        deconv_.deconvolvedMS1().sortByIDScoreRepresentative();
-      }
-      else {
-        deconv_.deconvolvedMS1().sortByIDScoreRepresentative(config_.targeting().hcd_energy);
-      }
-    }
-    else if (config_.level(ms_level).selection == SelectionMetric::Intensity)
+    if (config_.level(ms_level).selection == SelectionMetric::Intensity)
     {
       deconv_.deconvolvedMS1().sortByIntensity();
     }
@@ -432,21 +416,8 @@ namespace OpenMS
             for (int c = min_c; c <= max_c; ++c)
             {
               if (all_qs.count(c) == 0) { continue; }
-              double s;
+              double s = all_qs.at(c);
               int h = config_.targeting().hcd_energy;
-              if (config_.targeting().use_idscore && config_.targeting().hcd_energy < 0)
-              {
-                s = pg.getBestIDScoreForCharge(c);
-                h = pg.getBestHCDForCharge(c);
-              }
-              else if (config_.targeting().use_idscore)
-              {
-                s = pg.getIDScoreForChargeAndHCD(c, config_.targeting().hcd_energy);
-              }
-              else
-              {
-                s = all_qs.at(c);
-              }
               charges_to_process.push_back({c, s, h});
             }
             std::sort(charges_to_process.begin(), charges_to_process.end(),
@@ -458,25 +429,7 @@ namespace OpenMS
             double score;
             int hcd = config_.targeting().hcd_energy;
 
-            if (config_.targeting().use_idscore && config_.targeting().consider_all_charges && config_.targeting().hcd_energy < 0) {
-              charge = pg.getBestIDScoreCharge();
-              score = pg.getBestIDScore();
-              hcd = pg.getBestIDScoreHCD();
-            }
-            else if (config_.targeting().use_idscore && config_.targeting().consider_all_charges) {
-              charge = pg.getBestIDScoreChargeForHCD(config_.targeting().hcd_energy);
-              score = pg.getBestIDScoreForHCD(config_.targeting().hcd_energy);
-            }
-            else if (config_.targeting().use_idscore && !config_.targeting().consider_all_charges && config_.targeting().hcd_energy < 0) {
-              charge = pg.getRepAbsCharge();
-              score = pg.getBestIDScoreForCharge(charge);
-              hcd = pg.getBestHCDForCharge(charge);
-            }
-            else if (config_.targeting().use_idscore && !config_.targeting().consider_all_charges) {
-              charge = pg.getRepAbsCharge();
-              score = pg.getIDScoreForChargeAndHCD(charge, config_.targeting().hcd_energy);
-            }
-            else if (!config_.targeting().use_idscore && config_.targeting().consider_all_charges) {
+            if (config_.targeting().consider_all_charges) {
               charge = pg.getBestQScoreCharge();
               score = pg.getBestQScore();
             }
@@ -669,31 +622,20 @@ namespace OpenMS
             {
               // Per-(mass, charge) accumulation. No mass-level writes — the mass is never globally excluded.
               const auto key = std::make_pair(nominal_mass, charge);
-              if (!config_.targeting().use_idscore) {
-                auto inter = mass_charge_qscore_map_.find(key);
-                if (inter == mass_charge_qscore_map_.end())
-                {
-                  mass_charge_qscore_map_[key] = score;
-                }
-                else {
-                  mass_charge_qscore_map_[key] = std::max(inter->second, score);
-                }
-                if (mass_charge_qscore_map_[key] > config_.targeting().tqscore_threshold)
-                {
-                  tqscore_exceeding_mass_charge_set_.insert(key);
-                }
+              auto inter = mass_charge_qscore_map_.find(key);
+              if (inter == mass_charge_qscore_map_.end())
+              {
+                mass_charge_qscore_map_[key] = score;
               }
               else {
-                auto inter = mass_charge_qscore_map_.find(key);
-                if (inter == mass_charge_qscore_map_.end()) { mass_charge_qscore_map_[key] = 1 - score; }
-                else { mass_charge_qscore_map_[key] *= 1 - score; }
-                if (1 - mass_charge_qscore_map_[key] * tqscore_factor_for_exclusion > config_.targeting().tqscore_threshold)
-                {
-                  tqscore_exceeding_mass_charge_set_.insert(key);
-                }
+                mass_charge_qscore_map_[key] = std::max(inter->second, score);
+              }
+              if (mass_charge_qscore_map_[key] > config_.targeting().tqscore_threshold)
+              {
+                tqscore_exceeding_mass_charge_set_.insert(key);
               }
             }
-            else if (!config_.targeting().use_idscore) {
+            else {
               // Compute total qscore
               auto inter = mass_qscore_map_.find(nominal_mass);
               if (inter == mass_qscore_map_.end())
@@ -710,19 +652,6 @@ namespace OpenMS
 
               // Add to exclusion list if neccessary
               if (mass_qscore_map_[nominal_mass] > config_.targeting().tqscore_threshold)
-              {
-                tqscore_exceeding_mass_rt_map_[nominal_mass] = rt;
-                tqscore_exceeding_mz_rt_map_[integer_mz] = rt;
-              }
-            }
-            else {
-              // Compute total qscore
-              auto inter = mass_qscore_map_.find(nominal_mass);
-              if (inter == mass_qscore_map_.end()) { mass_qscore_map_[nominal_mass] = 1 - score; }
-              else { mass_qscore_map_[nominal_mass] *= 1 - score; }
-
-              // Add to exclusion list if neccessary
-              if (1 - mass_qscore_map_[nominal_mass] * tqscore_factor_for_exclusion > config_.targeting().tqscore_threshold)
               {
                 tqscore_exceeding_mass_rt_map_[nominal_mass] = rt;
                 tqscore_exceeding_mz_rt_map_[integer_mz] = rt;
@@ -793,14 +722,6 @@ namespace OpenMS
       {
         const auto key = std::make_pair(nominal_mass, cit->second);
         tqscore_exceeding_mass_charge_set_.erase(key);
-        if (config_.targeting().use_idscore)
-        {
-          auto ait = mass_charge_qscore_map_.find(key);
-          if (ait != mass_charge_qscore_map_.end())
-          {
-            ait->second /= (1 - qscore);
-          }
-        }
       }
     }
   }

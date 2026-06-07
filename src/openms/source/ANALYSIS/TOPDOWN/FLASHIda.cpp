@@ -746,7 +746,6 @@ FLASHIda::FLASHIda(char* arg) :
       int n = selection_.filterAndRank(mzs, ints, length, rt_min, 1, faims_cv);
       const auto& selected = selection_.selectedPeakGroups();
       const auto& sel_charges = selection_.triggerCharges();
-      const auto& sel_hcds = selection_.triggerHcds();
       int commands_pushed = 0;
       std::vector<ScanCommand> ms2_commands;
       
@@ -777,8 +776,6 @@ FLASHIda::FLASHIda(char* arg) :
           for (const auto& sc : config_.level(2).scans)
           {
             ScanConfig ms2_config = sc;
-            if (config_.targeting().use_idscore)
-              ms2_config.collision_energy = sel_hcds[i];
             ScanCommand cmd = queue_.buildMS2(selected[i], sel_charges[i], ms2_config, 2, tracking_id);
             cmd.faims_cv = faims_cv;  // MS2 carries parent MS1's CV
             queue_.push(cmd);
@@ -1120,7 +1117,8 @@ FLASHIda::FLASHIda(char* arg) :
     // Step 2: Cycle time -- force MS1 if too long since last survey scan
     // Suppressed while any exploration group is active.
     // Queued at priority 0 (not returned immediately) so it goes through normal dequeue.
-    if (config_.scheduling().cycle_time_enabled 
+    if (config_.scheduling().cycle_time_enabled
+        && !exploration_active_.load(std::memory_order_acquire)
         && queue_.msSinceLastMS1() > static_cast<uint64_t>(config_.scheduling().cycle_time_ms)
     )
     {
