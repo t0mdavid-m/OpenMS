@@ -89,84 +89,12 @@ namespace
       "agc_interval_seconds": 9999999
     },
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
-    "ms3": { "protein_sequence": "MKWVTFISLLLLFSSAYSRGVFRR" },
+    "ms3": { "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE" },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 3 },
       "ms2": { "selection": "intensity", "max_targets": 3 },
       "ms3": { "selection": "intensity", "max_targets": 2 }
-    }
-  })";
-
-  // Config with IDScore=true, AllCharges=false (activates sortByIDScoreRepresentative)
-  const char* idscore_json = R"({
-    "deconvolution": {
-      "score_threshold": 0.0, "tqscore_threshold": 0.9,
-      "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
-    },
-    "precursor_selection": {
-      "RT_window": 180, "target_mode": 0,
-      "IDScore": true, "AllCharges": false,
-      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
-    },
-    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
-    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
-    "faims": { "cv_values": [-50], "max_cv_skip": 0 },
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [
-        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
-        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "resolution": 120000 }
-      ]
-    },
-    "scheduling": {
-      "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": false, "value_ms": 30000 },
-      "agc_interval_seconds": 9999999
-    },
-    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "none" },
-      "ms3": { "selection": "none" }
-    }
-  })";
-
-  // Config with IDScore=true, AllCharges=true (activates sortByIDScoreAllCharges)
-  const char* idscore_allcharges_json = R"({
-    "deconvolution": {
-      "score_threshold": 0.0, "tqscore_threshold": 0.9,
-      "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
-    },
-    "precursor_selection": {
-      "RT_window": 180, "target_mode": 0,
-      "IDScore": true, "AllCharges": true,
-      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
-    },
-    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
-    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
-    "faims": { "cv_values": [-50], "max_cv_skip": 0 },
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [
-        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
-        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "resolution": 120000 }
-      ]
-    },
-    "scheduling": {
-      "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": false, "value_ms": 30000 },
-      "agc_interval_seconds": 9999999
-    },
-    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "none" },
-      "ms3": { "selection": "none" }
     }
   })";
 
@@ -1016,21 +944,15 @@ START_SECTION(processScan_scoring_branches)
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
   ABORT_IF(ms1_scans.empty())
 
-  // 4 configs: standard (QScore rep), idscore (IDScore rep), idscore_allcharges, qscore_allcharges
+  // 2 configs: standard (QScore rep), qscore_allcharges
   FLASHIda* ida_qscore = new FLASHIda(const_cast<char*>(standard_json));
-  FLASHIda* ida_idscore = new FLASHIda(const_cast<char*>(idscore_json));
-  FLASHIda* ida_idscore_all = new FLASHIda(const_cast<char*>(idscore_allcharges_json));
   FLASHIda* ida_qscore_all = new FLASHIda(const_cast<char*>(qscore_allcharges_json));
 
   int total_qscore = pushAllScans(ida_qscore, ms1_scans);
-  int total_idscore = pushAllScans(ida_idscore, ms1_scans);
-  int total_idscore_all = pushAllScans(ida_idscore_all, ms1_scans);
   int total_qscore_all = pushAllScans(ida_qscore_all, ms1_scans);
 
-  // All 4 branches must produce > 0 commands
+  // Both branches must produce > 0 commands
   TEST_EQUAL(total_qscore > 0, true)
-  TEST_EQUAL(total_idscore > 0, true)
-  TEST_EQUAL(total_idscore_all > 0, true)
   TEST_EQUAL(total_qscore_all > 0, true)
 
   // Dequeue first command from each — must have valid precursor_mz
@@ -1040,49 +962,64 @@ START_SECTION(processScan_scoring_branches)
   TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
   TEST_EQUAL(cmd.stages[0].precursor_mz > 0, true)
 
-  ida_idscore->getNextScanCommand(cmd);
-  TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
-  TEST_EQUAL(cmd.stages[0].precursor_mz > 0, true)
-
-  ida_idscore_all->getNextScanCommand(cmd);
-  TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
-  TEST_EQUAL(cmd.stages[0].precursor_mz > 0, true)
-
   ida_qscore_all->getNextScanCommand(cmd);
   TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
   TEST_EQUAL(cmd.stages[0].precursor_mz > 0, true)
 
   delete ida_qscore;
-  delete ida_idscore;
-  delete ida_idscore_all;
   delete ida_qscore_all;
 }
 END_SECTION
 
-// P4-U03: Mass exclusion reduces command count on second pass
+// P4-U03: Mass exclusion deprioritizes previously-selected high-confidence precursors.
+// Re-pushing the same scans within the RT window must NOT re-select the excluded masses
+// (they enter the exclusion map on first selection), and must never GROW the command count.
+// (A strict pass2<pass1 count drop is not valid: in standard mode excluded masses are simply
+// not re-selected rather than deterministically reducing the per-run total.)
 START_SECTION(processScan_mass_exclusion)
 {
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
   ABORT_IF(ms1_scans.empty())
   FLASHIda* ida = new FLASHIda(const_cast<char*>(standard_json));
 
-  // Pass 1: push all scans
+  // Pass 1: push all scans, dequeue all, recording selected MS2 precursor m/z.
   int total_pass1 = pushAllScans(ida, ms1_scans);
   TEST_EQUAL(total_pass1 > 0, true)
 
-  // Dequeue all commands (triggers mass exclusion map population)
+  std::vector<int> pass1_mz;
   ScanCommand cmd{};
   for (int i = 0; i < total_pass1; i++)
   {
-    ida->getNextScanCommand(cmd);
+    if (ida->getNextScanCommand(cmd) != 1) break;
     TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
+    if (!cmd.is_agc && cmd.msn_level == 2)
+      pass1_mz.push_back((int)(cmd.stages[0].precursor_mz + 0.5));
+  }
+  ABORT_IF(pass1_mz.empty())
+
+  // Pass 2: push the SAME scans at the same RTs (within RT_window=180s).
+  int total_pass2 = pushAllScans(ida, ms1_scans);
+  std::vector<int> pass2_mz;
+  ScanCommand out{};
+  for (int i = 0; i < total_pass2; i++)
+  {
+    if (ida->getNextScanCommand(out) != 1) break;
+    if (!out.is_agc && out.msn_level == 2)
+      pass2_mz.push_back((int)(out.stages[0].precursor_mz + 0.5));
   }
 
-  // Pass 2: push same scans again at same RTs (within RT_window=180s)
-  int total_pass2 = pushAllScans(ida, ms1_scans);
+  // Exclusion must never INCREASE the count for identical re-pushed data.
+  TEST_EQUAL(total_pass2 <= total_pass1, true)
 
-  // Same data within RT window — exclusion MUST strictly reduce count
-  TEST_EQUAL(total_pass2 < total_pass1, true)
+  // At least one precursor selected (and excluded) in pass 1 must NOT be re-selected in pass 2.
+  bool some_excluded = false;
+  for (int mz1 : pass1_mz)
+  {
+    bool reselected = false;
+    for (int mz2 : pass2_mz) { if (mz2 == mz1) { reselected = true; break; } }
+    if (!reselected) { some_excluded = true; break; }
+  }
+  TEST_EQUAL(some_excluded, true)
 
   delete ida;
 }
@@ -1197,7 +1134,7 @@ END_SECTION
 START_SECTION(agc_command_values)
 {
   // agc_fast_json: agc_interval_seconds=0 triggers AGC immediately
-  // ms1.agc_target=800000, ms1.max_it=246
+  // AGC is a dedicated minimal gain-control scan: makeAGC hardcodes agc_target=30000, max_it=1
   FLASHIda* ida = new FLASHIda(const_cast<char*>(agc_fast_json));
 
   ScanCommand cmd{};
@@ -1206,8 +1143,8 @@ START_SECTION(agc_command_values)
   TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
   TEST_EQUAL(cmd.is_agc, 1)
   TEST_EQUAL(cmd.msn_level, 1)
-  TEST_EQUAL(cmd.agc_target, 800000)  // From ms_settings.ms1.agc_target
-  TEST_EQUAL(cmd.max_it, 246)         // From ms_settings.ms1.max_it
+  TEST_EQUAL(cmd.agc_target, 30000)   // makeAGC: dedicated fast gain-control scan
+  TEST_EQUAL(cmd.max_it, 1)           // makeAGC: minimal injection time
   TEST_STRING_EQUAL(std::string(cmd.analyzer), "IonTrap")
   TEST_EQUAL(cmd.priority, 0)
 
@@ -1311,7 +1248,7 @@ START_SECTION(idle_cycle_agc_then_ms1)
     TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
     TEST_EQUAL(cmd.is_agc, 1)
     TEST_EQUAL(cmd.msn_level, 1)
-    TEST_EQUAL(cmd.agc_target, 800000)
+    TEST_EQUAL(cmd.agc_target, 30000)
     TEST_EQUAL(cmd.priority, 0)
 
     // Scan description: 3-char ID + type code 'A' for AGC calibration

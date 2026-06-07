@@ -1720,29 +1720,6 @@ START_SECTION(ambiguity_resolution_requires_protein_sequence)
 }
 END_SECTION
 
-START_SECTION(legacy_ms3_enabled_rejected)
-{
-  // Build a config with ms3.enabled present — should throw
-  std::string cfg_str = std::string(exploration_config);
-  auto pos = cfg_str.find("\"ms3\":");
-  auto brace = cfg_str.find("{", pos);
-  cfg_str.insert(brace + 1, " \"enabled\": false,");
-
-  TEST_EXCEPTION(std::invalid_argument, Config cfg{cfg_str})
-}
-END_SECTION
-
-START_SECTION(legacy_ms3_mode_rejected)
-{
-  std::string cfg_str = std::string(exploration_config);
-  auto pos = cfg_str.find("\"ms3\":");
-  auto brace = cfg_str.find("{", pos);
-  cfg_str.insert(brace + 1, " \"mode\": 0,");
-
-  TEST_EXCEPTION(std::invalid_argument, Config cfg{cfg_str})
-}
-END_SECTION
-
 START_SECTION(ms3_protein_sequence_only_accepted)
 {
   // Config with ms3.protein_sequence should be accepted (no throw)

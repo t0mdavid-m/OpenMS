@@ -154,7 +154,7 @@ namespace
         result.ms2_cmds.push_back(cmd);
       else if (cmd.msn_level == 1)
         result.ms1_cmds.push_back(cmd);
-      if (cmd.is_agc && result.ms2_cmds.size() > 0) break; // idle = queue drained
+      if (cmd.is_agc) break; // idle-cycle AGC => real queue drained (engine emits idle cmds forever)
     }
 
     // 3. Feed MS2 results back -> may create MS3 commands
@@ -477,9 +477,11 @@ START_SECTION(join_integrity)
   // Full MS1->MS2->MS3 cycle (with MS3 fed back)
   auto cycle = runFullCycle(&ida, ms1_scans, ms2_scans);
 
-  // Drain any remaining commands
+  // Drain any remaining commands (break on the idle-cycle AGC; the engine emits idle
+  // AGC/MS1 commands indefinitely once the real queue is empty, so an unbounded drain
+  // would loop forever and OOM).
   ScanCommand cmd;
-  while (ida.getNextScanCommand(cmd) > 0) {}
+  while (ida.getNextScanCommand(cmd) > 0) { if (cmd.is_agc) break; }
 
   // Parse both files
   auto cmd_tsv = TSVFile::parse(commands_file);
