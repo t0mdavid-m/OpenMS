@@ -47,8 +47,8 @@ namespace
     },
     "scheduling": {
       "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": true, "value_ms": 30000 },
-      "agc_interval_seconds": 30
+      "scan_timeout": { "enabled": false, "value_ms": 30000 },
+      "agc_interval_seconds": 9999999
     },
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
@@ -78,12 +78,15 @@ namespace
       "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
       "ms2": [
         { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }
+      ],
+      "ms3": [
+        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 35, "resolution": 120000 }
       ]
     },
     "scheduling": {
       "cycle_time": { "enabled": false, "value_ms": 60000 },
       "scan_timeout": { "enabled": false, "value_ms": 30000 },
-      "agc_interval_seconds": 30
+      "agc_interval_seconds": 9999999
     },
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "ms3": { "protein_sequence": "MKWVTFISLLLLFSSAYSRGVFRR" },
@@ -119,8 +122,8 @@ namespace
     },
     "scheduling": {
       "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": true, "value_ms": 30000 },
-      "agc_interval_seconds": 30
+      "scan_timeout": { "enabled": false, "value_ms": 30000 },
+      "agc_interval_seconds": 9999999
     },
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
@@ -155,8 +158,8 @@ namespace
     },
     "scheduling": {
       "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": true, "value_ms": 30000 },
-      "agc_interval_seconds": 30
+      "scan_timeout": { "enabled": false, "value_ms": 30000 },
+      "agc_interval_seconds": 9999999
     },
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
@@ -191,8 +194,8 @@ namespace
     },
     "scheduling": {
       "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": true, "value_ms": 30000 },
-      "agc_interval_seconds": 30
+      "scan_timeout": { "enabled": false, "value_ms": 30000 },
+      "agc_interval_seconds": 9999999
     },
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
@@ -227,8 +230,8 @@ namespace
     },
     "scheduling": {
       "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": true, "value_ms": 30000 },
-      "agc_interval_seconds": 30
+      "scan_timeout": { "enabled": false, "value_ms": 30000 },
+      "agc_interval_seconds": 9999999
     },
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
@@ -263,8 +266,8 @@ namespace
     },
     "scheduling": {
       "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": true, "value_ms": 30000 },
-      "agc_interval_seconds": 30
+      "scan_timeout": { "enabled": false, "value_ms": 30000 },
+      "agc_interval_seconds": 9999999
     },
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "../../FlashIDA/test-data/configs/test_fasta.fasta", "inclusion_list": "", "ptm_list": "" },
@@ -302,7 +305,7 @@ namespace
     "scheduling": {
       "cycle_time": { "enabled": false, "value_ms": 60000 },
       "scan_timeout": { "enabled": false, "value_ms": 30000 },
-      "agc_interval_seconds": 30
+      "agc_interval_seconds": 9999999
     },
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "conditional_ms2": true,
@@ -337,7 +340,7 @@ namespace
     },
     "scheduling": {
       "cycle_time": { "enabled": true, "value_ms": 0 },
-      "scan_timeout": { "enabled": true, "value_ms": 30000 },
+      "scan_timeout": { "enabled": false, "value_ms": 30000 },
       "agc_interval_seconds": 999999
     },
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
@@ -410,8 +413,8 @@ namespace
     },
     "scheduling": {
       "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": true, "value_ms": 30000 },
-      "agc_interval_seconds": 30
+      "scan_timeout": { "enabled": false, "value_ms": 30000 },
+      "agc_interval_seconds": 9999999
     },
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "conditional_ms2": true,
@@ -449,8 +452,8 @@ namespace
     },
     "scheduling": {
       "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": true, "value_ms": 30000 },
-      "agc_interval_seconds": 30
+      "scan_timeout": { "enabled": false, "value_ms": 30000 },
+      "agc_interval_seconds": 9999999
     },
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
@@ -521,8 +524,8 @@ namespace
     },
     "scheduling": {
       "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": true, "value_ms": 30000 },
-      "agc_interval_seconds": 30
+      "scan_timeout": { "enabled": false, "value_ms": 30000 },
+      "agc_interval_seconds": 9999999
     },
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
@@ -556,8 +559,8 @@ namespace
     },
     "scheduling": {
       "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": true, "value_ms": 30000 },
-      "agc_interval_seconds": 30
+      "scan_timeout": { "enabled": false, "value_ms": 30000 },
+      "agc_interval_seconds": 9999999
     },
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
@@ -591,8 +594,8 @@ namespace
     },
     "scheduling": {
       "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": true, "value_ms": 30000 },
-      "agc_interval_seconds": 30
+      "scan_timeout": { "enabled": false, "value_ms": 30000 },
+      "agc_interval_seconds": 9999999
     },
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
@@ -626,8 +629,8 @@ namespace
     },
     "scheduling": {
       "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": true, "value_ms": 30000 },
-      "agc_interval_seconds": 30
+      "scan_timeout": { "enabled": false, "value_ms": 30000 },
+      "agc_interval_seconds": 9999999
     },
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
@@ -1478,7 +1481,7 @@ START_SECTION(processScan_ms1_min_charge_filter)
       "max_charge": 50,
       "min_mass": 500,
       "max_mass": 50000,
-      "tol": [10, 10]
+      "tol": [10, 10, 10]
     },
     "precursor_selection": {
       "RT_window": 180,
@@ -1525,7 +1528,8 @@ START_SECTION(processScan_ms1_min_charge_filter)
     },
     "scheduling": {
       "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": false, "value_ms": 30000 }
+      "scan_timeout": { "enabled": false, "value_ms": 30000 },
+      "agc_interval_seconds": 9999999
     },
     "files": {
       "target_logs": [],
@@ -1544,7 +1548,7 @@ START_SECTION(processScan_ms1_min_charge_filter)
   FLASHIda ida(const_cast<char*>(min_charge_json));
 
   // Load same MS1 scans that normally produce commands
-  auto scans = loadTsvScans("../../FlashIDA/test-data/ms1_standard.txt");
+  auto scans = loadTsvScans(ms1_tsv_path);
   ABORT_IF(scans.empty())
 
   for (const auto& scan : scans)

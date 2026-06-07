@@ -116,6 +116,9 @@ namespace
           "collision_energy": 29,
           "resolution": 120000
         }
+      ],
+      "ms3": [
+        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 35, "resolution": 120000 }
       ]
     },
     "scheduling": {
@@ -191,6 +194,9 @@ namespace
           "collision_energy": 29,
           "resolution": 120000
         }
+      ],
+      "ms3": [
+        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 35, "resolution": 120000 }
       ]
     },
     "scheduling": {
@@ -275,6 +281,9 @@ namespace
           "collision_energy": 29,
           "resolution": 120000
         }
+      ],
+      "ms3": [
+        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 35, "resolution": 120000 }
       ]
     },
     "scheduling": {
