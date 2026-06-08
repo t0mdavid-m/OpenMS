@@ -20,6 +20,9 @@
 #include <map>
 #include <set>
 #include <thread>  // std::this_thread::sleep_for
+#include <algorithm>  // std::max
+#include <sstream>    // std::istringstream / std::ostringstream
+#include <cstdio>     // std::remove
 
 using namespace OpenMS;
 
@@ -537,41 +540,6 @@ namespace
     }
   })";
 
-  // Config with max_targets=5 (cap test)
-  const char* max5_json = R"({
-    "deconvolution": {
-      "score_threshold": 0.0, "tqscore_threshold": 0.9,
-      "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
-    },
-    "precursor_selection": {
-      "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": false,
-      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
-    },
-    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
-    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
-    "faims": { "cv_values": [-50], "max_cv_skip": 0 },
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [
-        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }
-      ]
-    },
-    "scheduling": {
-      "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": false, "value_ms": 30000 },
-      "agc_interval_seconds": 9999999
-    },
-    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 5 },
-      "ms2": { "selection": "none" },
-      "ms3": { "selection": "none" }
-    }
-  })";
-
   // TSV file paths relative to the OpenMS build directory (CTest working dir)
   const std::string ms1_tsv_path = "../../FlashIDA/test-data/spectra/ms1_standard.txt";
   const std::string ms2_tsv_path = "../../FlashIDA/test-data/spectra/ms2_hcd_fragment.txt";
@@ -631,6 +599,78 @@ namespace
       total += n;
     }
     return total;
+  }
+
+  // Build a cap-test config from the max1_json template: set ms1.max_targets, optionally extend the
+  // single HCD MS2 scan config to HCD+ETD, and enable per-scan results logging (runtime.scan_results_path).
+  std::string buildCapConfig(int max_targets, bool etd, const std::string& results_path)
+  {
+    std::string j(max1_json);
+    {
+      const std::string key = "\"max_targets\": 1";  // sole occurrence (ms1 selection_strategy)
+      auto p = j.find(key);
+      if (p != std::string::npos) j.replace(p, key.size(), "\"max_targets\": " + std::to_string(max_targets));
+    }
+    if (etd)
+    {
+      const std::string hcd = R"({ "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 })";
+      auto p = j.find(hcd);
+      if (p != std::string::npos)
+        j.replace(p, hcd.size(),
+                  hcd + R"(,
+        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "resolution": 120000 })");
+    }
+    {
+      const std::string files_key = "\"files\":";
+      auto p = j.find(files_key);
+      if (p != std::string::npos)
+        j.insert(p, "\"runtime\": { \"scan_results_path\": \"" + results_path + "\" }, ");
+    }
+    return j;
+  }
+
+  // Parse a FLASHIda scan_results.tsv. Only MS1 scans are pushed in the cap test, so every data row is
+  // an MS1 result row; return {commands_pushed, count(child_ids)} per row, in file order.
+  std::vector<std::pair<int, int>> readMs1ResultRows(const std::string& path)
+  {
+    std::vector<std::pair<int, int>> rows;
+    std::ifstream f(path);
+    std::string header;
+    if (! std::getline(f, header)) return rows;
+    std::vector<std::string> cols;
+    {
+      std::istringstream hs(header);
+      std::string c;
+      while (std::getline(hs, c, '\t')) cols.push_back(c);
+    }
+    int ci_pushed = -1, ci_child = -1;
+    for (int i = 0; i < (int)cols.size(); i++)
+    {
+      if (cols[i] == "commands_pushed") ci_pushed = i;
+      else if (cols[i] == "child_ids") ci_child = i;
+    }
+    if (ci_pushed < 0 || ci_child < 0) return rows;
+    std::string line;
+    while (std::getline(f, line))
+    {
+      if (line.empty()) continue;
+      std::vector<std::string> fields;
+      {
+        std::istringstream ls(line);
+        std::string fld;
+        while (std::getline(ls, fld, '\t')) fields.push_back(fld);
+      }
+      int pushed = (ci_pushed < (int)fields.size() && ! fields[ci_pushed].empty()) ? std::stoi(fields[ci_pushed]) : 0;
+      int nchild = 0;
+      if (ci_child < (int)fields.size() && ! fields[ci_child].empty())
+      {
+        std::istringstream cs(fields[ci_child]);
+        std::string cid;
+        while (std::getline(cs, cid, ';')) { if (! cid.empty()) nchild++; }
+      }
+      rows.emplace_back(pushed, nchild);
+    }
+    return rows;
   }
 }
 
@@ -1452,28 +1492,72 @@ START_SECTION(processScan_ms1_none_selection)
 }
 END_SECTION
 
-// max_targets cap: max=1 <= max=3 <= max=5
+// max_targets caps precursor selection PER MS1 scan: children (MS2 commands) per scan rise with the cap,
+// and equal (precursors selected) x (MS2 activations per precursor). Verified via the engine's own
+// per-scan logging (runtime.scan_results_path -> commands_pushed / child_ids), across a 2 (activation) x
+// 3 (cap) matrix. A *cumulative* command total across all scans is NOT a valid cap check: selection
+// couples to persistent cross-scan state (mass_qscore_map_ score-drop skip, PrecursorSelection.cpp:647-659)
+// that depends on the cap, so the running total is non-monotonic in max_targets. We therefore compare per
+// scan, and across caps only on scan 0 (all engines start from an empty exclusion state). Precursor
+// selection is independent of the ms2 array, so an HCD+ETD engine selects the same precursors as its HCD
+// twin and logs exactly 2x the children (asserted on every scan).
 START_SECTION(processScan_ms1_max_targets_cap)
 {
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
   ABORT_IF(ms1_scans.empty())
+  const int n = (int)ms1_scans.size();
 
-  FLASHIda* ida1 = new FLASHIda(const_cast<char*>(max1_json));
-  FLASHIda* ida3 = new FLASHIda(const_cast<char*>(standard_json));
-  FLASHIda* ida5 = new FLASHIda(const_cast<char*>(max5_json));
+  // Run all MS1 scans through a fresh engine (max_targets, HCD or HCD+ETD) with per-scan results logging;
+  // return children-per-MS1-scan and assert the logging join contract (commands_pushed == #child_ids).
+  auto runCase = [&](int max_targets, bool etd) -> std::vector<int> {
+    std::string path = std::string("p4u_maxcap_") + (etd ? "etd" : "hcd") + "_"
+                     + std::to_string(max_targets) + "_results.tsv";
+    std::remove(path.c_str());  // results stream opens in append mode -> ensure a fresh file
+    std::string cfg = buildCapConfig(max_targets, etd, path);
+    FLASHIda* ida = new FLASHIda(const_cast<char*>(cfg.c_str()));
+    for (const auto& s : ms1_scans)
+      ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1,
+                       ("scan_" + s.scan_id).c_str());
+    delete ida;  // flush + close the results TSV
+    std::vector<int> children;
+    for (const auto& r : readMs1ResultRows(path)) { TEST_EQUAL(r.first, r.second) children.push_back(r.first); }
+    std::remove(path.c_str());
+    return children;
+  };
 
-  int total1 = pushAllScans(ida1, ms1_scans);
-  int total3 = pushAllScans(ida3, ms1_scans);
-  int total5 = pushAllScans(ida5, ms1_scans);
+  std::vector<int> A1 = runCase(1, false), A3 = runCase(3, false), A5 = runCase(5, false);
+  std::vector<int> B1 = runCase(1, true),  B3 = runCase(3, true),  B5 = runCase(5, true);
 
-  TEST_EQUAL(total1 > 0, true)
-  TEST_EQUAL(total3 >= total1, true)
-  TEST_EQUAL(total5 >= total3, true)
-  TEST_EQUAL(total1 <= (int)ms1_scans.size(), true)
+  // 1) exactly one MS1 result row per scan
+  TEST_EQUAL((int)A1.size(), n) TEST_EQUAL((int)A3.size(), n) TEST_EQUAL((int)A5.size(), n)
+  TEST_EQUAL((int)B1.size(), n) TEST_EQUAL((int)B3.size(), n) TEST_EQUAL((int)B5.size(), n)
+  ABORT_IF((int)A1.size() != n || (int)A3.size() != n || (int)A5.size() != n
+           || (int)B1.size() != n || (int)B3.size() != n || (int)B5.size() != n)
 
-  delete ida1;
-  delete ida3;
-  delete ida5;
+  // 3) per-scan cap bound (with activation factor): children never exceed max_targets x activations
+  for (int v : A1) TEST_EQUAL(v <= 1, true)
+  for (int v : A3) TEST_EQUAL(v <= 3, true)
+  for (int v : A5) TEST_EQUAL(v <= 5, true)
+  for (int v : B1) TEST_EQUAL(v <= 2, true)
+  for (int v : B3) TEST_EQUAL(v <= 6, true)
+  for (int v : B5) TEST_EQUAL(v <= 10, true)
+
+  // 4) more max_targets -> more children, on scan 0 (clean empty exclusion state for all engines)
+  TEST_EQUAL(A1[0] <= A3[0], true) TEST_EQUAL(A3[0] <= A5[0], true)
+  TEST_EQUAL(B1[0] <= B3[0], true) TEST_EQUAL(B3[0] <= B5[0], true)
+
+  // 5) HCD+ETD logs exactly 2x the children of its HCD twin, on EVERY scan (the activation multiplier
+  //    that made the old cumulative comparison invalid)
+  for (int i = 0; i < n; i++)
+  {
+    TEST_EQUAL(B1[i], 2 * A1[i])
+    TEST_EQUAL(B3[i], 2 * A3[i])
+    TEST_EQUAL(B5[i], 2 * A5[i])
+  }
+
+  // 6) non-vacuous: a larger cap really selects > 1 precursor on some scan
+  int maxA5 = 0; for (int v : A5) maxA5 = std::max(maxA5, v);
+  TEST_EQUAL(maxA5 > 1, true)
 }
 END_SECTION
 
