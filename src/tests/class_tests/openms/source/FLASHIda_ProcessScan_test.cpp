@@ -542,6 +542,9 @@ namespace
 
   // TSV file paths relative to the OpenMS build directory (CTest working dir)
   const std::string ms1_tsv_path = "../../FlashIDA/test-data/spectra/ms1_standard.txt";
+  // 8 rich, co-eluting MS1 scans (raw 326-350) from a complex E. coli run, each with many distinct
+  // selectable precursors (charge>=4, ChargeSNR>=1, mass 500-50k) -> the max_targets cap actually bites.
+  const std::string ms1_ecoli_rich_tsv_path = "../../FlashIDA/test-data/spectra/ms1_ecoli_rich.txt";
   const std::string ms2_tsv_path = "../../FlashIDA/test-data/spectra/ms2_hcd_fragment.txt";
   const std::string ms2_tmt_tsv_path = "../../FlashIDA/test-data/spectra/ms2_quant_tmt.txt";
   const std::string ms1_cytc_tsv_path = "../../FlashIDA/test-data/spectra/ms1_cytc.txt";
@@ -1503,7 +1506,7 @@ END_SECTION
 // twin and logs exactly 2x the children (asserted on every scan).
 START_SECTION(processScan_ms1_max_targets_cap)
 {
-  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  auto ms1_scans = loadTsvScans(ms1_ecoli_rich_tsv_path);
   ABORT_IF(ms1_scans.empty())
   const int n = (int)ms1_scans.size();
 
@@ -1546,7 +1549,13 @@ START_SECTION(processScan_ms1_max_targets_cap)
   TEST_EQUAL(A1[0] <= A3[0], true) TEST_EQUAL(A3[0] <= A5[0], true)
   TEST_EQUAL(B1[0] <= B3[0], true) TEST_EQUAL(B3[0] <= B5[0], true)
 
-  // 5) HCD+ETD logs exactly 2x the children of its HCD twin, on EVERY scan (the activation multiplier
+  // 5) the cap bites at scan 0 (rich co-eluting E. coli precursors): exactly 1 at cap=1, strictly more
+  //    as the cap grows (these rich scans offer >=9 selectable precursors each)
+  TEST_EQUAL(A1[0], 1)
+  TEST_EQUAL(A3[0] >= 2, true)
+  TEST_EQUAL(A5[0] > A1[0], true)
+
+  // 6) HCD+ETD logs exactly 2x the children of its HCD twin, on EVERY scan (the activation multiplier
   //    that made the old cumulative comparison invalid)
   for (int i = 0; i < n; i++)
   {
@@ -1555,7 +1564,7 @@ START_SECTION(processScan_ms1_max_targets_cap)
     TEST_EQUAL(B5[i], 2 * A5[i])
   }
 
-  // 6) non-vacuous: a larger cap really selects > 1 precursor on some scan
+  // 7) non-vacuous: a larger cap really selects > 1 precursor on some scan
   int maxA5 = 0; for (int v : A5) maxA5 = std::max(maxA5, v);
   TEST_EQUAL(maxA5 > 1, true)
 }
