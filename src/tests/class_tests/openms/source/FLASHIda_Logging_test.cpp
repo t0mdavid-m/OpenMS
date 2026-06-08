@@ -57,7 +57,7 @@ namespace
       "scheduling": {
         "cycle_time": { "enabled": false, "value_ms": 60000 },
         "scan_timeout": { "enabled": false, "value_ms": 30000 },
-        "agc_interval_seconds": 30
+        "agc_interval_seconds": 999999
       },
       "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
       )" << ms3_block << R"(

@@ -17,6 +17,8 @@
 #include <string>
 #include <cstring>
 #include <vector>
+#include <map>
+#include <set>
 #include <thread>  // std::this_thread::sleep_for
 
 using namespace OpenMS;
@@ -573,6 +575,8 @@ namespace
   const std::string ms1_tsv_path = "../../FlashIDA/test-data/spectra/ms1_standard.txt";
   const std::string ms2_tsv_path = "../../FlashIDA/test-data/spectra/ms2_hcd_fragment.txt";
   const std::string ms2_tmt_tsv_path = "../../FlashIDA/test-data/spectra/ms2_quant_tmt.txt";
+  const std::string ms1_cytc_tsv_path = "../../FlashIDA/test-data/spectra/ms1_cytc.txt";
+  const std::string ms2_cytc_tsv_path = "../../FlashIDA/test-data/spectra/ms2_cytc_scan149.txt";
   const std::string fasta_path = "../../FlashIDA/test-data/configs/test_fasta.fasta";
 
   struct ScanData
@@ -812,8 +816,12 @@ END_SECTION
 // P4-U07: MS3 commands are pushed at priority 1 — hard positive (golden file confirms)
 START_SECTION(processScan_ms3_commands)
 {
-  auto ms1_scans = loadTsvScans(ms1_tsv_path);
-  auto ms2_scans = loadTsvScans(ms2_tsv_path);
+  // Use cytochrome-c MS1 + MS2 (scan 149) so the precursor and the fragment spectrum
+  // match ms3_mode1_json.protein_sequence (cytochrome-c). ms2_hcd_fragment.txt yields
+  // no cytC fragment matches at min_charge 4, and the E. coli ms1_standard.txt would
+  // feed a non-matching precursor mass into MS2 deconvolution -> 0 MS3 targets.
+  auto ms1_scans = loadTsvScans(ms1_cytc_tsv_path);
+  auto ms2_scans = loadTsvScans(ms2_cytc_tsv_path);
   ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
   FLASHIda* ida = new FLASHIda(const_cast<char*>(ms3_mode1_json));
 
@@ -971,55 +979,112 @@ START_SECTION(processScan_scoring_branches)
 }
 END_SECTION
 
-// P4-U03: Mass exclusion deprioritizes previously-selected high-confidence precursors.
-// Re-pushing the same scans within the RT window must NOT re-select the excluded masses
-// (they enter the exclusion map on first selection), and must never GROW the command count.
-// (A strict pass2<pass1 count drop is not valid: in standard mode excluded masses are simply
-// not re-selected rather than deterministically reducing the per-run total.)
+// P4-U03a: Mass exclusion deprioritizes previously-selected precursors — they are NOT picked
+// FIRST on an identical re-push. With tqscore_threshold=0.0 every selected mass (qscore is always
+// > 0) arms the within-run exclusion map, so on the re-push the previously-selected masses yield
+// their front-row slots to lower-ranked, not-yet-acquired masses.
 START_SECTION(processScan_mass_exclusion)
 {
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
   ABORT_IF(ms1_scans.empty())
-  FLASHIda* ida = new FLASHIda(const_cast<char*>(standard_json));
+  // standard_json uses tqscore_threshold=0.9; on ms1_standard.txt no selected mass reaches
+  // qscore>0.9, so the within-run dynamic exclusion never arms. Lower it to 0.0 so EVERY
+  // pass-1-selected mass arms the exclusion map (the gate at PrecursorSelection.cpp:654 is a
+  // strict '>', and qscore is always > 0). Local copy only; shared standard_json is untouched.
+  std::string excl_json(standard_json);
+  {
+    auto p = excl_json.find("\"tqscore_threshold\": 0.9");
+    TEST_EQUAL(p != std::string::npos, true)
+    excl_json.replace(p, std::string("\"tqscore_threshold\": 0.9").size(),
+                      "\"tqscore_threshold\": 0.0");
+  }
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(excl_json.c_str()));
 
-  // Pass 1: push all scans, dequeue all, recording selected MS2 precursor m/z.
+  // Pass 1: every selected MS2 precursor m/z becomes "excluded" (qscore > 0 > threshold 0.0).
   int total_pass1 = pushAllScans(ida, ms1_scans);
   TEST_EQUAL(total_pass1 > 0, true)
-
-  std::vector<int> pass1_mz;
+  std::set<int> excluded;
   ScanCommand cmd{};
   for (int i = 0; i < total_pass1; i++)
   {
-    if (ida->getNextScanCommand(cmd) != 1) break;
-    TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
-    if (!cmd.is_agc && cmd.msn_level == 2)
-      pass1_mz.push_back((int)(cmd.stages[0].precursor_mz + 0.5));
+    if (ida->getNextScanCommand(cmd) != 1 || cmd.is_agc) break;
+    if (cmd.msn_level == 2) excluded.insert((int)(cmd.stages[0].precursor_mz + 0.5));
   }
-  ABORT_IF(pass1_mz.empty())
+  ABORT_IF(excluded.empty())
 
-  // Pass 2: push the SAME scans at the same RTs (within RT_window=180s).
+  // Pass 2: re-push the SAME scans at the same RTs (within RT_window=180s), in dequeue order.
   int total_pass2 = pushAllScans(ida, ms1_scans);
-  std::vector<int> pass2_mz;
+  std::vector<int> pass2_order;
   ScanCommand out{};
   for (int i = 0; i < total_pass2; i++)
   {
-    if (ida->getNextScanCommand(out) != 1) break;
-    if (!out.is_agc && out.msn_level == 2)
-      pass2_mz.push_back((int)(out.stages[0].precursor_mz + 0.5));
+    if (ida->getNextScanCommand(out) != 1 || out.is_agc) break;
+    if (out.msn_level == 2) pass2_order.push_back((int)(out.stages[0].precursor_mz + 0.5));
   }
+  ABORT_IF(pass2_order.empty())
 
-  // Exclusion must never INCREASE the count for identical re-pushed data.
+  // Exclusion must never INCREASE the command count for identical re-pushed data.
   TEST_EQUAL(total_pass2 <= total_pass1, true)
+  // "Not picked FIRST": the first precursor selected on re-push is NOT a previously-excluded mass
+  // (pass1's top mass is in `excluded`, so a different, non-excluded mass leads pass 2).
+  TEST_EQUAL(excluded.count(pass2_order.front()) == 0, true)
 
-  // At least one precursor selected (and excluded) in pass 1 must NOT be re-selected in pass 2.
-  bool some_excluded = false;
-  for (int mz1 : pass1_mz)
+  delete ida;
+}
+END_SECTION
+
+// P4-U03b: Thresholded mass exclusion — ONLY masses selected with qscore > 0.1 are deprioritized
+// (not picked first) on re-push; lower-confidence masses remain eligible. Exercises the
+// tqscore_threshold gate; contrast with processScan_mass_exclusion above (threshold 0.0, all armed).
+START_SECTION(processScan_mass_exclusion_thresholded)
+{
+  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(ms1_scans.empty())
+  std::string excl_json(standard_json);
   {
-    bool reselected = false;
-    for (int mz2 : pass2_mz) { if (mz2 == mz1) { reselected = true; break; } }
-    if (!reselected) { some_excluded = true; break; }
+    auto p = excl_json.find("\"tqscore_threshold\": 0.9");
+    TEST_EQUAL(p != std::string::npos, true)
+    excl_json.replace(p, std::string("\"tqscore_threshold\": 0.9").size(),
+                      "\"tqscore_threshold\": 0.1");
   }
-  TEST_EQUAL(some_excluded, true)
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(excl_json.c_str()));
+
+  // Pass 1: record, per integer-m/z, the MAX selection qscore (the value the engine gates on at
+  // PrecursorSelection.cpp:654; cmd.qscore == pg.getQscore() since AllCharges=false).
+  int total_pass1 = pushAllScans(ida, ms1_scans);
+  TEST_EQUAL(total_pass1 > 0, true)
+  std::map<int, float> max_q;
+  ScanCommand cmd{};
+  for (int i = 0; i < total_pass1; i++)
+  {
+    if (ida->getNextScanCommand(cmd) != 1 || cmd.is_agc) break;
+    if (cmd.msn_level == 2)
+    {
+      int mz = (int)(cmd.stages[0].precursor_mz + 0.5);
+      auto it = max_q.find(mz);
+      if (it == max_q.end() || cmd.qscore > it->second) max_q[mz] = cmd.qscore;
+    }
+  }
+  // Only masses whose selection qscore exceeded 0.1 arm the exclusion map.
+  std::set<int> excluded;
+  for (const auto& kv : max_q) if (kv.second > 0.1f) excluded.insert(kv.first);
+  TEST_EQUAL(excluded.size() > 0, true)  // non-vacuous: there ARE qscore>0.1 masses to exclude
+
+  // Pass 2: re-push the SAME scans, in dequeue order.
+  int total_pass2 = pushAllScans(ida, ms1_scans);
+  std::vector<int> pass2_order;
+  ScanCommand out{};
+  for (int i = 0; i < total_pass2; i++)
+  {
+    if (ida->getNextScanCommand(out) != 1 || out.is_agc) break;
+    if (out.msn_level == 2) pass2_order.push_back((int)(out.stages[0].precursor_mz + 0.5));
+  }
+  ABORT_IF(pass2_order.empty())
+
+  TEST_EQUAL(total_pass2 <= total_pass1, true)
+  // "Only qscore>0.1 masses are not picked first": the first re-push precursor is NOT one of them
+  // (a lower-confidence mass, which did NOT arm exclusion, may legitimately lead pass 2).
+  TEST_EQUAL(excluded.count(pass2_order.front()) == 0, true)
 
   delete ida;
 }
@@ -1494,10 +1559,13 @@ START_SECTION(processScan_ms1_min_charge_filter)
                     scan.rt, 1, ("scan_" + scan.scan_id).c_str(), -50.0);
   }
 
-  // With min_charge=99, no precursor should pass the filter
+  // With min_charge=99, no precursor passes the filter, so no deconvolution-derived
+  // MS2 is produced. getNextScanCommand has no return-0 path: when the queue is empty
+  // it emits an idle-cycle AGC and returns 1 (cf. processScan_commands_dequeued).
   ScanCommand cmd{};
   int result = ida.getNextScanCommand(cmd);
-  TEST_EQUAL(result, 0)  // no commands generated
+  TEST_EQUAL(result, 1)
+  TEST_EQUAL(cmd.is_agc, 1)
 }
 END_SECTION
 

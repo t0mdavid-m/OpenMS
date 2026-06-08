@@ -303,6 +303,16 @@ FLASHIda::FLASHIda(char* arg) :
       reagent_max_its += rmi_os.str();
       reagent_agc_targets += std::to_string(cmd.stages[i].reagent_agc_target);
     }
+    // Stage-less commands (MS1 / AGC) populate no per-stage fields. Emit explicit
+    // placeholders so the row still serializes the full column count: a tab-split
+    // parser drops a trailing empty field, which would leave such rows one column
+    // short. Mirrors the empty-field guard in the ScanResults row writer.
+    if (cmd.num_stages == 0)
+    {
+      charges = precursor_mzs = iso_widths = col_energies = reaction_times =
+          reagent_max_its = reagent_agc_targets = "0";
+      activations = "none";
+    }
 
     std::string parent_id(cmd.parent_scan_id);
     std::string ion_type;

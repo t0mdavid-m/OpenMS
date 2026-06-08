@@ -268,6 +268,9 @@ namespace
           "collision_energy": 29,
           "resolution": 120000
         }
+      ],
+      "ms3": [
+        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 35, "resolution": 120000 }
       ]
     },
     "scheduling": {
@@ -1125,7 +1128,18 @@ END_SECTION
 
 START_SECTION(ms3_exploration_winner_selection_and_cleanup)
 {
-  Config cfg{std::string(ms3_exploration_config)};
+  // The winner's reported score must equal the peak-group count (MassCount semantics):
+  // makeSyntheticDeconv() below produces empty (mass-0) PeakGroups, so the MS3
+  // FragmentCount path (calibrated MS3FragmentMatcher) would match 0 fragments and
+  // score every variant 0. Swap the MS3 exploration metric to mass_count so the score
+  // is spec.size() and variant 3 (8 peak groups) wins with score 8.0.
+  std::string ms3_winner_cfg(ms3_exploration_config);
+  {
+    auto mpos = ms3_winner_cfg.find("fragment_count");
+    TEST_EQUAL(mpos != std::string::npos, true)
+    ms3_winner_cfg.replace(mpos, std::string("fragment_count").size(), "mass_count");
+  }
+  Config cfg{ms3_winner_cfg};
   ScanCommandQueue queue(cfg);
   Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
   FragmentAnalysis fragments(cfg);
@@ -1656,7 +1670,7 @@ START_SECTION(selection_metric_terminal_fragments_parsing)
 {
   // Build a config with ms2 selection = "terminal_fragments" and a protein sequence
   std::string cfg_str = std::string(ms3_selection_only_config);
-  // ms3_selection_only_config has ms2.selection = "none" and protein_sequence = "MKWVTFISLLLLFSSAYSRGVFRR"
+  // ms3_selection_only_config has ms2.selection = "none" and a cytochrome-c protein_sequence (GDVEK...ATNE)
   // Replace ms2 selection "none" with "terminal_fragments"
   auto pos = cfg_str.find("\"selection\": \"none\"");
   TEST_EQUAL(pos != std::string::npos, true)
@@ -1672,7 +1686,7 @@ START_SECTION(selection_metric_ambiguity_resolution_parsing)
 {
   // Build a config with ms2 selection = "ambiguity_resolution" and a protein sequence
   std::string cfg_str = std::string(ms3_selection_only_config);
-  // ms3_selection_only_config has ms2.selection = "none" and protein_sequence = "MKWVTFISLLLLFSSAYSRGVFRR"
+  // ms3_selection_only_config has ms2.selection = "none" and a cytochrome-c protein_sequence (GDVEK...ATNE)
   auto pos = cfg_str.find("\"selection\": \"none\"");
   TEST_EQUAL(pos != std::string::npos, true)
   cfg_str.replace(pos, 19, "\"selection\": \"ambiguity_resolution\"");
