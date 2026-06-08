@@ -61,7 +61,8 @@ namespace
     }
   })";
 
-  // Config with MS3 targeting enabled via selection_strategy
+  // Config with MS3 targeting enabled: inclusion mode (target_mode=1) + cytC inclusion list
+  // pins the precursor, plus MS3 selection via selection_strategy. Mirrors C# CT35.
   const char* ms3_mode1_json = R"({
     "deconvolution": {
       "score_threshold": 0.0, "tqscore_threshold": 0.9,
@@ -69,7 +70,7 @@ namespace
       "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
     },
     "precursor_selection": {
-      "RT_window": 180, "target_mode": 0,
+      "RT_window": 180, "target_mode": 1,
       "IDScore": false, "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
@@ -92,9 +93,9 @@ namespace
     },
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "ms3": { "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE" },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+    "files": { "target_logs": [], "fasta": "", "inclusion_list": "../../FlashIDA/test-data/configs/inclusion_cytc.txt", "ptm_list": "" },
     "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 3 },
+      "ms1": { "selection": "qscore", "max_targets": 1 },
       "ms2": { "selection": "intensity", "max_targets": 3 },
       "ms3": { "selection": "intensity", "max_targets": 2 }
     }
@@ -814,14 +815,12 @@ START_SECTION(processScan_conditional_ms2_followup)
 END_SECTION
 
 // P4-U07: MS3 commands are pushed at priority 1 — hard positive.
-// DEFERRED (left failing, like #7/#10): this asserts ms2_result>0 / ms3_count>0, but the engine
-// CORRECTLY emits 0 MS3 here. In standard DDA the first MS2 command is the intact cytochrome-c
-// precursor (~12.3 kDa); FLASHExtender (skip_precursor_inference=true) then requires a complete
-// proteoform ladder, which the real scan-149 MS2 (mostly unfragmented precursor) cannot reconstruct
-// -> 0 proteoform hits -> 0 MS3. (Production MS3 fires only when a SMALL precursor leads, e.g. the
-// inclusion-mode C# path CT35.) A deterministic positive needs a synthetic theoretical b/y ladder or
-// an inclusion-mode config — deferred. The cytC MS1+MS2 data below is kept because it is coherent
-// with ms3_mode1_json.protein_sequence; it does not change the (correct) zero-MS3 outcome.
+// Uses the production-representative inclusion-mode recipe (ms3_mode1_json: target_mode=1 +
+// inclusion_cytc.txt targeting intact cytochrome-c 12360 Da, ms1.max_targets=1). This pins the
+// MS2 command's precursor to the cytC mass that the real scan-149 MS2 fragments belong to, so
+// FragmentAnalysis matches b/y ions -> proteoform hits -> MS3. This mirrors the C# CT35 path
+// (P4_AL_CT35_MS3Mode1_MS2ReturnPipeline), whose golden continuity_ms3_mode1_real.json yields MS3
+// from the same ms1_cytc.txt + ms2_cytc_scan149.txt through the same engine.
 START_SECTION(processScan_ms3_commands)
 {
   auto ms1_scans = loadTsvScans(ms1_cytc_tsv_path);
@@ -839,7 +838,7 @@ START_SECTION(processScan_ms3_commands)
   TEST_EQUAL(std::strlen(ms2_cmd.scan_description) <= 15, true)
   TEST_EQUAL(ms2_cmd.msn_level, 2)
 
-  // Process MS2 return — golden file confirms MS3 targets are produced
+  // Process MS2 return — inclusion-pinned cytC precursor -> b/y fragment matches -> MS3 targets
   const auto& ms2 = ms2_scans[0];
   int ms2_result = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
                                      (int)ms2.mzs.size(), ms2.rt,
