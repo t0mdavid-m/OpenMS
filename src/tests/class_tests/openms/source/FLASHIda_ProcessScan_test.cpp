@@ -92,7 +92,7 @@ namespace
       "agc_interval_seconds": 9999999
     },
     "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
-    "ms3": { "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE" },
+    "ms3": { "protein_sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE" },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "../../FlashIDA/test-data/configs/inclusion_cytc.txt", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 1 },
@@ -578,6 +578,9 @@ namespace
   const std::string ms2_tmt_tsv_path = "../../FlashIDA/test-data/spectra/ms2_quant_tmt.txt";
   const std::string ms1_cytc_tsv_path = "../../FlashIDA/test-data/spectra/ms1_cytc.txt";
   const std::string ms2_cytc_tsv_path = "../../FlashIDA/test-data/spectra/ms2_cytc_scan149.txt";
+  // Fresh real Mode-2 MS3 CytC run (20250121): intact-cytC MS2 (HCD CE40, scan 57) with a rich b/y
+  // ladder that FLASHExtender can validate -> real MS3. Extracted via test-scripts/prepare-test-data.py.
+  const std::string ms2_cytc_fresh_tsv_path = "../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt";
   const std::string fasta_path = "../../FlashIDA/test-data/configs/test_fasta.fasta";
 
   struct ScanData
@@ -815,16 +818,16 @@ START_SECTION(processScan_conditional_ms2_followup)
 END_SECTION
 
 // P4-U07: MS3 commands are pushed at priority 1 — hard positive.
-// Uses the production-representative inclusion-mode recipe (ms3_mode1_json: target_mode=1 +
-// inclusion_cytc.txt targeting intact cytochrome-c 12360 Da, ms1.max_targets=1). This pins the
-// MS2 command's precursor to the cytC mass that the real scan-149 MS2 fragments belong to, so
-// FragmentAnalysis matches b/y ions -> proteoform hits -> MS3. This mirrors the C# CT35 path
-// (P4_AL_CT35_MS3Mode1_MS2ReturnPipeline), whose golden continuity_ms3_mode1_real.json yields MS3
-// from the same ms1_cytc.txt + ms2_cytc_scan149.txt through the same engine.
+// Drives the real processScan -> FragmentAnalysis/FLASHExtender -> buildMS3 chain on a FRESH real
+// Mode-2 MS3 CytC run (20250121): the intact-cytC MS2 (HCD CE40, scan 57, ms2_cytc_fresh_scan57.txt)
+// has a rich b/y ladder, and ms3_mode1_json now carries the matching M-starting cytC proteoform.
+// Inclusion mode (target_mode=1 + inclusion_cytc.txt 12360 Da, ms1.max_targets=1 over ms1_cytc.txt)
+// pins the MS2 command's precursor; FLASHExtender validates the proteoform -> MS3. The source run's
+// MS3_Mappings.tsv (300+ sub-ppm b/y matches) is ground truth that the engine finds hits from this MS2.
 START_SECTION(processScan_ms3_commands)
 {
   auto ms1_scans = loadTsvScans(ms1_cytc_tsv_path);
-  auto ms2_scans = loadTsvScans(ms2_cytc_tsv_path);
+  auto ms2_scans = loadTsvScans(ms2_cytc_fresh_tsv_path);
   ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
   FLASHIda* ida = new FLASHIda(const_cast<char*>(ms3_mode1_json));
 
