@@ -813,13 +813,17 @@ START_SECTION(processScan_conditional_ms2_followup)
 }
 END_SECTION
 
-// P4-U07: MS3 commands are pushed at priority 1 — hard positive (golden file confirms)
+// P4-U07: MS3 commands are pushed at priority 1 — hard positive.
+// DEFERRED (left failing, like #7/#10): this asserts ms2_result>0 / ms3_count>0, but the engine
+// CORRECTLY emits 0 MS3 here. In standard DDA the first MS2 command is the intact cytochrome-c
+// precursor (~12.3 kDa); FLASHExtender (skip_precursor_inference=true) then requires a complete
+// proteoform ladder, which the real scan-149 MS2 (mostly unfragmented precursor) cannot reconstruct
+// -> 0 proteoform hits -> 0 MS3. (Production MS3 fires only when a SMALL precursor leads, e.g. the
+// inclusion-mode C# path CT35.) A deterministic positive needs a synthetic theoretical b/y ladder or
+// an inclusion-mode config — deferred. The cytC MS1+MS2 data below is kept because it is coherent
+// with ms3_mode1_json.protein_sequence; it does not change the (correct) zero-MS3 outcome.
 START_SECTION(processScan_ms3_commands)
 {
-  // Use cytochrome-c MS1 + MS2 (scan 149) so the precursor and the fragment spectrum
-  // match ms3_mode1_json.protein_sequence (cytochrome-c). ms2_hcd_fragment.txt yields
-  // no cytC fragment matches at min_charge 4, and the E. coli ms1_standard.txt would
-  // feed a non-matching precursor mass into MS2 deconvolution -> 0 MS3 targets.
   auto ms1_scans = loadTsvScans(ms1_cytc_tsv_path);
   auto ms2_scans = loadTsvScans(ms2_cytc_tsv_path);
   ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
@@ -979,10 +983,12 @@ START_SECTION(processScan_scoring_branches)
 }
 END_SECTION
 
-// P4-U03a: Mass exclusion deprioritizes previously-selected precursors — they are NOT picked
-// FIRST on an identical re-push. With tqscore_threshold=0.0 every selected mass (qscore is always
-// > 0) arms the within-run exclusion map, so on the re-push the previously-selected masses yield
-// their front-row slots to lower-ranked, not-yet-acquired masses.
+// P4-U03a: Mass exclusion — previously-selected precursors are NOT re-selected on an identical
+// re-push (so they are never picked first). With tqscore_threshold=0.0 every selected mass (qscore
+// is always > 0) arms the within-run exclusion map; in target_mode=0 only phase 0 runs and it SKIPS
+// armed masses (PrecursorSelection.cpp:609-616), so the re-push selects strictly fewer commands
+// (here zero — every selected mass armed). It does NOT re-pick them. ("Picked last, not first" is a
+// different code path — phase 1 / mode 2 — out of scope here.)
 START_SECTION(processScan_mass_exclusion)
 {
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
@@ -1021,21 +1027,21 @@ START_SECTION(processScan_mass_exclusion)
     if (ida->getNextScanCommand(out) != 1 || out.is_agc) break;
     if (out.msn_level == 2) pass2_order.push_back((int)(out.stages[0].precursor_mz + 0.5));
   }
-  ABORT_IF(pass2_order.empty())
-
-  // Exclusion must never INCREASE the command count for identical re-pushed data.
-  TEST_EQUAL(total_pass2 <= total_pass1, true)
-  // "Not picked FIRST": the first precursor selected on re-push is NOT a previously-excluded mass
-  // (pass1's top mass is in `excluded`, so a different, non-excluded mass leads pass 2).
-  TEST_EQUAL(excluded.count(pass2_order.front()) == 0, true)
+  // Dynamic exclusion SKIPS armed masses on the re-push, so the command count strictly drops
+  // (every selected mass armed at threshold 0.0, so total_pass2 == 0 here).
+  TEST_EQUAL(total_pass2 < total_pass1, true)
+  // No previously-excluded mass is re-selected (hence none is picked first). Vacuous-safe: if pass2
+  // is empty the loop simply runs zero times.
+  for (int mz : pass2_order) TEST_EQUAL(excluded.count(mz) == 0, true)
 
   delete ida;
 }
 END_SECTION
 
-// P4-U03b: Thresholded mass exclusion — ONLY masses selected with qscore > 0.1 are deprioritized
-// (not picked first) on re-push; lower-confidence masses remain eligible. Exercises the
-// tqscore_threshold gate; contrast with processScan_mass_exclusion above (threshold 0.0, all armed).
+// P4-U03b: Thresholded mass exclusion — ONLY masses selected with qscore > 0.1 arm the exclusion
+// map and are therefore not re-selected on the re-push; lower-confidence masses stay eligible.
+// Exercises the tqscore_threshold gate; contrast with processScan_mass_exclusion above (threshold
+// 0.0, every selected mass armed).
 START_SECTION(processScan_mass_exclusion_thresholded)
 {
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
@@ -1079,12 +1085,10 @@ START_SECTION(processScan_mass_exclusion_thresholded)
     if (ida->getNextScanCommand(out) != 1 || out.is_agc) break;
     if (out.msn_level == 2) pass2_order.push_back((int)(out.stages[0].precursor_mz + 0.5));
   }
-  ABORT_IF(pass2_order.empty())
-
-  TEST_EQUAL(total_pass2 <= total_pass1, true)
-  // "Only qscore>0.1 masses are not picked first": the first re-push precursor is NOT one of them
-  // (a lower-confidence mass, which did NOT arm exclusion, may legitimately lead pass 2).
-  TEST_EQUAL(excluded.count(pass2_order.front()) == 0, true)
+  // Exclusion strictly reduces the count; no qscore>0.1 mass is re-selected (hence not picked first).
+  // Vacuous-safe over an empty pass2.
+  TEST_EQUAL(total_pass2 < total_pass1, true)
+  for (int mz : pass2_order) TEST_EQUAL(excluded.count(mz) == 0, true)
 
   delete ida;
 }
