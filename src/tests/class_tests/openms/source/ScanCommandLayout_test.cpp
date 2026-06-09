@@ -6,70 +6,75 @@
 // $Authors: Kyowon Jeong $
 // --------------------------------------------------------------------------
 
-// Layout query binary for ScanCommand and IsolationStage structs.
-// Outputs sizeof and offsetof values in a parseable format.
-// Used by CI to verify C++/C# struct layout agreement.
+// Verifies the ScanCommand / IsolationStage struct layout — the load-bearing 2048-byte
+// C++/C# ABI contract. Expected offsets mirror the C# side in
+// FlashIDA/src/Flash.Tests/ScanCommandLayoutTests.cs (P3_U03); keep the two in lockstep.
 
+#include <OpenMS/CONCEPT/ClassTest.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
+
 #include <cstddef>
-#include <cstdio>
 
 using namespace OpenMS;
 
-int main()
+START_TEST(ScanCommandLayout, "$Id$")
+
+START_SECTION([EXTRA] ScanCommand and IsolationStage struct layout)
 {
-  // IsolationStage layout
-  std::printf("IsolationStage.sizeof=%zu\n", sizeof(IsolationStage));
-  std::printf("IsolationStage.precursor_mz.offset=%zu\n", offsetof(IsolationStage, precursor_mz));
-  std::printf("IsolationStage.isolation_width.offset=%zu\n", offsetof(IsolationStage, isolation_width));
-  std::printf("IsolationStage.collision_energy.offset=%zu\n", offsetof(IsolationStage, collision_energy));
-  std::printf("IsolationStage.reaction_time.offset=%zu\n", offsetof(IsolationStage, reaction_time));
-  std::printf("IsolationStage.reagent_max_it.offset=%zu\n", offsetof(IsolationStage, reagent_max_it));
-  std::printf("IsolationStage.reagent_agc_target.offset=%zu\n", offsetof(IsolationStage, reagent_agc_target));
-  std::printf("IsolationStage.charge_state.offset=%zu\n", offsetof(IsolationStage, charge_state));
-  std::printf("IsolationStage.activation_type.offset=%zu\n", offsetof(IsolationStage, activation_type));
+  // Struct sizes (also guarded at compile time by static_assert in ScanCommand.h)
+  TEST_EQUAL(sizeof(ScanCommand), 2048)
+  TEST_EQUAL(sizeof(IsolationStage), 80)
 
-  // ScanCommand layout
-  std::printf("ScanCommand.sizeof=%zu\n", sizeof(ScanCommand));
-  std::printf("ScanCommand.scan_id.offset=%zu\n", offsetof(ScanCommand, scan_id));
-  std::printf("ScanCommand.msn_level.offset=%zu\n", offsetof(ScanCommand, msn_level));
-  std::printf("ScanCommand.priority.offset=%zu\n", offsetof(ScanCommand, priority));
-  std::printf("ScanCommand.is_agc.offset=%zu\n", offsetof(ScanCommand, is_agc));
-  std::printf("ScanCommand.num_stages.offset=%zu\n", offsetof(ScanCommand, num_stages));
-  std::printf("ScanCommand.orbitrap_resolution.offset=%zu\n", offsetof(ScanCommand, orbitrap_resolution));
-  std::printf("ScanCommand.agc_target.offset=%zu\n", offsetof(ScanCommand, agc_target));
-  std::printf("ScanCommand.pad1.offset=%zu\n", offsetof(ScanCommand, pad1));
-  std::printf("ScanCommand.first_mass.offset=%zu\n", offsetof(ScanCommand, first_mass));
-  std::printf("ScanCommand.last_mass.offset=%zu\n", offsetof(ScanCommand, last_mass));
-  std::printf("ScanCommand.max_it.offset=%zu\n", offsetof(ScanCommand, max_it));
-  std::printf("ScanCommand.analyzer.offset=%zu\n", offsetof(ScanCommand, analyzer));
-  std::printf("ScanCommand.scan_description.offset=%zu\n", offsetof(ScanCommand, scan_description));
-  std::printf("ScanCommand.stages.offset=%zu\n", offsetof(ScanCommand, stages));
-  std::printf("ScanCommand.enqueue_timestamp_ms.offset=%zu\n", offsetof(ScanCommand, enqueue_timestamp_ms));
-  std::printf("ScanCommand.dequeue_timestamp_ms.offset=%zu\n", offsetof(ScanCommand, dequeue_timestamp_ms));
-  std::printf("ScanCommand.qscore.offset=%zu\n", offsetof(ScanCommand, qscore));
-  std::printf("ScanCommand.mono_mass.offset=%zu\n", offsetof(ScanCommand, mono_mass));
-  std::printf("ScanCommand.charge_cos.offset=%zu\n", offsetof(ScanCommand, charge_cos));
-  std::printf("ScanCommand.charge_snr.offset=%zu\n", offsetof(ScanCommand, charge_snr));
-  std::printf("ScanCommand.iso_cos.offset=%zu\n", offsetof(ScanCommand, iso_cos));
-  std::printf("ScanCommand.snr.offset=%zu\n", offsetof(ScanCommand, snr));
-  std::printf("ScanCommand.charge_score.offset=%zu\n", offsetof(ScanCommand, charge_score));
-  std::printf("ScanCommand.ppm_error.offset=%zu\n", offsetof(ScanCommand, ppm_error));
-  std::printf("ScanCommand.precursor_intensity.offset=%zu\n", offsetof(ScanCommand, precursor_intensity));
-  std::printf("ScanCommand.peakgroup_intensity.offset=%zu\n", offsetof(ScanCommand, peakgroup_intensity));
-  std::printf("ScanCommand.hcd_energy.offset=%zu\n", offsetof(ScanCommand, hcd_energy));
-  std::printf("ScanCommand.pad2.offset=%zu\n", offsetof(ScanCommand, pad2));
-  std::printf("ScanCommand.faims_cv.offset=%zu\n", offsetof(ScanCommand, faims_cv));
-  std::printf("ScanCommand.microscans.offset=%zu\n", offsetof(ScanCommand, microscans));
-  std::printf("ScanCommand.pad3.offset=%zu\n", offsetof(ScanCommand, pad3));
-  std::printf("ScanCommand.rf_lens.offset=%zu\n", offsetof(ScanCommand, rf_lens));
-  std::printf("ScanCommand.source_cid.offset=%zu\n", offsetof(ScanCommand, source_cid));
-  std::printf("ScanCommand.source_cid_scaling.offset=%zu\n", offsetof(ScanCommand, source_cid_scaling));
-  std::printf("ScanCommand.data_type.offset=%zu\n", offsetof(ScanCommand, data_type));
-  std::printf("ScanCommand.scan_rate.offset=%zu\n", offsetof(ScanCommand, scan_rate));
-  std::printf("ScanCommand.parent_scan_id.offset=%zu\n", offsetof(ScanCommand, parent_scan_id));
-  std::printf("ScanCommand.reserved_.offset=%zu\n", offsetof(ScanCommand, reserved_));
+  // ScanCommand field offsets
+  TEST_EQUAL(offsetof(ScanCommand, scan_id), 0)
+  TEST_EQUAL(offsetof(ScanCommand, msn_level), 4)
+  TEST_EQUAL(offsetof(ScanCommand, priority), 8)
+  TEST_EQUAL(offsetof(ScanCommand, is_agc), 12)
+  TEST_EQUAL(offsetof(ScanCommand, num_stages), 16)
+  TEST_EQUAL(offsetof(ScanCommand, orbitrap_resolution), 20)
+  TEST_EQUAL(offsetof(ScanCommand, agc_target), 24)
+  TEST_EQUAL(offsetof(ScanCommand, pad1), 28)
+  TEST_EQUAL(offsetof(ScanCommand, first_mass), 32)
+  TEST_EQUAL(offsetof(ScanCommand, last_mass), 40)
+  TEST_EQUAL(offsetof(ScanCommand, max_it), 48)
+  TEST_EQUAL(offsetof(ScanCommand, analyzer), 56)
+  TEST_EQUAL(offsetof(ScanCommand, scan_description), 88)
+  TEST_EQUAL(offsetof(ScanCommand, stages), 344)
+  TEST_EQUAL(offsetof(ScanCommand, enqueue_timestamp_ms), 1144)
+  TEST_EQUAL(offsetof(ScanCommand, dequeue_timestamp_ms), 1152)
+  TEST_EQUAL(offsetof(ScanCommand, qscore), 1160)
+  TEST_EQUAL(offsetof(ScanCommand, mono_mass), 1168)
+  TEST_EQUAL(offsetof(ScanCommand, charge_cos), 1176)
+  TEST_EQUAL(offsetof(ScanCommand, charge_snr), 1184)
+  TEST_EQUAL(offsetof(ScanCommand, iso_cos), 1192)
+  TEST_EQUAL(offsetof(ScanCommand, snr), 1200)
+  TEST_EQUAL(offsetof(ScanCommand, charge_score), 1208)
+  TEST_EQUAL(offsetof(ScanCommand, ppm_error), 1216)
+  TEST_EQUAL(offsetof(ScanCommand, precursor_intensity), 1224)
+  TEST_EQUAL(offsetof(ScanCommand, peakgroup_intensity), 1232)
+  TEST_EQUAL(offsetof(ScanCommand, hcd_energy), 1240)
+  TEST_EQUAL(offsetof(ScanCommand, pad2), 1244)
+  TEST_EQUAL(offsetof(ScanCommand, faims_cv), 1248)
+  TEST_EQUAL(offsetof(ScanCommand, microscans), 1256)
+  TEST_EQUAL(offsetof(ScanCommand, pad3), 1260)
+  TEST_EQUAL(offsetof(ScanCommand, rf_lens), 1264)
+  TEST_EQUAL(offsetof(ScanCommand, source_cid), 1272)
+  TEST_EQUAL(offsetof(ScanCommand, source_cid_scaling), 1280)
+  TEST_EQUAL(offsetof(ScanCommand, data_type), 1288)
+  TEST_EQUAL(offsetof(ScanCommand, scan_rate), 1320)
+  TEST_EQUAL(offsetof(ScanCommand, parent_scan_id), 1352)
+  TEST_EQUAL(offsetof(ScanCommand, reserved_), 1356)
 
-  std::printf("LAYOUT_CHECK_PASSED\n");
-  return 0;
+  // IsolationStage field offsets
+  TEST_EQUAL(offsetof(IsolationStage, precursor_mz), 0)
+  TEST_EQUAL(offsetof(IsolationStage, isolation_width), 8)
+  TEST_EQUAL(offsetof(IsolationStage, collision_energy), 16)
+  TEST_EQUAL(offsetof(IsolationStage, reaction_time), 24)
+  TEST_EQUAL(offsetof(IsolationStage, reagent_max_it), 32)
+  TEST_EQUAL(offsetof(IsolationStage, reagent_agc_target), 40)
+  TEST_EQUAL(offsetof(IsolationStage, charge_state), 44)
+  TEST_EQUAL(offsetof(IsolationStage, activation_type), 48)
 }
+END_SECTION
+
+END_TEST

@@ -1322,9 +1322,11 @@ END_SECTION
 
 START_SECTION(ms3_selection_no_exploration_standard_targeting)
 {
-  // P7-U08: MS3 with selection but no exploration -> standard MS3 commands
-  auto ms1_scans = loadTsvScans(ms1_tsv_path);
-  auto ms2_scans = loadTsvScans(ms2_tsv_path);
+  // P7-U08: MS3 with selection but no exploration -> standard MS3 commands.
+  // Feed real CytC MS1+MS2 (matching the proteoform in ms3_selection_only_config) so MS3
+  // actually fires; generic data deconvolves to no matching fragments and yields 0 MS3.
+  auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
+  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_scan149.txt");
   ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
 
   FLASHIda* ida = new FLASHIda(const_cast<char*>(ms3_selection_only_config));
@@ -1369,8 +1371,8 @@ START_SECTION(ms3_selection_no_exploration_standard_targeting)
       break;
     }
   }
-  // MS3 generation depends on deconvolution results
-  (void)found_ms3;
+  // With matching CytC data the engine must queue at least one MS3 command.
+  TEST_EQUAL(found_ms3, true)
 
   delete ida;
 }
@@ -1953,10 +1955,15 @@ START_SECTION(ms2_exploration_returns_command_count)
     return_values.push_back(rv);
   }
 
+  int total_returned = 0;
   for (int rv : return_values)
   {
     TEST_EQUAL(rv >= 0, true)
+    total_returned += rv;
   }
+  // Exploration must actually produce commands (winner selection pushes >= 1), not merely
+  // return non-negative no-ops — the bare rv >= 0 check above is otherwise a tautology.
+  TEST_EQUAL(total_returned > 0, true)
 
   delete ida;
 }

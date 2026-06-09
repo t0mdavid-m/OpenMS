@@ -255,8 +255,10 @@ START_SECTION(concurrent_push_cleanup)
   push_thread.join();
   clean_thread.join();
 
-  // If we get here without crash/hang, the test passes
-  TEST_EQUAL(true, true)
+  // No command reaches the 100 ms timeout during this sub-millisecond test, so the
+  // concurrent cleaner must not have dropped any of the 200 pushes — verifies no loss /
+  // no corruption under the push+cleanup race (not just "didn't crash").
+  TEST_EQUAL(queue.queueSize(1), N)
 }
 END_SECTION
 

@@ -28,10 +28,19 @@ namespace
   std::string buildJsonWithRuntime(const std::string& ida_log_path,
                                    const std::string& commands_path,
                                    const std::string& results_path,
-                                   bool /*enable_ms3*/ = false)
+                                   bool enable_ms3 = false)
   {
-    std::string ms3_block;  // no ms3 block needed (protein_sequence defaults to "")
-    std::string ms3_selection = "\"none\"";
+    // When enabled: add the ms_settings.ms3 stage, a CytC proteoform to match MS2 fragments
+    // against, and an active ms3 selection metric (mirrors ms3_selection_only_config in the
+    // exploration test). Callers must also feed CytC MS1+MS2 data to actually fire MS3.
+    std::string ms3_settings = enable_ms3
+      ? R"(,
+        "ms3": [ { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 35, "resolution": 120000 } ])"
+      : "";
+    std::string ms3_block = enable_ms3
+      ? R"("ms3": { "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE" },)"
+      : "";
+    std::string ms3_selection = enable_ms3 ? "\"intensity\"" : "\"none\"";
 
     std::ostringstream oss;
     oss << R"({
@@ -52,7 +61,7 @@ namespace
         "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
         "ms2": [
           { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }
-        ]
+        ])" << ms3_settings << R"(
       },
       "scheduling": {
         "cycle_time": { "enabled": false, "value_ms": 60000 },
@@ -247,11 +256,7 @@ START_TEST(FLASHIda_Logging, "$Id$")
 START_SECTION(ida_log_contract_roundtrip)
 {
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
-  if (ms1_scans.empty())
-  {
-    NOT_TESTABLE;  // test data not available in this build environment
-    break;
-  }
+  ABORT_IF(ms1_scans.empty())
 
   // Use temp file for IDA log
   std::string ida_log_file = "test_ida_log_contract.log";
@@ -296,13 +301,11 @@ END_SECTION
 // Test 2: ScanCommands TSV -- full MS1->MS2->MS3 cycle
 START_SECTION(scan_commands_tsv_format)
 {
-  auto ms1_scans = loadTsvScans(ms1_tsv_path);
-  auto ms2_scans = loadTsvScans(ms2_tsv_path);
-  if (ms1_scans.empty() || ms2_scans.empty())
-  {
-    NOT_TESTABLE;
-    break;
-  }
+  // Real CytC MS1+MS2 so the MS3 path actually fires (MS3 enabled in the config below);
+  // generic data deconvolves to no proteoform-matching fragments and emits zero MS3.
+  auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
+  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_scan149.txt");
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
 
   std::string commands_file = "test_scan_commands.tsv";
   std::remove(commands_file.c_str());
@@ -368,10 +371,9 @@ START_SECTION(scan_commands_tsv_format)
     }
   }
   TEST_TRUE(found_ms2);
-  if (cycle.ms3_cmds.size() > 0)
-  {
-    TEST_TRUE(found_ms3);
-  }
+  // MS3 must actually be produced and appear in the TSV with two-stage semicolon fields.
+  TEST_TRUE(cycle.ms3_cmds.size() > 0);
+  TEST_TRUE(found_ms3);
 
   // Every row should have the same number of columns as the header
   for (const auto& row : tsv.rows)
@@ -386,13 +388,11 @@ END_SECTION
 // Test 3: ScanResults TSV -- full MS1->MS2->MS3 cycle with duration tracking
 START_SECTION(scan_results_tsv_format)
 {
-  auto ms1_scans = loadTsvScans(ms1_tsv_path);
-  auto ms2_scans = loadTsvScans(ms2_tsv_path);
-  if (ms1_scans.empty() || ms2_scans.empty())
-  {
-    NOT_TESTABLE;
-    break;
-  }
+  // Real CytC MS1+MS2 so MS3 result rows + child_ids are actually produced (MS3 enabled
+  // in the config below); generic data yields zero MS3 and would leave the MS3 checks dead.
+  auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
+  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_scan149.txt");
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
 
   std::string results_file = "test_scan_results.tsv";
   std::remove(results_file.c_str());
@@ -433,12 +433,12 @@ START_SECTION(scan_results_tsv_format)
     if (dur_col >= 0 && dur_col < (int)row.size())
     {
       uint64_t dur = std::stoull(row[dur_col]);
-      (void)dur; // stoull succeeds = valid unsigned integer
+      TEST_TRUE(dur < 3600000ULL);  // < 1 hour: a real upper bound, not a tautology
     }
   }
 
-  // MS2 result rows should have child_ids pointing to MS3 commands (if any)
-  if (cycle.ms3_cmds.size() > 0)
+  // MS3 must be produced, and MS2 result rows must carry child_ids linking to MS3 commands.
+  TEST_TRUE(cycle.ms3_cmds.size() > 0);
   {
     int child_col = tsv.colIndex("child_ids");
     bool found_ms2_with_children = false;
@@ -459,11 +459,7 @@ START_SECTION(join_integrity)
 {
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
   auto ms2_scans = loadTsvScans(ms2_tsv_path);
-  if (ms1_scans.empty() || ms2_scans.empty())
-  {
-    NOT_TESTABLE;
-    break;
-  }
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
 
   std::string commands_file = "test_join_commands.tsv";
   std::string results_file = "test_join_results.tsv";
@@ -530,11 +526,7 @@ START_SECTION(crash_safety_valid_tsv)
 {
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
   auto ms2_scans = loadTsvScans(ms2_tsv_path);
-  if (ms1_scans.empty() || ms2_scans.empty())
-  {
-    NOT_TESTABLE;
-    break;
-  }
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
 
   std::string commands_file = "test_crash_commands.tsv";
   std::string results_file = "test_crash_results.tsv";
