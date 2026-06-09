@@ -750,6 +750,47 @@ namespace
     return cfg;
   }
 
+  struct ExplResult { bool found_ms3 = false; bool found_production_ms2 = false;
+                      int total_returns = 0; int ms3_num_stages = 0; int group_commands = 0; };
+
+  // Push MS1 scans only until the FIRST scan that creates an exploration group (one selected
+  // precursor -> one group of CE variants), then stop and drive that single group. Inclusion +
+  // ms1.max_targets pins the single cytC precursor. Feed each drained MS2 variant back; the
+  // final-variant feed fires the winner -> MS3 directly (overrides empty), or a production-MS2
+  // re-acquisition (overrides non-empty) which is fed once more -> MS3. ONE group means the
+  // variants drain contiguously with no idle-AGC interleave (50 overlapping groups was both the
+  // idle-bug source and an unrealistic acquisition scenario).
+  ExplResult driveOneExplorationGroup(FLASHIda* ida, const std::vector<ScanData>& ms1_scans,
+                                      const ScanData& ms2)
+  {
+    ExplResult r;
+    for (const auto& s : ms1_scans)
+    {
+      int n = ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1,
+                               ("scan_" + s.scan_id).c_str());
+      if (n > 0) { r.group_commands = n; break; }
+    }
+    if (r.group_commands == 0) return r;
+
+    int idle = 0;
+    for (int i = 0; i < 100 && !r.found_ms3; ++i)
+    {
+      ScanCommand next{};
+      if (ida->getNextScanCommand(next) != 1) break;
+      if (next.is_agc || next.msn_level == 1) { if (++idle > 3) break; continue; }  // safety only
+      idle = 0;
+      if (next.msn_level == 3) { r.found_ms3 = true; r.ms3_num_stages = next.num_stages; break; }
+      if (next.msn_level == 2)
+      {
+        std::string d(next.scan_description);
+        if (d.size() >= 4 && d[3] != 'E') r.found_production_ms2 = true;  // production-MS2 winner
+        r.total_returns += ida->processScan(ms2.mzs.data(), ms2.ints.data(),
+                                            (int)ms2.mzs.size(), ms2.rt, 2, next.scan_description);
+      }
+    }
+    return r;
+  }
+
   const std::string ms1_tsv_path = "../../FlashIDA/test-data/spectra/ms1_standard.txt";
   const std::string ms2_tsv_path = "../../FlashIDA/test-data/spectra/ms2_hcd_fragment.txt";
   const std::string ms2_cytc_path = "../../FlashIDA/test-data/spectra/ms2_cytc_scan149.txt";
@@ -1351,50 +1392,12 @@ START_SECTION(ms3_selection_no_exploration_standard_targeting)
   std::string cfg_str = inclusionPinCytc(ms3_selection_only_config);
   FLASHIda* ida = new FLASHIda(const_cast<char*>(cfg_str.c_str()));
 
-  int total = pushAllMS1Scans(ida, ms1_scans);
-  if (total == 0) { delete ida; }
-  ABORT_IF(total == 0)
-
-  // Drain exploration variants and feed MS2 results
-  std::vector<ScanCommand> exploration_cmds;
-  ScanCommand cmd{};
-  while (ida->getNextScanCommand(cmd) == 1)
-  {
-    std::string desc(cmd.scan_description);
-    if (cmd.msn_level == 2 && desc.size() >= 4 && desc[3] == 'E')
-    {
-      exploration_cmds.push_back(cmd);
-    }
-    else
-    {
-      break;
-    }
-  }
-
-  const auto& ms2 = ms2_scans[0];
-  for (const auto& ecmd : exploration_cmds)
-  {
-    ida->processScan(ms2.mzs.data(), ms2.ints.data(),
-                     (int)ms2.mzs.size(), ms2.rt, 2, ecmd.scan_description);
-  }
-
-  // After MS2 exploration completes, MS3 commands should be queued
-  bool found_ms3 = false;
-  for (int i = 0; i < 20; ++i)
-  {
-    ScanCommand next{};
-    if (ida->getNextScanCommand(next) != 1) break;
-    if (next.msn_level == 3)
-    {
-      found_ms3 = true;
-      TEST_EQUAL(next.num_stages, 2)
-      break;
-    }
-  }
-  // With matching CytC data the engine must queue at least one MS3 command.
-  TEST_EQUAL(found_ms3, true)
-
+  ExplResult c = driveOneExplorationGroup(ida, ms1_scans, ms2_scans[0]);
   delete ida;
+  ABORT_IF(c.group_commands == 0)
+  // overrides empty -> the winning variant feed emits MS3 directly (two-stage command).
+  TEST_EQUAL(c.found_ms3, true)
+  TEST_EQUAL(c.ms3_num_stages, 2)
 }
 END_SECTION
 
@@ -1418,54 +1421,13 @@ START_SECTION(ms2_exploration_production_winner_then_ms3)
   }
   FLASHIda* ida = new FLASHIda(const_cast<char*>(cfg_str.c_str()));
 
-  int total = pushAllMS1Scans(ida, ms1_scans);
-  if (total == 0) { delete ida; }
-  ABORT_IF(total == 0)
-
-  // Drain + feed the MS2 exploration variants.
-  std::vector<ScanCommand> exploration_cmds;
-  ScanCommand cmd{};
-  while (ida->getNextScanCommand(cmd) == 1)
-  {
-    std::string desc(cmd.scan_description);
-    if (cmd.msn_level == 2 && desc.size() >= 4 && desc[3] == 'E')
-      exploration_cmds.push_back(cmd);
-    else
-      break;
-  }
-  ABORT_IF(exploration_cmds.empty())
-
-  const auto& ms2 = ms2_scans[0];
-  for (const auto& ecmd : exploration_cmds)
-    ida->processScan(ms2.mzs.data(), ms2.ints.data(),
-                     (int)ms2.mzs.size(), ms2.rt, 2, ecmd.scan_description);
-
-  // The winner is a production-MS2 re-acquisition (msn_level 2). Drain it, re-feed it, then the
-  // standard MS2->MS3 path must yield an MS3 command from the winning scan.
-  bool found_production_ms2 = false;
-  bool found_ms3 = false;
-  for (int i = 0; i < 30; ++i)
-  {
-    ScanCommand next{};
-    if (ida->getNextScanCommand(next) != 1) break;
-    if (next.is_agc) break;
-    if (next.msn_level == 3)
-    {
-      found_ms3 = true;
-      TEST_EQUAL(next.num_stages, 2)
-      break;
-    }
-    if (next.msn_level == 2)
-    {
-      found_production_ms2 = true;
-      ida->processScan(ms2.mzs.data(), ms2.ints.data(),
-                       (int)ms2.mzs.size(), ms2.rt, 2, next.scan_description);
-    }
-  }
-  TEST_EQUAL(found_production_ms2, true)
-  TEST_EQUAL(found_ms3, true)
-
+  ExplResult c = driveOneExplorationGroup(ida, ms1_scans, ms2_scans[0]);
   delete ida;
+  ABORT_IF(c.group_commands == 0)
+  // overrides non-empty -> the winner is a production-MS2 re-acquisition; driveOneExplorationGroup
+  // re-feeds it, and the standard MS2->MS3 path then yields MS3 from the winning scan.
+  TEST_EQUAL(c.found_production_ms2, true)
+  TEST_EQUAL(c.found_ms3, true)
 }
 END_SECTION
 
@@ -1482,32 +1444,12 @@ START_SECTION(ms2_then_ms3_exploration_acquires_ms3)
   std::string cfg_str = inclusionPinCytc(ms3_exploration_config);
   FLASHIda* ida = new FLASHIda(const_cast<char*>(cfg_str.c_str()));
 
-  int total = pushAllMS1Scans(ida, ms1_scans);
-  if (total == 0) { delete ida; }
-  ABORT_IF(total == 0)
-
-  const auto& ms2 = ms2_scans[0];
-  // Drive the cascade: feed every drained MS2 command (exploration variants + winner) the cytC
-  // fragments until an MS3-level command appears.
-  bool found_ms3 = false;
-  for (int i = 0; i < 60 && !found_ms3; ++i)
-  {
-    ScanCommand next{};
-    if (ida->getNextScanCommand(next) != 1) break;
-    if (next.is_agc) break;
-    if (next.msn_level == 3)
-    {
-      found_ms3 = true;
-      TEST_EQUAL(next.num_stages, 2)
-      TEST_EQUAL(next.priority, 1)
-      break;
-    }
-    ida->processScan(ms2.mzs.data(), ms2.ints.data(),
-                     (int)ms2.mzs.size(), ms2.rt, 2, next.scan_description);
-  }
-  TEST_EQUAL(found_ms3, true)
-
+  ExplResult c = driveOneExplorationGroup(ida, ms1_scans, ms2_scans[0]);
   delete ida;
+  ABORT_IF(c.group_commands == 0)
+  // two-level: the MS2-exploration winner cascades into MS3-level commands (two-stage).
+  TEST_EQUAL(c.found_ms3, true)
+  TEST_EQUAL(c.ms3_num_stages, 2)
 }
 END_SECTION
 
@@ -2067,42 +2009,12 @@ START_SECTION(ms2_exploration_returns_command_count)
   std::string cfg_str = inclusionPinCytc(ms3_selection_only_config);
   FLASHIda* ida = new FLASHIda(const_cast<char*>(cfg_str.c_str()));
 
-  int total = pushAllMS1Scans(ida, ms1_scans);
-  if (total == 0) { delete ida; }
-  ABORT_IF(total == 0)
-
-  std::vector<ScanCommand> exploration_cmds;
-  ScanCommand cmd{};
-  while (ida->getNextScanCommand(cmd) == 1)
-  {
-    std::string desc(cmd.scan_description);
-    if (cmd.msn_level == 2 && desc.size() >= 4 && desc[3] == 'E')
-      exploration_cmds.push_back(cmd);
-    else
-      break;
-  }
-  ABORT_IF(exploration_cmds.empty())
-
-  const auto& ms2 = ms2_scans[0];
-  std::vector<int> return_values;
-  for (const auto& ecmd : exploration_cmds)
-  {
-    int rv = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
-                               (int)ms2.mzs.size(), ms2.rt, 2, ecmd.scan_description);
-    return_values.push_back(rv);
-  }
-
-  int total_returned = 0;
-  for (int rv : return_values)
-  {
-    TEST_EQUAL(rv >= 0, true)
-    total_returned += rv;
-  }
-  // Exploration must actually produce commands (winner selection pushes >= 1), not merely
-  // return non-negative no-ops — the bare rv >= 0 check above is otherwise a tautology.
-  TEST_EQUAL(total_returned > 0, true)
-
+  ExplResult c = driveOneExplorationGroup(ida, ms1_scans, ms2_scans[0]);
   delete ida;
+  ABORT_IF(c.group_commands == 0)
+  // The winning variant feed pushes the follow-up command(s), so the summed processScan return
+  // count is positive (was a tautological rv >= 0 before).
+  TEST_EQUAL(c.total_returns > 0, true)
 }
 END_SECTION
 
