@@ -30,15 +30,20 @@ namespace
                                    const std::string& results_path,
                                    bool enable_ms3 = false)
   {
-    // When enabled: add the ms_settings.ms3 stage, a CytC proteoform to match MS2 fragments
-    // against, and an active ms3 selection metric (mirrors ms3_selection_only_config in the
-    // exploration test). Callers must also feed CytC MS1+MS2 data to actually fire MS3.
+    // When enabled, emit the full inclusion-pinned MS3 recipe proven by
+    // FLASHIda_ProcessScan_test::processScan_ms3_commands (P4-U07): pin the cytC precursor
+    // (target_mode=1 + inclusion_cytc.txt), select MS2 by intensity, add the ms_settings.ms3
+    // stage, the M-starting cytC proteoform, and ms3.selection=intensity. Callers must feed
+    // ms1_cytc.txt + ms2_cytc_fresh_scan57.txt for MS3 to actually fire.
+    std::string target_mode_val    = enable_ms3 ? "1" : "0";
+    std::string inclusion_list_val  = enable_ms3 ? "../../FlashIDA/test-data/configs/inclusion_cytc.txt" : "";
+    std::string ms2_selection       = enable_ms3 ? "\"intensity\"" : "\"none\"";
     std::string ms3_settings = enable_ms3
       ? R"(,
         "ms3": [ { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 35, "resolution": 120000 } ])"
       : "";
     std::string ms3_block = enable_ms3
-      ? R"("ms3": { "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE" },)"
+      ? R"("ms3": { "protein_sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE" },)"
       : "";
     std::string ms3_selection = enable_ms3 ? "\"intensity\"" : "\"none\"";
 
@@ -50,7 +55,7 @@ namespace
         "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
       },
       "precursor_selection": {
-        "RT_window": 180, "target_mode": 0,
+        "RT_window": 180, "target_mode": )" << target_mode_val << R"(,
         "IDScore": false, "AllCharges": false,
         "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
       },
@@ -70,10 +75,10 @@ namespace
       },
       "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
       )" << ms3_block << R"(
-      "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+      "files": { "target_logs": [], "fasta": "", "inclusion_list": ")" << inclusion_list_val << R"(", "ptm_list": "" },
       "selection_strategy": {
         "ms1": { "selection": "qscore", "max_targets": 5 },
-        "ms2": { "selection": "none" },
+        "ms2": { "selection": )" << ms2_selection << R"( },
         "ms3": { "selection": )" << ms3_selection << R"( }
       },
       "runtime": {
@@ -304,7 +309,7 @@ START_SECTION(scan_commands_tsv_format)
   // Real CytC MS1+MS2 so the MS3 path actually fires (MS3 enabled in the config below);
   // generic data deconvolves to no proteoform-matching fragments and emits zero MS3.
   auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
-  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_scan149.txt");
+  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
   ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
 
   std::string commands_file = "test_scan_commands.tsv";
@@ -391,7 +396,7 @@ START_SECTION(scan_results_tsv_format)
   // Real CytC MS1+MS2 so MS3 result rows + child_ids are actually produced (MS3 enabled
   // in the config below); generic data yields zero MS3 and would leave the MS3 checks dead.
   auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
-  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_scan149.txt");
+  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
   ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
 
   std::string results_file = "test_scan_results.tsv";
@@ -467,7 +472,7 @@ START_SECTION(join_integrity)
   std::remove(results_file.c_str());
 
   // Enable MS3 for full parent-child graph testing
-  std::string json = buildJsonWithRuntime("", commands_file, results_file, true);
+  std::string json = buildJsonWithRuntime("", commands_file, results_file, false);
   FLASHIda ida(const_cast<char*>(json.c_str()));
 
   // Full MS1->MS2->MS3 cycle (with MS3 fed back)
@@ -534,7 +539,7 @@ START_SECTION(crash_safety_valid_tsv)
   std::remove(results_file.c_str());
 
   // Enable MS3 for full cycle
-  std::string json = buildJsonWithRuntime("", commands_file, results_file, true);
+  std::string json = buildJsonWithRuntime("", commands_file, results_file, false);
   FLASHIda ida(const_cast<char*>(json.c_str()));
 
   // After constructor: headers should exist
