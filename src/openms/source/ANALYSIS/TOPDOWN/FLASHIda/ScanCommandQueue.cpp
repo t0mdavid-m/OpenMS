@@ -451,6 +451,56 @@ namespace OpenMS
     }
   }
 
+  std::vector<int> ScanCommandQueue::cancelByScanIds(const std::vector<int>& scan_ids)
+  {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    std::vector<int> removed;
+
+    auto is_target = [&scan_ids](int id) {
+      return std::find(scan_ids.begin(), scan_ids.end(), id) != scan_ids.end();
+    };
+
+    // Remove matching commands still waiting in the priority queues.
+    for (int p = 0; p < 4; ++p)
+    {
+      auto it = queues_[p].begin();
+      while (it != queues_[p].end())
+      {
+        if (is_target(it->scan_id))
+        {
+          removed.push_back(it->scan_id);
+          std::cout << "[TRACK-CANCEL] id=" << encode(it->scan_id)
+                    << " ms_level=" << it->msn_level << " state=queued" << std::endl;
+          it = queues_[p].erase(it);
+        }
+        else
+        {
+          ++it;
+        }
+      }
+    }
+
+    // Remove matching in-flight commands from the pending map; their late
+    // results are dropped once the caller erases the matching tracking entry.
+    auto pit = pending_scan_map_.begin();
+    while (pit != pending_scan_map_.end())
+    {
+      if (is_target(pit->first))
+      {
+        removed.push_back(pit->first);
+        std::cout << "[TRACK-CANCEL] id=" << encode(pit->first)
+                  << " ms_level=" << pit->second.msn_level << " state=in-flight" << std::endl;
+        pit = pending_scan_map_.erase(pit);
+      }
+      else
+      {
+        ++pit;
+      }
+    }
+
+    return removed;
+  }
+
   // --- Introspection ---
 
   size_t ScanCommandQueue::pendingScanMapSize() const

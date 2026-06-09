@@ -308,6 +308,37 @@ namespace OpenMS
       group.baseline_intensity = baseline_sum;
       group.has_baseline = true;
       v.score = 0.0;  // baseline score not meaningful
+
+      // Empty baseline window => no CE variant can be scored. Abort the group:
+      // cancel its still-queued / in-flight child scans (no follow-up production scan),
+      // and account for the cancelled children so the all-received path below cleans up.
+      if (group.exploration_metric == ExplorationMetric::RemainingPrecursor &&
+          group.baseline_intensity <= 0.0)
+      {
+        group.baseline_failed = true;
+
+        std::vector<int> child_ids;
+        for (const auto& cv : group.variants)
+          if (!cv.is_baseline) child_ids.push_back(queue.decode(cv.tracking_id));
+
+        std::vector<int> removed = queue.cancelByScanIds(child_ids);
+
+        // Cancelled children will never return — mark them received (score 0) so the group
+        // can complete, and erase their routing so any already-dispatched (in-flight) result
+        // that returns later is a harmless no-op (it won't re-create the erased group).
+        for (int cid : removed)
+        {
+          auto cit = variant_tracking_map_.find(cid);
+          if (cit == variant_tracking_map_.end()) continue;
+          int gidx = cit->second.variant_index;  // group-array index
+          if (gidx >= 0 && gidx < static_cast<int>(group.variants.size()))
+          {
+            group.variants[gidx].received = true;
+            group.variants[gidx].score = 0.0;
+          }
+          variant_tracking_map_.erase(cit);
+        }
+      }
     }
 
     // Count real (non-baseline) variants for metadata
@@ -433,78 +464,95 @@ namespace OpenMS
       }
     }
 
+    // Select the winner — unless the group was aborted (empty baseline) or no variant scored.
     int best_idx = -1;
     double best_score = -1.0;
-    for (int i = 0; i < static_cast<int>(group.variants.size()); ++i)
+    if (!group.baseline_failed)
     {
-      if (group.variants[i].is_baseline) continue;  // skip baseline
-      if (group.variants[i].score > best_score)
+      for (int i = 0; i < static_cast<int>(group.variants.size()); ++i)
       {
-        best_score = group.variants[i].score;
-        best_idx = i;
+        if (group.variants[i].is_baseline) continue;  // skip baseline
+        if (group.variants[i].score > best_score)
+        {
+          best_score = group.variants[i].score;
+          best_idx = i;
+        }
       }
     }
-    if (best_idx < 0) return info;  // shouldn't happen
-    group.winner_index = best_idx;
-    group.complete = true;
-    group.variants[best_idx].result.getOrCreateOptimizationMetadata().is_best_variant = true;
 
-    // Report the WINNER's metrics in the returned info (not the last-received variant's, which is
-    // what was populated above before winner selection / batch re-scoring).
+    if (group.baseline_failed || best_idx < 0)
     {
-      const ExplorationVariant& win = group.variants[best_idx];
-      info.score = best_score;
-      info.variant_index = win.variant_index;
-      info.collision_energy = win.collision_energy;
-      info.activation_type = win.activation_type;
-      info.reaction_time = win.reaction_time;
-      info.tic_coverage = win.tic_coverage;
-      info.fragment_count = win.fragment_count;
+      // Empty-baseline abort (or, defensively, no scorable variant): no winner, no follow-up scan.
+      // Children were already cancelled in the baseline hook. Falls through to the cleanup below
+      // (this replaces the old leaking `if (best_idx < 0) return info;`).
+      group.complete = true;
+      std::cout << "[EXPL-ABORT] group=" << group.group_id
+                << " reason=" << (group.baseline_failed ? "empty-baseline" : "no-winner")
+                << " winner=none" << std::endl;
     }
-
-    std::cout << "[EXPL-WINNER] group=" << group.group_id
-              << " winner_idx=" << best_idx
-              << " activation=" << group.variants[best_idx].activation_type
-              << " CE=" << group.variants[best_idx].collision_energy
-              << " RT=" << group.variants[best_idx].reaction_time
-              << " score=" << best_score << std::endl;
-
-    const auto& level_config = config_.level(group.msn_level);
-    if (!level_config.overrides.empty())
+    else
     {
-      ScanConfig prod_config = level_config.scans[0];
-      prod_config.collision_energy = static_cast<int>(group.variants[best_idx].collision_energy);
-      prod_config.reaction_time = group.variants[best_idx].reaction_time;
-      prod_config.activation = group.variants[best_idx].activation_type;
+      group.winner_index = best_idx;
+      group.complete = true;
+      group.variants[best_idx].result.getOrCreateOptimizationMetadata().is_best_variant = true;
 
-      ScanCommand prod_cmd;
-      if (group.msn_level >= 3)
+      // Report the WINNER's metrics in the returned info (not the last-received variant's, which is
+      // what was populated above before winner selection / batch re-scoring).
       {
-        prod_cmd = queue.buildMS3(group.variants[best_idx].cmd, prod_config,
-                                   group.precursor_mz, group.precursor_charge,
-                                   group.isolation_width,
-                                   group.fragment_ion_type, group.fragment_ion_index, 1);
+        const ExplorationVariant& win = group.variants[best_idx];
+        info.score = best_score;
+        info.variant_index = win.variant_index;
+        info.collision_energy = win.collision_energy;
+        info.activation_type = win.activation_type;
+        info.reaction_time = win.reaction_time;
+        info.tic_coverage = win.tic_coverage;
+        info.fragment_count = win.fragment_count;
       }
-      else
+
+      std::cout << "[EXPL-WINNER] group=" << group.group_id
+                << " winner_idx=" << best_idx
+                << " activation=" << group.variants[best_idx].activation_type
+                << " CE=" << group.variants[best_idx].collision_energy
+                << " RT=" << group.variants[best_idx].reaction_time
+                << " score=" << best_score << std::endl;
+
+      const auto& level_config = config_.level(group.msn_level);
+      if (!level_config.overrides.empty())
       {
-        prod_cmd = queue.buildMS2(group.precursor_pg, group.precursor_charge, prod_config, 2);
+        ScanConfig prod_config = level_config.scans[0];
+        prod_config.collision_energy = static_cast<int>(group.variants[best_idx].collision_energy);
+        prod_config.reaction_time = group.variants[best_idx].reaction_time;
+        prod_config.activation = group.variants[best_idx].activation_type;
+
+        ScanCommand prod_cmd;
+        if (group.msn_level >= 3)
+        {
+          prod_cmd = queue.buildMS3(group.variants[best_idx].cmd, prod_config,
+                                     group.precursor_mz, group.precursor_charge,
+                                     group.isolation_width,
+                                     group.fragment_ion_type, group.fragment_ion_index, 1);
+        }
+        else
+        {
+          prod_cmd = queue.buildMS2(group.precursor_pg, group.precursor_charge, prod_config, 2);
+        }
+        prod_cmd.faims_cv = group.faims_cv;
+
+        std::string prod_id = ScanCommandQueue::encode(prod_cmd.scan_id);
+        std::cout << "[TRACK-CREATE] id=" << prod_id
+                  << " ms_level=" << group.msn_level << " type=production"
+                  << std::endl;
+
+        info.commands.push_back(prod_cmd);
       }
-      prod_cmd.faims_cv = group.faims_cv;
-
-      std::string prod_id = ScanCommandQueue::encode(prod_cmd.scan_id);
-      std::cout << "[TRACK-CREATE] id=" << prod_id
-                << " ms_level=" << group.msn_level << " type=production"
-                << std::endl;
-
-      info.commands.push_back(prod_cmd);
-    }
-    else if (group.msn_level < 3)
-    {
-      std::cout << "exploration call site" << std::endl;
-      auto next_nlr = initiateNextLevel(group.msn_level,
-          group.variants[best_idx].result, group.faims_cv, queue,
-          &group.variants[best_idx].cmd);
-      info.commands.insert(info.commands.end(), next_nlr.commands.begin(), next_nlr.commands.end());
+      else if (group.msn_level < 3)
+      {
+        std::cout << "exploration call site" << std::endl;
+        auto next_nlr = initiateNextLevel(group.msn_level,
+            group.variants[best_idx].result, group.faims_cv, queue,
+            &group.variants[best_idx].cmd);
+        info.commands.insert(info.commands.end(), next_nlr.commands.begin(), next_nlr.commands.end());
+      }
     }
 
     for (const auto& vr : group.variants)
@@ -793,11 +841,11 @@ namespace OpenMS
     {
       reference = group.baseline_intensity;
       if (reference <= 0.0)
-        return -1.0;  // Baseline failed: ratio = 1/1, score = 0
+        return 0.0;  // Baseline failed (no in-window signal): score 0; out_ratio stays -1.0 (N/A)
     }
     else
     {
-      return -2.0;  // Baseline not yet received: ratio = 1/1, score = 0
+      return 0.0;  // Baseline not yet received: score 0; out_ratio stays -1.0 (N/A)
     }
 
     double ratio = remaining_intensity / reference;
@@ -805,7 +853,7 @@ namespace OpenMS
     double target = config_.level(group.msn_level).remaining_precursor_target;
     double deviation = std::abs(ratio - target);
     double score = 1.0 - deviation;
-    if (score < 0.0) score = -3.0;
+    if (score < 0.0) score = 0.0;  // floor: score is always in [0, 1]
     return score;
   }
 

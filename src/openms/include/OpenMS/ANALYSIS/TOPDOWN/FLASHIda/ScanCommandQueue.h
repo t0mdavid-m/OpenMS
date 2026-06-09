@@ -113,6 +113,11 @@ namespace OpenMS
     /// Remove expired commands from pending_scan_map_ using timeout_ms
     void cleanupExpired();
 
+    /// Cancel commands by scan_id: remove any matching entries from the priority
+    /// queues AND the pending (in-flight) map. Returns the scan_ids actually removed.
+    /// Used to abort an exploration group's child scans when its baseline fails.
+    std::vector<int> cancelByScanIds(const std::vector<int>& scan_ids);
+
     /// Check if an AGC scan is needed based on agc_interval_ms
     bool needsAGC() const;
 

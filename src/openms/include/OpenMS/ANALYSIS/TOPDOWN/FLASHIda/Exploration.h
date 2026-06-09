@@ -111,6 +111,7 @@ namespace OpenMS
       double faims_cv = 0.0;
       double baseline_intensity = 0.0;    ///< isolation-window intensity from CE=0 scan
       bool has_baseline = false;           ///< whether baseline result has arrived
+      bool baseline_failed = false;        ///< RemainingPrecursor: CE=0 baseline had no in-window signal -> abort (no winner)
       uint64_t start_ms = 0;
       std::vector<ExplorationVariant> variants;
       int winner_index = -1;

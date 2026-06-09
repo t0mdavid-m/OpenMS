@@ -1646,6 +1646,80 @@ START_SECTION(remaining_precursor_score_no_signal_in_window)
 }
 END_SECTION
 
+START_SECTION(remaining_precursor_empty_baseline_aborts_group)
+{
+  // Empty baseline window => no CE variant can be scored. The group must abort: cancel its
+  // still-queued child scans, pick no winner, and emit no follow-up production scan.
+  Config cfg{std::string(remaining_precursor_config)};
+  ScanCommandQueue queue(cfg);
+  Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+
+  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
+  TEST_EQUAL(static_cast<int>(cmds.size()), 6)
+
+  // Push the 5 CE variants (children) into the queue; feed the baseline directly (already acquired).
+  for (size_t i = 1; i < cmds.size(); ++i) queue.push(cmds[i]);
+  TEST_EQUAL(static_cast<int>(queue.queueSize(2)), 5)
+
+  // CE=0 baseline with raw data entirely OUTSIDE the precursor window -> baseline_intensity = 0.
+  std::vector<double> mzs = {400.0, 500.0, 600.0, 1200.0};
+  std::vector<double> intensities = {100.0, 200.0, 300.0, 400.0};
+  int baseline_tid = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
+  auto info = exploration.feedResult(baseline_tid, mzs.data(), intensities.data(),
+                                     static_cast<int>(mzs.size()), 0.5, queue);
+
+  // All 5 queued children cancelled; group finalized with no winner and no follow-up scan.
+  TEST_EQUAL(static_cast<int>(queue.queueSize(2)), 0)
+  TEST_EQUAL(exploration.activeGroupCount(), 0)
+  TEST_EQUAL(static_cast<int>(info.commands.size()), 0)
+}
+END_SECTION
+
+START_SECTION(remaining_precursor_inflight_child_after_abort_is_noop)
+{
+  // A child already dequeued/sent to the device (in-flight) that returns its result AFTER the
+  // group has aborted must be a harmless no-op and must not resurrect the cleaned-up group.
+  Config cfg{std::string(remaining_precursor_config)};
+  ScanCommandQueue queue(cfg);
+  Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+
+  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
+  TEST_EQUAL(static_cast<int>(cmds.size()), 6)
+
+  // cmds[2..5] still queued; cmds[1] already sent to the device (in-flight, in pending_scan_map_).
+  for (size_t i = 2; i < cmds.size(); ++i) queue.push(cmds[i]);
+  queue.registerPending(cmds[1]);
+  int inflight_tid = queue.decode(std::string(cmds[1].scan_description).substr(0, 3));
+  TEST_EQUAL(queue.peekPending(inflight_tid).has_value(), true)
+
+  // Baseline returns empty -> abort.
+  std::vector<double> mzs = {400.0, 500.0, 600.0, 1200.0};
+  std::vector<double> intensities = {100.0, 200.0, 300.0, 400.0};
+  int baseline_tid = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
+  exploration.feedResult(baseline_tid, mzs.data(), intensities.data(),
+                         static_cast<int>(mzs.size()), 0.5, queue);
+
+  TEST_EQUAL(exploration.activeGroupCount(), 0)                    // aborted + cleaned up
+  TEST_EQUAL(static_cast<int>(queue.queueSize(2)), 0)             // queued children cancelled
+  TEST_EQUAL(queue.peekPending(inflight_tid).has_value(), false)  // in-flight child cancelled from pending
+
+  // The device now finishes the in-flight child and returns its result LATE -> harmless no-op.
+  std::vector<double> frag_mzs = {790.0, 800.0, 810.0, 900.0};
+  std::vector<double> frag_ints = {100.0, 500.0, 200.0, 50.0};
+  auto late_info = exploration.feedResult(inflight_tid, frag_mzs.data(), frag_ints.data(),
+                                          static_cast<int>(frag_mzs.size()), 1.0, queue);
+  TEST_EQUAL(late_info.group_id, -1)                              // empty info (routing entry gone)
+  TEST_EQUAL(late_info.variant_index, -1)                         // not routed to any variant
+  TEST_EQUAL(exploration.activeGroupCount(), 0)                   // group NOT resurrected
+}
+END_SECTION
+
 START_SECTION(fragment_count_requires_protein_sequence)
 {
   // Config with fragment_count metric but empty protein_sequence should throw
