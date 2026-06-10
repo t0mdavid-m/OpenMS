@@ -747,6 +747,11 @@ namespace
         "\"inclusion_list\": \"../../FlashIDA/test-data/configs/inclusion_cytc.txt\"");
     rep("GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE",
         "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE");
+    // Activate MS2 selection: Exploration::initiateNextLevel (Exploration.cpp:574) returns 0
+    // commands when the current level's selection is None, so the MS2-exploration winner would
+    // never emit MS3. "selection": "none" is unique to the ms2 block in ms3_selection_only_config
+    // (ms1=qscore, ms3=intensity); a no-op for ms3_exploration_config (already intensity).
+    rep("\"selection\": \"none\"", "\"selection\": \"intensity\"");
     return cfg;
   }
 
