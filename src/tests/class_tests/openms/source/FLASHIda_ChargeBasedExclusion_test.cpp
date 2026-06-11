@@ -92,7 +92,11 @@ namespace
     }
   })";
 
-  const std::string ms1_tsv_path = "../../FlashIDA/test-data/spectra/ms1_standard.txt";
+  // cytC (~12356 Da neutral) is present at many charge states (envelopes at m/z
+  // ~1030/1124/1236/1373/1545), so a single mass appears at >=2 charges (CBE-03) and every
+  // scan is productive — unlike ms1_standard (<=1 selectable/scan, charges spread across
+  // different masses), which left CBE-03/04/06 with 0 MS2.
+  const std::string ms1_tsv_path = "../../FlashIDA/test-data/spectra/ms1_cytc.txt";
 
   struct ScanData
   {
@@ -216,16 +220,16 @@ START_SECTION(flag_on_suppresses_reacquisition_across_scans)
 {
   auto scans = loadTsvScans(ms1_tsv_path);
   ABORT_IF(scans.empty())
-  const auto& s0 = scans.front();
 
   FLASHIda ida(const_cast<char*>(base_on_json));
-
-  // First invocation.
-  int first_count = ida.processScan(s0.mzs.data(), s0.ints.data(),
-                                    (int)s0.mzs.size(), s0.rt, 1, "scan_0a");
-  // Drain the queue produced by the first scan before the second invocation.
-  int drained_first = 0;
   ScanCommand cmd{};
+
+  // First pass: drive every scan once (a single scan may yield no selectable precursor;
+  // the full sequence reliably does), then drain the MS2 commands produced.
+  for (const auto& s : scans)
+    ida.processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1,
+                    ("scan_" + s.scan_id + "_a").c_str());
+  int drained_first = 0;
   while (ida.getNextScanCommand(cmd) == 1)
   {
     if (cmd.is_agc) { break; }
@@ -233,10 +237,11 @@ START_SECTION(flag_on_suppresses_reacquisition_across_scans)
   }
   TEST_EQUAL(drained_first > 0, true)
 
-  // Second invocation with the exact same spectrum and a slightly later RT
-  // so the rt_window-based eviction doesn't clear the per-charge set.
-  int second_count = ida.processScan(s0.mzs.data(), s0.ints.data(),
-                                     (int)s0.mzs.size(), s0.rt + 0.001, 1, "scan_0b");
+  // Second pass: same precursors at an RT within rt_window, so the per-(mass, charge)
+  // exclusion set populated in pass 1 suppresses re-acquisition.
+  for (const auto& s : scans)
+    ida.processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt + 0.001, 1,
+                    ("scan_" + s.scan_id + "_b").c_str());
   int drained_second = 0;
   while (ida.getNextScanCommand(cmd) == 1)
   {
@@ -244,7 +249,6 @@ START_SECTION(flag_on_suppresses_reacquisition_across_scans)
     if (cmd.msn_level == 2) { drained_second++; }
   }
   TEST_EQUAL(drained_second < drained_first, true)
-  (void)first_count; (void)second_count;
 }
 END_SECTION
 
@@ -268,15 +272,15 @@ START_SECTION(flag_on_rt_window_eviction_reenables_charge)
 {
   auto scans = loadTsvScans(ms1_tsv_path);
   ABORT_IF(scans.empty())
-  const auto& s0 = scans.front();
 
   FLASHIda ida(const_cast<char*>(base_on_json));
-
-  // First acquisition at rt=0 populates per-charge exclusion entries.
-  ida.processScan(s0.mzs.data(), s0.ints.data(),
-                  (int)s0.mzs.size(), 0.0, 1, "scan_0a");
-  int drained_first = 0;
   ScanCommand cmd{};
+
+  // First pass at the scans' own RTs populates per-(mass, charge) exclusion entries.
+  for (const auto& s : scans)
+    ida.processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1,
+                    ("scan_" + s.scan_id + "_a").c_str());
+  int drained_first = 0;
   while (ida.getNextScanCommand(cmd) == 1)
   {
     if (cmd.is_agc) { break; }
@@ -284,18 +288,18 @@ START_SECTION(flag_on_rt_window_eviction_reenables_charge)
   }
   TEST_EQUAL(drained_first > 0, true)
 
-  // Second acquisition at rt far past rt_window (default 180) — evictions fire,
-  // per-charge state is cleared, charges become eligible again.
-  ida.processScan(s0.mzs.data(), s0.ints.data(),
-                  (int)s0.mzs.size(), 1000.0, 1, "scan_0c");
+  // Second pass far past rt_window (default 180): evictions fire, per-charge state is
+  // cleared, charges become eligible again, so re-acquisition is not suppressed.
+  for (const auto& s : scans)
+    ida.processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt + 1000.0, 1,
+                    ("scan_" + s.scan_id + "_c").c_str());
   int drained_second = 0;
   while (ida.getNextScanCommand(cmd) == 1)
   {
     if (cmd.is_agc) { break; }
     if (cmd.msn_level == 2) { drained_second++; }
   }
-  // With eviction, the second scan should acquire the same number of charges as the first
-  // (not fewer — the exclusion state was cleared). Allow a small delta for edge effects.
+  // Eviction cleared the per-charge state, so the second pass acquires at least as many.
   TEST_EQUAL(drained_second >= drained_first, true)
 }
 END_SECTION
