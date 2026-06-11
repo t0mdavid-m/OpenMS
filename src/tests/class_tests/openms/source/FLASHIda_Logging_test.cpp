@@ -518,17 +518,30 @@ START_SECTION(join_integrity)
   }
   TEST_TRUE(! cmd_ids.empty());
 
-  // Non-vacuous guard: at least one results row must carry child_ids (MS3 children were
-  // recorded). The strict per-child cross-file join (every child_id resolves to a commands
-  // tracking_id, and commands_pushed == child_count) fails for ALL rows for reasons static
-  // analysis can't explain; this cycle captures the raw TSVs (see CI diag step) instead of
-  // asserting it. TODO(round-3): restore a correct join check from the captured data.
+  // Strict join: every child_id in a results row must resolve to a commands-TSV tracking_id,
+  // and commands_pushed must equal the child count. Verified against captured runtime data
+  // (round-2 diag): e.g. MS2 parent !!! -> child_ids !"B..!"K == its 10 MS3 command ids.
   int child_col = res_tsv.colIndex("child_ids");
+  int pushed_col = res_tsv.colIndex("commands_pushed");
   bool checked_any_child = false;
   for (const auto& row : res_tsv.rows)
   {
     if (child_col >= 0 && child_col < (int)row.size() && ! row[child_col].empty())
+    {
+      std::istringstream child_ss(row[child_col]);
+      std::string child_id;
+      int child_count = 0;
+      while (std::getline(child_ss, child_id, ';'))
+      {
+        TEST_TRUE(cmd_ids.count(child_id) > 0);
+        child_count++;
+      }
+      if (pushed_col >= 0 && pushed_col < (int)row.size())
+      {
+        TEST_EQUAL(std::stoi(row[pushed_col]), child_count);
+      }
       checked_any_child = true;
+    }
   }
   TEST_TRUE(checked_any_child);
 

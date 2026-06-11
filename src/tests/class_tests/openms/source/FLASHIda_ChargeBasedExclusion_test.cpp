@@ -59,7 +59,7 @@ namespace
 
   const char* base_on_json = R"({
     "deconvolution": {
-      "score_threshold": 0.0, "tqscore_threshold": 0.9,
+      "score_threshold": 0.0, "tqscore_threshold": 0.3,
       "min_charge": 4, "max_charge": 50,
       "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
     },
