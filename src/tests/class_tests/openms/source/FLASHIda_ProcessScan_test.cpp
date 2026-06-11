@@ -667,9 +667,11 @@ namespace
       int nchild = 0;
       if (ci_child < (int)fields.size() && ! fields[ci_child].empty())
       {
+        // child_ids are space-separated (separator is outside the tracking-id alphabet, which
+        // includes ';'); split on ' ' to match writeScanResultRow_'s child_str join.
         std::istringstream cs(fields[ci_child]);
         std::string cid;
-        while (std::getline(cs, cid, ';')) { if (! cid.empty()) nchild++; }
+        while (std::getline(cs, cid, ' ')) { if (! cid.empty()) nchild++; }
       }
       rows.emplace_back(pushed, nchild);
     }

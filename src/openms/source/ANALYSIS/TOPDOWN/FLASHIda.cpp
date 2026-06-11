@@ -397,7 +397,10 @@ FLASHIda::FLASHIda(char* arg) :
     std::string child_str;
     for (size_t i = 0; i < child_ids.size(); i++)
     {
-      if (i > 0) child_str += ";";
+      // The child_ids separator MUST be outside the 0x21-0x7E tracking-id alphabet
+      // (encoded ids may contain ';', ',', '"', etc.); space (0x20) is the only printable
+      // char the alphabet excludes, so ids can never collide with it. Readers split on ' '.
+      if (i > 0) child_str += " ";
       child_str += child_ids[i];
     }
 

@@ -479,11 +479,8 @@ START_SECTION(join_integrity)
   auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
   ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
 
-  // TEMP diagnostic (round-2): write to a known path under FlashIDA and DO NOT delete at the
-  // end, so a CI step can dump tracking_id (commands) vs child_ids (results) and reveal why
-  // the strict join failed. Revert to test_join_*.tsv + std::remove next cycle.
-  std::string commands_file = "../../FlashIDA/join_commands_diag.tsv";
-  std::string results_file = "../../FlashIDA/join_results_diag.tsv";
+  std::string commands_file = "test_join_commands.tsv";
+  std::string results_file = "test_join_results.tsv";
   std::remove(commands_file.c_str());
   std::remove(results_file.c_str());
 
@@ -519,8 +516,9 @@ START_SECTION(join_integrity)
   TEST_TRUE(! cmd_ids.empty());
 
   // Strict join: every child_id in a results row must resolve to a commands-TSV tracking_id,
-  // and commands_pushed must equal the child count. Verified against captured runtime data
-  // (round-2 diag): e.g. MS2 parent !!! -> child_ids !"B..!"K == its 10 MS3 command ids.
+  // and commands_pushed must equal the child count. child_ids are space-separated (the
+  // separator is outside the 0x21-0x7E tracking-id alphabet so ids can never collide with it;
+  // ';' would, e.g. the id "!!;"). e.g. MS2 parent !!! -> child_ids "!"B .. !"K" == its 10 MS3 ids.
   int child_col = res_tsv.colIndex("child_ids");
   int pushed_col = res_tsv.colIndex("commands_pushed");
   bool checked_any_child = false;
@@ -531,7 +529,7 @@ START_SECTION(join_integrity)
       std::istringstream child_ss(row[child_col]);
       std::string child_id;
       int child_count = 0;
-      while (std::getline(child_ss, child_id, ';'))
+      while (std::getline(child_ss, child_id, ' '))
       {
         TEST_TRUE(cmd_ids.count(child_id) > 0);
         child_count++;
@@ -545,8 +543,8 @@ START_SECTION(join_integrity)
   }
   TEST_TRUE(checked_any_child);
 
-  // TEMP diagnostic (round-2): intentionally NOT deleting the diag TSVs so the CI step can
-  // dump them. Restore std::remove(commands_file)/std::remove(results_file) next cycle.
+  std::remove(commands_file.c_str());
+  std::remove(results_file.c_str());
 }
 END_SECTION
 
