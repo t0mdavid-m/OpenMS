@@ -447,7 +447,8 @@ set(analysis_executables_list
   ConsensusMapNormalizerAlgorithmQuantile_test
   ConsensusMapMergerAlgorithm_test
   #DataAccessHelper_test
-  # DeconvolvedSpectrum_test
+  # DeconvolvedSpectrum_test  # OpenMS data-structure unit test, out of FLASHIda scope;
+  #                           # superseded here by DeconvolvedSpectrum_OptimizationMetadata_test (D2)
   DeconvolvedSpectrum_OptimizationMetadata_test
   FLASHIdaFAIMS_test
   FLASHIdaQueueTracking_test
@@ -473,10 +474,13 @@ set(analysis_executables_list
   FeatureGroupingAlgorithm_test
   FeatureHandle_test
   FIAMSDataProcessor_test
-  # FIAMSScheduler_test
-  # FLASHDeconvAlgorithm_test
-  # FLASHDeconvHelperStructs_test
-  # FLASHTaggerAlgorithm_test
+  # Intentionally excluded — out of FLASHIda real-time-bridge test scope (we test the IDA
+  # bridge, not OpenMS/offline-FLASHDeconv library units). See
+  # docs/superpowers/plans/2026-06-11-test-falsepass-mitigation.md (D2).
+  # FIAMSScheduler_test             # offline FIA-MS batch scheduler, not FLASHIda
+  # FLASHDeconvAlgorithm_test       # offline FLASHDeconv tool, not the real-time IDA bridge
+  # FLASHDeconvHelperStructs_test   # OpenMS/FLASHDeconv helper-struct unit test, out of scope
+  # FLASHTaggerAlgorithm_test       # offline tagger; test is stale (hardcoded paths) - needs rewrite
   IDBoostGraph_test
   IDMapper_test
   IDMergerAlgorithm_test

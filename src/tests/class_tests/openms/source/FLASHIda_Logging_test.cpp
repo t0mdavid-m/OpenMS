@@ -342,6 +342,16 @@ START_SECTION(scan_commands_tsv_format)
   int iso_width_col = tsv.colIndex("isolation_width");
   int col_energy_col = tsv.colIndex("collision_energy");
 
+  // Fail closed on a dropped/renamed format column: these must exist, otherwise the per-row
+  // semicolon-format checks below would silently no-op (colIndex returns -1) and a schema
+  // regression would pass unnoticed. (The per-row `< row.size()` guards remain for bounds.)
+  TEST_TRUE(ms_level_col >= 0);
+  TEST_TRUE(charge_col >= 0);
+  TEST_TRUE(activation_col >= 0);
+  TEST_TRUE(precursor_mz_col >= 0);
+  TEST_TRUE(iso_width_col >= 0);
+  TEST_TRUE(col_energy_col >= 0);
+
   bool found_ms2 = false;
   bool found_ms3 = false;
   for (const auto& row : tsv.rows)
@@ -462,8 +472,11 @@ END_SECTION
 // Test 4: Join integrity -- every child_id in results exists in commands, full MS3 cycle
 START_SECTION(join_integrity)
 {
-  auto ms1_scans = loadTsvScans(ms1_tsv_path);
-  auto ms2_scans = loadTsvScans(ms2_tsv_path);
+  // Real CytC MS1+MS2 with MS3 enabled so the parent-child join graph is actually
+  // populated; with generic data + MS3 off every child_ids cell is empty and the join
+  // loop below never runs, letting the section pass having asserted nothing.
+  auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
+  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
   ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
 
   std::string commands_file = "test_join_commands.tsv";
@@ -472,7 +485,7 @@ START_SECTION(join_integrity)
   std::remove(results_file.c_str());
 
   // Enable MS3 for full parent-child graph testing
-  std::string json = buildJsonWithRuntime("", commands_file, results_file, false);
+  std::string json = buildJsonWithRuntime("", commands_file, results_file, true);
   FLASHIda ida(const_cast<char*>(json.c_str()));
 
   // Full MS1->MS2->MS3 cycle (with MS3 fed back)
@@ -488,6 +501,10 @@ START_SECTION(join_integrity)
   auto cmd_tsv = TSVFile::parse(commands_file);
   auto res_tsv = TSVFile::parse(results_file);
 
+  // MS3 must actually have fired, else the join graph is empty and the loop below
+  // would validate nothing.
+  TEST_TRUE(cycle.ms3_cmds.size() > 0);
+
   // Build set of all command tracking_ids
   std::set<std::string> cmd_ids;
   int cmd_id_col = cmd_tsv.colIndex("tracking_id");
@@ -496,10 +513,12 @@ START_SECTION(join_integrity)
     if (cmd_id_col >= 0 && cmd_id_col < (int)row.size())
       cmd_ids.insert(row[cmd_id_col]);
   }
+  TEST_TRUE(! cmd_ids.empty());
 
   // Every child_id in results must exist in commands
   int child_col = res_tsv.colIndex("child_ids");
   int pushed_col = res_tsv.colIndex("commands_pushed");
+  bool checked_any_child = false;
   for (const auto& row : res_tsv.rows)
   {
     if (child_col >= 0 && child_col < (int)row.size() && ! row[child_col].empty())
@@ -518,8 +537,11 @@ START_SECTION(join_integrity)
       {
         TEST_EQUAL(std::stoi(row[pushed_col]), child_count);
       }
+      checked_any_child = true;
     }
   }
+  // Fail closed: at least one results row must have carried validated child_ids.
+  TEST_TRUE(checked_any_child);
 
   std::remove(commands_file.c_str());
   std::remove(results_file.c_str());
@@ -529,8 +551,11 @@ END_SECTION
 // Test 5: Crash safety -- files are valid TSV after each operation (including MS3)
 START_SECTION(crash_safety_valid_tsv)
 {
-  auto ms1_scans = loadTsvScans(ms1_tsv_path);
-  auto ms2_scans = loadTsvScans(ms2_tsv_path);
+  // Real CytC MS1+MS2 with MS3 enabled so the MS2 and MS3 crash-safety paths below are
+  // actually reached; with MS3 off the MS3 block was unreachable and the MS2 block was a
+  // no-failing-else conditional, so the section validated only the MS1 path.
+  auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
+  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
   ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
 
   std::string commands_file = "test_crash_commands.tsv";
@@ -539,7 +564,7 @@ START_SECTION(crash_safety_valid_tsv)
   std::remove(results_file.c_str());
 
   // Enable MS3 for full cycle
-  std::string json = buildJsonWithRuntime("", commands_file, results_file, false);
+  std::string json = buildJsonWithRuntime("", commands_file, results_file, true);
   FLASHIda ida(const_cast<char*>(json.c_str()));
 
   // After constructor: headers should exist
@@ -550,9 +575,8 @@ START_SECTION(crash_safety_valid_tsv)
     TEST_TRUE(res_tsv.headers.size() > 0);
   }
 
-  // Push one MS1 scan, check files are valid
-  ida.processScan(ms1_scans[0].mzs.data(), ms1_scans[0].ints.data(),
-                  (int)ms1_scans[0].mzs.size(), ms1_scans[0].rt, 1, "scan_1");
+  // Push all MS1 scans, check results file is valid
+  pushAllScans(&ida, ms1_scans);
   {
     auto res_tsv = TSVFile::parse(results_file);
     TEST_TRUE(res_tsv.rows.size() >= 1);
@@ -560,9 +584,17 @@ START_SECTION(crash_safety_valid_tsv)
       TEST_EQUAL(row.size(), res_tsv.headers.size());
   }
 
-  // Dequeue one command, check commands file is valid
-  ScanCommand cmd;
-  ida.getNextScanCommand(cmd);
+  // Dequeue all MS2 commands (break on the idle-cycle AGC); commands file must stay valid
+  // and at least one MS2 command must have been produced (positive expectation, not a
+  // no-failing-else conditional).
+  std::vector<ScanCommand> ms2_cmds;
+  ScanCommand cmd{};
+  while (ida.getNextScanCommand(cmd) > 0)
+  {
+    if (cmd.msn_level == 2) ms2_cmds.push_back(cmd);
+    if (cmd.is_agc) break;
+  }
+  TEST_TRUE(ms2_cmds.size() > 0);
   {
     auto cmd_tsv = TSVFile::parse(commands_file);
     TEST_TRUE(cmd_tsv.rows.size() >= 1);
@@ -570,41 +602,40 @@ START_SECTION(crash_safety_valid_tsv)
       TEST_EQUAL(row.size(), cmd_tsv.headers.size());
   }
 
-  // Feed MS2 result back, check files are still valid
-  if (cmd.msn_level == 2)
-  {
+  // Feed every MS2 result back, check results file is still valid
+  for (const auto& m : ms2_cmds)
     ida.processScan(ms2_scans[0].mzs.data(), ms2_scans[0].ints.data(),
                     (int)ms2_scans[0].mzs.size(), ms2_scans[0].rt, 2,
-                    cmd.scan_description);
-    {
-      auto res_tsv = TSVFile::parse(results_file);
-      for (const auto& row : res_tsv.rows)
-        TEST_EQUAL(row.size(), res_tsv.headers.size());
-    }
+                    m.scan_description);
+  {
+    auto res_tsv = TSVFile::parse(results_file);
+    for (const auto& row : res_tsv.rows)
+      TEST_EQUAL(row.size(), res_tsv.headers.size());
   }
 
-  // Dequeue MS3 if available, feed back, check files
-  ScanCommand ms3_cmd;
-  if (ida.getNextScanCommand(ms3_cmd) > 0 && ms3_cmd.msn_level == 3)
+  // Dequeue MS3 commands (break on idle AGC); commands file valid and MS3 must have fired.
+  std::vector<ScanCommand> ms3_cmds;
+  while (ida.getNextScanCommand(cmd) > 0)
   {
-    // Check commands file after MS3 dequeue
-    {
-      auto cmd_tsv = TSVFile::parse(commands_file);
-      for (const auto& row : cmd_tsv.rows)
-        TEST_EQUAL(row.size(), cmd_tsv.headers.size());
-    }
+    if (cmd.msn_level == 3) ms3_cmds.push_back(cmd);
+    if (cmd.is_agc) break;
+  }
+  TEST_TRUE(ms3_cmds.size() > 0);
+  {
+    auto cmd_tsv = TSVFile::parse(commands_file);
+    for (const auto& row : cmd_tsv.rows)
+      TEST_EQUAL(row.size(), cmd_tsv.headers.size());
+  }
 
-    // Feed MS3 result back
+  // Feed every MS3 result back, check results file is still valid
+  for (const auto& m : ms3_cmds)
     ida.processScan(ms2_scans[0].mzs.data(), ms2_scans[0].ints.data(),
                     (int)ms2_scans[0].mzs.size(), ms2_scans[0].rt, 3,
-                    ms3_cmd.scan_description);
-
-    // Check results file after MS3 result
-    {
-      auto res_tsv = TSVFile::parse(results_file);
-      for (const auto& row : res_tsv.rows)
-        TEST_EQUAL(row.size(), res_tsv.headers.size());
-    }
+                    m.scan_description);
+  {
+    auto res_tsv = TSVFile::parse(results_file);
+    for (const auto& row : res_tsv.rows)
+      TEST_EQUAL(row.size(), res_tsv.headers.size());
   }
 
   std::remove(commands_file.c_str());
