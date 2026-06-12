@@ -313,6 +313,26 @@ namespace
   {
   }
 
+  // Re-compute the fragment precursor's deconvolution scores from the live PeakGroup,
+  // mirroring buildMS2 (ScanCommandQueue.cpp) getter-for-getter. Used for the stage-1
+  // (fragment) scoring columns of an MS3 scan_commands row.
+  FragmentAnalysis::FragmentScores
+  FragmentAnalysis::FragmentScores::fromPeakGroup(const PeakGroup& pg, int abs_charge)
+  {
+    FragmentScores s;
+    s.mono_mass            = pg.getMonoMass();
+    s.qscore               = pg.getQscore();
+    s.charge_cos           = pg.getChargeIsotopeCosine(abs_charge);
+    s.charge_snr           = pg.getChargeSNR(abs_charge);
+    s.iso_cos              = pg.getIsotopeCosine();
+    s.snr                  = pg.getSNR();
+    s.charge_score         = pg.getChargeScore();
+    s.ppm_error            = pg.getAvgPPMError();
+    s.precursor_intensity  = pg.getChargeIntensity(abs_charge);
+    s.peakgroup_intensity  = pg.getIntensity();
+    return s;
+  }
+
   int FragmentAnalysis::getBestMS2Masses(int n,
                                          double* masses,
                                          double* qscores,
@@ -711,7 +731,7 @@ namespace
         TagBasedFragmentMatch match;
         match.peak_index = static_cast<int>(peak_idx);
         match.observed_mass = observed_mass;
-        match.qscore = pg.getChargeIntensity(pg.getMaxIntensityAbsCharge());
+        match.intensity = pg.getChargeIntensity(pg.getMaxIntensityAbsCharge());
         match.charge = pg.getMaxIntensityAbsCharge();
         match.fragment_index = best_frag_idx;
         match.ion_type = best_ion_type;
@@ -721,10 +741,10 @@ namespace
       }
     }
 
-    // 11. Sort by qscore descending
+    // 11. Sort by intensity descending
     std::sort(matches.begin(), matches.end(),
               [](const TagBasedFragmentMatch& a, const TagBasedFragmentMatch& b) {
-                return a.qscore > b.qscore;
+                return a.intensity > b.intensity;
               });
 
     // === Diagnostic Output: Matched fragment ions ===
@@ -735,7 +755,7 @@ namespace
       const auto& m = matches[i];
       std::cout << "  " << m.ion_type << m.fragment_index
                 << " - " << std::fixed << std::setprecision(2) << m.observed_mass << " Da"
-                << " (qscore: " << std::setprecision(2) << m.qscore << ")" << std::endl;
+                << " (intensity:" << std::setprecision(2) << m.intensity << ")" << std::endl;
     }
     if (matches.size() > 10)
     {
@@ -768,7 +788,8 @@ namespace
                                               DeconvolvedSpectrum& stored_ms2,
                                               ProteoformMatch& result,
                                               const String& fragmentation_method,
-                                              double tolerance_ppm)
+                                              double tolerance_ppm,
+                                              FragmentScores* frag_scores)
   {
     std::cout << "Matching fragments!" << std::endl;
     // Use tag-based matching workflow (FLASHTagger + FLASHExtender)
@@ -783,13 +804,14 @@ namespace
 
       // Single charge behavior
       masses[output_idx] = m.observed_mass;
-      qscores[output_idx] = m.qscore;
+      qscores[output_idx] = m.intensity;
       charges[output_idx] = m.charge;
       ion_types[output_idx] = m.ion_type;
       fragment_indices[output_idx] = m.fragment_index;
       auto [mz1, mz2] = pg.getMzRange(m.charge);
       window_starts[output_idx] = mz1 - optimal_window_margin_;
       window_ends[output_idx] = mz2 + optimal_window_margin_;
+      if (frag_scores) frag_scores[output_idx] = FragmentScores::fromPeakGroup(pg, std::abs(m.charge));
       ++output_idx;
     }
 
@@ -852,7 +874,8 @@ namespace
                                                   DeconvolvedSpectrum& stored_ms2,
                                                   ProteoformMatch& result,
                                                   const String& fragmentation_method,
-                                                  double tolerance_ppm)
+                                                  double tolerance_ppm,
+                                                  FragmentScores* frag_scores)
   {
     // Get fragment matches AND PTM sites from FLASHExtender
     std::vector<TagBasedFragmentMatch> fragment_ion_match;
@@ -887,7 +910,7 @@ namespace
 
     // New data structures for interleaved PTM site output
     struct EnclosingIon {
-      float qscore;
+      float intensity;  // max-charge intensity (sort key, copied from TagBasedFragmentMatch.intensity); NOT a qscore
       int peak_index;
       char ion_type;
       int fragment_index;
@@ -934,7 +957,7 @@ namespace
       for (const auto& [dist, m] : left_candidates)
       {
         int n_term = seq_len - m->fragment_index + 1;  // N-terminal position
-        brackets.left_ions.push_back({static_cast<float>(m->qscore), m->peak_index, m->ion_type,
+        brackets.left_ions.push_back({static_cast<float>(m->intensity), m->peak_index, m->ion_type,
                                       m->fragment_index, n_term, seq_len});
       }
 
@@ -956,21 +979,21 @@ namespace
 
       for (const auto& [dist, m] : right_candidates)
       {
-        brackets.right_ions.push_back({static_cast<float>(m->qscore), m->peak_index, m->ion_type,
+        brackets.right_ions.push_back({static_cast<float>(m->intensity), m->peak_index, m->ion_type,
                                        m->fragment_index, 1, m->fragment_index});
       }
 
-      // Priority = max qscore of primary brackets
+      // Priority = max intensity of primary brackets
       brackets.priority = 0.0f;
-      if (!brackets.left_ions.empty()) brackets.priority = std::max(brackets.priority, brackets.left_ions[0].qscore);
-      if (!brackets.right_ions.empty()) brackets.priority = std::max(brackets.priority, brackets.right_ions[0].qscore);
+      if (!brackets.left_ions.empty()) brackets.priority = std::max(brackets.priority, brackets.left_ions[0].intensity);
+      if (!brackets.right_ions.empty()) brackets.priority = std::max(brackets.priority, brackets.right_ions[0].intensity);
 
       // Debug output for this PTM site
       std::cout << "[getAmbiguityEnclosingIons] PTM [" << site.start_position << "-" << site.end_position << "]:" << std::endl;
       if (!brackets.left_ions.empty())
       {
         std::cout << "  Left bracket (primary): " << brackets.left_ions[0].ion_type << brackets.left_ions[0].fragment_index
-                  << " (qscore: " << brackets.left_ions[0].qscore << ", total candidates: " << brackets.left_ions.size() << ")" << std::endl;
+                  << " (intensity:" << brackets.left_ions[0].intensity << ", total candidates: " << brackets.left_ions.size() << ")" << std::endl;
       }
       else
       {
@@ -979,7 +1002,7 @@ namespace
       if (!brackets.right_ions.empty())
       {
         std::cout << "  Right bracket (primary): " << brackets.right_ions[0].ion_type << brackets.right_ions[0].fragment_index
-                  << " (qscore: " << brackets.right_ions[0].qscore << ", total candidates: " << brackets.right_ions.size() << ")" << std::endl;
+                  << " (intensity:" << brackets.right_ions[0].intensity << ", total candidates: " << brackets.right_ions.size() << ")" << std::endl;
       }
       else
       {
@@ -1027,13 +1050,14 @@ namespace
 
       int charge = pg.getMaxIntensityAbsCharge();
       masses[output_idx] = mono_mass;
-      qscores[output_idx] = ion.qscore;
+      qscores[output_idx] = ion.intensity;
       charges[output_idx] = charge;
       ion_types[output_idx] = ion.ion_type;
       fragment_indices[output_idx] = ion.fragment_index;
       auto [mz1, mz2] = pg.getMzRange(charge);
       window_starts[output_idx] = mz1 - optimal_window_margin_;
       window_ends[output_idx] = mz2 + optimal_window_margin_;
+      if (frag_scores) frag_scores[output_idx] = FragmentScores::fromPeakGroup(pg, charge);
       ++output_idx;
     };
 
@@ -1161,7 +1185,8 @@ namespace
       DeconvolvedSpectrum& stored_ms2,
       ProteoformMatch& result,
       const String& fragmentation_method,
-      double tolerance_ppm)
+      double tolerance_ppm,
+      FragmentScores* frag_scores)
   {
     // Run fragment matching to get all matches
     std::vector<TagBasedFragmentMatch> matches;
@@ -1180,16 +1205,16 @@ namespace
     std::cout << "[getTerminalFragmentIons] Found " << prefix_ions.size() << " prefix ions and "
               << suffix_ions.size() << " suffix ions" << std::endl;
 
-    // Sort prefix ions by fragment_index descending (rightmost first), then qscore descending
+    // Sort prefix ions by fragment_index descending (rightmost first), then intensity descending
     std::sort(prefix_ions.begin(), prefix_ions.end(), [](const auto& a, const auto& b) {
       if (a.fragment_index != b.fragment_index) return a.fragment_index > b.fragment_index;
-      return a.qscore > b.qscore;
+      return a.intensity > b.intensity;
     });
 
-    // Sort suffix ions by fragment_index descending (leftmost first), then qscore descending
+    // Sort suffix ions by fragment_index descending (leftmost first), then intensity descending
     std::sort(suffix_ions.begin(), suffix_ions.end(), [](const auto& a, const auto& b) {
       if (a.fragment_index != b.fragment_index) return a.fragment_index > b.fragment_index;
-      return a.qscore > b.qscore;
+      return a.intensity > b.intensity;
     });
 
     if (!prefix_ions.empty())
@@ -1243,13 +1268,14 @@ namespace
 
         // Single charge behavior
         masses[output_idx] = selected->observed_mass;
-        qscores[output_idx] = selected->qscore;
+        qscores[output_idx] = selected->intensity;
         charges[output_idx] = selected->charge;
         ion_types[output_idx] = selected->ion_type;
         fragment_indices[output_idx] = selected->fragment_index;
         auto [mz_start, mz_end] = pg.getMzRange(selected->charge);
         window_starts[output_idx] = mz_start - optimal_window_margin_;
         window_ends[output_idx] = mz_end + optimal_window_margin_;
+        if (frag_scores) frag_scores[output_idx] = FragmentScores::fromPeakGroup(pg, std::abs(selected->charge));
         ++output_idx;
       }
       select_prefix = !select_prefix;  // Alternate between prefix and suffix

@@ -257,7 +257,7 @@ namespace OpenMS
     std::chrono::steady_clock::time_point engine_start_time_;
 
     /// Write IDA log entry for MS1 deconvolution results
-    void writeIDALogEntry_(double rt, const std::string& tracking_id,
+    void writeIDALogEntry_(double rt, int scan_number, const std::string& tracking_id,
                            const std::vector<ScanCommand>& ms2_commands,
                            const DeconvolvedSpectrum& all_peak_groups);
 
@@ -276,10 +276,10 @@ namespace OpenMS
                              float tic_coverage = 0.0f, int fragment_count = 0,
                              int exploration_group_id = -1, int exploration_metric = 0,
                              int variant_index = -1, int total_variants = 0,
-                             double collision_energy = 0.0, double exploration_score = -1.0,
+                             const std::string& collision_energy = "0", double exploration_score = -1.0,
                              double remaining_ratio = -1.0,
                              const std::string& activation_type = "",
-                             double reaction_time = 0.0);
+                             const std::string& reaction_time = "0");
 
     /// Write one identification.tsv row for an MS2 or MS3 scan with matched fragments
     void writeIdentificationRow_(const std::string& tracking_id,

@@ -945,7 +945,7 @@ namespace OpenMS
     std::cout << std::endl;
   }
 
-  bool PrecursorSelection::processMS2ForTagBasedTargeting(double precursor_mass, const std::string& activation_type)
+  int PrecursorSelection::processMS2ForTagBasedTargeting(double precursor_mass, const std::string& activation_type)
   {
     // Early exit if tag-based targeting not enabled
     if (target_protein_database_.empty())
@@ -1067,13 +1067,13 @@ namespace OpenMS
 
     if (truly_new_targets.empty())
     {
-      return true; // Target protein was detected, but all masses already tracked
+      return static_cast<int>(tags.size()); // target detected (all masses already tracked); tag_count = #tags
     }
 
     // Add to dynamic inclusion list
     addDynamicTargets_(truly_new_targets, deconv_.storedMS2RT(), 100); // High priority
 
-    return true;
+    return static_cast<int>(tags.size());
   }
 
 } // namespace OpenMS

@@ -458,6 +458,7 @@ set(analysis_executables_list
   FLASHIda_exploration_test
   FLASHIda_LegacyConfig_test
   FLASHIda_Logging_test
+  FLASHIda_LoggingFields_test
   MS3FragmentMatcher_test
   MS3FragmentMatcher_identification_test
   FragmentAnalysis_test

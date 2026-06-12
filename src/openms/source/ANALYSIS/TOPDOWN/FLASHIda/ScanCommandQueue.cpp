@@ -272,7 +272,8 @@ namespace OpenMS
 
   ScanCommand ScanCommandQueue::buildMS3(const ScanCommand& ms2_ctx, const ScanConfig& ms3_config,
                                           double frag_mz, int frag_charge, double iso_width,
-                                          char ion_type, int frag_index, int priority)
+                                          char ion_type, int frag_index, int priority,
+                                          const FragmentAnalysis::FragmentScores& frag_scores)
   {
     std::lock_guard<std::mutex> lock(queue_mutex_);
     ScanCommand cmd{};
@@ -337,6 +338,20 @@ namespace OpenMS
               << " frag_mz=" << frag_mz
               << std::endl;
 
+    // 2-stage scoring for the MS3 commands row: stage-0 = the MS2 precursor (carried from ms2_ctx),
+    // stage-1 = the selected fragment precursor (frag_scores, re-computed from its PeakGroup).
+    cmd.qscore               = ms2_ctx.qscore;               cmd.qscore_s1               = frag_scores.qscore;
+    cmd.mono_mass            = ms2_ctx.mono_mass;            cmd.mono_mass_s1            = frag_scores.mono_mass;
+    cmd.charge_cos           = ms2_ctx.charge_cos;           cmd.charge_cos_s1           = frag_scores.charge_cos;
+    cmd.charge_snr           = ms2_ctx.charge_snr;           cmd.charge_snr_s1           = frag_scores.charge_snr;
+    cmd.iso_cos              = ms2_ctx.iso_cos;              cmd.iso_cos_s1              = frag_scores.iso_cos;
+    cmd.snr                  = ms2_ctx.snr;                  cmd.snr_s1                  = frag_scores.snr;
+    cmd.charge_score         = ms2_ctx.charge_score;         cmd.charge_score_s1         = frag_scores.charge_score;
+    cmd.ppm_error            = ms2_ctx.ppm_error;            cmd.ppm_error_s1            = frag_scores.ppm_error;
+    cmd.precursor_intensity  = ms2_ctx.precursor_intensity;  cmd.precursor_intensity_s1  = frag_scores.precursor_intensity;
+    cmd.peakgroup_intensity  = ms2_ctx.peakgroup_intensity;  cmd.peakgroup_intensity_s1  = frag_scores.peakgroup_intensity;
+    cmd.hcd_energy           = ms2_ctx.hcd_energy;           cmd.hcd_energy_s1           = static_cast<int32_t>(ms3_config.collision_energy);
+
     return cmd;
   }
 
@@ -348,8 +363,11 @@ namespace OpenMS
     cmd.scan_id = nextTrackingIdInt_();
     cmd.priority = priority;
 
-    // Follow-up inherits parent from the originating command
-    std::strncpy(cmd.parent_scan_id, ctx.parent_scan_id, 4);
+    // Follow-up's logical parent is the triggering MS2 (ctx) itself, not the grandparent MS1 that
+    // ctx.parent_scan_id points to (#8). Mirror buildMS3 and encode ctx's own scan_id as the parent.
+    std::string parent_enc = encode(ctx.scan_id);
+    std::strncpy(cmd.parent_scan_id, parent_enc.c_str(), 3);
+    cmd.parent_scan_id[3] = '\0';
 
     std::strncpy(cmd.analyzer, follow_up_config.analyzer.c_str(), sizeof(cmd.analyzer) - 1);
     cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';

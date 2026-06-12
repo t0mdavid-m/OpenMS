@@ -60,7 +60,7 @@ namespace OpenMS
 
   /// Blittable struct representing a complete scan command for the instrument.
   /// Layout: 1248 (existing) + 8 (dequeue_timestamp_ms) + 8 (microscans+pad3) + 24 (rf_lens+source_cid+source_cid_scaling)
-  ///       + 64 (data_type+scan_rate) + 4 (parent_scan_id) + 692 (reserved) = 2048.
+  ///       + 64 (data_type+scan_rate) + 4 (parent_scan_id) + 84 (stage-1 scoring) + 608 (reserved) = 2048.
   struct OPENMS_DLLAPI ScanCommand
   {
     int32_t scan_id;             ///< Unique tracking ID (encoded as 3-char string in scan description)
@@ -102,7 +102,23 @@ namespace OpenMS
     char data_type[32];            ///< Data type (e.g., "Centroid", "Profile"; empty = method default)
     char scan_rate[32];            ///< Scan rate (e.g., "Normal", "Turbo"; empty = method default)
     char parent_scan_id[4];        ///< Parent scan's encoded tracking ID (3 chars + null; empty for MS1)
-    char reserved_[692];           ///< Reserved for future fields (consume from here, never change total size)
+
+    // --- Stage-1 (MS3 fragment) precursor scoring. Stage-0 lives in the top-level scalars above
+    //     (qscore..hcd_energy); for MS3 commands those carry the MS2 precursor, these carry the fragment.
+    //     int32 is FIRST so it absorbs the 4-aligned slot at offset 1356 and the doubles land 8-aligned
+    //     at 1360 with ZERO implicit padding (reordering shifts every offset — see ScanCommandLayout tests).
+    int32_t hcd_energy_s1;          ///< @1356 MS3 fragment-stage collision energy
+    double  mono_mass_s1;           ///< @1360 fragment PeakGroup::getMonoMass()
+    double  qscore_s1;              ///< @1368 fragment PeakGroup::getQscore()
+    double  charge_cos_s1;          ///< @1376 fragment getChargeIsotopeCosine(frag_charge)
+    double  charge_snr_s1;          ///< @1384 fragment getChargeSNR(frag_charge)
+    double  iso_cos_s1;             ///< @1392 fragment getIsotopeCosine()
+    double  snr_s1;                 ///< @1400 fragment getSNR()
+    double  charge_score_s1;        ///< @1408 fragment getChargeScore()
+    double  ppm_error_s1;           ///< @1416 fragment getAvgPPMError()
+    double  precursor_intensity_s1; ///< @1424 fragment getChargeIntensity(frag_charge)
+    double  peakgroup_intensity_s1; ///< @1432 fragment getIntensity()
+    char reserved_[608];           ///< Reserved for future fields (consume from here, never change total size)
   };
   static_assert(sizeof(ScanCommand) == 2048, "ScanCommand must be 2048 bytes for P/Invoke");
 

@@ -94,6 +94,7 @@ namespace OpenMS
       double fragment_mass = 0.0;
       double fragment_mz = 0.0;
       int fragment_charge = 0;
+      int tag_count = 0;        ///< Sequence-tag count from the parent MS2 (for MS3 results-row tag_count)
     };
 
     /// Group of CE variants for one precursor at one MSn level

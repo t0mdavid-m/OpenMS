@@ -36,6 +36,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 
 #include <chrono>
@@ -75,7 +76,8 @@ namespace OpenMS
     /// Build MS3 ScanCommand from MS2 context + fragment target + MS3 config for CE/activation
     ScanCommand buildMS3(const ScanCommand& ms2_ctx, const ScanConfig& ms3_config,
                          double frag_mz, int frag_charge, double iso_width,
-                         char ion_type = '\0', int frag_index = 0, int priority = 1);
+                         char ion_type = '\0', int frag_index = 0, int priority = 1,
+                         const FragmentAnalysis::FragmentScores& frag_scores = {});
 
     /// Create an MS1 survey scan command from current config
     ScanCommand makeMS1() const;

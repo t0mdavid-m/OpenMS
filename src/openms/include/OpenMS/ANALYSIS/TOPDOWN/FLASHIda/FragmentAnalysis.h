@@ -35,6 +35,7 @@
 #pragma once
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 #include <OpenMS/DATASTRUCTURES/String.h>
 
@@ -89,6 +90,17 @@ namespace OpenMS
 
       double ppm_offset = 0.0;        ///< Median PPM error from calibration pass (MS3 only)
       double correction_factor = 1.0;  ///< 1/(1 + ppm_offset * 1e-6) (MS3 only)
+    };
+
+    /// Deconvolution scores of a selected MS2 fragment, copied into the stage-1 (fragment)
+    /// scoring columns of an MS3 scan_commands row. Re-computed from the live PeakGroup via
+    /// fromPeakGroup() (NOT TagBasedFragmentMatch.intensity, which is getChargeIntensity, an intensity).
+    struct FragmentScores
+    {
+      double mono_mass = 0, qscore = 0, charge_cos = 0, charge_snr = 0, iso_cos = 0,
+             snr = 0, charge_score = 0, ppm_error = 0, precursor_intensity = 0,
+             peakgroup_intensity = 0;
+      static FragmentScores fromPeakGroup(const PeakGroup& pg, int abs_charge);
     };
 
     /// Format a proteoform sequence with PTM annotations in ProForma notation.
@@ -163,7 +175,8 @@ namespace OpenMS
                               DeconvolvedSpectrum& stored_ms2,
                               ProteoformMatch& result,
                               const String& fragmentation_method = "HCD",
-                              double tolerance_ppm = 0.0);
+                              double tolerance_ppm = 0.0,
+                              FragmentScores* frag_scores = nullptr);
 
     /**
      * @brief Get terminal (innermost) fragment ions sorted by sequence position
@@ -199,7 +212,8 @@ namespace OpenMS
                                 DeconvolvedSpectrum& stored_ms2,
                                 ProteoformMatch& result,
                                 const String& fragmentation_method = "HCD",
-                                double tolerance_ppm = 0.0);
+                                double tolerance_ppm = 0.0,
+                                FragmentScores* frag_scores = nullptr);
 
     /**
      * @brief Get unique fragment ions that enclose PTM ambiguity regions
@@ -233,7 +247,8 @@ namespace OpenMS
                                   DeconvolvedSpectrum& stored_ms2,
                                   ProteoformMatch& result,
                                   const String& fragmentation_method = "HCD",
-                                  double tolerance_ppm = 0.0);
+                                  double tolerance_ppm = 0.0,
+                                  FragmentScores* frag_scores = nullptr);
 
     // ---------------------------------------------------------------
     // Python-friendly overloads
@@ -289,7 +304,7 @@ namespace OpenMS
       int peak_index;           ///< Index in stored MS2 spectrum
       double observed_mass;     ///< Monoisotopic mass
       double theoretical_mass;  ///< Theoretical mass
-      double qscore;            ///< Quality score from PeakGroup
+      double intensity;         ///< Max-charge intensity from PeakGroup::getChargeIntensity (sort key, NOT a [0,1] qscore)
       int charge;               ///< Charge state
       int fragment_index;       ///< 1-based position in protein sequence
       char ion_type;            ///< Ion type: 'a', 'b', 'c', 'x', 'y', or 'z'

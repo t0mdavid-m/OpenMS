@@ -593,6 +593,7 @@ namespace OpenMS
     std::vector<int> charges(num_targets);
     std::vector<char> ion_types(num_targets, '\0');
     std::vector<int> frag_indices(num_targets, 0);
+    std::vector<FragmentAnalysis::FragmentScores> frag_scores(num_targets);  // stage-1 (fragment) scoring for MS3 cmd rows
 
     int found = 0;
     FragmentAnalysis::ProteoformMatch frag_result;
@@ -604,19 +605,19 @@ namespace OpenMS
         found = fragments_.getTopFragmentMatches(seq, num_targets,
             masses.data(), qscores.data(), charges.data(),
             wstarts.data(), wends.data(),
-            ion_types.data(), frag_indices.data(), result_copy, frag_result, scan_activation);
+            ion_types.data(), frag_indices.data(), result_copy, frag_result, scan_activation, 0.0, frag_scores.data());
         break;
       case SelectionMetric::TerminalFragments:
         found = fragments_.getTerminalFragmentIons(seq, num_targets,
             masses.data(), qscores.data(), charges.data(),
             wstarts.data(), wends.data(),
-            ion_types.data(), frag_indices.data(), result_copy, frag_result, scan_activation);
+            ion_types.data(), frag_indices.data(), result_copy, frag_result, scan_activation, 0.0, frag_scores.data());
         break;
       case SelectionMetric::AmbiguityResolution:
         found = fragments_.getAmbiguityEnclosingIons(seq, num_targets,
             masses.data(), qscores.data(), charges.data(),
             wstarts.data(), wends.data(),
-            ion_types.data(), frag_indices.data(), result_copy, frag_result, scan_activation);
+            ion_types.data(), frag_indices.data(), result_copy, frag_result, scan_activation, 0.0, frag_scores.data());
         break;
       default:
         break;
@@ -723,7 +724,7 @@ namespace OpenMS
         {
           // MS3: proper two-stage command via buildMS3 with config CE/activation
           cmd = queue.buildMS3(*ms_ctx, next_scan_config, frag_mz, frag_charge, iso_width,
-                               ion_types[ti], frag_indices[ti], 1);
+                               ion_types[ti], frag_indices[ti], 1, frag_scores[ti]);
         }
         else
         {

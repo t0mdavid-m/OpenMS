@@ -167,9 +167,10 @@ namespace OpenMS
      * 5. Adds expanded masses to dynamic inclusion list
      *
      * @param precursor_mass monoisotopic mass of the precursor (from iAPI)
-     * @return true if target protein detected and targets expanded, false otherwise
+     * @return number of sequence tags found (0 = none / no target); truthy (>0) when a target
+     *         protein was detected. Used directly as the scan_results tag_count.
      */
-    bool processMS2ForTagBasedTargeting(double precursor_mass, const std::string& activation_type);
+    int processMS2ForTagBasedTargeting(double precursor_mass, const std::string& activation_type);
 
     /**
      * @brief Remove a given precursor from the exclusion list by id (needed for FAIMS)
