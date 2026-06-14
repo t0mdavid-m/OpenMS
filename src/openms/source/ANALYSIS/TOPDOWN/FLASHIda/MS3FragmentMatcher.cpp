@@ -557,6 +557,9 @@ namespace OpenMS
         }
         std::sort(mr.fragments.begin(), mr.fragments.end(),
           [](const FragmentAnalysis::ProteoformMatch::FragmentMatch& a, const FragmentAnalysis::ProteoformMatch::FragmentMatch& b){ return a.observed_mass < b.observed_mass; });
+        // E1: record the matched-fragment count so the logged fragment_count / tic_coverage reflect the
+        // actual matches (was left at the ProteoformMatch default 0, despite mr.fragments being populated).
+        mr.total_match_count = static_cast<int>(details.size());
       }
 
       // --- Log: per-variant matches ---

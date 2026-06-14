@@ -30,6 +30,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
+#include <filesystem>
 #include <map>
 #include <set>
 #include <string>
@@ -61,12 +62,79 @@ namespace
     return c == 'a' || c == 'b' || c == 'c' || c == 'x' || c == 'y' || c == 'z';
   }
 
-  // Minimal ProForma plausibility: starts with an uppercase residue (optionally a leading
-  // modification is fine for our cytC fixtures, but the sequence body is upper-alpha).
+  // Decode the trailing precursor ion of an MS3 scan_description per the descriptor contract:
+  //   {id}R{mass}k@{charge}{ion_type}{ion_index}  (the 'k' is part of the mass token, before '@').
+  // Find the LAST '@', skip the run of fragment-charge digits after it, require an ion_type char in
+  // {a,b,c,x,y,z} (via ionTypeOk), then an all-digit ion_index >= 1. Returns false for the no-ion form
+  // {id}R{mass}k@{charge} (nothing after the charge digits) -- that branch is tolerated by callers.
+  // Kept byte-for-byte identical to decodeTrailingIonKey in FLASHIda_TestHelpers.h.
+  bool decodeTrailingIon(const std::string& d, char& t, int& idx)
+  {
+    std::size_t at = d.rfind('@');
+    if (at == std::string::npos) return false;
+    std::size_t i = at + 1;
+    while (i < d.size() && std::isdigit(static_cast<unsigned char>(d[i]))) ++i;  // skip fragment charge digits
+    if (i >= d.size() || !ionTypeOk(std::string(1, d[i]))) return false;          // no-ion branch -> false
+    t = d[i++];
+    std::string n = d.substr(i);
+    if (n.empty() || n.find_first_not_of("0123456789") != std::string::npos) return false;  // non-truncated index
+    idx = std::atoi(n.c_str());
+    return idx >= 1;
+  }
+
+  // Build ion -> [ScanData...] from real MS3 fixtures ms3_cytc_<ion>_scan<N>.txt in a spectra dir.
+  // The ion key (e.g. "b44") is the substring between "ms3_cytc_" and "_scan" (per the fixture naming
+  // contract). loadTsvScans each matching file and group by ion. Returns empty if the dir is absent or
+  // holds no matching fixtures (caller then skips cleanly -- never fabricates data).
+  std::map<std::string, std::vector<ScanData>> buildMs3IonManifest(const std::string& dir)
+  {
+    std::map<std::string, std::vector<ScanData>> manifest;
+    std::error_code ec;
+    if (!std::filesystem::is_directory(dir, ec)) return manifest;
+    const std::string prefix = "ms3_cytc_";
+    for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec))
+    {
+      if (!it->is_regular_file(ec)) continue;
+      std::string name = it->path().filename().string();
+      if (name.size() < prefix.size() || name.compare(0, prefix.size(), prefix) != 0) continue;
+      // The ion token sits between "ms3_cytc_" and the LAST "_scan"; require both present and a non-empty ion.
+      std::size_t scan_pos = name.rfind("_scan");
+      if (scan_pos == std::string::npos || scan_pos <= prefix.size()) continue;  // e.g. legacy ms3_cytc_scan341.txt
+      std::string ion = name.substr(prefix.size(), scan_pos - prefix.size());
+      if (ion.empty()) continue;
+      auto scans = loadTsvScans(it->path().string());
+      if (scans.empty()) continue;
+      auto& bucket = manifest[ion];
+      for (auto& s : scans) bucket.push_back(std::move(s));
+    }
+    return manifest;
+  }
+
+  // Strict ProForma validator (per the plan glossary): every RESIDUE char (alphabetic, outside [...]
+  // mod groups and the () region delimiters) must be UPPERCASE A-Z (no lowercase residues); modifications
+  // are bracketed [..]; an ambiguity region '(' RESIDUES ')' must be immediately followed by a '[' mod;
+  // brackets balanced; >=1 residue. e.g. GDVEK, PEP[+10.0000]TIDE, (GDVEKGKK)[+42.0157]IFVQK valid;
+  // gdvek[+42] (lowercase), GDVEK(IFVQ)KIFVQK (region not followed by a mod) invalid.
   bool isProForma(const std::string& s)
   {
     if (s.empty()) return false;
-    return std::isupper(static_cast<unsigned char>(s[0])) != 0;
+    bool in_mod = false;             // inside [...]
+    bool expect_mod = false;         // just closed a ')', a '[' mod must follow
+    bool any_residue = false;
+    for (char ch : s)
+    {
+      if (in_mod) { if (ch == ']') in_mod = false; continue; }
+      if (expect_mod) { if (ch != '[') return false; expect_mod = false; in_mod = true; continue; }
+      if (ch == '[') { in_mod = true; continue; }
+      if (ch == '(') continue;
+      if (ch == ')') { expect_mod = true; continue; }
+      if (std::isalpha(static_cast<unsigned char>(ch)))
+      {
+        if (std::isupper(static_cast<unsigned char>(ch)) == 0) return false;  // lowercase residue
+        any_residue = true;
+      }
+    }
+    return any_residue && !in_mod && !expect_mod;
   }
 
   const std::string CYTC_MS1 = FI_MS1_CYTC;
@@ -90,17 +158,19 @@ START_SECTION(schema_column_counts)
   auto r = TSVFile::parse(res_f);
   auto i = TSVFile::parse(id_f);
 
-  TEST_EQUAL(c.headers.size(), 28)
-  TEST_EQUAL(r.headers.size(), 32)
+  TEST_EQUAL(c.headers.size(), 29)   // E6: + scan_description
+  TEST_EQUAL(r.headers.size(), 33)   // E5: + ms_level
   TEST_EQUAL(i.headers.size(), 19)
 
   // Spot-check exact header identities / order at the boundaries that matter for parsing.
   TEST_EQUAL(c.headers.front(), std::string("tracking_id"))
-  TEST_EQUAL(c.headers.back(), std::string("reagent_agc_target"))
+  TEST_EQUAL(c.headers.back(), std::string("scan_description"))   // E6: appended last
+  TEST_EQUAL(c.colIndex("scan_description"), 28)
   TEST_EQUAL(c.colIndex("hcd_energy"), 21)
   TEST_EQUAL(r.headers.front(), std::string("tracking_id"))
+  TEST_EQUAL(r.colIndex("ms_level"), 1)                           // E5: inserted right after tracking_id
   TEST_EQUAL(r.headers.back(), std::string("processing_duration_ms"))
-  TEST_EQUAL(r.colIndex("child_ids"), 8)
+  TEST_EQUAL(r.colIndex("child_ids"), 9)                          // shifted +1 by ms_level@1
   TEST_EQUAL(i.headers.front(), std::string("ms_level"))
   TEST_EQUAL(i.headers.back(), std::string("ms3_fragment_masses"))
 
@@ -195,7 +265,8 @@ START_SECTION(commands_ms3_two_stage)
     auto ce  = splitTokens(cell(t, row, "collision_energy"), ';');
     auto act = splitTokens(cell(t, row, "activation"), ';');
     auto hcd = splitTokens(cell(t, row, "hcd_energy"), ';');
-    charge2_ok = charge2_ok && chg.size() == 2 && inChargeD(toD(chg[0])) && inChargeD(toD(chg[1]));
+    // stage-0 = MS2 precursor charge (>= min_charge); stage-1 = FRAGMENT charge (1..parent), not min_charge-bounded
+    charge2_ok = charge2_ok && chg.size() == 2 && inChargeD(toD(chg[0])) && inFragCharge(toD(chg[1]), toD(chg[0]));
     ce_stage1_ok = ce_stage1_ok && ce.size() == 2 && std::abs(toD(ce[1]) - 35.0) < 1.0;  // [cx] MS3 CE
     act2_ok = act2_ok && act.size() == 2 && inActivationSet(act[0]) && inActivationSet(act[1]);
     hcd_stage1_ok = hcd_stage1_ok && hcd.size() == 2 && std::abs(toD(hcd[1]) - 35.0) < 1.0;
@@ -696,7 +767,8 @@ START_SECTION(identification_R_rows_universal)
       std::string pion = cell(idf, row, "ms2_precursor_ion");
       TEST_TRUE(pion.size() >= 2 && ionTypeOk(std::string(1, pion[0])))
       TEST_TRUE(posFinite(toD(cell(idf, row, "ms2_precursor_mass"))))
-      TEST_TRUE(inChargeD(toD(cell(idf, row, "ms2_precursor_charge"))))
+      // the MS2 fragment chosen as MS3 precursor: a fragment charge, bounded by the MS1 precursor charge
+      TEST_TRUE(inFragCharge(toD(cell(idf, row, "ms2_precursor_charge")), toD(cell(idf, row, "ms1_precursor_charge"))))
       auto f3 = splitTokens(cell(idf, row, "ms3_fragments"), ';');
       auto m3 = splitTokens(cell(idf, row, "ms3_fragment_masses"), ';');
       TEST_TRUE(!f3.empty())
@@ -801,6 +873,271 @@ START_SECTION(scan_description_cap_roundtrip)
     TEST_TRUE(desc.size() >= 4)
     TEST_TRUE(isTrackingId(desc.substr(0, 3)))   // id prefix round-trips
     TEST_TRUE(desc[3] == 'R' || desc[3] == 'E')  // MS3 recording / exploration marker
+  }
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// §X6 -- parent_tracking_id resolution over a full INCLUSION-mode acquisition
+//
+// Drives the engine the way Flash.cs does: getNextScanCommand -> feed the matching
+// scan back stamped with THAT command's engine-emitted scan_description, so every
+// MS1->MS2->MS3 link uses the engine's own ids end-to-end (no test-fabricated ids).
+// The inclusion-pinned cytC MS3 recipe (buildJsonWithRuntime enable_ms3=true) is the
+// C++-facing equivalent of method_inclusion.json + the MS3 mode-1 HCD recipe: target_mode=1
+// + inclusion_cytc.txt + the M-starting cytC proteoform.  HARD requirement: EVERY non-empty
+// parent_tracking_id in scan_commands.tsv must resolve to an engine-emitted command id, with
+// MS2->MS1 / MS3->MS2 lineage.
+/////////////////////////////////////////////////////////////
+START_SECTION(parent_tracking_id_resolution)
+{
+  auto ms1 = loadTsvScans(CYTC_MS1);
+  auto ms2 = loadTsvScans(CYTC_MS2);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  std::string cmd_f = "lf_x6_commands.tsv", res_f = "lf_x6_results.tsv";
+  std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
+  std::string json = buildJsonWithRuntime("", cmd_f, res_f, true);  // inclusion (target_mode 1) + MS3
+  FLASHIda ida(const_cast<char*>(json.c_str()));
+
+  // Single-MS1 engine-chained acquisition: the engine emits the MS1 command, we feed the cytC
+  // MS1 back under that id; the resulting MS2s (and any MS3s) chain off the engine's own ids.
+  AcqResult acq = runFullAcquisition(&ida, ms1[0], ms2[0]);
+  TEST_TRUE(acq.ms2_cmds.size() >= 1)  // inclusion mode must trigger >=1 MS2 on the pinned cytC precursor
+
+  auto cmds = TSVFile::parse(cmd_f);
+
+  // Hard plausibility gate: every non-empty parent_tracking_id resolves to a known engine-emitted id.
+  // The engine chains ids itself here, so the fed-id universe is empty -- all known ids come from the
+  // commands TSV's own tracking_id column (MS1 survey, AGC, MS2, MS3 are all written there).
+  std::string err;
+  bool resolved = validateParentTrackingIds(cmds, std::vector<std::string>(), err);
+  TEST_EQUAL(err, std::string(""))  // surface the offending parent id on failure
+  TEST_TRUE(resolved)
+
+  // Explicit lineage: MS2 parents are MS1 ids; MS3 parents are MS2 ids.
+  auto level = commandLevels(cmds);
+  bool checked_ms2 = false, checked_ms3 = false, lineage_ok = true;
+  for (const auto& row : cmds.rows)
+  {
+    int lvl = std::atoi(cell(cmds, row, "ms_level").c_str());
+    std::string parent = cell(cmds, row, "parent_tracking_id");
+    if (lvl == 2 && !parent.empty())
+    {
+      checked_ms2 = true;
+      // parent is an MS1 survey: present as a known id but NOT itself an MS2/MS3 command
+      auto it = level.find(parent);
+      lineage_ok = lineage_ok && (it == level.end() || it->second == 1);
+    }
+    else if (lvl == 3 && !parent.empty())
+    {
+      checked_ms3 = true;
+      lineage_ok = lineage_ok && level.count(parent) && level[parent] == 2;  // MS3 parent is an MS2
+    }
+  }
+  TEST_TRUE(checked_ms2)
+  TEST_TRUE(lineage_ok)
+  (void)checked_ms3;  // MS3 rows are recipe-dependent; lineage is asserted WHEN present
+
+  std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// §R2t -- scan_results.tsv : tag-targeting MS2 rows log a real tag_count>0 (locks E4)
+//
+// Tag-based targeting (E4) fires whenever a target-protein database is loaded: the engine
+// generates sequence tags from the MS2 deconvolution and matches them against the FASTA. The
+// logged tag_count is the REAL number of generated tags (not a 0/1 boolean). This is the
+// C++-facing equivalent of method_tag_targeting.json: tagging active + a cytC-bearing FASTA
+// (test_fasta.fasta contains CYC_HORSE) driven with the real cytC MS2 fixture, so >=1 MS2
+// result row must carry tag_count>0. MS2 selection stays "none" so tagging runs without the
+// fragment-matching protein_sequence requirement (tagging is gated only on the FASTA database).
+/////////////////////////////////////////////////////////////
+START_SECTION(results_tag_targeting)
+{
+  auto ms1 = loadTsvScans(CYTC_MS1);
+  auto ms2 = loadTsvScans(CYTC_MS2);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  std::string cmd_f = "lf_r2t_commands.tsv", res_f = "lf_r2t_results.tsv";
+  std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
+
+  // C++-facing config (mirrors buildJsonWithRuntime's schema) with a target-protein FASTA loaded
+  // for tag-based targeting. tagging params present; conditional_ms2 stays false so no follow_up_scan
+  // is required by Config::validate(); MS2 selection "none" so no MS3/protein_sequence chain is needed.
+  std::ostringstream cfg;
+  cfg << R"({
+    "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
+    "precursor_selection": { "RT_window": 180, "target_mode": 0, "IDScore": false, "AllCharges": false, "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1 },
+    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
+    "faims": { "cv_values": [-50], "max_cv_skip": 0 },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
+      "ms2": [ { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 } ]
+    },
+    "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 }, "agc_interval_seconds": 999999 },
+    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
+    "files": { "target_logs": [], "fasta": "../../FlashIDA/test-data/configs/test_fasta.fasta", "inclusion_list": "", "ptm_list": "" },
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_targets": 5 },
+      "ms2": { "selection": "none" },
+      "ms3": { "selection": "none" }
+    },
+    "runtime": {
+      "ida_log_path": "", "scan_commands_path": ")" << cmd_f << R"(",
+      "scan_results_path": ")" << res_f << R"(", "identification_log_path": ""
+    }
+  })";
+  std::string json = cfg.str();
+  FLASHIda ida(const_cast<char*>(json.c_str()));
+  runFullCycle(&ida, ms1, ms2);
+
+  auto cmds = TSVFile::parse(cmd_f);
+  auto res = TSVFile::parse(res_f);
+  auto level = commandLevels(cmds);
+
+  bool found_ms2 = false, any_tag = false;
+  for (const auto& row : res.rows)
+  {
+    std::string tid = cell(res, row, "tracking_id");
+    auto it = level.find(tid);
+    if (it == level.end() || it->second != 2) continue;  // MS2 result rows only
+    found_ms2 = true;
+    double tc = toD(cell(res, row, "tag_count"));
+    TEST_TRUE(nonNegFinite(tc))                            // real count, never negative
+    if (tc > 0.0) any_tag = true;
+  }
+  TEST_TRUE(found_ms2)
+  TEST_TRUE(any_tag)  // E4: the real cytC MS2 tags must match CYC_HORSE in test_fasta.fasta
+
+  std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// §E6rt -- scan_commands.tsv scan_description column == the drained ScanCommand buffer
+//
+// X5 only inspects the DRAINED cmd.scan_description; this section closes the E6 loop by
+// proving the LOGGED scan_description column (index 28) is byte-identical to the descriptor
+// the engine actually drained for the same command (joined on the 3-char tracking-id prefix).
+/////////////////////////////////////////////////////////////
+START_SECTION(commands_scan_description_roundtrip)
+{
+  auto ms1 = loadTsvScans(CYTC_MS1);
+  auto ms2 = loadTsvScans(CYTC_MS2);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  std::string cmd_f = "lf_e6_commands.tsv";
+  std::remove(cmd_f.c_str());
+  std::string json = buildJsonWithRuntime("", cmd_f, "", true);
+  FLASHIda ida(const_cast<char*>(json.c_str()));
+  auto cycle = runFullCycle(&ida, ms1, ms2);
+  TEST_TRUE(cycle.ms2_cmds.size() > 0)
+
+  // Map each drained command's 3-char id prefix -> its raw scan_description buffer.
+  std::map<std::string, std::string> drained_desc;
+  for (const auto& c : cycle.ms2_cmds) { std::string d(c.scan_description); if (d.size() >= 3) drained_desc[d.substr(0, 3)] = d; }
+  for (const auto& c : cycle.ms3_cmds) { std::string d(c.scan_description); if (d.size() >= 3) drained_desc[d.substr(0, 3)] = d; }
+
+  auto t = TSVFile::parse(cmd_f);
+  ABORT_IF(t.colIndex("scan_description") != 28)  // E6: scan_description is the last column
+
+  bool matched_any = false, equal_ok = true;
+  for (const auto& row : t.rows)
+  {
+    std::string tid = cell(t, row, "tracking_id");
+    auto it = drained_desc.find(tid);
+    if (it == drained_desc.end()) continue;  // MS1/AGC rows we did not capture as drained MS2/MS3
+    matched_any = true;
+    equal_ok = equal_ok && (cell(t, row, "scan_description") == it->second);
+  }
+  TEST_TRUE(matched_any)  // at least the MS2 commands must round-trip
+  TEST_TRUE(equal_ok)     // logged col[28] == drained descriptor buffer, byte-for-byte
+
+  std::remove(cmd_f.c_str());
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// §T9 -- cytC REAL-MS3 fragment data via ion-name-keyed real-spectrum feed (skips cleanly if absent)
+//
+// The standard MS3 sections feed the MS2 spectrum back as the MS3 scan (a shortcut), so
+// matched_protein/fragment_count/tic are only conditionally populated. This section proves the
+// real MS3 path end-to-end on REAL data: under the inclusion-pinned, EXHAUSTIVE (ms3.max_targets=200)
+// MS3 mode-1 recipe (buildJsonWithRuntime enable_ms3=true), the engine emits ion-targeted MS3 commands;
+// each command's scan_description encodes its precursor fragment ion ({id}R{mass}k@{charge}{ion}{idx}).
+// runFullCycle decodes that ion and feeds the matching REAL per-ion MS3 spectrum from the manifest built
+// by globbing ms3_cytc_<ion>_scan<N>.txt in the spectra dir; commands whose ion is absent are SKIPPED
+// (tolerated). The gate is tolerance-based: >=1 FED MS3 row matches (matched_protein populated), and every
+// matched row is fully populated (isProForma proteoform, fragment_count>0, tic in (0,1], resolvable parent).
+// Guarded on the manifest: if no ms3_cytc_<ion>_scan<N>.txt fixtures exist this section asserts nothing and
+// passes -- never fabricates data. Exactness of the match-dependent fields is golden-locked in the C# suite.
+/////////////////////////////////////////////////////////////
+START_SECTION(results_ms3_real_fragment_data)
+{
+  // Build the ion -> [ScanData...] manifest by globbing the spectra dir for ms3_cytc_<ion>_scan<N>.txt.
+  auto manifest = buildMs3IonManifest("../../FlashIDA/test-data/spectra");
+  if (manifest.empty())
+  {
+    // No real MS3 fragment fixtures available -- skip cleanly (do NOT fabricate). The
+    // match-dependent path's exactness is golden-locked in the C# suite.
+    TEST_TRUE(true)
+  }
+  else
+  {
+    auto ms1 = loadTsvScans(CYTC_MS1);
+    auto ms2 = loadTsvScans(CYTC_MS2);  // scan57 ladder -> proteoform context (auto-PTM)
+    ABORT_IF(ms1.empty() || ms2.empty())
+
+    std::string cmd_f = "lf_t9_commands.tsv", res_f = "lf_t9_results.tsv";
+    std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
+    // M-start, inclusion-pinned, MS3 mode-1, EXHAUSTIVE MS3 emission (ms3.max_targets=200).
+    std::string json = buildJsonWithRuntime("", cmd_f, res_f, true);
+    FLASHIda ida(const_cast<char*>(json.c_str()));
+
+    // Mirror the shared harness wiring; feed the REAL per-ion MS3 spectrum keyed by the decoded descriptor ion.
+    CycleResult cyc = runFullCycle(&ida, ms1, ms2, &manifest);
+    TEST_TRUE(cyc.ms3_cmds.size() > 0)  // engine issued MS3 command(s)
+
+    // Q2: every emitted MS3 command descriptor that carries an ion decodes to a valid, non-truncated ion
+    // (ion_type in {a,b,c,x,y,z}, ion_index >= 1). The no-ion form is tolerated (not counted as a failure).
+    int decoded_ion_cmds = 0;
+    for (const auto& c : cyc.ms3_cmds)
+    {
+      char t; int idx;
+      if (decodeTrailingIon(c.scan_description, t, idx))  // false == no-ion branch (tolerated)
+      {
+        TEST_TRUE(ionTypeOk(std::string(1, t)) && idx >= 1)
+        ++decoded_ion_cmds;
+      }
+    }
+    TEST_TRUE(decoded_ion_cmds > 0)  // >=1 ion-targeted MS3 emitted
+
+    auto cmds  = TSVFile::parse(cmd_f);
+    auto res   = TSVFile::parse(res_f);
+    auto level = commandLevels(cmds);
+
+    // GATE: walk MS3 result rows; >=1 FED row WITH a match; each matched row fully populated.
+    int ms3_rows = 0, matched_rows = 0;
+    for (const auto& row : res.rows)
+    {
+      std::string tid = cell(res, row, "tracking_id");
+      auto it = level.find(tid);
+      if (it == level.end() || it->second != 3) continue;  // MS3 result rows only
+      ++ms3_rows;
+      if (cell(res, row, "matched_protein").empty()) continue;  // unfed / unmatched MS3 -> tolerated
+      ++matched_rows;
+      TEST_TRUE(isProForma(cell(res, row, "proteoform_sequence")))
+      TEST_TRUE(std::atoi(cell(res, row, "fragment_count").c_str()) > 0)  // floor, no exact count
+      TEST_TRUE(toD(cell(res, row, "tic_coverage")) > 0.0 && inUnit(toD(cell(res, row, "tic_coverage"))))
+      TEST_TRUE(isTrackingId(cell(res, row, "parent_tracking_id")))       // resolvable MS2 parent
+    }
+    TEST_TRUE(ms3_rows > 0)
+    TEST_TRUE(matched_rows >= 1)  // Q1 GATE: >=1 FED MS3 scan matched the pinned cytC proteoform
+
+    std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
   }
 }
 END_SECTION

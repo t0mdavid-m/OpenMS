@@ -197,13 +197,15 @@ namespace OpenMS
       if (msn_level >= 3 && ion_type != '\0' && frag_index > 0)
       {
         double frag_mass_kda = precursor_mz * charge / 1000.0;
-        std::snprintf(cmd.scan_description, 16, "%sE%.1f@%d%c%d",
-                     id_str.c_str(), frag_mass_kda, charge, ion_type, frag_index);
+        std::string mass_tok = ScanCommandQueue::formatMassToken(frag_mass_kda, charge, ion_type, frag_index);
+        std::snprintf(cmd.scan_description, 16, "%sE%s@%d%c%d",
+                     id_str.c_str(), mass_tok.c_str(), charge, ion_type, frag_index);
       }
       else
       {
-        std::snprintf(cmd.scan_description, 16, "%sE%.1f@%d",
-                     id_str.c_str(), precursor_mass / 1000.0, charge);
+        std::string mass_tok = ScanCommandQueue::formatMassToken(precursor_mass / 1000.0, charge, '\0', 0);
+        std::snprintf(cmd.scan_description, 16, "%sE%s@%d",
+                     id_str.c_str(), mass_tok.c_str(), charge);
       }
 
       group.variants.push_back(v);

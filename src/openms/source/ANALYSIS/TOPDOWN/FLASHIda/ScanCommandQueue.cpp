@@ -35,8 +35,10 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <iostream>
+#include <string>
 
 namespace OpenMS
 {
@@ -78,6 +80,25 @@ namespace OpenMS
       value = value * base + static_cast<int>(pos);
     }
     return value;
+  }
+
+  std::string ScanCommandQueue::formatMassToken(double mass_kda, int charge, char ion_type, int ion_index)
+  {
+    // 15-char scan_description budget: id(3) + marker(1) + massToken(this) + '@'(1) + charge + ion.
+    // Pack the most decimals that still leave the trailing ion intact (so the cap never truncates the ion).
+    const int charge_digits = static_cast<int>(std::to_string(charge < 0 ? -charge : charge).size());
+    const int ion_part = (ion_type != '\0' && ion_index > 0)
+                           ? 1 + static_cast<int>(std::to_string(ion_index).size()) : 0;
+    int token_budget = 15 - 5 - charge_digits - ion_part;  // 5 = id(3) + marker(1) + '@'(1)
+    if (token_budget < 2) token_budget = 2;                // always allow at least "Nk"
+    char buf[24];
+    for (int d = 6; d >= 0; --d)
+    {
+      std::snprintf(buf, sizeof(buf), "%.*fk", d, mass_kda);
+      if (static_cast<int>(std::strlen(buf)) <= token_budget) return std::string(buf);
+    }
+    std::snprintf(buf, sizeof(buf), "%.0fk", mass_kda);
+    return std::string(buf);
   }
 
   int ScanCommandQueue::nextTrackingIdInt_()
@@ -234,9 +255,10 @@ namespace OpenMS
     cmd.stages[0].reagent_max_it = scan_config.reagent_max_it;
     cmd.stages[0].reagent_agc_target = scan_config.reagent_agc_target;
 
-    // Scan description: {3-char ID}R{mass_kDa:.1f}@{charge}
+    // Scan description: {3-char ID}R{mass_kDa}k@{charge}  (adaptive-precision mass token)
     std::string id_str = encode(id);
-    std::snprintf(cmd.scan_description, 16, "%sR%.1f@%d", id_str.c_str(), pg.getMonoMass() / 1000.0, charge);
+    std::string mass_tok = formatMassToken(pg.getMonoMass() / 1000.0, charge, '\0', 0);
+    std::snprintf(cmd.scan_description, 16, "%sR%s@%d", id_str.c_str(), mass_tok.c_str(), charge);
 
     // Precursor scoring data for diagnostic TSV output
     cmd.qscore = pg.getQscore();
@@ -323,15 +345,21 @@ namespace OpenMS
     cmd.stages[1].reagent_max_it = ms3_config.reagent_max_it;
     cmd.stages[1].reagent_agc_target = ms3_config.reagent_agc_target;
 
-    // Description: {3-char ID}R{frag_mass_kDa:.1f}@{frag_charge}[{ion_type}{frag_index}]
+    // Description: {3-char ID}R{frag_mass_kDa}k@{frag_charge}[{ion_type}{frag_index}]  (adaptive-precision)
     std::string id_str = encode(id);
     double frag_mass_kda = frag_mz * frag_charge / 1000.0;
     if (ion_type != '\0' && frag_index > 0)
-      std::snprintf(cmd.scan_description, 16, "%sR%.1f@%d%c%d",
-                    id_str.c_str(), frag_mass_kda, frag_charge, ion_type, frag_index);
+    {
+      std::string mass_tok = formatMassToken(frag_mass_kda, frag_charge, ion_type, frag_index);
+      std::snprintf(cmd.scan_description, 16, "%sR%s@%d%c%d",
+                    id_str.c_str(), mass_tok.c_str(), frag_charge, ion_type, frag_index);
+    }
     else
-      std::snprintf(cmd.scan_description, 16, "%sR%.1f@%d",
-                    id_str.c_str(), frag_mass_kda, frag_charge);
+    {
+      std::string mass_tok = formatMassToken(frag_mass_kda, frag_charge, '\0', 0);
+      std::snprintf(cmd.scan_description, 16, "%sR%s@%d",
+                    id_str.c_str(), mass_tok.c_str(), frag_charge);
+    }
 
     std::cout << "[TRACK-CREATE] id=" << id_str
               << " ms_level=3"
@@ -378,8 +406,9 @@ namespace OpenMS
     cmd.stages[0].activation_type[sizeof(cmd.stages[0].activation_type) - 1] = '\0';
 
     std::string id_str = encode(cmd.scan_id);
-    std::snprintf(cmd.scan_description, 16, "%s%c%.1f@%d",
-                  id_str.c_str(), suffix, cmd.mono_mass / 1000.0, cmd.stages[0].charge_state);
+    std::string mass_tok = formatMassToken(cmd.mono_mass / 1000.0, cmd.stages[0].charge_state, '\0', 0);
+    std::snprintf(cmd.scan_description, 16, "%s%c%s@%d",
+                  id_str.c_str(), suffix, mass_tok.c_str(), cmd.stages[0].charge_state);
 
     std::cout << "[TRACK-CREATE] id=" << id_str
               << " ms_level=2 type=followup_" << suffix

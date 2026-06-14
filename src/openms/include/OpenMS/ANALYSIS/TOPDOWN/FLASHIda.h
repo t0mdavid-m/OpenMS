@@ -264,8 +264,8 @@ namespace OpenMS
     /// Write one TSV row for a dequeued scan command
     void writeScanCommandRow_(const ScanCommand& cmd);
 
-    /// Write one TSV row for a processScan result
-    void writeScanResultRow_(const std::string& tracking_id, double rt,
+    /// Write one TSV row for a processScan result (ms_level is logged at scan_results col 1)
+    void writeScanResultRow_(const std::string& tracking_id, int ms_level, double rt,
                              int mass_count, int commands_pushed,
                              const std::vector<std::string>& child_ids,
                              int tag_count, const std::string& matched_protein,

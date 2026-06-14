@@ -95,7 +95,8 @@ FLASHIda::FLASHIda(char* arg) :
                              << "iso_cos\tsnr\tcharge_score\tppm_error\tprecursor_intensity\t"
                              << "peakgroup_intensity\thcd_energy\tparent_tracking_id\t"
                              << "ion_type\tion_index\t"
-                             << "reaction_time\treagent_max_it\treagent_agc_target\n";
+                             << "reaction_time\treagent_max_it\treagent_agc_target\t"
+                             << "scan_description\n";  // E6: raw descriptor, asserted == what's sent to instrument
         commands_tsv_stream_.flush();
       }
     }
@@ -104,7 +105,7 @@ FLASHIda::FLASHIda(char* arg) :
       results_tsv_stream_.open(rt_cfg.scan_results_path, std::ios::app);
       if (results_tsv_stream_.is_open())
       {
-        results_tsv_stream_ << "tracking_id\tresolve_ts\tduration_ms\treceived_ts\tduration_received_ms\trt\t"
+        results_tsv_stream_ << "tracking_id\tms_level\tresolve_ts\tduration_ms\treceived_ts\tduration_received_ms\trt\t"
                             << "mass_count\tcommands_pushed\tchild_ids\t"
                             << "tag_count\tmatched_protein\tproteoform_sequence\t"
                             << "tic_coverage\tfragment_count\t"
@@ -373,11 +374,12 @@ FLASHIda::FLASHIda(char* arg) :
                          << ion_index << "\t"
                          << reaction_times << "\t"
                          << reagent_max_its << "\t"
-                         << reagent_agc_targets << "\n";
+                         << reagent_agc_targets << "\t"
+                         << cmd.scan_description << "\n";  // E6: raw descriptor (tab/newline-free by construction)
     commands_tsv_stream_.flush();
   }
 
-  void FLASHIda::writeScanResultRow_(const std::string& tracking_id, double rt,
+  void FLASHIda::writeScanResultRow_(const std::string& tracking_id, int ms_level, double rt,
                                       int mass_count, int commands_pushed,
                                       const std::vector<std::string>& child_ids,
                                       int tag_count, const std::string& matched_protein,
@@ -415,6 +417,7 @@ FLASHIda::FLASHIda(char* arg) :
     }
 
     results_tsv_stream_ << tracking_id << "\t"
+                        << ms_level << "\t"
                         << resolve_ts << "\t"
                         << duration << "\t"
                         << received_ts << "\t"
@@ -824,7 +827,7 @@ FLASHIda::FLASHIda(char* arg) :
       for (const auto& c : ms2_commands)
         child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
       int all_mass_count = static_cast<int>(selection_.deconvolvedMS1().size());
-      writeScanResultRow_(id_str, rt_min, all_mass_count, commands_pushed,
+      writeScanResultRow_(id_str, 1, rt_min, all_mass_count, commands_pushed,
                           child_ids, 0, "", "", enqueue_ts, dequeue_ts, received_ts,
                           &selection_.deconvolvedMS1(), "");
 
@@ -877,8 +880,8 @@ FLASHIda::FLASHIda(char* arg) :
         int expl_mass_count = has_expl_ms2 ? static_cast<int>(exploration_.exploration_deconv_->storedMS2().size()) : 0;
         const DeconvolvedSpectrum* ms2_spec = has_expl_ms2 ? &exploration_.exploration_deconv_->storedMS2() : nullptr;
         std::string parent_id(info.parent_scan_id);
-        writeScanResultRow_(id_str, rt_min, expl_mass_count, static_cast<int>(info.commands.size()),
-                            expl_children, 0, info.matched_protein, info.proteoform_sequence, enqueue_ts, dequeue_ts, received_ts,
+        writeScanResultRow_(id_str, 2, rt_min, expl_mass_count, static_cast<int>(info.commands.size()),
+                            expl_children, info.identification_result.tag_count, info.matched_protein, info.proteoform_sequence, enqueue_ts, dequeue_ts, received_ts,
                             ms2_spec, parent_id,
                             info.tic_coverage, info.fragment_count,
                             info.group_id, info.exploration_metric,
@@ -1002,7 +1005,7 @@ FLASHIda::FLASHIda(char* arg) :
       std::string ms2_act = ctx.num_stages > 0 ? std::string(ctx.stages[0].activation_type)
                                                : config_.level(2).scans[0].activation;
       std::string ms2_rt  = ctx.num_stages > 0 ? std::to_string(ctx.stages[0].reaction_time) : "0";
-      writeScanResultRow_(id_str, rt_min, ms2_mass_count, commands_pushed,
+      writeScanResultRow_(id_str, 2, rt_min, ms2_mass_count, commands_pushed,
                           child_ids, tag_count, nlr.matched_protein, nlr.proteoform_sequence,
                           enqueue_ts, dequeue_ts, received_ts,
                           ms2_spec, parent_id,
@@ -1038,9 +1041,9 @@ FLASHIda::FLASHIda(char* arg) :
         int expl_mass_count = has_expl_ms3 ? static_cast<int>(exploration_.exploration_deconv_->storedMS2().size()) : 0;
         const DeconvolvedSpectrum* ms3_spec = has_expl_ms3 ? &exploration_.exploration_deconv_->storedMS2() : nullptr;
         std::string parent_id(info.parent_scan_id);
-        writeScanResultRow_(id_str, rt_min, expl_mass_count,
+        writeScanResultRow_(id_str, 3, rt_min, expl_mass_count,
                             static_cast<int>(info.commands.size()),
-                            expl_children, 0, info.matched_protein, info.proteoform_sequence, enqueue_ts, dequeue_ts, received_ts,
+                            expl_children, info.identification_result.tag_count, info.matched_protein, info.proteoform_sequence, enqueue_ts, dequeue_ts, received_ts,
                             ms3_spec, parent_id,
                             info.tic_coverage, info.fragment_count,
                             info.group_id, info.exploration_metric,
@@ -1074,7 +1077,10 @@ FLASHIda::FLASHIda(char* arg) :
       if (resolved.has_value() && resolved->num_stages >= 2)
       {
         precursor_charge = resolved->stages[1].charge_state;
-        precursor_mass = resolved->mono_mass;
+        // E3: pair the FRAGMENT charge with the FRAGMENT mass (mono_mass_s1), not the MS2-precursor mass
+        // (resolved->mono_mass). A consistent (mass,charge) precursor lets the existing deconvolution cap
+        // bound MS3 sub-fragment charges to the parent fragment charge (fragZ <= parentZ).
+        precursor_mass = resolved->mono_mass_s1;
       }
 
       int ms3_mass_count = 0;
@@ -1148,7 +1154,7 @@ FLASHIda::FLASHIda(char* arg) :
         ms3_act = std::string(resolved->stages[0].activation_type) + ";" + std::string(resolved->stages[1].activation_type);
         ms3_rt  = std::to_string(resolved->stages[0].reaction_time) + ";" + std::to_string(resolved->stages[1].reaction_time);
       }
-      writeScanResultRow_(id_str, rt_min, ms3_mass_count, 0,
+      writeScanResultRow_(id_str, 3, rt_min, ms3_mass_count, 0,
                           {}, ms3_tag_count, ms3_matched_protein, ms3_proteoform,
                           enqueue_ts, dequeue_ts, received_ts,
                           ms3_spec, parent_id,

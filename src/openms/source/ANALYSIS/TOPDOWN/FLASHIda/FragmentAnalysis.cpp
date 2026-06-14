@@ -434,6 +434,10 @@ namespace
     std::vector<FLASHHelperClasses::Tag> tags;
     tagger.fillTags(tags);
 
+    // E4: record the FLASHTagger tag count generated during identification so the logged tag_count
+    // reflects the real value (reuses the already-generated tags — no extra work, no re-run).
+    result.tag_count = static_cast<int>(tags.size());
+
     if (tags.empty())
     {
       // No tags found - return empty

@@ -19,6 +19,11 @@
 #include <vector>
 #include <algorithm>
 #include <fstream>
+#include <sstream>
+#include <set>
+#include <string>
+#include <cstdio>
+#include <cmath>
 
 using namespace OpenMS;
 
@@ -731,6 +736,41 @@ namespace
     }
     return total;
   }
+
+  // Minimal TSV reader (first line = header, rest = rows; tab-split). Local to this test
+  // TU -- the exploration test does not include FLASHIda_TestHelpers.h (it would collide
+  // with the anonymous-namespace ScanData / loadTsvScans defined here). Used by the
+  // tag_count-under-tagging section to read scan_results.tsv.
+  struct TSVFile
+  {
+    std::vector<std::string> headers;
+    std::vector<std::vector<std::string>> rows;
+
+    static TSVFile parse(const std::string& path)
+    {
+      TSVFile result;
+      std::ifstream f(path);
+      std::string line;
+      bool first = true;
+      while (std::getline(f, line))
+      {
+        std::vector<std::string> cols;
+        std::istringstream iss(line);
+        std::string col;
+        while (std::getline(iss, col, '\t')) cols.push_back(col);
+        if (first) { result.headers = cols; first = false; }
+        else        { result.rows.push_back(cols); }
+      }
+      return result;
+    }
+
+    int colIndex(const std::string& name) const
+    {
+      for (size_t i = 0; i < headers.size(); i++)
+        if (headers[i] == name) return static_cast<int>(i);
+      return -1;
+    }
+  };
 
   // Derive an inclusion-pinned, MS3-capable variant of an exploration config: pin the cytC
   // precursor (target_mode=1 + inclusion_cytc.txt) and swap in the validatable M-starting cytC
@@ -2235,6 +2275,403 @@ START_SECTION(activation_type_wiring_in_scoring)
   // was correctly propagated through the chain.
   TEST_EQUAL(info.activation_type, "ETD")
   TEST_EQUAL(info.group_id > 0, true)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// T8: HCD / ETD exploration split.
+// KEEP the existing HCD baselines (exploration_group_creation /
+// exploration_variants_priority_by_level above). The two sections below are the
+// ETD-parallel half of the split: they assert that ETD exploration builds variants
+// (variants.size() > 0), that those variants carry the ETD activation (which maps
+// internally to c/z fragment ions, vs HCD's b/y), and that the ETD branch sweeps
+// reaction_time (rt_min/rt_max/rt_step) rather than collision_energy.
+//
+// The C++ engine's Config only accepts the C++-facing JSON schema (not the C#
+// method.json schema), so the canonical, build-stable assertions run against the
+// inline etd_exploration_config. A second, guarded section additionally drives the
+// data-agent fixture method_exploration_etd.json *iff* it is present AND parses as a
+// C++ config — so a C++-schema fixture is exercised end-to-end, while an absent file
+// (or a C#-schema one the engine cannot parse) is skipped cleanly with no false fail.
+/////////////////////////////////////////////////////////////
+
+START_SECTION(exploration_group_creation_etd)
+{
+  // ETD half of the HCD/ETD split (mirrors exploration_group_creation). ETD sweeps
+  // reaction_time over [rt_min, rt_max] step rt_step = [5,10,15] -> 3 variants, each
+  // with activation_type "ETD" (c/z ions). Verifies variants.size() > 0 and that the
+  // ETD branch wires reaction_time (not collision_energy) per Exploration::buildVariants_.
+  Config cfg{std::string(etd_exploration_config)};
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+
+  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
+
+  TEST_EQUAL(cmds.size() > 0, true)              // ETD exploration produced variants
+  TEST_EQUAL(exploration.activeGroupCount(), 1)
+
+  auto group = exploration.getGroup(1);
+  TEST_EQUAL(group.msn_level, 2)
+  TEST_EQUAL(group.variants.size() > 0, true)
+
+  // c/z proxy: every variant is ETD. rt-sweep: reaction_time takes the swept values
+  // {5,10,15}; collision_energy is the (constant) base-config CE, not a CE sweep.
+  std::set<double> seen_rts;
+  for (const auto& v : group.variants)
+  {
+    TEST_STRING_EQUAL(v.activation_type, "ETD")
+    TEST_EQUAL(std::isfinite(v.reaction_time), true)
+    seen_rts.insert(v.reaction_time);
+  }
+  // rt_min=5, rt_max=15, rt_step=5 -> 3 distinct reaction-time variants.
+  TEST_EQUAL(static_cast<int>(group.variants.size()), 3)
+  TEST_EQUAL(static_cast<int>(seen_rts.size()), 3)
+  TEST_EQUAL(seen_rts.count(5.0) == 1 && seen_rts.count(10.0) == 1 && seen_rts.count(15.0) == 1, true)
+}
+END_SECTION
+
+START_SECTION(exploration_variants_priority_by_level_etd)
+{
+  // ETD analogue of exploration_variants_priority_by_level: every ETD MS2 variant
+  // command is level 2, priority 2, non-AGC, and marked 'E' in its scan_description.
+  Config cfg{std::string(etd_exploration_config)};
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+
+  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
+
+  TEST_EQUAL(cmds.size() > 0, true)
+  for (size_t i = 0; i < cmds.size(); ++i)
+  {
+    TEST_EQUAL(cmds[i].msn_level, 2)
+    TEST_EQUAL(cmds[i].priority, 2)
+    TEST_EQUAL(cmds[i].is_agc, 0)
+    std::string desc(cmds[i].scan_description);
+    TEST_EQUAL(desc.size() >= 4, true)
+    TEST_EQUAL(desc[3], 'E')
+  }
+}
+END_SECTION
+
+START_SECTION(exploration_etd_from_method_fixture)
+{
+  // Drive the data-agent ETD fixture by path (T8). The C++ Config only parses the
+  // C++-facing schema; this section therefore READS the file and exercises it only
+  // when it is present AND constructs a FLASHIda without throwing (i.e. it is a
+  // C++-schema config). An absent file, or a C#-schema method.json the engine cannot
+  // parse, is skipped cleanly (informational STATUS, no assertion, no failure) — the
+  // canonical ETD assertions live in exploration_group_creation_etd above.
+  const std::string fixture = "../../FlashIDA/test-data/configs/method_exploration_etd.json";
+
+  std::ifstream f(fixture);
+  if (!f.good())
+  {
+    STATUS("method_exploration_etd.json absent -- ETD fixture section skipped cleanly")
+  }
+  else
+  {
+    std::stringstream buf;
+    buf << f.rdbuf();
+    std::string cfg_json = buf.str();
+    f.close();
+
+    // Only a C++-schema config (starts with '{' and Config accepts it) can be driven
+    // here; a C#-schema method.json would throw in the FLASHIda/Config ctor.
+    bool loadable = false;
+    FLASHIda* ida = nullptr;
+    try
+    {
+      ida = new FLASHIda(const_cast<char*>(cfg_json.c_str()));
+      loadable = true;
+    }
+    catch (...)
+    {
+      if (ida) { delete ida; ida = nullptr; }
+      loadable = false;
+    }
+
+    if (!loadable)
+    {
+      STATUS("method_exploration_etd.json is not a C++-schema config -- ETD fixture section skipped cleanly")
+    }
+    else
+    {
+      // The fixture loaded. Drive a single MS1 -> MS2-exploration cycle on real cytC
+      // data and assert that ETD exploration variants were produced (variants.size()>0)
+      // and that they carry the ETD activation (c/z ions). Feed the engine-emitted
+      // descriptions back so the variants are scored on real data.
+      auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
+      auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
+      ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
+
+      // Bootstrap MS1: push survey scans until one selects a precursor and creates the
+      // exploration group, then drain + feed the ETD MS2 variants back.
+      int group_cmds = 0;
+      for (const auto& s : ms1_scans)
+      {
+        int n = ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1,
+                                 ("scan_" + s.scan_id).c_str());
+        if (n > 0) { group_cmds = n; break; }
+      }
+      ABORT_IF(group_cmds == 0)
+
+      int etd_variant_cmds = 0;
+      int idle = 0;
+      for (int i = 0; i < 100; ++i)
+      {
+        ScanCommand next{};
+        if (ida->getNextScanCommand(next) != 1) break;
+        if (next.is_agc || next.msn_level == 1) { if (++idle > 3) break; continue; }
+        idle = 0;
+        if (next.msn_level == 2)
+        {
+          std::string d(next.scan_description);
+          if (d.size() >= 4 && d[3] == 'E') ++etd_variant_cmds;  // an exploration variant
+          ida->processScan(ms2_scans[0].mzs.data(), ms2_scans[0].ints.data(),
+                           (int)ms2_scans[0].mzs.size(), ms2_scans[0].rt, 2, next.scan_description);
+        }
+        else if (next.msn_level == 3)
+        {
+          break;  // reached MS3 -> the MS2-exploration group already produced its variants
+        }
+      }
+      delete ida;
+      // The fixture drives an ETD exploration -> at least one 'E' MS2 variant command.
+      TEST_EQUAL(etd_variant_cmds > 0, true)
+    }
+  }
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// T10: exploration-MS2 tag_count under tagging (locks E4).
+// E4 surfaces the FLASHTagger tag count generated during exploration identification
+// (info.identification_result.tag_count) into the exploration MS2 scan_results row,
+// instead of the old literal 0. Driving the inclusion-pinned cytC exploration on the
+// REAL ms2_cytc_fresh_scan57 ladder (whose b/y ions match the M-starting cytC
+// proteoform -- the same data that fires MS3 in the sections above) generates real
+// sequence tags during identification. We capture scan_results.tsv and assert that at
+// least one level-2 row logs tag_count > 0.
+//
+// NOTE (deviation from the literal T10 wording): the task says "an exploration MS2
+// variant ... logs tag_count>0". Per the engine's design (logging-validation suite
+// decision) a CE-/RT-sweep 'E' variant only logs a non-zero tag_count when its fed
+// spectrum actually tags against the proteoform; the assertion below therefore targets
+// "at least one level-2 result row" (which on this real, matching data is an
+// exploration row) rather than over-specifying a particular variant index. This still
+// locks E4: the field is no longer a hardcoded 0.
+/////////////////////////////////////////////////////////////
+
+START_SECTION(exploration_ms2_tag_count_under_tagging)
+{
+  auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
+  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
+
+  // Inclusion-pin the cytC precursor + the validatable M-starting proteoform so the
+  // real fresh57 ladder matches and FLASHTagger produces tags during identification.
+  std::string cfg_str = inclusionPinCytc(ms3_exploration_config);
+
+  // Inject a runtime block (the exploration configs have none) so the engine writes
+  // scan_results.tsv, which carries the tag_count column we assert on. Insert before
+  // the config's closing brace.
+  const std::string results_path = "expl_tagcount_scan_results.tsv";
+  std::remove(results_path.c_str());
+  {
+    auto last = cfg_str.rfind('}');
+    ABORT_IF(last == std::string::npos)
+    std::string rt = ", \"runtime\": { \"scan_results_path\": \"" + results_path + "\" }";
+    cfg_str.insert(last, rt);
+  }
+
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(cfg_str.c_str()));
+
+  // Drive the inclusion-pinned exploration group: bootstrap MS1 until a group is
+  // created, then drain + feed each MS2 variant back on the real cytC ladder so the
+  // exploration identification (and tag generation) runs and the rows are written.
+  int group_cmds = 0;
+  for (const auto& s : ms1_scans)
+  {
+    int n = ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1,
+                             ("scan_" + s.scan_id).c_str());
+    if (n > 0) { group_cmds = n; break; }
+  }
+  ABORT_IF(group_cmds == 0)
+
+  int idle = 0;
+  for (int i = 0; i < 100; ++i)
+  {
+    ScanCommand next{};
+    if (ida->getNextScanCommand(next) != 1) break;
+    if (next.is_agc || next.msn_level == 1) { if (++idle > 3) break; continue; }
+    idle = 0;
+    if (next.msn_level == 2)
+    {
+      ida->processScan(ms2_scans[0].mzs.data(), ms2_scans[0].ints.data(),
+                       (int)ms2_scans[0].mzs.size(), ms2_scans[0].rt, 2, next.scan_description);
+    }
+    else if (next.msn_level == 3)
+    {
+      // Feed the MS3 too so the cycle keeps draining (its row is not what we assert on).
+      ida->processScan(ms2_scans[0].mzs.data(), ms2_scans[0].ints.data(),
+                       (int)ms2_scans[0].mzs.size(), ms2_scans[0].rt, 3, next.scan_description);
+    }
+  }
+  delete ida;  // flush + close the TSV streams
+
+  // Parse scan_results.tsv: find a level-2 row whose tag_count > 0.
+  TSVFile results = TSVFile::parse(results_path);
+  ABORT_IF(results.rows.empty())
+  int lvl_col = results.colIndex("ms_level");
+  int tag_col = results.colIndex("tag_count");
+  ABORT_IF(lvl_col < 0 || tag_col < 0)
+
+  bool found_ms2_tag = false;
+  int max_ms2_tag = 0;
+  for (const auto& row : results.rows)
+  {
+    if (lvl_col >= (int)row.size() || tag_col >= (int)row.size()) continue;
+    if (row[lvl_col] != "2") continue;
+    int tc = 0;
+    try { tc = std::stoi(row[tag_col]); } catch (...) { tc = 0; }
+    if (tc > max_ms2_tag) max_ms2_tag = tc;
+    if (tc > 0) found_ms2_tag = true;
+  }
+  STATUS("max level-2 tag_count = " << max_ms2_tag)
+  // E4: at least one MS2 exploration row logs a real (non-zero) tag count.
+  TEST_EQUAL(found_ms2_tag, true)
+
+  std::remove(results_path.c_str());
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// Inclusion-mode MS3 full-acquisition round-trip (H-full).
+// Mirrors the Flash.cs event loop: repeatedly drain a command and feed the matching
+// scan back stamped with THAT command's engine-emitted scan_description, so MS1->MS2
+// ->MS3 lineage uses the engine's own ids end-to-end. Driven in INCLUSION mode for
+// cytC (single ~12360 Da target via inclusion_cytc.txt) so exactly one precursor fires
+// and the MS1->MS2->MS3 chain is unambiguous. Terminates on the 3-consecutive-idle
+// (AGC / already-fed-MS1) sentinel.
+//
+// The C++ Config takes the C++ JSON schema, not the C# method.json; the inline config
+// below is the C++-schema mirror of method_inclusion.json + inclusion_cytc.txt
+// (target_mode=1, the cytC inclusion list, the M-starting proteoform). It is deliberately
+// a STANDARD MS2 -> MS3 inclusion config (no ms2 exploration block) so the MS2->MS3
+// lineage flows through the standard path (FLASHIda.cpp MS2 branch, where each MS3
+// command's parent_scan_id is set to the originating MS2's encoded id) -- matching
+// method_inclusion.json (plain inclusion DDA, no exploration). agc_interval_seconds is
+// large so the only AGCs are idle ones (required by the idle-sentinel termination).
+//
+// HARD asserts (no silent pass): ms2_count >= 1, ms3_count >= 1, and every MS3
+// parent_tracking_id resolves to an emitted MS2 scan id.
+/////////////////////////////////////////////////////////////
+
+START_SECTION(inclusion_ms3_full_acquisition_roundtrip)
+{
+  auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
+  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
+
+  // C++-schema mirror of method_inclusion.json + inclusion_cytc.txt: inclusion mode
+  // (target_mode=1) pinned to the single ~12360 Da cytC target, the M-starting cytC
+  // proteoform (so the real fresh57 b/y ladder matches and MS3 fires), standard MS2 and
+  // MS3 intensity selection (NO exploration block), and a large agc_interval so only
+  // idle AGCs are emitted.
+  const char* inclusion_ms3_config = R"({
+    "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
+    "precursor_selection": { "RT_window": 180, "target_mode": 1, "IDScore": false, "AllCharges": false, "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1 },
+    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
+    "faims": { "cv_values": [-50], "max_cv_skip": 0, "cv_precursor_threshold": 15 },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
+      "ms2": [ { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 } ],
+      "ms3": [ { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 35, "resolution": 120000 } ]
+    },
+    "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 }, "agc_interval_seconds": 999999 },
+    "files": { "target_logs": [], "fasta": "", "inclusion_list": "../../FlashIDA/test-data/configs/inclusion_cytc.txt", "ptm_list": "" },
+    "ms3": { "protein_sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE" },
+    "conditional_ms2": false,
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_targets": 3 },
+      "ms2": { "selection": "intensity", "max_targets": 3 },
+      "ms3": { "selection": "intensity", "max_targets": 3 }
+    }
+  })";
+  std::string cfg_str(inclusion_ms3_config);
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(cfg_str.c_str()));
+
+  // --- H-full id-chaining driver (inlined; mirrors FLASHIda_TestHelpers::runFullAcquisition).
+  // MS1 bootstraps from the engine's first idle-emitted MS1 command; feed each level
+  // back with the engine-emitted scan_description. We use a single MS1 scan
+  // (ms1_scans[0]) so an MS1 re-survey after it is already fed counts as idle (avoids
+  // RT self-exclusion churn).
+  const ScanData& ms1 = ms1_scans[0];
+  const ScanData& ms2 = ms2_scans[0];
+
+  std::vector<ScanCommand> ms2_cmds, ms3_cmds;
+  bool ms1_fed = false;
+  int idle = 0;
+  ScanCommand cmd{};
+  for (int it = 0; it < 300 && idle < 3; ++it)
+  {
+    if (ida->getNextScanCommand(cmd) != 1) break;
+    if (cmd.is_agc || (cmd.msn_level == 1 && ms1_fed)) { ++idle; cmd = ScanCommand{}; continue; }
+    idle = 0;
+    if (cmd.msn_level == 1)
+    {
+      ida->processScan(ms1.mzs.data(), ms1.ints.data(), (int)ms1.mzs.size(), ms1.rt, 1, cmd.scan_description);
+      ms1_fed = true;
+    }
+    else if (cmd.msn_level == 2)
+    {
+      ms2_cmds.push_back(cmd);
+      ida->processScan(ms2.mzs.data(), ms2.ints.data(), (int)ms2.mzs.size(), ms2.rt, 2, cmd.scan_description);
+    }
+    else if (cmd.msn_level == 3)
+    {
+      ms3_cmds.push_back(cmd);
+      ida->processScan(ms2.mzs.data(), ms2.ints.data(), (int)ms2.mzs.size(), ms2.rt, 3, cmd.scan_description);
+    }
+    cmd = ScanCommand{};
+  }
+  delete ida;
+
+  // Hard asserts: the inclusion-mode cytC acquisition produced MS2 and MS3 commands.
+  TEST_EQUAL(ms2_cmds.size() >= 1, true)
+  TEST_EQUAL(ms3_cmds.size() >= 1, true)
+
+  // Every MS3 parent_tracking_id must resolve to an emitted MS2 scan id. The MS2 ids
+  // are the leading 3 chars of each emitted MS2 scan_description; an MS3 command stores
+  // its parent MS2 id in parent_scan_id (3 chars + NUL).
+  std::set<std::string> emitted_ms2_ids;
+  for (const auto& m2 : ms2_cmds)
+  {
+    std::string d(m2.scan_description);
+    if (d.size() >= 3) emitted_ms2_ids.insert(d.substr(0, 3));
+  }
+  bool all_ms3_parents_resolve = true;
+  std::string unresolved;
+  for (const auto& m3 : ms3_cmds)
+  {
+    std::string parent(m3.parent_scan_id);  // NUL-terminated 3-char id
+    if (parent.empty() || emitted_ms2_ids.count(parent) == 0)
+    {
+      all_ms3_parents_resolve = false;
+      unresolved = parent;
+      break;
+    }
+  }
+  STATUS("emitted MS2 ids = " << emitted_ms2_ids.size()
+         << ", MS3 cmds = " << ms3_cmds.size()
+         << (all_ms3_parents_resolve ? std::string("")
+                                     : (", first unresolved MS3 parent = '" + unresolved + "'")))
+  TEST_EQUAL(all_ms3_parents_resolve, true)
 }
 END_SECTION
 

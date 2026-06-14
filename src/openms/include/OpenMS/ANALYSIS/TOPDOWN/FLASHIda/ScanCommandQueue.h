@@ -131,6 +131,11 @@ namespace OpenMS
     /// Encode an integer as a 3-character base-94 string (all printable ASCII 0x21-0x7E)
     static std::string encode(int value);
 
+    /// Operator-facing scan_description mass token: the kDa mass with the most significant digits that
+    /// fit the 15-char scan_description budget, plus a 'k' (kDa) unit suffix. Reserves room for the
+    /// trailing ion (so it is never truncated) given the actual charge + ion fields of the command.
+    static std::string formatMassToken(double mass_kda, int charge, char ion_type, int ion_index);
+
     /// Decode a 3-character base-94 string back to integer
     int decode(const std::string& s) const;
 
