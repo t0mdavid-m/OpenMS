@@ -377,7 +377,8 @@ namespace
                                           const std::string& results_path,
                                           bool enable_ms3 = false,
                                           const std::string& identification_path = "",
-                                          const std::string& ms2_activation = "HCD")
+                                          const std::string& ms2_activation = "HCD",
+                                          int ms3_max_targets = 0)
   {
     std::string target_mode_val   = enable_ms3 ? "1" : "0";
     std::string inclusion_list_val = enable_ms3 ? "../../FlashIDA/test-data/configs/inclusion_cytc.txt" : "";
@@ -390,9 +391,12 @@ namespace
       ? R"("ms3": { "protein_sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE" },)"
       : "";
     std::string ms3_selection = enable_ms3 ? "\"intensity\"" : "\"none\"";
-    // Exhaustive MS3 emission: lift the per-fragment cap (engine default ~10) so the engine emits an MS3
-    // command for ALL matched MS2 fragment ions -- needed by the real-MS3 ion-name-keyed feed (§T9).
-    std::string ms3_max_targets = enable_ms3 ? ", \"max_targets\": 200" : "";
+    // Exhaustive MS3 emission (§T9 only): when ms3_max_targets > 0, lift the per-fragment cap so the engine
+    // emits an MS3 command for ALL matched MS2 fragment ions; otherwise omit -> engine default (~10).
+    // Scoped to the caller (not all enable_ms3 sections) so §C2's strict per-row ion check + suite runtime
+    // are not perturbed by the exhaustive fragment set.
+    std::string ms3_max_targets_json = (enable_ms3 && ms3_max_targets > 0)
+      ? (", \"max_targets\": " + std::to_string(ms3_max_targets)) : "";
     // reaction_time is an ETD-family parameter; only emit it for ETD/EThcD so the HCD
     // default stays byte-identical to the original FLASHIda_Logging_test config.
     std::string ms2_rt = (ms2_activation == "ETD" || ms2_activation == "EThcD")
@@ -430,7 +434,7 @@ namespace
       "selection_strategy": {
         "ms1": { "selection": "qscore", "max_targets": 5 },
         "ms2": { "selection": )" << ms2_selection << R"( },
-        "ms3": { "selection": )" << ms3_selection << ms3_max_targets << R"( }
+        "ms3": { "selection": )" << ms3_selection << ms3_max_targets_json << R"( }
       },
       "runtime": {
         "ida_log_path": ")" << ida_log_path << R"(",

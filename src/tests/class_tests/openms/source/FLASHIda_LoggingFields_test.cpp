@@ -832,19 +832,20 @@ END_SECTION
 START_SECTION(ida_log_multi_scan_distinct_keys)
 {
   auto ms1 = loadTsvScans(CYTC_MS1);
-  ABORT_IF(ms1.size() < 1)
+  ABORT_IF(ms1.size() < 2)
 
   std::string log_f = "lf_l2_ida.log";
   std::remove(log_f.c_str());
   std::string json = buildJsonWithRuntime(log_f, "", "");
   FLASHIda ida(const_cast<char*>(json.c_str()));
 
-  // Feed the same MS1 twice, the second well beyond RT_window (180) so the standard-DDA
-  // RT exclusion has expired and BOTH scans select precursors -> two log groups. Pre-B1 the
-  // scan number was a literal 0, collapsing both into a single map key; B1 makes it the
-  // per-scan tracking id, so the two groups stay distinct.
-  ida.processScan(ms1[0].mzs.data(), ms1[0].ints.data(), (int)ms1[0].mzs.size(), ms1[0].rt, 1, "scan_900");
-  ida.processScan(ms1[0].mzs.data(), ms1[0].ints.data(), (int)ms1[0].mzs.size(), ms1[0].rt + 1000.0, 1, "scan_901");
+  // Feed the cytC-bearing MS1 (ms1[1] = scan 134; ms1[0] = scan 132 is a weak edge scan that selects
+  // 0 precursors -> "0 targets" log headers that parseFLASHIdaLog skips). Feed it twice, the second
+  // well beyond RT_window (180) so the standard-DDA RT exclusion has expired and BOTH scans select
+  // precursors -> two log groups. Pre-B1 the scan number was a literal 0, collapsing both into a single
+  // map key; B1 makes it the per-scan tracking id, so the two groups stay distinct.
+  ida.processScan(ms1[1].mzs.data(), ms1[1].ints.data(), (int)ms1[1].mzs.size(), ms1[1].rt, 1, "scan_900");
+  ida.processScan(ms1[1].mzs.data(), ms1[1].ints.data(), (int)ms1[1].mzs.size(), ms1[1].rt + 1000.0, 1, "scan_901");
 
   auto parsed = FLASHIda::parseFLASHIdaLog(log_f);
   TEST_TRUE(parsed.size() >= 2)
@@ -893,7 +894,7 @@ START_SECTION(parent_tracking_id_resolution)
 {
   auto ms1 = loadTsvScans(CYTC_MS1);
   auto ms2 = loadTsvScans(CYTC_MS2);
-  ABORT_IF(ms1.empty() || ms2.empty())
+  ABORT_IF(ms1.size() < 2 || ms2.empty())
 
   std::string cmd_f = "lf_x6_commands.tsv", res_f = "lf_x6_results.tsv";
   std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
@@ -902,7 +903,9 @@ START_SECTION(parent_tracking_id_resolution)
 
   // Single-MS1 engine-chained acquisition: the engine emits the MS1 command, we feed the cytC
   // MS1 back under that id; the resulting MS2s (and any MS3s) chain off the engine's own ids.
-  AcqResult acq = runFullAcquisition(&ida, ms1[0], ms2[0]);
+  // ms1[1] = scan 134 carries the cytC envelope (ms1[0] = scan 132 is a weak edge scan from which
+  // the engine correctly selects 0 precursors).
+  AcqResult acq = runFullAcquisition(&ida, ms1[1], ms2[0]);
   TEST_TRUE(acq.ms2_cmds.size() >= 1)  // inclusion mode must trigger >=1 MS2 on the pinned cytC precursor
 
   auto cmds = TSVFile::parse(cmd_f);
@@ -1093,8 +1096,10 @@ START_SECTION(results_ms3_real_fragment_data)
 
     std::string cmd_f = "lf_t9_commands.tsv", res_f = "lf_t9_results.tsv";
     std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
-    // M-start, inclusion-pinned, MS3 mode-1, EXHAUSTIVE MS3 emission (ms3.max_targets=200).
-    std::string json = buildJsonWithRuntime("", cmd_f, res_f, true);
+    // M-start, inclusion-pinned, MS3 mode-1, EXHAUSTIVE MS3 emission: pass ms3_max_targets=200 (scoped to
+    // §T9 only; other enable_ms3 sections keep the engine default ~10 so §C2's strict ion check + runtime
+    // are unaffected).
+    std::string json = buildJsonWithRuntime("", cmd_f, res_f, true, "", "HCD", 200);
     FLASHIda ida(const_cast<char*>(json.c_str()));
 
     // Mirror the shared harness wiring; feed the REAL per-ion MS3 spectrum keyed by the decoded descriptor ion.

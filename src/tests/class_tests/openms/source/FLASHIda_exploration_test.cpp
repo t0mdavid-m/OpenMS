@@ -2575,7 +2575,7 @@ START_SECTION(inclusion_ms3_full_acquisition_roundtrip)
 {
   auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
   auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
-  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
+  ABORT_IF(ms1_scans.size() < 2 || ms2_scans.empty())
 
   // C++-schema mirror of method_inclusion.json + inclusion_cytc.txt: inclusion mode
   // (target_mode=1) pinned to the single ~12360 Da cytC target, the M-starting cytC
@@ -2608,10 +2608,11 @@ START_SECTION(inclusion_ms3_full_acquisition_roundtrip)
 
   // --- H-full id-chaining driver (inlined; mirrors FLASHIda_TestHelpers::runFullAcquisition).
   // MS1 bootstraps from the engine's first idle-emitted MS1 command; feed each level
-  // back with the engine-emitted scan_description. We use a single MS1 scan
-  // (ms1_scans[0]) so an MS1 re-survey after it is already fed counts as idle (avoids
-  // RT self-exclusion churn).
-  const ScanData& ms1 = ms1_scans[0];
+  // back with the engine-emitted scan_description. We use a single strong MS1 scan
+  // (ms1_scans[1] = scan 134, the cytC envelope; ms1_scans[0] = scan 132 is a weak edge scan
+  // that selects 0 precursors) so an MS1 re-survey after it is already fed counts as idle
+  // (avoids RT self-exclusion churn).
+  const ScanData& ms1 = ms1_scans[1];
   const ScanData& ms2 = ms2_scans[0];
 
   std::vector<ScanCommand> ms2_cmds, ms3_cmds;
