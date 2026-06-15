@@ -323,7 +323,11 @@ FLASHIda::FLASHIda(char* arg) :
     if (cmd.msn_level == 3 && std::strlen(cmd.scan_description) > 4)
     {
       std::string desc(cmd.scan_description);
-      auto at_pos = desc.find('@');
+      // rfind: the charge delimiter is the LAST '@'. The 3-char base-94 tracking id can itself contain '@'
+      // (0x40, e.g. id "!#@"); find() would lock onto the id's '@' and mis-parse the ion (logging the marker
+      // 'R' as ion_type + a mass digit as ion_index). The mass token has no '@', so rfind('@') is exactly the
+      // charge delimiter. (Matches the test-side decodeTrailingIon, which also uses rfind.)
+      auto at_pos = desc.rfind('@');
       if (at_pos != std::string::npos)
       {
         size_t pos = at_pos + 1;

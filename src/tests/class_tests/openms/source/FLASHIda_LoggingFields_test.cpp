@@ -31,7 +31,6 @@
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
-#include <iostream>
 #include <map>
 #include <set>
 #include <string>
@@ -273,15 +272,6 @@ START_SECTION(commands_ms3_two_stage)
     hcd_stage1_ok = hcd_stage1_ok && hcd.size() == 2 && std::abs(toD(hcd[1]) - 35.0) < 1.0;
 
     ion_ok = ion_ok && ionTypeOk(cell(t, row, "ion_type")) && (std::atoi(cell(t, row, "ion_index").c_str()) >= 1);
-    // [DIAGNOSTIC, temporary] static analysis says every MS3 row should carry a valid ion, yet CI shows
-    // ion_ok red. Dump any offending row so the next CI run reveals the actual cause (truncation vs no-ion
-    // descriptor vs column misalignment). Visible via ctest --output-on-failure. Remove once §C2's fix lands.
-    if (!(ionTypeOk(cell(t, row, "ion_type")) && std::atoi(cell(t, row, "ion_index").c_str()) >= 1))
-      std::cout << "[C2-ION-FAIL] tracking_id=" << cell(t, row, "tracking_id")
-                << " ion_type='" << cell(t, row, "ion_type") << "' ion_index='" << cell(t, row, "ion_index")
-                << "' charge='" << cell(t, row, "charge")
-                << "' scan_description='" << cell(t, row, "scan_description")
-                << "' desc_len=" << cell(t, row, "scan_description").size() << std::endl;
     parent_ok = parent_ok && isTrackingId(cell(t, row, "parent_tracking_id"));  // == its MS2
 
     // The 11 scoring cols are 2-stage 'stage0;stage1'. stage0 == parent MS2 score (range-checked);
