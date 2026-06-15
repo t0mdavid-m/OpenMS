@@ -312,23 +312,25 @@ namespace
   };
 
   inline AcqResult runFullAcquisition(FLASHIda* ida, const ScanData& ms1, const ScanData& ms2,
-                                      int max_iters = 300)
+                                      int max_iters = 300, int n_ms1 = 1, double ms1_rt_step = 1000.0)
   {
     AcqResult r;
     int idle = 0;
-    bool ms1_fed = false;
+    int ms1_fed = 0;
     ScanCommand cmd{};
     for (int it = 0; it < max_iters && idle < 3; ++it)
     {
       if (ida->getNextScanCommand(cmd) != 1) break;
-      // idle: an AGC, or an MS1 re-survey after we've already fed the one MS1 (avoids RT self-exclusion)
-      if (cmd.is_agc || (cmd.msn_level == 1 && ms1_fed)) { ++idle; cmd = ScanCommand{}; continue; }
+      // idle: an AGC, or an MS1 re-survey after we've already fed n_ms1 MS1 surveys (avoids RT self-exclusion)
+      if (cmd.is_agc || (cmd.msn_level == 1 && ms1_fed >= n_ms1)) { ++idle; cmd = ScanCommand{}; continue; }
       idle = 0;
       if (cmd.msn_level == 1)
       {
         r.ms1_cmds.push_back(cmd);
-        ida->processScan(ms1.mzs.data(), ms1.ints.data(), (int)ms1.mzs.size(), ms1.rt, 1, cmd.scan_description);
-        ms1_fed = true;
+        // successive surveys are fed beyond RT_window so each re-selects its precursor (distinct log groups)
+        double ms1_rt = ms1.rt + (double)ms1_fed * ms1_rt_step;
+        ida->processScan(ms1.mzs.data(), ms1.ints.data(), (int)ms1.mzs.size(), ms1_rt, 1, cmd.scan_description);
+        ++ms1_fed;
       }
       else if (cmd.msn_level == 2)
       {
