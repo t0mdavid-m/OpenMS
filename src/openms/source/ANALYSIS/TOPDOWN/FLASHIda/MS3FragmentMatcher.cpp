@@ -512,6 +512,13 @@ namespace OpenMS
       {
         (*detailed_results)[vi].ppm_offset = median_ppm;
         (*detailed_results)[vi].correction_factor = correction_factor;
+        // I1: store the MS3 fragment sub-range within the parent protein so identification.tsv reports
+        // where the MS3 PRECURSOR maps, not the parent proteoform's full range. prot_start_1based /
+        // prot_end_1based (computed above for the log line) are 1-based inclusive; convert to the
+        // ProteoformMatch convention (0-based start, 0-based EXCLUSIVE end, FragmentAnalysis.h:74-75):
+        // 0-based start = prot_start_1based - 1; 0-based exclusive end = prot_end_1based.
+        (*detailed_results)[vi].region_start = prot_start_1based - 1;
+        (*detailed_results)[vi].region_end = prot_end_1based;
       }
     }
 

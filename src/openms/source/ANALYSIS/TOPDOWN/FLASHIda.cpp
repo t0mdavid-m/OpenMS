@@ -129,7 +129,11 @@ FLASHIda::FLASHIda(char* arg) :
                                    << "ms1_precursor_mass\tms1_precursor_mz\tms1_precursor_charge\t"
                                    << "ms2_precursor_ion\tms2_precursor_mass\tms2_precursor_mz\tms2_precursor_charge\t"
                                    << "ms2_fragments\tms2_fragment_masses\t"
-                                   << "ms3_fragments\tms3_fragment_masses\n";
+                                   << "ms3_fragments\tms3_fragment_masses\t"
+                                   // I2: isolation-window width / over-window SNR / selected-charge intensity,
+                                   // for the MS2 precursor and (on MS3 rows) the MS3 fragment precursor.
+                                   << "ms2_isolation_width\tms2_window_snr\tms2_charge_intensity\t"
+                                   << "ms3_isolation_width\tms3_window_snr\tms3_charge_intensity\n";
         identification_tsv_stream_.flush();
       }
     }
@@ -501,8 +505,15 @@ FLASHIda::FLASHIda(char* arg) :
     const bool use_ctx_proteoform = (ms_level == 3 && scan_mode == 'R');
     const std::string& id_proteoform = use_ctx_proteoform ? ctx.proteoform_sequence : match.proteoform_sequence;
     const std::vector<FragmentAnalysis::PTMSite>& id_ptm_sites = use_ctx_proteoform ? ctx.ptm_sites : match.ptm_sites;
-    const int id_region_start = use_ctx_proteoform ? ctx.start_pos : match.region_start;
-    const int id_region_end = use_ctx_proteoform ? ctx.end_pos : match.region_end;
+    // I1: for MS3 rows, start_pos/end_pos must be the FRAGMENT sub-range the MS3 precursor covers, which
+    // calibrateAndScore now stores into match.region_start/end (0-based, exclusive end). Use it whenever
+    // populated (>=0) for BOTH 'E' (was -1 default) and 'R' (was ctx = parent full range). Fall back only
+    // if the matcher produced no sub-range: ctx parent range on 'R', match default on 'E'.
+    const bool use_match_region = (ms_level == 3 && match.region_start >= 0);
+    const int id_region_start = use_match_region ? match.region_start
+                                                 : (use_ctx_proteoform ? ctx.start_pos : match.region_start);
+    const int id_region_end = use_match_region ? match.region_end
+                                               : (use_ctx_proteoform ? ctx.end_pos : match.region_end);
 
     std::string proforma = FragmentAnalysis::toProForma(id_proteoform, id_ptm_sites);
 
@@ -567,7 +578,15 @@ FLASHIda::FLASHIda(char* arg) :
       << ms2_frags.str() << "\t"
       << ms2_masses.str() << "\t"
       << ms3_frags.str() << "\t"
-      << ms3_masses.str() << "\n";
+      << ms3_masses.str() << "\t"
+      // I2: isolation-window reporting (std::fixed setprecision(4) still in effect). MS2 triplet always
+      // written; MS3 triplet only on MS3 rows (0.0 otherwise), mirroring the fragment_* columns above.
+      << ctx.ms2_isolation_width << "\t"
+      << ctx.ms2_window_snr << "\t"
+      << ctx.ms2_charge_intensity << "\t"
+      << (ms_level == 3 ? ctx.ms3_isolation_width : 0.0) << "\t"
+      << (ms_level == 3 ? ctx.ms3_window_snr : 0.0) << "\t"
+      << (ms_level == 3 ? ctx.ms3_charge_intensity : 0.0) << "\n";
     identification_tsv_stream_.flush();
   }
 
@@ -835,6 +854,22 @@ FLASHIda::FLASHIda(char* arg) :
         }
       }
 
+      // I2: record each MS2 precursor's isolation-window SNR (signal/noise over the ACTUAL commanded
+      // window, co-isolation aware) against the MS1 source spectrum, keyed by scan_id, for the later
+      // identification.tsv row. signal = the engine's commanded selected-charge intensity (precursor_intensity).
+      // Exploration variants of one precursor share the same window, so each gets the same value.
+      {
+        const MSSpectrum& ms1_src = selection_.deconvolvedMS1().getOriginalSpectrum();
+        for (const auto& c : ms2_commands)
+        {
+          if (c.num_stages <= 0) continue;
+          const double half = c.stages[0].isolation_width / 2.0;
+          queue_.setWindowSnr(c.scan_id, FragmentAnalysis::windowSnr(
+              ms1_src, c.stages[0].precursor_mz - half, c.stages[0].precursor_mz + half,
+              c.precursor_intensity));
+        }
+      }
+
       // IDA log entry
       writeIDALogEntry_(rt_min, tracking_id, id_str, ms2_commands, selection_.deconvolvedMS1());
 
@@ -897,7 +932,8 @@ FLASHIda::FLASHIda(char* arg) :
         const DeconvolvedSpectrum* ms2_spec = has_expl_ms2 ? &exploration_.exploration_deconv_->storedMS2() : nullptr;
         std::string parent_id(info.parent_scan_id);
         writeScanResultRow_(id_str, 2, rt_min, expl_mass_count, static_cast<int>(info.commands.size()),
-                            expl_children, info.identification_result.tag_count, info.matched_protein, info.proteoform_sequence, enqueue_ts, dequeue_ts, received_ts,
+                            expl_children, info.identification_result.tag_count, info.matched_protein,
+                            FragmentAnalysis::toProForma(info.proteoform_sequence, info.identification_result.ptm_sites), enqueue_ts, dequeue_ts, received_ts,
                             ms2_spec, parent_id,
                             info.tic_coverage, info.fragment_count,
                             info.group_id, info.exploration_metric,
@@ -991,7 +1027,11 @@ FLASHIda::FLASHIda(char* arg) :
         {
           if (nlr.commands[ci].msn_level >= 3 && ci < nlr.ms3_contexts.size())
           {
-            nlr.ms3_contexts[ci].tag_count = tags_count;  // carry the parent MS2's tag count to its MS3 rows
+            // I3: carry the PARENT MS2's identification tag count (the FLASHTnT count, real when a
+            // proteoform matched) to its MS3 rows — NOT the FASTA-DB-gated tags_count, which is 0 unless
+            // a tag-targeting database is loaded.
+            nlr.ms3_contexts[ci].tag_count = (!nlr.proteoform_match.fragments.empty())
+                ? nlr.proteoform_match.tag_count : tags_count;
             ms2_context_cache_[nlr.commands[ci].scan_id] = nlr.ms3_contexts[ci];
           }
         }
@@ -1008,11 +1048,23 @@ FLASHIda::FLASHIda(char* arg) :
         ms2_ctx.ms1_precursor_mass = ctx.mono_mass;
         ms2_ctx.ms1_precursor_mz = ctx.stages[0].precursor_mz;
         ms2_ctx.ms1_precursor_charge = ctx.stages[0].charge_state;
+        // I2: MS2 isolation-window reporting from the resolved MS2 command (window-SNR recorded in the
+        // queue map at MS1 time, keyed by this command's scan_id). MS3 triplet stays 0 on MS2 rows.
+        if (ctx.num_stages > 0)
+        {
+          ms2_ctx.ms2_isolation_width = ctx.stages[0].isolation_width;
+          ms2_ctx.ms2_charge_intensity = ctx.precursor_intensity;
+          ms2_ctx.ms2_window_snr = queue_.windowSnr(ctx.scan_id);
+        }
         writeIdentificationRow_(id_str, 2, 'R', ms2_ctx, nlr.proteoform_match);
       }
 
       int ms2_mass_count = deconv_.hasStoredMS2() ? static_cast<int>(deconv_.storedMS2().size()) : 0;
-      int tag_count = tags_count;  // real sequence-tag count (was the 0/1 boolean)
+      // I3: log the identification tagger's real tag count when a proteoform was matched (the FASTA-DB
+      // tags_count is 0 unless a tag-targeting DB is loaded); fall back to tags_count otherwise (preserves
+      // the FASTA tag-targeting case and plain-DDA selection==None, which is legitimately 0).
+      int tag_count = (!nlr.proteoform_match.fragments.empty())
+          ? nlr.proteoform_match.tag_count : tags_count;
       const DeconvolvedSpectrum* ms2_spec = deconv_.hasStoredMS2() ? &deconv_.storedMS2() : nullptr;
       std::string parent_id(ctx.parent_scan_id);
 
@@ -1022,7 +1074,8 @@ FLASHIda::FLASHIda(char* arg) :
                                                : config_.level(2).scans[0].activation;
       std::string ms2_rt  = ctx.num_stages > 0 ? std::to_string(ctx.stages[0].reaction_time) : "0";
       writeScanResultRow_(id_str, 2, rt_min, ms2_mass_count, commands_pushed,
-                          child_ids, tag_count, nlr.matched_protein, nlr.proteoform_sequence,
+                          child_ids, tag_count, nlr.matched_protein,
+                          FragmentAnalysis::toProForma(nlr.proteoform_sequence, nlr.proteoform_match.ptm_sites),
                           enqueue_ts, dequeue_ts, received_ts,
                           ms2_spec, parent_id,
                           nlr.tic_coverage, nlr.fragment_count,
@@ -1059,7 +1112,8 @@ FLASHIda::FLASHIda(char* arg) :
         std::string parent_id(info.parent_scan_id);
         writeScanResultRow_(id_str, 3, rt_min, expl_mass_count,
                             static_cast<int>(info.commands.size()),
-                            expl_children, info.identification_result.tag_count, info.matched_protein, info.proteoform_sequence, enqueue_ts, dequeue_ts, received_ts,
+                            expl_children, info.identification_result.tag_count, info.matched_protein,
+                            FragmentAnalysis::toProForma(info.proteoform_sequence, info.identification_result.ptm_sites), enqueue_ts, dequeue_ts, received_ts,
                             ms3_spec, parent_id,
                             info.tic_coverage, info.fragment_count,
                             info.group_id, info.exploration_metric,
@@ -1142,7 +1196,10 @@ FLASHIda::FLASHIda(char* arg) :
           {
             writeIdentificationRow_(id_str, 3, 'R', mc, detailed[0]);
             // #2-5: hoist the decision values the engine used so the results row agrees with this match.
-            ms3_proteoform = mc.proteoform_sequence;
+            // I3: render the proteoform with its discovered PTMs (heme/N-term…) via the same renderer the
+            // identification row uses; mc.ptm_sites is the cached parent-MS2 PTM set (toProForma returns the
+            // bare sequence when empty, so no-PTM rows are unchanged).
+            ms3_proteoform = FragmentAnalysis::toProForma(mc.proteoform_sequence, mc.ptm_sites);
             ms3_frag_count = detailed[0].total_match_count;
             ms3_tag_count = mc.tag_count;
             ms3_matched_protein = config_.targeting().fasta_file.empty()

@@ -160,7 +160,7 @@ START_SECTION(schema_column_counts)
 
   TEST_EQUAL(c.headers.size(), 29)   // E6: + scan_description
   TEST_EQUAL(r.headers.size(), 33)   // E5: + ms_level
-  TEST_EQUAL(i.headers.size(), 19)
+  TEST_EQUAL(i.headers.size(), 25)   // I2: + ms2/ms3 isolation_width, window_snr, charge_intensity (6)
 
   // Spot-check exact header identities / order at the boundaries that matter for parsing.
   TEST_EQUAL(c.headers.front(), std::string("tracking_id"))
@@ -172,7 +172,15 @@ START_SECTION(schema_column_counts)
   TEST_EQUAL(r.headers.back(), std::string("processing_duration_ms"))
   TEST_EQUAL(r.colIndex("child_ids"), 9)                          // shifted +1 by ms_level@1
   TEST_EQUAL(i.headers.front(), std::string("ms_level"))
-  TEST_EQUAL(i.headers.back(), std::string("ms3_fragment_masses"))
+  TEST_EQUAL(i.headers.back(), std::string("ms3_charge_intensity"))   // I2: appended last
+  // I2: the 6 new identification columns appended after ms3_fragment_masses (col 18), in order.
+  TEST_EQUAL(i.colIndex("ms3_fragment_masses"), 18)
+  TEST_EQUAL(i.colIndex("ms2_isolation_width"), 19)
+  TEST_EQUAL(i.colIndex("ms2_window_snr"), 20)
+  TEST_EQUAL(i.colIndex("ms2_charge_intensity"), 21)
+  TEST_EQUAL(i.colIndex("ms3_isolation_width"), 22)
+  TEST_EQUAL(i.colIndex("ms3_window_snr"), 23)
+  TEST_EQUAL(i.colIndex("ms3_charge_intensity"), 24)
 
   std::remove(cmd_f.c_str()); std::remove(res_f.c_str()); std::remove(id_f.c_str());
 }
@@ -487,6 +495,54 @@ START_SECTION(results_ms2_normal_columns)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
+// §I3 -- scan_results.tsv : matched (non-FASTA identification) rows log the REAL identification
+//        tag_count (>0, not the FASTA-gated 0) and a toProForma-rendered proteoform that MATCHES
+//        identification.tsv for the same tracking id. Locks I3 on the stable side; exact values in C#.
+/////////////////////////////////////////////////////////////
+START_SECTION(results_identification_tag_count_and_proforma)
+{
+  auto ms1 = loadTsvScans(CYTC_MS1);
+  auto ms2 = loadTsvScans(CYTC_MS2);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  std::string res_f = "lf_i3_results.tsv", id_f = "lf_i3_id.tsv";
+  std::remove(res_f.c_str()); std::remove(id_f.c_str());
+  // inclusion-pinned cytC identification (target_mode=1, M-start proteoform, NO FASTA tag DB) -- the
+  // exact case that used to log tag_count=0 because selection_.hasTargetProteinDatabase() is false.
+  std::string json = buildJsonWithRuntime("", "", res_f, true, id_f);
+  FLASHIda ida(const_cast<char*>(json.c_str()));
+  runFullCycle(&ida, ms1, ms2);
+
+  auto res = TSVFile::parse(res_f);
+  auto idf = TSVFile::parse(id_f);
+  ABORT_IF(idf.rows.size() == 0)   // identification must fire, else this gate proves nothing
+
+  // tracking_id -> identification proteoform (rendered via toProForma in the engine writer)
+  std::map<std::string, std::string> id_proteoform;
+  for (const auto& row : idf.rows)
+    id_proteoform[cell(idf, row, "tracking_id")] = cell(idf, row, "proteoform");
+
+  bool checked = false;
+  for (const auto& row : res.rows)
+  {
+    std::string tid = cell(res, row, "tracking_id");
+    auto it = id_proteoform.find(tid);
+    if (it == id_proteoform.end()) continue;  // only rows that produced an identification (a match)
+    checked = true;
+    // I3(a): the logged tag_count is the engine's REAL identification tag count, not the FASTA-gated 0.
+    // A matched cytC proteoform implies >=1 generated sequence tag.
+    TEST_TRUE(toD(cell(res, row, "tag_count")) > 0.0)
+    // I3(b): proteoform_sequence is rendered through the SAME toProForma path as identification.tsv, so
+    // PTMs (heme/N-term...) are displayed and the two streams agree exactly for the same scan.
+    TEST_EQUAL(cell(res, row, "proteoform_sequence"), it->second)
+  }
+  TEST_TRUE(checked)
+
+  std::remove(res_f.c_str()); std::remove(id_f.c_str());
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
 // §R4 -- scan_results.tsv : MS3-normal 2-stage CE/act/rt + proteoform/protein/fragment/tic
 /////////////////////////////////////////////////////////////
 START_SECTION(results_ms3_normal_columns)
@@ -599,6 +655,99 @@ START_SECTION(results_ms2_exploration_columns)
   TEST_TRUE(found_expl)
 
   std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// §I4a -- scan_results.tsv : exploration FOLLOW-UP. A non-tolerance override makes the MS2-exploration
+//         winner re-acquire as a production MS2 (then MS2->MS3) on inclusion-pinned cytC. Mirrors C++
+//         ms2_exploration_production_winner_then_ms3 + checks the LOGGED exploration columns (matching data).
+/////////////////////////////////////////////////////////////
+START_SECTION(results_exploration_followup_columns)
+{
+  auto ms1 = loadTsvScans(CYTC_MS1);
+  auto ms2 = loadTsvScans(CYTC_MS2);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  // Inclusion-pin the cytC precursor + M-start proteoform; add a non-tolerance override ("analyzer")
+  // so config_.level(2).overrides stays non-empty -> the winner is a production-MS2 re-acquisition.
+  std::string cfg = inclusionPinCytc(ms3SelectionOnlyConfig());
+  {
+    auto p = cfg.find("\"metric\": \"mass_count\"");
+    ABORT_IF(p == std::string::npos)
+    cfg.insert(p, "\"overrides\": { \"analyzer\": \"Orbitrap\" }, ");
+  }
+  std::string res_f = "lf_i4followup_results.tsv";
+  std::remove(res_f.c_str());
+  cfg = injectRuntime(cfg, "", res_f);
+  FLASHIda ida(const_cast<char*>(cfg.c_str()));
+  auto r = driveOneExplorationGroup(&ida, ms1, ms2[0]);
+  ABORT_IF(r.group_commands == 0)
+
+  // Override non-empty -> winner re-acquires as production MS2; feeding it drives the MS2->MS3 path.
+  TEST_TRUE(r.found_production_ms2)
+  TEST_TRUE(r.found_ms3)
+
+  // Logged exploration result rows (inclusion-pinned cytC => they MATCH, unlike §R3's E. coli data).
+  auto res = TSVFile::parse(res_f);
+  bool found_expl = false;
+  for (const auto& row : res.rows)
+  {
+    int gid = std::atoi(cell(res, row, "exploration_group_id").c_str());
+    if (gid < 0) continue;
+    found_expl = true;
+    TEST_TRUE(gid >= 1)
+    int vi = std::atoi(cell(res, row, "variant_index").c_str());
+    int tv = std::atoi(cell(res, row, "total_variants").c_str());
+    TEST_TRUE(vi >= 0 && tv > 0 && vi < tv)
+    TEST_TRUE(finiteVal(toD(cell(res, row, "exploration_score"))))
+    auto kids = splitTokens(cell(res, row, "child_ids"), ' ');
+    int pushed = std::atoi(cell(res, row, "commands_pushed").c_str());
+    TEST_EQUAL((int)kids.size(), pushed)
+  }
+  TEST_TRUE(found_expl)
+  std::remove(res_f.c_str());
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// §I4b -- scan_results.tsv : MS3-level EXPLORATION. A two-level MS2->MS3 CE-sweep cascade on inclusion-
+//         pinned cytC. Mirrors C++ ms2_then_ms3_exploration_acquires_ms3 + checks the LOGGED exploration
+//         columns. (MS3 result rows themselves are golden-locked in the C# Golden_Exploration_MS3_CytC.)
+/////////////////////////////////////////////////////////////
+START_SECTION(results_ms3_exploration_columns)
+{
+  auto ms1 = loadTsvScans(CYTC_MS1);
+  auto ms2 = loadTsvScans(CYTC_MS2);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  std::string res_f = "lf_i4ms3_results.tsv";
+  std::remove(res_f.c_str());
+  std::string cfg = injectRuntime(inclusionPinCytc(ms3ExplorationConfig()), "", res_f);
+  FLASHIda ida(const_cast<char*>(cfg.c_str()));
+  auto r = driveOneExplorationGroup(&ida, ms1, ms2[0]);
+  ABORT_IF(r.group_commands == 0)
+
+  // The MS2-exploration winner cascades to an MS3 (two-stage) command.
+  TEST_TRUE(r.found_ms3)
+  TEST_EQUAL(r.ms3_num_stages, 2)
+
+  auto res = TSVFile::parse(res_f);
+  bool found_expl = false;
+  for (const auto& row : res.rows)
+  {
+    int gid = std::atoi(cell(res, row, "exploration_group_id").c_str());
+    if (gid < 0) continue;
+    found_expl = true;
+    TEST_TRUE(gid >= 1)
+    int metric = std::atoi(cell(res, row, "exploration_metric").c_str());
+    TEST_TRUE(metric >= 1 && metric <= 3)
+    int vi = std::atoi(cell(res, row, "variant_index").c_str());
+    int tv = std::atoi(cell(res, row, "total_variants").c_str());
+    TEST_TRUE(vi >= 0 && tv > 0 && vi < tv)
+  }
+  TEST_TRUE(found_expl)
+  std::remove(res_f.c_str());
 }
 END_SECTION
 
@@ -761,6 +910,15 @@ START_SECTION(identification_R_rows_universal)
     auto m = splitTokens(cell(idf, row, "ms2_fragment_masses"), ';');
     TEST_EQUAL(f.size(), m.size())
 
+    // I2 (isolation-window cols): every matched row reports the MS2 precursor's commanded window width,
+    // the SNR over that actual window, and the selected-charge intensity. Plausibility ranges only;
+    // the exact values are golden-locked in the C# suite. window_snr is bounded (~1000) for a pure window.
+    double w2 = toD(cell(idf, row, "ms2_isolation_width"));
+    TEST_TRUE(w2 > 0.0 && w2 < 50.0)
+    double s2 = toD(cell(idf, row, "ms2_window_snr"));
+    TEST_TRUE(finiteVal(s2) && s2 >= 0.0 && s2 <= 1001.0)
+    TEST_TRUE(posFinite(toD(cell(idf, row, "ms2_charge_intensity"))))
+
     // §I2 folded in: MS3-R rows additionally carry the MS2-fragment precursor (#1: proteoform/
     // region sourced from ctx) plus a non-empty, token-aligned MS3 fragment list. Asserted WHEN
     // an MS3-R row is present -- those require the MS3 fragment match to fire (which depends on
@@ -776,6 +934,21 @@ START_SECTION(identification_R_rows_universal)
       auto m3 = splitTokens(cell(idf, row, "ms3_fragment_masses"), ';');
       TEST_TRUE(!f3.empty())
       TEST_EQUAL(f3.size(), m3.size())
+
+      // I1: start_pos/end_pos must be the MS3 FRAGMENT sub-range, not the parent proteoform's full range.
+      // A b/y precursor ion of index k spans exactly k residues, so end_pos - start_pos == k (the
+      // ms2_precursor_ion index). Proves the sub-range was stored, with no hard-coded coordinates.
+      int frag_idx = std::atoi(pion.c_str() + 1);  // pion = e.g. "b3" -> 3
+      int sp = std::atoi(cell(idf, row, "start_pos").c_str());
+      int ep = std::atoi(cell(idf, row, "end_pos").c_str());
+      TEST_TRUE(frag_idx > 0 && (ep - sp) == frag_idx)
+
+      // I2 (isolation-window cols): MS3 rows additionally report the MS3 fragment precursor's window.
+      double w3 = toD(cell(idf, row, "ms3_isolation_width"));
+      TEST_TRUE(w3 >= 2.0 && w3 < 50.0)   // engine floors the MS3 isolation window at 2.0 Da
+      double s3 = toD(cell(idf, row, "ms3_window_snr"));
+      TEST_TRUE(finiteVal(s3) && s3 >= 0.0 && s3 <= 1001.0)
+      TEST_TRUE(posFinite(toD(cell(idf, row, "ms3_charge_intensity"))))
     }
   }
   std::remove(id_f.c_str());

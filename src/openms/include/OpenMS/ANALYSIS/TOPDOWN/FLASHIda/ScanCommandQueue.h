@@ -158,6 +158,16 @@ namespace OpenMS
     /// Queue size for a given priority level (0-3)
     size_t queueSize(int priority) const;
 
+    // --- I2: isolation-window SNR carrier ---
+
+    /// Record the isolation-window SNR computed for a command at build time (keyed by ScanCommand.scan_id),
+    /// so the identification.tsv writer can report it later when the scan's result comes back. Used because
+    /// the value is consumed C++-side only — it must NOT be added to the 2048-byte ScanCommand ABI struct.
+    void setWindowSnr(int scan_id, double value);
+
+    /// Look up a recorded isolation-window SNR. Returns -1.0 if none was recorded for @p scan_id.
+    double windowSnr(int scan_id) const;
+
   private:
     const Config& config_;
 
@@ -172,6 +182,10 @@ namespace OpenMS
 
     /// Map of tracking ID -> ScanCommand for pending (in-flight) scans
     std::unordered_map<int, ScanCommand> pending_scan_map_;
+
+    /// I2: scan_id -> isolation-window SNR (FragmentAnalysis::windowSnr), filled at command-build time and
+    /// read when the scan's identification.tsv row is written. Consumed C++-side only (not an ABI field).
+    std::unordered_map<int, double> window_snr_map_;
 
     /// Timestamp of last MS1 scan (for cycle time logic)
     std::chrono::steady_clock::time_point last_ms1_time_ = std::chrono::steady_clock::now();

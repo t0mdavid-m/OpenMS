@@ -95,6 +95,16 @@ namespace OpenMS
       double fragment_mz = 0.0;
       int fragment_charge = 0;
       int tag_count = 0;        ///< Sequence-tag count from the parent MS2 (for MS3 results-row tag_count)
+      // I2: isolation-window reporting for identification.tsv. MS2 triplet = the parent MS2 precursor;
+      // MS3 triplet = the MS3 fragment precursor (0 on MS2 rows). width/charge_intensity are the engine's
+      // commanded values copied from the ScanCommand; window_snr is computed over the ACTUAL commanded
+      // window (signal/noise incl. co-isolation, FragmentAnalysis::windowSnr), carried via the queue map.
+      double ms2_isolation_width = 0.0;
+      double ms2_window_snr = 0.0;
+      double ms2_charge_intensity = 0.0;
+      double ms3_isolation_width = 0.0;
+      double ms3_window_snr = 0.0;
+      double ms3_charge_intensity = 0.0;
     };
 
     /// Group of CE variants for one precursor at one MSn level

@@ -517,6 +517,62 @@ namespace
     })";
   }
 
+  // MS2 exploration (mass_count) + MS3 exploration (fragment_count, CID 15-35) — cytC, no runtime block.
+  // SHARED ground truth for FLASHIda_exploration_test::ms3_exploration_config and the FLASHIda_LoggingFields
+  // MS3-exploration golden-column section. inclusionPinCytc() turns it into the matching cytC recipe.
+  inline std::string ms3ExplorationConfig()
+  {
+    return R"({
+      "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
+      "precursor_selection": { "RT_window": 180, "target_mode": 0, "IDScore": false, "AllCharges": false, "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1 },
+      "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+      "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
+      "faims": { "cv_values": [-50], "max_cv_skip": 0, "cv_precursor_threshold": 15 },
+      "ms_settings": {
+        "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
+        "ms2": [ { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 } ],
+        "ms3": [ { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25, "resolution": 120000 } ]
+      },
+      "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 } },
+      "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+      "ms3": { "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE" },
+      "conditional_ms2": false,
+      "selection_strategy": {
+        "ms1": { "selection": "qscore", "max_targets": 3 },
+        "ms2": { "selection": "intensity", "max_targets": 3, "exploration": { "metric": "mass_count", "ce_min": 20.0, "ce_max": 40.0, "ce_step": 5.0 } },
+        "ms3": { "selection": "intensity", "max_targets": 3, "exploration": { "metric": "fragment_count", "ce_min": 15.0, "ce_max": 35.0, "ce_step": 5.0 } }
+      }
+    })";
+  }
+
+  // MS2 exploration (mass_count) + MS3 SELECTION only (intensity, no MS3 exploration) — cytC, no runtime block.
+  // SHARED ground truth for FLASHIda_exploration_test::ms3_selection_only_config and the FLASHIda_LoggingFields
+  // exploration-follow-up golden-column section (add a non-tolerance override to make the winner re-acquire).
+  inline std::string ms3SelectionOnlyConfig()
+  {
+    return R"({
+      "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
+      "precursor_selection": { "RT_window": 180, "target_mode": 0, "IDScore": false, "AllCharges": false, "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1 },
+      "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+      "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
+      "faims": { "cv_values": [-50], "max_cv_skip": 0, "cv_precursor_threshold": 15 },
+      "ms_settings": {
+        "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
+        "ms2": [ { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 } ],
+        "ms3": [ { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 35, "resolution": 120000 } ]
+      },
+      "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 } },
+      "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+      "ms3": { "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE" },
+      "conditional_ms2": false,
+      "selection_strategy": {
+        "ms1": { "selection": "qscore", "max_targets": 3 },
+        "ms2": { "selection": "none", "max_targets": 3, "exploration": { "metric": "mass_count", "ce_min": 20.0, "ce_max": 40.0, "ce_step": 5.0 } },
+        "ms3": { "selection": "intensity", "max_targets": 3 }
+      }
+    })";
+  }
+
   // Derive an inclusion-pinned, MS3-capable variant of an exploration config (verbatim
   // from FLASHIda_exploration_test): pin the cytC precursor + the validatable M-starting
   // proteoform so real ms2_cytc_fresh_scan57 b/y fragments match -> MS3 fires.

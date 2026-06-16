@@ -1343,6 +1343,25 @@ namespace
     return count;
   }
 
+  double FragmentAnalysis::windowSnr(const MSSpectrum& source, double lo, double hi, double signal_intensity)
+  {
+    // I2: SNR over the ACTUAL commanded isolation window. The "signal" (the selected charge's intensity,
+    // = PeakGroup::getChargeIntensity, already computed by the engine) is passed in; here we measure the
+    // total raw intensity in [lo, hi] and treat the remainder as co-isolation noise. No deconvolution math.
+    if (signal_intensity <= 0.0 || hi <= lo) return 0.0;
+    double total = 0.0;
+    for (const auto& peak : source)
+    {
+      const double mz = peak.getMZ();
+      if (mz >= lo && mz <= hi) total += peak.getIntensity();
+    }
+    const double noise = std::max(total - signal_intensity, 0.0);
+    // Floor noise at 0.1% of signal so a perfectly pure window yields a bounded high SNR (~1000) rather
+    // than dividing by ~0. (D5: the ε in "signal / (noise + ε)", chosen relative so magnitudes stay sane.)
+    const double denom = std::max(noise, 1e-3 * signal_intensity);
+    return signal_intensity / denom;
+  }
+
   std::string FragmentAnalysis::toProForma(const std::string& sequence,
                                            const std::vector<PTMSite>& ptm_sites)
   {

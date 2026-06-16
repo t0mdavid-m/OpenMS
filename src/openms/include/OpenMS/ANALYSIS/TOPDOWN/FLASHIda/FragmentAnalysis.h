@@ -110,6 +110,14 @@ namespace OpenMS
     static std::string toProForma(const std::string& sequence,
                                   const std::vector<PTMSite>& ptm_sites);
 
+    /// I2: signal-to-noise of a precursor over the ACTUAL commanded isolation window [lo, hi] (m/z).
+    /// signal = the selected charge's intensity within the window (the engine's already-computed
+    /// PeakGroup::getChargeIntensity, passed in as precursor_intensity / precursor_intensity_s1);
+    /// noise = the remaining in-window intensity of @p source (co-isolated species). Returns
+    /// signal / max(noise, 1e-3*signal) so a perfectly pure window is bounded (~1000), not infinite.
+    /// Reads existing peak intensities only — never re-runs deconvolution. Returns 0 for signal<=0.
+    static double windowSnr(const MSSpectrum& source, double lo, double hi, double signal_intensity);
+
     /// Map fragmentation method name to ion type strings for FLASHTagger/FLASHExtender.
     /// Case-insensitive. Returns {"b","y"} for HCD/CID, {"c","z"} for ETD,
     /// {"b","c","y","z"} for EThcD/EtCID, {"a","b","c","x","y","z"} for UVPD.
