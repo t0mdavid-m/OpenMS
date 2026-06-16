@@ -446,7 +446,7 @@ START_SECTION(cv_transition_ms1_before_ms2s)
   ScanCommand survey{};
   ida->getNextScanCommand(survey);                   // the idle MS1 carrying the engine's own survey id
   TEST_EQUAL(survey.msn_level, 1)
-  ida->processScan(nullptr, nullptr, 0, survey.rt, 1, survey.scan_description, survey.faims_cv);
+  ida->processScan(nullptr, nullptr, 0, 1.0, 1, survey.scan_description, survey.faims_cv);
 
   // Push two MS2s at priority 2 with parent CV=-40 (synthetic seeding — pure pushCommandForTest, unaffected by
   // the gate). They are now pending BEHIND the just-emitted prio-0 CV-transition MS1.
@@ -504,7 +504,7 @@ START_SECTION(non_faims_no_cv_transition)
   ScanCommand survey{};
   ida->getNextScanCommand(survey);                   // the idle MS1 carrying the engine's own survey id
   TEST_EQUAL(survey.msn_level, 1)
-  int pushed = ida->processScan(nullptr, nullptr, 0, survey.rt, 1, survey.scan_description, 0.0);
+  int pushed = ida->processScan(nullptr, nullptr, 0, 1.0, 1, survey.scan_description, 0.0);
   TEST_EQUAL(pushed, 0)  // empty spectrum => 0 MS2 commands, and (non-FAIMS) no CV-transition MS1
 
   // Next command: idle AGC (no CV-transition MS1 was injected) => non-FAIMS behavior confirmed.
