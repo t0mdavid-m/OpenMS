@@ -211,8 +211,11 @@ START_SECTION(scan_results_tsv_format)
   TEST_TRUE(tsv.colIndex("commands_pushed") >= 0);
   TEST_TRUE(tsv.colIndex("child_ids") >= 0);
 
-  // Should have MS1, MS2, and (if MS3 commands were created) MS3 result rows
-  // MS1 results from pushAllScans, MS2 from feeding back, MS3 from feeding back
+  // Should have MS1, MS2, and (if MS3 commands were created) MS3 result rows.
+  // MS1 results come from engine-emitted survey commands (echoed back via runFullCycle/runInterleaved);
+  // MS2 + MS3 from feeding their commands back. runFullCycle's iteration budget guarantees EVERY input MS1
+  // is fed, so a short-feed (fewer surveys driven than scans) fails LOUDLY here rather than under-counting.
+  ABORT_IF((int)cycle.ms1_cmds.size() != (int)ms1_scans.size())
   int expected_min_rows = (int)ms1_scans.size() + (int)cycle.ms2_cmds.size();
   if (cycle.ms3_cmds.size() > 0)
     expected_min_rows += (int)cycle.ms3_cmds.size();

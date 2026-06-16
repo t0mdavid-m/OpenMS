@@ -243,6 +243,11 @@ namespace
   {
     std::vector<ScanCommand> ms1_cmds, ms2_cmds, ms3_cmds;
     int total_dequeued = 0;
+    // single_group_only bookkeeping (see runInterleaved): the processScan return of the first MS1 that
+    // forms a group (== # commands it pushed), and the running sum of MS2-feed processScan returns. Both
+    // stay 0 for the default full-drive callers; driveOneExplorationGroup reads them to build ExplResult.
+    int first_group_commands = 0;
+    int ms2_feed_returns = 0;
   };
 
   // runInterleaved: the C++ implementation of the ground-truth interleaved engine-id-echo drive contract
@@ -253,22 +258,30 @@ namespace
   //   ms2_scans   : ms2_scans[0] fed for every MS2 command.
   //   ms3_ion_map : per-ion MS3 fixtures (decode trailing ion -> map; absent/empty => SKIP, never fabricate).
   //                 When null, the legacy MS2-as-MS3 shortcut is used (C++ plausibility only — not the contract).
+  //   single_group_only : C++-side convenience (no C# twin) — once the FIRST fed MS1 forms a group (processScan
+  //                 returns >0), stop feeding further MS1 surveys (they become idle ticks) but keep draining that
+  //                 group's MS2 variants + MS3. Records r.first_group_commands; used by driveOneExplorationGroup.
+  //                 Default false leaves the core pull->classify->feed->idle>=3 contract byte-identical.
   inline AcqResult runInterleaved(FLASHIda* ida,
                                   const std::vector<ScanData>& ms1_scans,
                                   const std::vector<ScanData>& ms2_scans,
                                   const std::map<std::string, std::vector<ScanData>>* ms3_ion_map = nullptr,
-                                  int max_iters = 600)
+                                  int max_iters = 600,
+                                  bool single_group_only = false)
   {
     AcqResult r;
     const int n_ms1 = static_cast<int>(ms1_scans.size());
     int idle = 0, ms1_fed = 0;
+    bool group_formed = false;
     ScanCommand cmd{};
     for (int it = 0; it < max_iters && idle < 3; ++it)
     {
       if (ida->getNextScanCommand(cmd) != 1) break;
       ++r.total_dequeued;
-      // Idle tick: AGC, empty descriptor, or an MS1 re-survey after all ms1_scans have been fed.
-      if (cmd.is_agc || cmd.scan_description[0] == '\0' || (cmd.msn_level <= 1 && ms1_fed >= n_ms1))
+      // Idle tick: AGC, empty descriptor, an MS1 re-survey after all ms1_scans have been fed, or (in
+      // single_group_only mode) any MS1 survey once the first group has already formed.
+      if (cmd.is_agc || cmd.scan_description[0] == '\0' || (cmd.msn_level <= 1 && ms1_fed >= n_ms1)
+          || (single_group_only && group_formed && cmd.msn_level <= 1))
       {
         ++idle;
         cmd = ScanCommand{};
@@ -279,13 +292,14 @@ namespace
       {
         r.ms1_cmds.push_back(cmd);
         const ScanData& s = ms1_scans[ms1_fed++];
-        ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1, cmd.scan_description);
+        int ret = ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1, cmd.scan_description);
+        if (single_group_only && ret > 0 && !group_formed) { r.first_group_commands = ret; group_formed = true; }
       }
       else if (cmd.msn_level == 2)
       {
         r.ms2_cmds.push_back(cmd);
         if (!ms2_scans.empty())
-          ida->processScan(ms2_scans[0].mzs.data(), ms2_scans[0].ints.data(),
+          r.ms2_feed_returns += ida->processScan(ms2_scans[0].mzs.data(), ms2_scans[0].ints.data(),
                            (int)ms2_scans[0].mzs.size(), ms2_scans[0].rt, 2, cmd.scan_description);
       }
       else  // msn_level >= 3
@@ -323,7 +337,10 @@ namespace
                                   const std::vector<ScanData>& ms2_scans,
                                   const std::map<std::string, std::vector<ScanData>>* ms3_ion_map = nullptr)
   {
-    AcqResult a = runInterleaved(ida, ms1_scans, ms2_scans, ms3_ion_map);
+    // Budget the drive so EVERY input MS1 is fed (idle>=3 ends it, not the iteration cap). Sized generously
+    // above the worst-case per-cycle command count (survey + MS2s + MS3s + AGCs) summed over all scans.
+    const int budget = 256 + 64 * static_cast<int>(ms1_scans.size() + ms2_scans.size());
+    AcqResult a = runInterleaved(ida, ms1_scans, ms2_scans, ms3_ion_map, budget);
     CycleResult result;
     result.ms1_cmds = a.ms1_cmds;
     result.ms2_cmds = a.ms2_cmds;
@@ -518,9 +535,9 @@ namespace
     return cfg;
   }
 
-  // Drive a single exploration group end-to-end through FLASHIda (verbatim from
-  // FLASHIda_exploration_test): push MS1 until the first scan creates a group, then
-  // drain + feed each MS2 variant back so the winner fires MS3.
+  // Drive a single exploration group end-to-end through FLASHIda — a THIN WRAPPER over the one canonical
+  // driver runInterleaved (single_group_only=true): feed MS1 with the engine's own survey id until one forms
+  // a group, then drain + feed each MS2 variant back so the winner fires MS3, and project AcqResult->ExplResult.
   struct ExplResult
   {
     bool found_ms3 = false;
@@ -534,30 +551,22 @@ namespace
                                              const std::vector<ScanData>& ms1_scans,
                                              const ScanData& ms2)
   {
-    ExplResult r;
-    for (const auto& s : ms1_scans)
-    {
-      int n = ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1,
-                               ("scan_" + s.scan_id).c_str());
-      if (n > 0) { r.group_commands = n; break; }
-    }
-    if (r.group_commands == 0) return r;
+    // single_group_only: feed engine-emitted survey MS1 ids (the always-on gate rejects fabricated ones) until
+    // the first selects a precursor and forms the exploration group; runInterleaved then drains that group's MS2
+    // variants (feeding the ms2 spectrum back so the winner fires MS3) and the MS3, all via the one contract.
+    const int budget = 256 + 64 * static_cast<int>(ms1_scans.size() + 1);
+    AcqResult a = runInterleaved(ida, ms1_scans, std::vector<ScanData>{ms2}, nullptr, budget,
+                                 /*single_group_only=*/true);
 
-    int idle = 0;
-    for (int i = 0; i < 100 && !r.found_ms3; ++i)
+    ExplResult r;
+    r.group_commands = a.first_group_commands;                       // # variants the forming MS1 pushed
+    r.total_returns  = a.ms2_feed_returns;                           // sum of MS2-variant feed returns
+    r.found_ms3      = !a.ms3_cmds.empty();                          // an MS3 command was emitted
+    r.ms3_num_stages = a.ms3_cmds.empty() ? 0 : a.ms3_cmds[0].num_stages;
+    for (const auto& c : a.ms2_cmds)                                 // a production-MS2 (winner) re-acquisition
     {
-      ScanCommand next{};
-      if (ida->getNextScanCommand(next) != 1) break;
-      if (next.is_agc || next.msn_level == 1) { if (++idle > 3) break; continue; }
-      idle = 0;
-      if (next.msn_level == 3) { r.found_ms3 = true; r.ms3_num_stages = next.num_stages; break; }
-      if (next.msn_level == 2)
-      {
-        std::string d(next.scan_description);
-        if (d.size() >= 4 && d[3] != 'E') r.found_production_ms2 = true;
-        r.total_returns += ida->processScan(ms2.mzs.data(), ms2.ints.data(),
-                                            (int)ms2.mzs.size(), ms2.rt, 2, next.scan_description);
-      }
+      std::string d(c.scan_description);
+      if (d.size() >= 4 && d[3] != 'E') { r.found_production_ms2 = true; break; }
     }
     return r;
   }

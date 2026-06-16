@@ -405,7 +405,9 @@ START_SECTION(results_ms1_columns)
   for (const auto& row : res.rows)
   {
     std::string tid = cell(res, row, "tracking_id");
-    if (level.count(tid)) continue;  // MS2/MS3 -> not an MS1 row
+    auto it = level.find(tid);
+    if (it != level.end() && it->second != 1) continue;  // MS2/MS3 -> not an MS1 row (MS1 surveys now sit in
+                                                          // scan_commands.tsv with ms_level=1; classify by value)
     found = true;
     // mass_count == deconv_masses token count
     int mc = std::atoi(cell(res, row, "mass_count").c_str());
@@ -663,7 +665,8 @@ START_SECTION(results_parent_lineage)
     std::string tid = cell(res, row, "tracking_id");
     std::string parent = cell(res, row, "parent_tracking_id");
     auto it = level.find(tid);
-    if (it == level.end()) { TEST_TRUE(parent.empty()); continue; }  // MS1 input
+    if (it == level.end() || it->second == 1) { TEST_TRUE(parent.empty()); continue; }  // MS1 survey/input
+                                                          // (now in scan_commands.tsv with ms_level=1)
     // MS2/MS3 result rows must carry a well-formed parent that is itself a known id
     TEST_TRUE(isTrackingId(parent))
     if (it->second == 2) { checked_ms2 = true; }

@@ -775,11 +775,16 @@ START_SECTION(processScan_commands_dequeued)
     TEST_EQUAL(cmd.enqueue_timestamp_ms > 0, true)
   }
 
-  // Queue empty — idle cycle returns AGC (never returns 0)
+  // After a full drive the idle cycle leaves a pending priority-3 survey MS1 queued (the last idle AGC pushed
+  // it). So the FIRST post-drive command is that survey MS1 (is_agc==0), and the SECOND is the idle AGC.
   ScanCommand cmd{};
   int idle_result = ida->getNextScanCommand(cmd);
   TEST_EQUAL(idle_result, 1)
   TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
+  TEST_EQUAL(cmd.msn_level, 1)
+  TEST_EQUAL(cmd.is_agc, 0)
+  int agc_result = ida->getNextScanCommand(cmd);
+  TEST_EQUAL(agc_result, 1)
   TEST_EQUAL(cmd.is_agc, 1)
 
   delete ida;
@@ -1270,19 +1275,27 @@ START_SECTION(processScan_cycle_time_enforcement)
   // (the always-on MS1 gate rejects fabricated ids) -- this generates the MS2 commands (priority 2) that the
   // next cycle-time MS1 must beat. The engine emits a real MS1 survey either via the cycle-time path or, if
   // <1ms has elapsed, via the idle cycle (AGC then a priority-3 MS1); loop until we get the non-AGC MS1.
+  // Feed successive MS1 scans, each stamped with a FRESH engine survey id, until one selects a precursor —
+  // scan 0 of ms1_standard is not selectable, and a feed (even selecting 0) resolves its survey id, so each
+  // attempt needs its own survey. The forming MS1's MS2 commands stay queued at priority 2 for the cycle-time
+  // check below.
   ScanCommand survey{};
   bool fed_ms1 = false;
-  for (int i = 0; i < 8 && !fed_ms1; ++i)
+  for (int si = 0; si < (int)ms1_scans.size() && !fed_ms1; ++si)
   {
-    int rs = ida->getNextScanCommand(survey);
-    TEST_EQUAL(rs, 1)
-    if (survey.is_agc) continue;          // idle-cycle AGC -> pushes a priority-3 MS1 for the next call
-    TEST_EQUAL(survey.msn_level, 1)
-    const auto& boot = ms1_scans[0];
+    bool got = false;
+    for (int k = 0; k < 8 && !got; ++k)
+    {
+      int rs = ida->getNextScanCommand(survey);
+      TEST_EQUAL(rs, 1)
+      if (survey.is_agc || survey.scan_description[0] == '\0' || survey.msn_level != 1) continue;  // skip AGC/idle
+      got = true;
+    }
+    ABORT_IF(!got)
+    const auto& boot = ms1_scans[si];
     int pushed = ida->processScan(boot.mzs.data(), boot.ints.data(), (int)boot.mzs.size(), boot.rt, 1,
                                   survey.scan_description);
-    TEST_EQUAL(pushed > 0, true)          // MS2 commands now queued at priority 2
-    fed_ms1 = true;
+    if (pushed > 0) fed_ms1 = true;       // selectable MS1 -> MS2 commands now queued at priority 2
   }
   ABORT_IF(!fed_ms1)
 
@@ -1546,9 +1559,13 @@ START_SECTION(processScan_ms1_none_selection)
   AcqResult acq = runInterleaved(ida, ms1_scans, {});
   TEST_EQUAL(acq.ms2_cmds.size(), (size_t)0)
 
+  // After the drive the idle cycle's pending priority-3 survey MS1 is dequeued first (is_agc==0), then the AGC.
   ScanCommand cmd{};
   TEST_EQUAL(ida->getNextScanCommand(cmd), true)  // idle cycle always returns 1
-  TEST_EQUAL(cmd.is_agc, 1)                       // first command is AGC = queue was empty
+  TEST_EQUAL(cmd.msn_level, 1)
+  TEST_EQUAL(cmd.is_agc, 0)                       // pending survey MS1, not the AGC yet
+  TEST_EQUAL(ida->getNextScanCommand(cmd), true)
+  TEST_EQUAL(cmd.is_agc, 1)                       // now the idle AGC (queue empty)
 
   delete ida;
 }
@@ -1722,10 +1739,14 @@ START_SECTION(processScan_ms1_min_charge_filter)
   // With min_charge=99, no precursor passes the filter, so no deconvolution-derived MS2 is produced.
   TEST_EQUAL(acq.ms2_cmds.size(), (size_t)0)
 
-  // getNextScanCommand has no return-0 path: when the queue is empty it emits an idle-cycle AGC and
-  // returns 1 (cf. processScan_commands_dequeued).
+  // getNextScanCommand has no return-0 path: after the drive the idle cycle's pending priority-3 survey MS1 is
+  // dequeued first (is_agc==0), then the idle AGC (cf. processScan_commands_dequeued).
   ScanCommand cmd{};
   int result = ida.getNextScanCommand(cmd);
+  TEST_EQUAL(result, 1)
+  TEST_EQUAL(cmd.msn_level, 1)
+  TEST_EQUAL(cmd.is_agc, 0)
+  result = ida.getNextScanCommand(cmd);
   TEST_EQUAL(result, 1)
   TEST_EQUAL(cmd.is_agc, 1)
 }
@@ -1902,35 +1923,40 @@ START_SECTION(processScan_ms1_gate_rejects_unrequested_id)
   // No MS2 was queued and no pending entry was added: the spectrum never reached deconvolution/selection.
   TEST_EQUAL(ida->getQueueForTest().pendingScanMapSize(), pending_before)
 
-  // ---- POSITIVE: the engine's OWN survey id is accepted ----
-  // Drain commands until a real (non-AGC, non-empty descriptor) MS1 survey is emitted; the idle cycle alternates
-  // AGC (skip) then a priority-3 MS1 survey whose minted id IS registered in pending_scan_map_ at dequeue.
-  ScanCommand survey{};
-  bool got_survey = false;
-  for (int i = 0; i < 8 && !got_survey; ++i)
+  // ---- POSITIVE: an engine-emitted survey id + a SELECTABLE spectrum is accepted ----
+  // Drain a FRESH survey per attempt and feed successive scans until one selects a precursor (scan 0 of
+  // ms1_standard is not selectable; a feed resolves its survey id, so each attempt needs its own survey). The
+  // idle cycle alternates AGC (skip) then a priority-3 survey MS1 whose minted id IS in pending_scan_map_ at
+  // dequeue, so the gate passes and selection runs.
+  int ret_pos = 0;
+  ScanCommand used{};
+  for (int si = 0; si < (int)ms1_scans.size() && ret_pos == 0; ++si)
   {
-    int rs = ida->getNextScanCommand(survey);
-    TEST_EQUAL(rs, 1)
-    if (survey.is_agc) continue;                 // idle-cycle AGC -> pushes the priority-3 MS1 for the next call
-    if (survey.scan_description[0] == '\0') continue;
-    if (survey.msn_level <= 1) got_survey = true; // a real survey-MS1 command with a minted, emitted id
+    ScanCommand survey{};
+    bool got_survey = false;
+    for (int k = 0; k < 8 && !got_survey; ++k)
+    {
+      int rs = ida->getNextScanCommand(survey);
+      TEST_EQUAL(rs, 1)
+      if (survey.is_agc || survey.scan_description[0] == '\0' || survey.msn_level != 1) continue;
+      got_survey = true;
+    }
+    ABORT_IF(!got_survey)
+    TEST_EQUAL(std::strlen(survey.scan_description) <= 15, true)
+    TEST_EQUAL(survey.is_agc, 0)
+    const auto& pos = ms1_scans[si];
+    int r = ida->processScan(pos.mzs.data(), pos.ints.data(), (int)pos.mzs.size(), pos.rt, 1,
+                             survey.scan_description);
+    if (r >= 1) { ret_pos = r; used = survey; }
   }
-  ABORT_IF(!got_survey)
-  TEST_EQUAL(std::strlen(survey.scan_description) <= 15, true)
-  TEST_EQUAL(survey.msn_level, 1)
-  TEST_EQUAL(survey.is_agc, 0)
-
-  // Feed the selectable MS1 stamped with the engine's OWN scan_description -> gate passes, selection runs.
-  const auto& pos = ms1_scans[0];
-  int ret_pos = ida->processScan(pos.mzs.data(), pos.ints.data(), (int)pos.mzs.size(), pos.rt, 1,
-                                 survey.scan_description);
-  TEST_EQUAL(ret_pos >= 1, true)  // selectable MS1 -> at least one MS2 command pushed
+  TEST_EQUAL(ret_pos >= 1, true)  // engine-emitted id + selectable MS1 -> at least one MS2 command pushed
 
   // ---- NO-REUSE: the now-resolved survey id is rejected on a second feed ----
   // processScan resolved (erased) the survey id from pending_scan_map_, so a repeat feed with the SAME id is
   // no longer "emitted" -> the gate rejects it (return 0), symmetric with the MS2/MS3 resolve-once gate.
-  int ret_reuse = ida->processScan(pos.mzs.data(), pos.ints.data(), (int)pos.mzs.size(), pos.rt, 1,
-                                   survey.scan_description);
+  const auto& reuse_scan = ms1_scans[0];
+  int ret_reuse = ida->processScan(reuse_scan.mzs.data(), reuse_scan.ints.data(), (int)reuse_scan.mzs.size(),
+                                   reuse_scan.rt, 1, used.scan_description);
   TEST_EQUAL(ret_reuse, 0)
 
   delete ida;
