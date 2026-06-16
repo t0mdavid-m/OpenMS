@@ -221,6 +221,7 @@ namespace
   // {a,b,c,x,y,z}, then an all-digit ion_index >= 1. Returns false on the no-ion form {id}R{mass}k@{charge}
   // (nothing after the charge digits) -- tolerated by callers. On success, ion_key = ion_type + ion_index
   // (e.g. "b44"). Kept identical, byte-for-byte, to decodeTrailingIon in FLASHIda_LoggingFields_test.cpp.
+  // [ION-DECODE C#<->C++ — see docs/kb/test-harness] byte-for-byte twin of C# DecodeIonFromScanDescription
   inline bool decodeTrailingIonKey(const std::string& d, std::string& ion_key)
   {
     auto at = d.rfind('@');
@@ -237,114 +238,115 @@ namespace
     return true;
   }
 
-  // When ms3_ion_map is non-null, each drained level-3 command's scan_description trailing ion (e.g. "b44")
-  // is decoded and looked up in the map; if found and non-empty, that ion's real MS3 spectrum (entry [0]) is
-  // fed back as the level-3 scan. Absent ion / no-ion descriptor -> that MS3 command is SKIPPED (tolerated).
-  // When ms3_ion_map is null, behaviour is unchanged: the MS2 spectrum is fed back as the MS3 scan (shortcut).
+  // [DRAIN-CONTRACT C#<->C++ — see docs/kb/test-harness] AcqResult + the one canonical interleaved driver.
+  struct AcqResult
+  {
+    std::vector<ScanCommand> ms1_cmds, ms2_cmds, ms3_cmds;
+    int total_dequeued = 0;
+  };
+
+  // runInterleaved: the C++ implementation of the ground-truth interleaved engine-id-echo drive contract
+  // (docs/kb/test-harness/README.md); twin of C# ContinuityTestHarness.PushScanAndDrainFull. Pull one command
+  // at a time and feed exactly one response per requested command, stamped with the engine's own
+  // scan_description; the engine paces the surveys. Terminate on idle>=3 (queue drained) or max_iters.
+  //   ms1_scans   : fed one per survey command, in order (nMs1 = size); further MS1 surveys are idle ticks.
+  //   ms2_scans   : ms2_scans[0] fed for every MS2 command.
+  //   ms3_ion_map : per-ion MS3 fixtures (decode trailing ion -> map; absent/empty => SKIP, never fabricate).
+  //                 When null, the legacy MS2-as-MS3 shortcut is used (C++ plausibility only — not the contract).
+  inline AcqResult runInterleaved(FLASHIda* ida,
+                                  const std::vector<ScanData>& ms1_scans,
+                                  const std::vector<ScanData>& ms2_scans,
+                                  const std::map<std::string, std::vector<ScanData>>* ms3_ion_map = nullptr,
+                                  int max_iters = 600)
+  {
+    AcqResult r;
+    const int n_ms1 = static_cast<int>(ms1_scans.size());
+    int idle = 0, ms1_fed = 0;
+    ScanCommand cmd{};
+    for (int it = 0; it < max_iters && idle < 3; ++it)
+    {
+      if (ida->getNextScanCommand(cmd) != 1) break;
+      ++r.total_dequeued;
+      // Idle tick: AGC, empty descriptor, or an MS1 re-survey after all ms1_scans have been fed.
+      if (cmd.is_agc || cmd.scan_description[0] == '\0' || (cmd.msn_level <= 1 && ms1_fed >= n_ms1))
+      {
+        ++idle;
+        cmd = ScanCommand{};
+        continue;
+      }
+      idle = 0;
+      if (cmd.msn_level <= 1)
+      {
+        r.ms1_cmds.push_back(cmd);
+        const ScanData& s = ms1_scans[ms1_fed++];
+        ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1, cmd.scan_description);
+      }
+      else if (cmd.msn_level == 2)
+      {
+        r.ms2_cmds.push_back(cmd);
+        if (!ms2_scans.empty())
+          ida->processScan(ms2_scans[0].mzs.data(), ms2_scans[0].ints.data(),
+                           (int)ms2_scans[0].mzs.size(), ms2_scans[0].rt, 2, cmd.scan_description);
+      }
+      else  // msn_level >= 3
+      {
+        r.ms3_cmds.push_back(cmd);
+        const std::vector<ScanData>* spectra = nullptr;
+        if (ms3_ion_map != nullptr)
+        {
+          std::string ion_key;
+          if (decodeTrailingIonKey(cmd.scan_description, ion_key))
+          {
+            auto mit = ms3_ion_map->find(ion_key);
+            if (mit != ms3_ion_map->end() && !mit->second.empty()) spectra = &mit->second;  // real per-ion MS3
+            // ion absent / no-ion descriptor -> skip (never fabricate)
+          }
+        }
+        else
+        {
+          spectra = ms2_scans.empty() ? nullptr : &ms2_scans;  // legacy MS2-as-MS3 shortcut (no manifest)
+        }
+        if (spectra != nullptr && !spectra->empty())
+          ida->processScan((*spectra)[0].mzs.data(), (*spectra)[0].ints.data(),
+                           (int)(*spectra)[0].mzs.size(), (*spectra)[0].rt, 3, cmd.scan_description);
+      }
+      cmd = ScanCommand{};
+    }
+    return r;
+  }
+
+  // runFullCycle: legacy 2-pass cycle, now a THIN WRAPPER over runInterleaved (same CycleResult fields).
+  // When ms3_ion_map is non-null, each level-3 command's trailing ion is decoded and fed from the manifest
+  // (absent/no-ion -> skipped); when null, the MS2 spectrum is fed back as the MS3 scan (shortcut).
   inline CycleResult runFullCycle(FLASHIda* ida,
                                   const std::vector<ScanData>& ms1_scans,
                                   const std::vector<ScanData>& ms2_scans,
                                   const std::map<std::string, std::vector<ScanData>>* ms3_ion_map = nullptr)
   {
+    AcqResult a = runInterleaved(ida, ms1_scans, ms2_scans, ms3_ion_map);
     CycleResult result;
-
-    pushAllScans(ida, ms1_scans);
-
-    ScanCommand cmd{};
-    while (ida->getNextScanCommand(cmd) > 0)
-    {
-      result.total_dequeued++;
-      if (cmd.msn_level == 2) result.ms2_cmds.push_back(cmd);
-      else if (cmd.msn_level == 1) result.ms1_cmds.push_back(cmd);
-      if (cmd.is_agc) break;  // idle-cycle AGC => real queue drained
-    }
-
-    for (const auto& ms2_cmd : result.ms2_cmds)
-    {
-      if (!ms2_scans.empty())
-        ida->processScan(ms2_scans[0].mzs.data(), ms2_scans[0].ints.data(),
-                         (int)ms2_scans[0].mzs.size(), ms2_scans[0].rt, 2,
-                         ms2_cmd.scan_description);
-    }
-
-    while (ida->getNextScanCommand(cmd) > 0)
-    {
-      result.total_dequeued++;
-      if (cmd.msn_level == 3) result.ms3_cmds.push_back(cmd);
-      if (cmd.is_agc) break;
-    }
-
-    for (const auto& ms3_cmd : result.ms3_cmds)
-    {
-      // Default (null manifest): MS2-as-MS3 shortcut -- feed ms2_scans[0] back as the MS3 scan.
-      const std::vector<ScanData>* spectra = ms2_scans.empty() ? nullptr : &ms2_scans;
-      if (ms3_ion_map != nullptr)
-      {
-        spectra = nullptr;  // ion-name-keyed feed: only fed when the descriptor ion is in the manifest
-        std::string ion_key;
-        if (decodeTrailingIonKey(ms3_cmd.scan_description, ion_key))
-        {
-          auto it = ms3_ion_map->find(ion_key);
-          if (it != ms3_ion_map->end() && !it->second.empty()) spectra = &it->second;  // real per-ion MS3
-          // ion absent / no-ion descriptor -> skip this MS3 command (tolerated, unfed)
-        }
-      }
-      if (spectra != nullptr && !spectra->empty())
-        ida->processScan((*spectra)[0].mzs.data(), (*spectra)[0].ints.data(),
-                         (int)(*spectra)[0].mzs.size(), (*spectra)[0].rt, 3,
-                         ms3_cmd.scan_description);
-    }
-
+    result.ms1_cmds = a.ms1_cmds;
+    result.ms2_cmds = a.ms2_cmds;
+    result.ms3_cmds = a.ms3_cmds;
+    result.total_dequeued = a.total_dequeued;
     return result;
   }
 
-  // ----------------------------------------------------------------------------
-  // Full-acquisition id-chaining driver (mirrors Flash.cs): pop each command from
-  // getNextScanCommand and feed the corresponding scan back stamped with THAT command's
-  // engine-emitted scan_description, so MS1->MS2->MS3 parent linkage uses the engine's own ids
-  // end-to-end. MS1 bootstraps from the engine's first idle-emitted MS1 command. Terminates on
-  // 3 consecutive idle ticks (AGC or already-fed MS1 re-survey). Requires a config whose
-  // agc_interval is large so the only AGCs are idle ones (true for the test configs).
-  // ----------------------------------------------------------------------------
-  struct AcqResult
-  {
-    std::vector<ScanCommand> ms1_cmds, ms2_cmds, ms3_cmds;
-  };
-
+  // Full-acquisition id-chaining driver — now a THIN WRAPPER over runInterleaved (the canonical contract).
+  // Feeds the SINGLE ms1 spectrum n_ms1 times with an RT step (so each survey re-selects its precursor and
+  // forms a distinct log group); MS3 uses the MS2-as-MS3 shortcut (no manifest).
   inline AcqResult runFullAcquisition(FLASHIda* ida, const ScanData& ms1, const ScanData& ms2,
                                       int max_iters = 300, int n_ms1 = 1, double ms1_rt_step = 1000.0)
   {
-    AcqResult r;
-    int idle = 0;
-    int ms1_fed = 0;
-    ScanCommand cmd{};
-    for (int it = 0; it < max_iters && idle < 3; ++it)
+    std::vector<ScanData> ms1_scans;
+    ms1_scans.reserve(n_ms1);
+    for (int i = 0; i < n_ms1; ++i)
     {
-      if (ida->getNextScanCommand(cmd) != 1) break;
-      // idle: an AGC, or an MS1 re-survey after we've already fed n_ms1 MS1 surveys (avoids RT self-exclusion)
-      if (cmd.is_agc || (cmd.msn_level == 1 && ms1_fed >= n_ms1)) { ++idle; cmd = ScanCommand{}; continue; }
-      idle = 0;
-      if (cmd.msn_level == 1)
-      {
-        r.ms1_cmds.push_back(cmd);
-        // successive surveys are fed beyond RT_window so each re-selects its precursor (distinct log groups)
-        double ms1_rt = ms1.rt + (double)ms1_fed * ms1_rt_step;
-        ida->processScan(ms1.mzs.data(), ms1.ints.data(), (int)ms1.mzs.size(), ms1_rt, 1, cmd.scan_description);
-        ++ms1_fed;
-      }
-      else if (cmd.msn_level == 2)
-      {
-        r.ms2_cmds.push_back(cmd);
-        ida->processScan(ms2.mzs.data(), ms2.ints.data(), (int)ms2.mzs.size(), ms2.rt, 2, cmd.scan_description);
-      }
-      else if (cmd.msn_level == 3)
-      {
-        r.ms3_cmds.push_back(cmd);
-        ida->processScan(ms2.mzs.data(), ms2.ints.data(), (int)ms2.mzs.size(), ms2.rt, 3, cmd.scan_description);
-      }
-      cmd = ScanCommand{};
+      ScanData s = ms1;
+      s.rt = ms1.rt + (double)i * ms1_rt_step;
+      ms1_scans.push_back(s);
     }
-    return r;
+    return runInterleaved(ida, ms1_scans, std::vector<ScanData>{ms2}, nullptr, max_iters);
   }
 
   // Hard parent-resolution check: every non-empty parent_tracking_id in the commands TSV must resolve to

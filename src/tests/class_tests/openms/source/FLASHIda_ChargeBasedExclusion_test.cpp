@@ -135,27 +135,63 @@ namespace
 
   struct AcquisitionRow { int charge; double mz; double width; };
 
-  // Drive all scans through processScan and collect every (charge, mz, width) tuple emitted.
+  // Interleaved drive result: every emitted MS2 (charge, mz, width) tuple + the MS2 command count.
+  struct DriveResult
+  {
+    std::vector<AcquisitionRow> rows;
+    int ms2_count = 0;
+  };
+
+  // Drive the engine via the canonical interleaved engine-id-echo contract (twin of
+  // FLASHIda_TestHelpers::runInterleaved; inlined here because this TU's local ScanData /
+  // loadTsvScans would collide with the helper's anonymous-namespace copies). Pull one command at
+  // a time and feed exactly one MS1 survey response per survey command, stamped with the engine's
+  // OWN scan_description (so the always-on MS1 gate accepts it — a fabricated "scan_"+id id is
+  // rejected and would yield 0 precursors). MS2 commands are collected; the engine paces surveys.
+  // ms1_scans are fed one per survey, in order (with rt_offset added); further surveys are idle
+  // ticks. Terminates on idle>=3 (queue drained) or max_iters. State persists in `ida` across
+  // calls, so a caller may invoke this twice (two passes) on the same engine.
+  DriveResult driveInterleaved(FLASHIda& ida, const std::vector<ScanData>& ms1_scans,
+                               double rt_offset = 0.0, int max_iters = 4000)
+  {
+    DriveResult res;
+    const int n_ms1 = static_cast<int>(ms1_scans.size());
+    int idle = 0, ms1_fed = 0;
+    ScanCommand cmd{};
+    for (int it = 0; it < max_iters && idle < 3; ++it)
+    {
+      if (ida.getNextScanCommand(cmd) != 1) break;
+      // Idle tick: AGC, empty descriptor, or an MS1 re-survey after all ms1_scans have been fed.
+      if (cmd.is_agc || cmd.scan_description[0] == '\0' || (cmd.msn_level <= 1 && ms1_fed >= n_ms1))
+      {
+        ++idle;
+        cmd = ScanCommand{};
+        continue;
+      }
+      idle = 0;
+      if (cmd.msn_level <= 1)
+      {
+        const ScanData& s = ms1_scans[ms1_fed++];
+        ida.processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt + rt_offset, 1,
+                        cmd.scan_description);
+      }
+      else if (cmd.msn_level == 2)
+      {
+        ++res.ms2_count;
+        if (cmd.num_stages >= 1)
+          res.rows.push_back({cmd.stages[0].charge_state, cmd.stages[0].precursor_mz,
+                              cmd.stages[0].isolation_width});
+      }
+      cmd = ScanCommand{};
+    }
+    return res;
+  }
+
+  // Convenience: fresh engine, single interleaved pass, return the emitted MS2 (charge, mz, width) rows.
   std::vector<AcquisitionRow> runAndCollect(const char* cfg, const std::vector<ScanData>& scans)
   {
     FLASHIda ida(const_cast<char*>(cfg));
-    for (const auto& scan : scans)
-    {
-      ida.processScan(scan.mzs.data(), scan.ints.data(),
-                      (int)scan.mzs.size(), scan.rt, 1,
-                      ("scan_" + scan.scan_id).c_str());
-    }
-    std::vector<AcquisitionRow> rows;
-    ScanCommand cmd{};
-    while (ida.getNextScanCommand(cmd) == 1)
-    {
-      if (cmd.is_agc) { break; }  // stop before AGC idle cycle
-      if (cmd.msn_level == 2 && cmd.num_stages >= 1)
-      {
-        rows.push_back({cmd.stages[0].charge_state, cmd.stages[0].precursor_mz, cmd.stages[0].isolation_width});
-      }
-    }
-    return rows;
+    return driveInterleaved(ida, scans).rows;
   }
 }
 
@@ -222,32 +258,15 @@ START_SECTION(flag_on_suppresses_reacquisition_across_scans)
   ABORT_IF(scans.empty())
 
   FLASHIda ida(const_cast<char*>(base_on_json));
-  ScanCommand cmd{};
 
-  // First pass: drive every scan once (a single scan may yield no selectable precursor;
-  // the full sequence reliably does), then drain the MS2 commands produced.
-  for (const auto& s : scans)
-    ida.processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1,
-                    ("scan_" + s.scan_id + "_a").c_str());
-  int drained_first = 0;
-  while (ida.getNextScanCommand(cmd) == 1)
-  {
-    if (cmd.is_agc) { break; }
-    if (cmd.msn_level == 2) { drained_first++; }
-  }
+  // First pass: interleave-drive every scan once via the engine's own survey ids (a single scan may
+  // yield no selectable precursor; the full sequence reliably does). MS2 commands are drained inline.
+  int drained_first = driveInterleaved(ida, scans).ms2_count;
   TEST_EQUAL(drained_first > 0, true)
 
-  // Second pass: same precursors at an RT within rt_window, so the per-(mass, charge)
-  // exclusion set populated in pass 1 suppresses re-acquisition.
-  for (const auto& s : scans)
-    ida.processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt + 0.001, 1,
-                    ("scan_" + s.scan_id + "_b").c_str());
-  int drained_second = 0;
-  while (ida.getNextScanCommand(cmd) == 1)
-  {
-    if (cmd.is_agc) { break; }
-    if (cmd.msn_level == 2) { drained_second++; }
-  }
+  // Second pass on the SAME engine: same precursors at an RT within rt_window, so the per-(mass,
+  // charge) exclusion set populated in pass 1 suppresses re-acquisition.
+  int drained_second = driveInterleaved(ida, scans, /*rt_offset=*/0.001).ms2_count;
   TEST_EQUAL(drained_second < drained_first, true)
 }
 END_SECTION
@@ -274,31 +293,15 @@ START_SECTION(flag_on_rt_window_eviction_reenables_charge)
   ABORT_IF(scans.empty())
 
   FLASHIda ida(const_cast<char*>(base_on_json));
-  ScanCommand cmd{};
 
-  // First pass at the scans' own RTs populates per-(mass, charge) exclusion entries.
-  for (const auto& s : scans)
-    ida.processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1,
-                    ("scan_" + s.scan_id + "_a").c_str());
-  int drained_first = 0;
-  while (ida.getNextScanCommand(cmd) == 1)
-  {
-    if (cmd.is_agc) { break; }
-    if (cmd.msn_level == 2) { drained_first++; }
-  }
+  // First pass at the scans' own RTs (interleaved via the engine's survey ids) populates the
+  // per-(mass, charge) exclusion entries.
+  int drained_first = driveInterleaved(ida, scans).ms2_count;
   TEST_EQUAL(drained_first > 0, true)
 
   // Second pass far past rt_window (default 180): evictions fire, per-charge state is
   // cleared, charges become eligible again, so re-acquisition is not suppressed.
-  for (const auto& s : scans)
-    ida.processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt + 1000.0, 1,
-                    ("scan_" + s.scan_id + "_c").c_str());
-  int drained_second = 0;
-  while (ida.getNextScanCommand(cmd) == 1)
-  {
-    if (cmd.is_agc) { break; }
-    if (cmd.msn_level == 2) { drained_second++; }
-  }
+  int drained_second = driveInterleaved(ida, scans, /*rt_offset=*/1000.0).ms2_count;
   // Eviction cleared the per-charge state, so the second pass acquires at least as many.
   TEST_EQUAL(drained_second >= drained_first, true)
 }

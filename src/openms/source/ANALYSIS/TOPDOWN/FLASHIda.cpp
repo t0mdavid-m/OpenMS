@@ -757,13 +757,25 @@ FLASHIda::FLASHIda(char* arg) :
     // Retrieve timestamps from pending map (enqueue set by push(), dequeue set by dequeue())
     uint64_t enqueue_ts = 0;
     uint64_t dequeue_ts = 0;
+    bool id_was_emitted = false;
     {
       auto peeked = queue_.peekPending(tracking_id);
       if (peeked.has_value())
       {
+        id_was_emitted = true;
         enqueue_ts = peeked->enqueue_timestamp_ms;
         dequeue_ts = peeked->dequeue_timestamp_ms;
       }
+    }
+
+    // MS1 gate: an MS1 whose tracking id was never emitted as a command is rejected — symmetric with the
+    // MS2/MS3 resolvePending gate below. Engine-emitted survey MS1 ids are registered in pending_scan_map_ at
+    // dequeue, so production (and the engine-id-echoing harness) pass; a fabricated/sentinel id (e.g. "~~~")
+    // never enters the pending map and is rejected here, instead of being silently logged as a real scan.
+    if (ms_level == 1 && !id_was_emitted)
+    {
+      std::cout << "[TRACK-RESOLVE] id=" << id_str << " status=not_found" << std::endl;
+      return 0;
     }
 
     // Stamp received timestamp (instrument → C++ handoff)

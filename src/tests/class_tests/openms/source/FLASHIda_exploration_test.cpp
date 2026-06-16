@@ -724,17 +724,34 @@ namespace
     return scans;
   }
 
-  int pushAllMS1Scans(FLASHIda* ida, const std::vector<ScanData>& scans)
+  // Interleaved bootstrap (canonical engine-id-echo contract): drain survey commands and feed the
+  // next MS1 spectrum per survey, stamped with the engine's OWN scan_description (a fabricated
+  // "scan_"+id MS1 is rejected by the always-on gate -> 0 precursors), until ONE survey selects a
+  // precursor and creates the exploration group. Returns that survey's processScan count (the number
+  // of exploration variants pushed; 0 if no scan ever selects). Leaves the variant commands QUEUED
+  // (does not drain them), so the caller can inspect the engine's next command while a group is
+  // active -- the contract the original pushAllMS1Scans + immediate getNextScanCommand relied on.
+  int bootstrapExplorationGroup(FLASHIda* ida, const std::vector<ScanData>& scans, int max_iters = 4000)
   {
-    int total = 0;
-    for (const auto& scan : scans)
+    const int n_ms1 = static_cast<int>(scans.size());
+    int ms1_fed = 0;
+    int idle = 0;
+    ScanCommand cmd{};
+    for (int it = 0; it < max_iters && idle < 3; ++it)
     {
-      int n = ida->processScan(scan.mzs.data(), scan.ints.data(),
-                                (int)scan.mzs.size(), scan.rt, 1,
-                                ("scan_" + scan.scan_id).c_str());
-      total += n;
+      if (ida->getNextScanCommand(cmd) != 1) break;
+      if (cmd.msn_level == 1 && !cmd.is_agc && ms1_fed < n_ms1)
+      {
+        const ScanData& s = scans[ms1_fed++];
+        int n = ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1,
+                                 cmd.scan_description);
+        if (n > 0) return n;  // group created; leave its variants queued for the caller
+        idle = 0;
+      }
+      else { ++idle; }       // AGC / re-survey-after-exhausted -> idle tick
+      cmd = ScanCommand{};
     }
-    return total;
+    return 0;
   }
 
   // Minimal TSV reader (first line = header, rest = rows; tab-split). Local to this test
@@ -798,31 +815,48 @@ namespace
   struct ExplResult { bool found_ms3 = false; bool found_production_ms2 = false;
                       int total_returns = 0; int ms3_num_stages = 0; int group_commands = 0; };
 
-  // Push MS1 scans only until the FIRST scan that creates an exploration group (one selected
-  // precursor -> one group of CE variants), then stop and drive that single group. Inclusion +
-  // ms1.max_targets pins the single cytC precursor. Feed each drained MS2 variant back; the
-  // final-variant feed fires the winner -> MS3 directly (overrides empty), or a production-MS2
-  // re-acquisition (overrides non-empty) which is fed once more -> MS3. ONE group means the
-  // variants drain contiguously with no idle-AGC interleave (50 overlapping groups was both the
-  // idle-bug source and an unrealistic acquisition scenario).
+  // Drive a single exploration group end-to-end via the canonical INTERLEAVED engine-id-echo
+  // contract (twin of FLASHIda_TestHelpers::runInterleaved; inlined here because this TU's local
+  // ScanData / loadTsvScans / TSVFile / ExplResult would collide with the helper's
+  // anonymous-namespace copies). Pull one command at a time and feed exactly one response per
+  // requested command, stamped with the engine's OWN scan_description -- the always-on MS1 gate
+  // rejects a fabricated "scan_"+id MS1 (returns 0 -> 0 precursors), so MS1 must carry the engine's
+  // survey id. The engine paces the surveys: feed the next cytC MS1 spectrum per survey command, in
+  // order, until ONE selects a precursor and creates the exploration group (group_commands = its
+  // return). Thereafter further MS1 surveys are idle ticks (ONE group -> variants drain contiguously,
+  // the unchanged test intent). Feed each drained MS2 variant back; the final-variant feed fires the
+  // winner -> MS3 directly (overrides empty), or a production-MS2 re-acquisition (overrides non-empty)
+  // which is fed once more -> MS3. Inclusion + ms1.max_targets pins the single cytC precursor.
   ExplResult driveOneExplorationGroup(FLASHIda* ida, const std::vector<ScanData>& ms1_scans,
                                       const ScanData& ms2)
   {
     ExplResult r;
-    for (const auto& s : ms1_scans)
-    {
-      int n = ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1,
-                               ("scan_" + s.scan_id).c_str());
-      if (n > 0) { r.group_commands = n; break; }
-    }
-    if (r.group_commands == 0) return r;
-
+    const int n_ms1 = static_cast<int>(ms1_scans.size());
+    int ms1_fed = 0;
+    bool group_formed = false;
     int idle = 0;
-    for (int i = 0; i < 100 && !r.found_ms3; ++i)
+    for (int i = 0; i < 200 && !r.found_ms3; ++i)
     {
       ScanCommand next{};
       if (ida->getNextScanCommand(next) != 1) break;
-      if (next.is_agc || next.msn_level == 1) { if (++idle > 3) break; continue; }  // safety only
+      // MS1 survey: before a group exists, feed the next cytC spectrum stamped with the engine id;
+      // after the group is formed (or once all scans are fed), MS1 surveys / AGC are idle ticks.
+      if (next.is_agc || next.msn_level == 1)
+      {
+        if (!group_formed && next.msn_level == 1 && !next.is_agc && ms1_fed < n_ms1)
+        {
+          // Feeding a survey scan is productive engine interaction (not idle), even when it selects
+          // 0 precursors -- mirrors the original "try every scan in order until one creates a group".
+          const ScanData& s = ms1_scans[ms1_fed++];
+          int n = ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1,
+                                   next.scan_description);
+          idle = 0;
+          if (n > 0) { r.group_commands = n; group_formed = true; }
+          continue;
+        }
+        if (++idle > 3) break;
+        continue;
+      }
       idle = 0;
       if (next.msn_level == 3) { r.found_ms3 = true; r.ms3_num_stages = next.num_stages; break; }
       if (next.msn_level == 2)
@@ -1311,7 +1345,10 @@ START_SECTION(cycle_time_suppression_during_exploration)
 
   FLASHIda* ida = new FLASHIda(const_cast<char*>(cycle_time_exploration_config));
 
-  int total = pushAllMS1Scans(ida, ms1_scans);
+  // Interleaved bootstrap: feed MS1 surveys (engine ids) until a group forms; its variants stay
+  // queued. The group is now active, so the next dequeue must be an exploration variant (cycle-time
+  // MS1 suppressed) -- not a cycle-time/idle MS1.
+  int total = bootstrapExplorationGroup(ida, ms1_scans);
   if (total == 0) { delete ida; }
   ABORT_IF(total == 0)
 
@@ -1339,7 +1376,9 @@ START_SECTION(ms1_resumes_after_exploration_completes)
 
   FLASHIda* ida = new FLASHIda(const_cast<char*>(cycle_time_exploration_config));
 
-  int total = pushAllMS1Scans(ida, ms1_scans);
+  // Interleaved bootstrap: feed MS1 surveys (engine ids) until a group forms; its variants stay
+  // queued for the drain loop below.
+  int total = bootstrapExplorationGroup(ida, ms1_scans);
   if (total == 0) { delete ida; }
   ABORT_IF(total == 0)
 
@@ -2408,15 +2447,10 @@ START_SECTION(exploration_etd_from_method_fixture)
       auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
       ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
 
-      // Bootstrap MS1: push survey scans until one selects a precursor and creates the
-      // exploration group, then drain + feed the ETD MS2 variants back.
-      int group_cmds = 0;
-      for (const auto& s : ms1_scans)
-      {
-        int n = ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1,
-                                 ("scan_" + s.scan_id).c_str());
-        if (n > 0) { group_cmds = n; break; }
-      }
+      // Bootstrap MS1 via the interleaved engine-id-echo contract: feed survey scans (stamped with
+      // the engine's own ids) until one selects a precursor and creates the exploration group; its
+      // variants stay queued for the drain loop below.
+      int group_cmds = bootstrapExplorationGroup(ida, ms1_scans);
       ABORT_IF(group_cmds == 0)
 
       int etd_variant_cmds = 0;
@@ -2490,16 +2524,12 @@ START_SECTION(exploration_ms2_tag_count_under_tagging)
 
   FLASHIda* ida = new FLASHIda(const_cast<char*>(cfg_str.c_str()));
 
-  // Drive the inclusion-pinned exploration group: bootstrap MS1 until a group is
-  // created, then drain + feed each MS2 variant back on the real cytC ladder so the
-  // exploration identification (and tag generation) runs and the rows are written.
-  int group_cmds = 0;
-  for (const auto& s : ms1_scans)
-  {
-    int n = ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1,
-                             ("scan_" + s.scan_id).c_str());
-    if (n > 0) { group_cmds = n; break; }
-  }
+  // Drive the inclusion-pinned exploration group via the interleaved engine-id-echo contract:
+  // bootstrap MS1 (feed survey scans stamped with the engine's own ids -- the always-on gate
+  // rejects fabricated "scan_"+id MS1) until a group is created, then drain + feed each MS2 variant
+  // back on the real cytC ladder so the exploration identification (and tag generation) runs and the
+  // rows are written. Variants stay queued for the drain loop below.
+  int group_cmds = bootstrapExplorationGroup(ida, ms1_scans);
   ABORT_IF(group_cmds == 0)
 
   int idle = 0;

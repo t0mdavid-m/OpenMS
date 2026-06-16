@@ -20,6 +20,7 @@
 #include <map>
 #include <set>
 #include <thread>  // std::this_thread::sleep_for
+#include <chrono>  // std::chrono::milliseconds
 #include <algorithm>  // std::max
 #include <sstream>    // std::istringstream / std::ostringstream
 #include <cstdio>     // std::remove
@@ -590,18 +591,67 @@ namespace
     return scans;
   }
 
-  // Push all scans through processScan, return total command count
-  int pushAllScans(FLASHIda* ida, const std::vector<ScanData>& scans)
+  // [DRAIN-CONTRACT C#<->C++ — see docs/kb/test-harness] inlined twin of FLASHIda_TestHelpers::runInterleaved
+  // Interleaved engine-id-echo drive contract (twin of FLASHIda_TestHelpers::runInterleaved; inlined here
+  // because this TU keeps its own anonymous-namespace ScanData / loadTsvScans and so does NOT include
+  // FLASHIda_TestHelpers.h -- including it would redefine those symbols). The engine now has an ALWAYS-ON
+  // MS1 gate (FLASHIda.cpp:775): an MS1 fed with a fabricated tracking id (the old "scan_"+id) is rejected
+  // and yields 0 precursors. We therefore drive MS1 by echoing the engine's OWN survey scan_description:
+  // pull one command at a time, feed exactly one response per requested command stamped with
+  // cmd.scan_description; the engine paces the surveys. Terminate on idle>=3 (queue drained) or max_iters.
+  //   ms1_scans : fed one per survey command, in order (nMs1 = size); further MS1 surveys are idle ticks.
+  //   ms2_scans : ms2_scans[0] fed for every MS2 command (empty => MS2 commands collected but not fed back).
+  //   ms3 uses the MS2-as-MS3 shortcut (this TU has no per-ion manifest; C++ plausibility only).
+  struct AcqResult
   {
-    int total = 0;
-    for (const auto& scan : scans)
+    std::vector<ScanCommand> ms1_cmds, ms2_cmds, ms3_cmds;
+    int total_dequeued = 0;
+  };
+
+  AcqResult runInterleaved(FLASHIda* ida,
+                           const std::vector<ScanData>& ms1_scans,
+                           const std::vector<ScanData>& ms2_scans,
+                           int max_iters = 600)
+  {
+    AcqResult r;
+    const int n_ms1 = (int)ms1_scans.size();
+    int idle = 0, ms1_fed = 0;
+    ScanCommand cmd{};
+    for (int it = 0; it < max_iters && idle < 3; ++it)
     {
-      int n = ida->processScan(scan.mzs.data(), scan.ints.data(),
-                                (int)scan.mzs.size(), scan.rt, 1,
-                                ("scan_" + scan.scan_id).c_str());
-      total += n;
+      if (ida->getNextScanCommand(cmd) != 1) break;
+      ++r.total_dequeued;
+      // Idle tick: AGC, empty descriptor, or an MS1 re-survey after all ms1_scans have been fed.
+      if (cmd.is_agc || cmd.scan_description[0] == '\0' || (cmd.msn_level <= 1 && ms1_fed >= n_ms1))
+      {
+        ++idle;
+        cmd = ScanCommand{};
+        continue;
+      }
+      idle = 0;
+      if (cmd.msn_level <= 1)
+      {
+        r.ms1_cmds.push_back(cmd);
+        const ScanData& s = ms1_scans[ms1_fed++];
+        ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1, cmd.scan_description);
+      }
+      else if (cmd.msn_level == 2)
+      {
+        r.ms2_cmds.push_back(cmd);
+        if (!ms2_scans.empty())
+          ida->processScan(ms2_scans[0].mzs.data(), ms2_scans[0].ints.data(),
+                           (int)ms2_scans[0].mzs.size(), ms2_scans[0].rt, 2, cmd.scan_description);
+      }
+      else  // msn_level >= 3
+      {
+        r.ms3_cmds.push_back(cmd);
+        if (!ms2_scans.empty())  // MS2-as-MS3 shortcut (no per-ion manifest in this TU)
+          ida->processScan(ms2_scans[0].mzs.data(), ms2_scans[0].ints.data(),
+                           (int)ms2_scans[0].mzs.size(), ms2_scans[0].rt, 3, cmd.scan_description);
+      }
+      cmd = ScanCommand{};
     }
-    return total;
+    return r;
   }
 
   // Build a cap-test config from the max1_json template: set ms1.max_targets, optionally extend the
@@ -689,8 +739,9 @@ START_SECTION(processScan_ms1_returns_commands)
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
   ABORT_IF(ms1_scans.empty())
   FLASHIda* ida = new FLASHIda(const_cast<char*>(standard_json));
-  int total = pushAllScans(ida, ms1_scans);
-  TEST_EQUAL(total > 0, true)
+  // Drive MS1 by echoing the engine's own survey id (the always-on MS1 gate rejects fabricated ids).
+  AcqResult acq = runInterleaved(ida, ms1_scans, {});
+  TEST_EQUAL(acq.ms2_cmds.size() > 0, true)
   delete ida;
 }
 END_SECTION
@@ -701,15 +752,14 @@ START_SECTION(processScan_commands_dequeued)
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
   ABORT_IF(ms1_scans.empty())
   FLASHIda* ida = new FLASHIda(const_cast<char*>(standard_json));
-  int total = pushAllScans(ida, ms1_scans);
-  TEST_EQUAL(total > 0, true)
+  // Drive MS1 via the engine-id-echo contract; runInterleaved collects every dequeued MS2 command, so the
+  // per-command field checks below run over acq.ms2_cmds (each was returned by getNextScanCommand with
+  // result==1 inside runInterleaved). The interleaving does not change the spectra/config -> same commands.
+  AcqResult acq = runInterleaved(ida, ms1_scans, {});
+  TEST_EQUAL(acq.ms2_cmds.size() > 0, true)
 
-  // Dequeue all commands
-  ScanCommand cmd{};
-  for (int i = 0; i < total; i++)
+  for (const auto& cmd : acq.ms2_cmds)
   {
-    int result = ida->getNextScanCommand(cmd);
-    TEST_EQUAL(result, 1)
     TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
     TEST_EQUAL(cmd.msn_level, 2)
     TEST_EQUAL(cmd.priority, 2)
@@ -726,6 +776,7 @@ START_SECTION(processScan_commands_dequeued)
   }
 
   // Queue empty — idle cycle returns AGC (never returns 0)
+  ScanCommand cmd{};
   int idle_result = ida->getNextScanCommand(cmd);
   TEST_EQUAL(idle_result, 1)
   TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
@@ -741,11 +792,12 @@ START_SECTION(processScan_command_fields)
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
   ABORT_IF(ms1_scans.empty())
   FLASHIda* ida = new FLASHIda(const_cast<char*>(standard_json));
-  int total = pushAllScans(ida, ms1_scans);
-  TEST_EQUAL(total > 0, true)
+  // Drive MS1 via engine-id echo; inspect the first dequeued MS2 command's fields.
+  AcqResult acq = runInterleaved(ida, ms1_scans, {});
+  TEST_EQUAL(acq.ms2_cmds.size() > 0, true)
+  ABORT_IF(acq.ms2_cmds.empty())
 
-  ScanCommand cmd{};
-  ida->getNextScanCommand(cmd);
+  const ScanCommand& cmd = acq.ms2_cmds[0];
   TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
 
   // Analyzer from ms2_configs_[0]
@@ -782,13 +834,14 @@ START_SECTION(processScan_ms2_path)
   ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
   FLASHIda* ida = new FLASHIda(const_cast<char*>(standard_json));
 
-  // Push all MS1 scans to accumulate state and generate MS2 commands
-  int total = pushAllScans(ida, ms1_scans);
-  TEST_EQUAL(total > 0, true)
+  // Drive MS1 via engine-id echo with NO MS2 feed, so the emitted MS2 commands stay in pending_scan_map_
+  // (unfed) and we can feed the first one ourselves below to inspect the MS2-path return value.
+  AcqResult acq = runInterleaved(ida, ms1_scans, {});
+  TEST_EQUAL(acq.ms2_cmds.size() > 0, true)
+  ABORT_IF(acq.ms2_cmds.empty())
 
-  // Dequeue one MS2 command to get its scan description (contains tracking ID)
-  ScanCommand ms2_cmd{};
-  ida->getNextScanCommand(ms2_cmd);
+  // The first emitted MS2 command carries the engine's tracking ID in its scan description.
+  const ScanCommand& ms2_cmd = acq.ms2_cmds[0];
   TEST_EQUAL(std::strlen(ms2_cmd.scan_description) <= 15, true)
   TEST_EQUAL(ms2_cmd.msn_level, 2)
 
@@ -797,7 +850,8 @@ START_SECTION(processScan_ms2_path)
   int ms2_result = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
                                      (int)ms2.mzs.size(), ms2.rt,
                                      2, ms2_cmd.scan_description);
-  // Should return 0 (no conditional, no MS3, no quant in standard config)
+  // Should return 0 (no conditional, no MS3, no quant in standard config). Interleaving does not change
+  // the standard-config MS2-path follow-up count: this re-derives to the same 0 as before.
   TEST_EQUAL(ms2_result, 0)
 
   delete ida;
@@ -827,13 +881,13 @@ START_SECTION(processScan_conditional_ms2_followup)
   // Uses conditional_with_tags_json: conditional_ms2=true + FASTA for tag detection
   FLASHIda* ida = new FLASHIda(const_cast<char*>(conditional_with_tags_json));
 
-  // Push all MS1 scans
-  int total = pushAllScans(ida, ms1_scans);
-  TEST_EQUAL(total > 0, true)
+  // Drive MS1 via engine-id echo with NO MS2 feed (so the emitted MS2 commands stay pending and we feed
+  // the first one ourselves below to exercise the conditional follow-up).
+  AcqResult acq = runInterleaved(ida, ms1_scans, {});
+  TEST_EQUAL(acq.ms2_cmds.size() > 0, true)
+  ABORT_IF(acq.ms2_cmds.empty())
 
-  // Dequeue first MS2
-  ScanCommand ms2_cmd{};
-  ida->getNextScanCommand(ms2_cmd);
+  const ScanCommand& ms2_cmd = acq.ms2_cmds[0];
   TEST_EQUAL(std::strlen(ms2_cmd.scan_description) <= 15, true)
   TEST_EQUAL(ms2_cmd.msn_level, 2)
   TEST_EQUAL(ms2_cmd.priority, 2)
@@ -876,13 +930,13 @@ START_SECTION(processScan_ms3_commands)
   ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
   FLASHIda* ida = new FLASHIda(const_cast<char*>(ms3_mode1_json));
 
-  // Push all MS1 scans
-  int total = pushAllScans(ida, ms1_scans);
-  TEST_EQUAL(total > 0, true)
+  // Drive MS1 via engine-id echo with NO MS2 feed (the emitted MS2 commands stay pending; we feed the
+  // inclusion-pinned cytC MS2 ourselves below so the b/y matches fire MS3).
+  AcqResult acq = runInterleaved(ida, ms1_scans, {});
+  TEST_EQUAL(acq.ms2_cmds.size() > 0, true)
+  ABORT_IF(acq.ms2_cmds.empty())
 
-  // Dequeue first MS2
-  ScanCommand ms2_cmd{};
-  ida->getNextScanCommand(ms2_cmd);
+  const ScanCommand& ms2_cmd = acq.ms2_cmds[0];
   TEST_EQUAL(std::strlen(ms2_cmd.scan_description) <= 15, true)
   TEST_EQUAL(ms2_cmd.msn_level, 2)
 
@@ -925,12 +979,12 @@ START_SECTION(decodeTracking_roundtrip)
   ABORT_IF(ms1_scans.empty())
   FLASHIda* ida = new FLASHIda(const_cast<char*>(standard_json));
 
-  // Test roundtrip via processScan → scan_description parsing
-  int total = pushAllScans(ida, ms1_scans);
-  TEST_EQUAL(total > 0, true)
+  // Test roundtrip via the engine-id-echo drive -> scan_description parsing on the first emitted MS2 command.
+  AcqResult acq = runInterleaved(ida, ms1_scans, {});
+  TEST_EQUAL(acq.ms2_cmds.size() > 0, true)
+  ABORT_IF(acq.ms2_cmds.empty())
 
-  ScanCommand cmd{};
-  ida->getNextScanCommand(cmd);
+  const ScanCommand& cmd = acq.ms2_cmds[0];
   TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
   // scan_description: {3-char base-94}{type_code}{payload}
   std::string desc(cmd.scan_description);
@@ -959,25 +1013,26 @@ START_SECTION(cleanup_expired_commands)
   // Use timeout-enabled config
   FLASHIda* ida = new FLASHIda(const_cast<char*>(standard_json));
 
-  // Push all MS1 scans (this adds to pending_scan_map_)
-  int total = pushAllScans(ida, ms1_scans);
-  TEST_EQUAL(total > 0, true)
+  // Drive MS1 via engine-id echo with NO MS2 feed: every dequeued command is registered in
+  // pending_scan_map_; the fed MS1 surveys resolve (erase) themselves, but the dequeued MS2 commands and
+  // the idle AGCs are NOT fed back, so they stay pending and are available for the resolution check below.
+  AcqResult acq = runInterleaved(ida, ms1_scans, {});
+  TEST_EQUAL(acq.ms2_cmds.size() > 0, true)
+  ABORT_IF(acq.ms2_cmds.empty())
+  for (const auto& c : acq.ms2_cmds) TEST_EQUAL(std::strlen(c.scan_description) <= 15, true)
 
-  // Dequeue all commands — they're still in pending_scan_map_ for tracking
-  ScanCommand cmd{};
-  for (int i = 0; i < total; i++)
-  {
-    ida->getNextScanCommand(cmd);
-    TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
-  }
+  // The pending_scan_map_ entries have timestamps. cleanupExpired is called by getNextScanCommand. With
+  // timeout_ms=30000, entries should NOT be expired immediately. Verify by resolving one MS2 tracking ID.
+  // Snapshot the pending size first so the post-resolution check is exact (one entry erased), independent of
+  // how many AGC/MS2 entries the interleaved drive left pending.
+  const size_t pending_before = ida->getQueueForTest().pendingScanMapSize();
+  ABORT_IF(pending_before == 0)
+  const ScanCommand& ms2_cmd = acq.ms2_cmds[0];
 
-  // The pending_scan_map_ entries have timestamps. cleanupExpiredCommands_
-  // is called by getNextScanCommand. With timeout_ms=30000, entries should
-  // NOT be expired immediately. Verify by processing an MS2 with valid tracking ID.
   const auto& ms2 = ms2_scans[0];
   int ms2_result = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
                                      (int)ms2.mzs.size(), ms2.rt,
-                                     2, cmd.scan_description);
+                                     2, ms2_cmd.scan_description);
   // Should succeed (entry found in pending_scan_map_)
   // ms2_result can be 0 (no follow-ups) but shouldn't crash
   TEST_EQUAL(ms2_result >= 0, true)
@@ -985,13 +1040,14 @@ START_SECTION(cleanup_expired_commands)
   // Verify pending_scan_map_ entry was erased by first resolution
   int ms2_result2 = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
                                       (int)ms2.mzs.size(), ms2.rt,
-                                      2, cmd.scan_description);
+                                      2, ms2_cmd.scan_description);
   // Second resolution with same tracking ID should find nothing (entry erased)
   TEST_EQUAL(ms2_result2, 0)
 
-  // Also verify via accessor: pending_scan_map_ should have (total - 1) entries
-  // (we resolved one, rest are still pending)
-  TEST_EQUAL(ida->getQueueForTest().pendingScanMapSize(), (size_t)(total - 1))
+  // Also verify via accessor: the first resolution erased EXACTLY one pending entry (pending_before - 1).
+  // (Re-derived from interleaving: the snapshot baseline replaces the old `total` MS2-only baseline; the
+  // engine still erases exactly one entry per resolved MS2 tracking id -- see FLASHIda.cpp:918.)
+  TEST_EQUAL(ida->getQueueForTest().pendingScanMapSize(), (size_t)(pending_before - 1))
 
   delete ida;
 }
@@ -1007,23 +1063,21 @@ START_SECTION(processScan_scoring_branches)
   FLASHIda* ida_qscore = new FLASHIda(const_cast<char*>(standard_json));
   FLASHIda* ida_qscore_all = new FLASHIda(const_cast<char*>(qscore_allcharges_json));
 
-  int total_qscore = pushAllScans(ida_qscore, ms1_scans);
-  int total_qscore_all = pushAllScans(ida_qscore_all, ms1_scans);
+  // Drive MS1 via engine-id echo for each scoring branch.
+  AcqResult acq_qscore = runInterleaved(ida_qscore, ms1_scans, {});
+  AcqResult acq_qscore_all = runInterleaved(ida_qscore_all, ms1_scans, {});
 
   // Both branches must produce > 0 commands
-  TEST_EQUAL(total_qscore > 0, true)
-  TEST_EQUAL(total_qscore_all > 0, true)
+  TEST_EQUAL(acq_qscore.ms2_cmds.size() > 0, true)
+  TEST_EQUAL(acq_qscore_all.ms2_cmds.size() > 0, true)
+  ABORT_IF(acq_qscore.ms2_cmds.empty() || acq_qscore_all.ms2_cmds.empty())
 
-  // Dequeue first command from each — must have valid precursor_mz
-  ScanCommand cmd{};
+  // First command from each — must have valid precursor_mz
+  TEST_EQUAL(std::strlen(acq_qscore.ms2_cmds[0].scan_description) <= 15, true)
+  TEST_EQUAL(acq_qscore.ms2_cmds[0].stages[0].precursor_mz > 0, true)
 
-  ida_qscore->getNextScanCommand(cmd);
-  TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
-  TEST_EQUAL(cmd.stages[0].precursor_mz > 0, true)
-
-  ida_qscore_all->getNextScanCommand(cmd);
-  TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
-  TEST_EQUAL(cmd.stages[0].precursor_mz > 0, true)
+  TEST_EQUAL(std::strlen(acq_qscore_all.ms2_cmds[0].scan_description) <= 15, true)
+  TEST_EQUAL(acq_qscore_all.ms2_cmds[0].stages[0].precursor_mz > 0, true)
 
   delete ida_qscore;
   delete ida_qscore_all;
@@ -1053,27 +1107,21 @@ START_SECTION(processScan_mass_exclusion)
   }
   FLASHIda* ida = new FLASHIda(const_cast<char*>(excl_json.c_str()));
 
-  // Pass 1: every selected MS2 precursor m/z becomes "excluded" (qscore > 0 > threshold 0.0).
-  int total_pass1 = pushAllScans(ida, ms1_scans);
+  // Pass 1: drive MS1 via engine-id echo (NO MS2 feed). Every selected MS2 precursor m/z becomes
+  // "excluded" (qscore > 0 > threshold 0.0). Exclusion is armed at MS1 selection time (not on the MS2
+  // feed), so {} for ms2_scans is correct; the exclusion state persists in the engine into pass 2.
+  AcqResult p1 = runInterleaved(ida, ms1_scans, {});
+  int total_pass1 = (int)p1.ms2_cmds.size();
   TEST_EQUAL(total_pass1 > 0, true)
   std::set<int> excluded;
-  ScanCommand cmd{};
-  for (int i = 0; i < total_pass1; i++)
-  {
-    if (ida->getNextScanCommand(cmd) != 1 || cmd.is_agc) break;
-    if (cmd.msn_level == 2) excluded.insert((int)(cmd.stages[0].precursor_mz + 0.5));
-  }
+  for (const auto& cmd : p1.ms2_cmds) excluded.insert((int)(cmd.stages[0].precursor_mz + 0.5));
   ABORT_IF(excluded.empty())
 
-  // Pass 2: re-push the SAME scans at the same RTs (within RT_window=180s), in dequeue order.
-  int total_pass2 = pushAllScans(ida, ms1_scans);
+  // Pass 2: re-drive the SAME scans at the same RTs (within RT_window=180s) on the SAME engine.
+  AcqResult p2 = runInterleaved(ida, ms1_scans, {});
+  int total_pass2 = (int)p2.ms2_cmds.size();
   std::vector<int> pass2_order;
-  ScanCommand out{};
-  for (int i = 0; i < total_pass2; i++)
-  {
-    if (ida->getNextScanCommand(out) != 1 || out.is_agc) break;
-    if (out.msn_level == 2) pass2_order.push_back((int)(out.stages[0].precursor_mz + 0.5));
-  }
+  for (const auto& out : p2.ms2_cmds) pass2_order.push_back((int)(out.stages[0].precursor_mz + 0.5));
   // Dynamic exclusion SKIPS armed masses on the re-push, so the command count strictly drops
   // (every selected mass armed at threshold 0.0, so total_pass2 == 0 here).
   TEST_EQUAL(total_pass2 < total_pass1, true)
@@ -1102,36 +1150,29 @@ START_SECTION(processScan_mass_exclusion_thresholded)
   }
   FLASHIda* ida = new FLASHIda(const_cast<char*>(excl_json.c_str()));
 
-  // Pass 1: record, per integer-m/z, the MAX selection qscore (the value the engine gates on at
-  // PrecursorSelection.cpp:654; cmd.qscore == pg.getQscore() since AllCharges=false).
-  int total_pass1 = pushAllScans(ida, ms1_scans);
+  // Pass 1: drive MS1 via engine-id echo (NO MS2 feed) and record, per integer-m/z, the MAX selection
+  // qscore (the value the engine gates on at PrecursorSelection.cpp:654; cmd.qscore == pg.getQscore()
+  // since AllCharges=false). The exclusion map is armed at MS1 selection time and persists into pass 2.
+  AcqResult p1 = runInterleaved(ida, ms1_scans, {});
+  int total_pass1 = (int)p1.ms2_cmds.size();
   TEST_EQUAL(total_pass1 > 0, true)
   std::map<int, float> max_q;
-  ScanCommand cmd{};
-  for (int i = 0; i < total_pass1; i++)
+  for (const auto& cmd : p1.ms2_cmds)
   {
-    if (ida->getNextScanCommand(cmd) != 1 || cmd.is_agc) break;
-    if (cmd.msn_level == 2)
-    {
-      int mz = (int)(cmd.stages[0].precursor_mz + 0.5);
-      auto it = max_q.find(mz);
-      if (it == max_q.end() || cmd.qscore > it->second) max_q[mz] = cmd.qscore;
-    }
+    int mz = (int)(cmd.stages[0].precursor_mz + 0.5);
+    auto it = max_q.find(mz);
+    if (it == max_q.end() || cmd.qscore > it->second) max_q[mz] = cmd.qscore;
   }
   // Only masses whose selection qscore exceeded 0.1 arm the exclusion map.
   std::set<int> excluded;
   for (const auto& kv : max_q) if (kv.second > 0.1f) excluded.insert(kv.first);
   TEST_EQUAL(excluded.size() > 0, true)  // non-vacuous: there ARE qscore>0.1 masses to exclude
 
-  // Pass 2: re-push the SAME scans, in dequeue order.
-  int total_pass2 = pushAllScans(ida, ms1_scans);
+  // Pass 2: re-drive the SAME scans on the SAME engine.
+  AcqResult p2 = runInterleaved(ida, ms1_scans, {});
+  int total_pass2 = (int)p2.ms2_cmds.size();
   std::vector<int> pass2_order;
-  ScanCommand out{};
-  for (int i = 0; i < total_pass2; i++)
-  {
-    if (ida->getNextScanCommand(out) != 1 || out.is_agc) break;
-    if (out.msn_level == 2) pass2_order.push_back((int)(out.stages[0].precursor_mz + 0.5));
-  }
+  for (const auto& out : p2.ms2_cmds) pass2_order.push_back((int)(out.stages[0].precursor_mz + 0.5));
   // Exclusion strictly reduces the count; no qscore>0.1 mass is re-selected (hence not picked first).
   // Vacuous-safe over an empty pass2.
   TEST_EQUAL(total_pass2 < total_pass1, true)
@@ -1150,13 +1191,13 @@ START_SECTION(processScan_quant_followup)
   // Use quant_sensitive_json with fold_change_threshold=0.01 to trigger on any reporter ratio
   FLASHIda* ida = new FLASHIda(const_cast<char*>(quant_sensitive_json));
 
-  // Push MS1 scans to generate MS2 commands
-  int total = pushAllScans(ida, ms1_scans);
-  TEST_EQUAL(total > 0, true)
+  // Drive MS1 via engine-id echo with NO MS2 feed (the emitted MS2 commands stay pending; we feed the TMT
+  // MS2 ourselves below to exercise the quant follow-up).
+  AcqResult acq = runInterleaved(ida, ms1_scans, {});
+  TEST_EQUAL(acq.ms2_cmds.size() > 0, true)
+  ABORT_IF(acq.ms2_cmds.empty())
 
-  // Dequeue one MS2 command
-  ScanCommand ms2_cmd{};
-  ida->getNextScanCommand(ms2_cmd);
+  const ScanCommand& ms2_cmd = acq.ms2_cmds[0];
   TEST_EQUAL(std::strlen(ms2_cmd.scan_description) <= 15, true)
   TEST_EQUAL(ms2_cmd.msn_level, 2)
 
@@ -1194,13 +1235,13 @@ START_SECTION(processScan_tag_targeting)
   ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
   FLASHIda* ida = new FLASHIda(const_cast<char*>(tag_targeting_json));
 
-  // Push MS1 scans
-  int total = pushAllScans(ida, ms1_scans);
-  TEST_EQUAL(total > 0, true)
+  // Drive MS1 via engine-id echo with NO MS2 feed (the emitted MS2 commands stay pending; we feed one back
+  // ourselves below to exercise the tag-targeting MS2 path).
+  AcqResult acq = runInterleaved(ida, ms1_scans, {});
+  TEST_EQUAL(acq.ms2_cmds.size() > 0, true)
+  ABORT_IF(acq.ms2_cmds.empty())
 
-  // Dequeue one MS2 command
-  ScanCommand ms2_cmd{};
-  ida->getNextScanCommand(ms2_cmd);
+  const ScanCommand& ms2_cmd = acq.ms2_cmds[0];
   TEST_EQUAL(std::strlen(ms2_cmd.scan_description) <= 15, true)
   TEST_EQUAL(ms2_cmd.msn_level, 2)
 
@@ -1225,11 +1266,32 @@ START_SECTION(processScan_cycle_time_enforcement)
   // cycle_time_json: cycle_time.enabled=true, value_ms=0 (any elapsed time triggers)
   FLASHIda* ida = new FLASHIda(const_cast<char*>(cycle_time_json));
 
-  int total = pushAllScans(ida, ms1_scans);
-  TEST_EQUAL(total > 0, true)
+  // Bootstrap an MS1 survey from the engine and feed the MS1 fixture with the engine's OWN scan_description
+  // (the always-on MS1 gate rejects fabricated ids) -- this generates the MS2 commands (priority 2) that the
+  // next cycle-time MS1 must beat. The engine emits a real MS1 survey either via the cycle-time path or, if
+  // <1ms has elapsed, via the idle cycle (AGC then a priority-3 MS1); loop until we get the non-AGC MS1.
+  ScanCommand survey{};
+  bool fed_ms1 = false;
+  for (int i = 0; i < 8 && !fed_ms1; ++i)
+  {
+    int rs = ida->getNextScanCommand(survey);
+    TEST_EQUAL(rs, 1)
+    if (survey.is_agc) continue;          // idle-cycle AGC -> pushes a priority-3 MS1 for the next call
+    TEST_EQUAL(survey.msn_level, 1)
+    const auto& boot = ms1_scans[0];
+    int pushed = ida->processScan(boot.mzs.data(), boot.ints.data(), (int)boot.mzs.size(), boot.rt, 1,
+                                  survey.scan_description);
+    TEST_EQUAL(pushed > 0, true)          // MS2 commands now queued at priority 2
+    fed_ms1 = true;
+  }
+  ABORT_IF(!fed_ms1)
 
-  // With cycle_time_ms=0, ANY elapsed time triggers a cycle-time MS1
-  // Cycle-time MS1 is queued at priority 0, then dequeued before MS2s (priority 2)
+  // Guarantee a strictly positive gap since the last survey so cycle_time_ms=0 ("any elapsed time triggers")
+  // fires deterministically rather than racing the sub-millisecond idle path.
+  std::this_thread::sleep_for(std::chrono::milliseconds(2));
+
+  // Next command: the elapsed time re-triggers a cycle-time MS1, queued at priority 0, dequeued before the
+  // MS2s (priority 2). Same fields/values as before the migration -- only the MS1 feed mechanism changed.
   ScanCommand cmd{};
   int r = ida->getNextScanCommand(cmd);
   TEST_EQUAL(r, 1)
@@ -1282,11 +1344,12 @@ START_SECTION(processScan_conditional_ms2_requires_tags)
   // conditional_json has conditional_ms2=true but fasta="" — no tag targeting possible
   FLASHIda* ida = new FLASHIda(const_cast<char*>(conditional_json));
 
-  int total = pushAllScans(ida, ms1_scans);
-  TEST_EQUAL(total > 0, true)
+  // Drive MS1 via engine-id echo with NO MS2 feed; feed one emitted MS2 back ourselves below.
+  AcqResult acq = runInterleaved(ida, ms1_scans, {});
+  TEST_EQUAL(acq.ms2_cmds.size() > 0, true)
+  ABORT_IF(acq.ms2_cmds.empty())
 
-  ScanCommand ms2_cmd{};
-  ida->getNextScanCommand(ms2_cmd);
+  const ScanCommand& ms2_cmd = acq.ms2_cmds[0];
   TEST_EQUAL(std::strlen(ms2_cmd.scan_description) <= 15, true)
 
   const auto& ms2 = ms2_scans[0];
@@ -1312,13 +1375,12 @@ START_SECTION(processScan_tag_targeting_produces_followups)
   ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
   FLASHIda* ida = new FLASHIda(const_cast<char*>(conditional_with_tags_json));
 
-  // Push all 50 MS1 scans
-  int total = pushAllScans(ida, ms1_scans);
-  TEST_EQUAL(total > 0, true)
+  // Drive MS1 via engine-id echo with NO MS2 feed; feed one emitted MS2 back ourselves below.
+  AcqResult acq = runInterleaved(ida, ms1_scans, {});
+  TEST_EQUAL(acq.ms2_cmds.size() > 0, true)
+  ABORT_IF(acq.ms2_cmds.empty())
 
-  // Dequeue one MS2 command
-  ScanCommand ms2_cmd{};
-  ida->getNextScanCommand(ms2_cmd);
+  const ScanCommand& ms2_cmd = acq.ms2_cmds[0];
   TEST_EQUAL(std::strlen(ms2_cmd.scan_description) <= 15, true)
   TEST_EQUAL(ms2_cmd.msn_level, 2)
   TEST_EQUAL(ms2_cmd.priority, 2)
@@ -1459,20 +1521,13 @@ START_SECTION(processScan_ms1_intensity_selection)
   FLASHIda* ida_qscore = new FLASHIda(const_cast<char*>(standard_json));
   FLASHIda* ida_intensity = new FLASHIda(const_cast<char*>(intensity_selection_json));
 
-  int n_qscore = pushAllScans(ida_qscore, ms1_scans);
-  int n_intensity = pushAllScans(ida_intensity, ms1_scans);
+  // Drive MS1 via engine-id echo for each selection metric; the collected MS2 commands are exactly the
+  // non-AGC commands the old drain-until-first-AGC loop counted.
+  AcqResult acq_q = runInterleaved(ida_qscore, ms1_scans, {});
+  AcqResult acq_i = runInterleaved(ida_intensity, ms1_scans, {});
 
-  TEST_EQUAL(n_qscore > 0, true)
-  TEST_EQUAL(n_intensity > 0, true)
-
-  ScanCommand cmd_q{};
-  ScanCommand cmd_i{};
-  int q_count = 0, i_count = 0;
-  while (ida_qscore->getNextScanCommand(cmd_q)) { if (cmd_q.is_agc) break; q_count++; }
-  while (ida_intensity->getNextScanCommand(cmd_i)) { if (cmd_i.is_agc) break; i_count++; }
-
-  TEST_EQUAL(q_count > 0, true)
-  TEST_EQUAL(i_count > 0, true)
+  TEST_EQUAL(acq_q.ms2_cmds.size() > 0, true)
+  TEST_EQUAL(acq_i.ms2_cmds.size() > 0, true)
 
   delete ida_qscore;
   delete ida_intensity;
@@ -1486,8 +1541,10 @@ START_SECTION(processScan_ms1_none_selection)
   ABORT_IF(ms1_scans.empty())
   FLASHIda* ida = new FLASHIda(const_cast<char*>(none_selection_json));
 
-  int total = pushAllScans(ida, ms1_scans);
-  TEST_EQUAL(total, 0)
+  // Drive MS1 via engine-id echo. selection=none -> the MS1 path selects nothing and pushes 0 MS2 commands
+  // (FLASHIda.cpp:789-792), so no MS2 commands are ever emitted.
+  AcqResult acq = runInterleaved(ida, ms1_scans, {});
+  TEST_EQUAL(acq.ms2_cmds.size(), (size_t)0)
 
   ScanCommand cmd{};
   TEST_EQUAL(ida->getNextScanCommand(cmd), true)  // idle cycle always returns 1
@@ -1514,15 +1571,18 @@ START_SECTION(processScan_ms1_max_targets_cap)
 
   // Run all MS1 scans through a fresh engine (max_targets, HCD or HCD+ETD) with per-scan results logging;
   // return children-per-MS1-scan and assert the logging join contract (commands_pushed == #child_ids).
+  // MS1 is driven via the engine-id-echo contract (runInterleaved): the always-on MS1 gate rejects the old
+  // fabricated "scan_"+id feed, so we feed each survey with the engine's own scan_description. Only MS1
+  // scans are fed (ms2_scans={} -> MS2 commands are collected but never fed back), so every data row in the
+  // results TSV is an MS1 result row, in scan order -- exactly as readMs1ResultRows assumes. Per-scan
+  // selection is unchanged by interleaving (same spectra, same order, same accumulated exclusion state).
   auto runCase = [&](int max_targets, bool etd) -> std::vector<int> {
     std::string path = std::string("p4u_maxcap_") + (etd ? "etd" : "hcd") + "_"
                      + std::to_string(max_targets) + "_results.tsv";
     std::remove(path.c_str());  // results stream opens in append mode -> ensure a fresh file
     std::string cfg = buildCapConfig(max_targets, etd, path);
     FLASHIda* ida = new FLASHIda(const_cast<char*>(cfg.c_str()));
-    for (const auto& s : ms1_scans)
-      ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1,
-                       ("scan_" + s.scan_id).c_str());
+    runInterleaved(ida, ms1_scans, {});
     delete ida;  // flush + close the results TSV
     std::vector<int> children;
     for (const auto& r : readMs1ResultRows(path)) { TEST_EQUAL(r.first, r.second) children.push_back(r.first); }
@@ -1654,15 +1714,16 @@ START_SECTION(processScan_ms1_min_charge_filter)
   auto scans = loadTsvScans(ms1_tsv_path);
   ABORT_IF(scans.empty())
 
-  for (const auto& scan : scans)
-  {
-    ida.processScan(scan.mzs.data(), scan.ints.data(), (int)scan.mzs.size(),
-                    scan.rt, 1, ("scan_" + scan.scan_id).c_str(), -50.0);
-  }
+  // Drive MS1 via engine-id echo (the always-on MS1 gate rejects fabricated "scan_"+id ids; feeding the
+  // engine's own survey id lets the spectrum actually reach deconvolution/selection so the min_charge=99
+  // FILTER -- not the gate -- is what produces zero MS2 commands, preserving this test's intent).
+  AcqResult acq = runInterleaved(&ida, scans, {});
 
-  // With min_charge=99, no precursor passes the filter, so no deconvolution-derived
-  // MS2 is produced. getNextScanCommand has no return-0 path: when the queue is empty
-  // it emits an idle-cycle AGC and returns 1 (cf. processScan_commands_dequeued).
+  // With min_charge=99, no precursor passes the filter, so no deconvolution-derived MS2 is produced.
+  TEST_EQUAL(acq.ms2_cmds.size(), (size_t)0)
+
+  // getNextScanCommand has no return-0 path: when the queue is empty it emits an idle-cycle AGC and
+  // returns 1 (cf. processScan_commands_dequeued).
   ScanCommand cmd{};
   int result = ida.getNextScanCommand(cmd);
   TEST_EQUAL(result, 1)
@@ -1814,6 +1875,63 @@ START_SECTION(ms1_agc_resolved_from_pending_map)
   // n >= 0 (may or may not produce MS2 commands from a single scan)
   TEST_EQUAL(n >= 0, true)
   TEST_EQUAL(ida->getQueueForTest().pendingScanMapSize(), (size_t)0)
+
+  delete ida;
+}
+END_SECTION
+
+// ADDITIVE: pins the always-on MS1 gate (FLASHIda.cpp:775) — an MS1 fed with a tracking id that was never
+// emitted as a survey command is rejected (return 0), an MS1 fed with the engine's OWN survey id is accepted
+// (selectable -> >=1 MS2), and that resolved id cannot be reused. This is the engine-side enforcement that
+// FORCES the interleaved engine-id-echo harness contract (docs/kb/test-harness/README.md, invariant 6): a
+// test harness cannot fabricate MS1 ids; it must pull the survey command first, then echo its scan_description.
+START_SECTION(processScan_ms1_gate_rejects_unrequested_id)
+{
+  // Same selectable MS1 fixture + selecting config as processScan_ms1_returns_commands.
+  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(ms1_scans.empty())
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(standard_json));
+
+  // ---- NEGATIVE: a never-emitted tracking id is rejected by the gate ----
+  // "ZZZ" is a syntactically valid 3-char base-94 id, 'S' is the MS1-survey type code, but this id was never
+  // minted/emitted as a command, so it is not in pending_scan_map_ -> the gate returns 0 before any selection.
+  const size_t pending_before = ida->getQueueForTest().pendingScanMapSize();
+  const auto& neg = ms1_scans[0];
+  int ret_neg = ida->processScan(neg.mzs.data(), neg.ints.data(), (int)neg.mzs.size(), neg.rt, 1, "ZZZS");
+  TEST_EQUAL(ret_neg, 0)
+  // No MS2 was queued and no pending entry was added: the spectrum never reached deconvolution/selection.
+  TEST_EQUAL(ida->getQueueForTest().pendingScanMapSize(), pending_before)
+
+  // ---- POSITIVE: the engine's OWN survey id is accepted ----
+  // Drain commands until a real (non-AGC, non-empty descriptor) MS1 survey is emitted; the idle cycle alternates
+  // AGC (skip) then a priority-3 MS1 survey whose minted id IS registered in pending_scan_map_ at dequeue.
+  ScanCommand survey{};
+  bool got_survey = false;
+  for (int i = 0; i < 8 && !got_survey; ++i)
+  {
+    int rs = ida->getNextScanCommand(survey);
+    TEST_EQUAL(rs, 1)
+    if (survey.is_agc) continue;                 // idle-cycle AGC -> pushes the priority-3 MS1 for the next call
+    if (survey.scan_description[0] == '\0') continue;
+    if (survey.msn_level <= 1) got_survey = true; // a real survey-MS1 command with a minted, emitted id
+  }
+  ABORT_IF(!got_survey)
+  TEST_EQUAL(std::strlen(survey.scan_description) <= 15, true)
+  TEST_EQUAL(survey.msn_level, 1)
+  TEST_EQUAL(survey.is_agc, 0)
+
+  // Feed the selectable MS1 stamped with the engine's OWN scan_description -> gate passes, selection runs.
+  const auto& pos = ms1_scans[0];
+  int ret_pos = ida->processScan(pos.mzs.data(), pos.ints.data(), (int)pos.mzs.size(), pos.rt, 1,
+                                 survey.scan_description);
+  TEST_EQUAL(ret_pos >= 1, true)  // selectable MS1 -> at least one MS2 command pushed
+
+  // ---- NO-REUSE: the now-resolved survey id is rejected on a second feed ----
+  // processScan resolved (erased) the survey id from pending_scan_map_, so a repeat feed with the SAME id is
+  // no longer "emitted" -> the gate rejects it (return 0), symmetric with the MS2/MS3 resolve-once gate.
+  int ret_reuse = ida->processScan(pos.mzs.data(), pos.ints.data(), (int)pos.mzs.size(), pos.rt, 1,
+                                   survey.scan_description);
+  TEST_EQUAL(ret_reuse, 0)
 
   delete ida;
 }

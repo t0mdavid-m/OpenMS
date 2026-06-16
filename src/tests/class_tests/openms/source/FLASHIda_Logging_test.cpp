@@ -47,9 +47,15 @@ START_SECTION(ida_log_contract_roundtrip)
   std::string json = buildJsonWithRuntime(ida_log_file, "", "");
   FLASHIda ida(const_cast<char*>(json.c_str()));
 
-  // Push all MS1 scans
-  int total_commands = pushAllScans(&ida, ms1_scans);
-  TEST_TRUE(total_commands > 0);
+  // Drive the MS1 surveys via the canonical interleaved driver: the engine emits each survey
+  // command and we feed the next ms1_standard scan back stamped with the engine's OWN tracking id
+  // (was pushAllScans' fabricated encode(800000+i) ids, which the always-on MS1 gate now rejects ->
+  // 0 precursors). No MS2 fixture needed: the ida_log is written at MS1 time and ms2 selection is
+  // "none" here, so MS2 commands are recorded but not fed. The engine selecting >=1 precursor per
+  // MS1 (ms1_standard) yields >=1 emitted MS2 command -- the faithful analog of the old
+  // total_commands>0 (which counted MS2 commands pushed during MS1 processing).
+  AcqResult acq = runInterleaved(&ida, ms1_scans, std::vector<ScanData>{});
+  TEST_TRUE(acq.ms2_cmds.size() > 0);
 
   // Parse the IDA log back using parseFLASHIdaLog
   auto parsed = FLASHIda::parseFLASHIdaLog(ida_log_file);
@@ -320,17 +326,71 @@ START_SECTION(join_integrity)
   }
   TEST_TRUE(checked_any_child);
 
+  // ----------------------------------------------------------------------------
+  // Backward edge (ADDITIVE -- the forward edge above checks every results child_id
+  // resolves to a commands tracking_id; here we walk the lineage the OTHER way).
+  // Build tracking_id -> ms_level from the commands TSV so result rows (which classify
+  // by their id appearing as an emitted command) can be resolved to a level.
+  // ----------------------------------------------------------------------------
+  std::map<std::string, int> cmd_level;
+  {
+    int id_col = cmd_tsv.colIndex("tracking_id");
+    int lvl_col = cmd_tsv.colIndex("ms_level");
+    TEST_TRUE(id_col >= 0 && lvl_col >= 0);
+    for (const auto& row : cmd_tsv.rows)
+      if (id_col < (int)row.size() && lvl_col < (int)row.size())
+        cmd_level[row[id_col]] = std::atoi(row[lvl_col].c_str());
+  }
+
+  int res_id_col = res_tsv.colIndex("tracking_id");
+  int res_parent_col = res_tsv.colIndex("parent_tracking_id");
+  TEST_TRUE(res_id_col >= 0 && res_parent_col >= 0);
+
+  // (a) No MS1 results-row carries the "~~~" sentinel tracking_id. An MS1 result row is one
+  //     whose id is NOT an emitted MS2/MS3 command (i.e. absent from cmd_level OR level==1).
+  //     "~~~" is the survey-MS1 sentinel the engine must never echo into a real results row.
+  bool checked_ms1_sentinel = false;
+  for (const auto& row : res_tsv.rows)
+  {
+    if (res_id_col >= (int)row.size()) continue;
+    const std::string& tid = row[res_id_col];
+    auto it = cmd_level.find(tid);
+    bool is_ms1 = (it == cmd_level.end()) || (it->second == 1);  // MS1 survey input row
+    if (!is_ms1) continue;
+    checked_ms1_sentinel = true;
+    TEST_TRUE(tid != "~~~");
+  }
+  TEST_TRUE(checked_ms1_sentinel);
+
+  // (b) Every MS2 results-row parent_tracking_id resolves to an emitted MS1-LEVEL command id.
+  //     An MS2 result row is one whose id is an emitted command at level 2; its parent must be
+  //     present in the commands level map at level 1 (the survey MS1 that spawned it).
+  bool checked_ms2_parent = false;
+  bool ms2_parent_ok = true;
+  for (const auto& row : res_tsv.rows)
+  {
+    if (res_id_col >= (int)row.size() || res_parent_col >= (int)row.size()) continue;
+    auto it = cmd_level.find(row[res_id_col]);
+    if (it == cmd_level.end() || it->second != 2) continue;  // MS2 result rows only
+    const std::string& parent = row[res_parent_col];
+    checked_ms2_parent = true;
+    auto pit = cmd_level.find(parent);
+    ms2_parent_ok = ms2_parent_ok && (pit != cmd_level.end()) && (pit->second == 1);
+  }
+  TEST_TRUE(checked_ms2_parent);
+  TEST_TRUE(ms2_parent_ok);
+
   std::remove(commands_file.c_str());
   std::remove(results_file.c_str());
 }
 END_SECTION
 
-// Test 5: Crash safety -- files are valid TSV after each operation (including MS3)
+// Test 5: Crash safety -- the command/results TSV files stay valid across a full MS3 cycle
 START_SECTION(crash_safety_valid_tsv)
 {
-  // Real CytC MS1+MS2 with MS3 enabled so the MS2 and MS3 crash-safety paths below are
-  // actually reached; with MS3 off the MS3 block was unreachable and the MS2 block was a
-  // no-failing-else conditional, so the section validated only the MS1 path.
+  // Real CytC MS1+MS2 with MS3 enabled so the MS2 and MS3 crash-safety paths are actually
+  // reached; with MS3 off the MS3 commands never fire and the section would validate only the
+  // MS1 path. (Driven via runInterleaved -- see the per-stage rationale at the cycle call below.)
   auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
   auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
   ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
@@ -344,7 +404,7 @@ START_SECTION(crash_safety_valid_tsv)
   std::string json = buildJsonWithRuntime("", commands_file, results_file, true);
   FLASHIda ida(const_cast<char*>(json.c_str()));
 
-  // After constructor: headers should exist
+  // After constructor: headers should exist (pre-cycle: no scans driven yet)
   {
     auto cmd_tsv = TSVFile::parse(commands_file);
     TEST_TRUE(cmd_tsv.headers.size() > 0);
@@ -352,8 +412,19 @@ START_SECTION(crash_safety_valid_tsv)
     TEST_TRUE(res_tsv.headers.size() > 0);
   }
 
-  // Push all MS1 scans, check results file is valid
-  pushAllScans(&ida, ms1_scans);
+  // Drive the full MS1->MS2->MS3 cycle via the canonical interleaved driver. The old staged feed
+  // (pushAllScans + manual MS2 drain + manual MS2-feed + manual MS3 drain + manual MS3-feed) fed MS1
+  // under fabricated encode(800000+i) ids, which the always-on MS1 gate now rejects -> 0 precursors ->
+  // the MS2/MS3 stages were never reached. runInterleaved pulls one command at a time and feeds the
+  // matching cytC scan back stamped with the ENGINE's own descriptor (MS3 via the MS2-as-MS3 shortcut,
+  // null manifest), so MS1->MS2->MS3 chains off the engine's ids end-to-end. The files are written
+  // incrementally during the call, so the post-cycle validity parse below confirms no partial/corrupt
+  // row was ever emitted -- the same crash-safety invariant the staged checks asserted per operation.
+  auto cycle = runFullCycle(&ida, ms1_scans, ms2_scans);
+  TEST_TRUE(cycle.ms2_cmds.size() > 0);  // MS2 commands produced (was: ms2_cmds.size() > 0 after drain)
+  TEST_TRUE(cycle.ms3_cmds.size() > 0);  // MS3 must have fired (was: ms3_cmds.size() > 0 after drain)
+
+  // results file is valid: >=1 row and every row has the header column count (no torn writes)
   {
     auto res_tsv = TSVFile::parse(results_file);
     TEST_TRUE(res_tsv.rows.size() >= 1);
@@ -361,58 +432,12 @@ START_SECTION(crash_safety_valid_tsv)
       TEST_EQUAL(row.size(), res_tsv.headers.size());
   }
 
-  // Dequeue all MS2 commands (break on the idle-cycle AGC); commands file must stay valid
-  // and at least one MS2 command must have been produced (positive expectation, not a
-  // no-failing-else conditional).
-  std::vector<ScanCommand> ms2_cmds;
-  ScanCommand cmd{};
-  while (ida.getNextScanCommand(cmd) > 0)
-  {
-    if (cmd.msn_level == 2) ms2_cmds.push_back(cmd);
-    if (cmd.is_agc) break;
-  }
-  TEST_TRUE(ms2_cmds.size() > 0);
+  // commands file is valid: >=1 row and every row has the header column count (no torn writes)
   {
     auto cmd_tsv = TSVFile::parse(commands_file);
     TEST_TRUE(cmd_tsv.rows.size() >= 1);
     for (const auto& row : cmd_tsv.rows)
       TEST_EQUAL(row.size(), cmd_tsv.headers.size());
-  }
-
-  // Feed every MS2 result back, check results file is still valid
-  for (const auto& m : ms2_cmds)
-    ida.processScan(ms2_scans[0].mzs.data(), ms2_scans[0].ints.data(),
-                    (int)ms2_scans[0].mzs.size(), ms2_scans[0].rt, 2,
-                    m.scan_description);
-  {
-    auto res_tsv = TSVFile::parse(results_file);
-    for (const auto& row : res_tsv.rows)
-      TEST_EQUAL(row.size(), res_tsv.headers.size());
-  }
-
-  // Dequeue MS3 commands (break on idle AGC); commands file valid and MS3 must have fired.
-  std::vector<ScanCommand> ms3_cmds;
-  while (ida.getNextScanCommand(cmd) > 0)
-  {
-    if (cmd.msn_level == 3) ms3_cmds.push_back(cmd);
-    if (cmd.is_agc) break;
-  }
-  TEST_TRUE(ms3_cmds.size() > 0);
-  {
-    auto cmd_tsv = TSVFile::parse(commands_file);
-    for (const auto& row : cmd_tsv.rows)
-      TEST_EQUAL(row.size(), cmd_tsv.headers.size());
-  }
-
-  // Feed every MS3 result back, check results file is still valid
-  for (const auto& m : ms3_cmds)
-    ida.processScan(ms2_scans[0].mzs.data(), ms2_scans[0].ints.data(),
-                    (int)ms2_scans[0].mzs.size(), ms2_scans[0].rt, 3,
-                    m.scan_description);
-  {
-    auto res_tsv = TSVFile::parse(results_file);
-    for (const auto& row : res_tsv.rows)
-      TEST_EQUAL(row.size(), res_tsv.headers.size());
   }
 
   std::remove(commands_file.c_str());

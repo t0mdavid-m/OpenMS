@@ -11,9 +11,12 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FAIMS.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 
+#include "FLASHIda_TestHelpers.h"  // runInterleaved / AcqResult / ScanData — the canonical engine-id-echo driver
+
 #include <vector>
 #include <set>
 #include <cmath>
+#include <cstring>
 
 using namespace OpenMS;
 
@@ -260,6 +263,22 @@ namespace
   {
     return new FLASHIda(const_cast<char*>(non_faims_config));
   }
+
+  // N empty-peak MS1 surveys (no mzs/ints => deconvolution finds 0 precursors = the "low-precursor" case the
+  // CV skip tests want), each with a distinct RT step. Fed one-per-survey by runInterleaved under the engine's
+  // OWN emitted tracking id, so the always-on MS1 gate (FLASHIda.cpp:775) passes and the engine paces the CVs.
+  inline std::vector<ScanData> emptyMs1Surveys(int n, double rt_step = 1.0)
+  {
+    std::vector<ScanData> v;
+    v.reserve(n);
+    for (int i = 0; i < n; ++i)
+    {
+      ScanData s;            // mzs/ints intentionally empty -> 0 precursors
+      s.rt = (double)(i + 1) * rt_step;
+      v.push_back(s);
+    }
+    return v;
+  }
 }
 
 START_TEST(FLASHIdaFAIMS, "$Id$")
@@ -271,31 +290,25 @@ START_SECTION(cv_cycling_order_matches_config)
 {
   FLASHIda* ida = createFaims3CV();
 
-  // Each processScan at MS1 level pushes a CV-transition MS1 into the queue.
-  // current_cv_index_ starts at 0; advanceToNextCV_ increments first:
-  //   1st processScan -> advance to index 1 -> CV-transition MS1 with CV -50
-  //   2nd processScan -> advance to index 2 -> CV-transition MS1 with CV -60
-  //   3rd processScan -> advance to index 0 (wrap) -> CV-transition MS1 with CV -40
-  //   4th processScan -> advance to index 1 -> CV-transition MS1 with CV -50
+  // OBSERVE the engine, do not dictate. The engine OWNS CV cycling: it stamps each survey MS1 with its current
+  // CV and, after processing one, advances to the next CV for the survey it pushes. Drive via runInterleaved
+  // feeding empty-peak MS1 (0 precursors) under the engine's own emitted tracking ids, then read the CV off the
+  // drained MS1 commands. current_cv_index_ starts at 0 (CV -40); the engine then cycles -50 -> -60 -> wrap -40:
+  //   ms1_cmds[0] = initial survey at CV -40
+  //   ms1_cmds[1] = next survey at CV -50  (advanced once)
+  //   ms1_cmds[2] = next survey at CV -60  (advanced again)
+  //   ms1_cmds[3] = next survey at CV -40  (wrap-around)
+  std::vector<double> expected_cvs = {-40.0, -50.0, -60.0, -40.0};
 
-  // Input: what the instrument scanned at (starts at initial CV -40, then follows transitions)
-  std::vector<double> input_cvs = {-40.0, -50.0, -60.0, -40.0};
-  // Output: what advanceToNextCV_ pushes as CV-transition MS1
-  std::vector<double> expected_cvs = {-50.0, -60.0, -40.0, -50.0};
+  AcqResult r = runInterleaved(ida, emptyMs1Surveys((int)expected_cvs.size()), std::vector<ScanData>{});
+
+  // The engine emitted at least one survey per requested CV (each fed MS1 = one drained MS1 command).
+  TEST_EQUAL(r.ms1_cmds.size() >= expected_cvs.size(), true)
   for (size_t i = 0; i < expected_cvs.size(); ++i)
   {
-    ida->processScan(nullptr, nullptr, 0, (double)(i + 1), 1, "ms1", input_cvs[i]);
-    ScanCommand cmd{};
-    int result = ida->getNextScanCommand(cmd);
-    TEST_EQUAL(result, 1)
-    TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
-    TEST_EQUAL(cmd.msn_level, 1)
-    TEST_REAL_SIMILAR(cmd.faims_cv, expected_cvs[i])
-    // Drain queued commands; stop at idle AGC + consume following idle MS1
-    while (ida->getNextScanCommand(cmd) == 1) {
-      TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
-      if (cmd.is_agc) { ida->getNextScanCommand(cmd); TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true) break; }
-    }
+    TEST_EQUAL(std::strlen(r.ms1_cmds[i].scan_description) <= 15, true)
+    TEST_EQUAL(r.ms1_cmds[i].msn_level, 1)
+    TEST_REAL_SIMILAR(r.ms1_cmds[i].faims_cv, expected_cvs[i])
   }
 
   delete ida;
@@ -305,35 +318,25 @@ END_SECTION
 // P6-U02: Adaptive CV skipping — low precursor count activates skip
 START_SECTION(adaptive_cv_skip_low_precursor)
 {
-  FLASHIda* ida = createFaimsSkip();
+  FLASHIda* ida = createFaimsSkip();  // max_cv_skip=2, threshold=15, CVs=[-40,-50,-60]
 
-  // processScan with empty spectrum -> 0 precursors < threshold 15
-  // -> updateCVSkip_ doubles CVSkipAmount[0] from 0 to 1
-  // -> advanceToNextCV_: index 1 -> CV -50 (CVSkipAmount[1]=0, no skip)
-  ida->processScan(nullptr, nullptr, 0, 1.0, 1, "ms1", -40.0);
+  // OBSERVE the engine. Each empty-peak survey yields 0 precursors (< threshold 15), so the engine doubles the
+  // just-processed CV's skip amount — but a freshly-entered CV (skip amount still 0) is NOT skipped, so the
+  // engine keeps advancing. Drive via runInterleaved (engine-id-echo) and read the emitted CV sequence:
+  //   ms1_cmds[0] = first survey at CV -40 (then amount[-40] doubles 0->1)
+  //   ms1_cmds[1] = advanced to CV -50     (amount[-50]=0, not skipped; then doubles 0->1)
+  //   ms1_cmds[2] = advanced to CV -60     (amount[-60]=0, not skipped)
+  AcqResult r = runInterleaved(ida, emptyMs1Surveys(3), std::vector<ScanData>{});
 
-  ScanCommand cmd{};
-  int result = ida->getNextScanCommand(cmd);
-  TEST_EQUAL(result, 1)
-  TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
-  TEST_EQUAL(cmd.msn_level, 1)
-  TEST_REAL_SIMILAR(cmd.faims_cv, -50.0)  // advanced to next CV
-
-  // Drain remaining; consume idle AGC + following idle MS1
-  while (ida->getNextScanCommand(cmd) == 1) {
-    TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
-    if (cmd.is_agc) { ida->getNextScanCommand(cmd); TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true) break; }
+  TEST_EQUAL(r.ms1_cmds.size() >= 3, true)
+  for (size_t i = 0; i < 3; ++i)
+  {
+    TEST_EQUAL(std::strlen(r.ms1_cmds[i].scan_description) <= 15, true)
+    TEST_EQUAL(r.ms1_cmds[i].msn_level, 1)
   }
-
-  // Second empty scan at CV=-50 -> CVSkipAmount[1] doubles 0->1
-  // advanceToNextCV_ from index 1: index 2 -> CV -60 (amount=0, use it)
-  ida->processScan(nullptr, nullptr, 0, 2.0, 1, "ms1", -50.0);
-
-  result = ida->getNextScanCommand(cmd);
-  TEST_EQUAL(result, 1)
-  TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
-  TEST_EQUAL(cmd.msn_level, 1)
-  TEST_REAL_SIMILAR(cmd.faims_cv, -60.0)  // advanced to CV -60
+  TEST_REAL_SIMILAR(r.ms1_cmds[0].faims_cv, -40.0)  // initial CV
+  TEST_REAL_SIMILAR(r.ms1_cmds[1].faims_cv, -50.0)  // advanced to next CV (not skipped)
+  TEST_REAL_SIMILAR(r.ms1_cmds[2].faims_cv, -60.0)  // advanced to CV -60 (not skipped)
 
   delete ida;
 }
@@ -373,24 +376,17 @@ START_SECTION(cv_skip_limit_enforced)
 {
   FLASHIda* ida = createFaimsSkip();  // max_cv_skip=2, 3 CVs
 
-  // Drive multiple cycles with empty spectra to build up skip amounts for all CVs.
-  // After enough cycles, all CVSkipAmounts should be capped at 2.
-  // But the skip counters exhaust, so all CVs are still reachable.
-  std::set<double> seen_cvs;
-  for (int cycle = 0; cycle < 15; ++cycle)
-  {
-    // Rotate through CVs
-    double cv = (cycle % 3 == 0) ? -40.0 : (cycle % 3 == 1) ? -50.0 : -60.0;
-    ida->processScan(nullptr, nullptr, 0, (double)(cycle + 1), 1, "ms1", cv);
+  // Drive many empty-peak surveys (0 precursors each) to build up skip amounts for all CVs. The engine OWNS the
+  // skip policy: amounts cap at max_cv_skip=2 and the per-CV skip counters exhaust, so every CV stays reachable.
+  // OBSERVE the engine-emitted CV sequence (runInterleaved, engine-id-echo) and confirm all 3 CVs appear — none
+  // is permanently blocked by skipping.
+  AcqResult r = runInterleaved(ida, emptyMs1Surveys(15), std::vector<ScanData>{});
 
-    // Drain and record CV values
-    ScanCommand drain{};
-    while (ida->getNextScanCommand(drain) == 1)
-    {
-      TEST_EQUAL(std::strlen(drain.scan_description) <= 15, true)
-      if (drain.is_agc) { ida->getNextScanCommand(drain); TEST_EQUAL(std::strlen(drain.scan_description) <= 15, true) break; } // consume idle AGC + MS1
-      seen_cvs.insert(drain.faims_cv);
-    }
+  std::set<double> seen_cvs;
+  for (const auto& c : r.ms1_cmds)
+  {
+    TEST_EQUAL(std::strlen(c.scan_description) <= 15, true)
+    seen_cvs.insert(c.faims_cv);
   }
 
   // All 3 CVs should appear — none permanently blocked
@@ -438,7 +434,22 @@ START_SECTION(cv_transition_ms1_before_ms2s)
 {
   FLASHIda* ida = createFaims3CV();
 
-  // Push two MS2s at priority 2 with parent CV=-40
+  // Drive ONE real engine survey under the engine's OWN emitted tracking id (engine-id-echo, same DRAIN-CONTRACT
+  // as runInterleaved — done inline here because this test observes dequeue ORDER, which runInterleaved abstracts
+  // away). The bootstrap idle cycle emits an AGC and queues an idle MS1 (prio 3) stamped with a valid engine id;
+  // dequeuing it registers it pending, so feeding an empty-peak MS1 back under that id passes the always-on MS1
+  // gate (FLASHIda.cpp:775). That survey (0 precursors) makes the engine advance the CV and push a CV-transition
+  // MS1 at priority 0 (CV -50).
+  ScanCommand boot{};
+  ida->getNextScanCommand(boot);                     // idle AGC; queues idle MS1 (engine id, CV -40)
+  TEST_EQUAL(boot.is_agc, 1)
+  ScanCommand survey{};
+  ida->getNextScanCommand(survey);                   // the idle MS1 carrying the engine's own survey id
+  TEST_EQUAL(survey.msn_level, 1)
+  ida->processScan(nullptr, nullptr, 0, survey.rt, 1, survey.scan_description, survey.faims_cv);
+
+  // Push two MS2s at priority 2 with parent CV=-40 (synthetic seeding — pure pushCommandForTest, unaffected by
+  // the gate). They are now pending BEHIND the just-emitted prio-0 CV-transition MS1.
   ScanCommand ms2_a{};
   ms2_a.msn_level = 2;
   ms2_a.priority = 2;
@@ -452,9 +463,6 @@ START_SECTION(cv_transition_ms1_before_ms2s)
   ms2_b.scan_id = 501;
   ms2_b.faims_cv = -40.0;
   ida->pushCommandForTest(ms2_b);
-
-  // processScan at CV=-40 pushes a CV-transition MS1 at priority 0 for next CV
-  ida->processScan(nullptr, nullptr, 0, 1.0, 1, "ms1", -40.0);
 
   // Dequeue order: CV-transition MS1 (prio 0), then MS2s (prio 2)
   ScanCommand out{};
@@ -482,17 +490,27 @@ END_SECTION
 // P6-U06: Non-FAIMS mode — processScan does not push CV-transition MS1
 START_SECTION(non_faims_no_cv_transition)
 {
-  FLASHIda* ida = createNonFaims();
+  FLASHIda* ida = createNonFaims();  // single CV => faims_enabled_=false
 
-  // Call processScan with non-FAIMS config (single CV = faims_enabled_=false).
-  // With null spectrum data, produces 0 MS2 commands.
-  // Key check: faims_enabled_=false means NO CV-transition MS1 is pushed.
-  ida->processScan(nullptr, nullptr, 0, 1.0, 1, "ms1", 0.0);
+  // Drive ONE real engine survey under the engine's OWN emitted id (engine-id-echo). The bootstrap idle cycle
+  // emits an AGC + queues an idle MS1 (prio 3); dequeuing it registers it pending, so the empty-peak MS1 we feed
+  // back passes the always-on MS1 gate and is genuinely PROCESSED (not gate-rejected). With faims_enabled_=false,
+  // processScan must NOT enter the FAIMS branch -> NO CV-transition MS1 (prio 0) is pushed. So after the survey
+  // the only pending item is the idle MS1 (prio 3); the next getNextScanCommand falls through to the idle cycle
+  // (AGC). A spurious prio-0 CV-transition MS1 would surface here instead of the AGC.
+  ScanCommand boot{};
+  ida->getNextScanCommand(boot);                     // idle AGC; queues idle MS1 (engine id)
+  TEST_EQUAL(boot.is_agc, 1)
+  ScanCommand survey{};
+  ida->getNextScanCommand(survey);                   // the idle MS1 carrying the engine's own survey id
+  TEST_EQUAL(survey.msn_level, 1)
+  int pushed = ida->processScan(nullptr, nullptr, 0, survey.rt, 1, survey.scan_description, 0.0);
+  TEST_EQUAL(pushed, 0)  // empty spectrum => 0 MS2 commands, and (non-FAIMS) no CV-transition MS1
 
-  // Queue should be empty — no CV-transition MS1, no MS2 commands
+  // Next command: idle AGC (no CV-transition MS1 was injected) => non-FAIMS behavior confirmed.
   ScanCommand out{};
   int result = ida->getNextScanCommand(out);
-  TEST_EQUAL(result, 1)  // idle cycle returns AGC = non-FAIMS behavior confirmed
+  TEST_EQUAL(result, 1)
   TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
   TEST_EQUAL(out.is_agc, 1)
 

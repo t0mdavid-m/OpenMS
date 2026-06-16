@@ -791,8 +791,16 @@ START_SECTION(ida_log_all15_fields)
   std::remove(log_f.c_str());
   std::string json = buildJsonWithRuntime(log_f, "", "");
   FLASHIda ida(const_cast<char*>(json.c_str()));
-  int total = pushAllScans(&ida, ms1);
-  TEST_TRUE(total > 0)
+
+  // Drive the MS1 surveys via the canonical interleaved driver: the engine emits each survey command
+  // and we feed the next cytC MS1 scan back stamped with the engine's OWN tracking id (was
+  // pushAllScans' fabricated encode(800000+i) ids, which the always-on MS1 gate now rejects -> 0
+  // precursors -> empty log). The ida_log is written at MS1 time; ms2 selection is "none" here so MS2
+  // commands are recorded but not fed (no MS2 fixture needed). Standard-DDA MS1 selection (qscore,
+  // threshold 0.0) still picks the top precursors per cytC scan -> >=1 emitted MS2 command, the
+  // faithful analog of the old total>0 (MS2 commands pushed during MS1 processing).
+  AcqResult acq = runInterleaved(&ida, ms1, std::vector<ScanData>{});
+  TEST_TRUE(acq.ms2_cmds.size() > 0)
 
   auto parsed = FLASHIda::parseFLASHIdaLog(log_f);
   TEST_TRUE(parsed.size() > 0)
@@ -1148,6 +1156,41 @@ START_SECTION(results_ms3_real_fragment_data)
     TEST_TRUE(matched_rows >= 1)  // Q1 GATE: >=1 FED MS3 scan matched the pinned cytC proteoform
 
     std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
+  }
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// §IONP -- ion-decode parity vectors (C# <-> C++ drift guard)
+//
+// decodeTrailingIonKey (FLASHIda_TestHelpers.h) and the C# DecodeIonFromScanDescription
+// (FLASHIdaLogGolden_test.cs) MUST decode the trailing precursor-ion key identically,
+// byte-for-byte. These are the SHARED parity vectors used in BOTH suites (the C# twin
+// asserts the same table). Each row: a raw scan_description and its expected ion key
+// (or the no-ion / malformed form, which must decode to "none"). Covers the
+// '@'-inside-the-id, multi-digit charge+index, no-ion, MS1-survey, invalid-type, and
+// index-0 / empty edge cases. If this section diverges, the two decoders have drifted.
+/////////////////////////////////////////////////////////////
+START_SECTION(ion_decode_parity_vectors)
+{
+  struct Vec { const char* desc; bool ok; const char* expected; };
+  const Vec vectors[] = {
+    {"!#@R4.450k@5y38", true,  "y38"},   // '@' INSIDE the 3-char id (!#@); rfind/LAST '@' is the charge delim
+    {"!!!R1.000k@2b10", true,  "b10"},
+    {"AAAR12.351k@3y5", true,  "y5"},
+    {"JJJR2.0k@12c144", true,  "c144"},  // multi-digit charge + index
+    {"!!!R5.0k@4",      false, ""},      // no-ion form (nothing after the charge digits)
+    {"!!\"S",           false, ""},      // MS1 survey descriptor, no '@'
+    {"!!!R5.0k@2d10",   false, ""},      // invalid ion type 'd'
+    {"!!!R5.0k@2y0",    false, ""},      // index 0 (<1) invalid
+    {"",                false, ""},      // empty
+  };
+  for (const auto& v : vectors)
+  {
+    std::string key;
+    bool decoded = decodeTrailingIonKey(std::string(v.desc), key);
+    TEST_EQUAL(decoded, v.ok)
+    if (v.ok) { TEST_EQUAL(key, std::string(v.expected)) }
   }
 }
 END_SECTION
