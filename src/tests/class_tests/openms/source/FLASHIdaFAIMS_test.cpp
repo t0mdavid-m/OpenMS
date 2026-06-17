@@ -530,9 +530,9 @@ START_SECTION(refed_ms1_echoes_commanded_faims_cv)
   auto ms2 = loadTsvScans(FI_MS2_HCD);
   ABORT_IF(ms1.empty() || ms2.empty())
 
-  // faims_config: multi-CV [-40,-50,-60] (=> faims_enabled_) + DDA. Flip MS2 selection on so the selected
+  // faims_3cv_config: multi-CV [-40,-50,-60] (=> faims_enabled_) + DDA. Flip MS2 selection on so the selected
   // precursor actually yields MS2 commands (the file's other FAIMS tests use empty surveys + "none").
-  std::string cfg(faims_config);
+  std::string cfg(faims_3cv_config);
   {
     const std::string from = "\"ms2\": { \"selection\": \"none\" }";
     auto p = cfg.find(from);
