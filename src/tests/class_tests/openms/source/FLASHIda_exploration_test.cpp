@@ -1169,39 +1169,49 @@ END_SECTION
 
 START_SECTION(cycle_time_suppression_during_exploration)
 {
-  // P7-U05: MS1 cycle time suppression during active exploration
+  // P7-U05: MS1 cycle-time injection is suppressed WHILE an exploration group is active. Drive the FULL
+  // acquisition through the general harness (runInterleaved) and scope the assertion to the exploration-ACTIVE
+  // window via AcqResult.all_active (the engine's exploration_active_ flag captured at each dequeue). A
+  // cycle-time MS1 (msn_level 1, priority 0, is_agc 0) injected while exploration is INACTIVE — before a group
+  // forms or between groups — is CORRECT engine behavior, so suppression is asserted ONLY where all_active is true.
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
-  ABORT_IF(ms1_scans.empty())
+  auto ms2_scans = loadTsvScans(ms2_tsv_path);
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
 
   FLASHIda* ida = new FLASHIda(const_cast<char*>(cycle_time_exploration_config));
+  AcqResult a = runInterleaved(ida, ms1_scans, std::vector<ScanData>{ms2_scans[0]});
 
-  // Drive over the one canonical interleaved engine-id-echo contract (runInterleaved): feed MS1 surveys
-  // (engine ids) until a group forms; its CE-sweep variants stay queued. While the group is active,
-  // cycle-time MS1 injection is SUPPRESSED, so the FIRST MS2 command appears in the raw dequeue order
-  // (a.all_cmds) with no cycle-time MS1 (msn_level==1 && priority==0) dequeued before it. Same
-  // suppression intent, observed over all_cmds instead of a raw getNextScanCommand peek.
-  AcqResult a = runInterleaved(ida, ms1_scans, std::vector<ScanData>{});
-  delete ida;
+  // The only prio-0 non-AGC MS1 the engine emits is the cycle-time injection (idle survey MS1 is priority 3;
+  // AGC is is_agc==1). FAIMS is off in this config, so there is no CV-transition prio-0 MS1 to confuse it.
+  auto isCycleTimeMS1 = [](const ScanCommand& c) {
+    return c.msn_level == 1 && c.priority == 0 && c.is_agc == 0;
+  };
 
-  // Find the first MS2 command in raw dequeue order, and check no cycle-time MS1 (prio-0) precedes it.
-  int first_ms2_idx = -1;
-  bool cycle_time_ms1_before = false;
+  // Anti-vacuous: a group must have formed (>=1 active-window command) and a variant must have fired.
+  int first_active = -1;
+  bool any_e = false;
   for (int i = 0; i < (int)a.all_cmds.size(); ++i)
   {
-    const ScanCommand& c = a.all_cmds[i];
-    if (c.msn_level == 1 && c.priority == 0 && first_ms2_idx < 0) cycle_time_ms1_before = true;
-    if (c.msn_level == 2) { first_ms2_idx = i; break; }
+    if (first_active < 0 && a.all_active[i]) first_active = i;
+    std::string d(a.all_cmds[i].scan_description);
+    if (d.size() >= 4 && d[3] == 'E') any_e = true;
   }
+  if (first_active < 0 || !any_e) { delete ida; }
+  ABORT_IF(first_active < 0 || !any_e)
 
-  // The first MS2 must be an exploration variant (priority 2, msn_level 2, scan_description[3]=='E') ...
-  TEST_TRUE(first_ms2_idx >= 0)
-  TEST_EQUAL(a.all_cmds[first_ms2_idx].msn_level, 2)
-  TEST_EQUAL(a.all_cmds[first_ms2_idx].priority, 2)
-  std::string desc(a.all_cmds[first_ms2_idx].scan_description);
-  TEST_EQUAL(desc.size() >= 4, true)
-  TEST_EQUAL(desc[3], 'E')
-  // ... and NO cycle-time MS1 (msn_level==1 && priority==0) appears before it (cycle-time suppressed).
-  TEST_EQUAL(cycle_time_ms1_before, false)
+  // Suppression invariant, scoped to the active window: no cycle-time MS1 is dequeued while exploration is active.
+  for (int i = 0; i < (int)a.all_cmds.size(); ++i)
+    if (a.all_active[i]) TEST_EQUAL(isCycleTimeMS1(a.all_cmds[i]), false);
+
+  // Original local intent recovered (now correctly scoped): the FIRST command dequeued while the group is
+  // active is the suppressed exploration variant (priority 2, msn_level 2, scan_description[3]=='E').
+  TEST_EQUAL(a.all_cmds[first_active].msn_level, 2)
+  TEST_EQUAL(a.all_cmds[first_active].priority, 2)
+  std::string first_desc(a.all_cmds[first_active].scan_description);
+  TEST_EQUAL(first_desc.size() >= 4, true)
+  TEST_EQUAL(first_desc[3], 'E')
+
+  delete ida;
 }
 END_SECTION
 

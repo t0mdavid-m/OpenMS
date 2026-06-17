@@ -1072,23 +1072,31 @@ START_SECTION(inclusion_ms2_within_target_window)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
-// §F8-excl -- exclusion (mode 2) tqscore suppression COVERAGE. NOT an engine bug: the enum is correct
-//   (2=exclusion/tqscore reading 'Mass' lines, 3=deep/AllMass). The committed target log had each Mass once
-//   with qscore<0.9, so tqscore never crossed the 0.9 threshold and mode-2 output was byte-identical to DDA
-//   -> the suppression path was never asserted. Here: run DDA to learn a really-selected mass, then write a
-//   target log re-observing it twice within rt_window at qscore 0.7 (tqscore = 1-(1-0.7)^2 = 0.91 > 0.9), and
-//   assert mode-2 does NOT re-select it. Set membership only -> drift-stable.
+// §F8-excl -- exclusion (mode 2) tqscore SOFT DE-PRIORITIZATION COVERAGE. NOT an engine bug: the enum is
+//   correct (2=exclusion/tqscore reading 'Mass' lines, 3=deep/AllMass). The mode-2 target-log tqscore is a
+//   SOFT, iteration-0-only DE-PRIORITIZATION (PrecursorSelection drops tqscore-exceeding masses FIRST, then
+//   BACKFILLS any remaining MS2 slots), NOT a hard exclusion. So with a slack slot budget the de-prioritized
+//   target is backfilled in iteration 1 and re-selected — the old !hasNear(excl, target) assertion was wrong
+//   (it asserted hard elimination, which only the dedicated ProcessScan::processScan_mass_exclusion hard-
+//   exclusion test covers). To make the soft de-prioritization OBSERVABLE we drive a RICH multi-precursor
+//   survey (ms1_ecoli_rich, >=9 selectable masses/scan) with max_targets==1: the single MS2 slot then goes to
+//   a non-suppressed competitor and the de-prioritized target is genuinely selected-OUT. Mode-0 (no log,
+//   max_targets==1) confirms the engine WOULD pick that target as its top pick; mode-2 with the target-log
+//   then de-prioritizes it out. Set membership only -> drift-stable.
 /////////////////////////////////////////////////////////////
 START_SECTION(exclusion_mode2_tqscore_suppresses_target_mass)
 {
-  auto ms1 = loadTsvScans(FI_MS1_STD);
+  // Rich co-eluting E. coli survey: >=9 selectable precursors per scan, so a max_targets==1 slot budget is
+  // genuinely contended — exactly the condition under which SOFT de-prioritization is observable.
+  const std::string FI_MS1_ECOLI = "../../FlashIDA/test-data/spectra/ms1_ecoli_rich.txt";
+  auto ms1 = loadTsvScans(FI_MS1_ECOLI);
   auto ms2 = loadTsvScans(FI_MS2_HCD);
   ABORT_IF(ms1.empty() || ms2.empty())
 
-  // target_logs is the only field that varies (mode 0 vs 2). tqscore_threshold is read from
-  // deconvolution.tqscore_threshold (Config.cpp:98) = 0.9; rt_window 180 >> the tiny ms1_standard RTs,
-  // so every target-log observation is within window of every survey scan.
-  auto cfg = [](int mode, const std::string& target_log_json) {
+  // target_logs + max_targets vary. tqscore_threshold is read from deconvolution.tqscore_threshold
+  // (Config.cpp:98) = 0.9; rt_window 180 >> the tiny ecoli RTs, so every target-log observation is within
+  // window of every survey scan.
+  auto cfg = [](int mode, int max_targets, const std::string& target_log_json) {
     std::ostringstream o;
     o << R"({
       "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
@@ -1099,7 +1107,7 @@ START_SECTION(exclusion_mode2_tqscore_suppresses_target_mass)
       "ms_settings": { "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 }, "ms2": [ { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 } ] },
       "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 }, "agc_interval_seconds": 999999 },
       "files": { "target_logs": [)" << target_log_json << R"(], "fasta": "", "inclusion_list": "", "ptm_list": "" },
-      "selection_strategy": { "ms1": { "selection": "qscore", "max_targets": 5 }, "ms2": { "selection": "none" }, "ms3": { "selection": "none" } }
+      "selection_strategy": { "ms1": { "selection": "qscore", "max_targets": )" << max_targets << R"( }, "ms2": { "selection": "none" }, "ms3": { "selection": "none" } }
     })";
     return o.str();
   };
@@ -1118,9 +1126,12 @@ START_SECTION(exclusion_mode2_tqscore_suppresses_target_mass)
     return masses;
   };
 
-  // 1) DDA baseline (mode 0, no target log): a mass the engine REALLY selects.
-  auto dda = selectedMs2Masses(cfg(0, ""));
-  ABORT_IF(dda.empty())
+  // 1) DDA baseline (mode 0, no target log, max_targets==1): the top pick per scan. dda aggregates one pick
+  //    per scan, so >=2 entries means the survey is productive (NON-VACUITY guard) — NOT a per-scan
+  //    >=2-selectable precondition (the slack-vs-tight contrast below is what certifies contention). The mass
+  //    we then de-prioritize is dda[0].
+  auto dda = selectedMs2Masses(cfg(0, 1, ""));
+  ABORT_IF(dda.size() < 2)
   const double target = dda[0];
 
   // 2) Write a target log re-observing `target` twice within rt_window at qscore 0.7
@@ -1134,17 +1145,31 @@ START_SECTION(exclusion_mode2_tqscore_suppresses_target_mass)
        << "Mass " << std::to_string(target) << "\tScore=0.7\tZ=4\n";
   }
 
-  // 3) Exclusion (mode 2) with that target log: `target` must be suppressed (tqscore > 0.9).
-  auto excl = selectedMs2Masses(cfg(2, "\"" + log_path + "\""));
+  // 3) Exclusion (mode 2) with that target log, STILL max_targets==1: the lone MS2 slot must go to a
+  //    non-suppressed competitor (the rich survey has >=8 others), so the de-prioritized `target` is
+  //    selected-OUT of the single slot. With a slack budget it would be backfilled — hence max_targets==1.
+  auto excl = selectedMs2Masses(cfg(2, 1, "\"" + log_path + "\""));
 
   auto hasNear = [&](const std::vector<double>& v, double t){
     for (double m : v) if (std::abs(m - t) < 0.5) return true;   // same nominal mass (suppression is per-nominal)
     return false;
   };
-  TEST_TRUE(hasNear(dda, target))    // sanity: DDA really selected it
-  // ISSUE(F8-excl): COVERAGE — mode-2 tqscore suppression was never asserted (committed log had each Mass
-  // once, qscore<0.9). With tqscore driven >0.9, `target` must NOT appear among the mode-2 selections.
+  TEST_TRUE(hasNear(dda, target))    // sanity: DDA (mode 0) picks `target` as its top pick
+  // §F8-excl SOFT DE-PRIORITIZATION: the mode-2 target-log tqscore (>0.9) is a SOFT iteration-0 de-
+  //   prioritization — the engine drops `target` to the back of the iteration-0 ranking. With only ONE MS2
+  //   slot and >=8 non-suppressed competitors, `target` loses that slot and does NOT appear among the mode-2
+  //   selections. This proves the SOFT de-prioritization path (target de-prioritized, selected only when a
+  //   slack slot lets it backfill), distinct from HARD exclusion (covered by
+  //   ProcessScan::processScan_mass_exclusion). Set membership only -> drift-stable.
   TEST_TRUE(!hasNear(excl, target))
+
+  // 4) SLACK budget (mode 2, SAME target log, max_targets==64 >> the >=9-19 selectable/scan): iteration 0 can
+  //    no longer fill every slot from non-suppressed competitors, so iteration 1 runs WITHOUT the tqscore
+  //    filter and BACKFILLS the de-prioritized `target` -> it IS re-selected. This is the decisive SOFT proof:
+  //    dropped at budget 1, backfilled at budget 64. A HARD exclusion would suppress it at ANY budget
+  //    (that path is covered by ProcessScan::processScan_mass_exclusion).
+  auto slack = selectedMs2Masses(cfg(2, 64, "\"" + log_path + "\""));
+  TEST_TRUE(hasNear(slack, target))
 
   std::remove(cmd_f.c_str());
   std::remove(log_path.c_str());

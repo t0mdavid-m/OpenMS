@@ -176,10 +176,19 @@ namespace
       bool first = true;
       while (std::getline(f, line))
       {
+        // Manual split that emits N+1 fields for N tabs, preserving a trailing empty field — matching
+        // C# String.Split('\t'). The prior std::getline(iss, col, '\t') loop DROPPED a trailing empty
+        // field, so scan_results rows whose new last column (winner_tracking_id) is empty tokenized to
+        // one fewer column than the header and failed row.size()==headers.size().
         std::vector<std::string> cols;
-        std::istringstream iss(line);
-        std::string col;
-        while (std::getline(iss, col, '\t')) cols.push_back(col);
+        size_t start = 0;
+        while (true)
+        {
+          size_t t = line.find('\t', start);
+          if (t == std::string::npos) { cols.push_back(line.substr(start)); break; }
+          cols.push_back(line.substr(start, t - start));
+          start = t + 1;
+        }
 
         if (first) { result.headers = cols; first = false; }
         else        { result.rows.push_back(cols); }
@@ -247,6 +256,10 @@ namespace
     // CV-transition MS1 drained BEFORE the prio-2 MS2s) that the per-level buckets above lose. Additive;
     // the drain contract is unchanged.
     std::vector<ScanCommand> all_cmds;
+    // Parallel to all_cmds (|all_active| == |all_cmds|): the engine's exploration_active_ flag captured AT
+    // each command's dequeue (FLASHIda::explorationActive()). Lets a caller scope an assertion to exactly
+    // the exploration-ACTIVE window (e.g. cycle-time MS1 suppression holds only while a group is active).
+    std::vector<char> all_active;
     int total_dequeued = 0;
     // single_group_only bookkeeping (see runInterleaved): the processScan return of the first MS1 that
     // forms a group (== # commands it pushed), and the running sum of MS2-feed processScan returns. Both
@@ -291,6 +304,7 @@ namespace
       // AGC/MS1 ticks — in raw dequeue order, BEFORE the idle-tick continue and the per-level bucketing,
       // so callers can assert cross-level interleave the per-level buckets lose.
       r.all_cmds.push_back(cmd);
+      r.all_active.push_back(ida->explorationActive() ? 1 : 0);   // engine's exploration-active flag AT dequeue
       // Idle tick: AGC, empty descriptor, an MS1 re-survey after all ms1_scans have been fed, or (in
       // single_group_only mode) any MS1 survey once the first group has already formed.
       if (cmd.is_agc || cmd.scan_description[0] == '\0' || (cmd.msn_level <= 1 && ms1_fed >= n_ms1)

@@ -185,6 +185,11 @@ namespace OpenMS
     /// Test-only accessor: access the ScanCommandQueue directly
     ScanCommandQueue& getQueueForTest() { return queue_; }
 
+    /// Test-only accessor: is an exploration group currently active? Reads the exact atomic the
+    /// cycle-time injection gate consults (set on group formation, cleared on completion), so a test
+    /// can assert suppression against the engine's real decision variable. Read-only; no behavior change.
+    bool explorationActive() const { return exploration_active_.load(std::memory_order_acquire); }
+
     /**
            @brief parse FLASHIda log file
            @param in_log_file input log file

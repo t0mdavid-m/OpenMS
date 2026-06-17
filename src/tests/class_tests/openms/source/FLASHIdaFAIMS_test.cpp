@@ -432,32 +432,37 @@ END_SECTION
 // P6-U05: CV transition injects an MS1 with the next CV at priority 0 (so it is sent before pending MS2s)
 START_SECTION(cv_transition_ms1_before_ms2s)
 {
-  // Drive a REAL survey through the canonical interleaved harness (engine-id-echo) and observe the CROSS-LEVEL
-  // dequeue order over AcqResult.all_cmds (the additive raw-order capability — the per-level ms1/ms2/ms3 buckets
-  // lose cross-level interleave). A real E. coli MS1 (FI_MS1_STD) selects >=1 precursor, so processScan pushes
-  // prio-2 MS2 commands (FLASHIda.cpp:858) and THEN a prio-0 CV-transition MS1 carrying the NEXT CV
-  // (FLASHIda.cpp:898-915). The queue dequeues by priority 0->3, so the prio-0 CV-transition MS1 is drained
-  // BEFORE the prio-2 MS2s — deterministically, no fallback. This preserves the original intent (prio-0
-  // CV-transition MS1 before the prio-2 MS2s; transition CV -50 vs the MS2's parent CV -40) over a real drive.
-  auto ms1 = loadTsvScans(FI_MS1_STD);
-  ABORT_IF(ms1.empty())
+  // Drive a REAL, guaranteed-selecting survey through the canonical interleaved harness (engine-id-echo) and
+  // observe the CROSS-LEVEL dequeue order over AcqResult.all_cmds (the additive raw-order capability — the
+  // per-level ms1/ms2/ms3 buckets lose cross-level interleave). ms1_ecoli_rich[0] deterministically selects
+  // >=1 precursor at the -40 STARTUP CV (cf. ProcessScan A1[0]==1 under a value-identical selection config),
+  // so processScan pushes prio-2 MS2 commands at CV -40 (FLASHIda.cpp:858) and THEN a prio-0 CV-transition MS1
+  // carrying the NEXT CV -50 (FLASHIda.cpp:898-915). The queue dequeues by priority 0->3, so the prio-0
+  // CV-transition MS1 is drained BEFORE the prio-2 MS2s — deterministically. Feeding exactly ONE survey
+  // (n_ms1==1) keeps a single selection event: the transition MS1 then arrives as an idle tick (recorded in
+  // all_cmds, not re-fed), so no second selection perturbs the trace -> exact -50/-40 are pinnable.
+  const std::string FI_MS1_ECOLI = "../../FlashIDA/test-data/spectra/ms1_ecoli_rich.txt";
+  auto ecoli = loadTsvScans(FI_MS1_ECOLI);
+  ABORT_IF(ecoli.empty())
 
   FLASHIda ida(const_cast<char*>(faims_3cv_config));
-  AcqResult a = runInterleaved(&ida, ms1, std::vector<ScanData>{});
+  AcqResult a = runInterleaved(&ida, std::vector<ScanData>{ecoli[0]}, std::vector<ScanData>{});
 
-  // First prio-0 MS1 (the CV transition) and first MS2, in raw dequeue order.
+  // First prio-0 NON-AGC MS1 (the CV transition) and first MS2, in raw dequeue order. Exclude the startup idle
+  // AGC (also msn_level 1 / priority 0, but is_agc==1, at the -40 startup CV): the CV-transition MS1 is the ONLY
+  // is_agc==0, prio-0, level-1 command (FLASHIda.cpp:908); the idle survey MS1 is priority 3.
   int cv_idx = -1, ms2_idx = -1;
   for (int i = 0; i < (int)a.all_cmds.size(); ++i)
   {
-    if (cv_idx < 0 && a.all_cmds[i].msn_level == 1 && a.all_cmds[i].priority == 0) cv_idx = i;
+    if (cv_idx < 0 && a.all_cmds[i].msn_level == 1 && a.all_cmds[i].priority == 0 && a.all_cmds[i].is_agc == 0) cv_idx = i;
     if (ms2_idx < 0 && a.all_cmds[i].msn_level == 2) ms2_idx = i;
   }
 
   TEST_TRUE(cv_idx >= 0)                 // a prio-0 CV-transition MS1 was emitted
   TEST_TRUE(ms2_idx >= 0)                // the survey selected >=1 precursor -> a prio-2 MS2 was emitted
   TEST_TRUE(cv_idx < ms2_idx)            // prio-0 CV-transition MS1 drained BEFORE the prio-2 MS2s
-  TEST_REAL_SIMILAR(a.all_cmds[cv_idx].faims_cv, -50.0)   // CV transition to the NEXT CV
-  TEST_REAL_SIMILAR(a.all_cmds[ms2_idx].faims_cv, -40.0)  // MS2 carries the parent survey's (current) CV
+  TEST_REAL_SIMILAR(a.all_cmds[cv_idx].faims_cv, -50.0)   // CV-transition MS1 carries the NEXT CV (-40 -> -50)
+  TEST_REAL_SIMILAR(a.all_cmds[ms2_idx].faims_cv, -40.0)  // MS2 carries the -40 startup (parent survey) CV
 }
 END_SECTION
 
