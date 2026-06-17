@@ -279,7 +279,10 @@ namespace OpenMS
                              const std::string& collision_energy = "0", double exploration_score = -1.0,
                              double remaining_ratio = -1.0,
                              const std::string& activation_type = "",
-                             const std::string& reaction_time = "0");
+                             const std::string& reaction_time = "0",
+                             // F5: encoded id of the winning variant; "" on every non-completing /
+                             // non-exploration row. Appended as the LAST scan_results column.
+                             const std::string& winner_tracking_id = "");
 
     /// Write one identification.tsv row for an MS2 or MS3 scan with matched fragments
     void writeIdentificationRow_(const std::string& tracking_id,

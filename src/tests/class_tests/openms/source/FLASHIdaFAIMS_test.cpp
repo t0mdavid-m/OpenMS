@@ -519,4 +519,45 @@ START_SECTION(non_faims_no_cv_transition)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
+// P6-U07 (F7): the ground-truth harness now echoes the engine command's FAIMS CV back on the re-fed MS1
+// (runInterleaved passes cmd.faims_cv to processScan; the C# twin PushScanAndDrainFull sets the "FAIMS CV"
+// trailer). So the engine observes the commanded CV and stamps the produced MS2 with it (FLASHIda.cpp:859).
+// Pre-fix the re-fed MS1 was processed with faims_cv=0.0, so its MS2 carried 0.0 — NOT a configured CV.
+// Set-membership of two engine-derived CVs (no captured float) -> drift-stable.
+START_SECTION(refed_ms1_echoes_commanded_faims_cv)
+{
+  auto ms1 = loadTsvScans(FI_MS1_STD);   // E. coli MS1 reliably selects >=1 precursor under DDA
+  auto ms2 = loadTsvScans(FI_MS2_HCD);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  // faims_config: multi-CV [-40,-50,-60] (=> faims_enabled_) + DDA. Flip MS2 selection on so the selected
+  // precursor actually yields MS2 commands (the file's other FAIMS tests use empty surveys + "none").
+  std::string cfg(faims_config);
+  {
+    const std::string from = "\"ms2\": { \"selection\": \"none\" }";
+    auto p = cfg.find(from);
+    ABORT_IF(p == std::string::npos)
+    cfg.replace(p, from.size(), "\"ms2\": { \"selection\": \"intensity\", \"max_targets\": 1 }");
+  }
+  FLASHIda ida(const_cast<char*>(cfg.c_str()));
+  AcqResult a = runInterleaved(&ida, ms1, std::vector<ScanData>{ms2[0]});
+
+  const std::set<double> cv_set = { -40.0, -50.0, -60.0 };
+  bool found_ms1_cv = false;
+  for (const auto& c : a.ms1_cmds) if (cv_set.count(c.faims_cv)) { found_ms1_cv = true; break; }
+  TEST_TRUE(found_ms1_cv)   // FAIMS run: surveys carry a configured CV
+
+  int checked = 0;
+  for (const auto& c : a.ms2_cmds)
+  {
+    // ISSUE(F7): pre-fix the re-fed MS1 dropped cmd.faims_cv -> processScan saw 0.0 -> the produced MS2
+    // carried faims_cv=0.0 (not in the configured CV set). The echo now binds the survey's CV to its MS2.
+    TEST_EQUAL(cv_set.count(c.faims_cv), 1)
+    checked++;
+  }
+  TEST_TRUE(checked >= 1)   // >=1 MS2 produced, each carrying a configured (parent-survey) FAIMS CV
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
 END_TEST

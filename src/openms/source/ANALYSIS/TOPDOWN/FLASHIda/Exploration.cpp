@@ -115,7 +115,8 @@ namespace OpenMS
   std::vector<ScanCommand> Exploration::initiate(int msn_level, const PeakGroup& pg, int charge,
       double faims_cv, ScanCommandQueue& queue, const ScanCommand* ms_ctx,
       char ion_type, int frag_index,
-      const MS3FragmentMatcher::ProteoformContext& proto_ctx)
+      const MS3FragmentMatcher::ProteoformContext& proto_ctx,
+      const FragmentAnalysis::FragmentScores& frag_scores)
   {
     std::vector<ScanCommand> commands;
 
@@ -182,7 +183,7 @@ namespace OpenMS
       {
         cmd = queue.buildMS3(*ms_ctx, variant_config,
                              precursor_mz, charge, isolation_width,
-                             ion_type, frag_index, expl_priority);
+                             ion_type, frag_index, expl_priority, frag_scores);  // F2: real stage-1 scalars
       }
       else
       {
@@ -406,12 +407,31 @@ namespace OpenMS
         ctx.ms2_isolation_width = variant_cmd.stages[0].isolation_width;
         ctx.ms2_charge_intensity = variant_cmd.precursor_intensity;
         ctx.ms2_window_snr = queue.windowSnr(variant_cmd.scan_id);
+        // F4: for an MS2 exploration group the originating_cmd is the MS1 survey (num_stages==0),
+        // so the guard above leaves ms1_precursor_* at 0. The precursor the engine actually
+        // deconvolved is the group's own precursor — source it directly. (MS3-'E' branch above is
+        // left UNCHANGED: there the originating_cmd is the real MS2 and its stage-0 triplet is right.)
+        ctx.ms1_precursor_mass = group.precursor_mass;
+        ctx.ms1_precursor_mz = group.precursor_mz;
+        ctx.ms1_precursor_charge = group.precursor_charge;
       }
       ctx.fragment_mass = group.precursor_mass;
       return ctx;
     };
 
     info.ms2_context = buildMS2ContextForVariant(variant_index);
+
+    // F3: for MS3 the matcher leaves matched_protein/proteoform_sequence empty (calibrateAndScore sets
+    // only ppm/region), so every MS3-'E' scan_results row would otherwise log a blank protein. Source the
+    // parent proteoform (already computed into ms2_context from group.proteoform_ctx) + the configured
+    // protein/fasta, identical to the 'R' path. Runs for EVERY variant (before the all-received return),
+    // so all MS3-'E' rows are covered, not just the group-completing one.
+    if (group.msn_level >= 3 && !info.ms2_context.proteoform_sequence.empty())
+    {
+      info.proteoform_sequence = info.ms2_context.proteoform_sequence;
+      info.matched_protein = config_.targeting().fasta_file.empty()
+          ? config_.targeting().protein_sequence : config_.targeting().fasta_file;
+    }
 
     auto& meta = v.result.getOrCreateOptimizationMetadata();
     meta.group_id = group.group_id;
@@ -465,6 +485,10 @@ namespace OpenMS
 
       // Re-populate identification_result after batch re-scoring updated it
       info.identification_result = group.variants[variant_index].identification_result;
+      // F5: re-read the completing variant's OWN post-calibration self-score so its scan_results
+      // exploration_score matches its calibrated identification.tsv row (decision F5(a)). This is still
+      // the completing variant's value — NOT the winner's; the winner is reported via winner_tracking_id.
+      info.score = group.variants[variant_index].score;
 
       // Return calibrated identification rows for other variants in the completed group.
       for (size_t vi = 0; vi < group.variants.size(); ++vi)
@@ -513,18 +537,12 @@ namespace OpenMS
       group.complete = true;
       group.variants[best_idx].result.getOrCreateOptimizationMetadata().is_best_variant = true;
 
-      // Report the WINNER's metrics in the returned info (not the last-received variant's, which is
-      // what was populated above before winner selection / batch re-scoring).
-      {
-        const ExplorationVariant& win = group.variants[best_idx];
-        info.score = best_score;
-        info.variant_index = win.variant_index;
-        info.collision_energy = win.collision_energy;
-        info.activation_type = win.activation_type;
-        info.reaction_time = win.reaction_time;
-        info.tic_coverage = win.tic_coverage;
-        info.fragment_count = win.fragment_count;
-      }
+      // F5: the completing variant's info row now keeps its OWN metrics (set at :351-365 + the post-
+      // calibration score re-read above). It is NO LONGER overwritten with the winner's CE/score/index —
+      // that overwrite lopsided the log (the last-resolved variant masqueraded as the winner, so e.g.
+      // variant_index 4 / CE 40 vanished and index 0 appeared twice). The winner stays identifiable via
+      // the new winner_tracking_id column — a cross-row pointer set ONLY on this group-completing row.
+      info.winner_tracking_id = group.variants[best_idx].tracking_id;
 
       std::cout << "[EXPL-WINNER] group=" << group.group_id
                 << " winner_idx=" << best_idx
@@ -544,10 +562,20 @@ namespace OpenMS
         ScanCommand prod_cmd;
         if (group.msn_level >= 3)
         {
+          // F2: re-supply the fragment's stage-1 scores so the production MS3 carries real *_s1 scalars.
+          // The winning variant's command already holds them (its buildMS3 received frag_scores above),
+          // so reconstruct a FragmentScores from that variant rather than the default-empty struct.
+          const ScanCommand& wcmd = group.variants[best_idx].cmd;
+          FragmentAnalysis::FragmentScores wfs;
+          wfs.mono_mass = wcmd.mono_mass_s1;                 wfs.qscore = wcmd.qscore_s1;
+          wfs.charge_cos = wcmd.charge_cos_s1;               wfs.charge_snr = wcmd.charge_snr_s1;
+          wfs.iso_cos = wcmd.iso_cos_s1;                     wfs.snr = wcmd.snr_s1;
+          wfs.charge_score = wcmd.charge_score_s1;           wfs.ppm_error = wcmd.ppm_error_s1;
+          wfs.precursor_intensity = wcmd.precursor_intensity_s1; wfs.peakgroup_intensity = wcmd.peakgroup_intensity_s1;
           prod_cmd = queue.buildMS3(group.variants[best_idx].cmd, prod_config,
                                      group.precursor_mz, group.precursor_charge,
                                      group.isolation_width,
-                                     group.fragment_ion_type, group.fragment_ion_index, 1);
+                                     group.fragment_ion_type, group.fragment_ion_index, 1, wfs);
         }
         else
         {
@@ -707,7 +735,7 @@ namespace OpenMS
         frag_pg.push_back(lp_hi);
 
         auto sub_cmds = initiate(next_level, frag_pg, std::abs(charges[ti]), faims_cv, queue, ms_ctx,
-                                 ion_types[ti], frag_indices[ti], proto_ctx);
+                                 ion_types[ti], frag_indices[ti], proto_ctx, frag_scores[ti]);  // F2: real fragment scores
         nlr.commands.insert(nlr.commands.end(), sub_cmds.begin(), sub_cmds.end());
 
         for (size_t sci = 0; sci < sub_cmds.size(); ++sci)

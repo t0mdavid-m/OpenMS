@@ -31,8 +31,10 @@
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -159,7 +161,7 @@ START_SECTION(schema_column_counts)
   auto i = TSVFile::parse(id_f);
 
   TEST_EQUAL(c.headers.size(), 29)   // E6: + scan_description
-  TEST_EQUAL(r.headers.size(), 33)   // E5: + ms_level
+  TEST_EQUAL(r.headers.size(), 34)   // E5: + ms_level; F5: + winner_tracking_id
   TEST_EQUAL(i.headers.size(), 25)   // I2: + ms2/ms3 isolation_width, window_snr, charge_intensity (6)
 
   // Spot-check exact header identities / order at the boundaries that matter for parsing.
@@ -169,7 +171,9 @@ START_SECTION(schema_column_counts)
   TEST_EQUAL(c.colIndex("hcd_energy"), 21)
   TEST_EQUAL(r.headers.front(), std::string("tracking_id"))
   TEST_EQUAL(r.colIndex("ms_level"), 1)                           // E5: inserted right after tracking_id
-  TEST_EQUAL(r.headers.back(), std::string("processing_duration_ms"))
+  TEST_EQUAL(r.headers.back(), std::string("winner_tracking_id"))   // F5: appended last
+  TEST_EQUAL(r.colIndex("winner_tracking_id"), 33)                 // F5: trailing column index
+  TEST_EQUAL(r.colIndex("processing_duration_ms"), 32)             // now second-to-last
   TEST_EQUAL(r.colIndex("child_ids"), 9)                          // shifted +1 by ms_level@1
   TEST_EQUAL(i.headers.front(), std::string("ms_level"))
   TEST_EQUAL(i.headers.back(), std::string("ms3_charge_intensity"))   // I2: appended last
@@ -517,10 +521,14 @@ START_SECTION(results_identification_tag_count_and_proforma)
   auto idf = TSVFile::parse(id_f);
   ABORT_IF(idf.rows.size() == 0)   // identification must fire, else this gate proves nothing
 
-  // tracking_id -> identification proteoform (rendered via toProForma in the engine writer)
+  // tracking_id -> identification proteoform (rendered via toProForma in the engine writer) + ms_level
   std::map<std::string, std::string> id_proteoform;
+  std::map<std::string, int> id_level;
   for (const auto& row : idf.rows)
+  {
     id_proteoform[cell(idf, row, "tracking_id")] = cell(idf, row, "proteoform");
+    id_level[cell(idf, row, "tracking_id")] = std::atoi(cell(idf, row, "ms_level").c_str());
+  }
 
   bool checked = false;
   for (const auto& row : res.rows)
@@ -528,6 +536,9 @@ START_SECTION(results_identification_tag_count_and_proforma)
     std::string tid = cell(res, row, "tracking_id");
     auto it = id_proteoform.find(tid);
     if (it == id_proteoform.end()) continue;  // only rows that produced an identification (a match)
+    // I3 is the MS2 identification tag_count fix; MS3 rows sentinel tag_count to -1 (F9, covered by §R4/§F9),
+    // so restrict the >0 tag_count floor to MS2 matched rows.
+    if (id_level[tid] != 2) continue;
     checked = true;
     // I3(a): the logged tag_count is the engine's REAL identification tag count, not the FASTA-gated 0.
     // A matched cytC proteoform implies >=1 generated sequence tag.
@@ -586,14 +597,17 @@ START_SECTION(results_ms3_normal_columns)
       TEST_TRUE(act.size() == 2 && inActivationSet(act[0]) && inActivationSet(act[1]))
       TEST_TRUE(rt.size() == 2 && nonNegFinite(toD(rt[0])) && nonNegFinite(toD(rt[1])))
     }
-    TEST_TRUE(toD(cell(res, row, "tag_count")) >= 0.0)
+    // F9: MS3 rows log fragment_count & tag_count as the -1 SENTINEL on EVERY MS3 row — the matched count is
+    // finalized only in the calibrated round and lives in identification.tsv (ms3_fragments); tagging is an
+    // MS2-targeting feature, not used for fragment-based MS3 id. (Was tag_count>=0 / fragment_count>0.)
+    TEST_EQUAL(std::atoi(cell(res, row, "tag_count").c_str()), -1)
+    TEST_EQUAL(std::atoi(cell(res, row, "fragment_count").c_str()), -1)
 
-    // the fix: a matched MS3 row carries protein + proteoform + fragment_count + tic
+    // a matched MS3 row still carries protein + proteoform + tic (these are NOT sentinelized by F9)
     if (!cell(res, row, "matched_protein").empty())
     {
       found_populated = true;
       TEST_TRUE(isProForma(cell(res, row, "proteoform_sequence")))
-      TEST_TRUE(std::atoi(cell(res, row, "fragment_count").c_str()) > 0)
       TEST_TRUE(toD(cell(res, row, "tic_coverage")) > 0.0 && inUnit(toD(cell(res, row, "tic_coverage"))))
     }
   }
@@ -653,6 +667,68 @@ START_SECTION(results_ms2_exploration_columns)
     TEST_TRUE(kids_ok)
   }
   TEST_TRUE(found_expl)
+
+  std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// §F5 -- scan_results.tsv : every exploration variant logs ITS OWN sweep point (variant_index spans
+//        0..total_variants-1 exactly once per group) and exactly ONE row per completed group names the
+//        winner via the trailing winner_tracking_id column. Catches F5 — the winner-overwrite at
+//        Exploration.cpp re-stamped the LAST-resolved variant's row with the WINNER's index/CE/score, so
+//        a variant_index was duplicated and another vanished, and the winner was otherwise unidentifiable.
+//        Set-membership / cross-row resolution only (no captured CE/score) -> drift-stable.
+/////////////////////////////////////////////////////////////
+START_SECTION(results_exploration_per_variant_and_winner)
+{
+  auto ms1 = loadTsvScans(FI_MS1_STD);
+  auto ms2 = loadTsvScans(FI_MS2_HCD);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  std::string cmd_f = "lf_f5_commands.tsv", res_f = "lf_f5_results.tsv";
+  std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
+  std::string json = injectRuntime(explorationConfig(), cmd_f, res_f);   // mass_count -> 5 variants, no baseline
+  FLASHIda ida(const_cast<char*>(json.c_str()));
+  auto r = driveOneExplorationGroup(&ida, ms1, ms2[0]);                  // feeds all variants -> group completes
+  ABORT_IF(r.group_commands == 0)
+
+  auto res = TSVFile::parse(res_f);
+
+  std::map<int, std::set<int>> seen_vi;     // group_id -> set of variant_index logged
+  std::map<int, int> tv_of, winner_count;   // group_id -> total_variants / # rows naming a winner
+  std::map<int, std::string> winner_of;     // group_id -> the winner's tracking_id
+  std::set<std::string> all_row_ids;        // every exploration row's own tracking_id
+  bool found_expl = false;
+  for (const auto& row : res.rows)
+  {
+    int gid = std::atoi(cell(res, row, "exploration_group_id").c_str());
+    if (gid < 0) continue;                  // exploration rows only (non-expl pin -1)
+    found_expl = true;
+    int vi = std::atoi(cell(res, row, "variant_index").c_str());
+    int tv = std::atoi(cell(res, row, "total_variants").c_str());
+    TEST_TRUE(vi >= 0 && tv > 0 && vi < tv)
+    seen_vi[gid].insert(vi);
+    tv_of[gid] = tv;
+    all_row_ids.insert(cell(res, row, "tracking_id"));
+    std::string w = cell(res, row, "winner_tracking_id");
+    if (!w.empty()) { winner_of[gid] = w; winner_count[gid]++; }
+  }
+  TEST_TRUE(found_expl)
+
+  for (const auto& kv : seen_vi)
+  {
+    int gid = kv.first;
+    const std::set<int>& vis = kv.second;
+    // ISSUE(F5): pre-fix variant_index did NOT self-describe (e.g. {0,0,1,2,3} — winner index duplicated,
+    // the completing variant's own index missing) because the completing row was overwritten with the winner.
+    for (int k = 0; k < tv_of[gid]; ++k) TEST_EQUAL(vis.count(k), 1)
+    TEST_EQUAL((int)vis.size(), tv_of[gid])
+    // ISSUE(F5): pre-fix there was NO winner column, so once per-variant overwriting stopped the winner
+    // would be unidentifiable. Exactly one row per completed group names a real, in-set winner.
+    TEST_EQUAL(winner_count[gid], 1)
+    TEST_TRUE(isTrackingId(winner_of[gid]) && all_row_ids.count(winner_of[gid]) == 1)
+  }
 
   std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
 }
@@ -748,6 +824,380 @@ START_SECTION(results_ms3_exploration_columns)
   }
   TEST_TRUE(found_expl)
   std::remove(res_f.c_str());
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// §F1 -- scan_commands.tsv : every MS3 exploration command's parent resolves to an MS2 (not the MS1
+//        survey). Catches F1 — the feedResult push-loop used to overwrite buildMS3's correct MS2 parent
+//        with the group's MS1 originating id. Cross-stream/level relationship only -> drift-stable.
+/////////////////////////////////////////////////////////////
+START_SECTION(commands_exploration_ms3_parent_is_ms2)
+{
+  auto ms1 = loadTsvScans(CYTC_MS1);
+  auto ms2 = loadTsvScans(CYTC_MS2);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  std::string cmd_f = "lf_f1_commands.tsv", res_f = "lf_f1_results.tsv";
+  std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
+  std::string cfg = injectRuntime(inclusionPinCytc(ms3ExplorationConfig()), cmd_f, res_f);
+  FLASHIda ida(const_cast<char*>(cfg.c_str()));
+  auto r = driveOneExplorationGroup(&ida, ms1, ms2[0]);
+  ABORT_IF(r.group_commands == 0)
+  ABORT_IF(!r.found_ms3)   // need >=1 MS3 command emitted to check its parent
+
+  auto cmds = TSVFile::parse(cmd_f);
+  auto level = commandLevels(cmds);   // tracking_id -> ms_level (from scan_commands)
+  int checked = 0;
+  for (const auto& row : cmds.rows)
+  {
+    std::string tid = cell(cmds, row, "tracking_id");
+    auto it = level.find(tid);
+    if (it == level.end() || it->second != 3) continue;   // MS3 commands only
+    std::string p = cell(cmds, row, "parent_tracking_id");
+    // ISSUE(F1): pre-fix p resolved to an MS1 (the group's grandparent survey) because the
+    // exploration push-loop overwrote buildMS3's correct MS2 parent with info.parent_scan_id.
+    auto pit = level.find(p);
+    TEST_TRUE(pit != level.end() && pit->second == 2)
+    checked++;
+  }
+  TEST_TRUE(checked >= 1)
+  std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// §F2 -- scan_commands.tsv : exploration MS3 commands carry REAL stage-1 (fragment) scores. Catches F2 —
+//        the exploration buildMS3 used to get a default-empty FragmentScores, so the ';'-joined stage-1
+//        token of the scoring columns was 0 (and identification ms3_window_snr/ms3_charge_intensity = 0).
+//        The single-group driver can't feed MS3 spectra (no MS3 identification rows), but it DOES drain+log
+//        the MS3 commands, whose stage-1 scalars are the upstream value the bug zeroed. Range only -> drift-stable.
+/////////////////////////////////////////////////////////////
+START_SECTION(commands_exploration_ms3_stage1_scores_nonzero)
+{
+  auto ms1 = loadTsvScans(CYTC_MS1);
+  auto ms2 = loadTsvScans(CYTC_MS2);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  std::string cmd_f = "lf_f2_commands.tsv", res_f = "lf_f2_results.tsv";
+  std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
+  std::string cfg = injectRuntime(inclusionPinCytc(ms3ExplorationConfig()), cmd_f, res_f);
+  FLASHIda ida(const_cast<char*>(cfg.c_str()));
+  auto r = driveOneExplorationGroup(&ida, ms1, ms2[0]);
+  ABORT_IF(r.group_commands == 0)
+  ABORT_IF(!r.found_ms3)   // need >=1 MS3 command to inspect its stage-1 scores
+
+  auto cmds = TSVFile::parse(cmd_f);
+  int checked = 0;
+  for (const auto& row : cmds.rows)
+  {
+    if (std::atoi(cell(cmds, row, "ms_level").c_str()) != 3) continue;   // MS3 commands only
+    // MS3 scoring columns are 2-stage ';'-joined "MS2;fragment"; token[1] is the stage-1 (fragment) value.
+    auto pin = splitTokens(cell(cmds, row, "precursor_intensity"), ';');
+    auto csn = splitTokens(cell(cmds, row, "charge_snr"), ';');
+    TEST_EQUAL(pin.size(), 2)
+    TEST_EQUAL(csn.size(), 2)
+    // ISSUE(F2): pre-fix the stage-1 tokens were 0 because exploration buildMS3 got the default-empty
+    // FragmentScores; now they carry the selected fragment's real deconvolution scores.
+    TEST_TRUE(toD(pin[1]) > 0.0)
+    TEST_TRUE(finiteVal(toD(csn[1])) && toD(csn[1]) >= 0.0)
+    checked++;
+  }
+  TEST_TRUE(checked >= 1)
+  std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// §F3 -- MS3 exploration ('E') rows carry the parent proteoform. Catches F3 — proteoform/matched_protein
+//        were sourced only on MS3 'R'. Needs the MS3 variants FED (the batch must complete), so this drives
+//        the inclusion-pinned MS3-exploration config with the real per-ion MS3 manifest (skips cleanly when
+//        no ms3_cytc fixtures exist; the exact proteoform is golden-locked in C# Golden_Exploration_MS3).
+/////////////////////////////////////////////////////////////
+START_SECTION(identification_ms3_exploration_proteoform)
+{
+  auto manifest = buildMs3IonManifest("../../FlashIDA/test-data/spectra");
+  if (manifest.empty())
+  {
+    TEST_TRUE(true)   // no real MS3 fragment fixtures -> skip cleanly (never fabricate)
+  }
+  else
+  {
+    auto ms1 = loadTsvScans(CYTC_MS1);
+    auto ms2 = loadTsvScans(CYTC_MS2);
+    ABORT_IF(ms1.empty() || ms2.empty())
+
+    std::string res_f = "lf_f3_results.tsv", id_f = "lf_f3_id.tsv";
+    std::remove(res_f.c_str()); std::remove(id_f.c_str());
+    std::string cfg = injectRuntime(inclusionPinCytc(ms3ExplorationConfig()), "", res_f, id_f);
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    runFullCycle(&ida, ms1, ms2, &manifest);   // feed the MS3 variants so MS3-'E' rows are produced
+
+    auto idf = TSVFile::parse(id_f);
+    auto res = TSVFile::parse(res_f);
+
+    // F3-id: a matched MS3-'E' identification row has a non-empty ProForma proteoform.
+    int matched = 0;
+    for (const auto& row : idf.rows)
+    {
+      if (std::atoi(cell(idf, row, "ms_level").c_str()) != 3) continue;
+      if (cell(idf, row, "scan_mode") != "E") continue;
+      if (cell(idf, row, "ms3_fragments").empty()) continue;   // only rows that matched fragments
+      // ISSUE(F3-id): pre-fix proteoform was blank (use_ctx_proteoform was 'R'-only).
+      TEST_TRUE(isProForma(cell(idf, row, "proteoform")))
+      matched++;
+    }
+    // F3-res: the matched MS3-'E' scan_results rows carry non-empty matched_protein + proteoform_sequence.
+    for (const auto& r : res.rows)
+    {
+      if (std::atoi(cell(res, r, "ms_level").c_str()) != 3) continue;
+      if (std::atoi(cell(res, r, "exploration_group_id").c_str()) < 1) continue;
+      if (cell(res, r, "matched_protein").empty()) continue;   // unmatched/unfed MS3 -> tolerated
+      // ISSUE(F3-res): pre-fix matched_protein/proteoform_sequence were blank on MS3-'E' rows.
+      TEST_TRUE(!cell(res, r, "proteoform_sequence").empty())
+    }
+    TEST_TRUE(matched >= 1)   // the inclusion-pinned MS3-exploration cascade must yield >=1 matched MS3-'E' row
+    std::remove(res_f.c_str()); std::remove(id_f.c_str());
+  }
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// §F4 -- MS2 exploration ('E') identification rows source ms1_precursor_* from the GROUP's own deconvolved
+//        precursor, not the originating MS1 survey command. Catches F4 — buildMS2ContextForVariant filled
+//        ms1_precursor_* from group.originating_cmd ONLY when num_stages>0, but for an MS2 exploration group
+//        the originating_cmd is the MS1 survey (num_stages==0), so the guard failed and the fields stayed 0.
+//        Drift-stable cross-stream ppm join: an MS2-'E' id row's ms1_precursor_mass must equal the SAME
+//        tracking_id's scan_commands.mono_mass (both = the group's deconvolved precursor) within ppm.
+/////////////////////////////////////////////////////////////
+START_SECTION(identification_ms2_exploration_ms1_precursor_from_group)
+{
+  auto ms1 = loadTsvScans(CYTC_MS1);
+  auto ms2 = loadTsvScans(CYTC_MS2);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  std::string cmd_f = "lf_f4_commands.tsv", id_f = "lf_f4_id.tsv";
+  std::remove(cmd_f.c_str()); std::remove(id_f.c_str());
+  // single-group drive feeds the MS2 variants back -> feedResult writes the MS2-'E' identification rows.
+  std::string cfg = injectRuntime(inclusionPinCytc(ms3ExplorationConfig()), cmd_f, "", id_f);
+  FLASHIda ida(const_cast<char*>(cfg.c_str()));
+  auto r = driveOneExplorationGroup(&ida, ms1, ms2[0]);
+  ABORT_IF(r.group_commands == 0)
+
+  auto cmds = TSVFile::parse(cmd_f);
+  auto idf  = TSVFile::parse(id_f);
+
+  // tracking_id -> mono_mass from scan_commands (an MS2 command's mono_mass is a single value == the
+  // precursor mono mass; only MS3 commands ';'-join two stages, which these MS2-'E' ids never resolve to).
+  std::map<std::string, double> cmd_mono;
+  for (const auto& row : cmds.rows)
+    cmd_mono[cell(cmds, row, "tracking_id")] = toD(cell(cmds, row, "mono_mass"));
+
+  int checked = 0;
+  for (const auto& row : idf.rows)
+  {
+    if (std::atoi(cell(idf, row, "ms_level").c_str()) != 2) continue;   // MS2 identification rows only
+    if (cell(idf, row, "scan_mode") != "E") continue;                   // exploration variants only
+    auto it = cmd_mono.find(cell(idf, row, "tracking_id"));
+    if (it == cmd_mono.end() || it->second <= 0.0) continue;            // need the matching command row
+    double id_mass = toD(cell(idf, row, "ms1_precursor_mass"));
+    // ISSUE(F4): pre-fix ms1_precursor_mass came from group.originating_cmd, which for an MS2 exploration
+    // group is the MS1 survey (num_stages==0) -> the >0 guard failed -> the field stayed 0.0.
+    TEST_TRUE(id_mass > 0.0)
+    double ppm = std::abs(id_mass - it->second) / it->second * 1e6;
+    TEST_TRUE(ppm < 50.0)
+    checked++;
+  }
+  TEST_TRUE(checked >= 1)   // >=1 MS2-'E' id row joined to its command within ppm
+  std::remove(cmd_f.c_str()); std::remove(id_f.c_str());
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// §F8-incl -- inclusion (cytC) selects the LISTED precursor within the target window. Catches the
+//   F8-inclusion bug: the target was the cytC AVERAGE mass (~12358.31), ~570-700 ppm off the engine's
+//   MONOISOTOPIC deconvolution (~12351.3), so the ~0.247 Da match window never matched -> silent DDA
+//   fall-through (DDA picks cytC anyway, masking the miss). inclusion_cytc.txt is now the monoisotopic
+//   12351.3. NON-STRICT: >=1 MS2 within the window (a floor — DDA would also pick cytC). STRICT: selection
+//   is RESTRICTED to the list, so EVERY MS2 is within the window AND >=1 exists (the real lever — on the
+//   wrong target strict matches nothing -> 0 MS2). Window membership only -> drift-stable.
+/////////////////////////////////////////////////////////////
+START_SECTION(inclusion_ms2_within_target_window)
+{
+  auto ms1 = loadTsvScans(CYTC_MS1);
+  auto ms2 = loadTsvScans(CYTC_MS2);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  const double T = 12351.3, HW = 2.0 * 10.0 * T * 1e-6;   // 10 ppm tol, doubled at the match site (~0.247 Da)
+  auto onList = [&](double m){ return std::abs(m - T) < HW; };
+  const std::string cmd_f = "lf_f8incl_commands.tsv";
+
+  auto driveCountMs2 = [&](const std::string& json, int& ms2_total, int& ms2_on_list) {
+    std::remove(cmd_f.c_str());
+    FLASHIda ida(const_cast<char*>(json.c_str()));
+    runFullCycle(&ida, ms1, ms2);
+    auto cmds = TSVFile::parse(cmd_f);
+    ms2_total = 0; ms2_on_list = 0;
+    for (const auto& row : cmds.rows)
+    {
+      if (std::atoi(cell(cmds, row, "ms_level").c_str()) != 2) continue;   // MS2 commands only
+      ms2_total++;
+      if (onList(toD(cell(cmds, row, "mono_mass")))) ms2_on_list++;        // mono_mass is single-valued at MS2
+    }
+  };
+
+  // NON-STRICT: the cytC precursor IS selected (>=1 MS2 within the window); DDA may add off-list MS2 too.
+  int ns_total = 0, ns_on = 0;
+  driveCountMs2(buildJsonWithRuntime("", cmd_f, "", true), ns_total, ns_on);
+  // ISSUE(F8-incl): pre-fix ns_on==0 — the target was the cytC AVERAGE mass, ~570-700 ppm off the
+  // monoisotopic ~12351.3, so the window never matched (silent DDA fall-through).
+  TEST_TRUE(ns_on >= 1)
+
+  // STRICT: selection RESTRICTED to the list -> EVERY MS2 is within the window, and >=1 exists.
+  std::string strict_json = buildJsonWithRuntime("", cmd_f, "", true);
+  {
+    const std::string from = "\"strict_inclusion\": false";
+    auto p = strict_json.find(from);
+    ABORT_IF(p == std::string::npos)
+    strict_json.replace(p, from.size(), "\"strict_inclusion\": true");
+  }
+  int s_total = 0, s_on = 0;
+  driveCountMs2(strict_json, s_total, s_on);
+  // ISSUE(F8-incl-strict): pre-fix s_total==0 (nothing matched the wrong target); any leaked MS2 would be an
+  // off-list DDA pick -> s_on != s_total. With the corrected monoisotopic target every strict MS2 is on-list.
+  TEST_TRUE(s_total >= 1 && s_on == s_total)
+
+  std::remove(cmd_f.c_str());
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// §F8-excl -- exclusion (mode 2) tqscore suppression COVERAGE. NOT an engine bug: the enum is correct
+//   (2=exclusion/tqscore reading 'Mass' lines, 3=deep/AllMass). The committed target log had each Mass once
+//   with qscore<0.9, so tqscore never crossed the 0.9 threshold and mode-2 output was byte-identical to DDA
+//   -> the suppression path was never asserted. Here: run DDA to learn a really-selected mass, then write a
+//   target log re-observing it twice within rt_window at qscore 0.7 (tqscore = 1-(1-0.7)^2 = 0.91 > 0.9), and
+//   assert mode-2 does NOT re-select it. Set membership only -> drift-stable.
+/////////////////////////////////////////////////////////////
+START_SECTION(exclusion_mode2_tqscore_suppresses_target_mass)
+{
+  auto ms1 = loadTsvScans(FI_MS1_STD);
+  auto ms2 = loadTsvScans(FI_MS2_HCD);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  // target_logs is the only field that varies (mode 0 vs 2). tqscore_threshold is read from
+  // deconvolution.tqscore_threshold (Config.cpp:98) = 0.9; rt_window 180 >> the tiny ms1_standard RTs,
+  // so every target-log observation is within window of every survey scan.
+  auto cfg = [](int mode, const std::string& target_log_json) {
+    std::ostringstream o;
+    o << R"({
+      "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
+      "precursor_selection": { "RT_window": 180, "target_mode": )" << mode << R"(, "IDScore": false, "AllCharges": false, "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1 },
+      "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+      "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
+      "faims": { "cv_values": [-50], "max_cv_skip": 0 },
+      "ms_settings": { "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 }, "ms2": [ { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 } ] },
+      "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 }, "agc_interval_seconds": 999999 },
+      "files": { "target_logs": [)" << target_log_json << R"(], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+      "selection_strategy": { "ms1": { "selection": "qscore", "max_targets": 5 }, "ms2": { "selection": "intensity" }, "ms3": { "selection": "none" } }
+    })";
+    return o.str();
+  };
+
+  const std::string cmd_f = "lf_f8excl_commands.tsv";
+  auto selectedMs2Masses = [&](const std::string& json) {
+    std::remove(cmd_f.c_str());
+    std::string full = injectRuntime(json, cmd_f, "");
+    FLASHIda ida(const_cast<char*>(full.c_str()));
+    runFullCycle(&ida, ms1, ms2);
+    auto cmds = TSVFile::parse(cmd_f);
+    std::vector<double> masses;
+    for (const auto& row : cmds.rows)
+      if (std::atoi(cell(cmds, row, "ms_level").c_str()) == 2)
+        masses.push_back(toD(cell(cmds, row, "mono_mass")));
+    return masses;
+  };
+
+  // 1) DDA baseline (mode 0, no target log): a mass the engine REALLY selects.
+  auto dda = selectedMs2Masses(cfg(0, ""));
+  ABORT_IF(dda.empty())
+  const double target = dda[0];
+
+  // 2) Write a target log re-observing `target` twice within rt_window at qscore 0.7
+  //    -> tqscore = 1 - (1-0.7)^2 = 0.91 > 0.9. (Mass<TAB>Score=<TAB>Z= format, mirrors test_target_log.log.)
+  const std::string log_path = "lf_f8excl_target.log";
+  {
+    std::ofstream lg(log_path);
+    lg << "MS1 RT 0.05 (scan)\n"
+       << "Mass " << std::to_string(target) << "\tScore=0.7\tZ=4\n"
+       << "MS1 RT 0.10 (scan)\n"
+       << "Mass " << std::to_string(target) << "\tScore=0.7\tZ=4\n";
+  }
+
+  // 3) Exclusion (mode 2) with that target log: `target` must be suppressed (tqscore > 0.9).
+  auto excl = selectedMs2Masses(cfg(2, "\"" + log_path + "\""));
+
+  auto hasNear = [&](const std::vector<double>& v, double t){
+    for (double m : v) if (std::abs(m - t) < 0.5) return true;   // same nominal mass (suppression is per-nominal)
+    return false;
+  };
+  TEST_TRUE(hasNear(dda, target))    // sanity: DDA really selected it
+  // ISSUE(F8-excl): COVERAGE — mode-2 tqscore suppression was never asserted (committed log had each Mass
+  // once, qscore<0.9). With tqscore driven >0.9, `target` must NOT appear among the mode-2 selections.
+  TEST_TRUE(!hasNear(excl, target))
+
+  std::remove(cmd_f.c_str());
+  std::remove(log_path.c_str());
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// §F9 -- scan_results.tsv : MS3 rows log fragment_count == -1 AND tag_count == -1 (the N/A SENTINEL), while
+//   MS2 rows keep real >=0 counts. Catches F9 — MS3 matching is finalized only in the calibrated round (the
+//   matched count lives in identification.tsv) and tagging is an MS2-targeting feature, so a +count / carried
+//   parent count on an MS3 row is misleading; -1 is the honest N/A marker. Exact -1 / >=0 floor -> drift-stable.
+/////////////////////////////////////////////////////////////
+START_SECTION(results_ms3_fragment_and_tag_count_are_sentinel)
+{
+  auto ms1 = loadTsvScans(CYTC_MS1);
+  auto ms2 = loadTsvScans(CYTC_MS2);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  std::string cmd_f = "lf_f9_commands.tsv", res_f = "lf_f9_results.tsv";
+  std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
+  std::string json = buildJsonWithRuntime("", cmd_f, res_f, true);   // cytC inclusion + MS3 -> MS2 AND MS3 rows
+  FLASHIda ida(const_cast<char*>(json.c_str()));
+  runFullCycle(&ida, ms1, ms2);
+
+  auto cmds = TSVFile::parse(cmd_f);
+  auto res  = TSVFile::parse(res_f);
+  auto level = commandLevels(cmds);
+
+  bool found_ms2 = false, found_ms3 = false;
+  for (const auto& row : res.rows)
+  {
+    auto it = level.find(cell(res, row, "tracking_id"));
+    if (it == level.end()) continue;   // MS1 survey input (not in the command-level map)
+    if (it->second == 3)
+    {
+      found_ms3 = true;
+      // ISSUE(F9a): MS3 fragment_count must be -1 (matched count is finalized in the calibrated round and
+      // lives in identification.tsv) — NOT 0, NOT a +count.
+      TEST_EQUAL(std::atoi(cell(res, row, "fragment_count").c_str()), -1)
+      // ISSUE(F9b): MS3 tag_count must be -1 (tagging is not used for fragment-based MS3 id) — NOT a carried count.
+      TEST_EQUAL(std::atoi(cell(res, row, "tag_count").c_str()), -1)
+    }
+    else if (it->second == 2)
+    {
+      found_ms2 = true;
+      TEST_TRUE(std::atoi(cell(res, row, "fragment_count").c_str()) >= 0)   // MS2 keeps a real count (not sentinel)
+      TEST_TRUE(std::atoi(cell(res, row, "tag_count").c_str()) >= 0)
+    }
+  }
+  TEST_TRUE(found_ms3)
+  TEST_TRUE(found_ms2)
+
+  std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
 }
 END_SECTION
 
@@ -1283,12 +1733,14 @@ START_SECTION(results_ms3_real_fragment_data)
     auto ms2 = loadTsvScans(CYTC_MS2);  // scan57 ladder -> proteoform context (auto-PTM)
     ABORT_IF(ms1.empty() || ms2.empty())
 
-    std::string cmd_f = "lf_t9_commands.tsv", res_f = "lf_t9_results.tsv";
-    std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
+    std::string cmd_f = "lf_t9_commands.tsv", res_f = "lf_t9_results.tsv", id_f = "lf_t9_id.tsv";
+    std::remove(cmd_f.c_str()); std::remove(res_f.c_str()); std::remove(id_f.c_str());
     // M-start, inclusion-pinned, MS3 mode-1, EXHAUSTIVE MS3 emission: pass ms3_max_targets=50 (scoped to
     // §T9 only; other enable_ms3 sections keep the engine default ~10). 50 > cytC's ~16-20 detectable
     // fragment ions, so emission stays exhaustive while keeping the section's runtime in check.
-    std::string json = buildJsonWithRuntime("", cmd_f, res_f, true, "", "HCD", 50);
+    // F9: capture identification.tsv too — the matched-fragment FLOOR now lives there (ms3_fragments), since
+    // scan_results fragment_count is sentinelized to -1.
+    std::string json = buildJsonWithRuntime("", cmd_f, res_f, true, id_f, "HCD", 50);
     FLASHIda ida(const_cast<char*>(json.c_str()));
 
     // Mirror the shared harness wiring; feed the REAL per-ion MS3 spectrum keyed by the decoded descriptor ion.
@@ -1324,14 +1776,27 @@ START_SECTION(results_ms3_real_fragment_data)
       if (cell(res, row, "matched_protein").empty()) continue;  // unfed / unmatched MS3 -> tolerated
       ++matched_rows;
       TEST_TRUE(isProForma(cell(res, row, "proteoform_sequence")))
-      TEST_TRUE(std::atoi(cell(res, row, "fragment_count").c_str()) > 0)  // floor, no exact count
+      // F9: scan_results fragment_count is the -1 SENTINEL on MS3 rows (the matched count lives in
+      // identification.tsv, asserted below). (Was fragment_count > 0.)
+      TEST_EQUAL(std::atoi(cell(res, row, "fragment_count").c_str()), -1)
       TEST_TRUE(toD(cell(res, row, "tic_coverage")) > 0.0 && inUnit(toD(cell(res, row, "tic_coverage"))))
       TEST_TRUE(isTrackingId(cell(res, row, "parent_tracking_id")))       // resolvable MS2 parent
     }
     TEST_TRUE(ms3_rows > 0)
     TEST_TRUE(matched_rows >= 1)  // Q1 GATE: >=1 FED MS3 scan matched the pinned cytC proteoform
 
-    std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
+    // F9: the matched-fragment FLOOR relocated from scan_results.fragment_count to identification.tsv —
+    // >=1 MS3 identification row carries a non-empty ms3_fragments list (matched-ness lives where it belongs).
+    auto idf = TSVFile::parse(id_f);
+    int ms3_id_with_frags = 0;
+    for (const auto& row : idf.rows)
+    {
+      if (std::atoi(cell(idf, row, "ms_level").c_str()) != 3) continue;
+      if (!cell(idf, row, "ms3_fragments").empty()) ++ms3_id_with_frags;
+    }
+    TEST_TRUE(ms3_id_with_frags >= 1)
+
+    std::remove(cmd_f.c_str()); std::remove(res_f.c_str()); std::remove(id_f.c_str());
   }
 }
 END_SECTION

@@ -292,7 +292,12 @@ namespace
       {
         r.ms1_cmds.push_back(cmd);
         const ScanData& s = ms1_scans[ms1_fed++];
-        int ret = ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1, cmd.scan_description);
+        // F7: echo the command's FAIMS CV back to the engine on the re-fed MS1 (the C++ channel for the
+        // CV is the processScan faims_cv argument — the C# twin reads it from the IMsScan "FAIMS CV"
+        // trailer in PushScanAndDrainFull). Without it the re-fed MS1 carried CV 0.0 and FAIMS cycling
+        // never observed the commanded CV, so downstream CV binding was lost.
+        int ret = ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1,
+                                   cmd.scan_description, cmd.faims_cv);
         if (single_group_only && ret > 0 && !group_formed) { r.first_group_commands = ret; group_formed = true; }
       }
       else if (cmd.msn_level == 2)

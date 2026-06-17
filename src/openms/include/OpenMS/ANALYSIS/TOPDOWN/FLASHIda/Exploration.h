@@ -176,6 +176,10 @@ namespace OpenMS
       std::string matched_protein;
       std::string proteoform_sequence;
       double remaining_ratio = -1.0;  ///< Raw remaining_intensity / baseline_intensity (-1.0 = N/A)
+      /// F5: encoded tracking id of the winning variant; set ONLY on the group-completing feedResult,
+      /// empty ("") on every other (per-variant / non-exploration / no-winner) row. Logged as the trailing
+      /// scan_results column so each variant row keeps its OWN metrics while the winner stays identifiable.
+      std::string winner_tracking_id;
       char parent_scan_id[4]{};  ///< Parent's encoded tracking ID (from group's originating_cmd)
       FragmentAnalysis::ProteoformMatch identification_result;  ///< Per-fragment match details for identification.tsv
       MS2Context ms2_context;  ///< Cached MS2 context for this variant's group
@@ -191,7 +195,10 @@ namespace OpenMS
                                       double faims_cv, ScanCommandQueue& queue,
                                       const ScanCommand* ms_ctx = nullptr,
                                       char ion_type = '\0', int frag_index = 0,
-                                      const MS3FragmentMatcher::ProteoformContext& proto_ctx = {});
+                                      const MS3FragmentMatcher::ProteoformContext& proto_ctx = {},
+                                      // F2: stage-1 scores of the selected fragment, forwarded to buildMS3
+                                      // so MS3 exploration variants carry real *_s1 scalars (default = empty).
+                                      const FragmentAnalysis::FragmentScores& frag_scores = {});
 
     /// Process returning exploration variant: deconvolve with correct precursor context,
     /// score, select winner, trigger next level. Returns FeedResultInfo with commands and metadata.

@@ -1266,11 +1266,12 @@ END_SECTION
 
 START_SECTION(ms3_exploration_winner_selection_and_cleanup)
 {
-  // The winner's reported score must equal the peak-group count (MassCount semantics):
-  // makeSyntheticDeconv() below produces empty (mass-0) PeakGroups, so the MS3
-  // FragmentCount path (calibrated MS3FragmentMatcher) would match 0 fragments and
-  // score every variant 0. Swap the MS3 exploration metric to mass_count so the score
-  // is spec.size() and variant 3 (8 peak groups) wins with score 8.0.
+  // makeSyntheticDeconv() below produces empty (mass-0) PeakGroups, so the MS3 FragmentCount path
+  // (calibrated MS3FragmentMatcher) would match 0 fragments and score every variant 0. Swap the MS3
+  // exploration metric to mass_count so the score is spec.size(): variant 3 (8 peak groups) WINS.
+  // F5: the completing feedResult (variant 4, the LAST fed, 3 peak groups) now reports ITS OWN metrics
+  // (score 3.0, variant_index 4) — it is no longer overwritten with the winner's. The winner (variant 3)
+  // is identified by the new winner_tracking_id, which equals variant 3's encoded command id.
   std::string ms3_winner_cfg(ms3_exploration_config);
   {
     auto mpos = ms3_winner_cfg.find("fragment_count");
@@ -1301,7 +1302,14 @@ START_SECTION(ms3_exploration_winner_selection_and_cleanup)
   }
 
   TEST_EQUAL(exploration.activeGroupCount(), 0)
-  TEST_REAL_SIMILAR(last_info.score, 8.0)
+  // F5: last_info is the COMPLETING variant (index 4, 3 peak groups) reporting its OWN metrics,
+  // not the winner's (variant 3, score 8.0) — the winner-overwrite was removed.
+  TEST_REAL_SIMILAR(last_info.score, 3.0)            // completing variant's own score (was 8.0)
+  TEST_EQUAL(last_info.variant_index, 4)             // its own index, not the winner's 3
+  // The winner stays identifiable via winner_tracking_id == variant 3's encoded command id.
+  // (getGroup throws here — the group was erased on completion — so read it from last_info.)
+  TEST_EQUAL(last_info.winner_tracking_id.empty(), false)
+  TEST_EQUAL(last_info.winner_tracking_id, std::string(cmds[3].scan_description).substr(0, 3))
 
   // ms3_exploration_config has no overrides, so feedResultImpl_() takes
   // the initiateNextLevel path which produces 0 commands for synthetic data.

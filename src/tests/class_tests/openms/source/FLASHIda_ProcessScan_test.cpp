@@ -921,6 +921,68 @@ START_SECTION(processScan_conditional_ms2_followup)
 }
 END_SECTION
 
+// P4-U06b (F6): a follow-up MS2 ('C' conditional / 'F' quant) must NOT spawn a SECOND-generation follow-up.
+// A follow-up is itself processed through the MS2 path, so without a single-generation guard its (same)
+// tag-bearing spectrum re-satisfies the predicate and recurses. Feeds a fired 'C' follow-up's own response
+// back and asserts zero new follow-ups. Set/count relationship only -> drift-stable.
+START_SECTION(processScan_followup_does_not_recurse)
+{
+  {
+    std::ifstream fasta_check(fasta_path);
+    ABORT_IF(! fasta_check.good())
+  }
+  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  auto ms2_scans = loadTsvScans(ms2_tsv_path);
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(conditional_with_tags_json));
+
+  // 1) Drive MS1 (no MS2 feed) so the selected MS2 stays pending.
+  AcqResult acq = runInterleaved(ida, ms1_scans, {});
+  ABORT_IF(acq.ms2_cmds.empty())
+
+  // 2) Feed the original MS2 (suffix 'R', NOT itself a follow-up) -> tags found -> first-generation 'C'.
+  const auto& ms2 = ms2_scans[0];
+  const ScanCommand& ms2_cmd = acq.ms2_cmds[0];
+  ABORT_IF(std::strlen(ms2_cmd.scan_description) < 4 ||
+           ms2_cmd.scan_description[3] == 'C' || ms2_cmd.scan_description[3] == 'F')
+  int gen1 = ida->processScan(ms2.mzs.data(), ms2.ints.data(), (int)ms2.mzs.size(), ms2.rt, 2,
+                              ms2_cmd.scan_description);
+  TEST_EQUAL(gen1 > 0, true)
+
+  // 3) Drain the first-generation 'C' follow-up command (priority 0, so it dequeues first).
+  ScanCommand follow{};
+  bool got_followup = false;
+  while (ida->getNextScanCommand(follow) == 1)
+  {
+    if (std::strlen(follow.scan_description) >= 4 &&
+        (follow.scan_description[3] == 'C' || follow.scan_description[3] == 'F'))
+    { got_followup = true; break; }
+    follow = ScanCommand{};
+  }
+  ABORT_IF(!got_followup)
+
+  // 4) Feed the follow-up's OWN response (same tag-bearing MS2) back through the MS2 path.
+  int gen2 = ida->processScan(ms2.mzs.data(), ms2.ints.data(), (int)ms2.mzs.size(), ms2.rt, 2,
+                              follow.scan_description);
+
+  // ISSUE(F6): pre-fix feeding a follow-up re-triggered buildFollowUp -> a SECOND-generation 'C'/'F'
+  // appeared (gen2 > 0). The single-generation guard now blocks it: zero new commands, zero follow-ups.
+  TEST_EQUAL(gen2, 0)
+  ScanCommand drained{};
+  int second_gen_followups = 0;
+  while (ida->getNextScanCommand(drained) == 1)
+  {
+    if (std::strlen(drained.scan_description) >= 4 &&
+        (drained.scan_description[3] == 'C' || drained.scan_description[3] == 'F'))
+      second_gen_followups++;
+    drained = ScanCommand{};
+  }
+  TEST_EQUAL(second_gen_followups, 0)
+
+  delete ida;
+}
+END_SECTION
+
 // P4-U07: MS3 commands are pushed at priority 1 — hard positive.
 // Drives the real processScan -> FragmentAnalysis/FLASHExtender -> buildMS3 chain on a FRESH real
 // Mode-2 MS3 CytC run (20250121): the intact-cytC MS2 (HCD CE40, scan 57, ms2_cytc_fresh_scan57.txt)

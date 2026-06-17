@@ -114,7 +114,8 @@ FLASHIda::FLASHIda(char* arg) :
                             << "collision_energy\texploration_score\tremaining_ratio\t"
                             << "activation_type\treaction_time\t"
                             << "deconv_masses\tdeconv_intensities\tdeconv_min_charge\tdeconv_max_charge\tparent_tracking_id\t"
-                            << "dequeue_ts\tqueue_duration_ms\tinstrument_duration_ms\tprocessing_duration_ms\n";
+                            << "dequeue_ts\tqueue_duration_ms\tinstrument_duration_ms\tprocessing_duration_ms\t"
+                            << "winner_tracking_id\n";  // F5: trailing winner pointer (33 -> 34 columns)
         results_tsv_stream_.flush();
       }
     }
@@ -401,7 +402,8 @@ FLASHIda::FLASHIda(char* arg) :
                                       const std::string& collision_energy, double exploration_score,
                                       double remaining_ratio,
                                       const std::string& activation_type,
-                                      const std::string& reaction_time)
+                                      const std::string& reaction_time,
+                                      const std::string& winner_tracking_id)
   {
     if (!results_tsv_stream_.is_open()) return;
 
@@ -485,7 +487,11 @@ FLASHIda::FLASHIda(char* arg) :
                         << "\t" << dequeue_ts
                         << "\t" << queue_duration
                         << "\t" << instrument_duration
-                        << "\t" << processing_duration << "\n";
+                        << "\t" << processing_duration
+                        // F5: trailing winner pointer — non-empty ONLY on the group-completing exploration
+                        // row (the winning variant's encoded id); "" everywhere else. Appended LAST so the
+                        // C# comparer's fixed column indices don't shift (scan_results 33 -> 34 columns).
+                        << "\t" << winner_tracking_id << "\n";
     results_tsv_stream_.flush();
   }
 
@@ -502,7 +508,11 @@ FLASHIda::FLASHIda(char* arg) :
     // #1: on the MS3 'R' (non-exploration) path, the matcher result (match=detailed[0]) leaves
     // proteoform_sequence/region_*/ptm_sites at their defaults; the real values live in the cached
     // MS2 context (ctx=mc). Source them from ctx there. (MS2 rows and MS3 'E' keep using match.)
-    const bool use_ctx_proteoform = (ms_level == 3 && scan_mode == 'R');
+    // F3: source proteoform/PTMs from the cached MS2 context for BOTH MS3 'R' and MS3 'E'. The matcher
+    // result leaves proteoform_sequence/ptm_sites empty on both paths (calibrateAndScore sets only
+    // ppm/region), while ctx (buildMS2ContextForVariant) carries the parent proteoform. region_* still
+    // prefers match below (use_match_region), so the MS3 fragment sub-range from F-I1 is preserved.
+    const bool use_ctx_proteoform = (ms_level == 3 && (scan_mode == 'R' || scan_mode == 'E'));
     const std::string& id_proteoform = use_ctx_proteoform ? ctx.proteoform_sequence : match.proteoform_sequence;
     const std::vector<FragmentAnalysis::PTMSite>& id_ptm_sites = use_ctx_proteoform ? ctx.ptm_sites : match.ptm_sites;
     // I1: for MS3 rows, start_pos/end_pos must be the FRAGMENT sub-range the MS3 precursor covers, which
@@ -921,7 +931,12 @@ FLASHIda::FLASHIda(char* arg) :
         std::vector<std::string> expl_children;
         for (auto& c : info.commands)
         {
-          std::strncpy(c.parent_scan_id, info.parent_scan_id, 4);
+          // F1: only stamp the group-originator parent when the builder did NOT already set one.
+          // buildMS3 sets the correct MS2 parent (ScanCommandQueue.cpp:331); overwriting it with
+          // info.parent_scan_id (the MS2 group's MS1 originating id) mis-parents MS3 -> MS1. Next-level
+          // buildMS2 commands leave parent_scan_id empty, so they still inherit the group originator.
+          if (c.parent_scan_id[0] == '\0')
+            std::strncpy(c.parent_scan_id, info.parent_scan_id, 4);
           queue_.push(c);
           expl_children.push_back(ScanCommandQueue::encode(c.scan_id));  // B7: link pushed children
         }
@@ -939,7 +954,8 @@ FLASHIda::FLASHIda(char* arg) :
                             info.group_id, info.exploration_metric,
                             info.variant_index, info.total_variants,
                             std::to_string(info.collision_energy), info.score, info.remaining_ratio,
-                            info.activation_type, std::to_string(info.reaction_time));
+                            info.activation_type, std::to_string(info.reaction_time),
+                            info.winner_tracking_id);  // F5: "" except on the group-completing row
 
         // Write MS2 identification row for exploration variant
         if (!info.proteoform_sequence.empty() && !info.identification_result.fragments.empty())
@@ -959,6 +975,15 @@ FLASHIda::FLASHIda(char* arg) :
       }
       ScanCommand ctx = resolved.value();
       std::vector<std::string> child_ids;
+
+      // F6: a follow-up MS2 ('F' quant / 'C' conditional) is itself processed through this same MS2 path,
+      // so without a guard its spectrum could satisfy the quant/tag predicate again and spawn ANOTHER
+      // follow-up, recursing without bound. Detect a follow-up by its scan_description suffix (stamped by
+      // buildFollowUp; normal MS2 = 'R', exploration = 'E', survey = 'S' — none collide with 'F'/'C') and
+      // refuse to generate a second-generation follow-up from it.
+      const bool current_ms2_is_follow_up =
+          std::strlen(ctx.scan_description) >= 4 &&
+          (ctx.scan_description[3] == 'F' || ctx.scan_description[3] == 'C');
 
       // Step 3: Deconvolve MS2 with precursor context
       double precursor_mass = 0;
@@ -985,7 +1010,9 @@ FLASHIda::FLASHIda(char* arg) :
       }
 
       // Quantification follow-up (independent of tags)
-      if (config_.quantification().enabled && !config_.quantification().follow_up_scan.activation.empty())
+      // F6: skip when the current MS2 is itself a follow-up — a follow-up never spawns another.
+      if (config_.quantification().enabled && !config_.quantification().follow_up_scan.activation.empty()
+          && !current_ms2_is_follow_up)
       {
         if (quant_.isDifferentiallyAbundant(mzs, ints, length, rt_min, 2, "ms2_quant",
                                             config_.quantification().reporter_mz_tol, config_.quantification().fold_change_threshold, false))
@@ -998,7 +1025,8 @@ FLASHIda::FLASHIda(char* arg) :
       }
 
       // Conditional MS2 follow-up -- only when tags detected AND explicitly enabled
-      if (config_.targeting().conditional_ms2_enabled && tags_found)
+      // F6: skip when the current MS2 is itself a follow-up — a follow-up never spawns another.
+      if (config_.targeting().conditional_ms2_enabled && tags_found && !current_ms2_is_follow_up)
       {
         auto cond = queue_.buildFollowUp(ctx, config_.targeting().tagging_follow_up_scan, 'C');
         queue_.push(cond);
@@ -1100,7 +1128,12 @@ FLASHIda::FLASHIda(char* arg) :
         std::vector<std::string> expl_children;
         for (auto& c : info.commands)
         {
-          std::strncpy(c.parent_scan_id, info.parent_scan_id, 4);
+          // F1: only stamp the group-originator parent when the builder did NOT already set one.
+          // buildMS3 sets the correct MS2 parent (ScanCommandQueue.cpp:331); overwriting it with
+          // info.parent_scan_id (the MS2 group's MS1 originating id) mis-parents MS3 -> MS1. Next-level
+          // buildMS2 commands leave parent_scan_id empty, so they still inherit the group originator.
+          if (c.parent_scan_id[0] == '\0')
+            std::strncpy(c.parent_scan_id, info.parent_scan_id, 4);
           queue_.push(c);
           expl_children.push_back(ScanCommandQueue::encode(c.scan_id));  // B7: link pushed children
         }
@@ -1110,16 +1143,20 @@ FLASHIda::FLASHIda(char* arg) :
         int expl_mass_count = has_expl_ms3 ? static_cast<int>(exploration_.exploration_deconv_->storedMS2().size()) : 0;
         const DeconvolvedSpectrum* ms3_spec = has_expl_ms3 ? &exploration_.exploration_deconv_->storedMS2() : nullptr;
         std::string parent_id(info.parent_scan_id);
+        // F9: MS3 rows log fragment_count & tag_count as the -1 SENTINEL (matched count is known only in the
+        // calibrated round and lives in identification.tsv; tagging isn't used for fragment-based MS3 id).
+        // tic_coverage stays real. Mirrors the MS3 non-exploration row.
         writeScanResultRow_(id_str, 3, rt_min, expl_mass_count,
                             static_cast<int>(info.commands.size()),
-                            expl_children, info.identification_result.tag_count, info.matched_protein,
+                            expl_children, /*tag_count=*/-1, info.matched_protein,
                             FragmentAnalysis::toProForma(info.proteoform_sequence, info.identification_result.ptm_sites), enqueue_ts, dequeue_ts, received_ts,
                             ms3_spec, parent_id,
-                            info.tic_coverage, info.fragment_count,
+                            info.tic_coverage, /*fragment_count=*/-1,
                             info.group_id, info.exploration_metric,
                             info.variant_index, info.total_variants,
                             std::to_string(info.collision_energy), info.score, info.remaining_ratio,
-                            info.activation_type, std::to_string(info.reaction_time));
+                            info.activation_type, std::to_string(info.reaction_time),
+                            info.winner_tracking_id);  // F5: "" except on the group-completing row
 
         if (!info.identification_result.fragments.empty())
         {
@@ -1227,11 +1264,16 @@ FLASHIda::FLASHIda(char* arg) :
         ms3_act = std::string(resolved->stages[0].activation_type) + ";" + std::string(resolved->stages[1].activation_type);
         ms3_rt  = std::to_string(resolved->stages[0].reaction_time) + ";" + std::to_string(resolved->stages[1].reaction_time);
       }
+      // F9: MS3 rows log fragment_count & tag_count as the -1 SENTINEL (not the carried/not-yet-final value).
+      //   - fragment_count: MS3 matching is finalized only in the calibrated round; the matched count lives in
+      //     identification.tsv (ms3_fragments), not here.
+      //   - tag_count: tagging is an MS2-targeting feature, not used for fragment-based MS3 id (the value here
+      //     was a carried-down parent-MS2 count). tic_coverage (ms3_tic) stays real — F9 does not touch it.
       writeScanResultRow_(id_str, 3, rt_min, ms3_mass_count, 0,
-                          {}, ms3_tag_count, ms3_matched_protein, ms3_proteoform,
+                          {}, /*tag_count=*/-1, ms3_matched_protein, ms3_proteoform,
                           enqueue_ts, dequeue_ts, received_ts,
                           ms3_spec, parent_id,
-                          ms3_tic, ms3_frag_count,
+                          ms3_tic, /*fragment_count=*/-1,
                           -1, 0, -1, 0, ms3_ce, -1.0, -1.0, ms3_act, ms3_rt);
       return 0;
     }
