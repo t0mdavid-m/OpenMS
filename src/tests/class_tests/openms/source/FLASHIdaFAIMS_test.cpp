@@ -429,90 +429,63 @@ START_SECTION(ms2_carries_parent_cv)
 }
 END_SECTION
 
-// P6-U05: CV transition injects MS1 with new CV; MS2s carry parent CV
+// P6-U05: CV transition injects an MS1 with the next CV at priority 0 (so it is sent before pending MS2s)
 START_SECTION(cv_transition_ms1_before_ms2s)
 {
-  FLASHIda* ida = createFaims3CV();
+  // Drive a REAL survey through the canonical interleaved harness (engine-id-echo) and observe the CROSS-LEVEL
+  // dequeue order over AcqResult.all_cmds (the additive raw-order capability — the per-level ms1/ms2/ms3 buckets
+  // lose cross-level interleave). A real E. coli MS1 (FI_MS1_STD) selects >=1 precursor, so processScan pushes
+  // prio-2 MS2 commands (FLASHIda.cpp:858) and THEN a prio-0 CV-transition MS1 carrying the NEXT CV
+  // (FLASHIda.cpp:898-915). The queue dequeues by priority 0->3, so the prio-0 CV-transition MS1 is drained
+  // BEFORE the prio-2 MS2s — deterministically, no fallback. This preserves the original intent (prio-0
+  // CV-transition MS1 before the prio-2 MS2s; transition CV -50 vs the MS2's parent CV -40) over a real drive.
+  auto ms1 = loadTsvScans(FI_MS1_STD);
+  ABORT_IF(ms1.empty())
 
-  // Drive ONE real engine survey under the engine's OWN emitted tracking id (engine-id-echo, same DRAIN-CONTRACT
-  // as runInterleaved — done inline here because this test observes dequeue ORDER, which runInterleaved abstracts
-  // away). The bootstrap idle cycle emits an AGC and queues an idle MS1 (prio 3) stamped with a valid engine id;
-  // dequeuing it registers it pending, so feeding an empty-peak MS1 back under that id passes the always-on MS1
-  // gate (FLASHIda.cpp:775). That survey (0 precursors) makes the engine advance the CV and push a CV-transition
-  // MS1 at priority 0 (CV -50).
-  ScanCommand boot{};
-  ida->getNextScanCommand(boot);                     // idle AGC; queues idle MS1 (engine id, CV -40)
-  TEST_EQUAL(boot.is_agc, 1)
-  ScanCommand survey{};
-  ida->getNextScanCommand(survey);                   // the idle MS1 carrying the engine's own survey id
-  TEST_EQUAL(survey.msn_level, 1)
-  ida->processScan(nullptr, nullptr, 0, 1.0, 1, survey.scan_description, survey.faims_cv);
+  FLASHIda ida(const_cast<char*>(faims_3cv_config));
+  AcqResult a = runInterleaved(&ida, ms1, std::vector<ScanData>{});
 
-  // Push two MS2s at priority 2 with parent CV=-40 (synthetic seeding — pure pushCommandForTest, unaffected by
-  // the gate). They are now pending BEHIND the just-emitted prio-0 CV-transition MS1.
-  ScanCommand ms2_a{};
-  ms2_a.msn_level = 2;
-  ms2_a.priority = 2;
-  ms2_a.scan_id = 500;
-  ms2_a.faims_cv = -40.0;
-  ida->pushCommandForTest(ms2_a);
+  // First prio-0 MS1 (the CV transition) and first MS2, in raw dequeue order.
+  int cv_idx = -1, ms2_idx = -1;
+  for (int i = 0; i < (int)a.all_cmds.size(); ++i)
+  {
+    if (cv_idx < 0 && a.all_cmds[i].msn_level == 1 && a.all_cmds[i].priority == 0) cv_idx = i;
+    if (ms2_idx < 0 && a.all_cmds[i].msn_level == 2) ms2_idx = i;
+  }
 
-  ScanCommand ms2_b{};
-  ms2_b.msn_level = 2;
-  ms2_b.priority = 2;
-  ms2_b.scan_id = 501;
-  ms2_b.faims_cv = -40.0;
-  ida->pushCommandForTest(ms2_b);
-
-  // Dequeue order: CV-transition MS1 (prio 0), then MS2s (prio 2)
-  ScanCommand out{};
-
-  ida->getNextScanCommand(out);
-  TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
-  TEST_EQUAL(out.msn_level, 1)
-  TEST_EQUAL(out.priority, 0)
-  TEST_REAL_SIMILAR(out.faims_cv, -50.0)  // CV transition to next CV
-
-  ida->getNextScanCommand(out);
-  TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
-  TEST_EQUAL(out.msn_level, 2)
-  TEST_REAL_SIMILAR(out.faims_cv, -40.0)  // parent CV preserved
-
-  ida->getNextScanCommand(out);
-  TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
-  TEST_EQUAL(out.msn_level, 2)
-  TEST_REAL_SIMILAR(out.faims_cv, -40.0)  // parent CV preserved
-
-  delete ida;
+  TEST_TRUE(cv_idx >= 0)                 // a prio-0 CV-transition MS1 was emitted
+  TEST_TRUE(ms2_idx >= 0)                // the survey selected >=1 precursor -> a prio-2 MS2 was emitted
+  TEST_TRUE(cv_idx < ms2_idx)            // prio-0 CV-transition MS1 drained BEFORE the prio-2 MS2s
+  TEST_REAL_SIMILAR(a.all_cmds[cv_idx].faims_cv, -50.0)   // CV transition to the NEXT CV
+  TEST_REAL_SIMILAR(a.all_cmds[ms2_idx].faims_cv, -40.0)  // MS2 carries the parent survey's (current) CV
 }
 END_SECTION
 
-// P6-U06: Non-FAIMS mode — processScan does not push CV-transition MS1
+// P6-U06: Non-FAIMS mode — processScan does not push a CV-transition MS1
 START_SECTION(non_faims_no_cv_transition)
 {
   FLASHIda* ida = createNonFaims();  // single CV => faims_enabled_=false
 
-  // Drive ONE real engine survey under the engine's OWN emitted id (engine-id-echo). The bootstrap idle cycle
-  // emits an AGC + queues an idle MS1 (prio 3); dequeuing it registers it pending, so the empty-peak MS1 we feed
-  // back passes the always-on MS1 gate and is genuinely PROCESSED (not gate-rejected). With faims_enabled_=false,
-  // processScan must NOT enter the FAIMS branch -> NO CV-transition MS1 (prio 0) is pushed. So after the survey
-  // the only pending item is the idle MS1 (prio 3); the next getNextScanCommand falls through to the idle cycle
-  // (AGC). A spurious prio-0 CV-transition MS1 would surface here instead of the AGC.
-  ScanCommand boot{};
-  ida->getNextScanCommand(boot);                     // idle AGC; queues idle MS1 (engine id)
-  TEST_EQUAL(boot.is_agc, 1)
-  ScanCommand survey{};
-  ida->getNextScanCommand(survey);                   // the idle MS1 carrying the engine's own survey id
-  TEST_EQUAL(survey.msn_level, 1)
-  int pushed = ida->processScan(nullptr, nullptr, 0, 1.0, 1, survey.scan_description, 0.0);
-  TEST_EQUAL(pushed, 0)  // empty spectrum => 0 MS2 commands, and (non-FAIMS) no CV-transition MS1
+  // Drive via the canonical interleaved harness (engine-id-echo). Feed empty-peak surveys (0 precursors) the same
+  // way the FAIMS sections do; the difference under test is purely the engine response. With faims_enabled_=false,
+  // processScan must NOT enter the FAIMS branch (FLASHIda.cpp:899) -> NO priority-0 CV-transition MS1 is ever
+  // pushed. "No CV-transition MS1" is a per-level property of ms1_cmds (not a cross-level interleave), so it is
+  // faithfully re-expressible over AcqResult.
+  AcqResult r = runInterleaved(ida, emptyMs1Surveys(3), std::vector<ScanData>{});
 
-  // Next command: idle AGC (no CV-transition MS1 was injected) => non-FAIMS behavior confirmed.
-  ScanCommand out{};
-  int result = ida->getNextScanCommand(out);
-  TEST_EQUAL(result, 1)
-  TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
-  TEST_EQUAL(out.is_agc, 1)
+  TEST_EQUAL(r.ms1_cmds.empty(), false)  // the engine still emitted idle survey MS1s
+
+  // Every emitted MS1 is an ordinary (idle, prio 3) survey — none is a prio-0 CV-transition MS1. With
+  // faims_enabled_=false the engine reports current_faims_cv_ as 0.0 (FLASHIda.cpp:919,1285), so the idle
+  // survey MS1s carry faims_cv 0.0 (the FAIMS branch never stamps a configured CV). A spurious FAIMS branch
+  // would surface as a prio-0 MS1 carrying a non-zero (configured) CV.
+  for (const auto& c : r.ms1_cmds)
+  {
+    TEST_EQUAL(std::strlen(c.scan_description) <= 15, true)
+    TEST_EQUAL(c.msn_level, 1)
+    TEST_NOT_EQUAL(c.priority, 0)            // non-FAIMS: no priority-0 CV-transition MS1 injected
+    TEST_REAL_SIMILAR(c.faims_cv, 0.0)       // non-FAIMS reports CV 0.0; no CV transition occurs
+  }
 
   delete ida;
 }
@@ -530,16 +503,11 @@ START_SECTION(refed_ms1_echoes_commanded_faims_cv)
   auto ms2 = loadTsvScans(FI_MS2_HCD);
   ABORT_IF(ms1.empty() || ms2.empty())
 
-  // faims_3cv_config: multi-CV [-40,-50,-60] (=> faims_enabled_) + DDA. Flip MS2 selection on so the selected
-  // precursor actually yields MS2 commands (the file's other FAIMS tests use empty surveys + "none").
-  std::string cfg(faims_3cv_config);
-  {
-    const std::string from = "\"ms2\": { \"selection\": \"none\" }";
-    auto p = cfg.find(from);
-    ABORT_IF(p == std::string::npos)
-    cfg.replace(p, from.size(), "\"ms2\": { \"selection\": \"intensity\", \"max_targets\": 1 }");
-  }
-  FLASHIda ida(const_cast<char*>(cfg.c_str()));
+  // faims_3cv_config AS-IS: multi-CV [-40,-50,-60] (=> faims_enabled_) + DDA. MS1->MS2 selection is already on
+  // (selection_strategy.ms1 = qscore); feeding a REAL survey yields MS2 commands carrying the parent survey's
+  // FAIMS CV. Do NOT enable ms2 (MS2->MS3) selection: it defaults to fragment matching, which Config::validate()
+  // requires a protein_sequence for — and this DDA config has none (would throw at construction).
+  FLASHIda ida(const_cast<char*>(faims_3cv_config));
   AcqResult a = runInterleaved(&ida, ms1, std::vector<ScanData>{ms2[0]});
 
   const std::set<double> cv_set = { -40.0, -50.0, -60.0 };

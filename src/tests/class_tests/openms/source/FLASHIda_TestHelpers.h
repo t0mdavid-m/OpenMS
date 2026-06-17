@@ -242,6 +242,11 @@ namespace
   struct AcqResult
   {
     std::vector<ScanCommand> ms1_cmds, ms2_cmds, ms3_cmds;
+    // Cross-level capability (C++-only, no C# twin): EVERY dequeued command — workload AND idle AGC/MS1
+    // ticks — pushed in raw dequeue order, so a caller can assert cross-level interleave (e.g. a prio-0
+    // CV-transition MS1 drained BEFORE the prio-2 MS2s) that the per-level buckets above lose. Additive;
+    // the drain contract is unchanged.
+    std::vector<ScanCommand> all_cmds;
     int total_dequeued = 0;
     // single_group_only bookkeeping (see runInterleaved): the processScan return of the first MS1 that
     // forms a group (== # commands it pushed), and the running sum of MS2-feed processScan returns. Both
@@ -262,12 +267,16 @@ namespace
   //                 returns >0), stop feeding further MS1 surveys (they become idle ticks) but keep draining that
   //                 group's MS2 variants + MS3. Records r.first_group_commands; used by driveOneExplorationGroup.
   //                 Default false leaves the core pull->classify->feed->idle>=3 contract byte-identical.
+  //   rt_offset : added to every fed MS1 survey rt (default 0.0). Lets a caller drive the SAME persistent
+  //               engine a second time with the surveys shifted in retention time (e.g. CBE two-pass
+  //               exclusion: 2nd pass inside vs outside rt_window). MS2/MS3 feeds reuse the source rt as-is.
   inline AcqResult runInterleaved(FLASHIda* ida,
                                   const std::vector<ScanData>& ms1_scans,
                                   const std::vector<ScanData>& ms2_scans,
                                   const std::map<std::string, std::vector<ScanData>>* ms3_ion_map = nullptr,
                                   int max_iters = 600,
-                                  bool single_group_only = false)
+                                  bool single_group_only = false,
+                                  double rt_offset = 0.0)
   {
     AcqResult r;
     const int n_ms1 = static_cast<int>(ms1_scans.size());
@@ -278,6 +287,10 @@ namespace
     {
       if (ida->getNextScanCommand(cmd) != 1) break;
       ++r.total_dequeued;
+      // Cross-level capability (C++-only, no C# twin): record EVERY dequeued command — workload AND idle
+      // AGC/MS1 ticks — in raw dequeue order, BEFORE the idle-tick continue and the per-level bucketing,
+      // so callers can assert cross-level interleave the per-level buckets lose.
+      r.all_cmds.push_back(cmd);
       // Idle tick: AGC, empty descriptor, an MS1 re-survey after all ms1_scans have been fed, or (in
       // single_group_only mode) any MS1 survey once the first group has already formed.
       if (cmd.is_agc || cmd.scan_description[0] == '\0' || (cmd.msn_level <= 1 && ms1_fed >= n_ms1)
@@ -296,7 +309,7 @@ namespace
         // CV is the processScan faims_cv argument — the C# twin reads it from the IMsScan "FAIMS CV"
         // trailer in PushScanAndDrainFull). Without it the re-fed MS1 carried CV 0.0 and FAIMS cycling
         // never observed the commanded CV, so downstream CV binding was lost.
-        int ret = ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1,
+        int ret = ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt + rt_offset, 1,
                                    cmd.scan_description, cmd.faims_cv);
         if (single_group_only && ret > 0 && !group_formed) { r.first_group_commands = ret; group_formed = true; }
       }
@@ -630,6 +643,46 @@ namespace
       if (d.size() >= 4 && d[3] != 'E') { r.found_production_ms2 = true; break; }
     }
     return r;
+  }
+
+  // Non-draining exploration-group former (C++-side convenience, no C# twin — like single_group_only): feed
+  // engine-emitted survey MS1 ids (the always-on gate rejects fabricated ones) until ONE forms a group, then
+  // RETURN that survey's processScan count (the # of variant commands it pushed) LEAVING the variants QUEUED
+  // for the caller to inspect (driveOneExplorationGroup DRAINS the group; this does not). Bounded idle>=3/max_iters.
+  inline int bootstrapExplorationGroup(FLASHIda* ida, const std::vector<ScanData>& scans, int max_iters = 4000)
+  {
+    const int n_ms1 = static_cast<int>(scans.size());
+    int ms1_fed = 0;
+    int idle = 0;
+    ScanCommand cmd{};
+    for (int it = 0; it < max_iters && idle < 3; ++it)
+    {
+      if (ida->getNextScanCommand(cmd) != 1) break;
+      if (cmd.msn_level == 1 && !cmd.is_agc && ms1_fed < n_ms1)
+      {
+        const ScanData& s = scans[ms1_fed++];
+        int n = ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1,
+                                 cmd.scan_description);
+        if (n > 0) return n;  // group created; leave its variants queued for the caller
+        idle = 0;
+      }
+      else { ++idle; }       // AGC / re-survey-after-exhausted -> idle tick
+      cmd = ScanCommand{};
+    }
+    return 0;
+  }
+
+  // Project an AcqResult's MS2 commands to (charge, mz, isolation_width) rows (stage-0 of each MS2 command).
+  // Used by ChargeBasedExclusion to assert which precursors the engine actually acquired — reads the harness
+  // result, so the drive still goes through runInterleaved.
+  struct AcquisitionRow { int charge; double mz; double width; };
+  inline std::vector<AcquisitionRow> ms2AcquisitionRows(const AcqResult& a)
+  {
+    std::vector<AcquisitionRow> rows;
+    for (const auto& c : a.ms2_cmds)
+      if (c.num_stages >= 1)
+        rows.push_back({c.stages[0].charge_state, c.stages[0].precursor_mz, c.stages[0].isolation_width});
+    return rows;
   }
 
   // ----------------------------------------------------------------------------

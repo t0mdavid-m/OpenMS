@@ -12,6 +12,8 @@
 #include <OpenMS/CONCEPT/ClassTest.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
 
+#include "FLASHIda_TestHelpers.h"  // ground-truth harness: ScanData/loadTsvScans/runInterleaved/AcquisitionRow/ms2AcquisitionRows
+
 #include <cstring>
 #include <fstream>
 #include <set>
@@ -98,42 +100,6 @@ namespace
   // different masses), which left CBE-03/04/06 with 0 MS2.
   const std::string ms1_tsv_path = "../../FlashIDA/test-data/spectra/ms1_cytc.txt";
 
-  struct ScanData
-  {
-    std::vector<double> mzs;
-    std::vector<double> ints;
-    double rt;
-    std::string scan_id;
-  };
-
-  std::vector<ScanData> loadTsvScans(const std::string& path)
-  {
-    std::vector<ScanData> scans;
-    std::ifstream f(path);
-    std::string line;
-    while (std::getline(f, line))
-    {
-      if (line.substr(0, 4) == "Spec")
-      {
-        scans.emplace_back();
-        auto tab = line.find('\t');
-        scans.back().scan_id = line.substr(10, tab - 10);
-        scans.back().rt = std::stod(line.substr(tab + 1));
-      }
-      else if (! scans.empty())
-      {
-        auto tab = line.find('\t');
-        if (tab != std::string::npos)
-        {
-          scans.back().mzs.push_back(std::stod(line.substr(0, tab)));
-          scans.back().ints.push_back(std::stod(line.substr(tab + 1)));
-        }
-      }
-    }
-    return scans;
-  }
-
-  struct AcquisitionRow { int charge; double mz; double width; };
 
   // Interleaved drive result: every emitted MS2 (charge, mz, width) tuple + the MS2 command count.
   struct DriveResult
@@ -142,48 +108,17 @@ namespace
     int ms2_count = 0;
   };
 
-  // Drive the engine via the canonical interleaved engine-id-echo contract (twin of
-  // FLASHIda_TestHelpers::runInterleaved; inlined here because this TU's local ScanData /
-  // loadTsvScans would collide with the helper's anonymous-namespace copies). Pull one command at
-  // a time and feed exactly one MS1 survey response per survey command, stamped with the engine's
-  // OWN scan_description (so the always-on MS1 gate accepts it — a fabricated "scan_"+id id is
-  // rejected and would yield 0 precursors). MS2 commands are collected; the engine paces surveys.
-  // ms1_scans are fed one per survey, in order (with rt_offset added); further surveys are idle
-  // ticks. Terminates on idle>=3 (queue drained) or max_iters. State persists in `ida` across
-  // calls, so a caller may invoke this twice (two passes) on the same engine.
+  // Thin adapter over the ground-truth harness runInterleaved (NO hand-rolled drive): MS1-only DDA driven
+  // by the engine's own survey ids; rt_offset shifts each fed survey (2-pass exclusion: 2nd pass inside vs
+  // outside rt_window). Projects the MS2 commands to (charge, mz, width) rows + count. State persists in
+  // `ida` across calls, so a caller may invoke this twice (two passes) on the same engine.
   DriveResult driveInterleaved(FLASHIda& ida, const std::vector<ScanData>& ms1_scans,
                                double rt_offset = 0.0, int max_iters = 4000)
   {
+    AcqResult a = runInterleaved(&ida, ms1_scans, {}, nullptr, max_iters, /*single_group_only=*/false, rt_offset);
     DriveResult res;
-    const int n_ms1 = static_cast<int>(ms1_scans.size());
-    int idle = 0, ms1_fed = 0;
-    ScanCommand cmd{};
-    for (int it = 0; it < max_iters && idle < 3; ++it)
-    {
-      if (ida.getNextScanCommand(cmd) != 1) break;
-      // Idle tick: AGC, empty descriptor, or an MS1 re-survey after all ms1_scans have been fed.
-      if (cmd.is_agc || cmd.scan_description[0] == '\0' || (cmd.msn_level <= 1 && ms1_fed >= n_ms1))
-      {
-        ++idle;
-        cmd = ScanCommand{};
-        continue;
-      }
-      idle = 0;
-      if (cmd.msn_level <= 1)
-      {
-        const ScanData& s = ms1_scans[ms1_fed++];
-        ida.processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt + rt_offset, 1,
-                        cmd.scan_description);
-      }
-      else if (cmd.msn_level == 2)
-      {
-        ++res.ms2_count;
-        if (cmd.num_stages >= 1)
-          res.rows.push_back({cmd.stages[0].charge_state, cmd.stages[0].precursor_mz,
-                              cmd.stages[0].isolation_width});
-      }
-      cmd = ScanCommand{};
-    }
+    res.rows = ms2AcquisitionRows(a);
+    res.ms2_count = static_cast<int>(a.ms2_cmds.size());
     return res;
   }
 

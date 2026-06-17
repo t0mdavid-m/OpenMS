@@ -274,14 +274,12 @@ START_SECTION(join_integrity)
   std::string json = buildJsonWithRuntime("", commands_file, results_file, true);
   FLASHIda ida(const_cast<char*>(json.c_str()));
 
-  // Full MS1->MS2->MS3 cycle (with MS3 fed back)
+  // Full MS1->MS2->MS3 cycle (with MS3 fed back). runFullCycle already drains the queue to idle,
+  // so there is no leftover command to drain here -- the previous trailing
+  // `while (getNextScanCommand) { if (is_agc) break; }` loop was redundant (and is exactly the
+  // unbounded-drain hazard the harness exists to remove). The TSVs are written incrementally
+  // during the cycle, so the parses below see every command/result the cycle produced.
   auto cycle = runFullCycle(&ida, ms1_scans, ms2_scans);
-
-  // Drain any remaining commands (break on the idle-cycle AGC; the engine emits idle
-  // AGC/MS1 commands indefinitely once the real queue is empty, so an unbounded drain
-  // would loop forever and OOM).
-  ScanCommand cmd;
-  while (ida.getNextScanCommand(cmd) > 0) { if (cmd.is_agc) break; }
 
   // Parse both files
   auto cmd_tsv = TSVFile::parse(commands_file);

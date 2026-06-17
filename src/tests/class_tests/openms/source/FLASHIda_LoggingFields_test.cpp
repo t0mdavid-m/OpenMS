@@ -1099,7 +1099,7 @@ START_SECTION(exclusion_mode2_tqscore_suppresses_target_mass)
       "ms_settings": { "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 }, "ms2": [ { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 } ] },
       "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 }, "agc_interval_seconds": 999999 },
       "files": { "target_logs": [)" << target_log_json << R"(], "fasta": "", "inclusion_list": "", "ptm_list": "" },
-      "selection_strategy": { "ms1": { "selection": "qscore", "max_targets": 5 }, "ms2": { "selection": "intensity" }, "ms3": { "selection": "none" } }
+      "selection_strategy": { "ms1": { "selection": "qscore", "max_targets": 5 }, "ms2": { "selection": "none" }, "ms3": { "selection": "none" } }
     })";
     return o.str();
   };

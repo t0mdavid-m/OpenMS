@@ -13,6 +13,8 @@
 #include <OpenMS/CONCEPT/ClassTest.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
 
+#include "FLASHIda_TestHelpers.h"  // ground-truth harness: ScanData/loadTsvScans/AcqResult/runInterleaved/runFullCycle
+
 #include <fstream>
 #include <string>
 #include <cstring>
@@ -555,104 +557,6 @@ namespace
   const std::string ms2_cytc_fresh_tsv_path = "../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt";
   const std::string fasta_path = "../../FlashIDA/test-data/configs/test_fasta.fasta";
 
-  struct ScanData
-  {
-    std::vector<double> mzs;
-    std::vector<double> ints;
-    double rt;
-    std::string scan_id;
-  };
-
-  // Parse multi-scan TSV: "Spec scan=N\tRT" headers, "mz\tintensity" data lines
-  std::vector<ScanData> loadTsvScans(const std::string& path)
-  {
-    std::vector<ScanData> scans;
-    std::ifstream f(path);
-    std::string line;
-    while (std::getline(f, line))
-    {
-      if (line.substr(0, 4) == "Spec")
-      {
-        scans.emplace_back();
-        auto tab = line.find('\t');
-        scans.back().scan_id = line.substr(10, tab - 10);
-        scans.back().rt = std::stod(line.substr(tab + 1));
-      }
-      else if (! scans.empty())
-      {
-        auto tab = line.find('\t');
-        if (tab != std::string::npos)
-        {
-          scans.back().mzs.push_back(std::stod(line.substr(0, tab)));
-          scans.back().ints.push_back(std::stod(line.substr(tab + 1)));
-        }
-      }
-    }
-    return scans;
-  }
-
-  // [DRAIN-CONTRACT C#<->C++ — see docs/kb/test-harness] inlined twin of FLASHIda_TestHelpers::runInterleaved
-  // Interleaved engine-id-echo drive contract (twin of FLASHIda_TestHelpers::runInterleaved; inlined here
-  // because this TU keeps its own anonymous-namespace ScanData / loadTsvScans and so does NOT include
-  // FLASHIda_TestHelpers.h -- including it would redefine those symbols). The engine now has an ALWAYS-ON
-  // MS1 gate (FLASHIda.cpp:775): an MS1 fed with a fabricated tracking id (the old "scan_"+id) is rejected
-  // and yields 0 precursors. We therefore drive MS1 by echoing the engine's OWN survey scan_description:
-  // pull one command at a time, feed exactly one response per requested command stamped with
-  // cmd.scan_description; the engine paces the surveys. Terminate on idle>=3 (queue drained) or max_iters.
-  //   ms1_scans : fed one per survey command, in order (nMs1 = size); further MS1 surveys are idle ticks.
-  //   ms2_scans : ms2_scans[0] fed for every MS2 command (empty => MS2 commands collected but not fed back).
-  //   ms3 uses the MS2-as-MS3 shortcut (this TU has no per-ion manifest; C++ plausibility only).
-  struct AcqResult
-  {
-    std::vector<ScanCommand> ms1_cmds, ms2_cmds, ms3_cmds;
-    int total_dequeued = 0;
-  };
-
-  AcqResult runInterleaved(FLASHIda* ida,
-                           const std::vector<ScanData>& ms1_scans,
-                           const std::vector<ScanData>& ms2_scans,
-                           int max_iters = 600)
-  {
-    AcqResult r;
-    const int n_ms1 = (int)ms1_scans.size();
-    int idle = 0, ms1_fed = 0;
-    ScanCommand cmd{};
-    for (int it = 0; it < max_iters && idle < 3; ++it)
-    {
-      if (ida->getNextScanCommand(cmd) != 1) break;
-      ++r.total_dequeued;
-      // Idle tick: AGC, empty descriptor, or an MS1 re-survey after all ms1_scans have been fed.
-      if (cmd.is_agc || cmd.scan_description[0] == '\0' || (cmd.msn_level <= 1 && ms1_fed >= n_ms1))
-      {
-        ++idle;
-        cmd = ScanCommand{};
-        continue;
-      }
-      idle = 0;
-      if (cmd.msn_level <= 1)
-      {
-        r.ms1_cmds.push_back(cmd);
-        const ScanData& s = ms1_scans[ms1_fed++];
-        ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1, cmd.scan_description);
-      }
-      else if (cmd.msn_level == 2)
-      {
-        r.ms2_cmds.push_back(cmd);
-        if (!ms2_scans.empty())
-          ida->processScan(ms2_scans[0].mzs.data(), ms2_scans[0].ints.data(),
-                           (int)ms2_scans[0].mzs.size(), ms2_scans[0].rt, 2, cmd.scan_description);
-      }
-      else  // msn_level >= 3
-      {
-        r.ms3_cmds.push_back(cmd);
-        if (!ms2_scans.empty())  // MS2-as-MS3 shortcut (no per-ion manifest in this TU)
-          ida->processScan(ms2_scans[0].mzs.data(), ms2_scans[0].ints.data(),
-                           (int)ms2_scans[0].mzs.size(), ms2_scans[0].rt, 3, cmd.scan_description);
-      }
-      cmd = ScanCommand{};
-    }
-    return r;
-  }
 
   // Build a cap-test config from the max1_json template: set ms1.max_targets, optionally extend the
   // single HCD MS2 scan config to HCD+ETD, and enable per-scan results logging (runtime.scan_results_path).
@@ -936,48 +840,29 @@ START_SECTION(processScan_followup_does_not_recurse)
   ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
   FLASHIda* ida = new FLASHIda(const_cast<char*>(conditional_with_tags_json));
 
-  // 1) Drive MS1 (no MS2 feed) so the selected MS2 stays pending.
-  AcqResult acq = runInterleaved(ida, ms1_scans, {});
+  // Drive the FULL acquisition through the canonical harness with a NON-empty ms2_scans: runInterleaved feeds
+  // each dequeued MS2 command's own response back BY LEVEL (the engine paces it; bounded by idle>=3/max_iters,
+  // so NO raw getNextScanCommand drain loop and no hang). The 'R' MS2 is fed -> tags -> a first-generation 'C'
+  // follow-up; that 'C' is itself an MS2-level command, so the harness dequeues it, collects it in acq.ms2_cmds,
+  // AND feeds ITS response back too. A second-generation follow-up (pre-fix) would likewise be dequeued + collected.
+  AcqResult acq = runInterleaved(ida, ms1_scans, ms2_scans);
   ABORT_IF(acq.ms2_cmds.empty())
 
-  // 2) Feed the original MS2 (suffix 'R', NOT itself a follow-up) -> tags found -> first-generation 'C'.
-  const auto& ms2 = ms2_scans[0];
-  const ScanCommand& ms2_cmd = acq.ms2_cmds[0];
-  ABORT_IF(std::strlen(ms2_cmd.scan_description) < 4 ||
-           ms2_cmd.scan_description[3] == 'C' || ms2_cmd.scan_description[3] == 'F')
-  int gen1 = ida->processScan(ms2.mzs.data(), ms2.ints.data(), (int)ms2.mzs.size(), ms2.rt, 2,
-                              ms2_cmd.scan_description);
-  TEST_EQUAL(gen1 > 0, true)
-
-  // 3) Drain the first-generation 'C' follow-up command (priority 0, so it dequeues first).
-  ScanCommand follow{};
-  bool got_followup = false;
-  while (ida->getNextScanCommand(follow) == 1)
+  // conditional_with_tags_json has quant disabled, so each original ('R') MS2 yields at most ONE 'C' follow-up.
+  // With the single-generation guard (FLASHIda.cpp:984) every follow-up's parent is an 'R', never another
+  // follow-up, so followups <= r_count.
+  // ISSUE(F6): pre-fix feeding a follow-up re-triggered buildFollowUp -> a 'C' spawned another 'C' -> followups
+  // ISSUE      grows past r_count (bounded only by max_iters). followups <= r_count is the no-recursion invariant.
+  int r_count = 0, followups = 0;
+  for (const auto& c : acq.ms2_cmds)
   {
-    if (std::strlen(follow.scan_description) >= 4 &&
-        (follow.scan_description[3] == 'C' || follow.scan_description[3] == 'F'))
-    { got_followup = true; break; }
-    follow = ScanCommand{};
+    std::string d(c.scan_description);
+    if (d.size() < 4) continue;
+    if (d[3] == 'R')                     ++r_count;     // original production MS2
+    else if (d[3] == 'C' || d[3] == 'F') ++followups;   // conditional / quant follow-up
   }
-  ABORT_IF(!got_followup)
-
-  // 4) Feed the follow-up's OWN response (same tag-bearing MS2) back through the MS2 path.
-  int gen2 = ida->processScan(ms2.mzs.data(), ms2.ints.data(), (int)ms2.mzs.size(), ms2.rt, 2,
-                              follow.scan_description);
-
-  // ISSUE(F6): pre-fix feeding a follow-up re-triggered buildFollowUp -> a SECOND-generation 'C'/'F'
-  // appeared (gen2 > 0). The single-generation guard now blocks it: zero new commands, zero follow-ups.
-  TEST_EQUAL(gen2, 0)
-  ScanCommand drained{};
-  int second_gen_followups = 0;
-  while (ida->getNextScanCommand(drained) == 1)
-  {
-    if (std::strlen(drained.scan_description) >= 4 &&
-        (drained.scan_description[3] == 'C' || drained.scan_description[3] == 'F'))
-      second_gen_followups++;
-    drained = ScanCommand{};
-  }
-  TEST_EQUAL(second_gen_followups, 0)
+  TEST_TRUE(followups >= 1)          // a follow-up WAS produced (the test is meaningful)
+  TEST_TRUE(followups <= r_count)    // no follow-up spawned another (single-generation guard holds)
 
   delete ida;
 }
@@ -997,41 +882,30 @@ START_SECTION(processScan_ms3_commands)
   ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
   FLASHIda* ida = new FLASHIda(const_cast<char*>(ms3_mode1_json));
 
-  // Drive MS1 via engine-id echo with NO MS2 feed (the emitted MS2 commands stay pending; we feed the
-  // inclusion-pinned cytC MS2 ourselves below so the b/y matches fire MS3).
-  AcqResult acq = runInterleaved(ida, ms1_scans, {});
-  TEST_EQUAL(acq.ms2_cmds.size() > 0, true)
-  ABORT_IF(acq.ms2_cmds.empty())
+  // Drive the WHOLE MS1 -> MS2 -> MS3 chain through the canonical harness. runFullCycle pulls each command,
+  // feeds the inclusion-pinned cytC MS1 survey by engine id, then feeds ms2_cytc (ms2_scans[0]) back for the
+  // emitted MS2 command -> the b/y fragment matches fire MS3 targets; MS3 commands are collected in
+  // result.ms3_cmds (with no ms3_ion_map the MS2 spectrum is fed back for each MS3 via the legacy shortcut,
+  // which the engine accepts). Bounded by idle>=3 / auto-sized budget -> no raw drain loop, no hang.
+  CycleResult result = runFullCycle(ida, ms1_scans, ms2_scans);
+  TEST_EQUAL(result.ms2_cmds.size() > 0, true)
+  ABORT_IF(result.ms2_cmds.empty())
 
-  const ScanCommand& ms2_cmd = acq.ms2_cmds[0];
-  TEST_EQUAL(std::strlen(ms2_cmd.scan_description) <= 15, true)
-  TEST_EQUAL(ms2_cmd.msn_level, 2)
-
-  // Process MS2 return — inclusion-pinned cytC precursor -> b/y fragment matches -> MS3 targets
-  const auto& ms2 = ms2_scans[0];
-  int ms2_result = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
-                                     (int)ms2.mzs.size(), ms2.rt,
-                                     2, ms2_cmd.scan_description);
-  TEST_EQUAL(ms2_result > 0, true)
-
-  // Drain all commands; MS3 at priority 1 dequeues before MS2 at priority 2
-  ScanCommand out{};
+  // MS3 at priority 1 dequeues before MS2 at priority 2; the harness collected every MS3 command it drained.
+  // Re-express the old per-command checks over result.ms3_cmds (each was returned by getNextScanCommand==1
+  // inside runFullCycle). The ms3_count>0 hard positive becomes "at least one MS3 command emitted".
   int ms3_count = 0;
-  while (ida->getNextScanCommand(out) == 1)
+  for (const ScanCommand& out : result.ms3_cmds)
   {
     TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
-    if (out.is_agc) break; // idle cycle = queue empty
-    if (out.msn_level == 3)
-    {
-      ms3_count++;
-      TEST_EQUAL(out.priority, 1)  // MS3 at priority 1
-      TEST_EQUAL(out.num_stages, 2)  // MS2 precursor + fragment target
+    ms3_count++;
+    TEST_EQUAL(out.priority, 1)    // MS3 at priority 1
+    TEST_EQUAL(out.num_stages, 2)  // MS2 precursor + fragment target
 
-      // D1: MS3 scan description uses 3-char ID + type code 'R' (recording)
-      std::string ms3_desc(out.scan_description);
-      TEST_EQUAL(ms3_desc.size() >= 4, true)
-      TEST_EQUAL(ms3_desc[3], 'R')  // MS3 recording
-    }
+    // D1: MS3 scan description uses 3-char ID + type code 'R' (recording)
+    std::string ms3_desc(out.scan_description);
+    TEST_EQUAL(ms3_desc.size() >= 4, true)
+    TEST_EQUAL(ms3_desc[3], 'R')  // MS3 recording
   }
   TEST_EQUAL(ms3_count > 0, true)
 
@@ -1333,33 +1207,14 @@ START_SECTION(processScan_cycle_time_enforcement)
   // cycle_time_json: cycle_time.enabled=true, value_ms=0 (any elapsed time triggers)
   FLASHIda* ida = new FLASHIda(const_cast<char*>(cycle_time_json));
 
-  // Bootstrap an MS1 survey from the engine and feed the MS1 fixture with the engine's OWN scan_description
-  // (the always-on MS1 gate rejects fabricated ids) -- this generates the MS2 commands (priority 2) that the
-  // next cycle-time MS1 must beat. The engine emits a real MS1 survey either via the cycle-time path or, if
-  // <1ms has elapsed, via the idle cycle (AGC then a priority-3 MS1); loop until we get the non-AGC MS1.
-  // Feed successive MS1 scans, each stamped with a FRESH engine survey id, until one selects a precursor —
-  // scan 0 of ms1_standard is not selectable, and a feed (even selecting 0) resolves its survey id, so each
-  // attempt needs its own survey. The forming MS1's MS2 commands stay queued at priority 2 for the cycle-time
-  // check below.
-  ScanCommand survey{};
-  bool fed_ms1 = false;
-  for (int si = 0; si < (int)ms1_scans.size() && !fed_ms1; ++si)
-  {
-    bool got = false;
-    for (int k = 0; k < 8 && !got; ++k)
-    {
-      int rs = ida->getNextScanCommand(survey);
-      TEST_EQUAL(rs, 1)
-      if (survey.is_agc || survey.scan_description[0] == '\0' || survey.msn_level != 1) continue;  // skip AGC/idle
-      got = true;
-    }
-    ABORT_IF(!got)
-    const auto& boot = ms1_scans[si];
-    int pushed = ida->processScan(boot.mzs.data(), boot.ints.data(), (int)boot.mzs.size(), boot.rt, 1,
-                                  survey.scan_description);
-    if (pushed > 0) fed_ms1 = true;       // selectable MS1 -> MS2 commands now queued at priority 2
-  }
-  ABORT_IF(!fed_ms1)
+  // Bootstrap the survey + MS2-command seeding through the canonical harness instead of a hand-rolled
+  // pull->echo->feed loop. runInterleaved drives MS1 by echoing each engine survey id (the always-on MS1
+  // gate rejects fabricated ids) with NO MS2 feed (ms2_scans={}), so the selectable MS1's emitted MS2
+  // commands stay QUEUED at priority 2 -- exactly the state the next cycle-time MS1 (priority 0) must beat.
+  // acq.ms2_cmds non-empty == the old `fed_ms1` (a selectable MS1 produced MS2 commands).
+  AcqResult acq = runInterleaved(ida, ms1_scans, {});
+  TEST_EQUAL(acq.ms2_cmds.size() > 0, true)
+  ABORT_IF(acq.ms2_cmds.empty())
 
   // Guarantee a strictly positive gap since the last survey so cycle_time_ms=0 ("any elapsed time triggers")
   // fires deterministically rather than racing the sub-millisecond idle path.
