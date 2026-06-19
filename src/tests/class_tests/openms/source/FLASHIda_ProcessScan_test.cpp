@@ -767,6 +767,38 @@ START_SECTION(processScan_ms2_path)
 }
 END_SECTION
 
+// P4-U04b: unified context-support gate (TODO #8/#9). processScan validates ONCE, before the level
+// dispatch, that the resolved queued command supports the inbound scan: ms_level in {1,2,3},
+// ctx.msn_level == ms_level, and ctx.num_stages >= required(ms_level). Any violation -> return 0.
+START_SECTION(processScan_context_gate_rejects_unsupported_levels)
+{
+  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  auto ms2_scans = loadTsvScans(ms2_tsv_path);
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
+
+  // Drive MS1 with NO MS2 feed so an emitted MS2 command (msn_level=2, num_stages=1) stays pending, then
+  // feed it back at the given inbound ms_level. Fresh engine per call so resolvePending isn't re-consumed.
+  auto feed_ms2_cmd_at_level = [&](int inbound_level) -> int
+  {
+    FLASHIda ida(const_cast<char*>(standard_json));
+    AcqResult acq = runInterleaved(&ida, ms1_scans, {});
+    if (acq.ms2_cmds.empty()) return -999;  // setup failure -> fails the assertion below, visibly
+    const ScanCommand& ms2_cmd = acq.ms2_cmds[0];
+    const auto& ms2 = ms2_scans[0];
+    return ida.processScan(ms2.mzs.data(), ms2.ints.data(), (int)ms2.mzs.size(), ms2.rt,
+                           inbound_level, ms2_cmd.scan_description);
+  };
+
+  // (a) MS4+ unsupported (required_stages < 0): would previously have run the MS3 path. (TODO #9)
+  TEST_EQUAL(feed_ms2_cmd_at_level(4), 0)
+  // (b) Inbound ms_level=3 but the queued command is msn_level=2 / num_stages=1 (< required 2): the
+  //     context cannot support the inbound scan level -> rejected. (TODO #8 + msn_level==ms_level)
+  TEST_EQUAL(feed_ms2_cmd_at_level(3), 0)
+  // (c) Inbound ms_level=1 but the queued command is msn_level=2 (level mismatch) -> rejected.
+  TEST_EQUAL(feed_ms2_cmd_at_level(1), 0)
+}
+END_SECTION
+
 // P4-U05: processScan with empty spectrum returns 0
 START_SECTION(processScan_empty_spectrum)
 {

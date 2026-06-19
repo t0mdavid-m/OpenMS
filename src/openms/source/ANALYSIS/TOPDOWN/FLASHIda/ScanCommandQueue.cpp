@@ -293,7 +293,7 @@ namespace OpenMS
   }
 
   ScanCommand ScanCommandQueue::buildMS3(const ScanCommand& ms2_ctx, const ScanConfig& ms3_config,
-                                          double frag_mz, int frag_charge, double iso_width,
+                                          double frag_mz, int frag_charge, double iso_width, int parent_scan_id,
                                           char ion_type, int frag_index, int priority,
                                           const FragmentAnalysis::FragmentScores& frag_scores)
   {
@@ -326,8 +326,8 @@ namespace OpenMS
     std::strncpy(cmd.scan_rate, ms3_config.scan_rate.c_str(), sizeof(cmd.scan_rate) - 1);
     cmd.scan_rate[sizeof(cmd.scan_rate) - 1] = '\0';
 
-    // Parent tracking ID from MS2 context
-    std::string parent_enc = encode(ms2_ctx.scan_id);
+    // Parent tracking ID (mandatory param; caller passes the immediate parent, normally ms2_ctx.scan_id)
+    std::string parent_enc = encode(parent_scan_id);
     std::strncpy(cmd.parent_scan_id, parent_enc.c_str(), 3);
     cmd.parent_scan_id[3] = '\0';
 

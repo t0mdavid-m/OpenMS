@@ -168,7 +168,7 @@ START_SECTION(concurrent_build_resolve)
     lp.mz = 500.0 + i;
     lp.abs_charge = 10;
     pg.push_back(lp);
-    ScanCommand cmd = queue.buildMS2(pg, 10, sc);
+    ScanCommand cmd = queue.buildMS2(pg, 10, sc, 2, 0);
     built_ids[i] = cmd.scan_id;
     queue.push(cmd);
   }

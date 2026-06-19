@@ -70,12 +70,14 @@ namespace OpenMS
 
     // --- Building ---
 
-    /// Build MS2 ScanCommand from a PeakGroup + ScanConfig (unified factory)
-    ScanCommand buildMS2(const PeakGroup& pg, int charge, const ScanConfig& scan_config, int priority = 2, int parent_scan_id = 0);
+    /// Build MS2 ScanCommand from a PeakGroup + ScanConfig (unified factory).
+    /// parent_scan_id is MANDATORY (0 = no parent / root); stamped onto the command at creation.
+    ScanCommand buildMS2(const PeakGroup& pg, int charge, const ScanConfig& scan_config, int priority, int parent_scan_id);
 
-    /// Build MS3 ScanCommand from MS2 context + fragment target + MS3 config for CE/activation
+    /// Build MS3 ScanCommand from MS2 context + fragment target + MS3 config for CE/activation.
+    /// parent_scan_id is MANDATORY (the immediate parent's tracking id); stamped at creation.
     ScanCommand buildMS3(const ScanCommand& ms2_ctx, const ScanConfig& ms3_config,
-                         double frag_mz, int frag_charge, double iso_width,
+                         double frag_mz, int frag_charge, double iso_width, int parent_scan_id,
                          char ion_type = '\0', int frag_index = 0, int priority = 1,
                          const FragmentAnalysis::FragmentScores& frag_scores = {});
 

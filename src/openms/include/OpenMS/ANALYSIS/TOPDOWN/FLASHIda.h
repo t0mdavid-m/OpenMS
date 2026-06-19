@@ -269,32 +269,60 @@ namespace OpenMS
     /// Write one TSV row for a dequeued scan command
     void writeScanCommandRow_(const ScanCommand& cmd);
 
+    /// One scan_results.tsv row, filled by a processScan branch and written once at the bottom.
+    /// Field set == the scan_results columns; defaults == the sentinels the non-applicable paths log,
+    /// so a branch only assigns the fields it actually owns. NOTE: tag_count/fragment_count default to
+    /// the MS3 sentinel (-1) — MS1 must set both to 0 and MS2 to its real counts.
+    struct ScanRowDescriptor
+    {
+      std::string tracking_id;
+      int ms_level = 0;
+      double rt = 0.0;
+      int mass_count = 0;
+      int commands_pushed = 0;
+      std::vector<std::string> child_ids;
+      int tag_count = -1;
+      std::string matched_protein;
+      std::string proteoform_sequence;
+      uint64_t enqueue_ts = 0, dequeue_ts = 0, received_ts = 0;
+      // INVARIANT: raw pointer into ENGINE-OWNED storage (selection_.deconvolvedMS1() /
+      // deconv_.storedMS2() / exploration_.exploration_deconv_->storedMS2()) — all FLASHIda members
+      // that outlive processScan. Exactly one ms-level branch runs per call, so the spectrum is never
+      // re-deconvolved between fill and the bottom write. Do NOT re-deconvolve after a fill or it dangles.
+      const DeconvolvedSpectrum* deconv_spectrum = nullptr;
+      std::string parent_tracking_id;
+      float tic_coverage = 0.0f;
+      int fragment_count = -1;
+      int exploration_group_id = -1;
+      int exploration_metric = 0;
+      int variant_index = -1;
+      int total_variants = 0;
+      std::string collision_energy = "0";
+      double exploration_score = -1.0;
+      double remaining_ratio = -1.0;
+      std::string activation_type;
+      std::string reaction_time = "0";
+      // F5: encoded id of the winning variant; "" on every non-completing / non-exploration row.
+      std::string winner_tracking_id;
+    };
+
+    /// One identification.tsv row. All members are held BY VALUE because the sources (info.*, a local
+    /// ms2_ctx, or a reference into ms2_context_cache_) go out of scope / are erased before the bottom
+    /// write. 0..N per scan; empty for MS1 and MS3 non-exploration.
+    struct IdRowDescriptor
+    {
+      std::string tracking_id;
+      int ms_level = 0;
+      char scan_mode = '\0';
+      Exploration::MS2Context ctx;
+      FragmentAnalysis::ProteoformMatch match;
+    };
+
     /// Write one TSV row for a processScan result (ms_level is logged at scan_results col 1)
-    void writeScanResultRow_(const std::string& tracking_id, int ms_level, double rt,
-                             int mass_count, int commands_pushed,
-                             const std::vector<std::string>& child_ids,
-                             int tag_count, const std::string& matched_protein,
-                             const std::string& proteoform_sequence,
-                             uint64_t enqueue_ts, uint64_t dequeue_ts, uint64_t received_ts,
-                             const DeconvolvedSpectrum* deconv_spectrum,
-                             const std::string& parent_tracking_id,
-                             float tic_coverage = 0.0f, int fragment_count = 0,
-                             int exploration_group_id = -1, int exploration_metric = 0,
-                             int variant_index = -1, int total_variants = 0,
-                             const std::string& collision_energy = "0", double exploration_score = -1.0,
-                             double remaining_ratio = -1.0,
-                             const std::string& activation_type = "",
-                             const std::string& reaction_time = "0",
-                             // F5: encoded id of the winning variant; "" on every non-completing /
-                             // non-exploration row. Appended as the LAST scan_results column.
-                             const std::string& winner_tracking_id = "");
+    void writeScanResultRow_(const ScanRowDescriptor& row);
 
     /// Write one identification.tsv row for an MS2 or MS3 scan with matched fragments
-    void writeIdentificationRow_(const std::string& tracking_id,
-                                  int ms_level,
-                                  char scan_mode,
-                                  const Exploration::MS2Context& ctx,
-                                  const FragmentAnalysis::ProteoformMatch& match);
+    void writeIdentificationRow_(const IdRowDescriptor& row);
 
     /// Derive scan_type string from scan_description
     static std::string scanTypeFromDescription_(const ScanCommand& cmd);

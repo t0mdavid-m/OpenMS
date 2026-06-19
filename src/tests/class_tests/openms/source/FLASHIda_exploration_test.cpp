@@ -1051,7 +1051,7 @@ START_SECTION(ms3_exploration_variants_use_buildMS3)
   Exploration exploration(cfg, fragments);
 
   auto precursor_pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
-  ScanCommand ms2_ctx = queue.buildMS2(precursor_pg, 3, cfg.level(2).scans[0]);
+  ScanCommand ms2_ctx = queue.buildMS2(precursor_pg, 3, cfg.level(2).scans[0], 2, 0);
 
   auto fragment_pg = makeSyntheticPeakGroup(500.0, 1000.0, 2);
   auto cmds = exploration.initiate(3, fragment_pg, 2, -50.0, queue, &ms2_ctx, 'y', 5);
@@ -1107,7 +1107,7 @@ START_SECTION(ms3_exploration_winner_selection_and_cleanup)
   Exploration exploration(cfg, fragments);
 
   auto precursor_pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
-  ScanCommand ms2_ctx = queue.buildMS2(precursor_pg, 3, cfg.level(2).scans[0]);
+  ScanCommand ms2_ctx = queue.buildMS2(precursor_pg, 3, cfg.level(2).scans[0], 2, 0);
 
   auto fragment_pg = makeSyntheticPeakGroup(500.0, 1000.0, 2);
   auto cmds = exploration.initiate(3, fragment_pg, 2, -50.0, queue, &ms2_ctx);
@@ -1946,7 +1946,7 @@ START_SECTION(ms3_remaining_precursor_isolation_width)
   // getMzRange() returns (500.0, 500.0) -> width=0 before floor
   auto fragment_pg = makeSyntheticPeakGroup(500.0, 1000.0, 2);
   ScanCommand ms2_ctx = queue.buildMS2(makeSyntheticPeakGroup(800.0, 2400.0, 3), 3,
-                                        cfg.level(2).scans[0]);
+                                        cfg.level(2).scans[0], 2, 0);
 
   auto cmds = exploration.initiate(3, fragment_pg, 2, 0.0, queue, &ms2_ctx);
   // RemainingPrecursor: 1 baseline + 5 CE variants (20,25,30,35,40) = 6
@@ -2100,7 +2100,7 @@ START_SECTION(initiateNextLevel_ms2_min_charge_filters_fragments)
   }
 
   auto precursor_pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
-  ScanCommand ms2_ctx = queue.buildMS2(precursor_pg, 3, cfg.level(2).scans[0]);
+  ScanCommand ms2_ctx = queue.buildMS2(precursor_pg, 3, cfg.level(2).scans[0], 2, 0);
 
   // initiateNextLevel processes MS2 results and picks fragments for MS3
   // With ms2.min_charge=99, ALL fragments should be filtered out

@@ -182,12 +182,13 @@ namespace OpenMS
       if (msn_level >= 3 && ms_ctx != nullptr)
       {
         cmd = queue.buildMS3(*ms_ctx, variant_config,
-                             precursor_mz, charge, isolation_width,
+                             precursor_mz, charge, isolation_width, ms_ctx->scan_id,
                              ion_type, frag_index, expl_priority, frag_scores);  // F2: real stage-1 scalars
       }
       else
       {
-        cmd = queue.buildMS2(pg, charge, variant_config, expl_priority);
+        // Parent = the originating command (ms_ctx->scan_id, e.g. the MS1 survey id); 0 when none.
+        cmd = queue.buildMS2(pg, charge, variant_config, expl_priority, ms_ctx ? ms_ctx->scan_id : 0);
       }
       cmd.faims_cv = faims_cv;
 
@@ -574,12 +575,14 @@ namespace OpenMS
           wfs.precursor_intensity = wcmd.precursor_intensity_s1; wfs.peakgroup_intensity = wcmd.peakgroup_intensity_s1;
           prod_cmd = queue.buildMS3(group.variants[best_idx].cmd, prod_config,
                                      group.precursor_mz, group.precursor_charge,
-                                     group.isolation_width,
+                                     group.isolation_width, group.variants[best_idx].cmd.scan_id,
                                      group.fragment_ion_type, group.fragment_ion_index, 1, wfs);
         }
         else
         {
-          prod_cmd = queue.buildMS2(group.precursor_pg, group.precursor_charge, prod_config, 2);
+          // Parent left empty here (0); the F1 fallback below stamps the group's originating id, matching
+          // the historical processScan push-loop exactly (incl. the degenerate originating_cmd.scan_id==0 case).
+          prod_cmd = queue.buildMS2(group.precursor_pg, group.precursor_charge, prod_config, 2, 0);
         }
         prod_cmd.faims_cv = group.faims_cv;
         // I2: the production re-acquisition reuses the winning variant's isolation window, so it inherits
@@ -605,6 +608,16 @@ namespace OpenMS
             &group.variants[best_idx].cmd);
         info.commands.insert(info.commands.end(), next_nlr.commands.begin(), next_nlr.commands.end());
       }
+    }
+
+    // F1 fallback: stamp any command whose builder left the parent empty with the group's originating id
+    // (only fill empties — never overwrite a builder-set parent, e.g. buildMS3's immediate MS2 parent).
+    // Relocated here from the former processScan feedResult push-loops so callers receive fully-parented
+    // commands and no longer post-stamp.
+    for (auto& c : info.commands)
+    {
+      if (c.parent_scan_id[0] == '\0')
+        std::strncpy(c.parent_scan_id, info.parent_scan_id, 4);
     }
 
     for (const auto& vr : group.variants)
@@ -795,12 +808,12 @@ namespace OpenMS
         if (next_level >= 3 && ms_ctx != nullptr)
         {
           // MS3: proper two-stage command via buildMS3 with config CE/activation
-          cmd = queue.buildMS3(*ms_ctx, next_scan_config, frag_mz, frag_charge, iso_width,
+          cmd = queue.buildMS3(*ms_ctx, next_scan_config, frag_mz, frag_charge, iso_width, ms_ctx->scan_id,
                                ion_types[ti], frag_indices[ti], 1, frag_scores[ti]);
         }
         else
         {
-          // MS2: single-stage command via buildMS2
+          // MS2: single-stage command via buildMS2 (parent = the MS context that triggered next level)
           PeakGroup frag_pg(frag_charge, frag_charge, true);
           frag_pg.setMonoisotopicMass(masses[ti]);
           FLASHHelperClasses::LogMzPeak lp;
@@ -808,7 +821,7 @@ namespace OpenMS
           lp.abs_charge = frag_charge;
           frag_pg.push_back(lp);
 
-          cmd = queue.buildMS2(frag_pg, frag_charge, next_scan_config, 1);
+          cmd = queue.buildMS2(frag_pg, frag_charge, next_scan_config, 1, ms_ctx ? ms_ctx->scan_id : 0);
           cmd.msn_level = next_level;
         }
         cmd.faims_cv = faims_cv;
