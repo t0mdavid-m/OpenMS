@@ -746,31 +746,13 @@ FLASHIda::FLASHIda(char* arg) :
     return precursor_map_for_real_time_acquisition;
   }
 
-  // ---- FAIMS CV adaptive skip state machine ----
-  //
-  // Behavioral audit of C# ScanScheduler (reference implementation):
-  //
-  // Q1. CV advance trigger: updateCV() called after every MS1 deconvolution with
-  //     the CV of that scan and precursor count. getFAIMSMS1Scan() does actual cycling.
-  // Q2. Threshold comparison: precursors < MassThreshold (strictly less than). Default=15.
-  // Q3. Skip counter: CVSkipAmount[pos] doubles (min=1, cap=MaxCVSkip).
-  //     CVSkipCount[pos] resets to 0 in BOTH branches of updateCV().
-  //     In getFAIMSMS1Scan(), CVSkipCount[i]++ when skipping.
-  // Q4. Forced cycle: when CVSkipAmount >= MaxCVSkip, skip amount stops growing.
-  //     CV is visited when CVSkipCount >= CVSkipAmount (counter exhausted).
-  // Q5. CV transition: getFAIMSMS1Scan() enqueues AGC+MS1 for next CV.
-  // Q6. Call order: deconvolve → create MS2s → updateCV(cv, precursors) → getFAIMSMS1Scan(true).
-  // Q7. Cycling: forward only (currentCV++), wraps at end. Increment-first (index 0 skipped on first call).
-  // Q8. Single CV: Flash.cs uses UnifiedScanProcessor, ScanScheduler with UseFAIMS=false.
-  // Q9. Non-FAIMS: faims_cv = 0.0 on all commands.
-
   int FLASHIda::processScan(const double* mzs, const double* ints, int length,
                              double rt_min, int ms_level, const char* scan_description,
                              double faims_cv)
   {
     std::lock_guard<std::mutex> lock(analysis_mutex_);
 
-    // Centralized tracking ID extraction — early return for instrument-triggered scans
+    // Tracking ID extraction
     std::string desc_str = scan_description ? std::string(scan_description) : "";
     if (desc_str.size() < 3) return 0;
     std::string id_str = desc_str.substr(0, 3);
@@ -783,7 +765,7 @@ FLASHIda::FLASHIda(char* arg) :
       return 0;
     }
 
-    // Retrieve timestamps from pending map (enqueue set by push(), dequeue set by dequeue())
+    // Retrieve timestamps from pending map
     uint64_t enqueue_ts = 0;
     uint64_t dequeue_ts = 0;
     bool id_was_emitted = false;
@@ -795,33 +777,31 @@ FLASHIda::FLASHIda(char* arg) :
         enqueue_ts = peeked->enqueue_timestamp_ms;
         dequeue_ts = peeked->dequeue_timestamp_ms;
       }
-    }
-
-    // MS1 gate: an MS1 whose tracking id was never emitted as a command is rejected — symmetric with the
-    // MS2/MS3 resolvePending gate below. Engine-emitted survey MS1 ids are registered in pending_scan_map_ at
-    // dequeue, so production (and the engine-id-echoing harness) pass; a fabricated/sentinel id (e.g. "~~~")
-    // never enters the pending map and is rejected here, instead of being silently logged as a real scan.
-    if (ms_level == 1 && !id_was_emitted)
-    {
-      std::cout << "[TRACK-RESOLVE] id=" << id_str << " status=not_found" << std::endl;
-      return 0;
+      else
+      {
+        std::cout << "[TRACK-RESOLVE] id=" << id_str << " status=not_found" << std::endl;
+        return 0;
+      }
     }
 
     // Stamp received timestamp (instrument → C++ handoff)
     uint64_t received_ts = static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count());
+        std::chrono::steady_clock::now().time_since_epoch()
+      ).count()
+    );
+
+    auto resolved = queue_.resolvePending(tracking_id);
+    ScanCommand ctx = resolved.value();
 
     if (ms_level == 1)
     {
       // Selection=none: skip MS1 precursor selection entirely
       if (config_.level(1).selection == SelectionMetric::None)
-      {
-        queue_.resolvePending(tracking_id);
         return 0;
       }
 
-      // MS1 path: deconvolve, score, filter, select top-N, push MS2 commands
+      // deconvolve, score, filter, select top-N, push MS2 commands
       int n = selection_.filterAndRank(mzs, ints, length, rt_min, 1, faims_cv);
       const auto& selected = selection_.selectedPeakGroups();
       const auto& sel_charges = selection_.triggerCharges();
@@ -836,6 +816,8 @@ FLASHIda::FLASHIda(char* arg) :
           ScanCommand ms1_ctx{};
           ms1_ctx.scan_id = tracking_id;
           auto cmds = exploration_.initiate(2, selected[i], sel_charges[i], faims_cv, queue_, &ms1_ctx);
+          // Stamp commands with parent scan id and queue
+          // TODO: @ Claude stamping should happen within initiate of exploration
           for (auto& c : cmds)
           {
             std::string ms1_enc = ScanCommandQueue::encode(tracking_id);
@@ -864,16 +846,14 @@ FLASHIda::FLASHIda(char* arg) :
         }
       }
 
-      // I2: record each MS2 precursor's isolation-window SNR (signal/noise over the ACTUAL commanded
-      // window, co-isolation aware) against the MS1 source spectrum, keyed by scan_id, for the later
-      // identification.tsv row. signal = the engine's commanded selected-charge intensity (precursor_intensity).
-      // Exploration variants of one precursor share the same window, so each gets the same value.
+      // All MS2 submissions should happen here
       {
         const MSSpectrum& ms1_src = selection_.deconvolvedMS1().getOriginalSpectrum();
         for (const auto& c : ms2_commands)
         {
           if (c.num_stages <= 0) continue;
           const double half = c.stages[0].isolation_width / 2.0;
+          // TODO: @Claude I think this can be done way easier. Simply get the raw spectrum (deconv->raw), 
           queue_.setWindowSnr(c.scan_id, FragmentAnalysis::windowSnr(
               ms1_src, c.stages[0].precursor_mz - half, c.stages[0].precursor_mz + half,
               c.precursor_intensity));
@@ -883,7 +863,7 @@ FLASHIda::FLASHIda(char* arg) :
       // IDA log entry
       writeIDALogEntry_(rt_min, tracking_id, id_str, ms2_commands, selection_.deconvolvedMS1());
 
-      // Results TSV entry for MS1
+      // Results TSV entry
       std::vector<std::string> child_ids;
       for (const auto& c : ms2_commands)
         child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
@@ -891,9 +871,6 @@ FLASHIda::FLASHIda(char* arg) :
       writeScanResultRow_(id_str, 1, rt_min, all_mass_count, commands_pushed,
                           child_ids, 0, "", "", enqueue_ts, dequeue_ts, received_ts,
                           &selection_.deconvolvedMS1(), "");
-
-      // Resolve MS1 from pending map (timestamps already captured via peekPending)
-      queue_.resolvePending(tracking_id);
 
       // FAIMS CV cycling: update skip policy, advance to next CV, push MS1
       if (faims_.isEnabled())
@@ -931,10 +908,7 @@ FLASHIda::FLASHIda(char* arg) :
         std::vector<std::string> expl_children;
         for (auto& c : info.commands)
         {
-          // F1: only stamp the group-originator parent when the builder did NOT already set one.
-          // buildMS3 sets the correct MS2 parent (ScanCommandQueue.cpp:331); overwriting it with
-          // info.parent_scan_id (the MS2 group's MS1 originating id) mis-parents MS3 -> MS1. Next-level
-          // buildMS2 commands leave parent_scan_id empty, so they still inherit the group originator.
+          // TODO: @Claude stamping should happen on command creation
           if (c.parent_scan_id[0] == '\0')
             std::strncpy(c.parent_scan_id, info.parent_scan_id, 4);
           queue_.push(c);
@@ -946,6 +920,8 @@ FLASHIda::FLASHIda(char* arg) :
         int expl_mass_count = has_expl_ms2 ? static_cast<int>(exploration_.exploration_deconv_->storedMS2().size()) : 0;
         const DeconvolvedSpectrum* ms2_spec = has_expl_ms2 ? &exploration_.exploration_deconv_->storedMS2() : nullptr;
         std::string parent_id(info.parent_scan_id);
+
+        // TODO @Claude move log output writing down to one central place, mirroring the MS1 structure
         writeScanResultRow_(id_str, 2, rt_min, expl_mass_count, static_cast<int>(info.commands.size()),
                             expl_children, info.identification_result.tag_count, info.matched_protein,
                             FragmentAnalysis::toProForma(info.proteoform_sequence, info.identification_result.ptm_sites), enqueue_ts, dequeue_ts, received_ts,
@@ -964,39 +940,29 @@ FLASHIda::FLASHIda(char* arg) :
         }
 
         exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);
+        // TODO @Claude return should go to the bottom, centralied
         return static_cast<int>(info.commands.size());
       }
-
-      auto resolved = queue_.resolvePending(tracking_id);
-      if (!resolved.has_value())
-      {
-        std::cout << "[TRACK-RESOLVE] id=" << id_str << " status=not_found" << std::endl;
-        return 0;
-      }
-      ScanCommand ctx = resolved.value();
+      
+      // TODO: @Claude this should be defined once for all ms levels
       std::vector<std::string> child_ids;
 
-      // F6: a follow-up MS2 ('F' quant / 'C' conditional) is itself processed through this same MS2 path,
-      // so without a guard its spectrum could satisfy the quant/tag predicate again and spawn ANOTHER
-      // follow-up, recursing without bound. Detect a follow-up by its scan_description suffix (stamped by
-      // buildFollowUp; normal MS2 = 'R', exploration = 'E', survey = 'S' — none collide with 'F'/'C') and
-      // refuse to generate a second-generation follow-up from it.
+      // TODO: @Claude the scan type should be defined once per ms level
       const bool current_ms2_is_follow_up =
           std::strlen(ctx.scan_description) >= 4 &&
           (ctx.scan_description[3] == 'F' || ctx.scan_description[3] == 'C');
 
-      // Step 3: Deconvolve MS2 with precursor context
+      // Deconvolve MS2 with precursor context
       double precursor_mass = 0;
       int precursor_charge = 0;
+      // TODO: @Claude this gate should be validated at the top (does context support the scan number of inbound scan)
       if (ctx.num_stages > 0)
       {
         precursor_charge = ctx.stages[0].charge_state;
         precursor_mass = ctx.mono_mass;
       }
-
       deconv_.deconvolveMSn(mzs, ints, length, rt_min, precursor_mass, precursor_charge);
 
-      // Step 4: Route by mode
       // Tag-based targeting
       bool tags_found = false;
       int tags_count = 0;   // real sequence-tag count (logged as tag_count, and cached for MS3 rows)
@@ -1010,7 +976,6 @@ FLASHIda::FLASHIda(char* arg) :
       }
 
       // Quantification follow-up (independent of tags)
-      // F6: skip when the current MS2 is itself a follow-up — a follow-up never spawns another.
       if (config_.quantification().enabled && !config_.quantification().follow_up_scan.activation.empty()
           && !current_ms2_is_follow_up)
       {
@@ -1025,7 +990,6 @@ FLASHIda::FLASHIda(char* arg) :
       }
 
       // Conditional MS2 follow-up -- only when tags detected AND explicitly enabled
-      // F6: skip when the current MS2 is itself a follow-up — a follow-up never spawns another.
       if (config_.targeting().conditional_ms2_enabled && tags_found && !current_ms2_is_follow_up)
       {
         auto cond = queue_.buildFollowUp(ctx, config_.targeting().tagging_follow_up_scan, 'C');
@@ -1034,11 +998,10 @@ FLASHIda::FLASHIda(char* arg) :
         commands_pushed++;
       }
 
-      // Step 5: MS3 targeting via selection_strategy
+      // MS3 targeting via selection_strategy
       Exploration::NextLevelResult nlr;
       if (config_.level(2).selection != SelectionMetric::None)
       {
-        std::cout << "flashida call site" << std::endl;
         nlr = exploration_.initiateNextLevel(2, deconv_.storedMS2(), ctx.faims_cv, queue_, &ctx);
         for (auto& c : nlr.commands)
         {
@@ -1120,6 +1083,7 @@ FLASHIda::FLASHIda(char* arg) :
       return commands_pushed;
     }
     // MS3 (or higher)
+    // TODO: @Claude gate MS3 explicitely, higher should return zero
     {
       // Route exploration variants to feedResult for scoring/winner selection
       if (exploration_.isExplorationVariant(tracking_id))
@@ -1128,10 +1092,7 @@ FLASHIda::FLASHIda(char* arg) :
         std::vector<std::string> expl_children;
         for (auto& c : info.commands)
         {
-          // F1: only stamp the group-originator parent when the builder did NOT already set one.
-          // buildMS3 sets the correct MS2 parent (ScanCommandQueue.cpp:331); overwriting it with
-          // info.parent_scan_id (the MS2 group's MS1 originating id) mis-parents MS3 -> MS1. Next-level
-          // buildMS2 commands leave parent_scan_id empty, so they still inherit the group originator.
+          // TODO: @Claude stamping should be done on scan reation
           if (c.parent_scan_id[0] == '\0')
             std::strncpy(c.parent_scan_id, info.parent_scan_id, 4);
           queue_.push(c);
