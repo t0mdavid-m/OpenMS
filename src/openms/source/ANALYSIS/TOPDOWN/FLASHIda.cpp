@@ -839,6 +839,16 @@ FLASHIda::FLASHIda(char* arg) :
     ScanRowDescriptor scan_row{};
     std::vector<IdRowDescriptor> id_rows;
 
+    // Common scan_results fields: identical in every branch, so set ONCE here (hoisted out of the
+    // per-branch fills). All inputs are already computed above. Branch-specific fields are filled
+    // inside each branch; the remaining sentinel-default fields are left to scan_row{}. Byte-identical.
+    scan_row.tracking_id = id_str;
+    scan_row.ms_level    = ms_level;   // gate guarantees ms_level in {1,2,3}; equals each branch's literal
+    scan_row.rt          = rt_min;
+    scan_row.enqueue_ts  = enqueue_ts;
+    scan_row.dequeue_ts  = dequeue_ts;
+    scan_row.received_ts = received_ts;
+
     if (ms_level == 1)
     {
       // Selection=none: skip MS1 precursor selection entirely
@@ -908,17 +918,11 @@ FLASHIda::FLASHIda(char* arg) :
       for (const auto& c : ms2_commands)
         child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
       int all_mass_count = static_cast<int>(selection_.deconvolvedMS1().size());
-      scan_row.tracking_id     = id_str;
-      scan_row.ms_level        = 1;
-      scan_row.rt              = rt_min;
       scan_row.mass_count      = all_mass_count;
       scan_row.commands_pushed = commands_pushed;
       scan_row.child_ids       = child_ids;
       scan_row.tag_count       = 0;   // MS1 logs 0 (override the -1 sentinel default)
       scan_row.fragment_count  = 0;   // MS1 logs 0 (override the -1 sentinel default)
-      scan_row.enqueue_ts      = enqueue_ts;
-      scan_row.dequeue_ts      = dequeue_ts;
-      scan_row.received_ts     = received_ts;
       scan_row.deconv_spectrum = &selection_.deconvolvedMS1();
       has_scan_row             = true;
 
@@ -970,18 +974,12 @@ FLASHIda::FLASHIda(char* arg) :
         std::string parent_id(info.parent_scan_id);
 
         // Fill the scan_results row (written at the bottom); copy info.* by value before goto.
-        scan_row.tracking_id         = id_str;
-        scan_row.ms_level            = 2;
-        scan_row.rt                  = rt_min;
         scan_row.mass_count          = expl_mass_count;
         scan_row.commands_pushed     = static_cast<int>(info.commands.size());
         scan_row.child_ids           = expl_children;
         scan_row.tag_count           = info.identification_result.tag_count;
         scan_row.matched_protein     = info.matched_protein;
         scan_row.proteoform_sequence = FragmentAnalysis::toProForma(info.proteoform_sequence, info.identification_result.ptm_sites);
-        scan_row.enqueue_ts          = enqueue_ts;
-        scan_row.dequeue_ts          = dequeue_ts;
-        scan_row.received_ts         = received_ts;
         scan_row.deconv_spectrum     = ms2_spec;
         scan_row.parent_tracking_id  = parent_id;
         scan_row.tic_coverage        = info.tic_coverage;
@@ -1111,18 +1109,12 @@ FLASHIda::FLASHIda(char* arg) :
       std::string ms2_rt  = ctx.num_stages > 0 ? std::to_string(ctx.stages[0].reaction_time) : "0";
       // Fill the scan_results row (written at the bottom). Exploration fields stay at their sentinel
       // defaults (-1/0/-1.0); only the real values are set here.
-      scan_row.tracking_id        = id_str;
-      scan_row.ms_level           = 2;
-      scan_row.rt                 = rt_min;
       scan_row.mass_count         = ms2_mass_count;
       scan_row.commands_pushed    = commands_pushed;
       scan_row.child_ids          = child_ids;
       scan_row.tag_count          = tag_count;
       scan_row.matched_protein    = nlr.matched_protein;
       scan_row.proteoform_sequence = FragmentAnalysis::toProForma(nlr.proteoform_sequence, nlr.proteoform_match.ptm_sites);
-      scan_row.enqueue_ts         = enqueue_ts;
-      scan_row.dequeue_ts         = dequeue_ts;
-      scan_row.received_ts        = received_ts;
       scan_row.deconv_spectrum    = ms2_spec;
       scan_row.parent_tracking_id = parent_id;
       scan_row.tic_coverage       = nlr.tic_coverage;
@@ -1163,23 +1155,15 @@ FLASHIda::FLASHIda(char* arg) :
         std::string parent_id(info.parent_scan_id);
 
         // Fill the scan_results row (written at the bottom); copy info.* by value before goto.
-        // F9: MS3 rows log fragment_count & tag_count as the -1 SENTINEL; tic_coverage stays real.
-        scan_row.tracking_id         = id_str;
-        scan_row.ms_level            = 3;
-        scan_row.rt                  = rt_min;
+        // F9: tag_count & fragment_count keep the scan_row{} -1 sentinel default (not re-set); tic stays real.
         scan_row.mass_count          = expl_mass_count;
         scan_row.commands_pushed     = static_cast<int>(info.commands.size());
         scan_row.child_ids           = expl_children;
-        scan_row.tag_count           = -1;
         scan_row.matched_protein     = info.matched_protein;
         scan_row.proteoform_sequence = FragmentAnalysis::toProForma(info.proteoform_sequence, info.identification_result.ptm_sites);
-        scan_row.enqueue_ts          = enqueue_ts;
-        scan_row.dequeue_ts          = dequeue_ts;
-        scan_row.received_ts         = received_ts;
         scan_row.deconv_spectrum     = ms3_spec;
         scan_row.parent_tracking_id  = parent_id;
         scan_row.tic_coverage        = info.tic_coverage;
-        scan_row.fragment_count      = -1;
         scan_row.exploration_group_id = info.group_id;
         scan_row.exploration_metric  = info.exploration_metric;
         scan_row.variant_index       = info.variant_index;
@@ -1301,23 +1285,15 @@ FLASHIda::FLASHIda(char* arg) :
       //     identification.tsv (ms3_fragments), not here.
       //   - tag_count: tagging is an MS2-targeting feature, not used for fragment-based MS3 id (the value here
       //     was a carried-down parent-MS2 count). tic_coverage (ms3_tic) stays real — F9 does not touch it.
-      // Fill the scan_results row (written at the bottom). child_ids stays empty; tag_count/fragment_count
-      // keep the -1 F9 sentinel (struct default); exploration fields stay at their sentinel defaults.
-      scan_row.tracking_id        = id_str;
-      scan_row.ms_level           = 3;
-      scan_row.rt                 = rt_min;
+      // Fill the scan_results row (written at the bottom). commands_pushed, tag_count, fragment_count keep
+      // the scan_row{} sentinel defaults (0/-1/-1, F9 — not re-set); child_ids stays empty; exploration
+      // fields stay at their sentinel defaults.
       scan_row.mass_count         = ms3_mass_count;
-      scan_row.commands_pushed    = 0;
-      scan_row.tag_count          = -1;
       scan_row.matched_protein    = ms3_matched_protein;
       scan_row.proteoform_sequence = ms3_proteoform;
-      scan_row.enqueue_ts         = enqueue_ts;
-      scan_row.dequeue_ts         = dequeue_ts;
-      scan_row.received_ts        = received_ts;
       scan_row.deconv_spectrum    = ms3_spec;
       scan_row.parent_tracking_id = parent_id;
       scan_row.tic_coverage       = ms3_tic;
-      scan_row.fragment_count     = -1;
       scan_row.collision_energy   = ms3_ce;
       scan_row.activation_type    = ms3_act;
       scan_row.reaction_time      = ms3_rt;
