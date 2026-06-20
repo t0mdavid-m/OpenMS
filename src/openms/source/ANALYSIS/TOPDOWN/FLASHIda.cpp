@@ -814,8 +814,8 @@ FLASHIda::FLASHIda(char* arg) :
     }
     ScanCommand ctx = resolved.value();
 
-    // Context-support gate (TODO #8/#9): validated ONCE, before the branch distinction. required_stages
-    // is the stage count this scan level needs in its queued command; ms_level>3 is unsupported (->0).
+    // Context-support gate, validated once before branching. required_stages = the stage count this
+    // level needs in its queued command; ms_level>3 is unsupported (returns 0).
     const int required_stages = (ms_level == 1) ? 0 : (ms_level == 2) ? 1 : (ms_level == 3) ? 2 : -1;
     if (required_stages < 0 || ctx.msn_level != ms_level || ctx.num_stages < required_stages)
     {
@@ -825,25 +825,24 @@ FLASHIda::FLASHIda(char* arg) :
       return 0;
     }
 
-    // Define-once locals (TODO #6/#7): scan type and the child-id accumulator, for all levels.
+    // Locals shared by all levels: the follow-up-scan flag and the child-id accumulator.
     const bool is_follow_up_scan =
         std::strlen(ctx.scan_description) >= 4 &&
         (ctx.scan_description[3] == 'F' || ctx.scan_description[3] == 'C');
     std::vector<std::string> child_ids;
 
-    // Converge-to-bottom carriers (TODO #4/#5): the file-backed TSV rows (scan_results + identification)
-    // are written ONCE at `bottom:`; the IDA log and the [TRACK-*] stdout diagnostics stay inline, and
-    // all side effects (queue pushes, atomics, cache erase) stay inline in their branch.
+    // Carriers for the file-backed TSV rows (scan_results + identification), written once at `bottom:`.
+    // The IDA log, the [TRACK-*] stdout lines, and all side effects (queue pushes, atomics, cache
+    // erase) stay inline in each branch.
     int return_code = 0;
     bool has_scan_row = false;
     ScanRowDescriptor scan_row{};
     std::vector<IdRowDescriptor> id_rows;
 
-    // Common scan_results fields: identical in every branch, so set ONCE here (hoisted out of the
-    // per-branch fills). All inputs are already computed above. Branch-specific fields are filled
-    // inside each branch; the remaining sentinel-default fields are left to scan_row{}. Byte-identical.
+    // scan_results fields that are identical in every branch — set once here. Each branch fills its
+    // own branch-specific fields; the rest keep their scan_row{} sentinel defaults.
     scan_row.tracking_id = id_str;
-    scan_row.ms_level    = ms_level;   // gate guarantees ms_level in {1,2,3}; equals each branch's literal
+    scan_row.ms_level    = ms_level;   // gate guarantees ms_level in {1,2,3}
     scan_row.rt          = rt_min;
     scan_row.enqueue_ts  = enqueue_ts;
     scan_row.dequeue_ts  = dequeue_ts;
@@ -869,8 +868,7 @@ FLASHIda::FLASHIda(char* arg) :
         {
           ScanCommand ms1_ctx{};
           ms1_ctx.scan_id = tracking_id;
-          // initiate stamps each command's parent_scan_id from ms_ctx->scan_id (= ms1_ctx.scan_id =
-          // tracking_id, set above), via the mandatory buildMS2 parent param (Task 3).
+          // initiate stamps each command's parent_scan_id from ms1_ctx.scan_id (= tracking_id).
           auto cmds = exploration_.initiate(2, selected[i], sel_charges[i], faims_cv, queue_, &ms1_ctx);
           for (auto& c : cmds)
           {
@@ -911,18 +909,18 @@ FLASHIda::FLASHIda(char* arg) :
         }
       }
 
-      // IDA log entry (the exception: stays inline in the MS1 branch).
+      // IDA log entry — stays inline in the MS1 branch.
       writeIDALogEntry_(rt_min, tracking_id, id_str, ms2_commands, selection_.deconvolvedMS1());
 
-      // Fill the scan_results row (written at the bottom). Uses the hoisted child_ids.
+      // Fill the scan_results row (written at bottom).
       for (const auto& c : ms2_commands)
         child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
       int all_mass_count = static_cast<int>(selection_.deconvolvedMS1().size());
       scan_row.mass_count      = all_mass_count;
       scan_row.commands_pushed = commands_pushed;
       scan_row.child_ids       = child_ids;
-      scan_row.tag_count       = 0;   // MS1 logs 0 (override the -1 sentinel default)
-      scan_row.fragment_count  = 0;   // MS1 logs 0 (override the -1 sentinel default)
+      scan_row.tag_count       = 0;   // MS1 logs 0 (overrides the -1 default)
+      scan_row.fragment_count  = 0;   // MS1 logs 0 (overrides the -1 default)
       scan_row.deconv_spectrum = &selection_.deconvolvedMS1();
       has_scan_row             = true;
 
@@ -963,8 +961,8 @@ FLASHIda::FLASHIda(char* arg) :
         std::vector<std::string> expl_children;
         for (auto& c : info.commands)
         {
-          queue_.push(c);  // parent_scan_id already stamped by feedResult/initiate (Task 3)
-          expl_children.push_back(ScanCommandQueue::encode(c.scan_id));  // B7: link pushed children
+          queue_.push(c);  // parent_scan_id already stamped by feedResult/initiate
+          expl_children.push_back(ScanCommandQueue::encode(c.scan_id));  // link pushed children
         }
 
         const bool has_expl_ms2 = exploration_.exploration_deconv_ != nullptr &&
@@ -973,7 +971,7 @@ FLASHIda::FLASHIda(char* arg) :
         const DeconvolvedSpectrum* ms2_spec = has_expl_ms2 ? &exploration_.exploration_deconv_->storedMS2() : nullptr;
         std::string parent_id(info.parent_scan_id);
 
-        // Fill the scan_results row (written at the bottom); copy info.* by value before goto.
+        // Fill the scan_results row (written at bottom); copy info.* by value before goto.
         scan_row.mass_count          = expl_mass_count;
         scan_row.commands_pushed     = static_cast<int>(info.commands.size());
         scan_row.child_ids           = expl_children;
@@ -993,7 +991,7 @@ FLASHIda::FLASHIda(char* arg) :
         scan_row.remaining_ratio     = info.remaining_ratio;
         scan_row.activation_type     = info.activation_type;
         scan_row.reaction_time       = std::to_string(info.reaction_time);
-        scan_row.winner_tracking_id  = info.winner_tracking_id;  // F5: "" except the group-completing row
+        scan_row.winner_tracking_id  = info.winner_tracking_id;  // "" except the group-completing row
         has_scan_row = true;
 
         // MS2 identification row for the exploration variant (copy by value before info dies at goto).
@@ -1005,7 +1003,7 @@ FLASHIda::FLASHIda(char* arg) :
         goto bottom;
       }
 
-      // Deconvolve MS2 with precursor context (gate guarantees num_stages >= 1; uses hoisted is_follow_up_scan/child_ids)
+      // Deconvolve MS2 with precursor context (gate guarantees num_stages >= 1).
       double precursor_mass = ctx.mono_mass;
       int precursor_charge = ctx.stages[0].charge_state;
       deconv_.deconvolveMSn(mzs, ints, length, rt_min, precursor_mass, precursor_charge);
@@ -1047,7 +1045,7 @@ FLASHIda::FLASHIda(char* arg) :
       Exploration::NextLevelResult nlr;
       if (config_.level(2).selection != SelectionMetric::None)
       {
-        // initiateNextLevel stamps each command's parent with the MS2 id (ctx.scan_id) at creation (Task 3).
+        // initiateNextLevel stamps each command's parent with the MS2 id (ctx.scan_id) at creation.
         nlr = exploration_.initiateNextLevel(2, deconv_.storedMS2(), ctx.faims_cv, queue_, &ctx);
         for (auto& c : nlr.commands)
         {
@@ -1061,9 +1059,8 @@ FLASHIda::FLASHIda(char* arg) :
         {
           if (nlr.commands[ci].msn_level >= 3 && ci < nlr.ms3_contexts.size())
           {
-            // I3: carry the PARENT MS2's identification tag count (the FLASHTnT count, real when a
-            // proteoform matched) to its MS3 rows — NOT the FASTA-DB-gated tags_count, which is 0 unless
-            // a tag-targeting database is loaded.
+            // Carry the parent MS2's identification tag count (real when a proteoform matched) to its
+            // MS3 rows — not the FASTA-DB-gated tags_count, which is 0 unless a tag-targeting DB is loaded.
             nlr.ms3_contexts[ci].tag_count = (!nlr.proteoform_match.fragments.empty())
                 ? nlr.proteoform_match.tag_count : tags_count;
             ms2_context_cache_[nlr.commands[ci].scan_id] = nlr.ms3_contexts[ci];
@@ -1082,8 +1079,8 @@ FLASHIda::FLASHIda(char* arg) :
         ms2_ctx.ms1_precursor_mass = ctx.mono_mass;
         ms2_ctx.ms1_precursor_mz = ctx.stages[0].precursor_mz;
         ms2_ctx.ms1_precursor_charge = ctx.stages[0].charge_state;
-        // I2: MS2 isolation-window reporting from the resolved MS2 command (window-SNR recorded in the
-        // queue map at MS1 time, keyed by this command's scan_id). MS3 triplet stays 0 on MS2 rows.
+        // MS2 isolation-window reporting from the resolved command (window-SNR was recorded at MS1
+        // time, keyed by this scan_id). The MS3 triplet stays 0 on MS2 rows.
         if (ctx.num_stages > 0)
         {
           ms2_ctx.ms2_isolation_width = ctx.stages[0].isolation_width;
@@ -1094,21 +1091,20 @@ FLASHIda::FLASHIda(char* arg) :
       }
 
       int ms2_mass_count = deconv_.hasStoredMS2() ? static_cast<int>(deconv_.storedMS2().size()) : 0;
-      // I3: log the identification tagger's real tag count when a proteoform was matched (the FASTA-DB
-      // tags_count is 0 unless a tag-targeting DB is loaded); fall back to tags_count otherwise (preserves
-      // the FASTA tag-targeting case and plain-DDA selection==None, which is legitimately 0).
+      // Log the identification tagger's real tag count when a proteoform matched; otherwise fall back
+      // to tags_count (the FASTA tag-targeting case, and plain-DDA selection==None which is legitimately 0).
       int tag_count = (!nlr.proteoform_match.fragments.empty())
           ? nlr.proteoform_match.tag_count : tags_count;
       const DeconvolvedSpectrum* ms2_spec = deconv_.hasStoredMS2() ? &deconv_.storedMS2() : nullptr;
       std::string parent_id(ctx.parent_scan_id);
 
-      // #6: log the actual MS2 scan-config CE/activation/reaction (single stage) the engine used.
+      // Log the actual MS2 scan-config CE/activation/reaction (single stage) the engine used.
       std::string ms2_ce  = ctx.num_stages > 0 ? std::to_string(ctx.stages[0].collision_energy) : "0";
       std::string ms2_act = ctx.num_stages > 0 ? std::string(ctx.stages[0].activation_type)
                                                : config_.level(2).scans[0].activation;
       std::string ms2_rt  = ctx.num_stages > 0 ? std::to_string(ctx.stages[0].reaction_time) : "0";
-      // Fill the scan_results row (written at the bottom). Exploration fields stay at their sentinel
-      // defaults (-1/0/-1.0); only the real values are set here.
+      // Fill the scan_results row (written at bottom). Exploration fields keep their sentinel
+      // defaults; only the real values are set here.
       scan_row.mass_count         = ms2_mass_count;
       scan_row.commands_pushed    = commands_pushed;
       scan_row.child_ids          = child_ids;
@@ -1144,8 +1140,8 @@ FLASHIda::FLASHIda(char* arg) :
         std::vector<std::string> expl_children;
         for (auto& c : info.commands)
         {
-          queue_.push(c);  // parent_scan_id already stamped by feedResult/initiate (Task 3)
-          expl_children.push_back(ScanCommandQueue::encode(c.scan_id));  // B7: link pushed children
+          queue_.push(c);  // parent_scan_id already stamped by feedResult/initiate
+          expl_children.push_back(ScanCommandQueue::encode(c.scan_id));  // link pushed children
         }
 
         const bool has_expl_ms3 = exploration_.exploration_deconv_ != nullptr &&
@@ -1154,8 +1150,8 @@ FLASHIda::FLASHIda(char* arg) :
         const DeconvolvedSpectrum* ms3_spec = has_expl_ms3 ? &exploration_.exploration_deconv_->storedMS2() : nullptr;
         std::string parent_id(info.parent_scan_id);
 
-        // Fill the scan_results row (written at the bottom); copy info.* by value before goto.
-        // F9: tag_count & fragment_count keep the scan_row{} -1 sentinel default (not re-set); tic stays real.
+        // Fill the scan_results row (written at bottom); copy info.* by value before goto.
+        // tag_count & fragment_count keep their -1 sentinel default; tic_coverage stays real.
         scan_row.mass_count          = expl_mass_count;
         scan_row.commands_pushed     = static_cast<int>(info.commands.size());
         scan_row.child_ids           = expl_children;
@@ -1173,7 +1169,7 @@ FLASHIda::FLASHIda(char* arg) :
         scan_row.remaining_ratio     = info.remaining_ratio;
         scan_row.activation_type     = info.activation_type;
         scan_row.reaction_time       = std::to_string(info.reaction_time);
-        scan_row.winner_tracking_id  = info.winner_tracking_id;  // F5: "" except the group-completing row
+        scan_row.winner_tracking_id  = info.winner_tracking_id;  // "" except the group-completing row
         has_scan_row = true;
 
         // Identification rows (copy by value before info dies at goto): primary + batch-evaluated winners.
@@ -1191,16 +1187,15 @@ FLASHIda::FLASHIda(char* arg) :
         goto bottom;
       }
 
-      // Non-exploration MS3: reuse the hoisted resolved/ctx (already consumed at the top; gate guarantees
-      // has_value && num_stages >= 2). NOTE: do NOT re-resolve here — the pending entry is already gone.
+      // Non-exploration MS3: reuse the resolved ctx from the top (gate guarantees num_stages >= 2).
+      // Do NOT re-resolve here — the pending entry is already gone.
       double precursor_mass = 0.0;
       int precursor_charge = 0;
       if (resolved.has_value() && resolved->num_stages >= 2)
       {
         precursor_charge = resolved->stages[1].charge_state;
-        // E3: pair the FRAGMENT charge with the FRAGMENT mass (mono_mass_s1), not the MS2-precursor mass
-        // (resolved->mono_mass). A consistent (mass,charge) precursor lets the existing deconvolution cap
-        // bound MS3 sub-fragment charges to the parent fragment charge (fragZ <= parentZ).
+        // Pair the fragment charge with the fragment mass (mono_mass_s1), not the MS2-precursor mass.
+        // A consistent (mass,charge) precursor caps MS3 sub-fragment charges to the parent (fragZ <= parentZ).
         precursor_mass = resolved->mono_mass_s1;
       }
 
@@ -1214,8 +1209,8 @@ FLASHIda::FLASHIda(char* arg) :
 
       const DeconvolvedSpectrum* ms3_spec = deconv_.hasStoredMS2() ? &deconv_.storedMS2() : nullptr;
 
-      // #2-5: results-row values that must outlive the inner identification block (mc/detailed are
-      // in scope only there, and cache_it is erased below). Default to the pinned MS1-style values.
+      // Results-row values that must outlive the inner identification block (mc/detailed are scoped
+      // there, and cache_it is erased below). Defaults below are overwritten on a match.
       std::string ms3_proteoform, ms3_matched_protein;
       int ms3_frag_count = 0, ms3_tag_count = 0;
       float ms3_tic = 0.0f;
@@ -1248,10 +1243,9 @@ FLASHIda::FLASHIda(char* arg) :
             // Copy mc (a reference into ms2_context_cache_, erased below) and detailed[0] (inner-scope)
             // BY VALUE into the id-row now — the bottom write must not read them after the erase.
             id_rows.push_back({id_str, 3, 'R', mc, detailed[0]});
-            // #2-5: hoist the decision values the engine used so the results row agrees with this match.
-            // I3: render the proteoform with its discovered PTMs (heme/N-term…) via the same renderer the
-            // identification row uses; mc.ptm_sites is the cached parent-MS2 PTM set (toProForma returns the
-            // bare sequence when empty, so no-PTM rows are unchanged).
+            // Capture the decision values the engine used so the results row agrees with this match.
+            // Render the proteoform with its discovered PTMs via the same renderer the id row uses;
+            // mc.ptm_sites is the cached parent-MS2 PTM set (toProForma returns the bare sequence when empty).
             ms3_proteoform = FragmentAnalysis::toProForma(mc.proteoform_sequence, mc.ptm_sites);
             ms3_frag_count = detailed[0].total_match_count;
             ms3_tag_count = mc.tag_count;
@@ -1272,7 +1266,7 @@ FLASHIda::FLASHIda(char* arg) :
       if (resolved.has_value())
         parent_id = std::string(resolved->parent_scan_id);
 
-      // #2-5: 2-stage CE/activation/reaction = MS2 isolation stage ; MS3 fragmentation stage.
+      // 2-stage CE/activation/reaction = MS2 isolation stage ; MS3 fragmentation stage.
       std::string ms3_ce = "0", ms3_act = "", ms3_rt = "0";
       if (resolved.has_value() && resolved->num_stages >= 2)
       {
@@ -1280,14 +1274,13 @@ FLASHIda::FLASHIda(char* arg) :
         ms3_act = std::string(resolved->stages[0].activation_type) + ";" + std::string(resolved->stages[1].activation_type);
         ms3_rt  = std::to_string(resolved->stages[0].reaction_time) + ";" + std::to_string(resolved->stages[1].reaction_time);
       }
-      // F9: MS3 rows log fragment_count & tag_count as the -1 SENTINEL (not the carried/not-yet-final value).
-      //   - fragment_count: MS3 matching is finalized only in the calibrated round; the matched count lives in
-      //     identification.tsv (ms3_fragments), not here.
-      //   - tag_count: tagging is an MS2-targeting feature, not used for fragment-based MS3 id (the value here
-      //     was a carried-down parent-MS2 count). tic_coverage (ms3_tic) stays real — F9 does not touch it.
-      // Fill the scan_results row (written at the bottom). commands_pushed, tag_count, fragment_count keep
-      // the scan_row{} sentinel defaults (0/-1/-1, F9 — not re-set); child_ids stays empty; exploration
-      // fields stay at their sentinel defaults.
+      // MS3 rows log fragment_count & tag_count as the -1 sentinel:
+      //   - fragment_count: MS3 matching is finalized only in the calibrated round; the matched count
+      //     lives in identification.tsv (ms3_fragments), not here.
+      //   - tag_count: tagging is an MS2 feature, not used for fragment-based MS3 id.
+      // Fill the scan_results row (written at bottom). commands_pushed, tag_count, fragment_count keep
+      // their sentinel defaults (0/-1/-1); child_ids stays empty; exploration fields stay at defaults.
+      // tic_coverage (ms3_tic) stays real.
       scan_row.mass_count         = ms3_mass_count;
       scan_row.matched_protein    = ms3_matched_protein;
       scan_row.proteoform_sequence = ms3_proteoform;
