@@ -869,6 +869,7 @@ FLASHIda::FLASHIda(char* arg) :
           ScanCommand ms1_ctx{};
           ms1_ctx.scan_id = tracking_id;
           // initiate stamps each command's parent_scan_id from ms1_ctx.scan_id (= tracking_id).
+          // @claude faims cv should be part of ms1_ctx
           auto cmds = exploration_.initiate(2, selected[i], sel_charges[i], faims_cv, queue_, &ms1_ctx);
           for (auto& c : cmds)
           {
@@ -905,6 +906,7 @@ FLASHIda::FLASHIda(char* arg) :
           const double window_lo = c.stages[0].precursor_mz - half;
           const double window_hi = c.stages[0].precursor_mz + half;
           const double snr       = FragmentAnalysis::windowSnr(raw_ms1, window_lo, window_hi, c.precursor_intensity);
+          // @claude this should not be tracked in the queue; find a better way to store this. Likely it would be good to store as part of context.
           queue_.setWindowSnr(c.scan_id, snr);
         }
       }
@@ -960,9 +962,11 @@ FLASHIda::FLASHIda(char* arg) :
         for (auto& c : expl_result.commands)
         {
           queue_.push(c);  // parent_scan_id already stamped by feedResult/initiate
+          // @claude this should be hanlded by the exploration class
           expl_children.push_back(ScanCommandQueue::encode(c.scan_id));  // link pushed children
         }
-
+        
+        // @claude this should be abstracted by exploration class. This logic does not belong here.
         const bool has_expl_deconv = exploration_.exploration_deconv_ != nullptr &&
                 exploration_.exploration_deconv_->hasStoredMS2();
         int expl_mass_count = has_expl_deconv ? static_cast<int>(exploration_.exploration_deconv_->storedMS2().size()) : 0;
