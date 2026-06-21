@@ -831,9 +831,9 @@ FLASHIda::FLASHIda(char* arg) :
         (ctx.scan_description[3] == 'F' || ctx.scan_description[3] == 'C');
     std::vector<std::string> child_ids;
 
-    // Carriers for the file-backed TSV rows (scan_results + identification), written once at `bottom:`.
-    // The IDA log, the [TRACK-*] stdout lines, and all side effects (queue pushes, atomics, cache
-    // erase) stay inline in each branch.
+    // Carriers for the file-backed TSV rows (scan_results + identification): each branch fills these,
+    // and they are written once after the branch dispatch below. The IDA log, the [TRACK-*] stdout
+    // lines, and all side effects (queue pushes, atomics, cache erase) stay inline in each branch.
     int return_code = 0;
     bool has_scan_row = false;
     ScanRowDescriptor scan_row{};
@@ -850,11 +850,11 @@ FLASHIda::FLASHIda(char* arg) :
 
     if (ms_level == 1)
     {
+      // ===== MS1: deconvolve -> select top-N -> push MS2 (or CE sweep) -> FAIMS cycle =====
       // Selection=none: skip MS1 precursor selection entirely
       if (config_.level(1).selection == SelectionMetric::None)
         return 0;
 
-      // deconvolve, score, filter, select top-N, push MS2 commands
       int n = selection_.filterAndRank(mzs, ints, length, rt_min, 1, faims_cv);
       const auto& selected = selection_.selectedPeakGroups();
       const auto& sel_charges = selection_.triggerCharges();
@@ -909,19 +909,18 @@ FLASHIda::FLASHIda(char* arg) :
         }
       }
 
-      // IDA log entry — stays inline in the MS1 branch.
+      // IDA log entry (MS1 only).
       writeIDALogEntry_(rt_min, tracking_id, id_str, ms2_commands, selection_.deconvolvedMS1());
 
-      // Fill the scan_results row (written at bottom).
       for (const auto& c : ms2_commands)
         child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
-      int all_mass_count = static_cast<int>(selection_.deconvolvedMS1().size());
-      scan_row.mass_count      = all_mass_count;
+      int ms1_mass_count = static_cast<int>(selection_.deconvolvedMS1().size());
+      scan_row.mass_count      = ms1_mass_count;
       scan_row.commands_pushed = commands_pushed;
       scan_row.child_ids       = child_ids;
       scan_row.tag_count       = 0;   // MS1 logs 0 (overrides the -1 default)
-      scan_row.fragment_count  = 0;   // MS1 logs 0 (overrides the -1 default)
       scan_row.deconv_spectrum = &selection_.deconvolvedMS1();
+      scan_row.fragment_count  = 0;   // MS1 logs 0 (overrides the -1 default)
       has_scan_row             = true;
 
       // FAIMS CV cycling: update skip policy, advance to next CV, push MS1
@@ -948,359 +947,359 @@ FLASHIda::FLASHIda(char* arg) :
       current_faims_cv_.store(faims_.isEnabled() ? faims_.currentCV() : 0.0, std::memory_order_release);
 
       return_code = commands_pushed;
-      goto bottom;
     }
     else if (ms_level == 2)
     {
       int commands_pushed = 0;
 
-      // Check if this is an exploration variant (before pending scan lookup)
+      // ===== MS2 (exploration variant): score variant -> push children -> fill row =====
       if (exploration_.isExplorationVariant(tracking_id))
       {
-        auto info = exploration_.feedResult(tracking_id, mzs, ints, length, rt_min, queue_);
+        auto expl_result = exploration_.feedResult(tracking_id, mzs, ints, length, rt_min, queue_);
         std::vector<std::string> expl_children;
-        for (auto& c : info.commands)
+        for (auto& c : expl_result.commands)
         {
           queue_.push(c);  // parent_scan_id already stamped by feedResult/initiate
           expl_children.push_back(ScanCommandQueue::encode(c.scan_id));  // link pushed children
         }
 
-        const bool has_expl_ms2 = exploration_.exploration_deconv_ != nullptr &&
+        const bool has_expl_deconv = exploration_.exploration_deconv_ != nullptr &&
                 exploration_.exploration_deconv_->hasStoredMS2();
-        int expl_mass_count = has_expl_ms2 ? static_cast<int>(exploration_.exploration_deconv_->storedMS2().size()) : 0;
-        const DeconvolvedSpectrum* ms2_spec = has_expl_ms2 ? &exploration_.exploration_deconv_->storedMS2() : nullptr;
-        std::string parent_id(info.parent_scan_id);
+        int expl_mass_count = has_expl_deconv ? static_cast<int>(exploration_.exploration_deconv_->storedMS2().size()) : 0;
+        const DeconvolvedSpectrum* expl_spec = has_expl_deconv ? &exploration_.exploration_deconv_->storedMS2() : nullptr;
+        std::string parent_id(expl_result.parent_scan_id);
 
-        // Fill the scan_results row (written at bottom); copy info.* by value before goto.
+        // Fill scan_results row in canonical order (copy expl_result.* by value — it dies at block end).
+        // DIVERGENCE vs MS3-expl: MS2 sets tag_count + fragment_count; MS3-expl leaves both at -1.
         scan_row.mass_count          = expl_mass_count;
-        scan_row.commands_pushed     = static_cast<int>(info.commands.size());
+        scan_row.commands_pushed     = static_cast<int>(expl_result.commands.size());
         scan_row.child_ids           = expl_children;
-        scan_row.tag_count           = info.identification_result.tag_count;
-        scan_row.matched_protein     = info.matched_protein;
-        scan_row.proteoform_sequence = FragmentAnalysis::toProForma(info.proteoform_sequence, info.identification_result.ptm_sites);
-        scan_row.deconv_spectrum     = ms2_spec;
+        scan_row.tag_count           = expl_result.identification_result.tag_count;
+        scan_row.matched_protein     = expl_result.matched_protein;
+        scan_row.proteoform_sequence = FragmentAnalysis::toProForma(expl_result.proteoform_sequence, expl_result.identification_result.ptm_sites);
+        scan_row.deconv_spectrum     = expl_spec;
         scan_row.parent_tracking_id  = parent_id;
-        scan_row.tic_coverage        = info.tic_coverage;
-        scan_row.fragment_count      = info.fragment_count;
-        scan_row.exploration_group_id = info.group_id;
-        scan_row.exploration_metric  = info.exploration_metric;
-        scan_row.variant_index       = info.variant_index;
-        scan_row.total_variants      = info.total_variants;
-        scan_row.collision_energy    = std::to_string(info.collision_energy);
-        scan_row.exploration_score   = info.score;
-        scan_row.remaining_ratio     = info.remaining_ratio;
-        scan_row.activation_type     = info.activation_type;
-        scan_row.reaction_time       = std::to_string(info.reaction_time);
-        scan_row.winner_tracking_id  = info.winner_tracking_id;  // "" except the group-completing row
+        scan_row.tic_coverage        = expl_result.tic_coverage;
+        scan_row.fragment_count      = expl_result.fragment_count;
+        scan_row.exploration_group_id = expl_result.group_id;
+        scan_row.exploration_metric  = expl_result.exploration_metric;
+        scan_row.variant_index       = expl_result.variant_index;
+        scan_row.total_variants      = expl_result.total_variants;
+        scan_row.collision_energy    = std::to_string(expl_result.collision_energy);
+        scan_row.exploration_score   = expl_result.score;
+        scan_row.remaining_ratio     = expl_result.remaining_ratio;
+        scan_row.activation_type     = expl_result.activation_type;
+        scan_row.reaction_time       = std::to_string(expl_result.reaction_time);
+        scan_row.winner_tracking_id  = expl_result.winner_tracking_id;  // "" except the group-completing row
         has_scan_row = true;
 
-        // MS2 identification row for the exploration variant (copy by value before info dies at goto).
-        if (!info.proteoform_sequence.empty() && !info.identification_result.fragments.empty())
-          id_rows.push_back({id_str, 2, 'E', info.ms2_context, info.identification_result});
+        // MS2 identification row (copy by value before expl_result goes out of scope).
+        // DIVERGENCE vs MS3-expl: MS2 gate requires a non-empty proteoform_sequence AND fragments.
+        if (!expl_result.proteoform_sequence.empty() && !expl_result.identification_result.fragments.empty())
+          id_rows.push_back({id_str, 2, 'E', expl_result.ms2_context, expl_result.identification_result});
 
         exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);
-        return_code = static_cast<int>(info.commands.size());
-        goto bottom;
+        return_code = static_cast<int>(expl_result.commands.size());
       }
-
-      // Deconvolve MS2 with precursor context (gate guarantees num_stages >= 1).
-      double precursor_mass = ctx.mono_mass;
-      int precursor_charge = ctx.stages[0].charge_state;
-      deconv_.deconvolveMSn(mzs, ints, length, rt_min, precursor_mass, precursor_charge);
-
-      // Tag-based targeting
-      bool tags_found = false;
-      int tags_count = 0;   // real sequence-tag count (logged as tag_count, and cached for MS3 rows)
-      if (selection_.hasTargetProteinDatabase() && precursor_mass > 0)
+      else
       {
-        std::string ms2_activation = std::string(ctx.stages[0].activation_type);
-        tags_count = selection_.processMS2ForTagBasedTargeting(precursor_mass, ms2_activation);
-        tags_found = tags_count > 0;
-      }
+        // ===== MS2 (regular): deconvolve -> targeting + follow-ups -> MS3 targeting -> row =====
+        double precursor_mass = ctx.mono_mass;
+        int precursor_charge = ctx.stages[0].charge_state;
+        deconv_.deconvolveMSn(mzs, ints, length, rt_min, precursor_mass, precursor_charge);
 
-      // Quantification follow-up (independent of tags)
-      if (config_.quantification().enabled && !config_.quantification().follow_up_scan.activation.empty()
-          && !is_follow_up_scan)
-      {
-        if (quant_.isDifferentiallyAbundant(mzs, ints, length, rt_min, 2, "ms2_quant",
-                                            config_.quantification().reporter_mz_tol, config_.quantification().fold_change_threshold, false))
+        // Tag-based targeting
+        bool tags_found = false;
+        int tags_count = 0;   // real sequence-tag count (logged as tag_count, and cached for MS3 rows)
+        if (selection_.hasTargetProteinDatabase() && precursor_mass > 0)
         {
-          auto followup = queue_.buildFollowUp(ctx, config_.quantification().follow_up_scan, 'F');
-          queue_.push(followup);
-          child_ids.push_back(ScanCommandQueue::encode(followup.scan_id));
-          commands_pushed++;
-        }
-      }
-
-      // Conditional MS2 follow-up -- only when tags detected AND explicitly enabled
-      if (config_.targeting().conditional_ms2_enabled && tags_found && !is_follow_up_scan)
-      {
-        auto cond = queue_.buildFollowUp(ctx, config_.targeting().tagging_follow_up_scan, 'C');
-        queue_.push(cond);
-        child_ids.push_back(ScanCommandQueue::encode(cond.scan_id));
-        commands_pushed++;
-      }
-
-      // MS3 targeting via selection_strategy
-      Exploration::NextLevelResult nlr;
-      if (config_.level(2).selection != SelectionMetric::None)
-      {
-        // initiateNextLevel stamps each command's parent with the MS2 id (ctx.scan_id) at creation.
-        nlr = exploration_.initiateNextLevel(2, deconv_.storedMS2(), ctx.faims_cv, queue_, &ctx);
-        for (auto& c : nlr.commands)
-        {
-          queue_.push(c);
-          child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
-          commands_pushed++;
+          std::string ms2_activation = std::string(ctx.stages[0].activation_type);
+          tags_count = selection_.processMS2ForTagBasedTargeting(precursor_mass, ms2_activation);
+          tags_found = tags_count > 0;
         }
 
-        // Cache MS2 context for each MS3 command (for non-exploration identification.tsv)
-        for (size_t ci = 0; ci < nlr.commands.size(); ++ci)
+        // Quantification follow-up (independent of tags)
+        if (config_.quantification().enabled && !config_.quantification().follow_up_scan.activation.empty()
+            && !is_follow_up_scan)
         {
-          if (nlr.commands[ci].msn_level >= 3 && ci < nlr.ms3_contexts.size())
+          if (quant_.isDifferentiallyAbundant(mzs, ints, length, rt_min, 2, "ms2_quant",
+                                              config_.quantification().reporter_mz_tol, config_.quantification().fold_change_threshold, false))
           {
-            // Carry the parent MS2's identification tag count (real when a proteoform matched) to its
-            // MS3 rows — not the FASTA-DB-gated tags_count, which is 0 unless a tag-targeting DB is loaded.
-            nlr.ms3_contexts[ci].tag_count = (!nlr.proteoform_match.fragments.empty())
-                ? nlr.proteoform_match.tag_count : tags_count;
-            ms2_context_cache_[nlr.commands[ci].scan_id] = nlr.ms3_contexts[ci];
+            auto followup = queue_.buildFollowUp(ctx, config_.quantification().follow_up_scan, 'F');
+            queue_.push(followup);
+            child_ids.push_back(ScanCommandQueue::encode(followup.scan_id));
+            commands_pushed++;
           }
         }
-      }
 
-      // Write MS2 identification row if proteoform was matched
-      if (!nlr.proteoform_sequence.empty() && !nlr.proteoform_match.fragments.empty())
-      {
-        Exploration::MS2Context ms2_ctx;
-        ms2_ctx.proteoform_sequence = nlr.proteoform_match.proteoform_sequence;
-        ms2_ctx.start_pos = nlr.proteoform_match.region_start;
-        ms2_ctx.end_pos = nlr.proteoform_match.region_end;
-        ms2_ctx.ptm_sites = nlr.proteoform_match.ptm_sites;
-        ms2_ctx.ms1_precursor_mass = ctx.mono_mass;
-        ms2_ctx.ms1_precursor_mz = ctx.stages[0].precursor_mz;
-        ms2_ctx.ms1_precursor_charge = ctx.stages[0].charge_state;
-        // MS2 isolation-window reporting from the resolved command (window-SNR was recorded at MS1
-        // time, keyed by this scan_id). The MS3 triplet stays 0 on MS2 rows.
-        if (ctx.num_stages > 0)
+        // Conditional MS2 follow-up -- only when tags detected AND explicitly enabled
+        if (config_.targeting().conditional_ms2_enabled && tags_found && !is_follow_up_scan)
         {
-          ms2_ctx.ms2_isolation_width = ctx.stages[0].isolation_width;
-          ms2_ctx.ms2_charge_intensity = ctx.precursor_intensity;
-          ms2_ctx.ms2_window_snr = queue_.windowSnr(ctx.scan_id);
+          auto cond = queue_.buildFollowUp(ctx, config_.targeting().tagging_follow_up_scan, 'C');
+          queue_.push(cond);
+          child_ids.push_back(ScanCommandQueue::encode(cond.scan_id));
+          commands_pushed++;
         }
-        id_rows.push_back({id_str, 2, 'R', ms2_ctx, nlr.proteoform_match});  // copy by value (ms2_ctx is local)
+
+        // MS3 targeting via selection_strategy
+        Exploration::NextLevelResult ms3_targeting;
+        if (config_.level(2).selection != SelectionMetric::None)
+        {
+          // initiateNextLevel stamps each command's parent with the MS2 id (ctx.scan_id) at creation.
+          ms3_targeting = exploration_.initiateNextLevel(2, deconv_.storedMS2(), ctx.faims_cv, queue_, &ctx);
+          for (auto& c : ms3_targeting.commands)
+          {
+            queue_.push(c);
+            child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
+            commands_pushed++;
+          }
+
+          // Cache MS2 context for each MS3 command (for non-exploration identification.tsv)
+          for (size_t ci = 0; ci < ms3_targeting.commands.size(); ++ci)
+          {
+            if (ms3_targeting.commands[ci].msn_level >= 3 && ci < ms3_targeting.ms3_contexts.size())
+            {
+              // Carry the parent MS2's identification tag count (real when a proteoform matched) to its
+              // MS3 rows — not the FASTA-DB-gated tags_count, which is 0 unless a tag-targeting DB is loaded.
+              ms3_targeting.ms3_contexts[ci].tag_count = (!ms3_targeting.proteoform_match.fragments.empty())
+                  ? ms3_targeting.proteoform_match.tag_count : tags_count;
+              ms2_context_cache_[ms3_targeting.commands[ci].scan_id] = ms3_targeting.ms3_contexts[ci];
+            }
+          }
+        }
+
+        // Write MS2 identification row if proteoform was matched
+        if (!ms3_targeting.proteoform_sequence.empty() && !ms3_targeting.proteoform_match.fragments.empty())
+        {
+          Exploration::MS2Context ms2_ctx;
+          ms2_ctx.proteoform_sequence = ms3_targeting.proteoform_match.proteoform_sequence;
+          ms2_ctx.start_pos = ms3_targeting.proteoform_match.region_start;
+          ms2_ctx.end_pos = ms3_targeting.proteoform_match.region_end;
+          ms2_ctx.ptm_sites = ms3_targeting.proteoform_match.ptm_sites;
+          ms2_ctx.ms1_precursor_mass = ctx.mono_mass;
+          ms2_ctx.ms1_precursor_mz = ctx.stages[0].precursor_mz;
+          ms2_ctx.ms1_precursor_charge = ctx.stages[0].charge_state;
+          // MS2 isolation-window reporting from the resolved command (window-SNR was recorded at MS1
+          // time, keyed by this scan_id). The MS3 triplet stays 0 on MS2 rows.
+          if (ctx.num_stages > 0)
+          {
+            ms2_ctx.ms2_isolation_width = ctx.stages[0].isolation_width;
+            ms2_ctx.ms2_charge_intensity = ctx.precursor_intensity;
+            ms2_ctx.ms2_window_snr = queue_.windowSnr(ctx.scan_id);
+          }
+          id_rows.push_back({id_str, 2, 'R', ms2_ctx, ms3_targeting.proteoform_match});  // copy by value (ms2_ctx is local)
+        }
+
+        int ms2_mass_count = deconv_.hasStoredMS2() ? static_cast<int>(deconv_.storedMS2().size()) : 0;
+        // Log the identification tagger's real tag count when a proteoform matched; otherwise fall back
+        // to tags_count (the FASTA tag-targeting case, and plain-DDA selection==None which is legitimately 0).
+        int tag_count = (!ms3_targeting.proteoform_match.fragments.empty())
+            ? ms3_targeting.proteoform_match.tag_count : tags_count;
+        const DeconvolvedSpectrum* ms2_spec = deconv_.hasStoredMS2() ? &deconv_.storedMS2() : nullptr;
+        std::string parent_id(ctx.parent_scan_id);
+
+        // Log the actual MS2 scan-config CE/activation/reaction (single stage) the engine used.
+        std::string ms2_collision_energy = ctx.num_stages > 0 ? std::to_string(ctx.stages[0].collision_energy) : "0";
+        std::string ms2_activation_type = ctx.num_stages > 0
+            ? std::string(ctx.stages[0].activation_type)
+            : config_.level(2).scans[0].activation;
+        std::string ms2_reaction_time = ctx.num_stages > 0 ? std::to_string(ctx.stages[0].reaction_time) : "0";
+        // Fill scan_results row; exploration fields stay at their sentinel defaults.
+        scan_row.mass_count         = ms2_mass_count;
+        scan_row.commands_pushed    = commands_pushed;
+        scan_row.child_ids          = child_ids;
+        scan_row.tag_count          = tag_count;
+        scan_row.matched_protein    = ms3_targeting.matched_protein;
+        scan_row.proteoform_sequence = FragmentAnalysis::toProForma(ms3_targeting.proteoform_sequence, ms3_targeting.proteoform_match.ptm_sites);
+        scan_row.deconv_spectrum    = ms2_spec;
+        scan_row.parent_tracking_id = parent_id;
+        scan_row.tic_coverage       = ms3_targeting.tic_coverage;
+        scan_row.fragment_count     = ms3_targeting.fragment_count;
+        scan_row.collision_energy   = ms2_collision_energy;
+        scan_row.activation_type    = ms2_activation_type;
+        scan_row.reaction_time      = ms2_reaction_time;
+        has_scan_row = true;
+
+        std::cout << "[TRACK-RESOLVE] id=" << id_str
+                  << " rt=" << rt_min
+                  << " commands=" << commands_pushed
+                  << std::endl;
+
+        // Update atomic for lock-free reads by getNextScanCommand
+        exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);
+
+        return_code = commands_pushed;
       }
-
-      int ms2_mass_count = deconv_.hasStoredMS2() ? static_cast<int>(deconv_.storedMS2().size()) : 0;
-      // Log the identification tagger's real tag count when a proteoform matched; otherwise fall back
-      // to tags_count (the FASTA tag-targeting case, and plain-DDA selection==None which is legitimately 0).
-      int tag_count = (!nlr.proteoform_match.fragments.empty())
-          ? nlr.proteoform_match.tag_count : tags_count;
-      const DeconvolvedSpectrum* ms2_spec = deconv_.hasStoredMS2() ? &deconv_.storedMS2() : nullptr;
-      std::string parent_id(ctx.parent_scan_id);
-
-      // Log the actual MS2 scan-config CE/activation/reaction (single stage) the engine used.
-      std::string ms2_ce  = ctx.num_stages > 0 ? std::to_string(ctx.stages[0].collision_energy) : "0";
-      std::string ms2_act = ctx.num_stages > 0 ? std::string(ctx.stages[0].activation_type)
-                                               : config_.level(2).scans[0].activation;
-      std::string ms2_rt  = ctx.num_stages > 0 ? std::to_string(ctx.stages[0].reaction_time) : "0";
-      // Fill the scan_results row (written at bottom). Exploration fields keep their sentinel
-      // defaults; only the real values are set here.
-      scan_row.mass_count         = ms2_mass_count;
-      scan_row.commands_pushed    = commands_pushed;
-      scan_row.child_ids          = child_ids;
-      scan_row.tag_count          = tag_count;
-      scan_row.matched_protein    = nlr.matched_protein;
-      scan_row.proteoform_sequence = FragmentAnalysis::toProForma(nlr.proteoform_sequence, nlr.proteoform_match.ptm_sites);
-      scan_row.deconv_spectrum    = ms2_spec;
-      scan_row.parent_tracking_id = parent_id;
-      scan_row.tic_coverage       = nlr.tic_coverage;
-      scan_row.fragment_count     = nlr.fragment_count;
-      scan_row.collision_energy   = ms2_ce;
-      scan_row.activation_type    = ms2_act;
-      scan_row.reaction_time      = ms2_rt;
-      has_scan_row = true;
-
-      std::cout << "[TRACK-RESOLVE] id=" << id_str
-                << " rt=" << rt_min
-                << " commands=" << commands_pushed
-                << std::endl;
-
-      // Update atomic for lock-free reads by getNextScanCommand
-      exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);
-
-      return_code = commands_pushed;
-      goto bottom;
     }
     else if (ms_level == 3)
     {
-      // Route exploration variants to feedResult for scoring/winner selection
+      // ===== MS3 (exploration variant): score variant -> push children -> fill row =====
       if (exploration_.isExplorationVariant(tracking_id))
       {
-        auto info = exploration_.feedResult(tracking_id, mzs, ints, length, rt_min, queue_);
+        auto expl_result = exploration_.feedResult(tracking_id, mzs, ints, length, rt_min, queue_);
         std::vector<std::string> expl_children;
-        for (auto& c : info.commands)
+        for (auto& c : expl_result.commands)
         {
           queue_.push(c);  // parent_scan_id already stamped by feedResult/initiate
           expl_children.push_back(ScanCommandQueue::encode(c.scan_id));  // link pushed children
         }
 
-        const bool has_expl_ms3 = exploration_.exploration_deconv_ != nullptr &&
+        const bool has_expl_deconv = exploration_.exploration_deconv_ != nullptr &&
                 exploration_.exploration_deconv_->hasStoredMS2();
-        int expl_mass_count = has_expl_ms3 ? static_cast<int>(exploration_.exploration_deconv_->storedMS2().size()) : 0;
-        const DeconvolvedSpectrum* ms3_spec = has_expl_ms3 ? &exploration_.exploration_deconv_->storedMS2() : nullptr;
-        std::string parent_id(info.parent_scan_id);
+        int expl_mass_count = has_expl_deconv ? static_cast<int>(exploration_.exploration_deconv_->storedMS2().size()) : 0;
+        const DeconvolvedSpectrum* expl_spec = has_expl_deconv ? &exploration_.exploration_deconv_->storedMS2() : nullptr;
+        std::string parent_id(expl_result.parent_scan_id);
 
-        // Fill the scan_results row (written at bottom); copy info.* by value before goto.
-        // tag_count & fragment_count keep their -1 sentinel default; tic_coverage stays real.
+        // Fill scan_results row in canonical order (copy expl_result.* by value — it dies at block end).
+        // DIVERGENCE vs MS2-expl: MS3-expl leaves tag_count + fragment_count at the -1 sentinel.
         scan_row.mass_count          = expl_mass_count;
-        scan_row.commands_pushed     = static_cast<int>(info.commands.size());
+        scan_row.commands_pushed     = static_cast<int>(expl_result.commands.size());
         scan_row.child_ids           = expl_children;
-        scan_row.matched_protein     = info.matched_protein;
-        scan_row.proteoform_sequence = FragmentAnalysis::toProForma(info.proteoform_sequence, info.identification_result.ptm_sites);
-        scan_row.deconv_spectrum     = ms3_spec;
+        scan_row.matched_protein     = expl_result.matched_protein;
+        scan_row.proteoform_sequence = FragmentAnalysis::toProForma(expl_result.proteoform_sequence, expl_result.identification_result.ptm_sites);
+        scan_row.deconv_spectrum     = expl_spec;
         scan_row.parent_tracking_id  = parent_id;
-        scan_row.tic_coverage        = info.tic_coverage;
-        scan_row.exploration_group_id = info.group_id;
-        scan_row.exploration_metric  = info.exploration_metric;
-        scan_row.variant_index       = info.variant_index;
-        scan_row.total_variants      = info.total_variants;
-        scan_row.collision_energy    = std::to_string(info.collision_energy);
-        scan_row.exploration_score   = info.score;
-        scan_row.remaining_ratio     = info.remaining_ratio;
-        scan_row.activation_type     = info.activation_type;
-        scan_row.reaction_time       = std::to_string(info.reaction_time);
-        scan_row.winner_tracking_id  = info.winner_tracking_id;  // "" except the group-completing row
+        scan_row.tic_coverage        = expl_result.tic_coverage;
+        scan_row.exploration_group_id = expl_result.group_id;
+        scan_row.exploration_metric  = expl_result.exploration_metric;
+        scan_row.variant_index       = expl_result.variant_index;
+        scan_row.total_variants      = expl_result.total_variants;
+        scan_row.collision_energy    = std::to_string(expl_result.collision_energy);
+        scan_row.exploration_score   = expl_result.score;
+        scan_row.remaining_ratio     = expl_result.remaining_ratio;
+        scan_row.activation_type     = expl_result.activation_type;
+        scan_row.reaction_time       = std::to_string(expl_result.reaction_time);
+        scan_row.winner_tracking_id  = expl_result.winner_tracking_id;  // "" except the group-completing row
         has_scan_row = true;
 
-        // Identification rows (copy by value before info dies at goto): primary + batch-evaluated winners.
-        if (!info.identification_result.fragments.empty())
-          id_rows.push_back({id_str, 3, 'E', info.ms2_context, info.identification_result});
-        for (const auto& row : info.additional_identification_rows)
+        // Identification rows (copy by value before expl_result goes out of scope): primary + winners.
+        // DIVERGENCE vs MS2-expl: MS3 gate is fragments-only, and MS3 also emits the winner-batch rows.
+        if (!expl_result.identification_result.fragments.empty())
+          id_rows.push_back({id_str, 3, 'E', expl_result.ms2_context, expl_result.identification_result});
+        for (const auto& row : expl_result.additional_identification_rows)
         {
           if (!row.identification_result.fragments.empty())
             id_rows.push_back({row.tracking_id, 3, 'E', row.ms2_context, row.identification_result});
         }
 
-        exploration_active_.store(exploration_.activeGroupCount() > 0,
-                                  std::memory_order_release);
-        return_code = static_cast<int>(info.commands.size());
-        goto bottom;
+        exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);
+        return_code = static_cast<int>(expl_result.commands.size());
       }
-
-      // Non-exploration MS3: reuse the resolved ctx from the top (gate guarantees num_stages >= 2).
-      // Do NOT re-resolve here — the pending entry is already gone.
-      double precursor_mass = 0.0;
-      int precursor_charge = 0;
-      if (resolved.has_value() && resolved->num_stages >= 2)
+      else
       {
-        precursor_charge = resolved->stages[1].charge_state;
-        // Pair the fragment charge with the fragment mass (mono_mass_s1), not the MS2-precursor mass.
-        // A consistent (mass,charge) precursor caps MS3 sub-fragment charges to the parent (fragZ <= parentZ).
-        precursor_mass = resolved->mono_mass_s1;
-      }
-
-      int ms3_mass_count = 0;
-      if (mzs != nullptr && ints != nullptr && length > 0)
-      {
-        deconv_.deconvolveMSn(mzs, ints, length, rt_min, precursor_mass, precursor_charge);
-        ms3_mass_count = deconv_.hasStoredMS2()
-            ? static_cast<int>(deconv_.storedMS2().size()) : 0;
-      }
-
-      const DeconvolvedSpectrum* ms3_spec = deconv_.hasStoredMS2() ? &deconv_.storedMS2() : nullptr;
-
-      // Results-row values that must outlive the inner identification block (mc/detailed are scoped
-      // there, and cache_it is erased below). Defaults below are overwritten on a match.
-      std::string ms3_proteoform, ms3_matched_protein;
-      int ms3_frag_count = 0, ms3_tag_count = 0;
-      float ms3_tic = 0.0f;
-
-      // Identification: look up MS2 context from cache and run fragment matching
-      {
-        auto cache_it = ms2_context_cache_.find(tracking_id);
-        if (cache_it != ms2_context_cache_.end() && ms3_spec != nullptr && !ms3_spec->empty())
+        // ===== MS3 (regular): reuse ctx -> deconvolve -> fragment-match -> row =====
+        // Reuse the resolved ctx from the top (gate guarantees num_stages >= 2).
+        // Do NOT re-resolve here — the pending entry is already gone.
+        double precursor_mass = 0.0;
+        int precursor_charge = 0;
+        if (resolved.has_value() && resolved->num_stages >= 2)
         {
-          const auto& mc = cache_it->second;
-          MS3FragmentMatcher::ProteoformContext proto_ctx;
-          proto_ctx.region_start = mc.start_pos;
-          proto_ctx.region_end = mc.end_pos;
-          proto_ctx.ptm_sites = mc.ptm_sites;
-
-          std::vector<const DeconvolvedSpectrum*> spectra = {ms3_spec};
-          std::vector<FragmentAnalysis::ProteoformMatch> detailed;
-          MS3FragmentMatcher::calibrateAndScore(
-            spectra,
-            config_.targeting().protein_sequence,
-            proto_ctx,
-            mc.fragment_ion_type,
-            mc.fragment_ion_index,
-            MS3FragmentMatcher::LOOSE_TOLERANCE_PPM,
-            config_.level(3).tolerance_ppm,
-            &detailed);
-
-          if (!detailed.empty() && !detailed[0].fragments.empty())
-          {
-            // Copy mc (a reference into ms2_context_cache_, erased below) and detailed[0] (inner-scope)
-            // BY VALUE into the id-row now — the bottom write must not read them after the erase.
-            id_rows.push_back({id_str, 3, 'R', mc, detailed[0]});
-            // Capture the decision values the engine used so the results row agrees with this match.
-            // Render the proteoform with its discovered PTMs via the same renderer the id row uses;
-            // mc.ptm_sites is the cached parent-MS2 PTM set (toProForma returns the bare sequence when empty).
-            ms3_proteoform = FragmentAnalysis::toProForma(mc.proteoform_sequence, mc.ptm_sites);
-            ms3_frag_count = detailed[0].total_match_count;
-            ms3_tag_count = mc.tag_count;
-            ms3_matched_protein = config_.targeting().fasta_file.empty()
-                ? config_.targeting().protein_sequence : config_.targeting().fasta_file;
-            if (ms3_mass_count > 0)
-            {
-              float r = static_cast<float>(detailed[0].total_match_count) / static_cast<float>(ms3_mass_count);
-              ms3_tic = r > 1.0f ? 1.0f : r;  // matched-fragment coverage of the MS3 deconvolution
-            }
-          }
-
-          ms2_context_cache_.erase(cache_it);
+          precursor_charge = resolved->stages[1].charge_state;
+          // Pair the fragment charge with the fragment mass (mono_mass_s1), not the MS2-precursor mass.
+          // A consistent (mass,charge) precursor caps MS3 sub-fragment charges to the parent (fragZ <= parentZ).
+          precursor_mass = resolved->mono_mass_s1;
         }
+
+        int ms3_mass_count = 0;
+        if (mzs != nullptr && ints != nullptr && length > 0)
+        {
+          deconv_.deconvolveMSn(mzs, ints, length, rt_min, precursor_mass, precursor_charge);
+          ms3_mass_count = deconv_.hasStoredMS2()
+              ? static_cast<int>(deconv_.storedMS2().size()) : 0;
+        }
+
+        const DeconvolvedSpectrum* ms3_spec = deconv_.hasStoredMS2() ? &deconv_.storedMS2() : nullptr;
+
+        // Results-row values that must outlive the inner identification block (cached_ms2_ctx/ms3_matches
+        // are scoped there, and cache_it is erased below). Defaults below are overwritten on a match.
+        std::string ms3_proteoform, ms3_matched_protein;
+        int ms3_frag_count = 0, ms3_tag_count = 0;
+        float ms3_tic = 0.0f;
+
+        // Identification: look up MS2 context from cache and run fragment matching
+        {
+          auto cache_it = ms2_context_cache_.find(tracking_id);
+          if (cache_it != ms2_context_cache_.end() && ms3_spec != nullptr && !ms3_spec->empty())
+          {
+            const auto& cached_ms2_ctx = cache_it->second;
+            MS3FragmentMatcher::ProteoformContext proto_ctx;
+            proto_ctx.region_start = cached_ms2_ctx.start_pos;
+            proto_ctx.region_end = cached_ms2_ctx.end_pos;
+            proto_ctx.ptm_sites = cached_ms2_ctx.ptm_sites;
+
+            std::vector<const DeconvolvedSpectrum*> spectra = {ms3_spec};
+            std::vector<FragmentAnalysis::ProteoformMatch> ms3_matches;
+            MS3FragmentMatcher::calibrateAndScore(
+              spectra,
+              config_.targeting().protein_sequence,
+              proto_ctx,
+              cached_ms2_ctx.fragment_ion_type,
+              cached_ms2_ctx.fragment_ion_index,
+              MS3FragmentMatcher::LOOSE_TOLERANCE_PPM,
+              config_.level(3).tolerance_ppm,
+              &ms3_matches);
+
+            if (!ms3_matches.empty() && !ms3_matches[0].fragments.empty())
+            {
+              // Copy cached_ms2_ctx (a reference into ms2_context_cache_, erased below) and ms3_matches[0]
+              // (inner-scope) BY VALUE into the id-row now — the bottom write must not read them after the erase.
+              id_rows.push_back({id_str, 3, 'R', cached_ms2_ctx, ms3_matches[0]});
+              // Capture the decision values the engine used so the results row agrees with this match.
+              // Render the proteoform with its discovered PTMs via the same renderer the id row uses;
+              // cached_ms2_ctx.ptm_sites is the cached parent-MS2 PTM set (toProForma returns the bare sequence when empty).
+              ms3_proteoform = FragmentAnalysis::toProForma(cached_ms2_ctx.proteoform_sequence, cached_ms2_ctx.ptm_sites);
+              ms3_frag_count = ms3_matches[0].total_match_count;
+              ms3_tag_count = cached_ms2_ctx.tag_count;
+              ms3_matched_protein = config_.targeting().fasta_file.empty()
+                  ? config_.targeting().protein_sequence : config_.targeting().fasta_file;
+              if (ms3_mass_count > 0)
+              {
+                float r = static_cast<float>(ms3_matches[0].total_match_count) / static_cast<float>(ms3_mass_count);
+                ms3_tic = r > 1.0f ? 1.0f : r;  // matched-fragment coverage of the MS3 deconvolution
+              }
+            }
+
+            ms2_context_cache_.erase(cache_it);
+          }
+        }
+
+        std::string parent_id;
+        if (resolved.has_value())
+          parent_id = std::string(resolved->parent_scan_id);
+
+        // 2-stage CE/activation/reaction = MS2 isolation stage ; MS3 fragmentation stage.
+        std::string ms3_collision_energy = "0", ms3_activation_type = "", ms3_reaction_time = "0";
+        if (resolved.has_value() && resolved->num_stages >= 2)
+        {
+          ms3_collision_energy = std::to_string(resolved->stages[0].collision_energy) + ";" + std::to_string(resolved->stages[1].collision_energy);
+          ms3_activation_type  = std::string(resolved->stages[0].activation_type) + ";" + std::string(resolved->stages[1].activation_type);
+          ms3_reaction_time    = std::to_string(resolved->stages[0].reaction_time) + ";" + std::to_string(resolved->stages[1].reaction_time);
+        }
+        // MS3 rows log fragment_count & tag_count as the -1 sentinel:
+        //   - fragment_count: MS3 matching is finalized only in the calibrated round; the matched count
+        //     lives in identification.tsv (ms3_fragments), not here.
+        //   - tag_count: tagging is an MS2 feature, not used for fragment-based MS3 id.
+        // Fill scan_results row; commands_pushed, tag_count, fragment_count keep their sentinel defaults
+        // (0/-1/-1); child_ids stays empty; exploration fields stay at defaults; tic_coverage stays real.
+        scan_row.mass_count         = ms3_mass_count;
+        scan_row.matched_protein    = ms3_matched_protein;
+        scan_row.proteoform_sequence = ms3_proteoform;
+        scan_row.deconv_spectrum    = ms3_spec;
+        scan_row.parent_tracking_id = parent_id;
+        scan_row.tic_coverage       = ms3_tic;
+        scan_row.collision_energy   = ms3_collision_energy;
+        scan_row.activation_type    = ms3_activation_type;
+        scan_row.reaction_time      = ms3_reaction_time;
+        has_scan_row = true;
+
+        return_code = 0;
       }
-
-      std::string parent_id;
-      if (resolved.has_value())
-        parent_id = std::string(resolved->parent_scan_id);
-
-      // 2-stage CE/activation/reaction = MS2 isolation stage ; MS3 fragmentation stage.
-      std::string ms3_ce = "0", ms3_act = "", ms3_rt = "0";
-      if (resolved.has_value() && resolved->num_stages >= 2)
-      {
-        ms3_ce  = std::to_string(resolved->stages[0].collision_energy) + ";" + std::to_string(resolved->stages[1].collision_energy);
-        ms3_act = std::string(resolved->stages[0].activation_type) + ";" + std::string(resolved->stages[1].activation_type);
-        ms3_rt  = std::to_string(resolved->stages[0].reaction_time) + ";" + std::to_string(resolved->stages[1].reaction_time);
-      }
-      // MS3 rows log fragment_count & tag_count as the -1 sentinel:
-      //   - fragment_count: MS3 matching is finalized only in the calibrated round; the matched count
-      //     lives in identification.tsv (ms3_fragments), not here.
-      //   - tag_count: tagging is an MS2 feature, not used for fragment-based MS3 id.
-      // Fill the scan_results row (written at bottom). commands_pushed, tag_count, fragment_count keep
-      // their sentinel defaults (0/-1/-1); child_ids stays empty; exploration fields stay at defaults.
-      // tic_coverage (ms3_tic) stays real.
-      scan_row.mass_count         = ms3_mass_count;
-      scan_row.matched_protein    = ms3_matched_protein;
-      scan_row.proteoform_sequence = ms3_proteoform;
-      scan_row.deconv_spectrum    = ms3_spec;
-      scan_row.parent_tracking_id = parent_id;
-      scan_row.tic_coverage       = ms3_tic;
-      scan_row.collision_energy   = ms3_ce;
-      scan_row.activation_type    = ms3_act;
-      scan_row.reaction_time      = ms3_rt;
-      has_scan_row = true;
-
-      return_code = 0;
-      goto bottom;
     }
 
-    // ===== Single bottom block: write the file-backed TSV rows once, then one return. =====
+    // ===== Write the file-backed TSV rows once: scan_results row, then identification rows. =====
     // (IDA log + [TRACK-*] stdout stay inline in their branches.) Per-file row order is observable;
     // cross-file scan<->id order is NOT (separate TSVs, per-file golden compare in LogGoldenComparer).
     // Do not add a cross-file interleaving assertion without revisiting this.
-    bottom:
     if (has_scan_row)
       writeScanResultRow_(scan_row);
     for (const auto& r : id_rows)
