@@ -113,7 +113,7 @@ namespace OpenMS
   }
 
   std::vector<ScanCommand> Exploration::initiate(int msn_level, const PeakGroup& pg, int charge,
-      double faims_cv, ScanCommandQueue& queue, const ScanCommand* ms_ctx,
+      ScanCommandQueue& queue, const MSSpectrum* source_spectrum, const ScanCommand* ms_ctx,
       char ion_type, int frag_index,
       const MS3FragmentMatcher::ProteoformContext& proto_ctx,
       const FragmentAnalysis::FragmentScores& frag_scores)
@@ -151,7 +151,7 @@ namespace OpenMS
     group.isolation_width = isolation_width;
     group.precursor_charge = charge;
     group.precursor_pg = pg;
-    group.faims_cv = faims_cv;
+    group.faims_cv = (ms_ctx != nullptr) ? ms_ctx->faims_cv : 0.0;  // Item 1: CV travels via the context
     group.start_ms = static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
@@ -190,7 +190,27 @@ namespace OpenMS
         // Parent = the originating command (ms_ctx->scan_id, e.g. the MS1 survey id); 0 when none.
         cmd = queue.buildMS2(pg, charge, variant_config, expl_priority, ms_ctx ? ms_ctx->scan_id : 0);
       }
-      cmd.faims_cv = faims_cv;
+      cmd.faims_cv = group.faims_cv;
+
+      // Item 2: stamp the isolation-window SNR onto the command so it travels with it (was the
+      // ScanCommandQueue window-SNR map). Identical formula/inputs to the former processScan (MS2,
+      // stage-0) and initiateNextLevel (MS3, stage-1) sites; set BEFORE v.cmd = cmd so the group's
+      // variant copy carries it too. num_stages==0 leaves window_snr at the -1.0 default.
+      if (source_spectrum != nullptr)
+      {
+        if (cmd.num_stages >= 2)
+        {
+          const double half = cmd.stages[1].isolation_width / 2.0;
+          cmd.window_snr = FragmentAnalysis::windowSnr(*source_spectrum,
+              cmd.stages[1].precursor_mz - half, cmd.stages[1].precursor_mz + half, cmd.precursor_intensity_s1);
+        }
+        else if (cmd.num_stages >= 1)
+        {
+          const double half = cmd.stages[0].isolation_width / 2.0;
+          cmd.window_snr = FragmentAnalysis::windowSnr(*source_spectrum,
+              cmd.stages[0].precursor_mz - half, cmd.stages[0].precursor_mz + half, cmd.precursor_intensity);
+        }
+      }
 
       int id_int = cmd.scan_id;
       std::string id_str = ScanCommandQueue::encode(id_int);
@@ -253,12 +273,6 @@ namespace OpenMS
     }
 
     return feedResultImpl_(tracking_id, ms2_deconv, mzs, ints, length, rt, queue);
-  }
-
-  Exploration::FeedResultInfo Exploration::feedResultForTest(int tracking_id,
-      const DeconvolvedSpectrum& ms2_deconv, double rt, ScanCommandQueue& queue)
-  {
-    return feedResultImpl_(tracking_id, ms2_deconv, nullptr, nullptr, 0, rt, queue);
   }
 
   Exploration::FeedResultInfo Exploration::feedResultImpl_(int tracking_id,
@@ -394,20 +408,20 @@ namespace OpenMS
         ctx.fragment_mz = variant_cmd.stages[1].precursor_mz;
         ctx.fragment_charge = variant_cmd.stages[1].charge_state;
         // I2: MS3 exploration variant — MS2 (parent) triplet from the originating MS2 command, MS3 triplet
-        // from this variant. window-SNRs were recorded in the queue map when the commands were built.
+        // from this variant. window-SNR now travels on each command (Item 2); read it off the command.
         ctx.ms2_isolation_width = group.originating_cmd.stages[0].isolation_width;
         ctx.ms2_charge_intensity = group.originating_cmd.precursor_intensity;
-        ctx.ms2_window_snr = queue.windowSnr(group.originating_cmd.scan_id);
+        ctx.ms2_window_snr = group.originating_cmd.window_snr;
         ctx.ms3_isolation_width = variant_cmd.stages[1].isolation_width;
         ctx.ms3_charge_intensity = variant_cmd.precursor_intensity_s1;
-        ctx.ms3_window_snr = queue.windowSnr(variant_cmd.scan_id);
+        ctx.ms3_window_snr = variant_cmd.window_snr;
       }
       else if (variant_cmd.num_stages >= 1)
       {
         // I2: MS2 exploration variant — MS2 triplet from the variant itself (no MS3).
         ctx.ms2_isolation_width = variant_cmd.stages[0].isolation_width;
         ctx.ms2_charge_intensity = variant_cmd.precursor_intensity;
-        ctx.ms2_window_snr = queue.windowSnr(variant_cmd.scan_id);
+        ctx.ms2_window_snr = variant_cmd.window_snr;
         // F4: for an MS2 exploration group the originating_cmd is the MS1 survey (num_stages==0),
         // so the guard above leaves ms1_precursor_* at 0. The precursor the engine actually
         // deconvolved is the group's own precursor — source it directly. (MS3-'E' branch above is
@@ -586,11 +600,12 @@ namespace OpenMS
         }
         prod_cmd.faims_cv = group.faims_cv;
         // I2: the production re-acquisition reuses the winning variant's isolation window, so it inherits
-        // that variant's already-recorded window-SNR (the source spectrum is no longer in scope here).
+        // that variant's window-SNR (the source spectrum is no longer in scope here). window_snr now lives
+        // on the command (Item 2), so copy it variant -> production directly.
         if (best_idx >= 0 && best_idx < static_cast<int>(group.variants.size()))
         {
-          const double inherited = queue.windowSnr(group.variants[best_idx].cmd.scan_id);
-          if (inherited >= 0.0) queue.setWindowSnr(prod_cmd.scan_id, inherited);
+          const double inherited = group.variants[best_idx].cmd.window_snr;
+          if (inherited >= 0.0) prod_cmd.window_snr = inherited;
         }
 
         std::string prod_id = ScanCommandQueue::encode(prod_cmd.scan_id);
@@ -619,6 +634,13 @@ namespace OpenMS
       if (c.parent_scan_id[0] == '\0')
         std::strncpy(c.parent_scan_id, info.parent_scan_id, 4);
     }
+
+    // Pre-encode the pushed children's tracking ids here (relocated from the former processScan
+    // expl_children loops). encode() is the same pure base-94 mapping, applied in info.commands order,
+    // so scan_results.tsv's child_ids column is byte-identical.
+    info.child_ids.clear();
+    for (const auto& c : info.commands)
+      info.child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
 
     for (const auto& vr : group.variants)
       variant_tracking_map_.erase(queue.decode(vr.tracking_id));
@@ -747,7 +769,7 @@ namespace OpenMS
         lp_hi.abs_charge = abs_charge;
         frag_pg.push_back(lp_hi);
 
-        auto sub_cmds = initiate(next_level, frag_pg, std::abs(charges[ti]), faims_cv, queue, ms_ctx,
+        auto sub_cmds = initiate(next_level, frag_pg, std::abs(charges[ti]), queue, &result.getOriginalSpectrum(), ms_ctx,
                                  ion_types[ti], frag_indices[ti], proto_ctx, frag_scores[ti]);  // F2: real fragment scores
         nlr.commands.insert(nlr.commands.end(), sub_cmds.begin(), sub_cmds.end());
 
@@ -770,24 +792,20 @@ namespace OpenMS
           mc.fragment_mz = (wstarts[ti] + wends[ti]) / 2.0;
           mc.fragment_charge = std::abs(charges[ti]);
           // I2: isolation-window reporting. MS2 (parent) triplet from ms_ctx; MS3 (this variant) triplet
-          // from the sub-command, with window-SNR computed over the MS2 source spectrum (co-isolation aware).
+          // from the sub-command. window-SNR now travels on each command (Item 2): MS2 off ms_ctx, MS3 off
+          // the sub-command (initiate computed it over result.getOriginalSpectrum() — identical value).
           if (ms_ctx != nullptr)
           {
             mc.ms2_isolation_width = ms_ctx->stages[0].isolation_width;
             mc.ms2_charge_intensity = ms_ctx->precursor_intensity;
-            mc.ms2_window_snr = queue.windowSnr(ms_ctx->scan_id);
+            mc.ms2_window_snr = ms_ctx->window_snr;
           }
           if (sci < sub_cmds.size() && sub_cmds[sci].num_stages >= 2)
           {
             const ScanCommand& sub = sub_cmds[sci];
-            const double half3 = sub.stages[1].isolation_width / 2.0;
-            const double snr3 = FragmentAnalysis::windowSnr(result.getOriginalSpectrum(),
-                sub.stages[1].precursor_mz - half3, sub.stages[1].precursor_mz + half3,
-                sub.precursor_intensity_s1);
-            queue.setWindowSnr(sub.scan_id, snr3);
             mc.ms3_isolation_width = sub.stages[1].isolation_width;
             mc.ms3_charge_intensity = sub.precursor_intensity_s1;
-            mc.ms3_window_snr = snr3;
+            mc.ms3_window_snr = sub.window_snr;
           }
           nlr.ms3_contexts.push_back(mc);
         }
@@ -826,6 +844,16 @@ namespace OpenMS
         }
         cmd.faims_cv = faims_cv;
 
+        // Item 2: stamp the MS3 fragment-window SNR onto the command BEFORE it is pushed (was the queue
+        // window-SNR map). Computed over the MS2 source spectrum — same inputs/formula as before.
+        if (cmd.num_stages >= 2)
+        {
+          const double half3 = cmd.stages[1].isolation_width / 2.0;
+          cmd.window_snr = FragmentAnalysis::windowSnr(result.getOriginalSpectrum(),
+              cmd.stages[1].precursor_mz - half3, cmd.stages[1].precursor_mz + half3,
+              cmd.precursor_intensity_s1);
+        }
+
         std::string id_str = ScanCommandQueue::encode(cmd.scan_id);
         std::cout << "[TRACK-CREATE] id=" << id_str
                   << " ms_level=" << next_level << " type=next_level"
@@ -849,20 +877,16 @@ namespace OpenMS
           mc.fragment_mz = frag_mz;
           mc.fragment_charge = frag_charge;
           // I2: isolation-window reporting. MS2 (parent) triplet from ms_ctx; MS3 (fragment) triplet from
-          // the MS3 command, with window-SNR computed over the MS2 source spectrum (co-isolation aware).
+          // the MS3 command. window-SNR travels on each command (Item 2): MS2 off ms_ctx, MS3 off cmd
+          // (computed above over the MS2 source spectrum, before the push).
           mc.ms2_isolation_width = ms_ctx->stages[0].isolation_width;
           mc.ms2_charge_intensity = ms_ctx->precursor_intensity;
-          mc.ms2_window_snr = queue.windowSnr(ms_ctx->scan_id);
+          mc.ms2_window_snr = ms_ctx->window_snr;
           if (cmd.num_stages >= 2)
           {
-            const double half3 = cmd.stages[1].isolation_width / 2.0;
-            const double snr3 = FragmentAnalysis::windowSnr(result.getOriginalSpectrum(),
-                cmd.stages[1].precursor_mz - half3, cmd.stages[1].precursor_mz + half3,
-                cmd.precursor_intensity_s1);
-            queue.setWindowSnr(cmd.scan_id, snr3);
             mc.ms3_isolation_width = cmd.stages[1].isolation_width;
             mc.ms3_charge_intensity = cmd.precursor_intensity_s1;
-            mc.ms3_window_snr = snr3;
+            mc.ms3_window_snr = cmd.window_snr;
           }
           nlr.ms3_contexts.push_back(mc);
         }

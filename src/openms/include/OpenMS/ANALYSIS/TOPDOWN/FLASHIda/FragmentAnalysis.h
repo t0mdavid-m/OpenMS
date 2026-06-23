@@ -259,51 +259,6 @@ namespace OpenMS
                                   double tolerance_ppm = 0.0,
                                   FragmentScores* frag_scores = nullptr);
 
-    // ---------------------------------------------------------------
-    // Python-friendly overloads
-    // ---------------------------------------------------------------
-
-    int getBestMS2MassesPy(int n,
-                           std::vector<double>& masses,
-                           std::vector<double>& qscores,
-                           std::vector<int>& charges,
-                           std::vector<double>& window_starts,
-                           std::vector<double>& window_ends,
-                           DeconvolvedSpectrum& stored_ms2);
-
-    int getTopFragmentMatchesPy(const String& protein_sequence,
-                                int n,
-                                std::vector<double>& masses,
-                                std::vector<double>& qscores,
-                                std::vector<int>& charges,
-                                std::vector<double>& window_starts,
-                                std::vector<double>& window_ends,
-                                std::vector<int>& is_b_ions,
-                                std::vector<int>& fragment_indices,
-                                DeconvolvedSpectrum& stored_ms2);
-
-    int getTerminalFragmentIonsPy(const String& protein_sequence,
-                                  int n,
-                                  std::vector<double>& masses,
-                                  std::vector<double>& qscores,
-                                  std::vector<int>& charges,
-                                  std::vector<double>& window_starts,
-                                  std::vector<double>& window_ends,
-                                  std::vector<int>& is_b_ions,
-                                  std::vector<int>& fragment_indices,
-                                  DeconvolvedSpectrum& stored_ms2);
-
-    int getAmbiguityEnclosingIonsPy(const String& protein_sequence,
-                                    int n,
-                                    std::vector<double>& masses,
-                                    std::vector<double>& qscores,
-                                    std::vector<int>& charges,
-                                    std::vector<double>& window_starts,
-                                    std::vector<double>& window_ends,
-                                    std::vector<int>& is_b_ions,
-                                    std::vector<int>& fragment_indices,
-                                    DeconvolvedSpectrum& stored_ms2);
-
   private:
     const Config& config_;
 

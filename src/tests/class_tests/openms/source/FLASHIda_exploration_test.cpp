@@ -17,6 +17,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
 
 #include "FLASHIda_TestHelpers.h"  // ground-truth harness: ScanData/loadTsvScans/TSVFile/AcqResult/runInterleaved/runFullCycle/ExplResult/driveOneExplorationGroup/inclusionPinCytc
+#include "FLASHIda_TestAccess.h"   // ExplorationTestAccess::feedResult/group (private-state access)
 
 #include <vector>
 #include <algorithm>
@@ -987,11 +988,11 @@ START_SECTION(exploration_group_creation)
   Exploration exploration(cfg, fragments);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
-  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
+  auto cmds = exploration.initiate(2, pg, 3, queue);
 
   TEST_EQUAL(exploration.activeGroupCount(), 1)
 
-  auto group = exploration.getGroup(1);
+  auto group = ExplorationTestAccess::group(exploration,1);
   TEST_EQUAL(group.group_id, 1)
   TEST_EQUAL(group.msn_level, 2)
   TEST_EQUAL(group.complete, false)
@@ -1027,7 +1028,7 @@ START_SECTION(exploration_variants_priority_by_level)
   Exploration exploration(cfg, fragments);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
-  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
+  auto cmds = exploration.initiate(2, pg, 3, queue);
 
   TEST_EQUAL(static_cast<int>(cmds.size()), 5)
   for (int i = 0; i < 5; ++i)
@@ -1054,7 +1055,8 @@ START_SECTION(ms3_exploration_variants_use_buildMS3)
   ScanCommand ms2_ctx = queue.buildMS2(precursor_pg, 3, cfg.level(2).scans[0], 2, 0);
 
   auto fragment_pg = makeSyntheticPeakGroup(500.0, 1000.0, 2);
-  auto cmds = exploration.initiate(3, fragment_pg, 2, -50.0, queue, &ms2_ctx, 'y', 5);
+  ms2_ctx.faims_cv = -50.0;  // Item 1: CV travels via the context
+  auto cmds = exploration.initiate(3, fragment_pg, 2, queue, nullptr, &ms2_ctx, 'y', 5);
 
   TEST_EQUAL(static_cast<int>(cmds.size()), 5)
 
@@ -1068,7 +1070,7 @@ START_SECTION(ms3_exploration_variants_use_buildMS3)
 
   TEST_EQUAL(cmds[0].stages[0].charge_state, 3)
 
-  auto group = exploration.getGroup(1);
+  auto group = ExplorationTestAccess::group(exploration,1);
   TEST_EQUAL(group.msn_level, 3)
   TEST_EQUAL(group.originating_cmd.num_stages > 0, true)
 
@@ -1110,7 +1112,8 @@ START_SECTION(ms3_exploration_winner_selection_and_cleanup)
   ScanCommand ms2_ctx = queue.buildMS2(precursor_pg, 3, cfg.level(2).scans[0], 2, 0);
 
   auto fragment_pg = makeSyntheticPeakGroup(500.0, 1000.0, 2);
-  auto cmds = exploration.initiate(3, fragment_pg, 2, -50.0, queue, &ms2_ctx);
+  ms2_ctx.faims_cv = -50.0;  // Item 1: CV travels via the context
+  auto cmds = exploration.initiate(3, fragment_pg, 2, queue, nullptr, &ms2_ctx);
   TEST_EQUAL(static_cast<int>(cmds.size()), 5)
   TEST_EQUAL(exploration.activeGroupCount(), 1)
 
@@ -1120,7 +1123,7 @@ START_SECTION(ms3_exploration_winner_selection_and_cleanup)
   {
     DeconvolvedSpectrum ds = makeSyntheticDeconv(i + 1, peak_counts[i]);
     int tracking_id = queue.decode(std::string(cmds[i].scan_description).substr(0, 3));
-    last_info = exploration.feedResultForTest(tracking_id, ds, static_cast<double>(i), queue);
+    last_info = ExplorationTestAccess::feedResult(exploration,tracking_id, ds, static_cast<double>(i), queue);
   }
 
   TEST_EQUAL(exploration.activeGroupCount(), 0)
@@ -1149,7 +1152,7 @@ START_SECTION(winner_selection_by_score)
   Exploration exploration(cfg, fragments);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
-  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
+  auto cmds = exploration.initiate(2, pg, 3, queue);
   TEST_EQUAL(static_cast<int>(cmds.size()), 5)
 
   std::vector<double> scores = {1.0, 3.0, 2.0, 5.0, 0.0};
@@ -1158,7 +1161,7 @@ START_SECTION(winner_selection_by_score)
   {
     DeconvolvedSpectrum ds = makeSyntheticDeconv(i + 1, static_cast<int>(scores[i]));
     int tracking_id = queue.decode(std::string(cmds[i].scan_description).substr(0, 3));
-    last_info = exploration.feedResultForTest(tracking_id, ds, static_cast<double>(i), queue);
+    last_info = ExplorationTestAccess::feedResult(exploration,tracking_id, ds, static_cast<double>(i), queue);
   }
 
   // mass_count metric -> remaining_ratio should be -1.0 (N/A)
@@ -1267,7 +1270,7 @@ START_SECTION(ms3_exploration_creates_child_groups)
   Exploration exploration(cfg, fragments);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
-  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
+  auto cmds = exploration.initiate(2, pg, 3, queue);
   TEST_EQUAL(static_cast<int>(cmds.size()), 5)
   // MS2-level exploration variants should have priority 2
   for (int i = 0; i < 5; ++i)
@@ -1283,7 +1286,7 @@ START_SECTION(ms3_exploration_creates_child_groups)
   for (int i = 0; i < 5; ++i)
   {
     int tracking_id = queue.decode(std::string(cmds[i].scan_description).substr(0, 3));
-    exploration.feedResultForTest(tracking_id, ms2_deconv, ms2_data.rt, queue);
+    ExplorationTestAccess::feedResult(exploration,tracking_id, ms2_deconv, ms2_data.rt, queue);
   }
 
   int ms3_group_count = exploration.activeGroupCount();
@@ -1375,15 +1378,15 @@ START_SECTION(optimization_metadata_populated)
   Exploration exploration(cfg, fragments);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
-  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
+  auto cmds = exploration.initiate(2, pg, 3, queue);
 
   DeconvolvedSpectrum ds = makeSyntheticDeconv(1, 3);
   int tracking_id = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
-  exploration.feedResultForTest(tracking_id, ds, 1.0, queue);
+  ExplorationTestAccess::feedResult(exploration,tracking_id, ds, 1.0, queue);
 
   TEST_EQUAL(exploration.activeGroupCount(), 1)
 
-  auto group = exploration.getGroup(1);
+  auto group = ExplorationTestAccess::group(exploration,1);
   TEST_EQUAL(group.variants[0].received, true)
   auto& stored = group.variants[0].result;
   TEST_EQUAL(stored.hasOptimizationMetadata(), true)
@@ -1507,14 +1510,14 @@ START_SECTION(remaining_precursor_score_no_raw_data)
   Exploration exploration(cfg, fragments);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
-  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
+  auto cmds = exploration.initiate(2, pg, 3, queue);
   TEST_EQUAL(static_cast<int>(cmds.size()), 6)
 
   // Verify first command is CE=0 baseline
   TEST_REAL_SIMILAR(cmds[0].stages[0].collision_energy, 0.0)
 
   // Verify exploration group has RemainingPrecursor metric
-  auto group = exploration.getGroup(1);
+  auto group = ExplorationTestAccess::group(exploration,1);
   TEST_EQUAL(static_cast<int>(group.exploration_metric),
              static_cast<int>(ExplorationMetric::RemainingPrecursor))
   // Baseline variant at index 0 should have is_baseline=true, variant_index=-1
@@ -1532,7 +1535,7 @@ START_SECTION(remaining_precursor_score_no_raw_data)
   {
     DeconvolvedSpectrum ds = makeSyntheticDeconv(i + 1, i + 1);
     int tracking_id = queue.decode(std::string(cmds[i].scan_description).substr(0, 3));
-    auto info = exploration.feedResultForTest(tracking_id, ds, static_cast<double>(i), queue);
+    auto info = ExplorationTestAccess::feedResult(exploration,tracking_id, ds, static_cast<double>(i), queue);
 
     // total_variants should exclude baseline (= 5 real variants)
     TEST_EQUAL(info.total_variants, 5)
@@ -1554,10 +1557,10 @@ START_SECTION(remaining_precursor_score_with_raw_data)
   Exploration exploration(cfg, fragments);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
-  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
+  auto cmds = exploration.initiate(2, pg, 3, queue);
   TEST_EQUAL(static_cast<int>(cmds.size()), 6)
 
-  auto group = exploration.getGroup(1);
+  auto group = ExplorationTestAccess::group(exploration,1);
   TEST_EQUAL(group.precursor_mz > 0.0, true)
 
   // Feed CE=0 baseline with precursor-window signal (full intensity)
@@ -1570,7 +1573,7 @@ START_SECTION(remaining_precursor_score_with_raw_data)
                          static_cast<int>(baseline_mzs.size()), 0.5, queue);
 
   // After baseline, group should have baseline_intensity set
-  auto group_after_baseline = exploration.getGroup(1);
+  auto group_after_baseline = ExplorationTestAccess::group(exploration,1);
   TEST_EQUAL(group_after_baseline.has_baseline, true)
   TEST_EQUAL(group_after_baseline.baseline_intensity >= 0.0, true)
 
@@ -1583,7 +1586,7 @@ START_SECTION(remaining_precursor_score_with_raw_data)
                                           static_cast<int>(frag_mzs.size()), 1.0, queue);
 
   // If baseline had in-window signal, CE>0 variant should have a score
-  auto group_mid = exploration.getGroup(1);
+  auto group_mid = ExplorationTestAccess::group(exploration,1);
   TEST_EQUAL(group_mid.variants[1].received, true)
   TEST_EQUAL(group_mid.variants[1].score >= 0.0, true)
   TEST_EQUAL(group_mid.variants[1].score <= 1.0, true)
@@ -1604,7 +1607,7 @@ START_SECTION(remaining_precursor_score_no_signal_in_window)
   Exploration exploration(cfg, fragments);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
-  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
+  auto cmds = exploration.initiate(2, pg, 3, queue);
   TEST_EQUAL(static_cast<int>(cmds.size()), 6)
 
   // Feed baseline (CE=0) with raw data entirely OUTSIDE the precursor window
@@ -1616,7 +1619,7 @@ START_SECTION(remaining_precursor_score_no_signal_in_window)
   exploration.feedResult(baseline_tid, mzs.data(), intensities.data(),
                          static_cast<int>(mzs.size()), 0.5, queue);
 
-  auto group = exploration.getGroup(1);
+  auto group = ExplorationTestAccess::group(exploration,1);
   TEST_EQUAL(group.has_baseline, true)
   TEST_REAL_SIMILAR(group.baseline_intensity, 0.0)
 
@@ -1629,7 +1632,7 @@ START_SECTION(remaining_precursor_score_no_signal_in_window)
   auto ce20_info = exploration.feedResult(ce20_tid, frag_mzs.data(), frag_ints.data(),
                                           static_cast<int>(frag_mzs.size()), 1.0, queue);
 
-  auto group_after = exploration.getGroup(1);
+  auto group_after = ExplorationTestAccess::group(exploration,1);
   TEST_EQUAL(group_after.variants[1].received, true)
   TEST_REAL_SIMILAR(group_after.variants[1].score, 0.0)
   TEST_REAL_SIMILAR(ce20_info.remaining_ratio, -1.0)
@@ -1647,7 +1650,7 @@ START_SECTION(remaining_precursor_empty_baseline_aborts_group)
   Exploration exploration(cfg, fragments);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
-  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
+  auto cmds = exploration.initiate(2, pg, 3, queue);
   TEST_EQUAL(static_cast<int>(cmds.size()), 6)
 
   // Push the 5 CE variants (children) into the queue; feed the baseline directly (already acquired).
@@ -1679,7 +1682,7 @@ START_SECTION(remaining_precursor_inflight_child_after_abort_is_noop)
   Exploration exploration(cfg, fragments);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
-  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
+  auto cmds = exploration.initiate(2, pg, 3, queue);
   TEST_EQUAL(static_cast<int>(cmds.size()), 6)
 
   // cmds[2..5] still queued; cmds[1] already sent to the device (in-flight, in pending_scan_map_).
@@ -1815,10 +1818,10 @@ START_SECTION(remaining_precursor_target_aware_scoring)
   Exploration exploration(cfg, fragments);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
-  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
+  auto cmds = exploration.initiate(2, pg, 3, queue);
   TEST_EQUAL(static_cast<int>(cmds.size()), 6)
 
-  auto group = exploration.getGroup(1);
+  auto group = ExplorationTestAccess::group(exploration,1);
   double iso_half = group.isolation_width / 2.0;
   double mz_center = group.precursor_mz;
 
@@ -1863,7 +1866,7 @@ START_SECTION(fragment_match_propagated_in_feed_result)
   TEST_EQUAL(cfg.targeting().protein_sequence.empty(), false)
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
-  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
+  auto cmds = exploration.initiate(2, pg, 3, queue);
 
   auto ms2_scans = loadTsvScans(ms2_cytc_path);
   ABORT_IF(ms2_scans.empty())
@@ -1893,16 +1896,16 @@ START_SECTION(fragment_count_zero_without_protein_sequence)
   Exploration exploration(cfg, fragments);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
-  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
+  auto cmds = exploration.initiate(2, pg, 3, queue);
   TEST_EQUAL(static_cast<int>(cmds.size()), 6)
 
   DeconvolvedSpectrum baseline_ds = makeSyntheticDeconv(0, 1);
   int baseline_tid = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
-  exploration.feedResultForTest(baseline_tid, baseline_ds, 0.0, queue);
+  ExplorationTestAccess::feedResult(exploration,baseline_tid, baseline_ds, 0.0, queue);
 
   DeconvolvedSpectrum ds = makeSyntheticDeconv(1, 5);
   int tracking_id = queue.decode(std::string(cmds[1].scan_description).substr(0, 3));
-  auto info = exploration.feedResultForTest(tracking_id, ds, 1.0, queue);
+  auto info = ExplorationTestAccess::feedResult(exploration,tracking_id, ds, 1.0, queue);
 
   TEST_EQUAL(info.fragment_count, 0)
   TEST_EQUAL(info.matched_protein.empty(), true)
@@ -1948,11 +1951,11 @@ START_SECTION(ms3_remaining_precursor_isolation_width)
   ScanCommand ms2_ctx = queue.buildMS2(makeSyntheticPeakGroup(800.0, 2400.0, 3), 3,
                                         cfg.level(2).scans[0], 2, 0);
 
-  auto cmds = exploration.initiate(3, fragment_pg, 2, 0.0, queue, &ms2_ctx);
+  auto cmds = exploration.initiate(3, fragment_pg, 2, queue, nullptr, &ms2_ctx);
   // RemainingPrecursor: 1 baseline + 5 CE variants (20,25,30,35,40) = 6
   TEST_EQUAL(static_cast<int>(cmds.size()), 6)
 
-  auto group = exploration.getGroup(1);
+  auto group = ExplorationTestAccess::group(exploration,1);
   // isolation_width should be floored to 2.0 (not 0.0)
   TEST_REAL_SIMILAR(group.isolation_width, 2.0)
 
@@ -1965,7 +1968,7 @@ START_SECTION(ms3_remaining_precursor_isolation_width)
   exploration.feedResult(baseline_tid, baseline_mzs.data(), baseline_ints.data(),
                          static_cast<int>(baseline_mzs.size()), 0.5, queue);
 
-  auto group_after = exploration.getGroup(1);
+  auto group_after = ExplorationTestAccess::group(exploration,1);
   TEST_EQUAL(group_after.has_baseline, true)
   // With 2.0 Da window [499.0, 501.0], mz_center=500.0 is in-window
   TEST_REAL_SIMILAR(group_after.baseline_intensity, 1000.0)
@@ -2122,11 +2125,11 @@ START_SECTION(activation_type_wiring_in_scoring)
   Exploration exploration(cfg, fragments);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
-  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
+  auto cmds = exploration.initiate(2, pg, 3, queue);
   TEST_EQUAL(cmds.size() > 0, true)
 
   // Verify variants have ETD activation type
-  auto group = exploration.getGroup(1);
+  auto group = ExplorationTestAccess::group(exploration,1);
   for (const auto& v : group.variants)
   {
     TEST_STRING_EQUAL(v.activation_type, "ETD")
@@ -2137,7 +2140,7 @@ START_SECTION(activation_type_wiring_in_scoring)
   // which now passes v.activation_type instead of hardcoded "HCD"
   DeconvolvedSpectrum ds = makeSyntheticDeconv(1, 5);
   int tracking_id = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
-  auto info = exploration.feedResultForTest(tracking_id, ds, 1.0, queue);
+  auto info = ExplorationTestAccess::feedResult(exploration,tracking_id, ds, 1.0, queue);
 
   // The key assertion: feedResult completed without error and the activation type
   // was correctly propagated through the chain.
@@ -2175,12 +2178,12 @@ START_SECTION(exploration_group_creation_etd)
   Exploration exploration(cfg, fragments);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
-  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
+  auto cmds = exploration.initiate(2, pg, 3, queue);
 
   TEST_EQUAL(cmds.size() > 0, true)              // ETD exploration produced variants
   TEST_EQUAL(exploration.activeGroupCount(), 1)
 
-  auto group = exploration.getGroup(1);
+  auto group = ExplorationTestAccess::group(exploration,1);
   TEST_EQUAL(group.msn_level, 2)
   TEST_EQUAL(group.variants.size() > 0, true)
 
@@ -2210,7 +2213,7 @@ START_SECTION(exploration_variants_priority_by_level_etd)
   Exploration exploration(cfg, fragments);
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
-  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
+  auto cmds = exploration.initiate(2, pg, 3, queue);
 
   TEST_EQUAL(cmds.size() > 0, true)
   for (size_t i = 0; i < cmds.size(); ++i)

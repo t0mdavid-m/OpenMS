@@ -465,19 +465,6 @@ namespace OpenMS
     return cmd;
   }
 
-  void ScanCommandQueue::setWindowSnr(int scan_id, double value)
-  {
-    std::lock_guard<std::mutex> lock(queue_mutex_);
-    window_snr_map_[scan_id] = value;
-  }
-
-  double ScanCommandQueue::windowSnr(int scan_id) const
-  {
-    std::lock_guard<std::mutex> lock(queue_mutex_);
-    auto it = window_snr_map_.find(scan_id);
-    return it == window_snr_map_.end() ? -1.0 : it->second;
-  }
-
   void ScanCommandQueue::cleanupExpired()
   {
     if (!config_.scheduling().timeout_enabled)

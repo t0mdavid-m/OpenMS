@@ -60,7 +60,6 @@ namespace OpenMS
   class OPENMS_DLLAPI Exploration
   {
   public:
-    std::unique_ptr<Deconvolution> exploration_deconv_;
     /// Single variant in an exploration CE sweep
     struct ExplorationVariant
     {
@@ -184,15 +183,20 @@ namespace OpenMS
       FragmentAnalysis::ProteoformMatch identification_result;  ///< Per-fragment match details for identification.tsv
       MS2Context ms2_context;  ///< Cached MS2 context for this variant's group
       std::vector<IdentificationRowInfo> additional_identification_rows;  ///< Extra calibrated rows for other variants in same completed exploration group
+      std::vector<std::string> child_ids;  ///< Encoded tracking ids of the pushed children, in info.commands order (pre-encoded by feedResultImpl_; replaces processScan's inline encode loop)
     };
 
     /// Construct with a reference to the shared Config and FragmentAnalysis
     explicit Exploration(const Config& config, FragmentAnalysis& fragments);
 
     /// Create exploration group with CE variants. Returns commands for the caller to push.
-    /// @param ms_ctx  Optional originating MS2 ScanCommand (needed for MS3 buildMS3 stage 0)
+    /// The FAIMS CV is sourced from ms_ctx->faims_cv (Item 1: CV travels via the context, not a param).
+    /// When source_spectrum != nullptr, each command's window_snr is computed over it (the survey MS1 for
+    /// MS2 variants, the MS2 result for MS3 variants) and stamped on the command (Item 2: SNR travels with
+    /// the command). nullptr leaves window_snr at its -1.0 default (used by direct-initiate unit tests).
+    /// @param ms_ctx  Optional originating ScanCommand (carries faims_cv; needed for MS3 buildMS3 stage 0)
     std::vector<ScanCommand> initiate(int msn_level, const PeakGroup& pg, int charge,
-                                      double faims_cv, ScanCommandQueue& queue,
+                                      ScanCommandQueue& queue, const MSSpectrum* source_spectrum = nullptr,
                                       const ScanCommand* ms_ctx = nullptr,
                                       char ion_type = '\0', int frag_index = 0,
                                       const MS3FragmentMatcher::ProteoformContext& proto_ctx = {},
@@ -206,10 +210,9 @@ namespace OpenMS
                               const double* mzs, const double* ints, int length,
                               double rt, ScanCommandQueue& queue);
 
-    /// Test-only: feed a pre-deconvolved result (bypasses deconvolution)
-    FeedResultInfo feedResultForTest(int tracking_id,
-                                     const DeconvolvedSpectrum& ms2_deconv,
-                                     double rt, ScanCommandQueue& queue);
+    /// Test-only access (the feedResultImpl_ deconvolution-bypass + getGroup) lives in
+    /// FLASHIda_TestAccess.h via this friend, so test scaffolding stays out of the production API.
+    friend struct ExplorationTestAccess;
 
     /// Check whether a tracking_id belongs to an exploration variant
     bool isExplorationVariant(int tracking_id) const;
@@ -223,10 +226,31 @@ namespace OpenMS
     /// Number of currently active exploration groups
     int activeGroupCount() const;
 
-    /// Get exploration group by ID (caller must ensure group exists)
-    ExplorationGroup getGroup(int group_id) const;
+    /// Mass count of the stored exploration-deconv MS2 spectrum (0 if none). Encapsulates the
+    /// exploration_deconv_ access that processScan used to perform inline.
+    int explorationDeconvMassCount() const
+    {
+      return (exploration_deconv_ != nullptr && exploration_deconv_->hasStoredMS2())
+                 ? static_cast<int>(exploration_deconv_->storedMS2().size()) : 0;
+    }
+
+    /// Pointer to the stored exploration-deconv MS2 spectrum, or nullptr if none. Targets an
+    /// engine-owned member (valid until the next exploration deconvolution).
+    const DeconvolvedSpectrum* explorationDeconvSpectrum() const
+    {
+      return (exploration_deconv_ != nullptr && exploration_deconv_->hasStoredMS2())
+                 ? &exploration_deconv_->storedMS2() : nullptr;
+    }
 
   private:
+    /// Internal deconvolution engine for exploration-variant MS2 spectra. Was public; now reached
+    /// only via the accessors above plus Exploration's own internals.
+    std::unique_ptr<Deconvolution> exploration_deconv_;
+
+    /// Get exploration group by ID (caller must ensure group exists). Test-only; reached via
+    /// ExplorationTestAccess (was public).
+    ExplorationGroup getGroup(int group_id) const;
+
     const Config& config_;
     FragmentAnalysis& fragments_;
 

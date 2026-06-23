@@ -10,6 +10,8 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 
+#include "FLASHIda_TestAccess.h"   // FLASHIdaTestAccess::push (private-state access)
+
 #include <set>
 #include <string>
 
@@ -162,19 +164,19 @@ START_SECTION(queue_priority_dequeue_order)
   cmd3.msn_level = 3;
   cmd3.priority = 3;
   cmd3.scan_id = 100;
-  ida->pushCommandForTest(cmd3);
+  FLASHIdaTestAccess::push(*ida,cmd3);
 
   ScanCommand cmd1{};
   cmd1.msn_level = 2;
   cmd1.priority = 1;
   cmd1.scan_id = 101;
-  ida->pushCommandForTest(cmd1);
+  FLASHIdaTestAccess::push(*ida,cmd1);
 
   ScanCommand cmd2{};
   cmd2.msn_level = 2;
   cmd2.priority = 2;
   cmd2.scan_id = 102;
-  ida->pushCommandForTest(cmd2);
+  FLASHIdaTestAccess::push(*ida,cmd2);
 
   // Dequeue should return priority 1, then 2, then 3
   ScanCommand out{};
@@ -246,7 +248,7 @@ START_SECTION(agc_scan_is_dequeued_first)
   ms2_cmd.msn_level = 2;
   ms2_cmd.priority = 2;
   ms2_cmd.scan_id = 200;
-  ida->pushCommandForTest(ms2_cmd);
+  FLASHIdaTestAccess::push(*ida,ms2_cmd);
 
   // First dequeue: with agc_interval_seconds=0, AGC is always needed.
   // AGC should be returned before any queued command.

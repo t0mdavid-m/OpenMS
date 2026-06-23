@@ -371,32 +371,6 @@ namespace
     return output_idx;
   }
 
-  int FragmentAnalysis::getBestMS2MassesPy(int n,
-                                           std::vector<double>& masses,
-                                           std::vector<double>& qscores,
-                                           std::vector<int>& charges,
-                                           std::vector<double>& window_starts,
-                                           std::vector<double>& window_ends,
-                                           DeconvolvedSpectrum& stored_ms2)
-  {
-    masses.resize(n);
-    qscores.resize(n);
-    charges.resize(n);
-    window_starts.resize(n);
-    window_ends.resize(n);
-
-    int count = getBestMS2Masses(n, masses.data(), qscores.data(), charges.data(),
-                                 window_starts.data(), window_ends.data(), stored_ms2);
-
-    masses.resize(count);
-    qscores.resize(count);
-    charges.resize(count);
-    window_starts.resize(count);
-    window_ends.resize(count);
-
-    return count;
-  }
-
   int FragmentAnalysis::runTagBasedFragmentMatching_(const String& protein_sequence,
                                                      std::vector<TagBasedFragmentMatch>& matches,
                                                      DeconvolvedSpectrum& stored_ms2,
@@ -822,50 +796,6 @@ namespace
     return output_idx;
   }
 
-  int FragmentAnalysis::getTopFragmentMatchesPy(const String& protein_sequence,
-                                                int n,
-                                                std::vector<double>& masses,
-                                                std::vector<double>& qscores,
-                                                std::vector<int>& charges,
-                                                std::vector<double>& window_starts,
-                                                std::vector<double>& window_ends,
-                                                std::vector<int>& is_b_ions,
-                                                std::vector<int>& fragment_indices,
-                                                DeconvolvedSpectrum& stored_ms2)
-  {
-    masses.resize(n);
-    qscores.resize(n);
-    charges.resize(n);
-    window_starts.resize(n);
-    window_ends.resize(n);
-
-    // Use raw char array for the C-style function
-    std::unique_ptr<char[]> ion_types_temp(new char[n]);
-    fragment_indices.resize(n);
-
-    ProteoformMatch discard;
-    int count = getTopFragmentMatches(protein_sequence, n, masses.data(), qscores.data(),
-                                      charges.data(), window_starts.data(), window_ends.data(),
-                                      ion_types_temp.get(), fragment_indices.data(), stored_ms2, discard, "HCD");
-
-    masses.resize(count);
-    qscores.resize(count);
-    charges.resize(count);
-    window_starts.resize(count);
-    window_ends.resize(count);
-    fragment_indices.resize(count);
-
-    // Convert char array to int vector (1 for prefix ion, 0 for suffix ion)
-    is_b_ions.resize(count);
-    for (int i = 0; i < count; ++i)
-    {
-      char c = ion_types_temp[i];
-      is_b_ions[i] = (c == 'a' || c == 'b' || c == 'c') ? 1 : 0;
-    }
-
-    return count;
-  }
-
   int FragmentAnalysis::getAmbiguityEnclosingIons(const String& protein_sequence,
                                                   int n,
                                                   double* masses,
@@ -1132,50 +1062,6 @@ namespace
     return output_idx;
   }
 
-  int FragmentAnalysis::getAmbiguityEnclosingIonsPy(const String& protein_sequence,
-                                                    int n,
-                                                    std::vector<double>& masses,
-                                                    std::vector<double>& qscores,
-                                                    std::vector<int>& charges,
-                                                    std::vector<double>& window_starts,
-                                                    std::vector<double>& window_ends,
-                                                    std::vector<int>& is_b_ions,
-                                                    std::vector<int>& fragment_indices,
-                                                    DeconvolvedSpectrum& stored_ms2)
-  {
-    masses.resize(n);
-    qscores.resize(n);
-    charges.resize(n);
-    window_starts.resize(n);
-    window_ends.resize(n);
-
-    // Use raw char array for the C-style function
-    std::unique_ptr<char[]> ion_types_temp(new char[n]);
-    fragment_indices.resize(n);
-
-    ProteoformMatch discard;
-    int count = getAmbiguityEnclosingIons(protein_sequence, n, masses.data(), qscores.data(),
-                                          charges.data(), window_starts.data(), window_ends.data(),
-                                          ion_types_temp.get(), fragment_indices.data(), stored_ms2, discard, "HCD");
-
-    masses.resize(count);
-    qscores.resize(count);
-    charges.resize(count);
-    window_starts.resize(count);
-    window_ends.resize(count);
-    fragment_indices.resize(count);
-
-    // Convert char array to int vector (1 for prefix ion, 0 for suffix ion)
-    is_b_ions.resize(count);
-    for (int i = 0; i < count; ++i)
-    {
-      char c = ion_types_temp[i];
-      is_b_ions[i] = (c == 'a' || c == 'b' || c == 'c') ? 1 : 0;
-    }
-
-    return count;
-  }
-
   int FragmentAnalysis::getTerminalFragmentIons(
       const String& protein_sequence,
       int n,
@@ -1293,54 +1179,6 @@ namespace
     }
 
     return output_idx;
-  }
-
-  int FragmentAnalysis::getTerminalFragmentIonsPy(
-      const String& protein_sequence,
-      int n,
-      std::vector<double>& masses,
-      std::vector<double>& qscores,
-      std::vector<int>& charges,
-      std::vector<double>& window_starts,
-      std::vector<double>& window_ends,
-      std::vector<int>& is_b_ions,
-      std::vector<int>& fragment_indices,
-      DeconvolvedSpectrum& stored_ms2)
-  {
-    masses.resize(n);
-    qscores.resize(n);
-    charges.resize(n);
-    window_starts.resize(n);
-    window_ends.resize(n);
-
-    // Use raw char array for the C-style function
-    std::unique_ptr<char[]> ion_types_temp(new char[n]);
-    fragment_indices.resize(n);
-
-    ProteoformMatch discard;
-    int count = getTerminalFragmentIons(
-        protein_sequence, n,
-        masses.data(), qscores.data(), charges.data(),
-        window_starts.data(), window_ends.data(),
-        ion_types_temp.get(), fragment_indices.data(), stored_ms2, discard, "HCD");
-
-    // Resize to actual count
-    masses.resize(count);
-    qscores.resize(count);
-    charges.resize(count);
-    window_starts.resize(count);
-    window_ends.resize(count);
-    fragment_indices.resize(count);
-
-    // Convert char array to int vector (1 for prefix ion, 0 for suffix ion)
-    is_b_ions.resize(count);
-    for (int i = 0; i < count; ++i)
-    {
-      char c = ion_types_temp[i];
-      is_b_ions[i] = (c == 'a' || c == 'b' || c == 'c') ? 1 : 0;
-    }
-
-    return count;
   }
 
   double FragmentAnalysis::windowSnr(const MSSpectrum& source, double lo, double hi, double signal_intensity)

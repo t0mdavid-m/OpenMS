@@ -20,6 +20,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>  // encode/decode for distinct MS1 ids
+#include "FLASHIda_TestAccess.h"  // FLASHIdaTestAccess::explorationActive (private-state access)
 
 #include <cctype>
 #include <cmath>
@@ -304,7 +305,7 @@ namespace
       // AGC/MS1 ticks — in raw dequeue order, BEFORE the idle-tick continue and the per-level bucketing,
       // so callers can assert cross-level interleave the per-level buckets lose.
       r.all_cmds.push_back(cmd);
-      r.all_active.push_back(ida->explorationActive() ? 1 : 0);   // engine's exploration-active flag AT dequeue
+      r.all_active.push_back(FLASHIdaTestAccess::explorationActive(*ida) ? 1 : 0);   // engine's exploration-active flag AT dequeue
       // Idle tick: AGC, empty descriptor, an MS1 re-survey after all ms1_scans have been fed, or (in
       // single_group_only mode) any MS1 survey once the first group has already formed.
       if (cmd.is_agc || cmd.scan_description[0] == '\0' || (cmd.msn_level <= 1 && ms1_fed >= n_ms1)

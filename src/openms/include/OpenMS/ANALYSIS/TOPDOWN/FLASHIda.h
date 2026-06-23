@@ -72,7 +72,6 @@ namespace OpenMS
     typedef FLASHHelperClasses::LogMzPeak LogMzPeak;
 
     using PTMSite = FragmentAnalysis::PTMSite;
-    using TagMatch = PrecursorSelection::TagMatch;
 
     /// constructor that takes string input argument
     explicit FLASHIda(char *arg);
@@ -113,52 +112,6 @@ namespace OpenMS
                                   char* ion_types, int* fragment_indices,
                                   const String& fragmentation_method = "HCD");
 
-    // ──────────────────────────────────────────────────
-    // Python API forwards -- delegates to components.
-    // Update FLASHIda.pxd if signatures change.
-    // ──────────────────────────────────────────────────
-    int getBestMS2MassesPy(int n, std::vector<double>& masses, std::vector<double>& qscores,
-                           std::vector<int>& charges, std::vector<double>& window_starts,
-                           std::vector<double>& window_ends)
-    {
-      return fragments_.getBestMS2MassesPy(n, masses, qscores, charges, window_starts, window_ends,
-                                            deconv_.storedMS2());
-    }
-
-    int getTopFragmentMatchesPy(const String& protein_sequence, int n,
-                                std::vector<double>& masses, std::vector<double>& qscores,
-                                std::vector<int>& charges, std::vector<double>& window_starts,
-                                std::vector<double>& window_ends,
-                                std::vector<int>& is_b_ions, std::vector<int>& fragment_indices)
-    {
-      return fragments_.getTopFragmentMatchesPy(protein_sequence, n, masses, qscores, charges,
-                                                 window_starts, window_ends, is_b_ions,
-                                                 fragment_indices, deconv_.storedMS2());
-    }
-
-    int getTerminalFragmentIonsPy(const String& protein_sequence, int n,
-                                  std::vector<double>& masses, std::vector<double>& qscores,
-                                  std::vector<int>& charges, std::vector<double>& window_starts,
-                                  std::vector<double>& window_ends,
-                                  std::vector<int>& is_b_ions, std::vector<int>& fragment_indices)
-    {
-      return fragments_.getTerminalFragmentIonsPy(protein_sequence, n, masses, qscores, charges,
-                                                   window_starts, window_ends, is_b_ions,
-                                                   fragment_indices, deconv_.storedMS2());
-    }
-
-    int getAmbiguityEnclosingIonsPy(const String& protein_sequence, int n,
-                                    std::vector<double>& masses, std::vector<double>& qscores,
-                                    std::vector<int>& charges, std::vector<double>& window_starts,
-                                    std::vector<double>& window_ends,
-                                    std::vector<int>& is_b_ions, std::vector<int>& fragment_indices)
-    {
-      return fragments_.getAmbiguityEnclosingIonsPy(protein_sequence, n, masses, qscores, charges,
-                                                     window_starts, window_ends, is_b_ions,
-                                                     fragment_indices, deconv_.storedMS2());
-    }
-    // ──────────────────────────────────────────────────
-
     /// Retrieve an integer config value by key (for bridge functions)
     int getConfigInt(const std::string& key) const;
 
@@ -176,19 +129,9 @@ namespace OpenMS
     /// Get the next monotonically increasing tracking ID (thread-safe)
     int getNextTrackingId();
 
-    /// Test-only: push a command into the priority queue (delegates to queue_)
-    void pushCommandForTest(ScanCommand cmd)
-    {
-      queue_.push(cmd);
-    }
-
-    /// Test-only accessor: access the ScanCommandQueue directly
-    ScanCommandQueue& getQueueForTest() { return queue_; }
-
-    /// Test-only accessor: is an exploration group currently active? Reads the exact atomic the
-    /// cycle-time injection gate consults (set on group formation, cleared on completion), so a test
-    /// can assert suppression against the engine's real decision variable. Read-only; no behavior change.
-    bool explorationActive() const { return exploration_active_.load(std::memory_order_acquire); }
+    /// Test-only access (push / queue / queueSize / explorationActive) lives in the test header
+    /// FLASHIda_TestAccess.h via this friend, so test scaffolding stays out of the production API.
+    friend struct FLASHIdaTestAccess;
 
     /**
            @brief parse FLASHIda log file
@@ -326,19 +269,6 @@ namespace OpenMS
 
     /// Derive scan_type string from scan_description
     static std::string scanTypeFromDescription_(const ScanCommand& cmd);
-
-  public:
-    /// Test-only: get level config for a given MSn level
-    const MSLevelConfig& getLevelConfigForTest(int level) const { return config_.level(level); }
-
-    /// Test-only: access the Config object directly
-    const Config& getConfigForTest() const { return config_; }
-
-    /// Test-only: get queue size for a given priority (delegates to queue_)
-    size_t getQueueSizeForTest(int priority) const
-    {
-      return queue_.queueSize(priority);
-    }
 
   };
 }

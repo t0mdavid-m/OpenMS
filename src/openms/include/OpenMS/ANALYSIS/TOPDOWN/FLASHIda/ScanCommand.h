@@ -118,7 +118,10 @@ namespace OpenMS
     double  ppm_error_s1;           ///< @1416 fragment getAvgPPMError()
     double  precursor_intensity_s1; ///< @1424 fragment getChargeIntensity(frag_charge)
     double  peakgroup_intensity_s1; ///< @1432 fragment getIntensity()
-    char reserved_[608];           ///< Reserved for future fields (consume from here, never change total size)
+    double  window_snr = -1.0;     ///< @1440 isolation-window SNR (FragmentAnalysis::windowSnr) of THIS command's
+                                   ///<       commanded window; -1.0 = not computed. Set at build time and travels
+                                   ///<       with the command (replaces the former ScanCommandQueue window-SNR map).
+    char reserved_[600];           ///< Reserved for future fields (consume from here, never change total size)
   };
   static_assert(sizeof(ScanCommand) == 2048, "ScanCommand must be 2048 bytes for P/Invoke");
 

@@ -12,6 +12,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 
 #include "FLASHIda_TestHelpers.h"  // runInterleaved / AcqResult / ScanData — the canonical engine-id-echo driver
+#include "FLASHIda_TestAccess.h"   // FLASHIdaTestAccess::push (private-state access)
 
 #include <vector>
 #include <set>
@@ -409,7 +410,7 @@ START_SECTION(ms2_carries_parent_cv)
   ms2.priority = 2;
   ms2.scan_id = 999;
   ms2.faims_cv = -40.0;
-  ida->pushCommandForTest(ms2);
+  FLASHIdaTestAccess::push(*ida,ms2);
 
   // Dequeue the MS2 — it should retain its parent CV
   ScanCommand out{};

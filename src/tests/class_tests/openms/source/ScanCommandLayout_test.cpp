@@ -74,7 +74,8 @@ START_SECTION([EXTRA] ScanCommand and IsolationStage struct layout)
   TEST_EQUAL(offsetof(ScanCommand, ppm_error_s1), 1416)
   TEST_EQUAL(offsetof(ScanCommand, precursor_intensity_s1), 1424)
   TEST_EQUAL(offsetof(ScanCommand, peakgroup_intensity_s1), 1432)
-  TEST_EQUAL(offsetof(ScanCommand, reserved_), 1440)
+  TEST_EQUAL(offsetof(ScanCommand, window_snr), 1440)
+  TEST_EQUAL(offsetof(ScanCommand, reserved_), 1448)
 
   // IsolationStage field offsets
   TEST_EQUAL(offsetof(IsolationStage, precursor_mz), 0)

@@ -14,6 +14,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
 
 #include "FLASHIda_TestHelpers.h"  // ground-truth harness: ScanData/loadTsvScans/AcqResult/runInterleaved/runFullCycle
+#include "FLASHIda_TestAccess.h"   // FLASHIdaTestAccess: push/queue/queueSize/explorationActive (private-state access)
 
 #include <fstream>
 #include <string>
@@ -970,7 +971,7 @@ START_SECTION(decodeTracking_roundtrip)
   }
 
   // Roundtrip: decoding the base-94 ID should give back cmd.scan_id
-  int decoded_id = ida->getQueueForTest().decode(id_str);
+  int decoded_id = FLASHIdaTestAccess::queue(*ida).decode(id_str);
   TEST_EQUAL(decoded_id, cmd.scan_id)
 
   delete ida;
@@ -998,7 +999,7 @@ START_SECTION(cleanup_expired_commands)
   // timeout_ms=30000, entries should NOT be expired immediately. Verify by resolving one MS2 tracking ID.
   // Snapshot the pending size first so the post-resolution check is exact (one entry erased), independent of
   // how many AGC/MS2 entries the interleaved drive left pending.
-  const size_t pending_before = ida->getQueueForTest().pendingScanMapSize();
+  const size_t pending_before = FLASHIdaTestAccess::queue(*ida).pendingScanMapSize();
   ABORT_IF(pending_before == 0)
   const ScanCommand& ms2_cmd = acq.ms2_cmds[0];
 
@@ -1020,7 +1021,7 @@ START_SECTION(cleanup_expired_commands)
   // Also verify via accessor: the first resolution erased EXACTLY one pending entry (pending_before - 1).
   // (Re-derived from interleaving: the snapshot baseline replaces the old `total` MS2-only baseline; the
   // engine still erases exactly one entry per resolved MS2 tracking id -- see FLASHIda.cpp:918.)
-  TEST_EQUAL(ida->getQueueForTest().pendingScanMapSize(), (size_t)(pending_before - 1))
+  TEST_EQUAL(FLASHIdaTestAccess::queue(*ida).pendingScanMapSize(), (size_t)(pending_before - 1))
 
   delete ida;
 }
@@ -1426,7 +1427,7 @@ START_SECTION(ms2_priority_beats_idle_ms1)
   ms2_a.priority = 2;
   ms2_a.scan_id = 42;
   ms2_a.faims_cv = -50.0;
-  ida->pushCommandForTest(ms2_a);
+  FLASHIdaTestAccess::push(*ida,ms2_a);
 
   // First getNextScanCommand: MS2 at priority 2 (queue not empty, no idle cycle)
   ScanCommand out{};
@@ -1451,7 +1452,7 @@ START_SECTION(ms2_priority_beats_idle_ms1)
   ms2_b.priority = 2;
   ms2_b.scan_id = 43;
   ms2_b.faims_cv = -50.0;
-  ida->pushCommandForTest(ms2_b);
+  FLASHIdaTestAccess::push(*ida,ms2_b);
 
   // Third call: MS2 at priority 2 beats idle MS1 at priority 3
   r = ida->getNextScanCommand(out);
@@ -1781,12 +1782,12 @@ START_SECTION(cleanup_expired_drops_stale_queued_commands)
     ScanCommand ms2{};
     ms2.msn_level = 2;
     ms2.priority = 2;
-    ms2.scan_id = ida->getQueueForTest().nextTrackingId();
-    ida->pushCommandForTest(ms2);
+    ms2.scan_id = FLASHIdaTestAccess::queue(*ida).nextTrackingId();
+    FLASHIdaTestAccess::push(*ida,ms2);
   }
 
   // Verify all 3 are in the queue
-  TEST_EQUAL(ida->getQueueSizeForTest(2), (size_t)3)
+  TEST_EQUAL(FLASHIdaTestAccess::queueSize(*ida,2), (size_t)3)
 
   // Sleep 2ms to ensure commands exceed the 1ms timeout
   std::this_thread::sleep_for(std::chrono::milliseconds(2));
@@ -1800,7 +1801,7 @@ START_SECTION(cleanup_expired_drops_stale_queued_commands)
   TEST_EQUAL(out.is_agc, 1)  // idle cycle AGC, not a stale MS2
 
   // Queue at priority 2 should now be empty (stale commands dropped)
-  TEST_EQUAL(ida->getQueueSizeForTest(2), (size_t)0)
+  TEST_EQUAL(FLASHIdaTestAccess::queueSize(*ida,2), (size_t)0)
 
   delete ida;
 }
@@ -1818,7 +1819,7 @@ START_SECTION(ms1_agc_resolved_from_pending_map)
   TEST_EQUAL(agc_cmd.is_agc, 1)
 
   // AGC is in pending map via registerPending
-  TEST_EQUAL(ida->getQueueForTest().pendingScanMapSize(), (size_t)1)
+  TEST_EQUAL(FLASHIdaTestAccess::queue(*ida).pendingScanMapSize(), (size_t)1)
 
   // Dequeue MS1 — now both AGC and MS1 are in pending map
   ScanCommand ms1_cmd{};
@@ -1826,13 +1827,13 @@ START_SECTION(ms1_agc_resolved_from_pending_map)
   TEST_EQUAL(r, 1)
   TEST_EQUAL(ms1_cmd.is_agc, 0)
   TEST_EQUAL(ms1_cmd.msn_level, 1)
-  TEST_EQUAL(ida->getQueueForTest().pendingScanMapSize(), (size_t)2)
+  TEST_EQUAL(FLASHIdaTestAccess::queue(*ida).pendingScanMapSize(), (size_t)2)
 
   // processScan with AGC scan description — should resolve AGC from pending map
   // AGC gate (desc[3]=='A') returns 0 and resolves at line 715
   int n = ida->processScan(nullptr, nullptr, 0, 0.0, 1, agc_cmd.scan_description);
   TEST_EQUAL(n, 0)
-  TEST_EQUAL(ida->getQueueForTest().pendingScanMapSize(), (size_t)1)
+  TEST_EQUAL(FLASHIdaTestAccess::queue(*ida).pendingScanMapSize(), (size_t)1)
 
   // processScan with MS1 scan description — should resolve MS1 from pending map
   // Load real MS1 data to feed through the MS1 path
@@ -1844,7 +1845,7 @@ START_SECTION(ms1_agc_resolved_from_pending_map)
                        ms1_cmd.scan_description);
   // n >= 0 (may or may not produce MS2 commands from a single scan)
   TEST_EQUAL(n >= 0, true)
-  TEST_EQUAL(ida->getQueueForTest().pendingScanMapSize(), (size_t)0)
+  TEST_EQUAL(FLASHIdaTestAccess::queue(*ida).pendingScanMapSize(), (size_t)0)
 
   delete ida;
 }
@@ -1865,12 +1866,12 @@ START_SECTION(processScan_ms1_gate_rejects_unrequested_id)
   // ---- NEGATIVE: a never-emitted tracking id is rejected by the gate ----
   // "ZZZ" is a syntactically valid 3-char base-94 id, 'S' is the MS1-survey type code, but this id was never
   // minted/emitted as a command, so it is not in pending_scan_map_ -> the gate returns 0 before any selection.
-  const size_t pending_before = ida->getQueueForTest().pendingScanMapSize();
+  const size_t pending_before = FLASHIdaTestAccess::queue(*ida).pendingScanMapSize();
   const auto& neg = ms1_scans[0];
   int ret_neg = ida->processScan(neg.mzs.data(), neg.ints.data(), (int)neg.mzs.size(), neg.rt, 1, "ZZZS");
   TEST_EQUAL(ret_neg, 0)
   // No MS2 was queued and no pending entry was added: the spectrum never reached deconvolution/selection.
-  TEST_EQUAL(ida->getQueueForTest().pendingScanMapSize(), pending_before)
+  TEST_EQUAL(FLASHIdaTestAccess::queue(*ida).pendingScanMapSize(), pending_before)
 
   // ---- POSITIVE: an engine-emitted survey id + a SELECTABLE spectrum is accepted ----
   // Drain a FRESH survey per attempt and feed successive scans until one selects a precursor (scan 0 of

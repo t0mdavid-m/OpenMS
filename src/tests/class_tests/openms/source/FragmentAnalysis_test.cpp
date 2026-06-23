@@ -16,6 +16,8 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
 
+#include "FLASHIda_TestAccess.h"   // ExplorationTestAccess::feedResult (private-state access)
+
 #include <fstream>
 #include <string>
 #include <vector>
@@ -469,12 +471,12 @@ START_SECTION(fragment_count_populated_for_fragment_count_metric)
 
   // Initiate exploration group — CE variants 20 and 30
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
-  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
+  auto cmds = exploration.initiate(2, pg, 3, queue);
   ABORT_IF(cmds.empty())
 
   // Feed deconvolved spectrum to first variant
   int tracking_id = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
-  auto info = exploration.feedResultForTest(tracking_id, deconv.storedMS2(), 1.0, queue);
+  auto info = ExplorationTestAccess::feedResult(exploration,tracking_id, deconv.storedMS2(), 1.0, queue);
 
   // FragmentCount metric: fragment analysis should have run
   TEST_EQUAL(info.fragment_count > 0, true)
@@ -502,12 +504,12 @@ START_SECTION(fragment_analysis_populated_for_mass_count_metric)
 
   // Initiate exploration group with mass_count metric
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
-  auto cmds = exploration.initiate(2, pg, 3, 0.0, queue);
+  auto cmds = exploration.initiate(2, pg, 3, queue);
   ABORT_IF(cmds.empty())
 
   // Feed same deconvolved spectrum
   int tracking_id = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
-  auto info = exploration.feedResultForTest(tracking_id, deconv.storedMS2(), 1.0, queue);
+  auto info = ExplorationTestAccess::feedResult(exploration,tracking_id, deconv.storedMS2(), 1.0, queue);
 
   // MassCount metric: fragment analysis still runs (populates metadata for all metrics)
   TEST_EQUAL(info.fragment_count > 0, true)

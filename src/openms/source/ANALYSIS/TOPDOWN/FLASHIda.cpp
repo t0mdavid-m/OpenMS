@@ -860,17 +860,21 @@ FLASHIda::FLASHIda(char* arg) :
       const auto& sel_charges = selection_.triggerCharges();
       int commands_pushed = 0;
       std::vector<ScanCommand> ms2_commands;
-      
+      // Item 2: the survey MS1 spectrum every MS2 isolation-window SNR is measured against. Hoisted so both
+      // the exploration path (passed into initiate) and the normal path (inline) can stamp window_snr.
+      const MSSpectrum& raw_ms1 = selection_.deconvolvedMS1().getOriginalSpectrum();
+
       if (config_.hasExploration(2))
       {
         // Exploration path: initiate CE sweep variants INSTEAD of regular MS2
         for (int i = 0; i < n; i++)
         {
           ScanCommand ms1_ctx{};
-          ms1_ctx.scan_id = tracking_id;
-          // initiate stamps each command's parent_scan_id from ms1_ctx.scan_id (= tracking_id).
-          // @claude faims cv should be part of ms1_ctx
-          auto cmds = exploration_.initiate(2, selected[i], sel_charges[i], faims_cv, queue_, &ms1_ctx);
+          ms1_ctx.scan_id  = tracking_id;
+          ms1_ctx.faims_cv = ctx.faims_cv;  // Item 1: CV travels via the context (the resolved MS1 carries it)
+          // initiate stamps each command's parent_scan_id from ms1_ctx.scan_id (= tracking_id), reads the CV
+          // off the context, and measures each variant's window_snr over raw_ms1.
+          auto cmds = exploration_.initiate(2, selected[i], sel_charges[i], queue_, &raw_ms1, &ms1_ctx);
           for (auto& c : cmds)
           {
             queue_.push(c);
@@ -889,25 +893,18 @@ FLASHIda::FLASHIda(char* arg) :
             ScanConfig ms2_config = sc;
             ScanCommand cmd = queue_.buildMS2(selected[i], sel_charges[i], ms2_config, 2, tracking_id);
             cmd.faims_cv = faims_cv;  // MS2 carries parent MS1's CV
+            // Item 2: stamp the isolation-window SNR before pushing (was the standalone post-push loop +
+            // queue window-SNR map). Same formula/inputs as before.
+            if (cmd.num_stages > 0)
+            {
+              const double half = cmd.stages[0].isolation_width / 2.0;
+              cmd.window_snr = FragmentAnalysis::windowSnr(raw_ms1, cmd.stages[0].precursor_mz - half,
+                                                           cmd.stages[0].precursor_mz + half, cmd.precursor_intensity);
+            }
             queue_.push(cmd);
             ms2_commands.push_back(cmd);
             commands_pushed++;
           }
-        }
-      }
-
-      // Record each MS2 command's isolation-window SNR against the raw (un-deconvolved) MS1 spectrum.
-      {
-        const MSSpectrum& raw_ms1 = selection_.deconvolvedMS1().getOriginalSpectrum();
-        for (const auto& c : ms2_commands)
-        {
-          if (c.num_stages <= 0) continue;
-          const double half      = c.stages[0].isolation_width / 2.0;
-          const double window_lo = c.stages[0].precursor_mz - half;
-          const double window_hi = c.stages[0].precursor_mz + half;
-          const double snr       = FragmentAnalysis::windowSnr(raw_ms1, window_lo, window_hi, c.precursor_intensity);
-          // @claude this should not be tracked in the queue; find a better way to store this. Likely it would be good to store as part of context.
-          queue_.setWindowSnr(c.scan_id, snr);
         }
       }
 
@@ -958,26 +955,18 @@ FLASHIda::FLASHIda(char* arg) :
       if (exploration_.isExplorationVariant(tracking_id))
       {
         auto expl_result = exploration_.feedResult(tracking_id, mzs, ints, length, rt_min, queue_);
-        std::vector<std::string> expl_children;
         for (auto& c : expl_result.commands)
-        {
-          queue_.push(c);  // parent_scan_id already stamped by feedResult/initiate
-          // @claude this should be hanlded by the exploration class
-          expl_children.push_back(ScanCommandQueue::encode(c.scan_id));  // link pushed children
-        }
-        
-        // @claude this should be abstracted by exploration class. This logic does not belong here.
-        const bool has_expl_deconv = exploration_.exploration_deconv_ != nullptr &&
-                exploration_.exploration_deconv_->hasStoredMS2();
-        int expl_mass_count = has_expl_deconv ? static_cast<int>(exploration_.exploration_deconv_->storedMS2().size()) : 0;
-        const DeconvolvedSpectrum* expl_spec = has_expl_deconv ? &exploration_.exploration_deconv_->storedMS2() : nullptr;
+          queue_.push(c);  // parent_scan_id already stamped by feedResult; children pre-encoded in expl_result.child_ids
+
+        int expl_mass_count = exploration_.explorationDeconvMassCount();
+        const DeconvolvedSpectrum* expl_spec = exploration_.explorationDeconvSpectrum();
         std::string parent_id(expl_result.parent_scan_id);
 
         // Fill scan_results row in canonical order (copy expl_result.* by value — it dies at block end).
         // DIVERGENCE vs MS3-expl: MS2 sets tag_count + fragment_count; MS3-expl leaves both at -1.
         scan_row.mass_count          = expl_mass_count;
         scan_row.commands_pushed     = static_cast<int>(expl_result.commands.size());
-        scan_row.child_ids           = expl_children;
+        scan_row.child_ids           = expl_result.child_ids;
         scan_row.tag_count           = expl_result.identification_result.tag_count;
         scan_row.matched_protein     = expl_result.matched_protein;
         scan_row.proteoform_sequence = FragmentAnalysis::toProForma(expl_result.proteoform_sequence, expl_result.identification_result.ptm_sites);
@@ -1089,7 +1078,7 @@ FLASHIda::FLASHIda(char* arg) :
           {
             ms2_ctx.ms2_isolation_width = ctx.stages[0].isolation_width;
             ms2_ctx.ms2_charge_intensity = ctx.precursor_intensity;
-            ms2_ctx.ms2_window_snr = queue_.windowSnr(ctx.scan_id);
+            ms2_ctx.ms2_window_snr = ctx.window_snr;  // Item 2: SNR travels on the command (was the queue map)
           }
           id_rows.push_back({id_str, 2, 'R', ms2_ctx, ms3_targeting.proteoform_match});  // copy by value (ms2_ctx is local)
         }
@@ -1141,24 +1130,18 @@ FLASHIda::FLASHIda(char* arg) :
       if (exploration_.isExplorationVariant(tracking_id))
       {
         auto expl_result = exploration_.feedResult(tracking_id, mzs, ints, length, rt_min, queue_);
-        std::vector<std::string> expl_children;
         for (auto& c : expl_result.commands)
-        {
-          queue_.push(c);  // parent_scan_id already stamped by feedResult/initiate
-          expl_children.push_back(ScanCommandQueue::encode(c.scan_id));  // link pushed children
-        }
+          queue_.push(c);  // parent_scan_id already stamped by feedResult; children pre-encoded in expl_result.child_ids
 
-        const bool has_expl_deconv = exploration_.exploration_deconv_ != nullptr &&
-                exploration_.exploration_deconv_->hasStoredMS2();
-        int expl_mass_count = has_expl_deconv ? static_cast<int>(exploration_.exploration_deconv_->storedMS2().size()) : 0;
-        const DeconvolvedSpectrum* expl_spec = has_expl_deconv ? &exploration_.exploration_deconv_->storedMS2() : nullptr;
+        int expl_mass_count = exploration_.explorationDeconvMassCount();
+        const DeconvolvedSpectrum* expl_spec = exploration_.explorationDeconvSpectrum();
         std::string parent_id(expl_result.parent_scan_id);
 
         // Fill scan_results row in canonical order (copy expl_result.* by value — it dies at block end).
         // DIVERGENCE vs MS2-expl: MS3-expl leaves tag_count + fragment_count at the -1 sentinel.
         scan_row.mass_count          = expl_mass_count;
         scan_row.commands_pushed     = static_cast<int>(expl_result.commands.size());
-        scan_row.child_ids           = expl_children;
+        scan_row.child_ids           = expl_result.child_ids;
         scan_row.matched_protein     = expl_result.matched_protein;
         scan_row.proteoform_sequence = FragmentAnalysis::toProForma(expl_result.proteoform_sequence, expl_result.identification_result.ptm_sites);
         scan_row.deconv_spectrum     = expl_spec;
