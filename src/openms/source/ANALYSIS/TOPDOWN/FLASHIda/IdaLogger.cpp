@@ -33,7 +33,7 @@
 // --------------------------------------------------------------------------
 
 
-#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Logger.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/IdaLogger.h>
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 
@@ -51,7 +51,7 @@
 namespace OpenMS
 {
 
-  Logger::Logger(const Config& config) :
+  IdaLogger::IdaLogger(const Config& config) :
       config_(config)
   {
     const auto& rt_cfg = config_.runtime();
@@ -115,7 +115,7 @@ namespace OpenMS
     }
   }
 
-  void Logger::writeIDALogEntry(double rt, int scan_number,
+  void IdaLogger::writeIDALogEntry(double rt, int scan_number,
                                     const std::string& tracking_id,
                                     const std::vector<ScanCommand>& ms2_commands,
                                     const DeconvolvedSpectrum& all_peak_groups)
@@ -172,7 +172,7 @@ namespace OpenMS
     ida_log_stream_.flush();
   }
 
-  std::string Logger::scanTypeFromDescription_(const ScanCommand& cmd)
+  std::string IdaLogger::scanTypeFromDescription_(const ScanCommand& cmd)
   {
     if (std::strlen(cmd.scan_description) < 4)
       return "unknown";
@@ -188,7 +188,7 @@ namespace OpenMS
     }
   }
 
-  void Logger::writeScanCommandRow(const ScanCommand& cmd)
+  void IdaLogger::writeScanCommandRow(const ScanCommand& cmd)
   {
     if (!commands_tsv_stream_.is_open()) return;
 
@@ -293,7 +293,7 @@ namespace OpenMS
     commands_tsv_stream_.flush();
   }
 
-  void Logger::writeScanResultRow(const ScanRowDescriptor& row)
+  void IdaLogger::writeScanResultRow(const ScanRowDescriptor& row)
   {
     if (!results_tsv_stream_.is_open()) return;
 
@@ -413,7 +413,7 @@ namespace OpenMS
     results_tsv_stream_.flush();
   }
 
-  void Logger::writeIdentificationRow(const IdRowDescriptor& row)
+  void IdaLogger::writeIdentificationRow(const IdRowDescriptor& row)
   {
     if (!identification_tsv_stream_.is_open()) return;
 
@@ -521,7 +521,7 @@ namespace OpenMS
     identification_tsv_stream_.flush();
   }
 
-  std::map<int, std::vector<std::vector<float>>> Logger::parseFLASHIdaLog(const String& in_log_file)
+  std::map<int, std::vector<std::vector<float>>> IdaLogger::parseFLASHIdaLog(const String& in_log_file)
   {
     std::map<int, std::vector<std::vector<float>>>
       precursor_map_for_real_time_acquisition; // ms1 scan -> mass, charge ,score, mz range, precursor int, mass int, color

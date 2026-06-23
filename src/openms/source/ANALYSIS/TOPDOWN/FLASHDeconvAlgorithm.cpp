@@ -8,7 +8,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvAlgorithm.h>
-#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Logger.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/IdaLogger.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/MassFeatureTrace.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/Qvalue.h>
@@ -466,7 +466,7 @@ void FLASHDeconvAlgorithm::run(MSExperiment& map,
                                std::vector<FLASHHelperClasses::MassFeature>& deconvolved_features)
 {
   // initialize
-  precursor_map_for_ida_ = Logger::parseFLASHIdaLog(ida_log_file_); // ms1 scan -> mass, charge ,score, mz range, precursor int, mass int, color
+  precursor_map_for_ida_ = IdaLogger::parseFLASHIdaLog(ida_log_file_); // ms1 scan -> mass, charge ,score, mz range, precursor int, mass int, color
 
   updateMSLevels_(map);
   filterLowPeaks_(map);

@@ -63,22 +63,22 @@ namespace OpenMS
    * hold no engine state. Locking is the CALLER's responsibility: FLASHIda holds
    * analysis_mutex_ across writeScanResultRow/writeIdentificationRow/writeIDALogEntry
    * (called from processScan), and wraps writeScanCommandRow in the same lock at
-   * its getNextScanCommand call sites. Logger itself is lock-agnostic.
+   * its getNextScanCommand call sites. IdaLogger itself is lock-agnostic.
    */
-  class OPENMS_DLLAPI Logger
+  class OPENMS_DLLAPI IdaLogger
   {
   public:
     /// Construct from Config: open the four streams (append) and write the three TSV headers.
-    explicit Logger(const Config& config);
+    explicit IdaLogger(const Config& config);
 
     /// copy constructor (deleted: ofstreams are non-copyable)
-    Logger(const Logger&) = delete;
+    IdaLogger(const IdaLogger&) = delete;
 
     /// move constructor (needed so the owning FLASHIda stays movable)
-    Logger(Logger&& other) = default;
+    IdaLogger(IdaLogger&& other) = default;
 
     /// assignment operator (deleted: ofstreams are non-copyable)
-    Logger& operator=(const Logger&) = delete;
+    IdaLogger& operator=(const IdaLogger&) = delete;
 
     /// One scan_results.tsv row, filled by a processScan branch and written once at the bottom.
     /// Field set == the scan_results columns; defaults == the sentinels the non-applicable paths log,

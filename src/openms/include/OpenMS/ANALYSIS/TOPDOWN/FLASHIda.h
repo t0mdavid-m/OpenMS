@@ -41,7 +41,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Exploration.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FAIMS.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
-#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Logger.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/IdaLogger.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/PrecursorSelection.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Quantification.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
@@ -109,7 +109,7 @@ namespace OpenMS
     Config config_;
 
     /// Owns all output logging: the 4 streams, TSV headers, row writers, and the ida_log parser
-    Logger logger_;
+    IdaLogger logger_;
 
     /// Scan command queue (owns queue, tracking IDs, pending map, command builders)
     ScanCommandQueue queue_;
@@ -129,7 +129,7 @@ namespace OpenMS
     /// Mutex protecting analysis state: deconv_, selection_, exploration_, faims_, quant_, fragments_.
     /// Also serialises the logger_ streams: processScan holds this lock across logger_.writeScanResultRow /
     /// writeIDALogEntry / writeIdentificationRow, and getNextScanCommand wraps logger_.writeScanCommandRow in
-    /// the same lock at its call sites (Logger itself is lock-agnostic).
+    /// the same lock at its call sites (IdaLogger itself is lock-agnostic).
     mutable std::mutex analysis_mutex_;
 
     /// Atomic flag: true when any exploration group is active (set by processScan, read by getNextScanCommand)

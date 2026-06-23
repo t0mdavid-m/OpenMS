@@ -1453,7 +1453,7 @@ START_SECTION(ida_log_all15_fields)
   AcqResult acq = runInterleaved(&ida, ms1, std::vector<ScanData>{});
   TEST_TRUE(acq.ms2_cmds.size() > 0)
 
-  auto parsed = Logger::parseFLASHIdaLog(log_f);
+  auto parsed = IdaLogger::parseFLASHIdaLog(log_f);
   TEST_TRUE(parsed.size() > 0)
   bool any = false;
   for (const auto& entry : parsed)
@@ -1511,7 +1511,7 @@ START_SECTION(ida_log_multi_scan_distinct_keys)
   std::string id0(acq.ms1_cmds[0].scan_description, 3), id1(acq.ms1_cmds[1].scan_description, 3);
   TEST_TRUE(id0 != id1)                          // distinct engine ids => distinct ida_log keys
 
-  auto parsed = Logger::parseFLASHIdaLog(log_f);
+  auto parsed = IdaLogger::parseFLASHIdaLog(log_f);
   TEST_TRUE(parsed.size() >= 2)                  // two non-"0 targets" MS1 groups
   std::remove(log_f.c_str());
 }

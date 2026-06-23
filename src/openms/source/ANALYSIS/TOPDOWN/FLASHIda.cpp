@@ -149,8 +149,8 @@ FLASHIda::FLASHIda(char* arg) :
     // lines, and all side effects (queue pushes, atomics, cache erase) stay inline in each branch.
     int return_code = 0;
     bool has_scan_row = false;
-    Logger::ScanRowDescriptor scan_row{};
-    std::vector<Logger::IdRowDescriptor> id_rows;
+    IdaLogger::ScanRowDescriptor scan_row{};
+    std::vector<IdaLogger::IdRowDescriptor> id_rows;
 
     // scan_results fields that are identical in every branch — set once here. Each branch fills its
     // own branch-specific fields; the rest keep their scan_row{} sentinel defaults.
