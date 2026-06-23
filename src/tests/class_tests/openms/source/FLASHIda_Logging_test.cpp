@@ -58,7 +58,7 @@ START_SECTION(ida_log_contract_roundtrip)
   TEST_TRUE(acq.ms2_cmds.size() > 0);
 
   // Parse the IDA log back using parseFLASHIdaLog
-  auto parsed = FLASHIda::parseFLASHIdaLog(ida_log_file);
+  auto parsed = Logger::parseFLASHIdaLog(ida_log_file);
 
   // Verify: at least one scan group with precursors
   TEST_TRUE(parsed.size() > 0);

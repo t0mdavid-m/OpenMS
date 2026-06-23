@@ -50,10 +50,7 @@ namespace OpenMS
   Exploration::Exploration(const Config& config, FragmentAnalysis& fragments)
     : config_(config), fragments_(fragments)
   {
-    DoubleList expl_tol;
-    for (const auto& [lvl, cfg] : config.levels())
-      expl_tol.push_back(cfg.exploration_tolerance_ppm);
-    exploration_deconv_ = std::make_unique<Deconvolution>(config, expl_tol);
+    exploration_deconv_ = std::make_unique<Deconvolution>(config, config.explorationToleranceList());
   }
 
   std::vector<Exploration::VariantParams> Exploration::buildVariants_(

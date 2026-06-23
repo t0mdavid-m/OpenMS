@@ -500,17 +500,20 @@ namespace OpenMS
     return it->second.exploration != ExplorationMetric::None;
   }
 
-  int Config::getInt(const std::string& key) const
+  DoubleList Config::toleranceList() const
   {
-    if (key == "targeting_mode") return targeting_.mode;
-    if (key == "hcd_energy") return targeting_.hcd_energy;
-    return 0;
+    DoubleList tol;
+    for (const auto& [lvl, cfg] : levels_)
+      tol.push_back(cfg.tolerance_ppm);
+    return tol;
   }
 
-  double Config::getDouble(const std::string& key) const
+  DoubleList Config::explorationToleranceList() const
   {
-    if (key == "rt_window") return targeting_.rt_window;
-    return 0.0;
+    DoubleList tol;
+    for (const auto& [lvl, cfg] : levels_)
+      tol.push_back(cfg.exploration_tolerance_ppm);
+    return tol;
   }
 
 } // namespace OpenMS

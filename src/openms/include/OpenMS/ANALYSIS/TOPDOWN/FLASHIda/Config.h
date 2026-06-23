@@ -36,6 +36,8 @@
 
 #include <OpenMS/config.h>
 
+#include <OpenMS/DATASTRUCTURES/ListUtils.h>
+
 #include <cstdint>
 #include <map>
 #include <string>
@@ -207,11 +209,11 @@ namespace OpenMS
     /// Returns true if any level has exploration enabled
     bool explorationEnabled() const { return exploration_enabled_; }
 
-    /// Retrieve integer config value by key (for bridge functions)
-    int getInt(const std::string& key) const;
+    /// Tolerance-ppm list across configured MS levels (ascending level order), for Deconvolution construction
+    DoubleList toleranceList() const;
 
-    /// Retrieve double config value by key (for bridge functions)
-    double getDouble(const std::string& key) const;
+    /// Exploration-tolerance-ppm list across configured MS levels (ascending level order)
+    DoubleList explorationToleranceList() const;
 
     /// Accessors for config sub-sections
     const DeconvolutionConfig& deconvolution() const { return deconv_; }

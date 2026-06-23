@@ -41,6 +41,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Exploration.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FAIMS.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Logger.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/PrecursorSelection.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Quantification.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
@@ -88,36 +89,6 @@ namespace OpenMS
     /// assignment operator (deleted: ofstreams are non-copyable)
     FLASHIda& operator=(const FLASHIda&) = delete;
 
-    // Fragment analysis methods delegate to fragments_ component.
-    // C-pointer overloads are kept as non-inline methods for binary compatibility.
-
-    int getBestMS2Masses(int n, double* masses, double* qscores, int* charges,
-                         double* window_starts, double* window_ends);
-
-    int getTopFragmentMatches(const String& protein_sequence, int n,
-                              double* masses, double* qscores, int* charges,
-                              double* window_starts, double* window_ends,
-                              char* ion_types, int* fragment_indices,
-                              const String& fragmentation_method = "HCD");
-
-    int getTerminalFragmentIons(const String& protein_sequence, int n,
-                                double* masses, double* qscores, int* charges,
-                                double* window_starts, double* window_ends,
-                                char* ion_types, int* fragment_indices,
-                                const String& fragmentation_method = "HCD");
-
-    int getAmbiguityEnclosingIons(const String& protein_sequence, int n,
-                                  double* masses, double* qscores, int* charges,
-                                  double* window_starts, double* window_ends,
-                                  char* ion_types, int* fragment_indices,
-                                  const String& fragmentation_method = "HCD");
-
-    /// Retrieve an integer config value by key (for bridge functions)
-    int getConfigInt(const std::string& key) const;
-
-    /// Retrieve a double config value by key (for bridge functions)
-    double getConfigDouble(const std::string& key) const;
-
     /// Process an incoming scan and enqueue resulting commands
     int processScan(const double* mzs, const double* ints, int length,
                     double rt_min, int ms_level, const char* scan_description,
@@ -133,29 +104,12 @@ namespace OpenMS
     /// FLASHIda_TestAccess.h via this friend, so test scaffolding stays out of the production API.
     friend struct FLASHIdaTestAccess;
 
-    /**
-           @brief parse FLASHIda log file
-           @param in_log_file input log file
-           @return parsed information : scan number - percursor information
-    **/
-    static std::map<int, std::vector<std::vector<float>>> parseFLASHIdaLog(const String& in_log_file);
-
-    /**
-     * @brief Process stored MS2 deconvolution for protein family detection and inclusion list expansion
-     *
-     * Delegates to PrecursorSelection::processMS2ForTagBasedTargeting().
-     *
-     * @param precursor_mass monoisotopic mass of the precursor (from iAPI)
-     * @return true if target protein detected and targets expanded, false otherwise
-     */
-    bool processMS2ForTagBasedTargeting(double precursor_mass, const std::string& activation_type)
-    {
-      return selection_.processMS2ForTagBasedTargeting(precursor_mass, activation_type);
-    }
-
   private:
     /// Configuration object (owns all parsed config values)
     Config config_;
+
+    /// Owns all output logging: the 4 streams, TSV headers, row writers, and the ida_log parser
+    Logger logger_;
 
     /// Scan command queue (owns queue, tracking IDs, pending map, command builders)
     ScanCommandQueue queue_;
@@ -173,9 +127,9 @@ namespace OpenMS
     Quantification quant_;
 
     /// Mutex protecting analysis state: deconv_, selection_, exploration_, faims_, quant_, fragments_.
-    /// Also protects logging streams: writeScanResultRow_/writeIDALogEntry_/writeIdentificationRow_
-    /// are called with this lock already held (from processScan). writeScanCommandRow_ acquires it
-    /// internally (called from getNextScanCommand which does NOT hold this lock).
+    /// Also serialises the logger_ streams: processScan holds this lock across logger_.writeScanResultRow /
+    /// writeIDALogEntry / writeIdentificationRow, and getNextScanCommand wraps logger_.writeScanCommandRow in
+    /// the same lock at its call sites (Logger itself is lock-agnostic).
     mutable std::mutex analysis_mutex_;
 
     /// Atomic flag: true when any exploration group is active (set by processScan, read by getNextScanCommand)
@@ -189,86 +143,11 @@ namespace OpenMS
     /// Exploration CE sweep engine (owns groups, variants, scoring)
     Exploration exploration_;
 
-    /// Build tolerance list from config for Deconvolution construction
-    static DoubleList buildToleranceList_(const Config& config);
-
-    // --- Logging file streams (append-only, crash-safe) ---
-    std::ofstream ida_log_stream_;
-    std::ofstream commands_tsv_stream_;
-    std::ofstream results_tsv_stream_;
-    std::ofstream identification_tsv_stream_;
-
     /// MS2 context cache keyed by MS3 tracking ID (for non-exploration identification)
     std::unordered_map<int, Exploration::MS2Context> ms2_context_cache_;
 
     /// Steady-clock reference for timestamps
     std::chrono::steady_clock::time_point engine_start_time_;
-
-    /// Write IDA log entry for MS1 deconvolution results
-    void writeIDALogEntry_(double rt, int scan_number, const std::string& tracking_id,
-                           const std::vector<ScanCommand>& ms2_commands,
-                           const DeconvolvedSpectrum& all_peak_groups);
-
-    /// Write one TSV row for a dequeued scan command
-    void writeScanCommandRow_(const ScanCommand& cmd);
-
-    /// One scan_results.tsv row, filled by a processScan branch and written once at the bottom.
-    /// Field set == the scan_results columns; defaults == the sentinels the non-applicable paths log,
-    /// so a branch only assigns the fields it actually owns. NOTE: tag_count/fragment_count default to
-    /// the MS3 sentinel (-1) — MS1 must set both to 0 and MS2 to its real counts.
-    struct ScanRowDescriptor
-    {
-      std::string tracking_id;
-      int ms_level = 0;
-      double rt = 0.0;
-      int mass_count = 0;
-      int commands_pushed = 0;
-      std::vector<std::string> child_ids;
-      int tag_count = -1;
-      std::string matched_protein;
-      std::string proteoform_sequence;
-      uint64_t enqueue_ts = 0, dequeue_ts = 0, received_ts = 0;
-      // INVARIANT: raw pointer into ENGINE-OWNED storage (selection_.deconvolvedMS1() /
-      // deconv_.storedMS2() / exploration_.exploration_deconv_->storedMS2()) — all FLASHIda members
-      // that outlive processScan. Exactly one ms-level branch runs per call, so the spectrum is never
-      // re-deconvolved between fill and the bottom write. Do NOT re-deconvolve after a fill or it dangles.
-      const DeconvolvedSpectrum* deconv_spectrum = nullptr;
-      std::string parent_tracking_id;
-      float tic_coverage = 0.0f;
-      int fragment_count = -1;
-      int exploration_group_id = -1;
-      int exploration_metric = 0;
-      int variant_index = -1;
-      int total_variants = 0;
-      std::string collision_energy = "0";
-      double exploration_score = -1.0;
-      double remaining_ratio = -1.0;
-      std::string activation_type;
-      std::string reaction_time = "0";
-      // F5: encoded id of the winning variant; "" on every non-completing / non-exploration row.
-      std::string winner_tracking_id;
-    };
-
-    /// One identification.tsv row. All members are held BY VALUE because the sources (info.*, a local
-    /// ms2_ctx, or a reference into ms2_context_cache_) go out of scope / are erased before the bottom
-    /// write. 0..N per scan; empty for MS1 and MS3 non-exploration.
-    struct IdRowDescriptor
-    {
-      std::string tracking_id;
-      int ms_level = 0;
-      char scan_mode = '\0';
-      Exploration::MS2Context ctx;
-      FragmentAnalysis::ProteoformMatch match;
-    };
-
-    /// Write one TSV row for a processScan result (ms_level is logged at scan_results col 1)
-    void writeScanResultRow_(const ScanRowDescriptor& row);
-
-    /// Write one identification.tsv row for an MS2 or MS3 scan with matched fragments
-    void writeIdentificationRow_(const IdRowDescriptor& row);
-
-    /// Derive scan_type string from scan_description
-    static std::string scanTypeFromDescription_(const ScanCommand& cmd);
 
   };
 }
