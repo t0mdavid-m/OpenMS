@@ -61,6 +61,8 @@ namespace OpenMS
     double intensity = 0;
     int source_scan_id = 0;
     Ms2Params params;           ///< For an MS3 obs: the parent MS2's params
+    double frag_mz = 0;         ///< Isolation m/z for targeting this fragment in MS3
+    int frag_charge = 0;        ///< Charge state for targeting this fragment in MS3
   };
 
   /// Key identifying a fragment ion: (ion_type, ion_index)
@@ -104,13 +106,22 @@ namespace OpenMS
     Coverage    ///< Extend sequence coverage
   };
 
+  /// Richer per-peak record so mapScanOntoModel_ can recover mz and charge for MS3 targeting
+  struct PeakRecord
+  {
+    double mono_mass = 0;
+    double mz = 0;       ///< Isolation centre m/z: (mz1+mz2)/2 from PeakGroup::getMzRange(charge)
+    int charge = 0;      ///< getMaxIntensityAbsCharge() — same charge used for mz derivation
+    double intensity = 0;
+  };
+
   /// A deconvolved scan awaiting integration into a ProteoformModel
   struct PendingScan
   {
     int scan_id = 0;
     uint8_t ms_level = 2;
     Ms2Params params;
-    std::vector<std::pair<double, double>> masses_intensities;  ///< (mass, intensity)
+    std::vector<PeakRecord> peaks;   ///< One entry per deconvolved PeakGroup
     FragmentAnalysis::ProteoformMatch match;
     double id_score = -1;
   };
@@ -128,6 +139,8 @@ namespace OpenMS
     std::vector<PendingScan> pending;
     std::vector<ModificationState> modifications;
     std::unordered_map<FragmentKey, MappedFragment, FragmentKeyHash> fragments;
+    ScanCommand ms2_ctx;        ///< MS2 command context for buildMS3 (captured once from the first feedScan)
+    bool has_ms2_ctx = false;   ///< True once ms2_ctx has been set
 
     /// Fraction of proteoform residues covered by at least one fragment observation [0,1]
     double coveragePct() const;
@@ -161,7 +174,8 @@ namespace OpenMS
      */
     void feedScan(int nominal_mass, uint8_t ms_level, const Ms2Params& params, int scan_id,
                   const DeconvolvedSpectrum& deconv,
-                  const FragmentAnalysis::ProteoformMatch& match, double id_score);
+                  const FragmentAnalysis::ProteoformMatch& match, double id_score,
+                  const ScanCommand& ms2_ctx);
 
     /// Mark the model for @p nominal_mass as finalized (no further scans expected).
     void finalize(int nominal_mass);

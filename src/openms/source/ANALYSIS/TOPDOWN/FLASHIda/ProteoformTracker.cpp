@@ -164,10 +164,18 @@ namespace OpenMS
 
   void ProteoformTracker::feedScan(int nominal_mass, uint8_t ms_level, const Ms2Params& params, int scan_id,
                                    const DeconvolvedSpectrum& deconv,
-                                   const FragmentAnalysis::ProteoformMatch& match, double id_score)
+                                   const FragmentAnalysis::ProteoformMatch& match, double id_score,
+                                   const ScanCommand& ms2_ctx)
   {
     ProteoformModel& m = models_[nominal_mass];
     m.nominal_mass = nominal_mass;
+
+    // Capture the MS2 command context once (used by planNextScans/buildMS3 in the next task).
+    if (!m.has_ms2_ctx)
+    {
+      m.ms2_ctx = ms2_ctx;
+      m.has_ms2_ctx = true;
+    }
 
     PendingScan ps;
     ps.scan_id = scan_id;
@@ -175,15 +183,22 @@ namespace OpenMS
     ps.params = params;
     ps.match = match;
     ps.id_score = id_score;
-    // Extract (monoisotopic mass, per-charge intensity) for every deconvolved peak group.
-    // Iteration idiom matches IdaLogger / FragmentAnalysis: index into DeconvolvedSpectrum with [i].
-    // Intensity: getChargeIntensity(getMaxIntensityAbsCharge()) — the max-charge intensity used
+    // Extract one PeakRecord per deconvolved peak group.
+    // mz idiom: getMzRange(charge) centre — matches buildMS2 (ScanCommandQueue.cpp) and the
+    // Exploration.cpp precursor_mz derivation, so the value is ready for direct use in buildMS3.
+    // Intensity: getChargeIntensity(getMaxIntensityAbsCharge()) — max-charge intensity used
     // elsewhere as the sort key and precursor_intensity field (FragmentAnalysis.cpp:713).
     for (size_t i = 0; i < deconv.size(); ++i)
     {
       const PeakGroup& pg = deconv[i];
-      ps.masses_intensities.emplace_back(pg.getMonoMass(),
-                                         static_cast<double>(pg.getChargeIntensity(pg.getMaxIntensityAbsCharge())));
+      const int charge = pg.getMaxIntensityAbsCharge();
+      auto [mz1, mz2] = pg.getMzRange(charge);
+      PeakRecord pr;
+      pr.mono_mass = pg.getMonoMass();
+      pr.mz = (mz1 + mz2) / 2.0;
+      pr.charge = charge;
+      pr.intensity = static_cast<double>(pg.getChargeIntensity(charge));
+      ps.peaks.push_back(pr);
     }
     m.pending.push_back(std::move(ps));
   }
@@ -342,16 +357,18 @@ namespace OpenMS
       // DROP fragments whose cleavage falls outside the winner region.
       if (winner_idx < 1 || winner_idx > L) continue;
 
-      // 3) Recover intensity: closest mass within per-level tolerance; otherwise fall back to the
-      //    overall closest mass (documented choice -- never drop a matched fragment for lack of an
-      //    intensity peak, since the fragment was already validated as a match upstream).
+      // 3) Recover intensity (and mz/charge for MS3 targeting): closest mass within per-level
+      //    tolerance; fall back to the overall closest mass (never drop a matched fragment for lack
+      //    of a peak — the fragment was already validated as a match upstream).
       double intensity = 0.0;
+      double matched_mz = 0.0;
+      int matched_charge = 0;
       {
         double best_diff = std::numeric_limits<double>::max();
         bool within_tol = false;
-        for (const std::pair<double, double>& mi : ps.masses_intensities)
+        for (const PeakRecord& pr : ps.peaks)
         {
-          const double diff = std::abs(mi.first - obs_mass);
+          const double diff = std::abs(pr.mono_mass - obs_mass);
           const double tol_abs = obs_mass * tol_ppm * 1e-6;
           const bool in_tol = (diff <= tol_abs);
           // Prefer the closest in-tolerance entry; fall back to the closest overall.
@@ -359,12 +376,16 @@ namespace OpenMS
           {
             within_tol = true;
             best_diff = diff;
-            intensity = mi.second;
+            intensity = pr.intensity;
+            matched_mz = pr.mz;
+            matched_charge = pr.charge;
           }
           else if (in_tol == within_tol && diff < best_diff)
           {
             best_diff = diff;
-            intensity = mi.second;
+            intensity = pr.intensity;
+            matched_mz = pr.mz;
+            matched_charge = pr.charge;
           }
         }
       }
@@ -394,6 +415,8 @@ namespace OpenMS
       obs.intensity = intensity;
       obs.source_scan_id = ps.scan_id;
       obs.params = ps.params;
+      obs.frag_mz = matched_mz;
+      obs.frag_charge = matched_charge;
 
       if (ps.ms_level == 3)
       {

@@ -388,7 +388,8 @@ namespace OpenMS
                         /*scan_id=*/tracking_id,
                         v.result,
                         frag,
-                        frag.score);
+                        frag.score,
+                        /*ms2_ctx=*/v.cmd);
     }
 
     info.remaining_ratio = remaining_ratio;
