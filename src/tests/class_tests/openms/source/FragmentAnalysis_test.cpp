@@ -133,7 +133,7 @@ namespace
       "inclusion_list": "",
       "ptm_list": ""
     },
-    "ms3": {
+    "characterization": {
       "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
     },
     "conditional_ms2": false,
@@ -211,7 +211,7 @@ namespace
       "inclusion_list": "",
       "ptm_list": ""
     },
-    "ms3": {
+    "characterization": {
       "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
     },
     "conditional_ms2": false,
@@ -298,7 +298,7 @@ namespace
       "inclusion_list": "",
       "ptm_list": ""
     },
-    "ms3": {
+    "characterization": {
       "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
     },
     "conditional_ms2": false,

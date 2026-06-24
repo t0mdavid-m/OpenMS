@@ -254,7 +254,7 @@ START_SECTION(([EXTRA] Config rejects legacy ms3.max_per_ms2 key))
 }
 END_SECTION
 
-START_SECTION(([EXTRA] Config accepts ms3 with only protein_sequence))
+START_SECTION(([EXTRA] Config accepts characterization with only protein_sequence))
 {
   const char* json = R"({
     "deconvolution": { "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10] },
@@ -268,14 +268,14 @@ START_SECTION(([EXTRA] Config accepts ms3 with only protein_sequence))
     },
     "scheduling": { "cycle_time": { "enabled": false }, "scan_timeout": { "enabled": false }, "agc_interval_seconds": 30 },
     "files": {},
-    "ms3": { "protein_sequence": "MKWVTFISLLLLFSSAYSRGVFRR" },
+    "characterization": { "protein_sequence": "MKWVTFISLLLLFSSAYSRGVFRR" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 3 },
       "ms2": { "selection": "none" }
     }
   })";
   Config cfg{std::string(json)};
-  TEST_EQUAL(cfg.targeting().protein_sequence, "MKWVTFISLLLLFSSAYSRGVFRR")
+  TEST_EQUAL(cfg.characterization().protein_sequence, "MKWVTFISLLLLFSSAYSRGVFRR")
 }
 END_SECTION
 

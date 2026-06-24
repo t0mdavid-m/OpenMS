@@ -103,7 +103,7 @@ namespace
       "inclusion_list": "",
       "ptm_list": ""
     },
-    "ms3": {
+    "characterization": {
       "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
     },
     "conditional_ms2": false,
@@ -195,7 +195,7 @@ namespace
       "inclusion_list": "",
       "ptm_list": ""
     },
-    "ms3": {
+    "characterization": {
       "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
     },
     "conditional_ms2": false,
@@ -291,7 +291,7 @@ namespace
       "inclusion_list": "",
       "ptm_list": ""
     },
-    "ms3": {
+    "characterization": {
       "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
     },
     "conditional_ms2": false,
@@ -375,7 +375,7 @@ namespace
       "inclusion_list": "",
       "ptm_list": ""
     },
-    "ms3": {
+    "characterization": {
       "protein_sequence": ""
     },
     "conditional_ms2": false,
@@ -467,7 +467,7 @@ namespace
       "inclusion_list": "",
       "ptm_list": ""
     },
-    "ms3": {
+    "characterization": {
       "protein_sequence": ""
     },
     "conditional_ms2": false,
@@ -555,7 +555,7 @@ namespace
       "inclusion_list": "",
       "ptm_list": ""
     },
-    "ms3": {
+    "characterization": {
       "protein_sequence": ""
     },
     "conditional_ms2": false,
@@ -647,7 +647,7 @@ namespace
       "inclusion_list": "",
       "ptm_list": ""
     },
-    "ms3": {
+    "characterization": {
       "protein_sequence": "MKWVTFISLLLLFSSAYSRGVFRR"
     },
     "conditional_ms2": false,
@@ -769,7 +769,7 @@ namespace
       "inclusion_list": "",
       "ptm_list": ""
     },
-    "ms3": {
+    "characterization": {
       "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
     },
     "conditional_ms2": false,
@@ -852,7 +852,7 @@ namespace
       "inclusion_list": "",
       "ptm_list": ""
     },
-    "ms3": {
+    "characterization": {
       "protein_sequence": ""
     },
     "conditional_ms2": false,
@@ -951,7 +951,7 @@ namespace
       "inclusion_list": "",
       "ptm_list": ""
     },
-    "ms3": {
+    "characterization": {
       "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
     },
     "conditional_ms2": false,
@@ -1805,7 +1805,7 @@ START_SECTION(ms3_protein_sequence_only_accepted)
 {
   // Config with ms3.protein_sequence should be accepted (no throw)
   Config cfg{std::string(exploration_config)};
-  TEST_EQUAL(cfg.targeting().protein_sequence.empty(), false)
+  TEST_EQUAL(cfg.characterization().protein_sequence.empty(), false)
 }
 END_SECTION
 
@@ -1863,7 +1863,7 @@ START_SECTION(fragment_match_propagated_in_feed_result)
   FragmentAnalysis fragments(cfg);
   Exploration exploration(cfg, fragments);
 
-  TEST_EQUAL(cfg.targeting().protein_sequence.empty(), false)
+  TEST_EQUAL(cfg.characterization().protein_sequence.empty(), false)
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, queue);
@@ -1888,7 +1888,7 @@ END_SECTION
 START_SECTION(fragment_count_zero_without_protein_sequence)
 {
   Config cfg{std::string(remaining_precursor_config)};
-  TEST_EQUAL(cfg.targeting().protein_sequence.empty(), true)
+  TEST_EQUAL(cfg.characterization().protein_sequence.empty(), true)
 
   ScanCommandQueue queue(cfg);
   Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
@@ -2040,7 +2040,7 @@ START_SECTION(tol_validation_insufficient_entries)
     },
     "scheduling": {},
     "files": {},
-    "ms3": { "protein_sequence": "" },
+    "characterization": { "protein_sequence": "" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 3 },
       "ms2": { "selection": "none", "max_targets": 3 },
@@ -2072,7 +2072,7 @@ START_SECTION(selection_without_next_level_scan_config_rejected)
     },
     "scheduling": {},
     "files": {},
-    "ms3": { "protein_sequence": "PEPTIDER" },
+    "characterization": { "protein_sequence": "PEPTIDER" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 3 },
       "ms2": { "selection": "intensity", "max_targets": 3 },
@@ -2422,7 +2422,7 @@ START_SECTION(inclusion_ms3_full_acquisition_roundtrip)
     },
     "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 }, "agc_interval_seconds": 999999 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "../../FlashIDA/test-data/configs/inclusion_cytc.txt", "ptm_list": "" },
-    "ms3": { "protein_sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE" },
+    "characterization": { "protein_sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE" },
     "conditional_ms2": false,
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 3 },
