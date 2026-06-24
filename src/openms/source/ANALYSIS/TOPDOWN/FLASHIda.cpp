@@ -268,7 +268,7 @@ FLASHIda::FLASHIda(char* arg) :
       // ===== MS2 (exploration variant): score variant -> push children -> fill row =====
       if (exploration_.isExplorationVariant(tracking_id))
       {
-        auto expl_result = exploration_.feedResult(tracking_id, mzs, ints, length, rt_min, queue_, tracker_);
+        auto expl_result = exploration_.feedResult(tracking_id, mzs, ints, length, rt_min, queue_, &tracker_);
         for (auto& c : expl_result.commands)
           queue_.push(c);  // parent_scan_id already stamped by feedResult; children pre-encoded in expl_result.child_ids
 
@@ -443,7 +443,7 @@ FLASHIda::FLASHIda(char* arg) :
       // ===== MS3 (exploration variant): score variant -> push children -> fill row =====
       if (exploration_.isExplorationVariant(tracking_id))
       {
-        auto expl_result = exploration_.feedResult(tracking_id, mzs, ints, length, rt_min, queue_, tracker_);
+        auto expl_result = exploration_.feedResult(tracking_id, mzs, ints, length, rt_min, queue_, &tracker_);
         for (auto& c : expl_result.commands)
           queue_.push(c);  // parent_scan_id already stamped by feedResult; children pre-encoded in expl_result.child_ids
 

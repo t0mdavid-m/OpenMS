@@ -209,7 +209,7 @@ namespace OpenMS
     /// score, select winner, trigger next level. Returns FeedResultInfo with commands and metadata.
     FeedResultInfo feedResult(int tracking_id,
                               const double* mzs, const double* ints, int length,
-                              double rt, ScanCommandQueue& queue, ProteoformTracker& tracker);
+                              double rt, ScanCommandQueue& queue, ProteoformTracker* tracker = nullptr);
 
     /// Test-only access (the feedResultImpl_ deconvolution-bypass + getGroup) lives in
     /// FLASHIda_TestAccess.h via this friend, so test scaffolding stays out of the production API.

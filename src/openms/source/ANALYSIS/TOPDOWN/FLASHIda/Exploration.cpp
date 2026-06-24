@@ -250,7 +250,7 @@ namespace OpenMS
 
   Exploration::FeedResultInfo Exploration::feedResult(int tracking_id,
       const double* mzs, const double* ints, int length,
-      double rt, ScanCommandQueue& queue, ProteoformTracker& tracker)
+      double rt, ScanCommandQueue& queue, ProteoformTracker* tracker)
   {
     // Look up the group to get correct precursor context for deconvolution
     auto vit = variant_tracking_map_.find(tracking_id);
@@ -270,7 +270,7 @@ namespace OpenMS
       ms2_deconv = exploration_deconv_->storedMS2();
     }
 
-    return feedResultImpl_(tracking_id, ms2_deconv, mzs, ints, length, rt, queue, &tracker);
+    return feedResultImpl_(tracking_id, ms2_deconv, mzs, ints, length, rt, queue, tracker);
   }
 
   Exploration::FeedResultInfo Exploration::feedResultImpl_(int tracking_id,
