@@ -60,7 +60,8 @@ FLASHIda::FLASHIda(char* arg) :
     selection_(config_, deconv_),
     quant_(config_),
     faims_(config_),
-    exploration_(config_, fragments_)
+    exploration_(config_, fragments_),
+    tracker_(config_, logger_)
 {
   #ifdef _OPENMP
     omp_set_num_threads(4);

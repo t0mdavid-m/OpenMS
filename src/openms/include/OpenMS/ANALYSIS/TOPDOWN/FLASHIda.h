@@ -40,6 +40,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Deconvolution.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Exploration.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FAIMS.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ProteoformTracker.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/IdaLogger.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/PrecursorSelection.h>
@@ -142,6 +143,9 @@ namespace OpenMS
 
     /// Exploration CE sweep engine (owns groups, variants, scoring)
     Exploration exploration_;
+
+    /// Per-precursor proteoform tracking model (accumulates fragment observations across MS2/MS3)
+    ProteoformTracker tracker_;
 
     /// MS2 context cache keyed by MS3 tracking ID (for non-exploration identification)
     std::unordered_map<int, Exploration::MS2Context> ms2_context_cache_;
