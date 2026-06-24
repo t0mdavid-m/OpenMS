@@ -180,6 +180,7 @@ namespace OpenMS
   {
     CharacterizationObjective objective = CharacterizationObjective::Ambiguity;
     std::string protein_sequence;
+    bool ms3_all_charges = false;  ///< MS3AllCharges: emit one MS3 per observed charge state of a target fragment (default: single best charge)
   };
 
   /// Isobaric quantification configuration

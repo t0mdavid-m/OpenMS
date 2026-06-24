@@ -107,6 +107,7 @@ namespace OpenMS
     int cover_start = 0, cover_end = 0;    ///< 1-based inclusive, proteoform frame
     double theoretical_mass = 0;
     std::optional<FragmentObservation> best_ms2, best_ms3;
+    std::unordered_map<int, FragmentObservation> ms2_by_charge;  ///< Best (highest-intensity) MS2 obs per charge state (for MS3AllCharges)
     int n_ms2 = 0, n_ms3 = 0;
   };
 

@@ -436,21 +436,42 @@ namespace OpenMS
                 return a->best_ms2->intensity > b->best_ms2->intensity;
               });
 
-    // --- 2) Emit one Ms3Target per chosen fragment ----------------------------------------------
+    // --- 2) Emit Ms3Targets, budget-bounded ---------------------------------------------------------
+    // OFF (default): one target per fragment from best_ms2 — byte-identical to M1.
+    // ON (ms3_all_charges): one target per observed charge state of each fragment, strongest first;
+    // stop as soon as the total emitted count reaches budget.
+    const bool all_charges = config_.characterization().ms3_all_charges;
     std::vector<Ms3Target> out;
-    out.reserve(targets.size());
     for (const MappedFragment* f : targets)
     {
-      const FragmentObservation& o = *f->best_ms2;  // guaranteed present by selection
-      Ms3Target t;
-      t.ion_type = f->ion_type;
-      t.ion_index = f->ion_index;
-      t.frag_mz = o.frag_mz;
-      t.frag_charge = o.frag_charge;
-      t.frag_mass = o.observed_mass;      // MS2-frame fragment mono mass (PeakGroup reconstruction)
-      t.iso_width = o.iso_width;          // isolation span (matches the direct path's wend-wstart)
-      t.stage0_params = o.params;         // per-ion best MS2 params -> MS3 stage[0] (ADR-0003)
-      out.push_back(std::move(t));
+      if (static_cast<int>(out.size()) >= budget) break;
+      // Build the per-charge observation list to emit for this fragment.
+      std::vector<const FragmentObservation*> obs_list;
+      if (all_charges && !f->ms2_by_charge.empty())
+      {
+        for (const auto& kv : f->ms2_by_charge) obs_list.push_back(&kv.second);
+        std::sort(obs_list.begin(), obs_list.end(),
+                  [](const FragmentObservation* a, const FragmentObservation* b) {
+                    return a->intensity > b->intensity;
+                  });
+      }
+      else
+      {
+        obs_list.push_back(&(*f->best_ms2));  // single best charge (default)
+      }
+      for (const FragmentObservation* o : obs_list)
+      {
+        if (static_cast<int>(out.size()) >= budget) break;
+        Ms3Target t;
+        t.ion_type = f->ion_type;
+        t.ion_index = f->ion_index;
+        t.frag_mz = o->frag_mz;
+        t.frag_charge = o->frag_charge;
+        t.frag_mass = o->observed_mass;
+        t.iso_width = o->iso_width;
+        t.stage0_params = o->params;
+        out.push_back(std::move(t));
+      }
     }
     return out;
   }
@@ -624,6 +645,10 @@ namespace OpenMS
       {
         if (!mfrag.best_ms2.has_value() || obs.intensity > mfrag.best_ms2->intensity)
           mfrag.best_ms2 = obs;
+        // Track the best MS2 observation per charge state for config-gated multi-charge MS3.
+        auto cit = mfrag.ms2_by_charge.find(obs.frag_charge);
+        if (cit == mfrag.ms2_by_charge.end() || obs.intensity > cit->second.intensity)
+          mfrag.ms2_by_charge[obs.frag_charge] = obs;
         ++mfrag.n_ms2;
       }
     }

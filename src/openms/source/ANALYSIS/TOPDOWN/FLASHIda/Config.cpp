@@ -173,6 +173,7 @@ namespace OpenMS
       else
         characterization_.objective = CharacterizationObjective::Ambiguity;
       characterization_.protein_sequence = charact.value("protein_sequence", "");
+      characterization_.ms3_all_charges = charact.value("ms3_all_charges", false);
     }
 
     // Reject legacy MS3 keys — force migration to selection_strategy
