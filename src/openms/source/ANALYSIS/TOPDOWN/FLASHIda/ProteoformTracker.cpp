@@ -108,6 +108,18 @@ namespace OpenMS
       if (f.is_prefix) return (rs <= f.cover_end && f.cover_end < re);
       return (rs < f.cover_start && f.cover_start <= re);
     }
+
+    // Does fragment @p f fully CONTAIN the (region-frame, 1-based inclusive) range [rs, re]? A
+    // fragment contains the range iff its coverage spans all of it: cover_start <= rs && cover_end >= re.
+    // (This is the dispatch predicate for MS3 targeting -- the whole ambiguous range must lie inside the
+    // fragment's coverage so an MS3 re-feed of that fragment carries internal cleavages able to narrow it.)
+    //   prefix b_k covers [1, k]      (k = f.cover_end):   contains iff k >= re   (cover_start == 1 <= rs)
+    //   suffix y_k covers [L-k+1, L]  (c = f.cover_start): contains iff c <= rs   (cover_end  == L >= re)
+    inline bool fragmentContains(const MappedFragment& f, int rs, int re)
+    {
+      if (f.ion_type.empty() || f.ion_index <= 0) return false;
+      return (f.cover_start <= rs && f.cover_end >= re);
+    }
   } // anonymous namespace
 
   // ---------------------------------------------------------------------------
@@ -314,9 +326,13 @@ namespace OpenMS
 
     if (obj == CharacterizationObjective::Ambiguity)
     {
-      // For each still-ambiguous modification (widest range first), pick the strongest best-MS2
-      // fragment that brackets that range (region frame). modifications are full-protein 1-based
-      // ranges; convert to the region frame via -ws to match the fragment keys.
+      // For each still-ambiguous modification (widest range first), build the list of best-MS2
+      // fragments that fully CONTAIN that range (region frame), strongest intensity first. A
+      // containing fragment is the only useful MS3 target: re-fragmenting it produces internal
+      // cleavages that can narrow the range. (A merely-bracketing fragment would already have
+      // narrowed it, so for a genuinely ambiguous range none exists -> we must use containers.)
+      // modifications are full-protein 1-based ranges; convert to the region frame via -ws to match
+      // the fragment keys, exactly as narrowModifications_ does.
       std::vector<const ModificationState*> ambiguous;
       for (const ModificationState& mod : m.modifications)
         if (mod.candidate_start < mod.candidate_end) ambiguous.push_back(&mod);
@@ -325,27 +341,52 @@ namespace OpenMS
                   return (a->candidate_end - a->candidate_start) > (b->candidate_end - b->candidate_start);
                 });
 
+      // Per-mod candidate container lists, each sorted by best-MS2 intensity descending.
+      std::vector<std::vector<const MappedFragment*>> per_mod_candidates;
+      per_mod_candidates.reserve(ambiguous.size());
       for (const ModificationState* mod : ambiguous)
       {
         const int rs_region = mod->candidate_start - ws;
         const int re_region = mod->candidate_end - ws;
-        const MappedFragment* best = nullptr;
+        std::vector<const MappedFragment*> cands;
         for (const auto& kv : m.fragments)
         {
           const MappedFragment& f = kv.second;
           if (!f.best_ms2.has_value()) continue;
-          if (chosen.count(FragmentKey{f.ion_type, f.ion_index})) continue;
-          if (!fragmentBrackets(f, rs_region, re_region)) continue;
-          if (best == nullptr || f.best_ms2->intensity > best->best_ms2->intensity) best = &f;
+          if (!fragmentContains(f, rs_region, re_region)) continue;
+          cands.push_back(&f);
         }
-        if (best != nullptr && !add_target(best)) break;
+        std::sort(cands.begin(), cands.end(),
+                  [](const MappedFragment* a, const MappedFragment* b) {
+                    return a->best_ms2->intensity > b->best_ms2->intensity;
+                  });
+        per_mod_candidates.push_back(std::move(cands));
+      }
+
+      // Round-robin: pass 1 gives every mod its strongest container, then continue round-robin with
+      // each mod's next-best, until the budget fills. add_target dedups by FragmentKey across mods and
+      // returns false once the budget is full. A mod with no container contributes nothing.
+      bool budget_full = false;
+      for (size_t rank = 0; !budget_full; ++rank)
+      {
+        bool any_at_rank = false;
+        for (const auto& cands : per_mod_candidates)
+        {
+          if (rank >= cands.size()) continue;
+          any_at_rank = true;
+          const FragmentKey key{cands[rank]->ion_type, cands[rank]->ion_index};
+          if (chosen.count(key)) continue;  // already added for an earlier mod
+          if (!add_target(cands[rank])) { budget_full = true; break; }
+        }
+        if (!any_at_rank) break;  // exhausted every mod's candidate list
       }
     }
     else  // CharacterizationObjective::Coverage
     {
       // Find the largest uncovered residue gaps (complement of the merged coverage intervals in the
-      // winner-region frame), then for each gap pick the strongest best-MS2 fragment spanning or
-      // adjacent to it (its coverage touches the gap). Mirrors coveragePct's merge logic.
+      // winner-region frame), then for each gap pick the strongest best-MS2 fragment that fully
+      // CONTAINS it (its coverage spans the whole gap), so an MS3 re-feed of that fragment yields the
+      // internal cleavages needed to cover the gap. Mirrors coveragePct's merge logic.
       std::vector<std::pair<int, int>> intervals;  // covered [cs, ce], region-1-based inclusive, clamped to [1, L]
       for (const auto& kv : m.fragments)
       {
@@ -379,8 +420,8 @@ namespace OpenMS
           const MappedFragment& f = kv.second;
           if (!f.best_ms2.has_value()) continue;
           if (chosen.count(FragmentKey{f.ion_type, f.ion_index})) continue;
-          // Spanning OR adjacent: the fragment's coverage interval touches (or abuts) the gap.
-          if (f.cover_end < gap.first - 1 || f.cover_start > gap.second + 1) continue;
+          // The fragment's coverage must fully span the gap to be a useful MS3 re-feed target.
+          if (!fragmentContains(f, gap.first, gap.second)) continue;
           if (best == nullptr || f.best_ms2->intensity > best->best_ms2->intensity) best = &f;
         }
         if (best != nullptr && !add_target(best)) break;
