@@ -129,6 +129,23 @@ namespace OpenMS
       FragmentAnalysis::ProteoformMatch match;
     };
 
+    /// One pooled_identification.tsv row: the current state of a ProteoformModel after each update.
+    /// All members held by value (model state is discarded between updates).
+    struct PooledModelDescriptor
+    {
+      int nominal_mass = 0;
+      double mono_mass = 0.0;
+      std::string proforma;
+      double score = -1.0;
+      double coverage_pct = 0.0;
+      int n_fragments = 0;
+      std::vector<std::string> localized_mods;
+      std::vector<std::string> ambiguous_mods;
+      std::vector<int> contributing_scan_ids;
+      std::vector<double> combined_masses;
+      int update_index = 0;
+    };
+
     /// Write IDA log entry for MS1 deconvolution results
     void writeIDALogEntry(double rt, int scan_number, const std::string& tracking_id,
                           const std::vector<ScanCommand>& ms2_commands,
@@ -142,6 +159,9 @@ namespace OpenMS
 
     /// Write one identification.tsv row for an MS2 or MS3 scan with matched fragments
     void writeIdentificationRow(const IdRowDescriptor& row);
+
+    /// Write one pooled_identification.tsv row for a ProteoformModel update (trajectory log)
+    void writePooledModelRow(const PooledModelDescriptor& r);
 
     /**
            @brief parse FLASHIda log file
@@ -159,6 +179,7 @@ namespace OpenMS
     std::ofstream commands_tsv_stream_;
     std::ofstream results_tsv_stream_;
     std::ofstream identification_tsv_stream_;
+    std::ofstream pooled_stream_;
 
     /// Derive scan_type string from scan_description
     static std::string scanTypeFromDescription_(const ScanCommand& cmd);

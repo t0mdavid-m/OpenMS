@@ -420,6 +420,7 @@ namespace OpenMS
     runtime_.scan_commands_path = rt_section.value("scan_commands_path", std::string{});
     runtime_.scan_results_path = rt_section.value("scan_results_path", std::string{});
     runtime_.identification_path = rt_section.value("identification_log_path", std::string{});
+    runtime_.pooled_identification_path = rt_section.value("pooled_identification_log_path", std::string{});
 
     // SNR threshold (hardcoded in original parseJSONConfig_)
     targeting_.snr_threshold = 1.0;

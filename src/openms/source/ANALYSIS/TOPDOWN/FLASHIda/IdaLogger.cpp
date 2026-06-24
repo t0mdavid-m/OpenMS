@@ -113,6 +113,17 @@ namespace OpenMS
         identification_tsv_stream_.flush();
       }
     }
+    if (!rt_cfg.pooled_identification_path.empty())
+    {
+      pooled_stream_.open(rt_cfg.pooled_identification_path, std::ios::app);
+      if (pooled_stream_.is_open())
+      {
+        pooled_stream_ << "nominal_mass\tmono_mass\tproteoform\tflash_extender_score\t"
+                       << "coverage_pct\tn_fragments\tlocalized_mods\tambiguous_mods\t"
+                       << "contributing_scan_ids\tcombined_ms2_frame_masses\tupdate_index\n";
+        pooled_stream_.flush();
+      }
+    }
   }
 
   void IdaLogger::writeIDALogEntry(double rt, int scan_number,
@@ -519,6 +530,55 @@ namespace OpenMS
       << (ms_level == 3 ? ctx.ms3_window_snr : 0.0) << "\t"
       << (ms_level == 3 ? ctx.ms3_charge_intensity : 0.0) << "\n";
     identification_tsv_stream_.flush();
+  }
+
+  void IdaLogger::writePooledModelRow(const PooledModelDescriptor& r)
+  {
+    if (!pooled_stream_.is_open()) return;
+
+    // localized_mods and ambiguous_mods joined with ';' (no tracking-id collision risk: these are
+    // human-readable strings, not encoded ids).
+    std::string loc_str;
+    for (size_t i = 0; i < r.localized_mods.size(); ++i)
+    {
+      if (i > 0) loc_str += ";";
+      loc_str += r.localized_mods[i];
+    }
+    std::string amb_str;
+    for (size_t i = 0; i < r.ambiguous_mods.size(); ++i)
+    {
+      if (i > 0) amb_str += ";";
+      amb_str += r.ambiguous_mods[i];
+    }
+    // contributing_scan_ids joined with SPACE — the established delimiter that avoids the
+    // tracking-id-alphabet ';' collision (same precedent as child_ids in writeScanResultRow).
+    std::string scan_ids_str;
+    for (size_t i = 0; i < r.contributing_scan_ids.size(); ++i)
+    {
+      if (i > 0) scan_ids_str += " ";
+      scan_ids_str += std::to_string(r.contributing_scan_ids[i]);
+    }
+    // combined_masses joined with ';'.
+    std::ostringstream masses_ss;
+    masses_ss << std::fixed << std::setprecision(4);
+    for (size_t i = 0; i < r.combined_masses.size(); ++i)
+    {
+      if (i > 0) masses_ss << ";";
+      masses_ss << r.combined_masses[i];
+    }
+
+    pooled_stream_ << r.nominal_mass << "\t"
+                   << std::fixed << std::setprecision(4) << r.mono_mass << "\t"
+                   << r.proforma << "\t"
+                   << std::setprecision(4) << r.score << "\t"
+                   << std::setprecision(4) << r.coverage_pct << "\t"
+                   << r.n_fragments << "\t"
+                   << loc_str << "\t"
+                   << amb_str << "\t"
+                   << scan_ids_str << "\t"
+                   << masses_ss.str() << "\t"
+                   << r.update_index << "\n";
+    pooled_stream_.flush();
   }
 
   std::map<int, std::vector<std::vector<float>>> IdaLogger::parseFLASHIdaLog(const String& in_log_file)

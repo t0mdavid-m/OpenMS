@@ -38,9 +38,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iomanip>
 #include <limits>
 #include <map>
 #include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -728,8 +730,103 @@ namespace OpenMS
     }
   }
 
-  void ProteoformTracker::emitRow_(const ProteoformModel& /*mdl*/)
+  void ProteoformTracker::emitRow_(const ProteoformModel& m)
   {
+    // Guard: no identified model -> nothing to emit.
+    if (m.proteoform_sequence.empty()) return;
+
+    IdaLogger::PooledModelDescriptor r;
+
+    // --- nominal_mass ---
+    r.nominal_mass = m.nominal_mass;
+
+    // --- mono_mass: the MS2 context precursor mass (captured once at feedScan time) ---
+    r.mono_mass = m.has_ms2_ctx ? m.ms2_ctx.mono_mass : 0.0;
+
+    // --- proforma ---
+    // m.proteoform_sequence is the FULL protein sequence (FragmentAnalysis sets it from protein_sequence).
+    // m.modifications are FULL-PROTEIN 1-based ranges.
+    // m.region_start/region_end are 0-based (exclusive end), -1 => full sequence.
+    // We render the WINNER-REGION substring with region-relative 1-based PTM positions,
+    // consistent with the narrowModifications_ frame convention (region_pos = full_pos - ws).
+    {
+      const int ws = (m.region_start < 0) ? 0 : m.region_start;
+      const int P = static_cast<int>(m.proteoform_sequence.size());
+      const int we = (m.region_end < 0) ? P : m.region_end;
+      const int L = we - ws;
+      const std::string region_seq =
+        (ws == 0 && we == P) ? m.proteoform_sequence : m.proteoform_sequence.substr(ws, L);
+
+      std::vector<FragmentAnalysis::PTMSite> ptm_sites;
+      ptm_sites.reserve(m.modifications.size());
+      for (const ModificationState& mod : m.modifications)
+      {
+        // Convert full-protein 1-based to region-relative 1-based (no-op when ws==0).
+        const int s = mod.candidate_start - ws;
+        const int e = mod.candidate_end - ws;
+        FragmentAnalysis::PTMSite site;
+        site.start_position = s;
+        site.end_position = e;
+        site.position = (s + e) / 2;
+        site.mass_shift = mod.mass_shift;
+        ptm_sites.push_back(site);
+      }
+      r.proforma = FragmentAnalysis::toProForma(region_seq, ptm_sites);
+    }
+
+    // --- score / coverage / fragment count ---
+    r.score = m.identification_score;
+    r.coverage_pct = m.coveragePct();
+    r.n_fragments = static_cast<int>(m.fragments.size());
+
+    // --- localized_mods and ambiguous_mods ---
+    // Format localized (start==end): "<start>[+<mass>]"
+    // Format ambiguous (start<end):  "(<start>-<end>)[+<mass>]"
+    for (const ModificationState& mod : m.modifications)
+    {
+      std::ostringstream ss;
+      ss << std::fixed << std::setprecision(4);
+      if (mod.candidate_start == mod.candidate_end)
+      {
+        ss << mod.candidate_start;
+        if (mod.mass_shift >= 0)
+          ss << "[+" << mod.mass_shift << "]";
+        else
+          ss << "[" << mod.mass_shift << "]";
+        r.localized_mods.push_back(ss.str());
+      }
+      else
+      {
+        ss << "(" << mod.candidate_start << "-" << mod.candidate_end << ")";
+        if (mod.mass_shift >= 0)
+          ss << "[+" << mod.mass_shift << "]";
+        else
+          ss << "[" << mod.mass_shift << "]";
+        r.ambiguous_mods.push_back(ss.str());
+      }
+    }
+
+    // --- contributing_scan_ids: unique sorted set of source_scan_id from all fragment observations
+    //     plus winner_scan_id ---
+    {
+      std::set<int> id_set;
+      if (m.winner_scan_id != 0) id_set.insert(m.winner_scan_id);
+      for (const auto& kv : m.fragments)
+      {
+        const MappedFragment& f = kv.second;
+        if (f.best_ms2.has_value()) id_set.insert(f.best_ms2->source_scan_id);
+        if (f.best_ms3.has_value()) id_set.insert(f.best_ms3->source_scan_id);
+      }
+      r.contributing_scan_ids.assign(id_set.begin(), id_set.end());
+    }
+
+    // --- combined_masses: union of all MS2-frame observed masses across MS2 and MS3 observations ---
+    r.combined_masses = m.combinedMs2FrameMasses();
+
+    // --- update_index ---
+    r.update_index = m.update_index;
+
+    logger_.writePooledModelRow(r);
   }
 
 } // namespace OpenMS

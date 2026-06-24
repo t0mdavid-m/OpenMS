@@ -198,6 +198,7 @@ namespace OpenMS
     std::string scan_commands_path;
     std::string scan_results_path;
     std::string identification_path;
+    std::string pooled_identification_path;
   };
 
   /**
