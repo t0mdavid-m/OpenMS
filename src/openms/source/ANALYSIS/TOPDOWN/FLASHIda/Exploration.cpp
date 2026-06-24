@@ -658,6 +658,15 @@ namespace OpenMS
     for (const auto& vr : group.variants)
       variant_tracking_map_.erase(queue.decode(vr.tracking_id));
 
+    // Group is complete (all variants received, winner chosen or aborted): finalize the proteoform
+    // model for this precursor — pick the best proteoform and pool every staged scan's fragments.
+    // Runs exactly once per completed group, while `group` is still valid. tracker is nullptr only
+    // in the ExplorationTestAccess bypass path.
+    if (tracker != nullptr)
+    {
+      tracker->finalize(SpectralDeconvolution::getNominalMass(group.precursor_mass));
+    }
+
     active_groups_.erase(git);
     return info;
   }
