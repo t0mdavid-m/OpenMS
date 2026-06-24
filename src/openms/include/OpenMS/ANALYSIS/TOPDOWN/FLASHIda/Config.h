@@ -47,6 +47,13 @@
 namespace OpenMS
 {
 
+  /// Objective driving characterization scan planning for a proteoform
+  enum class CharacterizationObjective
+  {
+    Ambiguity, ///< Resolve PTM site ambiguity
+    Coverage   ///< Extend sequence coverage
+  };
+
   /// Selection metric: how targets are ranked for MSn+1
   enum class SelectionMetric
   {
@@ -154,7 +161,6 @@ namespace OpenMS
     double qscore_threshold = 0.0;
     double tqscore_threshold = 0.9;
     double snr_threshold = 1.0;
-    std::string protein_sequence;
     bool conditional_ms2_enabled = false; ///< Explicit conditional_ms2 flag from JSON
     std::vector<std::string> target_log_files;
     std::string fasta_file;
@@ -167,6 +173,13 @@ namespace OpenMS
     double max_flanking_mass_diff = 50000.0;
     int max_total_ptm_count = 3;
     ScanConfig tagging_follow_up_scan;  ///< Follow-up scan config for conditional MS2
+  };
+
+  /// Characterization configuration: objective + protein sequence
+  struct OPENMS_DLLAPI CharacterizationConfig
+  {
+    CharacterizationObjective objective = CharacterizationObjective::Ambiguity;
+    std::string protein_sequence;
   };
 
   /// Isobaric quantification configuration
@@ -222,6 +235,7 @@ namespace OpenMS
     const TargetingConfig& targeting() const { return targeting_; }
     const QuantConfig& quantification() const { return quant_; }
     const RuntimeConfig& runtime() const { return runtime_; }
+    const CharacterizationConfig& characterization() const { return characterization_; }
 
     /// Validate configuration consistency; throws std::invalid_argument on conflict
     void validate() const;
@@ -235,6 +249,7 @@ namespace OpenMS
     FAIMSConfig faims_;
     SchedulingConfig scheduling_;
     TargetingConfig targeting_;
+    CharacterizationConfig characterization_;
     QuantConfig quant_;
     RuntimeConfig runtime_;
     bool exploration_enabled_ = false;

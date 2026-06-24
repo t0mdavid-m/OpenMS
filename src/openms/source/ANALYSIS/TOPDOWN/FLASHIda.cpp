@@ -532,7 +532,7 @@ FLASHIda::FLASHIda(char* arg) :
             std::vector<FragmentAnalysis::ProteoformMatch> ms3_matches;
             MS3FragmentMatcher::calibrateAndScore(
               spectra,
-              config_.targeting().protein_sequence,
+              config_.characterization().protein_sequence,
               proto_ctx,
               cached_ms2_ctx.fragment_ion_type,
               cached_ms2_ctx.fragment_ion_index,
@@ -552,7 +552,7 @@ FLASHIda::FLASHIda(char* arg) :
               ms3_frag_count = ms3_matches[0].total_match_count;
               ms3_tag_count = cached_ms2_ctx.tag_count;
               ms3_matched_protein = config_.targeting().fasta_file.empty()
-                  ? config_.targeting().protein_sequence : config_.targeting().fasta_file;
+                  ? config_.characterization().protein_sequence : config_.targeting().fasta_file;
               if (ms3_mass_count > 0)
               {
                 float r = static_cast<float>(ms3_matches[0].total_match_count) / static_cast<float>(ms3_mass_count);

@@ -164,11 +164,19 @@ namespace OpenMS
     if (files.contains("ptm_list") && !files["ptm_list"].get<std::string>().empty())
       targeting_.ptm_list_file = files["ptm_list"].get<std::string>();
 
-    // --- ms3 section ---
-    auto ms3 = config.value("ms3", json::object());
-    targeting_.protein_sequence = ms3.value("protein_sequence", "");
+    // --- characterization section ---
+    auto charact = config.value("characterization", json::object());
+    {
+      std::string obj_str = charact.value("objective", std::string("ambiguity"));
+      if (obj_str == "coverage")
+        characterization_.objective = CharacterizationObjective::Coverage;
+      else
+        characterization_.objective = CharacterizationObjective::Ambiguity;
+      characterization_.protein_sequence = charact.value("protein_sequence", "");
+    }
 
     // Reject legacy MS3 keys — force migration to selection_strategy
+    auto ms3 = config.value("ms3", json::object());
     static const std::vector<std::string> legacy_ms3_keys = {"enabled", "active", "mode", "all_charges", "max_per_ms2"};
     for (const auto& key : legacy_ms3_keys)
     {
@@ -436,18 +444,18 @@ namespace OpenMS
 
     for (const auto& [lvl, cfg] : levels_)
     {
-      if (cfg.exploration == ExplorationMetric::FragmentCount && targeting_.protein_sequence.empty())
+      if (cfg.exploration == ExplorationMetric::FragmentCount && characterization_.protein_sequence.empty())
         throw std::invalid_argument(
             "ExplorationMetric::FragmentCount at level " + std::to_string(lvl) +
-            " requires a non-empty protein_sequence in the ms3 config section.");
+            " requires a non-empty protein_sequence in the characterization config section.");
     }
 
     for (const auto& [lvl, cfg] : levels_)
     {
-      if (lvl >= 2 && cfg.selection != SelectionMetric::None && targeting_.protein_sequence.empty())
+      if (lvl >= 2 && cfg.selection != SelectionMetric::None && characterization_.protein_sequence.empty())
         throw std::invalid_argument(
             "SelectionMetric at level " + std::to_string(lvl) +
-            " requires a non-empty protein_sequence in the ms3 config section. "
+            " requires a non-empty protein_sequence in the characterization config section. "
             "Fragment matching is the default for all MSn>=2 selection.");
     }
 

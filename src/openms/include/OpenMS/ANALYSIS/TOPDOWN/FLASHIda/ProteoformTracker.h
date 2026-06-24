@@ -99,13 +99,6 @@ namespace OpenMS
     double support_lower = 0, support_upper = 0;
   };
 
-  /// Objective driving next-scan planning for a proteoform
-  enum class CharacterizationObjective
-  {
-    Ambiguity,  ///< Resolve PTM site ambiguity
-    Coverage    ///< Extend sequence coverage
-  };
-
   /// Richer per-peak record so mapScanOntoModel_ can recover mz and charge for MS3 targeting
   struct PeakRecord
   {

@@ -401,7 +401,7 @@ namespace OpenMS
     {
       MS2Context ctx;
       ctx.proteoform_sequence = (group.proteoform_ctx.region_start >= 0)
-          ? config_.targeting().protein_sequence.substr(group.proteoform_ctx.region_start,
+          ? config_.characterization().protein_sequence.substr(group.proteoform_ctx.region_start,
               group.proteoform_ctx.region_end - group.proteoform_ctx.region_start)
           : "";
       ctx.start_pos = group.proteoform_ctx.region_start;
@@ -459,7 +459,7 @@ namespace OpenMS
     {
       info.proteoform_sequence = info.ms2_context.proteoform_sequence;
       info.matched_protein = config_.targeting().fasta_file.empty()
-          ? config_.targeting().protein_sequence : config_.targeting().fasta_file;
+          ? config_.characterization().protein_sequence : config_.targeting().fasta_file;
     }
 
     auto& meta = v.result.getOrCreateOptimizationMetadata();
@@ -496,7 +496,7 @@ namespace OpenMS
       std::vector<FragmentAnalysis::ProteoformMatch> detailed_results;
       auto calibrated_scores = MS3FragmentMatcher::calibrateAndScore(
         variant_spectra,
-        config_.targeting().protein_sequence,
+        config_.characterization().protein_sequence,
         group.proteoform_ctx,
         group.fragment_ion_type,
         group.fragment_ion_index,
@@ -688,7 +688,7 @@ namespace OpenMS
     if (this_cfg.scans.empty() || next_cfg.scans.empty()
         || next_cfg.selection == SelectionMetric::None) return nlr;
 
-    const auto& seq = config_.targeting().protein_sequence;
+    const auto& seq = config_.characterization().protein_sequence;
     int num_targets = this_cfg.max_targets;
 
     // Extract activation type from the scan command that produced this result
@@ -753,7 +753,7 @@ namespace OpenMS
     if (!seq.empty() && found > 0)
     {
       nlr.matched_protein = config_.targeting().fasta_file.empty()
-          ? config_.targeting().protein_sequence : config_.targeting().fasta_file;
+          ? config_.characterization().protein_sequence : config_.targeting().fasta_file;
       nlr.proteoform_sequence = seq;
       // TIC coverage: sum of matched qscores / total spectrum intensity
       double total_tic = 0.0;
@@ -1010,7 +1010,7 @@ namespace OpenMS
                                                                       const std::string& activation_type) const
   {
     FragmentAnalysis::ProteoformMatch result;
-    const auto& seq = config_.targeting().protein_sequence;
+    const auto& seq = config_.characterization().protein_sequence;
     if (seq.empty() || spec.empty())
       return result;
 
@@ -1034,7 +1034,7 @@ namespace OpenMS
     if (result.total_match_count > 0)
     {
       result.matched_protein = config_.targeting().fasta_file.empty()
-          ? config_.targeting().protein_sequence : config_.targeting().fasta_file;
+          ? config_.characterization().protein_sequence : config_.targeting().fasta_file;
     }
     return result;
   }
