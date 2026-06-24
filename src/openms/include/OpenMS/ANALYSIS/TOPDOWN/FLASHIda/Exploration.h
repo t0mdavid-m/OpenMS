@@ -39,6 +39,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Deconvolution.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ProteoformTracker.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 
@@ -208,7 +209,7 @@ namespace OpenMS
     /// score, select winner, trigger next level. Returns FeedResultInfo with commands and metadata.
     FeedResultInfo feedResult(int tracking_id,
                               const double* mzs, const double* ints, int length,
-                              double rt, ScanCommandQueue& queue);
+                              double rt, ScanCommandQueue& queue, ProteoformTracker& tracker);
 
     /// Test-only access (the feedResultImpl_ deconvolution-bypass + getGroup) lives in
     /// FLASHIda_TestAccess.h via this friend, so test scaffolding stays out of the production API.
@@ -263,10 +264,12 @@ namespace OpenMS
     /// Next group ID (monotonically increasing)
     int next_group_id_ = 1;
 
-    /// Shared implementation: process a deconvolved spectrum for a tracked variant
+    /// Shared implementation: process a deconvolved spectrum for a tracked variant.
+    /// @p tracker may be nullptr (test-only bypass via ExplorationTestAccess); production always passes a
+    /// real tracker.
     FeedResultInfo feedResultImpl_(int tracking_id, const DeconvolvedSpectrum& ms2_deconv,
                                    const double* mzs, const double* ints, int length,
-                                   double rt, ScanCommandQueue& queue);
+                                   double rt, ScanCommandQueue& queue, ProteoformTracker* tracker);
 
     /// Parameters for one variant in a multi-activation sweep
     struct VariantParams

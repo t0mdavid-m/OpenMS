@@ -34,6 +34,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Exploration.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
 
 #include <OpenMS/DATASTRUCTURES/ListUtils.h>
 
@@ -249,7 +250,7 @@ namespace OpenMS
 
   Exploration::FeedResultInfo Exploration::feedResult(int tracking_id,
       const double* mzs, const double* ints, int length,
-      double rt, ScanCommandQueue& queue)
+      double rt, ScanCommandQueue& queue, ProteoformTracker& tracker)
   {
     // Look up the group to get correct precursor context for deconvolution
     auto vit = variant_tracking_map_.find(tracking_id);
@@ -269,13 +270,13 @@ namespace OpenMS
       ms2_deconv = exploration_deconv_->storedMS2();
     }
 
-    return feedResultImpl_(tracking_id, ms2_deconv, mzs, ints, length, rt, queue);
+    return feedResultImpl_(tracking_id, ms2_deconv, mzs, ints, length, rt, queue, &tracker);
   }
 
   Exploration::FeedResultInfo Exploration::feedResultImpl_(int tracking_id,
       const DeconvolvedSpectrum& ms2_deconv,
       const double* mzs, const double* ints, int length,
-      double rt, ScanCommandQueue& queue)
+      double rt, ScanCommandQueue& queue, ProteoformTracker* tracker)
   {
     (void)rt;
     FeedResultInfo info;
@@ -375,6 +376,21 @@ namespace OpenMS
     info.matched_protein = frag.matched_protein;
     info.proteoform_sequence = frag.proteoform_sequence;
     info.identification_result = frag;
+
+    // Feed this variant's evidence into the ProteoformTracker (staging only; every variant feeds,
+    // not just the group-completing one — placed before the all_received guard below).
+    // tracker is nullptr only in the ExplorationTestAccess bypass path (no real IdaLogger available).
+    if (tracker != nullptr)
+    {
+      tracker->feedScan(SpectralDeconvolution::getNominalMass(group.precursor_mass),
+                        /*ms_level=*/2,
+                        Ms2Params{v.collision_energy, v.activation_type, v.reaction_time},
+                        /*scan_id=*/tracking_id,
+                        v.result,
+                        frag,
+                        frag.score);
+    }
+
     info.remaining_ratio = remaining_ratio;
     std::string parent_enc = ScanCommandQueue::encode(group.originating_cmd.scan_id);
     std::strncpy(info.parent_scan_id, parent_enc.c_str(), 3);

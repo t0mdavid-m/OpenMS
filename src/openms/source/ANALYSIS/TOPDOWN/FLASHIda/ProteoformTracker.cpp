@@ -61,11 +61,11 @@ namespace OpenMS
   }
 
   void ProteoformTracker::feedScan(int nominal_mass, uint8_t ms_level, const Ms2Params& params, int scan_id,
-                                   const DeconvolvedSpectrum& /*deconv*/,
+                                   const DeconvolvedSpectrum& deconv,
                                    const FragmentAnalysis::ProteoformMatch& match, double id_score)
   {
-    auto& mdl = models_[nominal_mass];
-    mdl.nominal_mass = nominal_mass;
+    ProteoformModel& m = models_[nominal_mass];
+    m.nominal_mass = nominal_mass;
 
     PendingScan ps;
     ps.scan_id = scan_id;
@@ -73,10 +73,20 @@ namespace OpenMS
     ps.params = params;
     ps.match = match;
     ps.id_score = id_score;
-    mdl.pending.push_back(std::move(ps));
+    // Extract (monoisotopic mass, per-charge intensity) for every deconvolved peak group.
+    // Iteration idiom matches IdaLogger / FragmentAnalysis: index into DeconvolvedSpectrum with [i].
+    // Intensity: getChargeIntensity(getMaxIntensityAbsCharge()) — the max-charge intensity used
+    // elsewhere as the sort key and precursor_intensity field (FragmentAnalysis.cpp:713).
+    for (size_t i = 0; i < deconv.size(); ++i)
+    {
+      const PeakGroup& pg = deconv[i];
+      ps.masses_intensities.emplace_back(pg.getMonoMass(),
+                                         static_cast<double>(pg.getChargeIntensity(pg.getMaxIntensityAbsCharge())));
+    }
+    m.pending.push_back(std::move(ps));
 
-    mapScanOntoModel_(mdl, mdl.pending.back());
-    narrowModifications_(mdl);
+    mapScanOntoModel_(m, m.pending.back());
+    narrowModifications_(m);
   }
 
   void ProteoformTracker::finalize(int nominal_mass)
