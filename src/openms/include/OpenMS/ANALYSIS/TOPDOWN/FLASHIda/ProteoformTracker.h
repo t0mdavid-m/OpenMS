@@ -37,7 +37,6 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
-#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/IdaLogger.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms2Params.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
@@ -52,6 +51,12 @@
 
 namespace OpenMS
 {
+
+  // Forward declaration: ProteoformTracker uses IdaLogger only by reference (ctor param + logger_ member).
+  // Including IdaLogger.h here would form a cycle
+  // (IdaLogger.h -> Exploration.h -> ProteoformTracker.h); the full definition is included in
+  // ProteoformTracker.cpp instead.
+  class IdaLogger;
 
   /// A single fragment observation, either from MS2 or MS3
   struct FragmentObservation

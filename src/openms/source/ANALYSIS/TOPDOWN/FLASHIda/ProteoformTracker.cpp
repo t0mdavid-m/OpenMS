@@ -34,6 +34,8 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ProteoformTracker.h>
 
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/IdaLogger.h>
+
 #include <cmath>
 #include <limits>
 #include <map>
