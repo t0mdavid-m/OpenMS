@@ -269,7 +269,7 @@ namespace OpenMS
     /// real tracker.
     FeedResultInfo feedResultImpl_(int tracking_id, const DeconvolvedSpectrum& ms2_deconv,
                                    const double* mzs, const double* ints, int length,
-                                   double rt, ScanCommandQueue& queue, ProteoformTracker* tracker);
+                                   double rt, ScanCommandQueue& queue, ProteoformTracker* tracker = nullptr);
 
     /// Parameters for one variant in a multi-activation sweep
     struct VariantParams

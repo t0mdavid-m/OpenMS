@@ -45,13 +45,11 @@ namespace OpenMS
   struct ExplorationTestAccess
   {
     /// Feed a pre-deconvolved result, bypassing deconvolution (was Exploration::feedResultForTest).
-    /// Passes nullptr for tracker: tests have no real IdaLogger to construct a ProteoformTracker with,
-    /// and tracker staging is not under test here.
     static Exploration::FeedResultInfo feedResult(Exploration& e, int tracking_id,
                                                   const DeconvolvedSpectrum& ms2_deconv,
                                                   double rt, ScanCommandQueue& queue)
     {
-      return e.feedResultImpl_(tracking_id, ms2_deconv, nullptr, nullptr, 0, rt, /*tracker=*/nullptr);
+      return e.feedResultImpl_(tracking_id, ms2_deconv, nullptr, nullptr, 0, rt, queue);
     }
 
     /// Get exploration group by ID (caller must ensure group exists).

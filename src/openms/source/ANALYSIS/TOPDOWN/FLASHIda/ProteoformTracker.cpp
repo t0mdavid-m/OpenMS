@@ -84,9 +84,6 @@ namespace OpenMS
                                          static_cast<double>(pg.getChargeIntensity(pg.getMaxIntensityAbsCharge())));
     }
     m.pending.push_back(std::move(ps));
-
-    mapScanOntoModel_(m, m.pending.back());
-    narrowModifications_(m);
   }
 
   void ProteoformTracker::finalize(int nominal_mass)
