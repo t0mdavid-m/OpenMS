@@ -99,12 +99,58 @@ namespace OpenMS
 
   double ProteoformModel::coveragePct() const
   {
-    return 0.0;
+    const int L = (region_start < 0) ? static_cast<int>(proteoform_sequence.size()) : (region_end - region_start);
+    if (L <= 0) return 0.0;
+    if (fragments.empty()) return 0.0;
+
+    // Collect all [cover_start, cover_end] intervals (1-based inclusive), clamped to [1, L].
+    std::vector<std::pair<int, int>> intervals;
+    intervals.reserve(fragments.size());
+    for (const auto& kv : fragments)
+    {
+      const MappedFragment& f = kv.second;
+      const int cs = std::max(f.cover_start, 1);
+      const int ce = std::min(f.cover_end, L);
+      if (cs <= ce) intervals.emplace_back(cs, ce);
+    }
+    if (intervals.empty()) return 0.0;
+
+    // Sort by start, then merge overlapping intervals, sum covered length.
+    std::sort(intervals.begin(), intervals.end());
+    int covered = 0;
+    int cur_start = intervals[0].first;
+    int cur_end = intervals[0].second;
+    for (size_t i = 1; i < intervals.size(); ++i)
+    {
+      if (intervals[i].first <= cur_end + 1)
+      {
+        // Overlapping or adjacent: extend.
+        cur_end = std::max(cur_end, intervals[i].second);
+      }
+      else
+      {
+        covered += cur_end - cur_start + 1;
+        cur_start = intervals[i].first;
+        cur_end = intervals[i].second;
+      }
+    }
+    covered += cur_end - cur_start + 1;
+
+    return covered / static_cast<double>(L);
   }
 
   std::vector<double> ProteoformModel::combinedMs2FrameMasses() const
   {
-    return {};
+    std::vector<double> masses;
+    masses.reserve(fragments.size() * 2);
+    for (const auto& kv : fragments)
+    {
+      const MappedFragment& f = kv.second;
+      if (f.best_ms2.has_value()) masses.push_back(f.best_ms2->observed_mass);
+      if (f.best_ms3.has_value()) masses.push_back(f.best_ms3->observed_mass);
+    }
+    std::sort(masses.begin(), masses.end());
+    return masses;
   }
 
   // ---------------------------------------------------------------------------
