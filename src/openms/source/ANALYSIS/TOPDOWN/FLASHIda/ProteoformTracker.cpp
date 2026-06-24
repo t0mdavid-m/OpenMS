@@ -36,9 +36,62 @@
 
 #include <cmath>
 #include <limits>
+#include <map>
+#include <set>
+#include <string>
+#include <vector>
 
 namespace OpenMS
 {
+
+  // Anonymous namespace for ProteoformTracker helper functions
+  namespace
+  {
+    // Tighten the UPPER boundary of an ambiguous range [rs, re] (region 1-based) down to
+    // new_upper, justified by intensity I. support_lower / support_upper carry the intensities
+    // behind each boundary. A move is a CONFLICT iff it would push the upper past the lower
+    // (new_upper < rs, inverting the range): on conflict it only wins if I beats the opposing
+    // support (support_lower), in which case it overrides and collapses the range, re-justifying
+    // BOTH boundaries with I. A non-conflicting move applies whenever it is strictly inward.
+    inline void tightenUpper(int& rs, int& re, double& support_lower, double& support_upper, int new_upper, double I)
+    {
+      if (new_upper >= re) return;  // not inward -> nothing to do
+      if (new_upper >= rs)
+      {
+        // No conflict: stays at or above the lower boundary.
+        re = new_upper;
+        support_upper = I;
+      }
+      else if (I > support_lower)
+      {
+        // Conflict: would cross the lower boundary; new evidence wins -> collapse & re-justify.
+        rs = new_upper;
+        re = new_upper;
+        support_lower = I;
+        support_upper = I;
+      }
+      // else: conflicting, weaker evidence -> keep the higher-support boundary (no move).
+    }
+
+    // Symmetric counterpart: tighten the LOWER boundary up to new_lower; opposing = support_upper.
+    inline void tightenLower(int& rs, int& re, double& support_lower, double& support_upper, int new_lower, double I)
+    {
+      if (new_lower <= rs) return;  // not inward
+      if (new_lower <= re)
+      {
+        // No conflict: stays at or below the upper boundary.
+        rs = new_lower;
+        support_lower = I;
+      }
+      else if (I > support_upper)
+      {
+        rs = new_lower;
+        re = new_lower;
+        support_lower = I;
+        support_upper = I;
+      }
+    }
+  } // anonymous namespace
 
   // ---------------------------------------------------------------------------
   // ProteoformModel free methods
@@ -311,8 +364,153 @@ namespace OpenMS
     }
   }
 
-  void ProteoformTracker::narrowModifications_(ProteoformModel& /*mdl*/)
+  void ProteoformTracker::narrowModifications_(ProteoformModel& m)
   {
+    // --- Faithful per-fragment bracketing -------------------------------------------------------
+    // For each ambiguous modification (candidate_start < candidate_end), shrink the localization
+    // range using bracketing MappedFragments. A fragment brackets the range iff its backbone
+    // cleavage falls strictly inside it (it covers some, but not all, of the ambiguous residues).
+    // We test "PTM shift INSIDE this fragment's coverage" (base + mass_shift) vs "OUTSIDE" (base)
+    // against the fragment's observed mass at the per-level tolerance, then tighten the boundary the
+    // fragment constrains. Bidirectional intensity support: each boundary records the intensity that
+    // justified it; a later fragment that conflicts (would push a boundary past the opposing one)
+    // only wins if its intensity beats the opposing support (conflict -> higher-intensity-wins).
+    //
+    // FRAME ALIGNMENT (verified against T5 mapScanOntoModel_ + MS3FragmentMatcher::computeEquivalentIon):
+    //   m.modifications[i].candidate_start/end : FULL-PROTEIN 1-based residue range (seeded in T5).
+    //   m.fragments keys / cover_start / cover_end / ion_index : WINNER-REGION 1-based frame (T5).
+    //   Part-A theoreticals are computed on the WINNER-REGION substring, so baseline[type][k-1] is
+    //   the region-frame theoretical of ion (type, region-index k) -- the same frame as the keys.
+    //
+    //   A full-protein 1-based residue position `p` maps to the region 1-based position `p - ws`
+    //   (ws = max(region_start, 0)): residue p is at region 0-based (p-1)-ws, i.e. region 1-based
+    //   (p-1)-ws+1 = p-ws. Identity reduction: region == full => ws = 0 => region_pos == full_pos.
+    //   We tighten in the region frame, then convert the final boundaries back to full-protein
+    //   (full_pos = region_pos + ws) before storing, so the model keeps full-protein coordinates
+    //   consistent with how T5 seeded them and how the log/ProForma read them.
+    // -------------------------------------------------------------------------------------------
+    const int P = static_cast<int>(m.proteoform_sequence.size());
+    if (P <= 0 || m.modifications.empty() || m.fragments.empty()) return;
+
+    // Winner region resolved to [ws, we) (0-based, exclusive end); L = region residue count.
+    const int ws = (m.region_start < 0) ? 0 : m.region_start;
+    const int we = (m.region_end < 0) ? P : m.region_end;
+    const int L = we - ws;
+    if (L <= 0) return;
+
+    // The winner-region substring all theoreticals are computed on.
+    const String region_seq =
+      (m.region_start < 0) ? String(m.proteoform_sequence) : String(m.proteoform_sequence).substr(ws, L);
+
+    // Distinct ion-type chars actually observed in the mapped fragments (as strings), for Part A.
+    std::vector<std::string> ion_types;
+    {
+      std::set<char> seen;
+      for (const auto& kv : m.fragments)
+      {
+        const MappedFragment& f = kv.second;
+        if (f.ion_type.empty()) continue;
+        seen.insert(f.ion_type[0]);
+      }
+      for (char c : seen) ion_types.emplace_back(1, c);
+    }
+    if (ion_types.empty()) return;
+
+    // Process each ambiguous modification independently.
+    for (size_t mi = 0; mi < m.modifications.size(); ++mi)
+    {
+      ModificationState& mod = m.modifications[mi];
+      if (mod.candidate_start >= mod.candidate_end) continue;  // already localized / invalid
+
+      // Baseline = theoreticals of the proteoform with ALL OTHER mods applied, WITHOUT this mod.
+      // PTM positions handed to Part A must be in region-1-based coordinates.
+      std::vector<FragmentAnalysis::PTMSite> other_ptms;
+      for (size_t oi = 0; oi < m.modifications.size(); ++oi)
+      {
+        if (oi == mi) continue;
+        const ModificationState& om = m.modifications[oi];
+        const int os_region = om.candidate_start - ws;
+        const int oe_region = om.candidate_end - ws;
+        FragmentAnalysis::PTMSite site;
+        site.start_position = os_region;
+        site.end_position = oe_region;
+        site.position = (os_region + oe_region) / 2;
+        site.mass_shift = om.mass_shift;
+        other_ptms.push_back(site);
+      }
+      std::map<char, std::vector<double>> baseline;
+      FragmentAnalysis::computePTMAdjustedFragmentMasses(region_seq, other_ptms, ion_types, baseline);
+
+      // Ambiguous range in the region frame (1-based inclusive).
+      int rs_region = mod.candidate_start - ws;
+      int re_region = mod.candidate_end - ws;
+
+      for (const auto& kv : m.fragments)
+      {
+        const MappedFragment& f = kv.second;
+        if (f.ion_type.empty() || f.ion_index <= 0) continue;
+
+        // Bracketing test (region frame). f.cover_* are region-1-based inclusive (T5):
+        //   prefix b_k covers [1, k]      (k = f.ion_index = f.cover_end): brackets iff rs <= k < re
+        //   suffix y_k covers [L-k+1, L]  (c = f.cover_start = L-k+1):     brackets iff rs < c <= re
+        if (f.is_prefix)
+        {
+          if (!(rs_region <= f.cover_end && f.cover_end < re_region)) continue;
+        }
+        else
+        {
+          if (!(rs_region < f.cover_start && f.cover_start <= re_region)) continue;
+        }
+
+        // Best observation: prefer MS2, else MS3. Skip if neither present.
+        const FragmentObservation* obs =
+          f.best_ms2.has_value() ? &(*f.best_ms2) : (f.best_ms3.has_value() ? &(*f.best_ms3) : nullptr);
+        if (obs == nullptr) continue;
+
+        // Theoretical "without" this mod (region frame, 1-based index -> 0-based vector).
+        auto bit = baseline.find(f.ion_type[0]);
+        if (bit == baseline.end()) continue;
+        const std::vector<double>& masses = bit->second;
+        const int vi = f.ion_index - 1;
+        if (vi < 0 || vi >= static_cast<int>(masses.size())) continue;
+        const double base = masses[vi];
+        const double with = base + mod.mass_shift;
+
+        const double tol_abs = obs->observed_mass * config_.level(obs->ms_level).tolerance_ppm * 1e-6;
+        const bool matches_with = std::abs(obs->observed_mass - with) <= tol_abs;
+        const bool matches_without = std::abs(obs->observed_mass - base) <= tol_abs;
+
+        // Ambiguous fragment (matches both or neither) -> no information, skip.
+        if (matches_with == matches_without) continue;
+
+        const double I = obs->intensity;
+
+        if (matches_with)
+        {
+          // PTM shift IS inside this fragment's coverage.
+          //   prefix covering [1, k]: PTM is on residues rs..k -> tighten UPPER to k = f.cover_end.
+          //   suffix covering [c, L]: PTM is on residues c..re -> tighten LOWER to c = f.cover_start.
+          if (f.is_prefix)
+            tightenUpper(rs_region, re_region, mod.support_lower, mod.support_upper, f.cover_end, I);
+          else
+            tightenLower(rs_region, re_region, mod.support_lower, mod.support_upper, f.cover_start, I);
+        }
+        else
+        {
+          // PTM shift is OUTSIDE this fragment's coverage (complementary tighten).
+          //   prefix covering [1, k]: PTM is on residues k+1..re -> tighten LOWER to k+1.
+          //   suffix covering [c, L]: PTM is on residues rs..c-1 -> tighten UPPER to c-1.
+          if (f.is_prefix)
+            tightenLower(rs_region, re_region, mod.support_lower, mod.support_upper, f.cover_end + 1, I);
+          else
+            tightenUpper(rs_region, re_region, mod.support_lower, mod.support_upper, f.cover_start - 1, I);
+        }
+      }
+
+      // Convert the narrowed boundaries back to FULL-PROTEIN before storing.
+      mod.candidate_start = rs_region + ws;
+      mod.candidate_end = re_region + ws;
+    }
   }
 
   void ProteoformTracker::emitRow_(const ProteoformModel& /*mdl*/)

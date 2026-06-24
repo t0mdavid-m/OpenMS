@@ -39,6 +39,8 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 #include <OpenMS/DATASTRUCTURES/String.h>
 
+#include <map>
+#include <string>
 #include <vector>
 
 namespace OpenMS
@@ -124,6 +126,18 @@ namespace OpenMS
     /// {"b","c","y","z"} for EThcD/EtCID, {"a","b","c","x","y","z"} for UVPD.
     /// Defaults to {"b","y"} for unknown methods.
     static std::vector<std::string> getIonTypesForFragmentationMethod(const String& method);
+
+    /// Compute PTM-adjusted theoretical fragment masses for multiple ion types.
+    /// For each PTM site [start, end] (1-based), fragments that definitely contain the
+    /// region get the PTM mass added (b-ions from b(end) onward, y-ions from the side
+    /// that covers start). @p fragment_masses_map[type][i] is the theoretical mass of
+    /// ion (type, index = i+1), i.e. the 1-based ion index is the 0-based vector index + 1.
+    /// Isoleucine is treated as leucine for the mass calculation. Behavior is identical
+    /// to the formerly file-private helper this method was promoted from.
+    static void computePTMAdjustedFragmentMasses(const String& sequence,
+                                                 const std::vector<PTMSite>& ptm_sites,
+                                                 const std::vector<std::string>& ion_types,
+                                                 std::map<char, std::vector<double>>& fragment_masses_map);
 
     /// Constructor: takes a reference to the shared Config
     explicit FragmentAnalysis(const Config& config);

@@ -175,12 +175,29 @@ namespace
   }
 
 
+} // anonymous namespace
+
+
+  std::vector<std::string> FragmentAnalysis::getIonTypesForFragmentationMethod(const String& method)
+  {
+    String lower_method = method;
+    std::transform(lower_method.begin(), lower_method.end(), lower_method.begin(), ::tolower);
+
+    if (lower_method == "hcd") return {"b", "y"};
+    if (lower_method == "cid") return {"b", "y"};
+    if (lower_method == "etd") return {"c", "z"};
+    if (lower_method == "ethcd") return {"b", "c", "y", "z"};
+    if (lower_method == "etcid") return {"b", "c", "y", "z"};
+    if (lower_method == "uvpd") return {"a", "b", "c", "x", "y", "z"};
+    return {"b", "y"};  // default to HCD
+  }
+
   /// Calculate theoretical fragment masses for multiple ion types with PTM adjustments
   /// @param sequence the protein sequence
   /// @param ptm_sites PTM sites from FLASHExtender
   /// @param ion_types vector of ion type strings (e.g., {"a", "b", "c", "x", "y", "z"})
   /// @param fragment_masses_map output: map from ion type char to vector of masses
-  void calculatePTMAdjustedFragmentMassesMulti(
+  void FragmentAnalysis::computePTMAdjustedFragmentMasses(
       const String& sequence,
       const std::vector<PTMSite>& ptm_sites,
       const std::vector<std::string>& ion_types,
@@ -288,24 +305,6 @@ namespace
       }
       fragment_masses_map[ion_char] = std::move(masses);
     }
-  }
-
-
-} // anonymous namespace
-
-
-  std::vector<std::string> FragmentAnalysis::getIonTypesForFragmentationMethod(const String& method)
-  {
-    String lower_method = method;
-    std::transform(lower_method.begin(), lower_method.end(), lower_method.begin(), ::tolower);
-
-    if (lower_method == "hcd") return {"b", "y"};
-    if (lower_method == "cid") return {"b", "y"};
-    if (lower_method == "etd") return {"c", "z"};
-    if (lower_method == "ethcd") return {"b", "c", "y", "z"};
-    if (lower_method == "etcid") return {"b", "c", "y", "z"};
-    if (lower_method == "uvpd") return {"a", "b", "c", "x", "y", "z"};
-    return {"b", "y"};  // default to HCD
   }
 
   FragmentAnalysis::FragmentAnalysis(const Config& config)
@@ -673,7 +672,7 @@ namespace
 
     // 10. Calculate PTM-adjusted theoretical fragment masses for all configured ion types
     std::map<char, std::vector<double>> fragment_masses_map;
-    calculatePTMAdjustedFragmentMassesMulti(matching_sequence, local_ptm_sites, ion_types_str, fragment_masses_map);
+    FragmentAnalysis::computePTMAdjustedFragmentMasses(matching_sequence, local_ptm_sites, ion_types_str, fragment_masses_map);
 
     // 11. Match observed masses against PTM-adjusted theoretical masses (all ion types)
     for (Size peak_idx = 0; peak_idx < stored_ms2.size(); ++peak_idx)
