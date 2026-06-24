@@ -353,7 +353,8 @@ FLASHIda::FLASHIda(char* arg) :
         if (config_.level(2).selection != SelectionMetric::None)
         {
           // initiateNextLevel stamps each command's parent with the MS2 id (ctx.scan_id) at creation.
-          ms3_targeting = exploration_.initiateNextLevel(2, deconv_.storedMS2(), ctx.faims_cv, queue_, &ctx);
+          // 9b: pass the tracker so the proteoform model selects the MS3 targets (ADR-0002).
+          ms3_targeting = exploration_.initiateNextLevel(2, deconv_.storedMS2(), ctx.faims_cv, queue_, &ctx, &tracker_);
           for (auto& c : ms3_targeting.commands)
           {
             queue_.push(c);
@@ -557,6 +558,24 @@ FLASHIda::FLASHIda(char* arg) :
               {
                 float r = static_cast<float>(ms3_matches[0].total_match_count) / static_cast<float>(ms3_mass_count);
                 ms3_tic = r > 1.0f ? 1.0f : r;  // matched-fragment coverage of the MS3 deconvolution
+              }
+
+              // 9b Part 3: re-feed the MS3 result into the proteoform model so its fragments fold in
+              // (MS2 frame via ms3_matches[0].equiv_*/adjusted_mass; mapScanOntoModel_ handles the frame).
+              // Key on the SAME nominal mass the MS2 staged under (the MS2 precursor intact mass cached on
+              // the MS2 context). The parent-MS2 params are MS3 stage[0]; the captured ms2_ctx is ignored
+              // on re-feed (has_ms2_ctx is already true). Then re-finalize to re-pool (and T11 re-emit).
+              if (resolved.has_value() && resolved->num_stages >= 2 && ms3_spec != nullptr)
+              {
+                const int refeed_nominal =
+                    SpectralDeconvolution::getNominalMass(cached_ms2_ctx.ms1_precursor_mass);
+                Ms2Params parent_ms2_params{resolved->stages[0].collision_energy,
+                                            std::string(resolved->stages[0].activation_type),
+                                            resolved->stages[0].reaction_time};
+                tracker_.feedScan(refeed_nominal, /*ms_level=*/3, parent_ms2_params,
+                                  /*scan_id=*/tracking_id, *ms3_spec,
+                                  ms3_matches[0], ms3_matches[0].score, *resolved);
+                tracker_.finalize(refeed_nominal);
               }
             }
 

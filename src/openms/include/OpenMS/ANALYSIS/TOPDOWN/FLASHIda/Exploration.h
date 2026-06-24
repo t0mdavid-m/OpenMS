@@ -203,7 +203,11 @@ namespace OpenMS
                                       const MS3FragmentMatcher::ProteoformContext& proto_ctx = {},
                                       // F2: stage-1 scores of the selected fragment, forwarded to buildMS3
                                       // so MS3 exploration variants carry real *_s1 scalars (default = empty).
-                                      const FragmentAnalysis::FragmentScores& frag_scores = {});
+                                      const FragmentAnalysis::FragmentScores& frag_scores = {},
+                                      // 9b: per-ion best-MS2 params for MS3 stage[0] (ADR-0003). Defaulted so the
+                                      // MS2-exploration caller and direct-initiate tests compile unchanged. Only
+                                      // consulted on the MS3 (msn_level>=3) buildMS3 branch.
+                                      const Ms2Params* stage0_params = nullptr);
 
     /// Process returning exploration variant: deconvolve with correct precursor context,
     /// score, select winner, trigger next level. Returns FeedResultInfo with commands and metadata.
@@ -220,9 +224,14 @@ namespace OpenMS
 
     /// Generic MSn+1 follow-up after MSn processing. Returns commands plus fragment matching metadata.
     /// @param ms_ctx  Optional originating MS2 ScanCommand (needed for buildMS3 when next_level >= 3)
+    /// @param tracker Optional ProteoformTracker: when non-null and next_level >= 3 the model is the
+    ///        dispatch authority — it selects the MS3 targets (planNextScans) and Exploration builds
+    ///        them (single MS3, or the CE sweep when MS3 exploration is configured). nullptr keeps the
+    ///        legacy getTopFragmentMatches direct path (used by tests).
     NextLevelResult initiateNextLevel(int msn_level, const DeconvolvedSpectrum& result,
                                       double faims_cv, ScanCommandQueue& queue,
-                                      const ScanCommand* ms_ctx = nullptr);
+                                      const ScanCommand* ms_ctx = nullptr,
+                                      ProteoformTracker* tracker = nullptr);
 
     /// Number of currently active exploration groups
     int activeGroupCount() const;

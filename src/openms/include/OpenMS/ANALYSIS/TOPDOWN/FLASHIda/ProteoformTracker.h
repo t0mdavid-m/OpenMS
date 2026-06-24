@@ -68,6 +68,20 @@ namespace OpenMS
     Ms2Params params;           ///< For an MS3 obs: the parent MS2's params
     double frag_mz = 0;         ///< Isolation m/z for targeting this fragment in MS3
     int frag_charge = 0;        ///< Charge state for targeting this fragment in MS3
+    double iso_width = 0;       ///< Isolation-window span (mz2 - mz1 from PeakGroup::getMzRange) for MS3 targeting
+  };
+
+  /// A single MS3 acquisition target the model selected. The executor (Exploration) builds the
+  /// MS3 command (single scan or CE sweep) from these descriptors; the tracker only selects.
+  struct Ms3Target
+  {
+    std::string ion_type;       ///< Fragment ion type string (e.g. "b", "y"); first char drives the command
+    int ion_index = 0;          ///< Fragment ion index (winner-region frame)
+    double frag_mz = 0;         ///< Isolation m/z of the fragment precursor
+    int frag_charge = 0;        ///< Charge state of the fragment precursor
+    double frag_mass = 0;       ///< Monoisotopic mass of the fragment (MS2 frame) for PeakGroup reconstruction
+    double iso_width = 0;       ///< Isolation-window span for the MS3 isolation
+    Ms2Params stage0_params;    ///< Per-ion best MS2 params -> MS3 stage[0] (ADR-0003)
   };
 
   /// Key identifying a fragment ion: (ion_type, ion_index)
@@ -108,9 +122,10 @@ namespace OpenMS
   struct PeakRecord
   {
     double mono_mass = 0;
-    double mz = 0;       ///< Isolation centre m/z: (mz1+mz2)/2 from PeakGroup::getMzRange(charge)
-    int charge = 0;      ///< getMaxIntensityAbsCharge() — same charge used for mz derivation
+    double mz = 0;         ///< Isolation centre m/z: (mz1+mz2)/2 from PeakGroup::getMzRange(charge)
+    int charge = 0;        ///< getMaxIntensityAbsCharge() — same charge used for mz derivation
     double intensity = 0;
+    double iso_width = 0;  ///< Isolation-window span (mz2 - mz1) — matches the direct MS3 path's wend-wstart
   };
 
   /// A deconvolved scan awaiting integration into a ProteoformModel
@@ -179,13 +194,16 @@ namespace OpenMS
     void finalize(int nominal_mass);
 
     /**
-     * @brief Plan the next acquisition scans for @p nominal_mass.
+     * @brief Plan the next MS3 acquisition targets for @p nominal_mass.
      *
-     * Inspects the current ProteoformModel and returns a list of ScanCommands
-     * for the caller to push onto @p queue. Returns empty if no scans are needed
-     * or the model is finalized.
+     * Inspects the current ProteoformModel and returns a list of MS3 targets (descriptors,
+     * not commands) the executor (Exploration) builds and dispatches. The model is the
+     * dispatch authority (ADR-0002); it selects WHICH fragments to characterize, ordered by
+     * the configured CharacterizationObjective (Ambiguity | Coverage), bounded by the MS3
+     * budget, deduped, and skipping any fragment with no best-MS2 observation. Returns empty
+     * if there is no identified model, no MS2 context, or no MS3 config.
      */
-    std::vector<ScanCommand> planNextScans(int nominal_mass, ScanCommandQueue& queue);
+    std::vector<Ms3Target> planNextScans(int nominal_mass);
 
     /// Return a pointer to the model for @p nominal_mass, or nullptr if absent.
     const ProteoformModel* model(int nominal_mass) const;

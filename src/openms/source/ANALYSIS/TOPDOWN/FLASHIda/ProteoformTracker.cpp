@@ -36,6 +36,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/IdaLogger.h>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <map>
@@ -92,6 +93,18 @@ namespace OpenMS
         support_lower = I;
         support_upper = I;
       }
+    }
+
+    // Does fragment @p f bracket the (region-frame, 1-based inclusive) range [rs, re]? A fragment
+    // brackets the range iff its backbone cleavage falls strictly inside it (it covers SOME but not
+    // ALL of the ambiguous residues). Identical predicate used by narrowModifications_:
+    //   prefix b_k covers [1, k]      (k = f.cover_end):   brackets iff rs <= k < re
+    //   suffix y_k covers [L-k+1, L]  (c = f.cover_start):  brackets iff rs < c <= re
+    inline bool fragmentBrackets(const MappedFragment& f, int rs, int re)
+    {
+      if (f.ion_type.empty() || f.ion_index <= 0) return false;
+      if (f.is_prefix) return (rs <= f.cover_end && f.cover_end < re);
+      return (rs < f.cover_start && f.cover_start <= re);
     }
   } // anonymous namespace
 
@@ -200,6 +213,9 @@ namespace OpenMS
       pr.mz = (mz1 + mz2) / 2.0;
       pr.charge = charge;
       pr.intensity = static_cast<double>(pg.getChargeIntensity(charge));
+      // Isolation-window span, captured the same way the direct MS3 path derives iso_width
+      // (wend - wstart, Exploration.cpp), so a model-planned MS3 isolates the identical window.
+      pr.iso_width = mz2 - mz1;
       ps.peaks.push_back(pr);
     }
     m.pending.push_back(std::move(ps));
@@ -260,9 +276,140 @@ namespace OpenMS
     m.finalized = true;
   }
 
-  std::vector<ScanCommand> ProteoformTracker::planNextScans(int /*nominal_mass*/, ScanCommandQueue& /*queue*/)
+  std::vector<Ms3Target> ProteoformTracker::planNextScans(int nominal_mass)
   {
-    return {};
+    auto it = models_.find(nominal_mass);
+    if (it == models_.end()) return {};
+    ProteoformModel& m = it->second;
+    // No identified model / no captured MS2 context -> no plan (ADR-0002).
+    if (m.proteoform_sequence.empty() || !m.has_ms2_ctx) return {};
+
+    const CharacterizationObjective obj = config_.characterization().objective;
+    const int budget = config_.level(2).max_targets;  // reuse the MS2 max_targets as the MS3 budget
+    if (budget <= 0) return {};
+
+    const int P = static_cast<int>(m.proteoform_sequence.size());
+    if (P <= 0) return {};
+    const int ws = (m.region_start < 0) ? 0 : m.region_start;
+    const int we = (m.region_end < 0) ? P : m.region_end;
+    const int L = we - ws;  // winner-region residue count (fragment frame)
+    if (L <= 0) return {};
+
+    // --- 1) Choose ordered target fragments by objective ----------------------------------------
+    // Each chosen fragment MUST carry a best-MS2 observation (the MS3 isolation descriptors come
+    // from it). Dedup by FragmentKey. Bounded by budget.
+    std::vector<const MappedFragment*> targets;
+    std::set<FragmentKey> chosen;
+
+    auto add_target = [&](const MappedFragment* f) -> bool {
+      if (f == nullptr || !f->best_ms2.has_value()) return false;
+      const FragmentKey key{f->ion_type, f->ion_index};
+      if (chosen.count(key)) return false;
+      chosen.insert(key);
+      targets.push_back(f);
+      return static_cast<int>(targets.size()) < budget;  // false once the budget is full
+    };
+
+    if (obj == CharacterizationObjective::Ambiguity)
+    {
+      // For each still-ambiguous modification (widest range first), pick the strongest best-MS2
+      // fragment that brackets that range (region frame). modifications are full-protein 1-based
+      // ranges; convert to the region frame via -ws to match the fragment keys.
+      std::vector<const ModificationState*> ambiguous;
+      for (const ModificationState& mod : m.modifications)
+        if (mod.candidate_start < mod.candidate_end) ambiguous.push_back(&mod);
+      std::sort(ambiguous.begin(), ambiguous.end(),
+                [](const ModificationState* a, const ModificationState* b) {
+                  return (a->candidate_end - a->candidate_start) > (b->candidate_end - b->candidate_start);
+                });
+
+      for (const ModificationState* mod : ambiguous)
+      {
+        const int rs_region = mod->candidate_start - ws;
+        const int re_region = mod->candidate_end - ws;
+        const MappedFragment* best = nullptr;
+        for (const auto& kv : m.fragments)
+        {
+          const MappedFragment& f = kv.second;
+          if (!f.best_ms2.has_value()) continue;
+          if (chosen.count(FragmentKey{f.ion_type, f.ion_index})) continue;
+          if (!fragmentBrackets(f, rs_region, re_region)) continue;
+          if (best == nullptr || f.best_ms2->intensity > best->best_ms2->intensity) best = &f;
+        }
+        if (best != nullptr && !add_target(best)) break;
+      }
+    }
+    else  // CharacterizationObjective::Coverage
+    {
+      // Find the largest uncovered residue gaps (complement of the merged coverage intervals in the
+      // winner-region frame), then for each gap pick the strongest best-MS2 fragment spanning or
+      // adjacent to it (its coverage touches the gap). Mirrors coveragePct's merge logic.
+      std::vector<std::pair<int, int>> intervals;  // covered [cs, ce], region-1-based inclusive, clamped to [1, L]
+      for (const auto& kv : m.fragments)
+      {
+        const MappedFragment& f = kv.second;
+        const int cs = std::max(f.cover_start, 1);
+        const int ce = std::min(f.cover_end, L);
+        if (cs <= ce) intervals.emplace_back(cs, ce);
+      }
+      std::sort(intervals.begin(), intervals.end());
+
+      // Build the complement (uncovered) gaps over [1, L].
+      std::vector<std::pair<int, int>> gaps;
+      int cursor = 1;
+      for (const auto& iv : intervals)
+      {
+        if (iv.first > cursor) gaps.emplace_back(cursor, iv.first - 1);
+        cursor = std::max(cursor, iv.second + 1);
+      }
+      if (cursor <= L) gaps.emplace_back(cursor, L);
+      // Largest gaps first.
+      std::sort(gaps.begin(), gaps.end(),
+                [](const std::pair<int, int>& a, const std::pair<int, int>& b) {
+                  return (a.second - a.first) > (b.second - b.first);
+                });
+
+      for (const auto& gap : gaps)
+      {
+        const MappedFragment* best = nullptr;
+        for (const auto& kv : m.fragments)
+        {
+          const MappedFragment& f = kv.second;
+          if (!f.best_ms2.has_value()) continue;
+          if (chosen.count(FragmentKey{f.ion_type, f.ion_index})) continue;
+          // Spanning OR adjacent: the fragment's coverage interval touches (or abuts) the gap.
+          if (f.cover_end < gap.first - 1 || f.cover_start > gap.second + 1) continue;
+          if (best == nullptr || f.best_ms2->intensity > best->best_ms2->intensity) best = &f;
+        }
+        if (best != nullptr && !add_target(best)) break;
+      }
+    }
+
+    if (targets.empty()) return {};
+
+    // Strongest best-MS2 first within the chosen set (the executor dispatches in this order).
+    std::sort(targets.begin(), targets.end(),
+              [](const MappedFragment* a, const MappedFragment* b) {
+                return a->best_ms2->intensity > b->best_ms2->intensity;
+              });
+
+    // --- 2) Emit one Ms3Target per chosen fragment ----------------------------------------------
+    std::vector<Ms3Target> out;
+    out.reserve(targets.size());
+    for (const MappedFragment* f : targets)
+    {
+      const FragmentObservation& o = *f->best_ms2;  // guaranteed present by selection
+      Ms3Target t;
+      t.ion_type = f->ion_type;
+      t.ion_index = f->ion_index;
+      t.frag_mz = o.frag_mz;
+      t.frag_charge = o.frag_charge;
+      t.frag_mass = o.observed_mass;      // MS2-frame fragment mono mass (PeakGroup reconstruction)
+      t.iso_width = o.iso_width;          // isolation span (matches the direct path's wend-wstart)
+      t.stage0_params = o.params;         // per-ion best MS2 params -> MS3 stage[0] (ADR-0003)
+      out.push_back(std::move(t));
+    }
+    return out;
   }
 
   const ProteoformModel* ProteoformTracker::model(int nominal_mass) const
@@ -365,6 +512,7 @@ namespace OpenMS
       double intensity = 0.0;
       double matched_mz = 0.0;
       int matched_charge = 0;
+      double matched_iso_width = 0.0;
       {
         double best_diff = std::numeric_limits<double>::max();
         bool within_tol = false;
@@ -381,6 +529,7 @@ namespace OpenMS
             intensity = pr.intensity;
             matched_mz = pr.mz;
             matched_charge = pr.charge;
+            matched_iso_width = pr.iso_width;
           }
           else if (in_tol == within_tol && diff < best_diff)
           {
@@ -388,6 +537,7 @@ namespace OpenMS
             intensity = pr.intensity;
             matched_mz = pr.mz;
             matched_charge = pr.charge;
+            matched_iso_width = pr.iso_width;
           }
         }
       }
@@ -419,6 +569,7 @@ namespace OpenMS
       obs.params = ps.params;
       obs.frag_mz = matched_mz;
       obs.frag_charge = matched_charge;
+      obs.iso_width = matched_iso_width;
 
       if (ps.ms_level == 3)
       {
@@ -524,14 +675,7 @@ namespace OpenMS
         // Bracketing test (region frame). f.cover_* are region-1-based inclusive (T5):
         //   prefix b_k covers [1, k]      (k = f.ion_index = f.cover_end): brackets iff rs <= k < re
         //   suffix y_k covers [L-k+1, L]  (c = f.cover_start = L-k+1):     brackets iff rs < c <= re
-        if (f.is_prefix)
-        {
-          if (!(rs_region <= f.cover_end && f.cover_end < re_region)) continue;
-        }
-        else
-        {
-          if (!(rs_region < f.cover_start && f.cover_start <= re_region)) continue;
-        }
+        if (!fragmentBrackets(f, rs_region, re_region)) continue;
 
         // Best observation: prefer MS2, else MS3. Skip if neither present.
         const FragmentObservation* obs =

@@ -114,7 +114,8 @@ namespace OpenMS
       ScanCommandQueue& queue, const MSSpectrum* source_spectrum, const ScanCommand* ms_ctx,
       char ion_type, int frag_index,
       const MS3FragmentMatcher::ProteoformContext& proto_ctx,
-      const FragmentAnalysis::FragmentScores& frag_scores)
+      const FragmentAnalysis::FragmentScores& frag_scores,
+      const Ms2Params* stage0_params)
   {
     std::vector<ScanCommand> commands;
 
@@ -181,7 +182,8 @@ namespace OpenMS
       {
         cmd = queue.buildMS3(*ms_ctx, variant_config,
                              precursor_mz, charge, isolation_width, ms_ctx->scan_id,
-                             ion_type, frag_index, expl_priority, frag_scores);  // F2: real stage-1 scalars
+                             ion_type, frag_index, expl_priority, frag_scores,  // F2: real stage-1 scalars
+                             stage0_params);  // 9b: model's per-ion best-MS2 params -> MS3 stage[0] (ADR-0003)
       }
       else
       {
@@ -550,6 +552,16 @@ namespace OpenMS
       }
     }
 
+    // 9b: finalize the proteoform model NOW (before the next-level MS3 dispatch below), so the model is
+    // the dispatch authority — initiateNextLevel -> planNextScans needs the winner proteoform seeded and
+    // every staged scan pooled. All variants have already fed (feedScan at :385 runs per variant before
+    // this group-completing call). Runs exactly once per completed group while `group` is still valid;
+    // tracker is nullptr only in the ExplorationTestAccess bypass path. (Was previously after dispatch.)
+    if (tracker != nullptr)
+    {
+      tracker->finalize(SpectralDeconvolution::getNominalMass(group.precursor_mass));
+    }
+
     if (group.baseline_failed || best_idx < 0)
     {
       // Empty-baseline abort (or, defensively, no scorable variant): no winner, no follow-up scan.
@@ -634,7 +646,7 @@ namespace OpenMS
         std::cout << "exploration call site" << std::endl;
         auto next_nlr = initiateNextLevel(group.msn_level,
             group.variants[best_idx].result, group.faims_cv, queue,
-            &group.variants[best_idx].cmd);
+            &group.variants[best_idx].cmd, tracker);
         info.commands.insert(info.commands.end(), next_nlr.commands.begin(), next_nlr.commands.end());
       }
     }
@@ -659,14 +671,7 @@ namespace OpenMS
     for (const auto& vr : group.variants)
       variant_tracking_map_.erase(queue.decode(vr.tracking_id));
 
-    // Group is complete (all variants received, winner chosen or aborted): finalize the proteoform
-    // model for this precursor — pick the best proteoform and pool every staged scan's fragments.
-    // Runs exactly once per completed group, while `group` is still valid. tracker is nullptr only
-    // in the ExplorationTestAccess bypass path.
-    if (tracker != nullptr)
-    {
-      tracker->finalize(SpectralDeconvolution::getNominalMass(group.precursor_mass));
-    }
+    // (Model finalize was hoisted above, before the next-level MS3 dispatch — 9b.)
 
     active_groups_.erase(git);
     return info;
@@ -674,7 +679,7 @@ namespace OpenMS
 
   Exploration::NextLevelResult Exploration::initiateNextLevel(int msn_level,
       const DeconvolvedSpectrum& result, double faims_cv, ScanCommandQueue& queue,
-      const ScanCommand* ms_ctx)
+      const ScanCommand* ms_ctx, ProteoformTracker* tracker)
   {
     NextLevelResult nlr;
 
@@ -772,6 +777,134 @@ namespace OpenMS
     ScanConfig next_scan_config = next_cfg.scans[0];
 
     int charge_floor = this_cfg.min_charge;
+
+    // 9b: model-driven MS3 dispatch. When a tracker is present, we are about to plan MS3, AND this
+    // precursor has an IDENTIFIED proteoform model, the model is the dispatch authority (ADR-0002):
+    // it SELECTS which fragments to characterize (planNextScans), and Exploration BUILDS them here —
+    // a single MS3 per target, or the CE sweep when MS3 exploration is configured (stage[0] = the
+    // target's best-MS2 params). The fragment-selection + proto_ctx + nlr MS2-id-row metadata above
+    // are untouched (they still drive the MS2 identification row).
+    //
+    // Authority gate = an identified model exists for this precursor. Only the exploration path feeds
+    // the tracker (Exploration::feedResultImpl_), so the regular non-exploration MS2->MS3 path has no
+    // model -> it falls through to the legacy getTopFragmentMatches direct path UNCHANGED. Likewise
+    // tracker==nullptr (tests) falls through.
+    const int nominal_mass = (ms_ctx != nullptr) ? SpectralDeconvolution::getNominalMass(ms_ctx->mono_mass) : 0;
+    const ProteoformModel* model = (tracker != nullptr && next_level >= 3 && ms_ctx != nullptr)
+        ? tracker->model(nominal_mass) : nullptr;
+    if (model != nullptr && !model->proteoform_sequence.empty())
+    {
+      auto targets = tracker->planNextScans(nominal_mass);
+
+      for (const Ms3Target& target : targets)
+      {
+        const int frag_charge = std::abs(target.frag_charge);
+        if (charge_floor > 0 && frag_charge < charge_floor) continue;
+        const char ion_type = target.ion_type.empty() ? '\0' : target.ion_type[0];
+
+        if (config_.hasExploration(next_level))
+        {
+          // CE sweep: reconstruct the minimal PeakGroup initiate() needs from the target descriptors
+          // (mono_mass, charge, isolation window), exactly as the legacy sweep path builds frag_pg.
+          const double half = target.iso_width / 2.0;
+          const double wstart = target.frag_mz - half;
+          const double wend = target.frag_mz + half;
+          PeakGroup frag_pg(frag_charge, frag_charge, true);
+          frag_pg.setMonoisotopicMass(target.frag_mass);
+          FLASHHelperClasses::LogMzPeak lp_lo;
+          lp_lo.mz = wstart;
+          lp_lo.abs_charge = frag_charge;
+          frag_pg.push_back(lp_lo);
+          FLASHHelperClasses::LogMzPeak lp_hi;
+          lp_hi.mz = wend;
+          lp_hi.abs_charge = frag_charge;
+          frag_pg.push_back(lp_hi);
+
+          auto sub_cmds = initiate(next_level, frag_pg, frag_charge, queue, &result.getOriginalSpectrum(), ms_ctx,
+                                   ion_type, target.ion_index, proto_ctx, {}, &target.stage0_params);
+          nlr.commands.insert(nlr.commands.end(), sub_cmds.begin(), sub_cmds.end());
+
+          for (size_t sci = 0; sci < sub_cmds.size(); ++sci)
+          {
+            MS2Context mc;
+            mc.proteoform_sequence = nlr.proteoform_sequence;
+            mc.start_pos = proto_ctx.region_start;
+            mc.end_pos = proto_ctx.region_end;
+            mc.ptm_sites = proto_ctx.ptm_sites;
+            mc.ms1_precursor_mass = ms_ctx->mono_mass;
+            mc.ms1_precursor_mz = ms_ctx->stages[0].precursor_mz;
+            mc.ms1_precursor_charge = ms_ctx->stages[0].charge_state;
+            mc.fragment_ion_type = ion_type;
+            mc.fragment_ion_index = target.ion_index;
+            mc.fragment_mass = target.frag_mass;
+            mc.fragment_mz = target.frag_mz;
+            mc.fragment_charge = frag_charge;
+            mc.ms2_isolation_width = ms_ctx->stages[0].isolation_width;
+            mc.ms2_charge_intensity = ms_ctx->precursor_intensity;
+            mc.ms2_window_snr = ms_ctx->window_snr;
+            if (sub_cmds[sci].num_stages >= 2)
+            {
+              const ScanCommand& sub = sub_cmds[sci];
+              mc.ms3_isolation_width = sub.stages[1].isolation_width;
+              mc.ms3_charge_intensity = sub.precursor_intensity_s1;
+              mc.ms3_window_snr = sub.window_snr;
+            }
+            nlr.ms3_contexts.push_back(mc);
+          }
+        }
+        else
+        {
+          // Single MS3: build directly from the target descriptors, applying the model's stage[0].
+          ScanCommand cmd = queue.buildMS3(*ms_ctx, next_scan_config, target.frag_mz, frag_charge,
+                                           target.iso_width, ms_ctx->scan_id,
+                                           ion_type, target.ion_index, 1, {}, &target.stage0_params);
+          cmd.faims_cv = faims_cv;
+
+          // Item 2: stamp the MS3 fragment-window SNR onto the command before push (same inputs/formula
+          // as the legacy direct path — computed over the MS2 source spectrum).
+          if (cmd.num_stages >= 2)
+          {
+            const double half3 = cmd.stages[1].isolation_width / 2.0;
+            cmd.window_snr = FragmentAnalysis::windowSnr(result.getOriginalSpectrum(),
+                cmd.stages[1].precursor_mz - half3, cmd.stages[1].precursor_mz + half3,
+                cmd.precursor_intensity_s1);
+          }
+
+          std::string id_str = ScanCommandQueue::encode(cmd.scan_id);
+          std::cout << "[TRACK-CREATE] id=" << id_str
+                    << " ms_level=" << next_level << " type=next_level"
+                    << std::endl;
+
+          nlr.commands.push_back(cmd);
+
+          MS2Context mc;
+          mc.proteoform_sequence = nlr.proteoform_sequence;
+          mc.start_pos = proto_ctx.region_start;
+          mc.end_pos = proto_ctx.region_end;
+          mc.ptm_sites = proto_ctx.ptm_sites;
+          mc.ms1_precursor_mass = ms_ctx->mono_mass;
+          mc.ms1_precursor_mz = ms_ctx->stages[0].precursor_mz;
+          mc.ms1_precursor_charge = ms_ctx->stages[0].charge_state;
+          mc.fragment_ion_type = ion_type;
+          mc.fragment_ion_index = target.ion_index;
+          mc.fragment_mass = target.frag_mass;
+          mc.fragment_mz = target.frag_mz;
+          mc.fragment_charge = frag_charge;
+          mc.ms2_isolation_width = ms_ctx->stages[0].isolation_width;
+          mc.ms2_charge_intensity = ms_ctx->precursor_intensity;
+          mc.ms2_window_snr = ms_ctx->window_snr;
+          if (cmd.num_stages >= 2)
+          {
+            mc.ms3_isolation_width = cmd.stages[1].isolation_width;
+            mc.ms3_charge_intensity = cmd.precursor_intensity_s1;
+            mc.ms3_window_snr = cmd.window_snr;
+          }
+          nlr.ms3_contexts.push_back(mc);
+        }
+      }
+
+      return nlr;
+    }
 
     if (config_.hasExploration(next_level))
     {
