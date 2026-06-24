@@ -557,6 +557,7 @@ namespace
 
     // === Diagnostic Output: Proteoform and PTM sites ===
     const auto& best_hit = proteoform_hits[0];
+    result.score = best_hit.getScore();
 
     // Print matched proteoform sequence (using FLASHExtender truncation info)
     // Note: FLASHExtender positions are 1-based, convert to 0-based for substr
