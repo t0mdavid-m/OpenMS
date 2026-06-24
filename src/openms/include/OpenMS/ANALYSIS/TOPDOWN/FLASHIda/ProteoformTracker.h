@@ -38,6 +38,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/IdaLogger.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms2Params.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 #include <OpenMS/config.h>
@@ -51,14 +52,6 @@
 
 namespace OpenMS
 {
-
-  /// MS2 acquisition parameters carried with each observation
-  struct Ms2Params
-  {
-    double collision_energy = 0;
-    std::string activation_type;
-    double reaction_time = 0;
-  };
 
   /// A single fragment observation, either from MS2 or MS3
   struct FragmentObservation

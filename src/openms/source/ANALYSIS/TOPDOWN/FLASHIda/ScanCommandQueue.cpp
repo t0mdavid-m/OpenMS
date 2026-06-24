@@ -295,7 +295,8 @@ namespace OpenMS
   ScanCommand ScanCommandQueue::buildMS3(const ScanCommand& ms2_ctx, const ScanConfig& ms3_config,
                                           double frag_mz, int frag_charge, double iso_width, int parent_scan_id,
                                           char ion_type, int frag_index, int priority,
-                                          const FragmentAnalysis::FragmentScores& frag_scores)
+                                          const FragmentAnalysis::FragmentScores& frag_scores,
+                                          const Ms2Params* stage0_params)
   {
     std::lock_guard<std::mutex> lock(queue_mutex_);
     ScanCommand cmd{};
@@ -333,6 +334,18 @@ namespace OpenMS
 
     // Stage 0: MS2 precursor (from MS2 context)
     cmd.stages[0] = ms2_ctx.stages[0];
+
+    // Stage 0 override: if caller supplies per-ion optimised MS2 params, apply them now.
+    // Precursor mz/isolation_width/charge_state are NOT overridden — those come from ms2_ctx
+    // and describe the physical isolation window, which is fixed by the original MS2.
+    if (stage0_params != nullptr)
+    {
+      cmd.stages[0].collision_energy = stage0_params->collision_energy;
+      std::strncpy(cmd.stages[0].activation_type, stage0_params->activation_type.c_str(),
+                   sizeof(cmd.stages[0].activation_type) - 1);
+      cmd.stages[0].activation_type[sizeof(cmd.stages[0].activation_type) - 1] = '\0';
+      cmd.stages[0].reaction_time = stage0_params->reaction_time;
+    }
 
     // Stage 1: Fragment target
     cmd.stages[1].precursor_mz = frag_mz;

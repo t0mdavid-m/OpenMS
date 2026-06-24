@@ -35,8 +35,9 @@
 #pragma once
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
-#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms2Params.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 
 #include <chrono>
@@ -76,10 +77,13 @@ namespace OpenMS
 
     /// Build MS3 ScanCommand from MS2 context + fragment target + MS3 config for CE/activation.
     /// parent_scan_id is MANDATORY (the immediate parent's tracking id); stamped at creation.
+    /// stage0_params: if non-null, overrides the stage[0] CE/activation/reaction_time copied from
+    /// ms2_ctx with per-ion optimised MS2 parameters (caller wiring is a later task).
     ScanCommand buildMS3(const ScanCommand& ms2_ctx, const ScanConfig& ms3_config,
                          double frag_mz, int frag_charge, double iso_width, int parent_scan_id,
                          char ion_type = '\0', int frag_index = 0, int priority = 1,
-                         const FragmentAnalysis::FragmentScores& frag_scores = {});
+                         const FragmentAnalysis::FragmentScores& frag_scores = {},
+                         const Ms2Params* stage0_params = nullptr);
 
     /// Create an MS1 survey scan command from current config
     ScanCommand makeMS1() const;
