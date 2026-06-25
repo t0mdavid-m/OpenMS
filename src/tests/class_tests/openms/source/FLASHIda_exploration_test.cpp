@@ -697,89 +697,6 @@ namespace
   const std::string ms2_tsv_path = "../../FlashIDA/test-data/spectra/ms2_hcd_fragment.txt";
   const std::string ms2_cytc_path = "../../FlashIDA/test-data/spectra/ms2_cytc_scan149.txt";
 
-  // Config with ms2.min_charge set impossibly high — all fragments should be filtered
-  const char* ms2_min_charge_config = R"({
-    "deconvolution": {
-      "score_threshold": 0.0,
-      "tqscore_threshold": 0.9,
-      "min_charge": 1,
-      "max_charge": 50,
-      "min_mass": 100,
-      "max_mass": 50000,
-      "tol": [10, 10, 10]
-    },
-    "precursor_selection": {
-      "RT_window": 180,
-      "target_mode": 0,
-      "IDScore": false,
-      "AllCharges": false,
-      "HCDEnergy": 29,
-      "strict_inclusion": false,
-      "tie_threshold": 0.1
-    },
-    "tagging": {
-      "min_tag_length": 3,
-      "max_tag_length": 8,
-      "max_ptm_count": 3,
-      "max_flanking_mass_diff": 50000
-    },
-    "quantification": {
-      "enabled": false,
-      "reporter_mz_tol": 0.002,
-      "fold_change_threshold": 1.4
-    },
-    "faims": {
-      "cv_values": [-50],
-      "max_cv_skip": 0,
-      "cv_precursor_threshold": 15
-    },
-    "ms_settings": {
-      "ms1": {
-        "analyzer": "Orbitrap",
-        "first_mass": 500,
-        "last_mass": 2000,
-        "resolution": 120000,
-        "agc_target": 800000,
-        "max_it": 246
-      },
-      "ms2": [
-        {
-          "analyzer": "Orbitrap",
-          "activation": "HCD",
-          "collision_energy": 29,
-          "resolution": 120000
-        }
-      ],
-      "ms3": [
-        {
-          "analyzer": "Orbitrap",
-          "activation": "HCD",
-          "collision_energy": 35,
-          "resolution": 60000
-        }
-      ]
-    },
-    "scheduling": {
-      "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": false, "value_ms": 30000 }
-    },
-    "files": {
-      "target_logs": [],
-      "fasta": "",
-      "inclusion_list": "",
-      "ptm_list": ""
-    },
-    "characterization": {
-      "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
-    },
-    "conditional_ms2": false,
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "intensity", "max_targets": 3, "min_charge": 99 },
-      "ms3": { "selection": "none" }
-    }
-  })";
-
   // Config with 3-entry tol and MS2 exploration tolerance override
   const char* exploration_tolerance_config = R"({
     "deconvolution": {
@@ -1136,8 +1053,9 @@ START_SECTION(ms3_exploration_winner_selection_and_cleanup)
   TEST_EQUAL(last_info.winner_tracking_id.empty(), false)
   TEST_EQUAL(last_info.winner_tracking_id, std::string(cmds[3].scan_description).substr(0, 3))
 
-  // ms3_exploration_config has no overrides, so feedResultImpl_() takes
-  // the initiateNextLevel path which produces 0 commands for synthetic data.
+  // With synthetic data there is no identified model, so the model gate in
+  // feedResultImpl_() does not fire and initiateNextLevel returns 0 commands
+  // (the legacy MS3 emitter is gone as of M3).
   // MS3 command format (num_stages=2, priority=1) is verified in
   // ms3_exploration_variants_use_buildMS3 via the initiate() path.
 }
@@ -1253,45 +1171,6 @@ START_SECTION(ms1_resumes_after_exploration_completes)
   // MS1 cycle-time injection resumes after exploration completes: more than one MS1 survey was
   // emitted + fed (the post-exploration MS1 was injected only because exploration was finished).
   TEST_EQUAL(a.ms1_cmds.size() >= 2, true)
-}
-END_SECTION
-
-START_SECTION(ms3_exploration_creates_child_groups)
-{
-  // Load real MS2 spectrum data for fragment matching
-  auto ms2_scans = loadTsvScans(ms2_cytc_path);
-  ABORT_IF(ms2_scans.empty());
-  const auto& ms2_data = ms2_scans[0];
-
-  Config cfg{std::string(ms3_exploration_config)};
-  ScanCommandQueue queue(cfg);
-  Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
-  FragmentAnalysis fragments(cfg);
-  Exploration exploration(cfg, fragments);
-
-  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
-  auto cmds = exploration.initiate(2, pg, 3, queue);
-  TEST_EQUAL(static_cast<int>(cmds.size()), 5)
-  // MS2-level exploration variants should have priority 2
-  for (int i = 0; i < 5; ++i)
-  {
-    TEST_EQUAL(cmds[i].priority, 2)
-  }
-
-  // Deconvolve once without precursor constraint (test has no matched MS1)
-  deconv.deconvolveMSn(ms2_data.mzs.data(), ms2_data.ints.data(),
-                        static_cast<int>(ms2_data.mzs.size()), ms2_data.rt, 0.0, 0);
-  DeconvolvedSpectrum ms2_deconv = deconv.storedMS2();
-
-  for (int i = 0; i < 5; ++i)
-  {
-    int tracking_id = queue.decode(std::string(cmds[i].scan_description).substr(0, 3));
-    ExplorationTestAccess::feedResult(exploration,tracking_id, ms2_deconv, ms2_data.rt, queue);
-  }
-
-  int ms3_group_count = exploration.activeGroupCount();
-  TEST_EQUAL(ms3_group_count > 0, true)
-  TEST_EQUAL(ms3_group_count <= 3, true)
 }
 END_SECTION
 
@@ -2083,35 +1962,6 @@ START_SECTION(selection_without_next_level_scan_config_rejected)
 }
 END_SECTION
 
-START_SECTION(initiateNextLevel_ms2_min_charge_filters_fragments)
-{
-  Config cfg{std::string(ms2_min_charge_config)};
-  ScanCommandQueue queue(cfg);
-  FragmentAnalysis fragments(cfg);
-  Exploration exploration(cfg, fragments);
-
-  // Load real MS2 spectrum that normally produces fragment matches
-  auto scans = loadTsvScans(ms2_tsv_path);
-  ABORT_IF(scans.empty())
-
-  // Deconvolve the MS2 spectrum
-  Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
-  for (const auto& scan : scans)
-  {
-    deconv.deconvolveMSn(scan.mzs.data(), scan.ints.data(), (int)scan.mzs.size(),
-                         scan.rt, 12000.0, 10);
-  }
-
-  auto precursor_pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
-  ScanCommand ms2_ctx = queue.buildMS2(precursor_pg, 3, cfg.level(2).scans[0], 2, 0);
-
-  // initiateNextLevel processes MS2 results and picks fragments for MS3
-  // With ms2.min_charge=99, ALL fragments should be filtered out
-  auto nlr = exploration.initiateNextLevel(2, deconv.storedMS2(), -50.0, queue, &ms2_ctx);
-  TEST_EQUAL(static_cast<int>(nlr.commands.size()), 0)  // no commands — all fragments filtered by charge
-}
-END_SECTION
-
 START_SECTION(activation_type_wiring_in_scoring)
 {
   // Verify that exploration scoring passes variant activation type through
@@ -2473,6 +2323,102 @@ START_SECTION(inclusion_ms3_full_acquisition_roundtrip)
          << (all_ms3_parents_resolve ? std::string("")
                                      : (", first unresolved MS3 parent = '" + unresolved + "'")))
   TEST_EQUAL(all_ms3_parents_resolve, true)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// B1: model-driven MS3 charge floor (selection_strategy.ms2.min_charge).
+// Real cytC inclusion MS2->MS3 (M-start proteoform), driven through the standard model-driven path
+// (M3: tracker fed in initiateNextLevel -> planNextScans). The charge floor is applied at
+// Exploration.cpp:802 (std::abs(target.frag_charge) < charge_floor). Two sibling tests so the 0 in
+// the floor-filters case is NOT vacuous: the no-floor sibling proves the model DOES emit MS3 here.
+/////////////////////////////////////////////////////////////
+
+START_SECTION(ms3_min_charge_floor_filters_all_targets)
+{
+  auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
+  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
+  ABORT_IF(ms1_scans.size() < 2 || ms2_scans.empty())
+
+  // Clone of inclusion_ms3_config (A5) with selection_strategy.ms2.min_charge = 99 —
+  // impossible floor that filters every charge-1-3 MS3 target at Exploration.cpp:802.
+  const char* cfg99 = R"({
+    "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
+    "precursor_selection": { "RT_window": 180, "target_mode": 1, "IDScore": false, "AllCharges": false, "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1 },
+    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
+    "faims": { "cv_values": [-50], "max_cv_skip": 0, "cv_precursor_threshold": 15 },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
+      "ms2": [ { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 } ],
+      "ms3": [ { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 35, "resolution": 120000 } ]
+    },
+    "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 }, "agc_interval_seconds": 999999 },
+    "files": { "target_logs": [], "fasta": "", "inclusion_list": "../../FlashIDA/test-data/configs/inclusion_cytc.txt", "ptm_list": "" },
+    "characterization": { "protein_sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE" },
+    "conditional_ms2": false,
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_targets": 3 },
+      "ms2": { "selection": "intensity", "max_targets": 3, "min_charge": 99 },
+      "ms3": { "selection": "intensity", "max_targets": 3 }
+    }
+  })";
+  std::string s99(cfg99);
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(s99.c_str()));
+  AcqResult a = runInterleaved(ida, std::vector<ScanData>{ms1_scans[1]},
+                               std::vector<ScanData>{ms2_scans[0]}, nullptr, 300);
+  delete ida;
+
+  // The precursor still fires MS2 (inclusion selects it), but every model MS3 target has
+  // charge 1-3 which is < 99, so the charge floor at Exploration.cpp:802 filters them all
+  // -> zero MS3 commands.
+  TEST_EQUAL(a.ms2_cmds.size() >= 1, true)
+  TEST_EQUAL(a.ms3_cmds.size(), 0)
+}
+END_SECTION
+
+START_SECTION(ms3_min_charge_default_emits_ms3)
+{
+  auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
+  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
+  ABORT_IF(ms1_scans.size() < 2 || ms2_scans.empty())
+
+  // Clone of inclusion_ms3_config (A5) with selection_strategy.ms2.min_charge = 1 —
+  // a permissive floor that lets all fragment charges through; positive control proving
+  // the model-driven path DOES emit MS3 so the zero in ms3_min_charge_floor_filters_all_targets
+  // is real (not a structural dead-end).
+  const char* cfg1 = R"({
+    "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
+    "precursor_selection": { "RT_window": 180, "target_mode": 1, "IDScore": false, "AllCharges": false, "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1 },
+    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
+    "faims": { "cv_values": [-50], "max_cv_skip": 0, "cv_precursor_threshold": 15 },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
+      "ms2": [ { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 } ],
+      "ms3": [ { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 35, "resolution": 120000 } ]
+    },
+    "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 }, "agc_interval_seconds": 999999 },
+    "files": { "target_logs": [], "fasta": "", "inclusion_list": "../../FlashIDA/test-data/configs/inclusion_cytc.txt", "ptm_list": "" },
+    "characterization": { "protein_sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE" },
+    "conditional_ms2": false,
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_targets": 3 },
+      "ms2": { "selection": "intensity", "max_targets": 3, "min_charge": 1 },
+      "ms3": { "selection": "intensity", "max_targets": 3 }
+    }
+  })";
+  std::string s1(cfg1);
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(s1.c_str()));
+  AcqResult a = runInterleaved(ida, std::vector<ScanData>{ms1_scans[1]},
+                               std::vector<ScanData>{ms2_scans[0]}, nullptr, 300);
+  delete ida;
+
+  // Positive control: with a permissive floor the model-driven path emits MS3 commands,
+  // proving the zero in ms3_min_charge_floor_filters_all_targets is caused by the charge
+  // floor at Exploration.cpp:802, not by a structural dead-end.
+  TEST_EQUAL(a.ms2_cmds.size() >= 1, true)
+  TEST_EQUAL(a.ms3_cmds.size() >= 1, true)
 }
 END_SECTION
 
