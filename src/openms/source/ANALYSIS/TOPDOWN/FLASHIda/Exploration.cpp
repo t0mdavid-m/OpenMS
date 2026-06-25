@@ -785,11 +785,34 @@ namespace OpenMS
     // target's best-MS2 params). The fragment-selection + proto_ctx + nlr MS2-id-row metadata above
     // are untouched (they still drive the MS2 identification row).
     //
-    // Authority gate = an identified model exists for this precursor. Only the exploration path feeds
-    // the tracker (Exploration::feedResultImpl_), so the regular non-exploration MS2->MS3 path has no
-    // model -> it falls through to the legacy getTopFragmentMatches direct path UNCHANGED. Likewise
-    // tracker==nullptr (tests) falls through.
+    // Authority gate = an identified model exists for this precursor. M3 (ADR-0005): the regular
+    // non-exploration MS2->MS3 path is now ALSO model-driven — the feed+finalize block below builds a
+    // one-shot model for it so the gate fires. The legacy getTopFragmentMatches direct emitter has been
+    // deleted; the model is the sole MS3 authority. When no model exists (tracker==nullptr in tests, or
+    // found==0), the gate is false and the function returns nlr with no next-level commands.
     const int nominal_mass = (ms_ctx != nullptr) ? SpectralDeconvolution::getNominalMass(ms_ctx->mono_mass) : 0;
+
+    // M3 (ADR-0005): make the regular (non-exploration) MS2->MS3 path model-driven. The exploration path
+    // already fed its variants and finalized (Exploration::feedResultImpl_) before calling initiateNextLevel,
+    // so its model already exists; the regular path has none yet. When this MS2 identified a proteoform
+    // (found>0) and no model exists yet for this precursor, build a one-shot finalized model from this MS2 so
+    // the model-authority gate below fires and planNextScans drives the MS3 dispatch. found>0 guarantees a
+    // non-empty proteoform_sequence + score, so finalize seeds a winner.
+    if (tracker != nullptr && next_level >= 3 && ms_ctx != nullptr && ms_ctx->num_stages > 0 && found > 0)
+    {
+      const ProteoformModel* existing = tracker->model(nominal_mass);
+      if (existing == nullptr || existing->proteoform_sequence.empty())
+      {
+        Ms2Params p;
+        p.collision_energy = ms_ctx->stages[0].collision_energy;
+        p.activation_type  = std::string(ms_ctx->stages[0].activation_type);
+        p.reaction_time    = ms_ctx->stages[0].reaction_time;
+        tracker->feedScan(nominal_mass, /*ms_level=*/2, p, ms_ctx->scan_id, result, frag_result,
+                          frag_result.score, *ms_ctx);
+        tracker->finalize(nominal_mass);
+      }
+    }
+
     const ProteoformModel* model = (tracker != nullptr && next_level >= 3 && ms_ctx != nullptr)
         ? tracker->model(nominal_mass) : nullptr;
     if (model != nullptr && !model->proteoform_sequence.empty())
@@ -821,7 +844,7 @@ namespace OpenMS
           frag_pg.push_back(lp_hi);
 
           auto sub_cmds = initiate(next_level, frag_pg, frag_charge, queue, &result.getOriginalSpectrum(), ms_ctx,
-                                   ion_type, target.ion_index, proto_ctx, {}, &target.stage0_params);
+                                   ion_type, target.ion_index, proto_ctx, target.stage1_scores, &target.stage0_params);
           nlr.commands.insert(nlr.commands.end(), sub_cmds.begin(), sub_cmds.end());
 
           for (size_t sci = 0; sci < sub_cmds.size(); ++sci)
@@ -857,7 +880,7 @@ namespace OpenMS
           // Single MS3: build directly from the target descriptors, applying the model's stage[0].
           ScanCommand cmd = queue.buildMS3(*ms_ctx, next_scan_config, target.frag_mz, frag_charge,
                                            target.iso_width, ms_ctx->scan_id,
-                                           ion_type, target.ion_index, 1, {}, &target.stage0_params);
+                                           ion_type, target.ion_index, 1, target.stage1_scores, &target.stage0_params);
           cmd.faims_cv = faims_cv;
 
           // Item 2: stamp the MS3 fragment-window SNR onto the command before push (same inputs/formula
@@ -904,149 +927,6 @@ namespace OpenMS
       }
 
       return nlr;
-    }
-
-    if (config_.hasExploration(next_level))
-    {
-      // Recursive exploration at next level
-      for (int ti = 0; ti < num_targets; ++ti)
-      {
-        int abs_charge = std::abs(charges[ti]);
-        if (charge_floor > 0 && abs_charge < charge_floor)
-          continue;
-        PeakGroup frag_pg(abs_charge, abs_charge, true);
-        frag_pg.setMonoisotopicMass(masses[ti]);
-        FLASHHelperClasses::LogMzPeak lp_lo;
-        lp_lo.mz = wstarts[ti];
-        lp_lo.abs_charge = abs_charge;
-        frag_pg.push_back(lp_lo);
-        FLASHHelperClasses::LogMzPeak lp_hi;
-        lp_hi.mz = wends[ti];
-        lp_hi.abs_charge = abs_charge;
-        frag_pg.push_back(lp_hi);
-
-        auto sub_cmds = initiate(next_level, frag_pg, std::abs(charges[ti]), queue, &result.getOriginalSpectrum(), ms_ctx,
-                                 ion_types[ti], frag_indices[ti], proto_ctx, frag_scores[ti]);  // F2: real fragment scores
-        nlr.commands.insert(nlr.commands.end(), sub_cmds.begin(), sub_cmds.end());
-
-        for (size_t sci = 0; sci < sub_cmds.size(); ++sci)
-        {
-          MS2Context mc;
-          mc.proteoform_sequence = nlr.proteoform_sequence;
-          mc.start_pos = proto_ctx.region_start;
-          mc.end_pos = proto_ctx.region_end;
-          mc.ptm_sites = proto_ctx.ptm_sites;
-          if (ms_ctx != nullptr)
-          {
-            mc.ms1_precursor_mass = ms_ctx->mono_mass;
-            mc.ms1_precursor_mz = ms_ctx->stages[0].precursor_mz;
-            mc.ms1_precursor_charge = ms_ctx->stages[0].charge_state;
-          }
-          mc.fragment_ion_type = ion_types[ti];
-          mc.fragment_ion_index = frag_indices[ti];
-          mc.fragment_mass = masses[ti];
-          mc.fragment_mz = (wstarts[ti] + wends[ti]) / 2.0;
-          mc.fragment_charge = std::abs(charges[ti]);
-          // I2: isolation-window reporting. MS2 (parent) triplet from ms_ctx; MS3 (this variant) triplet
-          // from the sub-command. window-SNR now travels on each command (Item 2): MS2 off ms_ctx, MS3 off
-          // the sub-command (initiate computed it over result.getOriginalSpectrum() — identical value).
-          if (ms_ctx != nullptr)
-          {
-            mc.ms2_isolation_width = ms_ctx->stages[0].isolation_width;
-            mc.ms2_charge_intensity = ms_ctx->precursor_intensity;
-            mc.ms2_window_snr = ms_ctx->window_snr;
-          }
-          if (sci < sub_cmds.size() && sub_cmds[sci].num_stages >= 2)
-          {
-            const ScanCommand& sub = sub_cmds[sci];
-            mc.ms3_isolation_width = sub.stages[1].isolation_width;
-            mc.ms3_charge_intensity = sub.precursor_intensity_s1;
-            mc.ms3_window_snr = sub.window_snr;
-          }
-          nlr.ms3_contexts.push_back(mc);
-        }
-      }
-    }
-    else
-    {
-      // Direct command building for each fragment target
-      for (int ti = 0; ti < num_targets; ++ti)
-      {
-        double frag_mz = (wstarts[ti] + wends[ti]) / 2.0;
-        int frag_charge = std::abs(charges[ti]);
-        if (charge_floor > 0 && frag_charge < charge_floor)
-          continue;
-        double iso_width = wends[ti] - wstarts[ti];
-
-        ScanCommand cmd;
-        if (next_level >= 3 && ms_ctx != nullptr)
-        {
-          // MS3: proper two-stage command via buildMS3 with config CE/activation
-          cmd = queue.buildMS3(*ms_ctx, next_scan_config, frag_mz, frag_charge, iso_width, ms_ctx->scan_id,
-                               ion_types[ti], frag_indices[ti], 1, frag_scores[ti]);
-        }
-        else
-        {
-          // MS2: single-stage command via buildMS2 (parent = the MS context that triggered next level)
-          PeakGroup frag_pg(frag_charge, frag_charge, true);
-          frag_pg.setMonoisotopicMass(masses[ti]);
-          FLASHHelperClasses::LogMzPeak lp;
-          lp.mz = frag_mz;
-          lp.abs_charge = frag_charge;
-          frag_pg.push_back(lp);
-
-          cmd = queue.buildMS2(frag_pg, frag_charge, next_scan_config, 1, ms_ctx ? ms_ctx->scan_id : 0);
-          cmd.msn_level = next_level;
-        }
-        cmd.faims_cv = faims_cv;
-
-        // Item 2: stamp the MS3 fragment-window SNR onto the command BEFORE it is pushed (was the queue
-        // window-SNR map). Computed over the MS2 source spectrum — same inputs/formula as before.
-        if (cmd.num_stages >= 2)
-        {
-          const double half3 = cmd.stages[1].isolation_width / 2.0;
-          cmd.window_snr = FragmentAnalysis::windowSnr(result.getOriginalSpectrum(),
-              cmd.stages[1].precursor_mz - half3, cmd.stages[1].precursor_mz + half3,
-              cmd.precursor_intensity_s1);
-        }
-
-        std::string id_str = ScanCommandQueue::encode(cmd.scan_id);
-        std::cout << "[TRACK-CREATE] id=" << id_str
-                  << " ms_level=" << next_level << " type=next_level"
-                  << std::endl;
-
-        nlr.commands.push_back(cmd);
-
-        if (next_level >= 3 && ms_ctx != nullptr)
-        {
-          MS2Context mc;
-          mc.proteoform_sequence = nlr.proteoform_sequence;
-          mc.start_pos = proto_ctx.region_start;
-          mc.end_pos = proto_ctx.region_end;
-          mc.ptm_sites = proto_ctx.ptm_sites;
-          mc.ms1_precursor_mass = ms_ctx->mono_mass;
-          mc.ms1_precursor_mz = ms_ctx->stages[0].precursor_mz;
-          mc.ms1_precursor_charge = ms_ctx->stages[0].charge_state;
-          mc.fragment_ion_type = ion_types[ti];
-          mc.fragment_ion_index = frag_indices[ti];
-          mc.fragment_mass = masses[ti];
-          mc.fragment_mz = frag_mz;
-          mc.fragment_charge = frag_charge;
-          // I2: isolation-window reporting. MS2 (parent) triplet from ms_ctx; MS3 (fragment) triplet from
-          // the MS3 command. window-SNR travels on each command (Item 2): MS2 off ms_ctx, MS3 off cmd
-          // (computed above over the MS2 source spectrum, before the push).
-          mc.ms2_isolation_width = ms_ctx->stages[0].isolation_width;
-          mc.ms2_charge_intensity = ms_ctx->precursor_intensity;
-          mc.ms2_window_snr = ms_ctx->window_snr;
-          if (cmd.num_stages >= 2)
-          {
-            mc.ms3_isolation_width = cmd.stages[1].isolation_width;
-            mc.ms3_charge_intensity = cmd.precursor_intensity_s1;
-            mc.ms3_window_snr = cmd.window_snr;
-          }
-          nlr.ms3_contexts.push_back(mc);
-        }
-      }
     }
 
     return nlr;

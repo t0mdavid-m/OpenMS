@@ -230,6 +230,7 @@ namespace OpenMS
       // Isolation-window span, captured the same way the direct MS3 path derives iso_width
       // (wend - wstart, Exploration.cpp), so a model-planned MS3 isolates the identical window.
       pr.iso_width = mz2 - mz1;
+      pr.stage1_scores = FragmentAnalysis::FragmentScores::fromPeakGroup(pg, charge);
       ps.peaks.push_back(pr);
     }
     m.pending.push_back(std::move(ps));
@@ -470,6 +471,7 @@ namespace OpenMS
         t.frag_mass = o->observed_mass;
         t.iso_width = o->iso_width;
         t.stage0_params = o->params;
+        t.stage1_scores = o->stage1_scores;
         out.push_back(std::move(t));
       }
     }
@@ -577,6 +579,7 @@ namespace OpenMS
       double matched_mz = 0.0;
       int matched_charge = 0;
       double matched_iso_width = 0.0;
+      FragmentAnalysis::FragmentScores matched_stage1;
       {
         double best_diff = std::numeric_limits<double>::max();
         bool within_tol = false;
@@ -594,6 +597,7 @@ namespace OpenMS
             matched_mz = pr.mz;
             matched_charge = pr.charge;
             matched_iso_width = pr.iso_width;
+            matched_stage1 = pr.stage1_scores;
           }
           else if (in_tol == within_tol && diff < best_diff)
           {
@@ -602,6 +606,7 @@ namespace OpenMS
             matched_mz = pr.mz;
             matched_charge = pr.charge;
             matched_iso_width = pr.iso_width;
+            matched_stage1 = pr.stage1_scores;
           }
         }
       }
@@ -634,6 +639,7 @@ namespace OpenMS
       obs.frag_mz = matched_mz;
       obs.frag_charge = matched_charge;
       obs.iso_width = matched_iso_width;
+      obs.stage1_scores = matched_stage1;
 
       if (ps.ms_level == 3)
       {

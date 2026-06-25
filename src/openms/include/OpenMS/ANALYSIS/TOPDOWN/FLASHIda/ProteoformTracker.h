@@ -69,6 +69,7 @@ namespace OpenMS
     double frag_mz = 0;         ///< Isolation m/z for targeting this fragment in MS3
     int frag_charge = 0;        ///< Charge state for targeting this fragment in MS3
     double iso_width = 0;       ///< Isolation-window span (mz2 - mz1 from PeakGroup::getMzRange) for MS3 targeting
+    FragmentAnalysis::FragmentScores stage1_scores;  ///< Stage-1 scores of the matched peak (for MS3 stage[1] score columns)
   };
 
   /// A single MS3 acquisition target the model selected. The executor (Exploration) builds the
@@ -82,6 +83,7 @@ namespace OpenMS
     double frag_mass = 0;       ///< Monoisotopic mass of the fragment (MS2 frame) for PeakGroup reconstruction
     double iso_width = 0;       ///< Isolation-window span for the MS3 isolation
     Ms2Params stage0_params;    ///< Per-ion best MS2 params -> MS3 stage[0] (ADR-0003)
+    FragmentAnalysis::FragmentScores stage1_scores;  ///< Stage-1 fragment scores -> buildMS3 (so MS3 *_s1 columns are real, not 0)
   };
 
   /// Key identifying a fragment ion: (ion_type, ion_index)
@@ -127,6 +129,7 @@ namespace OpenMS
     int charge = 0;        ///< getMaxIntensityAbsCharge() — same charge used for mz derivation
     double intensity = 0;
     double iso_width = 0;  ///< Isolation-window span (mz2 - mz1) — matches the direct MS3 path's wend-wstart
+    FragmentAnalysis::FragmentScores stage1_scores;  ///< Stage-1 (fragment) deconvolution scores for MS3 (FragmentScores::fromPeakGroup)
   };
 
   /// A deconvolved scan awaiting integration into a ProteoformModel
