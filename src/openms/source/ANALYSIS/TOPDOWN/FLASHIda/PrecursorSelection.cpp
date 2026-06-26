@@ -605,8 +605,12 @@ namespace OpenMS
               continue;
             }
 
-            // selection phase 0, skip masses over tqscore threshold
-            if (selection_phase < selection_phase_end - 1)
+            // Skip masses over the tqscore threshold in ALL selection phases. Previously this ran in
+            // phase 0 only (`< selection_phase_end - 1`), so an already-excluded mass was re-admitted in
+            // the inclusion fallback phase (phase 1): non-strict inclusion zeroes target thresholds and
+            // re-selected the excluded mass every survey. Standard DDA (target_mode 0) only selects in
+            // phase 0, so running this in every phase changes inclusion-mode behaviour only.
+            if (selection_phase < selection_phase_end)
             {
               if (tqscore_exceeding_mass_rt_map_.find(nominal_mass) != tqscore_exceeding_mass_rt_map_.end()
                   || tqscore_exceeding_mz_rt_map_.find(integer_mz) != tqscore_exceeding_mz_rt_map_.end())

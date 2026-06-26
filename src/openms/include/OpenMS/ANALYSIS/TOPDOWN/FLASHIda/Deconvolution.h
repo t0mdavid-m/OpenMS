@@ -138,8 +138,32 @@ namespace OpenMS
     static MSSpectrum makeMSSpectrum_(const double* mzs, const double* ints, int length,
                                       double rt, int ms_level, const char* name);
 
+    /**
+     * @brief Set the signed charge window on fd_ and re-apply parameters.
+     *
+     * Mutates the cached sd_param_ ("min_charge"/"max_charge") and pushes it to fd_
+     * (which re-runs updateMembers_). Early-returns when the window already matches, so
+     * back-to-back calls with the same window do not re-set parameters. The window is signed:
+     * a negative sign selects negative-ion mode (SpectralDeconvolution derives polarity from
+     * the sign of min_charge before taking absolute values).
+     * @param signed_min_charge signed minimum charge (e.g. +1 or -1)
+     * @param signed_max_charge signed maximum charge (e.g. +|precursor| or -|precursor|)
+     */
+    void setChargeWindow_(int signed_min_charge, int signed_max_charge);
+
     /// SpectralDeconvolution engine
     SpectralDeconvolution fd_;
+
+    /// Cached full parameter set for fd_ (the global MS1 window); restored before each MS1 deconv.
+    Param sd_param_;
+
+    /// Global signed charge window (the MS1/default window) captured in the ctor.
+    int global_min_charge_ = 0;
+    int global_max_charge_ = 0;
+
+    /// Currently-applied signed charge window on fd_ (avoids redundant setParameters calls).
+    int cur_min_charge_ = 0;
+    int cur_max_charge_ = 0;
 
     /// Last MS1 deconvolution result
     DeconvolvedSpectrum deconvolved_spectrum_{0};

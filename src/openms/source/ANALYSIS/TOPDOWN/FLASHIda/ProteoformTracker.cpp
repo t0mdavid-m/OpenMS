@@ -227,8 +227,9 @@ namespace OpenMS
       pr.mz = (mz1 + mz2) / 2.0;
       pr.charge = charge;
       pr.intensity = static_cast<double>(pg.getChargeIntensity(charge));
-      // Isolation-window span, captured the same way the direct MS3 path derives iso_width
-      // (wend - wstart, Exploration.cpp), so a model-planned MS3 isolates the identical window.
+      // Isolation-window span = the PeakGroup's m/z extent at the selected charge (getMzRange centre-to-
+      // edge span). This sizes the CE-sweep sub-window in Exploration.cpp:832. It is NOT the legacy
+      // (wend - wstart) isolation width; ScanCommandQueue.cpp:352 floors it at 2.0 Th before emission.
       pr.iso_width = mz2 - mz1;
       pr.stage1_scores = FragmentAnalysis::FragmentScores::fromPeakGroup(pg, charge);
       ps.peaks.push_back(pr);

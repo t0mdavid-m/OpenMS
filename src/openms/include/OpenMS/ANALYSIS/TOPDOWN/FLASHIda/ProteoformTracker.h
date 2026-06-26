@@ -68,7 +68,7 @@ namespace OpenMS
     Ms2Params params;           ///< For an MS3 obs: the parent MS2's params
     double frag_mz = 0;         ///< Isolation m/z for targeting this fragment in MS3
     int frag_charge = 0;        ///< Charge state for targeting this fragment in MS3
-    double iso_width = 0;       ///< Isolation-window span (mz2 - mz1 from PeakGroup::getMzRange) for MS3 targeting
+    double iso_width = 0;       ///< PeakGroup m/z span (mz2 - mz1 from getMzRange) for MS3 targeting; floored at 2.0 Th at emission (ScanCommandQueue.cpp)
     FragmentAnalysis::FragmentScores stage1_scores;  ///< Stage-1 scores of the matched peak (for MS3 stage[1] score columns)
   };
 
@@ -81,7 +81,7 @@ namespace OpenMS
     double frag_mz = 0;         ///< Isolation m/z of the fragment precursor
     int frag_charge = 0;        ///< Charge state of the fragment precursor
     double frag_mass = 0;       ///< Monoisotopic mass of the fragment (MS2 frame) for PeakGroup reconstruction
-    double iso_width = 0;       ///< Isolation-window span for the MS3 isolation
+    double iso_width = 0;       ///< PeakGroup m/z span for the MS3 isolation; floored at 2.0 Th at emission (ScanCommandQueue.cpp)
     Ms2Params stage0_params;    ///< Per-ion best MS2 params -> MS3 stage[0] (ADR-0003)
     FragmentAnalysis::FragmentScores stage1_scores;  ///< Stage-1 fragment scores -> buildMS3 (so MS3 *_s1 columns are real, not 0)
   };

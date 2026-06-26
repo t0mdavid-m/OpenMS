@@ -55,6 +55,25 @@ namespace OpenMS
     sd_defaults.setValue("tol", tolerance_ppm_values);
     fd_.setParameters(sd_defaults);
     fd_.calculateAveragine(false);
+
+    // Cache the full parameter set plus the global (MS1/default) signed charge window. deconvolveMSn
+    // narrows the window to [sign*1, sign*|precursor_charge|] per call so a fragment can never be assigned
+    // a charge above its precursor; deconvolveMS1 restores this global window (fd_ is shared MS1<->MSn).
+    sd_param_ = sd_defaults;
+    global_min_charge_ = config.deconvolution().min_charge;
+    global_max_charge_ = config.deconvolution().max_charge;
+    cur_min_charge_ = global_min_charge_;
+    cur_max_charge_ = global_max_charge_;
+  }
+
+  void Deconvolution::setChargeWindow_(int signed_min_charge, int signed_max_charge)
+  {
+    if (signed_min_charge == cur_min_charge_ && signed_max_charge == cur_max_charge_) { return; }
+    sd_param_.setValue("min_charge", signed_min_charge);
+    sd_param_.setValue("max_charge", signed_max_charge);
+    fd_.setParameters(sd_param_);
+    cur_min_charge_ = signed_min_charge;
+    cur_max_charge_ = signed_max_charge;
   }
 
   DeconvolvedSpectrum Deconvolution::deconvolveMS1(const double* mzs, const double* ints,
@@ -62,6 +81,10 @@ namespace OpenMS
   {
     auto spec = makeMSSpectrum_(mzs, ints, length, rt, 1, "ms1_spectrum");
     if (faims_cv != 0.0) { spec.setMetaValue("filter string", DataValue("cv=" + std::to_string(faims_cv))); }
+
+    // LOAD-BEARING: fd_ is shared MS1<->MSn (deconvolveMSn narrows the charge window per call). Restore the
+    // global window before every MS1 survey, else MS1 selection would be silently capped by the last MSn call.
+    setChargeWindow_(global_min_charge_, global_max_charge_);
 
     PeakGroup empty;
     fd_.performSpectrumDeconvolution(spec, 0, empty);
@@ -113,6 +136,15 @@ namespace OpenMS
       precursor_pg.setRepAbsCharge(abs_charge);
       precursor_pg.setQscore(1.0);  // Known precursor from MS1, high confidence
       precursor_pg.setSNR(1.0);
+    }
+
+    // Charge ceiling: bound MSn fragment charges to the precursor's charge. Window = [sign*1, sign*|prec|]
+    // (min 1 so charge-1..3 fragments are found; max = |precursor charge|). The sign carries the polarity.
+    // No precursor charge (0) -> keep whatever window is currently applied (the global one after an MS1).
+    if (precursor_charge != 0)
+    {
+      const int sign = precursor_charge > 0 ? 1 : -1;
+      setChargeWindow_(sign * 1, sign * std::abs(precursor_charge));
     }
 
     // Perform deconvolution (empty precursor_pg if mass <= 0 or charge == 0)
