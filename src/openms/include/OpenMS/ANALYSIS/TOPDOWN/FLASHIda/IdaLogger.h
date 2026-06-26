@@ -127,12 +127,16 @@ namespace OpenMS
       char scan_mode = '\0';
       Exploration::MS2Context ctx;
       FragmentAnalysis::ProteoformMatch match;
+      /// Per-MS1-selection precursor identity (plain decimal); 0 when unknown (MS1, untracked id).
+      int precursor_id = 0;
     };
 
     /// One pooled_identification.tsv row: the current state of a ProteoformModel after each update.
     /// All members held by value (model state is discarded between updates).
     struct PooledModelDescriptor
     {
+      /// Per-MS1-selection precursor identity (the model key; plain decimal).
+      int precursor_id = 0;
       int nominal_mass = 0;
       double mono_mass = 0.0;
       std::string proforma;
@@ -151,8 +155,10 @@ namespace OpenMS
                           const std::vector<ScanCommand>& ms2_commands,
                           const DeconvolvedSpectrum& all_peak_groups);
 
-    /// Write one TSV row for a dequeued scan command
-    void writeScanCommandRow(const ScanCommand& cmd);
+    /// Write one TSV row for a dequeued scan command. @p precursor_id is the per-MS1-selection
+    /// identity for this command (sourced from the engine-side tracking_id->precursor_id map);
+    /// 0 for commands with no precursor (MS1 / AGC) or an untracked id. No ScanCommand ABI change.
+    void writeScanCommandRow(const ScanCommand& cmd, int precursor_id = 0);
 
     /// Write one TSV row for a processScan result (ms_level is logged at scan_results col 1)
     void writeScanResultRow(const ScanRowDescriptor& row);

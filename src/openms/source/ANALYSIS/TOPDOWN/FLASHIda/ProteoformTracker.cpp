@@ -35,6 +35,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ProteoformTracker.h>
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/IdaLogger.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>  // getNominalMass (read-only) for the pooled nominal_mass column
 
 #include <algorithm>
 #include <cmath>
@@ -191,13 +192,13 @@ namespace OpenMS
   {
   }
 
-  void ProteoformTracker::feedScan(int nominal_mass, uint8_t ms_level, const Ms2Params& params, int scan_id,
+  void ProteoformTracker::feedScan(int precursor_id, uint8_t ms_level, const Ms2Params& params, int scan_id,
                                    const DeconvolvedSpectrum& deconv,
                                    const FragmentAnalysis::ProteoformMatch& match, double id_score,
                                    const ScanCommand& ms2_ctx)
   {
-    ProteoformModel& m = models_[nominal_mass];
-    m.nominal_mass = nominal_mass;
+    ProteoformModel& m = models_[precursor_id];
+    m.precursor_id = precursor_id;
 
     // Capture the MS2 command context once (used by planNextScans/buildMS3 in the next task).
     if (!m.has_ms2_ctx)
@@ -237,9 +238,9 @@ namespace OpenMS
     m.pending.push_back(std::move(ps));
   }
 
-  void ProteoformTracker::finalize(int nominal_mass)
+  void ProteoformTracker::finalize(int precursor_id)
   {
-    auto it = models_.find(nominal_mass);
+    auto it = models_.find(precursor_id);
     if (it == models_.end()) return;
     ProteoformModel& m = it->second;
     if (m.pending.empty()) return;
@@ -292,9 +293,9 @@ namespace OpenMS
     m.finalized = true;
   }
 
-  std::vector<Ms3Target> ProteoformTracker::planNextScans(int nominal_mass)
+  std::vector<Ms3Target> ProteoformTracker::planNextScans(int precursor_id)
   {
-    auto it = models_.find(nominal_mass);
+    auto it = models_.find(precursor_id);
     if (it == models_.end()) return {};
     ProteoformModel& m = it->second;
     // No identified model / no captured MS2 context -> no plan (ADR-0002).
@@ -479,9 +480,9 @@ namespace OpenMS
     return out;
   }
 
-  const ProteoformModel* ProteoformTracker::model(int nominal_mass) const
+  const ProteoformModel* ProteoformTracker::model(int precursor_id) const
   {
-    auto it = models_.find(nominal_mass);
+    auto it = models_.find(precursor_id);
     if (it == models_.end())
     {
       return nullptr;
@@ -810,11 +811,16 @@ namespace OpenMS
 
     IdaLogger::PooledModelDescriptor r;
 
-    // --- nominal_mass ---
-    r.nominal_mass = m.nominal_mass;
+    // --- precursor_id: the model key (per-MS1-selection identity, logged as a plain decimal) ---
+    r.precursor_id = m.precursor_id;
 
     // --- mono_mass: the MS2 context precursor mass (captured once at feedScan time) ---
     r.mono_mass = m.has_ms2_ctx ? m.ms2_ctx.mono_mass : 0.0;
+
+    // --- nominal_mass: derived from the captured precursor mass (the model is now keyed by
+    //     precursor_id, so nominal_mass is no longer the key — recompute the real nominal mass
+    //     so the existing column keeps its meaning). getNominalMass is a read-only static. ---
+    r.nominal_mass = m.has_ms2_ctx ? SpectralDeconvolution::getNominalMass(m.ms2_ctx.mono_mass) : 0;
 
     // --- proforma ---
     // m.proteoform_sequence is the FULL protein sequence (FragmentAnalysis sets it from protein_sequence).

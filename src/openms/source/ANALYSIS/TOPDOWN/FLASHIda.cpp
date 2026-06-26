@@ -183,6 +183,9 @@ FLASHIda::FLASHIda(char* arg) :
         // Exploration path: initiate CE sweep variants INSTEAD of regular MS2
         for (int i = 0; i < n; i++)
         {
+          // P5: one precursor_id per MS1-selected precursor; every CE-sweep variant of this precursor
+          // shares it (they are the same MS1 selection -> same charge -> same model).
+          const int pid = allocPrecursorId_();
           ScanCommand ms1_ctx{};
           ms1_ctx.scan_id  = tracking_id;
           ms1_ctx.faims_cv = ctx.faims_cv;  // Item 1: CV travels via the context (the resolved MS1 carries it)
@@ -191,6 +194,7 @@ FLASHIda::FLASHIda(char* arg) :
           auto cmds = exploration_.initiate(2, selected[i], sel_charges[i], queue_, &raw_ms1, &ms1_ctx);
           for (auto& c : cmds)
           {
+            precursor_id_by_tracking_[c.scan_id] = pid;  // P5: stamp every variant of this selection
             queue_.push(c);
             ms2_commands.push_back(c);
             commands_pushed++;
@@ -202,6 +206,8 @@ FLASHIda::FLASHIda(char* arg) :
         // Normal path: push MS2 for each precursor, for each scan config
         for (int i = 0; i < n; i++)
         {
+          // P5: one precursor_id per MS1-selected precursor; all of its MS2 scan-config commands share it.
+          const int pid = allocPrecursorId_();
           for (const auto& sc : config_.level(2).scans)
           {
             ScanConfig ms2_config = sc;
@@ -215,6 +221,7 @@ FLASHIda::FLASHIda(char* arg) :
               cmd.window_snr = FragmentAnalysis::windowSnr(raw_ms1, cmd.stages[0].precursor_mz - half,
                                                            cmd.stages[0].precursor_mz + half, cmd.precursor_intensity);
             }
+            precursor_id_by_tracking_[cmd.scan_id] = pid;  // P5: stamp this MS2 command
             queue_.push(cmd);
             ms2_commands.push_back(cmd);
             commands_pushed++;
@@ -265,12 +272,19 @@ FLASHIda::FLASHIda(char* arg) :
     {
       int commands_pushed = 0;
 
+      // P5: precursor_id of this returning MS2 scan (carried since its MS1 selection). Its MS3 children
+      // inherit it; it also keys the ProteoformTracker model and feeds the precursor_id log column.
+      const int pid = precursorIdForTracking_(tracking_id);
+
       // ===== MS2 (exploration variant): score variant -> push children -> fill row =====
       if (exploration_.isExplorationVariant(tracking_id))
       {
-        auto expl_result = exploration_.feedResult(tracking_id, mzs, ints, length, rt_min, queue_, &tracker_);
+        auto expl_result = exploration_.feedResult(tracking_id, mzs, ints, length, rt_min, queue_, &tracker_, pid);
         for (auto& c : expl_result.commands)
+        {
+          precursor_id_by_tracking_[c.scan_id] = pid;  // P5: MS3 / production children inherit the parent's precursor_id
           queue_.push(c);  // parent_scan_id already stamped by feedResult; children pre-encoded in expl_result.child_ids
+        }
 
         int expl_mass_count = exploration_.explorationDeconvMassCount();
         const DeconvolvedSpectrum* expl_spec = exploration_.explorationDeconvSpectrum();
@@ -303,7 +317,7 @@ FLASHIda::FLASHIda(char* arg) :
         // MS2 identification row (copy by value before expl_result goes out of scope).
         // DIVERGENCE vs MS3-expl: MS2 gate requires a non-empty proteoform_sequence AND fragments.
         if (!expl_result.proteoform_sequence.empty() && !expl_result.identification_result.fragments.empty())
-          id_rows.push_back({id_str, 2, 'E', expl_result.ms2_context, expl_result.identification_result});
+          id_rows.push_back({id_str, 2, 'E', expl_result.ms2_context, expl_result.identification_result, pid});
 
         exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);
         return_code = static_cast<int>(expl_result.commands.size());
@@ -333,6 +347,7 @@ FLASHIda::FLASHIda(char* arg) :
                                               config_.quantification().reporter_mz_tol, config_.quantification().fold_change_threshold, false))
           {
             auto followup = queue_.buildFollowUp(ctx, config_.quantification().follow_up_scan, 'F');
+            precursor_id_by_tracking_[followup.scan_id] = pid;  // P5: follow-up inherits the MS2's precursor_id
             queue_.push(followup);
             child_ids.push_back(ScanCommandQueue::encode(followup.scan_id));
             commands_pushed++;
@@ -343,6 +358,7 @@ FLASHIda::FLASHIda(char* arg) :
         if (config_.targeting().conditional_ms2_enabled && tags_found && !is_follow_up_scan)
         {
           auto cond = queue_.buildFollowUp(ctx, config_.targeting().tagging_follow_up_scan, 'C');
+          precursor_id_by_tracking_[cond.scan_id] = pid;  // P5: follow-up inherits the MS2's precursor_id
           queue_.push(cond);
           child_ids.push_back(ScanCommandQueue::encode(cond.scan_id));
           commands_pushed++;
@@ -354,9 +370,11 @@ FLASHIda::FLASHIda(char* arg) :
         {
           // initiateNextLevel stamps each command's parent with the MS2 id (ctx.scan_id) at creation.
           // 9b: pass the tracker so the proteoform model selects the MS3 targets (ADR-0002).
-          ms3_targeting = exploration_.initiateNextLevel(2, deconv_.storedMS2(), ctx.faims_cv, queue_, &ctx, &tracker_);
+          // P5: pass this MS2's precursor_id so the one-shot model is keyed by it (not nominal mass).
+          ms3_targeting = exploration_.initiateNextLevel(2, deconv_.storedMS2(), ctx.faims_cv, queue_, &ctx, &tracker_, pid);
           for (auto& c : ms3_targeting.commands)
           {
+            precursor_id_by_tracking_[c.scan_id] = pid;  // P5: MS3 children inherit the parent MS2's precursor_id
             queue_.push(c);
             child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
             commands_pushed++;
@@ -395,7 +413,7 @@ FLASHIda::FLASHIda(char* arg) :
             ms2_ctx.ms2_charge_intensity = ctx.precursor_intensity;
             ms2_ctx.ms2_window_snr = ctx.window_snr;  // Item 2: SNR travels on the command (was the queue map)
           }
-          id_rows.push_back({id_str, 2, 'R', ms2_ctx, ms3_targeting.proteoform_match});  // copy by value (ms2_ctx is local)
+          id_rows.push_back({id_str, 2, 'R', ms2_ctx, ms3_targeting.proteoform_match, pid});  // copy by value (ms2_ctx is local)
         }
 
         int ms2_mass_count = deconv_.hasStoredMS2() ? static_cast<int>(deconv_.storedMS2().size()) : 0;
@@ -441,12 +459,19 @@ FLASHIda::FLASHIda(char* arg) :
     }
     else if (ms_level == 3)
     {
+      // P5: precursor_id of this returning MS3 scan (inherited from its parent MS2, ultimately the MS1
+      // selection). Used for the model re-feed key, the precursor_id log column, and any further children.
+      const int pid = precursorIdForTracking_(tracking_id);
+
       // ===== MS3 (exploration variant): score variant -> push children -> fill row =====
       if (exploration_.isExplorationVariant(tracking_id))
       {
-        auto expl_result = exploration_.feedResult(tracking_id, mzs, ints, length, rt_min, queue_, &tracker_);
+        auto expl_result = exploration_.feedResult(tracking_id, mzs, ints, length, rt_min, queue_, &tracker_, pid);
         for (auto& c : expl_result.commands)
+        {
+          precursor_id_by_tracking_[c.scan_id] = pid;  // P5: children (e.g. production MS3) inherit the precursor_id
           queue_.push(c);  // parent_scan_id already stamped by feedResult; children pre-encoded in expl_result.child_ids
+        }
 
         int expl_mass_count = exploration_.explorationDeconvMassCount();
         const DeconvolvedSpectrum* expl_spec = exploration_.explorationDeconvSpectrum();
@@ -476,12 +501,13 @@ FLASHIda::FLASHIda(char* arg) :
 
         // Identification rows (copy by value before expl_result goes out of scope): primary + winners.
         // DIVERGENCE vs MS2-expl: MS3 gate is fragments-only, and MS3 also emits the winner-batch rows.
+        // P5: every winner-batch row belongs to the same exploration group -> same precursor_id (pid).
         if (!expl_result.identification_result.fragments.empty())
-          id_rows.push_back({id_str, 3, 'E', expl_result.ms2_context, expl_result.identification_result});
+          id_rows.push_back({id_str, 3, 'E', expl_result.ms2_context, expl_result.identification_result, pid});
         for (const auto& row : expl_result.additional_identification_rows)
         {
           if (!row.identification_result.fragments.empty())
-            id_rows.push_back({row.tracking_id, 3, 'E', row.ms2_context, row.identification_result});
+            id_rows.push_back({row.tracking_id, 3, 'E', row.ms2_context, row.identification_result, pid});
         }
 
         exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);
@@ -545,7 +571,7 @@ FLASHIda::FLASHIda(char* arg) :
             {
               // Copy cached_ms2_ctx (a reference into ms2_context_cache_, erased below) and ms3_matches[0]
               // (inner-scope) BY VALUE into the id-row now — the bottom write must not read them after the erase.
-              id_rows.push_back({id_str, 3, 'R', cached_ms2_ctx, ms3_matches[0]});
+              id_rows.push_back({id_str, 3, 'R', cached_ms2_ctx, ms3_matches[0], pid});
               // Capture the decision values the engine used so the results row agrees with this match.
               // Render the proteoform with its discovered PTMs via the same renderer the id row uses;
               // cached_ms2_ctx.ptm_sites is the cached parent-MS2 PTM set (toProForma returns the bare sequence when empty).
@@ -562,20 +588,19 @@ FLASHIda::FLASHIda(char* arg) :
 
               // 9b Part 3: re-feed the MS3 result into the proteoform model so its fragments fold in
               // (MS2 frame via ms3_matches[0].equiv_*/adjusted_mass; mapScanOntoModel_ handles the frame).
-              // Key on the SAME nominal mass the MS2 staged under (the MS2 precursor intact mass cached on
-              // the MS2 context). The parent-MS2 params are MS3 stage[0]; the captured ms2_ctx is ignored
+              // P5: key on this MS3's precursor_id (inherited from its parent MS2 / MS1 selection), the SAME
+              // key the parent MS2 staged the model under — so the MS3 fragments fold into the right
+              // single-charge model. The parent-MS2 params are MS3 stage[0]; the captured ms2_ctx is ignored
               // on re-feed (has_ms2_ctx is already true). Then re-finalize to re-pool (and T11 re-emit).
               if (resolved.has_value() && resolved->num_stages >= 2 && ms3_spec != nullptr)
               {
-                const int refeed_nominal =
-                    SpectralDeconvolution::getNominalMass(cached_ms2_ctx.ms1_precursor_mass);
                 Ms2Params parent_ms2_params{resolved->stages[0].collision_energy,
                                             std::string(resolved->stages[0].activation_type),
                                             resolved->stages[0].reaction_time};
-                tracker_.feedScan(refeed_nominal, /*ms_level=*/3, parent_ms2_params,
+                tracker_.feedScan(pid, /*ms_level=*/3, parent_ms2_params,
                                   /*scan_id=*/tracking_id, *ms3_spec,
                                   ms3_matches[0], ms3_matches[0].score, *resolved);
-                tracker_.finalize(refeed_nominal);
+                tracker_.finalize(pid);
               }
             }
 
@@ -695,7 +720,9 @@ FLASHIda::FLASHIda(char* arg) :
       // faims_cv already set at creation time (MS2 -> parent CV, CV-transition MS1 -> next CV)
       {
         std::lock_guard<std::mutex> lk(analysis_mutex_);
-        logger_.writeScanCommandRow(out);
+        // P5: source the dequeued command's precursor_id from the map (0 for MS1/AGC/untracked).
+        // The lock above serialises this read against processScan's map writes.
+        logger_.writeScanCommandRow(out, precursorIdForTracking_(out.scan_id));
       }
       return 1;
     }

@@ -146,7 +146,9 @@ namespace OpenMS
   /// Per-precursor accumulated state: fragments, modifications, pending scans
   struct ProteoformModel
   {
-    int nominal_mass = 0;
+    /// Model key = the per-MS1-selection precursor_id (one MS1 selection -> one charge state).
+    /// Replaces the former nominal-mass key so a fragment can never out-charge its precursor.
+    int precursor_id = 0;
     bool finalized = false;
     std::string proteoform_sequence;
     int region_start = -1, region_end = -1;
@@ -170,7 +172,7 @@ namespace OpenMS
    * @brief Per-precursor proteoform tracking model for the FLASHIda characterization feature.
    *
    * Accumulates fragment observations from MS2 and MS3 scans belonging to the same
-   * nominal-mass precursor, maps them onto a ProteoformModel, narrows modification
+   * precursor_id (one MS1 selection), maps them onto a ProteoformModel, narrows modification
    * localization, and plans the next acquisition scans to maximize coverage or
    * resolve ambiguity.
    *
@@ -184,21 +186,22 @@ namespace OpenMS
     ProteoformTracker(const Config& cfg, IdaLogger& logger);
 
     /**
-     * @brief Integrate a new deconvolved scan into the model for @p nominal_mass.
+     * @brief Integrate a new deconvolved scan into the model for @p precursor_id.
      *
-     * Creates the model entry on first call. Appends a PendingScan to pending,
-     * then triggers mapScanOntoModel_ + narrowModifications_ (skeleton: no-ops).
+     * @p precursor_id is the per-MS1-selection identity (assigned at MS1, carried by all of the
+     * precursor's MS2/exploration/MS3 scans). Creates the model entry on first call. Appends a
+     * PendingScan to pending, then triggers mapScanOntoModel_ + narrowModifications_ (skeleton: no-ops).
      */
-    void feedScan(int nominal_mass, uint8_t ms_level, const Ms2Params& params, int scan_id,
+    void feedScan(int precursor_id, uint8_t ms_level, const Ms2Params& params, int scan_id,
                   const DeconvolvedSpectrum& deconv,
                   const FragmentAnalysis::ProteoformMatch& match, double id_score,
                   const ScanCommand& ms2_ctx);
 
-    /// Mark the model for @p nominal_mass as finalized (no further scans expected).
-    void finalize(int nominal_mass);
+    /// Mark the model for @p precursor_id as finalized (no further scans expected).
+    void finalize(int precursor_id);
 
     /**
-     * @brief Plan the next MS3 acquisition targets for @p nominal_mass.
+     * @brief Plan the next MS3 acquisition targets for @p precursor_id.
      *
      * Inspects the current ProteoformModel and returns a list of MS3 targets (descriptors,
      * not commands) the executor (Exploration) builds and dispatches. The model is the
@@ -207,10 +210,10 @@ namespace OpenMS
      * budget, deduped, and skipping any fragment with no best-MS2 observation. Returns empty
      * if there is no identified model, no MS2 context, or no MS3 config.
      */
-    std::vector<Ms3Target> planNextScans(int nominal_mass);
+    std::vector<Ms3Target> planNextScans(int precursor_id);
 
-    /// Return a pointer to the model for @p nominal_mass, or nullptr if absent.
-    const ProteoformModel* model(int nominal_mass) const;
+    /// Return a pointer to the model for @p precursor_id, or nullptr if absent.
+    const ProteoformModel* model(int precursor_id) const;
 
   private:
     /// Map all observations in @p scan onto @p mdl's fragments map (skeleton: no-op).
@@ -225,7 +228,7 @@ namespace OpenMS
     const Config& config_;
     IdaLogger& logger_;
 
-    /// Active models keyed by nominal precursor mass
+    /// Active models keyed by precursor_id (per-MS1-selection identity; one selection -> one charge)
     std::unordered_map<int, ProteoformModel> models_;
   };
 

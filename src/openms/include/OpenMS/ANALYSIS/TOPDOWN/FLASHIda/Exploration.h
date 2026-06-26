@@ -211,9 +211,12 @@ namespace OpenMS
 
     /// Process returning exploration variant: deconvolve with correct precursor context,
     /// score, select winner, trigger next level. Returns FeedResultInfo with commands and metadata.
+    /// @param precursor_id The returning variant's per-MS1-selection identity (engine-side map lookup);
+    ///        used as the ProteoformTracker model key so each model holds one MS1 selection (one charge).
     FeedResultInfo feedResult(int tracking_id,
                               const double* mzs, const double* ints, int length,
-                              double rt, ScanCommandQueue& queue, ProteoformTracker* tracker = nullptr);
+                              double rt, ScanCommandQueue& queue, ProteoformTracker* tracker = nullptr,
+                              int precursor_id = 0);
 
     /// Test-only access (the feedResultImpl_ deconvolution-bypass + getGroup) lives in
     /// FLASHIda_TestAccess.h via this friend, so test scaffolding stays out of the production API.
@@ -228,10 +231,13 @@ namespace OpenMS
     ///        dispatch authority — it selects the MS3 targets (planNextScans) and Exploration builds
     ///        them (single MS3, or the CE sweep when MS3 exploration is configured). nullptr keeps the
     ///        legacy getTopFragmentMatches direct path (used by tests).
+    /// @param precursor_id The originating MS2's per-MS1-selection identity; used as the
+    ///        ProteoformTracker model key for the regular MS2->MS3 one-shot model + planNextScans.
     NextLevelResult initiateNextLevel(int msn_level, const DeconvolvedSpectrum& result,
                                       double faims_cv, ScanCommandQueue& queue,
                                       const ScanCommand* ms_ctx = nullptr,
-                                      ProteoformTracker* tracker = nullptr);
+                                      ProteoformTracker* tracker = nullptr,
+                                      int precursor_id = 0);
 
     /// Number of currently active exploration groups
     int activeGroupCount() const;
@@ -278,7 +284,8 @@ namespace OpenMS
     /// real tracker.
     FeedResultInfo feedResultImpl_(int tracking_id, const DeconvolvedSpectrum& ms2_deconv,
                                    const double* mzs, const double* ints, int length,
-                                   double rt, ScanCommandQueue& queue, ProteoformTracker* tracker = nullptr);
+                                   double rt, ScanCommandQueue& queue, ProteoformTracker* tracker = nullptr,
+                                   int precursor_id = 0);
 
     /// Parameters for one variant in a multi-activation sweep
     struct VariantParams

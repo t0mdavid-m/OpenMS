@@ -252,7 +252,7 @@ namespace OpenMS
 
   Exploration::FeedResultInfo Exploration::feedResult(int tracking_id,
       const double* mzs, const double* ints, int length,
-      double rt, ScanCommandQueue& queue, ProteoformTracker* tracker)
+      double rt, ScanCommandQueue& queue, ProteoformTracker* tracker, int precursor_id)
   {
     // Look up the group to get correct precursor context for deconvolution
     auto vit = variant_tracking_map_.find(tracking_id);
@@ -272,13 +272,13 @@ namespace OpenMS
       ms2_deconv = exploration_deconv_->storedMS2();
     }
 
-    return feedResultImpl_(tracking_id, ms2_deconv, mzs, ints, length, rt, queue, tracker);
+    return feedResultImpl_(tracking_id, ms2_deconv, mzs, ints, length, rt, queue, tracker, precursor_id);
   }
 
   Exploration::FeedResultInfo Exploration::feedResultImpl_(int tracking_id,
       const DeconvolvedSpectrum& ms2_deconv,
       const double* mzs, const double* ints, int length,
-      double rt, ScanCommandQueue& queue, ProteoformTracker* tracker)
+      double rt, ScanCommandQueue& queue, ProteoformTracker* tracker, int precursor_id)
   {
     (void)rt;
     FeedResultInfo info;
@@ -384,7 +384,9 @@ namespace OpenMS
     // tracker is nullptr only in the ExplorationTestAccess bypass path (no real IdaLogger available).
     if (tracker != nullptr)
     {
-      tracker->feedScan(SpectralDeconvolution::getNominalMass(group.precursor_mass),
+      // P5: key the model by the returning variant's precursor_id (one MS1 selection -> one charge),
+      // not the recomputed nominal mass (which folded multiple charge selections into one model).
+      tracker->feedScan(precursor_id,
                         /*ms_level=*/2,
                         Ms2Params{v.collision_energy, v.activation_type, v.reaction_time},
                         /*scan_id=*/tracking_id,
@@ -559,7 +561,8 @@ namespace OpenMS
     // tracker is nullptr only in the ExplorationTestAccess bypass path. (Was previously after dispatch.)
     if (tracker != nullptr)
     {
-      tracker->finalize(SpectralDeconvolution::getNominalMass(group.precursor_mass));
+      // P5: finalize the model under the same precursor_id key fed at :387.
+      tracker->finalize(precursor_id);
     }
 
     if (group.baseline_failed || best_idx < 0)
@@ -646,7 +649,7 @@ namespace OpenMS
         std::cout << "exploration call site" << std::endl;
         auto next_nlr = initiateNextLevel(group.msn_level,
             group.variants[best_idx].result, group.faims_cv, queue,
-            &group.variants[best_idx].cmd, tracker);
+            &group.variants[best_idx].cmd, tracker, precursor_id);  // P5: same precursor_id model key
         info.commands.insert(info.commands.end(), next_nlr.commands.begin(), next_nlr.commands.end());
       }
     }
@@ -679,7 +682,7 @@ namespace OpenMS
 
   Exploration::NextLevelResult Exploration::initiateNextLevel(int msn_level,
       const DeconvolvedSpectrum& result, double faims_cv, ScanCommandQueue& queue,
-      const ScanCommand* ms_ctx, ProteoformTracker* tracker)
+      const ScanCommand* ms_ctx, ProteoformTracker* tracker, int precursor_id)
   {
     NextLevelResult nlr;
 
@@ -790,7 +793,8 @@ namespace OpenMS
     // one-shot model for it so the gate fires. The legacy getTopFragmentMatches direct emitter has been
     // deleted; the model is the sole MS3 authority. When no model exists (tracker==nullptr in tests, or
     // found==0), the gate is false and the function returns nlr with no next-level commands.
-    const int nominal_mass = (ms_ctx != nullptr) ? SpectralDeconvolution::getNominalMass(ms_ctx->mono_mass) : 0;
+    // P5: the model is keyed by the originating MS2's precursor_id (one MS1 selection -> one charge),
+    // not the recomputed nominal mass (which folded multiple charge selections of one molecule together).
 
     // M3 (ADR-0005): make the regular (non-exploration) MS2->MS3 path model-driven. The exploration path
     // already fed its variants and finalized (Exploration::feedResultImpl_) before calling initiateNextLevel,
@@ -800,24 +804,24 @@ namespace OpenMS
     // non-empty proteoform_sequence + score, so finalize seeds a winner.
     if (tracker != nullptr && next_level >= 3 && ms_ctx != nullptr && ms_ctx->num_stages > 0 && found > 0)
     {
-      const ProteoformModel* existing = tracker->model(nominal_mass);
+      const ProteoformModel* existing = tracker->model(precursor_id);
       if (existing == nullptr || existing->proteoform_sequence.empty())
       {
         Ms2Params p;
         p.collision_energy = ms_ctx->stages[0].collision_energy;
         p.activation_type  = std::string(ms_ctx->stages[0].activation_type);
         p.reaction_time    = ms_ctx->stages[0].reaction_time;
-        tracker->feedScan(nominal_mass, /*ms_level=*/2, p, ms_ctx->scan_id, result, frag_result,
+        tracker->feedScan(precursor_id, /*ms_level=*/2, p, ms_ctx->scan_id, result, frag_result,
                           frag_result.score, *ms_ctx);
-        tracker->finalize(nominal_mass);
+        tracker->finalize(precursor_id);
       }
     }
 
     const ProteoformModel* model = (tracker != nullptr && next_level >= 3 && ms_ctx != nullptr)
-        ? tracker->model(nominal_mass) : nullptr;
+        ? tracker->model(precursor_id) : nullptr;
     if (model != nullptr && !model->proteoform_sequence.empty())
     {
-      auto targets = tracker->planNextScans(nominal_mass);
+      auto targets = tracker->planNextScans(precursor_id);  // P5: plan from the precursor_id-keyed model
 
       for (const Ms3Target& target : targets)
       {

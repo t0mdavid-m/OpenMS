@@ -71,7 +71,10 @@ namespace OpenMS
                              << "peakgroup_intensity\thcd_energy\tparent_tracking_id\t"
                              << "ion_type\tion_index\t"
                              << "reaction_time\treagent_max_it\treagent_agc_target\t"
-                             << "scan_description\n";  // E6: raw descriptor, asserted == what's sent to instrument
+                             << "scan_description\t"  // E6: raw descriptor, asserted == what's sent to instrument
+                             // P5: per-MS1-selection precursor identity (plain decimal); appended LAST so the
+                             // existing positional column indices don't shift. 0 for MS1/AGC/untracked.
+                             << "precursor_id\n";
         commands_tsv_stream_.flush();
       }
     }
@@ -109,7 +112,9 @@ namespace OpenMS
                                    // I2: isolation-window width / over-window SNR / selected-charge intensity,
                                    // for the MS2 precursor and (on MS3 rows) the MS3 fragment precursor.
                                    << "ms2_isolation_width\tms2_window_snr\tms2_charge_intensity\t"
-                                   << "ms3_isolation_width\tms3_window_snr\tms3_charge_intensity\n";
+                                   << "ms3_isolation_width\tms3_window_snr\tms3_charge_intensity\t"
+                                   // P5: per-MS1-selection precursor identity (plain decimal); appended LAST.
+                                   << "precursor_id\n";
         identification_tsv_stream_.flush();
       }
     }
@@ -120,7 +125,9 @@ namespace OpenMS
       {
         pooled_stream_ << "nominal_mass\tmono_mass\tproteoform\tflash_extender_score\t"
                        << "coverage_pct\tn_fragments\tlocalized_mods\tambiguous_mods\t"
-                       << "contributing_scan_ids\tcombined_ms2_frame_masses\tupdate_index\n";
+                       << "contributing_scan_ids\tcombined_ms2_frame_masses\tupdate_index\t"
+                       // P5: per-MS1-selection precursor identity (the model key; plain decimal); appended LAST.
+                       << "precursor_id\n";
         pooled_stream_.flush();
       }
     }
@@ -199,7 +206,7 @@ namespace OpenMS
     }
   }
 
-  void IdaLogger::writeScanCommandRow(const ScanCommand& cmd)
+  void IdaLogger::writeScanCommandRow(const ScanCommand& cmd, int precursor_id)
   {
     if (!commands_tsv_stream_.is_open()) return;
 
@@ -300,7 +307,8 @@ namespace OpenMS
                          << reaction_times << "\t"
                          << reagent_max_its << "\t"
                          << reagent_agc_targets << "\t"
-                         << cmd.scan_description << "\n";  // E6: raw descriptor (tab/newline-free by construction)
+                         << cmd.scan_description << "\t"  // E6: raw descriptor (tab/newline-free by construction)
+                         << precursor_id << "\n";         // P5: per-MS1-selection precursor identity (appended LAST)
     commands_tsv_stream_.flush();
   }
 
@@ -528,7 +536,9 @@ namespace OpenMS
       << ctx.ms2_charge_intensity << "\t"
       << (ms_level == 3 ? ctx.ms3_isolation_width : 0.0) << "\t"
       << (ms_level == 3 ? ctx.ms3_window_snr : 0.0) << "\t"
-      << (ms_level == 3 ? ctx.ms3_charge_intensity : 0.0) << "\n";
+      << (ms_level == 3 ? ctx.ms3_charge_intensity : 0.0) << "\t"
+      // P5: per-MS1-selection precursor identity (plain decimal); appended LAST.
+      << row.precursor_id << "\n";
     identification_tsv_stream_.flush();
   }
 
@@ -577,7 +587,9 @@ namespace OpenMS
                    << amb_str << "\t"
                    << scan_ids_str << "\t"
                    << masses_ss.str() << "\t"
-                   << r.update_index << "\n";
+                   << r.update_index << "\t"
+                   // P5: per-MS1-selection precursor identity (the model key); appended LAST.
+                   << r.precursor_id << "\n";
     pooled_stream_.flush();
   }
 

@@ -150,6 +150,29 @@ namespace OpenMS
     /// MS2 context cache keyed by MS3 tracking ID (for non-exploration identification)
     std::unordered_map<int, Exploration::MS2Context> ms2_context_cache_;
 
+    /// P5: monotonic, deterministic-per-run, base-10 precursor identity counter. A NEW id is allocated
+    /// for each precursor selected at MS1 (allocPrecursorId_); carried by all of that precursor's
+    /// MS2 / exploration-variant / MS3 scans via precursor_id_by_tracking_. Logged as a plain decimal
+    /// (NOT base-94 like tracking_id). Starts at 1 (0 = "no precursor / untracked").
+    int next_precursor_id_ = 1;
+
+    /// P5: tracking_id -> precursor_id, the propagation map. Stamped when an MS2 command is issued at MS1
+    /// (allocPrecursorId_ per precursor) and when child commands inherit their parent's precursor_id.
+    /// Read on scan return to key the ProteoformTracker model and source the precursor_id log column.
+    /// Guarded by analysis_mutex_ (written in processScan; read in processScan + the writeScanCommandRow
+    /// call sites in getNextScanCommand, which hold analysis_mutex_).
+    std::unordered_map<int, int> precursor_id_by_tracking_;
+
+    /// P5: allocate the next precursor_id (monotonic). Call once per MS1-selected precursor.
+    int allocPrecursorId_() { return next_precursor_id_++; }
+
+    /// P5: look up the precursor_id for a tracking_id, or 0 if untracked.
+    int precursorIdForTracking_(int tracking_id) const
+    {
+      auto it = precursor_id_by_tracking_.find(tracking_id);
+      return (it != precursor_id_by_tracking_.end()) ? it->second : 0;
+    }
+
     /// Steady-clock reference for timestamps
     std::chrono::steady_clock::time_point engine_start_time_;
 
