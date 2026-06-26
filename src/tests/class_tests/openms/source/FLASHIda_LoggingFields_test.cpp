@@ -160,23 +160,26 @@ START_SECTION(schema_column_counts)
   auto r = TSVFile::parse(res_f);
   auto i = TSVFile::parse(id_f);
 
-  TEST_EQUAL(c.headers.size(), 29)   // E6: + scan_description
-  TEST_EQUAL(r.headers.size(), 34)   // E5: + ms_level; F5: + winner_tracking_id
-  TEST_EQUAL(i.headers.size(), 25)   // I2: + ms2/ms3 isolation_width, window_snr, charge_intensity (6)
+  TEST_EQUAL(c.headers.size(), 30)   // E6: + scan_description; P5: + precursor_id
+  TEST_EQUAL(r.headers.size(), 34)   // E5: + ms_level; F5: + winner_tracking_id (scan_results unchanged by P5)
+  TEST_EQUAL(i.headers.size(), 26)   // I2: + ms2/ms3 isolation_width, window_snr, charge_intensity (6); P5: + precursor_id
 
   // Spot-check exact header identities / order at the boundaries that matter for parsing.
   TEST_EQUAL(c.headers.front(), std::string("tracking_id"))
-  TEST_EQUAL(c.headers.back(), std::string("scan_description"))   // E6: appended last
-  TEST_EQUAL(c.colIndex("scan_description"), 28)
+  TEST_EQUAL(c.headers.back(), std::string("precursor_id"))      // P5: appended LAST (after scan_description)
+  TEST_EQUAL(c.colIndex("precursor_id"), 29)                     // P5: trailing column index
+  TEST_EQUAL(c.colIndex("scan_description"), 28)                 // E6 column unmoved (P5 appended after it)
   TEST_EQUAL(c.colIndex("hcd_energy"), 21)
   TEST_EQUAL(r.headers.front(), std::string("tracking_id"))
   TEST_EQUAL(r.colIndex("ms_level"), 1)                           // E5: inserted right after tracking_id
-  TEST_EQUAL(r.headers.back(), std::string("winner_tracking_id"))   // F5: appended last
+  TEST_EQUAL(r.headers.back(), std::string("winner_tracking_id"))   // F5: appended last (scan_results: no precursor_id)
   TEST_EQUAL(r.colIndex("winner_tracking_id"), 33)                 // F5: trailing column index
   TEST_EQUAL(r.colIndex("processing_duration_ms"), 32)             // now second-to-last
   TEST_EQUAL(r.colIndex("child_ids"), 9)                          // shifted +1 by ms_level@1
   TEST_EQUAL(i.headers.front(), std::string("ms_level"))
-  TEST_EQUAL(i.headers.back(), std::string("ms3_charge_intensity"))   // I2: appended last
+  TEST_EQUAL(i.headers.back(), std::string("precursor_id"))      // P5: appended LAST (after ms3_charge_intensity)
+  TEST_EQUAL(i.colIndex("precursor_id"), 25)                     // P5: trailing column index
+  TEST_EQUAL(i.colIndex("ms3_charge_intensity"), 24)            // I2 column unmoved (P5 appended after it)
   // I2: the 6 new identification columns appended after ms3_fragment_masses (col 18), in order.
   TEST_EQUAL(i.colIndex("ms3_fragment_masses"), 18)
   TEST_EQUAL(i.colIndex("ms2_isolation_width"), 19)
@@ -264,9 +267,20 @@ START_SECTION(commands_ms3_two_stage)
   int lvl = t.colIndex("ms_level");
   ABORT_IF(lvl < 0)
 
+  // §C2 lineage guard (P5): map every source-MS2 command's tracking_id -> its (single, no-';') precursor
+  // charge. MS2 rows carry one charge state (the MS1 selection's charge); MS3 rows join back to it via
+  // parent_tracking_id. Built in a first pass so the MS3 loop below can resolve each MS3's true source MS2.
+  std::map<std::string, double> ms2charge;
+  for (const auto& row : t.rows)
+  {
+    if (lvl >= (int)row.size() || row[lvl] != "2") continue;
+    ms2charge[cell(t, row, "tracking_id")] = toD(cell(t, row, "charge"));  // single-stage: no ';'
+  }
+
   bool found = false, stage1_populated = false;
   bool charge2_ok = true, ce_stage1_ok = true, act2_ok = true, ion_ok = true, parent_ok = true;
   bool score2_ok = true, hcd_stage1_ok = true;
+  bool lineage_ok = true, lineage_checked = false;  // §C2: fragment charge bounded by its REAL source-MS2 charge
   for (const auto& row : t.rows)
   {
     if (lvl >= (int)row.size() || row[lvl] != "3") continue;
@@ -284,7 +298,27 @@ START_SECTION(commands_ms3_two_stage)
     hcd_stage1_ok = hcd_stage1_ok && hcd.size() == 2 && std::abs(toD(hcd[1]) - 35.0) < 1.0;
 
     ion_ok = ion_ok && ionTypeOk(cell(t, row, "ion_type")) && (std::atoi(cell(t, row, "ion_index").c_str()) >= 1);
-    parent_ok = parent_ok && isTrackingId(cell(t, row, "parent_tracking_id"));  // == its MS2
+    std::string parent = cell(t, row, "parent_tracking_id");
+    parent_ok = parent_ok && isTrackingId(parent);  // == its MS2
+
+    // §C2 POSITIVE LINEAGE GUARD (P5): pin the MS3 fragment charge to the charge of the REAL source MS2
+    // it descends from -- not just to the MS3 row's own self-reported stage-0. Join the MS3 to its parent
+    // MS2 (parent_tracking_id), then require (a) the parent resolves to a logged MS2 row and (b) the
+    // fragment charge (chg[1]) fits inside that source MS2's charge. Because the per-MS1-selection model
+    // is now single-charge, the MS3's source MS2 IS the charge context, so the row's own stage-0 must
+    // equal the source-MS2 charge. Pre-P5 (nominal-mass model pooling cytC@8/@10/@15) this fired the
+    // [8;9] inversion: stage-0 logged 8 (one selection's trigger) while the fragment's source MS2 was z=15
+    // -> inFragCharge(9, 8) == false here. This is a real assertion, not vacuous (see below).
+    if (chg.size() == 2)
+    {
+      lineage_checked = true;
+      double frag_charge = toD(chg[1]);
+      bool has_parent = ms2charge.count(parent) > 0;
+      lineage_ok = lineage_ok
+                && has_parent                                                 // MS3 -> real source MS2
+                && (toD(chg[0]) == ms2charge[parent])                         // stage-0 == source-MS2 charge (pins it)
+                && inFragCharge(frag_charge, ms2charge[parent]);             // fragment <= REAL source charge
+    }
 
     // The 11 scoring cols are 2-stage 'stage0;stage1'. stage0 == parent MS2 score (range-checked);
     // stage1 is the fresh fragment score (allowed 0, but at least one row must populate it).
@@ -304,6 +338,8 @@ START_SECTION(commands_ms3_two_stage)
   TEST_TRUE(charge2_ok)  TEST_TRUE(ce_stage1_ok)  TEST_TRUE(act2_ok)  TEST_TRUE(hcd_stage1_ok)
   TEST_TRUE(ion_ok)      TEST_TRUE(parent_ok)     TEST_TRUE(score2_ok)
   TEST_TRUE(stage1_populated)  // proves the MS3 2-stage scoring plumb reached the writer
+  TEST_TRUE(lineage_checked)   // §C2: at least one MS3 two-stage charge cell was joined to its source MS2
+  TEST_TRUE(lineage_ok)        // §C2: every MS3 fragment charge fits inside its REAL source-MS2 charge
 
   std::remove(cmd_f.c_str());
 }
@@ -1709,7 +1745,7 @@ START_SECTION(commands_scan_description_roundtrip)
   for (const auto& c : cycle.ms3_cmds) { std::string d(c.scan_description); if (d.size() >= 3) drained_desc[d.substr(0, 3)] = d; }
 
   auto t = TSVFile::parse(cmd_f);
-  ABORT_IF(t.colIndex("scan_description") != 28)  // E6: scan_description is the last column
+  ABORT_IF(t.colIndex("scan_description") != 28)  // E6: scan_description at col 28 (P5 appended precursor_id after it)
 
   bool matched_any = false, equal_ok = true;
   for (const auto& row : t.rows)
