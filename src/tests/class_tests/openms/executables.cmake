@@ -463,6 +463,7 @@ set(analysis_executables_list
   MS3FragmentMatcher_identification_test
   FragmentAnalysis_test
   FragmentAnalysis_toProForma_test
+  ProteoformTracker_CEOptimization_test
   ScanCommandQueue_Concurrent_test
   ScanConfig_applyOverrides_test
   FalseDiscoveryRate_test

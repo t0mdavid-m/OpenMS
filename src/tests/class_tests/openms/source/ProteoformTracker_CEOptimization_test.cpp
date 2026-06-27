@@ -1,0 +1,274 @@
+// Copyright (c) 2002-present, OpenMS Inc. -- EKU Tuebingen, ETH Zurich, and FU Berlin
+// SPDX-License-Identifier: BSD-3-Clause
+//
+// --------------------------------------------------------------------------
+// $Maintainer: Tom David Mueller $
+// $Authors: Tom David Mueller $
+// --------------------------------------------------------------------------
+//
+// Issue-2 pin: per-fragment / per-charge CE optimization (ADR-0003).
+//
+// The ADR-0003 mechanism carries each fragment's BEST-MS2 acquisition params (collision energy,
+// activation, reaction time) forward into that fragment's MS3 isolation stage (stage[0]). The
+// engine implements it end to end:
+//   feedScan -> mapScanOntoModel_ stores obs.params = scan params on every FragmentObservation,
+//               and keeps the STRICTLY-greater best_ms2 per fragment (ProteoformTracker.cpp:654-655);
+//   planNextScans copies the winning observation's params into Ms3Target.stage0_params
+//               (ProteoformTracker.cpp:475);
+//   ScanCommandQueue::buildMS3 first copies the ctx stage[0] (ScanCommandQueue.cpp:336) and then,
+//               iff stage0_params != nullptr, OVERRIDES stage[0].collision_energy with the
+//               per-fragment value (ScanCommandQueue.cpp:341-347).
+//
+// Before this test nothing EXERCISED that override: every capture replays a static spectrum whose
+// fragment intensities do not change with the commanded CE, so the first variant (CE = ce_min)
+// always won and stage0 CE was uniformly ce_min. A regression that deleted the stage0_params
+// override (always use the ctx CE) would pass every existing test. This test forces two fragments
+// to win their best-MS2 at DIFFERENT collision energies and pins the per-fragment propagation.
+//
+// CONSTRUCTION NOTE (why per-scan fragment PRESENCE, not literal inverted intensity): a fragment
+// observation's intensity is recovered from PeakGroup::getChargeIntensity(charge) (feedScan ->
+// PeakRecord.intensity). per_charge_int_ is populated ONLY by the full updateQscore scoring
+// pipeline (needs a PrecalculatedAveragine + passes charge/cosine gates); a hand-built synthetic
+// PeakGroup has getChargeIntensity()==0 (see PeakGroup_test getChargeIntensity == .0). With every
+// observation intensity 0 the strictly-greater update (obs.intensity > best->intensity) keeps the
+// FIRST observation of each fragment. We therefore make each fragment win deterministically by
+// having it appear in EXACTLY ONE of the two scans: fragment A only in the CE=20 scan, fragment B
+// only in the CE=35 scan. This drives the identical best_ms2 / obs.params / stage0_params path the
+// real CE-response data would drive, with a deterministic outcome (A -> 20, B -> 35).
+
+#include <OpenMS/CONCEPT/ClassTest.h>
+
+#include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/IdaLogger.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms2Params.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ProteoformTracker.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
+
+#include <cmath>
+#include <cstring>
+#include <string>
+#include <vector>
+
+using namespace OpenMS;
+
+namespace
+{
+  // Ambiguity objective: planNextScans targets the best-MS2 fragments that fully CONTAIN a still-
+  // ambiguous modification (round-robin, strongest container first). We seed ONE ambiguous mod that
+  // BOTH fragments contain (and neither brackets, so it survives narrowModifications_), so both are
+  // emitted as per-fragment MS3 targets. (The Coverage objective cannot re-select here: a coverage
+  // "gap" is by definition uncovered, so no fragment's coverage can CONTAIN it -> empty plan.)
+  // No runtime block / no log files -> IdaLogger writes nothing. MS3 config drives buildMS3 stage[1].
+  // max_targets >= 2 so planNextScans can emit BOTH per-fragment MS3 targets (budget = level(2).max_targets).
+  const char* tracker_config = R"({
+    "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 1, "max_charge": 50, "min_mass": 100, "max_mass": 50000, "tol": [10, 10, 10] },
+    "precursor_selection": { "RT_window": 180, "target_mode": 0, "IDScore": false, "AllCharges": false, "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1 },
+    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
+    "faims": { "cv_values": [-50], "max_cv_skip": 0, "cv_precursor_threshold": 15 },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "first_mass": 100, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
+      "ms2": [ { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 } ],
+      "ms3": [ { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25, "resolution": 120000 } ]
+    },
+    "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 } },
+    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+    "characterization": { "objective": "ambiguity", "protein_sequence": "PEPTIDEK" },
+    "conditional_ms2": false,
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_targets": 3 },
+      "ms2": { "selection": "intensity", "max_targets": 10 },
+      "ms3": { "selection": "intensity", "max_targets": 10 }
+    }
+  })";
+
+  // 8-residue winner proteoform (L = 8). Two fragments both CONTAIN one ambiguous modification at
+  // residues [4,5] (so the Ambiguity objective keeps both as MS3 targets) yet neither BRACKETS it (so
+  // narrowModifications_ leaves it ambiguous):
+  //   fragment A = prefix b6  -> covers region residues [1, 6]; contains [4,5] (1<=4 && 6>=5); does not
+  //                              bracket (prefix brackets iff 4 <= 6 < 5 -> false).
+  //   fragment B = suffix y6  -> covers region residues [3, 8] (cover_start = L - 6 + 1 = 3); contains
+  //                              [4,5] (3<=4 && 8>=5); does not bracket (suffix brackets iff 4 < 3 <= 5 -> false).
+  // With the full-sequence match region (region_start/end = -1) both ion indices map straight to the
+  // winner-region frame (ProteoformTracker.cpp mapScanOntoModel_ identity reduction).
+  const char* WINNER_SEQ = "PEPTIDEK";
+  const int   AMB_MOD_START = 4;   // ambiguous modification region (full-protein 1-based) both fragments contain
+  const int   AMB_MOD_END   = 5;
+
+  // Build a minimal synthetic PeakGroup at a given (mz, mono_mass, charge). getChargeIntensity is 0
+  // for such hand-built groups (no scoring pass), which is fine: best-MS2 differentiation here is
+  // driven by per-scan fragment PRESENCE, not intensity (see file header).
+  PeakGroup makeSyntheticPeakGroup(double mz, double mono_mass, int charge)
+  {
+    PeakGroup pg(charge, charge, true);
+    pg.setMonoisotopicMass(mono_mass);
+    FLASHHelperClasses::LogMzPeak lp;
+    lp.mz = mz;
+    lp.abs_charge = charge;
+    lp.intensity = 1000.0f;  // recorded on the peak; getChargeIntensity stays 0 without a scoring pass
+    pg.push_back(lp);
+    return pg;
+  }
+
+  // A single-fragment ProteoformMatch for the winner proteoform: identifies the full sequence (score
+  // >= 0 so finalize accepts it as the winner), carries exactly one matched fragment ion, and seeds
+  // the ambiguous modification [AMB_MOD_START, AMB_MOD_END] via a PTMSite (finalize copies the WINNER
+  // match's ptm_sites into the model's modifications; both fed matches carry it so either could win).
+  FragmentAnalysis::ProteoformMatch makeMatch(const std::string& ion_type, int ion_index, double observed_mass)
+  {
+    FragmentAnalysis::ProteoformMatch m;
+    m.score = 1.0;                 // >= 0 + non-empty sequence => eligible winner (finalize)
+    m.region_start = -1;           // full-sequence region (identity frame mapping)
+    m.region_end = -1;
+    m.matched_protein = "synthetic";
+    m.proteoform_sequence = WINNER_SEQ;
+    FragmentAnalysis::ProteoformMatch::FragmentMatch fm;
+    fm.ion_type = ion_type;        // MS2 fragment: region-relative ion type/index
+    fm.ion_index = ion_index;
+    fm.observed_mass = observed_mass;
+    m.fragments.push_back(fm);
+    FragmentAnalysis::PTMSite site;
+    site.start_position = AMB_MOD_START;   // ambiguous region (start < end => candidate_start < candidate_end)
+    site.end_position = AMB_MOD_END;
+    site.position = (AMB_MOD_START + AMB_MOD_END) / 2;
+    site.mass_shift = 42.0106;             // arbitrary shift; no bracketing fragment => never localized here
+    m.ptm_sites.push_back(site);
+    return m;
+  }
+
+  // A 2-stage MS2 context command whose stage[0] carries the FIRST scan's CE (20). buildMS3 copies
+  // this stage[0] as the fallback; the per-fragment stage0_params override (if present) replaces the CE.
+  ScanCommand makeMs2Ctx(double ms2_ctx_ce)
+  {
+    ScanCommand ctx{};
+    ctx.scan_id = 1;
+    ctx.msn_level = 2;
+    ctx.num_stages = 1;
+    ctx.mono_mass = 900.0;
+    ctx.stages[0].precursor_mz = 451.0;
+    ctx.stages[0].isolation_width = 2.0;
+    ctx.stages[0].charge_state = 2;
+    ctx.stages[0].collision_energy = ms2_ctx_ce;
+    std::strncpy(ctx.stages[0].activation_type, "HCD", sizeof(ctx.stages[0].activation_type) - 1);
+    return ctx;
+  }
+
+  // Find the planned Ms3Target for a given ion (type + index); returns nullptr if absent.
+  const Ms3Target* findTarget(const std::vector<Ms3Target>& targets, const std::string& ion_type, int ion_index)
+  {
+    for (const Ms3Target& t : targets)
+      if (t.ion_type == ion_type && t.ion_index == ion_index) return &t;
+    return nullptr;
+  }
+}
+
+START_TEST(ProteoformTracker_CEOptimization, "$Id$")
+
+/////////////////////////////////////////////////////////////
+// Per-fragment CE optimization: best-MS2 CE is carried per fragment into the MS3 stage[0] command.
+/////////////////////////////////////////////////////////////
+START_SECTION(per_fragment_best_ms2_ce_propagates_to_ms3_stage0)
+{
+  const double CE_A = 20.0;   // fragment A wins its best MS2 here
+  const double CE_B = 35.0;   // fragment B wins its best MS2 here
+  const int precursor_id = 7;
+
+  Config cfg{std::string(tracker_config)};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+  ScanCommandQueue queue(cfg);
+
+  // Fragment masses (arbitrary but distinct + matching the fed PeakGroup so frag_mz/charge resolve).
+  const double MASS_A = 700.0;   // prefix b6
+  const double MASS_B = 800.0;   // suffix y6
+
+  // The MS2 context captured at the FIRST feedScan: its stage[0] CE = CE_A (= 20). This is the value
+  // buildMS3 would use for stage[0] IF the per-fragment override were absent (adversarial baseline).
+  ScanCommand ms2_ctx = makeMs2Ctx(CE_A);
+
+  // --- Scan 1: CE = 20, contains ONLY fragment A (prefix b6) -> A's best MS2 is at CE 20. ---
+  {
+    Ms2Params p1;
+    p1.collision_energy = CE_A;
+    p1.activation_type = "HCD";
+    p1.reaction_time = 0.0;
+
+    DeconvolvedSpectrum d1(101);
+    d1.push_back(makeSyntheticPeakGroup(MASS_A / 2.0 + 1.0, MASS_A, 2));   // matches fragment A's mass
+
+    auto match1 = makeMatch("b", 6, MASS_A);
+    tracker.feedScan(precursor_id, 2, p1, 101, d1, match1, 1.0, ms2_ctx);
+  }
+
+  // --- Scan 2: CE = 35, contains ONLY fragment B (suffix y6) -> B's best MS2 is at CE 35. ---
+  {
+    Ms2Params p2;
+    p2.collision_energy = CE_B;
+    p2.activation_type = "HCD";
+    p2.reaction_time = 0.0;
+
+    DeconvolvedSpectrum d2(102);
+    d2.push_back(makeSyntheticPeakGroup(MASS_B / 2.0 + 1.0, MASS_B, 2));   // matches fragment B's mass
+
+    auto match2 = makeMatch("y", 6, MASS_B);
+    tracker.feedScan(precursor_id, 2, p2, 102, d2, match2, 1.0, ms2_ctx);
+  }
+
+  tracker.finalize(precursor_id);
+
+  // The winner model identified the proteoform and mapped both fragments.
+  const ProteoformModel* mdl = tracker.model(precursor_id);
+  TEST_TRUE(mdl != nullptr)
+  ABORT_IF(mdl == nullptr)
+  TEST_EQUAL(mdl->proteoform_sequence, std::string(WINNER_SEQ))
+
+  // --- planNextScans: per-fragment MS3 targets, each carrying its OWN best-MS2 CE in stage0_params. ---
+  std::vector<Ms3Target> targets = tracker.planNextScans(precursor_id);
+  TEST_TRUE(targets.size() >= 2)   // both fragments selected (Ambiguity objective: both contain the mod; budget >= 2)
+
+  const Ms3Target* tA = findTarget(targets, "b", 6);
+  const Ms3Target* tB = findTarget(targets, "y", 6);
+  TEST_TRUE(tA != nullptr)
+  TEST_TRUE(tB != nullptr)
+  ABORT_IF(tA == nullptr || tB == nullptr)
+
+  // CORE ASSERTION 1: the per-fragment best-MS2 CE DIFFERS (A -> 20, B -> 35). A regression that
+  // collapsed per-fragment params to a single value (or always used the ctx CE) breaks this.
+  TEST_TRUE(std::abs(tA->stage0_params.collision_energy - CE_A) < 1e-6)
+  TEST_TRUE(std::abs(tB->stage0_params.collision_energy - CE_B) < 1e-6)
+  TEST_TRUE(std::abs(tA->stage0_params.collision_energy - tB->stage0_params.collision_energy) > 1.0)
+
+  // --- buildMS3: the per-fragment stage0 CE must reach cmd.stages[0].collision_energy. ---
+  // Pass each target's stage0_params into buildMS3 (the Exploration executor does this at runtime).
+  FragmentAnalysis::FragmentScores fs;  // default-empty scores are fine for the stage[0] CE check.
+  ABORT_IF(cfg.level(3).scans.empty())
+  const ScanConfig ms3_config = cfg.level(3).scans[0];  // analyzer CID, fragmentation CE 25 (stage[1])
+
+  ScanCommand cmdA = queue.buildMS3(ms2_ctx, ms3_config,
+                                    tA->frag_mz, tA->frag_charge, tA->iso_width, ms2_ctx.scan_id,
+                                    'b', tA->ion_index, 1, fs, &tA->stage0_params);
+  ScanCommand cmdB = queue.buildMS3(ms2_ctx, ms3_config,
+                                    tB->frag_mz, tB->frag_charge, tB->iso_width, ms2_ctx.scan_id,
+                                    'y', tB->ion_index, 1, fs, &tB->stage0_params);
+
+  // CORE ASSERTION 2: buildMS3 propagated each fragment's own MS2 CE into MS3 stage[0].
+  TEST_TRUE(std::abs(cmdA.stages[0].collision_energy - CE_A) < 1e-6)
+  TEST_TRUE(std::abs(cmdB.stages[0].collision_energy - CE_B) < 1e-6)
+
+  // ADVERSARIAL PROPERTY (non-vacuity): fragment B's stage[0] CE (35) DIFFERS from the ctx stage[0]
+  // CE (20). buildMS3 copies ctx.stages[0] first (ScanCommandQueue.cpp:336) and only the
+  // stage0_params override (ScanCommandQueue.cpp:341) raises it to 35. If that override line were
+  // DELETED, cmdB.stages[0].collision_energy would equal the ctx CE (20) and this assertion FAILS.
+  TEST_TRUE(std::abs(cmdB.stages[0].collision_energy - ms2_ctx.stages[0].collision_energy) > 1.0)
+  TEST_TRUE(std::abs(cmdB.stages[0].collision_energy - CE_B) < 1e-6)
+  // (cmdA's stage[0] CE happens to equal the ctx CE because the ctx was captured from scan 1 (CE 20);
+  //  the discriminating case is fragment B, whose best-MS2 CE differs from the ctx CE.)
+}
+END_SECTION
+
+END_TEST

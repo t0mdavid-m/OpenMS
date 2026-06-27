@@ -622,17 +622,21 @@ START_SECTION(results_ms3_normal_columns)
     TEST_TRUE(cell(res, row, "child_ids").empty())
     TEST_TRUE(isTrackingId(cell(res, row, "parent_tracking_id")))  // == its MS2
 
-    // 2-stage CE/act/rt (MS2 isolation ; MS3 fragmentation)
+    // 2-stage CE/act/rt (MS2 isolation ; MS3 fragmentation). FAIL-CLOSED: the per-stage split MUST
+    // yield exactly two tokens on every MS3 result row (a regression that logs a 1-token CE/act/rt
+    // -- e.g. the Issue-1 MS3-exploration single-stage bug, or num_stages<2 -> "0" -- now FAILS here
+    // instead of silently skipping the CE/act/rt checks).
     auto ce  = splitTokens(cell(res, row, "collision_energy"), ';');
     auto act = splitTokens(cell(res, row, "activation_type"), ';');
     auto rt  = splitTokens(cell(res, row, "reaction_time"), ';');
-    if (ce.size() == 2)
-    {
-      TEST_TRUE(posFinite(toD(ce[0])) && posFinite(toD(ce[1])))
-      TEST_TRUE(std::abs(toD(ce[1]) - 35.0) < 1.0)  // MS3 fragmentation CE
-      TEST_TRUE(act.size() == 2 && inActivationSet(act[0]) && inActivationSet(act[1]))
-      TEST_TRUE(rt.size() == 2 && nonNegFinite(toD(rt[0])) && nonNegFinite(toD(rt[1])))
-    }
+    TEST_EQUAL(ce.size(), 2)
+    TEST_EQUAL(act.size(), 2)
+    TEST_EQUAL(rt.size(), 2)
+    TEST_TRUE(posFinite(toD(ce[0])) && posFinite(toD(ce[1])))
+    TEST_TRUE(std::abs(toD(ce[0]) - 29.0) < 1.0)  // MS2 isolation CE (buildJsonWithRuntime fixed MS2 CE)
+    TEST_TRUE(std::abs(toD(ce[1]) - 35.0) < 1.0)  // MS3 fragmentation CE
+    TEST_TRUE(inActivationSet(act[0]) && inActivationSet(act[1]))
+    TEST_TRUE(nonNegFinite(toD(rt[0])) && nonNegFinite(toD(rt[1])))
     // F9: MS3 rows log fragment_count & tag_count as the -1 SENTINEL on EVERY MS3 row — the matched count is
     // finalized only in the calibrated round and lives in identification.tsv (ms3_fragments); tagging is an
     // MS2-targeting feature, not used for fragment-based MS3 id. (Was tag_count>=0 / fragment_count>0.)
@@ -846,6 +850,7 @@ START_SECTION(results_ms3_exploration_columns)
 
   auto res = TSVFile::parse(res_f);
   bool found_expl = false;
+  bool found_ms3_expl = false;  // §I4b(Issue-1): >=1 MS3-exploration result row whose CE/act is 2-stage
   for (const auto& row : res.rows)
   {
     int gid = std::atoi(cell(res, row, "exploration_group_id").c_str());
@@ -857,8 +862,31 @@ START_SECTION(results_ms3_exploration_columns)
     int vi = std::atoi(cell(res, row, "variant_index").c_str());
     int tv = std::atoi(cell(res, row, "total_variants").c_str());
     TEST_TRUE(vi >= 0 && tv > 0 && vi < tv)
+
+    // §I4b ISSUE(Issue-1): the MS3-exploration *result* rows used to log SINGLE-stage CE/activation
+    // (only the MS3 fragmentation half), even though the matching scan_commands row logged the correct
+    // 2-stage "ms2CE;ms3CE" / "HCD;CID". The Issue-1 engine fix carries the MS2 isolation stage through
+    // FeedResultInfo, so the MS3 result row is now 2-stage too. Gate on the scan_results ms_level column
+    // (col 1; cmd_f is "" here so we cannot join to scan_commands). ms3ExplorationConfig() SWEEPS BOTH
+    // stages -- MS2 CE in {20,25,30,35,40} (ce_min 20, ce_max 40, step 5) and MS3 CE in {15,20,25,30,35}
+    // (ce_min 15, ce_max 35, step 5) -- so DO NOT pin single values: assert exactly 2 ';'-tokens with
+    // ce[0] (MS2) in [20,40] and ce[1] (MS3) in [15,35], activation == "HCD;CID".
+    // PRE-FIX: collision_energy/activation_type split to size()==1 -> these TEST_EQUALs FAIL.
+    if (cell(res, row, "ms_level") == "3")
+    {
+      auto ce  = splitTokens(cell(res, row, "collision_energy"), ';');
+      auto act = splitTokens(cell(res, row, "activation_type"), ';');
+      TEST_EQUAL(ce.size(), 2)
+      TEST_EQUAL(act.size(), 2)
+      TEST_TRUE(toD(ce[0]) >= 20.0 - 1.0 && toD(ce[0]) <= 40.0 + 1.0)  // MS2 isolation CE in swept range
+      TEST_TRUE(toD(ce[1]) >= 15.0 - 1.0 && toD(ce[1]) <= 35.0 + 1.0)  // MS3 fragmentation CE in swept range
+      TEST_EQUAL(act[0], std::string("HCD"))   // MS2 isolation activation
+      TEST_EQUAL(act[1], std::string("CID"))   // MS3 fragmentation activation (ms3ExplorationConfig)
+      found_ms3_expl = true;
+    }
   }
   TEST_TRUE(found_expl)
+  TEST_TRUE(found_ms3_expl)   // >=1 MS3-exploration result row was checked (else the 2-stage pin proves nothing)
   std::remove(res_f.c_str());
 }
 END_SECTION
