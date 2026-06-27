@@ -33,6 +33,7 @@
 #include <map>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -284,13 +285,20 @@ namespace
   //   rt_offset : added to every fed MS1 survey rt (default 0.0). Lets a caller drive the SAME persistent
   //               engine a second time with the surveys shifted in retention time (e.g. CBE two-pass
   //               exclusion: 2nd pass inside vs outside rt_window). MS2/MS3 feeds reuse the source rt as-is.
+  //   ms2_ce_map : optional CE-keyed MS2-spectrum source (Task E.2-4) — twin of the C# PushScanAndDrainFull
+  //               ms2CeMap. When non-null, an MS2 command's fed spectrum is selected by its stage-0 collision
+  //               energy (round(cmd.stages[0].collision_energy)) so each CE variant of the exploration sweep
+  //               gets its own energy-resolved fixture. NO FALLBACK: an unmapped CE hard-fails (throws) — a
+  //               silent fall-through to ms2_scans[0] would collapse the sweep. When null, ms2_scans[0] is fed
+  //               for every MS2 command (existing behaviour). The MS2-bucket recording is unchanged.
   inline AcqResult runInterleaved(FLASHIda* ida,
                                   const std::vector<ScanData>& ms1_scans,
                                   const std::vector<ScanData>& ms2_scans,
                                   const std::map<std::string, std::vector<ScanData>>* ms3_ion_map = nullptr,
                                   int max_iters = 600,
                                   bool single_group_only = false,
-                                  double rt_offset = 0.0)
+                                  double rt_offset = 0.0,
+                                  const std::map<int, ScanData>* ms2_ce_map = nullptr)
   {
     AcqResult r;
     const int n_ms1 = static_cast<int>(ms1_scans.size());
@@ -331,9 +339,21 @@ namespace
       else if (cmd.msn_level == 2)
       {
         r.ms2_cmds.push_back(cmd);
-        if (!ms2_scans.empty())
-          r.ms2_feed_returns += ida->processScan(ms2_scans[0].mzs.data(), ms2_scans[0].ints.data(),
-                           (int)ms2_scans[0].mzs.size(), ms2_scans[0].rt, 2, cmd.scan_description);
+        // CE-keyed MS2 spectrum (Task E.2-4): select the energy-resolved fixture for THIS variant's stage-0
+        // collision energy. NO FALLBACK — an unmapped CE hard-fails (mirrors C# PushScanAndDrainFull).
+        const ScanData* ms2_src = ms2_scans.empty() ? nullptr : &ms2_scans[0];
+        if (ms2_ce_map != nullptr)
+        {
+          int ce = (int)std::round(cmd.num_stages > 0 ? cmd.stages[0].collision_energy : 0.0);
+          auto cit = ms2_ce_map->find(ce);
+          if (cit == ms2_ce_map->end())
+            throw std::runtime_error("runInterleaved: MS2 command collision energy " + std::to_string(ce) +
+                                     " has no CE-map fixture (no fallback).");
+          ms2_src = &cit->second;
+        }
+        if (ms2_src != nullptr)
+          r.ms2_feed_returns += ida->processScan(ms2_src->mzs.data(), ms2_src->ints.data(),
+                           (int)ms2_src->mzs.size(), ms2_src->rt, 2, cmd.scan_description);
       }
       else  // msn_level >= 3
       {
