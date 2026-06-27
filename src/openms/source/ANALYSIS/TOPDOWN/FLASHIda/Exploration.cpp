@@ -371,6 +371,15 @@ namespace OpenMS
     info.collision_energy = v.collision_energy;
     info.activation_type = v.activation_type;
     info.reaction_time = v.reaction_time;
+    // For MS3 groups, also carry the commanded MS2 isolation stage (stage[0]) so the result row can log
+    // the full 2-stage "ms2;ms3" CE/activation/reaction (matching scan_commands and the regular MS3 path).
+    // v.cmd is the full ScanCommand built by buildMS3 (assigned ~:218); v.cmd.stages[0] is the real MS2 stage.
+    if (group.msn_level >= 3 && v.cmd.num_stages >= 2)
+    {
+      info.stage0_collision_energy = v.cmd.stages[0].collision_energy;
+      info.stage0_activation_type  = std::string(v.cmd.stages[0].activation_type);
+      info.stage0_reaction_time    = v.cmd.stages[0].reaction_time;
+    }
     info.score = v.score;
     info.tic_coverage = v.tic_coverage;
     info.fragment_count = v.fragment_count;

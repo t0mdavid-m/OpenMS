@@ -491,11 +491,24 @@ FLASHIda::FLASHIda(char* arg) :
         scan_row.exploration_metric  = expl_result.exploration_metric;
         scan_row.variant_index       = expl_result.variant_index;
         scan_row.total_variants      = expl_result.total_variants;
-        scan_row.collision_energy    = std::to_string(expl_result.collision_energy);
+        // CE/activation/reaction: MS3-exploration rows log the full 2-stage "ms2;ms3" form (stage[0] MS2
+        // isolation ; stage[1] MS3 fragmentation), matching scan_commands and the regular MS3 path
+        // (~:615-621/635-637). MS2-exploration (and any non-MS3) rows stay single-stage. stage0_* is
+        // non-empty only for MS3 groups (populated in Exploration.cpp from v.cmd.stages[0]).
+        if (ms_level == 3 && !expl_result.stage0_activation_type.empty())
+        {
+          scan_row.collision_energy = std::to_string(expl_result.stage0_collision_energy) + ";" + std::to_string(expl_result.collision_energy);
+          scan_row.activation_type  = expl_result.stage0_activation_type + ";" + expl_result.activation_type;
+          scan_row.reaction_time    = std::to_string(expl_result.stage0_reaction_time) + ";" + std::to_string(expl_result.reaction_time);
+        }
+        else  // MS2 exploration (and any non-MS3): single stage, unchanged
+        {
+          scan_row.collision_energy = std::to_string(expl_result.collision_energy);
+          scan_row.activation_type  = expl_result.activation_type;
+          scan_row.reaction_time    = std::to_string(expl_result.reaction_time);
+        }
         scan_row.exploration_score   = expl_result.score;
         scan_row.remaining_ratio     = expl_result.remaining_ratio;
-        scan_row.activation_type     = expl_result.activation_type;
-        scan_row.reaction_time       = std::to_string(expl_result.reaction_time);
         scan_row.winner_tracking_id  = expl_result.winner_tracking_id;  // "" except the group-completing row
         has_scan_row = true;
 

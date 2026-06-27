@@ -169,6 +169,9 @@ namespace OpenMS
       double collision_energy = 0.0;
       std::string activation_type;
       double reaction_time = 0.0;
+      double stage0_collision_energy = 0.0;  ///< MS2 isolation stage CE; 0.0 for non-MS3 groups
+      std::string stage0_activation_type;    ///< MS2 isolation stage activation; "" for non-MS3 groups
+      double stage0_reaction_time = 0.0;     ///< MS2 isolation stage reaction_time; 0.0 for non-MS3 groups
       double score = -1.0;
       float tic_coverage = 0.0f;
       int fragment_count = 0;
