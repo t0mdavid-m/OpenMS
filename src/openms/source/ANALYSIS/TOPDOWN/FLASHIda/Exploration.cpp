@@ -391,7 +391,7 @@ namespace OpenMS
     // Feed this variant's evidence into the ProteoformTracker (staging only; every variant feeds,
     // not just the group-completing one — placed before the all_received guard below).
     // tracker is nullptr only in the ExplorationTestAccess bypass path (no real IdaLogger available).
-    if (tracker != nullptr)
+    if (tracker != nullptr && group.msn_level == 2)
     {
       // P5: key the model by the returning variant's precursor_id (one MS1 selection -> one charge),
       // not the recomputed nominal mass (which folded multiple charge selections into one model).
@@ -568,7 +568,7 @@ namespace OpenMS
     // every staged scan pooled. All variants have already fed (feedScan at :385 runs per variant before
     // this group-completing call). Runs exactly once per completed group while `group` is still valid;
     // tracker is nullptr only in the ExplorationTestAccess bypass path. (Was previously after dispatch.)
-    if (tracker != nullptr)
+    if (tracker != nullptr && group.msn_level == 2)
     {
       // P5: finalize the model under the same precursor_id key fed at :387.
       tracker->finalize(precursor_id);
@@ -660,6 +660,28 @@ namespace OpenMS
             group.variants[best_idx].result, group.faims_cv, queue,
             &group.variants[best_idx].cmd, tracker, precursor_id);  // P5: same precursor_id model key
         info.commands.insert(info.commands.end(), next_nlr.commands.begin(), next_nlr.commands.end());
+      }
+      else  // overrides empty && msn_level >= 3: MS3 exploration with no production scan -> fold the winning variant now
+      {
+        // The CE sweep emits no production re-acquisition for this fragment, so the winning variant IS
+        // the only MS3 evidence. Additively fold it into the precursor's trajectory model (one row per
+        // fragment, at its winner). Non-winning variants never fold.
+        if (tracker != nullptr && group.fragment_ion_type != '\0')
+        {
+          const ExplorationVariant& w = group.variants[best_idx];
+          if (!w.identification_result.fragments.empty())
+          {
+            Ms2Params stage0{w.cmd.stages[0].collision_energy,
+                             std::string(w.cmd.stages[0].activation_type),
+                             w.cmd.stages[0].reaction_time};
+            tracker->feedScan(precursor_id, /*ms_level=*/3, stage0,
+                              /*scan_id=*/queue.decode(w.tracking_id), w.result,
+                              w.identification_result, w.identification_result.score, w.cmd);
+            const std::string trig = std::string(1, group.fragment_ion_type)
+                                   + std::to_string(group.fragment_ion_index);
+            tracker->foldMs3(precursor_id, trig, w.tracking_id);
+          }
+        }
       }
     }
 
