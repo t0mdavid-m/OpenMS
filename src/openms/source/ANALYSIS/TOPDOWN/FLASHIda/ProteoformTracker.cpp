@@ -286,11 +286,28 @@ namespace OpenMS
     // 5) Narrowing (T6) and row emission (T11) are still stubs.
     narrowModifications_(m);
     ++m.update_index;
-    emitRow_(m);
+    emitRow_(m, "MS2", ScanCommandQueue::encode(m.winner_scan_id));
 
     // 6) Done.
     m.pending.clear();
     m.finalized = true;
+  }
+
+  void ProteoformTracker::foldMs3(int precursor_id, const std::string& trigger_ion,
+                                  const std::string& trigger_scan_id)
+  {
+    auto it = models_.find(precursor_id);
+    if (it == models_.end()) return;
+    ProteoformModel& m = it->second;
+    // Fold onto an already-identified MS2 baseline ONLY. No baseline -> nothing to refine; never reset.
+    if (!m.finalized || m.proteoform_sequence.empty()) { m.pending.clear(); return; }
+    if (m.pending.empty()) return;
+    // Additive: map the new MS3 scan(s) onto the EXISTING fragments/winner. Do NOT clear, do NOT re-pick.
+    for (const PendingScan& ps : m.pending) mapScanOntoModel_(m, ps);
+    narrowModifications_(m);
+    ++m.update_index;
+    emitRow_(m, trigger_ion, trigger_scan_id);
+    m.pending.clear();
   }
 
   std::vector<Ms3Target> ProteoformTracker::planNextScans(int precursor_id)
@@ -804,7 +821,7 @@ namespace OpenMS
     }
   }
 
-  void ProteoformTracker::emitRow_(const ProteoformModel& m)
+  void ProteoformTracker::emitRow_(const ProteoformModel& m, const std::string& trigger, const std::string& trigger_scan_id)
   {
     // Guard: no identified model -> nothing to emit.
     if (m.proteoform_sequence.empty()) return;
@@ -904,6 +921,9 @@ namespace OpenMS
 
     // --- update_index ---
     r.update_index = m.update_index;
+
+    r.trigger = trigger;
+    r.trigger_scan_id = trigger_scan_id;
 
     logger_.writePooledModelRow(r);
   }

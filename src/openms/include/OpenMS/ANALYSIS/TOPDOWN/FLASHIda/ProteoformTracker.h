@@ -200,6 +200,11 @@ namespace OpenMS
     /// Mark the model for @p precursor_id as finalized (no further scans expected).
     void finalize(int precursor_id);
 
+    /// Additively fold one already-staged MS3 scan into the EXISTING finalized model (no winner re-pick,
+    /// no fragments reset), re-narrow, and emit one pooled trajectory row tagged with the driving fragment
+    /// ion and scan. Caller stages the MS3 scan via feedScan(ms_level=3, ...) first.
+    void foldMs3(int precursor_id, const std::string& trigger_ion, const std::string& trigger_scan_id);
+
     /**
      * @brief Plan the next MS3 acquisition targets for @p precursor_id.
      *
@@ -223,7 +228,7 @@ namespace OpenMS
     void narrowModifications_(ProteoformModel& mdl);
 
     /// Emit a log/TSV row for the current state of @p mdl (skeleton: no-op).
-    void emitRow_(const ProteoformModel& mdl);
+    void emitRow_(const ProteoformModel& m, const std::string& trigger, const std::string& trigger_scan_id);
 
     const Config& config_;
     IdaLogger& logger_;
