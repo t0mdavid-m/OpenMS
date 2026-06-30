@@ -169,7 +169,8 @@ namespace OpenMS
     const Size bin_number_margin = 8;
     const Size max_bin_number = bin_number_margin + 12; // 12 bin + 8 extra bin
     float threshold = -1;
-    std::vector<std::pair<Peak1D, bool>> all_peaks; // peak + is signal?
+    static thread_local std::vector<std::pair<Peak1D, bool>> all_peaks; // peak + is signal? (reused across calls)
+    all_peaks.clear();
     all_peaks.reserve(max_noisy_peak_number + logMzpeaks_.size());
 
     auto noise_peak_count = std::count_if(noisy_peaks.begin(), noisy_peaks.end(), [&](const auto& noisy_peak) {
@@ -180,7 +181,8 @@ namespace OpenMS
     // get intensity threshold
     if (noise_peak_count > (int)max_noisy_peak_number)
     {
-      std::vector<float> intensities;
+      static thread_local std::vector<float> intensities;
+      intensities.clear();
       intensities.reserve(noise_peak_count);
       for (const auto& noisy_peak : noisy_peaks)
       {
@@ -215,25 +217,33 @@ namespace OpenMS
 
     float charge_noise_pwr = 0;
 
-    std::vector<std::vector<Size>> per_bin_edges(max_bin_number);
-    std::vector<int> per_bin_start_index(max_bin_number, -2); // -2 means bin is empty. -1 means bin is used. zero or positive = edge index
-    std::map<float, Size> max_intensity_sum_to_bin;
-    const std::vector<double> div_factors {1.0, 2.0, 3.0}; // allow two skips for each bin
+    static thread_local std::vector<std::vector<Size>> per_bin_edges; // reused across calls
+    static thread_local std::vector<int> per_bin_start_index;
+    static thread_local std::map<float, Size> max_intensity_sum_to_bin;
+    static const std::vector<double> div_factors {1.0, 2.0, 3.0}; // allow two skips for each bin
+    per_bin_edges.resize(max_bin_number);
+    per_bin_start_index.assign(max_bin_number, -2); // -2 means bin is empty. -1 means bin is used. zero or positive = edge index
+    max_intensity_sum_to_bin.clear();
 
     for (Size k = 0; k < max_bin_number; k++)
     {
-      per_bin_edges[k] = std::vector<Size>(all_peaks.size(), 0);
+      per_bin_edges[k].assign(all_peaks.size(), 0);
     }
     // first collect all possible edges. An edge means mass difference between two peaks.
+    // largest normalized distance that can still produce an edge; beyond this even the largest divisor lands outside the bin range
+    const double max_edge_normalized_dist = ((double)max_bin_number - 0.5) * div_factors.back() / (double)(max_bin_number - bin_number_margin);
+    static thread_local std::vector<double> per_bin_error; // reused across calls/iterations to avoid heap allocation
+    per_bin_error.resize(max_bin_number);
     for (Size i = 0; i < all_peaks.size(); i++)
     {
       const auto& [p1, p1_signal] = all_peaks[i];
       const auto p1_mass = p1.getMZ();
-      std::vector<double> per_bin_error(max_bin_number, -1.0);
+      std::fill(per_bin_error.begin(), per_bin_error.end(), -1.0);
       for (Size j = i + 1; j < all_peaks.size(); j++)
       {
         const auto& [p2, p2_signal] = all_peaks[j];
         const double normalized_dist = (p2.getMZ() - p1_mass) / iso_da_distance_;
+        if (normalized_dist >= max_edge_normalized_dist) break; // peaks sorted by mass: no further j can form an edge
 
         if (p1_signal && p2_signal
             && normalized_dist >= .75) // if both are signals, and they are different from each other by more than .75 isotope distance, do not connect.
@@ -247,7 +257,7 @@ namespace OpenMS
           double distance = normalized_dist / d * (max_bin_number - bin_number_margin);
           Size bin = (Size)round(distance);
           if (bin == 0) { continue; }
-          if (bin >= max_bin_number) { break; }
+          if (bin >= max_bin_number) { continue; } // larger divisors give smaller bins that may still be in range, so skip (not break) this d
 
           per_bin_start_index[bin] = -1;
           double current_error = d * max_bin_number + std::abs((double)bin - distance); // larger when d gets larger. For the same d, comparable.
@@ -259,21 +269,28 @@ namespace OpenMS
     }
 
     // then from each bin find the highest intensity path consisting of the same mass differences.
+    static thread_local boost::dynamic_bitset<> has_incoming; // reused across calls/bins to avoid allocation
+    has_incoming.resize(all_peaks.size());
     for (Size k = 0; k < max_bin_number; k++)
     {
       if (per_bin_start_index[k] == -2) { continue; }
       const auto& edges = per_bin_edges[k];
+      // mark edge targets so each chain is walked once from its head; the chain sum is maximized at the head (intensities are non-negative)
+      has_incoming.reset();
+      for (Size i = 0; i < edges.size(); i++)
+        if (edges[i] != 0) { has_incoming[edges[i]] = true; }
+
       float max_sum_intensity = 0;
       for (Size i = 0; i < edges.size(); i++)
       {
-        if (edges[i] == 0) { break; }
+        if (edges[i] == 0 || has_incoming[i]) { continue; }
 
         float sum_intensity = all_peaks[i].first.getIntensity();
 
         for (Size j = edges[i]; j < edges.size(); j = edges[j])
         {
-          sum_intensity += all_peaks[j].first.getIntensity();
           if (j == 0) break;
+          sum_intensity += all_peaks[j].first.getIntensity();
         }
 
         if (max_sum_intensity < sum_intensity) // at least two edges should be there.
@@ -285,8 +302,9 @@ namespace OpenMS
       max_intensity_sum_to_bin[max_sum_intensity] = k; // how to deal with profile peaks?
     }
 
-    auto unused = boost::dynamic_bitset<>(all_peaks.size());
-    unused.flip();
+    static thread_local boost::dynamic_bitset<> unused; // reused across calls
+    unused.clear();
+    unused.resize(all_peaks.size(), true);
 
     // Now from the highest intensity path to the lowest, sum up intensities excluding already used peaks or signal peaks.
     for (auto it = max_intensity_sum_to_bin.rbegin(); it != max_intensity_sum_to_bin.rend(); ++it)
@@ -823,31 +841,6 @@ namespace OpenMS
     return scan_number_;
   }
 
-  float PeakGroup::getPeakOccupancy() const
-  {
-    int min_i = -1, max_i = 0;
-    for (const auto& p : *this)
-    {
-      int i = p.isotopeIndex;
-      max_i = std::max(max_i, i);
-      if (min_i < 0) min_i = i;
-
-      min_i = std::min(min_i, i);
-    }
-
-    auto used = std::vector<bool>((max_abs_charge_ - min_abs_charge_ + 1) * (max_i - min_i + 1), false);
-    for (const auto& p : *this)
-    {
-      used[(p.abs_charge - min_abs_charge_ + 1) * (p.isotopeIndex - min_i + 1) - 1] = true;
-    }
-    int count = 0;
-    for (const auto& b : used)
-      if (b) count++;
-
-    return (float)count / (float)used.size();
-  }
-
-
   double PeakGroup::getMonoMass() const
   {
     return monoisotopic_mass_;
@@ -1074,101 +1067,4 @@ namespace OpenMS
     qvalue_ = (float)q;
   }
 
-  std::tuple<std::vector<double>, std::vector<double>> PeakGroup::getDLVector(const MSSpectrum& spec,
-                                                                              const Size charge_count,
-                                                                              const Size isotope_count,
-                                                                              const FLASHHelperClasses::PrecalculatedAveragine& avg,
-                                                                              double tol)
-  {
-    //assert(isotope_count > 3 && charge_count > 0);
-    std::tuple<std::vector<double>, std::vector<double>> sig_noise;
-    auto noisy_peaks = recruitAllPeaksInSpectrum(spec, tol * 1e-6, avg, getMonoMass(), false);
-
-    const int apex_iso_index = avg.getApexIndex(getMonoMass());
-    int apex_charge = -1;
-    double z_intensity = 0;
-    double max_s_intensity = 0;
-    //double avg_sum = 0;
-    const auto& avg_iso = avg.get(getMonoMass());
-
-    //for(auto i : avg_iso) avg_sum += i.getIntensity();
-
-    for (int z = min_abs_charge_; z<= max_abs_charge_; z++)
-    {
-      double z_i = getChargeIntensity(z);
-      if (z_intensity > z_i) continue;
-      z_intensity = z_i;
-      apex_charge = z;
-    }
-
-    int min_z = int(apex_charge - charge_count / 2);
-    int max_z = int(apex_charge + charge_count / 2); // inclusive
-
-    int min_iso_index = int(apex_iso_index - isotope_count / 2);
-    int max_iso_index = int(apex_iso_index + isotope_count / 2); // inclusive
-
-    auto& [sig, noise] = sig_noise;
-    sig.resize(charge_count * isotope_count, .0);
-    noise.resize(charge_count * isotope_count, .0);
-
-    for (const auto& p : logMzpeaks_)
-    {
-      if (min_z > p.abs_charge || max_z < p.abs_charge) continue;
-      if (min_iso_index > p.isotopeIndex || max_iso_index < p.isotopeIndex) continue;
-
-      int z_index = int(p.abs_charge - apex_charge + charge_count / 2);
-      int iso_index = int(p.isotopeIndex - apex_iso_index + isotope_count / 2);
-      int v_index = int(z_index * isotope_count + iso_index);
-
-      sig[v_index] += p.intensity;
-      //sig[v_index] += p.intensity / (1e-3 + avg_iso[p.isotopeIndex].getIntensity());
-      //sig[v_index] += std::abs(p.intensity - avg_iso[p.isotopeIndex].getIntensity() * getChargeIntensity(p.abs_charge) / avg_sum);
-      max_s_intensity = std::max(max_s_intensity, sig[v_index]);
-    }
-    //max_s_intensity = sig[int(charge_count / 2) * isotope_count + int(isotope_count / 2)];
-    max_s_intensity = max_s_intensity <= 0? 1 : max_s_intensity;
-
-    for (const auto& p : noisy_peaks)
-    {
-      if (min_z > p.abs_charge || max_z < p.abs_charge) continue;
-      if (min_iso_index > p.isotopeIndex || max_iso_index < p.isotopeIndex) continue;
-
-      int z_index = int(p.abs_charge - apex_charge + charge_count / 2);
-      int iso_index = int(p.isotopeIndex - apex_iso_index + isotope_count / 2);
-
-      int v_index = int(z_index * isotope_count + iso_index);
-      if (sig[v_index] > 0)
-      {
-        bool too_close = false;
-        for (int off = -1; off < 2; off ++)
-        {
-          if (off + p.isotopeIndex < 0) continue;
-          double correct_mass = getMonoMass() + (off + p.isotopeIndex) * iso_da_distance_;
-          if (std::abs(p.getUnchargedMass() - correct_mass) < .2)
-          {
-            too_close = true;
-            break;
-          }
-        }
-        if (too_close) continue;
-      }
-      noise[v_index] += p.intensity;//
-      //noise[v_index] += p.intensity / (1e-3 + avg_iso[p.isotopeIndex].getIntensity());
-      //noise[v_index] += std::abs(p.intensity - avg_iso[p.isotopeIndex].getIntensity() * getChargeIntensity(p.abs_charge) / avg_sum);
-    }
-
-    if (max_s_intensity > 0)
-    {
-      for (auto& s : sig)
-      {
-        s /= max_s_intensity;
-      }
-      for (auto& n : noise)
-      {
-        n /= max_s_intensity;
-      }
-    }
-
-    return sig_noise;
-  }
 } // namespace OpenMS

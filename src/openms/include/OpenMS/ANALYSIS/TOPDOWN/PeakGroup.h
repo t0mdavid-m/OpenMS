@@ -168,10 +168,7 @@ namespace OpenMS
     /// get isotopic cosine score
     float getIsotopeCosine() const;
 
-    /// get the density of the peaks within charge and isotope range
-    float getPeakOccupancy() const;
-
-    /// get representative charge
+    /// get representative charge (max SNR)
     int getRepAbsCharge() const;
 
     /// get Q score
@@ -257,9 +254,6 @@ namespace OpenMS
     bool empty() const;
     void swap(std::vector<FLASHHelperClasses::LogMzPeak>& x);
     void sort();
-
-    std::tuple<std::vector<double>, std::vector<double>> getDLVector(const MSSpectrum& spec, const Size charge_count, const Size isotope_count,
-                                                                     const FLASHHelperClasses::PrecalculatedAveragine& avg, double tol);
 
   private:
     /// update chargefit score and also update per charge intensities here.

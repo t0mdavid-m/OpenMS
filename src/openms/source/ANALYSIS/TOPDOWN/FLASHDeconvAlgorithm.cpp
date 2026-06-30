@@ -182,7 +182,7 @@ void FLASHDeconvAlgorithm::mergeSpectra_(MSExperiment& map, uint ms_level)
 //#pragma omp parallel for default(none), shared(map, ms_level, original_precursor_map)
       for (int i = 0; i < (int) map.size(); i++)
       {
-        auto spec = map[i];
+        const auto& spec = map[i];
         if (spec.getMSLevel() != ms_level) continue;
 
         const auto& native_id = spec.getNativeID();
@@ -574,7 +574,7 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsFormIdaLog_(const MSExperiment
         int ms1_scan_number = iter->first;
         precursor_pg.setScanNumber(ms1_scan_number);
         Size index_copy (index);
-        while(index_copy != 0 && getScanNumber(map, index_copy--) != ms1_scan_number);
+        while (index_copy != 0 && getScanNumber(map, index_copy) != ms1_scan_number) { index_copy--; }
 
         auto filter_str2 = map[index_copy].getMetaValue("filter string").toString(); // this part is messy. Make a function to parse CV from map
         Size pos2 = filter_str2.find("cv=");
@@ -729,8 +729,7 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
     for (Size l = k; ; l--)
     {
       if (precursor_raw_spec[l].getMZ() < start_mz) break;
-      if (precursor_raw_spec[l].getMZ() > end_mz) continue;
-      sum_intensity += precursor_raw_spec[l].getIntensity();
+      if (precursor_raw_spec[l].getMZ() <= end_mz) { sum_intensity += precursor_raw_spec[l].getIntensity(); }
       if (l == 0) break;
     }
 

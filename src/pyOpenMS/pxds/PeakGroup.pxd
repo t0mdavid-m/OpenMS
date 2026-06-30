@@ -28,7 +28,6 @@ cdef extern from "<OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>" namespace "OpenMS":
         float getChargeIsotopeCosine(int abs_charge) except + nogil
         float getChargeIntensity(int abs_charge) except + nogil
         float getIsotopeCosine() except + nogil
-        float getPeakOccupancy() except + nogil
         int getRepAbsCharge() except + nogil
         double getQscore() except + nogil
         double getQscore2D() except + nogil

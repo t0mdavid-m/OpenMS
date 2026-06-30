@@ -43,9 +43,6 @@ namespace OpenMS
     /// Write Csv file for Qscore training header.
     static void writeAttCsvForQscoreTrainingHeader(std::fstream& f);
 
-    /// get Deep learning based peak group score. Not implemented yet.
-    static double getDLscore(PeakGroup* pg, const MSSpectrum& spec, const FLASHHelperClasses::PrecalculatedAveragine& avg, double tol);
-
     /// convert a peak group to a feature vector for setQscore calculation
     static std::vector<double> toFeatureVector(const PeakGroup* pg);
 
@@ -53,8 +50,5 @@ namespace OpenMS
     /// the weights for Qscore calculation
     static std::vector<double> weight_;
 
-    /// charge and isotope counts for DL scoring.
-    static const int charge_count_for_DL_scoring_ = 11;
-    static const int iso_count_for_DL_scoring_ = 13;
   };
 } // namespace OpenMS

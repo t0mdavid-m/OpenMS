@@ -470,7 +470,7 @@ namespace OpenMS
                 int harmonic_cntr = 0;
                 if (ms_level_ > 1 && hc * abs_charge > current_max_charge_) { break; }
 
-                const int hdiff = (int)round((double)(next_iso_bin - mz_bin_index)) / hc * (hc / 2);
+                const int hdiff = (int)round((double)((int)next_iso_bin - (int)mz_bin_index)) / hc * (hc / 2);
                 const int next_harmonic_iso_bin = (int)mz_bin_index + hdiff;
                 // check if there are harmonic peaks between the current peak and the next isotope peak.
 

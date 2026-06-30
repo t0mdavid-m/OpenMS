@@ -102,15 +102,4 @@ namespace OpenMS
       }
     }
 
-    double PeakGroupScoring::getDLscore(PeakGroup* pg, const MSSpectrum& spec, const FLASHHelperClasses::PrecalculatedAveragine& avg, double tol)
-    {
-      const auto& [sig, noise]
-                  = pg->getDLVector(spec, charge_count_for_DL_scoring_, iso_count_for_DL_scoring_, avg, tol);
-
-      /// calculate score with sig and  noise
-
-
-      return 0;
-    }
-
   } // namespace OpenMS
