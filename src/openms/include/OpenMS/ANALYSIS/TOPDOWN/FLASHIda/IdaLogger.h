@@ -148,6 +148,8 @@ namespace OpenMS
       std::vector<int> contributing_scan_ids;
       std::vector<double> combined_masses;
       int update_index = 0;
+      std::string trigger;            ///< "MS2" for the baseline row; folded fragment ion (e.g. "y7") for an MS3 update row
+      std::string trigger_scan_id;    ///< Encoded tracking-id of the scan that drove this row (MS2 winner / MS3 production-or-variant)
     };
 
     /// Write IDA log entry for MS1 deconvolution results

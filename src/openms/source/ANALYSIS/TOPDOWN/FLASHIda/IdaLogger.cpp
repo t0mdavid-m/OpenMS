@@ -126,8 +126,10 @@ namespace OpenMS
         pooled_stream_ << "nominal_mass\tmono_mass\tproteoform\tflash_extender_score\t"
                        << "coverage_pct\tn_fragments\tlocalized_mods\tambiguous_mods\t"
                        << "contributing_scan_ids\tcombined_ms2_frame_masses\tupdate_index\t"
-                       // P5: per-MS1-selection precursor identity (the model key; plain decimal); appended LAST.
-                       << "precursor_id\n";
+                       // P5: per-MS1-selection precursor identity (the model key; plain decimal).
+                       << "precursor_id\t"
+                       // P6: trajectory columns — trigger source and the tracking-id of the driving scan; appended LAST.
+                       << "trigger\ttrigger_scan_id\n";
         pooled_stream_.flush();
       }
     }
@@ -588,8 +590,10 @@ namespace OpenMS
                    << scan_ids_str << "\t"
                    << masses_ss.str() << "\t"
                    << r.update_index << "\t"
-                   // P5: per-MS1-selection precursor identity (the model key); appended LAST.
-                   << r.precursor_id << "\n";
+                   // P5: per-MS1-selection precursor identity (the model key).
+                   << r.precursor_id << "\t"
+                   // P6: trajectory columns — trigger source and driving scan id; appended LAST.
+                   << r.trigger << "\t" << r.trigger_scan_id << "\n";
     pooled_stream_.flush();
   }
 
