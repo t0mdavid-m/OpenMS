@@ -51,6 +51,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 #include <OpenMS/SYSTEM/File.h>
 
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -155,10 +156,13 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
 {
   const int precursor_id = 7;
 
-  // Temp pooled-log path (known only at runtime) -> build the Config JSON dynamically so the engine
-  // opens the pooled stream (Config.cpp:424 reads runtime.pooled_identification_log_path).
-  String pooled_path;
-  NEW_TMP_FILE(pooled_path);
+  // Pooled-log path embedded in the Config JSON so the engine opens the pooled stream (Config.cpp:424
+  // reads runtime.pooled_identification_log_path). Use a RELATIVE filename in the test CWD (NOT an
+  // absolute temp path): an absolute Windows temp path contains backslashes that would form invalid JSON
+  // escapes when embedded below. The pooled stream is opened in APPEND mode, so remove any stale file
+  // first. (Mirrors the FLASHIda_LoggingFields_test relative-filename + std::remove pattern.)
+  const std::string pooled_path = "pt_trajectory_pooled.tsv";
+  std::remove(pooled_path.c_str());
 
   std::string cfg_json = std::string(R"({
     "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 1, "max_charge": 50, "min_mass": 100, "max_mass": 50000, "tol": [10, 10, 10] },
