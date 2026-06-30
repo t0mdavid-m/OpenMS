@@ -464,6 +464,7 @@ set(analysis_executables_list
   FragmentAnalysis_test
   FragmentAnalysis_toProForma_test
   ProteoformTracker_CEOptimization_test
+  ProteoformTracker_Trajectory_test
   ScanCommandQueue_Concurrent_test
   ScanConfig_applyOverrides_test
   FalseDiscoveryRate_test
