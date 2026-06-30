@@ -188,6 +188,9 @@ namespace OpenMS
       MS2Context ms2_context;  ///< Cached MS2 context for this variant's group
       std::vector<IdentificationRowInfo> additional_identification_rows;  ///< Extra calibrated rows for other variants in same completed exploration group
       std::vector<std::string> child_ids;  ///< Encoded tracking ids of the pushed children, in info.commands order (pre-encoded by feedResultImpl_; replaces processScan's inline encode loop)
+      /// (scan_id -> MS2Context) for production MS3 commands in `commands` that return on the REGULAR MS3
+      /// path and need ms2_context_cache_ seeded by the caller. Mirrors the regular MS2->MS3 caching.
+      std::vector<std::pair<int, MS2Context>> ms3_context_cache;
     };
 
     /// Construct with a reference to the shared Config and FragmentAnalysis

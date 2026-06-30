@@ -285,6 +285,9 @@ FLASHIda::FLASHIda(char* arg) :
           precursor_id_by_tracking_[c.scan_id] = pid;  // P5: MS3 / production children inherit the parent's precursor_id
           queue_.push(c);  // parent_scan_id already stamped by feedResult; children pre-encoded in expl_result.child_ids
         }
+        // Seed the cache for any production MS3 command (regular-path return) so it identifies + folds.
+        for (auto& kv : expl_result.ms3_context_cache)
+          ms2_context_cache_[kv.first] = kv.second;
 
         int expl_mass_count = exploration_.explorationDeconvMassCount();
         const DeconvolvedSpectrum* expl_spec = exploration_.explorationDeconvSpectrum();
@@ -472,6 +475,9 @@ FLASHIda::FLASHIda(char* arg) :
           precursor_id_by_tracking_[c.scan_id] = pid;  // P5: children (e.g. production MS3) inherit the precursor_id
           queue_.push(c);  // parent_scan_id already stamped by feedResult; children pre-encoded in expl_result.child_ids
         }
+        // Seed the cache for any production MS3 command (regular-path return) so it identifies + folds.
+        for (auto& kv : expl_result.ms3_context_cache)
+          ms2_context_cache_[kv.first] = kv.second;
 
         int expl_mass_count = exploration_.explorationDeconvMassCount();
         const DeconvolvedSpectrum* expl_spec = exploration_.explorationDeconvSpectrum();

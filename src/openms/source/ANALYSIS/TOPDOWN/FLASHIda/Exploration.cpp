@@ -652,6 +652,11 @@ namespace OpenMS
                   << std::endl;
 
         info.commands.push_back(prod_cmd);
+        // Production MS3 returns on the REGULAR MS3 path -> seed its parent context so it identifies + folds
+        // a trajectory row (the regular MS2->MS3 path caches equivalently at FLASHIda.cpp). buildMS2ContextForVariant
+        // (defined above in this function) captures the winner's fragment ion + region + ptm + precursor.
+        if (group.msn_level >= 3)
+          info.ms3_context_cache.emplace_back(prod_cmd.scan_id, buildMS2ContextForVariant(best_idx));
       }
       else if (group.msn_level < 3)
       {
