@@ -222,7 +222,6 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
   TEST_EQUAL(mdl->proteoform_sequence, std::string(WINNER_SEQ))
   TEST_EQUAL(mdl->update_index, 1)
   TEST_EQUAL((int)mdl->fragments.size(), 2)   // b6, y6
-  const double cov_after_finalize = mdl->coveragePct();
 
   Ms2Params ms3_params;       // parent MS2 params carried with the MS3 observation
   ms3_params.collision_energy = 29.0;
@@ -248,8 +247,6 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
   TEST_EQUAL(mdl->update_index, 2)
   TEST_EQUAL((int)mdl->fragments.size(), 3)     // b6, y6, + b3
   TEST_TRUE((int)mdl->fragments.size() > 2)      // a reset would DROP this to 1 -> this fails
-  const double cov_after_fold1 = mdl->coveragePct();
-  TEST_TRUE(cov_after_fold1 >= cov_after_finalize)   // coverage non-decreasing
 
   // ---------------------------------------------------------------------------------------------
   // MS3 fold #2: stage one MS3 scan (equiv y3) then foldMs3 -> ADDITIVE, NO reset.
@@ -268,8 +265,6 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
   ABORT_IF(mdl == nullptr)
   TEST_EQUAL(mdl->update_index, 3)
   TEST_EQUAL((int)mdl->fragments.size(), 4)     // b6, y6, b3, + y3
-  const double cov_after_fold2 = mdl->coveragePct();
-  TEST_TRUE(cov_after_fold2 >= cov_after_fold1)      // coverage non-decreasing across all three checkpoints
 
   // ---------------------------------------------------------------------------------------------
   // (B) Pooled trajectory file: 3 data rows, one per emitRow_ call (finalize + 2x foldMs3).
@@ -296,7 +291,7 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
   TEST_EQUAL((int)rows.size(), 3)   // exactly one row per finalize + foldMs3 + foldMs3
   ABORT_IF((int)rows.size() != 3)
 
-  const int CI_N_FRAG = 5, CI_UPDATE = 10, CI_PRECID = 11, CI_TRIGGER = 12, CI_TRIGGER_SCAN = 13;
+  const int CI_COV = 4, CI_N_FRAG = 5, CI_UPDATE = 10, CI_PRECID = 11, CI_TRIGGER = 12, CI_TRIGGER_SCAN = 13;
 
   // Every data row must carry all 14 fields (the trailing trigger_scan_id is non-empty here).
   for (const std::vector<std::string>& r : rows) TEST_EQUAL((int)r.size(), 14)
@@ -328,6 +323,15 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
   TEST_EQUAL(nf2, 4)
   TEST_TRUE(nf1 >= nf0)
   TEST_TRUE(nf2 >= nf1)
+
+  // coverage_pct (col 4) non-decreasing across the trajectory — the engine's LOGGED coverage, asserted
+  // from the produced file rather than ProteoformModel::coveragePct() (the struct is not OPENMS_DLLAPI, so
+  // its out-of-line method is not linkable from a test exe; the file column is the observable contract).
+  const double cov0 = std::stod(rows[0][CI_COV]);
+  const double cov1 = std::stod(rows[1][CI_COV]);
+  const double cov2 = std::stod(rows[2][CI_COV]);
+  TEST_TRUE(cov1 >= cov0)
+  TEST_TRUE(cov2 >= cov1)
 }
 END_SECTION
 
