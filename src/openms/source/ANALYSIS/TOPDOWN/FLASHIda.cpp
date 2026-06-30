@@ -613,7 +613,15 @@ FLASHIda::FLASHIda(char* arg) :
                 tracker_.feedScan(pid, /*ms_level=*/3, parent_ms2_params,
                                   /*scan_id=*/tracking_id, *ms3_spec,
                                   ms3_matches[0], ms3_matches[0].score, *resolved);
-                tracker_.finalize(pid);
+                // Additively fold this MS3 result into the precursor's trajectory model (was finalize(),
+                // which here early-returned win==nullptr and dropped the MS3 fragments). Tag the row with
+                // the characterized fragment ion (e.g. "y6") and this MS3 scan's tracking id.
+                if (cached_ms2_ctx.fragment_ion_type != '\0')
+                {
+                  const std::string trig = std::string(1, cached_ms2_ctx.fragment_ion_type)
+                                         + std::to_string(cached_ms2_ctx.fragment_ion_index);
+                  tracker_.foldMs3(pid, trig, id_str);
+                }
               }
             }
 
