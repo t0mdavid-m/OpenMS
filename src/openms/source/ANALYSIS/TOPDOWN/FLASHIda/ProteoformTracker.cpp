@@ -129,44 +129,21 @@ namespace OpenMS
 
   double ProteoformModel::coveragePct() const
   {
+    // Backbone-cleavage sequence coverage: fraction of the L-1 inter-residue bonds witnessed by >=1
+    // fragment (NOT a residue-span union, which saturates to 1.0 from one long prefix + one long suffix).
+    // Each mapped fragment reduces to exactly one cleavage in the winner-region frame: a prefix ion
+    // covering [1,k] witnesses the bond after residue k (= cover_end); a suffix ion covering [c,L]
+    // witnesses the bond before residue c (= cover_start-1).
     const int L = (region_start < 0) ? static_cast<int>(proteoform_sequence.size()) : (region_end - region_start);
-    if (L <= 0) return 0.0;
-    if (fragments.empty()) return 0.0;
-
-    // Collect all [cover_start, cover_end] intervals (1-based inclusive), clamped to [1, L].
-    std::vector<std::pair<int, int>> intervals;
-    intervals.reserve(fragments.size());
+    if (L < 2 || fragments.empty()) return 0.0;
+    std::set<int> sites;   // distinct backbone-bond indices observed, in [1, L-1]
     for (const auto& kv : fragments)
     {
       const MappedFragment& f = kv.second;
-      const int cs = std::max(f.cover_start, 1);
-      const int ce = std::min(f.cover_end, L);
-      if (cs <= ce) intervals.emplace_back(cs, ce);
+      const int site = f.is_prefix ? f.cover_end : (f.cover_start - 1);
+      if (site >= 1 && site <= L - 1) sites.insert(site);   // whole-protein prefix (site==L) / suffix (site==0) excluded
     }
-    if (intervals.empty()) return 0.0;
-
-    // Sort by start, then merge overlapping intervals, sum covered length.
-    std::sort(intervals.begin(), intervals.end());
-    int covered = 0;
-    int cur_start = intervals[0].first;
-    int cur_end = intervals[0].second;
-    for (size_t i = 1; i < intervals.size(); ++i)
-    {
-      if (intervals[i].first <= cur_end + 1)
-      {
-        // Overlapping or adjacent: extend.
-        cur_end = std::max(cur_end, intervals[i].second);
-      }
-      else
-      {
-        covered += cur_end - cur_start + 1;
-        cur_start = intervals[i].first;
-        cur_end = intervals[i].second;
-      }
-    }
-    covered += cur_end - cur_start + 1;
-
-    return covered / static_cast<double>(L);
+    return static_cast<double>(sites.size()) / static_cast<double>(L - 1);
   }
 
   std::vector<double> ProteoformModel::combinedMs2FrameMasses() const
@@ -406,7 +383,8 @@ namespace OpenMS
       // Find the largest uncovered residue gaps (complement of the merged coverage intervals in the
       // winner-region frame), then for each gap pick the strongest best-MS2 fragment that fully
       // CONTAINS it (its coverage spans the whole gap), so an MS3 re-feed of that fragment yields the
-      // internal cleavages needed to cover the gap. Mirrors coveragePct's merge logic.
+      // internal cleavages needed to cover the gap. Uses span-interval merging (appropriate for
+      // gap finding); coveragePct() uses a distinct backbone-cleavage metric instead.
       std::vector<std::pair<int, int>> intervals;  // covered [cs, ce], region-1-based inclusive, clamped to [1, L]
       for (const auto& kv : m.fragments)
       {
