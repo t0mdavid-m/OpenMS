@@ -133,6 +133,7 @@ namespace OpenMS
 
         // Check ambiguous PTMs for this position
         double ambiguous_delta = 0.0;
+        double covered_ambiguous = 0.0;
         bool has_ambiguous = false;
         for (const auto& pm : ptms)
         {
@@ -141,6 +142,7 @@ namespace OpenMS
           if (pm.start >= frag_start_0 && pm.end <= frag_end_0)
           {
             base_mass += pm.mass; // fully covered, always include
+            covered_ambiguous += pm.mass;
           }
           // Is it partially overlapping?
           else if (pm.end >= frag_start_0 && pm.start <= frag_end_0)
@@ -160,6 +162,7 @@ namespace OpenMS
           tm_with.position = position;
           tm_with.ion_type = ion_type;
           tm_with.includes_ptm = true;
+          tm_with.ambiguous_included = covered_ambiguous + ambiguous_delta;
           result.push_back(tm_with);
 
           TheoreticalMass tm_without;
@@ -167,6 +170,7 @@ namespace OpenMS
           tm_without.position = position;
           tm_without.ion_type = ion_type;
           tm_without.includes_ptm = false;
+          tm_without.ambiguous_included = covered_ambiguous;
           result.push_back(tm_without);
         }
         else
@@ -176,6 +180,7 @@ namespace OpenMS
           tm.position = position;
           tm.ion_type = ion_type;
           tm.includes_ptm = false;
+          tm.ambiguous_included = covered_ambiguous;
           result.push_back(tm);
         }
       }
@@ -248,6 +253,7 @@ namespace OpenMS
             md.position = theoretical[best_theo_idx].position;
             md.ion_type = theoretical[best_theo_idx].ion_type;
             md.includes_ptm = theoretical[best_theo_idx].includes_ptm;
+            md.ambiguous_included = theoretical[best_theo_idx].ambiguous_included;
             match_details->push_back(md);
           }
         }
@@ -559,7 +565,14 @@ namespace OpenMS
                                md.ion_type, md.position, md.theoretical_mass,
                                protein_prefix,
                                fm.equiv_type, fm.equiv_index, offset);
-          fm.adjusted_mass = md.observed_mass + offset;
+          // measured -> MS2 (full-protein) frame WITH mods: the bare-backbone FIX adds ambiguous_included,
+          // the PTM mass this ion folds in, so the adjusted mass lands on the modified proteoform, not the
+          // bare backbone (was fm.adjusted_mass = md.observed_mass + offset).
+          fm.adjusted_mass = md.observed_mass + offset + md.ambiguous_included;
+          // theoretical for the equivalent ion in the same frame (mod-inclusive, this scan's proteoform).
+          fm.theoretical_mass = offset + md.theoretical_mass + md.ambiguous_included;
+          fm.diff_da = fm.adjusted_mass - fm.theoretical_mass;
+          fm.diff_ppm = (fm.theoretical_mass != 0.0) ? (fm.diff_da / fm.theoretical_mass * 1e6) : 0.0;
           fm.includes_ptm = md.includes_ptm;   // propagate the MS3 localization verdict (already set in matchSpectrum)
           mr.fragments.push_back(fm);
         }

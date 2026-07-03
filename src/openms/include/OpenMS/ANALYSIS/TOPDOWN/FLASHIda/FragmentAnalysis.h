@@ -89,6 +89,9 @@ namespace OpenMS
         std::string equiv_type;     ///< MS3 only: full-protein equivalent ion type ("b"/"y")
         int equiv_index = 0;        ///< MS3 only: full-protein equivalent ion index
         double adjusted_mass = 0.0; ///< MS3 only: offset-adjusted to full-protein
+        double theoretical_mass = 0.0; ///< MS3 only: mass the proteoform predicts for the equivalent ion (mod-inclusive) = offset + md.theoretical_mass + ambiguous_included
+        double diff_da = 0.0;          ///< MS3 only: adjusted_mass - theoretical_mass (Da)
+        double diff_ppm = 0.0;         ///< MS3 only: diff_da / theoretical_mass * 1e6
         bool includes_ptm = false;   ///< MS3: did the matched theoretical fold in the ambiguous PTM (partial-overlap with-variant)? false for MS2 / fully-covered / no-overlap
       };
       std::vector<FragmentMatch> fragments;  ///< All matched fragments with detail

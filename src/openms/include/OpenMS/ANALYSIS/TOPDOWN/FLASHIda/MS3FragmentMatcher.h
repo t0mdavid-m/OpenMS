@@ -41,6 +41,7 @@ namespace OpenMS
       int position = 0;          ///< 1-based fragment index from the relevant terminus
       std::string ion_type;      ///< "a", "b", "y", "yb", "ya"
       bool includes_ptm = false; ///< For ambiguous PTMs: true = mass includes PTM shift
+      double ambiguous_included = 0.0; ///< Sum of ambiguous/fully-covered PTM mass folded into this ion's mass (for the bare-backbone frame fix)
     };
 
     /// Detail of a single observed-to-theoretical match
@@ -52,6 +53,7 @@ namespace OpenMS
       int position = 0;              ///< 1-based fragment index from relevant terminus
       std::string ion_type;          ///< "a", "b", "y", "yb", "ya"
       bool includes_ptm = false;     ///< Whether the matched theoretical includes an ambiguous PTM
+      double ambiguous_included = 0.0; ///< PTM mass folded into the matched theoretical (copied from TheoreticalMass; used for adjusted/theoretical frame masses)
     };
 
     /// Cached proteoform context from MS2 tag-based matching
