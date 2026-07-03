@@ -564,11 +564,15 @@ namespace OpenMS
     }
     // contributing_scan_ids joined with SPACE — the established delimiter that avoids the
     // tracking-id-alphabet ';' collision (same precedent as child_ids in writeScanResultRow).
+    // Each id is base-94 encoded (ScanCommandQueue::encode) for consistency with every other
+    // tracking-id in every stream — including the pooled trigger_scan_id (col 14) in this same row
+    // and encode(cmd.scan_id) in writeScanCommandRow. Encoded ids are exactly 3 chars from the
+    // 0x21-0x7E alphabet, so the space (0x20) delimiter never collides.
     std::string scan_ids_str;
     for (size_t i = 0; i < r.contributing_scan_ids.size(); ++i)
     {
       if (i > 0) scan_ids_str += " ";
-      scan_ids_str += std::to_string(r.contributing_scan_ids[i]);
+      scan_ids_str += ScanCommandQueue::encode(r.contributing_scan_ids[i]);
     }
     // combined_masses joined with ';'.
     std::ostringstream masses_ss;
