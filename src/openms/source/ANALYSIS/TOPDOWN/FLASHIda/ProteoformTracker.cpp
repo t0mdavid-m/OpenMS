@@ -632,7 +632,7 @@ namespace OpenMS
       obs.ms_level = ps.ms_level;
       obs.observed_mass = obs_mass;
       obs.measured_mass = fm.observed_mass;                                    // raw own-scan-frame mass (MS3 subsequence; MS2 == observed)
-      obs.theoretical_mass = (ps.ms_level == 3) ? fm.theoretical_mass : 0.0;   // MS3-only carried theoretical (D1=A)
+      obs.theoretical_mass = fm.theoretical_mass;                              // proteoform theoretical: MS3 equiv (calibrateAndScore) or MS2 matcher best_theo
       obs.intensity = intensity;
       obs.source_scan_id = ps.scan_id;
       obs.params = ps.params;

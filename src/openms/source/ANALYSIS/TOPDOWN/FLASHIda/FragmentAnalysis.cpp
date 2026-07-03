@@ -749,6 +749,12 @@ namespace
       fm.ion_type = std::string(1, m.ion_type);
       fm.ion_index = m.fragment_index;
       fm.observed_mass = m.observed_mass;
+      // MS2 three-mass contract: carry the matcher's PTM-adjusted theoretical (best_theo) + residual so the
+      // pooled/identification theoretical & diff columns are real for MS2 fragments (not 0). adjusted_mass
+      // stays 0 (MS3-only frame conversion); for MS2 measured == adjusted == observed.
+      fm.theoretical_mass = m.theoretical_mass;
+      fm.diff_da = m.observed_mass - m.theoretical_mass;
+      fm.diff_ppm = (m.theoretical_mass != 0.0) ? (fm.diff_da / m.theoretical_mass * 1e6) : 0.0;
       result.fragments.push_back(std::move(fm));
     }
     return static_cast<int>(matches.size());
