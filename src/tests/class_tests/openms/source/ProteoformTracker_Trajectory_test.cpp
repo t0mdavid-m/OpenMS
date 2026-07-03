@@ -135,8 +135,8 @@ namespace
   }
 
   // Split a TSV line on '\t'. NOTE: std::getline drops a TRAILING empty field, but in this scenario the
-  // last column (trigger_scan_id) is always non-empty, so every data row yields all 14 fields; interior
-  // empty fields (localized_mods/ambiguous_mods) sit between tabs and ARE preserved as "".
+  // last column (combined_diff_ppm) is a non-empty ';'-joined list, so every data row yields all 18 fields;
+  // interior empty fields (localized_mods/ambiguous_mods) sit between tabs and ARE preserved as "".
   std::vector<std::string> splitTab(const std::string& line)
   {
     std::vector<std::string> fields;
@@ -271,7 +271,8 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
   // Column layout (0-based, IdaLogger.cpp:126-132 header / 582-596 row):
   //   0 nominal_mass | 1 mono_mass | 2 proteoform | 3 flash_extender_score | 4 coverage_pct |
   //   5 n_fragments  | 6 localized_mods | 7 ambiguous_mods | 8 contributing_scan_ids |
-  //   9 combined_ms2_frame_masses | 10 update_index | 11 precursor_id | 12 trigger | 13 trigger_scan_id
+  //   9 combined_ms2_frame_masses | 10 update_index | 11 precursor_id | 12 trigger | 13 trigger_scan_id |
+  //   14 combined_measured | 15 combined_theoretical | 16 combined_diff_da | 17 combined_diff_ppm
   // ---------------------------------------------------------------------------------------------
   std::ifstream f(pooled_path.c_str());
   TEST_TRUE(f.good())
@@ -279,7 +280,7 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
   std::string header;
   TEST_TRUE(static_cast<bool>(std::getline(f, header)))
   const std::vector<std::string> header_cols = splitTab(header);
-  TEST_EQUAL((int)header_cols.size(), 14)   // P6 added trigger + trigger_scan_id to the 12 base columns
+  TEST_EQUAL((int)header_cols.size(), 18)   // 14 base + fragment-mass table (combined_measured/theoretical/diff_da/diff_ppm)
 
   std::vector<std::vector<std::string>> rows;
   std::string line;
@@ -293,8 +294,8 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
 
   const int CI_COV = 4, CI_N_FRAG = 5, CI_UPDATE = 10, CI_PRECID = 11, CI_TRIGGER = 12, CI_TRIGGER_SCAN = 13;
 
-  // Every data row must carry all 14 fields (the trailing trigger_scan_id is non-empty here).
-  for (const std::vector<std::string>& r : rows) TEST_EQUAL((int)r.size(), 14)
+  // Every data row must carry all 18 fields (the trailing combined_diff_ppm list is non-empty here).
+  for (const std::vector<std::string>& r : rows) TEST_EQUAL((int)r.size(), 18)
 
   // row0 = MS2 baseline: trigger "MS2"; trigger_scan_id = encode(101) (winner = first eligible scan);
   //        update_index "1".

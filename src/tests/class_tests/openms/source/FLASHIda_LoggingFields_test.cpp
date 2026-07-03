@@ -162,7 +162,7 @@ START_SECTION(schema_column_counts)
 
   TEST_EQUAL(c.headers.size(), 30)   // E6: + scan_description; P5: + precursor_id
   TEST_EQUAL(r.headers.size(), 34)   // E5: + ms_level; F5: + winner_tracking_id (scan_results unchanged by P5)
-  TEST_EQUAL(i.headers.size(), 26)   // I2: + ms2/ms3 isolation_width, window_snr, charge_intensity (6); P5: + precursor_id
+  TEST_EQUAL(i.headers.size(), 29)   // I2: +6 iso/snr/intensity; P5: +precursor_id; fragment-mass table: +theoretical_masses/diff_da/diff_ppm
 
   // Spot-check exact header identities / order at the boundaries that matter for parsing.
   TEST_EQUAL(c.headers.front(), std::string("tracking_id"))
@@ -177,9 +177,12 @@ START_SECTION(schema_column_counts)
   TEST_EQUAL(r.colIndex("processing_duration_ms"), 32)             // now second-to-last
   TEST_EQUAL(r.colIndex("child_ids"), 9)                          // shifted +1 by ms_level@1
   TEST_EQUAL(i.headers.front(), std::string("ms_level"))
-  TEST_EQUAL(i.headers.back(), std::string("precursor_id"))      // P5: appended LAST (after ms3_charge_intensity)
-  TEST_EQUAL(i.colIndex("precursor_id"), 25)                     // P5: trailing column index
-  TEST_EQUAL(i.colIndex("ms3_charge_intensity"), 24)            // I2 column unmoved (P5 appended after it)
+  TEST_EQUAL(i.headers.back(), std::string("diff_ppm"))         // fragment-mass table appended LAST after precursor_id
+  TEST_EQUAL(i.colIndex("precursor_id"), 25)                     // P5 column unmoved (fragment-mass table appended after it)
+  TEST_EQUAL(i.colIndex("theoretical_masses"), 26)              // fragment-mass table: per-scan theoretical + residual (Da, ppm)
+  TEST_EQUAL(i.colIndex("diff_da"), 27)
+  TEST_EQUAL(i.colIndex("diff_ppm"), 28)
+  TEST_EQUAL(i.colIndex("ms3_charge_intensity"), 24)            // I2 column unmoved
   // I2: the 6 new identification columns appended after ms3_fragment_masses (col 18), in order.
   TEST_EQUAL(i.colIndex("ms3_fragment_masses"), 18)
   TEST_EQUAL(i.colIndex("ms2_isolation_width"), 19)

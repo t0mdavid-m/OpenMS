@@ -197,6 +197,8 @@ START_SECTION(computeTheoreticalMasses_ambiguous_ptm)
   // b1 (covers pos 1): PTM range [2,4] outside — single entry, no PTM
   TEST_EQUAL(masses[0].ion_type, "b")
   TEST_TRUE(! masses[0].includes_ptm)
+  // bare-backbone FIX: ambiguous_included = the PTM mass folded into this ion's mass. b1 covers no PTM => 0.
+  TEST_REAL_SIMILAR(masses[0].ambiguous_included, 0.0)
 
   // b2 (covers pos 1-2): PTM range [2,4] partially overlaps — dual entries
   // Find the two b2 entries
@@ -204,12 +206,13 @@ START_SECTION(computeTheoreticalMasses_ambiguous_ptm)
   for (const auto& m : masses)
     if (m.position == 2) b2_entries.push_back(m);
   TEST_EQUAL(b2_entries.size(), 2)
-  // One with PTM, one without
+  // One with PTM, one without — and ambiguous_included must match: with-variant folds the partial
+  // shift (so adjusted_mass re-adds it and lands on the modified proteoform); without-variant folds none.
   bool found_with = false, found_without = false;
   for (const auto& e : b2_entries)
   {
-    if (e.includes_ptm) found_with = true;
-    else found_without = true;
+    if (e.includes_ptm) { found_with = true;    TEST_REAL_SIMILAR(e.ambiguous_included, ptm_shift) }
+    else                { found_without = true; TEST_REAL_SIMILAR(e.ambiguous_included, 0.0) }
   }
   TEST_TRUE(found_with)
   TEST_TRUE(found_without)
@@ -217,11 +220,13 @@ START_SECTION(computeTheoreticalMasses_ambiguous_ptm)
   double diff = std::abs(b2_entries[0].mass - b2_entries[1].mass);
   TEST_REAL_SIMILAR(diff, ptm_shift)
 
-  // b4 (covers pos 1-4): PTM range [2,4] fully covered — single entry with PTM included
+  // b4 (covers pos 1-4): PTM range [2,4] fully covered — single entry with PTM included in base_mass;
+  // ambiguous_included = the fully-covered PTM mass (so adjusted_mass re-adds it -> modified frame).
   std::vector<MS3FragmentMatcher::TheoreticalMass> b4_entries;
   for (const auto& m : masses)
     if (m.position == 4) b4_entries.push_back(m);
   TEST_EQUAL(b4_entries.size(), 1)
+  TEST_REAL_SIMILAR(b4_entries[0].ambiguous_included, ptm_shift)
 }
 END_SECTION
 
