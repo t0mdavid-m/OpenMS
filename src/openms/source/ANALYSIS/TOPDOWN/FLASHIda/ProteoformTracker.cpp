@@ -761,22 +761,19 @@ namespace OpenMS
       int rs_region = mod.candidate_start - ws;
       int re_region = mod.candidate_end - ws;
 
+      // Localize the mod from bracketing fragments in TWO passes so MS2 is AUTHORITATIVE and the MS3
+      // localization verdict can only refine WITHIN the MS2 result (never override it).
+      //
+      // Pass A -- MS2 mass-test (authoritative). This is the ORIGINAL logic, restricted to best_ms2
+      // observations (whose region-frame observed mass matches the region-frame `baseline` here).
       for (const auto& kv : m.fragments)
       {
         const MappedFragment& f = kv.second;
         if (f.ion_type.empty() || f.ion_index <= 0) continue;
-
-        // Bracketing test (region frame). f.cover_* are region-1-based inclusive (T5):
-        //   prefix b_k covers [1, k]      (k = f.ion_index = f.cover_end): brackets iff rs <= k < re
-        //   suffix y_k covers [L-k+1, L]  (c = f.cover_start = L-k+1):     brackets iff rs < c <= re
         if (!fragmentBrackets(f, rs_region, re_region)) continue;
+        if (!f.best_ms2.has_value()) continue;                 // MS2 only in Pass A
+        const FragmentObservation* obs = &(*f.best_ms2);
 
-        // Best observation: prefer MS2, else MS3. Skip if neither present.
-        const FragmentObservation* obs =
-          f.best_ms2.has_value() ? &(*f.best_ms2) : (f.best_ms3.has_value() ? &(*f.best_ms3) : nullptr);
-        if (obs == nullptr) continue;
-
-        // Theoretical "without" this mod (region frame, 1-based index -> 0-based vector).
         auto bit = baseline.find(f.ion_type[0]);
         if (bit == baseline.end()) continue;
         const std::vector<double>& masses = bit->second;
@@ -788,31 +785,45 @@ namespace OpenMS
         const double tol_abs = obs->observed_mass * config_.level(obs->ms_level).tolerance_ppm * 1e-6;
         const bool matches_with = std::abs(obs->observed_mass - with) <= tol_abs;
         const bool matches_without = std::abs(obs->observed_mass - base) <= tol_abs;
-
-        // Ambiguous fragment (matches both or neither) -> no information, skip.
-        if (matches_with == matches_without) continue;
+        if (matches_with == matches_without) continue;         // uninformative
 
         const double I = obs->intensity;
-
         if (matches_with)
         {
-          // PTM shift IS inside this fragment's coverage.
-          //   prefix covering [1, k]: PTM is on residues rs..k -> tighten UPPER to k = f.cover_end.
-          //   suffix covering [c, L]: PTM is on residues c..re -> tighten LOWER to c = f.cover_start.
-          if (f.is_prefix)
-            tightenUpper(rs_region, re_region, mod.support_lower, mod.support_upper, f.cover_end, I);
-          else
-            tightenLower(rs_region, re_region, mod.support_lower, mod.support_upper, f.cover_start, I);
+          if (f.is_prefix) tightenUpper(rs_region, re_region, mod.support_lower, mod.support_upper, f.cover_end, I);
+          else             tightenLower(rs_region, re_region, mod.support_lower, mod.support_upper, f.cover_start, I);
         }
         else
         {
-          // PTM shift is OUTSIDE this fragment's coverage (complementary tighten).
-          //   prefix covering [1, k]: PTM is on residues k+1..re -> tighten LOWER to k+1.
-          //   suffix covering [c, L]: PTM is on residues rs..c-1 -> tighten UPPER to c-1.
-          if (f.is_prefix)
-            tightenLower(rs_region, re_region, mod.support_lower, mod.support_upper, f.cover_end + 1, I);
-          else
-            tightenUpper(rs_region, re_region, mod.support_lower, mod.support_upper, f.cover_start - 1, I);
+          if (f.is_prefix) tightenLower(rs_region, re_region, mod.support_lower, mod.support_upper, f.cover_end + 1, I);
+          else             tightenUpper(rs_region, re_region, mod.support_lower, mod.support_upper, f.cover_start - 1, I);
+        }
+      }
+
+      // Pass B -- MS3 localization verdict (subordinate). MS3-ONLY fragments (best_ms3 present, no
+      // best_ms2 -- MS2 already voted for shared keys in Pass A) that STILL bracket the MS2-narrowed
+      // range. Uses the propagated includes_ptm (true = PTM inside this fragment's coverage; false =
+      // outside) instead of re-deriving from the folded adjusted_mass. Because Pass A already narrowed
+      // [rs,re] and we re-check fragmentBrackets against it (and tighten is inward-only), an MS3
+      // fragment can only refine WITHIN the MS2 result -- it can never move an MS2-set boundary.
+      for (const auto& kv : m.fragments)
+      {
+        const MappedFragment& f = kv.second;
+        if (f.ion_type.empty() || f.ion_index <= 0) continue;
+        if (!f.best_ms3.has_value() || f.best_ms2.has_value()) continue;   // MS3-only
+        if (!fragmentBrackets(f, rs_region, re_region)) continue;          // re-check vs the narrowed range
+        const FragmentObservation& o = *f.best_ms3;
+        const double I = o.intensity;
+
+        if (o.includes_ptm)      // PTM IS inside this fragment's coverage (matched the with-variant)
+        {
+          if (f.is_prefix) tightenUpper(rs_region, re_region, mod.support_lower, mod.support_upper, f.cover_end, I);
+          else             tightenLower(rs_region, re_region, mod.support_lower, mod.support_upper, f.cover_start, I);
+        }
+        else                     // PTM is OUTSIDE this fragment's coverage (matched the without-variant)
+        {
+          if (f.is_prefix) tightenLower(rs_region, re_region, mod.support_lower, mod.support_upper, f.cover_end + 1, I);
+          else             tightenUpper(rs_region, re_region, mod.support_lower, mod.support_upper, f.cover_start - 1, I);
         }
       }
 
