@@ -135,8 +135,8 @@ namespace
   }
 
   // Split a TSV line on '\t'. NOTE: std::getline drops a TRAILING empty field, but in this scenario the
-  // last column (combined_diff_ppm) is a non-empty ';'-joined list, so every data row yields all 18 fields;
-  // interior empty fields (localized_mods/ambiguous_mods) sit between tabs and ARE preserved as "".
+  // last column (trigger_scan_id) is always non-empty, so every data row yields all 19 fields; interior
+  // empty fields (localized_mods/ambiguous_mods) sit between tabs and ARE preserved as "".
   std::vector<std::string> splitTab(const std::string& line)
   {
     std::vector<std::string> fields;
@@ -268,11 +268,12 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
 
   // ---------------------------------------------------------------------------------------------
   // (B) Pooled trajectory file: 3 data rows, one per emitRow_ call (finalize + 2x foldMs3).
-  // Column layout (0-based, IdaLogger.cpp:126-132 header / 582-596 row):
+  // Column layout (0-based, IdaLogger.cpp pooled header / row) — grouped fragment-mass table:
   //   0 nominal_mass | 1 mono_mass | 2 proteoform | 3 flash_extender_score | 4 coverage_pct |
   //   5 n_fragments  | 6 localized_mods | 7 ambiguous_mods | 8 contributing_scan_ids |
-  //   9 combined_ms2_frame_masses | 10 update_index | 11 precursor_id | 12 trigger | 13 trigger_scan_id |
-  //   14 combined_measured | 15 combined_theoretical | 16 combined_diff_da | 17 combined_diff_ppm
+  //   9 combined_ms2_frame_masses | 10 combined_ms2_fragment_ions | 11 combined_measured |
+  //   12 combined_theoretical | 13 combined_diff_da | 14 combined_diff_ppm | 15 update_index |
+  //   16 precursor_id | 17 trigger | 18 trigger_scan_id
   // ---------------------------------------------------------------------------------------------
   std::ifstream f(pooled_path.c_str());
   TEST_TRUE(f.good())
@@ -280,7 +281,7 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
   std::string header;
   TEST_TRUE(static_cast<bool>(std::getline(f, header)))
   const std::vector<std::string> header_cols = splitTab(header);
-  TEST_EQUAL((int)header_cols.size(), 18)   // 14 base + fragment-mass table (combined_measured/theoretical/diff_da/diff_ppm)
+  TEST_EQUAL((int)header_cols.size(), 19)   // 14 base + grouped fragment-mass table (masses|ions|measured|theoretical|diff_da|diff_ppm)
 
   std::vector<std::vector<std::string>> rows;
   std::string line;
@@ -292,10 +293,20 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
   TEST_EQUAL((int)rows.size(), 3)   // exactly one row per finalize + foldMs3 + foldMs3
   ABORT_IF((int)rows.size() != 3)
 
-  const int CI_COV = 4, CI_N_FRAG = 5, CI_UPDATE = 10, CI_PRECID = 11, CI_TRIGGER = 12, CI_TRIGGER_SCAN = 13;
+  const int CI_COV = 4, CI_N_FRAG = 5, CI_MASSES = 9, CI_IONS = 10,
+            CI_UPDATE = 15, CI_PRECID = 16, CI_TRIGGER = 17, CI_TRIGGER_SCAN = 18;
 
-  // Every data row must carry all 18 fields (the trailing combined_diff_ppm list is non-empty here).
-  for (const std::vector<std::string>& r : rows) TEST_EQUAL((int)r.size(), 18)
+  // Every data row must carry all 19 fields (the trailing trigger_scan_id is non-empty here).
+  for (const std::vector<std::string>& r : rows) TEST_EQUAL((int)r.size(), 19)
+
+  // combined_ms2_fragment_ions (col 10) aligns 1-for-1 with combined_ms2_frame_masses (col 9), and each
+  // label looks like a fragment ion (ion-type letter + index).
+  auto semiCount = [](const std::string& s) { if (s.empty()) return 0; int n = 1; for (char c : s) if (c == ';') ++n; return n; };
+  for (const std::vector<std::string>& r : rows)
+  {
+    TEST_EQUAL(semiCount(r[CI_IONS]), semiCount(r[CI_MASSES]))
+    TEST_TRUE(!r[CI_IONS].empty() && r[CI_IONS][0] >= 'a' && r[CI_IONS][0] <= 'z')
+  }
 
   // row0 = MS2 baseline: trigger "MS2"; trigger_scan_id = encode(101) (winner = first eligible scan);
   //        update_index "1".
