@@ -127,13 +127,16 @@ namespace OpenMS
       {
         pooled_stream_ << "nominal_mass\tmono_mass\tproteoform\tflash_extender_score\t"
                        << "coverage_pct\tn_fragments\tlocalized_mods\tambiguous_mods\t"
-                       << "contributing_scan_ids\tcombined_ms2_frame_masses\tupdate_index\t"
+                       << "contributing_scan_ids\t"
+                       // Fragment-mass table (grouped): masses + ion labels + measured/theoretical/residual,
+                       // all aligned index-for-index with combined_ms2_frame_masses.
+                       << "combined_ms2_frame_masses\tcombined_ms2_fragment_ions\t"
+                       << "combined_measured\tcombined_theoretical\tcombined_diff_da\tcombined_diff_ppm\t"
+                       << "update_index\t"
                        // P5: per-MS1-selection precursor identity (the model key; plain decimal).
                        << "precursor_id\t"
                        // P6: trajectory columns — trigger source and the tracking-id of the driving scan.
-                       << "trigger\ttrigger_scan_id\t"
-                       // Fragment-mass table: aligned index-for-index with combined_ms2_frame_masses; appended LAST.
-                       << "combined_measured\tcombined_theoretical\tcombined_diff_da\tcombined_diff_ppm\n";
+                       << "trigger\ttrigger_scan_id\n";
         pooled_stream_.flush();
       }
     }
@@ -594,13 +597,16 @@ namespace OpenMS
       if (i > 0) scan_ids_str += " ";
       scan_ids_str += ScanCommandQueue::encode(r.contributing_scan_ids[i]);
     }
-    // combined_ms2_frame_masses + the four aligned parallel lists — all joined with ';'.
+    // Fragment-mass table (grouped) — the aligned lists joined with ';'; ion labels are strings.
     auto joinDoubles = [](const std::vector<double>& v, int precision) -> std::string {
       std::ostringstream ss;
       ss << std::fixed << std::setprecision(precision);
       for (size_t i = 0; i < v.size(); ++i) { if (i > 0) ss << ";"; ss << v[i]; }
       return ss.str();
     };
+    std::string ions_str;
+    for (size_t i = 0; i < r.combined_ms2_fragment_ions.size(); ++i)
+    { if (i > 0) ions_str += ";"; ions_str += r.combined_ms2_fragment_ions[i]; }
     const std::string masses_str   = joinDoubles(r.combined_masses, 4);      // combined_ms2_frame_masses (adjusted)
     const std::string measured_str = joinDoubles(r.combined_measured, 4);
     const std::string theo_str     = joinDoubles(r.combined_theoretical, 4);
@@ -616,14 +622,14 @@ namespace OpenMS
                    << loc_str << "\t"
                    << amb_str << "\t"
                    << scan_ids_str << "\t"
-                   << masses_str << "\t"
+                   // Fragment-mass table (grouped): masses | ion labels | measured | theoretical | diff_da | diff_ppm.
+                   << masses_str << "\t" << ions_str << "\t"
+                   << measured_str << "\t" << theo_str << "\t" << diff_da_str << "\t" << diff_ppm_str << "\t"
                    << r.update_index << "\t"
                    // P5: per-MS1-selection precursor identity (the model key).
                    << r.precursor_id << "\t"
                    // P6: trajectory columns — trigger source and driving scan id.
-                   << r.trigger << "\t" << r.trigger_scan_id << "\t"
-                   // Fragment-mass table aligned index-for-index with combined_ms2_frame_masses; appended LAST.
-                   << measured_str << "\t" << theo_str << "\t" << diff_da_str << "\t" << diff_ppm_str << "\n";
+                   << r.trigger << "\t" << r.trigger_scan_id << "\n";
     pooled_stream_.flush();
   }
 

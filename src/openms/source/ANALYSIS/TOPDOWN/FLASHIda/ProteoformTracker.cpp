@@ -815,6 +815,7 @@ namespace OpenMS
   }
 
   void ProteoformTracker::alignedCombinedLists_(const ProteoformModel& m,
+      std::vector<std::string>& ions,
       std::vector<double>& measured, std::vector<double>& adjusted, std::vector<double>& theoretical,
       std::vector<double>& diff_da, std::vector<double>& diff_ppm) const
   {
@@ -822,20 +823,22 @@ namespace OpenMS
     keys.reserve(m.fragments.size());
     for (const auto& kv : m.fragments) keys.push_back(kv.first);
     std::sort(keys.begin(), keys.end());  // FragmentKey = pair<string,int> => (ion_type, ion_index) order
-    auto push = [&](const FragmentObservation& o) {
+    auto push = [&](const std::string& label, const FragmentObservation& o) {
       const double adj = o.observed_mass;      // observed_mass holds the ADJUSTED (MS2-frame) value
       const double th  = o.theoretical_mass;
+      ions.push_back(label);
       measured.push_back(o.measured_mass);
       adjusted.push_back(adj);
       theoretical.push_back(th);
-      diff_da.push_back(th > 0.0 ? (adj - th) : 0.0);            // guard: MS2 (th==0) => 0, not adj-0
+      diff_da.push_back(th > 0.0 ? (adj - th) : 0.0);            // guard: no matched theoretical (th==0) => 0
       diff_ppm.push_back(th > 0.0 ? ((adj - th) / th * 1e6) : 0.0);
     };
     for (const FragmentKey& k : keys)
     {
+      const std::string label = k.first + std::to_string(k.second);   // ion_type + ion_index, e.g. "b22"
       const MappedFragment& f = m.fragments.at(k);
-      if (f.best_ms2.has_value()) push(*f.best_ms2);
-      if (f.best_ms3.has_value()) push(*f.best_ms3);
+      if (f.best_ms2.has_value()) push(label, *f.best_ms2);
+      if (f.best_ms3.has_value()) push(label, *f.best_ms3);
     }
   }
 
@@ -924,14 +927,16 @@ namespace OpenMS
     // drops). Was rebuilt here from current best_ms2/best_ms3 sources, which dropped superseded scans.
     r.contributing_scan_ids.assign(m.contributing_scan_ids.begin(), m.contributing_scan_ids.end());
 
-    // --- aligned combined lists: five parallel per-fragment vectors in stable FragmentKey order ---
+    // --- aligned combined lists: parallel per-fragment vectors in stable FragmentKey order ---
+    std::vector<std::string> _ions;
     std::vector<double> _measured, _adjusted, _theoretical, _diff_da, _diff_ppm;
-    alignedCombinedLists_(m, _measured, _adjusted, _theoretical, _diff_da, _diff_ppm);
-    r.combined_measured    = std::move(_measured);
-    r.combined_masses      = std::move(_adjusted);      // combined_ms2_frame_masses column, now FragmentKey order (not mass-sorted)
-    r.combined_theoretical = std::move(_theoretical);
-    r.combined_diff_da     = std::move(_diff_da);
-    r.combined_diff_ppm    = std::move(_diff_ppm);
+    alignedCombinedLists_(m, _ions, _measured, _adjusted, _theoretical, _diff_da, _diff_ppm);
+    r.combined_masses               = std::move(_adjusted);      // combined_ms2_frame_masses column (FragmentKey order, not mass-sorted)
+    r.combined_ms2_fragment_ions    = std::move(_ions);
+    r.combined_measured             = std::move(_measured);
+    r.combined_theoretical          = std::move(_theoretical);
+    r.combined_diff_da              = std::move(_diff_da);
+    r.combined_diff_ppm             = std::move(_diff_ppm);
 
     // --- update_index ---
     r.update_index = m.update_index;

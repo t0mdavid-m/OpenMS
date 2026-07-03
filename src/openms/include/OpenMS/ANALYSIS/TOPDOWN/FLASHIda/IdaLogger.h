@@ -147,10 +147,11 @@ namespace OpenMS
       std::vector<std::string> ambiguous_mods;
       std::vector<int> contributing_scan_ids;
       std::vector<double> combined_masses;
+      std::vector<std::string> combined_ms2_fragment_ions;  ///< ion label (ion_type+index, e.g. "b22") per entry, aligned with combined_masses
       std::vector<double> combined_measured;      ///< raw measured, aligned index-for-index with combined_masses
-      std::vector<double> combined_theoretical;   ///< theoretical (0 for MS2 fragments), aligned
-      std::vector<double> combined_diff_da;       ///< adjusted - theoretical (0 when no theoretical), aligned
-      std::vector<double> combined_diff_ppm;      ///< 1e6*diff_da/theoretical (0 when no theoretical), aligned
+      std::vector<double> combined_theoretical;   ///< proteoform theoretical (MS2 & MS3), aligned
+      std::vector<double> combined_diff_da;       ///< adjusted - theoretical, aligned
+      std::vector<double> combined_diff_ppm;      ///< 1e6*diff_da/theoretical, aligned
       int update_index = 0;
       std::string trigger;            ///< "MS2" for the baseline row; folded fragment ion (e.g. "y7") for an MS3 update row
       std::string trigger_scan_id;    ///< Encoded tracking-id of the scan that drove this row (MS2 winner / MS3 production-or-variant)

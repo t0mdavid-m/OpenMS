@@ -238,12 +238,13 @@ namespace OpenMS
     /// Emit a log/TSV row for the current state of @p mdl (skeleton: no-op).
     void emitRow_(const ProteoformModel& m, const std::string& trigger, const std::string& trigger_scan_id);
 
-    /// Produce five ALIGNED per-fragment lists in stable FragmentKey order (no mass-sort).
-    /// For each present observation (best_ms2 then best_ms3 per key), pushes one entry into
-    /// each of the five output vectors in lockstep: measured (raw own-scan-frame mass),
-    /// adjusted (MS2-frame, == observed_mass), theoretical, diff_da, diff_ppm.
-    /// MS2 fragments have theoretical==0 => diff_da==0, diff_ppm==0 (guarded).
+    /// Produce ALIGNED per-fragment lists in stable FragmentKey order (no mass-sort). For each present
+    /// observation (best_ms2 then best_ms3 per key), pushes one entry into each output vector in lockstep:
+    /// ions (ion_type+index label, e.g. "b22"), measured (raw own-scan-frame mass), adjusted
+    /// (MS2-frame, == observed_mass), theoretical, diff_da, diff_ppm. diff_da/ppm guarded to 0 when
+    /// theoretical==0 (a fragment with no matched theoretical).
     void alignedCombinedLists_(const ProteoformModel& m,
+                               std::vector<std::string>& ions,
                                std::vector<double>& measured, std::vector<double>& adjusted,
                                std::vector<double>& theoretical, std::vector<double>& diff_da,
                                std::vector<double>& diff_ppm) const;
