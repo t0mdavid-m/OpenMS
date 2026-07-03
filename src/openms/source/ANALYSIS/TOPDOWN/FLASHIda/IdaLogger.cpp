@@ -115,7 +115,7 @@ namespace OpenMS
                                    << "ms3_isolation_width\tms3_window_snr\tms3_charge_intensity\t"
                                    // P5: per-MS1-selection precursor identity (plain decimal).
                                    << "precursor_id\t"
-                                   // Fragment-mass table (MS3 rows only; empty on MS2): per-scan theoretical + residual; appended LAST.
+                                   // Fragment-mass table (MS2 & MS3 rows): per-scan theoretical + residual; appended LAST.
                                    << "theoretical_masses\tdiff_da\tdiff_ppm\n";
         identification_tsv_stream_.flush();
       }
@@ -588,7 +588,7 @@ namespace OpenMS
     // contributing_scan_ids joined with SPACE — the established delimiter that avoids the
     // tracking-id-alphabet ';' collision (same precedent as child_ids in writeScanResultRow).
     // Each id is base-94 encoded (ScanCommandQueue::encode) for consistency with every other
-    // tracking-id in every stream — including the pooled trigger_scan_id (col 14) in this same row
+    // tracking-id in every stream — including the pooled trigger_scan_id (col 18) in this same row
     // and encode(cmd.scan_id) in writeScanCommandRow. Encoded ids are exactly 3 chars from the
     // 0x21-0x7E alphabet, so the space (0x20) delimiter never collides.
     std::string scan_ids_str;
