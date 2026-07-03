@@ -176,6 +176,7 @@ namespace OpenMS
   {
     ProteoformModel& m = models_[precursor_id];
     m.precursor_id = precursor_id;
+    m.contributing_scan_ids.insert(scan_id);   // cumulative: every fed scan stays (never dropped on supersede)
 
     // Capture the MS2 command context once (used by planNextScans/buildMS3 in the next task).
     if (!m.has_ms2_ctx)
@@ -892,19 +893,9 @@ namespace OpenMS
       }
     }
 
-    // --- contributing_scan_ids: unique sorted set of source_scan_id from all fragment observations
-    //     plus winner_scan_id ---
-    {
-      std::set<int> id_set;
-      if (m.winner_scan_id != 0) id_set.insert(m.winner_scan_id);
-      for (const auto& kv : m.fragments)
-      {
-        const MappedFragment& f = kv.second;
-        if (f.best_ms2.has_value()) id_set.insert(f.best_ms2->source_scan_id);
-        if (f.best_ms3.has_value()) id_set.insert(f.best_ms3->source_scan_id);
-      }
-      r.contributing_scan_ids.assign(id_set.begin(), id_set.end());
-    }
+    // contributing_scan_ids: the model's CUMULATIVE fed-scan set (monotone; a superseded scan never
+    // drops). Was rebuilt here from current best_ms2/best_ms3 sources, which dropped superseded scans.
+    r.contributing_scan_ids.assign(m.contributing_scan_ids.begin(), m.contributing_scan_ids.end());
 
     // --- combined_masses: union of all MS2-frame observed masses across MS2 and MS3 observations ---
     r.combined_masses = m.combinedMs2FrameMasses();

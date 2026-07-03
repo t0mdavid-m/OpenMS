@@ -44,6 +44,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -161,6 +162,10 @@ namespace OpenMS
     std::unordered_map<FragmentKey, MappedFragment, FragmentKeyHash> fragments;
     ScanCommand ms2_ctx;        ///< MS2 command context for buildMS3 (captured once from the first feedScan)
     bool has_ms2_ctx = false;   ///< True once ms2_ctx has been set
+
+    /// Cumulative set of every scan fed to this model (MS2 variants + each MS3 fold). Never drops a
+    /// scan when its observation is later superseded -> the emitted contributing_scan_ids is monotone.
+    std::set<int> contributing_scan_ids;
 
     /// Fraction of proteoform residues covered by at least one fragment observation [0,1]
     double coveragePct() const;
