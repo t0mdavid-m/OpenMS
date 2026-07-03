@@ -70,6 +70,7 @@ namespace OpenMS
     int frag_charge = 0;        ///< Charge state for targeting this fragment in MS3
     double iso_width = 0;       ///< PeakGroup m/z span (mz2 - mz1 from getMzRange) for MS3 targeting; floored at 2.0 Th at emission (ScanCommandQueue.cpp)
     FragmentAnalysis::FragmentScores stage1_scores;  ///< Stage-1 scores of the matched peak (for MS3 stage[1] score columns)
+    bool includes_ptm = false;   ///< MS3 localization verdict carried from the FragmentMatch (see mapScanOntoModel_); false for MS2
   };
 
   /// A single MS3 acquisition target the model selected. The executor (Exploration) builds the

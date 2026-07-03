@@ -659,6 +659,7 @@ namespace OpenMS
       obs.frag_charge = matched_charge;
       obs.iso_width = matched_iso_width;
       obs.stage1_scores = matched_stage1;
+      obs.includes_ptm = fm.includes_ptm;   // carry the MS3 localization verdict (bool about THIS fragment's own coverage; frame-invariant)
 
       if (ps.ms_level == 3)
       {

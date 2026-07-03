@@ -560,6 +560,7 @@ namespace OpenMS
                                protein_prefix,
                                fm.equiv_type, fm.equiv_index, offset);
           fm.adjusted_mass = md.observed_mass + offset;
+          fm.includes_ptm = md.includes_ptm;   // propagate the MS3 localization verdict (already set in matchSpectrum)
           mr.fragments.push_back(fm);
         }
         std::sort(mr.fragments.begin(), mr.fragments.end(),
