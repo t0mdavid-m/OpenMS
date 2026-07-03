@@ -113,8 +113,10 @@ namespace OpenMS
                                    // for the MS2 precursor and (on MS3 rows) the MS3 fragment precursor.
                                    << "ms2_isolation_width\tms2_window_snr\tms2_charge_intensity\t"
                                    << "ms3_isolation_width\tms3_window_snr\tms3_charge_intensity\t"
-                                   // P5: per-MS1-selection precursor identity (plain decimal); appended LAST.
-                                   << "precursor_id\n";
+                                   // P5: per-MS1-selection precursor identity (plain decimal).
+                                   << "precursor_id\t"
+                                   // Fragment-mass table (MS3 rows only; empty on MS2): per-scan theoretical + residual; appended LAST.
+                                   << "theoretical_masses\tdiff_da\tdiff_ppm\n";
         identification_tsv_stream_.flush();
       }
     }
@@ -128,8 +130,10 @@ namespace OpenMS
                        << "contributing_scan_ids\tcombined_ms2_frame_masses\tupdate_index\t"
                        // P5: per-MS1-selection precursor identity (the model key; plain decimal).
                        << "precursor_id\t"
-                       // P6: trajectory columns — trigger source and the tracking-id of the driving scan; appended LAST.
-                       << "trigger\ttrigger_scan_id\n";
+                       // P6: trajectory columns — trigger source and the tracking-id of the driving scan.
+                       << "trigger\ttrigger_scan_id\t"
+                       // Fragment-mass table: aligned index-for-index with combined_ms2_frame_masses; appended LAST.
+                       << "combined_measured\tcombined_theoretical\tcombined_diff_da\tcombined_diff_ppm\n";
         pooled_stream_.flush();
       }
     }
@@ -492,17 +496,24 @@ namespace OpenMS
       }
     }
 
-    std::ostringstream ms3_frags, ms3_masses;
+    std::ostringstream ms3_frags, ms3_masses, ms3_theo, ms3_diff_da, ms3_diff_ppm;
     ms3_frags << std::fixed << std::setprecision(4);
     ms3_masses << std::fixed << std::setprecision(4);
+    ms3_theo << std::fixed << std::setprecision(4);
+    ms3_diff_da << std::fixed << std::setprecision(4);
+    ms3_diff_ppm << std::fixed << std::setprecision(2);
 
     if (ms_level == 3)
     {
       for (size_t i = 0; i < match.fragments.size(); ++i)
       {
-        if (i > 0) { ms3_frags << ";"; ms3_masses << ";"; }
+        if (i > 0) { ms3_frags << ";"; ms3_masses << ";"; ms3_theo << ";"; ms3_diff_da << ";"; ms3_diff_ppm << ";"; }
         ms3_frags << match.fragments[i].ion_type << match.fragments[i].ion_index;
         ms3_masses << match.fragments[i].observed_mass;
+        // measured = ms3_masses (raw subseq observed); adjusted = ms2_masses (col17); theoretical + residual (T1 fields):
+        ms3_theo << match.fragments[i].theoretical_mass;
+        ms3_diff_da << match.fragments[i].diff_da;
+        ms3_diff_ppm << match.fragments[i].diff_ppm;
       }
     }
 
@@ -539,8 +550,10 @@ namespace OpenMS
       << (ms_level == 3 ? ctx.ms3_isolation_width : 0.0) << "\t"
       << (ms_level == 3 ? ctx.ms3_window_snr : 0.0) << "\t"
       << (ms_level == 3 ? ctx.ms3_charge_intensity : 0.0) << "\t"
-      // P5: per-MS1-selection precursor identity (plain decimal); appended LAST.
-      << row.precursor_id << "\n";
+      // P5: per-MS1-selection precursor identity (plain decimal).
+      << row.precursor_id << "\t"
+      // Fragment-mass table (empty on MS2 rows): per-scan theoretical + residual (Da, ppm); appended LAST.
+      << ms3_theo.str() << "\t" << ms3_diff_da.str() << "\t" << ms3_diff_ppm.str() << "\n";
     identification_tsv_stream_.flush();
   }
 
@@ -574,14 +587,18 @@ namespace OpenMS
       if (i > 0) scan_ids_str += " ";
       scan_ids_str += ScanCommandQueue::encode(r.contributing_scan_ids[i]);
     }
-    // combined_masses joined with ';'.
-    std::ostringstream masses_ss;
-    masses_ss << std::fixed << std::setprecision(4);
-    for (size_t i = 0; i < r.combined_masses.size(); ++i)
-    {
-      if (i > 0) masses_ss << ";";
-      masses_ss << r.combined_masses[i];
-    }
+    // combined_ms2_frame_masses + the four aligned parallel lists — all joined with ';'.
+    auto joinDoubles = [](const std::vector<double>& v, int precision) -> std::string {
+      std::ostringstream ss;
+      ss << std::fixed << std::setprecision(precision);
+      for (size_t i = 0; i < v.size(); ++i) { if (i > 0) ss << ";"; ss << v[i]; }
+      return ss.str();
+    };
+    const std::string masses_str   = joinDoubles(r.combined_masses, 4);      // combined_ms2_frame_masses (adjusted)
+    const std::string measured_str = joinDoubles(r.combined_measured, 4);
+    const std::string theo_str     = joinDoubles(r.combined_theoretical, 4);
+    const std::string diff_da_str  = joinDoubles(r.combined_diff_da, 4);
+    const std::string diff_ppm_str = joinDoubles(r.combined_diff_ppm, 2);
 
     pooled_stream_ << r.nominal_mass << "\t"
                    << std::fixed << std::setprecision(4) << r.mono_mass << "\t"
@@ -592,12 +609,14 @@ namespace OpenMS
                    << loc_str << "\t"
                    << amb_str << "\t"
                    << scan_ids_str << "\t"
-                   << masses_ss.str() << "\t"
+                   << masses_str << "\t"
                    << r.update_index << "\t"
                    // P5: per-MS1-selection precursor identity (the model key).
                    << r.precursor_id << "\t"
-                   // P6: trajectory columns — trigger source and driving scan id; appended LAST.
-                   << r.trigger << "\t" << r.trigger_scan_id << "\n";
+                   // P6: trajectory columns — trigger source and driving scan id.
+                   << r.trigger << "\t" << r.trigger_scan_id << "\t"
+                   // Fragment-mass table aligned index-for-index with combined_ms2_frame_masses; appended LAST.
+                   << measured_str << "\t" << theo_str << "\t" << diff_da_str << "\t" << diff_ppm_str << "\n";
     pooled_stream_.flush();
   }
 
