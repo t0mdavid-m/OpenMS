@@ -496,25 +496,32 @@ namespace OpenMS
       }
     }
 
-    std::ostringstream ms3_frags, ms3_masses, ms3_theo, ms3_diff_da, ms3_diff_ppm;
+    std::ostringstream ms3_frags, ms3_masses;
     ms3_frags << std::fixed << std::setprecision(4);
     ms3_masses << std::fixed << std::setprecision(4);
-    ms3_theo << std::fixed << std::setprecision(4);
-    ms3_diff_da << std::fixed << std::setprecision(4);
-    ms3_diff_ppm << std::fixed << std::setprecision(2);
 
     if (ms_level == 3)
     {
       for (size_t i = 0; i < match.fragments.size(); ++i)
       {
-        if (i > 0) { ms3_frags << ";"; ms3_masses << ";"; ms3_theo << ";"; ms3_diff_da << ";"; ms3_diff_ppm << ";"; }
-        ms3_frags << match.fragments[i].ion_type << match.fragments[i].ion_index;
+        if (i > 0) { ms3_frags << ";"; ms3_masses << ";"; }
+        ms3_frags << match.fragments[i].ion_type << match.fragments[i].ion_index;   // raw MS3 sub-fragment (measured)
         ms3_masses << match.fragments[i].observed_mass;
-        // measured = ms3_masses (raw subseq observed); adjusted = ms2_masses (col17); theoretical + residual (T1 fields):
-        ms3_theo << match.fragments[i].theoretical_mass;
-        ms3_diff_da << match.fragments[i].diff_da;
-        ms3_diff_ppm << match.fragments[i].diff_ppm;
       }
+    }
+
+    // Fragment-mass table theoretical + residual, per fragment, for BOTH levels (match.fragments): MS2 rows
+    // carry the MS2 matcher's best_theo + diff, MS3 rows the equiv-frame theoretical + diff (calibrateAndScore).
+    std::ostringstream frag_theo, frag_diff_da, frag_diff_ppm;
+    frag_theo << std::fixed << std::setprecision(4);
+    frag_diff_da << std::fixed << std::setprecision(4);
+    frag_diff_ppm << std::fixed << std::setprecision(2);
+    for (size_t i = 0; i < match.fragments.size(); ++i)
+    {
+      if (i > 0) { frag_theo << ";"; frag_diff_da << ";"; frag_diff_ppm << ";"; }
+      frag_theo << match.fragments[i].theoretical_mass;
+      frag_diff_da << match.fragments[i].diff_da;
+      frag_diff_ppm << match.fragments[i].diff_ppm;
     }
 
     std::string precursor_ion;
@@ -552,8 +559,8 @@ namespace OpenMS
       << (ms_level == 3 ? ctx.ms3_charge_intensity : 0.0) << "\t"
       // P5: per-MS1-selection precursor identity (plain decimal).
       << row.precursor_id << "\t"
-      // Fragment-mass table (empty on MS2 rows): per-scan theoretical + residual (Da, ppm); appended LAST.
-      << ms3_theo.str() << "\t" << ms3_diff_da.str() << "\t" << ms3_diff_ppm.str() << "\n";
+      // Fragment-mass table: per-scan theoretical + residual (Da, ppm) for MS2 AND MS3 fragments; appended LAST.
+      << frag_theo.str() << "\t" << frag_diff_da.str() << "\t" << frag_diff_ppm.str() << "\n";
     identification_tsv_stream_.flush();
   }
 
