@@ -631,6 +631,8 @@ namespace OpenMS
       FragmentObservation obs;
       obs.ms_level = ps.ms_level;
       obs.observed_mass = obs_mass;
+      obs.measured_mass = fm.observed_mass;                                    // raw own-scan-frame mass (MS3 subsequence; MS2 == observed)
+      obs.theoretical_mass = (ps.ms_level == 3) ? fm.theoretical_mass : 0.0;   // MS3-only carried theoretical (D1=A)
       obs.intensity = intensity;
       obs.source_scan_id = ps.scan_id;
       obs.params = ps.params;
@@ -812,6 +814,31 @@ namespace OpenMS
     }
   }
 
+  void ProteoformTracker::alignedCombinedLists_(const ProteoformModel& m,
+      std::vector<double>& measured, std::vector<double>& adjusted, std::vector<double>& theoretical,
+      std::vector<double>& diff_da, std::vector<double>& diff_ppm) const
+  {
+    std::vector<FragmentKey> keys;
+    keys.reserve(m.fragments.size());
+    for (const auto& kv : m.fragments) keys.push_back(kv.first);
+    std::sort(keys.begin(), keys.end());  // FragmentKey = pair<string,int> => (ion_type, ion_index) order
+    auto push = [&](const FragmentObservation& o) {
+      const double adj = o.observed_mass;      // observed_mass holds the ADJUSTED (MS2-frame) value
+      const double th  = o.theoretical_mass;
+      measured.push_back(o.measured_mass);
+      adjusted.push_back(adj);
+      theoretical.push_back(th);
+      diff_da.push_back(th > 0.0 ? (adj - th) : 0.0);            // guard: MS2 (th==0) => 0, not adj-0
+      diff_ppm.push_back(th > 0.0 ? ((adj - th) / th * 1e6) : 0.0);
+    };
+    for (const FragmentKey& k : keys)
+    {
+      const MappedFragment& f = m.fragments.at(k);
+      if (f.best_ms2.has_value()) push(*f.best_ms2);
+      if (f.best_ms3.has_value()) push(*f.best_ms3);
+    }
+  }
+
   void ProteoformTracker::emitRow_(const ProteoformModel& m, const std::string& trigger, const std::string& trigger_scan_id)
   {
     // Guard: no identified model -> nothing to emit.
@@ -897,8 +924,14 @@ namespace OpenMS
     // drops). Was rebuilt here from current best_ms2/best_ms3 sources, which dropped superseded scans.
     r.contributing_scan_ids.assign(m.contributing_scan_ids.begin(), m.contributing_scan_ids.end());
 
-    // --- combined_masses: union of all MS2-frame observed masses across MS2 and MS3 observations ---
-    r.combined_masses = m.combinedMs2FrameMasses();
+    // --- aligned combined lists: five parallel per-fragment vectors in stable FragmentKey order ---
+    std::vector<double> _measured, _adjusted, _theoretical, _diff_da, _diff_ppm;
+    alignedCombinedLists_(m, _measured, _adjusted, _theoretical, _diff_da, _diff_ppm);
+    r.combined_measured    = std::move(_measured);
+    r.combined_masses      = std::move(_adjusted);      // combined_ms2_frame_masses column, now FragmentKey order (not mass-sorted)
+    r.combined_theoretical = std::move(_theoretical);
+    r.combined_diff_da     = std::move(_diff_da);
+    r.combined_diff_ppm    = std::move(_diff_ppm);
 
     // --- update_index ---
     r.update_index = m.update_index;

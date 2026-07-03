@@ -64,6 +64,8 @@ namespace OpenMS
   {
     uint8_t ms_level = 2;       ///< 2 | 3
     double observed_mass = 0;   ///< MS2 frame (MS3 already converted via equiv/adjusted)
+    double measured_mass = 0;    ///< Raw own-scan-frame mass (MS3 = subsequence-frame observed; MS2 == observed == adjusted). observed_mass STAYS the adjusted value.
+    double theoretical_mass = 0; ///< MS3: per-scan mod-inclusive equivalent-ion theoretical carried from FragmentMatch. MS2: 0 (no carried theoretical).
     double intensity = 0;
     int source_scan_id = 0;
     Ms2Params params;           ///< For an MS3 obs: the parent MS2's params
@@ -235,6 +237,16 @@ namespace OpenMS
 
     /// Emit a log/TSV row for the current state of @p mdl (skeleton: no-op).
     void emitRow_(const ProteoformModel& m, const std::string& trigger, const std::string& trigger_scan_id);
+
+    /// Produce five ALIGNED per-fragment lists in stable FragmentKey order (no mass-sort).
+    /// For each present observation (best_ms2 then best_ms3 per key), pushes one entry into
+    /// each of the five output vectors in lockstep: measured (raw own-scan-frame mass),
+    /// adjusted (MS2-frame, == observed_mass), theoretical, diff_da, diff_ppm.
+    /// MS2 fragments have theoretical==0 => diff_da==0, diff_ppm==0 (guarded).
+    void alignedCombinedLists_(const ProteoformModel& m,
+                               std::vector<double>& measured, std::vector<double>& adjusted,
+                               std::vector<double>& theoretical, std::vector<double>& diff_da,
+                               std::vector<double>& diff_ppm) const;
 
     const Config& config_;
     IdaLogger& logger_;
