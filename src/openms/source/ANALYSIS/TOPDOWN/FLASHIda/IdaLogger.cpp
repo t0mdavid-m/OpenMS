@@ -454,25 +454,18 @@ namespace OpenMS
 
     if (match.fragments.empty()) return;
 
-    // #1: on the MS3 'R' (non-exploration) path, the matcher result (match=detailed[0]) leaves
-    // proteoform_sequence/region_*/ptm_sites at their defaults; the real values live in the cached
-    // MS2 context (ctx=mc). Source them from ctx there. (MS2 rows and MS3 'E' keep using match.)
-    // F3: source proteoform/PTMs from the cached MS2 context for BOTH MS3 'R' and MS3 'E'. The matcher
-    // result leaves proteoform_sequence/ptm_sites empty on both paths (calibrateAndScore sets only
-    // ppm/region), while ctx (buildMS2ContextForVariant) carries the parent proteoform. region_* still
-    // prefers match below (use_match_region), so the MS3 fragment sub-range from F-I1 is preserved.
-    const bool use_ctx_proteoform = (ms_level == 3 && (scan_mode == 'R' || scan_mode == 'E'));
-    const std::string& id_proteoform = use_ctx_proteoform ? ctx.proteoform_sequence : match.proteoform_sequence;
-    const std::vector<FragmentAnalysis::PTMSite>& id_ptm_sites = use_ctx_proteoform ? ctx.ptm_sites : match.ptm_sites;
-    // I1: for MS3 rows, start_pos/end_pos must be the FRAGMENT sub-range the MS3 precursor covers, which
-    // calibrateAndScore now stores into match.region_start/end (0-based, exclusive end). Use it whenever
-    // populated (>=0) for BOTH 'E' (was -1 default) and 'R' (was ctx = parent full range). Fall back only
-    // if the matcher produced no sub-range: ctx parent range on 'R', match default on 'E'.
-    const bool use_match_region = (ms_level == 3 && match.region_start >= 0);
-    const int id_region_start = use_match_region ? match.region_start
-                                                 : (use_ctx_proteoform ? ctx.start_pos : match.region_start);
-    const int id_region_end = use_match_region ? match.region_end
-                                               : (use_ctx_proteoform ? ctx.end_pos : match.region_end);
+    // CONTRACT: `match` = the identified species (MS2 = the MS2 proteoform; MS3 = the FRAGMENT
+    // sub-sequence + its clipped mods, filled by calibrateAndScore), `ctx` = the acquisition context
+    // (MS1/MS2/MS3 precursor identity + isolation). Source proteoform/PTMs/region from `match`; fall back
+    // to the parent `ctx` only if `match` is unpopulated (defensive — a path that produced no match).
+    const bool match_has_proteoform = !match.proteoform_sequence.empty();
+    const std::string& id_proteoform = match_has_proteoform ? match.proteoform_sequence : ctx.proteoform_sequence;
+    const std::vector<FragmentAnalysis::PTMSite>& id_ptm_sites = match_has_proteoform ? match.ptm_sites : ctx.ptm_sites;
+    // region: the fragment sub-range (MS3) / proteoform region (MS2) from match.region_start/end (0-based,
+    // exclusive end); fall back to the parent ctx range only if match has no region (region_start < 0).
+    const bool use_match_region = (match.region_start >= 0);
+    const int id_region_start = use_match_region ? match.region_start : ctx.start_pos;
+    const int id_region_end   = use_match_region ? match.region_end   : ctx.end_pos;
 
     std::string proforma = FragmentAnalysis::toProForma(id_proteoform, id_ptm_sites);
 
