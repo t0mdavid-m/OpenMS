@@ -489,7 +489,12 @@ FLASHIda::FLASHIda(char* arg) :
         scan_row.commands_pushed     = static_cast<int>(expl_result.commands.size());
         scan_row.child_ids           = expl_result.child_ids;
         scan_row.matched_protein     = expl_result.matched_protein;
-        scan_row.proteoform_sequence = FragmentAnalysis::toProForma(expl_result.proteoform_sequence, expl_result.identification_result.ptm_sites);
+        // scan_results proteoform = the PARENT (acquisition context), rendered from the MS2 context like the
+        // MS3-'R' path (~:597). NOT identification_result.ptm_sites: for MS3 those are now the FRAGMENT-frame
+        // mods (calibrateAndScore), which would paste into the parent string at wrong offsets. identification.tsv
+        // shows the fragment; scan_results shows the parent it came from. Also fixes the pre-existing 'E'
+        // asymmetry ('E' showed the parent with NO mods while 'R' showed it WITH mods).
+        scan_row.proteoform_sequence = FragmentAnalysis::toProForma(expl_result.ms2_context.proteoform_sequence, expl_result.ms2_context.ptm_sites);
         scan_row.deconv_spectrum     = expl_spec;
         scan_row.parent_tracking_id  = parent_id;
         scan_row.tic_coverage        = expl_result.tic_coverage;
