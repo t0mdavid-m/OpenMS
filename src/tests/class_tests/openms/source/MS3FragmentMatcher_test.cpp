@@ -320,6 +320,24 @@ START_SECTION(extractSubsequence)
   // a-precursor treated same as b-precursor
   std::string a3 = MS3FragmentMatcher::extractSubsequence(protein, ctx, 'a', 3);
   TEST_EQUAL(a3, "CDE")
+
+  // Realistic cytC y-ions (C-terminal / suffix branch). All committed MS3 fixtures are b-ions, so this
+  // exercises the suffix path (subseq_start = region_end - index) with the exact indices the engine emits
+  // for cytC (y40/y56/y71, per the ms3_cytc scan_commands golden).
+  std::string cytC = "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE";
+  MS3FragmentMatcher::ProteoformContext cc;
+  cc.region_start = 0;
+  cc.region_end = 105;  // full-protein proteoform (cytC is a 105-mer with N-terminal Met)
+  for (int k : {40, 56, 71})
+  {
+    std::string y = MS3FragmentMatcher::extractSubsequence(cytC, cc, 'y', k);
+    TEST_EQUAL(static_cast<int>(y.size()), k)          // suffix length == index
+    TEST_EQUAL(y, cytC.substr(105 - k, k))             // C-terminal window (NOT the N-terminal one)
+    TEST_EQUAL(y.substr(y.size() - 6), "KKATNE")       // ends at the cytC C-terminus
+  }
+  TEST_EQUAL(MS3FragmentMatcher::extractSubsequence(cytC, cc, 'y', 40).substr(0, 5), "MEYLE") // y40 start
+  TEST_EQUAL(MS3FragmentMatcher::extractSubsequence(cytC, cc, 'y', 56).substr(0, 5), "TDANK") // y56 start
+  TEST_EQUAL(MS3FragmentMatcher::extractSubsequence(cytC, cc, 'y', 71).substr(0, 5), "GLFGR") // y71 start
 }
 END_SECTION
 
@@ -364,6 +382,41 @@ START_SECTION(rebasePTMSites)
   // Fixed PTM [7,7] rebased to [4,4]
   TEST_EQUAL(rebased_mid[1].start_position, 4)
   TEST_EQUAL(rebased_mid[1].end_position, 4)
+}
+END_SECTION
+
+START_SECTION(fragmentProForma)
+{
+  // The CHANGE-1 composed helper: extractSubsequence -> subseq_start_1based -> rebasePTMSites -> toProForma.
+  // The two scan_results MS3 write sites call this; test it directly (unreachable through the engine w/o a spectrum).
+  std::string cytC = "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE";
+  MS3FragmentMatcher::ProteoformContext c;
+  c.region_start = 0;
+  c.region_end = 105;
+
+  // (1) bare y56: cytC's real mods are N-terminal (heme), so a C-terminal y-fragment carries none.
+  TEST_EQUAL(MS3FragmentMatcher::fragmentProForma(cytC, c, 'y', 56), cytC.substr(49, 56))  // bare sub-sequence
+
+  // (2) y56 with a SYNTHETIC ambiguous parent mod in the C-terminal region [95,98] (+42.0106).
+  //     y56 covers parent 50..105 (1-based); subseq_start_1based = 105-56+1 = 50, so [95,98] -> [46,49] in-frame.
+  FragmentAnalysis::PTMSite m;
+  m.position = 96; m.start_position = 95; m.end_position = 98; m.mass_shift = 42.0106;
+  c.ptm_sites = {m};
+  std::string pf = MS3FragmentMatcher::fragmentProForma(cytC, c, 'y', 56);
+  TEST_NOT_EQUAL(pf.find("[+42"), std::string::npos)         // mod present, clipped into the fragment frame
+  int bare = 0; for (char ch : pf) if (ch >= 'A' && ch <= 'Z') ++bare;
+  TEST_EQUAL(bare, 56)                                        // 56 residues even with the bracket
+
+  // What bug this catches: if subseq_start_1based for a suffix ion were wrongly 1, the mod would clip/land at
+  // the wrong offset (or vanish); if toProForma pasted at the parent offset, bare != 56.
+  c.ptm_sites.clear();
+
+  // (3) b-ion parity: b80 -> N-terminal 80 residues, bare.
+  TEST_EQUAL(MS3FragmentMatcher::fragmentProForma(cytC, c, 'b', 80), cytC.substr(0, 80))
+
+  // (4) empty-context fallback: unpopulated ion type / index -> "" (never a parent string).
+  TEST_EQUAL(MS3FragmentMatcher::fragmentProForma(cytC, c, '\0', 0), "")
+  TEST_EQUAL(MS3FragmentMatcher::fragmentProForma(cytC, c, 'y', 0),  "")
 }
 END_SECTION
 

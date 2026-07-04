@@ -489,12 +489,21 @@ FLASHIda::FLASHIda(char* arg) :
         scan_row.commands_pushed     = static_cast<int>(expl_result.commands.size());
         scan_row.child_ids           = expl_result.child_ids;
         scan_row.matched_protein     = expl_result.matched_protein;
-        // scan_results proteoform = the PARENT (acquisition context), rendered from the MS2 context like the
-        // MS3-'R' path (~:597). NOT identification_result.ptm_sites: for MS3 those are now the FRAGMENT-frame
-        // mods (calibrateAndScore), which would paste into the parent string at wrong offsets. identification.tsv
-        // shows the fragment; scan_results shows the parent it came from. Also fixes the pre-existing 'E'
-        // asymmetry ('E' showed the parent with NO mods while 'R' showed it WITH mods).
-        scan_row.proteoform_sequence = FragmentAnalysis::toProForma(expl_result.ms2_context.proteoform_sequence, expl_result.ms2_context.ptm_sites);
+        // scan_results MS3 proteoform = the clipped b/y FRAGMENT (the "clipped MS2 sequence") — the
+        // acquisition-context view of what this MS3 is characterizing, rendered in the SAME fragment frame
+        // identification.tsv uses (extractSubsequence + rebasePTMSites + toProForma via fragmentProForma).
+        // Built from the MS2 context alone, so it's present for every processed MS3 scan even when
+        // identification is deferred/failed. The parent stays recoverable via matched_protein +
+        // parent_tracking_id. (Was the parent proteoform — reversed to the fragment.)
+        {
+          MS3FragmentMatcher::ProteoformContext pc;
+          pc.region_start = expl_result.ms2_context.start_pos;
+          pc.region_end   = expl_result.ms2_context.end_pos;
+          pc.ptm_sites    = expl_result.ms2_context.ptm_sites;
+          scan_row.proteoform_sequence = MS3FragmentMatcher::fragmentProForma(
+            config_.characterization().protein_sequence, pc,
+            expl_result.ms2_context.fragment_ion_type, expl_result.ms2_context.fragment_ion_index);
+        }
         scan_row.deconv_spectrum     = expl_spec;
         scan_row.parent_tracking_id  = parent_id;
         scan_row.tic_coverage        = expl_result.tic_coverage;
@@ -591,15 +600,20 @@ FLASHIda::FLASHIda(char* arg) :
               config_.level(3).tolerance_ppm,
               &ms3_matches);
 
+            // scan_results MS3 proteoform = the clipped b/y fragment from the acquisition context — computed
+            // OUTSIDE the match guard so it's present even when the match below is empty/deferred. Same fragment
+            // frame as identification.tsv; the parent stays recoverable via matched_protein + parent_tracking_id.
+            ms3_proteoform = MS3FragmentMatcher::fragmentProForma(
+              config_.characterization().protein_sequence, proto_ctx,
+              cached_ms2_ctx.fragment_ion_type, cached_ms2_ctx.fragment_ion_index);
+
             if (!ms3_matches.empty() && !ms3_matches[0].fragments.empty())
             {
               // Copy cached_ms2_ctx (a reference into ms2_context_cache_, erased below) and ms3_matches[0]
               // (inner-scope) BY VALUE into the id-row now — the bottom write must not read them after the erase.
               id_rows.push_back({id_str, 3, 'R', cached_ms2_ctx, ms3_matches[0], pid});
               // Capture the decision values the engine used so the results row agrees with this match.
-              // Render the proteoform with its discovered PTMs via the same renderer the id row uses;
-              // cached_ms2_ctx.ptm_sites is the cached parent-MS2 PTM set (toProForma returns the bare sequence when empty).
-              ms3_proteoform = FragmentAnalysis::toProForma(cached_ms2_ctx.proteoform_sequence, cached_ms2_ctx.ptm_sites);
+              // (ms3_proteoform — the clipped b/y fragment — was already set above, outside this guard.)
               ms3_frag_count = ms3_matches[0].total_match_count;
               ms3_tag_count = cached_ms2_ctx.tag_count;
               ms3_matched_protein = config_.targeting().fasta_file.empty()

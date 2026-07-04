@@ -98,6 +98,7 @@ namespace OpenMS
 
       double ppm_offset = 0.0;        ///< Median PPM error from calibration pass (MS3 only)
       double correction_factor = 1.0;  ///< 1/(1 + ppm_offset * 1e-6) (MS3 only)
+      float ms3_fragment_coverage = -1.0f;  ///< MS3 only: distinct backbone bonds covered / (L-1) over the matched sub-fragments; -1 = non-MS3/none
     };
 
     /// Deconvolution scores of a selected MS2 fragment, copied into the stage-1 (fragment)

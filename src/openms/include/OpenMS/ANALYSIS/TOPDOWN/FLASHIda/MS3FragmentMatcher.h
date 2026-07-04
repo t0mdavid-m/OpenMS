@@ -111,6 +111,17 @@ namespace OpenMS
       int subseq_start_in_proteoform,
       int subseq_length);
 
+    /// Render the MS3 fragment sub-sequence as ProForma: extractSubsequence + clip/rebase the parent
+    /// mods (rebasePTMSites) into the fragment frame + toProForma. Uses the SAME subseq-start logic as
+    /// calibrateAndScore. Returns "" when the context isn't populated (ion_type=='\0' | index==0 |
+    /// invalid region) — callers leave the proteoform empty, never a parent fallback. Consumed by the
+    /// scan_results MS3 rows so the fragment proteoform is present even when identification is deferred.
+    static std::string fragmentProForma(
+      const std::string& protein_sequence,
+      const ProteoformContext& ctx,
+      char fragment_ion_type,
+      int fragment_ion_index);
+
     // -- Two-pass calibration pipeline --
 
     /// Score all CE variants via two-pass calibration + matching

@@ -162,7 +162,7 @@ START_SECTION(schema_column_counts)
 
   TEST_EQUAL(c.headers.size(), 30)   // E6: + scan_description; P5: + precursor_id
   TEST_EQUAL(r.headers.size(), 34)   // E5: + ms_level; F5: + winner_tracking_id (scan_results unchanged by P5)
-  TEST_EQUAL(i.headers.size(), 29)   // I2: +6 iso/snr/intensity; P5: +precursor_id; fragment-mass table: +theoretical_masses/diff_da/diff_ppm
+  TEST_EQUAL(i.headers.size(), 30)   // I2: +6 iso/snr/intensity; P5: +precursor_id; fragment-mass table: +theoretical_masses/diff_da/diff_ppm; C2: +ms3_fragment_coverage
 
   // Spot-check exact header identities / order at the boundaries that matter for parsing.
   TEST_EQUAL(c.headers.front(), std::string("tracking_id"))
@@ -177,11 +177,12 @@ START_SECTION(schema_column_counts)
   TEST_EQUAL(r.colIndex("processing_duration_ms"), 32)             // now second-to-last
   TEST_EQUAL(r.colIndex("child_ids"), 9)                          // shifted +1 by ms_level@1
   TEST_EQUAL(i.headers.front(), std::string("ms_level"))
-  TEST_EQUAL(i.headers.back(), std::string("diff_ppm"))         // fragment-mass table appended LAST after precursor_id
+  TEST_EQUAL(i.headers.back(), std::string("ms3_fragment_coverage"))  // C2: appended LAST after the fragment-mass table
+  TEST_EQUAL(i.colIndex("ms3_fragment_coverage"), 29)               // C2: trailing column index
   TEST_EQUAL(i.colIndex("precursor_id"), 25)                     // P5 column unmoved (fragment-mass table appended after it)
   TEST_EQUAL(i.colIndex("theoretical_masses"), 26)              // fragment-mass table: per-scan theoretical + residual (Da, ppm)
   TEST_EQUAL(i.colIndex("diff_da"), 27)
-  TEST_EQUAL(i.colIndex("diff_ppm"), 28)
+  TEST_EQUAL(i.colIndex("diff_ppm"), 28)                        // C2: now second-to-last (ms3_fragment_coverage@29 is .back())
   TEST_EQUAL(i.colIndex("ms3_charge_intensity"), 24)            // I2 column unmoved
   // I2: the 6 new identification columns appended after ms3_fragment_masses (col 18), in order.
   TEST_EQUAL(i.colIndex("ms3_fragment_masses"), 18)
@@ -1028,6 +1029,8 @@ START_SECTION(identification_ms3_exploration_proteoform)
       if (cell(idf, row, "ms3_fragments").empty()) continue;   // only rows that matched fragments
       // ISSUE(F3-id): pre-fix proteoform was blank (use_ctx_proteoform was 'R'-only).
       TEST_TRUE(isProForma(cell(idf, row, "proteoform")))
+      // C2: MS3 per-ion coverage is a fraction in [0,1] on a matched MS3 row.
+      { double cov = toD(cell(idf, row, "ms3_fragment_coverage")); TEST_TRUE(cov >= 0.0 && cov <= 1.0) }
       matched++;
     }
     // F3-res: the matched MS3-'E' scan_results rows carry non-empty matched_protein + proteoform_sequence.
@@ -1038,6 +1041,10 @@ START_SECTION(identification_ms3_exploration_proteoform)
       if (cell(res, r, "matched_protein").empty()) continue;   // unmatched/unfed MS3 -> tolerated
       // ISSUE(F3-res): pre-fix matched_protein/proteoform_sequence were blank on MS3-'E' rows.
       TEST_TRUE(!cell(res, r, "proteoform_sequence").empty())
+      // C1: scan_results MS3-'E' proteoform is the CLIPPED FRAGMENT (bare-residue count < full cytC 105), not the parent.
+      { const std::string pf = cell(res, r, "proteoform_sequence");
+        int bare = 0; for (char ch : pf) if (ch >= 'A' && ch <= 'Z') ++bare;
+        TEST_TRUE(bare > 0 && bare < 105) }   // ISSUE(C1): pre-fix this logged the 105-mer parent
     }
     TEST_TRUE(matched >= 1)   // the inclusion-pinned MS3-exploration cascade must yield >=1 matched MS3-'E' row
     std::remove(res_f.c_str()); std::remove(id_f.c_str());
@@ -1884,6 +1891,11 @@ START_SECTION(results_ms3_real_fragment_data)
       if (cell(res, row, "matched_protein").empty()) continue;  // unfed / unmatched MS3 -> tolerated
       ++matched_rows;
       TEST_TRUE(isProForma(cell(res, row, "proteoform_sequence")))
+      // C1: the matched MS3 scan_results proteoform is now the clipped b/y FRAGMENT (bare-residue count
+      // < full cytC 105), not the 105-mer parent it came from.
+      { const std::string pf = cell(res, row, "proteoform_sequence");
+        int bare = 0; for (char ch : pf) if (ch >= 'A' && ch <= 'Z') ++bare;
+        TEST_TRUE(bare > 0 && bare < 105) }   // ISSUE(C1): pre-fix logged the 105-mer parent
       // F9: scan_results fragment_count is the -1 SENTINEL on MS3 rows (the matched count lives in
       // identification.tsv, asserted below). (Was fragment_count > 0.)
       TEST_EQUAL(std::atoi(cell(res, row, "fragment_count").c_str()), -1)
@@ -1900,9 +1912,39 @@ START_SECTION(results_ms3_real_fragment_data)
     for (const auto& row : idf.rows)
     {
       if (std::atoi(cell(idf, row, "ms_level").c_str()) != 3) continue;
-      if (!cell(idf, row, "ms3_fragments").empty()) ++ms3_id_with_frags;
+      if (cell(idf, row, "ms3_fragments").empty()) continue;
+      ++ms3_id_with_frags;
+      // C2: MS3 per-ion coverage is a fraction in [0,1] on a matched MS3 identification row.
+      double cov = toD(cell(idf, row, "ms3_fragment_coverage"));
+      TEST_TRUE(cov >= 0.0 && cov <= 1.0)
     }
     TEST_TRUE(ms3_id_with_frags >= 1)
+
+    // C1 cross-file tie: for the same MS3 tracking_id, scan_results' fragment proteoform bare-length ==
+    // identification's fragment span (end_pos - start_pos). Both share the fragment frame now; a parent
+    // render in scan_results (105) would break this. Matches by tracking_id, not row order.
+    std::map<std::string, int> id_span;
+    for (const auto& row : idf.rows)
+    {
+      if (std::atoi(cell(idf, row, "ms_level").c_str()) != 3) continue;
+      if (cell(idf, row, "proteoform").empty()) continue;
+      id_span[cell(idf, row, "tracking_id")] =
+        std::atoi(cell(idf, row, "end_pos").c_str()) - std::atoi(cell(idf, row, "start_pos").c_str());
+    }
+    int tied = 0;
+    for (const auto& row : res.rows)
+    {
+      std::string tid = cell(res, row, "tracking_id");
+      auto it = level.find(tid);
+      if (it == level.end() || it->second != 3) continue;
+      const std::string pf = cell(res, row, "proteoform_sequence");
+      auto s = id_span.find(tid);
+      if (pf.empty() || s == id_span.end()) continue;
+      int bare = 0; for (char ch : pf) if (ch >= 'A' && ch <= 'Z') ++bare;
+      TEST_EQUAL(bare, s->second)   // scan_results fragment length == identification fragment span
+      ++tied;
+    }
+    TEST_TRUE(tied >= 1)
 
     std::remove(cmd_f.c_str()); std::remove(res_f.c_str()); std::remove(id_f.c_str());
   }

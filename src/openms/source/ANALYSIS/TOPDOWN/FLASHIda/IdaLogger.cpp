@@ -116,7 +116,9 @@ namespace OpenMS
                                    // P5: per-MS1-selection precursor identity (plain decimal).
                                    << "precursor_id\t"
                                    // Fragment-mass table (MS2 & MS3 rows): per-scan theoretical + residual; appended LAST.
-                                   << "theoretical_masses\tdiff_da\tdiff_ppm\n";
+                                   << "theoretical_masses\tdiff_da\tdiff_ppm\t"
+                                   // C2: MS3 per-ion fragment coverage (distinct backbone bonds / (L-1)); appended LAST, -1 on MS2.
+                                   << "ms3_fragment_coverage\n";
         identification_tsv_stream_.flush();
       }
     }
@@ -556,7 +558,9 @@ namespace OpenMS
       // P5: per-MS1-selection precursor identity (plain decimal).
       << row.precursor_id << "\t"
       // Fragment-mass table: per-scan theoretical + residual (Da, ppm) for MS2 AND MS3 fragments; appended LAST.
-      << frag_theo.str() << "\t" << frag_diff_da.str() << "\t" << frag_diff_ppm.str() << "\n";
+      << frag_theo.str() << "\t" << frag_diff_da.str() << "\t" << frag_diff_ppm.str() << "\t"
+      // C2: MS3 per-ion fragment coverage (distinct backbone bonds / (L-1)); -1 on MS2. std::fixed setprecision(4) in effect.
+      << (ms_level == 3 ? match.ms3_fragment_coverage : -1.0f) << "\n";
     identification_tsv_stream_.flush();
   }
 

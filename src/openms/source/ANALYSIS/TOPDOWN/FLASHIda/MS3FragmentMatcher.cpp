@@ -316,6 +316,29 @@ namespace OpenMS
     return result;
   }
 
+  std::string MS3FragmentMatcher::fragmentProForma(
+    const std::string& protein_sequence,
+    const ProteoformContext& ctx,
+    char fragment_ion_type,
+    int fragment_ion_index)
+  {
+    // Same subsequence + rebase logic calibrateAndScore uses (see below), but standalone so the
+    // scan_results MS3 rows can render the fragment from the acquisition context alone — no matched
+    // spectrum required (present even when identification is deferred/failed).
+    std::string subseq = extractSubsequence(protein_sequence, ctx, fragment_ion_type, fragment_ion_index);
+    if (subseq.empty()) return "";  // context not populated -> empty (never a parent fallback)
+
+    int proteoform_length = ctx.region_end - ctx.region_start;
+    int subseq_start_1based;
+    if (fragment_ion_type == 'b' || fragment_ion_type == 'a' || fragment_ion_type == 'c')
+      subseq_start_1based = 1;
+    else
+      subseq_start_1based = proteoform_length - fragment_ion_index + 1;
+
+    std::vector<FragmentAnalysis::PTMSite> rebased = rebasePTMSites(ctx.ptm_sites, subseq_start_1based, fragment_ion_index);
+    return FragmentAnalysis::toProForma(subseq, rebased);
+  }
+
   std::vector<double> MS3FragmentMatcher::computeProteinPrefixMasses(
     const std::string& protein_sequence,
     const std::vector<FragmentAnalysis::PTMSite>& ptm_sites,
@@ -587,6 +610,31 @@ namespace OpenMS
         // E1: record the matched-fragment count so the logged fragment_count / tic_coverage reflect the
         // actual matches (was left at the ProteoformMatch default 0, despite mr.fragments being populated).
         mr.total_match_count = static_cast<int>(details.size());
+
+        // Per-ion coverage: fraction of the b/y fragment's (L-1) backbone bonds covered by DISTINCT matched
+        // MS3 sub-fragments. Prefix (a/b/c) sub-ion of subseq-index p cleaves bond p; suffix (y/x/z) of index p
+        // cleaves bond L-p. L = subseq length (== fragment_ion_index). L-1<=0 -> 0.
+        {
+          int L = static_cast<int>(subseq.size());
+          if (L - 1 > 0)
+          {
+            std::vector<bool> covered(L, false);  // bonds 1..L-1 (index 0 unused)
+            int n_covered = 0;
+            for (const auto& fm : mr.fragments)
+            {
+              if (fm.ion_type.empty()) continue;
+              char t = fm.ion_type[0];  // 'b'/'a'/'c' prefix ; 'y'/'x'/'z' (incl. "yb"/"ya") suffix
+              int bond = (t == 'b' || t == 'a' || t == 'c') ? fm.ion_index : (L - fm.ion_index);
+              if (bond >= 1 && bond <= L - 1 && !covered[bond]) { covered[bond] = true; ++n_covered; }
+            }
+            float cov = static_cast<float>(n_covered) / static_cast<float>(L - 1);
+            mr.ms3_fragment_coverage = cov > 1.0f ? 1.0f : cov;
+          }
+          else
+          {
+            mr.ms3_fragment_coverage = 0.0f;
+          }
+        }
       }
 
       // --- Log: per-variant matches ---
