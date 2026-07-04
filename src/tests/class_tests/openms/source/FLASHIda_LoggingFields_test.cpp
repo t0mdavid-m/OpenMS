@@ -588,6 +588,22 @@ START_SECTION(results_identification_tag_count_and_proforma)
   }
   TEST_TRUE(checked)
 
+  // Fragment-identity invariant: an MS3 identification row's proteoform is the FRAGMENT sub-sequence the
+  // MS3 precursor covers, so its bare-residue count (mods stripped) MUST equal end_pos - start_pos. The
+  // pre-fix behaviour logged the full PARENT proteoform (e.g. 105-mer cytC) against a narrower fragment
+  // range, which would fail this. Runs on any MS3 identification row the cycle produced; the exact per-row
+  // proteoform values are golden-locked in C#.
+  for (const auto& row : idf.rows)
+  {
+    if (std::atoi(cell(idf, row, "ms_level").c_str()) != 3) continue;
+    const std::string pf = cell(idf, row, "proteoform");
+    const int start = std::atoi(cell(idf, row, "start_pos").c_str());
+    const int end   = std::atoi(cell(idf, row, "end_pos").c_str());
+    if (pf.empty() || end <= start) continue;   // no fragment sub-range on this row
+    int bare = 0; for (char c : pf) if (c >= 'A' && c <= 'Z') ++bare;   // strip [..]/(..) mod annotations
+    TEST_EQUAL(bare, end - start)
+  }
+
   std::remove(res_f.c_str()); std::remove(id_f.c_str());
 }
 END_SECTION
