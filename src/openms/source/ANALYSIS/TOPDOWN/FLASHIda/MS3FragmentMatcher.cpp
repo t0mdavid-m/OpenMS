@@ -525,6 +525,12 @@ namespace OpenMS
         // 0-based start = prot_start_1based - 1; 0-based exclusive end = prot_end_1based.
         (*detailed_results)[vi].region_start = prot_start_1based - 1;
         (*detailed_results)[vi].region_end = prot_end_1based;
+        // Fragment identity: the MS3 match IS the fragment it identified. Fill proteoform_sequence with the
+        // fragment sub-sequence and ptm_sites with the parent mods clipped/rebased into it (1-based subseq
+        // frame) so identification.tsv's proteoform is the fragment (consistent with region_start/end), not
+        // the full parent. score stays -1 (ProteoformTracker winner-selection still skips MS3 via score<0).
+        (*detailed_results)[vi].proteoform_sequence = subseq;
+        (*detailed_results)[vi].ptm_sites = rebased_ptms;
       }
     }
 
