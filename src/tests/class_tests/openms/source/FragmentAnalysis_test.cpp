@@ -519,5 +519,68 @@ START_SECTION(fragment_analysis_populated_for_mass_count_metric)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
+// narrowFragmentPTMSites -- per-scan MS3 identification narrowing (option A). Pure function: given the
+// wide (subseq-frame) PTM sites + this scan's matched sub-fragments (each with includes_ptm), tighten the
+// bracketed boundary. Controlled inputs (NOT a claim about any real scan's fragment set); the exact ranges
+// are the semantic drift-guard vs ProteoformTracker Pass B. Suffix numbers per the verified derivation.
+/////////////////////////////////////////////////////////////
+START_SECTION(narrowFragmentPTMSites)
+{
+  using PTM = FragmentAnalysis::PTMSite;
+  using FM  = FragmentAnalysis::ProteoformMatch::FragmentMatch;
+  auto mk = [](const char* t, int idx, bool inc) { FM f; f.ion_type = t; f.ion_index = idx; f.includes_ptm = inc; return f; };
+
+  // (1) PREFIX inc -> tightenUpper. heme wide (15-26); b22 brackets & includes -> upper 26->22.
+  //     b26/b28 fully-cover (cover_end >= re) -> ignored; yb67 is an INERT distractor here (suffix cover_start
+  //     14 < 15, and even a prefix-misclassification cover_end 67 >= re fails to bracket) -- the real
+  //     yb-suffix-classification guard is case (6) below.
+  PTM heme{20, 15, 26, 615.2498};
+  auto r1 = FragmentAnalysis::narrowFragmentPTMSites({heme}, 80,
+              {mk("b", 22, true), mk("b", 26, true), mk("b", 28, true), mk("yb", 67, true)});
+  TEST_EQUAL(r1[0].start_position, 15)   // ISSUE(N): pre-fix stayed 15
+  TEST_EQUAL(r1[0].end_position, 22)     // ISSUE(N): pre-fix stayed 26
+
+  // (2) PREFIX inc localizes; a fully-covering prefix leaves the other mod wide (leaf != pooled).
+  //     N-term wide (1-8); b1 brackets & includes -> [1,1]. heme (15-26): b34 fully-covers -> stays wide.
+  PTM nterm{4, 1, 8, -89.0302};
+  auto r2 = FragmentAnalysis::narrowFragmentPTMSites({nterm, heme}, 70, {mk("b", 1, true), mk("b", 34, true)});
+  TEST_EQUAL(r2[0].start_position, 1)    // localized
+  TEST_EQUAL(r2[0].end_position, 1)
+  TEST_EQUAL(r2[1].start_position, 15)   // heme stays wide
+  TEST_EQUAL(r2[1].end_position, 26)
+
+  // (3) SUFFIX inc -> tightenLower. C-term mod (50-70), L=80; y21 cover_start=60 brackets -> lower 50->60.
+  PTM cterm{60, 50, 70, 42.0106};
+  auto r3 = FragmentAnalysis::narrowFragmentPTMSites({cterm}, 80, {mk("y", 21, true)});
+  TEST_EQUAL(r3[0].start_position, 60)
+  TEST_EQUAL(r3[0].end_position, 70)
+
+  // (4) SUFFIX !inc -> tightenUpper. same wide (50-70); y20 cover_start=61 -> upper 70->60.
+  auto r4 = FragmentAnalysis::narrowFragmentPTMSites({cterm}, 80, {mk("y", 20, false)});
+  TEST_EQUAL(r4[0].start_position, 50)
+  TEST_EQUAL(r4[0].end_position, 60)
+
+  // (5) SUFFIX two-ion localize (order-independent): y21(inc)+y20(!inc) -> [60,60].
+  auto r5 = FragmentAnalysis::narrowFragmentPTMSites({cterm}, 80, {mk("y", 21, true), mk("y", 20, false)});
+  TEST_EQUAL(r5[0].start_position, 60)
+  TEST_EQUAL(r5[0].end_position, 60)
+
+  // (6) "yb" classification: first char 'y' -> SUFFIX (cover_start == y21's). Substring-based classification
+  //     would wrongly treat "yb" as a prefix and tighten the wrong boundary.
+  auto r6 = FragmentAnalysis::narrowFragmentPTMSites({cterm}, 80, {mk("yb", 21, true)});
+  TEST_EQUAL(r6[0].start_position, 60)   // ISSUE(N): substring-class bug -> would not be 60
+  TEST_EQUAL(r6[0].end_position, 70)
+
+  // (7) no-op: empty fragments and L<=1 both return the input unchanged.
+  auto r7 = FragmentAnalysis::narrowFragmentPTMSites({heme}, 80, {});
+  TEST_EQUAL(r7[0].start_position, 15)
+  TEST_EQUAL(r7[0].end_position, 26)
+  auto r8 = FragmentAnalysis::narrowFragmentPTMSites({heme}, 1, {mk("b", 1, true)});
+  TEST_EQUAL(r8[0].start_position, 15)
+  TEST_EQUAL(r8[0].end_position, 26)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////
 END_TEST

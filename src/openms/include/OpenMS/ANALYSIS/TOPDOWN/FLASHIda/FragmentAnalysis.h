@@ -118,6 +118,21 @@ namespace OpenMS
     static std::string toProForma(const std::string& sequence,
                                   const std::vector<PTMSite>& ptm_sites);
 
+    /// Narrow fragment-frame ambiguous PTM ranges using ONLY this scan's matched MS3 sub-fragments
+    /// (per-scan identification evidence). For each wide site [s,e] (1-based, SUBSEQUENCE frame) and each
+    /// matched sub-fragment that BRACKETS it (backbone cleavage strictly inside the range), tighten the
+    /// constrained boundary from the fragment's includes_ptm verdict. Prefix (a/b/c) covers [1,k]; suffix
+    /// (y/x/z, incl. composite "yb"/"ya") covers [L-k+1, L]  (k = ion_index, SUBSEQUENCE space; L =
+    /// @p fragment_length). Prefix/suffix is decided by the FIRST char only (a/b/c prefix, else suffix),
+    /// so "yb"/"ya" classify as SUFFIX (first char 'y'), NOT by substring. Inward-only; within one scan the
+    /// includes_ptm verdicts are self-consistent, so no intensity conflict resolution is needed. This
+    /// deliberately mirrors ProteoformTracker::narrowModifications_ Pass B (the MS3 localization pass),
+    /// scoped to ONE scan -- it is NOT the cumulative cross-scan pooled pass. Returns @p wide_sites
+    /// unchanged when @p fragment_length <= 1, or for any site no bracketing fragment constrains.
+    static std::vector<PTMSite> narrowFragmentPTMSites(
+        const std::vector<PTMSite>& wide_sites, int fragment_length,
+        const std::vector<ProteoformMatch::FragmentMatch>& fragments);
+
     /// I2: signal-to-noise of a precursor over the ACTUAL commanded isolation window [lo, hi] (m/z).
     /// signal = the selected charge's intensity within the window (the engine's already-computed
     /// PeakGroup::getChargeIntensity, passed in as precursor_intensity / precursor_intensity_s1);

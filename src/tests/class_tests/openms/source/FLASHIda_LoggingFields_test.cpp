@@ -139,6 +139,38 @@ namespace
     return any_residue && !in_mod && !expect_mod;
   }
 
+  // Parse every PTM's (start,end) 1-based RESIDUE range from a ProForma proteoform, left-to-right.
+  //   Localized  RES[+m]         -> [p,p]   (p = residue index the '[' immediately follows)
+  //   Ambiguous  (RES..RES)[+m]  -> [s,e]   (s = first residue in parens, e = last)
+  // Residues are the uppercase A-Z outside [..] mod content and () region delimiters; bracket bodies are
+  // skipped. Mods appear in residue order and narrowing never adds/drops/reorders a mod, so index k of an
+  // identification proteoform and index k of the same tracking_id's scan_results proteoform are the SAME
+  // modification -- comparable as (start,end) pairs. Used by §T9/§F3 to assert identification ⊆ scan_results.
+  std::vector<std::pair<int,int>> parseModRanges(const std::string& s)
+  {
+    std::vector<std::pair<int,int>> ranges;
+    int residues = 0;              // residues read so far (1-based index of the last residue)
+    int region_start = -1;         // >0 while inside (...)
+    int pending_end = -1;          // end residue captured at ')', awaiting the '[' mod
+    bool in_mod = false;           // inside [...]
+    bool just_closed_region = false;
+    for (char ch : s)
+    {
+      if (in_mod) { if (ch == ']') in_mod = false; continue; }
+      if (ch == '[')
+      {
+        in_mod = true;
+        if (just_closed_region) { ranges.emplace_back(region_start, pending_end); just_closed_region = false; region_start = -1; }
+        else                    { ranges.emplace_back(residues, residues); }   // localized at current residue
+        continue;
+      }
+      if (ch == '(') { region_start = residues + 1; continue; }   // next residue is the region's first
+      if (ch == ')') { pending_end = residues; just_closed_region = true; continue; }
+      if (ch >= 'A' && ch <= 'Z') ++residues;
+    }
+    return ranges;
+  }
+
   const std::string CYTC_MS1 = FI_MS1_CYTC;
   const std::string CYTC_MS2 = FI_MS2_CYTC;
 }
@@ -1047,6 +1079,36 @@ START_SECTION(identification_ms3_exploration_proteoform)
         TEST_TRUE(bare > 0 && bare < 105) }   // ISSUE(C1): pre-fix this logged the 105-mer parent
     }
     TEST_TRUE(matched >= 1)   // the inclusion-pinned MS3-exploration cascade must yield >=1 matched MS3-'E' row
+
+    // T-N2 (exploration sink): the SAME writer that narrows regular 'R' MS3 rows also narrows exploration-'E'
+    // MS3 identification rows (the gate is ms_level==3, mode-agnostic). Assert each 'E' identification mod
+    // range lies WITHIN its scan_results (parent-wide) counterpart -- never wider. This checks only the ⊆
+    // (never-wider) direction for the 'E' sink; the STRICT non-vacuity ("narrowing actually happens") lives
+    // in §T9 (`strictly_narrower>=1`, on the 'R' sink, identical writer code path) -- do not remove it.
+    std::map<std::string, std::vector<std::pair<int,int>>> id_modranges_e;
+    for (const auto& row : idf.rows)
+    {
+      if (std::atoi(cell(idf, row, "ms_level").c_str()) != 3) continue;
+      if (cell(idf, row, "scan_mode") != "E") continue;
+      if (cell(idf, row, "ms3_fragments").empty()) continue;
+      id_modranges_e[cell(idf, row, "tracking_id")] = parseModRanges(cell(idf, row, "proteoform"));
+    }
+    int e_cmp_rows = 0;
+    for (const auto& r : res.rows)
+    {
+      if (std::atoi(cell(res, r, "ms_level").c_str()) != 3) continue;
+      if (std::atoi(cell(res, r, "exploration_group_id").c_str()) < 1) continue;
+      auto idr = id_modranges_e.find(cell(res, r, "tracking_id"));
+      if (idr == id_modranges_e.end()) continue;
+      auto res_ranges = parseModRanges(cell(res, r, "proteoform_sequence"));
+      const auto& id_ranges = idr->second;
+      TEST_EQUAL(id_ranges.size(), res_ranges.size())
+      if (id_ranges.size() != res_ranges.size()) continue;
+      for (size_t k = 0; k < id_ranges.size(); ++k)
+        TEST_TRUE(id_ranges[k].first >= res_ranges[k].first && id_ranges[k].second <= res_ranges[k].second)  // ISSUE(N): id ⊆ res
+      ++e_cmp_rows;
+    }
+    TEST_TRUE(e_cmp_rows >= 1)   // >=1 MS3-'E' row present in both logs -> exploration sink covered
     std::remove(res_f.c_str()); std::remove(id_f.c_str());
   }
 }
@@ -1945,6 +2007,46 @@ START_SECTION(results_ms3_real_fragment_data)
       ++tied;
     }
     TEST_TRUE(tied >= 1)
+
+    // T-N2: identification MS3 proteoform mod-ranges are per-scan NARROWED -> each is a SUBSET of the same
+    // tracking_id's scan_results (parent-wide) mod-ranges, and STRICTLY narrower on >=1 range. Both
+    // proteoforms are the same b/y fragment (same frame), so ranges compare index-for-index. This proves the
+    // 3-log narrowing gradient end-to-end on real MS3 data: scan_results stays wide; identification narrows
+    // to this scan's own matched-fragment evidence. (pooled is a separate cumulative log, not compared here.)
+    std::map<std::string, std::vector<std::pair<int,int>>> id_modranges;
+    for (const auto& row : idf.rows)
+    {
+      if (std::atoi(cell(idf, row, "ms_level").c_str()) != 3) continue;
+      if (cell(idf, row, "ms3_fragments").empty()) continue;   // matched MS3 rows only
+      id_modranges[cell(idf, row, "tracking_id")] = parseModRanges(cell(idf, row, "proteoform"));
+    }
+    int cmp_rows = 0, strictly_narrower = 0, wide_res_ranges = 0;
+    for (const auto& row : res.rows)
+    {
+      std::string tid = cell(res, row, "tracking_id");
+      auto it = level.find(tid);
+      if (it == level.end() || it->second != 3) continue;
+      auto idr = id_modranges.find(tid);
+      if (idr == id_modranges.end()) continue;                 // only rows present in BOTH logs
+      auto res_ranges = parseModRanges(cell(res, row, "proteoform_sequence"));
+      const auto& id_ranges = idr->second;
+      TEST_EQUAL(id_ranges.size(), res_ranges.size())          // narrowing never adds/drops a mod
+      if (id_ranges.size() != res_ranges.size()) continue;
+      for (size_t k = 0; k < id_ranges.size(); ++k)
+      {
+        // ISSUE(N): identification range must lie WITHIN the scan_results (parent-wide) range -- never wider.
+        TEST_TRUE(id_ranges[k].first >= res_ranges[k].first && id_ranges[k].second <= res_ranges[k].second)
+        if (res_ranges[k].first != res_ranges[k].second) ++wide_res_ranges;   // an ambiguous (wide) mod exists to narrow
+        if (id_ranges[k].first > res_ranges[k].first || id_ranges[k].second < res_ranges[k].second) ++strictly_narrower;
+      }
+      ++cmp_rows;
+    }
+    TEST_TRUE(cmp_rows >= 1)
+    // Precondition for the strict check to be meaningful: >=1 compared row must carry a WIDE (ambiguous)
+    // scan_results mod. If a future FLASHExtender/fixture change localized every MS3 mod, this fails with a
+    // self-explaining message instead of an opaque strictly_narrower miss.
+    TEST_TRUE(wide_res_ranges >= 1)
+    TEST_TRUE(strictly_narrower >= 1)   // ISSUE(N): pre-fix identification==scan_results -> 0 strictly-narrower -> FAILS
 
     std::remove(cmd_f.c_str()); std::remove(res_f.c_str()); std::remove(id_f.c_str());
   }

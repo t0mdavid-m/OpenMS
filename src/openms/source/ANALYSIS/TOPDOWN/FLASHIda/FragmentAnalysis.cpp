@@ -1247,4 +1247,43 @@ namespace
     return result;
   }
 
+  std::vector<FragmentAnalysis::PTMSite> FragmentAnalysis::narrowFragmentPTMSites(
+      const std::vector<PTMSite>& wide_sites, int L,
+      const std::vector<ProteoformMatch::FragmentMatch>& fragments)
+  {
+    std::vector<PTMSite> out = wide_sites;
+    if (L <= 1) return out;
+    for (auto& site : out)
+    {
+      int rs = site.start_position, re = site.end_position;   // 1-based subsequence frame
+      if (rs >= re) continue;                                  // already localized / invalid -> nothing to narrow
+      for (const auto& fm : fragments)
+      {
+        if (fm.ion_type.empty() || fm.ion_index <= 0) continue;
+        const char t = fm.ion_type[0];                         // FIRST char == isPrefixIonType input
+        const bool is_prefix = (t == 'a' || t == 'b' || t == 'c');  // "yb"/"ya" -> 'y' -> suffix (correct)
+        const int cover_start = is_prefix ? 1 : (L - fm.ion_index + 1);
+        const int cover_end   = is_prefix ? fm.ion_index : L;
+        // Brackets iff the fragment's backbone cleavage falls strictly inside [rs, re] (covers some, not all).
+        const bool brackets = is_prefix ? (rs <= cover_end && cover_end < re)
+                                        : (rs < cover_start && cover_start <= re);
+        if (!brackets) continue;
+        if (fm.includes_ptm)   // PTM IS inside this fragment's coverage
+        {
+          if (is_prefix) { if (cover_end   <  re && cover_end   >= rs) re = cover_end;   }  // tightenUpper
+          else           { if (cover_start >  rs && cover_start <= re) rs = cover_start; }  // tightenLower
+        }
+        else                   // PTM is OUTSIDE this fragment's coverage
+        {
+          if (is_prefix) { const int nl = cover_end + 1;   if (nl > rs && nl <= re) rs = nl; }  // tightenLower
+          else           { const int nu = cover_start - 1; if (nu < re && nu >= rs) re = nu; }  // tightenUpper
+        }
+      }
+      site.start_position = rs;
+      site.end_position = re;
+      site.position = (rs + re) / 2;
+    }
+    return out;
+  }
+
 } // namespace OpenMS

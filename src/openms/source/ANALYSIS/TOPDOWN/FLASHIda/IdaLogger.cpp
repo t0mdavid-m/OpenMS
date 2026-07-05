@@ -469,7 +469,22 @@ namespace OpenMS
     const int id_region_start = use_match_region ? match.region_start : ctx.start_pos;
     const int id_region_end   = use_match_region ? match.region_end   : ctx.end_pos;
 
-    std::string proforma = FragmentAnalysis::toProForma(id_proteoform, id_ptm_sites);
+    // ISSUE(N): the MS3 identification leaf carries THIS scan's OWN PTM narrowing (per-scan evidence),
+    // not the parent-wide clip. Narrow a LOCAL copy of the PTM sites from the match's own matched
+    // sub-fragments; this writer emits ONLY identification.tsv, so pooled (ProteoformTracker, seeded from
+    // the MS2 winner) and scan_results (rendered from the parent MS2 context) are untouched. This single
+    // site covers all three MS3 identification-row sinks (regular 'R' + exploration-'E' primary + winner).
+    // MS2 rows keep their proteoform range as-is (narrowing is an MS3-only, fragment-frame notion).
+    std::vector<FragmentAnalysis::PTMSite> narrowed_sites;
+    const std::vector<FragmentAnalysis::PTMSite>* eff_ptm_sites = &id_ptm_sites;
+    if (ms_level == 3 && match_has_proteoform)
+    {
+      narrowed_sites = FragmentAnalysis::narrowFragmentPTMSites(
+          match.ptm_sites, static_cast<int>(match.proteoform_sequence.size()), match.fragments);
+      eff_ptm_sites = &narrowed_sites;
+    }
+
+    std::string proforma = FragmentAnalysis::toProForma(id_proteoform, *eff_ptm_sites);
 
     std::ostringstream ms2_frags, ms2_masses;
     ms2_frags << std::fixed << std::setprecision(4);
