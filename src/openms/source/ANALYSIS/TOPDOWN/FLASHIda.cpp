@@ -212,7 +212,9 @@ FLASHIda::FLASHIda(char* arg) :
           {
             ScanConfig ms2_config = sc;
             ScanCommand cmd = queue_.buildMS2(selected[i], sel_charges[i], ms2_config, 2, parent_tracking_id);
-            cmd.faims_cv = parent_ctx.faims_cv;  // MS2 carries the resolved MS1's CV
+            // MS2 inherits the parent MS1's *processing* CV (the faims_cv arg), NOT parent_ctx.faims_cv:
+            // in a FAIMS-skip run the MS1 command's stored CV differs from the CV it was processed at.
+            cmd.faims_cv = faims_cv;
             if (cmd.num_stages > 0)
             {
               const double half = cmd.stages[0].isolation_width / 2.0;
