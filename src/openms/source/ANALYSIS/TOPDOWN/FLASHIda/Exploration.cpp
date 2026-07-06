@@ -64,7 +64,7 @@ namespace OpenMS
     if (acts.empty())
       acts.push_back(base_config.activation);
 
-    // Build CE and RT value arrays
+    // Build collision energy and reaction time value arrays
     std::vector<double> ces;
     for (double ce = cfg.ce_min; ce <= cfg.ce_max + 1e-9; ce += cfg.ce_step)
       ces.push_back(ce);
@@ -130,12 +130,13 @@ namespace OpenMS
     if (variant_params.empty()) return commands;
 
     // Prepend baseline variant for RemainingPrecursor metric
-    bool needs_baseline = (cfg.exploration == ExplorationMetric::RemainingPrecursor);
-    if (needs_baseline)
-      variant_params.insert(variant_params.begin(),
-                            {base_config.activation, 0.0, 0.0});
+    // bool needs_baseline = (cfg.exploration == ExplorationMetric::RemainingPrecursor);
+    // if (needs_baseline)
+    // Temporarily we add a baseline to all epxlorations
+    variant_params.insert(variant_params.begin(), {base_config.activation, 0.0, 0.0});
 
     // Compute precursor_mz and isolation_width from PeakGroup
+    // @Claude minimum isolation width of two only applies for ms3 and up,not ms2
     auto [mz1, mz2] = pg.getMzRange(charge);
     double precursor_mz = (mz1 + mz2) / 2.0;
     double isolation_width = std::max(mz2 - mz1, 2.0);
@@ -155,7 +156,7 @@ namespace OpenMS
       std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
 
-    // Capture originating MS2 context for buildMS3 (stage 0)
+    // @Claude Can this be nullptr? For MS2 there would be ms1 right? In this case bailing early (returning emtpy commands) would be better
     if (ms_ctx != nullptr) group.originating_cmd = *ms_ctx;
     group.fragment_ion_type = ion_type;
     group.fragment_ion_index = frag_index;
@@ -178,28 +179,25 @@ namespace OpenMS
 
       int expl_priority = (msn_level >= 3) ? 1 : 2;
       ScanCommand cmd;
-      if (msn_level >= 3 && ms_ctx != nullptr)
+      if (msn_level >= 3 && /*@Claude should be checked earlier, see previous comment*/ms_ctx != nullptr)
       {
-        // Wide clipped b/y fragment ProForma of this MS3 target -> scan_commands.tsv ms3_proteoform (via side-map).
+        // @Claude This should be moved into build_ms3
         std::string ms3pf = MS3FragmentMatcher::fragmentProForma(
             config_.characterization().protein_sequence, proto_ctx, ion_type, frag_index);
         cmd = queue.buildMS3(*ms_ctx, variant_config,
                              precursor_mz, charge, isolation_width, ms_ctx->scan_id,
-                             ion_type, frag_index, expl_priority, frag_scores,  // F2: real stage-1 scalars
-                             stage0_params,   // 9b: model's per-ion best-MS2 params -> MS3 stage[0] (ADR-0003)
-                             ms3pf);
+                             ion_type, frag_index, expl_priority, frag_scores,
+                             stage0_params, ms3pf);
       }
       else
       {
-        // Parent = the originating command (ms_ctx->scan_id, e.g. the MS1 survey id); 0 when none.
-        cmd = queue.buildMS2(pg, charge, variant_config, expl_priority, ms_ctx ? ms_ctx->scan_id : 0);
+        cmd = queue.buildMS2(pg, charge, variant_config, expl_priority, /*@Claude this cant be nullptr right? See previous comment */ms_ctx ? ms_ctx->scan_id : 0);
       }
+      // @Claude should always be inferred from ms1 context
       cmd.faims_cv = group.faims_cv;
 
-      // Item 2: stamp the isolation-window SNR onto the command so it travels with it (was the
-      // ScanCommandQueue window-SNR map). Identical formula/inputs to the former processScan (MS2,
-      // stage-0) and initiateNextLevel (MS3, stage-1) sites; set BEFORE v.cmd = cmd so the group's
-      // variant copy carries it too. num_stages==0 leaves window_snr at the -1.0 default.
+      // @Claude should always be provided, if not bail early.
+      // @Claude infer i in cmd.stages[i] from ms-level. Then you should be able to collapse this into one block.
       if (source_spectrum != nullptr)
       {
         if (cmd.num_stages >= 2)
@@ -216,6 +214,7 @@ namespace OpenMS
         }
       }
 
+      // @Claude this should be handled by the scan builders.
       int id_int = cmd.scan_id;
       std::string id_str = ScanCommandQueue::encode(id_int);
       v.tracking_id = id_str;
@@ -276,14 +275,16 @@ namespace OpenMS
       ms2_deconv = exploration_deconv_->storedMS2();
     }
 
+    // @Claude move this inline, we dont want a helper that is only used by this method
     return feedResultImpl_(tracking_id, ms2_deconv, mzs, ints, length, rt, queue, tracker, precursor_id);
   }
 
   Exploration::FeedResultInfo Exploration::feedResultImpl_(int tracking_id,
-      const DeconvolvedSpectrum& ms2_deconv,
+      const DeconvolvedSpectrum& msn_deconv,
       const double* mzs, const double* ints, int length,
       double rt, ScanCommandQueue& queue, ProteoformTracker* tracker, int precursor_id)
   {
+    // @Claude this can be removed
     (void)rt;
     FeedResultInfo info;
 
@@ -304,11 +305,11 @@ namespace OpenMS
     ExplorationVariant& v = group.variants[variant_index];
     if (v.received) return info;
 
-    v.result = ms2_deconv;
+    v.result = msn_deconv;
     double remaining_ratio = -1.0;
     FragmentAnalysis::ProteoformMatch frag{};
-    v.score = computeExplorationScore_(group.exploration_metric, ms2_deconv, group, mzs, ints, length, &remaining_ratio, &frag, v.activation_type);
-    v.tic_coverage = computeTICCoverage_(ms2_deconv);
+    v.score = computeExplorationScore_(group.exploration_metric, msn_deconv, group, mzs, ints, length, &remaining_ratio, &frag, v.activation_type);
+    v.tic_coverage = computeTICCoverage_(msn_deconv);
     v.fragment_count = frag.total_match_count;
     v.received = true;
 
@@ -329,7 +330,7 @@ namespace OpenMS
       }
       group.baseline_intensity = baseline_sum;
       group.has_baseline = true;
-      v.score = 0.0;  // baseline score not meaningful
+      v.score = 0.0;
 
       // Empty baseline window => no CE variant can be scored. Abort the group:
       // cancel its still-queued / in-flight child scans (no follow-up production scan),
@@ -352,7 +353,7 @@ namespace OpenMS
         {
           auto cit = variant_tracking_map_.find(cid);
           if (cit == variant_tracking_map_.end()) continue;
-          int gidx = cit->second.variant_index;  // group-array index
+          int gidx = cit->second.variant_index; 
           if (gidx >= 0 && gidx < static_cast<int>(group.variants.size()))
           {
             group.variants[gidx].received = true;
@@ -375,9 +376,7 @@ namespace OpenMS
     info.collision_energy = v.collision_energy;
     info.activation_type = v.activation_type;
     info.reaction_time = v.reaction_time;
-    // For MS3 groups, also carry the commanded MS2 isolation stage (stage[0]) so the result row can log
-    // the full 2-stage "ms2;ms3" CE/activation/reaction (matching scan_commands and the regular MS3 path).
-    // v.cmd is the full ScanCommand built by buildMS3 (assigned ~:218); v.cmd.stages[0] is the real MS2 stage.
+    // @Claude Please implement this more generically. At some point we might want to add MS4 or whatever
     if (group.msn_level >= 3 && v.cmd.num_stages >= 2)
     {
       info.stage0_collision_energy = v.cmd.stages[0].collision_energy;
@@ -392,28 +391,26 @@ namespace OpenMS
     info.proteoform_sequence = frag.proteoform_sequence;
     info.identification_result = frag;
 
-    // Feed this variant's evidence into the ProteoformTracker (staging only; every variant feeds,
-    // not just the group-completing one — placed before the all_received guard below).
-    // tracker is nullptr only in the ExplorationTestAccess bypass path (no real IdaLogger available).
+    // @Claude Bail early if nullptr; Also what about MS3. This should also update the representation
     if (tracker != nullptr && group.msn_level == 2)
     {
-      // P5: key the model by the returning variant's precursor_id (one MS1 selection -> one charge),
-      // not the recomputed nominal mass (which folded multiple charge selections into one model).
       tracker->feedScan(precursor_id,
-                        /*ms_level=*/2,
+                        2,
                         Ms2Params{v.collision_energy, v.activation_type, v.reaction_time},
-                        /*scan_id=*/tracking_id,
+                        tracking_id,
                         v.result,
                         frag,
                         frag.score,
-                        /*ms2_ctx=*/v.cmd);
+                        v.cmd);
     }
-
+    
     info.remaining_ratio = remaining_ratio;
+    // @Claude this is way to complicated; make simpler. I am sure whe dont actaully have to copy stuff like this
     std::string parent_enc = ScanCommandQueue::encode(group.originating_cmd.scan_id);
     std::strncpy(info.parent_scan_id, parent_enc.c_str(), 3);
     info.parent_scan_id[3] = '\0';
-
+    
+    // @Claude solve inline and make generic for ms3
     auto buildMS2ContextForVariant = [&](int group_variant_index)
     {
       MS2Context ctx;
@@ -438,8 +435,6 @@ namespace OpenMS
       {
         ctx.fragment_mz = variant_cmd.stages[1].precursor_mz;
         ctx.fragment_charge = variant_cmd.stages[1].charge_state;
-        // I2: MS3 exploration variant — MS2 (parent) triplet from the originating MS2 command, MS3 triplet
-        // from this variant. window-SNR now travels on each command (Item 2); read it off the command.
         ctx.ms2_isolation_width = group.originating_cmd.stages[0].isolation_width;
         ctx.ms2_charge_intensity = group.originating_cmd.precursor_intensity;
         ctx.ms2_window_snr = group.originating_cmd.window_snr;
@@ -449,14 +444,9 @@ namespace OpenMS
       }
       else if (variant_cmd.num_stages >= 1)
       {
-        // I2: MS2 exploration variant — MS2 triplet from the variant itself (no MS3).
         ctx.ms2_isolation_width = variant_cmd.stages[0].isolation_width;
         ctx.ms2_charge_intensity = variant_cmd.precursor_intensity;
         ctx.ms2_window_snr = variant_cmd.window_snr;
-        // F4: for an MS2 exploration group the originating_cmd is the MS1 survey (num_stages==0),
-        // so the guard above leaves ms1_precursor_* at 0. The precursor the engine actually
-        // deconvolved is the group's own precursor — source it directly. (MS3-'E' branch above is
-        // left UNCHANGED: there the originating_cmd is the real MS2 and its stage-0 triplet is right.)
         ctx.ms1_precursor_mass = group.precursor_mass;
         ctx.ms1_precursor_mz = group.precursor_mz;
         ctx.ms1_precursor_charge = group.precursor_charge;
@@ -467,18 +457,13 @@ namespace OpenMS
 
     info.ms2_context = buildMS2ContextForVariant(variant_index);
 
-    // F3: for MS3 the matcher leaves matched_protein/proteoform_sequence empty (calibrateAndScore sets
-    // only ppm/region), so every MS3-'E' scan_results row would otherwise log a blank protein. Source the
-    // parent proteoform (already computed into ms2_context from group.proteoform_ctx) + the configured
-    // protein/fasta, identical to the 'R' path. Runs for EVERY variant (before the all-received return),
-    // so all MS3-'E' rows are covered, not just the group-completing one.
     if (group.msn_level >= 3 && !info.ms2_context.proteoform_sequence.empty())
     {
       info.proteoform_sequence = info.ms2_context.proteoform_sequence;
       info.matched_protein = config_.targeting().fasta_file.empty()
           ? config_.characterization().protein_sequence : config_.targeting().fasta_file;
     }
-
+    
     auto& meta = v.result.getOrCreateOptimizationMetadata();
     meta.group_id = group.group_id;
     meta.variant_index = v.variant_index;
@@ -531,9 +516,6 @@ namespace OpenMS
 
       // Re-populate identification_result after batch re-scoring updated it
       info.identification_result = group.variants[variant_index].identification_result;
-      // F5: re-read the completing variant's OWN post-calibration self-score so its scan_results
-      // exploration_score matches its calibrated identification.tsv row (decision F5(a)). This is still
-      // the completing variant's value — NOT the winner's; the winner is reported via winner_tracking_id.
       info.score = group.variants[variant_index].score;
 
       // Return calibrated identification rows for other variants in the completed group.
@@ -567,14 +549,9 @@ namespace OpenMS
       }
     }
 
-    // 9b: finalize the proteoform model NOW (before the next-level MS3 dispatch below), so the model is
-    // the dispatch authority — initiateNextLevel -> planNextScans needs the winner proteoform seeded and
-    // every staged scan pooled. All variants have already fed (feedScan at :385 runs per variant before
-    // this group-completing call). Runs exactly once per completed group while `group` is still valid;
-    // tracker is nullptr only in the ExplorationTestAccess bypass path. (Was previously after dispatch.)
+    // Finalize the proteoform model before the next-level dispatch below
     if (tracker != nullptr && group.msn_level == 2)
     {
-      // P5: finalize the model under the same precursor_id key fed at :387.
       tracker->finalize(precursor_id);
     }
 
@@ -593,12 +570,6 @@ namespace OpenMS
       group.winner_index = best_idx;
       group.complete = true;
       group.variants[best_idx].result.getOrCreateOptimizationMetadata().is_best_variant = true;
-
-      // F5: the completing variant's info row now keeps its OWN metrics (set at :351-365 + the post-
-      // calibration score re-read above). It is NO LONGER overwritten with the winner's CE/score/index —
-      // that overwrite lopsided the log (the last-resolved variant masqueraded as the winner, so e.g.
-      // variant_index 4 / CE 40 vanished and index 0 appeared twice). The winner stays identifiable via
-      // the new winner_tracking_id column — a cross-row pointer set ONLY on this group-completing row.
       info.winner_tracking_id = group.variants[best_idx].tracking_id;
 
       std::cout << "[EXPL-WINNER] group=" << group.group_id
@@ -609,6 +580,8 @@ namespace OpenMS
                 << " score=" << best_score << std::endl;
 
       const auto& level_config = config_.level(group.msn_level);
+
+      // Send production scan after exploration
       if (!level_config.overrides.empty())
       {
         ScanConfig prod_config = level_config.scans[0];
@@ -619,16 +592,19 @@ namespace OpenMS
         ScanCommand prod_cmd;
         if (group.msn_level >= 3)
         {
-          // F2: re-supply the fragment's stage-1 scores so the production MS3 carries real *_s1 scalars.
-          // The winning variant's command already holds them (its buildMS3 received frag_scores above),
-          // so reconstruct a FragmentScores from that variant rather than the default-empty struct.
+          // Pull through ms2 info for ms3 scans @Claude I think that could be by providing the ms2 command to the ms3 builder
           const ScanCommand& wcmd = group.variants[best_idx].cmd;
           FragmentAnalysis::FragmentScores wfs;
-          wfs.mono_mass = wcmd.mono_mass_s1;                 wfs.qscore = wcmd.qscore_s1;
-          wfs.charge_cos = wcmd.charge_cos_s1;               wfs.charge_snr = wcmd.charge_snr_s1;
-          wfs.iso_cos = wcmd.iso_cos_s1;                     wfs.snr = wcmd.snr_s1;
-          wfs.charge_score = wcmd.charge_score_s1;           wfs.ppm_error = wcmd.ppm_error_s1;
-          wfs.precursor_intensity = wcmd.precursor_intensity_s1; wfs.peakgroup_intensity = wcmd.peakgroup_intensity_s1;
+          wfs.mono_mass = wcmd.mono_mass_s1;                 
+          wfs.qscore = wcmd.qscore_s1;
+          wfs.charge_cos = wcmd.charge_cos_s1;               
+          wfs.charge_snr = wcmd.charge_snr_s1;
+          wfs.iso_cos = wcmd.iso_cos_s1;                     
+          wfs.snr = wcmd.snr_s1;
+          wfs.charge_score = wcmd.charge_score_s1;           
+          wfs.ppm_error = wcmd.ppm_error_s1;
+          wfs.precursor_intensity = wcmd.precursor_intensity_s1; 
+          wfs.peakgroup_intensity = wcmd.peakgroup_intensity_s1;
           std::string ms3pf = MS3FragmentMatcher::fragmentProForma(
               config_.characterization().protein_sequence, group.proteoform_ctx,
               group.fragment_ion_type, group.fragment_ion_index);
@@ -640,14 +616,11 @@ namespace OpenMS
         }
         else
         {
-          // Parent left empty here (0); the F1 fallback below stamps the group's originating id, matching
-          // the historical processScan push-loop exactly (incl. the degenerate originating_cmd.scan_id==0 case).
           prod_cmd = queue.buildMS2(group.precursor_pg, group.precursor_charge, prod_config, 2, 0);
         }
+
+        // @Claude this should be inferred from the ctx object
         prod_cmd.faims_cv = group.faims_cv;
-        // I2: the production re-acquisition reuses the winning variant's isolation window, so it inherits
-        // that variant's window-SNR (the source spectrum is no longer in scope here). window_snr now lives
-        // on the command (Item 2), so copy it variant -> production directly.
         if (best_idx >= 0 && best_idx < static_cast<int>(group.variants.size()))
         {
           const double inherited = group.variants[best_idx].cmd.window_snr;
@@ -660,25 +633,19 @@ namespace OpenMS
                   << std::endl;
 
         info.commands.push_back(prod_cmd);
-        // Production MS3 returns on the REGULAR MS3 path -> seed its parent context so it identifies + folds
-        // a trajectory row (the regular MS2->MS3 path caches equivalently at FLASHIda.cpp). buildMS2ContextForVariant
-        // (defined above in this function) captures the winner's fragment ion + region + ptm + precursor.
         if (group.msn_level >= 3)
           info.ms3_context_cache.emplace_back(prod_cmd.scan_id, buildMS2ContextForVariant(best_idx));
       }
+      // inititate next level - @Claude make interface more generic. Should be for last level with selection criterion
       else if (group.msn_level < 3)
       {
-        std::cout << "exploration call site" << std::endl;
         auto next_nlr = initiateNextLevel(group.msn_level,
             group.variants[best_idx].result, group.faims_cv, queue,
             &group.variants[best_idx].cmd, tracker, precursor_id);  // P5: same precursor_id model key
         info.commands.insert(info.commands.end(), next_nlr.commands.begin(), next_nlr.commands.end());
       }
-      else  // overrides empty && msn_level >= 3: MS3 exploration with no production scan -> fold the winning variant now
+      else  // overrides empty && msn_level >= 3: MS3 exploration with no production scan -> fold the winning variant now @Claude should be more generic and happen after all winning variants or if a production scan is found.
       {
-        // The CE sweep emits no production re-acquisition for this fragment, so the winning variant IS
-        // the only MS3 evidence. Additively fold it into the precursor's trajectory model (one row per
-        // fragment, at its winner). Non-winning variants never fold.
         if (tracker != nullptr && group.fragment_ion_type != '\0')
         {
           const ExplorationVariant& w = group.variants[best_idx];
@@ -702,6 +669,7 @@ namespace OpenMS
     // (only fill empties — never overwrite a builder-set parent, e.g. buildMS3's immediate MS2 parent).
     // Relocated here from the former processScan feedResult push-loops so callers receive fully-parented
     // commands and no longer post-stamp.
+    // @Claude this should be fixed at source (if still happens) and removed
     for (auto& c : info.commands)
     {
       if (c.parent_scan_id[0] == '\0')
@@ -734,9 +702,6 @@ namespace OpenMS
     const auto& this_cfg = config_.level(msn_level);
     const auto& next_cfg = config_.level(next_level);
     if (this_cfg.selection == SelectionMetric::None) return nlr;
-    // Backstop for the Config::validate() rule: if the next level has no scan config or
-    // selects nothing, there is nothing to build (found is already 0). Avoids OOB on
-    // next_cfg.scans[0] (line 594) and this_cfg.scans[0] (line 521).
     if (this_cfg.scans.empty() || next_cfg.scans.empty()
         || next_cfg.selection == SelectionMetric::None) return nlr;
 
@@ -749,6 +714,7 @@ namespace OpenMS
         : config_.level(msn_level).scans[0].activation;
 
     // Get fragment ion targets via FragmentAnalysis
+    // @Claude should completely move to proteoform tracker
     DeconvolvedSpectrum result_copy = result;
     std::vector<double> masses(num_targets), qscores(num_targets);
     std::vector<double> wstarts(num_targets), wends(num_targets);
@@ -760,6 +726,7 @@ namespace OpenMS
     int found = 0;
     FragmentAnalysis::ProteoformMatch frag_result;
 
+    // @Claude this logic should move into ProteoformTracker
     switch (next_cfg.selection)
     {
       case SelectionMetric::Intensity:
@@ -786,6 +753,7 @@ namespace OpenMS
     }
 
     // Cache proteoform context for MS3 subsequence scoring
+    // @Claude this logic should move into ProteoformTracker
     MS3FragmentMatcher::ProteoformContext proto_ctx;
     if (next_level >= 3)
     {
@@ -800,6 +768,7 @@ namespace OpenMS
     }
 
     // Populate fragment matching metadata
+    // @Claude this logic should move into ProteoformTracker
     nlr.fragment_count = frag_result.total_match_count;
     nlr.proteoform_match = frag_result;
     if (!seq.empty() && found > 0)
@@ -822,32 +791,11 @@ namespace OpenMS
 
     // Build commands for each selected fragment target
     ScanConfig next_scan_config = next_cfg.scans[0];
-
     int charge_floor = this_cfg.min_charge;
 
-    // 9b: model-driven MS3 dispatch. When a tracker is present, we are about to plan MS3, AND this
-    // precursor has an IDENTIFIED proteoform model, the model is the dispatch authority (ADR-0002):
-    // it SELECTS which fragments to characterize (planNextScans), and Exploration BUILDS them here —
-    // a single MS3 per target, or the CE sweep when MS3 exploration is configured (stage[0] = the
-    // target's best-MS2 params). The fragment-selection + proto_ctx + nlr MS2-id-row metadata above
-    // are untouched (they still drive the MS2 identification row).
-    //
-    // Authority gate = an identified model exists for this precursor. M3 (ADR-0005): the regular
-    // non-exploration MS2->MS3 path is now ALSO model-driven — the feed+finalize block below builds a
-    // one-shot model for it so the gate fires. The legacy getTopFragmentMatches direct emitter has been
-    // deleted; the model is the sole MS3 authority. When no model exists (tracker==nullptr in tests, or
-    // found==0), the gate is false and the function returns nlr with no next-level commands.
-    // P5: the model is keyed by the originating MS2's precursor_id (one MS1 selection -> one charge),
-    // not the recomputed nominal mass (which folded multiple charge selections of one molecule together).
-
-    // M3 (ADR-0005): make the regular (non-exploration) MS2->MS3 path model-driven. The exploration path
-    // already fed its variants and finalized (Exploration::feedResultImpl_) before calling initiateNextLevel,
-    // so its model already exists; the regular path has none yet. When this MS2 identified a proteoform
-    // (found>0) and no model exists yet for this precursor, build a one-shot finalized model from this MS2 so
-    // the model-authority gate below fires and planNextScans drives the MS3 dispatch. found>0 guarantees a
-    // non-empty proteoform_sequence + score, so finalize seeds a winner.
     if (tracker != nullptr && next_level >= 3 && ms_ctx != nullptr && ms_ctx->num_stages > 0 && found > 0)
     {
+      // @Claude bail early if the ProteoformModel does not exist.
       const ProteoformModel* existing = tracker->model(precursor_id);
       if (existing == nullptr || existing->proteoform_sequence.empty())
       {
@@ -865,8 +813,9 @@ namespace OpenMS
         ? tracker->model(precursor_id) : nullptr;
     if (model != nullptr && !model->proteoform_sequence.empty())
     {
-      auto targets = tracker->planNextScans(precursor_id);  // P5: plan from the precursor_id-keyed model
+      auto targets = tracker->planNextScans(precursor_id);
 
+      // @Claude this should be bound by num_tartgets
       for (const Ms3Target& target : targets)
       {
         const int frag_charge = std::abs(target.frag_charge);
@@ -875,8 +824,6 @@ namespace OpenMS
 
         if (config_.hasExploration(next_level))
         {
-          // CE sweep: reconstruct the minimal PeakGroup initiate() needs from the target descriptors
-          // (mono_mass, charge, isolation window), exactly as the legacy sweep path builds frag_pg.
           const double half = target.iso_width / 2.0;
           const double wstart = target.frag_mz - half;
           const double wend = target.frag_mz + half;

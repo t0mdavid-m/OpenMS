@@ -151,6 +151,7 @@ namespace OpenMS
   }
 
   void IdaLogger::writeIDALogEntry(double rt, int scan_number,
+                                    // @Claude this can be inferred from scan number; doesnt need to be in signature
                                     const std::string& tracking_id,
                                     const std::vector<ScanCommand>& ms2_commands,
                                     const DeconvolvedSpectrum& all_peak_groups)

@@ -153,6 +153,8 @@ namespace OpenMS
     };
 
     /// Result of feedResult: commands plus exploration per-variant metadata
+
+    // @ Claude we want to clean up this struct. It feels extremely messy.
     struct FeedResultInfo
     {
       struct IdentificationRowInfo

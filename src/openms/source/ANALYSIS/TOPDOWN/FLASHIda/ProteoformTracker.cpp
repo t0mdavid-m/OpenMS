@@ -46,7 +46,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
-
+// @Claude all identification calls should be made here; even for exploration rows this should return the fragment count while staging the ms2. This keeps responsibilities in tact and avoids costly rerunning of identification workflows.
 namespace OpenMS
 {
 
@@ -168,7 +168,9 @@ namespace OpenMS
     config_(cfg), logger_(logger)
   {
   }
-
+  
+  // @Claude this is specialized for MS2 so it should be renamed to feedMS2Scan
+  // Once MS2 scans are finalized this should bail early with a log to cout
   void ProteoformTracker::feedScan(int precursor_id, uint8_t ms_level, const Ms2Params& params, int scan_id,
                                    const DeconvolvedSpectrum& deconv,
                                    const FragmentAnalysis::ProteoformMatch& match, double id_score,
@@ -176,9 +178,9 @@ namespace OpenMS
   {
     ProteoformModel& m = models_[precursor_id];
     m.precursor_id = precursor_id;
-    m.contributing_scan_ids.insert(scan_id);   // cumulative: every fed scan stays (never dropped on supersede)
+    m.contributing_scan_ids.insert(scan_id);
 
-    // Capture the MS2 command context once (used by planNextScans/buildMS3 in the next task).
+    // Capture the MS2 command context
     if (!m.has_ms2_ctx)
     {
       m.ms2_ctx = ms2_ctx;
@@ -191,11 +193,6 @@ namespace OpenMS
     ps.params = params;
     ps.match = match;
     ps.id_score = id_score;
-    // Extract one PeakRecord per deconvolved peak group.
-    // mz idiom: getMzRange(charge) centre — matches buildMS2 (ScanCommandQueue.cpp) and the
-    // Exploration.cpp precursor_mz derivation, so the value is ready for direct use in buildMS3.
-    // Intensity: getChargeIntensity(getMaxIntensityAbsCharge()) — max-charge intensity used
-    // elsewhere as the sort key and precursor_intensity field (FragmentAnalysis.cpp:713).
     for (size_t i = 0; i < deconv.size(); ++i)
     {
       const PeakGroup& pg = deconv[i];
@@ -206,9 +203,6 @@ namespace OpenMS
       pr.mz = (mz1 + mz2) / 2.0;
       pr.charge = charge;
       pr.intensity = static_cast<double>(pg.getChargeIntensity(charge));
-      // Isolation-window span = the PeakGroup's m/z extent at the selected charge (getMzRange centre-to-
-      // edge span). This sizes the CE-sweep sub-window in Exploration.cpp:832. It is NOT the legacy
-      // (wend - wstart) isolation width; ScanCommandQueue.cpp:352 floors it at 2.0 Th before emission.
       pr.iso_width = mz2 - mz1;
       pr.stage1_scores = FragmentAnalysis::FragmentScores::fromPeakGroup(pg, charge);
       ps.peaks.push_back(pr);
@@ -216,6 +210,7 @@ namespace OpenMS
     m.pending.push_back(std::move(ps));
   }
 
+  // @Claude this should be renamed to finalize MS2
   void ProteoformTracker::finalize(int precursor_id)
   {
     auto it = models_.find(precursor_id);
@@ -254,16 +249,17 @@ namespace OpenMS
       m.modifications.push_back(ModificationState{s.mass_shift, s.start_position, s.end_position, 0.0, 0.0});
     }
 
-    // 4) Map EVERY staged scan's already-matched fragments onto the model (Strategy A).
+    // 4) Map EVERY staged scan's already-matched fragments onto the model
     m.fragments.clear();
     for (const PendingScan& ps : m.pending)
     {
       mapScanOntoModel_(m, ps);
     }
 
-    // 5) Narrowing (T6) and row emission (T11) are still stubs.
+    // 5) Narrow modifications
     narrowModifications_(m);
     ++m.update_index;
+    // @Claude this method should be renamed to emitPooledIDRow or something that makes it easy to know where the log flows
     emitRow_(m, "MS2", ScanCommandQueue::encode(m.winner_scan_id));
 
     // 6) Done.
@@ -476,6 +472,7 @@ namespace OpenMS
     return out;
   }
 
+  // @Claude rename in getModel
   const ProteoformModel* ProteoformTracker::model(int precursor_id) const
   {
     auto it = models_.find(precursor_id);

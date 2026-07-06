@@ -1189,9 +1189,7 @@ namespace
 
   double FragmentAnalysis::windowSnr(const MSSpectrum& source, double lo, double hi, double signal_intensity)
   {
-    // I2: SNR over the ACTUAL commanded isolation window. The "signal" (the selected charge's intensity,
-    // = PeakGroup::getChargeIntensity, already computed by the engine) is passed in; here we measure the
-    // total raw intensity in [lo, hi] and treat the remainder as co-isolation noise. No deconvolution math.
+    // SNR over the ACTUAL commanded isolation window
     if (signal_intensity <= 0.0 || hi <= lo) return 0.0;
     double total = 0.0;
     for (const auto& peak : source)
