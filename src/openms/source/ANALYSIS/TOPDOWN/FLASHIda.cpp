@@ -238,9 +238,7 @@ FLASHIda::FLASHIda(char* arg) :
       scan_row.mass_count      = ms1_mass_count;
       scan_row.commands_pushed = commands_pushed;
       scan_row.child_ids       = child_ids;
-      scan_row.tag_count       = 0;   // MS1 logs 0 (overrides the -1 default)
       scan_row.deconv_spectrum = &selection_.deconvolvedMS1();
-      scan_row.fragment_count  = 0;   // MS1 logs 0 (overrides the -1 default)
       has_scan_row             = true;
 
       // FAIMS CV cycling: update skip policy, advance to next CV, push MS1
@@ -298,13 +296,8 @@ FLASHIda::FLASHIda(char* arg) :
         scan_row.mass_count          = expl_mass_count;
         scan_row.commands_pushed     = static_cast<int>(expl_result.commands.size());
         scan_row.child_ids           = expl_result.child_ids;
-        scan_row.tag_count           = expl_result.identification_result.tag_count;
-        scan_row.matched_protein     = expl_result.matched_protein;
-        scan_row.proteoform_sequence = FragmentAnalysis::toProForma(expl_result.proteoform_sequence, expl_result.identification_result.ptm_sites);
         scan_row.deconv_spectrum     = expl_spec;
         scan_row.parent_tracking_id  = parent_id;
-        scan_row.tic_coverage        = expl_result.tic_coverage;
-        scan_row.fragment_count      = expl_result.fragment_count;
         scan_row.exploration_group_id = expl_result.group_id;
         scan_row.exploration_metric  = expl_result.exploration_metric;
         scan_row.variant_index       = expl_result.variant_index;
@@ -320,7 +313,7 @@ FLASHIda::FLASHIda(char* arg) :
         // MS2 identification row (copy by value before expl_result goes out of scope).
         // DIVERGENCE vs MS3-expl: MS2 gate requires a non-empty proteoform_sequence AND fragments.
         if (!expl_result.proteoform_sequence.empty() && !expl_result.identification_result.fragments.empty())
-          id_rows.push_back({id_str, 2, 'E', expl_result.ms2_context, expl_result.identification_result, pid});
+          id_rows.push_back({id_str, 2, 'E', expl_result.ms2_context, expl_result.identification_result, pid, expl_result.tic_coverage});
 
         exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);
         return_code = static_cast<int>(expl_result.commands.size());
@@ -416,14 +409,10 @@ FLASHIda::FLASHIda(char* arg) :
             ms2_ctx.ms2_charge_intensity = ctx.precursor_intensity;
             ms2_ctx.ms2_window_snr = ctx.window_snr;  // Item 2: SNR travels on the command (was the queue map)
           }
-          id_rows.push_back({id_str, 2, 'R', ms2_ctx, ms3_targeting.proteoform_match, pid});  // copy by value (ms2_ctx is local)
+          id_rows.push_back({id_str, 2, 'R', ms2_ctx, ms3_targeting.proteoform_match, pid, ms3_targeting.tic_coverage});  // copy by value (ms2_ctx is local)
         }
 
         int ms2_mass_count = deconv_.hasStoredMS2() ? static_cast<int>(deconv_.storedMS2().size()) : 0;
-        // Log the identification tagger's real tag count when a proteoform matched; otherwise fall back
-        // to tags_count (the FASTA tag-targeting case, and plain-DDA selection==None which is legitimately 0).
-        int tag_count = (!ms3_targeting.proteoform_match.fragments.empty())
-            ? ms3_targeting.proteoform_match.tag_count : tags_count;
         const DeconvolvedSpectrum* ms2_spec = deconv_.hasStoredMS2() ? &deconv_.storedMS2() : nullptr;
         std::string parent_id(ctx.parent_scan_id);
 
@@ -437,13 +426,8 @@ FLASHIda::FLASHIda(char* arg) :
         scan_row.mass_count         = ms2_mass_count;
         scan_row.commands_pushed    = commands_pushed;
         scan_row.child_ids          = child_ids;
-        scan_row.tag_count          = tag_count;
-        scan_row.matched_protein    = ms3_targeting.matched_protein;
-        scan_row.proteoform_sequence = FragmentAnalysis::toProForma(ms3_targeting.proteoform_sequence, ms3_targeting.proteoform_match.ptm_sites);
         scan_row.deconv_spectrum    = ms2_spec;
         scan_row.parent_tracking_id = parent_id;
-        scan_row.tic_coverage       = ms3_targeting.tic_coverage;
-        scan_row.fragment_count     = ms3_targeting.fragment_count;
         scan_row.collision_energy   = ms2_collision_energy;
         scan_row.activation_type    = ms2_activation_type;
         scan_row.reaction_time      = ms2_reaction_time;
@@ -484,29 +468,13 @@ FLASHIda::FLASHIda(char* arg) :
         std::string parent_id(expl_result.parent_scan_id);
 
         // Fill scan_results row in canonical order (copy expl_result.* by value — it dies at block end).
-        // DIVERGENCE vs MS2-expl: MS3-expl leaves tag_count + fragment_count at the -1 sentinel.
+        // scan_results is a pure acquisition-event log: the MS3 fragment proteoform now lives on the
+        // scan_commands.tsv ms3_proteoform column, and identification/matched_protein/tic on identification.tsv.
         scan_row.mass_count          = expl_mass_count;
         scan_row.commands_pushed     = static_cast<int>(expl_result.commands.size());
         scan_row.child_ids           = expl_result.child_ids;
-        scan_row.matched_protein     = expl_result.matched_protein;
-        // scan_results MS3 proteoform = the clipped b/y FRAGMENT (the "clipped MS2 sequence") — the
-        // acquisition-context view of what this MS3 is characterizing, rendered in the SAME fragment frame
-        // identification.tsv uses (extractSubsequence + rebasePTMSites + toProForma via fragmentProForma).
-        // Built from the MS2 context alone, so it's present for every processed MS3 scan even when
-        // identification is deferred/failed. The parent stays recoverable via matched_protein +
-        // parent_tracking_id. (Was the parent proteoform — reversed to the fragment.)
-        {
-          MS3FragmentMatcher::ProteoformContext pc;
-          pc.region_start = expl_result.ms2_context.start_pos;
-          pc.region_end   = expl_result.ms2_context.end_pos;
-          pc.ptm_sites    = expl_result.ms2_context.ptm_sites;
-          scan_row.proteoform_sequence = MS3FragmentMatcher::fragmentProForma(
-            config_.characterization().protein_sequence, pc,
-            expl_result.ms2_context.fragment_ion_type, expl_result.ms2_context.fragment_ion_index);
-        }
         scan_row.deconv_spectrum     = expl_spec;
         scan_row.parent_tracking_id  = parent_id;
-        scan_row.tic_coverage        = expl_result.tic_coverage;
         scan_row.exploration_group_id = expl_result.group_id;
         scan_row.exploration_metric  = expl_result.exploration_metric;
         scan_row.variant_index       = expl_result.variant_index;
@@ -536,11 +504,13 @@ FLASHIda::FLASHIda(char* arg) :
         // DIVERGENCE vs MS2-expl: MS3 gate is fragments-only, and MS3 also emits the winner-batch rows.
         // P5: every winner-batch row belongs to the same exploration group -> same precursor_id (pid).
         if (!expl_result.identification_result.fragments.empty())
-          id_rows.push_back({id_str, 3, 'E', expl_result.ms2_context, expl_result.identification_result, pid});
+          id_rows.push_back({id_str, 3, 'E', expl_result.ms2_context, expl_result.identification_result, pid, expl_result.tic_coverage});
         for (const auto& row : expl_result.additional_identification_rows)
         {
+          // Winner-batch rows inherit the group-completing scan's tic_coverage (no per-variant tic is
+          // propagated through additional_identification_rows; a faithful per-variant value is out of scope).
           if (!row.identification_result.fragments.empty())
-            id_rows.push_back({row.tracking_id, 3, 'E', row.ms2_context, row.identification_result, pid});
+            id_rows.push_back({row.tracking_id, 3, 'E', row.ms2_context, row.identification_result, pid, expl_result.tic_coverage});
         }
 
         exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);
@@ -571,10 +541,8 @@ FLASHIda::FLASHIda(char* arg) :
 
         const DeconvolvedSpectrum* ms3_spec = deconv_.hasStoredMS2() ? &deconv_.storedMS2() : nullptr;
 
-        // Results-row values that must outlive the inner identification block (cached_ms2_ctx/ms3_matches
-        // are scoped there, and cache_it is erased below). Defaults below are overwritten on a match.
-        std::string ms3_proteoform, ms3_matched_protein;
-        int ms3_frag_count = 0, ms3_tag_count = 0;
+        // ms3_tic must outlive the inner identification block (ms3_matches is scoped there, cache_it is erased
+        // below); it feeds the identification row (moved from scan_results).
         float ms3_tic = 0.0f;
 
         // Identification: look up MS2 context from cache and run fragment matching
@@ -600,29 +568,19 @@ FLASHIda::FLASHIda(char* arg) :
               config_.level(3).tolerance_ppm,
               &ms3_matches);
 
-            // scan_results MS3 proteoform = the clipped b/y fragment from the acquisition context — computed
-            // OUTSIDE the match guard so it's present even when the match below is empty/deferred. Same fragment
-            // frame as identification.tsv; the parent stays recoverable via matched_protein + parent_tracking_id.
-            ms3_proteoform = MS3FragmentMatcher::fragmentProForma(
-              config_.characterization().protein_sequence, proto_ctx,
-              cached_ms2_ctx.fragment_ion_type, cached_ms2_ctx.fragment_ion_index);
-
             if (!ms3_matches.empty() && !ms3_matches[0].fragments.empty())
             {
-              // Copy cached_ms2_ctx (a reference into ms2_context_cache_, erased below) and ms3_matches[0]
-              // (inner-scope) BY VALUE into the id-row now — the bottom write must not read them after the erase.
-              id_rows.push_back({id_str, 3, 'R', cached_ms2_ctx, ms3_matches[0], pid});
-              // Capture the decision values the engine used so the results row agrees with this match.
-              // (ms3_proteoform — the clipped b/y fragment — was already set above, outside this guard.)
-              ms3_frag_count = ms3_matches[0].total_match_count;
-              ms3_tag_count = cached_ms2_ctx.tag_count;
-              ms3_matched_protein = config_.targeting().fasta_file.empty()
-                  ? config_.characterization().protein_sequence : config_.targeting().fasta_file;
+              // MS3 tic (matched-fragment coverage of the deconvolution) — computed BEFORE the id push so the
+              // identification row carries it (moved from scan_results). The fragment proteoform itself now
+              // lives on scan_commands.tsv (ms3_proteoform), rendered at command-build time.
               if (ms3_mass_count > 0)
               {
                 float r = static_cast<float>(ms3_matches[0].total_match_count) / static_cast<float>(ms3_mass_count);
-                ms3_tic = r > 1.0f ? 1.0f : r;  // matched-fragment coverage of the MS3 deconvolution
+                ms3_tic = r > 1.0f ? 1.0f : r;
               }
+              // Copy cached_ms2_ctx (a reference into ms2_context_cache_, erased below) and ms3_matches[0]
+              // (inner-scope) BY VALUE into the id-row now — the bottom write must not read them after the erase.
+              id_rows.push_back({id_str, 3, 'R', cached_ms2_ctx, ms3_matches[0], pid, ms3_tic});
 
               // 9b Part 3: re-feed the MS3 result into the proteoform model so its fragments fold in
               // (MS2 frame via ms3_matches[0].equiv_*/adjusted_mass; mapScanOntoModel_ handles the frame).
@@ -666,18 +624,12 @@ FLASHIda::FLASHIda(char* arg) :
           ms3_activation_type  = std::string(resolved->stages[0].activation_type) + ";" + std::string(resolved->stages[1].activation_type);
           ms3_reaction_time    = std::to_string(resolved->stages[0].reaction_time) + ";" + std::to_string(resolved->stages[1].reaction_time);
         }
-        // MS3 rows log fragment_count & tag_count as the -1 sentinel:
-        //   - fragment_count: MS3 matching is finalized only in the calibrated round; the matched count
-        //     lives in identification.tsv (ms3_fragments), not here.
-        //   - tag_count: tagging is an MS2 feature, not used for fragment-based MS3 id.
-        // Fill scan_results row; commands_pushed, tag_count, fragment_count keep their sentinel defaults
-        // (0/-1/-1); child_ids stays empty; exploration fields stay at defaults; tic_coverage stays real.
+        // Fill scan_results row (pure acquisition event): identification payload moved off scan_results —
+        // the MS3 fragment proteoform is on scan_commands.ms3_proteoform; matched_protein/tic on identification.
+        // commands_pushed keeps its 0 default; child_ids empty; exploration fields at defaults.
         scan_row.mass_count         = ms3_mass_count;
-        scan_row.matched_protein    = ms3_matched_protein;
-        scan_row.proteoform_sequence = ms3_proteoform;
         scan_row.deconv_spectrum    = ms3_spec;
         scan_row.parent_tracking_id = parent_id;
-        scan_row.tic_coverage       = ms3_tic;
         scan_row.collision_energy   = ms3_collision_energy;
         scan_row.activation_type    = ms3_activation_type;
         scan_row.reaction_time      = ms3_reaction_time;
@@ -768,7 +720,11 @@ FLASHIda::FLASHIda(char* arg) :
         std::lock_guard<std::mutex> lk(analysis_mutex_);
         // P5: source the dequeued command's precursor_id from the map (0 for MS1/AGC/untracked).
         // The lock above serialises this read against processScan's map writes.
-        logger_.writeScanCommandRow(out, precursorIdForTracking_(out.scan_id));
+        // Take the wide MS3 fragment ProForma stashed at buildMS3 time (empty for non-MS3 commands) so the
+        // scan_commands.tsv row carries the fired MS3 target's fragment identity. takeMS3Proteoform locks
+        // queue_mutex_ internally (separate from analysis_mutex_ held here).
+        std::string ms3pf = (out.msn_level == 3) ? queue_.takeMS3Proteoform(out.scan_id) : std::string();
+        logger_.writeScanCommandRow(out, precursorIdForTracking_(out.scan_id), ms3pf);
       }
       return 1;
     }

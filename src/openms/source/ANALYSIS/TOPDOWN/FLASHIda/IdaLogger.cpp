@@ -72,9 +72,11 @@ namespace OpenMS
                              << "ion_type\tion_index\t"
                              << "reaction_time\treagent_max_it\treagent_agc_target\t"
                              << "scan_description\t"  // E6: raw descriptor, asserted == what's sent to instrument
-                             // P5: per-MS1-selection precursor identity (plain decimal); appended LAST so the
-                             // existing positional column indices don't shift. 0 for MS1/AGC/untracked.
-                             << "precursor_id\n";
+                             // P5: per-MS1-selection precursor identity (plain decimal); 0 for MS1/AGC/untracked.
+                             << "precursor_id\t"
+                             // The wide clipped b/y fragment ProForma of the MS3 target being fired; appended LAST
+                             // so positional indices don't shift. "" on MS1/MS2/AGC (no fragment sub-sequence).
+                             << "ms3_proteoform\n";
         commands_tsv_stream_.flush();
       }
     }
@@ -85,8 +87,10 @@ namespace OpenMS
       {
         results_tsv_stream_ << "tracking_id\tms_level\tresolve_ts\tduration_ms\treceived_ts\tduration_received_ms\trt\t"
                             << "mass_count\tcommands_pushed\tchild_ids\t"
-                            << "tag_count\tmatched_protein\tproteoform_sequence\t"
-                            << "tic_coverage\tfragment_count\t"
+                            // scan_results is a pure acquisition-event log: identification payload
+                            // (tag_count/matched_protein/proteoform_sequence/fragment_count) moved to
+                            // identification.tsv (proteoform -> scan_commands.ms3_proteoform); tic_coverage
+                            // moved to identification.tsv; tag_count dropped. (34 -> 29 columns.)
                             << "exploration_group_id\texploration_metric\t"
                             << "variant_index\ttotal_variants\t"
                             << "collision_energy\texploration_score\tremaining_ratio\t"
@@ -118,7 +122,9 @@ namespace OpenMS
                                    // Fragment-mass table (MS2 & MS3 rows): per-scan theoretical + residual; appended LAST.
                                    << "theoretical_masses\tdiff_da\tdiff_ppm\t"
                                    // C2: MS3 per-ion fragment coverage (distinct backbone bonds / (L-1)); appended LAST, -1 on MS2.
-                                   << "ms3_fragment_coverage\n";
+                                   << "ms3_fragment_coverage\t"
+                                   // Per-scan TIC / matched-fragment coverage (moved here from scan_results); appended LAST.
+                                   << "tic_coverage\n";
         identification_tsv_stream_.flush();
       }
     }
@@ -217,7 +223,7 @@ namespace OpenMS
     }
   }
 
-  void IdaLogger::writeScanCommandRow(const ScanCommand& cmd, int precursor_id)
+  void IdaLogger::writeScanCommandRow(const ScanCommand& cmd, int precursor_id, const std::string& ms3_proteoform)
   {
     if (!commands_tsv_stream_.is_open()) return;
 
@@ -319,7 +325,8 @@ namespace OpenMS
                          << reagent_max_its << "\t"
                          << reagent_agc_targets << "\t"
                          << cmd.scan_description << "\t"  // E6: raw descriptor (tab/newline-free by construction)
-                         << precursor_id << "\n";         // P5: per-MS1-selection precursor identity (appended LAST)
+                         << precursor_id << "\t"          // P5: per-MS1-selection precursor identity
+                         << ms3_proteoform << "\n";       // wide MS3 fragment ProForma (appended LAST; "" for MS1/MS2/AGC)
     commands_tsv_stream_.flush();
   }
 
@@ -334,16 +341,11 @@ namespace OpenMS
     const int mass_count = row.mass_count;
     const int commands_pushed = row.commands_pushed;
     const std::vector<std::string>& child_ids = row.child_ids;
-    const int tag_count = row.tag_count;
-    const std::string& matched_protein = row.matched_protein;
-    const std::string& proteoform_sequence = row.proteoform_sequence;
     const uint64_t enqueue_ts = row.enqueue_ts;
     const uint64_t dequeue_ts = row.dequeue_ts;
     const uint64_t received_ts = row.received_ts;
     const DeconvolvedSpectrum* deconv_spectrum = row.deconv_spectrum;
     const std::string& parent_tracking_id = row.parent_tracking_id;
-    const float tic_coverage = row.tic_coverage;
-    const int fragment_count = row.fragment_count;
     const int exploration_group_id = row.exploration_group_id;
     const int exploration_metric = row.exploration_metric;
     const int variant_index = row.variant_index;
@@ -384,11 +386,6 @@ namespace OpenMS
                         << mass_count << "\t"
                         << commands_pushed << "\t"
                         << child_str << "\t"
-                        << tag_count << "\t"
-                        << matched_protein << "\t"
-                        << proteoform_sequence << "\t"
-                        << tic_coverage << "\t"
-                        << fragment_count << "\t"
                         << exploration_group_id << "\t"
                         << exploration_metric << "\t"
                         << variant_index << "\t"
@@ -575,7 +572,9 @@ namespace OpenMS
       // Fragment-mass table: per-scan theoretical + residual (Da, ppm) for MS2 AND MS3 fragments; appended LAST.
       << frag_theo.str() << "\t" << frag_diff_da.str() << "\t" << frag_diff_ppm.str() << "\t"
       // C2: MS3 per-ion fragment coverage (distinct backbone bonds / (L-1)); -1 on MS2. std::fixed setprecision(4) in effect.
-      << (ms_level == 3 ? match.ms3_fragment_coverage : -1.0f) << "\n";
+      << (ms_level == 3 ? match.ms3_fragment_coverage : -1.0f) << "\t"
+      // Per-scan TIC / matched-fragment coverage (moved from scan_results); the scan's actual value at this row.
+      << row.tic_coverage << "\n";
     identification_tsv_stream_.flush();
   }
 

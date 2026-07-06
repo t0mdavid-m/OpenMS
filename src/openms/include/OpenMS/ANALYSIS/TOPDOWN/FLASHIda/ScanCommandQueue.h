@@ -79,11 +79,15 @@ namespace OpenMS
     /// parent_scan_id is MANDATORY (the immediate parent's tracking id); stamped at creation.
     /// stage0_params: if non-null, overrides the stage[0] CE/activation/reaction_time copied from
     /// ms2_ctx with per-ion optimised MS2 parameters (caller wiring is a later task).
+    /// @p ms3_proteoform: the wide clipped b/y fragment ProForma of this MS3 target, rendered by the
+    /// caller (which holds the ProteoformContext). Stashed in a scan_id-keyed side-map and surfaced on the
+    /// scan_commands.tsv row via takeMS3Proteoform at drain time. "" = not applicable (leaves the log cell empty).
     ScanCommand buildMS3(const ScanCommand& ms2_ctx, const ScanConfig& ms3_config,
                          double frag_mz, int frag_charge, double iso_width, int parent_scan_id,
                          char ion_type = '\0', int frag_index = 0, int priority = 1,
                          const FragmentAnalysis::FragmentScores& frag_scores = {},
-                         const Ms2Params* stage0_params = nullptr);
+                         const Ms2Params* stage0_params = nullptr,
+                         const std::string& ms3_proteoform = "");
 
     /// Create an MS1 survey scan command from current config
     ScanCommand makeMS1() const;
@@ -120,6 +124,10 @@ namespace OpenMS
 
     /// Remove expired commands from pending_scan_map_ using timeout_ms
     void cleanupExpired();
+
+    /// Take (find + erase + return) the wide MS3 fragment ProForma stashed for @p scan_id at buildMS3 time;
+    /// returns "" if absent (non-MS3 command, or already taken). Thread-safe (acquires queue_mutex_).
+    std::string takeMS3Proteoform(int scan_id);
 
     /// Cancel commands by scan_id: remove any matching entries from the priority
     /// queues AND the pending (in-flight) map. Returns the scan_ids actually removed.
@@ -178,6 +186,10 @@ namespace OpenMS
 
     /// Map of tracking ID -> ScanCommand for pending (in-flight) scans
     std::unordered_map<int, ScanCommand> pending_scan_map_;
+
+    /// scan_id -> wide MS3 fragment ProForma, stashed at buildMS3 time, drained by takeMS3Proteoform for
+    /// the scan_commands.tsv ms3_proteoform column. Only MS3 commands ever have an entry. Guarded by queue_mutex_.
+    std::unordered_map<int, std::string> ms3_cmd_proteoform_;
 
     /// Timestamp of last MS1 scan (for cycle time logic)
     std::chrono::steady_clock::time_point last_ms1_time_ = std::chrono::steady_clock::now();

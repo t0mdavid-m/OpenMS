@@ -180,10 +180,14 @@ namespace OpenMS
       ScanCommand cmd;
       if (msn_level >= 3 && ms_ctx != nullptr)
       {
+        // Wide clipped b/y fragment ProForma of this MS3 target -> scan_commands.tsv ms3_proteoform (via side-map).
+        std::string ms3pf = MS3FragmentMatcher::fragmentProForma(
+            config_.characterization().protein_sequence, proto_ctx, ion_type, frag_index);
         cmd = queue.buildMS3(*ms_ctx, variant_config,
                              precursor_mz, charge, isolation_width, ms_ctx->scan_id,
                              ion_type, frag_index, expl_priority, frag_scores,  // F2: real stage-1 scalars
-                             stage0_params);  // 9b: model's per-ion best-MS2 params -> MS3 stage[0] (ADR-0003)
+                             stage0_params,   // 9b: model's per-ion best-MS2 params -> MS3 stage[0] (ADR-0003)
+                             ms3pf);
       }
       else
       {
@@ -625,10 +629,14 @@ namespace OpenMS
           wfs.iso_cos = wcmd.iso_cos_s1;                     wfs.snr = wcmd.snr_s1;
           wfs.charge_score = wcmd.charge_score_s1;           wfs.ppm_error = wcmd.ppm_error_s1;
           wfs.precursor_intensity = wcmd.precursor_intensity_s1; wfs.peakgroup_intensity = wcmd.peakgroup_intensity_s1;
+          std::string ms3pf = MS3FragmentMatcher::fragmentProForma(
+              config_.characterization().protein_sequence, group.proteoform_ctx,
+              group.fragment_ion_type, group.fragment_ion_index);
           prod_cmd = queue.buildMS3(group.variants[best_idx].cmd, prod_config,
                                      group.precursor_mz, group.precursor_charge,
                                      group.isolation_width, group.variants[best_idx].cmd.scan_id,
-                                     group.fragment_ion_type, group.fragment_ion_index, 1, wfs);
+                                     group.fragment_ion_type, group.fragment_ion_index, 1, wfs,
+                                     nullptr, ms3pf);
         }
         else
         {
@@ -918,9 +926,12 @@ namespace OpenMS
         else
         {
           // Single MS3: build directly from the target descriptors, applying the model's stage[0].
+          std::string ms3pf = MS3FragmentMatcher::fragmentProForma(
+              config_.characterization().protein_sequence, proto_ctx, ion_type, target.ion_index);
           ScanCommand cmd = queue.buildMS3(*ms_ctx, next_scan_config, target.frag_mz, frag_charge,
                                            target.iso_width, ms_ctx->scan_id,
-                                           ion_type, target.ion_index, 1, target.stage1_scores, &target.stage0_params);
+                                           ion_type, target.ion_index, 1, target.stage1_scores, &target.stage0_params,
+                                           ms3pf);
           cmd.faims_cv = faims_cv;
 
           // Item 2: stamp the MS3 fragment-window SNR onto the command before push (same inputs/formula

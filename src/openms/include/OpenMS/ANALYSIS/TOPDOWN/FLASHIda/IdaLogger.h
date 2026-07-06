@@ -80,10 +80,10 @@ namespace OpenMS
     /// assignment operator (deleted: ofstreams are non-copyable)
     IdaLogger& operator=(const IdaLogger&) = delete;
 
-    /// One scan_results.tsv row, filled by a processScan branch and written once at the bottom.
-    /// Field set == the scan_results columns; defaults == the sentinels the non-applicable paths log,
-    /// so a branch only assigns the fields it actually owns. NOTE: tag_count/fragment_count default to
-    /// the MS3 sentinel (-1) — MS1 must set both to 0 and MS2 to its real counts.
+    /// One scan_results.tsv row (a pure acquisition-event log after the slim-down — no identification
+    /// payload), filled by a processScan branch and written once at the bottom. Field set == the
+    /// scan_results columns; defaults == the sentinels the non-applicable paths log, so a branch only
+    /// assigns the fields it actually owns.
     struct ScanRowDescriptor
     {
       std::string tracking_id;
@@ -92,9 +92,6 @@ namespace OpenMS
       int mass_count = 0;
       int commands_pushed = 0;
       std::vector<std::string> child_ids;
-      int tag_count = -1;
-      std::string matched_protein;
-      std::string proteoform_sequence;
       uint64_t enqueue_ts = 0, dequeue_ts = 0, received_ts = 0;
       // INVARIANT: raw pointer into ENGINE-OWNED storage (selection_.deconvolvedMS1() /
       // deconv_.storedMS2() / exploration_.exploration_deconv_->storedMS2()) — all FLASHIda members
@@ -102,8 +99,6 @@ namespace OpenMS
       // re-deconvolved between fill and the bottom write. Do NOT re-deconvolve after a fill or it dangles.
       const DeconvolvedSpectrum* deconv_spectrum = nullptr;
       std::string parent_tracking_id;
-      float tic_coverage = 0.0f;
-      int fragment_count = -1;
       int exploration_group_id = -1;
       int exploration_metric = 0;
       int variant_index = -1;
@@ -129,6 +124,8 @@ namespace OpenMS
       FragmentAnalysis::ProteoformMatch match;
       /// Per-MS1-selection precursor identity (plain decimal); 0 when unknown (MS1, untracked id).
       int precursor_id = 0;
+      /// Per-scan TIC / matched-fragment coverage (moved here from scan_results); appended LAST.
+      float tic_coverage = 0.0f;
     };
 
     /// One pooled_identification.tsv row: the current state of a ProteoformModel after each update.
@@ -165,7 +162,7 @@ namespace OpenMS
     /// Write one TSV row for a dequeued scan command. @p precursor_id is the per-MS1-selection
     /// identity for this command (sourced from the engine-side tracking_id->precursor_id map);
     /// 0 for commands with no precursor (MS1 / AGC) or an untracked id. No ScanCommand ABI change.
-    void writeScanCommandRow(const ScanCommand& cmd, int precursor_id = 0);
+    void writeScanCommandRow(const ScanCommand& cmd, int precursor_id = 0, const std::string& ms3_proteoform = "");
 
     /// Write one TSV row for a processScan result (ms_level is logged at scan_results col 1)
     void writeScanResultRow(const ScanRowDescriptor& row);

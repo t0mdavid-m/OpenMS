@@ -296,12 +296,16 @@ namespace OpenMS
                                           double frag_mz, int frag_charge, double iso_width, int parent_scan_id,
                                           char ion_type, int frag_index, int priority,
                                           const FragmentAnalysis::FragmentScores& frag_scores,
-                                          const Ms2Params* stage0_params)
+                                          const Ms2Params* stage0_params,
+                                          const std::string& ms3_proteoform)
   {
     std::lock_guard<std::mutex> lock(queue_mutex_);
     ScanCommand cmd{};
     int id = nextTrackingIdInt_();
     cmd.scan_id = id;
+    // Stash the caller-rendered wide MS3 fragment ProForma for the scan_commands.tsv ms3_proteoform column
+    // (drained by takeMS3Proteoform). Inline write — queue_mutex_ is already held and is non-recursive.
+    if (!ms3_proteoform.empty()) ms3_cmd_proteoform_[id] = ms3_proteoform;
     cmd.msn_level = 3;
     cmd.priority = priority;
     cmd.is_agc = 0;
@@ -501,6 +505,7 @@ namespace OpenMS
                     << " age_ms=" << (now_ms - it->enqueue_timestamp_ms)
                     << " ms_level=" << it->msn_level
                     << std::endl;
+          ms3_cmd_proteoform_.erase(it->scan_id);  // drop any stashed MS3 proteoform (no-op for non-MS3)
           it = queues_[p].erase(it);
         }
         else
@@ -509,6 +514,16 @@ namespace OpenMS
         }
       }
     }
+  }
+
+  std::string ScanCommandQueue::takeMS3Proteoform(int scan_id)
+  {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    auto it = ms3_cmd_proteoform_.find(scan_id);
+    if (it == ms3_cmd_proteoform_.end()) return std::string();
+    std::string pf = std::move(it->second);
+    ms3_cmd_proteoform_.erase(it);
+    return pf;
   }
 
   std::vector<int> ScanCommandQueue::cancelByScanIds(const std::vector<int>& scan_ids)
@@ -531,6 +546,7 @@ namespace OpenMS
           removed.push_back(it->scan_id);
           std::cout << "[TRACK-CANCEL] id=" << encode(it->scan_id)
                     << " ms_level=" << it->msn_level << " state=queued" << std::endl;
+          ms3_cmd_proteoform_.erase(it->scan_id);  // drop any stashed MS3 proteoform (no-op for non-MS3)
           it = queues_[p].erase(it);
         }
         else
@@ -550,6 +566,7 @@ namespace OpenMS
         removed.push_back(pit->first);
         std::cout << "[TRACK-CANCEL] id=" << encode(pit->first)
                   << " ms_level=" << pit->second.msn_level << " state=in-flight" << std::endl;
+        ms3_cmd_proteoform_.erase(pit->first);  // drop any stashed MS3 proteoform (no-op for non-MS3)
         pit = pending_scan_map_.erase(pit);
       }
       else
