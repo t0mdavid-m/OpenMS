@@ -130,10 +130,9 @@ namespace OpenMS
     if (variant_params.empty()) return commands;
 
     // Prepend baseline variant for RemainingPrecursor metric
-    // bool needs_baseline = (cfg.exploration == ExplorationMetric::RemainingPrecursor);
-    // if (needs_baseline)
-    // Temporarily we add a baseline to all epxlorations
-    variant_params.insert(variant_params.begin(), {base_config.activation, 0.0, 0.0});
+    const bool needs_baseline = (cfg.exploration == ExplorationMetric::RemainingPrecursor);
+    if (needs_baseline)
+      variant_params.insert(variant_params.begin(), {base_config.activation, 0.0, 0.0});
 
     // Compute precursor_mz and isolation_width from PeakGroup
     // @Claude minimum isolation width of two only applies for ms3 and up,not ms2
@@ -156,7 +155,6 @@ namespace OpenMS
       std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
 
-    // @Claude Can this be nullptr? For MS2 there would be ms1 right? In this case bailing early (returning emtpy commands) would be better
     if (ms_ctx != nullptr) group.originating_cmd = *ms_ctx;
     group.fragment_ion_type = ion_type;
     group.fragment_ion_index = frag_index;
@@ -179,42 +177,30 @@ namespace OpenMS
 
       int expl_priority = (msn_level >= 3) ? 1 : 2;
       ScanCommand cmd;
-      if (msn_level >= 3 && /*@Claude should be checked earlier, see previous comment*/ms_ctx != nullptr)
+      if (msn_level >= 3 && ms_ctx != nullptr)
       {
-        // @Claude This should be moved into build_ms3
-        std::string ms3pf = MS3FragmentMatcher::fragmentProForma(
-            config_.characterization().protein_sequence, proto_ctx, ion_type, frag_index);
         cmd = queue.buildMS3(*ms_ctx, variant_config,
                              precursor_mz, charge, isolation_width, ms_ctx->scan_id,
                              ion_type, frag_index, expl_priority, frag_scores,
-                             stage0_params, ms3pf);
+                             stage0_params, proto_ctx);
       }
       else
       {
-        cmd = queue.buildMS2(pg, charge, variant_config, expl_priority, /*@Claude this cant be nullptr right? See previous comment */ms_ctx ? ms_ctx->scan_id : 0);
+        cmd = queue.buildMS2(pg, charge, variant_config, expl_priority, ms_ctx ? ms_ctx->scan_id : 0);
       }
-      // @Claude should always be inferred from ms1 context
-      cmd.faims_cv = group.faims_cv;
+      cmd.faims_cv = group.faims_cv;  // CV inferred from the MS1 context (group.faims_cv <- ms_ctx->faims_cv)
 
-      // @Claude should always be provided, if not bail early.
-      // @Claude infer i in cmd.stages[i] from ms-level. Then you should be able to collapse this into one block.
-      if (source_spectrum != nullptr)
+      // Stamp window-SNR over the ACTUAL fragmentation window: the last stage (MS2 -> stage[0],
+      // MS3 -> stage[1]); the signal is that stage's selected-precursor intensity (stage[1] uses _s1).
+      if (source_spectrum != nullptr && cmd.num_stages >= 1)
       {
-        if (cmd.num_stages >= 2)
-        {
-          const double half = cmd.stages[1].isolation_width / 2.0;
-          cmd.window_snr = FragmentAnalysis::windowSnr(*source_spectrum,
-              cmd.stages[1].precursor_mz - half, cmd.stages[1].precursor_mz + half, cmd.precursor_intensity_s1);
-        }
-        else if (cmd.num_stages >= 1)
-        {
-          const double half = cmd.stages[0].isolation_width / 2.0;
-          cmd.window_snr = FragmentAnalysis::windowSnr(*source_spectrum,
-              cmd.stages[0].precursor_mz - half, cmd.stages[0].precursor_mz + half, cmd.precursor_intensity);
-        }
+        const int si = cmd.num_stages - 1;
+        const double signal = (cmd.num_stages >= 2) ? cmd.precursor_intensity_s1 : cmd.precursor_intensity;
+        const double half = cmd.stages[si].isolation_width / 2.0;
+        cmd.window_snr = FragmentAnalysis::windowSnr(*source_spectrum,
+            cmd.stages[si].precursor_mz - half, cmd.stages[si].precursor_mz + half, signal);
       }
 
-      // @Claude this should be handled by the scan builders.
       int id_int = cmd.scan_id;
       std::string id_str = ScanCommandQueue::encode(id_int);
       v.tracking_id = id_str;
@@ -275,17 +261,14 @@ namespace OpenMS
       ms2_deconv = exploration_deconv_->storedMS2();
     }
 
-    // @Claude move this inline, we dont want a helper that is only used by this method
-    return feedResultImpl_(tracking_id, ms2_deconv, mzs, ints, length, rt, queue, tracker, precursor_id);
+    return feedResultImpl_(tracking_id, ms2_deconv, mzs, ints, length, queue, tracker, precursor_id);
   }
 
   Exploration::FeedResultInfo Exploration::feedResultImpl_(int tracking_id,
       const DeconvolvedSpectrum& msn_deconv,
       const double* mzs, const double* ints, int length,
-      double rt, ScanCommandQueue& queue, ProteoformTracker* tracker, int precursor_id)
+      ScanCommandQueue& queue, ProteoformTracker* tracker, int precursor_id)
   {
-    // @Claude this can be removed
-    (void)rt;
     FeedResultInfo info;
 
     // Look up the variant reference
@@ -405,7 +388,6 @@ namespace OpenMS
     }
     
     info.remaining_ratio = remaining_ratio;
-    // @Claude this is way to complicated; make simpler. I am sure whe dont actaully have to copy stuff like this
     std::string parent_enc = ScanCommandQueue::encode(group.originating_cmd.scan_id);
     std::strncpy(info.parent_scan_id, parent_enc.c_str(), 3);
     info.parent_scan_id[3] = '\0';
@@ -552,7 +534,7 @@ namespace OpenMS
     // Finalize the proteoform model before the next-level dispatch below
     if (tracker != nullptr && group.msn_level == 2)
     {
-      tracker->finalize(precursor_id);
+      tracker->finalizeMS2(precursor_id);
     }
 
     if (group.baseline_failed || best_idx < 0)
@@ -592,7 +574,9 @@ namespace OpenMS
         ScanCommand prod_cmd;
         if (group.msn_level >= 3)
         {
-          // Pull through ms2 info for ms3 scans @Claude I think that could be by providing the ms2 command to the ms3 builder
+          // Reconstruct the winning variant's stage-1 fragment scores for the production MS3 (buildMS3
+          // keeps its explicit frag_scores param; the other callers pass genuine scores, so do not fold
+          // this into buildMS3 — an ms2-command would carry zero-initialised *_s1 fields).
           const ScanCommand& wcmd = group.variants[best_idx].cmd;
           FragmentAnalysis::FragmentScores wfs;
           wfs.mono_mass = wcmd.mono_mass_s1;                 
@@ -605,21 +589,17 @@ namespace OpenMS
           wfs.ppm_error = wcmd.ppm_error_s1;
           wfs.precursor_intensity = wcmd.precursor_intensity_s1; 
           wfs.peakgroup_intensity = wcmd.peakgroup_intensity_s1;
-          std::string ms3pf = MS3FragmentMatcher::fragmentProForma(
-              config_.characterization().protein_sequence, group.proteoform_ctx,
-              group.fragment_ion_type, group.fragment_ion_index);
           prod_cmd = queue.buildMS3(group.variants[best_idx].cmd, prod_config,
                                      group.precursor_mz, group.precursor_charge,
                                      group.isolation_width, group.variants[best_idx].cmd.scan_id,
                                      group.fragment_ion_type, group.fragment_ion_index, 1, wfs,
-                                     nullptr, ms3pf);
+                                     nullptr, group.proteoform_ctx);
         }
         else
         {
           prod_cmd = queue.buildMS2(group.precursor_pg, group.precursor_charge, prod_config, 2, 0);
         }
 
-        // @Claude this should be inferred from the ctx object
         prod_cmd.faims_cv = group.faims_cv;
         if (best_idx >= 0 && best_idx < static_cast<int>(group.variants.size()))
         {
@@ -669,7 +649,6 @@ namespace OpenMS
     // (only fill empties — never overwrite a builder-set parent, e.g. buildMS3's immediate MS2 parent).
     // Relocated here from the former processScan feedResult push-loops so callers receive fully-parented
     // commands and no longer post-stamp.
-    // @Claude this should be fixed at source (if still happens) and removed
     for (auto& c : info.commands)
     {
       if (c.parent_scan_id[0] == '\0')
@@ -796,7 +775,7 @@ namespace OpenMS
     if (tracker != nullptr && next_level >= 3 && ms_ctx != nullptr && ms_ctx->num_stages > 0 && found > 0)
     {
       // @Claude bail early if the ProteoformModel does not exist.
-      const ProteoformModel* existing = tracker->model(precursor_id);
+      const ProteoformModel* existing = tracker->getModel(precursor_id);
       if (existing == nullptr || existing->proteoform_sequence.empty())
       {
         Ms2Params p;
@@ -805,12 +784,12 @@ namespace OpenMS
         p.reaction_time    = ms_ctx->stages[0].reaction_time;
         tracker->feedScan(precursor_id, /*ms_level=*/2, p, ms_ctx->scan_id, result, frag_result,
                           frag_result.score, *ms_ctx);
-        tracker->finalize(precursor_id);
+        tracker->finalizeMS2(precursor_id);
       }
     }
 
     const ProteoformModel* model = (tracker != nullptr && next_level >= 3 && ms_ctx != nullptr)
-        ? tracker->model(precursor_id) : nullptr;
+        ? tracker->getModel(precursor_id) : nullptr;
     if (model != nullptr && !model->proteoform_sequence.empty())
     {
       auto targets = tracker->planNextScans(precursor_id);
@@ -873,12 +852,10 @@ namespace OpenMS
         else
         {
           // Single MS3: build directly from the target descriptors, applying the model's stage[0].
-          std::string ms3pf = MS3FragmentMatcher::fragmentProForma(
-              config_.characterization().protein_sequence, proto_ctx, ion_type, target.ion_index);
           ScanCommand cmd = queue.buildMS3(*ms_ctx, next_scan_config, target.frag_mz, frag_charge,
                                            target.iso_width, ms_ctx->scan_id,
                                            ion_type, target.ion_index, 1, target.stage1_scores, &target.stage0_params,
-                                           ms3pf);
+                                           proto_ctx);
           cmd.faims_cv = faims_cv;
 
           // Item 2: stamp the MS3 fragment-window SNR onto the command before push (same inputs/formula

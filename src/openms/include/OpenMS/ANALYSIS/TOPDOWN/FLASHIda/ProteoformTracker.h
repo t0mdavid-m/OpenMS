@@ -206,7 +206,7 @@ namespace OpenMS
                   const ScanCommand& ms2_ctx);
 
     /// Mark the model for @p precursor_id as finalized (no further scans expected).
-    void finalize(int precursor_id);
+    void finalizeMS2(int precursor_id);
 
     /// Additively fold one already-staged MS3 scan into the EXISTING finalized model (no winner re-pick,
     /// no fragments reset), re-narrow, and emit one pooled trajectory row tagged with the driving fragment
@@ -226,7 +226,7 @@ namespace OpenMS
     std::vector<Ms3Target> planNextScans(int precursor_id);
 
     /// Return a pointer to the model for @p precursor_id, or nullptr if absent.
-    const ProteoformModel* model(int precursor_id) const;
+    const ProteoformModel* getModel(int precursor_id) const;
 
   private:
     /// Map all observations in @p scan onto @p mdl's fragments map (skeleton: no-op).
@@ -236,7 +236,7 @@ namespace OpenMS
     void narrowModifications_(ProteoformModel& mdl);
 
     /// Emit a log/TSV row for the current state of @p mdl (skeleton: no-op).
-    void emitRow_(const ProteoformModel& m, const std::string& trigger, const std::string& trigger_scan_id);
+    void emitPooledIDRow(const ProteoformModel& m, const std::string& trigger, const std::string& trigger_scan_id);
 
     /// Produce ALIGNED per-fragment lists in stable FragmentKey order (no mass-sort). For each present
     /// observation (best_ms2 then best_ms3 per key), pushes one entry into each output vector in lockstep:

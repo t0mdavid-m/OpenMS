@@ -155,7 +155,7 @@ namespace OpenMS
     };
 
     /// Write IDA log entry for MS1 deconvolution results
-    void writeIDALogEntry(double rt, int scan_number, const std::string& tracking_id,
+    void writeIDALogEntry(double rt, int scan_number,
                           const std::vector<ScanCommand>& ms2_commands,
                           const DeconvolvedSpectrum& all_peak_groups);
 

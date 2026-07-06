@@ -126,44 +126,40 @@ FLASHIda::FLASHIda(char* arg) :
       std::cout << "[TRACK-RESOLVE] id=" << parent_id_str << " status=context_lost_race" << std::endl;
       return 0;
     }
-    // @Claude rename ctx to parent_ctx
-    ScanCommand ctx = resolved.value();
+    ScanCommand parent_ctx = resolved.value();
 
     // Context-support gate, validated once before branching. required_stages = the stage count this
     // level needs in its queued command; ms_level>3 is unsupported (returns 0).
     const int required_stages = (ms_level == 1) ? 0 : (ms_level == 2) ? 1 : (ms_level == 3) ? 2 : -1;
-    if (required_stages < 0 || ctx.msn_level != ms_level || ctx.num_stages < required_stages)
+    if (required_stages < 0 || parent_ctx.msn_level != ms_level || parent_ctx.num_stages < required_stages)
     {
       std::cout << "[TRACK-RESOLVE] id=" << parent_id_str << " status=context_unsupported"
-                << " ms_level=" << ms_level << " ctx_msn=" << ctx.msn_level
-                << " num_stages=" << ctx.num_stages << std::endl;
+                << " ms_level=" << ms_level << " ctx_msn=" << parent_ctx.msn_level
+                << " num_stages=" << parent_ctx.num_stages << std::endl;
       return 0;
     }
 
     // Locals shared by all levels: the follow-up-scan flag and the child-id accumulator.
     const bool is_follow_up_scan =
-        std::strlen(ctx.scan_description) >= 4 &&
-        (ctx.scan_description[3] == 'F' || ctx.scan_description[3] == 'C');
+        std::strlen(parent_ctx.scan_description) >= 4 &&
+        (parent_ctx.scan_description[3] == 'F' || parent_ctx.scan_description[3] == 'C');
     std::vector<std::string> child_ids;
 
     // Carriers for the file-backed TSV rows (scan_results + identification): each branch fills these,
     // and they are written once after the branch dispatch below. The IDA log, the [TRACK-*] stdout
     // lines, and all side effects (queue pushes, atomics, cache erase) stay inline in each branch.
     int return_code = 0;
-    // @Claude should be removed, all scans that are added have a results row
-    bool has_scan_row = false;
-    // @Claude rename scan row to results_row
-    IdaLogger::ScanRowDescriptor scan_row{};
+    IdaLogger::ScanRowDescriptor results_row{};
     std::vector<IdaLogger::IdRowDescriptor> id_rows;
 
     // scan_results fields that are identical in every branch — set once here. Each branch fills its
-    // own branch-specific fields; the rest keep their scan_row{} sentinel defaults.
-    scan_row.tracking_id = parent_id_str;
-    scan_row.ms_level    = ms_level;   // gate guarantees ms_level in {1,2,3}
-    scan_row.rt          = rt_min;
-    scan_row.enqueue_ts  = enqueue_ts;
-    scan_row.dequeue_ts  = dequeue_ts;
-    scan_row.received_ts = received_ts;
+    // own branch-specific fields; the rest keep their results_row{} sentinel defaults.
+    results_row.tracking_id = parent_id_str;
+    results_row.ms_level    = ms_level;   // gate guarantees ms_level in {1,2,3}
+    results_row.rt          = rt_min;
+    results_row.enqueue_ts  = enqueue_ts;
+    results_row.dequeue_ts  = dequeue_ts;
+    results_row.received_ts = received_ts;
 
     if (ms_level == 1)
     {
@@ -179,6 +175,16 @@ FLASHIda::FLASHIda(char* arg) :
       std::vector<ScanCommand> ms2_commands;
       const MSSpectrum& raw_ms1 = selection_.deconvolvedMS1().getOriginalSpectrum();
 
+      // Shared MS2 push: stamp the precursor_id, enqueue, and remember the command for the IDA log.
+      // Equal-priority commands drain FIFO, so this preserves scan_commands row order and child_ids.
+      auto push_ms2_command = [&](ScanCommand& c, int precursor_id)
+      {
+        precursor_id_by_tracking_[c.scan_id] = precursor_id;
+        queue_.push(c);
+        ms2_commands.push_back(c);
+        commands_pushed++;
+      };
+
       if (config_.hasExploration(2))
       {
         // Exploration path: initiate CE sweep variants INSTEAD of regular MS2
@@ -186,21 +192,13 @@ FLASHIda::FLASHIda(char* arg) :
         {
           // One precursor_id per MS1-selected precursor; every CE-sweep variant of this precursor
           // shares it (they are the same MS1 selection -> same charge -> same model).
-          const int pid = allocPrecursorId_();
+          const int precursor_id = allocPrecursorId_();
           ScanCommand ms1_ctx{};
           ms1_ctx.scan_id  = parent_tracking_id;
-          // @Claude should be stored in ctx directly
-          ms1_ctx.faims_cv = ctx.faims_cv;
+          ms1_ctx.faims_cv = parent_ctx.faims_cv;  // CV travels via the resolved MS1 context
           auto cmds = exploration_.initiate(2, selected[i], sel_charges[i], queue_, &raw_ms1, &ms1_ctx);
           for (auto& c : cmds)
-          {
-            precursor_id_by_tracking_[c.scan_id] = pid;
-            // @Claude refactor this inside exploration_.initiate()
-            queue_.push(c);
-            // For logging
-            ms2_commands.push_back(c);
-            commands_pushed++;
-          }
+            push_ms2_command(c, precursor_id);
         }
       }
       else
@@ -209,40 +207,33 @@ FLASHIda::FLASHIda(char* arg) :
         for (int i = 0; i < n; i++)
         {
           // One precursor_id per MS1-selected precursor; all of its MS2 scan-config commands share it.
-          const int pid = allocPrecursorId_();
+          const int precursor_id = allocPrecursorId_();
           for (const auto& sc : config_.level(2).scans)
           {
             ScanConfig ms2_config = sc;
-            ScanCommand cmd = queue_.buildMS2(selected[i], sel_charges[i], ms2_config, 2, tracking_id);
-            // @Claude should be stored in ctx directly
-            cmd.faims_cv = faims_cv;
+            ScanCommand cmd = queue_.buildMS2(selected[i], sel_charges[i], ms2_config, 2, parent_tracking_id);
+            cmd.faims_cv = parent_ctx.faims_cv;  // MS2 carries the resolved MS1's CV
             if (cmd.num_stages > 0)
             {
               const double half = cmd.stages[0].isolation_width / 2.0;
               cmd.window_snr = FragmentAnalysis::windowSnr(raw_ms1, cmd.stages[0].precursor_mz - half,
                                                            cmd.stages[0].precursor_mz + half, cmd.precursor_intensity);
             }
-            precursor_id_by_tracking_[cmd.scan_id] = pid;
-            // @Claude refactor this inside exploration_.initiate()
-            queue_.push(cmd);
-            // For logging
-            ms2_commands.push_back(cmd);
-            commands_pushed++;
+            push_ms2_command(cmd, precursor_id);
           }
         }
       }
 
       // IDA log entry (MS1 only).
-      logger_.writeIDALogEntry(rt_min, parent_tracking_id, parent_id_str, ms2_commands, selection_.deconvolvedMS1());
+      logger_.writeIDALogEntry(rt_min, parent_tracking_id, ms2_commands, selection_.deconvolvedMS1());
 
       for (const auto& c : ms2_commands)
         child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
       int ms1_mass_count = static_cast<int>(selection_.deconvolvedMS1().size());
-      scan_row.mass_count      = ms1_mass_count;
-      scan_row.commands_pushed = commands_pushed;
-      scan_row.child_ids       = child_ids;
-      scan_row.deconv_spectrum = &selection_.deconvolvedMS1();
-      has_scan_row             = true;
+      results_row.mass_count      = ms1_mass_count;
+      results_row.commands_pushed = commands_pushed;
+      results_row.child_ids       = child_ids;
+      results_row.deconv_spectrum = &selection_.deconvolvedMS1();
 
       // FAIMS CV cycling: update skip policy, advance to next CV, push MS1
       if (faims_.isEnabled())
@@ -264,7 +255,6 @@ FLASHIda::FLASHIda(char* arg) :
       }
 
       // Update atomics for lock-free reads by getNextScanCommand
-      // @Claude move inside exploration intitiate
       exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);
       current_faims_cv_.store(faims_.isEnabled() ? faims_.currentCV() : 0.0, std::memory_order_release);
 
@@ -286,7 +276,7 @@ FLASHIda::FLASHIda(char* arg) :
           precursor_id_by_tracking_[c.scan_id] = precursor_id;
           queue_.push(c); 
         }
-        // @Claude this should be called ms2_context cache; also resolve key and value (presumably scan id : ctx) by name so its more legible
+        // @Claude this should be called ms2_context cache; also resolve key and value (presumably scan id : parent_ctx) by name so its more legible
         for (auto& kv : expl_result.ms3_context_cache)
           ms2_context_cache_[kv.first] = kv.second;
 
@@ -295,22 +285,21 @@ FLASHIda::FLASHIda(char* arg) :
         std::string parent_id(expl_result.parent_scan_id);
 
         // Fill scan_results row in canonical order (copy expl_result.* by value — it dies at block end).
-        scan_row.mass_count          = expl_mass_count;
-        scan_row.commands_pushed     = static_cast<int>(expl_result.commands.size());
-        scan_row.child_ids           = expl_result.child_ids;
-        scan_row.deconv_spectrum     = expl_spec;
-        scan_row.parent_tracking_id  = parent_id;
-        scan_row.exploration_group_id = expl_result.group_id;
-        scan_row.exploration_metric  = expl_result.exploration_metric;
-        scan_row.variant_index       = expl_result.variant_index;
-        scan_row.total_variants      = expl_result.total_variants;
-        scan_row.collision_energy    = std::to_string(expl_result.collision_energy);
-        scan_row.exploration_score   = expl_result.score;
-        scan_row.remaining_ratio     = expl_result.remaining_ratio;
-        scan_row.activation_type     = expl_result.activation_type;
-        scan_row.reaction_time       = std::to_string(expl_result.reaction_time);
-        scan_row.winner_tracking_id  = expl_result.winner_tracking_id;  // "" except the group-completing row
-        has_scan_row = true;
+        results_row.mass_count          = expl_mass_count;
+        results_row.commands_pushed     = static_cast<int>(expl_result.commands.size());
+        results_row.child_ids           = expl_result.child_ids;
+        results_row.deconv_spectrum     = expl_spec;
+        results_row.parent_tracking_id  = parent_id;
+        results_row.exploration_group_id = expl_result.group_id;
+        results_row.exploration_metric  = expl_result.exploration_metric;
+        results_row.variant_index       = expl_result.variant_index;
+        results_row.total_variants      = expl_result.total_variants;
+        results_row.collision_energy    = std::to_string(expl_result.collision_energy);
+        results_row.exploration_score   = expl_result.score;
+        results_row.remaining_ratio     = expl_result.remaining_ratio;
+        results_row.activation_type     = expl_result.activation_type;
+        results_row.reaction_time       = std::to_string(expl_result.reaction_time);
+        results_row.winner_tracking_id  = expl_result.winner_tracking_id;  // "" except the group-completing row
 
         // MS2 identification row (copy by value before expl_result goes out of scope).
         if (!expl_result.proteoform_sequence.empty() && !expl_result.identification_result.fragments.empty())
@@ -322,8 +311,8 @@ FLASHIda::FLASHIda(char* arg) :
       else
       {
         // ===== MS2 (regular): deconvolve -> targeting + follow-ups -> MS3 targeting -> row =====
-        double precursor_mass = ctx.mono_mass;
-        int precursor_charge = ctx.stages[0].charge_state;
+        double precursor_mass = parent_ctx.mono_mass;
+        int precursor_charge = parent_ctx.stages[0].charge_state;
         deconv_.deconvolveMSn(mzs, ints, length, rt_min, precursor_mass, precursor_charge);
 
         // Tag-based targeting
@@ -331,7 +320,7 @@ FLASHIda::FLASHIda(char* arg) :
         int tags_count = 0;   // real sequence-tag count (logged as tag_count, and cached for MS3 rows)
         if (selection_.hasTargetProteinDatabase() && precursor_mass > 0)
         {
-          std::string ms2_activation = std::string(ctx.stages[0].activation_type);
+          std::string ms2_activation = std::string(parent_ctx.stages[0].activation_type);
           tags_count = selection_.processMS2ForTagBasedTargeting(precursor_mass, ms2_activation);
           tags_found = tags_count > 0;
         }
@@ -343,7 +332,7 @@ FLASHIda::FLASHIda(char* arg) :
           if (quant_.isDifferentiallyAbundant(mzs, ints, length, rt_min, 2, "ms2_quant",
                                               config_.quantification().reporter_mz_tol, config_.quantification().fold_change_threshold, false))
           {
-            auto followup = queue_.buildFollowUp(ctx, config_.quantification().follow_up_scan, 'F');
+            auto followup = queue_.buildFollowUp(parent_ctx, config_.quantification().follow_up_scan, 'F');
             precursor_id_by_tracking_[followup.scan_id] = precursor_id;  // P5: follow-up inherits the MS2's precursor_id
             queue_.push(followup);
             child_ids.push_back(ScanCommandQueue::encode(followup.scan_id));
@@ -354,7 +343,7 @@ FLASHIda::FLASHIda(char* arg) :
         // Conditional MS2 follow-up -- only when tags detected AND explicitly enabled
         if (config_.targeting().conditional_ms2_enabled && tags_found && !is_follow_up_scan)
         {
-          auto cond = queue_.buildFollowUp(ctx, config_.targeting().tagging_follow_up_scan, 'C');
+          auto cond = queue_.buildFollowUp(parent_ctx, config_.targeting().tagging_follow_up_scan, 'C');
           precursor_id_by_tracking_[cond.scan_id] = precursor_id;  // P5: follow-up inherits the MS2's precursor_id
           queue_.push(cond);
           child_ids.push_back(ScanCommandQueue::encode(cond.scan_id));
@@ -365,9 +354,9 @@ FLASHIda::FLASHIda(char* arg) :
         Exploration::NextLevelResult ms3_targeting;
         if (config_.level(2).selection != SelectionMetric::None)
         {
-          // initiateNextLevel stamps each command's parent with the MS2 id (ctx.scan_id) at creation.
+          // initiateNextLevel stamps each command's parent with the MS2 id (parent_ctx.scan_id) at creation.
           // @Claude this assumes all MS3 scans are part of an exploration but I also want to be able to set without exploration (fixed CE)
-          ms3_targeting = exploration_.initiateNextLevel(2, deconv_.storedMS2(), ctx.faims_cv, queue_, &ctx, &tracker_, precursor_id);
+          ms3_targeting = exploration_.initiateNextLevel(2, deconv_.storedMS2(), parent_ctx.faims_cv, queue_, &parent_ctx, &tracker_, precursor_id);
           for (auto& c : ms3_targeting.commands)
           {
             precursor_id_by_tracking_[c.scan_id] = precursor_id;  // P5: MS3 children inherit the parent MS2's precursor_id
@@ -398,40 +387,39 @@ FLASHIda::FLASHIda(char* arg) :
           ms2_ctx.start_pos = ms3_targeting.proteoform_match.region_start;
           ms2_ctx.end_pos = ms3_targeting.proteoform_match.region_end;
           ms2_ctx.ptm_sites = ms3_targeting.proteoform_match.ptm_sites;
-          ms2_ctx.ms1_precursor_mass = ctx.mono_mass;
-          ms2_ctx.ms1_precursor_mz = ctx.stages[0].precursor_mz;
-          ms2_ctx.ms1_precursor_charge = ctx.stages[0].charge_state;
+          ms2_ctx.ms1_precursor_mass = parent_ctx.mono_mass;
+          ms2_ctx.ms1_precursor_mz = parent_ctx.stages[0].precursor_mz;
+          ms2_ctx.ms1_precursor_charge = parent_ctx.stages[0].charge_state;
           // MS2 isolation-window reporting from the resolved command (window-SNR was recorded at MS1
           // time, keyed by this scan_id). The MS3 triplet stays 0 on MS2 rows.
-          if (ctx.num_stages > 0)
+          if (parent_ctx.num_stages > 0)
           {
-            ms2_ctx.ms2_isolation_width = ctx.stages[0].isolation_width;
-            ms2_ctx.ms2_charge_intensity = ctx.precursor_intensity;
-            ms2_ctx.ms2_window_snr = ctx.window_snr;  // Item 2: SNR travels on the command (was the queue map)
+            ms2_ctx.ms2_isolation_width = parent_ctx.stages[0].isolation_width;
+            ms2_ctx.ms2_charge_intensity = parent_ctx.precursor_intensity;
+            ms2_ctx.ms2_window_snr = parent_ctx.window_snr;  // Item 2: SNR travels on the command (was the queue map)
           }
           id_rows.push_back({parent_id_str, 2, 'R', ms2_ctx, ms3_targeting.proteoform_match, precursor_id, ms3_targeting.tic_coverage});  // copy by value (ms2_ctx is local)
         }
 
         int ms2_mass_count = deconv_.hasStoredMS2() ? static_cast<int>(deconv_.storedMS2().size()) : 0;
         const DeconvolvedSpectrum* ms2_spec = deconv_.hasStoredMS2() ? &deconv_.storedMS2() : nullptr;
-        std::string parent_id(ctx.parent_scan_id);
+        std::string parent_id(parent_ctx.parent_scan_id);
 
         // Log the actual MS2 scan-config CE/activation/reaction (single stage) the engine used.
-        std::string ms2_collision_energy = ctx.num_stages > 0 ? std::to_string(ctx.stages[0].collision_energy) : "0";
-        std::string ms2_activation_type = ctx.num_stages > 0
-            ? std::string(ctx.stages[0].activation_type)
+        std::string ms2_collision_energy = parent_ctx.num_stages > 0 ? std::to_string(parent_ctx.stages[0].collision_energy) : "0";
+        std::string ms2_activation_type = parent_ctx.num_stages > 0
+            ? std::string(parent_ctx.stages[0].activation_type)
             : config_.level(2).scans[0].activation;
-        std::string ms2_reaction_time = ctx.num_stages > 0 ? std::to_string(ctx.stages[0].reaction_time) : "0";
+        std::string ms2_reaction_time = parent_ctx.num_stages > 0 ? std::to_string(parent_ctx.stages[0].reaction_time) : "0";
         // Fill scan_results row; exploration fields stay at their sentinel defaults.
-        scan_row.mass_count         = ms2_mass_count;
-        scan_row.commands_pushed    = commands_pushed;
-        scan_row.child_ids          = child_ids;
-        scan_row.deconv_spectrum    = ms2_spec;
-        scan_row.parent_tracking_id = parent_id;
-        scan_row.collision_energy   = ms2_collision_energy;
-        scan_row.activation_type    = ms2_activation_type;
-        scan_row.reaction_time      = ms2_reaction_time;
-        has_scan_row = true;
+        results_row.mass_count         = ms2_mass_count;
+        results_row.commands_pushed    = commands_pushed;
+        results_row.child_ids          = child_ids;
+        results_row.deconv_spectrum    = ms2_spec;
+        results_row.parent_tracking_id = parent_id;
+        results_row.collision_energy   = ms2_collision_energy;
+        results_row.activation_type    = ms2_activation_type;
+        results_row.reaction_time      = ms2_reaction_time;
 
         std::cout << "[TRACK-RESOLVE] id=" << parent_id_str
                   << " rt=" << rt_min
@@ -447,18 +435,18 @@ FLASHIda::FLASHIda(char* arg) :
     else if (ms_level == 3)
     {
       // Precursor ID for grounding protoeoform model
-      const int pid = precursorIdForTracking_(parent_tracking_id);
+      const int precursor_id = precursorIdForTracking_(parent_tracking_id);
 
       // ===== MS3 (exploration variant): score variant -> push children -> fill row =====
       if (exploration_.isExplorationVariant(parent_tracking_id))
       {
-        auto expl_result = exploration_.feedResult(parent_tracking_id, mzs, ints, length, rt_min, queue_, &tracker_, pid);
+        auto expl_result = exploration_.feedResult(parent_tracking_id, mzs, ints, length, rt_min, queue_, &tracker_, precursor_id);
         for (auto& c : expl_result.commands)
         {
-          precursor_id_by_tracking_[c.scan_id] = pid;
+          precursor_id_by_tracking_[c.scan_id] = precursor_id;
           queue_.push(c); 
         }
-        // @Claude this should be called ms2_context cache; also resolve key and value (presumably scan id : ctx) by name so its more legible
+        // @Claude this should be called ms2_context cache; also resolve key and value (presumably scan id : parent_ctx) by name so its more legible
         for (auto& kv : expl_result.ms3_context_cache)
           ms2_context_cache_[kv.first] = kv.second;
 
@@ -467,44 +455,35 @@ FLASHIda::FLASHIda(char* arg) :
         std::string parent_id(expl_result.parent_scan_id);
 
         // Logging
-        scan_row.mass_count          = expl_mass_count;
-        scan_row.commands_pushed     = static_cast<int>(expl_result.commands.size());
-        scan_row.child_ids           = expl_result.child_ids;
-        scan_row.deconv_spectrum     = expl_spec;
-        scan_row.parent_tracking_id  = parent_id;
-        scan_row.exploration_group_id = expl_result.group_id;
-        scan_row.exploration_metric  = expl_result.exploration_metric;
-        scan_row.variant_index       = expl_result.variant_index;
-        scan_row.total_variants      = expl_result.total_variants;
-        // @Claude unify these. I think the else should never be neccessary as we are on a ms3 branch
-        if (ms_level == 3 && !expl_result.stage0_activation_type.empty())
-        {
-          scan_row.collision_energy = std::to_string(expl_result.stage0_collision_energy) + ";" + std::to_string(expl_result.collision_energy);
-          scan_row.activation_type  = expl_result.stage0_activation_type + ";" + expl_result.activation_type;
-          scan_row.reaction_time    = std::to_string(expl_result.stage0_reaction_time) + ";" + std::to_string(expl_result.reaction_time);
-        }
-        else
-        {
-          scan_row.collision_energy = std::to_string(expl_result.collision_energy);
-          scan_row.activation_type  = expl_result.activation_type;
-          scan_row.reaction_time    = std::to_string(expl_result.reaction_time);
-        }
-        scan_row.exploration_score   = expl_result.score;
-        scan_row.remaining_ratio     = expl_result.remaining_ratio;
-        scan_row.winner_tracking_id  = expl_result.winner_tracking_id;
-        // @claude I believe all scans have a row in the results.tsv
-        has_scan_row = true;
+        results_row.mass_count          = expl_mass_count;
+        results_row.commands_pushed     = static_cast<int>(expl_result.commands.size());
+        results_row.child_ids           = expl_result.child_ids;
+        results_row.deconv_spectrum     = expl_spec;
+        results_row.parent_tracking_id  = parent_id;
+        results_row.exploration_group_id = expl_result.group_id;
+        results_row.exploration_metric  = expl_result.exploration_metric;
+        results_row.variant_index       = expl_result.variant_index;
+        results_row.total_variants      = expl_result.total_variants;
+        // MS3-exploration rows always log the 2-stage "ms2;ms3" CE/activation/reaction (stage[0] MS2
+        // isolation ; stage[1] MS3 fragmentation). stage0_* is always populated on the MS3 branch
+        // (buildMS3 emits 2 stages with the real MS2 params), so the single-stage form is unreachable.
+        results_row.collision_energy = std::to_string(expl_result.stage0_collision_energy) + ";" + std::to_string(expl_result.collision_energy);
+        results_row.activation_type  = expl_result.stage0_activation_type + ";" + expl_result.activation_type;
+        results_row.reaction_time    = std::to_string(expl_result.stage0_reaction_time) + ";" + std::to_string(expl_result.reaction_time);
+        results_row.exploration_score   = expl_result.score;
+        results_row.remaining_ratio     = expl_result.remaining_ratio;
+        results_row.winner_tracking_id  = expl_result.winner_tracking_id;
 
         // Identification rows 
         if (!expl_result.identification_result.fragments.empty())
-          id_rows.push_back({parent_id_str, 3, 'E', expl_result.ms2_context, expl_result.identification_result, pid, expl_result.tic_coverage});
+          id_rows.push_back({parent_id_str, 3, 'E', expl_result.ms2_context, expl_result.identification_result, precursor_id, expl_result.tic_coverage});
         for (const auto& row : expl_result.additional_identification_rows)
         {
           // Winner-batch rows inherit the group-completing scan's tic_coverage (no per-variant tic is
           // propagated through additional_identification_rows; a faithful per-variant value is out of scope).
           // @Claude this should be per scan.
           if (!row.identification_result.fragments.empty())
-            id_rows.push_back({row.tracking_id, 3, 'E', row.ms2_context, row.identification_result, pid, expl_result.tic_coverage});
+            id_rows.push_back({row.tracking_id, 3, 'E', row.ms2_context, row.identification_result, precursor_id, expl_result.tic_coverage});
         }
 
         exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);
@@ -512,19 +491,14 @@ FLASHIda::FLASHIda(char* arg) :
       }
       else
       {
-        // ===== MS3 (regular): reuse ctx -> deconvolve -> fragment-match -> row =====
-        // Reuse the resolved ctx from the top (gate guarantees num_stages >= 2).
+        // ===== MS3 (regular): reuse parent_ctx -> deconvolve -> fragment-match -> row =====
+        // Reuse the resolved parent_ctx from the top (gate guarantees num_stages >= 2).
         // Do NOT re-resolve here — the pending entry is already gone.
-        double precursor_mass = 0.0;
-        int precursor_charge = 0;
-        //  @Claude this is checked earlier. Simply use resolved or ctx
-        if (resolved.has_value() && resolved->num_stages >= 2)
-        {
-          precursor_charge = resolved->stages[1].charge_state;
-          // Pair the fragment charge with the fragment mass (mono_mass_s1), not the MS2-precursor mass.
-          // A consistent (mass,charge) precursor caps MS3 sub-fragment charges to the parent (fragZ <= parentZ).
-          precursor_mass = resolved->mono_mass_s1;
-        }
+        // The context-support gate (top of processScan) guarantees parent_ctx.num_stages >= 2 here.
+        const int precursor_charge = parent_ctx.stages[1].charge_state;
+        // Pair the fragment charge with the fragment mass (mono_mass_s1), not the MS2-precursor mass.
+        // A consistent (mass,charge) precursor caps MS3 sub-fragment charges to the parent (fragZ <= parentZ).
+        const double precursor_mass = parent_ctx.mono_mass_s1;
 
         int ms3_mass_count = 0;
         if (mzs != nullptr && ints != nullptr && length > 0)
@@ -572,20 +546,20 @@ FLASHIda::FLASHIda(char* arg) :
                 float r = static_cast<float>(ms3_matches[0].total_match_count) / static_cast<float>(ms3_mass_count);
                 ms3_tic = r > 1.0f ? 1.0f : r;
               }
-              id_rows.push_back({parent_id_str, 3, 'R', cached_ms2_ctx, ms3_matches[0], pid, ms3_tic});
+              id_rows.push_back({parent_id_str, 3, 'R', cached_ms2_ctx, ms3_matches[0], precursor_id, ms3_tic});
               // @Claude resolve has values (as mentioned previously)
               if (resolved.has_value() && resolved->num_stages >= 2 && ms3_spec != nullptr)
               {
                 Ms2Params parent_ms2_params{resolved->stages[0].collision_energy,
                                             std::string(resolved->stages[0].activation_type),
                                             resolved->stages[0].reaction_time};
-                tracker_.feedScan(pid, 3, parent_ms2_params,parent_tracking_id, *ms3_spec,
+                tracker_.feedScan(precursor_id, 3, parent_ms2_params,parent_tracking_id, *ms3_spec,
                                   ms3_matches[0], ms3_matches[0].score, *resolved);
                 if (cached_ms2_ctx.fragment_ion_type != '\0')
                 {
                   const std::string trig = std::string(1, cached_ms2_ctx.fragment_ion_type)
                                          + std::to_string(cached_ms2_ctx.fragment_ion_index);
-                  tracker_.foldMs3(pid, trig, parent_id_str);
+                  tracker_.foldMs3(precursor_id, trig, parent_id_str);
                 }
               }
             }
@@ -609,13 +583,12 @@ FLASHIda::FLASHIda(char* arg) :
         // Fill scan_results row (pure acquisition event): identification payload moved off scan_results —
         // the MS3 fragment proteoform is on scan_commands.ms3_proteoform; matched_protein/tic on identification.
         // commands_pushed keeps its 0 default; child_ids empty; exploration fields at defaults.
-        scan_row.mass_count         = ms3_mass_count;
-        scan_row.deconv_spectrum    = ms3_spec;
-        scan_row.parent_tracking_id = parent_id;
-        scan_row.collision_energy   = ms3_collision_energy;
-        scan_row.activation_type    = ms3_activation_type;
-        scan_row.reaction_time      = ms3_reaction_time;
-        has_scan_row = true;
+        results_row.mass_count         = ms3_mass_count;
+        results_row.deconv_spectrum    = ms3_spec;
+        results_row.parent_tracking_id = parent_id;
+        results_row.collision_energy   = ms3_collision_energy;
+        results_row.activation_type    = ms3_activation_type;
+        results_row.reaction_time      = ms3_reaction_time;
 
         return_code = 0;
       }
@@ -625,8 +598,9 @@ FLASHIda::FLASHIda(char* arg) :
     // (IDA log + [TRACK-*] stdout stay inline in their branches.) Per-file row order is observable;
     // cross-file scan<->id order is NOT (separate TSVs, per-file golden compare in LogGoldenComparer).
     // Do not add a cross-file interleaving assertion without revisiting this.
-    if (has_scan_row)
-      logger_.writeScanResultRow(scan_row);
+    // Every scan that reaches here was dispatched into a branch that filled results_row; the only
+    // level that leaves without a row (MS1 selection==None) returned above, so write unconditionally.
+    logger_.writeScanResultRow(results_row);
     for (const auto& r : id_rows)
       logger_.writeIdentificationRow(r);
     return return_code;

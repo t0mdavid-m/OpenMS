@@ -8,7 +8,7 @@
 //
 // Trajectory pin: pooled_identification.tsv is a per-precursor TRAJECTORY, not a single snapshot.
 //
-//   ProteoformTracker::finalize(pid)               -> emits ONE MS2 baseline row (trigger = "MS2").
+//   ProteoformTracker::finalizeMS2(pid)               -> emits ONE MS2 baseline row (trigger = "MS2").
 //   ProteoformTracker::foldMs3(pid, ion, scan_id)  -> ADDITIVELY folds the staged MS3 scan into the
 //                                                     EXISTING finalized model (no winner re-pick, no
 //                                                     fragments reset), bumps update_index, and emits
@@ -213,10 +213,10 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
     tracker.feedScan(precursor_id, 2, p, 102, d102, makeMatch("y", 6, 800.0), 1.0, ms2_ctx);
   }
 
-  tracker.finalize(precursor_id);
+  tracker.finalizeMS2(precursor_id);
 
   // (A) after finalize: winner identified, two MS2 fragments mapped, update_index == 1.
-  const ProteoformModel* mdl = tracker.model(precursor_id);
+  const ProteoformModel* mdl = tracker.getModel(precursor_id);
   TEST_TRUE(mdl != nullptr)
   ABORT_IF(mdl == nullptr)
   TEST_EQUAL(mdl->proteoform_sequence, std::string(WINNER_SEQ))
@@ -241,7 +241,7 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
   }
 
   // (A) after fold #1: fragment ADDED (NOT reset), update_index bumped.
-  mdl = tracker.model(precursor_id);
+  mdl = tracker.getModel(precursor_id);
   TEST_TRUE(mdl != nullptr)
   ABORT_IF(mdl == nullptr)
   TEST_EQUAL(mdl->update_index, 2)
@@ -260,7 +260,7 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
   }
 
   // (A) after fold #2: another fragment ADDED, update_index bumped.
-  mdl = tracker.model(precursor_id);
+  mdl = tracker.getModel(precursor_id);
   TEST_TRUE(mdl != nullptr)
   ABORT_IF(mdl == nullptr)
   TEST_EQUAL(mdl->update_index, 3)

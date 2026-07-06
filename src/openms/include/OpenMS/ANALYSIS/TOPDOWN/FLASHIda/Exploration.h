@@ -290,9 +290,9 @@ namespace OpenMS
     /// Shared implementation: process a deconvolved spectrum for a tracked variant.
     /// @p tracker may be nullptr (test-only bypass via ExplorationTestAccess); production always passes a
     /// real tracker.
-    FeedResultInfo feedResultImpl_(int tracking_id, const DeconvolvedSpectrum& ms2_deconv,
+    FeedResultInfo feedResultImpl_(int tracking_id, const DeconvolvedSpectrum& msn_deconv,
                                    const double* mzs, const double* ints, int length,
-                                   double rt, ScanCommandQueue& queue, ProteoformTracker* tracker = nullptr,
+                                   ScanCommandQueue& queue, ProteoformTracker* tracker = nullptr,
                                    int precursor_id = 0);
 
     /// Parameters for one variant in a multi-activation sweep

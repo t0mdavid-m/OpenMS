@@ -297,14 +297,17 @@ namespace OpenMS
                                           char ion_type, int frag_index, int priority,
                                           const FragmentAnalysis::FragmentScores& frag_scores,
                                           const Ms2Params* stage0_params,
-                                          const std::string& ms3_proteoform)
+                                          const MS3FragmentMatcher::ProteoformContext& proto_ctx)
   {
     std::lock_guard<std::mutex> lock(queue_mutex_);
     ScanCommand cmd{};
     int id = nextTrackingIdInt_();
     cmd.scan_id = id;
-    // Stash the caller-rendered wide MS3 fragment ProForma for the scan_commands.tsv ms3_proteoform column
-    // (drained by takeMS3Proteoform). Inline write — queue_mutex_ is already held and is non-recursive.
+    // Render the wide MS3 fragment ProForma here (moved off the callers) and stash it for the
+    // scan_commands.tsv ms3_proteoform column (drained by takeMS3Proteoform). Inline write —
+    // queue_mutex_ is already held and is non-recursive.
+    const std::string ms3_proteoform = MS3FragmentMatcher::fragmentProForma(
+        config_.characterization().protein_sequence, proto_ctx, ion_type, frag_index);
     if (!ms3_proteoform.empty()) ms3_cmd_proteoform_[id] = ms3_proteoform;
     cmd.msn_level = 3;
     cmd.priority = priority;

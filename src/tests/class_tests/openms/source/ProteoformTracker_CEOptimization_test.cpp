@@ -219,10 +219,10 @@ START_SECTION(per_fragment_best_ms2_ce_propagates_to_ms3_stage0)
     tracker.feedScan(precursor_id, 2, p2, 102, d2, match2, 1.0, ms2_ctx);
   }
 
-  tracker.finalize(precursor_id);
+  tracker.finalizeMS2(precursor_id);
 
   // The winner model identified the proteoform and mapped both fragments.
-  const ProteoformModel* mdl = tracker.model(precursor_id);
+  const ProteoformModel* mdl = tracker.getModel(precursor_id);
   TEST_TRUE(mdl != nullptr)
   ABORT_IF(mdl == nullptr)
   TEST_EQUAL(mdl->proteoform_sequence, std::string(WINNER_SEQ))

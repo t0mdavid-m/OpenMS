@@ -151,12 +151,13 @@ namespace OpenMS
   }
 
   void IdaLogger::writeIDALogEntry(double rt, int scan_number,
-                                    // @Claude this can be inferred from scan number; doesnt need to be in signature
-                                    const std::string& tracking_id,
                                     const std::vector<ScanCommand>& ms2_commands,
                                     const DeconvolvedSpectrum& all_peak_groups)
   {
     if (!ida_log_stream_.is_open()) return;
+
+    // The access-id token is the base-94 encoding of scan_number (round-trips the decoded id).
+    const std::string tracking_id = ScanCommandQueue::encode(scan_number);
 
     // MS1 header line. scan_number = the decoded tracking_id (a distinct, increasing per-command
     // base-94 counter) so multi-scan logs no longer collapse to map key 0 (B1). NOTE: it is NOT the

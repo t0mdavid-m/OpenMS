@@ -49,7 +49,8 @@ namespace OpenMS
                                                   const DeconvolvedSpectrum& ms2_deconv,
                                                   double rt, ScanCommandQueue& queue)
     {
-      return e.feedResultImpl_(tracking_id, ms2_deconv, nullptr, nullptr, 0, rt, queue);
+      (void)rt;  // feedResultImpl_ no longer takes rt (this bypass path never used it)
+      return e.feedResultImpl_(tracking_id, ms2_deconv, nullptr, nullptr, 0, queue);
     }
 
     /// Get exploration group by ID (caller must ensure group exists).

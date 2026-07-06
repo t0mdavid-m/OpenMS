@@ -169,8 +169,6 @@ namespace OpenMS
   {
   }
   
-  // @Claude this is specialized for MS2 so it should be renamed to feedMS2Scan
-  // Once MS2 scans are finalized this should bail early with a log to cout
   void ProteoformTracker::feedScan(int precursor_id, uint8_t ms_level, const Ms2Params& params, int scan_id,
                                    const DeconvolvedSpectrum& deconv,
                                    const FragmentAnalysis::ProteoformMatch& match, double id_score,
@@ -210,8 +208,7 @@ namespace OpenMS
     m.pending.push_back(std::move(ps));
   }
 
-  // @Claude this should be renamed to finalize MS2
-  void ProteoformTracker::finalize(int precursor_id)
+  void ProteoformTracker::finalizeMS2(int precursor_id)
   {
     auto it = models_.find(precursor_id);
     if (it == models_.end()) return;
@@ -259,8 +256,7 @@ namespace OpenMS
     // 5) Narrow modifications
     narrowModifications_(m);
     ++m.update_index;
-    // @Claude this method should be renamed to emitPooledIDRow or something that makes it easy to know where the log flows
-    emitRow_(m, "MS2", ScanCommandQueue::encode(m.winner_scan_id));
+    emitPooledIDRow(m, "MS2", ScanCommandQueue::encode(m.winner_scan_id));
 
     // 6) Done.
     m.pending.clear();
@@ -280,7 +276,7 @@ namespace OpenMS
     for (const PendingScan& ps : m.pending) mapScanOntoModel_(m, ps);
     narrowModifications_(m);
     ++m.update_index;
-    emitRow_(m, trigger_ion, trigger_scan_id);
+    emitPooledIDRow(m, trigger_ion, trigger_scan_id);
     m.pending.clear();
   }
 
@@ -472,8 +468,7 @@ namespace OpenMS
     return out;
   }
 
-  // @Claude rename in getModel
-  const ProteoformModel* ProteoformTracker::model(int precursor_id) const
+  const ProteoformModel* ProteoformTracker::getModel(int precursor_id) const
   {
     auto it = models_.find(precursor_id);
     if (it == models_.end())
@@ -839,7 +834,7 @@ namespace OpenMS
     }
   }
 
-  void ProteoformTracker::emitRow_(const ProteoformModel& m, const std::string& trigger, const std::string& trigger_scan_id)
+  void ProteoformTracker::emitPooledIDRow(const ProteoformModel& m, const std::string& trigger, const std::string& trigger_scan_id)
   {
     // Guard: no identified model -> nothing to emit.
     if (m.proteoform_sequence.empty()) return;

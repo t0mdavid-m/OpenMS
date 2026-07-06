@@ -9,7 +9,7 @@
 // Localization pin: an ambiguous PTM that a NON-bracketing MS2 fragment cannot localize IS narrowed
 // by a bracketing MS3 fragment carrying the propagated localization verdict FragmentMatch::includes_ptm.
 //
-//   ProteoformTracker::finalize(pid)   seeds modifications from the winner match's ptm_sites, then
+//   ProteoformTracker::finalizeMS2(pid)   seeds modifications from the winner match's ptm_sites, then
 //                                      runs narrowModifications_ (Pass A: MS2 mass-test).
 //   ProteoformTracker::foldMs3(pid,..) additively maps the staged MS3 scan, then re-runs
 //                                      narrowModifications_ (Pass B: MS3 includes_ptm verdict).
@@ -144,7 +144,7 @@ namespace
   }
 
   // Config JSON with the winner sequence as the characterization protein_sequence. No pooled log path
-  // (this test reads the model directly via tracker.model(pid), not the pooled file).
+  // (this test reads the model directly via tracker.getModel(pid), not the pooled file).
   std::string makeConfigJson()
   {
     return std::string(R"({
@@ -197,10 +197,10 @@ START_SECTION(ms3_prefix_verdict_localizes_upper)
   d101.push_back(makeSyntheticPeakGroup(700.0 / 2.0 + 1.0, 700.0, 2));
   tracker.feedScan(precursor_id, 2, p, 101, d101, makeMatchMs2WithMod("b", 8, 700.0, 15, 26, 42.0), 1.0, ms2_ctx);
 
-  tracker.finalize(precursor_id);
+  tracker.finalizeMS2(precursor_id);
 
   // After finalize: winner identified, ONE mod, still ambiguous [15,26] (MS2 seed did not bracket it).
-  const ProteoformModel* mdl = tracker.model(precursor_id);
+  const ProteoformModel* mdl = tracker.getModel(precursor_id);
   TEST_TRUE(mdl != nullptr)
   ABORT_IF(mdl == nullptr)
   TEST_EQUAL(mdl->proteoform_sequence, std::string(WINNER_SEQ))
@@ -223,7 +223,7 @@ START_SECTION(ms3_prefix_verdict_localizes_upper)
 
   // After fold: the prefix verdict narrowed the UPPER boundary 26 -> 20. RED before the fix (the MS3
   // verdict was dropped / re-derived from the folded mass, so the range stayed [15,26]); GREEN after.
-  mdl = tracker.model(precursor_id);
+  mdl = tracker.getModel(precursor_id);
   TEST_TRUE(mdl != nullptr)
   ABORT_IF(mdl == nullptr)
   TEST_EQUAL((int)mdl->modifications.size(), 1)
@@ -263,9 +263,9 @@ START_SECTION(ms3_suffix_verdict_localizes_lower)
   d101.push_back(makeSyntheticPeakGroup(700.0 / 2.0 + 1.0, 700.0, 2));
   tracker.feedScan(precursor_id, 2, p, 101, d101, makeMatchMs2WithMod("b", 8, 700.0, 15, 26, 42.0), 1.0, ms2_ctx);
 
-  tracker.finalize(precursor_id);
+  tracker.finalizeMS2(precursor_id);
 
-  const ProteoformModel* mdl = tracker.model(precursor_id);
+  const ProteoformModel* mdl = tracker.getModel(precursor_id);
   TEST_TRUE(mdl != nullptr)
   ABORT_IF(mdl == nullptr)
   TEST_EQUAL((int)mdl->modifications.size(), 1)
@@ -288,7 +288,7 @@ START_SECTION(ms3_suffix_verdict_localizes_lower)
   tracker.foldMs3(precursor_id, "y13", "AAC");
 
   // After fold: the suffix verdict narrowed the LOWER boundary 15 -> 20. [15,26] -> [20,26].
-  mdl = tracker.model(precursor_id);
+  mdl = tracker.getModel(precursor_id);
   TEST_TRUE(mdl != nullptr)
   ABORT_IF(mdl == nullptr)
   TEST_EQUAL((int)mdl->modifications.size(), 1)

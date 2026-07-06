@@ -36,6 +36,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms2Params.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
@@ -87,7 +88,7 @@ namespace OpenMS
                          char ion_type = '\0', int frag_index = 0, int priority = 1,
                          const FragmentAnalysis::FragmentScores& frag_scores = {},
                          const Ms2Params* stage0_params = nullptr,
-                         const std::string& ms3_proteoform = "");
+                         const MS3FragmentMatcher::ProteoformContext& proto_ctx = {});
 
     /// Create an MS1 survey scan command from current config
     ScanCommand makeMS1() const;
