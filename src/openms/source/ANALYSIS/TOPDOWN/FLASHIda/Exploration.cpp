@@ -129,16 +129,19 @@ namespace OpenMS
     auto variant_params = buildVariants_(cfg, base_config);
     if (variant_params.empty()) return commands;
 
-    // Prepend baseline variant for RemainingPrecursor metric
-    const bool needs_baseline = (cfg.exploration == ExplorationMetric::RemainingPrecursor);
-    if (needs_baseline)
-      variant_params.insert(variant_params.begin(), {base_config.activation, 0.0, 0.0});
+    // Prepend a CE-0 baseline (variant_index -1) to EVERY exploration metric. It is skipped in winner
+    // selection (is_baseline) and excluded from the ProteoformTracker feed, so it never wins or pools;
+    // it fires one extra pre-scan per group and measures the un-fragmented reference. needs_baseline is
+    // kept (always true now) because the per-variant index/is_baseline logic below reads it.
+    const bool needs_baseline = true;
+    variant_params.insert(variant_params.begin(), {base_config.activation, 0.0, 0.0});
 
-    // Compute precursor_mz and isolation_width from PeakGroup
-    // @Claude minimum isolation width of two only applies for ms3 and up,not ms2
+    // Compute precursor_mz and isolation_width from PeakGroup. The 2.0 Th minimum applies to MS3+
+    // fragment isolation only (buildMS3 stage[1] also re-floors); an MS2 group scores over its
+    // natural precursor window, matching the actual (unfloored) commanded MS2 isolation.
     auto [mz1, mz2] = pg.getMzRange(charge);
     double precursor_mz = (mz1 + mz2) / 2.0;
-    double isolation_width = std::max(mz2 - mz1, 2.0);
+    double isolation_width = (msn_level >= 3) ? std::max(mz2 - mz1, 2.0) : (mz2 - mz1);
     double precursor_mass = pg.getMonoMass();
 
     ExplorationGroup group;
@@ -374,8 +377,10 @@ namespace OpenMS
     info.proteoform_sequence = frag.proteoform_sequence;
     info.identification_result = frag;
 
-    // @Claude Bail early if nullptr; Also what about MS3. This should also update the representation
-    if (tracker != nullptr && group.msn_level == 2)
+    // Stage this MS2 variant into the ProteoformTracker for pooling (MS3 evidence folds via foldMs3,
+    // not here). The CE-0 baseline is excluded: it carries no fragmentation evidence and must never
+    // pollute the pooled model.
+    if (tracker != nullptr && group.msn_level == 2 && !v.is_baseline)
     {
       tracker->feedScan(precursor_id,
                         2,
@@ -511,6 +516,7 @@ namespace OpenMS
         row.tracking_id = gv.tracking_id;
         row.identification_result = gv.identification_result;
         row.ms2_context = buildMS2ContextForVariant(static_cast<int>(vi));
+        row.tic_coverage = gv.tic_coverage;   // this variant's OWN tic (per-scan)
         info.additional_identification_rows.push_back(row);
       }
     }

@@ -481,11 +481,10 @@ FLASHIda::FLASHIda(char* arg) :
           id_rows.push_back({parent_id_str, 3, 'E', expl_result.ms2_context, expl_result.identification_result, precursor_id, expl_result.tic_coverage});
         for (const auto& row : expl_result.additional_identification_rows)
         {
-          // Winner-batch rows inherit the group-completing scan's tic_coverage (no per-variant tic is
-          // propagated through additional_identification_rows; a faithful per-variant value is out of scope).
-          // @Claude this should be per scan.
+          // Winner-batch rows carry each variant's OWN tic (row.tic_coverage), not the group-completing
+          // scan's, so every MS3-'E' identification row reports the tic of the scan it describes.
           if (!row.identification_result.fragments.empty())
-            id_rows.push_back({row.tracking_id, 3, 'E', row.ms2_context, row.identification_result, precursor_id, expl_result.tic_coverage});
+            id_rows.push_back({row.tracking_id, 3, 'E', row.ms2_context, row.identification_result, precursor_id, row.tic_coverage});
         }
 
         exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);

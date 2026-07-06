@@ -162,6 +162,7 @@ namespace OpenMS
         std::string tracking_id;
         FragmentAnalysis::ProteoformMatch identification_result;
         MS2Context ms2_context;
+        float tic_coverage = 0.0f;   ///< this variant's OWN tic (per-scan), not the group-completing scan's
       };
 
       std::vector<ScanCommand> commands;
