@@ -17,6 +17,9 @@ namespace OpenMS
   inline const int multi_ion_score = 1;
   inline const bool debug = false;
   inline const double i2f_mass = Residue::getInternalToFull().getMonoWeight();
+  // Base penalty for a terminal truncation, equivalent to the base blind-modification (mass-shift)
+  // penalty applied in findSubPathsBetweenTagEndPoints. Equals 19.
+  inline const int truncation_penalty = 1 + 2 * (multi_ion_score + FLASHTaggerAlgorithm::max_node_score);
   FLASHExtenderAlgorithm::FLASHExtenderAlgorithm(): DefaultParamHandler("FLASHExtenderAlgorithm"), ProgressLogger()
   {
     setDefaultParams_();
@@ -828,6 +831,8 @@ namespace OpenMS
           }
           if (debug) { std::cout << std::endl; }
           int mode_score = getScore_(best_path[0]);
+          if (m == 2 && hi.protein_end_position_ >= 0 && hi.protein_end_position_ < (int)hit.getSequence().size())
+            mode_score -= truncation_penalty; // penalize C-terminal truncation in the both-termini path
           if (m == 1 && hi.protein_start_position_ >= 0 && hi.protein_end_position_ >= 0 && hi.protein_start_position_ >= hi.protein_end_position_)
           {
             if (total_score > mode_score) // mode 0 wins
@@ -1310,7 +1315,7 @@ namespace OpenMS
           continue;
         }
 
-        Size vertex2 = getVertex_(0, pro_i, 0, 0, 0, pro_mass_size); //
+        Size vertex2 = getVertex_(0, pro_i, -truncation_penalty, 0, 0, pro_mass_size); // penalize terminal truncation
         bool connected = hi.dag_.addEdge(vertex2, start_vertex, hi.visited_);
 
         if (vertex2 >= hi.dag_.size() || ! connected) continue;
