@@ -37,6 +37,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms2Params.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
@@ -227,6 +228,41 @@ namespace OpenMS
 
     /// Return a pointer to the model for @p precursor_id, or nullptr if absent.
     const ProteoformModel* getModel(int precursor_id) const;
+
+    // --- Identification entry points (#46) ---------------------------------------------------------------
+    // The tracker is the single place identification calls are made. These are thin STATIC forwarders (they
+    // take the caller's FragmentAnalysis& because they also run in const helpers and with a null tracker);
+    // they change nothing about the matching itself, so results are byte-identical to the direct calls.
+
+    /// MS2 exploration scoring: forward to FragmentAnalysis::getTopFragmentMatches (see computeFragmentMatch_).
+    static int identifyExplorationFragments(FragmentAnalysis& frag, const String& protein_sequence, int n,
+                                            double* masses, double* qscores, int* charges,
+                                            double* window_starts, double* window_ends,
+                                            char* ion_types, int* fragment_indices,
+                                            DeconvolvedSpectrum& stored_ms2,
+                                            FragmentAnalysis::ProteoformMatch& result,
+                                            const String& fragmentation_method,
+                                            double tolerance_ppm,
+                                            FragmentAnalysis::FragmentScores* frag_scores = nullptr);
+
+    /// Next-level target selection: the metric->matcher switch, moved verbatim from initiateNextLevel.
+    static int selectNextLevelTargets(FragmentAnalysis& frag, SelectionMetric selection,
+                                      const String& protein_sequence, int n,
+                                      double* masses, double* qscores, int* charges,
+                                      double* window_starts, double* window_ends,
+                                      char* ion_types, int* fragment_indices,
+                                      DeconvolvedSpectrum& stored_ms2,
+                                      FragmentAnalysis::ProteoformMatch& result,
+                                      const String& fragmentation_method,
+                                      double tolerance_ppm,
+                                      FragmentAnalysis::FragmentScores* frag_scores);
+
+    /// MS3 calibrated batch/single scoring: forward to MS3FragmentMatcher::calibrateAndScore.
+    static std::vector<double> scoreCalibratedVariants(
+        const std::vector<const DeconvolvedSpectrum*>& variant_spectra, const std::string& protein_sequence,
+        const MS3FragmentMatcher::ProteoformContext& ctx, char fragment_ion_type, int fragment_ion_index,
+        double loose_tolerance_ppm, double tight_tolerance_ppm,
+        std::vector<FragmentAnalysis::ProteoformMatch>* detailed_results = nullptr);
 
   private:
     /// Map all observations in @p scan onto @p mdl's fragments map (skeleton: no-op).

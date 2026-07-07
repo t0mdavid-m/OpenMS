@@ -292,20 +292,20 @@ FLASHIda::FLASHIda(char* arg) :
         results_row.child_ids           = expl_result.child_ids;
         results_row.deconv_spectrum     = expl_spec;
         results_row.parent_tracking_id  = parent_id;
-        results_row.exploration_group_id = expl_result.group_id;
-        results_row.exploration_metric  = expl_result.exploration_metric;
-        results_row.variant_index       = expl_result.variant_index;
-        results_row.total_variants      = expl_result.total_variants;
-        results_row.collision_energy    = std::to_string(expl_result.collision_energy);
-        results_row.exploration_score   = expl_result.score;
-        results_row.remaining_ratio     = expl_result.remaining_ratio;
-        results_row.activation_type     = expl_result.activation_type;
-        results_row.reaction_time       = std::to_string(expl_result.reaction_time);
-        results_row.winner_tracking_id  = expl_result.winner_tracking_id;  // "" except the group-completing row
+        results_row.exploration_group_id = expl_result.group.group_id;
+        results_row.exploration_metric  = expl_result.metric.exploration_metric;
+        results_row.variant_index       = expl_result.group.variant_index;
+        results_row.total_variants      = expl_result.group.total_variants;
+        results_row.collision_energy    = std::to_string(expl_result.fragmentation.collision_energy);
+        results_row.exploration_score   = expl_result.metric.score;
+        results_row.remaining_ratio     = expl_result.metric.remaining_ratio;
+        results_row.activation_type     = expl_result.fragmentation.activation_type;
+        results_row.reaction_time       = std::to_string(expl_result.fragmentation.reaction_time);
+        results_row.winner_tracking_id  = expl_result.group.winner_tracking_id;  // "" except the group-completing row
 
         // MS2 identification row (copy by value before expl_result goes out of scope).
-        if (!expl_result.proteoform_sequence.empty() && !expl_result.identification_result.fragments.empty())
-          id_rows.push_back({parent_id_str, 2, 'E', expl_result.ms2_context, expl_result.identification_result, precursor_id, expl_result.tic_coverage});
+        if (!expl_result.identification.proteoform_sequence.empty() && !expl_result.identification.result.fragments.empty())
+          id_rows.push_back({parent_id_str, 2, 'E', expl_result.identification.ms2_context, expl_result.identification.result, precursor_id, expl_result.metric.tic_coverage});
 
         exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);
         return_code = static_cast<int>(expl_result.commands.size());
@@ -462,24 +462,24 @@ FLASHIda::FLASHIda(char* arg) :
         results_row.child_ids           = expl_result.child_ids;
         results_row.deconv_spectrum     = expl_spec;
         results_row.parent_tracking_id  = parent_id;
-        results_row.exploration_group_id = expl_result.group_id;
-        results_row.exploration_metric  = expl_result.exploration_metric;
-        results_row.variant_index       = expl_result.variant_index;
-        results_row.total_variants      = expl_result.total_variants;
+        results_row.exploration_group_id = expl_result.group.group_id;
+        results_row.exploration_metric  = expl_result.metric.exploration_metric;
+        results_row.variant_index       = expl_result.group.variant_index;
+        results_row.total_variants      = expl_result.group.total_variants;
         // MS3-exploration rows always log the 2-stage "ms2;ms3" CE/activation/reaction (stage[0] MS2
         // isolation ; stage[1] MS3 fragmentation). stage0_* is always populated on the MS3 branch
         // (buildMS3 emits 2 stages with the real MS2 params), so the single-stage form is unreachable.
-        results_row.collision_energy = std::to_string(expl_result.stage0_collision_energy) + ";" + std::to_string(expl_result.collision_energy);
-        results_row.activation_type  = expl_result.stage0_activation_type + ";" + expl_result.activation_type;
-        results_row.reaction_time    = std::to_string(expl_result.stage0_reaction_time) + ";" + std::to_string(expl_result.reaction_time);
-        results_row.exploration_score   = expl_result.score;
-        results_row.remaining_ratio     = expl_result.remaining_ratio;
-        results_row.winner_tracking_id  = expl_result.winner_tracking_id;
+        results_row.collision_energy = std::to_string(expl_result.fragmentation.stage0_collision_energy) + ";" + std::to_string(expl_result.fragmentation.collision_energy);
+        results_row.activation_type  = expl_result.fragmentation.stage0_activation_type + ";" + expl_result.fragmentation.activation_type;
+        results_row.reaction_time    = std::to_string(expl_result.fragmentation.stage0_reaction_time) + ";" + std::to_string(expl_result.fragmentation.reaction_time);
+        results_row.exploration_score   = expl_result.metric.score;
+        results_row.remaining_ratio     = expl_result.metric.remaining_ratio;
+        results_row.winner_tracking_id  = expl_result.group.winner_tracking_id;
 
-        // Identification rows 
-        if (!expl_result.identification_result.fragments.empty())
-          id_rows.push_back({parent_id_str, 3, 'E', expl_result.ms2_context, expl_result.identification_result, precursor_id, expl_result.tic_coverage});
-        for (const auto& row : expl_result.additional_identification_rows)
+        // Identification rows
+        if (!expl_result.identification.result.fragments.empty())
+          id_rows.push_back({parent_id_str, 3, 'E', expl_result.identification.ms2_context, expl_result.identification.result, precursor_id, expl_result.metric.tic_coverage});
+        for (const auto& row : expl_result.identification.additional_rows)
         {
           // Winner-batch rows carry each variant's OWN tic (row.tic_coverage), not the group-completing
           // scan's, so every MS3-'E' identification row reports the tic of the scan it describes.
@@ -521,7 +521,8 @@ FLASHIda::FLASHIda(char* arg) :
           if (cache_it != ms2_context_cache_.end() && ms3_spec != nullptr && !ms3_spec->empty())
           {
             const auto& cached_ms2_ctx = cache_it->second;
-            // @Claude this should be integrated in the ProteoformTracker
+            // #46: the identification CALL now goes through ProteoformTracker::scoreCalibratedVariants
+            // (byte-identical forward to calibrateAndScore). Building proto_ctx here is deferred to Phase 3.
             MS3FragmentMatcher::ProteoformContext proto_ctx;
             proto_ctx.region_start = cached_ms2_ctx.start_pos;
             proto_ctx.region_end = cached_ms2_ctx.end_pos;
@@ -529,7 +530,7 @@ FLASHIda::FLASHIda(char* arg) :
 
             std::vector<const DeconvolvedSpectrum*> spectra = {ms3_spec};
             std::vector<FragmentAnalysis::ProteoformMatch> ms3_matches;
-            MS3FragmentMatcher::calibrateAndScore(
+            ProteoformTracker::scoreCalibratedVariants(
               spectra,
               config_.characterization().protein_sequence,
               proto_ctx,

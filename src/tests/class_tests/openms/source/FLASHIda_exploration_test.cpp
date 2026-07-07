@@ -1055,12 +1055,12 @@ START_SECTION(ms3_exploration_winner_selection_and_cleanup)
   TEST_EQUAL(exploration.activeGroupCount(), 0)
   // F5: last_info is the COMPLETING variant (variant_index 4, 3 peak groups) reporting its OWN metrics,
   // not the winner's (variant_index 3, score 8.0) — the winner-overwrite was removed.
-  TEST_REAL_SIMILAR(last_info.score, 3.0)            // completing variant's own score (was 8.0)
-  TEST_EQUAL(last_info.variant_index, 4)             // its own index, not the winner's 3
+  TEST_REAL_SIMILAR(last_info.metric.score, 3.0)            // completing variant's own score (was 8.0)
+  TEST_EQUAL(last_info.group.variant_index, 4)             // its own index, not the winner's 3
   // The winner stays identifiable via winner_tracking_id == variant_index 3's encoded command id (cmds[4]).
   // (getGroup throws here — the group was erased on completion — so read it from last_info.)
-  TEST_EQUAL(last_info.winner_tracking_id.empty(), false)
-  TEST_EQUAL(last_info.winner_tracking_id, std::string(cmds[4].scan_description).substr(0, 3))
+  TEST_EQUAL(last_info.group.winner_tracking_id.empty(), false)
+  TEST_EQUAL(last_info.group.winner_tracking_id, std::string(cmds[4].scan_description).substr(0, 3))
 
   // With synthetic data there is no identified model, so the model gate in
   // feedResultImpl_() does not fire and initiateNextLevel returns 0 commands
@@ -1092,7 +1092,7 @@ START_SECTION(winner_selection_by_score)
   }
 
   // mass_count metric -> remaining_ratio should be -1.0 (N/A)
-  TEST_REAL_SIMILAR(last_info.remaining_ratio, -1.0)
+  TEST_REAL_SIMILAR(last_info.metric.remaining_ratio, -1.0)
   TEST_EQUAL(exploration.activeGroupCount(), 0)
 }
 END_SECTION
@@ -1428,8 +1428,8 @@ START_SECTION(remaining_precursor_score_no_raw_data)
     auto info = ExplorationTestAccess::feedResult(exploration,tracking_id, ds, static_cast<double>(i), queue);
 
     // total_variants should exclude baseline (= 5 real variants)
-    TEST_EQUAL(info.total_variants, 5)
-    TEST_REAL_SIMILAR(info.remaining_ratio, -1.0)
+    TEST_EQUAL(info.group.total_variants, 5)
+    TEST_REAL_SIMILAR(info.metric.remaining_ratio, -1.0)
   }
 
   // Group should be complete (all variants received)
@@ -1482,8 +1482,8 @@ START_SECTION(remaining_precursor_score_with_raw_data)
   TEST_EQUAL(group_mid.variants[1].score <= 1.0, true)
 
   // remaining_ratio should be valid for RemainingPrecursor with raw data
-  TEST_EQUAL(ce20_info.remaining_ratio >= 0.0, true)
-  TEST_EQUAL(ce20_info.remaining_ratio <= 1.0, true)
+  TEST_EQUAL(ce20_info.metric.remaining_ratio >= 0.0, true)
+  TEST_EQUAL(ce20_info.metric.remaining_ratio <= 1.0, true)
 }
 END_SECTION
 
@@ -1525,7 +1525,7 @@ START_SECTION(remaining_precursor_score_no_signal_in_window)
   auto group_after = ExplorationTestAccess::group(exploration,1);
   TEST_EQUAL(group_after.variants[1].received, true)
   TEST_REAL_SIMILAR(group_after.variants[1].score, 0.0)
-  TEST_REAL_SIMILAR(ce20_info.remaining_ratio, -1.0)
+  TEST_REAL_SIMILAR(ce20_info.metric.remaining_ratio, -1.0)
 }
 END_SECTION
 
@@ -1597,8 +1597,8 @@ START_SECTION(remaining_precursor_inflight_child_after_abort_is_noop)
   std::vector<double> frag_ints = {100.0, 500.0, 200.0, 50.0};
   auto late_info = exploration.feedResult(inflight_tid, frag_mzs.data(), frag_ints.data(),
                                           static_cast<int>(frag_mzs.size()), 1.0, queue);
-  TEST_EQUAL(late_info.group_id, -1)                              // empty info (routing entry gone)
-  TEST_EQUAL(late_info.variant_index, -1)                         // not routed to any variant
+  TEST_EQUAL(late_info.group.group_id, -1)                              // empty info (routing entry gone)
+  TEST_EQUAL(late_info.group.variant_index, -1)                         // not routed to any variant
   TEST_EQUAL(exploration.activeGroupCount(), 0)                   // group NOT resurrected
 }
 END_SECTION
@@ -1768,10 +1768,10 @@ START_SECTION(fragment_match_propagated_in_feed_result)
       static_cast<int>(ms2_data.mzs.size()), ms2_data.rt, queue);
 
   // Real cytochrome c spectrum should produce fragment matches
-  TEST_EQUAL(info.fragment_count > 0, true)
-  TEST_EQUAL(info.matched_protein.empty(), false)
-  TEST_EQUAL(info.proteoform_sequence.empty(), false)
-  TEST_STRING_EQUAL(info.proteoform_sequence, std::string(cytochrome_c_sequence))
+  TEST_EQUAL(info.metric.fragment_count > 0, true)
+  TEST_EQUAL(info.identification.matched_protein.empty(), false)
+  TEST_EQUAL(info.identification.proteoform_sequence.empty(), false)
+  TEST_STRING_EQUAL(info.identification.proteoform_sequence, std::string(cytochrome_c_sequence))
 }
 END_SECTION
 
@@ -1797,9 +1797,9 @@ START_SECTION(fragment_count_zero_without_protein_sequence)
   int tracking_id = queue.decode(std::string(cmds[1].scan_description).substr(0, 3));
   auto info = ExplorationTestAccess::feedResult(exploration,tracking_id, ds, 1.0, queue);
 
-  TEST_EQUAL(info.fragment_count, 0)
-  TEST_EQUAL(info.matched_protein.empty(), true)
-  TEST_EQUAL(info.proteoform_sequence.empty(), true)
+  TEST_EQUAL(info.metric.fragment_count, 0)
+  TEST_EQUAL(info.identification.matched_protein.empty(), true)
+  TEST_EQUAL(info.identification.proteoform_sequence.empty(), true)
 }
 END_SECTION
 
@@ -1870,9 +1870,9 @@ START_SECTION(ms3_remaining_precursor_isolation_width)
                                       1, 1.0, queue);
 
   // Score should be real (not -1.0), ratio = 100/1000 = 0.1
-  TEST_REAL_SIMILAR(info.remaining_ratio, 0.1)
-  TEST_REAL_SIMILAR(info.score, 1.0)  // target=0.1, deviation=0.0, score=1.0
-  TEST_EQUAL(info.score > 0.0, true)
+  TEST_REAL_SIMILAR(info.metric.remaining_ratio, 0.1)
+  TEST_REAL_SIMILAR(info.metric.score, 1.0)  // target=0.1, deviation=0.0, score=1.0
+  TEST_EQUAL(info.metric.score > 0.0, true)
 }
 END_SECTION
 
@@ -2005,8 +2005,8 @@ START_SECTION(activation_type_wiring_in_scoring)
 
   // The key assertion: feedResult completed without error and the activation type
   // was correctly propagated through the chain.
-  TEST_EQUAL(info.activation_type, "ETD")
-  TEST_EQUAL(info.group_id > 0, true)
+  TEST_EQUAL(info.fragmentation.activation_type, "ETD")
+  TEST_EQUAL(info.group.group_id > 0, true)
 }
 END_SECTION
 

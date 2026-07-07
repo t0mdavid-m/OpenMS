@@ -154,7 +154,9 @@ namespace OpenMS
 
     /// Result of feedResult: commands plus exploration per-variant metadata
 
-    // @ Claude we want to clean up this struct. It feels extremely messy.
+    /// Result of feedResult: the commands to enqueue plus this variant's exploration metadata, grouped into
+    /// named sub-structs (group identity / fragmentation params / decision metrics / identification) with the
+    /// command-output fields kept at top level because the caller iterates them.
     struct FeedResultInfo
     {
       struct IdentificationRowInfo
@@ -165,32 +167,53 @@ namespace OpenMS
         float tic_coverage = 0.0f;   ///< this variant's OWN tic (per-scan), not the group-completing scan's
       };
 
+      /// Which exploration group / variant this row belongs to.
+      struct GroupInfo
+      {
+        int group_id = -1;
+        int variant_index = -1;
+        int total_variants = 0;
+        /// F5: encoded tracking id of the winning variant; set ONLY on the group-completing feedResult,
+        /// empty ("") on every other (per-variant / non-exploration / no-winner) row. Logged as the trailing
+        /// scan_results column so each variant row keeps its OWN metrics while the winner stays identifiable.
+        std::string winner_tracking_id;
+      } group;
+
+      /// The scan's fragmentation parameters. stage0_* are the MS2 isolation stage (MS3 groups only).
+      struct FragmentationInfo
+      {
+        double collision_energy = 0.0;
+        std::string activation_type;
+        double reaction_time = 0.0;
+        double stage0_collision_energy = 0.0;  ///< MS2 isolation stage CE; 0.0 for non-MS3 groups
+        std::string stage0_activation_type;    ///< MS2 isolation stage activation; "" for non-MS3 groups
+        double stage0_reaction_time = 0.0;     ///< MS2 isolation stage reaction_time; 0.0 for non-MS3 groups
+      } fragmentation;
+
+      /// The exploration decision values logged for this variant.
+      struct MetricInfo
+      {
+        double score = -1.0;
+        float tic_coverage = 0.0f;
+        int fragment_count = 0;
+        int exploration_metric = 0;
+        double remaining_ratio = -1.0;  ///< Raw remaining_intensity / baseline_intensity (-1.0 = N/A)
+      } metric;
+
+      /// The proteoform match + context written to identification.tsv.
+      struct IdentificationInfo
+      {
+        std::string matched_protein;
+        std::string proteoform_sequence;
+        FragmentAnalysis::ProteoformMatch result;  ///< Per-fragment match details for identification.tsv
+        MS2Context ms2_context;  ///< Cached MS2 context for this variant's group
+        std::vector<IdentificationRowInfo> additional_rows;  ///< Extra calibrated rows for other variants in same completed exploration group
+      } identification;
+
+      // Command output: what the caller enqueues + tracking (top-level; iterated by the caller).
       std::vector<ScanCommand> commands;
-      int group_id = -1;
-      int variant_index = -1;
-      int total_variants = 0;
-      double collision_energy = 0.0;
-      std::string activation_type;
-      double reaction_time = 0.0;
-      double stage0_collision_energy = 0.0;  ///< MS2 isolation stage CE; 0.0 for non-MS3 groups
-      std::string stage0_activation_type;    ///< MS2 isolation stage activation; "" for non-MS3 groups
-      double stage0_reaction_time = 0.0;     ///< MS2 isolation stage reaction_time; 0.0 for non-MS3 groups
-      double score = -1.0;
-      float tic_coverage = 0.0f;
-      int fragment_count = 0;
-      int exploration_metric = 0;
-      std::string matched_protein;
-      std::string proteoform_sequence;
-      double remaining_ratio = -1.0;  ///< Raw remaining_intensity / baseline_intensity (-1.0 = N/A)
-      /// F5: encoded tracking id of the winning variant; set ONLY on the group-completing feedResult,
-      /// empty ("") on every other (per-variant / non-exploration / no-winner) row. Logged as the trailing
-      /// scan_results column so each variant row keeps its OWN metrics while the winner stays identifiable.
-      std::string winner_tracking_id;
       char parent_scan_id[4]{};  ///< Parent's encoded tracking ID (from group's originating_cmd)
-      FragmentAnalysis::ProteoformMatch identification_result;  ///< Per-fragment match details for identification.tsv
-      MS2Context ms2_context;  ///< Cached MS2 context for this variant's group
-      std::vector<IdentificationRowInfo> additional_identification_rows;  ///< Extra calibrated rows for other variants in same completed exploration group
-      std::vector<std::string> child_ids;  ///< Encoded tracking ids of the pushed children, in info.commands order (pre-encoded by feedResultImpl_; replaces processScan's inline encode loop)
+      std::vector<std::string> child_ids;  ///< Encoded tracking ids of the pushed children, in commands order (pre-encoded by feedResultImpl_; replaces processScan's inline encode loop)
       /// (scan_id -> MS2Context) for production MS3 commands in `commands` that return on the REGULAR MS3
       /// path and need ms2_context_cache_ seeded by the caller. Mirrors the regular MS2->MS3 caching.
       std::vector<std::pair<int, MS2Context>> ms3_context_cache;

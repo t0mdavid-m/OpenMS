@@ -168,7 +168,68 @@ namespace OpenMS
     config_(cfg), logger_(logger)
   {
   }
-  
+
+  // --- Identification entry points (#46): thin static forwarders; results are byte-identical to the
+  //     former direct matcher calls. They take the caller's FragmentAnalysis& because they also run in
+  //     const helpers (computeFragmentMatch_) and where no tracker instance exists (initiateNextLevel).
+
+  int ProteoformTracker::identifyExplorationFragments(FragmentAnalysis& frag, const String& protein_sequence, int n,
+                                                      double* masses, double* qscores, int* charges,
+                                                      double* window_starts, double* window_ends,
+                                                      char* ion_types, int* fragment_indices,
+                                                      DeconvolvedSpectrum& stored_ms2,
+                                                      FragmentAnalysis::ProteoformMatch& result,
+                                                      const String& fragmentation_method,
+                                                      double tolerance_ppm,
+                                                      FragmentAnalysis::FragmentScores* frag_scores)
+  {
+    return frag.getTopFragmentMatches(protein_sequence, n, masses, qscores, charges,
+                                      window_starts, window_ends, ion_types, fragment_indices,
+                                      stored_ms2, result, fragmentation_method, tolerance_ppm, frag_scores);
+  }
+
+  int ProteoformTracker::selectNextLevelTargets(FragmentAnalysis& frag, SelectionMetric selection,
+                                                const String& protein_sequence, int n,
+                                                double* masses, double* qscores, int* charges,
+                                                double* window_starts, double* window_ends,
+                                                char* ion_types, int* fragment_indices,
+                                                DeconvolvedSpectrum& stored_ms2,
+                                                FragmentAnalysis::ProteoformMatch& result,
+                                                const String& fragmentation_method,
+                                                double tolerance_ppm,
+                                                FragmentAnalysis::FragmentScores* frag_scores)
+  {
+    switch (selection)
+    {
+      case SelectionMetric::Intensity:
+      case SelectionMetric::QScore:
+        return frag.getTopFragmentMatches(protein_sequence, n, masses, qscores, charges,
+                                          window_starts, window_ends, ion_types, fragment_indices,
+                                          stored_ms2, result, fragmentation_method, tolerance_ppm, frag_scores);
+      case SelectionMetric::TerminalFragments:
+        return frag.getTerminalFragmentIons(protein_sequence, n, masses, qscores, charges,
+                                            window_starts, window_ends, ion_types, fragment_indices,
+                                            stored_ms2, result, fragmentation_method, tolerance_ppm, frag_scores);
+      case SelectionMetric::AmbiguityResolution:
+        return frag.getAmbiguityEnclosingIons(protein_sequence, n, masses, qscores, charges,
+                                              window_starts, window_ends, ion_types, fragment_indices,
+                                              stored_ms2, result, fragmentation_method, tolerance_ppm, frag_scores);
+      default:
+        return 0;
+    }
+  }
+
+  std::vector<double> ProteoformTracker::scoreCalibratedVariants(
+      const std::vector<const DeconvolvedSpectrum*>& variant_spectra, const std::string& protein_sequence,
+      const MS3FragmentMatcher::ProteoformContext& ctx, char fragment_ion_type, int fragment_ion_index,
+      double loose_tolerance_ppm, double tight_tolerance_ppm,
+      std::vector<FragmentAnalysis::ProteoformMatch>* detailed_results)
+  {
+    return MS3FragmentMatcher::calibrateAndScore(variant_spectra, protein_sequence, ctx, fragment_ion_type,
+                                                 fragment_ion_index, loose_tolerance_ppm, tight_tolerance_ppm,
+                                                 detailed_results);
+  }
+
   void ProteoformTracker::feedScan(int precursor_id, uint8_t ms_level, const Ms2Params& params, int scan_id,
                                    const DeconvolvedSpectrum& deconv,
                                    const FragmentAnalysis::ProteoformMatch& match, double id_score,

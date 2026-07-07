@@ -356,26 +356,26 @@ namespace OpenMS
       if (!vr.is_baseline) ++real_variant_count;
 
     // Populate per-variant metadata in the return info
-    info.group_id = group.group_id;
-    info.variant_index = v.variant_index;
-    info.total_variants = real_variant_count;
-    info.collision_energy = v.collision_energy;
-    info.activation_type = v.activation_type;
-    info.reaction_time = v.reaction_time;
+    info.group.group_id = group.group_id;
+    info.group.variant_index = v.variant_index;
+    info.group.total_variants = real_variant_count;
+    info.fragmentation.collision_energy = v.collision_energy;
+    info.fragmentation.activation_type = v.activation_type;
+    info.fragmentation.reaction_time = v.reaction_time;
     // @Claude Please implement this more generically. At some point we might want to add MS4 or whatever
     if (group.msn_level >= 3 && v.cmd.num_stages >= 2)
     {
-      info.stage0_collision_energy = v.cmd.stages[0].collision_energy;
-      info.stage0_activation_type  = std::string(v.cmd.stages[0].activation_type);
-      info.stage0_reaction_time    = v.cmd.stages[0].reaction_time;
+      info.fragmentation.stage0_collision_energy = v.cmd.stages[0].collision_energy;
+      info.fragmentation.stage0_activation_type  = std::string(v.cmd.stages[0].activation_type);
+      info.fragmentation.stage0_reaction_time    = v.cmd.stages[0].reaction_time;
     }
-    info.score = v.score;
-    info.tic_coverage = v.tic_coverage;
-    info.fragment_count = v.fragment_count;
-    info.exploration_metric = static_cast<int>(group.exploration_metric);
-    info.matched_protein = frag.matched_protein;
-    info.proteoform_sequence = frag.proteoform_sequence;
-    info.identification_result = frag;
+    info.metric.score = v.score;
+    info.metric.tic_coverage = v.tic_coverage;
+    info.metric.fragment_count = v.fragment_count;
+    info.metric.exploration_metric = static_cast<int>(group.exploration_metric);
+    info.identification.matched_protein = frag.matched_protein;
+    info.identification.proteoform_sequence = frag.proteoform_sequence;
+    info.identification.result = frag;
 
     // Stage this MS2 variant into the ProteoformTracker for pooling (MS3 evidence folds via foldMs3,
     // not here). The CE-0 baseline is excluded: it carries no fragmentation evidence and must never
@@ -392,7 +392,7 @@ namespace OpenMS
                         v.cmd);
     }
     
-    info.remaining_ratio = remaining_ratio;
+    info.metric.remaining_ratio = remaining_ratio;
     std::string parent_enc = ScanCommandQueue::encode(group.originating_cmd.scan_id);
     std::strncpy(info.parent_scan_id, parent_enc.c_str(), 3);
     info.parent_scan_id[3] = '\0';
@@ -442,12 +442,12 @@ namespace OpenMS
       return ctx;
     };
 
-    info.ms2_context = buildMS2ContextForVariant(variant_index);
+    info.identification.ms2_context = buildMS2ContextForVariant(variant_index);
 
-    if (group.msn_level >= 3 && !info.ms2_context.proteoform_sequence.empty())
+    if (group.msn_level >= 3 && !info.identification.ms2_context.proteoform_sequence.empty())
     {
-      info.proteoform_sequence = info.ms2_context.proteoform_sequence;
-      info.matched_protein = config_.targeting().fasta_file.empty()
+      info.identification.proteoform_sequence = info.identification.ms2_context.proteoform_sequence;
+      info.identification.matched_protein = config_.targeting().fasta_file.empty()
           ? config_.characterization().protein_sequence : config_.targeting().fasta_file;
     }
     
@@ -483,7 +483,7 @@ namespace OpenMS
         variant_spectra.push_back(var.received ? &var.result : nullptr);
 
       std::vector<FragmentAnalysis::ProteoformMatch> detailed_results;
-      auto calibrated_scores = MS3FragmentMatcher::calibrateAndScore(
+      auto calibrated_scores = ProteoformTracker::scoreCalibratedVariants(
         variant_spectra,
         config_.characterization().protein_sequence,
         group.proteoform_ctx,
@@ -502,8 +502,8 @@ namespace OpenMS
       }
 
       // Re-populate identification_result after batch re-scoring updated it
-      info.identification_result = group.variants[variant_index].identification_result;
-      info.score = group.variants[variant_index].score;
+      info.identification.result = group.variants[variant_index].identification_result;
+      info.metric.score = group.variants[variant_index].score;
 
       // Return calibrated identification rows for other variants in the completed group.
       for (size_t vi = 0; vi < group.variants.size(); ++vi)
@@ -517,7 +517,7 @@ namespace OpenMS
         row.identification_result = gv.identification_result;
         row.ms2_context = buildMS2ContextForVariant(static_cast<int>(vi));
         row.tic_coverage = gv.tic_coverage;   // this variant's OWN tic (per-scan)
-        info.additional_identification_rows.push_back(row);
+        info.identification.additional_rows.push_back(row);
       }
     }
 
@@ -558,7 +558,7 @@ namespace OpenMS
       group.winner_index = best_idx;
       group.complete = true;
       group.variants[best_idx].result.getOrCreateOptimizationMetadata().is_best_variant = true;
-      info.winner_tracking_id = group.variants[best_idx].tracking_id;
+      info.group.winner_tracking_id = group.variants[best_idx].tracking_id;
 
       std::cout << "[EXPL-WINNER] group=" << group.group_id
                 << " winner_idx=" << best_idx
@@ -711,31 +711,12 @@ namespace OpenMS
     int found = 0;
     FragmentAnalysis::ProteoformMatch frag_result;
 
-    // @Claude this logic should move into ProteoformTracker
-    switch (next_cfg.selection)
-    {
-      case SelectionMetric::Intensity:
-      case SelectionMetric::QScore:
-        found = fragments_.getTopFragmentMatches(seq, num_targets,
-            masses.data(), qscores.data(), charges.data(),
-            wstarts.data(), wends.data(),
-            ion_types.data(), frag_indices.data(), result_copy, frag_result, scan_activation, 0.0, frag_scores.data());
-        break;
-      case SelectionMetric::TerminalFragments:
-        found = fragments_.getTerminalFragmentIons(seq, num_targets,
-            masses.data(), qscores.data(), charges.data(),
-            wstarts.data(), wends.data(),
-            ion_types.data(), frag_indices.data(), result_copy, frag_result, scan_activation, 0.0, frag_scores.data());
-        break;
-      case SelectionMetric::AmbiguityResolution:
-        found = fragments_.getAmbiguityEnclosingIons(seq, num_targets,
-            masses.data(), qscores.data(), charges.data(),
-            wstarts.data(), wends.data(),
-            ion_types.data(), frag_indices.data(), result_copy, frag_result, scan_activation, 0.0, frag_scores.data());
-        break;
-      default:
-        break;
-    }
+    // #46: the metric->matcher selection switch now lives in ProteoformTracker::selectNextLevelTargets
+    // (byte-identical: same matcher, same args). Behavior fixes (bail-early / num_targets bound) are deferred.
+    found = ProteoformTracker::selectNextLevelTargets(fragments_, next_cfg.selection, seq, num_targets,
+        masses.data(), qscores.data(), charges.data(),
+        wstarts.data(), wends.data(),
+        ion_types.data(), frag_indices.data(), result_copy, frag_result, scan_activation, 0.0, frag_scores.data());
 
     // Cache proteoform context for MS3 subsequence scoring
     // @Claude this logic should move into ProteoformTracker
@@ -1027,8 +1008,8 @@ namespace OpenMS
     std::vector<char> ion_types(max_matches, '\0');
     std::vector<int> frag_indices(max_matches, 0);
 
-    fragments_.getTopFragmentMatches(
-        seq, max_matches,
+    ProteoformTracker::identifyExplorationFragments(
+        fragments_, seq, max_matches,
         masses.data(), qscores.data(), charges.data(),
         wstarts.data(), wends.data(),
         ion_types.data(), frag_indices.data(),
