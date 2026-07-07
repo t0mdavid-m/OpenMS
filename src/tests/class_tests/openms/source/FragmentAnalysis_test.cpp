@@ -479,10 +479,10 @@ START_SECTION(fragment_count_populated_for_fragment_count_metric)
   auto info = ExplorationTestAccess::feedResult(exploration,tracking_id, deconv.storedMS2(), 1.0, queue);
 
   // FragmentCount metric: fragment analysis should have run
-  TEST_EQUAL(info.fragment_count > 0, true)
-  TEST_EQUAL(info.matched_protein.empty(), false)
-  TEST_EQUAL(info.proteoform_sequence.empty(), false)
-  TEST_STRING_EQUAL(info.proteoform_sequence, std::string(cytochrome_c_seq))
+  TEST_EQUAL(info.metric.fragment_count > 0, true)
+  TEST_EQUAL(info.identification.matched_protein.empty(), false)
+  TEST_EQUAL(info.identification.proteoform_sequence.empty(), false)
+  TEST_STRING_EQUAL(info.identification.proteoform_sequence, std::string(cytochrome_c_seq))
 }
 END_SECTION
 
@@ -512,9 +512,9 @@ START_SECTION(fragment_analysis_populated_for_mass_count_metric)
   auto info = ExplorationTestAccess::feedResult(exploration,tracking_id, deconv.storedMS2(), 1.0, queue);
 
   // MassCount metric: fragment analysis still runs (populates metadata for all metrics)
-  TEST_EQUAL(info.fragment_count > 0, true)
-  TEST_EQUAL(info.matched_protein.empty(), false)
-  TEST_EQUAL(info.proteoform_sequence == cytochrome_c_seq, true)
+  TEST_EQUAL(info.metric.fragment_count > 0, true)
+  TEST_EQUAL(info.identification.matched_protein.empty(), false)
+  TEST_EQUAL(info.identification.proteoform_sequence == cytochrome_c_seq, true)
 }
 END_SECTION
 
