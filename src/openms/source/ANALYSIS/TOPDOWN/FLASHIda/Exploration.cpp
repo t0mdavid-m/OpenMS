@@ -299,22 +299,10 @@ namespace OpenMS
     v.fragment_count = frag.total_match_count;
     v.received = true;
 
-    // Handle baseline for RemainingPrecursor
+    // Handle baseline (present for EVERY exploration group as of #18 baseline-on-all)
     if (v.is_baseline)
     {
-      double iso_half = group.isolation_width / 2.0;
-      double mz_low = group.precursor_mz - iso_half;
-      double mz_high = group.precursor_mz + iso_half;
-      double baseline_sum = 0.0;
-      if (mzs != nullptr && ints != nullptr)
-      {
-        for (int bi = 0; bi < length; ++bi)
-        {
-          if (mzs[bi] >= mz_low && mzs[bi] <= mz_high)
-            baseline_sum += ints[bi];
-        }
-      }
-      group.baseline_intensity = baseline_sum;
+      group.baseline_intensity = precursorWindowIntensity_(group, mzs, ints, length);
       group.has_baseline = true;
       v.score = 0.0;
 
@@ -348,6 +336,18 @@ namespace OpenMS
           variant_tracking_map_.erase(cit);
         }
       }
+    }
+
+    // remaining_ratio is metric-independent: every exploration group now carries a CE-0 baseline (#18), so
+    // ratio the variant's own isolation-window intensity against the baseline (same window-sum semantics as
+    // computeRemainingPrecursorScore_). The un-fragmented baseline variant ratios against itself -> 1.0; a
+    // fragment scan's surviving precursor is depleted -> < 1. Empty/late baseline -> stays -1.0 (N/A). The
+    // baseline dequeues FIFO-first, so has_baseline is already set when its CE siblings are scored.
+    if (group.has_baseline && group.baseline_intensity > 0.0)
+    {
+      remaining_ratio = v.is_baseline
+                          ? 1.0
+                          : precursorWindowIntensity_(group, mzs, ints, length) / group.baseline_intensity;
     }
 
     // Count real (non-baseline) variants for metadata
@@ -959,6 +959,25 @@ namespace OpenMS
     return static_cast<double>(spec.size());
   }
 
+  double Exploration::precursorWindowIntensity_(const ExplorationGroup& group,
+      const double* mzs, const double* ints, int length) const
+  {
+    if (length <= 0 || mzs == nullptr || ints == nullptr)
+      return 0.0;
+
+    double iso_half = group.isolation_width / 2.0;
+    double mz_low = group.precursor_mz - iso_half;
+    double mz_high = group.precursor_mz + iso_half;
+
+    double sum = 0.0;
+    for (int i = 0; i < length; ++i)
+    {
+      if (mzs[i] >= mz_low && mzs[i] <= mz_high)
+        sum += ints[i];
+    }
+    return sum;
+  }
+
   double Exploration::computeRemainingPrecursorScore_(const ExplorationGroup& group,
       const double* mzs, const double* ints, int length, double* out_ratio) const
   {
@@ -967,16 +986,7 @@ namespace OpenMS
     if (length <= 0 || mzs == nullptr || ints == nullptr)
       return 0.0;
 
-    double iso_half = group.isolation_width / 2.0;
-    double mz_low = group.precursor_mz - iso_half;
-    double mz_high = group.precursor_mz + iso_half;
-
-    double remaining_intensity = 0.0;
-    for (int i = 0; i < length; ++i)
-    {
-      if (mzs[i] >= mz_low && mzs[i] <= mz_high)
-        remaining_intensity += ints[i];
-    }
+    double remaining_intensity = precursorWindowIntensity_(group, mzs, ints, length);
 
     // Reference: baseline isolation-window intensity (CE=0 scan)
     double reference;

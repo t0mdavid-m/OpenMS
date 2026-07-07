@@ -423,6 +423,45 @@ namespace OpenMS
     mass_offset = theo_equiv - ms3_theoretical_mass;
   }
 
+  double MS3FragmentMatcher::coveredAmbiguousInEquivFrame(
+    const ProteoformContext& ctx,
+    const std::string& equiv_type,
+    int equiv_index,
+    int protein_length,
+    bool sub_includes_ptm)
+  {
+    // The equivalent full-protein ion covers a contiguous absolute residue span (0-based inclusive):
+    //   prefix b/a of index k -> [0, k-1] (mirrors protein_prefix_masses[k] = residues [0, k-1]);
+    //   suffix  y  of index k -> [P-k, P-1].
+    const bool equiv_prefix = isPrefixIonType(equiv_type);
+    int cover_start, cover_end;
+    if (equiv_prefix)
+    {
+      cover_start = 0;
+      cover_end = equiv_index - 1;
+    }
+    else
+    {
+      cover_start = protein_length - equiv_index;
+      cover_end = protein_length - 1;
+    }
+
+    double sum = 0.0;
+    for (const auto& pm : ctx.ptm_sites)
+    {
+      if (pm.start_position == pm.end_position) continue; // fixed PTM: already folded into protein_prefix_masses
+      const int abs_start = pm.start_position - 1 + ctx.region_start; // ambiguous range in absolute protein coords
+      const int abs_end = pm.end_position - 1 + ctx.region_start;
+      const bool fully = (abs_start >= cover_start && abs_end <= cover_end);
+      const bool overlap = (abs_end >= cover_start && abs_start <= cover_end);
+      if (fully)
+        sum += pm.mass_shift;
+      else if (overlap && sub_includes_ptm) // mod straddles the equivalent ion's boundary: follow the MS3 verdict
+        sum += pm.mass_shift;
+    }
+    return sum;
+  }
+
   std::vector<double> MS3FragmentMatcher::calibrateAndScore(
     const std::vector<const DeconvolvedSpectrum*>& variant_spectra,
     const std::string& protein_sequence,
@@ -594,12 +633,16 @@ namespace OpenMS
                                md.ion_type, md.position, md.theoretical_mass,
                                protein_prefix,
                                fm.equiv_type, fm.equiv_index, offset);
-          // measured -> MS2 (full-protein) frame WITH mods: the bare-backbone FIX adds ambiguous_included,
-          // the PTM mass this ion folds in, so the adjusted mass lands on the modified proteoform, not the
-          // bare backbone (was fm.adjusted_mass = md.observed_mass + offset).
-          fm.adjusted_mass = md.observed_mass + offset + md.ambiguous_included;
+          // measured -> MS2 (full-protein) frame WITH mods: fold in ONLY the ambiguous PTM mass the
+          // EQUIVALENT ion actually covers (the bare-backbone FIX added md.ambiguous_included, but that is
+          // the SUB-FRAME ion's covered mods -- for a complement-flipped map, e.g. suffix yb69 -> prefix b1,
+          // those mods belong to the complement, not to b1, so b1 wrongly read 131.04 + 526.22 = 657). The
+          // equiv-frame sum reproduces md.ambiguous_included exactly for same-direction maps.
+          double equiv_ambiguous = coveredAmbiguousInEquivFrame(
+            ctx, fm.equiv_type, fm.equiv_index, static_cast<int>(protein_sequence.size()), md.includes_ptm);
+          fm.adjusted_mass = md.observed_mass + offset + equiv_ambiguous;
           // theoretical for the equivalent ion in the same frame (mod-inclusive, this scan's proteoform).
-          fm.theoretical_mass = offset + md.theoretical_mass + md.ambiguous_included;
+          fm.theoretical_mass = offset + md.theoretical_mass + equiv_ambiguous;
           fm.diff_da = fm.adjusted_mass - fm.theoretical_mass;
           fm.diff_ppm = (fm.theoretical_mass != 0.0) ? (fm.diff_da / fm.theoretical_mass * 1e6) : 0.0;
           fm.includes_ptm = md.includes_ptm;   // propagate the MS3 localization verdict (already set in matchSpectrum)

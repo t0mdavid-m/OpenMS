@@ -156,6 +156,20 @@ namespace OpenMS
       const std::vector<FragmentAnalysis::PTMSite>& ptm_sites = {},
       int proteoform_start = 0);
 
+    /// Sum the ambiguous PTM mass (start!=end; fixed PTMs already live in the prefix masses) that falls
+    /// within the EQUIVALENT full-protein ion's own residue coverage (prefix b/a of index k -> absolute
+    /// residues [0, k-1]; suffix y of index k -> [P-k, P-1]). This is the mod mass the equivalent ion
+    /// itself carries -- correctly DROPPING the mods that belong to the complement when an MS3 suffix ion
+    /// maps to a prefix equivalent (and vice versa), while reproducing the sub-frame ambiguous_included
+    /// exactly for same-direction maps. @p sub_includes_ptm is the MS3 match's own PTM verdict, used only
+    /// for a mod that straddles the equivalent ion's boundary.
+    static double coveredAmbiguousInEquivFrame(
+      const ProteoformContext& ctx,
+      const std::string& equiv_type,
+      int equiv_index,
+      int protein_length,
+      bool sub_includes_ptm);
+
   private:
     static constexpr double PROTON_MASS_ = 1.007276;
     static constexpr double WATER_MASS_ = 18.010565;

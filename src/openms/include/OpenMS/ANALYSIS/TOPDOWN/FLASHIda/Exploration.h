@@ -318,6 +318,12 @@ namespace OpenMS
     /// Score: number of deconvolved masses
     double computeMassCount_(const DeconvolvedSpectrum& spec) const;
 
+    /// Sum the deconvolved intensity inside the precursor isolation window [precursor_mz +/- isolation_width/2].
+    /// Single source of truth for the baseline intensity, the RemainingPrecursor score, and the per-variant
+    /// remaining_ratio, so all three agree on the measurement.
+    double precursorWindowIntensity_(const ExplorationGroup& group,
+                                     const double* mzs, const double* ints, int length) const;
+
     /// Score: fragmentation efficiency (higher = less remaining precursor)
     double computeRemainingPrecursorScore_(const ExplorationGroup& group,
                                            const double* mzs, const double* ints, int length,
