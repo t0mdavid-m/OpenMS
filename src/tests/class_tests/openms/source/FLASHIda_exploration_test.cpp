@@ -1725,15 +1725,15 @@ START_SECTION(remaining_precursor_target_aware_scoring)
   int ce20_tid = queue.decode(std::string(cmds[1].scan_description).substr(0, 3));
   auto info_perfect = exploration.feedResult(ce20_tid, baseline_mzs.data(), perfect_ints.data(),
                                               1, 1.0, queue);
-  double score_perfect = info_perfect.score;
-  double ratio_perfect = info_perfect.remaining_ratio;
+  double score_perfect = info_perfect.metric.score;
+  double ratio_perfect = info_perfect.metric.remaining_ratio;
 
   std::vector<double> over_ints = {500.0};
   int ce25_tid = queue.decode(std::string(cmds[2].scan_description).substr(0, 3));
   auto info_over = exploration.feedResult(ce25_tid, baseline_mzs.data(), over_ints.data(),
                                            1, 2.0, queue);
-  double score_over = info_over.score;
-  double ratio_over = info_over.remaining_ratio;
+  double score_over = info_over.metric.score;
+  double ratio_over = info_over.metric.remaining_ratio;
 
   TEST_EQUAL(score_perfect > score_over, true)
   TEST_REAL_SIMILAR(score_perfect, 1.0)
