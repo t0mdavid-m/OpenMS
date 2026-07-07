@@ -917,20 +917,26 @@ START_SECTION(exploration_group_creation)
   TEST_EQUAL(static_cast<int>(group.exploration_metric),
              static_cast<int>(ExplorationMetric::MassCount))
 
-  TEST_EQUAL(static_cast<int>(group.variants.size()), 5)
-  TEST_REAL_SIMILAR(group.variants[0].collision_energy, 20.0)
-  TEST_REAL_SIMILAR(group.variants[1].collision_energy, 25.0)
-  TEST_REAL_SIMILAR(group.variants[2].collision_energy, 30.0)
-  TEST_REAL_SIMILAR(group.variants[3].collision_energy, 35.0)
-  TEST_REAL_SIMILAR(group.variants[4].collision_energy, 40.0)
+  // baseline-on-all (#18) prepends one CE-0 baseline variant (variant_index -1, is_baseline) at [0].
+  // Assert the 5 real CE-sweep variants by filtering the baseline out — robust to the baseline rule.
+  TEST_EQUAL(static_cast<int>(group.variants.size()), 6)
+  TEST_EQUAL(group.variants[0].is_baseline, true)
+  TEST_EQUAL(group.variants[0].variant_index, -1)
+  TEST_REAL_SIMILAR(group.variants[0].collision_energy, 0.0)
 
-  for (int i = 0; i < 5; ++i)
+  const double expected_ce[5] = {20.0, 25.0, 30.0, 35.0, 40.0};
+  int real_count = 0;
+  for (const auto& v : group.variants)
   {
-    TEST_EQUAL(group.variants[i].received, false)
-    TEST_EQUAL(group.variants[i].variant_index, i)
+    if (v.is_baseline) continue;
+    TEST_EQUAL(v.received, false)
+    TEST_EQUAL(v.variant_index, real_count)
+    TEST_REAL_SIMILAR(v.collision_energy, expected_ce[real_count])
+    ++real_count;
   }
+  TEST_EQUAL(real_count, 5)
 
-  TEST_EQUAL(static_cast<int>(cmds.size()), 5)
+  TEST_EQUAL(static_cast<int>(cmds.size()), 6)  // baseline + 5 CE-sweep variants
 
   (void)group;
 }
@@ -947,8 +953,8 @@ START_SECTION(exploration_variants_priority_by_level)
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, queue);
 
-  TEST_EQUAL(static_cast<int>(cmds.size()), 5)
-  for (int i = 0; i < 5; ++i)
+  TEST_EQUAL(static_cast<int>(cmds.size()), 6)  // baseline + 5 CE-sweep variants (all priority-2 'E')
+  for (int i = 0; i < 6; ++i)
   {
     TEST_EQUAL(cmds[i].msn_level, 2)
     TEST_EQUAL(cmds[i].priority, 2)  // MS2 exploration variants at priority 2
@@ -975,9 +981,9 @@ START_SECTION(ms3_exploration_variants_use_buildMS3)
   ms2_ctx.faims_cv = -50.0;  // Item 1: CV travels via the context
   auto cmds = exploration.initiate(3, fragment_pg, 2, queue, nullptr, &ms2_ctx, 'y', 5);
 
-  TEST_EQUAL(static_cast<int>(cmds.size()), 5)
+  TEST_EQUAL(static_cast<int>(cmds.size()), 6)  // baseline + 5 CE-sweep variants (all MS3 buildMS3)
 
-  for (int i = 0; i < 5; ++i)
+  for (int i = 0; i < 6; ++i)
   {
     TEST_EQUAL(cmds[i].msn_level, 3)
     TEST_EQUAL(cmds[i].num_stages, 2)
@@ -992,7 +998,7 @@ START_SECTION(ms3_exploration_variants_use_buildMS3)
   TEST_EQUAL(group.originating_cmd.num_stages > 0, true)
 
   // MS3 exploration descriptions must include fragment ion info
-  for (int i = 0; i < 5; ++i)
+  for (int i = 0; i < 6; ++i)
   {
     std::string desc(cmds[i].scan_description);
     TEST_EQUAL(desc[3], 'E')  // exploration marker
@@ -1031,12 +1037,15 @@ START_SECTION(ms3_exploration_winner_selection_and_cleanup)
   auto fragment_pg = makeSyntheticPeakGroup(500.0, 1000.0, 2);
   ms2_ctx.faims_cv = -50.0;  // Item 1: CV travels via the context
   auto cmds = exploration.initiate(3, fragment_pg, 2, queue, nullptr, &ms2_ctx);
-  TEST_EQUAL(static_cast<int>(cmds.size()), 5)
+  TEST_EQUAL(static_cast<int>(cmds.size()), 6)  // baseline (cmds[0]) + 5 CE-sweep variants
   TEST_EQUAL(exploration.activeGroupCount(), 1)
 
-  std::vector<int> peak_counts = {2, 4, 6, 8, 3};
+  // cmds[0] is the CE-0 baseline (variant_index -1, skipped in winner selection); cmds[1..5] are the
+  // 5 real variants (variant_index 0..4) with peak counts {2,4,6,8,3}. Feeding ALL 6 completes the group;
+  // the winner is the real variant with 8 peaks (variant_index 3 == cmds[4]).
+  std::vector<int> peak_counts = {0, 2, 4, 6, 8, 3};  // baseline + 5 reals
   Exploration::FeedResultInfo last_info;
-  for (int i = 0; i < 5; ++i)
+  for (int i = 0; i < 6; ++i)
   {
     DeconvolvedSpectrum ds = makeSyntheticDeconv(i + 1, peak_counts[i]);
     int tracking_id = queue.decode(std::string(cmds[i].scan_description).substr(0, 3));
@@ -1044,14 +1053,14 @@ START_SECTION(ms3_exploration_winner_selection_and_cleanup)
   }
 
   TEST_EQUAL(exploration.activeGroupCount(), 0)
-  // F5: last_info is the COMPLETING variant (index 4, 3 peak groups) reporting its OWN metrics,
-  // not the winner's (variant 3, score 8.0) — the winner-overwrite was removed.
+  // F5: last_info is the COMPLETING variant (variant_index 4, 3 peak groups) reporting its OWN metrics,
+  // not the winner's (variant_index 3, score 8.0) — the winner-overwrite was removed.
   TEST_REAL_SIMILAR(last_info.score, 3.0)            // completing variant's own score (was 8.0)
   TEST_EQUAL(last_info.variant_index, 4)             // its own index, not the winner's 3
-  // The winner stays identifiable via winner_tracking_id == variant 3's encoded command id.
+  // The winner stays identifiable via winner_tracking_id == variant_index 3's encoded command id (cmds[4]).
   // (getGroup throws here — the group was erased on completion — so read it from last_info.)
   TEST_EQUAL(last_info.winner_tracking_id.empty(), false)
-  TEST_EQUAL(last_info.winner_tracking_id, std::string(cmds[3].scan_description).substr(0, 3))
+  TEST_EQUAL(last_info.winner_tracking_id, std::string(cmds[4].scan_description).substr(0, 3))
 
   // With synthetic data there is no identified model, so the model gate in
   // feedResultImpl_() does not fire and initiateNextLevel returns 0 commands
@@ -1071,11 +1080,11 @@ START_SECTION(winner_selection_by_score)
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, queue);
-  TEST_EQUAL(static_cast<int>(cmds.size()), 5)
+  TEST_EQUAL(static_cast<int>(cmds.size()), 6)  // baseline (cmds[0]) + 5 CE-sweep variants
 
-  std::vector<double> scores = {1.0, 3.0, 2.0, 5.0, 0.0};
+  std::vector<double> scores = {0.0, 1.0, 3.0, 2.0, 5.0, 0.0};  // baseline + 5 reals
   Exploration::FeedResultInfo last_info;
-  for (int i = 0; i < 5; ++i)
+  for (int i = 0; i < 6; ++i)
   {
     DeconvolvedSpectrum ds = makeSyntheticDeconv(i + 1, static_cast<int>(scores[i]));
     int tracking_id = queue.decode(std::string(cmds[i].scan_description).substr(0, 3));
@@ -1259,15 +1268,17 @@ START_SECTION(optimization_metadata_populated)
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, queue);
 
+  // cmds[0] is the CE-0 baseline (variant_index -1); feed the FIRST REAL variant (cmds[1], variant_index 0,
+  // CE 20) so the metadata under test belongs to a real CE-sweep variant, not the baseline.
   DeconvolvedSpectrum ds = makeSyntheticDeconv(1, 3);
-  int tracking_id = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
+  int tracking_id = queue.decode(std::string(cmds[1].scan_description).substr(0, 3));
   ExplorationTestAccess::feedResult(exploration,tracking_id, ds, 1.0, queue);
 
   TEST_EQUAL(exploration.activeGroupCount(), 1)
 
   auto group = ExplorationTestAccess::group(exploration,1);
-  TEST_EQUAL(group.variants[0].received, true)
-  auto& stored = group.variants[0].result;
+  TEST_EQUAL(group.variants[1].received, true)
+  auto& stored = group.variants[1].result;
   TEST_EQUAL(stored.hasOptimizationMetadata(), true)
 
   const auto* meta = stored.getOptimizationMetadata();
@@ -2040,14 +2051,18 @@ START_SECTION(exploration_group_creation_etd)
   // c/z proxy: every variant is ETD. rt-sweep: reaction_time takes the swept values
   // {5,10,15}; collision_energy is the (constant) base-config CE, not a CE sweep.
   std::set<double> seen_rts;
+  int real_variants = 0;
   for (const auto& v : group.variants)
   {
+    if (v.is_baseline) continue;  // CE-0 baseline (RT 0): a reference, not an RT-sweep point
+    ++real_variants;
     TEST_STRING_EQUAL(v.activation_type, "ETD")
     TEST_EQUAL(std::isfinite(v.reaction_time), true)
     seen_rts.insert(v.reaction_time);
   }
-  // rt_min=5, rt_max=15, rt_step=5 -> 3 distinct reaction-time variants.
-  TEST_EQUAL(static_cast<int>(group.variants.size()), 3)
+  // rt_min=5, rt_max=15, rt_step=5 -> 3 distinct reaction-time variants (+ the prepended CE-0 baseline).
+  TEST_EQUAL(static_cast<int>(group.variants.size()), 4)  // baseline + 3 RT variants
+  TEST_EQUAL(real_variants, 3)
   TEST_EQUAL(static_cast<int>(seen_rts.size()), 3)
   TEST_EQUAL(seen_rts.count(5.0) == 1 && seen_rts.count(10.0) == 1 && seen_rts.count(15.0) == 1, true)
 }

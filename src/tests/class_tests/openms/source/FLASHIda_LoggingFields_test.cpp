@@ -704,6 +704,7 @@ START_SECTION(results_ms2_exploration_columns)
     TEST_TRUE(metric >= 1 && metric <= 3)
     int vi = std::atoi(cell(res, row, "variant_index").c_str());
     int tv = std::atoi(cell(res, row, "total_variants").c_str());
+    if (vi == -1) continue;  // CE-0 baseline row (variant_index -1, CE 0): a reference, not a sweep point
     TEST_TRUE(vi >= 0 && tv > 0 && vi < tv)
     TEST_TRUE(posFinite(toD(cell(res, row, "collision_energy"))))   // variant CE (single stage at MS2)
     TEST_TRUE(inActivationSet(cell(res, row, "activation_type")))
@@ -759,6 +760,7 @@ START_SECTION(results_exploration_per_variant_and_winner)
     found_expl = true;
     int vi = std::atoi(cell(res, row, "variant_index").c_str());
     int tv = std::atoi(cell(res, row, "total_variants").c_str());
+    if (vi == -1) continue;  // CE-0 baseline row: excluded from total_variants; not a sweep point
     TEST_TRUE(vi >= 0 && tv > 0 && vi < tv)
     seen_vi[gid].insert(vi);
     tv_of[gid] = tv;
@@ -827,6 +829,7 @@ START_SECTION(results_exploration_followup_columns)
     TEST_TRUE(gid >= 1)
     int vi = std::atoi(cell(res, row, "variant_index").c_str());
     int tv = std::atoi(cell(res, row, "total_variants").c_str());
+    if (vi == -1) continue;  // CE-0 baseline row (variant_index -1): a reference, not a sweep point
     TEST_TRUE(vi >= 0 && tv > 0 && vi < tv)
     TEST_TRUE(finiteVal(toD(cell(res, row, "exploration_score"))))
     auto kids = splitTokens(cell(res, row, "child_ids"), ' ');
@@ -873,6 +876,7 @@ START_SECTION(results_ms3_exploration_columns)
     TEST_TRUE(metric >= 1 && metric <= 3)
     int vi = std::atoi(cell(res, row, "variant_index").c_str());
     int tv = std::atoi(cell(res, row, "total_variants").c_str());
+    if (vi == -1) continue;  // CE-0 baseline row (variant_index -1): a reference, not a sweep point
     TEST_TRUE(vi >= 0 && tv > 0 && vi < tv)
 
     // §I4b ISSUE(Issue-1): the MS3-exploration *result* rows used to log SINGLE-stage CE/activation
