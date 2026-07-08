@@ -32,8 +32,8 @@ using namespace OpenMS;
 
 namespace
 {
-  // Horse heart cytochrome c sequence (104 AA) — matches ms2_hcd_fragment.txt test spectrum
-  const char* cytochrome_c_sequence = "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE";
+  // Horse heart cytochrome c sequence (M-start, 105 AA, UniProt P00004) — matches ms2_hcd_fragment.txt / ms2_cytc_fresh_scan57.txt (real scan-57)
+  const char* cytochrome_c_sequence = "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE";
 
   // Base JSON config with MS2 exploration enabled (mass_count, CE 20-40 step 5)
   // Uses cytochrome c sequence to match ms2_hcd_fragment.txt test spectrum
@@ -104,7 +104,7 @@ namespace
       "ptm_list": ""
     },
     "characterization": {
-      "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
+      "protein_sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE"
     },
     "conditional_ms2": false,
     "selection_strategy": {
@@ -695,7 +695,7 @@ namespace
 
   const std::string ms1_tsv_path = "../../FlashIDA/test-data/spectra/ms1_standard.txt";
   const std::string ms2_tsv_path = "../../FlashIDA/test-data/spectra/ms2_hcd_fragment.txt";
-  const std::string ms2_cytc_path = "../../FlashIDA/test-data/spectra/ms2_cytc_scan149.txt";
+  const std::string ms2_cytc_path = "../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt";
 
   // Config with 3-entry tol and MS2 exploration tolerance override
   const char* exploration_tolerance_config = R"({
