@@ -539,6 +539,37 @@ namespace OpenMS
     return &it->second;
   }
 
+  MS3FragmentMatcher::ProteoformContext ProteoformTracker::buildWinnerProteoformContext(int precursor_id) const
+  {
+    // Default context = region -1/-1, no PTMs. If there is no finalized, non-empty winner, MS3 then
+    // matches nothing ("no winner -> nothing to characterize"). This replaces the triggering-scan
+    // context at the MS3 build sites so MS3 is scored against the LIVE winner proteoform.
+    MS3FragmentMatcher::ProteoformContext ctx;
+    const ProteoformModel* m = getModel(precursor_id);
+    if (m == nullptr || !m->finalized || m->proteoform_sequence.empty()) return ctx;
+
+    const int P = static_cast<int>(m->proteoform_sequence.size());
+    const int ws = (m->region_start < 0) ? 0 : m->region_start;
+    const int we = (m->region_end < 0) ? P : m->region_end;
+    ctx.region_start = ws;   // 0-based inclusive (frame expected by MS3FragmentMatcher)
+    ctx.region_end = we;     // 0-based exclusive
+
+    // EVERY winner mod as a region-1-based PTMSite (same conversion as narrowModifications_ :782-789).
+    // Include LOCALIZED mods (candidate_start == candidate_end): a localized point PTM's mass must
+    // enter the MS3 theoretical (e.g. localized heme/acetyl) or fragments spanning it stop matching.
+    // Ambiguous mods (start < end) drive the matcher's dual with/without.
+    for (const ModificationState& mod : m->modifications)
+    {
+      FragmentAnalysis::PTMSite site;
+      site.start_position = mod.candidate_start - ws;   // region 1-based
+      site.end_position = mod.candidate_end - ws;
+      site.position = (site.start_position + site.end_position) / 2;
+      site.mass_shift = mod.mass_shift;
+      ctx.ptm_sites.push_back(site);
+    }
+    return ctx;
+  }
+
   void ProteoformTracker::mapScanOntoModel_(ProteoformModel& m, const PendingScan& ps)
   {
     // --- Strategy A ----------------------------------------------------------------------------
@@ -574,6 +605,17 @@ namespace OpenMS
     const int we = (m.region_end < 0) ? P : m.region_end;
     const int L = we - ws; // winner-region residue count
     if (L <= 0) return;
+
+    // A NON-winner MS2 scan matched against ITS OWN proteoform hypothesis, so trusting its already-
+    // matched fragments would pool foreign theoreticals. Instead re-match its RAW deconvolved masses
+    // against the WINNER ladder so every pooled MS2 fragment is winner-consistent by construction.
+    // The winner MS2 scan (FLASHTnT already did the heavy lifting) and all MS3 scans (winner-matched
+    // upstream via buildWinnerProteoformContext) keep the existing already-matched pooling below.
+    if (ps.ms_level == 2 && ps.scan_id != m.winner_scan_id)
+    {
+      mapNonWinnerMs2_(m, ps, ws, L);
+      return;
+    }
 
     // This scan's matched region resolved to [rs, re) (0-based, exclusive end).
     const int rs = (ps.match.region_start < 0) ? 0 : ps.match.region_start;
@@ -662,25 +704,7 @@ namespace OpenMS
         }
       }
 
-      // 4) Upsert the MappedFragment keyed by (ion_type, winner_frame_index).
-      const FragmentKey key{type, winner_idx};
-      MappedFragment& mfrag = m.fragments[key];
-      mfrag.ion_type = type;
-      mfrag.ion_index = winner_idx;
-      mfrag.is_prefix = is_prefix;
-      // Coverage = the winner-region residue span this ion covers (1-based inclusive, winner frame).
-      if (is_prefix)
-      {
-        mfrag.cover_start = 1;
-        mfrag.cover_end = winner_idx;
-      }
-      else
-      {
-        mfrag.cover_start = L - winner_idx + 1;
-        mfrag.cover_end = L;
-      }
-      // theoretical_mass is left 0 here; T6 computes theoreticals.
-
+      // 4) Build the observation and upsert it (shared helper: coverage + per-level max-intensity best).
       FragmentObservation obs;
       obs.ms_level = ps.ms_level;
       obs.observed_mass = obs_mass;
@@ -695,22 +719,186 @@ namespace OpenMS
       obs.stage1_scores = matched_stage1;
       obs.includes_ptm = fm.includes_ptm;   // carry the MS3 localization verdict (bool about THIS fragment's own coverage; frame-invariant)
 
-      if (ps.ms_level == 3)
+      upsertMappedObservation_(m, type, is_prefix, winner_idx, L, obs);
+    }
+  }
+
+  void ProteoformTracker::upsertMappedObservation_(ProteoformModel& m, const std::string& ion_type,
+      bool is_prefix, int winner_idx, int L, const FragmentObservation& obs)
+  {
+    const FragmentKey key{ion_type, winner_idx};
+    MappedFragment& mfrag = m.fragments[key];
+    mfrag.ion_type = ion_type;
+    mfrag.ion_index = winner_idx;
+    mfrag.is_prefix = is_prefix;
+    // Coverage = the winner-region residue span this ion covers (1-based inclusive, winner frame).
+    if (is_prefix)
+    {
+      mfrag.cover_start = 1;
+      mfrag.cover_end = winner_idx;
+    }
+    else
+    {
+      mfrag.cover_start = L - winner_idx + 1;
+      mfrag.cover_end = L;
+    }
+    // theoretical_mass is left 0 at the key level; alignedCombinedLists_ reports obs.theoretical_mass.
+
+    if (obs.ms_level == 3)
+    {
+      if (!mfrag.best_ms3.has_value() || obs.intensity > mfrag.best_ms3->intensity)
+        mfrag.best_ms3 = obs;
+      ++mfrag.n_ms3;
+    }
+    else
+    {
+      if (!mfrag.best_ms2.has_value() || obs.intensity > mfrag.best_ms2->intensity)
+        mfrag.best_ms2 = obs;
+      // Track the best MS2 observation per charge state for config-gated multi-charge MS3.
+      auto cit = mfrag.ms2_by_charge.find(obs.frag_charge);
+      if (cit == mfrag.ms2_by_charge.end() || obs.intensity > cit->second.intensity)
+        mfrag.ms2_by_charge[obs.frag_charge] = obs;
+      ++mfrag.n_ms2;
+    }
+  }
+
+  void ProteoformTracker::mapNonWinnerMs2_(ProteoformModel& m, const PendingScan& ps, int ws, int L)
+  {
+    // Build the WINNER theoretical ladder ONCE (winner-region frame) from the CURRENT (pre-narrow)
+    // winner mods -- the same region_seq + computePTMAdjustedFragmentMasses that narrowModifications_
+    // uses (:751-792). Ambiguous mods enter at their range boundary, so a BRACKETING ion carries the
+    // "mod OUT" value in `base`; "mod IN" = base + shift, tested per bracketed mod below.
+    const String region_seq =
+      (m.region_start < 0) ? String(m.proteoform_sequence) : String(m.proteoform_sequence).substr(ws, L);
+
+    // Ion types produced by THIS scan's fragmentation. A CE-sweep variant shares the winner's
+    // activation string (only collision energy differs); getIonTypesForFragmentationMethod lower-cases
+    // it. We match this scan's peaks against the winner ladder for exactly the ion types it produces.
+    const std::vector<std::string> ion_types =
+      FragmentAnalysis::getIonTypesForFragmentationMethod(ps.params.activation_type);
+    if (ion_types.empty()) return;
+
+    // ALL winner mods (localized AND ambiguous) as region-1-based PTMSites (same conversion as
+    // narrowModifications_ :782-789). Localized mods bake into the ladder; ambiguous ones are bracketed.
+    std::vector<FragmentAnalysis::PTMSite> winner_ptms;
+    for (const ModificationState& mod : m.modifications)
+    {
+      FragmentAnalysis::PTMSite site;
+      site.start_position = mod.candidate_start - ws;   // region 1-based
+      site.end_position = mod.candidate_end - ws;
+      site.position = (site.start_position + site.end_position) / 2;
+      site.mass_shift = mod.mass_shift;
+      winner_ptms.push_back(site);
+    }
+
+    std::map<char, std::vector<double>> ladder;   // region-frame theoreticals (ambiguous mods at range boundary)
+    FragmentAnalysis::computePTMAdjustedFragmentMasses(region_seq, winner_ptms, ion_types, ladder);
+
+    const double tol_ppm = config_.level(2).tolerance_ppm;
+
+    for (const PeakRecord& pr : ps.peaks)
+    {
+      const double obs_mass = pr.mono_mass;
+
+      // Assign this raw mass to the unique winner ion it lands on (Q7): keep only ions that match
+      // EXACTLY ONE candidate theoretical (base, or base + a subset of the shifts of the ambiguous
+      // mods it brackets); an ion matching >=2 candidates (base AND base+shift) is dropped as dodgy;
+      // across distinct surviving ions the closest ppm wins.
+      std::string best_type;
+      int best_idx = 0;
+      bool best_is_prefix = false;
+      double best_theo = 0.0;
+      double best_ppm = std::numeric_limits<double>::max();
+      bool have_best = false;
+
+      for (const std::string& ts : ion_types)
       {
-        if (!mfrag.best_ms3.has_value() || obs.intensity > mfrag.best_ms3->intensity)
-          mfrag.best_ms3 = obs;
-        ++mfrag.n_ms3;
+        if (ts.empty()) continue;
+        const char ic = ts[0];
+        const bool is_prefix = (ic == 'a' || ic == 'b' || ic == 'c');
+        auto lit = ladder.find(ic);
+        if (lit == ladder.end()) continue;
+        const std::vector<double>& masses = lit->second;
+
+        for (int k = 1; k <= static_cast<int>(masses.size()); ++k)
+        {
+          const double base = masses[k - 1];   // ambiguous mods this ion brackets are OUT of `base`
+          // Winner-frame coverage of ion (ic, k): prefix b_k covers [1,k]; suffix y_k covers [L-k+1,L].
+          const int cover_end = is_prefix ? k : L;
+          const int cover_start = is_prefix ? 1 : (L - k + 1);
+
+          // Shifts of the AMBIGUOUS winner mods this ion brackets (region frame; localized never bracket).
+          std::vector<double> bracket_shifts;
+          for (const ModificationState& mod : m.modifications)
+          {
+            const int s = mod.candidate_start - ws;
+            const int e = mod.candidate_end - ws;
+            if (s >= e) continue;   // localized -> baked into `base`, never bracketed
+            const bool brackets = is_prefix ? (s <= cover_end && cover_end < e)
+                                            : (s < cover_start && cover_start <= e);
+            if (brackets) bracket_shifts.push_back(mod.mass_shift);
+          }
+
+          // Candidate theoreticals = base + any subset of the bracketed shifts (2^n, n tiny). Deduped
+          // by exact value so equal-shift subsets (e.g. two identical PTMs) count as ONE mass
+          // hypothesis, while a genuine base-vs-base+shift pair (distinct values) still counts as two.
+          const int nb = static_cast<int>(bracket_shifts.size());
+          std::vector<double> cand;
+          cand.reserve(static_cast<size_t>(1) << nb);
+          for (int mask = 0; mask < (1 << nb); ++mask)
+          {
+            double theo = base;
+            for (int b = 0; b < nb; ++b)
+              if (mask & (1 << b)) theo += bracket_shifts[b];
+            if (theo > 0.0) cand.push_back(theo);
+          }
+          std::sort(cand.begin(), cand.end());
+
+          int n_match = 0;
+          double theo_here = 0.0;
+          double ppm_here = std::numeric_limits<double>::max();
+          for (size_t i = 0; i < cand.size(); ++i)
+          {
+            if (i > 0 && !(cand[i] > cand[i - 1])) continue;   // dedup exact-equal (sorted: equal iff not greater)
+            const double d = std::abs(obs_mass - cand[i]);
+            if (d <= cand[i] * tol_ppm * 1e-6)
+            {
+              ++n_match;
+              const double ppm = d / cand[i] * 1e6;
+              if (ppm < ppm_here) { ppm_here = ppm; theo_here = cand[i]; }
+            }
+          }
+          if (n_match != 1) continue;   // 0 -> no match; >=2 -> distinct base AND base+shift -> dodgy, drop
+
+          if (!have_best || ppm_here < best_ppm)   // >=2 distinct ions -> closest-ppm wins
+          {
+            have_best = true;
+            best_ppm = ppm_here;
+            best_type = ts;
+            best_idx = k;
+            best_is_prefix = is_prefix;
+            best_theo = theo_here;
+          }
+        }
       }
-      else
-      {
-        if (!mfrag.best_ms2.has_value() || obs.intensity > mfrag.best_ms2->intensity)
-          mfrag.best_ms2 = obs;
-        // Track the best MS2 observation per charge state for config-gated multi-charge MS3.
-        auto cit = mfrag.ms2_by_charge.find(obs.frag_charge);
-        if (cit == mfrag.ms2_by_charge.end() || obs.intensity > cit->second.intensity)
-          mfrag.ms2_by_charge[obs.frag_charge] = obs;
-        ++mfrag.n_ms2;
-      }
+
+      if (!have_best) continue;   // no unique winner-ladder match -> drop this mass
+
+      // Deposit as a best_ms2 observation; theoretical is the winner ladder value by construction.
+      FragmentObservation obs;
+      obs.ms_level = 2;
+      obs.observed_mass = obs_mass;
+      obs.measured_mass = obs_mass;                // MS2 fragment: measured == observed (protein frame)
+      obs.theoretical_mass = best_theo;
+      obs.intensity = pr.intensity;
+      obs.source_scan_id = ps.scan_id;
+      obs.params = ps.params;
+      obs.frag_mz = pr.mz;
+      obs.frag_charge = pr.charge;
+      obs.iso_width = pr.iso_width;
+      obs.stage1_scores = pr.stage1_scores;
+      obs.includes_ptm = false;                    // MS2: Pass A re-derives base-vs-shift per mod at narrow time
+      upsertMappedObservation_(m, best_type, best_is_prefix, best_idx, L, obs);
     }
   }
 

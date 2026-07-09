@@ -718,19 +718,15 @@ namespace OpenMS
         wstarts.data(), wends.data(),
         ion_types.data(), frag_indices.data(), result_copy, frag_result, scan_activation, 0.0, frag_scores.data());
 
-    // Cache proteoform context for MS3 subsequence scoring
-    // @Claude this logic should move into ProteoformTracker
+    // Proteoform context for MS3 subsequence scoring: score MS3 against the LIVE WINNER proteoform
+    // held by the tracker (ADR-0002 identification authority) rather than THIS triggering scan's
+    // frag_result. One source flows to group.proteoform_ctx (exploration-variant scoring), buildMS3
+    // (ms3_proteoform rendering) and the cached MS2Context for the returning MS3. buildWinnerProteoform-
+    // Context returns already-resolved 0-based bounds (empty context if there is no finalized winner).
     MS3FragmentMatcher::ProteoformContext proto_ctx;
-    if (next_level >= 3)
+    if (next_level >= 3 && tracker != nullptr)
     {
-      proto_ctx.region_start = frag_result.region_start;
-      proto_ctx.region_end = frag_result.region_end;
-      proto_ctx.ptm_sites = frag_result.ptm_sites;
-      // If no truncation detected, use full protein sequence bounds
-      if (proto_ctx.region_start < 0)
-        proto_ctx.region_start = 0;
-      if (proto_ctx.region_end < 0)
-        proto_ctx.region_end = static_cast<int>(seq.size());
+      proto_ctx = tracker->buildWinnerProteoformContext(precursor_id);
     }
 
     // Populate fragment matching metadata

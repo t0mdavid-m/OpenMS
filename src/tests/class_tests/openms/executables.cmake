@@ -466,6 +466,8 @@ set(analysis_executables_list
   ProteoformTracker_CEOptimization_test
   ProteoformTracker_Trajectory_test
   ProteoformTracker_Localization_test
+  ProteoformTracker_WinnerContext_test
+  ProteoformTracker_NonWinnerRematch_test
   ScanCommandQueue_Concurrent_test
   ScanConfig_applyOverrides_test
   FalseDiscoveryRate_test

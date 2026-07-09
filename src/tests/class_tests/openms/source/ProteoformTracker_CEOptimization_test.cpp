@@ -27,14 +27,14 @@
 //
 // CONSTRUCTION NOTE (why per-scan fragment PRESENCE, not literal inverted intensity): a fragment
 // observation's intensity is recovered from PeakGroup::getChargeIntensity(charge) (feedScan ->
-// PeakRecord.intensity). per_charge_int_ is populated ONLY by the full updateQscore scoring
-// pipeline (needs a PrecalculatedAveragine + passes charge/cosine gates); a hand-built synthetic
-// PeakGroup has getChargeIntensity()==0 (see PeakGroup_test getChargeIntensity == .0). With every
-// observation intensity 0 the strictly-greater update (obs.intensity > best->intensity) keeps the
-// FIRST observation of each fragment. We therefore make each fragment win deterministically by
-// having it appear in EXACTLY ONE of the two scans: fragment A only in the CE=20 scan, fragment B
-// only in the CE=35 scan. This drives the identical best_ms2 / obs.params / stage0_params path the
-// real CE-response data would drive, with a deterministic outcome (A -> 20, B -> 35).
+// PeakRecord.intensity), which is 0 for hand-built synthetic PeakGroups (no scoring pass). With every
+// observation intensity 0 the strictly-greater update (obs.intensity > best->intensity) keeps the FIRST
+// observation of each fragment. We make each fragment win deterministically by having it appear in
+// EXACTLY ONE scan: fragment A (b6) in the CE=20 scan (the WINNER, whose fragments are pooled verbatim),
+// fragment B (y6) in the CE=35 scan (a NON-winner, re-matched against the winner ladder -- Change 1:
+// winner-anchored pooling). Because B is re-matched, its raw peak MASS must equal the real winner y6 ion
+// (both fragments CONTAIN the ambiguous mod, so the mod is applied); we compute it in-test with the same
+// computePTMAdjustedFragmentMasses the engine uses. Deterministic outcome: A -> 20, B -> 35.
 
 #include <OpenMS/CONCEPT/ClassTest.h>
 
@@ -51,6 +51,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -183,9 +184,21 @@ START_SECTION(per_fragment_best_ms2_ce_propagates_to_ms3_stage0)
   ProteoformTracker tracker(cfg, logger);
   ScanCommandQueue queue(cfg);
 
-  // Fragment masses (arbitrary but distinct + matching the fed PeakGroup so frag_mz/charge resolve).
-  const double MASS_A = 700.0;   // prefix b6
-  const double MASS_B = 800.0;   // suffix y6
+  // Fragment masses = the REAL winner (PEPTIDEK) b6 / y6 with the ambiguous mod applied (both ions
+  // CONTAIN [4,5], so the mod is inside their coverage). The NON-winner scan (B) is re-matched against
+  // the winner ladder (Change 1: winner-anchored pooling), so its raw peak MUST equal a real winner ion;
+  // compute it with the same computePTMAdjustedFragmentMasses the engine uses -> exact (0 ppm) match.
+  std::map<char, std::vector<double>> winner_ladder;
+  {
+    FragmentAnalysis::PTMSite amb;
+    amb.start_position = AMB_MOD_START;
+    amb.end_position = AMB_MOD_END;
+    amb.position = (AMB_MOD_START + AMB_MOD_END) / 2;
+    amb.mass_shift = 42.0106;
+    FragmentAnalysis::computePTMAdjustedFragmentMasses(WINNER_SEQ, {amb}, {"b", "y"}, winner_ladder);
+  }
+  const double MASS_A = winner_ladder['b'][5];   // b6 (prefix; contains [4,5] -> mod applied)
+  const double MASS_B = winner_ladder['y'][5];   // y6 (suffix; contains [4,5] -> mod applied)
 
   // The MS2 context captured at the FIRST feedScan: its stage[0] CE = CE_A (= 20). This is the value
   // buildMS3 would use for stage[0] IF the per-fragment override were absent (adversarial baseline).

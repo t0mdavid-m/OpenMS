@@ -229,6 +229,13 @@ namespace OpenMS
     /// Return a pointer to the model for @p precursor_id, or nullptr if absent.
     const ProteoformModel* getModel(int precursor_id) const;
 
+    /// Build an MS3FragmentMatcher::ProteoformContext from the LIVE winner model for @p precursor_id
+    /// (winner region + ALL current modifications, localized and ambiguous). Returns an empty
+    /// context (region -1/-1, no PTMs) if there is no finalized, non-empty winner -> MS3 then matches
+    /// nothing. Lets MS3 scoring run against the winner proteoform instead of the triggering scan's
+    /// context (ADR-0002: the tracker is the identification authority).
+    MS3FragmentMatcher::ProteoformContext buildWinnerProteoformContext(int precursor_id) const;
+
     // --- Identification entry points (#46) ---------------------------------------------------------------
     // The tracker is the single place identification calls are made. These are thin STATIC forwarders (they
     // take the caller's FragmentAnalysis& because they also run in const helpers and with a null tracker);
@@ -267,6 +274,20 @@ namespace OpenMS
   private:
     /// Map all observations in @p scan onto @p mdl's fragments map (skeleton: no-op).
     void mapScanOntoModel_(ProteoformModel& mdl, const PendingScan& scan);
+
+    /// Re-match a NON-winner MS2 scan's raw deconvolved masses (@p scan.peaks) against the winner
+    /// theoretical ladder and deposit the winner-consistent matches as best_ms2 observations. A mass
+    /// maps only if it uniquely lands on one winner ion (base, or base+shift for a bracketed
+    /// ambiguous mod) within per-level tolerance; ambiguous double-matches are dropped, ties across
+    /// distinct ions resolve by closest ppm. Winner region resolved to [ws, we), L = we - ws.
+    void mapNonWinnerMs2_(ProteoformModel& mdl, const PendingScan& scan, int ws, int L);
+
+    /// Upsert one FragmentObservation into @p mdl.fragments at (@p ion_type, @p winner_idx): create
+    /// the MappedFragment if needed, set coverage in the winner frame (L = winner-region residues),
+    /// and update the per-level best (max-intensity) observation. Shared by the winner/MS3 pool path
+    /// and the non-winner re-match path.
+    void upsertMappedObservation_(ProteoformModel& mdl, const std::string& ion_type, bool is_prefix,
+                                  int winner_idx, int L, const FragmentObservation& obs);
 
     /// Update ModificationState entries in @p mdl based on current fragment coverage (skeleton: no-op).
     void narrowModifications_(ProteoformModel& mdl);

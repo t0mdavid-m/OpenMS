@@ -521,12 +521,10 @@ FLASHIda::FLASHIda(char* arg) :
           if (cache_it != ms2_context_cache_.end() && ms3_spec != nullptr && !ms3_spec->empty())
           {
             const auto& cached_ms2_ctx = cache_it->second;
-            // #46: the identification CALL now goes through ProteoformTracker::scoreCalibratedVariants
-            // (byte-identical forward to calibrateAndScore). Building proto_ctx here is deferred to Phase 3.
-            MS3FragmentMatcher::ProteoformContext proto_ctx;
-            proto_ctx.region_start = cached_ms2_ctx.start_pos;
-            proto_ctx.region_end = cached_ms2_ctx.end_pos;
-            proto_ctx.ptm_sites = cached_ms2_ctx.ptm_sites;
+            // Score the returning MS3 against the LIVE WINNER proteoform held by the tracker
+            // (ADR-0002), not this triggering MS2 scan's cached context. fragment_ion_type/index still
+            // come from cached_ms2_ctx below. Empty context (no finalized winner) => MS3 matches nothing.
+            MS3FragmentMatcher::ProteoformContext proto_ctx = tracker_.buildWinnerProteoformContext(precursor_id);
 
             std::vector<const DeconvolvedSpectrum*> spectra = {ms3_spec};
             std::vector<FragmentAnalysis::ProteoformMatch> ms3_matches;

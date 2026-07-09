@@ -31,11 +31,13 @@
 // "MS2" with trigger_scan_id = encode(winner_scan_id), failing assertion (B) (trigger must be "b3"/"y3"
 // and trigger_scan_id "AAB"/"AAC"). Either failure catches the regression.
 //
-// CONSTRUCTION NOTE (intensity recovery is best-effort, see ProteoformTracker.cpp:594-631): a hand-built
-// synthetic PeakGroup has getChargeIntensity() == 0, so every observation's intensity is 0. That is fine
-// here: mapScanOntoModel_ NEVER drops a matched fragment for lack of a peak (it falls back to the closest
-// mass), so each fed fragment lands in m.fragments regardless. The accumulation under test depends only
-// on the fragments map keying by (ion_type, winner-region index) -- distinct ions per fold -> new entries.
+// CONSTRUCTION NOTE: the WINNER MS2 scan's fragments are pooled verbatim (winner path) and MS3 folds map
+// by equiv index, so neither depends on a peak match. The NON-winner MS2 scan (102) is re-matched against
+// the winner ladder (Change 1: winner-anchored pooling), so its raw peak mass MUST equal a real winner b/y
+// ion (computed in-test with FragmentAnalysis::computePTMAdjustedFragmentMasses) or it would be DROPPED.
+// Hand-built PeakGroups have getChargeIntensity() == 0, so intensities are 0; mapping is by MASS, so that
+// is fine. The accumulation under test depends on the fragments map keying by (ion_type, winner index) --
+// distinct ions per fold -> new entries.
 
 #include <OpenMS/CONCEPT/ClassTest.h>
 
@@ -54,6 +56,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -190,13 +193,20 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
   IdaLogger logger(cfg);                 // opens the pooled stream (writes the header)
   ProteoformTracker tracker(cfg, logger);
 
+  // Real winner (PEPTIDEK) b/y ladder. A NON-winner MS2 scan is now re-matched against the winner
+  // ladder (Change 1: winner-anchored pooling), so its raw peak mass MUST equal a real winner ion or it
+  // is DROPPED. Compute the ladder with the SAME function the engine uses -> the fed peak matches at 0 ppm.
+  std::map<char, std::vector<double>> winner_ladder;
+  FragmentAnalysis::computePTMAdjustedFragmentMasses("PEPTIDEK", {}, {"b", "y"}, winner_ladder);
+  const double y2_mass = winner_ladder['y'][1];   // y2 -> winner key ("y", 2): distinct from b6 / b3 / y3
+
   ScanCommand ms2_ctx = makeMs2Ctx();
 
   // ---------------------------------------------------------------------------------------------
   // MS2 phase (baseline): feed two MS2 scans, then finalize -> ONE "MS2"-tagged baseline row.
-  //   scan 101 = prefix b6 (mass 700): covers winner residues [1, 6].
-  //   scan 102 = suffix y6 (mass 800): covers winner residues [3, 8] (cover_start = L - 6 + 1 = 3).
-  // Both ion cleavages map into the winner region (1..8) -> two distinct MappedFragments.
+  //   scan 101 = WINNER (b6, mass 700): pooled verbatim via the winner path -> key ("b", 6).
+  //   scan 102 = NON-winner (raw peak = real y2 mass): re-matched against the winner ladder (Change 1)
+  //              -> key ("y", 2), a distinct position -> two distinct MappedFragments.
   // ---------------------------------------------------------------------------------------------
   {
     Ms2Params p;
@@ -209,8 +219,10 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
     tracker.feedScan(precursor_id, 2, p, 101, d101, makeMatch("b", 6, 700.0), 1.0, ms2_ctx);
 
     DeconvolvedSpectrum d102(102);
-    d102.push_back(makeSyntheticPeakGroup(800.0 / 2.0 + 1.0, 800.0, 2));
-    tracker.feedScan(precursor_id, 2, p, 102, d102, makeMatch("y", 6, 800.0), 1.0, ms2_ctx);
+    d102.push_back(makeSyntheticPeakGroup(y2_mass / 2.0 + 1.0, y2_mass, 2));
+    // Non-winner: only its raw peak (y2_mass) is used -> re-matched to winner ("y", 2). The match arg's
+    // fragments are ignored for a non-winner; score/sequence keep it a (losing) winner candidate.
+    tracker.feedScan(precursor_id, 2, p, 102, d102, makeMatch("y", 2, y2_mass), 1.0, ms2_ctx);
   }
 
   tracker.finalizeMS2(precursor_id);
