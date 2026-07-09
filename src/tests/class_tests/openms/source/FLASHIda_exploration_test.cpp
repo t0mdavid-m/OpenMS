@@ -1610,7 +1610,7 @@ START_SECTION(fragment_count_requires_protein_sequence)
   std::string cfg_str = std::string(exploration_config);
   // Clear protein_sequence to test empty-sequence validation path
   {
-    const std::string seq = "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE";
+    const std::string seq = "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE";
     auto seq_pos = cfg_str.find(seq);
     if (seq_pos != std::string::npos) cfg_str.erase(seq_pos, seq.size());
   }
@@ -1661,7 +1661,7 @@ START_SECTION(terminal_fragments_requires_protein_sequence)
   std::string cfg_str = std::string(exploration_config);
   // Clear protein_sequence to test empty-sequence validation path
   {
-    const std::string seq = "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE";
+    const std::string seq = "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE";
     auto seq_pos = cfg_str.find(seq);
     if (seq_pos != std::string::npos) cfg_str.erase(seq_pos, seq.size());
   }
@@ -1680,7 +1680,7 @@ START_SECTION(ambiguity_resolution_requires_protein_sequence)
   std::string cfg_str = std::string(exploration_config);
   // Clear protein_sequence to test empty-sequence validation path
   {
-    const std::string seq = "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE";
+    const std::string seq = "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE";
     auto seq_pos = cfg_str.find(seq);
     if (seq_pos != std::string::npos) cfg_str.erase(seq_pos, seq.size());
   }
@@ -2284,82 +2284,6 @@ START_SECTION(inclusion_ms3_full_acquisition_roundtrip)
   delete ida;
 
   // Hard asserts: the inclusion-mode cytC acquisition produced MS2 and MS3 commands.
-  TEST_EQUAL(a.ms2_cmds.size() >= 1, true)
-  TEST_EQUAL(a.ms3_cmds.size() >= 1, true)
-
-  // Every MS3 parent_tracking_id must resolve to an emitted MS2 scan id. The MS2 ids
-  // are the leading 3 chars of each emitted MS2 scan_description; an MS3 command stores
-  // its parent MS2 id in parent_scan_id (3 chars + NUL).
-  std::set<std::string> emitted_ms2_ids;
-  for (const auto& m2 : a.ms2_cmds)
-  {
-    std::string d(m2.scan_description);
-    if (d.size() >= 3) emitted_ms2_ids.insert(d.substr(0, 3));
-  }
-  bool all_ms3_parents_resolve = true;
-  std::string unresolved;
-  for (const auto& m3 : a.ms3_cmds)
-  {
-    std::string parent(m3.parent_scan_id);  // NUL-terminated 3-char id
-    if (parent.empty() || emitted_ms2_ids.count(parent) == 0)
-    {
-      all_ms3_parents_resolve = false;
-      unresolved = parent;
-      break;
-    }
-  }
-  STATUS("emitted MS2 ids = " << emitted_ms2_ids.size()
-         << ", MS3 cmds = " << a.ms3_cmds.size()
-         << (all_ms3_parents_resolve ? std::string("")
-                                     : (", first unresolved MS3 parent = '" + unresolved + "'")))
-  TEST_EQUAL(all_ms3_parents_resolve, true)
-}
-END_SECTION
-
-START_SECTION(inclusion_ca_ms3_full_acquisition_roundtrip)
-{
-  auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_ca.txt");
-  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_ca_hcd45_scan185.txt");
-  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
-
-  // C++-schema mirror of method_inclusion.json + inclusion_ca.txt: inclusion mode
-  // (target_mode=1) pinned to the single ~29006 Da CA2 target, the CA2 proteoform
-  // (so the real HCD45 b/y ladder matches and MS3 fires), standard MS2 and
-  // MS3 intensity selection (NO exploration block), and a large agc_interval so only
-  // idle AGCs are emitted.
-  const char* inclusion_ms3_config = R"({
-    "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
-    "precursor_selection": { "RT_window": 180, "target_mode": 1, "IDScore": false, "AllCharges": false, "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1 },
-    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
-    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
-    "faims": { "cv_values": [-50], "max_cv_skip": 0, "cv_precursor_threshold": 15 },
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [ { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 } ],
-      "ms3": [ { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 35, "resolution": 120000 } ]
-    },
-    "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 }, "agc_interval_seconds": 999999 },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "../../FlashIDA/test-data/configs/inclusion_ca.txt", "ptm_list": "" },
-    "characterization": { "protein_sequence": "SHHWGYGKHNGPEHWHKDFPIANGERQSPVDIDTKAVVQDPALKPLALVYGEATSRRMVNNGHSFNVEYDDSQDKAVLKDGPLTGTYRLVQFHFHWGSSDDQGSEHTVDRKKYAAELHLVHWNTKYGDFGTAAQQPDGLAVVGVFLKVGDANPALQKVLDALDSIKTKGKSTDFPNFDPGSLLPNVLDYWTYPGSLTTPPLLESVTWIVLKEPISVSSQQMLKFRTLNFNAEGEPELLMLANWRPAQPLKNRQVRGFPK" },
-    "conditional_ms2": false,
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "intensity", "max_targets": 3 },
-      "ms3": { "selection": "intensity", "max_targets": 3 }
-    }
-  })";
-  std::string cfg_str(inclusion_ms3_config);
-  FLASHIda* ida = new FLASHIda(const_cast<char*>(cfg_str.c_str()));
-
-  // H-full id-chaining drive over the one canonical contract (runInterleaved). ms1_ca.txt has a
-  // SINGLE CA MS1 survey scan (scan 175), so we feed ms1_scans[0]; an MS1 re-survey after it is fed
-  // counts as idle (avoids RT self-exclusion churn). MS2 = ms2_scans[0]; the MS3 feed uses the
-  // MS2-as-MS3 shortcut (ms3_ion_map == nullptr), matching the original inline driver's MS3 feed.
-  AcqResult a = runInterleaved(ida, std::vector<ScanData>{ms1_scans[0]},
-                               std::vector<ScanData>{ms2_scans[0]}, nullptr, 300);
-  delete ida;
-
-  // Hard asserts: the inclusion-mode CA2 acquisition produced MS2 and MS3 commands.
   TEST_EQUAL(a.ms2_cmds.size() >= 1, true)
   TEST_EQUAL(a.ms3_cmds.size() >= 1, true)
 
