@@ -658,10 +658,20 @@ namespace OpenMS
           // equiv-frame sum reproduces md.ambiguous_included exactly for same-direction maps.
           double equiv_ambiguous = coveredAmbiguousInEquivFrame(
             ctx, fm.equiv_type, fm.equiv_index, static_cast<int>(protein_sequence.size()), md.includes_ptm);
-          fm.adjusted_mass = md.observed_mass + offset + equiv_ambiguous;
           // theoretical for the equivalent ion in the same frame (mod-inclusive, this scan's proteoform).
           fm.theoretical_mass = offset + md.theoretical_mass + equiv_ambiguous;
-          fm.diff_da = fm.adjusted_mass - fm.theoretical_mass;
+          // Project the sub-fragment onto the equivalent-ion (MS2) frame PPM-HONESTLY: scale the whole
+          // mod-inclusive equivalent theoretical by the sub-fragment's measured fractional (ppm) error,
+          // instead of ADDING the Da offset. The additive form (observed + offset + equiv_ambiguous) asserted
+          // the un-measured complement was error-free, so diff_ppm = (tiny sub-frame Da) / (large equiv mass)
+          // was DEFLATED -- it flattered every MS3 match. Here the complement inherits the fragment's
+          // fractional error, so diff_ppm = (ratio - 1) * 1e6 = the sub-frame measured ppm (== md.ppm_error)
+          // EXACTLY -- fm.theoretical_mass cancels, so offset and equiv_ambiguous are irrelevant to diff_ppm.
+          // Same-frame (offset == 0, no ambiguous mods) reduces to adjusted == observed. A matched ion always
+          // has md.theoretical_mass > 0, so the guard is a dead safety path.
+          const double ratio = (md.theoretical_mass > 0.0) ? (md.observed_mass / md.theoretical_mass) : 1.0;
+          fm.adjusted_mass = fm.theoretical_mass * ratio;
+          fm.diff_da = fm.adjusted_mass - fm.theoretical_mass;   // = fm.theoretical_mass * (ratio - 1): equiv-frame projected Da
           fm.diff_ppm = (fm.theoretical_mass != 0.0) ? (fm.diff_da / fm.theoretical_mass * 1e6) : 0.0;
           fm.includes_ptm = md.includes_ptm;   // propagate the MS3 localization verdict (already set in matchSpectrum)
           mr.fragments.push_back(fm);

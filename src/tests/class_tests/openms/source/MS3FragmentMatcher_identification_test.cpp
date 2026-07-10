@@ -342,4 +342,205 @@ START_SECTION(calibrateAndScore_detailed_results)
 }
 END_SECTION
 
+/////////////////////////////////////////////////////////////
+// T8: PPM-HONEST frame projection -- same-direction b-from-b, cross-frame.
+//     The MS3->MS2 projection is multiplicative (scale the equivalent theoretical by the
+//     sub-fragment's measured fractional error), NOT Da-additive. A sub-fragment measured at a
+//     known +10 ppm must report +10 ppm in the MS2 frame -- the OLD Da-additive form deflated it
+//     to 10*theo_sub/theo_equiv (~4.9 ppm here), so these assertions fail under the old code.
+//     Calibration trap: a LONE injected peak is absorbed by the Pass-1 median correction
+//     (correction_factor cancels it) -> diff_ppm ~ 0 under BOTH old and new. Neutralize it with an
+//     ODD, majority-0-ppm set so median = 0, correction_factor = 1, and the +10 ppm survives.
+/////////////////////////////////////////////////////////////
+
+START_SECTION(calibrateAndScore_ppm_frame_projection_same_dir_b)
+{
+  // protein indices: A0 C1 D2 E3 F4 G5 H6 I7 K8 L9
+  std::string protein = "ACDEFGHIKL";
+  MS3FragmentMatcher::ProteoformContext ctx;
+  ctx.region_start = 3;                 // proteoform "EFGHIKL" -> offset > 0 (cross-frame)
+  ctx.region_end = 10;
+
+  char frag_type = 'b';
+  int frag_index = 4;                   // b4 precursor -> subseq = protein[3:7] = "EFGH"
+  std::string subseq = MS3FragmentMatcher::extractSubsequence(protein, ctx, frag_type, frag_index);
+  TEST_EQUAL(subseq, "EFGH")
+
+  // Sub-frame b-ion masses (prefix sums of the subseq; computeTheoreticalMasses reproduces these exactly).
+  double theo_b1 = resMass('E');
+  double theo_b2 = resMass('E') + resMass('F');
+  double theo_b3 = resMass('E') + resMass('F') + resMass('G');
+
+  const double kPpm = 10.0;
+  DeconvolvedSpectrum ds(0);
+  auto addPeak = [&](double m) { PeakGroup pg(1, 1, true); pg.setMonoisotopicMass(m); ds.push_back(pg); };
+  addPeak(theo_b1);                          // 0 ppm
+  addPeak(theo_b2 * (1.0 + kPpm * 1e-6));    // +10 ppm (target)
+  addPeak(theo_b3);                          // 0 ppm
+
+  std::vector<const DeconvolvedSpectrum*> variants = {&ds};
+  std::vector<FragmentAnalysis::ProteoformMatch> detailed;
+  MS3FragmentMatcher::calibrateAndScore(
+    variants, protein, ctx, frag_type, frag_index,
+    MS3FragmentMatcher::LOOSE_TOLERANCE_PPM, 50.0, &detailed);
+
+  TEST_EQUAL(detailed.size(), 1)
+  // Calibration neutralized: median of {0, 0, +10} = 0 -> correction_factor = 1 (the +10 ppm survives).
+  TEST_REAL_SIMILAR(detailed[0].correction_factor, 1.0)
+
+  bool found = false;
+  for (const auto& fm : detailed[0].fragments)
+  {
+    if (fm.ion_type == "b" && fm.ion_index == 2)
+    {
+      found = true;
+      // Same-direction b: equiv b(start + 2) = b5, offset > 0.
+      TEST_EQUAL(fm.equiv_type, "b")
+      TEST_EQUAL(fm.equiv_index, 5)
+      // PPM-honest: the MS2-frame residual EQUALS the sub-frame measured +10 ppm (fails under Da-additive).
+      TEST_REAL_SIMILAR(fm.diff_ppm, kPpm)
+      // Multiplicative: adjusted = equivalent theoretical * (1 + 10 ppm).
+      TEST_REAL_SIMILAR(fm.adjusted_mass, fm.theoretical_mass * (1.0 + kPpm * 1e-6))
+      // diff_da is the equiv-frame projected Da residual (theoretical * (ratio - 1)), larger than the raw sub-frame Da.
+      TEST_REAL_SIMILAR(fm.diff_da, fm.theoretical_mass * (kPpm * 1e-6))
+      // fm.theoretical_mass is the full equivalent (b5) theoretical = prefix[5].
+      double theo_b5 = resMass('A') + resMass('C') + resMass('D') + resMass('E') + resMass('F');
+      TEST_REAL_SIMILAR(fm.theoretical_mass, theo_b5)
+      break;
+    }
+  }
+  TEST_TRUE(found)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// T9: PPM-HONEST frame projection -- complement-flip yb-from-b, with an ambiguous PTM on the
+//     COMPLEMENT of the sub-fragment. coveredAmbiguousInEquivFrame folds the phospho into the
+//     equivalent ion even though the yb2 sub-fragment does not cover it, so equiv_ambiguous (+phospho)
+//     != md.ambiguous_included (0). The invariant must still hold: diff_ppm == the sub-frame +10 ppm
+//     (offset AND equiv_ambiguous cancel), and the WHOLE mod-inclusive equivalent theoretical scales.
+/////////////////////////////////////////////////////////////
+
+START_SECTION(calibrateAndScore_ppm_frame_projection_complement_flip_yb)
+{
+  // protein indices: A0 C1 D2 E3 F4 G5 H6 I7 K8 L9 M10 N11 P12 Q13 R14 S15
+  std::string protein = "ACDEFGHIKLMNPQRS";
+  MS3FragmentMatcher::ProteoformContext ctx;
+  ctx.region_start = 3;                  // proteoform "EFGHIKLM" (region positions 1..8)
+  ctx.region_end = 11;
+  // Ambiguous PTM on region positions 3-4 (= "GH", absolute residues 5-6): on the COMPLEMENT of the
+  // yb2 sub-fragment, but INSIDE the equivalent b7 ion.
+  const double kPtm = 79.96633;          // phospho
+  FragmentAnalysis::PTMSite site;
+  site.start_position = 3; site.end_position = 4; site.position = 3; site.mass_shift = kPtm;
+  ctx.ptm_sites.push_back(site);
+
+  char frag_type = 'b';
+  int frag_index = 6;                    // b6 precursor -> subseq = protein[3:9] = "EFGHIK"
+  std::string subseq = MS3FragmentMatcher::extractSubsequence(protein, ctx, frag_type, frag_index);
+  TEST_EQUAL(subseq, "EFGHIK")
+
+  // Clean calibration ions: prefix b1,b2 cover subseq [1..2] = "EF" (no PTM overlap).
+  double theo_b1 = resMass('E');
+  double theo_b2 = resMass('E') + resMass('F');
+  // Target: suffix yb2 covers subseq [5..6] = "IK" (absolute 7-8), does NOT cover the PTM at [3,4].
+  double theo_yb2 = resMass('I') + resMass('K');
+
+  const double kPpm = 10.0;
+  DeconvolvedSpectrum ds(0);
+  auto addPeak = [&](double m) { PeakGroup pg(1, 1, true); pg.setMonoisotopicMass(m); ds.push_back(pg); };
+  addPeak(theo_b1);                          // 0 ppm
+  addPeak(theo_b2);                          // 0 ppm
+  addPeak(theo_yb2 * (1.0 + kPpm * 1e-6));   // +10 ppm (target)
+
+  std::vector<const DeconvolvedSpectrum*> variants = {&ds};
+  std::vector<FragmentAnalysis::ProteoformMatch> detailed;
+  MS3FragmentMatcher::calibrateAndScore(
+    variants, protein, ctx, frag_type, frag_index,
+    MS3FragmentMatcher::LOOSE_TOLERANCE_PPM, 50.0, &detailed);
+
+  TEST_EQUAL(detailed.size(), 1)
+  TEST_REAL_SIMILAR(detailed[0].correction_factor, 1.0)
+
+  bool found = false;
+  for (const auto& fm : detailed[0].fragments)
+  {
+    if (fm.ion_type == "yb" && fm.ion_index == 2)
+    {
+      found = true;
+      // Complement flip: yb2 (suffix) maps to the prefix equivalent b7 (covers absolute [0,6]).
+      TEST_EQUAL(fm.equiv_type, "b")
+      TEST_EQUAL(fm.equiv_index, 7)
+      // Invariant survives equiv_ambiguous (+phospho) != md.ambiguous_included (0): diff_ppm == sub-frame +10 ppm.
+      TEST_REAL_SIMILAR(fm.diff_ppm, kPpm)
+      TEST_REAL_SIMILAR(fm.adjusted_mass, fm.theoretical_mass * (1.0 + kPpm * 1e-6))
+      // Q3: the WHOLE mod-inclusive equivalent theoretical = b7 backbone (prefix[7]) + the ambiguous phospho.
+      double prefix7 = resMass('A') + resMass('C') + resMass('D') + resMass('E')
+                     + resMass('F') + resMass('G') + resMass('H');
+      TEST_REAL_SIMILAR(fm.theoretical_mass, prefix7 + kPtm)
+      break;
+    }
+  }
+  TEST_TRUE(found)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// T10: PPM-HONEST frame projection -- cross map, b-from-y-precursor, truncated proteoform
+//      (region_end < P so the P-end y-frame offset is exercised). A prefix b ion of a y-precursor
+//      maps to a y equivalent; diff_ppm must equal the injected sub-frame +10 ppm.
+/////////////////////////////////////////////////////////////
+
+START_SECTION(calibrateAndScore_ppm_frame_projection_cross_map_y)
+{
+  // protein indices: A0 C1 D2 E3 F4 G5 H6 I7 K8 L9  (P = 10)
+  std::string protein = "ACDEFGHIKL";
+  MS3FragmentMatcher::ProteoformContext ctx;
+  ctx.region_start = 1;                  // proteoform "CDEFGHI" (region_end 8 < P 10)
+  ctx.region_end = 8;
+
+  char frag_type = 'y';
+  int frag_index = 4;                    // y4 precursor -> subseq = protein[4:8] = "FGHI"
+  std::string subseq = MS3FragmentMatcher::extractSubsequence(protein, ctx, frag_type, frag_index);
+  TEST_EQUAL(subseq, "FGHI")
+
+  // Prefix b-ions of the subseq (a y-precursor emits a,b,y; a prefix b maps CROSS to a y equivalent).
+  double theo_b1 = resMass('F');
+  double theo_b2 = resMass('F') + resMass('G');
+  double theo_b3 = resMass('F') + resMass('G') + resMass('H');
+
+  const double kPpm = 10.0;
+  DeconvolvedSpectrum ds(0);
+  auto addPeak = [&](double m) { PeakGroup pg(1, 1, true); pg.setMonoisotopicMass(m); ds.push_back(pg); };
+  addPeak(theo_b1);                          // 0 ppm
+  addPeak(theo_b2 * (1.0 + kPpm * 1e-6));    // +10 ppm (target)
+  addPeak(theo_b3);                          // 0 ppm
+
+  std::vector<const DeconvolvedSpectrum*> variants = {&ds};
+  std::vector<FragmentAnalysis::ProteoformMatch> detailed;
+  MS3FragmentMatcher::calibrateAndScore(
+    variants, protein, ctx, frag_type, frag_index,
+    MS3FragmentMatcher::LOOSE_TOLERANCE_PPM, 50.0, &detailed);
+
+  TEST_EQUAL(detailed.size(), 1)
+  TEST_REAL_SIMILAR(detailed[0].correction_factor, 1.0)
+
+  bool found = false;
+  for (const auto& fm : detailed[0].fragments)
+  {
+    if (fm.ion_type == "b" && fm.ion_index == 2)
+    {
+      found = true;
+      // Cross map: prefix b from a y-precursor -> y equivalent, index = P - end + N - idx = 10 - 8 + 4 - 2 = 4.
+      TEST_EQUAL(fm.equiv_type, "y")
+      TEST_EQUAL(fm.equiv_index, 4)
+      TEST_REAL_SIMILAR(fm.diff_ppm, kPpm)
+      TEST_REAL_SIMILAR(fm.adjusted_mass, fm.theoretical_mass * (1.0 + kPpm * 1e-6))
+      break;
+    }
+  }
+  TEST_TRUE(found)
+}
+END_SECTION
+
 END_TEST
