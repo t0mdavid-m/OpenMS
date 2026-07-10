@@ -482,11 +482,17 @@ namespace OpenMS
       for (auto& var : group.variants)
         variant_spectra.push_back(var.received ? &var.result : nullptr);
 
+      // Score the completed exploration group against the LIVE WINNER ("Full"), not the render context.
+      // group.proteoform_ctx stays the triggering-scan RENDER context (drives buildMS3 + the MS2Context);
+      // tracker is null in unit tests -> fall back to the render context (the only one available then).
+      const MS3FragmentMatcher::ProteoformContext score_ctx = (tracker != nullptr)
+          ? tracker->buildWinnerProteoformContext(precursor_id)
+          : group.proteoform_ctx;
       std::vector<FragmentAnalysis::ProteoformMatch> detailed_results;
       auto calibrated_scores = ProteoformTracker::scoreCalibratedVariants(
         variant_spectra,
         config_.characterization().protein_sequence,
-        group.proteoform_ctx,
+        score_ctx,
         group.fragment_ion_type,
         group.fragment_ion_index,
         MS3FragmentMatcher::LOOSE_TOLERANCE_PPM,
@@ -718,15 +724,20 @@ namespace OpenMS
         wstarts.data(), wends.data(),
         ion_types.data(), frag_indices.data(), result_copy, frag_result, scan_activation, 0.0, frag_scores.data());
 
-    // Proteoform context for MS3 subsequence scoring: score MS3 against the LIVE WINNER proteoform
-    // held by the tracker (ADR-0002 identification authority) rather than THIS triggering scan's
-    // frag_result. One source flows to group.proteoform_ctx (exploration-variant scoring), buildMS3
-    // (ms3_proteoform rendering) and the cached MS2Context for the returning MS3. buildWinnerProteoform-
-    // Context returns already-resolved 0-based bounds (empty context if there is no finalized winner).
+    // RENDER context (build time): the TRIGGERING scan's frag_result, NOT the (unfinalized) winner. At
+    // MS2/next-level build time the winner is not yet finalized, so buildWinnerProteoformContext would
+    // return an empty context -> fragmentProForma renders "" (empty/collapsed ms3_proteoform). This one
+    // source flows to group.proteoform_ctx (:164), the three buildMS3 ms3_proteoform renders and the
+    // cached MS2Context. Winner SCORING is decoupled: the returning MS3 (FLASHIda.cpp) and the completed
+    // exploration group (below) score against a fresh buildWinnerProteoformContext instead.
     MS3FragmentMatcher::ProteoformContext proto_ctx;
-    if (next_level >= 3 && tracker != nullptr)
+    if (next_level >= 3)
     {
-      proto_ctx = tracker->buildWinnerProteoformContext(precursor_id);
+      proto_ctx.region_start = frag_result.region_start;
+      proto_ctx.region_end = frag_result.region_end;
+      proto_ctx.ptm_sites = frag_result.ptm_sites;
+      if (proto_ctx.region_start < 0) proto_ctx.region_start = 0;
+      if (proto_ctx.region_end < 0) proto_ctx.region_end = static_cast<int>(seq.size());
     }
 
     // Populate fragment matching metadata

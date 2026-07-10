@@ -35,6 +35,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/IdaLogger.h>
 
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 
 #include <algorithm>
@@ -468,22 +469,43 @@ namespace OpenMS
     const int id_region_start = use_match_region ? match.region_start : ctx.start_pos;
     const int id_region_end   = use_match_region ? match.region_end   : ctx.end_pos;
 
-    // ISSUE(N): the MS3 identification leaf carries THIS scan's OWN PTM narrowing (per-scan evidence),
-    // not the parent-wide clip. Narrow a LOCAL copy of the PTM sites from the match's own matched
-    // sub-fragments; this writer emits ONLY identification.tsv, so pooled (ProteoformTracker, seeded from
-    // the MS2 winner) and scan_results (rendered from the parent MS2 context) are untouched. This single
-    // site covers all three MS3 identification-row sinks (regular 'R' + exploration-'E' primary + winner).
-    // MS2 rows keep their proteoform range as-is (narrowing is an MS3-only, fragment-frame notion).
+    // FRESH PER-SCAN ambiguity (MS3): the identification leaf shows what THIS scan's ion looks like, so its
+    // ranges can be WIDER than the cumulative pooled log. Seed the narrowing from the SAME wide base
+    // scan_commands renders for this MS3 command -- row.ctx is the triggering-scan RENDER context (region
+    // frame), reconstructed here and run through the shared fragmentProFormaSites -- then narrow with ONLY
+    // THIS scan's matched ions. The wide base is independent of the pooled model (so the leaf can be >=
+    // pooled), and identical to scan_commands + inward-only narrowing guarantees the leaf is a SUBSET of
+    // scan_commands. This writer emits ONLY identification.tsv; pooled (ProteoformTracker) + scan_commands
+    // are untouched. MS2 rows keep their range as-is (narrowing is an MS3-only, fragment-frame notion).
     std::vector<FragmentAnalysis::PTMSite> narrowed_sites;
     const std::vector<FragmentAnalysis::PTMSite>* eff_ptm_sites = &id_ptm_sites;
+    std::string id_render_seq = id_proteoform;   // default: the fragment sub-sequence carried by match
     if (ms_level == 3 && match_has_proteoform)
     {
-      narrowed_sites = FragmentAnalysis::narrowFragmentPTMSites(
-          match.ptm_sites, static_cast<int>(match.proteoform_sequence.size()), match.fragments);
-      eff_ptm_sites = &narrowed_sites;
+      MS3FragmentMatcher::ProteoformContext render_ctx;
+      render_ctx.region_start = ctx.start_pos;   // render context (region frame) from the cached MS2Context
+      render_ctx.region_end = ctx.end_pos;
+      render_ctx.ptm_sites = ctx.ptm_sites;
+      std::string wide_seq;
+      std::vector<FragmentAnalysis::PTMSite> wide_sites;
+      if (MS3FragmentMatcher::fragmentProFormaSites(config_.characterization().protein_sequence, render_ctx,
+              ctx.fragment_ion_type, ctx.fragment_ion_index, wide_seq, wide_sites))
+      {
+        narrowed_sites = FragmentAnalysis::narrowFragmentPTMSites(
+            wide_sites, static_cast<int>(wide_seq.size()), match.fragments);   // THIS scan's ions only
+        eff_ptm_sites = &narrowed_sites;
+        id_render_seq = wide_seq;                // render the SAME fragment scan_commands renders
+      }
+      else
+      {
+        // Defensive fallback (render ctx not populated, e.g. a degenerate row): previous behaviour.
+        narrowed_sites = FragmentAnalysis::narrowFragmentPTMSites(
+            match.ptm_sites, static_cast<int>(match.proteoform_sequence.size()), match.fragments);
+        eff_ptm_sites = &narrowed_sites;
+      }
     }
 
-    std::string proforma = FragmentAnalysis::toProForma(id_proteoform, *eff_ptm_sites);
+    std::string proforma = FragmentAnalysis::toProForma(id_render_seq, *eff_ptm_sites);
 
     std::ostringstream ms2_frags, ms2_masses;
     ms2_frags << std::fixed << std::setprecision(4);

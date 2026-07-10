@@ -122,6 +122,17 @@ namespace OpenMS
       char fragment_ion_type,
       int fragment_ion_index);
 
+    /// The (subseq, wide fragment-frame PTM ranges) that fragmentProForma renders, exposed so the
+    /// identification.tsv leaf can narrow the SAME wide base by ONE MS3 scan's matched ions -- guaranteeing
+    /// identification is a subset of scan_commands. Returns false when the context isn't populated.
+    static bool fragmentProFormaSites(
+      const std::string& protein_sequence,
+      const ProteoformContext& ctx,
+      char fragment_ion_type,
+      int fragment_ion_index,
+      std::string& out_subseq,
+      std::vector<FragmentAnalysis::PTMSite>& out_wide_sites);
+
     // -- Two-pass calibration pipeline --
 
     /// Score all CE variants via two-pass calibration + matching

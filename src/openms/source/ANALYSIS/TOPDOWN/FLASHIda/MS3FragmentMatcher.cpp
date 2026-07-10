@@ -316,17 +316,20 @@ namespace OpenMS
     return result;
   }
 
-  std::string MS3FragmentMatcher::fragmentProForma(
+  bool MS3FragmentMatcher::fragmentProFormaSites(
     const std::string& protein_sequence,
     const ProteoformContext& ctx,
     char fragment_ion_type,
-    int fragment_ion_index)
+    int fragment_ion_index,
+    std::string& out_subseq,
+    std::vector<FragmentAnalysis::PTMSite>& out_wide_sites)
   {
-    // Same subsequence + rebase logic calibrateAndScore uses (see below), but standalone so the
-    // scan_results MS3 rows can render the fragment from the acquisition context alone — no matched
-    // spectrum required (present even when identification is deferred/failed).
-    std::string subseq = extractSubsequence(protein_sequence, ctx, fragment_ion_type, fragment_ion_index);
-    if (subseq.empty()) return "";  // context not populated -> empty (never a parent fallback)
+    // Same subsequence + rebase logic calibrateAndScore uses, exposed so BOTH scan_commands
+    // (fragmentProForma, string) and the identification.tsv leaf (which narrows these wide ranges by ONE
+    // MS3 scan's ions) draw the wide fragment-frame base from ONE code path -> identification is always a
+    // subset of scan_commands by construction. Returns false when the context is not populated.
+    out_subseq = extractSubsequence(protein_sequence, ctx, fragment_ion_type, fragment_ion_index);
+    if (out_subseq.empty()) return false;
 
     int proteoform_length = ctx.region_end - ctx.region_start;
     int subseq_start_1based;
@@ -335,8 +338,23 @@ namespace OpenMS
     else
       subseq_start_1based = proteoform_length - fragment_ion_index + 1;
 
-    std::vector<FragmentAnalysis::PTMSite> rebased = rebasePTMSites(ctx.ptm_sites, subseq_start_1based, fragment_ion_index);
-    return FragmentAnalysis::toProForma(subseq, rebased);
+    out_wide_sites = rebasePTMSites(ctx.ptm_sites, subseq_start_1based, fragment_ion_index);
+    return true;
+  }
+
+  std::string MS3FragmentMatcher::fragmentProForma(
+    const std::string& protein_sequence,
+    const ProteoformContext& ctx,
+    char fragment_ion_type,
+    int fragment_ion_index)
+  {
+    // scan_commands MS3 rows render the fragment from the acquisition context alone (no matched spectrum
+    // required, present even when identification is deferred/failed).
+    std::string subseq;
+    std::vector<FragmentAnalysis::PTMSite> wide;
+    if (!fragmentProFormaSites(protein_sequence, ctx, fragment_ion_type, fragment_ion_index, subseq, wide))
+      return "";  // context not populated -> empty (never a parent fallback) -- unchanged contract
+    return FragmentAnalysis::toProForma(subseq, wide);
   }
 
   std::vector<double> MS3FragmentMatcher::computeProteinPrefixMasses(
