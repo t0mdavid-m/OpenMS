@@ -728,12 +728,12 @@ namespace OpenMS
       obs.frag_charge = matched_charge;
       obs.iso_width = matched_iso_width;
       obs.stage1_scores = matched_stage1;
-      // Pooled narrowing votes on the EQUIVALENT (full-protein) ion, so it reads the complement-aware
-      // equiv-frame verdict — NOT the sub-frame includes_ptm (correct only for same-direction maps). The old
-      // "frame-invariant" claim was false: a complement-flipped MS3 fragment deposited under an equiv prefix
-      // key wrongly voted the mod onto the N-terminus (heme suffix res5-47 -> fake b4 -> +626 to (1-4)).
-      // MS2 fragments carry no equiv verdict, so they keep their own includes_ptm (== false).
-      obs.includes_ptm = (ps.ms_level == 3) ? fm.equiv_includes_ptm : fm.includes_ptm;
+      // Deposit the HONEST sub-frame verdict + the complement-flip flag. The mod-aware complement verdict
+      // (flip iff a complement map, with the N-terminal-net-loss exception) is applied per-(mod,fragment) in
+      // narrowModifications_ Pass B, which alone can see the mod's sign + N-terminal anchor. (A pre-flipped
+      // uniform verdict here regressed the N-terminal -89 from M1 to (2-8) while fixing the additive heme.)
+      obs.includes_ptm = fm.includes_ptm;
+      obs.is_complement_flip = (ps.ms_level == 3) && fm.is_complement_flip;
 
       upsertMappedObservation_(m, type, is_prefix, winner_idx, L, obs);
     }
@@ -1090,12 +1090,23 @@ namespace OpenMS
         const FragmentObservation& o = *f.best_ms3;
         const double I = o.intensity;
 
-        if (o.includes_ptm)      // PTM IS inside this fragment's coverage (matched the with-variant)
+        // Complement-aware, MOD-AWARE localization verdict. o.includes_ptm = the matched sub-ion's honest
+        // verdict; on a complement flip the equiv ion (deposited under the prefix key) is the COMPLEMENT, so
+        // it carries the mod iff the sub does NOT -- EXCEPT an N-terminal net-loss composite (Met-excision +
+        // N-alpha-acetyl = -89, mass_shift<0 anchored at residue 1), which stays localized to the N-terminus.
+        bool includes = o.includes_ptm;
+        if (o.is_complement_flip)
+        {
+          const bool nterm_loss = (mod.mass_shift < 0.0) && (mod.candidate_start == 1);
+          includes = nterm_loss ? o.includes_ptm : !o.includes_ptm;
+        }
+
+        if (includes)            // PTM IS inside this equiv ion's coverage
         {
           if (f.is_prefix) tightenUpper(rs_region, re_region, mod.support_lower, mod.support_upper, f.cover_end, I);
           else             tightenLower(rs_region, re_region, mod.support_lower, mod.support_upper, f.cover_start, I);
         }
-        else                     // PTM is OUTSIDE this fragment's coverage (matched the without-variant)
+        else                     // PTM is OUTSIDE this equiv ion's coverage
         {
           if (f.is_prefix) tightenLower(rs_region, re_region, mod.support_lower, mod.support_upper, f.cover_end + 1, I);
           else             tightenUpper(rs_region, re_region, mod.support_lower, mod.support_upper, f.cover_start - 1, I);

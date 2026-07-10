@@ -446,7 +446,8 @@ namespace OpenMS
     const std::string& equiv_type,
     int equiv_index,
     int protein_length,
-    bool sub_includes_ptm)
+    bool sub_includes_ptm,
+    bool is_flip)
   {
     // The equivalent full-protein ion covers a contiguous absolute residue span (0-based inclusive):
     //   prefix b/a of index k -> [0, k-1] (mirrors protein_prefix_masses[k] = residues [0, k-1]);
@@ -474,8 +475,19 @@ namespace OpenMS
       const bool overlap = (abs_end >= cover_start && abs_start <= cover_end);
       if (fully)
         sum += pm.mass_shift;
-      else if (overlap && sub_includes_ptm) // mod straddles the equivalent ion's boundary: follow the MS3 verdict
-        sum += pm.mass_shift;
+      else if (overlap)
+      {
+        // Complement-aware, MOD-AWARE straddle verdict. sub_includes_ptm = the matched sub-ion's own verdict.
+        // On a complement flip the equivalent ion is the COMPLEMENT, so it carries the mod iff the sub-ion
+        // does NOT -- EXCEPT an N-terminal net-loss composite (Met-excision + N-alpha-acetyl = -89, anchored
+        // at residue 1): the loss cannot be assigned to one side of a cleavage, so keep the direct verdict
+        // (equiv b1 = M-89 = 42.01 correctly localizes it to the N-terminus). This keeps the logged mass in
+        // step with narrowModifications_ Pass B, which applies the same rule for the localization.
+        const bool nterm_loss = (pm.mass_shift < 0.0) && (abs_start == 0);
+        const bool carries = nterm_loss ? sub_includes_ptm : (is_flip ? !sub_includes_ptm : sub_includes_ptm);
+        if (carries)
+          sum += pm.mass_shift;
+      }
     }
     return sum;
   }
@@ -656,18 +668,17 @@ namespace OpenMS
           // the SUB-FRAME ion's covered mods -- for a complement-flipped map, e.g. suffix yb69 -> prefix b1,
           // those mods belong to the complement, not to b1, so b1 wrongly read 131.04 + 526.22 = 657). The
           // equiv-frame sum reproduces md.ambiguous_included exactly for same-direction maps.
-          // Complement-aware equivalent-ion verdict: on a complement FLIP (matched sub-ion direction !=
-          // equivalent-ion direction, e.g. a suffix sub-ion mapped to a prefix "b", or a "yb"/"ya" cross-ion),
-          // the equivalent ion is the COMPLEMENT of the matched sub-ion, so whether IT covers the ambiguous
-          // PTM is the NEGATION of the sub-ion's own verdict. "The mass has to be somewhere": the mod stays
-          // on the side that actually covers the residue, never double-counted onto both a fragment and its
-          // complement. (The old code passed md.includes_ptm here and, for a complement-flipped map, wrongly
-          // re-added the +mod onto the complement prefix ion -> the pooled narrowing over-localized to the
-          // N-terminus, e.g. a heme suffix res5-47 -> fake b4 carrying +626 -> (1-4) instead of His18.)
+          // Complement-flip flag: the equivalent ion is the COMPLEMENT of the matched sub-ion (a suffix
+          // sub-ion mapped to a prefix "b", or a "yb"/"ya" cross-ion). The MOD-AWARE verdict -- equiv carries
+          // the mod iff the sub does NOT, EXCEPT an N-terminal net-loss composite (Met-excision + N-alpha-
+          // acetyl = -89 at residue 1) which stays N-terminal -- is applied per-mod INSIDE
+          // coveredAmbiguousInEquivFrame (mass columns) and again in ProteoformTracker narrowModifications_
+          // Pass B (localization). (A uniform !md.includes_ptm flip regressed the N-terminal -89 from M1 to
+          // (2-8); the per-mod exception keeps -89 at M1 while still moving a mislocalized additive heme, e.g.
+          // +626 res5-47 suffix -> bare b4 -> off (1-4) to His18.)
           const bool is_flip = isPrefixIonType(md.ion_type) != isPrefixIonType(fm.equiv_type);
-          const bool equiv_includes = is_flip ? !md.includes_ptm : md.includes_ptm;
           double equiv_ambiguous = coveredAmbiguousInEquivFrame(
-            ctx, fm.equiv_type, fm.equiv_index, static_cast<int>(protein_sequence.size()), equiv_includes);
+            ctx, fm.equiv_type, fm.equiv_index, static_cast<int>(protein_sequence.size()), md.includes_ptm, is_flip);
           // theoretical for the equivalent ion in the same frame (mod-inclusive, this scan's proteoform).
           fm.theoretical_mass = offset + md.theoretical_mass + equiv_ambiguous;
           // Project the sub-fragment onto the equivalent-ion (MS2) frame PPM-HONESTLY: scale the whole
@@ -683,8 +694,8 @@ namespace OpenMS
           fm.adjusted_mass = fm.theoretical_mass * ratio;
           fm.diff_da = fm.adjusted_mass - fm.theoretical_mass;   // = fm.theoretical_mass * (ratio - 1): equiv-frame projected Da
           fm.diff_ppm = (fm.theoretical_mass != 0.0) ? (fm.diff_da / fm.theoretical_mass * 1e6) : 0.0;
-          fm.includes_ptm = md.includes_ptm;             // SUB-frame verdict (already set in matchSpectrum) — the leaf narrowFragmentPTMSites reads this
-          fm.equiv_includes_ptm = equiv_includes;        // EQUIV-frame verdict (complement-aware) — the pooled path (ProteoformTracker deposit) reads this
+          fm.includes_ptm = md.includes_ptm;             // honest SUB-frame verdict (matchSpectrum) — the leaf AND the pooled deposit read this
+          fm.is_complement_flip = is_flip;               // equiv ion is the complement of the sub-ion — narrowModifications_ Pass B applies the mod-aware verdict
           mr.fragments.push_back(fm);
         }
         std::sort(mr.fragments.begin(), mr.fragments.end(),

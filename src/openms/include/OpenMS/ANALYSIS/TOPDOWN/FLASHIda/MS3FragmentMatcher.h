@@ -179,7 +179,8 @@ namespace OpenMS
       const std::string& equiv_type,
       int equiv_index,
       int protein_length,
-      bool sub_includes_ptm);
+      bool sub_includes_ptm,
+      bool is_flip);
 
   private:
     static constexpr double PROTON_MASS_ = 1.007276;
