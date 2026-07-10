@@ -305,7 +305,12 @@ FLASHIda::FLASHIda(char* arg) :
 
         // MS2 identification row (copy by value before expl_result goes out of scope).
         if (!expl_result.identification.proteoform_sequence.empty() && !expl_result.identification.result.fragments.empty())
-          id_rows.push_back({parent_id_str, 2, 'E', expl_result.identification.ms2_context, expl_result.identification.result, precursor_id, expl_result.metric.tic_coverage});
+          id_rows.push_back({parent_id_str, 2, 'E', expl_result.identification.ms2_context, expl_result.identification.result, precursor_id, expl_result.metric.tic_coverage, expl_result.identification.result.score});
+        // C: winner-re-matched non-winner identification rows (MS2 'E'), each rendering the winner proteoform;
+        // flash_extender_score = -1 marks "no own ID". Populated by Exploration after MS2 finalize.
+        for (const auto& row : expl_result.identification.additional_rows)
+          if (!row.identification_result.fragments.empty())
+            id_rows.push_back({row.tracking_id, 2, 'E', row.ms2_context, row.identification_result, precursor_id, row.tic_coverage, row.flash_extender_score});
 
         exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);
         return_code = static_cast<int>(expl_result.commands.size());
@@ -400,7 +405,7 @@ FLASHIda::FLASHIda(char* arg) :
             ms2_ctx.ms2_charge_intensity = parent_ctx.precursor_intensity;
             ms2_ctx.ms2_window_snr = parent_ctx.window_snr;  // Item 2: SNR travels on the command (was the queue map)
           }
-          id_rows.push_back({parent_id_str, 2, 'R', ms2_ctx, ms3_targeting.proteoform_match, precursor_id, ms3_targeting.tic_coverage});  // copy by value (ms2_ctx is local)
+          id_rows.push_back({parent_id_str, 2, 'R', ms2_ctx, ms3_targeting.proteoform_match, precursor_id, ms3_targeting.tic_coverage, ms3_targeting.proteoform_match.score});  // copy by value (ms2_ctx is local)
         }
 
         int ms2_mass_count = deconv_.hasStoredMS2() ? static_cast<int>(deconv_.storedMS2().size()) : 0;
@@ -478,13 +483,13 @@ FLASHIda::FLASHIda(char* arg) :
 
         // Identification rows
         if (!expl_result.identification.result.fragments.empty())
-          id_rows.push_back({parent_id_str, 3, 'E', expl_result.identification.ms2_context, expl_result.identification.result, precursor_id, expl_result.metric.tic_coverage});
+          id_rows.push_back({parent_id_str, 3, 'E', expl_result.identification.ms2_context, expl_result.identification.result, precursor_id, expl_result.metric.tic_coverage, expl_result.identification.result.score});
         for (const auto& row : expl_result.identification.additional_rows)
         {
           // Winner-batch rows carry each variant's OWN tic (row.tic_coverage), not the group-completing
           // scan's, so every MS3-'E' identification row reports the tic of the scan it describes.
           if (!row.identification_result.fragments.empty())
-            id_rows.push_back({row.tracking_id, 3, 'E', row.ms2_context, row.identification_result, precursor_id, row.tic_coverage});
+            id_rows.push_back({row.tracking_id, 3, 'E', row.ms2_context, row.identification_result, precursor_id, row.tic_coverage, row.flash_extender_score});
         }
 
         exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);
@@ -546,7 +551,7 @@ FLASHIda::FLASHIda(char* arg) :
                 float r = static_cast<float>(ms3_matches[0].total_match_count) / static_cast<float>(ms3_mass_count);
                 ms3_tic = r > 1.0f ? 1.0f : r;
               }
-              id_rows.push_back({parent_id_str, 3, 'R', cached_ms2_ctx, ms3_matches[0], precursor_id, ms3_tic});
+              id_rows.push_back({parent_id_str, 3, 'R', cached_ms2_ctx, ms3_matches[0], precursor_id, ms3_tic, ms3_matches[0].score});
               // @Claude resolve has values (as mentioned previously)
               if (resolved.has_value() && resolved->num_stages >= 2 && ms3_spec != nullptr)
               {

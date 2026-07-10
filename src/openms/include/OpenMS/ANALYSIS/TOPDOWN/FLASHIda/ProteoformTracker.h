@@ -166,6 +166,12 @@ namespace OpenMS
     ScanCommand ms2_ctx;        ///< MS2 command context for buildMS3 (captured once from the first feedScan)
     bool has_ms2_ctx = false;   ///< True once ms2_ctx has been set
 
+    /// C: per-non-winner-scan re-matched identification, keyed by scan_id. Populated in mapNonWinnerMs2_ ONLY
+    /// for a non-winner scan whose OWN FLASHTnT match was empty but whose masses matched the WINNER ladder
+    /// (so it folds into the pool yet has no self-ID row). Holds the winner proteoform + those re-matched
+    /// fragments. Rebuilt each finalize. Consumed by Exploration to emit that contributor's identification row.
+    std::unordered_map<int, FragmentAnalysis::ProteoformMatch> rematched_nonwinner_;
+
     /// Cumulative set of every scan fed to this model (MS2 variants + each MS3 fold). Never drops a
     /// scan when its observation is later superseded -> the emitted contributing_scan_ids is monotone.
     std::set<int> contributing_scan_ids;
@@ -228,6 +234,12 @@ namespace OpenMS
 
     /// Return a pointer to the model for @p precursor_id, or nullptr if absent.
     const ProteoformModel* getModel(int precursor_id) const;
+
+    /// C: the winner-re-matched identification for a NON-WINNER scan (empty own match) whose masses matched
+    /// the winner ladder — winner proteoform + the re-matched fragments. nullptr if the model/scan is absent,
+    /// the scan self-identified, or no mass re-matched. Populated by finalizeMS2 (mapNonWinnerMs2_); read by
+    /// Exploration to emit that contributor's identification.tsv row (flash_extender_score = -1).
+    const FragmentAnalysis::ProteoformMatch* getRematchedNonWinnerMatch(int precursor_id, int scan_id) const;
 
     /// Build an MS3FragmentMatcher::ProteoformContext from the LIVE winner model for @p precursor_id
     /// (winner region + ALL current modifications, localized and ambiguous). Returns an empty

@@ -92,7 +92,8 @@ namespace OpenMS
         double theoretical_mass = 0.0; ///< MS3 only: mass the proteoform predicts for the equivalent ion (mod-inclusive) = offset + md.theoretical_mass + ambiguous_included
         double diff_da = 0.0;          ///< MS3 only: adjusted_mass - theoretical_mass (Da)
         double diff_ppm = 0.0;         ///< MS3 only: diff_da / theoretical_mass * 1e6
-        bool includes_ptm = false;   ///< MS3: did the matched theoretical fold in the ambiguous PTM (partial-overlap with-variant)? false for MS2 / fully-covered / no-overlap
+        bool includes_ptm = false;   ///< MS3: did the matched theoretical fold in the ambiguous PTM (partial-overlap with-variant)? false for MS2 / fully-covered / no-overlap. SUB-FRAME verdict — the leaf (narrowFragmentPTMSites) reads this.
+        bool equiv_includes_ptm = false;  ///< MS3: does the EQUIVALENT (full-protein) ion cover the PTM? Complement-aware — flipped from includes_ptm on a complement-flip map (suffix sub-ion -> prefix equiv, or via yb/ya). The POOLED path (ProteoformTracker deposit) reads THIS, not includes_ptm. false for MS2.
       };
       std::vector<FragmentMatch> fragments;  ///< All matched fragments with detail
 

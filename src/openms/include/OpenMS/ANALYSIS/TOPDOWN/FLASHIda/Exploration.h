@@ -165,6 +165,7 @@ namespace OpenMS
         FragmentAnalysis::ProteoformMatch identification_result;
         MS2Context ms2_context;
         float tic_coverage = 0.0f;   ///< this variant's OWN tic (per-scan), not the group-completing scan's
+        double flash_extender_score = -1.0;   ///< C: own-match FLASHExtender score; -1 = winner-re-matched row (no own ID)
       };
 
       /// Which exploration group / variant this row belongs to.

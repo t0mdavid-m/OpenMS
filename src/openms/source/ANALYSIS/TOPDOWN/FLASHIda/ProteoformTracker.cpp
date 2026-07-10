@@ -309,6 +309,7 @@ namespace OpenMS
 
     // 4) Map EVERY staged scan's already-matched fragments onto the model
     m.fragments.clear();
+    m.rematched_nonwinner_.clear();   // C: rebuilt below by mapNonWinnerMs2_ for empty-own-match contributors
     for (const PendingScan& ps : m.pending)
     {
       mapScanOntoModel_(m, ps);
@@ -529,6 +530,16 @@ namespace OpenMS
     return out;
   }
 
+  const FragmentAnalysis::ProteoformMatch* ProteoformTracker::getRematchedNonWinnerMatch(int precursor_id, int scan_id) const
+  {
+    auto it = models_.find(precursor_id);
+    if (it == models_.end()) return nullptr;
+    const auto& map = it->second.rematched_nonwinner_;
+    auto mit = map.find(scan_id);
+    if (mit == map.end() || mit->second.fragments.empty()) return nullptr;
+    return &mit->second;
+  }
+
   const ProteoformModel* ProteoformTracker::getModel(int precursor_id) const
   {
     auto it = models_.find(precursor_id);
@@ -717,7 +728,12 @@ namespace OpenMS
       obs.frag_charge = matched_charge;
       obs.iso_width = matched_iso_width;
       obs.stage1_scores = matched_stage1;
-      obs.includes_ptm = fm.includes_ptm;   // carry the MS3 localization verdict (bool about THIS fragment's own coverage; frame-invariant)
+      // Pooled narrowing votes on the EQUIVALENT (full-protein) ion, so it reads the complement-aware
+      // equiv-frame verdict — NOT the sub-frame includes_ptm (correct only for same-direction maps). The old
+      // "frame-invariant" claim was false: a complement-flipped MS3 fragment deposited under an equiv prefix
+      // key wrongly voted the mod onto the N-terminus (heme suffix res5-47 -> fake b4 -> +626 to (1-4)).
+      // MS2 fragments carry no equiv verdict, so they keep their own includes_ptm (== false).
+      obs.includes_ptm = (ps.ms_level == 3) ? fm.equiv_includes_ptm : fm.includes_ptm;
 
       upsertMappedObservation_(m, type, is_prefix, winner_idx, L, obs);
     }
@@ -795,6 +811,29 @@ namespace OpenMS
     FragmentAnalysis::computePTMAdjustedFragmentMasses(region_seq, winner_ptms, ion_types, ladder);
 
     const double tol_ppm = config_.level(2).tolerance_ppm;
+
+    // C: if THIS non-winner scan did NOT self-identify (empty own match), seed a per-scan re-matched
+    // identification (winner proteoform + full-protein winner mods, like a self-ID row). Fragments this
+    // scan's masses match on the winner ladder are appended below; Exploration emits the row afterwards.
+    FragmentAnalysis::ProteoformMatch* rematch = nullptr;
+    if (ps.match.fragments.empty())
+    {
+      FragmentAnalysis::ProteoformMatch& rm = m.rematched_nonwinner_[ps.scan_id];
+      rm.proteoform_sequence = m.proteoform_sequence;
+      rm.region_start = m.region_start;
+      rm.region_end = m.region_end;
+      rm.ptm_sites.clear();
+      for (const ModificationState& mod : m.modifications)
+      {
+        FragmentAnalysis::PTMSite s;
+        s.start_position = mod.candidate_start;   // FULL-PROTEIN 1-based (matches a self-ID row's frame)
+        s.end_position = mod.candidate_end;
+        s.position = (s.start_position + s.end_position) / 2;
+        s.mass_shift = mod.mass_shift;
+        rm.ptm_sites.push_back(s);
+      }
+      rematch = &rm;
+    }
 
     for (const PeakRecord& pr : ps.peaks)
     {
@@ -899,6 +938,20 @@ namespace OpenMS
       obs.stage1_scores = pr.stage1_scores;
       obs.includes_ptm = false;                    // MS2: Pass A re-derives base-vs-shift per mod at narrow time
       upsertMappedObservation_(m, best_type, best_is_prefix, best_idx, L, obs);
+
+      // C: also record this re-match as an identification fragment for the per-scan row (winner-region frame
+      // ion index; == proteoform frame for a full-region winner, the only case in current data).
+      if (rematch != nullptr)
+      {
+        FragmentAnalysis::ProteoformMatch::FragmentMatch fmr;
+        fmr.ion_type = best_type;
+        fmr.ion_index = best_idx;
+        fmr.observed_mass = obs_mass;
+        fmr.theoretical_mass = best_theo;
+        fmr.diff_da = obs_mass - best_theo;
+        fmr.diff_ppm = (best_theo > 0.0) ? (fmr.diff_da / best_theo * 1e6) : 0.0;
+        rematch->fragments.push_back(fmr);
+      }
     }
   }
 
@@ -1140,13 +1193,18 @@ namespace OpenMS
     // --- localized_mods and ambiguous_mods ---
     // Format localized (start==end): "<start>[+<mass>]"
     // Format ambiguous (start<end):  "(<start>-<end>)[+<mass>]"
+    // Region-relative PTM positions: the proteoform ProForma above renders the winner-REGION substring with
+    // positions numbered from 1 within that region (candidate_start - ws). Emit the localized/ambiguous mod
+    // COLUMNS in the SAME frame so they agree with the ProForma string. When ws==0 (every current winner) this
+    // is byte-identical; it only differs for a sub-region winner with region_start>0.
+    const int mod_ws = (m.region_start < 0) ? 0 : m.region_start;
     for (const ModificationState& mod : m.modifications)
     {
       std::ostringstream ss;
       ss << std::fixed << std::setprecision(4);
       if (mod.candidate_start == mod.candidate_end)
       {
-        ss << mod.candidate_start;
+        ss << (mod.candidate_start - mod_ws);
         if (mod.mass_shift >= 0)
           ss << "[+" << mod.mass_shift << "]";
         else
@@ -1155,7 +1213,7 @@ namespace OpenMS
       }
       else
       {
-        ss << "(" << mod.candidate_start << "-" << mod.candidate_end << ")";
+        ss << "(" << (mod.candidate_start - mod_ws) << "-" << (mod.candidate_end - mod_ws) << ")";
         if (mod.mass_shift >= 0)
           ss << "[+" << mod.mass_shift << "]";
         else

@@ -1253,6 +1253,7 @@ namespace
     if (L <= 1) return out;
     for (auto& site : out)
     {
+      const int wide_lo = site.start_position, wide_hi = site.end_position;  // a priori wide base (Change W floor clamp)
       int rs = site.start_position, re = site.end_position;   // 1-based subsequence frame
       if (rs >= re) continue;                                  // already localized / invalid -> nothing to narrow
       for (const auto& fm : fragments)
@@ -1276,6 +1277,29 @@ namespace
           if (is_prefix) { const int nl = cover_end + 1;   if (nl > rs && nl <= re) rs = nl; }  // tightenLower
           else           { const int nu = cover_start - 1; if (nu < re && nu >= rs) re = nu; }  // tightenUpper
         }
+      }
+      // Change W: the per-scan leaf must never show a mod's ambiguity NARROWER than the WIDEST single MS3
+      // fragment that CONTAINS it. A containing fragment (includes_ptm=true) spanning residues [a,b] only
+      // proves the mod is somewhere in [a,b]; a tighter range over-claims localization this scan does not have.
+      // Take the widest single containing span (owner decision — not the intersection), clamp to the a priori
+      // wide base, and widen [rs,re] outward to it. (e.g. pid19 leaf (16-22) -> (5-47); keeps -89 on M1 when
+      // b1 contains it.)
+      int floor_lo = rs, floor_hi = re, widest_span = -1;
+      for (const auto& fm : fragments)
+      {
+        if (fm.ion_type.empty() || fm.ion_index <= 0 || !fm.includes_ptm) continue;  // only fragments that CONTAIN the mod
+        const char t = fm.ion_type[0];
+        const bool is_prefix = (t == 'a' || t == 'b' || t == 'c');   // "yb"/"ya" -> 'y' -> suffix
+        const int cover_start = is_prefix ? 1 : (L - fm.ion_index + 1);
+        const int cover_end   = is_prefix ? fm.ion_index : L;
+        if (cover_end < wide_lo || cover_start > wide_hi) continue;  // fragment must pertain to this mod (overlaps its wide base)
+        const int span = cover_end - cover_start;
+        if (span > widest_span) { widest_span = span; floor_lo = cover_start; floor_hi = cover_end; }
+      }
+      if (widest_span >= 0)
+      {
+        rs = std::min(rs, std::max(floor_lo, wide_lo));   // never narrower than the widest containing span,
+        re = std::max(re, std::min(floor_hi, wide_hi));   // clamped to the a priori wide base
       }
       site.start_position = rs;
       site.end_position = re;

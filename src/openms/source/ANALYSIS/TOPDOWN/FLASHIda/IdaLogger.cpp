@@ -125,7 +125,9 @@ namespace OpenMS
                                    // C2: MS3 per-ion fragment coverage (distinct backbone bonds / (L-1)); appended LAST, -1 on MS2.
                                    << "ms3_fragment_coverage\t"
                                    // Per-scan TIC / matched-fragment coverage (moved here from scan_results); appended LAST.
-                                   << "tic_coverage\n";
+                                   << "tic_coverage\t"
+                                   // C: FLASHExtender score of this scan's OWN match; -1 = winner-re-matched row (no own ID). Appended LAST.
+                                   << "flash_extender_score\n";
         identification_tsv_stream_.flush();
       }
     }
@@ -140,7 +142,7 @@ namespace OpenMS
                        // Fragment-mass table (grouped): masses + ion labels + measured/theoretical/residual,
                        // all aligned index-for-index with combined_ms2_frame_masses.
                        << "combined_ms2_frame_masses\tcombined_ms2_fragment_ions\t"
-                       << "combined_measured\tcombined_theoretical\tcombined_diff_da\tcombined_diff_ppm\t"
+                       << "combined_measured_raw\tcombined_theoretical\tcombined_diff_da\tcombined_diff_ppm\t"
                        << "update_index\t"
                        // P5: per-MS1-selection precursor identity (the model key; plain decimal).
                        << "precursor_id\t"
@@ -598,7 +600,9 @@ namespace OpenMS
       // C2: MS3 per-ion fragment coverage (distinct backbone bonds / (L-1)); -1 on MS2. std::fixed setprecision(4) in effect.
       << (ms_level == 3 ? match.ms3_fragment_coverage : -1.0f) << "\t"
       // Per-scan TIC / matched-fragment coverage (moved from scan_results); the scan's actual value at this row.
-      << row.tic_coverage << "\n";
+      << row.tic_coverage << "\t"
+      // C: FLASHExtender score of this scan's own match (-1 = winner-re-matched row, no own ID). setprecision(4) in effect.
+      << row.flash_extender_score << "\n";
     identification_tsv_stream_.flush();
   }
 

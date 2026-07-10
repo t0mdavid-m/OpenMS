@@ -194,7 +194,7 @@ START_SECTION(schema_column_counts)
 
   TEST_EQUAL(c.headers.size(), 31)   // E6: + scan_description; P5: + precursor_id; + ms3_proteoform (wide MS3 fragment)
   TEST_EQUAL(r.headers.size(), 29)   // E5: + ms_level; F5: + winner_tracking_id; slim-down: -5 id-payload cols (34->29)
-  TEST_EQUAL(i.headers.size(), 31)   // I2: +6 iso/snr/intensity; P5: +precursor_id; +theoretical_masses/diff_da/diff_ppm; C2: +ms3_fragment_coverage; + tic_coverage
+  TEST_EQUAL(i.headers.size(), 32)   // I2: +6 iso/snr/intensity; P5: +precursor_id; +theoretical_masses/diff_da/diff_ppm; C2: +ms3_fragment_coverage; + tic_coverage; C: + flash_extender_score
 
   // Spot-check exact header identities / order at the boundaries that matter for parsing.
   TEST_EQUAL(c.headers.front(), std::string("tracking_id"))
@@ -211,9 +211,10 @@ START_SECTION(schema_column_counts)
   TEST_EQUAL(r.colIndex("child_ids"), 9)                          // unchanged (before the removed block @10-14)
   TEST_EQUAL(r.colIndex("exploration_group_id"), 10)              // slim-down: -5 (was 15); first col after the removed block
   TEST_EQUAL(i.headers.front(), std::string("ms_level"))
-  TEST_EQUAL(i.headers.back(), std::string("tic_coverage"))          // appended LAST (moved from scan_results)
-  TEST_EQUAL(i.colIndex("tic_coverage"), 30)                       // trailing column index
-  TEST_EQUAL(i.colIndex("ms3_fragment_coverage"), 29)               // C2: unmoved (tic_coverage appended after it)
+  TEST_EQUAL(i.headers.back(), std::string("flash_extender_score"))  // C: appended LAST
+  TEST_EQUAL(i.colIndex("flash_extender_score"), 31)               // C: trailing column index
+  TEST_EQUAL(i.colIndex("tic_coverage"), 30)                       // now second-to-last (flash_extender_score appended after it)
+  TEST_EQUAL(i.colIndex("ms3_fragment_coverage"), 29)               // C2: unmoved
   TEST_EQUAL(i.colIndex("precursor_id"), 25)                     // P5 column unmoved (fragment-mass table appended after it)
   TEST_EQUAL(i.colIndex("theoretical_masses"), 26)              // fragment-mass table: per-scan theoretical + residual (Da, ppm)
   TEST_EQUAL(i.colIndex("diff_da"), 27)

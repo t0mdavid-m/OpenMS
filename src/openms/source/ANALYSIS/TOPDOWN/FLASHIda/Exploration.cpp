@@ -523,6 +523,7 @@ namespace OpenMS
         row.identification_result = gv.identification_result;
         row.ms2_context = buildMS2ContextForVariant(static_cast<int>(vi));
         row.tic_coverage = gv.tic_coverage;   // this variant's OWN tic (per-scan)
+        row.flash_extender_score = gv.identification_result.score;   // C: self-ID row carries its own score
         info.identification.additional_rows.push_back(row);
       }
     }
@@ -565,6 +566,31 @@ namespace OpenMS
       group.complete = true;
       group.variants[best_idx].result.getOrCreateOptimizationMetadata().is_best_variant = true;
       info.group.winner_tracking_id = group.variants[best_idx].tracking_id;
+
+      // C: emit identification.tsv rows for NON-WINNER variants that did NOT self-identify (empty own FLASHTnT
+      // match) but whose masses re-matched the WINNER ladder in finalizeMS2 (mapNonWinnerMs2_) — they fold into
+      // the pool (contributing_scan_ids) yet would otherwise have no id row. Render the winner proteoform + the
+      // scan's re-matched fragments, flash_extender_score = -1 (no own ID = the distinguisher).
+      if (tracker != nullptr && group.msn_level == 2)
+      {
+        for (size_t vi = 0; vi < group.variants.size(); ++vi)
+        {
+          if (static_cast<int>(vi) == best_idx) continue;               // winner already has its own self-ID row
+          const auto& gv = group.variants[vi];
+          if (gv.is_baseline) continue;                                 // CE-0 baseline is never pooled
+          if (!gv.identification_result.fragments.empty()) continue;    // self-identified -> already logged
+          const FragmentAnalysis::ProteoformMatch* rem =
+            tracker->getRematchedNonWinnerMatch(precursor_id, gv.cmd.scan_id);
+          if (rem == nullptr) continue;                                 // no winner-ladder re-match -> no row
+          FeedResultInfo::IdentificationRowInfo row;
+          row.tracking_id = gv.tracking_id;
+          row.identification_result = *rem;                             // winner proteoform + re-matched fragments
+          row.ms2_context = buildMS2ContextForVariant(static_cast<int>(vi));
+          row.tic_coverage = gv.tic_coverage;
+          row.flash_extender_score = -1.0;                             // no own ID
+          info.identification.additional_rows.push_back(row);
+        }
+      }
 
       std::cout << "[EXPL-WINNER] group=" << group.group_id
                 << " winner_idx=" << best_idx

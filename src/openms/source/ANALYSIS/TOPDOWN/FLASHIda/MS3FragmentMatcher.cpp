@@ -656,8 +656,18 @@ namespace OpenMS
           // the SUB-FRAME ion's covered mods -- for a complement-flipped map, e.g. suffix yb69 -> prefix b1,
           // those mods belong to the complement, not to b1, so b1 wrongly read 131.04 + 526.22 = 657). The
           // equiv-frame sum reproduces md.ambiguous_included exactly for same-direction maps.
+          // Complement-aware equivalent-ion verdict: on a complement FLIP (matched sub-ion direction !=
+          // equivalent-ion direction, e.g. a suffix sub-ion mapped to a prefix "b", or a "yb"/"ya" cross-ion),
+          // the equivalent ion is the COMPLEMENT of the matched sub-ion, so whether IT covers the ambiguous
+          // PTM is the NEGATION of the sub-ion's own verdict. "The mass has to be somewhere": the mod stays
+          // on the side that actually covers the residue, never double-counted onto both a fragment and its
+          // complement. (The old code passed md.includes_ptm here and, for a complement-flipped map, wrongly
+          // re-added the +mod onto the complement prefix ion -> the pooled narrowing over-localized to the
+          // N-terminus, e.g. a heme suffix res5-47 -> fake b4 carrying +626 -> (1-4) instead of His18.)
+          const bool is_flip = isPrefixIonType(md.ion_type) != isPrefixIonType(fm.equiv_type);
+          const bool equiv_includes = is_flip ? !md.includes_ptm : md.includes_ptm;
           double equiv_ambiguous = coveredAmbiguousInEquivFrame(
-            ctx, fm.equiv_type, fm.equiv_index, static_cast<int>(protein_sequence.size()), md.includes_ptm);
+            ctx, fm.equiv_type, fm.equiv_index, static_cast<int>(protein_sequence.size()), equiv_includes);
           // theoretical for the equivalent ion in the same frame (mod-inclusive, this scan's proteoform).
           fm.theoretical_mass = offset + md.theoretical_mass + equiv_ambiguous;
           // Project the sub-fragment onto the equivalent-ion (MS2) frame PPM-HONESTLY: scale the whole
@@ -673,7 +683,8 @@ namespace OpenMS
           fm.adjusted_mass = fm.theoretical_mass * ratio;
           fm.diff_da = fm.adjusted_mass - fm.theoretical_mass;   // = fm.theoretical_mass * (ratio - 1): equiv-frame projected Da
           fm.diff_ppm = (fm.theoretical_mass != 0.0) ? (fm.diff_da / fm.theoretical_mass * 1e6) : 0.0;
-          fm.includes_ptm = md.includes_ptm;   // propagate the MS3 localization verdict (already set in matchSpectrum)
+          fm.includes_ptm = md.includes_ptm;             // SUB-frame verdict (already set in matchSpectrum) — the leaf narrowFragmentPTMSites reads this
+          fm.equiv_includes_ptm = equiv_includes;        // EQUIV-frame verdict (complement-aware) — the pooled path (ProteoformTracker deposit) reads this
           mr.fragments.push_back(fm);
         }
         std::sort(mr.fragments.begin(), mr.fragments.end(),

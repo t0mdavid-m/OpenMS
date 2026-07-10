@@ -126,6 +126,10 @@ namespace OpenMS
       int precursor_id = 0;
       /// Per-scan TIC / matched-fragment coverage (moved here from scan_results); appended LAST.
       float tic_coverage = 0.0f;
+      /// C: FLASHExtender/FLASHTnT identification score of THIS scan's own match; -1.0 = the scan did NOT
+      /// self-identify — it is a winner-re-matched non-winner row (fragments matched the WINNER ladder).
+      /// Score presence is the sole distinguisher between self-ID rows and re-matched rows. Appended LAST.
+      double flash_extender_score = -1.0;
     };
 
     /// One pooled_identification.tsv row: the current state of a ProteoformModel after each update.
