@@ -122,9 +122,11 @@ namespace OpenMS
       char fragment_ion_type,
       int fragment_ion_index);
 
-    /// The (subseq, wide fragment-frame PTM ranges) that fragmentProForma renders, exposed so the
-    /// identification.tsv leaf can narrow the SAME wide base by ONE MS3 scan's matched ions -- guaranteeing
-    /// identification is a subset of scan_commands. Returns false when the context isn't populated.
+    /// The (subseq, wide fragment-frame PTM ranges) that fragmentProForma renders, exposed as the a-priori
+    /// wide base the identification.tsv leaf narrower (FragmentAnalysis::narrowFragmentPTMSites) re-brackets
+    /// over ONE MS3 scan's matched EQUIVALENT ions. Under Change L the leaf is a per-scan equiv-frame bracket
+    /// that MAY exceed this base and MAY merge co-observed mods -- there is NO leaf-subset-of-scan_commands
+    /// guarantee. Returns false when the context isn't populated.
     static bool fragmentProFormaSites(
       const std::string& protein_sequence,
       const ProteoformContext& ctx,

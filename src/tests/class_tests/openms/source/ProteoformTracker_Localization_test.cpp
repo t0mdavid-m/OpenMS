@@ -110,7 +110,8 @@ namespace
   // equiv_index / adjusted_mass and copies includes_ptm onto the FragmentObservation. adjusted_mass is a
   // dummy: Pass B uses includes_ptm + cover_* only, never the mass. score = -1 (foldMs3 never re-picks).
   FragmentAnalysis::ProteoformMatch makeMatchMs3(const std::string& equiv_type, int equiv_index,
-                                                 double adjusted_mass, bool includes_ptm)
+                                                 double adjusted_mass, bool includes_ptm,
+                                                 bool is_complement_flip = false)
   {
     FragmentAnalysis::ProteoformMatch m;
     m.score = -1.0;
@@ -123,6 +124,7 @@ namespace
     fm.equiv_index = equiv_index;      // MS3: full-protein equivalent ion index
     fm.adjusted_mass = adjusted_mass;  // MS3: dummy (Pass B ignores the mass)
     fm.includes_ptm = includes_ptm;    // MS3: propagated localization verdict consumed by Pass B
+    fm.is_complement_flip = is_complement_flip;  // MS3: complement-flip flag consumed by Pass B's mod-aware verdict
     m.fragments.push_back(fm);
     return m;
   }
@@ -295,6 +297,78 @@ START_SECTION(ms3_suffix_verdict_localizes_lower)
   ABORT_IF(mdl->modifications.size() != 1)
   TEST_EQUAL(mdl->modifications[0].candidate_start, 20)
   TEST_EQUAL(mdl->modifications[0].candidate_end, 26)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// Section 3 (Leg 3): the pooled localization narrows ONE-DIRECTIONALLY across successive MS3 folds. Each
+// fold's [candidate_start, candidate_end] is NESTED within the prior (never widens/flips outward), and once a
+// mod localizes it stays localized. This is the cumulative-narrowing invariant the leaf<->pooled seam depends
+// on (the leaf is per-scan and may be wider; the pooled is monotone across scans). Injected fragments ->
+// fully deterministic, no deconvolution.
+/////////////////////////////////////////////////////////////
+START_SECTION(ms3_pooled_localization_is_monotonic)
+{
+  const int precursor_id = 13;
+
+  Config cfg{makeConfigJson()};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+  ScanCommand ms2_ctx = makeMs2Ctx();
+
+  Ms2Params p;    p.collision_energy = 29.0; p.activation_type = "HCD"; p.reaction_time = 0.0;
+  Ms2Params ms3p; ms3p.collision_energy = 29.0; ms3p.activation_type = "HCD"; ms3p.reaction_time = 0.0;
+
+  // MS2 winner: ambiguous mod [15,26] + non-bracketing b8 -> finalize leaves it [15,26].
+  DeconvolvedSpectrum d101(101);
+  d101.push_back(makeSyntheticPeakGroup(700.0 / 2.0 + 1.0, 700.0, 2));
+  tracker.feedScan(precursor_id, 2, p, 101, d101, makeMatchMs2WithMod("b", 8, 700.0, 15, 26, 42.0), 1.0, ms2_ctx);
+  tracker.finalizeMS2(precursor_id);
+
+  int lo = -1, hi = -1, plo = -1, phi = -1;
+  auto readRange = [&]() {
+    const ProteoformModel* m = tracker.getModel(precursor_id);
+    TEST_TRUE(m != nullptr && m->modifications.size() == 1)
+    if (m != nullptr && m->modifications.size() == 1)
+    { lo = m->modifications[0].candidate_start; hi = m->modifications[0].candidate_end; }
+  };
+  readRange();
+  TEST_EQUAL(lo, 15)
+  TEST_EQUAL(hi, 26)   // wide before any MS3 evidence
+
+  // Fold one injected MS3 fragment, then assert the new range is NESTED within the prior (monotone).
+  int scan = 200;
+  auto fold = [&](const std::string& eq_t, int eq_i, bool inc, bool flip, const char* tag) {
+    plo = lo; phi = hi;
+    DeconvolvedSpectrum d(++scan);
+    d.push_back(makeSyntheticPeakGroup(2000.0 / 2.0 + 1.0, 2000.0, 2));
+    tracker.feedScan(precursor_id, 3, ms3p, scan, d, makeMatchMs3(eq_t, eq_i, 2000.0, inc, flip), -1.0, ms2_ctx);
+    tracker.foldMs3(precursor_id, tag, tag);
+    readRange();
+    TEST_TRUE(lo >= plo && hi <= phi)   // NESTED within the prior range: never widens
+    TEST_TRUE(lo <= hi)                 // still a valid range
+  };
+
+  fold("b", 22, true, false, "b22");    // prefix cover_end 22 brackets [15,26] -> [15,22]
+  TEST_EQUAL(lo, 15)
+  TEST_EQUAL(hi, 22)
+  fold("b", 18, true, false, "b18");    // -> [15,18]
+  TEST_EQUAL(lo, 15)
+  TEST_EQUAL(hi, 18)
+  fold("b", 30, true, false, "b30");    // fully-covering (non-bracketing) -> must NOT widen -> stays [15,18]
+  TEST_EQUAL(lo, 15)
+  TEST_EQUAL(hi, 18)
+  fold("y", SEQ_LEN - 16 + 1, true, false, "y17");   // suffix cover_start 16 -> tightenLower -> [16,18]
+  TEST_EQUAL(lo, 16)
+  TEST_EQUAL(hi, 18)
+  fold("b", 16, true, false, "b16");    // -> localized [16,16]
+  TEST_EQUAL(lo, 16)
+  TEST_EQUAL(hi, 16)
+  fold("b", 30, true, false, "b30b");   // localized-stays-localized (non-bracketing) -> [16,16]
+  TEST_EQUAL(lo, 16)
+  TEST_EQUAL(hi, 16)
+  // (The complement-flip verdict that pooled Pass B applies is pinned deterministically against the production
+  //  predicate coveredAmbiguousInEquivFrame in FragmentAnalysis_test's Leg-2 parity check.)
 }
 END_SECTION
 

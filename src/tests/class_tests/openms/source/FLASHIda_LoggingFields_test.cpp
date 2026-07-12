@@ -1047,10 +1047,10 @@ START_SECTION(identification_ms3_exploration_proteoform)
     }
     TEST_TRUE(matched >= 1)   // the inclusion-pinned MS3-exploration cascade must yield >=1 matched MS3-'E' row
 
-    // T-N2 (exploration sink): the identification 'E' MS3 proteoform mod-ranges are NARROWED by this scan's
-    // own evidence -> each is a SUBSET of the wide scan_commands.ms3_proteoform mod-ranges (same fragment
-    // frame), never wider. This checks only the ⊆ (never-wider) direction for the 'E' sink; the STRICT
-    // non-vacuity ("narrowing actually happens") lives in §T9 (strictly_narrower>=1, on the 'R' sink).
+    // T-N2 (exploration sink): under Change L the identification 'E' MS3 proteoform is a per-scan EQUIV-frame
+    // bracket that MAY exceed the wide scan_commands base AND may MERGE co-observed mods (fewer ranges). The old
+    // id-subset-of-cmd (and the exact size-equality) are retired; what holds is: the leaf never SPLITS a cmd mod
+    // (leaf mod count <= cmd mod count -- merges only reduce) and every leaf range is well-formed.
     int e_cmp_rows = 0;
     for (const auto& row : idf.rows)
     {
@@ -1061,10 +1061,9 @@ START_SECTION(identification_ms3_exploration_proteoform)
       if (cit == cmd_ms3pf.end()) continue;                 // need the paired scan_commands proteoform
       auto id_ranges  = parseModRanges(cell(idf, row, "proteoform"));
       auto cmd_ranges = parseModRanges(cit->second);        // wide fragment from scan_commands
-      TEST_EQUAL(id_ranges.size(), cmd_ranges.size())
-      if (id_ranges.size() != cmd_ranges.size()) continue;
+      TEST_TRUE(id_ranges.size() <= cmd_ranges.size())      // Change L merges co-observed mods; never splits
       for (size_t k = 0; k < id_ranges.size(); ++k)
-        TEST_TRUE(id_ranges[k].first >= cmd_ranges[k].first && id_ranges[k].second <= cmd_ranges[k].second)  // ISSUE(N): id ⊆ cmd
+        TEST_TRUE(id_ranges[k].first >= 1 && id_ranges[k].first <= id_ranges[k].second)   // well-formed range
       ++e_cmp_rows;
     }
     TEST_TRUE(e_cmp_rows >= 1)   // >=1 MS3-'E' row joined id<->scan_commands -> exploration sink covered
@@ -1856,12 +1855,15 @@ START_SECTION(results_ms3_real_fragment_data)
     }
     TEST_TRUE(tied >= 1)
 
-    // T-N2: identification MS3 proteoform mod-ranges are per-scan NARROWED -> each is a SUBSET of the same
-    // tracking_id's scan_commands (parent-wide) fragment mod-ranges, and STRICTLY narrower on >=1 range. Both
-    // proteoforms are the same b/y fragment (same frame), so ranges compare index-for-index. This proves the
-    // 3-log narrowing gradient end-to-end on real MS3 data: scan_commands stays wide; identification narrows
-    // to this scan's own matched-fragment evidence. (pooled is a separate cumulative log, not compared here.)
-    int cmp_rows = 0, strictly_narrower = 0, wide_cmd_ranges = 0;
+    // T9: under Change L the identification MS3 proteoform is a per-scan EQUIV-frame bracket. It no longer
+    // satisfies id-subset-of-cmd (it seeds wide over [1,L] and may EXCEED the scan_commands base) nor exact
+    // size-equality (it MERGES co-observed mods into one summed shift). What still holds on real MS3 data, and
+    // is asserted here: the leaf never SPLITS a cmd mod (leaf count <= cmd count); every leaf range is
+    // well-formed; a wide (ambiguous) cmd mod exists to resolve; and the leaf actually RE-BRACKETS vs the wide
+    // base on >=1 row -- i.e. the narrower is active and evidence-driven, not a pass-through of the wide base.
+    // (This replaces the retired strictly_narrower>=1: pre-fix the leaf==cmd wide gave 0 re-brackets -> FAILS;
+    // the pre-fix flip bug re-bracketed to the WRONG place -> the ground-truth anchors, not this row, catch it.)
+    int cmp_rows = 0, leaf_active = 0, wide_cmd_ranges = 0;
     for (const auto& row : idf.rows)
     {
       if (std::atoi(cell(idf, row, "ms_level").c_str()) != 3) continue;
@@ -1870,23 +1872,20 @@ START_SECTION(results_ms3_real_fragment_data)
       if (cit == cmd_ms3pf.end()) continue;                    // need the paired scan_commands proteoform
       auto id_ranges  = parseModRanges(cell(idf, row, "proteoform"));
       auto cmd_ranges = parseModRanges(cit->second);           // wide fragment from scan_commands
-      TEST_EQUAL(id_ranges.size(), cmd_ranges.size())          // narrowing never adds/drops a mod
-      if (id_ranges.size() != cmd_ranges.size()) continue;
+      TEST_TRUE(id_ranges.size() <= cmd_ranges.size())         // Change L merges co-observed mods; never splits
+      for (const auto& cr : cmd_ranges)
+        if (cr.first != cr.second) ++wide_cmd_ranges;          // an ambiguous (wide) cmd mod exists to resolve
       for (size_t k = 0; k < id_ranges.size(); ++k)
-      {
-        // ISSUE(N): identification range must lie WITHIN the scan_commands (parent-wide) range -- never wider.
-        TEST_TRUE(id_ranges[k].first >= cmd_ranges[k].first && id_ranges[k].second <= cmd_ranges[k].second)
-        if (cmd_ranges[k].first != cmd_ranges[k].second) ++wide_cmd_ranges;   // an ambiguous (wide) mod exists to narrow
-        if (id_ranges[k].first > cmd_ranges[k].first || id_ranges[k].second < cmd_ranges[k].second) ++strictly_narrower;
-      }
+        TEST_TRUE(id_ranges[k].first >= 1 && id_ranges[k].first <= id_ranges[k].second)   // well-formed range
+      if (id_ranges != cmd_ranges) ++leaf_active;              // leaf re-bracketed (narrowed/widened/merged) vs base
       ++cmp_rows;
     }
     TEST_TRUE(cmp_rows >= 1)
-    // Precondition for the strict check to be meaningful: >=1 compared row must carry a WIDE (ambiguous)
+    // Precondition for the "leaf active" check to be meaningful: >=1 compared row must carry a WIDE (ambiguous)
     // scan_commands mod. If a future FLASHExtender/fixture change localized every MS3 mod, this fails with a
-    // self-explaining message instead of an opaque strictly_narrower miss.
+    // self-explaining message instead of an opaque leaf_active miss.
     TEST_TRUE(wide_cmd_ranges >= 1)
-    TEST_TRUE(strictly_narrower >= 1)   // ISSUE(N): pre-fix identification==scan_commands wide -> 0 strictly-narrower -> FAILS
+    TEST_TRUE(leaf_active >= 1)   // the leaf narrower is active & evidence-driven, not a copy of the wide base
 
     std::remove(cmd_f.c_str()); std::remove(res_f.c_str()); std::remove(id_f.c_str());
   }

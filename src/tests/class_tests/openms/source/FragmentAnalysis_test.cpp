@@ -8,6 +8,7 @@
 
 #include <OpenMS/CONCEPT/ClassTest.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Deconvolution.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
@@ -519,65 +520,143 @@ START_SECTION(fragment_analysis_populated_for_mass_count_metric)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
-// narrowFragmentPTMSites -- per-scan MS3 identification narrowing (option A). Pure function: given the
-// wide (subseq-frame) PTM sites + this scan's matched sub-fragments (each with includes_ptm), tighten the
-// bracketed boundary. Controlled inputs (NOT a claim about any real scan's fragment set); the exact ranges
-// are the semantic drift-guard vs ProteoformTracker Pass B. Suffix numbers per the verified derivation.
+// narrowFragmentPTMSites -- per-scan MS3 identification-LEAF localizer (Change L: equiv-frame gap-partition).
+//
+// REGRESSION SUITE for the MS3 leaf flip/mislocalization bug. Every case INJECTS its matched-fragment set
+// directly (no deconvolution -> deterministic, immune to the OpenMS build-nondeterminism that flaps score
+// goldens) and drives the PRODUCTION narrowFragmentPTMSites + toProForma. Cases A/B are the two owner-validated
+// ground-truth proformas (kept in sync with FlashIDA/test-data/reference/ms3_leaf_expected.tsv); their real
+// matched ion sets come from the ms3_cytc capture as raw MS3 ion -> equivalent full-protein ion:
+//   !!& (b80): b22,b26,b28 direct + yb67 -> b13 (complement flip)
+//   !!' (b70): b26,b34,b44,b48,b61 direct + yb69 -> b1 (complement flip; b1 = 42.01 = M-89)
+//
+// Leg 1 (ions->leaf):     the injected equiv-frame ions localize each mod exactly as ground truth expects.
+// Leg 2 (leaf<->pooled):  the leaf's include/exclude verdict == the pooled predicate
+//                         MS3FragmentMatcher::coveredAmbiguousInEquivFrame for the same fragment+mod
+//                         (the two localization paths cannot drift apart).
+// The retired raw-frame test read fm.ion_type/ion_index; Change L reads fm.equiv_type/equiv_index, so it is
+// rewritten here to the equiv contract.
 /////////////////////////////////////////////////////////////
 START_SECTION(narrowFragmentPTMSites)
 {
   using PTM = FragmentAnalysis::PTMSite;
   using FM  = FragmentAnalysis::ProteoformMatch::FragmentMatch;
-  auto mk = [](const char* t, int idx, bool inc) { FM f; f.ion_type = t; f.ion_index = idx; f.includes_ptm = inc; return f; };
 
-  // (1) PREFIX inc -> tightenUpper. heme wide (15-26); b22 brackets & includes -> upper 26->22.
-  //     b26/b28 fully-cover (cover_end >= re) -> ignored; yb67 is an INERT distractor here (suffix cover_start
-  //     14 < 15, and even a prefix-misclassification cover_end 67 >= re fails to bracket) -- the real
-  //     yb-suffix-classification guard is case (6) below.
-  PTM heme{20, 15, 26, 615.2498};
-  auto r1 = FragmentAnalysis::narrowFragmentPTMSites({heme}, 80,
-              {mk("b", 22, true), mk("b", 26, true), mk("b", 28, true), mk("yb", 67, true)});
-  TEST_EQUAL(r1[0].start_position, 15)   // ISSUE(N): pre-fix stayed 15
-  TEST_EQUAL(r1[0].end_position, 22)     // ISSUE(N): pre-fix stayed 26
+  // Inject one equiv-frame fragment: raw sub-ion (ion_type/ion_index) + its projected full-protein equivalent
+  // (equiv_type/equiv_index) + the complement-flip flag + the sub-frame includes_ptm verdict. narrowFragmentPTMSites
+  // reads ONLY the equiv fields + flip + verdict (the raw fields document provenance / the flip source).
+  auto mkEq = [](const char* raw_t, int raw_i, const char* eq_t, int eq_i, bool flip, bool inc) {
+    FM f; f.ion_type = raw_t; f.ion_index = raw_i; f.equiv_type = eq_t; f.equiv_index = eq_i;
+    f.is_complement_flip = flip; f.includes_ptm = inc; return f; };
 
-  // (2) PREFIX inc localizes; a fully-covering prefix leaves the other mod wide (leaf != pooled).
-  //     N-term wide (1-8); b1 brackets & includes -> [1,1]. heme (15-26): b34 fully-covers -> stays wide.
-  PTM nterm{4, 1, 8, -89.0302};
-  auto r2 = FragmentAnalysis::narrowFragmentPTMSites({nterm, heme}, 70, {mk("b", 1, true), mk("b", 34, true)});
-  TEST_EQUAL(r2[0].start_position, 1)    // localized
-  TEST_EQUAL(r2[0].end_position, 1)
-  TEST_EQUAL(r2[1].start_position, 15)   // heme stays wide
-  TEST_EQUAL(r2[1].end_position, 26)
+  // The 105-aa M-start cytC reference the ms3_cytc goldens render against (NOT the 104-aa des-Met
+  // `cytochrome_c_seq` above). A b<k> MS3 precursor renders over the k-residue prefix CYTC105[0:k].
+  const std::string CYTC105 =
+    "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE";
 
-  // (3) SUFFIX inc -> tightenLower. C-term mod (50-70), L=80; y21 cover_start=60 brackets -> lower 50->60.
-  PTM cterm{60, 50, 70, 42.0106};
-  auto r3 = FragmentAnalysis::narrowFragmentPTMSites({cterm}, 80, {mk("y", 21, true)});
-  TEST_EQUAL(r3[0].start_position, 60)
-  TEST_EQUAL(r3[0].end_position, 70)
+  // Ground truth (== test-data/reference/ms3_leaf_expected.tsv). -89.0302 = N-terminal net loss (Met-excision +
+  // N-alpha-acetyl) anchored at residue 1; +615.2498 = heme; +526.2196 = -89.0302 + 615.2498 (the summed shift
+  // when the two are co-observed and no fragment separates them).
+  const std::string EXP_AMP  =  // !!& (b80): -89 over (1-13), +615 over (14-22)
+    "(MGDVEKGKKIFVQ)[-89.0302](KCAQCHTVE)[+615.2498]KGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTK";
+  const std::string EXP_APOS =  // !!' (b70): -89 localized to M1, +615 over (2-26)
+    "M[-89.0302](GDVEKGKKIFVQKCAQCHTVEKGGK)[+615.2498]HKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLE";
 
-  // (4) SUFFIX !inc -> tightenUpper. same wide (50-70); y20 cover_start=61 -> upper 70->60.
-  auto r4 = FragmentAnalysis::narrowFragmentPTMSites({cterm}, 80, {mk("y", 20, false)});
-  TEST_EQUAL(r4[0].start_position, 50)
-  TEST_EQUAL(r4[0].end_position, 60)
+  // The a-priori (wide) MS2 model base the two real scans narrow FROM.
+  std::vector<PTM> wideAB = { PTM{4, 1, 8, -89.0302}, PTM{20, 15, 26, 615.2498} };
 
-  // (5) SUFFIX two-ion localize (order-independent): y21(inc)+y20(!inc) -> [60,60].
-  auto r5 = FragmentAnalysis::narrowFragmentPTMSites({cterm}, 80, {mk("y", 21, true), mk("y", 20, false)});
-  TEST_EQUAL(r5[0].start_position, 60)
-  TEST_EQUAL(r5[0].end_position, 60)
+  // ---- Case A (!!&, b80): wide-seed to (1-13)/(14-22) ------------------------------------------------
+  // b13 (=flipped yb67) fully-covers -89 (caps hi 13) and no-overlaps +615 (excludes -> lo 14); b22 straddle-
+  // includes +615 (hi 22). yields -89 (1-13), +615 (14-22), rendered over the 80-residue b80 prefix.
+  auto sitesA = FragmentAnalysis::narrowFragmentPTMSites(
+      wideAB, 80, { mkEq("yb", 67, "b", 13, true, true), mkEq("b", 22, "b", 22, false, true),
+                    mkEq("b", 26, "b", 26, false, true), mkEq("b", 28, "b", 28, false, true) });
+  std::string pfA = FragmentAnalysis::toProForma(CYTC105.substr(0, 80), sitesA);
+  TEST_STRING_EQUAL(pfA, EXP_AMP)
 
-  // (6) "yb" classification: first char 'y' -> SUFFIX (cover_start == y21's). Substring-based classification
-  //     would wrongly treat "yb" as a prefix and tighten the wrong boundary.
-  auto r6 = FragmentAnalysis::narrowFragmentPTMSites({cterm}, 80, {mk("yb", 21, true)});
-  TEST_EQUAL(r6[0].start_position, 60)   // ISSUE(N): substring-class bug -> would not be 60
-  TEST_EQUAL(r6[0].end_position, 70)
+  // ---- Case B (!!', b70): THE flip case -------------------------------------------------------------
+  // b1 (=flipped yb69 = M-89). The N-terminal-loss exception keeps -89 on M1 DESPITE the flip; b26 caps +615
+  // at 26 and b1 excludes it from residue 1 (lo 2). yields -89 localized to M1, +615 (2-26).
+  auto sitesB = FragmentAnalysis::narrowFragmentPTMSites(
+      wideAB, 70, { mkEq("yb", 69, "b", 1, true, true), mkEq("b", 26, "b", 26, false, true),
+                    mkEq("b", 34, "b", 34, false, true), mkEq("b", 44, "b", 44, false, true),
+                    mkEq("b", 48, "b", 48, false, true), mkEq("b", 61, "b", 61, false, true) });
+  std::string pfB = FragmentAnalysis::toProForma(CYTC105.substr(0, 70), sitesB);
+  TEST_STRING_EQUAL(pfB, EXP_APOS)
+  // ISSUE(old raw-frame narrower): the flipped b1 (raw yb69) was read as a suffix over [2..70] -> -89 dragged
+  // off M1 to (2-8). Reading the EQUIV b1 + the nterm-loss exception pins it to M1.
 
-  // (7) no-op: empty fragments and L<=1 both return the input unchanged.
-  auto r7 = FragmentAnalysis::narrowFragmentPTMSites({heme}, 80, {});
-  TEST_EQUAL(r7[0].start_position, 15)
-  TEST_EQUAL(r7[0].end_position, 26)
-  auto r8 = FragmentAnalysis::narrowFragmentPTMSites({heme}, 1, {mk("b", 1, true)});
-  TEST_EQUAL(r8[0].start_position, 15)
-  TEST_EQUAL(r8[0].end_position, 26)
+  // ---- Case C: flip-INVERT (non-N-terminal) ---------------------------------------------------------
+  // Controlled scenario for the flip-invert branch: a complement-flipped includer must INVERT its sub-verdict.
+  // b15 excludes the heme (lo 16); the flipped b22 (sub_includes_ptm=false) inverts to an includer (hi 22),
+  // keeping the heme in the His-region.
+  auto sitesC = FragmentAnalysis::narrowFragmentPTMSites(
+      { PTM{20, 15, 26, 615.2498} }, 80,
+      { mkEq("b", 15, "b", 15, false, false), mkEq("yb", 58, "b", 22, true, false) });
+  TEST_EQUAL((int)sitesC.size(), 1)
+  TEST_EQUAL(sitesC[0].start_position, 16)
+  TEST_EQUAL(sitesC[0].end_position, 22)   // ISSUE(no-invert): a non-inverted flipped b22 would EXCLUDE -> lo 23 -> wrong region
+
+  // ---- Case D: co-observed MERGE --------------------------------------------------------------------
+  // Drop the separating b13: nothing splits -89 from +615 this scan, so they MERGE into one summed shift.
+  auto sitesD = FragmentAnalysis::narrowFragmentPTMSites(
+      wideAB, 80, { mkEq("b", 22, "b", 22, false, true), mkEq("b", 26, "b", 26, false, true),
+                    mkEq("b", 28, "b", 28, false, true) });
+  TEST_EQUAL((int)sitesD.size(), 1)
+  TEST_EQUAL(sitesD[0].start_position, 1)
+  TEST_EQUAL(sitesD[0].end_position, 22)
+  TEST_REAL_SIMILAR(sitesD[0].mass_shift, 526.2196)   // -89.0302 + 615.2498
+
+  // ---- Case E: separated STAYS split ----------------------------------------------------------------
+  // Case A's set (b13 present) separates the mods -> they must NOT merge: 2 sites with the gap at 13/14.
+  TEST_EQUAL((int)sitesA.size(), 2)
+  TEST_EQUAL(sitesA[0].end_position, 13)     // -89 ends at 13
+  TEST_EQUAL(sitesA[1].start_position, 14)   // +615 starts at 14 (b13 keeps them apart)
+
+  // ---- Case F: symmetric SUFFIX (y-precursor equiv) -------------------------------------------------
+  // Suffix-equiv y<k> covers [L-k+1, L]. y21 (cover_start 60) includes -> lower bound 60; y20 (cover_start 61)
+  // excludes -> upper bound 60; together they localize to 60.
+  auto sitesF1 = FragmentAnalysis::narrowFragmentPTMSites({ PTM{60, 50, 70, 42.0106} }, 80, { mkEq("y", 21, "y", 21, false, true) });
+  TEST_EQUAL(sitesF1[0].start_position, 60)
+  TEST_EQUAL(sitesF1[0].end_position, 70)
+  auto sitesF2 = FragmentAnalysis::narrowFragmentPTMSites({ PTM{60, 50, 70, 42.0106} }, 80, { mkEq("y", 20, "y", 20, false, false) });
+  TEST_EQUAL(sitesF2[0].start_position, 50)
+  TEST_EQUAL(sitesF2[0].end_position, 60)
+  auto sitesF3 = FragmentAnalysis::narrowFragmentPTMSites({ PTM{60, 50, 70, 42.0106} }, 80, { mkEq("y", 21, "y", 21, false, true), mkEq("y", 20, "y", 20, false, false) });
+  TEST_EQUAL(sitesF3[0].start_position, 60)
+  TEST_EQUAL(sitesF3[0].end_position, 60)
+
+  // ---- No-op guards ---------------------------------------------------------------------------------
+  PTM heme_np{20, 15, 26, 615.2498};
+  auto rL1 = FragmentAnalysis::narrowFragmentPTMSites({ heme_np }, 1, { mkEq("b", 1, "b", 1, false, true) });
+  TEST_EQUAL(rL1[0].start_position, 15)      // L<=1: input returned untouched
+  TEST_EQUAL(rL1[0].end_position, 26)
+  auto rEmpty = FragmentAnalysis::narrowFragmentPTMSites({ heme_np }, 80, {});
+  TEST_EQUAL(rEmpty[0].start_position, 1)     // no fragment evidence -> maximal ambiguity over [1,L]
+  TEST_EQUAL(rEmpty[0].end_position, 80)
+
+  // ---- Leg 2: leaf verdict == pooled predicate (coveredAmbiguousInEquivFrame) -----------------------
+  // (a) flip + N-terminal-loss (b1 / -89): the pooled predicate keeps -89 on the N-terminus (the nterm
+  //     exception ignores the flip) -- matching the leaf localizing -89 to [1,1] (case B).
+  MS3FragmentMatcher::ProteoformContext ctxNterm;
+  ctxNterm.region_start = 0; ctxNterm.region_end = -1;
+  ctxNterm.ptm_sites = { PTM{4, 1, 8, -89.0302} };
+  bool pooled_b1 = MS3FragmentMatcher::coveredAmbiguousInEquivFrame(ctxNterm, "b", 1, 70, /*sub_includes_ptm=*/true, /*is_flip=*/true) != 0.0;
+  auto leafB1 = FragmentAnalysis::narrowFragmentPTMSites({ PTM{4, 1, 8, -89.0302} }, 70, { mkEq("yb", 69, "b", 1, true, true) });
+  bool leaf_b1 = (leafB1[0].start_position == 1 && leafB1[0].end_position == 1);
+  TEST_EQUAL(leaf_b1, pooled_b1)   // both true: the flipped b1 pins -89 to M1
+
+  // (b) flip-INVERT (b22 / +615, non-nterm): the pooled predicate inverts the flipped sub-verdict so the
+  //     equivalent ion carries the mod -- matching the leaf including b22 (case C).
+  MS3FragmentMatcher::ProteoformContext ctxHeme;
+  ctxHeme.region_start = 0; ctxHeme.region_end = -1;
+  ctxHeme.ptm_sites = { PTM{20, 15, 26, 615.2498} };
+  bool pooled_b22 = MS3FragmentMatcher::coveredAmbiguousInEquivFrame(ctxHeme, "b", 22, 80, /*sub_includes_ptm=*/false, /*is_flip=*/true) != 0.0;
+  TEST_TRUE(pooled_b22)   // flip inverts sub=false -> equiv carries the mod (== leaf includer, case C)
+
+  // Flip-frame classification (the projection property the old leaf ignored): a raw suffix-family ion ("yb")
+  // whose equivalent is a prefix ("b") is a complement flip.
+  TEST_TRUE(MS3FragmentMatcher::isPrefixIonType("b") != MS3FragmentMatcher::isPrefixIonType("yb"))
 }
 END_SECTION
 
