@@ -614,13 +614,15 @@ START_SECTION(narrowFragmentPTMSites)
   TEST_EQUAL(sitesA[1].start_position, 14)   // +615 starts at 14 (b13 keeps them apart)
 
   // ---- Case F: symmetric SUFFIX (y-precursor equiv) -------------------------------------------------
-  // Suffix-equiv y<k> covers [L-k+1, L]. y21 (cover_start 60) includes -> lower bound 60; y20 (cover_start 61)
-  // excludes -> upper bound 60; together they localize to 60.
+  // Suffix-equiv y<k> covers [L-k+1, L]. Change L seeds [1,L] and tightens ONLY from fragments (the a-priori
+  // mod range is used to CLASSIFY, never as an output bound), so a SINGLE suffix ion bounds one side and leaves
+  // the other at the seed edge: y21 includer -> lower bound 60, upper stays L=80 -> [60,80]; y20 excluder ->
+  // upper bound 60, lower stays 1 -> [1,60]; the two together bound both sides -> localized [60,60].
   auto sitesF1 = FragmentAnalysis::narrowFragmentPTMSites({ PTM{60, 50, 70, 42.0106} }, 80, { mkEq("y", 21, "y", 21, false, true) });
   TEST_EQUAL(sitesF1[0].start_position, 60)
-  TEST_EQUAL(sitesF1[0].end_position, 70)
+  TEST_EQUAL(sitesF1[0].end_position, 80)    // single includer bounds only the lower side; upper stays seed L
   auto sitesF2 = FragmentAnalysis::narrowFragmentPTMSites({ PTM{60, 50, 70, 42.0106} }, 80, { mkEq("y", 20, "y", 20, false, false) });
-  TEST_EQUAL(sitesF2[0].start_position, 50)
+  TEST_EQUAL(sitesF2[0].start_position, 1)   // single excluder bounds only the upper side; lower stays seed 1
   TEST_EQUAL(sitesF2[0].end_position, 60)
   auto sitesF3 = FragmentAnalysis::narrowFragmentPTMSites({ PTM{60, 50, 70, 42.0106} }, 80, { mkEq("y", 21, "y", 21, false, true), mkEq("y", 20, "y", 20, false, false) });
   TEST_EQUAL(sitesF3[0].start_position, 60)
