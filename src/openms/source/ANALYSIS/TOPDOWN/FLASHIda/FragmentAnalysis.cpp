@@ -1249,61 +1249,98 @@ namespace
       const std::vector<PTMSite>& wide_sites, int L,
       const std::vector<ProteoformMatch::FragmentMatch>& fragments)
   {
-    std::vector<PTMSite> out = wide_sites;
-    if (L <= 1) return out;
-    for (auto& site : out)
+    // Per-scan MS3 identification-LEAF localizer (identification.tsv `proteoform` column ONLY). The pooled path
+    // (ProteoformTracker::narrowModifications_ Pass B) is a SEPARATE code path -- untouched, byte-identical.
+    //
+    // Bracket each modification over THIS scan's matched fragments in the EQUIVALENT (full-protein) frame,
+    // using the SAME flip/mod-aware verdict as pooled Pass B: fm.equiv_type/fm.equiv_index geometry +
+    // fm.is_complement_flip + fm.includes_ptm -- NOT the raw sub-frame ion (fm.ion_type/fm.ion_index). For a
+    // b-fragment MS3 precursor the equivalent prefix index equals the render sub-sequence index, so the equiv
+    // geometry renders directly. (The old code narrowed over the RAW sub-ion: e.g. the complement-flipped
+    // suffix `yb69` -- whose equivalent is prefix `b1`=42.01=M-89 -- was read as a suffix over [2..L], which
+    // dragged the N-terminal -89 OFF residue 1 to (2-8).)
+    //
+    // Seed WIDE over the full fragment region [1,L] and tighten inward from THIS scan's bracketing evidence, so
+    // the leaf reflects exactly what this scan's ions resolve -- it may be WIDER than the pooled/scan_commands
+    // a-priori base (per-scan, not cumulative). Finally MERGE any adjacent mods that no fragment separates
+    // (overlapping brackets == a shared gap) into ONE shift = arithmetic SUM over their UNION range ("reflect
+    // what the ion sees": a scan that only ever co-observes two shifts reports their sum, e.g. -89+615 = +526).
+    // (The retired Change-W widen-to-widest-containing-fragment floor is gone -- honest bracketing IS the range.)
+    if (L <= 1) return wide_sites;
+
+    auto is_prefix_ion = [](const std::string& t) { return !t.empty() && (t[0] == 'a' || t[0] == 'b' || t[0] == 'c'); };
+
+    // STEP 1 -- per-mod bracket over EQUIV ions, seed [1,L], inward-only.
+    struct Bracket { int lo; int hi; double mass; };
+    std::vector<Bracket> brackets;
+    brackets.reserve(wide_sites.size());
+    for (const auto& site : wide_sites)
     {
-      const int wide_lo = site.start_position, wide_hi = site.end_position;  // a priori wide base (Change W floor clamp)
-      int rs = site.start_position, re = site.end_position;   // 1-based subsequence frame
-      if (rs >= re) continue;                                  // already localized / invalid -> nothing to narrow
+      const int mod_lo = site.start_position, mod_hi = site.end_position;   // a-priori (wide) range, 1-based
+      if (mod_lo >= mod_hi) { brackets.push_back({mod_lo, mod_hi, site.mass_shift}); continue; }  // localized/fixed
+      // N-terminal net-loss composite (Met-excision + N-alpha-acetyl = -89 at residue 1): stays N-terminal on a
+      // complement flip. Prefix-only -- the sub-frame-1 == abs-0 identity holds solely when region_start==0.
+      const bool nterm_loss = (site.mass_shift < 0.0) && (mod_lo == 1);
+      int lo = 1, hi = L;                                    // neutral: no excluder -> lo=1 ; no includer -> hi=L
       for (const auto& fm : fragments)
       {
-        if (fm.ion_type.empty() || fm.ion_index <= 0) continue;
-        const char t = fm.ion_type[0];                         // FIRST char == isPrefixIonType input
-        const bool is_prefix = (t == 'a' || t == 'b' || t == 'c');  // "yb"/"ya" -> 'y' -> suffix (correct)
-        const int cover_start = is_prefix ? 1 : (L - fm.ion_index + 1);
-        const int cover_end   = is_prefix ? fm.ion_index : L;
-        // Brackets iff the fragment's backbone cleavage falls strictly inside [rs, re] (covers some, not all).
-        const bool brackets = is_prefix ? (rs <= cover_end && cover_end < re)
-                                        : (rs < cover_start && cover_start <= re);
-        if (!brackets) continue;
-        if (fm.includes_ptm)   // PTM IS inside this fragment's coverage
+        if (fm.equiv_type.empty() || fm.equiv_index <= 0) continue;   // bracket over the EQUIV (projected) ion
+        if (is_prefix_ion(fm.equiv_type))                             // prefix-equiv covers residues [1, equiv_index]
         {
-          if (is_prefix) { if (cover_end   <  re && cover_end   >= rs) re = cover_end;   }  // tightenUpper
-          else           { if (cover_start >  rs && cover_start <= re) rs = cover_start; }  // tightenLower
+          const int cover_end = fm.equiv_index;
+          if (cover_end <= 0 || cover_end >= L) continue;             // covers all / none -> constrains nothing
+          bool includes;
+          if (mod_hi <= cover_end)      includes = true;              // fully covers the a-priori range -> includer
+          else if (mod_lo > cover_end)  includes = false;             // no overlap -> excluder
+          else                                                        // straddle -> flip/mod-aware (== pooled Pass B)
+            includes = nterm_loss ? fm.includes_ptm
+                                  : (fm.is_complement_flip ? !fm.includes_ptm : fm.includes_ptm);
+          if (includes) { if (cover_end < hi) hi = cover_end; }       // includer -> upper bound
+          else          { if (cover_end + 1 > lo) lo = cover_end + 1; } // excluder -> lower bound
         }
-        else                   // PTM is OUTSIDE this fragment's coverage
+        else                                                          // suffix-equiv (y-precursor) covers [cover_start, L]
         {
-          if (is_prefix) { const int nl = cover_end + 1;   if (nl > rs && nl <= re) rs = nl; }  // tightenLower
-          else           { const int nu = cover_start - 1; if (nu < re && nu >= rs) re = nu; }  // tightenUpper
+          const int cover_start = L - fm.equiv_index + 1;             // render-frame suffix coverage
+          if (cover_start <= 1 || cover_start > L) continue;          // covers all / none -> constrains nothing
+          bool includes;                                              // nterm_loss NOT applied on suffix (subframe-1 != abs-0)
+          if (mod_lo >= cover_start)      includes = true;            // fully covers -> includer
+          else if (mod_hi < cover_start)  includes = false;           // no overlap -> excluder
+          else                                                        // straddle -> plain flip verdict
+            includes = fm.is_complement_flip ? !fm.includes_ptm : fm.includes_ptm;
+          if (includes) { if (cover_start > lo) lo = cover_start; }   // includer -> lower bound
+          else          { if (cover_start - 1 < hi) hi = cover_start - 1; } // excluder -> upper bound
         }
       }
-      // Change W: the per-scan leaf must never show a mod's ambiguity NARROWER than the WIDEST single MS3
-      // fragment that CONTAINS it. A containing fragment (includes_ptm=true) spanning residues [a,b] only
-      // proves the mod is somewhere in [a,b]; a tighter range over-claims localization this scan does not have.
-      // Take the widest single containing span (owner decision — not the intersection), clamp to the a priori
-      // wide base, and widen [rs,re] outward to it. (e.g. pid19 leaf (16-22) -> (5-47); keeps -89 on M1 when
-      // b1 contains it.)
-      int floor_lo = rs, floor_hi = re, widest_span = -1;
-      for (const auto& fm : fragments)
+      if (lo > hi) { lo = hi = std::min(std::max((mod_lo + mod_hi) / 2, 1), L); }  // degenerate safety
+      brackets.push_back({lo, hi, site.mass_shift});
+    }
+
+    // STEP 2 -- gap-partition MERGE: adjacent mods whose brackets OVERLAP were never separated by a fragment
+    // this scan, so they collapse to ONE PTMSite = arithmetic SUM of the masses over the UNION range.
+    std::vector<std::size_t> order(brackets.size());
+    for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+    std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+      return brackets[a].lo != brackets[b].lo ? brackets[a].lo < brackets[b].lo
+                                              : brackets[a].hi < brackets[b].hi; });
+    std::vector<PTMSite> out;
+    out.reserve(brackets.size());
+    for (std::size_t i = 0; i < order.size();)
+    {
+      int g_lo = brackets[order[i]].lo, g_hi = brackets[order[i]].hi;
+      double g_mass = brackets[order[i]].mass;
+      std::size_t j = i + 1;
+      for (; j < order.size() && brackets[order[j]].lo <= g_hi; ++j)   // inclusive overlap -> same gap -> merge
       {
-        if (fm.ion_type.empty() || fm.ion_index <= 0 || !fm.includes_ptm) continue;  // only fragments that CONTAIN the mod
-        const char t = fm.ion_type[0];
-        const bool is_prefix = (t == 'a' || t == 'b' || t == 'c');   // "yb"/"ya" -> 'y' -> suffix
-        const int cover_start = is_prefix ? 1 : (L - fm.ion_index + 1);
-        const int cover_end   = is_prefix ? fm.ion_index : L;
-        if (cover_end < wide_lo || cover_start > wide_hi) continue;  // fragment must pertain to this mod (overlaps its wide base)
-        const int span = cover_end - cover_start;
-        if (span > widest_span) { widest_span = span; floor_lo = cover_start; floor_hi = cover_end; }
+        g_hi = std::max(g_hi, brackets[order[j]].hi);
+        g_mass += brackets[order[j]].mass;
       }
-      if (widest_span >= 0)
-      {
-        rs = std::min(rs, std::max(floor_lo, wide_lo));   // never narrower than the widest containing span,
-        re = std::max(re, std::min(floor_hi, wide_hi));   // clamped to the a priori wide base
-      }
-      site.start_position = rs;
-      site.end_position = re;
-      site.position = (rs + re) / 2;
+      PTMSite s;
+      s.start_position = g_lo;
+      s.end_position = g_hi;
+      s.position = (g_lo + g_hi) / 2;
+      s.mass_shift = g_mass;
+      out.push_back(s);
+      i = j;
     }
     return out;
   }

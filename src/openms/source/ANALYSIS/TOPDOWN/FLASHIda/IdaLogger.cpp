@@ -471,14 +471,17 @@ namespace OpenMS
     const int id_region_start = use_match_region ? match.region_start : ctx.start_pos;
     const int id_region_end   = use_match_region ? match.region_end   : ctx.end_pos;
 
-    // FRESH PER-SCAN ambiguity (MS3): the identification leaf shows what THIS scan's ion looks like, so its
-    // ranges can be WIDER than the cumulative pooled log. Seed the narrowing from the SAME wide base
-    // scan_commands renders for this MS3 command -- row.ctx is the triggering-scan RENDER context (region
-    // frame), reconstructed here and run through the shared fragmentProFormaSites -- then narrow with ONLY
-    // THIS scan's matched ions. The wide base is independent of the pooled model (so the leaf can be >=
-    // pooled), and identical to scan_commands + inward-only narrowing guarantees the leaf is a SUBSET of
-    // scan_commands. This writer emits ONLY identification.tsv; pooled (ProteoformTracker) + scan_commands
-    // are untouched. MS2 rows keep their range as-is (narrowing is an MS3-only, fragment-frame notion).
+    // FRESH PER-SCAN ambiguity (MS3): the identification leaf shows what THIS scan's ion looks like. Its
+    // localizer (narrowFragmentPTMSites) brackets each mod over THIS scan's EQUIVALENT (full-protein) ions --
+    // seeded WIDE over the fragment region [1,L] and tightened inward with the flip/mod-aware verdict shared
+    // with pooled Pass B -- then MERGES any mods this scan cannot separate into one summed shift. So the leaf
+    // reflects the per-scan evidence exactly: its ranges can be WIDER than the cumulative pooled log AND wider
+    // than the scan_commands a-priori base (which is rendered pre-acquisition and cannot know the MS3 ions --
+    // there is no longer a leaf-subset-of-scan_commands guarantee). `wide_sites` (from the shared
+    // fragmentProFormaSites, region-frame RENDER context reconstructed from row.ctx) is passed only as the
+    // a-priori classification reference, never as an output clamp. This writer emits ONLY identification.tsv;
+    // pooled (ProteoformTracker) + scan_commands are untouched. MS2 rows keep their range as-is (narrowing is
+    // an MS3-only, equivalent-frame notion).
     std::vector<FragmentAnalysis::PTMSite> narrowed_sites;
     const std::vector<FragmentAnalysis::PTMSite>* eff_ptm_sites = &id_ptm_sites;
     std::string id_render_seq = id_proteoform;   // default: the fragment sub-sequence carried by match
