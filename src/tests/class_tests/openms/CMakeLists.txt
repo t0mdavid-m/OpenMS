@@ -67,6 +67,9 @@ target_link_libraries(Base64_test ZLIB::ZLIB)
 target_link_libraries(LPWrapper_test CoinOR::CoinOR)
 target_link_libraries(SpectraSTSimilarityScore_test Eigen3::Eigen)
 target_link_libraries(BinnedSpectrum_test Eigen3::Eigen)
+# ConfigSchemaParity_test re-parses the reference config with nlohmann::json to prove the C++
+# reader binds every on-disk key. The OpenMS lib links nlohmann PRIVATE, so link it here explicitly.
+target_link_libraries(ConfigSchemaParity_test nlohmann_json::nlohmann_json)
 
 if (WITH_HDF5)
   target_link_libraries(HDF5_test HDF5::HDF5)
