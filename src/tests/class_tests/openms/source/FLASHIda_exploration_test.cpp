@@ -58,9 +58,9 @@ namespace
       "strict_inclusion": false,
       "tie_threshold": 0.1
     },
-    "tagging": {
-      "min_tag_length": 3,
-      "max_tag_length": 8,
+    "flashtnt": {
+      "min_length": 3,
+      "max_length": 8,
       "max_ptm_count": 3,
       "max_flanking_mass_diff": 50000
     },
@@ -145,9 +145,9 @@ namespace
       "strict_inclusion": false,
       "tie_threshold": 0.1
     },
-    "tagging": {
-      "min_tag_length": 3,
-      "max_tag_length": 8,
+    "flashtnt": {
+      "min_length": 3,
+      "max_length": 8,
       "max_ptm_count": 3,
       "max_flanking_mass_diff": 50000
     },
@@ -246,9 +246,9 @@ namespace
       "strict_inclusion": false,
       "tie_threshold": 0.1
     },
-    "tagging": {
-      "min_tag_length": 3,
-      "max_tag_length": 8,
+    "flashtnt": {
+      "min_length": 3,
+      "max_length": 8,
       "max_ptm_count": 3,
       "max_flanking_mass_diff": 50000
     },
@@ -333,9 +333,9 @@ namespace
       "strict_inclusion": false,
       "tie_threshold": 0.1
     },
-    "tagging": {
-      "min_tag_length": 3,
-      "max_tag_length": 8,
+    "flashtnt": {
+      "min_length": 3,
+      "max_length": 8,
       "max_ptm_count": 3,
       "max_flanking_mass_diff": 50000
     },
@@ -417,9 +417,9 @@ namespace
       "strict_inclusion": false,
       "tie_threshold": 0.1
     },
-    "tagging": {
-      "min_tag_length": 3,
-      "max_tag_length": 8,
+    "flashtnt": {
+      "min_length": 3,
+      "max_length": 8,
       "max_ptm_count": 3,
       "max_flanking_mass_diff": 50000
     },
@@ -512,9 +512,9 @@ namespace
       "strict_inclusion": false,
       "tie_threshold": 0.1
     },
-    "tagging": {
-      "min_tag_length": 3,
-      "max_tag_length": 8,
+    "flashtnt": {
+      "min_length": 3,
+      "max_length": 8,
       "max_ptm_count": 3,
       "max_flanking_mass_diff": 50000
     },
@@ -597,9 +597,9 @@ namespace
       "strict_inclusion": false,
       "tie_threshold": 0.1
     },
-    "tagging": {
-      "min_tag_length": 3,
-      "max_tag_length": 8,
+    "flashtnt": {
+      "min_length": 3,
+      "max_length": 8,
       "max_ptm_count": 3,
       "max_flanking_mass_diff": 50000
     },
@@ -718,9 +718,9 @@ namespace
       "strict_inclusion": false,
       "tie_threshold": 0.1
     },
-    "tagging": {
-      "min_tag_length": 3,
-      "max_tag_length": 8,
+    "flashtnt": {
+      "min_length": 3,
+      "max_length": 8,
       "max_ptm_count": 3,
       "max_flanking_mass_diff": 50000
     },
@@ -822,9 +822,9 @@ namespace
       "strict_inclusion": false,
       "tie_threshold": 0.1
     },
-    "tagging": {
-      "min_tag_length": 3,
-      "max_tag_length": 8,
+    "flashtnt": {
+      "min_length": 3,
+      "max_length": 8,
       "max_ptm_count": 3,
       "max_flanking_mass_diff": 50000
     },
@@ -2252,7 +2252,7 @@ START_SECTION(inclusion_ms3_full_acquisition_roundtrip)
   const char* inclusion_ms3_config = R"({
     "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
     "precursor_selection": { "RT_window": 180, "target_mode": 1, "IDScore": false, "AllCharges": false, "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1 },
-    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
     "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
     "faims": { "cv_values": [-50], "max_cv_skip": 0, "cv_precursor_threshold": 15 },
     "ms_settings": {
@@ -2335,7 +2335,7 @@ START_SECTION(ms3_min_charge_floor_filters_all_targets)
   const char* cfg99 = R"({
     "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
     "precursor_selection": { "RT_window": 180, "target_mode": 1, "IDScore": false, "AllCharges": false, "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1 },
-    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
     "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
     "faims": { "cv_values": [-50], "max_cv_skip": 0, "cv_precursor_threshold": 15 },
     "ms_settings": {
@@ -2380,7 +2380,7 @@ START_SECTION(ms3_min_charge_default_emits_ms3)
   const char* cfg1 = R"({
     "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
     "precursor_selection": { "RT_window": 180, "target_mode": 1, "IDScore": false, "AllCharges": false, "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1 },
-    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
     "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
     "faims": { "cv_values": [-50], "max_cv_skip": 0, "cv_precursor_threshold": 15 },
     "ms_settings": {

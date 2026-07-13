@@ -129,12 +129,25 @@ namespace OpenMS
     if (targeting_.mode == 1)
       std::cout << "Inclusion mode: " << (targeting_.strict_inclusion ? "strict" : "non-strict") << "\n";
 
-    // --- tagging section ---
+    // --- flashtnt section (FLASHTagger/FLASHExtender tuning) ---
+    auto flashtnt = config.value("flashtnt", json::object());
+    targeting_.min_tag_length = flashtnt.value("min_length", 3);
+    targeting_.max_tag_length = flashtnt.value("max_length", 8);
+    targeting_.max_total_ptm_count = flashtnt.value("max_ptm_count", 3);
+    targeting_.max_flanking_mass_diff = flashtnt.value("max_flanking_mass_diff", 50000.0);
+    targeting_.allow_gap = flashtnt.value("allow_gap", false);
+    targeting_.max_aa_in_gap = flashtnt.value("max_aa_in_gap", 2);
+    targeting_.max_blind_mod_count = flashtnt.value("max_blind_mod_count", 2);
+    targeting_.max_mod_mass = flashtnt.value("max_mod_mass", 700.0);  // 700 preserves current MS2 behavior; NOT the extender's own 500 default
+    targeting_.fixed_mod.clear();
+    if (flashtnt.contains("fixed_mod") && flashtnt["fixed_mod"].is_array())
+    {
+      for (const auto& m : flashtnt["fixed_mod"])
+        targeting_.fixed_mod.push_back(m.get<std::string>());
+    }
+
+    // --- tagging section (acquisition-workflow controls; algorithm knobs live in flashtnt) ---
     auto tagging = config.value("tagging", json::object());
-    targeting_.min_tag_length = tagging.value("min_tag_length", 3);
-    targeting_.max_tag_length = tagging.value("max_tag_length", 8);
-    targeting_.max_total_ptm_count = tagging.value("max_ptm_count", 3);
-    targeting_.max_flanking_mass_diff = tagging.value("max_flanking_mass_diff", 50000.0);
 
     if (tagging.contains("follow_up_scan") && tagging["follow_up_scan"].is_object())
     {

@@ -43,9 +43,9 @@ namespace
       "strict_inclusion": false,
       "tie_threshold": 0.1
     },
-    "tagging": {
-      "min_tag_length": 3,
-      "max_tag_length": 8,
+    "flashtnt": {
+      "min_length": 3,
+      "max_length": 8,
       "max_ptm_count": 3,
       "max_flanking_mass_diff": 50000
     },
@@ -119,9 +119,9 @@ namespace
       "strict_inclusion": false,
       "tie_threshold": 0.1
     },
-    "tagging": {
-      "min_tag_length": 3,
-      "max_tag_length": 8,
+    "flashtnt": {
+      "min_length": 3,
+      "max_length": 8,
       "max_ptm_count": 3,
       "max_flanking_mass_diff": 50000
     },
@@ -195,9 +195,9 @@ namespace
       "strict_inclusion": false,
       "tie_threshold": 0.1
     },
-    "tagging": {
-      "min_tag_length": 3,
-      "max_tag_length": 8,
+    "flashtnt": {
+      "min_length": 3,
+      "max_length": 8,
       "max_ptm_count": 3,
       "max_flanking_mass_diff": 50000
     },

@@ -44,7 +44,7 @@ namespace
       "IDScore": false, "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
-    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
     "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
     "faims": { "cv_values": [-50], "max_cv_skip": 0 },
     "ms_settings": {
@@ -81,7 +81,7 @@ namespace
       "IDScore": false, "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
-    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
     "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
     "faims": { "cv_values": [-50], "max_cv_skip": 0 },
     "ms_settings": {
@@ -120,7 +120,7 @@ namespace
       "IDScore": false, "AllCharges": true,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
-    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
     "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
     "faims": { "cv_values": [-50], "max_cv_skip": 0 },
     "ms_settings": {
@@ -156,7 +156,7 @@ namespace
       "IDScore": false, "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
-    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
     "quantification": { "enabled": true, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
     "faims": { "cv_values": [-50], "max_cv_skip": 0 },
     "ms_settings": {
@@ -192,7 +192,7 @@ namespace
       "IDScore": false, "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
-    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
     "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
     "faims": { "cv_values": [-50], "max_cv_skip": 0 },
     "ms_settings": {
@@ -228,8 +228,8 @@ namespace
       "IDScore": false, "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
+    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
     "tagging": {
-      "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000,
       "follow_up_scan": { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "resolution": 120000 }
     },
     "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
@@ -267,7 +267,7 @@ namespace
       "IDScore": false, "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
-    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
     "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
     "faims": { "cv_values": [-50], "max_cv_skip": 0 },
     "ms_settings": {
@@ -302,7 +302,7 @@ namespace
       "IDScore": false, "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
-    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
     "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
     "faims": { "cv_values": [-50], "max_cv_skip": 0 },
     "ms_settings": {
@@ -337,8 +337,8 @@ namespace
       "IDScore": false, "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
+    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
     "tagging": {
-      "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000,
       "follow_up_scan": { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "resolution": 120000 }
     },
     "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
@@ -376,7 +376,7 @@ namespace
       "IDScore": false, "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
-    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
     "quantification": {
       "enabled": true, "reporter_mz_tol": 0.002, "fold_change_threshold": 0.01,
       "follow_up_scan": { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "resolution": 120000 }
@@ -415,7 +415,7 @@ namespace
       "IDScore": false, "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
-    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
     "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
     "faims": { "cv_values": [-50], "max_cv_skip": 0 },
     "ms_settings": {
@@ -450,7 +450,7 @@ namespace
       "IDScore": false, "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
-    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
     "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
     "faims": { "cv_values": [-50], "max_cv_skip": 0 },
     "ms_settings": {
@@ -486,7 +486,7 @@ namespace
       "IDScore": false, "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
-    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
     "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
     "faims": { "cv_values": [-50], "max_cv_skip": 0 },
     "ms_settings": {
@@ -521,7 +521,7 @@ namespace
       "IDScore": false, "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
-    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
     "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
     "faims": { "cv_values": [-50], "max_cv_skip": 0 },
     "ms_settings": {
@@ -1622,9 +1622,9 @@ START_SECTION(processScan_ms1_min_charge_filter)
       "strict_inclusion": false,
       "tie_threshold": 0.1
     },
-    "tagging": {
-      "min_tag_length": 3,
-      "max_tag_length": 8,
+    "flashtnt": {
+      "min_length": 3,
+      "max_length": 8,
       "max_ptm_count": 3,
       "max_flanking_mass_diff": 50000
     },
@@ -1751,7 +1751,7 @@ START_SECTION(cleanup_expired_drops_stale_queued_commands)
       "IDScore": false, "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
-    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
     "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
     "faims": { "cv_values": [-50], "max_cv_skip": 0 },
     "ms_settings": {

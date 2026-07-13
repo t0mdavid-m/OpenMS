@@ -40,6 +40,7 @@
 
 #include <cstdint>
 #include <map>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -172,6 +173,12 @@ namespace OpenMS
     double tag_matching_tolerance_ppm = 10.0;
     double max_flanking_mass_diff = 50000.0;
     int max_total_ptm_count = 3;
+    // --- FLASHTnT (FLASHTagger/FLASHExtender) tuning, from the `flashtnt` config block ---
+    bool allow_gap = false;                 ///< FLASHTagger allow_gap (passed as "true"/"false")
+    int max_aa_in_gap = 2;                   ///< FLASHTagger max_aa_in_gap
+    std::vector<std::string> fixed_mod;      ///< Fixed modifications (tagger + extender); empty = keep algorithm {""} default
+    int max_blind_mod_count = 2;             ///< FLASHExtender max_blind_mod_count
+    double max_mod_mass = 700.0;             ///< FLASHExtender max_mod_mass. 700 preserves current MS2 behavior; NOT the extender's own 500 default.
     ScanConfig tagging_follow_up_scan;  ///< Follow-up scan config for conditional MS2
   };
 

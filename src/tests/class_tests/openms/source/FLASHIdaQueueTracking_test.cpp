@@ -39,9 +39,9 @@ namespace
       "strict_inclusion": false,
       "tie_threshold": 0.1
     },
-    "tagging": {
-      "min_tag_length": 3,
-      "max_tag_length": 8,
+    "flashtnt": {
+      "min_length": 3,
+      "max_length": 8,
       "max_ptm_count": 3,
       "max_flanking_mass_diff": 50000
     },
@@ -220,7 +220,7 @@ START_SECTION(agc_scan_is_dequeued_first)
       "IDScore": false, "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
-    "tagging": { "min_tag_length": 3, "max_tag_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
     "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
     "faims": { "cv_values": [-50], "max_cv_skip": 0 },
     "ms_settings": {

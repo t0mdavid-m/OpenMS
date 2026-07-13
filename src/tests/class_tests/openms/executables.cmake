@@ -457,6 +457,7 @@ set(analysis_executables_list
   ScanCommandLayout_test
   FLASHIda_exploration_test
   FLASHIda_LegacyConfig_test
+  ConfigSchemaParity_test
   FLASHIda_Logging_test
   FLASHIda_LoggingFields_test
   MS3FragmentMatcher_test

@@ -401,6 +401,12 @@ namespace
     FLASHTaggerAlgorithm tagger;
     Param tagger_param = tagger.getDefaults();
     tagger_param.setValue("ion_type", ion_types_str);
+    tagger_param.setValue("min_length", config_.targeting().min_tag_length);
+    tagger_param.setValue("max_length", config_.targeting().max_tag_length);
+    tagger_param.setValue("allow_gap", config_.targeting().allow_gap ? "true" : "false");
+    tagger_param.setValue("max_aa_in_gap", config_.targeting().max_aa_in_gap);
+    if (!config_.targeting().fixed_mod.empty())
+      tagger_param.setValue("fixed_mod", config_.targeting().fixed_mod);
     tagger.setParameters(tagger_param);
     tagger.run(dspec, ppm_tolerance);
 
@@ -518,7 +524,7 @@ namespace
     std::vector<std::unordered_set<int>> rev_vec_pro = {rev_vec};
 
     // 6. Run FLASHTagger matching
-    double max_mod_mass = 700.0;
+    double max_mod_mass = config_.targeting().max_mod_mass;  // default 700.0 preserves prior hardcoded behavior
     std::cout << "max_mod_mass=" << max_mod_mass << std::endl;
     std::cout << "ion_types_str=";
     for (const auto& ion : ion_types_str) {
@@ -541,6 +547,9 @@ namespace
     extender_param.setValue("ion_type", ion_types_str);
     extender_param.setValue("max_mod_mass", max_mod_mass);
     extender_param.setValue("skip_precursor_inference", "true");
+    extender_param.setValue("max_blind_mod_count", config_.targeting().max_blind_mod_count);
+    if (!config_.targeting().fixed_mod.empty())
+      extender_param.setValue("fixed_mod", config_.targeting().fixed_mod);
     extender.setParameters(extender_param);
     extender.run(hits, dspec, spec_vec, vec_pro, rev_vec_pro, tags, ppm_tolerance, false);
 

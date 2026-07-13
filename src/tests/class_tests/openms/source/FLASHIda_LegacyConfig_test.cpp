@@ -119,7 +119,7 @@ START_SECTION(([EXTRA] Config rejects conditional_ms2 without tagging follow_up_
   const char* json = R"({
     "deconvolution": { "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10] },
     "precursor_selection": {},
-    "tagging": { "min_tag_length": 3 },
+    "tagging": {}, "flashtnt": { "min_length": 3 },
     "conditional_ms2": true,
     "quantification": { "enabled": false },
     "faims": {},

@@ -979,6 +979,10 @@ namespace OpenMS
     tagger_param.setValue("min_length", config_.targeting().min_tag_length);
     tagger_param.setValue("max_length", config_.targeting().max_tag_length);
     tagger_param.setValue("ion_type", FragmentAnalysis::getIonTypesForFragmentationMethod(activation_type));
+    tagger_param.setValue("allow_gap", config_.targeting().allow_gap ? "true" : "false");
+    tagger_param.setValue("max_aa_in_gap", config_.targeting().max_aa_in_gap);
+    if (!config_.targeting().fixed_mod.empty())
+      tagger_param.setValue("fixed_mod", config_.targeting().fixed_mod);
     tagger.setParameters(tagger_param);
 
     // Run tag generation
