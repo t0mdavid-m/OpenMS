@@ -33,7 +33,6 @@ namespace
     "precursor_selection": {
       "RT_window": 180,
       "target_mode": 0,
-      "IDScore": false,
       "AllCharges": false,
       "HCDEnergy": 29,
       "strict_inclusion": false,
@@ -75,11 +74,6 @@ namespace
     "scheduling": {
       "cycle_time": { "enabled": false, "value_ms": 60000 },
       "scan_timeout": { "enabled": false, "value_ms": 30000 }
-    },
-    "exploration": {
-      "enabled": false,
-      "max_depth": 1,
-      "max_variants": 5
     },
     "files": {
       "target_logs": [],
@@ -217,7 +211,7 @@ START_SECTION(agc_scan_is_dequeued_first)
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": false,
+      "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
@@ -232,7 +226,6 @@ START_SECTION(agc_scan_is_dequeued_first)
       "scan_timeout": { "enabled": false, "value_ms": 30000 },
       "agc_interval_seconds": 0
     },
-    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 1 },

@@ -88,7 +88,7 @@ START_SECTION(([EXTRA] Config rejects exploration with multiple scan configs))
 {
   const char* json = R"({
     "deconvolution": { "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10] },
-    "precursor_selection": { "IDScore": false },
+    "precursor_selection": {  },
     "tagging": {},
     "quantification": { "enabled": false },
     "faims": {},
@@ -103,7 +103,7 @@ START_SECTION(([EXTRA] Config rejects exploration with multiple scan configs))
     "files": {},
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "none", "exploration": { "metric": "mass_count", "ce_min": 20, "ce_max": 40, "ce_step": 5, "activation": "HCD" } }
+      "ms2": { "selection": "none", "exploration": { "metric": "mass_count", "ce_min": 20, "ce_max": 40, "ce_step": 5, "activations": ["HCD"] } }
     }
   })";
   bool threw = false;

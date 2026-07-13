@@ -32,7 +32,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": false,
+      "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1,
       "ChargeBasedExclusion": false
     },
@@ -50,7 +50,6 @@ namespace
       "scan_timeout": { "enabled": true, "value_ms": 30000 },
       "agc_interval_seconds": 30
     },
-    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 10 },
@@ -67,7 +66,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": false,
+      "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1,
       "ChargeBasedExclusion": true
     },
@@ -85,7 +84,6 @@ namespace
       "scan_timeout": { "enabled": true, "value_ms": 30000 },
       "agc_interval_seconds": 30
     },
-    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 10 },

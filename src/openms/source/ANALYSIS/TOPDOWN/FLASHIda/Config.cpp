@@ -36,7 +36,37 @@
 
 #include <iostream>
 #include <stdexcept>
+#include <set>
+#include <string>
+#include <vector>
 #include <nlohmann/json.hpp>
+
+namespace
+{
+  // Strict schema: throw naming every key in `obj` that is not in `allowed`. Dynamic objects
+  // (e.g. exploration.overrides) are simply not validated (never passed here).
+  void rejectUnknownKeys(const nlohmann::json& obj, const std::set<std::string>& allowed,
+                         const std::string& path)
+  {
+    if (!obj.is_object()) return;
+    std::vector<std::string> bad;
+    for (auto it = obj.begin(); it != obj.end(); ++it)
+      if (allowed.find(it.key()) == allowed.end()) bad.push_back(it.key());
+    if (bad.empty()) return;
+    std::string joined;
+    for (size_t i = 0; i < bad.size(); ++i) { if (i) joined += ", "; joined += bad[i]; }
+    throw std::invalid_argument(
+        "Config: unknown key(s) in '" + path + "': " + joined +
+        ". Keys are case-sensitive snake_case; see FlashIDA/test-data/config_schema_reference.json.");
+  }
+
+  // One lenient scan-config allowlist for every scan object (ms1/ms2/ms3/follow_up_scan): the union
+  // of MS1- and MS2/MS3-level keys. Rejects non-schema scan keys such as the removed 'IsolationMode'.
+  const std::set<std::string> kScanKeys = {
+    "analyzer", "activation", "collision_energy", "resolution", "agc_target", "max_it",
+    "first_mass", "last_mass", "microscans", "data_type", "rf_lens", "source_cid",
+    "source_cid_scaling", "scan_rate", "reaction_time", "reagent_max_it", "reagent_agc_target"};
+}
 
 namespace OpenMS
 {
@@ -92,8 +122,24 @@ namespace OpenMS
     using json = nlohmann::json;
     json config = json::parse(json_str);
 
+    // --- strict schema: reject unknown keys (top-level + every section below) ---
+    if (config.contains("ms3"))
+      throw std::invalid_argument(
+          "Config: 'ms3' is no longer a top-level section. "
+          "Migrate MS3 targeting to selection_strategy.ms2 and ms_settings.ms3.");
+    rejectUnknownKeys(config,
+        {"global", "deconvolution", "precursor_selection", "flashtnt", "tagging", "conditional_ms2",
+         "quantification", "faims", "ms_settings", "scheduling", "selection_strategy",
+         "characterization", "files", "runtime"},
+        "(root)");
+    rejectUnknownKeys(config.value("global", json::object()),
+        {"method_name", "method_description", "duration"}, "global");
+
     // --- deconvolution section ---
     auto deconv = config.value("deconvolution", json::object());
+    rejectUnknownKeys(deconv,
+        {"score_threshold", "tqscore_threshold", "min_charge", "max_charge", "min_mass", "max_mass", "tol"},
+        "deconvolution");
     targeting_.qscore_threshold = deconv.value("score_threshold", 0.0);
     targeting_.tqscore_threshold = deconv.value("tqscore_threshold", 0.9);
     deconv_.min_charge = deconv.value("min_charge", 4);
@@ -118,6 +164,10 @@ namespace OpenMS
 
     // --- precursor_selection section ---
     auto ps = config.value("precursor_selection", json::object());
+    rejectUnknownKeys(ps,
+        {"RT_window", "target_mode", "AllCharges", "HCDEnergy", "ChargeBasedExclusion",
+         "strict_inclusion", "tie_threshold"},
+        "precursor_selection");
     targeting_.rt_window = ps.value("RT_window", 180.0);
     targeting_.mode = ps.value("target_mode", 0);
     targeting_.consider_all_charges = ps.value("AllCharges", false);
@@ -131,6 +181,10 @@ namespace OpenMS
 
     // --- flashtnt section (FLASHTagger/FLASHExtender tuning) ---
     auto flashtnt = config.value("flashtnt", json::object());
+    rejectUnknownKeys(flashtnt,
+        {"min_length", "max_length", "max_ptm_count", "max_flanking_mass_diff", "allow_gap",
+         "max_aa_in_gap", "max_blind_mod_count", "max_mod_mass", "fixed_mod"},
+        "flashtnt");
     targeting_.min_tag_length = flashtnt.value("min_length", 3);
     targeting_.max_tag_length = flashtnt.value("max_length", 8);
     targeting_.max_total_ptm_count = flashtnt.value("max_ptm_count", 3);
@@ -148,10 +202,12 @@ namespace OpenMS
 
     // --- tagging section (acquisition-workflow controls; algorithm knobs live in flashtnt) ---
     auto tagging = config.value("tagging", json::object());
+    rejectUnknownKeys(tagging, {"follow_up_scan"}, "tagging");
 
     if (tagging.contains("follow_up_scan") && tagging["follow_up_scan"].is_object())
     {
       auto fus = tagging["follow_up_scan"];
+      rejectUnknownKeys(fus, kScanKeys, "tagging.follow_up_scan");
       targeting_.tagging_follow_up_scan.analyzer = fus.value("analyzer", "Orbitrap");
       targeting_.tagging_follow_up_scan.activation = fus.value("activation", "");
       targeting_.tagging_follow_up_scan.collision_energy = fus.value("collision_energy", 0);
@@ -164,6 +220,7 @@ namespace OpenMS
 
     // --- files section (paths only; loading stays in FLASHIda) ---
     auto files = config.value("files", json::object());
+    rejectUnknownKeys(files, {"target_logs", "fasta", "inclusion_list", "ptm_list"}, "files");
 
     if (files.contains("target_logs") && files["target_logs"].is_array())
     {
@@ -179,6 +236,7 @@ namespace OpenMS
 
     // --- characterization section ---
     auto charact = config.value("characterization", json::object());
+    rejectUnknownKeys(charact, {"objective", "protein_sequence", "ms3_all_charges"}, "characterization");
     {
       std::string obj_str = charact.value("objective", std::string("ambiguity"));
       if (obj_str == "coverage")
@@ -189,30 +247,21 @@ namespace OpenMS
       characterization_.ms3_all_charges = charact.value("ms3_all_charges", false);
     }
 
-    // Reject legacy MS3 keys — force migration to selection_strategy
-    auto ms3 = config.value("ms3", json::object());
-    static const std::vector<std::string> legacy_ms3_keys = {"enabled", "active", "mode", "all_charges", "max_per_ms2"};
-    for (const auto& key : legacy_ms3_keys)
-    {
-      if (ms3.contains(key))
-        throw std::invalid_argument(
-            "Config: ms3." + key + " is no longer supported. "
-            "Migrate MS3 targeting to selection_strategy.ms2.");
-    }
-
-    // --- conditional_ms2 (check top-level and tagging section) ---
-    targeting_.conditional_ms2_enabled = config.value("conditional_ms2",
-        tagging.value("conditional_ms2", false));
+    // --- conditional_ms2 (top-level only) ---
+    targeting_.conditional_ms2_enabled = config.value("conditional_ms2", false);
 
     // --- quantification ---
     auto quant = config.value("quantification", json::object());
-    quant_.enabled = quant.value("enabled", quant.value("active", false));
+    rejectUnknownKeys(quant,
+        {"enabled", "reporter_mz_tol", "fold_change_threshold", "follow_up_scan"}, "quantification");
+    quant_.enabled = quant.value("enabled", false);
     quant_.reporter_mz_tol = quant.value("reporter_mz_tol", 0.002);
     quant_.fold_change_threshold = quant.value("fold_change_threshold", 1.4);
 
     if (quant.contains("follow_up_scan") && quant["follow_up_scan"].is_object())
     {
       auto fus = quant["follow_up_scan"];
+      rejectUnknownKeys(fus, kScanKeys, "quantification.follow_up_scan");
       quant_.follow_up_scan.analyzer = fus.value("analyzer", "Orbitrap");
       quant_.follow_up_scan.activation = fus.value("activation", "");
       quant_.follow_up_scan.collision_energy = fus.value("collision_energy", 0);
@@ -225,6 +274,7 @@ namespace OpenMS
 
     // --- faims ---
     auto faims_section = config.value("faims", json::object());
+    rejectUnknownKeys(faims_section, {"cv_values", "max_cv_skip", "cv_precursor_threshold"}, "faims");
     if (faims_section.contains("cv_values") && faims_section["cv_values"].is_array())
     {
       for (const auto& v : faims_section["cv_values"])
@@ -236,9 +286,11 @@ namespace OpenMS
 
     // --- ms_settings: populate levels_[1] (MS1) and levels_[2] (MS2) scan configs ---
     auto ms_settings = config.value("ms_settings", json::object());
+    rejectUnknownKeys(ms_settings, {"ms1", "ms2", "ms3"}, "ms_settings");
 
     // MS1 scan config -> levels_[1].scans[0]
     auto ms1_json = ms_settings.value("ms1", json::object());
+    rejectUnknownKeys(ms1_json, kScanKeys, "ms_settings.ms1");
     ScanConfig ms1_scan;
     ms1_scan.analyzer = ms1_json.value("analyzer", "");
     ms1_scan.first_mass = ms1_json.value("first_mass", 0.0);
@@ -265,6 +317,7 @@ namespace OpenMS
         levels_[2] = MSLevelConfig{};
       for (const auto& m : ms_settings["ms2"])
       {
+        rejectUnknownKeys(m, kScanKeys, "ms_settings.ms2[]");
         ScanConfig ms2_scan;
         ms2_scan.analyzer = m.value("analyzer", "");
         ms2_scan.activation = m.value("activation", "");
@@ -294,6 +347,7 @@ namespace OpenMS
         levels_[3] = MSLevelConfig{};
       for (const auto& m : ms_settings["ms3"])
       {
+        rejectUnknownKeys(m, kScanKeys, "ms_settings.ms3[]");
         ScanConfig ms3_scan;
         ms3_scan.analyzer = m.value("analyzer", "");
         ms3_scan.activation = m.value("activation", "");
@@ -318,10 +372,13 @@ namespace OpenMS
 
     // --- scheduling ---
     auto sched = config.value("scheduling", json::object());
+    rejectUnknownKeys(sched, {"cycle_time", "scan_timeout", "agc_interval_seconds"}, "scheduling");
     auto ct = sched.value("cycle_time", json::object());
+    rejectUnknownKeys(ct, {"enabled", "value_ms"}, "scheduling.cycle_time");
     scheduling_.cycle_time_enabled = ct.value("enabled", false);
     scheduling_.cycle_time_ms = ct.value("value_ms", 60000.0);
     auto to = sched.value("scan_timeout", json::object());
+    rejectUnknownKeys(to, {"enabled", "value_ms"}, "scheduling.scan_timeout");
     scheduling_.timeout_enabled = to.value("enabled", false);
     scheduling_.timeout_ms = to.value("value_ms", 30000.0);
     double agc_interval_sec = sched.value("agc_interval_seconds", 30.0);
@@ -333,6 +390,7 @@ namespace OpenMS
       throw std::runtime_error("Config: missing required 'selection_strategy' in JSON config");
     }
     const auto& sel_strategy = config["selection_strategy"];
+    rejectUnknownKeys(sel_strategy, {"ms1", "ms2", "ms3"}, "selection_strategy");
     for (auto it = sel_strategy.begin(); it != sel_strategy.end(); ++it)
     {
       std::string ms_key = it.key();
@@ -340,6 +398,13 @@ namespace OpenMS
       {
         int level_num = std::stoi(ms_key.substr(2));
         const auto& level_obj = it.value();
+        rejectUnknownKeys(level_obj, {"selection", "max_targets", "min_charge", "exploration"},
+            "selection_strategy." + ms_key);
+        if (level_obj.contains("exploration") && level_obj["exploration"].is_object())
+          rejectUnknownKeys(level_obj["exploration"],
+              {"metric", "ce_min", "ce_max", "ce_step", "overrides", "remaining_precursor_target",
+               "rt_min", "rt_max", "rt_step", "activations"},
+              "selection_strategy." + ms_key + ".exploration");
 
         // Ensure the level exists in the map
         if (levels_.find(level_num) == levels_.end())
@@ -430,6 +495,9 @@ namespace OpenMS
 
     // --- runtime section (file paths, optional) ---
     auto rt_section = config.value("runtime", json::object());
+    rejectUnknownKeys(rt_section,
+        {"ida_log_path", "scan_commands_path", "scan_results_path",
+         "identification_log_path", "pooled_identification_log_path"}, "runtime");
     runtime_.ida_log_path = rt_section.value("ida_log_path", std::string{});
     runtime_.scan_commands_path = rt_section.value("scan_commands_path", std::string{});
     runtime_.scan_results_path = rt_section.value("scan_results_path", std::string{});

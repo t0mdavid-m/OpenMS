@@ -41,7 +41,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": false,
+      "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
@@ -59,7 +59,6 @@ namespace
       "scan_timeout": { "enabled": false, "value_ms": 30000 },
       "agc_interval_seconds": 9999999
     },
-    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 3 },
@@ -78,7 +77,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 1,
-      "IDScore": false, "AllCharges": false,
+      "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
@@ -98,7 +97,6 @@ namespace
       "scan_timeout": { "enabled": false, "value_ms": 30000 },
       "agc_interval_seconds": 9999999
     },
-    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "characterization": { "protein_sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE" },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "../../FlashIDA/test-data/configs/inclusion_cytc.txt", "ptm_list": "" },
     "selection_strategy": {
@@ -117,7 +115,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": true,
+      "AllCharges": true,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
@@ -135,7 +133,6 @@ namespace
       "scan_timeout": { "enabled": false, "value_ms": 30000 },
       "agc_interval_seconds": 9999999
     },
-    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 3 },
@@ -153,7 +150,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": false,
+      "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
@@ -171,7 +168,6 @@ namespace
       "scan_timeout": { "enabled": false, "value_ms": 30000 },
       "agc_interval_seconds": 9999999
     },
-    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 3 },
@@ -189,7 +185,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": false,
+      "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
@@ -207,7 +203,6 @@ namespace
       "scan_timeout": { "enabled": false, "value_ms": 30000 },
       "agc_interval_seconds": 9999999
     },
-    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "../../FlashIDA/test-data/configs/test_fasta.fasta", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 3 },
@@ -225,7 +220,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": false,
+      "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
@@ -245,7 +240,6 @@ namespace
       "scan_timeout": { "enabled": false, "value_ms": 30000 },
       "agc_interval_seconds": 9999999
     },
-    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "conditional_ms2": true,
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
@@ -264,7 +258,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": false,
+      "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
@@ -281,7 +275,6 @@ namespace
       "scan_timeout": { "enabled": false, "value_ms": 30000 },
       "agc_interval_seconds": 999999
     },
-    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 3 },
@@ -299,7 +292,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": false,
+      "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
@@ -316,7 +309,6 @@ namespace
       "scan_timeout": { "enabled": true, "value_ms": 30000 },
       "agc_interval_seconds": 0
     },
-    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 3 },
@@ -334,7 +326,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": false,
+      "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
@@ -354,7 +346,6 @@ namespace
       "scan_timeout": { "enabled": false, "value_ms": 30000 },
       "agc_interval_seconds": 9999999
     },
-    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "conditional_ms2": true,
     "files": { "target_logs": [], "fasta": "../../FlashIDA/test-data/configs/test_fasta.fasta", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
@@ -373,7 +364,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": false,
+      "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
@@ -393,7 +384,6 @@ namespace
       "scan_timeout": { "enabled": false, "value_ms": 30000 },
       "agc_interval_seconds": 9999999
     },
-    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 3 },
@@ -412,7 +402,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": false,
+      "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
@@ -429,7 +419,6 @@ namespace
       "scan_timeout": { "enabled": true, "value_ms": 30000 },
       "agc_interval_seconds": 9999
     },
-    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 3 },
@@ -447,7 +436,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": false,
+      "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
@@ -465,7 +454,6 @@ namespace
       "scan_timeout": { "enabled": false, "value_ms": 30000 },
       "agc_interval_seconds": 9999999
     },
-    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "intensity", "max_targets": 3 },
@@ -483,7 +471,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": false,
+      "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
@@ -500,7 +488,6 @@ namespace
       "scan_timeout": { "enabled": false, "value_ms": 30000 },
       "agc_interval_seconds": 9999999
     },
-    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "none", "max_targets": 3 },
@@ -518,7 +505,7 @@ namespace
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": false,
+      "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
@@ -535,7 +522,6 @@ namespace
       "scan_timeout": { "enabled": false, "value_ms": 30000 },
       "agc_interval_seconds": 9999999
     },
-    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 1 },
@@ -1616,7 +1602,6 @@ START_SECTION(processScan_ms1_min_charge_filter)
     "precursor_selection": {
       "RT_window": 180,
       "target_mode": 0,
-      "IDScore": false,
       "AllCharges": false,
       "HCDEnergy": 29,
       "strict_inclusion": false,
@@ -1748,7 +1733,7 @@ START_SECTION(cleanup_expired_drops_stale_queued_commands)
     },
     "precursor_selection": {
       "RT_window": 180, "target_mode": 0,
-      "IDScore": false, "AllCharges": false,
+      "AllCharges": false,
       "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
     },
     "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
@@ -1765,7 +1750,6 @@ START_SECTION(cleanup_expired_drops_stale_queued_commands)
       "scan_timeout": { "enabled": true, "value_ms": 1 },
       "agc_interval_seconds": 9999
     },
-    "exploration": { "enabled": false, "max_depth": 1, "max_variants": 5 },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "selection_strategy": {
       "ms1": { "selection": "qscore", "max_targets": 3 },

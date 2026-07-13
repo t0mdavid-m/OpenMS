@@ -81,7 +81,6 @@ namespace
     "precursor_selection": {
       "RT_window": 180,
       "target_mode": 0,
-      "IDScore": false,
       "AllCharges": false,
       "HCDEnergy": 29,
       "strict_inclusion": false,
@@ -159,7 +158,6 @@ namespace
     "precursor_selection": {
       "RT_window": 180,
       "target_mode": 0,
-      "IDScore": false,
       "AllCharges": false,
       "HCDEnergy": 29,
       "strict_inclusion": false,
@@ -246,7 +244,6 @@ namespace
     "precursor_selection": {
       "RT_window": 180,
       "target_mode": 0,
-      "IDScore": false,
       "AllCharges": false,
       "HCDEnergy": 29,
       "strict_inclusion": false,
