@@ -1,14 +1,11 @@
 name: Cherry-pick to release
 # Opens a backport PR that cherry-picks a merged, patch-labeled `develop` PR onto
 # the current release branch (this feeds the weekly patch release).
-#
-#   Why pull_request_target is safe here: docs/adr/0001 (in the release workspace)
-#   How the target branch is resolved:     docs/adr/0002
 
 on:
-  # ADR-0001: pull_request_target runs in the BASE-repo context, so GITHUB_TOKEN is
-  # writable and secrets exist even when the source PR came from a fork. This is safe
-  # ONLY because we cherry-pick the already-merged commit and never check out or run
+  # pull_request_target runs in the BASE-repo context, so GITHUB_TOKEN is writable
+  # and secrets exist even when the source PR came from a fork. This is safe ONLY
+  # because we cherry-pick the already-merged commit and never check out or run
   # PR-head code. Do NOT add `ref: <pr-head>` to the checkout below.
   pull_request_target:
     types: [closed, labeled]   # closed => label-then-merge; labeled => label-after-merge
@@ -34,8 +31,7 @@ jobs:
         contains(github.event.pull_request.labels.*.name, vars.PATCH_LABEL || 'patch') )
     steps:
       # Required so the local composite action below exists on disk. The default
-      # checkout ref is the base branch (develop), NOT the PR head — keep it that
-      # way (ADR-0001).
+      # checkout ref is the base branch (develop), NOT the PR head — keep it that way.
       - uses: actions/checkout@v6            # first-party action, tag-pinned to match repo convention
         with:
           fetch-depth: 0                     # full history so the engine can cherry-pick across branches
@@ -44,5 +40,4 @@ jobs:
         uses: ./.github/actions/cherry-pick
         with:
           pr-number: ${{ github.event.pull_request.number || inputs.pr_number }}
-          target-branch: ${{ vars.CURRENT_RELEASE_BRANCH }}   # ADR-0002 (unset => run fails, by design)
-          token: ${{ github.token }}
+          target-branch: ${{ vars.CURRENT_RELEASE_BRANCH }}   # unset => run fails, by design

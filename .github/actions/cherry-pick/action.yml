@@ -1,9 +1,5 @@
 name: Cherry-pick a merged PR onto a branch
-description: >-
-  Cherry-pick one merged PR's squash commit onto a target branch and open a backport
-  PR (a draft with resolution instructions, on conflict). A thin, stable wrapper over
-  korthout/backport-action so the trigger workflow, the future weekly patch-release
-  workflow, and manual runs share one implementation.
+description: Cherry-pick a merged PR's commit onto a branch and open a backport PR.
 
 inputs:
   pr-number:
@@ -12,12 +8,6 @@ inputs:
   target-branch:
     description: "Branch to cherry-pick onto (the current release branch)"
     required: true
-  token:
-    description: >-
-      Token used to push the branch and open the PR. The default GITHUB_TOKEN is
-      sufficient under pull_request_target (see docs/adr/0001).
-    required: false
-    default: ${{ github.token }}
 
 runs:
   using: composite
@@ -30,7 +20,7 @@ runs:
       with:
         source_pr_number: ${{ inputs.pr-number }}   # drives both the event and manual-dispatch paths
         target_branches: ${{ inputs.target-branch }}
-        github_token: ${{ inputs.token }}
+        github_token: ${{ github.token }}
         merge_commits: fail                          # squash is enforced; a 2-parent commit fails loudly
         experimental: '{"conflict_resolution": "draft_commit_conflicts"}'  # always open a PR; draft + instructions on conflict
         add_labels: backport                         # so the weekly patch-release workflow can find these PRs
