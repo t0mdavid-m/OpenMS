@@ -435,49 +435,45 @@ namespace OpenMS
     }
     else  // CharacterizationObjective::Coverage
     {
-      // Find the largest uncovered residue gaps (complement of the merged coverage intervals in the
-      // winner-region frame), then for each gap pick the strongest best-MS2 fragment that fully
-      // CONTAINS it (its coverage spans the whole gap), so an MS3 re-feed of that fragment yields the
-      // internal cleavages needed to cover the gap. Uses span-interval merging (appropriate for
-      // gap finding); coveragePct() uses a distinct backbone-cleavage metric instead.
-      std::vector<std::pair<int, int>> intervals;  // covered [cs, ce], region-1-based inclusive, clamped to [1, L]
+      // Backbone-cleavage-site coverage (same model as ProteoformModel::coveragePct, NOT a residue-span
+      // union). Each observed fragment witnesses exactly ONE bond in MS2 (prefix b_k -> bond cover_end;
+      // suffix -> bond cover_start-1). "Uncovered" = the L-1 inter-residue bonds not yet witnessed.
+      // MS3-ing a parent re-fragments its span, so it can witness the bonds INTERIOR to that span
+      // (prefix [1..k] -> bonds 1..k-1; suffix [c..L] -> bonds c..L-1). Target every observed fragment,
+      // strongest best-MS2 first, whose interior adds >=1 still-uncovered bond, marking that interior
+      // covered (marginal-skip so we don't re-target the same gap), bounded by budget.
+      //
+      // NB: a residue-SPAN union (the previous implementation) is unusable here: every fragment's span
+      // is a terminal slab [1,k] or [c,L], so the complement is always an INTERNAL gap that no terminal
+      // fragment can fully contain (fragmentContains) -> it selected 0 targets for all real data.
+      std::set<int> uncovered;
+      for (int b = 1; b <= L - 1; ++b) uncovered.insert(b);
       for (const auto& kv : m.fragments)
       {
         const MappedFragment& f = kv.second;
-        const int cs = std::max(f.cover_start, 1);
-        const int ce = std::min(f.cover_end, L);
-        if (cs <= ce) intervals.emplace_back(cs, ce);
+        const int site = f.is_prefix ? f.cover_end : (f.cover_start - 1);
+        if (site >= 1 && site <= L - 1) uncovered.erase(site);  // bond already witnessed in MS2
       }
-      std::sort(intervals.begin(), intervals.end());
 
-      // Build the complement (uncovered) gaps over [1, L].
-      std::vector<std::pair<int, int>> gaps;
-      int cursor = 1;
-      for (const auto& iv : intervals)
-      {
-        if (iv.first > cursor) gaps.emplace_back(cursor, iv.first - 1);
-        cursor = std::max(cursor, iv.second + 1);
-      }
-      if (cursor <= L) gaps.emplace_back(cursor, L);
-      // Largest gaps first.
-      std::sort(gaps.begin(), gaps.end(),
-                [](const std::pair<int, int>& a, const std::pair<int, int>& b) {
-                  return (a.second - a.first) > (b.second - b.first);
+      std::vector<const MappedFragment*> cands;
+      for (const auto& kv : m.fragments)
+        if (kv.second.best_ms2.has_value()) cands.push_back(&kv.second);
+      std::sort(cands.begin(), cands.end(),
+                [](const MappedFragment* a, const MappedFragment* b) {
+                  return a->best_ms2->intensity > b->best_ms2->intensity;  // strongest first
                 });
 
-      for (const auto& gap : gaps)
+      for (const MappedFragment* f : cands)
       {
-        const MappedFragment* best = nullptr;
-        for (const auto& kv : m.fragments)
-        {
-          const MappedFragment& f = kv.second;
-          if (!f.best_ms2.has_value()) continue;
-          if (chosen.count(FragmentKey{f.ion_type, f.ion_index})) continue;
-          // The fragment's coverage must fully span the gap to be a useful MS3 re-feed target.
-          if (!fragmentContains(f, gap.first, gap.second)) continue;
-          if (best == nullptr || f.best_ms2->intensity > best->best_ms2->intensity) best = &f;
-        }
-        if (best != nullptr && !add_target(best)) break;
+        // Interior bonds an MS3 re-feed of this parent could witness.
+        const int lo = f->is_prefix ? 1 : f->cover_start;
+        const int hi = f->is_prefix ? (f->cover_end - 1) : (L - 1);
+        if (hi < lo) continue;  // no interior bonds (e.g. b1)
+        bool adds = false;
+        for (int b = lo; b <= hi && !adds; ++b) adds = (uncovered.count(b) > 0);
+        if (!adds) continue;  // marginal-skip: contributes no new coverage
+        for (int b = lo; b <= hi; ++b) uncovered.erase(b);  // optimistic: MS3 drills its interior
+        if (!add_target(f)) break;  // dedup + budget bound (existing lambda; false => budget full)
       }
     }
 

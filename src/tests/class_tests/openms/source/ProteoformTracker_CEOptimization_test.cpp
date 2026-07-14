@@ -142,6 +142,26 @@ namespace
     return m;
   }
 
+  // A single-fragment winner match with NO modification (unlike makeMatch, which seeds an ambiguous
+  // PTM). The Coverage objective is mod-agnostic (it reasons over backbone-cleavage sites, not mods),
+  // and omitting the mod keeps every fragment mass THEORETICAL, so non-winner scans re-match verbatim
+  // against the winner ladder computed with computePTMAdjustedFragmentMasses(seq, {}, ...).
+  FragmentAnalysis::ProteoformMatch makeCoverageFrag(const std::string& ion_type, int ion_index, double observed_mass)
+  {
+    FragmentAnalysis::ProteoformMatch m;
+    m.score = 1.0;
+    m.region_start = -1;   // full-sequence region (identity frame mapping)
+    m.region_end = -1;
+    m.matched_protein = "synthetic";
+    m.proteoform_sequence = WINNER_SEQ;
+    FragmentAnalysis::ProteoformMatch::FragmentMatch fm;
+    fm.ion_type = ion_type;
+    fm.ion_index = ion_index;
+    fm.observed_mass = observed_mass;
+    m.fragments.push_back(fm);
+    return m;   // no ptm_sites -> no modifications
+  }
+
   // A 2-stage MS2 context command whose stage[0] carries the FIRST scan's CE (20). buildMS3 copies
   // this stage[0] as the fallback; the per-fragment stage0_params override (if present) replaces the CE.
   ScanCommand makeMs2Ctx(double ms2_ctx_ce)
@@ -281,6 +301,125 @@ START_SECTION(per_fragment_best_ms2_ce_propagates_to_ms3_stage0)
   TEST_TRUE(std::abs(cmdB.stages[0].collision_energy - CE_B) < 1e-6)
   // (cmdA's stage[0] CE happens to equal the ctx CE because the ctx was captured from scan 1 (CE 20);
   //  the discriminating case is fragment B, whose best-MS2 CE differs from the ctx CE.)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// Coverage objective (backbone-cleavage-site model): planNextScans targets observed fragments whose
+// span-INTERIOR carries a still-unwitnessed bond (so an MS3 re-feed can witness it), strongest-MS2
+// first, marginal-skip (a fragment whose interior is already fully witnessed contributes nothing).
+//
+// WINNER_SEQ = PEPTIDEK, L=8 -> backbone bonds 1..7. Each fed fragment witnesses ONE bond in MS2
+// (prefix b_k -> bond k; suffix y_m -> bond L-m). Its MS3-reachable interior is prefix [1..k] -> bonds
+// 1..k-1; suffix [L-m+1..L] -> bonds (L-m+1)..(L-1). Fragments feed one-per-scan (winner pooled
+// verbatim, non-winners re-matched by mass against the theoretical PEPTIDEK ladder). Synthetic peak
+// groups have getChargeIntensity==0, so these fixtures are built to be ORDER-INDEPENDENT (marginal-skip
+// via already-witnessed interiors, not pick order); intensity-driven ordering among overlapping useful
+// parents is exercised end-to-end by the C# ms3_coverage_cytc golden.
+/////////////////////////////////////////////////////////////
+START_SECTION(planNextScans_coverage_targets_gaps_and_skips_redundant)
+{
+  const int precursor_id = 11;
+
+  // Coverage config = the ambiguity config with the objective flipped (single occurrence).
+  std::string cov_json = std::string(tracker_config);
+  const std::string amb = "\"ambiguity\"";
+  const std::string::size_type pos = cov_json.find(amb);
+  TEST_TRUE(pos != std::string::npos)
+  ABORT_IF(pos == std::string::npos)
+  cov_json.replace(pos, amb.size(), "\"coverage\"");
+  Config cfg{cov_json};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+
+  // Theoretical PEPTIDEK b/y ladder (no mods) -> exact (0 ppm) re-match for non-winner scans.
+  std::map<char, std::vector<double>> ladder;
+  FragmentAnalysis::computePTMAdjustedFragmentMasses(WINNER_SEQ, {}, {"b", "y"}, ladder);
+
+  ScanCommand ms2_ctx = makeMs2Ctx(25.0);
+  int sid = 200;
+  auto feedFrag = [&](const std::string& it, int idx) {
+    const double mass = (it == "b") ? ladder['b'][idx - 1] : ladder['y'][idx - 1];
+    Ms2Params p;
+    p.collision_energy = 25.0;
+    p.activation_type = "HCD";
+    p.reaction_time = 0.0;
+    DeconvolvedSpectrum d(sid);
+    d.push_back(makeSyntheticPeakGroup(mass / 2.0 + 1.0, mass, 2));
+    auto match = makeCoverageFrag(it, idx, mass);
+    tracker.feedScan(precursor_id, 2, p, sid, d, match, 1.0, ms2_ctx);
+    ++sid;
+  };
+
+  // Witnessed sites: b1->1, b2->2, b3->3, b6->6, y3->(L-3)=5  =>  {1,2,3,5,6}; uncovered bonds {4,7}.
+  //   b6 interior {1..5} covers bond 4  -> SELECTED (prefix gap-filler)
+  //   y3 interior {6,7}  covers bond 7  -> SELECTED (suffix gap-filler)
+  //   b2 interior {1}, b3 interior {1,2}: already witnessed -> marginal-skip (order-independent)
+  //   b1 has no interior bond.
+  feedFrag("b", 1);
+  feedFrag("b", 2);
+  feedFrag("b", 3);
+  feedFrag("b", 6);
+  feedFrag("y", 3);
+  tracker.finalizeMS2(precursor_id);
+
+  const ProteoformModel* mdl = tracker.getModel(precursor_id);
+  TEST_TRUE(mdl != nullptr)
+  ABORT_IF(mdl == nullptr)
+
+  std::vector<Ms3Target> targets = tracker.planNextScans(precursor_id);
+  TEST_TRUE(findTarget(targets, "b", 6) != nullptr)   // gap -> spanning prefix parent selected
+  TEST_TRUE(findTarget(targets, "y", 3) != nullptr)   // suffix parent fills the C-terminal gap
+  TEST_TRUE(findTarget(targets, "b", 2) == nullptr)   // marginal-skip: interior {1} already witnessed
+  TEST_TRUE(findTarget(targets, "b", 3) == nullptr)   // marginal-skip: interior {1,2} already witnessed
+  TEST_TRUE(findTarget(targets, "b", 1) == nullptr)   // no interior bonds
+  TEST_EQUAL(static_cast<int>(targets.size()), 2)
+}
+END_SECTION
+
+START_SECTION(planNextScans_coverage_fully_witnessed_emits_nothing)
+{
+  const int precursor_id = 12;
+
+  std::string cov_json = std::string(tracker_config);
+  const std::string amb = "\"ambiguity\"";
+  const std::string::size_type pos = cov_json.find(amb);
+  ABORT_IF(pos == std::string::npos)
+  cov_json.replace(pos, amb.size(), "\"coverage\"");
+  Config cfg{cov_json};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+
+  std::map<char, std::vector<double>> ladder;
+  FragmentAnalysis::computePTMAdjustedFragmentMasses(WINNER_SEQ, {}, {"b", "y"}, ladder);
+
+  ScanCommand ms2_ctx = makeMs2Ctx(25.0);
+  int sid = 300;
+  auto feedFrag = [&](const std::string& it, int idx) {
+    const double mass = (it == "b") ? ladder['b'][idx - 1] : ladder['y'][idx - 1];
+    Ms2Params p;
+    p.collision_energy = 25.0;
+    p.activation_type = "HCD";
+    p.reaction_time = 0.0;
+    DeconvolvedSpectrum d(sid);
+    d.push_back(makeSyntheticPeakGroup(mass / 2.0 + 1.0, mass, 2));
+    auto match = makeCoverageFrag(it, idx, mass);
+    tracker.feedScan(precursor_id, 2, p, sid, d, match, 1.0, ms2_ctx);
+    ++sid;
+  };
+
+  // b1..b7 witness EVERY backbone bond 1..7 -> uncovered is empty -> Coverage correctly plans nothing
+  // (nothing left to drill). This is the case the CI run hit for cytC under the OLD span model too, but
+  // now it is reached by genuine full coverage, not by the span-union self-contradiction.
+  for (int k = 1; k <= 7; ++k) feedFrag("b", k);
+  tracker.finalizeMS2(precursor_id);
+
+  const ProteoformModel* mdl = tracker.getModel(precursor_id);
+  TEST_TRUE(mdl != nullptr)
+  ABORT_IF(mdl == nullptr)
+
+  std::vector<Ms3Target> targets = tracker.planNextScans(precursor_id);
+  TEST_EQUAL(static_cast<int>(targets.size()), 0)   // fully witnessed -> no coverage target
 }
 END_SECTION
 
