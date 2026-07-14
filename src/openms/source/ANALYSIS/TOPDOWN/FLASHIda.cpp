@@ -386,8 +386,11 @@ FLASHIda::FLASHIda(char* arg) :
           }
         }
 
-        // Write MS2 identification row if proteoform was matched
-        if (!ms3_targeting.proteoform_sequence.empty() && !ms3_targeting.proteoform_match.fragments.empty())
+        // Write MS2 identification row if proteoform was matched.
+        // Gate on the actual match (proteoform_match), NOT on ms3_targeting.proteoform_sequence — the
+        // latter is only set when found>0 (MS3 targets were selected), so an unambiguous ID that yields
+        // zero MS3 targets would otherwise be dropped from identification.tsv.
+        if (!ms3_targeting.proteoform_match.proteoform_sequence.empty() && !ms3_targeting.proteoform_match.fragments.empty())
         {
           Exploration::MS2Context ms2_ctx;
           ms2_ctx.proteoform_sequence = ms3_targeting.proteoform_match.proteoform_sequence;

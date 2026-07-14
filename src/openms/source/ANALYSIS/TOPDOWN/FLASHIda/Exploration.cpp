@@ -792,7 +792,12 @@ namespace OpenMS
     ScanConfig next_scan_config = next_cfg.scans[0];
     int charge_floor = this_cfg.min_charge;
 
-    if (tracker != nullptr && next_level >= 3 && ms_ctx != nullptr && ms_ctx->num_stages > 0 && found > 0)
+    // Gate the pooled baseline (feedScan + finalizeMS2) on the actual match, NOT on found>0. found is the
+    // MS3-target count; under AmbiguityResolution an unambiguous ID selects zero targets (found==0) yet still
+    // carries a real proteoform match — keying on the match keeps that ID in pooled_identification.tsv. For
+    // intensity/qscore metrics found>0 iff fragments non-empty, so this is equivalent for shipped configs.
+    if (tracker != nullptr && next_level >= 3 && ms_ctx != nullptr && ms_ctx->num_stages > 0
+        && !frag_result.proteoform_sequence.empty() && !frag_result.fragments.empty())
     {
       // @Claude bail early if the ProteoformModel does not exist.
       const ProteoformModel* existing = tracker->getModel(precursor_id);
