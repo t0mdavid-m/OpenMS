@@ -44,6 +44,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/IdaLogger.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms2Params.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ProteoformTracker.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
@@ -420,6 +421,82 @@ START_SECTION(planNextScans_coverage_fully_witnessed_emits_nothing)
 
   std::vector<Ms3Target> targets = tracker.planNextScans(precursor_id);
   TEST_EQUAL(static_cast<int>(targets.size()), 0)   // fully witnessed -> no coverage target
+}
+END_SECTION
+
+// The SOURCE contract behind the exploration MS3 render-seed fix (Exploration.cpp: the render seed
+// proto_ctx / group.proteoform_ctx is now taken from tracker->buildWinnerProteoformContext instead of
+// the exploration-metric winner's frag_result). Under a CE sweep the metric winner (e.g. mass_count)
+// can carry a FUSED single blind-mod decomposition while the identification-best (highest match.score /
+// flash_extender_score) winner is SPLIT into its true mods. finalizeMS2 picks by match.score
+// (ProteoformTracker.cpp:285) and buildWinnerProteoformContext exposes exactly the finalized model's
+// mods (ProteoformTracker.cpp:568-576), so neither the pooled model NOR the render seed may inherit a
+// fused metric-winner. Pre-regression (winner-by-count, or a fused buildWinnerProteoformContext) would
+// report ONE +526 site. The END-TO-END wiring -- that Exploration seeds the MS3 leaf/command from this
+// context so identification.tsv == pooled_identification -- is pinned by the C# exploration_ms3
+// leaf==pooled invariant in FLASHIdaLogGolden_test.cs.
+START_SECTION(winner_context_reflects_id_best_split_not_metric_fused)
+{
+  const int precursor_id = 9;
+
+  Config cfg{std::string(tracker_config)};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+
+  ScanCommand ms2_ctx = makeMs2Ctx(30.0);
+
+  // A ProteoformMatch with a given match.score + explicit PTM sites (one fragment so it identifies).
+  auto makeScored = [](double score, const std::vector<FragmentAnalysis::PTMSite>& sites)
+  {
+    FragmentAnalysis::ProteoformMatch m;
+    m.score = score;                 // finalizeMS2 winner = highest match.score
+    m.region_start = -1;             // full-sequence region (identity frame mapping)
+    m.region_end = -1;
+    m.matched_protein = "synthetic";
+    m.proteoform_sequence = WINNER_SEQ;   // PEPTIDEK (L = 8)
+    FragmentAnalysis::ProteoformMatch::FragmentMatch fm;
+    fm.ion_type = "b"; fm.ion_index = 6; fm.observed_mass = 700.0;
+    m.fragments.push_back(fm);
+    m.ptm_sites = sites;
+    return m;
+  };
+
+  // id-BEST SPLIT (higher score): -89.0302 localized to residue 1 (N-term loss) + 615.2512 ambiguous [4,6].
+  FragmentAnalysis::PTMSite s_nterm; s_nterm.start_position = 1; s_nterm.end_position = 1; s_nterm.position = 1; s_nterm.mass_shift = -89.0302;
+  FragmentAnalysis::PTMSite s_heme;  s_heme.start_position = 4;  s_heme.end_position = 6;  s_heme.position = 5;  s_heme.mass_shift = 615.2512;
+  FragmentAnalysis::ProteoformMatch split = makeScored(3.0, {s_nterm, s_heme});
+
+  // metric-winner FUSED (lower score): ONE blind mod = summed mass over the union range [1,6].
+  FragmentAnalysis::PTMSite s_fused; s_fused.start_position = 1; s_fused.end_position = 6; s_fused.position = 3; s_fused.mass_shift = 526.2210;
+  FragmentAnalysis::ProteoformMatch fused = makeScored(1.0, {s_fused});
+
+  Ms2Params p; p.collision_energy = 30.0; p.activation_type = "HCD"; p.reaction_time = 0.0;
+  DeconvolvedSpectrum d1(201); d1.push_back(makeSyntheticPeakGroup(351.0, 700.0, 2));
+  DeconvolvedSpectrum d2(202); d2.push_back(makeSyntheticPeakGroup(351.0, 700.0, 2));
+  tracker.feedScan(precursor_id, 2, p, 201, d1, split, 3.0, ms2_ctx);
+  tracker.feedScan(precursor_id, 2, p, 202, d2, fused, 1.0, ms2_ctx);
+  tracker.finalizeMS2(precursor_id);
+
+  // The finalized model must be the SPLIT winner: two mods, NOT the one fused blind mod.
+  const ProteoformModel* mdl = tracker.getModel(precursor_id);
+  TEST_TRUE(mdl != nullptr)
+  ABORT_IF(mdl == nullptr)
+  TEST_EQUAL(static_cast<int>(mdl->modifications.size()), 2)
+
+  // The render seed the fix uses (buildWinnerProteoformContext) must expose that SPLIT decomposition:
+  // one ~ -89.03 site + one ~ +615.25 site, and NO fused ~ +526.22 site.
+  MS3FragmentMatcher::ProteoformContext ctx = tracker.buildWinnerProteoformContext(precursor_id);
+  TEST_EQUAL(static_cast<int>(ctx.ptm_sites.size()), 2)
+  bool has_nterm = false, has_heme = false, has_fused = false;
+  for (const FragmentAnalysis::PTMSite& s : ctx.ptm_sites)
+  {
+    if (std::abs(s.mass_shift - (-89.0302)) < 0.01) has_nterm = true;
+    if (std::abs(s.mass_shift - 615.2512) < 0.01) has_heme = true;
+    if (std::abs(s.mass_shift - 526.2210) < 0.01) has_fused = true;
+  }
+  TEST_EQUAL(has_nterm, true)
+  TEST_EQUAL(has_heme, true)
+  TEST_EQUAL(has_fused, false)
 }
 END_SECTION
 

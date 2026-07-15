@@ -612,6 +612,13 @@ namespace OpenMS
         ScanCommand prod_cmd;
         if (group.msn_level >= 3)
         {
+          // Annotation seed = the finalized model (matches pooled_identification), not the MS2 group's
+          // triggering render context. Self-guards on a finalized winner (empty ctx -> region_start < 0).
+          if (tracker != nullptr)
+          {
+            MS3FragmentMatcher::ProteoformContext win_ctx = tracker->buildWinnerProteoformContext(precursor_id);
+            if (win_ctx.region_start >= 0) group.proteoform_ctx = win_ctx;
+          }
           // Reconstruct the winning variant's stage-1 fragment scores for the production MS3 (buildMS3
           // keeps its explicit frag_scores param; the other callers pass genuine scores, so do not fold
           // this into buildMS3 — an ms2-command would carry zero-initialised *_s1 fields).
@@ -817,6 +824,15 @@ namespace OpenMS
         ? tracker->getModel(precursor_id) : nullptr;
     if (model != nullptr && !model->proteoform_sequence.empty())
     {
+      // Render/annotation seed = the finalized ProteoformTracker model (the SAME object
+      // pooled_identification emits), NOT the exploration-metric winner's frag_result. Under a CE sweep
+      // the metric winner (e.g. mass_count) can carry a fused blind-mod decomposition while the id-best
+      // winner is split; seeding the render from the model keeps scan_commands ms3_proteoform and the
+      // identification.tsv MS3 leaf == pooled. buildWinnerProteoformContext returns a region_start < 0
+      // context when there is no finalized winner, so this is a no-op there (and where they coincide).
+      MS3FragmentMatcher::ProteoformContext win_ctx = tracker->buildWinnerProteoformContext(precursor_id);
+      if (win_ctx.region_start >= 0) proto_ctx = win_ctx;
+
       auto targets = tracker->planNextScans(precursor_id);
 
       // @Claude this should be bound by num_tartgets
