@@ -404,9 +404,6 @@ void FLASHTaggerAlgorithm::run(const DeconvolvedSpectrum& deconvolved_spectrum, 
   // setLogType(CMD);
   if (deconvolved_spectrum.empty() || deconvolved_spectrum.isDecoy()) return;
 
-  auto tags = std::vector<FLASHHelperClasses::Tag>();
-  tags.reserve(max_tag_length_ * max_tag_counts_.back());
-
   for (int mode = 0; mode < (common_shifts_.empty() ? 3 : 1); mode++)
     generateTags_(deconvolved_spectrum, ppm, mode);
 
@@ -593,11 +590,11 @@ void FLASHTaggerAlgorithm::getTags_(const std::vector<double>& mzs, const std::v
   int max_vertex_score = *std::max_element(_scores.begin(), _scores.end());
   int min_vertex_score = *std::min_element(_scores.begin(), _scores.end());
 
-  max_path_score_ = std::max(max_vertex_score, max_vertex_score) * (max_tag_length_ + 2);
-  min_path_score_ = std::max(min_vertex_score, min_vertex_score) * (max_tag_length_ + 2);
+  max_path_score_ = max_vertex_score * (max_tag_length_ + 2);
+  min_path_score_ = min_vertex_score * (max_tag_length_ + 2);
 
-  max_path_score_ = std::max(max_path_score_, std::max(max_vertex_score, max_vertex_score) * (min_tag_length_ - 2));
-  min_path_score_ = std::min(min_path_score_, std::max(min_vertex_score, min_vertex_score) * (min_tag_length_ - 2));
+  max_path_score_ = std::max(max_path_score_, max_vertex_score * (min_tag_length_ - 2));
+  min_path_score_ = std::min(min_path_score_, min_vertex_score * (min_tag_length_ - 2));
   min_path_score_ = std::max(0, min_path_score_);
 
   std::set<FLASHHelperClasses::Tag> tagSet;
@@ -654,7 +651,7 @@ void FLASHTaggerAlgorithm::getTags_(const std::vector<double>& mzs, const std::v
 
 Size FLASHTaggerAlgorithm::find_with_X_(const std::string_view& A, const String& B, Size pos) // allow a single X. pos is in A
 {
-  if (A.length() <= B.length()) return String::npos;
+  if (A.length() < B.length()) return String::npos;
   for (size_t i = pos; i <= A.length() - B.length(); ++i)
   {
     bool match = true;
@@ -678,7 +675,7 @@ Size FLASHTaggerAlgorithm::find_with_X_(const std::string_view& A, const String&
 // Make output struct containing all information about matched entries and tags, coverage, score etc.
 void FLASHTaggerAlgorithm::runMatching(std::vector<ProteinHit>& hits,
                                        const DeconvolvedSpectrum& deconvolved_spectrum,
-                                       const std::vector<int> spec_vec,
+                                       const std::vector<int>& spec_vec,
                                        const std::vector<std::unordered_set<int>>& vec_pro,
                                        const std::vector<std::unordered_set<int>>& rev_vec_pro,
                                        const double max_mod_mass)
@@ -698,10 +695,9 @@ void FLASHTaggerAlgorithm::runMatching(std::vector<ProteinHit>& hits,
 #pragma omp parallel for default(none)                                                                                                     \
   shared(spec_vec, spec_scores, deconvolved_spectrum, hits, vec_pro, \
            rev_vec_pro, scan, max_mod_mass, std::cout)
-  for (int i = 0; i < hits.size(); i++)
+  for (int i = 0; i < (int)hits.size(); i++)
   {
     auto& hit = hits[i];
-    std::vector<int> matched_tag_indices;
     std::vector<int> n_spec_pro_diffs = hit.getMetaValue("NtermFlankingMasses").toIntList(),
                      c_spec_pro_diffs = hit.getMetaValue("CtermFlankingMasses").toIntList();
     int index = hit.getMetaValue("FastaIndex");

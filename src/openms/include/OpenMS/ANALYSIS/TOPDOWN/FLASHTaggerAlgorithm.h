@@ -67,7 +67,7 @@ public:
    */
   static void runMatching(std::vector<ProteinHit>& hits,
                           const DeconvolvedSpectrum& deconvolved_spectrum,
-                          const std::vector<int> spec_vec,
+                          const std::vector<int>& spec_vec,
                           const std::vector<std::unordered_set<int>>& vec_pro,
                           const std::vector<std::unordered_set<int>>& rev_vec_pro,
                           const double max_mod_mass = 0);
