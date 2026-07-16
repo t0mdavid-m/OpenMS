@@ -253,6 +253,7 @@ private:
   std::vector<ProteinHit> proteoform_hits_;
   double tol_;
 
+  bool skip_precursor_inference_ = false;
   int max_blind_mod_cntr_ = 1;
   int max_var_mod_cntr_ = 0;
   int allowed_isotope_error_ = 1;
