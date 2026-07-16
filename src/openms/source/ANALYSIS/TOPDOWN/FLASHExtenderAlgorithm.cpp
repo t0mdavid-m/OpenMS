@@ -51,39 +51,46 @@ namespace OpenMS
     max_blind_mod_cntr_ = param_.getValue("max_mod_count");
     max_mod_mass_ = param_.getValue("max_mod_mass");
     skip_precursor_inference_ = param_.getValue("skip_precursor_inference") == "true";
+
+    // precomputed vertex-packing spans (invariant during run(); used by the get*Vertex helpers on the hot path)
+    var_span_ = (Size)max_var_mod_cntr_ + 1;
+    score_span_ = (Size)(max_path_score_ - min_path_score_) + 1;
+    blind_span_ = (Size)max_blind_mod_cntr_ + 1;
+    var_score_span_ = var_span_ * score_span_;
+    var_score_blind_span_ = var_score_span_ * blind_span_;
   }
 
   inline Size FLASHExtenderAlgorithm::getVertex_(int node_index, int pro_index, int score, int num_blind_mod, int num_var_mod, Size pro_mass_size) const
   {
-    return (((node_index * pro_mass_size + pro_index) * (max_blind_mod_cntr_ + 1) + num_blind_mod) * (max_path_score_ - min_path_score_ + 1)
+    return (((node_index * pro_mass_size + pro_index) * blind_span_ + num_blind_mod) * score_span_
             + (std::min(max_path_score_, std::max(min_path_score_, score)) - min_path_score_))
-             * (max_var_mod_cntr_ + 1)
+             * var_span_
            + num_var_mod;
   }
 
   inline int FLASHExtenderAlgorithm::getNodeIndex_(Size vertex, Size pro_mass_size) const
   {
-    return (vertex / (max_var_mod_cntr_ + 1) / (max_path_score_ - min_path_score_ + 1) / ((Size)max_blind_mod_cntr_ + 1)) / pro_mass_size;
+    return vertex / var_score_blind_span_ / pro_mass_size;
   }
 
   inline int FLASHExtenderAlgorithm::getProIndex_(Size vertex, Size pro_mass_size) const
   {
-    return ((vertex / (max_var_mod_cntr_ + 1) / (max_path_score_ - min_path_score_ + 1) / (max_blind_mod_cntr_ + 1))) % pro_mass_size;
+    return (vertex / var_score_blind_span_) % pro_mass_size;
   }
 
   inline int FLASHExtenderAlgorithm::getScore_(Size vertex) const
   {
-    return (vertex / (max_var_mod_cntr_ + 1)) % (max_path_score_ - min_path_score_ + 1) + min_path_score_;
+    return (vertex / var_span_) % score_span_ + min_path_score_;
   }
 
   inline int FLASHExtenderAlgorithm::getBlindModNumber_(Size vertex) const
   {
-    return ((vertex / (max_var_mod_cntr_ + 1)) / (max_path_score_ - min_path_score_ + 1)) % (max_blind_mod_cntr_ + 1);
+    return (vertex / var_score_span_) % blind_span_;
   }
 
   inline int FLASHExtenderAlgorithm::getVarModNumber_(Size vertex) const
   {
-    return vertex % (max_var_mod_cntr_ + 1);
+    return vertex % var_span_;
   }
 
   // take the hits. Just calculate the mass of truncated protein. Then add modification masses if they are disjoint. If they overlap and the same mass,
@@ -368,11 +375,15 @@ namespace OpenMS
     }
     const auto& node_spec = hi.node_spec_map_[hi.mode_];
     const auto& pro_masses = hi.pro_mass_map_[hi.mode_];
+    // cache current-mode map entries so the recursion does not re-resolve these std::map lookups on every frame (entries are stable for this mode)
+    hi.cur_node_spec_ = &node_spec;
+    hi.cur_pro_masses_ = &pro_masses;
+    hi.cur_tol_spec_ = &hi.tol_spec_map_[hi.mode_];
     hi.dag_ = FLASHHelperClasses::DAG((1 + max_var_mod_cntr_) * (1 + node_spec.size()) * (1 + pro_masses.size()) * (1 + max_blind_mod_cntr_)
                                       * (1 + max_path_score_ - min_path_score_));
 
     bool tag_found = false;
-    auto seq = hit.getSequence();
+    const String& seq = hit.getSequence();
 
     for (const auto& tag : matched_tags)
     {
@@ -1011,7 +1022,7 @@ namespace OpenMS
     hi.visited_[src] = true;
     std::set<Size> visited_tag_edges;
     std::map<Size, std::set<std::pair<double, double>>> sink_map;
-    std::map<Size, std::map<Size, int>> node_max_score_map; // node, cumulative mass, score
+    std::unordered_map<Size, std::unordered_map<Size, int>> node_max_score_map; // node, cumulative mass, score
 
     findPathsAlongTagEndPoints(visited_tag_edges, hi, sink_map, src, 0, 0, node_max_score_map, tag_edges, max_mod_cntr_for_last_mode, use_tags);
 
@@ -1027,12 +1038,12 @@ namespace OpenMS
                                                           Size vertex,
                                                           double truncation_mass,
                                                           double cumulative_shift,
-                                                          std::map<Size, std::map<Size, int>>& node_max_score_map,
+                                                          std::unordered_map<Size, std::unordered_map<Size, int>>& node_max_score_map,
                                                           const std::vector<std::vector<int>>& tag_edges,
                                                           int max_mod_cntr_for_last_mode,
                                                           bool use_tags)
   {
-    const auto& pro_masses = hi.pro_mass_map_[hi.mode_];
+    const auto& pro_masses = *hi.cur_pro_masses_;
     int node_index = getNodeIndex_(vertex, pro_masses.size());
     int pro_index = getProIndex_(vertex, pro_masses.size());
 
@@ -1177,7 +1188,7 @@ namespace OpenMS
                 > max_mod_mass_ * (max_blind_mod_cntr_ - getBlindModNumber_(vertex)))
               continue;
 
-            findSubPathsBetweenTagEndPoints(sinks, hi, vertex, hi.node_spec_map_[2].size() - 1, j, 0, truncation_mass, cumulative_shift,
+            findSubPathsBetweenTagEndPoints(sinks, hi, vertex, hi.cur_node_spec_->size() - 1, j, 0, truncation_mass, cumulative_shift,
                                             node_max_score_map, max_mod_cntr_for_last_mode);
           }
         }
@@ -1193,13 +1204,13 @@ namespace OpenMS
                                                                int diagonal_counter,
                                                                double truncation_mass,
                                                                double cumulative_mod_mass,
-                                                               std::map<Size, std::map<Size, int>>& node_max_score_map,
+                                                               std::unordered_map<Size, std::unordered_map<Size, int>>& node_max_score_map,
                                                                int max_blind_mod_cntr_for_last_mode)
   {
     // TODO N term mod vs. 1st amino acid mod distinction
 
     if (! hi.visited_[start_vertex]) return;
-    const auto& pro_masses = hi.pro_mass_map_[hi.mode_];
+    const auto& pro_masses = *hi.cur_pro_masses_;
     const auto pro_mass_size = pro_masses.size();
     int max_blind_mod_cntr = max_blind_mod_cntr_for_last_mode >= 0 ? max_blind_mod_cntr_for_last_mode : max_blind_mod_cntr_;
     int start_node_index = getNodeIndex_(start_vertex, pro_mass_size);
@@ -1210,8 +1221,8 @@ namespace OpenMS
     if (start_num_blind_mod == max_blind_mod_cntr) diagonal_counter = 1e5;
 
     const auto src = getVertex_(0, 0, 0, 0, 0, pro_mass_size);
-    const auto& node_spec = hi.node_spec_map_.at(hi.mode_);
-    const auto& tol_spec = hi.tol_spec_map_.at(hi.mode_);
+    const auto& node_spec = *hi.cur_node_spec_;
+    const auto& tol_spec = *hi.cur_tol_spec_;
 
     if (end_pro_index < 0) //
     {

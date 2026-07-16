@@ -19,6 +19,7 @@
 #include <boost/dynamic_bitset.hpp>
 #include <iomanip>
 #include <iostream>
+#include <unordered_map>
 
 namespace OpenMS
 {
@@ -115,6 +116,10 @@ private:
     double calculated_precursor_mass_ = -1;
     /// n and c term best mass shift between spec and protein. For speed up
     int n_best_shift_ = 0, c_best_shift_ = 0;
+    /// cached pointers to the current-mode (mode_) entries of the maps above; set once per mode to avoid re-resolving the std::map lookup on every recursion frame.
+    const std::vector<double>* cur_pro_masses_ = nullptr;
+    const MSSpectrum* cur_node_spec_ = nullptr;
+    const MSSpectrum* cur_tol_spec_ = nullptr;
   };
 
   /// modification mass to modification index. To use find nearest function
@@ -212,7 +217,7 @@ private:
                            Size vertex,
                            double truncation_mass,
                            double cumulative_shift,
-                           std::map<Size, std::map<Size, int>>& node_max_score_map,
+                           std::unordered_map<Size, std::unordered_map<Size, int>>& node_max_score_map,
                            const std::vector<std::vector<int>>& tag_edges,
                            int max_mod_cntr_for_last_mode,
                            bool use_tags);
@@ -238,7 +243,7 @@ private:
                           int diagonal_counter,
                           double truncation_mass,
                           double cumulative_mod_mass,
-                          std::map<Size, std::map<Size, int>>& node_max_score_map,
+                          std::unordered_map<Size, std::unordered_map<Size, int>>& node_max_score_map,
                           int max_blind_mod_cntr_for_last_mode);
 
   /// get proteoform specific information from the input @p path and relevant data.
@@ -262,5 +267,8 @@ private:
   const int max_extension_stretch_ = 50;
   double max_mod_mass_ = 500.0;
   double given_precursor_mass_ = -1;
+
+  /// precomputed vertex-packing spans (set in updateMembers_): var, score, blind, and their products. Invariant during run().
+  Size var_span_ = 1, score_span_ = 1221, blind_span_ = 2, var_score_span_ = 1221, var_score_blind_span_ = 2442;
 };
 } // namespace OpenMS
