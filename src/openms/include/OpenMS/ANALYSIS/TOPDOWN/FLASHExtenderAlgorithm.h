@@ -58,7 +58,7 @@ public:
    * @param multiple_hits_per_spec should multiple proteins be considered per spectrum or only the best protein should be considered?
    */
   void run(std::vector<ProteinHit>& hits,
-           const DeconvolvedSpectrum& dspec, const std::vector<int> spec_vec, const std::vector<std::unordered_set<int>>& vec_pro,
+           const DeconvolvedSpectrum& dspec, const std::vector<int>& spec_vec, const std::vector<std::unordered_set<int>>& vec_pro,
            const std::vector<std::unordered_set<int>>& rev_vec_pro, const std::vector<FLASHHelperClasses::Tag>& tags, double ppm, bool multiple_hits_per_spec);
 
   /// fill the characterized proteoforms in @p hits

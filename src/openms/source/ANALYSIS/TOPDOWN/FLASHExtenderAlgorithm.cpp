@@ -110,6 +110,7 @@ namespace OpenMS
         proj = getProIndex_(*iter1, pro_size);
         if (proi + proj >= (int)hit.getSequence().size()) break;
       }
+      if (iter1 == bp1.rend()) continue; // no bp1 vertex complements this bp0 vertex to full coverage
       if (getScore_(*iter0) < terminal_score_threshold || getScore_(*iter1) < terminal_score_threshold) continue; //
       int excessive_aa = (proi + proj) - (int)hit.getSequence().size();
 
@@ -150,7 +151,6 @@ namespace OpenMS
     pro_masses.push_back(0);
 
     auto seq = hit.getSequence();
-    pro_masses.reserve(seq.size());
 
     if (mode == 0) seq = seq.reverse();
     for (const auto& aa : seq)
@@ -301,8 +301,9 @@ namespace OpenMS
         {
           float prev_score = t_node_spec.back().getIntensity();
 
-          margin = (mass + margin - t_node_spec.back().getMZ() + prev_margin) / 2.0;
-          mass = (mass + margin + t_node_spec.back().getMZ() - prev_margin) / 2.0;
+          const double orig_margin = margin;
+          margin = (mass + orig_margin - t_node_spec.back().getMZ() + prev_margin) / 2.0;
+          mass = (mass + orig_margin + t_node_spec.back().getMZ() - prev_margin) / 2.0;
           if (t_node_spec.size() > 1)
           {
             t_node_spec.pop_back();
@@ -530,7 +531,7 @@ namespace OpenMS
   }
 
   void FLASHExtenderAlgorithm::run(std::vector<ProteinHit>& hits,
-                                   const DeconvolvedSpectrum& dspec, const std::vector<int> spec_vec, const std::vector<std::unordered_set<int>>& vec_pro,
+                                   const DeconvolvedSpectrum& dspec, const std::vector<int>& spec_vec, const std::vector<std::unordered_set<int>>& vec_pro,
                                    const std::vector<std::unordered_set<int>>& rev_vec_pro, const std::vector<FLASHHelperClasses::Tag>& tags, double ppm, bool multiple_hits_per_spec)
   {
     if (hits.empty()) return;
@@ -619,6 +620,8 @@ namespace OpenMS
         if (hi.visited_.empty())
           hi.visited_ = boost::dynamic_bitset<>((3 + dspec.size() * ion_types_str_.size()) * (1 + pro_masses.size()) * (1 + max_blind_mod_cntr_)
                                                 * (1 + max_var_mod_cntr_) * (1 + max_path_score_ - min_path_score_));
+        else
+          hi.visited_.reset(); // dag_ is rebuilt per mode; clear stale visited bits (vertex index space is identical across modes)
 
         run_(hit, hi, matched_tags, all_path_map[hi.mode_], max_mod_cntr_for_last_mode);
 
@@ -836,7 +839,7 @@ namespace OpenMS
       mod_ends.clear();
       mod_tols.clear();
 
-      for (int k = 0; k < t_mod_masses.size(); k++)
+      for (int k = 0; k < (int)t_mod_masses.size(); k++)
       {
         if (hi.protein_start_position_ >= 0 && t_mod_starts[k] < hi.protein_start_position_) continue;
         if (hi.protein_end_position_ >= 0 && t_mod_ends[k] > hi.protein_end_position_) continue;
@@ -847,7 +850,7 @@ namespace OpenMS
       }
       std::vector<String> mod_ids, mod_accs;
 
-      for (int k = 0; k < mod_masses.size(); k++)
+      for (int k = 0; k < (int)mod_masses.size(); k++)
       {
         auto mod_mass = mod_masses[k];
         auto iter = candidate_blind_mod_map_.lower_bound(mod_mass - mod_tols[k]);
@@ -891,9 +894,9 @@ namespace OpenMS
           for (int pos : matched_position_map[m])
             matched_positions.insert(pos);
         }
-        for (int j = 0; j < matched_tags.size(); j++) // for each tag
+        for (int j = 0; j < (int)matched_tags.size(); j++) // for each tag
         {
-          auto tag = matched_tags[j];
+          const auto& tag = matched_tags[j];
 
           if ((tag.getNtermMass() > 0 && m == 0) || (tag.getCtermMass() > 0 && m == 1)) { continue; }
           bool tag_matched = false;
@@ -1157,35 +1160,6 @@ namespace OpenMS
       }
       if ((vertex != src || ! use_tags) && reachable_vertices.empty())
       {
-        if (! use_tags)
-        {
-          std::map<int, int> diff_count;
-          for (const auto& p : hi.node_spec_map_.at(hi.mode_))
-          {
-            for (const auto& m : pro_masses)
-            {
-              int diff = (int)round((m - p.getMZ())); // can do log transform to reflect ppm error later.
-              diff_count[diff] += (int)p.getIntensity();
-            }
-          }
-
-          std::priority_queue<std::pair<int, int>> maxHeap;
-
-          for (const auto& entry : diff_count)
-          {
-            // Push pairs into the heap with count as the key (max heap based on count)
-            maxHeap.push({entry.second, entry.first});
-          }
-
-          // Collect the top 3 most frequent differences
-          std::vector<int> top_diffs;
-          for (int i = 0; i < 1 && ! maxHeap.empty(); ++i)
-          {
-            top_diffs.push_back(maxHeap.top().second); // Get the difference
-            maxHeap.pop();
-          }
-        }
-
         if (hi.mode_ != 2)
         {
           findSubPathsBetweenTagEndPoints(sinks, hi, vertex, -1, -1, use_tags ? 1e5 : 0, truncation_mass, cumulative_shift, node_max_score_map,
@@ -1193,7 +1167,7 @@ namespace OpenMS
         }
         else
         {
-          for (int j = 0; j < pro_masses.size(); j++)
+          for (int j = 0; j < (int)pro_masses.size(); j++)
           {
             if (std::abs(hi.calculated_precursor_mass_ + truncation_mass - pro_masses[j])
                 > max_mod_mass_ * (max_blind_mod_cntr_ - getBlindModNumber_(vertex)))
@@ -1292,10 +1266,10 @@ namespace OpenMS
       }
     }
     // double start_delta_mass = start_node_mass - pro_masses[start_pro_index];
-    double end_node_mass = node_spec[end_node_index].getMZ();
-    double end_delta_mass = end_node_mass - pro_masses[end_pro_index];
     if (end_node_index >= 0)
     {
+      double end_node_mass = node_spec[end_node_index].getMZ();
+      double end_delta_mass = end_node_mass - pro_masses[end_pro_index];
       double margin = tol_spec[end_node_index].getIntensity(); // tol_spec[end_node_index].getIntensity();
       if (std::abs(end_delta_mass - cumulative_mod_mass + truncation_mass) > max_mod_mass_ * (max_blind_mod_cntr - start_num_blind_mod) + margin)
       {
