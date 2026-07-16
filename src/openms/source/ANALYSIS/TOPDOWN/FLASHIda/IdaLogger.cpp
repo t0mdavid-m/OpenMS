@@ -65,19 +65,21 @@ namespace OpenMS
       commands_tsv_stream_.open(rt_cfg.scan_commands_path, std::ios::app);
       if (commands_tsv_stream_.is_open())
       {
-        commands_tsv_stream_ << "tracking_id\tms_level\tscan_type\tenqueue_ts\tpriority\t"
-                             << "faims_cv\tmono_mass\tcharge\tprecursor_mz\tisolation_width\t"
-                             << "collision_energy\tactivation\tqscore\tcharge_cos\tcharge_snr\t"
-                             << "iso_cos\tsnr\tcharge_score\tppm_error\tprecursor_intensity\t"
-                             << "peakgroup_intensity\thcd_energy\tparent_tracking_id\t"
-                             << "ion_type\tion_index\t"
-                             << "reaction_time\treagent_max_it\treagent_agc_target\t"
-                             << "scan_description\t"  // E6: raw descriptor, asserted == what's sent to instrument
+        commands_tsv_stream_ << "tracking_id\tscan_type\tms_level\tparent_tracking_id\t"
                              // P5: per-MS1-selection precursor identity (plain decimal); 0 for MS1/AGC/untracked.
                              << "precursor_id\t"
-                             // The wide clipped b/y fragment ProForma of the MS3 target being fired; appended LAST
-                             // so positional indices don't shift. "" on MS1/MS2/AGC (no fragment sub-sequence).
-                             << "ms3_proteoform\n";
+                             << "priority\tmono_mass\tcharge\tprecursor_mz\tisolation_width\t"
+                             << "qscore\tcharge_cos\tcharge_snr\tiso_cos\tsnr\tcharge_score\t"
+                             << "activation\tcollision_energy\thcd_energy\t"
+                             << "reaction_time\treagent_max_it\treagent_agc_target\t"
+                             << "ppm_error\tprecursor_intensity\tpeakgroup_intensity\t"
+                             << "ion_type\tion_index\t"
+                             // The wide clipped b/y fragment ProForma of the MS3 target being fired.
+                             // "" on MS1/MS2/AGC (no fragment sub-sequence).
+                             << "ms3_proteoform\t"
+                             << "scan_description\t"  // E6: raw descriptor, asserted == what's sent to instrument
+                             << "faims_cv\t"
+                             << "enqueue_ts\n";
         commands_tsv_stream_.flush();
       }
     }
@@ -86,19 +88,20 @@ namespace OpenMS
       results_tsv_stream_.open(rt_cfg.scan_results_path, std::ios::app);
       if (results_tsv_stream_.is_open())
       {
-        results_tsv_stream_ << "tracking_id\tms_level\tresolve_ts\tduration_ms\treceived_ts\tduration_received_ms\trt\t"
-                            << "mass_count\tcommands_pushed\tchild_ids\t"
-                            // scan_results is a pure acquisition-event log: identification payload
-                            // (tag_count/matched_protein/proteoform_sequence/fragment_count) moved to
-                            // identification.tsv (proteoform -> scan_commands.ms3_proteoform); tic_coverage
-                            // moved to identification.tsv; tag_count dropped. (34 -> 29 columns.)
-                            << "exploration_group_id\texploration_metric\t"
+        // scan_results is a pure acquisition-event log: identification payload
+        // (tag_count/matched_protein/proteoform_sequence/fragment_count) moved to
+        // identification.tsv (proteoform -> scan_commands.ms3_proteoform); tic_coverage
+        // moved to identification.tsv; tag_count dropped. (34 -> 29 columns.)
+        results_tsv_stream_ << "tracking_id\tms_level\tparent_tracking_id\t"
+                            << "commands_pushed\tchild_ids\trt\t"
+                            << "duration_ms\tduration_received_ms\tqueue_duration_ms\tinstrument_duration_ms\tprocessing_duration_ms\t"
+                            << "mass_count\tremaining_ratio\t"
+                            << "exploration_group_id\texploration_metric\texploration_score\t"
                             << "variant_index\ttotal_variants\t"
-                            << "collision_energy\texploration_score\tremaining_ratio\t"
-                            << "activation_type\treaction_time\t"
-                            << "deconv_masses\tdeconv_intensities\tdeconv_min_charge\tdeconv_max_charge\tparent_tracking_id\t"
-                            << "dequeue_ts\tqueue_duration_ms\tinstrument_duration_ms\tprocessing_duration_ms\t"
-                            << "winner_tracking_id\n";  // F5: trailing winner pointer (33 -> 34 columns)
+                            << "winner_tracking_id\t"  // F5: group-completing exploration winner pointer
+                            << "activation_type\tcollision_energy\treaction_time\t"
+                            << "deconv_masses\tdeconv_intensities\tdeconv_min_charge\tdeconv_max_charge\t"
+                            << "resolve_ts\treceived_ts\tdequeue_ts\n";
         results_tsv_stream_.flush();
       }
     }
@@ -107,27 +110,28 @@ namespace OpenMS
       identification_tsv_stream_.open(rt_cfg.identification_path, std::ios::app);
       if (identification_tsv_stream_.is_open())
       {
-        identification_tsv_stream_ << "ms_level\tscan_mode\t"
-                                   << "tracking_id\tproteoform\tstart_pos\tend_pos\t"
-                                   << "ppm_offset\tcorrection_factor\t"
-                                   << "ms1_precursor_mass\tms1_precursor_mz\tms1_precursor_charge\t"
-                                   << "ms2_precursor_ion\tms2_precursor_mass\tms2_precursor_mz\tms2_precursor_charge\t"
+        identification_tsv_stream_ << "tracking_id\tscan_mode\tms_level\t"
+                                   // P5: per-MS1-selection precursor identity (plain decimal).
+                                   << "precursor_id\t"
+                                   << "ms1_precursor_mass\tms2_precursor_ion\tproteoform\t"
+                                   // C: FLASHExtender score of this scan's OWN match; -1 = winner-re-matched row (no own ID).
+                                   << "flash_extender_score\t"
                                    << "ms2_fragments\tms2_fragment_masses\t"
+                                   << "ppm_offset\tcorrection_factor\t"
+                                   << "ms1_precursor_mz\tms1_precursor_charge\t"
+                                   << "ms2_precursor_mass\tms2_precursor_mz\tms2_precursor_charge\t"
+                                   << "start_pos\tend_pos\t"
                                    << "ms3_fragments\tms3_fragment_masses\t"
                                    // I2: isolation-window width / over-window SNR / selected-charge intensity,
                                    // for the MS2 precursor and (on MS3 rows) the MS3 fragment precursor.
                                    << "ms2_isolation_width\tms2_window_snr\tms2_charge_intensity\t"
                                    << "ms3_isolation_width\tms3_window_snr\tms3_charge_intensity\t"
-                                   // P5: per-MS1-selection precursor identity (plain decimal).
-                                   << "precursor_id\t"
-                                   // Fragment-mass table (MS2 & MS3 rows): per-scan theoretical + residual; appended LAST.
+                                   // Fragment-mass table (MS2 & MS3 rows): per-scan theoretical + residual.
                                    << "theoretical_masses\tdiff_da\tdiff_ppm\t"
-                                   // C2: MS3 per-ion fragment coverage (distinct backbone bonds / (L-1)); appended LAST, -1 on MS2.
+                                   // C2: MS3 per-ion fragment coverage (distinct backbone bonds / (L-1)); -1 on MS2.
                                    << "ms3_fragment_coverage\t"
-                                   // Per-scan TIC / matched-fragment coverage (moved here from scan_results); appended LAST.
-                                   << "tic_coverage\t"
-                                   // C: FLASHExtender score of this scan's OWN match; -1 = winner-re-matched row (no own ID). Appended LAST.
-                                   << "flash_extender_score\n";
+                                   // Per-scan TIC / matched-fragment coverage (moved here from scan_results).
+                                   << "tic_coverage\n";
         identification_tsv_stream_.flush();
       }
     }
@@ -136,18 +140,17 @@ namespace OpenMS
       pooled_stream_.open(rt_cfg.pooled_identification_path, std::ios::app);
       if (pooled_stream_.is_open())
       {
-        pooled_stream_ << "nominal_mass\tmono_mass\tproteoform\tflash_extender_score\t"
+        // P6: trajectory columns lead — trigger source and the tracking-id of the driving scan.
+        pooled_stream_ << "trigger_scan_id\ttrigger\t"
+                       // P5: per-MS1-selection precursor identity (the model key; plain decimal).
+                       << "precursor_id\tupdate_index\t"
+                       << "mono_mass\tproteoform\tflash_extender_score\t"
                        << "coverage_pct\tn_fragments\tlocalized_mods\tambiguous_mods\t"
-                       << "contributing_scan_ids\t"
                        // Fragment-mass table (grouped): masses + ion labels + measured/theoretical/residual,
                        // all aligned index-for-index with combined_ms2_frame_masses.
                        << "combined_ms2_frame_masses\tcombined_ms2_fragment_ions\t"
                        << "combined_measured_raw\tcombined_theoretical\tcombined_diff_da\tcombined_diff_ppm\t"
-                       << "update_index\t"
-                       // P5: per-MS1-selection precursor identity (the model key; plain decimal).
-                       << "precursor_id\t"
-                       // P6: trajectory columns — trigger source and the tracking-id of the driving scan.
-                       << "trigger\ttrigger_scan_id\n";
+                       << "contributing_scan_ids\tnominal_mass\n";
         pooled_stream_.flush();
       }
     }
@@ -302,36 +305,36 @@ namespace OpenMS
       std::ostringstream os; os << v0; if (cmd.msn_level == 3) { os << ';' << v1; } return os.str();
     };
     commands_tsv_stream_ << id_str << "\t"
-                         << cmd.msn_level << "\t"
                          << scan_type << "\t"
-                         << cmd.enqueue_timestamp_ms << "\t"
+                         << cmd.msn_level << "\t"
+                         << parent_id << "\t"
+                         << precursor_id << "\t"          // P5: per-MS1-selection precursor identity
                          << cmd.priority << "\t"
-                         << cmd.faims_cv << "\t"
                          << sc(cmd.mono_mass, cmd.mono_mass_s1) << "\t"
                          << charges << "\t"
                          << precursor_mzs << "\t"
                          << iso_widths << "\t"
-                         << col_energies << "\t"
-                         << activations << "\t"
                          << sc(cmd.qscore, cmd.qscore_s1) << "\t"
                          << sc(cmd.charge_cos, cmd.charge_cos_s1) << "\t"
                          << sc(cmd.charge_snr, cmd.charge_snr_s1) << "\t"
                          << sc(cmd.iso_cos, cmd.iso_cos_s1) << "\t"
                          << sc(cmd.snr, cmd.snr_s1) << "\t"
                          << sc(cmd.charge_score, cmd.charge_score_s1) << "\t"
-                         << sc(cmd.ppm_error, cmd.ppm_error_s1) << "\t"
-                         << sc(cmd.precursor_intensity, cmd.precursor_intensity_s1) << "\t"
-                         << sc(cmd.peakgroup_intensity, cmd.peakgroup_intensity_s1) << "\t"
+                         << activations << "\t"
+                         << col_energies << "\t"
                          << sci(cmd.hcd_energy, cmd.hcd_energy_s1) << "\t"
-                         << parent_id << "\t"
-                         << ion_type << "\t"
-                         << ion_index << "\t"
                          << reaction_times << "\t"
                          << reagent_max_its << "\t"
                          << reagent_agc_targets << "\t"
+                         << sc(cmd.ppm_error, cmd.ppm_error_s1) << "\t"
+                         << sc(cmd.precursor_intensity, cmd.precursor_intensity_s1) << "\t"
+                         << sc(cmd.peakgroup_intensity, cmd.peakgroup_intensity_s1) << "\t"
+                         << ion_type << "\t"
+                         << ion_index << "\t"
+                         << ms3_proteoform << "\t"        // wide MS3 fragment ProForma ("" for MS1/MS2/AGC)
                          << cmd.scan_description << "\t"  // E6: raw descriptor (tab/newline-free by construction)
-                         << precursor_id << "\t"          // P5: per-MS1-selection precursor identity
-                         << ms3_proteoform << "\n";       // wide MS3 fragment ProForma (appended LAST; "" for MS1/MS2/AGC)
+                         << cmd.faims_cv << "\t"
+                         << cmd.enqueue_timestamp_ms << "\n";
     commands_tsv_stream_.flush();
   }
 
@@ -383,22 +386,27 @@ namespace OpenMS
 
     results_tsv_stream_ << tracking_id << "\t"
                         << ms_level << "\t"
-                        << resolve_ts << "\t"
-                        << duration << "\t"
-                        << received_ts << "\t"
-                        << duration_received << "\t"
-                        << rt << "\t"
-                        << mass_count << "\t"
+                        << parent_tracking_id << "\t"
                         << commands_pushed << "\t"
                         << child_str << "\t"
+                        << rt << "\t"
+                        << duration << "\t"
+                        << duration_received << "\t"
+                        << queue_duration << "\t"
+                        << instrument_duration << "\t"
+                        << processing_duration << "\t"
+                        << mass_count << "\t"
+                        << remaining_ratio << "\t"
                         << exploration_group_id << "\t"
                         << exploration_metric << "\t"
+                        << exploration_score << "\t"
                         << variant_index << "\t"
                         << total_variants << "\t"
-                        << collision_energy << "\t"
-                        << exploration_score << "\t"
-                        << remaining_ratio << "\t";
+                        // F5: winner pointer — non-empty ONLY on the group-completing exploration row
+                        // (the winning variant's encoded id); "" everywhere else.
+                        << winner_tracking_id << "\t";
     results_tsv_stream_ << activation_type << "\t"
+                        << collision_energy << "\t"
                         << reaction_time << "\t";
 
     // Deconvolved masses and intensities (semicolon-delimited)
@@ -433,15 +441,9 @@ namespace OpenMS
     {
       results_tsv_stream_ << "\t\t\t";
     }
-    results_tsv_stream_ << "\t" << parent_tracking_id
-                        << "\t" << dequeue_ts
-                        << "\t" << queue_duration
-                        << "\t" << instrument_duration
-                        << "\t" << processing_duration
-                        // F5: trailing winner pointer — non-empty ONLY on the group-completing exploration
-                        // row (the winning variant's encoded id); "" everywhere else. Appended LAST so the
-                        // C# comparer's fixed column indices don't shift (scan_results 33 -> 34 columns).
-                        << "\t" << winner_tracking_id << "\n";
+    results_tsv_stream_ << "\t" << resolve_ts
+                        << "\t" << received_ts
+                        << "\t" << dequeue_ts << "\n";
     results_tsv_stream_.flush();
   }
 
@@ -569,23 +571,29 @@ namespace OpenMS
                       + std::to_string(ctx.fragment_ion_index);
 
     identification_tsv_stream_
-      << ms_level << "\t"
-      << scan_mode << "\t"
       << tracking_id << "\t"
-      << proforma << "\t"
-      << id_region_start << "\t"
-      << id_region_end << "\t"
-      << std::fixed << std::setprecision(2) << match.ppm_offset << "\t"
-      << std::setprecision(8) << match.correction_factor << "\t"
-      << std::setprecision(4) << ctx.ms1_precursor_mass << "\t"
-      << ctx.ms1_precursor_mz << "\t"
-      << ctx.ms1_precursor_charge << "\t"
+      << scan_mode << "\t"
+      << ms_level << "\t"
+      // P5: per-MS1-selection precursor identity (plain decimal).
+      << row.precursor_id << "\t"
+      // First float on this stream: establish std::fixed + setprecision(4) here (KEEP std::fixed explicit).
+      << std::fixed << std::setprecision(4) << ctx.ms1_precursor_mass << "\t"
       << precursor_ion << "\t"
+      << proforma << "\t"
+      // C: FLASHExtender score of this scan's own match (-1 = winner-re-matched row, no own ID). fixed+4 in effect.
+      << row.flash_extender_score << "\t"
+      << ms2_frags.str() << "\t"
+      << ms2_masses.str() << "\t"
+      << std::setprecision(2) << match.ppm_offset << "\t"
+      << std::setprecision(8) << match.correction_factor << "\t"
+      // Re-establish setprecision(4) (sticky for every float below).
+      << std::setprecision(4) << ctx.ms1_precursor_mz << "\t"
+      << ctx.ms1_precursor_charge << "\t"
       << (ms_level == 3 ? ctx.fragment_mass : 0.0) << "\t"
       << (ms_level == 3 ? ctx.fragment_mz : 0.0) << "\t"
       << (ms_level == 3 ? ctx.fragment_charge : 0) << "\t"
-      << ms2_frags.str() << "\t"
-      << ms2_masses.str() << "\t"
+      << id_region_start << "\t"
+      << id_region_end << "\t"
       << ms3_frags.str() << "\t"
       << ms3_masses.str() << "\t"
       // I2: isolation-window reporting (std::fixed setprecision(4) still in effect). MS2 triplet always
@@ -596,16 +604,12 @@ namespace OpenMS
       << (ms_level == 3 ? ctx.ms3_isolation_width : 0.0) << "\t"
       << (ms_level == 3 ? ctx.ms3_window_snr : 0.0) << "\t"
       << (ms_level == 3 ? ctx.ms3_charge_intensity : 0.0) << "\t"
-      // P5: per-MS1-selection precursor identity (plain decimal).
-      << row.precursor_id << "\t"
-      // Fragment-mass table: per-scan theoretical + residual (Da, ppm) for MS2 AND MS3 fragments; appended LAST.
+      // Fragment-mass table: per-scan theoretical + residual (Da, ppm) for MS2 AND MS3 fragments.
       << frag_theo.str() << "\t" << frag_diff_da.str() << "\t" << frag_diff_ppm.str() << "\t"
       // C2: MS3 per-ion fragment coverage (distinct backbone bonds / (L-1)); -1 on MS2. std::fixed setprecision(4) in effect.
       << (ms_level == 3 ? match.ms3_fragment_coverage : -1.0f) << "\t"
       // Per-scan TIC / matched-fragment coverage (moved from scan_results); the scan's actual value at this row.
-      << row.tic_coverage << "\t"
-      // C: FLASHExtender score of this scan's own match (-1 = winner-re-matched row, no own ID). setprecision(4) in effect.
-      << row.flash_extender_score << "\n";
+      << row.tic_coverage << "\n";
     identification_tsv_stream_.flush();
   }
 
@@ -655,7 +659,11 @@ namespace OpenMS
     const std::string diff_da_str  = joinDoubles(r.combined_diff_da, 4);
     const std::string diff_ppm_str = joinDoubles(r.combined_diff_ppm, 2);
 
-    pooled_stream_ << r.nominal_mass << "\t"
+    pooled_stream_ << r.trigger_scan_id << "\t"
+                   << r.trigger << "\t"
+                   // P5: per-MS1-selection precursor identity (the model key).
+                   << r.precursor_id << "\t"
+                   << r.update_index << "\t"
                    << std::fixed << std::setprecision(4) << r.mono_mass << "\t"
                    << r.proforma << "\t"
                    << std::setprecision(4) << r.score << "\t"
@@ -663,15 +671,11 @@ namespace OpenMS
                    << r.n_fragments << "\t"
                    << loc_str << "\t"
                    << amb_str << "\t"
-                   << scan_ids_str << "\t"
                    // Fragment-mass table (grouped): masses | ion labels | measured | theoretical | diff_da | diff_ppm.
                    << masses_str << "\t" << ions_str << "\t"
                    << measured_str << "\t" << theo_str << "\t" << diff_da_str << "\t" << diff_ppm_str << "\t"
-                   << r.update_index << "\t"
-                   // P5: per-MS1-selection precursor identity (the model key).
-                   << r.precursor_id << "\t"
-                   // P6: trajectory columns — trigger source and driving scan id.
-                   << r.trigger << "\t" << r.trigger_scan_id << "\n";
+                   << scan_ids_str << "\t"
+                   << r.nominal_mass << "\n";
     pooled_stream_.flush();
   }
 

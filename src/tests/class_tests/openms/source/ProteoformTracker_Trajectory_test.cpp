@@ -280,12 +280,8 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
 
   // ---------------------------------------------------------------------------------------------
   // (B) Pooled trajectory file: 3 data rows, one per emitRow_ call (finalize + 2x foldMs3).
-  // Column layout (0-based, IdaLogger.cpp pooled header / row) — grouped fragment-mass table:
-  //   0 nominal_mass | 1 mono_mass | 2 proteoform | 3 flash_extender_score | 4 coverage_pct |
-  //   5 n_fragments  | 6 localized_mods | 7 ambiguous_mods | 8 contributing_scan_ids |
-  //   9 combined_ms2_frame_masses | 10 combined_ms2_fragment_ions | 11 combined_measured |
-  //   12 combined_theoretical | 13 combined_diff_da | 14 combined_diff_ppm | 15 update_index |
-  //   16 precursor_id | 17 trigger | 18 trigger_scan_id
+  // Columns are resolved BY HEADER NAME (colOf, below), so this test is agnostic to the pooled column
+  // order — a reorder in IdaLogger's pooled writer needs no change here. The pooled stream has 19 columns.
   // ---------------------------------------------------------------------------------------------
   std::ifstream f(pooled_path.c_str());
   TEST_TRUE(f.good())
@@ -305,8 +301,17 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
   TEST_EQUAL((int)rows.size(), 3)   // exactly one row per finalize + foldMs3 + foldMs3
   ABORT_IF((int)rows.size() != 3)
 
-  const int CI_COV = 4, CI_N_FRAG = 5, CI_MASSES = 9, CI_IONS = 10,
-            CI_UPDATE = 15, CI_PRECID = 16, CI_TRIGGER = 17, CI_TRIGGER_SCAN = 18;
+  // Resolve pooled columns BY HEADER NAME (order-agnostic to the pooled layout).
+  auto colOf = [&](const std::string& name) {
+    for (int j = 0; j < (int)header_cols.size(); ++j) if (header_cols[j] == name) return j;
+    return -1;
+  };
+  const int CI_COV = colOf("coverage_pct"), CI_N_FRAG = colOf("n_fragments"),
+            CI_MASSES = colOf("combined_ms2_frame_masses"), CI_IONS = colOf("combined_ms2_fragment_ions"),
+            CI_UPDATE = colOf("update_index"), CI_PRECID = colOf("precursor_id"),
+            CI_TRIGGER = colOf("trigger"), CI_TRIGGER_SCAN = colOf("trigger_scan_id");
+  TEST_TRUE(CI_COV >= 0 && CI_N_FRAG >= 0 && CI_MASSES >= 0 && CI_IONS >= 0 &&
+            CI_UPDATE >= 0 && CI_PRECID >= 0 && CI_TRIGGER >= 0 && CI_TRIGGER_SCAN >= 0)
 
   // Every data row must carry all 19 fields (the trailing trigger_scan_id is non-empty here).
   for (const std::vector<std::string>& r : rows) TEST_EQUAL((int)r.size(), 19)

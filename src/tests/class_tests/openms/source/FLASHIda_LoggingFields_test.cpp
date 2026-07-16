@@ -197,37 +197,39 @@ START_SECTION(schema_column_counts)
   TEST_EQUAL(i.headers.size(), 32)   // I2: +6 iso/snr/intensity; P5: +precursor_id; +theoretical_masses/diff_da/diff_ppm; C2: +ms3_fragment_coverage; + tic_coverage; C: + flash_extender_score
 
   // Spot-check exact header identities / order at the boundaries that matter for parsing.
+  // NOTE: the four log streams were reordered for human legibility (LOG_COLUMN_ORDER_REFERENCE.md);
+  // this section is the schema-order lock, so these indices ARE the new declared schema. Counts unchanged.
   TEST_EQUAL(c.headers.front(), std::string("tracking_id"))
-  TEST_EQUAL(c.headers.back(), std::string("ms3_proteoform"))    // appended LAST (after precursor_id)
-  TEST_EQUAL(c.colIndex("ms3_proteoform"), 30)                   // trailing column index
-  TEST_EQUAL(c.colIndex("precursor_id"), 29)                     // P5 column unmoved (ms3_proteoform appended after it)
-  TEST_EQUAL(c.colIndex("scan_description"), 28)                 // E6 column unmoved
-  TEST_EQUAL(c.colIndex("hcd_energy"), 21)
+  TEST_EQUAL(c.headers.back(), std::string("enqueue_ts"))        // reordered: enqueue_ts is now the trailing column
+  TEST_EQUAL(c.colIndex("ms3_proteoform"), 27)
+  TEST_EQUAL(c.colIndex("precursor_id"), 4)                      // P5 moved forward (right after parent_tracking_id)
+  TEST_EQUAL(c.colIndex("scan_description"), 28)
+  TEST_EQUAL(c.colIndex("hcd_energy"), 18)
   TEST_EQUAL(r.headers.front(), std::string("tracking_id"))
-  TEST_EQUAL(r.colIndex("ms_level"), 1)                           // E5: inserted right after tracking_id
-  TEST_EQUAL(r.headers.back(), std::string("winner_tracking_id"))   // F5: appended last
-  TEST_EQUAL(r.colIndex("winner_tracking_id"), 28)                 // slim-down: -5 (was 33)
-  TEST_EQUAL(r.colIndex("processing_duration_ms"), 27)             // slim-down: -5 (was 32); now second-to-last
-  TEST_EQUAL(r.colIndex("child_ids"), 9)                          // unchanged (before the removed block @10-14)
-  TEST_EQUAL(r.colIndex("exploration_group_id"), 10)              // slim-down: -5 (was 15); first col after the removed block
-  TEST_EQUAL(i.headers.front(), std::string("ms_level"))
-  TEST_EQUAL(i.headers.back(), std::string("flash_extender_score"))  // C: appended LAST
-  TEST_EQUAL(i.colIndex("flash_extender_score"), 31)               // C: trailing column index
-  TEST_EQUAL(i.colIndex("tic_coverage"), 30)                       // now second-to-last (flash_extender_score appended after it)
-  TEST_EQUAL(i.colIndex("ms3_fragment_coverage"), 29)               // C2: unmoved
-  TEST_EQUAL(i.colIndex("precursor_id"), 25)                     // P5 column unmoved (fragment-mass table appended after it)
-  TEST_EQUAL(i.colIndex("theoretical_masses"), 26)              // fragment-mass table: per-scan theoretical + residual (Da, ppm)
-  TEST_EQUAL(i.colIndex("diff_da"), 27)
-  TEST_EQUAL(i.colIndex("diff_ppm"), 28)                        // C2: now second-to-last (ms3_fragment_coverage@29 is .back())
-  TEST_EQUAL(i.colIndex("ms3_charge_intensity"), 24)            // I2 column unmoved
-  // I2: the 6 new identification columns appended after ms3_fragment_masses (col 18), in order.
-  TEST_EQUAL(i.colIndex("ms3_fragment_masses"), 18)
-  TEST_EQUAL(i.colIndex("ms2_isolation_width"), 19)
-  TEST_EQUAL(i.colIndex("ms2_window_snr"), 20)
-  TEST_EQUAL(i.colIndex("ms2_charge_intensity"), 21)
-  TEST_EQUAL(i.colIndex("ms3_isolation_width"), 22)
-  TEST_EQUAL(i.colIndex("ms3_window_snr"), 23)
-  TEST_EQUAL(i.colIndex("ms3_charge_intensity"), 24)
+  TEST_EQUAL(r.colIndex("ms_level"), 1)
+  TEST_EQUAL(r.headers.back(), std::string("dequeue_ts"))        // reordered: dequeue_ts is now the trailing column
+  TEST_EQUAL(r.colIndex("winner_tracking_id"), 18)
+  TEST_EQUAL(r.colIndex("processing_duration_ms"), 10)           // grouped up front with the other duration columns
+  TEST_EQUAL(r.colIndex("child_ids"), 4)
+  TEST_EQUAL(r.colIndex("exploration_group_id"), 13)
+  TEST_EQUAL(i.headers.front(), std::string("tracking_id"))      // reordered: identification now leads with tracking_id
+  TEST_EQUAL(i.headers.back(), std::string("tic_coverage"))      // reordered: tic_coverage is now the trailing column
+  TEST_EQUAL(i.colIndex("flash_extender_score"), 7)             // moved up next to proteoform
+  TEST_EQUAL(i.colIndex("tic_coverage"), 31)                    // trailing column index
+  TEST_EQUAL(i.colIndex("ms3_fragment_coverage"), 30)
+  TEST_EQUAL(i.colIndex("precursor_id"), 3)
+  TEST_EQUAL(i.colIndex("theoretical_masses"), 27)             // fragment-mass table: per-scan theoretical + residual (Da, ppm)
+  TEST_EQUAL(i.colIndex("diff_da"), 28)
+  TEST_EQUAL(i.colIndex("diff_ppm"), 29)
+  TEST_EQUAL(i.colIndex("ms3_charge_intensity"), 26)           // I2 charge-intensity (new order)
+  // I2 isolation/snr/intensity block, in the new order.
+  TEST_EQUAL(i.colIndex("ms3_fragment_masses"), 20)
+  TEST_EQUAL(i.colIndex("ms2_isolation_width"), 21)
+  TEST_EQUAL(i.colIndex("ms2_window_snr"), 22)
+  TEST_EQUAL(i.colIndex("ms2_charge_intensity"), 23)
+  TEST_EQUAL(i.colIndex("ms3_isolation_width"), 24)
+  TEST_EQUAL(i.colIndex("ms3_window_snr"), 25)
+  TEST_EQUAL(i.colIndex("ms3_charge_intensity"), 26)
 
   std::remove(cmd_f.c_str()); std::remove(res_f.c_str()); std::remove(id_f.c_str());
 }
