@@ -1,0 +1,302 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+**Scope: the FLASH real-time IDA engine only.** This is a C++20 fork of OpenMS, checked out as a
+git submodule of the `flashida-development` workspace. It exists to serve FLASHIda; this file
+documents the real-time acquisition engine and nothing else. Upstream OpenMS subsystems
+(FORMAT, CHEMISTRY, the TOPP tools, pyOpenMS) are out of scope — treat them as a vendored library.
+
+The parent `../CLAUDE.md` owns the bridge/ABI contract, CI, build and test commands, and the
+config flow, and wins on any conflict. `../FlashIDA/CLAUDE.md` owns the C# side.
+
+**Do not build this project unless explicitly asked** — it is resource-intensive and CI handles it.
+
+## Where the code lives
+
+Headers under `src/openms/include/OpenMS/ANALYSIS/TOPDOWN/`, sources under
+`src/openms/source/ANALYSIS/TOPDOWN/` — note the source tree has **no** `OpenMS/` path segment
+(`source/OpenMS/…` does not exist). `sources.cmake` is **not** a reliable header inventory:
+`Ms2Params.h` and `ProteoformTracker.h` are live but unregistered. Glob the directory instead.
+
+### The untouchable boundary
+
+The directory split is a near-perfect proxy for what you may modify.
+
+| | Files | Status |
+|---|---|---|
+| **FLASHDeconv** (flat `TOPDOWN/`) | `DeconvolvedSpectrum`, `SpectralDeconvolution`, `FLASHDeconvAlgorithm`, `FLASHHelperClasses`, `MassFeatureTrace`, `PeakGroup`, `PeakGroupScoring`, `Qvalue`, `TopDownIsobaricQuantification` | **OFF-LIMITS** |
+| **FLASHTnT** (flat `TOPDOWN/`) | `FLASHTnTAlgorithm`, `FLASHTaggerAlgorithm`, `FLASHGappedTaggerAlgorithm`, `FLASHExtenderAlgorithm` | **OFF-LIMITS** |
+| **FLASHIda engine** | `FLASHIda.{h,cpp}`, `FLASHIdaBridgeFunctions.{h,cpp}` (flat) + everything in `TOPDOWN/FLASHIda/` | Fair game |
+
+Two deliberate exceptions to the clean split, both worth knowing before you conclude the boundary
+is airtight:
+
+- **`OptimizationMetadata` is IDA code living in FLASHDeconv territory.** Its header sits flat
+  under `TOPDOWN/` and it is stored as `std::optional<OptimizationMetadata> opt_metadata_` on
+  `DeconvolvedSpectrum`, populated by `Exploration.cpp` and serialized through `toSpectrum()`.
+  It is a sanctioned IDA hook with its own CI test (`DeconvolvedSpectrum_OptimizationMetadata_test`).
+- **Only two IDA files reach into FLASHTnT**: `FragmentAnalysis.cpp` (constructs
+  `FLASHTaggerAlgorithm` :401, `runMatching` :535, `FLASHExtenderAlgorithm` :545) and
+  `PrecursorSelection.cpp` (:977, :1022). The IDA path drives Tagger + Extender **directly** and
+  never uses `FLASHTnTAlgorithm` — that orchestrator belongs to the TOPP tool. So tuning knobs
+  arrive via the `flashtnt` config section, not through `FLASHTnTAlgorithm`'s own defaults.
+
+> **Name trap.** `TopDownIsobaricQuantification` (flat, off-limits, used only by
+> `FLASHDeconvAlgorithm`) and `FLASHIda/Quantification` (IDA, fair game) are unrelated. The IDA one
+> hardcodes `TMTSixPlexQuantitationMethod` + `IsobaricChannelExtractor` with a
+> `// TODO: Variable channel extractors` — the real-time quant test is **6-plex only**, whatever
+> label was actually run.
+
+### Ownership tree — declaration order is load-bearing
+
+`FLASHIda` is the single orchestrator and owns all ten subsystems **by value**. C++ initializes
+members in declaration order and several bind references to earlier siblings, so **reordering the
+member declarations is undefined behavior**, not a style choice:
+
+```
+config_ (Config) → logger_ (IdaLogger) → queue_ (ScanCommandQueue) → deconv_ (Deconvolution)
+  → fragments_ (FragmentAnalysis) → selection_ (PrecursorSelection) → quant_ (Quantification)
+  → [analysis_mutex_, exploration_active_, current_faims_cv_] → faims_ (FAIMS)
+  → exploration_ (Exploration) → tracker_ (ProteoformTracker)
+```
+
+Reference-holding: `PrecursorSelection{const Config&, Deconvolution&}`,
+`Exploration{const Config&, FragmentAnalysis&}`, `ProteoformTracker{const Config&, IdaLogger&}`;
+config-reference-only: `IdaLogger`, `ScanCommandQueue`, `FragmentAnalysis`, `Quantification`.
+`FAIMS` and `Deconvolution` take `const Config&` but **copy** what they need. The ctor init list
+mirrors the declaration order exactly (`FLASHIda.cpp:54-64`).
+
+### Enqueue discipline: return, don't push
+
+`FLASHIda.cpp` is the **sole enqueuer** — exactly nine `queue_.push(` sites; no `.push(` on a
+`ScanCommandQueue` exists anywhere else under `TOPDOWN/`. The `ScanCommandQueue&` that
+`Exploration::initiate/feedResult/initiateNextLevel` receive is a **command builder, not an
+enqueue target**: `buildMS2`/`buildMS3`/`buildFollowUp` allocate a tracking id and return a
+`ScanCommand` by value. Any new command-producing component must follow the same contract.
+
+They also do **not** register in the pending-scan map — that happens only in `dequeue()` and in
+explicit `registerPending()` calls, which `FLASHIda.cpp` makes itself on the drain path.
+⚠️ The doc comment at `ScanCommandQueue.h:59-60` claiming builders register is **stale**.
+
+## `processScan` — five admission gates
+
+`FLASHIda.cpp:79-169`. Before any MS-level branching, a scan must clear all of these; each returns
+`0`. This is the always-on **engine-id-echo** contract: a spectrum is analysed only if the engine
+itself minted and dispatched its id.
+
+| # | Gate | Trace |
+|---|---|---|
+| 1 | `scan_description` (or null) shorter than 3 chars | silent |
+| 2 | `desc[3] == 'A'` — AGC calibration scan; resolves pending, returns | silent |
+| 3 | `peekPending(decode(desc[0..2]))` empty — id never emitted | `[TRACK-RESOLVE] status=not_found` |
+| 4 | `resolvePending` empty after a successful peek (upstream race) | `status=context_lost_race` |
+| 5 | context support: `required_stages` = 0/1/2 for ms_level 1/2/3; rejects if ms_level ∉ {1,2,3}, or `parent_ctx.msn_level != ms_level`, or `parent_ctx.num_stages < required_stages` (a **less-than**, not an equality) | `status=context_unsupported` |
+
+A sixth early return follows the gates: MS1 with `config_.level(1).selection == None` returns 0
+before selection. None of these paths reaches the TSV writers, so an un-commanded scan produces no
+log row — but gates 3–5 do leave a stdout trace.
+
+### Scan-description wire format
+
+`{3-char base-94 tracking id}{1-char type marker}{payload}`. Markers, per the authoritative switch
+in `IdaLogger::scanTypeFromDescription_`:
+
+`S` survey MS1 · `A` AGC calibration · `R` "recording" — any data-acquiring MS2 *or* MS3 ·
+`F` quantification follow-up MS2 · `C` tagging conditional follow-up MS2 · `E` exploration variant.
+
+`processScan` branches on the marker twice: `desc[3]=='A'` (gate 2) and
+`is_follow_up_scan = desc[3]=='F' || desc[3]=='C'`.
+
+> The ABI field is `char scan_description[256]`, but **every writer caps at `snprintf(dst, 16, …)`
+> — 15 chars + NUL.** That is why MS2/MS3 mass tokens go through
+> `ScanCommandQueue::formatMassToken`, which computes a token budget and degrades decimal precision
+> from 6 down to 0 so the trailing `@{charge}{ion_type}{index}` is never truncated.
+> Known dead store: `FLASHIda.cpp:661` sets `[3]='C'` but :665 overwrites the buffer, so
+> cycle-time-forced MS1s emit as `'S'`.
+
+## `getNextScanCommand` — never returns 0
+
+`FLASHIda.cpp:617-739`. Five steps: (1) AGC → (2) cycle-time MS1 → (3) cleanup → (4) priority
+dequeue → (5) idle fallback. **Every path returns 1.** When all four queues are empty, Step 5
+fabricates an AGC command, *also* pushes a fresh priority-3 survey MS1, registers the AGC pending,
+and returns 1 — the instrument is never observably starved. The only `return 0` in the whole file
+belongs to `processScan`. `FLASHIda.h:99`'s "0 if error" comment is imprecise.
+
+Callers must therefore terminate on `IsAgc != 0` or bound their iterations. See `../CLAUDE.md`.
+
+Two subtleties:
+
+- **Step 2 does not return.** The cycle-time MS1 is skipped while `exploration_active_` is true;
+  when it fires it stamps priority 0, pushes, and deliberately falls through to Steps 3–4.
+- **The five steps are not atomic** — no lock is held across the body (explicit comment at :619).
+  Each `ScanCommandQueue` call takes `queue_mutex_` independently, so one drain is many short
+  critical sections. `analysis_mutex_` is held only around the three `writeScanCommandRow` calls.
+  The only lock-free `processScan` → `getNextScanCommand` channel is two atomics
+  (`exploration_active_`, `current_faims_cv_`), written release / read acquire.
+
+This matters because the two bridge calls genuinely run on **different threads**: `processScan` on
+the C# TPL Dataflow `ActionBlock` thread (serialized with itself, `MaxDegreeOfParallelism = 1`),
+`getNextScanCommand` on the instrument's event thread.
+
+### Priority ladder (0 highest → 3 lowest)
+
+| P | Commands |
+|---|---|
+| 0 | AGC; FAIMS CV-transition MS1; cycle-time MS1; **both follow-up kinds** (quant `F`, conditional `C`) |
+| 1 | MS3, including exploration MS3 variants |
+| 2 | MS2 from MS1 selection; exploration MS2 variants |
+| 3 | survey / idle MS1 |
+
+Assigned at build time, never re-ranked. Within a priority `dequeue()` is strict FIFO, which is
+what makes `scan_commands.tsv` row order and `child_ids` order deterministic. `push()` clamps
+out-of-range priorities into [0,3].
+
+## Where deconvolution actually runs — 3 call sites, 2 engines
+
+- **MS1** is *not* deconvolved from `processScan`: it happens inside
+  `PrecursorSelection::filterAndRank` → `deconv_.deconvolveMS1(…)`, just before mass-exclusion.
+- **Regular MS2/MS3** — `deconv_.deconvolveMSn(…)`, called directly from `processScan`.
+- **Exploration variants use a different engine.** `Exploration` owns a *second* `Deconvolution`
+  instance built with `config.explorationToleranceList()` rather than `config.toleranceList()`.
+  So `deconv_.storedMS2()` is empty/stale during an exploration group, and exploration results can
+  use a different ppm tolerance than production scans.
+
+`target_mode` semantics (and the fact that 2/3 are swapped in every doc comment) are documented in
+`../CLAUDE.md` — mode **2 is deep/in-depth**, mode **3 is exclusion**.
+
+## Characterization / MS3
+
+**`ProteoformTracker::planNextScans` is the only producer of MS3 targets.** `initiateNextLevel`
+builds commands exclusively inside `if (model != nullptr && !model->proteoform_sequence.empty())`;
+every other path returns zero commands. No tracker, no finalized model, or an unidentified
+precursor ⇒ **zero MS3 by design**, with no intensity or legacy fallback.
+
+- **`characterization.objective`** picks the targets. Default `ambiguity`; parsed as
+  `if (== "coverage") … else Ambiguity`, so `"Coverage"` or a typo silently means ambiguity —
+  unknown *keys* are rejected, unknown *values* are not (`Config.cpp:241-245`).
+- **`selection_strategy.ms3.selection`** does three things, none of them choosing targets:
+  `None` short-circuits so no MS3 is emitted at all; it selects the MS2 matcher
+  (`intensity`/`qscore` → `getTopFragmentMatches`, `terminal_fragments` → `getTerminalFragmentIons`,
+  `ambiguity_resolution` → `getAmbiguityEnclosingIons`); and the resulting
+  `region_start/end/ptm_sites` become the MS3 **render context** (`scan_commands.ms3_proteoform`).
+- **Budget and charge floor come from level 2**, not 3: `config_.level(2).max_targets` (hardcoded
+  inside `planNextScans`) and `selection_strategy.ms2.min_charge`.
+  `selection_strategy.ms3.max_targets` / `.min_charge` are parsed but **never read**.
+
+### `fragmentContains` vs `fragmentBrackets` (ADR-0005)
+
+Two similar-looking predicates in `ProteoformTracker`'s anonymous namespace, used for opposite
+purposes — do not swap them:
+
+- **`fragmentContains(f, rs, re)`** = `cover_start <= rs && cover_end >= re`. **Targeting only.**
+- **`fragmentBrackets(f, rs, re)`** = cleavage strictly inside the range. **Narrowing only**
+  (`narrowModifications_`).
+
+Targeting on `brackets` is self-defeating — a bracketing ion would already have localized the mod —
+and dispatched zero MS3 in every mode.
+
+Ambiguity target ordering: keep mods with `candidate_start < candidate_end`; sort **widest range
+first**; per mod collect containing fragments with a `best_ms2`, sorted by best-MS2 intensity
+descending; **round-robin by rank** (every mod gets its strongest container before any mod gets a
+second), deduped by `(ion_type, ion_index)`, until the budget fills; then re-sort by intensity.
+
+> `selectNextLevelTargets` fills `masses/charges/wstarts/wends/ion_types/frag_indices/frag_scores`
+> and **none of them is read again**. Only `frag_result` and `qscores[i]` (summed into
+> `tic_coverage`) survive.
+
+A returning regular MS3 is scored against the **live tracker winner**
+(`tracker_.buildWinnerProteoformContext(precursor_id)`), not its own MS2 context — the cached MS2
+context supplies only `fragment_ion_type`/`fragment_ion_index`. No winner ⇒ empty context ⇒ the
+MS3 matches nothing. The cache entry is erased after use, so a duplicate/late MS3 yields no row.
+
+## Config (`FLASHIda/Config.cpp`)
+
+Unknown keys are hard-rejected by one free function `rejectUnknownKeys(obj, allowed, path)` called
+~18 times, each with its own hand-written allowed-set, throwing `std::invalid_argument` naming the
+offenders and pointing at `FlashIDA/test-data/config_schema_reference.json`. Two exemptions:
+`exploration.overrides` (a dynamic string→string map) and a top-level `ms3`, which gets a dedicated
+**migration** error before the root check runs.
+
+> **Inconsistency:** a *missing* `selection_strategy` throws `std::runtime_error` — the only config
+> error in the file that is not `std::invalid_argument`. A `catch(std::invalid_argument)` misses it.
+
+Traps worth internalizing before touching config code:
+
+- **`.value(key, default)` fallbacks are dead in production.** C# `ToCppJson` emits every key
+  unconditionally, so the C++ literals never fire and several disagree with the effective C#
+  defaults. Don't read a C++ default and believe it.
+- **`kScanKeys` is one lenient 17-key union validating every scan object**, but each parser reads a
+  different subset — so keys that *pass validation* are silently dropped. `ms_settings.ms1` ignores
+  activation/collision_energy/reaction_time/reagent_*; **both `follow_up_scan` blocks read only 8
+  of 17**, so an ETD conditional-MS2 or quant follow-up **cannot be given a `reaction_time` from
+  config** and always emits 0.
+- **`ScanConfig.analyzer`'s default flips by parse site**: the in-class default is `"Orbitrap"`, but
+  the `ms_settings.ms{1,2,3}` parsers override it with `""` (strncpy'd straight into the
+  `ScanCommand`). Only the two `follow_up_scan` blocks keep `"Orbitrap"`.
+- **"Absent" ≠ "present with defaults".** `Config::level(n)` returns a static `default_level_` with
+  `selection = None` for any level not in `levels_`, whereas a level present without a `selection`
+  key gets `qscore` (level 1) or `intensity` (level > 1).
+- **`applyOverrides` silently ignores unknown keys** (hand-written if/else chain over 17 fields, no
+  `else`), and override **values must be JSON strings** — `"collision_energy": 30` throws an
+  nlohmann `type_error`; `"30"` works. The base is the level's `scans[0]`, which is why `validate()`
+  requires exactly one scan config at an exploring level.
+- `deconvolution.tol` must always carry ≥ 3 entries — C++ throws below `max_level`, and
+  `selection_strategy` always materializes levels {1,2,3}.
+
+## Logging (`FLASHIda/IdaLogger.cpp`)
+
+Five append-only streams, all opt-in per config path. `IdaLogger` is **lock-agnostic** — locking is
+the caller's responsibility.
+
+| Stream | Cols | Role |
+|---|---|---|
+| `ida.log` | — | free-text MS1 summary (not a TSV) |
+| `scan_commands.tsv` | 31 | one row per **dequeued** command; the wide MS3-fragment stream |
+| `scan_results.tsv` | 29 | pure acquisition-**event** log per `processScan` (identification payload was moved out, 34→29) |
+| `identification.tsv` | 32 | per-scan MS2/MS3 identification leaf |
+| `pooled_identification.tsv` | 19 | per-precursor cumulative proteoform trajectory |
+
+- **Rows are written at dequeue**, from 3 sites inside `getNextScanCommand`, each under
+  `analysis_mutex_`. So row order == dequeue order, and an enqueued-but-never-dequeued command
+  never appears. Only the priority-dequeue site passes `precursor_id` and `ms3_proteoform` (a
+  one-shot `takeMS3Proteoform`); both AGC sites log `precursor_id=0` and an empty proteoform.
+- **Two-stage MS3 scalars**: 11 columns are emitted as `"stage0;stage1"` **only when
+  `msn_level == 3`** (mono_mass, qscore, charge_cos, charge_snr, iso_cos, snr, charge_score,
+  hcd_energy, ppm_error, precursor_intensity, peakgroup_intensity). Everything else emits stage 0
+  alone, byte-identical to the pre-two-stage format.
+- **Stage-less rows emit literal placeholders** — for `num_stages == 0` (MS1/AGC) the per-stage
+  columns are forced to `"0"` (`"none"` for activation) so a tab-splitting parser doesn't drop
+  trailing empty fields and tokenize the row one column short. The test TSV parser carries the
+  mirror-image guard (hand-splits to N+1 fields for N tabs).
+- **Delimiters: `';'` everywhere EXCEPT id lists, which use a space.** `child_ids` and
+  `contributing_scan_ids` join with `' '` because base-94 tracking ids draw from 0x21–0x7E, which
+  **includes `';'`** (an id like `!!;` would collide); space is the only printable char the alphabet
+  excludes. Readers on both sides must split those two columns on `' '`.
+- **Column order was permuted for legibility and goldens were NOT recaptured.** The C# comparison
+  resolves columns **by header name**, so a further pure reorder is free — but a rename/add/drop
+  fails closed. The C++ `FLASHIda_LoggingFields_test` hard-codes the **new** indices, so any reorder
+  *does* require editing that test.
+
+## Tests
+
+Registering a test in `src/tests/class_tests/openms/executables.cmake` is **not enough to run it**.
+A C++ test executes in CI only if it appears in **both** places in
+`../.github/workflows/flashida-ci.yml`: the build `--target` list **and** the `ctest -R`
+alternation. Miss the first and it never builds; miss the second and it builds but never runs.
+
+Tests read fixtures from `../../FlashIDA/test-data` relative to `OpenMS/build`, so the FlashIDA
+submodule must be checked out. Test exes land in `build/src/tests/class_tests/bin/`, not
+`build/bin/`, and need the 5-DLL set staged beside them (including `zlib.dll`).
+
+**Drive acquisitions only through `FLASHIda_TestHelpers.h::runInterleaved`** — the C++ mirror of
+C# `PushScanAndDrainFull`. One contract: pull a command → classify idle vs workload → feed one
+response scan stamped with that command's own engine-emitted description → repeat; terminate on
+`idle >= 3`. You cannot fabricate a scan id (gate 3 above), which is precisely why hand-rolled
+drive loops don't work. `FLASHIda_ProcessScan_test` pins this with
+`processScan_ms1_gate_rejects_unrequested_id`.
+
+Division of labour with the C# suite: **C++ ctests assert plausibility ranges** (stable across
+engine bumps); **C# NUnit asserts exact goldens**. Put a new numeric expectation on the C# side
+unless it is genuinely range-based. Note CI builds **Release**, so `OPENMS_PRECONDITION` and debug
+asserts are compiled out — an accepted tradeoff to match the production toolchain.
