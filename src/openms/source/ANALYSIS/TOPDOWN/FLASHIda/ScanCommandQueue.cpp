@@ -417,13 +417,39 @@ namespace OpenMS
     std::strncpy(cmd.parent_scan_id, parent_enc.c_str(), 3);
     cmd.parent_scan_id[3] = '\0';
 
+    // A ScanConfig fully determines the scan's instrument parameters (ADR-0009), so EVERY one of
+    // them comes from follow_up_config below. `cmd = ctx` above is deliberate and must stay: it
+    // carries what makes this a follow-up *of that precursor* -- the targeting (mono_mass,
+    // precursor_mz, isolation_width, charge_state), the precursor scoring fields, and faims_cv.
+    // Rebuilding from ScanCommand{} instead would zero faims_cv, so the follow-up would be acquired
+    // at a different compensation voltage and sample a different ion population entirely.
     std::strncpy(cmd.analyzer, follow_up_config.analyzer.c_str(), sizeof(cmd.analyzer) - 1);
     cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';
     cmd.orbitrap_resolution = follow_up_config.resolution;
+    cmd.agc_target = follow_up_config.agc_target;
+    cmd.max_it = follow_up_config.max_it;
+    cmd.first_mass = follow_up_config.first_mass;
+    cmd.last_mass = follow_up_config.last_mass;
+    cmd.microscans = follow_up_config.microscans;
+    cmd.rf_lens = follow_up_config.rf_lens;
+    cmd.source_cid = follow_up_config.source_cid;
+    cmd.source_cid_scaling = follow_up_config.source_cid_scaling;
+    std::strncpy(cmd.data_type, follow_up_config.data_type.c_str(), sizeof(cmd.data_type) - 1);
+    cmd.data_type[sizeof(cmd.data_type) - 1] = '\0';
+    std::strncpy(cmd.scan_rate, follow_up_config.scan_rate.c_str(), sizeof(cmd.scan_rate) - 1);
+    cmd.scan_rate[sizeof(cmd.scan_rate) - 1] = '\0';
+    cmd.hcd_energy = follow_up_config.collision_energy;   // mirrors buildMS2; was inherited from ctx
+
     cmd.stages[0].collision_energy = static_cast<double>(follow_up_config.collision_energy);
     std::strncpy(cmd.stages[0].activation_type, follow_up_config.activation.c_str(),
                  sizeof(cmd.stages[0].activation_type) - 1);
     cmd.stages[0].activation_type[sizeof(cmd.stages[0].activation_type) - 1] = '\0';
+    // Activation-coupled parameters MUST travel with the activation being overridden above.
+    // Leaving them inherited is how an HCD follow-up ended up carrying the parent ETD's ion-ion
+    // reaction settings (reaction_time/reagent_*), which reached the instrument via ScanFactory.
+    cmd.stages[0].reaction_time = follow_up_config.reaction_time;
+    cmd.stages[0].reagent_max_it = follow_up_config.reagent_max_it;
+    cmd.stages[0].reagent_agc_target = follow_up_config.reagent_agc_target;
 
     std::string id_str = encode(cmd.scan_id);
     std::string mass_tok = formatMassToken(cmd.mono_mass / 1000.0, cmd.stages[0].charge_state, '\0', 0);

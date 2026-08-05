@@ -66,6 +66,52 @@ namespace
     "analyzer", "activation", "collision_energy", "resolution", "agc_target", "max_it",
     "first_mass", "last_mass", "microscans", "data_type", "rf_lens", "source_cid",
     "source_cid_scaling", "scan_rate", "reaction_time", "reagent_max_it", "reagent_agc_target"};
+
+  // Read EVERY key kScanKeys admits, so validation and parsing share one source of truth. When the
+  // two lists drifted apart, nine keys passed validation and were then silently discarded --
+  // notably reaction_time on a follow_up_scan, which made an ETD follow-up unconfigurable.
+  //
+  // A ScanConfig fully determines its scan's instrument parameters (ADR-0009); an unset value means
+  // "use the instrument method default", never "inherit from another scan".
+  void parseScanConfig(const nlohmann::json& j, OpenMS::ScanConfig& sc,
+                       const std::string& analyzer_default)
+  {
+    // is_string() guard, not .value(): a present-but-null string (the generated
+    // config_schema_reference.json carries "data_type": null) makes .value() throw type_error.302.
+    auto str = [&](const char* k, const std::string& d) {
+      auto it = j.find(k);
+      return (it != j.end() && it->is_string()) ? it->get<std::string>() : d;
+    };
+
+    sc.analyzer           = str("analyzer", analyzer_default);
+    sc.activation         = str("activation", "");
+    sc.data_type          = str("data_type", "");
+    sc.scan_rate          = str("scan_rate", "");
+    sc.collision_energy   = j.value("collision_energy", 0);
+    sc.resolution         = j.value("resolution", 0);
+    sc.agc_target         = j.value("agc_target", 0);
+    sc.max_it             = j.value("max_it", 0.0);
+    sc.first_mass         = j.value("first_mass", 0.0);
+    sc.last_mass          = j.value("last_mass", 0.0);
+    sc.microscans         = j.value("microscans", 0);
+    sc.rf_lens            = j.value("rf_lens", 0.0);
+    sc.source_cid         = j.value("source_cid", 0.0);
+    sc.source_cid_scaling = j.value("source_cid_scaling", 0.0);
+    sc.reaction_time      = j.value("reaction_time", 0.0);
+    sc.reagent_max_it     = j.value("reagent_max_it", 0.0);
+    sc.reagent_agc_target = j.value("reagent_agc_target", 0);
+  }
+
+  // Activation-coupled parameters: a parameter that is meaningful only for particular activation
+  // types, and must therefore travel with the activation whenever it is set (CONTEXT.md).
+  bool needsCollisionEnergy(const std::string& act)
+  {
+    return act == "HCD" || act == "CID" || act == "EThcD";
+  }
+  bool needsReactionTime(const std::string& act)
+  {
+    return act == "ETD" || act == "EThcD";
+  }
 }
 
 namespace OpenMS
@@ -208,14 +254,7 @@ namespace OpenMS
     {
       auto fus = tagging["follow_up_scan"];
       rejectUnknownKeys(fus, kScanKeys, "tagging.follow_up_scan");
-      targeting_.tagging_follow_up_scan.analyzer = fus.value("analyzer", "Orbitrap");
-      targeting_.tagging_follow_up_scan.activation = fus.value("activation", "");
-      targeting_.tagging_follow_up_scan.collision_energy = fus.value("collision_energy", 0);
-      targeting_.tagging_follow_up_scan.resolution = fus.value("resolution", 0);
-      targeting_.tagging_follow_up_scan.agc_target = fus.value("agc_target", 0);
-      targeting_.tagging_follow_up_scan.first_mass = fus.value("first_mass", 0.0);
-      targeting_.tagging_follow_up_scan.last_mass = fus.value("last_mass", 0.0);
-      targeting_.tagging_follow_up_scan.max_it = fus.value("max_it", 0.0);
+      parseScanConfig(fus, targeting_.tagging_follow_up_scan, "Orbitrap");
     }
 
     // --- files section (paths only; loading stays in FLASHIda) ---
@@ -262,14 +301,7 @@ namespace OpenMS
     {
       auto fus = quant["follow_up_scan"];
       rejectUnknownKeys(fus, kScanKeys, "quantification.follow_up_scan");
-      quant_.follow_up_scan.analyzer = fus.value("analyzer", "Orbitrap");
-      quant_.follow_up_scan.activation = fus.value("activation", "");
-      quant_.follow_up_scan.collision_energy = fus.value("collision_energy", 0);
-      quant_.follow_up_scan.resolution = fus.value("resolution", 0);
-      quant_.follow_up_scan.agc_target = fus.value("agc_target", 0);
-      quant_.follow_up_scan.first_mass = fus.value("first_mass", 0.0);
-      quant_.follow_up_scan.last_mass = fus.value("last_mass", 0.0);
-      quant_.follow_up_scan.max_it = fus.value("max_it", 0.0);
+      parseScanConfig(fus, quant_.follow_up_scan, "Orbitrap");
     }
 
     // --- faims ---
@@ -292,18 +324,7 @@ namespace OpenMS
     auto ms1_json = ms_settings.value("ms1", json::object());
     rejectUnknownKeys(ms1_json, kScanKeys, "ms_settings.ms1");
     ScanConfig ms1_scan;
-    ms1_scan.analyzer = ms1_json.value("analyzer", "");
-    ms1_scan.first_mass = ms1_json.value("first_mass", 0.0);
-    ms1_scan.last_mass = ms1_json.value("last_mass", 0.0);
-    ms1_scan.resolution = ms1_json.value("resolution", 0);
-    ms1_scan.agc_target = ms1_json.value("agc_target", 0);
-    ms1_scan.max_it = ms1_json.value("max_it", 0.0);
-    ms1_scan.microscans = ms1_json.value("microscans", 0);
-    ms1_scan.rf_lens = ms1_json.value("rf_lens", 0.0);
-    ms1_scan.source_cid = ms1_json.value("source_cid", 0.0);
-    ms1_scan.source_cid_scaling = ms1_json.value("source_cid_scaling", 0.0);
-    ms1_scan.data_type = ms1_json.value("data_type", std::string(""));
-    ms1_scan.scan_rate = ms1_json.value("scan_rate", std::string(""));
+    parseScanConfig(ms1_json, ms1_scan, "");
 
     // Ensure levels_[1] exists before populating scans
     if (levels_.find(1) == levels_.end())
@@ -319,23 +340,7 @@ namespace OpenMS
       {
         rejectUnknownKeys(m, kScanKeys, "ms_settings.ms2[]");
         ScanConfig ms2_scan;
-        ms2_scan.analyzer = m.value("analyzer", "");
-        ms2_scan.activation = m.value("activation", "");
-        ms2_scan.collision_energy = m.value("collision_energy", 0);
-        ms2_scan.resolution = m.value("resolution", 0);
-        ms2_scan.agc_target = m.value("agc_target", 0);
-        ms2_scan.max_it = m.value("max_it", 0);
-        ms2_scan.first_mass = m.value("first_mass", 0.0);
-        ms2_scan.last_mass = m.value("last_mass", 0.0);
-        ms2_scan.microscans = m.value("microscans", 0);
-        ms2_scan.rf_lens = m.value("rf_lens", 0.0);
-        ms2_scan.source_cid = m.value("source_cid", 0.0);
-        ms2_scan.source_cid_scaling = m.value("source_cid_scaling", 0.0);
-        ms2_scan.data_type = m.value("data_type", std::string(""));
-        ms2_scan.scan_rate = m.value("scan_rate", std::string(""));
-        ms2_scan.reaction_time = m.value("reaction_time", 0.0);
-        ms2_scan.reagent_max_it = m.value("reagent_max_it", 0.0);
-        ms2_scan.reagent_agc_target = m.value("reagent_agc_target", 0);
+        parseScanConfig(m, ms2_scan, "");
         levels_[2].scans.push_back(ms2_scan);
       }
     }
@@ -349,23 +354,7 @@ namespace OpenMS
       {
         rejectUnknownKeys(m, kScanKeys, "ms_settings.ms3[]");
         ScanConfig ms3_scan;
-        ms3_scan.analyzer = m.value("analyzer", "");
-        ms3_scan.activation = m.value("activation", "");
-        ms3_scan.collision_energy = m.value("collision_energy", 0);
-        ms3_scan.resolution = m.value("resolution", 0);
-        ms3_scan.agc_target = m.value("agc_target", 0);
-        ms3_scan.max_it = m.value("max_it", 0);
-        ms3_scan.first_mass = m.value("first_mass", 0.0);
-        ms3_scan.last_mass = m.value("last_mass", 0.0);
-        ms3_scan.microscans = m.value("microscans", 0);
-        ms3_scan.rf_lens = m.value("rf_lens", 0.0);
-        ms3_scan.source_cid = m.value("source_cid", 0.0);
-        ms3_scan.source_cid_scaling = m.value("source_cid_scaling", 0.0);
-        ms3_scan.data_type = m.value("data_type", std::string(""));
-        ms3_scan.scan_rate = m.value("scan_rate", std::string(""));
-        ms3_scan.reaction_time = m.value("reaction_time", 0.0);
-        ms3_scan.reagent_max_it = m.value("reagent_max_it", 0.0);
-        ms3_scan.reagent_agc_target = m.value("reagent_agc_target", 0);
+        parseScanConfig(m, ms3_scan, "");
         levels_[3].scans.push_back(ms3_scan);
       }
     }
@@ -516,6 +505,26 @@ namespace OpenMS
       throw std::invalid_argument(
           "Conditional MS2 is enabled but tagging.follow_up_scan is not configured.");
 
+    // An activation must arrive with the parameters that give it meaning (ADR-0009). Without this,
+    // an ETD scan config that omits reaction_time silently emits 0, ScanFactory then drops the
+    // parameter entirely, and the instrument falls back to its own method default -- invisibly.
+    // Applied at every scan-config site, exactly as kScanKeys validates every scan object.
+    auto checkActivationCoupling = [](const ScanConfig& sc, const std::string& path) {
+      if (needsReactionTime(sc.activation) && sc.reaction_time <= 0)
+        throw std::invalid_argument(
+            path + " activation '" + sc.activation + "' requires reaction_time > 0.");
+      if (needsCollisionEnergy(sc.activation) && sc.collision_energy <= 0)
+        throw std::invalid_argument(
+            path + " activation '" + sc.activation + "' requires collision_energy > 0.");
+    };
+
+    checkActivationCoupling(targeting_.tagging_follow_up_scan, "tagging.follow_up_scan");
+    checkActivationCoupling(quant_.follow_up_scan, "quantification.follow_up_scan");
+    for (const auto& [lvl, cfg] : levels_)
+      for (size_t i = 0; i < cfg.scans.size(); ++i)
+        checkActivationCoupling(cfg.scans[i],
+                                "ms_settings.ms" + std::to_string(lvl) + "[" + std::to_string(i) + "]");
+
     for (const auto& [lvl, cfg] : levels_)
     {
       if (cfg.exploration != ExplorationMetric::None && cfg.scans.size() != 1)
@@ -562,8 +571,8 @@ namespace OpenMS
 
       for (const auto& act : acts)
       {
-        bool needs_ce = (act == "HCD" || act == "CID" || act == "EThcD");
-        bool needs_rt = (act == "ETD" || act == "EThcD");
+        bool needs_ce = needsCollisionEnergy(act);
+        bool needs_rt = needsReactionTime(act);
 
         if (needs_ce && cfg.ce_max <= cfg.ce_min)
           throw std::invalid_argument(
