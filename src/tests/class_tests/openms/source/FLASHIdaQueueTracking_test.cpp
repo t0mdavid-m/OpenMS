@@ -67,6 +67,7 @@ namespace
           "analyzer": "Orbitrap",
           "activation": "ETD",
           "collision_energy": 0,
+          "reaction_time": 10.0,
           "resolution": 120000
         }
       ]
@@ -219,7 +220,7 @@ START_SECTION(agc_scan_is_dequeued_first)
     "faims": { "cv_values": [-50], "max_cv_skip": 0 },
     "ms_settings": {
       "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [{ "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "resolution": 120000 }]
+      "ms2": [{ "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "reaction_time": 10.0, "resolution": 120000 }]
     },
     "scheduling": {
       "cycle_time": { "enabled": false, "value_ms": 60000 },

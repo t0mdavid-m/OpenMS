@@ -96,7 +96,7 @@ START_SECTION(([EXTRA] Config rejects exploration with multiple scan configs))
       "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
       "ms2": [
         { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
-        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "resolution": 60000 }
+        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "reaction_time": 10.0, "resolution": 60000 }
       ]
     },
     "scheduling": { "cycle_time": { "enabled": false }, "scan_timeout": { "enabled": false }, "agc_interval_seconds": 30 },

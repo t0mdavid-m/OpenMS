@@ -51,7 +51,7 @@ namespace
       "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
       "ms2": [
         { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
-        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "resolution": 120000 }
+        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "reaction_time": 10.0, "resolution": 120000 }
       ]
     },
     "scheduling": {
@@ -125,7 +125,7 @@ namespace
       "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
       "ms2": [
         { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
-        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "resolution": 120000 }
+        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "reaction_time": 10.0, "resolution": 120000 }
       ]
     },
     "scheduling": {
@@ -160,7 +160,7 @@ namespace
       "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
       "ms2": [
         { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
-        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "resolution": 120000 }
+        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "reaction_time": 10.0, "resolution": 120000 }
       ]
     },
     "scheduling": {
@@ -195,7 +195,7 @@ namespace
       "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
       "ms2": [
         { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
-        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "resolution": 120000 }
+        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "reaction_time": 10.0, "resolution": 120000 }
       ]
     },
     "scheduling": {
@@ -225,7 +225,7 @@ namespace
     },
     "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
     "tagging": {
-      "follow_up_scan": { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "resolution": 120000 }
+      "follow_up_scan": { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "reaction_time": 10.0, "resolution": 120000 }
     },
     "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
     "faims": { "cv_values": [-50], "max_cv_skip": 0 },
@@ -331,7 +331,7 @@ namespace
     },
     "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
     "tagging": {
-      "follow_up_scan": { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "resolution": 120000 }
+      "follow_up_scan": { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "reaction_time": 10.0, "resolution": 120000 }
     },
     "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
     "faims": { "cv_values": [-50], "max_cv_skip": 0 },
@@ -355,6 +355,90 @@ namespace
     }
   })";
 
+  // Follow-up parameter-ownership configs. The MS2 and the follow_up_scan differ in EVERY
+  // activation-coupled parameter on purpose: if the follow-up inherited them from the triggering
+  // MS2 (the defect), each assertion below would read the MS2's value instead of the follow-up's.
+  // A config where the two agree would make the test vacuous.
+  const char* followup_owns_params_conditional_json = R"({
+    "deconvolution": {
+      "score_threshold": 0.0, "tqscore_threshold": 0.9,
+      "min_charge": 4, "max_charge": 50,
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
+    },
+    "precursor_selection": {
+      "RT_window": 180, "target_mode": 0,
+      "AllCharges": false,
+      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    },
+    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "tagging": {
+      "follow_up_scan": { "analyzer": "Orbitrap", "activation": "EThcD", "collision_energy": 7,
+                          "reaction_time": 5.0, "reagent_max_it": 111.0, "reagent_agc_target": 222,
+                          "resolution": 120000 }
+    },
+    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
+    "faims": { "cv_values": [-50], "max_cv_skip": 0 },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
+      "ms2": [
+        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000,
+          "reaction_time": 10.0, "reagent_max_it": 200.0, "reagent_agc_target": 700000 }
+      ]
+    },
+    "scheduling": {
+      "cycle_time": { "enabled": false, "value_ms": 60000 },
+      "scan_timeout": { "enabled": false, "value_ms": 30000 },
+      "agc_interval_seconds": 9999999
+    },
+    "conditional_ms2": true,
+    "files": { "target_logs": [], "fasta": "../../FlashIDA/test-data/configs/test_fasta.fasta", "inclusion_list": "", "ptm_list": "" },
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_targets": 3 },
+      "ms2": { "selection": "none" },
+      "ms3": { "selection": "none" }
+    }
+  })";
+
+  const char* followup_owns_params_quant_json = R"({
+    "deconvolution": {
+      "score_threshold": 0.0, "tqscore_threshold": 0.9,
+      "min_charge": 4, "max_charge": 50,
+      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
+    },
+    "precursor_selection": {
+      "RT_window": 180, "target_mode": 0,
+      "AllCharges": false,
+      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    },
+    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "tagging": {},
+    "quantification": {
+      "enabled": true, "reporter_mz_tol": 0.01, "fold_change_threshold": 0.01,
+      "follow_up_scan": { "analyzer": "Orbitrap", "activation": "EThcD", "collision_energy": 7,
+                          "reaction_time": 5.0, "reagent_max_it": 111.0, "reagent_agc_target": 222,
+                          "resolution": 120000 }
+    },
+    "faims": { "cv_values": [-50], "max_cv_skip": 0 },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
+      "ms2": [
+        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000,
+          "reaction_time": 10.0, "reagent_max_it": 200.0, "reagent_agc_target": 700000 }
+      ]
+    },
+    "scheduling": {
+      "cycle_time": { "enabled": false, "value_ms": 60000 },
+      "scan_timeout": { "enabled": false, "value_ms": 30000 },
+      "agc_interval_seconds": 9999999
+    },
+    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_targets": 3 },
+      "ms2": { "selection": "none" },
+      "ms3": { "selection": "none" }
+    }
+  })";
+
   // Config with quantification + low fold_change_threshold (any reporter ratio triggers)
   const char* quant_sensitive_json = R"({
     "deconvolution": {
@@ -370,7 +454,7 @@ namespace
     "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
     "quantification": {
       "enabled": true, "reporter_mz_tol": 0.002, "fold_change_threshold": 0.01,
-      "follow_up_scan": { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "resolution": 120000 }
+      "follow_up_scan": { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "reaction_time": 10.0, "resolution": 120000 }
     },
     "faims": { "cv_values": [-50], "max_cv_skip": 0 },
     "ms_settings": {
@@ -446,7 +530,7 @@ namespace
       "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
       "ms2": [
         { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
-        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "resolution": 120000 }
+        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "reaction_time": 10.0, "resolution": 120000 }
       ]
     },
     "scheduling": {
@@ -562,7 +646,7 @@ namespace
       if (p != std::string::npos)
         j.replace(p, hcd.size(),
                   hcd + R"(,
-        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "resolution": 120000 })");
+        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "reaction_time": 10.0, "resolution": 120000 })");
     }
     {
       const std::string files_key = "\"files\":";
@@ -1177,6 +1261,99 @@ START_SECTION(processScan_quant_followup)
   TEST_STRING_EQUAL(std::string(out.stages[0].activation_type), "ETD")
   TEST_EQUAL(out.msn_level, 2)
   TEST_EQUAL(out.priority, 0)  // Follow-up priority
+
+  delete ida;
+}
+END_SECTION
+
+// A conditional ('C') follow-up takes its fragmentation parameters from tagging.follow_up_scan,
+// never from the MS2 that triggered it. Regression guard for the defect where buildFollowUp
+// overrode the activation but left the activation-coupled parameters inherited, emitting a scan
+// whose activation and reaction settings came from different configs.
+START_SECTION(processScan_conditional_followup_owns_its_scan_parameters)
+{
+  {
+    std::ifstream fasta_check(fasta_path);
+    ABORT_IF(! fasta_check.good())
+  }
+  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  auto ms2_scans = loadTsvScans(ms2_tsv_path);
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(followup_owns_params_conditional_json));
+
+  AcqResult acq = runInterleaved(ida, ms1_scans, {});
+  TEST_EQUAL(acq.ms2_cmds.size() > 0, true)
+  ABORT_IF(acq.ms2_cmds.empty())
+
+  // The triggering MS2 carries the OTHER set of values -- assert that first, so a failure
+  // distinguishes "the follow-up inherited" from "the MS2 itself was misconfigured".
+  const ScanCommand& ms2_cmd = acq.ms2_cmds[0];
+  TEST_STRING_EQUAL(std::string(ms2_cmd.stages[0].activation_type), "HCD")
+  TEST_REAL_SIMILAR(ms2_cmd.stages[0].reaction_time, 10.0)
+
+  const auto& ms2 = ms2_scans[0];
+  int ms2_result = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
+                                    (int)ms2.mzs.size(), ms2.rt,
+                                    2, ms2_cmd.scan_description);
+  TEST_EQUAL(ms2_result > 0, true)
+  ABORT_IF(ms2_result <= 0)
+
+  ScanCommand out{};
+  int r = ida->getNextScanCommand(out);
+  TEST_EQUAL(r, 1)
+  TEST_EQUAL(out.priority, 0)
+  TEST_STRING_EQUAL(std::string(out.stages[0].activation_type), "EThcD")
+
+  // Every one of these differs from the triggering MS2's value, so each fails under the defect.
+  TEST_REAL_SIMILAR(out.stages[0].reaction_time, 5.0)        // MS2 had 10.0
+  TEST_REAL_SIMILAR(out.stages[0].reagent_max_it, 111.0)     // MS2 had 200.0
+  TEST_EQUAL(out.stages[0].reagent_agc_target, 222)          // MS2 had 700000
+  TEST_REAL_SIMILAR(out.stages[0].collision_energy, 7.0)     // MS2 had 29
+  TEST_EQUAL(out.hcd_energy, 7)                              // MS2 had 29
+
+  // Precursor context still comes from the triggering MS2 -- a follow-up of THAT precursor.
+  TEST_REAL_SIMILAR(out.mono_mass, ms2_cmd.mono_mass)
+  TEST_EQUAL(out.stages[0].charge_state, ms2_cmd.stages[0].charge_state)
+  TEST_REAL_SIMILAR(out.faims_cv, ms2_cmd.faims_cv)
+
+  delete ida;
+}
+END_SECTION
+
+// Same contract on the quantification ('F') path: the two follow-up kinds share buildFollowUp but
+// have independent config blocks, so both must be pinned.
+START_SECTION(processScan_quant_followup_owns_its_scan_parameters)
+{
+  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  auto ms2_tmt_scans = loadTsvScans(ms2_tmt_tsv_path);
+  ABORT_IF(ms1_scans.empty() || ms2_tmt_scans.empty())
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(followup_owns_params_quant_json));
+
+  AcqResult acq = runInterleaved(ida, ms1_scans, {});
+  TEST_EQUAL(acq.ms2_cmds.size() > 0, true)
+  ABORT_IF(acq.ms2_cmds.empty())
+
+  const ScanCommand& ms2_cmd = acq.ms2_cmds[0];
+  TEST_STRING_EQUAL(std::string(ms2_cmd.stages[0].activation_type), "HCD")
+  TEST_REAL_SIMILAR(ms2_cmd.stages[0].reaction_time, 10.0)
+
+  const auto& ms2 = ms2_tmt_scans[0];
+  int ms2_result = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
+                                    (int)ms2.mzs.size(), ms2.rt,
+                                    2, ms2_cmd.scan_description);
+  TEST_EQUAL(ms2_result > 0, true)
+  ABORT_IF(ms2_result <= 0)
+
+  ScanCommand out{};
+  int r = ida->getNextScanCommand(out);
+  TEST_EQUAL(r, 1)
+  TEST_EQUAL(out.priority, 0)
+  TEST_STRING_EQUAL(std::string(out.stages[0].activation_type), "EThcD")
+
+  TEST_REAL_SIMILAR(out.stages[0].reaction_time, 5.0)        // MS2 had 10.0
+  TEST_REAL_SIMILAR(out.stages[0].reagent_max_it, 111.0)     // MS2 had 200.0
+  TEST_EQUAL(out.stages[0].reagent_agc_target, 222)          // MS2 had 700000
+  TEST_EQUAL(out.hcd_energy, 7)                              // MS2 had 29
 
   delete ida;
 }

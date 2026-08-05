@@ -84,10 +84,46 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
              j["flashtnt"]["fixed_mod"][0].get<std::string>())
 
   // --- tagging.follow_up_scan ---
-  TEST_EQUAL(cfg.targeting().tagging_follow_up_scan.analyzer, j["tagging"]["follow_up_scan"]["analyzer"].get<std::string>())
-  TEST_EQUAL(cfg.targeting().tagging_follow_up_scan.activation, j["tagging"]["follow_up_scan"]["activation"].get<std::string>())
-  TEST_EQUAL(cfg.targeting().tagging_follow_up_scan.collision_energy, j["tagging"]["follow_up_scan"]["collision_energy"].get<int>())
-  TEST_EQUAL(cfg.targeting().tagging_follow_up_scan.resolution, j["tagging"]["follow_up_scan"]["resolution"].get<int>())
+  // EVERY key, not a subset. This block previously asserted only the 4 keys Config happened to
+  // parse, so the 9 it silently discarded were invisible here -- which is how a follow_up_scan
+  // became unable to carry its own reaction_time. A follow_up_scan is a full scan config
+  // (ADR-0009), so every key it declares must bind.
+  {
+    const auto& fus = cfg.targeting().tagging_follow_up_scan;
+    const auto& jf = j["tagging"]["follow_up_scan"];
+    TEST_EQUAL(fus.analyzer, jf["analyzer"].get<std::string>())
+    TEST_EQUAL(fus.activation, jf["activation"].get<std::string>())
+    TEST_EQUAL(fus.collision_energy, jf["collision_energy"].get<int>())
+    TEST_EQUAL(fus.resolution, jf["resolution"].get<int>())
+    TEST_EQUAL(fus.agc_target, jf["agc_target"].get<int>())
+    TEST_REAL_SIMILAR(fus.max_it, jf["max_it"].get<double>())
+    TEST_REAL_SIMILAR(fus.first_mass, jf["first_mass"].get<double>())
+    TEST_REAL_SIMILAR(fus.last_mass, jf["last_mass"].get<double>())
+    TEST_EQUAL(fus.microscans, jf["microscans"].get<int>())
+    TEST_EQUAL(fus.data_type, jf["data_type"].get<std::string>())
+    TEST_REAL_SIMILAR(fus.reaction_time, jf["reaction_time"].get<double>())
+    TEST_REAL_SIMILAR(fus.reagent_max_it, jf["reagent_max_it"].get<double>())
+    TEST_EQUAL(fus.reagent_agc_target, jf["reagent_agc_target"].get<int>())
+  }
+
+  // --- quantification.follow_up_scan (previously asserted NOWHERE) ---
+  {
+    const auto& fus = cfg.quantification().follow_up_scan;
+    const auto& jf = j["quantification"]["follow_up_scan"];
+    TEST_EQUAL(fus.analyzer, jf["analyzer"].get<std::string>())
+    TEST_EQUAL(fus.activation, jf["activation"].get<std::string>())
+    TEST_EQUAL(fus.collision_energy, jf["collision_energy"].get<int>())
+    TEST_EQUAL(fus.resolution, jf["resolution"].get<int>())
+    TEST_EQUAL(fus.agc_target, jf["agc_target"].get<int>())
+    TEST_REAL_SIMILAR(fus.max_it, jf["max_it"].get<double>())
+    TEST_REAL_SIMILAR(fus.first_mass, jf["first_mass"].get<double>())
+    TEST_REAL_SIMILAR(fus.last_mass, jf["last_mass"].get<double>())
+    TEST_EQUAL(fus.microscans, jf["microscans"].get<int>())
+    TEST_EQUAL(fus.data_type, jf["data_type"].get<std::string>())
+    TEST_REAL_SIMILAR(fus.reaction_time, jf["reaction_time"].get<double>())
+    TEST_REAL_SIMILAR(fus.reagent_max_it, jf["reagent_max_it"].get<double>())
+    TEST_EQUAL(fus.reagent_agc_target, jf["reagent_agc_target"].get<int>())
+  }
 
   // --- conditional_ms2 ---
   TEST_EQUAL(cfg.targeting().conditional_ms2_enabled, j["conditional_ms2"].get<bool>())
