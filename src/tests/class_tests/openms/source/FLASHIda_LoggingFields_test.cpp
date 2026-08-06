@@ -388,6 +388,64 @@ START_SECTION(commands_ms3_two_stage)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
+// §C2b -- scan_commands.tsv : hcd_energy is a faithful mirror of the stages' collision energies
+/////////////////////////////////////////////////////////////
+START_SECTION(commands_hcd_energy_matches_stage_ce)
+{
+  auto ms1 = loadTsvScans(CYTC_MS1);
+  auto ms2 = loadTsvScans(CYTC_MS2);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  std::string cmd_f = "lf_c2b_commands.tsv";
+  std::remove(cmd_f.c_str());
+  std::string json = buildJsonWithRuntime("", cmd_f, "", true);
+  FLASHIda ida(const_cast<char*>(json.c_str()));
+  auto cycle = runFullCycle(&ida, ms1, ms2);
+  TEST_TRUE(cycle.ms3_cmds.size() > 0)  // MS3 must fire, else this section asserts nothing
+
+  auto t = TSVFile::parse(cmd_f);
+  int lvl = t.colIndex("ms_level");
+  ABORT_IF(lvl < 0)
+
+  // hcd_energy is a LOG-ONLY mirror of the stages' collision energies, now derived in
+  // ScanCommandQueue::push rather than assigned by each builder. It went stale on the MS3 path:
+  // buildMS3 refreshed stages[0].collision_energy from the tracker's per-ion stage0_params but
+  // kept hcd_energy from the MS2 context, so 522 exploration-MS3 rows logged an energy the
+  // instrument never used (e.g. collision_energy "40;35" beside hcd_energy "30;35").
+  //
+  // This is the structural half of the guard -- the token-for-token invariant, checked for every
+  // command with stages, independent of which values the data happens to produce. The C# suite
+  // owns the exact-value side by comparing against the built instrument request.
+  bool mirror_ok = true, checked_ms3 = false, checked_msn = false;
+  for (const auto& row : t.rows)
+  {
+    if (lvl >= (int)row.size()) continue;
+    const std::string& level = row[lvl];
+    if (level != "2" && level != "3") continue;   // MS1/AGC rows are stage-less placeholders
+
+    auto ce  = splitTokens(cell(t, row, "collision_energy"), ';');
+    auto hcd = splitTokens(cell(t, row, "hcd_energy"), ';');
+    const size_t want = (level == "3") ? 2 : 1;
+    if (ce.size() != want || hcd.size() != want) { mirror_ok = false; continue; }
+
+    checked_msn = true;
+    for (size_t i = 0; i < want; ++i)
+    {
+      // hcd_energy is int32, collision_energy is a double -- compare after rounding, matching
+      // both the engine's lround and ScanFactory's (int)Math.Round.
+      mirror_ok = mirror_ok && (std::llround(toD(hcd[i])) == std::llround(toD(ce[i])));
+    }
+    if (level == "3") checked_ms3 = true;
+  }
+  TEST_TRUE(checked_msn)   // fail-closed: at least one MSn row was compared
+  TEST_TRUE(checked_ms3)   // fail-closed: the two-stage path specifically was exercised
+  TEST_TRUE(mirror_ok)
+
+  std::remove(cmd_f.c_str());
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
 // §C3 -- scan_commands.tsv : MS1 / AGC stage-less rows
 /////////////////////////////////////////////////////////////
 START_SECTION(commands_ms1_agc_stageless)
