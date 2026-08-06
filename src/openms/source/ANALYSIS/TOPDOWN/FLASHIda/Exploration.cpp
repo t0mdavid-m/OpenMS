@@ -840,6 +840,13 @@ namespace OpenMS
       {
         const int frag_charge = std::abs(target.frag_charge);
         if (charge_floor > 0 && frag_charge < charge_floor) continue;
+        // A tracker match with no backing peak carries frag_mz/frag_charge 0 -- ProteoformTracker
+        // initialises matched_mz/matched_charge to 0 and deliberately keeps the observation when no
+        // peak is found ("never drop a matched fragment for lack of a peak"). Such a fragment is a
+        // real match but cannot be isolated, so it is not a dispatchable MS3 target. Skipping here
+        // costs no tracking id and writes no log row; the charge_floor guard above does not cover it
+        // because selection_strategy.ms2.min_charge defaults to 0, leaving that test inert.
+        if (target.frag_mz <= 0.0 || frag_charge <= 0) continue;
         const char ion_type = target.ion_type.empty() ? '\0' : target.ion_type[0];
 
         if (config_.hasExploration(next_level))
