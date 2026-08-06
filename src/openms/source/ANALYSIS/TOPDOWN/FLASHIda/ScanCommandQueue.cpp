@@ -150,6 +150,29 @@ namespace OpenMS
 
   // --- Command builders ---
 
+  /// Recompute the log-only energy mirrors from the stages that own the truth.
+  ///
+  /// hcd_energy / hcd_energy_s1 duplicate stages[0]/stages[1].collision_energy purely so the log
+  /// writers can emit them; nothing else in the engine reads them, and ScanFactory builds the
+  /// instrument request from stages[] alone. Because they are a duplicate, they can go stale --
+  /// buildMS3 refreshed stages[0].collision_energy from the tracker's per-ion stage0_params but
+  /// left the mirror pointing at the MS2 context's energy.
+  ///
+  /// This runs in the BUILDERS, not only in push(), and the distinction is load-bearing: two
+  /// independent readers hold copies of a command. push() takes its argument by value, so
+  /// normalising there reaches the queued copy (which scan_commands.tsv reads at dequeue) but not
+  /// the caller's copy -- and FLASHIda.cpp keeps exactly such a copy of every MS2 command to feed
+  /// writeIDALogEntry. Setting the mirror at construction precedes both readers, so no command
+  /// ever exists with a stale value.
+  ///
+  /// lround rather than a truncating cast mirrors ScanFactory's (int)Math.Round, so the logged
+  /// value equals the value actually sent to the instrument.
+  static void syncEnergyMirrors_(ScanCommand& cmd)
+  {
+    cmd.hcd_energy    = cmd.num_stages > 0 ? static_cast<int32_t>(std::lround(cmd.stages[0].collision_energy)) : 0;
+    cmd.hcd_energy_s1 = cmd.num_stages > 1 ? static_cast<int32_t>(std::lround(cmd.stages[1].collision_energy)) : 0;
+  }
+
   ScanCommand ScanCommandQueue::makeMS1() const
   {
     ScanCommand cmd{};
@@ -272,7 +295,7 @@ namespace OpenMS
     cmd.ppm_error = pg.getAvgPPMError();
     cmd.precursor_intensity = pg.getChargeIntensity(std::abs(charge));
     cmd.peakgroup_intensity = pg.getIntensity();
-    cmd.pad2 = 0;   // hcd_energy is derived from stages[0] in push()
+    cmd.pad2 = 0;   // hcd_energy is derived from stages[0] by syncEnergyMirrors_ below
 
     // Parent tracking ID
     if (parent_scan_id > 0)
@@ -289,6 +312,7 @@ namespace OpenMS
               << " mass=" << pg.getMonoMass()
               << std::endl;
 
+    syncEnergyMirrors_(cmd);
     return cmd;
   }
 
@@ -398,10 +422,11 @@ namespace OpenMS
     cmd.ppm_error            = ms2_ctx.ppm_error;            cmd.ppm_error_s1            = frag_scores.ppm_error;
     cmd.precursor_intensity  = ms2_ctx.precursor_intensity;  cmd.precursor_intensity_s1  = frag_scores.precursor_intensity;
     cmd.peakgroup_intensity  = ms2_ctx.peakgroup_intensity;  cmd.peakgroup_intensity_s1  = frag_scores.peakgroup_intensity;
-    // hcd_energy / hcd_energy_s1 are derived from stages[0]/stages[1] in push(). Copying
+    // hcd_energy / hcd_energy_s1 are derived from stages[0]/stages[1] below. Copying
     // ms2_ctx.hcd_energy here was the stale-mirror bug: the stage0_params override above
     // refreshes stages[0].collision_energy but left this pointing at the MS2's energy.
 
+    syncEnergyMirrors_(cmd);
     return cmd;
   }
 
@@ -440,7 +465,7 @@ namespace OpenMS
     cmd.data_type[sizeof(cmd.data_type) - 1] = '\0';
     std::strncpy(cmd.scan_rate, follow_up_config.scan_rate.c_str(), sizeof(cmd.scan_rate) - 1);
     cmd.scan_rate[sizeof(cmd.scan_rate) - 1] = '\0';
-    // hcd_energy is derived from stages[0] in push(); the ctx copy this started from no longer
+    // hcd_energy is derived from stages[0] by syncEnergyMirrors_ below; the ctx copy this started from no longer
     // leaks through, since stages[0].collision_energy below is the follow-up's own energy.
 
     cmd.stages[0].collision_energy = static_cast<double>(follow_up_config.collision_energy);
@@ -463,6 +488,7 @@ namespace OpenMS
               << " ms_level=2 type=followup_" << suffix
               << std::endl;
 
+    syncEnergyMirrors_(cmd);
     return cmd;
   }
 
@@ -472,19 +498,11 @@ namespace OpenMS
   {
     std::lock_guard<std::mutex> lock(queue_mutex_);
 
-    // hcd_energy / hcd_energy_s1 are LOG-ONLY mirrors of the stages' collision energies -- read
-    // only by IdaLogger (the ida.log summary and the scan_commands.tsv column), never by
-    // ScanFactory and never by an engine decision. Derived here, at the one gate every queued
-    // command passes, so no builder can leave them stale: buildMS3 refreshed
-    // stages[0].collision_energy from stage0_params but kept hcd_energy from the MS2 context,
-    // which made 522 exploration-MS3 rows log an energy the instrument never used.
-    // lround (not a truncating cast) mirrors ScanFactory's (int)Math.Round, so the logged value
-    // equals the value actually sent. The two differ only at exact .5 midpoints, which no
-    // integral collision energy in the config schema can reach.
-    // The two AGC log sites bypass push() via registerPending, but those commands carry
-    // num_stages == 0 and never set hcd_energy, so they log 0 here as they did before.
-    cmd.hcd_energy    = cmd.num_stages > 0 ? static_cast<int32_t>(std::lround(cmd.stages[0].collision_energy)) : 0;
-    cmd.hcd_energy_s1 = cmd.num_stages > 1 ? static_cast<int32_t>(std::lround(cmd.stages[1].collision_energy)) : 0;
+    // Backstop only -- the builders already did this at construction, which is what makes the
+    // value correct for every reader rather than just for the queue (see syncEnergyMirrors_).
+    // Same helper on the same input, so it cannot disagree with them; it exists so a future
+    // command that reaches the queue without going through a builder still holds the invariant.
+    syncEnergyMirrors_(cmd);
 
     cmd.enqueue_timestamp_ms = static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(
