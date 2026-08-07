@@ -338,9 +338,9 @@ START_SECTION(makeAGC_takes_source_region_from_config_but_not_speed)
   // ms1 asks for 4, and an AGC scan at 4 microscans is four times as long -- on a priority-0 scan
   // with a 1 ms max IT. Asserting 1 against a config that says 4 is what makes this non-vacuous.
   TEST_EQUAL(cmd.microscans, 1)
-  TEST_EQUAL(std::string(cmd.data_type), "Profile")
-  TEST_EQUAL(std::string(cmd.analyzer), "IonTrap")
-  TEST_EQUAL(std::string(cmd.scan_rate), "Turbo")
+  TEST_STRING_EQUAL(std::string(cmd.data_type), "Profile")
+  TEST_STRING_EQUAL(std::string(cmd.analyzer), "IonTrap")
+  TEST_STRING_EQUAL(std::string(cmd.scan_rate), "Turbo")
   TEST_EQUAL(cmd.agc_target, 30000)
   TEST_REAL_SIMILAR(cmd.max_it, 1.0)
   TEST_EQUAL(cmd.is_agc, 1)

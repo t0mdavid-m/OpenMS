@@ -265,12 +265,12 @@ START_SECTION(GeneratedReference_CarriesEveryScanKey)
     for (const auto& site : msn_sites)
     {
       // Reported as a key/bool pair so a failure names the missing key rather than just "0 != 1".
-      TEST_EQUAL(key + "=" + (site.contains(key) ? "present" : "MISSING"), key + "=present")
+      TEST_STRING_EQUAL(key + "=" + (site.contains(key) ? "present" : "MISSING"), key + "=present")
     }
     if (stage_carried.count(key) == 0)
     {
       const auto& ms1 = j["ms_settings"]["ms1"];
-      TEST_EQUAL("ms1." + key + "=" + (ms1.contains(key) ? "present" : "MISSING"),
+      TEST_STRING_EQUAL("ms1." + key + "=" + (ms1.contains(key) ? "present" : "MISSING"),
                  "ms1." + key + "=present")
     }
   }
@@ -280,8 +280,8 @@ START_SECTION(GeneratedReference_CarriesEveryScanKey)
   for (const auto& key : stage_carried)
   {
     const auto& ms1 = j["ms_settings"]["ms1"];
-    TEST_EQUAL("ms1." + key + "=" + (ms1.contains(key) ? "UNEXPECTED" : "absent"),
-               "ms1." + key + "=absent")
+    TEST_STRING_EQUAL("ms1." + key + "=" + (ms1.contains(key) ? "UNEXPECTED" : "absent"),
+                      "ms1." + key + "=absent")
   }
 }
 END_SECTION
