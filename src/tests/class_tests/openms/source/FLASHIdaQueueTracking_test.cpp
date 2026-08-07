@@ -96,6 +96,45 @@ namespace
     // const_cast needed because constructor takes char* (legacy strtok compatibility)
     return new FLASHIda(const_cast<char*>(minimal_json_config));
   }
+
+  // Used by the two builder sections at the end of this file. It lives here, at file scope, and
+  // not next to them: START_TEST expands to `int main(...) {` (ClassTest.h:453), so everything
+  // after it is inside a function body and a namespace there is ill-formed (C2870).
+  //
+  // ms1 carries a full source region and microscans 4; ms2 has TWO configs whose agc_target and
+  // max_it deliberately differ, which is what makes the buildMS2 section non-vacuous.
+  const char* scan_sourcing_config = R"({
+    "deconvolution": { "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
+    "precursor_selection": { "RT_window": 180, "target_mode": 0 },
+    "tagging": {},
+    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "quantification": { "enabled": false },
+    "faims": { "cv_values": [], "max_cv_skip": 0 },
+    "ms_settings": {
+      "ms1": {
+        "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000,
+        "resolution": 120000, "agc_target": 800000, "max_it": 246,
+        "microscans": 4, "data_type": "Centroid",
+        "rf_lens": 60, "source_cid": 15, "source_cid_scaling": 0
+      },
+      "ms2": [
+        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29,
+          "resolution": 120000, "agc_target": 500000, "max_it": 150 },
+        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 35,
+          "resolution": 60000, "agc_target": 300000, "max_it": 100 }
+      ]
+    },
+    "scheduling": {
+      "cycle_time": { "enabled": false, "value_ms": 60000 },
+      "scan_timeout": { "enabled": false, "value_ms": 30000 }
+    },
+    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_targets": 1 },
+      "ms2": { "selection": "none" },
+      "ms3": { "selection": "none" }
+    }
+  })";
 }
 
 START_TEST(FLASHIdaQueueTracking, "$Id$")
@@ -277,44 +316,6 @@ END_SECTION
 /////////////////////////////////////////////////////////////
 // What the builders put into a command: config sourcing, not queueing.
 /////////////////////////////////////////////////////////////
-
-namespace
-{
-  // ms1 carries a full source region and microscans 4; ms2 has TWO configs whose agc_target and
-  // max_it deliberately differ, which is what makes the buildMS2 section below non-vacuous.
-  const char* scan_sourcing_config = R"({
-    "deconvolution": { "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
-    "precursor_selection": { "RT_window": 180, "target_mode": 0 },
-    "tagging": {},
-    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
-    "quantification": { "enabled": false },
-    "faims": { "cv_values": [], "max_cv_skip": 0 },
-    "ms_settings": {
-      "ms1": {
-        "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000,
-        "resolution": 120000, "agc_target": 800000, "max_it": 246,
-        "microscans": 4, "data_type": "Centroid",
-        "rf_lens": 60, "source_cid": 15, "source_cid_scaling": 0
-      },
-      "ms2": [
-        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29,
-          "resolution": 120000, "agc_target": 500000, "max_it": 150 },
-        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 35,
-          "resolution": 60000, "agc_target": 300000, "max_it": 100 }
-      ]
-    },
-    "scheduling": {
-      "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": false, "value_ms": 30000 }
-    },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 1 },
-      "ms2": { "selection": "none" },
-      "ms3": { "selection": "none" }
-    }
-  })";
-}
 
 // The AGC prescan is split by physics (ADR-0011): what decides WHICH ions arrive comes from the
 // survey's config, what decides HOW they are measured is fixed to the fast-prescan identity.
