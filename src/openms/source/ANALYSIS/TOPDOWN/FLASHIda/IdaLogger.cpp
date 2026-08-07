@@ -79,6 +79,14 @@ namespace OpenMS
                              << "ms3_proteoform\t"
                              << "scan_description\t"  // E6: raw descriptor, asserted == what's sent to instrument
                              << "faims_cv\t"
+                             // faims_cv alone is ambiguous: 0.0 is both "no FAIMS" and a
+                             // legitimate compensation voltage, and ADR-0012 made cv_values: [0]
+                             // -- FAIMS on at CV 0 -- expressible. Without this column a reader
+                             // cannot tell that run from a FAIMS-off one. Sits between faims_cv
+                             // and enqueue_ts deliberately: enqueue_ts must stay the trailing
+                             // column (FLASHIda_LoggingFields_test asserts headers.back()), and
+                             // every scan_commands column index pinned by that test is < 29.
+                             << "faims_enabled\t"
                              << "enqueue_ts\n";
         commands_tsv_stream_.flush();
       }
@@ -334,6 +342,7 @@ namespace OpenMS
                          << ms3_proteoform << "\t"        // wide MS3 fragment ProForma ("" for MS1/MS2/AGC)
                          << cmd.scan_description << "\t"  // E6: raw descriptor (tab/newline-free by construction)
                          << cmd.faims_cv << "\t"
+                         << cmd.faims_enabled << "\t"     // 0/1; disambiguates CV 0 from no FAIMS
                          << cmd.enqueue_timestamp_ms << "\n";
     commands_tsv_stream_.flush();
   }

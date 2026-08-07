@@ -192,7 +192,7 @@ START_SECTION(schema_column_counts)
   auto r = TSVFile::parse(res_f);
   auto i = TSVFile::parse(id_f);
 
-  TEST_EQUAL(c.headers.size(), 31)   // E6: + scan_description; P5: + precursor_id; + ms3_proteoform (wide MS3 fragment)
+  TEST_EQUAL(c.headers.size(), 32)   // E6: + scan_description; P5: + precursor_id; + ms3_proteoform (wide MS3 fragment); ADR-0012: + faims_enabled
   TEST_EQUAL(r.headers.size(), 29)   // E5: + ms_level; F5: + winner_tracking_id; slim-down: -5 id-payload cols (34->29)
   TEST_EQUAL(i.headers.size(), 32)   // I2: +6 iso/snr/intensity; P5: +precursor_id; +theoretical_masses/diff_da/diff_ppm; C2: +ms3_fragment_coverage; + tic_coverage; C: + flash_extender_score
 
@@ -205,6 +205,11 @@ START_SECTION(schema_column_counts)
   TEST_EQUAL(c.colIndex("precursor_id"), 4)                      // P5 moved forward (right after parent_tracking_id)
   TEST_EQUAL(c.colIndex("scan_description"), 28)
   TEST_EQUAL(c.colIndex("hcd_energy"), 18)
+  // ADR-0012. Deliberately inserted BETWEEN faims_cv and enqueue_ts rather than appended: every
+  // scan_commands index pinned above is < 29, and enqueue_ts must remain headers.back(), so this
+  // is the one position that adds a column without invalidating an existing pin.
+  TEST_EQUAL(c.colIndex("faims_cv"), 29)
+  TEST_EQUAL(c.colIndex("faims_enabled"), 30)
   TEST_EQUAL(r.headers.front(), std::string("tracking_id"))
   TEST_EQUAL(r.colIndex("ms_level"), 1)
   TEST_EQUAL(r.headers.back(), std::string("dequeue_ts"))        // reordered: dequeue_ts is now the trailing column
@@ -286,6 +291,79 @@ START_SECTION(commands_ms2_columns)
   TEST_TRUE(parent_ok) TEST_TRUE(ion_ok) TEST_TRUE(nosemi)
 
   std::remove(cmd_f.c_str());
+}
+END_SECTION
+
+// The faims_enabled column earns its recapture cost only if it says something faims_cv cannot.
+// It does, and the [0] case below is the proof: ADR-0012 made cv_values: [0] mean "FAIMS on at
+// compensation voltage 0", which logs faims_cv = 0 -- byte-identical to a run with no FAIMS at
+// all. Before this column the two were indistinguishable in every log stream.
+//
+// Drives the same acquisition three times, changing ONLY cv_values, so the column is the only
+// thing that can differ.
+START_SECTION(commands_faims_enabled_column)
+{
+  auto ms1 = loadTsvScans(CYTC_MS1);
+  auto ms2 = loadTsvScans(CYTC_MS2);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  auto driveWithCvs = [&](const std::string& cv_list, const std::string& file) {
+    std::remove(file.c_str());
+    std::string json = buildJsonWithRuntime("", file, "", true);
+    const std::string needle = "\"cv_values\": []";
+    const size_t p = json.find(needle);
+    if (p != std::string::npos) json.replace(p, needle.size(), "\"cv_values\": " + cv_list);
+    FLASHIda ida(const_cast<char*>(json.c_str()));
+    runFullCycle(&ida, ms1, ms2);
+    return TSVFile::parse(file);
+  };
+
+  // Empty cv_values -> FAIMS off.
+  {
+    auto t = driveWithCvs("[]", "lf_faims_off_commands.tsv");
+    ABORT_IF(t.rows.empty())
+    bool enabled_ok = true, cv_ok = true;
+    for (const auto& row : t.rows)
+    {
+      enabled_ok = enabled_ok && (cell(t, row, "faims_enabled") == "0");
+      cv_ok      = cv_ok      && (std::abs(toD(cell(t, row, "faims_cv"))) < 1e-9);
+    }
+    TEST_TRUE(enabled_ok)
+    TEST_TRUE(cv_ok)
+    std::remove("lf_faims_off_commands.tsv");
+  }
+
+  // One CV -> FAIMS on at a fixed voltage. Under the pre-ADR-0012 `size() > 1` rule this run
+  // reported no FAIMS and logged faims_cv = 0; both columns now say otherwise.
+  {
+    auto t = driveWithCvs("[-45]", "lf_faims_on_commands.tsv");
+    ABORT_IF(t.rows.empty())
+    bool enabled_ok = true, cv_ok = true;
+    for (const auto& row : t.rows)
+    {
+      enabled_ok = enabled_ok && (cell(t, row, "faims_enabled") == "1");
+      cv_ok      = cv_ok      && (std::abs(toD(cell(t, row, "faims_cv")) + 45.0) < 1e-9);
+    }
+    TEST_TRUE(enabled_ok)
+    TEST_TRUE(cv_ok)
+    std::remove("lf_faims_on_commands.tsv");
+  }
+
+  // THE case the column exists for: FAIMS on, at CV 0. faims_cv is 0 here, exactly as in the
+  // FAIMS-off run above -- so faims_enabled is the only column that tells them apart.
+  {
+    auto t = driveWithCvs("[0]", "lf_faims_cv0_commands.tsv");
+    ABORT_IF(t.rows.empty())
+    bool enabled_ok = true, cv_is_zero = true;
+    for (const auto& row : t.rows)
+    {
+      enabled_ok = enabled_ok && (cell(t, row, "faims_enabled") == "1");
+      cv_is_zero = cv_is_zero && (std::abs(toD(cell(t, row, "faims_cv"))) < 1e-9);
+    }
+    TEST_TRUE(enabled_ok)   // ISSUE(pre-ADR-0012): reported 0 -- indistinguishable from FAIMS off
+    TEST_TRUE(cv_is_zero)   // and faims_cv alone genuinely cannot disambiguate it
+    std::remove("lf_faims_cv0_commands.tsv");
+  }
 }
 END_SECTION
 
