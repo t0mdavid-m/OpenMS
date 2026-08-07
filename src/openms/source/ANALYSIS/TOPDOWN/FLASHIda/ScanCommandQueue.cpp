@@ -266,9 +266,14 @@ namespace OpenMS
     cmd.first_mass = scan_config.first_mass;
     cmd.last_mass = scan_config.last_mass;
 
-    // Scan properties from MS2 config
-    cmd.agc_target = config_.level(2).scans[0].agc_target;
-    cmd.max_it = config_.level(2).scans[0].max_it;
+    // Scan properties from the PASSED scan_config, like every other field in this function.
+    // These two used to read config_.level(2).scans[0] directly, which silently overrode the
+    // argument: FLASHIda.cpp loops over every level-2 scan config, so ms_settings.ms2[1..N]
+    // acquired at ms2[0]'s AGC target and max IT -- and an exploration override of either key
+    // was inert at level 2. buildMS3 and buildFollowUp never had this; buildMS2 was the outlier.
+    // A ScanConfig fully determines its scan's instrument parameters (ADR-0009).
+    cmd.agc_target = scan_config.agc_target;
+    cmd.max_it = scan_config.max_it;
 
     // New scan parameters from MS2 config
     cmd.microscans = scan_config.microscans;
