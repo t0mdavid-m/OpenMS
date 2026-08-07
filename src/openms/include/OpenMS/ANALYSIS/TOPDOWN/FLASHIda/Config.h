@@ -246,6 +246,18 @@ namespace OpenMS
     const RuntimeConfig& runtime() const { return runtime_; }
     const CharacterizationConfig& characterization() const { return characterization_; }
 
+    /**
+     * @brief The complete set of keys any scan object may carry (ms1, ms2[], ms3[], follow_up_scan).
+     *
+     * This is schema, not an implementation detail: it is what rejectUnknownKeys validates against
+     * and what parseScanConfig reads, and the loader's error message already points users at the
+     * generated FlashIDA/test-data/config_schema_reference.json. Exposed so the parity test can
+     * assert that the C#-generated reference carries every one of them -- the C# emit set and this
+     * list drifting apart is precisely how rf_lens/source_cid/source_cid_scaling/scan_rate became
+     * unreachable from method.json while C++ went on parsing them (ADR-0011).
+     */
+    static const std::set<std::string>& scanKeys();
+
     /// Validate configuration consistency; throws std::invalid_argument on conflict
     void validate() const;
 

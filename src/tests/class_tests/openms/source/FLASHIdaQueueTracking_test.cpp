@@ -9,6 +9,8 @@
 #include <OpenMS/CONCEPT/ClassTest.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 
 #include "FLASHIda_TestAccess.h"   // FLASHIdaTestAccess::push (private-state access)
 
@@ -50,7 +52,7 @@ namespace
       "fold_change_threshold": 1.4
     },
     "faims": {
-      "cv_values": [-50],
+      "cv_values": [],
       "max_cv_skip": 0
     },
     "ms_settings": {
@@ -217,7 +219,7 @@ START_SECTION(agc_scan_is_dequeued_first)
     },
     "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
     "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
-    "faims": { "cv_values": [-50], "max_cv_skip": 0 },
+    "faims": { "cv_values": [], "max_cv_skip": 0 },
     "ms_settings": {
       "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
       "ms2": [{ "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "reaction_time": 10.0, "resolution": 120000 }]
@@ -269,6 +271,103 @@ START_SECTION(timeout_cleanup_no_crash)
   TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
   TEST_EQUAL(cmd.is_agc, 1)
   delete ida;
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// What the builders put into a command: config sourcing, not queueing.
+/////////////////////////////////////////////////////////////
+
+namespace
+{
+  // ms1 carries a full source region and microscans 4; ms2 has TWO configs whose agc_target and
+  // max_it deliberately differ, which is what makes the buildMS2 section below non-vacuous.
+  const char* scan_sourcing_config = R"({
+    "deconvolution": { "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
+    "precursor_selection": { "RT_window": 180, "target_mode": 0 },
+    "tagging": {},
+    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "quantification": { "enabled": false },
+    "faims": { "cv_values": [], "max_cv_skip": 0 },
+    "ms_settings": {
+      "ms1": {
+        "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000,
+        "resolution": 120000, "agc_target": 800000, "max_it": 246,
+        "microscans": 4, "data_type": "Centroid",
+        "rf_lens": 60, "source_cid": 15, "source_cid_scaling": 0
+      },
+      "ms2": [
+        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29,
+          "resolution": 120000, "agc_target": 500000, "max_it": 150 },
+        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 35,
+          "resolution": 60000, "agc_target": 300000, "max_it": 100 }
+      ]
+    },
+    "scheduling": {
+      "cycle_time": { "enabled": false, "value_ms": 60000 },
+      "scan_timeout": { "enabled": false, "value_ms": 30000 }
+    },
+    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+    "selection_strategy": {
+      "ms1": { "selection": "qscore", "max_targets": 1 },
+      "ms2": { "selection": "none" },
+      "ms3": { "selection": "none" }
+    }
+  })";
+}
+
+// The AGC prescan is split by physics (ADR-0011): what decides WHICH ions arrive comes from the
+// survey's config, what decides HOW they are measured is fixed to the fast-prescan identity.
+//
+// makeAGC used to read only first_mass/last_mass, leaving the source region at 0. That was
+// invisible while ScanFactory guarded those fields with `> 0` -- the keys were simply omitted. Now
+// that the group is emitted unconditionally, a zero here would actively command RF lens 0 on the
+// scan whose ion-flux estimate gains every scan that follows it.
+START_SECTION(makeAGC_takes_source_region_from_config_but_not_speed)
+{
+  Config cfg{std::string(scan_sourcing_config)};
+  ScanCommandQueue queue(cfg);
+  ScanCommand cmd = queue.makeAGC();
+
+  // From the survey's config: the prescan must sample the same ion population it is calibrating.
+  TEST_REAL_SIMILAR(cmd.rf_lens, 60.0)
+  TEST_REAL_SIMILAR(cmd.source_cid, 15.0)
+  TEST_REAL_SIMILAR(cmd.source_cid_scaling, 0.0)
+
+  // Fixed to the fast-prescan identity, NOT copied from ms1. microscans is the one that bites:
+  // ms1 asks for 4, and an AGC scan at 4 microscans is four times as long -- on a priority-0 scan
+  // with a 1 ms max IT. Asserting 1 against a config that says 4 is what makes this non-vacuous.
+  TEST_EQUAL(cmd.microscans, 1)
+  TEST_EQUAL(std::string(cmd.data_type), "Profile")
+  TEST_EQUAL(std::string(cmd.analyzer), "IonTrap")
+  TEST_EQUAL(std::string(cmd.scan_rate), "Turbo")
+  TEST_EQUAL(cmd.agc_target, 30000)
+  TEST_REAL_SIMILAR(cmd.max_it, 1.0)
+  TEST_EQUAL(cmd.is_agc, 1)
+}
+END_SECTION
+
+// buildMS2 must use the ScanConfig it was handed (ADR-0009).
+//
+// It took a ScanConfig& and then ignored it for exactly two fields, reading level(2).scans[0]
+// directly. FLASHIda loops over every level-2 scan config, so ms_settings.ms2[1..N] acquired at
+// ms2[0]'s AGC target and max IT, and an exploration override of either key was inert at level 2.
+//
+// The section is written against scans[1] with values that differ from scans[0]; under the old
+// code it reports 500000/150 instead of 300000/100. Run against scans[0] it would pass either way.
+START_SECTION(buildMS2_uses_the_scan_config_it_was_given)
+{
+  Config cfg{std::string(scan_sourcing_config)};
+  ScanCommandQueue queue(cfg);
+
+  TEST_EQUAL(cfg.level(2).scans.size(), 2)   // guards the premise: two DIFFERENT configs exist
+
+  PeakGroup pg(10, 10, true);
+  ScanCommand cmd = queue.buildMS2(pg, 10, cfg.level(2).scans[1], 2, 0);
+
+  TEST_EQUAL(cmd.agc_target, 300000)          // ISSUE(pre-fix): 500000, i.e. scans[0]'s
+  TEST_REAL_SIMILAR(cmd.max_it, 100.0)        // ISSUE(pre-fix): 150.0, i.e. scans[0]'s
+  TEST_EQUAL(cmd.orbitrap_resolution, 60000)  // already correct; pins that the fix did not regress it
 }
 END_SECTION
 

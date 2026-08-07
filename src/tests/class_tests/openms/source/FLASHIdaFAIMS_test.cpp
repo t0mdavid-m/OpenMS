@@ -163,7 +163,10 @@ namespace
     }
   })";
 
-  // JSON config with no FAIMS (single CV = non-FAIMS mode)
+  // JSON config with no FAIMS. An EMPTY cv_values is the only way to say that (ADR-0012).
+  // This fixture used to carry [-50] and rely on faims_.enabled being `cv_values.size() > 1`,
+  // i.e. it expressed "no FAIMS" as "one CV, which is not enough to cycle". That conflation was
+  // the defect: a real fixed-CV FAIMS method was silently treated as no FAIMS at all.
   const char* non_faims_config = R"({
     "deconvolution": {
       "score_threshold": 0.0,
@@ -194,7 +197,7 @@ namespace
       "fold_change_threshold": 1.4
     },
     "faims": {
-      "cv_values": [-50],
+      "cv_values": [],
       "max_cv_skip": 0
     },
     "ms_settings": {
@@ -245,6 +248,19 @@ namespace
   FLASHIda* createNonFaims()
   {
     return new FLASHIda(const_cast<char*>(non_faims_config));
+  }
+
+  // non_faims_config with a different cv_values, so enablement is the ONLY variable. Building the
+  // string this way rather than hand-writing a config keeps every other key identical by
+  // construction -- an enablement test that also perturbed selection or tolerances would prove
+  // nothing about enablement.
+  std::string withCvValues(const std::string& cv_list)
+  {
+    std::string s(non_faims_config);
+    const std::string needle = "\"cv_values\": []";
+    const size_t p = s.find(needle);
+    if (p == std::string::npos) return s;   // fixture drifted; the section's TEST_EQUALs will catch it
+    return s.replace(p, needle.size(), "\"cv_values\": " + cv_list);
   }
 
   // N empty-peak MS1 surveys (no mzs/ints => deconvolution finds 0 precursors = the "low-precursor" case the
@@ -449,10 +465,72 @@ START_SECTION(cv_transition_ms1_before_ms2s)
 }
 END_SECTION
 
+// Enablement and cycling are two different questions (ADR-0012).
+//
+// faims_.enabled used to be `cv_values.size() > 1`, which answered "is there anything to cycle
+// between?" and then used that as the answer to "is FAIMS in use?". A fixed-CV method -- one CV,
+// perfectly ordinary -- therefore reported no FAIMS: faims_cv stayed 0, ScanFactory's magnitude
+// test failed, and the run silently acquired at whatever FAIMS state the instrument method held.
+START_SECTION(faims_enablement_and_cycling_are_separate)
+{
+  {
+    Config c(withCvValues("[]"));
+    TEST_EQUAL(c.faims().enabled, false)          // empty is the ONLY way to say "no FAIMS"
+    FAIMS f(c);
+    TEST_EQUAL(f.isEnabled(), false)
+    TEST_EQUAL(f.isCycling(), false)
+  }
+  {
+    Config c(withCvValues("[-45]"));
+    FAIMS f(c);
+    TEST_EQUAL(f.isEnabled(), true)               // ISSUE(pre-fix): was false -- the whole defect
+    TEST_EQUAL(f.isCycling(), false)              // one CV: nothing to rotate between
+    TEST_REAL_SIMILAR(f.currentCV(), -45.0)
+  }
+  {
+    // CV 0 is a legitimate compensation voltage, and is now distinguishable from "no FAIMS".
+    Config c(withCvValues("[0]"));
+    FAIMS f(c);
+    TEST_EQUAL(f.isEnabled(), true)
+    TEST_EQUAL(f.isCycling(), false)
+    TEST_REAL_SIMILAR(f.currentCV(), 0.0)
+  }
+  {
+    Config c(withCvValues("[-40, -50]"));
+    FAIMS f(c);
+    TEST_EQUAL(f.isEnabled(), true)
+    TEST_EQUAL(f.isCycling(), true)
+  }
+}
+END_SECTION
+
+// A fixed-CV run carries its CV but must not transition.
+//
+// The CV-transition MS1 push is guarded on isCycling(), not isEnabled(). Guarding it on
+// isEnabled() would make a single-CV run push a priority-0 MS1 after EVERY MS1 -- advanceToNextCV
+// would keep returning the one CV it has -- silently doubling the survey rate. This is the
+// regression the split exists to prevent, so it is asserted rather than assumed.
+START_SECTION(single_cv_is_enabled_but_never_transitions)
+{
+  std::string cfg = withCvValues("[-45]");
+  FLASHIda ida(const_cast<char*>(cfg.c_str()));
+  AcqResult r = runInterleaved(&ida, emptyMs1Surveys(3), std::vector<ScanData>{});
+
+  TEST_EQUAL(r.ms1_cmds.empty(), false)
+  for (const auto& c : r.ms1_cmds)
+  {
+    TEST_EQUAL(c.msn_level, 1)
+    TEST_NOT_EQUAL(c.priority, 0)              // no CV-transition MS1 was injected
+    TEST_REAL_SIMILAR(c.faims_cv, -45.0)       // ...but the configured CV still travels
+    TEST_EQUAL(c.faims_enabled, 1)             // ...and the instrument is told FAIMS is on
+  }
+}
+END_SECTION
+
 // P6-U06: Non-FAIMS mode — processScan does not push a CV-transition MS1
 START_SECTION(non_faims_no_cv_transition)
 {
-  FLASHIda* ida = createNonFaims();  // single CV => faims_enabled_=false
+  FLASHIda* ida = createNonFaims();  // empty cv_values => faims_.enabled false
 
   // Drive via the canonical interleaved harness (engine-id-echo). Feed empty-peak surveys (0 precursors) the same
   // way the FAIMS sections do; the difference under test is purely the engine response. With faims_enabled_=false,

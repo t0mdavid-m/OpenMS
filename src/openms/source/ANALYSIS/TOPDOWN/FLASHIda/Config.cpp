@@ -133,6 +133,11 @@ namespace OpenMS
     0.1                           // remaining_precursor_target
   };
 
+  const std::set<std::string>& Config::scanKeys()
+  {
+    return kScanKeys;
+  }
+
   void ScanConfig::applyOverrides(const std::unordered_map<std::string, std::string>& overrides)
   {
     for (const auto& [key, val] : overrides)
