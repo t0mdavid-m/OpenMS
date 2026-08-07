@@ -1273,7 +1273,7 @@ START_SECTION(exclusion_mode2_tqscore_suppresses_target_mass)
       "precursor_selection": { "RT_window": 180, "target_mode": )" << mode << R"(, "AllCharges": false, "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1 },
       "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
       "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
-      "faims": { "cv_values": [-50], "max_cv_skip": 0 },
+      "faims": { "cv_values": [], "max_cv_skip": 0 },
       "ms_settings": { "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 }, "ms2": [ { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 } ] },
       "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 }, "agc_interval_seconds": 999999 },
       "files": { "target_logs": [)" << target_log_json << R"(], "fasta": "", "inclusion_list": "", "ptm_list": "" },

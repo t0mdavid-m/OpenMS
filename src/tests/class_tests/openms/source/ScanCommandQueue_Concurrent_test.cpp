@@ -29,7 +29,7 @@ namespace
     "precursor_selection": { "RT_window": 180, "target_mode": 0 },
     "tagging": {},
     "quantification": { "enabled": false },
-    "faims": { "cv_values": [-50] },
+    "faims": { "cv_values": [] },
     "ms_settings": {
       "ms1": {
         "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000,

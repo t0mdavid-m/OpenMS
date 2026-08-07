@@ -154,7 +154,7 @@ namespace
     "precursor_selection": { "RT_window": 180, "target_mode": 0, "AllCharges": false, "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1 },
     "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
     "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
-    "faims": { "cv_values": [-50], "max_cv_skip": 0, "cv_precursor_threshold": 15 },
+    "faims": { "cv_values": [], "max_cv_skip": 0, "cv_precursor_threshold": 15 },
     "ms_settings": {
       "ms1": { "analyzer": "Orbitrap", "first_mass": 100, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
       "ms2": [ { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 } ],

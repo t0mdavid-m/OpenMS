@@ -98,7 +98,7 @@ namespace
       "fold_change_threshold": 1.4
     },
     "faims": {
-      "cv_values": [-50],
+      "cv_values": [],
       "max_cv_skip": 0,
       "cv_precursor_threshold": 15
     },
@@ -175,7 +175,7 @@ namespace
       "fold_change_threshold": 1.4
     },
     "faims": {
-      "cv_values": [-50],
+      "cv_values": [],
       "max_cv_skip": 0,
       "cv_precursor_threshold": 15
     },
@@ -261,7 +261,7 @@ namespace
       "fold_change_threshold": 1.4
     },
     "faims": {
-      "cv_values": [-50],
+      "cv_values": [],
       "max_cv_skip": 0,
       "cv_precursor_threshold": 15
     },
