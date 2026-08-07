@@ -216,6 +216,27 @@ namespace OpenMS
     cmd.first_mass = config_.level(1).scans[0].first_mass;
     cmd.last_mass = config_.level(1).scans[0].last_mass;
     cmd.max_it = 1;
+
+    // The AGC prescan is split by physics, not by "whatever makeMS1 copies" (ADR-0011).
+    //
+    // SOURCE-REGION comes from the survey's config: these are upstream of the analyzer and decide
+    // WHICH ions arrive, so a flux estimate taken through a different source configuration does not
+    // describe the scans it is used to gain-correct. ScanFactory now emits this group
+    // unconditionally, so leaving them at 0 here would actively command RF lens 0 rather than
+    // omitting the key -- this is load-bearing, not cosmetic. Pre-port set exactly these three on
+    // the AGC scan from MS1 (Flash.cs@cd0d086:282-284).
+    cmd.rf_lens = config_.level(1).scans[0].rf_lens;
+    cmd.source_cid = config_.level(1).scans[0].source_cid;
+    cmd.source_cid_scaling = config_.level(1).scans[0].source_cid_scaling;
+
+    // ANALYZER-SIDE stays hardcoded, joining agc_target/max_it/analyzer/scan_rate above: this is a
+    // fast ion-trap prescan, not a small copy of the Orbitrap survey. microscans in particular must
+    // NOT come from config -- the shipped method.json sets ms1.microscans = 4, which would quadruple
+    // a priority-0 scan with a 1 ms max IT. Both values are pre-port (Flash.cs@cd0d086:279,285).
+    cmd.microscans = 1;
+    std::strncpy(cmd.data_type, "Profile", sizeof(cmd.data_type) - 1);
+    cmd.data_type[sizeof(cmd.data_type) - 1] = '\0';
+
     std::strncpy(cmd.scan_rate, "Turbo", sizeof(cmd.scan_rate) - 1);
     std::strncpy(cmd.analyzer, "IonTrap", sizeof(cmd.analyzer) - 1);
     cmd.analyzer[sizeof(cmd.analyzer) - 1] = '\0';
