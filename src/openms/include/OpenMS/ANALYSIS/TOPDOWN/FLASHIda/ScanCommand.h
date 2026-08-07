@@ -61,6 +61,8 @@ namespace OpenMS
   /// Blittable struct representing a complete scan command for the instrument.
   /// Layout: 1248 (existing) + 8 (dequeue_timestamp_ms) + 8 (microscans+pad3) + 24 (rf_lens+source_cid+source_cid_scaling)
   ///       + 64 (data_type+scan_rate) + 4 (parent_scan_id) + 84 (stage-1 scoring) + 608 (reserved) = 2048.
+  /// The trailing 608 covers window_snr (8 @1440) + faims_enabled (4 @1448) + reserved_ (596 @1452):
+  /// new fields are carved OUT of reserved_ so the 2048 total and every existing offset stay fixed.
   struct OPENMS_DLLAPI ScanCommand
   {
     int32_t scan_id;             ///< Unique tracking ID (encoded as 3-char string in scan description)
@@ -121,7 +123,16 @@ namespace OpenMS
     double  window_snr = -1.0;     ///< @1440 isolation-window SNR (FragmentAnalysis::windowSnr) of THIS command's
                                    ///<       commanded window; -1.0 = not computed. Set at build time and travels
                                    ///<       with the command (replaces the former ScanCommandQueue window-SNR map).
-    char reserved_[600];           ///< Reserved for future fields (consume from here, never change total size)
+
+    /// @1448 1 if FAIMS is in use for this run, 0 otherwise. Carved from reserved_ (ADR-0012).
+    ///
+    /// faims_cv alone cannot express this: 0.0 is both "no FAIMS" and a legitimate compensation
+    /// voltage, so ScanFactory had to infer intent from |cv| > 0.001 and could therefore only ever
+    /// say "FAIMS on" -- never "FAIMS off", which is an ACTIVE instruction to the instrument, not
+    /// the absence of one. int32_t rather than bool to match is_agc and avoid P/Invoke marshalling
+    /// ambiguity.
+    int32_t faims_enabled;
+    char reserved_[596];           ///< Reserved for future fields (consume from here, never change total size)
   };
   static_assert(sizeof(ScanCommand) == 2048, "ScanCommand must be 2048 bytes for P/Invoke");
 

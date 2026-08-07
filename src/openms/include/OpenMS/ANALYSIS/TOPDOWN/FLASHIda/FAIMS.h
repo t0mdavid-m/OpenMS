@@ -55,8 +55,24 @@ namespace OpenMS
     /// Construct from Config; initialises all per-CV state vectors.
     explicit FAIMS(const Config& config);
 
-    /// Returns true if FAIMS mode is active (2+ CVs configured).
+    /**
+     * @brief Returns true if FAIMS is in use at all, i.e. any CV is configured.
+     *
+     * Distinct from isCycling(): a single configured CV is a perfectly ordinary FAIMS run at a
+     * fixed compensation voltage. This used to be `cv_values.size() > 1`, which conflated "FAIMS
+     * is off" with "there is nothing to cycle between", so a single-CV method silently acquired
+     * with FAIMS at whatever the instrument method carried. See ADR-0012.
+     */
     bool isEnabled() const;
+
+    /**
+     * @brief Returns true if there is more than one CV to rotate between.
+     *
+     * Guards the CV-transition MS1 push and the adaptive skip policy. Both are meaningless with a
+     * single CV, and pushing a CV-transition MS1 after every MS1 when the "next" CV is always the
+     * current one would double the survey rate.
+     */
+    bool isCycling() const;
 
     /// Returns the CV value at the current cycling index.
     double currentCV() const;

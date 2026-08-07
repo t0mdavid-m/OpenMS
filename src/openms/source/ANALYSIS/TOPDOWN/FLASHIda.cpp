@@ -237,8 +237,12 @@ FLASHIda::FLASHIda(char* arg) :
       results_row.child_ids       = child_ids;
       results_row.deconv_spectrum = &selection_.deconvolvedMS1();
 
-      // FAIMS CV cycling: update skip policy, advance to next CV, push MS1
-      if (faims_.isEnabled())
+      // FAIMS CV cycling: update skip policy, advance to next CV, push MS1.
+      // isCycling(), not isEnabled(): with a single configured CV the "next" CV is always the
+      // current one, so this would push a redundant priority-0 MS1 after every MS1 and double the
+      // survey rate for no gain. A fixed-CV run still gets its CV -- it travels on every command
+      // via current_faims_cv_, it just never transitions (ADR-0012).
+      if (faims_.isCycling())
       {
         double current_cv = faims_.currentCV();
         faims_.updateSkip(current_cv, commands_pushed);

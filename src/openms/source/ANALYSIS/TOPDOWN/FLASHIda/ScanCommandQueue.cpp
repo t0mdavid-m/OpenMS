@@ -189,6 +189,7 @@ namespace OpenMS
     cmd.rf_lens = config_.level(1).scans[0].rf_lens;
     cmd.source_cid = config_.level(1).scans[0].source_cid;
     cmd.source_cid_scaling = config_.level(1).scans[0].source_cid_scaling;
+    cmd.faims_enabled = config_.faims().enabled ? 1 : 0;
     std::strncpy(cmd.data_type, config_.level(1).scans[0].data_type.c_str(), sizeof(cmd.data_type) - 1);
     cmd.data_type[sizeof(cmd.data_type) - 1] = '\0';
     std::strncpy(cmd.scan_rate, config_.level(1).scans[0].scan_rate.c_str(), sizeof(cmd.scan_rate) - 1);
@@ -228,6 +229,7 @@ namespace OpenMS
     cmd.rf_lens = config_.level(1).scans[0].rf_lens;
     cmd.source_cid = config_.level(1).scans[0].source_cid;
     cmd.source_cid_scaling = config_.level(1).scans[0].source_cid_scaling;
+    cmd.faims_enabled = config_.faims().enabled ? 1 : 0;
 
     // ANALYZER-SIDE stays hardcoded, joining agc_target/max_it/analyzer/scan_rate above: this is a
     // fast ion-trap prescan, not a small copy of the Orbitrap survey. microscans in particular must
@@ -280,6 +282,7 @@ namespace OpenMS
     cmd.rf_lens = scan_config.rf_lens;
     cmd.source_cid = scan_config.source_cid;
     cmd.source_cid_scaling = scan_config.source_cid_scaling;
+    cmd.faims_enabled = config_.faims().enabled ? 1 : 0;
     std::strncpy(cmd.data_type, scan_config.data_type.c_str(), sizeof(cmd.data_type) - 1);
     cmd.data_type[sizeof(cmd.data_type) - 1] = '\0';
     std::strncpy(cmd.scan_rate, scan_config.scan_rate.c_str(), sizeof(cmd.scan_rate) - 1);
@@ -379,6 +382,7 @@ namespace OpenMS
     cmd.rf_lens = ms3_config.rf_lens;
     cmd.source_cid = ms3_config.source_cid;
     cmd.source_cid_scaling = ms3_config.source_cid_scaling;
+    cmd.faims_enabled = config_.faims().enabled ? 1 : 0;
     std::strncpy(cmd.data_type, ms3_config.data_type.c_str(), sizeof(cmd.data_type) - 1);
     cmd.data_type[sizeof(cmd.data_type) - 1] = '\0';
     std::strncpy(cmd.scan_rate, ms3_config.scan_rate.c_str(), sizeof(cmd.scan_rate) - 1);
@@ -487,6 +491,7 @@ namespace OpenMS
     cmd.rf_lens = follow_up_config.rf_lens;
     cmd.source_cid = follow_up_config.source_cid;
     cmd.source_cid_scaling = follow_up_config.source_cid_scaling;
+    cmd.faims_enabled = config_.faims().enabled ? 1 : 0;
     std::strncpy(cmd.data_type, follow_up_config.data_type.c_str(), sizeof(cmd.data_type) - 1);
     cmd.data_type[sizeof(cmd.data_type) - 1] = '\0';
     std::strncpy(cmd.scan_rate, follow_up_config.scan_rate.c_str(), sizeof(cmd.scan_rate) - 1);

@@ -60,6 +60,11 @@ namespace OpenMS
     return enabled_;
   }
 
+  bool FAIMS::isCycling() const
+  {
+    return enabled_ && cv_values_.size() > 1;
+  }
+
   double FAIMS::currentCV() const
   {
     return cv_values_[current_cv_index_];
@@ -72,7 +77,9 @@ namespace OpenMS
 
   void FAIMS::updateSkip(double cv, int precursor_count)
   {
-    if (!enabled_) return;
+    // isCycling, not isEnabled: with a single CV there is nothing to skip TO, and letting the skip
+    // amount climb would only make advanceToNextCV take its all-skipped fallback branch.
+    if (!isCycling()) return;
 
     // Find position for this CV value
     int pos = -1;

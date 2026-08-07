@@ -314,7 +314,12 @@ namespace OpenMS
     }
     faims_.max_cv_skip = faims_section.value("max_cv_skip", 0);
     faims_.precursor_threshold = faims_section.value("cv_precursor_threshold", 15);
-    faims_.enabled = (faims_.cv_values.size() > 1);
+    // An empty cv_values is the ONLY way to say "no FAIMS" (ADR-0012). This used to be
+    // `size() > 1`, which conflated "FAIMS is off" with "there is nothing to cycle between": a
+    // single-CV method -- an ordinary fixed-CV FAIMS run -- silently acquired at whatever CV the
+    // instrument method carried, and FLASHIda had no way to say so. Cycling is a separate question,
+    // answered by FAIMS::isCycling().
+    faims_.enabled = !faims_.cv_values.empty();
 
     // --- ms_settings: populate levels_[1] (MS1) and levels_[2] (MS2) scan configs ---
     auto ms_settings = config.value("ms_settings", json::object());

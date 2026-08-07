@@ -75,7 +75,10 @@ START_SECTION([EXTRA] ScanCommand and IsolationStage struct layout)
   TEST_EQUAL(offsetof(ScanCommand, precursor_intensity_s1), 1424)
   TEST_EQUAL(offsetof(ScanCommand, peakgroup_intensity_s1), 1432)
   TEST_EQUAL(offsetof(ScanCommand, window_snr), 1440)
-  TEST_EQUAL(offsetof(ScanCommand, reserved_), 1448)
+  // Carved out of reserved_, which moved 1448 -> 1452 and shrank 600 -> 596. Every offset above is
+  // unchanged and sizeof stays 2048; that is the whole point of consuming from the tail.
+  TEST_EQUAL(offsetof(ScanCommand, faims_enabled), 1448)
+  TEST_EQUAL(offsetof(ScanCommand, reserved_), 1452)
 
   // IsolationStage field offsets
   TEST_EQUAL(offsetof(IsolationStage, precursor_mz), 0)
