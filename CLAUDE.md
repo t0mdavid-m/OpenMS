@@ -226,11 +226,19 @@ Traps worth internalizing before touching config code:
 - **`.value(key, default)` fallbacks are dead in production.** C# `ToCppJson` emits every key
   unconditionally, so the C++ literals never fire and several disagree with the effective C#
   defaults. Don't read a C++ default and believe it.
-- **`kScanKeys` is one lenient 17-key union validating every scan object**, but each parser reads a
-  different subset — so keys that *pass validation* are silently dropped. `ms_settings.ms1` ignores
-  activation/collision_energy/reaction_time/reagent_*; **both `follow_up_scan` blocks read only 8
-  of 17**, so an ETD conditional-MS2 or quant follow-up **cannot be given a `reaction_time` from
-  config** and always emits 0.
+- **`kScanKeys` is one lenient 17-key union validating every scan object, and one parser reads all
+  17 at all five sites.** Validation and parsing share a single source of truth (`Config.cpp:70-73`
+  records why: when the two lists drifted, nine keys passed validation and were then discarded —
+  notably `reaction_time` on a `follow_up_scan`, which made an ETD follow-up unconfigurable). The
+  set is exposed as `Config::scanKeys()`.
+  **The constraint has never been on this side — it is the C# emit set.** A key C# does not emit
+  cannot reach C++ regardless of what `kScanKeys` admits, which is how `rf_lens`, `source_cid`,
+  `source_cid_scaling` and `scan_rate` were unreachable from `method.json` for every MSn scan while
+  C++ parsed, copied and sent them (ADR-0011). `ConfigSchemaParity_test::GeneratedReference_CarriesEveryScanKey`
+  now compares the C#-generated reference against `scanKeys()` so the two cannot drift again.
+  Level asymmetry that remains and is deliberate: `ms_settings.ms1` omits the five stage-carried
+  keys (activation/collision_energy/reaction_time/reagent_*) because `makeMS1` emits
+  `num_stages = 0`, so they could never reach an MS1 scan.
 - **`ScanConfig.analyzer`'s default flips by parse site**: the in-class default is `"Orbitrap"`, but
   the `ms_settings.ms{1,2,3}` parsers override it with `""` (strncpy'd straight into the
   `ScanCommand`). Only the two `follow_up_scan` blocks keep `"Orbitrap"`.

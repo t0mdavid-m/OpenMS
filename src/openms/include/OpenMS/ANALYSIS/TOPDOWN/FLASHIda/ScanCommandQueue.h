@@ -57,7 +57,9 @@ namespace OpenMS
    *
    * Fully thread-safe: every public method that touches mutable state acquires queue_mutex_ internally.
    * Callers never need to hold an external lock. Building methods (buildMS2, buildMS3, etc.) produce
-   * ScanCommand values, register them in the pending scan map, and return by value.
+   * ScanCommand values and return them by value; they do NOT enqueue and do NOT register in the
+   * pending scan map. Registration happens in dequeue() and in explicit registerPending() calls,
+   * which FLASHIda.cpp — the sole enqueuer — makes itself on the drain path.
    *
    * Methods that do NOT acquire queue_mutex_ (safe without locking):
    * - makeMS1(), makeAGC(): const, only read config_ (immutable after construction)
