@@ -112,6 +112,60 @@ namespace
   {
     return act == "ETD" || act == "EThcD";
   }
+
+  // --- scan-name resolution -------------------------------------------------------------
+  // File-local, not members: none of these touches Config state, and their signatures need
+  // nlohmann::json -- which Config.h deliberately does not know about, since the public
+  // constructor takes raw JSON as a std::string precisely to keep the library an
+  // implementation detail. Declaring them in the header broke that and would not compile.
+  bool isValidScanName(const std::string& name)
+  {
+    if (name.empty() || name.size() > 32) return false;
+    if (name[0] < 'a' || name[0] > 'z') return false;
+    for (char ch : name)
+      if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_')) return false;
+    return true;
+  }
+
+  std::string knownScanNames(const std::map<std::string, OpenMS::ScanConfig>& additional_ms2)
+  {
+    if (additional_ms2.empty())
+      return "ms_settings.additional_ms2 defines no scan configs.";
+    std::string s = "Defined in ms_settings.additional_ms2:";
+    for (const auto& kv : additional_ms2) s += " " + kv.first;
+    return s + ".";
+  }
+
+  void resolveFollowUp_(const nlohmann::json& config, const std::string& section,
+                                const std::map<std::string, OpenMS::ScanConfig>& additional_ms2,
+                                OpenMS::ScanConfig& out, bool& has_follow_up, std::string& out_name)
+  {
+    const auto sec = config.value(section, nlohmann::json::object());
+    if (!sec.contains("follow_up_scan") || sec["follow_up_scan"].is_null())
+      return;
+
+    // A follow-up is just another MS2, so it names an additional_ms2 entry rather than repeating a
+    // 17-key block. An object here is someone carrying the old shape forward.
+    if (sec["follow_up_scan"].is_object())
+      throw std::invalid_argument(
+          "Config: " + section + ".follow_up_scan is no longer an inline scan object. It is now the "
+          "NAME of an ms_settings.additional_ms2 entry, e.g. \"" + section + "_follow_up\".");
+    if (!sec["follow_up_scan"].is_string())
+      throw std::invalid_argument("Config: " + section + ".follow_up_scan must be a scan-config name.");
+
+    const std::string name = sec["follow_up_scan"].get<std::string>();
+    if (name.empty()) return;
+
+    auto found = additional_ms2.find(name);
+    if (found == additional_ms2.end())
+      throw std::invalid_argument(
+          "Config: " + section + ".follow_up_scan references unknown MS2 scan config '" + name
+          + "'. " + knownScanNames(additional_ms2));
+
+    out = found->second;
+    has_follow_up = true;
+    out_name = name;
+  }
 }
 
 namespace OpenMS
@@ -638,55 +692,6 @@ namespace OpenMS
     targeting_.snr_threshold = 1.0;
 
     validate();
-  }
-
-  bool Config::isValidScanName(const std::string& name)
-  {
-    if (name.empty() || name.size() > 32) return false;
-    if (name[0] < 'a' || name[0] > 'z') return false;
-    for (char ch : name)
-      if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_')) return false;
-    return true;
-  }
-
-  std::string Config::knownScanNames(const std::map<std::string, ScanConfig>& additional_ms2)
-  {
-    if (additional_ms2.empty())
-      return "ms_settings.additional_ms2 defines no scan configs.";
-    std::string s = "Defined in ms_settings.additional_ms2:";
-    for (const auto& kv : additional_ms2) s += " " + kv.first;
-    return s + ".";
-  }
-
-  void Config::resolveFollowUp_(const nlohmann::json& config, const std::string& section,
-                                const std::map<std::string, ScanConfig>& additional_ms2,
-                                ScanConfig& out, bool& has_follow_up, std::string& out_name)
-  {
-    const auto sec = config.value(section, nlohmann::json::object());
-    if (!sec.contains("follow_up_scan") || sec["follow_up_scan"].is_null())
-      return;
-
-    // A follow-up is just another MS2, so it names an additional_ms2 entry rather than repeating a
-    // 17-key block. An object here is someone carrying the old shape forward.
-    if (sec["follow_up_scan"].is_object())
-      throw std::invalid_argument(
-          "Config: " + section + ".follow_up_scan is no longer an inline scan object. It is now the "
-          "NAME of an ms_settings.additional_ms2 entry, e.g. \"" + section + "_follow_up\".");
-    if (!sec["follow_up_scan"].is_string())
-      throw std::invalid_argument("Config: " + section + ".follow_up_scan must be a scan-config name.");
-
-    const std::string name = sec["follow_up_scan"].get<std::string>();
-    if (name.empty()) return;
-
-    auto found = additional_ms2.find(name);
-    if (found == additional_ms2.end())
-      throw std::invalid_argument(
-          "Config: " + section + ".follow_up_scan references unknown MS2 scan config '" + name
-          + "'. " + knownScanNames(additional_ms2));
-
-    out = found->second;
-    has_follow_up = true;
-    out_name = name;
   }
 
   void Config::applyCharacterizationMode_(const std::string& rank_by, int max_precursors,

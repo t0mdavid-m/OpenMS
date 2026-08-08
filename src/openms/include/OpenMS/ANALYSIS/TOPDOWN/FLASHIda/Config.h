@@ -330,21 +330,12 @@ namespace OpenMS
     void applyCharacterizationMode_(const std::string& rank_by, int max_precursors,
                                     int min_precursor_charge);
 
-    /// Resolve a `<section>.follow_up_scan` NAME against the additional_ms2 definitions, or throw
-    /// naming the section and listing what is defined. Leaves @p out untouched when the key is
-    /// absent, and reports presence through @p has_follow_up so the enablement checks in validate()
-    /// key off "a reference exists" rather than the old "activation string is non-empty" sentinel.
-    void resolveFollowUp_(const nlohmann::json& config, const std::string& section,
-                          const std::map<std::string, ScanConfig>& additional_ms2,
-                          ScanConfig& out, bool& has_follow_up, std::string& out_name);
-
-    /// Scan-config names are user-authored, so they are validated as identifiers rather than
-    /// against an allowlist: ^[a-z][a-z0-9_]{0,31}$, matching the schema's snake_case rule.
-    static bool isValidScanName(const std::string& name);
-
-    /// "Defined in ms_settings.additional_ms2: a, b, c." -- appended to dangling-reference errors so
-    /// the message shows the caller what they could have meant.
-    static std::string knownScanNames(const std::map<std::string, ScanConfig>& additional_ms2);
+    // Scan-name resolution (resolving a `<section>.follow_up_scan` reference, validating a
+    // user-authored name as an identifier, listing what is defined for an error message) lives in
+    // Config.cpp's anonymous namespace, NOT here. Those helpers need nlohmann::json in their
+    // signatures, and this header deliberately does not know that type exists -- the public
+    // constructor takes a `const std::string&` of raw JSON precisely so the JSON library stays an
+    // implementation detail. None of them touches member state, so none needs to be a member.
 
     std::map<int, MSLevelConfig> levels_;
     DeconvolutionConfig deconv_;
