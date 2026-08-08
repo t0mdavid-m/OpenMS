@@ -37,6 +37,21 @@ namespace
   const char* ca_sequence = "SHHWGYGKHNGPEHWHKDFPIANGERQSPVDIDTKAVVQDPALKPLALVYGEATSRRMVNNGHSFNVEYDDSQDKAVLKDGPLTGTYRLVQFHFHWGSSDDQGSEHTVDRKKYAAELHLVHWNTKYGDFGTAAQQPDGLAVVGVFLKVGDANPALQKVLDALDSIKTKGKSTDFPNFDPGSLLPNVLDYWTYPGSLTTPPLLESVTWIVLKEPISVSSQQMLKFRTLNFNAEGEPELLMLANWRPAQPLKNRQVRGFPK";
   const std::string ms2_ca_path = "../../FlashIDA/test-data/spectra/ms2_ca_hcd25_scan181.txt";
 
+  // Minimal loadable config; `mode` and `rank_by` are the two spots a removed metric could be typed.
+  std::string metricProbe(const std::string& mode, const std::string& rank_by)
+  {
+    return R"({
+      "deconvolution": { "tol": [10, 10, 10] },
+      "precursor_selection": { "rank_by": ")" + rank_by + R"(", "max_precursors": 3 },
+      "characterization": { "mode": ")" + mode + R"(", "protein_sequence": "PEPTIDER" },
+      "ms_settings": {
+        "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
+        "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 },
+        "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25 }
+      }
+    })";
+  }
+
   // Base JSON config with MS2 exploration enabled (mass_count, CE 20-40 step 5)
   // Uses cytochrome c sequence to match ms2_hcd_fragment.txt test spectrum
   const char* exploration_config = R"({
@@ -1675,24 +1690,6 @@ END_SECTION
 // Written as self-contained JSON rather than find/replace surgery on a shared template. The previous
 // versions searched for "selection": "none" -- a key the reshape deleted -- so all four died on
 // `invalid string position` instead of testing anything.
-namespace
-{
-  // Minimal loadable config; `mode` and `rank_by` are the two spots a removed metric could be typed.
-  std::string metricProbe(const std::string& mode, const std::string& rank_by)
-  {
-    return R"({
-      "deconvolution": { "tol": [10, 10, 10] },
-      "precursor_selection": { "rank_by": ")" + rank_by + R"(", "max_precursors": 3 },
-      "characterization": { "mode": ")" + mode + R"(", "protein_sequence": "PEPTIDER" },
-      "ms_settings": {
-        "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
-        "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 },
-        "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25 }
-      }
-    })";
-  }
-}
-
 START_SECTION(terminal_fragments_is_unreachable_from_config)
 {
   // Sanity: the probe itself loads, so a rejection below is the metric and not a malformed fixture.
