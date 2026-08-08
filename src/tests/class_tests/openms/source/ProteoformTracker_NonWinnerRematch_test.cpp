@@ -52,8 +52,7 @@ namespace
 {
   const char* WINNER_SEQ = "PEPTIDEK";   // P = 8
 
-  const char* tracker_config = R"(
-{
+  const char* tracker_config = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,

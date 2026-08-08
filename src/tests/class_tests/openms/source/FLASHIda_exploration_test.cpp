@@ -39,8 +39,7 @@ namespace
 
   // Base JSON config with MS2 exploration enabled (mass_count, CE 20-40 step 5)
   // Uses cytochrome c sequence to match ms2_hcd_fragment.txt test spectrum
-  const char* exploration_config = R"(
-{
+  const char* exploration_config = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -134,8 +133,7 @@ namespace
 )";
 
   // Config with MS2 exploration + MS3 exploration (fragment_count)
-  const char* ms3_exploration_config = R"(
-{
+  const char* ms3_exploration_config = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -235,8 +233,7 @@ namespace
 )";
 
   // Config with MS2 exploration + MS3 selection only (no exploration)
-  const char* ms3_selection_only_config = R"(
-{
+  const char* ms3_selection_only_config = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -330,8 +327,7 @@ namespace
 )";
 
   // Config with remaining_precursor exploration metric at MS2
-  const char* remaining_precursor_config = R"(
-{
+  const char* remaining_precursor_config = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -418,8 +414,7 @@ namespace
 )";
 
   // Config with remaining_precursor exploration metric at MS3
-  const char* ms3_remaining_precursor_config = R"(
-{
+  const char* ms3_remaining_precursor_config = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -512,8 +507,7 @@ namespace
 )";
 
   // Config with cycle time enabled + exploration
-  const char* cycle_time_exploration_config = R"(
-{
+  const char* cycle_time_exploration_config = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -601,8 +595,7 @@ namespace
 )";
 
   // Config: no MS2 exploration, MS3 exploration enabled
-  const char* no_ms2_expl_ms3_expl_config = R"(
-{
+  const char* no_ms2_expl_ms3_expl_config = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -725,8 +718,7 @@ namespace
   const std::string ms2_tsv_path = "../../FlashIDA/test-data/spectra/ms2_hcd_fragment.txt";
 
   // Config with 3-entry tol and MS2 exploration tolerance override
-  const char* exploration_tolerance_config = R"(
-{
+  const char* exploration_tolerance_config = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -826,8 +818,7 @@ namespace
 )";
 
   // Config with ETD exploration for activation type wiring test
-  const char* etd_exploration_config = R"(
-{
+  const char* etd_exploration_config = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -1996,8 +1987,7 @@ END_SECTION
 START_SECTION(tol_validation_insufficient_entries)
 {
   // MS3 configured in selection_strategy but only 2 tol entries -> must throw
-  const char* insufficient_tol_config = R"(
-{
+  const char* insufficient_tol_config = R"({
   "deconvolution": {
     "min_charge": 4,
     "max_charge": 50,
@@ -2058,8 +2048,7 @@ START_SECTION(selection_without_next_level_scan_config_rejected)
   // ms2 selects targets for MS3 (selection != none) but no ms_settings.ms3 scan config is
   // defined -> must throw at construction. Guards the OOB read of next_cfg.scans[0] in
   // Exploration::initiateNextLevel.
-  const char* missing_next_scan_config = R"(
-{
+  const char* missing_next_scan_config = R"({
   "deconvolution": {
     "min_charge": 4,
     "max_charge": 50,
@@ -2337,8 +2326,7 @@ START_SECTION(inclusion_ms3_full_acquisition_roundtrip)
   // proteoform (so the real fresh57 b/y ladder matches and MS3 fires), standard MS2 and
   // MS3 intensity selection (NO exploration block), and a large agc_interval so only
   // idle AGCs are emitted.
-  const char* inclusion_ms3_config = R"(
-{
+  const char* inclusion_ms3_config = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -2487,8 +2475,7 @@ START_SECTION(ms3_min_charge_floor_filters_all_targets)
 
   // Clone of inclusion_ms3_config (A5) with selection_strategy.ms2.min_charge = 99 —
   // impossible floor that filters every charge-1-3 MS3 target at Exploration.cpp:802.
-  const char* cfg99 = R"(
-{
+  const char* cfg99 = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -2600,8 +2587,7 @@ START_SECTION(ms3_min_charge_default_emits_ms3)
   // a permissive floor that lets all fragment charges through; positive control proving
   // the model-driven path DOES emit MS3 so the zero in ms3_min_charge_floor_filters_all_targets
   // is real (not a structural dead-end).
-  const char* cfg1 = R"(
-{
+  const char* cfg1 = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,

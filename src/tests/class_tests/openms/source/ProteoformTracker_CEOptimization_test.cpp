@@ -67,8 +67,7 @@ namespace
   // "gap" is by definition uncovered, so no fragment's coverage can CONTAIN it -> empty plan.)
   // No runtime block / no log files -> IdaLogger writes nothing. MS3 config drives buildMS3 stage[1].
   // max_targets >= 2 so planNextScans can emit BOTH per-fragment MS3 targets (budget = level(2).max_targets).
-  const char* tracker_config = R"(
-{
+  const char* tracker_config = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,

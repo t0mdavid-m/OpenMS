@@ -24,8 +24,7 @@ using namespace OpenMS;
 namespace
 {
   // JSON config with 3 CVs, no skipping
-  const char* faims_3cv_config = R"(
-{
+  const char* faims_3cv_config = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -109,8 +108,7 @@ namespace
 )";
 
   // JSON config with 3 CVs, adaptive skipping enabled
-  const char* faims_skip_config = R"(
-{
+  const char* faims_skip_config = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -197,8 +195,7 @@ namespace
   // This fixture used to carry [-50] and rely on faims_.enabled being `cv_values.size() > 1`,
   // i.e. it expressed "no FAIMS" as "one CV, which is not enough to cycle". That conflation was
   // the defect: a real fixed-CV FAIMS method was silently treated as no FAIMS at all.
-  const char* non_faims_config = R"(
-{
+  const char* non_faims_config = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,

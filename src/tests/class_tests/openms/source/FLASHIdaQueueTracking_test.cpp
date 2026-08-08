@@ -22,8 +22,7 @@ using namespace OpenMS;
 namespace
 {
   // Minimal JSON config matching Phase 1 schema — just enough to construct FLASHIda
-  const char* minimal_json_config = R"(
-{
+  const char* minimal_json_config = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -114,8 +113,7 @@ namespace
   //
   // ms1 carries a full source region and microscans 4; ms2 has TWO configs whose agc_target and
   // max_it deliberately differ, which is what makes the buildMS2 section non-vacuous.
-  const char* scan_sourcing_config = R"(
-{
+  const char* scan_sourcing_config = R"({
   "deconvolution": {
     "min_charge": 4,
     "max_charge": 50,
@@ -315,8 +313,7 @@ END_SECTION
 START_SECTION(agc_scan_is_dequeued_first)
 {
   // Create FLASHIda with agc_interval_seconds = 0 (always needs AGC)
-  const char* agc_config = R"(
-{
+  const char* agc_config = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,

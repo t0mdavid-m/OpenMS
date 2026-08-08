@@ -86,8 +86,7 @@ END_SECTION
 
 START_SECTION(([EXTRA] Config rejects exploration with multiple scan configs))
 {
-  const char* json = R"(
-{
+  const char* json = R"({
   "deconvolution": {
     "min_charge": 4,
     "max_charge": 50,
@@ -171,8 +170,7 @@ END_SECTION
 
 START_SECTION(([EXTRA] Config rejects conditional_ms2 without tagging follow_up_scan))
 {
-  const char* json = R"(
-{
+  const char* json = R"({
   "deconvolution": {
     "min_charge": 4,
     "max_charge": 50,
@@ -239,8 +237,7 @@ END_SECTION
 
 START_SECTION(([EXTRA] Config rejects legacy ms3.enabled key))
 {
-  const char* json = R"(
-{
+  const char* json = R"({
   "deconvolution": {
     "min_charge": 4,
     "max_charge": 50,
@@ -307,8 +304,7 @@ END_SECTION
 
 START_SECTION(([EXTRA] Config rejects legacy ms3.active key))
 {
-  const char* json = R"(
-{
+  const char* json = R"({
   "deconvolution": {
     "min_charge": 4,
     "max_charge": 50,
@@ -375,8 +371,7 @@ END_SECTION
 
 START_SECTION(([EXTRA] Config rejects legacy ms3.mode key))
 {
-  const char* json = R"(
-{
+  const char* json = R"({
   "deconvolution": {
     "min_charge": 4,
     "max_charge": 50,
@@ -443,8 +438,7 @@ END_SECTION
 
 START_SECTION(([EXTRA] Config rejects legacy ms3.max_per_ms2 key))
 {
-  const char* json = R"(
-{
+  const char* json = R"({
   "deconvolution": {
     "min_charge": 4,
     "max_charge": 50,
@@ -511,8 +505,7 @@ END_SECTION
 
 START_SECTION(([EXTRA] Config accepts characterization with only protein_sequence))
 {
-  const char* json = R"(
-{
+  const char* json = R"({
   "deconvolution": {
     "min_charge": 4,
     "max_charge": 50,
@@ -573,8 +566,7 @@ END_SECTION
 
 START_SECTION(([EXTRA] Config parses charge_based_exclusion flag true))
 {
-  const char* json = R"(
-{
+  const char* json = R"({
   "deconvolution": {
     "min_charge": 4,
     "max_charge": 50,
@@ -635,8 +627,7 @@ END_SECTION
 
 START_SECTION(([EXTRA] Config charge_based_exclusion defaults to false))
 {
-  const char* json = R"(
-{
+  const char* json = R"({
   "deconvolution": {
     "min_charge": 4,
     "max_charge": 50,

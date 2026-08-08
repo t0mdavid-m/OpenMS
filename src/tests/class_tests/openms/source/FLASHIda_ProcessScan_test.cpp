@@ -33,8 +33,7 @@ using namespace OpenMS;
 namespace
 {
   // Minimal JSON config for standard DDA mode with score_threshold=0 to accept all peaks
-  const char* standard_json = R"(
-{
+  const char* standard_json = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -127,8 +126,7 @@ namespace
 
   // Config with MS3 targeting enabled: inclusion mode (target_mode=1) + cytC inclusion list
   // pins the precursor, plus MS3 selection via selection_strategy. Mirrors C# CT35.
-  const char* ms3_mode1_json = R"(
-{
+  const char* ms3_mode1_json = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -215,8 +213,7 @@ namespace
 )";
 
   // Config with IDScore=false, AllCharges=true (activates sortByQScoreAllCharges)
-  const char* qscore_allcharges_json = R"(
-{
+  const char* qscore_allcharges_json = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -308,8 +305,7 @@ namespace
 )";
 
   // Config with quantification enabled and 2 MS2 configs (HCD+ETD, required for quant path)
-  const char* quant_json = R"(
-{
+  const char* quant_json = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -401,8 +397,7 @@ namespace
 )";
 
   // Config with tag-based targeting enabled via valid FASTA path, 2 MS2 configs
-  const char* tag_targeting_json = R"(
-{
+  const char* tag_targeting_json = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -494,8 +489,7 @@ namespace
 )";
 
   // Config with conditional MS2 enabled (no FASTA — tags cannot be found)
-  const char* conditional_json = R"(
-{
+  const char* conditional_json = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -587,8 +581,7 @@ namespace
 )";
 
   // Config with cycle_time enabled and value_ms=0 (always triggers), AGC suppressed
-  const char* cycle_time_json = R"(
-{
+  const char* cycle_time_json = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -668,8 +661,7 @@ namespace
 )";
 
   // Config with agc_interval_seconds=0 (AGC triggers immediately)
-  const char* agc_fast_json = R"(
-{
+  const char* agc_fast_json = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -749,8 +741,7 @@ namespace
 )";
 
   // Config with conditional MS2 + tag targeting + FASTA (tags CAN be found)
-  const char* conditional_with_tags_json = R"(
-{
+  const char* conditional_with_tags_json = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -845,8 +836,7 @@ namespace
   // activation-coupled parameter on purpose: if the follow-up inherited them from the triggering
   // MS2 (the defect), each assertion below would read the MS2's value instead of the follow-up's.
   // A config where the two agree would make the test vacuous.
-  const char* followup_owns_params_conditional_json = R"(
-{
+  const char* followup_owns_params_conditional_json = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -942,8 +932,7 @@ namespace
 }
 )";
 
-  const char* followup_owns_params_quant_json = R"(
-{
+  const char* followup_owns_params_quant_json = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -1038,8 +1027,7 @@ namespace
 )";
 
   // Config with quantification + low fold_change_threshold (any reporter ratio triggers)
-  const char* quant_sensitive_json = R"(
-{
+  const char* quant_sensitive_json = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -1130,8 +1118,7 @@ namespace
 
   // Config with agc_interval_seconds=9999 to disable timer-based AGC.
   // Only idle cycle (empty queue) produces AGC/MS1 pairs.
-  const char* idle_cycle_json = R"(
-{
+  const char* idle_cycle_json = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -1211,8 +1198,7 @@ namespace
 )";
 
   // Config with intensity-based MS1 selection
-  const char* intensity_selection_json = R"(
-{
+  const char* intensity_selection_json = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -1304,8 +1290,7 @@ namespace
 )";
 
   // Config with selection=none at MS1
-  const char* none_selection_json = R"(
-{
+  const char* none_selection_json = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -1385,8 +1370,7 @@ namespace
 )";
 
   // Config with max_targets=1 (cap test)
-  const char* max1_json = R"(
-{
+  const char* max1_json = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -2617,8 +2601,7 @@ START_SECTION(processScan_ms1_min_charge_filter)
 {
   // Config identical to standard_json but with ms1.min_charge = 99
   // This should filter out ALL precursors since no precursor has charge >= 99
-  const char* min_charge_json = R"(
-{
+  const char* min_charge_json = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -2765,8 +2748,7 @@ START_SECTION(cleanup_expired_drops_stale_queued_commands)
 {
   // Use idle_cycle_json (timeout enabled, 30s) but we'll use pushCommandForTest
   // with a 1ms-timeout config to verify expiry
-  const char* short_timeout_json = R"(
-{
+  const char* short_timeout_json = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,

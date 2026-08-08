@@ -493,7 +493,11 @@ namespace OpenMS
     // additional_ms2: user-authored KEYS, so they cannot be allowlisted -- validated as identifiers
     // instead. The VALUES go through the normal 17-key scan allowlist.
     std::map<std::string, ScanConfig> additional_ms2;
-    if (ms_settings.contains("additional_ms2"))
+    // `&& !is_null()` is load-bearing, not defensive noise: JavaScriptSerializer does not omit null
+    // properties, so ToCppJson emits `"additional_ms2": null` for the ~30 configs that have no
+    // extras. contains() is true for an explicit null while is_object() is false, so checking only
+    // contains() rejected almost every real config. Same idiom the exploration parse already uses.
+    if (ms_settings.contains("additional_ms2") && !ms_settings["additional_ms2"].is_null())
     {
       const auto& add = ms_settings["additional_ms2"];
       if (!add.is_object())

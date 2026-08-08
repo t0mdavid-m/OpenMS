@@ -24,8 +24,7 @@ using namespace OpenMS;
 
 namespace
 {
-  const char* base_off_json = R"(
-{
+  const char* base_off_json = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -105,8 +104,7 @@ namespace
 }
 )";
 
-  const char* base_on_json = R"(
-{
+  const char* base_on_json = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.3,

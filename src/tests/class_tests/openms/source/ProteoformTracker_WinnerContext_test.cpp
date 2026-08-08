@@ -40,8 +40,7 @@ namespace
   const char* WINNER_SEQ = "PEPTIDEK";   // P = 8
 
   // Minimal characterization config; no runtime log paths (IdaLogger writes nothing).
-  const char* tracker_config = R"(
-{
+  const char* tracker_config = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,

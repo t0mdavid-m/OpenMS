@@ -68,8 +68,7 @@ namespace
   const std::string ms2_cytc_path = "../../FlashIDA/test-data/spectra/ms2_cytc_scan149.txt";
 
   // JSON config for fragment analysis tests
-  const char* fragment_test_config = R"(
-{
+  const char* fragment_test_config = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -157,8 +156,7 @@ namespace
 )";
 
   // Config with fragment_count exploration metric + protein sequence
-  const char* fragment_count_exploration_config = R"(
-{
+  const char* fragment_count_exploration_config = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -252,8 +250,7 @@ namespace
 )";
 
   // Config with mass_count exploration metric + protein sequence (same sequence present)
-  const char* mass_count_exploration_config = R"(
-{
+  const char* mass_count_exploration_config = R"({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,

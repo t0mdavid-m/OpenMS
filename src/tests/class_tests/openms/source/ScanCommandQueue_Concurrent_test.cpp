@@ -20,8 +20,7 @@ using namespace OpenMS;
 
 namespace
 {
-  const char* minimal_config = R"(
-{
+  const char* minimal_config = R"({
   "deconvolution": {
     "min_charge": 4,
     "max_charge": 50,
