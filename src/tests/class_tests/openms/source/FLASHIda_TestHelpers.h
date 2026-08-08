@@ -454,23 +454,34 @@ namespace
                                           const std::string& ms2_activation = "HCD",
                                           int ms3_max_targets = 0)
   {
-    std::string target_mode_val   = enable_ms3 ? "1" : "0";
+    std::string targeting_val     = enable_ms3 ? "inclusion" : "none";
     std::string inclusion_list_val = enable_ms3 ? "../../FlashIDA/test-data/configs/inclusion_cytc.txt" : "";
-    std::string ms2_selection      = enable_ms3 ? "\"intensity\"" : "\"none\"";
     std::string ms3_settings = enable_ms3
       ? R"(,
-        "ms3": [ { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 35, "resolution": 120000 } ])"
+        "ms3": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 35, "resolution": 120000 })"
       : "";
+
+    // characterization.mode is now the whole MS3 gate -- it replaces what used to be two separate
+    // selection strings plus the presence of an ms3 scan block.
+    //
+    // BUDGET, and why the number is what it is. `ms3_max_targets` used to be appended to
+    // selection_strategy.ms3.max_targets, which the engine NEVER READ (the budget is taken from
+    // level 2). So §T9's "exhaustive MS3" request has always been silently ignored and every caller
+    // has actually run the level-2 default. For hand-written bridge JSON like this that default was
+    // the C++ literal 10, NOT the C# 3 -- so 10 is the behaviour-preserving value and is now stated
+    // explicitly, because characterization.max_targets defaults to 3.
+    //
+    // Honouring ms3_max_targets for real would CHANGE §T9's behaviour, so it is deliberately not
+    // done here: this rewrite preserves behaviour, and turning that request on is a separate,
+    // golden-moving decision.
+    const int effective_budget = 10;
+    std::string ms3_max_targets_json = ", \"max_targets\": " + std::to_string(effective_budget);
+    (void)ms3_max_targets;  // inert since before this rewrite; see above
+
     std::string ms3_block = enable_ms3
-      ? R"("characterization": { "protein_sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE" },)"
-      : "";
-    std::string ms3_selection = enable_ms3 ? "\"intensity\"" : "\"none\"";
-    // Exhaustive MS3 emission (§T9 only): when ms3_max_targets > 0, lift the per-fragment cap so the engine
-    // emits an MS3 command for ALL matched MS2 fragment ions; otherwise omit -> engine default (~10).
-    // Scoped to the caller (not all enable_ms3 sections) so §C2's strict per-row ion check + suite runtime
-    // are not perturbed by the exhaustive fragment set.
-    std::string ms3_max_targets_json = (enable_ms3 && ms3_max_targets > 0)
-      ? (", \"max_targets\": " + std::to_string(ms3_max_targets)) : "";
+      ? R"("characterization": { "mode": "ambiguity", "protein_sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE")"
+        + ms3_max_targets_json + R"( },)"
+      : R"("characterization": { "mode": "off" },)";
     // reaction_time is an ETD-family parameter; only emit it for ETD/EThcD so the HCD
     // default stays byte-identical to the original FLASHIda_Logging_test config.
     std::string ms2_rt = (ms2_activation == "ETD" || ms2_activation == "EThcD")
@@ -484,18 +495,17 @@ namespace
         "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
       },
       "precursor_selection": {
-        "RT_window": 180, "target_mode": )" << target_mode_val << R"(,
-        "AllCharges": false,
-        "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+        "rt_window": 180, "targeting": ")" << targeting_val << R"(",
+        "consider_all_charges": false,
+        "strict_inclusion": false, "tie_threshold": 0.1,
+        "rank_by": "qscore", "max_precursors": 5
       },
       "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
       "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
       "faims": { "cv_values": [], "max_cv_skip": 0 },
       "ms_settings": {
         "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-        "ms2": [
-          { "analyzer": "Orbitrap", "activation": ")" << ms2_activation << R"(", "collision_energy": 29)" << ms2_rt << R"(, "resolution": 120000 }
-        ])" << ms3_settings << R"(
+        "ms2": { "analyzer": "Orbitrap", "activation": ")" << ms2_activation << R"(", "collision_energy": 29)" << ms2_rt << R"(, "resolution": 120000 })" << ms3_settings << R"(
       },
       "scheduling": {
         "cycle_time": { "enabled": false, "value_ms": 60000 },
@@ -504,11 +514,6 @@ namespace
       },
       )" << ms3_block << R"(
       "files": { "target_logs": [], "fasta": "", "inclusion_list": ")" << inclusion_list_val << R"(", "ptm_list": "" },
-      "selection_strategy": {
-        "ms1": { "selection": "qscore", "max_targets": 5 },
-        "ms2": { "selection": )" << ms2_selection << R"( },
-        "ms3": { "selection": )" << ms3_selection << ms3_max_targets_json << R"( }
-      },
       "runtime": {
         "ida_log_path": ")" << ida_log_path << R"(",
         "scan_commands_path": ")" << commands_path << R"(",
@@ -548,24 +553,20 @@ namespace
   {
     return R"({
       "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
-      "precursor_selection": { "RT_window": 180, "target_mode": 0, "AllCharges": false, "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1 },
+      "precursor_selection": { "rt_window": 180, "targeting": "none", "consider_all_charges": false, "strict_inclusion": false, "tie_threshold": 0.1, "rank_by": "qscore", "max_precursors": 3,
+        "exploration": { "metric": "mass_count", "ce_min": 20.0, "ce_max": 40.0, "ce_step": 5.0 } },
       "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
       "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
       "faims": { "cv_values": [], "max_cv_skip": 0, "cv_precursor_threshold": 15 },
       "ms_settings": {
         "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-        "ms2": [ { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 } ],
-        "ms3": [ { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 35, "resolution": 120000 } ]
+        "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
+        "ms3": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 35, "resolution": 120000 }
       },
       "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 }, "agc_interval_seconds": 999999 },
       "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
-      "characterization": { "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE" },
-      "conditional_ms2": false,
-      "selection_strategy": {
-        "ms1": { "selection": "qscore", "max_targets": 3 },
-        "ms2": { "selection": "intensity", "max_targets": 3, "exploration": { "metric": "mass_count", "ce_min": 20.0, "ce_max": 40.0, "ce_step": 5.0 } },
-        "ms3": { "selection": "none" }
-      }
+      "characterization": { "mode": "off", "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE", "max_targets": 3 },
+      "conditional_ms2": false
     })";
   }
 
@@ -576,24 +577,21 @@ namespace
   {
     return R"({
       "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
-      "precursor_selection": { "RT_window": 180, "target_mode": 0, "AllCharges": false, "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1 },
+      "precursor_selection": { "rt_window": 180, "targeting": "none", "consider_all_charges": false, "strict_inclusion": false, "tie_threshold": 0.1, "rank_by": "qscore", "max_precursors": 3,
+        "exploration": { "metric": "mass_count", "ce_min": 20.0, "ce_max": 40.0, "ce_step": 5.0 } },
       "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
       "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
       "faims": { "cv_values": [], "max_cv_skip": 0, "cv_precursor_threshold": 15 },
       "ms_settings": {
         "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-        "ms2": [ { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 } ],
-        "ms3": [ { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25, "resolution": 120000 } ]
+        "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
+        "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25, "resolution": 120000 }
       },
       "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 } },
       "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
-      "characterization": { "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE" },
-      "conditional_ms2": false,
-      "selection_strategy": {
-        "ms1": { "selection": "qscore", "max_targets": 3 },
-        "ms2": { "selection": "intensity", "max_targets": 3, "exploration": { "metric": "mass_count", "ce_min": 20.0, "ce_max": 40.0, "ce_step": 5.0 } },
-        "ms3": { "selection": "intensity", "max_targets": 3, "exploration": { "metric": "fragment_count", "ce_min": 15.0, "ce_max": 35.0, "ce_step": 5.0 } }
-      }
+      "characterization": { "mode": "ambiguity", "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE", "max_targets": 3,
+        "exploration": { "metric": "fragment_count", "ce_min": 15.0, "ce_max": 35.0, "ce_step": 5.0 } },
+      "conditional_ms2": false
     })";
   }
 
@@ -604,24 +602,20 @@ namespace
   {
     return R"({
       "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
-      "precursor_selection": { "RT_window": 180, "target_mode": 0, "AllCharges": false, "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1 },
+      "precursor_selection": { "rt_window": 180, "targeting": "none", "consider_all_charges": false, "strict_inclusion": false, "tie_threshold": 0.1, "rank_by": "qscore", "max_precursors": 3,
+        "exploration": { "metric": "mass_count", "ce_min": 20.0, "ce_max": 40.0, "ce_step": 5.0 } },
       "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
       "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
       "faims": { "cv_values": [], "max_cv_skip": 0, "cv_precursor_threshold": 15 },
       "ms_settings": {
         "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-        "ms2": [ { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 } ],
-        "ms3": [ { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 35, "resolution": 120000 } ]
+        "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
+        "ms3": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 35, "resolution": 120000 }
       },
       "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 } },
       "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
-      "characterization": { "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE" },
-      "conditional_ms2": false,
-      "selection_strategy": {
-        "ms1": { "selection": "qscore", "max_targets": 3 },
-        "ms2": { "selection": "none", "max_targets": 3, "exploration": { "metric": "mass_count", "ce_min": 20.0, "ce_max": 40.0, "ce_step": 5.0 } },
-        "ms3": { "selection": "intensity", "max_targets": 3 }
-      }
+      "characterization": { "mode": "ambiguity", "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE", "max_targets": 3 },
+      "conditional_ms2": false
     })";
   }
 
@@ -634,12 +628,12 @@ namespace
       auto p = cfg.find(from);
       if (p != std::string::npos) cfg.replace(p, from.size(), to);
     };
-    rep("\"target_mode\": 0", "\"target_mode\": 1");
+    rep("\"targeting\": \"none\"", "\"targeting\": \"inclusion\"");
     rep("\"inclusion_list\": \"\"",
         "\"inclusion_list\": \"../../FlashIDA/test-data/configs/inclusion_cytc.txt\"");
     rep("GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE",
         "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE");
-    rep("\"selection\": \"none\"", "\"selection\": \"intensity\"");
+    rep("\"mode\": \"off\"", "\"mode\": \"ambiguity\"");
     return cfg;
   }
 
