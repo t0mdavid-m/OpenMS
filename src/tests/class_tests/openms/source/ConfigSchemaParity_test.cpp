@@ -99,9 +99,15 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
   // parse, so the 9 it silently discarded were invisible here -- which is how a follow_up_scan
   // became unable to carry its own reaction_time. A follow_up_scan is a full scan config
   // (ADR-0009), so every key it declares must bind.
+  //
+  // follow_up_scan is a NAME now, so this follows the indirection into additional_ms2 rather than
+  // reading an inline block. That makes the assertion strictly stronger: it proves the resolved
+  // ScanConfig matches the JSON of the entry the name actually points at, so a resolver that picked
+  // the wrong entry (or the first one by map order) would fail here.
   {
     const auto& fus = cfg.targeting().tagging_follow_up_scan;
-    const auto& jf = j["tagging"]["follow_up_scan"];
+    const std::string fname = j["tagging"]["follow_up_scan"].get<std::string>();
+    const auto& jf = j["ms_settings"]["additional_ms2"][fname];
     TEST_EQUAL(fus.analyzer, jf["analyzer"].get<std::string>())
     TEST_EQUAL(fus.activation, jf["activation"].get<std::string>())
     TEST_EQUAL(fus.collision_energy, jf["collision_energy"].get<int>())
@@ -120,7 +126,8 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
   // --- quantification.follow_up_scan (previously asserted NOWHERE) ---
   {
     const auto& fus = cfg.quantification().follow_up_scan;
-    const auto& jf = j["quantification"]["follow_up_scan"];
+    const std::string fname = j["quantification"]["follow_up_scan"].get<std::string>();
+    const auto& jf = j["ms_settings"]["additional_ms2"][fname];
     TEST_EQUAL(fus.analyzer, jf["analyzer"].get<std::string>())
     TEST_EQUAL(fus.activation, jf["activation"].get<std::string>())
     TEST_EQUAL(fus.collision_energy, jf["collision_energy"].get<int>())
