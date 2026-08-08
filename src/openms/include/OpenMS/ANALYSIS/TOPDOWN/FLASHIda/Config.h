@@ -102,8 +102,20 @@ namespace OpenMS
   /// Per-MSn-level configuration: selection + optional exploration
   struct OPENMS_DLLAPI MSLevelConfig
   {
-    std::vector<ScanConfig> scans;  ///< [0]=primary, [1]=conditional follow-up
-    SelectionMetric selection = SelectionMetric::Intensity;
+    /// The DISPATCH ROSTER for this level, in dispatch order -- NOT every scan config defined for
+    /// it. Config materialises this from ms_settings.msN plus the names listed in
+    /// precursor_selection.additional_scans, so a block that exists only to back a follow-up
+    /// reference is absent here and never fires unconditionally.
+    /// (The old comment claimed "[1]=conditional follow-up". That was never true: FLASHIda.cpp:211
+    /// range-fors the whole vector, so entry [1] was a second UNCONDITIONAL MS2.)
+    std::vector<ScanConfig> scans;
+
+    /// Defaults to None, not Intensity. This is load-bearing: ms_settings.msN materialises
+    /// levels_[N] BEFORE any selection is parsed (Config.cpp), so an in-class default of Intensity
+    /// meant that merely DEFINING a scan config switched that level on. Failing closed here is what
+    /// makes characterization.mode the single MS3 switch. Every level is assigned explicitly by
+    /// applyCharacterizationMode_() regardless, so this default is a safety net, not the mechanism.
+    SelectionMetric selection = SelectionMetric::None;
     int max_targets = 10;
     int min_charge = 0;  ///< Minimum charge for target selection (0 = no filter)
 
@@ -111,6 +123,8 @@ namespace OpenMS
     double ce_min = 20.0;
     double ce_max = 40.0;
     double ce_step = 5.0;
+    /// Ion-ion REACTION time (ms), not retention time. Wire keys are reaction_time_{min,max,step};
+    /// "rt" elsewhere in this codebase means retention time (TargetingConfig::rt_window, seconds).
     double rt_min = 0;                 ///< Reaction time sweep min (ms), 0 = no RT sweep
     double rt_max = 0;                 ///< Reaction time sweep max (ms)
     double rt_step = 1.0;              ///< Reaction time sweep step (ms)
@@ -179,14 +193,44 @@ namespace OpenMS
     std::vector<std::string> fixed_mod;      ///< Fixed modifications (tagger + extender); empty = keep algorithm {""} default
     int max_blind_mod_count = 2;             ///< FLASHExtender max_blind_mod_count
     double max_mod_mass = 700.0;             ///< FLASHExtender max_mod_mass. 700 preserves current MS2 behavior; NOT the extender's own 500 default.
-    ScanConfig tagging_follow_up_scan;  ///< Follow-up scan config for conditional MS2
+    ScanConfig tagging_follow_up_scan;  ///< Follow-up scan config for conditional MS2, RESOLVED from a name
+    /// Whether tagging.follow_up_scan named anything. Replaces the old
+    /// `tagging_follow_up_scan.activation.empty()` sentinel: with the block now defined elsewhere
+    /// and merely referenced, "is one configured" is a property of the REFERENCE, not of the
+    /// resolved block's contents.
+    bool has_tagging_follow_up = false;
+    std::string tagging_follow_up_name;  ///< the referenced name, for diagnostics only
   };
 
   /// Characterization configuration: objective + protein sequence
+  /// The single MS3 switch. `Off` means no MS3 is emitted at all; the two on-values ARE the
+  /// objectives, so there is no separate enable flag and no way to express "on but with no
+  /// objective". Supersedes ADR-0004, which decided there would be no enable flag at all.
+  enum class CharacterizationMode
+  {
+    Off,
+    Ambiguity,
+    Coverage
+  };
+
   struct OPENMS_DLLAPI CharacterizationConfig
   {
+    CharacterizationMode mode = CharacterizationMode::Off;
+
+    /// Kept as a separate field so every existing objective read site (ProteoformTracker.cpp:353
+    /// and friends) is untouched. It is derived from `mode` at parse time and is meaningless when
+    /// mode == Off, because nothing downstream runs in that case.
     CharacterizationObjective objective = CharacterizationObjective::Ambiguity;
+
     std::string protein_sequence;
+
+    /// The MS3 budget, and the fragment-charge floor for MS3 targeting. Moved here from
+    /// selection_strategy.ms2.{max_targets,min_charge}, which named them one level off their
+    /// effect. Projected into levels_[2] so the existing reads (ProteoformTracker.cpp:354,
+    /// Exploration.cpp:733/:800) keep working unchanged.
+    int max_targets = 3;
+    int min_fragment_charge = 0;
+
     bool ms3_all_charges = false;  ///< MS3AllCharges: emit one MS3 per observed charge state of a target fragment (default: single best charge)
   };
 
@@ -196,7 +240,9 @@ namespace OpenMS
     bool enabled = false;
     double reporter_mz_tol = 0.002;
     double fold_change_threshold = 1.4;
-    ScanConfig follow_up_scan;  ///< Follow-up scan config for quant follow-up MS2
+    ScanConfig follow_up_scan;  ///< Follow-up scan config for quant follow-up MS2, RESOLVED from a name
+    bool has_follow_up = false;      ///< whether quantification.follow_up_scan named anything
+    std::string follow_up_name;      ///< the referenced name, for diagnostics only
   };
 
   /// Runtime file paths (set by C# or user override in JSON)
@@ -265,6 +311,41 @@ namespace OpenMS
     const std::map<int, MSLevelConfig>& levels() const { return levels_; }
 
   private:
+    /**
+     * @brief Derive every level's selection state from characterization.mode, after the whole
+     *        document has been parsed.
+     *
+     * This is the mechanism that makes `mode` the single MS3 switch. It replaces the old
+     * selection_strategy block, which let each level's on/off state be set independently and so
+     * allowed states the engine cannot actually express (MS3 on with MS2 off, for instance).
+     *
+     * MUST run after the characterization and precursor_selection parses and BEFORE the
+     * deconvolution.tol loop, because that loop sizes itself from levels_.
+     *
+     * MUST assign all THREE levels. Level 1 is the easy one to forget and the expensive one: with
+     * MSLevelConfig::selection now defaulting to None, omitting level 1 leaves it None, and
+     * FLASHIda.cpp:168 then short-circuits every MS1 before selection -- the instrument acquires
+     * nothing at all, silently.
+     */
+    void applyCharacterizationMode_(const std::string& rank_by, int max_precursors,
+                                    int min_precursor_charge);
+
+    /// Resolve a `<section>.follow_up_scan` NAME against the additional_ms2 definitions, or throw
+    /// naming the section and listing what is defined. Leaves @p out untouched when the key is
+    /// absent, and reports presence through @p has_follow_up so the enablement checks in validate()
+    /// key off "a reference exists" rather than the old "activation string is non-empty" sentinel.
+    void resolveFollowUp_(const nlohmann::json& config, const std::string& section,
+                          const std::map<std::string, ScanConfig>& additional_ms2,
+                          ScanConfig& out, bool& has_follow_up, std::string& out_name);
+
+    /// Scan-config names are user-authored, so they are validated as identifiers rather than
+    /// against an allowlist: ^[a-z][a-z0-9_]{0,31}$, matching the schema's snake_case rule.
+    static bool isValidScanName(const std::string& name);
+
+    /// "Defined in ms_settings.additional_ms2: a, b, c." -- appended to dangling-reference errors so
+    /// the message shows the caller what they could have meant.
+    static std::string knownScanNames(const std::map<std::string, ScanConfig>& additional_ms2);
+
     std::map<int, MSLevelConfig> levels_;
     DeconvolutionConfig deconv_;
     FAIMSConfig faims_;
@@ -274,6 +355,10 @@ namespace OpenMS
     QuantConfig quant_;
     RuntimeConfig runtime_;
     bool exploration_enabled_ = false;
+
+    /// Names listed in precursor_selection.additional_scans, kept only so the unreferenced-block
+    /// warning can tell a dispatched definition from an orphaned one.
+    std::set<std::string> additional_scan_names_;
 
     static const MSLevelConfig default_level_;
   };

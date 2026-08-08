@@ -361,7 +361,7 @@ FLASHIda::FLASHIda(char* arg) :
           commands_pushed++;
         }
 
-        // MS3 targeting via selection_strategy
+        // MS3 targeting, gated by characterization.mode (projected onto level(2).selection)
         Exploration::NextLevelResult ms3_targeting;
         if (config_.level(2).selection != SelectionMetric::None)
         {

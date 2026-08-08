@@ -845,7 +845,7 @@ namespace OpenMS
         // peak is found ("never drop a matched fragment for lack of a peak"). Such a fragment is a
         // real match but cannot be isolated, so it is not a dispatchable MS3 target. Skipping here
         // costs no tracking id and writes no log row; the charge_floor guard above does not cover it
-        // because selection_strategy.ms2.min_charge defaults to 0, leaving that test inert.
+        // because characterization.min_fragment_charge defaults to 0, leaving that test inert.
         if (target.frag_mz <= 0.0 || frag_charge <= 0) continue;
         const char ion_type = target.ion_type.empty() ? '\0' : target.ion_type[0];
 

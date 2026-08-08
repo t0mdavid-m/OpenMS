@@ -177,10 +177,27 @@ namespace OpenMS
     if (config.contains("ms3"))
       throw std::invalid_argument(
           "Config: 'ms3' is no longer a top-level section. "
-          "Migrate MS3 targeting to selection_strategy.ms2 and ms_settings.ms3.");
+          "MS3 is configured under 'characterization' (mode/protein_sequence/max_targets) with its "
+          "scan parameters in 'ms_settings.ms3'.");
+    // Dedicated migration error rather than the generic unknown-key message, which would say only
+    // "unknown key 'selection_strategy'" and leave the reader to find all seven destinations.
+    if (config.contains("selection_strategy"))
+      throw std::invalid_argument(
+          "Config: 'selection_strategy' has been removed. Its keys moved to the two decision "
+          "sections:\n"
+          "  ms1.selection    -> precursor_selection.rank_by\n"
+          "  ms1.max_targets  -> precursor_selection.max_precursors   (it is the MS2 count)\n"
+          "  ms1.min_charge   -> precursor_selection.min_precursor_charge\n"
+          "  ms2.exploration  -> precursor_selection.exploration\n"
+          "  ms2.max_targets  -> characterization.max_targets         (it is the MS3 budget)\n"
+          "  ms2.min_charge   -> characterization.min_fragment_charge\n"
+          "  ms3.exploration  -> characterization.exploration\n"
+          "  ms2.selection and ms3.selection are replaced by characterization.mode "
+          "(off|ambiguity|coverage); ms3.max_targets and ms3.min_charge were never read and are "
+          "deleted.");
     rejectUnknownKeys(config,
         {"global", "deconvolution", "precursor_selection", "flashtnt", "tagging", "conditional_ms2",
-         "quantification", "faims", "ms_settings", "scheduling", "selection_strategy",
+         "quantification", "faims", "ms_settings", "scheduling",
          "characterization", "files", "runtime"},
         "(root)");
     rejectUnknownKeys(config.value("global", json::object()),
@@ -213,19 +230,37 @@ namespace OpenMS
     // Use MS2 tolerance for tag matching (index 1, guaranteed to exist)
     targeting_.tag_matching_tolerance_ppm = tol_values.size() >= 2 ? tol_values[1] : tol_values[0];
 
-    // --- precursor_selection section ---
+    // --- precursor_selection section: WHICH intact species do we fragment? ---
+    // Absorbs what used to be selection_strategy.ms1. Keys are snake_case throughout and named for
+    // what they PRODUCE: max_precursors is the MS2 count. rank_by/max_precursors/min_precursor_charge
+    // are read into levels_[1] by applyCharacterizationMode_() once every section has been parsed.
     auto ps = config.value("precursor_selection", json::object());
     rejectUnknownKeys(ps,
-        {"RT_window", "target_mode", "AllCharges", "HCDEnergy", "ChargeBasedExclusion",
-         "strict_inclusion", "tie_threshold"},
+        {"rt_window", "targeting", "consider_all_charges", "charge_based_exclusion",
+         "strict_inclusion", "tie_threshold",
+         "rank_by", "max_precursors", "min_precursor_charge", "additional_scans", "exploration"},
         "precursor_selection");
-    targeting_.rt_window = ps.value("RT_window", 180.0);
-    targeting_.mode = ps.value("target_mode", 0);
-    targeting_.consider_all_charges = ps.value("AllCharges", false);
-    targeting_.charge_based_exclusion = ps.value("ChargeBasedExclusion", false);
-    targeting_.hcd_energy = ps.value("HCDEnergy", -1);
+    targeting_.rt_window = ps.value("rt_window", 180.0);
+    targeting_.consider_all_charges = ps.value("consider_all_charges", false);
+    targeting_.charge_based_exclusion = ps.value("charge_based_exclusion", false);
     targeting_.strict_inclusion = ps.value("strict_inclusion", false);
     targeting_.tie_threshold = ps.value("tie_threshold", 0.1);
+
+    // targeting: int -> string enum. Values map to the CODE, not the doc comments -- 2 is in-depth
+    // and 3 is exclusion (PrecursorSelection.cpp:138-141 logs exactly that), while MethodConfig.cs,
+    // Config.h and PrecursorSelection.cpp:564 all had 2 and 3 the wrong way round.
+    // Rejected rather than defaulted: an unknown value used to fall through silently.
+    {
+      const std::string t = ps.value("targeting", std::string("none"));
+      if (t == "none") targeting_.mode = 0;
+      else if (t == "inclusion") targeting_.mode = 1;
+      else if (t == "in_depth") targeting_.mode = 2;
+      else if (t == "exclusion_masses") targeting_.mode = 3;
+      else
+        throw std::invalid_argument(
+            "Config: precursor_selection.targeting must be one of \"none\", \"inclusion\", "
+            "\"in_depth\", \"exclusion_masses\"; got \"" + t + "\" (values are case-sensitive).");
+    }
 
     if (targeting_.mode == 1)
       std::cout << "Inclusion mode: " << (targeting_.strict_inclusion ? "strict" : "non-strict") << "\n";
@@ -278,16 +313,41 @@ namespace OpenMS
     if (files.contains("ptm_list") && !files["ptm_list"].get<std::string>().empty())
       targeting_.ptm_list_file = files["ptm_list"].get<std::string>();
 
-    // --- characterization section ---
+    // --- characterization section: WHETHER and HOW we characterize ---
+    // `mode` is the single MS3 switch. It absorbs the old `objective` key AND the two
+    // selection gates (selection_strategy.ms2.selection / .ms3.selection), which were booleans in
+    // disguise. Decisions only -- the MS3 scan's instrument parameters stay in ms_settings.ms3.
     auto charact = config.value("characterization", json::object());
-    rejectUnknownKeys(charact, {"objective", "protein_sequence", "ms3_all_charges"}, "characterization");
+    rejectUnknownKeys(charact,
+        {"mode", "protein_sequence", "max_targets", "min_fragment_charge", "ms3_all_charges",
+         "exploration"},
+        "characterization");
     {
-      std::string obj_str = charact.value("objective", std::string("ambiguity"));
-      if (obj_str == "coverage")
-        characterization_.objective = CharacterizationObjective::Coverage;
-      else
+      // Hard-rejected, not defaulted. The old parse was
+      //     if (obj_str == "coverage") Coverage; else Ambiguity;
+      // so "Coverage", "covrage" or any typo silently selected ambiguity, and with mode now
+      // carrying the on/off bit a typo'd "Off" would silently ENABLE MS3.
+      const std::string m = charact.value("mode", std::string("off"));
+      if (m == "off")
+        characterization_.mode = CharacterizationMode::Off;
+      else if (m == "ambiguity")
+      {
+        characterization_.mode = CharacterizationMode::Ambiguity;
         characterization_.objective = CharacterizationObjective::Ambiguity;
+      }
+      else if (m == "coverage")
+      {
+        characterization_.mode = CharacterizationMode::Coverage;
+        characterization_.objective = CharacterizationObjective::Coverage;
+      }
+      else
+        throw std::invalid_argument(
+            "Config: characterization.mode must be one of \"off\", \"ambiguity\", \"coverage\"; "
+            "got \"" + m + "\" (values are case-sensitive).");
+
       characterization_.protein_sequence = charact.value("protein_sequence", "");
+      characterization_.max_targets = charact.value("max_targets", 3);
+      characterization_.min_fragment_charge = charact.value("min_fragment_charge", 0);
       characterization_.ms3_all_charges = charact.value("ms3_all_charges", false);
     }
 
@@ -326,48 +386,125 @@ namespace OpenMS
     // answered by FAIMS::isCycling().
     faims_.enabled = !faims_.cv_values.empty();
 
-    // --- ms_settings: populate levels_[1] (MS1) and levels_[2] (MS2) scan configs ---
+    // --- ms_settings: a library of scan configs. NOTHING here decides whether a scan happens. ---
+    // ms1/ms2/ms3 are bare objects (they were arrays); extra MS2 blocks live in the name-keyed
+    // additional_ms2 map and reach the dispatch roster only by being REFERENCED.
     auto ms_settings = config.value("ms_settings", json::object());
-    rejectUnknownKeys(ms_settings, {"ms1", "ms2", "ms3"}, "ms_settings");
+    rejectUnknownKeys(ms_settings, {"ms1", "ms2", "ms3", "additional_ms2"}, "ms_settings");
 
-    // MS1 scan config -> levels_[1].scans[0]
+    if (ms_settings.contains("ms2") && ms_settings["ms2"].is_array())
+      throw std::invalid_argument(
+          "Config: 'ms_settings.ms2' is no longer an array. It is now a single scan object; "
+          "additional MS2 configs go in 'ms_settings.additional_ms2' as a name->object map and are "
+          "referenced from precursor_selection.additional_scans, tagging.follow_up_scan or "
+          "quantification.follow_up_scan.");
+    if (ms_settings.contains("ms3") && ms_settings["ms3"].is_array())
+      throw std::invalid_argument(
+          "Config: 'ms_settings.ms3' is no longer an array. It is now a single scan object. "
+          "There is no additional_ms3: every level-3 consumer reads scans[0], so a second MS3 "
+          "config was never reachable.");
+
+    // levels_ is materialised unconditionally for {1,2,3}. This used to hold only by accident --
+    // selection_strategy was required and every config named all three levels. toleranceList() and
+    // explorationToleranceList() walk levels_ POSITIONALLY to build the DoubleLists that construct
+    // Deconvolution, so a level going missing would silently shift every tols_[ms_level-1] index.
+    for (int lvl : {1, 2, 3})
+      if (levels_.find(lvl) == levels_.end())
+        levels_[lvl] = MSLevelConfig{};
+
+    auto parseNamedScan = [&](const json& node, const std::string& path) {
+      rejectUnknownKeys(node, kScanKeys, path);
+      ScanConfig sc;
+      parseScanConfig(node, sc, "");
+      return sc;
+    };
+
     auto ms1_json = ms_settings.value("ms1", json::object());
     rejectUnknownKeys(ms1_json, kScanKeys, "ms_settings.ms1");
     ScanConfig ms1_scan;
     parseScanConfig(ms1_json, ms1_scan, "");
-
-    // Ensure levels_[1] exists before populating scans
-    if (levels_.find(1) == levels_.end())
-      levels_[1] = MSLevelConfig{};
     levels_[1].scans.push_back(ms1_scan);
 
-    // MS2 scan configs -> levels_[2].scans[0..N]
-    if (ms_settings.contains("ms2") && ms_settings["ms2"].is_array())
+    // Definitions first; the roster is assembled afterwards from the reference list.
+    ScanConfig primary_ms2;
+    bool has_primary_ms2 = false;
+    if (ms_settings.contains("ms2") && ms_settings["ms2"].is_object())
     {
-      if (levels_.find(2) == levels_.end())
-        levels_[2] = MSLevelConfig{};
-      for (const auto& m : ms_settings["ms2"])
+      primary_ms2 = parseNamedScan(ms_settings["ms2"], "ms_settings.ms2");
+      has_primary_ms2 = true;
+    }
+    if (ms_settings.contains("ms3") && ms_settings["ms3"].is_object())
+      levels_[3].scans.push_back(parseNamedScan(ms_settings["ms3"], "ms_settings.ms3"));
+
+    // additional_ms2: user-authored KEYS, so they cannot be allowlisted -- validated as identifiers
+    // instead. The VALUES go through the normal 17-key scan allowlist.
+    std::map<std::string, ScanConfig> additional_ms2;
+    if (ms_settings.contains("additional_ms2"))
+    {
+      const auto& add = ms_settings["additional_ms2"];
+      if (!add.is_object())
+        throw std::invalid_argument("Config: ms_settings.additional_ms2 must be a name->object map.");
+      static const std::set<std::string> kReservedScanNames = {"ms1", "ms2", "ms3", "none", "off", "all"};
+      for (auto it = add.begin(); it != add.end(); ++it)
       {
-        rejectUnknownKeys(m, kScanKeys, "ms_settings.ms2[]");
-        ScanConfig ms2_scan;
-        parseScanConfig(m, ms2_scan, "");
-        levels_[2].scans.push_back(ms2_scan);
+        const std::string& name = it.key();
+        if (!isValidScanName(name))
+          throw std::invalid_argument(
+              "Config: scan-config name '" + name + "' in ms_settings.additional_ms2 is invalid. "
+              "Names are snake_case identifiers matching ^[a-z][a-z0-9_]{0,31}$.");
+        if (kReservedScanNames.count(name) != 0)
+          throw std::invalid_argument(
+              "Config: '" + name + "' is a reserved word and cannot be used as a scan-config name. "
+              "Reserved: ms1, ms2, ms3, none, off, all.");
+        additional_ms2[name] = parseNamedScan(it.value(), "ms_settings.additional_ms2." + name);
       }
     }
 
-    // MS3 scan configs -> levels_[3].scans[0..N]
-    if (ms_settings.contains("ms3") && ms_settings["ms3"].is_array())
+    // The DISPATCH ROSTER: ms_settings.ms2 first, then precursor_selection.additional_scans in the
+    // order the array gives. Nothing else fires unconditionally -- a block that only backs a
+    // follow-up reference is simply absent here. Order comes from the ARRAY, never from map
+    // iteration: nlohmann's object_t is a std::map, so iterating additional_ms2 would sort the
+    // names alphabetically and silently reorder dispatch.
+    if (has_primary_ms2)
+      levels_[2].scans.push_back(primary_ms2);
     {
-      if (levels_.find(3) == levels_.end())
-        levels_[3] = MSLevelConfig{};
-      for (const auto& m : ms_settings["ms3"])
+      std::set<std::string> seen;
+      const auto& add_scans = ps.value("additional_scans", json::array());
+      if (!add_scans.is_array())
+        throw std::invalid_argument("Config: precursor_selection.additional_scans must be an array of names.");
+      for (const auto& n : add_scans)
       {
-        rejectUnknownKeys(m, kScanKeys, "ms_settings.ms3[]");
-        ScanConfig ms3_scan;
-        parseScanConfig(m, ms3_scan, "");
-        levels_[3].scans.push_back(ms3_scan);
+        const std::string name = n.get<std::string>();
+        if (!seen.insert(name).second)
+          throw std::invalid_argument(
+              "Config: precursor_selection.additional_scans lists '" + name + "' more than once.");
+        auto found = additional_ms2.find(name);
+        if (found == additional_ms2.end())
+          throw std::invalid_argument(
+              "Config: precursor_selection.additional_scans references unknown MS2 scan config '"
+              + name + "'. " + knownScanNames(additional_ms2));
+        levels_[2].scans.push_back(found->second);
       }
+      additional_scan_names_ = seen;
     }
+
+    // Follow-ups are name references now, resolved here so no downstream consumer learns that
+    // names exist -- FLASHIda.cpp keeps reading targeting_.tagging_follow_up_scan verbatim.
+    resolveFollowUp_(config, "tagging", additional_ms2, targeting_.tagging_follow_up_scan,
+                     targeting_.has_tagging_follow_up, targeting_.tagging_follow_up_name);
+    resolveFollowUp_(config, "quantification", additional_ms2, quant_.follow_up_scan,
+                     quant_.has_follow_up, quant_.follow_up_name);
+
+    // A definition nobody references never fires. That is legal but almost always a mistake, and it
+    // is the only check that catches a typo on the DEFINITION side (a typo on the reference side is
+    // caught above). Warn rather than throw -- commenting a scan out of the roster while tuning is
+    // a normal thing to do.
+    for (const auto& kv : additional_ms2)
+      if (additional_scan_names_.count(kv.first) == 0
+          && targeting_.tagging_follow_up_name != kv.first
+          && quant_.follow_up_name != kv.first)
+        std::cout << "[CONFIG-WARN] ms_settings.additional_ms2." << kv.first
+                  << " is defined but never referenced; it will never be acquired.\n";
 
     // --- scheduling ---
     auto sched = config.value("scheduling", json::object());
@@ -383,102 +520,96 @@ namespace OpenMS
     double agc_interval_sec = sched.value("agc_interval_seconds", 30.0);
     scheduling_.agc_interval_ms = static_cast<uint64_t>(agc_interval_sec * 1000.0);
 
-    // --- selection_strategy (required) ---
-    if (!config.contains("selection_strategy"))
-    {
-      throw std::runtime_error("Config: missing required 'selection_strategy' in JSON config");
-    }
-    const auto& sel_strategy = config["selection_strategy"];
-    rejectUnknownKeys(sel_strategy, {"ms1", "ms2", "ms3"}, "selection_strategy");
-    for (auto it = sel_strategy.begin(); it != sel_strategy.end(); ++it)
-    {
-      std::string ms_key = it.key();
-      if (ms_key.substr(0, 2) == "ms" && ms_key.size() > 2)
+    // --- exploration: one block per decision section, each sweeping the scans that section
+    //     dispatches. precursor_selection.exploration -> level 2, characterization.exploration ->
+    //     level 3. They must stay separate: a single config legitimately sweeps different ranges at
+    //     the two levels (method_exploration_ms3_followup sweeps HCD 20-40 at MS2, CID 15-35 at MS3).
+    //     There is no level-1 exploration: it was parsed nowhere and discarded on both sides.
+    auto parseExploration = [&](const json& parent, const std::string& path, int level) {
+      if (!parent.contains("exploration") || parent["exploration"].is_null())
+        return;
+      const auto& e = parent["exploration"];
+      if (!e.is_object())
+        throw std::invalid_argument("Config: " + path + ".exploration must be an object.");
+      rejectUnknownKeys(e,
+          {"metric", "ce_min", "ce_max", "ce_step", "overrides", "remaining_precursor_target",
+           "reaction_time_min", "reaction_time_max", "reaction_time_step", "activations",
+           "tolerance_ppm"},
+          path + ".exploration");
+
+      MSLevelConfig& cfg = levels_[level];
+
+      // Hard-rejected. The old parse fell through to None, so a typo silently collapsed an
+      // N-variant sweep to a single scan -- the exact opposite direction from the selection typo,
+      // which silently ENABLED a level. Neither should guess.
+      const std::string m = e.value("metric", std::string("none"));
+      if (m == "none") cfg.exploration = ExplorationMetric::None;
+      else if (m == "mass_count") cfg.exploration = ExplorationMetric::MassCount;
+      else if (m == "remaining_precursor") cfg.exploration = ExplorationMetric::RemainingPrecursor;
+      else if (m == "fragment_count") cfg.exploration = ExplorationMetric::FragmentCount;
+      else
+        throw std::invalid_argument(
+            "Config: " + path + ".exploration.metric must be one of \"none\", \"mass_count\", "
+            "\"remaining_precursor\", \"fragment_count\"; got \"" + m + "\".");
+
+      cfg.ce_min = e.value("ce_min", 20.0);
+      cfg.ce_max = e.value("ce_max", 40.0);
+      cfg.ce_step = e.value("ce_step", 5.0);
+      cfg.remaining_precursor_target = e.value("remaining_precursor_target", 0.1);
+      cfg.rt_min = e.value("reaction_time_min", 0.0);
+      cfg.rt_max = e.value("reaction_time_max", 0.0);
+      cfg.rt_step = e.value("reaction_time_step", 1.0);
+      // First-class now. It used to be smuggled through the overrides map and then ERASED from it
+      // at this point -- before Exploration.cpp:605 tested that same map for emptiness to decide
+      // whether to acquire the production scan, so a tolerance-only map silently suppressed a scan.
+      // 0 means "use deconvolution.tol for this level"; resolved just below.
+      cfg.exploration_tolerance_ppm = e.value("tolerance_ppm", 0.0);
+
+      if (e.contains("activations") && e["activations"].is_array())
+        for (const auto& a : e["activations"])
+          cfg.activations.push_back(a.get<std::string>());
+
+      if (e.contains("overrides") && e["overrides"].is_object())
       {
-        int level_num = std::stoi(ms_key.substr(2));
-        const auto& level_obj = it.value();
-        rejectUnknownKeys(level_obj, {"selection", "max_targets", "min_charge", "exploration"},
-            "selection_strategy." + ms_key);
-        if (level_obj.contains("exploration") && level_obj["exploration"].is_object())
-          rejectUnknownKeys(level_obj["exploration"],
-              {"metric", "ce_min", "ce_max", "ce_step", "overrides", "remaining_precursor_target",
-               "rt_min", "rt_max", "rt_step", "activations"},
-              "selection_strategy." + ms_key + ".exploration");
-
-        // Ensure the level exists in the map
-        if (levels_.find(level_num) == levels_.end())
-          levels_[level_num] = MSLevelConfig{};
-        MSLevelConfig& cfg = levels_[level_num];
-
-        // Selection metric
-        std::string sel_str = level_obj.value("selection",
-            level_num == 1 ? std::string("qscore") : std::string("intensity"));
-        if (sel_str == "intensity") cfg.selection = SelectionMetric::Intensity;
-        else if (sel_str == "qscore") cfg.selection = SelectionMetric::QScore;
-        else if (sel_str == "none") cfg.selection = SelectionMetric::None;
-        else if (sel_str == "terminal_fragments") cfg.selection = SelectionMetric::TerminalFragments;
-        else if (sel_str == "ambiguity_resolution") cfg.selection = SelectionMetric::AmbiguityResolution;
-        else cfg.selection = SelectionMetric::Intensity;
-
-        // Max targets
-        cfg.max_targets = level_obj.value("max_targets", 10);
-
-        // Minimum charge for target selection
-        cfg.min_charge = level_obj.value("min_charge", 0);
-
-        // Exploration (optional, MS2+ only; guard against JSON null)
-        if (level_obj.contains("exploration") && !level_obj["exploration"].is_null() && level_num > 1)
+        const auto& ov = e["overrides"];
+        for (auto ov_it = ov.begin(); ov_it != ov.end(); ++ov_it)
         {
-          const auto& expl_obj = level_obj["exploration"];
-          std::string met_str = expl_obj.value("metric", std::string("none"));
-          if (met_str == "mass_count") cfg.exploration = ExplorationMetric::MassCount;
-          else if (met_str == "remaining_precursor") cfg.exploration = ExplorationMetric::RemainingPrecursor;
-          else if (met_str == "fragment_count") cfg.exploration = ExplorationMetric::FragmentCount;
-          else cfg.exploration = ExplorationMetric::None;
-          cfg.ce_min = expl_obj.value("ce_min", 20.0);
-          cfg.ce_max = expl_obj.value("ce_max", 40.0);
-          cfg.ce_step = expl_obj.value("ce_step", 5.0);
-          cfg.remaining_precursor_target = expl_obj.value("remaining_precursor_target", 0.1);
-          cfg.rt_min = expl_obj.value("rt_min", 0.0);
-          cfg.rt_max = expl_obj.value("rt_max", 0.0);
-          cfg.rt_step = expl_obj.value("rt_step", 1.0);
-          if (expl_obj.contains("activations") && expl_obj["activations"].is_array())
-          {
-            for (const auto& a : expl_obj["activations"])
-              cfg.activations.push_back(a.get<std::string>());
-          }
-          if (expl_obj.contains("overrides") && expl_obj["overrides"].is_object())
-          {
-            const auto& ov_obj = expl_obj["overrides"];
-            for (auto ov_it = ov_obj.begin(); ov_it != ov_obj.end(); ++ov_it)
-              cfg.overrides[ov_it.key()] = ov_it.value().get<std::string>();
-          }
+          if (ov_it.key() == "tolerance_ppm")
+            throw std::invalid_argument(
+                "Config: " + path + ".exploration.overrides no longer carries 'tolerance_ppm'. "
+                "It is a first-class key: move it to " + path + ".exploration.tolerance_ppm. "
+                "(applyOverrides has no branch for it, so leaving it here would drop it silently.)");
+          cfg.overrides[ov_it.key()] = ov_it.value().get<std::string>();
         }
       }
-    }
+    };
+    parseExploration(ps, "precursor_selection", 2);
+    parseExploration(charact, "characterization", 3);
 
-    // Validate tol array length covers all configured MS levels
+    // --- THE PROJECTION: derive every level's selection state from characterization.mode ---
+    // Runs after all sections are parsed and BEFORE the tol loop below, which sizes itself from
+    // levels_. This is what makes `mode` the single MS3 switch.
+    applyCharacterizationMode_(ps.value("rank_by", std::string("qscore")),
+                               ps.value("max_precursors", 10),
+                               ps.value("min_precursor_charge", 0));
+
+    // Validate tol array length covers all configured MS levels. levels_ is now always {1,2,3}, so
+    // this is effectively a fixed ">= 3" -- kept level-derived so it stays correct if that changes.
     int max_level = 0;
     for (const auto& [lvl, unused_cfg] : levels_)
       max_level = std::max(max_level, lvl);
     if (static_cast<int>(tol_values.size()) < max_level)
       throw std::invalid_argument("deconvolution.tol must have at least "
-        + std::to_string(max_level) + " entries when MS" + std::to_string(max_level) + " is configured");
+        + std::to_string(max_level) + " entries (one per MS level), got "
+        + std::to_string(tol_values.size()));
 
-    // Set per-level tolerance values (direct index)
+    // Per-level tolerances. An unset exploration tolerance falls back to the level's base tol --
+    // the same value the old overrides path produced, so this is value-preserving.
     for (auto& [lvl, cfg] : levels_)
     {
       cfg.tolerance_ppm = tol_values[lvl - 1];
-      // Default exploration tolerance to base; overrides (parsed above) take precedence
-      if (cfg.overrides.count("tolerance_ppm"))
-      {
-        cfg.exploration_tolerance_ppm = std::stod(cfg.overrides["tolerance_ppm"]);
-        cfg.overrides.erase("tolerance_ppm");
-      }
-      else
-      {
+      if (cfg.exploration_tolerance_ppm <= 0.0)
         cfg.exploration_tolerance_ppm = tol_values[lvl - 1];
-      }
     }
 
     // Compute convenience boolean
@@ -509,11 +640,102 @@ namespace OpenMS
     validate();
   }
 
+  bool Config::isValidScanName(const std::string& name)
+  {
+    if (name.empty() || name.size() > 32) return false;
+    if (name[0] < 'a' || name[0] > 'z') return false;
+    for (char ch : name)
+      if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_')) return false;
+    return true;
+  }
+
+  std::string Config::knownScanNames(const std::map<std::string, ScanConfig>& additional_ms2)
+  {
+    if (additional_ms2.empty())
+      return "ms_settings.additional_ms2 defines no scan configs.";
+    std::string s = "Defined in ms_settings.additional_ms2:";
+    for (const auto& kv : additional_ms2) s += " " + kv.first;
+    return s + ".";
+  }
+
+  void Config::resolveFollowUp_(const nlohmann::json& config, const std::string& section,
+                                const std::map<std::string, ScanConfig>& additional_ms2,
+                                ScanConfig& out, bool& has_follow_up, std::string& out_name)
+  {
+    const auto sec = config.value(section, nlohmann::json::object());
+    if (!sec.contains("follow_up_scan") || sec["follow_up_scan"].is_null())
+      return;
+
+    // A follow-up is just another MS2, so it names an additional_ms2 entry rather than repeating a
+    // 17-key block. An object here is someone carrying the old shape forward.
+    if (sec["follow_up_scan"].is_object())
+      throw std::invalid_argument(
+          "Config: " + section + ".follow_up_scan is no longer an inline scan object. It is now the "
+          "NAME of an ms_settings.additional_ms2 entry, e.g. \"" + section + "_follow_up\".");
+    if (!sec["follow_up_scan"].is_string())
+      throw std::invalid_argument("Config: " + section + ".follow_up_scan must be a scan-config name.");
+
+    const std::string name = sec["follow_up_scan"].get<std::string>();
+    if (name.empty()) return;
+
+    auto found = additional_ms2.find(name);
+    if (found == additional_ms2.end())
+      throw std::invalid_argument(
+          "Config: " + section + ".follow_up_scan references unknown MS2 scan config '" + name
+          + "'. " + knownScanNames(additional_ms2));
+
+    out = found->second;
+    has_follow_up = true;
+    out_name = name;
+  }
+
+  void Config::applyCharacterizationMode_(const std::string& rank_by, int max_precursors,
+                                          int min_precursor_charge)
+  {
+    // ---- LEVEL 1 ----
+    // Do not remove. MSLevelConfig::selection defaults to None, so if level 1 is left unassigned
+    // FLASHIda.cpp:168 short-circuits before MS1 selection and the run acquires NOTHING at all,
+    // silently. This is the only level whose selection VALUE is read (PrecursorSelection.cpp:246
+    // picks sortByIntensity vs sortByQscore); at levels 2 and 3 only None-vs-non-None matters.
+    if (rank_by == "qscore") levels_[1].selection = SelectionMetric::QScore;
+    else if (rank_by == "intensity") levels_[1].selection = SelectionMetric::Intensity;
+    else if (rank_by == "none") levels_[1].selection = SelectionMetric::None;
+    else
+      throw std::invalid_argument(
+          "Config: precursor_selection.rank_by must be one of \"qscore\", \"intensity\", \"none\"; "
+          "got \"" + rank_by + "\" (values are case-sensitive).");
+    levels_[1].max_targets = max_precursors;   // the MS2 count
+    levels_[1].min_charge = min_precursor_charge;
+
+    // ---- LEVELS 2 AND 3 ----
+    // MS3 requires BOTH gates non-None: FLASHIda.cpp:366 and Exploration.cpp:728 test level 2,
+    // Exploration.cpp:730 tests level 3. Driving both from one enum is what makes the incoherent
+    // states (MS3 on with MS2 off) unrepresentable rather than merely discouraged.
+    //
+    // Intensity is the value used when on: intensity and qscore share a case in
+    // ProteoformTracker::selectNextLevelTargets, and every MS3-enabled config in the corpus used
+    // intensity, so this reproduces today's matcher exactly.
+    const bool on = characterization_.mode != CharacterizationMode::Off;
+    levels_[2].selection = on ? SelectionMetric::Intensity : SelectionMetric::None;
+    levels_[3].selection = on ? SelectionMetric::Intensity : SelectionMetric::None;
+
+    // The MS3 budget and fragment-charge floor are read off level 2
+    // (ProteoformTracker.cpp:354, Exploration.cpp:733/:800) because level-2 selection is what
+    // produces level-3 targets. They are AUTHORED in characterization, where they belong.
+    levels_[2].max_targets = characterization_.max_targets;
+    levels_[2].min_charge = characterization_.min_fragment_charge;
+  }
+
   void Config::validate() const
   {
-    if (targeting_.conditional_ms2_enabled && targeting_.tagging_follow_up_scan.activation.empty())
+    // Re-keyed off the REFERENCE rather than the resolved block's activation string. The old
+    // sentinel (`tagging_follow_up_scan.activation.empty()`) was a proxy for "nobody configured
+    // one"; now that the block is defined elsewhere and merely named, presence of the name is the
+    // direct answer.
+    if (targeting_.conditional_ms2_enabled && !targeting_.has_tagging_follow_up)
       throw std::invalid_argument(
-          "Conditional MS2 is enabled but tagging.follow_up_scan is not configured.");
+          "conditional_ms2 is true but tagging.follow_up_scan is not set. Name an "
+          "ms_settings.additional_ms2 entry, or set conditional_ms2 to false.");
 
     // An activation must arrive with the parameters that give it meaning (ADR-0009). Without this,
     // an ETD scan config that omits reaction_time silently emits 0, ScanFactory then drops the
@@ -528,20 +750,31 @@ namespace OpenMS
             path + " activation '" + sc.activation + "' requires collision_energy > 0.");
     };
 
-    checkActivationCoupling(targeting_.tagging_follow_up_scan, "tagging.follow_up_scan");
-    checkActivationCoupling(quant_.follow_up_scan, "quantification.follow_up_scan");
+    if (targeting_.has_tagging_follow_up)
+      checkActivationCoupling(targeting_.tagging_follow_up_scan,
+                              "ms_settings.additional_ms2." + targeting_.tagging_follow_up_name);
+    if (quant_.has_follow_up)
+      checkActivationCoupling(quant_.follow_up_scan,
+                              "ms_settings.additional_ms2." + quant_.follow_up_name);
+    // The roster, not the definition store: an unreferenced block never fires, so an incoherent
+    // activation in one is a warning's problem, not a load error's.
     for (const auto& [lvl, cfg] : levels_)
       for (size_t i = 0; i < cfg.scans.size(); ++i)
         checkActivationCoupling(cfg.scans[i],
-                                "ms_settings.ms" + std::to_string(lvl) + "[" + std::to_string(i) + "]");
+                                "ms_settings.ms" + std::to_string(lvl)
+                                + (i == 0 ? "" : " (additional scan " + std::to_string(i) + ")"));
 
+    // Restated on the ROSTER, not the definition map: a CE/RT sweep varies one base scan config, so
+    // the level it sweeps must dispatch exactly one.
     for (const auto& [lvl, cfg] : levels_)
     {
       if (cfg.exploration != ExplorationMetric::None && cfg.scans.size() != 1)
         throw std::invalid_argument(
-            "Exploration at level " + std::to_string(lvl) +
-            " requires exactly one scan config, got " +
-            std::to_string(cfg.scans.size()) + ".");
+            std::string(lvl == 2 ? "precursor_selection" : "characterization")
+            + ".exploration is enabled, so level " + std::to_string(lvl)
+            + " must dispatch exactly one scan config; it dispatches "
+            + std::to_string(cfg.scans.size())
+            + ". Remove entries from precursor_selection.additional_scans.");
     }
 
     for (const auto& [lvl, cfg] : levels_)
@@ -549,25 +782,33 @@ namespace OpenMS
       if (cfg.exploration == ExplorationMetric::FragmentCount && characterization_.protein_sequence.empty())
         throw std::invalid_argument(
             "ExplorationMetric::FragmentCount at level " + std::to_string(lvl) +
-            " requires a non-empty protein_sequence in the characterization config section.");
+            " requires a non-empty characterization.protein_sequence.");
     }
 
-    for (const auto& [lvl, cfg] : levels_)
-    {
-      if (lvl >= 2 && cfg.selection != SelectionMetric::None && characterization_.protein_sequence.empty())
-        throw std::invalid_argument(
-            "SelectionMetric at level " + std::to_string(lvl) +
-            " requires a non-empty protein_sequence in the characterization config section. "
-            "Fragment matching is the default for all MSn>=2 selection.");
-    }
+    // Re-keyed onto `mode`. It used to fire off the UPSTREAM gate (any level >= 2 selecting), which
+    // is why 18 configs that run no MS3 at all still had to carry a placeholder "SEQUENCE": their
+    // ms2.selection defaulted to intensity and nothing downstream ever read the sequence. Now the
+    // requirement tracks the thing that actually consumes it.
+    if (characterization_.mode != CharacterizationMode::Off
+        && characterization_.protein_sequence.empty())
+      throw std::invalid_argument(
+          "characterization.mode is not \"off\" but characterization.protein_sequence is empty. "
+          "MS3 characterization matches fragments against that sequence.");
 
-    // A level that selects targets for the next level must have a scan config there to build
-    // into; otherwise Exploration::initiateNextLevel would OOB-read next_cfg.scans[0].
-    for (const auto& [lvl, cfg] : levels_)
-      if (lvl < 3 && cfg.selection != SelectionMetric::None && level(lvl + 1).scans.empty())
-        throw std::invalid_argument(
-            "Selection at level " + std::to_string(lvl) + " targets MS" + std::to_string(lvl + 1) +
-            " but no ms_settings.ms" + std::to_string(lvl + 1) + " scan config is defined.");
+    // The converse of "mode: off does not forbid ms_settings.ms3" -- and the direction that
+    // segfaults. Exploration::initiateNextLevel reads next_cfg.scans[0] unguarded, so MS3 being
+    // reachable with no level-3 scan config is an OOB read, not a no-op.
+    if (characterization_.mode != CharacterizationMode::Off && level(3).scans.empty())
+      throw std::invalid_argument(
+          "characterization.mode is \"" +
+          std::string(characterization_.mode == CharacterizationMode::Coverage ? "coverage" : "ambiguity")
+          + "\" but ms_settings.ms3 is not defined. An MS3 scan config is required to build the "
+            "MS3 command into.");
+
+    // MS2 needs somewhere to dispatch into whenever MS1 selects at all.
+    if (level(1).selection != SelectionMetric::None && level(2).scans.empty())
+      throw std::invalid_argument(
+          "precursor_selection.rank_by is not \"none\" but ms_settings.ms2 is not defined.");
 
     // Validate that each exploration activation type has its required sweep range
     for (const auto& [lvl, cfg] : levels_)
@@ -578,6 +819,20 @@ namespace OpenMS
       std::vector<std::string> acts = cfg.activations;
       if (acts.empty() && !cfg.scans.empty())
         acts.push_back(cfg.scans[0].activation);
+
+      // Step guards. These were validated on NEITHER side, and a non-positive step is not a
+      // no-op: Exploration.cpp's `for (ce = ce_min; ce <= ce_max + 1e-9; ce += ce_step)` never
+      // advances, so it spins forever INSIDE processScan -- on the C# TPL ActionBlock thread, with
+      // the instrument still waiting for commands. A hang, not an error.
+      const std::string sect = (lvl == 2 ? "precursor_selection" : "characterization");
+      if (cfg.ce_step <= 0.0)
+        throw std::invalid_argument(
+            sect + ".exploration.ce_step must be > 0; got " + std::to_string(cfg.ce_step)
+            + ". A non-positive step never terminates the sweep loop.");
+      if (cfg.rt_max > cfg.rt_min && cfg.rt_step <= 0.0)
+        throw std::invalid_argument(
+            sect + ".exploration.reaction_time_step must be > 0 when a reaction-time range is set; got "
+            + std::to_string(cfg.rt_step) + ". A non-positive step never terminates the sweep loop.");
 
       for (const auto& act : acts)
       {
