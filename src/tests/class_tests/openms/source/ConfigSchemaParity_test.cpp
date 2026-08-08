@@ -172,7 +172,7 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
   // fixed for. A key nobody asserts is a key that can be dropped silently, which is how
   // rf_lens/source_cid/source_cid_scaling/scan_rate went missing from every MSn scan.
   const auto& ms2 = cfg.level(2).scans[0];
-  const auto& jms2 = j["ms_settings"]["ms2"][0];
+  const auto& jms2 = j["ms_settings"]["ms2"];
   TEST_EQUAL(ms2.analyzer, jms2["analyzer"].get<std::string>())
   TEST_EQUAL(ms2.activation, jms2["activation"].get<std::string>())
   TEST_EQUAL(ms2.collision_energy, jms2["collision_energy"].get<int>())
@@ -192,7 +192,7 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
   TEST_EQUAL(ms2.reagent_agc_target, jms2["reagent_agc_target"].get<int>())
 
   const auto& ms3 = cfg.level(3).scans[0];
-  const auto& jms3 = j["ms_settings"]["ms3"][0];
+  const auto& jms3 = j["ms_settings"]["ms3"];
   TEST_EQUAL(ms3.analyzer, jms3["analyzer"].get<std::string>())
   TEST_EQUAL(ms3.activation, jms3["activation"].get<std::string>())
   TEST_EQUAL(ms3.collision_energy, jms3["collision_energy"].get<int>())
@@ -301,11 +301,15 @@ START_SECTION(GeneratedReference_CarriesEveryScanKey)
   const std::set<std::string> stage_carried = {
     "activation", "collision_energy", "reaction_time", "reagent_max_it", "reagent_agc_target"};
 
-  const std::vector<json> msn_sites = {
-    j["ms_settings"]["ms2"][0],
-    j["ms_settings"]["ms3"][0],
-    j["tagging"]["follow_up_scan"],
-    j["quantification"]["follow_up_scan"]};
+  // ms2 and ms3 are bare objects, and every extra MS2 -- including the two that back the follow-up
+  // references -- lives in additional_ms2. The follow-up sites are DISCOVERED here rather than
+  // named: j["tagging"]["follow_up_scan"] is a name string now, and hard-coding the generator's
+  // chosen names would make this loop quietly stop covering a site the day one is renamed.
+  std::vector<json> msn_sites = {j["ms_settings"]["ms2"], j["ms_settings"]["ms3"]};
+  if (j["ms_settings"].contains("additional_ms2") && j["ms_settings"]["additional_ms2"].is_object())
+    for (const auto& entry : j["ms_settings"]["additional_ms2"])
+      msn_sites.push_back(entry);
+  TEST_EQUAL(msn_sites.size() >= 3, true)  // else the reference stopped covering the follow-ups
 
   for (const auto& key : Config::scanKeys())
   {

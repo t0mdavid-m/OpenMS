@@ -158,6 +158,30 @@ START_SECTION(scan_name_resolution)
     Config(cfgJson("", R"("characterization": { "mode": "off" },)",
       R"(, "additional_ms2": { "bad": { "IsolationMode": "Quadrupole" } })")))
 
+  // DOUBLE DUTY. additional_ms2 is one flat namespace serving two mutually exclusive roles:
+  // additional_scans dispatches unconditionally per precursor, follow_up_scan fires conditionally
+  // off a returning MS2. A name in both does BOTH -- the same config acquired twice per precursor,
+  // at two different priorities, with no diagnostic. Nothing else catches it: the reference
+  // resolves, so the dangling-name check passes, and the block IS referenced, so the unreferenced
+  // warning stays quiet. Note conditional_ms2 must be true or validate() throws for the other
+  // reason first, which would make this section pass vacuously.
+  TEST_EXCEPTION(std::invalid_argument,
+    Config(cfgJson(R"(, "additional_scans": ["etd_extra"])",
+                   R"("characterization": { "mode": "off" },
+                      "conditional_ms2": true,
+                      "tagging": { "follow_up_scan": "etd_extra" },)",
+                   two_extra_scans)))
+
+  // The same block used ONLY as a follow-up is fine -- that is the intended arrangement, and it is
+  // what keeps a follow-up out of the unconditional roster.
+  {
+    Config cfg(cfgJson("", R"("characterization": { "mode": "off" },
+                              "conditional_ms2": true,
+                              "tagging": { "follow_up_scan": "etd_extra" },)",
+                       two_extra_scans));
+    TEST_EQUAL(cfg.level(2).scans.size(), 1)  // ms2 only; the follow-up is NOT in the roster
+  }
+
   // Array form is a migration error, not a generic unknown-key one.
   TEST_EXCEPTION(std::invalid_argument,
     Config(std::string(R"({ "deconvolution": { "tol": [10,10,10] },

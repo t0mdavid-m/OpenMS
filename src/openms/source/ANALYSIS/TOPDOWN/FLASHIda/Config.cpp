@@ -553,6 +553,24 @@ namespace OpenMS
     resolveFollowUp_(config, "quantification", additional_ms2, quant_.follow_up_scan,
                      quant_.has_follow_up, quant_.follow_up_name);
 
+    // additional_ms2 is ONE flat namespace serving two roles, and the roles are mutually exclusive:
+    // additional_scans dispatches unconditionally once per precursor, a follow_up_scan fires
+    // conditionally off a returning MS2. A name in both does BOTH -- the same scan config acquired
+    // twice per precursor, at two different priorities (2 for the roster entry, 0 for the
+    // follow-up), with no diagnostic. Nothing else in the schema catches it: both references
+    // resolve, so the dangling-name check passes, and the block is referenced, so the unreferenced
+    // warning below stays quiet.
+    auto rejectDoubleDuty = [this](const std::string& section, const std::string& name) {
+      if (name.empty() || additional_scan_names_.count(name) == 0) return;
+      throw std::invalid_argument(
+          "Config: ms_settings.additional_ms2." + name + " is listed in "
+          "precursor_selection.additional_scans AND referenced by " + section
+          + ".follow_up_scan. It would fire unconditionally once per precursor and again as a "
+            "conditional follow-up. Define two entries, or drop it from additional_scans.");
+    };
+    rejectDoubleDuty("tagging", targeting_.tagging_follow_up_name);
+    rejectDoubleDuty("quantification", quant_.follow_up_name);
+
     // A definition nobody references never fires. That is legal but almost always a mistake, and it
     // is the only check that catches a typo on the DEFINITION side (a typo on the reference side is
     // caught above). Warn rather than throw -- commenting a scan out of the roster while tuning is
