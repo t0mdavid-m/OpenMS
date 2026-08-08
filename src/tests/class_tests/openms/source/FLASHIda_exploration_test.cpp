@@ -1386,7 +1386,17 @@ START_SECTION(selection_metric_controls_config)
   TEST_EQUAL(ms1_cfg.max_targets, 3)
 
   auto ms2_cfg = cfg.level(2);
-  TEST_EQUAL(static_cast<int>(ms2_cfg.selection), static_cast<int>(SelectionMetric::Intensity))
+  // Levels 2 and 3 are no longer selected independently: applyCharacterizationMode_ projects BOTH
+  // from characterization.mode, and this fixture is mode:"off", so both are None. That is the
+  // point of ADR-0013 -- MS3 needs level 2 AND level 3 non-None (FLASHIda.cpp:366,
+  // Exploration.cpp:728 and :730), so driving them from one enum makes "MS3 on with MS2 off"
+  // unrepresentable rather than merely discouraged.
+  //
+  // No behaviour moved. level(2).selection is a pure MS3 gate, never a ranking metric --
+  // filterAndRank early-returns for ms_level != 1 and its sole caller passes literal 1 -- so with
+  // MS3 off, Intensity and None were always indistinguishable at runtime. Only the value an
+  // observer reads back off the Config changed.
+  TEST_EQUAL(static_cast<int>(ms2_cfg.selection), static_cast<int>(SelectionMetric::None))
   TEST_EQUAL(ms2_cfg.max_targets, 3)
   TEST_EQUAL(static_cast<int>(ms2_cfg.exploration), static_cast<int>(ExplorationMetric::MassCount))
   TEST_REAL_SIMILAR(ms2_cfg.ce_min, 20.0)
@@ -1648,71 +1658,62 @@ START_SECTION(fragment_count_requires_protein_sequence)
 }
 END_SECTION
 
-START_SECTION(selection_metric_terminal_fragments_parsing)
+// The two removed SELECTION METRICS.
+//
+// selection_strategy.ms3.selection used to be both the MS3 on/off gate and the MS2-matcher
+// chooser: intensity/qscore -> getTopFragmentMatches, terminal_fragments -> getTerminalFragmentIons,
+// ambiguity_resolution -> getAmbiguityEnclosingIons. ADR-0013/0014 deleted that key. The gate is now
+// characterization.mode and the matcher is hardcoded to getTopFragmentMatches -- which is what every
+// MS3-enabled config selected anyway, so the other two SelectionMetric values survive in the engine
+// but NO CONFIG CAN REACH THEM. That is a deliberate capability removal, recorded in ADR-0013.
+//
+// These sections used to assert the values PARSED. They now assert they are REJECTED, which pins the
+// removal: re-introducing a config path to either matcher fails here rather than silently reviving a
+// code path nothing else covers. Both surviving enum sites are checked, because either would be the
+// natural place for someone to re-add them.
+//
+// Written as self-contained JSON rather than find/replace surgery on a shared template. The previous
+// versions searched for "selection": "none" -- a key the reshape deleted -- so all four died on
+// `invalid string position` instead of testing anything.
+namespace
 {
-  // Build a config with ms2 selection = "terminal_fragments" and a protein sequence
-  std::string cfg_str = std::string(ms3_selection_only_config);
-  // ms3_selection_only_config has ms2.selection = "none" and a cytochrome-c protein_sequence (GDVEK...ATNE)
-  // Replace ms2 selection "none" with "terminal_fragments"
-  auto pos = cfg_str.find("\"selection\": \"none\"");
-  TEST_EQUAL(pos != std::string::npos, true)
-  cfg_str.replace(pos, 19, "\"selection\": \"terminal_fragments\"");
-
-  Config cfg{cfg_str};
-  TEST_EQUAL(static_cast<int>(cfg.level(2).selection),
-             static_cast<int>(SelectionMetric::TerminalFragments))
-}
-END_SECTION
-
-START_SECTION(selection_metric_ambiguity_resolution_parsing)
-{
-  // Build a config with ms2 selection = "ambiguity_resolution" and a protein sequence
-  std::string cfg_str = std::string(ms3_selection_only_config);
-  // ms3_selection_only_config has ms2.selection = "none" and a cytochrome-c protein_sequence (GDVEK...ATNE)
-  auto pos = cfg_str.find("\"selection\": \"none\"");
-  TEST_EQUAL(pos != std::string::npos, true)
-  cfg_str.replace(pos, 19, "\"selection\": \"ambiguity_resolution\"");
-
-  Config cfg{cfg_str};
-  TEST_EQUAL(static_cast<int>(cfg.level(2).selection),
-             static_cast<int>(SelectionMetric::AmbiguityResolution))
-}
-END_SECTION
-
-START_SECTION(terminal_fragments_requires_protein_sequence)
-{
-  // ms2 selection = terminal_fragments, protein_sequence empty -> should throw
-  std::string cfg_str = std::string(exploration_config);
-  // Clear protein_sequence to test empty-sequence validation path
+  // Minimal loadable config; `mode` and `rank_by` are the two spots a removed metric could be typed.
+  std::string metricProbe(const std::string& mode, const std::string& rank_by)
   {
-    const std::string seq = "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE";
-    auto seq_pos = cfg_str.find(seq);
-    if (seq_pos != std::string::npos) cfg_str.erase(seq_pos, seq.size());
+    return R"({
+      "deconvolution": { "tol": [10, 10, 10] },
+      "precursor_selection": { "rank_by": ")" + rank_by + R"(", "max_precursors": 3 },
+      "characterization": { "mode": ")" + mode + R"(", "protein_sequence": "PEPTIDER" },
+      "ms_settings": {
+        "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
+        "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 },
+        "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25 }
+      }
+    })";
   }
-  // Change ms2 selection to "terminal_fragments" but leave protein_sequence empty
-  auto pos = cfg_str.find("\"selection\": \"none\"");
-  TEST_EQUAL(pos != std::string::npos, true)
-  cfg_str.replace(pos, 19, "\"selection\": \"terminal_fragments\"");
+}
 
-  TEST_EXCEPTION(std::invalid_argument, Config cfg{cfg_str})
+START_SECTION(terminal_fragments_is_unreachable_from_config)
+{
+  // Sanity: the probe itself loads, so a rejection below is the metric and not a malformed fixture.
+  Config ok{metricProbe("ambiguity", "qscore")};
+  TEST_EQUAL(static_cast<int>(ok.level(3).selection), static_cast<int>(SelectionMetric::Intensity))
+
+  TEST_EXCEPTION(std::invalid_argument, Config cfg{metricProbe("terminal_fragments", "qscore")})
+  TEST_EXCEPTION(std::invalid_argument, Config cfg{metricProbe("ambiguity", "terminal_fragments")})
 }
 END_SECTION
 
-START_SECTION(ambiguity_resolution_requires_protein_sequence)
+START_SECTION(ambiguity_resolution_is_unreachable_from_config)
 {
-  // ms2 selection = ambiguity_resolution, protein_sequence empty -> should throw
-  std::string cfg_str = std::string(exploration_config);
-  // Clear protein_sequence to test empty-sequence validation path
-  {
-    const std::string seq = "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE";
-    auto seq_pos = cfg_str.find(seq);
-    if (seq_pos != std::string::npos) cfg_str.erase(seq_pos, seq.size());
-  }
-  auto pos = cfg_str.find("\"selection\": \"none\"");
-  TEST_EQUAL(pos != std::string::npos, true)
-  cfg_str.replace(pos, 19, "\"selection\": \"ambiguity_resolution\"");
+  // Note "ambiguity_resolution" is NOT "ambiguity". The former is the deleted MATCHER; the latter is
+  // a live characterization.mode value. Conflating the two is the single easiest mistake here, and it
+  // is why mode hard-rejects instead of falling through the way the old objective parse did.
+  TEST_EXCEPTION(std::invalid_argument, Config cfg{metricProbe("ambiguity_resolution", "qscore")})
+  TEST_EXCEPTION(std::invalid_argument, Config cfg{metricProbe("ambiguity", "ambiguity_resolution")})
 
-  TEST_EXCEPTION(std::invalid_argument, Config cfg{cfg_str})
+  Config live{metricProbe("ambiguity", "qscore")};
+  TEST_EQUAL(static_cast<int>(live.characterization().objective), static_cast<int>(CharacterizationObjective::Ambiguity))
 }
 END_SECTION
 
@@ -1995,6 +1996,7 @@ START_SECTION(tol_validation_insufficient_entries)
     "max_mass": 50000,
     "tol": [
       10,
+      10,
       10
     ]
   },
@@ -2045,9 +2047,13 @@ END_SECTION
 
 START_SECTION(selection_without_next_level_scan_config_rejected)
 {
-  // ms2 selects targets for MS3 (selection != none) but no ms_settings.ms3 scan config is
-  // defined -> must throw at construction. Guards the OOB read of next_cfg.scans[0] in
-  // Exploration::initiateNextLevel.
+  // MS3 is ON but no ms_settings.ms3 scan config is defined -> must throw at construction.
+  // Guards the OOB read of next_cfg.scans[0] in Exploration::initiateNextLevel.
+  //
+  // `mode` MUST NOT be "off" here. The schema migration mechanically rewrote this fixture's
+  // ms3.selection:"none" into mode:"off", which silently DEFANGED the test: with MS3 off no
+  // level-3 scan config is required, so the expected throw correctly stopped happening and the
+  // section failed with "no exception thrown". The premise is "MS3 reachable, nowhere to put it".
   const char* missing_next_scan_config = R"({
   "deconvolution": {
     "min_charge": 4,
@@ -2072,7 +2078,7 @@ START_SECTION(selection_without_next_level_scan_config_rejected)
     "max_precursors": 3
   },
   "characterization": {
-    "mode": "off",
+    "mode": "ambiguity",
     "protein_sequence": "PEPTIDER",
     "max_targets": 3
   },

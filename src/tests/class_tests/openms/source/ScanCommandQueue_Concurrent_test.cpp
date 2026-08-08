@@ -28,6 +28,7 @@ namespace
     "max_mass": 50000,
     "tol": [
       10,
+      10,
       10
     ]
   },

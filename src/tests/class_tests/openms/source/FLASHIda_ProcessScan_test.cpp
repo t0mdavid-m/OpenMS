@@ -16,6 +16,8 @@
 #include "FLASHIda_TestHelpers.h"  // ground-truth harness: ScanData/loadTsvScans/AcqResult/runInterleaved/runFullCycle
 #include "FLASHIda_TestAccess.h"   // FLASHIdaTestAccess: push/queue/queueSize/explorationActive (private-state access)
 
+#include <nlohmann/json.hpp>  // buildCapConfig edits the parsed document, not the text
+
 #include <fstream>
 #include <string>
 #include <cstring>
@@ -1464,32 +1466,39 @@ namespace
   const std::string fasta_path = "../../FlashIDA/test-data/configs/test_fasta.fasta";
 
 
-  // Build a cap-test config from the max1_json template: set ms1.max_targets, optionally extend the
-  // single HCD MS2 scan config to HCD+ETD, and enable per-scan results logging (runtime.scan_results_path).
+  // Build a cap-test config from the max1_json template: set the precursor cap, optionally add a
+  // second (ETD) MS2 scan config, and enable per-scan results logging.
+  //
+  // EDITS THE PARSED DOCUMENT, NOT THE TEXT. This used to be three std::string::find calls, each
+  // guarded by `if (p != npos)` -- so when the schema reshape renamed the key and re-indented the
+  // template, all three edits silently became no-ops and this test ran SIX IDENTICAL CONFIGS and
+  // compared them to each other. It stayed green until both the cap edit and the ETD edit died at
+  // once; with only one broken it would have kept passing while testing half of nothing.
+  //
+  // Two specific traps the textual version walked into:
+  //   - it searched for "max_targets": 1, but the cap is precursor_selection.max_precursors now.
+  //     The only surviving max_targets is characterization.max_targets -- the MS3 budget -- so a
+  //     near-miss would have silently changed the wrong knob.
+  //   - it appended `, {...ETD...}` after the HCD object to make an array. ms_settings.ms2 is a
+  //     bare object now; a second MS2 must be DEFINED in additional_ms2 and then REFERENCED from
+  //     precursor_selection.additional_scans, or it parses fine and never dispatches.
   std::string buildCapConfig(int max_targets, bool etd, const std::string& results_path)
   {
-    std::string j(max1_json);
-    {
-      const std::string key = "\"max_targets\": 1";  // sole occurrence (ms1 selection_strategy)
-      auto p = j.find(key);
-      if (p != std::string::npos) j.replace(p, key.size(), "\"max_targets\": " + std::to_string(max_targets));
-    }
+    nlohmann::json j = nlohmann::json::parse(max1_json);
+
+    j["precursor_selection"]["max_precursors"] = max_targets;
+
     if (etd)
     {
-      const std::string hcd = R"({ "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 })";
-      auto p = j.find(hcd);
-      if (p != std::string::npos)
-        j.replace(p, hcd.size(),
-                  hcd + R"(,
-        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "reaction_time": 10.0, "resolution": 120000 })");
+      j["ms_settings"]["additional_ms2"]["etd"] = {
+        {"analyzer", "Orbitrap"}, {"activation", "ETD"}, {"collision_energy", 0},
+        {"reaction_time", 10.0}, {"resolution", 120000}};
+      // Definition alone is inert -- the roster is built from this array.
+      j["precursor_selection"]["additional_scans"] = nlohmann::json::array({"etd"});
     }
-    {
-      const std::string files_key = "\"files\":";
-      auto p = j.find(files_key);
-      if (p != std::string::npos)
-        j.insert(p, "\"runtime\": { \"scan_results_path\": \"" + results_path + "\" }, ");
-    }
-    return j;
+
+    j["runtime"]["scan_results_path"] = results_path;
+    return j.dump();
   }
 
   // Parse a FLASHIda scan_results.tsv. Only MS1 scans are pushed in the cap test, so every data row is

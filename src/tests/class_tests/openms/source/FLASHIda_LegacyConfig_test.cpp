@@ -94,6 +94,7 @@ START_SECTION(([EXTRA] Config rejects exploration with multiple scan configs))
     "max_mass": 50000,
     "tol": [
       10,
+      10,
       10
     ]
   },
@@ -178,6 +179,7 @@ START_SECTION(([EXTRA] Config rejects conditional_ms2 without tagging follow_up_
     "max_mass": 50000,
     "tol": [
       10,
+      10,
       10
     ]
   },
@@ -244,6 +246,7 @@ START_SECTION(([EXTRA] Config rejects legacy ms3.enabled key))
     "min_mass": 500,
     "max_mass": 50000,
     "tol": [
+      10,
       10,
       10
     ]
@@ -312,6 +315,7 @@ START_SECTION(([EXTRA] Config rejects legacy ms3.active key))
     "max_mass": 50000,
     "tol": [
       10,
+      10,
       10
     ]
   },
@@ -378,6 +382,7 @@ START_SECTION(([EXTRA] Config rejects legacy ms3.mode key))
     "min_mass": 500,
     "max_mass": 50000,
     "tol": [
+      10,
       10,
       10
     ]
@@ -446,6 +451,7 @@ START_SECTION(([EXTRA] Config rejects legacy ms3.max_per_ms2 key))
     "max_mass": 50000,
     "tol": [
       10,
+      10,
       10
     ]
   },
@@ -513,6 +519,7 @@ START_SECTION(([EXTRA] Config accepts characterization with only protein_sequenc
     "max_mass": 50000,
     "tol": [
       10,
+      10,
       10
     ]
   },
@@ -574,6 +581,7 @@ START_SECTION(([EXTRA] Config parses charge_based_exclusion flag true))
     "max_mass": 50000,
     "tol": [
       10,
+      10,
       10
     ]
   },
@@ -634,6 +642,7 @@ START_SECTION(([EXTRA] Config charge_based_exclusion defaults to false))
     "min_mass": 500,
     "max_mass": 50000,
     "tol": [
+      10,
       10,
       10
     ]
