@@ -276,10 +276,8 @@ namespace OpenMS
 
     Size mass_count = (Size)config_.level(ms_level).max_targets;
     trigger_charges_.clear();
-    trigger_hcds_.clear();
     trigger_scores_.clear();
     trigger_charges_.reserve(mass_count);
-    trigger_hcds_.reserve(mass_count);
     trigger_scores_.reserve(mass_count);
     trigger_left_isolation_mzs_.clear();
     trigger_left_isolation_mzs_.reserve(mass_count);
@@ -406,7 +404,7 @@ namespace OpenMS
           // dont acquire the same mass multiple times
           if (selected_peak_groups_.size() >= mass_count) { break; }
 
-          struct ChargeCandidate { int charge; double score; int hcd; };
+          struct ChargeCandidate { int charge; double score; };
           std::vector<ChargeCandidate> charges_to_process;
 
           if (config_.targeting().charge_based_exclusion)
@@ -417,8 +415,7 @@ namespace OpenMS
             {
               if (all_qs.count(c) == 0) { continue; }
               double s = all_qs.at(c);
-              int h = config_.targeting().hcd_energy;
-              charges_to_process.push_back({c, s, h});
+              charges_to_process.push_back({c, s});
             }
             std::sort(charges_to_process.begin(), charges_to_process.end(),
                       [](const ChargeCandidate& a, const ChargeCandidate& b) { return a.score > b.score; });
@@ -427,8 +424,6 @@ namespace OpenMS
           {
             int charge;
             double score;
-            int hcd = config_.targeting().hcd_energy;
-
             if (config_.targeting().consider_all_charges) {
               charge = pg.getBestQScoreCharge();
               score = pg.getBestQScore();
@@ -437,7 +432,7 @@ namespace OpenMS
               charge = pg.getRepAbsCharge();
               score = pg.getQscore();
             }
-            charges_to_process.push_back({charge, score, hcd});
+            charges_to_process.push_back({charge, score});
           }
 
           for (const auto& cc : charges_to_process)
@@ -445,7 +440,6 @@ namespace OpenMS
             if (selected_peak_groups_.size() >= mass_count) { break; }
             int charge = cc.charge;
             double score = cc.score;
-            int hcd = cc.hcd;
 
             // Per-level charge filter: ms1.min_charge controls what MS1 picks
             if (config_.level(ms_level).min_charge > 0 && charge < config_.level(ms_level).min_charge)
@@ -684,7 +678,6 @@ namespace OpenMS
 
             selected_peak_groups_.push_back(pg);
             trigger_charges_.push_back(charge);
-            trigger_hcds_.push_back(hcd);
             trigger_scores_.push_back(score);
 
             trigger_left_isolation_mzs_.push_back(mz1);
@@ -727,51 +720,6 @@ namespace OpenMS
         const auto key = std::make_pair(nominal_mass, cit->second);
         tqscore_exceeding_mass_charge_set_.erase(key);
       }
-    }
-  }
-
-  void PrecursorSelection::getIsolationWindows(double* wstart,
-                                               double* wend,
-                                               double* qscores,
-                                               int* charges,
-                                               int* min_charges,
-                                               int* max_charges,
-                                               double* mono_masses,
-                                               double* charge_cos,
-                                               double* charge_snrs,
-                                               double* iso_cos,
-                                               double* snrs,
-                                               double* charge_scores,
-                                               double* ppm_errors,
-                                               double* precursor_intensities,
-                                               double* peakgroup_intensities,
-                                               int* hcds,
-                                               int* ids)
-  {
-    for (Size i = 0; i < selected_peak_groups_.size(); i++)
-    {
-      if (trigger_charges_[i] == 0) { continue; }
-      auto peakgroup = selected_peak_groups_[i];
-      charges[i] = trigger_charges_[i];
-      auto cr = peakgroup.getAbsChargeRange();
-      min_charges[i] = std::get<0>(cr);
-      max_charges[i] = std::get<1>(cr);
-
-      wstart[i] = trigger_left_isolation_mzs_[i];
-      wend[i] = trigger_right_isolation_mzs_[i];
-
-      qscores[i] = trigger_scores_[i];
-      mono_masses[i] = peakgroup.getMonoMass();
-      charge_cos[i] = peakgroup.getChargeIsotopeCosine(charges[i]);
-      charge_snrs[i] = peakgroup.getChargeSNR(charges[i]);
-      iso_cos[i] = peakgroup.getIsotopeCosine();
-      snrs[i] = peakgroup.getSNR();
-      charge_scores[i] = peakgroup.getChargeScore();
-      ppm_errors[i] = peakgroup.getAvgPPMError();
-      peakgroup_intensities[i] = peakgroup.getIntensity();
-      precursor_intensities[i] = peakgroup.getChargeIntensity(charges[i]);
-      hcds[i] = trigger_hcds_[i];
-      ids[i] = trigger_ids_[i];
     }
   }
 

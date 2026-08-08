@@ -141,9 +141,6 @@ namespace OpenMS
     /// Access trigger charges populated by filterAndRank
     const std::vector<int>& triggerCharges() const { return trigger_charges_; }
 
-    /// Access trigger HCD energies populated by filterAndRank
-    const std::vector<int>& triggerHcds() const { return trigger_hcds_; }
-
     /// Access trigger scores populated by filterAndRank
     const std::vector<float>& triggerScores() const { return trigger_scores_; }
 
@@ -178,18 +175,6 @@ namespace OpenMS
      */
     void removeFromExclusionList(int id);
 
-    /**
-     * @brief Fill legacy isolation window arrays from the last filterAndRank call
-     */
-    void getIsolationWindows(double* window_start, double* window_end,
-                             double* qscores, int* charges,
-                             int* min_charges, int* max_charges,
-                             double* mono_masses, double* charge_cos,
-                             double* charge_snrs, double* iso_cos,
-                             double* snrs, double* charge_scores,
-                             double* ppm_errors, double* precursor_intensities,
-                             double* peakgroup_intensities, int* hcds, int* ids);
-
     /// Check if tag-based targeting database is loaded (non-empty)
     bool hasTargetProteinDatabase() const { return !target_protein_database_.empty(); }
 
@@ -202,7 +187,6 @@ namespace OpenMS
 
     /// Trigger arrays populated by filterAndRank
     std::vector<int> trigger_charges_;
-    std::vector<int> trigger_hcds_;
     std::vector<float> trigger_scores_;
     std::vector<double> trigger_left_isolation_mzs_;
     std::vector<double> trigger_right_isolation_mzs_;

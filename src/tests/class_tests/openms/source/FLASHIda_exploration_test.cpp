@@ -1984,7 +1984,10 @@ END_SECTION
 
 START_SECTION(tol_validation_insufficient_entries)
 {
-  // MS3 configured in selection_strategy but only 2 tol entries -> must throw
+  // DELIBERATELY 2 tol ENTRIES -- do not "fix" this to 3. levels_ materialises {1,2,3}
+  // unconditionally and requires tol.size() >= 3, and proving that throw is the whole point
+  // of this section. A bulk sweep that extended every 2-entry tol array in the tree defanged
+  // it once already, and the assertion then passes vacuously because nothing throws.
   const char* insufficient_tol_config = R"({
   "deconvolution": {
     "min_charge": 4,
@@ -1992,7 +1995,6 @@ START_SECTION(tol_validation_insufficient_entries)
     "min_mass": 500,
     "max_mass": 50000,
     "tol": [
-      10,
       10,
       10
     ]

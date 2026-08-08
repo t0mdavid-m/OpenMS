@@ -172,7 +172,10 @@ namespace OpenMS
     double rt_window = 180.0;
     bool consider_all_charges = false;
     bool charge_based_exclusion = false;  ///< Treat each (mass, charge) as an independent exclusion target (developer flag).
-    int hcd_energy = -1;
+    // NOTE: there is no hcd_energy here any more. The precursor_selection.HCDEnergy key was deleted
+    // (ADR-0014) because its only export, PrecursorSelection::getIsolationWindows(), had zero callers
+    // repo-wide. Do not confuse it with ScanCommand::hcd_energy, which is alive and unrelated: that
+    // one mirrors stages[0].collision_energy into the log schema and is part of the 2048-byte ABI.
     double qscore_threshold = 0.0;
     double tqscore_threshold = 0.9;
     double snr_threshold = 1.0;
