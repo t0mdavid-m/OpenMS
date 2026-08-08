@@ -22,74 +22,85 @@ using namespace OpenMS;
 namespace
 {
   // Minimal JSON config matching Phase 1 schema — just enough to construct FLASHIda
-  const char* minimal_json_config = R"({
-    "deconvolution": {
-      "score_threshold": 0.0,
-      "tqscore_threshold": 0.9,
-      "min_charge": 4,
-      "max_charge": 50,
-      "min_mass": 500,
-      "max_mass": 50000,
-      "tol": [10, 10, 10]
-    },
-    "precursor_selection": {
-      "RT_window": 180,
-      "target_mode": 0,
-      "AllCharges": false,
-      "HCDEnergy": 29,
-      "strict_inclusion": false,
-      "tie_threshold": 0.1
-    },
-    "flashtnt": {
-      "min_length": 3,
-      "max_length": 8,
-      "max_ptm_count": 3,
-      "max_flanking_mass_diff": 50000
-    },
-    "quantification": {
+  const char* minimal_json_config = R"(
+{
+  "deconvolution": {
+    "score_threshold": 0.0,
+    "tqscore_threshold": 0.9,
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10,
+      10
+    ]
+  },
+  "flashtnt": {
+    "min_length": 3,
+    "max_length": 8,
+    "max_ptm_count": 3,
+    "max_flanking_mass_diff": 50000
+  },
+  "faims": {
+    "cv_values": [],
+    "max_cv_skip": 0
+  },
+  "scheduling": {
+    "cycle_time": {
       "enabled": false,
-      "reporter_mz_tol": 0.002,
-      "fold_change_threshold": 1.4
+      "value_ms": 60000
     },
-    "faims": {
-      "cv_values": [],
-      "max_cv_skip": 0
-    },
-    "ms_settings": {
-      "ms1": {
-        "analyzer": "Orbitrap",
-        "first_mass": 500,
-        "last_mass": 2000,
-        "resolution": 120000,
-        "agc_target": 800000,
-        "max_it": 246
-      },
-      "ms2": [
-        {
-          "analyzer": "Orbitrap",
-          "activation": "ETD",
-          "collision_energy": 0,
-          "reaction_time": 10.0,
-          "resolution": 120000
-        }
-      ]
-    },
-    "scheduling": {
-      "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": false, "value_ms": 30000 }
-    },
-    "files": {
-      "target_logs": [],
-      "fasta": "",
-      "inclusion_list": "",
-      "ptm_list": ""
-    },
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 1 },
-      "ms2": { "selection": "none" },
-      "ms3": { "selection": "none" }
+    "scan_timeout": {
+      "enabled": false,
+      "value_ms": 30000
     }
-  })";
+  },
+  "files": {
+    "target_logs": [],
+    "fasta": "",
+    "inclusion_list": "",
+    "ptm_list": ""
+  },
+  "precursor_selection": {
+    "rt_window": 180,
+    "targeting": "none",
+    "consider_all_charges": false,
+    "strict_inclusion": false,
+    "tie_threshold": 0.1,
+    "rank_by": "qscore",
+    "max_precursors": 1
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
+    },
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "ETD",
+      "collision_energy": 0,
+      "reaction_time": 10.0,
+      "resolution": 120000
+    }
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false,
+    "reporter_mz_tol": 0.002,
+    "fold_change_threshold": 1.4
+  }
+}
+)";
 
   FLASHIda* createTestInstance()
   {
@@ -103,38 +114,97 @@ namespace
   //
   // ms1 carries a full source region and microscans 4; ms2 has TWO configs whose agc_target and
   // max_it deliberately differ, which is what makes the buildMS2 section non-vacuous.
-  const char* scan_sourcing_config = R"({
-    "deconvolution": { "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
-    "precursor_selection": { "RT_window": 180, "target_mode": 0 },
-    "tagging": {},
-    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
-    "quantification": { "enabled": false },
-    "faims": { "cv_values": [], "max_cv_skip": 0 },
-    "ms_settings": {
-      "ms1": {
-        "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000,
-        "resolution": 120000, "agc_target": 800000, "max_it": 246,
-        "microscans": 4, "data_type": "Centroid",
-        "rf_lens": 60, "source_cid": 15, "source_cid_scaling": 0
-      },
-      "ms2": [
-        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29,
-          "resolution": 120000, "agc_target": 500000, "max_it": 150 },
-        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 35,
-          "resolution": 60000, "agc_target": 300000, "max_it": 100 }
-      ]
+  const char* scan_sourcing_config = R"(
+{
+  "deconvolution": {
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10,
+      10
+    ]
+  },
+  "flashtnt": {
+    "min_length": 3,
+    "max_length": 8,
+    "max_ptm_count": 3,
+    "max_flanking_mass_diff": 50000
+  },
+  "faims": {
+    "cv_values": [],
+    "max_cv_skip": 0
+  },
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false,
+      "value_ms": 60000
     },
-    "scheduling": {
-      "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": false, "value_ms": 30000 }
-    },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 1 },
-      "ms2": { "selection": "none" },
-      "ms3": { "selection": "none" }
+    "scan_timeout": {
+      "enabled": false,
+      "value_ms": 30000
     }
-  })";
+  },
+  "files": {
+    "target_logs": [],
+    "fasta": "",
+    "inclusion_list": "",
+    "ptm_list": ""
+  },
+  "precursor_selection": {
+    "rt_window": 180,
+    "targeting": "none",
+    "rank_by": "qscore",
+    "max_precursors": 1,
+    "additional_scans": [
+      "secondary"
+    ]
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246,
+      "microscans": 4,
+      "data_type": "Centroid",
+      "rf_lens": 60,
+      "source_cid": 15,
+      "source_cid_scaling": 0
+    },
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000,
+      "agc_target": 500000,
+      "max_it": 150
+    },
+    "additional_ms2": {
+      "secondary": {
+        "analyzer": "Orbitrap",
+        "activation": "HCD",
+        "collision_energy": 35,
+        "resolution": 60000,
+        "agc_target": 300000,
+        "max_it": 100
+      }
+    }
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false
+  }
+}
+)";
 }
 
 START_TEST(FLASHIdaQueueTracking, "$Id$")
@@ -245,36 +315,86 @@ END_SECTION
 START_SECTION(agc_scan_is_dequeued_first)
 {
   // Create FLASHIda with agc_interval_seconds = 0 (always needs AGC)
-  const char* agc_config = R"({
-    "deconvolution": {
-      "score_threshold": 0.0, "tqscore_threshold": 0.9,
-      "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
+  const char* agc_config = R"(
+{
+  "deconvolution": {
+    "score_threshold": 0.0,
+    "tqscore_threshold": 0.9,
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10,
+      10
+    ]
+  },
+  "flashtnt": {
+    "min_length": 3,
+    "max_length": 8,
+    "max_ptm_count": 3,
+    "max_flanking_mass_diff": 50000
+  },
+  "faims": {
+    "cv_values": [],
+    "max_cv_skip": 0
+  },
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false,
+      "value_ms": 60000
     },
-    "precursor_selection": {
-      "RT_window": 180, "target_mode": 0,
-      "AllCharges": false,
-      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    "scan_timeout": {
+      "enabled": false,
+      "value_ms": 30000
     },
-    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
-    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
-    "faims": { "cv_values": [], "max_cv_skip": 0 },
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [{ "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "reaction_time": 10.0, "resolution": 120000 }]
+    "agc_interval_seconds": 0
+  },
+  "files": {
+    "target_logs": [],
+    "fasta": "",
+    "inclusion_list": "",
+    "ptm_list": ""
+  },
+  "precursor_selection": {
+    "rt_window": 180,
+    "targeting": "none",
+    "consider_all_charges": false,
+    "strict_inclusion": false,
+    "tie_threshold": 0.1,
+    "rank_by": "qscore",
+    "max_precursors": 1
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
     },
-    "scheduling": {
-      "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": false, "value_ms": 30000 },
-      "agc_interval_seconds": 0
-    },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 1 },
-      "ms2": { "selection": "none" },
-      "ms3": { "selection": "none" }
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "ETD",
+      "collision_energy": 0,
+      "reaction_time": 10.0,
+      "resolution": 120000
     }
-  })";
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false,
+    "reporter_mz_tol": 0.002,
+    "fold_change_threshold": 1.4
+  }
+}
+)";
 
   FLASHIda* ida = new FLASHIda(const_cast<char*>(agc_config));
 

@@ -1345,17 +1345,23 @@ START_SECTION(exclusion_mode2_tqscore_suppresses_target_mass)
   // (Config.cpp:98) = 0.9; rt_window 180 >> the tiny ecoli RTs, so every target-log observation is within
   // window of every survey scan.
   auto cfg = [](int mode, int max_targets, const std::string& target_log_json) {
+    // target_mode was an int; targeting is a string enum. Mapped from the CODE
+    // (PrecursorSelection.cpp:138-141): 2 is in-depth and 3 is exclusion, which is the reverse of
+    // what the old doc comments claimed.
+    const char* targeting = mode == 1 ? "inclusion"
+                          : mode == 2 ? "in_depth"
+                          : mode == 3 ? "exclusion_masses" : "none";
     std::ostringstream o;
     o << R"({
       "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
-      "precursor_selection": { "RT_window": 180, "target_mode": )" << mode << R"(, "AllCharges": false, "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1 },
+      "precursor_selection": { "rt_window": 180, "targeting": ")" << targeting << R"(", "consider_all_charges": false, "strict_inclusion": false, "tie_threshold": 0.1, "rank_by": "qscore", "max_precursors": )" << max_targets << R"( },
       "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
       "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
       "faims": { "cv_values": [], "max_cv_skip": 0 },
-      "ms_settings": { "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 }, "ms2": [ { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 } ] },
+      "ms_settings": { "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 }, "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 } },
       "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 }, "agc_interval_seconds": 999999 },
       "files": { "target_logs": [)" << target_log_json << R"(], "fasta": "", "inclusion_list": "", "ptm_list": "" },
-      "selection_strategy": { "ms1": { "selection": "qscore", "max_targets": )" << max_targets << R"( }, "ms2": { "selection": "none" }, "ms3": { "selection": "none" } }
+      "characterization": { "mode": "off" }
     })";
     return o.str();
   };

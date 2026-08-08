@@ -24,73 +24,167 @@ using namespace OpenMS;
 
 namespace
 {
-  const char* base_off_json = R"({
-    "deconvolution": {
-      "score_threshold": 0.0, "tqscore_threshold": 0.9,
-      "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
+  const char* base_off_json = R"(
+{
+  "deconvolution": {
+    "score_threshold": 0.0,
+    "tqscore_threshold": 0.9,
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10,
+      10
+    ]
+  },
+  "flashtnt": {
+    "min_length": 3,
+    "max_length": 8,
+    "max_ptm_count": 3,
+    "max_flanking_mass_diff": 50000
+  },
+  "faims": {
+    "cv_values": [],
+    "max_cv_skip": 0
+  },
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false,
+      "value_ms": 60000
     },
-    "precursor_selection": {
-      "RT_window": 180, "target_mode": 0,
-      "AllCharges": false,
-      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1,
-      "ChargeBasedExclusion": false
+    "scan_timeout": {
+      "enabled": true,
+      "value_ms": 30000
     },
-    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
-    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
-    "faims": { "cv_values": [], "max_cv_skip": 0 },
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [
-        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }
-      ]
+    "agc_interval_seconds": 30
+  },
+  "files": {
+    "target_logs": [],
+    "fasta": "",
+    "inclusion_list": "",
+    "ptm_list": ""
+  },
+  "precursor_selection": {
+    "rt_window": 180,
+    "targeting": "none",
+    "consider_all_charges": false,
+    "charge_based_exclusion": false,
+    "strict_inclusion": false,
+    "tie_threshold": 0.1,
+    "rank_by": "qscore",
+    "max_precursors": 10
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
     },
-    "scheduling": {
-      "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": true, "value_ms": 30000 },
-      "agc_interval_seconds": 30
-    },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 10 },
-      "ms2": { "selection": "none" },
-      "ms3": { "selection": "none" }
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
     }
-  })";
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false,
+    "reporter_mz_tol": 0.002,
+    "fold_change_threshold": 1.4
+  }
+}
+)";
 
-  const char* base_on_json = R"({
-    "deconvolution": {
-      "score_threshold": 0.0, "tqscore_threshold": 0.3,
-      "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
+  const char* base_on_json = R"(
+{
+  "deconvolution": {
+    "score_threshold": 0.0,
+    "tqscore_threshold": 0.3,
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10,
+      10
+    ]
+  },
+  "flashtnt": {
+    "min_length": 3,
+    "max_length": 8,
+    "max_ptm_count": 3,
+    "max_flanking_mass_diff": 50000
+  },
+  "faims": {
+    "cv_values": [],
+    "max_cv_skip": 0
+  },
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false,
+      "value_ms": 60000
     },
-    "precursor_selection": {
-      "RT_window": 180, "target_mode": 0,
-      "AllCharges": false,
-      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1,
-      "ChargeBasedExclusion": true
+    "scan_timeout": {
+      "enabled": true,
+      "value_ms": 30000
     },
-    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
-    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
-    "faims": { "cv_values": [], "max_cv_skip": 0 },
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [
-        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }
-      ]
+    "agc_interval_seconds": 30
+  },
+  "files": {
+    "target_logs": [],
+    "fasta": "",
+    "inclusion_list": "",
+    "ptm_list": ""
+  },
+  "precursor_selection": {
+    "rt_window": 180,
+    "targeting": "none",
+    "consider_all_charges": false,
+    "charge_based_exclusion": true,
+    "strict_inclusion": false,
+    "tie_threshold": 0.1,
+    "rank_by": "qscore",
+    "max_precursors": 10
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
     },
-    "scheduling": {
-      "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": true, "value_ms": 30000 },
-      "agc_interval_seconds": 30
-    },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 10 },
-      "ms2": { "selection": "none" },
-      "ms3": { "selection": "none" }
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
     }
-  })";
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false,
+    "reporter_mz_tol": 0.002,
+    "fold_change_threshold": 1.4
+  }
+}
+)";
 
   // cytC (~12356 Da neutral) is present at many charge states (envelopes at m/z
   // ~1030/1124/1236/1373/1545), so a single mass appears at >=2 charges (CBE-03) and every

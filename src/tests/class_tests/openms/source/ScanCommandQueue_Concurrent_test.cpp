@@ -20,34 +20,64 @@ using namespace OpenMS;
 
 namespace
 {
-  const char* minimal_config = R"({
-    "deconvolution": {
-      "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000,
-      "tol": [10, 10]
+  const char* minimal_config = R"(
+{
+  "deconvolution": {
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10
+    ]
+  },
+  "faims": {
+    "cv_values": []
+  },
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false
     },
-    "precursor_selection": { "RT_window": 180, "target_mode": 0 },
-    "tagging": {},
-    "quantification": { "enabled": false },
-    "faims": { "cv_values": [] },
-    "ms_settings": {
-      "ms1": {
-        "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000,
-        "resolution": 120000, "agc_target": 800000, "max_it": 246
-      },
-      "ms2": [{ "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }]
+    "scan_timeout": {
+      "enabled": true,
+      "value_ms": 100
     },
-    "scheduling": {
-      "cycle_time": { "enabled": false },
-      "scan_timeout": { "enabled": true, "value_ms": 100 },
-      "agc_interval_seconds": 30
+    "agc_interval_seconds": 30
+  },
+  "files": {},
+  "precursor_selection": {
+    "rt_window": 180,
+    "targeting": "none",
+    "rank_by": "qscore",
+    "max_precursors": 10
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
     },
-    "files": {},
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 10 },
-      "ms2": { "selection": "none" }
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
     }
-  })";
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false
+  }
+}
+)";
 }
 
 START_TEST(ScanCommandQueue_Concurrent, "$Id$")

@@ -24,216 +24,257 @@ using namespace OpenMS;
 namespace
 {
   // JSON config with 3 CVs, no skipping
-  const char* faims_3cv_config = R"({
-    "deconvolution": {
-      "score_threshold": 0.0,
-      "tqscore_threshold": 0.9,
-      "min_charge": 4,
-      "max_charge": 50,
-      "min_mass": 500,
-      "max_mass": 50000,
-      "tol": [10, 10, 10]
-    },
-    "precursor_selection": {
-      "RT_window": 180,
-      "target_mode": 0,
-      "AllCharges": false,
-      "HCDEnergy": 29,
-      "strict_inclusion": false,
-      "tie_threshold": 0.1
-    },
-    "flashtnt": {
-      "min_length": 3,
-      "max_length": 8,
-      "max_ptm_count": 3,
-      "max_flanking_mass_diff": 50000
-    },
-    "quantification": {
+  const char* faims_3cv_config = R"(
+{
+  "deconvolution": {
+    "score_threshold": 0.0,
+    "tqscore_threshold": 0.9,
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10,
+      10
+    ]
+  },
+  "flashtnt": {
+    "min_length": 3,
+    "max_length": 8,
+    "max_ptm_count": 3,
+    "max_flanking_mass_diff": 50000
+  },
+  "faims": {
+    "cv_values": [
+      -40,
+      -50,
+      -60
+    ],
+    "max_cv_skip": 0,
+    "cv_precursor_threshold": 15
+  },
+  "scheduling": {
+    "cycle_time": {
       "enabled": false,
-      "reporter_mz_tol": 0.002,
-      "fold_change_threshold": 1.4
+      "value_ms": 60000
     },
-    "faims": {
-      "cv_values": [-40, -50, -60],
-      "max_cv_skip": 0,
-      "cv_precursor_threshold": 15
-    },
-    "ms_settings": {
-      "ms1": {
-        "analyzer": "Orbitrap",
-        "first_mass": 500,
-        "last_mass": 2000,
-        "resolution": 120000,
-        "agc_target": 800000,
-        "max_it": 246
-      },
-      "ms2": [
-        {
-          "analyzer": "Orbitrap",
-          "activation": "HCD",
-          "collision_energy": 29,
-          "resolution": 120000
-        }
-      ]
-    },
-    "scheduling": {
-      "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": false, "value_ms": 30000 }
-    },
-    "files": {
-      "target_logs": [],
-      "fasta": "",
-      "inclusion_list": "",
-      "ptm_list": ""
-    },
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 1 },
-      "ms2": { "selection": "none" },
-      "ms3": { "selection": "none" }
+    "scan_timeout": {
+      "enabled": false,
+      "value_ms": 30000
     }
-  })";
+  },
+  "files": {
+    "target_logs": [],
+    "fasta": "",
+    "inclusion_list": "",
+    "ptm_list": ""
+  },
+  "precursor_selection": {
+    "rt_window": 180,
+    "targeting": "none",
+    "consider_all_charges": false,
+    "strict_inclusion": false,
+    "tie_threshold": 0.1,
+    "rank_by": "qscore",
+    "max_precursors": 1
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
+    },
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
+    }
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false,
+    "reporter_mz_tol": 0.002,
+    "fold_change_threshold": 1.4
+  }
+}
+)";
 
   // JSON config with 3 CVs, adaptive skipping enabled
-  const char* faims_skip_config = R"({
-    "deconvolution": {
-      "score_threshold": 0.0,
-      "tqscore_threshold": 0.9,
-      "min_charge": 4,
-      "max_charge": 50,
-      "min_mass": 500,
-      "max_mass": 50000,
-      "tol": [10, 10, 10]
-    },
-    "precursor_selection": {
-      "RT_window": 180,
-      "target_mode": 0,
-      "AllCharges": false,
-      "HCDEnergy": 29,
-      "strict_inclusion": false,
-      "tie_threshold": 0.1
-    },
-    "flashtnt": {
-      "min_length": 3,
-      "max_length": 8,
-      "max_ptm_count": 3,
-      "max_flanking_mass_diff": 50000
-    },
-    "quantification": {
+  const char* faims_skip_config = R"(
+{
+  "deconvolution": {
+    "score_threshold": 0.0,
+    "tqscore_threshold": 0.9,
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10,
+      10
+    ]
+  },
+  "flashtnt": {
+    "min_length": 3,
+    "max_length": 8,
+    "max_ptm_count": 3,
+    "max_flanking_mass_diff": 50000
+  },
+  "faims": {
+    "cv_values": [
+      -40,
+      -50,
+      -60
+    ],
+    "max_cv_skip": 2,
+    "cv_precursor_threshold": 15
+  },
+  "scheduling": {
+    "cycle_time": {
       "enabled": false,
-      "reporter_mz_tol": 0.002,
-      "fold_change_threshold": 1.4
+      "value_ms": 60000
     },
-    "faims": {
-      "cv_values": [-40, -50, -60],
-      "max_cv_skip": 2,
-      "cv_precursor_threshold": 15
-    },
-    "ms_settings": {
-      "ms1": {
-        "analyzer": "Orbitrap",
-        "first_mass": 500,
-        "last_mass": 2000,
-        "resolution": 120000,
-        "agc_target": 800000,
-        "max_it": 246
-      },
-      "ms2": [
-        {
-          "analyzer": "Orbitrap",
-          "activation": "HCD",
-          "collision_energy": 29,
-          "resolution": 120000
-        }
-      ]
-    },
-    "scheduling": {
-      "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": false, "value_ms": 30000 }
-    },
-    "files": {
-      "target_logs": [],
-      "fasta": "",
-      "inclusion_list": "",
-      "ptm_list": ""
-    },
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 1 },
-      "ms2": { "selection": "none" },
-      "ms3": { "selection": "none" }
+    "scan_timeout": {
+      "enabled": false,
+      "value_ms": 30000
     }
-  })";
+  },
+  "files": {
+    "target_logs": [],
+    "fasta": "",
+    "inclusion_list": "",
+    "ptm_list": ""
+  },
+  "precursor_selection": {
+    "rt_window": 180,
+    "targeting": "none",
+    "consider_all_charges": false,
+    "strict_inclusion": false,
+    "tie_threshold": 0.1,
+    "rank_by": "qscore",
+    "max_precursors": 1
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
+    },
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
+    }
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false,
+    "reporter_mz_tol": 0.002,
+    "fold_change_threshold": 1.4
+  }
+}
+)";
 
   // JSON config with no FAIMS. An EMPTY cv_values is the only way to say that (ADR-0012).
   // This fixture used to carry [-50] and rely on faims_.enabled being `cv_values.size() > 1`,
   // i.e. it expressed "no FAIMS" as "one CV, which is not enough to cycle". That conflation was
   // the defect: a real fixed-CV FAIMS method was silently treated as no FAIMS at all.
-  const char* non_faims_config = R"({
-    "deconvolution": {
-      "score_threshold": 0.0,
-      "tqscore_threshold": 0.9,
-      "min_charge": 4,
-      "max_charge": 50,
-      "min_mass": 500,
-      "max_mass": 50000,
-      "tol": [10, 10, 10]
-    },
-    "precursor_selection": {
-      "RT_window": 180,
-      "target_mode": 0,
-      "AllCharges": false,
-      "HCDEnergy": 29,
-      "strict_inclusion": false,
-      "tie_threshold": 0.1
-    },
-    "flashtnt": {
-      "min_length": 3,
-      "max_length": 8,
-      "max_ptm_count": 3,
-      "max_flanking_mass_diff": 50000
-    },
-    "quantification": {
+  const char* non_faims_config = R"(
+{
+  "deconvolution": {
+    "score_threshold": 0.0,
+    "tqscore_threshold": 0.9,
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10,
+      10
+    ]
+  },
+  "flashtnt": {
+    "min_length": 3,
+    "max_length": 8,
+    "max_ptm_count": 3,
+    "max_flanking_mass_diff": 50000
+  },
+  "faims": {
+    "cv_values": [],
+    "max_cv_skip": 0
+  },
+  "scheduling": {
+    "cycle_time": {
       "enabled": false,
-      "reporter_mz_tol": 0.002,
-      "fold_change_threshold": 1.4
+      "value_ms": 60000
     },
-    "faims": {
-      "cv_values": [],
-      "max_cv_skip": 0
-    },
-    "ms_settings": {
-      "ms1": {
-        "analyzer": "Orbitrap",
-        "first_mass": 500,
-        "last_mass": 2000,
-        "resolution": 120000,
-        "agc_target": 800000,
-        "max_it": 246
-      },
-      "ms2": [
-        {
-          "analyzer": "Orbitrap",
-          "activation": "HCD",
-          "collision_energy": 29,
-          "resolution": 120000
-        }
-      ]
-    },
-    "scheduling": {
-      "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": false, "value_ms": 30000 }
-    },
-    "files": {
-      "target_logs": [],
-      "fasta": "",
-      "inclusion_list": "",
-      "ptm_list": ""
-    },
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 1 },
-      "ms2": { "selection": "none" },
-      "ms3": { "selection": "none" }
+    "scan_timeout": {
+      "enabled": false,
+      "value_ms": 30000
     }
-  })";
+  },
+  "files": {
+    "target_logs": [],
+    "fasta": "",
+    "inclusion_list": "",
+    "ptm_list": ""
+  },
+  "precursor_selection": {
+    "rt_window": 180,
+    "targeting": "none",
+    "consider_all_charges": false,
+    "strict_inclusion": false,
+    "tie_threshold": 0.1,
+    "rank_by": "qscore",
+    "max_precursors": 1
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
+    },
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
+    }
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false,
+    "reporter_mz_tol": 0.002,
+    "fold_change_threshold": 1.4
+  }
+}
+)";
 
   FLASHIda* createFaims3CV()
   {

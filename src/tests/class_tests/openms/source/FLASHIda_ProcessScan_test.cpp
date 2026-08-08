@@ -33,586 +33,1437 @@ using namespace OpenMS;
 namespace
 {
   // Minimal JSON config for standard DDA mode with score_threshold=0 to accept all peaks
-  const char* standard_json = R"({
-    "deconvolution": {
-      "score_threshold": 0.0, "tqscore_threshold": 0.9,
-      "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
+  const char* standard_json = R"(
+{
+  "deconvolution": {
+    "score_threshold": 0.0,
+    "tqscore_threshold": 0.9,
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10,
+      10
+    ]
+  },
+  "flashtnt": {
+    "min_length": 3,
+    "max_length": 8,
+    "max_ptm_count": 3,
+    "max_flanking_mass_diff": 50000
+  },
+  "faims": {
+    "cv_values": [],
+    "max_cv_skip": 0
+  },
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false,
+      "value_ms": 60000
     },
-    "precursor_selection": {
-      "RT_window": 180, "target_mode": 0,
-      "AllCharges": false,
-      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    "scan_timeout": {
+      "enabled": false,
+      "value_ms": 30000
     },
-    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
-    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
-    "faims": { "cv_values": [], "max_cv_skip": 0 },
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [
-        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
-        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "reaction_time": 10.0, "resolution": 120000 }
-      ]
+    "agc_interval_seconds": 9999999
+  },
+  "files": {
+    "target_logs": [],
+    "fasta": "",
+    "inclusion_list": "",
+    "ptm_list": ""
+  },
+  "precursor_selection": {
+    "rt_window": 180,
+    "targeting": "none",
+    "consider_all_charges": false,
+    "strict_inclusion": false,
+    "tie_threshold": 0.1,
+    "rank_by": "qscore",
+    "max_precursors": 3,
+    "additional_scans": [
+      "secondary"
+    ]
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
     },
-    "scheduling": {
-      "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": false, "value_ms": 30000 },
-      "agc_interval_seconds": 9999999
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
     },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "none" },
-      "ms3": { "selection": "none" }
+    "additional_ms2": {
+      "secondary": {
+        "analyzer": "Orbitrap",
+        "activation": "ETD",
+        "collision_energy": 0,
+        "reaction_time": 10.0,
+        "resolution": 120000
+      }
     }
-  })";
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false,
+    "reporter_mz_tol": 0.002,
+    "fold_change_threshold": 1.4
+  }
+}
+)";
 
   // Config with MS3 targeting enabled: inclusion mode (target_mode=1) + cytC inclusion list
   // pins the precursor, plus MS3 selection via selection_strategy. Mirrors C# CT35.
-  const char* ms3_mode1_json = R"({
-    "deconvolution": {
-      "score_threshold": 0.0, "tqscore_threshold": 0.9,
-      "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
+  const char* ms3_mode1_json = R"(
+{
+  "deconvolution": {
+    "score_threshold": 0.0,
+    "tqscore_threshold": 0.9,
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10,
+      10
+    ]
+  },
+  "flashtnt": {
+    "min_length": 3,
+    "max_length": 8,
+    "max_ptm_count": 3,
+    "max_flanking_mass_diff": 50000
+  },
+  "faims": {
+    "cv_values": [],
+    "max_cv_skip": 0
+  },
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false,
+      "value_ms": 60000
     },
-    "precursor_selection": {
-      "RT_window": 180, "target_mode": 1,
-      "AllCharges": false,
-      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    "scan_timeout": {
+      "enabled": false,
+      "value_ms": 30000
     },
-    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
-    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
-    "faims": { "cv_values": [], "max_cv_skip": 0 },
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [
-        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }
-      ],
-      "ms3": [
-        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 35, "resolution": 120000 }
-      ]
+    "agc_interval_seconds": 9999999
+  },
+  "files": {
+    "target_logs": [],
+    "fasta": "",
+    "inclusion_list": "../../FlashIDA/test-data/configs/inclusion_cytc.txt",
+    "ptm_list": ""
+  },
+  "precursor_selection": {
+    "rt_window": 180,
+    "targeting": "inclusion",
+    "consider_all_charges": false,
+    "strict_inclusion": false,
+    "tie_threshold": 0.1,
+    "rank_by": "qscore",
+    "max_precursors": 1
+  },
+  "characterization": {
+    "mode": "ambiguity",
+    "protein_sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE",
+    "max_targets": 3
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
     },
-    "scheduling": {
-      "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": false, "value_ms": 30000 },
-      "agc_interval_seconds": 9999999
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
     },
-    "characterization": { "protein_sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE" },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "../../FlashIDA/test-data/configs/inclusion_cytc.txt", "ptm_list": "" },
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 1 },
-      "ms2": { "selection": "intensity", "max_targets": 3 },
-      "ms3": { "selection": "intensity", "max_targets": 2 }
+    "ms3": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 35,
+      "resolution": 120000
     }
-  })";
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false,
+    "reporter_mz_tol": 0.002,
+    "fold_change_threshold": 1.4
+  }
+}
+)";
 
   // Config with IDScore=false, AllCharges=true (activates sortByQScoreAllCharges)
-  const char* qscore_allcharges_json = R"({
-    "deconvolution": {
-      "score_threshold": 0.0, "tqscore_threshold": 0.9,
-      "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
+  const char* qscore_allcharges_json = R"(
+{
+  "deconvolution": {
+    "score_threshold": 0.0,
+    "tqscore_threshold": 0.9,
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10,
+      10
+    ]
+  },
+  "flashtnt": {
+    "min_length": 3,
+    "max_length": 8,
+    "max_ptm_count": 3,
+    "max_flanking_mass_diff": 50000
+  },
+  "faims": {
+    "cv_values": [],
+    "max_cv_skip": 0
+  },
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false,
+      "value_ms": 60000
     },
-    "precursor_selection": {
-      "RT_window": 180, "target_mode": 0,
-      "AllCharges": true,
-      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    "scan_timeout": {
+      "enabled": false,
+      "value_ms": 30000
     },
-    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
-    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
-    "faims": { "cv_values": [], "max_cv_skip": 0 },
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [
-        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
-        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "reaction_time": 10.0, "resolution": 120000 }
-      ]
+    "agc_interval_seconds": 9999999
+  },
+  "files": {
+    "target_logs": [],
+    "fasta": "",
+    "inclusion_list": "",
+    "ptm_list": ""
+  },
+  "precursor_selection": {
+    "rt_window": 180,
+    "targeting": "none",
+    "consider_all_charges": true,
+    "strict_inclusion": false,
+    "tie_threshold": 0.1,
+    "rank_by": "qscore",
+    "max_precursors": 3,
+    "additional_scans": [
+      "secondary"
+    ]
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
     },
-    "scheduling": {
-      "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": false, "value_ms": 30000 },
-      "agc_interval_seconds": 9999999
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
     },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "none" },
-      "ms3": { "selection": "none" }
+    "additional_ms2": {
+      "secondary": {
+        "analyzer": "Orbitrap",
+        "activation": "ETD",
+        "collision_energy": 0,
+        "reaction_time": 10.0,
+        "resolution": 120000
+      }
     }
-  })";
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false,
+    "reporter_mz_tol": 0.002,
+    "fold_change_threshold": 1.4
+  }
+}
+)";
 
   // Config with quantification enabled and 2 MS2 configs (HCD+ETD, required for quant path)
-  const char* quant_json = R"({
-    "deconvolution": {
-      "score_threshold": 0.0, "tqscore_threshold": 0.9,
-      "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
+  const char* quant_json = R"(
+{
+  "deconvolution": {
+    "score_threshold": 0.0,
+    "tqscore_threshold": 0.9,
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10,
+      10
+    ]
+  },
+  "flashtnt": {
+    "min_length": 3,
+    "max_length": 8,
+    "max_ptm_count": 3,
+    "max_flanking_mass_diff": 50000
+  },
+  "faims": {
+    "cv_values": [],
+    "max_cv_skip": 0
+  },
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false,
+      "value_ms": 60000
     },
-    "precursor_selection": {
-      "RT_window": 180, "target_mode": 0,
-      "AllCharges": false,
-      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    "scan_timeout": {
+      "enabled": false,
+      "value_ms": 30000
     },
-    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
-    "quantification": { "enabled": true, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
-    "faims": { "cv_values": [], "max_cv_skip": 0 },
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [
-        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
-        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "reaction_time": 10.0, "resolution": 120000 }
-      ]
+    "agc_interval_seconds": 9999999
+  },
+  "files": {
+    "target_logs": [],
+    "fasta": "",
+    "inclusion_list": "",
+    "ptm_list": ""
+  },
+  "precursor_selection": {
+    "rt_window": 180,
+    "targeting": "none",
+    "consider_all_charges": false,
+    "strict_inclusion": false,
+    "tie_threshold": 0.1,
+    "rank_by": "qscore",
+    "max_precursors": 3,
+    "additional_scans": [
+      "secondary"
+    ]
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
     },
-    "scheduling": {
-      "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": false, "value_ms": 30000 },
-      "agc_interval_seconds": 9999999
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
     },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "none" },
-      "ms3": { "selection": "none" }
+    "additional_ms2": {
+      "secondary": {
+        "analyzer": "Orbitrap",
+        "activation": "ETD",
+        "collision_energy": 0,
+        "reaction_time": 10.0,
+        "resolution": 120000
+      }
     }
-  })";
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": true,
+    "reporter_mz_tol": 0.002,
+    "fold_change_threshold": 1.4
+  }
+}
+)";
 
   // Config with tag-based targeting enabled via valid FASTA path, 2 MS2 configs
-  const char* tag_targeting_json = R"({
-    "deconvolution": {
-      "score_threshold": 0.0, "tqscore_threshold": 0.9,
-      "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
+  const char* tag_targeting_json = R"(
+{
+  "deconvolution": {
+    "score_threshold": 0.0,
+    "tqscore_threshold": 0.9,
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10,
+      10
+    ]
+  },
+  "flashtnt": {
+    "min_length": 3,
+    "max_length": 8,
+    "max_ptm_count": 3,
+    "max_flanking_mass_diff": 50000
+  },
+  "faims": {
+    "cv_values": [],
+    "max_cv_skip": 0
+  },
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false,
+      "value_ms": 60000
     },
-    "precursor_selection": {
-      "RT_window": 180, "target_mode": 0,
-      "AllCharges": false,
-      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    "scan_timeout": {
+      "enabled": false,
+      "value_ms": 30000
     },
-    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
-    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
-    "faims": { "cv_values": [], "max_cv_skip": 0 },
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [
-        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
-        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "reaction_time": 10.0, "resolution": 120000 }
-      ]
+    "agc_interval_seconds": 9999999
+  },
+  "files": {
+    "target_logs": [],
+    "fasta": "../../FlashIDA/test-data/configs/test_fasta.fasta",
+    "inclusion_list": "",
+    "ptm_list": ""
+  },
+  "precursor_selection": {
+    "rt_window": 180,
+    "targeting": "none",
+    "consider_all_charges": false,
+    "strict_inclusion": false,
+    "tie_threshold": 0.1,
+    "rank_by": "qscore",
+    "max_precursors": 3,
+    "additional_scans": [
+      "secondary"
+    ]
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
     },
-    "scheduling": {
-      "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": false, "value_ms": 30000 },
-      "agc_interval_seconds": 9999999
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
     },
-    "files": { "target_logs": [], "fasta": "../../FlashIDA/test-data/configs/test_fasta.fasta", "inclusion_list": "", "ptm_list": "" },
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "none" },
-      "ms3": { "selection": "none" }
+    "additional_ms2": {
+      "secondary": {
+        "analyzer": "Orbitrap",
+        "activation": "ETD",
+        "collision_energy": 0,
+        "reaction_time": 10.0,
+        "resolution": 120000
+      }
     }
-  })";
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false,
+    "reporter_mz_tol": 0.002,
+    "fold_change_threshold": 1.4
+  }
+}
+)";
 
   // Config with conditional MS2 enabled (no FASTA — tags cannot be found)
-  const char* conditional_json = R"({
-    "deconvolution": {
-      "score_threshold": 0.0, "tqscore_threshold": 0.9,
-      "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
+  const char* conditional_json = R"(
+{
+  "deconvolution": {
+    "score_threshold": 0.0,
+    "tqscore_threshold": 0.9,
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10,
+      10
+    ]
+  },
+  "flashtnt": {
+    "min_length": 3,
+    "max_length": 8,
+    "max_ptm_count": 3,
+    "max_flanking_mass_diff": 50000
+  },
+  "faims": {
+    "cv_values": [],
+    "max_cv_skip": 0
+  },
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false,
+      "value_ms": 60000
     },
-    "precursor_selection": {
-      "RT_window": 180, "target_mode": 0,
-      "AllCharges": false,
-      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    "scan_timeout": {
+      "enabled": false,
+      "value_ms": 30000
     },
-    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
-    "tagging": {
-      "follow_up_scan": { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "reaction_time": 10.0, "resolution": 120000 }
+    "agc_interval_seconds": 9999999
+  },
+  "conditional_ms2": true,
+  "files": {
+    "target_logs": [],
+    "fasta": "",
+    "inclusion_list": "",
+    "ptm_list": ""
+  },
+  "precursor_selection": {
+    "rt_window": 180,
+    "targeting": "none",
+    "consider_all_charges": false,
+    "strict_inclusion": false,
+    "tie_threshold": 0.1,
+    "rank_by": "qscore",
+    "max_precursors": 3
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
     },
-    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
-    "faims": { "cv_values": [], "max_cv_skip": 0 },
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [
-        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }
-      ]
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
     },
-    "scheduling": {
-      "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": false, "value_ms": 30000 },
-      "agc_interval_seconds": 9999999
-    },
-    "conditional_ms2": true,
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "none" },
-      "ms3": { "selection": "none" }
+    "additional_ms2": {
+      "tagging_follow_up": {
+        "analyzer": "Orbitrap",
+        "activation": "ETD",
+        "collision_energy": 0,
+        "reaction_time": 10.0,
+        "resolution": 120000
+      }
     }
-  })";
+  },
+  "tagging": {
+    "follow_up_scan": "tagging_follow_up"
+  },
+  "quantification": {
+    "enabled": false,
+    "reporter_mz_tol": 0.002,
+    "fold_change_threshold": 1.4
+  }
+}
+)";
 
   // Config with cycle_time enabled and value_ms=0 (always triggers), AGC suppressed
-  const char* cycle_time_json = R"({
-    "deconvolution": {
-      "score_threshold": 0.0, "tqscore_threshold": 0.9,
-      "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
+  const char* cycle_time_json = R"(
+{
+  "deconvolution": {
+    "score_threshold": 0.0,
+    "tqscore_threshold": 0.9,
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10,
+      10
+    ]
+  },
+  "flashtnt": {
+    "min_length": 3,
+    "max_length": 8,
+    "max_ptm_count": 3,
+    "max_flanking_mass_diff": 50000
+  },
+  "faims": {
+    "cv_values": [],
+    "max_cv_skip": 0
+  },
+  "scheduling": {
+    "cycle_time": {
+      "enabled": true,
+      "value_ms": 0
     },
-    "precursor_selection": {
-      "RT_window": 180, "target_mode": 0,
-      "AllCharges": false,
-      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    "scan_timeout": {
+      "enabled": false,
+      "value_ms": 30000
     },
-    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
-    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
-    "faims": { "cv_values": [], "max_cv_skip": 0 },
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [
-        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }
-      ]
+    "agc_interval_seconds": 999999
+  },
+  "files": {
+    "target_logs": [],
+    "fasta": "",
+    "inclusion_list": "",
+    "ptm_list": ""
+  },
+  "precursor_selection": {
+    "rt_window": 180,
+    "targeting": "none",
+    "consider_all_charges": false,
+    "strict_inclusion": false,
+    "tie_threshold": 0.1,
+    "rank_by": "qscore",
+    "max_precursors": 3
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
     },
-    "scheduling": {
-      "cycle_time": { "enabled": true, "value_ms": 0 },
-      "scan_timeout": { "enabled": false, "value_ms": 30000 },
-      "agc_interval_seconds": 999999
-    },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "none" },
-      "ms3": { "selection": "none" }
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
     }
-  })";
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false,
+    "reporter_mz_tol": 0.002,
+    "fold_change_threshold": 1.4
+  }
+}
+)";
 
   // Config with agc_interval_seconds=0 (AGC triggers immediately)
-  const char* agc_fast_json = R"({
-    "deconvolution": {
-      "score_threshold": 0.0, "tqscore_threshold": 0.9,
-      "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
+  const char* agc_fast_json = R"(
+{
+  "deconvolution": {
+    "score_threshold": 0.0,
+    "tqscore_threshold": 0.9,
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10,
+      10
+    ]
+  },
+  "flashtnt": {
+    "min_length": 3,
+    "max_length": 8,
+    "max_ptm_count": 3,
+    "max_flanking_mass_diff": 50000
+  },
+  "faims": {
+    "cv_values": [],
+    "max_cv_skip": 0
+  },
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false,
+      "value_ms": 60000
     },
-    "precursor_selection": {
-      "RT_window": 180, "target_mode": 0,
-      "AllCharges": false,
-      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    "scan_timeout": {
+      "enabled": true,
+      "value_ms": 30000
     },
-    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
-    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
-    "faims": { "cv_values": [], "max_cv_skip": 0 },
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [
-        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }
-      ]
+    "agc_interval_seconds": 0
+  },
+  "files": {
+    "target_logs": [],
+    "fasta": "",
+    "inclusion_list": "",
+    "ptm_list": ""
+  },
+  "precursor_selection": {
+    "rt_window": 180,
+    "targeting": "none",
+    "consider_all_charges": false,
+    "strict_inclusion": false,
+    "tie_threshold": 0.1,
+    "rank_by": "qscore",
+    "max_precursors": 3
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
     },
-    "scheduling": {
-      "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": true, "value_ms": 30000 },
-      "agc_interval_seconds": 0
-    },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "none" },
-      "ms3": { "selection": "none" }
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
     }
-  })";
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false,
+    "reporter_mz_tol": 0.002,
+    "fold_change_threshold": 1.4
+  }
+}
+)";
 
   // Config with conditional MS2 + tag targeting + FASTA (tags CAN be found)
-  const char* conditional_with_tags_json = R"({
-    "deconvolution": {
-      "score_threshold": 0.0, "tqscore_threshold": 0.9,
-      "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
+  const char* conditional_with_tags_json = R"(
+{
+  "deconvolution": {
+    "score_threshold": 0.0,
+    "tqscore_threshold": 0.9,
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10,
+      10
+    ]
+  },
+  "flashtnt": {
+    "min_length": 3,
+    "max_length": 8,
+    "max_ptm_count": 3,
+    "max_flanking_mass_diff": 50000
+  },
+  "faims": {
+    "cv_values": [],
+    "max_cv_skip": 0
+  },
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false,
+      "value_ms": 60000
     },
-    "precursor_selection": {
-      "RT_window": 180, "target_mode": 0,
-      "AllCharges": false,
-      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    "scan_timeout": {
+      "enabled": false,
+      "value_ms": 30000
     },
-    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
-    "tagging": {
-      "follow_up_scan": { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "reaction_time": 10.0, "resolution": 120000 }
+    "agc_interval_seconds": 9999999
+  },
+  "conditional_ms2": true,
+  "files": {
+    "target_logs": [],
+    "fasta": "../../FlashIDA/test-data/configs/test_fasta.fasta",
+    "inclusion_list": "",
+    "ptm_list": ""
+  },
+  "precursor_selection": {
+    "rt_window": 180,
+    "targeting": "none",
+    "consider_all_charges": false,
+    "strict_inclusion": false,
+    "tie_threshold": 0.1,
+    "rank_by": "qscore",
+    "max_precursors": 3
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
     },
-    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
-    "faims": { "cv_values": [], "max_cv_skip": 0 },
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [
-        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }
-      ]
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
     },
-    "scheduling": {
-      "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": false, "value_ms": 30000 },
-      "agc_interval_seconds": 9999999
-    },
-    "conditional_ms2": true,
-    "files": { "target_logs": [], "fasta": "../../FlashIDA/test-data/configs/test_fasta.fasta", "inclusion_list": "", "ptm_list": "" },
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "none" },
-      "ms3": { "selection": "none" }
+    "additional_ms2": {
+      "tagging_follow_up": {
+        "analyzer": "Orbitrap",
+        "activation": "ETD",
+        "collision_energy": 0,
+        "reaction_time": 10.0,
+        "resolution": 120000
+      }
     }
-  })";
+  },
+  "tagging": {
+    "follow_up_scan": "tagging_follow_up"
+  },
+  "quantification": {
+    "enabled": false,
+    "reporter_mz_tol": 0.002,
+    "fold_change_threshold": 1.4
+  }
+}
+)";
 
   // Follow-up parameter-ownership configs. The MS2 and the follow_up_scan differ in EVERY
   // activation-coupled parameter on purpose: if the follow-up inherited them from the triggering
   // MS2 (the defect), each assertion below would read the MS2's value instead of the follow-up's.
   // A config where the two agree would make the test vacuous.
-  const char* followup_owns_params_conditional_json = R"({
-    "deconvolution": {
-      "score_threshold": 0.0, "tqscore_threshold": 0.9,
-      "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
+  const char* followup_owns_params_conditional_json = R"(
+{
+  "deconvolution": {
+    "score_threshold": 0.0,
+    "tqscore_threshold": 0.9,
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10,
+      10
+    ]
+  },
+  "flashtnt": {
+    "min_length": 3,
+    "max_length": 8,
+    "max_ptm_count": 3,
+    "max_flanking_mass_diff": 50000
+  },
+  "faims": {
+    "cv_values": [],
+    "max_cv_skip": 0
+  },
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false,
+      "value_ms": 60000
     },
-    "precursor_selection": {
-      "RT_window": 180, "target_mode": 0,
-      "AllCharges": false,
-      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    "scan_timeout": {
+      "enabled": false,
+      "value_ms": 30000
     },
-    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
-    "tagging": {
-      "follow_up_scan": { "analyzer": "Orbitrap", "activation": "EThcD", "collision_energy": 7,
-                          "reaction_time": 5.0, "reagent_max_it": 111.0, "reagent_agc_target": 222,
-                          "resolution": 120000 }
+    "agc_interval_seconds": 9999999
+  },
+  "conditional_ms2": true,
+  "files": {
+    "target_logs": [],
+    "fasta": "../../FlashIDA/test-data/configs/test_fasta.fasta",
+    "inclusion_list": "",
+    "ptm_list": ""
+  },
+  "precursor_selection": {
+    "rt_window": 180,
+    "targeting": "none",
+    "consider_all_charges": false,
+    "strict_inclusion": false,
+    "tie_threshold": 0.1,
+    "rank_by": "qscore",
+    "max_precursors": 3
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
     },
-    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
-    "faims": { "cv_values": [], "max_cv_skip": 0 },
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [
-        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000,
-          "reaction_time": 10.0, "reagent_max_it": 200.0, "reagent_agc_target": 700000 }
-      ]
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000,
+      "reaction_time": 10.0,
+      "reagent_max_it": 200.0,
+      "reagent_agc_target": 700000
     },
-    "scheduling": {
-      "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": false, "value_ms": 30000 },
-      "agc_interval_seconds": 9999999
-    },
-    "conditional_ms2": true,
-    "files": { "target_logs": [], "fasta": "../../FlashIDA/test-data/configs/test_fasta.fasta", "inclusion_list": "", "ptm_list": "" },
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "none" },
-      "ms3": { "selection": "none" }
+    "additional_ms2": {
+      "tagging_follow_up": {
+        "analyzer": "Orbitrap",
+        "activation": "EThcD",
+        "collision_energy": 7,
+        "reaction_time": 5.0,
+        "reagent_max_it": 111.0,
+        "reagent_agc_target": 222,
+        "resolution": 120000
+      }
     }
-  })";
+  },
+  "tagging": {
+    "follow_up_scan": "tagging_follow_up"
+  },
+  "quantification": {
+    "enabled": false,
+    "reporter_mz_tol": 0.002,
+    "fold_change_threshold": 1.4
+  }
+}
+)";
 
-  const char* followup_owns_params_quant_json = R"({
-    "deconvolution": {
-      "score_threshold": 0.0, "tqscore_threshold": 0.9,
-      "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
+  const char* followup_owns_params_quant_json = R"(
+{
+  "deconvolution": {
+    "score_threshold": 0.0,
+    "tqscore_threshold": 0.9,
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10,
+      10
+    ]
+  },
+  "flashtnt": {
+    "min_length": 3,
+    "max_length": 8,
+    "max_ptm_count": 3,
+    "max_flanking_mass_diff": 50000
+  },
+  "faims": {
+    "cv_values": [],
+    "max_cv_skip": 0
+  },
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false,
+      "value_ms": 60000
     },
-    "precursor_selection": {
-      "RT_window": 180, "target_mode": 0,
-      "AllCharges": false,
-      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    "scan_timeout": {
+      "enabled": false,
+      "value_ms": 30000
     },
-    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
-    "tagging": {},
-    "quantification": {
-      "enabled": true, "reporter_mz_tol": 0.01, "fold_change_threshold": 0.01,
-      "follow_up_scan": { "analyzer": "Orbitrap", "activation": "EThcD", "collision_energy": 7,
-                          "reaction_time": 5.0, "reagent_max_it": 111.0, "reagent_agc_target": 222,
-                          "resolution": 120000 }
+    "agc_interval_seconds": 9999999
+  },
+  "files": {
+    "target_logs": [],
+    "fasta": "",
+    "inclusion_list": "",
+    "ptm_list": ""
+  },
+  "precursor_selection": {
+    "rt_window": 180,
+    "targeting": "none",
+    "consider_all_charges": false,
+    "strict_inclusion": false,
+    "tie_threshold": 0.1,
+    "rank_by": "qscore",
+    "max_precursors": 3
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
     },
-    "faims": { "cv_values": [], "max_cv_skip": 0 },
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [
-        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000,
-          "reaction_time": 10.0, "reagent_max_it": 200.0, "reagent_agc_target": 700000 }
-      ]
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000,
+      "reaction_time": 10.0,
+      "reagent_max_it": 200.0,
+      "reagent_agc_target": 700000
     },
-    "scheduling": {
-      "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": false, "value_ms": 30000 },
-      "agc_interval_seconds": 9999999
-    },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "none" },
-      "ms3": { "selection": "none" }
+    "additional_ms2": {
+      "quant_follow_up": {
+        "analyzer": "Orbitrap",
+        "activation": "EThcD",
+        "collision_energy": 7,
+        "reaction_time": 5.0,
+        "reagent_max_it": 111.0,
+        "reagent_agc_target": 222,
+        "resolution": 120000
+      }
     }
-  })";
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": true,
+    "reporter_mz_tol": 0.01,
+    "fold_change_threshold": 0.01,
+    "follow_up_scan": "quant_follow_up"
+  }
+}
+)";
 
   // Config with quantification + low fold_change_threshold (any reporter ratio triggers)
-  const char* quant_sensitive_json = R"({
-    "deconvolution": {
-      "score_threshold": 0.0, "tqscore_threshold": 0.9,
-      "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
+  const char* quant_sensitive_json = R"(
+{
+  "deconvolution": {
+    "score_threshold": 0.0,
+    "tqscore_threshold": 0.9,
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10,
+      10
+    ]
+  },
+  "flashtnt": {
+    "min_length": 3,
+    "max_length": 8,
+    "max_ptm_count": 3,
+    "max_flanking_mass_diff": 50000
+  },
+  "faims": {
+    "cv_values": [],
+    "max_cv_skip": 0
+  },
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false,
+      "value_ms": 60000
     },
-    "precursor_selection": {
-      "RT_window": 180, "target_mode": 0,
-      "AllCharges": false,
-      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    "scan_timeout": {
+      "enabled": false,
+      "value_ms": 30000
     },
-    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
-    "quantification": {
-      "enabled": true, "reporter_mz_tol": 0.002, "fold_change_threshold": 0.01,
-      "follow_up_scan": { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "reaction_time": 10.0, "resolution": 120000 }
+    "agc_interval_seconds": 9999999
+  },
+  "files": {
+    "target_logs": [],
+    "fasta": "",
+    "inclusion_list": "",
+    "ptm_list": ""
+  },
+  "precursor_selection": {
+    "rt_window": 180,
+    "targeting": "none",
+    "consider_all_charges": false,
+    "strict_inclusion": false,
+    "tie_threshold": 0.1,
+    "rank_by": "qscore",
+    "max_precursors": 3
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
     },
-    "faims": { "cv_values": [], "max_cv_skip": 0 },
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [
-        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }
-      ]
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
     },
-    "scheduling": {
-      "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": false, "value_ms": 30000 },
-      "agc_interval_seconds": 9999999
-    },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "none" },
-      "ms3": { "selection": "none" }
+    "additional_ms2": {
+      "quant_follow_up": {
+        "analyzer": "Orbitrap",
+        "activation": "ETD",
+        "collision_energy": 0,
+        "reaction_time": 10.0,
+        "resolution": 120000
+      }
     }
-  })";
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": true,
+    "reporter_mz_tol": 0.002,
+    "fold_change_threshold": 0.01,
+    "follow_up_scan": "quant_follow_up"
+  }
+}
+)";
 
   // Config with agc_interval_seconds=9999 to disable timer-based AGC.
   // Only idle cycle (empty queue) produces AGC/MS1 pairs.
-  const char* idle_cycle_json = R"({
-    "deconvolution": {
-      "score_threshold": 0.0, "tqscore_threshold": 0.9,
-      "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
+  const char* idle_cycle_json = R"(
+{
+  "deconvolution": {
+    "score_threshold": 0.0,
+    "tqscore_threshold": 0.9,
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10,
+      10
+    ]
+  },
+  "flashtnt": {
+    "min_length": 3,
+    "max_length": 8,
+    "max_ptm_count": 3,
+    "max_flanking_mass_diff": 50000
+  },
+  "faims": {
+    "cv_values": [],
+    "max_cv_skip": 0
+  },
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false,
+      "value_ms": 60000
     },
-    "precursor_selection": {
-      "RT_window": 180, "target_mode": 0,
-      "AllCharges": false,
-      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    "scan_timeout": {
+      "enabled": true,
+      "value_ms": 30000
     },
-    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
-    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
-    "faims": { "cv_values": [], "max_cv_skip": 0 },
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [
-        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }
-      ]
+    "agc_interval_seconds": 9999
+  },
+  "files": {
+    "target_logs": [],
+    "fasta": "",
+    "inclusion_list": "",
+    "ptm_list": ""
+  },
+  "precursor_selection": {
+    "rt_window": 180,
+    "targeting": "none",
+    "consider_all_charges": false,
+    "strict_inclusion": false,
+    "tie_threshold": 0.1,
+    "rank_by": "qscore",
+    "max_precursors": 3
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
     },
-    "scheduling": {
-      "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": true, "value_ms": 30000 },
-      "agc_interval_seconds": 9999
-    },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "none" },
-      "ms3": { "selection": "none" }
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
     }
-  })";
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false,
+    "reporter_mz_tol": 0.002,
+    "fold_change_threshold": 1.4
+  }
+}
+)";
 
   // Config with intensity-based MS1 selection
-  const char* intensity_selection_json = R"({
-    "deconvolution": {
-      "score_threshold": 0.0, "tqscore_threshold": 0.9,
-      "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
+  const char* intensity_selection_json = R"(
+{
+  "deconvolution": {
+    "score_threshold": 0.0,
+    "tqscore_threshold": 0.9,
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10,
+      10
+    ]
+  },
+  "flashtnt": {
+    "min_length": 3,
+    "max_length": 8,
+    "max_ptm_count": 3,
+    "max_flanking_mass_diff": 50000
+  },
+  "faims": {
+    "cv_values": [],
+    "max_cv_skip": 0
+  },
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false,
+      "value_ms": 60000
     },
-    "precursor_selection": {
-      "RT_window": 180, "target_mode": 0,
-      "AllCharges": false,
-      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    "scan_timeout": {
+      "enabled": false,
+      "value_ms": 30000
     },
-    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
-    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
-    "faims": { "cv_values": [], "max_cv_skip": 0 },
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [
-        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
-        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "reaction_time": 10.0, "resolution": 120000 }
-      ]
+    "agc_interval_seconds": 9999999
+  },
+  "files": {
+    "target_logs": [],
+    "fasta": "",
+    "inclusion_list": "",
+    "ptm_list": ""
+  },
+  "precursor_selection": {
+    "rt_window": 180,
+    "targeting": "none",
+    "consider_all_charges": false,
+    "strict_inclusion": false,
+    "tie_threshold": 0.1,
+    "rank_by": "intensity",
+    "max_precursors": 3,
+    "additional_scans": [
+      "secondary"
+    ]
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
     },
-    "scheduling": {
-      "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": false, "value_ms": 30000 },
-      "agc_interval_seconds": 9999999
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
     },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
-    "selection_strategy": {
-      "ms1": { "selection": "intensity", "max_targets": 3 },
-      "ms2": { "selection": "none" },
-      "ms3": { "selection": "none" }
+    "additional_ms2": {
+      "secondary": {
+        "analyzer": "Orbitrap",
+        "activation": "ETD",
+        "collision_energy": 0,
+        "reaction_time": 10.0,
+        "resolution": 120000
+      }
     }
-  })";
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false,
+    "reporter_mz_tol": 0.002,
+    "fold_change_threshold": 1.4
+  }
+}
+)";
 
   // Config with selection=none at MS1
-  const char* none_selection_json = R"({
-    "deconvolution": {
-      "score_threshold": 0.0, "tqscore_threshold": 0.9,
-      "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
+  const char* none_selection_json = R"(
+{
+  "deconvolution": {
+    "score_threshold": 0.0,
+    "tqscore_threshold": 0.9,
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10,
+      10
+    ]
+  },
+  "flashtnt": {
+    "min_length": 3,
+    "max_length": 8,
+    "max_ptm_count": 3,
+    "max_flanking_mass_diff": 50000
+  },
+  "faims": {
+    "cv_values": [],
+    "max_cv_skip": 0
+  },
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false,
+      "value_ms": 60000
     },
-    "precursor_selection": {
-      "RT_window": 180, "target_mode": 0,
-      "AllCharges": false,
-      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    "scan_timeout": {
+      "enabled": false,
+      "value_ms": 30000
     },
-    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
-    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
-    "faims": { "cv_values": [], "max_cv_skip": 0 },
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [
-        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }
-      ]
+    "agc_interval_seconds": 9999999
+  },
+  "files": {
+    "target_logs": [],
+    "fasta": "",
+    "inclusion_list": "",
+    "ptm_list": ""
+  },
+  "precursor_selection": {
+    "rt_window": 180,
+    "targeting": "none",
+    "consider_all_charges": false,
+    "strict_inclusion": false,
+    "tie_threshold": 0.1,
+    "rank_by": "none",
+    "max_precursors": 3
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
     },
-    "scheduling": {
-      "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": false, "value_ms": 30000 },
-      "agc_interval_seconds": 9999999
-    },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
-    "selection_strategy": {
-      "ms1": { "selection": "none", "max_targets": 3 },
-      "ms2": { "selection": "none" },
-      "ms3": { "selection": "none" }
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
     }
-  })";
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false,
+    "reporter_mz_tol": 0.002,
+    "fold_change_threshold": 1.4
+  }
+}
+)";
 
   // Config with max_targets=1 (cap test)
-  const char* max1_json = R"({
-    "deconvolution": {
-      "score_threshold": 0.0, "tqscore_threshold": 0.9,
-      "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
+  const char* max1_json = R"(
+{
+  "deconvolution": {
+    "score_threshold": 0.0,
+    "tqscore_threshold": 0.9,
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10,
+      10
+    ]
+  },
+  "flashtnt": {
+    "min_length": 3,
+    "max_length": 8,
+    "max_ptm_count": 3,
+    "max_flanking_mass_diff": 50000
+  },
+  "faims": {
+    "cv_values": [],
+    "max_cv_skip": 0
+  },
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false,
+      "value_ms": 60000
     },
-    "precursor_selection": {
-      "RT_window": 180, "target_mode": 0,
-      "AllCharges": false,
-      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    "scan_timeout": {
+      "enabled": false,
+      "value_ms": 30000
     },
-    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
-    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
-    "faims": { "cv_values": [], "max_cv_skip": 0 },
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [
-        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }
-      ]
+    "agc_interval_seconds": 9999999
+  },
+  "files": {
+    "target_logs": [],
+    "fasta": "",
+    "inclusion_list": "",
+    "ptm_list": ""
+  },
+  "precursor_selection": {
+    "rt_window": 180,
+    "targeting": "none",
+    "consider_all_charges": false,
+    "strict_inclusion": false,
+    "tie_threshold": 0.1,
+    "rank_by": "qscore",
+    "max_precursors": 1
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
     },
-    "scheduling": {
-      "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": false, "value_ms": 30000 },
-      "agc_interval_seconds": 9999999
-    },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 1 },
-      "ms2": { "selection": "none" },
-      "ms3": { "selection": "none" }
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
     }
-  })";
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false,
+    "reporter_mz_tol": 0.002,
+    "fold_change_threshold": 1.4
+  }
+}
+)";
 
   // TSV file paths relative to the OpenMS build directory (CTest working dir)
   const std::string ms1_tsv_path = "../../FlashIDA/test-data/spectra/ms1_standard.txt";
@@ -1766,76 +2617,88 @@ START_SECTION(processScan_ms1_min_charge_filter)
 {
   // Config identical to standard_json but with ms1.min_charge = 99
   // This should filter out ALL precursors since no precursor has charge >= 99
-  const char* min_charge_json = R"({
-    "deconvolution": {
-      "score_threshold": 0.0,
-      "tqscore_threshold": 0.9,
-      "min_charge": 4,
-      "max_charge": 50,
-      "min_mass": 500,
-      "max_mass": 50000,
-      "tol": [10, 10, 10]
-    },
-    "precursor_selection": {
-      "RT_window": 180,
-      "target_mode": 0,
-      "AllCharges": false,
-      "HCDEnergy": 29,
-      "strict_inclusion": false,
-      "tie_threshold": 0.1
-    },
-    "flashtnt": {
-      "min_length": 3,
-      "max_length": 8,
-      "max_ptm_count": 3,
-      "max_flanking_mass_diff": 50000
-    },
-    "quantification": {
+  const char* min_charge_json = R"(
+{
+  "deconvolution": {
+    "score_threshold": 0.0,
+    "tqscore_threshold": 0.9,
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10,
+      10
+    ]
+  },
+  "flashtnt": {
+    "min_length": 3,
+    "max_length": 8,
+    "max_ptm_count": 3,
+    "max_flanking_mass_diff": 50000
+  },
+  "faims": {
+    "cv_values": [],
+    "max_cv_skip": 0,
+    "cv_precursor_threshold": 15
+  },
+  "scheduling": {
+    "cycle_time": {
       "enabled": false,
-      "reporter_mz_tol": 0.002,
-      "fold_change_threshold": 1.4
+      "value_ms": 60000
     },
-    "faims": {
-      "cv_values": [],
-      "max_cv_skip": 0,
-      "cv_precursor_threshold": 15
+    "scan_timeout": {
+      "enabled": false,
+      "value_ms": 30000
     },
-    "ms_settings": {
-      "ms1": {
-        "analyzer": "Orbitrap",
-        "first_mass": 500,
-        "last_mass": 2000,
-        "resolution": 120000,
-        "agc_target": 800000,
-        "max_it": 246
-      },
-      "ms2": [
-        {
-          "analyzer": "Orbitrap",
-          "activation": "HCD",
-          "collision_energy": 29,
-          "resolution": 120000
-        }
-      ]
+    "agc_interval_seconds": 9999999
+  },
+  "files": {
+    "target_logs": [],
+    "fasta": "",
+    "inclusion_list": "",
+    "ptm_list": ""
+  },
+  "conditional_ms2": false,
+  "precursor_selection": {
+    "rt_window": 180,
+    "targeting": "none",
+    "consider_all_charges": false,
+    "strict_inclusion": false,
+    "tie_threshold": 0.1,
+    "rank_by": "qscore",
+    "max_precursors": 3,
+    "min_precursor_charge": 99
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
     },
-    "scheduling": {
-      "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": false, "value_ms": 30000 },
-      "agc_interval_seconds": 9999999
-    },
-    "files": {
-      "target_logs": [],
-      "fasta": "",
-      "inclusion_list": "",
-      "ptm_list": ""
-    },
-    "conditional_ms2": false,
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 3, "min_charge": 99 },
-      "ms2": { "selection": "none" },
-      "ms3": { "selection": "none" }
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
     }
-  })";
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false,
+    "reporter_mz_tol": 0.002,
+    "fold_change_threshold": 1.4
+  }
+}
+)";
 
   FLASHIda ida(const_cast<char*>(min_charge_json));
 
@@ -1902,38 +2765,85 @@ START_SECTION(cleanup_expired_drops_stale_queued_commands)
 {
   // Use idle_cycle_json (timeout enabled, 30s) but we'll use pushCommandForTest
   // with a 1ms-timeout config to verify expiry
-  const char* short_timeout_json = R"({
-    "deconvolution": {
-      "score_threshold": 0.0, "tqscore_threshold": 0.9,
-      "min_charge": 4, "max_charge": 50,
-      "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10]
+  const char* short_timeout_json = R"(
+{
+  "deconvolution": {
+    "score_threshold": 0.0,
+    "tqscore_threshold": 0.9,
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10,
+      10
+    ]
+  },
+  "flashtnt": {
+    "min_length": 3,
+    "max_length": 8,
+    "max_ptm_count": 3,
+    "max_flanking_mass_diff": 50000
+  },
+  "faims": {
+    "cv_values": [],
+    "max_cv_skip": 0
+  },
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false,
+      "value_ms": 60000
     },
-    "precursor_selection": {
-      "RT_window": 180, "target_mode": 0,
-      "AllCharges": false,
-      "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1
+    "scan_timeout": {
+      "enabled": true,
+      "value_ms": 1
     },
-    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
-    "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
-    "faims": { "cv_values": [], "max_cv_skip": 0 },
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [
-        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }
-      ]
+    "agc_interval_seconds": 9999
+  },
+  "files": {
+    "target_logs": [],
+    "fasta": "",
+    "inclusion_list": "",
+    "ptm_list": ""
+  },
+  "precursor_selection": {
+    "rt_window": 180,
+    "targeting": "none",
+    "consider_all_charges": false,
+    "strict_inclusion": false,
+    "tie_threshold": 0.1,
+    "rank_by": "qscore",
+    "max_precursors": 3
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
     },
-    "scheduling": {
-      "cycle_time": { "enabled": false, "value_ms": 60000 },
-      "scan_timeout": { "enabled": true, "value_ms": 1 },
-      "agc_interval_seconds": 9999
-    },
-    "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "none" },
-      "ms3": { "selection": "none" }
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
     }
-  })";
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false,
+    "reporter_mz_tol": 0.002,
+    "fold_change_threshold": 1.4
+  }
+}
+)";
 
   FLASHIda* ida = new FLASHIda(const_cast<char*>(short_timeout_json));
 

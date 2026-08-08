@@ -62,13 +62,24 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
   TEST_REAL_SIMILAR(cfg.targeting().tag_matching_tolerance_ppm, j["deconvolution"]["tol"][1].get<double>())
 
   // --- precursor_selection ---
-  TEST_REAL_SIMILAR(cfg.targeting().rt_window, j["precursor_selection"]["RT_window"].get<double>())
-  TEST_EQUAL(cfg.targeting().mode, j["precursor_selection"]["target_mode"].get<int>())
-  TEST_EQUAL(cfg.targeting().consider_all_charges, j["precursor_selection"]["AllCharges"].get<bool>())
-  TEST_EQUAL(cfg.targeting().charge_based_exclusion, j["precursor_selection"]["ChargeBasedExclusion"].get<bool>())
-  TEST_EQUAL(cfg.targeting().hcd_energy, j["precursor_selection"]["HCDEnergy"].get<int>())
+  TEST_REAL_SIMILAR(cfg.targeting().rt_window, j["precursor_selection"]["rt_window"].get<double>())
+  TEST_EQUAL(cfg.targeting().consider_all_charges, j["precursor_selection"]["consider_all_charges"].get<bool>())
+  TEST_EQUAL(cfg.targeting().charge_based_exclusion, j["precursor_selection"]["charge_based_exclusion"].get<bool>())
   TEST_EQUAL(cfg.targeting().strict_inclusion, j["precursor_selection"]["strict_inclusion"].get<bool>())
   TEST_REAL_SIMILAR(cfg.targeting().tie_threshold, j["precursor_selection"]["tie_threshold"].get<double>())
+  // targeting is a string enum on the wire and an int in the struct, so the parity check has to
+  // map rather than compare directly. Mapping taken from the CODE (PrecursorSelection.cpp:138-141).
+  {
+    const std::string t = j["precursor_selection"]["targeting"].get<std::string>();
+    const int expected = t == "inclusion" ? 1 : t == "in_depth" ? 2 : t == "exclusion_masses" ? 3 : 0;
+    TEST_EQUAL(cfg.targeting().mode, expected)
+  }
+  // HCDEnergy is gone: its only export, PrecursorSelection::getIsolationWindows(), has zero
+  // callers repo-wide, so the key could never affect an acquisition.
+
+  // --- the MS1 selection keys, which moved here out of selection_strategy.ms1 ---
+  TEST_EQUAL(cfg.level(1).max_targets, j["precursor_selection"]["max_precursors"].get<int>())
+  TEST_EQUAL(cfg.level(1).min_charge, j["precursor_selection"]["min_precursor_charge"].get<int>())
 
   // --- flashtnt ---
   TEST_EQUAL(cfg.targeting().min_tag_length, j["flashtnt"]["min_length"].get<int>())
@@ -209,24 +220,60 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
              (int)(j["scheduling"]["agc_interval_seconds"].get<double>() * 1000.0))
 
   // --- characterization ---
-  std::string obj = j["characterization"]["objective"].get<std::string>();
-  TEST_EQUAL((int)cfg.characterization().objective,
-             (int)(obj == "coverage" ? CharacterizationObjective::Coverage : CharacterizationObjective::Ambiguity))
+  // `objective` is gone: its two values ARE the two on-values of `mode`, so it is derived rather
+  // than authored. Asserting the derivation is what pins them together.
+  {
+    const std::string m = j["characterization"]["mode"].get<std::string>();
+    TEST_EQUAL((int)cfg.characterization().objective,
+               (int)(m == "coverage" ? CharacterizationObjective::Coverage
+                                     : CharacterizationObjective::Ambiguity))
+  }
   TEST_EQUAL(cfg.characterization().protein_sequence, j["characterization"]["protein_sequence"].get<std::string>())
   TEST_EQUAL(cfg.characterization().ms3_all_charges, j["characterization"]["ms3_all_charges"].get<bool>())
 
-  // --- selection_strategy ---
-  TEST_EQUAL(cfg.level(1).max_targets, j["selection_strategy"]["ms1"]["max_targets"].get<int>())
-  TEST_EQUAL(cfg.level(1).min_charge, j["selection_strategy"]["ms1"]["min_charge"].get<int>())
-  TEST_EQUAL(cfg.level(2).max_targets, j["selection_strategy"]["ms2"]["max_targets"].get<int>())
-  TEST_EQUAL(cfg.level(2).min_charge, j["selection_strategy"]["ms2"]["min_charge"].get<int>())
+  // --- the projection: characterization.mode drives levels 2 and 3, and the MS3 budget/charge
+  //     floor are AUTHORED in characterization but READ off level 2. Pinning both sides here is
+  //     what stops the projection silently regressing.
+  TEST_EQUAL(cfg.level(2).max_targets, j["characterization"]["max_targets"].get<int>())
+  TEST_EQUAL(cfg.level(2).min_charge, j["characterization"]["min_fragment_charge"].get<int>())
+  {
+    const std::string mode = j["characterization"]["mode"].get<std::string>();
+    const bool on = mode != "off";
+    // Both gates move together -- MS3 requires level 2 AND level 3 non-None, so the incoherent
+    // states are unrepresentable rather than merely discouraged.
+    TEST_EQUAL(cfg.level(2).selection != SelectionMetric::None, on)
+    TEST_EQUAL(cfg.level(3).selection != SelectionMetric::None, on)
+    // Level 1 is projected from rank_by and is INDEPENDENT of mode. Asserted explicitly because
+    // omitting it from the projection makes FLASHIda.cpp:168 short-circuit every MS1 and the
+    // instrument acquires nothing at all.
+    const std::string rank_by = j["precursor_selection"]["rank_by"].get<std::string>();
+    TEST_EQUAL((int)cfg.level(1).selection,
+               (int)(rank_by == "intensity" ? SelectionMetric::Intensity
+                     : rank_by == "none"    ? SelectionMetric::None
+                                            : SelectionMetric::QScore))
+  }
+
+  // --- exploration, now one block per decision section ---
   TEST_EQUAL((int)cfg.level(2).exploration, (int)ExplorationMetric::MassCount)
-  const auto& jex2 = j["selection_strategy"]["ms2"]["exploration"];
+  const auto& jex2 = j["precursor_selection"]["exploration"];
   TEST_REAL_SIMILAR(cfg.level(2).ce_min, jex2["ce_min"].get<double>())
   TEST_REAL_SIMILAR(cfg.level(2).ce_max, jex2["ce_max"].get<double>())
   TEST_REAL_SIMILAR(cfg.level(2).ce_step, jex2["ce_step"].get<double>())
   TEST_REAL_SIMILAR(cfg.level(2).remaining_precursor_target, jex2["remaining_precursor_target"].get<double>())
-  TEST_EQUAL((int)cfg.level(3).selection, (int)SelectionMetric::None)
+  // tolerance_ppm is first-class now, not smuggled through the overrides map.
+  TEST_REAL_SIMILAR(cfg.level(2).exploration_tolerance_ppm, jex2["tolerance_ppm"].get<double>())
+
+  const auto& jex3 = j["characterization"]["exploration"];
+  TEST_EQUAL((int)cfg.level(3).exploration, (int)ExplorationMetric::FragmentCount)
+  TEST_REAL_SIMILAR(cfg.level(3).ce_min, jex3["ce_min"].get<double>())
+  TEST_REAL_SIMILAR(cfg.level(3).ce_max, jex3["ce_max"].get<double>())
+  TEST_REAL_SIMILAR(cfg.level(3).exploration_tolerance_ppm, jex3["tolerance_ppm"].get<double>())
+
+  // --- the dispatch roster: ms_settings.ms2 first, then additional_scans IN ARRAY ORDER.
+  //     Order must never come from iterating additional_ms2 -- nlohmann's object_t is a std::map,
+  //     so that would alphabetise the names and silently reorder MS2 dispatch.
+  TEST_EQUAL(cfg.level(2).scans.size(),
+             1 + j["precursor_selection"]["additional_scans"].size())
 }
 END_SECTION
 

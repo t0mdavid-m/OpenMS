@@ -86,26 +86,81 @@ END_SECTION
 
 START_SECTION(([EXTRA] Config rejects exploration with multiple scan configs))
 {
-  const char* json = R"({
-    "deconvolution": { "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10] },
-    "precursor_selection": {  },
-    "tagging": {},
-    "quantification": { "enabled": false },
-    "faims": {},
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [
-        { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
-        { "analyzer": "Orbitrap", "activation": "ETD", "collision_energy": 0, "reaction_time": 10.0, "resolution": 60000 }
-      ]
+  const char* json = R"(
+{
+  "deconvolution": {
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10
+    ]
+  },
+  "faims": {},
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false
     },
-    "scheduling": { "cycle_time": { "enabled": false }, "scan_timeout": { "enabled": false }, "agc_interval_seconds": 30 },
-    "files": {},
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "none", "exploration": { "metric": "mass_count", "ce_min": 20, "ce_max": 40, "ce_step": 5, "activations": ["HCD"] } }
+    "scan_timeout": {
+      "enabled": false
+    },
+    "agc_interval_seconds": 30
+  },
+  "files": {},
+  "precursor_selection": {
+    "targeting": "none",
+    "rank_by": "qscore",
+    "max_precursors": 3,
+    "additional_scans": [
+      "secondary"
+    ],
+    "exploration": {
+      "metric": "mass_count",
+      "ce_min": 20,
+      "ce_max": 40,
+      "ce_step": 5,
+      "activations": [
+        "HCD"
+      ]
     }
-  })";
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
+    },
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
+    },
+    "additional_ms2": {
+      "secondary": {
+        "analyzer": "Orbitrap",
+        "activation": "ETD",
+        "collision_energy": 0,
+        "reaction_time": 10.0,
+        "resolution": 60000
+      }
+    }
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false
+  }
+}
+)";
   bool threw = false;
   try { Config cfg{std::string(json)}; }
   catch (const std::invalid_argument&) { threw = true; }
@@ -116,24 +171,64 @@ END_SECTION
 
 START_SECTION(([EXTRA] Config rejects conditional_ms2 without tagging follow_up_scan))
 {
-  const char* json = R"({
-    "deconvolution": { "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10] },
-    "precursor_selection": {},
-    "tagging": {}, "flashtnt": { "min_length": 3 },
-    "conditional_ms2": true,
-    "quantification": { "enabled": false },
-    "faims": {},
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [{ "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }]
+  const char* json = R"(
+{
+  "deconvolution": {
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10
+    ]
+  },
+  "flashtnt": {
+    "min_length": 3
+  },
+  "conditional_ms2": true,
+  "faims": {},
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false
     },
-    "scheduling": { "cycle_time": { "enabled": false }, "scan_timeout": { "enabled": false }, "agc_interval_seconds": 30 },
-    "files": {},
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "none" }
+    "scan_timeout": {
+      "enabled": false
+    },
+    "agc_interval_seconds": 30
+  },
+  "files": {},
+  "precursor_selection": {
+    "targeting": "none",
+    "rank_by": "qscore",
+    "max_precursors": 3
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
+    },
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
     }
-  })";
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false
+  }
+}
+)";
   bool threw = false;
   try { Config cfg{std::string(json)}; }
   catch (const std::invalid_argument&) { threw = true; }
@@ -144,24 +239,64 @@ END_SECTION
 
 START_SECTION(([EXTRA] Config rejects legacy ms3.enabled key))
 {
-  const char* json = R"({
-    "deconvolution": { "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10] },
-    "precursor_selection": {},
-    "tagging": {},
-    "quantification": { "enabled": false },
-    "faims": {},
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [{ "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }]
+  const char* json = R"(
+{
+  "deconvolution": {
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10
+    ]
+  },
+  "faims": {},
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false
     },
-    "scheduling": { "cycle_time": { "enabled": false }, "scan_timeout": { "enabled": false }, "agc_interval_seconds": 30 },
-    "files": {},
-    "ms3": { "enabled": false, "protein_sequence": "" },
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "none" }
+    "scan_timeout": {
+      "enabled": false
+    },
+    "agc_interval_seconds": 30
+  },
+  "files": {},
+  "ms3": {
+    "enabled": false,
+    "protein_sequence": ""
+  },
+  "precursor_selection": {
+    "targeting": "none",
+    "rank_by": "qscore",
+    "max_precursors": 3
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
+    },
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
     }
-  })";
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false
+  }
+}
+)";
   bool threw = false;
   try { Config cfg{std::string(json)}; }
   catch (const std::invalid_argument&) { threw = true; }
@@ -172,24 +307,64 @@ END_SECTION
 
 START_SECTION(([EXTRA] Config rejects legacy ms3.active key))
 {
-  const char* json = R"({
-    "deconvolution": { "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10] },
-    "precursor_selection": {},
-    "tagging": {},
-    "quantification": { "enabled": false },
-    "faims": {},
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [{ "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }]
+  const char* json = R"(
+{
+  "deconvolution": {
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10
+    ]
+  },
+  "faims": {},
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false
     },
-    "scheduling": { "cycle_time": { "enabled": false }, "scan_timeout": { "enabled": false }, "agc_interval_seconds": 30 },
-    "files": {},
-    "ms3": { "active": true, "protein_sequence": "" },
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "none" }
+    "scan_timeout": {
+      "enabled": false
+    },
+    "agc_interval_seconds": 30
+  },
+  "files": {},
+  "ms3": {
+    "active": true,
+    "protein_sequence": ""
+  },
+  "precursor_selection": {
+    "targeting": "none",
+    "rank_by": "qscore",
+    "max_precursors": 3
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
+    },
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
     }
-  })";
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false
+  }
+}
+)";
   bool threw = false;
   try { Config cfg{std::string(json)}; }
   catch (const std::invalid_argument&) { threw = true; }
@@ -200,24 +375,64 @@ END_SECTION
 
 START_SECTION(([EXTRA] Config rejects legacy ms3.mode key))
 {
-  const char* json = R"({
-    "deconvolution": { "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10] },
-    "precursor_selection": {},
-    "tagging": {},
-    "quantification": { "enabled": false },
-    "faims": {},
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [{ "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }]
+  const char* json = R"(
+{
+  "deconvolution": {
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10
+    ]
+  },
+  "faims": {},
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false
     },
-    "scheduling": { "cycle_time": { "enabled": false }, "scan_timeout": { "enabled": false }, "agc_interval_seconds": 30 },
-    "files": {},
-    "ms3": { "mode": 1, "protein_sequence": "" },
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "none" }
+    "scan_timeout": {
+      "enabled": false
+    },
+    "agc_interval_seconds": 30
+  },
+  "files": {},
+  "ms3": {
+    "mode": 1,
+    "protein_sequence": ""
+  },
+  "precursor_selection": {
+    "targeting": "none",
+    "rank_by": "qscore",
+    "max_precursors": 3
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
+    },
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
     }
-  })";
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false
+  }
+}
+)";
   bool threw = false;
   try { Config cfg{std::string(json)}; }
   catch (const std::invalid_argument&) { threw = true; }
@@ -228,24 +443,64 @@ END_SECTION
 
 START_SECTION(([EXTRA] Config rejects legacy ms3.max_per_ms2 key))
 {
-  const char* json = R"({
-    "deconvolution": { "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10] },
-    "precursor_selection": {},
-    "tagging": {},
-    "quantification": { "enabled": false },
-    "faims": {},
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [{ "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }]
+  const char* json = R"(
+{
+  "deconvolution": {
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10
+    ]
+  },
+  "faims": {},
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false
     },
-    "scheduling": { "cycle_time": { "enabled": false }, "scan_timeout": { "enabled": false }, "agc_interval_seconds": 30 },
-    "files": {},
-    "ms3": { "max_per_ms2": 4, "protein_sequence": "" },
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "none" }
+    "scan_timeout": {
+      "enabled": false
+    },
+    "agc_interval_seconds": 30
+  },
+  "files": {},
+  "ms3": {
+    "max_per_ms2": 4,
+    "protein_sequence": ""
+  },
+  "precursor_selection": {
+    "targeting": "none",
+    "rank_by": "qscore",
+    "max_precursors": 3
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
+    },
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
     }
-  })";
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false
+  }
+}
+)";
   bool threw = false;
   try { Config cfg{std::string(json)}; }
   catch (const std::invalid_argument&) { threw = true; }
@@ -256,24 +511,61 @@ END_SECTION
 
 START_SECTION(([EXTRA] Config accepts characterization with only protein_sequence))
 {
-  const char* json = R"({
-    "deconvolution": { "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10] },
-    "precursor_selection": {},
-    "tagging": {},
-    "quantification": { "enabled": false },
-    "faims": {},
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [{ "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }]
+  const char* json = R"(
+{
+  "deconvolution": {
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10
+    ]
+  },
+  "faims": {},
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false
     },
-    "scheduling": { "cycle_time": { "enabled": false }, "scan_timeout": { "enabled": false }, "agc_interval_seconds": 30 },
-    "files": {},
-    "characterization": { "protein_sequence": "MKWVTFISLLLLFSSAYSRGVFRR" },
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "none" }
+    "scan_timeout": {
+      "enabled": false
+    },
+    "agc_interval_seconds": 30
+  },
+  "files": {},
+  "precursor_selection": {
+    "targeting": "none",
+    "rank_by": "qscore",
+    "max_precursors": 3
+  },
+  "characterization": {
+    "mode": "off",
+    "protein_sequence": "MKWVTFISLLLLFSSAYSRGVFRR",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
+    },
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
     }
-  })";
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false
+  }
+}
+)";
   Config cfg{std::string(json)};
   TEST_EQUAL(cfg.characterization().protein_sequence, "MKWVTFISLLLLFSSAYSRGVFRR")
 }
@@ -281,23 +573,61 @@ END_SECTION
 
 START_SECTION(([EXTRA] Config parses charge_based_exclusion flag true))
 {
-  const char* json = R"({
-    "deconvolution": { "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10] },
-    "precursor_selection": { "ChargeBasedExclusion": true },
-    "tagging": {},
-    "quantification": { "enabled": false },
-    "faims": {},
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [{ "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }]
+  const char* json = R"(
+{
+  "deconvolution": {
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10
+    ]
+  },
+  "faims": {},
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false
     },
-    "scheduling": { "cycle_time": { "enabled": false }, "scan_timeout": { "enabled": false }, "agc_interval_seconds": 30 },
-    "files": {},
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "none" }
+    "scan_timeout": {
+      "enabled": false
+    },
+    "agc_interval_seconds": 30
+  },
+  "files": {},
+  "precursor_selection": {
+    "targeting": "none",
+    "charge_based_exclusion": true,
+    "rank_by": "qscore",
+    "max_precursors": 3
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
+    },
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
     }
-  })";
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false
+  }
+}
+)";
   Config cfg{std::string(json)};
   TEST_EQUAL(cfg.targeting().charge_based_exclusion, true)
 }
@@ -305,23 +635,60 @@ END_SECTION
 
 START_SECTION(([EXTRA] Config charge_based_exclusion defaults to false))
 {
-  const char* json = R"({
-    "deconvolution": { "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10] },
-    "precursor_selection": {},
-    "tagging": {},
-    "quantification": { "enabled": false },
-    "faims": {},
-    "ms_settings": {
-      "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [{ "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }]
+  const char* json = R"(
+{
+  "deconvolution": {
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10
+    ]
+  },
+  "faims": {},
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false
     },
-    "scheduling": { "cycle_time": { "enabled": false }, "scan_timeout": { "enabled": false }, "agc_interval_seconds": 30 },
-    "files": {},
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "none" }
+    "scan_timeout": {
+      "enabled": false
+    },
+    "agc_interval_seconds": 30
+  },
+  "files": {},
+  "precursor_selection": {
+    "targeting": "none",
+    "rank_by": "qscore",
+    "max_precursors": 3
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 10
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
+    },
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
     }
-  })";
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false
+  }
+}
+)";
   Config cfg{std::string(json)};
   TEST_EQUAL(cfg.targeting().charge_based_exclusion, false)
 }

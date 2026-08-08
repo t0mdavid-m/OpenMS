@@ -169,24 +169,19 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
 
   std::string cfg_json = std::string(R"({
     "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 1, "max_charge": 50, "min_mass": 100, "max_mass": 50000, "tol": [10, 10, 10] },
-    "precursor_selection": { "RT_window": 180, "target_mode": 0, "AllCharges": false, "HCDEnergy": 29, "strict_inclusion": false, "tie_threshold": 0.1 },
+    "precursor_selection": { "rt_window": 180, "targeting": "none", "consider_all_charges": false, "strict_inclusion": false, "tie_threshold": 0.1, "rank_by": "qscore", "max_precursors": 3 },
     "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
     "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
     "faims": { "cv_values": [], "max_cv_skip": 0, "cv_precursor_threshold": 15 },
     "ms_settings": {
       "ms1": { "analyzer": "Orbitrap", "first_mass": 100, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
-      "ms2": [ { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 } ],
-      "ms3": [ { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25, "resolution": 120000 } ]
+      "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
+      "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25, "resolution": 120000 }
     },
     "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 } },
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
-    "characterization": { "objective": "coverage", "protein_sequence": "PEPTIDEK" },
+    "characterization": { "mode": "coverage", "max_targets": 10, "protein_sequence": "PEPTIDEK" },
     "conditional_ms2": false,
-    "selection_strategy": {
-      "ms1": { "selection": "qscore", "max_targets": 3 },
-      "ms2": { "selection": "intensity", "max_targets": 10 },
-      "ms3": { "selection": "intensity", "max_targets": 10 }
-    },
     "runtime": { "pooled_identification_log_path": ")") + std::string(pooled_path) + R"(" } })";
 
   Config cfg{cfg_json};
