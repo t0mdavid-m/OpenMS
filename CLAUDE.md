@@ -172,17 +172,31 @@ builds commands exclusively inside `if (model != nullptr && !model->proteoform_s
 every other path returns zero commands. No tracker, no finalized model, or an unidentified
 precursor ⇒ **zero MS3 by design**, with no intensity or legacy fallback.
 
-- **`characterization.objective`** picks the targets. Default `ambiguity`; parsed as
-  `if (== "coverage") … else Ambiguity`, so `"Coverage"` or a typo silently means ambiguity —
-  unknown *keys* are rejected, unknown *values* are not (`Config.cpp:241-245`).
-- **`selection_strategy.ms3.selection`** does three things, none of them choosing targets:
-  `None` short-circuits so no MS3 is emitted at all; it selects the MS2 matcher
-  (`intensity`/`qscore` → `getTopFragmentMatches`, `terminal_fragments` → `getTerminalFragmentIons`,
-  `ambiguity_resolution` → `getAmbiguityEnclosingIons`); and the resulting
-  `region_start/end/ptm_sites` become the MS3 **render context** (`scan_commands.ms3_proteoform`).
+- **`characterization.mode`** (`off | ambiguity | coverage`) is the single MS3 switch and also picks
+  the targets: its two on-values *are* the objectives (ADR-0013). `Off` means no MS3 at all.
+  **Unknown values throw** — the old `objective` parse was `if (== "coverage") … else Ambiguity`, so
+  `"Coverage"` or any typo silently meant ambiguity, and with `mode` now carrying the on/off bit a
+  typo'd `"Off"` would have silently *enabled* MS3. The struct still exposes
+  `characterization().objective`, derived from `mode`, so every existing read site is unchanged.
+- **`Config::applyCharacterizationMode_`** projects `mode` onto `levels_[2].selection` and
+  `levels_[3].selection` after the whole document is parsed. MS3 needs BOTH non-`None`
+  (`FLASHIda.cpp:366`, `Exploration.cpp:728` and `:730`), so driving them from one enum makes
+  "MS3 on with MS2 off" unrepresentable. It also assigns **level 1** from
+  `precursor_selection.rank_by` — do not remove that: `MSLevelConfig::selection` defaults to `None`,
+  so an unassigned level 1 makes `FLASHIda.cpp:168` short-circuit every MS1 and the instrument
+  acquires *nothing*, silently.
+- **`selection_strategy.ms3.selection` is DELETED** (ADR-0014). It used to be the on/off gate *and*
+  the MS2-matcher chooser (`intensity`/`qscore` → `getTopFragmentMatches`, `terminal_fragments` →
+  `getTerminalFragmentIons`, `ambiguity_resolution` → `getAmbiguityEnclosingIons`). The gate is now
+  `mode`; the matcher is hardcoded to `getTopFragmentMatches`, which is what every MS3-enabled
+  config selected anyway, so the other two matchers survive in the engine but are unreachable from
+  config.
 - **Budget and charge floor come from level 2**, not 3: `config_.level(2).max_targets` (hardcoded
-  inside `planNextScans`) and `selection_strategy.ms2.min_charge`.
-  `selection_strategy.ms3.max_targets` / `.min_charge` are parsed but **never read**.
+  inside `planNextScans`) and level 2's `min_charge`. Both are now AUTHORED as
+  `characterization.max_targets` / `.min_fragment_charge` and projected onto level 2 by
+  `Config::applyCharacterizationMode_`, so the read sites are unchanged while the keys finally sit
+  where the feature does. `selection_strategy.ms3.max_targets` / `.min_charge` were parsed and
+  **never read** — four committed configs set 200 and ran 3 — and are deleted.
 
 ### `fragmentContains` vs `fragmentBrackets` (ADR-0005)
 
@@ -218,8 +232,9 @@ offenders and pointing at `FlashIDA/test-data/config_schema_reference.json`. Two
 `exploration.overrides` (a dynamic string→string map) and a top-level `ms3`, which gets a dedicated
 **migration** error before the root check runs.
 
-> **Inconsistency:** a *missing* `selection_strategy` throws `std::runtime_error` — the only config
-> error in the file that is not `std::invalid_argument`. A `catch(std::invalid_argument)` misses it.
+> **Resolved:** `selection_strategy` is deleted, and with it the one `std::runtime_error` in the
+> file. A *present* `selection_strategy` now throws `std::invalid_argument` with a migration message
+> naming all seven destinations, so every config error in this file is now the same exception type.
 
 Traps worth internalizing before touching config code:
 
@@ -242,15 +257,21 @@ Traps worth internalizing before touching config code:
 - **`ScanConfig.analyzer`'s default flips by parse site**: the in-class default is `"Orbitrap"`, but
   the `ms_settings.ms{1,2,3}` parsers override it with `""` (strncpy'd straight into the
   `ScanCommand`). Only the two `follow_up_scan` blocks keep `"Orbitrap"`.
-- **"Absent" ≠ "present with defaults".** `Config::level(n)` returns a static `default_level_` with
-  `selection = None` for any level not in `levels_`, whereas a level present without a `selection`
-  key gets `qscore` (level 1) or `intensity` (level > 1).
+- **Selection is never authored per level any more** — it is projected from `characterization.mode`
+  and `precursor_selection.rank_by`, so there is no "level present without a selection key" case
+  left. `Config::level(n)` still returns a static `default_level_` with `selection = None` for a
+  level not in `levels_`, but `levels_` is now always `{1,2,3}`. `MSLevelConfig::selection`'s
+  in-class default is also `None` (it was `Intensity`, which meant merely *defining* an
+  `ms_settings.msN` block switched that level on, because that parse materialises the level before
+  any selection is read).
 - **`applyOverrides` silently ignores unknown keys** (hand-written if/else chain over 17 fields, no
   `else`), and override **values must be JSON strings** — `"collision_energy": 30` throws an
   nlohmann `type_error`; `"30"` works. The base is the level's `scans[0]`, which is why `validate()`
   requires exactly one scan config at an exploring level.
 - `deconvolution.tol` must always carry ≥ 3 entries — C++ throws below `max_level`, and
-  `selection_strategy` always materializes levels {1,2,3}.
+  `Config` now materializes levels {1,2,3} unconditionally (it used to hold only because
+  `selection_strategy` was required and every config named all three) — `toleranceList()` walks
+  `levels_` positionally, so a missing level would shift every `tols_[ms_level-1]` index.
 
 ## Logging (`FLASHIda/IdaLogger.cpp`)
 
