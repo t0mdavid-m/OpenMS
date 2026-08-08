@@ -471,6 +471,7 @@ set(analysis_executables_list
   ProteoformTracker_NonWinnerRematch_test
   ScanCommandQueue_Concurrent_test
   ScanConfig_applyOverrides_test
+  Config_SchemaProjection_test
   FalseDiscoveryRate_test
   FeatureDeconvolution_test
   FeatureDistance_test
