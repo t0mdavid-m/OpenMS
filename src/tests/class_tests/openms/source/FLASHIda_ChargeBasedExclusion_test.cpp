@@ -17,9 +17,11 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
+#include <iostream>
 #include <map>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace OpenMS;
@@ -344,26 +346,46 @@ START_SECTION(flag_on_selects_one_charge_per_mass_within_a_survey)
   auto scans = loadTsvScans(ms1_tsv_path);
   ABORT_IF(scans.empty())
 
-  // ONE survey only. cytC is present at many charge states, so under the fan-out this single scan
-  // emitted an MS2 per charge of the same PeakGroup.
-  std::vector<ScanData> one_survey{scans[0]};
+  // The FULL sequence, as every other section drives it. A single survey does NOT work: this
+  // fixture's first scan selects nothing, so the engine emits only idle AGC/MS1 pairs and the
+  // harness terminates on its 3-idle rule with zero MS2 commands. runInterleaved is called directly
+  // rather than through driveInterleaved because the assertion needs whole commands (mono_mass,
+  // parent_scan_id), which the AcquisitionRow projection drops.
   FLASHIda ida(const_cast<char*>(base_on_json));
-  AcqResult a = runInterleaved(&ida, one_survey, {});
+  AcqResult a = runInterleaved(&ida, scans, {}, nullptr, /*max_iters=*/4000);
 
   // Non-vacuity: with no MS2 commands the assertion below is trivially satisfied.
   TEST_EQUAL(a.ms2_cmds.size() > 0, true)
 
-  // Group by the engine's OWN mono_mass rather than reconstructing it from the isolation centre.
-  // The fan-out pushed the SAME PeakGroup once per charge, so those commands carry a bit-identical
-  // mono_mass — no rounding near-miss can split a group and hide the defect.
-  std::map<long long, std::set<int>> charges_by_mass;
+  // "Within a survey" must be keyed per PARENT, not per run. Charge-keyed exclusion is SUPPOSED to
+  // reach other charges of a mass on LATER surveys -- that is exactly what CBE-03/CBE-05 assert --
+  // so grouping across the whole sequence would assert the opposite of the intended behaviour.
+  // parent_scan_id identifies the survey that spawned each MS2.
+  //
+  // The mass key is the engine's OWN mono_mass: the fan-out pushed the SAME PeakGroup once per
+  // charge, so those commands carry a bit-identical value and no rounding near-miss can split a
+  // group and mask the defect. The first survey's MS2s carry an EMPTY parent_scan_id (buildMS2
+  // stamps it only when the parent tracking id is non-zero, and the first survey's is 0); that is
+  // still one coherent group.
+  std::map<std::pair<std::string, long long>, std::set<int>> charges_per_survey_mass;
   for (const auto& c : a.ms2_cmds)
-    if (c.num_stages >= 1) charges_by_mass[std::llround(c.mono_mass)].insert(c.stages[0].charge_state);
+    if (c.num_stages >= 1)
+      charges_per_survey_mass[{std::string(c.parent_scan_id), std::llround(c.mono_mass)}]
+          .insert(c.stages[0].charge_state);
 
-  for (const auto& kv : charges_by_mass)
+  // Report every offender before asserting: TEST_EQUAL carries no message, and "2 != 1" without the
+  // survey and the mass is not a diagnosis.
+  int violations = 0;
+  for (const auto& kv : charges_per_survey_mass)
   {
-    TEST_EQUAL(static_cast<int>(kv.second.size()), 1)
+    if (kv.second.size() <= 1) continue;
+    ++violations;
+    std::cout << "[CBE-07] survey '" << kv.first.first << "' mass " << kv.first.second
+              << " acquired at " << kv.second.size() << " charges:";
+    for (int z : kv.second) std::cout << " " << z;
+    std::cout << std::endl;
   }
+  TEST_EQUAL(violations, 0)
 }
 END_SECTION
 
