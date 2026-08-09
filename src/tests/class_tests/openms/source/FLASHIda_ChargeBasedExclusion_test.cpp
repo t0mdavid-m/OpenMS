@@ -40,9 +40,7 @@ namespace
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -120,9 +118,7 @@ namespace
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],

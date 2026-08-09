@@ -81,11 +81,21 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
   TEST_EQUAL(cfg.level(1).max_targets, j["precursor_selection"]["max_precursors"].get<int>())
   TEST_EQUAL(cfg.level(1).min_charge, j["precursor_selection"]["min_precursor_charge"].get<int>())
 
-  // --- flashtnt ---
+  // --- precursor_selection.tag_expansion ---
+  // These two keys were authored under `flashtnt` but are neither FLASHTnT Params: max_ptm_count is
+  // read only by PrecursorSelection::generatePTMCombinations_, and max_flanking_mass_diff is a call
+  // argument FLASHIda passes to a static tagger helper. They now live where the feature does.
+  // The C++ STORAGE deliberately did NOT move -- both still land in TargetingConfig -- so this pair
+  // is the mechanical proof that the new parse path binds to the same fields as the old one. Read
+  // the new JSON path, compare against the unchanged cfg.targeting() fields.
+  TEST_EQUAL(cfg.targeting().max_total_ptm_count,
+             j["precursor_selection"]["tag_expansion"]["max_ptm_count"].get<int>())
+  TEST_REAL_SIMILAR(cfg.targeting().max_flanking_mass_diff,
+                    j["precursor_selection"]["tag_expansion"]["max_flanking_mass_diff"].get<double>())
+
+  // --- flashtnt (now only genuine FLASHTnT Params) ---
   TEST_EQUAL(cfg.targeting().min_tag_length, j["flashtnt"]["min_length"].get<int>())
   TEST_EQUAL(cfg.targeting().max_tag_length, j["flashtnt"]["max_length"].get<int>())
-  TEST_EQUAL(cfg.targeting().max_total_ptm_count, j["flashtnt"]["max_ptm_count"].get<int>())
-  TEST_REAL_SIMILAR(cfg.targeting().max_flanking_mass_diff, j["flashtnt"]["max_flanking_mass_diff"].get<double>())
   TEST_EQUAL(cfg.targeting().allow_gap, j["flashtnt"]["allow_gap"].get<bool>())
   TEST_EQUAL(cfg.targeting().max_aa_in_gap, j["flashtnt"]["max_aa_in_gap"].get<int>())
   TEST_EQUAL(cfg.targeting().max_blind_mod_count, j["flashtnt"]["max_blind_mod_count"].get<int>())
