@@ -693,6 +693,24 @@ namespace OpenMS
             trigger_right_isolation_mzs_.push_back(mz2);
             current_selected_masses.insert(pg.getMonoMass());
             current_selected_mzs.insert(center_mz);
+
+            // ONE acquisition per PeakGroup per survey. charges_to_process is a preference-ordered
+            // FALLBACK list, not a work list: it is sorted by descending per-charge qscore above, so
+            // the first charge that survives every guard is by definition the best charge not already
+            // excluded. That is the whole point of charge-keyed exclusion — a mass fragmented at one
+            // charge stays eligible at another on a LATER survey (ADR-0018).
+            //
+            // Without this break the loop fell through to the next charge of the SAME PeakGroup, and
+            // nothing stopped it: z16 has a different center_mz so the current_selected_mzs guard
+            // misses, the charge_based_exclusion branch deliberately writes no mass-level key ("the
+            // mass is never globally excluded"), and tqscore_exceeding_mass_charge_set_ holds only
+            // (mass, z17). So one proteoform consumed as many mass_count slots as it had charges —
+            // with max_precursors 3 and three charges, P2 and P3 were never fragmented at all.
+            //
+            // Acquiring several charges of one mass in a single survey is a legitimate thing to WANT;
+            // it is just not what this flag means. It arrives as an explicit acquisition mode
+            // (precursor_selection.precursor_charges: "separate") rather than as a side effect here.
+            break;
           }  // end for charges_to_process
         }
       }

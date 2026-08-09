@@ -14,8 +14,10 @@
 
 #include "FLASHIda_TestHelpers.h"  // ground-truth harness: ScanData/loadTsvScans/runInterleaved/AcquisitionRow/ms2AcquisitionRows
 
+#include <cmath>
 #include <cstring>
 #include <fstream>
+#include <map>
 #include <set>
 #include <string>
 #include <vector>
@@ -325,6 +327,43 @@ START_SECTION(flag_on_rt_window_eviction_reenables_charge)
   int drained_second = driveInterleaved(ida, scans, /*rt_offset=*/1000.0).ms2_count;
   // Eviction cleared the per-charge state, so the second pass acquires at least as many.
   TEST_EQUAL(drained_second >= drained_first, true)
+}
+END_SECTION
+
+// CBE-07: charges_to_process is a preference-ordered FALLBACK list, not a work list. Within a
+// SINGLE survey a mass is acquired at exactly ONE charge — the best one not already excluded.
+//
+// This is the only section that separates the fallback from the fan-out. CBE-02/03/05 assert
+// more-acquisitions and multiple-charges-per-mass across the FULL scan sequence, and all three hold
+// under BOTH designs, because the fallback also reaches new charges — just on later surveys. That
+// gap is exactly how the fan-out survived: the flag consumed one mass_count slot per charge, so
+// with max_precursors 3 and a species at three charges, the 2nd and 3rd precursors were never
+// fragmented, and no test noticed.
+START_SECTION(flag_on_selects_one_charge_per_mass_within_a_survey)
+{
+  auto scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(scans.empty())
+
+  // ONE survey only. cytC is present at many charge states, so under the fan-out this single scan
+  // emitted an MS2 per charge of the same PeakGroup.
+  std::vector<ScanData> one_survey{scans[0]};
+  FLASHIda ida(const_cast<char*>(base_on_json));
+  AcqResult a = runInterleaved(&ida, one_survey, {});
+
+  // Non-vacuity: with no MS2 commands the assertion below is trivially satisfied.
+  TEST_EQUAL(a.ms2_cmds.size() > 0, true)
+
+  // Group by the engine's OWN mono_mass rather than reconstructing it from the isolation centre.
+  // The fan-out pushed the SAME PeakGroup once per charge, so those commands carry a bit-identical
+  // mono_mass — no rounding near-miss can split a group and hide the defect.
+  std::map<long long, std::set<int>> charges_by_mass;
+  for (const auto& c : a.ms2_cmds)
+    if (c.num_stages >= 1) charges_by_mass[std::llround(c.mono_mass)].insert(c.stages[0].charge_state);
+
+  for (const auto& kv : charges_by_mass)
+  {
+    TEST_EQUAL(static_cast<int>(kv.second.size()), 1)
+  }
 }
 END_SECTION
 
