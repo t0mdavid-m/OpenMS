@@ -297,7 +297,14 @@ namespace OpenMS
     std::unordered_map<int, double> new_mass_score_map_;
     std::unordered_map<int, double> t_mass_score_map_;
 
-    // exclusion mode
+    // IN-DEPTH mode (targeting == "in_depth"). NOT exclusion -- this comment said "exclusion mode"
+    // for a long time while guarding mode 2, which is the opposite branch.
+    //
+    // Builds a de-prioritization product: t_mass_score_map_[nominal] *= (1 - qscore) over every
+    // target-log observation in the RT window. A mass observed often, or observed well, drives the
+    // product toward 0, and iteration 0 below then skips it while 1 - product exceeds
+    // tqscore_threshold. It is SOFT: iteration 1 has no such guard and back-fills anything skipped,
+    // so the effect is invisible unless the slot budget is contended.
     // TODO: Update IDScore bla, currently only qscore
     if (config_.targeting().mode == 2)
     {
@@ -555,7 +562,9 @@ namespace OpenMS
               // Strict inclusion mode with no active targets - skip all candidates
               continue;
             }
-            // deep mode
+            // EXCLUSION mode (targeting == "exclusion_masses"). NOT deep -- this comment said
+            // "deep mode" while guarding mode 3. Unlike the soft de-prioritization at mode 2, this
+            // is a HARD skip: a matched mass is never selected, whatever the slot budget.
             else if (config_.targeting().mode == 3 && excluded_masses_.size() > 0)
             {
               bool to_exclude = false;

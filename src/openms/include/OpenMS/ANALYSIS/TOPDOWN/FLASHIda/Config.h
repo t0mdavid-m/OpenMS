@@ -166,7 +166,13 @@ namespace OpenMS
   /// Targeting and precursor selection configuration
   struct OPENMS_DLLAPI TargetingConfig
   {
-    int mode = 0;                      ///< 0=none, 1=inclusive, 2=exclusive, 3=deep
+    /// 0=none, 1=inclusion, 2=in_depth, 3=exclusion_masses -- from precursor_selection.targeting.
+    /// This comment said "2=exclusive, 3=deep" for a long time, and it was BACKWARDS. Mode 2 loads
+    /// `Mass` lines into target_mass_rt_map_ and de-prioritizes them via the tqscore product map;
+    /// mode 3 loads `AllMass` lines and hard-skips matches. Two committed configs were named for the
+    /// mode they did not set because of this. Trust the parse in Config.cpp and the branches in
+    /// PrecursorSelection.cpp, not prose.
+    int mode = 0;
     bool strict_inclusion = false;
     double tie_threshold = 0.1;
     double rt_window = 180.0;
