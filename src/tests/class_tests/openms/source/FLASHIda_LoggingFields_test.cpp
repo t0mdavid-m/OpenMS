@@ -182,15 +182,14 @@ START_TEST(FLASHIda_LoggingFields, "$Id$")
 /////////////////////////////////////////////////////////////
 START_SECTION(schema_column_counts)
 {
-  std::string cmd_f = "lf_schema_commands.tsv", res_f = "lf_schema_results.tsv", id_f = "lf_schema_id.tsv";
-  std::remove(cmd_f.c_str()); std::remove(res_f.c_str()); std::remove(id_f.c_str());
+  const std::string dir = freshLogDir("lf_schema");
 
-  std::string json = buildJsonWithRuntime("", cmd_f, res_f, true, id_f);
+  std::string json = buildJsonWithLogDir(dir, true);
   FLASHIda ida(const_cast<char*>(json.c_str()));  // constructor writes the three headers
 
-  auto c = TSVFile::parse(cmd_f);
-  auto r = TSVFile::parse(res_f);
-  auto i = TSVFile::parse(id_f);
+  auto c = TSVFile::parse(dir + "/scan_commands.tsv");
+  auto r = TSVFile::parse(dir + "/scan_results.tsv");
+  auto i = TSVFile::parse(dir + "/identification.tsv");
 
   TEST_EQUAL(c.headers.size(), 32)   // E6: + scan_description; P5: + precursor_id; + ms3_proteoform (wide MS3 fragment); ADR-0012: + faims_enabled
   TEST_EQUAL(r.headers.size(), 29)   // E5: + ms_level; F5: + winner_tracking_id; slim-down: -5 id-payload cols (34->29)
@@ -235,8 +234,6 @@ START_SECTION(schema_column_counts)
   TEST_EQUAL(i.colIndex("ms3_isolation_width"), 24)
   TEST_EQUAL(i.colIndex("ms3_window_snr"), 25)
   TEST_EQUAL(i.colIndex("ms3_charge_intensity"), 26)
-
-  std::remove(cmd_f.c_str()); std::remove(res_f.c_str()); std::remove(id_f.c_str());
 }
 END_SECTION
 
@@ -249,14 +246,13 @@ START_SECTION(commands_ms2_columns)
   auto ms2 = loadTsvScans(CYTC_MS2);
   ABORT_IF(ms1.empty() || ms2.empty())
 
-  std::string cmd_f = "lf_c1_commands.tsv";
-  std::remove(cmd_f.c_str());
-  std::string json = buildJsonWithRuntime("", cmd_f, "", true);
+  const std::string dir = freshLogDir("lf_c1");
+  std::string json = buildJsonWithLogDir(dir, true);
   FLASHIda ida(const_cast<char*>(json.c_str()));
   auto cycle = runFullCycle(&ida, ms1, ms2);
   TEST_TRUE(cycle.ms2_cmds.size() > 0)
 
-  auto t = TSVFile::parse(cmd_f);
+  auto t = TSVFile::parse(dir + "/scan_commands.tsv");
   int lvl = t.colIndex("ms_level");
   ABORT_IF(lvl < 0)
 
@@ -289,8 +285,6 @@ START_SECTION(commands_ms2_columns)
   TEST_TRUE(tid_ok)  TEST_TRUE(type_ok)  TEST_TRUE(act_ok)  TEST_TRUE(ce_ok)
   TEST_TRUE(qsc_ok)  TEST_TRUE(snr_ok)   TEST_TRUE(ppm_ok)  TEST_TRUE(pint_ok)
   TEST_TRUE(parent_ok) TEST_TRUE(ion_ok) TEST_TRUE(nosemi)
-
-  std::remove(cmd_f.c_str());
 }
 END_SECTION
 
@@ -307,20 +301,21 @@ START_SECTION(commands_faims_enabled_column)
   auto ms2 = loadTsvScans(CYTC_MS2);
   ABORT_IF(ms1.empty() || ms2.empty())
 
-  auto driveWithCvs = [&](const std::string& cv_list, const std::string& file) {
-    std::remove(file.c_str());
-    std::string json = buildJsonWithRuntime("", file, "", true);
+  // Each invocation builds its OWN engine, so each takes its own log folder (tag).
+  auto driveWithCvs = [&](const std::string& cv_list, const std::string& tag) {
+    const std::string dir = freshLogDir(tag);
+    std::string json = buildJsonWithLogDir(dir, true);
     const std::string needle = "\"cv_values\": []";
     const size_t p = json.find(needle);
     if (p != std::string::npos) json.replace(p, needle.size(), "\"cv_values\": " + cv_list);
     FLASHIda ida(const_cast<char*>(json.c_str()));
     runFullCycle(&ida, ms1, ms2);
-    return TSVFile::parse(file);
+    return TSVFile::parse(dir + "/scan_commands.tsv");
   };
 
   // Empty cv_values -> FAIMS off.
   {
-    auto t = driveWithCvs("[]", "lf_faims_off_commands.tsv");
+    auto t = driveWithCvs("[]", "lf_faims_off");
     ABORT_IF(t.rows.empty())
     bool enabled_ok = true, cv_ok = true;
     for (const auto& row : t.rows)
@@ -330,13 +325,12 @@ START_SECTION(commands_faims_enabled_column)
     }
     TEST_TRUE(enabled_ok)
     TEST_TRUE(cv_ok)
-    std::remove("lf_faims_off_commands.tsv");
   }
 
   // One CV -> FAIMS on at a fixed voltage. Under the pre-ADR-0012 `size() > 1` rule this run
   // reported no FAIMS and logged faims_cv = 0; both columns now say otherwise.
   {
-    auto t = driveWithCvs("[-45]", "lf_faims_on_commands.tsv");
+    auto t = driveWithCvs("[-45]", "lf_faims_on");
     ABORT_IF(t.rows.empty())
     bool enabled_ok = true, cv_ok = true;
     for (const auto& row : t.rows)
@@ -346,13 +340,12 @@ START_SECTION(commands_faims_enabled_column)
     }
     TEST_TRUE(enabled_ok)
     TEST_TRUE(cv_ok)
-    std::remove("lf_faims_on_commands.tsv");
   }
 
   // THE case the column exists for: FAIMS on, at CV 0. faims_cv is 0 here, exactly as in the
   // FAIMS-off run above -- so faims_enabled is the only column that tells them apart.
   {
-    auto t = driveWithCvs("[0]", "lf_faims_cv0_commands.tsv");
+    auto t = driveWithCvs("[0]", "lf_faims_cv0");
     ABORT_IF(t.rows.empty())
     bool enabled_ok = true, cv_is_zero = true;
     for (const auto& row : t.rows)
@@ -362,7 +355,6 @@ START_SECTION(commands_faims_enabled_column)
     }
     TEST_TRUE(enabled_ok)   // ISSUE(pre-ADR-0012): reported 0 -- indistinguishable from FAIMS off
     TEST_TRUE(cv_is_zero)   // and faims_cv alone genuinely cannot disambiguate it
-    std::remove("lf_faims_cv0_commands.tsv");
   }
 }
 END_SECTION
@@ -376,14 +368,13 @@ START_SECTION(commands_ms3_two_stage)
   auto ms2 = loadTsvScans(CYTC_MS2);
   ABORT_IF(ms1.empty() || ms2.empty())
 
-  std::string cmd_f = "lf_c2_commands.tsv";
-  std::remove(cmd_f.c_str());
-  std::string json = buildJsonWithRuntime("", cmd_f, "", true);
+  const std::string dir = freshLogDir("lf_c2");
+  std::string json = buildJsonWithLogDir(dir, true);
   FLASHIda ida(const_cast<char*>(json.c_str()));
   auto cycle = runFullCycle(&ida, ms1, ms2);
   TEST_TRUE(cycle.ms3_cmds.size() > 0)  // MS3 must fire, else this section asserts nothing
 
-  auto t = TSVFile::parse(cmd_f);
+  auto t = TSVFile::parse(dir + "/scan_commands.tsv");
   int lvl = t.colIndex("ms_level");
   ABORT_IF(lvl < 0)
 
@@ -460,8 +451,6 @@ START_SECTION(commands_ms3_two_stage)
   TEST_TRUE(stage1_populated)  // proves the MS3 2-stage scoring plumb reached the writer
   TEST_TRUE(lineage_checked)   // §C2: at least one MS3 two-stage charge cell was joined to its source MS2
   TEST_TRUE(lineage_ok)        // §C2: every MS3 fragment charge fits inside its REAL source-MS2 charge
-
-  std::remove(cmd_f.c_str());
 }
 END_SECTION
 
@@ -474,14 +463,13 @@ START_SECTION(commands_hcd_energy_matches_stage_ce)
   auto ms2 = loadTsvScans(CYTC_MS2);
   ABORT_IF(ms1.empty() || ms2.empty())
 
-  std::string cmd_f = "lf_c2b_commands.tsv";
-  std::remove(cmd_f.c_str());
-  std::string json = buildJsonWithRuntime("", cmd_f, "", true);
+  const std::string dir = freshLogDir("lf_c2b");
+  std::string json = buildJsonWithLogDir(dir, true);
   FLASHIda ida(const_cast<char*>(json.c_str()));
   auto cycle = runFullCycle(&ida, ms1, ms2);
   TEST_TRUE(cycle.ms3_cmds.size() > 0)  // MS3 must fire, else this section asserts nothing
 
-  auto t = TSVFile::parse(cmd_f);
+  auto t = TSVFile::parse(dir + "/scan_commands.tsv");
   int lvl = t.colIndex("ms_level");
   ABORT_IF(lvl < 0)
 
@@ -518,8 +506,6 @@ START_SECTION(commands_hcd_energy_matches_stage_ce)
   TEST_TRUE(checked_msn)   // fail-closed: at least one MSn row was compared
   TEST_TRUE(checked_ms3)   // fail-closed: the two-stage path specifically was exercised
   TEST_TRUE(mirror_ok)
-
-  std::remove(cmd_f.c_str());
 }
 END_SECTION
 
@@ -532,13 +518,12 @@ START_SECTION(commands_ms1_agc_stageless)
   auto ms2 = loadTsvScans(CYTC_MS2);
   ABORT_IF(ms1.empty() || ms2.empty())
 
-  std::string cmd_f = "lf_c3_commands.tsv";
-  std::remove(cmd_f.c_str());
-  std::string json = buildJsonWithRuntime("", cmd_f, "", true);
+  const std::string dir = freshLogDir("lf_c3");
+  std::string json = buildJsonWithLogDir(dir, true);
   FLASHIda ida(const_cast<char*>(json.c_str()));
   runFullCycle(&ida, ms1, ms2);
 
-  auto t = TSVFile::parse(cmd_f);
+  auto t = TSVFile::parse(dir + "/scan_commands.tsv");
   int lvl = t.colIndex("ms_level");
   ABORT_IF(lvl < 0)
 
@@ -560,8 +545,6 @@ START_SECTION(commands_ms1_agc_stageless)
   }
   TEST_TRUE(found)
   TEST_TRUE(type_ok)  TEST_TRUE(act_ok)  TEST_TRUE(zero_ok)  TEST_TRUE(parent_ok)  TEST_TRUE(ion_ok)
-
-  std::remove(cmd_f.c_str());
 }
 END_SECTION
 
@@ -577,14 +560,13 @@ START_SECTION(commands_exploration_marker)
   auto ms2 = loadTsvScans(FI_MS2_HCD);
   ABORT_IF(ms1.empty() || ms2.empty())
 
-  std::string cmd_f = "lf_cE_commands.tsv";
-  std::remove(cmd_f.c_str());
-  std::string json = injectRuntime(explorationConfig(), cmd_f, "");
+  const std::string dir = freshLogDir("lf_cE");
+  std::string json = injectRuntime(explorationConfig(), dir);
   FLASHIda ida(const_cast<char*>(json.c_str()));
   auto r = driveOneExplorationGroup(&ida, ms1, ms2[0]);
   TEST_TRUE(r.group_commands > 0)
 
-  auto t = TSVFile::parse(cmd_f);
+  auto t = TSVFile::parse(dir + "/scan_commands.tsv");
   int lvl = t.colIndex("ms_level");
   ABORT_IF(lvl < 0)
 
@@ -600,8 +582,6 @@ START_SECTION(commands_exploration_marker)
     }
   }
   TEST_TRUE(found_expl)  // exploration CE-sweep variants overwrite the desc marker to 'E'
-
-  std::remove(cmd_f.c_str());
 }
 END_SECTION
 
@@ -614,14 +594,13 @@ START_SECTION(results_ms1_columns)
   auto ms2 = loadTsvScans(CYTC_MS2);
   ABORT_IF(ms1.empty() || ms2.empty())
 
-  std::string cmd_f = "lf_r1_commands.tsv", res_f = "lf_r1_results.tsv";
-  std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
-  std::string json = buildJsonWithRuntime("", cmd_f, res_f, true);
+  const std::string dir = freshLogDir("lf_r1");
+  std::string json = buildJsonWithLogDir(dir, true);
   FLASHIda ida(const_cast<char*>(json.c_str()));
   runFullCycle(&ida, ms1, ms2);
 
-  auto cmds = TSVFile::parse(cmd_f);
-  auto res = TSVFile::parse(res_f);
+  auto cmds = TSVFile::parse(dir + "/scan_commands.tsv");
+  auto res = TSVFile::parse(dir + "/scan_results.tsv");
   auto level = commandLevels(cmds);
 
   std::set<std::string> cmd_ids;
@@ -658,8 +637,6 @@ START_SECTION(results_ms1_columns)
     TEST_TRUE(toD(cell(res, row, "rt")) >= 0.0 && toD(cell(res, row, "rt")) <= FI_RT_WINDOW)
   }
   TEST_TRUE(found)
-
-  std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
 }
 END_SECTION
 
@@ -672,14 +649,13 @@ START_SECTION(results_ms2_normal_columns)
   auto ms2 = loadTsvScans(CYTC_MS2);
   ABORT_IF(ms1.empty() || ms2.empty())
 
-  std::string cmd_f = "lf_r2_commands.tsv", res_f = "lf_r2_results.tsv";
-  std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
-  std::string json = buildJsonWithRuntime("", cmd_f, res_f, true);
+  const std::string dir = freshLogDir("lf_r2");
+  std::string json = buildJsonWithLogDir(dir, true);
   FLASHIda ida(const_cast<char*>(json.c_str()));
   runFullCycle(&ida, ms1, ms2);
 
-  auto cmds = TSVFile::parse(cmd_f);
-  auto res = TSVFile::parse(res_f);
+  auto cmds = TSVFile::parse(dir + "/scan_commands.tsv");
+  auto res = TSVFile::parse(dir + "/scan_results.tsv");
   auto level = commandLevels(cmds);
 
   bool found = false;
@@ -703,8 +679,6 @@ START_SECTION(results_ms2_normal_columns)
     TEST_TRUE(isTrackingId(cell(res, row, "parent_tracking_id")))            // == its MS1
   }
   TEST_TRUE(found)
-
-  std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
 }
 END_SECTION
 
@@ -719,15 +693,14 @@ START_SECTION(results_identification_tag_count_and_proforma)
   auto ms2 = loadTsvScans(CYTC_MS2);
   ABORT_IF(ms1.empty() || ms2.empty())
 
-  std::string res_f = "lf_i3_results.tsv", id_f = "lf_i3_id.tsv";
-  std::remove(res_f.c_str()); std::remove(id_f.c_str());
+  const std::string dir = freshLogDir("lf_i3");
   // inclusion-pinned cytC identification (target_mode=1, M-start proteoform, NO FASTA tag DB) -- the
   // exact case that used to log tag_count=0 because selection_.hasTargetProteinDatabase() is false.
-  std::string json = buildJsonWithRuntime("", "", res_f, true, id_f);
+  std::string json = buildJsonWithLogDir(dir, true);
   FLASHIda ida(const_cast<char*>(json.c_str()));
   runFullCycle(&ida, ms1, ms2);
 
-  auto idf = TSVFile::parse(id_f);
+  auto idf = TSVFile::parse(dir + "/identification.tsv");
   ABORT_IF(idf.rows.size() == 0)   // identification must fire, else this gate proves nothing
 
   // NOTE: the former scan_results tag_count>0 + proteoform-equality checks were removed — tag_count is
@@ -750,8 +723,6 @@ START_SECTION(results_identification_tag_count_and_proforma)
     int bare = 0; for (char c : pf) if (c >= 'A' && c <= 'Z') ++bare;   // strip [..]/(..) mod annotations
     TEST_EQUAL(bare, end - start)
   }
-
-  std::remove(res_f.c_str()); std::remove(id_f.c_str());
 }
 END_SECTION
 
@@ -764,15 +735,14 @@ START_SECTION(results_ms3_normal_columns)
   auto ms2 = loadTsvScans(CYTC_MS2);
   ABORT_IF(ms1.empty() || ms2.empty())
 
-  std::string cmd_f = "lf_r4_commands.tsv", res_f = "lf_r4_results.tsv";
-  std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
-  std::string json = buildJsonWithRuntime("", cmd_f, res_f, true);
+  const std::string dir = freshLogDir("lf_r4");
+  std::string json = buildJsonWithLogDir(dir, true);
   FLASHIda ida(const_cast<char*>(json.c_str()));
   auto cycle = runFullCycle(&ida, ms1, ms2);
   TEST_TRUE(cycle.ms3_cmds.size() > 0)
 
-  auto cmds = TSVFile::parse(cmd_f);
-  auto res = TSVFile::parse(res_f);
+  auto cmds = TSVFile::parse(dir + "/scan_commands.tsv");
+  auto res = TSVFile::parse(dir + "/scan_results.tsv");
   auto level = commandLevels(cmds);
 
   bool found_ms3 = false;
@@ -799,7 +769,7 @@ START_SECTION(results_ms3_normal_columns)
     TEST_EQUAL(act.size(), 2)
     TEST_EQUAL(rt.size(), 2)
     TEST_TRUE(posFinite(toD(ce[0])) && posFinite(toD(ce[1])))
-    TEST_TRUE(std::abs(toD(ce[0]) - 29.0) < 1.0)  // MS2 isolation CE (buildJsonWithRuntime fixed MS2 CE)
+    TEST_TRUE(std::abs(toD(ce[0]) - 29.0) < 1.0)  // MS2 isolation CE (buildJsonWithLogDir fixed MS2 CE)
     TEST_TRUE(std::abs(toD(ce[1]) - 35.0) < 1.0)  // MS3 fragmentation CE
     TEST_TRUE(inActivationSet(act[0]) && inActivationSet(act[1]))
     TEST_TRUE(nonNegFinite(toD(rt[0])) && nonNegFinite(toD(rt[1])))
@@ -809,8 +779,6 @@ START_SECTION(results_ms3_normal_columns)
     // match-independent scan_results checks (2-stage CE/act/rt + terminal structure) on every MS3 row.
   }
   TEST_TRUE(found_ms3)
-
-  std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
 }
 END_SECTION
 
@@ -823,14 +791,13 @@ START_SECTION(results_ms2_exploration_columns)
   auto ms2 = loadTsvScans(FI_MS2_HCD);
   ABORT_IF(ms1.empty() || ms2.empty())
 
-  std::string cmd_f = "lf_r3_commands.tsv", res_f = "lf_r3_results.tsv";
-  std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
-  std::string json = injectRuntime(explorationConfig(), cmd_f, res_f);
+  const std::string dir = freshLogDir("lf_r3");
+  std::string json = injectRuntime(explorationConfig(), dir);
   FLASHIda ida(const_cast<char*>(json.c_str()));
   auto r = driveOneExplorationGroup(&ida, ms1, ms2[0]);
   TEST_TRUE(r.group_commands > 0)
 
-  auto res = TSVFile::parse(res_f);
+  auto res = TSVFile::parse(dir + "/scan_results.tsv");
 
   bool found_expl = false;
   for (const auto& row : res.rows)
@@ -859,8 +826,6 @@ START_SECTION(results_ms2_exploration_columns)
     TEST_TRUE(kids_ok)
   }
   TEST_TRUE(found_expl)
-
-  std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
 }
 END_SECTION
 
@@ -878,14 +843,13 @@ START_SECTION(results_exploration_per_variant_and_winner)
   auto ms2 = loadTsvScans(FI_MS2_HCD);
   ABORT_IF(ms1.empty() || ms2.empty())
 
-  std::string cmd_f = "lf_f5_commands.tsv", res_f = "lf_f5_results.tsv";
-  std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
-  std::string json = injectRuntime(explorationConfig(), cmd_f, res_f);   // mass_count -> 5 variants, no baseline
+  const std::string dir = freshLogDir("lf_f5");
+  std::string json = injectRuntime(explorationConfig(), dir);            // mass_count -> 5 variants, no baseline
   FLASHIda ida(const_cast<char*>(json.c_str()));
   auto r = driveOneExplorationGroup(&ida, ms1, ms2[0]);                  // feeds all variants -> group completes
   ABORT_IF(r.group_commands == 0)
 
-  auto res = TSVFile::parse(res_f);
+  auto res = TSVFile::parse(dir + "/scan_results.tsv");
 
   std::map<int, std::set<int>> seen_vi;     // group_id -> set of variant_index logged
   std::map<int, int> tv_of, winner_count;   // group_id -> total_variants / # rows naming a winner
@@ -922,8 +886,6 @@ START_SECTION(results_exploration_per_variant_and_winner)
     TEST_EQUAL(winner_count[gid], 1)
     TEST_TRUE(isTrackingId(winner_of[gid]) && all_row_ids.count(winner_of[gid]) == 1)
   }
-
-  std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
 }
 END_SECTION
 
@@ -946,9 +908,8 @@ START_SECTION(results_exploration_followup_columns)
     ABORT_IF(p == std::string::npos)
     cfg.insert(p, "\"overrides\": { \"analyzer\": \"Orbitrap\" }, ");
   }
-  std::string res_f = "lf_i4followup_results.tsv";
-  std::remove(res_f.c_str());
-  cfg = injectRuntime(cfg, "", res_f);
+  const std::string dir = freshLogDir("lf_i4followup");
+  cfg = injectRuntime(cfg, dir);
   FLASHIda ida(const_cast<char*>(cfg.c_str()));
   auto r = driveOneExplorationGroup(&ida, ms1, ms2[0]);
   ABORT_IF(r.group_commands == 0)
@@ -958,7 +919,7 @@ START_SECTION(results_exploration_followup_columns)
   TEST_TRUE(r.found_ms3)
 
   // Logged exploration result rows (inclusion-pinned cytC => they MATCH, unlike §R3's E. coli data).
-  auto res = TSVFile::parse(res_f);
+  auto res = TSVFile::parse(dir + "/scan_results.tsv");
   bool found_expl = false;
   for (const auto& row : res.rows)
   {
@@ -976,7 +937,6 @@ START_SECTION(results_exploration_followup_columns)
     TEST_EQUAL((int)kids.size(), pushed)
   }
   TEST_TRUE(found_expl)
-  std::remove(res_f.c_str());
 }
 END_SECTION
 
@@ -991,9 +951,8 @@ START_SECTION(results_ms3_exploration_columns)
   auto ms2 = loadTsvScans(CYTC_MS2);
   ABORT_IF(ms1.empty() || ms2.empty())
 
-  std::string res_f = "lf_i4ms3_results.tsv";
-  std::remove(res_f.c_str());
-  std::string cfg = injectRuntime(inclusionPinCytc(ms3ExplorationConfig()), "", res_f);
+  const std::string dir = freshLogDir("lf_i4ms3");
+  std::string cfg = injectRuntime(inclusionPinCytc(ms3ExplorationConfig()), dir);
   FLASHIda ida(const_cast<char*>(cfg.c_str()));
   auto r = driveOneExplorationGroup(&ida, ms1, ms2[0]);
   ABORT_IF(r.group_commands == 0)
@@ -1002,7 +961,7 @@ START_SECTION(results_ms3_exploration_columns)
   TEST_TRUE(r.found_ms3)
   TEST_EQUAL(r.ms3_num_stages, 2)
 
-  auto res = TSVFile::parse(res_f);
+  auto res = TSVFile::parse(dir + "/scan_results.tsv");
   bool found_expl = false;
   bool found_ms3_expl = false;  // §I4b(Issue-1): >=1 MS3-exploration result row whose CE/act is 2-stage
   for (const auto& row : res.rows)
@@ -1022,7 +981,7 @@ START_SECTION(results_ms3_exploration_columns)
     // (only the MS3 fragmentation half), even though the matching scan_commands row logged the correct
     // 2-stage "ms2CE;ms3CE" / "HCD;CID". The Issue-1 engine fix carries the MS2 isolation stage through
     // FeedResultInfo, so the MS3 result row is now 2-stage too. Gate on the scan_results ms_level column
-    // (col 1; cmd_f is "" here so we cannot join to scan_commands). ms3ExplorationConfig() SWEEPS BOTH
+    // (col 1; this section does not join to scan_commands). ms3ExplorationConfig() SWEEPS BOTH
     // stages -- MS2 CE in {20,25,30,35,40} (ce_min 20, ce_max 40, step 5) and MS3 CE in {15,20,25,30,35}
     // (ce_min 15, ce_max 35, step 5) -- so DO NOT pin single values: assert exactly 2 ';'-tokens with
     // ce[0] (MS2) in [20,40] and ce[1] (MS3) in [15,35], activation == "HCD;CID".
@@ -1042,7 +1001,6 @@ START_SECTION(results_ms3_exploration_columns)
   }
   TEST_TRUE(found_expl)
   TEST_TRUE(found_ms3_expl)   // >=1 MS3-exploration result row was checked (else the 2-stage pin proves nothing)
-  std::remove(res_f.c_str());
 }
 END_SECTION
 
@@ -1057,15 +1015,14 @@ START_SECTION(commands_exploration_ms3_parent_is_ms2)
   auto ms2 = loadTsvScans(CYTC_MS2);
   ABORT_IF(ms1.empty() || ms2.empty())
 
-  std::string cmd_f = "lf_f1_commands.tsv", res_f = "lf_f1_results.tsv";
-  std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
-  std::string cfg = injectRuntime(inclusionPinCytc(ms3ExplorationConfig()), cmd_f, res_f);
+  const std::string dir = freshLogDir("lf_f1");
+  std::string cfg = injectRuntime(inclusionPinCytc(ms3ExplorationConfig()), dir);
   FLASHIda ida(const_cast<char*>(cfg.c_str()));
   auto r = driveOneExplorationGroup(&ida, ms1, ms2[0]);
   ABORT_IF(r.group_commands == 0)
   ABORT_IF(!r.found_ms3)   // need >=1 MS3 command emitted to check its parent
 
-  auto cmds = TSVFile::parse(cmd_f);
+  auto cmds = TSVFile::parse(dir + "/scan_commands.tsv");
   auto level = commandLevels(cmds);   // tracking_id -> ms_level (from scan_commands)
   int checked = 0;
   for (const auto& row : cmds.rows)
@@ -1081,7 +1038,6 @@ START_SECTION(commands_exploration_ms3_parent_is_ms2)
     checked++;
   }
   TEST_TRUE(checked >= 1)
-  std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
 }
 END_SECTION
 
@@ -1098,15 +1054,14 @@ START_SECTION(commands_exploration_ms3_stage1_scores_nonzero)
   auto ms2 = loadTsvScans(CYTC_MS2);
   ABORT_IF(ms1.empty() || ms2.empty())
 
-  std::string cmd_f = "lf_f2_commands.tsv", res_f = "lf_f2_results.tsv";
-  std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
-  std::string cfg = injectRuntime(inclusionPinCytc(ms3ExplorationConfig()), cmd_f, res_f);
+  const std::string dir = freshLogDir("lf_f2");
+  std::string cfg = injectRuntime(inclusionPinCytc(ms3ExplorationConfig()), dir);
   FLASHIda ida(const_cast<char*>(cfg.c_str()));
   auto r = driveOneExplorationGroup(&ida, ms1, ms2[0]);
   ABORT_IF(r.group_commands == 0)
   ABORT_IF(!r.found_ms3)   // need >=1 MS3 command to inspect its stage-1 scores
 
-  auto cmds = TSVFile::parse(cmd_f);
+  auto cmds = TSVFile::parse(dir + "/scan_commands.tsv");
   int checked = 0;
   for (const auto& row : cmds.rows)
   {
@@ -1123,7 +1078,6 @@ START_SECTION(commands_exploration_ms3_stage1_scores_nonzero)
     checked++;
   }
   TEST_TRUE(checked >= 1)
-  std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
 }
 END_SECTION
 
@@ -1147,14 +1101,13 @@ START_SECTION(identification_ms3_exploration_proteoform)
     auto ms2 = loadTsvScans(CYTC_MS2);
     ABORT_IF(ms1.empty() || ms2.empty())
 
-    std::string cmd_f = "lf_f3_commands.tsv", res_f = "lf_f3_results.tsv", id_f = "lf_f3_id.tsv";
-    std::remove(cmd_f.c_str()); std::remove(res_f.c_str()); std::remove(id_f.c_str());
-    std::string cfg = injectRuntime(inclusionPinCytc(ms3ExplorationConfig()), cmd_f, res_f, id_f);
+    const std::string dir = freshLogDir("lf_f3");
+    std::string cfg = injectRuntime(inclusionPinCytc(ms3ExplorationConfig()), dir);
     FLASHIda ida(const_cast<char*>(cfg.c_str()));
     runFullCycle(&ida, ms1, ms2, &manifest);   // feed the MS3 variants so MS3-'E' rows are produced
 
-    auto cmds = TSVFile::parse(cmd_f);
-    auto idf = TSVFile::parse(id_f);
+    auto cmds = TSVFile::parse(dir + "/scan_commands.tsv");
+    auto idf = TSVFile::parse(dir + "/identification.tsv");
 
     // F3-id: a matched MS3-'E' identification row has a non-empty ProForma proteoform.
     int matched = 0;
@@ -1205,7 +1158,6 @@ START_SECTION(identification_ms3_exploration_proteoform)
       ++e_cmp_rows;
     }
     TEST_TRUE(e_cmp_rows >= 1)   // >=1 MS3-'E' row joined id<->scan_commands -> exploration sink covered
-    std::remove(cmd_f.c_str()); std::remove(res_f.c_str()); std::remove(id_f.c_str());
   }
 }
 END_SECTION
@@ -1224,16 +1176,15 @@ START_SECTION(identification_ms2_exploration_ms1_precursor_from_group)
   auto ms2 = loadTsvScans(CYTC_MS2);
   ABORT_IF(ms1.empty() || ms2.empty())
 
-  std::string cmd_f = "lf_f4_commands.tsv", id_f = "lf_f4_id.tsv";
-  std::remove(cmd_f.c_str()); std::remove(id_f.c_str());
+  const std::string dir = freshLogDir("lf_f4");
   // single-group drive feeds the MS2 variants back -> feedResult writes the MS2-'E' identification rows.
-  std::string cfg = injectRuntime(inclusionPinCytc(ms3ExplorationConfig()), cmd_f, "", id_f);
+  std::string cfg = injectRuntime(inclusionPinCytc(ms3ExplorationConfig()), dir);
   FLASHIda ida(const_cast<char*>(cfg.c_str()));
   auto r = driveOneExplorationGroup(&ida, ms1, ms2[0]);
   ABORT_IF(r.group_commands == 0)
 
-  auto cmds = TSVFile::parse(cmd_f);
-  auto idf  = TSVFile::parse(id_f);
+  auto cmds = TSVFile::parse(dir + "/scan_commands.tsv");
+  auto idf  = TSVFile::parse(dir + "/identification.tsv");
 
   // tracking_id -> mono_mass from scan_commands (an MS2 command's mono_mass is a single value == the
   // precursor mono mass; only MS3 commands ';'-join two stages, which these MS2-'E' ids never resolve to).
@@ -1257,7 +1208,6 @@ START_SECTION(identification_ms2_exploration_ms1_precursor_from_group)
     checked++;
   }
   TEST_TRUE(checked >= 1)   // >=1 MS2-'E' id row joined to its command within ppm
-  std::remove(cmd_f.c_str()); std::remove(id_f.c_str());
 }
 END_SECTION
 
@@ -1278,13 +1228,12 @@ START_SECTION(inclusion_ms2_within_target_window)
 
   const double T = 12351.3, HW = 2.0 * 10.0 * T * 1e-6;   // 10 ppm tol, doubled at the match site (~0.247 Da)
   auto onList = [&](double m){ return std::abs(m - T) < HW; };
-  const std::string cmd_f = "lf_f8incl_commands.tsv";
 
-  auto driveCountMs2 = [&](const std::string& json, int& ms2_total, int& ms2_on_list) {
-    std::remove(cmd_f.c_str());
+  // Two engines are built below (non-strict, then strict), so each gets its OWN log folder.
+  auto driveCountMs2 = [&](const std::string& json, const std::string& dir, int& ms2_total, int& ms2_on_list) {
     FLASHIda ida(const_cast<char*>(json.c_str()));
     runFullCycle(&ida, ms1, ms2);
-    auto cmds = TSVFile::parse(cmd_f);
+    auto cmds = TSVFile::parse(dir + "/scan_commands.tsv");
     ms2_total = 0; ms2_on_list = 0;
     for (const auto& row : cmds.rows)
     {
@@ -1296,13 +1245,15 @@ START_SECTION(inclusion_ms2_within_target_window)
 
   // NON-STRICT: the cytC precursor IS selected (>=1 MS2 within the window); DDA may add off-list MS2 too.
   int ns_total = 0, ns_on = 0;
-  driveCountMs2(buildJsonWithRuntime("", cmd_f, "", true), ns_total, ns_on);
+  const std::string ns_dir = freshLogDir("lf_f8incl_1");
+  driveCountMs2(buildJsonWithLogDir(ns_dir, true), ns_dir, ns_total, ns_on);
   // ISSUE(F8-incl): pre-fix ns_on==0 — the target was the cytC AVERAGE mass, ~570-700 ppm off the
   // monoisotopic ~12351.3, so the window never matched (silent DDA fall-through).
   TEST_TRUE(ns_on >= 1)
 
   // STRICT: selection RESTRICTED to the list -> EVERY MS2 is within the window, and >=1 exists.
-  std::string strict_json = buildJsonWithRuntime("", cmd_f, "", true);
+  const std::string s_dir = freshLogDir("lf_f8incl_2");
+  std::string strict_json = buildJsonWithLogDir(s_dir, true);
   {
     const std::string from = "\"strict_inclusion\": false";
     auto p = strict_json.find(from);
@@ -1310,12 +1261,10 @@ START_SECTION(inclusion_ms2_within_target_window)
     strict_json.replace(p, from.size(), "\"strict_inclusion\": true");
   }
   int s_total = 0, s_on = 0;
-  driveCountMs2(strict_json, s_total, s_on);
+  driveCountMs2(strict_json, s_dir, s_total, s_on);
   // ISSUE(F8-incl-strict): pre-fix s_total==0 (nothing matched the wrong target); any leaked MS2 would be an
   // off-list DDA pick -> s_on != s_total. With the corrected monoisotopic target every strict MS2 is on-list.
   TEST_TRUE(s_total >= 1 && s_on == s_total)
-
-  std::remove(cmd_f.c_str());
 }
 END_SECTION
 
@@ -1366,13 +1315,13 @@ START_SECTION(exclusion_mode2_tqscore_suppresses_target_mass)
     return o.str();
   };
 
-  const std::string cmd_f = "lf_f8excl_commands.tsv";
-  auto selectedMs2Masses = [&](const std::string& json) {
-    std::remove(cmd_f.c_str());
-    std::string full = injectRuntime(json, cmd_f, "");
+  // Each invocation builds its OWN engine, so each takes its own log folder (tag).
+  auto selectedMs2Masses = [&](const std::string& json, const std::string& tag) {
+    const std::string dir = freshLogDir(tag);
+    std::string full = injectRuntime(json, dir);
     FLASHIda ida(const_cast<char*>(full.c_str()));
     runFullCycle(&ida, ms1, ms2);
-    auto cmds = TSVFile::parse(cmd_f);
+    auto cmds = TSVFile::parse(dir + "/scan_commands.tsv");
     std::vector<double> masses;
     for (const auto& row : cmds.rows)
       if (std::atoi(cell(cmds, row, "ms_level").c_str()) == 2)
@@ -1384,7 +1333,7 @@ START_SECTION(exclusion_mode2_tqscore_suppresses_target_mass)
   //    per scan, so >=2 entries means the survey is productive (NON-VACUITY guard) — NOT a per-scan
   //    >=2-selectable precondition (the slack-vs-tight contrast below is what certifies contention). The mass
   //    we then de-prioritize is dda[0].
-  auto dda = selectedMs2Masses(cfg(0, 1, ""));
+  auto dda = selectedMs2Masses(cfg(0, 1, ""), "lf_f8excl_1");
   ABORT_IF(dda.size() < 2)
   const double target = dda[0];
 
@@ -1402,7 +1351,7 @@ START_SECTION(exclusion_mode2_tqscore_suppresses_target_mass)
   // 3) Exclusion (mode 2) with that target log, STILL max_targets==1: the lone MS2 slot must go to a
   //    non-suppressed competitor (the rich survey has >=8 others), so the de-prioritized `target` is
   //    selected-OUT of the single slot. With a slack budget it would be backfilled — hence max_targets==1.
-  auto excl = selectedMs2Masses(cfg(2, 1, "\"" + log_path + "\""));
+  auto excl = selectedMs2Masses(cfg(2, 1, "\"" + log_path + "\""), "lf_f8excl_2");
 
   auto hasNear = [&](const std::vector<double>& v, double t){
     for (double m : v) if (std::abs(m - t) < 0.5) return true;   // same nominal mass (suppression is per-nominal)
@@ -1422,10 +1371,9 @@ START_SECTION(exclusion_mode2_tqscore_suppresses_target_mass)
   //    filter and BACKFILLS the de-prioritized `target` -> it IS re-selected. This is the decisive SOFT proof:
   //    dropped at budget 1, backfilled at budget 64. A HARD exclusion would suppress it at ANY budget
   //    (that path is covered by ProcessScan::processScan_mass_exclusion).
-  auto slack = selectedMs2Masses(cfg(2, 64, "\"" + log_path + "\""));
+  auto slack = selectedMs2Masses(cfg(2, 64, "\"" + log_path + "\""), "lf_f8excl_3");
   TEST_TRUE(hasNear(slack, target))
 
-  std::remove(cmd_f.c_str());
   std::remove(log_path.c_str());
 }
 END_SECTION
@@ -1446,13 +1394,12 @@ START_SECTION(results_duration_semantics)
   auto ms2 = loadTsvScans(CYTC_MS2);
   ABORT_IF(ms1.empty() || ms2.empty())
 
-  std::string res_f = "lf_x1_results.tsv";
-  std::remove(res_f.c_str());
-  std::string json = buildJsonWithRuntime("", "", res_f, true);
+  const std::string dir = freshLogDir("lf_x1");
+  std::string json = buildJsonWithLogDir(dir, true);
   FLASHIda ida(const_cast<char*>(json.c_str()));
   runFullCycle(&ida, ms1, ms2);
 
-  auto res = TSVFile::parse(res_f);
+  auto res = TSVFile::parse(dir + "/scan_results.tsv");
   TEST_TRUE(res.rows.size() > 0)
   for (const auto& row : res.rows)
   {
@@ -1471,7 +1418,6 @@ START_SECTION(results_duration_semantics)
     // decomposition when fully tracked
     if (q > 0 && inst > 0 && proc > 0) TEST_TRUE(std::abs(dur - (q + inst + proc)) < 2.0)
   }
-  std::remove(res_f.c_str());
 }
 END_SECTION
 
@@ -1484,14 +1430,13 @@ START_SECTION(results_parent_lineage)
   auto ms2 = loadTsvScans(CYTC_MS2);
   ABORT_IF(ms1.empty() || ms2.empty())
 
-  std::string cmd_f = "lf_x2_commands.tsv", res_f = "lf_x2_results.tsv";
-  std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
-  std::string json = buildJsonWithRuntime("", cmd_f, res_f, true);
+  const std::string dir = freshLogDir("lf_x2");
+  std::string json = buildJsonWithLogDir(dir, true);
   FLASHIda ida(const_cast<char*>(json.c_str()));
   runFullCycle(&ida, ms1, ms2);
 
-  auto cmds = TSVFile::parse(cmd_f);
-  auto res = TSVFile::parse(res_f);
+  auto cmds = TSVFile::parse(dir + "/scan_commands.tsv");
+  auto res = TSVFile::parse(dir + "/scan_results.tsv");
   auto level = commandLevels(cmds);
 
   bool checked_ms2 = false, checked_ms3 = false;
@@ -1509,8 +1454,6 @@ START_SECTION(results_parent_lineage)
   }
   TEST_TRUE(checked_ms2)
   TEST_TRUE(checked_ms3)
-
-  std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
 }
 END_SECTION
 
@@ -1523,13 +1466,12 @@ START_SECTION(results_identification_agreement)
   auto ms2 = loadTsvScans(CYTC_MS2);
   ABORT_IF(ms1.empty() || ms2.empty())
 
-  std::string res_f = "lf_x4_results.tsv", id_f = "lf_x4_id.tsv";
-  std::remove(res_f.c_str()); std::remove(id_f.c_str());
-  std::string json = buildJsonWithRuntime("", "", res_f, true, id_f);
+  const std::string dir = freshLogDir("lf_x4");
+  std::string json = buildJsonWithLogDir(dir, true);
   FLASHIda ida(const_cast<char*>(json.c_str()));
   runFullCycle(&ida, ms1, ms2);
 
-  auto idf = TSVFile::parse(id_f);
+  auto idf = TSVFile::parse(dir + "/identification.tsv");
   ABORT_IF(idf.rows.size() == 0)   // identification must fire, else this gate proves nothing
 
   // scan_results no longer carries a proteoform (moved to scan_commands.ms3_proteoform for MS3, and the
@@ -1544,8 +1486,6 @@ START_SECTION(results_identification_agreement)
     ++checked;
   }
   TEST_TRUE(checked > 0)
-
-  std::remove(res_f.c_str()); std::remove(id_f.c_str());
 }
 END_SECTION
 
@@ -1558,13 +1498,12 @@ START_SECTION(identification_R_rows_universal)
   auto ms2 = loadTsvScans(CYTC_MS2);
   ABORT_IF(ms1.empty() || ms2.empty())
 
-  std::string id_f = "lf_i1_id.tsv";
-  std::remove(id_f.c_str());
-  std::string json = buildJsonWithRuntime("", "", "", true, id_f);
+  const std::string dir = freshLogDir("lf_i1");
+  std::string json = buildJsonWithLogDir(dir, true);
   FLASHIda ida(const_cast<char*>(json.c_str()));
   runFullCycle(&ida, ms1, ms2);
 
-  auto idf = TSVFile::parse(id_f);
+  auto idf = TSVFile::parse(dir + "/identification.tsv");
   TEST_TRUE(idf.rows.size() > 0)  // cytC (non-exploration) => all rows scan_mode 'R'
   for (const auto& row : idf.rows)
   {
@@ -1628,7 +1567,6 @@ START_SECTION(identification_R_rows_universal)
       TEST_TRUE(posFinite(toD(cell(idf, row, "ms3_charge_intensity"))))
     }
   }
-  std::remove(id_f.c_str());
 }
 END_SECTION
 
@@ -1640,9 +1578,8 @@ START_SECTION(ida_log_all15_fields)
   auto ms1 = loadTsvScans(CYTC_MS1);
   ABORT_IF(ms1.empty())
 
-  std::string log_f = "lf_l1_ida.log";
-  std::remove(log_f.c_str());
-  std::string json = buildJsonWithRuntime(log_f, "", "");
+  const std::string dir = freshLogDir("lf_l1");
+  std::string json = buildJsonWithLogDir(dir);
   FLASHIda ida(const_cast<char*>(json.c_str()));
 
   // Drive the MS1 surveys via the canonical interleaved driver: the engine emits each survey command
@@ -1655,7 +1592,7 @@ START_SECTION(ida_log_all15_fields)
   AcqResult acq = runInterleaved(&ida, ms1, std::vector<ScanData>{});
   TEST_TRUE(acq.ms2_cmds.size() > 0)
 
-  auto parsed = IdaLogger::parseFLASHIdaLog(log_f);
+  auto parsed = IdaLogger::parseFLASHIdaLog(dir + "/ida.log");
   TEST_TRUE(parsed.size() > 0)
   bool any = false;
   for (const auto& entry : parsed)
@@ -1683,7 +1620,6 @@ START_SECTION(ida_log_all15_fields)
     }
   }
   TEST_TRUE(any)
-  std::remove(log_f.c_str());
 }
 END_SECTION
 
@@ -1696,12 +1632,11 @@ START_SECTION(ida_log_multi_scan_distinct_keys)
   auto ms2 = loadTsvScans(CYTC_MS2);
   ABORT_IF(ms1.size() < 2 || ms2.empty())
 
-  std::string log_f = "lf_l2_ida.log";
-  std::remove(log_f.c_str());
+  const std::string dir = freshLogDir("lf_l2");
   // Selecting config: a standard-DDA "none" config (enable_ms3=false) logs every MS1 as "0 targets",
   // which parseFLASHIdaLog (FLASHIda.cpp:595) skips -> no log groups. enable_ms3=true gives ms2
   // selection="intensity" + inclusion, so each MS1 selects >=1 precursor -> a NON-empty log group.
-  std::string json = buildJsonWithRuntime(log_f, "", "", true);
+  std::string json = buildJsonWithLogDir(dir, true);
   FLASHIda ida(const_cast<char*>(json.c_str()));
 
   // Feed TWO MS1 surveys under the engine's OWN emitted tracking ids (no invented ids) -- the ida_log key
@@ -1713,9 +1648,8 @@ START_SECTION(ida_log_multi_scan_distinct_keys)
   std::string id0(acq.ms1_cmds[0].scan_description, 3), id1(acq.ms1_cmds[1].scan_description, 3);
   TEST_TRUE(id0 != id1)                          // distinct engine ids => distinct ida_log keys
 
-  auto parsed = IdaLogger::parseFLASHIdaLog(log_f);
+  auto parsed = IdaLogger::parseFLASHIdaLog(dir + "/ida.log");
   TEST_TRUE(parsed.size() >= 2)                  // two non-"0 targets" MS1 groups
-  std::remove(log_f.c_str());
 }
 END_SECTION
 
@@ -1728,7 +1662,9 @@ START_SECTION(scan_description_cap_roundtrip)
   auto ms2 = loadTsvScans(CYTC_MS2);
   ABORT_IF(ms1.empty() || ms2.empty())
 
-  std::string json = buildJsonWithRuntime("", "", "", true);
+  // No log folder on purpose: this section only inspects the DRAINED ScanCommand buffers, so an empty
+  // log_dir ("open nothing") is the right config -- it writes no files at all.
+  std::string json = buildJsonWithLogDir("", true);
   FLASHIda ida(const_cast<char*>(json.c_str()));
   auto cycle = runFullCycle(&ida, ms1, ms2);
   TEST_TRUE(cycle.ms3_cmds.size() > 0)
@@ -1750,7 +1686,7 @@ END_SECTION
 // Drives the engine the way Flash.cs does: getNextScanCommand -> feed the matching
 // scan back stamped with THAT command's engine-emitted scan_description, so every
 // MS1->MS2->MS3 link uses the engine's own ids end-to-end (no test-fabricated ids).
-// The inclusion-pinned cytC MS3 recipe (buildJsonWithRuntime enable_ms3=true) is the
+// The inclusion-pinned cytC MS3 recipe (buildJsonWithLogDir enable_ms3=true) is the
 // C++-facing equivalent of method_inclusion.json + the MS3 mode-1 HCD recipe: target_mode=1
 // + inclusion_cytc.txt + the M-starting cytC proteoform.  HARD requirement: EVERY non-empty
 // parent_tracking_id in scan_commands.tsv must resolve to an engine-emitted command id, with
@@ -1762,9 +1698,8 @@ START_SECTION(parent_tracking_id_resolution)
   auto ms2 = loadTsvScans(CYTC_MS2);
   ABORT_IF(ms1.size() < 2 || ms2.empty())
 
-  std::string cmd_f = "lf_x6_commands.tsv", res_f = "lf_x6_results.tsv";
-  std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
-  std::string json = buildJsonWithRuntime("", cmd_f, res_f, true);  // inclusion (target_mode 1) + MS3
+  const std::string dir = freshLogDir("lf_x6");
+  std::string json = buildJsonWithLogDir(dir, true);  // inclusion (target_mode 1) + MS3
   FLASHIda ida(const_cast<char*>(json.c_str()));
 
   // Single-MS1 engine-chained acquisition: the engine emits the MS1 command, we feed the cytC
@@ -1774,7 +1709,7 @@ START_SECTION(parent_tracking_id_resolution)
   AcqResult acq = runFullAcquisition(&ida, ms1[1], ms2[0]);
   TEST_TRUE(acq.ms2_cmds.size() >= 1)  // inclusion mode must trigger >=1 MS2 on the pinned cytC precursor
 
-  auto cmds = TSVFile::parse(cmd_f);
+  auto cmds = TSVFile::parse(dir + "/scan_commands.tsv");
 
   // Hard plausibility gate: every non-empty parent_tracking_id resolves to a known engine-emitted id.
   // The engine chains ids itself here, so the fed-id universe is empty -- all known ids come from the
@@ -1807,8 +1742,6 @@ START_SECTION(parent_tracking_id_resolution)
   TEST_TRUE(checked_ms2)
   TEST_TRUE(lineage_ok)
   (void)checked_ms3;  // MS3 rows are recipe-dependent; lineage is asserted WHEN present
-
-  std::remove(cmd_f.c_str()); std::remove(res_f.c_str());
 }
 END_SECTION
 
@@ -1832,9 +1765,8 @@ START_SECTION(commands_scan_description_roundtrip)
   auto ms2 = loadTsvScans(CYTC_MS2);
   ABORT_IF(ms1.empty() || ms2.empty())
 
-  std::string cmd_f = "lf_e6_commands.tsv";
-  std::remove(cmd_f.c_str());
-  std::string json = buildJsonWithRuntime("", cmd_f, "", true);
+  const std::string dir = freshLogDir("lf_e6");
+  std::string json = buildJsonWithLogDir(dir, true);
   FLASHIda ida(const_cast<char*>(json.c_str()));
   auto cycle = runFullCycle(&ida, ms1, ms2);
   TEST_TRUE(cycle.ms2_cmds.size() > 0)
@@ -1844,7 +1776,7 @@ START_SECTION(commands_scan_description_roundtrip)
   for (const auto& c : cycle.ms2_cmds) { std::string d(c.scan_description); if (d.size() >= 3) drained_desc[d.substr(0, 3)] = d; }
   for (const auto& c : cycle.ms3_cmds) { std::string d(c.scan_description); if (d.size() >= 3) drained_desc[d.substr(0, 3)] = d; }
 
-  auto t = TSVFile::parse(cmd_f);
+  auto t = TSVFile::parse(dir + "/scan_commands.tsv");
   ABORT_IF(t.colIndex("scan_description") != 28)  // E6: scan_description at col 28 (P5 appended precursor_id after it)
 
   bool matched_any = false, equal_ok = true;
@@ -1858,8 +1790,6 @@ START_SECTION(commands_scan_description_roundtrip)
   }
   TEST_TRUE(matched_any)  // at least the MS2 commands must round-trip
   TEST_TRUE(equal_ok)     // logged col[28] == drained descriptor buffer, byte-for-byte
-
-  std::remove(cmd_f.c_str());
 }
 END_SECTION
 
@@ -1867,7 +1797,7 @@ END_SECTION
 // §T9 -- cytC REAL-MS3 fragment data via ion-name-keyed real-spectrum feed (skips cleanly if absent)
 //
 // This section proves the real MS3 path end-to-end on REAL data: under the inclusion-pinned, EXHAUSTIVE
-// MS3 mode-1 recipe (buildJsonWithRuntime enable_ms3=true), the engine emits ion-targeted MS3 commands;
+// MS3 mode-1 recipe (buildJsonWithLogDir enable_ms3=true), the engine emits ion-targeted MS3 commands;
 // each command's scan_description encodes its precursor fragment ion ({id}R{mass}k@{charge}{ion}{idx}).
 // runFullCycle decodes that ion and feeds the matching REAL per-ion MS3 spectrum from the manifest built
 // by globbing ms3_cytc_<ion>_scan<N>.txt in the spectra dir; commands whose ion is absent are SKIPPED
@@ -1893,14 +1823,13 @@ START_SECTION(results_ms3_real_fragment_data)
     auto ms2 = loadTsvScans(CYTC_MS2);  // scan57 ladder -> proteoform context (auto-PTM)
     ABORT_IF(ms1.empty() || ms2.empty())
 
-    std::string cmd_f = "lf_t9_commands.tsv", res_f = "lf_t9_results.tsv", id_f = "lf_t9_id.tsv";
-    std::remove(cmd_f.c_str()); std::remove(res_f.c_str()); std::remove(id_f.c_str());
+    const std::string dir = freshLogDir("lf_t9");
     // M-start, inclusion-pinned, MS3 mode-1, EXHAUSTIVE MS3 emission: pass ms3_max_targets=50 (scoped to
     // §T9 only; other enable_ms3 sections keep the engine default ~10). 50 > cytC's ~16-20 detectable
     // fragment ions, so emission stays exhaustive while keeping the section's runtime in check.
     // F9: capture identification.tsv too — the matched-fragment FLOOR now lives there (ms3_fragments), since
     // scan_results fragment_count is sentinelized to -1.
-    std::string json = buildJsonWithRuntime("", cmd_f, res_f, true, id_f, "HCD", 50);
+    std::string json = buildJsonWithLogDir(dir, true, "HCD", 50);
     FLASHIda ida(const_cast<char*>(json.c_str()));
 
     // Mirror the shared harness wiring; feed the REAL per-ion MS3 spectrum keyed by the decoded descriptor ion.
@@ -1921,8 +1850,8 @@ START_SECTION(results_ms3_real_fragment_data)
     }
     TEST_TRUE(decoded_ion_cmds > 0)  // >=1 ion-targeted MS3 emitted
 
-    auto cmds  = TSVFile::parse(cmd_f);
-    auto res   = TSVFile::parse(res_f);
+    auto cmds  = TSVFile::parse(dir + "/scan_commands.tsv");
+    auto res   = TSVFile::parse(dir + "/scan_results.tsv");
     auto level = commandLevels(cmds);
 
     // The wide MS3 fragment proteoform moved from scan_results to scan_commands.ms3_proteoform. Build a
@@ -1962,7 +1891,7 @@ START_SECTION(results_ms3_real_fragment_data)
 
     // F9: the matched-fragment FLOOR relocated from scan_results.fragment_count to identification.tsv —
     // >=1 MS3 identification row carries a non-empty ms3_fragments list (matched-ness lives where it belongs).
-    auto idf = TSVFile::parse(id_f);
+    auto idf = TSVFile::parse(dir + "/identification.tsv");
     int ms3_id_with_frags = 0;
     for (const auto& row : idf.rows)
     {
@@ -2030,8 +1959,6 @@ START_SECTION(results_ms3_real_fragment_data)
     // self-explaining message instead of an opaque leaf_active miss.
     TEST_TRUE(wide_cmd_ranges >= 1)
     TEST_TRUE(leaf_active >= 1)   // the leaf narrower is active & evidence-driven, not a copy of the wide base
-
-    std::remove(cmd_f.c_str()); std::remove(res_f.c_str()); std::remove(id_f.c_str());
   }
 }
 END_SECTION

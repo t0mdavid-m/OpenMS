@@ -20,6 +20,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>  // encode/decode for distinct MS1 ids
+#include <OpenMS/SYSTEM/File.h>  // freshLogDir: makeDir / removeDirRecursively
 #include "FLASHIda_TestAccess.h"  // FLASHIdaTestAccess::explorationActive (private-state access)
 
 #include <cctype>
@@ -441,18 +442,40 @@ namespace
   }
 
   // ----------------------------------------------------------------------------
-  // JSON config builder with runtime log paths (extends FLASHIda_Logging_test's
-  // builder with an identification_log_path slot).  enable_ms3 emits the proven
-  // inclusion-pinned cytC MS3 recipe (target_mode=1 + inclusion_cytc.txt + the
-  // M-starting proteoform + ms3 stage); callers feed ms1_cytc + ms2_cytc_fresh_scan57.
+  // Give a test section its own empty log folder.
+  //
+  // Isolation used to come from a unique FILENAME per stream in the one shared ctest CWD.
+  // The engine now writes fixed basenames under runtime.log_dir, so isolation moves to the
+  // FOLDER and every engine instance needs its own -- including the several sections that
+  // construct two or three engines in a row.
+  //
+  // IdaLogger deliberately does NOT create directories (the host owns the filesystem), and a
+  // missing folder leaves every stream silently closed. So this must be called before building
+  // the config, and it is the ONLY place a test should name a log directory.
   // ----------------------------------------------------------------------------
-  inline std::string buildJsonWithRuntime(const std::string& ida_log_path,
-                                          const std::string& commands_path,
-                                          const std::string& results_path,
-                                          bool enable_ms3 = false,
-                                          const std::string& identification_path = "",
-                                          const std::string& ms2_activation = "HCD",
-                                          int ms3_max_targets = 0)
+  inline std::string freshLogDir(const std::string& tag)
+  {
+    const std::string dir = "testlogs/" + tag;
+    File::removeDirRecursively(dir);  // streams open in append mode; start from nothing
+    File::makeDir(dir);               // recursive, idempotent, no-throw
+    return dir;
+  }
+
+  // ----------------------------------------------------------------------------
+  // JSON config builder writing all five log streams into one folder.  enable_ms3 emits the
+  // proven inclusion-pinned cytC MS3 recipe (target_mode=1 + inclusion_cytc.txt + the
+  // M-starting proteoform + ms3 stage); callers feed ms1_cytc + ms2_cytc_fresh_scan57.
+  //
+  // RENAMED from buildJsonWithRuntime, and the rename is load-bearing rather than cosmetic.
+  // Under the new parameter list a stale 3-or-more-argument call would still COMPILE -- the
+  // second argument is now `bool enable_ms3`, and a `const char*` converts to `true` -- so it
+  // would silently force MS3 on and blank the activation string. Renaming makes every stale
+  // call a named compile error instead.
+  // ----------------------------------------------------------------------------
+  inline std::string buildJsonWithLogDir(const std::string& log_dir,
+                                         bool enable_ms3 = false,
+                                         const std::string& ms2_activation = "HCD",
+                                         int ms3_max_targets = 0)
   {
     std::string targeting_val     = enable_ms3 ? "inclusion" : "none";
     std::string inclusion_list_val = enable_ms3 ? "../../FlashIDA/test-data/configs/inclusion_cytc.txt" : "";
@@ -514,34 +537,22 @@ namespace
       },
       )" << ms3_block << R"(
       "files": { "target_logs": [], "fasta": "", "inclusion_list": ")" << inclusion_list_val << R"(", "ptm_list": "" },
-      "runtime": {
-        "ida_log_path": ")" << ida_log_path << R"(",
-        "scan_commands_path": ")" << commands_path << R"(",
-        "scan_results_path": ")" << results_path << R"(",
-        "identification_log_path": ")" << identification_path << R"("
-      }
+      "runtime": { "log_dir": ")" << log_dir << R"(" }
     })";
     return oss.str();
   }
 
-  // Insert a "runtime" block (the four log paths) into an arbitrary config JSON that
-  // lacks one, immediately before its closing brace.  Used to drive the exploration
-  // configs (which have no runtime section) and capture their log files.
-  inline std::string injectRuntime(std::string cfg,
-                                   const std::string& commands_path,
-                                   const std::string& results_path,
-                                   const std::string& identification_path = "",
-                                   const std::string& ida_log_path = "")
+  // Insert a "runtime" block naming the log folder into an arbitrary config JSON that lacks
+  // one, immediately before its closing brace.  Used to drive the exploration configs (which
+  // have no runtime section) and capture their log files.
+  //
+  // Keeps its name: every existing call passes 3-4 arguments and this takes 2, so a stale call
+  // is an arity error rather than a silent conversion.
+  inline std::string injectRuntime(std::string cfg, const std::string& log_dir)
   {
     auto last = cfg.rfind('}');
     if (last == std::string::npos) return cfg;
-    std::ostringstream rt;
-    rt << ", \"runtime\": {"
-       << "\"ida_log_path\": \"" << ida_log_path << "\", "
-       << "\"scan_commands_path\": \"" << commands_path << "\", "
-       << "\"scan_results_path\": \"" << results_path << "\", "
-       << "\"identification_log_path\": \"" << identification_path << "\"}";
-    cfg.insert(last, rt.str());
+    cfg.insert(last, ", \"runtime\": {\"log_dir\": \"" + log_dir + "\"}");
     return cfg;
   }
 

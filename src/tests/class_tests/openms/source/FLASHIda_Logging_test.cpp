@@ -40,11 +40,10 @@ START_SECTION(ida_log_contract_roundtrip)
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
   ABORT_IF(ms1_scans.empty())
 
-  // Use temp file for IDA log
-  std::string ida_log_file = "test_ida_log_contract.log";
-  std::remove(ida_log_file.c_str());
+  // Own (wiped + created) log folder for this engine; the IDA log is dir + "/ida.log"
+  const std::string dir = freshLogDir("logging_ida_log_contract");
 
-  std::string json = buildJsonWithRuntime(ida_log_file, "", "");
+  std::string json = buildJsonWithLogDir(dir);
   FLASHIda ida(const_cast<char*>(json.c_str()));
 
   // Drive the MS1 surveys via the canonical interleaved driver: the engine emits each survey
@@ -58,7 +57,7 @@ START_SECTION(ida_log_contract_roundtrip)
   TEST_TRUE(acq.ms2_cmds.size() > 0);
 
   // Parse the IDA log back using parseFLASHIdaLog
-  auto parsed = IdaLogger::parseFLASHIdaLog(ida_log_file);
+  auto parsed = IdaLogger::parseFLASHIdaLog(dir + "/ida.log");
 
   // Verify: at least one scan group with precursors
   TEST_TRUE(parsed.size() > 0);
@@ -80,9 +79,6 @@ START_SECTION(ida_log_contract_roundtrip)
       TEST_TRUE(precursor[4] > precursor[3]);
     }
   }
-
-  // Cleanup
-  std::remove(ida_log_file.c_str());
 }
 END_SECTION
 
@@ -95,11 +91,10 @@ START_SECTION(scan_commands_tsv_format)
   auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
   ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
 
-  std::string commands_file = "test_scan_commands.tsv";
-  std::remove(commands_file.c_str());
+  const std::string dir = freshLogDir("logging_scan_commands");
 
   // Enable MS3 so we get MS3 commands in the TSV
-  std::string json = buildJsonWithRuntime("", commands_file, "", true);
+  std::string json = buildJsonWithLogDir(dir, true);
   FLASHIda ida(const_cast<char*>(json.c_str()));
 
   // Full MS1->MS2->MS3 cycle
@@ -107,7 +102,7 @@ START_SECTION(scan_commands_tsv_format)
   TEST_TRUE(cycle.ms2_cmds.size() > 0);
 
   // Parse and verify TSV
-  auto tsv = TSVFile::parse(commands_file);
+  auto tsv = TSVFile::parse(dir + "/scan_commands.tsv");
 
   // Header check
   TEST_TRUE(tsv.colIndex("tracking_id") >= 0);
@@ -178,8 +173,6 @@ START_SECTION(scan_commands_tsv_format)
   {
     TEST_EQUAL(row.size(), tsv.headers.size());
   }
-
-  std::remove(commands_file.c_str());
 }
 END_SECTION
 
@@ -192,18 +185,17 @@ START_SECTION(scan_results_tsv_format)
   auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
   ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
 
-  std::string results_file = "test_scan_results.tsv";
-  std::remove(results_file.c_str());
+  const std::string dir = freshLogDir("logging_scan_results");
 
   // Enable MS3 so we get MS3 result rows
-  std::string json = buildJsonWithRuntime("", "", results_file, true);
+  std::string json = buildJsonWithLogDir(dir, true);
   FLASHIda ida(const_cast<char*>(json.c_str()));
 
   // Full MS1->MS2->MS3 cycle (including feeding MS3 back)
   auto cycle = runFullCycle(&ida, ms1_scans, ms2_scans);
 
   // Parse and verify
-  auto tsv = TSVFile::parse(results_file);
+  auto tsv = TSVFile::parse(dir + "/scan_results.tsv");
   TEST_TRUE(tsv.colIndex("tracking_id") >= 0);
   TEST_TRUE(tsv.colIndex("resolve_ts") >= 0);
   TEST_TRUE(tsv.colIndex("duration_ms") >= 0);
@@ -250,8 +242,6 @@ START_SECTION(scan_results_tsv_format)
     }
     TEST_TRUE(found_ms2_with_children);
   }
-
-  std::remove(results_file.c_str());
 }
 END_SECTION
 
@@ -265,13 +255,10 @@ START_SECTION(join_integrity)
   auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
   ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
 
-  std::string commands_file = "test_join_commands.tsv";
-  std::string results_file = "test_join_results.tsv";
-  std::remove(commands_file.c_str());
-  std::remove(results_file.c_str());
+  const std::string dir = freshLogDir("logging_join");
 
   // Enable MS3 for full parent-child graph testing
-  std::string json = buildJsonWithRuntime("", commands_file, results_file, true);
+  std::string json = buildJsonWithLogDir(dir, true);
   FLASHIda ida(const_cast<char*>(json.c_str()));
 
   // Full MS1->MS2->MS3 cycle (with MS3 fed back). runFullCycle already drains the queue to idle,
@@ -282,8 +269,8 @@ START_SECTION(join_integrity)
   auto cycle = runFullCycle(&ida, ms1_scans, ms2_scans);
 
   // Parse both files
-  auto cmd_tsv = TSVFile::parse(commands_file);
-  auto res_tsv = TSVFile::parse(results_file);
+  auto cmd_tsv = TSVFile::parse(dir + "/scan_commands.tsv");
+  auto res_tsv = TSVFile::parse(dir + "/scan_results.tsv");
 
   // MS3 must actually have fired, else the join graph is empty and the loop below
   // would validate nothing.
@@ -380,9 +367,6 @@ START_SECTION(join_integrity)
   }
   TEST_TRUE(checked_ms2_parent);
   TEST_TRUE(ms2_parent_ok);
-
-  std::remove(commands_file.c_str());
-  std::remove(results_file.c_str());
 }
 END_SECTION
 
@@ -396,20 +380,17 @@ START_SECTION(crash_safety_valid_tsv)
   auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
   ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
 
-  std::string commands_file = "test_crash_commands.tsv";
-  std::string results_file = "test_crash_results.tsv";
-  std::remove(commands_file.c_str());
-  std::remove(results_file.c_str());
+  const std::string dir = freshLogDir("logging_crash");
 
   // Enable MS3 for full cycle
-  std::string json = buildJsonWithRuntime("", commands_file, results_file, true);
+  std::string json = buildJsonWithLogDir(dir, true);
   FLASHIda ida(const_cast<char*>(json.c_str()));
 
   // After constructor: headers should exist (pre-cycle: no scans driven yet)
   {
-    auto cmd_tsv = TSVFile::parse(commands_file);
+    auto cmd_tsv = TSVFile::parse(dir + "/scan_commands.tsv");
     TEST_TRUE(cmd_tsv.headers.size() > 0);
-    auto res_tsv = TSVFile::parse(results_file);
+    auto res_tsv = TSVFile::parse(dir + "/scan_results.tsv");
     TEST_TRUE(res_tsv.headers.size() > 0);
   }
 
@@ -427,7 +408,7 @@ START_SECTION(crash_safety_valid_tsv)
 
   // results file is valid: >=1 row and every row has the header column count (no torn writes)
   {
-    auto res_tsv = TSVFile::parse(results_file);
+    auto res_tsv = TSVFile::parse(dir + "/scan_results.tsv");
     TEST_TRUE(res_tsv.rows.size() >= 1);
     for (const auto& row : res_tsv.rows)
       TEST_EQUAL(row.size(), res_tsv.headers.size());
@@ -435,14 +416,11 @@ START_SECTION(crash_safety_valid_tsv)
 
   // commands file is valid: >=1 row and every row has the header column count (no torn writes)
   {
-    auto cmd_tsv = TSVFile::parse(commands_file);
+    auto cmd_tsv = TSVFile::parse(dir + "/scan_commands.tsv");
     TEST_TRUE(cmd_tsv.rows.size() >= 1);
     for (const auto& row : cmd_tsv.rows)
       TEST_EQUAL(row.size(), cmd_tsv.headers.size());
   }
-
-  std::remove(commands_file.c_str());
-  std::remove(results_file.c_str());
 }
 END_SECTION
 
