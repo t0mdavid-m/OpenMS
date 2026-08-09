@@ -37,6 +37,7 @@
 #include <OpenMS/config.h>
 #include <cstdint>
 #include <cstring>
+#include <utility>
 
 namespace OpenMS
 {
@@ -61,7 +62,8 @@ namespace OpenMS
   /// Blittable struct representing a complete scan command for the instrument.
   /// Layout: 1248 (existing) + 8 (dequeue_timestamp_ms) + 8 (microscans+pad3) + 24 (rf_lens+source_cid+source_cid_scaling)
   ///       + 64 (data_type+scan_rate) + 4 (parent_scan_id) + 84 (stage-1 scoring) + 608 (reserved) = 2048.
-  /// The trailing 608 covers window_snr (8 @1440) + faims_enabled (4 @1448) + reserved_ (596 @1452):
+  /// The trailing 608 covers window_snr (8 @1440) + faims_enabled (4 @1448) + stage0_notch_count
+  /// (4 @1452) + stage1_notch_count (4 @1456) + reserved_ (588 @1460):
   /// new fields are carved OUT of reserved_ so the 2048 total and every existing offset stay fixed.
   struct OPENMS_DLLAPI ScanCommand
   {
@@ -132,8 +134,59 @@ namespace OpenMS
     /// the absence of one. int32_t rather than bool to match is_agc and avoid P/Invoke marshalling
     /// ambiguity.
     int32_t faims_enabled;
-    char reserved_[596];           ///< Reserved for future fields (consume from here, never change total size)
+
+    /// @1452 / @1456 Number of EXTRA co-isolation notches at cascade stage 0 / stage 1 (ADR-0017).
+    ///
+    /// A notch is a parallel isolation window within ONE fragmentation stage, as against a stage,
+    /// which is a further fragmentation performed in sequence. All notches of a stage fire into the
+    /// same fragmentation event and are read out as one spectrum. Every notch here holds a different
+    /// charge state of the SAME species, so a multi-notch spectrum is not chimeric.
+    ///
+    /// The descriptors live in stages[num_stages ...] -- the slots the engine has never written,
+    /// since num_stages is only ever 0, 1 or 2 -- packed stage-0's first, then stage-1's. Those
+    /// slots already carry precursor_mz / isolation_width / charge_state, which is exactly a notch,
+    /// so only this bookkeeping had to be carved (reserved_ 596 -> 588; no existing offset moves).
+    /// Use notchesForStage() rather than open-coding the arithmetic.
+    ///
+    /// num_stages does NOT count notches, and that is load-bearing: processScan's context gate,
+    /// syncEnergyMirrors_, Exploration's `si = num_stages - 1` and ScanFactory's clamp all key on
+    /// it, and stay correct only while it means cascade depth.
+    ///
+    /// Capacity is MAX_ISOLATION_STAGES - num_stages (9 for an MS2, 8 shared across an MS3's two
+    /// stages). That is not a byte-budget artifact: the instrument accepts at most 10 values in
+    /// PrecursorMass, so num_stages + total notches <= 10 is its own limit and this lands on it.
+    int32_t stage0_notch_count;
+    int32_t stage1_notch_count;
+    char reserved_[588];           ///< Reserved for future fields (consume from here, never change total size)
   };
   static_assert(sizeof(ScanCommand) == 2048, "ScanCommand must be 2048 bytes for P/Invoke");
+
+  /// The co-isolation notches belonging to cascade stage @p k (0 or 1), as {first, count}.
+  ///
+  /// Notches are packed into stages[num_stages ...], stage-0's first then stage-1's, so stage 1's
+  /// offset depends on stage 0's COUNT, not on any fixed slot. Never open-code that arithmetic at a
+  /// read site: the packing is the one implicit part of ADR-0017's layout, and a hand-rolled offset
+  /// is exactly how stage-1's notches end up being read as stage-0's.
+  ///
+  /// An empty range is returned as {nullptr, 0}, so a caller can loop without a count check. The
+  /// bounds guard is defensive rather than expected: the producers cap the total at
+  /// MAX_ISOLATION_STAGES - num_stages, which is also the instrument's own 10-value limit.
+  inline std::pair<const IsolationStage*, int> notchesForStage(const ScanCommand& cmd, int k)
+  {
+    const int count = (k == 0) ? cmd.stage0_notch_count : (k == 1) ? cmd.stage1_notch_count : 0;
+    if (count <= 0) return {nullptr, 0};
+    const int begin = cmd.num_stages + ((k == 1) ? cmd.stage0_notch_count : 0);
+    if (begin < 0 || begin + count > MAX_ISOLATION_STAGES) return {nullptr, 0};
+    return {&cmd.stages[begin], count};
+  }
+
+  /// Total isolation windows the instrument is asked for at cascade stage @p k: the stage itself
+  /// plus its notches. This is the per-stage element count on the wire, where the stage's values are
+  /// ','-joined within the stage's ';'-separated group.
+  inline int windowsAtStage(const ScanCommand& cmd, int k)
+  {
+    if (k < 0 || k >= cmd.num_stages) return 0;
+    return 1 + notchesForStage(cmd, k).second;
+  }
 
 } // namespace OpenMS

@@ -75,10 +75,16 @@ START_SECTION([EXTRA] ScanCommand and IsolationStage struct layout)
   TEST_EQUAL(offsetof(ScanCommand, precursor_intensity_s1), 1424)
   TEST_EQUAL(offsetof(ScanCommand, peakgroup_intensity_s1), 1432)
   TEST_EQUAL(offsetof(ScanCommand, window_snr), 1440)
-  // Carved out of reserved_, which moved 1448 -> 1452 and shrank 600 -> 596. Every offset above is
+  // Carved out of reserved_, which has now moved 1448 -> 1460 and shrunk 600 -> 588 across two
+  // changes (faims_enabled, ADR-0012; then the two notch counts, ADR-0017). Every offset above is
   // unchanged and sizeof stays 2048; that is the whole point of consuming from the tail.
   TEST_EQUAL(offsetof(ScanCommand, faims_enabled), 1448)
-  TEST_EQUAL(offsetof(ScanCommand, reserved_), 1452)
+  TEST_EQUAL(offsetof(ScanCommand, stage0_notch_count), 1452)
+  TEST_EQUAL(offsetof(ScanCommand, stage1_notch_count), 1456)
+  TEST_EQUAL(offsetof(ScanCommand, reserved_), 1460)
+  // Both notch counts are int32 and reserved_ began 4-mod-8, so the pair lands with no padding.
+  // A double carved here would have needed an explicit pad first, like pad1/pad2/pad3 above.
+  TEST_EQUAL(sizeof(ScanCommand) - offsetof(ScanCommand, reserved_), 588)
 
   // IsolationStage field offsets
   TEST_EQUAL(offsetof(IsolationStage, precursor_mz), 0)
@@ -89,6 +95,71 @@ START_SECTION([EXTRA] ScanCommand and IsolationStage struct layout)
   TEST_EQUAL(offsetof(IsolationStage, reagent_agc_target), 40)
   TEST_EQUAL(offsetof(IsolationStage, charge_state), 44)
   TEST_EQUAL(offsetof(IsolationStage, activation_type), 48)
+}
+END_SECTION
+
+// The notch packing (ADR-0017) is the one implicit part of the layout: stage-1's notches begin at
+// num_stages + stage0_notch_count, NOT at a fixed slot. Reading them from a fixed slot is the
+// mistake notchesForStage() exists to prevent, so it is pinned here rather than left to call sites.
+START_SECTION(notchesForStage_packing)
+{
+  // MS2, two notches at stage 0. stages[0] is the cascade stage; notches follow at [1] and [2].
+  ScanCommand ms2 {};
+  ms2.num_stages = 1;
+  ms2.stage0_notch_count = 2;
+  ms2.stages[0].charge_state = 17;   // anchor
+  ms2.stages[1].charge_state = 16;   // notch 1
+  ms2.stages[2].charge_state = 15;   // notch 2
+
+  auto n0 = notchesForStage(ms2, 0);
+  TEST_EQUAL(n0.second, 2)
+  TEST_EQUAL(n0.first[0].charge_state, 16)
+  TEST_EQUAL(n0.first[1].charge_state, 15)
+  TEST_EQUAL(windowsAtStage(ms2, 0), 3)
+  // An MS2 has no cascade stage 1, so neither notches nor windows exist there.
+  TEST_EQUAL(notchesForStage(ms2, 1).second, 0)
+  TEST_EQUAL(windowsAtStage(ms2, 1), 0)
+
+  // MS3 with notches at BOTH stages -- the case a fixed-slot offset gets wrong.
+  ScanCommand ms3 {};
+  ms3.num_stages = 2;
+  ms3.stage0_notch_count = 2;
+  ms3.stage1_notch_count = 3;
+  ms3.stages[0].charge_state = 17;   // cascade stage 0 anchor
+  ms3.stages[1].charge_state = 4;    // cascade stage 1 anchor
+  ms3.stages[2].charge_state = 16;   // stage-0 notch 1
+  ms3.stages[3].charge_state = 15;   // stage-0 notch 2
+  ms3.stages[4].charge_state = 5;    // stage-1 notch 1
+  ms3.stages[5].charge_state = 3;    // stage-1 notch 2
+  ms3.stages[6].charge_state = 2;    // stage-1 notch 3
+
+  auto s0 = notchesForStage(ms3, 0);
+  TEST_EQUAL(s0.second, 2)
+  TEST_EQUAL(s0.first[0].charge_state, 16)
+  TEST_EQUAL(s0.first[1].charge_state, 15)
+  auto s1 = notchesForStage(ms3, 1);
+  TEST_EQUAL(s1.second, 3)
+  TEST_EQUAL(s1.first[0].charge_state, 5)
+  TEST_EQUAL(s1.first[1].charge_state, 3)
+  TEST_EQUAL(s1.first[2].charge_state, 2)
+  TEST_EQUAL(windowsAtStage(ms3, 0), 3)
+  TEST_EQUAL(windowsAtStage(ms3, 1), 4)
+
+  // No notches: an empty range, so a caller may loop without a count check.
+  ScanCommand plain {};
+  plain.num_stages = 1;
+  TEST_EQUAL(notchesForStage(plain, 0).second, 0)
+  TEST_EQUAL(notchesForStage(plain, 0).first == nullptr, true)
+  TEST_EQUAL(windowsAtStage(plain, 0), 1)
+
+  // Overflow is refused rather than read past stages[]: 1 cascade + 10 notches exceeds 10 slots.
+  ScanCommand over {};
+  over.num_stages = 1;
+  over.stage0_notch_count = 10;
+  TEST_EQUAL(notchesForStage(over, 0).second, 0)
+
+  // A stage index outside {0,1} has no notch counter and yields nothing.
+  TEST_EQUAL(notchesForStage(ms3, 2).second, 0)
 }
 END_SECTION
 
