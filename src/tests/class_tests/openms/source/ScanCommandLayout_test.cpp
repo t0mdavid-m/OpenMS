@@ -11,9 +11,13 @@
 // FlashIDA/src/Flash.Tests/ScanCommandLayoutTests.cs (P3_U03); keep the two in lockstep.
 
 #include <OpenMS/CONCEPT/ClassTest.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 
 #include <cstddef>
+#include <cstring>
+#include <string>
+#include <vector>
 
 using namespace OpenMS;
 
@@ -160,6 +164,111 @@ START_SECTION(notchesForStage_packing)
 
   // A stage index outside {0,1} has no notch counter and yields nothing.
   TEST_EQUAL(notchesForStage(ms3, 2).second, 0)
+}
+END_SECTION
+
+// selectNotches is the one place the co-isolation policy lives, called from three sites, so its
+// rules are pinned here rather than inferred from any one caller (ADR-0016).
+START_SECTION(selectNotches_policy)
+{
+  // charge, mz, width, snr. z=17 is the anchor; z=9 is below noise.
+  const std::vector<NotchCandidate> cands = {
+    {17, 1000.5, 3.2, 8.0},
+    {16,  938.2, 3.0, 5.0},
+    {15,  883.9, 2.9, 9.0},
+    { 9,  512.1, 2.0, 0.4},
+  };
+
+  // The anchor is the cascade stage itself, never a notch; the sub-threshold charge is dropped;
+  // what survives is ordered by DESCENDING SNR so a clamp keeps the strongest.
+  {
+    auto out = selectNotches(cands, /*anchor=*/17, /*snr_threshold=*/1.0, /*max_notches=*/9);
+    TEST_EQUAL(out.size(), 2)
+    TEST_EQUAL(out[0].charge, 15)   // snr 9.0
+    TEST_EQUAL(out[1].charge, 16)   // snr 5.0
+  }
+
+  // The clamp keeps the top N by SNR. (It also reports the drop on stdout; that a value was dropped
+  // is never silent, which is the point.)
+  {
+    auto out = selectNotches(cands, 17, 1.0, 1);
+    TEST_EQUAL(out.size(), 1)
+    TEST_EQUAL(out[0].charge, 15)
+  }
+
+  // max_notches 0 -- an MS3 whose stage-0 notches already consumed every slot -- yields nothing
+  // rather than overflowing.
+  TEST_EQUAL(selectNotches(cands, 17, 1.0, 0).size(), 0)
+
+  // A higher threshold gates more out; a threshold above every candidate leaves nothing.
+  TEST_EQUAL(selectNotches(cands, 17, 6.0, 9).size(), 1)    // only z=15 (snr 9.0)
+  TEST_EQUAL(selectNotches(cands, 17, 100.0, 9).size(), 0)
+
+  // Anchoring elsewhere moves which charge is excluded, and the anchor's own SNR is irrelevant.
+  {
+    auto out = selectNotches(cands, /*anchor=*/15, 1.0, 9);
+    TEST_EQUAL(out.size(), 2)
+    TEST_EQUAL(out[0].charge, 17)   // snr 8.0
+    TEST_EQUAL(out[1].charge, 16)   // snr 5.0
+  }
+
+  // Not isolatable is not the same as below noise: a candidate with no geometry is dropped whatever
+  // its SNR, because a window needs a centre and a width.
+  {
+    const std::vector<NotchCandidate> broken = {
+      {16, 0.0,   3.0, 99.0},   // no m/z
+      {15, 883.9, 0.0, 99.0},   // no width
+      { 0, 512.1, 2.0, 99.0},   // no charge
+      {14, 820.0, 2.5,  4.0},   // fine
+    };
+    auto out = selectNotches(broken, 17, 1.0, 9);
+    TEST_EQUAL(out.size(), 1)
+    TEST_EQUAL(out[0].charge, 14)
+  }
+
+  // Empty in, empty out.
+  TEST_EQUAL(selectNotches({}, 17, 1.0, 9).size(), 0)
+}
+END_SECTION
+
+// writeNotchesForStage is the only writer of the packed slots, and its ordering requirement (stage 0
+// before stage 1) is what keeps notchesForStage able to find them.
+START_SECTION(writeNotchesForStage_roundTrip)
+{
+  ScanCommand cmd {};
+  cmd.num_stages = 2;
+  cmd.stages[0].charge_state = 17;
+  cmd.stages[0].collision_energy = 30;
+  std::strncpy(cmd.stages[0].activation_type, "HCD", sizeof(cmd.stages[0].activation_type) - 1);
+  cmd.stages[1].charge_state = 4;
+  cmd.stages[1].collision_energy = 25;
+  std::strncpy(cmd.stages[1].activation_type, "CID", sizeof(cmd.stages[1].activation_type) - 1);
+
+  TEST_EQUAL(writeNotchesForStage(cmd, 0, {{16, 938.2, 3.0, 5.0}, {15, 883.9, 2.9, 9.0}}), 2)
+  TEST_EQUAL(writeNotchesForStage(cmd, 1, {{5, 1001.2, 2.0, 4.0}}), 1)
+
+  auto s0 = notchesForStage(cmd, 0);
+  auto s1 = notchesForStage(cmd, 1);
+  TEST_EQUAL(s0.second, 2)
+  TEST_EQUAL(s1.second, 1)
+  TEST_EQUAL(s0.first[0].charge_state, 16)
+  TEST_EQUAL(s1.first[0].charge_state, 5)
+
+  // A notch inherits its stage's fragmentation settings: all notches of a stage fire into the SAME
+  // event, and the wire carries collision energy and activation per stage, not per notch.
+  TEST_REAL_SIMILAR(s0.first[0].collision_energy, 30.0)
+  TEST_EQUAL(std::string(s0.first[0].activation_type), "HCD")
+  TEST_REAL_SIMILAR(s1.first[0].collision_energy, 25.0)
+  TEST_EQUAL(std::string(s1.first[0].activation_type), "CID")
+
+  // Wire arity: one ';'-group per cascade stage, each 1 + its notch count.
+  TEST_EQUAL(windowsAtStage(cmd, 0), 3)
+  TEST_EQUAL(windowsAtStage(cmd, 1), 2)
+
+  // The ceiling a returning spectrum is deconvolved against is the highest charge ISOLATED, not the
+  // anchor's -- capping at the anchor would discard fragments of the higher members.
+  TEST_EQUAL(maxIsolatedCharge(cmd, 0), 17)   // anchor 17 still the highest here
+  TEST_EQUAL(maxIsolatedCharge(cmd, 1), 5)    // notch z=5 exceeds the anchor's 4
 }
 END_SECTION
 

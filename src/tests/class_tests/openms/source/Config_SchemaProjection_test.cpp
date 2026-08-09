@@ -276,4 +276,59 @@ START_SECTION(sweep_step_and_required_scan_validation)
 }
 END_SECTION
 
+// ---------------------------------------------------------------------------------------------
+// The two charge-acquisition keys (ADR-0016). Both take the same three values through one shared
+// parse, and both default to Single so an existing config is unaffected.
+START_SECTION(charge_acquisition_modes_parse)
+{
+  // Absent => Single at both levels. This is what keeps the feature byte-identical when unused.
+  {
+    Config cfg(cfgJson());
+    TEST_EQUAL((int)cfg.targeting().precursor_charges, (int)ChargeAcquisitionMode::Single)
+    TEST_EQUAL((int)cfg.characterization().fragment_charges, (int)ChargeAcquisitionMode::Single)
+  }
+
+  {
+    Config cfg(cfgJson(R"(, "precursor_charges": "separate")"));
+    TEST_EQUAL((int)cfg.targeting().precursor_charges, (int)ChargeAcquisitionMode::Separate)
+  }
+  {
+    Config cfg(cfgJson(R"(, "precursor_charges": "multiplexed")"));
+    TEST_EQUAL((int)cfg.targeting().precursor_charges, (int)ChargeAcquisitionMode::Multiplexed)
+  }
+  {
+    Config cfg(cfgJson("",
+        R"("characterization": { "mode": "ambiguity", "protein_sequence": "PEPTIDEK", "fragment_charges": "multiplexed" },)",
+        R"(, "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25 })"));
+    TEST_EQUAL((int)cfg.characterization().fragment_charges, (int)ChargeAcquisitionMode::Multiplexed)
+  }
+}
+END_SECTION
+
+// An unknown VALUE throws rather than defaulting. The whole reason characterization.mode was made to
+// throw is that its predecessor silently mapped anything-but-"coverage" to ambiguity, so a typo'd
+// mode meant the opposite of what it said. Same failure shape here: a typo'd "Multiplexed" that
+// quietly meant "single" would look like the feature simply not working.
+START_SECTION(charge_acquisition_unknown_value_throws)
+{
+  TEST_EXCEPTION(std::invalid_argument, Config(cfgJson(R"(, "precursor_charges": "Multiplexed")")))
+  TEST_EXCEPTION(std::invalid_argument, Config(cfgJson(R"(, "precursor_charges": "all")")))
+  TEST_EXCEPTION(std::invalid_argument,
+      Config(cfgJson("",
+          R"("characterization": { "mode": "ambiguity", "protein_sequence": "PEPTIDEK", "fragment_charges": "Separate" },)",
+          R"(, "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25 })")))
+}
+END_SECTION
+
+// The retired bool gets a migration error naming its replacement, not the generic unknown-key
+// message -- checked before the allowlist precisely so the message can be specific.
+START_SECTION(ms3_all_charges_is_a_migration_error)
+{
+  TEST_EXCEPTION(std::invalid_argument,
+      Config(cfgJson("",
+          R"("characterization": { "mode": "ambiguity", "protein_sequence": "PEPTIDEK", "ms3_all_charges": true },)",
+          R"(, "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25 })")))
+}
+END_SECTION
+
 END_TEST
