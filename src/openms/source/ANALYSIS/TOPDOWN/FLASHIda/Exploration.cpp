@@ -668,6 +668,20 @@ namespace OpenMS
             group.variants[best_idx].result, group.faims_cv, queue,
             &group.variants[best_idx].cmd, tracker, precursor_id);  // P5: same precursor_id model key
         info.commands.insert(info.commands.end(), next_nlr.commands.begin(), next_nlr.commands.end());
+        // Carry the per-command MS2 contexts out ALONGSIDE the commands. Without this the MS3s this
+        // branch dispatches are acquired but never identified: a fixed-CE MS3 returns on the REGULAR
+        // MS3 path, which resolves its parent MS2 context out of FLASHIda::ms2_context_cache_ and,
+        // on a miss, silently skips the whole identification block -- no identification.tsv row, no
+        // tracker feedScan/foldMs3, so the MS3 never reaches pooled_identification either. The
+        // regular MS2->MS3 path already seeds that cache from NextLevelResult::ms3_contexts
+        // (FLASHIda.cpp); mirror it here so an MS2-exploration winner behaves identically.
+        // ms3_contexts is index-parallel to next_nlr.commands, but info.commands may already hold
+        // other entries, so key by scan_id (what the cache is keyed on) rather than by position.
+        for (size_t i = 0; i < next_nlr.commands.size() && i < next_nlr.ms3_contexts.size(); ++i)
+        {
+          if (next_nlr.commands[i].msn_level >= 3)
+            info.ms3_context_cache.emplace_back(next_nlr.commands[i].scan_id, next_nlr.ms3_contexts[i]);
+        }
       }
       else  // overrides empty && msn_level >= 3: MS3 exploration with no production scan -> fold the winning variant now @Claude should be more generic and happen after all winning variants or if a production scan is found.
       {

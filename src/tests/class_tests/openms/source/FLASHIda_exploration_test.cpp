@@ -1245,6 +1245,42 @@ START_SECTION(ms3_selection_no_exploration_standard_targeting)
 }
 END_SECTION
 
+START_SECTION(ms2_exploration_fixed_ce_ms3_carries_parent_context)
+{
+  // Regression pin for the dropped-context defect. Same config as the section above (MS2 exploration,
+  // overrides EMPTY, MS3 selection on, MS3 exploration off), but asserting the step past dispatch: each
+  // fixed-CE MS3 the winner dispatches must arrive with its parent MS2 context registered.
+  //
+  // Why the section above did not catch it: it asserts an MS3 command was EMITTED. The commands were
+  // always emitted — feedResult just dropped NextLevelResult::ms3_contexts on the floor, so the MS3s
+  // returned on the REGULAR path, missed ms2_context_cache_, and skipped the whole identification block
+  // (no identification.tsv row, no tracker feedScan/foldMs3, nothing in pooled_identification). The
+  // regular MS2->MS3 path seeded the same cache correctly, which is why only the exploration route broke.
+  //
+  // The drive passes a non-null but EMPTY ms3_ion_map: MS3 commands are dequeued and recorded but never
+  // fed back (the harness never fabricates MS3 data), so the cache entries are still outstanding when we
+  // read them — a returning MS3 erases its own entry.
+  auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
+  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
+
+  std::string cfg_str = inclusionPinCytc(ms3_selection_only_config);
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(cfg_str.c_str()));
+
+  const std::map<std::string, std::vector<ScanData>> no_ms3_fixtures;  // non-null + empty => record, never feed
+  const int budget = 256 + 64 * static_cast<int>(ms1_scans.size() + 1);
+  AcqResult a = runInterleaved(ida, ms1_scans, std::vector<ScanData>{ms2_scans[0]}, &no_ms3_fixtures,
+                               budget, /*single_group_only=*/true);
+  ABORT_IF(a.first_group_commands == 0)
+  ABORT_IF(a.ms3_cmds.empty())
+
+  // Every dispatched MS3 carries exactly one parent-MS2 context. Structural, not numeric: if engine drift
+  // changes how many MS3s are selected, both sides move together.
+  TEST_EQUAL(FLASHIdaTestAccess::ms2ContextCacheSize(*ida), a.ms3_cmds.size())
+  delete ida;
+}
+END_SECTION
+
 START_SECTION(ms2_exploration_production_winner_then_ms3)
 {
   // Overrides NON-empty branch: with an exploration override set, the MS2-exploration winner is

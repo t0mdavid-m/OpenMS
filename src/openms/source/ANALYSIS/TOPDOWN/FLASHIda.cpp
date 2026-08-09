@@ -282,7 +282,7 @@ FLASHIda::FLASHIda(char* arg) :
           precursor_id_by_tracking_[c.scan_id] = precursor_id;
           queue_.push(c); 
         }
-        // @Claude this should be called ms2_context cache; also resolve key and value (presumably scan id : parent_ctx) by name so its more legible
+        // @Claude this should be called ms2 context cache
         for (auto& kv : expl_result.ms3_context_cache)
           ms2_context_cache_[kv.first] = kv.second;
 
@@ -366,7 +366,9 @@ FLASHIda::FLASHIda(char* arg) :
         if (config_.level(2).selection != SelectionMetric::None)
         {
           // initiateNextLevel stamps each command's parent with the MS2 id (parent_ctx.scan_id) at creation.
-          // @Claude this assumes all MS3 scans are part of an exploration but I also want to be able to set without exploration (fixed CE)
+          // It serves BOTH MS3 shapes, chosen by config_.hasExploration(3): with MS3 exploration off it
+          // builds one fixed-CE MS3 per target straight from ms_settings.ms3; with it on it builds a CE
+          // sweep. The `exploration_` receiver names the owning object, not a precondition on the scan.
           ms3_targeting = exploration_.initiateNextLevel(2, deconv_.storedMS2(), parent_ctx.faims_cv, queue_, &parent_ctx, &tracker_, precursor_id);
           for (auto& c : ms3_targeting.commands)
           {

@@ -32,6 +32,11 @@ namespace OpenMS
     static ScanCommandQueue& queue(FLASHIda& f) { return f.queue_; }
     static void push(FLASHIda& f, ScanCommand cmd) { f.queue_.push(cmd); }
     static size_t queueSize(const FLASHIda& f, int priority) { return f.queue_.queueSize(priority); }
+    /// Number of pending (MS3 scan_id -> parent MS2 context) entries. An MS3 that returns on the
+    /// REGULAR path identifies only if its id is in here, so this is the observable for "the engine
+    /// dispatched an MS3 it will be able to identify". Entries are erased on that return, so read it
+    /// while the MS3 commands are still outstanding (drive with an EMPTY ms3_ion_map).
+    static size_t ms2ContextCacheSize(const FLASHIda& f) { return f.ms2_context_cache_.size(); }
     static bool explorationActive(const FLASHIda& f)
     {
       // The exact atomic the cycle-time injection gate consults (set on group formation, cleared on

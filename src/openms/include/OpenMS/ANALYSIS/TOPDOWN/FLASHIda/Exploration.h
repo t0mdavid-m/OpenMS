@@ -215,8 +215,12 @@ namespace OpenMS
       std::vector<ScanCommand> commands;
       char parent_scan_id[4]{};  ///< Parent's encoded tracking ID (from group's originating_cmd)
       std::vector<std::string> child_ids;  ///< Encoded tracking ids of the pushed children, in commands order (pre-encoded by feedResultImpl_; replaces processScan's inline encode loop)
-      /// (scan_id -> MS2Context) for production MS3 commands in `commands` that return on the REGULAR MS3
-      /// path and need ms2_context_cache_ seeded by the caller. Mirrors the regular MS2->MS3 caching.
+      /// (MS3 scan_id -> its parent MS2's context) for MS3 commands in `commands` that return on the
+      /// REGULAR MS3 path and need ms2_context_cache_ seeded by the caller. Mirrors the regular
+      /// MS2->MS3 caching. Filled from BOTH command-producing branches of a completed group: the
+      /// production MS3 re-acquisition (overrides set) and the next-level dispatch an MS2 group makes
+      /// when it has no production scan. Leaving the second one out meant those MS3s were acquired and
+      /// then silently unidentified — the cache miss skips the whole identification block.
       std::vector<std::pair<int, MS2Context>> ms3_context_cache;
     };
 
