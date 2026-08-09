@@ -37,10 +37,21 @@ is airtight:
   `DeconvolvedSpectrum`, populated by `Exploration.cpp` and serialized through `toSpectrum()`.
   It is a sanctioned IDA hook with its own CI test (`DeconvolvedSpectrum_OptimizationMetadata_test`).
 - **Only two IDA files reach into FLASHTnT**: `FragmentAnalysis.cpp` (constructs
-  `FLASHTaggerAlgorithm` :401, `runMatching` :535, `FLASHExtenderAlgorithm` :545) and
-  `PrecursorSelection.cpp` (:977, :1022). The IDA path drives Tagger + Extender **directly** and
-  never uses `FLASHTnTAlgorithm` — that orchestrator belongs to the TOPP tool. So tuning knobs
-  arrive via the `flashtnt` config section, not through `FLASHTnTAlgorithm`'s own defaults.
+  `FLASHTaggerAlgorithm` :430, `runMatching` :556, `FLASHExtenderAlgorithm` :566) and
+  `PrecursorSelection.cpp` (constructs `FLASHTaggerAlgorithm` :934, calls the static
+  `fillMatchedPositionsAndFlankingMassDiffs` :972). The IDA path drives Tagger + Extender
+  **directly** and never uses `FLASHTnTAlgorithm` — that orchestrator belongs to the TOPP tool.
+  Tuning knobs arrive via the `flashtnt` config section, not through `FLASHTnTAlgorithm`'s own
+  defaults.
+  **Every Param handed to either algorithm is built in one of two places** —
+  `FragmentAnalysis::buildTaggerParam` / `buildExtenderParam` (:197 / :213, which construct a
+  throwaway instance purely for `getDefaults()`). All three call sites route through them, so a new
+  knob is added once, not per site. `fixed_mod` is set **unconditionally** there: an empty config
+  list is passed verbatim as an empty Param list, *not* left at the algorithms' declared `{""}`
+  placeholder — pinned by `FragmentAnalysis_test`'s `build*Param_sets_fixed_mod_when_empty`.
+  ⚠️ Two keys that look like FLASHTnT tuning are **not**: `max_ptm_count` and
+  `max_flanking_mass_diff` are neither Params nor read by either algorithm on the IDA path. They
+  come from `precursor_selection.tag_expansion` and drive FLASHIda's own FASTA target expansion.
 
 > **Name trap.** `TopDownIsobaricQuantification` (flat, off-limits, used only by
 > `FLASHDeconvAlgorithm`) and `FLASHIda/Quantification` (IDA, fair game) are unrelated. The IDA one
