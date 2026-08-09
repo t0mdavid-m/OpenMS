@@ -192,6 +192,35 @@ namespace
     return {"b", "y"};  // default to HCD
   }
 
+  Param FragmentAnalysis::buildTaggerParam(const Config& config, const std::vector<std::string>& ion_types)
+  {
+    FLASHTaggerAlgorithm tagger;
+    Param p = tagger.getDefaults();
+    p.setValue("ion_type", ion_types);
+    p.setValue("min_length", config.targeting().min_tag_length);
+    p.setValue("max_length", config.targeting().max_tag_length);
+    p.setValue("allow_gap", config.targeting().allow_gap ? "true" : "false");
+    p.setValue("max_aa_in_gap", config.targeting().max_aa_in_gap);
+    // Unconditional: an empty config list is passed through verbatim as an empty Param list,
+    // NOT left at the algorithm's declared {""} placeholder.
+    p.setValue("fixed_mod", config.targeting().fixed_mod);
+    return p;
+  }
+
+  Param FragmentAnalysis::buildExtenderParam(const Config& config, const std::vector<std::string>& ion_types,
+                                             double max_mod_mass)
+  {
+    FLASHExtenderAlgorithm extender;
+    Param p = extender.getDefaults();
+    p.setValue("ion_type", ion_types);
+    p.setValue("max_mod_mass", max_mod_mass);
+    p.setValue("skip_precursor_inference", "true");
+    p.setValue("max_blind_mod_count", config.targeting().max_blind_mod_count);
+    // Unconditional -- see buildTaggerParam.
+    p.setValue("fixed_mod", config.targeting().fixed_mod);
+    return p;
+  }
+
   /// Calculate theoretical fragment masses for multiple ion types with PTM adjustments
   /// @param sequence the protein sequence
   /// @param ptm_sites PTM sites from FLASHExtender
@@ -399,15 +428,7 @@ namespace
     double ppm_tolerance = (tolerance_ppm > 0.0) ? tolerance_ppm : config_.level(2).tolerance_ppm;
     std::vector<std::string> ion_types_str = FragmentAnalysis::getIonTypesForFragmentationMethod(fragmentation_method);
     FLASHTaggerAlgorithm tagger;
-    Param tagger_param = tagger.getDefaults();
-    tagger_param.setValue("ion_type", ion_types_str);
-    tagger_param.setValue("min_length", config_.targeting().min_tag_length);
-    tagger_param.setValue("max_length", config_.targeting().max_tag_length);
-    tagger_param.setValue("allow_gap", config_.targeting().allow_gap ? "true" : "false");
-    tagger_param.setValue("max_aa_in_gap", config_.targeting().max_aa_in_gap);
-    if (!config_.targeting().fixed_mod.empty())
-      tagger_param.setValue("fixed_mod", config_.targeting().fixed_mod);
-    tagger.setParameters(tagger_param);
+    tagger.setParameters(FragmentAnalysis::buildTaggerParam(config_, ion_types_str));
     tagger.run(dspec, ppm_tolerance);
 
     std::vector<FLASHHelperClasses::Tag> tags;
@@ -543,14 +564,7 @@ namespace
 
     // 7. Run FLASHExtender for path-based validation
     FLASHExtenderAlgorithm extender;
-    Param extender_param = extender.getDefaults();
-    extender_param.setValue("ion_type", ion_types_str);
-    extender_param.setValue("max_mod_mass", max_mod_mass);
-    extender_param.setValue("skip_precursor_inference", "true");
-    extender_param.setValue("max_blind_mod_count", config_.targeting().max_blind_mod_count);
-    if (!config_.targeting().fixed_mod.empty())
-      extender_param.setValue("fixed_mod", config_.targeting().fixed_mod);
-    extender.setParameters(extender_param);
+    extender.setParameters(FragmentAnalysis::buildExtenderParam(config_, ion_types_str, max_mod_mass));
     extender.run(hits, dspec, spec_vec, vec_pro, rev_vec_pro, tags, ppm_tolerance, false);
 
     std::vector<ProteinHit> proteoform_hits;
