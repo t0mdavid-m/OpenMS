@@ -51,9 +51,7 @@ namespace
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -144,9 +142,7 @@ namespace
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -231,9 +227,7 @@ namespace
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -323,9 +317,7 @@ namespace
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -415,9 +407,7 @@ namespace
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -507,9 +497,7 @@ namespace
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -599,9 +587,7 @@ namespace
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -679,9 +665,7 @@ namespace
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -759,9 +743,7 @@ namespace
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -854,9 +836,7 @@ namespace
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -950,9 +930,7 @@ namespace
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -1045,9 +1023,7 @@ namespace
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -1136,9 +1112,7 @@ namespace
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -1216,9 +1190,7 @@ namespace
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -1308,9 +1280,7 @@ namespace
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -1388,9 +1358,7 @@ namespace
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -1482,7 +1450,7 @@ namespace
   //   - it appended `, {...ETD...}` after the HCD object to make an array. ms_settings.ms2 is a
   //     bare object now; a second MS2 must be DEFINED in additional_ms2 and then REFERENCED from
   //     precursor_selection.additional_scans, or it parses fine and never dispatches.
-  std::string buildCapConfig(int max_targets, bool etd, const std::string& results_path)
+  std::string buildCapConfig(int max_targets, bool etd, const std::string& log_dir)
   {
     nlohmann::json j = nlohmann::json::parse(max1_json);
 
@@ -1497,7 +1465,9 @@ namespace
       j["precursor_selection"]["additional_scans"] = nlohmann::json::array({"etd"});
     }
 
-    j["runtime"]["scan_results_path"] = results_path;
+    // One folder, five fixed basenames. This test only reads scan_results.tsv, but the engine
+    // now opens all five streams under log_dir -- there is no way to ask for just one.
+    j["runtime"]["log_dir"] = log_dir;
     return j.dump();
   }
 
@@ -2530,7 +2500,7 @@ END_SECTION
 
 // max_targets caps precursor selection PER MS1 scan: children (MS2 commands) per scan rise with the cap,
 // and equal (precursors selected) x (MS2 activations per precursor). Verified via the engine's own
-// per-scan logging (runtime.scan_results_path -> commands_pushed / child_ids), across a 2 (activation) x
+// per-scan logging (runtime.log_dir -> scan_results.tsv commands_pushed / child_ids), across a 2 (activation) x
 // 3 (cap) matrix. A *cumulative* command total across all scans is NOT a valid cap check: selection
 // couples to persistent cross-scan state (mass_qscore_map_ score-drop skip, PrecursorSelection.cpp:647-659)
 // that depends on the cap, so the running total is non-monotonic in max_targets. We therefore compare per
@@ -2551,16 +2521,20 @@ START_SECTION(processScan_ms1_max_targets_cap)
   // results TSV is an MS1 result row, in scan order -- exactly as readMs1ResultRows assumes. Per-scan
   // selection is unchanged by interleaving (same spectra, same order, same accumulated exclusion state).
   auto runCase = [&](int max_targets, bool etd) -> std::vector<int> {
-    std::string path = std::string("p4u_maxcap_") + (etd ? "etd" : "hcd") + "_"
-                     + std::to_string(max_targets) + "_results.tsv";
-    std::remove(path.c_str());  // results stream opens in append mode -> ensure a fresh file
-    std::string cfg = buildCapConfig(max_targets, etd, path);
+    // Six engines run through this lambda, so each needs its OWN folder: the basenames are fixed
+    // now, and the streams still open in append mode, so a shared folder would concatenate runs
+    // and inject a second header row mid-file. freshLogDir wipes and creates -- the engine never
+    // creates a directory, and a missing one would leave every stream closed and this test
+    // reading zero rows without any error.
+    const std::string dir = freshLogDir(std::string("ps_maxcap_") + (etd ? "etd" : "hcd") + "_"
+                                        + std::to_string(max_targets));
+    std::string cfg = buildCapConfig(max_targets, etd, dir);
     FLASHIda* ida = new FLASHIda(const_cast<char*>(cfg.c_str()));
     runInterleaved(ida, ms1_scans, {});
     delete ida;  // flush + close the results TSV
     std::vector<int> children;
-    for (const auto& r : readMs1ResultRows(path)) { TEST_EQUAL(r.first, r.second) children.push_back(r.first); }
-    std::remove(path.c_str());
+    for (const auto& r : readMs1ResultRows(dir + "/scan_results.tsv"))
+    { TEST_EQUAL(r.first, r.second) children.push_back(r.first); }
     return children;
   };
 
@@ -2626,9 +2600,7 @@ START_SECTION(processScan_ms1_min_charge_filter)
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -2773,9 +2745,7 @@ START_SECTION(cleanup_expired_drops_stale_queued_commands)
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],

@@ -159,18 +159,20 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
 {
   const int precursor_id = 7;
 
-  // Pooled-log path embedded in the Config JSON so the engine opens the pooled stream (Config.cpp:424
-  // reads runtime.pooled_identification_log_path). Use a RELATIVE filename in the test CWD (NOT an
-  // absolute temp path): an absolute Windows temp path contains backslashes that would form invalid JSON
-  // escapes when embedded below. The pooled stream is opened in APPEND mode, so remove any stale file
-  // first. (Mirrors the FLASHIda_LoggingFields_test relative-filename + std::remove pattern.)
-  const std::string pooled_path = "pt_trajectory_pooled.tsv";
-  std::remove(pooled_path.c_str());
+  // Log FOLDER embedded in the Config JSON so the engine opens its streams (Config.cpp reads
+  // runtime.log_dir; IdaLogger joins the fixed basename pooled_identification.tsv onto it). Use a
+  // RELATIVE folder in the test CWD (NOT an absolute temp path): an absolute Windows path contains
+  // backslashes that would form invalid JSON escapes when embedded below. The streams open in
+  // APPEND mode and IdaLogger never creates directories, so wipe-and-create up front.
+  const std::string log_dir = "testlogs/pt_trajectory";
+  File::removeDirRecursively(log_dir);
+  File::makeDir(log_dir);
+  const std::string pooled_path = log_dir + "/pooled_identification.tsv";
 
   std::string cfg_json = std::string(R"({
     "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 1, "max_charge": 50, "min_mass": 100, "max_mass": 50000, "tol": [10, 10, 10] },
     "precursor_selection": { "rt_window": 180, "targeting": "none", "consider_all_charges": false, "strict_inclusion": false, "tie_threshold": 0.1, "rank_by": "qscore", "max_precursors": 3 },
-    "flashtnt": { "min_length": 3, "max_length": 8, "max_ptm_count": 3, "max_flanking_mass_diff": 50000 },
+    "flashtnt": { "min_length": 3, "max_length": 8 },
     "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
     "faims": { "cv_values": [], "max_cv_skip": 0, "cv_precursor_threshold": 15 },
     "ms_settings": {
@@ -182,7 +184,7 @@ START_SECTION(ms2_baseline_then_accumulating_ms3_folds)
     "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
     "characterization": { "mode": "coverage", "max_targets": 10, "protein_sequence": "PEPTIDEK" },
     "conditional_ms2": false,
-    "runtime": { "pooled_identification_log_path": ")") + std::string(pooled_path) + R"(" } })";
+    "runtime": { "log_dir": ")") + log_dir + R"(" } })";
 
   Config cfg{cfg_json};
   IdaLogger logger(cfg);                 // opens the pooled stream (writes the header)

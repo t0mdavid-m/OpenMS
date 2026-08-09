@@ -37,6 +37,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
+#include <OpenMS/DATASTRUCTURES/Param.h>
 #include <OpenMS/DATASTRUCTURES/String.h>
 
 #include <map>
@@ -147,6 +148,21 @@ namespace OpenMS
     /// {"b","c","y","z"} for EThcD/EtCID, {"a","b","c","x","y","z"} for UVPD.
     /// Defaults to {"b","y"} for unknown methods.
     static std::vector<std::string> getIonTypesForFragmentationMethod(const String& method);
+
+    /// Build the FLASHTagger Param used by every FLASHIda tag-generation site.
+    /// Starts from FLASHTaggerAlgorithm's own defaults and sets exactly ion_type, min_length,
+    /// max_length, allow_gap, max_aa_in_gap and fixed_mod from @p config's targeting section.
+    /// @p ion_types is supplied by the caller (each site derives it from its own fragmentation
+    /// method). fixed_mod is set UNCONDITIONALLY: an empty config list yields an empty Param list,
+    /// deliberately NOT the algorithm's declared {""} placeholder.
+    static Param buildTaggerParam(const Config& config, const std::vector<std::string>& ion_types);
+
+    /// Build the FLASHExtender Param used by FLASHIda's tag-based fragment matching.
+    /// Starts from FLASHExtenderAlgorithm's own defaults and sets exactly ion_type, max_mod_mass,
+    /// skip_precursor_inference, max_blind_mod_count and fixed_mod. fixed_mod is set
+    /// UNCONDITIONALLY, with the same empty-list semantics as buildTaggerParam.
+    static Param buildExtenderParam(const Config& config, const std::vector<std::string>& ion_types,
+                                    double max_mod_mass);
 
     /// Compute PTM-adjusted theoretical fragment masses for multiple ion types.
     /// For each PTM site [start, end] (1-based), fragments that definitely contain the

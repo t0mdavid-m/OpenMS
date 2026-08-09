@@ -16,6 +16,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
+#include <OpenMS/DATASTRUCTURES/Param.h>
 
 #include "FLASHIda_TestAccess.h"   // ExplorationTestAccess::feedResult (private-state access)
 
@@ -84,9 +85,7 @@ namespace
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -172,9 +171,7 @@ namespace
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -266,9 +263,7 @@ namespace
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -309,6 +304,194 @@ namespace
   },
   "characterization": {
     "mode": "off",
+    "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE",
+    "max_targets": 3
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
+    },
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
+    },
+    "ms3": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 35,
+      "resolution": 120000
+    }
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false,
+    "reporter_mz_tol": 0.002,
+    "fold_change_threshold": 1.4
+  }
+}
+)";
+
+  // Param-builder fixture: every flashtnt key the tagger builder reads carries a NON-default value
+  // (min_length 4 != 3, max_length 9 != 8, allow_gap true != false, max_aa_in_gap 3 != 2,
+  // fixed_mod non-empty != {}), so a dropped setValue in buildTaggerParam cannot pass by accident.
+  // NOTE the custom JSON delimiter -- do not remove it. This fixture carries a real ModificationsDB
+  // modification name, Carbamidomethyl (C). In an UNdelimited raw string, a close-paren followed
+  // directly by a double-quote is the terminator -- and that sequence occurs inside any
+  // parenthesised mod name. Without the delimiter the literal ended 370 chars in, mid-JSON, and
+  // everything after it was compiled as C++ (broke CI 2026-08-09).
+  const char* tagger_param_config = R"JSON({
+  "deconvolution": {
+    "score_threshold": 0.0,
+    "tqscore_threshold": 0.9,
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10,
+      10
+    ]
+  },
+  "flashtnt": {
+    "min_length": 4,
+    "max_length": 9,
+    "allow_gap": true,
+    "max_aa_in_gap": 3,
+    "fixed_mod": [
+      "Carbamidomethyl (C)"
+    ]
+  },
+  "faims": {
+    "cv_values": [],
+    "max_cv_skip": 0,
+    "cv_precursor_threshold": 15
+  },
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false,
+      "value_ms": 60000
+    },
+    "scan_timeout": {
+      "enabled": false,
+      "value_ms": 30000
+    }
+  },
+  "files": {
+    "target_logs": [],
+    "fasta": "",
+    "inclusion_list": "",
+    "ptm_list": ""
+  },
+  "conditional_ms2": false,
+  "precursor_selection": {
+    "rt_window": 180,
+    "targeting": "none",
+    "consider_all_charges": false,
+    "strict_inclusion": false,
+    "tie_threshold": 0.1,
+    "rank_by": "qscore",
+    "max_precursors": 3
+  },
+  "characterization": {
+    "mode": "ambiguity",
+    "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE",
+    "max_targets": 3
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
+    },
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
+    },
+    "ms3": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 35,
+      "resolution": 120000
+    }
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false,
+    "reporter_mz_tol": 0.002,
+    "fold_change_threshold": 1.4
+  }
+}
+)JSON";
+
+  // Same, but with an EXPLICITLY EMPTY fixed_mod -- the case the deleted
+  // `if (!config_.targeting().fixed_mod.empty())` guards used to suppress. max_blind_mod_count is
+  // non-default (4 != 2) so the extender builder's carry-through is genuinely proven.
+  const char* empty_fixed_mod_config = R"({
+  "deconvolution": {
+    "score_threshold": 0.0,
+    "tqscore_threshold": 0.9,
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10,
+      10
+    ]
+  },
+  "flashtnt": {
+    "min_length": 3,
+    "max_length": 8,
+    "max_blind_mod_count": 4,
+    "fixed_mod": []
+  },
+  "faims": {
+    "cv_values": [],
+    "max_cv_skip": 0,
+    "cv_precursor_threshold": 15
+  },
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false,
+      "value_ms": 60000
+    },
+    "scan_timeout": {
+      "enabled": false,
+      "value_ms": 30000
+    }
+  },
+  "files": {
+    "target_logs": [],
+    "fasta": "",
+    "inclusion_list": "",
+    "ptm_list": ""
+  },
+  "conditional_ms2": false,
+  "precursor_selection": {
+    "rt_window": 180,
+    "targeting": "none",
+    "consider_all_charges": false,
+    "strict_inclusion": false,
+    "tie_threshold": 0.1,
+    "rank_by": "qscore",
+    "max_precursors": 3
+  },
+  "characterization": {
+    "mode": "ambiguity",
     "protein_sequence": "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFSYTDANKNKGITWGEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE",
     "max_targets": 3
   },
@@ -540,6 +723,97 @@ START_SECTION(fragment_analysis_populated_for_mass_count_metric)
   TEST_EQUAL(info.metric.fragment_count > 0, true)
   TEST_EQUAL(info.identification.matched_protein.empty(), false)
   TEST_EQUAL(info.identification.proteoform_sequence == cytochrome_c_seq, true)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// buildTaggerParam / buildExtenderParam -- the shared FLASHTnT Param builders.
+//
+// The same six tagger Params used to be assembled inline in TWO places (FragmentAnalysis.cpp and
+// PrecursorSelection.cpp), each wrapping fixed_mod in `if (!config_.targeting().fixed_mod.empty())`.
+// The builders replace both copies and set fixed_mod UNCONDITIONALLY. These sections cover the two
+// things a reviewer cannot see by diffing two deleted blocks against one new function:
+//   T1 -- nothing was dropped in the extraction (every key set, from non-default config values);
+//   T2/T3 -- the removed guard stays removed. fixed_mod is inert inside FLASHTnT today, so NO other
+//            test in either project can notice if someone reintroduces the conditional.
+/////////////////////////////////////////////////////////////
+START_SECTION(buildTaggerParam_sets_every_key)
+{
+  Config cfg{std::string(tagger_param_config)};
+
+  // {"c","z"}, NOT {"b","y"}: {"b","y"} is FLASHTaggerAlgorithm's OWN declared default, so asserting
+  // it would pass even if the builder never set ion_type at all.
+  Param p = FragmentAnalysis::buildTaggerParam(cfg, {"c", "z"});
+
+  TEST_EQUAL((int)p.getValue("min_length"), 4)
+  TEST_EQUAL((int)p.getValue("max_length"), 9)
+  TEST_STRING_EQUAL(p.getValue("allow_gap").toString(), std::string("true"))
+  TEST_EQUAL((int)p.getValue("max_aa_in_gap"), 3)
+
+  auto ion_types = p.getValue("ion_type").toStringVector();
+  TEST_EQUAL((int)ion_types.size(), 2)
+  TEST_STRING_EQUAL(ion_types[0], std::string("c"))
+  TEST_STRING_EQUAL(ion_types[1], std::string("z"))
+
+  auto fixed_mod = p.getValue("fixed_mod").toStringVector();
+  TEST_EQUAL((int)fixed_mod.size(), 1)
+  TEST_STRING_EQUAL(fixed_mod[0], std::string("Carbamidomethyl (C)"))
+}
+END_SECTION
+
+START_SECTION(buildTaggerParam_sets_fixed_mod_when_empty)
+{
+  // THE regression guard for the removed `if (!fixed_mod.empty())`. With the guard back, the builder
+  // would leave FLASHTaggerAlgorithm's declared {""} default in place and the size assertion fails.
+  Config cfg{std::string(empty_fixed_mod_config)};
+
+  Param p = FragmentAnalysis::buildTaggerParam(cfg, {"b", "y"});
+
+  // exists() is true EITHER WAY -- getDefaults() already declares fixed_mod, so the guard never
+  // removed the key, it only left the {""} placeholder in place. The size assertion below is the
+  // load-bearing one; do not "simplify" it away.
+  TEST_EQUAL(p.exists("fixed_mod"), true)
+  TEST_EQUAL((int)p.getValue("fixed_mod").toStringVector().size(), 0)  // [] verbatim, NOT the declared {""}
+}
+END_SECTION
+
+START_SECTION(buildExtenderParam_sets_fixed_mod_when_empty)
+{
+  Config cfg{std::string(empty_fixed_mod_config)};
+
+  Param p = FragmentAnalysis::buildExtenderParam(cfg, {"c", "z"}, 555.0);
+
+  // See buildTaggerParam_sets_fixed_mod_when_empty: exists() passes either way, the size is the guard.
+  TEST_EQUAL(p.exists("fixed_mod"), true)
+  TEST_EQUAL((int)p.getValue("fixed_mod").toStringVector().size(), 0)  // [] verbatim, NOT the declared {""}
+
+  // The two values the extender builder must carry through: one from config, one from the argument.
+  TEST_EQUAL((int)p.getValue("max_blind_mod_count"), 4)   // flashtnt.max_blind_mod_count (non-default)
+  TEST_REAL_SIMILAR((double)p.getValue("max_mod_mass"), 555.0)
+}
+END_SECTION
+
+START_SECTION(buildExtenderParam_sets_every_key)
+{
+  // The extender counterpart of buildTaggerParam_sets_every_key, and it exists for one key in
+  // particular: skip_precursor_inference. The builder sets it "true" against the extender's own
+  // declared default of "false", and NOTHING else in either project asserts it -- so if that
+  // setValue were ever dropped, the extender would silently resume inferring precursor masses from
+  // complementary fragment pairs during MS2 identification, with no test anywhere noticing.
+  Config cfg{std::string(empty_fixed_mod_config)};
+
+  // {"c","z"} again, not the declared {"b","y"} default -- otherwise a dropped ion_type set passes.
+  Param p = FragmentAnalysis::buildExtenderParam(cfg, {"c", "z"}, 555.0);
+
+  TEST_STRING_EQUAL(p.getValue("skip_precursor_inference").toString(), std::string("true"))
+
+  auto ion_types = p.getValue("ion_type").toStringVector();
+  TEST_EQUAL((int)ion_types.size(), 2)
+  TEST_STRING_EQUAL(ion_types[0], std::string("c"))
+  TEST_STRING_EQUAL(ion_types[1], std::string("z"))
+
+  TEST_EQUAL((int)p.getValue("max_blind_mod_count"), 4)
+  TEST_REAL_SIMILAR((double)p.getValue("max_mod_mass"), 555.0)
 }
 END_SECTION
 

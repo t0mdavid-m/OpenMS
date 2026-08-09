@@ -190,7 +190,6 @@ namespace OpenMS
     std::string fasta_file;
     std::string inclusion_list_file;
     std::string ptm_list_file;
-    bool tag_based_enabled = false;
     int min_tag_length = 3;
     int max_tag_length = 8;
     double tag_matching_tolerance_ppm = 10.0;
@@ -199,7 +198,7 @@ namespace OpenMS
     // --- FLASHTnT (FLASHTagger/FLASHExtender) tuning, from the `flashtnt` config block ---
     bool allow_gap = false;                 ///< FLASHTagger allow_gap (passed as "true"/"false")
     int max_aa_in_gap = 2;                   ///< FLASHTagger max_aa_in_gap
-    std::vector<std::string> fixed_mod;      ///< Fixed modifications (tagger + extender); empty = keep algorithm {""} default
+    std::vector<std::string> fixed_mod;      ///< Fixed mods, passed VERBATIM to tagger+extender; empty = empty Param list, NOT the declared {""}
     int max_blind_mod_count = 2;             ///< FLASHExtender max_blind_mod_count
     double max_mod_mass = 700.0;             ///< FLASHExtender max_mod_mass. 700 preserves current MS2 behavior; NOT the extender's own 500 default.
     ScanConfig tagging_follow_up_scan;  ///< Follow-up scan config for conditional MS2, RESOLVED from a name
@@ -254,14 +253,20 @@ namespace OpenMS
     std::string follow_up_name;      ///< the referenced name, for diagnostics only
   };
 
-  /// Runtime file paths (set by C# or user override in JSON)
+  /// Where IdaLogger writes its five streams.
+  ///
+  /// This is the FULLY RESOLVED run folder, not a base directory: the host composes it (base
+  /// directory + per-run timestamp) and creates it before constructing the engine. IdaLogger
+  /// joins its own fixed basenames onto it and never creates a directory itself.
+  ///
+  /// EMPTY MEANS OPEN NOTHING, and that is load-bearing -- a config with no "runtime" section
+  /// or with "runtime": {} opens no streams at all, which several tests rely on. Note the
+  /// authored method.json layer gives "" the OPPOSITE meaning ("." = the working directory);
+  /// C# resolves that before emitting, so an empty value never reaches here while logging is
+  /// on. See ADR-0015 before collapsing the two meanings into one.
   struct OPENMS_DLLAPI RuntimeConfig
   {
-    std::string ida_log_path;
-    std::string scan_commands_path;
-    std::string scan_results_path;
-    std::string identification_path;
-    std::string pooled_identification_path;
+    std::string log_dir;
   };
 
   /**

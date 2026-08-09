@@ -56,13 +56,18 @@ namespace OpenMS
       config_(config)
   {
     const auto& rt_cfg = config_.runtime();
-    if (!rt_cfg.ida_log_path.empty())
+    // Empty log_dir = open nothing. Otherwise log_dir is the already-created, already-resolved
+    // run folder and every stream is <log_dir>/<fixed basename>. The host owns the filesystem:
+    // this constructor never creates a directory, so a folder that does not exist leaves every
+    // stream closed and every writer a no-op.
+    const std::string dir = rt_cfg.log_dir.empty() ? std::string{} : rt_cfg.log_dir + "/";
+    if (!dir.empty())
     {
-      ida_log_stream_.open(rt_cfg.ida_log_path, std::ios::app);
+      ida_log_stream_.open(dir + kIdaLogName, std::ios::app);
     }
-    if (!rt_cfg.scan_commands_path.empty())
+    if (!dir.empty())
     {
-      commands_tsv_stream_.open(rt_cfg.scan_commands_path, std::ios::app);
+      commands_tsv_stream_.open(dir + kScanCommandsName, std::ios::app);
       if (commands_tsv_stream_.is_open())
       {
         commands_tsv_stream_ << "tracking_id\tscan_type\tms_level\tparent_tracking_id\t"
@@ -91,9 +96,9 @@ namespace OpenMS
         commands_tsv_stream_.flush();
       }
     }
-    if (!rt_cfg.scan_results_path.empty())
+    if (!dir.empty())
     {
-      results_tsv_stream_.open(rt_cfg.scan_results_path, std::ios::app);
+      results_tsv_stream_.open(dir + kScanResultsName, std::ios::app);
       if (results_tsv_stream_.is_open())
       {
         // scan_results is a pure acquisition-event log: identification payload
@@ -113,9 +118,9 @@ namespace OpenMS
         results_tsv_stream_.flush();
       }
     }
-    if (!rt_cfg.identification_path.empty())
+    if (!dir.empty())
     {
-      identification_tsv_stream_.open(rt_cfg.identification_path, std::ios::app);
+      identification_tsv_stream_.open(dir + kIdentificationName, std::ios::app);
       if (identification_tsv_stream_.is_open())
       {
         identification_tsv_stream_ << "tracking_id\tscan_mode\tms_level\t"
@@ -143,9 +148,9 @@ namespace OpenMS
         identification_tsv_stream_.flush();
       }
     }
-    if (!rt_cfg.pooled_identification_path.empty())
+    if (!dir.empty())
     {
-      pooled_stream_.open(rt_cfg.pooled_identification_path, std::ios::app);
+      pooled_stream_.open(dir + kPooledIdentificationName, std::ios::app);
       if (pooled_stream_.is_open())
       {
         // P6: trajectory columns lead — trigger source and the tracking-id of the driving scan.

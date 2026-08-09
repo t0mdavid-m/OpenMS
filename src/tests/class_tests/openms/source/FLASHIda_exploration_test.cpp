@@ -70,9 +70,7 @@ namespace
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -164,9 +162,7 @@ namespace
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -264,9 +260,7 @@ namespace
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -358,9 +352,7 @@ namespace
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -445,9 +437,7 @@ namespace
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -538,9 +528,7 @@ namespace
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -626,9 +614,7 @@ namespace
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -749,9 +735,7 @@ namespace
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -849,9 +833,7 @@ namespace
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -2412,9 +2394,7 @@ START_SECTION(inclusion_ms3_full_acquisition_roundtrip)
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -2561,9 +2541,7 @@ START_SECTION(ms3_min_charge_floor_filters_all_targets)
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
@@ -2673,9 +2651,7 @@ START_SECTION(ms3_min_charge_default_emits_ms3)
   },
   "flashtnt": {
     "min_length": 3,
-    "max_length": 8,
-    "max_ptm_count": 3,
-    "max_flanking_mass_diff": 50000
+    "max_length": 8
   },
   "faims": {
     "cv_values": [],
