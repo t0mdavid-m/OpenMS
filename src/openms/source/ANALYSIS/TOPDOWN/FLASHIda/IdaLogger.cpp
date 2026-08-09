@@ -113,7 +113,7 @@ namespace OpenMS
                             << "variant_index\ttotal_variants\t"
                             << "winner_tracking_id\t"  // F5: group-completing exploration winner pointer
                             << "activation_type\tcollision_energy\treaction_time\t"
-                            << "deconv_masses\tdeconv_intensities\tdeconv_min_charge\tdeconv_max_charge\t"
+                            << "deconv_masses\tdeconv_charges\tdeconv_intensities\t"
                             << "resolve_ts\treceived_ts\tdequeue_ts\n";
         results_tsv_stream_.flush();
       }
@@ -440,7 +440,22 @@ namespace OpenMS
                         << collision_energy << "\t"
                         << reaction_time << "\t";
 
-    // Deconvolved masses and intensities (semicolon-delimited)
+    // Deconvolved masses, then the per-charge breakdown: one ';'-group per PeakGroup in each column,
+    // with that group's observed charges and their OWN intensities ','-joined inside, index-aligned.
+    //
+    //   deconv_masses       12358.31;15234.11
+    //   deconv_charges      12,13,14;9,10
+    //   deconv_intensities  3e5,5e5,8e5;1e5,2e5
+    //
+    // deconv_intensities used to be getIntensity() -- the PeakGroup TOTAL, summed across charge states
+    // -- and the charge information was only the [min,max] range, so the log could say how much signal
+    // a mass carried but never how it was distributed across the envelope. That distribution is the
+    // input to charge-state co-isolation: it is what decides which charges clear the SNR gate.
+    // min/max are dropped as derivable from the charge list, so this is three columns where there
+    // were four.
+    //
+    // A charge is listed only when it actually carries intensity, so the group is the OBSERVED
+    // envelope rather than every integer in the range.
     if (deconv_spectrum != nullptr && deconv_spectrum->size() > 0)
     {
       for (size_t i = 0; i < deconv_spectrum->size(); i++)
@@ -452,25 +467,35 @@ namespace OpenMS
       for (size_t i = 0; i < deconv_spectrum->size(); i++)
       {
         if (i > 0) results_tsv_stream_ << ";";
-        results_tsv_stream_ << (*deconv_spectrum)[i].getIntensity();
+        auto [lo, hi] = (*deconv_spectrum)[i].getAbsChargeRange();
+        bool first = true;
+        for (int z = lo; z <= hi; ++z)
+        {
+          if ((*deconv_spectrum)[i].getChargeIntensity(z) <= 0) continue;
+          if (!first) results_tsv_stream_ << ",";
+          results_tsv_stream_ << z;
+          first = false;
+        }
       }
       results_tsv_stream_ << "\t";
       for (size_t i = 0; i < deconv_spectrum->size(); i++)
       {
         if (i > 0) results_tsv_stream_ << ";";
-        results_tsv_stream_ << std::get<0>((*deconv_spectrum)[i].getAbsChargeRange());
-      }
-      results_tsv_stream_ << "\t";
-      for (size_t i = 0; i < deconv_spectrum->size(); i++)
-      {
-        if (i > 0) results_tsv_stream_ << ";";
-        results_tsv_stream_ << std::get<1>((*deconv_spectrum)[i].getAbsChargeRange());
-
+        auto [lo, hi] = (*deconv_spectrum)[i].getAbsChargeRange();
+        bool first = true;
+        for (int z = lo; z <= hi; ++z)
+        {
+          const float ci = (*deconv_spectrum)[i].getChargeIntensity(z);
+          if (ci <= 0) continue;
+          if (!first) results_tsv_stream_ << ",";
+          results_tsv_stream_ << ci;
+          first = false;
+        }
       }
     }
     else
     {
-      results_tsv_stream_ << "\t\t\t";
+      results_tsv_stream_ << "\t\t";
     }
     results_tsv_stream_ << "\t" << resolve_ts
                         << "\t" << received_ts

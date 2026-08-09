@@ -192,7 +192,11 @@ START_SECTION(schema_column_counts)
   auto i = TSVFile::parse(dir + "/identification.tsv");
 
   TEST_EQUAL(c.headers.size(), 32)   // E6: + scan_description; P5: + precursor_id; + ms3_proteoform (wide MS3 fragment); ADR-0012: + faims_enabled
-  TEST_EQUAL(r.headers.size(), 29)   // E5: + ms_level; F5: + winner_tracking_id; slim-down: -5 id-payload cols (34->29)
+  // E5: + ms_level; F5: + winner_tracking_id; slim-down: -5 id-payload cols (34->29); per-charge
+  // deconv output replaced 4 columns (masses/intensities/min_charge/max_charge) with 3
+  // (masses/charges/intensities), min and max being derivable from the charge list (29->28). Every
+  // r.colIndex pinned below is <= 18, i.e. ahead of the deconv block, so none of them moved.
+  TEST_EQUAL(r.headers.size(), 28)
   TEST_EQUAL(i.headers.size(), 32)   // I2: +6 iso/snr/intensity; P5: +precursor_id; +theoretical_masses/diff_da/diff_ppm; C2: +ms3_fragment_coverage; + tic_coverage; C: + flash_extender_score
 
   // Spot-check exact header identities / order at the boundaries that matter for parsing.
@@ -618,6 +622,25 @@ START_SECTION(results_ms1_columns)
     int mc = std::atoi(cell(res, row, "mass_count").c_str());
     auto masses = splitTokens(cell(res, row, "deconv_masses"), ';');
     TEST_EQUAL((int)masses.size(), mc)
+
+    // Per-charge deconv output: the three columns are INDEX-ALIGNED, one ';'-group per PeakGroup, and
+    // within a group one ','-token per observed charge. Any reader pairing a charge with its intensity
+    // depends on that alignment, so it is asserted rather than assumed. A charge is listed only when it
+    // carries intensity, so a group is the observed envelope and never the full [min,max] range.
+    auto dcharges = splitTokens(cell(res, row, "deconv_charges"), ';');
+    auto dints = splitTokens(cell(res, row, "deconv_intensities"), ';');
+    TEST_EQUAL(dcharges.size(), masses.size())
+    TEST_EQUAL(dints.size(), masses.size())
+    bool per_charge_aligned = true;
+    for (size_t g = 0; g < dcharges.size(); ++g)
+    {
+      auto zs = splitTokens(dcharges[g], ',');
+      auto is = splitTokens(dints[g], ',');
+      per_charge_aligned = per_charge_aligned && (zs.size() == is.size()) && !zs.empty();
+      for (const auto& z : zs) per_charge_aligned = per_charge_aligned && std::atoi(z.c_str()) > 0;
+      for (const auto& v : is) per_charge_aligned = per_charge_aligned && toD(v) > 0.0;
+    }
+    TEST_TRUE(per_charge_aligned)
     // child_ids space-split, each a real command id, count == commands_pushed
     auto kids = splitTokens(cell(res, row, "child_ids"), ' ');
     int pushed = std::atoi(cell(res, row, "commands_pushed").c_str());
