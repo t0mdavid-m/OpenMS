@@ -341,7 +341,12 @@ namespace
   // Param-builder fixture: every flashtnt key the tagger builder reads carries a NON-default value
   // (min_length 4 != 3, max_length 9 != 8, allow_gap true != false, max_aa_in_gap 3 != 2,
   // fixed_mod non-empty != {}), so a dropped setValue in buildTaggerParam cannot pass by accident.
-  const char* tagger_param_config = R"({
+  // NOTE the custom JSON delimiter -- do not remove it. This fixture carries a real ModificationsDB
+  // modification name, Carbamidomethyl (C). In an UNdelimited raw string, a close-paren followed
+  // directly by a double-quote is the terminator -- and that sequence occurs inside any
+  // parenthesised mod name. Without the delimiter the literal ended 370 chars in, mid-JSON, and
+  // everything after it was compiled as C++ (broke CI 2026-08-09).
+  const char* tagger_param_config = R"JSON({
   "deconvolution": {
     "score_threshold": 0.0,
     "tqscore_threshold": 0.9,
@@ -429,7 +434,7 @@ namespace
     "fold_change_threshold": 1.4
   }
 }
-)";
+)JSON";
 
   // Same, but with an EXPLICITLY EMPTY fixed_mod -- the case the deleted
   // `if (!config_.targeting().fixed_mod.empty())` guards used to suppress. max_blind_mod_count is
