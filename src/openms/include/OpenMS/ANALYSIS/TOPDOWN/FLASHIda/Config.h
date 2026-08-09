@@ -253,14 +253,20 @@ namespace OpenMS
     std::string follow_up_name;      ///< the referenced name, for diagnostics only
   };
 
-  /// Runtime file paths (set by C# or user override in JSON)
+  /// Where IdaLogger writes its five streams.
+  ///
+  /// This is the FULLY RESOLVED run folder, not a base directory: the host composes it (base
+  /// directory + per-run timestamp) and creates it before constructing the engine. IdaLogger
+  /// joins its own fixed basenames onto it and never creates a directory itself.
+  ///
+  /// EMPTY MEANS OPEN NOTHING, and that is load-bearing -- a config with no "runtime" section
+  /// or with "runtime": {} opens no streams at all, which several tests rely on. Note the
+  /// authored method.json layer gives "" the OPPOSITE meaning ("." = the working directory);
+  /// C# resolves that before emitting, so an empty value never reaches here while logging is
+  /// on. See ADR-0015 before collapsing the two meanings into one.
   struct OPENMS_DLLAPI RuntimeConfig
   {
-    std::string ida_log_path;
-    std::string scan_commands_path;
-    std::string scan_results_path;
-    std::string identification_path;
-    std::string pooled_identification_path;
+    std::string log_dir;
   };
 
   /**

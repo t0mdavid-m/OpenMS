@@ -53,12 +53,22 @@ namespace OpenMS
 {
 
   /**
-   * @brief Owns all FLASHIda output logging: the four append-only streams
-   * (ida_log, scan_commands.tsv, scan_results.tsv, identification.tsv), their
-   * TSV headers, the row writers, and the ida_log parser.
+   * @brief Owns all FLASHIda output logging: the five append-only streams
+   * (ida.log, scan_commands.tsv, scan_results.tsv, identification.tsv,
+   * pooled_identification.tsv), their TSV headers, the row writers, and the
+   * ida_log parser.
    *
-   * Constructed from Config (reads the four runtime() paths and opens + headers
-   * the streams). The writers operate purely on their arguments (ScanCommand /
+   * Constructed from Config, which supplies ONE value — runtime().log_dir, the
+   * already-resolved and already-created run folder. Each stream is
+   * <log_dir>/<fixed basename> (the five k*Name constants below). An empty
+   * log_dir opens nothing; see Config::RuntimeConfig and ADR-0015 for why that
+   * meaning is the opposite of the authored method.json layer's.
+   *
+   * This class never creates a directory: the host does that before constructing
+   * the engine. A log_dir that does not exist therefore leaves every stream
+   * closed and every writer an early-return no-op.
+   *
+   * The writers operate purely on their arguments (ScanCommand /
    * DeconvolvedSpectrum / the two row descriptors) and the owned streams — they
    * hold no engine state. Locking is the CALLER's responsibility: FLASHIda holds
    * analysis_mutex_ across writeScanResultRow/writeIdentificationRow/writeIDALogEntry
@@ -68,7 +78,16 @@ namespace OpenMS
   class OPENMS_DLLAPI IdaLogger
   {
   public:
-    /// Construct from Config: open the four streams (append) and write the three TSV headers.
+    /// Stream basenames, joined onto runtime().log_dir. These are the wire contract with the
+    /// C# golden comparer (LogGoldenComparer.cs) — changing one requires a golden recapture.
+    static constexpr const char* kIdaLogName = "ida.log";
+    static constexpr const char* kScanCommandsName = "scan_commands.tsv";
+    static constexpr const char* kScanResultsName = "scan_results.tsv";
+    static constexpr const char* kIdentificationName = "identification.tsv";
+    static constexpr const char* kPooledIdentificationName = "pooled_identification.tsv";
+
+    /// Construct from Config: open the five streams (append) under runtime().log_dir and write
+    /// the four TSV headers. Opens nothing when log_dir is empty.
     explicit IdaLogger(const Config& config);
 
     /// copy constructor (deleted: ofstreams are non-copyable)

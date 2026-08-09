@@ -710,16 +710,25 @@ namespace OpenMS
       }
     }
 
-    // --- runtime section (file paths, optional) ---
+    // --- runtime section (log folder, optional) ---
+    // The json::object() default is what makes an absent section and "runtime": {} both mean
+    // "open nothing" -- do not replace it with a required section.
     auto rt_section = config.value("runtime", json::object());
-    rejectUnknownKeys(rt_section,
-        {"ida_log_path", "scan_commands_path", "scan_results_path",
-         "identification_log_path", "pooled_identification_log_path"}, "runtime");
-    runtime_.ida_log_path = rt_section.value("ida_log_path", std::string{});
-    runtime_.scan_commands_path = rt_section.value("scan_commands_path", std::string{});
-    runtime_.scan_results_path = rt_section.value("scan_results_path", std::string{});
-    runtime_.identification_path = rt_section.value("identification_log_path", std::string{});
-    runtime_.pooled_identification_path = rt_section.value("pooled_identification_log_path", std::string{});
+    // Dedicated migration error: the generic unknown-key message would name the offending key
+    // without saying that ALL FIVE collapsed into one, or that the value is now a folder rather
+    // than a file path.
+    for (const char* dead : {"ida_log_path", "scan_commands_path", "scan_results_path",
+                             "identification_log_path", "pooled_identification_log_path"})
+    {
+      if (rt_section.contains(dead))
+        throw std::invalid_argument(
+            std::string("Config: runtime.") + dead + " has been removed. The five per-stream log "
+            "paths are replaced by a single 'runtime.log_dir' naming the FOLDER that receives all "
+            "of them, under their fixed basenames (ida.log, scan_commands.tsv, scan_results.tsv, "
+            "identification.tsv, pooled_identification.tsv).");
+    }
+    rejectUnknownKeys(rt_section, {"log_dir"}, "runtime");
+    runtime_.log_dir = rt_section.value("log_dir", std::string{});
 
     // SNR threshold (hardcoded in original parseJSONConfig_)
     targeting_.snr_threshold = 1.0;
