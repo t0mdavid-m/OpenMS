@@ -501,17 +501,22 @@ namespace OpenMS
               });
 
     // --- 2) Emit Ms3Targets, budget-bounded ---------------------------------------------------------
-    // OFF (default): one target per fragment from best_ms2 — byte-identical to M1.
-    // ON (ms3_all_charges): one target per observed charge state of each fragment, strongest first;
-    // stop as soon as the total emitted count reaches budget.
-    const bool all_charges = config_.characterization().ms3_all_charges;
+    // Single (default): one target per fragment from best_ms2 — byte-identical to the pre-mode build.
+    // Separate: one target per observed charge state, strongest first. The budget counts
+    //   (fragment, charge) PAIRS, so a fragment seen at three charges consumes three of it and the
+    //   whole budget can go on one cleavage site.
+    // Multiplexed: one target per FRAGMENT again, carrying the other SNR-positive charges as notches.
+    //   The budget therefore counts fragments, and the same three slots buy three cleavage sites
+    //   instead of three charges of one site. That reversal is the point of the mode (ADR-0016).
+    const ChargeAcquisitionMode charge_mode = config_.characterization().fragment_charges;
+    const double snr_threshold = config_.targeting().snr_threshold;
     std::vector<Ms3Target> out;
     for (const MappedFragment* f : targets)
     {
       if (static_cast<int>(out.size()) >= budget) break;
       // Build the per-charge observation list to emit for this fragment.
       std::vector<const FragmentObservation*> obs_list;
-      if (all_charges && !f->ms2_by_charge.empty())
+      if (charge_mode == ChargeAcquisitionMode::Separate && !f->ms2_by_charge.empty())
       {
         for (const auto& kv : f->ms2_by_charge) obs_list.push_back(&kv.second);
         std::sort(obs_list.begin(), obs_list.end(),
@@ -521,7 +526,24 @@ namespace OpenMS
       }
       else
       {
-        obs_list.push_back(&(*f->best_ms2));  // single best charge (default)
+        obs_list.push_back(&(*f->best_ms2));  // Single, and the anchor for Multiplexed
+      }
+
+      // Multiplexed: every other observed charge of this same fragment becomes a notch on the one
+      // target. Capped at MAX_ISOLATION_STAGES - 2 because an MS3 command already spends two slots
+      // on its cascade stages; buildMS3 writes stage-0's notches first and truncates this list if
+      // the remaining slots run out, reporting what it dropped.
+      std::vector<NotchCandidate> frag_notches;
+      if (charge_mode == ChargeAcquisitionMode::Multiplexed && !f->ms2_by_charge.empty())
+      {
+        std::vector<NotchCandidate> cands;
+        cands.reserve(f->ms2_by_charge.size());
+        for (const auto& kv : f->ms2_by_charge)
+          cands.push_back({kv.second.frag_charge, kv.second.frag_mz, kv.second.iso_width,
+                           kv.second.stage1_scores.charge_snr});
+        frag_notches = selectNotches(cands, obs_list.front()->frag_charge, snr_threshold,
+                                     MAX_ISOLATION_STAGES - 2,
+                                     "MS3 " + f->ion_type + std::to_string(f->ion_index));
       }
       for (const FragmentObservation* o : obs_list)
       {
@@ -535,6 +557,7 @@ namespace OpenMS
         t.iso_width = o->iso_width;
         t.stage0_params = o->params;
         t.stage1_scores = o->stage1_scores;
+        t.notches = frag_notches;  // empty unless fragment_charges == Multiplexed
         out.push_back(std::move(t));
       }
     }

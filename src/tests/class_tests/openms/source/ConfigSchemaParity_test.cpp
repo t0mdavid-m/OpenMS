@@ -246,7 +246,22 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
                                      : CharacterizationObjective::Ambiguity))
   }
   TEST_EQUAL(cfg.characterization().protein_sequence, j["characterization"]["protein_sequence"].get<std::string>())
-  TEST_EQUAL(cfg.characterization().ms3_all_charges, j["characterization"]["ms3_all_charges"].get<bool>())
+  // fragment_charges replaced the bool ms3_all_charges (ADR-0016): its two states became "single"
+  // and "separate", and "multiplexed" is the value a bool could not express.
+  {
+    const std::string fc = j["characterization"]["fragment_charges"].get<std::string>();
+    TEST_EQUAL((int)cfg.characterization().fragment_charges,
+               (int)(fc == "multiplexed" ? ChargeAcquisitionMode::Multiplexed
+                     : fc == "separate"  ? ChargeAcquisitionMode::Separate
+                                         : ChargeAcquisitionMode::Single))
+  }
+  {
+    const std::string pc = j["precursor_selection"]["precursor_charges"].get<std::string>();
+    TEST_EQUAL((int)cfg.targeting().precursor_charges,
+               (int)(pc == "multiplexed" ? ChargeAcquisitionMode::Multiplexed
+                     : pc == "separate"  ? ChargeAcquisitionMode::Separate
+                                         : ChargeAcquisitionMode::Single))
+  }
 
   // --- the projection: characterization.mode drives levels 2 and 3, and the MS3 budget/charge
   //     floor are AUTHORED in characterization but READ off level 2. Pinning both sides here is

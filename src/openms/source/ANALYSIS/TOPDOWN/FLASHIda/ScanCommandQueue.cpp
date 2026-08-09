@@ -34,6 +34,8 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -308,6 +310,20 @@ namespace OpenMS
     cmd.stages[0].reagent_max_it = scan_config.reagent_max_it;
     cmd.stages[0].reagent_agc_target = scan_config.reagent_agc_target;
 
+    // Co-isolation notches: the other charge states of THIS SAME PeakGroup, when the acquisition mode
+    // asks for them (ADR-0016). Geometry comes from getMzRange(z) per charge -- the same measured
+    // window the anchor uses, never derived from theory -- and the SNR gate is the one the selector
+    // already applies. Written AFTER stage 0 because writeNotchesForStage inherits that stage's
+    // CE/activation: all notches of a stage fire into one fragmentation event.
+    if (config_.targeting().precursor_charges == ChargeAcquisitionMode::Multiplexed)
+    {
+      writeNotchesForStage(cmd, 0,
+          selectNotches(peakGroupNotchCandidates(pg, optimal_window_margin_),
+                        charge, config_.targeting().snr_threshold,
+                        MAX_ISOLATION_STAGES - cmd.num_stages,
+                        "MS2 z=" + std::to_string(charge)));
+    }
+
     // Scan description: {3-char ID}R{mass_kDa}k@{charge}  (adaptive-precision mass token)
     std::string id_str = encode(id);
     std::string mass_tok = formatMassToken(pg.getMonoMass() / 1000.0, charge, '\0', 0);
@@ -350,7 +366,8 @@ namespace OpenMS
                                           char ion_type, int frag_index, int priority,
                                           const FragmentAnalysis::FragmentScores& frag_scores,
                                           const Ms2Params* stage0_params,
-                                          const MS3FragmentMatcher::ProteoformContext& proto_ctx)
+                                          const MS3FragmentMatcher::ProteoformContext& proto_ctx,
+                                          const std::vector<NotchCandidate>* stage1_notches)
   {
     std::lock_guard<std::mutex> lock(queue_mutex_);
     ScanCommand cmd{};
@@ -408,6 +425,26 @@ namespace OpenMS
       cmd.stages[0].reaction_time = stage0_params->reaction_time;
     }
 
+    // Stage 0's notches are INHERITED from the MS2 context, not re-selected (ADR-0016 decision 6):
+    // if the MS2 co-isolated a charge set, the replay that regenerates the fragment must isolate the
+    // same set, or it produces a fraction of the fragment signal the MS3 then tries to work with.
+    // No SNR gate here -- these already passed it when the MS2 was built, and re-gating would need
+    // the MS1 PeakGroup, which this builder does not have. Written BEFORE stage 1's, because the
+    // packing puts stage-0's first and stage-1's offset depends on how many there are.
+    {
+      auto inherited_range = notchesForStage(ms2_ctx, 0);
+      if (inherited_range.second > 0)
+      {
+        std::vector<NotchCandidate> inherited;
+        inherited.reserve(inherited_range.second);
+        for (int i = 0; i < inherited_range.second; ++i)
+          inherited.push_back({inherited_range.first[i].charge_state,
+                               inherited_range.first[i].precursor_mz,
+                               inherited_range.first[i].isolation_width, 0.0});
+        writeNotchesForStage(cmd, 0, inherited);
+      }
+    }
+
     // Stage 1: Fragment target
     cmd.stages[1].precursor_mz = frag_mz;
     cmd.stages[1].isolation_width = std::max(iso_width, 2.0);
@@ -418,6 +455,19 @@ namespace OpenMS
     cmd.stages[1].reaction_time = ms3_config.reaction_time;
     cmd.stages[1].reagent_max_it = ms3_config.reagent_max_it;
     cmd.stages[1].reagent_agc_target = ms3_config.reagent_agc_target;
+
+    // Stage 1's notches: the other charge states of this fragment, chosen by the tracker. The slot
+    // budget is SHARED with stage 0's inherited notches, so this can be truncated -- say so rather
+    // than silently isolating fewer windows than the model asked for.
+    if (stage1_notches != nullptr && !stage1_notches->empty())
+    {
+      const int wrote = writeNotchesForStage(cmd, 1, *stage1_notches);
+      if (wrote < static_cast<int>(stage1_notches->size()))
+        std::cout << "[NOTCH-CLAMP] MS3 stage1 kept=" << wrote
+                  << " dropped=" << (static_cast<int>(stage1_notches->size()) - wrote)
+                  << " (stage-0 took " << cmd.stage0_notch_count << " of the "
+                  << (MAX_ISOLATION_STAGES - cmd.num_stages) << " shared slots)" << std::endl;
+    }
 
     // Description: {3-char ID}R{frag_mass_kDa}k@{frag_charge}[{ion_type}{frag_index}]  (adaptive-precision)
     std::string id_str = encode(id);

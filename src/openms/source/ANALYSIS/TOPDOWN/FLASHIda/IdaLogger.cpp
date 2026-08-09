@@ -265,6 +265,23 @@ namespace OpenMS
       iso_widths += iw_os.str();
       col_energies += ce_os.str();
       activations += cmd.stages[i].activation_type;
+
+      // Co-isolation notches, ','-joined INSIDE this stage's ';'-group -- the same two-axis grammar
+      // the wire uses, so scan_commands.tsv records what was actually commanded rather than only the
+      // anchor window. Only the charge-dependent geometry gains the axis: collision energy and
+      // activation are per fragmentation event and all notches of a stage share one.
+      // No notches (every mode but multiplexed) emits nothing here, so these columns stay
+      // byte-identical to the pre-notch format.
+      auto stage_notches = notchesForStage(cmd, i);
+      for (int n = 0; n < stage_notches.second; ++n)
+      {
+        std::ostringstream nmz_os, niw_os;
+        nmz_os << stage_notches.first[n].precursor_mz;
+        niw_os << stage_notches.first[n].isolation_width;
+        charges += "," + std::to_string(stage_notches.first[n].charge_state);
+        precursor_mzs += "," + nmz_os.str();
+        iso_widths += "," + niw_os.str();
+      }
       std::ostringstream rt_os, rmi_os;
       rt_os << cmd.stages[i].reaction_time;
       rmi_os << cmd.stages[i].reagent_max_it;

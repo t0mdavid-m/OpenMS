@@ -60,6 +60,22 @@ namespace
         ". Keys are case-sensitive snake_case; see FlashIDA/test-data/config_schema_reference.json.");
   }
 
+  // Shared parse for the two charge-acquisition keys (precursor_selection.precursor_charges and
+  // characterization.fragment_charges). One helper because the value sets are identical and must
+  // stay identical -- two hand-written if/else chains is how "Coverage" once silently meant
+  // ambiguity. Hard-rejected, not defaulted, per ADR-0007.
+  OpenMS::ChargeAcquisitionMode parseChargeMode(const nlohmann::json& obj, const std::string& key,
+                                                const std::string& path)
+  {
+    const std::string v = obj.value(key, std::string("single"));
+    if (v == "single")      return OpenMS::ChargeAcquisitionMode::Single;
+    if (v == "separate")    return OpenMS::ChargeAcquisitionMode::Separate;
+    if (v == "multiplexed") return OpenMS::ChargeAcquisitionMode::Multiplexed;
+    throw std::invalid_argument(
+        "Config: " + path + "." + key + " must be one of \"single\", \"separate\", \"multiplexed\"; "
+        "got \"" + v + "\" (values are case-sensitive).");
+  }
+
   // One lenient scan-config allowlist for every scan object (ms1/ms2/ms3/follow_up_scan): the union
   // of MS1- and MS2/MS3-level keys. Rejects non-schema scan keys such as the removed 'IsolationMode'.
   const std::set<std::string> kScanKeys = {
@@ -291,13 +307,14 @@ namespace OpenMS
     auto ps = config.value("precursor_selection", json::object());
     rejectUnknownKeys(ps,
         {"rt_window", "targeting", "consider_all_charges", "charge_based_exclusion",
-         "strict_inclusion", "tie_threshold",
+         "precursor_charges", "strict_inclusion", "tie_threshold",
          "rank_by", "max_precursors", "min_precursor_charge", "additional_scans", "exploration",
          "tag_expansion"},
         "precursor_selection");
     targeting_.rt_window = ps.value("rt_window", 180.0);
     targeting_.consider_all_charges = ps.value("consider_all_charges", false);
     targeting_.charge_based_exclusion = ps.value("charge_based_exclusion", false);
+    targeting_.precursor_charges = parseChargeMode(ps, "precursor_charges", "precursor_selection");
     targeting_.strict_inclusion = ps.value("strict_inclusion", false);
     targeting_.tie_threshold = ps.value("tie_threshold", 0.1);
 
@@ -383,8 +400,17 @@ namespace OpenMS
     // selection gates (selection_strategy.ms2.selection / .ms3.selection), which were booleans in
     // disguise. Decisions only -- the MS3 scan's instrument parameters stay in ms_settings.ms3.
     auto charact = config.value("characterization", json::object());
+    // Migration, checked BEFORE the allowlist so the message names the replacement instead of the
+    // generic unknown-key error. ms3_all_charges was a bool; its two states are now values of a
+    // three-valued mode whose third value (multiplexed) it could not express.
+    if (charact.contains("ms3_all_charges"))
+      throw std::invalid_argument(
+          "Config: characterization.ms3_all_charges was replaced by characterization.fragment_charges "
+          "(ADR-0016). Use \"single\" for the old false (the fragment's best-MS2 charge) or "
+          "\"separate\" for the old true (one MS3 per observed charge); \"multiplexed\" co-isolates "
+          "them into one MS3.");
     rejectUnknownKeys(charact,
-        {"mode", "protein_sequence", "max_targets", "min_fragment_charge", "ms3_all_charges",
+        {"mode", "protein_sequence", "max_targets", "min_fragment_charge", "fragment_charges",
          "exploration"},
         "characterization");
     {
@@ -413,7 +439,7 @@ namespace OpenMS
       characterization_.protein_sequence = charact.value("protein_sequence", "");
       characterization_.max_targets = charact.value("max_targets", 3);
       characterization_.min_fragment_charge = charact.value("min_fragment_charge", 0);
-      characterization_.ms3_all_charges = charact.value("ms3_all_charges", false);
+      characterization_.fragment_charges = parseChargeMode(charact, "fragment_charges", "characterization");
     }
 
     // --- conditional_ms2 (top-level only) ---
@@ -841,6 +867,7 @@ namespace OpenMS
       throw std::invalid_argument(
           "characterization.mode is not \"off\" but characterization.protein_sequence is empty. "
           "MS3 characterization matches fragments against that sequence.");
+
 
     // The converse of "mode: off does not forbid ms_settings.ms3" -- and the direction that
     // segfaults. Exploration::initiateNextLevel reads next_cfg.scans[0] unguarded, so MS3 being

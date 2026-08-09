@@ -39,6 +39,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Deconvolution.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ProteoformTracker.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
@@ -130,6 +131,10 @@ namespace OpenMS
       ScanCommand originating_cmd{};  ///< MS2 context for buildMS3 (stage 0)
       char fragment_ion_type = '\0';   ///< Fragment ion type (e.g. 'b', 'y') for MS3 scan description
       int fragment_ion_index = 0;      ///< Fragment ion index for MS3 scan description
+      /// The MS3 fragment stage's co-isolation notches (fragment_charges == Multiplexed), captured at
+      /// initiate. The post-sweep production scan rebuilds from the winning variant rather than from
+      /// the Ms3Target, so without this the sweep would multiplex and its production scan would not.
+      std::vector<NotchCandidate> stage1_notches;
       MS3FragmentMatcher::ProteoformContext proteoform_ctx; ///< Cached MS2 proteoform for MS3 scoring
     };
 
@@ -247,7 +252,13 @@ namespace OpenMS
                                       // 9b: per-ion best-MS2 params for MS3 stage[0] (ADR-0003). Defaulted so the
                                       // MS2-exploration caller and direct-initiate tests compile unchanged. Only
                                       // consulted on the MS3 (msn_level>=3) buildMS3 branch.
-                                      const Ms2Params* stage0_params = nullptr);
+                                      const Ms2Params* stage0_params = nullptr,
+                                      // Co-isolation notches for the MS3 fragment stage, when
+                                      // characterization.fragment_charges == Multiplexed (ADR-0016). MS2 variants
+                                      // need no equivalent: they go through buildMS2, which derives its own
+                                      // notches from the PeakGroup it is handed. Stored on the group so the
+                                      // post-sweep production scan can rebuild with the same set.
+                                      const std::vector<NotchCandidate>* stage1_notches = nullptr);
 
     /// Process returning exploration variant: deconvolve with correct precursor context,
     /// score, select winner, trigger next level. Returns FeedResultInfo with commands and metadata.

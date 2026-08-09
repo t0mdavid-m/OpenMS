@@ -115,7 +115,8 @@ namespace OpenMS
       char ion_type, int frag_index,
       const MS3FragmentMatcher::ProteoformContext& proto_ctx,
       const FragmentAnalysis::FragmentScores& frag_scores,
-      const Ms2Params* stage0_params)
+      const Ms2Params* stage0_params,
+      const std::vector<NotchCandidate>* stage1_notches)
   {
     std::vector<ScanCommand> commands;
 
@@ -162,6 +163,9 @@ namespace OpenMS
     group.fragment_ion_type = ion_type;
     group.fragment_ion_index = frag_index;
     group.proteoform_ctx = proto_ctx;
+    // Captured for the post-sweep production scan, which rebuilds from the winning VARIANT rather
+    // than from the Ms3Target and so has no other route to the notch set (ADR-0016).
+    if (stage1_notches != nullptr) group.stage1_notches = *stage1_notches;
 
     for (int i = 0; i < static_cast<int>(variant_params.size()); ++i)
     {
@@ -185,7 +189,7 @@ namespace OpenMS
         cmd = queue.buildMS3(*ms_ctx, variant_config,
                              precursor_mz, charge, isolation_width, ms_ctx->scan_id,
                              ion_type, frag_index, expl_priority, frag_scores,
-                             stage0_params, proto_ctx);
+                             stage0_params, proto_ctx, stage1_notches);
       }
       else
       {
@@ -642,11 +646,14 @@ namespace OpenMS
           wfs.ppm_error = wcmd.ppm_error_s1;
           wfs.precursor_intensity = wcmd.precursor_intensity_s1; 
           wfs.peakgroup_intensity = wcmd.peakgroup_intensity_s1;
+          // group.stage1_notches, not the winning variant's own notches: this rebuilds the fragment
+          // stage from the group's descriptors, and the variant command's notch slots would be read
+          // as stage-0's inherited set by buildMS3's own inheritance step.
           prod_cmd = queue.buildMS3(group.variants[best_idx].cmd, prod_config,
                                      group.precursor_mz, group.precursor_charge,
                                      group.isolation_width, group.variants[best_idx].cmd.scan_id,
                                      group.fragment_ion_type, group.fragment_ion_index, 1, wfs,
-                                     nullptr, group.proteoform_ctx);
+                                     nullptr, group.proteoform_ctx, &group.stage1_notches);
         }
         else
         {
@@ -913,7 +920,8 @@ namespace OpenMS
           frag_pg.push_back(lp_hi);
 
           auto sub_cmds = initiate(next_level, frag_pg, frag_charge, queue, &result.getOriginalSpectrum(), ms_ctx,
-                                   ion_type, target.ion_index, proto_ctx, target.stage1_scores, &target.stage0_params);
+                                   ion_type, target.ion_index, proto_ctx, target.stage1_scores, &target.stage0_params,
+                                   &target.notches);
           nlr.commands.insert(nlr.commands.end(), sub_cmds.begin(), sub_cmds.end());
 
           for (size_t sci = 0; sci < sub_cmds.size(); ++sci)
@@ -950,7 +958,7 @@ namespace OpenMS
           ScanCommand cmd = queue.buildMS3(*ms_ctx, next_scan_config, target.frag_mz, frag_charge,
                                            target.iso_width, ms_ctx->scan_id,
                                            ion_type, target.ion_index, 1, target.stage1_scores, &target.stage0_params,
-                                           proto_ctx);
+                                           proto_ctx, &target.notches);
           cmd.faims_cv = faims_cv;
 
           // Item 2: stamp the MS3 fragment-window SNR onto the command before push (same inputs/formula

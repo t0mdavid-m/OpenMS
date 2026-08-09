@@ -35,6 +35,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
 
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
 #include <OpenMS/DATASTRUCTURES/ListUtils.h>
 
 #include <algorithm>
@@ -324,7 +325,11 @@ FLASHIda::FLASHIda(char* arg) :
       {
         // ===== MS2 (regular): deconvolve -> targeting + follow-ups -> MS3 targeting -> row =====
         double precursor_mass = parent_ctx.mono_mass;
-        int precursor_charge = parent_ctx.stages[0].charge_state;
+        // The HIGHEST charge this scan actually isolated, not the anchor's (ADR-0016). With a
+        // co-isolated charge set every member is genuinely present in the isolation, so a fragment of
+        // the highest member may itself carry that charge; capping at the anchor would discard real
+        // fragments. Identical to stages[0].charge_state whenever there are no notches.
+        int precursor_charge = maxIsolatedCharge(parent_ctx, 0);
         deconv_.deconvolveMSn(mzs, ints, length, rt_min, precursor_mass, precursor_charge);
 
         // Tag-based targeting
@@ -521,7 +526,10 @@ FLASHIda::FLASHIda(char* arg) :
         // Reuse the resolved parent_ctx from the top (gate guarantees num_stages >= 2).
         // Do NOT re-resolve here — the pending entry is already gone.
         // The context-support gate (top of processScan) guarantees parent_ctx.num_stages >= 2 here.
-        const int precursor_charge = parent_ctx.stages[1].charge_state;
+        // Highest charge isolated at the MS3 stage, so a co-isolated fragment charge set keeps its
+        // sub-fragments rather than having them capped at the anchor (ADR-0016). Equals
+        // stages[1].charge_state when there are no notches.
+        const int precursor_charge = maxIsolatedCharge(parent_ctx, 1);
         // Pair the fragment charge with the fragment mass (mono_mass_s1), not the MS2-precursor mass.
         // A consistent (mass,charge) precursor caps MS3 sub-fragment charges to the parent (fragZ <= parentZ).
         const double precursor_mass = parent_ctx.mono_mass_s1;

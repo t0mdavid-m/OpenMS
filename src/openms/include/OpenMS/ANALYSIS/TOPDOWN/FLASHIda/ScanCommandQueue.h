@@ -38,6 +38,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms2Params.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 
@@ -90,7 +91,13 @@ namespace OpenMS
                          char ion_type = '\0', int frag_index = 0, int priority = 1,
                          const FragmentAnalysis::FragmentScores& frag_scores = {},
                          const Ms2Params* stage0_params = nullptr,
-                         const MS3FragmentMatcher::ProteoformContext& proto_ctx = {});
+                         const MS3FragmentMatcher::ProteoformContext& proto_ctx = {},
+                         /// EXTRA co-isolated charge states of the fragment, for
+                         /// characterization.fragment_charges == Multiplexed. Selected by the tracker
+                         /// (Ms3Target::notches) because this builder receives only scalars and cannot
+                         /// see the model's per-charge observations. May be truncated: stage-0's
+                         /// inherited notches are written first and share the same slot budget.
+                         const std::vector<NotchCandidate>* stage1_notches = nullptr);
 
     /// Create an MS1 survey scan command from current config
     ScanCommand makeMS1() const;

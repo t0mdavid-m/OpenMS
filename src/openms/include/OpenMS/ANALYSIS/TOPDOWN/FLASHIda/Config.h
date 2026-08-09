@@ -65,6 +65,22 @@ namespace OpenMS
     AmbiguityResolution    ///< PTM-site bracketing ions
   };
 
+  /// How many charge states of one species a scan acquires, and how (ADR-0016).
+  ///
+  /// The unit of acquisition is a Precursor's *acquisition charge set*, not a single charge.
+  /// Membership is SNR-gated: a charge joins only if its own envelope rises above noise, because a
+  /// charge contributing no signal still consumes part of the scan's ion budget.
+  ///
+  /// This is an acquisition-geometry question, deliberately separate from
+  /// `charge_based_exclusion`, which is an exclusion-KEYING question: that flag decides whether a
+  /// mass already fragmented at one charge stays eligible at another on a LATER survey (ADR-0018).
+  enum class ChargeAcquisitionMode
+  {
+    Single = 0,   ///< One charge per detection -- the representative / best-qscore charge. Default.
+    Separate,     ///< One scan PER charge state; each is its own Precursor with its own model.
+    Multiplexed   ///< ONE scan co-isolating the whole set as notches; one Precursor, one model.
+  };
+
   /// Exploration metric: what to optimize during CE sweep (MS2+ only)
   enum class ExplorationMetric
   {
@@ -178,6 +194,11 @@ namespace OpenMS
     double rt_window = 180.0;
     bool consider_all_charges = false;
     bool charge_based_exclusion = false;  ///< Treat each (mass, charge) as an independent exclusion target (developer flag).
+    /// How many charge states of a selected precursor one MS2 acquires -- from
+    /// precursor_selection.precursor_charges. Orthogonal to charge_based_exclusion above: that flag
+    /// keys EXCLUSION per (mass, charge) and makes a later survey fall back to the next unexcluded
+    /// charge; this decides the isolation GEOMETRY of a single scan (ADR-0016/0018).
+    ChargeAcquisitionMode precursor_charges = ChargeAcquisitionMode::Single;
     // NOTE: there is no hcd_energy here any more. The precursor_selection.HCDEnergy key was deleted
     // (ADR-0014) because its only export, PrecursorSelection::getIsolationWindows(), had zero callers
     // repo-wide. Do not confuse it with ScanCommand::hcd_energy, which is alive and unrelated: that
@@ -239,7 +260,12 @@ namespace OpenMS
     int max_targets = 3;
     int min_fragment_charge = 0;
 
-    bool ms3_all_charges = false;  ///< MS3AllCharges: emit one MS3 per observed charge state of a target fragment (default: single best charge)
+    /// How many charge states of a target FRAGMENT one MS3 acquires -- from
+    /// characterization.fragment_charges. Replaces the bool `ms3_all_charges`, whose two states are
+    /// now Single (the fragment's best-MS2 charge) and Separate (one MS3 per observed charge);
+    /// Multiplexed co-isolates them into one MS3, which is the free direction because synchronous
+    /// precursor selection is one simultaneous waveform rather than N sequential fills.
+    ChargeAcquisitionMode fragment_charges = ChargeAcquisitionMode::Single;
   };
 
   /// Isobaric quantification configuration

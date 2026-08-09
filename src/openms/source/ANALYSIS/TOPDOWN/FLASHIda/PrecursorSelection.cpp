@@ -34,6 +34,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/PrecursorSelection.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
@@ -625,21 +626,41 @@ namespace OpenMS
             // save mass acquisition
             all_mass_rt_map_[nominal_mass] = rt;
 
+            // EVERY charge this scan will actually isolate, not just the anchor. Under
+            // precursor_charges: multiplexed one scan co-isolates a whole set, so recording only the
+            // anchor would leave its siblings eligible and the next survey's fallback would land on a
+            // charge already fragmented (ADR-0018). The set comes from the same
+            // peakGroupNotchCandidates + selectNotches pair buildMS2 uses, so what is recorded as
+            // acquired is by construction what gets isolated. Computed once: both the qscore
+            // accumulation and the RT map below must record the same set.
+            std::vector<int> acquired_charges{charge};
+            if (config_.targeting().precursor_charges == ChargeAcquisitionMode::Multiplexed)
+            {
+              for (const NotchCandidate& n :
+                   selectNotches(peakGroupNotchCandidates(pg, optimal_window_margin_), charge,
+                                 config_.targeting().snr_threshold,
+                                 MAX_ISOLATION_STAGES - 1, "MS2 z=" + std::to_string(charge)))
+                acquired_charges.push_back(n.charge);
+            }
+
             if (config_.targeting().charge_based_exclusion)
             {
               // Per-(mass, charge) accumulation. No mass-level writes — the mass is never globally excluded.
-              const auto key = std::make_pair(nominal_mass, charge);
-              auto inter = mass_charge_qscore_map_.find(key);
-              if (inter == mass_charge_qscore_map_.end())
+              for (int z : acquired_charges)
               {
-                mass_charge_qscore_map_[key] = score;
-              }
-              else {
-                mass_charge_qscore_map_[key] = std::max(inter->second, score);
-              }
-              if (mass_charge_qscore_map_[key] > config_.targeting().tqscore_threshold)
-              {
-                tqscore_exceeding_mass_charge_set_.insert(key);
+                const auto key = std::make_pair(nominal_mass, z);
+                auto inter = mass_charge_qscore_map_.find(key);
+                if (inter == mass_charge_qscore_map_.end())
+                {
+                  mass_charge_qscore_map_[key] = score;
+                }
+                else {
+                  mass_charge_qscore_map_[key] = std::max(inter->second, score);
+                }
+                if (mass_charge_qscore_map_[key] > config_.targeting().tqscore_threshold)
+                {
+                  tqscore_exceeding_mass_charge_set_.insert(key);
+                }
               }
             }
             else {
@@ -680,7 +701,9 @@ namespace OpenMS
             id_charge_map_[window_id_] = charge;
             if (config_.targeting().charge_based_exclusion)
             {
-              mass_charge_rt_map_[{nominal_mass, charge}] = rt;
+              // Same set as the qscore accumulation above — a co-isolated charge whose RT entry is
+              // missing would be evicted from exclusion on a different schedule from its siblings.
+              for (int z : acquired_charges) mass_charge_rt_map_[{nominal_mass, z}] = rt;
             }
             trigger_ids_.push_back(window_id_);
             window_id_++;

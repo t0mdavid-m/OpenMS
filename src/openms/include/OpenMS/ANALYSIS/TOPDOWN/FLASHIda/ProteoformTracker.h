@@ -39,6 +39,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms2Params.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 #include <OpenMS/config.h>
@@ -90,6 +91,10 @@ namespace OpenMS
     double iso_width = 0;       ///< PeakGroup m/z span for the MS3 isolation; floored at 2.0 Th at emission (ScanCommandQueue.cpp)
     Ms2Params stage0_params;    ///< Per-ion best MS2 params -> MS3 stage[0] (ADR-0003)
     FragmentAnalysis::FragmentScores stage1_scores;  ///< Stage-1 fragment scores -> buildMS3 (so MS3 *_s1 columns are real, not 0)
+    /// EXTRA co-isolated charge states of THIS SAME fragment, for characterization.fragment_charges
+    /// == Multiplexed. Empty in every other mode. The tracker selects them because buildMS3 receives
+    /// only scalars and has no access to the model's per-charge observations (ADR-0016).
+    std::vector<NotchCandidate> notches;
   };
 
   /// Key identifying a fragment ion: (ion_type, ion_index)
@@ -115,7 +120,7 @@ namespace OpenMS
     int cover_start = 0, cover_end = 0;    ///< 1-based inclusive, proteoform frame
     double theoretical_mass = 0;
     std::optional<FragmentObservation> best_ms2, best_ms3;
-    std::unordered_map<int, FragmentObservation> ms2_by_charge;  ///< Best (highest-intensity) MS2 obs per charge state (for MS3AllCharges)
+    std::unordered_map<int, FragmentObservation> ms2_by_charge;  ///< Best (highest-intensity) MS2 obs per charge state (drives characterization.fragment_charges: separate/multiplexed)
     int n_ms2 = 0, n_ms3 = 0;
   };
 
