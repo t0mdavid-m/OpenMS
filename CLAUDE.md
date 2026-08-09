@@ -314,6 +314,36 @@ the caller's responsibility.
   columns are forced to `"0"` (`"none"` for activation) so a tab-splitting parser doesn't drop
   trailing empty fields and tokenize the row one column short. The test TSV parser carries the
   mirror-image guard (hand-splits to N+1 fields for N tabs).
+- **Co-isolation notches add a SECOND delimiter inside the per-stage columns** (ADR-0016): `charge`,
+  `precursor_mz` and `isolation_width` carry `','`-joined notches *within* each `';'` stage group, e.g.
+  `"17,16,15;4,5"`. It mirrors the wire grammar, so the row records what was commanded rather than
+  only the anchor window. Collision energy and activation do **not** gain the axis — all notches of a
+  stage fire into one fragmentation event. With `precursor_charges`/`fragment_charges` at their
+  `single` default no notch exists, so these columns stay byte-identical.
+
+## Co-isolation notches (ADR-0016)
+
+**`num_stages` counts cascade stages and NEVER notches.** This is load-bearing: `processScan`'s
+context gate, `syncEnergyMirrors_`, `Exploration`'s `si = num_stages - 1` and C# `ScanFactory`'s
+clamp all key on it, and stay correct only while it means MSⁿ depth.
+
+Notch descriptors live in **`stages[num_stages …]`** — the slots the engine never wrote — packed
+stage-0's first, then stage-1's, with counts in `stage0_notch_count` / `stage1_notch_count` (carved
+from `reserved_`, 596 → 588). **Stage 1's notches therefore begin at
+`num_stages + stage0_notch_count`, not at a fixed slot**; use `notchesForStage()` rather than
+open-coding that, and when writing, write stage 0 first or stage-1's land where the accessor looks for
+stage-0's. Capacity is `MAX_ISOLATION_STAGES - num_stages`, which is also the instrument's own
+10-value `PrecursorMass` limit.
+
+`NotchSelection.h` holds the whole policy — SNR gate, descending-SNR order, clamp-with-report — plus
+`peakGroupNotchCandidates`, shared by `PrecursorSelection` (which records the acquired set for
+charge-keyed exclusion) and `buildMS2` (which writes the geometry), so the set recorded as acquired is
+by construction the set isolated.
+
+Two things notches deliberately do **not** carry: per-notch **scores** (the slots hold geometry only,
+and the `*_s1` block is two-stage, so `charge_snr`/`precursor_intensity` remain the anchor's), and a
+redefined **`window_snr`** (it feeds exploration's `RemainingPrecursor` scoring, so it stays the anchor
+window's purity rather than a union).
 - **Delimiters: `';'` everywhere EXCEPT id lists, which use a space.** `child_ids` and
   `contributing_scan_ids` join with `' '` because base-94 tracking ids draw from 0x21–0x7E, which
   **includes `';'`** (an id like `!!;` would collide); space is the only printable char the alphabet
