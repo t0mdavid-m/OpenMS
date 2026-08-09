@@ -286,7 +286,12 @@ Traps worth internalizing before touching config code:
 
 ## Logging (`FLASHIda/IdaLogger.cpp`)
 
-Five append-only streams, all opt-in per config path. `IdaLogger` is **lock-agnostic** — locking is
+Five append-only streams under **one folder**, `runtime.log_dir`, joined with the fixed basenames
+below. All five open together or none do — an empty `log_dir` opens nothing, which is how a fixture
+with no `runtime` section (or `"runtime": {}`) logs nothing. `IdaLogger` never creates the
+directory: the host does, and a missing one leaves every stream silently closed. Note the authored
+`method.json` layer gives `""` the *opposite* meaning (`.` = the working directory) — ADR-0015.
+`IdaLogger` is **lock-agnostic** — locking is
 the caller's responsibility.
 
 | Stream | Cols | Role |
