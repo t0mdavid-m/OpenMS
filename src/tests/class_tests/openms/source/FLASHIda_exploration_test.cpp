@@ -1281,6 +1281,35 @@ START_SECTION(ms2_exploration_fixed_ce_ms3_carries_parent_context)
 }
 END_SECTION
 
+START_SECTION(ms3_exploration_variants_do_not_retain_parent_contexts)
+{
+  // Companion to the section above: contexts must be RETIRED as well as seeded. An MS3 exploration
+  // variant is dispatched through the same initiateNextLevel path as a regular MS3, so it gets a
+  // parent-MS2 context — but it returns on the EXPLORATION branch, which never reads the cache, and
+  // only the regular MS3 branch erased. Every variant therefore left a permanent entry, growing for
+  // the lifetime of the engine. Unobservable in the logs (a tracking id is resolved out of the pending
+  // map exactly once, so an erased entry can never be re-read), which is why nothing caught it.
+  //
+  // Here all MS3 variants are fed back, so a correct engine ends with an empty cache.
+  auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
+  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
+
+  std::string cfg_str = inclusionPinCytc(ms3_exploration_config);
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(cfg_str.c_str()));
+
+  const int budget = 256 + 64 * static_cast<int>(ms1_scans.size() + 1);
+  AcqResult a = runInterleaved(ida, ms1_scans, std::vector<ScanData>{ms2_scans[0]}, nullptr,
+                               budget, /*single_group_only=*/true);
+  ABORT_IF(a.ms3_cmds.empty())   // nothing to retain if nothing was dispatched
+
+  // runInterleaved feeds every MS3 command it dequeues, and it terminates on idle>=3 (all workload
+  // queues drained), so every dispatched MS3 has returned and consumed its context by now.
+  TEST_EQUAL(FLASHIdaTestAccess::ms2ContextCacheSize(*ida), 0)
+  delete ida;
+}
+END_SECTION
+
 START_SECTION(ms2_exploration_production_winner_then_ms3)
 {
   // Overrides NON-empty branch: with an exploration override set, the MS2-exploration winner is

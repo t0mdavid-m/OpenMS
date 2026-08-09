@@ -466,6 +466,15 @@ FLASHIda::FLASHIda(char* arg) :
         for (auto& kv : expl_result.ms3_context_cache)
           ms2_context_cache_[kv.first] = kv.second;
 
+        // Retire this variant's own cache entry (a different key from the ones just seeded above, which
+        // belong to newly built commands). An MS3 exploration variant is dispatched through the same
+        // initiateNextLevel path as a regular MS3, so it was given a parent-MS2 context — but it returns
+        // HERE, and this branch never reads the cache. Without the erase the entry lives for the rest of
+        // the run: nothing else is keyed on it and only the regular MS3 branch erases. Matches the
+        // established one-shot policy (a context is consumed by the scan it was minted for, so a
+        // duplicate or late MS3 yields no row).
+        ms2_context_cache_.erase(parent_tracking_id);
+
         int expl_mass_count = exploration_.explorationDeconvMassCount();
         const DeconvolvedSpectrum* expl_spec = exploration_.explorationDeconvSpectrum();
         std::string parent_id(expl_result.parent_scan_id);
@@ -561,14 +570,17 @@ FLASHIda::FLASHIda(char* arg) :
                 ms3_tic = r > 1.0f ? 1.0f : r;
               }
               id_rows.push_back({parent_id_str, 3, 'R', cached_ms2_ctx, ms3_matches[0], precursor_id, ms3_tic, ms3_matches[0].score});
-              // @Claude resolve has values (as mentioned previously)
-              if (resolved.has_value() && resolved->num_stages >= 2 && ms3_spec != nullptr)
+              // parent_ctx, not resolved-> : `resolved` is unconditionally non-empty here (the top of
+              // processScan returns on an empty resolve) and parent_ctx is its value. num_stages >= 2 is
+              // likewise guaranteed by the context-support gate for ms_level 3, and ms3_spec != nullptr by
+              // the enclosing if. Those three guards were always true, and reading them the other way --
+              // as if a stage-less MS3 could reach this point -- is what they cost.
               {
-                Ms2Params parent_ms2_params{resolved->stages[0].collision_energy,
-                                            std::string(resolved->stages[0].activation_type),
-                                            resolved->stages[0].reaction_time};
-                tracker_.feedScan(precursor_id, 3, parent_ms2_params,parent_tracking_id, *ms3_spec,
-                                  ms3_matches[0], ms3_matches[0].score, *resolved);
+                Ms2Params parent_ms2_params{parent_ctx.stages[0].collision_energy,
+                                            std::string(parent_ctx.stages[0].activation_type),
+                                            parent_ctx.stages[0].reaction_time};
+                tracker_.feedScan(precursor_id, 3, parent_ms2_params, parent_tracking_id, *ms3_spec,
+                                  ms3_matches[0], ms3_matches[0].score, parent_ctx);
                 if (cached_ms2_ctx.fragment_ion_type != '\0')
                 {
                   const std::string trig = std::string(1, cached_ms2_ctx.fragment_ion_type)
@@ -582,18 +594,14 @@ FLASHIda::FLASHIda(char* arg) :
           }
         }
 
-        std::string parent_id;
-        if (resolved.has_value())
-          parent_id = std::string(resolved->parent_scan_id);
+        std::string parent_id(parent_ctx.parent_scan_id);
 
-        // 2-stage CE/activation/reaction = MS2 isolation stage ; MS3 fragmentation stage.
-        std::string ms3_collision_energy = "0", ms3_activation_type = "", ms3_reaction_time = "0";
-        if (resolved.has_value() && resolved->num_stages >= 2)
-        {
-          ms3_collision_energy = std::to_string(resolved->stages[0].collision_energy) + ";" + std::to_string(resolved->stages[1].collision_energy);
-          ms3_activation_type  = std::string(resolved->stages[0].activation_type) + ";" + std::string(resolved->stages[1].activation_type);
-          ms3_reaction_time    = std::to_string(resolved->stages[0].reaction_time) + ";" + std::to_string(resolved->stages[1].reaction_time);
-        }
+        // 2-stage CE/activation/reaction = MS2 isolation stage ; MS3 fragmentation stage. Always the
+        // two-stage form: the context-support gate rejects an ms_level-3 scan whose command carries
+        // fewer than 2 stages, so the single-stage "0"/""/"0" fallback this used to keep was dead.
+        std::string ms3_collision_energy = std::to_string(parent_ctx.stages[0].collision_energy) + ";" + std::to_string(parent_ctx.stages[1].collision_energy);
+        std::string ms3_activation_type  = std::string(parent_ctx.stages[0].activation_type) + ";" + std::string(parent_ctx.stages[1].activation_type);
+        std::string ms3_reaction_time    = std::to_string(parent_ctx.stages[0].reaction_time) + ";" + std::to_string(parent_ctx.stages[1].reaction_time);
         // Fill scan_results row (pure acquisition event): identification payload moved off scan_results —
         // the MS3 fragment proteoform is on scan_commands.ms3_proteoform; matched_protein/tic on identification.
         // commands_pushed keeps its 0 default; child_ids empty; exploration fields at defaults.
