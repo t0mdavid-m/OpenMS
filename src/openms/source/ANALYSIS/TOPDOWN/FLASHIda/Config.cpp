@@ -292,7 +292,8 @@ namespace OpenMS
     rejectUnknownKeys(ps,
         {"rt_window", "targeting", "consider_all_charges", "charge_based_exclusion",
          "strict_inclusion", "tie_threshold",
-         "rank_by", "max_precursors", "min_precursor_charge", "additional_scans", "exploration"},
+         "rank_by", "max_precursors", "min_precursor_charge", "additional_scans", "exploration",
+         "tag_expansion"},
         "precursor_selection");
     targeting_.rt_window = ps.value("rt_window", 180.0);
     targeting_.consider_all_charges = ps.value("consider_all_charges", false);
@@ -319,16 +320,26 @@ namespace OpenMS
     if (targeting_.mode == 1)
       std::cout << "Inclusion mode: " << (targeting_.strict_inclusion ? "strict" : "non-strict") << "\n";
 
+    // tag_expansion: these two used to sit in `flashtnt`, which was a misnomer -- neither is a
+    // FLASHTagger/FLASHExtender Param. max_ptm_count is read only by
+    // PrecursorSelection::generatePTMCombinations_, and max_flanking_mass_diff is a call argument
+    // FLASHIda passes to the static FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs.
+    // Both belong to FLASHIda's tag-based target expansion, so they are authored where that feature
+    // lives. STORAGE IS DELIBERATELY UNCHANGED (still TargetingConfig): this is a parse-path move
+    // only, so every read site keeps working untouched. The old flashtnt placement now fails through
+    // the ordinary unknown-key path -- no migration message, by design.
+    auto te = ps.value("tag_expansion", json::object());
+    rejectUnknownKeys(te, {"max_ptm_count", "max_flanking_mass_diff"}, "precursor_selection.tag_expansion");
+    targeting_.max_total_ptm_count = te.value("max_ptm_count", 3);
+    targeting_.max_flanking_mass_diff = te.value("max_flanking_mass_diff", 50000.0);
+
     // --- flashtnt section (FLASHTagger/FLASHExtender tuning) ---
     auto flashtnt = config.value("flashtnt", json::object());
     rejectUnknownKeys(flashtnt,
-        {"min_length", "max_length", "max_ptm_count", "max_flanking_mass_diff", "allow_gap",
-         "max_aa_in_gap", "max_blind_mod_count", "max_mod_mass", "fixed_mod"},
+        {"min_length", "max_length", "allow_gap", "max_aa_in_gap", "max_blind_mod_count", "max_mod_mass", "fixed_mod"},
         "flashtnt");
     targeting_.min_tag_length = flashtnt.value("min_length", 3);
     targeting_.max_tag_length = flashtnt.value("max_length", 8);
-    targeting_.max_total_ptm_count = flashtnt.value("max_ptm_count", 3);
-    targeting_.max_flanking_mass_diff = flashtnt.value("max_flanking_mass_diff", 50000.0);
     targeting_.allow_gap = flashtnt.value("allow_gap", false);
     targeting_.max_aa_in_gap = flashtnt.value("max_aa_in_gap", 2);
     targeting_.max_blind_mod_count = flashtnt.value("max_blind_mod_count", 2);
