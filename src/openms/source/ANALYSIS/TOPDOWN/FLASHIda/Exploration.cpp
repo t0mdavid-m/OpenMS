@@ -659,7 +659,7 @@ namespace OpenMS
 
         info.commands.push_back(prod_cmd);
         if (group.msn_level >= 3)
-          info.ms3_context_cache.emplace_back(prod_cmd.scan_id, buildMS2ContextForVariant(best_idx));
+          info.ms2_context_cache.emplace_back(prod_cmd.scan_id, buildMS2ContextForVariant(best_idx));
       }
       // inititate next level - @Claude make interface more generic. Should be for last level with selection criterion
       else if (group.msn_level < 3)
@@ -680,7 +680,7 @@ namespace OpenMS
         for (size_t i = 0; i < next_nlr.commands.size() && i < next_nlr.ms3_contexts.size(); ++i)
         {
           if (next_nlr.commands[i].msn_level >= 3)
-            info.ms3_context_cache.emplace_back(next_nlr.commands[i].scan_id, next_nlr.ms3_contexts[i]);
+            info.ms2_context_cache.emplace_back(next_nlr.commands[i].scan_id, next_nlr.ms3_contexts[i]);
         }
       }
       else  // overrides empty && msn_level >= 3: MS3 exploration with no production scan -> fold the winning variant now @Claude should be more generic and happen after all winning variants or if a production scan is found.
@@ -849,7 +849,11 @@ namespace OpenMS
 
       auto targets = tracker->planNextScans(precursor_id);
 
-      // @Claude this should be bound by num_tartgets
+      // Already bounded: planNextScans stops adding once targets.size() == config_.level(2).max_targets,
+      // which is the same value num_targets was read from above (this_cfg == level 2). The two skips below
+      // (charge floor, unisolatable frag_mz) can only yield fewer targets, never more. NB with MS3
+      // exploration on, each target still fans out into one command PER CE VARIANT -- the budget bounds
+      // targets, not commands.
       for (const Ms3Target& target : targets)
       {
         const int frag_charge = std::abs(target.frag_charge);

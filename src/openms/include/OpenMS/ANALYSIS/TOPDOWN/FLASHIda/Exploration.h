@@ -221,7 +221,10 @@ namespace OpenMS
       /// production MS3 re-acquisition (overrides set) and the next-level dispatch an MS2 group makes
       /// when it has no production scan. Leaving the second one out meant those MS3s were acquired and
       /// then silently unidentified — the cache miss skips the whole identification block.
-      std::vector<std::pair<int, MS2Context>> ms3_context_cache;
+      ///
+      /// Named for the CONTENT (an MS2 context), not the consumer level, matching the engine member it
+      /// feeds. It was `ms3_context_cache`, which read as "a cache of MS3 contexts".
+      std::vector<std::pair<int, MS2Context>> ms2_context_cache;
     };
 
     /// Construct with a reference to the shared Config and FragmentAnalysis

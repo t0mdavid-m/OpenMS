@@ -282,9 +282,10 @@ FLASHIda::FLASHIda(char* arg) :
           precursor_id_by_tracking_[c.scan_id] = precursor_id;
           queue_.push(c); 
         }
-        // @Claude this should be called ms2 context cache
-        for (auto& kv : expl_result.ms3_context_cache)
-          ms2_context_cache_[kv.first] = kv.second;
+        // Seed the parent-MS2 context of every MS3 this group dispatched, so each one identifies when it
+        // returns on the regular MS3 path. Empty unless the group cascaded to MS3.
+        for (const auto& [ms3_scan_id, parent_ms2_context] : expl_result.ms2_context_cache)
+          ms2_context_cache_[ms3_scan_id] = parent_ms2_context;
 
         int expl_mass_count = exploration_.explorationDeconvMassCount();
         const DeconvolvedSpectrum* expl_spec = exploration_.explorationDeconvSpectrum();
@@ -462,9 +463,10 @@ FLASHIda::FLASHIda(char* arg) :
           precursor_id_by_tracking_[c.scan_id] = precursor_id;
           queue_.push(c); 
         }
-        // @Claude this should be called ms2_context cache; also resolve key and value (presumably scan id : parent_ctx) by name so its more legible
-        for (auto& kv : expl_result.ms3_context_cache)
-          ms2_context_cache_[kv.first] = kv.second;
+        // Seed the parent-MS2 context of the production MS3 a completed MS3 group re-acquires (overrides
+        // set); that scan is not a variant, so it returns on the regular MS3 path and needs the lookup.
+        for (const auto& [ms3_scan_id, parent_ms2_context] : expl_result.ms2_context_cache)
+          ms2_context_cache_[ms3_scan_id] = parent_ms2_context;
 
         // Retire this variant's own cache entry (a different key from the ones just seeded above, which
         // belong to newly built commands). An MS3 exploration variant is dispatched through the same
