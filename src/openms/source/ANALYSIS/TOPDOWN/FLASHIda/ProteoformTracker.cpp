@@ -46,7 +46,22 @@
 #include <sstream>
 #include <string>
 #include <vector>
-// @Claude all identification calls should be made here; even for exploration rows this should return the fragment count while staging the ms2. This keeps responsibilities in tact and avoids costly rerunning of identification workflows.
+// Identification entry points already live here as statics -- identifyExplorationFragments,
+// selectNextLevelTargets, scoreCalibratedVariants -- and Exploration calls into them rather than
+// driving FLASHTagger/FLASHExtender itself (Exploration::computeFragmentMatch_ is a marshalling
+// wrapper around the first). So the responsibility split is largely in place.
+//
+// What is NOT in place, recorded here so it is not rediscovered from scratch: an MS3 FragmentCount
+// exploration group of N variants identifies each variant's spectrum TWICE. Once per variant on the
+// feed path (computeExplorationScore_ -> computeFragmentMatch_, every metric branch calls it), then all
+// N again in scoreCalibratedVariants once all_received flips -- which re-matches from scratch by
+// design, two-pass calibration plus a tight-tolerance rematch, and deliberately reuses nothing from
+// the feed path. MS2 groups pay this once; only MS3 FragmentCount doubles.
+//
+// Whether the two passes are interchangeable is the open question: they run at different tolerances
+// (exploration_tolerance_ppm vs LOOSE_TOLERANCE_PPM then level tolerance) and, since ADR-0002, against
+// different contexts (the triggering scan's render context vs the tracker's live winner). So this is a
+// caching problem with a correctness precondition, not a code-motion problem, and it is not addressed.
 namespace OpenMS
 {
 

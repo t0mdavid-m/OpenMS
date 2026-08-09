@@ -362,7 +362,12 @@ namespace OpenMS
     info.fragmentation.collision_energy = v.collision_energy;
     info.fragmentation.activation_type = v.activation_type;
     info.fragmentation.reaction_time = v.reaction_time;
-    // @Claude Please implement this more generically. At some point we might want to add MS4 or whatever
+    // Two-level only by construction: FragmentationInfo carries exactly one stage0_* triplet, so this
+    // records "the isolation stage before the fragmentation stage" and nothing deeper. Generalizing to
+    // MS4+ means a per-stage vector here AND in the scan_results CE/activation/reaction columns, which
+    // are emitted as a fixed "stage0;stage1" pair (IdaLogger) and golden-locked in that shape. Deliberately
+    // not built for: there is no MS4 path to validate it against. The other wall is the `msn_level < 3`
+    // cascade test in feedResultImpl_.
     if (group.msn_level >= 3 && v.cmd.num_stages >= 2)
     {
       info.fragmentation.stage0_collision_energy = v.cmd.stages[0].collision_energy;
@@ -397,7 +402,10 @@ namespace OpenMS
     std::strncpy(info.parent_scan_id, parent_enc.c_str(), 3);
     info.parent_scan_id[3] = '\0';
     
-    // @Claude solve inline and make generic for ms3
+    // Renders the group's MS2Context for one variant. Reads group.proteoform_ctx (the TRIGGERING scan's
+    // render context, not the winner) and the variant's own command, so it is correct at any point in
+    // feedResult; it is a lambda rather than a member because it closes over `group`. Note the name is
+    // literal: the value describes the MS2 that produced the group, even when the group is at MS3.
     auto buildMS2ContextForVariant = [&](int group_variant_index)
     {
       MS2Context ctx;
@@ -661,7 +669,12 @@ namespace OpenMS
         if (group.msn_level >= 3)
           info.ms2_context_cache.emplace_back(prod_cmd.scan_id, buildMS2ContextForVariant(best_idx));
       }
-      // inititate next level - @Claude make interface more generic. Should be for last level with selection criterion
+      // Cascade to the next level. The `< 3` is the MS4 wall: it says "MS2 groups cascade, MS3 groups are
+      // terminal" where the general rule would be "cascade while the next level has a selection criterion"
+      // -- which initiateNextLevel already checks for itself (next_cfg.selection == None returns empty).
+      // Dropping the literal would make this level-agnostic here, but the levels beneath it are not:
+      // config_ only ever materializes {1,2,3}, buildMS3 hardcodes a 2-stage command, and the logging
+      // emits a fixed stage0;stage1 pair. Not generalized -- no MS4 path exists to validate it.
       else if (group.msn_level < 3)
       {
         auto next_nlr = initiateNextLevel(group.msn_level,
@@ -683,7 +696,13 @@ namespace OpenMS
             info.ms2_context_cache.emplace_back(next_nlr.commands[i].scan_id, next_nlr.ms3_contexts[i]);
         }
       }
-      else  // overrides empty && msn_level >= 3: MS3 exploration with no production scan -> fold the winning variant now @Claude should be more generic and happen after all winning variants or if a production scan is found.
+      // overrides empty && msn_level >= 3: an MS3 exploration group with no production scan. Nothing else
+      // will fold this group's result into the trajectory -- the production-MS3 branch above folds via the
+      // returning scan and the cascade branch has no MS3 to fold -- so the winning variant is folded here,
+      // inline, at group completion. Known asymmetry, not generalized: folding is per-group, so a precursor
+      // whose fragments are explored in several groups folds each winner as its group closes rather than
+      // once at the end. That only matters if a later group should be able to revise an earlier fold.
+      else
       {
         if (tracker != nullptr && group.fragment_ion_type != '\0')
         {
@@ -751,8 +770,12 @@ namespace OpenMS
         ? std::string(ms_ctx->stages[0].activation_type)
         : config_.level(msn_level).scans[0].activation;
 
-    // Get fragment ion targets via FragmentAnalysis
-    // @Claude should completely move to proteoform tracker
+    // Get fragment ion targets. The SELECTION already lives on ProteoformTracker
+    // (selectNextLevelTargets, below); what remains here is the out-parameter marshalling it inherited
+    // from the C-style signature. Seven parallel arrays go in and only two come back out meaningfully --
+    // frag_result and qscores (summed into tic_coverage). masses/charges/wstarts/wends/ion_types/
+    // frag_indices/frag_scores are filled and never read again, because the real target descriptors
+    // arrive later via tracker->planNextScans. Collapsing them is safe but touches the shared signature.
     DeconvolvedSpectrum result_copy = result;
     std::vector<double> masses(num_targets), qscores(num_targets);
     std::vector<double> wstarts(num_targets), wends(num_targets);
@@ -787,8 +810,10 @@ namespace OpenMS
       if (proto_ctx.region_end < 0) proto_ctx.region_end = static_cast<int>(seq.size());
     }
 
-    // Populate fragment matching metadata
-    // @Claude this logic should move into ProteoformTracker
+    // Populate fragment matching metadata. This is report assembly, not identification -- the match was
+    // produced by ProteoformTracker::selectNextLevelTargets above; these lines only shape it for the
+    // caller's log rows. Moving it onto the tracker would give it a caller-facing return type it does not
+    // otherwise need, so it stays here by choice, not by oversight.
     nlr.fragment_count = frag_result.total_match_count;
     nlr.proteoform_match = frag_result;
     if (!seq.empty() && found > 0)
@@ -820,7 +845,11 @@ namespace OpenMS
     if (tracker != nullptr && next_level >= 3 && ms_ctx != nullptr && ms_ctx->num_stages > 0
         && !frag_result.proteoform_sequence.empty() && !frag_result.fragments.empty())
     {
-      // @Claude bail early if the ProteoformModel does not exist.
+      // NOT a bail: this block RUNS when no model exists. It is the one-shot baseline for the
+      // non-exploration MS2->MS3 path, where nothing upstream has fed the tracker -- the MS2 exploration
+      // path finalizes its own model in feedResult, so `existing` is already populated there and this is
+      // skipped. Turning it into an early-out would leave the regular path with no model, and
+      // planNextScans below returns zero targets without one: no MS3 at all, silently.
       const ProteoformModel* existing = tracker->getModel(precursor_id);
       if (existing == nullptr || existing->proteoform_sequence.empty())
       {
