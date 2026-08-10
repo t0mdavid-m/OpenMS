@@ -406,11 +406,20 @@ namespace OpenMS
           }
         }
 
+        // The budget counts SPECIES, not acquisitions. It matters only for
+        // precursor_charges: "separate", which emits one scan per charge state of ONE species and must
+        // cost one slot for the whole envelope -- exactly what "multiplexed" costs for the same envelope
+        // in a single scan. Counting acquisitions instead would make max_precursors: 3 spend everything
+        // on the first species the moment it had three charges. In every other mode a PeakGroup pushes at
+        // most once, so this equals selected_peak_groups_.size() and nothing changes.
+        Size species_selected = 0;
+
         // Iterate over candidates (sorted by qscore)
         for (const auto& pg : deconv_.deconvolvedMS1())
         {
           // dont acquire the same mass multiple times
-          if (selected_peak_groups_.size() >= mass_count) { break; }
+          if (species_selected >= mass_count) { break; }
+          const size_t pushed_before_pg = selected_peak_groups_.size();
 
           struct ChargeCandidate { int charge; double score; };
           std::vector<ChargeCandidate> charges_to_process;
@@ -445,7 +454,11 @@ namespace OpenMS
 
           for (const auto& cc : charges_to_process)
           {
-            if (selected_peak_groups_.size() >= mass_count) { break; }
+            // No budget check for the additional charges of THIS species under "separate": the slot was
+            // already paid for by the per-PeakGroup guard above, and the mode's contract is the whole
+            // SNR-positive envelope. The set is bounded by the observed charge range and the SNR gate.
+            if (config_.targeting().precursor_charges != ChargeAcquisitionMode::Separate
+                && selected_peak_groups_.size() >= mass_count) { break; }
             int charge = cc.charge;
             double score = cc.score;
 
@@ -735,12 +748,14 @@ namespace OpenMS
             // (precursor_selection.precursor_charges: "separate") rather than as a side effect here.
             //
             // Separate is that mode: it keeps walking charges_to_process, so this PeakGroup yields one
-            // acquisition PER charge state, each its own Precursor with its own model. It is bounded by
-            // mass_count exactly as before (the guard at the top of this loop), so it spends the
-            // max_precursors budget on (mass, charge) pairs -- which is the whole point of asking for
-            // it, and also why it needs max_precursors > 1 to do anything at all.
+            // acquisition PER charge state, each its own Precursor with its own model -- and the whole
+            // envelope costs ONE budget slot, the same as multiplexing it into a single scan costs. The
+            // two modes therefore differ only in scan count, never in how much budget a species buys.
             if (config_.targeting().precursor_charges != ChargeAcquisitionMode::Separate) break;
           }  // end for charges_to_process
+
+          // One species consumed, however many acquisitions it produced.
+          if (selected_peak_groups_.size() > pushed_before_pg) ++species_selected;
         }
       }
     }

@@ -502,18 +502,22 @@ namespace OpenMS
 
     // --- 2) Emit Ms3Targets, budget-bounded ---------------------------------------------------------
     // Single (default): one target per fragment from best_ms2 — byte-identical to the pre-mode build.
-    // Separate: one target per observed charge state, strongest first. The budget counts
-    //   (fragment, charge) PAIRS, so a fragment seen at three charges consumes three of it and the
-    //   whole budget can go on one cleavage site.
-    // Multiplexed: one target per FRAGMENT again, carrying the other SNR-positive charges as notches.
-    //   The budget therefore counts fragments, and the same three slots buy three cleavage sites
-    //   instead of three charges of one site. That reversal is the point of the mode (ADR-0016).
+    // Separate: one target per observed charge state of the fragment, strongest first — N scans.
+    // Multiplexed: ONE target carrying the other SNR-positive charges as notches — 1 scan.
+    //
+    // THE BUDGET COUNTS FRAGMENTS IN ALL THREE. Separate and Multiplexed both acquire one fragment's
+    // whole envelope and both cost one slot for it; they differ only in scan count. Counting emitted
+    // targets instead would make max_targets: 3 spend everything on the first fragment that happened to
+    // be seen at three charges, characterising ONE cleavage site — which is the pathology the modes
+    // exist to avoid, not to reproduce (ADR-0016).
     const ChargeAcquisitionMode charge_mode = config_.characterization().fragment_charges;
     const double snr_threshold = config_.targeting().snr_threshold;
     std::vector<Ms3Target> out;
+    int fragments_selected = 0;
     for (const MappedFragment* f : targets)
     {
-      if (static_cast<int>(out.size()) >= budget) break;
+      if (fragments_selected >= budget) break;
+      const size_t emitted_before_fragment = out.size();
       // Build the per-charge observation list to emit for this fragment.
       std::vector<const FragmentObservation*> obs_list;
       if (charge_mode == ChargeAcquisitionMode::Separate && !f->ms2_by_charge.empty())
@@ -547,7 +551,11 @@ namespace OpenMS
       }
       for (const FragmentObservation* o : obs_list)
       {
-        if (static_cast<int>(out.size()) >= budget) break;
+        // No budget check on the additional charges of THIS fragment under "separate": the slot was
+        // paid for by the per-fragment guard above, and the mode's contract is the whole envelope. In
+        // the other two modes obs_list holds exactly one entry, so this is unchanged for them.
+        if (charge_mode != ChargeAcquisitionMode::Separate
+            && static_cast<int>(out.size()) >= budget) break;
         Ms3Target t;
         t.ion_type = f->ion_type;
         t.ion_index = f->ion_index;
@@ -560,6 +568,8 @@ namespace OpenMS
         t.notches = frag_notches;  // empty unless fragment_charges == Multiplexed
         out.push_back(std::move(t));
       }
+      // One fragment consumed, however many targets it produced.
+      if (out.size() > emitted_before_fragment) ++fragments_selected;
     }
     return out;
   }
