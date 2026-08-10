@@ -1085,11 +1085,133 @@ START_SECTION(ms3_exploration_winner_selection_and_cleanup)
   TEST_EQUAL(last_info.group.winner_tracking_id.empty(), false)
   TEST_EQUAL(last_info.group.winner_tracking_id, std::string(cmds[4].scan_description).substr(0, 3))
 
-  // With synthetic data there is no identified model, so the model gate in
-  // feedResultImpl_() does not fire and initiateNextLevel returns 0 commands
-  // (the legacy MS3 emitter is gone as of M3).
   // MS3 command format (num_stages=2, priority=1) is verified in
   // ms3_exploration_variants_use_buildMS3 via the initiate() path.
+  //
+  // ADR-0020: mass_count is a MEASURING metric, so a completed MS3 group re-acquires even though
+  // overrides is empty. This used to assert nothing and merely comment "returns 0 commands" — which
+  // was true then, and is the exact defect ADR-0020 fixes (a measuring MS3 sweep left no evidence at
+  // all). The cascade branch is NOT what produced this: an MS3 group is terminal (msn_level < 3 is
+  // false), so the one command here can only be the production re-acquisition.
+  TEST_EQUAL(static_cast<int>(last_info.commands.size()), 1)
+  TEST_EQUAL(last_info.commands[0].msn_level, 3)
+  TEST_EQUAL(last_info.commands[0].num_stages, 2)
+  TEST_EQUAL(last_info.commands[0].priority, 1)
+  // Production, not a variant: it must return on the REGULAR MS3 path (marker 'R', not 'E'), which is
+  // the whole point — that path runs the calibrated matcher against the live winner.
+  TEST_EQUAL(std::string(last_info.commands[0].scan_description)[3], 'R')
+  // ...and the regular path resolves its parent MS2 context out of the cache, so the caller must be
+  // handed a seed for it. A miss there silently skips identification (the FLASHIda.cpp comment on the
+  // MS2->MS3 cascade records exactly that failure), which would reintroduce the bug one layer down.
+  TEST_EQUAL(static_cast<int>(last_info.ms2_context_cache.size()), 1)
+  TEST_EQUAL(last_info.ms2_context_cache[0].first, last_info.commands[0].scan_id)
+  // The production CE is the WINNER's, not the level default (25) and not the completing variant's
+  // (cmds[5], CE 35). mass_count scores spec.size(), so variant_index 3 — 8 peak groups, cmds[4],
+  // CE 30 on the 15/20/25/30/35 grid — won. Reading it off cmds[4] rather than hard-coding 30 keeps
+  // the assertion true if the fixture's sweep grid is ever retuned.
+  TEST_REAL_SIMILAR(last_info.commands[0].stages[1].collision_energy,
+                    cmds[4].stages[1].collision_energy)
+}
+END_SECTION
+
+START_SECTION(ms3_measuring_metric_always_reacquires_without_overrides)
+{
+  // ADR-0020, the remaining_precursor half. A MEASURING metric scores from bulk signal and never
+  // matches fragments, so its pre-scans leave NO identification behind: identification_result stays
+  // default-constructed (its single write site is the FragmentCount batch re-score), the inline fold
+  // at group completion is gated on that field being non-empty, and so a completed MS3 sweep used to
+  // contribute nothing whatsoever. Real-run evidence: 66 MS3 scans acquired, 3 CE winners chosen,
+  // zero MS3 rows in identification.tsv and zero MS3 evidence in pooled_identification.tsv.
+  //
+  // The fix is a production re-acquisition at the winning CE, which returns on the regular MS3 path
+  // and IS identified. Asserted here at the seam that decides it: commands emitted at completion.
+  Config cfg{std::string(ms3_remaining_precursor_config)};
+  TEST_EQUAL(cfg.level(3).overrides.empty(), true)  // the precondition: no overrides to trigger the old gate
+  TEST_EQUAL(isMeasuringMetric(cfg.level(3).exploration), true)
+
+  ScanCommandQueue queue(cfg);
+  Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+
+  auto fragment_pg = makeSyntheticPeakGroup(500.0, 1000.0, 2);
+  ScanCommand ms2_ctx = queue.buildMS2(makeSyntheticPeakGroup(800.0, 2400.0, 3), 3,
+                                       cfg.level(2).scans[0], 2, 0);
+  auto cmds = exploration.initiate(3, fragment_pg, 2, queue, nullptr, &ms2_ctx);
+  TEST_EQUAL(static_cast<int>(cmds.size()), 6)  // baseline + CE 20,25,30,35,40
+
+  // RemainingPrecursor needs a real baseline: an EMPTY baseline window aborts the group outright
+  // (baseline_failed -> children cancelled, no winner, no production scan), which would make this
+  // test pass for the wrong reason. Feed intensity at the precursor centre so has_baseline is true.
+  auto group = ExplorationTestAccess::group(exploration, 1);
+  std::vector<double> mzs = {group.precursor_mz};
+  std::vector<double> baseline_ints = {1000.0};
+
+  Exploration::FeedResultInfo last_info;
+  for (int i = 0; i < 6; ++i)
+  {
+    // Baseline at full intensity; the CE variants deplete progressively. The ratio closest to the
+    // 0.1 target wins -> 100/1000 = 0.1 exactly at i == 2 (CE 25), score 1.0.
+    std::vector<double> ints = {i == 0 ? 1000.0 : (i == 2 ? 100.0 : 800.0)};
+    int tid = queue.decode(std::string(cmds[i].scan_description).substr(0, 3));
+    last_info = exploration.feedResult(tid, mzs.data(), ints.data(), 1,
+                                       static_cast<double>(i), queue);
+  }
+
+  TEST_EQUAL(exploration.activeGroupCount(), 0)                      // group completed
+  TEST_EQUAL(last_info.group.winner_tracking_id.empty(), false)      // a winner was chosen
+  TEST_EQUAL(last_info.group.winner_tracking_id, std::string(cmds[2].scan_description).substr(0, 3))
+
+  // THE ASSERTION THIS TEST EXISTS FOR: exactly one production MS3, despite empty overrides.
+  TEST_EQUAL(static_cast<int>(last_info.commands.size()), 1)
+  TEST_EQUAL(last_info.commands[0].msn_level, 3)
+  TEST_EQUAL(last_info.commands[0].num_stages, 2)
+  TEST_EQUAL(std::string(last_info.commands[0].scan_description)[3], 'R')
+  TEST_EQUAL(static_cast<int>(last_info.ms2_context_cache.size()), 1)
+  TEST_EQUAL(last_info.ms2_context_cache[0].first, last_info.commands[0].scan_id)
+}
+END_SECTION
+
+START_SECTION(ms3_reading_metric_does_not_reacquire_without_overrides)
+{
+  // The other side of ADR-0020, and the reason the rule is keyed on the METRIC rather than made
+  // unconditional: FragmentCount is a READING metric. It matches every variant in order to score it,
+  // so the batch re-score populates identification_result and the inline fold at group completion
+  // already carries the evidence. Re-acquiring would spend one extra MS3 per target for data the
+  // group already holds.
+  //
+  // Pinning this asymmetry is what stops a later "simplify: always re-acquire" from silently
+  // doubling the MS3 cost of every fragment_count method.
+  Config cfg{std::string(ms3_exploration_config)};
+  TEST_EQUAL(cfg.level(3).overrides.empty(), true)
+  TEST_EQUAL(isMeasuringMetric(cfg.level(3).exploration), false)  // FragmentCount == reading
+
+  ScanCommandQueue queue(cfg);
+  Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+
+  auto fragment_pg = makeSyntheticPeakGroup(500.0, 1000.0, 2);
+  ScanCommand ms2_ctx = queue.buildMS2(makeSyntheticPeakGroup(800.0, 2400.0, 3), 3,
+                                       cfg.level(2).scans[0], 2, 0);
+  auto cmds = exploration.initiate(3, fragment_pg, 2, queue, nullptr, &ms2_ctx);
+  TEST_EQUAL(static_cast<int>(cmds.size()), 6)
+
+  std::vector<int> peak_counts = {0, 2, 4, 6, 8, 3};
+  Exploration::FeedResultInfo last_info;
+  for (int i = 0; i < 6; ++i)
+  {
+    DeconvolvedSpectrum ds = makeSyntheticDeconv(i + 1, peak_counts[i]);
+    int tracking_id = queue.decode(std::string(cmds[i].scan_description).substr(0, 3));
+    last_info = ExplorationTestAccess::feedResult(exploration, tracking_id, ds,
+                                                  static_cast<double>(i), queue);
+  }
+
+  TEST_EQUAL(exploration.activeGroupCount(), 0)
+  // No production scan: an MS3 group is terminal so the cascade branch cannot fire either, leaving
+  // the inline fold as the sole consumer — exactly as before ADR-0020.
+  TEST_EQUAL(static_cast<int>(last_info.commands.size()), 0)
+  TEST_EQUAL(static_cast<int>(last_info.ms2_context_cache.size()), 0)
 }
 END_SECTION
 

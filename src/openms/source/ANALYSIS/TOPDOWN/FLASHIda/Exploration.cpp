@@ -638,8 +638,21 @@ namespace OpenMS
 
       const auto& level_config = config_.level(group.msn_level);
 
-      // Send production scan after exploration
-      if (!level_config.overrides.empty())
+      // Send production scan after exploration. Two independent reasons to re-acquire (ADR-0020):
+      //
+      //  1. overrides non-empty -- the pre-scans ran at DEGRADED settings (that is what overrides are
+      //     for), so no variant was acquired at production fidelity. Applies at every level.
+      //  2. a MEASURING metric at MS3 -- MassCount/RemainingPrecursor score from bulk signal and never
+      //     match fragments, so the whole group leaves NO identification even though every variant was
+      //     acquired at production settings. FragmentCount is exempt: it matches each variant to score
+      //     it, so the batch re-score below already populated identification_result and the inline fold
+      //     at the tail of this function carries the evidence.
+      //
+      // Deliberately MS3-only: an MS2 variant is matched under every metric (computeFragmentMatch_ runs
+      // the whole-protein matcher, which is the right one at MS2), so an MS2 sweep already has its
+      // evidence and cascades to MS3 instead of re-acquiring itself.
+      const bool measuring_ms3_sweep = group.msn_level >= 3 && isMeasuringMetric(group.exploration_metric);
+      if (!level_config.overrides.empty() || measuring_ms3_sweep)
       {
         ScanConfig prod_config = level_config.scans[0];
         prod_config.collision_energy = static_cast<int>(group.variants[best_idx].collision_energy);
@@ -728,12 +741,15 @@ namespace OpenMS
             info.ms2_context_cache.emplace_back(next_nlr.commands[i].scan_id, next_nlr.ms3_contexts[i]);
         }
       }
-      // overrides empty && msn_level >= 3: an MS3 exploration group with no production scan. Nothing else
-      // will fold this group's result into the trajectory -- the production-MS3 branch above folds via the
-      // returning scan and the cascade branch has no MS3 to fold -- so the winning variant is folded here,
-      // inline, at group completion. Known asymmetry, not generalized: folding is per-group, so a precursor
-      // whose fragments are explored in several groups folds each winner as its group closes rather than
-      // once at the end. That only matters if a later group should be able to revise an earlier fold.
+      // overrides empty && msn_level >= 3 && a READING metric (FragmentCount): an MS3 exploration group
+      // with no production scan. Since ADR-0020 this is the ONLY way to reach here at MS3 -- a measuring
+      // metric now takes the production branch above -- and it is exactly the case where the group already
+      // holds its own evidence, because the FragmentCount batch re-score populated identification_result.
+      // Nothing else will fold that into the trajectory (the production-MS3 branch folds via the returning
+      // scan, and the cascade branch has no MS3 to fold), so the winning variant is folded here, inline, at
+      // group completion. Known asymmetry, not generalized: folding is per-group, so a precursor whose
+      // fragments are explored in several groups folds each winner as its group closes rather than once at
+      // the end. That only matters if a later group should be able to revise an earlier fold.
       else
       {
         if (tracker != nullptr && group.fragment_ion_type != '\0')

@@ -90,6 +90,27 @@ namespace OpenMS
     FragmentCount        ///< Optimize for most fragment ions
   };
 
+  /**
+    @brief True for a metric that weighs bulk signal without matching fragments (ADR-0020).
+
+    A **measuring** metric (MassCount, RemainingPrecursor) scores a variant from peak or
+    intensity counts alone, so it never produces a ProteoformMatch and its pre-scans leave no
+    identification behind. FragmentCount is the sole **reading** metric: it matches every
+    variant against the proteoform in order to score it, so identification is a side effect of
+    scoring.
+
+    At MS3 the distinction decides whether an exploration group produces any evidence at all,
+    which is why a measuring MS3 sweep must always be closed by a production scan
+    (`Exploration.cpp`, the post-winner dispatch). At MS2 it does not apply — every variant is
+    matched there regardless of metric.
+
+    `None` is not a sweep, so it is not measuring.
+  */
+  inline bool isMeasuringMetric(ExplorationMetric metric)
+  {
+    return metric == ExplorationMetric::MassCount || metric == ExplorationMetric::RemainingPrecursor;
+  }
+
   /// Configuration for a single scan type (MS1 survey or one MS2 config slot)
   struct OPENMS_DLLAPI ScanConfig
   {

@@ -40,6 +40,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iomanip>
+#include <iostream>
 #include <limits>
 #include <map>
 #include <set>
@@ -375,22 +376,41 @@ namespace OpenMS
 
   std::vector<Ms3Target> ProteoformTracker::planNextScans(int precursor_id)
   {
+    // "This run fired no MS3" resolves to one of NINE causes below (seven return sites; the last one
+    // splits three ways by objective). Every one of them used to return an empty plan silently,
+    // leaving the reason to be inferred from empty columns in pooled_identification.tsv. Name it
+    // instead (ADR-0020). The zero-target outcome is frequently CORRECT -- ambiguity mode with every
+    // modification already localized has nothing an MS3 could narrow -- so this is an explanation,
+    // not a warning, and there is deliberately no severity attached to it.
+    //
+    // stdout by design, and stdout ONLY: the engine has no file stream for decisions, and adding one
+    // to ida.log would move all 17 log goldens. Accepted consequence -- an instrument acquisition
+    // discards the engine's stdout, so this is visible in offline Flash.exe runs and in CI (which
+    // greps regression-stdout.txt) but NOT in an instrument run folder. Every other engine marker
+    // ([TRACK-CREATE], [EXPL-WINNER], [EXPL-ABORT]) already has exactly this limitation.
+    auto no_plan = [precursor_id](const char* reason) -> std::vector<Ms3Target> {
+      std::cout << "[MS3-PLAN] precursor_id=" << precursor_id
+                << " targets=0 reason=" << reason << std::endl;
+      return {};
+    };
+
     auto it = models_.find(precursor_id);
-    if (it == models_.end()) return {};
+    if (it == models_.end()) return no_plan("no_model");
     ProteoformModel& m = it->second;
     // No identified model / no captured MS2 context -> no plan (ADR-0002).
-    if (m.proteoform_sequence.empty() || !m.has_ms2_ctx) return {};
+    if (m.proteoform_sequence.empty()) return no_plan("unidentified_precursor");
+    if (!m.has_ms2_ctx) return no_plan("no_ms2_context");
 
     const CharacterizationObjective obj = config_.characterization().objective;
     const int budget = config_.level(2).max_targets;  // reuse the MS2 max_targets as the MS3 budget
-    if (budget <= 0) return {};
+    if (budget <= 0) return no_plan("zero_budget");
 
     const int P = static_cast<int>(m.proteoform_sequence.size());
-    if (P <= 0) return {};
+    if (P <= 0) return no_plan("empty_sequence");
     const int ws = (m.region_start < 0) ? 0 : m.region_start;
     const int we = (m.region_end < 0) ? P : m.region_end;
     const int L = we - ws;  // winner-region residue count (fragment frame)
-    if (L <= 0) return {};
+    if (L <= 0) return no_plan("empty_region");
 
     // --- 1) Choose ordered target fragments by objective ----------------------------------------
     // Each chosen fragment MUST carry a best-MS2 observation (the MS3 isolation descriptors come
@@ -407,6 +427,12 @@ namespace OpenMS
       return static_cast<int>(targets.size()) < budget;  // false once the budget is full
     };
 
+    // Distinguishes the two ambiguity dead-ends in the reason line below: "nothing left to resolve"
+    // (every mod localized -- the expected end state of a successful run) versus "something to resolve
+    // but no fragment spans it" (a real coverage gap). Both yield zero targets; only the second is a
+    // reason to change the method.
+    bool had_ambiguous_mod = false;
+
     if (obj == CharacterizationObjective::Ambiguity)
     {
       // For each still-ambiguous modification (widest range first), build the list of best-MS2
@@ -419,6 +445,7 @@ namespace OpenMS
       std::vector<const ModificationState*> ambiguous;
       for (const ModificationState& mod : m.modifications)
         if (mod.candidate_start < mod.candidate_end) ambiguous.push_back(&mod);
+      had_ambiguous_mod = !ambiguous.empty();
       std::sort(ambiguous.begin(), ambiguous.end(),
                 [](const ModificationState* a, const ModificationState* b) {
                   return (a->candidate_end - a->candidate_start) > (b->candidate_end - b->candidate_start);
@@ -508,7 +535,13 @@ namespace OpenMS
       }
     }
 
-    if (targets.empty()) return {};
+    if (targets.empty())
+    {
+      if (obj != CharacterizationObjective::Ambiguity) return no_plan("no_fragment_adds_coverage");
+      // The run-B case: MS2 alone localized every modification, so there is no range left for an MS3
+      // to narrow and zero targets is the correct answer, not a failure.
+      return no_plan(had_ambiguous_mod ? "no_containing_fragment" : "all_mods_localized");
+    }
 
     // Strongest best-MS2 first within the chosen set (the executor dispatches in this order).
     std::sort(targets.begin(), targets.end(),
@@ -594,6 +627,15 @@ namespace OpenMS
       // One fragment consumed, however many targets it produced.
       if (out.size() > emitted_before_fragment) ++fragments_selected;
     }
+    // Counterpart to the no_plan lines: the same marker on the success path, so grepping [MS3-PLAN]
+    // yields every MS3 planning decision rather than only the negative ones. fragments and targets
+    // differ under separate/multiplexed charge modes -- fragments is what the budget counts (ADR-0016).
+    std::cout << "[MS3-PLAN] precursor_id=" << precursor_id
+              << " targets=" << out.size()
+              << " fragments=" << fragments_selected
+              << " budget=" << budget
+              << " objective=" << (obj == CharacterizationObjective::Ambiguity ? "ambiguity" : "coverage")
+              << std::endl;
     return out;
   }
 

@@ -235,6 +235,37 @@ A returning regular MS3 is scored against the **live tracker winner**
 context supplies only `fragment_ion_type`/`fragment_ion_index`. No winner ⇒ empty context ⇒ the
 MS3 matches nothing. The cache entry is erased after use, so a duplicate/late MS3 yields no row.
 
+### Reading vs measuring exploration metrics — the MS3 evidence rule (ADR-0020)
+
+**Only `FragmentCount` identifies its own MS3 pre-scans.** It scores a variant *by* matching it, so
+`ProteoformTracker::scoreCalibratedVariants` — the only matcher that works on an MS3 spectrum, since
+it is seeded with the proteoform context and the parent ion index — runs inside a
+`metric == FragmentCount` guard in `Exploration.cpp`. `MassCount` and `RemainingPrecursor` are
+**measuring**: they score from peak counts and window intensity and never invoke a matcher.
+`isMeasuringMetric()` (`Config.h`, beside the enum) is the classification; do not open-code
+`== FragmentCount`.
+
+Three things follow, and the third is the trap:
+
+- `ExplorationVariant::identification_result` has **one write site**, inside that guard. Under a
+  measuring metric it is empty for every variant.
+- The inline fold at MS3 group completion is gated on that field, so under a measuring metric it
+  cannot fire — which is why a completed MS3 sweep used to contribute *nothing*: no
+  `identification.tsv` row, no `foldMs3`, no pooled evidence, after paying for every pre-scan.
+- Therefore a **measuring metric at MS3 always emits a production scan**, regardless of `overrides`.
+  The post-winner dispatch fires on `!overrides.empty() || (msn_level >= 3 && isMeasuringMetric(...))`.
+  The follow-up returns on the *regular* MS3 path and is matched there.
+
+`overrides` means *"the pre-scans ran at degraded settings"* — variants are built from
+`scans[0] + overrides`, the production scan from `scans[0]` alone. That is the whole reason the
+original gate keyed on it. **MS2 is exempt** from the metric condition: `computeFragmentMatch_`'s
+whole-protein matcher is correct at MS2, so every MS2 variant is identified under every metric and an
+MS2 group cascades instead of re-acquiring.
+
+`planNextScans` emits `[MS3-PLAN] … reason=…` naming which of its zero-target causes fired
+(`all_mods_localized` is the common, *correct* one: ambiguity mode with everything already localized).
+stdout only — like every engine marker, it is discarded during instrument acquisition.
+
 ## Config (`FLASHIda/Config.cpp`)
 
 Unknown keys are hard-rejected by one free function `rejectUnknownKeys(obj, allowed, path)` called

@@ -223,9 +223,10 @@ namespace OpenMS
       /// (MS3 scan_id -> its parent MS2's context) for MS3 commands in `commands` that return on the
       /// REGULAR MS3 path and need ms2_context_cache_ seeded by the caller. Mirrors the regular
       /// MS2->MS3 caching. Filled from BOTH command-producing branches of a completed group: the
-      /// production MS3 re-acquisition (overrides set) and the next-level dispatch an MS2 group makes
-      /// when it has no production scan. Leaving the second one out meant those MS3s were acquired and
-      /// then silently unidentified — the cache miss skips the whole identification block.
+      /// production MS3 re-acquisition (overrides set, OR a measuring metric at MS3 — ADR-0020) and
+      /// the next-level dispatch an MS2 group makes when it has no production scan. Leaving the second
+      /// one out meant those MS3s were acquired and then silently unidentified — the cache miss skips
+      /// the whole identification block.
       ///
       /// Named for the CONTENT (an MS2 context), not the consumer level, matching the engine member it
       /// feeds. It was `ms3_context_cache`, which read as "a cache of MS3 contexts".
