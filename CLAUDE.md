@@ -321,24 +321,44 @@ the caller's responsibility.
   stage fire into one fragmentation event. With `precursor_charges`/`fragment_charges` at their
   `single` default no notch exists, so these columns stay byte-identical.
 
-## Co-isolation notches (ADR-0016)
+## Co-isolation notches (ADR-0016, ADR-0019)
 
 **`num_stages` counts cascade stages and NEVER notches.** This is load-bearing: `processScan`'s
 context gate, `syncEnergyMirrors_`, `Exploration`'s `si = num_stages - 1` and C# `ScanFactory`'s
 clamp all key on it, and stay correct only while it means MSⁿ depth.
 
-Notch descriptors live in **`stages[num_stages …]`** — the slots the engine never wrote — packed
-stage-0's first, then stage-1's, with counts in `stage0_notch_count` / `stage1_notch_count` (carved
-from `reserved_`, 596 → 588). **Stage 1's notches therefore begin at
-`num_stages + stage0_notch_count`, not at a fixed slot**; use `notchesForStage()` rather than
-open-coding that, and when writing, write stage 0 first or stage-1's land where the accessor looks for
-stage-0's. Capacity is `MAX_ISOLATION_STAGES - num_stages`, which is also the instrument's own
-10-value `PrecursorMass` limit.
+Notch descriptors live in their own **`Notch notches[18]`** (24 bytes each, geometry only), carved from
+`reserved_` at @1464 alongside `pad4` (596 → 152 across two changes). **Stage k owns the fixed block
+`[k * MAX_NOTCHES_PER_STAGE, + MAX_NOTCHES_PER_STAGE)`** — use `notchesForStage()` rather than
+open-coding it, but write order no longer matters and the two stages cannot contend.
 
-`NotchSelection.h` holds the whole policy — SNR gate, descending-SNR order, clamp-with-report — plus
-`peakGroupNotchCandidates`, shared by `PrecursorSelection` (which records the acquired set for
-charge-keyed exclusion) and `buildMS2` (which writes the geometry), so the set recorded as acquired is
-by construction the set isolated.
+**Two different tens; do not collapse them.** `MAX_ISOLATION_STAGES` (10) is the `';'`-axis cascade
+limit — every stage-carried iAPI key documents "a maximum of 10 values", including `ActivationType` and
+`CollisionEnergy`, which have no notch axis at all. `MAX_NOTCHES_PER_STAGE` (9) + the anchor is the
+`','`-axis limit, from `MSXTargets`' 10 MSX windows **per fragmentation stage**. So an MS3 can command
+20 isolation windows. ADR-0017 read the first ten as a joint budget, which gave 8 slots shared across
+an MS3's two stages; stage 0's inherited precursor set consumed all of them and the fragment stage got
+none. `ScanCommandLayout_test` pins the two constants apart deliberately.
+
+A `Notch` has no collision energy or activation field, which is the correct encoding of "all notches of
+a stage fire into one fragmentation event" — under the old layout the writer copied `stages[k]`, so a
+per-notch CE existed and merely happened to agree.
+
+`NotchSelection.h` holds the whole policy — SNR **gate**, descending-**intensity** order (charge as the
+tiebreak), clamp-with-report — plus `peakGroupNotchCandidates`, shared by `PrecursorSelection` (which
+records the acquired set for charge-keyed exclusion) and `buildMS2` (which writes the geometry), so the
+set recorded as acquired is by construction the set isolated. SNR admits and intensity ranks: SNR is a
+purity measure, so ordering by it would let a clean-but-faint charge displace an abundant one under a
+clamp and trade away the ion current the fill exists to harvest.
+
+**The MS3 side needs the fragment's whole envelope, and getting it there is the part that broke.**
+`ProteoformTracker::stageScan` flattens each fragment PeakGroup to `getMaxIntensityAbsCharge()` for the
+representative fields, and *also* stores every present charge as a `ChargeRecord` in
+`PeakRecord::by_charge`; `upsertMappedObservation_` fills `ms2_by_charge` from that. Without the
+envelope, `ms2_by_charge` held one entry per fragment per scan and `characterization.fragment_charges`
+was inert in **both** on-values while the spectra resolved ~38% of fragments at two or more charges.
+`planNextScans` derives `separate` and `multiplexed` from **one** `selectNotches` call, so the two modes
+acquire the same set and differ only in scan count.
 
 Two things notches deliberately do **not** carry: per-notch **scores** (the slots hold geometry only,
 and the `*_s1` block is two-stage, so `charge_snr`/`precursor_intensity` remain the anchor's), and a
