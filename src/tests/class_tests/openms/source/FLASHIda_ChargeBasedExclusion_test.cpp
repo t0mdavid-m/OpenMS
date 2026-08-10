@@ -389,4 +389,53 @@ START_SECTION(flag_on_selects_one_charge_per_mass_within_a_survey)
 }
 END_SECTION
 
+// CBE-08: the INVERSE of CBE-07, and the reason it exists. precursor_charges: "separate" is the mode
+// that deliberately acquires one MS2 per charge state, so within a single survey a mass MUST appear at
+// two or more charges. Nothing asserted that, and the value was silently inert: it parsed, it was
+// documented as "the fan-out arrives as an explicit acquisition mode", and PrecursorSelection never
+// branched on it -- the break added for the fallback fix was unconditional. A config asking for
+// separate fragmentation behaved exactly like "single".
+//
+// This is the shape of test that catches a mode wired at parse time and nowhere else: assert the
+// BEHAVIOUR the value promises, not that the value round-trips.
+//
+// max_precursors must exceed 1 or the mode cannot express itself: selected_peak_groups_ is bounded by
+// mass_count, so at 1 "one scan per charge" can only ever emit one scan.
+START_SECTION(separate_yields_multiple_charges_per_mass_within_a_survey)
+{
+  auto scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(scans.empty())
+
+  std::string sep_json = std::string(base_on_json);
+  {
+    const std::string k = "\"max_precursors\": 10";
+    const std::string::size_type pos = sep_json.find(k);
+    TEST_TRUE(pos != std::string::npos)
+    ABORT_IF(pos == std::string::npos)
+    sep_json.replace(pos, k.size(),
+                     "\"max_precursors\": 10, \"precursor_charges\": \"separate\"");
+  }
+
+  FLASHIda ida(const_cast<char*>(sep_json.c_str()));
+  AcqResult a = runInterleaved(&ida, scans, {}, nullptr, /*max_iters=*/4000);
+  TEST_EQUAL(a.ms2_cmds.size() > 0, true)
+
+  // Same keying as CBE-07 -- (survey, mass) -> charges -- but the expectation is inverted.
+  std::map<std::pair<std::string, long long>, std::set<int>> charges_per_survey_mass;
+  for (const auto& c : a.ms2_cmds)
+    if (c.num_stages >= 1)
+      charges_per_survey_mass[{std::string(c.parent_scan_id), std::llround(c.mono_mass)}]
+          .insert(c.stages[0].charge_state);
+
+  int masses_with_multiple_charges = 0;
+  for (const auto& kv : charges_per_survey_mass)
+    if (kv.second.size() >= 2) ++masses_with_multiple_charges;
+
+  if (masses_with_multiple_charges == 0)
+    std::cout << "[CBE-08] no mass was acquired at >=2 charges within one survey -- "
+                 "precursor_charges: \"separate\" is not fanning out" << std::endl;
+  TEST_EQUAL(masses_with_multiple_charges >= 1, true)
+}
+END_SECTION
+
 END_TEST

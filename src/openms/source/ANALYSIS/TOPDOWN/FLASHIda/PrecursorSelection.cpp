@@ -733,7 +733,13 @@ namespace OpenMS
             // Acquiring several charges of one mass in a single survey is a legitimate thing to WANT;
             // it is just not what this flag means. It arrives as an explicit acquisition mode
             // (precursor_selection.precursor_charges: "separate") rather than as a side effect here.
-            break;
+            //
+            // Separate is that mode: it keeps walking charges_to_process, so this PeakGroup yields one
+            // acquisition PER charge state, each its own Precursor with its own model. It is bounded by
+            // mass_count exactly as before (the guard at the top of this loop), so it spends the
+            // max_precursors budget on (mass, charge) pairs -- which is the whole point of asking for
+            // it, and also why it needs max_precursors > 1 to do anything at all.
+            if (config_.targeting().precursor_charges != ChargeAcquisitionMode::Separate) break;
           }  // end for charges_to_process
         }
       }
