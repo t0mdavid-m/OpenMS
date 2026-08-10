@@ -312,15 +312,14 @@ namespace OpenMS
 
     // Co-isolation notches: the other charge states of THIS SAME PeakGroup, when the acquisition mode
     // asks for them (ADR-0016). Geometry comes from getMzRange(z) per charge -- the same measured
-    // window the anchor uses, never derived from theory -- and the SNR gate is the one the selector
-    // already applies. Written AFTER stage 0 because writeNotchesForStage inherits that stage's
-    // CE/activation: all notches of a stage fire into one fragmentation event.
+    // window the anchor uses, never derived from theory -- the SNR gate is the one the selector
+    // already applies, and the cap is this stage's own 10-plex budget.
     if (config_.targeting().precursor_charges == ChargeAcquisitionMode::Multiplexed)
     {
       writeNotchesForStage(cmd, 0,
           selectNotches(peakGroupNotchCandidates(pg, optimal_window_margin_),
                         charge, config_.targeting().snr_threshold,
-                        MAX_ISOLATION_STAGES - cmd.num_stages,
+                        MAX_NOTCHES_PER_STAGE,
                         "MS2 z=" + std::to_string(charge)));
     }
 
@@ -428,9 +427,14 @@ namespace OpenMS
     // Stage 0's notches are INHERITED from the MS2 context, not re-selected (ADR-0016 decision 6):
     // if the MS2 co-isolated a charge set, the replay that regenerates the fragment must isolate the
     // same set, or it produces a fraction of the fragment signal the MS3 then tries to work with.
-    // No SNR gate here -- these already passed it when the MS2 was built, and re-gating would need
-    // the MS1 PeakGroup, which this builder does not have. Written BEFORE stage 1's, because the
-    // packing puts stage-0's first and stage-1's offset depends on how many there are.
+    // No SNR gate and no re-ranking here -- these already passed both when the MS2 was built, and
+    // re-doing either would need the MS1 PeakGroup, which this builder does not have.
+    //
+    // Stage 0 and stage 1 own DISJOINT notch blocks, so this can never starve the fragment stage and
+    // write order does not matter. It used to: both stages drew from one pool of
+    // MAX_ISOLATION_STAGES - num_stages == 8 slots, stage 0 was written first and took all of them
+    // whenever the parent MS2 was a full multiplex, and stage 1 -- the whole point of an MS3 -- was
+    // left with zero (observed as notches/stage=[8,0] in the multiplexed_ms2 golden mode).
     {
       auto inherited_range = notchesForStage(ms2_ctx, 0);
       if (inherited_range.second > 0)
@@ -440,7 +444,7 @@ namespace OpenMS
         for (int i = 0; i < inherited_range.second; ++i)
           inherited.push_back({inherited_range.first[i].charge_state,
                                inherited_range.first[i].precursor_mz,
-                               inherited_range.first[i].isolation_width, 0.0});
+                               inherited_range.first[i].isolation_width, 0.0, 0.0});
         writeNotchesForStage(cmd, 0, inherited);
       }
     }
@@ -456,17 +460,17 @@ namespace OpenMS
     cmd.stages[1].reagent_max_it = ms3_config.reagent_max_it;
     cmd.stages[1].reagent_agc_target = ms3_config.reagent_agc_target;
 
-    // Stage 1's notches: the other charge states of this fragment, chosen by the tracker. The slot
-    // budget is SHARED with stage 0's inherited notches, so this can be truncated -- say so rather
-    // than silently isolating fewer windows than the model asked for.
+    // Stage 1's notches: the other charge states of this fragment, chosen by the tracker, which has
+    // already gated and ranked them. This stage's own MAX_NOTCHES_PER_STAGE block, independent of
+    // stage 0's, so truncation here means the tracker handed over more than a 10-plex -- which its
+    // own selectNotches clamp should have prevented. Report it rather than trimming in silence.
     if (stage1_notches != nullptr && !stage1_notches->empty())
     {
       const int wrote = writeNotchesForStage(cmd, 1, *stage1_notches);
       if (wrote < static_cast<int>(stage1_notches->size()))
         std::cout << "[NOTCH-CLAMP] MS3 stage1 kept=" << wrote
                   << " dropped=" << (static_cast<int>(stage1_notches->size()) - wrote)
-                  << " (stage-0 took " << cmd.stage0_notch_count << " of the "
-                  << (MAX_ISOLATION_STAGES - cmd.num_stages) << " shared slots)" << std::endl;
+                  << " (over this stage's own cap of " << MAX_NOTCHES_PER_STAGE << ")" << std::endl;
     }
 
     // Description: {3-char ID}R{frag_mass_kDa}k@{frag_charge}[{ion_type}{frag_index}]  (adaptive-precision)

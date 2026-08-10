@@ -279,6 +279,22 @@ namespace OpenMS
       pr.intensity = static_cast<double>(pg.getChargeIntensity(charge));
       pr.iso_width = mz2 - mz1;
       pr.stage1_scores = FragmentAnalysis::FragmentScores::fromPeakGroup(pg, charge);
+      // The FULL envelope alongside the representative charge, so fragment_charges has real
+      // candidates. Same arithmetic as the four lines above, once per present charge. No SNR gate and
+      // no ordering here: selectNotches owns both, in one place (ADR-0016).
+      auto [z_lo, z_hi] = pg.getAbsChargeRange();
+      for (int z = z_lo; z <= z_hi; ++z)
+      {
+        auto [zmz1, zmz2] = pg.getMzRange(z);
+        if (zmz2 <= zmz1) { continue; }   // charge not present in this envelope
+        ChargeRecord cr;
+        cr.charge = z;
+        cr.mz = (zmz1 + zmz2) / 2.0;
+        cr.iso_width = zmz2 - zmz1;
+        cr.intensity = static_cast<double>(pg.getChargeIntensity(z));
+        cr.stage1_scores = FragmentAnalysis::FragmentScores::fromPeakGroup(pg, z);
+        pr.by_charge.push_back(cr);
+      }
       ps.peaks.push_back(pr);
     }
     m.pending.push_back(std::move(ps));
@@ -518,37 +534,44 @@ namespace OpenMS
     {
       if (fragments_selected >= budget) break;
       const size_t emitted_before_fragment = out.size();
-      // Build the per-charge observation list to emit for this fragment.
-      std::vector<const FragmentObservation*> obs_list;
-      if (charge_mode == ChargeAcquisitionMode::Separate && !f->ms2_by_charge.empty())
-      {
-        for (const auto& kv : f->ms2_by_charge) obs_list.push_back(&kv.second);
-        std::sort(obs_list.begin(), obs_list.end(),
-                  [](const FragmentObservation* a, const FragmentObservation* b) {
-                    return a->intensity > b->intensity;
-                  });
-      }
-      else
-      {
-        obs_list.push_back(&(*f->best_ms2));  // Single, and the anchor for Multiplexed
-      }
 
-      // Multiplexed: every other observed charge of this same fragment becomes a notch on the one
-      // target. Capped at MAX_ISOLATION_STAGES - 2 because an MS3 command already spends two slots
-      // on its cascade stages; buildMS3 writes stage-0's notches first and truncates this list if
-      // the remaining slots run out, reporting what it dropped.
-      std::vector<NotchCandidate> frag_notches;
-      if (charge_mode == ChargeAcquisitionMode::Multiplexed && !f->ms2_by_charge.empty())
+      // The acquisition charge set, chosen ONCE for both on-modes: anchor (best_ms2, i.e. the most
+      // intense charge) plus the SNR-positive rest, most intense first, capped at a 10-plex.
+      // Separate and Multiplexed then acquire exactly this set and differ only in how many scans it
+      // takes -- N versus 1. Deriving both from one selectNotches call is what makes that identity
+      // structural instead of a comment: they cannot drift into gating or ranking differently.
+      std::vector<NotchCandidate> extra_charges;
+      if (charge_mode != ChargeAcquisitionMode::Single && !f->ms2_by_charge.empty())
       {
         std::vector<NotchCandidate> cands;
         cands.reserve(f->ms2_by_charge.size());
         for (const auto& kv : f->ms2_by_charge)
           cands.push_back({kv.second.frag_charge, kv.second.frag_mz, kv.second.iso_width,
-                           kv.second.stage1_scores.charge_snr});
-        frag_notches = selectNotches(cands, obs_list.front()->frag_charge, snr_threshold,
-                                     MAX_ISOLATION_STAGES - 2,
-                                     "MS3 " + f->ion_type + std::to_string(f->ion_index));
+                           kv.second.stage1_scores.charge_snr, kv.second.intensity});
+        extra_charges = selectNotches(cands, f->best_ms2->frag_charge, snr_threshold,
+                                      MAX_NOTCHES_PER_STAGE,
+                                      "MS3 " + f->ion_type + std::to_string(f->ion_index));
       }
+
+      // Build the per-charge observation list to emit for this fragment.
+      std::vector<const FragmentObservation*> obs_list;
+      obs_list.push_back(&(*f->best_ms2));   // the anchor, in every mode
+      if (charge_mode == ChargeAcquisitionMode::Separate)
+      {
+        for (const NotchCandidate& n : extra_charges)
+        {
+          auto zit = f->ms2_by_charge.find(n.charge);
+          if (zit != f->ms2_by_charge.end()) obs_list.push_back(&zit->second);
+        }
+      }
+
+      // Multiplexed: the same set arrives as notches on ONE target, so the fragment stage isolates the
+      // whole envelope in a single scan. The fragment stage owns its own MAX_NOTCHES_PER_STAGE block,
+      // so this is not shared with the stage-0 precursor set the MS3 inherits from its parent.
+      const std::vector<NotchCandidate> frag_notches =
+          (charge_mode == ChargeAcquisitionMode::Multiplexed) ? extra_charges
+                                                             : std::vector<NotchCandidate>{};
+
       for (const FragmentObservation* o : obs_list)
       {
         // No budget check on the additional charges of THIS fragment under "separate": the slot was
@@ -728,6 +751,7 @@ namespace OpenMS
       int matched_charge = 0;
       double matched_iso_width = 0.0;
       FragmentAnalysis::FragmentScores matched_stage1;
+      const std::vector<ChargeRecord>* matched_env = nullptr;  ///< the matched group's charge envelope
       {
         double best_diff = std::numeric_limits<double>::max();
         bool within_tol = false;
@@ -746,6 +770,7 @@ namespace OpenMS
             matched_charge = pr.charge;
             matched_iso_width = pr.iso_width;
             matched_stage1 = pr.stage1_scores;
+            matched_env = &pr.by_charge;
           }
           else if (in_tol == within_tol && diff < best_diff)
           {
@@ -755,6 +780,7 @@ namespace OpenMS
             matched_charge = pr.charge;
             matched_iso_width = pr.iso_width;
             matched_stage1 = pr.stage1_scores;
+            matched_env = &pr.by_charge;
           }
         }
       }
@@ -779,12 +805,13 @@ namespace OpenMS
       obs.includes_ptm = fm.includes_ptm;
       obs.is_complement_flip = (ps.ms_level == 3) && fm.is_complement_flip;
 
-      upsertMappedObservation_(m, type, is_prefix, winner_idx, L, obs);
+      upsertMappedObservation_(m, type, is_prefix, winner_idx, L, obs, matched_env);
     }
   }
 
   void ProteoformTracker::upsertMappedObservation_(ProteoformModel& m, const std::string& ion_type,
-      bool is_prefix, int winner_idx, int L, const FragmentObservation& obs)
+      bool is_prefix, int winner_idx, int L, const FragmentObservation& obs,
+      const std::vector<ChargeRecord>* envelope)
   {
     const FragmentKey key{ion_type, winner_idx};
     MappedFragment& mfrag = m.fragments[key];
@@ -815,10 +842,33 @@ namespace OpenMS
       if (!mfrag.best_ms2.has_value() || obs.intensity > mfrag.best_ms2->intensity)
         mfrag.best_ms2 = obs;
       // Track the best MS2 observation per charge state for config-gated multi-charge MS3.
-      auto cit = mfrag.ms2_by_charge.find(obs.frag_charge);
-      if (cit == mfrag.ms2_by_charge.end() || obs.intensity > cit->second.intensity)
-        mfrag.ms2_by_charge[obs.frag_charge] = obs;
-      ++mfrag.n_ms2;
+      //
+      // From the matched PeakGroup's WHOLE envelope when we have it, so fragment_charges sees every
+      // charge the fragment was resolved at rather than only the representative one. best_ms2 above
+      // is untouched by this: the representative charge is getMaxIntensityAbsCharge(), i.e. already
+      // the envelope's most intense, so "single" stays byte-identical.
+      if (envelope != nullptr && !envelope->empty())
+      {
+        for (const ChargeRecord& cr : *envelope)
+        {
+          FragmentObservation zo = obs;
+          zo.frag_charge = cr.charge;
+          zo.frag_mz = cr.mz;
+          zo.iso_width = cr.iso_width;
+          zo.intensity = cr.intensity;
+          zo.stage1_scores = cr.stage1_scores;
+          auto cit = mfrag.ms2_by_charge.find(cr.charge);
+          if (cit == mfrag.ms2_by_charge.end() || zo.intensity > cit->second.intensity)
+            mfrag.ms2_by_charge[cr.charge] = zo;
+        }
+      }
+      else   // MS3-sourced observations and any match with no envelope: exactly the former behaviour
+      {
+        auto cit = mfrag.ms2_by_charge.find(obs.frag_charge);
+        if (cit == mfrag.ms2_by_charge.end() || obs.intensity > cit->second.intensity)
+          mfrag.ms2_by_charge[obs.frag_charge] = obs;
+      }
+      ++mfrag.n_ms2;   // one per contributing scan, not per charge
     }
   }
 
@@ -981,7 +1031,9 @@ namespace OpenMS
       obs.iso_width = pr.iso_width;
       obs.stage1_scores = pr.stage1_scores;
       obs.includes_ptm = false;                    // MS2: Pass A re-derives base-vs-shift per mod at narrow time
-      upsertMappedObservation_(m, best_type, best_is_prefix, best_idx, L, obs);
+      // Envelope carried here too: this path and the winner path upsert into the SAME MappedFragment,
+      // so a fragment first seen via a non-winner re-match must not arrive charge-flattened.
+      upsertMappedObservation_(m, best_type, best_is_prefix, best_idx, L, obs, &pr.by_charge);
 
       // C: also record this re-match as an identification fragment for the per-scan row (winner-region frame
       // ion index; == proteoform frame for a full-region winner, the only case in current data).

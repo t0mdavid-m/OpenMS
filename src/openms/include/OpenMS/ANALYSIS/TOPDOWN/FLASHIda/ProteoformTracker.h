@@ -132,6 +132,18 @@ namespace OpenMS
     double support_lower = 0, support_upper = 0;
   };
 
+  /// One deconvolved charge state of a fragment PeakGroup: exactly what a per-charge
+  /// FragmentObservation or a co-isolation notch needs, computed the same way the representative
+  /// charge's fields are.
+  struct ChargeRecord
+  {
+    int charge = 0;
+    double mz = 0;         ///< Isolation centre m/z: (mz1+mz2)/2 from PeakGroup::getMzRange(charge)
+    double iso_width = 0;  ///< mz2 - mz1
+    double intensity = 0;  ///< PeakGroup::getChargeIntensity(charge)
+    FragmentAnalysis::FragmentScores stage1_scores;  ///< FragmentScores::fromPeakGroup(pg, charge)
+  };
+
   /// Richer per-peak record so mapScanOntoModel_ can recover mz and charge for MS3 targeting
   struct PeakRecord
   {
@@ -141,6 +153,15 @@ namespace OpenMS
     double intensity = 0;
     double iso_width = 0;  ///< Isolation-window span (mz2 - mz1) — matches the direct MS3 path's wend-wstart
     FragmentAnalysis::FragmentScores stage1_scores;  ///< Stage-1 (fragment) deconvolution scores for MS3 (FragmentScores::fromPeakGroup)
+
+    /// The fragment's FULL charge envelope, not just the representative charge above.
+    ///
+    /// Without this, characterization.fragment_charges was inert in both its on-values: a fragment
+    /// matched exactly one PeakRecord, so ms2_by_charge could only ever hold one entry, so
+    /// "separate" emitted one target and "multiplexed" selected zero notches — while the parent MS2
+    /// spectrum genuinely resolved ~38% of its fragment PeakGroups at two or more charges. Ungated
+    /// and unranked here on purpose: selectNotches owns the SNR gate and the intensity order.
+    std::vector<ChargeRecord> by_charge;
   };
 
   /// A deconvolved scan awaiting integration into a ProteoformModel
@@ -304,8 +325,14 @@ namespace OpenMS
     /// the MappedFragment if needed, set coverage in the winner frame (L = winner-region residues),
     /// and update the per-level best (max-intensity) observation. Shared by the winner/MS3 pool path
     /// and the non-winner re-match path.
+    ///
+    /// @p envelope, when given, is the matched PeakGroup's full charge envelope: ms2_by_charge is then
+    /// filled from every charge rather than from @p obs's representative one, which is what makes
+    /// characterization.fragment_charges functional. nullptr keeps the single-charge behaviour, which
+    /// is correct for MS3-sourced observations (no MS1-style envelope to speak of).
     void upsertMappedObservation_(ProteoformModel& mdl, const std::string& ion_type, bool is_prefix,
-                                  int winner_idx, int L, const FragmentObservation& obs);
+                                  int winner_idx, int L, const FragmentObservation& obs,
+                                  const std::vector<ChargeRecord>* envelope = nullptr);
 
     /// Update ModificationState entries in @p mdl based on current fragment coverage (skeleton: no-op).
     void narrowModifications_(ProteoformModel& mdl);

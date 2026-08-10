@@ -652,7 +652,7 @@ namespace OpenMS
               for (const NotchCandidate& n :
                    selectNotches(peakGroupNotchCandidates(pg, optimal_window_margin_), charge,
                                  config_.targeting().snr_threshold,
-                                 MAX_ISOLATION_STAGES - 1, "MS2 z=" + std::to_string(charge)))
+                                 MAX_NOTCHES_PER_STAGE, "MS2 z=" + std::to_string(charge)))
                 acquired_charges.push_back(n.charge);
             }
 

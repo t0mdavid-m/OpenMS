@@ -563,4 +563,135 @@ START_SECTION(winner_context_reflects_id_best_split_not_metric_fused)
 }
 END_SECTION
 
+// characterization.fragment_charges shipped INERT in both its on-values, and nothing caught it: the
+// tracker flattened every fragment PeakGroup to getMaxIntensityAbsCharge() before storing it, so
+// ms2_by_charge could only ever hold ONE entry per fragment per scan. "multiplexed" therefore handed
+// selectNotches a one-element list and produced zero notches; "separate" emitted one target and was
+// indistinguishable from "single". Meanwhile the parent MS2 spectra genuinely resolved ~38% of their
+// fragment PeakGroups at two or more charges -- the data was there and discarded one layer above.
+//
+// This drives a fragment observed at TWO charges through feedScan and asserts the plan reflects both.
+// Under the bug the multiplexed assertion sees notches.size() == 0 and the separate one sees 1 target.
+START_SECTION(fragment_charges_multiplexed_and_separate_see_the_whole_envelope)
+{
+  // A fragment PeakGroup resolved at charges 2 AND 3. Two peaks per charge, deliberately: getMzRange
+  // returns {min_mz, max_mz} over the peaks AT that charge, so a single peak gives a zero-width window
+  // and the extraction (correctly) skips it as not isolatable. setChargeSNR is what admits a charge --
+  // hand-built groups have no scoring pass, so without it every charge reads SNR 0 and is gated out.
+  auto makeTwoChargePeakGroup = [](double mono_mass) {
+    PeakGroup pg(2, 3, true);
+    pg.setMonoisotopicMass(mono_mass);
+    for (int z = 2; z <= 3; ++z)
+    {
+      const double centre = mono_mass / z + 1.00728;
+      for (double d : {-0.5, 0.5})
+      {
+        FLASHHelperClasses::LogMzPeak lp;
+        lp.mz = centre + d;
+        lp.abs_charge = z;
+        lp.intensity = 1000.0f;
+        pg.push_back(lp);
+      }
+      pg.setChargeSNR(z, 5.0f);   // above the default snr_threshold of 1.0
+    }
+    return pg;
+  };
+
+  const double MASS_A = 700.0;   // fragment b6's observed mass, as makeMatch reports it
+  const int precursor_id = 11;
+
+  // The config differs from tracker_config by exactly one key, so nothing but the mode is in play.
+  auto configFor = [](const char* charge_mode) {
+    std::string cfg(tracker_config);
+    const std::string anchor = "\"max_targets\": 10";
+    const size_t at = cfg.find(anchor);
+    cfg.replace(at, anchor.size(),
+                anchor + ",\n    \"fragment_charges\": \"" + std::string(charge_mode) + "\"");
+    return cfg;
+  };
+
+  // --- multiplexed: ONE target carrying the other charge as a notch -------------------------------
+  {
+    Config cfg{configFor("multiplexed")};
+    IdaLogger logger(cfg);
+    ProteoformTracker tracker(cfg, logger);
+    ScanCommand ms2_ctx = makeMs2Ctx(29.0);
+    Ms2Params p{};
+    p.collision_energy = 29;
+    DeconvolvedSpectrum d(101);
+    d.push_back(makeTwoChargePeakGroup(MASS_A));
+    tracker.feedScan(precursor_id, 2, p, 101, d, makeMatch("b", 6, MASS_A), 1.0, ms2_ctx);
+    tracker.finalizeMS2(precursor_id);
+
+    // The envelope reaches the model at all: ms2_by_charge holds BOTH charges, not just the
+    // representative one. This is the assertion that fails hardest under the bug (it saw 1).
+    const ProteoformModel* mdl = tracker.getModel(precursor_id);
+    TEST_TRUE(mdl != nullptr)
+    ABORT_IF(mdl == nullptr)
+    int max_charges_seen = 0;
+    for (const auto& kv : mdl->fragments)
+      max_charges_seen = std::max(max_charges_seen, static_cast<int>(kv.second.ms2_by_charge.size()));
+    TEST_EQUAL(max_charges_seen, 2)
+
+    std::vector<Ms3Target> plan = tracker.planNextScans(precursor_id);
+    TEST_EQUAL(plan.empty(), false)
+    ABORT_IF(plan.empty())
+    TEST_EQUAL(static_cast<int>(plan.size()), 1)
+    TEST_EQUAL(static_cast<int>(plan[0].notches.size()), 1)
+    // The notch is the OTHER charge of the same fragment, never the anchor's own.
+    TEST_EQUAL(plan[0].notches[0].charge != plan[0].frag_charge, true)
+    TEST_EQUAL(plan[0].notches[0].charge == 2 || plan[0].notches[0].charge == 3, true)
+    // Real measured geometry, not a theoretical window.
+    TEST_EQUAL(plan[0].notches[0].mz > 0.0, true)
+    TEST_EQUAL(plan[0].notches[0].width > 0.0, true)
+  }
+
+  // --- separate: the SAME charge set, one scan each ------------------------------------------------
+  // Both modes derive their set from one selectNotches call, so this is that same envelope, split
+  // differently -- and one budget slot still bought the whole of it (ADR-0016).
+  {
+    Config cfg{configFor("separate")};
+    IdaLogger logger(cfg);
+    ProteoformTracker tracker(cfg, logger);
+    ScanCommand ms2_ctx = makeMs2Ctx(29.0);
+    Ms2Params p{};
+    p.collision_energy = 29;
+    DeconvolvedSpectrum d(101);
+    d.push_back(makeTwoChargePeakGroup(MASS_A));
+    tracker.feedScan(precursor_id, 2, p, 101, d, makeMatch("b", 6, MASS_A), 1.0, ms2_ctx);
+    tracker.finalizeMS2(precursor_id);
+
+    std::vector<Ms3Target> plan = tracker.planNextScans(precursor_id);
+    TEST_EQUAL(static_cast<int>(plan.size()), 2)
+    ABORT_IF(plan.size() != 2)
+    TEST_EQUAL(static_cast<int>(plan[0].notches.size()), 0)
+    TEST_EQUAL(static_cast<int>(plan[1].notches.size()), 0)
+    TEST_EQUAL(plan[0].frag_charge != plan[1].frag_charge, true)
+    TEST_EQUAL(plan[0].ion_index, plan[1].ion_index)
+    TEST_EQUAL(plan[0].ion_type, plan[1].ion_type)
+  }
+
+  // --- single (the default): one target, no notches, whatever the envelope holds -------------------
+  // The guard that the fix did not quietly turn multi-charge MS3 on for every existing config, which
+  // would have moved every MS3 golden.
+  {
+    Config cfg{configFor("single")};
+    IdaLogger logger(cfg);
+    ProteoformTracker tracker(cfg, logger);
+    ScanCommand ms2_ctx = makeMs2Ctx(29.0);
+    Ms2Params p{};
+    p.collision_energy = 29;
+    DeconvolvedSpectrum d(101);
+    d.push_back(makeTwoChargePeakGroup(MASS_A));
+    tracker.feedScan(precursor_id, 2, p, 101, d, makeMatch("b", 6, MASS_A), 1.0, ms2_ctx);
+    tracker.finalizeMS2(precursor_id);
+
+    std::vector<Ms3Target> plan = tracker.planNextScans(precursor_id);
+    TEST_EQUAL(static_cast<int>(plan.size()), 1)
+    ABORT_IF(plan.empty())
+    TEST_EQUAL(static_cast<int>(plan[0].notches.size()), 0)
+  }
+}
+END_SECTION
+
 END_TEST

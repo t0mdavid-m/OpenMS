@@ -21,16 +21,22 @@
 namespace OpenMS
 {
   /// One candidate co-isolation window: a charge state of the species being acquired, with the
-  /// measured geometry needed to isolate it and the SNR that decides whether it is worth isolating.
+  /// measured geometry needed to isolate it, the SNR that decides whether it is worth isolating at
+  /// all, and the intensity that decides which survive a clamp.
   ///
   /// mz and width are MEASURED (PeakGroup::getMzRange for a precursor, the stored observation for a
   /// fragment), never derived from theory — an isolation window must match what was actually seen.
+  ///
+  /// snr and intensity have distinct jobs and are not interchangeable: SNR is the ADMISSION test
+  /// ("is there signal here at all"), intensity is the RANKING ("which charges carry the ion current
+  /// worth spending a fill on"). A weak-but-clean charge passes the gate and still loses the slot.
   struct OPENMS_DLLAPI NotchCandidate
   {
     int charge = 0;
     double mz = 0;
     double width = 0;
     double snr = 0;
+    double intensity = 0;
   };
 
   /// Pick the co-isolation notches for one acquisition charge set (ADR-0016).
@@ -42,15 +48,23 @@ namespace OpenMS
   ///      a charge contributing no signal still consumes part of the scan's ion budget, and under
   ///      MSX the budget is shared with equal injection time per notch, so a junk notch actively
   ///      costs the good ones,
-  ///   3. order by descending SNR, so a clamp keeps the strongest,
+  ///   3. order by descending INTENSITY, so a clamp keeps the charges carrying the most ion current,
   ///   4. clamp to @p max_notches and SAY what was dropped — a silent truncation reads as "we
   ///      isolated the whole envelope" when we did not.
+  ///
+  /// Ordering by intensity rather than SNR is deliberate. SNR is a purity measure: a charge sitting
+  /// in a clean part of the spectrum can out-score a far more abundant one in a crowded region, and
+  /// under a clamp that trades away most of the envelope's ion current for tidiness. What a
+  /// co-isolated fill is *for* is harvesting that current, so intensity ranks and SNR only admits.
+  ///
+  /// The anchor is always kept — it is the stage itself and the scan's identity channel (ADR-0008) —
+  /// so the isolated set is the anchor plus the @p max_notches most intense of the rest. With an
+  /// envelope of 10 or fewer charges that is every SNR-positive charge, and the order is moot.
   ///
   /// @param candidates every observed charge of the species, anchor included
   /// @param anchor_charge the charge the cascade stage itself isolates
   /// @param snr_threshold the same targeting().snr_threshold the selector already applies
-  /// @param max_notches MAX_ISOLATION_STAGES - num_stages, which is also the instrument's own
-  ///        10-value PrecursorMass limit
+  /// @param max_notches MAX_NOTCHES_PER_STAGE — this stage's own budget, not shared with the other
   /// @param where short label for the drop message (e.g. "MS2 z=17 m=12358.3")
   inline std::vector<NotchCandidate> selectNotches(std::vector<NotchCandidate> candidates,
                                                    int anchor_charge, double snr_threshold,
@@ -67,16 +81,21 @@ namespace OpenMS
       out.push_back(c);
     }
 
+    // Descending intensity, charge as the tiebreak so the order is total and the output reproducible
+    // (two charges of one envelope can carry byte-equal intensities).
     std::sort(out.begin(), out.end(),
-              [](const NotchCandidate& a, const NotchCandidate& b) { return a.snr > b.snr; });
+              [](const NotchCandidate& a, const NotchCandidate& b) {
+                if (a.intensity != b.intensity) return a.intensity > b.intensity;
+                return a.charge < b.charge;
+              });
 
     if (static_cast<int>(out.size()) > max_notches)
     {
       const int dropped = static_cast<int>(out.size()) - max_notches;
       out.resize(max_notches);
       std::cout << "[NOTCH-CLAMP] " << where << " kept=" << max_notches << " dropped=" << dropped
-                << " (lowest-SNR charge states; cap is MAX_ISOLATION_STAGES - num_stages, which is"
-                   " also the instrument's 10-value PrecursorMass limit)" << std::endl;
+                << " (least intense charge states; cap is MAX_NOTCHES_PER_STAGE, the instrument's"
+                   " 10 MSX windows per fragmentation stage minus the anchor)" << std::endl;
     }
     return out;
   }
@@ -99,33 +118,36 @@ namespace OpenMS
     {
       auto [lo, hi] = pg.getMzRange(c);
       if (hi <= lo) continue;   // charge not present in this envelope
-      cands.push_back({c, (lo + hi) / 2.0, (hi + margin) - (lo - margin), pg.getChargeSNR(c)});
+      cands.push_back({c, (lo + hi) / 2.0, (hi + margin) - (lo - margin), pg.getChargeSNR(c),
+                       static_cast<double>(pg.getChargeIntensity(c))});
     }
     return cands;
   }
 
-  /// Write @p notches into @p cmd's stage slots for cascade stage @p k and set that stage's count.
+  /// Write @p notches into cascade stage @p k's notch block and set that stage's count.
   ///
-  /// Notches are packed at stages[num_stages ...], stage-0's first then stage-1's, so stage 1 must
-  /// be written AFTER stage 0 — writing them out of order would place stage-1's notches where
-  /// notchesForStage() looks for stage-0's. Returns how many were written (may be fewer than
-  /// requested if the slots run out, which selectNotches' clamp normally prevents).
+  /// Stage k's block is fixed at [k * MAX_NOTCHES_PER_STAGE, + MAX_NOTCHES_PER_STAGE), so the two
+  /// stages can be written in either order and neither can consume the other's slots. Returns how
+  /// many were written — fewer than requested only if the caller passed more than a stage's cap,
+  /// which selectNotches' clamp normally prevents.
   ///
-  /// Collision energy and activation are copied from the stage the notches belong to: all notches of
-  /// a stage fire into the SAME fragmentation event, and the wire has no per-notch slot for them.
+  /// No collision energy or activation is written: a notch is geometry only, because every notch of a
+  /// stage fires into the SAME fragmentation event and the wire carries one CE and one activation per
+  /// ';' group. That used to be a copy from stages[k] into a spare stage slot; the Notch record makes
+  /// it structural instead, so there is no per-notch CE to drift from the stage's.
   inline int writeNotchesForStage(ScanCommand& cmd, int k, const std::vector<NotchCandidate>& notches)
   {
-    if (k < 0 || k >= cmd.num_stages) return 0;
-    const int begin = cmd.num_stages + ((k == 1) ? cmd.stage0_notch_count : 0);
+    if (k < 0 || k > 1) return 0;
+    const int begin = k * MAX_NOTCHES_PER_STAGE;
     int written = 0;
     for (const NotchCandidate& n : notches)
     {
-      const int slot = begin + written;
-      if (slot >= MAX_ISOLATION_STAGES) break;
-      cmd.stages[slot] = cmd.stages[k];        // inherit CE / activation / reagent settings
-      cmd.stages[slot].precursor_mz = n.mz;
-      cmd.stages[slot].isolation_width = n.width;
-      cmd.stages[slot].charge_state = n.charge;
+      if (written >= MAX_NOTCHES_PER_STAGE) break;
+      Notch& slot = cmd.notches[begin + written];
+      slot.precursor_mz = n.mz;
+      slot.isolation_width = n.width;
+      slot.charge_state = n.charge;
+      slot.pad_ = 0;
       ++written;
     }
     if (k == 0) cmd.stage0_notch_count = written;

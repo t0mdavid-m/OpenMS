@@ -41,8 +41,45 @@
 
 namespace OpenMS
 {
-  /// Maximum number of isolation stages per scan command
+  /// Maximum number of cascade (MSⁿ) isolation stages per scan command.
+  ///
+  /// This is the instrument's documented ';'-axis limit: PrecursorMass, IsolationWidth, ChargeStates,
+  /// ActivationType and CollisionEnergy each accept "a maximum of 10 values" as ';'-separated groups.
+  /// The engine only ever builds 0, 1 or 2 stages.
   static constexpr int MAX_ISOLATION_STAGES = 10;
+
+  /// Maximum co-isolation windows the instrument accepts per fragmentation stage, and hence the
+  /// maximum notches per stage (a 10-plex is the anchor plus 9 notches).
+  ///
+  /// 10 is MSXTargets' own limit — "AGC target values for MSX windows, in m/z order … a maximum of
+  /// 10 values" — which is the per-scan MSX window count, matching the Q Exactive method editor's
+  /// "MSX count … 1 (no spectral multiplexing) to 10 fillings". It is a DIFFERENT ten from
+  /// MAX_ISOLATION_STAGES: that one counts cascade stages on the ';' axis, this one counts parallel
+  /// windows on the ',' axis. Conflating them capped an MS3's fragment stage at 10 - num_stages and,
+  /// worse, made stage 0 and stage 1 compete for one shared pool.
+  static constexpr int MAX_NOTCHES_PER_STAGE = 9;
+
+  /// Notch capacity of a scan command: MAX_NOTCHES_PER_STAGE for each of the two stages that can
+  /// carry notches. Stage k owns the FIXED block [k * MAX_NOTCHES_PER_STAGE, +MAX_NOTCHES_PER_STAGE),
+  /// so the two stages never contend and write order is irrelevant.
+  static constexpr int MAX_NOTCHES = 2 * MAX_NOTCHES_PER_STAGE;
+
+  /// One co-isolation notch: a parallel isolation window inside a single fragmentation stage.
+  ///
+  /// Geometry only, and that is structural rather than conventional: every notch of a stage fires
+  /// into the SAME fragmentation event, so there is no per-notch collision energy, activation type or
+  /// reaction time to carry — the wire has exactly one of each per ';'-group. Scores are likewise
+  /// absent; the *_s1 scoring block is two-stage and reports the anchor's (ADR-0016).
+  ///
+  /// Layout: 2 doubles (16) + 2 int32 (8) = 24 bytes.
+  struct OPENMS_DLLAPI Notch
+  {
+    double precursor_mz;    ///< Centre m/z of this window
+    double isolation_width; ///< Full width of this window (Da), measured, never derived from theory
+    int32_t charge_state;   ///< The charge state this window isolates
+    int32_t pad_;           ///< Explicit padding; Notch is 8-aligned because of the doubles
+  };
+  static_assert(sizeof(Notch) == 24, "Notch must be 24 bytes for P/Invoke");
 
   /// Blittable struct representing one isolation stage in a multi-stage MS2/MS3 scan.
   /// Layout: 5 doubles (40) + 2 int32 (8) + char[32] (32) = 80 bytes.
@@ -63,7 +100,8 @@ namespace OpenMS
   /// Layout: 1248 (existing) + 8 (dequeue_timestamp_ms) + 8 (microscans+pad3) + 24 (rf_lens+source_cid+source_cid_scaling)
   ///       + 64 (data_type+scan_rate) + 4 (parent_scan_id) + 84 (stage-1 scoring) + 608 (reserved) = 2048.
   /// The trailing 608 covers window_snr (8 @1440) + faims_enabled (4 @1448) + stage0_notch_count
-  /// (4 @1452) + stage1_notch_count (4 @1456) + reserved_ (588 @1460):
+  /// (4 @1452) + stage1_notch_count (4 @1456) + pad4 (4 @1460) + notches (432 @1464)
+  /// + reserved_ (152 @1896):
   /// new fields are carved OUT of reserved_ so the 2048 total and every existing offset stay fixed.
   struct OPENMS_DLLAPI ScanCommand
   {
@@ -135,49 +173,63 @@ namespace OpenMS
     /// ambiguity.
     int32_t faims_enabled;
 
-    /// @1452 / @1456 Number of EXTRA co-isolation notches at cascade stage 0 / stage 1 (ADR-0017).
+    /// @1452 / @1456 Number of EXTRA co-isolation notches at cascade stage 0 / stage 1 (ADR-0017,
+    /// amended by ADR-0019: notches have their own array and their own per-stage cap).
     ///
     /// A notch is a parallel isolation window within ONE fragmentation stage, as against a stage,
     /// which is a further fragmentation performed in sequence. All notches of a stage fire into the
     /// same fragmentation event and are read out as one spectrum. Every notch here holds a different
     /// charge state of the SAME species, so a multi-notch spectrum is not chimeric.
     ///
-    /// The descriptors live in stages[num_stages ...] -- the slots the engine has never written,
-    /// since num_stages is only ever 0, 1 or 2 -- packed stage-0's first, then stage-1's. Those
-    /// slots already carry precursor_mz / isolation_width / charge_state, which is exactly a notch,
-    /// so only this bookkeeping had to be carved (reserved_ 596 -> 588; no existing offset moves).
-    /// Use notchesForStage() rather than open-coding the arithmetic.
+    /// Each count is at most MAX_NOTCHES_PER_STAGE, so either stage can be a full 10-plex
+    /// independently of the other. The descriptors live in notches[] below, in fixed per-stage
+    /// blocks; use notchesForStage() rather than open-coding the offset.
     ///
     /// num_stages does NOT count notches, and that is load-bearing: processScan's context gate,
     /// syncEnergyMirrors_, Exploration's `si = num_stages - 1` and ScanFactory's clamp all key on
     /// it, and stay correct only while it means cascade depth.
-    ///
-    /// Capacity is MAX_ISOLATION_STAGES - num_stages (9 for an MS2, 8 shared across an MS3's two
-    /// stages). That is not a byte-budget artifact: the instrument accepts at most 10 values in
-    /// PrecursorMass, so num_stages + total notches <= 10 is its own limit and this lands on it.
     int32_t stage0_notch_count;
     int32_t stage1_notch_count;
-    char reserved_[588];           ///< Reserved for future fields (consume from here, never change total size)
+
+    /// @1460 Explicit padding so notches[] lands 8-aligned at 1464. Without it the compiler inserts
+    /// the same 4 bytes implicitly and the C# mirror has nothing to line up against.
+    int32_t pad4;
+
+    /// @1464 Co-isolation notch descriptors, 18 * 24 = 432 bytes, carved from reserved_ (588 -> 152).
+    ///
+    /// Stage k owns the fixed block [k * MAX_NOTCHES_PER_STAGE, + MAX_NOTCHES_PER_STAGE). Fixed
+    /// blocks rather than a packed shared pool, deliberately: they let each stage reach a full
+    /// 10-plex, they make write order irrelevant, and they remove the failure mode where an MS3
+    /// inheriting its parent's precursor charge set left its own fragment stage with zero slots.
+    ///
+    /// They no longer live in the unused tail of stages[]: that arrangement (ADR-0017) capped the
+    /// total at MAX_ISOLATION_STAGES - num_stages, i.e. 8 shared for an MS3, on the mistaken reading
+    /// that the instrument's 10-value PrecursorMass limit was a joint budget for stages and notches.
+    /// It is not — that 10 counts ';' groups, while the ',' windows have their own limit of 10 per
+    /// group (MSXTargets). A notch also needs only 3 of IsolationStage's 8 fields, so a dedicated
+    /// 24-byte record buys 18 slots for less than the 800 bytes stages[20] would have cost.
+    Notch notches[MAX_NOTCHES];
+
+    char reserved_[152];           ///< Reserved for future fields (consume from here, never change total size)
   };
   static_assert(sizeof(ScanCommand) == 2048, "ScanCommand must be 2048 bytes for P/Invoke");
 
   /// The co-isolation notches belonging to cascade stage @p k (0 or 1), as {first, count}.
   ///
-  /// Notches are packed into stages[num_stages ...], stage-0's first then stage-1's, so stage 1's
-  /// offset depends on stage 0's COUNT, not on any fixed slot. Never open-code that arithmetic at a
-  /// read site: the packing is the one implicit part of ADR-0017's layout, and a hand-rolled offset
-  /// is exactly how stage-1's notches end up being read as stage-0's.
+  /// Stage k's notches occupy the FIXED block starting at k * MAX_NOTCHES_PER_STAGE, so the offset
+  /// depends on nothing but k — not on num_stages, not on the other stage's count. Still prefer this
+  /// accessor to open-coding `k * MAX_NOTCHES_PER_STAGE`: it is the one place the block layout is
+  /// stated, and it applies the bounds guard.
   ///
-  /// An empty range is returned as {nullptr, 0}, so a caller can loop without a count check. The
-  /// bounds guard is defensive rather than expected: the producers cap the total at
-  /// MAX_ISOLATION_STAGES - num_stages, which is also the instrument's own 10-value limit.
-  inline std::pair<const IsolationStage*, int> notchesForStage(const ScanCommand& cmd, int k)
+  /// An empty range is returned as {nullptr, 0}, so a caller can loop without a count check.
+  inline std::pair<const Notch*, int> notchesForStage(const ScanCommand& cmd, int k)
   {
-    const int count = (k == 0) ? cmd.stage0_notch_count : (k == 1) ? cmd.stage1_notch_count : 0;
+    if (k < 0 || k > 1) return {nullptr, 0};
+    const int count = (k == 0) ? cmd.stage0_notch_count : cmd.stage1_notch_count;
     if (count <= 0) return {nullptr, 0};
-    const int begin = cmd.num_stages + ((k == 1) ? cmd.stage0_notch_count : 0);
-    if (begin < 0 || begin + count > MAX_ISOLATION_STAGES) return {nullptr, 0};
-    return {&cmd.stages[begin], count};
+    const int begin = k * MAX_NOTCHES_PER_STAGE;
+    if (count > MAX_NOTCHES_PER_STAGE || begin + count > MAX_NOTCHES) return {nullptr, 0};
+    return {&cmd.notches[begin], count};
   }
 
   /// Total isolation windows the instrument is asked for at cascade stage @p k: the stage itself
