@@ -22,6 +22,7 @@
 #include <vector>
 #include <algorithm>
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <set>
 #include <string>
@@ -2506,6 +2507,198 @@ START_SECTION(inclusion_ms3_full_acquisition_roundtrip)
          << (all_ms3_parents_resolve ? std::string("")
                                      : (", first unresolved MS3 parent = '" + unresolved + "'")))
   TEST_EQUAL(all_ms3_parents_resolve, true)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// Exploration x co-isolation. This combination had NO coverage on either CI path: every charge-mode
+// golden runs without exploration, and every exploration test leaves precursor_charges at "single".
+//
+// What it guards: an MS3 cascaded from an MS2-EXPLORATION winner takes its stage 0 from
+// group.variants[best_idx].cmd (Exploration.cpp:687 -> initiateNextLevel -> buildMS3), which is a
+// different command object than the regular path's resolved parent_ctx. If that object ever stops
+// carrying the notch block -- a variant rebuilt from descriptors, a snapshot taken too early, a
+// stage-0 re-selection -- the MS3 replays a FRACTION of the precursor it was supposed to regenerate
+// the fragment from, and nothing else in the tree notices.
+//
+// Two drives, identical but for the two charge keys, because the notch assertion below would pass
+// vacuously on data with single-charge envelopes: the "single" drive must acquire the same way and
+// carry ZERO notches. That is what makes the multiplexed drive's counts evidence.
+/////////////////////////////////////////////////////////////
+
+START_SECTION(exploration_multiplexed_ms3_inherits_the_variant_notch_set)
+{
+  auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
+  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
+  ABORT_IF(ms1_scans.size() < 2 || ms2_scans.empty())
+
+  // Same cytC MS2->MS3 acquisition as the section above, with targeting off and an MS2 CE sweep added,
+  // so the MS3s arrive via the exploration cascade rather than the regular path. @PC@/@FC@ are spliced
+  // per drive. R"JSON(...)JSON" is delimited deliberately: an undelimited R"(...)" ends at the first
+  // ")" inside the payload, which has silently truncated a config in this tree before.
+  const std::string cfg_template = R"JSON({
+  "deconvolution": {
+    "score_threshold": 0.0,
+    "tqscore_threshold": 0.9,
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [10, 10, 10]
+  },
+  "flashtnt": {
+    "min_length": 3,
+    "max_length": 8
+  },
+  "faims": {
+    "cv_values": [],
+    "max_cv_skip": 0,
+    "cv_precursor_threshold": 15
+  },
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false,
+      "value_ms": 60000
+    },
+    "scan_timeout": {
+      "enabled": false,
+      "value_ms": 30000
+    },
+    "agc_interval_seconds": 999999
+  },
+  "files": {
+    "target_logs": [],
+    "fasta": "",
+    "inclusion_list": "",
+    "ptm_list": ""
+  },
+  "conditional_ms2": false,
+  "precursor_selection": {
+    "rt_window": 180,
+    "targeting": "none",
+    "consider_all_charges": false,
+    "strict_inclusion": false,
+    "tie_threshold": 0.1,
+    "rank_by": "qscore",
+    "max_precursors": 1,
+    "precursor_charges": "@PC@",
+    "exploration": {
+      "metric": "mass_count",
+      "ce_min": 20,
+      "ce_max": 40,
+      "ce_step": 5,
+      "activations": ["HCD"]
+    }
+  },
+  "characterization": {
+    "mode": "ambiguity",
+    "protein_sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE",
+    "max_targets": 3,
+    "fragment_charges": "@FC@"
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
+    },
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
+    },
+    "ms3": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 35,
+      "resolution": 120000
+    }
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false,
+    "reporter_mz_tol": 0.002,
+    "fold_change_threshold": 1.4
+  }
+}
+)JSON";
+
+  auto instantiate = [&cfg_template](const std::string& pc, const std::string& fc) {
+    std::string s = cfg_template;
+    s.replace(s.find("@PC@"), 4, pc);
+    s.replace(s.find("@FC@"), 4, fc);
+    return s;
+  };
+
+  // Notch charge list of one cascade stage, as ints -- structural, so no float tolerance is involved.
+  auto notch_charges = [](const ScanCommand& c, int k) {
+    std::vector<int> out;
+    auto r = notchesForStage(c, k);
+    for (int i = 0; i < r.second; ++i) out.push_back(r.first[i].charge_state);
+    return out;
+  };
+
+  auto drive = [&](const std::string& cfg) {
+    FLASHIda* ida = new FLASHIda(const_cast<char*>(cfg.c_str()));
+    AcqResult a = runInterleaved(ida, std::vector<ScanData>{ms1_scans[1]},
+                                 std::vector<ScanData>{ms2_scans[0]}, nullptr, 300);
+    delete ida;
+    return a;
+  };
+
+  // ---- Drive 1: "single". The control. Same acquisition, no notch anywhere. ----
+  AcqResult s = drive(instantiate("single", "single"));
+  TEST_EQUAL(s.ms2_cmds.size() >= 1, true)
+  TEST_EQUAL(s.ms3_cmds.size() >= 1, true)
+
+  int single_notches = 0;
+  for (const auto& c : s.ms2_cmds) single_notches += c.stage0_notch_count + c.stage1_notch_count;
+  for (const auto& c : s.ms3_cmds) single_notches += c.stage0_notch_count + c.stage1_notch_count;
+  STATUS("single: ms2=" << s.ms2_cmds.size() << " ms3=" << s.ms3_cmds.size()
+         << " notches=" << single_notches)
+  TEST_EQUAL(single_notches, 0)
+
+  // ---- Drive 2: "multiplexed" at both levels. ----
+  AcqResult m = drive(instantiate("multiplexed", "multiplexed"));
+  TEST_EQUAL(m.ms2_cmds.size() >= 1, true)
+  TEST_EQUAL(m.ms3_cmds.size() >= 1, true)
+
+  // The exploration path co-isolates at all: at least one MS2 variant carries notches. Without this the
+  // inheritance check below would be satisfied by every MS3 inheriting an empty set.
+  int notched_ms2 = 0, widest_ms2 = 0;
+  std::map<std::string, std::vector<int>> ms2_stage0_by_id;   // 3-char id -> its stage-0 notch charges
+  for (const auto& c : m.ms2_cmds)
+  {
+    if (c.stage0_notch_count > 0) ++notched_ms2;
+    if (c.stage0_notch_count > widest_ms2) widest_ms2 = c.stage0_notch_count;
+    // No stage can exceed its OWN block; a larger value means the two stages are sharing again.
+    TEST_EQUAL(c.stage0_notch_count <= MAX_NOTCHES_PER_STAGE, true)
+    std::string d(c.scan_description);
+    if (d.size() >= 3) ms2_stage0_by_id[d.substr(0, 3)] = notch_charges(c, 0);
+  }
+  STATUS("multiplexed: ms2=" << m.ms2_cmds.size() << " notched_ms2=" << notched_ms2
+         << " widest_stage0=" << widest_ms2 << " ms3=" << m.ms3_cmds.size())
+  TEST_EQUAL(notched_ms2 >= 1, true)
+
+  // Every MS3 replays its parent's FULL precursor isolation, not just the anchor.
+  int checked = 0, mismatched = 0;
+  for (const auto& c : m.ms3_cmds)
+  {
+    std::string parent(c.parent_scan_id);
+    auto pit = ms2_stage0_by_id.find(parent);
+    if (pit == ms2_stage0_by_id.end()) continue;   // parent resolution is the section above's job
+    ++checked;
+    if (notch_charges(c, 0) != pit->second) ++mismatched;
+    TEST_EQUAL(c.stage0_notch_count <= MAX_NOTCHES_PER_STAGE, true)
+    TEST_EQUAL(c.stage1_notch_count <= MAX_NOTCHES_PER_STAGE, true)
+  }
+  STATUS("MS3 stage-0 inheritance: checked=" << checked << " mismatched=" << mismatched)
+  TEST_EQUAL(checked >= 1, true)
+  TEST_EQUAL(mismatched, 0)
 }
 END_SECTION
 
