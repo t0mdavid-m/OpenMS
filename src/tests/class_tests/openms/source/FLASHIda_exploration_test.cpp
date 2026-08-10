@@ -2627,11 +2627,16 @@ START_SECTION(exploration_multiplexed_ms3_inherits_the_variant_notch_set)
 }
 )JSON";
 
+  // inclusionPinCytc is the canonical cytC recipe every other cytC section here uses -- it swaps
+  // targeting none -> inclusion and points inclusion_list at inclusion_cytc.txt. Required, not
+  // decorative: under targeting "none" the top-qscore precursor of this survey is not reliably cytC,
+  // and if it is not, the fresh57 ladder matches nothing and no MS3 fires at all. Its other two
+  // replacements (M-start sequence, mode) are already satisfied above, so they no-op.
   auto instantiate = [&cfg_template](const std::string& pc, const std::string& fc) {
     std::string s = cfg_template;
     s.replace(s.find("@PC@"), 4, pc);
     s.replace(s.find("@FC@"), 4, fc);
-    return s;
+    return inclusionPinCytc(s);
   };
 
   // Notch charge list of one cascade stage, as ints -- structural, so no float tolerance is involved.
