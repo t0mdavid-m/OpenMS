@@ -259,12 +259,37 @@ namespace OpenMS
     if (git == active_groups_.end()) return {};
     const ExplorationGroup& group = git->second;
 
+    // Charge ceiling = the highest charge THIS VARIANT ACTUALLY ISOLATED, not the group's anchor
+    // (ADR-0016). With a co-isolated charge set every member is genuinely present in the isolation, so
+    // a fragment of the highest member may itself carry that charge; capping at the anchor silently
+    // discards those fragments before matching -- and since MS3 targets are chosen from the matched
+    // fragment list, that thins the target set with nothing anywhere reading wrong.
+    //
+    // This mirrors the two regular return paths, which already call maxIsolatedCharge
+    // (FLASHIda.cpp:332 for MS2, :532 for MS3); the exploration path was the one that did not, and it
+    // is the only deconvolveMSn in this file -- it serves MS2 *and* MS3 variants. The LAST cascade
+    // stage is the one that fragmented, so stage 0 for an MS2 variant and stage 1 for an MS3 variant.
+    //
+    // The mass is deliberately NOT touched: every co-isolated member is the same neutral mass, which
+    // is exactly why the spectrum is not chimeric. Only the charge ceiling was ever charge-specific.
+    // With no notches this resolves to abs(anchor charge), i.e. the previous value, so every existing
+    // golden stays byte-identical.
+    int precursor_charge = group.precursor_charge;
+    const int variant_slot = vit->second.variant_index;   // array index into group.variants,
+                                                          // NOT ExplorationVariant::variant_index
+                                                          // (which is -1 for the CE-0 baseline)
+    if (variant_slot >= 0 && variant_slot < static_cast<int>(group.variants.size()))
+    {
+      const ScanCommand& vcmd = group.variants[variant_slot].cmd;
+      if (vcmd.num_stages > 0) precursor_charge = maxIsolatedCharge(vcmd, vcmd.num_stages - 1);
+    }
+
     // Deconvolve with correct precursor context from the group
     DeconvolvedSpectrum ms2_deconv(tracking_id);
     if (mzs != nullptr && ints != nullptr && length > 0)
     {
       exploration_deconv_->deconvolveMSn(mzs, ints, length, rt,
-                                         group.precursor_mass, group.precursor_charge);
+                                         group.precursor_mass, precursor_charge);
       ms2_deconv = exploration_deconv_->storedMS2();
     }
 
