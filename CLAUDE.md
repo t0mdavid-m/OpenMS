@@ -329,7 +329,7 @@ the caller's responsibility.
 |---|---|---|
 | `ida.log` | — | free-text MS1 summary (not a TSV) |
 | `scan_commands.tsv` | 32 | one row per **dequeued** command; the wide MS3-fragment stream |
-| `scan_results.tsv` | 29 | pure acquisition-**event** log per `processScan` (identification payload was moved out, 34→29) |
+| `scan_results.tsv` | 29 | pure acquisition-**event** log per `processScan` (34→29 identification payload moved out, →28 per-charge deconv restructure, →29 `deconv_qscores`) |
 | `identification.tsv` | 32 | per-scan MS2/MS3 identification leaf |
 | `pooled_identification.tsv` | 19 | per-precursor cumulative proteoform trajectory |
 
@@ -351,6 +351,12 @@ the caller's responsibility.
   only the anchor window. Collision energy and activation do **not** gain the axis — all notches of a
   stage fire into one fragmentation event. With `precursor_charges`/`fragment_charges` at their
   `single` default no notch exists, so these columns stay byte-identical.
+- **`scan_results`'s deconv block reuses both delimiters with different meanings** — there `';'`
+  separates masses and `','` separates one mass's observed charges (`deconv_charges`,
+  `deconv_intensities`); nothing to do with notches. `deconv_qscores`, between `deconv_masses` and
+  `deconv_charges`, is `';'`-only: `PeakGroup::getQscore()` is one value per mass — the representative
+  charge's, not an envelope aggregate — so it stays index-aligned 1:1 with `deconv_masses`, on every
+  MS level.
 
 ## Co-isolation notches (ADR-0016, ADR-0019)
 
