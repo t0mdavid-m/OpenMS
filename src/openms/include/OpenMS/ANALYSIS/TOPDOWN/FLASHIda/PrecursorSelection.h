@@ -198,17 +198,10 @@ namespace OpenMS
     std::unordered_map<int, double> all_mass_rt_map_;
     std::unordered_map<int, double> mass_qscore_map_;
 
-    /// Per-(nominal_mass, charge) cross-scan exclusion set (charge_based_exclusion flag).
-    std::set<std::pair<int, int>> tqscore_exceeding_mass_charge_set_;
-
-    /// Per-(nominal_mass, charge) qscore accumulator, parallel to mass_qscore_map_
-    /// but one level deeper. Only touched when charge_based_exclusion is on.
-    std::map<std::pair<int, int>, double> mass_charge_qscore_map_;
-
-    /// Per-(nominal_mass, charge) RT timestamp, parallel to all_mass_rt_map_ but
-    /// one level deeper. Enables RT-window eviction of the per-charge accumulator
-    /// and exclusion set. Only touched when charge_based_exclusion is on.
-    std::map<std::pair<int, int>, double> mass_charge_rt_map_;
+    // NOTE: the three per-(nominal_mass, charge) containers that used to sit here --
+    // tqscore_exceeding_mass_charge_set_, mass_charge_qscore_map_, mass_charge_rt_map_ -- were the
+    // state behind charge_based_exclusion and went with it (ADR-0021). Exclusion is mass-keyed;
+    // acquiring several charge states is precursor_charges: "separate" / "multiplexed".
 
     /// Maps for selectively disabling mass exclusion (needed for FAIMS support)
     std::unordered_map<int, int> id_mass_map_;

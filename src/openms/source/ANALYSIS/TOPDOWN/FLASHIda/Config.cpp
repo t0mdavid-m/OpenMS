@@ -305,15 +305,29 @@ namespace OpenMS
     // what they PRODUCE: max_precursors is the MS2 count. rank_by/max_precursors/min_precursor_charge
     // are read into levels_[1] by applyCharacterizationMode_() once every section has been parsed.
     auto ps = config.value("precursor_selection", json::object());
+    // Dedicated migration error rather than the generic unknown-key message: the flag's only
+    // user-visible effect was a fan-out that is now a named acquisition mode, and a reader hitting
+    // "unknown key" would have no way to know that (ADR-0021).
+    if (ps.contains("charge_based_exclusion"))
+      throw std::invalid_argument(
+          "Config: precursor_selection.charge_based_exclusion has been removed (ADR-0021). It was a "
+          "developer flag that keyed exclusion per (mass, charge); as a side effect it was also the "
+          "only thing that made precursor_charges: \"separate\" fan out, so acquisition geometry "
+          "depended on an exclusion flag. Acquiring several charge states of one species is now "
+          "requested directly:\n"
+          "  precursor_selection.precursor_charges: \"separate\"     one MS2 per charge state\n"
+          "  precursor_selection.precursor_charges: \"multiplexed\"  one MS2 co-isolating them\n"
+          "Exclusion is mass-keyed. There is no replacement for re-selecting one mass at a "
+          "different charge on a LATER survey.");
+
     rejectUnknownKeys(ps,
-        {"rt_window", "targeting", "consider_all_charges", "charge_based_exclusion",
+        {"rt_window", "targeting", "consider_all_charges",
          "precursor_charges", "strict_inclusion", "tie_threshold",
          "rank_by", "max_precursors", "min_precursor_charge", "additional_scans", "exploration",
          "tag_expansion"},
         "precursor_selection");
     targeting_.rt_window = ps.value("rt_window", 180.0);
     targeting_.consider_all_charges = ps.value("consider_all_charges", false);
-    targeting_.charge_based_exclusion = ps.value("charge_based_exclusion", false);
     targeting_.precursor_charges = parseChargeMode(ps, "precursor_charges", "precursor_selection");
     targeting_.strict_inclusion = ps.value("strict_inclusion", false);
     targeting_.tie_threshold = ps.value("tie_threshold", 0.1);

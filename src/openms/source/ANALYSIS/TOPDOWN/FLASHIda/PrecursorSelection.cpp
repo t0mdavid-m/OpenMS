@@ -357,31 +357,6 @@ namespace OpenMS
     new_mass_score_map_.swap(mass_qscore_map_);
     std::unordered_map<int, double>().swap(new_mass_score_map_);
 
-    // remove expired entries for per-(mass, charge) state (charge_based_exclusion flag)
-    if (config_.targeting().charge_based_exclusion)
-    {
-      std::map<std::pair<int, int>, double> new_mass_charge_rt_map_;
-      std::set<std::pair<int, int>> new_mass_charge_set_;
-      std::map<std::pair<int, int>, double> new_mass_charge_qscore_map_;
-      for (const auto& [key, r] : mass_charge_rt_map_)
-      {
-        if (rt - r > config_.targeting().rt_window) { continue; }
-        new_mass_charge_rt_map_[key] = r;
-        if (tqscore_exceeding_mass_charge_set_.count(key) > 0)
-        {
-          new_mass_charge_set_.insert(key);
-        }
-        auto it = mass_charge_qscore_map_.find(key);
-        if (it != mass_charge_qscore_map_.end())
-        {
-          new_mass_charge_qscore_map_[key] = it->second;
-        }
-      }
-      new_mass_charge_rt_map_.swap(mass_charge_rt_map_);
-      new_mass_charge_set_.swap(tqscore_exceeding_mass_charge_set_);
-      new_mass_charge_qscore_map_.swap(mass_charge_qscore_map_);
-    }
-
     const int selection_phase_start = 0;
     const int selection_phase_end = 2; // inclusive
     // When selection_phase == 0, consider only the masses whose tqscore did not exceed total qscore threshold.
@@ -421,23 +396,16 @@ namespace OpenMS
           if (species_selected >= mass_count) { break; }
           const size_t pushed_before_pg = selected_peak_groups_.size();
 
+          // The ANCHOR charge -- one per PeakGroup. This was a multi-element list only under
+          // charge_based_exclusion, which is gone (ADR-0021); how many charges the scan then
+          // ISOLATES is decided by precursor_charges further down, from the PeakGroup itself.
+          //
+          // Deliberately still a one-element loop rather than straight-line code: the body below
+          // uses `break` and `continue` throughout, and both would silently retarget the enclosing
+          // per-PeakGroup loop if this one were removed -- e.g. the qscore-threshold `break`, which
+          // means "stop considering this species" and would become "stop selecting entirely".
           struct ChargeCandidate { int charge; double score; };
           std::vector<ChargeCandidate> charges_to_process;
-
-          if (config_.targeting().charge_based_exclusion)
-          {
-            auto [min_c, max_c] = pg.getAbsChargeRange();
-            const auto& all_qs = pg.getAllQscores();
-            for (int c = min_c; c <= max_c; ++c)
-            {
-              if (all_qs.count(c) == 0) { continue; }
-              double s = all_qs.at(c);
-              charges_to_process.push_back({c, s});
-            }
-            std::sort(charges_to_process.begin(), charges_to_process.end(),
-                      [](const ChargeCandidate& a, const ChargeCandidate& b) { return a.score > b.score; });
-          }
-          else
           {
             int charge;
             double score;
@@ -616,12 +584,6 @@ namespace OpenMS
               }
             }
 
-            if (config_.targeting().charge_based_exclusion
-                && tqscore_exceeding_mass_charge_set_.count({nominal_mass, charge}) > 0)
-            {
-              continue;
-            }
-
             // Skip masses over the tqscore threshold in ALL selection phases. Previously this ran in
             // phase 0 only (`< selection_phase_end - 1`), so an already-excluded mass was re-admitted in
             // the inclusion fallback phase (phase 1): non-strict inclusion zeroes target thresholds and
@@ -664,28 +626,10 @@ namespace OpenMS
                 acquired_charges.push_back(n.charge);
             }
 
-            if (config_.targeting().charge_based_exclusion)
+            // Compute total qscore. Mass-keyed, unconditionally: exclusion no longer has a
+            // per-(mass, charge) variant (ADR-0021). Runs ONCE per species even when the scan
+            // isolates several of its charges -- see the emit loop below for why that matters.
             {
-              // Per-(mass, charge) accumulation. No mass-level writes — the mass is never globally excluded.
-              for (int z : acquired_charges)
-              {
-                const auto key = std::make_pair(nominal_mass, z);
-                auto inter = mass_charge_qscore_map_.find(key);
-                if (inter == mass_charge_qscore_map_.end())
-                {
-                  mass_charge_qscore_map_[key] = score;
-                }
-                else {
-                  mass_charge_qscore_map_[key] = std::max(inter->second, score);
-                }
-                if (mass_charge_qscore_map_[key] > config_.targeting().tqscore_threshold)
-                {
-                  tqscore_exceeding_mass_charge_set_.insert(key);
-                }
-              }
-            }
-            else {
-              // Compute total qscore
               auto inter = mass_qscore_map_.find(nominal_mass);
               if (inter == mass_qscore_map_.end())
               {
@@ -713,13 +657,6 @@ namespace OpenMS
               if (it != charges->end()) {
                 charges->erase(it);
               }
-            }
-
-            if (config_.targeting().charge_based_exclusion)
-            {
-              // Same set as the qscore accumulation above — a co-isolated charge whose RT entry is
-              // missing would be evicted from exclusion on a different schedule from its siblings.
-              for (int z : acquired_charges) mass_charge_rt_map_[{nominal_mass, z}] = rt;
             }
 
             // Store acquisition. "separate" emits the acquisition charge set as one record PER charge
@@ -772,29 +709,20 @@ namespace OpenMS
               current_selected_mzs.insert(e_center_mz);
             }
 
-            // ONE acquisition per PeakGroup per survey. charges_to_process is a preference-ordered
-            // FALLBACK list, not a work list: it is sorted by descending per-charge qscore above, so
-            // the first charge that survives every guard is by definition the best charge not already
-            // excluded. That is the whole point of charge-keyed exclusion — a mass fragmented at one
-            // charge stays eligible at another on a LATER survey (ADR-0018).
+            // ONE anchor per PeakGroup per survey. How many charges the survey actually FRAGMENTS is
+            // decided by precursor_charges at the emit loop above, from the PeakGroup's own envelope
+            // -- never here.
             //
-            // Without this break the loop fell through to the next charge of the SAME PeakGroup, and
-            // nothing stopped it: z16 has a different center_mz so the current_selected_mzs guard
-            // misses, the charge_based_exclusion branch deliberately writes no mass-level key ("the
-            // mass is never globally excluded"), and tqscore_exceeding_mass_charge_set_ holds only
-            // (mass, z17). So one proteoform consumed as many mass_count slots as it had charges —
-            // with max_precursors 3 and three charges, P2 and P3 were never fragmented at all.
+            // This distinction is the whole history of this loop. It once walked a multi-charge list
+            // built by the charge_based_exclusion developer flag, which meant one proteoform could
+            // consume as many max_precursors slots as it had charges (with max_precursors 3 and three
+            // charges, P2 and P3 were never fragmented). Adding this break fixed that, but the
+            // "separate" mode was then implemented as a suppressed break over the same list -- so
+            // acquisition GEOMETRY silently depended on an exclusion-KEYING flag, and "separate"
+            // equalled "single" wherever that flag sat at its default, i.e. everywhere.
             //
-            // Acquiring several charges of one mass in a single survey is a legitimate thing to WANT;
-            // it is just not what this flag means. It arrives as an explicit acquisition mode
-            // (precursor_selection.precursor_charges: "separate") rather than as a side effect here.
-            //
-            // The break is UNCONDITIONAL, including under "separate". That mode fans out at the emit
-            // loop above, from the acquisition charge set, so it no longer needs to keep walking this
-            // list -- and must not, because the list is only ever multi-charge when the unrelated
-            // charge_based_exclusion flag is on. Sourcing acquisition GEOMETRY from an exclusion-KEYING
-            // flag is precisely the coupling that left "separate" inert in every shipped config
-            // (Config.h:74-76 already declared the two axes orthogonal; now they are).
+            // The flag is now gone (ADR-0021) and the break is unconditional. Asking for several
+            // charge states is precursor_charges: "separate" or "multiplexed", and nothing else.
             break;
           }  // end for charges_to_process
 
@@ -826,16 +754,6 @@ namespace OpenMS
 
     // Remove qscore from further calculations
     if (mass_qscore_map_.find(nominal_mass) != mass_qscore_map_.end()) { mass_qscore_map_[nominal_mass] /= 1 - qscore; }
-
-    if (config_.targeting().charge_based_exclusion)
-    {
-      auto cit = id_charge_map_.find(id);
-      if (cit != id_charge_map_.end())
-      {
-        const auto key = std::make_pair(nominal_mass, cit->second);
-        tqscore_exceeding_mass_charge_set_.erase(key);
-      }
-    }
   }
 
   void PrecursorSelection::parseInclusionListTSV_(const String& filename)

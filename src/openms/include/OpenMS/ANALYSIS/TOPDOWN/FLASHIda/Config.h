@@ -71,9 +71,10 @@ namespace OpenMS
   /// Membership is SNR-gated: a charge joins only if its own envelope rises above noise, because a
   /// charge contributing no signal still consumes part of the scan's ion budget.
   ///
-  /// This is an acquisition-geometry question, deliberately separate from
-  /// `charge_based_exclusion`, which is an exclusion-KEYING question: that flag decides whether a
-  /// mass already fragmented at one charge stays eligible at another on a LATER survey (ADR-0018).
+  /// This is the SOLE source of acquisition geometry (ADR-0021). It used to share the question with
+  /// `charge_based_exclusion`, an exclusion-KEYING developer flag: the list `Separate` walked was
+  /// built multi-charge only when that flag was on, so `Separate` silently equalled `Single` in every
+  /// config that left it at its default. The flag is gone; geometry has one owner.
   enum class ChargeAcquisitionMode
   {
     Single = 0,   ///< One charge per detection -- the representative / best-qscore charge. Default.
@@ -214,11 +215,9 @@ namespace OpenMS
     double tie_threshold = 0.1;
     double rt_window = 180.0;
     bool consider_all_charges = false;
-    bool charge_based_exclusion = false;  ///< Treat each (mass, charge) as an independent exclusion target (developer flag).
     /// How many charge states of a selected precursor one MS2 acquires -- from
-    /// precursor_selection.precursor_charges. Orthogonal to charge_based_exclusion above: that flag
-    /// keys EXCLUSION per (mass, charge) and makes a later survey fall back to the next unexcluded
-    /// charge; this decides the isolation GEOMETRY of a single scan (ADR-0016/0018).
+    /// precursor_selection.precursor_charges. Decides the isolation GEOMETRY of a single scan
+    /// (ADR-0016), and since ADR-0021 it is the only thing that does. Exclusion is mass-keyed.
     ChargeAcquisitionMode precursor_charges = ChargeAcquisitionMode::Single;
     // NOTE: there is no hcd_energy here any more. The precursor_selection.HCDEnergy key was deleted
     // (ADR-0014) because its only export, PrecursorSelection::getIsolationWindows(), had zero callers
