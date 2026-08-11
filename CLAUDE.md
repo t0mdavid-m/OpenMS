@@ -376,11 +376,24 @@ a stage fire into one fragmentation event" — under the old layout the writer c
 per-notch CE existed and merely happened to agree.
 
 `NotchSelection.h` holds the whole policy — SNR **gate**, descending-**intensity** order (charge as the
-tiebreak), clamp-with-report — plus `peakGroupNotchCandidates`, shared by `PrecursorSelection` (which
-records the acquired set for charge-keyed exclusion) and `buildMS2` (which writes the geometry), so the
-set recorded as acquired is by construction the set isolated. SNR admits and intensity ranks: SNR is a
-purity measure, so ordering by it would let a clean-but-faint charge displace an abundant one under a
-clamp and trade away the ion current the fill exists to harvest.
+tiebreak), clamp-with-report — plus `peakGroupNotchCandidates`, shared by `PrecursorSelection` and
+`buildMS2` (which writes the geometry), so the set recorded as acquired is by construction the set
+isolated. SNR admits and intensity ranks: SNR is a purity measure, so ordering by it would let a
+clean-but-faint charge displace an abundant one under a clamp and trade away the ion current the fill
+exists to harvest.
+
+**Both MS2 non-single modes read that one call, and this is load-bearing** (ADR-0021). `multiplexed`
+turns the set into notches on one command; `separate` emits one command per member. They differ only
+in scan count. `separate` used to source its charges from `charges_to_process` instead — a list that
+was multi-valued only under the `charge_based_exclusion` developer flag — so acquisition GEOMETRY
+depended on an exclusion-KEYING flag and the mode was inert wherever that flag sat at its default,
+i.e. everywhere. The flag is deleted; exclusion is mass-keyed.
+
+⚠️ **The fan-out lives at the emit loop, below the mass-level bookkeeping — never in the candidate
+loop.** That bookkeeping runs once per species and both its guards
+(`tqscore_exceeding_mass_rt_map_`, and the "previously acquired with higher qscore" skip) key on
+`nominal_mass`, so iterating charges through it `continue`s on every sibling. Anyone "fixing"
+`separate` by making the candidate loop multi-charge will reproduce the original bug.
 
 **The MS3 side needs the fragment's whole envelope, and getting it there is the part that broke.**
 `ProteoformTracker::stageScan` flattens each fragment PeakGroup to `getMaxIntensityAbsCharge()` for the
