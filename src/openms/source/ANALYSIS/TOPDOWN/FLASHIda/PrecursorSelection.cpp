@@ -639,15 +639,23 @@ namespace OpenMS
             // save mass acquisition
             all_mass_rt_map_[nominal_mass] = rt;
 
-            // EVERY charge this scan will actually isolate, not just the anchor. Under
-            // precursor_charges: multiplexed one scan co-isolates a whole set, so recording only the
-            // anchor would leave its siblings eligible and the next survey's fallback would land on a
-            // charge already fragmented (ADR-0018). The set comes from the same
-            // peakGroupNotchCandidates + selectNotches pair buildMS2 uses, so what is recorded as
-            // acquired is by construction what gets isolated. Computed once: both the qscore
-            // accumulation and the RT map below must record the same set.
+            // The species' ACQUISITION CHARGE SET -- every charge this survey will fragment, not just
+            // the anchor. Both non-single modes acquire the SAME set and differ only in scan count
+            // (ADR-0016): multiplexed co-isolates it as notches in one scan, separate emits one scan
+            // per member. Deriving both from this one call is what keeps that true; it is also how the
+            // MS3 side does it (ProteoformTracker::planNextScans).
+            //
+            // Recording only the anchor would leave its siblings eligible and the next survey's
+            // fallback would land on a charge already fragmented (ADR-0018). The set comes from the
+            // same peakGroupNotchCandidates + selectNotches pair buildMS2 uses, so what is recorded as
+            // acquired is by construction what gets isolated. Computed once: the qscore accumulation,
+            // the RT map and the emit loop below must all record the same set.
+            //
+            // The anchor is `charge` AFTER inclusion-mode target matching may have reassigned it
+            // (:520) -- selectNotches drops the anchor from its output, so a stale anchor would emit
+            // the matched charge twice.
             std::vector<int> acquired_charges{charge};
-            if (config_.targeting().precursor_charges == ChargeAcquisitionMode::Multiplexed)
+            if (config_.targeting().precursor_charges != ChargeAcquisitionMode::Single)
             {
               for (const NotchCandidate& n :
                    selectNotches(peakGroupNotchCandidates(pg, optimal_window_margin_), charge,
@@ -707,28 +715,62 @@ namespace OpenMS
               }
             }
 
-            // Store acquisition
-            id_mass_map_[window_id_] = nominal_mass;
-            id_mz_map_[window_id_] = integer_mz;
-            id_qscore_map_[window_id_] = score;
-            id_charge_map_[window_id_] = charge;
             if (config_.targeting().charge_based_exclusion)
             {
               // Same set as the qscore accumulation above — a co-isolated charge whose RT entry is
               // missing would be evicted from exclusion on a different schedule from its siblings.
               for (int z : acquired_charges) mass_charge_rt_map_[{nominal_mass, z}] = rt;
             }
-            trigger_ids_.push_back(window_id_);
-            window_id_++;
 
-            selected_peak_groups_.push_back(pg);
-            trigger_charges_.push_back(charge);
-            trigger_scores_.push_back(score);
+            // Store acquisition. "separate" emits the acquisition charge set as one record PER charge
+            // -- each its own Precursor with its own precursor_id (Config.h:80) -- while single and
+            // multiplexed emit exactly one, byte-identically to before.
+            //
+            // The mass-level bookkeeping above stays deliberately OUTSIDE this loop. It ran once for
+            // the species and must not run again per charge: the tqscore_exceeding_mass_rt_map_ guard
+            // and the "previously acquired with higher qscore" guard in the mass_qscore_map_ block are
+            // both keyed on nominal_mass, so a second pass would `continue` on every sibling -- the
+            // first writes the mass on the anchor, and charges are ranked descending so every later
+            // one scores lower. That is exactly why the fan-out could not simply be a walk of
+            // charges_to_process, and why "separate" was inert whenever charge_based_exclusion --
+            // the only thing that made that list multi-charge -- was off, i.e. in every shipped config.
+            const bool emit_per_charge =
+                config_.targeting().precursor_charges == ChargeAcquisitionMode::Separate;
 
-            trigger_left_isolation_mzs_.push_back(mz1);
-            trigger_right_isolation_mzs_.push_back(mz2);
-            current_selected_masses.insert(pg.getMonoMass());
-            current_selected_mzs.insert(center_mz);
+            for (size_t ei = 0, emit_count = emit_per_charge ? acquired_charges.size() : 1;
+                 ei < emit_count; ++ei)
+            {
+              const int emit_charge = emit_per_charge ? acquired_charges[ei] : charge;
+
+              // The anchor keeps the geometry computed above: inclusion-mode target matching may have
+              // recomputed mz1/mz2/center_mz for a matched charge (:521-525), and recomputing here
+              // would silently discard that. Siblings measure their own window the same way, margin
+              // included, so every emitted record carries MEASURED geometry.
+              double e_mz1 = mz1, e_mz2 = mz2, e_center_mz = center_mz;
+              if (emit_charge != charge)
+              {
+                std::tie(e_mz1, e_mz2) = pg.getMzRange(emit_charge);
+                e_center_mz = (e_mz1 + e_mz2) / 2.0;
+                e_mz1 -= optimal_window_margin_;
+                e_mz2 += optimal_window_margin_;
+              }
+
+              id_mass_map_[window_id_] = nominal_mass;
+              id_mz_map_[window_id_] = (int)round(e_center_mz);
+              id_qscore_map_[window_id_] = score;
+              id_charge_map_[window_id_] = emit_charge;
+              trigger_ids_.push_back(window_id_);
+              window_id_++;
+
+              selected_peak_groups_.push_back(pg);
+              trigger_charges_.push_back(emit_charge);
+              trigger_scores_.push_back(score);
+
+              trigger_left_isolation_mzs_.push_back(e_mz1);
+              trigger_right_isolation_mzs_.push_back(e_mz2);
+              current_selected_masses.insert(pg.getMonoMass());
+              current_selected_mzs.insert(e_center_mz);
+            }
 
             // ONE acquisition per PeakGroup per survey. charges_to_process is a preference-ordered
             // FALLBACK list, not a work list: it is sorted by descending per-charge qscore above, so
@@ -747,11 +789,13 @@ namespace OpenMS
             // it is just not what this flag means. It arrives as an explicit acquisition mode
             // (precursor_selection.precursor_charges: "separate") rather than as a side effect here.
             //
-            // Separate is that mode: it keeps walking charges_to_process, so this PeakGroup yields one
-            // acquisition PER charge state, each its own Precursor with its own model -- and the whole
-            // envelope costs ONE budget slot, the same as multiplexing it into a single scan costs. The
-            // two modes therefore differ only in scan count, never in how much budget a species buys.
-            if (config_.targeting().precursor_charges != ChargeAcquisitionMode::Separate) break;
+            // The break is UNCONDITIONAL, including under "separate". That mode fans out at the emit
+            // loop above, from the acquisition charge set, so it no longer needs to keep walking this
+            // list -- and must not, because the list is only ever multi-charge when the unrelated
+            // charge_based_exclusion flag is on. Sourcing acquisition GEOMETRY from an exclusion-KEYING
+            // flag is precisely the coupling that left "separate" inert in every shipped config
+            // (Config.h:74-76 already declared the two axes orthogonal; now they are).
+            break;
           }  // end for charges_to_process
 
           // One species consumed, however many acquisitions it produced.
