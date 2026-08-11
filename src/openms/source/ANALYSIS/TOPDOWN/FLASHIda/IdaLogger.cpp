@@ -113,7 +113,7 @@ namespace OpenMS
                             << "variant_index\ttotal_variants\t"
                             << "winner_tracking_id\t"  // F5: group-completing exploration winner pointer
                             << "activation_type\tcollision_energy\treaction_time\t"
-                            << "deconv_masses\tdeconv_charges\tdeconv_intensities\t"
+                            << "deconv_masses\tdeconv_qscores\tdeconv_charges\tdeconv_intensities\t"
                             << "resolve_ts\treceived_ts\tdequeue_ts\n";
         results_tsv_stream_.flush();
       }
@@ -440,19 +440,33 @@ namespace OpenMS
                         << collision_energy << "\t"
                         << reaction_time << "\t";
 
-    // Deconvolved masses, then the per-charge breakdown: one ';'-group per PeakGroup in each column,
-    // with that group's observed charges and their OWN intensities ','-joined inside, index-aligned.
+    // Deconvolved masses, then the per-mass score, then the per-charge breakdown: one ';'-group per
+    // PeakGroup in each column, with that group's observed charges and their OWN intensities ','-joined
+    // inside, index-aligned.
     //
     //   deconv_masses       12358.31;15234.11
-    //   deconv_charges      12,13,14;9,10
-    //   deconv_intensities  3e5,5e5,8e5;1e5,2e5
+    //   deconv_qscores      0.83;0.44
+    //   deconv_charges      12,14;9,10
+    //   deconv_intensities  3e5,8e5;1e5,2e5
+    //
+    // deconv_qscores is the PER-MASS value: PeakGroupScoring's logistic evaluated at the representative
+    // charge (getRepAbsCharge(), the max-ChargeSNR charge). It is therefore an ELEMENT of the per-charge
+    // qscore set, not an aggregate of it -- which is also why it needs no ','-axis while charges and
+    // intensities do -- and for a mass that was selected it equals that command's scan_commands.qscore.
+    //
+    // It is written unconditionally, on every MS level, and deliberately is NOT the config-dependent
+    // selection score (consider_all_charges swaps in getBestQScore() at the selection site). One
+    // definition everywhere means a reader can compare the column across rows, runs and configs without
+    // first knowing which selection knobs were set. The one caveat is provenance, not definition:
+    // exploration-variant rows are deconvolved by Exploration's SECOND Deconvolution instance, built
+    // from a different tolerance list, so their scores are not directly comparable to production rows.
     //
     // deconv_intensities used to be getIntensity() -- the PeakGroup TOTAL, summed across charge states
     // -- and the charge information was only the [min,max] range, so the log could say how much signal
     // a mass carried but never how it was distributed across the envelope. That distribution is the
     // input to charge-state co-isolation: it is what decides which charges clear the SNR gate.
-    // min/max are dropped as derivable from the charge list, so this is three columns where there
-    // were four.
+    // min/max are dropped as derivable from the charge list, so that reshape left three columns where
+    // there had been four; deconv_qscores makes it four again for the unrelated reason above.
     //
     // A charge is listed only when it actually carries intensity, so the group is the OBSERVED
     // envelope rather than every integer in the range.
@@ -462,6 +476,15 @@ namespace OpenMS
       {
         if (i > 0) results_tsv_stream_ << ";";
         results_tsv_stream_ << (*deconv_spectrum)[i].getMonoMass();
+      }
+      results_tsv_stream_ << "\t";
+      // No std::fixed / setprecision here, deliberately: results_tsv_stream_ is the one IdaLogger stream
+      // that is never given a precision, and both are STICKY -- setting them for this column would silently
+      // reformat rt, remaining_ratio, exploration_score and the NEXT row's deconv_masses.
+      for (size_t i = 0; i < deconv_spectrum->size(); i++)
+      {
+        if (i > 0) results_tsv_stream_ << ";";
+        results_tsv_stream_ << (*deconv_spectrum)[i].getQscore();
       }
       results_tsv_stream_ << "\t";
       for (size_t i = 0; i < deconv_spectrum->size(); i++)
@@ -495,7 +518,9 @@ namespace OpenMS
     }
     else
     {
-      results_tsv_stream_ << "\t\t";
+      // One tab per gap BETWEEN the four deconv columns; the trailing tab before resolve_ts is emitted
+      // below for both branches alike. Four columns => three tabs (it was two while there were three).
+      results_tsv_stream_ << "\t\t\t";
     }
     results_tsv_stream_ << "\t" << resolve_ts
                         << "\t" << received_ts

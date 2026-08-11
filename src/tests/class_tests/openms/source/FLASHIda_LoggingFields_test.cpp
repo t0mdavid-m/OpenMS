@@ -194,9 +194,12 @@ START_SECTION(schema_column_counts)
   TEST_EQUAL(c.headers.size(), 32)   // E6: + scan_description; P5: + precursor_id; + ms3_proteoform (wide MS3 fragment); ADR-0012: + faims_enabled
   // E5: + ms_level; F5: + winner_tracking_id; slim-down: -5 id-payload cols (34->29); per-charge
   // deconv output replaced 4 columns (masses/intensities/min_charge/max_charge) with 3
-  // (masses/charges/intensities), min and max being derivable from the charge list (29->28). Every
-  // r.colIndex pinned below is <= 18, i.e. ahead of the deconv block, so none of them moved.
-  TEST_EQUAL(r.headers.size(), 28)
+  // (masses/charges/intensities), min and max being derivable from the charge list (29->28); then
+  // + deconv_qscores, one PeakGroup::getQscore() per deconvolved mass, so the score the survey was
+  // ranked on is logged beside the mass list rather than only for the masses that won a scan (28->29).
+  // Every r.colIndex pinned below is <= 18, i.e. ahead of the deconv block, and deconv_qscores lands
+  // at 23 (between deconv_masses at 22 and deconv_charges), so none of them moved.
+  TEST_EQUAL(r.headers.size(), 29)
   TEST_EQUAL(i.headers.size(), 32)   // I2: +6 iso/snr/intensity; P5: +precursor_id; +theoretical_masses/diff_da/diff_ppm; C2: +ms3_fragment_coverage; + tic_coverage; C: + flash_extender_score
 
   // Spot-check exact header identities / order at the boundaries that matter for parsing.
@@ -641,6 +644,15 @@ START_SECTION(results_ms1_columns)
       for (const auto& v : is) per_charge_aligned = per_charge_aligned && toD(v) > 0.0;
     }
     TEST_TRUE(per_charge_aligned)
+    // deconv_qscores is PER-MASS, not per-charge: one PeakGroup::getQscore() per ';'-group and no
+    // ','-axis at all, so its group count is exactly deconv_masses' (that 1:1 index alignment is what
+    // lets a reader put a score on a mass). The value is a logistic output (PeakGroupScoring::getQscore
+    // returns 1/(1+exp(score))), hence strictly positive and bounded by 1.
+    auto qs = splitTokens(cell(res, row, "deconv_qscores"), ';');
+    TEST_EQUAL(qs.size(), masses.size())
+    bool q_in_range = true;
+    for (const auto& q : qs) q_in_range = q_in_range && toD(q) > 0.0 && toD(q) <= 1.0;
+    TEST_TRUE(q_in_range)
     // child_ids space-split, each a real command id, count == commands_pushed
     auto kids = splitTokens(cell(res, row, "child_ids"), ' ');
     int pushed = std::atoi(cell(res, row, "commands_pushed").c_str());
@@ -696,6 +708,11 @@ START_SECTION(results_ms2_normal_columns)
     TEST_TRUE(inActivationSet(cell(res, row, "activation_type")))
     TEST_TRUE(nonNegFinite(toD(cell(res, row, "reaction_time"))))
     // tag_count + tic_coverage removed from scan_results (tic_coverage now on identification.tsv; §T9 covers it)
+    // deconv_qscores is written on EVERY MS level, not just the MS1 survey §R1 checks: one value per
+    // deconvolved mass, so an MS2 row's list is index-aligned with its own deconv_masses. Unguarded on
+    // purpose -- an MS2 that deconvolved nothing logs both cells empty, and 0 == 0 still holds.
+    TEST_EQUAL(splitTokens(cell(res, row, "deconv_qscores"), ';').size(),
+               splitTokens(cell(res, row, "deconv_masses"), ';').size())
     // non-exploration: exploration cols pinned
     TEST_EQUAL(cell(res, row, "exploration_group_id"), std::string("-1"))
     TEST_EQUAL(cell(res, row, "variant_index"), std::string("-1"))
@@ -796,12 +813,70 @@ START_SECTION(results_ms3_normal_columns)
     TEST_TRUE(std::abs(toD(ce[1]) - 35.0) < 1.0)  // MS3 fragmentation CE
     TEST_TRUE(inActivationSet(act[0]) && inActivationSet(act[1]))
     TEST_TRUE(nonNegFinite(toD(rt[0])) && nonNegFinite(toD(rt[1])))
+    // deconv_qscores reaches MS3 too -- it is one value per deconvolved mass of THIS scan, so unlike the
+    // 2-stage scalars above it never gains the ';'-stage axis; it stays index-aligned with deconv_masses.
+    // Unguarded on purpose: an MS3 that deconvolved nothing logs both cells empty, and 0 == 0 still holds.
+    TEST_EQUAL(splitTokens(cell(res, row, "deconv_qscores"), ';').size(),
+               splitTokens(cell(res, row, "deconv_masses"), ';').size())
     // NOTE: the MS3 identification payload (matched_protein/proteoform_sequence/tic_coverage/fragment_count/
     // tag_count) was removed from scan_results in the slim-down. The MS3 fragment proteoform now lives on
     // scan_commands.ms3_proteoform (locked in §T9/§F3) and tic on identification.tsv; this section retains the
     // match-independent scan_results checks (2-stage CE/act/rt + terminal structure) on every MS3 row.
   }
   TEST_TRUE(found_ms3)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// §R5 -- scan_results.tsv : deconv_qscores logs THE sort key, so an MS1 row's list is non-increasing.
+//        PrecursorSelection::filterPeakGroupsUsingMassExclusion_ orders the survey spectrum with
+//        DeconvolvedSpectrum::sortByQscore(), which compares PeakGroup::getQscore() verbatim, and the
+//        writer walks that same spectrum in place -- so a monotone list is the observable consequence of
+//        the column holding that exact score. §R1 pins the column's SHAPE (one value per mass, in [0,1]);
+//        this pins WHICH score, and it is the only assertion that fails if the column is ever re-pointed
+//        at getBestQScore() or getQscore2D() -- both are per-PeakGroup too, so they would keep the shape
+//        and the mass order intact while silently no longer explaining the ranking.
+/////////////////////////////////////////////////////////////
+START_SECTION(results_ms1_deconv_qscore_order)
+{
+  auto ms1 = loadTsvScans(CYTC_MS1);
+  ABORT_IF(ms1.empty())
+
+  const std::string dir = freshLogDir("lf_r5");
+  // FIXTURE, and it must stay this one: buildJsonWithLogDir(dir) takes the DEFAULT enable_ms3 = false,
+  // which gives targeting "none" and an EMPTY inclusion list. Passing `true` selects "inclusion" with
+  // ../../FlashIDA/test-data/configs/inclusion_cytc.txt, whose priority-1 entry for mass 12351.3 makes
+  // target_priority_map_ non-empty; the std::stable_sort at PrecursorSelection.cpp:262-276 then re-orders
+  // any pair whose qscores differ by less than tie_threshold (0.1) by target priority, LEGITIMATELY
+  // breaking monotonicity. So do not "helpfully" switch this section to the MS3 recipe -- under it the
+  // assertion below would be wrong about the engine, not the other way round. The config's
+  // rank_by "qscore" matters for the same reason: "intensity" would sort the survey by intensity instead.
+  std::string json = buildJsonWithLogDir(dir);
+  FLASHIda ida(const_cast<char*>(json.c_str()));
+
+  // MS1-only drive, exactly as §L1: the canonical interleaved driver feeds each survey back under the
+  // engine's OWN emitted tracking id (the always-on MS1 gate rejects fabricated ones). ms2 selection is
+  // "none" here, so MS2 commands are recorded but never fed -- no MS2 fixture is needed.
+  AcqResult acq = runInterleaved(&ida, ms1, std::vector<ScanData>{});
+  TEST_TRUE(acq.ms2_cmds.size() > 0)
+
+  auto cmds = TSVFile::parse(dir + "/scan_commands.tsv");
+  auto res = TSVFile::parse(dir + "/scan_results.tsv");
+  auto level = commandLevels(cmds);
+
+  bool saw_multi = false, non_increasing = true;
+  for (const auto& row : res.rows)
+  {
+    auto it = level.find(cell(res, row, "tracking_id"));
+    if (it != level.end() && it->second != 1) continue;  // MS1 rows only (classified as in §R1)
+    auto qs = splitTokens(cell(res, row, "deconv_qscores"), ';');
+    if (qs.size() < 2) continue;                         // a single-mass list cannot be out of order
+    saw_multi = true;
+    for (size_t i = 0; i + 1 < qs.size(); ++i)
+      non_increasing = non_increasing && (toD(qs[i]) >= toD(qs[i + 1]));
+  }
+  TEST_TRUE(saw_multi)        // ANTI-VACUITY: a survey with <=1 deconvolved mass per scan proves nothing
+  TEST_TRUE(non_increasing)
 }
 END_SECTION
 
