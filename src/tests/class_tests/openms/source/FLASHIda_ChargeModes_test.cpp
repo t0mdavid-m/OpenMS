@@ -16,7 +16,9 @@
 // multi-valued. With the flag at its default the mode emitted one scan, i.e. behaved exactly like
 // "single", in every shipped config, and the suite was green throughout.
 //
-// So: no config here sets charge_based_exclusion. Geometry must come from precursor_charges alone.
+// That flag is now gone (ADR-0021), so geometry has exactly one source and these sections exercise
+// it directly. The lesson generalises past this key: a mode wired at parse time and asserted only
+// for round-trip is indistinguishable from a mode that does nothing.
 
 #include <OpenMS/CONCEPT/ClassTest.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
@@ -103,9 +105,7 @@ namespace
   // Keying per SURVEY, not per run, is the point: charge-keyed fallback legitimately reaches other
   // charges of a mass on LATER surveys, so a run-wide grouping would conflate "acquired the envelope
   // at once" with "drifted onto another charge eventually" -- the exact conflation that let the
-  // defect survive. parent_scan_id identifies the spawning survey; the first survey's MS2s carry an
-  // EMPTY parent_scan_id (buildMS2 stamps it only for a non-zero parent tracking id), which is still
-  // one coherent group.
+  // defect survive. parent_scan_id identifies the spawning survey.
   //
   // @p with_notches folds a multiplexed command's co-isolation notches in alongside its anchor, so
   // the two geometries become comparable as SETS.
@@ -117,6 +117,38 @@ namespace
     {
       if (c.num_stages < 1) continue;
       auto& charges = out[{std::string(c.parent_scan_id), std::llround(c.mono_mass)}];
+      charges.insert(c.stages[0].charge_state);
+      if (with_notches)
+      {
+        auto [first, count] = notchesForStage(c, 0);
+        for (int i = 0; i < count; ++i) charges.insert(first[i].charge_state);
+      }
+    }
+    return out;
+  }
+
+  // The FIRST survey's acquisitions only, as mass -> charges.
+  //
+  // "First survey" is read from the run itself -- the parent of the first MS2 command emitted -- and
+  // NOT assumed to be the empty string. buildMS2 stamps parent_scan_id only when the parent tracking
+  // id is non-zero (ScanCommandQueue.cpp:345), and by the time the first productive survey runs, the
+  // idle AGC/MS1 ticks have already consumed ids, so every MS2 here carries a real parent. Assuming
+  // "" matched nothing at all and compared zero groups.
+  //
+  // Reading it per-run is not incidental: the two runs mint different ids once one emits several
+  // times as many commands, so the id is only meaningful within its own run. The first survey itself
+  // is comparable across runs because both start from the same engine state and the same MS1.
+  std::map<long long, std::set<int>> firstSurveyCharges(const AcqResult& a, bool with_notches)
+  {
+    std::map<long long, std::set<int>> out;
+    if (a.ms2_cmds.empty()) return out;
+
+    const std::string first_survey(a.ms2_cmds.front().parent_scan_id);
+    for (const auto& c : a.ms2_cmds)
+    {
+      if (c.num_stages < 1) continue;
+      if (std::string(c.parent_scan_id) != first_survey) continue;
+      auto& charges = out[std::llround(c.mono_mass)];
       charges.insert(c.stages[0].charge_state);
       if (with_notches)
       {
@@ -168,9 +200,10 @@ END_SECTION
 // peakGroupNotchCandidates + selectNotches pair; sourcing them differently is precisely how
 // "separate" ended up reading an exclusion flag while "multiplexed" read the PeakGroup.
 //
-// Scoped to the FIRST survey (empty parent_scan_id), which is identical in both runs. Later surveys
-// are not comparable across runs: "separate" emits more commands, so it consumes more tracking ids
-// and the two runs' survey ids diverge. Comparing them would test id allocation, not geometry.
+// Scoped to the FIRST survey, which both runs reach from the same engine state and the same MS1.
+// Later surveys are not comparable across runs: "separate" emits several times as many commands, so
+// it consumes more tracking ids and the two runs' survey ids -- and then their exclusion state --
+// diverge. Comparing those would test id allocation, not geometry.
 START_SECTION(separate_and_multiplexed_acquire_the_same_charge_set)
 {
   auto scans = loadTsvScans(ms1_tsv_path);
@@ -188,19 +221,18 @@ START_SECTION(separate_and_multiplexed_acquire_the_same_charge_set)
   TEST_EQUAL(mux.ms2_cmds.size() > 0, true)
 
   // separate: N commands, anchor only. multiplexed: 1 command, anchor + notches.
-  const auto sep_groups = chargesPerSurveyMass(sep, /*with_notches=*/false);
-  const auto mux_groups = chargesPerSurveyMass(mux, /*with_notches=*/true);
+  const auto sep_groups = firstSurveyCharges(sep, /*with_notches=*/false);
+  const auto mux_groups = firstSurveyCharges(mux, /*with_notches=*/true);
 
   int compared = 0, mismatches = 0;
   for (const auto& kv : mux_groups)
   {
-    if (!kv.first.first.empty()) continue;  // first survey only
     auto it = sep_groups.find(kv.first);
     if (it == sep_groups.end()) continue;
     ++compared;
     if (it->second == kv.second) continue;
     ++mismatches;
-    std::cout << "[CM-02] mass " << kv.first.second << " separate={";
+    std::cout << "[CM-02] mass " << kv.first << " separate={";
     for (int z : it->second) std::cout << " " << z;
     std::cout << " } multiplexed={";
     for (int z : kv.second) std::cout << " " << z;

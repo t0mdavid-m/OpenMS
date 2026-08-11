@@ -331,4 +331,17 @@ START_SECTION(ms3_all_charges_is_a_migration_error)
 }
 END_SECTION
 
+// Same treatment for the retired developer flag (ADR-0021). It earns a specific message rather than
+// the generic unknown-key one for a reason peculiar to this key: its documented job was exclusion
+// KEYING, but it was also the only thing that made precursor_charges: "separate" fan out. A reader
+// told merely "unknown key" would remove it and silently lose the multi-charge acquisition they were
+// relying on, with nothing pointing at "separate" as the replacement. Both values must throw --
+// `false` was the default, so a config carrying it is the common case, not the exotic one.
+START_SECTION(charge_based_exclusion_is_a_migration_error)
+{
+  TEST_EXCEPTION(std::invalid_argument, Config(cfgJson(R"(, "charge_based_exclusion": true)")))
+  TEST_EXCEPTION(std::invalid_argument, Config(cfgJson(R"(, "charge_based_exclusion": false)")))
+}
+END_SECTION
+
 END_TEST

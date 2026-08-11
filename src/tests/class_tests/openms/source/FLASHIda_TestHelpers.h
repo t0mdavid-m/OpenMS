@@ -712,8 +712,8 @@ namespace
   }
 
   // Project an AcqResult's MS2 commands to (charge, mz, isolation_width) rows (stage-0 of each MS2 command).
-  // Used by ChargeBasedExclusion to assert which precursors the engine actually acquired — reads the harness
-  // result, so the drive still goes through runInterleaved.
+  // For asserting which precursors the engine actually acquired — reads the harness result, so the
+  // drive still goes through runInterleaved.
   struct AcquisitionRow { int charge; double mz; double width; };
   inline std::vector<AcquisitionRow> ms2AcquisitionRows(const AcqResult& a)
   {

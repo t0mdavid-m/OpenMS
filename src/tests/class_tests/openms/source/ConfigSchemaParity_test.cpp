@@ -64,7 +64,6 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
   // --- precursor_selection ---
   TEST_REAL_SIMILAR(cfg.targeting().rt_window, j["precursor_selection"]["rt_window"].get<double>())
   TEST_EQUAL(cfg.targeting().consider_all_charges, j["precursor_selection"]["consider_all_charges"].get<bool>())
-  TEST_EQUAL(cfg.targeting().charge_based_exclusion, j["precursor_selection"]["charge_based_exclusion"].get<bool>())
   TEST_EQUAL(cfg.targeting().strict_inclusion, j["precursor_selection"]["strict_inclusion"].get<bool>())
   TEST_REAL_SIMILAR(cfg.targeting().tie_threshold, j["precursor_selection"]["tie_threshold"].get<double>())
   // targeting is a string enum on the wire and an int in the struct, so the parity check has to
