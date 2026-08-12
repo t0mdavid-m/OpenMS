@@ -69,7 +69,18 @@ namespace OpenMS
 
     // -- Ion type handling --
 
-    /// Select MS3 ion types based on precursor fragment class
+    /// The ion classes this matcher can project an MS3 sub-fragment through: a, b, c (prefix) and x, y, z
+    /// (suffix). Everything else -- notably 'u', the label an exhaustive-mode unassigned target carries
+    /// (ADR-0023 decision 5) -- has no frame, and every projection site below must refuse rather than fall
+    /// through to its suffix branch.
+    ///
+    /// The refusal keys on the CLASS and NEVER on the index: ion type and ion index are two independent
+    /// fields that travel independently, so an index-only guard leaves a 'u' carrying a plausible index
+    /// cutting a real suffix out of the proteoform and matching against it -- confident wrong
+    /// identifications instead of none.
+    static bool isKnownIonClass(char ion_class);
+
+    /// Select MS3 ion types based on precursor fragment class. Empty for an unknown class (isKnownIonClass).
     static std::vector<std::string> getMS3IonTypes(char precursor_ion_class);
 
     /// Returns true for prefix ion types (a, b), false for suffix (y, yb, ya)

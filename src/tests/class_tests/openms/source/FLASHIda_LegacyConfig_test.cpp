@@ -571,4 +571,52 @@ START_SECTION(([EXTRA] Config accepts characterization with only protein_sequenc
 }
 END_SECTION
 
+// The fourth characterization mode (ADR-0023). The objective assertion is the point of this
+// section: the engine branches on `objective`, never on `mode`, so a mode that parsed without
+// deriving its own objective would inherit the in-class Ambiguity default and run byte-identically
+// to "ambiguity" -- accepted, logged as exhaustive, and behaving as something else.
+START_SECTION(([EXTRA] characterization mode exhaustive parses and carries its own objective))
+{
+  const std::string json = R"JSON({
+    "deconvolution": {"tol": [10, 10, 10]},
+    "precursor_selection": {"rank_by": "qscore", "max_precursors": 2},
+    "characterization": {"mode": "exhaustive", "protein_sequence": "PEPTIDEPEPTIDE",
+                         "max_targets": 3, "min_target_mass": 0},
+    "ms_settings": {"ms1": {}, "ms2": {"activation": "HCD"}, "ms3": {"activation": "HCD"}}
+  })JSON";
+  Config cfg(json);
+  TEST_EQUAL((int)cfg.characterization().mode, (int)CharacterizationMode::Exhaustive)
+  TEST_EQUAL((int)cfg.characterization().objective, (int)CharacterizationObjective::Exhaustive)
+  TEST_REAL_SIMILAR(cfg.characterization().min_target_mass, 0.0)
+}
+END_SECTION
+
+// A fourth legal value must not have loosened the strictness that made mode the single MS3 switch,
+// and the new key must be READ, not merely tolerated by the allowlist -- a key that passes
+// validation and is then discarded is this file's oldest failure mode.
+START_SECTION(([EXTRA] a mistyped mode still throws, and min_target_mass is honoured))
+{
+  const std::string bad = R"JSON({
+    "deconvolution": {"tol": [10, 10, 10]},
+    "characterization": {"mode": "exhaustve", "protein_sequence": "PEPTIDE"},
+    "ms_settings": {"ms1": {}, "ms2": {"activation": "HCD"}, "ms3": {"activation": "HCD"}}
+  })JSON";
+  bool threw = false;
+  try { Config cfg{bad}; }
+  catch (const std::invalid_argument&) { threw = true; }
+  TEST_EQUAL(threw, true)
+  (void)threw; // MSVC C4189
+
+  const std::string floored = R"JSON({
+    "deconvolution": {"tol": [10, 10, 10]},
+    "precursor_selection": {"rank_by": "qscore", "max_precursors": 2},
+    "characterization": {"mode": "exhaustive", "protein_sequence": "PEPTIDEPEPTIDE",
+                         "min_target_mass": 1500.5},
+    "ms_settings": {"ms1": {}, "ms2": {"activation": "HCD"}, "ms3": {"activation": "HCD"}}
+  })JSON";
+  Config cfg2(floored);
+  TEST_REAL_SIMILAR(cfg2.characterization().min_target_mass, 1500.5)
+}
+END_SECTION
+
 END_TEST

@@ -52,7 +52,8 @@ namespace OpenMS
   enum class CharacterizationObjective
   {
     Ambiguity, ///< Resolve PTM site ambiguity
-    Coverage   ///< Extend sequence coverage
+    Coverage,  ///< Extend sequence coverage
+    Exhaustive ///< Fragment every deconvolved mass of the winner MS2 scan, mapped or not (ADR-0023)
   };
 
   /// Selection metric: how targets are ranked for MSn+1
@@ -252,14 +253,18 @@ namespace OpenMS
   };
 
   /// Characterization configuration: objective + protein sequence
-  /// The single MS3 switch. `Off` means no MS3 is emitted at all; the two on-values ARE the
+  /// The single MS3 switch. `Off` means no MS3 is emitted at all; the on-values ARE the
   /// objectives, so there is no separate enable flag and no way to express "on but with no
   /// objective". Supersedes ADR-0004, which decided there would be no enable flag at all.
   enum class CharacterizationMode
   {
     Off,
     Ambiguity,
-    Coverage
+    Coverage,
+    /// Target every deconvolved mass of the winner MS2 scan, not only the ones that matched a
+    /// theoretical fragment (ADR-0023). An unmatched mass is acquired identically and logged
+    /// rather than matched.
+    Exhaustive
   };
 
   struct OPENMS_DLLAPI CharacterizationConfig
@@ -339,6 +344,16 @@ namespace OpenMS
 
     /// Tolerance-ppm list across configured MS levels (ascending level order), for Deconvolution construction
     DoubleList toleranceList() const;
+
+    /// Pool floor for characterization.mode == Exhaustive: a deconvolved mass below this (Da) is not
+    /// a target. 0 = off, and off is the default deliberately -- the mode does exactly what its name
+    /// says until told otherwise.
+    ///
+    /// NOT inheritable from deconvolution.min_mass: that floor is not applied to MSn output. The
+    /// reference config sets min_mass 500 / min_charge 4 and its MS2 spectra still contain 248 Da
+    /// and charge-1 species, so this is a genuinely new floor rather than a duplicate of one that
+    /// already reaches here.
+    double min_target_mass = 0.0;
 
     /// Exploration-tolerance-ppm list across configured MS levels (ascending level order)
     DoubleList explorationToleranceList() const;

@@ -469,6 +469,7 @@ set(analysis_executables_list
   ProteoformTracker_Localization_test
   ProteoformTracker_WinnerContext_test
   ProteoformTracker_NonWinnerRematch_test
+  ProteoformTracker_Exhaustive_test
   ScanCommandQueue_Concurrent_test
   ScanConfig_applyOverrides_test
   Config_SchemaProjection_test

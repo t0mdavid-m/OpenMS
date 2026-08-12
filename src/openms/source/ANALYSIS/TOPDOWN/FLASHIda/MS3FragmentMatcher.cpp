@@ -19,6 +19,11 @@
 namespace OpenMS
 {
 
+  bool MS3FragmentMatcher::isKnownIonClass(char ion_class)
+  {
+    return ion_class == 'a' || ion_class == 'b' || ion_class == 'c' || ion_class == 'x' || ion_class == 'y' || ion_class == 'z';
+  }
+
   std::vector<std::string> MS3FragmentMatcher::getMS3IonTypes(char precursor_ion_class)
   {
     switch (precursor_ion_class)
@@ -32,7 +37,11 @@ namespace OpenMS
       case 'z':
         return {"a", "b", "y"};
       default:
-        return {"a", "b", "y"};
+        // No frame, no ion types. This used to return the SUFFIX set, which handed an unassigned target
+        // ('u', ADR-0023 decision 5) a full theoretical ladder to match against. The cases above are exactly
+        // the classes isKnownIonClass() accepts -- keep the two in step, or a class is admitted here and
+        // refused at the projection sites.
+        return {};
     }
   }
 
@@ -269,6 +278,11 @@ namespace OpenMS
     char fragment_ion_type,
     int fragment_ion_index)
   {
+    // Refuse on the CLASS, ahead of every index/range check below: an unknown class has no frame at ANY
+    // index, and the else-branch further down is the SUFFIX cut. An index-only guard would let 'u' with a
+    // plausible index carve a real subsequence out of the proteoform (ADR-0023 decision 5).
+    if (!isKnownIonClass(fragment_ion_type)) return "";
+
     if (ctx.region_start < 0 || ctx.region_end < 0) return "";
     int proteoform_length = ctx.region_end - ctx.region_start;
     if (fragment_ion_index <= 0 || fragment_ion_index > proteoform_length) return "";
@@ -328,6 +342,17 @@ namespace OpenMS
     // (fragmentProForma, string) and the identification.tsv leaf (which narrows these wide ranges by ONE
     // MS3 scan's ions) draw the wide fragment-frame base from ONE code path -> identification is always a
     // subset of scan_commands by construction. Returns false when the context is not populated.
+    //
+    // Class guard first (ADR-0023 decision 5): with no frame there is neither a sub-sequence to render nor a
+    // mod window to rebase into. Both outputs are cleared so a refused call never leaves a caller's buffers
+    // half-populated -- the subseq assignment below is the only other writer of out_subseq.
+    if (!isKnownIonClass(fragment_ion_type))
+    {
+      out_subseq.clear();
+      out_wide_sites.clear();
+      return false;
+    }
+
     out_subseq = extractSubsequence(protein_sequence, ctx, fragment_ion_type, fragment_ion_index);
     if (out_subseq.empty()) return false;
 
@@ -350,6 +375,11 @@ namespace OpenMS
   {
     // scan_commands MS3 rows render the fragment from the acquisition context alone (no matched spectrum
     // required, present even when identification is deferred/failed).
+    //
+    // The class guard is repeated here rather than left to fragmentProFormaSites: this is a public entry
+    // point, and a refusal that depends on a callee is one refactor away from being lost (ADR-0023 d5).
+    if (!isKnownIonClass(fragment_ion_type)) return "";
+
     std::string subseq;
     std::vector<FragmentAnalysis::PTMSite> wide;
     if (!fragmentProFormaSites(protein_sequence, ctx, fragment_ion_type, fragment_ion_index, subseq, wide))
@@ -392,6 +422,17 @@ namespace OpenMS
     int& equiv_index,
     double& mass_offset)
   {
+    // No frame, no equivalent ion. Report the "nothing" every caller already handles (empty type, index 0,
+    // zero offset) instead of falling into the else-branch below, which would label an unassigned mass with a
+    // full-protein 'y' it was never shown to be (ADR-0023 decision 5).
+    if (!isKnownIonClass(precursor_ion_type))
+    {
+      equiv_type.clear();
+      equiv_index = 0;
+      mass_offset = 0.0;
+      return;
+    }
+
     int P = static_cast<int>(protein_sequence.size());
     int start = ctx.region_start;
     int end = ctx.region_end;
@@ -503,6 +544,12 @@ namespace OpenMS
     std::vector<FragmentAnalysis::ProteoformMatch>* detailed_results)
   {
     std::vector<double> scores(variant_spectra.size(), 0.0);
+
+    // Class guard before ANY projection: without it getMS3IonTypes and extractSubsequence would both take
+    // their suffix fallback, and this whole sweep would be scored against a subsequence the target never had
+    // -- every variant getting a real, wrong match count (ADR-0023 decision 5). A zero score per variant is
+    // the same "nothing matched" the empty-subsequence exit just below already reports.
+    if (!isKnownIonClass(fragment_ion_type)) return scores;
 
     // Extract subsequence
     std::string subseq = extractSubsequence(protein_sequence, ctx, fragment_ion_type, fragment_ion_index);

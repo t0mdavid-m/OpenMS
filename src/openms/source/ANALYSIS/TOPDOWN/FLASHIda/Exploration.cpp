@@ -148,7 +148,19 @@ namespace OpenMS
     ExplorationGroup group;
     group.group_id = next_group_id_++;
     group.msn_level = msn_level;
-    group.exploration_metric = cfg.exploration;
+    // An unassigned exhaustive target (unknown ion class) cannot be scored by a READING metric --
+    // the matcher refuses to project without an ion frame, so every variant scores 0 and the winner
+    // is a coin flip. RemainingPrecursor scores from isolation-window intensity alone, needs no
+    // proteoform, and being a MEASURING metric it also earns the ADR-0020 close-out production scan
+    // with no further edit. ADR-0023 decision 11.
+    //
+    // msn_level >= 3 is LOAD-BEARING: initiate()'s ion_type parameter defaults to '\0' and the MS2
+    // call site (FLASHIda.cpp:200) passes nothing, so an ungated test would force this metric onto
+    // EVERY MS2 exploration group and move the exploration_hcd / exploration_etd /
+    // exploration_followup / exploration_multiplexed goldens.
+    group.exploration_metric = (msn_level >= 3 && !MS3FragmentMatcher::isKnownIonClass(ion_type))
+                                 ? ExplorationMetric::RemainingPrecursor
+                                 : cfg.exploration;
     group.precursor_mz = precursor_mz;
     group.precursor_mass = precursor_mass;
     group.isolation_width = isolation_width;
@@ -944,6 +956,14 @@ namespace OpenMS
         if (target.frag_mz <= 0.0 || frag_charge <= 0) continue;
         const char ion_type = target.ion_type.empty() ? '\0' : target.ion_type[0];
 
+      //
+      // Counters for the [MS3-DISPATCH] marker below (ADR-0023 D-e). They are counted HERE rather than on
+      // the tracker's [MS3-PLAN] line because buildVariants_ is private to this class and the tracker holds
+      // no reference to it -- and because the two skips above mean the tracker's target count is an upper
+      // bound, not what was dispatched. dispatched_targets counts the targets that survived both skips;
+      // variants_per_target is the CE-sweep width each one fanned out into (1 with no MS3 exploration).
+      int dispatched_targets = 0;
+      int variants_per_target = 0;
         if (config_.hasExploration(next_level))
         {
           const double half = target.iso_width / 2.0;
@@ -956,6 +976,7 @@ namespace OpenMS
           lp_lo.abs_charge = frag_charge;
           frag_pg.push_back(lp_lo);
           FLASHHelperClasses::LogMzPeak lp_hi;
+        ++dispatched_targets;
           lp_hi.mz = wend;
           lp_hi.abs_charge = frag_charge;
           frag_pg.push_back(lp_hi);
@@ -977,6 +998,7 @@ namespace OpenMS
             mc.ms1_precursor_charge = ms_ctx->stages[0].charge_state;
             mc.fragment_ion_type = ion_type;
             mc.fragment_ion_index = target.ion_index;
+          variants_per_target = static_cast<int>(sub_cmds.size());
             mc.fragment_mass = target.frag_mass;
             mc.fragment_mz = target.frag_mz;
             mc.fragment_charge = frag_charge;
@@ -1031,6 +1053,7 @@ namespace OpenMS
           mc.fragment_ion_index = target.ion_index;
           mc.fragment_mass = target.frag_mass;
           mc.fragment_mz = target.frag_mz;
+          variants_per_target = 1;  // no CE sweep at this level: one command per target
           mc.fragment_charge = frag_charge;
           mc.ms2_isolation_width = ms_ctx->stages[0].isolation_width;
           mc.ms2_charge_intensity = ms_ctx->precursor_intensity;
@@ -1058,6 +1081,17 @@ namespace OpenMS
 
   Exploration::ExplorationGroup Exploration::getGroup(int group_id) const
   {
+      // The dispatch half of the plan marker (ADR-0023 D-e). commands is the figure that actually
+      // predicts the instrument cost: max_targets bounds TARGETS, and with an MS3 CE sweep on, each
+      // target fans out into one command per variant -- so a budget of 20 can be ~100 scans. Emitted
+      // even at zero targets, so a grep for [MS3-DISPATCH] pairs with every [MS3-PLAN] line rather
+      // than only with the ones that produced something. stdout only, like every engine marker.
+      std::cout << "[MS3-DISPATCH] precursor_id=" << precursor_id
+                << " targets=" << dispatched_targets
+                << " variants=" << variants_per_target
+                << " commands=" << nlr.commands.size()
+                << std::endl;
+
     return active_groups_.at(group_id);
   }
 

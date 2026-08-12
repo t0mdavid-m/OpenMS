@@ -186,6 +186,22 @@ namespace OpenMS
     int region_start = -1, region_end = -1;
     double identification_score = -1;
     int winner_scan_id = 0;
+
+    /// The winner MS2 scan's RAW deconvolved peaks, and the parameters it was acquired under, copied
+    /// at finalize (ADR-0023). The target pool for characterization.mode == Exhaustive.
+    ///
+    /// `fragments` cannot serve: it is keyed by theoretical ion, so it holds nothing at all about the
+    /// masses that matched no ion -- which are the majority of a real MS2 (117 deconvolved, 44 mapped
+    /// in the reference cytC scan) and precisely what this mode fragments.
+    ///
+    /// A COPY, owned by the model, so the pool's lifetime is the model's. Reading the winner back out
+    /// of a scan container at plan time would instead make this mode's correctness depend on another
+    /// feature's retention policy, and plan nothing the moment that policy changed.
+    ///
+    /// Empty until finalizeMS2 picks a winner; an unidentified Precursor never gets one, which is how
+    /// decision 10 ("identification is still required") holds without a second test.
+    std::vector<PeakRecord> winner_peaks;
+    Ms2Params winner_params;
     int update_index = 0;
     std::vector<PendingScan> pending;
     std::vector<ModificationState> modifications;
@@ -202,6 +218,19 @@ namespace OpenMS
     /// Cumulative set of every scan fed to this model (MS2 variants + each MS3 fold). Never drops a
     /// scan when its observation is later superseded -> the emitted contributing_scan_ids is monotone.
     std::set<int> contributing_scan_ids;
+
+    /// Nominal masses already dispatched as exhaustive MS3 targets for this Precursor (ADR-0023 d7).
+    ///
+    /// Per-Precursor and monotone. Nominal-mass keyed -- the same key exclusion and Precursor identity
+    /// already use -- so "we have fragmented this species" means one thing engine-wide.
+    ///
+    /// Dispatched-but-never-returned counts as DONE, deliberately: a target with no record that it was
+    /// tried is re-dispatched forever.
+    ///
+    /// Unused by ambiguity/coverage, which are self-limiting by construction (a localized mod leaves
+    /// the ambiguous list; a witnessed bond leaves the uncovered set). Exhaustive has no such feedback
+    /// -- its pool never shrinks -- so this set IS its termination condition.
+    std::set<int> dispatched_nominal_masses;
 
     /// Fraction of proteoform residues covered by at least one fragment observation [0,1]
     double coveragePct() const;
@@ -257,6 +286,8 @@ namespace OpenMS
      * budget, deduped, and skipping any fragment with no best-MS2 observation. Returns empty
      * if there is no identified model, no MS2 context, or no MS3 config.
      */
+    /// Exhaustive forks to planExhaustive_ instead: its pool is the winner MS2 scan's raw deconvolved
+    /// masses rather than the mapped-fragment table (ADR-0023).
     std::vector<Ms3Target> planNextScans(int precursor_id);
 
     /// Return a pointer to the model for @p precursor_id, or nullptr if absent.
@@ -350,6 +381,25 @@ namespace OpenMS
                                std::vector<double>& measured, std::vector<double>& adjusted,
                                std::vector<double>& theoretical, std::vector<double>& diff_da,
                                std::vector<double>& diff_ppm) const;
+
+    /**
+     * @brief The CharacterizationObjective::Exhaustive branch of planNextScans (ADR-0023).
+     *
+     * Pool = the winner MS2 scan's raw PeakRecords, not @p m.fragments: a mass that also matched a
+     * theoretical fragment keeps that fragment's ion_type/ion_index and is acquired and matched
+     * exactly as today; a mass that did not is labelled 'u'/0, acquired identically, and logged
+     * rather than matched.
+     *
+     * MUTATES @p m: every emitted target's nominal mass is stamped into dispatched_nominal_masses,
+     * which is what terminates the mode (the pool itself never shrinks). The stamp happens strictly
+     * AFTER every pool filter, because min_fragment_charge and the unisolatable test are re-applied
+     * downstream in Exploration once this has already returned (ADR-0023 D-d).
+     *
+     * @p budget is the same level(2).max_targets the other objectives use, and counts SPECIES, not
+     * emitted targets -- characterization.fragment_charges may fan one species out into several
+     * scans (ADR-0016).
+     */
+    std::vector<Ms3Target> planExhaustive_(ProteoformModel& m, int precursor_id, int budget);
 
     const Config& config_;
     IdaLogger& logger_;

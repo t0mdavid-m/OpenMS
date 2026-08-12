@@ -44,9 +44,27 @@ START_SECTION(getMS3IonTypes)
   auto z_types = MS3FragmentMatcher::getMS3IonTypes('z');
   TEST_EQUAL(z_types.size(), 3)
 
-  // Unknown: defaults to y-precursor behavior
+  // Unknown ion class: NO ion types. Reversed deliberately by ADR-0023 decision 5 -- the old suffix
+  // fallback is what would let an unassigned exhaustive target ('u') fabricate a match frame and score a
+  // full, confident, WRONG ladder. This assertion was previously pinned at 3 with a comment blessing the
+  // fallback; the reversal is a decision, not a regression.
   auto unk_types = MS3FragmentMatcher::getMS3IonTypes('?');
-  TEST_EQUAL(unk_types.size(), 3)
+  TEST_EQUAL(unk_types.empty(), true)
+
+  // The predicate the refusal keys on, at every projection site.
+  TEST_EQUAL(MS3FragmentMatcher::isKnownIonClass('a'), true)
+  TEST_EQUAL(MS3FragmentMatcher::isKnownIonClass('b'), true)
+  TEST_EQUAL(MS3FragmentMatcher::isKnownIonClass('c'), true)
+  TEST_EQUAL(MS3FragmentMatcher::isKnownIonClass('x'), true)
+  TEST_EQUAL(MS3FragmentMatcher::isKnownIonClass('y'), true)
+  TEST_EQUAL(MS3FragmentMatcher::isKnownIonClass('z'), true)
+  TEST_EQUAL(MS3FragmentMatcher::isKnownIonClass('u'), false)
+  TEST_EQUAL(MS3FragmentMatcher::isKnownIonClass('\0'), false)
+
+  // isKnownIonClass and the switch above must admit the same set, or a class is accepted by one and
+  // refused by the other.
+  for (char c : {'a', 'b', 'c', 'x', 'y', 'z'})
+    TEST_EQUAL(MS3FragmentMatcher::getMS3IonTypes(c).empty(), false)
 }
 END_SECTION
 
@@ -529,6 +547,82 @@ START_SECTION(matchSpectrum_match_details)
   TEST_EQUAL(shift_details.size(), 2)
   for (const auto& md : shift_details)
     TEST_REAL_SIMILAR(md.ppm_error, 50.0)
+}
+END_SECTION
+
+START_SECTION(([EXTRA] an unknown ion class never projects, at ANY index))
+{
+  // ADR-0023 decision 5. 'u' is the label an exhaustive-mode target carries when its deconvolved mass
+  // matched no theoretical fragment. Every projection site must refuse it.
+  MS3FragmentMatcher::ProteoformContext ctx;
+  ctx.region_start = 0;
+  ctx.region_end = 14;
+  const std::string seq = "PEPTIDEPEPTIDE"; // 14 residues == the whole proteoform region
+
+  // Nothing ties 'u' to index 0 -- ion_type and ion_index are two independent fields and travel
+  // independently. If the refusal keyed on the INDEX instead of the class, every k below would fall through
+  // to the suffix branch, cut a real subsequence out of the proteoform, and match against it.
+  for (int k = 0; k <= 14; ++k)
+  {
+    TEST_EQUAL(MS3FragmentMatcher::extractSubsequence(seq, ctx, 'u', k), "")
+    TEST_EQUAL(MS3FragmentMatcher::fragmentProForma(seq, ctx, 'u', k), "")
+  }
+
+  // Known classes are unaffected at in-range indices: prefix cut from the region start, suffix from its end.
+  TEST_EQUAL(MS3FragmentMatcher::extractSubsequence(seq, ctx, 'b', 4), "PEPT")
+  TEST_EQUAL(MS3FragmentMatcher::extractSubsequence(seq, ctx, 'y', 4), "TIDE")
+
+  // fragmentProFormaSites refuses and leaves neither output half-populated.
+  std::string out_seq = "STALE";
+  std::vector<FragmentAnalysis::PTMSite> out_sites(1);
+  TEST_EQUAL(MS3FragmentMatcher::fragmentProFormaSites(seq, ctx, 'u', 7, out_seq, out_sites), false)
+  TEST_EQUAL(out_seq, "")
+  TEST_EQUAL(out_sites.empty(), true)
+  TEST_EQUAL(MS3FragmentMatcher::fragmentProFormaSites(seq, ctx, 'b', 7, out_seq, out_sites), true)
+  TEST_EQUAL(out_seq, "PEPTIDE")
+
+  // computeEquivalentIon: no frame -> no full-protein label. Without the class guard the 'u' precursor would
+  // take the suffix branch and report equiv y5 -- a confident, fabricated identification.
+  auto prefix_masses = MS3FragmentMatcher::computeProteinPrefixMasses(seq);
+  std::string equiv_type = "b";
+  int equiv_index = 42;
+  double mass_offset = 99.0;
+  MS3FragmentMatcher::computeEquivalentIon(seq, ctx, 'u', 7, "b", 2, 200.0, prefix_masses,
+                                           equiv_type, equiv_index, mass_offset);
+  TEST_EQUAL(equiv_type, "")
+  TEST_EQUAL(equiv_index, 0)
+  TEST_REAL_SIMILAR(mass_offset, 0.0)
+
+  // calibrateAndScore is the site where the fallthrough actually cost identifications. 'u' and 'y' at the
+  // SAME index used to be byte-identical, because the unknown class took the same suffix branch and the same
+  // ion-type set. This spectrum is built from the theoretical ladder of exactly the subsequence 'y' cuts, so
+  // before the guard a 'u' target scored a full match count against a frame it never had.
+  const std::string protein = "ACDEFGHIKLMNPQRSTVWY"; // 20 residues
+  MS3FragmentMatcher::ProteoformContext pctx;
+  pctx.region_start = 0;
+  pctx.region_end = 20;
+
+  std::string suffix10 = MS3FragmentMatcher::extractSubsequence(protein, pctx, 'y', 10);
+  TEST_EQUAL(suffix10, "MNPQRSTVWY")
+  auto theo = MS3FragmentMatcher::computeTheoreticalMasses(suffix10, MS3FragmentMatcher::getMS3IonTypes('y'));
+  DeconvolvedSpectrum spec(0);
+  for (int i = 0; i < 5 && i < static_cast<int>(theo.size()); ++i)
+  {
+    PeakGroup pg(1, 1, true);
+    pg.setMonoisotopicMass(theo[i].mass);
+    spec.push_back(pg);
+  }
+  std::vector<const DeconvolvedSpectrum*> variants = {&spec};
+
+  auto y_scores = MS3FragmentMatcher::calibrateAndScore(variants, protein, pctx, 'y', 10,
+                                                        MS3FragmentMatcher::LOOSE_TOLERANCE_PPM, 10.0);
+  TEST_EQUAL(y_scores.size(), 1)
+  TEST_TRUE(y_scores[0] >= 4.0) // the known class still matches its own ladder -- the guard is class-keyed
+
+  auto u_scores = MS3FragmentMatcher::calibrateAndScore(variants, protein, pctx, 'u', 10,
+                                                        MS3FragmentMatcher::LOOSE_TOLERANCE_PPM, 10.0);
+  TEST_EQUAL(u_scores.size(), 1)
+  TEST_REAL_SIMILAR(u_scores[0], 0.0) // same spectrum, same index, unknown class -> nothing
 }
 END_SECTION
 

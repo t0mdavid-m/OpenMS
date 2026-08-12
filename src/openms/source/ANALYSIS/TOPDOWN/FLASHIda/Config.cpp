@@ -77,6 +77,26 @@ namespace
   }
 
   // One lenient scan-config allowlist for every scan object (ms1/ms2/ms3/follow_up_scan): the union
+  // The authored spelling of a characterization mode, for error messages that quote the user's
+  // config back at them.
+  //
+  // A switch over every enumerator with no `default:`, deliberately: this replaced a two-way ternary
+  // (`mode == Coverage ? "coverage" : "ambiguity"`) which, the moment a third on-value existed,
+  // printed "ambiguity" for an exhaustive config -- a factually wrong mode name inside a message
+  // telling the user what their config said. With the switch, the next value is a compiler warning
+  // rather than a wrong string.
+  const char* characterizationModeName(OpenMS::CharacterizationMode m)
+  {
+    switch (m)
+    {
+      case OpenMS::CharacterizationMode::Off: return "off";
+      case OpenMS::CharacterizationMode::Ambiguity: return "ambiguity";
+      case OpenMS::CharacterizationMode::Coverage: return "coverage";
+      case OpenMS::CharacterizationMode::Exhaustive: return "exhaustive";
+    }
+    return "off";  // unreachable for a valid enumerator; keeps every compiler's return-path check quiet
+  }
+
   // of MS1- and MS2/MS3-level keys. Rejects non-schema scan keys such as the removed 'IsolationMode'.
   const std::set<std::string> kScanKeys = {
     "analyzer", "activation", "collision_energy", "resolution", "agc_target", "max_it",
@@ -263,8 +283,8 @@ namespace OpenMS
           "  ms2.min_charge   -> characterization.min_fragment_charge\n"
           "  ms3.exploration  -> characterization.exploration\n"
           "  ms2.selection and ms3.selection are replaced by characterization.mode "
-          "(off|ambiguity|coverage); ms3.max_targets and ms3.min_charge were never read and are "
-          "deleted.");
+          "(off|ambiguity|coverage|exhaustive); ms3.max_targets and ms3.min_charge were never read "
+          "and are deleted.");
     rejectUnknownKeys(config,
         {"global", "deconvolution", "precursor_selection", "flashtnt", "tagging", "conditional_ms2",
          "quantification", "faims", "ms_settings", "scheduling",
@@ -424,8 +444,8 @@ namespace OpenMS
           "\"separate\" for the old true (one MS3 per observed charge); \"multiplexed\" co-isolates "
           "them into one MS3.");
     rejectUnknownKeys(charact,
-        {"mode", "protein_sequence", "max_targets", "min_fragment_charge", "fragment_charges",
-         "exploration"},
+        {"mode", "protein_sequence", "max_targets", "min_fragment_charge", "min_target_mass",
+         "fragment_charges", "exploration"},
         "characterization");
     {
       // Hard-rejected, not defaulted. The old parse was
@@ -446,14 +466,25 @@ namespace OpenMS
         characterization_.objective = CharacterizationObjective::Coverage;
       }
       else
+      else if (m == "exhaustive")
+      {
+        characterization_.mode = CharacterizationMode::Exhaustive;
+        // The engine reads `objective`, never `mode` -- mode has no read site outside this file.
+        // Assigning only the mode here would ship a mode byte-identical to "ambiguity", because
+        // objective keeps its in-class Ambiguity default (ADR-0023).
+        characterization_.objective = CharacterizationObjective::Exhaustive;
+      }
         throw std::invalid_argument(
-            "Config: characterization.mode must be one of \"off\", \"ambiguity\", \"coverage\"; "
-            "got \"" + m + "\" (values are case-sensitive).");
+            "Config: characterization.mode must be one of \"off\", \"ambiguity\", \"coverage\", "
+            "\"exhaustive\"; got \"" + m + "\" (values are case-sensitive).");
 
       characterization_.protein_sequence = charact.value("protein_sequence", "");
       characterization_.max_targets = charact.value("max_targets", 3);
       characterization_.min_fragment_charge = charact.value("min_fragment_charge", 0);
       characterization_.fragment_charges = parseChargeMode(charact, "fragment_charges", "characterization");
+      // Read beside its sibling floors. Inert unless mode == Exhaustive; every other mode's pool is
+      // the mapped-fragment table, which this never touches.
+      characterization_.min_target_mass = charact.value("min_target_mass", 0.0);
     }
 
     // --- conditional_ms2 (top-level only) ---
@@ -868,6 +899,11 @@ namespace OpenMS
     {
       if (cfg.exploration == ExplorationMetric::FragmentCount && characterization_.protein_sequence.empty())
         throw std::invalid_argument(
+    //
+    // Keep this as `!= Off` and do NOT "tidy" it into an enumeration of the on-values. The
+    // inequality is what makes a newly added mode project correctly by construction -- exhaustive
+    // (ADR-0023) needed no edit here. An enumeration would leave a new mode's levels at None, i.e.
+    // MS3 configured, accepted, and then never emitted, with no wrong value anywhere to notice.
             "ExplorationMetric::FragmentCount at level " + std::to_string(lvl) +
             " requires a non-empty characterization.protein_sequence.");
     }
@@ -889,7 +925,7 @@ namespace OpenMS
     if (characterization_.mode != CharacterizationMode::Off && level(3).scans.empty())
       throw std::invalid_argument(
           "characterization.mode is \"" +
-          std::string(characterization_.mode == CharacterizationMode::Coverage ? "coverage" : "ambiguity")
+          std::string(characterizationModeName(characterization_.mode))
           + "\" but ms_settings.ms3 is not defined. An MS3 scan config is required to build the "
             "MS3 command into.");
 

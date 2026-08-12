@@ -183,12 +183,30 @@ builds commands exclusively inside `if (model != nullptr && !model->proteoform_s
 every other path returns zero commands. No tracker, no finalized model, or an unidentified
 precursor ⇒ **zero MS3 by design**, with no intensity or legacy fallback.
 
-- **`characterization.mode`** (`off | ambiguity | coverage`) is the single MS3 switch and also picks
-  the targets: its two on-values *are* the objectives (ADR-0013). `Off` means no MS3 at all.
+- **`characterization.mode`** (`off | ambiguity | coverage | exhaustive`) is the single MS3 switch
+  and also picks the targets: each of its **three** on-values *is* an objective, one for one
+  (ADR-0013, extended by ADR-0023). `Off` means no MS3 at all.
   **Unknown values throw** — the old `objective` parse was `if (== "coverage") … else Ambiguity`, so
   `"Coverage"` or any typo silently meant ambiguity, and with `mode` now carrying the on/off bit a
   typo'd `"Off"` would have silently *enabled* MS3. The struct still exposes
   `characterization().objective`, derived from `mode`, so every existing read site is unchanged.
+  âš  **`mode` itself has zero read sites outside `Config.cpp`** â€” it is parsed, projected and quoted
+  in error text there and nowhere else; the engine branches on `.objective`
+  (`ProteoformTracker.cpp:421`, `:524`). A new mode that does not also assign an objective therefore
+  ships byte-identical to `ambiguity`: accepted, green, and inert (ADR-0023 D-a).
+- **`exhaustive`** (ADR-0023) targets **every deconvolved mass of the winner MS2 scan**, not only the
+  masses that matched the winning proteoform â€” in the reference cytC MS2 that is 117 masses rather
+  than 44. A mass that maps keeps its real `ion_type`/`ion_index` and is matched as today; a mass
+  that does not is labelled `'u'`/`0`, acquired identically, and **logged rather than matched**.
+  `'u'` is an in-engine sentinel only: it never reaches the wire, because `ion_index == 0` sends it
+  down `buildMS3`'s no-ion branch. `MS3FragmentMatcher::isKnownIonClass` is the positive guard that
+  makes every projection site refuse an unknown class **on the class, never on the index** â€” the two
+  fields travel independently, and the old `default:`/`else` fallback was the *suffix* branch, so an
+  index-only guard would let a `'u'` with a plausible index cut a real suffix and match against it.
+  Its pool floor is the new `characterization.min_target_mass` (Da, `0` = off), and an unassigned
+  target's CE sweep is forced onto `RemainingPrecursor` whatever the config asked for â€” gated
+  `msn_level >= 3`, because `initiate`'s `ion_type` defaults to `'\0'` and an ungated test would
+  drag every MS2 exploration group with it (ADR-0023 decisions 5 and 11, D-f, D-g).
 - **`Config::applyCharacterizationMode_`** projects `mode` onto `levels_[2].selection` and
   `levels_[3].selection` after the whole document is parsed. MS3 needs BOTH non-`None`
   (`FLASHIda.cpp:366`, `Exploration.cpp:728` and `:730`), so driving them from one enum makes

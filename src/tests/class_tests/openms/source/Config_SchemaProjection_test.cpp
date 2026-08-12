@@ -105,6 +105,65 @@ START_SECTION(projection_covers_all_three_levels)
 END_SECTION
 
 // ---------------------------------------------------------------------------------------------
+// The fourth mode (ADR-0023). It needed no edit in applyCharacterizationMode_ -- levels 2 and 3
+// derive from `mode != Off`, an inequality rather than an enumeration of on-values -- and this
+// section is what pins that. If anyone rewrites the projection as a list of on-values, level 1 or
+// the level-2/3 pair silently drops out for exhaustive, and the failure is an empty run rather than
+// a wrong value.
+START_SECTION(exhaustive_projects_every_level)
+{
+  const std::string ms3 =
+    R"(, "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25 })";
+
+  {
+    Config cfg(cfgJson("",
+      R"("characterization": { "mode": "exhaustive", "protein_sequence": "PEPTIDEK",
+                               "max_targets": 3, "min_target_mass": 700 },)", ms3));
+
+    // Level 1 MUST be assigned, and from rank_by rather than from the mode. MSLevelConfig::selection
+    // defaults to None, and an unassigned level 1 makes FLASHIda.cpp short-circuit EVERY MS1 -- the
+    // instrument acquires nothing at all, silently, with no wrong value anywhere to notice.
+    TEST_EQUAL((int)cfg.level(1).selection, (int)SelectionMetric::QScore)
+    TEST_EQUAL(cfg.level(2).selection != SelectionMetric::None, true)
+    TEST_EQUAL(cfg.level(3).selection != SelectionMetric::None, true)
+
+    // Authored in characterization, read off level 2. The level's own default is 10, so this
+    // distinguishes "projected" from "left at the default".
+    TEST_EQUAL(cfg.level(2).max_targets, 3)
+
+    // The mode carries its OWN objective. objective defaults to Ambiguity, so a mode that assigned
+    // only `mode` would be byte-identical to "ambiguity" everywhere the engine actually branches.
+    TEST_EQUAL((int)cfg.characterization().objective, (int)CharacterizationObjective::Exhaustive)
+    TEST_REAL_SIMILAR(cfg.characterization().min_target_mass, 700.0)
+  }
+
+  // A fourth legal value did not loosen the strictness: unknown and wrong-case mode values still
+  // throw, and so does an unknown key beside the new one.
+  TEST_EXCEPTION(std::invalid_argument,
+    Config(cfgJson("", R"("characterization": { "mode": "Exhaustive", "protein_sequence": "PEPTIDEK" },)", ms3)))
+  TEST_EXCEPTION(std::invalid_argument,
+    Config(cfgJson("", R"("characterization": { "mode": "exhaustve", "protein_sequence": "PEPTIDEK" },)", ms3)))
+  TEST_EXCEPTION(std::invalid_argument,
+    Config(cfgJson("", R"("characterization": { "mode": "exhaustive", "protein_sequence": "P", "min_targt_mass": 700 },)", ms3)))
+
+  // min_target_mass is a plain optional key, not an exhaustive-only one: it parses under any mode
+  // and simply goes unread. Gating it on the mode would make toggling the mode off a two-key edit.
+  {
+    Config cfg(cfgJson("",
+      R"("characterization": { "mode": "ambiguity", "protein_sequence": "PEPTIDEK", "min_target_mass": 900 },)", ms3));
+    TEST_REAL_SIMILAR(cfg.characterization().min_target_mass, 900.0)
+    TEST_EQUAL((int)cfg.characterization().objective, (int)CharacterizationObjective::Ambiguity)
+  }
+
+  // Absent => 0, i.e. off. This is what keeps every existing config's pool unchanged.
+  {
+    Config cfg(cfgJson());
+    TEST_REAL_SIMILAR(cfg.characterization().min_target_mass, 0.0)
+  }
+}
+END_SECTION
+
+// ---------------------------------------------------------------------------------------------
 START_SECTION(scan_name_resolution)
 {
   const std::string two_extra_scans =

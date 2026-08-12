@@ -39,6 +39,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>   // std::abs(int) -- the charge floors below compare absolute charges
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -136,6 +137,46 @@ namespace OpenMS
     {
       if (f.ion_type.empty() || f.ion_index <= 0) return false;
       return (f.cover_start <= rs && f.cover_end >= re);
+    }
+
+    // The label an exhaustive-mode target carries when no mapped fragment claims its mass (ADR-0023
+    // decision 5). An IN-ENGINE SENTINEL ONLY: paired with ion_index 0 it takes buildMS3's no-ion
+    // branch, so it never reaches the wire and logs as an empty ion_type (D-f). Its whole job is to
+    // fail MS3FragmentMatcher::isKnownIonClass, so no projection site can cut a subsequence for it.
+    constexpr char kUnassignedIonType[] = "u";
+
+    // Human-readable objective name, switch-covered so a new objective is a -Wswitch diagnostic rather
+    // than a silently wrong word in a marker line. The two-way ternary this replaces printed
+    // "coverage" or "ambiguity" and nothing else, so a third value would have been mislabelled.
+    inline const char* objectiveName(CharacterizationObjective o)
+    {
+      switch (o)
+      {
+        case CharacterizationObjective::Ambiguity: return "ambiguity";
+        case CharacterizationObjective::Coverage: return "coverage";
+        case CharacterizationObjective::Exhaustive: return "exhaustive";
+      }
+      return "ambiguity";
+    }
+
+    // The exhaustive pool's admission test, factored out because it answers "is this peak a target?"
+    // and that question gets asked in more than one place as soon as the escalation ladder (ADR-0022)
+    // lands: its stopping condition is "would planExhaustive_ return anything?", which is this test
+    // plus the dispatch memory. Keep it a single definition -- were the two to drift, the ladder would
+    // escalate a Precursor whose pool the planner considers empty, or stop on one it would still fire at.
+    //
+    // The dispatch-memory test is deliberately NOT part of this: that is per-mass state each caller
+    // checks against the same set, not a property of the peak.
+    inline bool exhaustivePoolAdmits(const PeakRecord& pr, double min_target_mass, int charge_floor)
+    {
+      if (min_target_mass > 0.0 && pr.mono_mass < min_target_mass) return false;
+      if (charge_floor > 0 && std::abs(pr.charge) < charge_floor) return false;
+      // Unisolatable: no isolation centre, or no charge to isolate it at. Exploration.cpp:950/:957
+      // drops both anyway -- but only AFTER planNextScans has returned, so admitting one here would
+      // stamp its nominal mass into a monotone dispatch memory and burn that mass for the rest of the
+      // Precursor's life without ever acquiring it (ADR-0023 D-d).
+      if (pr.mz <= 0.0 || pr.charge == 0) return false;
+      return true;
     }
   } // anonymous namespace
 
@@ -343,6 +384,18 @@ namespace OpenMS
     m.fragments.clear();
     m.rematched_nonwinner_.clear();   // C: rebuilt below by mapNonWinnerMs2_ for empty-own-match contributors
     for (const PendingScan& ps : m.pending)
+    // Retain the winner scan's RAW deconvolved peaks and the parameters it was acquired under, for
+    // characterization.mode == Exhaustive (ADR-0023). Every other mode targets out of `fragments`,
+    // which is a table of theoretical ions and therefore keeps nothing about the masses that matched
+    // no ion -- exactly the masses this mode exists to fragment.
+    //
+    // Captured HERE, at the moment the winner is chosen, because that is the one point where the
+    // winning scan's peak list is both identified and still in hand. Copying rather than pointing:
+    // a pointer into a scan container would be a lifetime dependency on that container's retention
+    // policy, and the pool must not stop working because unrelated code changed how scans are kept.
+    m.winner_peaks = win->peaks;
+    m.winner_params = win->params;
+
     {
       mapScanOntoModel_(m, ps);
     }
@@ -559,6 +612,12 @@ namespace OpenMS
     // targets instead would make max_targets: 3 spend everything on the first fragment that happened to
     // be seen at three charges, characterising ONE cleavage site — which is the pathology the modes
     // exist to avoid, not to reproduce (ADR-0016).
+    // The fork sits HERE on purpose: after every identification/context/budget guard, so decision 10's
+    // reason strings read identically in all three modes, and before the sequence/region guards and the
+    // objective-keyed pool build below, which exist only to serve the mapped-fragment table exhaustive
+    // does not use (ADR-0023).
+    if (obj == CharacterizationObjective::Exhaustive) return planExhaustive_(m, precursor_id, budget);
+
     const ChargeAcquisitionMode charge_mode = config_.characterization().fragment_charges;
     const double snr_threshold = config_.targeting().snr_threshold;
     std::vector<Ms3Target> out;
@@ -597,6 +656,12 @@ namespace OpenMS
           if (zit != f->ms2_by_charge.end()) obs_list.push_back(&zit->second);
         }
       }
+    // How many DISTINCT fragments the objective actually had to choose from, for the [MS3-PLAN] line.
+    // "pool" is the objective-eligible set, not every mapped fragment: under Coverage that is every
+    // MS3-buildable fragment, under Ambiguity the union of the containers of the still-ambiguous mods.
+    // pool - fragments is then the honest truncation figure -- what the budget turned away.
+    int pool_size = 0;
+
 
       // Multiplexed: the same set arrives as notches on ONE target, so the fragment stage isolates the
       // whole envelope in a single scan. The fragment stage owns its own MAX_NOTCHES_PER_STAGE block,
@@ -629,14 +694,23 @@ namespace OpenMS
     }
     // Counterpart to the no_plan lines: the same marker on the success path, so grepping [MS3-PLAN]
     // yields every MS3 planning decision rather than only the negative ones. fragments and targets
-    // differ under separate/multiplexed charge modes -- fragments is what the budget counts (ADR-0016).
+    // differ under separate/multiplexed charge modes -- fragments is what the budget counts (ADR-0016)
+    // -- and pool/truncated say how much of the objective's candidate set the budget turned away, the
+    // figure that was previously invisible (ADR-0023 decision 8, as split by D-e: variants/commands
+    // belong on Exploration's marker, because buildVariants_ is private to it).
     std::cout << "[MS3-PLAN] precursor_id=" << precursor_id
               << " targets=" << out.size()
               << " fragments=" << fragments_selected
               << " budget=" << budget
-              << " objective=" << (obj == CharacterizationObjective::Ambiguity ? "ambiguity" : "coverage")
               << std::endl;
     return out;
+      // Deduped across mods, because the round-robin below dedups by FragmentKey too -- counting the
+      // per-mod lists raw would report a pool larger than anything the budget could ever have taken.
+      std::set<FragmentKey> pool_keys;
+      for (const auto& cands : per_mod_candidates)
+        for (const MappedFragment* f : cands) pool_keys.insert(FragmentKey{f->ion_type, f->ion_index});
+      pool_size = static_cast<int>(pool_keys.size());
+
   }
 
   const FragmentAnalysis::ProteoformMatch* ProteoformTracker::getRematchedNonWinnerMatch(int precursor_id, int scan_id) const
@@ -684,6 +758,7 @@ namespace OpenMS
       site.start_position = mod.candidate_start - ws;   // region 1-based
       site.end_position = mod.candidate_end - ws;
       site.position = (site.start_position + site.end_position) / 2;
+      pool_size = static_cast<int>(cands.size());
       site.mass_shift = mod.mass_shift;
       ctx.ptm_sites.push_back(site);
     }
@@ -795,8 +870,202 @@ namespace OpenMS
       FragmentAnalysis::FragmentScores matched_stage1;
       const std::vector<ChargeRecord>* matched_env = nullptr;  ///< the matched group's charge envelope
       {
+              << " objective=" << objectiveName(obj)
+              << " pool=" << pool_size
         double best_diff = std::numeric_limits<double>::max();
         bool within_tol = false;
+              << " truncated=" << std::max(0, pool_size - fragments_selected)
+              << " budget=" << budget
+              << std::endl;
+    return out;
+  }
+
+  std::vector<Ms3Target> ProteoformTracker::planExhaustive_(ProteoformModel& m, int precursor_id, int budget)
+  {
+    // Same marker and the same zero-target vocabulary as planNextScans' guards, so one grep still
+    // yields every MS3 planning decision in every mode.
+    auto no_plan = [precursor_id](const char* reason) -> std::vector<Ms3Target> {
+      std::cout << "[MS3-PLAN] precursor_id=" << precursor_id
+                << " objective=exhaustive targets=0 reason=" << reason << std::endl;
+      return {};
+    };
+
+    // The winner scan's own peak list, captured at finalize (ADR-0023). Deliberately NOT a lookup into
+    // a scan archive: the pool is a property of the model, so the feature does not depend on any other
+    // feature's retention policy for its raw material to still exist at plan time.
+    if (m.winner_peaks.empty()) return no_plan("no_winner_scan");
+
+    // NOT EMPTY *AND* NOT CAPABLE => refuse. An EMPTY activation counts as CAPABLE, and the asymmetry
+    // is deliberate: this mirrors upsertMappedObservation_'s only other capability test, whose comment
+    // records the reason at length. "" is not ETD -- it is "no activation recorded", which is what
+    // every hand-built C++ fixture and every scan config that omits the key produces. Failing closed on
+    // "" would return zero MS3 targets for all of them: a quieter failure than the one being prevented.
+    // (ADR-0023 decision 3 reads fail-closed; D-b corrects it.)
+    //
+    // Spelled out rather than delegated on purpose: the named predicate for this test arrives with the
+    // escalation ladder (ADR-0022), which is not in this branch. Collapse these two comparisons into
+    // that helper in the same commit that introduces it -- do not add a second definition here, or the
+    // two will disagree the first time the supported set changes.
+    const std::string& win_act = m.winner_params.activation_type;
+    if (!win_act.empty() && win_act != "HCD" && win_act != "CID")
+      return no_plan("winner_scan_not_ms3_capable");
+
+    const double min_target_mass = config_.characterization().min_target_mass;
+    const int charge_floor = config_.level(2).min_charge;
+    const double tol_ppm = config_.level(2).tolerance_ppm;
+
+    // --- 1) The pool: this ONE scan's deconvolved masses, mapped or not ----------------------------
+    struct PoolEntry
+    {
+      const PeakRecord* peak = nullptr;
+      int nominal = 0;
+    };
+    std::vector<PoolEntry> pool;
+    pool.reserve(m.winner_peaks.size());
+    for (const PeakRecord& pr : m.winner_peaks)
+    {
+      // ORDER IS LOAD-BEARING: every filter runs HERE, and the dispatch memory is stamped only in the
+      // emit loop below. See exhaustivePoolAdmits for what a premature stamp costs (ADR-0023 D-d).
+      if (!exhaustivePoolAdmits(pr, min_target_mass, charge_floor)) continue;
+      const int nominal = SpectralDeconvolution::getNominalMass(pr.mono_mass);
+      if (m.dispatched_nominal_masses.count(nominal) > 0) continue;   // already fragmented this species
+      pool.push_back(PoolEntry{&pr, nominal});
+    }
+    if (pool.empty()) return no_plan("pool_exhausted");
+
+    // Decision 4: intensity, descending, no tiebreak -- the same rule as every other target-ranking
+    // site, for ADR-0003's reason (more fragment ion means more MS3 precursor). Mapped and unassigned
+    // masses rank on the identical number, so the two halves interleave rather than segregating.
+    //
+    // stable_sort, not sort: PeakGroup::getChargeIntensity() is 0 for any group that never went through
+    // a scoring pass, so an all-ties pool is a real state (every hand-built fixture is one), and an
+    // unstable sort would make WHICH masses survive a budget truncation implementation-defined.
+    std::stable_sort(pool.begin(), pool.end(),
+                     [](const PoolEntry& a, const PoolEntry& b) {
+                       return a.peak->intensity > b.peak->intensity;
+                     });
+
+    // --- 2) The mapped/unassigned label ------------------------------------------------------------
+    // IN-TOLERANCE ONLY, and deliberately unlike mapScanOntoModel_, which falls back to the closest
+    // peak OVERALL so that "a matched fragment is never dropped for lack of a peak". That is the right
+    // rule for its question (does this KNOWN FRAGMENT have intensity here?) and the wrong rule for this
+    // one (does this PEAK deserve a known fragment's name?): replaying the fallback would stamp a real
+    // b61 onto an arbitrarily distant peak -- a confident wrong label, which is exactly what decision
+    // 5's class guard exists to make impossible. ADR-0023 D-c.
+    //
+    // Bound against the fragment's own observed MS2-frame mass, i.e. the binding mapScanOntoModel_
+    // made, read backwards. NOT against MappedFragment::theoretical_mass: that member is declared and
+    // never assigned (upsertMappedObservation_ says so in as many words), so keying on it would label
+    // every pool mass 'u' and the mode would never match anything.
+    auto labelFor = [&](const PeakRecord& pr) -> std::pair<std::string, int> {
+      const std::pair<std::string, int> unassigned{std::string(kUnassignedIonType), 0};
+      const double tol_abs = pr.mono_mass * tol_ppm * 1e-6;
+      const MappedFragment* best = nullptr;
+      double best_diff = 0.0;
+      for (const auto& kv : m.fragments)
+      {
+        const MappedFragment& f = kv.second;
+        double mapped_mass = 0.0;
+        if (f.best_ms2.has_value()) mapped_mass = f.best_ms2->observed_mass;
+        else if (f.best_ms3.has_value()) mapped_mass = f.best_ms3->observed_mass;   // also MS2-frame
+        else continue;
+        if (mapped_mass <= 0.0) continue;
+        const double diff = std::abs(mapped_mass - pr.mono_mass);
+        if (diff > tol_abs) continue;
+        // Closest wins, FragmentKey breaks an exact tie. `fragments` is an unordered_map, so a
+        // first-match-wins rule would make the label depend on hash order -- reproducible within a
+        // build and not across them.
+        if (best == nullptr || diff < best_diff
+            || (diff == best_diff && FragmentKey{f.ion_type, f.ion_index} < FragmentKey{best->ion_type, best->ion_index}))
+        {
+          best = &f;
+          best_diff = diff;
+        }
+      }
+      if (best == nullptr) return unassigned;
+      // A label is only usable if the matcher can project through it. mapScanOntoModel_ already admits
+      // a/b/c/x/y/z only, so this cannot fire today; it keeps "every target is either a KNOWN class
+      // with a positive index, or the 'u'/0 sentinel" a local invariant of this function rather than
+      // one inherited from a caller three files away.
+      if (best->ion_type.empty() || best->ion_index <= 0
+          || !MS3FragmentMatcher::isKnownIonClass(best->ion_type[0]))
+        return unassigned;
+      return {best->ion_type, best->ion_index};
+    };
+
+    // --- 3) Emit, budget-bounded -------------------------------------------------------------------
+    // THE BUDGET COUNTS SPECIES, not emitted targets, exactly as it counts fragments on the mapped
+    // path: separate and multiplexed acquire one species' whole charge envelope for ONE slot and differ
+    // only in scan count (ADR-0016). Counting acquisitions instead is the pathology the modes exist to
+    // avoid -- max_targets: 3 spent entirely on the first mass that happened to resolve at 3 charges.
+    const ChargeAcquisitionMode charge_mode = config_.characterization().fragment_charges;
+    const double snr_threshold = config_.targeting().snr_threshold;
+
+    std::vector<Ms3Target> out;
+    int species_selected = 0;
+    for (const PoolEntry& e : pool)
+    {
+      if (species_selected >= budget) break;
+      const PeakRecord& pr = *e.peak;
+      const std::pair<std::string, int> label = labelFor(pr);
+
+      // The acquisition charge set, chosen ONCE for both on-modes from the peak's own envelope: anchor
+      // plus the SNR-positive rest, most intense first, capped at a 10-plex. One selectNotches call for
+      // both is what keeps "they differ only in scan count" structural rather than aspirational.
+      std::vector<NotchCandidate> extra_charges;
+      if (charge_mode != ChargeAcquisitionMode::Single && !pr.by_charge.empty())
+      {
+        std::vector<NotchCandidate> cands;
+        cands.reserve(pr.by_charge.size());
+        for (const ChargeRecord& cr : pr.by_charge)
+          cands.push_back({cr.charge, cr.mz, cr.iso_width, cr.stage1_scores.charge_snr, cr.intensity});
+        extra_charges = selectNotches(cands, pr.charge, snr_threshold, MAX_NOTCHES_PER_STAGE,
+                                      "MS3 exhaustive m=" + std::to_string(pr.mono_mass));
+      }
+      // Multiplexed puts that set on ONE command as notches; separate spends one command per member.
+      const std::vector<NotchCandidate> frag_notches =
+          (charge_mode == ChargeAcquisitionMode::Multiplexed) ? extra_charges : std::vector<NotchCandidate>{};
+
+      auto emit = [&](double mz, int charge, double iso_width, const FragmentAnalysis::FragmentScores& s) {
+        Ms3Target t;
+        t.ion_type = label.first;
+        t.ion_index = label.second;
+        t.frag_mz = mz;
+        t.frag_charge = charge;
+        t.frag_mass = pr.mono_mass;
+        t.iso_width = iso_width;
+        // stage[0] REPLAYS the MS2 that produced this mass (ADR-0003), and for an unassigned mass there
+        // is no per-ion best observation to source it from -- the winner scan's own params ARE the
+        // acquisition that produced it, for mapped and unassigned masses alike.
+        t.stage0_params = m.winner_params;
+        t.stage1_scores = s;
+        t.notches = frag_notches;   // empty unless fragment_charges == Multiplexed
+        out.push_back(std::move(t));
+      };
+
+      emit(pr.mz, pr.charge, pr.iso_width, pr.stage1_scores);
+      if (charge_mode == ChargeAcquisitionMode::Separate)
+      {
+        for (const NotchCandidate& n : extra_charges)
+        {
+          for (const ChargeRecord& cr : pr.by_charge)
+            if (cr.charge == n.charge) { emit(cr.mz, cr.charge, cr.iso_width, cr.stage1_scores); break; }
+        }
+      }
+
+      // Stamped only now: after every filter, and after the mass has actually become a target. The set
+      // is monotone and dispatched-but-never-returned counts as done, so a stamp made any earlier is a
+      // species this Precursor can never revisit (ADR-0023 D-d, d7).
+      m.dispatched_nominal_masses.insert(e.nominal);
+      ++species_selected;
+    }
+
+    std::cout << "[MS3-PLAN] precursor_id=" << precursor_id
+              << " objective=" << objectiveName(CharacterizationObjective::Exhaustive)
+              << " pool=" << pool.size()
+              << " targets=" << out.size()
+              << " species=" << species_selected
+              << " truncated=" << (static_cast<int>(pool.size()) - species_selected)
         for (const PeakRecord& pr : ps.peaks)
         {
           const double diff = std::abs(pr.mono_mass - obs_mass);
