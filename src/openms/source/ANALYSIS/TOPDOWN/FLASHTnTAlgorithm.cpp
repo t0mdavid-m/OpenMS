@@ -559,7 +559,38 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
                                                  : (left.getScore() > right.getScore());
     });
 
-    if (hits.size() > max_hit_count) { hits.resize(max_hit_count); }
+    if ((int)hits.size() > max_hit_count)
+    {
+      // The score above comes from a coarse integer-mass alignment against the whole spectrum, which is
+      // not very specific: a correct protein can end up far below the cut while long sequences collect
+      // chance matches. The number of distinct matched tags is sequence-specific evidence, so keep the
+      // best hits by that criterion as well and let the extension decide between them.
+      std::vector<bool> keep(hits.size(), false);
+      for (int i = 0; i < max_hit_count; i++)
+      {
+        keep[i] = true; // hits are already sorted by score
+      }
+
+      std::vector<std::pair<int, Size>> by_tag_count;
+      by_tag_count.reserve(hits.size());
+      for (Size i = 0; i < hits.size(); i++)
+      {
+        by_tag_count.emplace_back(-(int)hits[i].getMetaValue("TagIndices").toIntList().size(), i);
+      }
+      std::partial_sort(by_tag_count.begin(), by_tag_count.begin() + max_hit_count, by_tag_count.end());
+      for (int i = 0; i < max_hit_count; i++)
+      {
+        keep[by_tag_count[i].second] = true;
+      }
+
+      std::vector<ProteinHit> kept;
+      kept.reserve(2 * max_hit_count);
+      for (Size i = 0; i < hits.size(); i++)
+      {
+        if (keep[i]) kept.push_back(hits[i]);
+      }
+      hits.swap(kept); // still in score order
+    }
 
     FLASHExtenderAlgorithm extender;
     extender.setParameters(extender_param_);
