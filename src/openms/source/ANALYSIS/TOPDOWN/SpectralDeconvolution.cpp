@@ -91,15 +91,15 @@ namespace OpenMS
       return;
     }
 
-    // Get precursor from spectrum if available, otherwise create one from target parameters
+    // Get precursor from spectrum if available, to keep its isolation window and other metadata
     Precursor precursor;
     if (!spec.getPrecursors().empty())
     {
       precursor = spec.getPrecursors()[0];
     }
-    else
+    // An explicitly specified target m/z takes precedence over the one from the spectrum
+    if (target_precursor_mz_ > 0)
     {
-      // Create precursor from target parameters when spectrum has no precursors
       precursor.setMZ(target_precursor_mz_);
     }
 

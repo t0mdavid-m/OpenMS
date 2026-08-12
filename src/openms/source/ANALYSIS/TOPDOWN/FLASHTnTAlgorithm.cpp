@@ -358,11 +358,17 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     int s_loc_pre_e = deconv_meta_str.find(";", s_loc_pre_s);
     int precursor_scan = stoi(deconv_meta_str.substr(s_loc_pre_s, s_loc_pre_e - s_loc_pre_s));
 
-    if (precursor_scan > 0)
+    double precursor_mass = 0;
+    if (deconv_meta_str.hasSubstring("precursormass="))
     {
       int s_loc_prem_s = deconv_meta_str.find("precursormass=") + 14;
       int s_loc_prem_e = deconv_meta_str.find(";", s_loc_prem_s);
-      double precursor_mass = stod(deconv_meta_str.substr(s_loc_prem_s, s_loc_prem_e - s_loc_prem_s));
+      precursor_mass = stod(deconv_meta_str.substr(s_loc_prem_s, s_loc_prem_e - s_loc_prem_s));
+    }
+
+    // a precursor mass may be given (e.g. by precursor_charge/precursor_mz options) even if no precursor scan is present
+    if (precursor_scan > 0 || precursor_mass > 0)
+    {
       PeakGroup pg;
       pg.setMonoisotopicMass(precursor_mass);
       if (deconv_meta_str.hasSubstring("precursorscore="))
