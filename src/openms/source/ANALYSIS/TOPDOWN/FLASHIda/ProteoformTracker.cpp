@@ -840,7 +840,10 @@ namespace OpenMS
       const std::vector<NotchCandidate> frag_notches =
           (charge_mode == ChargeAcquisitionMode::Multiplexed) ? extra_charges : std::vector<NotchCandidate>{};
 
-      auto emit = [&](double mz, int charge, double iso_width, const FragmentAnalysis::FragmentScores& s) {
+      // NOT named `emit`: Qt's qobjectdefs.h defines `emit` as an EMPTY macro, and OpenMS links
+      // Qt6Core, so `auto emit = ...` preprocesses to `auto = ...` -- MSVC then reports
+      // "no variable declared before '='" on a line that looks perfectly valid.
+      auto emitTarget = [&](double mz, int charge, double iso_width, const FragmentAnalysis::FragmentScores& s) {
         Ms3Target t;
         t.ion_type = label.first;
         t.ion_index = label.second;
@@ -857,13 +860,13 @@ namespace OpenMS
         out.push_back(std::move(t));
       };
 
-      emit(pr.mz, pr.charge, pr.iso_width, pr.stage1_scores);
+      emitTarget(pr.mz, pr.charge, pr.iso_width, pr.stage1_scores);
       if (charge_mode == ChargeAcquisitionMode::Separate)
       {
         for (const NotchCandidate& n : extra_charges)
         {
           for (const ChargeRecord& cr : pr.by_charge)
-            if (cr.charge == n.charge) { emit(cr.mz, cr.charge, cr.iso_width, cr.stage1_scores); break; }
+            if (cr.charge == n.charge) { emitTarget(cr.mz, cr.charge, cr.iso_width, cr.stage1_scores); break; }
         }
       }
 
