@@ -285,6 +285,16 @@ namespace OpenMS
     int max_targets = 3;
     int min_fragment_charge = 0;
 
+    /// Pool floor for characterization.mode == Exhaustive: a deconvolved mass below this (Da) is
+    /// not a target. 0 = off, and off is the default deliberately -- the mode does exactly what
+    /// its name says until told otherwise.
+    ///
+    /// NOT inheritable from deconvolution.min_mass: that floor is not applied to MSn output. The
+    /// reference config sets min_mass 500 / min_charge 4 and its MS2 spectra still contain 248 Da
+    /// and charge-1 species, so this is a genuinely new floor rather than a duplicate of one that
+    /// already reaches here.
+    double min_target_mass = 0.0;
+
     /// How many charge states of a target FRAGMENT one MS3 acquires -- from
     /// characterization.fragment_charges. Replaces the bool `ms3_all_charges`, whose two states are
     /// now Single (the fragment's best-MS2 charge) and Separate (one MS3 per observed charge);
@@ -344,16 +354,6 @@ namespace OpenMS
 
     /// Tolerance-ppm list across configured MS levels (ascending level order), for Deconvolution construction
     DoubleList toleranceList() const;
-
-    /// Pool floor for characterization.mode == Exhaustive: a deconvolved mass below this (Da) is not
-    /// a target. 0 = off, and off is the default deliberately -- the mode does exactly what its name
-    /// says until told otherwise.
-    ///
-    /// NOT inheritable from deconvolution.min_mass: that floor is not applied to MSn output. The
-    /// reference config sets min_mass 500 / min_charge 4 and its MS2 spectra still contain 248 Da
-    /// and charge-1 species, so this is a genuinely new floor rather than a duplicate of one that
-    /// already reaches here.
-    double min_target_mass = 0.0;
 
     /// Exploration-tolerance-ppm list across configured MS levels (ascending level order)
     DoubleList explorationToleranceList() const;
