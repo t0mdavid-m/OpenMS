@@ -39,11 +39,11 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>   // std::abs(int) -- the charge floors below compare absolute charges
 #include <iomanip>
 #include <iostream>
 #include <limits>
 #include <map>
+#include <cstdlib>   // std::abs(int) -- the exhaustive pool's charge floor compares absolute charges
 #include <set>
 #include <sstream>
 #include <string>
@@ -138,16 +138,8 @@ namespace OpenMS
       if (f.ion_type.empty() || f.ion_index <= 0) return false;
       return (f.cover_start <= rs && f.cover_end >= re);
     }
-
-    // The label an exhaustive-mode target carries when no mapped fragment claims its mass (ADR-0023
-    // decision 5). An IN-ENGINE SENTINEL ONLY: paired with ion_index 0 it takes buildMS3's no-ion
-    // branch, so it never reaches the wire and logs as an empty ion_type (D-f). Its whole job is to
-    // fail MS3FragmentMatcher::isKnownIonClass, so no projection site can cut a subsequence for it.
-    constexpr char kUnassignedIonType[] = "u";
-
-    // Human-readable objective name, switch-covered so a new objective is a -Wswitch diagnostic rather
-    // than a silently wrong word in a marker line. The two-way ternary this replaces printed
-    // "coverage" or "ambiguity" and nothing else, so a third value would have been mislabelled.
+    // The authored spelling of an objective, for the [MS3-PLAN] marker. A switch with no `default:`
+    // so the next objective is a compiler warning rather than a silently wrong label.
     inline const char* objectiveName(CharacterizationObjective o)
     {
       switch (o)
@@ -162,8 +154,7 @@ namespace OpenMS
     // The exhaustive pool's admission test, factored out because it answers "is this peak a target?"
     // and that question gets asked in more than one place as soon as the escalation ladder (ADR-0022)
     // lands: its stopping condition is "would planExhaustive_ return anything?", which is this test
-    // plus the dispatch memory. Keep it a single definition -- were the two to drift, the ladder would
-    // escalate a Precursor whose pool the planner considers empty, or stop on one it would still fire at.
+    // plus the dispatch memory. One definition, so the two can never drift.
     //
     // The dispatch-memory test is deliberately NOT part of this: that is per-mass state each caller
     // checks against the same set, not a property of the peak.
@@ -178,6 +169,7 @@ namespace OpenMS
       if (pr.mz <= 0.0 || pr.charge == 0) return false;
       return true;
     }
+
   } // anonymous namespace
 
   // ---------------------------------------------------------------------------
@@ -373,6 +365,17 @@ namespace OpenMS
     m.identification_score = win->match.score;
     m.winner_scan_id = win->scan_id;
 
+    // Retain the winner scan's RAW deconvolved peaks and the parameters it was acquired under, for
+    // characterization.mode == Exhaustive (ADR-0023). Every other objective targets out of
+    // `fragments`, a table of theoretical ions, which by construction keeps nothing about the masses
+    // that matched no ion -- exactly the masses this mode exists to fragment.
+    //
+    // Captured HERE, where the winner is chosen, because that is the one point at which the winning
+    // scan's peak list is both identified and still in hand. A copy, not a pointer: a pointer into a
+    // scan container would tie this mode's correctness to that container's retention policy.
+    m.winner_peaks = win->peaks;
+    m.winner_params = win->params;
+
     // 3) Seed modifications from the winner's PTM sites (full-protein 1-based ranges).
     m.modifications.clear();
     for (const FragmentAnalysis::PTMSite& s : win->match.ptm_sites)
@@ -384,18 +387,6 @@ namespace OpenMS
     m.fragments.clear();
     m.rematched_nonwinner_.clear();   // C: rebuilt below by mapNonWinnerMs2_ for empty-own-match contributors
     for (const PendingScan& ps : m.pending)
-    // Retain the winner scan's RAW deconvolved peaks and the parameters it was acquired under, for
-    // characterization.mode == Exhaustive (ADR-0023). Every other mode targets out of `fragments`,
-    // which is a table of theoretical ions and therefore keeps nothing about the masses that matched
-    // no ion -- exactly the masses this mode exists to fragment.
-    //
-    // Captured HERE, at the moment the winner is chosen, because that is the one point where the
-    // winning scan's peak list is both identified and still in hand. Copying rather than pointing:
-    // a pointer into a scan container would be a lifetime dependency on that container's retention
-    // policy, and the pool must not stop working because unrelated code changed how scans are kept.
-    m.winner_peaks = win->peaks;
-    m.winner_params = win->params;
-
     {
       mapScanOntoModel_(m, ps);
     }
@@ -457,6 +448,11 @@ namespace OpenMS
     const CharacterizationObjective obj = config_.characterization().objective;
     const int budget = config_.level(2).max_targets;  // reuse the MS2 max_targets as the MS3 budget
     if (budget <= 0) return no_plan("zero_budget");
+
+    // The fork sits HERE deliberately: after every identification/context/budget guard, so decision 10
+    // ("identification is still required") reports through the SAME reason strings in every mode, and
+    // before the objective-keyed pool build below, which exhaustive replaces wholesale (ADR-0023).
+    if (obj == CharacterizationObjective::Exhaustive) return planExhaustive_(m, precursor_id, budget);
 
     const int P = static_cast<int>(m.proteoform_sequence.size());
     if (P <= 0) return no_plan("empty_sequence");
@@ -612,12 +608,6 @@ namespace OpenMS
     // targets instead would make max_targets: 3 spend everything on the first fragment that happened to
     // be seen at three charges, characterising ONE cleavage site — which is the pathology the modes
     // exist to avoid, not to reproduce (ADR-0016).
-    // The fork sits HERE on purpose: after every identification/context/budget guard, so decision 10's
-    // reason strings read identically in all three modes, and before the sequence/region guards and the
-    // objective-keyed pool build below, which exist only to serve the mapped-fragment table exhaustive
-    // does not use (ADR-0023).
-    if (obj == CharacterizationObjective::Exhaustive) return planExhaustive_(m, precursor_id, budget);
-
     const ChargeAcquisitionMode charge_mode = config_.characterization().fragment_charges;
     const double snr_threshold = config_.targeting().snr_threshold;
     std::vector<Ms3Target> out;
@@ -656,12 +646,6 @@ namespace OpenMS
           if (zit != f->ms2_by_charge.end()) obs_list.push_back(&zit->second);
         }
       }
-    // How many DISTINCT fragments the objective actually had to choose from, for the [MS3-PLAN] line.
-    // "pool" is the objective-eligible set, not every mapped fragment: under Coverage that is every
-    // MS3-buildable fragment, under Ambiguity the union of the containers of the still-ambiguous mods.
-    // pool - fragments is then the honest truncation figure -- what the budget turned away.
-    int pool_size = 0;
-
 
       // Multiplexed: the same set arrives as notches on ONE target, so the fragment stage isolates the
       // whole envelope in a single scan. The fragment stage owns its own MAX_NOTCHES_PER_STAGE block,
@@ -694,188 +678,12 @@ namespace OpenMS
     }
     // Counterpart to the no_plan lines: the same marker on the success path, so grepping [MS3-PLAN]
     // yields every MS3 planning decision rather than only the negative ones. fragments and targets
-    // differ under separate/multiplexed charge modes -- fragments is what the budget counts (ADR-0016)
-    // -- and pool/truncated say how much of the objective's candidate set the budget turned away, the
-    // figure that was previously invisible (ADR-0023 decision 8, as split by D-e: variants/commands
-    // belong on Exploration's marker, because buildVariants_ is private to it).
+    // differ under separate/multiplexed charge modes -- fragments is what the budget counts (ADR-0016).
     std::cout << "[MS3-PLAN] precursor_id=" << precursor_id
               << " targets=" << out.size()
               << " fragments=" << fragments_selected
               << " budget=" << budget
-              << std::endl;
-    return out;
-      // Deduped across mods, because the round-robin below dedups by FragmentKey too -- counting the
-      // per-mod lists raw would report a pool larger than anything the budget could ever have taken.
-      std::set<FragmentKey> pool_keys;
-      for (const auto& cands : per_mod_candidates)
-        for (const MappedFragment* f : cands) pool_keys.insert(FragmentKey{f->ion_type, f->ion_index});
-      pool_size = static_cast<int>(pool_keys.size());
-
-  }
-
-  const FragmentAnalysis::ProteoformMatch* ProteoformTracker::getRematchedNonWinnerMatch(int precursor_id, int scan_id) const
-  {
-    auto it = models_.find(precursor_id);
-    if (it == models_.end()) return nullptr;
-    const auto& map = it->second.rematched_nonwinner_;
-    auto mit = map.find(scan_id);
-    if (mit == map.end() || mit->second.fragments.empty()) return nullptr;
-    return &mit->second;
-  }
-
-  const ProteoformModel* ProteoformTracker::getModel(int precursor_id) const
-  {
-    auto it = models_.find(precursor_id);
-    if (it == models_.end())
-    {
-      return nullptr;
-    }
-    return &it->second;
-  }
-
-  MS3FragmentMatcher::ProteoformContext ProteoformTracker::buildWinnerProteoformContext(int precursor_id) const
-  {
-    // Default context = region -1/-1, no PTMs. If there is no finalized, non-empty winner, MS3 then
-    // matches nothing ("no winner -> nothing to characterize"). This replaces the triggering-scan
-    // context at the MS3 build sites so MS3 is scored against the LIVE winner proteoform.
-    MS3FragmentMatcher::ProteoformContext ctx;
-    const ProteoformModel* m = getModel(precursor_id);
-    if (m == nullptr || !m->finalized || m->proteoform_sequence.empty()) return ctx;
-
-    const int P = static_cast<int>(m->proteoform_sequence.size());
-    const int ws = (m->region_start < 0) ? 0 : m->region_start;
-    const int we = (m->region_end < 0) ? P : m->region_end;
-    ctx.region_start = ws;   // 0-based inclusive (frame expected by MS3FragmentMatcher)
-    ctx.region_end = we;     // 0-based exclusive
-
-    // EVERY winner mod as a region-1-based PTMSite (same conversion as narrowModifications_ :782-789).
-    // Include LOCALIZED mods (candidate_start == candidate_end): a localized point PTM's mass must
-    // enter the MS3 theoretical (e.g. localized heme/acetyl) or fragments spanning it stop matching.
-    // Ambiguous mods (start < end) drive the matcher's dual with/without.
-    for (const ModificationState& mod : m->modifications)
-    {
-      FragmentAnalysis::PTMSite site;
-      site.start_position = mod.candidate_start - ws;   // region 1-based
-      site.end_position = mod.candidate_end - ws;
-      site.position = (site.start_position + site.end_position) / 2;
-      pool_size = static_cast<int>(cands.size());
-      site.mass_shift = mod.mass_shift;
-      ctx.ptm_sites.push_back(site);
-    }
-    return ctx;
-  }
-
-  void ProteoformTracker::mapScanOntoModel_(ProteoformModel& m, const PendingScan& ps)
-  {
-    // --- Strategy A ----------------------------------------------------------------------------
-    // Pool the scan's ALREADY-matched fragments (ps.match.fragments) onto the winner proteoform.
-    // No theoretical masses are recomputed here. The hard part is the coordinate-frame conversion:
-    // every MS2/MS3 fragment, regardless of which (possibly truncated) region its own scan matched
-    // against, is reduced to ONE backbone-cleavage position expressed in the WINNER region frame so
-    // the same cleavage from any scan/level collides into the same MappedFragment.
-    //
-    // Frame definitions (all derived from the verified source semantics):
-    //   region_start (rs/ws): 0-based inclusive start, -1 => full sequence (=> 0).
-    //   region_end   (re/we): 0-based EXCLUSIVE end,   -1 => full sequence (=> P).
-    //   P = full-protein length = winner proteoform_sequence length.
-    //
-    //   MS2 ion_index `idx` is 1-based in THAT SCAN's matched region:
-    //     prefix b_idx covers region residues 1..idx  -> full-protein prefix cut = rs + idx
-    //     suffix y_idx covers the last idx region res. -> full-protein suffix cut = (P - re) + idx
-    //   (These match MS3FragmentMatcher::computeEquivalentIon exactly: prefix `start + i`,
-    //    suffix `P - end + i`. MS3 equiv_index is therefore ALREADY in the full-protein frame.)
-    //
-    //   Winner-region frame index (the map key index):
-    //     prefix:  winner_idx = full_prefix_cut - ws
-    //     suffix:  winner_idx = full_suffix_cut - (P - we)
-    //   Identity reduction: scan-region == winner-region == full => rs=ws=0, re=we=P =>
-    //     prefix winner_idx = (0 + idx) - 0 = idx; suffix winner_idx = ((P-P) + idx) - 0 = idx. OK.
-    // -------------------------------------------------------------------------------------------
-
-    const int P = static_cast<int>(m.proteoform_sequence.size());
-    if (P <= 0) return;
-
-    // Winner region resolved to [ws, we) (0-based, exclusive end).
-    const int ws = (m.region_start < 0) ? 0 : m.region_start;
-    const int we = (m.region_end < 0) ? P : m.region_end;
-    const int L = we - ws; // winner-region residue count
-    if (L <= 0) return;
-
-    // A NON-winner MS2 scan matched against ITS OWN proteoform hypothesis, so trusting its already-
-    // matched fragments would pool foreign theoreticals. Instead re-match its RAW deconvolved masses
-    // against the WINNER ladder so every pooled MS2 fragment is winner-consistent by construction.
-    // The winner MS2 scan (FLASHTnT already did the heavy lifting) and all MS3 scans (winner-matched
-    // upstream via buildWinnerProteoformContext) keep the existing already-matched pooling below.
-    if (ps.ms_level == 2 && ps.scan_id != m.winner_scan_id)
-    {
-      mapNonWinnerMs2_(m, ps, ws, L);
-      return;
-    }
-
-    // This scan's matched region resolved to [rs, re) (0-based, exclusive end).
-    const int rs = (ps.match.region_start < 0) ? 0 : ps.match.region_start;
-    const int re = (ps.match.region_end < 0) ? P : ps.match.region_end;
-
-    const double tol_ppm = config_.level(ps.ms_level).tolerance_ppm;
-
-    for (const FragmentAnalysis::ProteoformMatch::FragmentMatch& fm : ps.match.fragments)
-    {
-      // 1) Pick the ion identity by level.
-      std::string type;
-      int idx = 0;
-      double obs_mass = 0.0;
-      if (ps.ms_level == 3)
-      {
-        type = fm.equiv_type;       // already full-protein b/y
-        idx = fm.equiv_index;       // already full-protein index
-        obs_mass = fm.adjusted_mass;
-      }
-      else
-      {
-        type = fm.ion_type;         // region-relative
-        idx = fm.ion_index;         // region-relative 1-based
-        obs_mass = fm.observed_mass;
-      }
-      if (type.empty() || idx <= 0) continue;
-
-      const char ic = type[0];
-      const bool is_prefix = (ic == 'a' || ic == 'b' || ic == 'c');
-      const bool is_suffix = (ic == 'x' || ic == 'y' || ic == 'z');
-      if (!is_prefix && !is_suffix) continue;
-
-      // 2) Convert to the full-protein cleavage, then to the winner-region frame.
-      int winner_idx;
-      if (ps.ms_level == 3)
-      {
-        // MS3 equiv_index is full-protein; map straight into the winner region.
-        winner_idx = is_prefix ? (idx - ws) : (idx - (P - we));
-      }
-      else
-      {
-        // MS2 idx is relative to this scan's region -> full-protein -> winner region.
-        const int full_cut = is_prefix ? (rs + idx) : ((P - re) + idx);
-        winner_idx = is_prefix ? (full_cut - ws) : (full_cut - (P - we));
-      }
-
-      // DROP fragments whose cleavage falls outside the winner region.
-      if (winner_idx < 1 || winner_idx > L) continue;
-
-      // 3) Recover intensity (and mz/charge for MS3 targeting): closest mass within per-level
-      //    tolerance; fall back to the overall closest mass (never drop a matched fragment for lack
-      //    of a peak — the fragment was already validated as a match upstream).
-      double intensity = 0.0;
-      double matched_mz = 0.0;
-      int matched_charge = 0;
-      double matched_iso_width = 0.0;
-      FragmentAnalysis::FragmentScores matched_stage1;
-      const std::vector<ChargeRecord>* matched_env = nullptr;  ///< the matched group's charge envelope
-      {
-              << " objective=" << objectiveName(obj)
-              << " pool=" << pool_size
-        double best_diff = std::numeric_limits<double>::max();
-        bool within_tol = false;
-              << " truncated=" << std::max(0, pool_size - fragments_selected)
-              << " budget=" << budget
+              << " objective=" << (obj == CharacterizationObjective::Ambiguity ? "ambiguity" : "coverage")
               << std::endl;
     return out;
   }
@@ -1066,6 +874,169 @@ namespace OpenMS
               << " targets=" << out.size()
               << " species=" << species_selected
               << " truncated=" << (static_cast<int>(pool.size()) - species_selected)
+              << " budget=" << budget
+              << std::endl;
+    return out;
+  }
+
+  const FragmentAnalysis::ProteoformMatch* ProteoformTracker::getRematchedNonWinnerMatch(int precursor_id, int scan_id) const
+  {
+    auto it = models_.find(precursor_id);
+    if (it == models_.end()) return nullptr;
+    const auto& map = it->second.rematched_nonwinner_;
+    auto mit = map.find(scan_id);
+    if (mit == map.end() || mit->second.fragments.empty()) return nullptr;
+    return &mit->second;
+  }
+
+  const ProteoformModel* ProteoformTracker::getModel(int precursor_id) const
+  {
+    auto it = models_.find(precursor_id);
+    if (it == models_.end())
+    {
+      return nullptr;
+    }
+    return &it->second;
+  }
+
+  MS3FragmentMatcher::ProteoformContext ProteoformTracker::buildWinnerProteoformContext(int precursor_id) const
+  {
+    // Default context = region -1/-1, no PTMs. If there is no finalized, non-empty winner, MS3 then
+    // matches nothing ("no winner -> nothing to characterize"). This replaces the triggering-scan
+    // context at the MS3 build sites so MS3 is scored against the LIVE winner proteoform.
+    MS3FragmentMatcher::ProteoformContext ctx;
+    const ProteoformModel* m = getModel(precursor_id);
+    if (m == nullptr || !m->finalized || m->proteoform_sequence.empty()) return ctx;
+
+    const int P = static_cast<int>(m->proteoform_sequence.size());
+    const int ws = (m->region_start < 0) ? 0 : m->region_start;
+    const int we = (m->region_end < 0) ? P : m->region_end;
+    ctx.region_start = ws;   // 0-based inclusive (frame expected by MS3FragmentMatcher)
+    ctx.region_end = we;     // 0-based exclusive
+
+    // EVERY winner mod as a region-1-based PTMSite (same conversion as narrowModifications_ :782-789).
+    // Include LOCALIZED mods (candidate_start == candidate_end): a localized point PTM's mass must
+    // enter the MS3 theoretical (e.g. localized heme/acetyl) or fragments spanning it stop matching.
+    // Ambiguous mods (start < end) drive the matcher's dual with/without.
+    for (const ModificationState& mod : m->modifications)
+    {
+      FragmentAnalysis::PTMSite site;
+      site.start_position = mod.candidate_start - ws;   // region 1-based
+      site.end_position = mod.candidate_end - ws;
+      site.position = (site.start_position + site.end_position) / 2;
+      site.mass_shift = mod.mass_shift;
+      ctx.ptm_sites.push_back(site);
+    }
+    return ctx;
+  }
+
+  void ProteoformTracker::mapScanOntoModel_(ProteoformModel& m, const PendingScan& ps)
+  {
+    // --- Strategy A ----------------------------------------------------------------------------
+    // Pool the scan's ALREADY-matched fragments (ps.match.fragments) onto the winner proteoform.
+    // No theoretical masses are recomputed here. The hard part is the coordinate-frame conversion:
+    // every MS2/MS3 fragment, regardless of which (possibly truncated) region its own scan matched
+    // against, is reduced to ONE backbone-cleavage position expressed in the WINNER region frame so
+    // the same cleavage from any scan/level collides into the same MappedFragment.
+    //
+    // Frame definitions (all derived from the verified source semantics):
+    //   region_start (rs/ws): 0-based inclusive start, -1 => full sequence (=> 0).
+    //   region_end   (re/we): 0-based EXCLUSIVE end,   -1 => full sequence (=> P).
+    //   P = full-protein length = winner proteoform_sequence length.
+    //
+    //   MS2 ion_index `idx` is 1-based in THAT SCAN's matched region:
+    //     prefix b_idx covers region residues 1..idx  -> full-protein prefix cut = rs + idx
+    //     suffix y_idx covers the last idx region res. -> full-protein suffix cut = (P - re) + idx
+    //   (These match MS3FragmentMatcher::computeEquivalentIon exactly: prefix `start + i`,
+    //    suffix `P - end + i`. MS3 equiv_index is therefore ALREADY in the full-protein frame.)
+    //
+    //   Winner-region frame index (the map key index):
+    //     prefix:  winner_idx = full_prefix_cut - ws
+    //     suffix:  winner_idx = full_suffix_cut - (P - we)
+    //   Identity reduction: scan-region == winner-region == full => rs=ws=0, re=we=P =>
+    //     prefix winner_idx = (0 + idx) - 0 = idx; suffix winner_idx = ((P-P) + idx) - 0 = idx. OK.
+    // -------------------------------------------------------------------------------------------
+
+    const int P = static_cast<int>(m.proteoform_sequence.size());
+    if (P <= 0) return;
+
+    // Winner region resolved to [ws, we) (0-based, exclusive end).
+    const int ws = (m.region_start < 0) ? 0 : m.region_start;
+    const int we = (m.region_end < 0) ? P : m.region_end;
+    const int L = we - ws; // winner-region residue count
+    if (L <= 0) return;
+
+    // A NON-winner MS2 scan matched against ITS OWN proteoform hypothesis, so trusting its already-
+    // matched fragments would pool foreign theoreticals. Instead re-match its RAW deconvolved masses
+    // against the WINNER ladder so every pooled MS2 fragment is winner-consistent by construction.
+    // The winner MS2 scan (FLASHTnT already did the heavy lifting) and all MS3 scans (winner-matched
+    // upstream via buildWinnerProteoformContext) keep the existing already-matched pooling below.
+    if (ps.ms_level == 2 && ps.scan_id != m.winner_scan_id)
+    {
+      mapNonWinnerMs2_(m, ps, ws, L);
+      return;
+    }
+
+    // This scan's matched region resolved to [rs, re) (0-based, exclusive end).
+    const int rs = (ps.match.region_start < 0) ? 0 : ps.match.region_start;
+    const int re = (ps.match.region_end < 0) ? P : ps.match.region_end;
+
+    const double tol_ppm = config_.level(ps.ms_level).tolerance_ppm;
+
+    for (const FragmentAnalysis::ProteoformMatch::FragmentMatch& fm : ps.match.fragments)
+    {
+      // 1) Pick the ion identity by level.
+      std::string type;
+      int idx = 0;
+      double obs_mass = 0.0;
+      if (ps.ms_level == 3)
+      {
+        type = fm.equiv_type;       // already full-protein b/y
+        idx = fm.equiv_index;       // already full-protein index
+        obs_mass = fm.adjusted_mass;
+      }
+      else
+      {
+        type = fm.ion_type;         // region-relative
+        idx = fm.ion_index;         // region-relative 1-based
+        obs_mass = fm.observed_mass;
+      }
+      if (type.empty() || idx <= 0) continue;
+
+      const char ic = type[0];
+      const bool is_prefix = (ic == 'a' || ic == 'b' || ic == 'c');
+      const bool is_suffix = (ic == 'x' || ic == 'y' || ic == 'z');
+      if (!is_prefix && !is_suffix) continue;
+
+      // 2) Convert to the full-protein cleavage, then to the winner-region frame.
+      int winner_idx;
+      if (ps.ms_level == 3)
+      {
+        // MS3 equiv_index is full-protein; map straight into the winner region.
+        winner_idx = is_prefix ? (idx - ws) : (idx - (P - we));
+      }
+      else
+      {
+        // MS2 idx is relative to this scan's region -> full-protein -> winner region.
+        const int full_cut = is_prefix ? (rs + idx) : ((P - re) + idx);
+        winner_idx = is_prefix ? (full_cut - ws) : (full_cut - (P - we));
+      }
+
+      // DROP fragments whose cleavage falls outside the winner region.
+      if (winner_idx < 1 || winner_idx > L) continue;
+
+      // 3) Recover intensity (and mz/charge for MS3 targeting): closest mass within per-level
+      //    tolerance; fall back to the overall closest mass (never drop a matched fragment for lack
+      //    of a peak — the fragment was already validated as a match upstream).
+      double intensity = 0.0;
+      double matched_mz = 0.0;
+      int matched_charge = 0;
+      double matched_iso_width = 0.0;
+      FragmentAnalysis::FragmentScores matched_stage1;
+      const std::vector<ChargeRecord>* matched_env = nullptr;  ///< the matched group's charge envelope
+      {
+        double best_diff = std::numeric_limits<double>::max();
+        bool within_tol = false;
         for (const PeakRecord& pr : ps.peaks)
         {
           const double diff = std::abs(pr.mono_mass - obs_mass);
