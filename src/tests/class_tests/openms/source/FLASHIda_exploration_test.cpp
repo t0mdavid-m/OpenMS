@@ -1094,6 +1094,12 @@ START_SECTION(ms3_exploration_winner_selection_and_cleanup)
   // all). The cascade branch is NOT what produced this: an MS3 group is terminal (msn_level < 3 is
   // false), so the one command here can only be the production re-acquisition.
   TEST_EQUAL(static_cast<int>(last_info.commands.size()), 1)
+  // Release build: no _ITERATOR_DEBUG_LEVEL and no OPENMS_PRECONDITION. Indexing an EMPTY
+  // `commands` here is a read at address 0x4 that kills the binary and takes every later section
+  // with it -- which is exactly what an empty-baseline group abort produced: one wrong metric
+  // surfaced as a score of 0 in this section and a SegFault that hid 44 of the file's 48.
+  // One failure must report as one failed line.
+  ABORT_IF(last_info.commands.empty())
   TEST_EQUAL(last_info.commands[0].msn_level, 3)
   TEST_EQUAL(last_info.commands[0].num_stages, 2)
   TEST_EQUAL(last_info.commands[0].priority, 1)
@@ -1104,6 +1110,7 @@ START_SECTION(ms3_exploration_winner_selection_and_cleanup)
   // handed a seed for it. A miss there silently skips identification (the FLASHIda.cpp comment on the
   // MS2->MS3 cascade records exactly that failure), which would reintroduce the bug one layer down.
   TEST_EQUAL(static_cast<int>(last_info.ms2_context_cache.size()), 1)
+  ABORT_IF(last_info.ms2_context_cache.empty())
   TEST_EQUAL(last_info.ms2_context_cache[0].first, last_info.commands[0].scan_id)
   // The production CE is the WINNER's, not the level default (25) and not the completing variant's
   // (cmds[5], CE 35). mass_count scores spec.size(), so variant_index 3 — 8 peak groups, cmds[4],
@@ -1164,10 +1171,17 @@ START_SECTION(ms3_measuring_metric_always_reacquires_without_overrides)
 
   // THE ASSERTION THIS TEST EXISTS FOR: exactly one production MS3, despite empty overrides.
   TEST_EQUAL(static_cast<int>(last_info.commands.size()), 1)
+  // Release build: no _ITERATOR_DEBUG_LEVEL and no OPENMS_PRECONDITION. Indexing an EMPTY
+  // `commands` here is a read at address 0x4 that kills the binary and takes every later section
+  // with it -- which is exactly what an empty-baseline group abort produced: one wrong metric
+  // surfaced as a score of 0 in this section and a SegFault that hid 44 of the file's 48.
+  // One failure must report as one failed line.
+  ABORT_IF(last_info.commands.empty())
   TEST_EQUAL(last_info.commands[0].msn_level, 3)
   TEST_EQUAL(last_info.commands[0].num_stages, 2)
   TEST_EQUAL(std::string(last_info.commands[0].scan_description)[3], 'R')
   TEST_EQUAL(static_cast<int>(last_info.ms2_context_cache.size()), 1)
+  ABORT_IF(last_info.ms2_context_cache.empty())
   TEST_EQUAL(last_info.ms2_context_cache[0].first, last_info.commands[0].scan_id)
 }
 END_SECTION

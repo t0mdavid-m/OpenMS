@@ -157,7 +157,23 @@ namespace OpenMS
     // msn_level >= 3 is LOAD-BEARING: initiate()'s ion_type parameter defaults to '\0' and the MS2
     // call site (FLASHIda.cpp) passes nothing, so an ungated test would force this metric onto EVERY
     // MS2 exploration group and move four committed golden modes.
-    group.exploration_metric = (msn_level >= 3 && !MS3FragmentMatcher::isKnownIonClass(ion_type))
+    //
+    // Keyed on the ion CLASS, never on the 'u' literal: every projection site refuses on the class
+    // (MS3FragmentMatcher::extractSubsequence, calibrateAndScore), the sentinel's value is TU-local
+    // to ProteoformTracker.cpp's anonymous namespace and invisible from here, and any FUTURE
+    // unprojectable class must take this branch too.
+    //
+    // '\0' IS EXEMPT, AND THAT EXEMPTION IS THE POINT. It means "no ion identity was RECORDED", not
+    // "an ion identity the matcher refuses" -- the same asymmetry planExhaustive_ spells out for an
+    // empty activation_type ("NOT EMPTY *AND* NOT CAPABLE => refuse"; failing closed on the empty
+    // value is the quieter bug). Production never reaches MS3 with it: Ms3Target::ion_type is
+    // non-empty at both assignment sites and the conversion in initiateNextLevel is the only
+    // string->char site. Only unit tests calling initiate(3, ...) without an ion pass it, and
+    // forcing the metric there turned two MS3 sections into empty-baseline aborts -- one reported as
+    // a score of 0, the other as a SegFault that hid 44 of the file's 48 sections.
+    const bool has_ion_identity  = (ion_type != '\0');
+    const bool unprojectable_ion = has_ion_identity && !MS3FragmentMatcher::isKnownIonClass(ion_type);
+    group.exploration_metric = (msn_level >= 3 && unprojectable_ion)
                                  ? ExplorationMetric::RemainingPrecursor
                                  : cfg.exploration;
     group.precursor_mz = precursor_mz;

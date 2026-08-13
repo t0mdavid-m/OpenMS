@@ -582,7 +582,8 @@ START_SECTION(([EXTRA] characterization mode exhaustive parses and carries its o
     "precursor_selection": {"rank_by": "qscore", "max_precursors": 2},
     "characterization": {"mode": "exhaustive", "protein_sequence": "PEPTIDEPEPTIDE",
                          "max_targets": 3, "min_target_mass": 0},
-    "ms_settings": {"ms1": {}, "ms2": {"activation": "HCD"}, "ms3": {"activation": "HCD"}}
+    "ms_settings": {"ms1": {}, "ms2": {"activation": "HCD", "collision_energy": 29},
+                    "ms3": {"activation": "HCD", "collision_energy": 25}}
   })JSON";
   Config cfg(json);
   TEST_EQUAL((int)cfg.characterization().mode, (int)CharacterizationMode::Exhaustive)
@@ -599,20 +600,28 @@ START_SECTION(([EXTRA] a mistyped mode still throws, and min_target_mass is hono
   const std::string bad = R"JSON({
     "deconvolution": {"tol": [10, 10, 10]},
     "characterization": {"mode": "exhaustve", "protein_sequence": "PEPTIDE"},
-    "ms_settings": {"ms1": {}, "ms2": {"activation": "HCD"}, "ms3": {"activation": "HCD"}}
+    "ms_settings": {"ms1": {}, "ms2": {"activation": "HCD", "collision_energy": 29},
+                    "ms3": {"activation": "HCD", "collision_energy": 25}}
   })JSON";
-  bool threw = false;
+  // Assert on the MESSAGE, not merely on the type. Config.cpp throws std::invalid_argument for
+  // EVERY error in the file, so a type-only catch goes green off an unrelated defect -- it was
+  // passing off a missing collision_energy in this very fixture, and it would still pass with the
+  // whole mode allowlist deleted, which is the one regression this section exists to catch.
+  bool threw_for_mode = false;
   try { Config cfg{bad}; }
-  catch (const std::invalid_argument&) { threw = true; }
-  TEST_EQUAL(threw, true)
-  (void)threw; // MSVC C4189
+  catch (const std::invalid_argument& e)
+  {
+    threw_for_mode = std::string(e.what()).find("characterization.mode") != std::string::npos;
+  }
+  TEST_EQUAL(threw_for_mode, true)
 
   const std::string floored = R"JSON({
     "deconvolution": {"tol": [10, 10, 10]},
     "precursor_selection": {"rank_by": "qscore", "max_precursors": 2},
     "characterization": {"mode": "exhaustive", "protein_sequence": "PEPTIDEPEPTIDE",
                          "min_target_mass": 1500.5},
-    "ms_settings": {"ms1": {}, "ms2": {"activation": "HCD"}, "ms3": {"activation": "HCD"}}
+    "ms_settings": {"ms1": {}, "ms2": {"activation": "HCD", "collision_energy": 29},
+                    "ms3": {"activation": "HCD", "collision_energy": 25}}
   })JSON";
   Config cfg2(floored);
   TEST_REAL_SIMILAR(cfg2.characterization().min_target_mass, 1500.5)

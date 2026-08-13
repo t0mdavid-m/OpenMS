@@ -863,4 +863,54 @@ START_SECTION(ms2_exploration_metric_is_never_overridden)
 }
 END_SECTION
 
+// The case the other three metric sections leave open, and the one that broke CI: 'u' at MS3 is
+// pinned (-> RemainingPrecursor), 'b' at MS3 is pinned (-> the configured metric), and '\0' at MS2 is
+// pinned by the level gate -- but NOTHING pinned '\0' at MS3.
+//
+// It is not a hypothetical hole. The override first shipped as `!isKnownIonClass(ion_type)`, which is
+// true for '\0', so every MS3 group formed without an ion identity flipped to RemainingPrecursor.
+// FLASHIda_exploration_test builds exactly such groups; with its harness feeding no raw arrays the
+// baseline window measured 0, the group aborted, and the failure surfaced once as a score of 0 and
+// once as a SegFault. '\0' means "no ion identity RECORDED" -- not "an identity the matcher refuses"
+// -- and only the latter may change the metric.
+START_SECTION(ms3_unrecorded_ion_type_keeps_the_configured_metric)
+{
+  const std::string cfg_json = R"JSON({
+    "deconvolution": {"tol": [10, 10, 10]},
+    "precursor_selection": {"rank_by": "qscore", "max_precursors": 3},
+    "characterization": {
+      "mode": "exhaustive",
+      "protein_sequence": "PEPTIDEK",
+      "max_targets": 3,
+      "exploration": {"metric": "fragment_count", "ce_min": 20.0, "ce_max": 30.0, "ce_step": 5.0}
+    },
+    "ms_settings": {
+      "ms1": {"analyzer": "Orbitrap", "resolution": 120000},
+      "ms2": {"analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29},
+      "ms3": {"analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25}
+    }
+  })JSON";
+
+  Config cfg{cfg_json};
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+
+  TEST_EQUAL(static_cast<int>(cfg.level(3).exploration), static_cast<int>(ExplorationMetric::FragmentCount))
+
+  ScanCommand ms2_ctx = makeMs2Ctx();
+  PeakGroup pg = makeSyntheticPeakGroup(MASS_U1, 2);
+
+  // Level 3, no ion identity recorded -- the initiate() default, reached explicitly here.
+  std::vector<ScanCommand> cmds = exploration.initiate(3, pg, 2, queue, nullptr, &ms2_ctx, '\0', 0);
+  TEST_EQUAL(static_cast<int>(cmds.size()), 4)   // CE-0 baseline + CE 20 / 25 / 30
+  ABORT_IF(cmds.size() != 4)
+
+  auto grp = ExplorationTestAccess::group(exploration, 1);
+  TEST_EQUAL(grp.msn_level, 3)
+  // The CONFIGURED metric survives. Under the shipped-and-reverted gate this read RemainingPrecursor.
+  TEST_EQUAL(static_cast<int>(grp.exploration_metric), static_cast<int>(ExplorationMetric::FragmentCount))
+}
+END_SECTION
+
 END_TEST
