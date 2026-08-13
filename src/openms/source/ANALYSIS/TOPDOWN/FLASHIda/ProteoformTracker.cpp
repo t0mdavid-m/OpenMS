@@ -138,6 +138,12 @@ namespace OpenMS
       if (f.ion_type.empty() || f.ion_index <= 0) return false;
       return (f.cover_start <= rs && f.cover_end >= re);
     }
+    // The label an exhaustive-mode target carries when no mapped fragment claims its mass (ADR-0023
+    // decision 5). An IN-ENGINE SENTINEL ONLY: paired with ion_index 0 it takes buildMS3's no-ion
+    // branch, so it never reaches the wire and logs as an empty ion_type (D-f). Its whole job is to
+    // fail MS3FragmentMatcher::isKnownIonClass, so no projection site can cut a subsequence for it.
+    constexpr char kUnassignedIonType[] = "u";
+
     // The authored spelling of an objective, for the [MS3-PLAN] marker. A switch with no `default:`
     // so the next objective is a compiler warning rather than a silently wrong label.
     inline const char* objectiveName(CharacterizationObjective o)
