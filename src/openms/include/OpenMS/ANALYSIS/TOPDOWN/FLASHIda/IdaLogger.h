@@ -46,6 +46,7 @@
 #include <cstdint>
 #include <fstream>
 #include <map>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -70,10 +71,33 @@ namespace OpenMS
    *
    * The writers operate purely on their arguments (ScanCommand /
    * DeconvolvedSpectrum / the two row descriptors) and the owned streams — they
-   * hold no engine state. Locking is the CALLER's responsibility: FLASHIda holds
-   * analysis_mutex_ across writeScanResultRow/writeIdentificationRow/writeIDALogEntry
-   * (called from processScan), and wraps writeScanCommandRow in the same lock at
-   * its getNextScanCommand call sites. IdaLogger itself is lock-agnostic.
+   * hold no engine state.
+   *
+   * SELF-SYNCHRONISING, one mutex PER STREAM. Locking used to be the caller's
+   * job, borrowed from FLASHIda::analysis_mutex_ — which meant the instrument
+   * event thread waited out a whole deconvolution to write one row. It does not
+   * any more, so the streams protect themselves.
+   *
+   * Per-stream rather than one shared lock, and that is not tidiness. The two
+   * threads write DISJOINT streams: writeScanCommandRow is the sole writer of
+   * commands_tsv_stream_ and is called only from getNextScanCommand (the event
+   * thread); the other four are written only from processScan (the pool thread).
+   * A single logger mutex would therefore couple them back together — the drain's
+   * row would queue behind writeScanResultRow / writeIdentificationRow, each
+   * ending in a synchronous flush, and behind writeIDALogEntry, which walks every
+   * peak group of an MS1. That reintroduces exactly the stall the split removed,
+   * through a different mutex, and the drain-blocking test cannot see it because
+   * that test is scoped by mutex identity.
+   *
+   * The locks are uncontended in production precisely BECAUSE the streams are
+   * disjoint. They are here so that disjointness is a fact rather than an
+   * assumption: nothing anywhere guarantees the Thermo iAPI raises MsScanArrived
+   * on a single thread. Pinned by FLASHIda_Logging_test's
+   * concurrent_drain_writes_one_wellformed_row_per_call, which without them
+   * produced 17 intact rows out of 1000.
+   *
+   * Headers are written in the CONSTRUCTOR, before any thread exists, so they
+   * need no lock and cannot race a writer.
    */
   class OPENMS_DLLAPI IdaLogger
   {
@@ -207,12 +231,22 @@ namespace OpenMS
     /// Configuration object (owns the runtime output paths)
     const Config& config_;
 
-    // --- Logging file streams (append-only, crash-safe) ---
+    // --- Logging file streams (append-only, crash-safe), each with its own lock ---
+    //
+    // One mutex per stream, declared beside the stream it guards so the pairing cannot drift. Every
+    // writer takes its own and nothing else, so these are LEAVES of the lock hierarchy
+    // (analysis_mutex_ -> {queue_mutex_, precursor_map_mutex_, these}) and no writer may grow a call
+    // into another writer without inverting an edge.
     std::ofstream ida_log_stream_;
+    mutable std::mutex ida_log_mutex_;
     std::ofstream commands_tsv_stream_;
+    mutable std::mutex commands_tsv_mutex_;
     std::ofstream results_tsv_stream_;
+    mutable std::mutex results_tsv_mutex_;
     std::ofstream identification_tsv_stream_;
+    mutable std::mutex identification_tsv_mutex_;
     std::ofstream pooled_stream_;
+    mutable std::mutex pooled_mutex_;
 
     /// Derive scan_type string from scan_description
     static std::string scanTypeFromDescription_(const ScanCommand& cmd);

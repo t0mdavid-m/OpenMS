@@ -525,20 +525,25 @@ START_SECTION(concurrent_drain_writes_one_wellformed_row_per_call)
 {
   // WHAT THIS PINS: scan_commands.tsv stays intact when getNextScanCommand runs on several threads.
   //
-  // Today analysis_mutex_ serialises the three write sites, so this passes. It is expected to go RED
-  // the moment those guards are deleted and BEFORE the per-stream logger mutexes land -- that
-  // intermediate state is deliberate, and this test is the evidence those mutexes are load-bearing
-  // rather than decorative.
+  // OBSERVED, not hypothesised. This test was landed green, the coarse lock was then removed while
+  // the per-stream logger mutexes were deliberately held back one commit, and CI reported:
+  //
+  //     [DRAIN-CONCURRENCY] calls=1000 rows=1000 wellformed=17 unique_ids=156
+  //
+  // 17 intact rows out of 1000. That run is why IdaLogger owns a mutex per stream rather than
+  // relying on the streams being thread-disjoint in practice.
   //
   // No processScan, no spectra, no id echo. The MS1 admission gate makes fabricated ids useless, but
   // the DRAIN needs none of that -- it manufactures its own work. That is what makes this cheap and
   // immune to fixture drift.
   //
-  // THE INVARIANT IS EXACT, not "roughly right": every path through getNextScanCommand writes
-  // exactly one row and returns 1. Step 1 (:668), Step 4 (:715) and Step 5 (:759) each write once;
-  // Step 2 pushes and falls through rather than returning; Step 3 writes nothing. So rows == calls,
-  // and a torn row merges two lines and DROPS the count -- deterministic detection of the common
-  // tearing mode rather than a probabilistic one.
+  // THREE ASSERTIONS, and the one that actually caught it was NOT the one expected to. Every path
+  // through getNextScanCommand writes exactly one row and returns 1 (Step 1, Step 4 and Step 5 each
+  // write once; Step 2 pushes and falls through rather than returning; Step 3 writes nothing), so
+  // rows == calls. The original reasoning was that a torn row MERGES two lines and drops that count.
+  // It does not: the count held at exactly 1000 and the damage was entirely intra-line -- interleaved
+  // field writes within correctly-terminated rows. The row count alone would have passed. Keep all
+  // three; the field-count and unique-id checks are what have actually earned their keep.
   const std::string dir = freshLogDir("logging_concurrent_drain");
   std::string json = buildJsonWithLogDir(dir);
   FLASHIda ida(const_cast<char*>(json.c_str()));
@@ -562,18 +567,21 @@ START_SECTION(concurrent_drain_writes_one_wellformed_row_per_call)
 
   auto tsv = TSVFile::parse(dir + "/scan_commands.tsv");
 
-  // Exactly one row per call. Fewer means rows were merged (torn writes); more would mean a path
-  // started writing twice.
+  // Exactly one row per call. Held even under full tearing, so on its own this proves little -- but
+  // it is the assertion that would catch a path that stopped writing, or started writing twice.
   TEST_EQUAL((int)tsv.rows.size(), kTotalCalls);
 
-  // Every row has the full column count. A row torn mid-write tokenizes short.
+  // Every row has the full column count. THIS is the one that catches interleaved writes: fields
+  // from two threads land in one line and the row tokenizes to the wrong width.
   int wellformed = 0;
   for (const auto& row : tsv.rows)
     if (row.size() == tsv.headers.size()) wellformed++;
   TEST_EQUAL(wellformed, (int)tsv.rows.size());
 
   // Tracking ids are allocated under queue_mutex_, so they must all be distinct even across threads.
-  // This catches a torn row that happens to tokenize to the right width by splicing two half-rows.
+  // Independent of the width check: a spliced row can tokenize to the right width and still carry a
+  // duplicated or garbled id, which is what the observed run showed (156 distinct ids across 1000
+  // rows).
   std::set<std::string> ids;
   for (const auto& row : tsv.rows) ids.insert(cell(tsv, row, "tracking_id"));
   TEST_EQUAL((int)ids.size(), (int)tsv.rows.size());

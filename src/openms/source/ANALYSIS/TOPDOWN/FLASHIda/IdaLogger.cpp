@@ -174,6 +174,8 @@ namespace OpenMS
                                     const DeconvolvedSpectrum& all_peak_groups)
   {
     if (!ida_log_stream_.is_open()) return;
+    // After the is_open() check, so a run with no log_dir pays nothing at all.
+    std::lock_guard<std::mutex> lk(ida_log_mutex_);
 
     // The access-id token is the base-94 encoding of scan_number (round-trips the decoded id).
     const std::string tracking_id = ScanCommandQueue::encode(scan_number);
@@ -247,6 +249,9 @@ namespace OpenMS
   void IdaLogger::writeScanCommandRow(const ScanCommand& cmd, int precursor_id, const std::string& ms3_proteoform)
   {
     if (!commands_tsv_stream_.is_open()) return;
+    // The one writer called from the instrument event thread. Its own lock, so it never queues
+    // behind a processScan-side row and its flush.
+    std::lock_guard<std::mutex> lk(commands_tsv_mutex_);
 
     std::string id_str = ScanCommandQueue::encode(cmd.scan_id);
     std::string scan_type = scanTypeFromDescription_(cmd);
@@ -372,6 +377,7 @@ namespace OpenMS
   void IdaLogger::writeScanResultRow(const ScanRowDescriptor& row)
   {
     if (!results_tsv_stream_.is_open()) return;
+    std::lock_guard<std::mutex> lk(results_tsv_mutex_);
 
     // Alias the descriptor fields so the row-building body below is unchanged (byte-identical output).
     const std::string& tracking_id = row.tracking_id;
@@ -531,6 +537,7 @@ namespace OpenMS
   void IdaLogger::writeIdentificationRow(const IdRowDescriptor& row)
   {
     if (!identification_tsv_stream_.is_open()) return;
+    std::lock_guard<std::mutex> lk(identification_tsv_mutex_);
 
     // Alias the descriptor fields so the row-building body below is unchanged (byte-identical output).
     const std::string& tracking_id = row.tracking_id;
@@ -697,6 +704,7 @@ namespace OpenMS
   void IdaLogger::writePooledModelRow(const PooledModelDescriptor& r)
   {
     if (!pooled_stream_.is_open()) return;
+    std::lock_guard<std::mutex> lk(pooled_mutex_);
 
     // localized_mods and ambiguous_mods joined with ';' (no tracking-id collision risk: these are
     // human-readable strings, not encoded ids).
