@@ -180,8 +180,7 @@ FLASHIda::FLASHIda(char* arg) :
       // Equal-priority commands drain FIFO, so this preserves scan_commands row order and child_ids.
       auto push_ms2_command = [&](ScanCommand& c, int precursor_id)
       {
-        precursor_id_by_tracking_[c.scan_id] = precursor_id;
-        queue_.push(c);
+        stampAndPush_(c, precursor_id);
         ms2_commands.push_back(c);
         commands_pushed++;
       };
@@ -280,8 +279,7 @@ FLASHIda::FLASHIda(char* arg) :
         auto expl_result = exploration_.feedResult(parent_tracking_id, mzs, ints, length, rt_min, queue_, &tracker_, precursor_id);
         for (auto& c : expl_result.commands)
         {
-          precursor_id_by_tracking_[c.scan_id] = precursor_id;
-          queue_.push(c); 
+          stampAndPush_(c, precursor_id);
         }
         // Seed the parent-MS2 context of every MS3 this group dispatched, so each one identifies when it
         // returns on the regular MS3 path. Empty unless the group cascaded to MS3.
@@ -350,8 +348,7 @@ FLASHIda::FLASHIda(char* arg) :
                                               config_.quantification().reporter_mz_tol, config_.quantification().fold_change_threshold, false))
           {
             auto followup = queue_.buildFollowUp(parent_ctx, config_.quantification().follow_up_scan, 'F');
-            precursor_id_by_tracking_[followup.scan_id] = precursor_id;  // P5: follow-up inherits the MS2's precursor_id
-            queue_.push(followup);
+            stampAndPush_(followup, precursor_id);  // P5: follow-up inherits the MS2's precursor_id
             child_ids.push_back(ScanCommandQueue::encode(followup.scan_id));
             commands_pushed++;
           }
@@ -361,8 +358,7 @@ FLASHIda::FLASHIda(char* arg) :
         if (config_.targeting().conditional_ms2_enabled && tags_found && !is_follow_up_scan)
         {
           auto cond = queue_.buildFollowUp(parent_ctx, config_.targeting().tagging_follow_up_scan, 'C');
-          precursor_id_by_tracking_[cond.scan_id] = precursor_id;  // P5: follow-up inherits the MS2's precursor_id
-          queue_.push(cond);
+          stampAndPush_(cond, precursor_id);  // P5: follow-up inherits the MS2's precursor_id
           child_ids.push_back(ScanCommandQueue::encode(cond.scan_id));
           commands_pushed++;
         }
@@ -378,8 +374,7 @@ FLASHIda::FLASHIda(char* arg) :
           ms3_targeting = exploration_.initiateNextLevel(2, deconv_.storedMS2(), parent_ctx.faims_cv, queue_, &parent_ctx, &tracker_, precursor_id);
           for (auto& c : ms3_targeting.commands)
           {
-            precursor_id_by_tracking_[c.scan_id] = precursor_id;  // P5: MS3 children inherit the parent MS2's precursor_id
-            queue_.push(c);
+            stampAndPush_(c, precursor_id);  // P5: MS3 children inherit the parent MS2's precursor_id
             child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
             commands_pushed++;
           }
@@ -465,8 +460,7 @@ FLASHIda::FLASHIda(char* arg) :
         auto expl_result = exploration_.feedResult(parent_tracking_id, mzs, ints, length, rt_min, queue_, &tracker_, precursor_id);
         for (auto& c : expl_result.commands)
         {
-          precursor_id_by_tracking_[c.scan_id] = precursor_id;
-          queue_.push(c); 
+          stampAndPush_(c, precursor_id);
         }
         // Seed the parent-MS2 context of the production MS3 a completed MS3 group re-acquires (overrides
         // set); that scan is not a variant, so it returns on the regular MS3 path and needs the lookup.
@@ -640,7 +634,22 @@ FLASHIda::FLASHIda(char* arg) :
 
   int FLASHIda::getNextScanCommand(ScanCommand& out)
   {
-    // No analysis_mutex_ acquired — queue methods lock internally, exploration/FAIMS via atomics
+    // This runs on the INSTRUMENT EVENT THREAD and acquires analysis_mutex_ nowhere. That is the
+    // contract, not an accident: processScan holds that lock across a whole MS1 deconvolution, so any
+    // acquisition on this path parks the instrument for the duration. Pinned by
+    // FLASHIda_ProcessScan_test::drain_completes_while_analysis_mutex_held, which covers all three
+    // emitting paths separately because each used to take the lock at its own site.
+    //
+    // How each piece of cross-thread state is reached instead:
+    //   queue_                    -- ScanCommandQueue locks queue_mutex_ internally
+    //   precursor_id_by_tracking_ -- precursorIdForTracking_ locks precursor_map_mutex_ internally
+    //   logger_                   -- IdaLogger serialises each stream itself
+    //   exploration_active_, current_faims_cv_ -- atomics, release/acquire
+    //   faims_.isEnabled()        -- NOT synchronised. Safe only because FAIMS::enabled_ is assigned
+    //                                once in the FAIMS constructor and never again. That immutability
+    //                                is the drain's last unsynchronised cross-thread read and is
+    //                                pinned nowhere; a "disable FAIMS mid-run" feature would make it
+    //                                a real race.
     double faims_cv = faims_.isEnabled() ? current_faims_cv_.load(std::memory_order_acquire) : 0.0;
 
     // Step 1: AGC scan if needed
@@ -663,10 +672,10 @@ FLASHIda::FLASHIda(char* arg) :
 
       std::cout << "[TRACK-CREATE] id=" << id_str << " ms_level=1 type=agc" << std::endl;
       queue_.registerPending(out);
-      {
-        std::lock_guard<std::mutex> lk(analysis_mutex_);
-        logger_.writeScanCommandRow(out);
-      }
+      // No analysis_mutex_. Taking it here would park the instrument event thread behind a whole
+      // deconvolution to write one row -- see the note on analysis_mutex_ in FLASHIda.h. Serialising
+      // a log stream is IdaLogger's job, not the analysis lock's.
+      logger_.writeScanCommandRow(out);
       return 1;
     }
 
@@ -704,16 +713,21 @@ FLASHIda::FLASHIda(char* arg) :
       if (out.msn_level == 1 && out.is_agc == 0)
         queue_.recordMS1Time();
       // faims_cv already set at creation time (MS2 -> parent CV, CV-transition MS1 -> next CV)
-      {
-        std::lock_guard<std::mutex> lk(analysis_mutex_);
-        // P5: source the dequeued command's precursor_id from the map (0 for MS1/AGC/untracked).
-        // The lock above serialises this read against processScan's map writes.
-        // Take the wide MS3 fragment ProForma stashed at buildMS3 time (empty for non-MS3 commands) so the
-        // scan_commands.tsv row carries the fired MS3 target's fragment identity. takeMS3Proteoform locks
-        // queue_mutex_ internally (separate from analysis_mutex_ held here).
-        std::string ms3pf = (out.msn_level == 3) ? queue_.takeMS3Proteoform(out.scan_id) : std::string();
-        logger_.writeScanCommandRow(out, precursorIdForTracking_(out.scan_id), ms3pf);
-      }
+      //
+      // No analysis_mutex_ -- this is the one drain site that reads shared state, and it now takes
+      // only the leaf locks it actually needs. precursorIdForTracking_ locks precursor_map_mutex_
+      // itself; takeMS3Proteoform locks queue_mutex_ itself. Neither can be held for longer than a
+      // hash lookup, whereas analysis_mutex_ is held across a whole deconvolution.
+      //
+      // The VALUE read here is already final and would be even without the map lock: the write
+      // happens before its queue_.push(), and the dequeue() above acquired the same queue_mutex_
+      // that push released. The lock exists for the container -- a concurrent insert can rehash the
+      // table while find() is walking it. See FLASHIda.h.
+      //
+      // Take the wide MS3 fragment ProForma stashed at buildMS3 time (empty for non-MS3 commands) so the
+      // scan_commands.tsv row carries the fired MS3 target's fragment identity.
+      std::string ms3pf = (out.msn_level == 3) ? queue_.takeMS3Proteoform(out.scan_id) : std::string();
+      logger_.writeScanCommandRow(out, precursorIdForTracking_(out.scan_id), ms3pf);
       return 1;
     }
 
@@ -754,10 +768,10 @@ FLASHIda::FLASHIda(char* arg) :
 
       out = agc_cmd;
       queue_.registerPending(out);
-      {
-        std::lock_guard<std::mutex> lk(analysis_mutex_);
-        logger_.writeScanCommandRow(out);
-      }
+      // No analysis_mutex_. Taking it here would park the instrument event thread behind a whole
+      // deconvolution to write one row -- see the note on analysis_mutex_ in FLASHIda.h. Serialising
+      // a log stream is IdaLogger's job, not the analysis lock's.
+      logger_.writeScanCommandRow(out);
       return 1;
     }
   }

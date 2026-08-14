@@ -127,10 +127,23 @@ namespace OpenMS
     /// Isobaric quantification (TMT reporter-ion differential abundance test)
     Quantification quant_;
 
-    /// Mutex protecting analysis state: deconv_, selection_, exploration_, faims_, quant_, fragments_.
-    /// Also serialises the logger_ streams: processScan holds this lock across logger_.writeScanResultRow /
-    /// writeIDALogEntry / writeIdentificationRow, and getNextScanCommand wraps logger_.writeScanCommandRow in
-    /// the same lock at its call sites (IdaLogger itself is lock-agnostic).
+    /// Mutex protecting analysis state: deconv_, selection_, exploration_, faims_, quant_, fragments_,
+    /// tracker_, ms2_context_cache_ and next_precursor_id_.
+    ///
+    /// ONE acquisition site: processScan (function-scoped, so it is held across the whole
+    /// deconvolution). getNextScanCommand does NOT acquire it and must not start -- the instrument
+    /// event thread calls the drain, and making it wait on a deconvolution to write one TSV row and
+    /// read one map entry is what this arrangement exists to prevent.
+    ///
+    /// It no longer serialises the logger. IdaLogger owns a mutex per stream, which matters rather
+    /// than being tidier: one shared logger lock would put the drain's writeScanCommandRow behind
+    /// processScan's writeScanResultRow / writeIdentificationRow / writeIDALogEntry -- each ending in
+    /// a synchronous flush -- and reintroduce exactly the coupling removed here, through a different
+    /// mutex, in a way the drain-blocking test cannot see because that test is scoped by mutex name.
+    ///
+    /// Pinned by FLASHIda_ProcessScan_test's drain_completes_while_analysis_mutex_held (the drain
+    /// must not wait on it) and process_scan_still_blocks_while_analysis_mutex_held (processScan must
+    /// still take it -- deleting THIS lock is the wrong way to satisfy the first test).
     mutable std::mutex analysis_mutex_;
 
     /// Atomic flag: true when any exploration group is active (set by processScan, read by getNextScanCommand)
@@ -159,18 +172,68 @@ namespace OpenMS
     /// P5: tracking_id -> precursor_id, the propagation map. Stamped when an MS2 command is issued at MS1
     /// (allocPrecursorId_ per precursor) and when child commands inherit their parent's precursor_id.
     /// Read on scan return to key the ProteoformTracker model and source the precursor_id log column.
-    /// Guarded by analysis_mutex_ (written in processScan; read in processScan + the writeScanCommandRow
-    /// call sites in getNextScanCommand, which hold analysis_mutex_).
+    ///
+    /// Guarded by its OWN leaf mutex, NOT by analysis_mutex_. This is the only mutable state the
+    /// instrument-event-thread drain and the deconvolution thread genuinely share, and giving it a
+    /// dedicated lock is what stops the drain waiting out a whole deconvolution to log one row.
+    ///
+    /// The lock is for the CONTAINER, not for the value. Value visibility is already guaranteed
+    /// without it: every write is immediately followed by queue_.push(), which RELEASES queue_mutex_,
+    /// and the drain's dequeue() ACQUIRES the same mutex -- a happens-before edge, so a dequeued
+    /// command's entry is final by the time the drain reads it. What genuinely needs protecting is
+    /// the concurrent INSERT: an insert that rehashes while find() is walking a bucket is undefined
+    /// behaviour whichever value would have won.
+    ///
+    /// Deliberately unreachable except through the accessors below -- a raw subscript no longer
+    /// compiles, which is a stronger guarantee than any test we can write for that rehash race on
+    /// this toolchain (MSVC ships no thread sanitizer).
     std::unordered_map<int, int> precursor_id_by_tracking_;
 
+    /// Leaf lock for precursor_id_by_tracking_.
+    ///
+    /// Lock hierarchy: analysis_mutex_ -> { queue_mutex_, precursor_map_mutex_, the IdaLogger stream
+    /// mutexes }, all leaves. This one is taken ONLY inside the two accessors below, and neither of
+    /// them calls anything -- that is what makes it a leaf and the hierarchy acyclic. Keep it that
+    /// way: a queue callback that consulted this map would invert the edge.
+    ///
+    /// std::mutex is NOT recursive, so the accessors must never call each other. The obvious-looking
+    /// "read the existing id first" version of the setter self-deadlocks on the first MS2 of the run.
+    mutable std::mutex precursor_map_mutex_;
+
     /// P5: allocate the next precursor_id (monotonic). Call once per MS1-selected precursor.
+    /// processScan-only, and processScan is serialised against itself by the host pipeline, so this
+    /// needs no lock -- it is not part of the shared surface.
     int allocPrecursorId_() { return next_precursor_id_++; }
 
     /// P5: look up the precursor_id for a tracking_id, or 0 if untracked.
+    /// Self-locking so that no call site can forget it -- including the drain's, which is the whole
+    /// reason the lock exists.
     int precursorIdForTracking_(int tracking_id) const
     {
+      std::lock_guard<std::mutex> lk(precursor_map_mutex_);
       auto it = precursor_id_by_tracking_.find(tracking_id);
       return (it != precursor_id_by_tracking_.end()) ? it->second : 0;
+    }
+
+    /// P5: stamp a tracking_id with its precursor_id. Self-locking; must NOT call the reader above.
+    void setPrecursorForTracking_(int tracking_id, int precursor_id)
+    {
+      std::lock_guard<std::mutex> lk(precursor_map_mutex_);
+      precursor_id_by_tracking_[tracking_id] = precursor_id;
+    }
+
+    /// Stamp a command with its precursor_id and enqueue it -- in that order, always.
+    ///
+    /// The ORDER is the entire point of this helper. The drain reads the map for a command it has
+    /// just dequeued, and dequeue() acquires the same queue_mutex_ that push() releases, so stamping
+    /// BEFORE the push puts the write on the happens-before side of that edge and the drain is
+    /// guaranteed a final value. Stamping after would be a genuine defect -- one that no compiler and
+    /// no CPU can introduce, and only an editor can. Six call sites each remembering the rule is six
+    /// chances to get it wrong; one helper is none.
+    void stampAndPush_(ScanCommand& cmd, int precursor_id)
+    {
+      setPrecursorForTracking_(cmd.scan_id, precursor_id);
+      queue_.push(cmd);
     }
 
     /// Steady-clock reference for timestamps
