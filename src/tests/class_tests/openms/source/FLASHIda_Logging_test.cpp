@@ -17,6 +17,11 @@
 #include <cstring>
 #include <vector>
 #include <cstdio>
+#include <iostream>  // the two lock-split guards below report their counts
+#include <thread>    // concurrent_drain_writes_one_wellformed_row_per_call
+#include <map>       // precursor_id inheritance check
+#include <set>       // tracking-id uniqueness check
+#include <utility>   // std::pair
 
 #include "FLASHIda_TestHelpers.h"
 
@@ -421,6 +426,160 @@ START_SECTION(crash_safety_valid_tsv)
     for (const auto& row : cmd_tsv.rows)
       TEST_EQUAL(row.size(), cmd_tsv.headers.size());
   }
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// Lock-split guards.
+//
+// Neither of these is a golden. They assert RELATIONSHIPS between logged values and structural
+// invariants of the writer -- never an absolute number -- so they cannot drift into being a second,
+// unmanaged copy of the log goldens.
+/////////////////////////////////////////////////////////////
+
+// Every dequeued MSn command carries a real precursor_id, and children inherit their parent's.
+START_SECTION(every_dequeued_command_logs_a_row_with_the_right_precursor_id)
+{
+  // WHAT THIS PINS, and why it is worth its lines even though it passes today.
+  //
+  // The precursor_id written on a scan_commands row is read at dequeue time from a map that
+  // processScan populates. The lock split moves that read behind its own mutex and routes the six
+  // writes through a helper. Two mis-applications of that change are silent:
+  //
+  //   1. Deleting the whole braced block at FLASHIda.cpp:707-716 instead of just the lock_guard
+  //      LINE inside it. That removes writeScanCommandRow entirely and every non-AGC row with it.
+  //      Nothing else in this suite would notice -- the log goldens would, but they are deliberately
+  //      out of scope here.
+  //   2. Converting a write site to the helper but dropping or mis-keying its argument, so a whole
+  //      family of children silently logs precursor_id 0.
+  //
+  // Both are caught by asserting the ROW EXISTS and its value RELATES correctly to its siblings.
+  // The cytC + MS3 recipe, same as scan_commands_tsv_format above. MS3 is REQUIRED here, not
+  // incidental: inheritance is only observable when a child's parent itself carries a non-zero
+  // precursor_id, and an MS2's parent is an MS1, which logs 0 by definition. With MS3 off the
+  // inheritance loop below would iterate, skip every pair, and assert nothing -- vacuous and green.
+  auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
+  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
+
+  const std::string dir = freshLogDir("logging_precursor_id_pin");
+  std::string json = buildJsonWithLogDir(dir, true);
+  FLASHIda ida(const_cast<char*>(json.c_str()));
+
+  auto cycle = runFullCycle(&ida, ms1_scans, ms2_scans);
+  TEST_TRUE(cycle.ms2_cmds.size() > 0);
+  TEST_TRUE(cycle.ms3_cmds.size() > 0);  // no MS3 -> the inheritance check below is vacuous
+
+  auto tsv = TSVFile::parse(dir + "/scan_commands.tsv");
+  TEST_TRUE(tsv.colIndex("precursor_id") >= 0);
+
+  // FAIL-CLOSED. Zero MSn rows is a failure, not a skip -- that is precisely mis-application (1),
+  // and a test that quietly passes on an empty file is the thing this whole exercise exists to avoid.
+  int msn_rows = 0;
+  int msn_rows_with_precursor = 0;
+  std::map<std::string, std::string> precursor_by_tracking;  // tracking_id -> precursor_id
+  std::vector<std::pair<std::string, std::string>> child_parent;  // (tracking_id, parent_tracking_id)
+
+  for (const auto& row : tsv.rows)
+  {
+    const std::string lvl = cell(tsv, row, "ms_level");
+    const std::string tid = cell(tsv, row, "tracking_id");
+    const std::string pid = cell(tsv, row, "precursor_id");
+    const std::string par = cell(tsv, row, "parent_tracking_id");
+
+    if (!tid.empty()) precursor_by_tracking[tid] = pid;
+
+    if (lvl == "2" || lvl == "3")
+    {
+      msn_rows++;
+      if (!pid.empty() && pid != "0") msn_rows_with_precursor++;
+      if (!par.empty() && par != "0") child_parent.emplace_back(tid, par);
+    }
+  }
+
+  TEST_TRUE(msn_rows > 0);                              // mis-application (1) fails here
+  TEST_EQUAL(msn_rows_with_precursor, msn_rows);        // mis-application (2) fails here
+
+  // A child command inherits its parent's precursor_id verbatim -- that inheritance is the whole
+  // reason five of the six write sites exist, and it is invisible in any single row.
+  int checked_inheritance = 0;
+  for (const auto& cp : child_parent)
+  {
+    auto par_it = precursor_by_tracking.find(cp.second);
+    if (par_it == precursor_by_tracking.end()) continue;  // parent not in this file (AGC/idle parents)
+    if (par_it->second.empty() || par_it->second == "0") continue;
+    TEST_EQUAL(precursor_by_tracking[cp.first], par_it->second);
+    checked_inheritance++;
+  }
+  std::cout << "[PID-PIN] msn_rows=" << msn_rows << " inheritance_pairs_checked=" << checked_inheritance << std::endl;
+
+  // FAIL-CLOSED on the check itself. Without this, a config or fixture change that stopped producing
+  // parent-carrying children would turn the loop above into a no-op and this test would keep passing
+  // while asserting nothing -- the exact failure mode it was written to catch elsewhere.
+  TEST_TRUE(checked_inheritance > 0);
+}
+END_SECTION
+
+// Concurrent drains must each write exactly one intact row.
+START_SECTION(concurrent_drain_writes_one_wellformed_row_per_call)
+{
+  // WHAT THIS PINS: scan_commands.tsv stays intact when getNextScanCommand runs on several threads.
+  //
+  // Today analysis_mutex_ serialises the three write sites, so this passes. It is expected to go RED
+  // the moment those guards are deleted and BEFORE the per-stream logger mutexes land -- that
+  // intermediate state is deliberate, and this test is the evidence those mutexes are load-bearing
+  // rather than decorative.
+  //
+  // No processScan, no spectra, no id echo. The MS1 admission gate makes fabricated ids useless, but
+  // the DRAIN needs none of that -- it manufactures its own work. That is what makes this cheap and
+  // immune to fixture drift.
+  //
+  // THE INVARIANT IS EXACT, not "roughly right": every path through getNextScanCommand writes
+  // exactly one row and returns 1. Step 1 (:668), Step 4 (:715) and Step 5 (:759) each write once;
+  // Step 2 pushes and falls through rather than returning; Step 3 writes nothing. So rows == calls,
+  // and a torn row merges two lines and DROPS the count -- deterministic detection of the common
+  // tearing mode rather than a probabilistic one.
+  const std::string dir = freshLogDir("logging_concurrent_drain");
+  std::string json = buildJsonWithLogDir(dir);
+  FLASHIda ida(const_cast<char*>(json.c_str()));
+
+  const int kThreads = 4;
+  const int kCallsPerThread = 250;
+  const int kTotalCalls = kThreads * kCallsPerThread;
+
+  std::vector<std::thread> workers;
+  for (int t = 0; t < kThreads; t++)
+  {
+    workers.emplace_back([&ida, kCallsPerThread]() {
+      for (int i = 0; i < kCallsPerThread; i++)
+      {
+        ScanCommand cmd {};
+        ida.getNextScanCommand(cmd);
+      }
+    });
+  }
+  for (auto& w : workers) w.join();
+
+  auto tsv = TSVFile::parse(dir + "/scan_commands.tsv");
+
+  // Exactly one row per call. Fewer means rows were merged (torn writes); more would mean a path
+  // started writing twice.
+  TEST_EQUAL((int)tsv.rows.size(), kTotalCalls);
+
+  // Every row has the full column count. A row torn mid-write tokenizes short.
+  int wellformed = 0;
+  for (const auto& row : tsv.rows)
+    if (row.size() == tsv.headers.size()) wellformed++;
+  TEST_EQUAL(wellformed, (int)tsv.rows.size());
+
+  // Tracking ids are allocated under queue_mutex_, so they must all be distinct even across threads.
+  // This catches a torn row that happens to tokenize to the right width by splicing two half-rows.
+  std::set<std::string> ids;
+  for (const auto& row : tsv.rows) ids.insert(cell(tsv, row, "tracking_id"));
+  TEST_EQUAL((int)ids.size(), (int)tsv.rows.size());
+
+  std::cout << "[DRAIN-CONCURRENCY] calls=" << kTotalCalls << " rows=" << tsv.rows.size()
+            << " wellformed=" << wellformed << " unique_ids=" << ids.size() << std::endl;
 }
 END_SECTION
 

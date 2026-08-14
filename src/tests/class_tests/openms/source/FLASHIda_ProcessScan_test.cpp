@@ -29,6 +29,9 @@
 #include <algorithm>  // std::max
 #include <sstream>    // std::istringstream / std::ostringstream
 #include <cstdio>     // std::remove
+#include <future>     // std::async / std::future_status -- the drain-blocking pins
+#include <mutex>      // std::unique_lock over FLASHIdaTestAccess::analysisMutex
+#include <iostream>   // the drain pins report which path they covered
 
 using namespace OpenMS;
 
@@ -2942,6 +2945,137 @@ START_SECTION(processScan_ms1_gate_rejects_unrequested_id)
   TEST_EQUAL(ret_reuse, 0)
 
   delete ida;
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// Drain-blocking pins.
+//
+// These two are a matched pair and only mean something together. The first says the drain must NOT
+// wait on analysis_mutex_; the second says processScan must STILL take it. Either one alone can be
+// satisfied by deleting the wrong lock.
+/////////////////////////////////////////////////////////////
+
+// The drain must not acquire analysis_mutex_ on ANY of its three emitting paths.
+START_SECTION(drain_completes_while_analysis_mutex_held)
+{
+  // processScan takes analysis_mutex_ function-scoped (FLASHIda.cpp:84) across its whole body,
+  // including the MS1 deconvolution. Holding that same mutex here is an exact stand-in for "a
+  // deconvolution is in flight" -- there is no timing threshold and no scheduling assumption to
+  // flake on: either the drain wants the lock or it does not.
+  //
+  // THREE PASSES, all load-bearing. getNextScanCommand has three emitting paths and each acquired
+  // the mutex at its own site, so covering one proves nothing about the other two:
+  //   Step 1 (:667) time-triggered AGC -- reachable only when needsAGC() is true
+  //   Step 4 (:708) priority dequeue   -- reachable only with something queued
+  //   Step 5 (:758) idle fallback      -- what a fresh engine does
+  // needsAGC() is FALSE on a fresh engine: last_agc_time_ is stamped in the ScanCommandQueue ctor
+  // and standard_json pins agc_interval_seconds at 9999999. So Step 1 needs its own config with the
+  // interval at zero, or that guard ships unpinned.
+  // The helper deliberately returns a status instead of asserting: the ClassTest macros belong at
+  // section scope, and keeping them out of the lambda also keeps the lock's lifetime obvious.
+  auto drainWhileHeld = [](FLASHIda& ida, int& rc_out) -> std::future_status {
+    std::unique_lock<std::mutex> lk(FLASHIdaTestAccess::analysisMutex(ida));
+
+    ScanCommand cmd {};
+    // std::launch::async EXPLICITLY. The default policy is allowed to defer, and a deferred future
+    // reports future_status::deferred rather than ready -- which would fail this test against
+    // perfectly correct code.
+    std::future<int> fut = std::async(std::launch::async, [&ida, &cmd]() { return ida.getNextScanCommand(cmd); });
+
+    std::future_status st = fut.wait_for(std::chrono::seconds(2));
+
+    // Release BEFORE touching the future. If the drain is still blocked (the pre-fix state) then
+    // get() -- or just the future's destructor -- would wait on it while we still hold the very lock
+    // it is waiting for. That is a real deadlock, and ctest would only break it at its 1500 s
+    // default timeout. Unlocking first turns the pre-fix state into a clean assertion failure.
+    lk.unlock();
+
+    rc_out = fut.get();
+    return st;
+  };
+
+  // --- Pass 1: fresh engine, empty queue -> Step 5, the idle fallback ---
+  {
+    FLASHIda ida(const_cast<char*>(standard_json));
+    int rc = 0;
+    std::future_status st = drainWhileHeld(ida, rc);
+    std::cout << "[DRAIN-PIN] path=step5_idle completed_while_held="
+              << (st == std::future_status::ready ? 1 : 0) << std::endl;
+    TEST_EQUAL(st == std::future_status::ready, true)
+    TEST_EQUAL(rc, 1)
+  }
+
+  // --- Pass 2: something queued -> Step 4, the priority dequeue (the one real map read) ---
+  {
+    FLASHIda ida(const_cast<char*>(standard_json));
+    ScanCommand queued {};
+    queued.msn_level = 2;
+    queued.priority = 2;
+    queued.scan_id = 7;
+    FLASHIdaTestAccess::push(ida, queued);
+
+    int rc = 0;
+    std::future_status st = drainWhileHeld(ida, rc);
+    std::cout << "[DRAIN-PIN] path=step4_dequeue completed_while_held="
+              << (st == std::future_status::ready ? 1 : 0) << std::endl;
+    TEST_EQUAL(st == std::future_status::ready, true)
+    TEST_EQUAL(rc, 1)
+  }
+
+  // --- Pass 3: AGC due -> Step 1, which returns before the dequeue is even reached ---
+  {
+    nlohmann::json j = nlohmann::json::parse(standard_json);
+    j["scheduling"]["agc_interval_seconds"] = 0;
+    std::string agc_due_json = j.dump();
+
+    FLASHIda ida(const_cast<char*>(agc_due_json.c_str()));
+    // needsAGC() is `elapsed > agc_interval_ms`, so with the interval at 0 any non-zero elapsed
+    // qualifies. Sleep past the millisecond boundary the steady_clock difference is measured in.
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+    int rc = 0;
+    std::future_status st = drainWhileHeld(ida, rc);
+    std::cout << "[DRAIN-PIN] path=step1_agc completed_while_held="
+              << (st == std::future_status::ready ? 1 : 0) << std::endl;
+    TEST_EQUAL(st == std::future_status::ready, true)
+    TEST_EQUAL(rc, 1)
+  }
+}
+END_SECTION
+
+// processScan must STILL hold analysis_mutex_ -- the inverse pin.
+START_SECTION(process_scan_still_blocks_while_analysis_mutex_held)
+{
+  // Why this exists: the cheapest way to make the test above pass is to delete the lock at
+  // FLASHIda.cpp:84 rather than the three drain-side guards. That "fix" leaves deconv_, selection_,
+  // exploration_, tracker_ and the rest unsynchronised against a concurrent drain, and every other
+  // test in this suite is single-threaded so none of them would notice. This one fails.
+  //
+  // One-sided by construction: it asserts something does NOT happen inside a window, so a slow or
+  // loaded runner can only make it more likely to pass. There is no flake direction.
+  FLASHIda ida(const_cast<char*>(standard_json));
+
+  std::unique_lock<std::mutex> lk(FLASHIdaTestAccess::analysisMutex(ida));
+
+  // The lock is the FIRST statement of processScan, so the arguments are irrelevant -- this call
+  // parks before it can look at any of them. Empty peak arrays keep it that way if it ever does run.
+  std::vector<double> no_mzs;
+  std::vector<double> no_ints;
+  std::future<int> fut = std::async(std::launch::async, [&ida, &no_mzs, &no_ints]() {
+    return ida.processScan(no_mzs.data(), no_ints.data(), 0, 0.0, 1, "");
+  });
+
+  std::future_status st = fut.wait_for(std::chrono::milliseconds(500));
+
+  // Release first, for the same deadlock reason as above -- here the future is EXPECTED to be
+  // outstanding, so this unlock is what lets it finish.
+  lk.unlock();
+
+  std::cout << "[DRAIN-PIN] path=process_scan blocked_while_held="
+            << (st == std::future_status::timeout ? 1 : 0) << std::endl;
+  TEST_EQUAL(st == std::future_status::timeout, true)
+  TEST_EQUAL(fut.get(), 0)  // empty description -> the size<3 gate, once it finally runs
 }
 END_SECTION
 

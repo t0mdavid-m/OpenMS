@@ -21,6 +21,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <mutex>
 
 namespace OpenMS
 {
@@ -43,6 +44,22 @@ namespace OpenMS
       // completion), so a test can assert suppression against the engine's real decision variable.
       return f.exploration_active_.load(std::memory_order_acquire);
     }
+
+    /// The analysis mutex itself, so a test can HOLD it and observe who blocks.
+    ///
+    /// processScan takes this function-scoped across its whole body (FLASHIda.cpp:84), including the
+    /// MS1 deconvolution. Holding it here therefore simulates "a deconvolution is in flight" exactly,
+    /// with no timing race: whatever the drain does, it does it against a genuinely held lock.
+    ///
+    /// This is the observable for the ONE property that cannot be checked any other way -- that
+    /// getNextScanCommand acquires nothing processScan holds. It is scoped by mutex IDENTITY, which is
+    /// both its strength (no threshold, no flake) and its limit: it says nothing about the drain
+    /// blocking on some OTHER lock, which is why the logger locks are per-stream rather than shared.
+    static std::mutex& analysisMutex(FLASHIda& f) { return f.analysis_mutex_; }
+
+    /// tracking_id -> precursor_id, or 0 if untracked. Forwards to the private accessor rather than
+    /// reading the map, so the test exercises the same path the drain does.
+    static int precursorIdFor(const FLASHIda& f, int tracking_id) { return f.precursorIdForTracking_(tracking_id); }
   };
 
   /// Reaches into Exploration's private feedResultImpl_ / getGroup for the test suite.
