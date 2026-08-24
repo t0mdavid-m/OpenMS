@@ -1006,9 +1006,11 @@ namespace OpenMS
           "or pick a different exploration metric (ADR-0026).");
 
     // Re-keyed onto `mode`. It used to fire off the UPSTREAM gate (any level >= 2 selecting), which
-    // is why 18 configs that run no MS3 at all still had to carry a placeholder "SEQUENCE": their
+    // is why 17 test configs that run no MS3 at all had to carry a placeholder "SEQUENCE": their
     // ms2.selection defaulted to intensity and nothing downstream ever read the sequence. Now the
-    // requirement tracks the thing that actually consumes it.
+    // requirement tracks the thing that actually consumes it, and those 17 placeholders are blanked --
+    // an empty sequence is the honest encoding of "no protein was supplied", and a non-empty one is
+    // load-bearing rather than decorative.
     if (characterization_.mode != CharacterizationMode::Off
         && characterization_.protein_sequence.empty())
       throw std::invalid_argument(
