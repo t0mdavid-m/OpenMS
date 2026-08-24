@@ -137,12 +137,34 @@ namespace OpenMS
     const bool needs_baseline = true;
     variant_params.insert(variant_params.begin(), {base_config.activation, 0.0, 0.0});
 
-    // Compute precursor_mz and isolation_width from PeakGroup. The 2.0 Th minimum applies to MS3+
-    // fragment isolation only (buildMS3 stage[1] also re-floors); an MS2 group scores over its
-    // natural precursor window, matching the actual (unfloored) commanded MS2 isolation.
+    // Compute precursor_mz and isolation_width from PeakGroup. The interval a metric SUMS must be the
+    // interval the instrument was told to ISOLATE (ADR-0026 decision 2). buildMS2 widens the measured
+    // range by optimal_window_margin_ per side before commanding it (ScanCommandQueue.cpp:291-295), so
+    // an MS2 group's window is (mz2 - mz1) + 2 * margin -- 0.8 Th WIDER than the bare PeakGroup span
+    // this used to take. The 2.0 Th minimum applies to MS3+ fragment isolation only (buildMS3 stage[1]
+    // re-floors identically at ScanCommandQueue.cpp:450).
+    //
+    // MS2-ONLY, AND THE MARGIN GOES BEFORE THE FLOOR:
+    //   - buildMS3 applies NO margin, and Exploration passes its own isolation_width straight into
+    //     buildMS3. Widening at MS3 would therefore RE-CREATE the same disagreement in the other
+    //     direction *and* change the commanded MS3 width, moving three exploration golden modes.
+    //   - FLASHIda_exploration_test.cpp:2923 pins TEST_REAL_SIMILAR(group.isolation_width, 2.0) on the
+    //     MS3 floor. Applying the margin AFTER the floor gives 2.8 and breaks it; applying it BEFORE
+    //     gives max(0.8, 2.0) == 2.0 -- harmless but pointless. MS2-only is the correct scope.
+    //   - The CENTRE needs no correction: buildMS2 computes (mz1 + mz2) / 2 BEFORE applying the margin
+    //     (ScanCommandQueue.cpp:292), so the two sides already agree on precursor_mz.
+    //
+    // This is also why the ADR-0026 binding below needs no floor of its own, and why the correction
+    // ships in the same push as that binding: a charge resolved at a SINGLE isotope has mz2 == mz1, and
+    // the margin turns that degenerate 0 into a 0.8 Th window. Without it the binding would emit
+    // first_mass == last_mass == precursor_mz -- two positive bounds, which FlashIDA/src/Flash/
+    // ScanFactory.cs:245-247 sends to the instrument as a zero-width "DefineMZRange". The margin IS the
+    // floor.
     auto [mz1, mz2] = pg.getMzRange(charge);
     double precursor_mz = (mz1 + mz2) / 2.0;
-    double isolation_width = (msn_level >= 3) ? std::max(mz2 - mz1, 2.0) : (mz2 - mz1);
+    double isolation_width = (msn_level >= 3)
+                               ? std::max(mz2 - mz1, 2.0)
+                               : (mz2 - mz1) + 2.0 * optimal_window_margin_;
     double precursor_mass = pg.getMonoMass();
 
     ExplorationGroup group;
@@ -193,6 +215,50 @@ namespace OpenMS
     // Captured for the post-sweep production scan, which rebuilds from the winning VARIANT rather
     // than from the Ms3Target and so has no other route to the notch set (ADR-0016).
     if (stage1_notches != nullptr) group.stage1_notches = *stage1_notches;
+
+    // ADR-0026: a RemainingPrecursor sweep acquires only the window it reads. The metric scores a variant
+    // from raw peak intensity inside [precursor_mz +/- isolation_width/2] and discards everything else the
+    // pre-scan returned (precursorWindowIntensity_, :1192). On an ion trap scan time is proportional to the
+    // m/z range swept, so a 200-2000 Th pre-scan pays ~900x the time of the ~2 Th it actually sums. Written
+    // onto base_config, which is what makes it reach the CE-0 baseline for free: the baseline is
+    // variant_params[0] (inserted at :138) and takes the same unconditional `variant_config = base_config`
+    // at :251 as every other variant. Required, not incidental -- a full-range trap fill and a narrow trap
+    // fill are not comparable denominators for the ratio.
+    //
+    // GATED ON group.exploration_metric, NEVER ON cfg.exploration. The two differ on exactly one input: the
+    // ADR-0023 forcing at :176-178, where an exhaustive-mode unassigned mass (ion class 'u', which fails
+    // MS3FragmentMatcher::isKnownIonClass) is dragged onto RemainingPrecursor whatever the config asked for.
+    // A CONFIGURED sweep is guaranteed its full-range re-acquisition by ADR-0026 decision 3, which rejects
+    // `remaining_precursor` with an empty `overrides` map at config load. The FORCED sweep has no config
+    // entry to carry that guarantee and needs none, because it is safe BY CONSTRUCTION:
+    //     force fires  =>  msn_level >= 3  AND  metric == RemainingPrecursor (a measuring metric)
+    //                  =>  measuring_ms3_sweep (the gate at :725)
+    //                  =>  ADR-0020 gate #2 fires => full-range production scan re-acquires.
+    // The force's own precondition IS gate #2's condition, and the metric it forces is measuring by
+    // definition. MS3 is also terminal at the `< 3` MS4 wall (:794), so a narrowed MS3 pre-scan has no
+    // cascade to strand -- "a window-only spectrum yields zero next-level targets" is an MS2-only hazard,
+    // and at MS2 the config rejection is what covers it.
+    // DO NOT "fix" the asymmetry by adding a third config rejection: the forced path has no config entry to
+    // reject, and rejecting the exhaustive mode that triggers it would delete ADR-0023.
+    //
+    // THE SUPPRESSION TEST READS cfg.overrides AND NEVER base_config, and that is not a shortcut.
+    // applyOverrides already ran at :128, and an authored ms_settings.msN.first_mass lands in the SAME
+    // ScanConfig field (Config.cpp:130-131) with the SAME 0 default (Config.h:124) -- so
+    // `base_config.first_mass != 0` cannot tell an exploration override apart from a plain scan-config
+    // value, and would suppress the binding for every level whose scan config happens to name a range.
+    // Only the raw map separates them (ADR-0026 decision 5: an explicit range wins, quietly).
+    //
+    // Nothing here reaches the post-winner production scan: that one is rebuilt from level_config.scans[0]
+    // (:728), never from base_config, so it keeps its configured full range. Deliberate -- it is the one
+    // acquisition of the group that is meant to be identified.
+    if (group.exploration_metric == ExplorationMetric::RemainingPrecursor
+        && cfg.overrides.find("first_mass") == cfg.overrides.end()
+        && cfg.overrides.find("last_mass") == cfg.overrides.end())
+    {
+      const double half = isolation_width / 2.0;
+      base_config.first_mass = precursor_mz - half;
+      base_config.last_mass  = precursor_mz + half;
+    }
 
     for (int i = 0; i < static_cast<int>(variant_params.size()); ++i)
     {

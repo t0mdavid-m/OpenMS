@@ -907,6 +907,81 @@ namespace OpenMS
             " requires a non-empty characterization.protein_sequence.");
     }
 
+    // RemainingPrecursor scores a variant from the intensity inside its isolation window alone
+    // (Exploration::precursorWindowIntensity_) and its winner is ALWAYS re-acquired by a production
+    // scan built from the un-overridden config, so its pre-scans are throwaway measurements --
+    // which is why ADR-0026 narrows their scan range to exactly that window. The narrowing leaves an
+    // MS2 pre-scan with no fragments in it, and an MS2 exploration group with EMPTY overrides
+    // cascades by feeding initiateNextLevel the winning variant's deconvolved spectrum: that
+    // narrowed spectrum would yield ZERO MS3 targets, with no throw and no warning -- only
+    // `[MS3-PLAN] no_containing_fragment` and a user concluding their protein did not fragment.
+    // Requiring non-empty overrides is the STATIC form of ADR-0020 gate #1: the production
+    // re-acquisition that makes narrowing safe is then guaranteed by the schema rather than by the
+    // author's habit of writing an analyzer override anyway.
+    for (const auto& [lvl, cfg] : levels_)
+    {
+      // levels_ always holds {1,2,3} (Config.cpp:755), but an exploration block is parsed for levels 2
+      // and 3 only (Config.cpp:686, :745-746), so level 1 is structurally None today. Skipped rather
+      // than left to fall through, because `sect` below resolves everything that is not level 2 to
+      // "characterization": a future level-1 sweep would be told to edit a key that does not govern
+      // it. A guard, not dead code.
+      if (lvl < 2) continue;
+
+      // The level-3 arm applies only when MS3 actually runs. parseExploration writes
+      // levels_[3].exploration unconditionally (Config.cpp:746) and applyCharacterizationMode_ resets
+      // only `selection`, so a leftover characterization.exploration block outlives
+      // characterization.mode == "off". Rejecting on it would make that leftover a LOAD ERROR for a
+      // run that emits no MS3 and narrows no pre-scan, breaking ADR-0013's promise that toggling MS3
+      // off stays a one-word edit -- under "off" the MS3 keys are carried and never read. Level 2 is
+      // deliberately not guarded: an MS2 sweep runs whatever characterization.mode says.
+      if (lvl == 3 && characterization_.mode == CharacterizationMode::Off) continue;
+
+      const std::string sect = (lvl == 2 ? "precursor_selection" : "characterization");
+      if (cfg.exploration == ExplorationMetric::RemainingPrecursor && cfg.overrides.empty())
+        throw std::invalid_argument(
+            sect + ".exploration.metric is \"remaining_precursor\" but " + sect
+            + ".exploration.overrides is empty. A remaining_precursor sweep never keeps its "
+              "pre-scans -- they are scanned over their isolation window only, and the winner is "
+              "re-acquired -- so it must declare the settings they run at. Add an overrides block, "
+              "e.g. \"overrides\": { \"analyzer\": \"IonTrap\" } (ADR-0026).");
+    }
+
+    // Level-matched multiplexing. [first_mass, last_mass] is ONE interval and a notch set is not,
+    // so ADR-0026's binding cannot express a multiplexed readout: charge states 10-16 of a ~12 kDa
+    // protein scatter their 2 Th windows across ~463 Th, and binding to the anchor alone would
+    // isolate seven charge states while reading one, while spanning them all would cut the speed
+    // win from ~900x to ~4x. Two shapes stay LEGAL and are deliberately not caught here:
+    //   - `separate` at BOTH levels: it fans out to one anchor per scan (buildMS2's notch guard at
+    //     ScanCommandQueue.cpp:314 tests `== Multiplexed` only), so every readout is a single
+    //     interval and each gets its own correct range.
+    //   - the CROSS-LEVEL case -- an MS3 remaining_precursor sweep under
+    //     precursor_selection.precursor_charges == multiplexed -- because stage-0 notches change
+    //     WHICH precursors are fragmented, not where the MS3 readout sits; the sub-fragment scan is
+    //     still one contiguous stage-1 window. Hence two pair-specific checks rather than one
+    //     "multiplexed anywhere" check.
+    if (level(2).exploration == ExplorationMetric::RemainingPrecursor
+        && targeting_.precursor_charges == ChargeAcquisitionMode::Multiplexed)
+      throw std::invalid_argument(
+          "precursor_selection.exploration.metric is \"remaining_precursor\" but "
+          "precursor_selection.precursor_charges is \"multiplexed\". A multiplexed scan reads "
+          "several non-contiguous isolation windows, which cannot be expressed as the one scan "
+          "range such a sweep's pre-scans are bound to. Set precursor_charges to \"single\" or "
+          "\"separate\", or pick a different exploration metric (ADR-0026).");
+
+    // Guarded on `mode` for the reason spelled out at the level-3 arm above: levels_[3].exploration
+    // outlives characterization.mode == "off" (applyCharacterizationMode_ resets only `selection`),
+    // and under "off" no MS3 pre-scan is ever emitted or narrowed, so there is no bound readout for a
+    // multiplexed fragment isolation to conflict with (ADR-0013).
+    if (characterization_.mode != CharacterizationMode::Off
+        && level(3).exploration == ExplorationMetric::RemainingPrecursor
+        && characterization_.fragment_charges == ChargeAcquisitionMode::Multiplexed)
+      throw std::invalid_argument(
+          "characterization.exploration.metric is \"remaining_precursor\" but "
+          "characterization.fragment_charges is \"multiplexed\". A multiplexed scan reads several "
+          "non-contiguous isolation windows, which cannot be expressed as the one scan range such "
+          "a sweep's pre-scans are bound to. Set fragment_charges to \"single\" or \"separate\", "
+          "or pick a different exploration metric (ADR-0026).");
+
     // Re-keyed onto `mode`. It used to fire off the UPSTREAM gate (any level >= 2 selecting), which
     // is why 18 configs that run no MS3 at all still had to carry a placeholder "SEQUENCE": their
     // ms2.selection defaulted to intensity and nothing downstream ever read the sequence. Now the
