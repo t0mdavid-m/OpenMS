@@ -811,6 +811,14 @@ namespace OpenMS
       // Cascade to the next level. The `< 3` is the MS4 wall: it says "MS2 groups cascade, MS3 groups are
       // terminal" where the general rule would be "cascade while the next level has a selection criterion"
       // -- which initiateNextLevel already checks for itself (next_cfg.selection == None returns empty).
+      //
+      // That self-check is no longer a CHEAP early return. Since identification was decoupled from the MS3
+      // switch, initiateNextLevel matches fragments before it decides it has no commands to build, so with
+      // characterization.mode off this call runs a tagger + extender pass whose result is discarded here
+      // (only .commands and .ms3_contexts are read below). It is redundant rather than wrong -- every
+      // variant of this group was already identified per-variant by computeFragmentMatch_. The condition is
+      // deliberately NOT duplicated at this call site: one owner of the dispatch decision beats two that can
+      // drift apart, which is how acquisition geometry once ended up sourced from an exclusion flag.
       // Dropping the literal would make this level-agnostic here, but the levels beneath it are not:
       // config_ only ever materializes {1,2,3}, buildMS3 hardcodes a 2-stage command, and the logging
       // emits a fixed stage0;stage1 pair. Not generalized -- no MS4 path exists to validate it.
