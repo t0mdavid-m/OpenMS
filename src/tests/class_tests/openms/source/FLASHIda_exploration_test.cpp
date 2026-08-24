@@ -15,6 +15,10 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
+// optimal_window_margin_ (ADR-0026 decision 2). Named DIRECTLY rather than taken on ScanCommandQueue.h's
+// transitive pull: optimal_window_margin_has_one_definition guards this header's copy, so the guard has to
+// name the header that owns it.
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
 
 #include "FLASHIda_TestHelpers.h"  // ground-truth harness: ScanData/loadTsvScans/TSVFile/AcqResult/runInterleaved/runFullCycle/ExplResult/driveOneExplorationGroup/inclusionPinCytc
 #include "FLASHIda_TestAccess.h"   // ExplorationTestAccess::feedResult/group (private-state access)
@@ -28,6 +32,7 @@
 #include <string>
 #include <cstdio>
 #include <cmath>
+#include <tuple>   // PeakGroup::getMzRange's return type, read explicitly in single_isotope_charge_yields_non_degenerate_scan_range
 
 using namespace OpenMS;
 
@@ -49,6 +54,61 @@ namespace
         "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
         "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 },
         "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25 }
+      }
+    })";
+  }
+
+  // ---- remaining_precursor rejection probes (ADR-0026) ---------------------------------------
+  //
+  // ADR-0026 binds a remaining_precursor pre-scan's scan range to the isolation window it reads.
+  // That narrowing is what buys the sweep its speed, and it is sound only because the winner is
+  // ALWAYS re-acquired by a production scan built from the un-overridden config. Two config shapes
+  // break the reasoning, and Config::validate() rejects both -- the four sections that sit beside
+  // ms3_protein_sequence_only_accepted pin them.
+  //
+  // Spliced, never find/replaced. The sections commented at :2108-2110 died on `invalid string
+  // position` doing surgery on a finished literal; a splice has no position to compute, so the only
+  // way the probes below can fail is the rejection itself. Every knob a section varies is a
+  // parameter here, so no section reaches into another section's JSON.
+
+  // A non-empty exploration.overrides map. Rejection A (Config.cpp:924) fires on EMPTINESS and is
+  // checked BEFORE the multiplexing pair-checks, so any section aimed at a different throw has to
+  // carry one -- otherwise Rejection A throws first and the section passes for the wrong reason.
+  const std::string sweep_overrides = R"(, "overrides": { "analyzer": "Orbitrap" })";
+
+  // A remaining_precursor exploration block, ready to splice into either decision section. Pass ""
+  // for `overrides` to probe Rejection A and `sweep_overrides` otherwise. One CE range serves both
+  // levels: needsCollisionEnergy is true for HCD and CID alike, and Config.cpp:1019-1022 asks only
+  // for ce_min < ce_max.
+  std::string rpSweep(const std::string& overrides)
+  {
+    return R"("exploration": { "metric": "remaining_precursor", "ce_min": 20.0, "ce_max": 40.0, "ce_step": 5.0)"
+           + overrides + R"( })";
+  }
+
+  // The characterization body that makes characterization.exploration reachable at level 3: the MS3
+  // gate (mode != off) plus the sequence Config.cpp:968-972 then requires. Trailing comma included,
+  // so a caller appends its own keys directly.
+  const std::string ms3_on = R"("mode": "ambiguity", "protein_sequence": "PEPTIDER", )";
+
+  // Minimal loadable config. `ps_extra` is appended inside precursor_selection (lead with a comma),
+  // `charact` REPLACES the characterization body, and `with_ms3` adds the level-3 scan config that a
+  // non-off mode requires (Config.cpp:978 -- without it Exploration::initiateNextLevel OOB-reads
+  // scans[0], so its absence is a crash rather than a no-op).
+  std::string sweepProbe(const std::string& ps_extra = "",
+                         const std::string& charact = R"("mode": "off")",
+                         bool with_ms3 = false)
+  {
+    return std::string(R"({
+      "deconvolution": { "tol": [10, 10, 10] },
+      "precursor_selection": { "rank_by": "qscore", "max_precursors": 3)") + ps_extra + R"( },
+      "characterization": { )" + charact + R"( },
+      "ms_settings": {
+        "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
+        "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 })"
+      + (with_ms3 ? R"(,
+        "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25 })" : "")
+      + R"(
       }
     })";
   }
@@ -336,7 +396,41 @@ namespace
 }
 )";
 
-  // Config with remaining_precursor exploration metric at MS2
+  // Config with remaining_precursor exploration metric at MS2.
+  //
+  // The exploration.overrides map below MUST be non-empty: ADR-0026 rejects "remaining_precursor" with
+  // an empty map at config load (Config.cpp:924-930, at BOTH levels). Such a sweep's pre-scans are
+  // narrowed to the isolation window and then thrown away, so the schema now forces the author to
+  // declare the settings they run at, which is what guarantees the ADR-0020 gate-#1 re-acquisition.
+  // "Orbitrap" is deliberately a NO-OP: it is what ms_settings.ms2.analyzer already says, so
+  // Exploration::initiate's base_config.applyOverrides (Exploration.cpp:128) writes back the value the
+  // base config already carries and every fixture behaviour is unchanged. Same inert-override trick as
+  // the injection at :1659.
+  //
+  // THE ONE BRANCH A NON-EMPTY MAP OPENS is ADR-0020 gate #1 -- `!level_config.overrides.empty() ||
+  // measuring_ms3_sweep` at Exploration.cpp:748 -- and it is unreached here. THREE sections driven off
+  // this fixture complete their group, and all three reach completion through the baseline_failed abort
+  // at Exploration.cpp:434-437, which takes the `group.baseline_failed || best_idx < 0` arm at :683 and
+  // returns before the gate is ever evaluated:
+  //   * remaining_precursor_empty_baseline_aborts_group and
+  //     remaining_precursor_inflight_child_after_abort_is_noop -- aborts by construction, on a raw
+  //     baseline whose peaks all sit outside the isolation window.
+  //   * remaining_precursor_score_no_raw_data -- NOT an abort section by name or by intent. It feeds all
+  //     SIX variants and asserts activeGroupCount() == 0, and it lands on the same arm only because
+  //     ExplorationTestAccess::feedResult hands feedResultImpl_ mzs == ints == nullptr, so
+  //     precursorWindowIntensity_ short-circuits to 0.0 (Exploration.cpp:1214-1218) and the baseline
+  //     reads as empty.
+  // Every other section stops feeding partway, so no group on this fixture has ever selected a winner.
+  //
+  // LIVE HAZARD, not a historical note. Give remaining_precursor_score_no_raw_data -- or any section
+  // added here -- a raw-array baseline with in-window signal and a winner IS selected, and gate #1 is
+  // then not merely reached but TRUE, because this fixture's overrides map is non-empty by
+  // construction. Gate #1 and the MS2 cascade `else if (group.msn_level < 3)` (Exploration.cpp:816) are
+  // mutually exclusive arms of ONE if/else-if chain, so the cascade would be REPLACED by a production-
+  // MS2 re-acquisition, never added to. With characterization.mode "off" the cascade yields nothing
+  // here anyway (level 3 selection is None, so initiateNextLevel returns empty), which is exactly what
+  // makes the swap quiet: today its only symptom is an extra command in info.commands, and the lost
+  // cascade surfaces only once someone gives this fixture an ms_settings.ms3 block.
   const char* remaining_precursor_config = R"({
   "deconvolution": {
     "score_threshold": 0.0,
@@ -389,7 +483,8 @@ namespace
       "metric": "remaining_precursor",
       "ce_min": 20.0,
       "ce_max": 40.0,
-      "ce_step": 5.0
+      "ce_step": 5.0,
+      "overrides": { "analyzer": "Orbitrap" }
     }
   },
   "characterization": {
@@ -421,7 +516,14 @@ namespace
 }
 )";
 
-  // Config with remaining_precursor exploration metric at MS3
+  // Config with remaining_precursor exploration metric at MS3.
+  //
+  // Same ADR-0026 requirement as the MS2 fixture above -- the rejection at Config.cpp:924-930 loops over
+  // every level, so characterization.exploration.overrides must be non-empty too. "Orbitrap" is again a
+  // deliberate no-op (ms_settings.ms3.analyzer already says Orbitrap), so this fixture drives exactly the
+  // behaviour it did before. Note the isolation-window narrowing itself is NOT gated on this map -- it is
+  // suppressed only by an explicit first_mass/last_mass override (Exploration.cpp:255-256) -- so adding an
+  // analyzer key does not perturb ms3_remaining_precursor_isolation_width's window arithmetic.
   const char* ms3_remaining_precursor_config = R"({
   "deconvolution": {
     "score_threshold": 0.0,
@@ -476,6 +578,110 @@ namespace
     "max_targets": 3,
     "exploration": {
       "metric": "remaining_precursor",
+      "ce_min": 20.0,
+      "ce_max": 40.0,
+      "ce_step": 5.0,
+      "overrides": { "analyzer": "Orbitrap" }
+    }
+  },
+  "ms_settings": {
+    "ms1": {
+      "analyzer": "Orbitrap",
+      "first_mass": 500,
+      "last_mass": 2000,
+      "resolution": 120000,
+      "agc_target": 800000,
+      "max_it": 246
+    },
+    "ms2": {
+      "analyzer": "Orbitrap",
+      "activation": "HCD",
+      "collision_energy": 29,
+      "resolution": 120000
+    },
+    "ms3": {
+      "analyzer": "Orbitrap",
+      "activation": "CID",
+      "collision_energy": 25,
+      "resolution": 120000
+    }
+  },
+  "tagging": {},
+  "quantification": {
+    "enabled": false,
+    "reporter_mz_tol": 0.002,
+    "fold_change_threshold": 1.4
+  }
+}
+)";
+
+  // Config with mass_count exploration at MS3 and NO overrides key -- the fixture that isolates ADR-0020
+  // gate #2 now that ADR-0026 has made "remaining_precursor + empty overrides" unrepresentable.
+  //
+  // Both of ADR-0020's re-acquisition reasons are MEASURING-metric-driven, but only gate #2 keys on the
+  // metric; gate #1 keys on a non-empty overrides map (Exploration.cpp:748). Since ADR-0026 forces every
+  // authored remaining_precursor sweep to carry overrides, remaining_precursor can no longer exercise
+  // gate #2 in isolation -- gate #1 would fire first and the assertion would prove nothing. mass_count is
+  // the other measuring metric (isMeasuringMetric, Config.h:111-114), is untouched by either ADR-0026
+  // rejection, and so is now the only way to reach gate #2 with an empty map.
+  //
+  // Written as a SELF-CONTAINED literal rather than a find/replace over ms3_exploration_config: the note
+  // at :2108-2110 records four sections that died on `invalid string position` when the token they
+  // searched for was renamed out from under them.
+  const char* ms3_mass_count_config = R"({
+  "deconvolution": {
+    "score_threshold": 0.0,
+    "tqscore_threshold": 0.9,
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [
+      10,
+      10,
+      10
+    ]
+  },
+  "flashtnt": {
+    "min_length": 3,
+    "max_length": 8
+  },
+  "faims": {
+    "cv_values": [],
+    "max_cv_skip": 0,
+    "cv_precursor_threshold": 15
+  },
+  "scheduling": {
+    "cycle_time": {
+      "enabled": false,
+      "value_ms": 60000
+    },
+    "scan_timeout": {
+      "enabled": false,
+      "value_ms": 30000
+    }
+  },
+  "files": {
+    "target_logs": [],
+    "fasta": "",
+    "inclusion_list": "",
+    "ptm_list": ""
+  },
+  "conditional_ms2": false,
+  "precursor_selection": {
+    "rt_window": 180,
+    "targeting": "none",
+    "consider_all_charges": false,
+    "strict_inclusion": false,
+    "tie_threshold": 0.1,
+    "rank_by": "qscore",
+    "max_precursors": 3
+  },
+  "characterization": {
+    "mode": "off",
+    "max_targets": 3,
+    "exploration": {
+      "metric": "mass_count",
       "ce_min": 20.0,
       "ce_max": 40.0,
       "ce_step": 5.0
@@ -1123,7 +1329,7 @@ END_SECTION
 
 START_SECTION(ms3_measuring_metric_always_reacquires_without_overrides)
 {
-  // ADR-0020, the remaining_precursor half. A MEASURING metric scores from bulk signal and never
+  // ADR-0020, the empty-overrides half. A MEASURING metric scores from bulk signal and never
   // matches fragments, so its pre-scans leave NO identification behind: identification_result stays
   // default-constructed (its single write site is the FragmentCount batch re-score), the inline fold
   // at group completion is gated on that field being non-empty, and so a completed MS3 sweep used to
@@ -1132,7 +1338,23 @@ START_SECTION(ms3_measuring_metric_always_reacquires_without_overrides)
   //
   // The fix is a production re-acquisition at the winning CE, which returns on the regular MS3 path
   // and IS identified. Asserted here at the seam that decides it: commands emitted at completion.
-  Config cfg{std::string(ms3_remaining_precursor_config)};
+  //
+  // THE METRIC IS mass_count, NOT remaining_precursor, AND THAT IS FORCED BY ADR-0026. The gate is
+  // `!level_config.overrides.empty() || measuring_ms3_sweep` (Exploration.cpp:748) -- a disjunction, so
+  // proving the SECOND term requires the first to be false, i.e. an empty overrides map. ADR-0026 now
+  // rejects exactly that pairing for remaining_precursor at config load (Config.cpp:924-930), so this
+  // section's old fixture no longer loads, and adding overrides to it would have satisfied gate #1 and
+  // left the assertion below passing for the wrong reason. mass_count is the other measuring metric
+  // (Config.h:111-114) and neither ADR-0026 rejection touches it, so it is the only remaining way to
+  // reach gate #2 alone. The metrics are interchangeable HERE precisely because gate #2 keys on
+  // isMeasuringMetric and not on a specific enumerator.
+  //
+  // Feeding pre-deconvolved spectra (ExplorationTestAccess) rather than raw peaks is the matching
+  // change: mass_count scores spec.size(), so the peak-count vector below IS the score vector, whereas
+  // remaining_precursor had to be driven through raw isolation-window intensities. It also drops the
+  // empty-baseline hazard entirely -- the baseline_failed abort is gated on RemainingPrecursor
+  // (Exploration.cpp:434-435), so a zero-intensity baseline is simply a score-0 variant here.
+  Config cfg{std::string(ms3_mass_count_config)};
   TEST_EQUAL(cfg.level(3).overrides.empty(), true)  // the precondition: no overrides to trigger the old gate
   TEST_EQUAL(isMeasuringMetric(cfg.level(3).exploration), true)
 
@@ -1147,27 +1369,21 @@ START_SECTION(ms3_measuring_metric_always_reacquires_without_overrides)
   auto cmds = exploration.initiate(3, fragment_pg, 2, queue, nullptr, &ms2_ctx);
   TEST_EQUAL(static_cast<int>(cmds.size()), 6)  // baseline + CE 20,25,30,35,40
 
-  // RemainingPrecursor needs a real baseline: an EMPTY baseline window aborts the group outright
-  // (baseline_failed -> children cancelled, no winner, no production scan), which would make this
-  // test pass for the wrong reason. Feed intensity at the precursor centre so has_baseline is true.
-  auto group = ExplorationTestAccess::group(exploration, 1);
-  std::vector<double> mzs = {group.precursor_mz};
-  std::vector<double> baseline_ints = {1000.0};
-
+  // cmds[0] is the CE-0 baseline (variant_index -1, skipped in winner selection); cmds[1..5] are the
+  // 5 real variants. mass_count scores spec.size(), so the counts below are the scores directly and
+  // the winner is the 8-peak variant at cmds[4].
+  std::vector<int> peak_counts = {0, 2, 4, 6, 8, 3};  // baseline + 5 reals
   Exploration::FeedResultInfo last_info;
   for (int i = 0; i < 6; ++i)
   {
-    // Baseline at full intensity; the CE variants deplete progressively. The ratio closest to the
-    // 0.1 target wins -> 100/1000 = 0.1 exactly at i == 2 (CE 25), score 1.0.
-    std::vector<double> ints = {i == 0 ? 1000.0 : (i == 2 ? 100.0 : 800.0)};
+    DeconvolvedSpectrum ds = makeSyntheticDeconv(i + 1, peak_counts[i]);
     int tid = queue.decode(std::string(cmds[i].scan_description).substr(0, 3));
-    last_info = exploration.feedResult(tid, mzs.data(), ints.data(), 1,
-                                       static_cast<double>(i), queue);
+    last_info = ExplorationTestAccess::feedResult(exploration, tid, ds, static_cast<double>(i), queue);
   }
 
   TEST_EQUAL(exploration.activeGroupCount(), 0)                      // group completed
   TEST_EQUAL(last_info.group.winner_tracking_id.empty(), false)      // a winner was chosen
-  TEST_EQUAL(last_info.group.winner_tracking_id, std::string(cmds[2].scan_description).substr(0, 3))
+  TEST_EQUAL(last_info.group.winner_tracking_id, std::string(cmds[4].scan_description).substr(0, 3))
 
   // THE ASSERTION THIS TEST EXISTS FOR: exactly one production MS3, despite empty overrides.
   TEST_EQUAL(static_cast<int>(last_info.commands.size()), 1)
@@ -1685,7 +1901,12 @@ START_SECTION(remaining_precursor_score_with_raw_data)
   TEST_EQUAL(static_cast<int>(cmds.size()), 6)
 
   auto group = ExplorationTestAccess::group(exploration,1);
-  TEST_EQUAL(group.precursor_mz > 0.0, true)
+  // Exact, not `> 0.0`: initiate() sets precursor_mz = midpoint of pg.getMzRange(charge), and the
+  // synthetic group holds ONE peak at 800.0 at charge 3, so the midpoint is that peak (800+800)/2.
+  // The old `> 0.0` could not fail -- getMzRange returns (-1, -10) only when the charge is outside
+  // [min_abs_charge_, max_abs_charge_], which makeSyntheticPeakGroup(mz, mass, c) makes impossible
+  // by constructing PeakGroup(c, c, true) and feeding the peak at that same charge.
+  TEST_REAL_SIMILAR(group.precursor_mz, 800.0)
 
   // Feed CE=0 baseline with precursor-window signal (full intensity)
   std::vector<double> baseline_mzs = {790.0, 800.0, 810.0, 900.0};
@@ -1696,10 +1917,18 @@ START_SECTION(remaining_precursor_score_with_raw_data)
   exploration.feedResult(baseline_tid, baseline_mzs.data(), baseline_ints.data(),
                          static_cast<int>(baseline_mzs.size()), 0.5, queue);
 
-  // After baseline, group should have baseline_intensity set
+  // After baseline, group should have baseline_intensity set.
+  //
+  // The exact value, not `>= 0.0` -- precursorWindowIntensity_ sums non-negative intensities, so the
+  // old form was a tautology that would have held just as well for the empty window this section
+  // exists to rule out. At MS2 there is NO 2.0 Th floor (Exploration.cpp:165-167 applies that to
+  // msn_level >= 3 only) and the synthetic group is a single peak, so mz2 - mz1 == 0 and the window is
+  // the ADR-0026 decision-2 margin alone: 2 * optimal_window_margin_ == 0.8 Th, i.e. [799.6, 800.4].
+  // precursorWindowIntensity_ tests `>= mz_low && <= mz_high`, so that window admits the 800.0 peak and
+  // rejects 790/810/900: the sum is that peak's 500.0 alone.
   auto group_after_baseline = ExplorationTestAccess::group(exploration,1);
   TEST_EQUAL(group_after_baseline.has_baseline, true)
-  TEST_EQUAL(group_after_baseline.baseline_intensity >= 0.0, true)
+  TEST_REAL_SIMILAR(group_after_baseline.baseline_intensity, 500.0)
 
   // Feed second variant (CE=20) with reduced in-window signal (fragmentation removed some)
   std::vector<double> frag_mzs = {790.0, 800.0, 810.0, 900.0};
@@ -1709,15 +1938,25 @@ START_SECTION(remaining_precursor_score_with_raw_data)
   auto ce20_info = exploration.feedResult(ce20_tid, frag_mzs.data(), frag_ints.data(),
                                           static_cast<int>(frag_mzs.size()), 1.0, queue);
 
-  // If baseline had in-window signal, CE>0 variant should have a score
+  // The CE>0 variant's exact score, not a [0, 1] range check. computeRemainingPrecursorScore_ ends in
+  // `score = 1.0 - deviation; if (score < 0.0) score = 0.0;` with deviation = |ratio - target| >= 0, so
+  // both bounds held BY CONSTRUCTION and the pair could not fail for any input at all -- they would have
+  // passed just as happily on the score-0 baseline-failure path the next section exercises.
+  // Derivation: the same 0.8 Th window admits only the 800.0 peak, so the variant's
+  // in-window intensity is 200.0 against the baseline's 500.0 -> ratio 0.4; remaining_precursor_target
+  // is unset in this fixture and defaults to 0.1 (Config.h:174, asserted in remaining_precursor_config_parsed),
+  // so deviation = 0.3 and score = 0.7.
   auto group_mid = ExplorationTestAccess::group(exploration,1);
   TEST_EQUAL(group_mid.variants[1].received, true)
-  TEST_EQUAL(group_mid.variants[1].score >= 0.0, true)
-  TEST_EQUAL(group_mid.variants[1].score <= 1.0, true)
+  TEST_REAL_SIMILAR(group_mid.variants[1].score, 0.7)
 
-  // remaining_ratio should be valid for RemainingPrecursor with raw data
-  TEST_EQUAL(ce20_info.metric.remaining_ratio >= 0.0, true)
-  TEST_EQUAL(ce20_info.metric.remaining_ratio <= 1.0, true)
+  // remaining_ratio: 200.0 in-window / 500.0 baseline = 0.4. Unlike the score above, the two bounds this
+  // replaces were WEAK rather than unfailable -- the ratio is a raw quotient, so -1.0 (the "N/A" sentinel
+  // for no baseline or an empty one) and values above 1.0 (a variant brighter than the un-fragmented
+  // reference) are both reachable and both would have failed. But [0, 1] still admits every plausible
+  // depletion, so it never pinned WHICH scan the metric-independent block (Exploration.cpp:468-473)
+  // ratioed against -- the whole point of that block being keyed on the baseline.
+  TEST_REAL_SIMILAR(ce20_info.metric.remaining_ratio, 0.4)
 }
 END_SECTION
 
@@ -1906,6 +2145,582 @@ START_SECTION(ms3_protein_sequence_only_accepted)
 }
 END_SECTION
 
+// The two remaining_precursor config rejections (ADR-0026).
+//
+// A remaining_precursor pre-scan is scanned over its isolation window ALONE. That narrowing is what
+// makes the sweep cheap, and it is sound only because the winner is always re-acquired by a
+// production scan built from the un-overridden config. Two config shapes break that reasoning, and
+// Config::validate() rejects both at load rather than letting a run produce plausible-looking
+// emptiness:
+//
+//   Rejection A (Config.cpp:922-931) -- metric "remaining_precursor" with an EMPTY overrides map.
+//   Rejection B (Config.cpp:946-953 and :955-962) -- metric "remaining_precursor" at a level whose
+//                OWN charge mode is "multiplexed". Two pair-specific clauses, not one
+//                "multiplexed anywhere" test.
+//
+// Three sections pin the throws; the fourth pins what must keep LOADING, because a rejection
+// written one clause too broad is invisible to every positive test.
+START_SECTION(remaining_precursor_without_overrides_throws)
+{
+  // Rejection A is LEVEL-AGNOSTIC: the reasoning is about the metric, not about which decision
+  // section authored it, so validate() loops over levels_ instead of testing level 2. What makes
+  // this section fail is that check being absent -- or scoped to a single level, which is the shape
+  // a "fix it where it was reported" edit produces and which the second throw below exists to catch.
+  //
+  // The defect it stands in for is silent, not loud. An MS2 sweep with empty overrides cascades the
+  // winning variant's window-narrowed spectrum into Exploration::initiateNextLevel, which finds zero
+  // MS3 targets and logs `[MS3-PLAN] no_containing_fragment`. The run reads as a protein that did
+  // not fragment, and nothing in it points back at the config.
+  TEST_EXCEPTION(std::invalid_argument, Config(sweepProbe(", " + rpSweep(""))))
+  TEST_EXCEPTION(std::invalid_argument, Config(sweepProbe("", ms3_on + rpSweep(""), true)))
+
+  // Sanity: both probes load once the overrides map is non-empty, so the rejections above are the
+  // empty map and not a malformed fixture.
+  Config ms2_ok{sweepProbe(", " + rpSweep(sweep_overrides))};
+  TEST_EQUAL(static_cast<int>(ms2_ok.level(2).exploration), static_cast<int>(ExplorationMetric::RemainingPrecursor))
+
+  Config ms3_ok{sweepProbe("", ms3_on + rpSweep(sweep_overrides), true)};
+  TEST_EQUAL(static_cast<int>(ms3_ok.level(3).exploration), static_cast<int>(ExplorationMetric::RemainingPrecursor))
+}
+END_SECTION
+
+START_SECTION(remaining_precursor_multiplexed_ms2_throws)
+{
+  // Rejection B at level 2. [first_mass, last_mass] is ONE interval and a multiplexed readout is a
+  // notch SET: the charge states of a ~12 kDa protein scatter their 2 Th windows over hundreds of
+  // Th. Binding the pre-scan to the anchor window alone would isolate the whole set and read one
+  // member of it; spanning the set would give back most of what the narrowing bought. Neither is
+  // the scan the author asked for, so the pair is rejected instead of silently resolved one way.
+  //
+  // LOAD-BEARING: the probe carries a non-empty overrides map. Rejection A is checked first and
+  // fires on an empty one, so without those overrides this section would throw for A's reason and
+  // stay green with Rejection B deleted outright.
+  TEST_EXCEPTION(std::invalid_argument,
+      Config(sweepProbe(R"(, "precursor_charges": "multiplexed", )" + rpSweep(sweep_overrides))))
+
+  // Positive control: the identical config at "single" loads, so what is rejected is the charge
+  // mode and not the sweep.
+  Config ok{sweepProbe(R"(, "precursor_charges": "single", )" + rpSweep(sweep_overrides))};
+  TEST_EQUAL(static_cast<int>(ok.targeting().precursor_charges), static_cast<int>(ChargeAcquisitionMode::Single))
+  TEST_EQUAL(static_cast<int>(ok.level(2).exploration), static_cast<int>(ExplorationMetric::RemainingPrecursor))
+}
+END_SECTION
+
+START_SECTION(remaining_precursor_multiplexed_ms3_throws)
+{
+  // Rejection B at level 3 -- a separate clause from level 2's, deliberately, because the two
+  // cross-level pairs stay legal (see the negative section below). An MS3 sweep spreads its readout
+  // when characterization.fragment_charges multiplexes the SUB-fragments it is reading, which is
+  // the level-3 mirror of the MS2 case and is not something the level-2 clause can see.
+  //
+  // LOAD-BEARING, same as the MS2 section: the non-empty overrides map keeps Rejection A from
+  // firing first and masking whether Rejection B exists at all.
+  TEST_EXCEPTION(std::invalid_argument,
+      Config(sweepProbe("", ms3_on + R"("fragment_charges": "multiplexed", )" + rpSweep(sweep_overrides), true)))
+
+  Config ok{sweepProbe("", ms3_on + R"("fragment_charges": "single", )" + rpSweep(sweep_overrides), true)};
+  TEST_EQUAL(static_cast<int>(ok.characterization().fragment_charges), static_cast<int>(ChargeAcquisitionMode::Single))
+  TEST_EQUAL(static_cast<int>(ok.level(3).exploration), static_cast<int>(ExplorationMetric::RemainingPrecursor))
+}
+END_SECTION
+
+START_SECTION(remaining_precursor_separate_and_crosslevel_are_legal)
+{
+  // The NEGATIVE half of Rejection B: four shapes that must keep loading. This section is what
+  // fails when the check is written one clause too broad -- "remaining_precursor plus multiplexed
+  // ANYWHERE", or "remaining_precursor plus any non-single charge mode" -- neither of which the
+  // three throwing sections above can tell apart from the correct pair-specific form.
+  //
+  // (a) and (b): `separate` FANS OUT to one scan per charge state instead of co-isolating them.
+  // buildMS2's notch guard (ScanCommandQueue.cpp:314) tests `== Multiplexed` only, so a `separate`
+  // scan carries no notches at all and every readout is a single contiguous interval -- exactly
+  // what ADR-0026's binding describes. Rejecting `separate` would cost the mode for no reason.
+  //
+  // (c) and (d): the CROSS-LEVEL pairs, where the multiplexed level is not the level that sweeps.
+  // Stage-0 notches change WHICH precursors are fragmented, not where a stage-1 readout sits, so an
+  // MS3 sub-fragment scan under a multiplexed MS2 is still one contiguous window; and a multiplexed
+  // MS3 does not touch the MS2 pre-scan above it. Only the sweeping level's OWN charge mode can
+  // spread the readout that the sweep is bound to.
+  {
+    // (a) level-2 sweep, precursor_charges "separate"
+    Config cfg{sweepProbe(R"(, "precursor_charges": "separate", )" + rpSweep(sweep_overrides))};
+    TEST_EQUAL(static_cast<int>(cfg.level(2).exploration), static_cast<int>(ExplorationMetric::RemainingPrecursor))
+    TEST_EQUAL(static_cast<int>(cfg.targeting().precursor_charges), static_cast<int>(ChargeAcquisitionMode::Separate))
+  }
+  {
+    // (b) level-3 sweep, fragment_charges "separate"
+    Config cfg{sweepProbe("", ms3_on + R"("fragment_charges": "separate", )" + rpSweep(sweep_overrides), true)};
+    TEST_EQUAL(static_cast<int>(cfg.level(3).exploration), static_cast<int>(ExplorationMetric::RemainingPrecursor))
+    TEST_EQUAL(static_cast<int>(cfg.characterization().fragment_charges), static_cast<int>(ChargeAcquisitionMode::Separate))
+  }
+  {
+    // (c) level-3 sweep under a MULTIPLEXED level 2. Level 2 does not sweep, so nothing binds its
+    // scan range; the MS3 readout that IS bound sits a stage below the notches.
+    Config cfg{sweepProbe(R"(, "precursor_charges": "multiplexed")", ms3_on + rpSweep(sweep_overrides), true)};
+    TEST_EQUAL(static_cast<int>(cfg.level(3).exploration), static_cast<int>(ExplorationMetric::RemainingPrecursor))
+    TEST_EQUAL(static_cast<int>(cfg.targeting().precursor_charges), static_cast<int>(ChargeAcquisitionMode::Multiplexed))
+    TEST_EQUAL(static_cast<int>(cfg.level(2).exploration), static_cast<int>(ExplorationMetric::None))
+  }
+  {
+    // (d) the mirror: level-2 sweep under MULTIPLEXED fragment charges. mode is on, so level 3 is
+    // live and its charge mode is real -- it simply is not the level being swept.
+    Config cfg{sweepProbe(", " + rpSweep(sweep_overrides), ms3_on + R"("fragment_charges": "multiplexed")", true)};
+    TEST_EQUAL(static_cast<int>(cfg.level(2).exploration), static_cast<int>(ExplorationMetric::RemainingPrecursor))
+    TEST_EQUAL(static_cast<int>(cfg.characterization().fragment_charges), static_cast<int>(ChargeAcquisitionMode::Multiplexed))
+    TEST_EQUAL(static_cast<int>(cfg.level(3).exploration), static_cast<int>(ExplorationMetric::None))
+  }
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// The ADR-0026 BINDING itself (Exploration.cpp:254-261), where the four sections above pin only the
+// config shapes that make it representable. A RemainingPrecursor pre-scan's first_mass/last_mass are
+// set to precursor_mz -/+ isolation_width/2 -- at MS2 and MS3 alike, and for EVERY variant including
+// the CE-0 baseline, because a full-range trap fill and a narrow one are not comparable denominators
+// for the ratio. Five sections: the two levels, the production scan the binding must NOT reach, the
+// explicit-range escape hatch, and the ADR-0023 FORCED metric that no config declares.
+//
+// EVERY RANGE ASSERTION BELOW IS RELATIONAL -- `group.precursor_mz -/+ group.isolation_width / 2.0`
+// read back through ExplorationTestAccess, never a literal, and that is load-bearing rather than
+// stylistic. ADR-0026 decision 2 ships in THIS push: initiate() no longer takes isolation_width as the
+// bare PeakGroup m/z span, because buildMS2 pads the commanded window by optimal_window_margin_ on
+// each side (ScanCommandQueue.cpp:293-295, .4 Th => 0.8 Th total) and the interval the metric SUMS
+// must be the interval the instrument was told to ISOLATE. So MS2 is now (mz2 - mz1) + 0.8 while MS3
+// keeps the 2.0 Th floor, the two arms of Exploration.cpp:165-167. Every window in these five sections
+// moved when that landed and not one line here needed touching, because the group and the command are
+// read from the same computation; hard-coded 499.0/501.0 bounds would have had to be re-derived in
+// five places, which is how a golden-shaped assertion turns into a reason not to make the change.
+//
+// The only literals below are the two MS3 isolation_width pins, and they are there because the
+// relational pair cannot fail on its own once std::max(..., 2.0) is in play.
+/////////////////////////////////////////////////////////////
+
+START_SECTION(remaining_precursor_binds_scan_range_ms2)
+{
+  // FAILS WHEN the binding is absent at level 2: every command then carries ms_settings.ms2's
+  // 300/1800 and the sweep pays a 1500 Th fill to read the 2 Th it scores from.
+  //
+  // ALSO FAILS under the suppression test written against base_config instead of cfg.overrides --
+  // the shape Exploration.cpp:244-249 warns about. applyOverrides has already run at :128 and an
+  // authored ms_settings range lands in the SAME ScanConfig field with the SAME 0 default
+  // (Config.cpp:130-131, Config.h:124), so `base_config.first_mass != 0` reads true here purely
+  // because ms2 names a range, and the binding would be skipped for a config that asked for no
+  // range override at all. THE NON-ZERO 300/1800 IS WHAT MAKES THAT DETECTABLE: leave ms2 at the 0
+  // default and both forms agree, and this section passes under either.
+  const std::string cfg_json = R"JSON({
+    "deconvolution": { "tol": [10, 10, 10] },
+    "precursor_selection": {
+      "rank_by": "qscore", "max_precursors": 3,
+      "exploration": { "metric": "remaining_precursor", "ce_min": 20.0, "ce_max": 30.0, "ce_step": 5.0,
+                       "overrides": { "analyzer": "IonTrap" } }
+    },
+    "characterization": { "mode": "off" },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
+      "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29,
+               "first_mass": 300, "last_mass": 1800 }
+    }
+  })JSON";
+
+  Config cfg{cfg_json};
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+
+  // The control the loop below is read against: what an UNBOUND command carries. Asserted off the
+  // parsed config rather than restated as a number, so a fixture typo cannot make the section pass.
+  TEST_REAL_SIMILAR(cfg.level(2).scans[0].first_mass, 300.0)
+  TEST_REAL_SIMILAR(cfg.level(2).scans[0].last_mass, 1800.0)
+
+  // A SECOND peak at the same charge, so the group's m/z span is non-degenerate. The shared helper
+  // makes ONE peak and getMzRange then returns (mz, mz); at MS2 there is no 2.0 Th floor
+  // (Exploration.cpp:165-167 applies that to msn_level >= 3 only), so a one-peak group would bind the
+  // decision-2 margin alone -- precursor_mz -/+ 0.4, symmetric about the centre, which lo and hi would
+  // then be two readings of. Two peaks make them independent claims about the measured SPAN.
+  PeakGroup pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  FLASHHelperClasses::LogMzPeak lp2;
+  lp2.mz = 802.0;
+  lp2.abs_charge = 3;
+  pg.push_back(lp2);
+
+  std::vector<ScanCommand> cmds = exploration.initiate(2, pg, 3, queue);
+  TEST_EQUAL(static_cast<int>(cmds.size()), 4)   // CE-0 baseline + CE 20 / 25 / 30
+  ABORT_IF(cmds.size() != 4)
+
+  auto group = ExplorationTestAccess::group(exploration, 1);
+  TEST_EQUAL(group.msn_level, 2)
+  TEST_EQUAL(static_cast<int>(group.exploration_metric), static_cast<int>(ExplorationMetric::RemainingPrecursor))
+
+  // cmds[0] IS THE CE-0 BASELINE, asserted rather than assumed. It is variant_params[0] (inserted at
+  // Exploration.cpp:138) and the binding reaches it only by being written onto base_config ABOVE the
+  // loop, so that the baseline takes the same unconditional `variant_config = base_config` at :273 as
+  // every other variant. A binding moved inside an `is_baseline == false` branch would leave the CE-0
+  // reference scanning 300-1800 while its variants scan ~2 Th, and every ratio in the group would then
+  // divide a narrow fill by a full-range one.
+  TEST_EQUAL(group.variants[0].is_baseline, true)
+  TEST_EQUAL(group.variants[0].variant_index, -1)
+  TEST_REAL_SIMILAR(group.variants[0].collision_energy, 0.0)
+  TEST_EQUAL(group.variants[0].cmd.scan_id, cmds[0].scan_id)
+
+  const double lo = group.precursor_mz - group.isolation_width / 2.0;
+  const double hi = group.precursor_mz + group.isolation_width / 2.0;
+  TEST_EQUAL(hi > lo, true)   // non-degenerate, so the pair below cannot be satisfied by one value
+
+  for (const ScanCommand& c : cmds)
+  {
+    TEST_EQUAL(c.msn_level, 2)
+    TEST_REAL_SIMILAR(c.first_mass, lo)
+    TEST_REAL_SIMILAR(c.last_mass, hi)
+  }
+}
+END_SECTION
+
+START_SECTION(remaining_precursor_binds_scan_range_ms3)
+{
+  // FAILS WHEN the binding is absent at level 3 -- or present but written on the MS2 branch only.
+  // The binding sits ABOVE the variant loop and before the buildMS2/buildMS3 fork
+  // (Exploration.cpp:254-261 vs :280-290), which is exactly why one edit covers both levels; a
+  // version placed inside that fork is the plausible way to get MS2 right and MS3 wrong, and the
+  // MS2 section alone cannot see it.
+  //
+  // ms_settings.ms3 names 350/1750 for the same two reasons ms2 named 300/1800 above: it is the
+  // control for "unbound", and being non-zero it is also what makes a base_config-keyed suppression
+  // test fail here rather than silently agree.
+  const std::string cfg_json = R"JSON({
+    "deconvolution": { "tol": [10, 10, 10] },
+    "precursor_selection": { "rank_by": "qscore", "max_precursors": 3 },
+    "characterization": {
+      "mode": "ambiguity", "protein_sequence": "PEPTIDER", "max_targets": 3,
+      "exploration": { "metric": "remaining_precursor", "ce_min": 20.0, "ce_max": 30.0, "ce_step": 5.0,
+                       "overrides": { "analyzer": "IonTrap" } }
+    },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
+      "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 },
+      "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25,
+               "first_mass": 350, "last_mass": 1750 }
+    }
+  })JSON";
+
+  Config cfg{cfg_json};
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+
+  TEST_REAL_SIMILAR(cfg.level(3).scans[0].first_mass, 350.0)
+  TEST_REAL_SIMILAR(cfg.level(3).scans[0].last_mass, 1750.0)
+
+  PeakGroup fragment_pg = makeSyntheticPeakGroup(500.0, 1000.0, 2);
+  ScanCommand ms2_ctx = queue.buildMS2(makeSyntheticPeakGroup(800.0, 2400.0, 3), 3,
+                                       cfg.level(2).scans[0], 2, 0);
+
+  std::vector<ScanCommand> cmds = exploration.initiate(3, fragment_pg, 2, queue, nullptr, &ms2_ctx);
+  TEST_EQUAL(static_cast<int>(cmds.size()), 4)   // CE-0 baseline + CE 20 / 25 / 30
+  ABORT_IF(cmds.size() != 4)
+
+  auto group = ExplorationTestAccess::group(exploration, 1);
+  TEST_EQUAL(group.msn_level, 3)
+  TEST_EQUAL(static_cast<int>(group.exploration_metric), static_cast<int>(ExplorationMetric::RemainingPrecursor))
+
+  // Same baseline pin as the MS2 section: the CE-0 scan is in the loop below, not exempt from it.
+  TEST_EQUAL(group.variants[0].is_baseline, true)
+  TEST_EQUAL(group.variants[0].variant_index, -1)
+  TEST_EQUAL(group.variants[0].cmd.scan_id, cmds[0].scan_id)
+
+  const double lo = group.precursor_mz - group.isolation_width / 2.0;
+  const double hi = group.precursor_mz + group.isolation_width / 2.0;
+  // Exact, not `hi > lo`: at MS3 isolation_width is std::max(mz2 - mz1, 2.0) (Exploration.cpp:165-167),
+  // so hi - lo >= 2.0 for EVERY input the floor can see -- including the (-1, -10) sentinel getMzRange
+  // returns for a charge with no peaks. A comparison against zero was documentation, not a test. The
+  // fixture is a single peak at 500.0, so mz2 - mz1 == 0 and the floor IS the window: this fails if the
+  // floor is dropped, re-tuned, or if the MS2 margin branch is taken at level 3.
+  TEST_REAL_SIMILAR(group.isolation_width, 2.0)
+
+  // The window bound is the FRAGMENT stage's, not the inherited MS2 precursor's. An MS3 command
+  // carries both (stage[0] ~ 800 Th from ms2_ctx, stage[1] = the ~500 Th fragment), and
+  // precursorWindowIntensity_ sums around group.precursor_mz -- so a binding that reached for
+  // stages[0] would command one window and score another.
+  TEST_REAL_SIMILAR(cmds[0].stages[1].precursor_mz, group.precursor_mz)
+  TEST_EQUAL(std::abs(cmds[0].stages[0].precursor_mz - group.precursor_mz) > 100.0, true)
+
+  for (const ScanCommand& c : cmds)
+  {
+    TEST_EQUAL(c.msn_level, 3)
+    TEST_EQUAL(c.num_stages, 2)
+    TEST_REAL_SIMILAR(c.first_mass, lo)
+    TEST_REAL_SIMILAR(c.last_mass, hi)
+  }
+}
+END_SECTION
+
+START_SECTION(production_scan_keeps_configured_range)
+{
+  // FAILS WHEN the binding leaks past the pre-scans into the post-winner close-out.
+  //
+  // The production scan is the ONE acquisition of the group that is meant to be identified, and it
+  // is rebuilt from level_config.scans[0] (Exploration.cpp:750) rather than from base_config, which
+  // is why it keeps its configured 200-2000 while the sweep that chose its CE ran at ~2 Th. That
+  // separation is structural -- no flag defends it -- so an edit that "hoisted" the narrowing onto
+  // level_config, or pushed it down into buildMS3 where every MS3 command would inherit it, would
+  // narrow the close-out too. Nothing would throw: ADR-0026's entire safety argument (decision 3,
+  // the winner is always re-acquired at full range) would simply stop being true, and the run would
+  // look like a working narrow sweep that identified nothing.
+  //
+  // The pre-scan assertion below is the positive control. It proves the binding DID fire in this
+  // very group, so the production scan's 200/2000 is a contrast rather than a binding that never ran.
+  const std::string cfg_json = R"JSON({
+    "deconvolution": { "tol": [10, 10, 10] },
+    "precursor_selection": { "rank_by": "qscore", "max_precursors": 3 },
+    "characterization": {
+      "mode": "ambiguity", "protein_sequence": "PEPTIDER", "max_targets": 3,
+      "exploration": { "metric": "remaining_precursor", "ce_min": 20.0, "ce_max": 30.0, "ce_step": 5.0,
+                       "overrides": { "analyzer": "IonTrap" } }
+    },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
+      "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 },
+      "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25,
+               "first_mass": 200, "last_mass": 2000 }
+    }
+  })JSON";
+
+  Config cfg{cfg_json};
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+
+  PeakGroup fragment_pg = makeSyntheticPeakGroup(500.0, 1000.0, 2);
+  ScanCommand ms2_ctx = queue.buildMS2(makeSyntheticPeakGroup(800.0, 2400.0, 3), 3,
+                                       cfg.level(2).scans[0], 2, 0);
+
+  std::vector<ScanCommand> cmds = exploration.initiate(3, fragment_pg, 2, queue, nullptr, &ms2_ctx);
+  TEST_EQUAL(static_cast<int>(cmds.size()), 4)
+  ABORT_IF(cmds.size() != 4)
+
+  // Read the group BEFORE the sweep completes -- completion erases it from active_groups_.
+  auto group = ExplorationTestAccess::group(exploration, 1);
+  const double lo = group.precursor_mz - group.isolation_width / 2.0;
+  const double hi = group.precursor_mz + group.isolation_width / 2.0;
+  TEST_REAL_SIMILAR(cmds[0].first_mass, lo)   // positive control: the pre-scans ARE narrowed here
+  TEST_REAL_SIMILAR(cmds[3].last_mass, hi)
+
+  // Drive the sweep to completion with RAW ARRAYS. RemainingPrecursor scores from isolation-window
+  // intensity alone, so one peak at the centre and two 50 Th away make the in-window sum exactly
+  // controllable; the ExplorationTestAccess deconvolution bypass the mass_count sections use cannot
+  // drive this metric at all. A baseline with no in-window signal aborts the group on
+  // baseline_failed (set at Exploration.cpp:434-437), which suppresses winner selection at :664 and
+  // takes the no-follow-up arm at :683, so no production scan is emitted -- the assertion would then
+  // read as a missing command rather than a narrowed one.
+  const double mz_c = group.precursor_mz;
+  std::vector<double> mzs{mz_c - 50.0, mz_c, mz_c + 50.0};
+  // score = 1 - |ratio - remaining_precursor_target|, target = 0.1 (the level default), so the
+  // ratios 0.9 / 0.4 / 0.1 give 0.2 / 0.7 / 1.0 and the LAST-fed variant wins. A tie-break-order
+  // winner would land on cmds[1] and the CE assertion below would catch it.
+  std::vector<double> baseline_ints{300.0, 1000.0, 700.0};
+  std::vector<double> ce20_ints{300.0, 900.0, 700.0};
+  std::vector<double> ce25_ints{300.0, 400.0, 700.0};
+  std::vector<double> ce30_ints{300.0, 100.0, 700.0};
+
+  exploration.feedResult(cmds[0].scan_id, mzs.data(), baseline_ints.data(),
+                         static_cast<int>(mzs.size()), 0.5, queue);
+  exploration.feedResult(cmds[1].scan_id, mzs.data(), ce20_ints.data(),
+                         static_cast<int>(mzs.size()), 1.0, queue);
+  exploration.feedResult(cmds[2].scan_id, mzs.data(), ce25_ints.data(),
+                         static_cast<int>(mzs.size()), 1.5, queue);
+  auto info = exploration.feedResult(cmds[3].scan_id, mzs.data(), ce30_ints.data(),
+                                     static_cast<int>(mzs.size()), 2.0, queue);
+
+  TEST_EQUAL(exploration.activeGroupCount(), 0)
+  TEST_REAL_SIMILAR(info.metric.score, 1.0)
+  TEST_EQUAL(info.group.winner_tracking_id, ScanCommandQueue::encode(cmds[3].scan_id))
+
+  // Exactly one close-out command. Both ADR-0020 gates hold here (non-empty overrides AND a
+  // measuring MS3 metric), which is not a weakness of this section: WHICH gate fired is
+  // ms3_measuring_metric_always_reacquires_without_overrides' subject, and this one only needs a
+  // production scan to exist so that its range can be read.
+  TEST_EQUAL(static_cast<int>(info.commands.size()), 1)
+  // Release build: no _ITERATOR_DEBUG_LEVEL and no OPENMS_PRECONDITION, so indexing an empty
+  // `commands` is a read near address 0 that kills the binary and takes every later section with it.
+  ABORT_IF(info.commands.size() != 1)
+  TEST_EQUAL(info.commands[0].msn_level, 3)
+  TEST_REAL_SIMILAR(info.commands[0].stages[1].collision_energy, 30.0)  // rebuilt at the WINNING CE
+
+  // THE ASSERTIONS THIS SECTION EXISTS FOR: the configured MS3 range, not the ~2 Th window its own
+  // pre-scans were bound to. Stated twice on purpose -- against the literals so the intent is
+  // readable, and against the parsed config so the pair cannot both drift to some third value.
+  TEST_REAL_SIMILAR(info.commands[0].first_mass, 200.0)
+  TEST_REAL_SIMILAR(info.commands[0].last_mass, 2000.0)
+  TEST_REAL_SIMILAR(info.commands[0].first_mass, cfg.level(3).scans[0].first_mass)
+  TEST_REAL_SIMILAR(info.commands[0].last_mass, cfg.level(3).scans[0].last_mass)
+  TEST_EQUAL(info.commands[0].first_mass < lo && info.commands[0].last_mass > hi, true)
+}
+END_SECTION
+
+START_SECTION(explicit_range_override_suppresses_binding)
+{
+  // FAILS WHEN the escape hatch (ADR-0026 decision 5) is missing: the binding would overwrite the
+  // author's 600/1600 with the ~2 Th window, and the one knob that lets someone tune a sweep against
+  // real hardware without a rebuild would be inert -- quietly, because the resulting scans still look
+  // like a working narrow sweep and only scan_commands.tsv's range columns (decision 6) can tell the
+  // two apart.
+  //
+  // WHAT THIS SECTION CANNOT DO, AND WHERE THAT IS COVERED. It does NOT separate a suppression test
+  // written against cfg.overrides from one written against base_config: applyOverrides has already
+  // folded 600/1600 into base_config by the time the binding is reached (Exploration.cpp:128), so
+  // both forms suppress here and both emit 600/1600. The discrimination lives in the two binding
+  // sections above, whose ms_settings ranges are non-zero and must STILL be narrowed -- a
+  // base_config test reads those as "a range override is present" and skips the binding. The three
+  // sections only cover ADR-0026 decision 5 together.
+  //
+  // ms_settings.ms2 carries its OWN 100/2000, deliberately different from the override, so the
+  // 600/1600 below is attributable to the overrides map: set ms2 to 600/1600 and the assertions
+  // would pass even if applyOverrides never ran at all.
+  //
+  // The override VALUES ARE JSON STRINGS. Config.cpp:741 reads the map with `.get<std::string>()`,
+  // so a bare `"first_mass": 600` throws a nlohmann type error out of the constructor and the
+  // section fails as an unloadable fixture rather than as a suppression defect.
+  const std::string cfg_json = R"JSON({
+    "deconvolution": { "tol": [10, 10, 10] },
+    "precursor_selection": {
+      "rank_by": "qscore", "max_precursors": 3,
+      "exploration": { "metric": "remaining_precursor", "ce_min": 20.0, "ce_max": 30.0, "ce_step": 5.0,
+                       "overrides": { "analyzer": "Orbitrap", "first_mass": "600", "last_mass": "1600" } }
+    },
+    "characterization": { "mode": "off" },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
+      "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29,
+               "first_mass": 100, "last_mass": 2000 }
+    }
+  })JSON";
+
+  Config cfg{cfg_json};
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+
+  // The map survived parsing under both keys -- the escape hatch's actual input. tolerance_ppm was
+  // erased from this map once; that is now only history in a comment (Config.cpp:721-724) and the live
+  // code throws on the key instead (Config.cpp:736-740), so "an exploration key reached overrides" is
+  // not something to take on trust.
+  TEST_EQUAL(cfg.level(2).overrides.count("first_mass"), 1u)
+  TEST_EQUAL(cfg.level(2).overrides.count("last_mass"), 1u)
+  TEST_REAL_SIMILAR(cfg.level(2).scans[0].first_mass, 100.0)   // the AUTHORED scan range, untouched
+  TEST_REAL_SIMILAR(cfg.level(2).scans[0].last_mass, 2000.0)
+
+  PeakGroup pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  std::vector<ScanCommand> cmds = exploration.initiate(2, pg, 3, queue);
+  TEST_EQUAL(static_cast<int>(cmds.size()), 4)
+  ABORT_IF(cmds.size() != 4)
+
+  auto group = ExplorationTestAccess::group(exploration, 1);
+  TEST_EQUAL(static_cast<int>(group.exploration_metric), static_cast<int>(ExplorationMetric::RemainingPrecursor))
+
+  // What the binding WOULD have written, computed rather than asserted, so the section states the
+  // collision it is protecting against instead of merely avoiding it. ~800 Th against 600 -- and it
+  // stays ~800 after the decision-2 margin push, so the 1.0 Th slack is not a tolerance in disguise.
+  const double bound_lo = group.precursor_mz - group.isolation_width / 2.0;
+  TEST_EQUAL(std::abs(bound_lo - 600.0) > 1.0, true)
+
+  for (const ScanCommand& c : cmds)
+  {
+    TEST_REAL_SIMILAR(c.first_mass, 600.0)
+    TEST_REAL_SIMILAR(c.last_mass, 1600.0)
+  }
+}
+END_SECTION
+
+START_SECTION(forced_remaining_precursor_binds_scan_range)
+{
+  // FAILS WHEN the binding is gated on cfg.exploration rather than on group.exploration_metric.
+  // The two agree everywhere except here: ADR-0023 decision 11 DRAGS an exhaustive-mode unassigned
+  // mass -- ion class 'u', which MS3FragmentMatcher::isKnownIonClass rejects -- onto
+  // RemainingPrecursor whatever the config asked for (Exploration.cpp:196-200). This config asks for
+  // fragment_count, so a cfg-keyed binding emits ms_settings.ms3's 200/2000 and the forced sweep
+  // pays a full-range fill for every pre-scan it then reads ~2 Th of. Mirrors
+  // ProteoformTracker_Exhaustive_test.cpp:682-719, which pins the force itself; this section pins
+  // what the force implies for the scan range.
+  //
+  // WHY THE FORCED PATH NEEDS NO CONFIG GUARANTEE, and why no third Config::validate() rejection
+  // should be added for it. Narrowing is safe because the winner is always re-acquired at full
+  // range; for a CONFIGURED sweep that is guaranteed by Rejection A (ADR-0026 decision 3), and here
+  // it is structural instead:
+  //     force fires => msn_level >= 3 AND metric == RemainingPrecursor (measuring by definition)
+  //                 => measuring_ms3_sweep (Exploration.cpp:747-748)
+  //                 => ADR-0020 gate #2 fires => a full-range production scan re-acquires.
+  // The force's own precondition IS gate #2's condition. Nor is there a cascade to strand: MS3 is
+  // terminal at the `< 3` MS4 wall (:816), so "a window-only spectrum yields zero next-level
+  // targets" -- the hazard Rejection A exists for -- is an MS2-only failure.
+  //
+  // The overrides map is non-empty and deliberately carries NO range key. Unlike the four sections
+  // above it is NOT there to keep Rejection A from firing first: that rejection keys on the
+  // CONFIGURED metric, which is fragment_count here, so it cannot fire and the forced metric never
+  // reaches validate() at all -- which is the asymmetry this section documents. It is there so the
+  // narrowing below is attributable to group.exploration_metric alone, with the escape hatch of
+  // ADR-0026 decision 5 provably not engaged.
+  const std::string cfg_json = R"JSON({
+    "deconvolution": { "tol": [10, 10, 10] },
+    "precursor_selection": { "rank_by": "qscore", "max_precursors": 3 },
+    "characterization": {
+      "mode": "exhaustive", "protein_sequence": "PEPTIDEK", "max_targets": 3,
+      "exploration": { "metric": "fragment_count", "ce_min": 20.0, "ce_max": 30.0, "ce_step": 5.0,
+                       "overrides": { "analyzer": "IonTrap" } }
+    },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
+      "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 },
+      "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25,
+               "first_mass": 200, "last_mass": 2000 }
+    }
+  })JSON";
+
+  Config cfg{cfg_json};
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+
+  // The CONFIG says reading. The GROUP will say measuring. That gap is the whole section, so both
+  // halves are asserted rather than one inferred from the other.
+  TEST_EQUAL(static_cast<int>(cfg.level(3).exploration), static_cast<int>(ExplorationMetric::FragmentCount))
+  TEST_EQUAL(cfg.level(3).overrides.count("first_mass"), 0u)
+  TEST_EQUAL(cfg.level(3).overrides.count("last_mass"), 0u)
+  TEST_REAL_SIMILAR(cfg.level(3).scans[0].first_mass, 200.0)   // what a cfg-keyed binding would emit
+  TEST_REAL_SIMILAR(cfg.level(3).scans[0].last_mass, 2000.0)
+
+  PeakGroup unassigned_pg = makeSyntheticPeakGroup(500.0, 1000.0, 2);
+  ScanCommand ms2_ctx = queue.buildMS2(makeSyntheticPeakGroup(800.0, 2400.0, 3), 3,
+                                       cfg.level(2).scans[0], 2, 0);
+
+  // 'u'/0 is exactly what planExhaustive_ labels a mass that matched no theoretical fragment.
+  std::vector<ScanCommand> cmds = exploration.initiate(3, unassigned_pg, 2, queue, nullptr, &ms2_ctx, 'u', 0);
+  TEST_EQUAL(static_cast<int>(cmds.size()), 4)   // CE-0 baseline + CE 20 / 25 / 30
+  ABORT_IF(cmds.size() != 4)
+
+  auto group = ExplorationTestAccess::group(exploration, 1);
+  TEST_EQUAL(group.msn_level, 3)
+  TEST_EQUAL(static_cast<int>(group.exploration_metric), static_cast<int>(ExplorationMetric::RemainingPrecursor))
+  TEST_EQUAL(group.variants[0].is_baseline, true)
+  TEST_EQUAL(group.variants[0].cmd.scan_id, cmds[0].scan_id)
+
+  const double lo = group.precursor_mz - group.isolation_width / 2.0;
+  const double hi = group.precursor_mz + group.isolation_width / 2.0;
+  // The FORCED sweep takes the same MS3 floor a configured one does (Exploration.cpp:165-167), so pin
+  // the width rather than `hi > lo`, which std::max(..., 2.0) makes true for every possible input --
+  // the (-1, -10) sentinel getMzRange returns for a charge with no peaks included. 2.0 also says the
+  // width was computed from the FRAGMENT group and not from ms2_ctx, whose buildMS2 window is 0.8 Th.
+  TEST_REAL_SIMILAR(group.isolation_width, 2.0)
+  TEST_EQUAL(lo > cfg.level(3).scans[0].first_mass, true)   // strictly inside the configured range,
+  TEST_EQUAL(hi < cfg.level(3).scans[0].last_mass, true)    // so "bound" and "unbound" cannot coincide
+
+  for (const ScanCommand& c : cmds)
+  {
+    TEST_EQUAL(c.msn_level, 3)
+    TEST_REAL_SIMILAR(c.first_mass, lo)
+    TEST_REAL_SIMILAR(c.last_mass, hi)
+  }
+}
+END_SECTION
+
 START_SECTION(remaining_precursor_target_aware_scoring)
 {
   Config cfg{std::string(remaining_precursor_config)};
@@ -1942,7 +2757,9 @@ START_SECTION(remaining_precursor_target_aware_scoring)
   double score_over = info_over.metric.score;
   double ratio_over = info_over.metric.remaining_ratio;
 
-  TEST_EQUAL(score_perfect > score_over, true)
+  // (The former `score_perfect > score_over` ordering check is gone: the two exact values below
+  // already imply it, and an ordering assertion that survives a shift of BOTH scores is the weaker
+  // of the two claims, never an independent one.)
   TEST_REAL_SIMILAR(score_perfect, 1.0)
   TEST_REAL_SIMILAR(score_over, 0.6)
   TEST_REAL_SIMILAR(ratio_perfect, 0.1)
@@ -2127,8 +2944,274 @@ START_SECTION(ms3_remaining_precursor_isolation_width)
 
   // Score should be real (not -1.0), ratio = 100/1000 = 0.1
   TEST_REAL_SIMILAR(info.metric.remaining_ratio, 0.1)
-  TEST_REAL_SIMILAR(info.metric.score, 1.0)  // target=0.1, deviation=0.0, score=1.0
-  TEST_EQUAL(info.metric.score > 0.0, true)
+  // target=0.1, deviation=0.0, score=1.0. (The former trailing `score > 0.0` is gone -- it was implied
+  // by this line and unfailable on its own: computeRemainingPrecursorScore_ floors at 0 and caps at 1,
+  // so it could only have caught the exact-zero case this exact assertion already excludes.)
+  TEST_REAL_SIMILAR(info.metric.score, 1.0)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// ADR-0026 DECISION 2: THE MARGIN CORRECTION. The interval a metric SUMS must be the interval the
+// instrument was told to ISOLATE.
+//
+// buildMS2 has always padded the measured [mz1, mz2] by optimal_window_margin_ per side before
+// commanding it (ScanCommandQueue.cpp:291-295), while Exploration::initiate took the BARE span. So a
+// RemainingPrecursor sweep scored a window 0.8 Th narrower than the one it acquired: every peak in
+// those two flanks was paid for, transmitted, and then dropped on the floor by
+// precursorWindowIntensity_. Nothing read wrong -- the ratio was simply computed over a different
+// interval than the one the fill was spent on.
+//
+// The correction is Exploration.cpp:165-167's MS2 arm, `(mz2 - mz1) + 2.0 * optimal_window_margin_`,
+// and the three sections below are the whole case for shipping it in the SAME push as the ADR-0026
+// binding rather than a later one:
+//   * ms2_scoring_window_matches_commanded_isolation -- the ONLY section in this file that goes red
+//     without it, because it is the only one whose fixture puts signal in the 0.4 Th flanks.
+//   * optimal_window_margin_has_one_definition -- the drift guard for the constant the correction
+//     had to be collapsed onto (three TU-local copies -> NotchSelection.h:123).
+//   * single_isotope_charge_yields_non_degenerate_scan_range -- the defect that makes "later"
+//     impossible: without the margin the binding emits a zero-width scan range.
+/////////////////////////////////////////////////////////////
+
+START_SECTION(ms2_scoring_window_matches_commanded_isolation)
+{
+  // FAILS WHEN Exploration.cpp:167 loses `+ 2.0 * optimal_window_margin_` and reverts to the bare
+  // `(mz2 - mz1)`. That is the ONE edit this file can detect numerically, and only from here: every
+  // other remaining_precursor section feeds peaks that are 10 Th or more off centre (790/810/900) or
+  // sits at MS3, where std::max(..., 2.0) swallows a 0.8 Th difference whole. This fixture is built
+  // the other way round -- two of its four baseline peaks land INSIDE the commanded window and
+  // OUTSIDE the un-margined one, so the two definitions of "the window" give two different sums.
+  //
+  // THE ARITHMETIC, derived from the fixture and from precursorWindowIntensity_'s actual predicate
+  // (`mzs[i] >= mz_low && mzs[i] <= mz_high`, Exploration.cpp:1227), not guessed:
+  //   getMzRange(3) = (800.0, 802.0)          two peaks at one charge -> a NON-degenerate span
+  //   precursor_mz  = 801.0                   (mz1 + mz2) / 2, computed before any margin
+  //   raw_half      = (802.0 - 800.0) / 2 = 1.0
+  //   OLD window    = [800.0, 802.0]          precursor_mz +/- raw_half
+  //   NEW window    = [799.6, 802.4]          precursor_mz +/- (raw_half + optimal_window_margin_)
+  // The two flank peaks sit at precursor_mz +/- (raw_half + 0.2), i.e. 0.2 Th inside the new edge and
+  // 0.2 Th outside the old one -- far enough from both that the `>=`/`<=` boundary cannot decide the
+  // result, which a peak placed exactly on an edge would.
+  //   NEW sum = 300 + 1000 + 200 = 1500.0     (810.0's 700.0 is outside BOTH, so this is not merely
+  //   OLD sum =       1000.0                   "the sum of everything fed")
+  const std::string cfg_json = R"JSON({
+    "deconvolution": { "tol": [10, 10, 10] },
+    "precursor_selection": {
+      "rank_by": "qscore", "max_precursors": 3,
+      "exploration": { "metric": "remaining_precursor", "ce_min": 20.0, "ce_max": 30.0, "ce_step": 5.0,
+                       "overrides": { "analyzer": "IonTrap" } }
+    },
+    "characterization": { "mode": "off" },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
+      "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 }
+    }
+  })JSON";
+
+  Config cfg{cfg_json};
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+
+  // A SECOND peak at the same charge. makeSyntheticPeakGroup makes one, and a one-peak group has
+  // mz2 == mz1, which would make the commanded window the margin ALONE -- symmetric about the centre,
+  // so "inside the new window but outside the old" would have no room to exist. The single-peak case
+  // is the third section's subject, not this one's.
+  PeakGroup pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  FLASHHelperClasses::LogMzPeak lp2;
+  lp2.mz = 802.0;
+  lp2.abs_charge = 3;
+  pg.push_back(lp2);
+
+  std::vector<ScanCommand> cmds = exploration.initiate(2, pg, 3, queue);
+  TEST_EQUAL(static_cast<int>(cmds.size()), 4)   // CE-0 baseline + CE 20 / 25 / 30
+  ABORT_IF(cmds.size() != 4)
+
+  auto group = ExplorationTestAccess::group(exploration, 1);
+  TEST_EQUAL(group.msn_level, 2)
+  TEST_REAL_SIMILAR(group.precursor_mz, 801.0)
+
+  // THE INVARIANT, stated rather than inferred from the sum below: an MS2 exploration window is the
+  // measured span plus the margin on each side (2.8 Th here). Expressed through the shared symbol, so
+  // it says "the same margin buildMS2 uses" and not "0.8" -- a retuned constant should move this
+  // section through optimal_window_margin_has_one_definition, not silently agree with a stale literal.
+  TEST_REAL_SIMILAR(group.isolation_width, (802.0 - 800.0) + 2.0 * optimal_window_margin_)
+
+  // ...and the COMMANDED side of the same claim, read off the baseline command the group actually
+  // emitted. This is ADR-0026 decision 2 in one line: the scored interval IS the isolated interval. It
+  // is a second, independent way for a reverted MS2 arm to go red (group 2.0 against command 2.8), and
+  // unlike the sum below it needs no fed peaks at all.
+  TEST_REAL_SIMILAR(cmds[0].stages[0].precursor_mz, group.precursor_mz)
+  TEST_REAL_SIMILAR(cmds[0].stages[0].isolation_width, group.isolation_width)
+
+  std::vector<double> baseline_mzs  = {799.8, 801.0, 802.2, 810.0};
+  std::vector<double> baseline_ints = {300.0, 1000.0, 200.0, 700.0};
+  exploration.feedResult(cmds[0].scan_id, baseline_mzs.data(), baseline_ints.data(),
+                         static_cast<int>(baseline_mzs.size()), 0.5, queue);
+
+  // THE ASSERTION THIS SECTION EXISTS FOR. 1500.0 with the margin, 1000.0 without it -- so a revert
+  // does not merely widen a tolerance, it changes the number. Read back off the group rather than out
+  // of the returned info because baseline_intensity is where the denominator of every later ratio in
+  // this group is stored (Exploration.cpp:427).
+  auto after = ExplorationTestAccess::group(exploration, 1);
+  TEST_EQUAL(after.has_baseline, true)
+  TEST_REAL_SIMILAR(after.baseline_intensity, 1500.0)
+  TEST_EQUAL(after.baseline_failed, false)   // 1500 > 0, so this is the live path and not the abort one
+}
+END_SECTION
+
+START_SECTION(optimal_window_margin_has_one_definition)
+{
+  // DRIFT GUARD for the constant this push collapsed from three TU-local copies -- ScanCommandQueue.cpp,
+  // PrecursorSelection.cpp, and FragmentAnalysis.cpp's anonymous namespace, all `.4`, none of them aware
+  // of the others -- onto the single inline constexpr at NotchSelection.h:123. Collapsing two
+  // definitions into one earns a permanent bidirectional guard; this is it.
+  //
+  // FAILS WHEN a second definition reappears and drifts. The literal check below catches a retune of
+  // the shared symbol, but on its own it cannot see a private copy: a `static const double
+  // optimal_window_margin_ = .5;` back inside ScanCommandQueue.cpp shadows the header for that TU
+  // alone, and every assertion that reads the header would keep passing. The buildMS2 assertion is the
+  // half that catches it -- it compares the width ScanCommandQueue ACTUALLY computed against one
+  // derived from the shared symbol, so the two sides have to agree numerically or the section is red.
+  TEST_REAL_SIMILAR(optimal_window_margin_, 0.4)
+
+  // mass_count, deliberately, and not remaining_precursor: this section is about GEOMETRY, and
+  // mass_count is untouched by either ADR-0026 config rejection (Config.cpp:940-946 and :962-983), so the fixture
+  // needs no overrides map to keep Rejection A quiet and nothing here can be misread as a test of the
+  // sweep contract.
+  const std::string cfg_json = R"JSON({
+    "deconvolution": { "tol": [10, 10, 10] },
+    "precursor_selection": {
+      "rank_by": "qscore", "max_precursors": 3,
+      "exploration": { "metric": "mass_count", "ce_min": 20.0, "ce_max": 30.0, "ce_step": 5.0 }
+    },
+    "characterization": { "mode": "off" },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
+      "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 }
+    }
+  })JSON";
+
+  Config cfg{cfg_json};
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+
+  // getMzRange(4) == (600.0, 603.0): a span of 3.0, deliberately different from the other two sections'
+  // so a fixture copy-pasted between them cannot pass by coincidence.
+  PeakGroup pg = makeSyntheticPeakGroup(600.0, 2396.0, 4);
+  FLASHHelperClasses::LogMzPeak lp2;
+  lp2.mz = 603.0;
+  lp2.abs_charge = 4;
+  pg.push_back(lp2);
+
+  // Computed from the SHARED symbol, which is the whole point: 3.8 written as a literal would agree
+  // with a divergent private copy exactly as happily as with the header.
+  const double expected_width = (603.0 - 600.0) + 2.0 * optimal_window_margin_;
+
+  // THE ScanCommandQueue SIDE. buildMS2 pads mz1/mz2 (ScanCommandQueue.cpp:293-294) AFTER taking the
+  // centre (:292), so the centre is the un-padded midpoint and only the width carries the margin --
+  // asserted separately, because a margin applied before the centre would leave the width right and the
+  // centre wrong.
+  ScanCommand ms2 = queue.buildMS2(pg, 4, cfg.level(2).scans[0], 2, 0);
+  TEST_EQUAL(ms2.msn_level, 2)
+  TEST_EQUAL(ms2.num_stages, 1)
+  TEST_REAL_SIMILAR(ms2.stages[0].precursor_mz, 601.5)
+  TEST_REAL_SIMILAR(ms2.stages[0].isolation_width, expected_width)
+
+  // THE Exploration SIDE -- the invariant ADR-0026 decision 2 establishes, on the same peak group.
+  // Before the correction this read 3.0 against the command's 3.8.
+  std::vector<ScanCommand> cmds = exploration.initiate(2, pg, 4, queue);
+  TEST_EQUAL(static_cast<int>(cmds.size()), 4)   // CE-0 baseline + CE 20 / 25 / 30
+  ABORT_IF(cmds.size() != 4)
+
+  auto group = ExplorationTestAccess::group(exploration, 1);
+  TEST_REAL_SIMILAR(group.precursor_mz, 601.5)
+  TEST_REAL_SIMILAR(group.isolation_width, expected_width)
+  // The two sides against each other, with no literal in between: whatever value the margin takes, the
+  // scored window and the commanded window are the same interval.
+  TEST_REAL_SIMILAR(group.isolation_width, cmds[0].stages[0].isolation_width)
+  TEST_REAL_SIMILAR(group.precursor_mz, cmds[0].stages[0].precursor_mz)
+}
+END_SECTION
+
+START_SECTION(single_isotope_charge_yields_non_degenerate_scan_range)
+{
+  // THE REASON THE MARGIN CORRECTION SHIPS IN THIS PUSH RATHER THAN A LATER ONE, and the section that
+  // pins it. A charge state the deconvolution resolved at ONE isotope gives mz2 == mz1, so the bare
+  // span is 0. Without the correction Exploration.cpp:165-167 hands the ADR-0026 binding
+  // isolation_width == 0, the binding at :254-261 writes first_mass = last_mass = precursor_mz, and
+  // BOTH are positive -- which is exactly the shape ScanFactory.cs:245-247 forwards:
+  //     if (cmd.FirstMass > 0) p.FirstMass = ...;  if (cmd.LastMass > 0) p.LastMass = ...;
+  //     if (cmd.FirstMass > 0 && cmd.LastMass > 0) p.ScanRangeMode = "DefineMZRange";
+  // A zero-width DefineMZRange reaches the instrument. Nothing on either side of the bridge rejects it,
+  // and no other section in this file would have noticed, so the binding could not land alone.
+  //
+  // THE MARGIN IS THE FLOOR HERE: MS2 has no 2.0 Th minimum of its own. That arm is msn_level >= 3 only
+  // (Exploration.cpp:165-166), mirrored by buildMS3's stage[1] re-floor at ScanCommandQueue.cpp:451, so
+  // an MS3 sweep on the same degenerate span is protected by something this section cannot see.
+  //
+  // FAILS WHEN the MS2 margin is dropped: last_mass - first_mass collapses to exactly 0, which the
+  // `> 0.0` half reports as a degenerate range and the `2 * margin` half reports as the wrong width.
+  const std::string cfg_json = R"JSON({
+    "deconvolution": { "tol": [10, 10, 10] },
+    "precursor_selection": {
+      "rank_by": "qscore", "max_precursors": 3,
+      "exploration": { "metric": "remaining_precursor", "ce_min": 20.0, "ce_max": 30.0, "ce_step": 5.0,
+                       "overrides": { "analyzer": "IonTrap" } }
+    },
+    "characterization": { "mode": "off" },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
+      "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 }
+    }
+  })JSON";
+
+  Config cfg{cfg_json};
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+
+  // ONE peak, and it stays one peak. Adding a second is the workaround
+  // remaining_precursor_binds_scan_range_ms2 uses to get an independent lo/hi pair, and applying it
+  // here would delete the case: a single-isotope charge is the input, not an inconvenience.
+  // makeSyntheticPeakGroup builds precisely that, so no helper needed changing.
+  PeakGroup pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  const std::tuple<double, double> mz_range = pg.getMzRange(3);
+  const double mz1 = std::get<0>(mz_range);
+  const double mz2 = std::get<1>(mz_range);
+  TEST_REAL_SIMILAR(mz2 - mz1, 0.0)      // the degenerate span, asserted rather than assumed
+  TEST_REAL_SIMILAR(mz1, 800.0)          // and not the (-1, -10) no-such-charge sentinel
+
+  // ms_settings.ms2 names NO range, so its 0/0 default is what a command carries when the binding does
+  // not fire -- which keeps the loop below honest in the other direction too: a missing binding gives
+  // 0 - 0 == 0 and fails on the same two assertions as a missing margin.
+  TEST_REAL_SIMILAR(cfg.level(2).scans[0].first_mass, 0.0)
+  TEST_REAL_SIMILAR(cfg.level(2).scans[0].last_mass, 0.0)
+  TEST_EQUAL(cfg.level(2).overrides.count("first_mass"), 0u)   // the decision-5 escape hatch is NOT engaged
+  TEST_EQUAL(cfg.level(2).overrides.count("last_mass"), 0u)
+
+  std::vector<ScanCommand> cmds = exploration.initiate(2, pg, 3, queue);
+  TEST_EQUAL(static_cast<int>(cmds.size()), 4)   // CE-0 baseline + CE 20 / 25 / 30
+  ABORT_IF(cmds.size() != 4)
+
+  auto group = ExplorationTestAccess::group(exploration, 1);
+  TEST_EQUAL(static_cast<int>(group.exploration_metric), static_cast<int>(ExplorationMetric::RemainingPrecursor))
+  TEST_REAL_SIMILAR(group.precursor_mz, 800.0)
+  // Span 0 plus the margin on each side. Nothing else contributes at MS2, so this is the floor in its
+  // entirety: 0.8 Th, neither 2.0 nor 0.
+  TEST_REAL_SIMILAR(group.isolation_width, 2.0 * optimal_window_margin_)
+
+  // EVERY command, the CE-0 baseline included: the binding is written onto base_config above the
+  // variant loop (Exploration.cpp:258-260), so a degenerate range would reach the reference scan too.
+  for (const ScanCommand& c : cmds)
+  {
+    TEST_EQUAL(c.msn_level, 2)
+    TEST_EQUAL(c.last_mass - c.first_mass > 0.0, true)
+    TEST_REAL_SIMILAR(c.last_mass - c.first_mass, 2.0 * optimal_window_margin_)
+    TEST_REAL_SIMILAR(c.first_mass, group.precursor_mz - group.isolation_width / 2.0)
+    TEST_REAL_SIMILAR(c.last_mass, group.precursor_mz + group.isolation_width / 2.0)
+  }
 }
 END_SECTION
 
