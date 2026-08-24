@@ -51,9 +51,6 @@
 namespace OpenMS
 {
 
-  /// optimal window margin
-  inline const double optimal_window_margin_ = .4;
-
   PrecursorSelection::PrecursorSelection(const Config& config, Deconvolution& deconv) :
       config_(config),
       deconv_(deconv)

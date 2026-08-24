@@ -46,9 +46,6 @@
 namespace OpenMS
 {
 
-  /// optimal window margin (same constant used in FLASHIda.cpp)
-  static const double optimal_window_margin_ = .4;
-
   // Static member definition: all 94 printable ASCII characters (0x21-0x7E)
   const std::string ScanCommandQueue::tracking_alphabet_ = "!\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
 

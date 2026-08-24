@@ -100,6 +100,28 @@ namespace OpenMS
     return out;
   }
 
+  /// The per-side widening applied to a MEASURED m/z range before it is commanded as an isolation
+  /// window, so the envelope is transmitted whole rather than clipped at its edges: the species does
+  /// not stop at the outermost isotope the deconvolution happened to resolve, and an unpadded window
+  /// shaves the wings off the fill.
+  ///
+  /// Applied SYMMETRICALLY at every site — a window built from a measured [mz1, mz2] is
+  /// (mz2 - mz1) + 2 * this value, i.e. 0.8 Th wider than the span, never 0.4.
+  ///
+  /// It lives here because peakGroupNotchCandidates below already takes it as @p margin and every
+  /// other consumer must agree with it. It previously existed as THREE independent TU-local copies —
+  /// ScanCommandQueue.cpp, PrecursorSelection.cpp, and FragmentAnalysis.cpp's anonymous namespace —
+  /// all .4, with nothing keeping them in step. Their silent divergence from Exploration's
+  /// un-margined window (Exploration.cpp:143-145 takes the bare PeakGroup span) is the defect
+  /// ADR-0026 decision 2 fixes: the interval a metric SUMS must be the interval the instrument was
+  /// told to ISOLATE.
+  ///
+  /// The margin is also the window FLOOR. A charge resolved at a single isotope has mz2 == mz1, so
+  /// without it the commanded isolation_width is 0 and first_mass == last_mass == precursor_mz —
+  /// both positive, which FlashIDA/src/Flash/ScanFactory.cs:245-247 sends to the instrument as a
+  /// zero-width "DefineMZRange".
+  inline constexpr double optimal_window_margin_ = 0.4;
+
   /// Every observed charge of one MS1 PeakGroup, as notch candidates with MEASURED geometry.
   ///
   /// Shared by PrecursorSelection (which records the acquired set for charge-keyed exclusion) and
@@ -108,8 +130,8 @@ namespace OpenMS
   /// actually isolated — two independent walks of the same PeakGroup is exactly how the exclusion
   /// side and the geometry side would drift apart.
   ///
-  /// @p margin is ScanCommandQueue's optimal_window_margin_, applied symmetrically as it is for the
-  /// anchor stage, so a notch's width is computed the same way the cascade stage's is.
+  /// @p margin is optimal_window_margin_ above, applied symmetrically as it is for the anchor stage,
+  /// so a notch's width is computed the same way the cascade stage's is.
   inline std::vector<NotchCandidate> peakGroupNotchCandidates(const PeakGroup& pg, double margin)
   {
     std::vector<NotchCandidate> cands;

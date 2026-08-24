@@ -33,6 +33,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHExtenderAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
@@ -55,9 +56,6 @@ namespace OpenMS
 // Anonymous namespace for fragment analysis helper functions
 namespace
 {
-  /// optimal window margin
-  inline const double optimal_window_margin_ = .4;
-
   /// Get ion type mass shift for N-terminal (prefix) ions
   /// Uses Residue class methods for consistency with FLASHTnT
   inline double getPrefixIonShift(const String& ion_type)
