@@ -611,7 +611,7 @@ namespace OpenMS
             // the RT map and the emit loop below must all record the same set.
             //
             // The anchor is `charge` AFTER inclusion-mode target matching may have reassigned it
-            // (:520) -- selectNotches drops the anchor from its output, so a stale anchor would emit
+            // (:485) -- selectNotches drops the anchor from its output, so a stale anchor would emit
             // the matched charge twice.
             std::vector<int> acquired_charges{charge};
             if (config_.targeting().precursor_charges != ChargeAcquisitionMode::Single)
@@ -657,7 +657,7 @@ namespace OpenMS
             }
 
             // Store acquisition. "separate" emits the acquisition charge set as one record PER charge
-            // -- each its own Precursor with its own precursor_id (Config.h:80) -- while single and
+            // -- each its own Precursor with its own precursor_id (Config.h:82) -- while single and
             // multiplexed emit exactly one, byte-identically to before.
             //
             // The mass-level bookkeeping above stays deliberately OUTSIDE this loop. It ran once for
@@ -677,7 +677,7 @@ namespace OpenMS
               const int emit_charge = emit_per_charge ? acquired_charges[ei] : charge;
 
               // The anchor keeps the geometry computed above: inclusion-mode target matching may have
-              // recomputed mz1/mz2/center_mz for a matched charge (:521-525), and recomputing here
+              // recomputed mz1/mz2/center_mz for a matched charge (:486-489), and recomputing here
               // would silently discard that. Siblings measure their own window the same way, margin
               // included, so every emitted record carries MEASURED geometry.
               double e_mz1 = mz1, e_mz2 = mz2, e_center_mz = center_mz;

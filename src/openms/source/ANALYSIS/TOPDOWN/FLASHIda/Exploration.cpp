@@ -34,6 +34,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Exploration.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
 
 #include <OpenMS/DATASTRUCTURES/ListUtils.h>
@@ -142,13 +143,13 @@ namespace OpenMS
     // range by optimal_window_margin_ per side before commanding it (ScanCommandQueue.cpp:291-295), so
     // an MS2 group's window is (mz2 - mz1) + 2 * margin -- 0.8 Th WIDER than the bare PeakGroup span
     // this used to take. The 2.0 Th minimum applies to MS3+ fragment isolation only (buildMS3 stage[1]
-    // re-floors identically at ScanCommandQueue.cpp:450).
+    // re-floors identically at ScanCommandQueue.cpp:451).
     //
     // MS2-ONLY, AND THE MARGIN GOES BEFORE THE FLOOR:
     //   - buildMS3 applies NO margin, and Exploration passes its own isolation_width straight into
     //     buildMS3. Widening at MS3 would therefore RE-CREATE the same disagreement in the other
     //     direction *and* change the commanded MS3 width, moving three exploration golden modes.
-    //   - FLASHIda_exploration_test.cpp:2923 pins TEST_REAL_SIMILAR(group.isolation_width, 2.0) on the
+    //   - FLASHIda_exploration_test.cpp:2926 pins TEST_REAL_SIMILAR(group.isolation_width, 2.0) on the
     //     MS3 floor. Applying the margin AFTER the floor gives 2.8 and breaks it; applying it BEFORE
     //     gives max(0.8, 2.0) == 2.0 -- harmless but pointless. MS2-only is the correct scope.
     //   - The CENTRE needs no correction: buildMS2 computes (mz1 + mz2) / 2 BEFORE applying the margin
@@ -218,38 +219,38 @@ namespace OpenMS
 
     // ADR-0026: a RemainingPrecursor sweep acquires only the window it reads. The metric scores a variant
     // from raw peak intensity inside [precursor_mz +/- isolation_width/2] and discards everything else the
-    // pre-scan returned (precursorWindowIntensity_, :1192). On an ion trap scan time is proportional to the
+    // pre-scan returned (precursorWindowIntensity_, :1215). On an ion trap scan time is proportional to the
     // m/z range swept, so a 200-2000 Th pre-scan pays ~900x the time of the ~2 Th it actually sums. Written
     // onto base_config, which is what makes it reach the CE-0 baseline for free: the baseline is
-    // variant_params[0] (inserted at :138) and takes the same unconditional `variant_config = base_config`
-    // at :251 as every other variant. Required, not incidental -- a full-range trap fill and a narrow trap
+    // variant_params[0] (inserted at :139) and takes the same unconditional `variant_config = base_config`
+    // at :274 as every other variant. Required, not incidental -- a full-range trap fill and a narrow trap
     // fill are not comparable denominators for the ratio.
     //
     // GATED ON group.exploration_metric, NEVER ON cfg.exploration. The two differ on exactly one input: the
-    // ADR-0023 forcing at :176-178, where an exhaustive-mode unassigned mass (ion class 'u', which fails
+    // ADR-0023 forcing at :199-201, where an exhaustive-mode unassigned mass (ion class 'u', which fails
     // MS3FragmentMatcher::isKnownIonClass) is dragged onto RemainingPrecursor whatever the config asked for.
     // A CONFIGURED sweep is guaranteed its full-range re-acquisition by ADR-0026 decision 3, which rejects
     // `remaining_precursor` with an empty `overrides` map at config load. The FORCED sweep has no config
     // entry to carry that guarantee and needs none, because it is safe BY CONSTRUCTION:
     //     force fires  =>  msn_level >= 3  AND  metric == RemainingPrecursor (a measuring metric)
-    //                  =>  measuring_ms3_sweep (the gate at :725)
+    //                  =>  measuring_ms3_sweep (the gate at :748)
     //                  =>  ADR-0020 gate #2 fires => full-range production scan re-acquires.
     // The force's own precondition IS gate #2's condition, and the metric it forces is measuring by
-    // definition. MS3 is also terminal at the `< 3` MS4 wall (:794), so a narrowed MS3 pre-scan has no
+    // definition. MS3 is also terminal at the `< 3` MS4 wall (:817), so a narrowed MS3 pre-scan has no
     // cascade to strand -- "a window-only spectrum yields zero next-level targets" is an MS2-only hazard,
     // and at MS2 the config rejection is what covers it.
     // DO NOT "fix" the asymmetry by adding a third config rejection: the forced path has no config entry to
     // reject, and rejecting the exhaustive mode that triggers it would delete ADR-0023.
     //
     // THE SUPPRESSION TEST READS cfg.overrides AND NEVER base_config, and that is not a shortcut.
-    // applyOverrides already ran at :128, and an authored ms_settings.msN.first_mass lands in the SAME
+    // applyOverrides already ran at :129, and an authored ms_settings.msN.first_mass lands in the SAME
     // ScanConfig field (Config.cpp:130-131) with the SAME 0 default (Config.h:124) -- so
     // `base_config.first_mass != 0` cannot tell an exploration override apart from a plain scan-config
     // value, and would suppress the binding for every level whose scan config happens to name a range.
     // Only the raw map separates them (ADR-0026 decision 5: an explicit range wins, quietly).
     //
     // Nothing here reaches the post-winner production scan: that one is rebuilt from level_config.scans[0]
-    // (:728), never from base_config, so it keeps its configured full range. Deliberate -- it is the one
+    // (:751), never from base_config, so it keeps its configured full range. Deliberate -- it is the one
     // acquisition of the group that is meant to be identified.
     if (group.exploration_metric == ExplorationMetric::RemainingPrecursor
         && cfg.overrides.find("first_mass") == cfg.overrides.end()
@@ -359,7 +360,7 @@ namespace OpenMS
     // fragment list, that thins the target set with nothing anywhere reading wrong.
     //
     // This mirrors the two regular return paths, which already call maxIsolatedCharge
-    // (FLASHIda.cpp:332 for MS2, :532 for MS3); the exploration path was the one that did not, and it
+    // (FLASHIda.cpp:330 for MS2, :526 for MS3); the exploration path was the one that did not, and it
     // is the only deconvolveMSn in this file -- it serves MS2 *and* MS3 variants. The LAST cascade
     // stage is the one that fragmented, so stage 0 for an MS2 variant and stage 1 for an MS3 variant.
     //
@@ -938,7 +939,7 @@ namespace OpenMS
     // RENDER context (build time): the TRIGGERING scan's frag_result, NOT the (unfinalized) winner. At
     // MS2/next-level build time the winner is not yet finalized, so buildWinnerProteoformContext would
     // return an empty context -> fragmentProForma renders "" (empty/collapsed ms3_proteoform). This one
-    // source flows to group.proteoform_ctx (:164), the three buildMS3 ms3_proteoform renders and the
+    // source flows to group.proteoform_ctx (:215), the three buildMS3 ms3_proteoform renders and the
     // cached MS2Context. Winner SCORING is decoupled: the returning MS3 (FLASHIda.cpp) and the completed
     // exploration group (below) score against a fresh buildWinnerProteoformContext instead.
     MS3FragmentMatcher::ProteoformContext proto_ctx;

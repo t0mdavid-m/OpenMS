@@ -353,8 +353,8 @@ namespace OpenMS
     targeting_.tie_threshold = ps.value("tie_threshold", 0.1);
 
     // targeting: int -> string enum. Values map to the CODE, not the doc comments -- 2 is in-depth
-    // and 3 is exclusion (PrecursorSelection.cpp:138-141 logs exactly that), while MethodConfig.cs,
-    // Config.h and PrecursorSelection.cpp:564 all had 2 and 3 the wrong way round.
+    // and 3 is exclusion (PrecursorSelection.cpp:136-139 logs exactly that), while MethodConfig.cs,
+    // Config.h and PrecursorSelection.cpp:544-546 all had 2 and 3 the wrong way round.
     // Rejected rather than defaulted: an unknown value used to fall through silently.
     {
       const std::string t = ps.value("targeting", std::string("none"));
@@ -719,7 +719,7 @@ namespace OpenMS
       cfg.rt_max = e.value("reaction_time_max", 0.0);
       cfg.rt_step = e.value("reaction_time_step", 1.0);
       // First-class now. It used to be smuggled through the overrides map and then ERASED from it
-      // at this point -- before Exploration.cpp:605 tested that same map for emptiness to decide
+      // at this point -- before Exploration.cpp:749 tested that same map for emptiness to decide
       // whether to acquire the production scan, so a tolerance-only map silently suppressed a scan.
       // 0 means "use deconvolution.tol for this level"; resolved just below.
       cfg.exploration_tolerance_ppm = e.value("tolerance_ppm", 0.0);
@@ -813,7 +813,7 @@ namespace OpenMS
   {
     // ---- LEVEL 1 ----
     // Do not remove. MSLevelConfig::selection defaults to None, so if level 1 is left unassigned
-    // FLASHIda.cpp:168 short-circuits before MS1 selection and the run acquires NOTHING at all,
+    // FLASHIda.cpp:169-170 short-circuits before MS1 selection and the run acquires NOTHING at all,
     // silently. This is the only level whose selection VALUE is read (PrecursorSelection.cpp:246
     // picks sortByIntensity vs sortByQscore); at levels 2 and 3 only None-vs-non-None matters.
     if (rank_by == "qscore") levels_[1].selection = SelectionMetric::QScore;
@@ -827,8 +827,8 @@ namespace OpenMS
     levels_[1].min_charge = min_precursor_charge;
 
     // ---- LEVELS 2 AND 3 ----
-    // MS3 requires BOTH gates non-None: FLASHIda.cpp:366 and Exploration.cpp:728 test level 2,
-    // Exploration.cpp:730 tests level 3. Driving both from one enum is what makes the incoherent
+    // MS3 requires BOTH gates non-None: FLASHIda.cpp:368 and Exploration.cpp:903 test level 2,
+    // Exploration.cpp:905 tests level 3. Driving both from one enum is what makes the incoherent
     // states (MS3 on with MS2 off) unrepresentable rather than merely discouraged.
     //
     // Intensity is the value used when on: intensity and qscore share a case in
@@ -842,7 +842,7 @@ namespace OpenMS
     levels_[3].selection = on ? SelectionMetric::Intensity : SelectionMetric::None;
 
     // The MS3 budget and fragment-charge floor are read off level 2
-    // (ProteoformTracker.cpp:354, Exploration.cpp:733/:800) because level-2 selection is what
+    // (ProteoformTracker.cpp:455, Exploration.cpp:908/:981) because level-2 selection is what
     // produces level-3 targets. They are AUTHORED in characterization, where they belong.
     levels_[2].max_targets = characterization_.max_targets;
     levels_[2].min_charge = characterization_.min_fragment_charge;
@@ -911,13 +911,26 @@ namespace OpenMS
     // (Exploration::precursorWindowIntensity_) and its winner is ALWAYS re-acquired by a production
     // scan built from the un-overridden config, so its pre-scans are throwaway measurements --
     // which is why ADR-0026 narrows their scan range to exactly that window. The narrowing leaves an
-    // MS2 pre-scan with no fragments in it, and an MS2 exploration group with EMPTY overrides
-    // cascades by feeding initiateNextLevel the winning variant's deconvolved spectrum: that
-    // narrowed spectrum would yield ZERO MS3 targets, with no throw and no warning -- only
-    // `[MS3-PLAN] no_containing_fragment` and a user concluding their protein did not fragment.
-    // Requiring non-empty overrides is the STATIC form of ADR-0020 gate #1: the production
-    // re-acquisition that makes narrowing safe is then guaranteed by the schema rather than by the
-    // author's habit of writing an analyzer override anyway.
+    // MS2 pre-scan with no fragments in it, so the winning variant's deconvolved spectrum is a
+    // useless MS3 target list.
+    //
+    // This rejection does NOT protect the MS2->MS3 cascade -- it REPLACES its source. Exploration's
+    // post-winner handling is ONE if/else chain: `!level_config.overrides.empty() ||
+    // measuring_ms3_sweep` takes the production re-acquisition, and the cascade is that same chain's
+    // `else if (group.msn_level < 3)` arm, so the two are mutually exclusive. Forcing every MS2
+    // remaining_precursor config to carry non-empty overrides makes the first condition
+    // unconditionally true at MS2, which makes the cascade arm structurally UNREACHABLE for them.
+    // That is the intended outcome, not collateral: rather than cascading off a window-only
+    // spectrum, MS3 is dispatched off the FULL-RANGE production re-acquisition -- it is not an
+    // exploration variant, so it returns on the regular MS2 path and cascades from the stored MS2
+    // spectrum like any other MS2. A better cascade source, one scan later.
+    //
+    // Without the rejection, empty overrides fail BOTH conditions -- measuring_ms3_sweep is level-3
+    // only -- so the cascade arm does run, off the narrowed spectrum, and yields ZERO MS3 targets
+    // with no throw and no warning: only `[MS3-PLAN] no_containing_fragment` and a user concluding
+    // their protein did not fragment. Requiring non-empty overrides is the STATIC form of ADR-0020
+    // gate #1: the production re-acquisition that makes narrowing safe is guaranteed by the schema
+    // rather than by the author's habit of writing an analyzer override anyway.
     for (const auto& [lvl, cfg] : levels_)
     {
       // levels_ always holds {1,2,3} (Config.cpp:755), but an exploration block is parsed for levels 2
@@ -927,13 +940,23 @@ namespace OpenMS
       // it. A guard, not dead code.
       if (lvl < 2) continue;
 
-      // The level-3 arm applies only when MS3 actually runs. parseExploration writes
-      // levels_[3].exploration unconditionally (Config.cpp:746) and applyCharacterizationMode_ resets
-      // only `selection`, so a leftover characterization.exploration block outlives
-      // characterization.mode == "off". Rejecting on it would make that leftover a LOAD ERROR for a
-      // run that emits no MS3 and narrows no pre-scan, breaking ADR-0013's promise that toggling MS3
-      // off stays a one-word edit -- under "off" the MS3 keys are carried and never read. Level 2 is
-      // deliberately not guarded: an MS2 sweep runs whatever characterization.mode says.
+      // The level-3 arm applies only when MS3 actually runs. parseExploration returns early when a
+      // section carries no "exploration" key, so levels_[3].exploration is written whenever that block
+      // is PRESENT (Config.cpp:746) -- and nothing afterwards clears it, because
+      // applyCharacterizationMode_ resets only `selection`. A leftover characterization.exploration
+      // block therefore outlives characterization.mode == "off". Rejecting on it would make that
+      // leftover a LOAD ERROR for a run that emits no MS3 and narrows no pre-scan, breaking ADR-0013's
+      // promise that toggling MS3 off stays a one-word edit -- under "off" the MS3 keys are carried and
+      // never read. Level 2 is deliberately not guarded: an MS2 sweep runs whatever
+      // characterization.mode says.
+      //
+      // That promise is NOT upheld tree-wide, and the asymmetry is known rather than an oversight: the
+      // FragmentCount / protein_sequence rejection a few loops above carries no such guard, so
+      // `characterization: { mode: "off", exploration: { metric: "fragment_count" } }` with an empty
+      // protein_sequence still throws at load. The guard is applied HERE because THIS rejection is new
+      // with ADR-0026 and gets to be born correct; the FragmentCount check predates it, and widening an
+      // existing rejection's guard is a behaviour change to configs that load today -- out of scope for
+      // ADR-0026, not a claim that it is right.
       if (lvl == 3 && characterization_.mode == CharacterizationMode::Off) continue;
 
       const std::string sect = (lvl == 2 ? "precursor_selection" : "characterization");

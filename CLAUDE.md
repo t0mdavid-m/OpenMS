@@ -346,7 +346,7 @@ the caller's responsibility.
 | Stream | Cols | Role |
 |---|---|---|
 | `ida.log` | — | free-text MS1 summary (not a TSV) |
-| `scan_commands.tsv` | 32 | one row per **dequeued** command; the wide MS3-fragment stream |
+| `scan_commands.tsv` | 34 | one row per **dequeued** command; the wide MS3-fragment stream (32→34 ADR-0026 `first_mass`/`last_mass`, between `faims_enabled` and the trailing `enqueue_ts`) |
 | `scan_results.tsv` | 29 | pure acquisition-**event** log per `processScan` (34→29 identification payload moved out, →28 per-charge deconv restructure, →29 `deconv_qscores`) |
 | `identification.tsv` | 32 | per-scan MS2/MS3 identification leaf |
 | `pooled_identification.tsv` | 19 | per-precursor cumulative proteoform trajectory |

@@ -111,10 +111,16 @@ namespace OpenMS
   /// It lives here because peakGroupNotchCandidates below already takes it as @p margin and every
   /// other consumer must agree with it. It previously existed as THREE independent TU-local copies —
   /// ScanCommandQueue.cpp, PrecursorSelection.cpp, and FragmentAnalysis.cpp's anonymous namespace —
-  /// all .4, with nothing keeping them in step. Their silent divergence from Exploration's
-  /// un-margined window (Exploration.cpp:143-145 takes the bare PeakGroup span) is the defect
-  /// ADR-0026 decision 2 fixes: the interval a metric SUMS must be the interval the instrument was
-  /// told to ISOLATE.
+  /// all .4, with nothing keeping them in step. Exploration used none of the three: it took the bare
+  /// PeakGroup span (Exploration.cpp:164-168), so the window an exploration metric SUMMED came out
+  /// 0.8 Th narrower than the one buildMS2 COMMANDED for the very same precursor, and every score
+  /// was computed over an interval the instrument was never asked to isolate. ADR-0026 decision 2
+  /// closed that gap: the copies were collapsed onto this symbol and Exploration was given it too.
+  ///
+  /// The invariant that holds now, at MS2: the interval a metric sums and the interval the
+  /// instrument was told to isolate are the SAME interval. A fourth copy, or a consumer reaching for
+  /// the bare span again, reopens the gap silently — such scores stay perfectly plausible, they just
+  /// describe a window that was never acquired.
   ///
   /// The margin is also the window FLOOR. A charge resolved at a single isotope has mz2 == mz1, so
   /// without it the commanded isolation_width is 0 and first_mass == last_mass == precursor_mz —
