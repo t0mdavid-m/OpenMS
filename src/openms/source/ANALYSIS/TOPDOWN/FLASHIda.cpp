@@ -363,9 +363,15 @@ FLASHIda::FLASHIda(char* arg) :
           commands_pushed++;
         }
 
-        // MS3 targeting, gated by characterization.mode (projected onto level(2).selection)
+        // Identification + MS3 targeting, gated by the SEQUENCE rather than by characterization.mode.
+        // initiateNextLevel owns both, and it decides internally which of the two it performs: with mode
+        // off it matches fragments and returns no commands, with mode on it also dispatches MS3. Gating
+        // the CALL on level(2).selection (i.e. on mode) meant an MS2 in a mode: off run was never
+        // identified at all -- no sequence tags, no fragments, no identification.tsv row.
+        // The identification-row write below sits OUTSIDE this block deliberately and reads
+        // ms3_targeting, which stays default-constructed when the call is skipped.
         Exploration::NextLevelResult ms3_targeting;
-        if (config_.level(2).selection != SelectionMetric::None)
+        if (!config_.characterization().protein_sequence.empty())
         {
           // initiateNextLevel stamps each command's parent with the MS2 id (parent_ctx.scan_id) at creation.
           // It serves BOTH MS3 shapes, chosen by config_.hasExploration(3): with MS3 exploration off it
