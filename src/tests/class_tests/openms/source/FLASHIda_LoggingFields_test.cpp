@@ -191,7 +191,10 @@ START_SECTION(schema_column_counts)
   auto r = TSVFile::parse(dir + "/scan_results.tsv");
   auto i = TSVFile::parse(dir + "/identification.tsv");
 
-  TEST_EQUAL(c.headers.size(), 32)   // E6: + scan_description; P5: + precursor_id; + ms3_proteoform (wide MS3 fragment); ADR-0012: + faims_enabled
+  TEST_EQUAL(c.headers.size(), 34)   // E6: + scan_description; P5: + precursor_id; + ms3_proteoform (wide MS3 fragment); ADR-0012: + faims_enabled;
+                                     // ADR-0026 d6: + first_mass/last_mass (32 -> 34). Inserted between faims_enabled and
+                                     // enqueue_ts, so every c.colIndex pinned below and c.headers.back() are unchanged --
+                                     // that they still pass IS the proof the insertion point was the only admissible one.
   // E5: + ms_level; F5: + winner_tracking_id; slim-down: -5 id-payload cols (34->29); per-charge
   // deconv output replaced 4 columns (masses/intensities/min_charge/max_charge) with 3
   // (masses/charges/intensities), min and max being derivable from the charge list (29->28); then
@@ -846,7 +849,7 @@ START_SECTION(results_ms1_deconv_qscore_order)
   // FIXTURE, and it must stay this one: buildJsonWithLogDir(dir) takes the DEFAULT enable_ms3 = false,
   // which gives targeting "none" and an EMPTY inclusion list. Passing `true` selects "inclusion" with
   // ../../FlashIDA/test-data/configs/inclusion_cytc.txt, whose priority-1 entry for mass 12351.3 makes
-  // target_priority_map_ non-empty; the std::stable_sort at PrecursorSelection.cpp:262-276 then re-orders
+  // target_priority_map_ non-empty; the std::stable_sort at PrecursorSelection.cpp:261-272 then re-orders
   // any pair whose qscores differ by less than tie_threshold (0.1) by target priority, LEGITIMATELY
   // breaking monotonicity. So do not "helpfully" switch this section to the MS3 recipe -- under it the
   // assertion below would be wrong about the engine, not the other way round. The config's
@@ -1389,11 +1392,11 @@ START_SECTION(exclusion_mode2_tqscore_suppresses_target_mass)
   ABORT_IF(ms1.empty() || ms2.empty())
 
   // target_logs + max_targets vary. tqscore_threshold is read from deconvolution.tqscore_threshold
-  // (Config.cpp:98) = 0.9; rt_window 180 >> the tiny ecoli RTs, so every target-log observation is within
+  // (Config.cpp:302) = 0.9; rt_window 180 >> the tiny ecoli RTs, so every target-log observation is within
   // window of every survey scan.
   auto cfg = [](int mode, int max_targets, const std::string& target_log_json) {
     // target_mode was an int; targeting is a string enum. Mapped from the CODE
-    // (PrecursorSelection.cpp:138-141): 2 is in-depth and 3 is exclusion, which is the reverse of
+    // (PrecursorSelection.cpp:136-139): 2 is in-depth and 3 is exclusion, which is the reverse of
     // what the old doc comments claimed.
     const char* targeting = mode == 1 ? "inclusion"
                           : mode == 2 ? "in_depth"
@@ -1732,7 +1735,7 @@ START_SECTION(ida_log_multi_scan_distinct_keys)
 
   const std::string dir = freshLogDir("lf_l2");
   // Selecting config: a standard-DDA "none" config (enable_ms3=false) logs every MS1 as "0 targets",
-  // which parseFLASHIdaLog (FLASHIda.cpp:595) skips -> no log groups. enable_ms3=true gives ms2
+  // which parseFLASHIdaLog (IdaLogger.cpp:816) skips -> no log groups. enable_ms3=true gives ms2
   // selection="intensity" + inclusion, so each MS1 selects >=1 precursor -> a NON-empty log group.
   std::string json = buildJsonWithLogDir(dir, true);
   FLASHIda ida(const_cast<char*>(json.c_str()));

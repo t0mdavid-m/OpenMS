@@ -92,6 +92,16 @@ namespace OpenMS
                              // column (FLASHIda_LoggingFields_test asserts headers.back()), and
                              // every scan_commands column index pinned by that test is < 29.
                              << "faims_enabled\t"
+                             // ADR-0026 decision 6: the acquired scan range. Without it a scan whose range was BOUND
+                             // to its isolation window and one whose range was hand-overridden in ms_settings emit
+                             // byte-identical rows, so the escape hatch is undetectable from a run folder. Logged for
+                             // EVERY command, not only exploration ones. 0 is a real value here -- "unset, use the
+                             // instrument method default" -- and is deliberately not suppressed.
+                             // Placed between faims_enabled and enqueue_ts for the same forced reason as faims_enabled
+                             // above: FLASHIda_LoggingFields_test pins headers.back() == "enqueue_ts" and pins six
+                             // scan_commands column indices, all <= 30, so slots 31/32 are the only pair of positions
+                             // that satisfies both.
+                             << "first_mass\tlast_mass\t"
                              << "enqueue_ts\n";
         commands_tsv_stream_.flush();
       }
@@ -339,6 +349,14 @@ namespace OpenMS
     auto sci = [&](int v0, int v1) {
       std::ostringstream os; os << v0; if (cmd.msn_level == 3) { os << ';' << v1; } return os.str();
     };
+    // Scan-range bounds, formatted through a LOCAL stream like sc()/sci() above and for the same reason:
+    // std::fixed/setprecision are STICKY, and commands_tsv_stream_ is deliberately left at the stream default,
+    // so setting them on it here would reformat faims_cv on every SUBSEQUENT row (0 -> 0.0000) and move goldens
+    // for all 22 modes. The default is not sufficient on its own either: defaultfloat gives 6 SIGNIFICANT
+    // figures, so an isolation-bound edge of 1236.625 prints as "1236.62" -- 0.005 Th gone, which is exactly
+    // the resolution a reader needs to tell a bound window from a hand-override. fixed+4 holds 4 decimals at
+    // any m/z in range.
+    auto mz = [](double v) { std::ostringstream os; os << std::fixed << std::setprecision(4) << v; return os.str(); };
     commands_tsv_stream_ << id_str << "\t"
                          << scan_type << "\t"
                          << cmd.msn_level << "\t"
@@ -370,6 +388,8 @@ namespace OpenMS
                          << cmd.scan_description << "\t"  // E6: raw descriptor (tab/newline-free by construction)
                          << cmd.faims_cv << "\t"
                          << cmd.faims_enabled << "\t"     // 0/1; disambiguates CV 0 from no FAIMS
+                         << mz(cmd.first_mass) << "\t"    // ADR-0026 d6: 0 = unset (instrument method default), a real value
+                         << mz(cmd.last_mass) << "\t"
                          << cmd.enqueue_timestamp_ms << "\n";
     commands_tsv_stream_.flush();
   }
