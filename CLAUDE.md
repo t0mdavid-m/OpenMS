@@ -420,7 +420,7 @@ loop.** That bookkeeping runs once per species and both its guards
 `separate` by making the candidate loop multi-charge will reproduce the original bug.
 
 **The MS3 side needs the fragment's whole envelope, and getting it there is the part that broke.**
-`ProteoformTracker::stageScan` flattens each fragment PeakGroup to `getMaxIntensityAbsCharge()` for the
+`ProteoformTracker::feedScan` flattens each fragment PeakGroup to `getMaxIntensityAbsCharge()` for the
 representative fields, and *also* stores every present charge as a `ChargeRecord` in
 `PeakRecord::by_charge`; `upsertMappedObservation_` fills `ms2_by_charge` from that. Without the
 envelope, `ms2_by_charge` held one entry per fragment per scan and `characterization.fragment_charges`
