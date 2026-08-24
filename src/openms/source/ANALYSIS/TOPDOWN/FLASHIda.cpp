@@ -330,14 +330,16 @@ FLASHIda::FLASHIda(char* arg) :
         int precursor_charge = maxIsolatedCharge(parent_ctx, 0);
         deconv_.deconvolveMSn(mzs, ints, length, rt_min, precursor_mass, precursor_charge);
 
-        // Tag-based targeting
+        // Tag-based targeting. processMS2ForTagBasedTargeting returns how many tags matched the FASTA
+        // target database, but nothing consumes that as a COUNT -- it is a gate, and the only question
+        // asked of it is whether a target protein was detected. It is also 0 whenever tags existed but
+        // matched no DB protein, which is why it is not the number any log reports; the identification
+        // tag count on ProteoformMatch is, and that one is taken before any protein is consulted.
         bool tags_found = false;
-        int tags_count = 0;   // real sequence-tag count (logged as tag_count, and cached for MS3 rows)
         if (selection_.hasTargetProteinDatabase() && precursor_mass > 0)
         {
           std::string ms2_activation = std::string(parent_ctx.stages[0].activation_type);
-          tags_count = selection_.processMS2ForTagBasedTargeting(precursor_mass, ms2_activation);
-          tags_found = tags_count > 0;
+          tags_found = selection_.processMS2ForTagBasedTargeting(precursor_mass, ms2_activation) > 0;
         }
 
         // Quantification follow-up (independent of tags)
@@ -390,10 +392,6 @@ FLASHIda::FLASHIda(char* arg) :
           {
             if (ms3_targeting.commands[ci].msn_level >= 3 && ci < ms3_targeting.ms3_contexts.size())
             {
-              // Carry the parent MS2's identification tag count (real when a proteoform matched) to its
-              // MS3 rows — not the FASTA-DB-gated tags_count, which is 0 unless a tag-targeting DB is loaded.
-              ms3_targeting.ms3_contexts[ci].tag_count = (!ms3_targeting.proteoform_match.fragments.empty())
-                  ? ms3_targeting.proteoform_match.tag_count : tags_count;
               ms2_context_cache_[ms3_targeting.commands[ci].scan_id] = ms3_targeting.ms3_contexts[ci];
             }
           }
