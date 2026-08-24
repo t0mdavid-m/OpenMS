@@ -900,17 +900,27 @@ namespace OpenMS
     int next_level = msn_level + 1;
     const auto& this_cfg = config_.level(msn_level);
     const auto& next_cfg = config_.level(next_level);
-    if (this_cfg.selection == SelectionMetric::None) return nlr;
-    if (this_cfg.scans.empty() || next_cfg.scans.empty()
-        || next_cfg.selection == SelectionMetric::None) return nlr;
-
     const auto& seq = config_.characterization().protein_sequence;
+
+    // Identification is gated by the SEQUENCE, not by characterization.mode. The four conditions that
+    // used to bail here gate MS3 DISPATCH, and they are re-asserted below, immediately above the
+    // next_cfg.scans[0] read they protect. Bailing on them HERE cost every "mode": "off" run its whole
+    // identification payload -- no sequence tags, no fragment matches, no identification.tsv row at all --
+    // because this function owns identification as well as MS3 target selection, and the former sits above
+    // the latter. With no sequence there is nothing to match against, so that is the honest gate.
+    if (seq.empty()) return nlr;
+
     int num_targets = this_cfg.max_targets;
 
-    // Extract activation type from the scan command that produced this result
+    // Extract activation type from the scan command that produced this result.
+    // The fallback indexes this_cfg.scans[0], which the entry gate above used to guard. On both reachable
+    // paths it is still non-empty -- validate() requires ms_settings.ms2 whenever level 1 selects, and an
+    // MS3 group can only exist once dispatch has run, which requires ms_settings.ms3 -- but that is a
+    // three-step reachability argument standing where an explicit guard used to be, so keep it explicit.
+    // Same value on every path that reaches it; this only refuses to read past the end of an empty list.
     std::string scan_activation = (ms_ctx != nullptr && ms_ctx->num_stages > 0)
         ? std::string(ms_ctx->stages[0].activation_type)
-        : config_.level(msn_level).scans[0].activation;
+        : (this_cfg.scans.empty() ? std::string() : this_cfg.scans[0].activation);
 
     // Get fragment ion targets. The SELECTION already lives on ProteoformTracker
     // (selectNextLevelTargets, below); what remains here is the out-parameter marshalling it inherited
@@ -931,7 +941,16 @@ namespace OpenMS
 
     // #46: the metric->matcher selection switch now lives in ProteoformTracker::selectNextLevelTargets
     // (byte-identical: same matcher, same args). Behavior fixes (bail-early / num_targets bound) are deferred.
-    found = ProteoformTracker::selectNextLevelTargets(fragments_, next_cfg.selection, seq, num_targets,
+    // selectNextLevelTargets chooses its matcher by switching on the NEXT level's metric, and its default
+    // arm returns 0 without calling one. Config projects characterization.mode onto that metric, so under
+    // "mode": "off" it is None -- the switch falls to default and matches nothing. Relaxing the entry gate
+    // above therefore buys nothing on its own; the matcher has to be named explicitly. getTopFragmentMatches
+    // is the only matcher reachable from method.json since ADR-0014 deleted the chooser, and it is what
+    // every MS3-enabled config already resolves to, so this is a no-op wherever the metric is set.
+    const SelectionMetric matcher =
+        (next_cfg.selection == SelectionMetric::None) ? SelectionMetric::QScore : next_cfg.selection;
+
+    found = ProteoformTracker::selectNextLevelTargets(fragments_, matcher, seq, num_targets,
         masses.data(), qscores.data(), charges.data(),
         wstarts.data(), wends.data(),
         ion_types.data(), frag_indices.data(), result_copy, frag_result, scan_activation, 0.0, frag_scores.data());
@@ -975,6 +994,22 @@ namespace OpenMS
     }
 
     num_targets = std::min(num_targets, found);
+
+    // MS3 DISPATCH GATE -- the four conditions lifted off the entry gate at the top of this function.
+    //
+    // It sits HERE, and not one line lower, because the very next statement indexes next_cfg.scans[0]
+    // UNGUARDED. Config::validate requires an ms_settings.ms3 block only when characterization.mode != off,
+    // and its own comment calls the reverse case "the direction that segfaults". That validation covered
+    // this read only for as long as mode == off could never reach this function -- which is exactly what
+    // the relaxed entry gate changes. A "mode": "off" config with no ms_settings.ms3 block now arrives
+    // here, so the guard has to travel with the read rather than stay at the door.
+    //
+    // Everything ABOVE this line is measurement: fragment matching plus the report assembly that shapes it
+    // for the caller's log rows. Everything BELOW acquires. That is the whole seam -- identification is
+    // gated by the sequence, dispatch by the mode.
+    if (this_cfg.selection == SelectionMetric::None || next_cfg.selection == SelectionMetric::None
+        || this_cfg.scans.empty() || next_cfg.scans.empty())
+      return nlr;
 
     // Build commands for each selected fragment target
     ScanConfig next_scan_config = next_cfg.scans[0];
