@@ -18,9 +18,15 @@
 //   * MS3-exploration *result* rows and the metric-dependent identification 'E'-row MIXED
 //     behaviour are golden-locked in C# -- the single-group C++ driver stops at the first MS3
 //     command, so those rows are not reliably reachable here.
-//   * Exploration variant rows log tag_count==0 because no sequence tagging runs on CE-sweep
-//     variants; the >0 real-tag-count path (standard MS2/MS3) is plausibility-checked (>=0)
-//     here and golden-locked exactly in C#.
+//   * CORRECTED: sequence tagging DOES run on CE-sweep variants. This note used to claim the
+//     opposite -- that exploration variant rows carry tag_count==0 because no tagging happens on
+//     a variant -- and that is false in both directions. Exploration::computeExplorationScore_
+//     calls computeFragmentMatch_, which reaches FragmentAnalysis::runTagBasedFragmentMatching_
+//     via ProteoformTracker::identifyExplorationFragments and getTopFragmentMatches, and that
+//     sets ProteoformMatch::tag_count unconditionally, before the empty-tags early return and
+//     before any protein is consulted. Exploration variants have always had a real tag count; it
+//     was simply never logged, since tag_count was dropped from every stream in the scan_results
+//     slim-down. Nothing here was wrong about the OUTPUT -- only about the reason for it.
 
 #include <OpenMS/CONCEPT/ClassTest.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
@@ -679,7 +685,9 @@ START_SECTION(results_ms1_columns)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
-// §R2 -- scan_results.tsv : MS2-normal CE/activation/reaction (single stage) + tag_count
+// §R2 -- scan_results.tsv : MS2-normal CE/activation/reaction (single stage)
+//        (the "+ tag_count" this banner used to promise went out with the scan_results slim-down;
+//         the body below has checked no such column since, as its own note at the deconv block says)
 /////////////////////////////////////////////////////////////
 START_SECTION(results_ms2_normal_columns)
 {
@@ -726,9 +734,13 @@ START_SECTION(results_ms2_normal_columns)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
-// §I3 -- scan_results.tsv : matched (non-FASTA identification) rows log the REAL identification
-//        tag_count (>0, not the FASTA-gated 0) and a toProForma-rendered proteoform that MATCHES
-//        identification.tsv for the same tracking id. Locks I3 on the stable side; exact values in C#.
+// §I3 -- identification.tsv : the MS3 fragment-frame invariant on an inclusion-pinned cytC run.
+//        This banner used to promise a scan_results tag_count (>0, not the FASTA-gated 0) alongside a
+//        proteoform matching identification.tsv for the same tracking id. Neither survives: both columns
+//        left scan_results in the slim-down, as the body's own NOTE records. What the section actually
+//        locks now is that an MS3 row's proteoform is the FRAGMENT sub-sequence -- bare-residue count ==
+//        end_pos - start_pos. The START_SECTION name is left alone deliberately: it is this file's
+//        navigation index, and renaming it changes ctest output for no gain.
 /////////////////////////////////////////////////////////////
 START_SECTION(results_identification_tag_count_and_proforma)
 {
@@ -766,6 +778,68 @@ START_SECTION(results_identification_tag_count_and_proforma)
     int bare = 0; for (char c : pf) if (c >= 'A' && c <= 'Z') ++bare;   // strip [..]/(..) mod annotations
     TEST_EQUAL(bare, end - start)
   }
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// §ID1 -- identification runs with characterization OFF when a sequence is supplied.
+//
+// Exploration::initiateNextLevel owns identification AND MS3 target selection, with the former above the
+// latter, and it used to bail at its entry gate whenever characterization.mode was off. So "no MS3"
+// silently meant "no sequence tags, no fragment matches, no identification.tsv row". Identification is now
+// gated by characterization.protein_sequence; DISPATCH is still gated by mode.
+//
+// This section is the ONLY thing that observes that change. It is byte-identical on every golden mode --
+// the 9 mode: off modes carry an empty sequence and return at the new gate, and the 13 others already
+// identified -- so no golden can see it, and without this the whole engine change would be
+// indistinguishable from an empty commit.
+/////////////////////////////////////////////////////////////
+START_SECTION(identification_runs_when_mode_off_with_sequence)
+{
+  auto ms1 = loadTsvScans(CYTC_MS1);
+  auto ms2 = loadTsvScans(CYTC_MS2);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  const std::string dir = freshLogDir("lf_id1");
+  // The same inclusion-pinned cytC recipe §I3 drives, with exactly ONE key flipped: ambiguity -> off. The
+  // real protein_sequence stays, and so does ms_settings.ms3 (permitted-but-inert when off), so the only
+  // difference from a run that identifies today is the thing under test.
+  std::string json = buildJsonWithLogDir(dir, true);
+  const std::string from = "\"mode\": \"ambiguity\"";
+  const size_t at = json.find(from);
+  ABORT_IF(at == std::string::npos)   // recipe reshaped: the flip would silently be a no-op and §ID1 vacuous
+  json.replace(at, from.size(), "\"mode\": \"off\"");
+  TEST_TRUE(json.find("\"mode\": \"ambiguity\"") == std::string::npos)
+
+  FLASHIda ida(const_cast<char*>(json.c_str()));
+  runFullCycle(&ida, ms1, ms2);
+
+  // (1) Identification RAN. Fails if the entry gate was not relaxed -- and, just as importantly, if the
+  // matcher were left to selectNextLevelTargets' default arm, which returns 0 without calling a matcher
+  // when the next level's metric is None. mode: off projects exactly that None, so relaxing the gate
+  // without naming the matcher produces zero rows here and nothing else in the suite would notice.
+  auto idf = TSVFile::parse(dir + "/identification.tsv");
+  TEST_TRUE(idf.rows.size() > 0)
+
+  // (2) NO MS3 was dispatched. Fails if the dispatch conditions were DROPPED rather than moved down to
+  // the next_cfg.scans[0] read they protect.
+  auto cmds = TSVFile::parse(dir + "/scan_commands.tsv");
+  int ms3_cmds = 0;
+  for (const auto& row : cmds.rows)
+    if (cell(cmds, row, "ms_level") == "3") ms3_cmds++;
+  TEST_EQUAL(ms3_cmds, 0)
+
+  // (3) The pooled model was NOT built. Fails if the dispatch gate landed BELOW the pooled baseline
+  // (tracker feedScan + finalizeMS2) rather than above the scan-config read -- the one placement that
+  // still segfaults on a mode: off config carrying no ms_settings.ms3 block.
+  auto pooled = TSVFile::parse(dir + "/pooled_identification.tsv");
+  TEST_EQUAL(pooled.rows.size(), 0)
+
+  // (4) Every identification row is an MS2 row: with no MS3 acquired there is nothing else to identify.
+  bool all_ms2 = true;
+  for (const auto& row : idf.rows)
+    all_ms2 = all_ms2 && cell(idf, row, "ms_level") == "2";
+  TEST_TRUE(all_ms2)
 }
 END_SECTION
 
