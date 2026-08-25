@@ -347,8 +347,8 @@ the caller's responsibility.
 |---|---|---|
 | `ida.log` | — | free-text MS1 summary (not a TSV) |
 | `scan_commands.tsv` | 34 | one row per **dequeued** command; the wide MS3-fragment stream (32→34 ADR-0026 `first_mass`/`last_mass`, between `faims_enabled` and the trailing `enqueue_ts`) |
-| `scan_results.tsv` | 29 | pure acquisition-**event** log per `processScan` (34→29 identification payload moved out, →28 per-charge deconv restructure, →29 `deconv_qscores`) |
-| `identification.tsv` | 32 | per-scan MS2/MS3 identification leaf |
+| `scan_results.tsv` | 32 | pure acquisition-**event** log per `processScan` (34→29 identification payload moved out, →28 per-charge deconv restructure, →29 `deconv_qscores`; →32 the identification-YIELD block `tag_count`/`fragment_count`/`tic_coverage` after `remaining_ratio`) |
+| `identification.tsv` | 34 | per-scan MS2/MS3 identification leaf (32→34: `tag_count` beside `flash_extender_score`, `fragment_qscores` inside the aligned fragment-mass table) |
 | `pooled_identification.tsv` | 19 | per-precursor cumulative proteoform trajectory |
 
 - **Rows are written at dequeue**, from 3 sites inside `getNextScanCommand`, each under
