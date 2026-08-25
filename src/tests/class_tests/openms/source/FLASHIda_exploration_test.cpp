@@ -408,17 +408,18 @@ namespace
   // the injection at :1664.
   //
   // THE ONE BRANCH A NON-EMPTY MAP OPENS is ADR-0020 gate #1 -- `!level_config.overrides.empty() ||
-  // measuring_ms3_sweep` at Exploration.cpp:749 -- and it is unreached here. THREE sections driven off
-  // this fixture complete their group, and all three reach completion through the baseline_failed abort
-  // at Exploration.cpp:435-438, which takes the `group.baseline_failed || best_idx < 0` arm at :684 and
-  // returns before the gate is ever evaluated:
-  //   * remaining_precursor_empty_baseline_aborts_group and
-  //     remaining_precursor_inflight_child_after_abort_is_noop -- aborts by construction, on a raw
-  //     baseline whose peaks all sit outside the isolation window.
-  //   * remaining_precursor_score_no_raw_data -- NOT an abort section by name or by intent. It feeds all
-  //     SIX variants and asserts activeGroupCount() == 0, and it lands on the same arm only because
-  //     ExplorationTestAccess::feedResult hands feedResultImpl_ mzs == ints == nullptr, so
-  //     precursorWindowIntensity_ short-circuits to 0.0 (Exploration.cpp:1215-1219) and the baseline
+  // measuring_ms3_sweep` at Exploration.cpp:749 -- and it is unreached here. The sections driven off
+  // this fixture that complete their group all reach completion with NO WINNER, taking the
+  // `best_idx < 0` arm and returning before the gate is ever evaluated. Since ADR-0029 they get there
+  // by scoring rather than by aborting: an activation whose reference returned empty scores -1.0, and
+  // winner selection seeds best_score at -1.0 and takes `score > best_score`, so nothing is eligible.
+  //   * remaining_precursor_empty_baseline_bars_activation_from_winning and
+  //     remaining_precursor_late_child_after_group_cleanup_is_noop -- de-referenced by construction,
+  //     on a raw baseline whose peaks all sit outside the isolation window.
+  //   * remaining_precursor_score_no_raw_data -- NOT a de-referenced section by name or by intent. It
+  //     feeds all SIX variants and asserts activeGroupCount() == 0, and it lands on the same arm only
+  //     because ExplorationTestAccess::feedResult hands feedResultImpl_ mzs == ints == nullptr, so
+  //     precursorWindowIntensity_ short-circuits to 0.0 (Exploration.cpp:1215-1219) and the reference
   //     reads as empty.
   // Every other section stops feeding partway, so no group on this fixture has ever selected a winner.
   //
@@ -1117,6 +1118,64 @@ namespace
   }
 }
 )";
+
+  // --- ADR-0029 helpers: one un-fragmented reference per swept activation -------------------
+  //
+  // These live HERE, not beside the sections that use them: START_TEST opens `int main()`, so
+  // everything past it is function-local and a namespace-scope helper cannot be declared there.
+
+  // A sweep config whose every ADR-0029-relevant knob is a parameter: which activations are swept,
+  // where the CE and RT sweeps start, and what the base scan config carries on the axes that are
+  // NOT swept (which is what that activation's baseline must copy).
+  //
+  // ce_max/rt_max are derived as min + 20 because Config::validate rejects an empty range on a
+  // swept axis; the steps are coarse (10) so a block stays countable by hand: 3 sweep points.
+  std::string sweepCfg(const std::string& activations, double ce_min, double rt_min,
+                       const std::string& metric = "mass_count",
+                       const std::string& ms2_activation = "HCD",
+                       int ms2_collision_energy = 35)
+  {
+    std::ostringstream os;
+    os << R"({
+  "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 1,
+                     "max_charge": 50, "min_mass": 600, "max_mass": 50000, "tol": [10, 10, 10] },
+  "precursor_selection": {
+    "rt_window": 180, "targeting": "none", "rank_by": "qscore", "max_precursors": 3,
+    "exploration": {
+      "metric": ")" << metric << R"(",
+      "ce_min": )" << ce_min << R"(, "ce_max": )" << (ce_min + 20.0) << R"(, "ce_step": 10.0,
+      "reaction_time_min": )" << rt_min << R"(, "reaction_time_max": )" << (rt_min + 20.0)
+       << R"(, "reaction_time_step": 10.0,
+      "activations": [)" << activations << R"(]
+    }
+  },
+  "characterization": { "mode": "off",
+    "protein_sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE",
+    "max_targets": 3 },
+  "ms_settings": {
+    "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
+    "ms2": { "analyzer": "Orbitrap", "activation": ")" << ms2_activation
+       << R"(", "collision_energy": )" << ms2_collision_energy << R"(, "resolution": 120000 }
+  }
+})";
+    return os.str();
+  }
+
+  /// Index of the first variant belonging to @p act, or -1. Each activation's variants are
+  /// contiguous and the blocks appear in the order the activations were authored.
+  int blockStart(const std::vector<Exploration::ExplorationVariant>& vs, const std::string& act)
+  {
+    for (size_t i = 0; i < vs.size(); ++i)
+      if (vs[i].activation_type == act) return static_cast<int>(i);
+    return -1;
+  }
+
+  int baselineCount(const std::vector<Exploration::ExplorationVariant>& vs)
+  {
+    int n = 0;
+    for (const auto& v : vs) if (v.is_baseline) ++n;
+    return n;
+  }
 } // anonymous namespace
 
 
@@ -1352,8 +1411,8 @@ START_SECTION(ms3_measuring_metric_always_reacquires_without_overrides)
   // Feeding pre-deconvolved spectra (ExplorationTestAccess) rather than raw peaks is the matching
   // change: mass_count scores spec.size(), so the peak-count vector below IS the score vector, whereas
   // remaining_precursor had to be driven through raw isolation-window intensities. It also drops the
-  // empty-baseline hazard entirely -- the baseline_failed abort is gated on RemainingPrecursor
-  // (Exploration.cpp:435-436), so a zero-intensity baseline is simply a score-0 variant here.
+  // empty-reference hazard entirely -- only RemainingPrecursor divides by a reference, so under
+  // mass_count a zero-intensity baseline is simply a score-0 variant here.
   Config cfg{std::string(ms3_mass_count_config)};
   TEST_EQUAL(cfg.level(3).overrides.empty(), true)  // the precondition: no overrides to trigger the old gate
   TEST_EQUAL(isMeasuringMetric(cfg.level(3).exploration), true)
@@ -1927,8 +1986,8 @@ START_SECTION(remaining_precursor_score_with_raw_data)
   // precursorWindowIntensity_ tests `>= mz_low && <= mz_high`, so that window admits the 800.0 peak and
   // rejects 790/810/900: the sum is that peak's 500.0 alone.
   auto group_after_baseline = ExplorationTestAccess::group(exploration,1);
-  TEST_EQUAL(group_after_baseline.has_baseline, true)
-  TEST_REAL_SIMILAR(group_after_baseline.baseline_intensity, 500.0)
+  TEST_EQUAL(ExplorationTestAccess::hasAnyBaseline(group_after_baseline), true)
+  TEST_REAL_SIMILAR(ExplorationTestAccess::soleBaseline(group_after_baseline), 500.0)
 
   // Feed second variant (CE=20) with reduced in-window signal (fragmentation removed some)
   std::vector<double> frag_mzs = {790.0, 800.0, 810.0, 900.0};
@@ -1983,8 +2042,8 @@ START_SECTION(remaining_precursor_score_no_signal_in_window)
                          static_cast<int>(mzs.size()), 0.5, queue);
 
   auto group = ExplorationTestAccess::group(exploration,1);
-  TEST_EQUAL(group.has_baseline, true)
-  TEST_REAL_SIMILAR(group.baseline_intensity, 0.0)
+  TEST_EQUAL(ExplorationTestAccess::hasAnyBaseline(group), true)
+  TEST_REAL_SIMILAR(ExplorationTestAccess::soleBaseline(group), 0.0)
 
   // Feed CE=20 variant with signal inside the precursor window
   // Since baseline = 0, score should be 0 (baseline failure path)
@@ -2002,10 +2061,16 @@ START_SECTION(remaining_precursor_score_no_signal_in_window)
 }
 END_SECTION
 
-START_SECTION(remaining_precursor_empty_baseline_aborts_group)
+START_SECTION(remaining_precursor_empty_baseline_bars_activation_from_winning)
 {
-  // Empty baseline window => no CE variant can be scored. The group must abort: cancel its
-  // still-queued child scans, pick no winner, and emit no follow-up production scan.
+  // An empty reference window is a fact about ONE activation, so it withdraws that activation's
+  // variants from winner selection WITHOUT cancelling them (ADR-0029). This fixture sweeps a single
+  // activation, so "bars its activation" and "bars the group" coincide: no variant wins and no
+  // follow-up production scan is emitted -- but every child is still acquired.
+  //
+  // The -1.0 score is the whole mechanism, and it is why this is not merely a wasteful variant of
+  // the old abort: at 0.0 the first child would WIN, because winner selection seeds best_score at
+  // -1.0 and takes `score > best_score`.
   Config cfg{std::string(remaining_precursor_config)};
   ScanCommandQueue queue(cfg);
   Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
@@ -2020,24 +2085,51 @@ START_SECTION(remaining_precursor_empty_baseline_aborts_group)
   for (size_t i = 1; i < cmds.size(); ++i) queue.push(cmds[i]);
   TEST_EQUAL(static_cast<int>(queue.queueSize(2)), 5)
 
-  // CE=0 baseline with raw data entirely OUTSIDE the precursor window -> baseline_intensity = 0.
+  // CE=0 baseline with raw data entirely OUTSIDE the precursor window -> reference intensity 0.
   std::vector<double> mzs = {400.0, 500.0, 600.0, 1200.0};
   std::vector<double> intensities = {100.0, 200.0, 300.0, 400.0};
   int baseline_tid = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
   auto info = exploration.feedResult(baseline_tid, mzs.data(), intensities.data(),
                                      static_cast<int>(mzs.size()), 0.5, queue);
 
-  // All 5 queued children cancelled; group finalized with no winner and no follow-up scan.
-  TEST_EQUAL(static_cast<int>(queue.queueSize(2)), 0)
-  TEST_EQUAL(exploration.activeGroupCount(), 0)
+  // NOTHING is cancelled, and the group is still waiting on its 5 children.
+  TEST_EQUAL(static_cast<int>(queue.queueSize(2)), 5)
+  TEST_EQUAL(exploration.activeGroupCount(), 1)
   TEST_EQUAL(static_cast<int>(info.commands.size()), 0)
+  TEST_REAL_SIMILAR(ExplorationTestAccess::soleBaseline(
+                      ExplorationTestAccess::group(exploration, 1)), 0.0)
+
+  // Every child returns with GOOD in-window signal. Under the old 0.0 return they would have been
+  // perfectly scoreable and one would have won on a reference that does not exist.
+  std::vector<double> frag_mzs  = {790.0, 800.0, 810.0, 900.0};
+  std::vector<double> frag_ints = {100.0, 500.0, 200.0,  50.0};
+  Exploration::FeedResultInfo last;
+  for (size_t i = 1; i < cmds.size(); ++i)
+  {
+    int tid = queue.decode(std::string(cmds[i].scan_description).substr(0, 3));
+    last = exploration.feedResult(tid, frag_mzs.data(), frag_ints.data(),
+                                  static_cast<int>(frag_mzs.size()), 1.0, queue);
+    TEST_REAL_SIMILAR(last.metric.score, -1.0)     // not scored -> cannot win
+    TEST_REAL_SIMILAR(last.metric.remaining_ratio, -1.0)   // N/A: no denominator
+  }
+
+  // Group completes with no winner and no follow-up production scan.
+  TEST_EQUAL(static_cast<int>(last.commands.size()), 0)
+  TEST_EQUAL(last.group.winner_tracking_id, std::string(""))
+  TEST_EQUAL(exploration.activeGroupCount(), 0)
 }
 END_SECTION
 
-START_SECTION(remaining_precursor_inflight_child_after_abort_is_noop)
+START_SECTION(remaining_precursor_late_child_after_group_cleanup_is_noop)
 {
-  // A child already dequeued/sent to the device (in-flight) that returns its result AFTER the
-  // group has aborted must be a harmless no-op and must not resurrect the cleaned-up group.
+  // A result arriving for a variant whose group has already been cleaned up must be a harmless
+  // no-op and must not resurrect the group.
+  //
+  // RETARGETED, not weakened. This hazard used to be reached through the empty-baseline abort,
+  // which cancelled the in-flight child and tore the group down while it was still outstanding.
+  // Nothing is cancelled any more (ADR-0029), so a group is only ever cleaned up by COMPLETING --
+  // and the late/duplicate result the device can still deliver afterwards is exactly the same
+  // hazard, guarded by the same routing-map erase at Exploration.cpp:457.
   Config cfg{std::string(remaining_precursor_config)};
   ScanCommandQueue queue(cfg);
   Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
@@ -2048,31 +2140,30 @@ START_SECTION(remaining_precursor_inflight_child_after_abort_is_noop)
   auto cmds = exploration.initiate(2, pg, 3, queue);
   TEST_EQUAL(static_cast<int>(cmds.size()), 6)
 
-  // cmds[2..5] still queued; cmds[1] already sent to the device (in-flight, in pending_scan_map_).
-  for (size_t i = 2; i < cmds.size(); ++i) queue.push(cmds[i]);
-  queue.registerPending(cmds[1]);
-  int inflight_tid = queue.decode(std::string(cmds[1].scan_description).substr(0, 3));
-  TEST_EQUAL(queue.peekPending(inflight_tid).has_value(), true)
-
-  // Baseline returns empty -> abort.
-  std::vector<double> mzs = {400.0, 500.0, 600.0, 1200.0};
-  std::vector<double> intensities = {100.0, 200.0, 300.0, 400.0};
+  // Baseline with good in-window signal, then every child -> the group completes and is erased.
+  std::vector<double> base_mzs  = {790.0, 800.0, 810.0, 900.0};
+  std::vector<double> base_ints = {100.0, 1000.0, 200.0, 50.0};
   int baseline_tid = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
-  exploration.feedResult(baseline_tid, mzs.data(), intensities.data(),
-                         static_cast<int>(mzs.size()), 0.5, queue);
+  exploration.feedResult(baseline_tid, base_mzs.data(), base_ints.data(),
+                         static_cast<int>(base_mzs.size()), 0.5, queue);
+  TEST_EQUAL(exploration.activeGroupCount(), 1)
 
-  TEST_EQUAL(exploration.activeGroupCount(), 0)                    // aborted + cleaned up
-  TEST_EQUAL(static_cast<int>(queue.queueSize(2)), 0)             // queued children cancelled
-  TEST_EQUAL(queue.peekPending(inflight_tid).has_value(), false)  // in-flight child cancelled from pending
-
-  // The device now finishes the in-flight child and returns its result LATE -> harmless no-op.
-  std::vector<double> frag_mzs = {790.0, 800.0, 810.0, 900.0};
   std::vector<double> frag_ints = {100.0, 500.0, 200.0, 50.0};
-  auto late_info = exploration.feedResult(inflight_tid, frag_mzs.data(), frag_ints.data(),
-                                          static_cast<int>(frag_mzs.size()), 1.0, queue);
-  TEST_EQUAL(late_info.group.group_id, -1)                              // empty info (routing entry gone)
-  TEST_EQUAL(late_info.group.variant_index, -1)                         // not routed to any variant
-  TEST_EQUAL(exploration.activeGroupCount(), 0)                   // group NOT resurrected
+  int replay_tid = queue.decode(std::string(cmds[1].scan_description).substr(0, 3));
+  for (size_t i = 1; i < cmds.size(); ++i)
+  {
+    int tid = queue.decode(std::string(cmds[i].scan_description).substr(0, 3));
+    exploration.feedResult(tid, base_mzs.data(), frag_ints.data(),
+                           static_cast<int>(base_mzs.size()), 1.0, queue);
+  }
+  TEST_EQUAL(exploration.activeGroupCount(), 0)   // completed + cleaned up
+
+  // The device now delivers a LATE duplicate for a child of that erased group -> harmless no-op.
+  auto late_info = exploration.feedResult(replay_tid, base_mzs.data(), frag_ints.data(),
+                                          static_cast<int>(base_mzs.size()), 1.0, queue);
+  TEST_EQUAL(late_info.group.group_id, -1)        // empty info (routing entry gone)
+  TEST_EQUAL(late_info.group.variant_index, -1)   // not routed to any variant
+  TEST_EQUAL(exploration.activeGroupCount(), 0)   // group NOT resurrected
 }
 END_SECTION
 
@@ -2507,10 +2598,10 @@ START_SECTION(production_scan_keeps_configured_range)
   // Drive the sweep to completion with RAW ARRAYS. RemainingPrecursor scores from isolation-window
   // intensity alone, so one peak at the centre and two 50 Th away make the in-window sum exactly
   // controllable; the ExplorationTestAccess deconvolution bypass the mass_count sections use cannot
-  // drive this metric at all. A baseline with no in-window signal aborts the group on
-  // baseline_failed (set at Exploration.cpp:435-438), which suppresses winner selection at :665 and
-  // takes the no-follow-up arm at :684, so no production scan is emitted -- the assertion would then
-  // read as a missing command rather than a narrowed one.
+  // drive this metric at all. A baseline with no in-window signal leaves this activation without a
+  // denominator, so every one of its variants scores -1.0 and none is eligible; best_idx stays -1,
+  // the no-follow-up arm fires and no production scan is emitted -- the assertion below would then
+  // read as a missing command rather than a narrowed one. Hence the deliberate in-window baseline.
   const double mz_c = group.precursor_mz;
   std::vector<double> mzs{mz_c - 50.0, mz_c, mz_c + 50.0};
   // score = 1 - |ratio - remaining_precursor_target|, target = 0.1 (the level default), so the
@@ -2935,9 +3026,9 @@ START_SECTION(ms3_remaining_precursor_isolation_width)
                          static_cast<int>(baseline_mzs.size()), 0.5, queue);
 
   auto group_after = ExplorationTestAccess::group(exploration,1);
-  TEST_EQUAL(group_after.has_baseline, true)
+  TEST_EQUAL(ExplorationTestAccess::hasAnyBaseline(group_after), true)
   // With 2.0 Da window [499.0, 501.0], mz_center=500.0 is in-window
-  TEST_REAL_SIMILAR(group_after.baseline_intensity, 1000.0)
+  TEST_REAL_SIMILAR(ExplorationTestAccess::soleBaseline(group_after), 1000.0)
 
   // Feed CE=20 variant with 100.0 intensity -> ratio = 0.1
   std::vector<double> variant_ints = {100.0};
@@ -3061,11 +3152,13 @@ START_SECTION(ms2_scoring_window_matches_commanded_isolation)
   // THE ASSERTION THIS SECTION EXISTS FOR. 1500.0 with the margin, 1000.0 without it -- so a revert
   // does not merely widen a tolerance, it changes the number. Read back off the group rather than out
   // of the returned info because baseline_intensity is where the denominator of every later ratio in
-  // this group is stored (Exploration.cpp:428).
+  // this group is stored, now keyed by the activation it was measured under (ADR-0029).
   auto after = ExplorationTestAccess::group(exploration, 1);
-  TEST_EQUAL(after.has_baseline, true)
-  TEST_REAL_SIMILAR(after.baseline_intensity, 1500.0)
-  TEST_EQUAL(after.baseline_failed, false)   // 1500 > 0, so this is the live path and not the abort one
+  TEST_EQUAL(ExplorationTestAccess::hasAnyBaseline(after), true)
+  TEST_REAL_SIMILAR(ExplorationTestAccess::soleBaseline(after), 1500.0)
+  // 1500 > 0, so this activation keeps a usable denominator and its variants stay scoreable --
+  // the live path, not the one where an empty reference bars them with a -1.0 score.
+  TEST_EQUAL(ExplorationTestAccess::soleBaseline(after) > 0.0, true)
 }
 END_SECTION
 
@@ -4175,6 +4268,285 @@ START_SECTION(ms3_min_charge_default_emits_ms3)
   // floor at Exploration.cpp:1038, not by a structural dead-end.
   TEST_EQUAL(a.ms2_cmds.size() >= 1, true)
   TEST_EQUAL(a.ms3_cmds.size() >= 1, true)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// ADR-0029: one un-fragmented reference per swept activation
+/////////////////////////////////////////////////////////////
+
+// T1. Every SWEPT activation gets its own reference, at the head of its own block.
+//
+// The old code prepended exactly ONE baseline for the whole group and stamped it with
+// base_config.activation -- which need not even be one of the swept activations. Here ms2.activation
+// is HCD while CID and ETD are also swept, so a single group-level baseline would leave CID and ETD
+// ratioing against a reference measured through a different ion path.
+START_SECTION(baseline_is_one_per_swept_activation)
+{
+  Config cfg{sweepCfg(R"("CID", "HCD", "ETD")", 15.0, 5.0)};
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+
+  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  auto cmds = exploration.initiate(2, pg, 3, queue);
+
+  auto group = ExplorationTestAccess::group(exploration, 1);
+  const auto& vs = group.variants;
+
+  // CID 15/25/35 + HCD 15/25/35 + ETD RT 5/15/25, each block headed by its own baseline.
+  TEST_EQUAL(static_cast<int>(vs.size()), 12)
+  TEST_EQUAL(static_cast<int>(cmds.size()), 12)
+  TEST_EQUAL(baselineCount(vs), 3)
+
+  // Authored order is preserved and the blocks are contiguous.
+  TEST_EQUAL(blockStart(vs, "CID"), 0)
+  TEST_EQUAL(blockStart(vs, "HCD"), 4)
+  TEST_EQUAL(blockStart(vs, "ETD"), 8)
+
+  // The baseline of each block is its FIRST member -- which is what makes it dequeue ahead of the
+  // siblings it is the denominator for.
+  TEST_EQUAL(vs[0].is_baseline, true)
+  TEST_EQUAL(vs[4].is_baseline, true)
+  TEST_EQUAL(vs[8].is_baseline, true)
+  for (size_t i = 0; i < vs.size(); ++i)
+    if (i != 0 && i != 4 && i != 8) TEST_EQUAL(vs[i].is_baseline, false)
+
+  // A baseline is marked -1 in the logged variant_index column; real variants keep one running
+  // 0-based counter across the whole group.
+  TEST_EQUAL(vs[0].variant_index, -1)
+  TEST_EQUAL(vs[1].variant_index, 0)
+  TEST_EQUAL(vs[4].variant_index, -1)
+  TEST_EQUAL(vs[5].variant_index, 3)
+  TEST_EQUAL(vs[8].variant_index, -1)
+  TEST_EQUAL(vs[9].variant_index, 6)
+}
+END_SECTION
+
+// T2. When a block's sweep already CONTAINS its zero-point, the reference is that variant -- no
+// second scan is synthesized. This is the reported defect: with ce_min 0 the old code acquired
+// `HCD 0` as the group baseline and then `HCD 0` again as the HCD sweep's first point.
+START_SECTION(baseline_suppressed_when_sweep_contains_zero_point)
+{
+  Config cfg{sweepCfg(R"("CID", "HCD", "ETD")", 0.0, 0.0)};
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+
+  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  auto cmds = exploration.initiate(2, pg, 3, queue);
+
+  auto group = ExplorationTestAccess::group(exploration, 1);
+  const auto& vs = group.variants;
+
+  // 3 blocks x 3 sweep points, and NOTHING synthesized: 9, not 12. Under the old code this was 10
+  // (nine sweep points plus one prepended baseline) with `HCD 0` acquired twice.
+  TEST_EQUAL(static_cast<int>(vs.size()), 9)
+  TEST_EQUAL(baselineCount(vs), 3)
+
+  TEST_EQUAL(blockStart(vs, "CID"), 0)
+  TEST_EQUAL(blockStart(vs, "HCD"), 3)
+  TEST_EQUAL(blockStart(vs, "ETD"), 6)
+
+  // The flagged variants ARE the sweeps' own zero-points, not extra scans beside them.
+  TEST_EQUAL(vs[0].is_baseline, true)
+  TEST_REAL_SIMILAR(vs[0].collision_energy, 0.0)
+  TEST_EQUAL(vs[3].is_baseline, true)
+  TEST_REAL_SIMILAR(vs[3].collision_energy, 0.0)
+  TEST_EQUAL(vs[6].is_baseline, true)
+  TEST_REAL_SIMILAR(vs[6].reaction_time, 0.0)
+
+  // No duplicate command: exactly one HCD variant sits at CE 0.
+  int hcd_at_zero = 0;
+  for (const auto& v : vs)
+    if (v.activation_type == "HCD" && std::abs(v.collision_energy) < 1e-9) ++hcd_at_zero;
+  TEST_EQUAL(hcd_at_zero, 1)
+}
+END_SECTION
+
+// T3. A baseline zeroes ONLY the axis its activation sweeps, and copies the base scan config on
+// every other. An ETD baseline therefore keeps ms2.collision_energy rather than dropping to 0.
+//
+// This is what makes the synthesized form and the flagged form the same command: buildVariants_
+// gives ETD variants base_config.collision_energy, so a baseline that zeroed both axes would be a
+// different scan from the sweep's own RT-0 point and the suppression in T2 would be unsound.
+START_SECTION(baseline_matches_the_non_swept_axis)
+{
+  Config cfg{sweepCfg(R"("HCD", "ETD")", 15.0, 5.0, "mass_count", "HCD", 35)};
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+
+  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  exploration.initiate(2, pg, 3, queue);
+
+  auto group = ExplorationTestAccess::group(exploration, 1);
+  const auto& vs = group.variants;
+
+  const int hcd = blockStart(vs, "HCD");
+  const int etd = blockStart(vs, "ETD");
+  ABORT_IF(hcd < 0 || etd < 0)
+
+  // HCD sweeps CE -> CE zeroed, reaction time copied from the base config (0 here).
+  TEST_EQUAL(vs[hcd].is_baseline, true)
+  TEST_REAL_SIMILAR(vs[hcd].collision_energy, 0.0)
+  TEST_REAL_SIMILAR(vs[hcd].reaction_time, 0.0)
+
+  // ETD sweeps RT -> RT zeroed, collision energy copied: 35, NOT 0. And it matches what its own
+  // siblings carry, which is the property that matters.
+  TEST_EQUAL(vs[etd].is_baseline, true)
+  TEST_REAL_SIMILAR(vs[etd].reaction_time, 0.0)
+  TEST_REAL_SIMILAR(vs[etd].collision_energy, 35.0)
+  TEST_REAL_SIMILAR(vs[etd + 1].collision_energy, 35.0)
+}
+END_SECTION
+
+// T4. Each variant ratios against ITS OWN activation's reference. With one shared scalar the two
+// activations' references overwrote each other, so whichever returned last silently became the
+// denominator for both.
+START_SECTION(remaining_ratio_uses_its_own_activation_baseline)
+{
+  Config cfg{sweepCfg(R"("HCD", "ETD")", 15.0, 5.0, "remaining_precursor")};
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+
+  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  auto cmds = exploration.initiate(2, pg, 3, queue);
+
+  auto group = ExplorationTestAccess::group(exploration, 1);
+  const int hcd = blockStart(group.variants, "HCD");
+  const int etd = blockStart(group.variants, "ETD");
+  ABORT_IF(hcd < 0 || etd < 0)
+
+  auto feed = [&](int idx, double centre_intensity) {
+    std::vector<double> mzs{group.precursor_mz};
+    std::vector<double> ints{centre_intensity};
+    int tid = queue.decode(std::string(cmds[idx].scan_description).substr(0, 3));
+    return exploration.feedResult(tid, mzs.data(), ints.data(), 1, 0.5, queue);
+  };
+
+  // Deliberately DIFFERENT references per activation -- the whole point of keying them apart.
+  feed(hcd, 1000.0);
+  feed(etd, 400.0);
+
+  auto after = ExplorationTestAccess::group(exploration, 1);
+  TEST_EQUAL(static_cast<int>(after.baseline_intensity.size()), 2)
+  TEST_REAL_SIMILAR(after.baseline_intensity.at("HCD"), 1000.0)
+  TEST_REAL_SIMILAR(after.baseline_intensity.at("ETD"), 400.0)
+
+  // 200 against HCD's 1000 -> 0.2. Against ETD's 400 it would be 0.5.
+  auto hcd_info = feed(hcd + 1, 200.0);
+  TEST_REAL_SIMILAR(hcd_info.metric.remaining_ratio, 0.2)
+
+  // 200 against ETD's 400 -> 0.5. Against HCD's 1000 it would be 0.2.
+  auto etd_info = feed(etd + 1, 200.0);
+  TEST_REAL_SIMILAR(etd_info.metric.remaining_ratio, 0.5)
+}
+END_SECTION
+
+// T5. An empty reference bars ONLY its own activation. The other activation keeps scoring and
+// supplies the winner.
+//
+// Two failures at once: with a shared scalar the empty HCD reference would de-reference ETD too,
+// and with the old 0.0 return an unscoreable HCD variant would WIN at zero, because winner selection
+// seeds best_score at -1.0 and takes `score > best_score`.
+START_SECTION(empty_baseline_bars_only_its_own_activation)
+{
+  Config cfg{sweepCfg(R"("HCD", "ETD")", 15.0, 5.0, "remaining_precursor")};
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+
+  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  auto cmds = exploration.initiate(2, pg, 3, queue);
+
+  auto group0 = ExplorationTestAccess::group(exploration, 1);
+  const double centre = group0.precursor_mz;
+  const int hcd = blockStart(group0.variants, "HCD");
+  const int etd = blockStart(group0.variants, "ETD");
+  ABORT_IF(hcd < 0 || etd < 0)
+
+  // `mz` far outside the isolation window -> that activation's reference sums to 0.
+  auto feed = [&](int idx, double mz, double intensity) {
+    std::vector<double> mzs{mz};
+    std::vector<double> ints{intensity};
+    int tid = queue.decode(std::string(cmds[idx].scan_description).substr(0, 3));
+    return exploration.feedResult(tid, mzs.data(), ints.data(), 1, 0.5, queue);
+  };
+
+  feed(hcd, centre + 500.0, 1000.0);   // HCD reference EMPTY
+  feed(etd, centre, 1000.0);           // ETD reference healthy
+
+  auto mid = ExplorationTestAccess::group(exploration, 1);
+  TEST_REAL_SIMILAR(mid.baseline_intensity.at("HCD"), 0.0)
+  TEST_REAL_SIMILAR(mid.baseline_intensity.at("ETD"), 1000.0)
+
+  // NOTHING was cancelled -- the de-referenced activation's variants are still acquired.
+  TEST_EQUAL(exploration.activeGroupCount(), 1)
+
+  // Every HCD variant scores -1.0 (not scored) even on good in-window signal. Under the old 0.0
+  // return the first of these would have won the group outright.
+  for (int k = 1; k <= 3; ++k)
+  {
+    auto hcd_info = feed(hcd + k, centre, 900.0);
+    TEST_REAL_SIMILAR(hcd_info.metric.score, -1.0)
+    TEST_REAL_SIMILAR(hcd_info.metric.remaining_ratio, -1.0)
+  }
+
+  // ETD variants score normally against their own 1000.0 reference.
+  // score = 1 - |ratio - target|, target = 0.1 (the level default).
+  auto etd1 = feed(etd + 1, centre, 900.0);      // ratio 0.9 -> 0.2
+  TEST_REAL_SIMILAR(etd1.metric.remaining_ratio, 0.9)
+  TEST_REAL_SIMILAR(etd1.metric.score, 0.2)
+
+  auto etd2 = feed(etd + 2, centre, 500.0);      // ratio 0.5 -> 0.6
+  TEST_REAL_SIMILAR(etd2.metric.remaining_ratio, 0.5)
+  TEST_REAL_SIMILAR(etd2.metric.score, 0.6)
+
+  auto etd3 = feed(etd + 3, centre, 100.0);      // ratio 0.1 -> 1.0, the best score in the group
+  TEST_REAL_SIMILAR(etd3.metric.remaining_ratio, 0.1)
+  TEST_REAL_SIMILAR(etd3.metric.score, 1.0)
+
+  // All 8 variants fed -> the group completes, and the winner is the best ETD variant. An HCD
+  // variant winning at 0.0 is exactly the defect the -1.0 bar exists to prevent.
+  TEST_EQUAL(exploration.activeGroupCount(), 0)
+  TEST_EQUAL(etd3.group.winner_tracking_id,
+             std::string(ScanCommandQueue::encode(cmds[etd + 3].scan_id)))
+}
+END_SECTION
+
+// T6. An activation that sweeps NEITHER axis gets no baseline and competes normally.
+//
+// Guards the `sweep_ce || sweep_rt` condition in buildVariants_. Without it that activation's single
+// variant is identical to its own synthesized baseline, the suppression step flags it, and the only
+// variant the activation has can never win.
+START_SECTION(non_swept_activation_gets_no_baseline)
+{
+  Config cfg{sweepCfg(R"("UVPD")", 15.0, 5.0)};
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+
+  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  auto cmds = exploration.initiate(2, pg, 3, queue);
+
+  auto group = ExplorationTestAccess::group(exploration, 1);
+  const auto& vs = group.variants;
+
+  TEST_EQUAL(static_cast<int>(vs.size()), 1)
+  TEST_EQUAL(static_cast<int>(cmds.size()), 1)
+  TEST_EQUAL(baselineCount(vs), 0)
+  TEST_EQUAL(vs[0].is_baseline, false)
+  TEST_EQUAL(vs[0].variant_index, 0)      // a real variant, not the -1 baseline marker
+  TEST_EQUAL(vs[0].activation_type, std::string("UVPD"))
+
+  // It is eligible: fed a scorable result it becomes the winner.
+  std::vector<double> mzs{group.precursor_mz};
+  std::vector<double> ints{500.0};
+  int tid = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
+  auto info = exploration.feedResult(tid, mzs.data(), ints.data(), 1, 0.5, queue);
+  TEST_EQUAL(info.group.winner_tracking_id, std::string(ScanCommandQueue::encode(cmds[0].scan_id)))
 }
 END_SECTION
 

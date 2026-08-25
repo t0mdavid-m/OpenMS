@@ -739,10 +739,12 @@ START_SECTION(unassigned_ms3_sweep_is_scored_by_remaining_precursor)
                                           static_cast<int>(mzs.size()), 0.5, queue);
   TEST_REAL_SIMILAR(info_base.metric.score, 0.0)   // the baseline never competes
 
+  // One swept activation here, so the group carries exactly one reference (ADR-0029).
   auto grp_after_baseline = ExplorationTestAccess::group(exploration, 1);
-  TEST_EQUAL(grp_after_baseline.has_baseline, true)
-  TEST_REAL_SIMILAR(grp_after_baseline.baseline_intensity, 1000.0)
-  TEST_EQUAL(grp_after_baseline.baseline_failed, false)
+  TEST_EQUAL(ExplorationTestAccess::hasAnyBaseline(grp_after_baseline), true)
+  TEST_REAL_SIMILAR(ExplorationTestAccess::soleBaseline(grp_after_baseline), 1000.0)
+  // > 0, so the activation keeps a usable denominator and its variants stay scoreable.
+  TEST_EQUAL(ExplorationTestAccess::soleBaseline(grp_after_baseline) > 0.0, true)
 
   // score = 1 - |ratio - remaining_precursor_target|, target = 0.1 (the level default).
   // ratios 0.9 / 0.4 / 0.1 -> scores 0.2 / 0.7 / 1.0, so the WINNER is the last-fed variant rather

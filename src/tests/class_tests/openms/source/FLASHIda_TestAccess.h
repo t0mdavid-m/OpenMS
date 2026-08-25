@@ -80,5 +80,26 @@ namespace OpenMS
     {
       return e.getGroup(group_id);
     }
+
+    /// Has ANY un-fragmented reference returned for this group yet?
+    /// Replaces the former scalar `ExplorationGroup::has_baseline`, which could not survive the
+    /// move to one reference per swept activation (ADR-0029).
+    static bool hasAnyBaseline(const Exploration::ExplorationGroup& g)
+    {
+      return !g.baseline_intensity.empty();
+    }
+
+    /// The reference intensity of a single-activation group, or -1.0 if none has returned.
+    ///
+    /// For fixtures that sweep exactly ONE activation, which is every fixture that predates
+    /// ADR-0029 -- it asserts the same quantity the old scalar `baseline_intensity` held, without
+    /// each call site having to name that fixture's activation string. Tests that specifically
+    /// exercise the per-activation keying assert on `baseline_intensity.at("HCD")` directly, so
+    /// nothing here hides the key.
+    static double soleBaseline(const Exploration::ExplorationGroup& g)
+    {
+      if (g.baseline_intensity.size() != 1) return -1.0;
+      return g.baseline_intensity.begin()->second;
+    }
   };
 } // namespace OpenMS

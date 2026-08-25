@@ -403,4 +403,76 @@ START_SECTION(charge_based_exclusion_is_a_migration_error)
 }
 END_SECTION
 
+// Drift guard, C++ half (ADR-0030). ScanFactory.NeedsReactionTime is the other half, pinned by
+// ScanFactoryTests.NeedsReactionTime_MatchesEngineActivationSet.
+//
+// These predicates now answer TWO questions that used to be answered separately, which is what makes
+// pinning them worthwhile. In Config they said which parameters an activation must arrive with; in
+// Exploration::buildVariants_ they now also decide which axis of a sweep varies and which axis that
+// activation's baseline zeroes; and in C# the reaction-time half decides whether the ReactionTime key
+// reaches the instrument at all. A set that drifts therefore changes what is acquired and what is
+// commanded, without changing anything the engine logs.
+//
+// Exact sets, not spot checks: an over-broad predicate is the failure that matters. Adding "CID" to
+// needsReactionTime would start emitting a reaction time on every CID scan, and no existing assertion
+// anywhere would notice.
+START_SECTION(activation_coupling_predicates_are_the_declared_set)
+{
+  TEST_EQUAL(needsReactionTime("ETD"), true)
+  TEST_EQUAL(needsReactionTime("EThcD"), true)
+  TEST_EQUAL(needsReactionTime("HCD"), false)
+  TEST_EQUAL(needsReactionTime("CID"), false)
+  TEST_EQUAL(needsReactionTime("UVPD"), false)
+  TEST_EQUAL(needsReactionTime(""), false)
+  TEST_EQUAL(needsReactionTime("etd"), false)     // ordinal, case-sensitive -- see the C# mirror
+
+  TEST_EQUAL(needsCollisionEnergy("HCD"), true)
+  TEST_EQUAL(needsCollisionEnergy("CID"), true)
+  TEST_EQUAL(needsCollisionEnergy("EThcD"), true)
+  TEST_EQUAL(needsCollisionEnergy("ETD"), false)
+  TEST_EQUAL(needsCollisionEnergy("UVPD"), false)
+  TEST_EQUAL(needsCollisionEnergy(""), false)
+  TEST_EQUAL(needsCollisionEnergy("hcd"), false)
+
+  // EThcD is the only activation in both sets, and that is load-bearing: it is what makes
+  // buildVariants_ take the cross-product branch and give EThcD a baseline at CE 0 AND RT 0.
+  TEST_EQUAL(needsCollisionEnergy("EThcD") && needsReactionTime("EThcD"), true)
+}
+END_SECTION
+
+// An authored scan config pairing an activation with a zero on its coupled axis LOADS (ADR-0030).
+// This used to throw. The guard's stated purpose was to stop ScanFactory silently dropping a zero
+// reaction time so the instrument fell back to its own method default; that key is now gated on the
+// activation rather than the value, so the value reaches the instrument and the silence is gone.
+// Both branches were dropped together, so ETD and HCD stay symmetric.
+START_SECTION(zero_on_a_coupled_axis_is_accepted)
+{
+  // ms_settings.ms2 itself, NOT an additional_ms2 block: the check only ever ran over the dispatch
+  // ROSTER (an unreferenced definition never fires), so probing it through an unreferenced block
+  // would pass whether or not the guard is still there.
+  auto ms2Json = [](const std::string& scan_body) {
+    return std::string(R"({
+      "deconvolution": { "tol": [10, 10, 10] },
+      "precursor_selection": { "rank_by": "qscore", "max_precursors": 5 },
+      "characterization": { "mode": "off" },
+      "ms_settings": {
+        "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
+        "ms2": )") + scan_body + R"(
+      }
+    })";
+  };
+
+  // ETD at reaction_time 0: commands a literal 0, i.e. "do not fragment". This threw before.
+  Config etd{ms2Json(R"({ "analyzer": "Orbitrap", "activation": "ETD", "reaction_time": 0 })")};
+  TEST_EQUAL(etd.level(2).scans.empty(), false)
+  TEST_REAL_SIMILAR(etd.level(2).scans[0].reaction_time, 0.0)
+
+  // HCD at collision_energy 0 -- the symmetric case, dropped in the same change so the two coupled
+  // axes keep the same rule. It is also the CE an exploration baseline has always commanded.
+  Config hcd{ms2Json(R"({ "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 0 })")};
+  TEST_EQUAL(hcd.level(2).scans.empty(), false)
+  TEST_EQUAL(hcd.level(2).scans[0].collision_energy, 0)
+}
+END_SECTION
+
 END_TEST
