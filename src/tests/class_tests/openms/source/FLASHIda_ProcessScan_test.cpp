@@ -2968,6 +2968,43 @@ START_SECTION(only_the_idle_survey_is_emitted_at_priority_3)
 }
 END_SECTION
 
+// Tracking id 0 is RESERVED and must never be issued.
+//
+// Why this exists: 0 doubles as buildMS2's "no parent / root" sentinel (`if (parent_scan_id > 0)`,
+// ScanCommandQueue.cpp), and FLASHIda.cpp passes a literal 0 for a root MS2. So a survey that
+// actually HOLDS id 0 is indistinguishable from one with no parent -- every MS2 it parents ships
+// with an empty parent_tracking_id and the lineage graph loses its first generation, on the
+// instrument as much as in tests.
+//
+// This was latent for the whole life of the code. The drained-queue AGC prescan was the first
+// command minted on every fresh engine, so it absorbed id 0 and no survey ever held it. Deleting
+// that prescan (ADR-0031) handed 0 straight to the first survey, and
+// FLASHIda_LoggingFields_test::parent_tracking_id_resolution caught it. A drift guard belongs here
+// rather than there, because the defect is in the id allocator, not in logging.
+START_SECTION(tracking_id_zero_is_never_issued)
+{
+  FLASHIda ida(const_cast<char*>(standard_json));
+
+  // Fresh engine: the very first id handed out must not be the sentinel.
+  const int first = ida.getNextTrackingId();
+  std::cout << "[ID-RESERVE] first_id=" << first << std::endl;
+  TEST_NOT_EQUAL(first, 0)
+
+  // ...and across the wrap. The counter resets when it passes 94^3 - 1; resetting it to 0 rather
+  // than 1 would reintroduce the defect once per 830k scans -- rare enough to never be noticed and
+  // permanent once it happened, since the id would then recur every wrap.
+  // No early exit: issuing max_id + 5 ids necessarily crosses the wrap, so the count below is
+  // anti-vacuous by construction and one defect produces exactly one failure.
+  const int max_id = 94 * 94 * 94 - 1;
+  int zeros = (first == 0) ? 1 : 0;
+  for (int i = 0; i < max_id + 4; ++i)
+    if (ida.getNextTrackingId() == 0) ++zeros;
+
+  std::cout << "[ID-RESERVE] issued=" << (max_id + 5) << " zeros=" << zeros << std::endl;
+  TEST_EQUAL(zeros, 0)
+}
+END_SECTION
+
 // MS1 and AGC scans should be resolved from pending_scan_map_ after processScan
 START_SECTION(ms1_agc_resolved_from_pending_map)
 {
