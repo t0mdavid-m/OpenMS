@@ -257,15 +257,24 @@ MS3 matches nothing. The cache entry is erased after use, so a duplicate/late MS
 
 `exploration.activations` is a **list**, and `buildVariants_` emits each activation's whole sweep as a
 contiguous block before starting the next. A **baseline** heads each block: that activation's own
-variant with the **swept axis alone** zeroed — CE for HCD/CID, reaction time for ETD, both for EThcD —
-and every other parameter left as its siblings carry it, so an ETD baseline keeps
+variant with the **swept axis alone** turned off — CE for HCD/CID, reaction time for ETD, both for
+EThcD — and every other parameter left as its siblings carry it, so an ETD baseline keeps
 `base_config.collision_energy` rather than dropping to 0.
+
+⚠️ **The two axes turn off at different values, and the asymmetry is the instrument's.** A collision
+energy of 0 is commandable and simply does not fragment; a reaction time of 0 is **rejected**, so "no
+reaction" is `Config.h`'s `MIN_REACTION_TIME_MS` (0.03 ms, ~300× shorter than a working ETD time).
+Zeroing both would emit an ETD reference the instrument refuses to acquire. The authored sweep *grid*
+is deliberately **not** floored — `Config::validate` rejects a `reaction_time_min` below the floor
+when an ETD-family activation is swept, which is what lets the grid's first point still coincide with
+the baseline and be suppressed. Gate it on `needsReactionTime`, never unconditionally: every
+CE-only config leaves `reaction_time_min` at its 0 default.
 
 Three consequences that are easy to get backwards:
 
-- **It is suppressed, not duplicated, when the sweep already contains its zero-point.** With
-  `ce_min: 0` the block's first sweep point *is* the reference, so it is flagged in place and nothing
-  is synthesized. `buildVariants_` decides this by comparing the two **emitted commands**, not by
+- **It is suppressed, not duplicated, when the sweep already contains its turn-off point.** With
+  `ce_min: 0` (or `reaction_time_min: 0.03`) the block's first sweep point *is* the reference, so it
+  is flagged in place and nothing is synthesized. `buildVariants_` decides this by comparing the two **emitted commands**, not by
   testing `ce_min == 0` — which is what makes the flagged and synthesized forms provably the same scan
   and covers EThcD's cross-product for free. `initiate` prepends **nothing**; it used to insert one
   baseline stamped `base_config.activation`, which need not be a swept activation at all.
