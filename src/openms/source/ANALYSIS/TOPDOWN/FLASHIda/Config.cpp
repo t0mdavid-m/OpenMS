@@ -1060,6 +1060,22 @@ namespace OpenMS
           throw std::invalid_argument(
               "Exploration activation '" + act + "' at level " + std::to_string(lvl) +
               " requires rt_min < rt_max for RT sweep.");
+
+        // The sweep GRID is authored, not floored (ADR-0029). Exploration raises only its own
+        // synthesized baseline to MIN_REACTION_TIME_MS, so a grid that starts below the floor would
+        // put a scan the instrument REJECTS into every sweep -- and, because the baseline would no
+        // longer coincide with the grid's first point, would also resurrect the duplicate reference
+        // scan the suppression rule exists to remove. One wrong scan per group, visible only on the
+        // hardware. Reject it at load instead, and name the value that works.
+        //
+        // Gated on needs_rt: a CE-only sweep leaves reaction_time_min at its 0 default and must not
+        // be rejected for it, which is every committed config except the ETD one.
+        if (needs_rt && cfg.rt_min < MIN_REACTION_TIME_MS)
+          throw std::invalid_argument(
+              sect + ".exploration.reaction_time_min must be >= 0.03 when an ETD-family activation "
+              "is swept ('" + act + "' at level " + std::to_string(lvl) + "); got "
+              + std::to_string(cfg.rt_min) + ". The instrument rejects a reaction time of 0 -- use "
+              "0.03 for a near-zero sweep point.");
       }
     }
   }

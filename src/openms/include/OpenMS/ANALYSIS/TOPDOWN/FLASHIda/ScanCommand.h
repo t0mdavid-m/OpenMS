@@ -88,7 +88,12 @@ namespace OpenMS
     double precursor_mz;         ///< Center m/z for isolation window
     double isolation_width;      ///< Full width of isolation window (Da)
     double collision_energy;     ///< Normalized collision energy (%)
-    double reaction_time;        ///< Ion/ion reaction time (ms), 0 = not used
+    /// Ion/ion reaction time (ms). 0 = not used, and that is an ABI sentinel ONLY -- it means "this
+    /// stage has no ion-ion reaction", never "react for zero milliseconds". The instrument REJECTS a
+    /// reaction time of 0 on an ETD-family stage, so an un-fragmented ETD reference is commanded at
+    /// Config.h's MIN_REACTION_TIME_MS (0.03), not at 0. Whether the key is emitted at all is decided
+    /// by the stage's ACTIVATION rather than by this value (ADR-0030).
+    double reaction_time;
     double reagent_max_it;       ///< Reagent max injection time (ms), 0 = not used
     int32_t reagent_agc_target;  ///< Reagent AGC target, 0 = not used
     int32_t charge_state;        ///< Precursor charge state (0 = unknown)

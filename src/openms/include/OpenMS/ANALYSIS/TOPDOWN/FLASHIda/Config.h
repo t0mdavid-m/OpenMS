@@ -128,6 +128,25 @@ namespace OpenMS
   OPENMS_DLLAPI bool needsCollisionEnergy(const std::string& act);
   OPENMS_DLLAPI bool needsReactionTime(const std::string& act);
 
+  /**
+    @brief The smallest ion-ion reaction time the instrument will accept (ms).
+
+    THE TWO COUPLED AXES DO NOT SHARE A "FRAGMENTATION OFF" VALUE, and that asymmetry is the
+    instrument's, not ours. A collision energy of 0 is commandable — it simply does not fragment —
+    but a reaction time of 0 is **rejected outright**, so 0.03 is what "no reaction" has to mean on
+    that axis. 0.03 ms is ~300x shorter than a working ETD time, so it is still an un-fragmented
+    reference.
+
+    Two consumers, both of which would otherwise command a value that cannot be acquired:
+    Exploration's synthesized ETD/EThcD baseline (ADR-0029 decision 2), and Config::validate's
+    rejection of an authored @c reaction_time_min below it.
+
+    Owner-confirmed against the hardware. It is not derivable from anything in this repository —
+    the iAPI headers are not distributed and no test can exercise the instrument — so treat it as
+    an external fact rather than something to re-derive.
+  */
+  constexpr double MIN_REACTION_TIME_MS = 0.03;
+
   /// Configuration for a single scan type (MS1 survey or one MS2 config slot)
   struct OPENMS_DLLAPI ScanConfig
   {

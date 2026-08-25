@@ -96,9 +96,16 @@ namespace OpenMS
 
       // Each activation opens its own block with its own un-fragmented reference (ADR-0029). A
       // baseline is "this activation's scan with fragmentation turned off", so only the SWEPT axis
-      // is zeroed -- an ETD baseline keeps base_config.collision_energy, exactly as the ETD
+      // is turned off -- an ETD baseline keeps base_config.collision_energy, exactly as the ETD
       // variants below it do. That is what makes the synthesized form and the flagged form (see
       // the suppression step) the identical command rather than two different notions of baseline.
+      //
+      // THE TWO AXES TURN OFF AT DIFFERENT VALUES, and the asymmetry is the instrument's. A
+      // collision energy of 0 is commandable and simply does not fragment; a reaction time of 0 is
+      // REJECTED, so "no reaction" is MIN_REACTION_TIME_MS on that axis. Zeroing both would emit an
+      // ETD baseline the instrument refuses to acquire -- the one thing a reference scan must not
+      // be. Config::validate holds the authored sweep grid at or above the same floor, so a grid
+      // point can still coincide with this baseline and be suppressed below.
       //
       // An activation that sweeps NEITHER axis has no axis to turn off, so it gets no baseline and
       // competes normally. Without this guard its single variant below would be identical to its
@@ -108,7 +115,7 @@ namespace OpenMS
       {
         VariantParams baseline{act,
                                sweep_ce ? 0.0 : static_cast<double>(base_config.collision_energy),
-                               sweep_rt ? 0.0 : base_config.reaction_time};
+                               sweep_rt ? MIN_REACTION_TIME_MS : base_config.reaction_time};
         baseline.is_baseline = true;
         variants.push_back(baseline);
       }
