@@ -206,10 +206,19 @@ START_SECTION(schema_column_counts)
   // (masses/charges/intensities), min and max being derivable from the charge list (29->28); then
   // + deconv_qscores, one PeakGroup::getQscore() per deconvolved mass, so the score the survey was
   // ranked on is logged beside the mass list rather than only for the masses that won a scan (28->29).
-  // Every r.colIndex pinned below is <= 18, i.e. ahead of the deconv block, and deconv_qscores lands
-  // at 23 (between deconv_masses at 22 and deconv_charges), so none of them moved.
-  TEST_EQUAL(r.headers.size(), 29)
-  TEST_EQUAL(i.headers.size(), 32)   // I2: +6 iso/snr/intensity; P5: +precursor_id; +theoretical_masses/diff_da/diff_ppm; C2: +ms3_fragment_coverage; + tic_coverage; C: + flash_extender_score
+  // Then + tag_count/fragment_count/tic_coverage, the per-scan identification YIELD, inserted as a block
+  // straight after remaining_ratio so it sits with the other "what did this scan return" columns
+  // (29 -> 32). That placement DOES move things, and the previous note here -- "every r.colIndex pinned
+  // below is <= 18, ahead of the deconv block, so none of them moved" -- is no longer true in either
+  // clause: the pins now run to 21, and the deconv block starts at 25 rather than 22. The insertion
+  // point was chosen for legibility rather than to dodge that churn, because golden comparison resolves
+  // columns by header NAME: a reorder costs nothing at the goldens and only this section has to move.
+  TEST_EQUAL(r.headers.size(), 32)
+  // I2: +6 iso/snr/intensity; P5: +precursor_id; +theoretical_masses/diff_da/diff_ppm; C2:
+  // +ms3_fragment_coverage; + tic_coverage; C: + flash_extender_score; then + tag_count (beside
+  // flash_extender_score, the other "how strong is this ID" scalar) and + fragment_qscores (inside the
+  // aligned fragment-mass table it is index-parallel with) -> 32 -> 34. tic_coverage stays LAST.
+  TEST_EQUAL(i.headers.size(), 34)
 
   // Spot-check exact header identities / order at the boundaries that matter for parsing.
   // NOTE: the four log streams were reordered for human legibility (LOG_COLUMN_ORDER_REFERENCE.md);
@@ -228,28 +237,34 @@ START_SECTION(schema_column_counts)
   TEST_EQUAL(r.headers.front(), std::string("tracking_id"))
   TEST_EQUAL(r.colIndex("ms_level"), 1)
   TEST_EQUAL(r.headers.back(), std::string("dequeue_ts"))        // reordered: dequeue_ts is now the trailing column
-  TEST_EQUAL(r.colIndex("winner_tracking_id"), 18)
+  TEST_EQUAL(r.colIndex("winner_tracking_id"), 21)
   TEST_EQUAL(r.colIndex("processing_duration_ms"), 10)           // grouped up front with the other duration columns
   TEST_EQUAL(r.colIndex("child_ids"), 4)
-  TEST_EQUAL(r.colIndex("exploration_group_id"), 13)
+  TEST_EQUAL(r.colIndex("exploration_group_id"), 16)
+  // The identification-yield block, pinned as a contiguous run so a partial insert fails loudly.
+  TEST_EQUAL(r.colIndex("tag_count"), 13)
+  TEST_EQUAL(r.colIndex("fragment_count"), 14)
+  TEST_EQUAL(r.colIndex("tic_coverage"), 15)
   TEST_EQUAL(i.headers.front(), std::string("tracking_id"))      // reordered: identification now leads with tracking_id
   TEST_EQUAL(i.headers.back(), std::string("tic_coverage"))      // reordered: tic_coverage is now the trailing column
   TEST_EQUAL(i.colIndex("flash_extender_score"), 7)             // moved up next to proteoform
-  TEST_EQUAL(i.colIndex("tic_coverage"), 31)                    // trailing column index
-  TEST_EQUAL(i.colIndex("ms3_fragment_coverage"), 30)
+  TEST_EQUAL(i.colIndex("tag_count"), 8)                        // beside it: the other per-ID evidence scalar
+  TEST_EQUAL(i.colIndex("fragment_qscores"), 31)                // inside the aligned table, right after diff_ppm
+  TEST_EQUAL(i.colIndex("tic_coverage"), 33)                    // trailing column index
+  TEST_EQUAL(i.colIndex("ms3_fragment_coverage"), 32)
   TEST_EQUAL(i.colIndex("precursor_id"), 3)
-  TEST_EQUAL(i.colIndex("theoretical_masses"), 27)             // fragment-mass table: per-scan theoretical + residual (Da, ppm)
-  TEST_EQUAL(i.colIndex("diff_da"), 28)
-  TEST_EQUAL(i.colIndex("diff_ppm"), 29)
-  TEST_EQUAL(i.colIndex("ms3_charge_intensity"), 26)           // I2 charge-intensity (new order)
+  TEST_EQUAL(i.colIndex("theoretical_masses"), 28)             // fragment-mass table: per-scan theoretical + residual (Da, ppm)
+  TEST_EQUAL(i.colIndex("diff_da"), 29)
+  TEST_EQUAL(i.colIndex("diff_ppm"), 30)
+  TEST_EQUAL(i.colIndex("ms3_charge_intensity"), 27)           // I2 charge-intensity (new order)
   // I2 isolation/snr/intensity block, in the new order.
-  TEST_EQUAL(i.colIndex("ms3_fragment_masses"), 20)
-  TEST_EQUAL(i.colIndex("ms2_isolation_width"), 21)
-  TEST_EQUAL(i.colIndex("ms2_window_snr"), 22)
-  TEST_EQUAL(i.colIndex("ms2_charge_intensity"), 23)
-  TEST_EQUAL(i.colIndex("ms3_isolation_width"), 24)
-  TEST_EQUAL(i.colIndex("ms3_window_snr"), 25)
-  TEST_EQUAL(i.colIndex("ms3_charge_intensity"), 26)
+  TEST_EQUAL(i.colIndex("ms3_fragment_masses"), 21)
+  TEST_EQUAL(i.colIndex("ms2_isolation_width"), 22)
+  TEST_EQUAL(i.colIndex("ms2_window_snr"), 23)
+  TEST_EQUAL(i.colIndex("ms2_charge_intensity"), 24)
+  TEST_EQUAL(i.colIndex("ms3_isolation_width"), 25)
+  TEST_EQUAL(i.colIndex("ms3_window_snr"), 26)
+  TEST_EQUAL(i.colIndex("ms3_charge_intensity"), 27)
 }
 END_SECTION
 
