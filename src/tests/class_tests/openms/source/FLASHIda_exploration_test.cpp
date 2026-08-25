@@ -146,7 +146,8 @@ namespace
     "scan_timeout": {
       "enabled": false,
       "value_ms": 30000
-    }
+    },
+    "agc_interval_seconds": 9999999
   },
   "files": {
     "target_logs": [],
@@ -238,7 +239,8 @@ namespace
     "scan_timeout": {
       "enabled": false,
       "value_ms": 30000
-    }
+    },
+    "agc_interval_seconds": 9999999
   },
   "files": {
     "target_logs": [],
@@ -336,7 +338,8 @@ namespace
     "scan_timeout": {
       "enabled": false,
       "value_ms": 30000
-    }
+    },
+    "agc_interval_seconds": 9999999
   },
   "files": {
     "target_logs": [],
@@ -463,7 +466,8 @@ namespace
     "scan_timeout": {
       "enabled": false,
       "value_ms": 30000
-    }
+    },
+    "agc_interval_seconds": 9999999
   },
   "files": {
     "target_logs": [],
@@ -556,7 +560,8 @@ namespace
     "scan_timeout": {
       "enabled": false,
       "value_ms": 30000
-    }
+    },
+    "agc_interval_seconds": 9999999
   },
   "files": {
     "target_logs": [],
@@ -660,7 +665,8 @@ namespace
     "scan_timeout": {
       "enabled": false,
       "value_ms": 30000
-    }
+    },
+    "agc_interval_seconds": 9999999
   },
   "files": {
     "target_logs": [],
@@ -837,7 +843,8 @@ namespace
     "scan_timeout": {
       "enabled": false,
       "value_ms": 30000
-    }
+    },
+    "agc_interval_seconds": 9999999
   },
   "files": {
     "target_logs": [],
@@ -958,7 +965,8 @@ namespace
     "scan_timeout": {
       "enabled": false,
       "value_ms": 30000
-    }
+    },
+    "agc_interval_seconds": 9999999
   },
   "files": {
     "target_logs": [],
@@ -1056,7 +1064,8 @@ namespace
     "scan_timeout": {
       "enabled": false,
       "value_ms": 30000
-    }
+    },
+    "agc_interval_seconds": 9999999
   },
   "files": {
     "target_logs": [],
@@ -3402,7 +3411,7 @@ START_SECTION(tol_validation_insufficient_entries)
   "faims": {
     "cv_values": []
   },
-  "scheduling": {},
+  "scheduling": { "agc_interval_seconds": 9999999 },
   "files": {},
   "precursor_selection": {
     "rt_window": 180,
@@ -3468,7 +3477,7 @@ START_SECTION(selection_without_next_level_scan_config_rejected)
   "faims": {
     "cv_values": []
   },
-  "scheduling": {},
+  "scheduling": { "agc_interval_seconds": 9999999 },
   "files": {},
   "precursor_selection": {
     "rt_window": 180,

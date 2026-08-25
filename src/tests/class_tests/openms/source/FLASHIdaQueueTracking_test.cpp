@@ -14,8 +14,10 @@
 
 #include "FLASHIda_TestAccess.h"   // FLASHIdaTestAccess::push (private-state access)
 
+#include <chrono>
 #include <set>
 #include <string>
+#include <thread>  // std::this_thread::sleep_for -- reaching the interval-AGC path deterministically
 
 using namespace OpenMS;
 
@@ -52,7 +54,8 @@ namespace
     "scan_timeout": {
       "enabled": false,
       "value_ms": 30000
-    }
+    },
+    "agc_interval_seconds": 9999999
   },
   "files": {
     "target_logs": [],
@@ -139,7 +142,8 @@ namespace
     "scan_timeout": {
       "enabled": false,
       "value_ms": 30000
-    }
+    },
+    "agc_interval_seconds": 9999999
   },
   "files": {
     "target_logs": [],
@@ -241,15 +245,25 @@ START_SECTION(tracking_ids_sequential_unique)
 }
 END_SECTION
 
-// P3-U07: empty queue returns idle AGC (never returns 0)
-START_SECTION(empty_queue_returns_idle_agc)
+// P3-U07: empty queue returns an idle survey MS1 (never returns 0)
+//
+// The drained queue emits a survey, NOT an AGC prescan (ADR-0031). Prescans are scheduled by
+// scheduling.agc_interval_seconds alone, and this fixture pins that at 9999999 so the timer cannot
+// fire here. priority == 3 is asserted rather than incidental: three C# drain loops break on
+// exactly `msn_level == 1 && priority == 3`, so it is the contract, not a detail.
+START_SECTION(empty_queue_returns_idle_survey)
 {
   FLASHIda* ida = createTestInstance();
   ScanCommand cmd{};
   int result = ida->getNextScanCommand(cmd);
-  TEST_EQUAL(result, 1)  // Queue empty, idle cycle returns AGC
+  TEST_EQUAL(result, 1)  // Queue empty, idle cycle returns a survey MS1
   TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
-  TEST_EQUAL(cmd.is_agc, 1)
+  TEST_EQUAL(cmd.is_agc, 0)
+  TEST_EQUAL(cmd.msn_level, 1)
+  TEST_EQUAL(cmd.priority, 3)
+  std::string desc(cmd.scan_description);
+  TEST_EQUAL(desc.size() >= 4, true)
+  TEST_EQUAL(desc[3], 'S')
   delete ida;
 }
 END_SECTION
@@ -295,11 +309,18 @@ START_SECTION(queue_priority_dequeue_order)
   TEST_EQUAL(out.scan_id, 100)  // priority 3
   TEST_EQUAL(out.priority, 3)
 
-  // Queue empty — idle cycle returns AGC (never returns 0)
+  // Queue empty — idle cycle returns a fresh survey MS1 (never returns 0).
+  // Note the p3 command dequeued just above was TEST-INJECTED via FLASHIdaTestAccess::push, which
+  // bypasses the builders; scan_id 100 distinguishes it from the survey the engine mints here.
+  // Nothing in production emits a priority-3 command except Step 5 —
+  // only_the_idle_survey_is_emitted_at_priority_3 pins that on engine-emitted commands.
   int idle_result = ida->getNextScanCommand(out);
   TEST_EQUAL(idle_result, 1)
   TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
-  TEST_EQUAL(out.is_agc, 1)
+  TEST_EQUAL(out.is_agc, 0)
+  TEST_EQUAL(out.msn_level, 1)
+  TEST_EQUAL(out.priority, 3)
+  TEST_NOT_EQUAL(out.scan_id, 100)
 
   delete ida;
 }
@@ -396,8 +417,15 @@ START_SECTION(agc_scan_is_dequeued_first)
   ms2_cmd.scan_id = 200;
   FLASHIdaTestAccess::push(*ida,ms2_cmd);
 
-  // First dequeue: with agc_interval_seconds=0, AGC is always needed.
-  // AGC should be returned before any queued command.
+  // First dequeue: with agc_interval_seconds=0, an AGC prescan is always due.
+  // It should be returned before any queued command — Step 1 sits ahead of the dequeue.
+  //
+  // needsAGC() is `elapsed > agc_interval_ms`, so with the interval at 0 any non-zero elapsed
+  // qualifies. Sleep past the millisecond boundary the steady_clock difference is measured in:
+  // this used to rely on FLASHIda construction happening to take >=1 ms, and the drained-queue
+  // path fabricating a prescan anyway if it did not. Both crutches are gone (ADR-0031).
+  std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
   ScanCommand out{};
   ida->getNextScanCommand(out);
   TEST_EQUAL(out.is_agc, 1)
@@ -417,9 +445,10 @@ START_SECTION(timeout_cleanup_no_crash)
   // Calling getNextScanCommand (which calls cleanupExpiredCommands_) should not crash.
   ScanCommand cmd{};
   int result = ida->getNextScanCommand(cmd);
-  TEST_EQUAL(result, 1)  // Queue empty, idle cycle returns AGC
+  TEST_EQUAL(result, 1)  // Queue empty, idle cycle returns a survey MS1
   TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
-  TEST_EQUAL(cmd.is_agc, 1)
+  TEST_EQUAL(cmd.is_agc, 0)
+  TEST_EQUAL(cmd.priority, 3)
   delete ida;
 }
 END_SECTION

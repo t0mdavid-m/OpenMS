@@ -1567,17 +1567,26 @@ START_SECTION(processScan_commands_dequeued)
     TEST_EQUAL(cmd.enqueue_timestamp_ms > 0, true)
   }
 
-  // After a full drive the idle cycle leaves a pending priority-3 survey MS1 queued (the last idle AGC pushed
-  // it). So the FIRST post-drive command is that survey MS1 (is_agc==0), and the SECOND is the idle AGC.
+  // After a full drive the queue is drained, so every further call emits a fresh idle survey MS1 --
+  // no AGC prescan alternates with them any more (ADR-0031), and this fixture pins
+  // agc_interval_seconds high so the scheduled prescan cannot fire either. Two consecutive calls
+  // therefore both yield priority-3 surveys, with DIFFERENT tracking ids: each is minted on the
+  // call that returns it, rather than one being left queued by a preceding prescan.
   ScanCommand cmd{};
   int idle_result = ida->getNextScanCommand(cmd);
   TEST_EQUAL(idle_result, 1)
   TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
   TEST_EQUAL(cmd.msn_level, 1)
   TEST_EQUAL(cmd.is_agc, 0)
-  int agc_result = ida->getNextScanCommand(cmd);
-  TEST_EQUAL(agc_result, 1)
-  TEST_EQUAL(cmd.is_agc, 1)
+  TEST_EQUAL(cmd.priority, 3)
+  const int first_idle_id = cmd.scan_id;
+
+  int second_result = ida->getNextScanCommand(cmd);
+  TEST_EQUAL(second_result, 1)
+  TEST_EQUAL(cmd.msn_level, 1)
+  TEST_EQUAL(cmd.is_agc, 0)
+  TEST_EQUAL(cmd.priority, 3)
+  TEST_NOT_EQUAL(cmd.scan_id, first_idle_id)
 
   delete ida;
 }
@@ -2254,9 +2263,17 @@ END_SECTION
 // P4-U15: AGC command uses ms1 config values (not hardcoded zeros)
 START_SECTION(agc_command_values)
 {
-  // agc_fast_json: agc_interval_seconds=0 triggers AGC immediately
+  // agc_fast_json: agc_interval_seconds=0, so a scheduled prescan is due as soon as any measurable
+  // time has passed. Step 1 is now the ONLY source of an AGC prescan (ADR-0031).
   // AGC is a dedicated minimal gain-control scan: makeAGC hardcodes agc_target=30000, max_it=1
   FLASHIda* ida = new FLASHIda(const_cast<char*>(agc_fast_json));
+
+  // needsAGC() is `elapsed > agc_interval_ms`, so with the interval at 0 any non-zero elapsed
+  // qualifies. Sleep past the millisecond boundary the steady_clock difference is measured in.
+  // Before ADR-0031 this section passed either way -- the drained-queue path fabricated a prescan
+  // regardless of whether the timer had fired, so it could not distinguish the two and never
+  // proved Step 1 ran at all.
+  std::this_thread::sleep_for(std::chrono::milliseconds(5));
 
   ScanCommand cmd{};
   int r = ida->getNextScanCommand(cmd);
@@ -2350,36 +2367,25 @@ START_SECTION(processScan_tag_targeting_produces_followups)
 }
 END_SECTION
 
-// Idle cycle: empty queue produces alternating AGC then MS1, 3 full iterations
-START_SECTION(idle_cycle_agc_then_ms1)
+// Idle cycle: an empty queue produces a survey MS1 on EVERY call, never an AGC prescan.
+//
+// This section used to assert a strictly alternating AGC/MS1 pair, which was the drained-queue path
+// fabricating a prescan as filler and pushing the survey behind it. Prescans are now scheduled by
+// scheduling.agc_interval_seconds alone (ADR-0031), and idle_cycle_json pins that at 9999 s, so no
+// prescan can appear here at all -- which is exactly what makes `is_agc == 0` a real assertion
+// rather than a description of call parity.
+START_SECTION(idle_cycle_returns_survey_ms1)
 {
   FLASHIda* ida = new FLASHIda(const_cast<char*>(idle_cycle_json));
 
-  // No processScan — queue is empty from the start.
-  // Each getNextScanCommand call on an empty queue should produce an AGC (returned
-  // immediately) and push an MS1 at priority 3 into the queue. The next call
-  // dequeues that MS1.  So 6 calls = 3 AGC + 3 MS1, strictly alternating.
+  // No processScan — the queue is empty from the start, so every call takes Step 5.
   ScanCommand cmd{};
+  std::set<int> ids;
 
-  for (int iter = 0; iter < 3; ++iter)
+  for (int iter = 0; iter < 6; ++iter)
   {
-    // Odd call: AGC
-    int r1 = ida->getNextScanCommand(cmd);
-    TEST_EQUAL(r1, 1)
-    TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
-    TEST_EQUAL(cmd.is_agc, 1)
-    TEST_EQUAL(cmd.msn_level, 1)
-    TEST_EQUAL(cmd.agc_target, 30000)
-    TEST_EQUAL(cmd.priority, 0)
-
-    // Scan description: 3-char ID + type code 'A' for AGC calibration
-    std::string agc_desc(cmd.scan_description);
-    TEST_EQUAL(agc_desc.size() >= 4, true)
-    TEST_EQUAL(agc_desc[3], 'A')
-
-    // Even call: MS1
-    int r2 = ida->getNextScanCommand(cmd);
-    TEST_EQUAL(r2, 1)
+    int r = ida->getNextScanCommand(cmd);
+    TEST_EQUAL(r, 1)
     TEST_EQUAL(std::strlen(cmd.scan_description) <= 15, true)
     TEST_EQUAL(cmd.is_agc, 0)
     TEST_EQUAL(cmd.msn_level, 1)
@@ -2390,7 +2396,14 @@ START_SECTION(idle_cycle_agc_then_ms1)
     std::string ms1_desc(cmd.scan_description);
     TEST_EQUAL(ms1_desc.size() >= 4, true)
     TEST_EQUAL(ms1_desc[3], 'S')
+
+    ids.insert(cmd.scan_id);
   }
+
+  // Each idle survey is minted on the call that returns it, so six calls yield six distinct ids.
+  // A regression that returned the same queued command twice would still satisfy every assertion
+  // above.
+  TEST_EQUAL(ids.size(), (size_t)6)
 
   delete ida;
 }
@@ -2418,15 +2431,17 @@ START_SECTION(ms2_priority_beats_idle_ms1)
   TEST_EQUAL(out.scan_id, 42)
   TEST_EQUAL(out.priority, 2)
 
-  // Second call: queue empty -> idle cycle fires: returns AGC, pushes MS1 at prio 3
-  r = ida->getNextScanCommand(out);
-  TEST_EQUAL(r, 1)
-  TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
-  TEST_EQUAL(out.is_agc, 1)
-  TEST_EQUAL(out.msn_level, 1)
-  TEST_EQUAL(out.priority, 0)
+  // The priority claim needs an MS1 that is genuinely WAITING at priority 3 while an MS2 sits at
+  // priority 2. The idle survey no longer provides one: Step 5 pushes it and dequeues it within the
+  // same call (ADR-0031), so it is never observably queued. Inject the pair directly instead --
+  // which is a sharper test of the ladder anyway, since it does not depend on how the survey got
+  // there.
+  ScanCommand ms1_waiting{};
+  ms1_waiting.msn_level = 1;
+  ms1_waiting.priority = 3;
+  ms1_waiting.scan_id = 44;
+  FLASHIdaTestAccess::push(*ida, ms1_waiting);
 
-  // Now push another MS2 at priority 2 WHILE the idle MS1 sits at priority 3
   ScanCommand ms2_b{};
   ms2_b.msn_level = 2;
   ms2_b.priority = 2;
@@ -2434,7 +2449,7 @@ START_SECTION(ms2_priority_beats_idle_ms1)
   ms2_b.faims_cv = -50.0;
   FLASHIdaTestAccess::push(*ida,ms2_b);
 
-  // Third call: MS2 at priority 2 beats idle MS1 at priority 3
+  // Second call: MS2 at priority 2 beats the MS1 waiting at priority 3, despite being pushed later.
   r = ida->getNextScanCommand(out);
   TEST_EQUAL(r, 1)
   TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
@@ -2442,13 +2457,22 @@ START_SECTION(ms2_priority_beats_idle_ms1)
   TEST_EQUAL(out.scan_id, 43)
   TEST_EQUAL(out.priority, 2)
 
-  // Fourth call: idle MS1 at priority 3 is dequeued
+  // Third call: the MS1 at priority 3 is dequeued.
   r = ida->getNextScanCommand(out);
   TEST_EQUAL(r, 1)
   TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
   TEST_EQUAL(out.is_agc, 0)
   TEST_EQUAL(out.msn_level, 1)
+  TEST_EQUAL(out.scan_id, 44)
   TEST_EQUAL(out.priority, 3)
+
+  // Fourth call: queue drained -> a fresh idle survey, minted here rather than left over.
+  r = ida->getNextScanCommand(out);
+  TEST_EQUAL(r, 1)
+  TEST_EQUAL(out.is_agc, 0)
+  TEST_EQUAL(out.msn_level, 1)
+  TEST_EQUAL(out.priority, 3)
+  TEST_NOT_EQUAL(out.scan_id, 44)
 
   delete ida;
 }
@@ -2489,13 +2513,17 @@ START_SECTION(processScan_ms1_none_selection)
   AcqResult acq = runInterleaved(ida, ms1_scans, {});
   TEST_EQUAL(acq.ms2_cmds.size(), (size_t)0)
 
-  // After the drive the idle cycle's pending priority-3 survey MS1 is dequeued first (is_agc==0), then the AGC.
+  // After the drive the queue is drained, so every call yields a fresh idle survey MS1 -- no AGC
+  // prescan is interleaved with them any more (ADR-0031).
   ScanCommand cmd{};
   TEST_EQUAL(ida->getNextScanCommand(cmd), true)  // idle cycle always returns 1
   TEST_EQUAL(cmd.msn_level, 1)
-  TEST_EQUAL(cmd.is_agc, 0)                       // pending survey MS1, not the AGC yet
+  TEST_EQUAL(cmd.is_agc, 0)
+  TEST_EQUAL(cmd.priority, 3)
   TEST_EQUAL(ida->getNextScanCommand(cmd), true)
-  TEST_EQUAL(cmd.is_agc, 1)                       // now the idle AGC (queue empty)
+  TEST_EQUAL(cmd.msn_level, 1)
+  TEST_EQUAL(cmd.is_agc, 0)
+  TEST_EQUAL(cmd.priority, 3)
 
   delete ida;
 }
@@ -2688,9 +2716,12 @@ START_SECTION(processScan_ms1_min_charge_filter)
   TEST_EQUAL(result, 1)
   TEST_EQUAL(cmd.msn_level, 1)
   TEST_EQUAL(cmd.is_agc, 0)
+  TEST_EQUAL(cmd.priority, 3)
   result = ida.getNextScanCommand(cmd);
   TEST_EQUAL(result, 1)
-  TEST_EQUAL(cmd.is_agc, 1)
+  TEST_EQUAL(cmd.msn_level, 1)
+  TEST_EQUAL(cmd.is_agc, 0)   // a drained queue yields surveys, never a prescan (ADR-0031)
+  TEST_EQUAL(cmd.priority, 3)
 }
 END_SECTION
 
@@ -2699,7 +2730,11 @@ START_SECTION(processScan_agc_scan_skipped)
   // Use agc_fast_json (agc_interval_seconds=0) to get an AGC command immediately
   FLASHIda* ida = new FLASHIda(const_cast<char*>(agc_fast_json));
 
-  // Get the AGC command the engine produces on init
+  // Get a scheduled AGC prescan from the engine. agc_fast_json sets agc_interval_seconds=0, and the
+  // sleep carries `elapsed` past the millisecond boundary needsAGC() measures in -- Step 1 is the
+  // only path that emits a prescan now (ADR-0031).
+  std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
   ScanCommand agc_cmd{};
   int r = ida->getNextScanCommand(agc_cmd);
   TEST_EQUAL(r, 1)
@@ -2719,9 +2754,15 @@ START_SECTION(processScan_agc_scan_skipped)
   // Verify no commands were generated
   ScanCommand next_cmd{};
   int has_cmd = ida->getNextScanCommand(next_cmd);
-  // Only expect the next idle-cycle AGC/MS1, not any MS2 from deconvolution
-  // If the gate works, the scan data was never processed, so no MS2 commands
-  TEST_EQUAL(has_cmd == 0 || next_cmd.is_agc == 1 || next_cmd.msn_level == 1, true)
+  // If the gate works, the scan data was never deconvolved, so nothing MS2 was queued and the next
+  // drain can only be an idle survey or another scheduled prescan -- both MS1, both stage-less.
+  //
+  // The old form was `has_cmd == 0 || is_agc == 1 || msn_level == 1`, which is vacuous: an AGC is
+  // itself msn_level 1, so the disjunction reduced to "msn_level == 1" and getNextScanCommand never
+  // returns 0. Assert the absence of MS2 directly instead.
+  TEST_EQUAL(has_cmd, 1)
+  TEST_EQUAL(next_cmd.msn_level, 1)
+  TEST_EQUAL(next_cmd.num_stages, 0)
 
   delete ida;
 }
@@ -2829,11 +2870,13 @@ START_SECTION(cleanup_expired_drops_stale_queued_commands)
 
   // getNextScanCommand calls cleanupExpired in step 3.
   // After cleanup, the queue should be empty — all 3 stale commands dropped.
-  // The idle cycle (step 5) will fire and return an AGC.
+  // The idle cycle (step 5) will fire and return a fresh survey MS1.
   ScanCommand out{};
   int r = ida->getNextScanCommand(out);
   TEST_EQUAL(r, 1)
-  TEST_EQUAL(out.is_agc, 1)  // idle cycle AGC, not a stale MS2
+  TEST_EQUAL(out.msn_level, 1)  // idle survey, not a stale MS2
+  TEST_EQUAL(out.is_agc, 0)
+  TEST_EQUAL(out.priority, 3)
 
   // Queue at priority 2 should now be empty (stale commands dropped)
   TEST_EQUAL(FLASHIdaTestAccess::queueSize(*ida,2), (size_t)0)
@@ -2842,12 +2885,100 @@ START_SECTION(cleanup_expired_drops_stale_queued_commands)
 }
 END_SECTION
 
+/////////////////////////////////////////////////////////////
+// ADR-0031: the scheduled prescan is the ONLY prescan, and priority 3 is the drained-queue signal.
+// Both facts are now load-bearing and neither was pinned before.
+/////////////////////////////////////////////////////////////
+
+// The interval AGC must fire on its schedule -- roughly once per interval, not never and not on
+// every drain.
+//
+// Why this exists: with the drained-queue prescan deleted, agc_interval_seconds is the only thing
+// that emits a prescan at all. A broken gate means the instrument acquires an entire run with no
+// flux estimate, and every scan is gain-corrected from whatever the startup handshake left behind.
+// Nothing else would notice -- the same silent shape as the faims cv_values `size() > 1` bug and
+// the source_cid_scaling `> 0` guard.
+START_SECTION(interval_agc_fires_once_per_interval)
+{
+  nlohmann::json j = nlohmann::json::parse(standard_json);
+  j["scheduling"]["agc_interval_seconds"] = 0.05;   // 50 ms
+  std::string agc_periodic_json = j.dump();
+
+  FLASHIda ida(const_cast<char*>(agc_periodic_json.c_str()));
+
+  int agc = 0, other = 0;
+  for (int i = 0; i < 20; ++i)
+  {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    ScanCommand c {};
+    int r = ida.getNextScanCommand(c);
+    TEST_EQUAL(r, 1)
+    if (c.is_agc) ++agc; else ++other;
+  }
+
+  std::cout << "[AGC-CADENCE] interval_ms=50 drains=20 agc=" << agc << " other=" << other << std::endl;
+
+  // ~200 ms of sleep against a 50 ms interval. The bounds are deliberately loose and asymmetric: a
+  // loaded runner only ever sleeps LONGER, which raises `agc`, so the upper bound carries the
+  // slack and there is no flake direction that a slow machine can push this into.
+  TEST_EQUAL(agc >= 2, true)
+  TEST_EQUAL(agc <= 12, true)
+  // Anti-vacuous: idle surveys still flow between prescans. A gate stuck open would give agc == 20.
+  TEST_EQUAL(other > 0, true)
+}
+END_SECTION
+
+// Nothing but the idle survey is emitted at priority 3.
+//
+// Why this exists: three C# drain loops (FLASHIdaWrapper's offline harness x2, ContinuityTestHarness
+// .PushScan) terminate on `msn_level == 1 && priority == 3`. If any other command were ever emitted
+// at priority 3 those loops would stop early, and the failure is invisible -- a truncated drain
+// looks exactly like "the engine had nothing more to do".
+//
+// Scoped to ENGINE-EMITTED commands via runInterleaved. Tests may legitimately inject a priority-3
+// command through FLASHIdaTestAccess::push (queue_priority_dequeue_order does); that bypasses the
+// builders and says nothing about what production emits.
+START_SECTION(only_the_idle_survey_is_emitted_at_priority_3)
+{
+  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  auto ms2_scans = loadTsvScans(ms2_tsv_path);
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
+
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(standard_json));
+  AcqResult a = runInterleaved(ida, ms1_scans, std::vector<ScanData>{ms2_scans[0]});
+  delete ida;
+
+  int p3 = 0, ms2_seen = 0;
+  for (const auto& c : a.all_cmds)
+  {
+    if (c.msn_level == 2) ++ms2_seen;
+    if (c.priority != 3) continue;
+    ++p3;
+    TEST_EQUAL(c.msn_level, 1)
+    TEST_EQUAL(c.is_agc, 0)
+  }
+
+  std::cout << "[P3-CONTRACT] commands=" << a.all_cmds.size() << " p3=" << p3
+            << " ms2=" << ms2_seen << std::endl;
+
+  // Anti-vacuous twice over: the drive must have produced real MS2 workload (so the loop had
+  // non-p3 commands to reject) AND at least one priority-3 command (so the assertions above ran).
+  TEST_EQUAL(ms2_seen > 0, true)
+  TEST_EQUAL(p3 > 0, true)
+}
+END_SECTION
+
 // MS1 and AGC scans should be resolved from pending_scan_map_ after processScan
 START_SECTION(ms1_agc_resolved_from_pending_map)
 {
-  FLASHIda* ida = new FLASHIda(const_cast<char*>(idle_cycle_json));
+  // agc_fast_json, not idle_cycle_json: this section needs an AGC prescan in the pending map, and
+  // Step 1 is now the only thing that puts one there (ADR-0031). idle_cycle_json pins the interval
+  // at 9999 s, so under it this section would never see a prescan at all.
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(agc_fast_json));
 
-  // Idle cycle: returns AGC immediately, pushes MS1 at priority 3
+  // Interval 0 + a sleep past the millisecond boundary -> the first drain takes Step 1.
+  std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
   ScanCommand agc_cmd{};
   int r = ida->getNextScanCommand(agc_cmd);
   TEST_EQUAL(r, 1)
@@ -2856,16 +2987,18 @@ START_SECTION(ms1_agc_resolved_from_pending_map)
   // AGC is in pending map via registerPending
   TEST_EQUAL(FLASHIdaTestAccess::queue(*ida).pendingScanMapSize(), (size_t)1)
 
-  // Dequeue MS1 — now both AGC and MS1 are in pending map
+  // Next drain: Step 1 just called recordAGCTime(), so `elapsed > 0` is false again and the drained
+  // queue takes Step 5 -- an idle survey MS1, registered pending by dequeue(). Both are now held.
   ScanCommand ms1_cmd{};
   r = ida->getNextScanCommand(ms1_cmd);
   TEST_EQUAL(r, 1)
   TEST_EQUAL(ms1_cmd.is_agc, 0)
   TEST_EQUAL(ms1_cmd.msn_level, 1)
+  TEST_EQUAL(ms1_cmd.priority, 3)
   TEST_EQUAL(FLASHIdaTestAccess::queue(*ida).pendingScanMapSize(), (size_t)2)
 
   // processScan with AGC scan description — should resolve AGC from pending map
-  // AGC gate (desc[3]=='A') returns 0 and resolves at line 715
+  // AGC gate (desc[3]=='A') returns 0 and resolves the pending entry.
   int n = ida->processScan(nullptr, nullptr, 0, 0.0, 1, agc_cmd.scan_description);
   TEST_EQUAL(n, 0)
   TEST_EQUAL(FLASHIdaTestAccess::queue(*ida).pendingScanMapSize(), (size_t)1)

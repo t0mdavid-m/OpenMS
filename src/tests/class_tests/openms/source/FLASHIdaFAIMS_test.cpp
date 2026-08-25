@@ -59,7 +59,8 @@ namespace
     "scan_timeout": {
       "enabled": false,
       "value_ms": 30000
-    }
+    },
+    "agc_interval_seconds": 9999999
   },
   "files": {
     "target_logs": [],
@@ -141,7 +142,8 @@ namespace
     "scan_timeout": {
       "enabled": false,
       "value_ms": 30000
-    }
+    },
+    "agc_interval_seconds": 9999999
   },
   "files": {
     "target_logs": [],
@@ -221,7 +223,8 @@ namespace
     "scan_timeout": {
       "enabled": false,
       "value_ms": 30000
-    }
+    },
+    "agc_interval_seconds": 9999999
   },
   "files": {
     "target_logs": [],
@@ -450,11 +453,13 @@ START_SECTION(ms2_carries_parent_cv)
   TEST_EQUAL(out.msn_level, 2)
   TEST_REAL_SIMILAR(out.faims_cv, -40.0)  // parent CV preserved
 
-  // Queue is now empty — idle cycle returns AGC
+  // Queue is now empty — idle cycle returns a survey MS1, not an AGC prescan (ADR-0031).
   result = ida->getNextScanCommand(out);
   TEST_EQUAL(result, 1)
   TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
-  TEST_EQUAL(out.is_agc, 1)
+  TEST_EQUAL(out.is_agc, 0)
+  TEST_EQUAL(out.msn_level, 1)
+  TEST_EQUAL(out.priority, 3)
 
   delete ida;
 }
@@ -480,8 +485,9 @@ START_SECTION(cv_transition_ms1_before_ms2s)
   AcqResult a = runInterleaved(&ida, std::vector<ScanData>{ecoli[0]}, std::vector<ScanData>{});
 
   // First prio-0 NON-AGC MS1 (the CV transition) and first MS2, in raw dequeue order. Exclude the startup idle
-  // AGC (also msn_level 1 / priority 0, but is_agc==1, at the -40 startup CV): the CV-transition MS1 is the ONLY
-  // is_agc==0, prio-0, level-1 command (FLASHIda.cpp:908); the idle survey MS1 is priority 3.
+  // The CV-transition MS1 is the ONLY is_agc==0, prio-0, level-1 command the engine emits; the idle
+  // survey MS1 is priority 3. A scheduled AGC prescan would also be msn_level 1 / priority 0 but
+  // carries is_agc==1 — and this fixture pins agc_interval_seconds at 9999999, so none can fire.
   int cv_idx = -1, ms2_idx = -1;
   for (int i = 0; i < (int)a.all_cmds.size(); ++i)
   {
