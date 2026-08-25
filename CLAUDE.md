@@ -128,13 +128,23 @@ in `IdaLogger::scanTypeFromDescription_`:
 
 ## `getNextScanCommand` — never returns 0
 
-`FLASHIda.cpp:617-739`. Five steps: (1) AGC → (2) cycle-time MS1 → (3) cleanup → (4) priority
-dequeue → (5) idle fallback. **Every path returns 1.** When all four queues are empty, Step 5
-fabricates an AGC command, *also* pushes a fresh priority-3 survey MS1, registers the AGC pending,
-and returns 1 — the instrument is never observably starved. The only `return 0` in the whole file
-belongs to `processScan`. `FLASHIda.h:99`'s "0 if error" comment is imprecise.
+Five steps: (1) scheduled AGC prescan → (2) cycle-time MS1 → (3) cleanup → (4) priority dequeue →
+(5) idle fallback. **Every path returns 1.** When all four queues are empty, Step 5 mints a fresh
+priority-3 survey MS1, pushes it, and re-enters `dequeue()` to return it — the instrument is never
+observably starved. The only `return 0` in the whole file belongs to `processScan`.
+`FLASHIda.h:99`'s "0 if error" comment is imprecise.
 
-Callers must therefore terminate on `IsAgc != 0` or bound their iterations. See `../CLAUDE.md`.
+Callers must therefore terminate on `msn_level == 1 && priority == 3`, or bound their iterations.
+See `../CLAUDE.md`.
+
+⚠️ **Step 5 emits NO prescan** (ADR-0031). It used to fabricate one as filler *and* call
+`recordAGCTime()`, which reset the timer Step 1 reads — so Step 1 could only fire in a run whose
+queue stayed busy for a whole interval, and `agc_interval_seconds` never governed the real cadence.
+Step 1 is now the only `makeAGC()` caller. Two details of Step 5's shape are load-bearing: it
+re-enters `dequeue()` rather than returning its local copy, which is what makes the survey inherit
+`recordMS1Time()`, the timestamps, pending-map registration and the rich log row from the Step 4
+tail; and that re-entry is also the correct read under a concurrent `processScan`, since work pushed
+between the two dequeues wins on priority.
 
 Two subtleties:
 
@@ -154,10 +164,18 @@ the C# TPL Dataflow `ActionBlock` thread (serialized with itself, `MaxDegreeOfPa
 
 | P | Commands |
 |---|---|
-| 0 | AGC; FAIMS CV-transition MS1; cycle-time MS1; **both follow-up kinds** (quant `F`, conditional `C`) |
+| 0 | FAIMS CV-transition MS1; cycle-time MS1; **both follow-up kinds** (quant `F`, conditional `C`) |
 | 1 | MS3, including exploration MS3 variants |
 | 2 | MS2 from MS1 selection; exploration MS2 variants |
-| 3 | survey / idle MS1 |
+| 3 | idle survey MS1 — **and nothing else** |
+
+The **AGC prescan is not in this table**: `makeAGC()` sets `priority = 0`, but Step 1 returns the
+command directly and never pushes it, so that field is never read. Its ordering comes from where the
+check sits — ahead of the dequeue — not from its value.
+
+Priority 3 is a contract, not a detail: three C# drain loops treat a priority-3 MS1 as "the queue is
+drained" (ADR-0031). Emitting anything else at 3 truncates them silently. Pinned by
+`FLASHIda_ProcessScan_test::only_the_idle_survey_is_emitted_at_priority_3` ∥ C# `IdleSurveySentinelTests`.
 
 Assigned at build time, never re-ranked. Within a priority `dequeue()` is strict FIFO, which is
 what makes `scan_commands.tsv` row order and `child_ids` order deterministic. `push()` clamps
@@ -393,10 +411,14 @@ the caller's responsibility.
 | `identification.tsv` | 34 | per-scan MS2/MS3 identification leaf (32→34: `tag_count` beside `flash_extender_score`, `fragment_qscores` inside the aligned fragment-mass table) |
 | `pooled_identification.tsv` | 19 | per-precursor cumulative proteoform trajectory |
 
-- **Rows are written at dequeue**, from 3 sites inside `getNextScanCommand`, each under
-  `analysis_mutex_`. So row order == dequeue order, and an enqueued-but-never-dequeued command
-  never appears. Only the priority-dequeue site passes `precursor_id` and `ms3_proteoform` (a
-  one-shot `takeMS3Proteoform`); both AGC sites log `precursor_id=0` and an empty proteoform.
+- **Rows are written at dequeue**, from 2 sites inside `getNextScanCommand`. So row order == dequeue
+  order, and an enqueued-but-never-dequeued command never appears. Only the priority-dequeue site
+  passes `precursor_id` and `ms3_proteoform` (a one-shot `takeMS3Proteoform`); the scheduled-prescan
+  site (Step 1) logs `precursor_id=0` and an empty proteoform. There used to be three sites, the
+  third being Step 5's fabricated prescan — the idle survey now goes out through the priority-dequeue
+  site like any other command (ADR-0031).
+  ⚠️ Neither site takes `analysis_mutex_` — that is ADR-0025, and it is why `IdaLogger` serialises
+  each stream itself.
 - **Two-stage MS3 scalars**: 11 columns are emitted as `"stage0;stage1"` **only when
   `msn_level == 3`** (mono_mass, qscore, charge_cos, charge_snr, iso_cos, snr, charge_score,
   hcd_energy, ppm_error, precursor_intensity, peakgroup_intensity). Everything else emits stage 0
