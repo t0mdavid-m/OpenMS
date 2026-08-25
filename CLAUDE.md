@@ -413,6 +413,26 @@ was multi-valued only under the `charge_based_exclusion` developer flag — so a
 depended on an exclusion-KEYING flag and the mode was inert wherever that flag sat at its default,
 i.e. everywhere. The flag is deleted; exclusion is mass-keyed.
 
+**An inclusion row may name WHICH charges** (ADR-0028), which `precursor_charges` cannot — it is
+all-or-one. `PrecursorSelection::authoredChargesFor_` unions the charge sets of the RT-active rows
+whose mass matches, and that **authored charge set** filters `peakGroupNotchCandidates` before
+`selectNotches` runs, so the SNR gate and the intensity ranking above are unchanged — the set only
+shrinks what they see. It can never extend: a charge the deconvolution did not resolve has no
+measured window and is skipped, and `min_charge` still applies.
+
+Two things move with it. The **anchor** becomes the highest-SNR *named* charge rather than
+`getRepAbsCharge()`/`getBestQScoreCharge()`, resolved before the selection loop because it needs the
+set; and its **own** per-charge qscore (`PeakGroup::getAllQscores()`) is what gets logged and
+excluded on, rather than a sibling's. Exclusion is re-keyed to `(nominal mass, charge)` in
+`authored_acquired_rt_map_` **for these species only** — everything else stays mass-keyed as
+ADR-0021 left it — so `single` walks the set across surveys, one charge per survey, and the species
+is skipped once every named charge is spent. A call-local guard stops non-strict inclusion's phase-1
+pass taking a second named charge within one survey.
+
+This also replaced a matcher that walked every RT-active row and took the first whose charge fell
+inside the envelope **without checking that row's mass**. It was invisible because all committed
+inclusion lists write `-1`, which returns on the first row before the mass ever mattered.
+
 ⚠️ **The fan-out lives at the emit loop, below the mass-level bookkeeping — never in the candidate
 loop.** That bookkeeping runs once per species and both its guards
 (`tqscore_exceeding_mass_rt_map_`, and the "previously acquired with higher qscore" skip) key on
