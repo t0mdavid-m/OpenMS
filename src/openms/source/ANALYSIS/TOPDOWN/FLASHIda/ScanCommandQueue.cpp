@@ -107,7 +107,8 @@ namespace OpenMS
     const int max_id = base * base * base - 1;
     int id = tracking_id_counter_++;
     if (tracking_id_counter_ > max_id)
-      tracking_id_counter_ = 0;
+      tracking_id_counter_ = 1;  // wrap to 1, NOT 0 -- 0 is the reserved "no parent" sentinel.
+                                 // See the counter's declaration in ScanCommandQueue.h.
     return id;
   }
 
@@ -357,7 +358,16 @@ namespace OpenMS
     cmd.peakgroup_intensity = pg.getIntensity();
     cmd.pad2 = 0;   // hcd_energy is derived from stages[0] by syncEnergyMirrors_ below
 
-    // Parent tracking ID
+    // Parent tracking ID. `> 0` is exactly right, but only because nextTrackingIdInt_ never issues
+    // 0 -- it is the reserved "no parent / root" sentinel FLASHIda.cpp passes literally for a root
+    // MS2. That reservation is the whole contract: while the counter DID issue 0, a survey holding
+    // it produced MS2s with an empty parent_tracking_id, indistinguishable from having no parent.
+    // The AGC prescan hid this by absorbing 0 on every fresh engine until ADR-0031 deleted it.
+    //
+    // buildMS3 and buildFollowUp encode their parent unconditionally, which reads as inconsistent
+    // and is not: with 0 unreachable, every parent they are handed is a real id, so a guard there
+    // could never fire. Do not "harmonise" by removing this one -- it is what keeps a root MS2's
+    // parent empty rather than "!!!".
     if (parent_scan_id > 0)
     {
       std::string parent_enc = encode(parent_scan_id);

@@ -195,8 +195,22 @@ namespace OpenMS
     /// Mutex protecting queues_, tracking_id_counter_, pending_scan_map_
     mutable std::mutex queue_mutex_;
 
-    /// Monotonically increasing tracking ID counter
-    int tracking_id_counter_ = 0;
+    /// Monotonically increasing tracking ID counter.
+    ///
+    /// **Starts at 1, and 0 is never issued.** 0 is the "no parent / root" sentinel that buildMS2
+    /// tests for (`if (parent_scan_id > 0)`) and that FLASHIda.cpp passes literally for a root MS2,
+    /// so a command actually HOLDING id 0 is indistinguishable from one with no parent — its
+    /// children ship with an empty parent_tracking_id and the lineage graph loses a generation.
+    ///
+    /// This was latent for the whole life of the code: the drained-queue AGC prescan was the first
+    /// command minted on every fresh engine, so it absorbed id 0 and no survey ever held it.
+    /// Deleting that prescan (ADR-0031) handed 0 to the first survey and broke MS2 parentage on the
+    /// instrument as well as in tests. ADR-0008 independently reserves 0 on the sibling identity
+    /// channel, for the same "it looks like an absence" reason.
+    ///
+    /// Pinned by FLASHIda_ProcessScan_test::tracking_id_zero_is_never_issued, which covers the wrap
+    /// as well as the fresh engine.
+    int tracking_id_counter_ = 1;
 
     /// Map of tracking ID -> ScanCommand for pending (in-flight) scans
     std::unordered_map<int, ScanCommand> pending_scan_map_;
