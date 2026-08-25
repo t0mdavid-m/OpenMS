@@ -747,52 +747,18 @@ FLASHIda::FLASHIda(char* arg) :
 
     // Step 4: Dequeue by priority (0 = highest -> 3 = lowest)
     auto dequeued = queue_.dequeue();
-    if (dequeued.has_value())
+
+    if (!dequeued.has_value())
     {
-      out = dequeued.value();
-      if (out.msn_level == 1 && out.is_agc == 0)
-        queue_.recordMS1Time();
-      // faims_cv already set at creation time (MS2 -> parent CV, CV-transition MS1 -> next CV)
+      // Step 5: Idle survey -- the queue is drained, so emit a fallback survey MS1 at the lowest
+      // priority and hand it straight back, so the instrument is never left without a command.
       //
-      // No analysis_mutex_ -- this is the one drain site that reads shared state, and it now takes
-      // only the leaf locks it actually needs. precursorIdForTracking_ locks precursor_map_mutex_
-      // itself; takeMS3Proteoform locks queue_mutex_ itself. Neither can be held for longer than a
-      // hash lookup, whereas analysis_mutex_ is held across a whole deconvolution.
-      //
-      // The VALUE read here is already final and would be even without the map lock: the write
-      // happens before its queue_.push(), and the dequeue() above acquired the same queue_mutex_
-      // that push released. The lock exists for the container -- a concurrent insert can rehash the
-      // table while find() is walking it. See FLASHIda.h.
-      //
-      // Take the wide MS3 fragment ProForma stashed at buildMS3 time (empty for non-MS3 commands) so the
-      // scan_commands.tsv row carries the fired MS3 target's fragment identity.
-      std::string ms3pf = (out.msn_level == 3) ? queue_.takeMS3Proteoform(out.scan_id) : std::string();
-      logger_.writeScanCommandRow(out, precursorIdForTracking_(out.scan_id), ms3pf);
-      return 1;
-    }
-
-    // Step 5: Idle cycle -- queue empty, keep the instrument busy with AGC + MS1
-    // Create an AGC command (returned immediately) and push an MS1 at priority 3
-    // into the queue as a fallback scan (lowest priority, behind follow-ups/MS3/MS2).
-    {
-      // 5a: AGC
-      ScanCommand agc_cmd = queue_.makeAGC();
-      agc_cmd.faims_cv = faims_cv;
-      agc_cmd.scan_id = queue_.nextTrackingId();
-      queue_.recordAGCTime();
-
-      uint64_t now_ms = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-          std::chrono::steady_clock::now().time_since_epoch()).count());
-      agc_cmd.enqueue_timestamp_ms = now_ms;
-      agc_cmd.dequeue_timestamp_ms = now_ms;
-
-      std::string agc_id_str = ScanCommandQueue::encode(agc_cmd.scan_id);
-      std::snprintf(agc_cmd.scan_description, 16, "%sA", agc_id_str.c_str());
-
-      std::cout << "[TRACK-CREATE] id=" << agc_id_str << " ms_level=1 type=idle_agc" << std::endl;
-
-      // 5b: MS1 -- use default priority 3 (lowest, behind follow-ups/MS3/MS2)
+      // There is deliberately NO AGC prescan on this path (ADR-0031). A prescan is a scheduled
+      // flux measurement, emitted by Step 1 when scheduling.agc_interval_seconds has elapsed and
+      // at no other time; it is not filler for an idle instrument. Fabricating one here also
+      // called recordAGCTime(), which reset that very timer -- so Step 1 could only ever fire in a
+      // run whose queue stayed non-empty for a whole interval, and the authored interval never
+      // governed the real cadence.
       ScanCommand ms1_cmd = queue_.makeMS1();
       ms1_cmd.faims_cv = faims_cv;
       ms1_cmd.scan_id = queue_.nextTrackingId();
@@ -803,17 +769,41 @@ FLASHIda::FLASHIda(char* arg) :
 
       std::cout << "[TRACK-CREATE] id=" << ms1_id_str << " ms_level=1 type=idle_ms1" << std::endl;
 
-      // Push MS1 into priority-3 queue for next dequeue call
       queue_.push(ms1_cmd);
+      dequeued = queue_.dequeue();
 
-      out = agc_cmd;
-      queue_.registerPending(out);
-      // No analysis_mutex_. Taking it here would park the instrument event thread behind a whole
-      // deconvolution to write one row -- see the note on analysis_mutex_ in FLASHIda.h. Serialising
-      // a log stream is IdaLogger's job, not the analysis lock's.
-      logger_.writeScanCommandRow(out);
-      return 1;
+      // Re-entering dequeue() rather than returning ms1_cmd directly is what lets the idle survey
+      // inherit the whole Step 4 tail below -- recordMS1Time(), the enqueue/dequeue timestamps,
+      // pending_scan_map_ registration, and the log row carrying precursor_id. A bypass would get
+      // none of those and would silently stop resetting the cycle-time clock.
+      //
+      // It is also the correct read under a concurrent processScan: if that thread pushed
+      // higher-priority work between the two dequeues, that command wins and ours waits at
+      // priority 3. The fallback covers only a cancelByScanIds race against an id nothing outside
+      // this scope has yet seen -- getNextScanCommand must never return 0 for an empty queue.
+      if (!dequeued.has_value()) dequeued = ms1_cmd;
     }
+
+    out = dequeued.value();
+    if (out.msn_level == 1 && out.is_agc == 0)
+      queue_.recordMS1Time();
+    // faims_cv already set at creation time (MS2 -> parent CV, CV-transition MS1 -> next CV)
+    //
+    // No analysis_mutex_ -- this is the one drain site that reads shared state, and it now takes
+    // only the leaf locks it actually needs. precursorIdForTracking_ locks precursor_map_mutex_
+    // itself; takeMS3Proteoform locks queue_mutex_ itself. Neither can be held for longer than a
+    // hash lookup, whereas analysis_mutex_ is held across a whole deconvolution.
+    //
+    // The VALUE read here is already final and would be even without the map lock: the write
+    // happens before its queue_.push(), and the dequeue() above acquired the same queue_mutex_
+    // that push released. The lock exists for the container -- a concurrent insert can rehash the
+    // table while find() is walking it. See FLASHIda.h.
+    //
+    // Take the wide MS3 fragment ProForma stashed at buildMS3 time (empty for non-MS3 commands) so the
+    // scan_commands.tsv row carries the fired MS3 target's fragment identity.
+    std::string ms3pf = (out.msn_level == 3) ? queue_.takeMS3Proteoform(out.scan_id) : std::string();
+    logger_.writeScanCommandRow(out, precursorIdForTracking_(out.scan_id), ms3pf);
+    return 1;
   }
 
   int FLASHIda::getNextTrackingId()

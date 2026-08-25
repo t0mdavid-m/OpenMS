@@ -681,7 +681,7 @@ namespace OpenMS
     rejectUnknownKeys(to, {"enabled", "value_ms"}, "scheduling.scan_timeout");
     scheduling_.timeout_enabled = to.value("enabled", false);
     scheduling_.timeout_ms = to.value("value_ms", 30000.0);
-    double agc_interval_sec = sched.value("agc_interval_seconds", 30.0);
+    double agc_interval_sec = sched.value("agc_interval_seconds", 1.0);
     scheduling_.agc_interval_ms = static_cast<uint64_t>(agc_interval_sec * 1000.0);
 
     // --- exploration: one block per decision section, each sweeping the scans that section

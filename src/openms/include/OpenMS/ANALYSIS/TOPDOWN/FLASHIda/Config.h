@@ -233,7 +233,12 @@ namespace OpenMS
     bool timeout_enabled = false;
     double cycle_time_ms = 60000.0;
     double timeout_ms = 30000.0;
-    uint64_t agc_interval_ms = 30000;
+    /// Interval between scheduled AGC prescans. This is the ONLY thing that emits one (ADR-0031):
+    /// the drained-queue path used to fabricate a prescan as filler AND reset this timer, so the
+    /// authored value only ever bound a run whose queue stayed busy for a whole interval. 1 s is
+    /// close to the cadence that filler was actually delivering; it is a domain choice, not a
+    /// measured one, and no test run lasts long enough for CI to observe it.
+    uint64_t agc_interval_ms = 1000;
   };
 
   /// Targeting and precursor selection configuration
