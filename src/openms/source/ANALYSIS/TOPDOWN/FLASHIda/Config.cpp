@@ -672,7 +672,14 @@ namespace OpenMS
 
     // --- scheduling ---
     auto sched = config.value("scheduling", json::object());
-    rejectUnknownKeys(sched, {"cycle_time", "scan_timeout", "agc_interval_seconds"}, "scheduling");
+    // target_depth is ACCEPTED AND UNUSED, deliberately. It sizes the instrument's custom-scan
+    // queue, which only the host can do -- Flash.cs:ProcessSpectrum is the sole submitter, and the
+    // engine has no visibility into how many commands the instrument is holding (docs/adr/0033).
+    // It is listed here because the schema is strict on both sides (ADR-0007) and
+    // test-data/config_schema_reference.json is generated from the C# model, so a host-only key
+    // that C++ rejected would fail ConfigSchemaParity_test rather than any real config error.
+    // Do not "wire it up" engine-side; there is nothing here for it to control.
+    rejectUnknownKeys(sched, {"cycle_time", "scan_timeout", "agc_interval_seconds", "target_depth"}, "scheduling");
     auto ct = sched.value("cycle_time", json::object());
     rejectUnknownKeys(ct, {"enabled", "value_ms"}, "scheduling.cycle_time");
     scheduling_.cycle_time_enabled = ct.value("enabled", false);

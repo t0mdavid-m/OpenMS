@@ -356,6 +356,15 @@ offenders and pointing at `FlashIDA/test-data/config_schema_reference.json`. Two
 > file. A *present* `selection_strategy` now throws `std::invalid_argument` with a migration message
 > naming all seven destinations, so every config error in this file is now the same exception type.
 
+⚠ **`scheduling.target_depth` is listed as allowed and then never read, and that is correct**
+(ADR-0033). It sizes the *instrument's* custom-scan queue, which only the host can do — `Flash.cs`
+is the sole submitter and the engine has no visibility into how many commands the instrument holds.
+It appears in the allowed-set purely because the schema is strict on both sides (ADR-0007) and
+`config_schema_reference.json` is generated from the C# model, so a host-only key C++ rejected would
+fail `ConfigSchemaParity_test` rather than any real config. **Do not "wire it up"** — there is
+nothing engine-side for it to control. It is the only key in the file with this shape; if a second
+one appears, that is the point to introduce a marker rather than let the pattern go unremarked.
+
 Traps worth internalizing before touching config code:
 
 - **`.value(key, default)` fallbacks are dead in production.** C# `ToCppJson` emits every key
