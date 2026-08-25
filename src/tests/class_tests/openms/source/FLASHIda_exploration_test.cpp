@@ -2021,7 +2021,9 @@ END_SECTION
 
 START_SECTION(remaining_precursor_score_no_signal_in_window)
 {
-  // Feed CE=0 baseline with zero in-window signal. All subsequent variants should score 0.
+  // Feed a baseline with zero in-window signal, leaving this activation without a denominator. Its
+  // variants are still ACQUIRED and still received -- nothing is cancelled (ADR-0029) -- but they
+  // score -1.0, "not scored", which is what withdraws them from winner selection.
   Config cfg{std::string(remaining_precursor_config)};
   ScanCommandQueue queue(cfg);
   Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
@@ -2032,8 +2034,8 @@ START_SECTION(remaining_precursor_score_no_signal_in_window)
   auto cmds = exploration.initiate(2, pg, 3, queue);
   TEST_EQUAL(static_cast<int>(cmds.size()), 6)
 
-  // Feed baseline (CE=0) with raw data entirely OUTSIDE the precursor window
-  // -> baseline_intensity = 0 -> all subsequent scores = 0 (baseline failure)
+  // Feed the baseline with raw data entirely OUTSIDE the precursor window
+  // -> this activation's reference is 0 -> its variants are barred, not cancelled
   std::vector<double> mzs = {400.0, 500.0, 600.0, 1200.0};
   std::vector<double> intensities = {100.0, 200.0, 300.0, 400.0};
 
@@ -2045,8 +2047,9 @@ START_SECTION(remaining_precursor_score_no_signal_in_window)
   TEST_EQUAL(ExplorationTestAccess::hasAnyBaseline(group), true)
   TEST_REAL_SIMILAR(ExplorationTestAccess::soleBaseline(group), 0.0)
 
-  // Feed CE=20 variant with signal inside the precursor window
-  // Since baseline = 0, score should be 0 (baseline failure path)
+  // Feed the CE=20 variant with GOOD signal inside the precursor window. It is unscoreable anyway:
+  // there is no reference to ratio it against. Good signal is the point -- a variant that merely
+  // scored badly would be indistinguishable from one that could not be scored at all.
   std::vector<double> frag_mzs = {790.0, 800.0, 810.0, 900.0};
   std::vector<double> frag_ints = {100.0, 500.0, 200.0, 50.0};
 
@@ -2055,8 +2058,12 @@ START_SECTION(remaining_precursor_score_no_signal_in_window)
                                           static_cast<int>(frag_mzs.size()), 1.0, queue);
 
   auto group_after = ExplorationTestAccess::group(exploration,1);
-  TEST_EQUAL(group_after.variants[1].received, true)
-  TEST_REAL_SIMILAR(group_after.variants[1].score, 0.0)
+  TEST_EQUAL(group_after.variants[1].received, true)   // acquired, not cancelled
+  // -1.0, NOT 0.0. Winner selection seeds best_score at -1.0 and takes `score > best_score`, so a
+  // 0.0 here WINS the group on a reference that does not exist -- and at MS3 a measuring metric
+  // would then fire a production scan at that coin-flip CE. -1.0 is ExplorationVariant::score's own
+  // "not scored" default and matches remaining_ratio's -1.0 = N/A on the next line.
+  TEST_REAL_SIMILAR(group_after.variants[1].score, -1.0)
   TEST_REAL_SIMILAR(ce20_info.metric.remaining_ratio, -1.0)
 }
 END_SECTION
@@ -3572,13 +3579,15 @@ START_SECTION(exploration_group_creation_etd)
   int real_variants = 0;
   for (const auto& v : group.variants)
   {
-    if (v.is_baseline) continue;  // CE-0 baseline (RT 0): a reference, not an RT-sweep point
+    if (v.is_baseline) continue;  // the ETD reference (RT at the instrument floor, not a sweep point)
     ++real_variants;
     TEST_STRING_EQUAL(v.activation_type, "ETD")
     TEST_EQUAL(std::isfinite(v.reaction_time), true)
     seen_rts.insert(v.reaction_time);
   }
-  // rt_min=5, rt_max=15, rt_step=5 -> 3 distinct reaction-time variants (+ the prepended CE-0 baseline).
+  // rt_min=5, rt_max=15, rt_step=5 -> 3 distinct reaction-time variants, plus this activation's own
+  // reference at the head of its block. Not suppressed: rt_min is 5, so the grid does not contain
+  // the floor the baseline sits at.
   TEST_EQUAL(static_cast<int>(group.variants.size()), 4)  // baseline + 3 RT variants
   TEST_EQUAL(real_variants, 3)
   TEST_EQUAL(static_cast<int>(seen_rts.size()), 3)
@@ -4328,7 +4337,12 @@ END_SECTION
 // `HCD 0` as the group baseline and then `HCD 0` again as the HCD sweep's first point.
 START_SECTION(baseline_suppressed_when_sweep_contains_zero_point)
 {
-  Config cfg{sweepCfg(R"("CID", "HCD", "ETD")", 0.0, 0.0)};
+  // rt_min is MIN_REACTION_TIME_MS, not 0: Config::validate rejects a sub-floor reaction_time_min
+  // when an ETD-family activation is swept, because the instrument will not acquire a reaction time
+  // of 0. 0.03 is the "as near to no reaction as the hardware allows" floor, so the ETD grid's first
+  // point still coincides with the ETD baseline and is still suppressed -- which is the property
+  // this section exists to pin.
+  Config cfg{sweepCfg(R"("CID", "HCD", "ETD")", 0.0, MIN_REACTION_TIME_MS)};
   ScanCommandQueue queue(cfg);
   FragmentAnalysis fragments(cfg);
   Exploration exploration(cfg, fragments);
@@ -4348,19 +4362,25 @@ START_SECTION(baseline_suppressed_when_sweep_contains_zero_point)
   TEST_EQUAL(blockStart(vs, "HCD"), 3)
   TEST_EQUAL(blockStart(vs, "ETD"), 6)
 
-  // The flagged variants ARE the sweeps' own zero-points, not extra scans beside them.
+  // The flagged variants ARE the sweeps' own turn-off points, not extra scans beside them. Note the
+  // two axes turn off at different values: CE at 0, reaction time at the instrument's floor.
   TEST_EQUAL(vs[0].is_baseline, true)
   TEST_REAL_SIMILAR(vs[0].collision_energy, 0.0)
   TEST_EQUAL(vs[3].is_baseline, true)
   TEST_REAL_SIMILAR(vs[3].collision_energy, 0.0)
   TEST_EQUAL(vs[6].is_baseline, true)
-  TEST_REAL_SIMILAR(vs[6].reaction_time, 0.0)
+  TEST_REAL_SIMILAR(vs[6].reaction_time, MIN_REACTION_TIME_MS)
 
-  // No duplicate command: exactly one HCD variant sits at CE 0.
-  int hcd_at_zero = 0;
+  // No duplicate command: exactly one HCD variant sits at CE 0, and exactly one ETD variant sits at
+  // the reaction-time floor.
+  int hcd_at_zero = 0, etd_at_floor = 0;
   for (const auto& v : vs)
+  {
     if (v.activation_type == "HCD" && std::abs(v.collision_energy) < 1e-9) ++hcd_at_zero;
+    if (v.activation_type == "ETD" && std::abs(v.reaction_time - MIN_REACTION_TIME_MS) < 1e-9) ++etd_at_floor;
+  }
   TEST_EQUAL(hcd_at_zero, 1)
+  TEST_EQUAL(etd_at_floor, 1)
 }
 END_SECTION
 
@@ -4387,17 +4407,24 @@ START_SECTION(baseline_matches_the_non_swept_axis)
   const int etd = blockStart(vs, "ETD");
   ABORT_IF(hcd < 0 || etd < 0)
 
-  // HCD sweeps CE -> CE zeroed, reaction time copied from the base config (0 here).
+  // HCD sweeps CE -> CE turned off at 0 (which IS commandable), reaction time copied from the base
+  // config (0 here, and correctly so: HCD has no ion-ion reaction, so 0 is the "not used" sentinel).
   TEST_EQUAL(vs[hcd].is_baseline, true)
   TEST_REAL_SIMILAR(vs[hcd].collision_energy, 0.0)
   TEST_REAL_SIMILAR(vs[hcd].reaction_time, 0.0)
 
-  // ETD sweeps RT -> RT zeroed, collision energy copied: 35, NOT 0. And it matches what its own
-  // siblings carry, which is the property that matters.
+  // ETD sweeps RT -> RT turned off at the instrument's FLOOR, not at 0: the hardware rejects a
+  // reaction time of 0, so a baseline emitted at 0.0 would never be acquired. Collision energy is
+  // copied: 35, NOT 0 -- and it matches what its own siblings carry, which is the property that
+  // makes the synthesized baseline and a flagged grid point the same command.
   TEST_EQUAL(vs[etd].is_baseline, true)
-  TEST_REAL_SIMILAR(vs[etd].reaction_time, 0.0)
+  TEST_REAL_SIMILAR(vs[etd].reaction_time, MIN_REACTION_TIME_MS)
   TEST_REAL_SIMILAR(vs[etd].collision_energy, 35.0)
   TEST_REAL_SIMILAR(vs[etd + 1].collision_energy, 35.0)
+
+  // The two axes turn off at DIFFERENT values, and that is the instrument's asymmetry rather than
+  // ours. A single shared "zero" would emit an unacquirable ETD baseline.
+  TEST_NOT_EQUAL(vs[etd].reaction_time, 0.0)
 }
 END_SECTION
 

@@ -435,7 +435,8 @@ START_SECTION(activation_coupling_predicates_are_the_declared_set)
   TEST_EQUAL(needsCollisionEnergy("hcd"), false)
 
   // EThcD is the only activation in both sets, and that is load-bearing: it is what makes
-  // buildVariants_ take the cross-product branch and give EThcD a baseline at CE 0 AND RT 0.
+  // buildVariants_ take the cross-product branch and turn off BOTH axes for an EThcD baseline --
+  // CE at 0, reaction time at MIN_REACTION_TIME_MS, since the two axes turn off at different values.
   TEST_EQUAL(needsCollisionEnergy("EThcD") && needsReactionTime("EThcD"), true)
 }
 END_SECTION
@@ -445,6 +446,45 @@ END_SECTION
 // reaction time so the instrument fell back to its own method default; that key is now gated on the
 // activation rather than the value, so the value reaches the instrument and the silence is gone.
 // Both branches were dropped together, so ETD and HCD stay symmetric.
+// The sweep GRID is authored, not floored (ADR-0029): Exploration raises only its own synthesized
+// baseline to MIN_REACTION_TIME_MS. So a grid starting below the floor would put a scan the
+// instrument rejects into every sweep, AND -- because the baseline would no longer coincide with the
+// grid's first point -- resurrect the duplicate reference scan the suppression rule removes. Both
+// failures are visible only on the hardware, so this rejects the config at load instead.
+//
+// Both arms matter. The ETD arm is the guard; the HCD arm is what stops it being written over-broad,
+// since reaction_time_min defaults to 0 and every CE-only config leaves it there.
+START_SECTION(etd_sweep_rejects_sub_floor_reaction_time_min)
+{
+  auto sweep = [](const std::string& acts, const std::string& rt_min) {
+    return R"(, "exploration": { "metric": "mass_count", "ce_min": 15, "ce_max": 50, "ce_step": 5,
+                                 "reaction_time_min": )" + rt_min + R"(, "reaction_time_max": 20,
+                                 "reaction_time_step": 5, "activations": [)" + acts + R"(] })";
+  };
+
+  // ETD swept + a sub-floor reaction_time_min -> rejected.
+  TEST_EXCEPTION(std::invalid_argument, Config(cfgJson(sweep(R"("ETD")", "0"))))
+  TEST_EXCEPTION(std::invalid_argument, Config(cfgJson(sweep(R"("ETD")", "0.01"))))
+  // EThcD sweeps BOTH axes, so it needs the reaction time too.
+  TEST_EXCEPTION(std::invalid_argument, Config(cfgJson(sweep(R"("EThcD")", "0"))))
+  // One offending activation in a list is enough.
+  TEST_EXCEPTION(std::invalid_argument, Config(cfgJson(sweep(R"("HCD", "ETD")", "0"))))
+
+  // At the floor exactly, and above it -> accepted.
+  Config at_floor{cfgJson(sweep(R"("ETD")", "0.03"))};
+  TEST_REAL_SIMILAR(at_floor.level(2).rt_min, MIN_REACTION_TIME_MS)
+  Config above{cfgJson(sweep(R"("ETD")", "5"))};
+  TEST_REAL_SIMILAR(above.level(2).rt_min, 5.0)
+
+  // NOT over-broad: a CE-only sweep leaves reaction_time_min at its 0 default and must still load.
+  // Getting this wrong would reject every committed exploration config except the ETD one.
+  Config hcd_only{cfgJson(sweep(R"("HCD")", "0"))};
+  TEST_REAL_SIMILAR(hcd_only.level(2).rt_min, 0.0)
+  Config cid_only{cfgJson(sweep(R"("CID")", "0"))};
+  TEST_REAL_SIMILAR(cid_only.level(2).rt_min, 0.0)
+}
+END_SECTION
+
 START_SECTION(zero_on_a_coupled_axis_is_accepted)
 {
   // ms_settings.ms2 itself, NOT an additional_ms2 block: the check only ever ran over the dispatch
@@ -462,7 +502,14 @@ START_SECTION(zero_on_a_coupled_axis_is_accepted)
     })";
   };
 
-  // ETD at reaction_time 0: commands a literal 0, i.e. "do not fragment". This threw before.
+  // ETD at reaction_time 0 loads. This threw before ADR-0030.
+  //
+  // KNOWN, ACCEPTED GAP: unlike the exploration sweep, an AUTHORED scan config is not floored to
+  // MIN_REACTION_TIME_MS and is not rejected for sitting below it, so this config commands a
+  // reaction time the instrument refuses -- on every MS2 of the run. It fails loudly at the device
+  // rather than silently inheriting the method default, which is the property ADR-0030 bought, but
+  // it is not caught at load. Deliberate: only the sweep path, where a zero floor is the natural way
+  // to ask for "no reaction", is guarded (see etd_sweep_rejects_sub_floor_reaction_time_min).
   Config etd{ms2Json(R"({ "analyzer": "Orbitrap", "activation": "ETD", "reaction_time": 0 })")};
   TEST_EQUAL(etd.level(2).scans.empty(), false)
   TEST_REAL_SIMILAR(etd.level(2).scans[0].reaction_time, 0.0)
