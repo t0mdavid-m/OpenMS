@@ -46,7 +46,26 @@ namespace
   // One config, one varying value. max_precursors is 10 so the budget never masks the geometry:
   // the species guard bounds selection by SPECIES, and a whole envelope costs ONE slot (ADR-0016),
   // but a cramped budget would still make "did it fan out?" ambiguous.
-  std::string cfgFor(const std::string& precursor_charges)
+  // The AUTHORED CHARGE SET fixtures (ADR-0028). cytC resolves at EVERY charge z=8..20 in this
+  // spectrum, so naming three of them is a large, visible restriction rather than a no-op, and the
+  // envelope's most intense charge (z=15) is deliberately NOT among them -- an anchor that ignored
+  // the set would land outside it.
+  const std::string charge_set_list      = "../../FlashIDA/test-data/configs/inclusion_cytc_charges.txt";
+  const std::string charge_set_rows_list = "../../FlashIDA/test-data/configs/inclusion_cytc_charges_rows.txt";
+  const std::string unrestricted_list    = "../../FlashIDA/test-data/configs/inclusion_cytc.txt";
+  const long long   authored_mass        = 12351;   // llround of the authored monoisotopic mass
+  const std::set<int> authored_charges{10, 13, 16};
+
+  bool isSubsetOfAuthored(const std::set<int>& charges)
+  {
+    for (int z : charges)
+      if (authored_charges.count(z) == 0) return false;
+    return true;
+  }
+
+  std::string cfgFor(const std::string& precursor_charges,
+                     const std::string& targeting = "none",
+                     const std::string& inclusion_list = "")
   {
     return std::string(R"JSON({
   "deconvolution": {
@@ -65,17 +84,17 @@ namespace
     "scan_timeout": { "enabled": true, "value_ms": 30000 },
     "agc_interval_seconds": 30
   },
-  "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+  "files": { "target_logs": [], "fasta": "", "inclusion_list": ")JSON")
+           + inclusion_list + R"JSON(", "ptm_list": "" },
   "precursor_selection": {
     "rt_window": 180,
-    "targeting": "none",
+    "targeting": ")JSON" + targeting + R"JSON(",
     "consider_all_charges": false,
     "strict_inclusion": false,
     "tie_threshold": 0.1,
     "rank_by": "qscore",
     "max_precursors": 10,
-    "precursor_charges": ")JSON")
-           + precursor_charges + R"JSON("
+    "precursor_charges": ")JSON" + precursor_charges + R"JSON("
   },
   "characterization": { "mode": "off", "max_targets": 10 },
   "ms_settings": {
@@ -280,6 +299,179 @@ START_SECTION(single_acquires_one_charge_per_mass_per_survey)
   for (const auto& c : a.ms2_cmds)
     if (notchesForStage(c, 0).second > 0) ++notched;
   TEST_EQUAL(notched, 0)
+}
+END_SECTION
+
+// CM-04: an AUTHORED CHARGE SET is a RESTRICTION (ADR-0028 decision 1). Under multiplexed the scan
+// co-isolates the envelope, so if the set were ignored the command would carry ~10 charges, most of
+// them unnamed. It must carry only named ones -- and still more than one, or "restrict" quietly
+// became "acquire a single charge" and the co-isolation was thrown away with the rest.
+START_SECTION(authored_charge_set_restricts_the_acquisition)
+{
+  auto scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(scans.empty())
+
+  const std::string cfg = cfgFor("multiplexed", "inclusion", charge_set_list);
+  FLASHIda ida(const_cast<char*>(cfg.c_str()));
+  AcqResult a = runMode(ida, scans);
+
+  TEST_EQUAL(a.ms2_cmds.size() > 0, true)  // non-vacuity
+
+  const auto groups = chargesPerSurveyMass(a, /*with_notches=*/true);
+  int checked = 0, violations = 0, co_isolated = 0;
+  for (const auto& kv : groups)
+  {
+    if (kv.first.second != authored_mass) continue;
+    ++checked;
+    if (kv.second.size() >= 2) ++co_isolated;
+    if (isSubsetOfAuthored(kv.second)) continue;
+    ++violations;
+    std::cout << "[CM-04] survey '" << kv.first.first << "' isolated unauthored charges:";
+    for (int z : kv.second)
+      if (authored_charges.count(z) == 0) std::cout << " " << z;
+    std::cout << " (authored 10;13;16)" << std::endl;
+  }
+
+  TEST_EQUAL(checked > 0, true)      // the authored mass was selected at all
+  TEST_EQUAL(violations, 0)          // FAILS if the notch filter is skipped
+  TEST_EQUAL(co_isolated > 0, true)  // FAILS if the filter emptied the notch set
+}
+END_SECTION
+
+// CM-05: the anchor is drawn FROM the set (ADR-0028 decision 2). cytC resolves at 13 charges here
+// and three are named, so an anchor picked from the envelope rather than the set lands outside it
+// almost surely -- which is exactly the regression this guards: the old code reassigned the charge
+// inside the inclusion matcher, and that reassignment is now gone.
+START_SECTION(authored_charge_set_moves_the_anchor)
+{
+  auto scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(scans.empty())
+
+  const std::string cfg = cfgFor("single", "inclusion", charge_set_list);
+  FLASHIda ida(const_cast<char*>(cfg.c_str()));
+  AcqResult a = runMode(ida, scans);
+
+  TEST_EQUAL(a.ms2_cmds.size() > 0, true)
+
+  const auto first = firstSurveyCharges(a, /*with_notches=*/false);
+  auto it = first.find(authored_mass);
+  TEST_EQUAL(it != first.end(), true)  // non-vacuity: the authored mass must have been acquired
+  ABORT_IF(it == first.end())
+
+  // "single" acquires exactly one charge per species per survey, and it must be a named one.
+  TEST_EQUAL(it->second.size(), 1)
+  if (!isSubsetOfAuthored(it->second))
+    std::cout << "[CM-05] anchor " << *it->second.begin()
+              << " is not one of the authored charges 10;13;16 -- the set did not reach the anchor"
+              << std::endl;
+  TEST_EQUAL(isSubsetOfAuthored(it->second), true)
+}
+END_SECTION
+
+// CM-06: per-charge exclusion walks the set across surveys (ADR-0028 decision 3b) -- the load-
+// bearing one. Under mass-keyed exclusion the species is retired by its own first acquisition and
+// the second and third named charges are unreachable, so this fails with exactly one anchor.
+START_SECTION(authored_charge_set_is_walked_across_surveys)
+{
+  auto scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(scans.empty())
+
+  const std::string cfg = cfgFor("single", "inclusion", charge_set_list);
+  FLASHIda ida(const_cast<char*>(cfg.c_str()));
+  AcqResult a = runMode(ida, scans);
+
+  TEST_EQUAL(a.ms2_cmds.size() > 0, true)
+
+  // Anchors for the authored mass, one entry per survey that acquired it.
+  std::vector<int> anchors;
+  std::set<std::string> surveys_seen;
+  for (const auto& c : a.ms2_cmds)
+  {
+    if (c.num_stages < 1) continue;
+    if (std::llround(c.mono_mass) != authored_mass) continue;
+    const std::string survey(c.parent_scan_id);
+    if (!surveys_seen.insert(survey).second) continue;
+    anchors.push_back(c.stages[0].charge_state);
+  }
+
+  std::cout << "[CM-06] authored mass acquired at charges:";
+  for (int z : anchors) std::cout << " " << z;
+  std::cout << " (authored 10;13;16)" << std::endl;
+
+  const std::set<int> distinct(anchors.begin(), anchors.end());
+  TEST_EQUAL(anchors.size() >= 2, true)           // FAILS under mass-keyed exclusion
+  TEST_EQUAL(distinct.size(), anchors.size())     // FAILS if a spent charge is re-acquired
+  TEST_EQUAL(isSubsetOfAuthored(distinct), true)  // FAILS if the walk escapes the set
+  TEST_EQUAL(anchors.size() <= 3, true)           // FAILS if the set never terminates
+}
+END_SECTION
+
+// CM-07: several rows naming one mass union their sets (ADR-0028 decision 5), so the one-row and
+// three-row spellings are the same method. It is also the regression guard for the matcher that
+// took the first ACTIVE row regardless of its mass: under that bug the three-row file hands over
+// the charge of whichever row std::sort happened to leave first, and the two runs diverge.
+START_SECTION(rows_naming_one_mass_union_their_charge_sets)
+{
+  auto scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(scans.empty())
+
+  const std::string one_cfg  = cfgFor("multiplexed", "inclusion", charge_set_list);
+  const std::string rows_cfg = cfgFor("multiplexed", "inclusion", charge_set_rows_list);
+
+  FLASHIda one_ida(const_cast<char*>(one_cfg.c_str()));
+  FLASHIda rows_ida(const_cast<char*>(rows_cfg.c_str()));
+  AcqResult one = runMode(one_ida, scans);
+  AcqResult rows = runMode(rows_ida, scans);
+
+  TEST_EQUAL(one.ms2_cmds.size() > 0, true)
+  TEST_EQUAL(rows.ms2_cmds.size() > 0, true)
+
+  // Scoped to the first survey for the same reason CM-02 is: later surveys are only comparable
+  // while both runs have minted the same tracking ids.
+  const auto one_first  = firstSurveyCharges(one, /*with_notches=*/true);
+  const auto rows_first = firstSurveyCharges(rows, /*with_notches=*/true);
+
+  auto a_it = one_first.find(authored_mass);
+  auto b_it = rows_first.find(authored_mass);
+  TEST_EQUAL(a_it != one_first.end(), true)  // non-vacuity on both sides
+  TEST_EQUAL(b_it != rows_first.end(), true)
+  ABORT_IF(a_it == one_first.end() || b_it == rows_first.end())
+
+  if (a_it->second != b_it->second)
+  {
+    std::cout << "[CM-07] one-row={";
+    for (int z : a_it->second) std::cout << " " << z;
+    std::cout << " } three-row={";
+    for (int z : b_it->second) std::cout << " " << z;
+    std::cout << " }" << std::endl;
+  }
+  TEST_EQUAL(a_it->second == b_it->second, true)
+}
+END_SECTION
+
+// CM-08: a row naming NO charge stays unrestricted. This is the guard behind the claim that every
+// committed config -- all of which write -1 -- is byte-identical. If authoredChargesFor_ ever
+// returned a non-empty set for such a row, the whole envelope would collapse onto three charges
+// here and every existing inclusion golden would move with it.
+START_SECTION(a_row_naming_no_charge_is_unrestricted)
+{
+  auto scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(scans.empty())
+
+  const std::string cfg = cfgFor("multiplexed", "inclusion", unrestricted_list);
+  FLASHIda ida(const_cast<char*>(cfg.c_str()));
+  AcqResult a = runMode(ida, scans);
+
+  TEST_EQUAL(a.ms2_cmds.size() > 0, true)
+
+  const auto first = firstSurveyCharges(a, /*with_notches=*/true);
+  auto it = first.find(authored_mass);
+  TEST_EQUAL(it != first.end(), true)
+  ABORT_IF(it == first.end())
+
+  // cytC co-isolates ~10 of its 13 resolved charges here, so an unrestricted row must reach well
+  // outside {10,13,16}.
+  TEST_EQUAL(isSubsetOfAuthored(it->second), false)
 }
 END_SECTION
 
