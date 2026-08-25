@@ -44,6 +44,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -70,7 +71,9 @@ namespace OpenMS
       double reaction_time = 0.0;
       std::string activation_type;
       std::string tracking_id;
-      bool is_baseline = false;           ///< CE=0 reference scan for RemainingPrecursor
+      bool is_baseline = false;           ///< THIS activation's un-fragmented reference (ADR-0029),
+                                          ///< on every metric -- swept axis at 0, other axes as its
+                                          ///< siblings carry them. Skipped in winner selection.
       double score = -1.0;
       float tic_coverage = 0.0f;
       int fragment_count = 0;
@@ -120,9 +123,16 @@ namespace OpenMS
       PeakGroup precursor_pg;
       double isolation_width = 0.0;
       double faims_cv = 0.0;
-      double baseline_intensity = 0.0;    ///< isolation-window intensity from CE=0 scan
-      bool has_baseline = false;           ///< whether baseline result has arrived
-      bool baseline_failed = false;        ///< RemainingPrecursor: CE=0 baseline had no in-window signal -> abort (no winner)
+      /// activation -> that activation's un-fragmented isolation-window intensity (ADR-0029).
+      /// THREE states, deliberately carried by one map:
+      ///   absent  = this activation's reference has not returned yet;
+      ///   > 0     = a usable denominator for its own activation's variants;
+      ///   <= 0    = it returned with no in-window signal, so its variants score -1 and can never
+      ///             win. They are still ACQUIRED -- an empty reference bars one activation, it
+      ///             does not cancel the group.
+      /// Keyed per activation because the ETD ion path (reagent injection, reaction cell) measures
+      /// a genuinely different reference from HCD's; a shared scalar silently mixed them.
+      std::map<std::string, double> baseline_intensity;
       uint64_t start_ms = 0;
       std::vector<ExplorationVariant> variants;
       int winner_index = -1;
@@ -344,9 +354,14 @@ namespace OpenMS
       std::string activation;
       double collision_energy = 0.0;
       double reaction_time = 0.0;
+      /// This variant IS its activation's un-fragmented reference -- either synthesized at the head
+      /// of that activation's block, or the block's own zero-point flagged in place when the sweep
+      /// already contains it. Never scored, never pooled, never a winner.
+      bool is_baseline = false;
     };
 
-    /// Generate variants across activation types with CE and/or RT sweep
+    /// Generate variants across activation types with CE and/or RT sweep, each activation's block
+    /// headed by its own baseline (ADR-0029).
     std::vector<VariantParams> buildVariants_(const MSLevelConfig& cfg, const ScanConfig& base_config) const;
 
     /// Dispatch to metric-specific scorer
@@ -366,9 +381,14 @@ namespace OpenMS
     double precursorWindowIntensity_(const ExplorationGroup& group,
                                      const double* mzs, const double* ints, int length) const;
 
-    /// Score: fragmentation efficiency (higher = less remaining precursor)
+    /// Score: fragmentation efficiency (higher = less remaining precursor).
+    /// Ratios against @p activation_type's OWN reference, not a group-wide one (ADR-0029). Returns
+    /// 0.0 while that reference is still outstanding, and -1.0 ("not scored") once it has returned
+    /// empty -- which is what bars the activation from winning, since winner selection seeds
+    /// best_score at -1.0 and compares strictly greater.
     double computeRemainingPrecursorScore_(const ExplorationGroup& group,
                                            const double* mzs, const double* ints, int length,
+                                           const std::string& activation_type,
                                            double* out_ratio = nullptr) const;
 
     /// Score: number of matched fragment ions + protein info

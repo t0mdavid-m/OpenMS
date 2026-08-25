@@ -138,17 +138,6 @@ namespace
     sc.reagent_agc_target = j.value("reagent_agc_target", 0);
   }
 
-  // Activation-coupled parameters: a parameter that is meaningful only for particular activation
-  // types, and must therefore travel with the activation whenever it is set (CONTEXT.md).
-  bool needsCollisionEnergy(const std::string& act)
-  {
-    return act == "HCD" || act == "CID" || act == "EThcD";
-  }
-  bool needsReactionTime(const std::string& act)
-  {
-    return act == "ETD" || act == "EThcD";
-  }
-
   // --- scan-name resolution -------------------------------------------------------------
   // File-local, not members: none of these touches Config state, and their signatures need
   // nlohmann::json -- which Config.h deliberately does not know about, since the public
@@ -206,6 +195,22 @@ namespace
 
 namespace OpenMS
 {
+
+  // Activation-coupled parameters: a parameter that is meaningful only for particular activation
+  // types, and must therefore travel with the activation whenever it is set (CONTEXT.md).
+  //
+  // Declared in Config.h and defined at namespace scope rather than in this file's anonymous
+  // namespace, because Exploration::buildVariants_ asks the same question -- which axis of a sweep
+  // varies, and which one that activation's baseline zeroes. It used to re-inline these literals,
+  // so the answer had two definitions that could disagree without anything noticing.
+  bool needsCollisionEnergy(const std::string& act)
+  {
+    return act == "HCD" || act == "CID" || act == "EThcD";
+  }
+  bool needsReactionTime(const std::string& act)
+  {
+    return act == "ETD" || act == "EThcD";
+  }
 
   // Static default level config (selection=None, exploration=None)
   const MSLevelConfig Config::default_level_ = {
@@ -859,32 +864,16 @@ namespace OpenMS
           "conditional_ms2 is true but tagging.follow_up_scan is not set. Name an "
           "ms_settings.additional_ms2 entry, or set conditional_ms2 to false.");
 
-    // An activation must arrive with the parameters that give it meaning (ADR-0009). Without this,
-    // an ETD scan config that omits reaction_time silently emits 0, ScanFactory then drops the
-    // parameter entirely, and the instrument falls back to its own method default -- invisibly.
-    // Applied at every scan-config site, exactly as kScanKeys validates every scan object.
-    auto checkActivationCoupling = [](const ScanConfig& sc, const std::string& path) {
-      if (needsReactionTime(sc.activation) && sc.reaction_time <= 0)
-        throw std::invalid_argument(
-            path + " activation '" + sc.activation + "' requires reaction_time > 0.");
-      if (needsCollisionEnergy(sc.activation) && sc.collision_energy <= 0)
-        throw std::invalid_argument(
-            path + " activation '" + sc.activation + "' requires collision_energy > 0.");
-    };
-
-    if (targeting_.has_tagging_follow_up)
-      checkActivationCoupling(targeting_.tagging_follow_up_scan,
-                              "ms_settings.additional_ms2." + targeting_.tagging_follow_up_name);
-    if (quant_.has_follow_up)
-      checkActivationCoupling(quant_.follow_up_scan,
-                              "ms_settings.additional_ms2." + quant_.follow_up_name);
-    // The roster, not the definition store: an unreferenced block never fires, so an incoherent
-    // activation in one is a warning's problem, not a load error's.
-    for (const auto& [lvl, cfg] : levels_)
-      for (size_t i = 0; i < cfg.scans.size(); ++i)
-        checkActivationCoupling(cfg.scans[i],
-                                "ms_settings.ms" + std::to_string(lvl)
-                                + (i == 0 ? "" : " (additional scan " + std::to_string(i) + ")"));
+    // NO ACTIVATION-COUPLING THROW HERE, deliberately (ADR-0030). This used to reject an authored
+    // scan config pairing ETD with reaction_time <= 0, or HCD/CID with collision_energy <= 0. Its
+    // stated purpose was to stop a SILENT failure: ScanFactory dropped a zero reaction_time
+    // entirely, so the instrument fell back to its own method default and nothing anywhere said so.
+    //
+    // ScanFactory now gates that key on the stage's ACTIVATION rather than on its value, so a zero
+    // reaction time is commanded as a real 0 and the logged value equals the commanded one. The
+    // silence the guard existed to prevent is gone, and with it the guard -- on both branches, so
+    // ETD and HCD stay symmetric. A zero on either axis is now simply "do not fragment", which is
+    // exactly what an exploration baseline asks for.
 
     // Restated on the ROSTER, not the definition map: a CE/RT sweep varies one base scan config, so
     // the level it sweeps must dispatch exactly one.

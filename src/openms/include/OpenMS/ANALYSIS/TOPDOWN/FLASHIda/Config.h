@@ -113,6 +113,21 @@ namespace OpenMS
     return metric == ExplorationMetric::MassCount || metric == ExplorationMetric::RemainingPrecursor;
   }
 
+  /**
+    @brief Activation-coupled parameter predicates: does @p act give this parameter meaning?
+
+    Definitions live in Config.cpp; declared here because Exploration asks the same question when
+    it decides which axis of a sweep to vary and which one its baseline zeroes. It used to
+    re-inline the activation literals instead, so the answer had two definitions that could
+    disagree silently.
+
+    Mirrored in C# by @c ScanFactory.NeedsReactionTime, which decides whether the ReactionTime key
+    is emitted at all. Both sides are pinned by a drift-guard pair — @c Config_SchemaProjection_test
+    (C++) and @c ScanFactoryTests (C#) — so change one and you must change the other.
+  */
+  OPENMS_DLLAPI bool needsCollisionEnergy(const std::string& act);
+  OPENMS_DLLAPI bool needsReactionTime(const std::string& act);
+
   /// Configuration for a single scan type (MS1 survey or one MS2 config slot)
   struct OPENMS_DLLAPI ScanConfig
   {

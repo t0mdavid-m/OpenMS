@@ -77,10 +77,41 @@ namespace OpenMS
         rts.push_back(rt);
     }
 
+    // "Is this the same commanded scan?" -- the two sweep loops above advance by accumulation, so
+    // compare with the same 1e-9 epsilon they terminate on rather than with ==.
+    auto sameSweepPoint = [](const VariantParams& a, const VariantParams& b) {
+      return std::abs(a.collision_energy - b.collision_energy) < 1e-9
+          && std::abs(a.reaction_time - b.reaction_time) < 1e-9;
+    };
+
     for (const auto& act : acts)
     {
-      bool sweep_ce = (act == "HCD" || act == "CID" || act == "EThcD");
-      bool sweep_rt = (act == "ETD" || act == "EThcD");
+      // ONE definition of which axis an activation varies, shared with Config's validator
+      // (Config.h). These used to be re-inlined here as string literals, so the engine held two
+      // copies of the same rule with nothing pinning them together.
+      const bool sweep_ce = needsCollisionEnergy(act);   // HCD | CID | EThcD
+      const bool sweep_rt = needsReactionTime(act);      // ETD | EThcD
+
+      const size_t block_start = variants.size();
+
+      // Each activation opens its own block with its own un-fragmented reference (ADR-0029). A
+      // baseline is "this activation's scan with fragmentation turned off", so only the SWEPT axis
+      // is zeroed -- an ETD baseline keeps base_config.collision_energy, exactly as the ETD
+      // variants below it do. That is what makes the synthesized form and the flagged form (see
+      // the suppression step) the identical command rather than two different notions of baseline.
+      //
+      // An activation that sweeps NEITHER axis has no axis to turn off, so it gets no baseline and
+      // competes normally. Without this guard its single variant below would be identical to its
+      // own synthesized baseline, the suppression step would flag it, and that activation's ONLY
+      // variant could never win.
+      if (sweep_ce || sweep_rt)
+      {
+        VariantParams baseline{act,
+                               sweep_ce ? 0.0 : static_cast<double>(base_config.collision_energy),
+                               sweep_rt ? 0.0 : base_config.reaction_time};
+        baseline.is_baseline = true;
+        variants.push_back(baseline);
+      }
 
       if (sweep_ce && sweep_rt)
       {
@@ -105,6 +136,21 @@ namespace OpenMS
       {
         // Unknown activation — single variant with base config values
         variants.push_back({act, static_cast<double>(base_config.collision_energy), base_config.reaction_time});
+      }
+
+      // Suppress the redundant baseline. With ce_min == 0 (or rt_min == 0) this block's first sweep
+      // point IS the reference we just synthesized, and acquiring both spends an extra scan on a
+      // duplicate command -- the reported defect. Drop the synthesized head and flag the sweep's own
+      // zero-point instead.
+      //
+      // Compares the EMITTED commands rather than testing ce_min == 0, so one rule covers every
+      // sweep shape (CE-only, RT-only, and EThcD's cross-product, whose first point is
+      // (ce_min, rt_min)) and the two forms are provably the same scan rather than assumed to be.
+      if (variants.size() > block_start + 1 && variants[block_start].is_baseline
+          && sameSweepPoint(variants[block_start], variants[block_start + 1]))
+      {
+        variants.erase(variants.begin() + block_start);
+        variants[block_start].is_baseline = true;
       }
     }
 
@@ -131,12 +177,12 @@ namespace OpenMS
     auto variant_params = buildVariants_(cfg, base_config);
     if (variant_params.empty()) return commands;
 
-    // Prepend a CE-0 baseline (variant_index -1) to EVERY exploration metric. It is skipped in winner
-    // selection (is_baseline) and excluded from the ProteoformTracker feed, so it never wins or pools;
-    // it fires one extra pre-scan per group and measures the un-fragmented reference. needs_baseline is
-    // kept (always true now) because the per-variant index/is_baseline logic below reads it.
-    const bool needs_baseline = true;
-    variant_params.insert(variant_params.begin(), {base_config.activation, 0.0, 0.0});
+    // NOTHING IS PREPENDED HERE. buildVariants_ owns baseline placement now (ADR-0029): one per
+    // swept activation, at the head of that activation's own block, suppressed when the block's
+    // sweep already contains it. This used to insert a SINGLE baseline at base_config.activation,
+    // which for a multi-activation sweep both mislabelled it (the scan config's activation need not
+    // be one of the swept ones) and duplicated a real sweep point whenever ce_min was 0.
+    // Baselines are still skipped in winner selection and excluded from the ProteoformTracker feed.
 
     // Compute precursor_mz and isolation_width from PeakGroup. The interval a metric SUMS must be the
     // interval the instrument was told to ISOLATE (ADR-0026 decision 2). buildMS2 widens the measured
@@ -261,14 +307,19 @@ namespace OpenMS
       base_config.last_mass  = precursor_mz + half;
     }
 
+    // -1 is the baseline marker in the logged variant_index column, and there may now be one per
+    // swept activation rather than exactly one per group. Real variants keep a single running
+    // 0-based counter across the whole group, so a single-activation sweep -- every committed
+    // config -- still numbers 0,1,2,... exactly as the old `i - 1` did.
+    int real_index = 0;
     for (int i = 0; i < static_cast<int>(variant_params.size()); ++i)
     {
       const auto& vp = variant_params[i];
       ExplorationVariant v;
-      v.variant_index = (needs_baseline && i == 0) ? -1 : (needs_baseline ? i - 1 : i);
+      v.is_baseline = vp.is_baseline;
+      v.variant_index = vp.is_baseline ? -1 : real_index++;
       v.collision_energy = vp.collision_energy;
       v.reaction_time = vp.reaction_time;
-      v.is_baseline = (needs_baseline && i == 0);
       v.activation_type = vp.activation;
 
       ScanConfig variant_config = base_config;
@@ -422,55 +473,32 @@ namespace OpenMS
     v.fragment_count = frag.total_match_count;
     v.received = true;
 
-    // Handle baseline (present for EVERY exploration group as of #18 baseline-on-all)
+    // Handle baseline. Every swept activation carries one (ADR-0029), so this records the reference
+    // under ITS OWN activation rather than into a group-wide slot.
+    //
+    // NOTHING IS CANCELLED. An empty reference is a fact about one activation, and it bars only that
+    // activation's variants -- via the -1.0 "not scored" that computeRemainingPrecursorScore_ returns
+    // once the reference has arrived empty. This used to abort the whole group and cancel every child,
+    // which under a multi-activation sweep would discard two healthy activations' worth of acquisition
+    // because a third one's reference scan came back empty.
     if (v.is_baseline)
     {
-      group.baseline_intensity = precursorWindowIntensity_(group, mzs, ints, length);
-      group.has_baseline = true;
+      group.baseline_intensity[v.activation_type] = precursorWindowIntensity_(group, mzs, ints, length);
       v.score = 0.0;
-
-      // Empty baseline window => no CE variant can be scored. Abort the group:
-      // cancel its still-queued / in-flight child scans (no follow-up production scan),
-      // and account for the cancelled children so the all-received path below cleans up.
-      if (group.exploration_metric == ExplorationMetric::RemainingPrecursor &&
-          group.baseline_intensity <= 0.0)
-      {
-        group.baseline_failed = true;
-
-        std::vector<int> child_ids;
-        for (const auto& cv : group.variants)
-          if (!cv.is_baseline) child_ids.push_back(queue.decode(cv.tracking_id));
-
-        std::vector<int> removed = queue.cancelByScanIds(child_ids);
-
-        // Cancelled children will never return — mark them received (score 0) so the group
-        // can complete, and erase their routing so any already-dispatched (in-flight) result
-        // that returns later is a harmless no-op (it won't re-create the erased group).
-        for (int cid : removed)
-        {
-          auto cit = variant_tracking_map_.find(cid);
-          if (cit == variant_tracking_map_.end()) continue;
-          int gidx = cit->second.variant_index; 
-          if (gidx >= 0 && gidx < static_cast<int>(group.variants.size()))
-          {
-            group.variants[gidx].received = true;
-            group.variants[gidx].score = 0.0;
-          }
-          variant_tracking_map_.erase(cit);
-        }
-      }
     }
 
-    // remaining_ratio is metric-independent: every exploration group now carries a CE-0 baseline (#18), so
-    // ratio the variant's own isolation-window intensity against the baseline (same window-sum semantics as
-    // computeRemainingPrecursorScore_). The un-fragmented baseline variant ratios against itself -> 1.0; a
-    // fragment scan's surviving precursor is depleted -> < 1. Empty/late baseline -> stays -1.0 (N/A). The
-    // baseline dequeues FIFO-first, so has_baseline is already set when its CE siblings are scored.
-    if (group.has_baseline && group.baseline_intensity > 0.0)
+    // remaining_ratio is metric-independent: every swept activation carries a baseline, so ratio the
+    // variant's own isolation-window intensity against ITS OWN activation's reference (same window-sum
+    // semantics as computeRemainingPrecursorScore_). The un-fragmented baseline ratios against itself
+    // -> 1.0; a fragment scan's surviving precursor is depleted -> < 1. Empty/late reference -> stays
+    // -1.0 (N/A). Each activation's baseline heads its own block and so dequeues FIFO-first among its
+    // siblings, which is what makes the reference present by the time they are scored.
+    auto bit = group.baseline_intensity.find(v.activation_type);
+    if (bit != group.baseline_intensity.end() && bit->second > 0.0)
     {
       remaining_ratio = v.is_baseline
                           ? 1.0
-                          : precursorWindowIntensity_(group, mzs, ints, length) / group.baseline_intensity;
+                          : precursorWindowIntensity_(group, mzs, ints, length) / bit->second;
     }
 
     // Count real (non-baseline) variants for metadata
@@ -659,19 +687,19 @@ namespace OpenMS
       }
     }
 
-    // Select the winner — unless the group was aborted (empty baseline) or no variant scored.
+    // Select the winner. No group-level abort flag to consult any more: a variant whose own
+    // activation's reference came back empty scored -1.0, and `> best_score` starting from -1.0
+    // already excludes it. If EVERY activation was de-referenced, best_idx simply stays -1 and the
+    // no-winner arm below handles it.
     int best_idx = -1;
     double best_score = -1.0;
-    if (!group.baseline_failed)
+    for (int i = 0; i < static_cast<int>(group.variants.size()); ++i)
     {
-      for (int i = 0; i < static_cast<int>(group.variants.size()); ++i)
+      if (group.variants[i].is_baseline) continue;  // skip baseline
+      if (group.variants[i].score > best_score)
       {
-        if (group.variants[i].is_baseline) continue;  // skip baseline
-        if (group.variants[i].score > best_score)
-        {
-          best_score = group.variants[i].score;
-          best_idx = i;
-        }
+        best_score = group.variants[i].score;
+        best_idx = i;
       }
     }
 
@@ -681,14 +709,20 @@ namespace OpenMS
       tracker->finalizeMS2(precursor_id);
     }
 
-    if (group.baseline_failed || best_idx < 0)
+    if (best_idx < 0)
     {
-      // Empty-baseline abort (or, defensively, no scorable variant): no winner, no follow-up scan.
-      // Children were already cancelled in the baseline hook. Falls through to the cleanup below
+      // No scorable variant: no winner, no follow-up scan. Falls through to the cleanup below
       // (this replaces the old leaking `if (best_idx < 0) return info;`).
+      //
+      // "empty-baseline" is now reported only when EVERY swept activation's reference came back
+      // empty -- that is the case in which nothing could be scored for want of a denominator.
+      // A group that merely had nothing worth winning reports "no-winner", as before.
+      const bool all_refs_empty = !group.baseline_intensity.empty()
+          && std::all_of(group.baseline_intensity.begin(), group.baseline_intensity.end(),
+                         [](const std::pair<const std::string, double>& kv) { return kv.second <= 0.0; });
       group.complete = true;
       std::cout << "[EXPL-ABORT] group=" << group.group_id
-                << " reason=" << (group.baseline_failed ? "empty-baseline" : "no-winner")
+                << " reason=" << (all_refs_empty ? "empty-baseline" : "no-winner")
                 << " winner=none" << std::endl;
     }
     else
@@ -1236,7 +1270,7 @@ namespace OpenMS
       case ExplorationMetric::RemainingPrecursor:
         fmr = computeFragmentMatch_(spec, group.msn_level, activation_type);
         if (out_frag) *out_frag = fmr;
-        return computeRemainingPrecursorScore_(group, mzs, ints, length, out_remaining_ratio);
+        return computeRemainingPrecursorScore_(group, mzs, ints, length, activation_type, out_remaining_ratio);
       case ExplorationMetric::FragmentCount:
       {
         fmr = computeFragmentMatch_(spec, group.msn_level, activation_type);
@@ -1275,7 +1309,8 @@ namespace OpenMS
   }
 
   double Exploration::computeRemainingPrecursorScore_(const ExplorationGroup& group,
-      const double* mzs, const double* ints, int length, double* out_ratio) const
+      const double* mzs, const double* ints, int length, const std::string& activation_type,
+      double* out_ratio) const
   {
     if (out_ratio) *out_ratio = -1.0;
 
@@ -1284,18 +1319,21 @@ namespace OpenMS
 
     double remaining_intensity = precursorWindowIntensity_(group, mzs, ints, length);
 
-    // Reference: baseline isolation-window intensity (CE=0 scan)
-    double reference;
-    if (group.has_baseline)
-    {
-      reference = group.baseline_intensity;
-      if (reference <= 0.0)
-        return 0.0;  // Baseline failed (no in-window signal): score 0; out_ratio stays -1.0 (N/A)
-    }
-    else
-    {
-      return 0.0;  // Baseline not yet received: score 0; out_ratio stays -1.0 (N/A)
-    }
+    // Reference: THIS activation's own un-fragmented isolation-window intensity (ADR-0029).
+    auto bit = group.baseline_intensity.find(activation_type);
+    if (bit == group.baseline_intensity.end())
+      return 0.0;   // Reference not yet received: score 0; out_ratio stays -1.0 (N/A)
+
+    // Reference arrived with no in-window signal. -1.0, NOT 0.0, and the distinction is the whole
+    // bar: winner selection seeds best_score at -1.0 and takes `score > best_score`, so a 0.0 here
+    // WINS an otherwise-unscoreable activation at zero -- and at MS3 a measuring metric would then
+    // fire a production scan at that coin-flip CE. -1.0 is ExplorationVariant::score's own "not
+    // scored" default and matches out_ratio's -1.0 = N/A, so it reads the same way in the logs.
+    // The variants are still acquired; only their eligibility is withdrawn.
+    if (bit->second <= 0.0)
+      return -1.0;
+
+    const double reference = bit->second;
 
     double ratio = remaining_intensity / reference;
     if (out_ratio) *out_ratio = ratio;
