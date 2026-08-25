@@ -290,6 +290,15 @@ FLASHIda::FLASHIda(char* arg) :
         const DeconvolvedSpectrum* expl_spec = exploration_.explorationDeconvSpectrum();
         std::string parent_id(expl_result.parent_scan_id);
 
+        // Identification yield for an MS2 exploration VARIANT. Every MS2 variant is identified under
+        // every metric (computeFragmentMatch_'s whole-protein matcher is correct at MS2), so these are
+        // real readings, gated only on a sequence being configured.
+        if (!config_.characterization().protein_sequence.empty())
+        {
+          results_row.tag_count      = expl_result.identification.result.tag_count;
+          results_row.fragment_count = expl_result.identification.result.total_match_count;
+          results_row.tic_coverage   = expl_result.metric.tic_coverage;
+        }
         // Fill scan_results row in canonical order (copy expl_result.* by value — it dies at block end).
         results_row.mass_count          = expl_mass_count;
         results_row.commands_pushed     = static_cast<int>(expl_result.commands.size());
@@ -432,6 +441,18 @@ FLASHIda::FLASHIda(char* arg) :
             ? std::string(parent_ctx.stages[0].activation_type)
             : config_.level(2).scans[0].activation;
         std::string ms2_reaction_time = parent_ctx.num_stages > 0 ? std::to_string(parent_ctx.stages[0].reaction_time) : "0";
+        // Identification yield. The DISTINCTION the sentinels exist for: -1 means the tagger never ran
+        // on this spectrum, 0 means it ran and read nothing. Identification runs exactly when a protein
+        // sequence is configured, so that is the condition -- NOT whether it happened to match anything,
+        // which is the reading 0 carries. ms3_targeting.tic_coverage is written only inside its own
+        // found>0 guard and otherwise stays 0.0f, so it needs the same treatment or a spectrum that
+        // matched nothing would be indistinguishable from one never examined.
+        if (!config_.characterization().protein_sequence.empty())
+        {
+          results_row.tag_count      = ms3_targeting.proteoform_match.tag_count;
+          results_row.fragment_count = ms3_targeting.proteoform_match.total_match_count;
+          results_row.tic_coverage   = ms3_targeting.tic_coverage;
+        }
         // Fill scan_results row; exploration fields stay at their sentinel defaults.
         results_row.mass_count         = ms2_mass_count;
         results_row.commands_pushed    = commands_pushed;
@@ -484,6 +505,10 @@ FLASHIda::FLASHIda(char* arg) :
         const DeconvolvedSpectrum* expl_spec = exploration_.explorationDeconvSpectrum();
         std::string parent_id(expl_result.parent_scan_id);
 
+        // MS3 exploration variant. tag_count/fragment_count stay at -1: an MS3 spectrum is scored against
+        // a known ladder rather than re-tagged for identity, so a count here would describe the
+        // sub-fragment spectrum, not the precursor. tic_coverage IS real on MS3 and is reported.
+        results_row.tic_coverage        = expl_result.metric.tic_coverage;
         // Logging
         results_row.mass_count          = expl_mass_count;
         results_row.commands_pushed     = static_cast<int>(expl_result.commands.size());
@@ -612,6 +637,10 @@ FLASHIda::FLASHIda(char* arg) :
         std::string ms3_reaction_time    = std::to_string(parent_ctx.stages[0].reaction_time) + ";" + std::to_string(parent_ctx.stages[1].reaction_time);
         // Fill scan_results row (pure acquisition event): identification payload moved off scan_results —
         // the MS3 fragment proteoform is on scan_commands.ms3_proteoform; matched_protein/tic on identification.
+        // Regular MS3. tag_count/fragment_count stay at -1 for the same reason as the exploration MS3
+        // row above: no tagger runs on an MS3 spectrum. ms3_tic is this scan's real matched-fragment
+        // ratio and is declared outside the identification block precisely so it can be read here.
+        results_row.tic_coverage       = ms3_tic;
         // commands_pushed keeps its 0 default; child_ids empty; exploration fields at defaults.
         results_row.mass_count         = ms3_mass_count;
         results_row.deconv_spectrum    = ms3_spec;

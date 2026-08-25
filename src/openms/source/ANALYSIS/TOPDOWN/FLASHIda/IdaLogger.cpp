@@ -119,6 +119,10 @@ namespace OpenMS
                             << "commands_pushed\tchild_ids\trt\t"
                             << "duration_ms\tduration_received_ms\tqueue_duration_ms\tinstrument_duration_ms\tprocessing_duration_ms\t"
                             << "mass_count\tremaining_ratio\t"
+                            // Per-scan identification YIELD, beside the other "how much did this scan
+                            // return" columns. -1 = no tagger ran (MS1, MS3); 0 = ran, read nothing;
+                            // >0 = real. tic_coverage also appears on identification.tsv, per ID row.
+                            << "tag_count\tfragment_count\ttic_coverage\t"
                             << "exploration_group_id\texploration_metric\texploration_score\t"
                             << "variant_index\ttotal_variants\t"
                             << "winner_tracking_id\t"  // F5: group-completing exploration winner pointer
@@ -139,6 +143,12 @@ namespace OpenMS
                                    << "ms1_precursor_mass\tms2_precursor_ion\tproteoform\t"
                                    // C: FLASHExtender score of this scan's OWN match; -1 = winner-re-matched row (no own ID).
                                    << "flash_extender_score\t"
+                                   // Sequence tags FLASHTagger read off THIS spectrum, beside the other
+                                   // "how strong is this ID" scalar. -1 on every MS3 row: that is a
+                                   // POLICY, not an absence of tagging (MS3 exploration variants are
+                                   // tagged via computeFragmentMatch_). An MS3 tag count would measure
+                                   // the sub-fragment spectrum, not the precursor's identifiability.
+                                   << "tag_count\t"
                                    << "ms2_fragments\tms2_fragment_masses\t"
                                    << "ppm_offset\tcorrection_factor\t"
                                    << "ms1_precursor_mz\tms1_precursor_charge\t"
@@ -151,6 +161,12 @@ namespace OpenMS
                                    << "ms3_isolation_width\tms3_window_snr\tms3_charge_intensity\t"
                                    // Fragment-mass table (MS2 & MS3 rows): per-scan theoretical + residual.
                                    << "theoretical_masses\tdiff_da\tdiff_ppm\t"
+                                   // One PeakGroup::getQscore() per MATCHED fragment, index-aligned with
+                                   // the block above and with ms2_fragments/ms3_fragments -- all five
+                                   // lists iterate the same match.fragments vector. Distinct from
+                                   // scan_results' deconv_qscores, which reports EVERY deconvolved mass
+                                   // of the spectrum; this is the matched subset.
+                                   << "fragment_qscores\t"
                                    // C2: MS3 per-ion fragment coverage (distinct backbone bonds / (L-1)); -1 on MS2.
                                    << "ms3_fragment_coverage\t"
                                    // Per-scan TIC / matched-fragment coverage (moved here from scan_results).
@@ -454,6 +470,13 @@ namespace OpenMS
                         << processing_duration << "\t"
                         << mass_count << "\t"
                         << remaining_ratio << "\t"
+                        // Identification yield. Emitted raw: results_tsv_stream_ is the one IdaLogger
+                        // stream deliberately never given a precision, and both fixed/setprecision are
+                        // sticky, so setting one here would reformat rt, remaining_ratio,
+                        // exploration_score and the next row's deconv block. Two are ints anyway.
+                        << row.tag_count << "\t"
+                        << row.fragment_count << "\t"
+                        << row.tic_coverage << "\t"
                         << exploration_group_id << "\t"
                         << exploration_metric << "\t"
                         << exploration_score << "\t"
@@ -665,12 +688,19 @@ namespace OpenMS
     frag_theo << std::fixed << std::setprecision(4);
     frag_diff_da << std::fixed << std::setprecision(4);
     frag_diff_ppm << std::fixed << std::setprecision(2);
+    // One qscore per MATCHED fragment, built in this same loop so it is aligned with the mass table by
+    // construction rather than by convention. Its OWN precision is set explicitly: this stream is
+    // fixed/setprecision(4) but that state is re-established several times around the output statement,
+    // and a qscore is a [0,1] probability, so 4 decimals is both sufficient and what its neighbours use.
+    std::ostringstream frag_qscores;
+    frag_qscores << std::fixed << std::setprecision(4);
     for (size_t i = 0; i < match.fragments.size(); ++i)
     {
-      if (i > 0) { frag_theo << ";"; frag_diff_da << ";"; frag_diff_ppm << ";"; }
+      if (i > 0) { frag_theo << ";"; frag_diff_da << ";"; frag_diff_ppm << ";"; frag_qscores << ";"; }
       frag_theo << match.fragments[i].theoretical_mass;
       frag_diff_da << match.fragments[i].diff_da;
       frag_diff_ppm << match.fragments[i].diff_ppm;
+      frag_qscores << match.fragments[i].qscore;
     }
 
     std::string precursor_ion;
@@ -690,6 +720,11 @@ namespace OpenMS
       << proforma << "\t"
       // C: FLASHExtender score of this scan's own match (-1 = winner-re-matched row, no own ID). fixed+4 in effect.
       << row.flash_extender_score << "\t"
+      // -1 on every MS3 row by POLICY, not because nothing tagged: MS3 exploration variants ARE tagged
+      // (computeFragmentMatch_), but a tag count there measures the sub-fragment spectrum rather than
+      // the precursor's identifiability, which is not what this column means. On MS2 rows 0 is a real
+      // reading -- the tagger ran and read nothing -- and stays distinct from -1.
+      << (ms_level == 3 ? -1 : match.tag_count) << "\t"
       << ms2_frags.str() << "\t"
       << ms2_masses.str() << "\t"
       << std::setprecision(2) << match.ppm_offset << "\t"
@@ -714,6 +749,8 @@ namespace OpenMS
       << (ms_level == 3 ? ctx.ms3_charge_intensity : 0.0) << "\t"
       // Fragment-mass table: per-scan theoretical + residual (Da, ppm) for MS2 AND MS3 fragments.
       << frag_theo.str() << "\t" << frag_diff_da.str() << "\t" << frag_diff_ppm.str() << "\t"
+      // Per-matched-fragment deconvolution confidence, aligned with the three columns above.
+      << frag_qscores.str() << "\t"
       // C2: MS3 per-ion fragment coverage (distinct backbone bonds / (L-1)); -1 on MS2. std::fixed setprecision(4) in effect.
       << (ms_level == 3 ? match.ms3_fragment_coverage : -1.0f) << "\t"
       // Per-scan TIC / matched-fragment coverage (moved from scan_results); the scan's actual value at this row.

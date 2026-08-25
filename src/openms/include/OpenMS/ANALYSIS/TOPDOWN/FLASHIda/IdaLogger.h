@@ -151,6 +151,21 @@ namespace OpenMS
       double remaining_ratio = -1.0;
       std::string activation_type;
       std::string reaction_time = "0";
+      // Per-scan identification YIELD. Sentinels are load-bearing and the defaults encode them:
+      //   -1  no tagger ran on this spectrum   (every MS1 row, and every MS3 row)
+      //    0  it ran and read nothing          (for a real protein, a meaningful negative result)
+      //   >0  real count
+      // Collapsing the first two to a plain 0 recreates precisely the ambiguity ADR-0012 had to add a
+      // whole column (faims_enabled) to undo, once faims_cv = 0.0 turned out to mean two things.
+      // tag_count is the identification count from ProteoformMatch, taken before any protein is
+      // consulted -- NOT PrecursorSelection's FASTA-gated targeting return, which reports 0 both when
+      // no tags existed and when tags existed but matched nothing, and so is a gate, not a measurement.
+      int tag_count = -1;
+      int fragment_count = -1;
+      /// Matched-fragment TIC coverage. -1.0 when identification did not run, so that "ran and matched
+      /// nothing" (0.0) stays distinguishable. NOTE this column also exists on identification.tsv, where
+      /// it is per-ID-row; the two are written by different writers from the same source value.
+      float tic_coverage = -1.0f;
       // F5: encoded id of the winning variant; "" on every non-completing / non-exploration row.
       std::string winner_tracking_id;
     };
