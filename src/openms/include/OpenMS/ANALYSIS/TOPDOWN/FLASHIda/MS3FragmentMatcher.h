@@ -54,6 +54,11 @@ namespace OpenMS
       std::string ion_type;          ///< "a", "b", "y", "yb", "ya"
       bool includes_ptm = false;     ///< Whether the matched theoretical includes an ambiguous PTM
       double ambiguous_included = 0.0; ///< PTM mass folded into the matched theoretical (copied from TheoreticalMass; used for adjusted/theoretical frame masses)
+      /// PeakGroup::getQscore() of the MS3 deconvolved mass this detail was matched from, at the
+      /// representative charge. Carries the MS3 leg of identification.tsv's fragment_qscores; the MS2
+      /// leg is filled independently in FragmentAnalysis::runTagBasedFragmentMatching_. Unaffected by
+      /// the calibration copy: that rescales the monoisotopic mass only and never re-scores the group.
+      double qscore = 0.0;
     };
 
     /// Cached proteoform context from MS2 tag-based matching

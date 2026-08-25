@@ -263,6 +263,11 @@ namespace OpenMS
             md.ion_type = theoretical[best_theo_idx].ion_type;
             md.includes_ptm = theoretical[best_theo_idx].includes_ptm;
             md.ambiguous_included = theoretical[best_theo_idx].ambiguous_included;
+            // MS3 leg of fragment_qscores, taken from the group this detail was matched from. Callers
+            // pass a calibration-corrected COPY of the spectrum, but that only rescales the
+            // monoisotopic mass -- the score is not recomputed -- so this is the original deconvolution
+            // qscore either way, at the same representative charge deconv_qscores reports.
+            md.qscore = spectrum[si].getQscore();
             match_details->push_back(md);
           }
         }
@@ -743,6 +748,7 @@ namespace OpenMS
           fm.diff_ppm = (fm.theoretical_mass != 0.0) ? (fm.diff_da / fm.theoretical_mass * 1e6) : 0.0;
           fm.includes_ptm = md.includes_ptm;             // honest SUB-frame verdict (matchSpectrum) — the leaf AND the pooled deposit read this
           fm.is_complement_flip = is_flip;               // equiv ion is the complement of the sub-ion — narrowModifications_ Pass B applies the mod-aware verdict
+          fm.qscore = md.qscore;                         // MS3 leg of fragment_qscores; the MS2 leg is filled in runTagBasedFragmentMatching_
           mr.fragments.push_back(fm);
         }
         std::sort(mr.fragments.begin(), mr.fragments.end(),

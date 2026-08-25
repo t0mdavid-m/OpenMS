@@ -1337,6 +1337,14 @@ namespace OpenMS
         fmr.theoretical_mass = best_theo;
         fmr.diff_da = obs_mass - best_theo;
         fmr.diff_ppm = (best_theo > 0.0) ? (fmr.diff_da / best_theo * 1e6) : 0.0;
+        // Third producer of fragment_qscores, and the one that is easy to forget: these re-matched
+        // rows reach identification.tsv too (the non-winner 'E' rows), so leaving qscore at its
+        // default would publish a column of zeros that reads as "terrible deconvolution" rather than
+        // "never filled". stage1_scores is FragmentScores::fromPeakGroup, whose qscore IS
+        // PeakGroup::getQscore() at the representative charge -- the same read point as the other two
+        // producers. Caveat worth stating rather than hiding: FragmentScores default-initialises to 0,
+        // so unlike a -1 sentinel this cannot fail loudly if the record were ever unpopulated.
+        fmr.qscore = pr.stage1_scores.qscore;
         rematch->fragments.push_back(fmr);
       }
     }

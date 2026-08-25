@@ -776,6 +776,13 @@ namespace
       fm.theoretical_mass = m.theoretical_mass;
       fm.diff_da = m.observed_mass - m.theoretical_mass;
       fm.diff_ppm = (m.theoretical_mass != 0.0) ? (fm.diff_da / m.theoretical_mass * 1e6) : 0.0;
+      // MS2 leg of fragment_qscores. Read straight off the source PeakGroup via the peak_index the
+      // matcher already carries, rather than through a second field on TagBasedFragmentMatch: one
+      // index that is set where the match is made cannot drift out of step with the mass it describes.
+      // getQscore() is the representative-charge read point, matching deconv_qscores exactly; note
+      // TagBasedFragmentMatch::intensity is NOT this (it is getChargeIntensity, unbounded).
+      if (m.peak_index >= 0 && static_cast<Size>(m.peak_index) < stored_ms2.size())
+        fm.qscore = stored_ms2[m.peak_index].getQscore();
       result.fragments.push_back(std::move(fm));
     }
     return static_cast<int>(matches.size());

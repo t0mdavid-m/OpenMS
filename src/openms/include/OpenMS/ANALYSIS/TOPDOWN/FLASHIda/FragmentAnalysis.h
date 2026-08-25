@@ -95,6 +95,17 @@ namespace OpenMS
         double diff_ppm = 0.0;         ///< MS3 only: diff_da / theoretical_mass * 1e6
         bool includes_ptm = false;   ///< MS3: did the matched theoretical fold in the ambiguous PTM (partial-overlap with-variant)? false for MS2 / fully-covered / no-overlap. SUB-FRAME verdict — the leaf (narrowFragmentPTMSites) reads this.
         bool is_complement_flip = false;  ///< MS3: the equivalent (full-protein) ion is the COMPLEMENT of the matched sub-ion (suffix sub-ion -> prefix equiv, or via yb/ya). The pooled narrowing (narrowModifications_ Pass B) applies the mod-aware verdict using this + includes_ptm. false for MS2.
+        /// PeakGroup::getQscore() of the deconvolved mass this fragment was matched from, at the
+        /// REPRESENTATIVE charge -- the same read point as scan_results' deconv_qscores and
+        /// scan_commands' qscore, never getBestQScore(). Logged as identification.tsv's
+        /// fragment_qscores, which is the MATCHED SUBSET: deconv_qscores already reports every
+        /// deconvolved mass of the spectrum, matched or not, and is a different column answering a
+        /// different question. Set in BOTH producers -- runTagBasedFragmentMatching_ (MS2 leg) and
+        /// MS3FragmentMatcher::calibrateAndScore (MS3 leg) -- which are entirely separate code paths.
+        /// APPEND-ONLY position: added at the end of the struct deliberately. Every construction site
+        /// default-constructs and assigns by name, but a mid-struct insert is the kind of change a
+        /// positional aggregate initializer would silently mis-assign while still compiling.
+        double qscore = 0.0;
       };
       std::vector<FragmentMatch> fragments;  ///< All matched fragments with detail
 
