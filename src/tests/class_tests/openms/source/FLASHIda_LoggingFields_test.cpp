@@ -859,6 +859,105 @@ START_SECTION(identification_runs_when_mode_off_with_sequence)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
+// §Y1 -- scan_results.tsv : the identification-yield sentinels, per row type.
+//
+//   -1  no tagger ran on this spectrum   (MS1 rows, and every MS3 row)
+//    0  it ran and read nothing          (a real negative result for a real protein)
+//   >0  real count
+//
+// The -1/0 distinction is the whole reason these columns are not plain counts, so it is what this
+// section locks. Exact values are golden-locked in C#; this asserts the vocabulary.
+//
+// tic_coverage is deliberately NOT in the matrix. It is real and non-negative on MS3 rows (a
+// matched-fragment ratio), so asserting tic < 0 there would be wrong -- its -1 means only "identification
+// did not run", which on this recipe is never true at MS2 and never asserted at MS3.
+/////////////////////////////////////////////////////////////
+START_SECTION(results_identification_yield_sentinels_by_row_type)
+{
+  auto ms1 = loadTsvScans(CYTC_MS1);
+  auto ms2 = loadTsvScans(CYTC_MS2);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  const std::string dir = freshLogDir("lf_y1");
+  std::string json = buildJsonWithLogDir(dir, true);   // identifying cytC recipe: MS2 rows carry real counts
+  FLASHIda ida(const_cast<char*>(json.c_str()));
+  runFullCycle(&ida, ms1, ms2);
+
+  auto res = TSVFile::parse(dir + "/scan_results.tsv");
+  ABORT_IF(res.rows.size() == 0)
+
+  bool saw_ms1 = false, saw_ms2 = false;
+  for (const auto& row : res.rows)
+  {
+    const int lvl   = std::atoi(cell(res, row, "ms_level").c_str());
+    const int tags  = std::atoi(cell(res, row, "tag_count").c_str());
+    const int frags = std::atoi(cell(res, row, "fragment_count").c_str());
+
+    if (lvl == 1 || lvl == 3)
+    {
+      // No tagger runs on a survey or on an MS3 spectrum. Fails if a fill site was missed and the
+      // column silently reported 0 instead -- which would read as "ran, found nothing".
+      TEST_EQUAL(tags, -1)
+      TEST_EQUAL(frags, -1)
+      saw_ms1 = saw_ms1 || lvl == 1;
+    }
+    else if (lvl == 2)
+    {
+      // Identification ran on this recipe, so 0 is admissible but -1 is not.
+      TEST_TRUE(tags >= 0)
+      TEST_TRUE(frags >= 0)
+      saw_ms2 = true;
+    }
+  }
+  // Both arms must actually have been exercised, or the matrix above proves nothing.
+  TEST_TRUE(saw_ms1)
+  TEST_TRUE(saw_ms2)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// §Y2 -- identification.tsv : fragment_qscores is one qscore per MATCHED fragment.
+//
+// All five list columns on this stream iterate the same match.fragments vector, so a single alignment
+// check covers every one of them. This is what would catch wiring only ONE of the two matchers: the MS2
+// leg lives in runTagBasedFragmentMatching_ and the MS3 leg in calibrateAndScore, and they are entirely
+// separate code paths, so a half-done job leaves MS3 rows aligned but uniformly zero.
+/////////////////////////////////////////////////////////////
+START_SECTION(identification_fragment_qscores_align_and_are_probabilities)
+{
+  auto ms1 = loadTsvScans(CYTC_MS1);
+  auto ms2 = loadTsvScans(CYTC_MS2);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  const std::string dir = freshLogDir("lf_y2");
+  std::string json = buildJsonWithLogDir(dir, true);
+  FLASHIda ida(const_cast<char*>(json.c_str()));
+  runFullCycle(&ida, ms1, ms2);
+
+  auto idf = TSVFile::parse(dir + "/identification.tsv");
+  ABORT_IF(idf.rows.size() == 0)
+
+  int rows_with_frags = 0;
+  for (const auto& row : idf.rows)
+  {
+    const int lvl = std::atoi(cell(idf, row, "ms_level").c_str());
+    auto qs   = splitTokens(cell(idf, row, "fragment_qscores"), ';');
+    auto theo = splitTokens(cell(idf, row, "theoretical_masses"), ';');
+    auto ions = splitTokens(cell(idf, row, lvl == 3 ? "ms3_fragments" : "ms2_fragments"), ';');
+
+    TEST_EQUAL(qs.size(), theo.size())
+    TEST_EQUAL(qs.size(), ions.size())
+
+    for (const auto& q : qs)
+      TEST_TRUE(inUnit(toD(q)))   // qscore is a probability from the same logistic as deconv_qscores
+
+    if (!qs.empty()) rows_with_frags++;
+  }
+  TEST_TRUE(rows_with_frags > 0)   // an all-empty stream would satisfy every equality above vacuously
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
 // §R4 -- scan_results.tsv : MS3-normal 2-stage CE/act/rt + proteoform/protein/fragment/tic
 /////////////////////////////////////////////////////////////
 START_SECTION(results_ms3_normal_columns)
