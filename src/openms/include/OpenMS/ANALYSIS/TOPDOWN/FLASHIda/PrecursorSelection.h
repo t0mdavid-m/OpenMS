@@ -40,9 +40,11 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
 #include <OpenMS/FORMAT/FASTAFile.h>
 
+#include <algorithm>
 #include <map>
 #include <set>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace OpenMS
@@ -70,7 +72,12 @@ namespace OpenMS
     struct InclusionTarget
     {
       double mass;        ///< Target monoisotopic mass
-      int charge;         ///< Charge state (-1 = any charge)
+      /// The row's AUTHORED CHARGE SET (ADR-0028), written as `10;13;16`. EMPTY means the row
+      /// names no charge -- the old `-1` -- and leaves acquisition unrestricted. A named set is a
+      /// RESTRICTION on the acquisition charge set and never an addition to it: a charge is
+      /// acquired only if it also clears the gates every candidate faces, and naming a charge the
+      /// survey never resolved acquires nothing, because an isolation window must be measured.
+      std::vector<int> charges;
       double rt_start;    ///< RT window start (seconds)
       double rt_end;      ///< RT window end (seconds)
       int priority;       ///< Tie-breaking priority (higher = preferred)
@@ -78,8 +85,11 @@ namespace OpenMS
       /// Check if current RT is within the target's active window
       bool isActiveAt(double rt) const { return rt >= rt_start && rt <= rt_end; }
 
-      /// Check if charge matches (true if target charge is -1 or matches)
-      bool matchesCharge(int c) const { return charge == -1 || charge == c; }
+      /// Check if charge matches (true if the row names no charge, or names this one)
+      bool matchesCharge(int c) const
+      {
+        return charges.empty() || std::find(charges.begin(), charges.end(), c) != charges.end();
+      }
     };
 
     /**
@@ -202,6 +212,18 @@ namespace OpenMS
     // tqscore_exceeding_mass_charge_set_, mass_charge_qscore_map_, mass_charge_rt_map_ -- were the
     // state behind charge_based_exclusion and went with it (ADR-0021). Exclusion is mass-keyed;
     // acquiring several charge states is precursor_charges: "separate" / "multiplexed".
+    //
+    // ADR-0028 reinstates ONE of them, and only for Precursors carrying an authored charge set.
+    // That is not a reversal of ADR-0021: what 0021 removed was acquisition GEOMETRY being sourced
+    // from an exclusion-KEYING flag. Geometry still comes only from precursor_charges plus the
+    // authored restriction; this map decides nothing about what a scan isolates, only about when a
+    // mass stops being selectable. Every species without an authored set stays mass-keyed.
+
+    /// (nominal mass, charge) -> rt at which that charge was acquired. Written ONLY for Precursors
+    /// carrying an authored charge set. It is what lets `single` walk such a set across successive
+    /// surveys: the mass survives its own acquisition and is re-selected at the next named charge,
+    /// until every one is spent and the species is skipped for good.
+    std::map<std::pair<int, int>, double> authored_acquired_rt_map_;
 
     /// Maps for selectively disabling mass exclusion (needed for FAIMS support)
     std::unordered_map<int, int> id_mass_map_;
@@ -234,6 +256,18 @@ namespace OpenMS
 
     /// Filter peak groups using mass exclusion logic
     void filterPeakGroupsUsingMassExclusion_(int ms_level, double rt);
+
+    /// The AUTHORED CHARGE SET in force for @p mass at the current retention time (ADR-0028):
+    /// the union of the charge sets named by every RT-active inclusion row whose mass matches
+    /// within @p delta. An empty result means unrestricted, which covers three distinct cases --
+    /// no row matches this mass, the matching rows name no charge, or targeting is not inclusion.
+    ///
+    /// Unioning is what makes one row `12351.3  10;13;16` and three rows `10` / `13` / `16`
+    /// identical, while rows whose RT windows differ stay independent because active_targets_ is
+    /// already RT-filtered. It also replaces a matcher that walked EVERY active row and took the
+    /// first whose charge fell inside the envelope without checking that row's mass, so the charge
+    /// could be supplied by an unrelated target.
+    std::vector<int> authoredChargesFor_(double mass, double delta) const;
 
     /// Parse TSV inclusion list file
     void parseInclusionListTSV_(const String& filename);

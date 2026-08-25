@@ -286,6 +286,13 @@ namespace OpenMS
     std::vector<int>* charges = nullptr;
 
     selected_peak_groups_.reserve(mass_count);
+    // Nominal masses that already spent one of their AUTHORED charges in THIS survey (ADR-0028).
+    // Without it, the phase-1 pass of non-strict inclusion would come back for a second named
+    // charge in the same survey and break `single`'s "one anchor per species per survey"
+    // invariant (see the break at the bottom of the emit loop). Only bites under `single`:
+    // separate/multiplexed spend the whole set in one pass anyway.
+    std::set<int> authored_acquired_this_survey;
+
     std::set<double> current_selected_mzs;    // current selected mzs
     std::set<double> current_selected_masses; // current selected mzs
 
@@ -341,6 +348,19 @@ namespace OpenMS
     }
     new_mass_rt_map_.swap(tqscore_exceeding_mass_rt_map_);
     std::unordered_map<int, double>().swap(new_mass_rt_map_);
+
+    // remove expired entries for authored_acquired_rt_map_ (ADR-0028). Same keep-if-fresh shape:
+    // a named charge becomes re-acquirable once its acquisition falls out of the RT window, which
+    // is what the mass-keyed maps above have always done for masses.
+    {
+      std::map<std::pair<int, int>, double> fresh;
+      for (const auto& [key, r] : authored_acquired_rt_map_)
+      {
+        if (rt - r > config_.targeting().rt_window) { continue; }
+        fresh[key] = r;
+      }
+      authored_acquired_rt_map_.swap(fresh);
+    }
 
     // remove expired entries for all_mass_rt_map_, mass_qscore_map_
     for (const auto& item : all_mass_rt_map_)
@@ -401,8 +421,53 @@ namespace OpenMS
           // uses `break` and `continue` throughout, and both would silently retarget the enclosing
           // per-PeakGroup loop if this one were removed -- e.g. the qscore-threshold `break`, which
           // means "stop considering this species" and would become "stop selecting entirely".
+          // The AUTHORED CHARGE SET in force for this species (ADR-0028). Resolved from the mass
+          // alone, so it is available BEFORE the anchor is picked -- which it has to be, because
+          // under an authored set the anchor is drawn from the set rather than from the envelope.
+          const double mass_pg = pg.getMonoMass();
+          const double delta_pg = 2 * config_.level(1).tolerance_ppm * mass_pg * 1e-6;
+          const int nominal_pg = SpectralDeconvolution::getNominalMass(mass_pg);
+          const std::vector<int> authored =
+              config_.targeting().mode == 1 ? authoredChargesFor_(mass_pg, delta_pg) : std::vector<int>();
+          const bool has_authored = !authored.empty();
+
           struct ChargeCandidate { int charge; double score; };
           std::vector<ChargeCandidate> charges_to_process;
+          if (has_authored)
+          {
+            // The strongest charge the row NAMED that this survey actually resolved and that the
+            // species has not already been acquired at.
+            //
+            // SNR ORDERS here; it does not gate. A matched target's anchor is exempt from the SNR
+            // threshold (the zeroing further down), so an authored target is never lost to a weak
+            // survey -- which is most of why one authors it. The notch side keeps the gate.
+            int charge = -1;
+            float best_snr = -1.0f;
+            for (int c : authored)
+            {
+              // The set can only SUBTRACT, so it must not smuggle a charge past the level floor.
+              if (config_.level(ms_level).min_charge > 0 && c < config_.level(ms_level).min_charge) continue;
+              auto [lo, hi] = pg.getMzRange(c);
+              if (hi <= lo) continue;  // never resolved -- there is no MEASURED window to isolate
+              if (authored_acquired_rt_map_.count({nominal_pg, c}) > 0) continue;  // already spent
+              const float snr = pg.getChargeSNR(c);
+              if (snr > best_snr) { best_snr = snr; charge = c; }
+            }
+            // Every named charge spent, absent, or below the floor: the species is finished. There
+            // is deliberately no fallback to an unnamed charge -- that would be the set ADDING.
+            if (charge < 0) continue;
+            if (authored_acquired_this_survey.count(nominal_pg) > 0) continue;
+
+            // The anchor's OWN qscore, not a sibling's. The pair below used to be bound together
+            // and then the charge alone reassigned by inclusion matching, so a scan could be
+            // logged and excluded on the score of a charge it never isolated.
+            const std::unordered_map<int, float> per_charge_qscores = pg.getAllQscores();
+            auto qs_it = per_charge_qscores.find(charge);
+            const double score =
+                qs_it != per_charge_qscores.end() ? (double)qs_it->second : pg.getQscore();
+            charges_to_process.push_back({charge, score});
+          }
+          else
           {
             int charge;
             double score;
@@ -470,29 +535,20 @@ namespace OpenMS
                   if (std::abs(*ub - mass) < delta) // target is detected.
                   {
                     // Check charge matching for both TSV and legacy modes
-                    if (!inclusion_targets_.empty())  // TSV mode: check active_targets_ with charge
+                    if (!inclusion_targets_.empty())  // TSV mode
                     {
-                      for (const auto* t : active_targets_)
-                      {
-                        if (t->charge < 0) {
-                          target_matched = true;
-                          break;
-                        }
-                        auto [min_charge, max_charge] = pg.getAbsChargeRange();
-                        if ((t->charge >= min_charge) && (t->charge <= max_charge))
-                        {
-                          // Update with matched charge
-                          charge = t->charge;
-                          std::tie(mz1, mz2) = pg.getMzRange(charge);
-                          center_mz = (mz1 + mz2) / 2.0;
-                          mz1 -= optimal_window_margin_;
-                          mz2 += optimal_window_margin_;
-                          integer_mz = (int)round(center_mz);
-
-                          target_matched = true;
-                          break;
-                        }
-                      }
+                      // A pure MASS question now. The mass matched at the binary search above, and
+                      // any charge restriction the matching rows carry was already applied when the
+                      // anchor was picked (authoredChargesFor_ + the authored anchor loop), so
+                      // there is nothing left to reassign here.
+                      //
+                      // This replaces a loop over active_targets_ that took the first row whose
+                      // charge fell inside the envelope WITHOUT checking that row's mass -- so with
+                      // several rows live at one retention time the isolated charge could be
+                      // supplied by an unrelated target, and which row won depended on std::sort's
+                      // unspecified order among equal masses. Invisible in CI only because every
+                      // committed list writes -1, which hit the `charge < 0` arm on the first row.
+                      target_matched = true;
                     }
                     else if (!target_mass_charge_map_.empty())  // Legacy .log mode with charge
                     {
@@ -588,7 +644,15 @@ namespace OpenMS
             // phase 0, so running this in every phase changes inclusion-mode behaviour only.
             if (selection_phase < selection_phase_end)
             {
-              if (tqscore_exceeding_mass_rt_map_.find(nominal_mass) != tqscore_exceeding_mass_rt_map_.end()
+              if (has_authored)
+              {
+                // Per-charge (ADR-0028): the MASS must survive its own acquisition, or `single`
+                // could never come back for the second and third charge the row named. Only the
+                // charge just spent is out. The anchor loop already skips spent charges; this is
+                // the documented gate and selection_phase can re-enter, so both stay.
+                if (authored_acquired_rt_map_.count({nominal_mass, charge}) > 0) { continue; }
+              }
+              else if (tqscore_exceeding_mass_rt_map_.find(nominal_mass) != tqscore_exceeding_mass_rt_map_.end()
                   || tqscore_exceeding_mz_rt_map_.find(integer_mz) != tqscore_exceeding_mz_rt_map_.end())
               {
                 continue;
@@ -610,22 +674,84 @@ namespace OpenMS
             // acquired is by construction what gets isolated. Computed once: the qscore accumulation,
             // the RT map and the emit loop below must all record the same set.
             //
-            // The anchor is `charge` AFTER inclusion-mode target matching may have reassigned it
-            // (:485) -- selectNotches drops the anchor from its output, so a stale anchor would emit
-            // the matched charge twice.
+            // The anchor is `charge` as the anchor block resolved it -- under an authored charge
+            // set that is the highest-SNR NAMED charge, not the envelope's representative one.
+            // selectNotches drops the anchor from its output, so a stale anchor would emit it twice.
             std::vector<int> acquired_charges{charge};
+            std::vector<int> authored_dropped;  // named, observed, but refused -- reported below
             if (config_.targeting().precursor_charges != ChargeAcquisitionMode::Single)
             {
+              std::vector<NotchCandidate> notch_candidates =
+                  peakGroupNotchCandidates(pg, optimal_window_margin_);
+              if (has_authored)
+              {
+                // FILTER ONLY (ADR-0028). The authored set can subtract from what the envelope
+                // offers and never add to it; selectNotches below still applies the SNR gate, so a
+                // named-but-weak charge is refused as a notch even though the anchor is exempt.
+                notch_candidates.erase(
+                    std::remove_if(notch_candidates.begin(), notch_candidates.end(),
+                                   [&](const NotchCandidate& n) {
+                                     return std::find(authored.begin(), authored.end(), n.charge) == authored.end()
+                                            || authored_acquired_rt_map_.count({nominal_pg, n.charge}) > 0
+                                            || (config_.level(ms_level).min_charge > 0
+                                                && n.charge < config_.level(ms_level).min_charge);
+                                   }),
+                    notch_candidates.end());
+              }
               for (const NotchCandidate& n :
-                   selectNotches(peakGroupNotchCandidates(pg, optimal_window_margin_), charge,
+                   selectNotches(notch_candidates, charge,
                                  config_.targeting().snr_threshold,
                                  MAX_NOTCHES_PER_STAGE, "MS2 z=" + std::to_string(charge)))
                 acquired_charges.push_back(n.charge);
             }
 
-            // Compute total qscore. Mass-keyed, unconditionally: exclusion no longer has a
-            // per-(mass, charge) variant (ADR-0021). Runs ONCE per species even when the scan
-            // isolates several of its charges -- see the emit loop below for why that matters.
+            if (has_authored)
+            {
+              // Per-charge exclusion (ADR-0028): record what was actually isolated, charge by
+              // charge, and write NO mass-keyed entry -- see the mass_qscore_map_ block below.
+              for (int c : acquired_charges) { authored_acquired_rt_map_[{nominal_mass, c}] = rt; }
+              authored_acquired_this_survey.insert(nominal_mass);
+
+              // Say what was named and refused. A silent drop reads as "we isolated everything you
+              // asked for" when we did not -- the same failure shape [NOTCH-CLAMP] exists for.
+              std::stringstream charge_set_msg;
+              charge_set_msg << "[CHARGE-SET] m=" << mass << " authored=";
+              for (size_t ai = 0; ai < authored.size(); ++ai)
+                charge_set_msg << (ai ? ";" : "") << authored[ai];
+              charge_set_msg << " anchor=" << charge << " acquired=";
+              for (size_t ai = 0; ai < acquired_charges.size(); ++ai)
+                charge_set_msg << (ai ? "," : "") << acquired_charges[ai];
+              // "unacquired", not "dropped": under `single` the other named charges are DEFERRED to
+              // later surveys, not refused, and per-charge exclusion is what will deliver them.
+              // Calling that a drop would read as a failure every single survey.
+              for (int c : authored)
+              {
+                if (std::find(acquired_charges.begin(), acquired_charges.end(), c) != acquired_charges.end())
+                  continue;
+                auto [lo, hi] = pg.getMzRange(c);
+                authored_dropped.push_back(c);
+                charge_set_msg << (authored_dropped.size() == 1 ? " unacquired=" : ",") << c << "(";
+                if (hi <= lo) charge_set_msg << "not resolved";
+                else if (config_.level(ms_level).min_charge > 0 && c < config_.level(ms_level).min_charge)
+                  charge_set_msg << "below min_charge " << config_.level(ms_level).min_charge;
+                else if (config_.targeting().precursor_charges == ChargeAcquisitionMode::Single)
+                  charge_set_msg << "deferred, precursor_charges single";
+                else charge_set_msg << "snr " << pg.getChargeSNR(c) << " < " << config_.targeting().snr_threshold;
+                charge_set_msg << ")";
+              }
+              std::cout << charge_set_msg.str() << std::endl;
+            }
+
+            // Compute total qscore. Mass-keyed. Runs ONCE per species even when the scan isolates
+            // several of its charges -- see the emit loop below for why that matters.
+            //
+            // Skipped entirely for an authored charge set (ADR-0028), and both halves have to go.
+            // The tqscore_exceeding_* writes would retire the MASS after its first charge, leaving
+            // the other named charges unreachable; and the "previously acquired with higher
+            // qscore" guard is mass-keyed too, so on the next survey the second charge -- ranked
+            // lower by construction -- would `continue` against the first charge's score. Per-charge
+            // state was already recorded above.
+            if (!has_authored)
             {
               auto inter = mass_qscore_map_.find(nominal_mass);
               if (inter == mass_qscore_map_.end())
@@ -749,8 +875,33 @@ namespace OpenMS
     // Remove from mz exclusion
     if (tqscore_exceeding_mz_rt_map_.find(integer_mz) != tqscore_exceeding_mz_rt_map_.end()) { tqscore_exceeding_mz_rt_map_.erase(integer_mz); }
 
+    // Remove the per-charge entry an authored charge set would have written (ADR-0028). Keyed on
+    // the charge this very window isolated, so the named charge becomes selectable again rather
+    // than the whole set.
+    authored_acquired_rt_map_.erase({nominal_mass, id_charge_map_[id]});
+
     // Remove qscore from further calculations
     if (mass_qscore_map_.find(nominal_mass) != mass_qscore_map_.end()) { mass_qscore_map_[nominal_mass] /= 1 - qscore; }
+  }
+
+  std::vector<int> PrecursorSelection::authoredChargesFor_(double mass, double delta) const
+  {
+    std::vector<int> out;
+    // active_targets_ is already RT-filtered (filterAndRank, :190-207), so "active" needs no
+    // second RT test here -- which is exactly what keeps two rows for one mass in DIFFERENT RT
+    // windows independent while unioning two rows in the SAME window.
+    for (const InclusionTarget* t : active_targets_)
+    {
+      if (std::abs(t->mass - mass) >= delta) continue;
+      // An unrestricted row wins the union outright. Intersecting instead would let a bare `-1`
+      // row silently narrow a neighbouring row's set, and "no charge named" has to mean "no
+      // opinion", not "every charge".
+      if (t->charges.empty()) return {};
+      out.insert(out.end(), t->charges.begin(), t->charges.end());
+    }
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
   }
 
   void PrecursorSelection::parseInclusionListTSV_(const String& filename)
@@ -788,9 +939,42 @@ namespace OpenMS
 
       InclusionTarget target;
       target.mass = cells[0].toDouble();
-      // Charge: -1 or empty means "any charge"
+
+      // The AUTHORED CHARGE SET (ADR-0028). "-1" or empty leaves the row unrestricted and yields
+      // an EMPTY set; a single charge is just a set of one; "10;13;16" names three.
+      //
+      // ';' rather than ',' deliberately: this file is tab-separated so either would parse, but a
+      // spreadsheet in a comma-decimal locale writes 12351,3 and a comma list would then be
+      // indistinguishable from a mangled number. The wire grammar's ',' axis is a different thing
+      // in a different file and does not reach here.
       String charge_str = cells[1].trim();
-      target.charge = (charge_str.empty() || charge_str == "-1") ? -1 : cells[1].toInt();
+      if (!charge_str.empty() && charge_str != "-1")
+      {
+        // String::split pushes the whole string and returns false when the delimiter is absent, so
+        // a lone "12" arrives here as a one-element list and needs no special case. It does NOT
+        // trim on that path, hence the trim below.
+        StringList charge_parts;
+        charge_str.split(';', charge_parts);
+        for (const String& part : charge_parts)
+        {
+          const String tok = String(part).trim();
+          if (tok.empty()) continue;
+          const int z = tok.toInt();
+          // Loud rather than silent, per the strict-schema stance (ADR-0007): a charge that cannot
+          // be isolated is a typo, and a row silently reduced to "unrestricted" would acquire the
+          // whole envelope while reading as though it named three charges.
+          if (z <= 0)
+          {
+            throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
+              "inclusion list: charge must be a positive integer, a ';'-separated list of them, or -1",
+              tok);
+          }
+          target.charges.push_back(z);
+        }
+        std::sort(target.charges.begin(), target.charges.end());
+        target.charges.erase(std::unique(target.charges.begin(), target.charges.end()),
+                             target.charges.end());
+      }
       // RT values in minutes, convert to seconds
       target.rt_start = cells[2].toDouble() * 60.0;
       target.rt_end = cells[3].toDouble() * 60.0;
@@ -904,7 +1088,9 @@ namespace OpenMS
     {
       InclusionTarget target;
       target.mass = mass;
-      target.charge = -1;  // Any charge
+      // No authored charge set: a tag-expanded target is a MASS hypothesis, and nothing in the tag
+      // match says anything about which charge states of it will be worth isolating. Leaving
+      // `charges` empty keeps acquisition unrestricted, exactly as the old `-1` did.
       target.rt_start = rt;
       target.rt_end = rt + config_.targeting().rt_window;
       target.priority = priority;
