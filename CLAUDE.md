@@ -253,6 +253,39 @@ A returning regular MS3 is scored against the **live tracker winner**
 context supplies only `fragment_ion_type`/`fragment_ion_index`. No winner ⇒ empty context ⇒ the
 MS3 matches nothing. The cache entry is erased after use, so a duplicate/late MS3 yields no row.
 
+### One un-fragmented reference per swept activation (ADR-0029)
+
+`exploration.activations` is a **list**, and `buildVariants_` emits each activation's whole sweep as a
+contiguous block before starting the next. A **baseline** heads each block: that activation's own
+variant with the **swept axis alone** zeroed — CE for HCD/CID, reaction time for ETD, both for EThcD —
+and every other parameter left as its siblings carry it, so an ETD baseline keeps
+`base_config.collision_energy` rather than dropping to 0.
+
+Three consequences that are easy to get backwards:
+
+- **It is suppressed, not duplicated, when the sweep already contains its zero-point.** With
+  `ce_min: 0` the block's first sweep point *is* the reference, so it is flagged in place and nothing
+  is synthesized. `buildVariants_` decides this by comparing the two **emitted commands**, not by
+  testing `ce_min == 0` — which is what makes the flagged and synthesized forms provably the same scan
+  and covers EThcD's cross-product for free. `initiate` prepends **nothing**; it used to insert one
+  baseline stamped `base_config.activation`, which need not be a swept activation at all.
+- **An activation that sweeps neither axis gets no baseline** and competes normally. A baseline is
+  "this scan with fragmentation off"; with no swept axis there is nothing to turn off. Drop that guard
+  and such an activation's single variant is identical to its own baseline, gets flagged, and can never
+  win.
+- **`ExplorationGroup::baseline_intensity` is a `std::map<std::string, double>` carrying three
+  states**: absent = that activation's reference has not returned; `> 0` = usable denominator;
+  `<= 0` = returned empty. `has_baseline` and `baseline_failed` are gone — both were group-scalar facts
+  that are now per-activation.
+
+⚠️ **An empty reference bars one activation; it cancels nothing.** Its variants are still acquired and
+score **`-1.0`**, and that value is load-bearing rather than stylistic: winner selection seeds
+`best_score = -1.0` and takes `score > best_score`, so `-1.0` is excluded by the existing comparison
+with no new flag — while `0.0` **wins the group at zero**, and at MS3 a measuring metric then fires a
+production scan at that coin-flip CE. Siblings are unaffected and supply the winner; only when every
+activation is de-referenced does `best_idx` stay `-1`. `ScanCommandQueue::cancelByScanIds` therefore
+has no production caller left and is kept as a tested queue primitive.
+
 ### Reading vs measuring exploration metrics — the MS3 evidence rule (ADR-0020)
 
 **Only `FragmentCount` identifies its own MS3 pre-scans.** It scores a variant *by* matching it, so
