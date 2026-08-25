@@ -1130,10 +1130,17 @@ namespace
   //
   // ce_max/rt_max are derived as min + 20 because Config::validate rejects an empty range on a
   // swept axis; the steps are coarse (10) so a block stays countable by hand: 3 sweep points.
+  //
+  // `overrides` defaults to empty and MUST be passed as `sweep_overrides` for a
+  // remaining_precursor sweep: Config::validate rejects that metric with an empty overrides map
+  // (ADR-0026 -- such a sweep never keeps its pre-scans, so it has to declare the settings they run
+  // at). Omitting it does not fail an assertion, it throws out of the Config constructor, which
+  // ClassTest reports as a failed section with an EMPTY "Failed lines:" list.
   std::string sweepCfg(const std::string& activations, double ce_min, double rt_min,
                        const std::string& metric = "mass_count",
                        const std::string& ms2_activation = "HCD",
-                       int ms2_collision_energy = 35)
+                       int ms2_collision_energy = 35,
+                       const std::string& overrides = "")
   {
     std::ostringstream os;
     os << R"({
@@ -1146,7 +1153,7 @@ namespace
       "ce_min": )" << ce_min << R"(, "ce_max": )" << (ce_min + 20.0) << R"(, "ce_step": 10.0,
       "reaction_time_min": )" << rt_min << R"(, "reaction_time_max": )" << (rt_min + 20.0)
        << R"(, "reaction_time_step": 10.0,
-      "activations": [)" << activations << R"(]
+      "activations": [)" << activations << R"(])" << overrides << R"(
     }
   },
   "characterization": { "mode": "off",
@@ -4433,7 +4440,11 @@ END_SECTION
 // denominator for both.
 START_SECTION(remaining_ratio_uses_its_own_activation_baseline)
 {
-  Config cfg{sweepCfg(R"("HCD", "ETD")", 15.0, 5.0, "remaining_precursor")};
+  // sweep_overrides is REQUIRED here, not decoration: Config::validate rejects a
+  // remaining_precursor sweep whose overrides map is empty (ADR-0026). "Orbitrap" is inert -- it is
+  // what ms_settings.ms2.analyzer already says -- so it satisfies the rule without changing any
+  // acquired value.
+  Config cfg{sweepCfg(R"("HCD", "ETD")", 15.0, 5.0, "remaining_precursor", "HCD", 35, sweep_overrides)};
   ScanCommandQueue queue(cfg);
   FragmentAnalysis fragments(cfg);
   Exploration exploration(cfg, fragments);
@@ -4480,7 +4491,10 @@ END_SECTION
 // seeds best_score at -1.0 and takes `score > best_score`.
 START_SECTION(empty_baseline_bars_only_its_own_activation)
 {
-  Config cfg{sweepCfg(R"("HCD", "ETD")", 15.0, 5.0, "remaining_precursor")};
+  // sweep_overrides is REQUIRED, as above (ADR-0026). It also makes ADR-0020 gate #1 true, so this
+  // group emits a production scan at completion -- harmless here: the assertions below are on the
+  // per-variant scores, the winner, and activeGroupCount, none of which the extra command touches.
+  Config cfg{sweepCfg(R"("HCD", "ETD")", 15.0, 5.0, "remaining_precursor", "HCD", 35, sweep_overrides)};
   ScanCommandQueue queue(cfg);
   FragmentAnalysis fragments(cfg);
   Exploration exploration(cfg, fragments);
