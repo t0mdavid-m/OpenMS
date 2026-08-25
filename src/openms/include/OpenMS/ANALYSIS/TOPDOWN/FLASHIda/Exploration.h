@@ -121,6 +121,11 @@ namespace OpenMS
       double precursor_mass = 0.0;
       int precursor_charge = 0;
       PeakGroup precursor_pg;
+      /// The precursor's ACQUISITION CHARGE SET (ADR-0028); empty = unrestricted. Stored so every
+      /// variant, and the post-sweep production scan, isolate the same charges the MS1 selection
+      /// resolved -- otherwise a CE sweep would co-isolate the whole envelope while the production
+      /// scan of the same species co-isolated three of it.
+      std::vector<int> allowed_charges;
       double isolation_width = 0.0;
       double faims_cv = 0.0;
       /// activation -> that activation's un-fragmented isolation-window intensity (ADR-0029).
@@ -265,10 +270,13 @@ namespace OpenMS
                                       const Ms2Params* stage0_params = nullptr,
                                       // Co-isolation notches for the MS3 fragment stage, when
                                       // characterization.fragment_charges == Multiplexed (ADR-0016). MS2 variants
-                                      // need no equivalent: they go through buildMS2, which derives its own
+                                      // need no equivalent SET: they go through buildMS2, which derives its own
                                       // notches from the PeakGroup it is handed. Stored on the group so the
                                       // post-sweep production scan can rebuild with the same set.
-                                      const std::vector<NotchCandidate>* stage1_notches = nullptr);
+                                      const std::vector<NotchCandidate>* stage1_notches = nullptr,
+                                      // The MS1 selection's authored charge set (ADR-0028), which BOUNDS what
+                                      // buildMS2 may derive above. Empty/null = unrestricted.
+                                      const std::vector<int>* allowed_charges = nullptr);
 
     /// Process returning exploration variant: deconvolve with correct precursor context,
     /// score, select winner, trigger next level. Returns FeedResultInfo with commands and metadata.

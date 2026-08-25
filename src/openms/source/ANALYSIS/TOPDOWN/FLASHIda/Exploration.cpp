@@ -163,7 +163,8 @@ namespace OpenMS
       const MS3FragmentMatcher::ProteoformContext& proto_ctx,
       const FragmentAnalysis::FragmentScores& frag_scores,
       const Ms2Params* stage0_params,
-      const std::vector<NotchCandidate>* stage1_notches)
+      const std::vector<NotchCandidate>* stage1_notches,
+      const std::vector<int>* allowed_charges)
   {
     std::vector<ScanCommand> commands;
 
@@ -250,6 +251,7 @@ namespace OpenMS
     group.isolation_width = isolation_width;
     group.precursor_charge = charge;
     group.precursor_pg = pg;
+    if (allowed_charges != nullptr) group.allowed_charges = *allowed_charges;
     group.faims_cv = (ms_ctx != nullptr) ? ms_ctx->faims_cv : 0.0;  // Item 1: CV travels via the context
     group.start_ms = static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -338,7 +340,8 @@ namespace OpenMS
       }
       else
       {
-        cmd = queue.buildMS2(pg, charge, variant_config, expl_priority, ms_ctx ? ms_ctx->scan_id : 0);
+        cmd = queue.buildMS2(pg, charge, variant_config, expl_priority, ms_ctx ? ms_ctx->scan_id : 0,
+                             &group.allowed_charges);
       }
       cmd.faims_cv = group.faims_cv;  // CV inferred from the MS1 context (group.faims_cv <- ms_ctx->faims_cv)
 
@@ -823,7 +826,8 @@ namespace OpenMS
         }
         else
         {
-          prod_cmd = queue.buildMS2(group.precursor_pg, group.precursor_charge, prod_config, 2, 0);
+          prod_cmd = queue.buildMS2(group.precursor_pg, group.precursor_charge, prod_config, 2, 0,
+                                    &group.allowed_charges);
         }
 
         prod_cmd.faims_cv = group.faims_cv;

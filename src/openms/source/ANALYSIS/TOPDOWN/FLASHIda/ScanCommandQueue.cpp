@@ -247,7 +247,8 @@ namespace OpenMS
     return cmd;
   }
 
-  ScanCommand ScanCommandQueue::buildMS2(const PeakGroup& pg, int charge, const ScanConfig& scan_config, int priority, int parent_scan_id)
+  ScanCommand ScanCommandQueue::buildMS2(const PeakGroup& pg, int charge, const ScanConfig& scan_config, int priority, int parent_scan_id,
+                                         const std::vector<int>* allowed_charges)
   {
     std::lock_guard<std::mutex> lock(queue_mutex_);
     ScanCommand cmd{};
@@ -313,8 +314,26 @@ namespace OpenMS
     // already applies, and the cap is this stage's own 10-plex budget.
     if (config_.targeting().precursor_charges == ChargeAcquisitionMode::Multiplexed)
     {
+      std::vector<NotchCandidate> notch_candidates = peakGroupNotchCandidates(pg, optimal_window_margin_);
+
+      // An AUTHORED CHARGE SET (ADR-0028) confines co-isolation to the charges the caller resolved.
+      // THIS walk is the one that reaches the instrument, so leaving it unfiltered is not a
+      // bookkeeping discrepancy: it is the wire disagreeing with every record of itself, and the
+      // engine reporting a restriction it never applied. That shipped for one CI run -- the
+      // selector logged acquired=16,13,10 while the command carried all ten windows.
+      if (allowed_charges != nullptr && !allowed_charges->empty())
+      {
+        notch_candidates.erase(
+            std::remove_if(notch_candidates.begin(), notch_candidates.end(),
+                           [allowed_charges](const NotchCandidate& n) {
+                             return std::find(allowed_charges->begin(), allowed_charges->end(), n.charge)
+                                    == allowed_charges->end();
+                           }),
+            notch_candidates.end());
+      }
+
       writeNotchesForStage(cmd, 0,
-          selectNotches(peakGroupNotchCandidates(pg, optimal_window_margin_),
+          selectNotches(notch_candidates,
                         charge, config_.targeting().snr_threshold,
                         MAX_NOTCHES_PER_STAGE,
                         "MS2 z=" + std::to_string(charge)));

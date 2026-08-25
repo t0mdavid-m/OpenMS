@@ -77,7 +77,11 @@ namespace OpenMS
 
     /// Build MS2 ScanCommand from a PeakGroup + ScanConfig (unified factory).
     /// parent_scan_id is MANDATORY (0 = no parent / root); stamped onto the command at creation.
-    ScanCommand buildMS2(const PeakGroup& pg, int charge, const ScanConfig& scan_config, int priority, int parent_scan_id);
+    /// @p allowed_charges, when non-null and non-empty, is the ACQUISITION CHARGE SET the caller
+    /// already resolved (PrecursorSelection::triggerAuthoredCharges). Co-isolation is confined to
+    /// it. Defaulted, so callers that never restrict compile and behave exactly as before.
+    ScanCommand buildMS2(const PeakGroup& pg, int charge, const ScanConfig& scan_config, int priority, int parent_scan_id,
+                         const std::vector<int>* allowed_charges = nullptr);
 
     /// Build MS3 ScanCommand from MS2 context + fragment target + MS3 config for CE/activation.
     /// parent_scan_id is MANDATORY (the immediate parent's tracking id); stamped at creation.

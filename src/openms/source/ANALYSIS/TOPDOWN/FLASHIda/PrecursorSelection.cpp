@@ -283,6 +283,8 @@ namespace OpenMS
     trigger_right_isolation_mzs_.reserve(mass_count);
     trigger_ids_.clear();
     trigger_ids_.reserve(mass_count);
+    trigger_authored_charges_.clear();
+    trigger_authored_charges_.reserve(mass_count);
     std::vector<int>* charges = nullptr;
 
     selected_peak_groups_.reserve(mass_count);
@@ -715,7 +717,10 @@ namespace OpenMS
               // Say what was named and refused. A silent drop reads as "we isolated everything you
               // asked for" when we did not -- the same failure shape [NOTCH-CLAMP] exists for.
               std::stringstream charge_set_msg;
-              charge_set_msg << "[CHARGE-SET] m=" << mass << " authored=";
+              // rt identifies the survey. Without it, lines from different surveys -- and, in a
+              // ctest log, from different engine runs -- are indistinguishable, which is most of
+              // what made the CM-04 scoping failure slow to attribute.
+              charge_set_msg << "[CHARGE-SET] rt=" << rt << " m=" << mass << " authored=";
               for (size_t ai = 0; ai < authored.size(); ++ai)
                 charge_set_msg << (ai ? ";" : "") << authored[ai];
               charge_set_msg << " anchor=" << charge << " acquired=";
@@ -734,6 +739,10 @@ namespace OpenMS
                 if (hi <= lo) charge_set_msg << "not resolved";
                 else if (config_.level(ms_level).min_charge > 0 && c < config_.level(ms_level).min_charge)
                   charge_set_msg << "below min_charge " << config_.level(ms_level).min_charge;
+                // Ahead of the SNR arm deliberately: a spent charge has a perfectly good SNR and
+                // would otherwise be reported as having failed a gate it never reached.
+                else if (authored_acquired_rt_map_.count({nominal_mass, c}) > 0)
+                  charge_set_msg << "already acquired this rt window";
                 else if (config_.targeting().precursor_charges == ChargeAcquisitionMode::Single)
                   charge_set_msg << "deferred, precursor_charges single";
                 else charge_set_msg << "snr " << pg.getChargeSNR(c) << " < " << config_.targeting().snr_threshold;
@@ -819,6 +828,11 @@ namespace OpenMS
               id_mz_map_[window_id_] = (int)round(e_center_mz);
               id_qscore_map_[window_id_] = score;
               id_charge_map_[window_id_] = emit_charge;
+              // The set the geometry writer must not exceed. Under an authored charge set this is
+              // exactly what was recorded above; otherwise empty, meaning unrestricted, which
+              // reproduces the envelope-wide behaviour every non-targeted species has always had.
+              trigger_authored_charges_.push_back(has_authored ? acquired_charges : std::vector<int>());
+
               trigger_ids_.push_back(window_id_);
               window_id_++;
 

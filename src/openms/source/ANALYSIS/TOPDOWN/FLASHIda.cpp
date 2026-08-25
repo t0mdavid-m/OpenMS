@@ -196,7 +196,12 @@ FLASHIda::FLASHIda(char* arg) :
           ScanCommand ms1_ctx{};
           ms1_ctx.scan_id  = parent_tracking_id;
           ms1_ctx.faims_cv = parent_ctx.faims_cv;  // CV travels via the resolved MS1 context
-          auto cmds = exploration_.initiate(2, selected[i], sel_charges[i], queue_, &raw_ms1, &ms1_ctx);
+          // Same index i as the production dispatch below, so a species carrying an authored
+          // charge set has its CE-sweep variants isolate the charges its production scan would.
+          const std::vector<int>* allowed_i =
+              i < (int)selection_.triggerAuthoredCharges().size() ? &selection_.triggerAuthoredCharges()[i] : nullptr;
+          auto cmds = exploration_.initiate(2, selected[i], sel_charges[i], queue_, &raw_ms1, &ms1_ctx,
+                                            '\0', 0, {}, {}, nullptr, nullptr, allowed_i);
           for (auto& c : cmds)
             push_ms2_command(c, precursor_id);
         }
@@ -211,7 +216,9 @@ FLASHIda::FLASHIda(char* arg) :
           for (const auto& sc : config_.level(2).scans)
           {
             ScanConfig ms2_config = sc;
-            ScanCommand cmd = queue_.buildMS2(selected[i], sel_charges[i], ms2_config, 2, parent_tracking_id);
+            const std::vector<int>* allowed_i =
+                i < (int)selection_.triggerAuthoredCharges().size() ? &selection_.triggerAuthoredCharges()[i] : nullptr;
+            ScanCommand cmd = queue_.buildMS2(selected[i], sel_charges[i], ms2_config, 2, parent_tracking_id, allowed_i);
             // MS2 inherits the parent MS1's *processing* CV (the faims_cv arg), NOT parent_ctx.faims_cv:
             // in a FAIMS-skip run the MS1 command's stored CV differs from the CV it was processed at.
             cmd.faims_cv = faims_cv;
