@@ -28,9 +28,12 @@ namespace OpenMS
 
   void FLASHDeconvFeatureFile::writeTopFDFeatureHeader(std::fstream& fs, uint ms_level)
   {
+    // MS2 layout targets TopPIC 1.8.x: 17 columns, parsed positionally and without bounds checks
+    // (see docs/adr/0034). Column 13 was added in TopPIC 1.8.0; emitting the older 16-column form
+    // makes TopPIC read past the end of the row and crash.
     //  //File_name	Fraction_ID	Spectrum_ID	Scans	MS_one_ID	MS_one_scans	Fraction_feature_ID	Fraction_feature_intensity
     // Fraction_feature_score	Fraction_feature_min_time	Fraction_feature_max_time
-    // Fraction_feature_apex_time	Precursor_monoisotopic_mz	Precursor_average_mz	Precursor_charge	Precursor_intensity
+    // Fraction_feature_apex_time	Precursor_neutral_monoisotopic_mass	Precursor_monoisotopic_mz	Precursor_average_mz	Precursor_charge	Precursor_intensity
 
     if (ms_level == 1)
     {
@@ -38,7 +41,7 @@ namespace OpenMS
     }
     else
     {
-      fs << "File_name\tFraction_ID\tSpectrum_ID\tScans\tMS_one_ID\tMS_one_scans\tFraction_feature_ID\tFraction_feature_intensity\tFraction_feature_score\tFraction_feature_min_time\tFraction_feature_max_time\tFraction_feature_apex_time\tPrecursor_monoisotopic_mz\tPrecursor_average_mz\tPrecursor_charge\tPrecursor_intensity\n";
+      fs << "File_name\tFraction_ID\tSpectrum_ID\tScans\tMS_one_ID\tMS_one_scans\tFraction_feature_ID\tFraction_feature_intensity\tFraction_feature_score\tFraction_feature_min_time\tFraction_feature_max_time\tFraction_feature_apex_time\tPrecursor_neutral_monoisotopic_mass\tPrecursor_monoisotopic_mz\tPrecursor_average_mz\tPrecursor_charge\tPrecursor_intensity\n";
     }
     fs.flush();
   }
@@ -109,7 +112,12 @@ namespace OpenMS
 
     if (ms_level == 1)
     {
-      uint max_feature_index = 0;
+      // Mint synthetic feature IDs above EVERY feature, not just the MS1 targets written below:
+      // mass_features also holds decoy and MSn features at higher indices, and the ms_level == 2
+      // branch discriminates minted from real on `index > mass_features.size()`. Basing this on
+      // the MS1-target max mints into that occupied space, and the MS2 branch then reports an
+      // unrelated feature's payload.
+      uint max_feature_index = (uint)mass_features.size();
       for (const auto& mass_feature : mass_features)
       {
         if (mass_feature.ms_level != 1 || mass_feature.is_decoy) continue;
@@ -125,8 +133,6 @@ namespace OpenMS
            << "\t" << std::to_string(mass_feature.mt.rbegin()->getRT()/60.0) << "\t" << mass_feature.min_scan_number << "\t" << mass_feature.max_scan_number << "\t"
            << mass_feature.min_charge << "\t" << mass_feature.max_charge << "\t" << std::to_string(apex.getRT()/60.0) << "\t" << mass_feature.scan_number << "\t"
            << std::to_string(apex.getIntensity()) << "\t" << mass_feature.rep_charge << "\t" << mass_feature.rep_mz << "\t0\t0\n";
-
-        max_feature_index = std::max(max_feature_index, mass_feature.index);
       }
       for (auto& dspec : deconvolved_spectra)
       {
@@ -176,9 +182,13 @@ namespace OpenMS
           {
             sum_intensity += m.getIntensity();
           }
+          // Fraction_feature_score stays 0: TopPIC copies it verbatim into the PrSM table's
+          // "Feature score", so populating it could move results. Deliberately out of scope.
+          const double mono_mass = mass_feature.mt.getCentroidMZ();
+          const double mono_mz = mono_mass / mass_feature.rep_charge + Constants::PROTON_MASS_U;
           ss << std::to_string(sum_intensity) << "\t0\t" << std::to_string(mass_feature.mt.begin()->getRT()/60.0)
-             << "\t" << std::to_string(mass_feature.mt.rbegin()->getRT()/60.0) << "\t" << std::to_string(apex.getRT()/60.0) << "\t" << std::to_string(mass_feature.mt.getCentroidMZ())
-             << "\t" << std::to_string(mass_feature.rep_mz) << "\t" << mass_feature.rep_charge << "\t" << std::to_string(dspec.getPrecursor().getIntensity()) << "\n";
+             << "\t" << std::to_string(mass_feature.mt.rbegin()->getRT()/60.0) << "\t" << std::to_string(apex.getRT()/60.0) << "\t" << std::to_string(mono_mass)
+             << "\t" << std::to_string(mono_mz) << "\t" << std::to_string(mass_feature.rep_mz) << "\t" << mass_feature.rep_charge << "\t" << std::to_string(dspec.getPrecursor().getIntensity()) << "\n";
         }
         else
         {
@@ -194,9 +204,13 @@ namespace OpenMS
             rep_mz = p.mz;
           }
 
+          // rep_mz is the observed most-intense peak at the representative charge and stays 0 when
+          // that charge is absent from the isolation-window-narrowed group; TopPIC parses
+          // Precursor_average_mz and discards it, so that is left as-is.
+          const double mono_mz = pg.getMonoMass() / pg.getRepAbsCharge() + Constants::PROTON_MASS_U;
           ss << std::to_string(pg.getIntensity()) << "\t0\t" << std::to_string(rt)
              << "\t" << std::to_string(rt) << "\t" << std::to_string(rt) << "\t" << std::to_string(pg.getMonoMass())
-             << "\t" << std::to_string(rep_mz) << "\t" << pg.getRepAbsCharge() << "\t" << std::to_string(dspec.getPrecursor().getIntensity()) << "\n";
+             << "\t" << std::to_string(mono_mz) << "\t" << std::to_string(rep_mz) << "\t" << pg.getRepAbsCharge() << "\t" << std::to_string(dspec.getPrecursor().getIntensity()) << "\n";
         }
       }
     }

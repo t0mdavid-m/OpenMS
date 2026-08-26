@@ -213,7 +213,10 @@ namespace OpenMS
       mass_feature.per_charge_intensity = per_charge_intensity;
       mass_feature.per_isotope_intensity = per_isotope_intensity;
 
-      mass_feature.rep_mz = mass_feature.avg_mass / rep_pg.getRepAbsCharge();
+      // m/z of the representative charge state: the z protons the ion carries divide down to
+      // exactly one proton, independent of z. Omitting it made every Rep_average_mz /
+      // Precursor_average_mz short by 1.00727646688 Th.
+      mass_feature.rep_mz = mass_feature.avg_mass / rep_pg.getRepAbsCharge() + Constants::PROTON_MASS_U;
       mass_feature.scan_number = rep_pg.getScanNumber();
       mass_feature.min_scan_number = min_scan_number;
       mass_feature.max_scan_number = max_scan_number;
