@@ -11,6 +11,7 @@
 #include <OpenMS/CONCEPT/ClassTest.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
 
+#include <cmath>     // std::abs on the parsed float masses
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -36,6 +37,59 @@ namespace
 }
 
 START_TEST(FLASHIda_Logging, "$Id$")
+
+/////////////////////////////////////////////////////////////
+
+// Test 0: a >= 10 target count must not be mistaken for "0 targets"
+//
+// The skip test was `line.find("0 targets")`, an unanchored SUBSTRING, so it also matched
+// "10 targets" and "20 targets". Those headers were dropped and their Mass= rows then inherited the
+// PREVIOUS header's scan key -- or, at the head of a file, an uninitialised int. This is not
+// hypothetical: the committed separate_charges golden carries eight "- 10 targets" headers and one
+// "- 20 targets", because command fan-out (per MS2 config x CE-sweep variant x charge under
+// `separate`) makes double-digit counts routine.
+//
+// Driven off a hand-written log rather than an acquisition: the defect is in the READER, and a
+// synthetic file states the exact input that triggers it without needing a config that happens to
+// fan out past ten.
+START_SECTION(ida_log_double_digit_target_count_is_not_skipped)
+{
+  const std::string dir = freshLogDir("logging_ida_double_digit_targets");
+  const std::string path = dir + "/ida.log";
+  {
+    std::ofstream f(path);
+    // Entry A: 10 targets. Must be kept, under its own key.
+    f << "MS1 Scan# 7 RT 1.0000 (Access ID !!\") - 10 targets\n";
+    f << "Mass=12351.3933\tZ=15\tScore=0.90000\tWindow=[824.0356-825.8985]"
+         "\tPrecursorIntensity=1.00000\tPrecursorMassIntensity=2.00000"
+         "\tFeatures=[0.9,1.0,0.9,1.0,0.9,1.0]\tChargeRange=[12-19]\tHCD=0\n";
+    f << "AllMass=12351.3933\n";
+    // Entry B: genuinely 0 targets. Must still be skipped -- the anchor must not over-correct.
+    f << "MS1 Scan# 8 RT 2.0000 (Access ID !!#) - 0 targets\n";
+    f << "AllMass=\n";
+    // Entry C: 20 targets, the other count the substring swallowed.
+    f << "MS1 Scan# 9 RT 3.0000 (Access ID !!$) - 20 targets\n";
+    f << "Mass=8604.9191\tZ=8\tScore=0.80000\tWindow=[1076.6249-1077.6249]"
+         "\tPrecursorIntensity=3.00000\tPrecursorMassIntensity=4.00000"
+         "\tFeatures=[0.8,1.0,0.8,1.0,0.8,1.0]\tChargeRange=[6-10]\tHCD=0\n";
+    f << "AllMass=8604.9191\n";
+  }
+
+  auto parsed = IdaLogger::parseFLASHIdaLog(path);
+
+  TEST_EQUAL(parsed.count(7), 1)          // the "10 targets" header survived
+  TEST_EQUAL(parsed.count(9), 1)          // and the "20 targets" one
+  TEST_EQUAL(parsed.count(8), 0)          // while a real "0 targets" entry is still skipped
+  TEST_EQUAL(parsed.size(), 2)
+
+  // Each row landed under ITS OWN header, not the previous one. Before the fix scan 7's row went to
+  // an uninitialised key and scan 9's was appended to whatever came before it.
+  TEST_EQUAL(parsed[7].size(), 1)
+  TEST_EQUAL(parsed[9].size(), 1)
+  TEST_TRUE(std::abs(parsed[7][0][0] - 12351.3933) < 0.001)
+  TEST_TRUE(std::abs(parsed[9][0][0] - 8604.9191) < 0.001)
+}
+END_SECTION
 
 /////////////////////////////////////////////////////////////
 

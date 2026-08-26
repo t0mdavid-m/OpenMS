@@ -862,12 +862,17 @@ namespace OpenMS
     if (instream.good())
     {
       String line;
-      int scan;
+      int scan = -1;   // no MS1 header seen yet; a Mass= line before one is not attributable
       float mass, charge, w1, w2, qscore, pint, mint, z1, z2;
       float features[6];
       while (std::getline(instream, line))
       {
-        if (line.find("0 targets") != line.npos) { continue; }
+        // " 0 targets" WITH THE LEADING SPACE. The bare substring also matches "10 targets" and
+        // "20 targets", and command fan-out (one MS2 config x CE-sweep variant x charge under
+        // `separate`) makes counts >= 10 routine -- the committed separate_charges golden alone
+        // carries eight "- 10 targets" headers and one "- 20 targets". Each was silently dropped,
+        // and its Mass= rows then landed under the PREVIOUS header's scan key.
+        if (line.find(" 0 targets") != line.npos) { continue; }
         if (line.hasPrefix("MS1"))
         {
           Size st = line.find("MS1 Scan# ") + 10;
@@ -877,6 +882,11 @@ namespace OpenMS
           precursor_map_for_real_time_acquisition[scan]
             = std::vector<std::vector<float>>(); //// ms1 scan -> mass, charge ,score, mz range, precursor int, mass int, color
         }
+        // A Mass= line before ANY header is not attributable to a scan. `scan` used to be
+        // uninitialised here, so such a row was filed under whatever the stack held. Must sit AFTER
+        // the MS1 block (which assigns `scan`) and BEFORE the Mass block. "AllMass=" does not have
+        // the prefix "Mass", so this cannot swallow the AllMass line.
+        if (line.hasPrefix("Mass") && scan < 0) { continue; }
         if (line.hasPrefix("Mass"))
         {
           Size st = 5;

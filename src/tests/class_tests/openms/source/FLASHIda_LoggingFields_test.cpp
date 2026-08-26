@@ -1668,6 +1668,108 @@ START_SECTION(exclusion_mode2_tqscore_suppresses_target_mass)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
+// §F8b -- target-log reader : a >= 10 target count must not be read as "0 targets"
+/////////////////////////////////////////////////////////////
+START_SECTION(target_log_double_digit_target_count_is_not_skipped)
+{
+  // PrecursorSelection's target_log_files loader is the SECOND reader of the ida.log grammar, and it
+  // is the in-scope one: feeding an engine-written ida.log back in as a target log is the round-trip
+  // this covers. It carried the same unanchored `line.find("0 targets")` as parseFLASHIdaLog, so a
+  // "- 10 targets" or "- 20 targets" header was dropped -- and here the consequence is not a mis-keyed
+  // map but a WRONG RETENTION TIME: `rt` keeps the previous header's value, or 0.0 at the head of the
+  // file, and mode 2's suppression is gated on |survey_rt - prt| < rt_window
+  // (PrecursorSelection.cpp:332).
+  //
+  // Its Mass= path had no test at all before this: the only existing target-log test
+  // (exclusion_mode2_tqscore_suppresses_target_mass, above) uses the older space-delimited
+  // "Mass <v>" grammar and headers with no "targets" text, so it cannot see this defect.
+  const std::string FI_MS1_ECOLI = "../../FlashIDA/test-data/spectra/ms1_ecoli_rich.txt";
+  auto ms1 = loadTsvScans(FI_MS1_ECOLI);
+  auto ms2 = loadTsvScans(FI_MS2_HCD);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  // rt_window 60, NOT the 180 the section above uses, and that is the whole reason this test can
+  // fail. The ecoli surveys sit at rt 151-160; the log header below is written at RT 2.6 -> prt 156.
+  //   fixed : |151..160 - 156| <= 5  <  60  -> in window  -> suppression applies
+  //   broken: header skipped -> prt 0 -> |151 - 0| = 151 >= 60 -> out of window -> NO suppression
+  // At 180 both cases are in window and the assertion would hold under the bug -- i.e. vacuous.
+  // 60 still spans the whole 9-unit survey range, so mass exclusion is unaffected.
+  auto cfg = [](const char* targeting, int max_precursors, const std::string& target_log_json) {
+    std::ostringstream o;
+    o << R"({
+      "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
+      "precursor_selection": { "rt_window": 60, "targeting": ")" << targeting << R"(", "consider_all_charges": false, "strict_inclusion": false, "tie_threshold": 0.1, "rank_by": "qscore", "max_precursors": )" << max_precursors << R"( },
+      "flashtnt": { "min_length": 3, "max_length": 8 },
+      "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
+      "faims": { "cv_values": [], "max_cv_skip": 0 },
+      "ms_settings": { "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 }, "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 } },
+      "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 }, "agc_interval_seconds": 999999 },
+      "files": { "target_logs": [)" << target_log_json << R"(], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+      "characterization": { "mode": "off" }
+    })";
+    return o.str();
+  };
+
+  auto selectedMs2Masses = [&](const std::string& json, const std::string& tag) {
+    const std::string dir = freshLogDir(tag);
+    std::string full = injectRuntime(json, dir);
+    FLASHIda ida(const_cast<char*>(full.c_str()));
+    runFullCycle(&ida, ms1, ms2);
+    auto cmds = TSVFile::parse(dir + "/scan_commands.tsv");
+    std::vector<double> masses;
+    for (const auto& row : cmds.rows)
+      if (std::atoi(cell(cmds, row, "ms_level").c_str()) == 2)
+        masses.push_back(toD(cell(cmds, row, "mono_mass")));
+    return masses;
+  };
+  auto hasNear = [](const std::vector<double>& v, double t) {
+    for (double m : v) if (std::abs(m - t) < 0.5) return true;   // suppression is per-NOMINAL mass
+    return false;
+  };
+
+  // 1) DDA baseline names the mass to suppress. >= 2 entries = the survey is productive.
+  auto dda = selectedMs2Masses(cfg("none", 1, ""), "lf_f8b_dda");
+  ABORT_IF(dda.size() < 2)
+  const double target = dda[0];
+  TEST_TRUE(hasNear(dda, target))
+
+  // 2) The same log content under two headers that differ ONLY in the target count. Two observations
+  //    at qscore 0.7 give tqscore = 1 - (1-0.7)^2 = 0.91 > the 0.9 threshold, so the mass is
+  //    de-prioritized out of the single MS2 slot -- provided the header's RT was read.
+  auto writeLog = [&](const std::string& path, const char* count_token) {
+    std::ofstream lg(path);
+    for (int i = 0; i < 2; i++)
+    {
+      lg << "MS1 Scan# " << (7 + i) << " RT 2.6000 (Access ID !!\") - " << count_token << " targets\n";
+      lg << "Mass=" << std::to_string(target) << "\tZ=4\tScore=0.70000"
+         << "\tWindow=[500.0000-501.0000]\tPrecursorIntensity=1.00000"
+         << "\tPrecursorMassIntensity=2.00000\tFeatures=[0.9,1.0,0.9,1.0,0.9,1.0]"
+         << "\tChargeRange=[4-6]\tHCD=0\n";
+    }
+  };
+
+  // CONTROL: a single-digit count was never affected by the substring bug, so this suppresses both
+  // before and after the fix. It proves the suppression mechanism is live here at rt_window 60 --
+  // without it, the assertion below could pass merely because nothing is ever suppressed.
+  const std::string log_single = "lf_f8b_single.log";
+  writeLog(log_single, "4");
+  auto suppressed_single = selectedMs2Masses(cfg("in_depth", 1, "\"" + log_single + "\""), "lf_f8b_single");
+  TEST_TRUE(!hasNear(suppressed_single, target))
+
+  // THE REGRESSING CASE: identical but for the count. Before the fix the header is swallowed by
+  // `find("0 targets")`, rt stays 0.0, the observations are filed 151 s away from every survey, the
+  // suppression never applies and `target` keeps the slot.
+  const std::string log_double = "lf_f8b_double.log";
+  writeLog(log_double, "10");
+  auto suppressed_double = selectedMs2Masses(cfg("in_depth", 1, "\"" + log_double + "\""), "lf_f8b_double");
+  TEST_TRUE(!hasNear(suppressed_double, target))
+
+  std::remove(log_single.c_str());
+  std::remove(log_double.c_str());
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
 // [REMOVED §F9] results_ms3_fragment_and_tag_count_are_sentinel — asserted scan_results MS3
 //   fragment_count==-1 && tag_count==-1; both columns were removed in the scan_results slim-down
 //   (fragment_count derivable from identification.tsv ms3_fragments; tag_count dropped entirely).

@@ -69,7 +69,13 @@ namespace OpenMS
         int charge;
         while (std::getline(instream, line))
         {
-          if (line.find("0 targets") != line.npos)
+          // " 0 targets" WITH THE LEADING SPACE — the same anchor as IdaLogger::parseFLASHIdaLog,
+          // and for the same reason: the bare substring also matches "10 targets" / "20 targets".
+          // Here the consequence is different and worse than a mis-keyed map. A dropped header leaves
+          // `rt` at the PREVIOUS header's value (or 0.0 at the head of the file), so those masses are
+          // filed in target_mass_rt_map_ against the wrong retention time — and mode 3 discards
+          // rt == 0 entries outright.
+          if (line.find(" 0 targets") != line.npos)
             continue;
           if (line.hasPrefix("MS1"))
           {
