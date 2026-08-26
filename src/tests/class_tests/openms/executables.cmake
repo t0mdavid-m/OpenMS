@@ -450,6 +450,9 @@ set(analysis_executables_list
   # DeconvolvedSpectrum_test  # OpenMS data-structure unit test, out of FLASHIda scope;
   #                           # superseded here by DeconvolvedSpectrum_OptimizationMetadata_test (D2)
   DeconvolvedSpectrum_OptimizationMetadata_test
+  # Exception to the "offline FLASHDeconv units are out of scope" rule below: this locks the
+  # TopPIC *_ms2.feature layout, which TopPIC parses positionally and without bounds checks.
+  FLASHDeconvFeatureFile_test
   FLASHIdaFAIMS_test
   FLASHIdaQueueTracking_test
   FLASHIda_ProcessScan_test
