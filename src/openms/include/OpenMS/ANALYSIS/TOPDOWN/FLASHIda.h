@@ -90,10 +90,15 @@ namespace OpenMS
     /// assignment operator (deleted: ofstreams are non-copyable)
     FLASHIda& operator=(const FLASHIda&) = delete;
 
-    /// Process an incoming scan and enqueue resulting commands
+    /// Process an incoming scan and enqueue resulting commands.
+    /// @param instrument_scan_number the number the INSTRUMENT assigned this scan (Header["Scan"] on
+    ///        the C# side). <= 0 means "not supplied" and the ida.log falls back to the tracking id
+    ///        (ADR-0035). faims_cv deliberately LOSES its default here: a defaulted trailing
+    ///        parameter would let every existing call site keep compiling while silently passing 0,
+    ///        which collapses every ida.log entry onto one map key with nothing to notice it.
     int processScan(const double* mzs, const double* ints, int length,
                     double rt_min, int ms_level, const char* scan_description,
-                    double faims_cv = 0.0);
+                    double faims_cv, int instrument_scan_number);
 
     /// Dequeue the next scan command by priority. Returns 1 if command filled, 0 if error.
     int getNextScanCommand(ScanCommand& out);

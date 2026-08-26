@@ -116,6 +116,20 @@ namespace
     std::string scan_id;
   };
 
+  // The INSTRUMENT scan number a fed spectrum claims, for processScan's trailing argument.
+  //
+  // Fixtures carry it in their "Spec scan=N" header, which loadTsvScans already parses into
+  // ScanData::scan_id -- a field that was populated and then never read by anything. It is the same
+  // quantity the C# twin sources from Header["Scan"] (MockMsScan.cs:267,340), so both mirrors of the
+  // one drive contract feed the engine the same number from the same place.
+  //
+  // 0 for a fixture that names none, which the engine reads as "not supplied" (ADR-0035).
+  inline int instrumentScanNumberOf(const ScanData& s)
+  {
+    if (s.scan_id.empty()) return 0;
+    try { return std::stoi(s.scan_id); } catch (...) { return 0; }
+  }
+
   // Parse multi-scan TSV: "Spec scan=N\tRT" headers, "mz\tintensity" data lines
   inline std::vector<ScanData> loadTsvScans(const std::string& path)
   {
@@ -159,7 +173,8 @@ namespace
     {
       std::string id = ScanCommandQueue::encode(800000 + (i++));
       total += ida->processScan(scan.mzs.data(), scan.ints.data(),
-                                (int)scan.mzs.size(), scan.rt, 1, (id + "S").c_str());
+                                (int)scan.mzs.size(), scan.rt, 1, (id + "S").c_str(),
+                                0.0, instrumentScanNumberOf(scan));
       if (fed_ms1_ids) fed_ms1_ids->push_back(id);
     }
     return total;
@@ -334,7 +349,7 @@ namespace
         // trailer in PushScanAndDrainFull). Without it the re-fed MS1 carried CV 0.0 and FAIMS cycling
         // never observed the commanded CV, so downstream CV binding was lost.
         int ret = ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt + rt_offset, 1,
-                                   cmd.scan_description, cmd.faims_cv);
+                                   cmd.scan_description, cmd.faims_cv, instrumentScanNumberOf(s));
         if (single_group_only && ret > 0 && !group_formed) { r.first_group_commands = ret; group_formed = true; }
       }
       else if (cmd.msn_level == 2)
@@ -354,7 +369,8 @@ namespace
         }
         if (ms2_src != nullptr)
           r.ms2_feed_returns += ida->processScan(ms2_src->mzs.data(), ms2_src->ints.data(),
-                           (int)ms2_src->mzs.size(), ms2_src->rt, 2, cmd.scan_description);
+                           (int)ms2_src->mzs.size(), ms2_src->rt, 2, cmd.scan_description,
+                           0.0, instrumentScanNumberOf(*ms2_src));
       }
       else  // msn_level >= 3
       {
@@ -376,7 +392,8 @@ namespace
         }
         if (spectra != nullptr && !spectra->empty())
           ida->processScan((*spectra)[0].mzs.data(), (*spectra)[0].ints.data(),
-                           (int)(*spectra)[0].mzs.size(), (*spectra)[0].rt, 3, cmd.scan_description);
+                           (int)(*spectra)[0].mzs.size(), (*spectra)[0].rt, 3, cmd.scan_description,
+                           0.0, instrumentScanNumberOf((*spectra)[0]));
       }
       cmd = ScanCommand{};
     }
@@ -415,6 +432,12 @@ namespace
     {
       ScanData s = ms1;
       s.rt = ms1.rt + (double)i * ms1_rt_step;
+      // A real instrument stamps a FRESH, increasing scan number on every scan it acquires, so
+      // replaying ONE fixture n times has to step the id alongside the RT. Left unstepped, all n
+      // surveys claim the same instrument scan and their ida.log entries collapse onto a single map
+      // key -- which is what ida_log_multi_scan_distinct_keys exists to catch.
+      if (!ms1.scan_id.empty())
+        s.scan_id = std::to_string(instrumentScanNumberOf(ms1) + i);
       ms1_scans.push_back(s);
     }
     return runInterleaved(ida, ms1_scans, std::vector<ScanData>{ms2}, nullptr, max_iters);
@@ -701,7 +724,7 @@ namespace
       {
         const ScanData& s = scans[ms1_fed++];
         int n = ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1,
-                                 cmd.scan_description);
+                                 cmd.scan_description, 0.0, instrumentScanNumberOf(s));
         if (n > 0) return n;  // group created; leave its variants queued for the caller
         idle = 0;
       }

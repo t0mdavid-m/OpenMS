@@ -216,8 +216,19 @@ namespace OpenMS
       std::string trigger_scan_id;    ///< Encoded tracking-id of the scan that drove this row (MS2 winner / MS3 production-or-variant)
     };
 
-    /// Write IDA log entry for MS1 deconvolution results
-    void writeIDALogEntry(double rt, int scan_number,
+    /// Write IDA log entry for MS1 deconvolution results.
+    ///
+    /// The two identifiers are deliberately separate and neither substitutes for the other
+    /// (ADR-0035, CONTEXT.md "Language - instrument control"):
+    ///  - @p tracking_id is engine-minted. It is encoded base-94 into the "Access ID" token and is
+    ///    the join key to the other four streams.
+    ///  - @p instrument_scan_number is what the INSTRUMENT assigned. It becomes "MS1 Scan#", which
+    ///    is what FLASHDeconv matches against the mzML native id. <= 0 = not supplied, in which case
+    ///    the tracking id is written instead so the field never carries a fabricated scan.
+    ///
+    /// The old single `scan_number` parameter carried the tracking id under a name that claimed
+    /// otherwise; that is the confusion this signature exists to remove.
+    void writeIDALogEntry(double rt, int tracking_id, int instrument_scan_number,
                           const std::vector<ScanCommand>& ms2_commands,
                           const DeconvolvedSpectrum& all_peak_groups);
 
@@ -262,6 +273,13 @@ namespace OpenMS
     mutable std::mutex identification_tsv_mutex_;
     std::ofstream pooled_stream_;
     mutable std::mutex pooled_mutex_;
+
+    /// One-shot latch for the "no instrument scan number was supplied" warning. Guarded by
+    /// ida_log_mutex_, which writeIDALogEntry already holds. ONE warning per run, deliberately: it
+    /// is emitted with std::endl, i.e. a flush, under that lock -- per-scan it would be thousands of
+    /// flushes racing the host's own console appender, which is exactly the pathology ADR-0025 and
+    /// ADR-0033 were about.
+    bool warned_missing_scan_number_ = false;
 
     /// Derive scan_type string from scan_description
     static std::string scanTypeFromDescription_(const ScanCommand& cmd);

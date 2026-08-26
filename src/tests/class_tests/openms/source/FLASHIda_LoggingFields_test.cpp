@@ -1923,22 +1923,32 @@ START_SECTION(ida_log_multi_scan_distinct_keys)
 
   const std::string dir = freshLogDir("lf_l2");
   // Selecting config: a standard-DDA "none" config (enable_ms3=false) logs every MS1 as "0 targets",
-  // which parseFLASHIdaLog (IdaLogger.cpp:816) skips -> no log groups. enable_ms3=true gives ms2
-  // selection="intensity" + inclusion, so each MS1 selects >=1 precursor -> a NON-empty log group.
+  // which parseFLASHIdaLog skips -> no log groups. enable_ms3=true gives ms2 selection="intensity"
+  // + inclusion, so each MS1 selects >=1 precursor -> a NON-empty log group.
   std::string json = buildJsonWithLogDir(dir, true);
   FLASHIda ida(const_cast<char*>(json.c_str()));
 
-  // Feed TWO MS1 surveys under the engine's OWN emitted tracking ids (no invented ids) -- the ida_log key
-  // is the decoded 3-char tracking id, so distinct engine ids => distinct log groups. ms1[1] = scan 134
-  // carries the cytC envelope (ms1[0] = scan 132 is a weak edge scan). runFullAcquisition feeds the 2nd
-  // survey at rt+1000 (beyond RT_window 180) so its precursor re-selects. DRY: reuse runFullAcquisition.
+  // Feed TWO MS1 surveys under the engine's OWN emitted tracking ids (no invented ids). ms1[1] =
+  // scan 134 carries the cytC envelope (ms1[0] = scan 132 is a weak edge scan). runFullAcquisition
+  // feeds the 2nd survey at rt+1000 (beyond RT_window 180) so its precursor re-selects.
   AcqResult acq = runFullAcquisition(&ida, ms1[1], ms2[0], 300, /*n_ms1=*/2);
   ABORT_IF(acq.ms1_cmds.size() < 2)
   std::string id0(acq.ms1_cmds[0].scan_description, 3), id1(acq.ms1_cmds[1].scan_description, 3);
-  TEST_TRUE(id0 != id1)                          // distinct engine ids => distinct ida_log keys
+  TEST_TRUE(id0 != id1)                          // the engine minted two distinct tracking ids
 
+  // What makes the KEYS distinct is now the INSTRUMENT scan number, not the tracking id (ADR-0035):
+  // runFullAcquisition steps the fixture's scan_id per replay, so the two surveys are scans 134 and
+  // 135 -- what a real instrument would produce, and what FLASHDeconv joins against. Leave the
+  // tracking-id assertion above in place: it still pins that the engine is chaining real ids, which
+  // is what lets the surveys be fed back at all.
   auto parsed = IdaLogger::parseFLASHIdaLog(dir + "/ida.log");
-  TEST_TRUE(parsed.size() >= 2)                  // two non-"0 targets" MS1 groups
+  TEST_TRUE(parsed.size() >= 2)                  // two non-"0 targets" MS1 groups, distinct scans
+
+  // The keys ARE the fed instrument scan numbers, not the tracking ids -- pin it directly, or a
+  // regression to tracking-id keying would still satisfy the >= 2 above.
+  const int base_scan = instrumentScanNumberOf(ms1[1]);
+  TEST_TRUE(parsed.count(base_scan) == 1)
+  TEST_TRUE(parsed.count(base_scan + 1) == 1)
 }
 END_SECTION
 

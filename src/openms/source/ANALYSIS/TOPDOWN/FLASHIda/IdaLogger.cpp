@@ -195,7 +195,7 @@ namespace OpenMS
     }
   }
 
-  void IdaLogger::writeIDALogEntry(double rt, int scan_number,
+  void IdaLogger::writeIDALogEntry(double rt, int tracking_id, int instrument_scan_number,
                                     const std::vector<ScanCommand>& ms2_commands,
                                     const DeconvolvedSpectrum& all_peak_groups)
   {
@@ -203,15 +203,32 @@ namespace OpenMS
     // After the is_open() check, so a run with no log_dir pays nothing at all.
     std::lock_guard<std::mutex> lk(ida_log_mutex_);
 
-    // The access-id token is the base-94 encoding of scan_number (round-trips the decoded id).
-    const std::string tracking_id = ScanCommandQueue::encode(scan_number);
+    // The access-id token stays the TRACKING id: it is the join key to scan_commands.tsv,
+    // scan_results.tsv, identification.tsv and pooled_identification.tsv, and nothing else on this
+    // line carries it.
+    const std::string tracking_id_str = ScanCommandQueue::encode(tracking_id);
 
-    // MS1 header line. scan_number = the decoded tracking_id (a distinct, increasing per-command
-    // base-94 counter) so multi-scan logs no longer collapse to map key 0 (B1). NOTE: it is NOT the
-    // instrument scan index (that would need a bridge change); it is unique-per-scan, which is the fix.
-    ida_log_stream_ << "MS1 Scan# " << scan_number
+    // "MS1 Scan#" is the INSTRUMENT's scan number -- what FLASHDeconv matches against the mzML
+    // native id, and what the pre-port C# writer put here (ADR-0035). It used to be the tracking id,
+    // which made the join structurally unsatisfiable rather than merely wrong: tracking ids count
+    // 1,2,3... while instrument scan numbers run into the thousands, so past ~50 scans
+    // findPrecursorPeakGroupsFormIdaLog_'s `iter->first < scan_number - 50` cutoff sits above every
+    // key in the map and it returns before attempting a single isolation-window match.
+    //
+    // Falling back to the tracking id (rather than writing 0, or refusing the entry) keeps an
+    // offline or synthetically-driven run producing exactly the log it produced before.
+    const int logged_scan_number = (instrument_scan_number > 0) ? instrument_scan_number : tracking_id;
+    if (instrument_scan_number <= 0 && !warned_missing_scan_number_)
+    {
+      warned_missing_scan_number_ = true;
+      std::cout << "No instrument scan number supplied to processScan; ida.log 'MS1 Scan#' will "
+                   "carry the tracking id instead. FLASHDeconv coupling on this log will not resolve."
+                << std::endl;
+    }
+
+    ida_log_stream_ << "MS1 Scan# " << logged_scan_number
                     << " RT " << std::fixed << std::setprecision(4) << rt
-                    << " (Access ID " << tracking_id << ") - "
+                    << " (Access ID " << tracking_id_str << ") - "
                     << ms2_commands.size() << " targets\n";
 
     for (const auto& cmd : ms2_commands)

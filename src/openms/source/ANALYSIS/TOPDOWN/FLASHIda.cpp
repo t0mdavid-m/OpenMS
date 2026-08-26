@@ -79,7 +79,7 @@ FLASHIda::FLASHIda(char* arg) :
 
   int FLASHIda::processScan(const double* mzs, const double* ints, int length,
                              double rt_min, int ms_level, const char* scan_description,
-                             double faims_cv)
+                             double faims_cv, int instrument_scan_number)
   {
     std::lock_guard<std::mutex> lock(analysis_mutex_);
 
@@ -234,7 +234,8 @@ FLASHIda::FLASHIda(char* arg) :
       }
 
       // IDA log entry (MS1 only).
-      logger_.writeIDALogEntry(rt_min, parent_tracking_id, ms2_commands, selection_.deconvolvedMS1());
+      logger_.writeIDALogEntry(rt_min, parent_tracking_id, instrument_scan_number,
+                               ms2_commands, selection_.deconvolvedMS1());
 
       for (const auto& c : ms2_commands)
         child_ids.push_back(ScanCommandQueue::encode(c.scan_id));

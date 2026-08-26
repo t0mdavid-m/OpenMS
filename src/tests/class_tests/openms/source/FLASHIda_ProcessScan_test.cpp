@@ -1655,7 +1655,7 @@ START_SECTION(processScan_ms2_path)
   const auto& ms2 = ms2_scans[0];
   int ms2_result = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
                                      (int)ms2.mzs.size(), ms2.rt,
-                                     2, ms2_cmd.scan_description);
+                                     2, ms2_cmd.scan_description, 0.0, instrumentScanNumberOf(ms2));
   // Should return 0 (no conditional, no MS3, no quant in standard config). Interleaving does not change
   // the standard-config MS2-path follow-up count: this re-derives to the same 0 as before.
   TEST_EQUAL(ms2_result, 0)
@@ -1683,7 +1683,7 @@ START_SECTION(processScan_context_gate_rejects_unsupported_levels)
     const ScanCommand& ms2_cmd = acq.ms2_cmds[0];
     const auto& ms2 = ms2_scans[0];
     return ida.processScan(ms2.mzs.data(), ms2.ints.data(), (int)ms2.mzs.size(), ms2.rt,
-                           inbound_level, ms2_cmd.scan_description);
+                           inbound_level, ms2_cmd.scan_description, 0.0, instrumentScanNumberOf(ms2));
   };
 
   // (a) MS4+ unsupported (required_stages < 0): would previously have run the MS3 path. (TODO #9)
@@ -1700,7 +1700,7 @@ END_SECTION
 START_SECTION(processScan_empty_spectrum)
 {
   FLASHIda* ida = new FLASHIda(const_cast<char*>(standard_json));
-  int n = ida->processScan(nullptr, nullptr, 0, 0.0, 1, "empty");
+  int n = ida->processScan(nullptr, nullptr, 0, 0.0, 1, "empty", 0.0, 0);
   TEST_EQUAL(n, 0)
   delete ida;
 }
@@ -1734,7 +1734,7 @@ START_SECTION(processScan_conditional_ms2_followup)
   const auto& ms2 = ms2_scans[0];
   int ms2_result = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
                                      (int)ms2.mzs.size(), ms2.rt,
-                                     2, ms2_cmd.scan_description);
+                                     2, ms2_cmd.scan_description, 0.0, instrumentScanNumberOf(ms2));
   TEST_EQUAL(ms2_result > 0, true)
 
   // Follow-up at priority 0 dequeues before remaining MS2s at priority 2
@@ -1902,7 +1902,7 @@ START_SECTION(cleanup_expired_commands)
   const auto& ms2 = ms2_scans[0];
   int ms2_result = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
                                      (int)ms2.mzs.size(), ms2.rt,
-                                     2, ms2_cmd.scan_description);
+                                     2, ms2_cmd.scan_description, 0.0, instrumentScanNumberOf(ms2));
   // Should succeed (entry found in pending_scan_map_)
   // ms2_result can be 0 (no follow-ups) but shouldn't crash
   TEST_EQUAL(ms2_result >= 0, true)
@@ -1910,7 +1910,7 @@ START_SECTION(cleanup_expired_commands)
   // Verify pending_scan_map_ entry was erased by first resolution
   int ms2_result2 = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
                                       (int)ms2.mzs.size(), ms2.rt,
-                                      2, ms2_cmd.scan_description);
+                                      2, ms2_cmd.scan_description, 0.0, instrumentScanNumberOf(ms2));
   // Second resolution with same tracking ID should find nothing (entry erased)
   TEST_EQUAL(ms2_result2, 0)
 
@@ -2075,7 +2075,7 @@ START_SECTION(processScan_quant_followup)
   const auto& ms2 = ms2_tmt_scans[0];
   int ms2_result = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
                                      (int)ms2.mzs.size(), ms2.rt,
-                                     2, ms2_cmd.scan_description);
+                                     2, ms2_cmd.scan_description, 0.0, instrumentScanNumberOf(ms2));
   // With fold_change_threshold=0.01, any reporter ion ratio should trigger
   TEST_EQUAL(ms2_result, 1)  // Exactly 1 quant follow-up per MS2
 
@@ -2120,7 +2120,7 @@ START_SECTION(processScan_conditional_followup_owns_its_scan_parameters)
   const auto& ms2 = ms2_scans[0];
   int ms2_result = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
                                     (int)ms2.mzs.size(), ms2.rt,
-                                    2, ms2_cmd.scan_description);
+                                    2, ms2_cmd.scan_description, 0.0, instrumentScanNumberOf(ms2));
   TEST_EQUAL(ms2_result > 0, true)
   ABORT_IF(ms2_result <= 0)
 
@@ -2166,7 +2166,7 @@ START_SECTION(processScan_quant_followup_owns_its_scan_parameters)
   const auto& ms2 = ms2_tmt_scans[0];
   int ms2_result = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
                                     (int)ms2.mzs.size(), ms2.rt,
-                                    2, ms2_cmd.scan_description);
+                                    2, ms2_cmd.scan_description, 0.0, instrumentScanNumberOf(ms2));
   TEST_EQUAL(ms2_result > 0, true)
   ABORT_IF(ms2_result <= 0)
 
@@ -2212,7 +2212,7 @@ START_SECTION(processScan_tag_targeting)
   const auto& ms2 = ms2_scans[0];
   int ms2_result = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
                                      (int)ms2.mzs.size(), ms2.rt,
-                                     2, ms2_cmd.scan_description);
+                                     2, ms2_cmd.scan_description, 0.0, instrumentScanNumberOf(ms2));
   // tag_targeting_json has no quant/conditional/ms3 — tag targeting updates internal state
   // but pushes 0 follow-up commands
   TEST_EQUAL(ms2_result, 0)
@@ -2315,7 +2315,7 @@ START_SECTION(processScan_conditional_ms2_requires_tags)
   const auto& ms2 = ms2_scans[0];
   int ms2_result = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
                                      (int)ms2.mzs.size(), ms2.rt,
-                                     2, ms2_cmd.scan_description);
+                                     2, ms2_cmd.scan_description, 0.0, instrumentScanNumberOf(ms2));
   // Without FASTA, tags cannot be found — conditional must NOT fire
   TEST_EQUAL(ms2_result, 0)
 
@@ -2349,7 +2349,7 @@ START_SECTION(processScan_tag_targeting_produces_followups)
   const auto& ms2 = ms2_scans[0];
   int ms2_result = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
                                      (int)ms2.mzs.size(), ms2.rt,
-                                     2, ms2_cmd.scan_description);
+                                     2, ms2_cmd.scan_description, 0.0, instrumentScanNumberOf(ms2));
   // Golden file continuity_tag_ms2return.json confirms: tags found → follow-ups produced
   TEST_EQUAL(ms2_result > 0, true)
 
@@ -2748,7 +2748,7 @@ START_SECTION(processScan_agc_scan_skipped)
   // Feed real peak data back with the AGC scan description — should be gated
   int result = ida->processScan(scan.mzs.data(), scan.ints.data(),
                                  (int)scan.mzs.size(), scan.rt, 1,
-                                 agc_cmd.scan_description);
+                                 agc_cmd.scan_description, 0.0, instrumentScanNumberOf(scan));
   TEST_EQUAL(result, 0)
 
   // Verify no commands were generated
@@ -3036,7 +3036,7 @@ START_SECTION(ms1_agc_resolved_from_pending_map)
 
   // processScan with AGC scan description — should resolve AGC from pending map
   // AGC gate (desc[3]=='A') returns 0 and resolves the pending entry.
-  int n = ida->processScan(nullptr, nullptr, 0, 0.0, 1, agc_cmd.scan_description);
+  int n = ida->processScan(nullptr, nullptr, 0, 0.0, 1, agc_cmd.scan_description, 0.0, 0);
   TEST_EQUAL(n, 0)
   TEST_EQUAL(FLASHIdaTestAccess::queue(*ida).pendingScanMapSize(), (size_t)1)
 
@@ -3047,7 +3047,7 @@ START_SECTION(ms1_agc_resolved_from_pending_map)
   const auto& scan = ms1_scans[0];
   n = ida->processScan(scan.mzs.data(), scan.ints.data(),
                        (int)scan.mzs.size(), scan.rt, 1,
-                       ms1_cmd.scan_description);
+                       ms1_cmd.scan_description, 0.0, instrumentScanNumberOf(scan));
   // n >= 0 (may or may not produce MS2 commands from a single scan)
   TEST_EQUAL(n >= 0, true)
   TEST_EQUAL(FLASHIdaTestAccess::queue(*ida).pendingScanMapSize(), (size_t)0)
@@ -3073,7 +3073,7 @@ START_SECTION(processScan_ms1_gate_rejects_unrequested_id)
   // minted/emitted as a command, so it is not in pending_scan_map_ -> the gate returns 0 before any selection.
   const size_t pending_before = FLASHIdaTestAccess::queue(*ida).pendingScanMapSize();
   const auto& neg = ms1_scans[0];
-  int ret_neg = ida->processScan(neg.mzs.data(), neg.ints.data(), (int)neg.mzs.size(), neg.rt, 1, "ZZZS");
+  int ret_neg = ida->processScan(neg.mzs.data(), neg.ints.data(), (int)neg.mzs.size(), neg.rt, 1, "ZZZS", 0.0, instrumentScanNumberOf(neg));
   TEST_EQUAL(ret_neg, 0)
   // No MS2 was queued and no pending entry was added: the spectrum never reached deconvolution/selection.
   TEST_EQUAL(FLASHIdaTestAccess::queue(*ida).pendingScanMapSize(), pending_before)
@@ -3101,7 +3101,7 @@ START_SECTION(processScan_ms1_gate_rejects_unrequested_id)
     TEST_EQUAL(survey.is_agc, 0)
     const auto& pos = ms1_scans[si];
     int r = ida->processScan(pos.mzs.data(), pos.ints.data(), (int)pos.mzs.size(), pos.rt, 1,
-                             survey.scan_description);
+                             survey.scan_description, 0.0, instrumentScanNumberOf(pos));
     if (r >= 1) { ret_pos = r; used = survey; }
   }
   TEST_EQUAL(ret_pos >= 1, true)  // engine-emitted id + selectable MS1 -> at least one MS2 command pushed
@@ -3111,7 +3111,7 @@ START_SECTION(processScan_ms1_gate_rejects_unrequested_id)
   // no longer "emitted" -> the gate rejects it (return 0), symmetric with the MS2/MS3 resolve-once gate.
   const auto& reuse_scan = ms1_scans[0];
   int ret_reuse = ida->processScan(reuse_scan.mzs.data(), reuse_scan.ints.data(), (int)reuse_scan.mzs.size(),
-                                   reuse_scan.rt, 1, used.scan_description);
+                                   reuse_scan.rt, 1, used.scan_description, 0.0, instrumentScanNumberOf(reuse_scan));
   TEST_EQUAL(ret_reuse, 0)
 
   delete ida;
@@ -3233,7 +3233,7 @@ START_SECTION(process_scan_still_blocks_while_analysis_mutex_held)
   std::vector<double> no_mzs;
   std::vector<double> no_ints;
   std::future<int> fut = std::async(std::launch::async, [&ida, &no_mzs, &no_ints]() {
-    return ida.processScan(no_mzs.data(), no_ints.data(), 0, 0.0, 1, "");
+    return ida.processScan(no_mzs.data(), no_ints.data(), 0, 0.0, 1, "", 0.0, 0);
   });
 
   std::future_status st = fut.wait_for(std::chrono::milliseconds(500));

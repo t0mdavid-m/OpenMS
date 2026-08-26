@@ -51,10 +51,18 @@ namespace OpenMS
   /// delete FLASHIda class in C# FLASHIda side. Invoke FLASHIda destructor
   extern "C" OPENMS_DLLAPI void DisposeFLASHIda(FLASHIda *object);
 
-  /// Process an incoming scan: deconvolve (MS1) or resolve tracking (MS2), enqueue commands
+  /// Process an incoming scan: deconvolve (MS1) or resolve tracking (MS2), enqueue commands.
+  ///
+  /// @param instrument_scan_number the number the INSTRUMENT assigned this scan; <= 0 = not supplied.
+  ///
+  /// It is APPENDED, never inserted, and that ordering is load-bearing. On x64 Windows arguments 5
+  /// and beyond are passed on the stack, so a stale 8-parameter OpenMS.dll simply ignores argument 9
+  /// and degrades to the old tracking-id logging. Inserting it before faims_cv would instead make
+  /// that DLL read an int as a double and command the wrong FAIMS CV on every scan, silently.
+  /// This still leaves exactly 5 exports: a signature change is not a count change.
   extern "C" OPENMS_DLLAPI int ProcessScan(FLASHIda *obj, double *mzs, double *ints,
       int length, double rt_min, int ms_level, const char *scan_description,
-      double faims_cv);
+      double faims_cv, int instrument_scan_number);
 
   /// Dequeue the next scan command by priority. Returns 1 if command filled.
   extern "C" OPENMS_DLLAPI int GetNextScanCommand(FLASHIda *obj, ScanCommand *output);
