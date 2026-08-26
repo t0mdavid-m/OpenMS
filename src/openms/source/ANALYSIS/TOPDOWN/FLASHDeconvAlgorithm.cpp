@@ -548,16 +548,14 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsFormIdaLog_(const MSExperiment
     cv = std::stod(filter_str.substr(pos + 3, end - pos));
   }
 
-  for (auto iter = precursor_map_for_ida_.lower_bound(scan_number);
-       iter != precursor_map_for_ida_.begin()
-       && native_id_precursor_peak_group_map_.find(map[index].getNativeID())
-          == native_id_precursor_peak_group_map_.end();
-       iter--)
+  // visit the logged MS1 scans at or before this MSn scan, starting with the most recent one.
+  // upper_bound (instead of lower_bound) makes sure that no dereferencing of end() happens - the scan number of an MSn
+  // spectrum may well be larger than any MS1 scan number in the log, e.g. when the log ends in the middle of a cycle.
+  auto iter = precursor_map_for_ida_.upper_bound(scan_number);
+
+  while (iter != precursor_map_for_ida_.begin())
   {
-    if (iter->first > scan_number || iter == precursor_map_for_ida_.end())
-    {
-      continue;
-    }
+    iter--;
     if (iter->first < scan_number - 50) // for FLASHIda, give more buffer scans
     {
       return;
@@ -565,47 +563,62 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsFormIdaLog_(const MSExperiment
 
     for (auto& smap : iter->second)
     {
-      if (abs(start_mz - smap[3]) < .001 && abs(end_mz - smap[4]) < .001)
+      if (abs(start_mz - smap[3]) >= .001 || abs(end_mz - smap[4]) >= .001) continue;
+
+      int ms1_scan_number = iter->first;
+      // the MS1 scan number written by FLASHIda is not necessarily present in the input map (e.g. a scan the
+      // instrument logged but never wrote out). Such an entry cannot be used - downstream code resolves the RT and
+      // the precursor spectrum through this scan number.
+      Size ms1_index = index;
+      bool ms1_found = false;
+      while (ms1_index != 0)
       {
-        FLASHHelperClasses::LogMzPeak precursor_log_mz_peak;
-        precursor_log_mz_peak.abs_charge = std::abs((int)smap[1]);
-        precursor_log_mz_peak.is_positive = (int)smap[1] > 0;
-        precursor_log_mz_peak.isotopeIndex = 0;
-        precursor_log_mz_peak.mass = smap[0];
-        precursor_log_mz_peak.intensity = smap[6];
-
-        PeakGroup precursor_pg(precursor_log_mz_peak.abs_charge, precursor_log_mz_peak.abs_charge, true);
-        precursor_pg.push_back(precursor_log_mz_peak);
-        precursor_pg.setAbsChargeRange(std::abs((int)smap[7]), std::abs((int)smap[8]));
-        precursor_pg.setChargeIsotopeCosine(precursor_log_mz_peak.abs_charge, smap[9]);
-        precursor_pg.setChargeSNR(precursor_log_mz_peak.abs_charge, smap[10]); // cnsr
-        precursor_pg.setIsotopeCosine(smap[11]);
-        precursor_pg.setSNR(smap[12]);
-        precursor_pg.setChargeScore(smap[13]);
-        precursor_pg.setAvgPPMError(smap[14]);
-        precursor_pg.setQscore(smap[2]);
-        precursor_pg.setRepAbsCharge(precursor_log_mz_peak.abs_charge);
-        precursor_pg.updateMonoMassAndIsotopeIntensities(tols_[0]);
-        int ms1_scan_number = iter->first;
-        precursor_pg.setScanNumber(ms1_scan_number);
-        Size index_copy (index);
-        while(index_copy != 0 && getScanNumber(map, index_copy--) != ms1_scan_number);
-
-        auto filter_str2 = map[index_copy].getMetaValue("filter string").toString();
-        Size pos2 = filter_str2.find("cv=");
-        double cv_match = 1e5;
-
-        if (pos2 != String::npos)
+        ms1_index--;
+        int current_scan_number = getScanNumber(map, ms1_index);
+        if (current_scan_number == ms1_scan_number)
         {
-          Size end2 = filter_str2.find(" ", pos2);
-          if (end2 == String::npos) end2 = filter_str2.length() - 1;
-          cv_match = std::stod(filter_str2.substr(pos2 + 3, end2 - pos2));
+          ms1_found = true;
+          break;
         }
-        if (std::abs(cv_match - cv) > 1e-5) continue;
-
-        native_id_precursor_peak_group_map_[map[index].getNativeID()] = precursor_pg;
-        break;
+        if (current_scan_number < ms1_scan_number) break; // scan numbers increase with the index - the scan is missing
       }
+      if (!ms1_found) continue;
+
+      auto filter_str2 = map[ms1_index].getMetaValue("filter string").toString();
+      Size pos2 = filter_str2.find("cv=");
+      double cv_match = 1e5;
+
+      if (pos2 != String::npos)
+      {
+        Size end2 = filter_str2.find(" ", pos2);
+        if (end2 == String::npos) end2 = filter_str2.length() - 1;
+        cv_match = std::stod(filter_str2.substr(pos2 + 3, end2 - pos2));
+      }
+      if (std::abs(cv_match - cv) > 1e-5) continue;
+
+      FLASHHelperClasses::LogMzPeak precursor_log_mz_peak;
+      precursor_log_mz_peak.abs_charge = std::abs((int)smap[1]);
+      precursor_log_mz_peak.is_positive = (int)smap[1] > 0;
+      precursor_log_mz_peak.isotopeIndex = 0;
+      precursor_log_mz_peak.mass = smap[0];
+      precursor_log_mz_peak.intensity = smap[6];
+
+      PeakGroup precursor_pg(precursor_log_mz_peak.abs_charge, precursor_log_mz_peak.abs_charge, true);
+      precursor_pg.push_back(precursor_log_mz_peak);
+      precursor_pg.setAbsChargeRange(std::abs((int)smap[7]), std::abs((int)smap[8]));
+      precursor_pg.setChargeIsotopeCosine(precursor_log_mz_peak.abs_charge, smap[9]);
+      precursor_pg.setChargeSNR(precursor_log_mz_peak.abs_charge, smap[10]); // cnsr
+      precursor_pg.setIsotopeCosine(smap[11]);
+      precursor_pg.setSNR(smap[12]);
+      precursor_pg.setChargeScore(smap[13]);
+      precursor_pg.setAvgPPMError(smap[14]);
+      precursor_pg.setQscore(smap[2]);
+      precursor_pg.setRepAbsCharge(precursor_log_mz_peak.abs_charge);
+      precursor_pg.updateMonoMassAndIsotopeIntensities(tols_[0]);
+      precursor_pg.setScanNumber(ms1_scan_number);
+
+      native_id_precursor_peak_group_map_[map[index].getNativeID()] = precursor_pg;
+      return;
     }
   }
 }

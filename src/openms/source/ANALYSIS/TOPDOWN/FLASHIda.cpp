@@ -2006,12 +2006,13 @@ FLASHIda::FLASHIda(char* arg)
     if (instream.good())
     {
       String line;
-      int scan;
+      int scan = -1;
       float mass, charge, w1, w2, qscore, pint, mint, z1, z2;
       float features[6];
       while (std::getline(instream, line))
       {
-        if (line.find("0 targets") != line.npos) { continue; }
+        // MS1 scans without any target are not reported. Note the leading space - " 0 targets" must not match e.g. "10 targets".
+        if (line.find(" 0 targets") != line.npos) { continue; }
         if (line.hasPrefix("MS1"))
         {
           Size st = line.find("MS1 Scan# ") + 10;
@@ -2114,6 +2115,7 @@ FLASHIda::FLASHIda(char* arg)
           {
             e[i] = features[i - 9];
           }
+          if (scan < 0) { continue; } // no MS1 scan seen yet - the entry cannot be assigned to a scan
           precursor_map_for_real_time_acquisition[scan].push_back(e);
         }
       }

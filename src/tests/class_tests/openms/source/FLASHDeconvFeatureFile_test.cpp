@@ -247,6 +247,44 @@ START_SECTION(static void writeTopFDFeatures(std::vector<DeconvolvedSpectrum>& d
     // Should have feature entries
     TEST_EQUAL(output.empty(), false)
   }
+
+  // A precursor may carry a scan number that is not part of the input map (e.g. taken from a FLASHIda log
+  // referring to an MS1 scan that is missing from the mzML). Writing must not throw in that case.
+  {
+    ostringstream oss;
+    std::vector<DeconvolvedSpectrum> spectra;
+    std::vector<FLASHHelperClasses::MassFeature> features;
+    std::map<int, double> scan_rt_map;
+
+    MSSpectrum ms2_spec;
+    ms2_spec.setMSLevel(2);
+    ms2_spec.setRT(120.0);
+
+    FLASHHelperClasses::LogMzPeak precursor_peak;
+    precursor_peak.abs_charge = 10;
+    precursor_peak.is_positive = true;
+    precursor_peak.isotopeIndex = 0;
+    precursor_peak.mass = 10000.0;
+    precursor_peak.intensity = 1000.0f;
+
+    PeakGroup precursor_pg(10, 10, true);
+    precursor_pg.push_back(precursor_peak);
+    precursor_pg.setAbsChargeRange(10, 10);
+    precursor_pg.setRepAbsCharge(10);
+    precursor_pg.updateMonoMassAndIsotopeIntensities(10.0);
+    precursor_pg.setScanNumber(999); // not contained in scan_rt_map
+
+    DeconvolvedSpectrum dspec(1000);
+    dspec.setOriginalSpectrum(ms2_spec);
+    dspec.setPrecursorPeakGroup(precursor_pg);
+    spectra.push_back(dspec);
+
+    scan_rt_map[1000] = 120.0; // only the MS2 scan is known
+
+    // must not throw (used to be a std::out_of_range from std::map::at)
+    FLASHDeconvFeatureFile::writeTopFDFeatures(spectra, features, scan_rt_map, "test_input.mzML", oss, 1);
+    TEST_EQUAL(oss.str().empty(), false)
+  }
 }
 END_SECTION
 

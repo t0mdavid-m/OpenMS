@@ -10,6 +10,23 @@
 
 namespace OpenMS
 {
+  namespace
+  {
+    /**
+      @brief RT (in seconds) of the MS1 scan a precursor was found in.
+
+      The scan number of a precursor PeakGroup does not necessarily refer to a spectrum of the input map: with FLASHIda
+      coupling the precursor is taken from the FLASHIda log and carries the MS1 scan number written by FLASHIda, which
+      may be absent from the mzML (e.g. a scan the instrument logged but never wrote out). In that case the RT of the
+      MSn spectrum itself is used, which is the closest information available.
+    */
+    double getPrecursorRT_(const std::map<int, double>& scan_rt_map, int precursor_scan_number, const DeconvolvedSpectrum& dspec)
+    {
+      auto iter = scan_rt_map.find(precursor_scan_number);
+      return iter == scan_rt_map.end() ? dspec.getOriginalSpectrum().getRT() : iter->second;
+    }
+  } // namespace
+
   /**
     @brief FLASHDeconv Spectrum level output *.tsv, *.msalign (for TopPIC) file formats
      @ingroup FileIO
@@ -133,7 +150,7 @@ namespace OpenMS
         if (dspec.getPrecursorPeakGroup().getFeatureIndex() != 0) continue;
         auto pg = dspec.getPrecursorPeakGroup();
 
-        double rt = scan_rt_map.at(pg.getScanNumber())/60.0;
+        double rt = getPrecursorRT_(scan_rt_map, pg.getScanNumber(), dspec) / 60.0;
         const auto& [z, Z] = pg.getAbsChargeRange();
         pg.setFeatureIndex(++max_feature_index);
         dspec.setPrecursorPeakGroup(pg);
@@ -181,7 +198,7 @@ namespace OpenMS
         }
         else
         {
-          double rt = scan_rt_map.at(pg.getScanNumber()) / 60.0;
+          double rt = getPrecursorRT_(scan_rt_map, pg.getScanNumber(), dspec) / 60.0;
           double rep_mz = 0;
           double p_int = 0;
 

@@ -108,6 +108,16 @@ namespace OpenMS
         Param tmp_param = Param(fd_param);
         tmp_param.insert("FLASHDeconv:1:", flashdeconv_param_outputs_);
 
+        // 'ida_log' is only kept without the "FD:" prefix within this widget (see setWidgetsfromFDDefaultParam_).
+        // FLASHDeconv registers it as "FD:ida_log", so restore the prefix before writing the INI - otherwise the
+        // tool reports it as an unknown parameter.
+        if (tmp_param.exists("FLASHDeconv:1:ida_log"))
+        {
+          tmp_param.setValue("FLASHDeconv:1:FD:ida_log", tmp_param.getValue("FLASHDeconv:1:ida_log"),
+                             flashdeconv_param_outputs_.getDescription("ida_log"), flashdeconv_param_outputs_.getTags("ida_log"));
+          tmp_param.remove("FLASHDeconv:1:ida_log");
+        }
+
         ParamXMLFile().store(tmp_ini, tmp_param);
 
         auto r = ep_.run(this,

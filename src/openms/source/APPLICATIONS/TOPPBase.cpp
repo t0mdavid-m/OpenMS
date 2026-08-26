@@ -43,6 +43,7 @@
 #include <QtCore/QDir>
 
 #include <iostream>
+#include <typeinfo>
 
 // OpenMP support
 #ifdef _OPENMP
@@ -552,6 +553,14 @@ namespace OpenMS
     {
       writeLogError_(String("Error: Unexpected internal error (") + e.what() + ")");
       writeDebug_(String("Error occurred in line ") + e.getLine() + " of file " + e.getFile() + " (in function: " + e.getFunction() + ") !", 1);
+      return UNKNOWN_ERROR;
+    }
+    // exceptions which are not derived from OpenMS' BaseException (e.g. std::out_of_range from a failed map lookup).
+    // Without this handler they would escape main() and terminate the process, which looks like a segfault to callers.
+    catch (std::exception& e)
+    {
+      writeLogError_(String("Error: Unexpected internal error (") + e.what() + ")");
+      writeDebug_(String("The exception was of type '") + typeid(e).name() + "'.", 1);
       return UNKNOWN_ERROR;
     }
     log_.close();
