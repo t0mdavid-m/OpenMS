@@ -414,12 +414,25 @@ the caller's responsibility.
 
 | Stream | Cols | Role |
 |---|---|---|
-| `ida.log` | — | free-text MS1 summary (not a TSV) |
+| `ida.log` | — | free-text MS1 summary (not a TSV); the only stream with an outside consumer, and the only one keyed on the **instrument** scan number |
 | `scan_commands.tsv` | 34 | one row per **dequeued** command; the wide MS3-fragment stream (32→34 ADR-0026 `first_mass`/`last_mass`, between `faims_enabled` and the trailing `enqueue_ts`) |
 | `scan_results.tsv` | 32 | pure acquisition-**event** log per `processScan` (34→29 identification payload moved out, →28 per-charge deconv restructure, →29 `deconv_qscores`; →32 the identification-YIELD block `tag_count`/`fragment_count`/`tic_coverage` after `remaining_ratio`) |
 | `identification.tsv` | 34 | per-scan MS2/MS3 identification leaf (32→34: `tag_count` beside `flash_extender_score`, `fragment_qscores` inside the aligned fragment-mass table) |
 | `pooled_identification.tsv` | 19 | per-precursor cumulative proteoform trajectory |
 
+- **`ida.log`'s two identifiers are different quantities and neither substitutes for the other**
+  (ADR-0035). `MS1 Scan#` is the **instrument's** scan number, arriving as a trailing `int` on
+  `processScan` and used for nothing else; `Access ID` on the same line is the base-94 **tracking
+  id**, which is the join key to the other four streams. The port had `MS1 Scan#` carrying the
+  tracking id, which did not merely mis-key `FLASHDeconvAlgorithm`'s `precursor_map_for_ida_` — it
+  made the join unsatisfiable, since that walk returns at `iter->first < scan_number - 50` and
+  tracking ids never reach the thousands instrument scan numbers do. `<= 0` means "not supplied" and
+  the writer falls back to the tracking id, warning **once** per run (it flushes under
+  `ida_log_mutex_`).
+  ⚠️ **Both readers of this grammar anchor on `" 0 targets"` with the leading space.** The bare
+  substring also matches `"10 targets"` / `"20 targets"`, which command fan-out makes routine.
+  `parseFLASHIdaLog` is one reader; `PrecursorSelection`'s `targeting.target_log_files` loader is the
+  other, and it is in-scope — feeding an engine-written `ida.log` back in is a supported round trip.
 - **Rows are written at dequeue**, from 2 sites inside `getNextScanCommand`. So row order == dequeue
   order, and an enqueued-but-never-dequeued command never appears. Only the priority-dequeue site
   passes `precursor_id` and `ms3_proteoform` (a one-shot `takeMS3Proteoform`); the scheduled-prescan
