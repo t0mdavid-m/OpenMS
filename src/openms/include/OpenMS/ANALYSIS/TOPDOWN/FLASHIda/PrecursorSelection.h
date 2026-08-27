@@ -280,6 +280,11 @@ namespace OpenMS
     /// could be supplied by an unrelated target.
     std::vector<int> authoredChargesFor_(double mass, double delta) const;
 
+    /// The charges of @p nominal_mass already acquired inside the retention-time window, read out of
+    /// the per-charge acquisition record. Gathering them once per candidate is what lets the
+    /// admission decision be a function of plain data rather than of this class's maps.
+    std::vector<int> spentAuthoredCharges_(int nominal_mass) const;
+
     /// Parse TSV inclusion list file
     void parseInclusionListTSV_(const String& filename);
 

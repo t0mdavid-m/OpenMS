@@ -33,6 +33,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/PrecursorSelection.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/CandidateAdmission.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
@@ -45,6 +46,7 @@
 #include <functional>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <set>
 #include <sstream>
 
@@ -439,56 +441,29 @@ namespace OpenMS
               config_.targeting().mode == 1 ? authoredChargesFor_(mass_pg, delta_pg) : std::vector<int>();
           const bool has_authored = !authored.empty();
 
-          struct ChargeCandidate { int charge; double score; };
-          std::vector<ChargeCandidate> charges_to_process;
-          if (has_authored)
-          {
-            // The strongest charge the row NAMED that this survey actually resolved and that the
-            // species has not already been acquired at.
-            //
-            // SNR ORDERS here; it does not gate. A matched target's anchor is exempt from the SNR
-            // threshold (the zeroing further down), so an authored target is never lost to a weak
-            // survey -- which is most of why one authors it. The notch side keeps the gate.
-            int charge = -1;
-            float best_snr = -1.0f;
-            for (int c : authored)
-            {
-              // The set can only SUBTRACT, so it must not smuggle a charge past the level floor.
-              if (config_.level(ms_level).min_charge > 0 && c < config_.level(ms_level).min_charge) continue;
-              auto [lo, hi] = pg.getMzRange(c);
-              if (hi <= lo) continue;  // never resolved -- there is no MEASURED window to isolate
-              if (authored_acquired_rt_map_.count({nominal_pg, c}) > 0) continue;  // already spent
-              const float snr = pg.getChargeSNR(c);
-              if (snr > best_snr) { best_snr = snr; charge = c; }
-            }
-            // Every named charge spent, absent, or below the floor: the species is finished. There
-            // is deliberately no fallback to an unnamed charge -- that would be the set ADDING.
-            if (charge < 0) continue;
-            if (authored_acquired_this_survey.count(nominal_pg) > 0) continue;
+          // The ANCHOR pick now lives in CandidateAdmission.h, unchanged in what it decides: drawn
+          // from the authored SET when the row names charges (SNR orders the named charges, it does
+          // not gate them), otherwise the envelope's own representative or best-qscore charge.
+          //
+          // The guard is `reason`, NOT `resolved()`, and the two differ on purpose. Only the authored
+          // path ever refused a candidate for having no anchor; the unauthored path has always taken
+          // the envelope's charge as-is, including a representative charge the deconvolution never
+          // assigned. Guarding on `resolved()` would tighten that, which is a behaviour change and
+          // does not belong in a lift-and-shift.
+          const std::vector<int> spent_charges = spentAuthoredCharges_(nominal_pg);
 
-            // The anchor's OWN qscore, not a sibling's. The pair below used to be bound together
-            // and then the charge alone reassigned by inclusion matching, so a scan could be
-            // logged and excluded on the score of a charge it never isolated.
-            const std::unordered_map<int, float> per_charge_qscores = pg.getAllQscores();
-            auto qs_it = per_charge_qscores.find(charge);
-            const double score =
-                qs_it != per_charge_qscores.end() ? (double)qs_it->second : pg.getQscore();
-            charges_to_process.push_back({charge, score});
-          }
-          else
-          {
-            int charge;
-            double score;
-            if (config_.targeting().consider_all_charges) {
-              charge = pg.getBestQScoreCharge();
-              score = pg.getBestQScore();
-            }
-            else {
-              charge = pg.getRepAbsCharge();
-              score = pg.getQscore();
-            }
-            charges_to_process.push_back({charge, score});
-          }
+          AnchorContext anchor_ctx;
+          anchor_ctx.authored = authored;
+          anchor_ctx.spent_charges = spent_charges;
+          anchor_ctx.already_this_survey = authored_acquired_this_survey.count(nominal_pg) > 0;
+          anchor_ctx.min_charge = config_.level(ms_level).min_charge;
+          anchor_ctx.consider_all_charges = config_.targeting().consider_all_charges;
+
+          const AnchorChoice anchor = pickAnchor(pg, anchor_ctx);
+          if (anchor.reason != AdmissionReason::Admitted) { continue; }
+
+          struct ChargeCandidate { int charge; double score; };
+          std::vector<ChargeCandidate> charges_to_process {{anchor.charge, anchor.score}};
 
           for (const auto& cc : charges_to_process)
           {
@@ -500,7 +475,14 @@ namespace OpenMS
             int charge = cc.charge;
             double score = cc.score;
 
-            // Per-level charge filter: ms1.min_charge controls what MS1 picks
+            // Per-level charge filter: ms1.min_charge controls what MS1 picks.
+            //
+            // Kept HERE, ahead of the geometry, rather than relying on admitCandidate's own copy of
+            // the same rule. Moving it down would let a below-floor candidate reach the legacy
+            // charge-list matching below, which assigns the `charges` pointer -- and that pointer
+            // outlives this iteration, so a later candidate would erase from a list an earlier,
+            // refused one had selected. admitCandidate re-checks the floor because it must be
+            // decidable on its own; that copy is unreachable from here and is meant to be.
             if (config_.level(ms_level).min_charge > 0 && charge < config_.level(ms_level).min_charge)
               continue;
 
@@ -631,11 +613,6 @@ namespace OpenMS
               if (to_exclude) { continue; }
             }
 
-            if (score < qscore_threshold) { break; }
-
-            // TODO: Check
-            if (pg.getChargeSNR(charge) < snr_threshold) { continue; }
-
             if (current_selected_mzs.find(center_mz) != current_selected_mzs.end()) // mz has been triggered
             {
               if (selection_phase < selection_phase_end) { continue; }
@@ -645,30 +622,62 @@ namespace OpenMS
               }
             }
 
-            // Skip masses over the tqscore threshold in ALL selection phases. Previously this ran in
-            // phase 0 only (`< selection_phase_end - 1`), so an already-excluded mass was re-admitted in
-            // the inclusion fallback phase (phase 1): non-strict inclusion zeroes target thresholds and
-            // re-selected the excluded mass every survey. Standard DDA (target_mode 0) only selects in
-            // phase 0, so running this in every phase changes inclusion-mode behaviour only.
-            if (selection_phase < selection_phase_end)
+            // The per-candidate gates and dynamic exclusion now live in CandidateAdmission.h. Same
+            // decisions and the same order among themselves: score, then the anchor's OWN SNR, then
+            // exclusion -- per-charge for an authored species, ORed over the nominal-mass and
+            // integer-m/z bars for everyone else. Exclusion applies only in the selection phases
+            // that apply it at all, so the three lookups are gated here rather than inside.
+            //
+            // Two deliberate non-equivalences, both invisible in behaviour:
+            //
+            // - These sit AFTER the within-survey m/z dedup above, where the score and SNR gates used
+            //   to sit before it. Both are side-effect-free skips of the same candidate, so which one
+            //   reports first is unobservable; leaving the dedup textually in place keeps the diff
+            //   legible.
+            // - The score gate was a `break` out of charges_to_process and is now a refusal.
+            //   That loop has exactly one element -- one anchor per PeakGroup (ADR-0021) -- so
+            //   `break` and `continue` reach the same next statement, the species count below, which
+            //   does not fire because nothing was pushed.
+            //
+            // spent_charges and anchor_spent answer DIFFERENT questions and neither derives from the
+            // other: the notch filter reads the per-charge record unconditionally, the exclusion bar
+            // only in the exclusion-applying phases.
+            double bar_value = 0.0;
+            bool   has_bar = false;
             {
-              if (has_authored)
-              {
-                // Per-charge (ADR-0028): the MASS must survive its own acquisition, or `single`
-                // could never come back for the second and third charge the row named. Only the
-                // charge just spent is out. The anchor loop already skips spent charges; this is
-                // the documented gate and selection_phase can re-enter, so both stay.
-                if (authored_acquired_rt_map_.count({nominal_mass, charge}) > 0) { continue; }
-              }
-              else if (tqscore_exceeding_mass_rt_map_.find(nominal_mass) != tqscore_exceeding_mass_rt_map_.end()
-                  || tqscore_exceeding_mz_rt_map_.find(integer_mz) != tqscore_exceeding_mz_rt_map_.end())
-              {
-                continue;
-              }
+              auto bar_it = mass_qscore_map_.find(nominal_mass);
+              if (bar_it != mass_qscore_map_.end()) { bar_value = bar_it->second; has_bar = true; }
             }
 
-            // save mass acquisition
-            all_mass_rt_map_[nominal_mass] = rt;
+            AdmissionContext adm_ctx;
+            adm_ctx.target_matched = target_matched;
+            adm_ctx.has_authored = has_authored;
+            adm_ctx.authored = authored;
+            adm_ctx.spent_charges = spent_charges;
+            adm_ctx.anchor_spent = selection_phase < selection_phase_end
+                                   && authored_acquired_rt_map_.count({nominal_mass, charge}) > 0;
+            adm_ctx.mass_barred = selection_phase < selection_phase_end
+                                  && tqscore_exceeding_mass_rt_map_.find(nominal_mass) != tqscore_exceeding_mass_rt_map_.end();
+            adm_ctx.mz_barred = selection_phase < selection_phase_end
+                                && tqscore_exceeding_mz_rt_map_.find(integer_mz) != tqscore_exceeding_mz_rt_map_.end();
+            adm_ctx.qscore_bar = has_bar ? &bar_value : nullptr;
+            adm_ctx.fan_out = config_.targeting().precursor_charges != ChargeAcquisitionMode::Single;
+            adm_ctx.min_charge = config_.level(ms_level).min_charge;
+            adm_ctx.snr_threshold = config_.targeting().snr_threshold;
+            adm_ctx.anchor_snr_threshold = snr_threshold;
+            adm_ctx.qscore_threshold = qscore_threshold;
+            adm_ctx.tqscore_threshold = config_.targeting().tqscore_threshold;
+            adm_ctx.max_notches = MAX_NOTCHES_PER_STAGE;
+            adm_ctx.where = "MS2 z=" + std::to_string(charge);
+
+            const AdmissionVerdict verdict = admitCandidate(pg, charge, score, adm_ctx);
+
+            // Acquisition memory is stamped once exclusion is cleared and BEFORE the qscore ledger
+            // can refuse, so a candidate the ledger turns away still refreshes the record that keeps
+            // its stored score alive through expiry. That ordering is the whole reason the verdict
+            // reports passing exclusion separately from being admitted.
+            if (verdict.passed_exclusion) { all_mass_rt_map_[nominal_mass] = rt; }
+            if (! verdict.admit) { continue; }
 
             // The species' ACQUISITION CHARGE SET -- every charge this survey will fragment, not just
             // the anchor. Both non-single modes acquire the SAME set and differ only in scan count
@@ -682,36 +691,16 @@ namespace OpenMS
             // acquired is by construction what gets isolated. Computed once: the qscore accumulation,
             // the RT map and the emit loop below must all record the same set.
             //
-            // The anchor is `charge` as the anchor block resolved it -- under an authored charge
-            // set that is the highest-SNR NAMED charge, not the envelope's representative one.
-            // selectNotches drops the anchor from its output, so a stale anchor would emit it twice.
-            std::vector<int> acquired_charges{charge};
+            // The anchor is `charge` as pickAnchor resolved it -- under an authored charge set that
+            // is the highest-SNR NAMED charge, not the envelope's representative one. selectNotches
+            // drops the anchor from its output, so a stale anchor would emit it twice.
+            //
+            // Computed inside admitCandidate, from the same peakGroupNotchCandidates + selectNotches
+            // pair buildMS2 uses. Binding a reference here rather than copying keeps the single
+            // source visible: the qscore accumulation, the per-charge record and the emit loop below
+            // must all record the same set, and now they cannot each derive their own.
+            const std::vector<int>& acquired_charges = verdict.acquisition_charges;
             std::vector<int> authored_dropped;  // named, observed, but refused -- reported below
-            if (config_.targeting().precursor_charges != ChargeAcquisitionMode::Single)
-            {
-              std::vector<NotchCandidate> notch_candidates =
-                  peakGroupNotchCandidates(pg, optimal_window_margin_);
-              if (has_authored)
-              {
-                // FILTER ONLY (ADR-0028). The authored set can subtract from what the envelope
-                // offers and never add to it; selectNotches below still applies the SNR gate, so a
-                // named-but-weak charge is refused as a notch even though the anchor is exempt.
-                notch_candidates.erase(
-                    std::remove_if(notch_candidates.begin(), notch_candidates.end(),
-                                   [&](const NotchCandidate& n) {
-                                     return std::find(authored.begin(), authored.end(), n.charge) == authored.end()
-                                            || authored_acquired_rt_map_.count({nominal_pg, n.charge}) > 0
-                                            || (config_.level(ms_level).min_charge > 0
-                                                && n.charge < config_.level(ms_level).min_charge);
-                                   }),
-                    notch_candidates.end());
-              }
-              for (const NotchCandidate& n :
-                   selectNotches(notch_candidates, charge,
-                                 config_.targeting().snr_threshold,
-                                 MAX_NOTCHES_PER_STAGE, "MS2 z=" + std::to_string(charge)))
-                acquired_charges.push_back(n.charge);
-            }
 
             if (has_authored)
             {
@@ -766,23 +755,13 @@ namespace OpenMS
             // qscore" guard is mass-keyed too, so on the next survey the second charge -- ranked
             // lower by construction -- would `continue` against the first charge's score. Per-charge
             // state was already recorded above.
-            if (!has_authored)
+            // The ledger DECISION -- whether this survey beats the score the species was acquired at
+            // -- was made inside admitCandidate and has already turned this candidate away if it did
+            // not. What is left here is the WRITE, which belongs to the class that owns the maps.
+            if (! has_authored)
             {
-              auto inter = mass_qscore_map_.find(nominal_mass);
-              if (inter == mass_qscore_map_.end())
-              {
-                mass_qscore_map_[nominal_mass] = score;
-              }
-              else {
-                // If mass has previously been acquired with higher qscore, skip
-                if (score < mass_qscore_map_[nominal_mass]) {
-                  continue;
-                }
-                mass_qscore_map_[nominal_mass] = score;
-              }
-
-              // Add to exclusion list if neccessary
-              if (mass_qscore_map_[nominal_mass] > config_.targeting().tqscore_threshold)
+              mass_qscore_map_[nominal_mass] = verdict.record_score;
+              if (verdict.arms_bars)
               {
                 tqscore_exceeding_mass_rt_map_[nominal_mass] = rt;
                 tqscore_exceeding_mz_rt_map_[integer_mz] = rt;
@@ -921,6 +900,21 @@ namespace OpenMS
     }
     std::sort(out.begin(), out.end());
     out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
+  }
+
+  std::vector<int> PrecursorSelection::spentAuthoredCharges_(int nominal_mass) const
+  {
+    // authored_acquired_rt_map_ is keyed on the pair, and std::map orders pairs lexicographically,
+    // so one nominal mass's charges are a contiguous range. Walking it beats querying per charge:
+    // the anchor pick, the notch filter and the exclusion bar all want the same set, and gathering
+    // it once is what keeps them consulting identical state.
+    std::vector<int> out;
+    for (auto it = authored_acquired_rt_map_.lower_bound({nominal_mass, std::numeric_limits<int>::min()});
+         it != authored_acquired_rt_map_.end() && it->first.first == nominal_mass; ++it)
+    {
+      out.push_back(it->first.second);
+    }
     return out;
   }
 

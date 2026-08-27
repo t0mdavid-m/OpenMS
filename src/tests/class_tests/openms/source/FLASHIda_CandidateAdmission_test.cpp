@@ -253,8 +253,16 @@ START_SECTION(an_authored_species_is_excluded_per_charge_not_by_the_mass_bars)
   barred.mz_barred = true;
   TEST_EQUAL(admitCandidate(pg, 13, 0.94, barred).admit, true)   // the mass bars do not reach it
 
-  AdmissionContext spent = admitCtx({10, 13, 16}, {13});
+  AdmissionContext spent = admitCtx({10, 13, 16});
+  spent.anchor_spent = true;
   TEST_EQUAL(admitCandidate(pg, 13, 0.94, spent).reason == AdmissionReason::Barred, true)
+
+  // anchor_spent and spent_charges are NOT interchangeable, and this pins why. The loop consults the
+  // per-charge map unconditionally for the anchor pick and the notch filter, but only in the
+  // exclusion-applying selection phases for the bar. So a populated spent_charges must NOT bar on
+  // its own -- deriving the bar from it would apply exclusion in a phase that does not.
+  AdmissionContext notch_filter_only = admitCtx({10, 13, 16}, {13});
+  TEST_EQUAL(admitCandidate(pg, 13, 0.94, notch_filter_only).admit, true)
 }
 END_SECTION
 
@@ -278,6 +286,18 @@ START_SECTION(the_qscore_bar_admits_only_an_equal_or_better_survey)
   AdmissionContext equal = admitCtx();
   equal.qscore_bar = &bar;
   TEST_EQUAL(admitCandidate(pg, 13, 0.90, equal).admit, true)   // `<` is strict: equal re-acquires
+
+  // A ledger refusal still PASSED exclusion, and the caller has to be able to tell the two apart:
+  // the species' acquisition-memory timestamp is stamped once exclusion is cleared, before the
+  // ledger runs, so a candidate the ledger turns away still refreshes the record that keeps its
+  // stored score alive through expiry. A refusal at the bars stamps nothing.
+  AdmissionVerdict ledger_refusal = admitCandidate(pg, 13, 0.80, worse);
+  TEST_EQUAL(ledger_refusal.admit, false)
+  TEST_EQUAL(ledger_refusal.passed_exclusion, true)
+
+  AdmissionContext bar_refusal = admitCtx();
+  bar_refusal.mass_barred = true;
+  TEST_EQUAL(admitCandidate(pg, 13, 0.80, bar_refusal).passed_exclusion, false)
 }
 END_SECTION
 

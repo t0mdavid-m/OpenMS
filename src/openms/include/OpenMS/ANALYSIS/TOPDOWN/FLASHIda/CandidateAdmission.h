@@ -103,7 +103,17 @@ namespace OpenMS
 
     bool has_authored = false;       ///< the row named charges; mirrors `!AnchorContext::authored.empty()`
     std::vector<int> authored;
-    std::vector<int> spent_charges;  ///< as AnchorContext::spent_charges
+
+    /// The named charges already spent inside the retention-time window, for the NOTCH filter.
+    /// Read unconditionally, matching the anchor pick.
+    std::vector<int> spent_charges;
+
+    /// Is the ANCHOR's own charge already spent? Separate from @c spent_charges above, and not
+    /// derivable from it, because the two are gated differently in the loop this came from: the
+    /// anchor pick and the notch filter consult the per-charge map unconditionally, while the
+    /// exclusion bar consults it only in the selection phases that apply exclusion at all. Deriving
+    /// one from the other would quietly apply exclusion in a phase that does not.
+    bool anchor_spent = false;
 
     /// Dynamic exclusion, already looked up: the nominal-mass bar and the integer-m/z bar. They are
     /// ORed, and both are armed together, so exempting one alone changes nothing whenever the anchor
@@ -137,6 +147,15 @@ namespace OpenMS
     /// Should this acquisition arm the two `tqscore_exceeding_*` bars? Separated from the admit
     /// decision because the arming side and the reading side are independent choices (ADR-0037).
     bool arms_bars = false;
+
+    /// Did this candidate get past dynamic exclusion, whatever the qscore ledger then decided?
+    ///
+    /// Exposed because the loop records the species' acquisition-memory timestamp at that point,
+    /// BEFORE the ledger can refuse — so a candidate the ledger turns away still refreshes the
+    /// record that keeps its score alive through expiry. Collapsing this into @c admit would move
+    /// that write, which is a change to when a mass's stored score expires rather than a
+    /// simplification.
+    bool passed_exclusion = false;
 
     /// The score to record against the species. Never lowers a bar the species already holds.
     double record_score = 0.0;
@@ -281,7 +300,7 @@ namespace OpenMS
     // the anchor's isolation centre, ORed.
     if (ctx.has_authored)
     {
-      if (CandidateAdmissionDetail::contains(ctx.spent_charges, anchor_charge))
+      if (ctx.anchor_spent)
       {
         v.reason = AdmissionReason::Barred;
         return v;
@@ -292,6 +311,9 @@ namespace OpenMS
       v.reason = AdmissionReason::Barred;
       return v;
     }
+
+    // Past exclusion. The caller stamps acquisition memory here, before the ledger below can refuse.
+    v.passed_exclusion = true;
 
     v.acquisition_charges = acquisitionChargeSet(pg, anchor_charge, ctx);
 
