@@ -296,12 +296,18 @@ namespace OpenMS
     std::vector<int>* charges = nullptr;
 
     selected_peak_groups_.reserve(mass_count);
-    // Nominal masses that already spent one of their AUTHORED charges in THIS survey (ADR-0028).
-    // Without it, the phase-1 pass of non-strict inclusion would come back for a second named
-    // charge in the same survey and break `single`'s "one anchor per species per survey"
-    // invariant (see the break at the bottom of the emit loop). Only bites under `single`:
-    // separate/multiplexed spend the whole set in one pass anyway.
-    std::set<int> authored_acquired_this_survey;
+    // What THIS survey has already done to each species, keyed by nominal mass (ADR-0036).
+    //
+    // Replaces a bare set of "nominal masses already acquired this survey", which refused every
+    // later PeakGroup of a species outright. That was right while a species was one PeakGroup, and
+    // wrong for an inclusion target, which is the one case that arrives SPLIT across several -- so
+    // the charges only a sibling resolved were deferred until the first PeakGroup's were spent, and
+    // lost entirely if the peak stopped eluting first.
+    //
+    // A record now carries what was RESOLVED (which decides whether a sibling can add anything),
+    // what was ACQUIRED (which the sibling's own set is reduced by, so the scans partition), and the
+    // survey's best score (so a low-scoring sibling cannot lower the bar the next survey faces).
+    SurveyLedger survey_ledger;
 
     std::set<double> current_selected_mzs;    // current selected mzs
     std::set<double> current_selected_masses; // current selected mzs
@@ -422,6 +428,9 @@ namespace OpenMS
           // dont acquire the same mass multiple times
           if (species_selected >= mass_count) { break; }
           const size_t pushed_before_pg = selected_peak_groups_.size();
+          // Set from the verdict inside the loop below, read after it: the species count lives at
+          // PeakGroup scope and the verdict does not.
+          bool verdict_was_sibling = false;
 
           // The ANCHOR charge -- one per PeakGroup. This was a multi-element list only under
           // charge_based_exclusion, which is gone (ADR-0021); how many charges the scan then
@@ -451,12 +460,17 @@ namespace OpenMS
           // assigned. Guarding on `resolved()` would tighten that, which is a behaviour change and
           // does not belong in a lift-and-shift.
           const std::vector<int> spent_charges = spentAuthoredCharges_(nominal_pg);
+          auto ledger_it = survey_ledger.find(nominal_pg);
+          const SpeciesSurveyRecord* seen =
+              ledger_it != survey_ledger.end() ? &ledger_it->second : nullptr;
 
           AnchorContext anchor_ctx;
           anchor_ctx.authored = authored;
           anchor_ctx.spent_charges = spent_charges;
-          anchor_ctx.already_this_survey = authored_acquired_this_survey.count(nominal_pg) > 0;
+          anchor_ctx.seen = seen;
+          anchor_ctx.fan_out = config_.targeting().precursor_charges != ChargeAcquisitionMode::Single;
           anchor_ctx.min_charge = config_.level(ms_level).min_charge;
+          anchor_ctx.snr_threshold = config_.targeting().snr_threshold;
           anchor_ctx.consider_all_charges = config_.targeting().consider_all_charges;
 
           const AnchorChoice anchor = pickAnchor(pg, anchor_ctx);
@@ -661,6 +675,7 @@ namespace OpenMS
             adm_ctx.mz_barred = selection_phase < selection_phase_end
                                 && tqscore_exceeding_mz_rt_map_.find(integer_mz) != tqscore_exceeding_mz_rt_map_.end();
             adm_ctx.qscore_bar = has_bar ? &bar_value : nullptr;
+            adm_ctx.seen = seen;
             adm_ctx.fan_out = config_.targeting().precursor_charges != ChargeAcquisitionMode::Single;
             adm_ctx.min_charge = config_.level(ms_level).min_charge;
             adm_ctx.snr_threshold = config_.targeting().snr_threshold;
@@ -678,6 +693,7 @@ namespace OpenMS
             // reports passing exclusion separately from being admitted.
             if (verdict.passed_exclusion) { all_mass_rt_map_[nominal_mass] = rt; }
             if (! verdict.admit) { continue; }
+            verdict_was_sibling = verdict.is_sibling;
 
             // The species' ACQUISITION CHARGE SET -- every charge this survey will fragment, not just
             // the anchor. Both non-single modes acquire the SAME set and differ only in scan count
@@ -707,7 +723,6 @@ namespace OpenMS
               // Per-charge exclusion (ADR-0028): record what was actually isolated, charge by
               // charge, and write NO mass-keyed entry -- see the mass_qscore_map_ block below.
               for (int c : acquired_charges) { authored_acquired_rt_map_[{nominal_mass, c}] = rt; }
-              authored_acquired_this_survey.insert(nominal_mass);
 
               // Say what was named and refused. A silent drop reads as "we isolated everything you
               // asked for" when we did not -- the same failure shape [NOTCH-CLAMP] exists for.
@@ -731,7 +746,20 @@ namespace OpenMS
                 auto [lo, hi] = pg.getMzRange(c);
                 authored_dropped.push_back(c);
                 charge_set_msg << (authored_dropped.size() == 1 ? " unacquired=" : ",") << c << "(";
-                if (hi <= lo) charge_set_msg << "not resolved";
+                // A charge an EARLIER PeakGroup of this species already isolated (ADR-0036). Ahead
+                // of "not resolved" deliberately: this PeakGroup cannot see it either, so without
+                // this arm a completed split envelope would report its own success as a failure.
+                if (seen != nullptr
+                    && std::find(seen->acquired.begin(), seen->acquired.end(), c) != seen->acquired.end())
+                  charge_set_msg << "acquired from an earlier peak group of this species";
+                // "in this peak group", not "not resolved" flat. The old wording named the survey,
+                // and it was wrong exactly when it mattered: an inclusion target arrives SPLIT
+                // across PeakGroups, so a charge absent from THIS one is routinely resolved on a
+                // sibling and acquired a moment later. It read as an instrument limitation and sent
+                // every reader looking in the wrong place. Whether a sibling will supply it is not
+                // knowable here -- this line is emitted before that PeakGroup is considered -- so
+                // the honest claim is the narrow one.
+                else if (hi <= lo) charge_set_msg << "not resolved in this peak group";
                 else if (config_.level(ms_level).min_charge > 0 && c < config_.level(ms_level).min_charge)
                   charge_set_msg << "below min_charge " << config_.level(ms_level).min_charge;
                 // Ahead of the SNR arm deliberately: a spent charge has a perfectly good SNR and
@@ -755,6 +783,38 @@ namespace OpenMS
             // qscore" guard is mass-keyed too, so on the next survey the second charge -- ranked
             // lower by construction -- would `continue` against the first charge's score. Per-charge
             // state was already recorded above.
+            // Record what this survey has now done to the species (ADR-0036). Written HERE, after
+            // every reader of `seen` above, so that pointer keeps meaning "what the species had
+            // BEFORE this PeakGroup" for the whole candidate -- including the [CHARGE-SET] reason
+            // ladder, which distinguishes a charge an earlier PeakGroup took from one nothing has
+            // resolved.
+            //
+            // Every species, not only authored ones: an unrestricted row under multiplexed/separate
+            // has the same split envelope to complete, and it is intendedChargeSet -- not this
+            // record -- that decides whether a sibling is entitled to anything.
+            //
+            // RESOLVED is what this PeakGroup could SEE, not what it took, and that is what
+            // preserves ADR-0028's deferral: under `single` a PeakGroup resolves all of its named
+            // charges while acquiring one, so a sibling offering the same charges adds nothing and
+            // the rest still arrive one survey at a time.
+            {
+              SpeciesSurveyRecord& rec = survey_ledger[nominal_mass];
+              for (int c : intendedChargeSet(pg, authored,
+                                             config_.targeting().precursor_charges != ChargeAcquisitionMode::Single,
+                                             config_.level(ms_level).min_charge,
+                                             config_.targeting().snr_threshold))
+              {
+                if (std::find(rec.resolved.begin(), rec.resolved.end(), c) == rec.resolved.end())
+                  rec.resolved.push_back(c);
+              }
+              for (int c : acquired_charges)
+              {
+                if (std::find(rec.acquired.begin(), rec.acquired.end(), c) == rec.acquired.end())
+                  rec.acquired.push_back(c);
+              }
+              rec.best_score = std::max(rec.best_score, verdict.record_score);
+            }
+
             // The ledger DECISION -- whether this survey beats the score the species was acquired at
             // -- was made inside admitCandidate and has already turned this candidate away if it did
             // not. What is left here is the WRITE, which belongs to the class that owns the maps.
@@ -813,10 +873,21 @@ namespace OpenMS
               id_mz_map_[window_id_] = (int)round(e_center_mz);
               id_qscore_map_[window_id_] = score;
               id_charge_map_[window_id_] = emit_charge;
-              // The set the geometry writer must not exceed. Under an authored charge set this is
-              // exactly what was recorded above; otherwise empty, meaning unrestricted, which
-              // reproduces the envelope-wide behaviour every non-targeted species has always had.
-              trigger_authored_charges_.push_back(has_authored ? acquired_charges : std::vector<int>());
+              // The set the geometry writer must not exceed -- now carried for EVERY trigger, not
+              // only authored ones (ADR-0036). It stops meaning "the authored set" and starts
+              // meaning "the acquisition charge set", which is what ScanCommandQueue.h already
+              // documents the parameter as.
+              //
+              // It has to widen because a SIBLING's set is REDUCED by what the species already
+              // isolated, and buildMS2 re-derives its notches from the PeakGroup's own envelope. Left
+              // empty, the filter would be skipped and the sibling would re-isolate charges the first
+              // scan already took -- the wire disagreeing with every record of itself, which is the
+              // failure [CHARGE-SET] and this field exist to prevent.
+              //
+              // For a species that is NOT split this is a no-op by construction, not by luck: both
+              // sides call peakGroupNotchCandidates then selectNotches with identical arguments, so
+              // the filter trims nothing.
+              trigger_authored_charges_.push_back(acquired_charges);
 
               trigger_ids_.push_back(window_id_);
               window_id_++;
@@ -848,8 +919,14 @@ namespace OpenMS
             break;
           }  // end for charges_to_process
 
-          // One species consumed, however many acquisitions it produced.
-          if (selected_peak_groups_.size() > pushed_before_pg) ++species_selected;
+          // One species consumed, however many acquisitions it produced -- and however many
+          // PeakGroups it took to acquire (ADR-0036). A SIBLING completing a split envelope costs no
+          // slot: the predicate that admitted it has just declared it the same species as the
+          // PeakGroup that already paid. Counting it again would let one target eat the survey --
+          // survey 20 of the inclusion golden carries five PeakGroups at 12351.30x against
+          // max_precursors 5 -- and would contradict the admission decision in the same breath.
+          if (selected_peak_groups_.size() > pushed_before_pg && !verdict_was_sibling)
+            ++species_selected;
         }
       }
     }

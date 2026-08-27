@@ -44,13 +44,39 @@ namespace OpenMS
   /// "acquired in full" is measured against, ADR-0036) is the one in `CONTEXT.md`; the names are used
   /// in that sense throughout.
 
+  /// What one survey has already done to one species, keyed by nominal mass by the caller.
+  ///
+  /// A **split envelope** (ADR-0036) is one Precursor arriving as several PeakGroups, each carrying
+  /// part of its charge range — which happens only for inclusion targets, because the overlap
+  /// collapse that merges near-identical features is deliberately skipped for targeted ones. This
+  /// record is what lets the second PeakGroup of a species be told apart from the first, and it is
+  /// call-local: a survey starts with an empty ledger.
+  struct SpeciesSurveyRecord
+  {
+    /// Charges that already-SELECTED PeakGroups of this species RESOLVED — not merely acquired.
+    /// The distinction matters: a sibling earns a scan only by supplying something no earlier
+    /// PeakGroup could, and "could" is about resolution, not about which charge won the anchor.
+    std::vector<int> resolved;
+
+    /// Charges this species has actually ISOLATED so far this survey. Subtracted from a sibling's
+    /// acquisition set so the scans PARTITION the envelope rather than overlapping it.
+    std::vector<int> acquired;
+
+    /// The highest score the species has been acquired at in this survey. Only ever rises, so a
+    /// low-scoring sibling admitted on charge grounds cannot lower the bar the next survey faces.
+    double best_score = 0.0;
+  };
+
+  /// nominal mass -> what this survey has done to it. Call-local; empty at the start of each survey.
+  using SurveyLedger = std::map<int, SpeciesSurveyRecord>;
+
   /// Why a candidate was admitted or refused. Doubles as the `[CHARGE-SET]` reason vocabulary, so a
   /// refusal can say which gate it failed rather than being reported as a gate it never reached.
   enum class AdmissionReason
   {
     Admitted = 0,        ///< acquired; the anchor and the acquisition charge set are in the verdict
     NoAnchorResolved,    ///< no candidate charge survived: every one absent, spent, or below the floor
-    AlreadyThisSurvey,   ///< the species already took an anchor in this survey
+    IntendedSetComplete, ///< a SIBLING that adds nothing: every charge it offers was already resolved
     BelowMinCharge,      ///< the anchor is under the level's charge floor
     ScoreBelowThreshold, ///< score < qscore_threshold
     SnrBelowThreshold,   ///< the anchor's own envelope does not rise above noise
@@ -85,12 +111,22 @@ namespace OpenMS
     /// mass-keyed for every species without an authored set.
     std::vector<int> spent_charges;
 
-    /// Has this species already taken an anchor in THIS survey? Under `single` that is the whole of
-    /// "one anchor per species per survey"; it exists because non-strict inclusion runs the selection
-    /// loop twice and phase 1 would otherwise come back for a second named charge.
-    bool already_this_survey = false;
+    /// What this survey has already done to this species, or nullptr if this is its first PeakGroup.
+    ///
+    /// Non-null makes this candidate a SIBLING, and a sibling is judged on what it can ADD rather
+    /// than on its score (ADR-0036). Before that ADR this was a bare "already acquired this survey"
+    /// flag that refused every sibling outright, which is what lost the charges only a sibling could
+    /// resolve — under `single` for three surveys, and permanently if the peak stopped eluting
+    /// first.
+    const SpeciesSurveyRecord* seen = nullptr;
 
-    int  min_charge = 0;             ///< the level's charge floor; 0 = no floor
+    /// Does the acquisition mode ask for several charges (`precursor_charges != single`)? It decides
+    /// how much of the envelope a species INTENDS to acquire, and therefore whether a sibling can
+    /// complete anything at all.
+    bool fan_out = false;
+
+    int    min_charge = 0;           ///< the level's charge floor; 0 = no floor
+    double snr_threshold = 0.0;      ///< the notch gate, used to size the intended set
     bool consider_all_charges = false;  ///< rank across the envelope rather than the representative charge
   };
 
@@ -124,6 +160,12 @@ namespace OpenMS
     /// `mass_qscore_map_` for this nominal mass, or nullptr if the species has not been acquired
     /// inside the retention-time window. The best score it has been acquired at.
     const double* qscore_bar = nullptr;
+
+    /// As AnchorContext::seen — non-null makes this candidate a sibling. It changes two things here:
+    /// the sibling's acquisition set is reduced by what the species already isolated (so the scans
+    /// partition rather than overlap), and the sibling is exempt from the qscore bar entirely,
+    /// because its admission was earned by completing the intended set rather than by scoring well.
+    const SpeciesSurveyRecord* seen = nullptr;
 
     bool   fan_out = false;          ///< precursor_charges != Single: the scan takes the whole envelope
     int    min_charge = 0;
@@ -175,6 +217,69 @@ namespace OpenMS
     }
   }
 
+  /// The INTENDED CHARGE SET this PeakGroup can contribute (ADR-0036): what "acquired in full" is
+  /// measured against, restricted to charges this PeakGroup actually resolved.
+  ///
+  /// Three shapes, one per row-and-mode combination:
+  ///   - an AUTHORED row: the named charges it resolved, whatever the mode. A named charge is the
+  ///     method asking for that charge specifically, so `single` still owes them all — it just pays
+  ///     one per survey.
+  ///   - no authored row, several charges asked for: every charge whose own envelope rises above
+  ///     noise. The mode's contract is the whole signal-bearing envelope.
+  ///   - no authored row, one charge asked for: the anchor alone, so the set is complete the moment
+  ///     the species has been acquired at all and no sibling can ever add to it.
+  ///
+  /// Charges below the level's floor are excluded everywhere: an intended set that named one would
+  /// let a sibling be admitted to acquire something the floor forbids.
+  inline std::vector<int> intendedChargeSet(const PeakGroup& pg, const std::vector<int>& authored,
+                                            bool fan_out, int min_charge, double snr_threshold)
+  {
+    std::vector<int> out;
+    auto resolved_here = [&pg, min_charge](int c) {
+      if (min_charge > 0 && c < min_charge) return false;
+      auto [lo, hi] = pg.getMzRange(c);
+      return hi > lo;
+    };
+
+    if (!authored.empty())
+    {
+      for (int c : authored)
+        if (resolved_here(c)) out.push_back(c);
+      return out;
+    }
+    if (!fan_out) return out;  // the anchor alone; a sibling can complete nothing
+
+    auto [min_c, max_c] = pg.getAbsChargeRange();
+    for (int c = min_c; c <= max_c; ++c)
+      if (resolved_here(c) && pg.getChargeSNR(c) >= snr_threshold) out.push_back(c);
+    return out;
+  }
+
+  namespace CandidateAdmissionDetail
+  {
+    /// Is this candidate worth a scan given what the species already has (ADR-0036)?
+    ///
+    /// The FIRST PeakGroup of a species always is — there is nothing to compare against. A SIBLING
+    /// earns one only by offering an intended-set member that no already-selected PeakGroup of the
+    /// species RESOLVED. That predicate does three things at once, and all three are wanted:
+    ///
+    ///   - it completes a split envelope, which is the whole point;
+    ///   - it refuses a sibling that merely repeats what the first PeakGroup could already see, so
+    ///     the duplicate near-identical peak groups a targeted survey produces cost nothing;
+    ///   - it preserves ADR-0028's deferral, because "resolved" is not "acquired": under `single`
+    ///     the first PeakGroup resolves all of its named charges while acquiring one, so a sibling
+    ///     offering the same charges adds nothing and the rest still arrive one survey at a time.
+    inline bool completesSomething(const PeakGroup& pg, const std::vector<int>& authored,
+                                   bool fan_out, int min_charge, double snr_threshold,
+                                   const SpeciesSurveyRecord* seen)
+    {
+      if (seen == nullptr) { return true; }
+      for (int c : intendedChargeSet(pg, authored, fan_out, min_charge, snr_threshold))
+        if (!contains(seen->resolved, c)) { return true; }
+      return false;
+    }
+  }
+
   /// Pick the anchor charge of one candidate.
   ///
   /// Under an AUTHORED charge set the anchor is drawn from the SET rather than from the envelope, so
@@ -205,7 +310,12 @@ namespace OpenMS
       // Every named charge spent, absent, or below the floor: the species is finished. There is
       // deliberately no fallback to an unnamed charge -- that would be the set ADDING.
       if (charge < 0) { out.reason = AdmissionReason::NoAnchorResolved; return out; }
-      if (ctx.already_this_survey) { out.reason = AdmissionReason::AlreadyThisSurvey; return out; }
+      if (!CandidateAdmissionDetail::completesSomething(pg, ctx.authored, ctx.fan_out, ctx.min_charge,
+                                                        ctx.snr_threshold, ctx.seen))
+      {
+        out.reason = AdmissionReason::IntendedSetComplete;
+        return out;
+      }
 
       // The anchor's OWN qscore, not a sibling's. The pair used to be bound together and then the
       // charge alone reassigned by inclusion matching, so a scan could be logged and excluded on the
@@ -216,6 +326,18 @@ namespace OpenMS
       out.charge = charge;
       out.score  = qs_it != per_charge_qscores.end() ? (double)qs_it->second : pg.getQscore();
       out.reason = AdmissionReason::Admitted;
+      return out;
+    }
+
+    // No authored set. The sibling test runs here too, and it is what makes an unrestricted row
+    // under `multiplexed`/`separate` behave like an authored one: its intended set is the whole
+    // signal-bearing envelope, so a sibling carrying charges the first PeakGroup could not resolve
+    // completes it. Under `single` the intended set is the anchor alone, `completesSomething`
+    // returns false for every sibling, and the "best-qscore mass is enough" rule stands unchanged.
+    if (!CandidateAdmissionDetail::completesSomething(pg, ctx.authored, ctx.fan_out, ctx.min_charge,
+                                                      ctx.snr_threshold, ctx.seen))
+    {
+      out.reason = AdmissionReason::IntendedSetComplete;
       return out;
     }
 
@@ -265,6 +387,20 @@ namespace OpenMS
     for (const NotchCandidate& n :
          selectNotches(notch_candidates, anchor_charge, ctx.snr_threshold, ctx.max_notches, ctx.where))
       out.push_back(n.charge);
+
+    // A SIBLING isolates only what the species has not already isolated this survey (ADR-0036), so
+    // the scans PARTITION the envelope instead of overlapping it. Re-isolating a charge a previous
+    // scan of the same survey already took splits its ions across two fills and makes both weaker
+    // than the single isolation would have been -- the same reasoning ADR-0016's SNR gate rests on.
+    // The anchor is never dropped: it was chosen from charges that are still owed.
+    if (ctx.seen != nullptr)
+    {
+      out.erase(std::remove_if(out.begin() + 1, out.end(),
+                               [&ctx](int c) {
+                                 return CandidateAdmissionDetail::contains(ctx.seen->acquired, c);
+                               }),
+                out.end());
+    }
     return out;
   }
 
@@ -295,9 +431,18 @@ namespace OpenMS
       return v;
     }
 
+    v.is_sibling = ctx.seen != nullptr;
+
     // Dynamic exclusion. An authored species is keyed per (mass, charge) so `single` can come back
     // for the charges the row named; everything else is keyed on the mass and on the integer m/z of
     // the anchor's isolation centre, ORed.
+    //
+    // A species that matched an inclusion row does not READ either mass-keyed bar (ADR-0037). It
+    // still arms them below, once, so every other species sees exactly what it sees today; what
+    // changes is that a target is no longer barred from its own re-acquisition for the whole
+    // retention-time window regardless of how much better a later survey resolves it. With
+    // tqscore_threshold at 0.1 against observed qscores of 0.48-0.98, the first acquisition armed
+    // those bars every time and the qscore ledger below was unreachable.
     if (ctx.has_authored)
     {
       if (ctx.anchor_spent)
@@ -306,7 +451,7 @@ namespace OpenMS
         return v;
       }
     }
-    else if (ctx.mass_barred || ctx.mz_barred)
+    else if (!ctx.target_matched && (ctx.mass_barred || ctx.mz_barred))
     {
       v.reason = AdmissionReason::Barred;
       return v;
@@ -323,13 +468,36 @@ namespace OpenMS
     // the next survey, since charges are ranked descending and every later one scores lower.
     if (!ctx.has_authored)
     {
-      if (ctx.qscore_bar != nullptr && score < *ctx.qscore_bar)
+      // The bar is a CROSS-SURVEY rule alone (ADR-0037). A sibling is exempt from it outright: its
+      // admission was earned by completing the intended set, and comparing it against a bar -- this
+      // survey's or an earlier survey's -- would refuse work already justified on other grounds.
+      // That exemption is not decoration: siblings are ranked below the first PeakGroup by
+      // construction, so a score test would turn every one of them away and the split envelope
+      // would stay unfinished no matter what the guards above allowed.
+      if (!v.is_sibling && ctx.qscore_bar != nullptr && score < *ctx.qscore_bar)
       {
         v.reason = AdmissionReason::ScoreNotBetter;
         return v;
       }
+
+      // The bar only ever RISES. A sibling admitted on charge grounds may well score below what the
+      // species has already been acquired at, and letting it write its own score would lower the bar
+      // the next survey faces -- turning a ratchet into a random walk.
       v.record_score = ctx.qscore_bar != nullptr ? std::max(score, *ctx.qscore_bar) : score;
-      v.arms_bars    = v.record_score > ctx.tqscore_threshold;
+      if (ctx.seen != nullptr) { v.record_score = std::max(v.record_score, ctx.seen->best_score); }
+
+      // A MATCHED TARGET arms the bars once and never refreshes them (ADR-0037): refreshing would
+      // suppress its bin and window neighbours for its whole elution, which is longer than today.
+      //
+      // The exemption is scoped to targets on purpose. "Arm on first acquisition only" is NOT the
+      // same rule for everyone else: a non-target whose first acquisition scores below
+      // tqscore_threshold does not arm, and today it may still arm on a later, better one -- the
+      // bars never blocked it, precisely because they were never armed. Gating that on "has this
+      // species been acquired before" would leave such a mass permanently unbarred, which is a
+      // change to non-target behaviour and the one thing this decision is meant not to touch.
+      const bool refreshing_a_target =
+          ctx.target_matched && (ctx.seen != nullptr || ctx.qscore_bar != nullptr);
+      v.arms_bars = !refreshing_a_target && v.record_score > ctx.tqscore_threshold;
     }
 
     v.admit  = true;
