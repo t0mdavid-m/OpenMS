@@ -427,7 +427,7 @@ the caller's responsibility.
 |---|---|---|
 | `ida.log` | — | free-text MS1 summary (not a TSV); the only stream with an outside consumer, and the only one keyed on the **instrument** scan number |
 | `scan_commands.tsv` | 34 | one row per **dequeued** command; the wide MS3-fragment stream (32→34 ADR-0026 `first_mass`/`last_mass`, between `faims_enabled` and the trailing `enqueue_ts`) |
-| `scan_results.tsv` | 32 | pure acquisition-**event** log per `processScan` (34→29 identification payload moved out, →28 per-charge deconv restructure, →29 `deconv_qscores`; →32 the identification-YIELD block `tag_count`/`fragment_count`/`tic_coverage` after `remaining_ratio`) |
+| `scan_results.tsv` | 36 | pure acquisition-**event** log per `processScan` (34→29 identification payload moved out, →28 per-charge deconv restructure, →29 `deconv_qscores`; →32 the identification-YIELD block `tag_count`/`fragment_count`/`tic_coverage` after `remaining_ratio`; →36 ADR-0038's quant block `quant_channels`/`quant_condition_means`/`quant_fold_change`/`quant_verdict`, **appended** after `dequeue_ts` because every `r.colIndex` pinned in `FLASHIda_LoggingFields_test` is ≤ 21 and appending is the only placement that invalidates none of them) |
 | `identification.tsv` | 34 | per-scan MS2/MS3 identification leaf (32→34: `tag_count` beside `flash_extender_score`, `fragment_qscores` inside the aligned fragment-mass table) |
 | `pooled_identification.tsv` | 19 | per-precursor cumulative proteoform trajectory |
 
