@@ -204,6 +204,7 @@ namespace OpenMS
 
   void IdaLogger::writeIDALogEntry(double rt, int tracking_id, int instrument_scan_number,
                                     const std::vector<ScanCommand>& ms2_commands,
+                                    const std::vector<const PeakGroup*>& ms2_sources,
                                     const DeconvolvedSpectrum& all_peak_groups)
   {
     if (!ida_log_stream_.is_open()) return;
@@ -238,8 +239,10 @@ namespace OpenMS
                     << " (Access ID " << tracking_id_str << ") - "
                     << ms2_commands.size() << " targets\n";
 
-    for (const auto& cmd : ms2_commands)
+    // Indexed, not range-for: ms2_sources is index-parallel to ms2_commands.
+    for (size_t ci = 0; ci < ms2_commands.size(); ++ci)
     {
+      const ScanCommand& cmd = ms2_commands[ci];
       double w1 = 0, w2 = 0;
       int charge = 0;
       if (cmd.num_stages > 0)
@@ -251,7 +254,36 @@ namespace OpenMS
         charge = cmd.stages[0].charge_state;
       }
 
-      ida_log_stream_ << "Mass=" << std::defaultfloat << cmd.mono_mass
+      // ChargeRange is the SPECIES' measured envelope (ADR-0035 decision 6), read off the PeakGroup
+      // this command was actually built from -- ms2_sources is index-parallel to ms2_commands, filled
+      // at push time in FLASHIda::processScan. Not a mass lookup into all_peak_groups: several
+      // PeakGroups routinely share one mass within a survey (ADR-0036 split envelopes -- 48 of the
+      // 1324 committed golden target lines sit on a species with 2-4 of them), and each carries a
+      // different charge subset, so a lookup would silently pick one of several answers.
+      // It reaches FLASHDeconvFeatureFile as columns 10-11 (z, Z) of *_ms2.feature, so a degenerate
+      // [z-z] tells TopPIC every ida.log-sourced feature is single-charge.
+      // Missing source => fall back to the trigger charge, i.e. the pre-ADR-0035 output rather than
+      // a fabricated range. FLASHIda_LoggingFields_test's any_wider assertion is what catches that
+      // fallback becoming the norm.
+      // The well-formedness test is not defensive noise: PeakGroup's members default to
+      // min_abs_charge_ = 0, max_abs_charge_ = -1, so a group whose range was never set would print
+      // "ChargeRange=[0--1]" -- an inverted range that both readers would parse without complaint.
+      // Every selected PeakGroup comes out of the deconvolution with a real range, so this arm is
+      // unreachable today; it exists so the fallback means the same thing on every path.
+      int z_lo = charge, z_hi = charge;
+      if (ci < ms2_sources.size() && ms2_sources[ci] != nullptr)
+      {
+        auto [lo, hi] = ms2_sources[ci]->getAbsChargeRange();
+        if (lo > 0 && hi >= lo) { z_lo = lo; z_hi = hi; }
+      }
+
+      // Mass= sets its OWN format. It used to say std::defaultfloat with no precision, inheriting
+      // whatever the previous field left -- and under defaultfloat precision counts SIGNIFICANT
+      // DIGITS, not decimals. The first target of an entry inherited the header's setprecision(4)
+      // (-> "1.235e+04") and every later one the previous line's Features setprecision(6)
+      // (-> "12383.3"), against an AllMass= of 12351.3933 / 12383.3180. std::fixed is redundant on
+      // the second and later targets and load-bearing on the first, so it is set unconditionally.
+      ida_log_stream_ << "Mass=" << std::fixed << std::setprecision(4) << cmd.mono_mass
                       << "\tZ=" << charge
                       << "\tScore=" << std::fixed << std::setprecision(5) << cmd.qscore
                       << "\tWindow=[" << std::setprecision(4) << w1 << "-" << w2 << "]"
@@ -264,7 +296,7 @@ namespace OpenMS
                         << cmd.snr << ","
                         << cmd.charge_score << ","
                         << cmd.ppm_error << "]"
-                      << "\tChargeRange=[" << charge << "-" << charge << "]"
+                      << "\tChargeRange=[" << z_lo << "-" << z_hi << "]"
                       << "\tHCD=" << cmd.hcd_energy << "\n";
     }
 

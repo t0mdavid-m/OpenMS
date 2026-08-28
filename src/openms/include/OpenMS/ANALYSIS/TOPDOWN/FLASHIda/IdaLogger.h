@@ -241,8 +241,15 @@ namespace OpenMS
     ///
     /// The old single `scan_number` parameter carried the tracking id under a name that claimed
     /// otherwise; that is the confusion this signature exists to remove.
+    /// @p ms2_sources is INDEX-PARALLEL to @p ms2_commands: entry i is the PeakGroup command i was
+    /// built from, and is what the line's `ChargeRange` reports (ADR-0035 decision 6). Passing it
+    /// rather than looking the mass up in @p all_peak_groups is deliberate -- several PeakGroups
+    /// routinely share one mass within a survey (ADR-0036), each with a different charge subset, so
+    /// a lookup would pick one of several answers with nothing to notice. A short vector or a null
+    /// entry falls back to the trigger charge, i.e. the pre-ADR-0035 output.
     void writeIDALogEntry(double rt, int tracking_id, int instrument_scan_number,
                           const std::vector<ScanCommand>& ms2_commands,
+                          const std::vector<const PeakGroup*>& ms2_sources,
                           const DeconvolvedSpectrum& all_peak_groups);
 
     /// Write one TSV row for a dequeued scan command. @p precursor_id is the per-MS1-selection

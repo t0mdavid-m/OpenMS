@@ -174,14 +174,23 @@ FLASHIda::FLASHIda(char* arg) :
       const auto& sel_charges = selection_.triggerCharges();
       int commands_pushed = 0;
       std::vector<ScanCommand> ms2_commands;
+      // Index-parallel to ms2_commands; points into selection_.selectedPeakGroups(), a member vector
+      // that outlives the writeIDALogEntry call below.
+      std::vector<const PeakGroup*> ms2_sources;
       const MSSpectrum& raw_ms1 = selection_.deconvolvedMS1().getOriginalSpectrum();
 
       // Shared MS2 push: stamp the precursor_id, enqueue, and remember the command for the IDA log.
       // Equal-priority commands drain FIFO, so this preserves scan_commands row order and child_ids.
-      auto push_ms2_command = [&](ScanCommand& c, int precursor_id)
+      // @p src is the PeakGroup this command was built from. Recorded index-parallel to
+      // ms2_commands so ida.log's ChargeRange can report the species' real charge envelope without
+      // looking the mass back up in the deconvolved spectrum -- several PeakGroups routinely share
+      // one mass in a survey (ADR-0036) and each carries a different charge subset, so a lookup
+      // would pick one of them arbitrarily. See ADR-0035 decision 6.
+      auto push_ms2_command = [&](ScanCommand& c, int precursor_id, const PeakGroup& src)
       {
         stampAndPush_(c, precursor_id);
         ms2_commands.push_back(c);
+        ms2_sources.push_back(&src);
         commands_pushed++;
       };
 
@@ -203,7 +212,7 @@ FLASHIda::FLASHIda(char* arg) :
           auto cmds = exploration_.initiate(2, selected[i], sel_charges[i], queue_, &raw_ms1, &ms1_ctx,
                                             '\0', 0, {}, {}, nullptr, nullptr, allowed_i);
           for (auto& c : cmds)
-            push_ms2_command(c, precursor_id);
+            push_ms2_command(c, precursor_id, selected[i]);
         }
       }
       else
@@ -228,14 +237,14 @@ FLASHIda::FLASHIda(char* arg) :
               cmd.window_snr = FragmentAnalysis::windowSnr(raw_ms1, cmd.stages[0].precursor_mz - half,
                                                            cmd.stages[0].precursor_mz + half, cmd.precursor_intensity);
             }
-            push_ms2_command(cmd, precursor_id);
+            push_ms2_command(cmd, precursor_id, selected[i]);
           }
         }
       }
 
       // IDA log entry (MS1 only).
       logger_.writeIDALogEntry(rt_min, parent_tracking_id, instrument_scan_number,
-                               ms2_commands, selection_.deconvolvedMS1());
+                               ms2_commands, ms2_sources, selection_.deconvolvedMS1());
 
       for (const auto& c : ms2_commands)
         child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
