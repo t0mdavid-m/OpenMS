@@ -65,10 +65,16 @@ is airtight:
   come from `precursor_selection.tag_expansion` and drive FLASHIda's own FASTA target expansion.
 
 > **Name trap.** `TopDownIsobaricQuantification` (flat, off-limits, used only by
-> `FLASHDeconvAlgorithm`) and `FLASHIda/Quantification` (IDA, fair game) are unrelated. The IDA one
-> hardcodes `TMTSixPlexQuantitationMethod` + `IsobaricChannelExtractor` with a
-> `// TODO: Variable channel extractors` — the real-time quant test is **6-plex only**, whatever
-> label was actually run.
+> `FLASHDeconvAlgorithm`) and `FLASHIda/Quantification` (IDA, fair game) are unrelated — but the
+> IDA one now **borrows its vocabulary**: `quantification.labelling` takes the same seven strings
+> that tool's `setValidStrings("type", …)` pins, minus `"none"`, because here
+> `quantification.enabled` is the switch. All seven schemes are live (ADR-0038); the
+> `TMTSixPlexQuantitationMethod` hardcode and its `// TODO: Variable channel extractors` are gone.
+>
+> ⚠️ Correction is applied now (`IsobaricQuantifier`, stock matrix, `normalization` left at its
+> `false` default), and **an all-zero `correction_matrix` is handled by FLASHIda rather than passed
+> through**: `IsobaricIsotopeCorrector` *throws* on an identity matrix, so delegating would abort
+> every scan instead of skipping the correction.
 
 ### Ownership tree — declaration order is load-bearing
 
@@ -124,11 +130,21 @@ log row — but gates 3–5 do leave a stdout trace.
 `{3-char base-94 tracking id}{1-char type marker}{payload}`. Markers, per the authoritative switch
 in `IdaLogger::scanTypeFromDescription_`:
 
-`S` survey MS1 · `A` AGC calibration · `R` "recording" — any data-acquiring MS2 *or* MS3 ·
-`F` quantification follow-up MS2 · `C` tagging conditional follow-up MS2 · `E` exploration variant.
+`S` survey MS1 · `A` AGC calibration · `R` "recording" — any data-acquiring MS2 *or* MS3, **and
+the identification scan a differential quantification verdict buys** · `Q` the quantification scan
+(ADR-0038) · `C` tagging conditional follow-up MS2 · `E` exploration variant.
 
-`processScan` branches on the marker twice: `desc[3]=='A'` (gate 2) and
-`is_follow_up_scan = desc[3]=='F' || desc[3]=='C'`.
+⚠️ **`F` is retired** (ADR-0038). It marked the scan quantification *bought* — which the engine
+never measured — while the scan it *did* measure was the base MS2, whose activation could not
+release the reporter ion. `Q` marks the scan quantification **measures**: rostered once per
+selected precursor, and the only scan measured. What it buys is an ordinary `R`, which is what
+keeps `R` meaning "identification MS2" in every mode; only *when* it fires changes.
+
+`processScan` branches on the marker three times: `desc[3]=='A'` (gate 2),
+`is_follow_up_scan = desc[3]=='C'`, and `is_quant_scan = desc[3]=='Q'`. The screen gate keys on
+`'Q'` rather than on "is not a follow-up", which is what makes it safe for the bought scan to be an
+indistinguishable `'R'` — an `R` is never re-screened, so depth-one holds without the marker having
+to separate a follow-up from a primary.
 
 > The ABI field is `char scan_description[256]`, but **every writer caps at `snprintf(dst, 16, …)`
 > — 15 chars + NUL.** That is why MS2/MS3 mass tokens go through
@@ -175,7 +191,7 @@ the C# TPL Dataflow `ActionBlock` thread (serialized with itself, `MaxDegreeOfPa
 
 | P | Commands |
 |---|---|
-| 0 | FAIMS CV-transition MS1; cycle-time MS1; **both follow-up kinds** (quant `F`, conditional `C`) |
+| 0 | FAIMS CV-transition MS1; cycle-time MS1; **both bought scans** — the identification scan a quantification verdict buys (`R`, ADR-0038) and the tagging conditional follow-up (`C`) |
 | 1 | MS3, including exploration MS3 variants |
 | 2 | MS2 from MS1 selection; exploration MS2 variants |
 | 3 | idle survey MS1 — **and nothing else** |
