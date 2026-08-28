@@ -522,4 +522,129 @@ START_SECTION(zero_on_a_coupled_axis_is_accepted)
 }
 END_SECTION
 
+// ---------------------------------------------------------------------------------------------
+// Quantification (ADR-0038). These live here rather than in ConfigSchemaParity_test because the
+// generated reference fixture keeps quantification DISABLED -- enabling it would invert the level-2
+// roster, so that test's 17-key ms_settings.ms2 block (which reads level(2).scans[0]) would compare
+// the wrong scan. The inversion is behaviour, so it is pinned here.
+
+// cfgJson splices its `characterization` argument verbatim at the top level, so it doubles as the
+// slot for a quantification section; `ms_settings_extra` is spliced inside ms_settings.
+#define QUANT_ON(body) R"("characterization": { "mode": "off" }, "quantification": )" body R"(,)"
+#define MS2_QUANT R"(, "ms2_quant": { "analyzer": "Orbitrap", "activation": "ETD", "reaction_time": 12 })"
+
+START_SECTION(quantification_inverts_the_level2_roster)
+{
+  // THE structural claim of ADR-0038. With quantification on, the QUANTIFICATION scan takes the
+  // roster's primary slot -- it is the screen, so it must be acquired to decide anything -- and
+  // ms_settings.ms2 becomes the identification scan a differential verdict buys, held on the quant
+  // config rather than dispatched. Without this, ms2 would fire unconditionally and the screen
+  // would never be acquired at all.
+  Config on(cfgJson("", QUANT_ON(R"({ "enabled": true, "labelling": "tmt6plex",
+        "conditions": [ { "name": "a", "channels": ["126","127","128"] },
+                        { "name": "b", "channels": ["129","130","131"] } ] })"), MS2_QUANT));
+  TEST_EQUAL(on.level(2).scans.size(), 1)
+  // scans[0] is ms2_quant (ETD), NOT ms_settings.ms2 (HCD). Asserting the activation rather than
+  // "is non-empty" is the point: both configs are present, so only the value distinguishes them.
+  TEST_STRING_EQUAL(on.level(2).scans[0].activation, "ETD")
+  TEST_REAL_SIMILAR(on.level(2).scans[0].reaction_time, 12.0)
+  TEST_STRING_EQUAL(on.quantification().identification_scan.activation, "HCD")
+  TEST_EQUAL(on.quantification().identification_scan.collision_energy, 29)
+
+  // Quantification OFF puts ms_settings.ms2 back on the roster -- i.e. every other mode is
+  // untouched, which is what keeps 'R' meaning "identification MS2" everywhere.
+  Config off(cfgJson("", R"("characterization": { "mode": "off" },)", MS2_QUANT));
+  TEST_EQUAL(off.level(2).scans.size(), 1)
+  TEST_STRING_EQUAL(off.level(2).scans[0].activation, "HCD")
+  // ...and ms2_quant is still PARSED when off, so the schema fixture can see its keys.
+  TEST_STRING_EQUAL(off.quantification().quantification_scan.activation, "ETD")
+}
+END_SECTION
+
+START_SECTION(quantification_conditions_resolve_by_channel_name)
+{
+  // Channel NAMES become ordinals into the scheme's getChannelInformation() at load, so nothing
+  // downstream needs the name->m/z table and a typo cannot silently read the wrong intensity.
+  Config cfg(cfgJson("", QUANT_ON(R"({ "enabled": true, "labelling": "tmt10plex",
+        "conditions": [ { "name": "a", "channels": ["126","127C"] },
+                        { "name": "b", "channels": ["130N","131"] } ] })"), MS2_QUANT));
+  const auto& q = cfg.quantification();
+  TEST_EQUAL(q.conditions.size(), 2)
+  TEST_EQUAL(q.conditions[0].channels.size(), 2)
+  // tmt10plex order: 126,127N,127C,128N,128C,129N,129C,130N,130C,131
+  TEST_EQUAL(q.conditions[0].channels[0], 0)  // 126
+  TEST_EQUAL(q.conditions[0].channels[1], 2)  // 127C -- NOT 127N, which is the 6.32 mDa neighbour
+  TEST_EQUAL(q.conditions[1].channels[0], 7)  // 130N
+  TEST_EQUAL(q.conditions[1].channels[1], 9)  // 131
+
+  // A name that is not a channel of the SELECTED scheme is a load error. "127C" exists in
+  // tmt10plex and not in tmt6plex, so this also proves the check is scheme-aware rather than a
+  // static list.
+  TEST_EXCEPTION(std::invalid_argument,
+      Config(cfgJson("", QUANT_ON(R"({ "enabled": true, "labelling": "tmt6plex",
+        "conditions": [ { "name": "a", "channels": ["127C"] },
+                        { "name": "b", "channels": ["131"] } ] })"), MS2_QUANT)))
+  TEST_EXCEPTION(std::invalid_argument,
+      Config(cfgJson("", QUANT_ON(R"({ "enabled": true, "labelling": "not_a_scheme",
+        "conditions": [ { "name": "a", "channels": ["126"] },
+                        { "name": "b", "channels": ["131"] } ] })"), MS2_QUANT)))
+}
+END_SECTION
+
+START_SECTION(quantification_structural_rejections)
+{
+  const std::string conds = R"("conditions": [ { "name": "a", "channels": ["126","127","128"] },
+                                               { "name": "b", "channels": ["129","130","131"] } ])";
+
+  // 1. enabled with no ms2_quant: nothing is rostered, ms_settings.ms2 stays unconditional, and the
+  //    run is plain DDA that silently quantifies nothing. Note the ms_settings_extra is OMITTED.
+  TEST_EXCEPTION(std::invalid_argument,
+      Config(cfgJson("", QUANT_ON(R"({ "enabled": true, "labelling": "tmt6plex", )" + conds + R"( })"), "")))
+
+  // 2. conditions absent, and not-exactly-two. There is deliberately no fallback behind these: the
+  //    positional 3-vs-3 split they replace was correct only for six-plex.
+  TEST_EXCEPTION(std::invalid_argument,
+      Config(cfgJson("", QUANT_ON(R"({ "enabled": true, "labelling": "tmt6plex" })"), MS2_QUANT)))
+  TEST_EXCEPTION(std::invalid_argument,
+      Config(cfgJson("", QUANT_ON(R"({ "enabled": true, "labelling": "tmt6plex",
+        "conditions": [ { "name": "a", "channels": ["126"] } ] })"), MS2_QUANT)))
+  TEST_EXCEPTION(std::invalid_argument,
+      Config(cfgJson("", QUANT_ON(R"({ "enabled": true, "labelling": "tmt6plex",
+        "conditions": [ { "name": "a", "channels": ["126"] }, { "name": "b", "channels": ["129"] },
+                        { "name": "c", "channels": ["131"] } ] })"), MS2_QUANT)))
+
+  // 3. quantification + level-2 exploration. Exploration replaces the roster with CE-sweep variants,
+  //    so the quantification scan is never dispatched and every variant is labelled 'E' -- never
+  //    measured, never buying anything. The feature dies completely, and the one guard that might
+  //    have caught it (exactly-one-scan-config at a swept level) is SATISFIED, because the inverted
+  //    roster has exactly one entry. That is why this needs its own rejection.
+  TEST_EXCEPTION(std::invalid_argument,
+      // `metric` is what actually switches exploration on -- it defaults to "none", so an
+      // exploration block without it leaves hasExploration(2) false and would prove nothing here.
+      Config(cfgJson(R"(, "exploration": { "metric": "fragment_count", "activations": ["HCD"],
+                                           "ce_min": 20, "ce_max": 30, "ce_step": 5 })",
+                     QUANT_ON(R"({ "enabled": true, "labelling": "tmt6plex", )" + conds + R"( })"), MS2_QUANT)))
+
+  // Disabled + incomplete is LEGAL: 40 of the 41 committed configs carry a quantification block
+  // with neither conditions nor ms2_quant, and they must keep loading untouched.
+  Config ok(cfgJson("", QUANT_ON(R"({ "enabled": false })"), ""));
+  TEST_EQUAL(ok.quantification().enabled, false)
+  TEST_EQUAL(ok.level(2).scans.size(), 1)
+}
+END_SECTION
+
+START_SECTION(quantification_retired_keys_are_migration_errors)
+{
+  // Both earn their own message rather than a bare "unknown key", because deleting the key is the
+  // wrong fix for follow_up_scan -- the block it named still has to go somewhere (ms2_quant).
+  TEST_EXCEPTION(std::invalid_argument,
+      Config(cfgJson("", QUANT_ON(R"({ "enabled": false, "follow_up_scan": "whatever" })"), "")))
+  TEST_EXCEPTION(std::invalid_argument,
+      Config(cfgJson("", QUANT_ON(R"({ "enabled": false, "only_one_condition": true })"), "")))
+}
+END_SECTION
+
+#undef QUANT_ON
+#undef MS2_QUANT
+
 END_TEST

@@ -132,11 +132,17 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
     TEST_EQUAL(fus.reagent_agc_target, jf["reagent_agc_target"].get<int>())
   }
 
-  // --- quantification.follow_up_scan (previously asserted NOWHERE) ---
+  // --- ms_settings.ms2_quant, the quantification scan (ADR-0038) ---
+  // Replaces the old quantification.follow_up_scan block. That key named the scan quantification
+  // BOUGHT and never measured; ms2_quant is the scan it MEASURES, and it is a bare ms_settings
+  // slot rather than a name reference, so it is read straight off the section.
+  //
+  // Asserted here even though the reference has quantification disabled: Config copies both quant
+  // scan configs unconditionally and only the roster decision is gated, precisely so the one
+  // fixture whose job is to prove every key reachable can still see this one.
   {
-    const auto& fus = cfg.quantification().follow_up_scan;
-    const std::string fname = j["quantification"]["follow_up_scan"].get<std::string>();
-    const auto& jf = j["ms_settings"]["additional_ms2"][fname];
+    const auto& fus = cfg.quantification().quantification_scan;
+    const auto& jf = j["ms_settings"]["ms2_quant"];
     TEST_EQUAL(fus.analyzer, jf["analyzer"].get<std::string>())
     TEST_EQUAL(fus.activation, jf["activation"].get<std::string>())
     TEST_EQUAL(fus.collision_energy, jf["collision_energy"].get<int>())

@@ -987,24 +987,26 @@ namespace
       "reagent_max_it": 200.0,
       "reagent_agc_target": 700000
     },
-    "additional_ms2": {
-      "quant_follow_up": {
-        "analyzer": "Orbitrap",
-        "activation": "EThcD",
-        "collision_energy": 7,
-        "reaction_time": 5.0,
-        "reagent_max_it": 111.0,
-        "reagent_agc_target": 222,
-        "resolution": 120000
-      }
+    "ms2_quant": {
+      "analyzer": "Orbitrap",
+      "activation": "EThcD",
+      "collision_energy": 7,
+      "reaction_time": 5.0,
+      "reagent_max_it": 111.0,
+      "reagent_agc_target": 222,
+      "resolution": 120000
     }
   },
   "tagging": {},
   "quantification": {
     "enabled": true,
+    "labelling": "tmt6plex",
     "reporter_mz_tol": 0.01,
     "fold_change_threshold": 0.01,
-    "follow_up_scan": "quant_follow_up"
+    "conditions": [
+      { "name": "a", "channels": ["126", "127", "128"] },
+      { "name": "b", "channels": ["129", "130", "131"] }
+    ]
   }
 }
 )";
@@ -1077,22 +1079,24 @@ namespace
       "collision_energy": 29,
       "resolution": 120000
     },
-    "additional_ms2": {
-      "quant_follow_up": {
-        "analyzer": "Orbitrap",
-        "activation": "ETD",
-        "collision_energy": 0,
-        "reaction_time": 10.0,
-        "resolution": 120000
-      }
+    "ms2_quant": {
+      "analyzer": "Orbitrap",
+      "activation": "ETD",
+      "collision_energy": 0,
+      "reaction_time": 10.0,
+      "resolution": 120000
     }
   },
   "tagging": {},
   "quantification": {
     "enabled": true,
+    "labelling": "tmt6plex",
     "reporter_mz_tol": 0.002,
     "fold_change_threshold": 0.01,
-    "follow_up_scan": "quant_follow_up"
+    "conditions": [
+      { "name": "a", "channels": ["126", "127", "128"] },
+      { "name": "b", "channels": ["129", "130", "131"] }
+    ]
   }
 }
 )";
@@ -1787,8 +1791,11 @@ START_SECTION(processScan_followup_does_not_recurse)
   {
     std::string d(c.scan_description);
     if (d.size() < 4) continue;
-    if (d[3] == 'R')                     ++r_count;     // original production MS2
-    else if (d[3] == 'C' || d[3] == 'F') ++followups;   // conditional / quant follow-up
+    if (d[3] == 'R')      ++r_count;     // original production MS2
+    else if (d[3] == 'C') ++followups;   // conditional follow-up
+    // 'F' is gone (ADR-0038) and is deliberately NOT replaced by 'Q' here: a 'Q' is a ROSTERED
+    // quantification scan, not a follow-up, so counting it would break the invariant this test
+    // asserts. This fixture disables quantification anyway, so no 'Q' is emitted.
   }
   TEST_TRUE(followups >= 1)          // a follow-up WAS produced (the test is meaningful)
   TEST_TRUE(followups <= r_count)    // no follow-up spawned another (single-generation guard holds)
@@ -2067,26 +2074,36 @@ START_SECTION(processScan_quant_followup)
   TEST_EQUAL(acq.ms2_cmds.size() > 0, true)
   ABORT_IF(acq.ms2_cmds.empty())
 
+  // ADR-0038: the ROSTERED MS2 is now the quantification scan -- marked 'Q', carrying
+  // ms_settings.ms2_quant's parameters (ETD here). It is the scan that gets measured.
   const ScanCommand& ms2_cmd = acq.ms2_cmds[0];
   TEST_EQUAL(std::strlen(ms2_cmd.scan_description) <= 15, true)
   TEST_EQUAL(ms2_cmd.msn_level, 2)
+  TEST_EQUAL(ms2_cmd.scan_description[3], 'Q')
+  TEST_STRING_EQUAL(std::string(ms2_cmd.stages[0].activation_type), "ETD")
+  TEST_EQUAL(ms2_cmd.priority, 2)  // rostered, not a follow-up
 
-  // Push MS2 return with TMT reporter data
+  // Push its return with TMT reporter data
   const auto& ms2 = ms2_tmt_scans[0];
   int ms2_result = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
                                      (int)ms2.mzs.size(), ms2.rt,
                                      2, ms2_cmd.scan_description, 0.0, instrumentScanNumberOf(ms2));
-  // With fold_change_threshold=0.01, any reporter ion ratio should trigger
-  TEST_EQUAL(ms2_result, 1)  // Exactly 1 quant follow-up per MS2
+  // With fold_change_threshold=0.01, any reporter ion ratio is differential
+  TEST_EQUAL(ms2_result, 1)  // exactly 1 identification scan bought per quantification scan
 
-  // Follow-up at priority 0 dequeues before remaining MS2s at priority 2
+  // What a differential verdict BUYS is the identification scan: ms_settings.ms2, marked 'R', at
+  // priority 0 so it dequeues ahead of the remaining rostered MS2s. Asserting HCD here is the whole
+  // point of the fixture -- the two configs carry different activations, so this distinguishes
+  // "bought ms_settings.ms2" from "re-emitted the screen".
   ScanCommand out{};
   int r = ida->getNextScanCommand(out);
   TEST_EQUAL(r, 1)
   TEST_EQUAL(std::strlen(out.scan_description) <= 15, true)
-  TEST_STRING_EQUAL(std::string(out.stages[0].activation_type), "ETD")
+  TEST_EQUAL(out.scan_description[3], 'R')
+  TEST_STRING_EQUAL(std::string(out.stages[0].activation_type), "HCD")
+  TEST_EQUAL(out.stages[0].collision_energy, 29)
   TEST_EQUAL(out.msn_level, 2)
-  TEST_EQUAL(out.priority, 0)  // Follow-up priority
+  TEST_EQUAL(out.priority, 0)  // bought, not rostered
 
   delete ida;
 }
@@ -2159,9 +2176,12 @@ START_SECTION(processScan_quant_followup_owns_its_scan_parameters)
   TEST_EQUAL(acq.ms2_cmds.size() > 0, true)
   ABORT_IF(acq.ms2_cmds.empty())
 
+  // ADR-0038 swapped which config is rostered. The rostered scan is now the QUANTIFICATION scan,
+  // carrying ms_settings.ms2_quant (EThcD / rt 5.0 / reagent 111 / 222 / CE 7).
   const ScanCommand& ms2_cmd = acq.ms2_cmds[0];
-  TEST_STRING_EQUAL(std::string(ms2_cmd.stages[0].activation_type), "HCD")
-  TEST_REAL_SIMILAR(ms2_cmd.stages[0].reaction_time, 10.0)
+  TEST_EQUAL(ms2_cmd.scan_description[3], 'Q')
+  TEST_STRING_EQUAL(std::string(ms2_cmd.stages[0].activation_type), "EThcD")
+  TEST_REAL_SIMILAR(ms2_cmd.stages[0].reaction_time, 5.0)
 
   const auto& ms2 = ms2_tmt_scans[0];
   int ms2_result = ida->processScan(ms2.mzs.data(), ms2.ints.data(),
@@ -2170,16 +2190,20 @@ START_SECTION(processScan_quant_followup_owns_its_scan_parameters)
   TEST_EQUAL(ms2_result > 0, true)
   ABORT_IF(ms2_result <= 0)
 
+  // The scan it buys is the IDENTIFICATION scan and takes every parameter from ms_settings.ms2,
+  // never from the quantification scan that triggered it. The two configs disagree on all five
+  // fields below, which is what makes this a test rather than a coincidence.
   ScanCommand out{};
   int r = ida->getNextScanCommand(out);
   TEST_EQUAL(r, 1)
   TEST_EQUAL(out.priority, 0)
-  TEST_STRING_EQUAL(std::string(out.stages[0].activation_type), "EThcD")
+  TEST_EQUAL(out.scan_description[3], 'R')
+  TEST_STRING_EQUAL(std::string(out.stages[0].activation_type), "HCD")
 
-  TEST_REAL_SIMILAR(out.stages[0].reaction_time, 5.0)        // MS2 had 10.0
-  TEST_REAL_SIMILAR(out.stages[0].reagent_max_it, 111.0)     // MS2 had 200.0
-  TEST_EQUAL(out.stages[0].reagent_agc_target, 222)          // MS2 had 700000
-  TEST_EQUAL(out.hcd_energy, 7)                              // MS2 had 29
+  TEST_REAL_SIMILAR(out.stages[0].reaction_time, 10.0)       // the Q scan had 5.0
+  TEST_REAL_SIMILAR(out.stages[0].reagent_max_it, 200.0)     // the Q scan had 111.0
+  TEST_EQUAL(out.stages[0].reagent_agc_target, 700000)       // the Q scan had 222
+  TEST_EQUAL(out.stages[0].collision_energy, 29)             // the Q scan had 7
 
   delete ida;
 }
