@@ -10,7 +10,10 @@ documents the real-time acquisition engine and nothing else. Upstream OpenMS sub
 The parent `../CLAUDE.md` owns the bridge/ABI contract, CI, build and test commands, and the
 config flow, and wins on any conflict. `../FlashIDA/CLAUDE.md` owns the C# side.
 
-**Do not build this project unless explicitly asked** — it is resource-intensive and CI handles it.
+**Build this project in the Linux container** — it is the fast inner loop (gcc 13.3, ctest, a
+~5 s fast tier). It cannot produce `OpenMS.dll`; only the Windows container and CI can. The images,
+the wrapper commands, the authority boundary and what stays remote-only live in `../CLAUDE.md`,
+which owns them — including what a green container run does and does not entitle you to claim.
 
 ## Where the code lives
 
@@ -28,6 +31,14 @@ The directory split is a near-perfect proxy for what you may modify.
 | **FLASHDeconv** (flat `TOPDOWN/`) | `DeconvolvedSpectrum`, `SpectralDeconvolution`, `FLASHDeconvAlgorithm`, `FLASHHelperClasses`, `MassFeatureTrace`, `PeakGroup`, `PeakGroupScoring`, `Qvalue`, `TopDownIsobaricQuantification` | **OFF-LIMITS** |
 | **FLASHTnT** (flat `TOPDOWN/`) | `FLASHTnTAlgorithm`, `FLASHTaggerAlgorithm`, `FLASHGappedTaggerAlgorithm`, `FLASHExtenderAlgorithm` | **OFF-LIMITS** |
 | **FLASHIda engine** | `FLASHIda.{h,cpp}`, `FLASHIdaBridgeFunctions.{h,cpp}` (flat) + everything in `TOPDOWN/FLASHIda/` | Fair game |
+
+⚠️ **"Fair game" now means "fair game to propose".** The table says what is off-limits
+*outright*; it is no longer the whole gate. Since verification moved into the local containers,
+**every** change under `src/` — engine, bridge, tests, `.cmake`, inside the boundary or outside it
+— needs the owner's sign-off on the exact diff **before** it is written: stop, show file + line +
+hunk, wait for a per-file yes. Ambiguous cases count as source changes. And prefer a container-side
+fix (build flags, `-isystem`, build scope) over a source fix, always — a container change is a parent
+commit with no CI round trip, while a source change is a ~60 min cycle against the shipped engine.
 
 Two deliberate exceptions to the clean split, both worth knowing before you conclude the boundary
 is airtight:
@@ -550,13 +561,18 @@ window's purity rather than a union).
 ## Tests
 
 Registering a test in `src/tests/class_tests/openms/executables.cmake` is **not enough to run it**.
-A C++ test executes in CI only if it appears in **both** places in
-`../.github/workflows/flashida-ci.yml`: the build `--target` list **and** the `ctest -R`
-alternation. Miss the first and it never builds; miss the second and it builds but never runs.
+A C++ test executes **at all — in CI or in either container, which parse those same two lists —**
+only if it appears in **both** places in `../.github/workflows/flashida-ci.yml`: the build
+`--target` list **and** the `ctest -R` alternation. Miss the first and it never builds; miss the
+second and it builds but never runs. Neither list is reproduced in prose here or anywhere else —
+any copy you find is stale by construction; `../CLAUDE.md` owns how the two are read out of the yml.
 
-Tests read fixtures from `../../FlashIDA/test-data` relative to `OpenMS/build`, so the FlashIDA
-submodule must be checked out. Test exes land in `build/src/tests/class_tests/bin/`, not
-`build/bin/`, and need the 5-DLL set staged beside them (including `zlib.dll`).
+Tests read fixtures from `../../FlashIDA/test-data` relative to the **build directory**, so the
+FlashIDA submodule must be checked out and the build dir must sit directly under `OpenMS/` with
+`FlashIDA/` beside it — that is what makes the `"../../FlashIDA/test-data/…"` literals resolve.
+Test exes land in `<build>/src/tests/class_tests/bin/`, not `<build>/bin/`. **Staging the 5-DLL set
+beside them (including `zlib.dll`) is Windows-only** — on Linux the equivalent is
+rpath/`LD_LIBRARY_PATH` to `libOpenMS.so`, and there is no `zlib.dll` at all.
 
 **Drive acquisitions only through `FLASHIda_TestHelpers.h::runInterleaved`** — the C++ mirror of
 C# `PushScanAndDrainFull`. One contract: pull a command → classify idle vs workload → feed one
@@ -567,5 +583,28 @@ drive loops don't work. `FLASHIda_ProcessScan_test` pins this with
 
 Division of labour with the C# suite: **C++ ctests assert plausibility ranges** (stable across
 engine bumps); **C# NUnit asserts exact goldens**. Put a new numeric expectation on the C# side
-unless it is genuinely range-based. Note CI builds **Release**, so `OPENMS_PRECONDITION` and debug
-asserts are compiled out — an accepted tradeoff to match the production toolchain.
+unless it is genuinely range-based.
+
+**Two toolchains now build this code.** CI and the Windows container: MSVC, **Release** —
+`OPENMS_PRECONDITION` and debug asserts are compiled out, an accepted tradeoff to match the
+production toolchain. The Linux container: gcc 13.3, Release by default, Debug behind a flag in a
+separate build dir. Three consequences that decide what a green run entitles you to claim:
+
+- **A Linux-green change is not MSVC-green.** No CI job has exercised gcc since the ubuntu
+  `cpp-unit-tests` job was removed on 2026-06-10, so expect toolchain-only diagnostics in both
+  directions — and MSVC remains the only toolchain that produces `OpenMS.dll`.
+- **Linux never adjudicates a number.** `cmake/compiler_flags.cmake:86-91` gives MSVC `/arch:AVX`
+  (256-bit) and non-MSVC `-mssse3` (128-bit) as PUBLIC options on every target, and Linux's
+  `x86_64` matches the same `x64_CPU` pattern — different vector width, different FP reduction
+  order. Treat a Linux-only score or ranking disagreement as a **lead**, not a verdict. (No C++
+  ctest reads a golden file — every `golden` occurrence in the test sources is a comment — so this
+  drift can produce Linux ctest noise but can never corrupt a golden.)
+- **The Linux test binaries are not the same binaries.**
+  `src/tests/class_tests/openms/CMakeLists.txt:32-35` forces `CMAKE_CXX_FLAGS_RELEASE="-O0"` for
+  GCC/Clang/Intel and leaves MSVC alone, so the class tests are unoptimised on Linux even in
+  Release.
+
+Do **not** sell a Debug Linux build as `OPENMS_PRECONDITION` coverage for this engine: `grep
+OPENMS_PRECONDITION` over the whole TOPDOWN tree returns **zero**, and the single `assert(` there is
+commented out. Debug buys assertions in OpenMS *core* — and it is the only Linux configuration ever
+proven green (the deleted `cpp-unit-tests` job, 2026-06-10).
