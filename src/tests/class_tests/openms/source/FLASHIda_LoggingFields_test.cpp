@@ -38,6 +38,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <map>
 #include <set>
 #include <sstream>
@@ -1993,6 +1994,7 @@ START_SECTION(ida_log_all15_fields)
   auto parsed = IdaLogger::parseFLASHIdaLog(dir + "/ida.log");
   TEST_TRUE(parsed.size() > 0)
   bool any = false;
+  bool any_wider = false;
   for (const auto& entry : parsed)
   {
     for (const auto& p : entry.second)
@@ -2012,12 +2014,24 @@ START_SECTION(ida_log_all15_fields)
       TEST_TRUE(nonNegFinite(p[12]))                // e12 snr
       TEST_TRUE(inUnit(p[13]))                      // e13 charge_score
       TEST_TRUE(finiteVal(p[14]))                   // e14 ppm_error
-      // e7/e8 ChargeRange are the documented ⟂DEFER degenerate pin (== e1 charge)
-      TEST_TRUE(std::abs(p[7] - p[1]) < 1.0)
-      TEST_TRUE(std::abs(p[8] - p[7]) < 1.0)
+      // e7/e8 ChargeRange is the species' MEASURED charge envelope (ADR-0035 decision 6), read off
+      // the PeakGroup the command was built from -- it used to be the trigger charge printed twice,
+      // which told FLASHDeconvFeatureFile (cols 10-11 of *_ms2.feature) that every ida.log-sourced
+      // feature was single-charge.
+      const int z_lo   = (int)std::lround(p[7]);
+      const int z_hi   = (int)std::lround(p[8]);
+      const int z_trig = (int)std::lround(p[1]);
+      TEST_TRUE(z_lo <= z_hi)                       // well ordered
+      TEST_TRUE(z_lo <= z_trig && z_trig <= z_hi)   // the isolated charge is inside the envelope
+      TEST_TRUE(z_lo > 0 && z_hi < 100)
+      if (z_hi > z_lo) any_wider = true;
     }
   }
   TEST_TRUE(any)
+  // The non-vacuity of the block above. A reverted fix -- or an ms2_sources wiring fault falling
+  // back to [trigger-trigger] on every line -- satisfies BOTH inequalities everywhere, so only
+  // "at least one line reports a genuinely wider envelope" can catch it.
+  TEST_TRUE(any_wider)
 }
 END_SECTION
 
@@ -2058,6 +2072,179 @@ START_SECTION(ida_log_multi_scan_distinct_keys)
   const int base_scan = instrumentScanNumberOf(ms1[1]);
   TEST_TRUE(parsed.count(base_scan) == 1)
   TEST_TRUE(parsed.count(base_scan + 1) == 1)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// §L3 -- ida_log : Mass= renders identically to AllMass= (ADR-0035 decision 5)
+/////////////////////////////////////////////////////////////
+START_SECTION(ida_log_mass_matches_allmass_byte_for_byte)
+{
+  auto ms1 = loadTsvScans(CYTC_MS1);
+  ABORT_IF(ms1.empty())
+
+  const std::string dir = freshLogDir("lf_l3");
+  std::string json = buildJsonWithLogDir(dir);
+  FLASHIda ida(const_cast<char*>(json.c_str()));
+  AcqResult acq = runInterleaved(&ida, ms1, std::vector<ScanData>{});
+  TEST_TRUE(acq.ms2_cmds.size() > 0)
+
+  // RAW TEXT, deliberately NOT parseFLASHIdaLog: that reader atof()s every field into a float,
+  // which absorbs exactly the rendering defect under test. The goldens cannot see it either --
+  // GoldenNumericComparer tolerances Mass= at RelTol 1e-3, i.e. +/-12.35 Da at 12 kDa, so a wrong
+  // Mass= passes a full golden regression with headroom to spare. This assertion is the ONLY gate
+  // on ADR-0035 decision 5.
+  //
+  // Mass= used to be written `std::defaultfloat` with no precision of its own, inheriting the
+  // header's setprecision(4) on the first target of an entry and the previous line's Features
+  // setprecision(6) thereafter -- and under defaultfloat precision counts SIGNIFICANT DIGITS. The
+  // committed goldens still show what that produced: Mass=1.235e+04 against an AllMass= of
+  // 12351.3933, and Mass=12383.3 against 12383.3180.
+  std::ifstream f(dir + "/ida.log");
+  TEST_TRUE(f.good())
+
+  std::vector<std::string> pending;   // Mass= tokens of the entry currently being read
+  int entries_checked = 0, targets_checked = 0;
+  std::string line;
+  while (std::getline(f, line))
+  {
+    if (line.rfind("Mass=", 0) == 0)   // "AllMass=" does not carry this prefix
+    {
+      const std::size_t tab = line.find('\t');
+      TEST_TRUE(tab != std::string::npos)
+      if (tab != std::string::npos) pending.push_back(line.substr(5, tab - 5));
+    }
+    else if (line.rfind("AllMass=", 0) == 0)
+    {
+      std::set<std::string> all;
+      std::istringstream is(line.substr(8));
+      std::string tok;
+      while (is >> tok) all.insert(tok);
+
+      for (const std::string& m : pending)
+      {
+        // Byte-exact, not toleranced. cmd.mono_mass IS pg.getMonoMass() (ScanCommandQueue.cpp), and
+        // the selected PeakGroups are drawn from the same DeconvolvedSpectrum that writes AllMass=,
+        // so a miss can only mean a precision regression or a provenance break -- never a valid case.
+        const bool found = (all.find(m) != all.end());
+        if (!found)
+          std::cout << "ida.log: Mass=" << m << " is not a token of its entry's AllMass= list"
+                    << std::endl;
+        TEST_TRUE(found)
+        targets_checked++;
+      }
+      if (!pending.empty()) entries_checked++;
+      pending.clear();
+    }
+  }
+  // Fail closed: an empty log, or one whose entries carry no targets, must not read as a pass.
+  TEST_TRUE(entries_checked > 0)
+  TEST_TRUE(targets_checked > 0)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// §L4 -- ida_log : every emitted number renders at its pinned width (drift guard)
+/////////////////////////////////////////////////////////////
+START_SECTION(ida_log_target_line_precision_is_pinned)
+{
+  auto ms1 = loadTsvScans(CYTC_MS1);
+  ABORT_IF(ms1.empty())
+
+  const std::string dir = freshLogDir("lf_l4");
+  std::string json = buildJsonWithLogDir(dir);
+  FLASHIda ida(const_cast<char*>(json.c_str()));
+  AcqResult acq = runInterleaved(&ida, ms1, std::vector<ScanData>{});
+  TEST_TRUE(acq.ms2_cmds.size() > 0)
+
+  // Guards the defect CLASS rather than the one instance. Every number in this file goes through
+  // ONE ostream whose format flags and precision are STICKY, so a field that does not set its own
+  // precision silently inherits the previous field's -- which is precisely how Mass= came to render
+  // at 4 significant digits and then 6. Pinning the rendered width of every token means the next
+  // field appended to these lines cannot repeat it silently.
+  //
+  // -1 == scientific notation, which no field here should ever produce; it is the signature of
+  // defaultfloat with a precision smaller than the value's exponent.
+  auto decimalsOf = [](const std::string& t) -> int {
+    if (t.find('e') != std::string::npos || t.find('E') != std::string::npos) return -1;
+    const std::size_t dot = t.find('.');
+    return (dot == std::string::npos) ? 0 : (int)(t.size() - dot - 1);
+  };
+  // Split "a-b" on the separating '-', not on a leading sign: the separator is the first '-'
+  // preceded by a digit. Window's lower bound is center - width/2 and may in principle be negative.
+  auto splitDash = [](const std::string& s, std::string& a, std::string& b) -> bool {
+    for (std::size_t i = 1; i < s.size(); ++i)
+      if (s[i] == '-' && std::isdigit((unsigned char)s[i - 1]))
+      { a = s.substr(0, i); b = s.substr(i + 1); return true; }
+    return false;
+  };
+  auto inner = [](const std::string& v) {   // strip [ ]
+    return (v.size() >= 2 && v.front() == '[' && v.back() == ']') ? v.substr(1, v.size() - 2) : v;
+  };
+
+  std::ifstream f(dir + "/ida.log");
+  TEST_TRUE(f.good())
+  int headers = 0, targets = 0, allmass_tokens = 0;
+  std::string line;
+  while (std::getline(f, line))
+  {
+    if (line.rfind("MS1 Scan# ", 0) == 0)
+    {
+      const std::size_t rt = line.find(" RT ");
+      TEST_TRUE(rt != std::string::npos)
+      if (rt == std::string::npos) continue;
+      const std::size_t beg = rt + 4;
+      const std::size_t end = line.find(' ', beg);
+      // RT is the field whose setprecision(4) leaked into the first target's Mass=.
+      TEST_EQUAL(decimalsOf(line.substr(beg, end - beg)), 4)
+      headers++;
+    }
+    else if (line.rfind("AllMass=", 0) == 0)
+    {
+      std::istringstream is(line.substr(8));
+      std::string tok;
+      while (is >> tok) { TEST_EQUAL(decimalsOf(tok), 4) allmass_tokens++; }
+    }
+    else if (line.rfind("Mass=", 0) == 0)
+    {
+      std::map<std::string, std::string> fld;
+      std::istringstream is(line);
+      std::string part;
+      while (std::getline(is, part, '\t'))
+      {
+        const std::size_t eq = part.find('=');
+        if (eq != std::string::npos) fld[part.substr(0, eq)] = part.substr(eq + 1);
+      }
+      TEST_EQUAL(fld.size(), 9)          // Mass Z Score Window PrecursorIntensity
+                                         // PrecursorMassIntensity Features ChargeRange HCD
+      TEST_EQUAL(decimalsOf(fld["Mass"]), 4)                       // == AllMass, byte for byte
+      TEST_EQUAL(decimalsOf(fld["Z"]), 0)                          // int32_t
+      TEST_EQUAL(decimalsOf(fld["Score"]), 5)
+      TEST_EQUAL(decimalsOf(fld["PrecursorIntensity"]), 5)
+      TEST_EQUAL(decimalsOf(fld["PrecursorMassIntensity"]), 5)
+      TEST_EQUAL(decimalsOf(fld["HCD"]), 0)                        // int32_t
+
+      std::string a, b;
+      TEST_TRUE(splitDash(inner(fld["Window"]), a, b))
+      TEST_EQUAL(decimalsOf(a), 4)
+      TEST_EQUAL(decimalsOf(b), 4)
+
+      TEST_TRUE(splitDash(inner(fld["ChargeRange"]), a, b))
+      TEST_EQUAL(decimalsOf(a), 0)                                 // ints, both ends
+      TEST_EQUAL(decimalsOf(b), 0)
+
+      std::istringstream fs(inner(fld["Features"]));
+      std::string ftok;
+      int nfeat = 0;
+      while (std::getline(fs, ftok, ',')) { TEST_EQUAL(decimalsOf(ftok), 6) nfeat++; }
+      TEST_EQUAL(nfeat, 6)
+      targets++;
+    }
+  }
+  // Fail closed on every line class this guard covers.
+  TEST_TRUE(headers > 0)
+  TEST_TRUE(targets > 0)
+  TEST_TRUE(allmass_tokens > 0)
 }
 END_SECTION
 
