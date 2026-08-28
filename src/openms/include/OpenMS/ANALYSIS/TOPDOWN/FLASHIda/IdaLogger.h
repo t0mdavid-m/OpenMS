@@ -168,6 +168,19 @@ namespace OpenMS
       float tic_coverage = -1.0f;
       // F5: encoded id of the winning variant; "" on every non-completing / non-exploration row.
       std::string winner_tracking_id;
+      // Isobaric quantification (ADR-0038). Measured on the 'Q' quantification scan and on nothing
+      // else, so every other row logs the sentinels these defaults encode.
+      //
+      // quant_fold_change carries -1 for TWO states -- "not measured", and "measured, but one
+      // condition was wholly empty so the ratio has no finite value" -- and quant_condition_means is
+      // what separates them: "" means not measured, two numbers mean measured. Keeping both states
+      // representable is the point: a species present in one condition and absent in the other is the
+      // strongest result the experiment can produce, and collapsing it into a rejection is what the
+      // (unreachable) only_one_condition flag existed to avoid.
+      std::string quant_channels;         ///< ';'-joined, all N corrected intensities in getChannelInformation() order
+      std::string quant_condition_means;  ///< ';'-joined pair, in quantification.conditions order (== ratio order)
+      double quant_fold_change = -1.0;    ///< mean(conditions[0]) / mean(conditions[1]); -1 = no finite ratio
+      std::string quant_verdict;          ///< differential | not_differential | incomplete_channels | extraction_failed
     };
 
     /// One identification.tsv row. All members are held BY VALUE because the sources (info.*, a local

@@ -213,7 +213,14 @@ START_SECTION(schema_column_counts)
   // clause: the pins now run to 21, and the deconv block starts at 25 rather than 22. The insertion
   // point was chosen for legibility rather than to dodge that churn, because golden comparison resolves
   // columns by header NAME: a reorder costs nothing at the goldens and only this section has to move.
-  TEST_EQUAL(r.headers.size(), 32)
+  // Then ADR-0038: + quant_channels/quant_condition_means/quant_fold_change/quant_verdict, the isobaric
+  // quantification result, measured on the 'Q' quantification scan and sentinel-valued on every other
+  // row (32 -> 36). APPENDED after dequeue_ts rather than grouped with the other "what did this scan
+  // return" columns, and that choice is load-bearing here: every r.colIndex pinned below is <= 21, so
+  // appending is the one placement that adds four columns while leaving every single pin valid. Only
+  // this count and r.headers.back() move -- which is the same admissibility argument ADR-0012 and
+  // ADR-0026 d6 make above for scan_commands.
+  TEST_EQUAL(r.headers.size(), 36)
   // I2: +6 iso/snr/intensity; P5: +precursor_id; +theoretical_masses/diff_da/diff_ppm; C2:
   // +ms3_fragment_coverage; + tic_coverage; C: + flash_extender_score; then + tag_count (beside
   // flash_extender_score, the other "how strong is this ID" scalar) and + fragment_qscores (inside the
@@ -236,7 +243,7 @@ START_SECTION(schema_column_counts)
   TEST_EQUAL(c.colIndex("faims_enabled"), 30)
   TEST_EQUAL(r.headers.front(), std::string("tracking_id"))
   TEST_EQUAL(r.colIndex("ms_level"), 1)
-  TEST_EQUAL(r.headers.back(), std::string("dequeue_ts"))        // reordered: dequeue_ts is now the trailing column
+  TEST_EQUAL(r.headers.back(), std::string("quant_verdict"))     // ADR-0038: the quant block is appended after dequeue_ts
   TEST_EQUAL(r.colIndex("winner_tracking_id"), 21)
   TEST_EQUAL(r.colIndex("processing_duration_ms"), 10)           // grouped up front with the other duration columns
   TEST_EQUAL(r.colIndex("child_ids"), 4)

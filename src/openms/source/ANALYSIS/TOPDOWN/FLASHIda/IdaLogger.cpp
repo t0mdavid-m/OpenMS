@@ -128,7 +128,14 @@ namespace OpenMS
                             << "winner_tracking_id\t"  // F5: group-completing exploration winner pointer
                             << "activation_type\tcollision_energy\treaction_time\t"
                             << "deconv_masses\tdeconv_qscores\tdeconv_charges\tdeconv_intensities\t"
-                            << "resolve_ts\treceived_ts\tdequeue_ts\n";
+                            << "resolve_ts\treceived_ts\tdequeue_ts\t"
+                            // ADR-0038. Isobaric quantification, measured on the 'Q' quantification
+                            // scan and nowhere else; every other row carries the sentinels. APPENDED,
+                            // deliberately: every scan_results colIndex pinned in
+                            // FLASHIda_LoggingFields_test's schema_column_counts is <= 21, so appending
+                            // is the one placement that adds columns without invalidating a single pin
+                            // -- only the count and headers.back() move.
+                            << "quant_channels\tquant_condition_means\tquant_fold_change\tquant_verdict\n";
         results_tsv_stream_.flush();
       }
     }
@@ -590,7 +597,15 @@ namespace OpenMS
     }
     results_tsv_stream_ << "\t" << resolve_ts
                         << "\t" << received_ts
-                        << "\t" << dequeue_ts << "\n";
+                        << "\t" << dequeue_ts
+                        // ADR-0038. No stream manipulator here on purpose: std::fixed/setprecision are
+                        // STICKY on this stream (see the notes above), and results_tsv_stream_ is
+                        // deliberately left at the default, which is what renders the -1.0 sentinel as
+                        // "-1" exactly like remaining_ratio and exploration_score already do.
+                        << "\t" << row.quant_channels
+                        << "\t" << row.quant_condition_means
+                        << "\t" << row.quant_fold_change
+                        << "\t" << row.quant_verdict << "\n";
     results_tsv_stream_.flush();
   }
 
