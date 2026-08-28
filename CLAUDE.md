@@ -444,6 +444,26 @@ the caller's responsibility.
   substring also matches `"10 targets"` / `"20 targets"`, which command fan-out makes routine.
   `parseFLASHIdaLog` is one reader; `PrecursorSelection`'s `targeting.target_log_files` loader is the
   other, and it is in-scope — feeding an engine-written `ida.log` back in is a supported round trip.
+- **`Mass=` and `AllMass=` are the same rendering, and that is asserted** (ADR-0035 decision 5).
+  Both are `std::fixed << setprecision(4)`, so a target's mass appears **verbatim** among its own
+  entry's `AllMass=` tokens. `Mass=` used to say `std::defaultfloat` with no precision of its own —
+  and every number on these lines goes through ONE ostream whose flags and precision are **sticky**,
+  so it inherited the header's `setprecision(4)` on an entry's first target and the previous line's
+  `Features` `setprecision(6)` on the rest. Under `defaultfloat` that counts *significant digits*:
+  `Mass=1.235e+04` and `Mass=12383.3` against an `AllMass=` of `12351.3933` / `12383.3180`, up to
+  ~5 Da wrong, on 99.4 % of targets in the field. A new field added to these lines **must set its
+  own precision**; `ida_log_target_line_precision_is_pinned` pins every token's rendered width so
+  the next one cannot repeat it silently.
+- **`ChargeRange` is the species' measured charge envelope**, `PeakGroup::getAbsChargeRange()` of
+  the PeakGroup the command was built from (ADR-0035 decision 6) — not the trigger charge printed
+  twice, which is what it was. `writeIDALogEntry` takes it through `ms2_sources`, a vector
+  **index-parallel** to `ms2_commands` filled at push time in `FLASHIda::processScan`, rather than
+  looking the mass up in the deconvolved spectrum: several PeakGroups routinely share one mass in a
+  survey (ADR-0036 split envelopes — 48 of the 1324 committed golden target lines sit on a species
+  with 2–4 of them), each carrying a different charge subset, so a lookup would pick one of several
+  answers with nothing to notice. It leaves FLASHIda via `parseFLASHIdaLog` → `setAbsChargeRange` and
+  reaches `FLASHDeconvFeatureFile` as columns 10–11 (`z`, `Z`) of `*_ms2.feature`, so a degenerate
+  `[z-z]` told TopPIC every ida.log-sourced feature was single-charge.
 - **Rows are written at dequeue**, from 2 sites inside `getNextScanCommand`. So row order == dequeue
   order, and an enqueued-but-never-dequeued command never appears. Only the priority-dequeue site
   passes `precursor_id` and `ms3_proteoform` (a one-shot `takeMS3Proteoform`); the scheduled-prescan
