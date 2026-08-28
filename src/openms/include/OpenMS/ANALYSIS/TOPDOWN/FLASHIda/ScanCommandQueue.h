@@ -121,6 +121,19 @@ namespace OpenMS
     /// Dequeue next command by priority (0 = highest). Returns nullopt if all queues empty.
     std::optional<ScanCommand> dequeue();
 
+    /// Push @p cmd and take the next command in ONE lock acquisition.
+    ///
+    /// push() and dequeue() are each thread-safe; the SEQUENCE is not. Between them the lock is
+    /// released, so a concurrent drain's dequeue() can take the command this thread just pushed.
+    /// Harmless at the Step 2 cycle-time push, which simply takes whatever else is queued -- but at
+    /// the Step 5 idle survey the caller falls back to logging its own copy, so the command is
+    /// emitted TWICE while the thief, having consumed a command it never built, never allocates a
+    /// tracking id at all. That is a duplicate in the tracking-id channel, which is the join key
+    /// from scan_commands.tsv to the other four streams (ADR-0008).
+    /// Measured on gcc/Linux: 19-42 duplicate ids per 1000 concurrent drains, at EVERY core count
+    /// including --cpus 1. Never observed on MSVC in ~45 CI runs since 2026-08-14.
+    std::optional<ScanCommand> pushAndDequeue(ScanCommand cmd);
+
     /// Register a bypass command (AGC, etc.) in pending_scan_map_ without queuing it
     void registerPending(const ScanCommand& cmd);
 
@@ -230,6 +243,13 @@ namespace OpenMS
 
     /// Get next tracking ID (not thread-safe; caller must hold queue_mutex_)
     int nextTrackingIdInt_();
+
+    /// push()/dequeue() bodies WITHOUT the lock; caller must hold queue_mutex_.
+    /// Trailing underscore = unlocked, the same convention nextTrackingIdInt_() uses.
+    /// They exist so pushAndDequeue() can run both under a single acquisition -- queue_mutex_ is
+    /// non-recursive, so it could not simply call the public wrappers.
+    void push_(ScanCommand cmd);
+    std::optional<ScanCommand> dequeue_();
 
   };
 

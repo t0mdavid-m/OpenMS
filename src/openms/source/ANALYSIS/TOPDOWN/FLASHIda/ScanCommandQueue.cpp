@@ -608,7 +608,11 @@ namespace OpenMS
   void ScanCommandQueue::push(ScanCommand cmd)
   {
     std::lock_guard<std::mutex> lock(queue_mutex_);
+    push_(cmd);
+  }
 
+  void ScanCommandQueue::push_(ScanCommand cmd)
+  {
     // Backstop only -- the builders already did this at construction, which is what makes the
     // value correct for every reader rather than just for the queue (see syncEnergyMirrors_).
     // Same helper on the same input, so it cannot disagree with them; it exists so a future
@@ -625,6 +629,11 @@ namespace OpenMS
   std::optional<ScanCommand> ScanCommandQueue::dequeue()
   {
     std::lock_guard<std::mutex> lock(queue_mutex_);
+    return dequeue_();
+  }
+
+  std::optional<ScanCommand> ScanCommandQueue::dequeue_()
+  {
     for (int p = 0; p < 4; ++p)
     {
       if (!queues_[p].empty())
@@ -639,6 +648,15 @@ namespace OpenMS
       }
     }
     return std::nullopt;
+  }
+
+  std::optional<ScanCommand> ScanCommandQueue::pushAndDequeue(ScanCommand cmd)
+  {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    push_(cmd);
+    // Cannot be nullopt: push_ clamps into [0,3] and we hold the lock across both, so the queue we
+    // just wrote to is still non-empty here. That is the whole point -- see the header.
+    return dequeue_();
   }
 
   void ScanCommandQueue::registerPending(const ScanCommand& cmd)

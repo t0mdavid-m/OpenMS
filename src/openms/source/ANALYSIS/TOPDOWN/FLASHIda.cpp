@@ -770,8 +770,7 @@ FLASHIda::FLASHIda(char* arg) :
 
       std::cout << "[TRACK-CREATE] id=" << ms1_id_str << " ms_level=1 type=idle_ms1" << std::endl;
 
-      queue_.push(ms1_cmd);
-      dequeued = queue_.dequeue();
+      dequeued = queue_.pushAndDequeue(ms1_cmd);
 
       // Re-entering dequeue() rather than returning ms1_cmd directly is what lets the idle survey
       // inherit the whole Step 4 tail below -- recordMS1Time(), the enqueue/dequeue timestamps,
@@ -779,9 +778,18 @@ FLASHIda::FLASHIda(char* arg) :
       // none of those and would silently stop resetting the cycle-time clock.
       //
       // It is also the correct read under a concurrent processScan: if that thread pushed
-      // higher-priority work between the two dequeues, that command wins and ours waits at
-      // priority 3. The fallback covers only a cancelByScanIds race against an id nothing outside
-      // this scope has yet seen -- getNextScanCommand must never return 0 for an empty queue.
+      // higher-priority work BEFORE our atomic push-and-take, that command wins and ours waits at
+      // priority 3. Taking under the SAME lock as the push is what makes this safe -- see
+      // ScanCommandQueue::pushAndDequeue().
+      //
+      // The fallback below is now UNREACHABLE BY CONSTRUCTION: we pushed at a clamped priority
+      // under the lock we then dequeue under, so dequeue_ always finds something, and
+      // cancelByScanIds can no longer interleave either. It is retained only as a belt-and-braces
+      // backstop for the hard invariant that getNextScanCommand must never return 0 for an empty
+      // queue. Do NOT "restore" the old push()-then-dequeue() split to make it reachable again:
+      // that gap let a concurrent drainer steal this survey, after which this thread logged its
+      // local copy of a command the thief had ALREADY logged -- a duplicate tracking id, and one
+      // fewer id allocated, because the thief never built a command of its own.
       if (!dequeued.has_value()) dequeued = ms1_cmd;
     }
 
