@@ -177,8 +177,15 @@ namespace OpenMS
       // representable is the point: a species present in one condition and absent in the other is the
       // strongest result the experiment can produce, and collapsing it into a rejection is what the
       // (unreachable) only_one_condition flag existed to avoid.
-      std::string quant_channels;         ///< ';'-joined, all N corrected intensities in getChannelInformation() order
-      std::string quant_condition_means;  ///< ';'-joined pair, in quantification.conditions order (== ratio order)
+      /// All N corrected channel intensities in getChannelInformation() order; EMPTY = not measured.
+      /// Held as values and joined by the writer, the same division of labour as child_ids — the
+      /// producer should not have to know the delimiter.
+      std::vector<double> quant_channels;
+      /// The two condition means, in quantification.conditions order (== the ratio direction);
+      /// EMPTY = not measured. This is also what disambiguates quant_fold_change's -1: empty means
+      /// "not measured", two values with -1 means "measured, but a condition was wholly absent so
+      /// the ratio has no finite value".
+      std::vector<double> quant_condition_means;
       double quant_fold_change = -1.0;    ///< mean(conditions[0]) / mean(conditions[1]); -1 = no finite ratio
       std::string quant_verdict;          ///< differential | not_differential | incomplete_channels | extraction_failed
     };

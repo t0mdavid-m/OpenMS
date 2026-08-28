@@ -321,7 +321,9 @@ namespace OpenMS
       case 'S': return "survey";
       case 'A': return "agc";
       case 'R': return "recording";
-      case 'F': return "followup";
+      // ADR-0038: 'F'/"followup" is retired. It named the scan quantification BOUGHT, which was
+      // never measured; 'Q' names the scan quantification MEASURES.
+      case 'Q': return "quantification";
       case 'C': return "conditional";
       case 'E': return "exploration";
       default: return "unknown";
@@ -627,6 +629,19 @@ namespace OpenMS
       // below for both branches alike. Four columns => three tabs (it was two while there were three).
       results_tsv_stream_ << "\t\t\t";
     }
+    // ADR-0038 quant block. Joined HERE rather than by the producer, so processScan hands over
+    // values and never learns the delimiter. Built in a LOCAL ostringstream: std::fixed /
+    // setprecision are sticky, and results_tsv_stream_ is deliberately left at the stream default
+    // (see the notes above), which is also what renders the -1.0 sentinels as "-1".
+    // Empty vector -> empty cell, which is the "not measured" sentinel for every non-'Q' row.
+    auto joinQuant = [](const std::vector<double>& v) {
+      std::ostringstream os;
+      for (size_t i = 0; i < v.size(); ++i) { if (i) os << ';'; os << v[i]; }
+      return os.str();
+    };
+    const std::string quant_channels_str = joinQuant(row.quant_channels);
+    const std::string quant_means_str    = joinQuant(row.quant_condition_means);
+
     results_tsv_stream_ << "\t" << resolve_ts
                         << "\t" << received_ts
                         << "\t" << dequeue_ts
@@ -634,8 +649,8 @@ namespace OpenMS
                         // STICKY on this stream (see the notes above), and results_tsv_stream_ is
                         // deliberately left at the default, which is what renders the -1.0 sentinel as
                         // "-1" exactly like remaining_ratio and exploration_score already do.
-                        << "\t" << row.quant_channels
-                        << "\t" << row.quant_condition_means
+                        << "\t" << quant_channels_str
+                        << "\t" << quant_means_str
                         << "\t" << row.quant_fold_change
                         << "\t" << row.quant_verdict << "\n";
     results_tsv_stream_.flush();

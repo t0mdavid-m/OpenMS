@@ -342,15 +342,63 @@ namespace OpenMS
     ChargeAcquisitionMode fragment_charges = ChargeAcquisitionMode::Single;
   };
 
-  /// Isobaric quantification configuration
+  /// Isobaric quantification configuration (ADR-0038).
+  ///
+  /// The QUANTIFICATION SCAN is `ms_settings.ms2_quant`: rostered once per selected precursor,
+  /// labelled `'Q'`, and the only scan whose reporter ions are ever measured. A differential
+  /// verdict then BUYS the IDENTIFICATION scan, `ms_settings.ms2`, labelled `'R'` -- which is why
+  /// `ms2` leaves the unconditional roster whenever this is enabled.
+  ///
+  /// The reverse arrangement -- measure the base MS2, buy a "quant follow-up" -- is what shipped
+  /// until ADR-0038 and could never work: it screened for reporter ions on a scan whose activation
+  /// (ETD, in the only config that enabled the feature) cannot release them, then acquired the HCD
+  /// scan that could and never looked at it.
   struct OPENMS_DLLAPI QuantConfig
   {
+    /// One of the two experimental conditions the fold change is taken over. Channels are held as
+    /// ORDINALS into the selected method's getChannelInformation(), resolved from the authored
+    /// names once at load, so no consumer downstream needs the name->m/z table -- and so an
+    /// unknown channel name fails at load rather than silently reading the wrong intensity.
+    struct Condition
+    {
+      std::string name;
+      std::vector<size_t> channels;
+    };
+
     bool enabled = false;
+    /// One of the seven isobaric methods OpenMS ships, spelled as
+    /// TopDownIsobaricQuantification's own valid strings. `"none"` is deliberately NOT among them:
+    /// `enabled` is the switch, so `enabled: true, labelling: "none"` is unwritable.
+    std::string labelling = "tmt6plex";
     double reporter_mz_tol = 0.002;
     double fold_change_threshold = 1.4;
-    ScanConfig follow_up_scan;  ///< Follow-up scan config for quant follow-up MS2, RESOLVED from a name
-    bool has_follow_up = false;      ///< whether quantification.follow_up_scan named anything
-    std::string follow_up_name;      ///< the referenced name, for diagnostics only
+    /// EXACTLY TWO, and the ARRAY ORDER IS THE RATIO DIRECTION:
+    ///   fold_change = mean(conditions[0]) / mean(conditions[1])
+    /// Authored as a JSON array rather than an object because nlohmann's object_t is a std::map,
+    /// so an object would sort the two conditions alphabetically and silently decide which is the
+    /// numerator -- the same trap Config.cpp already documents for additional_ms2 dispatch order.
+    std::vector<Condition> conditions;
+    /// Isotope-impurity correction matrix, one entry per channel, Thermo data-sheet spelling.
+    /// EMPTY = use the selected method's stock matrix (IsobaricQuantifier's own default, which
+    /// corrects impurity and does nothing else because `normalization` defaults false). An
+    /// all-zero matrix yields the identity, i.e. correction off.
+    std::vector<std::string> correction_matrix;
+    /// `ms_settings.ms2`: the scan a differential verdict buys. In a quant config it is
+    /// deliberately NOT on levels_[2].scans -- the quantification scan holds that slot, and that
+    /// swap is the whole of ADR-0038.
+    ///
+    /// Both scan configs below are copied here UNCONDITIONALLY, whatever `enabled` says. Only the
+    /// ROSTER decision is conditional. That split is what lets the generated schema reference --
+    /// which has every key populated but quantification off -- still assert that ms2_quant's keys
+    /// round-trip; tying the copy to `enabled` would have made the only new scan slot in this
+    /// schema unreachable from the one fixture whose job is to prove keys reachable.
+    ScanConfig identification_scan;
+    /// `ms_settings.ms2_quant`: the quantification scan, rostered and measured when enabled.
+    ScanConfig quantification_scan;
+    /// Whether `ms_settings.ms2_quant` was authored. Distinct from "levels_[2].scans is non-empty",
+    /// which stays true when ms2_quant is absent but ms2 is present -- the exact state validate()
+    /// has to reject, since it is plain DDA that silently quantifies nothing.
+    bool has_quant_scan = false;
   };
 
   /// Where IdaLogger writes its five streams.

@@ -140,10 +140,19 @@ FLASHIda::FLASHIda(char* arg) :
       return 0;
     }
 
-    // Locals shared by all levels: the follow-up-scan flag and the child-id accumulator.
+    // Locals shared by all levels: the two scan-role flags and the child-id accumulator.
+    //
+    // 'F' is gone with ADR-0038. The two roles it used to conflate are now separate marks:
+    //   'C'  a tagging follow-up  -- bought by tag detection, must not buy another (depth one)
+    //   'Q'  the QUANTIFICATION scan -- rostered, primary, and the only scan ever measured
+    // The identification scan a differential verdict buys is an ordinary 'R', which is what keeps
+    // 'R' meaning "identification MS2" in every mode. It is safe for it to be indistinguishable
+    // from a rostered MS2 precisely because the screen gate below keys on 'Q' rather than on
+    // "is not a follow-up": an 'R' is never re-screened, so it can never buy a second scan.
     const bool is_follow_up_scan =
-        std::strlen(parent_ctx.scan_description) >= 4 &&
-        (parent_ctx.scan_description[3] == 'F' || parent_ctx.scan_description[3] == 'C');
+        std::strlen(parent_ctx.scan_description) >= 4 && parent_ctx.scan_description[3] == 'C';
+    const bool is_quant_scan =
+        std::strlen(parent_ctx.scan_description) >= 4 && parent_ctx.scan_description[3] == 'Q';
     std::vector<std::string> child_ids;
 
     // Carriers for the file-backed TSV rows (scan_results + identification): each branch fills these,
@@ -222,12 +231,19 @@ FLASHIda::FLASHIda(char* arg) :
         {
           // One precursor_id per MS1-selected precursor; all of its MS2 scan-config commands share it.
           const int precursor_id = allocPrecursorId_();
-          for (const auto& sc : config_.level(2).scans)
+          // With quantification on, Config puts the quantification scan in the roster's PRIMARY
+          // slot and holds ms_settings.ms2 back as the scan a differential verdict buys, so
+          // scans[0] is the 'Q' (ADR-0038). Everything else on the roster is an ordinary 'R'.
+          const bool quant_owns_primary =
+              config_.quantification().enabled && config_.quantification().has_quant_scan;
+          const auto& roster = config_.level(2).scans;
+          for (size_t si = 0; si < roster.size(); ++si)
           {
-            ScanConfig ms2_config = sc;
+            ScanConfig ms2_config = roster[si];
+            const char marker = (quant_owns_primary && si == 0) ? 'Q' : 'R';
             const std::vector<int>* allowed_i =
                 i < (int)selection_.triggerAuthoredCharges().size() ? &selection_.triggerAuthoredCharges()[i] : nullptr;
-            ScanCommand cmd = queue_.buildMS2(selected[i], sel_charges[i], ms2_config, 2, parent_tracking_id, allowed_i);
+            ScanCommand cmd = queue_.buildMS2(selected[i], sel_charges[i], ms2_config, 2, parent_tracking_id, allowed_i, marker);
             // MS2 inherits the parent MS1's *processing* CV (the faims_cv arg), NOT parent_ctx.faims_cv:
             // in a FAIMS-skip run the MS1 command's stored CV differs from the CV it was processed at.
             cmd.faims_cv = faims_cv;
@@ -361,23 +377,38 @@ FLASHIda::FLASHIda(char* arg) :
         // asked of it is whether a target protein was detected. It is also 0 whenever tags existed but
         // matched no DB protein, which is why it is not the number any log reports; the identification
         // tag count on ProteoformMatch is, and that one is taken before any protein is consulted.
+        // Not on a quantification scan (ADR-0038). Its activation and energy were chosen to release
+        // a reporter ion, not to fragment informatively, so tags read off it would be read from the
+        // wrong spectrum -- and a 'C' follow-up bought here would be a third scan on the precursor
+        // before the identification scan has even run. Skipping the detection also skips the work.
         bool tags_found = false;
-        if (selection_.hasTargetProteinDatabase() && precursor_mass > 0)
+        if (selection_.hasTargetProteinDatabase() && precursor_mass > 0 && !is_quant_scan)
         {
           std::string ms2_activation = std::string(parent_ctx.stages[0].activation_type);
           tags_found = selection_.processMS2ForTagBasedTargeting(precursor_mass, ms2_activation) > 0;
         }
 
-        // Quantification follow-up (independent of tags)
-        if (config_.quantification().enabled && !config_.quantification().follow_up_scan.activation.empty()
-            && !is_follow_up_scan)
+        // --- Quantification: measure THIS scan, and buy the identification scan (ADR-0038) -------
+        // Gated on the scan's own mark, not on "is not a follow-up". Only a 'Q' is measured, so the
+        // identification scan it buys -- an ordinary 'R' -- is never re-screened and depth stays one
+        // without the marker having to distinguish a follow-up from a primary.
+        if (is_quant_scan && config_.quantification().enabled)
         {
-          if (quant_.isDifferentiallyAbundant(mzs, ints, length, rt_min, 2, "ms2_quant",
-                                              config_.quantification().reporter_mz_tol, config_.quantification().fold_change_threshold, false))
+          const auto q = quant_.measure(mzs, ints, length, rt_min, 2, "ms2_quant");
+
+          // Every field is logged, so what scan_results reports IS what the engine decided on.
+          results_row.quant_verdict = Quantification::verdictName(q.verdict);
+          results_row.quant_fold_change = q.fold_change;
+          results_row.quant_channels = q.channels;
+          results_row.quant_condition_means = {q.condition_means[0], q.condition_means[1]};
+
+          if (q.verdict == Quantification::Result::Verdict::Differential)
           {
-            auto followup = queue_.buildFollowUp(parent_ctx, config_.quantification().follow_up_scan, 'F');
-            stampAndPush_(followup, precursor_id);  // P5: follow-up inherits the MS2's precursor_id
-            child_ids.push_back(ScanCommandQueue::encode(followup.scan_id));
+            // ms_settings.ms2 -- held on quant_ rather than rostered, because in a quant config the
+            // quantification scan holds the roster's primary slot and this one is conditional.
+            auto ident = queue_.buildFollowUp(parent_ctx, config_.quantification().identification_scan, 'R');
+            stampAndPush_(ident, precursor_id);  // inherits the quantification scan's precursor_id
+            child_ids.push_back(ScanCommandQueue::encode(ident.scan_id));
             commands_pushed++;
           }
         }
@@ -398,8 +429,12 @@ FLASHIda::FLASHIda(char* arg) :
         // identified at all -- no sequence tags, no fragments, no identification.tsv row.
         // The identification-row write below sits OUTSIDE this block deliberately and reads
         // ms3_targeting, which stays default-constructed when the call is skipped.
+        // Also skipped on a quantification scan (ADR-0038): MS3 targets picked off a reporter-release
+        // spectrum would be selected from a spectrum optimised for something else. Identification and
+        // MS3 both belong to the 'R' identification scan, which is the one chosen to fragment
+        // informatively -- and which this Q scan may be about to buy.
         Exploration::NextLevelResult ms3_targeting;
-        if (!config_.characterization().protein_sequence.empty())
+        if (!config_.characterization().protein_sequence.empty() && !is_quant_scan)
         {
           // initiateNextLevel stamps each command's parent with the MS2 id (parent_ctx.scan_id) at creation.
           // It serves BOTH MS3 shapes, chosen by config_.hasExploration(3): with MS3 exploration off it
@@ -741,7 +776,9 @@ FLASHIda::FLASHIda(char* arg) :
       ms1_cmd.faims_cv = faims_cv;
       ms1_cmd.scan_id = queue_.nextTrackingId();
       ms1_cmd.priority = 0;
-      ms1_cmd.scan_description[3] = 'C';
+      // (A `scan_description[3] = 'C'` used to sit here and was DEAD: the snprintf four lines below
+      // overwrites the whole buffer, so a cycle-time MS1 has always gone out as 'S' -- correctly, it
+      // is a survey. Removed with ADR-0038 rather than left to look like a third marker site.)
       queue_.recordMS1Time();
 
       std::string id_str = ScanCommandQueue::encode(ms1_cmd.scan_id);

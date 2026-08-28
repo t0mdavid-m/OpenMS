@@ -37,14 +37,24 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 #include <OpenMS/config.h>
 
+#include <array>
+#include <string>
+#include <vector>
+
 namespace OpenMS
 {
 
   /**
-   * @brief Isobaric quantification component for FLASHIda.
+   * @brief Isobaric quantification component for FLASHIda (ADR-0038).
    *
-   * Owns the TMT reporter-ion differential abundance test used to decide
-   * whether a precursor warrants a quantification follow-up MS2 scan.
+   * Measures the reporter-ion channels of a returning QUANTIFICATION scan -- the `'Q'`-labelled
+   * `ms_settings.ms2_quant`, rostered once per selected precursor -- and reports both the numbers
+   * and the verdict. A differential verdict is what buys the identification scan.
+   *
+   * This is the only place reporter ions are measured, and it is deliberately NOT the scan that
+   * gets bought. The reverse arrangement shipped until ADR-0038 and could not work: it screened a
+   * scan whose activation cannot release the reporter, then acquired the one that can and never
+   * read it.
    */
   class OPENMS_DLLAPI Quantification
   {
@@ -52,34 +62,57 @@ namespace OpenMS
     /// Constructor — holds a reference to the shared Config object
     explicit Quantification(const Config& config);
 
-    /**
-     * @brief Determine whether a spectrum shows differential abundance across TMT channels.
-     *
-     * Extracts TMT6plex reporter-ion channels and compares the mean intensities of
-     * the first three channels (sample 1) against the last three (sample 2).
-     *
-     * @param mzs        m/z values of the input spectrum
-     * @param ints       intensity values of the input spectrum
-     * @param length     number of entries in mzs / ints
-     * @param rt         retention time in seconds
-     * @param ms_level   MS level of the spectrum
-     * @param name       spectrum name (passed to MSSpectrum)
-     * @param reporter_mz_tol      reporter ion m/z tolerance
-     * @param fold_change_threshold fold-change threshold above which a feature is
-     *                              considered differentially abundant
-     * @param only_one_condition   when true, treat a completely missing condition
-     *                              as differentially abundant
-     * @return true if the spectrum is differentially abundant, false otherwise
-     */
-    bool isDifferentiallyAbundant(const double* mzs,
-                                  const double* ints,
-                                  int length,
-                                  double rt,
-                                  int ms_level,
-                                  const char* name,
-                                  double reporter_mz_tol,
-                                  double fold_change_threshold,
-                                  bool only_one_condition);
+    /// Outcome of measuring one quantification scan. Every field is logged (scan_results.tsv), so
+    /// the value reported is by construction the value the engine decided on.
+    struct Result
+    {
+      enum class Verdict
+      {
+        Differential,       ///< conditions differ beyond fold_change_threshold, OR one is wholly absent
+        NotDifferential,    ///< measured cleanly, ratio inside the threshold
+        IncompleteChannels, ///< an ASSIGNED channel was empty; no honest ratio exists
+        ExtractionFailed    ///< the extractor produced no usable channel set for this spectrum
+      };
+
+      Verdict verdict = Verdict::ExtractionFailed;
+      /// All N corrected channel intensities, in getChannelInformation() order. Every channel is
+      /// reported, including any assigned to no condition -- gating ignores those, the log does not.
+      std::vector<double> channels;
+      /// Mean of each condition, in `quantification.conditions` order (== the ratio direction).
+      std::array<double, 2> condition_means {{0.0, 0.0}};
+      /// mean(conditions[0]) / mean(conditions[1]); -1.0 when a condition is wholly absent, so the
+      /// ratio has no finite value. Callers distinguish that from "not measured" by the presence of
+      /// condition_means, never by this field alone.
+      double fold_change = -1.0;
+    };
+
+    /// Measure the reporter channels of one quantification scan.
+    ///
+    /// Reads every parameter but the spectrum from `config_.quantification()` -- the labelling
+    /// scheme, the tolerance, the two conditions and the correction matrix. That reference was
+    /// held and never read before ADR-0038.
+    ///
+    /// @param mzs       m/z values of the returning spectrum
+    /// @param ints      intensity values, parallel to @p mzs
+    /// @param length    number of entries in @p mzs / @p ints
+    /// @param rt        retention time
+    /// @param ms_level  MS level of the spectrum
+    /// @param name      spectrum name (passed through to MSSpectrum)
+    Result measure(const double* mzs, const double* ints, int length,
+                   double rt, int ms_level, const char* name) const;
+
+    /// Render a Verdict as the string logged in scan_results.tsv's `quant_verdict`.
+    static const char* verdictName(Result::Verdict v);
+
+    /// The accepted `quantification.labelling` values -- TopDownIsobaricQuantification's own valid
+    /// strings MINUS "none", because `quantification.enabled` is the switch (ADR-0038).
+    static const std::vector<std::string>& labellingNames();
+
+    /// The channel NAMES of one labelling scheme, in getChannelInformation() order, or empty for an
+    /// unknown scheme. Config calls this at load to resolve authored condition channel names to
+    /// ordinals, so an unknown channel fails loudly at load rather than silently reading the wrong
+    /// intensity at acquisition time.
+    static std::vector<std::string> channelNames(const std::string& labelling);
 
   private:
     const Config& config_;

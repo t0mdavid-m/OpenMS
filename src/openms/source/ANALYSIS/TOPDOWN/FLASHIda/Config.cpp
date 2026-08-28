@@ -34,6 +34,12 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 
+// For the isobaric labelling vocabulary and the channel-name table, so an authored condition
+// channel resolves to an ordinal HERE, at load. Quantification.h includes Config.h, not the other
+// way round, so this is a one-way dependency and not a cycle.
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Quantification.h>
+
+#include <algorithm>
 #include <iostream>
 #include <stdexcept>
 #include <set>
@@ -496,19 +502,95 @@ namespace OpenMS
     // --- conditional_ms2 (top-level only) ---
     targeting_.conditional_ms2_enabled = config.value("conditional_ms2", false);
 
-    // --- quantification ---
+    // --- quantification (ADR-0038) ---
     auto quant = config.value("quantification", json::object());
+
+    // Two retired keys, both worth their own message: silently rejecting them as "unknown" would
+    // send an author looking for a typo when the model underneath changed.
+    if (quant.contains("follow_up_scan"))
+      throw std::invalid_argument(
+          "Config: 'quantification.follow_up_scan' is retired (ADR-0038). The scan it named was "
+          "acquired but never measured, while the scan that WAS measured -- the base MS2 -- could "
+          "not release the reporter ion. The roles are now explicit: 'ms_settings.ms2_quant' is the "
+          "quantification scan (rostered per precursor, measured), and 'ms_settings.ms2' is the "
+          "identification scan a differential verdict buys.");
+    if (quant.contains("only_one_condition"))
+      throw std::invalid_argument(
+          "Config: 'quantification.only_one_condition' is retired (ADR-0038). It was never "
+          "reachable -- no emit DTO carried it -- and its intent is now unconditional: a condition "
+          "that is WHOLLY absent reports 'differential', because a species present in one condition "
+          "and absent in the other is the strongest result the experiment can produce.");
+
     rejectUnknownKeys(quant,
-        {"enabled", "reporter_mz_tol", "fold_change_threshold", "follow_up_scan"}, "quantification");
+        {"enabled", "labelling", "reporter_mz_tol", "fold_change_threshold",
+         "conditions", "correction_matrix"}, "quantification");
     quant_.enabled = quant.value("enabled", false);
+    quant_.labelling = quant.value("labelling", std::string("tmt6plex"));
     quant_.reporter_mz_tol = quant.value("reporter_mz_tol", 0.002);
     quant_.fold_change_threshold = quant.value("fold_change_threshold", 1.4);
 
-    if (quant.contains("follow_up_scan") && quant["follow_up_scan"].is_object())
+    const auto& valid_labellings = Quantification::labellingNames();
+    if (std::find(valid_labellings.begin(), valid_labellings.end(), quant_.labelling)
+        == valid_labellings.end())
     {
-      auto fus = quant["follow_up_scan"];
-      rejectUnknownKeys(fus, kScanKeys, "quantification.follow_up_scan");
-      parseScanConfig(fus, quant_.follow_up_scan, "Orbitrap");
+      std::string known;
+      for (const auto& n : valid_labellings) { if (!known.empty()) known += ", "; known += n; }
+      throw std::invalid_argument(
+          "Config: unknown 'quantification.labelling' value '" + quant_.labelling
+          + "'. Valid: " + known + ". ('none' is deliberately not accepted -- "
+            "'quantification.enabled' is the switch.)");
+    }
+
+    if (quant.contains("correction_matrix"))
+    {
+      if (!quant["correction_matrix"].is_array())
+        throw std::invalid_argument(
+            "Config: 'quantification.correction_matrix' must be an array of strings, one per "
+            "channel (Thermo data-sheet spelling, e.g. \"0.0/0.0/5.09/0.0\"). Omit it to use the "
+            "method's stock matrix; an all-zero matrix turns correction off.");
+      for (const auto& row : quant["correction_matrix"])
+        quant_.correction_matrix.push_back(row.get<std::string>());
+    }
+
+    // Conditions are an ARRAY, never an object: nlohmann's object_t is a std::map, so an object
+    // would sort the two alphabetically and silently decide which is the numerator. The array order
+    // IS the ratio direction. Channel NAMES resolve to ordinals here, at load, so an unknown
+    // channel fails loudly instead of reading the wrong intensity at acquisition time.
+    if (quant.contains("conditions"))
+    {
+      if (!quant["conditions"].is_array())
+        throw std::invalid_argument(
+            "Config: 'quantification.conditions' must be an ARRAY of exactly two objects "
+            "{name, channels}. The array order is the ratio direction: "
+            "fold_change = mean(conditions[0]) / mean(conditions[1]).");
+
+      const std::vector<std::string> channel_names = Quantification::channelNames(quant_.labelling);
+      std::string known_channels;
+      for (const auto& c : channel_names)
+      { if (!known_channels.empty()) known_channels += ", "; known_channels += c; }
+
+      for (const auto& cond : quant["conditions"])
+      {
+        rejectUnknownKeys(cond, {"name", "channels"}, "quantification.conditions[]");
+        QuantConfig::Condition parsed;
+        parsed.name = cond.value("name", std::string{});
+        if (!cond.contains("channels") || !cond["channels"].is_array() || cond["channels"].empty())
+          throw std::invalid_argument(
+              "Config: quantification condition '" + parsed.name
+              + "' must name a non-empty 'channels' array. Valid channels for "
+              + quant_.labelling + ": " + known_channels + ".");
+        for (const auto& ch : cond["channels"])
+        {
+          const std::string cname = ch.get<std::string>();
+          auto it = std::find(channel_names.begin(), channel_names.end(), cname);
+          if (it == channel_names.end())
+            throw std::invalid_argument(
+                "Config: quantification condition '" + parsed.name + "' names unknown channel '"
+                + cname + "'. Valid channels for " + quant_.labelling + ": " + known_channels + ".");
+          parsed.channels.push_back(static_cast<size_t>(it - channel_names.begin()));
+        }
+        quant_.conditions.push_back(std::move(parsed));
+      }
     }
 
     // --- faims ---
@@ -532,14 +614,16 @@ namespace OpenMS
     // ms1/ms2/ms3 are bare objects (they were arrays); extra MS2 blocks live in the name-keyed
     // additional_ms2 map and reach the dispatch roster only by being REFERENCED.
     auto ms_settings = config.value("ms_settings", json::object());
-    rejectUnknownKeys(ms_settings, {"ms1", "ms2", "ms3", "additional_ms2"}, "ms_settings");
+    // ms2_quant is a bare slot beside ms1/ms2/ms3, not a name reference (ADR-0038) -- the same
+    // shape characterization already uses, where the decision section holds no scan config and
+    // ms_settings.ms3 supplies the parameters with no key pointing at it.
+    rejectUnknownKeys(ms_settings, {"ms1", "ms2", "ms2_quant", "ms3", "additional_ms2"}, "ms_settings");
 
     if (ms_settings.contains("ms2") && ms_settings["ms2"].is_array())
       throw std::invalid_argument(
           "Config: 'ms_settings.ms2' is no longer an array. It is now a single scan object; "
           "additional MS2 configs go in 'ms_settings.additional_ms2' as a name->object map and are "
-          "referenced from precursor_selection.additional_scans, tagging.follow_up_scan or "
-          "quantification.follow_up_scan.");
+          "referenced from precursor_selection.additional_scans or tagging.follow_up_scan.");
     if (ms_settings.contains("ms3") && ms_settings["ms3"].is_array())
       throw std::invalid_argument(
           "Config: 'ms_settings.ms3' is no longer an array. It is now a single scan object. "
@@ -574,6 +658,13 @@ namespace OpenMS
     {
       primary_ms2 = parseNamedScan(ms_settings["ms2"], "ms_settings.ms2");
       has_primary_ms2 = true;
+    }
+    ScanConfig quant_scan;
+    bool has_quant_scan = false;
+    if (ms_settings.contains("ms2_quant") && ms_settings["ms2_quant"].is_object())
+    {
+      quant_scan = parseNamedScan(ms_settings["ms2_quant"], "ms_settings.ms2_quant");
+      has_quant_scan = true;
     }
     if (ms_settings.contains("ms3") && ms_settings["ms3"].is_object())
       levels_[3].scans.push_back(parseNamedScan(ms_settings["ms3"], "ms_settings.ms3"));
@@ -611,8 +702,24 @@ namespace OpenMS
     // follow-up reference is simply absent here. Order comes from the ARRAY, never from map
     // iteration: nlohmann's object_t is a std::map, so iterating additional_ms2 would sort the
     // names alphabetically and silently reorder dispatch.
-    if (has_primary_ms2)
+    // ADR-0038 inverts which of the two MS2 configs is unconditional. With quantification enabled
+    // the QUANTIFICATION scan takes the roster's primary slot -- it is the screen, so it must be
+    // acquired to decide anything -- and ms_settings.ms2 becomes the IDENTIFICATION scan a
+    // differential verdict buys, held on quant_ rather than dispatched. `ms_settings.ms2` therefore
+    // means "the identification MS2" in every mode; only WHEN it fires changes.
+    // Copy both scan configs unconditionally; only the ROSTER below is conditional.
+    quant_.has_quant_scan = has_quant_scan;
+    if (has_quant_scan)  quant_.quantification_scan = quant_scan;
+    if (has_primary_ms2) quant_.identification_scan = primary_ms2;
+
+    if (quant_.enabled && has_quant_scan)
+    {
+      levels_[2].scans.push_back(quant_scan);
+    }
+    else if (has_primary_ms2)
+    {
       levels_[2].scans.push_back(primary_ms2);
+    }
     {
       std::set<std::string> seen;
       const auto& add_scans = ps.value("additional_scans", json::array());
@@ -636,10 +743,10 @@ namespace OpenMS
 
     // Follow-ups are name references now, resolved here so no downstream consumer learns that
     // names exist -- FLASHIda.cpp keeps reading targeting_.tagging_follow_up_scan verbatim.
+    // Tagging is the only remaining name-referenced follow-up. Quantification's went away with
+    // ADR-0038: its bought scan is ms_settings.ms2, a bare slot, so there is no name to resolve.
     resolveFollowUp_(config, "tagging", additional_ms2, targeting_.tagging_follow_up_scan,
                      targeting_.has_tagging_follow_up, targeting_.tagging_follow_up_name);
-    resolveFollowUp_(config, "quantification", additional_ms2, quant_.follow_up_scan,
-                     quant_.has_follow_up, quant_.follow_up_name);
 
     // additional_ms2 is ONE flat namespace serving two roles, and the roles are mutually exclusive:
     // additional_scans dispatches unconditionally once per precursor, a follow_up_scan fires
@@ -657,16 +764,16 @@ namespace OpenMS
             "conditional follow-up. Define two entries, or drop it from additional_scans.");
     };
     rejectDoubleDuty("tagging", targeting_.tagging_follow_up_name);
-    rejectDoubleDuty("quantification", quant_.follow_up_name);
 
     // A definition nobody references never fires. That is legal but almost always a mistake, and it
     // is the only check that catches a typo on the DEFINITION side (a typo on the reference side is
     // caught above). Warn rather than throw -- commenting a scan out of the roster while tuning is
     // a normal thing to do.
+    // Quantification no longer appears here: its two scans are the bare ms_settings.ms2_quant and
+    // ms_settings.ms2 slots, so neither is an additional_ms2 definition that could go unreferenced.
     for (const auto& kv : additional_ms2)
       if (additional_scan_names_.count(kv.first) == 0
-          && targeting_.tagging_follow_up_name != kv.first
-          && quant_.follow_up_name != kv.first)
+          && targeting_.tagging_follow_up_name != kv.first)
         std::cout << "[CONFIG-WARN] ms_settings.additional_ms2." << kv.first
                   << " is defined but never referenced; it will never be acquired.\n";
 
@@ -870,6 +977,46 @@ namespace OpenMS
       throw std::invalid_argument(
           "conditional_ms2 is true but tagging.follow_up_scan is not set. Name an "
           "ms_settings.additional_ms2 entry, or set conditional_ms2 to false.");
+
+    // --- quantification (ADR-0038) --------------------------------------------------------------
+    // Three structural rejections. These are NOT chemistry judgements -- there is deliberately no
+    // guard that the quantification scan's activation can release a reporter ion, and none that
+    // reporter_mz_tol is narrower than half the scheme's channel spacing. The user is trusted on
+    // both, which is exactly why quant_verdict is a four-way enum: it is now the only route by
+    // which a misconfigured screen is discovered.
+    if (quant_.enabled)
+    {
+      // 1. No quantification scan => nothing is rostered, ms_settings.ms2 stays unconditional, and
+      //    the run is plain DDA that silently quantifies nothing.
+      if (!quant_.has_quant_scan)
+        throw std::invalid_argument(
+            "Config: quantification.enabled is true but ms_settings.ms2_quant is not set. "
+            "ms2_quant is the quantification scan -- the one rostered per precursor and actually "
+            "measured (ADR-0038); ms_settings.ms2 is the identification scan a differential verdict "
+            "buys. Without ms2_quant nothing is measured and no identification scan is ever bought.");
+
+      // 2. No ratio without exactly two conditions. There is deliberately nothing behind this: the
+      //    positional 3-vs-3 split it replaces was correct only for six-plex and silently wrong for
+      //    every other scheme this ADR enables.
+      if (quant_.conditions.size() != 2)
+        throw std::invalid_argument(
+            "Config: quantification.conditions must name EXACTLY TWO conditions (got "
+            + std::to_string(quant_.conditions.size())
+            + "). fold_change = mean(conditions[0]) / mean(conditions[1]) is a two-group ratio; a "
+              "time course or dose series needs a different statistic, not a ratio of the first "
+              "two groups.");
+
+      // 3. Exploration at level 2 dispatches CE-sweep variants INSTEAD of the roster, so the
+      //    quantification scan is never acquired and every variant is labelled 'E' -- never
+      //    measured, never buying anything. The feature dies completely, and the one guard that
+      //    might have caught it (exactly-one-scan-config at a swept level) is SATISFIED here,
+      //    because the inverted roster has exactly one entry. Incompatible by construction.
+      if (hasExploration(2))
+        throw std::invalid_argument(
+            "Config: quantification.enabled and precursor_selection.exploration are incompatible. "
+            "Exploration replaces the level-2 roster with CE-sweep variants, so the quantification "
+            "scan would never be dispatched and nothing would ever be measured. Turn one off.");
+    }
 
     // NO ACTIVATION-COUPLING THROW HERE, deliberately (ADR-0030). This used to reject an authored
     // scan config pairing ETD with reaction_time <= 0, or HCD/CID with collision_energy <= 0. Its

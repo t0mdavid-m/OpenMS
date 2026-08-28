@@ -249,7 +249,7 @@ namespace OpenMS
   }
 
   ScanCommand ScanCommandQueue::buildMS2(const PeakGroup& pg, int charge, const ScanConfig& scan_config, int priority, int parent_scan_id,
-                                         const std::vector<int>* allowed_charges)
+                                         const std::vector<int>* allowed_charges, char marker)
   {
     std::lock_guard<std::mutex> lock(queue_mutex_);
     ScanCommand cmd{};
@@ -343,7 +343,10 @@ namespace OpenMS
     // Scan description: {3-char ID}R{mass_kDa}k@{charge}  (adaptive-precision mass token)
     std::string id_str = encode(id);
     std::string mass_tok = formatMassToken(pg.getMonoMass() / 1000.0, charge, '\0', 0);
-    std::snprintf(cmd.scan_description, 16, "%sR%s@%d", id_str.c_str(), mass_tok.c_str(), charge);
+    // `marker` is 'R' for an identification MS2 and 'Q' for the quantification scan (ADR-0038).
+    // Both are built by this one function because they are the same KIND of command -- a rostered
+    // MS2 of a selected precursor -- differing only in role, which is exactly what the marker says.
+    std::snprintf(cmd.scan_description, 16, "%s%c%s@%d", id_str.c_str(), marker, mass_tok.c_str(), charge);
 
     // Precursor scoring data for diagnostic TSV output
     cmd.qscore = pg.getQscore();

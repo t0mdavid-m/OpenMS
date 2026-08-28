@@ -29,42 +29,145 @@
 //
 // --------------------------------------------------------------------------
 // $Maintainer: Tom David Mueller $
-// $Authors: Tom David Mueller $
+// $Authors: Kyowon Jeong, Tom David Mueller $
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Quantification.h>
 
 #include <OpenMS/ANALYSIS/QUANTITATION/IsobaricChannelExtractor.h>
+#include <OpenMS/ANALYSIS/QUANTITATION/IsobaricQuantifier.h>
+#include <OpenMS/ANALYSIS/QUANTITATION/IsobaricQuantitationMethod.h>
+#include <OpenMS/ANALYSIS/QUANTITATION/ItraqEightPlexQuantitationMethod.h>
+#include <OpenMS/ANALYSIS/QUANTITATION/ItraqFourPlexQuantitationMethod.h>
+#include <OpenMS/ANALYSIS/QUANTITATION/TMTEighteenPlexQuantitationMethod.h>
+#include <OpenMS/ANALYSIS/QUANTITATION/TMTElevenPlexQuantitationMethod.h>
 #include <OpenMS/ANALYSIS/QUANTITATION/TMTSixPlexQuantitationMethod.h>
+#include <OpenMS/ANALYSIS/QUANTITATION/TMTSixteenPlexQuantitationMethod.h>
+#include <OpenMS/ANALYSIS/QUANTITATION/TMTTenPlexQuantitationMethod.h>
 #include <OpenMS/KERNEL/ConsensusMap.h>
 #include <OpenMS/KERNEL/MSExperiment.h>
 #include <OpenMS/KERNEL/MSSpectrum.h>
 #include <OpenMS/METADATA/Precursor.h>
 
 #include <algorithm>
-#include <iostream>
+#include <cctype>
+#include <sstream>
+#include <memory>
 #include <numeric>
 #include <vector>
 
 namespace OpenMS
 {
+  namespace
+  {
+    /// An assigned channel at or below this intensity counts as absent. Same 1e-3 floor the
+    /// pre-ADR-0038 completeness gate used; kept so a config that merely gains `conditions`
+    /// classifies its spectra the same way.
+    constexpr double kEmptyChannel = 1e-3;
+
+    /// Build the OpenMS method named by @p labelling. nullptr for an unknown name -- Config
+    /// validates the name at load, so a nullptr here means the two lists drifted.
+    std::unique_ptr<IsobaricQuantitationMethod> makeMethod(const std::string& labelling)
+    {
+      if (labelling == "tmt6plex")   return std::make_unique<TMTSixPlexQuantitationMethod>();
+      if (labelling == "tmt10plex")  return std::make_unique<TMTTenPlexQuantitationMethod>();
+      if (labelling == "tmt11plex")  return std::make_unique<TMTElevenPlexQuantitationMethod>();
+      if (labelling == "tmt16plex")  return std::make_unique<TMTSixteenPlexQuantitationMethod>();
+      if (labelling == "tmt18plex")  return std::make_unique<TMTEighteenPlexQuantitationMethod>();
+      if (labelling == "itraq4plex") return std::make_unique<ItraqFourPlexQuantitationMethod>();
+      if (labelling == "itraq8plex") return std::make_unique<ItraqEightPlexQuantitationMethod>();
+      return nullptr;
+    }
+
+    /// True when every entry of an authored correction matrix records NO cross-talk, i.e. the
+    /// matrix builds to the identity and correction would be a no-op.
+    ///
+    /// This has to be detected HERE rather than delegated. IsobaricIsotopeCorrector THROWS on an
+    /// identity matrix ("...leading to no correction. Please provide a valid isotope_correction
+    /// matrix as it was provided with the sample kit!"), so passing one through would abort the
+    /// measurement of every scan rather than skip the correction. An all-zero matrix is the
+    /// documented way to turn correction off in this schema, so the engine honours that by not
+    /// running the corrector at all -- which is also why FLASHDeconv exposes correction as a
+    /// boolean instead.
+    bool isNoCorrection(const std::vector<std::string>& matrix)
+    {
+      for (const auto& row : matrix)
+      {
+        std::string tok;
+        std::istringstream rs(row);
+        while (std::getline(rs, tok, '/'))
+        {
+          // The same three spellings IsobaricQuantitationMethod treats as "no contribution".
+          std::string t;
+          for (char c : tok) if (!std::isspace(static_cast<unsigned char>(c))) t += std::toupper(static_cast<unsigned char>(c));
+          if (t.empty() || t == "NA" || t == "-1") continue;
+          try { if (std::stod(t) != 0.0) return false; }
+          catch (...) { return false; }   // unparseable -> let OpenMS produce the real error
+        }
+      }
+      return true;
+    }
+  } // namespace
 
   Quantification::Quantification(const Config& config) :
       config_(config)
   {
   }
 
-  bool Quantification::isDifferentiallyAbundant(const double* mzs,
-                                                 const double* ints,
-                                                 const int length,
-                                                 const double rt,
-                                                 const int ms_level,
-                                                 const char* name,
-                                                 double reporter_mz_tol,
-                                                 double fold_change_threshold,
-                                                 bool only_one_condition)
+  const std::vector<std::string>& Quantification::labellingNames()
   {
-    // Create spectrum
+    // TopDownIsobaricQuantification.cpp's setValidStrings("type", ...) MINUS "none": that tool has
+    // no separate on/off key, this section does (quantification.enabled), so accepting "none" here
+    // would make `enabled: true, labelling: "none"` a contradiction someone has to resolve.
+    static const std::vector<std::string> names {
+      "itraq4plex", "itraq8plex", "tmt6plex", "tmt10plex", "tmt11plex", "tmt16plex", "tmt18plex"};
+    return names;
+  }
+
+  std::vector<std::string> Quantification::channelNames(const std::string& labelling)
+  {
+    auto method = makeMethod(labelling);
+    if (method == nullptr) return {};
+    std::vector<std::string> names;
+    for (const auto& ch : method->getChannelInformation())
+      names.push_back(ch.name);
+    return names;
+  }
+
+  const char* Quantification::verdictName(Result::Verdict v)
+  {
+    switch (v)
+    {
+      case Result::Verdict::Differential:       return "differential";
+      case Result::Verdict::NotDifferential:    return "not_differential";
+      case Result::Verdict::IncompleteChannels: return "incomplete_channels";
+      case Result::Verdict::ExtractionFailed:   return "extraction_failed";
+    }
+    return "extraction_failed";
+  }
+
+  Quantification::Result Quantification::measure(const double* mzs, const double* ints,
+                                                 const int length, const double rt,
+                                                 const int ms_level, const char* name) const
+  {
+    Result out;
+    const auto& cfg = config_.quantification();
+
+    auto method = makeMethod(cfg.labelling);
+    if (method == nullptr) return out;  // ExtractionFailed; Config rejects this at load
+
+    // Optional authored correction matrix. Empty leaves the method's stock matrix in place, which
+    // is the manufacturer's typical lot rather than this kit's -- an override exists for anyone
+    // holding their data sheet, and an all-zero matrix means "no correction" (handled below).
+    const bool correction_off = !cfg.correction_matrix.empty() && isNoCorrection(cfg.correction_matrix);
+    if (!cfg.correction_matrix.empty() && !correction_off)
+    {
+      Param mp = method->getParameters();
+      mp.setValue("correction_matrix", cfg.correction_matrix);
+      method->setParameters(mp);  // throws on a wrong entry/column count -- OpenMS validates it for us
+    }
+
+    // ---- the spectrum, as the extractor wants it ----------------------------------------------
     MSSpectrum spec;
     for (int i = 0; i < length; i++)
     {
@@ -74,110 +177,113 @@ namespace OpenMS
     spec.setName(name);
     spec.setRT(rt);
 
-    // Set precursor with HCD activation - neccessary for channel extractor
-    OpenMS::Precursor precursor;
-    precursor.setActivationMethods({OpenMS::Precursor::ActivationMethod::HCD});
+    // The precursor is fabricated with HCD purely to defeat IsobaricChannelExtractor's own
+    // `select_activation: auto` filter -- it is not a claim about how this scan was acquired. Note
+    // the consequence: the extractor never rejects on activation, so a scan whose activation cannot
+    // release the reporter yields empty channels rather than ExtractionFailed. That surfaces as
+    // IncompleteChannels, which is the honest report and is why the verdict is a four-way enum.
+    Precursor precursor;
+    precursor.setActivationMethods({Precursor::ActivationMethod::HCD});
     spec.setPrecursors({precursor});
 
-    // Create experiment
     MSExperiment exp;
     exp.addSpectrum(spec);
 
-    // TODO: Variable channel extractors
-    TMTSixPlexQuantitationMethod quant_method;
-    IsobaricChannelExtractor channel_extractor(&quant_method);
+    // ---- extract, then correct ----------------------------------------------------------------
+    IsobaricChannelExtractor extractor(method.get());
+    Param ep = extractor.getParameters();
+    ep.setValue("reporter_mass_shift", cfg.reporter_mz_tol);
+    extractor.setParameters(ep);
 
-    // Set parameters
-    Param p = channel_extractor.getParameters();
-    p.setValue("reporter_mass_shift", reporter_mz_tol);
-    channel_extractor.setParameters(p);
+    ConsensusMap raw;
+    extractor.extractChannels(exp, raw);
 
-    // Extract reporter-ion channels into a ConsensusMap
-    ConsensusMap consensus_map_raw;
-    channel_extractor.extractChannels(exp, consensus_map_raw);
-
-    // Collect m/z-intensity pairs from the ConsensusFeatures
-    std::vector<std::pair<double, double>> mz_int;
-    mz_int.reserve(quant_method.getNumberOfChannels());
-    for (const auto& cf : consensus_map_raw)
+    // IsobaricQuantifier's stock parameters correct isotope impurity and do NOTHING else:
+    // `isotope_correction` defaults true, `normalization` defaults false. Leaving normalization
+    // alone is load-bearing -- median-of-ratios against a reference channel would silently rescale
+    // every fold change.
+    IsobaricQuantifier quantifier(method.get());
+    if (correction_off)
     {
-        for (auto& i : cf)
-        {
-            mz_int.emplace_back(i.getMZ(), i.getIntensity());
-        }
+      Param qp = quantifier.getParameters();
+      qp.setValue("isotope_correction", "false");
+      quantifier.setParameters(qp);
     }
+    ConsensusMap corrected;
+    quantifier.quantify(raw, corrected);
 
-    // Something went wrong – bail out early
-    if (mz_int.size() != quant_method.getNumberOfChannels())
+    // ---- read intensities BY CHANNEL ORDINAL --------------------------------------------------
+    // IsobaricChannelExtractor inserts each channel with map_index == its ordinal in
+    // getChannelInformation(). That identity is stated, so read it; the pre-ADR-0038 code discarded
+    // it and re-derived the ordering with an m/z sort, which only agreed because every method class
+    // happens to declare its channels in ascending m/z.
+    const size_t n = method->getNumberOfChannels();
+    out.channels.assign(n, 0.0);
+    size_t seen = 0;
+    for (const auto& cf : corrected)
     {
-        std::cout << "FLASHIda - channel extraction failed..." << std::endl;
-        return false;
-    }
-
-    // Sort by m/z to ensure channel order
-    std::sort(mz_int.begin(), mz_int.end(),
-              [](const auto& a, const auto& b){ return a.first < b.first; });
-
-    // Extract intensities
-    std::vector<double> intensities;
-    intensities.reserve(mz_int.size());
-    for (const auto& p2 : mz_int) intensities.push_back(p2.second);
-
-    for (auto intensity : intensities) {
-      std::cout << intensity << std::endl;
-    }
-
-    // TODO: Make configurable
-    if (only_one_condition) {
-      bool first_sample_present = std::none_of(
-        intensities.begin(), intensities.begin()+3, [](double x){ return x < 1e-3; }
-      );
-      std::cout << first_sample_present << std::endl;
-      bool second_sample_present = std::none_of(
-        intensities.begin()+3, intensities.end(), [](double x){ return x < 1e-3; }
-      );
-      std::cout << second_sample_present << std::endl;
-      bool first_sample_missing = std::all_of(
-        intensities.begin(), intensities.begin()+3, [](double x){ return x < 1e-3; }
-      );
-      std::cout << first_sample_missing << std::endl;
-      bool second_sample_missing = std::all_of(
-        intensities.begin()+3, intensities.end(), [](double x){ return x < 1e-3; }
-      );
-      std::cout << second_sample_missing << std::endl;
-      // No signal
-      if (first_sample_missing && second_sample_missing) {
-        return false;
-      }
-      // Both are incomplete
-      else if (!first_sample_present && !second_sample_present) {
-        return false;
-      }
-      // One signal
-      else if (
-        (first_sample_missing || second_sample_missing)
-        && (first_sample_present || second_sample_present)
-      ) {
-        return true;
+      for (auto it = cf.begin(); it != cf.end(); ++it)
+      {
+        const size_t idx = static_cast<size_t>(it->getMapIndex());
+        if (idx < n) { out.channels[idx] = it->getIntensity(); ++seen; }
       }
     }
+    if (seen != n) return out;  // ExtractionFailed: no usable channel set for this spectrum
 
-    // Reject spectra with missing / too-low reporter peaks
-    if (!only_one_condition && std::any_of(intensities.begin(), intensities.end(),
-                    [](double x){ return x < 1e-3; }))
+    // ---- condition means, over ASSIGNED channels only -----------------------------------------
+    // A channel named in no condition is unassigned: ignored here, still reported in `channels`.
+    // That is what makes a bridge channel, or a kit run below capacity, legal -- the old gate read
+    // every channel in the scheme, so four samples in six-plex chemistry rejected every spectrum.
+    if (cfg.conditions.size() != 2) return out;  // Config rejects this at load
+
+    bool any_assigned_empty = false;
+    std::array<bool, 2> wholly_absent {{false, false}};
+    for (size_t c = 0; c < 2; ++c)
     {
-        return false;
+      const auto& chans = cfg.conditions[c].channels;
+      if (chans.empty()) return out;  // Config rejects this at load
+
+      double sum = 0.0;
+      size_t empties = 0;
+      for (size_t idx : chans)
+      {
+        const double v = (idx < n) ? out.channels[idx] : 0.0;
+        if (v < kEmptyChannel) ++empties;
+        sum += v;
+      }
+      out.condition_means[c] = sum / static_cast<double>(chans.size());
+      if (empties == chans.size()) { wholly_absent[c] = true; }
+      else if (empties > 0)        { any_assigned_empty = true; }
     }
 
-    const double sample1_mean = std::accumulate(intensities.begin(),
-                                                intensities.begin() + 3, 0.0) / 3.0;
+    // A condition that is WHOLLY absent is not missing data, it is the measurement: the species is
+    // present in one condition and not the other, which is the strongest result the experiment can
+    // produce. There is no finite ratio, so fold_change stays -1 and condition_means carries the
+    // truth. Both absent means no signal at all.
+    if (wholly_absent[0] && wholly_absent[1])
+    {
+      out.verdict = Result::Verdict::IncompleteChannels;
+      return out;
+    }
+    if (wholly_absent[0] || wholly_absent[1])
+    {
+      out.verdict = Result::Verdict::Differential;
+      return out;
+    }
+    // A PARTIALLY empty condition is untrustworthy rather than informative: the zero is folded into
+    // the mean and biases the ratio, and there is no honest number to report.
+    if (any_assigned_empty)
+    {
+      out.verdict = Result::Verdict::IncompleteChannels;
+      return out;
+    }
 
-    const double sample2_mean = std::accumulate(intensities.begin() + 3,
-                                                intensities.end(), 0.0) / 3.0;
-
-    const double fold_change = sample1_mean / sample2_mean;
-
-    return (fold_change > fold_change_threshold) || ((1/fold_change) > fold_change_threshold);
+    out.fold_change = out.condition_means[0] / out.condition_means[1];
+    const double t = cfg.fold_change_threshold;
+    out.verdict = (out.fold_change > t || (1.0 / out.fold_change) > t)
+                      ? Result::Verdict::Differential
+                      : Result::Verdict::NotDifferential;
+    return out;
   }
 
 } // namespace OpenMS
