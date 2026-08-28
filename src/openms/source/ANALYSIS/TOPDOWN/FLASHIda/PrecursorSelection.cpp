@@ -422,11 +422,15 @@ namespace OpenMS
         // most once, so this equals selected_peak_groups_.size() and nothing changes.
         Size species_selected = 0;
 
+        // Did the candidate list end because the slot budget ran out, rather than because it ran
+        // out of candidates? Read after the loop by the budget-exhausted diagnostic below.
+        bool budget_ended_the_loop = false;
+
         // Iterate over candidates (sorted by qscore)
         for (const auto& pg : deconv_.deconvolvedMS1())
         {
           // dont acquire the same mass multiple times
-          if (species_selected >= mass_count) { break; }
+          if (species_selected >= mass_count) { budget_ended_the_loop = true; break; }
           const size_t pushed_before_pg = selected_peak_groups_.size();
           // Set from the verdict inside the loop below, read after it: the species count lives at
           // PeakGroup scope and the verdict does not.
@@ -468,9 +472,7 @@ namespace OpenMS
           anchor_ctx.authored = authored;
           anchor_ctx.spent_charges = spent_charges;
           anchor_ctx.seen = seen;
-          anchor_ctx.fan_out = config_.targeting().precursor_charges != ChargeAcquisitionMode::Single;
           anchor_ctx.min_charge = config_.level(ms_level).min_charge;
-          anchor_ctx.snr_threshold = config_.targeting().snr_threshold;
           anchor_ctx.consider_all_charges = config_.targeting().consider_all_charges;
 
           const AnchorChoice anchor = pickAnchor(pg, anchor_ctx);
@@ -664,7 +666,6 @@ namespace OpenMS
             }
 
             AdmissionContext adm_ctx;
-            adm_ctx.target_matched = target_matched;
             adm_ctx.has_authored = has_authored;
             adm_ctx.authored = authored;
             adm_ctx.spent_charges = spent_charges;
@@ -789,9 +790,11 @@ namespace OpenMS
             // ladder, which distinguishes a charge an earlier PeakGroup took from one nothing has
             // resolved.
             //
-            // Every species, not only authored ones: an unrestricted row under multiplexed/separate
-            // has the same split envelope to complete, and it is intendedChargeSet -- not this
-            // record -- that decides whether a sibling is entitled to anything.
+            // Written for every species, not only authored ones -- but for an unrestricted row
+            // `intendedChargeSet` returns {} and the record stays empty, so `completesSomething`
+            // refuses every sibling of one. Keeping the write unconditional means there is exactly
+            // one place that decides who is owed charges (ADR-0036, amended 2026-08-28) instead of
+            // a second scope test here that could drift from it.
             //
             // RESOLVED is what this PeakGroup could SEE, not what it took, and that is what
             // preserves ADR-0028's deferral: under `single` a PeakGroup resolves all of its named
@@ -799,10 +802,9 @@ namespace OpenMS
             // the rest still arrive one survey at a time.
             {
               SpeciesSurveyRecord& rec = survey_ledger[nominal_mass];
-              for (int c : intendedChargeSet(pg, authored,
-                                             config_.targeting().precursor_charges != ChargeAcquisitionMode::Single,
-                                             config_.level(ms_level).min_charge,
-                                             config_.targeting().snr_threshold))
+              rec.authored = authored;
+              rec.mono_mass = mass;
+              for (int c : intendedChargeSet(pg, authored, config_.level(ms_level).min_charge))
               {
                 if (std::find(rec.resolved.begin(), rec.resolved.end(), c) == rec.resolved.end())
                   rec.resolved.push_back(c);
@@ -812,7 +814,6 @@ namespace OpenMS
                 if (std::find(rec.acquired.begin(), rec.acquired.end(), c) == rec.acquired.end())
                   rec.acquired.push_back(c);
               }
-              rec.best_score = std::max(rec.best_score, verdict.record_score);
             }
 
             // The ledger DECISION -- whether this survey beats the score the species was acquired at
@@ -873,21 +874,20 @@ namespace OpenMS
               id_mz_map_[window_id_] = (int)round(e_center_mz);
               id_qscore_map_[window_id_] = score;
               id_charge_map_[window_id_] = emit_charge;
-              // The set the geometry writer must not exceed -- now carried for EVERY trigger, not
-              // only authored ones (ADR-0036). It stops meaning "the authored set" and starts
-              // meaning "the acquisition charge set", which is what ScanCommandQueue.h already
-              // documents the parameter as.
+              // The set the geometry writer must not exceed, carried for AUTHORED triggers only.
               //
-              // It has to widen because a SIBLING's set is REDUCED by what the species already
-              // isolated, and buildMS2 re-derives its notches from the PeakGroup's own envelope. Left
-              // empty, the filter would be skipped and the sibling would re-isolate charges the first
-              // scan already took -- the wire disagreeing with every record of itself, which is the
-              // failure [CHARGE-SET] and this field exist to prevent.
+              // It matters for those because a SIBLING's set is REDUCED by what the species already
+              // isolated this survey (ADR-0036), and buildMS2 re-derives its notches from the
+              // PeakGroup's own envelope. Left empty, the filter would be skipped and the sibling
+              // would re-isolate charges the first scan already took -- the wire disagreeing with
+              // every record of itself, which is the failure this field exists to prevent.
               //
-              // For a species that is NOT split this is a no-op by construction, not by luck: both
-              // sides call peakGroupNotchCandidates then selectNotches with identical arguments, so
-              // the filter trims nothing.
-              trigger_authored_charges_.push_back(acquired_charges);
+              // Deliberately NOT carried for an unrestricted row. Such a row has no sibling to
+              // reduce against (its intended set is empty), so the value would always equal what
+              // buildMS2 derives anyway -- but pushing it flips ScanCommandQueue's
+              // `!allowed_charges->empty()` branch and runs a filter that has never run for one.
+              // "It should trim nothing" is an argument, not a gate; an empty vector is the gate.
+              trigger_authored_charges_.push_back(has_authored ? acquired_charges : std::vector<int>());
 
               trigger_ids_.push_back(window_id_);
               window_id_++;
@@ -927,6 +927,46 @@ namespace OpenMS
           // max_precursors 5 -- and would contradict the admission decision in the same breath.
           if (selected_peak_groups_.size() > pushed_before_pg && !verdict_was_sibling)
             ++species_selected;
+        }
+
+        // The slot budget ended the candidate list while a named charge was still owed (ADR-0036).
+        //
+        // The cap is deliberately HARD: a sibling costs no slot, but it is not examined once the
+        // loop has stopped. Headroom is a configuration decision -- under `strict_inclusion` a
+        // non-target never spends a slot and a sibling spends none either, so `max_precursors: 2`
+        // leaves one target's siblings reachable across the whole list while the cap stays a cap.
+        //
+        // That leaves one silent failure: at `max_precursors: 1`, production's own value, a split
+        // envelope can never be completed and nothing said so. This line says so, and only when it
+        // actually cost something -- a species whose named set is fully acquired or fully spent
+        // prints nothing. Rejecting `max_precursors: 1` at load was considered and refused: it is a
+        // legal, working configuration whose behaviour is unchanged here; it simply cannot benefit.
+        if (budget_ended_the_loop)
+        {
+          for (const auto& [nominal, rec] : survey_ledger)
+          {
+            if (rec.authored.empty()) continue;
+            const std::vector<int> spent = spentAuthoredCharges_(nominal);
+            std::vector<int> owed;
+            for (int c : rec.authored)
+            {
+              if (std::find(rec.acquired.begin(), rec.acquired.end(), c) != rec.acquired.end()) continue;
+              if (std::find(spent.begin(), spent.end(), c) != spent.end()) continue;
+              owed.push_back(c);
+            }
+            if (owed.empty()) continue;
+
+            std::stringstream budget_msg;
+            budget_msg << "[CHARGE-SET] rt=" << rt << " m=" << rec.mono_mass << " authored=";
+            for (size_t ai = 0; ai < rec.authored.size(); ++ai)
+              budget_msg << (ai ? ";" : "") << rec.authored[ai];
+            budget_msg << " unacquired=";
+            for (size_t ai = 0; ai < owed.size(); ++ai)
+              budget_msg << (ai ? "," : "") << owed[ai];
+            budget_msg << " reason=budget_exhausted(max_precursors " << mass_count
+                       << " spent before this species could be completed)";
+            std::cout << budget_msg.str() << std::endl;
+          }
         }
       }
     }

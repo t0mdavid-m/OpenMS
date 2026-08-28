@@ -16,19 +16,22 @@ using namespace OpenMS;
 
 // The per-candidate acquisition decision, driven directly with synthetic PeakGroups.
 //
-// This suite exists because the behaviour it guards is UNREACHABLE from a spectrum fixture. The
-// defect ADR-0036 addresses needs one species' charge envelope to arrive as several PeakGroups, and
-// no committed fixture does that: ms1_cytc.txt resolves cytC at 13 charges in ONE PeakGroup (see
-// FLASHIda_ChargeModes_test's CM-05), and the inclusion goldens' duplicate peak groups at 12351.30x
-// are weak leftovers rather than envelope halves. An end-to-end golden therefore cannot see either
-// the defect or its fix, which is exactly why the decision was lifted out of the selection loop.
+// This suite exists because the decision is worth reading apart from the ~450-line loop it came
+// from, and because a synthetic PeakGroup can express a SPLIT ENVELOPE precisely, at chosen charges,
+// which a spectrum fixture can only supply where the data happens to split.
 //
-// THIS FILE PINS THE EXTRACTION, NOT THE NEW BEHAVIOUR. Every expectation below is the selection
-// loop's behaviour as it stands, so a green run here plus byte-identical log goldens is the proof
-// that lifting the decision out changed nothing. The cases that pin ADR-0036/0037 -- sibling
-// admission, the partitioned acquisition set, the budget exemption, the bar exemption for matched
-// targets, and the selector/buildMS2 drift guard -- arrive with the behaviour change itself, where
-// their expectations are written once rather than flipped.
+// It does split there, contrary to what this comment said when the suite was written: 22 of the 25
+// productive surveys of ms1_cytc.txt carry two to six PeakGroups inside the target's +-0.247 Da
+// window, because the overlap collapse is skipped for targeted features. What the committed
+// AUTHORED fixture never produces is a split its winner cannot cover -- inclusion_cytc_charges.txt
+// names 10;13;16 and the winning PeakGroup carries all three in 18 of 25 surveys. The end-to-end
+// counterpart therefore lives in FLASHIda_ChargeModes_test against a WIDER authored row, and these
+// cases stay the place where the predicate itself is pinned.
+//
+// NOTE ON SCOPE (ADR-0036, amended 2026-08-28; ADR-0037, withdrawn). Sibling completion applies
+// ONLY to a row that names charges. An unrestricted `-1` row has an empty intended set, admits no
+// sibling in any acquisition mode, and reads both exclusion bars exactly as every other species
+// does -- see CA-B7c and CA-B9, which are the two regression guards for that scope.
 
 namespace
 {
@@ -198,11 +201,9 @@ START_SECTION(a_sibling_that_completes_the_intended_set_is_admitted)
   SpeciesSurveyRecord seen;             // what PG_A, resolving z12-14, left behind
   seen.resolved = {12, 13, 14};
   seen.acquired = {12, 13, 14};
-  seen.best_score = 0.94;
 
   AnchorContext ctx = anchorCtx(named);
   ctx.seen = &seen;
-  ctx.fan_out = true;
 
   AnchorChoice a = pickAnchor(pg_b, ctx);
   TEST_EQUAL(a.resolved(), true)
@@ -223,7 +224,6 @@ START_SECTION(a_sibling_that_adds_nothing_is_refused)
   SpeciesSurveyRecord seen;
   seen.resolved = {12, 13, 14};
   seen.acquired = {13};               // `single`: only ONE was taken, but all three were RESOLVED
-  seen.best_score = 0.94;
 
   AnchorContext ctx = anchorCtx(named);
   ctx.seen = &seen;
@@ -234,12 +234,12 @@ START_SECTION(a_sibling_that_adds_nothing_is_refused)
 }
 END_SECTION
 
-// CA-B7c: an UNRESTRICTED row splits the same way, and the rule has to reach it -- the defect is
-// identical there, only the guard that used to kill the sibling differs. Under `single` the intended
-// set is the anchor alone, so no sibling is ever admitted and "the best-qscore mass is enough"
-// stands; under multiplexed/separate the intended set is the signal-bearing envelope and a sibling
-// completing it is admitted.
-START_SECTION(an_unrestricted_row_admits_siblings_only_when_it_asked_for_several_charges)
+// CA-B7c: an UNRESTRICTED row splits the same way, and completion deliberately does NOT reach it
+// (ADR-0036, amended 2026-08-28). A `-1` row expresses no opinion about charge, so its intended set
+// is empty, nothing about it is ever incomplete, and no sibling of it is ever admitted -- in any
+// acquisition mode. The mode is not consulted at all: it decides how many charges one SCAN
+// isolates, not which charges the species is owed. This is what keeps `-1` byte-identical.
+START_SECTION(an_unrestricted_row_never_admits_a_sibling)
 {
   PeakGroup pg_b = makeEnvelope(12351.33, {15, 16, 17, 18}, 0.72, 10.0f);
 
@@ -247,15 +247,16 @@ START_SECTION(an_unrestricted_row_admits_siblings_only_when_it_asked_for_several
   seen.resolved = {12, 13, 14};
   seen.acquired = {12, 13, 14};
 
-  AnchorContext fan = anchorCtx();      // authored = {} -- an unrestricted row
-  fan.seen = &seen;
-  fan.fan_out = true;
-  TEST_EQUAL(pickAnchor(pg_b, fan).reason == AdmissionReason::Admitted, true)
+  // authored = {} -- an unrestricted row. The sibling carries four charges the first PeakGroup
+  // never resolved and is still refused, because none of them is OWED.
+  AnchorContext unrestricted = anchorCtx();
+  unrestricted.seen = &seen;
+  TEST_EQUAL(pickAnchor(pg_b, unrestricted).reason == AdmissionReason::IntendedSetComplete, true)
 
-  AnchorContext single = anchorCtx();
-  single.seen = &seen;
-  single.fan_out = false;
-  TEST_EQUAL(pickAnchor(pg_b, single).reason == AdmissionReason::IntendedSetComplete, true)
+  // ...and the intended set itself is empty, which is the reason. Asserting the mechanism as well
+  // as the outcome: an intended set that filled from the envelope would make the refusal above
+  // depend on which charges happened to overlap.
+  TEST_EQUAL(intendedChargeSet(pg_b, {}, 0).empty(), true)
 }
 END_SECTION
 
@@ -282,8 +283,10 @@ START_SECTION(score_and_snr_gates_fire_in_order)
 END_SECTION
 
 // CA-B9: dynamic exclusion is ORed over the nominal-mass bar and the integer-m/z bar. Either alone
-// refuses -- which is why exempting only one of them changes nothing whenever the anchor charge
-// repeats, and the reason ADR-0037 had to name both.
+// refuses, and neither has an exemption: matching an inclusion row does NOT lift them. ADR-0037
+// proposed exactly that and was withdrawn -- whether a species is barred or governed by its qscore
+// is `tqscore_threshold`'s decision, and hard-coding one side for every matched row removed a knob
+// rather than adding a behaviour.
 START_SECTION(either_exclusion_bar_alone_refuses_an_unauthored_species)
 {
   PeakGroup pg = makeEnvelope(12351.39, {12, 13, 14}, 0.94, 10.0f);
@@ -295,6 +298,14 @@ START_SECTION(either_exclusion_bar_alone_refuses_an_unauthored_species)
   AdmissionContext mz_only = admitCtx();
   mz_only.mz_barred = true;
   TEST_EQUAL(admitCandidate(pg, 13, 0.94, mz_only).reason == AdmissionReason::Barred, true)
+
+  // Both bars set, on a species that DID match an inclusion row: still refused. This is the
+  // regression guard for the withdrawal -- under ADR-0037 as implemented this admitted, and that
+  // one line moved thirteen log goldens.
+  AdmissionContext matched_target = admitCtx();
+  matched_target.mass_barred = true;
+  matched_target.mz_barred   = true;
+  TEST_EQUAL(admitCandidate(pg, 13, 0.94, matched_target).reason == AdmissionReason::Barred, true)
 }
 END_SECTION
 
@@ -454,104 +465,6 @@ START_SECTION(an_admitted_sibling_is_not_charged_a_budget_slot)
   AdmissionVerdict v = admitCandidate(pg, 13, 0.94, sib);
   TEST_EQUAL(v.admit, true)
   TEST_EQUAL(v.is_sibling, true)
-}
-END_SECTION
-
-// CA-B17: a matched inclusion target is not barred by dynamic exclusion (ADR-0037). Without this the
-// qscore ledger below is unreachable: production sets tqscore_threshold to 0.1 against observed
-// qscores of 0.48-0.98, so the first acquisition arms both bars every time.
-START_SECTION(a_matched_target_does_not_read_the_exclusion_bars)
-{
-  PeakGroup pg = makeEnvelope(12351.39, {12, 13, 14}, 0.94, 10.0f);
-
-  AdmissionContext target = admitCtx();
-  target.target_matched = true;
-  target.mass_barred = true;
-  target.mz_barred = true;
-  TEST_EQUAL(admitCandidate(pg, 13, 0.94, target).admit, true)
-
-  // ...and the exemption is scoped to targets. An unmatched species stays barred exactly as today,
-  // which is what keeps every non-inclusion run byte-identical.
-  AdmissionContext other = admitCtx();
-  other.mass_barred = true;
-  TEST_EQUAL(admitCandidate(pg, 13, 0.94, other).reason == AdmissionReason::Barred, true)
-}
-END_SECTION
-
-// CA-B18: completion beats the score bar outright (ADR-0037, M2-wide). This is not decoration:
-// siblings rank below the first PeakGroup by construction, so a score test would turn every one of
-// them away and a split envelope could never be completed however permissive the other guards were.
-START_SECTION(an_admitted_sibling_is_exempt_from_the_score_bar)
-{
-  PeakGroup pg = makeEnvelope(12351.33, {15, 16, 17, 18}, 0.55, 10.0f);
-  double bar = 0.60;                    // an EARLIER survey's bar, higher than this sibling scores
-
-  SpeciesSurveyRecord seen;
-  seen.resolved = {12, 13, 14};
-  seen.best_score = 0.72;
-
-  AdmissionContext sib = admitCtx();
-  sib.qscore_bar = &bar;
-  sib.seen = &seen;
-  TEST_EQUAL(admitCandidate(pg, 16, 0.55, sib).admit, true)
-
-  // A NON-sibling scoring the same is still refused -- the exemption is about completion, not about
-  // being lenient.
-  AdmissionContext first = admitCtx();
-  first.qscore_bar = &bar;
-  TEST_EQUAL(admitCandidate(pg, 16, 0.55, first).reason == AdmissionReason::ScoreNotBetter, true)
-}
-END_SECTION
-
-// CA-B19: the bar only ever RISES (W-max). A sibling admitted on charge grounds may score well below
-// what the species was already acquired at; letting it write its own score would lower the bar the
-// next survey faces and turn the ratchet into a random walk.
-START_SECTION(a_low_scoring_sibling_cannot_lower_the_bar)
-{
-  PeakGroup pg = makeEnvelope(12351.33, {15, 16, 17, 18}, 0.55, 10.0f);
-  double bar = 0.60;
-
-  SpeciesSurveyRecord seen;
-  seen.resolved = {12, 13, 14};
-  seen.best_score = 0.72;
-
-  AdmissionContext sib = admitCtx();
-  sib.qscore_bar = &bar;
-  sib.seen = &seen;
-
-  AdmissionVerdict v = admitCandidate(pg, 16, 0.55, sib);
-  TEST_EQUAL(v.admit, true)
-  TEST_REAL_SIMILAR(v.record_score, 0.72)   // the survey's best, not this sibling's 0.55
-}
-END_SECTION
-
-// CA-B20: a matched target arms the bars ONCE and never refreshes them (ADR-0037) -- refreshing
-// would suppress its bin and window neighbours for its whole elution, longer than today.
-//
-// The second half is the one that matters for "non-target behaviour is unchanged": a species that is
-// NOT a target still arms on a later, better acquisition. Its first acquisition scoring below
-// tqscore_threshold never armed the bars, so nothing ever blocked it from coming back -- and gating
-// arming on "acquired before" would leave such a mass permanently unbarred.
-START_SECTION(only_a_matched_target_stops_re_arming_the_bars)
-{
-  PeakGroup pg = makeEnvelope(12351.39, {12, 13, 14}, 0.94, 10.0f);
-  double bar = 0.50;
-
-  AdmissionContext first_target = admitCtx();
-  first_target.target_matched = true;
-  first_target.tqscore_threshold = 0.10;
-  TEST_EQUAL(admitCandidate(pg, 13, 0.94, first_target).arms_bars, true)
-
-  AdmissionContext again_target = admitCtx();
-  again_target.target_matched = true;
-  again_target.tqscore_threshold = 0.10;
-  again_target.qscore_bar = &bar;                       // acquired earlier in this rt window
-  TEST_EQUAL(admitCandidate(pg, 13, 0.94, again_target).arms_bars, false)
-
-  AdmissionContext again_other = admitCtx();
-  again_other.tqscore_threshold = 0.10;
-  again_other.qscore_bar = &bar;                        // same shape, but NOT a target
-  TEST_EQUAL(admitCandidate(pg, 13, 0.94, again_other).arms_bars, true)
 }
 END_SECTION
 

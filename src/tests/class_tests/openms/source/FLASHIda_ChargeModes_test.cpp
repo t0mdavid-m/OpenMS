@@ -30,6 +30,7 @@
 #include <iostream>
 #include <map>
 #include <set>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -56,6 +57,17 @@ namespace
   const long long   authored_mass        = 12351;   // llround of the authored monoisotopic mass
   const std::set<int> authored_charges{10, 13, 16};
 
+  // The WIDE authored row (ADR-0036), naming a contiguous span the winning PeakGroup often cannot
+  // cover on its own. `10;13;16` above cannot exercise split-envelope completion at all: its winner
+  // carries all three in 18 of the 25 productive surveys, and in the 7 where it does not, the
+  // missing charges were already spent by an earlier survey -- so no sibling ever has anything to
+  // complete. Against `12..18` the same spectrum behaves differently: the winner carries all seven
+  // in 12 surveys, carries a strict non-empty subset in several more (survey 6 is the first), and
+  // the species' PeakGroups collectively carry all seven in 23 of 25.
+  const std::string wide_set_list      = "../../FlashIDA/test-data/configs/inclusion_cytc_charges_wide.txt";
+  const std::string wide_set_rows_list = "../../FlashIDA/test-data/configs/inclusion_cytc_charges_wide_rows.txt";
+  const std::set<int> wide_charges{12, 13, 14, 15, 16, 17, 18};
+
   bool isSubsetOfAuthored(const std::set<int>& charges)
   {
     for (int z : charges)
@@ -63,9 +75,16 @@ namespace
     return true;
   }
 
+  // @p max_precursors and @p strict_inclusion default to what every CM-01..CM-08 case already used,
+  // so adding them changes no existing config text. CM-09 needs both: the split-envelope completion
+  // it exercises is reachable only while the candidate loop is still running (ADR-0036 leaves the
+  // cap hard), and under strict inclusion a non-target never spends a slot, which is what makes a
+  // budget of 2 enough for one target and its siblings.
   std::string cfgFor(const std::string& precursor_charges,
                      const std::string& targeting = "none",
-                     const std::string& inclusion_list = "")
+                     const std::string& inclusion_list = "",
+                     int max_precursors = 10,
+                     bool strict_inclusion = false)
   {
     return std::string(R"JSON({
   "deconvolution": {
@@ -90,10 +109,10 @@ namespace
     "rt_window": 180,
     "targeting": ")JSON" + targeting + R"JSON(",
     "consider_all_charges": false,
-    "strict_inclusion": false,
+    "strict_inclusion": )JSON" + (strict_inclusion ? "true" : "false") + R"JSON(,
     "tie_threshold": 0.1,
     "rank_by": "qscore",
-    "max_precursors": 10,
+    "max_precursors": )JSON" + std::to_string(max_precursors) + R"JSON(,
     "precursor_charges": ")JSON" + precursor_charges + R"JSON("
   },
   "characterization": { "mode": "off", "max_targets": 10 },
@@ -472,6 +491,190 @@ START_SECTION(a_row_naming_no_charge_is_unrestricted)
   // cytC co-isolates ~10 of its 13 resolved charges here, so an unrestricted row must reach well
   // outside {10,13,16}.
   TEST_EQUAL(isSubsetOfAuthored(it->second), false)
+}
+END_SECTION
+
+// CM-09: a SPLIT ENVELOPE is completed within one survey (ADR-0036), and the budget cap is what
+// bounds it.
+//
+// The discriminator has to be "two charges of one mass in ONE survey", not "the named set completed
+// eventually". Across surveys this fixture's winner varies -- z8..18, then z8..22, then z9,10,11 --
+// so the set is walked to completion with or without sibling admission, and an eventual-completion
+// assertion would pass against the defect. Within a single survey under `single`, a mass reaching
+// two charges is only possible if a second PeakGroup of it was admitted.
+//
+// The max_precursors 1 arm pins the other half of the decision: the cap stays HARD, so a sibling is
+// not examined once the loop has ended, and the run says so rather than silently acquiring less.
+START_SECTION(a_split_authored_envelope_is_completed_within_one_survey)
+{
+  auto scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(scans.empty())
+
+  std::ostringstream captured;
+  std::streambuf* const real_cout = std::cout.rdbuf(captured.rdbuf());
+  AcqResult roomy, cramped;
+  try
+  {
+    const std::string roomy_cfg = cfgFor("single", "inclusion", wide_set_list, /*max_precursors=*/2,
+                                         /*strict_inclusion=*/true);
+    FLASHIda roomy_ida(const_cast<char*>(roomy_cfg.c_str()));
+    roomy = runMode(roomy_ida, scans);
+  }
+  catch (...)
+  {
+    std::cout.rdbuf(real_cout);
+    throw;
+  }
+  const std::string roomy_log = captured.str();
+  captured.str("");
+
+  try
+  {
+    const std::string cramped_cfg = cfgFor("single", "inclusion", wide_set_list, /*max_precursors=*/1,
+                                           /*strict_inclusion=*/true);
+    FLASHIda cramped_ida(const_cast<char*>(cramped_cfg.c_str()));
+    cramped = runMode(cramped_ida, scans);
+  }
+  catch (...)
+  {
+    std::cout.rdbuf(real_cout);
+    throw;
+  }
+  const std::string cramped_log = captured.str();
+  std::cout.rdbuf(real_cout);
+
+  TEST_EQUAL(roomy.ms2_cmds.size() > 0, true)
+  TEST_EQUAL(cramped.ms2_cmds.size() > 0, true)
+
+  // Non-vacuity first: the authored mass must actually have been acquired in both runs, or the
+  // counts below would both be zero and the test would pass having measured nothing.
+  int roomy_surveys_with_the_mass = 0, cramped_surveys_with_the_mass = 0;
+  int roomy_completing_surveys = 0, cramped_completing_surveys = 0;
+  std::set<int> roomy_union;
+
+  for (const auto& kv : chargesPerSurveyMass(roomy, /*with_notches=*/false))
+  {
+    if (kv.first.second != authored_mass) continue;
+    ++roomy_surveys_with_the_mass;
+    roomy_union.insert(kv.second.begin(), kv.second.end());
+    if (kv.second.size() >= 2) ++roomy_completing_surveys;
+  }
+  for (const auto& kv : chargesPerSurveyMass(cramped, /*with_notches=*/false))
+  {
+    if (kv.first.second != authored_mass) continue;
+    ++cramped_surveys_with_the_mass;
+    if (kv.second.size() >= 2) ++cramped_completing_surveys;
+  }
+
+  TEST_EQUAL(roomy_surveys_with_the_mass > 0, true)
+  TEST_EQUAL(cramped_surveys_with_the_mass > 0, true)
+
+  if (roomy_completing_surveys == 0)
+    std::cout << "[CM-09] no survey acquired mass " << authored_mass << " at >=2 charges -- a "
+              << "sibling PeakGroup was never admitted, so the split envelope was not completed"
+              << std::endl;
+  TEST_EQUAL(roomy_completing_surveys > 0, true)
+
+  // Everything acquired is a NAMED charge: completion must not become "acquire more".
+  for (int z : roomy_union)
+  {
+    if (wide_charges.count(z) == 0)
+      std::cout << "[CM-09] charge " << z << " is outside the authored set 12..18" << std::endl;
+    TEST_EQUAL(wide_charges.count(z) > 0, true)
+  }
+
+  // The hard cap: at max_precursors 1 the loop ends on the first species and no sibling is reached.
+  TEST_EQUAL(cramped_completing_surveys, 0)
+
+  // ...and it is not silent about it. This is the whole reason the cap was left hard rather than
+  // special-cased: the configuration remains legal and unchanged, and the run reports what it cost.
+  TEST_EQUAL(cramped_log.find("reason=budget_exhausted") != std::string::npos, true)
+  TEST_EQUAL(roomy_log.find("reason=budget_exhausted") == std::string::npos, true)
+}
+END_SECTION
+
+// CM-10: the union rule (ADR-0028) survives a SPLIT. CM-07 already pins that one row naming
+// `10;13;16` and three rows naming one charge each acquire identically -- but its winner resolves
+// the whole named set every survey, so no sibling is ever admitted and the equivalence never
+// crosses the completion path. Against the wide row it does.
+START_SECTION(rows_naming_one_mass_union_their_charge_sets_under_a_split)
+{
+  auto scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(scans.empty())
+
+  const std::string one_cfg  = cfgFor("single", "inclusion", wide_set_list, 2, true);
+  const std::string rows_cfg = cfgFor("single", "inclusion", wide_set_rows_list, 2, true);
+
+  FLASHIda one_ida(const_cast<char*>(one_cfg.c_str()));
+  FLASHIda rows_ida(const_cast<char*>(rows_cfg.c_str()));
+  AcqResult one  = runMode(one_ida, scans);
+  AcqResult rows = runMode(rows_ida, scans);
+
+  TEST_EQUAL(one.ms2_cmds.size() > 0, true)
+  TEST_EQUAL(one.ms2_cmds.size(), rows.ms2_cmds.size())
+  ABORT_IF(one.ms2_cmds.size() != rows.ms2_cmds.size())
+
+  const auto one_groups  = chargesPerSurveyMass(one, /*with_notches=*/true);
+  const auto rows_groups = chargesPerSurveyMass(rows, /*with_notches=*/true);
+  TEST_EQUAL(one_groups.size(), rows_groups.size())
+  TEST_EQUAL(one_groups == rows_groups, true)
+}
+END_SECTION
+
+// CM-11: an UNRESTRICTED row is untouched by any of this (ADR-0036 as amended; ADR-0037 withdrawn).
+//
+// This is the regression guard for the scope decision, and it is the test whose absence let a
+// change aimed at charge completeness move thirteen log goldens -- every one of them a `-1` row,
+// while the two authored-charge modes stayed still. Two things must hold for a `-1` row: no sibling
+// is ever admitted (so a mass reaches at most one anchor per survey under `single`), and matching
+// an inclusion row does not lift dynamic exclusion (so the mass is acquired once per rt window
+// rather than on every survey that beats the stored qscore by any margin).
+START_SECTION(an_unrestricted_row_is_unaffected_by_split_envelope_completion)
+{
+  auto scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(scans.empty())
+
+  // Under `single`: one anchor per mass per survey, exactly as CM-03 requires of a non-targeted run.
+  {
+    const std::string cfg = cfgFor("single", "inclusion", unrestricted_list);
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    AcqResult a = runMode(ida, scans);
+    TEST_EQUAL(a.ms2_cmds.size() > 0, true)
+
+    int violations = 0, surveys_with_the_mass = 0;
+    for (const auto& kv : chargesPerSurveyMass(a, /*with_notches=*/false))
+    {
+      if (kv.first.second != authored_mass) continue;
+      ++surveys_with_the_mass;
+      if (kv.second.size() <= 1) continue;
+      ++violations;
+      std::cout << "[CM-11] survey '" << kv.first.first << "' acquired the unrestricted mass at "
+                << kv.second.size() << " charges -- a sibling was admitted for a `-1` row"
+                << std::endl;
+    }
+    TEST_EQUAL(surveys_with_the_mass > 0, true)   // non-vacuity
+    TEST_EQUAL(violations, 0)
+
+    // Dynamic exclusion still governs: the target is acquired ONCE inside the rt window, not on
+    // every survey that resolves it a fraction better. rt_window is 180 s and this fixture is a
+    // 63 s run, so nothing expires -- a count above one here means the bars were exempted.
+    TEST_EQUAL(surveys_with_the_mass, 1)
+  }
+
+  // Under `multiplexed`: still one scan for the mass per survey, however many PeakGroups of it the
+  // survey produced. The notch set is the winner's own envelope and is NOT extended by a sibling.
+  {
+    const std::string cfg = cfgFor("multiplexed", "inclusion", unrestricted_list);
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    AcqResult a = runMode(ida, scans);
+    TEST_EQUAL(a.ms2_cmds.size() > 0, true)
+
+    int scans_for_the_mass = 0;
+    for (const auto& c : a.ms2_cmds)
+      if (c.num_stages >= 1 && std::llround(c.mono_mass) == authored_mass) ++scans_for_the_mass;
+
+    TEST_EQUAL(scans_for_the_mass, 1)
+  }
 }
 END_SECTION
 
