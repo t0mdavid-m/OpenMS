@@ -633,6 +633,31 @@ START_SECTION(quantification_structural_rejections)
 }
 END_SECTION
 
+START_SECTION(quantification_explicit_nulls_are_treated_as_absent)
+{
+  // REGRESSION. ToCppJson uses the STOCK JavaScriptSerializer, which EMITS nulls -- so every
+  // config that authors neither key sends `"conditions": null, "correction_matrix": null`. A bare
+  // contains() check then reads "present but not an array" and threw for ALL 41 committed configs,
+  // which is 68 C# failures and an engine that will not construct. `is_null()` is the idiom
+  // resolveFollowUp_ already uses in this file for exactly this reason.
+  //
+  // Asserted with quantification DISABLED because that is the shape 40 of the 41 configs have.
+  Config nulls(cfgJson("", QUANT_ON(R"({ "enabled": false, "conditions": null,
+                                         "correction_matrix": null })"), ""));
+  TEST_EQUAL(nulls.quantification().enabled, false)
+  TEST_EQUAL(nulls.quantification().conditions.empty(), true)
+  TEST_EQUAL(nulls.quantification().correction_matrix.empty(), true)
+  // ...and ms_settings.ms2 is still rostered, i.e. such a config is an ordinary DDA run.
+  TEST_EQUAL(nulls.level(2).scans.size(), 1)
+  TEST_STRING_EQUAL(nulls.level(2).scans[0].activation, "HCD")
+
+  // A null ms2_quant is likewise absent rather than an empty scan config.
+  Config nulls2(cfgJson("", QUANT_ON(R"({ "enabled": false })"), R"(, "ms2_quant": null)"));
+  TEST_EQUAL(nulls2.quantification().has_quant_scan, false)
+  TEST_EQUAL(nulls2.level(2).scans.size(), 1)
+}
+END_SECTION
+
 START_SECTION(quantification_retired_keys_are_migration_errors)
 {
   // Both earn their own message rather than a bare "unknown key", because deleting the key is the

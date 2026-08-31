@@ -541,7 +541,11 @@ namespace OpenMS
             "'quantification.enabled' is the switch.)");
     }
 
-    if (quant.contains("correction_matrix"))
+    // NOTE the is_null() arm on both of these, and it is not defensive padding. ToCppJson uses the
+    // STOCK JavaScriptSerializer, which EMITS nulls -- so every config that authors neither key
+    // sends `"conditions": null, "correction_matrix": null`, and a bare contains() check would
+    // throw "must be an ARRAY" for all 41 of them. Same idiom resolveFollowUp_ already uses above.
+    if (quant.contains("correction_matrix") && !quant["correction_matrix"].is_null())
     {
       if (!quant["correction_matrix"].is_array())
         throw std::invalid_argument(
@@ -556,7 +560,7 @@ namespace OpenMS
     // would sort the two alphabetically and silently decide which is the numerator. The array order
     // IS the ratio direction. Channel NAMES resolve to ordinals here, at load, so an unknown
     // channel fails loudly instead of reading the wrong intensity at acquisition time.
-    if (quant.contains("conditions"))
+    if (quant.contains("conditions") && !quant["conditions"].is_null())
     {
       if (!quant["conditions"].is_array())
         throw std::invalid_argument(
