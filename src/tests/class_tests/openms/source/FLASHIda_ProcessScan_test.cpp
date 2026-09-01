@@ -2060,6 +2060,102 @@ START_SECTION(processScan_mass_exclusion_thresholded)
 END_SECTION
 
 // P4-U07: Quantification follow-up routing — hard positive with sensitive threshold
+// ADR-0038: a quantification scan is MEASURED and BUYS the identification scan -- and does nothing
+// else. Its activation and energy were chosen to release a reporter ion, not to fragment
+// informatively, so tags read off it would come from the wrong spectrum and a 'C' follow-up bought
+// here would be a third scan on the precursor before the identification scan has even run.
+//
+// The control is what makes this a test rather than an observation: tags_with_quant_json is
+// conditional_with_tags_json with quantification ADDED and nothing else changed -- same fasta, same
+// tagging.follow_up_scan, same spectra. processScan_followup_does_not_recurse already asserts the
+// control produces at least one 'C'. So if the is_quant_scan gate on the tagging branch were
+// removed, this section would see those same 'C' commands and fail.
+START_SECTION(processScan_quant_scan_raises_no_tagging_or_ms3)
+{
+  const char* tags_with_quant_json = R"({
+  "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 4,
+                     "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
+  "flashtnt": { "min_length": 3, "max_length": 8 },
+  "faims": { "cv_values": [], "max_cv_skip": 0 },
+  "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 },
+                  "scan_timeout": { "enabled": false, "value_ms": 30000 },
+                  "agc_interval_seconds": 9999999 },
+  "conditional_ms2": true,
+  "files": { "target_logs": [], "fasta": "../../FlashIDA/test-data/configs/test_fasta.fasta",
+             "inclusion_list": "", "ptm_list": "" },
+  "precursor_selection": { "rt_window": 180, "targeting": "none", "consider_all_charges": false,
+                           "strict_inclusion": false, "tie_threshold": 0.1, "rank_by": "qscore",
+                           "max_precursors": 3 },
+  "characterization": { "mode": "off", "max_targets": 10 },
+  "ms_settings": {
+    "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000,
+             "agc_target": 800000, "max_it": 246 },
+    "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 },
+    "ms2_quant": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 30, "resolution": 120000 },
+    "additional_ms2": { "tagging_follow_up": { "analyzer": "Orbitrap", "activation": "ETD",
+                                               "collision_energy": 0, "reaction_time": 10.0,
+                                               "resolution": 120000 } }
+  },
+  "tagging": { "follow_up_scan": "tagging_follow_up" },
+  "quantification": { "enabled": true, "labelling": "tmt6plex", "reporter_mz_tol": 0.002,
+                      "fold_change_threshold": 0.01,
+                      "conditions": [ { "name": "a", "channels": ["126", "127", "128"] },
+                                      { "name": "b", "channels": ["129", "130", "131"] } ] }
+})";
+
+  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  auto ms2_tmt_scans = loadTsvScans(ms2_tmt_tsv_path);
+  ABORT_IF(ms1_scans.empty() || ms2_tmt_scans.empty())
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(tags_with_quant_json));
+
+  AcqResult acq = runInterleaved(ida, ms1_scans, {});
+  ABORT_IF(acq.ms2_cmds.empty())
+
+  // The rostered scan is the 'Q'. Feed its return the TMT spectrum, which the fasta ALSO yields
+  // tags from -- that is what the control demonstrates.
+  const ScanCommand& q = acq.ms2_cmds[0];
+  TEST_EQUAL(q.scan_description[3], 'Q')
+  const auto& ms2 = ms2_tmt_scans[0];
+  int pushed = ida->processScan(ms2.mzs.data(), ms2.ints.data(), (int)ms2.mzs.size(), ms2.rt,
+                                2, q.scan_description, 0.0, instrumentScanNumberOf(ms2));
+
+  // EXACTLY ONE command: the identification scan it bought. Not two, which is what a 'C' alongside
+  // it would make, and not more.
+  TEST_EQUAL(pushed, 1)
+
+  // Drain everything and confirm what came out: no 'C' anywhere, and no MS3 at any point.
+  int c_count = 0, r_count = 0, q_count = 0;
+  ScanCommand out{};
+  for (int i = 0; i < 40; ++i)
+  {
+    if (ida->getNextScanCommand(out) != 1) break;
+    if (out.msn_level == 1 && out.priority == 3) break;   // idle survey == drained
+    if (out.msn_level == 3) { TEST_EQUAL(out.msn_level, 2) }  // fails loudly naming the level
+    if (std::strlen(out.scan_description) >= 4)
+    {
+      if (out.scan_description[3] == 'C') ++c_count;
+      if (out.scan_description[3] == 'R') ++r_count;
+      if (out.scan_description[3] == 'Q') ++q_count;
+    }
+    out = ScanCommand{};
+  }
+  TEST_EQUAL(c_count, 0)          // the whole point: tagging is suppressed on a 'Q'
+  TEST_TRUE(r_count >= 1)         // ...but the identification scan WAS bought, so this is not
+                                  //    "nothing happened", which would pass vacuously
+
+  // The quantification scans are counted from the DRIVE, not from the drain above: runInterleaved
+  // already dequeued them into acq.ms2_cmds, so the post-return drain only sees what the return
+  // pushed. Counting them there found 0 and said nothing about the roster.
+  int q_rostered = 0;
+  for (const auto& c : acq.ms2_cmds)
+    if (std::strlen(c.scan_description) >= 4 && c.scan_description[3] == 'Q') ++q_rostered;
+  TEST_TRUE(q_rostered >= 1)      // the roster really is emitting quantification scans
+  (void)q_count;
+
+  delete ida;
+}
+END_SECTION
+
 START_SECTION(processScan_quant_followup)
 {
   auto ms1_scans = loadTsvScans(ms1_tsv_path);
