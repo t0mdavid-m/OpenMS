@@ -84,7 +84,11 @@ namespace
                      const std::string& targeting = "none",
                      const std::string& inclusion_list = "",
                      int max_precursors = 10,
-                     bool strict_inclusion = false)
+                     bool strict_inclusion = false,
+                     // ADR-0040. Emitted unconditionally at their INERT defaults, so every existing
+                     // caller's config is unchanged in behaviour while the keys stay exercised.
+                     int max_charge_states = 0,
+                     int min_charge_states = 1)
   {
     return std::string(R"JSON({
   "deconvolution": {
@@ -113,7 +117,9 @@ namespace
     "tie_threshold": 0.1,
     "rank_by": "qscore",
     "max_precursors": )JSON" + std::to_string(max_precursors) + R"JSON(,
-    "precursor_charges": ")JSON" + precursor_charges + R"JSON("
+    "precursor_charges": ")JSON" + precursor_charges + R"JSON(",
+    "max_charge_states": )JSON" + std::to_string(max_charge_states) + R"JSON(,
+    "min_charge_states": )JSON" + std::to_string(min_charge_states) + R"JSON(
   },
   "characterization": { "mode": "off", "max_targets": 10 },
   "ms_settings": {
@@ -675,6 +681,48 @@ START_SECTION(an_unrestricted_row_is_unaffected_by_split_envelope_completion)
 
     TEST_EQUAL(scans_for_the_mass, 1)
   }
+}
+END_SECTION
+
+// CM-09: precursor_selection.max_charge_states caps the acquired set END TO END (ADR-0040).
+//
+// This is the test that pins the CALLER's arithmetic. max_charge_states counts the SET (anchor +
+// notches) while AdmissionContext::max_notches counts notches ALONE, so PrecursorSelection must
+// pass `max_charge_states - 1`. Passing it unconverted yields one charge too many -- a defect that
+// is invisible in every log, because "max 3" producing 4 charges reads as entirely plausible.
+// CA-B18 pins the +1 at the unit level; only this section pins the subtraction at the call site.
+//
+// Uses `separate`, where the cap bounds the SCAN COUNT per species and was previously bounded only
+// by MAX_NOTCHES_PER_STAGE -- a notch-array capacity that `separate` never writes into.
+START_SECTION(max_charge_states_caps_the_acquired_set)
+{
+  auto scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(scans.empty())
+
+  // Uncapped first, to establish that this fixture DOES resolve more charges than the cap allows.
+  // Without this the capped assertion below could pass on a survey that never had 4 charges to cap.
+  const std::string uncapped_cfg = cfgFor("separate");
+  FLASHIda uncapped(const_cast<char*>(uncapped_cfg.c_str()));
+  AcqResult ua = runMode(uncapped, scans);
+  const auto ugroups = chargesPerSurveyMass(ua, /*with_notches=*/false);
+  size_t widest = 0;
+  for (const auto& kv : ugroups) widest = std::max(widest, kv.second.size());
+  if (widest <= 3)
+    std::cout << "[CM-09] uncapped run never acquired a mass at >3 charges (widest=" << widest
+              << ") -- the cap assertion below would be vacuous" << std::endl;
+  TEST_EQUAL(widest > 3, true)
+
+  // Capped at 3. No mass may exceed it, and at least one must REACH it.
+  const std::string capped_cfg = cfgFor("separate", "none", "", 10, false, /*max_charge_states=*/3);
+  FLASHIda capped(const_cast<char*>(capped_cfg.c_str()));
+  AcqResult ca = runMode(capped, scans);
+  TEST_EQUAL(ca.ms2_cmds.size() > 0, true)   // non-vacuity
+
+  const auto cgroups = chargesPerSurveyMass(ca, /*with_notches=*/false);
+  size_t capped_widest = 0;
+  for (const auto& kv : cgroups) capped_widest = std::max(capped_widest, kv.second.size());
+  TEST_EQUAL(capped_widest <= 3, true)   // 4 here means the -1 was dropped at the call site
+  TEST_EQUAL(capped_widest, 3)           // and the cap is REACHED, so it is not merely unreachable
 }
 END_SECTION
 

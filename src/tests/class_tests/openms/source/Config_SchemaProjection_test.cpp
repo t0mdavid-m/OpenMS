@@ -872,4 +872,52 @@ END_SECTION
 #undef QUANT_ON
 #undef MS2_QUANT
 
+// SP-CS1: precursor_selection.snr_threshold is AUTHORABLE (ADR-0040).
+//
+// It was assigned a hardcoded 1.0 at the very END of parseJSONConfig_, after every section had been
+// read -- so a config could carry the key, the allowlist could accept it, and the value would still
+// be overwritten before validate(). This test fails against that arrangement, which is the point:
+// adding the parse without deleting the assignment is the only plausible way to get this wrong, and
+// it is exactly the shape (bound, documented, inert) that only_one_condition spent its whole life in.
+START_SECTION(snr_threshold_is_authorable_and_defaults_to_one)
+{
+  Config def(cfgJson());
+  TEST_REAL_SIMILAR(def.targeting().snr_threshold, 1.0)   // unauthored: the pre-ADR-0040 constant
+
+  Config authored(cfgJson(R"(, "snr_threshold": 3.5)"));
+  TEST_REAL_SIMILAR(authored.targeting().snr_threshold, 3.5)
+}
+END_SECTION
+
+// SP-CS2: the two charge-set bounds parse, default to their inert values, and reject the one pair
+// that cannot be satisfied (ADR-0040).
+//
+// min > max is not merely odd -- the cap truncates the acquisition charge set BELOW the floor, so
+// admitCandidate refuses every species and the run acquires nothing, with no wrong value anywhere to
+// notice. The guard is gated on max > 0 so the default (0 = no cap) can never trip it.
+START_SECTION(charge_state_bounds_parse_and_an_unsatisfiable_pair_throws)
+{
+  Config def(cfgJson());
+  TEST_EQUAL(def.targeting().max_charge_states, 0)   // 0 = all, the pre-ADR-0040 behaviour
+  TEST_EQUAL(def.targeting().min_charge_states, 1)   // 1 = no floor
+
+  Config bounded(cfgJson(R"(, "max_charge_states": 3, "min_charge_states": 2)"));
+  TEST_EQUAL(bounded.targeting().max_charge_states, 3)
+  TEST_EQUAL(bounded.targeting().min_charge_states, 2)
+
+  // Unsatisfiable: floor above cap.
+  TEST_EXCEPTION(std::invalid_argument,
+                 Config(cfgJson(R"(, "max_charge_states": 2, "min_charge_states": 4)")))
+
+  // Equal is fine -- exactly one set size satisfies both.
+  Config tight(cfgJson(R"(, "max_charge_states": 3, "min_charge_states": 3)"));
+  TEST_EQUAL(tight.targeting().min_charge_states, 3)
+
+  // A floor with NO cap is fine, and is the combination the quant configs actually author.
+  Config floor_only(cfgJson(R"(, "min_charge_states": 2)"));
+  TEST_EQUAL(floor_only.targeting().min_charge_states, 2)
+  TEST_EQUAL(floor_only.targeting().max_charge_states, 0)
+}
+END_SECTION
+
 END_TEST

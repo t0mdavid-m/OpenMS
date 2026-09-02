@@ -468,6 +468,81 @@ START_SECTION(an_admitted_sibling_is_not_charged_a_budget_slot)
 }
 END_SECTION
 
+// CA-B17: the min_charge_states floor (ADR-0040) refuses a species whose acquisition charge set is
+// too small to be worth the scans -- and EXEMPTS a sibling.
+//
+// The exemption is load-bearing rather than defensive. A sibling's set is deliberately REDUCED by
+// what the species already isolated (ADR-0036, CA-B15), so the PeakGroup supplying the last charge
+// of a split envelope presents a set of size 1 BY CONSTRUCTION. Without the exemption the floor
+// refuses precisely the acquisition ADR-0036 exists to recover, and it does so silently -- the
+// species simply stops appearing, with every other gate reporting success.
+START_SECTION(min_charge_states_refuses_a_small_set_but_exempts_a_sibling)
+{
+  // Two SNR-positive charges; the floor asks for three.
+  PeakGroup small = makeEnvelope(12351.39, {12, 13}, 0.94, 10.0f);
+
+  AdmissionContext floor3 = admitCtx();
+  floor3.fan_out = true;
+  floor3.min_charge_states = 3;
+
+  AdmissionVerdict refused = admitCandidate(small, 13, 0.94, floor3);
+  TEST_EQUAL(refused.admit, false)
+  TEST_EQUAL(refused.reason == AdmissionReason::BelowMinChargeStates, true)
+  TEST_EQUAL(refused.acquisition_charges.size(), 2)   // computed, THEN refused -- not left empty
+
+  // The default floor is 1, i.e. none: the SAME candidate is admitted. This is what makes the key
+  // inert unless authored, and therefore what keeps every committed config byte-identical.
+  AdmissionContext no_floor = admitCtx();
+  no_floor.fan_out = true;
+  TEST_EQUAL(admitCandidate(small, 13, 0.94, no_floor).admit, true)
+
+  // A SIBLING is exempt. z12 was already isolated by an earlier PeakGroup of this species, so the
+  // sibling's set reduces to {13} -- below the floor, and exactly what still has to be acquired.
+  SpeciesSurveyRecord seen;
+  seen.resolved = {12};
+  seen.acquired = {12};
+
+  AdmissionContext sib = admitCtx();
+  sib.fan_out = true;
+  sib.min_charge_states = 3;
+  sib.seen = &seen;
+
+  AdmissionVerdict v = admitCandidate(small, 13, 0.94, sib);
+  TEST_EQUAL(v.is_sibling, true)
+  TEST_EQUAL(v.admit, true)                       // exempt: fails the floor, admitted regardless
+  TEST_EQUAL(v.acquisition_charges.size(), 1)     // and its set really IS below the floor
+  TEST_EQUAL(v.acquisition_charges[0], 13)
+}
+END_SECTION
+
+// CA-B18: the acquisition charge set is the ANCHOR PLUS max_notches, never max_notches alone.
+//
+// That +1 is the whole content of the max_charge_states -> max_notches translation the caller
+// performs (PrecursorSelection.cpp), and getting it wrong is silent: max_charge_states: 3 yielding
+// four charges reads as entirely plausible in any log. Pinned here at the unit level; the caller's
+// arithmetic is pinned end-to-end by FLASHIda_ChargeModes_test CM-09.
+START_SECTION(the_acquired_set_size_is_the_anchor_plus_max_notches)
+{
+  PeakGroup pg = makeEnvelope(12351.39, {10, 11, 12, 13, 14, 15, 16}, 0.94, 10.0f);
+
+  AdmissionContext all = admitCtx();
+  all.fan_out = true;
+  TEST_EQUAL(acquisitionChargeSet(pg, 13, all).size(), 7)   // ceiling well above the envelope
+
+  AdmissionContext three = admitCtx();
+  three.fan_out = true;
+  three.max_notches = 3 - 1;                                // what max_charge_states: 3 must become
+  std::vector<int> got = acquisitionChargeSet(pg, 13, three);
+  TEST_EQUAL(got.size(), 3)
+  TEST_EQUAL(got[0], 13)                                    // the anchor is kept and leads
+
+  AdmissionContext anchor_only = admitCtx();
+  anchor_only.fan_out = true;
+  anchor_only.max_notches = 1 - 1;                          // max_charge_states: 1 -> zero notches
+  TEST_EQUAL(acquisitionChargeSet(pg, 13, anchor_only).size(), 1)
+}
+END_SECTION
+
 /////////////////////////////////////////////////////////////
 
 END_TEST
