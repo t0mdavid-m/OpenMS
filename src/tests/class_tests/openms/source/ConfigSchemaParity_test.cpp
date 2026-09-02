@@ -66,6 +66,14 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
   TEST_EQUAL(cfg.targeting().consider_all_charges, j["precursor_selection"]["consider_all_charges"].get<bool>())
   TEST_EQUAL(cfg.targeting().strict_inclusion, j["precursor_selection"]["strict_inclusion"].get<bool>())
   TEST_REAL_SIMILAR(cfg.targeting().tie_threshold, j["precursor_selection"]["tie_threshold"].get<double>())
+  // ADR-0040. Without these three the reference could carry the keys while the C++ reader ignored
+  // them entirely -- which is the rf_lens failure shape (ADR-0011): C++ parsed keys C# could not
+  // reach, both sides looked correct in isolation, and nothing noticed for months. snr_threshold
+  // additionally guards the deleted post-parse assignment: if that line came back, this reads 1.0
+  // against the reference's 1.7.
+  TEST_REAL_SIMILAR(cfg.targeting().snr_threshold, j["precursor_selection"]["snr_threshold"].get<double>())
+  TEST_EQUAL(cfg.targeting().max_charge_states, j["precursor_selection"]["max_charge_states"].get<int>())
+  TEST_EQUAL(cfg.targeting().min_charge_states, j["precursor_selection"]["min_charge_states"].get<int>())
   // targeting is a string enum on the wire and an int in the struct, so the parity check has to
   // map rather than compare directly. Mapping taken from the CODE (PrecursorSelection.cpp:138-141).
   {
