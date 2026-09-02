@@ -683,7 +683,14 @@ namespace OpenMS
             adm_ctx.anchor_snr_threshold = snr_threshold;
             adm_ctx.qscore_threshold = qscore_threshold;
             adm_ctx.tqscore_threshold = config_.targeting().tqscore_threshold;
-            adm_ctx.max_notches = MAX_NOTCHES_PER_STAGE;
+            // max_charge_states counts the SET (anchor + notches); max_notches counts notches
+            // only -- hence the -1. 0 means unbounded, and MAX_NOTCHES_PER_STAGE stays the hard
+            // ceiling because the notch block is ABI (ADR-0019/0040).
+            adm_ctx.max_notches =
+                config_.targeting().max_charge_states > 0
+                    ? std::min(config_.targeting().max_charge_states - 1, MAX_NOTCHES_PER_STAGE)
+                    : MAX_NOTCHES_PER_STAGE;
+            adm_ctx.min_charge_states = config_.targeting().min_charge_states;
             adm_ctx.where = "MS2 z=" + std::to_string(charge);
 
             const AdmissionVerdict verdict = admitCandidate(pg, charge, score, adm_ctx);

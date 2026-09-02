@@ -259,6 +259,24 @@ namespace OpenMS
     /// precursor_selection.precursor_charges. Decides the isolation GEOMETRY of a single scan
     /// (ADR-0016), and since ADR-0021 it is the only thing that does. Exclusion is mass-keyed.
     ChargeAcquisitionMode precursor_charges = ChargeAcquisitionMode::Single;
+    /// precursor_selection.max_charge_states -- an upper bound on the ACQUISITION CHARGE SET
+    /// (anchor + notches), 0 = no bound (ADR-0040). It can only LOWER the cap; the hard ceiling
+    /// stays MAX_NOTCHES_PER_STAGE + 1, so the 2048-byte ABI is never at risk.
+    ///
+    /// It exists because `separate` had no bound of its own: it never writes a notch
+    /// (ScanCommandQueue.cpp:316 gates that on Multiplexed) yet was clamped by the notch array's
+    /// capacity, so a SCAN COUNT was limited by a geometry constant. Measured on the
+    /// separate_charges golden: 10 of 18 species sat at exactly 10 charges, 100 of its 135 MS2.
+    int max_charge_states = 0;
+    /// precursor_selection.min_charge_states -- the minimum ACQUISITION CHARGE SET size for a
+    /// species to be selected at all (ADR-0040). 1 = no floor, and 1 is the default, so this is
+    /// inert unless authored. Inert under `single` too, where the set is always size 1.
+    ///
+    /// Refused in admitCandidate, so a species below the floor costs no max_precursors slot.
+    /// A SIBLING is exempt: its set is REDUCED by what the species already isolated (ADR-0036),
+    /// so the last charge of a split envelope presents size 1 and the floor would refuse exactly
+    /// the charge that ADR needed to recover.
+    int min_charge_states = 1;
     // NOTE: there is no hcd_energy here any more. The precursor_selection.HCDEnergy key was deleted
     // (ADR-0014) because its only export, PrecursorSelection::getIsolationWindows(), had zero callers
     // repo-wide. Do not confuse it with ScanCommand::hcd_energy, which is alive and unrelated: that

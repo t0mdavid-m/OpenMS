@@ -86,7 +86,8 @@ namespace OpenMS
     ScoreBelowThreshold, ///< score < qscore_threshold
     SnrBelowThreshold,   ///< the anchor's own envelope does not rise above noise
     Barred,              ///< dynamic exclusion: a tqscore_exceeding_* bar, or a spent authored charge
-    ScoreNotBetter       ///< the species has been acquired at a score this survey does not beat
+    ScoreNotBetter,      ///< the species has been acquired at a score this survey does not beat
+    BelowMinChargeStates ///< the acquisition charge set is smaller than min_charge_states (ADR-0040)
   };
 
   /// The anchor charge of one candidate, with the score that will be logged and excluded on.
@@ -174,6 +175,7 @@ namespace OpenMS
     double qscore_threshold = 0.0;       ///< likewise zeroed for a matched target
     double tqscore_threshold = 0.0;
     int    max_notches = MAX_NOTCHES_PER_STAGE;
+    int    min_charge_states = 1;    ///< floor on the ACQUIRED set size; 1 = no floor. Siblings exempt.
     std::string where;               ///< short label for selectNotches' clamp message
   };
 
@@ -454,6 +456,25 @@ namespace OpenMS
     v.passed_exclusion = true;
 
     v.acquisition_charges = acquisitionChargeSet(pg, anchor_charge, ctx);
+
+    // ADR-0040. A species whose set is too small to vote on is not worth the scans, and refusing
+    // HERE -- rather than at the consumer -- is what frees its max_precursors slot for one that is.
+    //
+    // The sibling exemption is load-bearing, not defensive: a sibling's set is REDUCED by what the
+    // species already isolated (ADR-0036), so the PeakGroup supplying the last charge of a split
+    // envelope presents a set of size 1. Without this clause the floor refuses precisely the charge
+    // ADR-0036 exists to recover, and split-envelope completion regresses silently.
+    //
+    // Placed after passed_exclusion deliberately: all_mass_rt_map_ has no readers, it only carries
+    // mass_qscore_map_ entries through expiry, and a species never acquired has no qscore entry --
+    // so operator[] default-inserts a 0.0 bar, which bars nothing. Moving the gate earlier would
+    // reorder exclusion stamping, which is a behaviour change dressed as a refactor.
+    if (ctx.min_charge_states > 1 && !v.is_sibling
+        && static_cast<int>(v.acquisition_charges.size()) < ctx.min_charge_states)
+    {
+      v.reason = AdmissionReason::BelowMinChargeStates;
+      return v;   // v.admit stays false -> no slot spent
+    }
 
     // The qscore ledger is mass-keyed and therefore skipped entirely for an authored species: it
     // would retire the MASS after its first charge and leave the other named charges unreachable,

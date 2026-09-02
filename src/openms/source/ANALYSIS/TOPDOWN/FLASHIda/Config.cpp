@@ -371,13 +371,20 @@ namespace OpenMS
         {"rt_window", "targeting", "consider_all_charges",
          "precursor_charges", "strict_inclusion", "tie_threshold",
          "rank_by", "max_precursors", "min_precursor_charge", "additional_scans", "exploration",
-         "tag_expansion"},
+         "tag_expansion", "snr_threshold", "max_charge_states", "min_charge_states"},
         "precursor_selection");
     targeting_.rt_window = ps.value("rt_window", 180.0);
     targeting_.consider_all_charges = ps.value("consider_all_charges", false);
     targeting_.precursor_charges = parseChargeMode(ps, "precursor_charges", "precursor_selection");
     targeting_.strict_inclusion = ps.value("strict_inclusion", false);
     targeting_.tie_threshold = ps.value("tie_threshold", 0.1);
+
+    // The notch ADMISSION gate (NotchSelection.h) and the anchor's own SNR bar. Authorable since
+    // ADR-0040. It was assigned a hardcoded 1.0 AFTER this entire parse, so adding this line
+    // required DELETING that one -- otherwise the key would have been bound and inert.
+    targeting_.snr_threshold = ps.value("snr_threshold", 1.0);
+    targeting_.max_charge_states = ps.value("max_charge_states", 0);
+    targeting_.min_charge_states = ps.value("min_charge_states", 1);
 
     // targeting: int -> string enum. Values map to the CODE, not the doc comments -- 2 is in-depth
     // and 3 is exclusion (PrecursorSelection.cpp:136-139 logs exactly that), while MethodConfig.cs,
@@ -1007,9 +1014,6 @@ namespace OpenMS
     rejectUnknownKeys(rt_section, {"log_dir"}, "runtime");
     runtime_.log_dir = rt_section.value("log_dir", std::string{});
 
-    // SNR threshold (hardcoded in original parseJSONConfig_)
-    targeting_.snr_threshold = 1.0;
-
     validate();
   }
 
@@ -1063,6 +1067,21 @@ namespace OpenMS
       throw std::invalid_argument(
           "conditional_ms2 is true but tagging.follow_up_scan is not set. Name an "
           "ms_settings.additional_ms2 entry, or set conditional_ms2 to false.");
+
+    // --- charge-set bounds (ADR-0040) -----------------------------------------------------------
+    // Unsatisfiable rather than merely odd: the cap truncates the acquisition charge set BELOW the
+    // floor, so admitCandidate refuses every species and the run acquires nothing -- silently, with
+    // no wrong value anywhere to notice. Both keys are inert at their defaults (1 and 0), so this
+    // can only fire on a config that authored both.
+    if (targeting_.max_charge_states > 0
+        && targeting_.min_charge_states > targeting_.max_charge_states)
+      throw std::invalid_argument(
+          "Config: precursor_selection.min_charge_states ("
+          + std::to_string(targeting_.min_charge_states)
+          + ") exceeds max_charge_states (" + std::to_string(targeting_.max_charge_states)
+          + "). The cap truncates the acquisition charge set below the floor, so EVERY species "
+            "would be refused and the run would acquire nothing. Lower min_charge_states, raise "
+            "max_charge_states, or set max_charge_states to 0 for no cap.");
 
     // --- quantification (ADR-0038) --------------------------------------------------------------
     // Three structural rejections. These are NOT chemistry judgements -- there is deliberately no
