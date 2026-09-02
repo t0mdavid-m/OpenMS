@@ -131,7 +131,7 @@ log row — but gates 3–5 do leave a stdout trace.
 in `IdaLogger::scanTypeFromDescription_`:
 
 `S` survey MS1 · `A` AGC calibration · `R` "recording" — any data-acquiring MS2 *or* MS3, **and
-the identification scan a differential quantification verdict buys** · `Q` the quantification scan
+the identification scan a quantification verdict buys** · `Q` the quantification scan
 (ADR-0038) · `C` tagging conditional follow-up MS2 · `E` exploration variant.
 
 ⚠️ **`F` is retired** (ADR-0038). It marked the scan quantification *bought* — which the engine
@@ -139,6 +139,19 @@ never measured — while the scan it *did* measure was the base MS2, whose activ
 release the reporter ion. `Q` marks the scan quantification **measures**: rostered once per
 selected precursor, and the only scan measured. What it buys is an ordinary `R`, which is what
 keeps `R` meaning "identification MS2" in every mode; only *when* it fires changes.
+
+⚠️ **WHICH verdicts buy is authored, not hardcoded** (ADR-0039). `quantification.identify` is a cut
+point on the verdict ladder — `differential` (default; ADR-0038's exact behaviour) | `quantified` |
+`all` | `none` — and `quantification.enriched_in` names the **condition** a differential species
+must be enriched in (or `"either"`). Never a direction: `fold_change = mean(conditions[0]) /
+mean(conditions[1])`, so `"up"` would mean *enriched in whichever condition is listed first*.
+The predicate is `quantBuysIdentification` in `FLASHIda.cpp`'s anonymous namespace, and it reads
+**`Result::condition_means`, never `fold_change`** — a wholly-absent condition is `Differential`
+with `fold_change == -1.0`, a sentinel, so a `fold_change`-based direction test drops exactly the
+species the experiment exists to find. Two fixtures pin it, one per absence direction, because with
+`conditions[0]` absent a bug spelled `fold_change < 1.0` coincidentally agrees with the right
+answer. Since tagging and MS3 are suppressed on a `Q` and ride the bought `R`, `identify` also
+governs what gets characterized — with no MS3 code involved.
 
 `processScan` branches on the marker three times: `desc[3]=='A'` (gate 2),
 `is_follow_up_scan = desc[3]=='C'`, and `is_quant_scan = desc[3]=='Q'`. The screen gate keys on
