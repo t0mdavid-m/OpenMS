@@ -51,6 +51,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <sstream>
 #include <memory>
 #include <numeric>
@@ -144,6 +145,174 @@ namespace OpenMS
       case Result::Verdict::ExtractionFailed:   return "extraction_failed";
     }
     return "extraction_failed";
+  }
+
+  // ---- the quantification group and its vote (ADR-0040) ----------------------------------------
+
+  void Quantification::addMember(const int group_id, const ScanCommand& cmd, const int precursor_id)
+  {
+    GroupMember m;
+    m.tracking_id  = cmd.scan_id;
+    m.precursor_id = precursor_id;
+    m.charge       = cmd.num_stages > 0 ? std::abs(cmd.stages[0].charge_state) : 0;
+    m.window_snr   = cmd.window_snr;
+    m.intensity    = cmd.precursor_intensity;
+    m.cmd          = cmd;
+    groups_[group_id].push_back(m);
+    group_by_tracking_[cmd.scan_id] = group_id;
+  }
+
+  int Quantification::deposit(const int tracking_id, const Result& result)
+  {
+    auto it = group_by_tracking_.find(tracking_id);
+    if (it == group_by_tracking_.end()) return 0;
+    auto git = groups_.find(it->second);
+    if (git == groups_.end()) return 0;
+    for (GroupMember& m : git->second)
+    {
+      if (m.tracking_id != tracking_id) continue;
+      m.received = true;
+      m.result   = result;
+      return it->second;
+    }
+    return 0;
+  }
+
+  bool Quantification::isComplete(const int group_id) const
+  {
+    auto it = groups_.find(group_id);
+    if (it == groups_.end()) return false;
+    // Exploration.cpp:643's all_of(variants, received), deliberately -- including its lack of a
+    // timeout. A 'Q' the instrument never returns leaves the group open forever, exactly as a lost
+    // exploration variant does today (ADR-0040 decision 8).
+    return std::all_of(it->second.begin(), it->second.end(),
+                       [](const GroupMember& m) { return m.received; });
+  }
+
+  void Quantification::closeGroup(const int group_id)
+  {
+    auto it = groups_.find(group_id);
+    if (it == groups_.end()) return;
+    for (const GroupMember& m : it->second) group_by_tracking_.erase(m.tracking_id);
+    groups_.erase(it);
+  }
+
+  Quantification::Consensus Quantification::decide(const int group_id) const
+  {
+    Consensus out;
+    auto git = groups_.find(group_id);
+    if (git == groups_.end()) return out;
+    const std::vector<GroupMember>& members = git->second;
+
+    // ---- ballots -------------------------------------------------------------------------------
+    // A member that measured nothing usable ABSTAINS; it is evidence of nothing, not evidence of
+    // disagreement, and counting it as dissent would manufacture chimericity out of a weak charge.
+    std::vector<const GroupMember*> ballots;
+    bool any_returned = false;
+    for (const GroupMember& m : members)
+    {
+      if (m.received) any_returned = true;
+      if (!m.received) continue;
+      if (m.result.verdict == Result::Verdict::Differential
+          || m.result.verdict == Result::Verdict::NotDifferential)
+        ballots.push_back(&m);
+    }
+
+    const int min_ballots = std::max(1, config_.targeting().min_charge_states);
+    if (static_cast<int>(ballots.size()) < min_ballots)
+    {
+      // Not a verdict about the SPECIES but about the MEASUREMENT, and it reads as one. Folding it
+      // into IncompleteChannels follows ADR-0039's own reasoning that the two failure values "differ
+      // only in why" -- and each member's own why is already on its own scan_results row.
+      out.result.verdict = any_returned ? Result::Verdict::IncompleteChannels
+                                        : Result::Verdict::ExtractionFailed;
+      for (const GroupMember* b : ballots) { out.ballot_charges.push_back(b->charge);
+                                             out.ballot_agreed.push_back(false); }
+      out.total_ballots = static_cast<int>(ballots.size());
+      return out;
+    }
+
+    // ---- the DIRECTIONAL key -------------------------------------------------------------------
+    // Voting on the verdict ALONE is insufficient and fails silently: fold changes 2.50 / 2.50 /
+    // 0.42 are all Differential and vote 3-0 unanimous while disagreeing about WHICH condition is
+    // enriched -- precisely the interference this feature exists to detect.
+    //
+    // The direction is read from condition_means, NEVER from fold_change: a wholly-absent condition
+    // is Differential with fold_change == -1.0, a SENTINEL, so any fold_change-based test silently
+    // drops the strongest results in the experiment (ADR-0039).
+    auto ballotKey = [](const GroupMember* m) -> std::pair<int, int> {
+      const int verdict = static_cast<int>(m->result.verdict);
+      if (m->result.verdict != Result::Verdict::Differential) return {verdict, -1};
+      const int enriched = m->result.condition_means[0] > m->result.condition_means[1] ? 0 : 1;
+      return {verdict, enriched};
+    };
+
+    std::map<std::pair<int, int>, std::vector<const GroupMember*>> blocs;
+    for (const GroupMember* b : ballots) blocs[ballotKey(b)].push_back(b);
+
+    // ---- pick the winning bloc -----------------------------------------------------------------
+    // Majority; a tie goes to the bloc holding the highest-window_snr ballot. Breaking it on
+    // window_snr rather than intensity is what makes the tie-breaking ballot the ID charge BY
+    // CONSTRUCTION -- the same member wins both comparisons, so the two can never name different
+    // charges (ADR-0040 decision 5).
+    auto better = [](const GroupMember* a, const GroupMember* b) {
+      if (a->window_snr != b->window_snr) return a->window_snr > b->window_snr;
+      if (a->intensity  != b->intensity)  return a->intensity  > b->intensity;
+      return a->charge < b->charge;    // total and reproducible: window_snr saturates at 1000.0
+    };
+
+    const std::vector<const GroupMember*>* winner_bloc = nullptr;
+    const GroupMember* winner = nullptr;
+    for (const auto& kv : blocs)
+    {
+      const std::vector<const GroupMember*>& bloc = kv.second;
+      const GroupMember* best = bloc.front();
+      for (const GroupMember* m : bloc) if (better(m, best)) best = m;
+
+      if (winner_bloc == nullptr
+          || bloc.size() > winner_bloc->size()
+          || (bloc.size() == winner_bloc->size() && better(best, winner)))
+      {
+        winner_bloc = &bloc;
+        winner      = best;
+      }
+    }
+
+    // ---- the aggregate, over the AGREEING members only ------------------------------------------
+    // Intensity-WEIGHTED, by summing condition_means and ratioing the sums rather than averaging
+    // the per-charge ratios: summing IS the weighting, and ratios of small numbers are noisy. The
+    // vote above is deliberately UNWEIGHTED -- a weak charge's opinion is still evidence of
+    // interference. SNR admits, intensity ranks; the same split selectNotches already makes.
+    std::array<double, 2> sums {{0.0, 0.0}};
+    std::vector<double> channels;
+    for (const GroupMember* m : *winner_bloc)
+    {
+      sums[0] += m->result.condition_means[0];
+      sums[1] += m->result.condition_means[1];
+      if (channels.size() < m->result.channels.size()) channels.resize(m->result.channels.size(), 0.0);
+      for (size_t i = 0; i < m->result.channels.size(); ++i) channels[i] += m->result.channels[i];
+    }
+
+    out.result.verdict         = winner_bloc->front()->result.verdict;
+    out.result.condition_means = sums;
+    out.result.channels        = channels;
+    // Inherit ADR-0038's sentinel rules: no finite ratio when a condition is wholly absent.
+    out.result.fold_change = (sums[0] > 0.0 && sums[1] > 0.0) ? sums[0] / sums[1] : -1.0;
+
+    out.has_winner         = true;
+    out.winner_charge      = winner->charge;
+    out.winner_precursor_id= winner->precursor_id;
+    out.winner_cmd         = winner->cmd;
+    out.agreeing           = static_cast<int>(winner_bloc->size());
+    out.total_ballots      = static_cast<int>(ballots.size());
+
+    for (const GroupMember* b : ballots)
+    {
+      out.ballot_charges.push_back(b->charge);
+      out.ballot_agreed.push_back(
+          std::find(winner_bloc->begin(), winner_bloc->end(), b) != winner_bloc->end());
+    }
+    return out;
   }
 
   Quantification::Result Quantification::measure(const double* mzs, const double* ints,

@@ -85,6 +85,24 @@ namespace OpenMS
       }
       return false;  // unreachable for a valid enumerator
     }
+
+    /// consensus_charges: every balloting charge, with the agreeing ones starred (ADR-0040).
+    ///
+    /// ';'-joined, matching every other list column. The star is what makes a dissent legible at a
+    /// glance -- `11*;14*;17` says which charge was discarded and therefore which population the
+    /// identification scan was NOT taken from. Abstentions do not appear: they cast no ballot, so
+    /// listing them would read as dissent.
+    std::string formatConsensusCharges_(const Quantification::Consensus& c)
+    {
+      std::string out;
+      for (size_t i = 0; i < c.ballot_charges.size(); ++i)
+      {
+        if (!out.empty()) out += ";";
+        out += std::to_string(c.ballot_charges[i]);
+        if (i < c.ballot_agreed.size() && c.ballot_agreed[i]) out += "*";
+      }
+      return out;
+    }
   } // namespace
 
 /// constructor
@@ -263,6 +281,14 @@ FLASHIda::FLASHIda(char* arg) :
       else
       {
         // Normal path: push MS2 for each precursor, for each scan config
+        //
+        // ADR-0040: the QUANTIFICATION GROUP is minted here, one per SPECIES per survey, and keyed
+        // on NOMINAL MASS rather than on loop adjacency. Adjacency happens to hold today -- the emit
+        // loop pushes a species' charges consecutively -- but ADR-0036 siblings put two PeakGroups
+        // of one species in this list at slightly different masses (12351.39 / 12351.33 in the
+        // committed fixtures), and those are ONE reporter population. Nominal mass is the ~1 Da bin
+        // every other acquisition map already keys on, so it groups them and adjacency would not.
+        std::map<int, int> quant_group_by_nominal;   // survey-local: nominal mass -> group_id
         for (int i = 0; i < n; i++)
         {
           // One precursor_id per MS1-selected precursor; all of its MS2 scan-config commands share it.
@@ -290,6 +316,17 @@ FLASHIda::FLASHIda(char* arg) :
                                                            cmd.stages[0].precursor_mz + half, cmd.precursor_intensity);
             }
             push_ms2_command(cmd, precursor_id, selected[i]);
+
+            // Register the 'Q' with its species' group. AFTER the push, because addMember indexes on
+            // cmd.scan_id and reads the window_snr/intensity set above -- both are final only here.
+            if (marker == 'Q')
+            {
+              const int nominal = SpectralDeconvolution::getNominalMass(selected[i].getMonoMass());
+              auto git = quant_group_by_nominal.find(nominal);
+              if (git == quant_group_by_nominal.end())
+                git = quant_group_by_nominal.emplace(nominal, allocQuantGroupId_()).first;
+              quant_.addMember(git->second, cmd, precursor_id);
+            }
           }
         }
       }
@@ -438,18 +475,42 @@ FLASHIda::FLASHIda(char* arg) :
           results_row.quant_channels = q.channels;
           results_row.quant_condition_means = {q.condition_means[0], q.condition_means[1]};
 
-          // ADR-0039. Was `q.verdict == Verdict::Differential`, hardcoded. The objective is now
-          // authored (quantification.identify + .enriched_in) and the default reproduces that
-          // comparison exactly. Note what this transitively governs: tagging and MS3 are suppressed
-          // on a 'Q' and ride the bought 'R', so this line also decides what gets characterized.
-          if (quantBuysIdentification(q, config_.quantification()))
+          // ADR-0040. The buy moved from PER-SCAN to PER-GROUP. Under precursor_charges "single"
+          // the group has one member, completes on this first return, and the consensus of one
+          // measurement IS that measurement -- so this path is byte-identical to ADR-0039's.
+          const int gid = quant_.deposit(parent_tracking_id, q);
+          if (gid > 0 && quant_.isComplete(gid))
           {
-            // ms_settings.ms2 -- held on quant_ rather than rostered, because in a quant config the
-            // quantification scan holds the roster's primary slot and this one is conditional.
-            auto ident = queue_.buildFollowUp(parent_ctx, config_.quantification().identification_scan, 'R');
-            stampAndPush_(ident, precursor_id);  // inherits the quantification scan's precursor_id
-            child_ids.push_back(ScanCommandQueue::encode(ident.scan_id));
-            commands_pushed++;
+            const auto cons = quant_.decide(gid);
+
+            // The consensus belongs to the GROUP, not to any one scan, so it is written on
+            // whichever 'Q' completed it and left empty everywhere else. consensus_id_charge is
+            // carried explicitly so a reader never has to infer that this row is not the row the
+            // decision was about.
+            results_row.consensus_verdict     = Quantification::verdictName(cons.result.verdict);
+            results_row.consensus_fold_change = cons.result.fold_change;
+            results_row.consensus_agreement   = std::to_string(cons.agreeing) + "/"
+                                                + std::to_string(cons.total_ballots);
+            results_row.consensus_charges     = formatConsensusCharges_(cons);
+            results_row.consensus_id_charge   = cons.winner_charge;
+
+            // ADR-0039's predicate, UNCHANGED: it receives the synthesized consensus Result, so
+            // `identify` and `enriched_in` keep working -- including the condition_means-not-
+            // fold_change trap, because the aggregate carries real means.
+            if (cons.has_winner && quantBuysIdentification(cons.result, config_.quantification()))
+            {
+              // BOTH the geometry and the precursor_id come from the WINNER, never from the scan
+              // currently returning. The group completes on its LAST member, which may well be a
+              // dissenter: building from the winner's command while stamping the dissenter's
+              // precursor_id would fragment one charge and file the identification -- and every MS3
+              // target downstream of it -- under another charge's proteoform model.
+              auto ident = queue_.buildFollowUp(cons.winner_cmd,
+                                                config_.quantification().identification_scan, 'R');
+              stampAndPush_(ident, cons.winner_precursor_id);
+              child_ids.push_back(ScanCommandQueue::encode(ident.scan_id));
+              commands_pushed++;
+            }
+            quant_.closeGroup(gid);
           }
         }
 

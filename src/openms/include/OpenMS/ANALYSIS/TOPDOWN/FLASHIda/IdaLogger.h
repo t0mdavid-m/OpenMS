@@ -188,6 +188,19 @@ namespace OpenMS
       std::vector<double> quant_condition_means;
       double quant_fold_change = -1.0;    ///< mean(conditions[0]) / mean(conditions[1]); -1 = no finite ratio
       std::string quant_verdict;          ///< differential | not_differential | incomplete_channels | extraction_failed
+
+      // ---- the QUANTIFICATION GROUP's consensus (ADR-0040) ------------------------------------
+      // Populated on the 'Q' that COMPLETED its group, empty on every other row -- the same shape
+      // the quant_* block above uses off a 'Q'.
+      //
+      // Named consensus_* and not quant_* deliberately: the row these sit on is whichever member
+      // happened to return LAST, which is not necessarily the row the decision was about. Reading
+      // them as per-scan is the one misinterpretation the column names have to prevent.
+      std::string consensus_verdict;        ///< as quant_verdict; the GROUP's, from the majority vote
+      double      consensus_fold_change = -1.0;  ///< intensity-weighted over the AGREEING members
+      std::string consensus_agreement;      ///< "agreeing/total_ballots", e.g. "2/3"; abstentions excluded
+      std::string consensus_charges;        ///< ';'-joined balloting charges, agreeing ones starred
+      int         consensus_id_charge = 0;  ///< charge the bought 'R' used; 0 = nothing bought
     };
 
     /// One identification.tsv row. All members are held BY VALUE because the sources (info.*, a local

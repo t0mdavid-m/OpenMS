@@ -35,10 +35,13 @@
 #pragma once
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/config.h>
 
 #include <array>
+#include <map>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace OpenMS
@@ -105,6 +108,70 @@ namespace OpenMS
     /// Render a Verdict as the string logged in scan_results.tsv's `quant_verdict`.
     static const char* verdictName(Result::Verdict v);
 
+    // ---- the QUANTIFICATION GROUP, and its vote (ADR-0040) -------------------------------------
+    //
+    // Under precursor_charges "separate" one species gets one 'Q' per charge state. The reporter ion
+    // is charge-INDEPENDENT, so a clean species must give the same ratio at every charge -- which is
+    // what makes cross-charge disagreement evidence of chimericity, and what makes pooling REPORTER
+    // measurements sound where pooling FRAGMENT evidence across charges is not (CONTEXT.md).
+    //
+    // The group is what buys the identification scan, never a member on its own.
+
+    /// One quantification scan of a group: the command that produced it, and what it measured.
+    struct GroupMember
+    {
+      int    tracking_id  = 0;
+      int    precursor_id = 0;   ///< the WINNER's is what the bought 'R' inherits
+      int    charge       = 0;
+      double window_snr   = 0.0; ///< ranks the ID charge and breaks a tied vote (ADR-0040 d.4/d.5)
+      double intensity    = 0.0; ///< this charge's own; weights the aggregate
+      ScanCommand cmd {};        ///< handed to buildFollowUp as ctx, so the 'R' inherits its geometry
+      bool   received     = false;
+      Result result {};
+    };
+
+    /// What a completed group decided. Carries the winner outright so the caller needs no second
+    /// lookup and the group can be closed immediately.
+    struct Consensus
+    {
+      /// The synthesized measurement. Deliberately a plain Result, so quantBuysIdentification --
+      /// and therefore `identify` and `enriched_in` -- work on it UNCHANGED (ADR-0039).
+      Result result {};
+
+      bool   has_winner = false;      ///< false = too few ballots; nothing is bought
+      int    winner_charge = 0;
+      int    winner_precursor_id = 0;
+      ScanCommand winner_cmd {};
+
+      int    agreeing = 0;            ///< ballots in the winning bloc
+      int    total_ballots = 0;       ///< ballots cast; abstentions are NOT counted
+      /// Every balloting charge, and whether it agreed. Index-parallel; drives consensus_charges.
+      std::vector<int>  ballot_charges;
+      std::vector<bool> ballot_agreed;
+    };
+
+    /// Register one 'Q' command as a member of @p group_id. Called at MS1, once per emitted 'Q'.
+    void addMember(int group_id, const ScanCommand& cmd, int precursor_id);
+
+    /// Record a returning scan's measurement. Returns its group_id, or 0 if the scan is not a
+    /// member of any group (which is every scan in a non-quant run).
+    int deposit(int tracking_id, const Result& result);
+
+    /// Has every member of @p group_id returned? Mirrors Exploration's all_of(variants, received)
+    /// -- and, like it, has NO timeout: a scan the instrument never returns leaves its group open.
+    bool isComplete(int group_id) const;
+
+    /// Run the vote. See Quantification.cpp for the policy; the short version is a DIRECTIONAL
+    /// majority (verdict + which condition is enriched), abstentions excluded, ties broken by
+    /// window_snr, and an intensity-weighted aggregate over the AGREEING members only.
+    Consensus decide(int group_id) const;
+
+    /// Drop a group and its tracking-id index entries. Call once the consensus has been used.
+    void closeGroup(int group_id);
+
+    /// Test seam: how many groups are currently open.
+    size_t openGroupCount() const { return groups_.size(); }
+
     /// The accepted `quantification.labelling` values -- TopDownIsobaricQuantification's own valid
     /// strings MINUS "none", because `quantification.enabled` is the switch (ADR-0038).
     static const std::vector<std::string>& labellingNames();
@@ -117,6 +184,19 @@ namespace OpenMS
 
   private:
     const Config& config_;
+
+    /// group_id -> its members, in emit order. std::map so iteration is deterministic; a run holds
+    /// only the groups whose scans are still in flight, which is a handful.
+    ///
+    /// NO LOCK, and that is not an oversight: every access is from processScan, which the host
+    /// pipeline serialises against itself (MaxDegreeOfParallelism = 1). The drain never touches
+    /// this. That is exactly why it does NOT live beside FLASHIda::precursor_id_by_tracking_, whose
+    /// leaf mutex exists solely because the drain reads that map -- putting it there would advertise
+    /// a sharing that does not exist.
+    std::map<int, std::vector<GroupMember>> groups_;
+
+    /// tracking_id -> group_id, so a returning scan finds its group in one hop.
+    std::unordered_map<int, int> group_by_tracking_;
   };
 
 } // namespace OpenMS

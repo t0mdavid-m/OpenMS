@@ -135,7 +135,12 @@ namespace OpenMS
                             // FLASHIda_LoggingFields_test's schema_column_counts is <= 21, so appending
                             // is the one placement that adds columns without invalidating a single pin
                             // -- only the count and headers.back() move.
-                            << "quant_channels\tquant_condition_means\tquant_fold_change\tquant_verdict\n";
+                            << "quant_channels\tquant_condition_means\tquant_fold_change\tquant_verdict"
+                            // ADR-0040's group consensus, APPENDED for the same reason the quant
+                            // block above was: every column index pinned in FLASHIda_LoggingFields_test
+                            // is lower, so appending invalidates none of them.
+                            << "\tconsensus_verdict\tconsensus_fold_change\tconsensus_agreement"
+                               "\tconsensus_charges\tconsensus_id_charge\n";
         results_tsv_stream_.flush();
       }
     }
@@ -652,7 +657,15 @@ namespace OpenMS
                         << "\t" << quant_channels_str
                         << "\t" << quant_means_str
                         << "\t" << row.quant_fold_change
-                        << "\t" << row.quant_verdict << "\n";
+                        << "\t" << row.quant_verdict
+                        // ADR-0040. Same no-manipulator rule as the quant block above: the stream's
+                        // sticky flags are left at the default so consensus_fold_change's -1.0
+                        // sentinel renders as "-1", identically to quant_fold_change beside it.
+                        << "\t" << row.consensus_verdict
+                        << "\t" << row.consensus_fold_change
+                        << "\t" << row.consensus_agreement
+                        << "\t" << row.consensus_charges
+                        << "\t" << row.consensus_id_charge << "\n";
     results_tsv_stream_.flush();
   }
 

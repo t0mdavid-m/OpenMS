@@ -210,6 +210,18 @@ namespace OpenMS
     /// needs no lock -- it is not part of the shared surface.
     int allocPrecursorId_() { return next_precursor_id_++; }
 
+    /// ADR-0040: monotonic quantification-GROUP id. One per species per survey, shared by every 'Q'
+    /// that species emits -- which under precursor_charges "separate" is one per charge state.
+    ///
+    /// Deliberately NOT a second precursor_id. precursor_id means "one Precursor, one proteoform
+    /// model"; this means "these scans measure the same reporter population". Collapsing them would
+    /// pool FRAGMENT evidence across charges along with the reporters, which is the defect
+    /// CONTEXT.md's Precursor entry warns about. The group->members map itself lives on
+    /// Quantification, not here: the drain never reads it, so it needs none of the locking that
+    /// precursor_id_by_tracking_ above does.
+    int next_quant_group_id_ = 1;
+    int allocQuantGroupId_() { return next_quant_group_id_++; }
+
     /// P5: look up the precursor_id for a tracking_id, or 0 if untracked.
     /// Self-locking so that no call site can forget it -- including the drain's, which is the whole
     /// reason the lock exists.
