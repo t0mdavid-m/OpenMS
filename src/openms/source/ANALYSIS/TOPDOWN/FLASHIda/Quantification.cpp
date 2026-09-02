@@ -218,7 +218,16 @@ namespace OpenMS
         ballots.push_back(&m);
     }
 
-    const int min_ballots = std::max(1, config_.targeting().min_charge_states);
+    // The floor, CAPPED BY THE GROUP'S SIZE. min_charge_states is a requirement on the acquisition
+    // charge SET and is enforced once, at MS1 admission (admitCandidate). This is its decision-time
+    // half -- "too many members abstained to trust the vote" -- and the two are the same number only
+    // under `separate`. `multiplexed` co-isolates the whole set into ONE measurement, so an uncapped
+    // floor of 2 rejects its single ballot and the mode can never produce a result at all: measured
+    // as `incomplete_channels | 0/1` on every row of the quant_multiplexed golden mode.
+    //
+    // A geometry that can only ever produce one measurement satisfies the floor with one.
+    const int min_ballots = std::min<int>(std::max(1, config_.targeting().min_charge_states),
+                                          static_cast<int>(members.size()));
     if (static_cast<int>(ballots.size()) < min_ballots)
     {
       // Not a verdict about the SPECIES but about the MEASUREMENT, and it reads as one. Folding it
