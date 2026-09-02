@@ -1433,6 +1433,18 @@ namespace
   const std::string ms1_ecoli_rich_tsv_path = "../../FlashIDA/test-data/spectra/ms1_ecoli_rich.txt";
   const std::string ms2_tsv_path = "../../FlashIDA/test-data/spectra/ms2_hcd_fragment.txt";
   const std::string ms2_tmt_tsv_path = "../../FlashIDA/test-data/spectra/ms2_quant_tmt.txt";
+  // ADR-0039. ms2_quant_tmt.txt with the three CONTROL reporter peaks (126/127/128) deleted and
+  // nothing else changed -- a species present under treatment and absent from control. That is the
+  // one shape the six-channel fixture cannot produce, and the only one that distinguishes an
+  // enriched_in implemented on condition_means from one implemented on fold_change.
+  const std::string ms2_quant_absent_tsv_path =
+      "../../FlashIDA/test-data/spectra/ms2_quant_tmt_absent.txt";
+  // The MIRROR: 129/130/131 removed instead, so `treated` is the absent condition and
+  // condition_means is [X, 0] rather than [0, X]. Both directions are needed because a sentinel bug
+  // spelled `fold_change < 1.0` happens to AGREE with the correct answer when condition[0] is the
+  // absent one -- it is only distinguishable when the absent condition is the numerator.
+  const std::string ms2_quant_treated_absent_tsv_path =
+      "../../FlashIDA/test-data/spectra/ms2_quant_tmt_treated_absent.txt";
   const std::string ms1_cytc_tsv_path = "../../FlashIDA/test-data/spectra/ms1_cytc.txt";
   const std::string ms2_cytc_tsv_path = "../../FlashIDA/test-data/spectra/ms2_cytc_scan149.txt";
   // Fresh real Mode-2 MS3 CytC run (20250121): intact-cytC MS2 (HCD CE40, scan 57) with a rich b/y
@@ -1522,6 +1534,65 @@ namespace
       rows.emplace_back(pushed, nchild);
     }
     return rows;
+  }
+
+  // ADR-0039. One quantification config, parameterized on the three knobs the objective sections
+  // vary. Deliberately carries NO fasta and conditional_ms2: false, so nothing but the
+  // quantification screen can ever push a command -- which is what lets those sections assert on
+  // `pushed` directly rather than having to classify what came back.
+  //
+  // The two conditions are named control/treated to match method_quant.json, and their channel
+  // split is the same 3-vs-3. fold_change = mean(control) / mean(treated), so on the TMT fixture
+  // (control mean 5088.06, treated mean 9925.51) the species is enriched in TREATED and the raw
+  // ratio is < 1 -- which is exactly why direction is authored by condition NAME and never as
+  // "up": "up" here would have meant enriched in control.
+  std::string quantObjectiveJson(const std::string& fold_change_threshold,
+                                 const std::string& identify_key_or_empty,
+                                 const std::string& enriched_in_key_or_empty)
+  {
+    return std::string(R"({
+  "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 4,
+                     "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
+  "flashtnt": { "min_length": 3, "max_length": 8 },
+  "faims": { "cv_values": [], "max_cv_skip": 0 },
+  "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 },
+                  "scan_timeout": { "enabled": false, "value_ms": 30000 },
+                  "agc_interval_seconds": 9999999 },
+  "conditional_ms2": false,
+  "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+  "precursor_selection": { "rt_window": 180, "targeting": "none", "consider_all_charges": false,
+                           "strict_inclusion": false, "tie_threshold": 0.1, "rank_by": "qscore",
+                           "max_precursors": 1 },
+  "characterization": { "mode": "off", "max_targets": 3 },
+  "ms_settings": {
+    "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000,
+             "agc_target": 800000, "max_it": 246 },
+    "ms2": { "analyzer": "Orbitrap", "activation": "ETD", "reaction_time": 7, "resolution": 120000 },
+    "ms2_quant": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 30,
+                   "resolution": 120000 }
+  },
+  "quantification": { "enabled": true, "labelling": "tmt6plex", "reporter_mz_tol": 0.002,
+                      "fold_change_threshold": )") + fold_change_threshold + R"(,)"
+           + identify_key_or_empty + enriched_in_key_or_empty + R"(
+                      "conditions": [ { "name": "control", "channels": ["126", "127", "128"] },
+                                      { "name": "treated", "channels": ["129", "130", "131"] } ] }
+})";
+  }
+
+  /// Drive one MS1, feed the rostered 'Q' scan the given MS2 spectrum, and return how many commands
+  /// its return pushed. 0 = the verdict bought nothing; 1 = it bought the identification scan.
+  /// Asserts the rostered scan really is the 'Q', so a roster regression cannot make this vacuous.
+  int quantPushedFor(const char* cfg_json, const std::vector<ScanData>& ms1_scans,
+                     const std::vector<ScanData>& ms2_scans)
+  {
+    FLASHIda ida(const_cast<char*>(cfg_json));
+    AcqResult acq = runInterleaved(&ida, ms1_scans, {});
+    if (acq.ms2_cmds.empty()) return -1;
+    const ScanCommand& q = acq.ms2_cmds[0];
+    if (std::strlen(q.scan_description) < 4 || q.scan_description[3] != 'Q') return -2;
+    const auto& ms2 = ms2_scans[0];
+    return ida.processScan(ms2.mzs.data(), ms2.ints.data(), (int)ms2.mzs.size(), ms2.rt, 2,
+                           q.scan_description, 0.0, instrumentScanNumberOf(ms2));
   }
 }
 
@@ -2153,6 +2224,134 @@ START_SECTION(processScan_quant_scan_raises_no_tagging_or_ms3)
   (void)q_count;
 
   delete ida;
+}
+END_SECTION
+
+// ---------------------------------------------------------------------------------------------
+// ADR-0039: the quantification OBJECTIVE. Until this ADR the decision was a hardcoded
+// `verdict == Differential` with no config surface, so "identify everything I could quantify",
+// "quantify only" and "only the ones enriched in treated" were all unauthorable.
+//
+// Thresholds are chosen far from any plausible ratio rather than close to it: isotope correction is
+// ON by default (ADR-0038), so the fixture's corrected fold change is NOT its raw 0.512627 and a
+// threshold picked to sit just beside that number would be pinning a value this test does not own.
+// 0.01 makes every ratio differential; 100.0 makes none.
+// ---------------------------------------------------------------------------------------------
+
+START_SECTION(processScan_quant_identify_selects_what_the_verdict_buys)
+{
+  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  auto ms2_tmt_scans = loadTsvScans(ms2_tmt_tsv_path);
+  ABORT_IF(ms1_scans.empty() || ms2_tmt_scans.empty())
+
+  // A Differential verdict under the DEFAULT objective buys the identification scan. This is
+  // ADR-0038's behaviour, and it is asserted here so the sections below are read as differences
+  // from a known-good baseline rather than in isolation.
+  const std::string diff_default = quantObjectiveJson("0.01", "", "");
+  TEST_EQUAL(quantPushedFor(diff_default.c_str(), ms1_scans, ms2_tmt_scans), 1)
+
+  // ...and authoring the default explicitly changes nothing. That is what makes ADR-0039
+  // byte-identical for every committed config.
+  const std::string diff_explicit = quantObjectiveJson("0.01", R"( "identify": "differential",)", "");
+  TEST_EQUAL(quantPushedFor(diff_explicit.c_str(), ms1_scans, ms2_tmt_scans), 1)
+
+  // NotDifferential under `differential` buys NOTHING -- the precursor is screened and dropped.
+  const std::string notdiff_default = quantObjectiveJson("100.0", "", "");
+  TEST_EQUAL(quantPushedFor(notdiff_default.c_str(), ms1_scans, ms2_tmt_scans), 0)
+
+  // ...and that is the exact case `quantified` exists to change: a cleanly measured species now
+  // earns identification whether or not it moved.
+  const std::string notdiff_quantified =
+      quantObjectiveJson("100.0", R"( "identify": "quantified",)", "");
+  TEST_EQUAL(quantPushedFor(notdiff_quantified.c_str(), ms1_scans, ms2_tmt_scans), 1)
+
+  // `all` buys regardless of verdict.
+  const std::string notdiff_all = quantObjectiveJson("100.0", R"( "identify": "all",)", "");
+  TEST_EQUAL(quantPushedFor(notdiff_all.c_str(), ms1_scans, ms2_tmt_scans), 1)
+
+  // `none` buys nothing even on a Differential verdict -- a quantify-only run. Paired with the
+  // FIRST assertion in this section, which is the same config differing only in this key, so a
+  // 0 here is the objective and not a screen that failed to fire.
+  const std::string diff_none = quantObjectiveJson("0.01", R"( "identify": "none",)", "");
+  TEST_EQUAL(quantPushedFor(diff_none.c_str(), ms1_scans, ms2_tmt_scans), 0)
+}
+END_SECTION
+
+START_SECTION(processScan_enriched_in_restricts_by_condition)
+{
+  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  auto ms2_tmt_scans = loadTsvScans(ms2_tmt_tsv_path);
+  ABORT_IF(ms1_scans.empty() || ms2_tmt_scans.empty())
+
+  // The fixture's species is enriched in TREATED (means 5088.06 control vs 9925.51 treated), so
+  // naming treated buys and naming control does not. Both configs are identical but for this one
+  // string, which is what makes the pair a direction test rather than two unrelated observations.
+  const std::string in_treated =
+      quantObjectiveJson("0.01", "", R"( "enriched_in": "treated",)");
+  TEST_EQUAL(quantPushedFor(in_treated.c_str(), ms1_scans, ms2_tmt_scans), 1)
+
+  const std::string in_control =
+      quantObjectiveJson("0.01", "", R"( "enriched_in": "control",)");
+  TEST_EQUAL(quantPushedFor(in_control.c_str(), ms1_scans, ms2_tmt_scans), 0)
+
+  // "either" is the default and restores the symmetric test ADR-0038 shipped.
+  const std::string either = quantObjectiveJson("0.01", "", R"( "enriched_in": "either",)");
+  TEST_EQUAL(quantPushedFor(either.c_str(), ms1_scans, ms2_tmt_scans), 1)
+
+  // Inert under a non-differential objective, and inert means the scan is still bought -- the
+  // direction does not quietly survive as a filter. Emits [CONFIG-WARN] at load.
+  const std::string inert_all =
+      quantObjectiveJson("0.01", R"( "identify": "all",)", R"( "enriched_in": "control",)");
+  TEST_EQUAL(quantPushedFor(inert_all.c_str(), ms1_scans, ms2_tmt_scans), 1)
+}
+END_SECTION
+
+START_SECTION(processScan_enriched_in_survives_a_wholly_absent_condition)
+{
+  // THE trap test. A species present under treatment and absent from control is the strongest
+  // result the experiment can produce: Quantification reports it Differential with
+  // fold_change == -1.0, a SENTINEL rather than a ratio (condition_means carries the truth).
+  //
+  // An `enriched_in` implemented on fold_change therefore reads -1, finds it below any threshold,
+  // and silently DROPS exactly the species the experiment exists to find. Nothing else in this
+  // suite would catch that: every other quant fixture has all six channels populated, so
+  // fold_change is a real number and a wrong implementation agrees with a right one everywhere.
+  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  auto ms2_absent_scans = loadTsvScans(ms2_quant_absent_tsv_path);
+  ABORT_IF(ms1_scans.empty() || ms2_absent_scans.empty())
+
+  // Control is wholly absent -> enriched in treated. Buys.
+  const std::string in_treated =
+      quantObjectiveJson("0.01", "", R"( "enriched_in": "treated",)");
+  TEST_EQUAL(quantPushedFor(in_treated.c_str(), ms1_scans, ms2_absent_scans), 1)
+
+  // ...and the other direction is correctly refused, so the assertion above is not just "the
+  // absent-condition path always buys".
+  const std::string in_control =
+      quantObjectiveJson("0.01", "", R"( "enriched_in": "control",)");
+  TEST_EQUAL(quantPushedFor(in_control.c_str(), ms1_scans, ms2_absent_scans), 0)
+
+  // Control: with no direction restriction the same spectrum buys, confirming the verdict really
+  // is Differential and the 0 above is the direction test rather than a rejected measurement.
+  const std::string either = quantObjectiveJson("0.01", "", "");
+  TEST_EQUAL(quantPushedFor(either.c_str(), ms1_scans, ms2_absent_scans), 1)
+
+  // BOTH directions of absence, because one is not enough. With control absent, condition_means is
+  // [0, X] and a bug spelled `fold_change < 1.0` gives the right answer by coincidence: -1 is
+  // indeed below 1, so "enriched in conditions[1]" comes out true. Only the mirror -- treated
+  // absent, condition_means [X, 0] -- separates them, because there the correct answer is
+  // "enriched in conditions[0]" and every fold_change-based spelling of that reads the sentinel as
+  // a tiny ratio and refuses.
+  auto ms2_treated_absent_scans = loadTsvScans(ms2_quant_treated_absent_tsv_path);
+  ABORT_IF(ms2_treated_absent_scans.empty())
+
+  const std::string mirror_control =
+      quantObjectiveJson("0.01", "", R"( "enriched_in": "control",)");
+  TEST_EQUAL(quantPushedFor(mirror_control.c_str(), ms1_scans, ms2_treated_absent_scans), 1)
+
+  const std::string mirror_treated =
+      quantObjectiveJson("0.01", "", R"( "enriched_in": "treated",)");
+  TEST_EQUAL(quantPushedFor(mirror_treated.c_str(), ms1_scans, ms2_treated_absent_scans), 0)
 }
 END_SECTION
 

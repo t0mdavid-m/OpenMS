@@ -669,6 +669,206 @@ START_SECTION(quantification_retired_keys_are_migration_errors)
 }
 END_SECTION
 
+// ---------------------------------------------------------------------------------------------
+// ADR-0039: the quantification OBJECTIVE. Until this ADR, what a verdict bought was a hardcoded
+// `verdict == Differential` in FLASHIda.cpp with no config surface at all.
+// ---------------------------------------------------------------------------------------------
+
+// The two conditions every section below shares. Named a/b so `enriched_in` has something to
+// resolve against, and so the "either" collision has a control.
+// ONE LINE, no continuation: a raw string literal does not process `\`-newline, so a continuation
+// would put a literal backslash inside the JSON.
+#define QUANT_CONDS R"("conditions": [ { "name": "a", "channels": ["126","127","128"] }, { "name": "b", "channels": ["129","130","131"] } ])"
+
+START_SECTION(quantification_identify_parses_and_rejects)
+{
+  auto withIdentify = [](const std::string& body) {
+    return cfgJson("", QUANT_ON(R"({ "enabled": true, "labelling": "tmt6plex", )"
+                                + std::string(QUANT_CONDS) + R"(, )" + body + R"( })"), MS2_QUANT);
+  };
+
+  // All four values reach their enumerator. Asserting the enumerator rather than "it loaded" is the
+  // point: a parse that accepted the string and assigned nothing would ship byte-identical to
+  // `differential` -- exactly the inert-mode trap ADR-0023 D-a documents for characterization.mode.
+  TEST_EQUAL(Config(withIdentify(R"("identify": "differential")")).quantification().identify
+                 == QuantIdentify::Differential, true)
+  TEST_EQUAL(Config(withIdentify(R"("identify": "quantified")")).quantification().identify
+                 == QuantIdentify::Quantified, true)
+  TEST_EQUAL(Config(withIdentify(R"("identify": "all")")).quantification().identify
+                 == QuantIdentify::All, true)
+  TEST_EQUAL(Config(withIdentify(R"("identify": "none")")).quantification().identify
+                 == QuantIdentify::None, true)
+
+  // Unauthored defaults to Differential -- this is what makes ADR-0039 byte-identical for the 41
+  // committed configs, none of which authors the key.
+  TEST_EQUAL(Config(withIdentify(R"("reporter_mz_tol": 0.002)")).quantification().identify
+                 == QuantIdentify::Differential, true)
+
+  // Explicit null is "unauthored", NOT a throw. ToCppJson uses the stock JavaScriptSerializer,
+  // which emits nulls; a bare .value() here would throw a type_error for every config that leaves
+  // the key alone, which is how `conditions` broke all 41 configs once.
+  TEST_EQUAL(Config(withIdentify(R"("identify": null)")).quantification().identify
+                 == QuantIdentify::Differential, true)
+
+  // Hard-rejected, not defaulted. Case matters, whitespace matters, and a plausible-but-wrong word
+  // must not silently select a different acquisition policy.
+  TEST_EXCEPTION(std::invalid_argument, Config(withIdentify(R"("identify": "Differential")")))
+  TEST_EXCEPTION(std::invalid_argument, Config(withIdentify(R"("identify": "differential ")")))
+  TEST_EXCEPTION(std::invalid_argument, Config(withIdentify(R"("identify": "any")")))
+  TEST_EXCEPTION(std::invalid_argument, Config(withIdentify(R"("identify": "")")))
+  // "off" is the characterization.mode spelling, and the one an author is most likely to reach for
+  // when they mean "none". It must not quietly disable the buy.
+  TEST_EXCEPTION(std::invalid_argument, Config(withIdentify(R"("identify": "off")")))
+}
+END_SECTION
+
+START_SECTION(quantification_enriched_in_resolves_by_condition_name)
+{
+  auto withEnriched = [](const std::string& body) {
+    return cfgJson("", QUANT_ON(R"({ "enabled": true, "labelling": "tmt6plex", )"
+                                + std::string(QUANT_CONDS) + R"(, )" + body + R"( })"), MS2_QUANT);
+  };
+
+  // Named by CONDITION, resolved to an ordinal at load. Direction is never authored as up/down:
+  // fold_change = mean(conditions[0]) / mean(conditions[1]), so "up" would mean enriched in
+  // conditions[0] and would invert silently if the array were reordered.
+  TEST_EQUAL(Config(withEnriched(R"("enriched_in": "a")")).quantification().enriched_in, 0)
+  TEST_EQUAL(Config(withEnriched(R"("enriched_in": "b")")).quantification().enriched_in, 1)
+
+  // -1 is "either direction" -- ADR-0038's symmetric test, and the default.
+  TEST_EQUAL(Config(withEnriched(R"("enriched_in": "either")")).quantification().enriched_in, -1)
+  TEST_EQUAL(Config(withEnriched(R"("reporter_mz_tol": 0.002)")).quantification().enriched_in, -1)
+  TEST_EQUAL(Config(withEnriched(R"("enriched_in": null)")).quantification().enriched_in, -1)
+
+  // An unknown name fails at LOAD. Silently ignoring it would run the experiment in whichever
+  // direction happened to be first, with nothing anywhere saying so.
+  TEST_EXCEPTION(std::invalid_argument, Config(withEnriched(R"("enriched_in": "treated")")))
+  // Condition names are case-sensitive, like every other enum in this schema.
+  TEST_EXCEPTION(std::invalid_argument, Config(withEnriched(R"("enriched_in": "A")")))
+
+  // enriched_in authored with NO conditions at all is rejected rather than ignored. This is why the
+  // resolution sits outside the conditions block: inside it, this config would load with
+  // enriched_in silently at -1.
+  TEST_EXCEPTION(std::invalid_argument,
+      Config(cfgJson("", QUANT_ON(R"({ "enabled": false, "enriched_in": "a" })"), MS2_QUANT)))
+
+  // "either" is the sentinel, so a condition may not claim the name -- otherwise enriched_in:
+  // "either" is ambiguous and the losing reading is silently the wrong direction.
+  TEST_EXCEPTION(std::invalid_argument,
+      Config(cfgJson("", QUANT_ON(R"({ "enabled": true, "labelling": "tmt6plex",
+        "conditions": [ { "name": "either", "channels": ["126","127","128"] },
+                        { "name": "b", "channels": ["129","130","131"] } ] })"), MS2_QUANT)))
+  // Rejected even with quantification OFF: the name is unusable either way, and a config that
+  // loads while disabled and throws when enabled is the worse failure.
+  TEST_EXCEPTION(std::invalid_argument,
+      Config(cfgJson("", QUANT_ON(R"({ "enabled": false,
+        "conditions": [ { "name": "a", "channels": ["126"] },
+                        { "name": "either", "channels": ["131"] } ] })"), "")))
+}
+END_SECTION
+
+START_SECTION(quantification_requires_the_identification_scan)
+{
+  // ADR-0039's fourth structural rejection, and it closes a LIVE gap rather than guarding a new
+  // one. Config assigns quant_.identification_scan only `if (has_primary_ms2)`, so without
+  // ms_settings.ms2 the scan a verdict buys is built from a DEFAULT-CONSTRUCTED ScanConfig. That
+  // was latent while only a Differential verdict reached it; `identify: "all"` fires it on every
+  // precursor, so the guard lands in the same change that widens the gap.
+  //
+  // cfgJson always emits ms_settings.ms2, so these configs are written out in full.
+  auto noMs2 = [](const std::string& quant_body) {
+    return std::string(R"({
+      "deconvolution": { "tol": [10, 10, 10] },
+      "precursor_selection": { "rank_by": "qscore", "max_precursors": 5 },
+      "characterization": { "mode": "off" },
+      "quantification": )") + quant_body + R"(,
+      "ms_settings": {
+        "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
+        "ms2_quant": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 30 }
+      }
+    })";
+  };
+
+  // The message is asserted, not just the exception type. Config ALREADY rejects a missing
+  // ms_settings.ms2 via `level(1).selection != None && level(2).scans.empty()` -- but that guard
+  // reads the ROSTER, and in a quant config the roster is non-empty because the 'Q' scan holds it.
+  // So the pre-existing guard cannot fire here, and a bare TEST_EXCEPTION would pass on either
+  // one: this whole section would stay green with the ADR-0039 throw deleted.
+  auto throwMessage = [](const std::string& json) {
+    try { Config c(json); } catch (const std::exception& e) { return std::string(e.what()); }
+    return std::string("<no exception>");
+  };
+  auto isTheNewGuard = [](const std::string& msg) {
+    // "is not set" (ADR-0039) vs the pre-existing "is not defined".
+    return msg.find("ms_settings.ms2 is not set") != std::string::npos;
+  };
+
+  const std::string enabled_body = R"({ "enabled": true, "labelling": "tmt6plex", )"
+                                   + std::string(QUANT_CONDS) + R"( })";
+  TEST_EXCEPTION(std::invalid_argument, Config(noMs2(enabled_body)))
+  TEST_EQUAL(isTheNewGuard(throwMessage(noMs2(enabled_body))), true)
+
+  // Still required under identify: "none", where it is INERT. Required-but-inert rather than
+  // optional is deliberate (ADR-0013's ms_settings.ms3 rule): it keeps all four identify values
+  // interchangeable, so flipping the objective can never invalidate a config.
+  const std::string none_body = R"({ "enabled": true, "labelling": "tmt6plex", "identify": "none", )"
+                                + std::string(QUANT_CONDS) + R"( })";
+  TEST_EXCEPTION(std::invalid_argument, Config(noMs2(none_body)))
+  TEST_EQUAL(isTheNewGuard(throwMessage(noMs2(none_body))), true)
+
+  // The two guards cover DISJOINT states, which is why both are needed. With quantification off the
+  // roster is empty, so the pre-existing roster guard fires and the ADR-0039 one -- gated on
+  // `enabled` alongside its three ADR-0038 siblings -- does not.
+  TEST_EQUAL(isTheNewGuard(throwMessage(noMs2(R"({ "enabled": false })"))), false)
+  TEST_EQUAL(throwMessage(noMs2(R"({ "enabled": false })")).find("is not defined")
+                 != std::string::npos, true)
+
+  // The control: the same config WITH ms_settings.ms2 loads, so the rejection is about the missing
+  // key and not about anything else in the fixture.
+  Config ok(cfgJson("", QUANT_ON(R"({ "enabled": true, "labelling": "tmt6plex", )"
+                                 + std::string(QUANT_CONDS) + R"( })"), MS2_QUANT));
+  TEST_EQUAL(ok.quantification().has_identification_scan, true)
+  TEST_STRING_EQUAL(ok.quantification().identification_scan.activation, "HCD")
+}
+END_SECTION
+
+START_SECTION(quantification_inert_enriched_in_is_a_warning_not_a_throw)
+{
+  // enriched_in restricts only the `differential` objective. Under the other three it is inert --
+  // and inert is announced with [CONFIG-WARN], NOT rejected.
+  //
+  // This is a deliberate decision, so it gets a test rather than being left to chance. A throw
+  // would force a second edit every time `identify` is flipped and would invalidate a lab template
+  // that sets enriched_in once and switches objectives between runs. The distinction from
+  // only_one_condition, which ADR-0038 deleted, is that this key is LIVE under `differential`;
+  // only_one_condition was unreachable in every possible config. It is ms_settings.ms3-under-
+  // mode-off, which ADR-0013 explicitly permits.
+  auto withBoth = [](const std::string& identify, const std::string& enriched) {
+    return cfgJson("", QUANT_ON(R"({ "enabled": true, "labelling": "tmt6plex", )"
+                                + std::string(QUANT_CONDS) + R"(, "identify": ")" + identify
+                                + R"(", "enriched_in": ")" + enriched + R"(" })"), MS2_QUANT);
+  };
+
+  // Loads, and the resolved ordinal is PRESERVED rather than quietly reset -- so flipping identify
+  // back to "differential" restores the intended direction with a one-word edit.
+  Config all(withBoth("all", "b"));
+  TEST_EQUAL(all.quantification().enriched_in, 1)
+  TEST_EQUAL(all.quantification().identify == QuantIdentify::All, true)
+
+  Config none(withBoth("none", "a"));
+  TEST_EQUAL(none.quantification().enriched_in, 0)
+
+  Config quantified(withBoth("quantified", "b"));
+  TEST_EQUAL(quantified.quantification().enriched_in, 1)
+
+  // The combination it is NOT inert in.
+  Config diff(withBoth("differential", "b"));
+  TEST_EQUAL(diff.quantification().enriched_in, 1)
+  TEST_EQUAL(diff.quantification().identify == QuantIdentify::Differential, true)
+}
+END_SECTION
+
+#undef QUANT_CONDS
 #undef QUANT_ON
 #undef MS2_QUANT
 
