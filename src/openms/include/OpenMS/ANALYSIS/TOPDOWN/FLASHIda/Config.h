@@ -306,6 +306,29 @@ namespace OpenMS
     Exhaustive
   };
 
+  /// Which quantification verdicts buy the identification scan (ADR-0039).
+  ///
+  /// A CUT POINT on the verdict quality ladder, not a set:
+  ///   Differential < NotDifferential < IncompleteChannels < ExtractionFailed
+  /// IncompleteChannels and ExtractionFailed are deliberately not separate cut points -- both mean
+  /// "no usable quant number" and differ only in why, which quant_verdict already reports.
+  ///
+  /// This replaces the hardcoded `verdict == Differential` that was the whole of the decision until
+  /// ADR-0039. Note what it transitively governs: tagging and MS3 targeting are suppressed on a 'Q'
+  /// scan and ride the bought 'R', so this enum also decides which species are CHARACTERIZED.
+  enum class QuantIdentify
+  {
+    /// Differential only, subject to `enriched_in`. THE DEFAULT, and exactly ADR-0038's behaviour.
+    Differential,
+    /// Differential | NotDifferential -- any cleanly measured species.
+    Quantified,
+    /// Every screened precursor, verdict irrelevant: quantification becomes pure annotation.
+    All,
+    /// Nothing is ever bought. The run measures and never identifies, which halves the per-precursor
+    /// cost and is what a labelled survey wants when identification comes from elsewhere.
+    None
+  };
+
   struct OPENMS_DLLAPI CharacterizationConfig
   {
     CharacterizationMode mode = CharacterizationMode::Off;
@@ -372,6 +395,23 @@ namespace OpenMS
     std::string labelling = "tmt6plex";
     double reporter_mz_tol = 0.002;
     double fold_change_threshold = 1.4;
+    /// ADR-0039. Which verdicts buy `identification_scan`. The default reproduces ADR-0038 exactly.
+    QuantIdentify identify = QuantIdentify::Differential;
+    /// ADR-0039. Ordinal into `conditions` that a species must be ENRICHED IN for a Differential
+    /// verdict to buy the identification scan. `-1` = either direction (the default, and the
+    /// symmetric test ADR-0038 shipped). Resolved from the authored CONDITION NAME at load, so no
+    /// consumer downstream needs the name table -- the same treatment channel names get.
+    ///
+    /// Named by condition, NEVER as up/down. fold_change = mean(conditions[0]) / mean(conditions[1]),
+    /// so "up" would mean *enriched in conditions[0]* -- on method_quant.json, enriched in CONTROL,
+    /// the opposite of what anyone writing "up" intends -- and would silently invert the experiment
+    /// the moment someone reordered the array.
+    ///
+    /// ⚠ Consumers must read `Result::condition_means`, NEVER `fold_change`: a wholly-absent
+    /// condition is Differential with fold_change == -1.0, a SENTINEL rather than a ratio, so a
+    /// `fold_change > threshold` direction test silently drops every species present in one
+    /// condition and absent in the other -- the strongest result the experiment can produce.
+    int enriched_in = -1;
     /// EXACTLY TWO, and the ARRAY ORDER IS THE RATIO DIRECTION:
     ///   fold_change = mean(conditions[0]) / mean(conditions[1])
     /// Authored as a JSON array rather than an object because nlohmann's object_t is a std::map,
@@ -399,6 +439,12 @@ namespace OpenMS
     /// which stays true when ms2_quant is absent but ms2 is present -- the exact state validate()
     /// has to reject, since it is plain DDA that silently quantifies nothing.
     bool has_quant_scan = false;
+    /// Whether `ms_settings.ms2` was authored (ADR-0039). Same reason `has_quant_scan` exists:
+    /// `identification_scan` is copied unconditionally and is DEFAULT-CONSTRUCTED when absent, so
+    /// its contents cannot answer "was one authored". validate() has to reject that state -- a
+    /// quant config with no ms2 builds the bought scan from defaults, which is latent while only a
+    /// Differential verdict reaches it and fires on every precursor under `identify: "all"`.
+    bool has_identification_scan = false;
   };
 
   /// Where IdaLogger writes its five streams.

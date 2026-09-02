@@ -49,7 +49,8 @@ namespace OpenMS
    *
    * Measures the reporter-ion channels of a returning QUANTIFICATION scan -- the `'Q'`-labelled
    * `ms_settings.ms2_quant`, rostered once per selected precursor -- and reports both the numbers
-   * and the verdict. A differential verdict is what buys the identification scan.
+   * and the verdict. A verdict satisfying `quantification.identify` is what buys the identification
+   * scan -- `differential` by default, which is ADR-0038's original rule (ADR-0039).
    *
    * This is the only place reporter ions are measured, and it is deliberately NOT the scan that
    * gets bought. The reverse arrangement shipped until ADR-0038 and could not work: it screened a

@@ -50,6 +50,42 @@
 
 namespace OpenMS
 {
+  namespace
+  {
+    /// Does this quantification verdict buy the identification scan, under the authored objective?
+    /// (ADR-0039, amending ADR-0038's hardcoded `verdict == Differential`.)
+    ///
+    /// This is the WHOLE of the acquisition decision quantification makes. It deliberately does not
+    /// touch the verdict itself: quant_verdict reports the MEASUREMENT, this decides the PURCHASE.
+    /// Keeping those apart is what lets the objective change without moving a single log column.
+    bool quantBuysIdentification(const Quantification::Result& q, const QuantConfig& cfg)
+    {
+      using V = Quantification::Result::Verdict;
+      switch (cfg.identify)
+      {
+        case QuantIdentify::None:
+          return false;
+        case QuantIdentify::All:
+          return true;
+        case QuantIdentify::Quantified:
+          return q.verdict == V::Differential || q.verdict == V::NotDifferential;
+        case QuantIdentify::Differential:
+          if (q.verdict != V::Differential) { return false; }
+          if (cfg.enriched_in < 0) { return true; }  // "either" -- ADR-0038's symmetric behaviour
+          // condition_means, NEVER fold_change. A wholly-absent condition is Differential with
+          // fold_change == -1.0 (Quantification.cpp) -- a SENTINEL, not a ratio -- so a
+          // `fold_change > threshold` test here would silently drop every species present in one
+          // condition and absent in the other, which is the strongest result the experiment can
+          // produce. Pinned by processScan_enriched_in_survives_a_wholly_absent_condition.
+          //
+          // A plain `>` is sufficient and correct: this line is reached only when the verdict is
+          // already Differential, so the threshold is satisfied in one direction and the larger
+          // mean is the enriched condition.
+          return q.condition_means[cfg.enriched_in] > q.condition_means[1 - cfg.enriched_in];
+      }
+      return false;  // unreachable for a valid enumerator
+    }
+  } // namespace
 
 /// constructor
 FLASHIda::FLASHIda(char* arg) :
@@ -402,7 +438,11 @@ FLASHIda::FLASHIda(char* arg) :
           results_row.quant_channels = q.channels;
           results_row.quant_condition_means = {q.condition_means[0], q.condition_means[1]};
 
-          if (q.verdict == Quantification::Result::Verdict::Differential)
+          // ADR-0039. Was `q.verdict == Verdict::Differential`, hardcoded. The objective is now
+          // authored (quantification.identify + .enriched_in) and the default reproduces that
+          // comparison exactly. Note what this transitively governs: tagging and MS3 are suppressed
+          // on a 'Q' and ride the bought 'R', so this line also decides what gets characterized.
+          if (quantBuysIdentification(q, config_.quantification()))
           {
             // ms_settings.ms2 -- held on quant_ rather than rostered, because in a quant config the
             // quantification scan holds the roster's primary slot and this one is conditional.

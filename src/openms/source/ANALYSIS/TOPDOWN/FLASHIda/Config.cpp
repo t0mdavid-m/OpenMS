@@ -102,6 +102,22 @@ namespace
     return "off";  // unreachable for a valid enumerator; keeps return-path checks quiet
   }
 
+  // The authored spelling of a quantification objective (ADR-0039), for the [CONFIG-WARN] line that
+  // quotes the user's config back at them. A switch over every enumerator with NO `default:`, for
+  // the same reason as characterizationModeName above: the next value must be a compiler warning
+  // rather than a wrong mode name inside a message telling the user what their config said.
+  const char* quantIdentifyName(OpenMS::QuantIdentify i)
+  {
+    switch (i)
+    {
+      case OpenMS::QuantIdentify::Differential: return "differential";
+      case OpenMS::QuantIdentify::Quantified: return "quantified";
+      case OpenMS::QuantIdentify::All: return "all";
+      case OpenMS::QuantIdentify::None: return "none";
+    }
+    return "differential";  // unreachable for a valid enumerator; keeps return-path checks quiet
+  }
+
   // One lenient scan-config allowlist for every scan object (ms1/ms2/ms3/follow_up_scan): the union
   // of MS1- and MS2/MS3-level keys. Rejects non-schema scan keys such as the removed 'IsolationMode'.
   const std::set<std::string> kScanKeys = {
@@ -523,11 +539,35 @@ namespace OpenMS
 
     rejectUnknownKeys(quant,
         {"enabled", "labelling", "reporter_mz_tol", "fold_change_threshold",
-         "conditions", "correction_matrix"}, "quantification");
+         "conditions", "correction_matrix",
+         "identify", "enriched_in"},  // ADR-0039
+        "quantification");
     quant_.enabled = quant.value("enabled", false);
     quant_.labelling = quant.value("labelling", std::string("tmt6plex"));
     quant_.reporter_mz_tol = quant.value("reporter_mz_tol", 0.002);
     quant_.fold_change_threshold = quant.value("fold_change_threshold", 1.4);
+
+    // ADR-0039. Which verdicts buy the identification scan. Hard-rejected rather than defaulted,
+    // for exactly characterization.mode's reason: a typo'd "Differential" must not silently select
+    // a different acquisition policy, and here the wrong branch changes what the run acquires.
+    {
+      // NOT quant.value("identify", ...). ToCppJson uses the stock JavaScriptSerializer, which
+      // EMITS NULLS -- value() on a present-but-null string throws a type_error, which is exactly
+      // how `conditions` broke all 41 committed configs once (see the explicit-nulls block below
+      // and its regression test). Absent and null must both mean "unauthored".
+      const std::string id = (quant.contains("identify") && !quant["identify"].is_null())
+                                 ? quant["identify"].get<std::string>()
+                                 : "differential";
+      if (id == "differential")     quant_.identify = QuantIdentify::Differential;
+      else if (id == "quantified")  quant_.identify = QuantIdentify::Quantified;
+      else if (id == "all")         quant_.identify = QuantIdentify::All;
+      else if (id == "none")        quant_.identify = QuantIdentify::None;
+      else
+        throw std::invalid_argument(
+            "Config: quantification.identify must be one of \"differential\", \"quantified\", "
+            "\"all\", \"none\"; got \"" + id + "\" (values are case-sensitive). It selects which "
+            "quantification verdicts buy the identification scan ms_settings.ms2 (ADR-0039).");
+    }
 
     const auto& valid_labellings = Quantification::labellingNames();
     if (std::find(valid_labellings.begin(), valid_labellings.end(), quant_.labelling)
@@ -578,6 +618,14 @@ namespace OpenMS
         rejectUnknownKeys(cond, {"name", "channels"}, "quantification.conditions[]");
         QuantConfig::Condition parsed;
         parsed.name = cond.value("name", std::string{});
+        // ADR-0039. "either" is quantification.enriched_in's sentinel for "either direction", so a
+        // condition may not claim the name -- otherwise `enriched_in: "either"` is ambiguous and
+        // whichever reading loses is silently wrong about which way the experiment ran.
+        if (parsed.name == "either")
+          throw std::invalid_argument(
+              "Config: a quantification condition may not be named \"either\". That is the "
+              "quantification.enriched_in sentinel meaning 'either direction' (ADR-0039); a "
+              "condition of that name would make enriched_in ambiguous. Rename the condition.");
         if (!cond.contains("channels") || !cond["channels"].is_array() || cond["channels"].empty())
           throw std::invalid_argument(
               "Config: quantification condition '" + parsed.name
@@ -594,6 +642,36 @@ namespace OpenMS
           parsed.channels.push_back(static_cast<size_t>(it - channel_names.begin()));
         }
         quant_.conditions.push_back(std::move(parsed));
+      }
+    }
+
+    // ADR-0039. Direction, named by CONDITION rather than as up/down, and resolved to an ordinal
+    // here -- exactly the treatment channel names get above, and for the same reason: an unknown
+    // name fails loudly at load instead of silently reading the wrong side of the ratio.
+    //
+    // OUTSIDE the conditions block deliberately, so `enriched_in` authored without conditions is
+    // rejected rather than ignored. Null-tolerant for the JavaScriptSerializer reason above.
+    {
+      const std::string ei = (quant.contains("enriched_in") && !quant["enriched_in"].is_null())
+                                 ? quant["enriched_in"].get<std::string>()
+                                 : "either";
+      if (ei != "either")
+      {
+        for (size_t i = 0; i < quant_.conditions.size(); ++i)
+          if (quant_.conditions[i].name == ei) { quant_.enriched_in = static_cast<int>(i); break; }
+
+        if (quant_.enriched_in < 0)
+        {
+          std::string known;
+          for (const auto& c : quant_.conditions)
+          { if (!known.empty()) known += ", "; known += "\"" + c.name + "\""; }
+          if (known.empty()) known = "(none authored)";
+          throw std::invalid_argument(
+              "Config: quantification.enriched_in names unknown condition \"" + ei
+              + "\". Valid: " + known + ", or \"either\" for either direction. It names the "
+                "condition a species must be ENRICHED IN for a differential verdict to buy the "
+                "identification scan (ADR-0039).");
+        }
       }
     }
 
@@ -713,6 +791,10 @@ namespace OpenMS
     // means "the identification MS2" in every mode; only WHEN it fires changes.
     // Copy both scan configs unconditionally; only the ROSTER below is conditional.
     quant_.has_quant_scan = has_quant_scan;
+    // ADR-0039. Carried onto quant_ because validate() is const and separate from this constructor,
+    // and identification_scan cannot answer "was one authored" -- it is default-constructed when
+    // ms_settings.ms2 is absent, which is precisely the state validate() has to reject.
+    quant_.has_identification_scan = has_primary_ms2;
     if (has_quant_scan)  quant_.quantification_scan = quant_scan;
     if (has_primary_ms2) quant_.identification_scan = primary_ms2;
 
@@ -1020,6 +1102,35 @@ namespace OpenMS
             "Config: quantification.enabled and precursor_selection.exploration are incompatible. "
             "Exploration replaces the level-2 roster with CE-sweep variants, so the quantification "
             "scan would never be dispatched and nothing would ever be measured. Turn one off.");
+
+      // 4. ADR-0039. ms_settings.ms2 is the scan the screen buys. Without it, identification_scan is
+      //    DEFAULT-CONSTRUCTED and buildFollowUp builds the bought scan out of defaults. That was
+      //    latent while only a Differential verdict reached it; `identify: "all"` fires it on EVERY
+      //    precursor, so the gap gets a guard in the same change that widens it.
+      //
+      //    Required whenever enabled, INERT under identify: "none" rather than optional -- so all
+      //    four identify values stay interchangeable and flipping the objective can never invalidate
+      //    a config. That is ADR-0013's ms_settings.ms3 rule, and the same reason the enriched_in
+      //    mismatch below warns instead of throwing.
+      if (!quant_.has_identification_scan)
+        throw std::invalid_argument(
+            "Config: quantification.enabled is true but ms_settings.ms2 is not set. ms2 is the "
+            "IDENTIFICATION scan the quantification screen buys (ADR-0038); ms2_quant is the scan "
+            "that does the measuring. It is required whenever quantification is enabled -- inert "
+            "under quantification.identify: \"none\", so the objective stays a one-word edit.");
+
+      // ADR-0039. A WARNING, not a throw. enriched_in is live under `differential` and merely inert
+      // under the other three -- that is ms_settings.ms3-under-mode-off, NOT only_one_condition,
+      // which was unreachable in every possible config. Throwing would force a second edit every
+      // time `identify` is flipped and would invalidate a template that sets enriched_in once, so
+      // the inertness is announced instead -- the same [CONFIG-WARN] treatment an unreferenced
+      // ms_settings.additional_ms2 block gets in the constructor above.
+      if (quant_.enriched_in >= 0 && quant_.identify != QuantIdentify::Differential)
+        std::cout << "[CONFIG-WARN] quantification.enriched_in is set but quantification.identify "
+                     "is \""
+                  << quantIdentifyName(quant_.identify)
+                  << "\", so direction is not applied; it restricts only the \"differential\" "
+                     "objective.\n";
     }
 
     // NO ACTIVATION-COUPLING THROW HERE, deliberately (ADR-0030). This used to reject an authored
