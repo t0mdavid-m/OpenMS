@@ -552,6 +552,24 @@ isolated. SNR admits and intensity ranks: SNR is a purity measure, so ordering b
 clean-but-faint charge displace an abundant one under a clamp and trade away the ion current the fill
 exists to harvest.
 
+**Three of the policy's inputs are now AUTHORED, and all three are inert by default** (ADR-0040,
+`precursor_selection`). `snr_threshold` is the same gate as ever but reachable — it used to be
+assigned a hardcoded `1.0` at the very END of `parseJSONConfig_`, after every section had been read,
+so adding the key without deleting that assignment would have left it bound and inert.
+`max_charge_states` bounds the SET and reaches `selectNotches` as `max_charge_states - 1`, since the
+anchor is not a notch; `MAX_NOTCHES_PER_STAGE` remains the hard ceiling, so an authored value can
+only lower it and the 2048-byte ABI is never at risk. `min_charge_states` is a floor applied in
+`admitCandidate` — it refuses the species outright rather than trimming its set, so no
+`max_precursors` slot is spent, and it **exempts a sibling**, whose set is deliberately reduced by
+what the species already isolated (ADR-0036); without that exemption the floor refuses precisely the
+PeakGroup supplying the last charge of a split envelope.
+
+⚠️ **The clamp mattered most where it meant least.** `buildMS2` writes notches only under
+`Multiplexed` (`ScanCommandQueue.cpp:316`), yet `separate` — which never writes one — was clamped by
+the notch array's capacity all the same, because it calls `selectNotches` upstream purely to compute
+its charge LIST. Measured on the `separate_charges` golden: 10 of 18 species-surveys sat at exactly
+10 charges, and 100 of that mode's 135 MS2 scans came from species pinned at that coincidence.
+
 **Both MS2 non-single modes read that one call, and this is load-bearing** (ADR-0021). `multiplexed`
 turns the set into notches on one command; `separate` emits one command per member. They differ only
 in scan count. `separate` used to source its charges from `charges_to_process` instead — a list that
