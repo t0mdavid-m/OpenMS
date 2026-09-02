@@ -1548,7 +1548,10 @@ namespace
   // "up": "up" here would have meant enriched in control.
   std::string quantObjectiveJson(const std::string& fold_change_threshold,
                                  const std::string& identify_key_or_empty,
-                                 const std::string& enriched_in_key_or_empty)
+                                 const std::string& enriched_in_key_or_empty,
+                                 // ADR-0040: extra precursor_selection keys, appended verbatim.
+                                 // Empty for every pre-0040 caller, so their configs are unchanged.
+                                 const std::string& precursor_extra = "")
   {
     return std::string(R"({
   "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 4,
@@ -1562,7 +1565,7 @@ namespace
   "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
   "precursor_selection": { "rt_window": 180, "targeting": "none", "consider_all_charges": false,
                            "strict_inclusion": false, "tie_threshold": 0.1, "rank_by": "qscore",
-                           "max_precursors": 1 },
+                           "max_precursors": 1)" + precursor_extra + R"( },
   "characterization": { "mode": "off", "max_targets": 3 },
   "ms_settings": {
     "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000,
@@ -1593,6 +1596,60 @@ namespace
     const auto& ms2 = ms2_scans[0];
     return ida.processScan(ms2.mzs.data(), ms2.ints.data(), (int)ms2.mzs.size(), ms2.rt, 2,
                            q.scan_description, 0.0, instrumentScanNumberOf(ms2));
+  }
+
+  // ---- ADR-0040: driving ONE quantification group -----------------------------------------------
+
+  /// What one group's returns did.
+  struct GroupRun
+  {
+    int q_count = 0;                    ///< 'Q' scans in the group
+    std::vector<int> pushed_per_scan;   ///< processScan's return for each, IN RETURN ORDER
+    int pushed_total = 0;
+  };
+
+  /// Drive one survey, then feed every 'Q' OF ONE SPECIES back, giving member @p dissent_index the
+  /// @p dissenter spectrum and all the others @p majority.
+  ///
+  /// The group is selected as "same parent survey AND same nominal mass as the first 'Q'", not as
+  /// "the first N commands": a survey emits 'Q's for several species and only one species is a
+  /// group. Feeding across species would prove nothing about the vote.
+  ///
+  /// @p dissent_index < 0 feeds @p majority to every member (the unanimous case).
+  GroupRun runQuantGroup(const std::string& cfg, const std::vector<ScanData>& ms1_scans,
+                         const ScanData& majority, const ScanData& dissenter, int dissent_index)
+  {
+    GroupRun out;
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    AcqResult acq = runInterleaved(&ida, ms1_scans, {});
+
+    std::vector<ScanCommand> qs;
+    for (const auto& c : acq.ms2_cmds)
+    {
+      if (std::strlen(c.scan_description) < 4 || c.scan_description[3] != 'Q') continue;
+      if (qs.empty()) { qs.push_back(c); continue; }
+      if (std::string(c.parent_scan_id) == std::string(qs.front().parent_scan_id)
+          && std::llround(c.mono_mass) == std::llround(qs.front().mono_mass))
+        qs.push_back(c);
+    }
+    out.q_count = static_cast<int>(qs.size());
+
+    for (size_t i = 0; i < qs.size(); ++i)
+    {
+      const ScanData& s = (static_cast<int>(i) == dissent_index) ? dissenter : majority;
+      const int pushed = ida.processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 2,
+                                         qs[i].scan_description, 0.0, instrumentScanNumberOf(s));
+      out.pushed_per_scan.push_back(pushed);
+      if (pushed > 0) out.pushed_total += pushed;
+    }
+    return out;
+  }
+
+  /// separate + a floor of 2: the configuration the majority vote needs.
+  std::string quantGroupJson(const std::string& identify_key_or_empty = "")
+  {
+    return quantObjectiveJson("1.4", identify_key_or_empty, "",
+                              R"(, "precursor_charges": "separate", "min_charge_states": 2)");
   }
 }
 
@@ -3565,6 +3622,110 @@ START_SECTION(process_scan_still_blocks_while_analysis_mutex_held)
             << (st == std::future_status::timeout ? 1 : 0) << std::endl;
   TEST_EQUAL(st == std::future_status::timeout, true)
   TEST_EQUAL(fut.get(), 0)  // empty description -> the size<3 gate, once it finally runs
+}
+END_SECTION
+
+// ===== ADR-0040: the quantification group votes ================================================
+
+// Q40-1: the whole feature end to end. N 'Q' scans of one species, ONE identification scan, bought
+// only when the LAST member returns.
+//
+// Under a bug that keeps buying per-scan this reads N, not 1; under one that never completes the
+// group it reads 0. Both are the failures the group exists to prevent.
+START_SECTION(quant_group_buys_exactly_one_identification_on_its_last_return)
+{
+  auto ms1 = loadTsvScans(ms1_cytc_tsv_path);
+  auto tmt = loadTsvScans(ms2_tmt_tsv_path);
+  ABORT_IF(ms1.empty() || tmt.empty())
+
+  GroupRun r = runQuantGroup(quantGroupJson(), ms1, tmt[0], tmt[0], -1);
+
+  // Non-vacuity: without a real fan-out every assertion below is trivially true.
+  // Measured: this species fans out to 10 charges (the anchor + MAX_NOTCHES_PER_STAGE), so the
+  // dissent and abstention sections below genuinely out-vote rather than skipping their guards.
+  TEST_EQUAL(r.q_count >= 2, true)
+  TEST_EQUAL(r.pushed_total, 1)                                  // exactly ONE 'R', for the group
+
+  // ...and it is bought on the LAST return, not the first. That is the group waiting for every
+  // member rather than deciding on whoever happened to come back first.
+  for (size_t i = 0; i + 1 < r.pushed_per_scan.size(); ++i) TEST_EQUAL(r.pushed_per_scan[i], 0)
+  TEST_EQUAL(r.pushed_per_scan.back(), 1)
+}
+END_SECTION
+
+// Q40-2: a DISSENTING charge is out-voted, and the group still buys.
+//
+// The dissenter is fed ms2_quant_tmt_treated_absent.txt -- Differential enriched in CONTROL -- while
+// the majority get ms2_quant_tmt.txt, which is Differential enriched in TREATED. Same verdict,
+// opposite direction: a vote keyed on the verdict ALONE would call this unanimous.
+START_SECTION(quant_group_outvotes_a_dissenting_charge)
+{
+  auto ms1 = loadTsvScans(ms1_cytc_tsv_path);
+  auto tmt = loadTsvScans(ms2_tmt_tsv_path);
+  auto opp = loadTsvScans(ms2_quant_treated_absent_tsv_path);
+  ABORT_IF(ms1.empty() || tmt.empty() || opp.empty())
+
+  GroupRun unan = runQuantGroup(quantGroupJson(), ms1, tmt[0], tmt[0], -1);
+  ABORT_IF(unan.q_count < 3)   // a 2-member group would TIE rather than out-vote
+
+  GroupRun split = runQuantGroup(quantGroupJson(), ms1, tmt[0], opp[0], 0);
+  TEST_EQUAL(split.q_count, unan.q_count)   // same acquisition either way; only the returns differ
+  TEST_EQUAL(split.pushed_total, 1)         // the majority still buys, exactly once
+}
+END_SECTION
+
+// Q40-3: ABSTENTIONS are not dissent.
+//
+// ms2_hcd_fragment.txt carries no reporter ions at all, so that member cannot be measured. It must
+// lower the BALLOT COUNT, never the agreement -- a charge with no signal is evidence of nothing, and
+// counting it as disagreement would manufacture chimericity out of a weak charge.
+//
+// With min_charge_states 2 and one abstainer, the remaining members still clear the floor and buy.
+START_SECTION(quant_group_abstention_is_not_dissent)
+{
+  auto ms1 = loadTsvScans(ms1_cytc_tsv_path);
+  auto tmt = loadTsvScans(ms2_tmt_tsv_path);
+  auto inert = loadTsvScans(ms2_tsv_path);   // no TMT reporter region
+  ABORT_IF(ms1.empty() || tmt.empty() || inert.empty())
+
+  GroupRun r = runQuantGroup(quantGroupJson(), ms1, tmt[0], inert[0], 0);
+  ABORT_IF(r.q_count < 3)   // 2 members minus 1 abstainer would fall BELOW the floor, not over it
+
+  TEST_EQUAL(r.pushed_total, 1)   // the abstainer is ignored; the rest agree and buy
+}
+END_SECTION
+
+// Q40-4: `identify` still governs, on the CONSENSUS rather than on any member.
+//
+// This is the property that keeps ADR-0039 intact: decide() synthesizes a plain Result, so
+// quantBuysIdentification is reached unchanged. "none" must buy nothing however the vote went.
+START_SECTION(quant_group_consensus_is_what_identify_cuts_on)
+{
+  auto ms1 = loadTsvScans(ms1_cytc_tsv_path);
+  auto tmt = loadTsvScans(ms2_tmt_tsv_path);
+  ABORT_IF(ms1.empty() || tmt.empty())
+
+  TEST_EQUAL(runQuantGroup(quantGroupJson(R"( "identify": "none",)"), ms1, tmt[0], tmt[0], -1)
+                 .pushed_total, 0)
+  TEST_EQUAL(runQuantGroup(quantGroupJson(R"( "identify": "all",)"), ms1, tmt[0], tmt[0], -1)
+                 .pushed_total, 1)
+}
+END_SECTION
+
+// Q40-5: `single` is BYTE-IDENTICAL -- a group of one completes on its first return and the
+// consensus of one measurement is that measurement. This is what keeps 24 of 25 golden modes still,
+// so it is asserted rather than assumed.
+START_SECTION(quant_group_of_one_reproduces_the_pre_ADR_0040_buy)
+{
+  auto ms1 = loadTsvScans(ms1_cytc_tsv_path);
+  auto tmt = loadTsvScans(ms2_tmt_tsv_path);
+  ABORT_IF(ms1.empty() || tmt.empty())
+
+  // No precursor_charges override => "single" => one 'Q' per species.
+  GroupRun r = runQuantGroup(quantObjectiveJson("1.4", "", ""), ms1, tmt[0], tmt[0], -1);
+  TEST_EQUAL(r.q_count, 1)
+  TEST_EQUAL(r.pushed_total, 1)             // bought immediately, on the only return
+  TEST_EQUAL(r.pushed_per_scan[0], 1)
 }
 END_SECTION
 

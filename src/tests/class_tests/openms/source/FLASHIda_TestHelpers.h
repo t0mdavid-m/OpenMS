@@ -314,7 +314,17 @@ namespace
                                   int max_iters = 600,
                                   bool single_group_only = false,
                                   double rt_offset = 0.0,
-                                  const std::map<int, ScanData>* ms2_ce_map = nullptr)
+                                  const std::map<int, ScanData>* ms2_ce_map = nullptr,
+                                  //   ms2_charge_map : ADR-0040, twin of the C# ms2ChargeMap. Same shape as
+                                  //               ms2_ce_map but keyed on the command's stage-0 CHARGE, so the
+                                  //               members of one quantification group can be given DIFFERENT
+                                  //               reporter ratios and the majority vote actually has something
+                                  //               to out-vote. NO FALLBACK, for ms2_ce_map's reason: a silent
+                                  //               fall-through would make every member agree and the vote
+                                  //               would pass while testing nothing. Applied only when
+                                  //               ms2_ce_map is null; the two key the same feed and a config
+                                  //               that swept CE *and* voted would be ambiguous.
+                                  const std::map<int, ScanData>* ms2_charge_map = nullptr)
   {
     AcqResult r;
     const int n_ms1 = static_cast<int>(ms1_scans.size());
@@ -366,6 +376,16 @@ namespace
             throw std::runtime_error("runInterleaved: MS2 command collision energy " + std::to_string(ce) +
                                      " has no CE-map fixture (no fallback).");
           ms2_src = &cit->second;
+        }
+        else if (ms2_charge_map != nullptr)
+        {
+          // ADR-0040: charge-keyed feed, so one quantification group's members can disagree.
+          int z = cmd.num_stages > 0 ? std::abs(cmd.stages[0].charge_state) : 0;
+          auto zit = ms2_charge_map->find(z);
+          if (zit == ms2_charge_map->end())
+            throw std::runtime_error("runInterleaved: MS2 command charge " + std::to_string(z) +
+                                     " has no charge-map fixture (no fallback).");
+          ms2_src = &zit->second;
         }
         if (ms2_src != nullptr)
           r.ms2_feed_returns += ida->processScan(ms2_src->mzs.data(), ms2_src->ints.data(),
