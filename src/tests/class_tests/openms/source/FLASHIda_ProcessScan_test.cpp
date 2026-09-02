@@ -3729,4 +3729,29 @@ START_SECTION(quant_group_of_one_reproduces_the_pre_ADR_0040_buy)
 }
 END_SECTION
 
+// Q40-6: MULTIPLEXED reaches a consensus and buys, with min_charge_states above 1.
+//
+// Regression for a defect that shipped to CI: the ballot floor was min_charge_states flat, but
+// multiplexed co-isolates the whole charge set into ONE scan -- so its single ballot fell below a
+// floor of 2 and the mode reported `incomplete_channels | 0/1` on every row and bought nothing,
+// permanently. min_charge_states is a requirement on the acquisition charge SET, enforced at MS1
+// admission; the ballot floor is its decision-time half, and the two are the same number only under
+// `separate`. Capping the floor by the group's size is what separates them.
+//
+// Adversarially: revert the std::min cap and this reads 0.
+START_SECTION(quant_multiplexed_group_of_one_still_reaches_a_consensus)
+{
+  auto ms1 = loadTsvScans(ms1_cytc_tsv_path);
+  auto tmt = loadTsvScans(ms2_tmt_tsv_path);
+  ABORT_IF(ms1.empty() || tmt.empty())
+
+  const std::string cfg = quantObjectiveJson(
+      "1.4", "", "", R"(, "precursor_charges": "multiplexed", "min_charge_states": 2)");
+
+  GroupRun r = runQuantGroup(cfg, ms1, tmt[0], tmt[0], -1);
+  TEST_EQUAL(r.q_count, 1)        // one co-isolated 'Q' however many charges it carries
+  TEST_EQUAL(r.pushed_total, 1)   // ...which is enough: the floor cannot exceed what the mode emits
+}
+END_SECTION
+
 END_TEST
