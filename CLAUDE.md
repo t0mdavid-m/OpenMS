@@ -20,7 +20,10 @@ which owns them — including what a green container run does and does not entit
 Headers under `src/openms/include/OpenMS/ANALYSIS/TOPDOWN/`, sources under
 `src/openms/source/ANALYSIS/TOPDOWN/` — note the source tree has **no** `OpenMS/` path segment
 (`source/OpenMS/…` does not exist). `sources.cmake` is **not** a reliable header inventory:
-`Ms2Params.h` and `ProteoformTracker.h` are live but unregistered. Glob the directory instead.
+`CandidateAdmission.h`, `Ms2Params.h`, `NotchSelection.h` and `ProteoformTracker.h` are live but
+unregistered (verified 2026-09-04 — the list is longer than it used to be). Glob the directory
+instead. It costs nothing to register a new header there and it keeps the drift from growing;
+`ScanRole.h` is.
 
 ### The untouchable boundary
 
@@ -116,7 +119,7 @@ itself minted and dispatched its id.
 | # | Gate | Trace |
 |---|---|---|
 | 1 | `scan_description` (or null) shorter than 3 chars | silent |
-| 2 | `desc[3] == 'A'` — AGC calibration scan; resolves pending, returns | silent |
+| 2 | `!roleObserves(echo_role)` — AGC calibration scan; resolves pending, returns. Reads the ECHO, the one gate entitled to (ADR-0042); `Agc` is the only `observes == false` row | silent |
 | 3 | `peekPending(decode(desc[0..2]))` empty — id never emitted | `[TRACK-RESOLVE] status=not_found` |
 | 4 | `resolvePending` empty after a successful peek (upstream race) | `status=context_lost_race` |
 | 5 | context support: `required_stages` = 0/1/2 for ms_level 1/2/3; rejects if ms_level ∉ {1,2,3}, or `parent_ctx.msn_level != ms_level`, or `parent_ctx.num_stages < required_stages` (a **less-than**, not an equality) | `status=context_unsupported` |
@@ -127,12 +130,37 @@ log row — but gates 3–5 do leave a stdout trace.
 
 ### Scan-description wire format
 
-`{3-char base-94 tracking id}{1-char type marker}{payload}`. Markers, per the authoritative switch
-in `IdaLogger::scanTypeFromDescription_`:
+`{3-char base-94 tracking id}{1-char type marker}{payload}`. The marker is decoded in exactly ONE
+place — `FLASHIda/ScanRole.h`'s `constexpr` traits table (ADR-0042), which
+`IdaLogger::scanTypeFromDescription_` now delegates to:
 
-`S` survey MS1 · `A` AGC calibration · `R` "recording" — any data-acquiring MS2 *or* MS3, **and
-the identification scan a quantification verdict buys** · `Q` the quantification scan
-(ADR-0038) · `C` tagging conditional follow-up MS2 · `E` exploration variant.
+| Marker | `scan_type` | observes | decides | |
+|---|---|---|---|---|
+| `S` | `survey` | ✓ | ✓ | survey MS1 |
+| `A` | `agc` | **✗** | ✗ | AGC calibration; peaks discarded before the spectrum is read |
+| `M` | `monitor` | ✓ | **✗** | monitor scan — observed, never acted upon (ADR-0042) |
+| `R` | `recording` | ✓ | ✓ | any data-acquiring MS2 *or* MS3, **and the identification scan a quantification verdict buys** |
+| `Q` | `quantification` | ✓ | ✓ | the quantification scan (ADR-0038) |
+| `C` | `conditional` | ✓ | ✓ | tagging conditional follow-up MS2 |
+| `E` | `exploration` | ✓ | ✓ | exploration variant |
+
+The `scan_type` strings are a **golden column** and the table is now their only source — `"recording"`
+is a poor name for an identification MS2 and must stay. Pinned by
+`FLASHIda_exploration_test::roleName_matches_the_legacy_scan_type_strings`, which also asserts both
+predicates as EXACT sets. Adding an enumerator without its table row **fails to compile**
+(`static_assert` on totality), which is deliberate: `ENABLE_GCC_WERROR` is off and MSVC's C4062 is
+off-by-default, so a `switch` without `default` would only warn.
+
+⚠️ **An UNDECODABLE description — too short, or a marker no row claims — resolves as a SURVEY**:
+`observes` and `decides` both true. That is what keeps the migrated read sites byte-identical with
+the `char` comparisons they replaced. Do not "fail closed" here; it would silently stop processing
+every scan the engine did not mint.
+
+⚠️ **Which copy of the role is authoritative: the ENGINE's** (ADR-0042, settling a question ADR-0008
+and ADR-0035 left open). Two copies exist and `processScan` names them `echo_role` and `cmd_role`.
+The **observe** gate reads the instrument's echo, because it must run before `resolvePending` and
+there is no engine record yet. Every **decision** gate reads `parent_ctx`, the engine's own queued
+command, which cannot be truncated or lost by the trailer round trip.
 
 ⚠️ **`F` is retired** (ADR-0038). It marked the scan quantification *bought* — which the engine
 never measured — while the scan it *did* measure was the base MS2, whose activation could not
@@ -168,7 +196,7 @@ to separate a follow-up from a primary.
 
 ## `getNextScanCommand` — never returns 0
 
-Five steps: (1) scheduled AGC prescan → (2) cycle-time MS1 → (3) cleanup → (4) priority dequeue →
+Six steps: (1) scheduled AGC prescan → (2) cycle-time MS1 → (2b) monitor scan (ADR-0042) → (3) cleanup → (4) priority dequeue →
 (5) idle fallback. **Every path returns 1.** When all four queues are empty, Step 5 mints a fresh
 priority-3 survey MS1, pushes it, and re-enters `dequeue()` to return it — the instrument is never
 observably starved. The only `return 0` in the whole file belongs to `processScan`.
@@ -176,6 +204,24 @@ observably starved. The only `return 0` in the whole file belongs to `processSca
 
 Callers must therefore terminate on `msn_level == 1 && priority == 3`, or bound their iterations.
 See `../CLAUDE.md`.
+
+⚠️ **Step 2b is NOT an `else` of Step 2**, although the two are behaviourally complementary (Step 2
+fires only when nothing is sweeping, Step 2b only when something is). `queue_.takeMonitorDue()` must
+be reached on EVERY drain, because its `sweeping == false` path is what RE-ARMS a level for its next
+episode. Put it in an `else` and the arm survives the end of a sweep, so the next sweep silently
+loses its anchor scan — visible only as a missing first data point. Both levels are always asked,
+even once one has answered yes, so each consumes its own clock: it is one MS1 and it serves both.
+`takeMonitorDue` is a CONSUME, not a peek — it tests and updates under one `queue_mutex_`
+acquisition, so two concurrent drains cannot both be told the same monitor scan is due. Its cadence
+is one anchor per episode, then one per `interval_ms`; the anchor is deliberately independent of the
+interval, so a sweep shorter than one interval still yields the reading that says what the source
+looked like while it ran.
+
+⚠️ **The drain tail's `recordMS1Time()` carries a `roleDecides` conjunct** (ADR-0042). A monitor scan
+satisfies `msn_level == 1 && is_agc == 0` exactly as a survey does, so without it the scan stands in
+for one — which is character-for-character ADR-0031's bug, with `scheduling.cycle_time` as the
+victim instead of `agc_interval_seconds`: monitoring a long sweep would starve the very survey the
+cycle time exists to force.
 
 ⚠️ **Step 5 emits NO prescan** (ADR-0031). It used to fabricate one as filler *and* call
 `recordAGCTime()`, which reset the timer Step 1 reads — so Step 1 could only fire in a run whose
@@ -204,7 +250,7 @@ the C# TPL Dataflow `ActionBlock` thread (serialized with itself, `MaxDegreeOfPa
 
 | P | Commands |
 |---|---|
-| 0 | FAIMS CV-transition MS1; cycle-time MS1; **both bought scans** — the identification scan a quantification verdict buys (`R`, ADR-0038) and the tagging conditional follow-up (`C`) |
+| 0 | FAIMS CV-transition MS1; cycle-time MS1; **both bought scans** — the identification scan a quantification verdict buys (`R`, ADR-0038) and the tagging conditional follow-up (`C`); the **monitor scan** (`M`, ADR-0042) — 3 is the idle sentinel and 1/2 are the sweep's own lanes, so 0 is the only priority at which its authored interval can govern |
 | 1 | MS3, including exploration MS3 variants |
 | 2 | MS2 from MS1 selection; exploration MS2 variants |
 | 3 | idle survey MS1 — **and nothing else** |
@@ -221,7 +267,7 @@ Assigned at build time, never re-ranked. Within a priority `dequeue()` is strict
 what makes `scan_commands.tsv` row order and `child_ids` order deterministic. `push()` clamps
 out-of-range priorities into [0,3].
 
-## Where deconvolution actually runs — 3 call sites, 2 engines
+## Where deconvolution actually runs — 4 call sites, 3 engines
 
 - **MS1** is *not* deconvolved from `processScan`: it happens inside
   `PrecursorSelection::filterAndRank` → `deconv_.deconvolveMS1(…)`, just before mass-exclusion.
@@ -230,6 +276,17 @@ out-of-range priorities into [0,3].
   instance built with `config.explorationToleranceList()` rather than `config.toleranceList()`.
   So `deconv_.storedMS2()` is empty/stale during an exploration group, and exploration results can
   use a different ppm tolerance than production scans.
+- **Monitor scans use a THIRD engine** (ADR-0042). `FLASHIda::monitor_deconv_` is a
+  `unique_ptr<Deconvolution>`, null unless a level enables `monitor_ms1`, built with the SAME
+  `config.toleranceList()` as `deconv_` so a monitor reading is numerically comparable with a
+  survey's. It is private on purpose, not incidentally: `deconv_` holds ONE `SpectralDeconvolution`
+  shared between MS1 and MSn, and `deconvolveMS1` restores the global charge window on it (flagged
+  `// LOAD-BEARING` in `Deconvolution.cpp`), so routing a monitor scan through `deconv_` mid-sweep
+  would reset that window under the running sweep. It self-corrects — `deconvolveMSn` re-narrows on
+  every call — but that is an inference across two call sites, and a private instance makes it
+  impossible instead. **Do not "simplify" it away.** Which of the three engines carries a fed rt is
+  also the only spectrum-independent way to tell which MS1 arm ran, which is what
+  `the_engine_record_decides_the_role_not_the_echo` asserts on.
 
 `target_mode` semantics (and the fact that 2/3 are swapped in every doc comment) are documented in
 `../CLAUDE.md` — mode **2 is deep/in-depth**, mode **3 is exclusion**.
