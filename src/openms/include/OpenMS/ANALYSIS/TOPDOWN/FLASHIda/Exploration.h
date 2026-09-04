@@ -311,6 +311,13 @@ namespace OpenMS
     /// Number of currently active exploration groups
     int activeGroupCount() const;
 
+    /// Number of currently active exploration groups AT ONE MSn LEVEL (ADR-0042).
+    ///
+    /// The monitor scan is configured per level -- precursor_selection.exploration governs MS2
+    /// sweeps, characterization.exploration governs MS3 sweeps -- so "is this level sweeping?" has
+    /// to be answerable separately. Each group already records its msn_level; this only filters.
+    int activeGroupCount(int msn_level) const;
+
     /// Mass count of the stored exploration-deconv MS2 spectrum (0 if none). Encapsulates the
     /// exploration_deconv_ access that processScan used to perform inline.
     int explorationDeconvMassCount() const

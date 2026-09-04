@@ -55,6 +55,7 @@
 #include <deque>
 #include <fstream>
 #include <iomanip>
+#include <memory>
 #include <mutex>
 
 namespace OpenMS
@@ -123,6 +124,21 @@ namespace OpenMS
     /// Deconvolution engine (owns SpectralDeconvolution, MS1 result, MS2 result)
     Deconvolution deconv_;
 
+    /// The MONITOR scan's OWN deconvolution engine (ADR-0042). Null unless a level enables
+    /// monitor_ms1, so the feature costs nothing -- not even a second averagine table -- when off.
+    ///
+    /// Private, and that is the point. deconv_ holds ONE SpectralDeconvolution shared between MS1
+    /// and MSn, and deconvolveMS1 restores the global charge window on it (see the LOAD-BEARING
+    /// comment in Deconvolution.cpp). Routing a monitor scan through deconv_ mid-sweep would reset
+    /// that window under the sweep. It self-corrects, because deconvolveMSn re-narrows on every
+    /// call -- but "self-corrects" is an inference across two call sites, and a private instance
+    /// makes it impossible instead. Built with the same toleranceList() as deconv_, so a monitor
+    /// reading is numerically comparable with a survey's.
+    ///
+    /// Precedent: Exploration::exploration_deconv_ does the same thing, incidentally. Here it is
+    /// deliberate. Do NOT "simplify" this away in favour of deconv_.
+    std::unique_ptr<Deconvolution> monitor_deconv_;
+
     /// Fragment analysis (tag-based matching, MS2 mass queries, PTM ambiguity)
     FragmentAnalysis fragments_;
 
@@ -153,6 +169,16 @@ namespace OpenMS
 
     /// Atomic flag: true when any exploration group is active (set by processScan, read by getNextScanCommand)
     std::atomic<bool> exploration_active_{false};
+
+    /// Per-level active-group counts, [0] = level 2, [1] = level 3 (ADR-0042). Same producer, same
+    /// consumer and the same release/acquire discipline as exploration_active_ above -- written by
+    /// processScan at the four sites that write that flag, read lock-free by getNextScanCommand.
+    ///
+    /// A SEPARATE atomic per level, not one packed value: the drain reads them independently and
+    /// they are only ever compared to zero, so no cross-level consistency is needed and no reader
+    /// can observe a torn pair. They deliberately do NOT replace exploration_active_ -- that flag
+    /// still gates the cycle-time MS1, which is a whole-run question, not a per-level one.
+    std::atomic<int> exploration_active_lvl_[2]{};
 
     /// Atomic FAIMS CV: current CV value (set by processScan after advanceToNextCV, read by getNextScanCommand)
     std::atomic<double> current_faims_cv_{0.0};
@@ -252,6 +278,60 @@ namespace OpenMS
       setPrecursorForTracking_(cmd.scan_id, precursor_id);
       queue_.push(cmd);
     }
+
+    /// Publish exploration state for the drain's lock-free reads: the whole-run flag AND both
+    /// per-level counts, together (ADR-0042).
+    ///
+    /// One helper for the same reason stampAndPush_ is one: there are four sites that must publish
+    /// this, and asking each of them to remember three atomics is twelve chances to get it wrong.
+    /// A per-level count that lags its flag would strand a monitor scan's cadence -- armed against a
+    /// sweep the drain no longer believes is running, or the reverse.
+    void publishExplorationState_()
+    {
+      exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);
+      exploration_active_lvl_[0].store(exploration_.activeGroupCount(2), std::memory_order_release);
+      exploration_active_lvl_[1].store(exploration_.activeGroupCount(3), std::memory_order_release);
+    }
+
+    /**
+     * @brief The MS1 SURVEY arm of processScan: deconvolve -> select -> push MS2 -> FAIMS cycle.
+     *
+     * Extracted verbatim from the `ms_level == 1` branch (ADR-0042) so that branch can fork into a
+     * deciding arm and an observing one with NOTHING AFTER THE FORK. Every acquisition decision an
+     * MS1 makes lives in here; a side effect added to this function is therefore unreachable from a
+     * scan that took the other arm, by construction rather than by a guard.
+     *
+     * @return commands pushed; becomes processScan's return_code.
+     */
+    int runSurveyMS1_(const double* mzs, const double* ints, int length, double rt_min,
+                      double faims_cv, int parent_tracking_id, const ScanCommand& parent_ctx,
+                      int instrument_scan_number,
+                      IdaLogger::ScanRowDescriptor& results_row,
+                      std::vector<std::string>& child_ids);
+
+    /**
+     * @brief The MS1 OBSERVING arm: deconvolve, record the masses, decide nothing (ADR-0042).
+     *
+     * `static` IS LOAD-BEARING. It is the entire neutrality guarantee, not a style choice.
+     *
+     * A static member function has no `this`, so inside it `selection_`, `queue_`, `faims_`,
+     * `tracker_`, `quant_` and `exploration_` are not merely discouraged -- naming any of them is
+     * `error: invalid use of non-static data member`. A monitor scan therefore cannot age an
+     * exclusion map, mint a precursor id, push a command or advance the FAIMS wheel, because there
+     * is no object in scope through which to do it. Every parameter is passed explicitly, so this
+     * signature IS the function's complete list of capabilities, and widening it is a header diff a
+     * reviewer sees.
+     *
+     * DO NOT remove `static` to "simplify". DO NOT add a FLASHIda& parameter. Either change silently
+     * converts a compile-time guarantee back into a promise, and the failure it stops -- a monitor
+     * scan quietly corrupting acquisition memory -- is invisible in every log.
+     *
+     * @param d MUST be monitor_deconv_, never deconv_ (see that member's comment).
+     */
+    static void observeMonitoringMS1_(Deconvolution& d, const Config& cfg,
+                                      const double* mzs, const double* ints, int length,
+                                      double rt, double faims_cv,
+                                      IdaLogger::ScanRowDescriptor& results_row);
 
     /// Steady-clock reference for timestamps
     std::chrono::steady_clock::time_point engine_start_time_;

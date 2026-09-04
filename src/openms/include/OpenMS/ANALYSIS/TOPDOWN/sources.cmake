@@ -20,6 +20,7 @@ set(sources_list_h
         FLASHIda/Quantification.h
         FLASHIda/ScanCommand.h
         FLASHIda/ScanCommandQueue.h
+        FLASHIda/ScanRole.h
         FLASHIdaBridgeFunctions.h
         FLASHGappedTaggerAlgorithm.h
         FLASHTaggerAlgorithm.h

@@ -20,6 +20,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>  // encode/decode for distinct MS1 ids
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanRole.h>          // roleOf: monitor scans are not surveys
 #include <OpenMS/SYSTEM/File.h>  // freshLogDir: makeDir / removeDirRecursively
 #include "FLASHIda_TestAccess.h"  // FLASHIdaTestAccess::explorationActive (private-state access)
 
@@ -278,6 +279,10 @@ namespace
     // each command's dequeue (FLASHIda::explorationActive()). Lets a caller scope an assertion to exactly
     // the exploration-ACTIVE window (e.g. cycle-time MS1 suppression holds only while a group is active).
     std::vector<char> all_active;
+    // Monitor scans (ADR-0042), in dequeue order. Kept OUT of ms1_cmds deliberately: a monitor scan is
+    // not a survey and every existing assertion over ms1_cmds counts surveys. Empty in every mode that
+    // does not enable monitor_ms1, which is all of them by default.
+    std::vector<ScanCommand> monitor_cmds;
     int total_dequeued = 0;
     // single_group_only bookkeeping (see runInterleaved): the processScan return of the first MS1 that
     // forms a group (== # commands it pushed), and the running sum of MS2-feed processScan returns. Both
@@ -340,6 +345,25 @@ namespace
       // so callers can assert cross-level interleave the per-level buckets lose.
       r.all_cmds.push_back(cmd);
       r.all_active.push_back(FLASHIdaTestAccess::explorationActive(*ida) ? 1 : 0);   // engine's exploration-active flag AT dequeue
+      // MONITOR scan (ADR-0042): neither workload nor idleness, and it MUST be classified before the
+      // idle predicate below. Two ways it breaks the drive otherwise, and both are silent:
+      //   * with fixtures left, it falls into the `msn_level <= 1` workload arm and consumes
+      //     ms1_scans[ms1_fed++] -- a survey the drive still owes the engine, so every later
+      //     assertion is off by one spectrum;
+      //   * with fixtures exhausted, it satisfies `ms1_fed >= n_ms1` and counts as idle, so three
+      //     monitor scans in a row TRUNCATE the drive.
+      // So: re-feed the spectrum the last survey used (the engine only wants a source reading, and it
+      // decides nothing from it), do not advance ms1_fed, and leave `idle` untouched -- a monitor scan
+      // is neither progress nor stagnation. max_iters remains the backstop.
+      if (roleOf(cmd) == ScanRole::Monitor)
+      {
+        r.monitor_cmds.push_back(cmd);
+        const ScanData& s = ms1_scans[ms1_fed > 0 ? ms1_fed - 1 : 0];
+        ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt + rt_offset, 1,
+                         cmd.scan_description, cmd.faims_cv, instrumentScanNumberOf(s));
+        cmd = ScanCommand{};
+        continue;
+      }
       // Idle tick: AGC, empty descriptor, an MS1 re-survey after all ms1_scans have been fed, or (in
       // single_group_only mode) any MS1 survey once the first group has already formed.
       if (cmd.is_agc || cmd.scan_description[0] == '\0' || (cmd.msn_level <= 1 && ms1_fed >= n_ms1)
@@ -740,6 +764,16 @@ namespace
     for (int it = 0; it < max_iters && idle < 3; ++it)
     {
       if (ida->getNextScanCommand(cmd) != 1) break;
+      // Monitor scan (ADR-0042): answer it without spending a fixture, and do not tick idle. Same
+      // reasoning as runInterleaved's branch -- see there.
+      if (roleOf(cmd) == ScanRole::Monitor)
+      {
+        const ScanData& s = scans[ms1_fed > 0 ? ms1_fed - 1 : 0];
+        ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1,
+                         cmd.scan_description, 0.0, instrumentScanNumberOf(s));
+        cmd = ScanCommand{};
+        continue;
+      }
       if (cmd.msn_level == 1 && !cmd.is_agc && ms1_fed < n_ms1)
       {
         const ScanData& s = scans[ms1_fed++];

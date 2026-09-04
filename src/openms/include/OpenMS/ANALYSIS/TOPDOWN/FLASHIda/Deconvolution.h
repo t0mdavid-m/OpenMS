@@ -178,4 +178,25 @@ namespace OpenMS
     bool ms2_deconv_valid_ = false;
   };
 
+  /**
+   * @brief Order a deconvolved spectrum IN PLACE by the level's selection metric.
+   *
+   * Extracted verbatim from PrecursorSelection::filterPeakGroupsUsingMassExclusion_ (ADR-0042).
+   *
+   * WHY THIS IS OBSERVABLE, and why it is worth a shared function: scan_results.tsv's four deconv_*
+   * columns and ida.log's AllMass= are both written by walking the spectrum BY INDEX, so this
+   * ordering IS the column order. A scan that skips selection entirely -- a monitor scan -- would
+   * otherwise list its masses in the deconvolution engine's own output order while a survey lists
+   * them ranked, and column 1 would mean two different things on two rows of the same file.
+   *
+   * DELIBERATELY DECLARED HERE and not in PrecursorSelection.h: the observing arm must be able to
+   * call it without PrecursorSelection being in scope. That placement is the whole reason this can
+   * be shared at all.
+   *
+   * This is the RANKING sort only. The inclusion-priority stable_sort that follows it in
+   * filterPeakGroupsUsingMassExclusion_ is NOT here and must not be: priority tie-breaking is a
+   * selection decision, and a scan that decides nothing must not run it.
+   */
+  OPENMS_DLLAPI void sortByLevelMetric(DeconvolvedSpectrum& spec, const Config& cfg, int ms_level);
+
 } // namespace OpenMS

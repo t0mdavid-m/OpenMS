@@ -206,6 +206,21 @@ namespace OpenMS
     double tolerance_ppm = 10.0;
     double exploration_tolerance_ppm = 10.0;  ///< Resolved exploration tolerance (from overrides or base tol)
     double remaining_precursor_target = 0.1;  ///< Target remaining precursor ratio (0.1 = 10%)
+
+    /// MONITOR SCAN (ADR-0042): a periodic MS1 acquired WHILE THIS LEVEL IS SWEEPING, so the
+    /// operator can watch the source. Deconvolved and logged; it selects nothing, excludes nothing,
+    /// and no later acquisition decision reads anything it wrote.
+    ///
+    /// Per level because the two exploration blocks are authored separately and their sweeps differ
+    /// in length by an order of magnitude: an MS3 sweep is targets x (points + 2) scans and is the
+    /// one that leaves the operator blind, while an MS2 sweep is often over in seconds. Enabling it
+    /// on characterization.exploration alone is the intended production shape.
+    ///
+    /// Off by default, so no committed config emits a monitor scan and no golden moves.
+    bool monitor_ms1_enabled = false;
+    /// Wall-clock spacing. Config::validate THROWS on <= 0 when enabled: at 0 every drain would mint
+    /// another priority-0 MS1 ahead of the sweep and the sweep would never progress.
+    double monitor_ms1_interval_ms = 30000.0;
   };
 
   /// Deconvolution engine parameters

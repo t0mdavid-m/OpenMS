@@ -60,6 +60,66 @@ namespace OpenMS
     /// tracking_id -> precursor_id, or 0 if untracked. Forwards to the private accessor rather than
     /// reading the map, so the test exercises the same path the drain does.
     static int precursorIdFor(const FLASHIda& f, int tracking_id) { return f.precursorIdForTracking_(tracking_id); }
+
+    // ---- ADR-0042: the monitor scan's two observables --------------------------------------------
+
+    /// The engine's ACQUISITION MEMORY -- everything PrecursorSelection remembers across surveys.
+    ///
+    /// This is the read side of the neutrality drift-guard. It returns the whole struct BY VALUE and
+    /// compares with the compiler-generated operator==, so a container added to SurveyMemory later is
+    /// covered the moment it is declared, with no edit here and none in the test. Do not replace this
+    /// with a hand-picked tuple of members -- that is precisely the checklist step the struct exists
+    /// to delete.
+    static PrecursorSelection::SurveyMemory surveyMemory(const FLASHIda& f) { return f.selection_.memory_; }
+
+    /// Next precursor id the engine would mint. Part of the neutrality fingerprint: a monitor scan
+    /// must not consume one, and an id counter that moved is the cheapest evidence that it selected.
+    static int nextPrecursorId(const FLASHIda& f) { return f.next_precursor_id_; }
+
+    /// The FAIMS wheel's current CV. A monitor scan must not advance it (advanceToNextCV lives on the
+    /// survey arm), so this is the third leg of the fingerprint.
+    ///
+    /// The isEnabled() guard is NOT optional and is copied from the engine's own two call sites
+    /// (FLASHIda.cpp's ctor and publishExplorationState_, both `faims_.isEnabled() ? currentCV() : 0.0`).
+    /// FAIMS::currentCV() is a bare `cv_values_[current_cv_index_]` with no empty check, so on a
+    /// config with `"cv_values": []` -- which is every non-FAIMS config, i.e. most of them -- calling
+    /// it unguarded reads off the end of an empty vector and SEGFAULTs. Do not "simplify" this.
+    static double faimsCurrentCV(const FLASHIda& f)
+    {
+      return f.faims_.isEnabled() ? f.faims_.currentCV() : 0.0;
+    }
+
+    /// Back-date a level's monitor clock so a WALL-CLOCK cadence becomes deterministic in a test.
+    /// @param idx 0 = level 2, 1 = level 3.
+    ///
+    /// This exists because the authored cadence is in milliseconds of real time, which no test can
+    /// wait for. Without it the interval branch of takeMonitorDue would ship unexercised -- exactly
+    /// the hole ADR-0031 documents for agc_interval_seconds, which all 43 committed configs pin at
+    /// 9999999 so that its interval logic has never once been executed by a test.
+    static void backdateMonitorClock(FLASHIda& f, int idx, double ms) { f.queue_.backdateMonitorClock(idx, ms); }
+
+    /// Is the monitor scan's private Deconvolution engine present? Null unless a level enables
+    /// monitor_ms1, which is what makes the feature free when off.
+    static bool hasMonitorDeconv(const FLASHIda& f) { return f.monitor_deconv_ != nullptr; }
+
+    /// Retention time stamped on each of the two MS1 deconvolution results. This is the ONLY
+    /// observable that separates the two MS1 arms unconditionally.
+    ///
+    /// Everything else is contingent on the SPECTRUM. A survey writes acquisition memory and mints
+    /// ids only if it actually selects; and peak-group COUNT is no better, because a spectrum can
+    /// deconvolve to nothing while the survey arm still ran in full -- which is exactly what
+    /// ms1_standard's first scan does. But both arms call deconvolveMS1 unconditionally, and that
+    /// stamps the fed rt onto the stored spectrum whatever it contains. The arms deconvolve into
+    /// DIFFERENT engines by construction (survey -> deconv_, monitor -> its own monitor_deconv_),
+    /// so feeding a distinctive rt and asking which engine now carries it says which arm ran.
+    static double surveyDeconvRT(const FLASHIda& f)
+    {
+      return f.deconv_.deconvolvedMS1().getOriginalSpectrum().getRT();
+    }
+    static double monitorDeconvRT(const FLASHIda& f)
+    {
+      return f.monitor_deconv_ ? f.monitor_deconv_->deconvolvedMS1().getOriginalSpectrum().getRT() : -1.0;
+    }
   };
 
   /// Reaches into Exploration's private feedResultImpl_ / getGroup for the test suite.

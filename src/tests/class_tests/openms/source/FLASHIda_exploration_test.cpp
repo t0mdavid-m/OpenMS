@@ -1195,6 +1195,66 @@ namespace
 } // anonymous namespace
 
 
+
+/////////////////////////////////////////////////////////////
+// ADR-0042 -- the MONITOR scan: an MS1 that observes the source and decides nothing.
+/////////////////////////////////////////////////////////////
+
+namespace
+{
+  /// Config for the monitor-scan tests. Level 2 sweeps HCD 20-40 over ms1_standard -- the same shape
+  /// cycle_time_suppression_during_exploration drives. The two monitor_ms1 blocks are passed verbatim
+  /// (empty string = key absent) so one helper covers on/off, per-level, and the invalid-interval case.
+  std::string monitorScanConfig(const std::string& ms2_monitor,
+                                const std::string& ms3_monitor = "",
+                                bool cycle_time_enabled = false,
+                                const std::string& ms3_metric = "none")
+  {
+    const std::string ct = cycle_time_enabled ? "true" : "false";
+    return std::string("{"
+      "\"deconvolution\": { \"score_threshold\": 0.0, \"tqscore_threshold\": 0.9, \"min_charge\": 4,"
+      "                     \"max_charge\": 50, \"min_mass\": 500, \"max_mass\": 50000, \"tol\": [10, 10, 10] },"
+      "\"faims\": { \"cv_values\": [] },"
+      "\"scheduling\": { \"cycle_time\": { \"enabled\": ") + ct + ", \"value_ms\": 1 },"
+      "                  \"agc_interval_seconds\": 999999 },"
+      "\"precursor_selection\": {"
+      "  \"rank_by\": \"qscore\", \"max_precursors\": 3,"
+      "  \"exploration\": { \"metric\": \"mass_count\", \"ce_min\": 20.0, \"ce_max\": 40.0, \"ce_step\": 5.0"
+      + ms2_monitor + " }"
+      "},"
+      // protein_sequence is set unconditionally: an ms3_metric of "fragment_count" makes level 3 a
+      // READING metric, and Config::validate requires a sequence for one. Harmless when the metric
+      // is "none", which is this helper's default.
+      "\"characterization\": { \"mode\": \"off\", \"max_targets\": 3,"
+      "  \"protein_sequence\": \"PEPTIDERPEPTIDER\","
+      "  \"exploration\": { \"metric\": \"" + ms3_metric + "\"" + ms3_monitor + " }"
+      "},"
+      "\"ms_settings\": {"
+      "  \"ms1\": { \"analyzer\": \"Orbitrap\", \"first_mass\": 500, \"last_mass\": 2000,"
+      "             \"resolution\": 120000, \"agc_target\": 800000, \"max_it\": 246 },"
+      "  \"ms2\": { \"analyzer\": \"Orbitrap\", \"activation\": \"HCD\", \"collision_energy\": 30 },"
+      "  \"ms3\": { \"analyzer\": \"Orbitrap\", \"activation\": \"CID\", \"collision_energy\": 25 }"
+      "}"
+      "}";
+  }
+
+  const char* kMonitorOn  = ", \"monitor_ms1\": { \"enabled\": true, \"interval_ms\": 30000 }";
+
+  /// Pull commands off the drain until one carries @p want, or the bound is hit. Returns whether it
+  /// was found; @p out holds it. Non-matching commands are DISCARDED, which is fine below because
+  /// every caller snapshots engine state AFTER this returns.
+  bool drainUntilRole(FLASHIda* ida, ScanRole want, ScanCommand& out, int max_pulls = 12)
+  {
+    for (int i = 0; i < max_pulls; ++i)
+    {
+      out = ScanCommand{};
+      if (ida->getNextScanCommand(out) != 1) return false;
+      if (roleOf(out) == want) return true;
+    }
+    return false;
+  }
+}
+
 START_TEST(FLASHIda_exploration, "$Id$")
 
 /////////////////////////////////////////////////////////////
@@ -4602,4 +4662,342 @@ END_SECTION
 
 /////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////
+
+
+START_SECTION(a_monitor_scan_leaves_the_decision_state_bit_identical)
+{
+  // THE ADR, as one assertion. A monitor scan is DEFINED by what it does not write, so this compares
+  // the engine's WHOLE acquisition memory across one rather than a hand-picked subset of maps.
+  // SurveyMemory's operator== is compiler-generated, so a container added to that struct years from
+  // now is covered here with no edit to this test.
+  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(ms1_scans.empty())
+
+  std::string cfg_str = monitorScanConfig(kMonitorOn);
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(cfg_str.c_str()));
+  TEST_EQUAL(FLASHIdaTestAccess::hasMonitorDeconv(*ida), true)   // the feature is actually on
+
+  int pushed = bootstrapExplorationGroup(ida, ms1_scans);
+  ABORT_IF(pushed <= 0)                                          // a sweep really is running
+
+  // Force one to be due, then take it off the drain.
+  FLASHIdaTestAccess::backdateMonitorClock(*ida, 0, 60000);
+  ScanCommand mon{};
+  TEST_EQUAL(drainUntilRole(ida, ScanRole::Monitor, mon), true)
+
+  // Snapshot AFTER the pull, so the commands discarded above cannot be mistaken for the effect.
+  auto before      = FLASHIdaTestAccess::surveyMemory(*ida);
+  int  pid_before  = FLASHIdaTestAccess::nextPrecursorId(*ida);
+  double cv_before = FLASHIdaTestAccess::faimsCurrentCV(*ida);
+  size_t q_before[4];
+  for (int p = 0; p < 4; ++p) q_before[p] = FLASHIdaTestAccess::queueSize(*ida, p);
+
+  const ScanData& s = ms1_scans[0];
+  ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1,
+                   mon.scan_description, 0.0, instrumentScanNumberOf(s));
+
+  TEST_EQUAL(FLASHIdaTestAccess::surveyMemory(*ida) == before, true)      // no acquisition memory written
+  TEST_EQUAL(FLASHIdaTestAccess::nextPrecursorId(*ida), pid_before)       // no precursor id minted
+  TEST_REAL_SIMILAR(FLASHIdaTestAccess::faimsCurrentCV(*ida), cv_before)  // the FAIMS wheel did not turn
+  for (int p = 0; p < 4; ++p)
+    TEST_EQUAL(FLASHIdaTestAccess::queueSize(*ida, p), q_before[p])       // nothing pushed
+
+  // ANTI-VACUOUS MIRROR. Without this the test passes just as well if 'M' scans are dropped on the
+  // floor entirely -- the fingerprint would be unchanged for the wrong reason. Feed the SAME spectrum
+  // as a SURVEY and require the fingerprint to MOVE.
+  // ANTI-VACUOUS MIRROR, on a FRESH engine driven until a survey genuinely SELECTS.
+  //
+  // Both details are load-bearing. Re-feeding this spectrum to `ida` moves nothing for a real engine
+  // reason rather than a bug -- the species is already acquired and the qscore ratchet refuses one
+  // whose score does not IMPROVE, so the maps rebuild identically at any rt. And a single survey of
+  // ms1_scans[0] moves nothing either, because acquisition memory records what was ACQUIRED: a
+  // spectrum with nothing selectable runs the whole survey arm and writes none of it.
+  // bootstrapExplorationGroup returns > 0 only once a survey has actually selected and pushed, which
+  // is exactly the precondition this mirror needs.
+  FLASHIda* fresh = new FLASHIda(const_cast<char*>(cfg_str.c_str()));
+  auto fresh_before = FLASHIdaTestAccess::surveyMemory(*fresh);
+  ABORT_IF(bootstrapExplorationGroup(fresh, ms1_scans) <= 0)
+  TEST_EQUAL(FLASHIdaTestAccess::surveyMemory(*fresh) == fresh_before, false)
+
+  delete fresh;
+  delete ida;
+}
+END_SECTION
+
+START_SECTION(a_monitor_scan_is_never_priority_three)
+{
+  // Priority 3 is ADR-0031's idle-survey sentinel, and FIVE role-blind drain loops break on it
+  // (FLASHIdaWrapper.cs:459/:477, ContinuityTestHarness.cs:123, plus the two fixture classifiers).
+  // A monitor scan emitted at 3 would silently truncate every offline drive -- the one way this
+  // feature could break something with no connection to it.
+  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(ms1_scans.empty())
+
+  std::string cfg_str = monitorScanConfig(kMonitorOn);
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(cfg_str.c_str()));
+  AcqResult a = runInterleaved(ida, ms1_scans, std::vector<ScanData>{});
+
+  int monitors = 0;
+  for (const auto& c : a.all_cmds)
+  {
+    if (roleOf(c) != ScanRole::Monitor) continue;
+    ++monitors;
+    TEST_EQUAL(c.priority, 0)          // the lane cycle-time and CV-transition MS1s already use
+    TEST_EQUAL(c.msn_level, 1)
+    TEST_EQUAL(c.is_agc, 0)
+  }
+  TEST_EQUAL(monitors > 0, true)       // anti-vacuous: some actually fired
+  delete ida;
+}
+END_SECTION
+
+START_SECTION(a_monitor_scan_does_not_reset_the_survey_clock)
+{
+  // Pins the roleDecides conjunct on the drain tail's recordMS1Time. A monitor scan satisfies
+  // `msn_level == 1 && is_agc == 0` exactly as a survey does, so without that conjunct it stands in
+  // for one -- character-for-character the ADR-0031 bug, where the idle path called recordAGCTime()
+  // and the authored AGC interval stopped governing the cadence. cycle_time is the only config under
+  // which the survey clock is observable at all, which is why it is enabled here and nowhere else.
+  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(ms1_scans.empty())
+
+  std::string cfg_str = monitorScanConfig(kMonitorOn, "", true);
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(cfg_str.c_str()));
+  ABORT_IF(bootstrapExplorationGroup(ida, ms1_scans) <= 0)
+
+  FLASHIdaTestAccess::backdateMonitorClock(*ida, 0, 60000);
+  ScanCommand mon{};
+  TEST_EQUAL(drainUntilRole(ida, ScanRole::Monitor, mon), true)
+
+  // The clock the cycle-time gate reads must not have been reset by that dequeue. With value_ms = 1
+  // it is already overdue, so "still overdue" is the observable.
+  uint64_t since = FLASHIdaTestAccess::queue(*ida).msSinceLastMS1();
+  TEST_EQUAL(since > 1, true)
+  delete ida;
+}
+END_SECTION
+
+START_SECTION(monitor_cadence_anchors_each_episode_and_then_honours_the_interval)
+{
+  // The cadence, exactly as authored: one ANCHOR when a level starts sweeping, then one per
+  // interval_ms while it keeps sweeping, and RE-ARMED once it goes quiet. Exercised on the queue
+  // primitive directly, because the alternative is waiting 30 real seconds -- which is precisely why
+  // agc_interval_seconds' equivalent branch has never had a test (ADR-0031).
+  std::string cfg_str = monitorScanConfig(kMonitorOn);
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(cfg_str.c_str()));
+  ScanCommandQueue& q = FLASHIdaTestAccess::queue(*ida);
+
+  const double interval = 30000.0;
+
+  // Not sweeping: never due -- and this call is also what keeps the level re-armed.
+  TEST_EQUAL(q.takeMonitorDue(0, false, interval), false)
+
+  // Sweep starts -> ANCHOR immediately, independent of the interval.
+  TEST_EQUAL(q.takeMonitorDue(0, true, interval), true)
+  // Still sweeping, no time passed -> not due.
+  TEST_EQUAL(q.takeMonitorDue(0, true, interval), false)
+
+  // Interval elapses -> due once, and the clock is CONSUMED (a second ask returns false).
+  q.backdateMonitorClock(0, interval + 1);
+  TEST_EQUAL(q.takeMonitorDue(0, true, interval), true)
+  TEST_EQUAL(q.takeMonitorDue(0, true, interval), false)
+
+  // Sweep ends, then a new one starts -> RE-ARMED, so it owes a fresh anchor. Drop the re-arm and the
+  // next episode silently begins with no data point at all.
+  TEST_EQUAL(q.takeMonitorDue(0, false, interval), false)
+  TEST_EQUAL(q.takeMonitorDue(0, true, interval), true)
+
+  // PER LEVEL: level 3 has its own arm and clock, untouched by everything above.
+  TEST_EQUAL(q.takeMonitorDue(1, true, interval), true)
+  TEST_EQUAL(q.takeMonitorDue(1, true, interval), false)
+  TEST_EQUAL(q.takeMonitorDue(0, true, interval), false)   // level 2 still not due
+  delete ida;
+}
+END_SECTION
+
+START_SECTION(a_monitor_scan_does_not_disturb_its_sweep)
+{
+  // monitor_deconv_ is a SEPARATE Deconvolution instance, and this is why. deconv_ holds ONE
+  // SpectralDeconvolution shared between MS1 and MSn, and deconvolveMS1 restores the global charge
+  // window on it (Deconvolution.cpp, flagged LOAD-BEARING). Routed through deconv_, a monitor scan
+  // would reset that window under the running sweep and land in the MS1 slot the survey arm reads.
+  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(ms1_scans.empty())
+
+  std::string cfg_str = monitorScanConfig(kMonitorOn);
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(cfg_str.c_str()));
+  ABORT_IF(bootstrapExplorationGroup(ida, ms1_scans) <= 0)
+
+  FLASHIdaTestAccess::backdateMonitorClock(*ida, 0, 60000);
+  ScanCommand mon{};
+  TEST_EQUAL(drainUntilRole(ida, ScanRole::Monitor, mon), true)
+  TEST_EQUAL(FLASHIdaTestAccess::hasMonitorDeconv(*ida), true)
+
+  const ScanData& s = ms1_scans[0];
+  ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1,
+                   mon.scan_description, 0.0, instrumentScanNumberOf(s));
+
+  // The group is still active -- a monitor scan cancels nothing and completes nothing.
+  TEST_EQUAL(FLASHIdaTestAccess::explorationActive(*ida), true)
+  delete ida;
+}
+END_SECTION
+
+START_SECTION(the_engine_record_decides_the_role_not_the_echo)
+{
+  // ADR-0008/0035 separate a scan's identity channels but never said which copy of its ROLE wins.
+  // It is the ENGINE's: cmd_role comes from the queued command via pending_scan_map_, not from the
+  // description the instrument echoed back. Reading the echo instead would let an altered trailer
+  // flip a survey into an observation -- and a survey silently observed acquires nothing.
+  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(ms1_scans.empty())
+
+  std::string cfg_str = monitorScanConfig(kMonitorOn);
+  const ScanData& s = ms1_scans[0];
+
+  // DIRECTION 1 -- engine record says 'S', the echo claims 'M'. The SURVEY arm must run.
+  // A fresh engine, so "memory moved" is unconditional (see the mirror in
+  // a_monitor_scan_leaves_the_decision_state_bit_identical for why re-feeding an established
+  // engine proves nothing).
+  {
+    FLASHIda* ida = new FLASHIda(const_cast<char*>(cfg_str.c_str()));
+    ScanCommand surv{};
+    TEST_EQUAL(drainUntilRole(ida, ScanRole::Survey, surv, 8), true)
+
+    std::string spoofed(surv.scan_description);
+    ABORT_IF(spoofed.size() < 4)
+    spoofed[3] = 'M';
+
+    // WHICH DECONVOLUTION ENGINE CARRIES THE FED RT is the discriminator: the survey arm deconvolves
+    // into deconv_, the monitor arm into its own monitor_deconv_. Acquisition memory would not do --
+    // it moves only if the survey also SELECTED, and this spectrum need not.
+    const double probe_rt = 777.25;
+    ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), probe_rt, 1,
+                     spoofed.c_str(), 0.0, instrumentScanNumberOf(s));
+    TEST_REAL_SIMILAR(FLASHIdaTestAccess::surveyDeconvRT(*ida), probe_rt)      // SURVEY arm ran
+    TEST_NOT_EQUAL(FLASHIdaTestAccess::monitorDeconvRT(*ida), probe_rt)        // observing arm did not
+    delete ida;
+  }
+
+  // DIRECTION 2 -- engine record says 'M', the echo claims 'S'. The MONITOR arm must run.
+  // Without both directions this test is half a test: direction 1 alone also passes for an engine
+  // that simply ignores the marker and always runs the survey arm.
+  {
+    FLASHIda* ida = new FLASHIda(const_cast<char*>(cfg_str.c_str()));
+    ABORT_IF(bootstrapExplorationGroup(ida, ms1_scans) <= 0)
+    FLASHIdaTestAccess::backdateMonitorClock(*ida, 0, 60000);
+
+    ScanCommand mon{};
+    TEST_EQUAL(drainUntilRole(ida, ScanRole::Monitor, mon), true)
+
+    std::string spoofed(mon.scan_description);
+    ABORT_IF(spoofed.size() < 4)
+    spoofed[3] = 'S';
+
+    auto before = FLASHIdaTestAccess::surveyMemory(*ida);
+    const double probe_rt = 888.75;
+    ida->processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), probe_rt, 1,
+                     spoofed.c_str(), 0.0, instrumentScanNumberOf(s));
+
+    // The MONITOR arm ran: its private engine carries the fed rt, the survey's does not, and no
+    // acquisition memory moved -- despite the echoed description claiming 'S'.
+    TEST_REAL_SIMILAR(FLASHIdaTestAccess::monitorDeconvRT(*ida), probe_rt)
+    TEST_NOT_EQUAL(FLASHIdaTestAccess::surveyDeconvRT(*ida), probe_rt)
+    TEST_EQUAL(FLASHIdaTestAccess::surveyMemory(*ida) == before, true)
+    delete ida;
+  }
+}
+END_SECTION
+
+START_SECTION(roleName_matches_the_legacy_scan_type_strings)
+{
+  // scan_commands.tsv's `scan_type` column is a GOLDEN column and ScanRole.h's table is now its only
+  // source. These six pairs are exactly what IdaLogger::scanTypeFromDescription_'s switch returned
+  // before ADR-0042 moved it: the byte-identity proof for 28 golden files, as a test rather than as
+  // a diff someone has to remember to run.
+  TEST_EQUAL(std::string(roleName(ScanRole::Survey)),             "survey")
+  TEST_EQUAL(std::string(roleName(ScanRole::Agc)),                "agc")
+  TEST_EQUAL(std::string(roleName(ScanRole::Identification)),     "recording")
+  TEST_EQUAL(std::string(roleName(ScanRole::Quantification)),     "quantification")
+  TEST_EQUAL(std::string(roleName(ScanRole::FollowUp)),           "conditional")
+  TEST_EQUAL(std::string(roleName(ScanRole::ExplorationVariant)), "exploration")
+  TEST_EQUAL(std::string(roleName(ScanRole::Monitor)),            "monitor")   // the only new value
+
+  TEST_EQUAL(roleMarker(ScanRole::Survey),             'S')
+  TEST_EQUAL(roleMarker(ScanRole::Agc),                'A')
+  TEST_EQUAL(roleMarker(ScanRole::Identification),     'R')
+  TEST_EQUAL(roleMarker(ScanRole::Quantification),     'Q')
+  TEST_EQUAL(roleMarker(ScanRole::FollowUp),           'C')
+  TEST_EQUAL(roleMarker(ScanRole::ExplorationVariant), 'E')
+  TEST_EQUAL(roleMarker(ScanRole::Monitor),            'M')
+
+  // AGC is the only role whose peaks the engine does not read; Monitor is the only other that drives
+  // no decision. Both are asserted as EXACT sets, so widening either has to be deliberate.
+  for (size_t i = 0; i < kScanRoleTraits.size(); ++i)
+  {
+    TEST_EQUAL(kScanRoleTraits[i].observes, kScanRoleTraits[i].role != ScanRole::Agc)
+    TEST_EQUAL(kScanRoleTraits[i].decides,
+               !(kScanRoleTraits[i].role == ScanRole::Agc || kScanRoleTraits[i].role == ScanRole::Monitor))
+  }
+
+  // An UNDECODABLE description must resolve as a survey does -- observes and decides both true.
+  // Failing closed here would silently stop processing every scan the engine did not mint, and it is
+  // what keeps the migrated read sites byte-identical with the char comparisons they replaced.
+  ScanCommand blank{};
+  blank.scan_description[0] = '\0';
+  TEST_EQUAL(roleOf(blank).has_value(), false)
+  TEST_EQUAL(roleObserves(roleOf(blank)), true)
+  TEST_EQUAL(roleDecides(roleOf(blank)), true)
+  TEST_EQUAL(std::string(roleNameOf(blank)), "unknown")
+}
+END_SECTION
+
+START_SECTION(monitor_ms1_config_is_strict_on_both_ends)
+{
+  // THROW on a non-positive interval when enabled: a monitor scan would then be due on EVERY drain,
+  // minting a priority-0 MS1 ahead of the sweep indefinitely so the sweep could never progress. That
+  // is a hang, not a degraded run, and it must not load.
+  TEST_EXCEPTION(std::invalid_argument,
+      Config cfg{monitorScanConfig(", \"monitor_ms1\": { \"enabled\": true, \"interval_ms\": 0 }")})
+  TEST_EXCEPTION(std::invalid_argument,
+      Config cfg{monitorScanConfig(", \"monitor_ms1\": { \"enabled\": true, \"interval_ms\": -1 }")})
+
+  // An unknown key inside the block is rejected like every other section (ADR-0007).
+  TEST_EXCEPTION(std::invalid_argument,
+      Config cfg{monitorScanConfig(", \"monitor_ms1\": { \"enabled\": true, \"interval_sec\": 30 }")})
+
+  // A non-positive interval while DISABLED is fine: the key is inert, and a config must stay loadable
+  // when the feature is switched off.
+  {
+    Config cfg{monitorScanConfig(", \"monitor_ms1\": { \"enabled\": false, \"interval_ms\": 0 }")};
+    TEST_EQUAL(cfg.level(2).monitor_ms1_enabled, false)
+  }
+
+  // Values reach the level they were authored on, and the two levels are INDEPENDENT.
+  {
+    Config cfg{monitorScanConfig(", \"monitor_ms1\": { \"enabled\": true, \"interval_ms\": 1111 }",
+                                 ", \"monitor_ms1\": { \"enabled\": false, \"interval_ms\": 2222 }",
+                                 false, "fragment_count")};
+    TEST_EQUAL(cfg.level(2).monitor_ms1_enabled, true)
+    TEST_REAL_SIMILAR(cfg.level(2).monitor_ms1_interval_ms, 1111.0)
+    TEST_EQUAL(cfg.level(3).monitor_ms1_enabled, false)
+    TEST_REAL_SIMILAR(cfg.level(3).monitor_ms1_interval_ms, 2222.0)
+  }
+
+  // Absent block => off, at the documented default. This is the state of every committed config.
+  {
+    Config cfg{monitorScanConfig("")};
+    TEST_EQUAL(cfg.level(2).monitor_ms1_enabled, false)
+    TEST_REAL_SIMILAR(cfg.level(2).monitor_ms1_interval_ms, 30000.0)
+  }
+
+  // Enabled on a level that never sweeps is INERT, not invalid: it must load (and the engine prints a
+  // [CONFIG-WARN]). Turning exploration off must never invalidate a config -- ADR-0039's call for an
+  // enriched_in that no objective reads, taken again here.
+  {
+    Config cfg{monitorScanConfig("", kMonitorOn, false, "none")};
+    TEST_EQUAL(cfg.level(3).monitor_ms1_enabled, true)
+  }
+}
+END_SECTION
 END_TEST

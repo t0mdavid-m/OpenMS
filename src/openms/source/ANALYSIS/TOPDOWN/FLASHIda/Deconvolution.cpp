@@ -203,4 +203,24 @@ namespace OpenMS
     return spec;
   }
 
+  void sortByLevelMetric(DeconvolvedSpectrum& spec, const Config& cfg, int ms_level)
+  {
+    // Verbatim from PrecursorSelection::filterPeakGroupsUsingMassExclusion_ (ADR-0042). Any change
+    // here reorders scan_results.tsv's deconv_* columns and ida.log's AllMass= on EVERY MS1 row of
+    // EVERY mode -- 56 of the 140 log goldens. It is a pure move; keep it one.
+    if (cfg.level(ms_level).selection == SelectionMetric::Intensity)
+    {
+      spec.sortByIntensity();
+    }
+    else
+    {
+      if (cfg.targeting().consider_all_charges) {
+        spec.sortByQScoreAllCharges();
+      }
+      else {
+        spec.sortByQscore();
+      }
+    }
+  }
+
 } // namespace OpenMS

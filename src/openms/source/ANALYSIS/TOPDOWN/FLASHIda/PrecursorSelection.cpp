@@ -249,19 +249,11 @@ namespace OpenMS
 
   void PrecursorSelection::filterPeakGroupsUsingMassExclusion_(const int ms_level, const double rt)
   {
-    if (config_.level(ms_level).selection == SelectionMetric::Intensity)
-    {
-      deconv_.deconvolvedMS1().sortByIntensity();
-    }
-    else
-    {
-      if (config_.targeting().consider_all_charges) {
-        deconv_.deconvolvedMS1().sortByQScoreAllCharges();
-      }
-      else {
-        deconv_.deconvolvedMS1().sortByQscore();
-      }
-    }
+    // The RANKING sort now lives in Deconvolution.h so the observing arm can share it -- a monitor
+    // scan runs none of the selection below, but its scan_results deconv_* columns must still be
+    // ordered the way a survey's are, or column 1 means two things in one file (ADR-0042).
+    // The inclusion-priority stable_sort immediately below stays HERE: it is a selection decision.
+    sortByLevelMetric(deconv_.deconvolvedMS1(), config_, ms_level);
 
     // Apply priority tie-breaking when TSV targets are loaded
     if (config_.targeting().mode == 1 && !inclusion_targets_.empty())
@@ -347,47 +339,47 @@ namespace OpenMS
       }
     }
 
-    // remove expired entries for tqscore_exceeding_mz_rt_map_
-    for (const auto& [m, r] : tqscore_exceeding_mz_rt_map_)
+    // remove expired entries for memory_.tqscore_exceeding_mz_rt_map_
+    for (const auto& [m, r] : memory_.tqscore_exceeding_mz_rt_map_)
     {
       if (rt - r > config_.targeting().rt_window) { continue; }
       new_mz_rt_map_[m] = r;
     }
-    new_mz_rt_map_.swap(tqscore_exceeding_mz_rt_map_);
+    new_mz_rt_map_.swap(memory_.tqscore_exceeding_mz_rt_map_);
     std::unordered_map<int, double>().swap(new_mz_rt_map_);
 
-    // remove expired entries for tqscore_exceeding_mass_rt_map_
-    for (const auto& [m, r] : tqscore_exceeding_mass_rt_map_)
+    // remove expired entries for memory_.tqscore_exceeding_mass_rt_map_
+    for (const auto& [m, r] : memory_.tqscore_exceeding_mass_rt_map_)
     {
       if (rt - r > config_.targeting().rt_window) { continue; }
       new_mass_rt_map_[m] = r;
     }
-    new_mass_rt_map_.swap(tqscore_exceeding_mass_rt_map_);
+    new_mass_rt_map_.swap(memory_.tqscore_exceeding_mass_rt_map_);
     std::unordered_map<int, double>().swap(new_mass_rt_map_);
 
-    // remove expired entries for authored_acquired_rt_map_ (ADR-0028). Same keep-if-fresh shape:
+    // remove expired entries for memory_.authored_acquired_rt_map_ (ADR-0028). Same keep-if-fresh shape:
     // a named charge becomes re-acquirable once its acquisition falls out of the RT window, which
     // is what the mass-keyed maps above have always done for masses.
     {
       std::map<std::pair<int, int>, double> fresh;
-      for (const auto& [key, r] : authored_acquired_rt_map_)
+      for (const auto& [key, r] : memory_.authored_acquired_rt_map_)
       {
         if (rt - r > config_.targeting().rt_window) { continue; }
         fresh[key] = r;
       }
-      authored_acquired_rt_map_.swap(fresh);
+      memory_.authored_acquired_rt_map_.swap(fresh);
     }
 
-    // remove expired entries for all_mass_rt_map_, mass_qscore_map_
-    for (const auto& item : all_mass_rt_map_)
+    // remove expired entries for memory_.all_mass_rt_map_, memory_.mass_qscore_map_
+    for (const auto& item : memory_.all_mass_rt_map_)
     {
       if (rt - item.second > config_.targeting().rt_window) { continue; }
       new_all_mass_rt_map_[item.first] = item.second;
-      new_mass_score_map_[item.first] = mass_qscore_map_[item.first];
+      new_mass_score_map_[item.first] = memory_.mass_qscore_map_[item.first];
     }
-    new_all_mass_rt_map_.swap(all_mass_rt_map_);
+    new_all_mass_rt_map_.swap(memory_.all_mass_rt_map_);
     std::unordered_map<int, double>().swap(new_all_mass_rt_map_);
-    new_mass_score_map_.swap(mass_qscore_map_);
+    new_mass_score_map_.swap(memory_.mass_qscore_map_);
     std::unordered_map<int, double>().swap(new_mass_score_map_);
 
     const int selection_phase_start = 0;
@@ -661,8 +653,8 @@ namespace OpenMS
             double bar_value = 0.0;
             bool   has_bar = false;
             {
-              auto bar_it = mass_qscore_map_.find(nominal_mass);
-              if (bar_it != mass_qscore_map_.end()) { bar_value = bar_it->second; has_bar = true; }
+              auto bar_it = memory_.mass_qscore_map_.find(nominal_mass);
+              if (bar_it != memory_.mass_qscore_map_.end()) { bar_value = bar_it->second; has_bar = true; }
             }
 
             AdmissionContext adm_ctx;
@@ -670,11 +662,11 @@ namespace OpenMS
             adm_ctx.authored = authored;
             adm_ctx.spent_charges = spent_charges;
             adm_ctx.anchor_spent = selection_phase < selection_phase_end
-                                   && authored_acquired_rt_map_.count({nominal_mass, charge}) > 0;
+                                   && memory_.authored_acquired_rt_map_.count({nominal_mass, charge}) > 0;
             adm_ctx.mass_barred = selection_phase < selection_phase_end
-                                  && tqscore_exceeding_mass_rt_map_.find(nominal_mass) != tqscore_exceeding_mass_rt_map_.end();
+                                  && memory_.tqscore_exceeding_mass_rt_map_.find(nominal_mass) != memory_.tqscore_exceeding_mass_rt_map_.end();
             adm_ctx.mz_barred = selection_phase < selection_phase_end
-                                && tqscore_exceeding_mz_rt_map_.find(integer_mz) != tqscore_exceeding_mz_rt_map_.end();
+                                && memory_.tqscore_exceeding_mz_rt_map_.find(integer_mz) != memory_.tqscore_exceeding_mz_rt_map_.end();
             adm_ctx.qscore_bar = has_bar ? &bar_value : nullptr;
             adm_ctx.seen = seen;
             adm_ctx.fan_out = config_.targeting().precursor_charges != ChargeAcquisitionMode::Single;
@@ -699,7 +691,7 @@ namespace OpenMS
             // can refuse, so a candidate the ledger turns away still refreshes the record that keeps
             // its stored score alive through expiry. That ordering is the whole reason the verdict
             // reports passing exclusion separately from being admitted.
-            if (verdict.passed_exclusion) { all_mass_rt_map_[nominal_mass] = rt; }
+            if (verdict.passed_exclusion) { memory_.all_mass_rt_map_[nominal_mass] = rt; }
             if (! verdict.admit) { continue; }
             verdict_was_sibling = verdict.is_sibling;
 
@@ -729,8 +721,8 @@ namespace OpenMS
             if (has_authored)
             {
               // Per-charge exclusion (ADR-0028): record what was actually isolated, charge by
-              // charge, and write NO mass-keyed entry -- see the mass_qscore_map_ block below.
-              for (int c : acquired_charges) { authored_acquired_rt_map_[{nominal_mass, c}] = rt; }
+              // charge, and write NO mass-keyed entry -- see the memory_.mass_qscore_map_ block below.
+              for (int c : acquired_charges) { memory_.authored_acquired_rt_map_[{nominal_mass, c}] = rt; }
 
               // Say what was named and refused. A silent drop reads as "we isolated everything you
               // asked for" when we did not -- the same failure shape [NOTCH-CLAMP] exists for.
@@ -772,7 +764,7 @@ namespace OpenMS
                   charge_set_msg << "below min_charge " << config_.level(ms_level).min_charge;
                 // Ahead of the SNR arm deliberately: a spent charge has a perfectly good SNR and
                 // would otherwise be reported as having failed a gate it never reached.
-                else if (authored_acquired_rt_map_.count({nominal_mass, c}) > 0)
+                else if (memory_.authored_acquired_rt_map_.count({nominal_mass, c}) > 0)
                   charge_set_msg << "already acquired this rt window";
                 else if (config_.targeting().precursor_charges == ChargeAcquisitionMode::Single)
                   charge_set_msg << "deferred, precursor_charges single";
@@ -828,11 +820,11 @@ namespace OpenMS
             // not. What is left here is the WRITE, which belongs to the class that owns the maps.
             if (! has_authored)
             {
-              mass_qscore_map_[nominal_mass] = verdict.record_score;
+              memory_.mass_qscore_map_[nominal_mass] = verdict.record_score;
               if (verdict.arms_bars)
               {
-                tqscore_exceeding_mass_rt_map_[nominal_mass] = rt;
-                tqscore_exceeding_mz_rt_map_[integer_mz] = rt;
+                memory_.tqscore_exceeding_mass_rt_map_[nominal_mass] = rt;
+                memory_.tqscore_exceeding_mz_rt_map_[integer_mz] = rt;
               }
             }
 
@@ -849,8 +841,8 @@ namespace OpenMS
             // multiplexed emit exactly one, byte-identically to before.
             //
             // The mass-level bookkeeping above stays deliberately OUTSIDE this loop. It ran once for
-            // the species and must not run again per charge: the tqscore_exceeding_mass_rt_map_ guard
-            // and the "previously acquired with higher qscore" guard in the mass_qscore_map_ block are
+            // the species and must not run again per charge: the memory_.tqscore_exceeding_mass_rt_map_ guard
+            // and the "previously acquired with higher qscore" guard in the memory_.mass_qscore_map_ block are
             // both keyed on nominal_mass, so a second pass would `continue` on every sibling -- the
             // first writes the mass on the anchor, and charges are ranked descending so every later
             // one scores lower. That is exactly why the fan-out could not simply be a walk of
@@ -877,10 +869,10 @@ namespace OpenMS
                 e_mz2 += optimal_window_margin_;
               }
 
-              id_mass_map_[window_id_] = nominal_mass;
-              id_mz_map_[window_id_] = (int)round(e_center_mz);
-              id_qscore_map_[window_id_] = score;
-              id_charge_map_[window_id_] = emit_charge;
+              memory_.id_mass_map_[memory_.window_id_] = nominal_mass;
+              memory_.id_mz_map_[memory_.window_id_] = (int)round(e_center_mz);
+              memory_.id_qscore_map_[memory_.window_id_] = score;
+              memory_.id_charge_map_[memory_.window_id_] = emit_charge;
               // The set the geometry writer must not exceed, carried for AUTHORED triggers only.
               //
               // It matters for those because a SIBLING's set is REDUCED by what the species already
@@ -896,8 +888,8 @@ namespace OpenMS
               // "It should trim nothing" is an argument, not a gate; an empty vector is the gate.
               trigger_authored_charges_.push_back(has_authored ? acquired_charges : std::vector<int>());
 
-              trigger_ids_.push_back(window_id_);
-              window_id_++;
+              trigger_ids_.push_back(memory_.window_id_);
+              memory_.window_id_++;
 
               selected_peak_groups_.push_back(pg);
               trigger_charges_.push_back(emit_charge);
@@ -982,29 +974,29 @@ namespace OpenMS
   void PrecursorSelection::removeFromExclusionList(int id)
   {
     // Check if id is valid
-    if (id >= window_id_) { return; }
+    if (id >= memory_.window_id_) { return; }
 
     // Obtain information needed for removal
-    int nominal_mass = id_mass_map_[id];
-    int integer_mz = id_mz_map_[id];
-    double qscore = id_qscore_map_[id];
+    int nominal_mass = memory_.id_mass_map_[id];
+    int integer_mz = memory_.id_mz_map_[id];
+    double qscore = memory_.id_qscore_map_[id];
 
     // Remove from mass exclusion
-    if (tqscore_exceeding_mass_rt_map_.find(nominal_mass) != tqscore_exceeding_mass_rt_map_.end())
+    if (memory_.tqscore_exceeding_mass_rt_map_.find(nominal_mass) != memory_.tqscore_exceeding_mass_rt_map_.end())
     {
-      tqscore_exceeding_mass_rt_map_.erase(nominal_mass);
+      memory_.tqscore_exceeding_mass_rt_map_.erase(nominal_mass);
     }
 
     // Remove from mz exclusion
-    if (tqscore_exceeding_mz_rt_map_.find(integer_mz) != tqscore_exceeding_mz_rt_map_.end()) { tqscore_exceeding_mz_rt_map_.erase(integer_mz); }
+    if (memory_.tqscore_exceeding_mz_rt_map_.find(integer_mz) != memory_.tqscore_exceeding_mz_rt_map_.end()) { memory_.tqscore_exceeding_mz_rt_map_.erase(integer_mz); }
 
     // Remove the per-charge entry an authored charge set would have written (ADR-0028). Keyed on
     // the charge this very window isolated, so the named charge becomes selectable again rather
     // than the whole set.
-    authored_acquired_rt_map_.erase({nominal_mass, id_charge_map_[id]});
+    memory_.authored_acquired_rt_map_.erase({nominal_mass, memory_.id_charge_map_[id]});
 
     // Remove qscore from further calculations
-    if (mass_qscore_map_.find(nominal_mass) != mass_qscore_map_.end()) { mass_qscore_map_[nominal_mass] /= 1 - qscore; }
+    if (memory_.mass_qscore_map_.find(nominal_mass) != memory_.mass_qscore_map_.end()) { memory_.mass_qscore_map_[nominal_mass] /= 1 - qscore; }
   }
 
   std::vector<int> PrecursorSelection::authoredChargesFor_(double mass, double delta) const
@@ -1029,13 +1021,13 @@ namespace OpenMS
 
   std::vector<int> PrecursorSelection::spentAuthoredCharges_(int nominal_mass) const
   {
-    // authored_acquired_rt_map_ is keyed on the pair, and std::map orders pairs lexicographically,
+    // memory_.authored_acquired_rt_map_ is keyed on the pair, and std::map orders pairs lexicographically,
     // so one nominal mass's charges are a contiguous range. Walking it beats querying per charge:
     // the anchor pick, the notch filter and the exclusion bar all want the same set, and gathering
     // it once is what keeps them consulting identical state.
     std::vector<int> out;
-    for (auto it = authored_acquired_rt_map_.lower_bound({nominal_mass, std::numeric_limits<int>::min()});
-         it != authored_acquired_rt_map_.end() && it->first.first == nominal_mass; ++it)
+    for (auto it = memory_.authored_acquired_rt_map_.lower_bound({nominal_mass, std::numeric_limits<int>::min()});
+         it != memory_.authored_acquired_rt_map_.end() && it->first.first == nominal_mass; ++it)
     {
       out.push_back(it->first.second);
     }

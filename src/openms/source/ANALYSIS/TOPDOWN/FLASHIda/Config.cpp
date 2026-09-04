@@ -905,7 +905,7 @@ namespace OpenMS
       rejectUnknownKeys(e,
           {"metric", "ce_min", "ce_max", "ce_step", "overrides", "remaining_precursor_target",
            "reaction_time_min", "reaction_time_max", "reaction_time_step", "activations",
-           "tolerance_ppm"},
+           "tolerance_ppm", "monitor_ms1"},
           path + ".exploration");
 
       MSLevelConfig& cfg = levels_[level];
@@ -935,6 +935,19 @@ namespace OpenMS
       // whether to acquire the production scan, so a tolerance-only map silently suppressed a scan.
       // 0 means "use deconvolution.tol for this level"; resolved just below.
       cfg.exploration_tolerance_ppm = e.value("tolerance_ppm", 0.0);
+
+      // Monitor scan (ADR-0042). Nested object, mirroring scheduling.cycle_time's {enabled, value}
+      // shape: the enabled flag carries the off-state so the interval never has to encode it, which
+      // is what lets validate() reject a non-positive interval outright instead of overloading 0.
+      if (e.contains("monitor_ms1") && !e["monitor_ms1"].is_null())
+      {
+        const auto& m = e["monitor_ms1"];
+        if (!m.is_object())
+          throw std::invalid_argument("Config: " + path + ".exploration.monitor_ms1 must be an object.");
+        rejectUnknownKeys(m, {"enabled", "interval_ms"}, path + ".exploration.monitor_ms1");
+        cfg.monitor_ms1_enabled     = m.value("enabled", false);
+        cfg.monitor_ms1_interval_ms = m.value("interval_ms", 30000.0);
+      }
 
       if (e.contains("activations") && e["activations"].is_array())
         for (const auto& a : e["activations"])
@@ -1082,6 +1095,34 @@ namespace OpenMS
           + "). The cap truncates the acquisition charge set below the floor, so EVERY species "
             "would be refused and the run would acquire nothing. Lower min_charge_states, raise "
             "max_charge_states, or set max_charge_states to 0 for no cap.");
+
+    // --- monitor scan (ADR-0042) ----------------------------------------------------------------
+    // One THROW and one WARN, and the split is deliberate.
+    //
+    // THROW on a non-positive interval: Step 2b would then find a monitor scan due on EVERY drain,
+    // mint another priority-0 MS1 ahead of the sweep, and the sweep would never progress. That is a
+    // hang, not a degraded run, so it must not load.
+    //
+    // WARN, never throw, when the level does not sweep: the key is inert, not invalid. Turning
+    // exploration off must never invalidate a config -- the same call ADR-0039 made for an
+    // enriched_in that no objective reads (see the [CONFIG-WARN] below).
+    for (int lvl : {2, 3})
+    {
+      auto it = levels_.find(lvl);
+      if (it == levels_.end() || !it->second.monitor_ms1_enabled) continue;
+      const std::string path = (lvl == 2) ? "precursor_selection" : "characterization";
+      if (it->second.monitor_ms1_interval_ms <= 0.0)
+        throw std::invalid_argument(
+            "Config: " + path + ".exploration.monitor_ms1.interval_ms must be > 0 when enabled "
+            "(got " + std::to_string(it->second.monitor_ms1_interval_ms) + "). At or below zero a "
+            "monitor scan is due on every drain, so the engine would mint one ahead of the sweep "
+            "indefinitely and the sweep would never progress. Set enabled to false to turn the "
+            "feature off.");
+      if (it->second.exploration == ExplorationMetric::None)
+        std::cout << "[CONFIG-WARN] " << path << ".exploration.monitor_ms1 is enabled but "
+                  << path << ".exploration.metric is \"none\", so no sweep ever runs at this level "
+                     "and no monitor scan will be acquired. The key is inert, not invalid.\n";
+    }
 
     // --- quantification (ADR-0038) --------------------------------------------------------------
     // Three structural rejections. These are NOT chemistry judgements -- there is deliberately no

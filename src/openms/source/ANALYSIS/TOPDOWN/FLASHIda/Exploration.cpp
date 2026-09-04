@@ -1259,6 +1259,14 @@ namespace OpenMS
     return static_cast<int>(active_groups_.size());
   }
 
+  int Exploration::activeGroupCount(int msn_level) const
+  {
+    int n = 0;
+    for (const auto& kv : active_groups_)
+      if (kv.second.msn_level == msn_level) ++n;
+    return n;
+  }
+
   Exploration::ExplorationGroup Exploration::getGroup(int group_id) const
   {
     return active_groups_.at(group_id);

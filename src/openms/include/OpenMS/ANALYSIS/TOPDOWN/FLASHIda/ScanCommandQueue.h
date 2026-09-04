@@ -40,6 +40,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms2Params.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanRole.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 
 #include <chrono>
@@ -182,6 +183,22 @@ namespace OpenMS
     /// trailing ion (so it is never truncated) given the actual charge + ion fields of the command.
     static std::string formatMassToken(double mass_kda, int charge, char ion_type, int ion_index);
 
+    /**
+     * @brief Write a bare MS1-family scan_description: `{3-char tracking id}{role marker}`.
+     *
+     * Requires @p cmd.scan_id to be assigned already. Funnels the four sites that used to spell the
+     * marker as a literal ("%sS" / "%sA"), so the marker is sourced from ScanRole.h's table rather
+     * than from four independent string literals (ADR-0042).
+     *
+     * DELIBERATELY NOT used for the COMPOUND descriptions -- buildMS2 / buildMS3 / buildFollowUp and
+     * Exploration's two variant writers append a mass token, charge and ion, and scan_description is
+     * a golden column, so funnelling those would risk moving 28 files for no gain.
+     *
+     * Also not used for makeMS1()/makeAGC()'s bare "S"/"A" placeholders: those run before a scan_id
+     * exists and are always overwritten by one of this function's call sites.
+     */
+    static void writeMs1Description(ScanCommand& cmd, ScanRole role);
+
     /// Decode a 3-character base-94 string back to integer
     int decode(const std::string& s) const;
 
@@ -195,6 +212,30 @@ namespace OpenMS
 
     /// Milliseconds since last MS1 scan (for cycle time enforcement)
     uint64_t msSinceLastMS1() const;
+
+    /**
+     * @brief Is a MONITOR scan due for one exploration level right now? (ADR-0042)
+     *
+     * A CONSUME, not a peek: it tests and updates the level's clock under ONE queue_mutex_
+     * acquisition, so two concurrent drains can never both be told the same monitor scan is due.
+     * Call it exactly once per level per drain and act on the answer.
+     *
+     * MUST BE CALLED ON EVERY DRAIN, including drains where nothing is sweeping -- the
+     * `sweeping == false` path is what RE-ARMS the level for its next episode. Skip it and the arm
+     * stays set from the previous sweep, so the next sweep silently loses its anchor scan.
+     *
+     * Cadence: one anchor the moment a level starts sweeping (`armed` false), then one every
+     * @p interval_ms while it keeps sweeping.
+     *
+     * @param idx 0 for level 2, 1 for level 3
+     * @param sweeping is that level currently sweeping AND configured to monitor?
+     * @param interval_ms authored spacing; Config::validate guarantees > 0 whenever enabled
+     */
+    bool takeMonitorDue(int idx, bool sweeping, double interval_ms);
+
+    /// Test-only: back-date a level's monitor clock so a wall-clock cadence is deterministic.
+    /// There is no production caller and must not be one.
+    void backdateMonitorClock(int idx, double ms);
 
     // --- Introspection ---
 
@@ -239,6 +280,11 @@ namespace OpenMS
 
     /// Timestamp of last MS1 scan (for cycle time logic)
     std::chrono::steady_clock::time_point last_ms1_time_ = std::chrono::steady_clock::now();
+
+    /// Monitor-scan cadence state, per exploration level ([0] = level 2, [1] = level 3). ADR-0042.
+    /// `armed` false means "this level's next drain owes an EPISODE ANCHOR"; see takeMonitorDue.
+    std::chrono::steady_clock::time_point last_monitor_time_[2];
+    bool monitor_armed_[2] = {false, false};
 
     /// Timestamp of last AGC scan (for AGC interval logic)
     mutable std::chrono::steady_clock::time_point last_agc_time_;

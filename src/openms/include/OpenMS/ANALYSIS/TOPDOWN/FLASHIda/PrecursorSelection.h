@@ -213,37 +213,73 @@ namespace OpenMS
     std::vector<int> trigger_ids_;
     std::vector<std::vector<int>> trigger_authored_charges_;
 
-    /// Mass exclusion maps
-    std::unordered_map<int, double> tqscore_exceeding_mz_rt_map_;
-    std::unordered_map<int, double> tqscore_exceeding_mass_rt_map_;
-    std::unordered_map<int, double> all_mass_rt_map_;
-    std::unordered_map<int, double> mass_qscore_map_;
+    /**
+     * @brief ACQUISITION MEMORY: everything this class remembers ACROSS surveys.
+     *
+     * Grouped, not invented (ADR-0042). These ten members already existed and are unchanged in type,
+     * order and meaning; the trailing underscores are kept so the grouping is a pure `memory_.`
+     * prefix and the diff is verifiable by `sed 's/memory_\.//'`.
+     *
+     * WHY A STRUCT, and why the defaulted `operator==`: a monitor scan is defined by what it does
+     * NOT write here, and asserting that means comparing this state before and after. Hand-listing
+     * the containers in the test would mean the eleventh one, added years from now, is silently not
+     * checked. The compiler-generated `==` covers every member, so a container added INSIDE this
+     * struct joins the neutrality drift-guard the moment it is declared -- no test edit, no
+     * checklist step. Add cross-survey state HERE, not as a bare PrecursorSelection member.
+     *
+     * std::unordered_map::operator== compares as an unordered multiset, so this is bucket-order
+     * independent and cannot flake.
+     *
+     * NOT a transaction. Intra-survey read-after-write is load-bearing -- authored_acquired_rt_map_
+     * is read back within one survey by ADR-0036 siblings, and mass_qscore_map_ /
+     * tqscore_exceeding_mass_rt_map_ by the iteration re-walks below -- so these are written in
+     * place exactly as before. The struct buys the FINGERPRINT, not deferred writes.
+     */
+    struct SurveyMemory
+    {
+      /// Mass exclusion maps
+      std::unordered_map<int, double> tqscore_exceeding_mz_rt_map_;
+      std::unordered_map<int, double> tqscore_exceeding_mass_rt_map_;
+      std::unordered_map<int, double> all_mass_rt_map_;
+      std::unordered_map<int, double> mass_qscore_map_;
 
-    // NOTE: the three per-(nominal_mass, charge) containers that used to sit here --
-    // tqscore_exceeding_mass_charge_set_, mass_charge_qscore_map_, mass_charge_rt_map_ -- were the
-    // state behind charge_based_exclusion and went with it (ADR-0021). Exclusion is mass-keyed;
-    // acquiring several charge states is precursor_charges: "separate" / "multiplexed".
-    //
-    // ADR-0028 reinstates ONE of them, and only for Precursors carrying an authored charge set.
-    // That is not a reversal of ADR-0021: what 0021 removed was acquisition GEOMETRY being sourced
-    // from an exclusion-KEYING flag. Geometry still comes only from precursor_charges plus the
-    // authored restriction; this map decides nothing about what a scan isolates, only about when a
-    // mass stops being selectable. Every species without an authored set stays mass-keyed.
+      // NOTE: the three per-(nominal_mass, charge) containers that used to sit here --
+      // tqscore_exceeding_mass_charge_set_, mass_charge_qscore_map_, mass_charge_rt_map_ -- were the
+      // state behind charge_based_exclusion and went with it (ADR-0021). Exclusion is mass-keyed;
+      // acquiring several charge states is precursor_charges: "separate" / "multiplexed".
+      //
+      // ADR-0028 reinstates ONE of them, and only for Precursors carrying an authored charge set.
+      // That is not a reversal of ADR-0021: what 0021 removed was acquisition GEOMETRY being sourced
+      // from an exclusion-KEYING flag. Geometry still comes only from precursor_charges plus the
+      // authored restriction; this map decides nothing about what a scan isolates, only about when a
+      // mass stops being selectable. Every species without an authored set stays mass-keyed.
 
-    /// (nominal mass, charge) -> rt at which that charge was acquired. Written ONLY for Precursors
-    /// carrying an authored charge set. It is what lets `single` walk such a set across successive
-    /// surveys: the mass survives its own acquisition and is re-selected at the next named charge,
-    /// until every one is spent and the species is skipped for good.
-    std::map<std::pair<int, int>, double> authored_acquired_rt_map_;
+      /// (nominal mass, charge) -> rt at which that charge was acquired. Written ONLY for Precursors
+      /// carrying an authored charge set. It is what lets `single` walk such a set across successive
+      /// surveys: the mass survives its own acquisition and is re-selected at the next named charge,
+      /// until every one is spent and the species is skipped for good.
+      std::map<std::pair<int, int>, double> authored_acquired_rt_map_;
 
-    /// Maps for selectively disabling mass exclusion (needed for FAIMS support)
-    std::unordered_map<int, int> id_mass_map_;
-    std::unordered_map<int, int> id_mz_map_;
-    std::unordered_map<int, double> id_qscore_map_;
-    std::unordered_map<int, int> id_charge_map_;
+      /// Maps for selectively disabling mass exclusion (needed for FAIMS support)
+      std::unordered_map<int, int> id_mass_map_;
+      std::unordered_map<int, int> id_mz_map_;
+      std::unordered_map<int, double> id_qscore_map_;
+      std::unordered_map<int, int> id_charge_map_;
 
-    /// Window ID counter for FAIMS exclusion list removal
-    int window_id_ = 0;
+      /// Window ID counter for FAIMS exclusion list removal
+      int window_id_ = 0;
+
+      /// Compiler-generated over EVERY member -- that totality is the whole point. See the class
+      /// comment above before replacing it with a hand-written comparison.
+      bool operator==(const SurveyMemory&) const = default;
+    };
+
+    SurveyMemory memory_;
+
+    /// Test scaffolding reaches memory_ through this friend rather than through a public getter, so
+    /// nothing in the production API exposes acquisition memory (ADR-0042). Same idiom the engine
+    /// already uses for FLASHIda and Exploration; see FLASHIda_TestAccess.h.
+    friend struct FLASHIdaTestAccess;
 
     /// Maps for global inclusion targeting
     std::map<double, std::vector<double>> target_mass_rt_map_;

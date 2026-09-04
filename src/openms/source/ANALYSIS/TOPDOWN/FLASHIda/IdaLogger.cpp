@@ -37,6 +37,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanRole.h>
 
 #include <algorithm>
 #include <cctype>
@@ -319,20 +320,14 @@ namespace OpenMS
 
   std::string IdaLogger::scanTypeFromDescription_(const ScanCommand& cmd)
   {
-    if (std::strlen(cmd.scan_description) < 4)
-      return "unknown";
-    switch (cmd.scan_description[3])
-    {
-      case 'S': return "survey";
-      case 'A': return "agc";
-      case 'R': return "recording";
-      // ADR-0038: 'F'/"followup" is retired. It named the scan quantification BOUGHT, which was
-      // never measured; 'Q' names the scan quantification MEASURES.
-      case 'Q': return "quantification";
-      case 'C': return "conditional";
-      case 'E': return "exploration";
-      default: return "unknown";
-    }
+    // The six cases that used to sit here now live in ScanRole.h's traits table, which is the single
+    // decoder for scan_description[3] (ADR-0042). The strings are UNCHANGED and must stay so: this is
+    // scan_commands.tsv's `scan_type` column, and renaming one revalues 28 golden files. Pinned by
+    // FLASHIda_exploration_test::roleName_matches_the_legacy_scan_type_strings.
+    //
+    // ADR-0038: 'F'/"followup" is retired. It named the scan quantification BOUGHT, which was
+    // never measured; 'Q' names the scan quantification MEASURES.
+    return roleNameOf(cmd);
   }
 
   void IdaLogger::writeScanCommandRow(const ScanCommand& cmd, int precursor_id, const std::string& ms3_proteoform)

@@ -36,6 +36,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanRole.h>
 #include <OpenMS/DATASTRUCTURES/ListUtils.h>
 
 #include <algorithm>
@@ -124,12 +125,210 @@ FLASHIda::FLASHIda(char* arg) :
 
     engine_start_time_ = std::chrono::steady_clock::now();
 
+    // The monitor scan's own deconvolution engine, built only if a level asks for one (ADR-0042).
+    // In the ctor BODY rather than the init list deliberately: it is conditional, and a null pointer
+    // is what makes the feature free when off. Same toleranceList() as deconv_, so a monitor reading
+    // is numerically comparable with a survey's.
+    if (config_.level(2).monitor_ms1_enabled || config_.level(3).monitor_ms1_enabled)
+      monitor_deconv_ = std::make_unique<Deconvolution>(config_, config_.toleranceList());
+
     // Initialize FAIMS CV atomic for getNextScanCommand reads.
     // relaxed is safe: no other thread can observe this object before construction completes.
     current_faims_cv_.store(faims_.isEnabled() ? faims_.currentCV() : 0.0, std::memory_order_relaxed);
   }
 
   FLASHIda::~FLASHIda() = default;
+
+  /**
+   * @brief The MS1 SURVEY arm: deconvolve -> select top-N -> push MS2 (or CE sweep) -> FAIMS cycle.
+   *
+   * Extracted VERBATIM from processScan's `ms_level == 1` branch (ADR-0042). Nothing here changed;
+   * the extraction exists so that the branch can fork into a deciding arm and an observing one with
+   * NOTHING AFTER THE FORK -- which is what makes a side effect added to this function unreachable
+   * from a monitor scan by construction rather than by a guard someone has to remember.
+   *
+   * The `selection == None` early return deliberately stays in processScan rather than moving here:
+   * it returns without writing a scan_results row, and that asymmetry is documented at the bottom
+   * of processScan.
+   *
+   * @return the number of commands pushed, which becomes processScan's return_code.
+   */
+  void FLASHIda::observeMonitoringMS1_(Deconvolution& d, const Config& cfg,
+                                       const double* mzs, const double* ints, int length,
+                                       double rt, double faims_cv,
+                                       IdaLogger::ScanRowDescriptor& results_row)
+  {
+    // The WHOLE observing arm. Read the `static` note on the declaration before adding a line here:
+    // nothing in this function can reach an acquisition decision, and that is enforced by the
+    // absence of `this` rather than by anyone remembering.
+    d.deconvolveMS1(mzs, ints, length, rt, faims_cv);
+
+    // Order the masses the way a survey's row orders them, so a monitor row and a survey row can be
+    // read down the same column. This is the RANKING sort only -- the inclusion-priority pass that
+    // follows it in PrecursorSelection is a selection decision and is deliberately not called.
+    sortByLevelMetric(d.deconvolvedMS1(), cfg, 1);
+
+    results_row.mass_count      = static_cast<int>(d.deconvolvedMS1().size());
+    // Engine-owned and outlives processScan (monitor_deconv_ is a FLASHIda member), which is the
+    // invariant ScanRowDescriptor::deconv_spectrum documents.
+    results_row.deconv_spectrum = &d.deconvolvedMS1();
+
+    // commands_pushed stays 0, child_ids stays empty, and every other field keeps its sentinel --
+    // all of which is the truth about a scan that decided nothing.
+    //
+    // NO ida.log entry, deliberately. That file is the record of acquisition DECISIONS and the
+    // FLASHDeconv coupling file; a monitor scan makes none and must not couple. Its entry would read
+    // "- 0 targets", which BOTH readers (IdaLogger::parseFLASHIdaLog and PrecursorSelection's
+    // target_log_files loader) skip by design -- so it would carry nothing to any consumer while
+    // adding noise to the one stream with an outside reader.
+  }
+
+  int FLASHIda::runSurveyMS1_(const double* mzs, const double* ints, int length, double rt_min,
+                              double faims_cv, int parent_tracking_id, const ScanCommand& parent_ctx,
+                              int instrument_scan_number,
+                              IdaLogger::ScanRowDescriptor& results_row,
+                              std::vector<std::string>& child_ids)
+  {
+    int n = selection_.filterAndRank(mzs, ints, length, rt_min, 1, faims_cv);
+    const auto& selected = selection_.selectedPeakGroups();
+    const auto& sel_charges = selection_.triggerCharges();
+    int commands_pushed = 0;
+    std::vector<ScanCommand> ms2_commands;
+    // Index-parallel to ms2_commands; points into selection_.selectedPeakGroups(), a member vector
+    // that outlives the writeIDALogEntry call below.
+    std::vector<const PeakGroup*> ms2_sources;
+    const MSSpectrum& raw_ms1 = selection_.deconvolvedMS1().getOriginalSpectrum();
+
+    // Shared MS2 push: stamp the precursor_id, enqueue, and remember the command for the IDA log.
+    // Equal-priority commands drain FIFO, so this preserves scan_commands row order and child_ids.
+    // @p src is the PeakGroup this command was built from. Recorded index-parallel to
+    // ms2_commands so ida.log's ChargeRange can report the species' real charge envelope without
+    // looking the mass back up in the deconvolved spectrum -- several PeakGroups routinely share
+    // one mass in a survey (ADR-0036) and each carries a different charge subset, so a lookup
+    // would pick one of them arbitrarily. See ADR-0035 decision 6.
+    auto push_ms2_command = [&](ScanCommand& c, int precursor_id, const PeakGroup& src)
+    {
+      stampAndPush_(c, precursor_id);
+      ms2_commands.push_back(c);
+      ms2_sources.push_back(&src);
+      commands_pushed++;
+    };
+
+    if (config_.hasExploration(2))
+    {
+      // Exploration path: initiate CE sweep variants INSTEAD of regular MS2
+      for (int i = 0; i < n; i++)
+      {
+        // One precursor_id per MS1-selected precursor; every CE-sweep variant of this precursor
+        // shares it (they are the same MS1 selection -> same charge -> same model).
+        const int precursor_id = allocPrecursorId_();
+        ScanCommand ms1_ctx{};
+        ms1_ctx.scan_id  = parent_tracking_id;
+        ms1_ctx.faims_cv = parent_ctx.faims_cv;  // CV travels via the resolved MS1 context
+        // Same index i as the production dispatch below, so a species carrying an authored
+        // charge set has its CE-sweep variants isolate the charges its production scan would.
+        const std::vector<int>* allowed_i =
+            i < (int)selection_.triggerAuthoredCharges().size() ? &selection_.triggerAuthoredCharges()[i] : nullptr;
+        auto cmds = exploration_.initiate(2, selected[i], sel_charges[i], queue_, &raw_ms1, &ms1_ctx,
+                                          '\0', 0, {}, {}, nullptr, nullptr, allowed_i);
+        for (auto& c : cmds)
+          push_ms2_command(c, precursor_id, selected[i]);
+      }
+    }
+    else
+    {
+      // Normal path: push MS2 for each precursor, for each scan config
+      //
+      // ADR-0040: the QUANTIFICATION GROUP is minted here, one per SPECIES per survey, and keyed
+      // on NOMINAL MASS rather than on loop adjacency. Adjacency happens to hold today -- the emit
+      // loop pushes a species' charges consecutively -- but ADR-0036 siblings put two PeakGroups
+      // of one species in this list at slightly different masses (12351.39 / 12351.33 in the
+      // committed fixtures), and those are ONE reporter population. Nominal mass is the ~1 Da bin
+      // every other acquisition map already keys on, so it groups them and adjacency would not.
+      std::map<int, int> quant_group_by_nominal;   // survey-local: nominal mass -> group_id
+      for (int i = 0; i < n; i++)
+      {
+        // One precursor_id per MS1-selected precursor; all of its MS2 scan-config commands share it.
+        const int precursor_id = allocPrecursorId_();
+        // With quantification on, Config puts the quantification scan in the roster's PRIMARY
+        // slot and holds ms_settings.ms2 back as the scan a differential verdict buys, so
+        // scans[0] is the 'Q' (ADR-0038). Everything else on the roster is an ordinary 'R'.
+        const bool quant_owns_primary =
+            config_.quantification().enabled && config_.quantification().has_quant_scan;
+        const auto& roster = config_.level(2).scans;
+        for (size_t si = 0; si < roster.size(); ++si)
+        {
+          ScanConfig ms2_config = roster[si];
+          const char marker = (quant_owns_primary && si == 0) ? 'Q' : 'R';
+          const std::vector<int>* allowed_i =
+              i < (int)selection_.triggerAuthoredCharges().size() ? &selection_.triggerAuthoredCharges()[i] : nullptr;
+          ScanCommand cmd = queue_.buildMS2(selected[i], sel_charges[i], ms2_config, 2, parent_tracking_id, allowed_i, marker);
+          // MS2 inherits the parent MS1's *processing* CV (the faims_cv arg), NOT parent_ctx.faims_cv:
+          // in a FAIMS-skip run the MS1 command's stored CV differs from the CV it was processed at.
+          cmd.faims_cv = faims_cv;
+          if (cmd.num_stages > 0)
+          {
+            const double half = cmd.stages[0].isolation_width / 2.0;
+            cmd.window_snr = FragmentAnalysis::windowSnr(raw_ms1, cmd.stages[0].precursor_mz - half,
+                                                         cmd.stages[0].precursor_mz + half, cmd.precursor_intensity);
+          }
+          push_ms2_command(cmd, precursor_id, selected[i]);
+
+          // Register the 'Q' with its species' group. AFTER the push, because addMember indexes on
+          // cmd.scan_id and reads the window_snr/intensity set above -- both are final only here.
+          if (marker == 'Q')
+          {
+            const int nominal = SpectralDeconvolution::getNominalMass(selected[i].getMonoMass());
+            auto git = quant_group_by_nominal.find(nominal);
+            if (git == quant_group_by_nominal.end())
+              git = quant_group_by_nominal.emplace(nominal, allocQuantGroupId_()).first;
+            quant_.addMember(git->second, cmd, precursor_id);
+          }
+        }
+      }
+    }
+
+    // IDA log entry (MS1 only).
+    logger_.writeIDALogEntry(rt_min, parent_tracking_id, instrument_scan_number,
+                             ms2_commands, ms2_sources, selection_.deconvolvedMS1());
+
+    for (const auto& c : ms2_commands)
+      child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
+    int ms1_mass_count = static_cast<int>(selection_.deconvolvedMS1().size());
+    results_row.mass_count      = ms1_mass_count;
+    results_row.commands_pushed = commands_pushed;
+    results_row.child_ids       = child_ids;
+    results_row.deconv_spectrum = &selection_.deconvolvedMS1();
+
+    // FAIMS CV cycling: update skip policy, advance to next CV, push MS1.
+    // isCycling(), not isEnabled(): with a single configured CV the "next" CV is always the
+    // current one, so this would push a redundant priority-0 MS1 after every MS1 and double the
+    // survey rate for no gain. A fixed-CV run still gets its CV -- it travels on every command
+    // via current_faims_cv_, it just never transitions (ADR-0012).
+    if (faims_.isCycling())
+    {
+      double current_cv = faims_.currentCV();
+      faims_.updateSkip(current_cv, commands_pushed);
+
+      double next_cv = faims_.advanceToNextCV();
+      ScanCommand ms1 = queue_.makeMS1();
+      ms1.faims_cv = next_cv;
+      ms1.scan_id = queue_.nextTrackingId();
+      ms1.priority = 0;  // priority 0 to send before pending MS2s
+
+      std::string next_ms1_id = ScanCommandQueue::encode(ms1.scan_id);
+      ScanCommandQueue::writeMs1Description(ms1, ScanRole::Survey);
+
+      queue_.push(ms1);
+      std::cout << "[TRACK-CREATE] id=" << next_ms1_id << " ms_level=1 type=cv_transition cv=" << next_cv << std::endl;
+    }
+
+    // Update atomics for lock-free reads by getNextScanCommand
+    publishExplorationState_();
+    current_faims_cv_.store(faims_.isEnabled() ? faims_.currentCV() : 0.0, std::memory_order_release);
+
+    return commands_pushed;
+  }
 
   int FLASHIda::processScan(const double* mzs, const double* ints, int length,
                              double rt_min, int ms_level, const char* scan_description,
@@ -143,8 +342,22 @@ FLASHIda::FLASHIda(char* arg) :
     std::string parent_id_str = parent_desc_str.substr(0, 3);
     int parent_tracking_id = queue_.decode(parent_id_str);
 
-    // Skip AGC scans — calibration-only, no data to process
-    if (parent_desc_str.size() >= 4 && parent_desc_str[3] == 'A')
+    // THE ECHO's role, and the ONLY gate entitled to read it (ADR-0042).
+    //
+    // Two copies of the role exist and they are not interchangeable. This one is decoded from the
+    // description the INSTRUMENT handed back, because this gate has to run before resolvePending()
+    // below and there is no engine record to consult yet. Every DECISION gate reads `cmd_role`,
+    // decoded from the engine's own queued command, because that copy cannot be truncated, spoofed
+    // or lost by the trailer round trip. ADR-0008/0035 separate the identity channels but never said
+    // which copy of the ROLE wins; it is the engine's, everywhere except right here.
+    const std::optional<ScanRole> echo_role =
+        roleFromDescription(parent_desc_str.c_str(), parent_desc_str.size());
+
+    // Skip AGC scans — calibration-only, no data to process.
+    // `Agc` is the only row in kScanRoleTraits with observes == false, and an undecodable
+    // description resolves as observing, so this is byte-identical to the `desc[3] == 'A'` test it
+    // replaces — while also being correct for any future peakless role.
+    if (!roleObserves(echo_role))
     {
       queue_.resolvePending(parent_tracking_id);
       return 0;
@@ -203,10 +416,13 @@ FLASHIda::FLASHIda(char* arg) :
     // 'R' meaning "identification MS2" in every mode. It is safe for it to be indistinguishable
     // from a rostered MS2 precisely because the screen gate below keys on 'Q' rather than on
     // "is not a follow-up": an 'R' is never re-screened, so it can never buy a second scan.
-    const bool is_follow_up_scan =
-        std::strlen(parent_ctx.scan_description) >= 4 && parent_ctx.scan_description[3] == 'C';
-    const bool is_quant_scan =
-        std::strlen(parent_ctx.scan_description) >= 4 && parent_ctx.scan_description[3] == 'Q';
+    // THE ENGINE RECORD's role -- the copy every DECISION gate reads, and the one the MS1 fork below
+    // dispatches on. Not `echo_role`: see the note at its declaration. Comparing an engaged optional
+    // to a ScanRole is exactly the old `len >= 4 && desc[3] == 'C'` test, since an undecodable
+    // description yields nullopt and nullopt equals no role.
+    const std::optional<ScanRole> cmd_role = roleOf(parent_ctx);
+    const bool is_follow_up_scan = (cmd_role == ScanRole::FollowUp);
+    const bool is_quant_scan     = (cmd_role == ScanRole::Quantification);
     std::vector<std::string> child_ids;
 
     // Carriers for the file-backed TSV rows (scan_results + identification): each branch fills these,
@@ -227,150 +443,39 @@ FLASHIda::FLASHIda(char* arg) :
 
     if (ms_level == 1)
     {
-      // ===== MS1: deconvolve -> select top-N -> push MS2 (or CE sweep) -> FAIMS cycle =====
+      // ===== THE FORK (ADR-0042) =====
+      // An MS1 either DECIDES or it OBSERVES, and the two arms share nothing below this point.
+      //
+      // The observing arm is tested FIRST and deliberately sits above the selection == None gate:
+      // observation is not gated on a selection metric, and that gate returns before any row is
+      // written. It reads cmd_role -- the ENGINE's record of what it asked for -- not the atomic, so
+      // a monitor scan that returns after its sweep has already ended is still recognised as one.
+      // Re-reading exploration_active_ here would make behaviour depend on when the instrument got
+      // round to answering.
+      if (!roleDecides(cmd_role))
+      {
+        if (monitor_deconv_)
+          observeMonitoringMS1_(*monitor_deconv_, config_, mzs, ints, length, rt_min, faims_cv,
+                                results_row);
+        // return_code stays 0, which the host already treats as an ordinary gate rejection. No
+        // bridge or C# contract moves.
+      }
+      // ===== MS1 SURVEY: deconvolve -> select top-N -> push MS2 (or CE sweep) -> FAIMS cycle =====
       // Selection=none: skip MS1 precursor selection entirely
-      if (config_.level(1).selection == SelectionMetric::None)
+      else if (config_.level(1).selection == SelectionMetric::None)
+      {
         return 0;
-
-      int n = selection_.filterAndRank(mzs, ints, length, rt_min, 1, faims_cv);
-      const auto& selected = selection_.selectedPeakGroups();
-      const auto& sel_charges = selection_.triggerCharges();
-      int commands_pushed = 0;
-      std::vector<ScanCommand> ms2_commands;
-      // Index-parallel to ms2_commands; points into selection_.selectedPeakGroups(), a member vector
-      // that outlives the writeIDALogEntry call below.
-      std::vector<const PeakGroup*> ms2_sources;
-      const MSSpectrum& raw_ms1 = selection_.deconvolvedMS1().getOriginalSpectrum();
-
-      // Shared MS2 push: stamp the precursor_id, enqueue, and remember the command for the IDA log.
-      // Equal-priority commands drain FIFO, so this preserves scan_commands row order and child_ids.
-      // @p src is the PeakGroup this command was built from. Recorded index-parallel to
-      // ms2_commands so ida.log's ChargeRange can report the species' real charge envelope without
-      // looking the mass back up in the deconvolved spectrum -- several PeakGroups routinely share
-      // one mass in a survey (ADR-0036) and each carries a different charge subset, so a lookup
-      // would pick one of them arbitrarily. See ADR-0035 decision 6.
-      auto push_ms2_command = [&](ScanCommand& c, int precursor_id, const PeakGroup& src)
-      {
-        stampAndPush_(c, precursor_id);
-        ms2_commands.push_back(c);
-        ms2_sources.push_back(&src);
-        commands_pushed++;
-      };
-
-      if (config_.hasExploration(2))
-      {
-        // Exploration path: initiate CE sweep variants INSTEAD of regular MS2
-        for (int i = 0; i < n; i++)
-        {
-          // One precursor_id per MS1-selected precursor; every CE-sweep variant of this precursor
-          // shares it (they are the same MS1 selection -> same charge -> same model).
-          const int precursor_id = allocPrecursorId_();
-          ScanCommand ms1_ctx{};
-          ms1_ctx.scan_id  = parent_tracking_id;
-          ms1_ctx.faims_cv = parent_ctx.faims_cv;  // CV travels via the resolved MS1 context
-          // Same index i as the production dispatch below, so a species carrying an authored
-          // charge set has its CE-sweep variants isolate the charges its production scan would.
-          const std::vector<int>* allowed_i =
-              i < (int)selection_.triggerAuthoredCharges().size() ? &selection_.triggerAuthoredCharges()[i] : nullptr;
-          auto cmds = exploration_.initiate(2, selected[i], sel_charges[i], queue_, &raw_ms1, &ms1_ctx,
-                                            '\0', 0, {}, {}, nullptr, nullptr, allowed_i);
-          for (auto& c : cmds)
-            push_ms2_command(c, precursor_id, selected[i]);
-        }
       }
       else
       {
-        // Normal path: push MS2 for each precursor, for each scan config
-        //
-        // ADR-0040: the QUANTIFICATION GROUP is minted here, one per SPECIES per survey, and keyed
-        // on NOMINAL MASS rather than on loop adjacency. Adjacency happens to hold today -- the emit
-        // loop pushes a species' charges consecutively -- but ADR-0036 siblings put two PeakGroups
-        // of one species in this list at slightly different masses (12351.39 / 12351.33 in the
-        // committed fixtures), and those are ONE reporter population. Nominal mass is the ~1 Da bin
-        // every other acquisition map already keys on, so it groups them and adjacency would not.
-        std::map<int, int> quant_group_by_nominal;   // survey-local: nominal mass -> group_id
-        for (int i = 0; i < n; i++)
-        {
-          // One precursor_id per MS1-selected precursor; all of its MS2 scan-config commands share it.
-          const int precursor_id = allocPrecursorId_();
-          // With quantification on, Config puts the quantification scan in the roster's PRIMARY
-          // slot and holds ms_settings.ms2 back as the scan a differential verdict buys, so
-          // scans[0] is the 'Q' (ADR-0038). Everything else on the roster is an ordinary 'R'.
-          const bool quant_owns_primary =
-              config_.quantification().enabled && config_.quantification().has_quant_scan;
-          const auto& roster = config_.level(2).scans;
-          for (size_t si = 0; si < roster.size(); ++si)
-          {
-            ScanConfig ms2_config = roster[si];
-            const char marker = (quant_owns_primary && si == 0) ? 'Q' : 'R';
-            const std::vector<int>* allowed_i =
-                i < (int)selection_.triggerAuthoredCharges().size() ? &selection_.triggerAuthoredCharges()[i] : nullptr;
-            ScanCommand cmd = queue_.buildMS2(selected[i], sel_charges[i], ms2_config, 2, parent_tracking_id, allowed_i, marker);
-            // MS2 inherits the parent MS1's *processing* CV (the faims_cv arg), NOT parent_ctx.faims_cv:
-            // in a FAIMS-skip run the MS1 command's stored CV differs from the CV it was processed at.
-            cmd.faims_cv = faims_cv;
-            if (cmd.num_stages > 0)
-            {
-              const double half = cmd.stages[0].isolation_width / 2.0;
-              cmd.window_snr = FragmentAnalysis::windowSnr(raw_ms1, cmd.stages[0].precursor_mz - half,
-                                                           cmd.stages[0].precursor_mz + half, cmd.precursor_intensity);
-            }
-            push_ms2_command(cmd, precursor_id, selected[i]);
-
-            // Register the 'Q' with its species' group. AFTER the push, because addMember indexes on
-            // cmd.scan_id and reads the window_snr/intensity set above -- both are final only here.
-            if (marker == 'Q')
-            {
-              const int nominal = SpectralDeconvolution::getNominalMass(selected[i].getMonoMass());
-              auto git = quant_group_by_nominal.find(nominal);
-              if (git == quant_group_by_nominal.end())
-                git = quant_group_by_nominal.emplace(nominal, allocQuantGroupId_()).first;
-              quant_.addMember(git->second, cmd, precursor_id);
-            }
-          }
-        }
+        return_code = runSurveyMS1_(mzs, ints, length, rt_min, faims_cv,
+                                    parent_tracking_id, parent_ctx, instrument_scan_number,
+                                    results_row, child_ids);
       }
-
-      // IDA log entry (MS1 only).
-      logger_.writeIDALogEntry(rt_min, parent_tracking_id, instrument_scan_number,
-                               ms2_commands, ms2_sources, selection_.deconvolvedMS1());
-
-      for (const auto& c : ms2_commands)
-        child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
-      int ms1_mass_count = static_cast<int>(selection_.deconvolvedMS1().size());
-      results_row.mass_count      = ms1_mass_count;
-      results_row.commands_pushed = commands_pushed;
-      results_row.child_ids       = child_ids;
-      results_row.deconv_spectrum = &selection_.deconvolvedMS1();
-
-      // FAIMS CV cycling: update skip policy, advance to next CV, push MS1.
-      // isCycling(), not isEnabled(): with a single configured CV the "next" CV is always the
-      // current one, so this would push a redundant priority-0 MS1 after every MS1 and double the
-      // survey rate for no gain. A fixed-CV run still gets its CV -- it travels on every command
-      // via current_faims_cv_, it just never transitions (ADR-0012).
-      if (faims_.isCycling())
-      {
-        double current_cv = faims_.currentCV();
-        faims_.updateSkip(current_cv, commands_pushed);
-
-        double next_cv = faims_.advanceToNextCV();
-        ScanCommand ms1 = queue_.makeMS1();
-        ms1.faims_cv = next_cv;
-        ms1.scan_id = queue_.nextTrackingId();
-        ms1.priority = 0;  // priority 0 to send before pending MS2s
-
-        std::string next_ms1_id = ScanCommandQueue::encode(ms1.scan_id);
-        std::snprintf(ms1.scan_description, 16, "%sS", next_ms1_id.c_str());
-
-        queue_.push(ms1);
-        std::cout << "[TRACK-CREATE] id=" << next_ms1_id << " ms_level=1 type=cv_transition cv=" << next_cv << std::endl;
-      }
-
-      // Update atomics for lock-free reads by getNextScanCommand
-      exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);
-      current_faims_cv_.store(faims_.isEnabled() ? faims_.currentCV() : 0.0, std::memory_order_release);
-
-      return_code = commands_pushed;
+      // NOTHING BELOW THIS LINE, and that is the seam. A monitor scan cannot acquire a decision by
+      // someone adding one here, because there is no here -- any new MS1 side effect has to go
+      // inside one arm or the other, which forces the author to say which. The shared tail below
+      // (writeScanResultRow) runs for both arms and is the only thing they have in common.
     }
     else if (ms_level == 2)
     {
@@ -431,7 +536,7 @@ FLASHIda::FLASHIda(char* arg) :
           if (!row.identification_result.fragments.empty())
             id_rows.push_back({row.tracking_id, 2, 'E', row.ms2_context, row.identification_result, precursor_id, row.tic_coverage, row.flash_extender_score});
 
-        exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);
+        publishExplorationState_();
         return_code = static_cast<int>(expl_result.commands.size());
       }
       else
@@ -622,7 +727,7 @@ FLASHIda::FLASHIda(char* arg) :
                   << std::endl;
 
         // Update atomic for lock-free reads by getNextScanCommand
-        exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);
+        publishExplorationState_();
 
         return_code = commands_pushed;
       }
@@ -693,7 +798,7 @@ FLASHIda::FLASHIda(char* arg) :
             id_rows.push_back({row.tracking_id, 3, 'E', row.ms2_context, row.identification_result, precursor_id, row.tic_coverage, row.flash_extender_score});
         }
 
-        exploration_active_.store(exploration_.activeGroupCount() > 0, std::memory_order_release);
+        publishExplorationState_();
         return_code = static_cast<int>(expl_result.commands.size());
       }
       else
@@ -854,7 +959,7 @@ FLASHIda::FLASHIda(char* arg) :
 
       // Scan description: {3-char ID}A
       std::string id_str = ScanCommandQueue::encode(out.scan_id);
-      std::snprintf(out.scan_description, 16, "%sA", id_str.c_str());
+      ScanCommandQueue::writeMs1Description(out, ScanRole::Agc);
 
       std::cout << "[TRACK-CREATE] id=" << id_str << " ms_level=1 type=agc" << std::endl;
       queue_.registerPending(out);
@@ -865,11 +970,13 @@ FLASHIda::FLASHIda(char* arg) :
       return 1;
     }
 
+    const bool sweeping = exploration_active_.load(std::memory_order_acquire);
+
     // Step 2: Cycle time -- force MS1 if too long since last survey scan
     // Suppressed while any exploration group is active.
     // Queued at priority 0 (not returned immediately) so it goes through normal dequeue.
     if (config_.scheduling().cycle_time_enabled
-        && !exploration_active_.load(std::memory_order_acquire)
+        && !sweeping
         && queue_.msSinceLastMS1() > static_cast<uint64_t>(config_.scheduling().cycle_time_ms)
     )
     {
@@ -883,11 +990,56 @@ FLASHIda::FLASHIda(char* arg) :
       queue_.recordMS1Time();
 
       std::string id_str = ScanCommandQueue::encode(ms1_cmd.scan_id);
-      std::snprintf(ms1_cmd.scan_description, 16, "%sS", id_str.c_str());
+      ScanCommandQueue::writeMs1Description(ms1_cmd, ScanRole::Survey);
 
       std::cout << "[TRACK-CREATE] id=" << id_str << " ms_level=1 type=cycle_time" << std::endl;
       queue_.push(ms1_cmd);
       // Fall through to Step 3 (cleanup) and Step 4 (dequeue)
+    }
+
+    // Step 2b: MONITOR scan -- a periodic MS1 that lets the operator watch the source while a sweep
+    // is running, and that drives NO acquisition decision (ADR-0042).
+    //
+    // NOT an `else` of Step 2, though the two are behaviourally complementary (Step 2 fires only
+    // when nothing is sweeping, Step 2b only when something is). takeMonitorDue must be reached on
+    // EVERY drain, because its `sweeping == false` path is what re-arms a level for its next
+    // episode. Put this in an else and the arm survives the end of a sweep, so the next sweep
+    // silently loses its anchor scan -- visible only as a missing first data point.
+    //
+    // Both levels are always asked, even once one has answered yes, so each consumes its own clock:
+    // it is ONE MS1 and it serves both levels' purposes, so neither should stay due afterwards.
+    {
+      int due_level = 0;
+      for (int i = 0; i < 2; ++i)
+      {
+        const auto& lvl_cfg = config_.level(i + 2);
+        const bool lvl_sweeping = lvl_cfg.monitor_ms1_enabled
+                                  && exploration_active_lvl_[i].load(std::memory_order_acquire) > 0;
+        if (queue_.takeMonitorDue(i, lvl_sweeping, lvl_cfg.monitor_ms1_interval_ms) && due_level == 0)
+          due_level = i + 2;
+      }
+
+      if (due_level > 0)
+      {
+        // ms_settings.ms1 VERBATIM, so a monitor reading is directly comparable with the run's real
+        // surveys -- that comparability is the point, and it is why there is no cheaper dedicated
+        // scan config. At production settings (240k, 4 microscans) this costs ~2 s.
+        ScanCommand mon_cmd = queue_.makeMS1();
+        mon_cmd.faims_cv = faims_cv;   // the CV the sweep froze it at; a monitor scan never advances it
+        mon_cmd.scan_id  = queue_.nextTrackingId();
+        // Priority 0 is MANDATORY, not a preference. Priority 3 is ADR-0031's idle-survey sentinel
+        // that five role-blind drain loops break on; 1 and 2 are the sweep's own lanes, so a monitor
+        // scan would queue behind the very sweep it is meant to interrupt and the authored interval
+        // would never govern. 0 is the lane the cycle-time and CV-transition MS1s already use.
+        mon_cmd.priority = 0;
+        // NO recordMS1Time() here -- see the drain tail. A monitor scan is not a survey.
+        ScanCommandQueue::writeMs1Description(mon_cmd, ScanRole::Monitor);
+
+        std::cout << "[TRACK-CREATE] id=" << ScanCommandQueue::encode(mon_cmd.scan_id)
+                  << " ms_level=1 type=monitor lvl=" << due_level << std::endl;
+        queue_.push(mon_cmd);   // pushed, not returned: inherits Step 4's registerPending, the
+                                // timestamps and the scan_commands.tsv row
+      }
     }
 
     // Step 3: Cleanup expired commands
@@ -913,7 +1065,7 @@ FLASHIda::FLASHIda(char* arg) :
       ms1_cmd.priority = 3;
 
       std::string ms1_id_str = ScanCommandQueue::encode(ms1_cmd.scan_id);
-      std::snprintf(ms1_cmd.scan_description, 16, "%sS", ms1_id_str.c_str());
+      ScanCommandQueue::writeMs1Description(ms1_cmd, ScanRole::Survey);
 
       std::cout << "[TRACK-CREATE] id=" << ms1_id_str << " ms_level=1 type=idle_ms1" << std::endl;
 
@@ -941,7 +1093,14 @@ FLASHIda::FLASHIda(char* arg) :
     }
 
     out = dequeued.value();
-    if (out.msn_level == 1 && out.is_agc == 0)
+    // The added roleDecides conjunct keeps a MONITOR scan from resetting the SURVEY clock (ADR-0042).
+    // It satisfies `msn_level == 1 && is_agc == 0` exactly as a survey does, so without this it would
+    // stand in for one -- and that is character-for-character the ADR-0031 bug, where the idle path
+    // called recordAGCTime() and the authored AGC interval silently stopped governing the cadence.
+    // Here the victim would be scheduling.cycle_time: monitoring a long sweep would starve the very
+    // survey the cycle time exists to force. Inert for every command that exists today, since Monitor
+    // is the only non-AGC role with decides == false.
+    if (out.msn_level == 1 && out.is_agc == 0 && roleDecides(roleOf(out)))
       queue_.recordMS1Time();
     // faims_cv already set at creation time (MS2 -> parent CV, CV-transition MS1 -> next CV)
     //

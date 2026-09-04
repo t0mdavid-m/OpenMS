@@ -69,6 +69,14 @@ namespace OpenMS
     return std::string(buf);
   }
 
+  void ScanCommandQueue::writeMs1Description(ScanCommand& cmd, ScanRole role)
+  {
+    // The 16 is the pre-existing scan_description budget the four migrated call sites all used, NOT
+    // sizeof(scan_description) (256). Keeping it is what makes this byte-identical to them.
+    const std::string id_str = encode(cmd.scan_id);
+    std::snprintf(cmd.scan_description, 16, "%s%c", id_str.c_str(), roleMarker(role));
+  }
+
   int ScanCommandQueue::decode(const std::string& s) const
   {
     const int base = static_cast<int>(tracking_alphabet_.size());
@@ -134,6 +142,49 @@ namespace OpenMS
     auto now = std::chrono::steady_clock::now();
     return static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(now - last_ms1_time_).count());
+  }
+
+  bool ScanCommandQueue::takeMonitorDue(int idx, bool sweeping, double interval_ms)
+  {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    if (idx < 0 || idx > 1) return false;
+
+    // Not sweeping (or not configured): RE-ARM. This is the whole reason the caller must reach here
+    // on every drain rather than only while a sweep is running -- the reset is what makes the next
+    // episode start with an anchor scan instead of inheriting the last one's elapsed clock.
+    if (!sweeping)
+    {
+      monitor_armed_[idx] = false;
+      return false;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+
+    // EPISODE ANCHOR: this level has just started sweeping, so emit immediately and start the clock.
+    // Deliberately independent of interval_ms -- a sweep shorter than one interval still gets the
+    // one reading that says what the source looked like while it ran.
+    if (!monitor_armed_[idx])
+    {
+      monitor_armed_[idx] = true;
+      last_monitor_time_[idx] = now;
+      return true;
+    }
+
+    const auto elapsed =
+      std::chrono::duration_cast<std::chrono::milliseconds>(now - last_monitor_time_[idx]).count();
+    if (static_cast<double>(elapsed) > interval_ms)
+    {
+      last_monitor_time_[idx] = now;
+      return true;
+    }
+    return false;
+  }
+
+  void ScanCommandQueue::backdateMonitorClock(int idx, double ms)
+  {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    if (idx < 0 || idx > 1) return;
+    last_monitor_time_[idx] -= std::chrono::milliseconds(static_cast<long long>(ms));
   }
 
   void ScanCommandQueue::recordMS1Time()
