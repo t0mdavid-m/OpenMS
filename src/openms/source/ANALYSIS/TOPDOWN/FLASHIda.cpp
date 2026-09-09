@@ -753,7 +753,7 @@ FLASHIda::FLASHIda(char* arg)
             if (1 - tqscore_factor_for_exclusion > tqscore_threshold) { continue; }
           }
 
-          if (targeting_mode_ == 1 && target_masses_.size() > 0) // inclusive mode
+          if (targeting_mode_ == 1) // inclusive mode
           {
             double delta = 2 * tol_[0] * mass * 1e-6;
             auto ub = std::upper_bound(target_masses_.begin(), target_masses_.end(), mass + delta);
