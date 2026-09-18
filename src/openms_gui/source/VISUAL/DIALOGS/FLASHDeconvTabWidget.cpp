@@ -131,8 +131,13 @@ namespace OpenMS
         {
           // FLASHDeconv registers scan_commands under its "FD:" subsection. Written at the tool's top level -- as
           // ida_log was -- it is an unknown INI key, which TOPPBase answers with a warning and FLASHDeconv never reads.
-          // checkFDInputReady_ has established that exactly one run folder matches.
-          tmp_param.setValue("FLASHDeconv:1:FD:scan_commands", findScanCommandsFiles(mzML.toQString()).front().toStdString());
+          // The size test is load-bearing, not defensive: checkFDInputReady_ lets an input with NO run folder through,
+          // and front() on an empty QStringList is undefined behaviour. Absent key => this input is not coupled.
+          const QStringList found = findScanCommandsFiles(mzML.toQString());
+          if (found.size() == 1)
+          {
+            tmp_param.setValue("FLASHDeconv:1:FD:scan_commands", found.front().toStdString());
+          }
         }
 
         ParamXMLFile().store(tmp_ini, tmp_param);
@@ -374,22 +379,36 @@ namespace OpenMS
         return false;
       }
 
-      // ADR-0046 decision 6: an input whose FLASHIda run folder cannot be resolved is an error BEFORE anything runs,
-      // never a silently uncoupled deconvolution.
+      // ADR-0046 decision 7: the two ways an input can fail to resolve carry DIFFERENT risk, so they are
+      // answered differently.
+      //   SEVERAL matching run folders -> refuse. Picking one could couple the WRONG acquisition, and a
+      //   wrong precursor is invisible in the results.
+      //   NONE -> report and carry on. That input is simply not coupled, i.e. exactly the behaviour before
+      //   ADR-0046. A batch normally mixes FLASHIda runs with the instrument-method controls they are
+      //   compared against, and a control was never FLASHIda-driven -- its spectra carry no tracking id at
+      //   all, so there is nothing to couple and nothing to warn about. Refusing the batch for their sake
+      //   is the file-level form of the mistake decision 4 avoids at scan level.
       if (ui->checkbox_readlogfile->isChecked())
       {
-        QString problems;
+        QString ambiguous, uncoupled;
         for (const auto& mzML : ui->input_mzMLs->getFilenames())
         {
           const QStringList found = findScanCommandsFiles(mzML.toQString());
           if (found.size() == 1) { continue; }
-          problems += "\n\n" + mzML.toQString() + (found.isEmpty() ? QString(": no run folder") : ": several run folders:\n  " + found.join("\n  "));
+          if (found.isEmpty()) { uncoupled += "\n  " + mzML.toQString(); }
+          else { ambiguous += "\n\n" + mzML.toQString() + ": several run folders:\n  " + found.join("\n  "); }
         }
-        if (!problems.isEmpty())
+        if (!ambiguous.isEmpty())
         {
-          QMessageBox::critical(this, "Error", "FLASHIda scan commands were requested, but for these inputs there is not exactly one "
-                                "[mzml_file_name]_[yyyy-MM-dd-HH-mm-ss]/scan_commands.tsv beside the mzML file:" + problems);
+          QMessageBox::critical(this, "Error", "FLASHIda scan commands were requested, but these inputs have MORE THAN ONE "
+                                "[mzml_file_name]_[yyyy-MM-dd-HH-mm-ss]/scan_commands.tsv beside them, so the right one cannot be "
+                                "chosen:" + ambiguous);
           return false;
+        }
+        if (!uncoupled.isEmpty())
+        {
+          writeLog_("No FLASHIda run folder beside these inputs, so they are deconvolved WITHOUT scan-command coupling "
+                    "(expected for a run the instrument method drove, not FLASHIda):" + uncoupled, Qt::darkYellow, true);
         }
       }
 
