@@ -234,7 +234,7 @@
        </size>
       </property>
       <property name="toolTip">
-       <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;A log file should be in the same directory as mzML file to be read.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+       <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;The FLASHIda run folder ([mzml_file_name]_[yyyy-MM-dd-HH-mm-ss]) should be in the same directory as the mzML file.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
       </property>
       <property name="title">
        <string>FLASHIda support (optional)</string>
@@ -243,10 +243,10 @@
        <item>
         <widget class="QCheckBox" name="checkbox_readlogfile">
          <property name="toolTip">
-          <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Log file name: IDALog_[mzml_file_name].log. A log file should be in the same directory as mzML file to be read.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+          <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Reads [mzml_file_name]_[yyyy-MM-dd-HH-mm-ss]/scan_commands.tsv, the run folder FLASHIda wrote, from the directory of the mzML file. Exactly one such folder must exist per mzML file.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
          </property>
          <property name="text">
-          <string>Read log file (IDALog_[mzml_file_name].log)</string>
+          <string>Read FLASHIda scan commands ([mzml_file_name]_[time stamp]/scan_commands.tsv)</string>
          </property>
         </widget>
        </item>

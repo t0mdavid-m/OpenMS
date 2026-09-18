@@ -20,6 +20,8 @@
 #include <QSignalBlocker>
 #include <QtCore/QDateTime>
 #include <QtCore/QDir>
+#include <QtCore/QFileInfo>
+#include <QtCore/QRegularExpression>
 #include <algorithm>
 
 using namespace std;
@@ -75,6 +77,24 @@ namespace OpenMS
       return FileHandler::swapExtension(File::basename(infile), FileTypes::TSV);
     }
 
+    /// ADR-0046: the scan_commands.tsv of every FLASHIda run folder beside @p mzml. FLASHIda names that folder
+    /// <raw name>_<yyyy-MM-dd-HH-mm-ss>, plus _<n> on a collision (LogPathResolver.Compose). The stamp is matched
+    /// strictly, so "X_R2" cannot pick up the folder of "X_R2_20260916015201".
+    QStringList findScanCommandsFiles(const QString& mzml)
+    {
+      const QFileInfo info(mzml);
+      const QDir dir = info.dir();
+      const QRegularExpression run_folder("^" + QRegularExpression::escape(info.completeBaseName())
+                                          + "_\\d{4}-\\d{2}-\\d{2}-\\d{2}-\\d{2}-\\d{2}(_\\d+)?$");
+      QStringList found;
+      for (const QString& sub : dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot))
+      {
+        const QString candidate = dir.filePath(sub + "/scan_commands.tsv");
+        if (run_folder.match(sub).hasMatch() && QFileInfo::exists(candidate)) { found << candidate; }
+      }
+      return found;
+    }
+
     StringList FLASHDeconvTabWidget::getMzMLInputFiles() const
     {
       return ui->input_mzMLs->getFilenames();
@@ -107,6 +127,13 @@ namespace OpenMS
         updateOutputParamFromPerInputFile(mzML.toQString());
         Param tmp_param = Param(fd_param);
         tmp_param.insert("FLASHDeconv:1:", flashdeconv_param_outputs_);
+        if (ui->checkbox_readlogfile->isChecked())
+        {
+          // FLASHDeconv registers scan_commands under its "FD:" subsection. Written at the tool's top level -- as
+          // ida_log was -- it is an unknown INI key, which TOPPBase answers with a warning and FLASHDeconv never reads.
+          // checkFDInputReady_ has established that exactly one run folder matches.
+          tmp_param.setValue("FLASHDeconv:1:FD:scan_commands", findScanCommandsFiles(mzML.toQString()).front().toStdString());
+        }
 
         ParamXMLFile().store(tmp_ini, tmp_param);
 
@@ -185,12 +212,6 @@ namespace OpenMS
         flashdeconv_output_tags_.emplace_back("out_feature1");
         flashdeconv_output_tags_.emplace_back("out_feature2");
       }
-
-      // optional FLASHIda support part
-      if (ui->checkbox_readlogfile->isChecked())
-      {
-        flashdeconv_output_tags_.push_back("ida_log");
-      }
     }
 
     void FLASHDeconvTabWidget::updateOutputParamFromPerInputFile(const QString& input_file_name)
@@ -211,7 +232,7 @@ namespace OpenMS
           is_requested = true;
         }
 
-        if (tag == "out_mzml" || tag == "out_annotated_mzml" || tag == "out_quant" || tag == "ida_log"
+        if (tag == "out_mzml" || tag == "out_annotated_mzml" || tag == "out_quant"
             || tag == "out_spec1"|| tag == "out_spec2"|| tag == "out_spec3"|| tag == "out_spec4"
             || tag == "out_msalign1" || tag == "out_msalign2"
             || tag == "out_feature1" || tag == "out_feature2") //  params having string values //  params having string values
@@ -236,12 +257,6 @@ namespace OpenMS
           else if (tag == "out_quant")
           {
             out_path += "_quant.tsv";
-          }
-          else if (tag == "ida_log")
-          {
-            String dir_path_only = File::path(input_file_name);
-            String file_name_only = FileHandler::stripExtension(File::basename(input_file_name));
-            out_path = dir_path_only + '/' + "IDALog_" + file_name_only + ".log";
           }
           else if (tag == "out_spec1")
           {
@@ -319,9 +334,8 @@ namespace OpenMS
       for (const auto& name : out_params)
         flashdeconv_param_.remove(name);
 
-      // add ida_log parameter to flashdeconv_param_outputs_ (rename ida_log to get it out of "FD:" prefix)
-      flashdeconv_param_outputs_.setValue("ida_log", "", flashdeconv_param_.getDescription("FD:ida_log"), flashdeconv_param_.getTags("FD:ida_log"));
-      flashdeconv_param_.remove("FD:ida_log");
+      // FD:scan_commands is set per input file in on_run_fd_clicked, from the FLASHIda checkbox; keep it out of the editor
+      flashdeconv_param_.remove("FD:scan_commands");
 
       ui->list_editor->load(flashdeconv_param_);
     }
@@ -358,6 +372,25 @@ namespace OpenMS
       {
         QMessageBox::critical(this, "Error", "Input mzML file(s) are missing! Please provide at least one!");
         return false;
+      }
+
+      // ADR-0046 decision 6: an input whose FLASHIda run folder cannot be resolved is an error BEFORE anything runs,
+      // never a silently uncoupled deconvolution.
+      if (ui->checkbox_readlogfile->isChecked())
+      {
+        QString problems;
+        for (const auto& mzML : ui->input_mzMLs->getFilenames())
+        {
+          const QStringList found = findScanCommandsFiles(mzML.toQString());
+          if (found.size() == 1) { continue; }
+          problems += "\n\n" + mzML.toQString() + (found.isEmpty() ? QString(": no run folder") : ": several run folders:\n  " + found.join("\n  "));
+        }
+        if (!problems.isEmpty())
+        {
+          QMessageBox::critical(this, "Error", "FLASHIda scan commands were requested, but for these inputs there is not exactly one "
+                                "[mzml_file_name]_[yyyy-MM-dd-HH-mm-ss]/scan_commands.tsv beside the mzML file:" + problems);
+          return false;
+        }
       }
 
       return true;
