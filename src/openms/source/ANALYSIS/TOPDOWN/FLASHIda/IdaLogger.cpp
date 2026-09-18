@@ -431,13 +431,21 @@ namespace OpenMS
     // the resolution a reader needs to tell a bound window from a hand-override. fixed+4 holds 4 decimals at
     // any m/z in range.
     auto mz = [](double v) { std::ostringstream os; os << std::fixed << std::setprecision(4) << v; return os.str(); };
+    // mono_mass sets its OWN format (ADR-0046 decision 10). Through sc() it printed at the stream default --
+    // six SIGNIFICANT digits, "12351.4" for 12351.3933 -- the defect ADR-0035 decision 5 fixed in ida.log, and a
+    // logged value that was not the decision value. A LOCAL stream, like mz() above and for its reason. Stage-less
+    // rows (MS1 / AGC / monitor) keep their "0": there is no mass there, and "0.0000" would revalue every such row.
+    auto mass = [&](double v0, double v1) {
+      if (cmd.num_stages == 0) { return std::string("0"); }
+      std::ostringstream os; os << std::fixed << std::setprecision(4) << v0; if (cmd.msn_level == 3) { os << ';' << v1; } return os.str();
+    };
     commands_tsv_stream_ << id_str << "\t"
                          << scan_type << "\t"
                          << cmd.msn_level << "\t"
                          << parent_id << "\t"
                          << precursor_id << "\t"          // P5: per-MS1-selection precursor identity
                          << cmd.priority << "\t"
-                         << sc(cmd.mono_mass, cmd.mono_mass_s1) << "\t"
+                         << mass(cmd.mono_mass, cmd.mono_mass_s1) << "\t"
                          << charges << "\t"
                          << precursor_mzs << "\t"
                          << iso_widths << "\t"

@@ -13,6 +13,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandJoin.h>
 
 #include <cmath>     // std::abs on the parsed float masses
+#include <iomanip>   // fixed4 in scan_commands_mono_mass_is_written_at_four_decimals
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -1000,6 +1001,57 @@ START_SECTION(scan_commands_massRank)
   TEST_TRUE(res < 0.001)
   TEST_EQUAL(ScanCommandJoin::massRank(12354.4004, 12351.3933, res), -1)   // three isotopes: another call
   TEST_EQUAL(ScanCommandJoin::massRank(12351.8933, 12351.3933, res), -1)   // half a dalton: another mass
+}
+END_SECTION
+
+// T20 -- scan_commands.tsv's mono_mass is the DECISION value, at four decimals (ADR-0046 decision 10).
+//
+// It used to go through sc(), i.e. the stream default of six SIGNIFICANT digits: "12351.4" for a
+// commanded 12351.3933 -- the defect ADR-0035 decision 5 fixed in ida.log. This section is the ONLY
+// gate on the fix: the C# golden comparer accepts 12351.4 against 12351.3933 with ~1800x headroom
+// (RelTol 1e-3), so no golden can see the precision either way.
+// Fails if mono_mass goes back through sc(), or if the stage-less "0" becomes "0.0000" -- which would
+// revalue every MS1 / AGC row and break FLASHIda_LoggingFields_test::commands_ms1_agc_stageless.
+START_SECTION(scan_commands_mono_mass_is_written_at_four_decimals)
+{
+  auto ms1 = loadTsvScans(FI_MS1_CYTC);
+  auto ms2 = loadTsvScans(FI_MS2_CYTC);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  const std::string dir = freshLogDir("scj_t20");
+  std::string json = buildJsonWithLogDir(dir, true);
+  FLASHIda ida(const_cast<char*>(json.c_str()));
+  const int budget = 256 + 64 * static_cast<int>(ms1.size() + ms2.size());
+  AcqResult acq = runInterleaved(&ida, ms1, ms2, nullptr, budget);
+  ABORT_IF(acq.ms2_cmds.empty() || acq.ms3_cmds.empty())   // vacuity guard: all three row shapes must occur
+
+  auto t = TSVFile::parse(dir + "/scan_commands.tsv");
+  std::map<std::string, std::string> text_of;   // tracking_id -> the mono_mass cell AS WRITTEN
+  for (const auto& row : t.rows) text_of[cell(t, row, "tracking_id")] = cell(t, row, "mono_mass");
+
+  auto fixed4 = [](double v) { std::ostringstream os; os << std::fixed << std::setprecision(4) << v; return os.str(); };
+
+  int stageless = 0, ms2_rows = 0, ms3_rows = 0, above_10k = 0, missing = 0, wrong = 0;
+  for (const auto& c : acq.all_cmds)
+  {
+    auto it = text_of.find(ScanCommandQueue::encode(c.scan_id));
+    if (it == text_of.end()) { missing++; continue; }
+    std::string want;
+    if (c.num_stages == 0)      { want = "0"; stageless++; }
+    else if (c.msn_level == 3)  { want = fixed4(c.mono_mass) + ";" + fixed4(c.mono_mass_s1); ms3_rows++; }
+    else                        { want = fixed4(c.mono_mass); ms2_rows++; if (c.mono_mass >= 10000.0) above_10k++; }
+    if (it->second != want)     // byte for byte
+    {
+      wrong++;
+      std::cout << "[MONO-MASS] id=" << it->first << " wrote '" << it->second << "' want '" << want << "'" << std::endl;
+    }
+  }
+  TEST_EQUAL(missing, 0)
+  TEST_EQUAL(wrong, 0)
+  TEST_TRUE(stageless > 0)
+  TEST_TRUE(ms2_rows > 0)
+  TEST_TRUE(ms3_rows > 0)
+  TEST_TRUE(above_10k > 0)   // where six significant digits lose a decimal
 }
 END_SECTION
 
