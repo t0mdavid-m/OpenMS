@@ -23,7 +23,7 @@ Headers under `src/openms/include/OpenMS/ANALYSIS/TOPDOWN/`, sources under
 `CandidateAdmission.h`, `Ms2Params.h`, `NotchSelection.h` and `ProteoformTracker.h` are live but
 unregistered (verified 2026-09-04 — the list is longer than it used to be). Glob the directory
 instead. It costs nothing to register a new header there and it keeps the drift from growing;
-`ScanRole.h` is.
+`ScanRole.h` and `ScanCommandJoin.h` are.
 
 ### The untouchable boundary
 
@@ -511,8 +511,8 @@ the caller's responsibility.
 
 | Stream | Cols | Role |
 |---|---|---|
-| `ida.log` | — | free-text MS1 summary (not a TSV); the only stream with an outside consumer, and the only one keyed on the **instrument** scan number |
-| `scan_commands.tsv` | 34 | one row per **dequeued** command; the wide MS3-fragment stream (32→34 ADR-0026 `first_mass`/`last_mass`, between `faims_enabled` and the trailing `enqueue_ts`) |
+| `ida.log` | — | free-text MS1 summary (not a TSV) — the record of acquisition *decisions*, and the only stream keyed on the **instrument** scan number. It **no longer has a reader outside FLASHIda** (ADR-0046); `PrecursorSelection`'s `target_log_files` loader is the one that remains |
+| `scan_commands.tsv` | 34 | one row per **dequeued** command; the wide MS3-fragment stream (32→34 ADR-0026 `first_mass`/`last_mass`, between `faims_enabled` and the trailing `enqueue_ts`). **The stream FLASHDeconv reads** (`-FD:scan_commands`, ADR-0046) — see *Offline coupling* below |
 | `scan_results.tsv` | 36 | pure acquisition-**event** log per `processScan` (34→29 identification payload moved out, →28 per-charge deconv restructure, →29 `deconv_qscores`; →32 the identification-YIELD block `tag_count`/`fragment_count`/`tic_coverage` after `remaining_ratio`; →36 ADR-0038's quant block `quant_channels`/`quant_condition_means`/`quant_fold_change`/`quant_verdict`, **appended** after `dequeue_ts` because every `r.colIndex` pinned in `FLASHIda_LoggingFields_test` is ≤ 21 and appending is the only placement that invalidates none of them) |
 | `identification.tsv` | 34 | per-scan MS2/MS3 identification leaf (32→34: `tag_count` beside `flash_extender_score`, `fragment_qscores` inside the aligned fragment-mass table) |
 | `pooled_identification.tsv` | 19 | per-precursor cumulative proteoform trajectory |
@@ -521,15 +521,18 @@ the caller's responsibility.
   (ADR-0035). `MS1 Scan#` is the **instrument's** scan number, arriving as a trailing `int` on
   `processScan` and used for nothing else; `Access ID` on the same line is the base-94 **tracking
   id**, which is the join key to the other four streams. The port had `MS1 Scan#` carrying the
-  tracking id, which did not merely mis-key `FLASHDeconvAlgorithm`'s `precursor_map_for_ida_` — it
-  made the join unsatisfiable, since that walk returns at `iter->first < scan_number - 50` and
-  tracking ids never reach the thousands instrument scan numbers do. `<= 0` means "not supplied" and
-  the writer falls back to the tracking id, warning **once** per run (it flushes under
+  tracking id, which made FLASHDeconv's old `ida.log` join unsatisfiable rather than merely
+  mis-keyed — tracking ids count 1, 2, 3… and never reach the thousands instrument scan numbers do.
+  (That consumer — `precursor_map_for_ida_` / `findPrecursorPeakGroupsFormIdaLog_` — **is gone**:
+  ADR-0046 joins by tracking id through `scan_commands.tsv` instead.) `<= 0` means "not supplied"
+  and the writer falls back to the tracking id, warning **once** per run (it flushes under
   `ida_log_mutex_`).
   ⚠️ **Both readers of this grammar anchor on `" 0 targets"` with the leading space.** The bare
   substring also matches `"10 targets"` / `"20 targets"`, which command fan-out makes routine.
-  `parseFLASHIdaLog` is one reader; `PrecursorSelection`'s `targeting.target_log_files` loader is the
-  other, and it is in-scope — feeding an engine-written `ida.log` back in is a supported round trip.
+  `parseFLASHIdaLog` is one reader — since ADR-0046 it has **no production caller**, only the four
+  writer round-trip sections in the logging tests, and it stays where it is by decision;
+  `PrecursorSelection`'s `targeting.target_log_files` loader is the other, and it is in-scope —
+  feeding an engine-written `ida.log` back in is a supported round trip.
 - **`Mass=` and `AllMass=` are the same rendering, and that is asserted** (ADR-0035 decision 5).
   Both are `std::fixed << setprecision(4)`, so a target's mass appears **verbatim** among its own
   entry's `AllMass=` tokens. `Mass=` used to say `std::defaultfloat` with no precision of its own —
@@ -540,6 +543,16 @@ the caller's responsibility.
   ~5 Da wrong, on 99.4 % of targets in the field. A new field added to these lines **must set its
   own precision**; `ida_log_target_line_precision_is_pinned` pins every token's rendered width so
   the next one cannot repeat it silently.
+- **`scan_commands.tsv`'s `mono_mass` had the same defect, and has its own formatter now**
+  (ADR-0046 decision 10). It shared the `sc()` lambda with ten other columns, i.e. the stream
+  default of six *significant* digits — `12351.4` for a commanded 12351.3933. `mass()` prints four
+  decimals and keeps the stage-less rows' literal `"0"` (`num_stages == 0`), because `"0.0000"` would
+  revalue every MS1/AGC row and break `commands_ms1_agc_stageless`'s raw `== "0"`.
+  ⚠️ **No golden can see this.** `GoldenNumericComparer` accepts `12351.4` against `12351.3933`
+  with ~1800× headroom (`RelTol 1e-3`), so the 28 `scan_commands` goldens were deliberately **not**
+  recaptured and still show six significant digits. The only gate is
+  `FLASHIda_Logging_test::scan_commands_mono_mass_is_written_at_four_decimals`, which compares the
+  written cell **byte for byte** with the dequeued command's own `double`.
 - **`ChargeRange` is the species' measured charge envelope**, `PeakGroup::getAbsChargeRange()` of
   the PeakGroup the command was built from (ADR-0035 decision 6) — not the trigger charge printed
   twice, which is what it was. `writeIDALogEntry` takes it through `ms2_sources`, a vector
@@ -547,9 +560,13 @@ the caller's responsibility.
   looking the mass up in the deconvolved spectrum: several PeakGroups routinely share one mass in a
   survey (ADR-0036 split envelopes — 48 of the 1324 committed golden target lines sit on a species
   with 2–4 of them), each carrying a different charge subset, so a lookup would pick one of several
-  answers with nothing to notice. It leaves FLASHIda via `parseFLASHIdaLog` → `setAbsChargeRange` and
-  reaches `FLASHDeconvFeatureFile` as columns 10–11 (`z`, `Z`) of `*_ms2.feature`, so a degenerate
-  `[z-z]` told TopPIC every ida.log-sourced feature was single-charge.
+  answers with nothing to notice. A degenerate `[z-z]` told every reader of the log that the
+  species was seen at one charge only.
+  ⚠️ This file used to say the range "reaches `FLASHDeconvFeatureFile` as columns 10–11 of
+  `*_ms2.feature`". That was wrong twice: the file was **`_ms1.feature`** (the synthetic one-scan
+  feature minted for a precursor rebuilt from a log row), which a single-run TopPIC search never
+  opens — and since ADR-0046 no `ida.log` value reaches FLASHDeconv at all. It is also why
+  `scan_commands.tsv` deliberately carries **no** charge-range column.
 - **Rows are written at dequeue**, from 2 sites inside `getNextScanCommand`. So row order == dequeue
   order, and an enqueued-but-never-dequeued command never appears. Only the priority-dequeue site
   passes `precursor_id` and `ms3_proteoform` (a one-shot `takeMS3Proteoform`); the scheduled-prescan
@@ -578,6 +595,45 @@ the caller's responsibility.
   `deconv_charges`, is `';'`-only: `PeakGroup::getQscore()` is one value per mass — the representative
   charge's, not an envelope aggregate — so it stays index-aligned 1:1 with `deconv_masses`, on every
   MS level.
+
+## Offline coupling — FLASHDeconv reads `scan_commands.tsv` (ADR-0046)
+
+`FLASHIda/ScanCommandJoin.h` is the one piece of FLASHIda code that runs **offline**, inside
+FLASHDeconv. It is header-only, stateless, and knows nothing about FLASHDeconv — which is what lets
+it be tested here (`FLASHIda_Logging_test`, the twenty `scan_commands_*` sections) when no CI job
+runs FLASHDeconv at all.
+
+```
+mzML spectrum ── "scan description"[0..2] = tracking id ──► scan_commands.tsv row
+row.parent_tracking_id ── walked UP the rows to the ms_level 1 row ──► the survey the command was decided from
+FLASHDeconv then takes ITS OWN PeakGroup nearest row.mono_mass from THAT survey
+```
+
+- **The tracking id survives conversion.** msconvert writes the scan-description trailer as the
+  spectrum-level userParam `scan description`, which `MzMLHandler` loads as a meta value. ADR-0035
+  and the glossary used to call the instrument scan number "the only one that survives"; it is not.
+- **The row is a locator, not a measurement.** Commands queue, so 88 % of commanded MS2 have 1–5
+  newer surveys between them and the survey their command came from. FLASHDeconv used to search the
+  *latest* one and agreed with the commanded mass 40–46 % of the time, against 95 % when it happened
+  to read the right one. Its deconvolution of the right survey holds the commanded mass for 99.8 %
+  of MS2, so the reported mass, charge range and feature linkage stay FLASHDeconv's own.
+- **A follow-up MS2's parent is the MS2 that triggered it**, not the survey
+  (`ScanCommandQueue::buildFollowUp`), which is why `join` *walks* the parent chain rather than
+  reading one hop.
+- **The join fails closed, before any deconvolution.** Tracking ids restart in every run, so a
+  foreign `scan_commands.tsv` joins 100 % of scans by id; the row-vs-spectrum check (MS level, anchor
+  m/z within 0.01) is what tells them apart. A duplicate id, or a file that joins nothing, aborts too.
+  A spectrum with no id or no row is an ordinary **uncommanded scan** and is never an error.
+- **MS2 only.** MS3 rows are parsed and level-checked; nothing locates an MS3 yet — no acquired run
+  exists to show how pwiz writes a two-stage precursor list.
+- ⚠️ **`parse` resolves columns by header name and requires no column added after 2026-09.** Every
+  run folder already on disk must keep parsing; `scan_commands_parse_reads_a_pre_adr0046_run_folder_file`
+  pins that with three rows copied from a real one. A column *rename* in `IdaLogger` breaks
+  `scan_commands_parse_roundtrips_an_engine_written_file` — which is the point.
+
+The FLASHDeconv side (`FLASHDeconvAlgorithm::run` + `findPrecursorPeakGroupsForMSnSpectra_`, and
+`FLASHDeconvTabWidget`) is **inside the no-go boundary** and was edited by an owner-approved, locked
+line list. The boundary has not moved.
 
 ## Co-isolation notches (ADR-0016, ADR-0019)
 
