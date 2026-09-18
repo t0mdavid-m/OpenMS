@@ -176,11 +176,11 @@ FLASHIda::FLASHIda(char* arg) :
     // commands_pushed stays 0, child_ids stays empty, and every other field keeps its sentinel --
     // all of which is the truth about a scan that decided nothing.
     //
-    // NO ida.log entry, deliberately. That file is the record of acquisition DECISIONS and the
-    // FLASHDeconv coupling file; a monitor scan makes none and must not couple. Its entry would read
-    // "- 0 targets", which BOTH readers (IdaLogger::parseFLASHIdaLog and PrecursorSelection's
-    // target_log_files loader) skip by design -- so it would carry nothing to any consumer while
-    // adding noise to the one stream with an outside reader.
+    // NO ida.log entry, deliberately. That file is the record of acquisition DECISIONS; a monitor
+    // scan makes none. Its entry would read "- 0 targets", which BOTH readers
+    // (IdaLogger::parseFLASHIdaLog and PrecursorSelection's target_log_files loader) skip by design
+    // -- so it would carry nothing to any reader while adding noise to the decision record.
+    // (FLASHDeconv no longer reads ida.log at all -- ADR-0046.)
   }
 
   int FLASHIda::runSurveyMS1_(const double* mzs, const double* ints, int length, double rt_min,

@@ -2021,8 +2021,7 @@ START_SECTION(ida_log_all15_fields)
       TEST_TRUE(finiteVal(p[14]))                   // e14 ppm_error
       // e7/e8 ChargeRange is the species' MEASURED charge envelope (ADR-0035 decision 6), read off
       // the PeakGroup the command was built from -- it used to be the trigger charge printed twice,
-      // which told FLASHDeconvFeatureFile (cols 10-11 of *_ms2.feature) that every ida.log-sourced
-      // feature was single-charge.
+      // which told every reader of the log that the species was seen at one charge only.
       const int z_lo   = (int)std::lround(p[7]);
       const int z_hi   = (int)std::lround(p[8]);
       const int z_trig = (int)std::lround(p[1]);

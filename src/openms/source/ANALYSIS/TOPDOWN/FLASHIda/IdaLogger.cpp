@@ -222,12 +222,11 @@ namespace OpenMS
     // line carries it.
     const std::string tracking_id_str = ScanCommandQueue::encode(tracking_id);
 
-    // "MS1 Scan#" is the INSTRUMENT's scan number -- what FLASHDeconv matches against the mzML
-    // native id, and what the pre-port C# writer put here (ADR-0035). It used to be the tracking id,
-    // which made the join structurally unsatisfiable rather than merely wrong: tracking ids count
-    // 1,2,3... while instrument scan numbers run into the thousands, so past ~50 scans
-    // findPrecursorPeakGroupsFormIdaLog_'s `iter->first < scan_number - 50` cutoff sits above every
-    // key in the map and it returns before attempting a single isolation-window match.
+    // "MS1 Scan#" is the INSTRUMENT's scan number -- what places this entry in the converted data
+    // file, and what the pre-port C# writer put here (ADR-0035). It used to be the tracking id, which
+    // counts 1,2,3... while instrument scan numbers run into the thousands, so nothing keyed on it
+    // could ever join. (Its original consumer, FLASHDeconv's ida.log path, is gone -- ADR-0046 joins
+    // by tracking id instead.)
     //
     // Falling back to the tracking id (rather than writing 0, or refusing the entry) keeps an
     // offline or synthetically-driven run producing exactly the log it produced before.
@@ -236,7 +235,8 @@ namespace OpenMS
     {
       warned_missing_scan_number_ = true;
       std::cout << "No instrument scan number supplied to processScan; ida.log 'MS1 Scan#' will "
-                   "carry the tracking id instead. FLASHDeconv coupling on this log will not resolve."
+                   "carry the tracking id instead, so this log cannot be placed against the converted "
+                   "data file by scan number."
                 << std::endl;
     }
 
@@ -266,8 +266,8 @@ namespace OpenMS
       // PeakGroups routinely share one mass within a survey (ADR-0036 split envelopes -- 48 of the
       // 1324 committed golden target lines sit on a species with 2-4 of them), and each carries a
       // different charge subset, so a lookup would silently pick one of several answers.
-      // It reaches FLASHDeconvFeatureFile as columns 10-11 (z, Z) of *_ms2.feature, so a degenerate
-      // [z-z] tells TopPIC every ida.log-sourced feature is single-charge.
+      // A degenerate [z-z] would tell every reader of this log that the species was seen at one
+      // charge only.
       // Missing source => fall back to the trigger charge, i.e. the pre-ADR-0035 output rather than
       // a fabricated range. FLASHIda_LoggingFields_test's any_wider assertion is what catches that
       // fallback becoming the norm.
