@@ -37,8 +37,9 @@ using namespace std;
   Also for MSn spectra, the precursor masses (not peak m/zs) should be determined and assigned in most cases. This assignment
   can be done by tracking MSn-1 spectra deconvolution information. Thus FLASHDeconv class keeps MSn-1 spectra deconvolution information
   for a certain period for precursor mass assignment in DeconvolvedSpectrum class.
-  In case of FLASHIda runs, this precursor mass assignment is done by FLASHIda. Thus FLASHDeconv class simply parses the log file
-  from FLASHIda runs and pass the parsed information to DeconvolvedSpectrum class.
+  In case of FLASHIda runs, FLASHIda decided which precursor each MSn scan was acquired for. Given the run's scan_commands.tsv
+  (-FD:scan_commands), FLASHDeconv joins each spectrum to its command by the tracking id in the spectrum's scan description, and
+  takes its own deconvolved mass for the commanded precursor from the MS1 spectrum that command was decided from.
 
 See https://openms.de/FLASHDeconv for more information.
 
@@ -215,7 +216,6 @@ protected:
     Param fd_param;
     fd_param.insert("", tmp_fd_param);
     bool report_decoy = tmp_fd_param.getValue("report_FDR") != "false";
-    //double topfd_snr_threshold = 0;// tmp_fd_param.getValue("ida_log").toString().empty() ? getDoubleOption_("precursor_snr") : .0;
 
     tmp_fd_param = getParam_().copy("SD:", false);
     fd_param.insert("", tmp_fd_param);

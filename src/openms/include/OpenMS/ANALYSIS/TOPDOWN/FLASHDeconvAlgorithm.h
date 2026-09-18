@@ -10,6 +10,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandJoin.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
 #include <OpenMS/DATASTRUCTURES/DefaultParamHandler.h>
@@ -101,8 +102,8 @@ namespace OpenMS
     /// the number of preceding full scans from which MS2 precursor mass will be searched.
     //int precursor_MS1_window_ = 0;
 
-    /// FLASHIda log file name
-    String ida_log_file_;
+    /// the FLASHIda acquisition's scan_commands.tsv (ADR-0046); empty = no coupling
+    String scan_commands_file_;
 
     /// mass tolerances, and minimum cosine scores per MS level
     DoubleList tols_, min_cos_;
@@ -118,8 +119,8 @@ namespace OpenMS
 
     /// noise decoy weight determined with qvalue calcualtion.
     double noise_decoy_weight_ = 1;
-    /// FLASHIda parsing information is stored here: MS1 scan - information
-    std::map<int, std::vector<std::vector<float>>> precursor_map_for_ida_;
+    /// ADR-0046: the commanded MS2 scans by scan number, each naming the survey its command was decided from
+    std::map<int, ScanCommandJoin::Located> located_by_scan_;
     /// a map from native ID to precursor peak
     std::map<String, Precursor> native_id_precursor_peak_map_;
     /// a map from native ID to precursor peak group
@@ -142,8 +143,9 @@ namespace OpenMS
     /// with found deconvolved features, update QScores for masses that are contained in features.
     static void updatePrecursorQScores_(std::vector<DeconvolvedSpectrum>& deconvolved_spectra, int ms_level);
 
-    /// find precursor peak groups from FLASHIda log file
-    void findPrecursorPeakGroupsFormIdaLog_(const MSExperiment& map, Size index, double start_mz, double end_mz);
+    /// ADR-0046: the one-peak precursor peak group of a commanded scan whose mass FLASHDeconv's own
+    /// deconvolution of the survey lacks
+    PeakGroup peakGroupFromCommand_(const ScanCommandJoin::Located& located) const;
 
     /// register the precursor peak group (or mass) if possible for MSn (n>1) spectrum.
     void findPrecursorPeakGroupsForMSnSpectra_(const MSExperiment& map, const std::vector<DeconvolvedSpectrum>& deconvolved_spectra, uint ms_level);
