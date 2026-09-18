@@ -10,6 +10,7 @@
 
 #include <OpenMS/CONCEPT/ClassTest.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandJoin.h>
 
 #include <cmath>     // std::abs on the parsed float masses
 #include <fstream>
@@ -34,6 +35,75 @@ namespace
   // JSON config builder now live in FLASHIda_TestHelpers.h (included above).
   const std::string ms1_tsv_path = "../../FlashIDA/test-data/spectra/ms1_standard.txt";
   const std::string ms2_tsv_path = "../../FlashIDA/test-data/spectra/ms2_hcd_fragment.txt";
+
+  // ---- Fixture for the ADR-0046 sections (scan_commands_parse_* / scan_commands_join_*) ----------
+  //
+  // REAL data, not invented: the header and three rows of a run folder's own scan_commands.tsv
+  // (Eclipse, 2026-09-15 -- a PRE-ADR-0046 file, mono_mass at six significant digits), with the
+  // spectra facts from that run's mzML: survey !!= is scan 32, survey !!> is scan 33, and MS2 !!B is
+  // scan 37 isolating 531.790649. A newer survey really does sit between the command's survey and
+  // its scan -- which is the whole reason the join exists.
+  using Cells = std::vector<std::string>;
+
+  const Cells kCmdHeader = {"tracking_id", "scan_type", "ms_level", "parent_tracking_id", "precursor_id", "priority",
+                            "mono_mass", "charge", "precursor_mz", "isolation_width", "qscore", "charge_cos",
+                            "charge_snr", "iso_cos", "snr", "charge_score", "activation", "collision_energy",
+                            "hcd_energy", "reaction_time", "reagent_max_it", "reagent_agc_target", "ppm_error",
+                            "precursor_intensity", "peakgroup_intensity", "ion_type", "ion_index", "ms3_proteoform",
+                            "scan_description", "faims_cv", "faims_enabled", "first_mass", "last_mass", "enqueue_ts"};
+
+  Cells surveyRow(const std::string& id, const std::string& enqueue_ts)
+  {
+    return {id, "survey", "1", "", "0", "3",
+            "0", "0", "0", "0", "0", "0", "0", "0", "0", "0",   // mono_mass .. charge_score: stage-less placeholders
+            "none",
+            "0", "0", "0", "0", "0", "0", "0", "0",             // collision_energy .. peakgroup_intensity
+            "", "0", "", id + "S", "0", "0", "500.0000", "2000.0000", enqueue_ts};
+  }
+
+  const Cells kS32 = surveyRow("!!=", "267351474");
+  const Cells kS33 = surveyRow("!!>", "267351740");
+  const Cells kM37 = {"!!B", "recording", "2", "!!=", "1", "2", "5305.33", "10", "531.791", "0.901196", "0.443474",
+                      "0.738412", "5.70422", "0.859759", "3.90517", "1", "HCD", "29", "29", "0", "0", "0", "0.608297",
+                      "2134.16", "2947.43", "", "0", "", "!!BR5.30533k@10", "0", "0", "200.0000", "2000.0000",
+                      "267352272"};
+
+  // @p row with one named cell replaced.
+  Cells withCell(Cells row, const std::string& column, const std::string& value)
+  {
+    for (size_t i = 0; i < kCmdHeader.size(); ++i)
+      if (kCmdHeader[i] == column) row[i] = value;
+    return row;
+  }
+
+  // A scan_commands.tsv written by hand into a fresh dir; returns its path.
+  std::string writeCommandsFile(const std::string& tag, const std::vector<Cells>& lines)
+  {
+    const std::string path = freshLogDir(tag) + "/scan_commands.tsv";
+    std::ofstream f(path);
+    for (const auto& cells : lines)
+    {
+      for (size_t i = 0; i < cells.size(); ++i) f << (i ? "\t" : "") << cells[i];
+      f << "\n";
+    }
+    return path;
+  }
+
+  ScanCommandJoin::Scan scanOf(int number, int level, const std::string& description, const std::vector<double>& targets = {})
+  {
+    ScanCommandJoin::Scan s;
+    s.scan_number = number;
+    s.ms_level = level;
+    s.scan_description = description;
+    s.isolation_targets = targets;
+    return s;
+  }
+
+  // The three spectra the three fixture rows belong to.
+  std::vector<ScanCommandJoin::Scan> realScans()
+  {
+    return {scanOf(32, 1, "!!=S"), scanOf(33, 1, "!!>S"), scanOf(37, 2, "!!BR5.30533k@10", {531.790649})};
+  }
 }
 
 START_TEST(FLASHIda_Logging, "$Id$")
@@ -642,6 +712,294 @@ START_SECTION(concurrent_drain_writes_one_wellformed_row_per_call)
 
   std::cout << "[DRAIN-CONCURRENCY] calls=" << kTotalCalls << " rows=" << tsv.rows.size()
             << " wellformed=" << wellformed << " unique_ids=" << ids.size() << std::endl;
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// ADR-0046 -- ScanCommandJoin: reading a scan_commands.tsv back, and joining it to a data file
+//
+// FLASHDeconv locates the precursor of a commanded MS2 through this join instead of searching for
+// it. The join is pure (file -> rows, data -> data), which is why it is tested HERE: no CI job runs
+// FLASHDeconv. Each section states the bug under which it fails.
+/////////////////////////////////////////////////////////////
+
+// T1 -- every file the engine has ever written must parse (ADR-0046 decision 9).
+// Fails if a required column is misnamed, or the reader demands a column old files do not have.
+START_SECTION(scan_commands_parse_reads_a_pre_adr0046_run_folder_file)
+{
+  auto rows = ScanCommandJoin::parse(writeCommandsFile("scj_t01", {kCmdHeader, kS32, kS33, kM37}));
+  TEST_EQUAL(rows.size(), 3)
+  ABORT_IF(rows.count("!!B") == 0 || rows.count("!!=") == 0)
+
+  const auto& m = rows["!!B"];
+  TEST_EQUAL(m.ms_level, 2)
+  TEST_EQUAL(m.parent_tracking_id, std::string("!!="))
+  TEST_EQUAL(m.charge, 10)
+  TEST_TRUE(std::abs(m.mono_mass - 5305.33) < 1e-9)
+  TEST_TRUE(std::abs(m.precursor_mz - 531.791) < 1e-9)
+  TEST_TRUE(std::abs(m.qscore - 0.443474) < 1e-9)
+  TEST_TRUE(std::abs(m.charge_snr - 5.70422) < 1e-9)
+  TEST_TRUE(std::abs(m.ppm_error - 0.608297) < 1e-9)
+  TEST_TRUE(std::abs(m.precursor_intensity - 2134.16) < 1e-9)
+  TEST_TRUE(std::abs(m.peakgroup_intensity - 2947.43) < 1e-9)
+
+  // A non-MS2 row keeps id / parent / level and nothing else.
+  const auto& s = rows["!!="];
+  TEST_EQUAL(s.ms_level, 1)
+  TEST_TRUE(s.parent_tracking_id.empty())
+  TEST_EQUAL(s.mono_mass, 0.0)
+}
+END_SECTION
+
+// T2 -- the drift guard: whatever the WRITER emits, the reader must take.
+// Fails if IdaLogger renames or drops a column the reader needs -- so the break lands in a test, not
+// in somebody's analysis.
+START_SECTION(scan_commands_parse_roundtrips_an_engine_written_file)
+{
+  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(ms1_scans.empty())
+
+  const std::string dir = freshLogDir("scj_t02");
+  std::string json = buildJsonWithLogDir(dir);
+  FLASHIda ida(const_cast<char*>(json.c_str()));
+  AcqResult acq = runInterleaved(&ida, ms1_scans, std::vector<ScanData>{});
+  ABORT_IF(acq.ms2_cmds.empty())
+
+  auto t = TSVFile::parse(dir + "/scan_commands.tsv");
+  auto rows = ScanCommandJoin::parse(dir + "/scan_commands.tsv");
+  TEST_EQUAL(rows.size(), t.rows.size())   // every row the engine wrote is a Row
+
+  int ms2_rows = 0;
+  bool fields_ok = true, parent_ok = true;
+  for (const auto& row : t.rows)
+  {
+    if (cell(t, row, "ms_level") != "2") continue;
+    ms2_rows++;
+    auto it = rows.find(cell(t, row, "tracking_id"));
+    if (it == rows.end()) { fields_ok = false; continue; }
+    const auto& r = it->second;
+    fields_ok = fields_ok && std::abs(r.mono_mass - toD(cell(t, row, "mono_mass"))) < 1e-6
+                          && r.charge == (int)toD(cell(t, row, "charge"))
+                          && std::abs(r.precursor_mz - toD(cell(t, row, "precursor_mz"))) < 1e-6
+                          && std::abs(r.qscore - toD(cell(t, row, "qscore"))) < 1e-9
+                          && r.mono_mass > 0 && r.charge > 0 && r.precursor_mz > 0;
+    // a production MS2's parent is its survey
+    auto p = rows.find(r.parent_tracking_id);
+    parent_ok = parent_ok && p != rows.end() && p->second.ms_level == 1;
+  }
+  TEST_TRUE(ms2_rows > 0)   // vacuity guard
+  TEST_TRUE(fields_ok)
+  TEST_TRUE(parent_ok)
+}
+END_SECTION
+
+// T3 -- a multiplexed row carries "anchor,notch,notch"; the join wants the anchor (ADR-0016 / 0046 d7).
+// Fails if the whole cell is parsed ("10,9" is not a number) or the LAST notch is taken.
+START_SECTION(scan_commands_parse_takes_the_anchor_of_a_multiplexed_row)
+{
+  Cells msx = withCell(withCell(withCell(kM37, "charge", "10,9"), "precursor_mz", "531.791,590.878"), "isolation_width", "0.9,1.0");
+  auto rows = ScanCommandJoin::parse(writeCommandsFile("scj_t03", {kCmdHeader, kS32, msx}));
+  ABORT_IF(rows.count("!!B") == 0)
+  TEST_EQUAL(rows["!!B"].charge, 10)
+  TEST_TRUE(std::abs(rows["!!B"].precursor_mz - 531.791) < 1e-9)
+}
+END_SECTION
+
+// T4 -- columns are resolved by NAME, so a reorder (and a column from the future) is free.
+// Fails if any index is positional.
+START_SECTION(scan_commands_parse_resolves_columns_by_name)
+{
+  // mono_mass moved to the front, plus an unknown trailing column.
+  auto permute = [](const Cells& c, const std::string& extra) {
+    Cells out;
+    out.push_back(c[6]);
+    for (size_t i = 0; i < c.size(); ++i) if (i != 6) out.push_back(c[i]);
+    out.push_back(extra);
+    return out;
+  };
+  auto rows = ScanCommandJoin::parse(writeCommandsFile("scj_t04", {permute(kCmdHeader, "future_col"), permute(kS32, "x"), permute(kM37, "y")}));
+  ABORT_IF(rows.count("!!B") == 0)
+  const auto& m = rows["!!B"];
+  TEST_EQUAL(m.ms_level, 2)
+  TEST_EQUAL(m.parent_tracking_id, std::string("!!="))
+  TEST_EQUAL(m.charge, 10)
+  TEST_TRUE(std::abs(m.mono_mass - 5305.33) < 1e-9)
+  TEST_TRUE(std::abs(m.precursor_mz - 531.791) < 1e-9)
+  TEST_TRUE(std::abs(m.peakgroup_intensity - 2947.43) < 1e-9)
+}
+END_SECTION
+
+// T5-T9 -- a bad file FAILS CLOSED (ADR-0046 decision 5). Each is one way a bad file could otherwise
+// slip through as "a few rows fewer".
+START_SECTION(scan_commands_parse_rejects_a_missing_file)
+{
+  const std::string dir = freshLogDir("scj_t05");
+  TEST_EXCEPTION(Exception::FileNotFound, ScanCommandJoin::parse(dir + "/absent.tsv"))
+}
+END_SECTION
+
+START_SECTION(scan_commands_parse_rejects_a_missing_required_column)
+{
+  auto drop = [](const Cells& c) { Cells out = c; out.erase(out.begin() + 3); return out; };   // parent_tracking_id
+  const std::string path = writeCommandsFile("scj_t06", {drop(kCmdHeader), drop(kS32), drop(kM37)});
+  TEST_EXCEPTION(Exception::ParseError, ScanCommandJoin::parse(path))
+}
+END_SECTION
+
+START_SECTION(scan_commands_parse_rejects_a_short_row)
+{
+  Cells cut(kM37.begin(), kM37.begin() + 20);
+  const std::string path = writeCommandsFile("scj_t07", {kCmdHeader, kS32, cut});
+  TEST_EXCEPTION(Exception::ParseError, ScanCommandJoin::parse(path))
+}
+END_SECTION
+
+START_SECTION(scan_commands_parse_rejects_a_non_numeric_mass)
+{
+  const std::string path = writeCommandsFile("scj_t08", {kCmdHeader, kS32, withCell(kM37, "mono_mass", "n/a")});
+  TEST_EXCEPTION(Exception::ParseError, ScanCommandJoin::parse(path))
+}
+END_SECTION
+
+START_SECTION(scan_commands_parse_rejects_a_duplicate_tracking_id)
+{
+  const std::string path = writeCommandsFile("scj_t09", {kCmdHeader, kS32, kM37, kM37});
+  TEST_EXCEPTION(Exception::InvalidValue, ScanCommandJoin::parse(path))
+}
+END_SECTION
+
+// T10 -- THE assertion of ADR-0046: the survey is the one the COMMAND names.
+// Fails if the join takes "the MS1 before me" -- which is what FLASHDeconv did, and is wrong for 88 %
+// of commanded MS2 (scan 33 is a newer survey sitting between the command's survey 32 and its scan 37).
+START_SECTION(scan_commands_join_names_the_survey_the_command_came_from)
+{
+  auto rows = ScanCommandJoin::parse(writeCommandsFile("scj_t10", {kCmdHeader, kS32, kS33, kM37}));
+  auto located = ScanCommandJoin::join(realScans(), rows);
+  TEST_EQUAL(located.size(), 1)
+  ABORT_IF(located.count(37) == 0)
+  TEST_EQUAL(located[37].parent_scan_number, 32)
+  TEST_EQUAL(located[37].row.tracking_id, std::string("!!B"))
+  TEST_TRUE(std::abs(located[37].row.mono_mass - 5305.33) < 1e-9)
+}
+END_SECTION
+
+// T11 -- a follow-up MS2's parent is the MS2 that TRIGGERED it (ScanCommandQueue::buildFollowUp), not
+// the survey; the join walks the parent chain up to the MS1 row.
+// Fails if the parent is assumed to be the survey.
+START_SECTION(scan_commands_join_walks_a_follow_up_up_to_its_survey)
+{
+  Cells c40 = withCell(withCell(withCell(withCell(kM37, "tracking_id", "!!C"), "scan_type", "conditional"),
+                                "parent_tracking_id", "!!B"), "scan_description", "!!CC5.30533k@10");
+  auto rows = ScanCommandJoin::parse(writeCommandsFile("scj_t11", {kCmdHeader, kS32, kS33, kM37, c40}));
+  auto scans = realScans();
+  scans.push_back(scanOf(40, 2, "!!CC5.30533k@10", {531.790649}));
+  auto located = ScanCommandJoin::join(scans, rows);
+  TEST_EQUAL(located.size(), 2)
+  ABORT_IF(located.count(40) == 0)
+  TEST_EQUAL(located[40].parent_scan_number, 32)   // through !!B, up to !!=
+}
+END_SECTION
+
+// T12 -- an uncommanded scan is not an error (ADR-0046 decision 4).
+// Fails if a blank or unknown id aborts the join, or if the three-blank non-id the instrument's own
+// scans have been seen to carry trips the duplicate check when it appears twice.
+START_SECTION(scan_commands_join_passes_uncommanded_scans_through)
+{
+  auto rows = ScanCommandJoin::parse(writeCommandsFile("scj_t12", {kCmdHeader, kS32, kS33, kM37}));
+  auto scans = realScans();
+  scans.push_back(scanOf(34, 1, ""));
+  scans.push_back(scanOf(35, 1, "   "));
+  scans.push_back(scanOf(36, 1, "   "));
+  scans.push_back(scanOf(38, 2, "~~~R9.99k@9", {700.0}));   // another acquisition's id
+  auto located = ScanCommandJoin::join(scans, rows);
+  TEST_EQUAL(located.size(), 1)
+  TEST_EQUAL(located.count(37), 1)
+  TEST_EQUAL(located.count(38), 0)
+}
+END_SECTION
+
+// T13 -- the survey can be legitimately absent from the data file (an RT crop), and a root MS2 names
+// no parent at all. Neither is an error: parent_scan_number is -1 and FLASHDeconv keeps its search.
+// Fails if a cropped input aborts, or if -1 is ever taken for a scan number.
+START_SECTION(scan_commands_join_tolerates_a_survey_missing_from_the_data_file)
+{
+  auto rows = ScanCommandJoin::parse(writeCommandsFile("scj_t13a", {kCmdHeader, kS32, kS33, kM37}));
+  std::vector<ScanCommandJoin::Scan> cropped = {scanOf(33, 1, "!!>S"), scanOf(37, 2, "!!BR5.30533k@10", {531.790649})};
+  auto located = ScanCommandJoin::join(cropped, rows);
+  ABORT_IF(located.count(37) == 0)
+  TEST_EQUAL(located[37].parent_scan_number, -1)
+
+  auto root_rows = ScanCommandJoin::parse(writeCommandsFile("scj_t13b", {kCmdHeader, kS32, withCell(kM37, "parent_tracking_id", "")}));
+  auto root_located = ScanCommandJoin::join(realScans(), root_rows);
+  ABORT_IF(root_located.count(37) == 0)
+  TEST_EQUAL(root_located[37].parent_scan_number, -1)
+}
+END_SECTION
+
+// T14 / T15 -- tracking ids restart in every run, so a FOREIGN scan_commands.tsv joins every scan by
+// id (measured: replicate R2's file joins 13,873 of 13,873 of R1's MS2). The row-vs-spectrum check is
+// what tells them apart. Fail if a foreign file joins silently.
+START_SECTION(scan_commands_join_rejects_a_foreign_file_by_mz)
+{
+  auto rows = ScanCommandJoin::parse(writeCommandsFile("scj_t14", {kCmdHeader, kS32, kS33, withCell(kM37, "precursor_mz", "600.123")}));
+  TEST_EXCEPTION(Exception::InvalidValue, ScanCommandJoin::join(realScans(), rows))
+}
+END_SECTION
+
+START_SECTION(scan_commands_join_rejects_a_foreign_file_by_ms_level)
+{
+  // In the other run, id !!= was an MS2; here the spectrum carrying it is a survey.
+  auto rows = ScanCommandJoin::parse(writeCommandsFile("scj_t15", {kCmdHeader, withCell(kS32, "ms_level", "2"), kS33, kM37}));
+  TEST_EXCEPTION(Exception::InvalidValue, ScanCommandJoin::join(realScans(), rows))
+}
+END_SECTION
+
+// T16 -- a file that joins NOTHING is the extreme foreign file, and also what a converter that drops
+// the scan description produces. -FD:scan_commands was given, so an uncoupled run is never silent.
+START_SECTION(scan_commands_join_rejects_a_file_that_joins_nothing)
+{
+  auto rows = ScanCommandJoin::parse(writeCommandsFile("scj_t16", {kCmdHeader, kS32, kS33, kM37}));
+  std::vector<ScanCommandJoin::Scan> bare = {scanOf(32, 1, ""), scanOf(33, 1, ""), scanOf(37, 2, "", {531.790649})};
+  TEST_EXCEPTION(Exception::InvalidValue, ScanCommandJoin::join(bare, rows))
+}
+END_SECTION
+
+// T17 -- one commanded id on two spectra makes every parent lookup ambiguous.
+START_SECTION(scan_commands_join_rejects_one_id_on_two_spectra)
+{
+  auto rows = ScanCommandJoin::parse(writeCommandsFile("scj_t17", {kCmdHeader, kS32, kS33, kM37}));
+  auto scans = realScans();
+  scans.push_back(scanOf(41, 2, "!!BR5.30533k@10", {531.790649}));
+  TEST_EXCEPTION(Exception::InvalidValue, ScanCommandJoin::join(scans, rows))
+}
+END_SECTION
+
+// T18 -- an MSX scan has one precursor element per notch; the anchor may be any of them.
+// Fails if only the first isolation target is compared.
+START_SECTION(scan_commands_join_accepts_any_isolation_target_of_an_msx_scan)
+{
+  auto rows = ScanCommandJoin::parse(writeCommandsFile("scj_t18", {kCmdHeader, kS32, kS33, kM37}));
+  std::vector<ScanCommandJoin::Scan> scans = {scanOf(32, 1, "!!=S"), scanOf(33, 1, "!!>S"),
+                                              scanOf(37, 2, "!!BR5.30533k@10", {590.878, 531.790649})};
+  auto located = ScanCommandJoin::join(scans, rows);
+  TEST_EQUAL(located.count(37), 1)
+}
+END_SECTION
+
+// T19 -- the locator tolerance and the isotope ladder, in one place (ADR-0046 decision 3).
+START_SECTION(scan_commands_massRank)
+{
+  double res = -1;
+  // A six-significant-digit logged mass (every pre-ADR-0046 file) still locates the species.
+  TEST_EQUAL(ScanCommandJoin::massRank(12351.3933, 12351.4, res), 0)
+  TEST_TRUE(res >= 0 && res < 0.01)   // the tie-break input is the distance to the ACCEPTED isotope
+
+  TEST_EQUAL(ScanCommandJoin::massRank(12352.3957, 12351.3933, res), 1)    // +1 isotope
+  TEST_TRUE(res < 0.001)
+  TEST_EQUAL(ScanCommandJoin::massRank(12349.3886, 12351.3933, res), 2)    // -2 isotopes
+  TEST_TRUE(res < 0.001)
+  TEST_EQUAL(ScanCommandJoin::massRank(12354.4004, 12351.3933, res), -1)   // three isotopes: another call
+  TEST_EQUAL(ScanCommandJoin::massRank(12351.8933, 12351.3933, res), -1)   // half a dalton: another mass
 }
 END_SECTION
 

@@ -18,6 +18,7 @@ set(sources_list_h
         FLASHIda/MS3FragmentMatcher.h
         FLASHIda/PrecursorSelection.h
         FLASHIda/Quantification.h
+        FLASHIda/ScanCommandJoin.h
         FLASHIda/ScanCommand.h
         FLASHIda/ScanCommandQueue.h
         FLASHIda/ScanRole.h
