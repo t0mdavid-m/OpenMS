@@ -617,6 +617,14 @@ FLASHDeconv then takes ITS OWN PeakGroup nearest row.mono_mass from THAT survey
   *latest* one and agreed with the commanded mass 40–46 % of the time, against 95 % when it happened
   to read the right one. Its deconvolution of the right survey holds the commanded mass for 99.8 %
   of MS2, so the reported mass, charge range and feature linkage stay FLASHDeconv's own.
+- **A rebuilt precursor is the last resort, not the second** (decision 3, amended 2026-09-20). The
+  commanded mass wins its window at the **same isotope only**; a window holding something else takes
+  that species on **charge-SNR**, exactly as an uncommanded scan does; only a window holding nothing
+  at all is rebuilt from the row by `peakGroupFromCommand_`. The rebuild has one peak and no isotope
+  envelope, and `SpectralDeconvolution::performSpectrumDeconvolution` bounds the **fragment**
+  deconvolution's max charge and max mass by the precursor PeakGroup — so preferring it over a
+  measured species costs the MS2, not just the mass. `MAX_ISOTOPE_OFFSET` and `massRank`'s ladder
+  stay in the header, now with no reader outside its own tests: the call site requires rank `== 0`.
 - **A follow-up MS2's parent is the MS2 that triggered it**, not the survey
   (`ScanCommandQueue::buildFollowUp`), which is why `join` *walks* the parent chain rather than
   reading one hop.
