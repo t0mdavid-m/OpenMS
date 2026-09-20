@@ -143,8 +143,8 @@ namespace OpenMS
     /// with found deconvolved features, update QScores for masses that are contained in features.
     static void updatePrecursorQScores_(std::vector<DeconvolvedSpectrum>& deconvolved_spectra, int ms_level);
 
-    /// ADR-0046: the one-peak precursor peak group of a commanded scan whose mass FLASHDeconv's own
-    /// deconvolution of the survey lacks
+    /// ADR-0046: the one-peak precursor peak group of a commanded scan whose survey window holds no
+    /// deconvolved mass at all
     PeakGroup peakGroupFromCommand_(const ScanCommandJoin::Located& located) const;
 
     /// register the precursor peak group (or mass) if possible for MSn (n>1) spectrum.

@@ -541,9 +541,12 @@ void FLASHDeconvAlgorithm::run(MSExperiment& map,
   quantifier.quantify(map, deconvolved_spectra, deconvolved_features);
 }
 
-// ADR-0046 decision 3: FLASHDeconv's own deconvolution of the survey lacks the commanded mass, so the precursor
-// is rebuilt from the command itself -- one peak at the anchor charge, scores as the engine logged them. The
-// construction the ida.log path used, over doubles instead of floats, and with no charge range to claim.
+// ADR-0046 decision 3: FLASHDeconv's deconvolution of the commanded survey holds NOTHING in the isolation window,
+// so the precursor is rebuilt from the command itself -- one peak at the anchor charge, scores as the engine
+// logged them. The construction the ida.log path used, over doubles instead of floats, and with no charge range
+// to claim. A window that holds something the command did not name takes the charge-SNR pick instead: a measured
+// species carries an isotope envelope, and this one does not -- which also bounds the FRAGMENT deconvolution
+// (SpectralDeconvolution.cpp:197-218), so a rebuilt precursor costs the MS2 as well as the mass.
 PeakGroup FLASHDeconvAlgorithm::peakGroupFromCommand_(const ScanCommandJoin::Located& located) const
 {
   const auto& row = located.row;
@@ -727,7 +730,7 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
 
 
     double max_snr = -1.0;
-    int best_rank = ScanCommandJoin::MAX_ISOTOPE_OFFSET + 1; // ADR-0046: worse than any accepted rank
+    bool found_commanded = false; // ADR-0046: the commanded mass outranks every other species in this window
     double best_residual = 0;
     //auto o_spec = precursor_deconvolved_spectrum.getOriginalSpectrum();
     std::map<double, double> mass_to_intensity;
@@ -756,17 +759,25 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
       if (tmp_precursor == nullptr) { continue; }
       mass_to_intensity[pg.getMonoMass()] = intensity;
 
+      // ADR-0046: for a located scan the COMMANDED mass wins when this survey holds it -- SAME isotope only, so an
+      // isotope-off call no longer stands in for it and competes as an ordinary candidate. When the window holds
+      // no commanded mass the loudest species is the better answer, so this falls through to the charge-SNR rule
+      // below and peakGroupFromCommand_ is left for a window that holds nothing at all.
+      bool commanded = false;
       if (located != nullptr)
       {
-        // ADR-0046: the COMMANDED mass determines the precursor, not the loudest species in the window.
         double residual = 0;
-        const int rank = ScanCommandJoin::massRank(pg.getMonoMass(), located->row.mono_mass, residual);
-        if (rank < 0 || rank > best_rank || (rank == best_rank && residual >= best_residual)) { continue; }
-        best_rank = rank;
-        best_residual = residual;
+        commanded = ScanCommandJoin::massRank(pg.getMonoMass(), located->row.mono_mass, residual) == 0;
+        if (commanded)
+        {
+          if (found_commanded && residual >= best_residual) { continue; }
+          found_commanded = true;
+          best_residual = residual;
+        }
       }
-      else
+      if (!commanded)
       {
+        if (found_commanded) { continue; } // never displace the commanded mass with a louder neighbour
         auto snr= pg.getChargeSNR(tmp_precursor->abs_charge); // the highest snr one should determine the mass
 
         if (snr < max_snr) { continue; }
