@@ -132,7 +132,7 @@ namespace
   // A ScanConfig fully determines its scan's instrument parameters (ADR-0009); an unset value means
   // "use the instrument method default", never "inherit from another scan".
   void parseScanConfig(const nlohmann::json& j, OpenMS::ScanConfig& sc,
-                       const std::string& analyzer_default)
+                       const std::string& path, const std::string& analyzer_default)
   {
     // is_string() guard, not .value(): a present-but-null string (the generated
     // config_schema_reference.json carries "data_type": null) makes .value() throw type_error.302.
@@ -140,6 +140,16 @@ namespace
       auto it = j.find(k);
       return (it != j.end() && it->is_string()) ? it->get<std::string>() : d;
     };
+
+    // Closed set (ADR-0045), checked on the RAW value: str() coerces a non-string to the default, which
+    // would turn `"analyzer": 5` into "" and load clean. null stays a default -- the generated
+    // config_schema_reference.json carries nulls (see the is_string() note above).
+    if (auto it = j.find("analyzer"); it != j.end() && !it->is_null())
+    {
+      if (!it->is_string() || !OpenMS::isKnownAnalyzer(it->get<std::string>()))
+        throw std::invalid_argument("Config: " + path + ".analyzer must be \"Orbitrap\", \"IonTrap\" or \"\"; got "
+                                    + it->dump() + " (ADR-0045).");
+    }
 
     sc.analyzer           = str("analyzer", analyzer_default);
     sc.activation         = str("activation", "");
@@ -232,6 +242,17 @@ namespace OpenMS
   bool needsReactionTime(const std::string& act)
   {
     return act == "ETD" || act == "EThcD";
+  }
+
+  // ADR-0045 decision 3. Exact set; the engine reads this string to decide whether a pre-scan is
+  // deconvolved at all, so a misspelling must fail at load rather than reach the instrument.
+  bool isKnownAnalyzer(const std::string& analyzer)
+  {
+    return analyzer.empty() || analyzer == "Orbitrap" || analyzer == "IonTrap";
+  }
+  bool isTrapAnalyzer(const std::string& analyzer)
+  {
+    return analyzer == "IonTrap";
   }
 
   // Static default level config (selection=None, exploration=None)
@@ -444,7 +465,7 @@ namespace OpenMS
     {
       auto fus = tagging["follow_up_scan"];
       rejectUnknownKeys(fus, kScanKeys, "tagging.follow_up_scan");
-      parseScanConfig(fus, targeting_.tagging_follow_up_scan, "Orbitrap");
+      parseScanConfig(fus, targeting_.tagging_follow_up_scan, "tagging.follow_up_scan", "Orbitrap");
     }
 
     // --- files section (paths only; loading stays in FLASHIda) ---
@@ -730,14 +751,14 @@ namespace OpenMS
     auto parseNamedScan = [&](const json& node, const std::string& path) {
       rejectUnknownKeys(node, kScanKeys, path);
       ScanConfig sc;
-      parseScanConfig(node, sc, "");
+      parseScanConfig(node, sc, path, "");
       return sc;
     };
 
     auto ms1_json = ms_settings.value("ms1", json::object());
     rejectUnknownKeys(ms1_json, kScanKeys, "ms_settings.ms1");
     ScanConfig ms1_scan;
-    parseScanConfig(ms1_json, ms1_scan, "");
+    parseScanConfig(ms1_json, ms1_scan, "ms_settings.ms1", "");
     levels_[1].scans.push_back(ms1_scan);
 
     // Definitions first; the roster is assembled afterwards from the reference list.
@@ -963,6 +984,10 @@ namespace OpenMS
                 "Config: " + path + ".exploration.overrides no longer carries 'tolerance_ppm'. "
                 "It is a first-class key: move it to " + path + ".exploration.tolerance_ppm. "
                 "(applyOverrides has no branch for it, so leaving it here would drop it silently.)");
+          if (ov_it.key() == "analyzer"
+              && !(ov_it.value().is_string() && isKnownAnalyzer(ov_it.value().get<std::string>())))
+            throw std::invalid_argument("Config: " + path + ".exploration.overrides.analyzer must be \"Orbitrap\", "
+                                        "\"IonTrap\" or \"\"; got " + ov_it.value().dump() + " (ADR-0045).");
           cfg.overrides[ov_it.key()] = ov_it.value().get<std::string>();
         }
       }

@@ -129,6 +129,16 @@ namespace OpenMS
   OPENMS_DLLAPI bool needsReactionTime(const std::string& act);
 
   /**
+    @brief The analyzer names a scan config may carry (ADR-0045). "" = the instrument method default.
+    Closed on purpose: Exploration branches on it (a trap pre-scan is measured, never identified) and
+    Config::validate does too (a trap sweep must use remaining_precursor). A name outside the set
+    would miss both gates and reach the instrument verbatim, so it fails at load instead.
+    Pinned as an exact set by Config_SchemaProjection_test::analyzer_is_a_closed_set.
+  */
+  OPENMS_DLLAPI bool isKnownAnalyzer(const std::string& analyzer);
+  OPENMS_DLLAPI bool isTrapAnalyzer(const std::string& analyzer);
+
+  /**
     @brief The smallest ion-ion reaction time the instrument will accept (ms).
 
     THE TWO COUPLED AXES DO NOT SHARE A "FRAGMENTATION OFF" VALUE, and that asymmetry is the

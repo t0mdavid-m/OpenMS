@@ -441,6 +441,59 @@ START_SECTION(activation_coupling_predicates_are_the_declared_set)
 }
 END_SECTION
 
+// Exact set, as the activation predicates above: the engine now BRANCHES on this string (ADR-0045 --
+// a trap pre-scan is not deconvolved, and a trap sweep must use remaining_precursor), so a value the
+// set does not name must fail at load rather than miss both gates and reach the instrument verbatim.
+START_SECTION(analyzer_is_a_closed_set)
+{
+  TEST_EQUAL(isKnownAnalyzer("Orbitrap"), true)
+  TEST_EQUAL(isKnownAnalyzer("IonTrap"), true)
+  TEST_EQUAL(isKnownAnalyzer(""), true)          // five of the six parse sites default to "" (= instrument method default)
+  TEST_EQUAL(isKnownAnalyzer("iontrap"), false)  // ordinal, case-sensitive
+  TEST_EQUAL(isKnownAnalyzer("Iontrap"), false)
+  TEST_EQUAL(isKnownAnalyzer("ITMS"), false)
+  TEST_EQUAL(isKnownAnalyzer("FTMS"), false)
+  TEST_EQUAL(isTrapAnalyzer("IonTrap"), true)
+  TEST_EQUAL(isTrapAnalyzer("Orbitrap"), false)
+  TEST_EQUAL(isTrapAnalyzer(""), false)          // unset is NOT the trap: a method-default trap is invisible to the rule (ADR-0045, recorded gap)
+
+  // Load-time enforcement at both kinds of site: a scan object, and overrides.analyzer.
+  auto probe = [](const std::string& ms2_analyzer, const std::string& override_analyzer) {
+    return std::string(R"({
+      "deconvolution": { "tol": [10, 10, 10] },
+      "precursor_selection": { "rank_by": "qscore", "max_precursors": 3,
+        "exploration": { "metric": "remaining_precursor", "ce_min": 20.0, "ce_max": 30.0, "ce_step": 5.0,
+                         "overrides": { "analyzer": ")" + override_analyzer + R"(" } } },
+      "characterization": { "mode": "off" },
+      "ms_settings": {
+        "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
+        "ms2": { "analyzer": ")" + ms2_analyzer + R"(", "activation": "HCD", "collision_energy": 29 }
+      }
+    })");
+  };
+  Config ok_a{probe("Orbitrap", "IonTrap")};   // positive control
+  Config ok_b{probe("", "Orbitrap")};          // "" is legal in a scan object
+  TEST_EXCEPTION(std::invalid_argument, Config(probe("Iontrap", "IonTrap")))   // scan object
+  TEST_EXCEPTION(std::invalid_argument, Config(probe("Orbitrap", "iontrap")))  // overrides
+  TEST_EXCEPTION(std::invalid_argument, Config(probe("FTMS", "Orbitrap")))
+
+  // A present-but-null analyzer keeps today's behaviour: the generated schema reference carries nulls.
+  const std::string null_ms1 = R"({ "deconvolution": { "tol": [10,10,10] },
+    "precursor_selection": { "rank_by": "qscore", "max_precursors": 3 }, "characterization": { "mode": "off" },
+    "ms_settings": { "ms1": { "analyzer": null, "resolution": 120000 },
+                     "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 } } })";
+  Config ok_c{null_ms1};
+  TEST_STRING_EQUAL(ok_c.level(1).scans[0].analyzer, "")
+  // A non-string, non-null value is a typo, not a default. FAILS WHEN the check runs on the coerced
+  // std::string: str()'s is_string() guard turns 5 into "" and the config would load clean.
+  const std::string int_ms1 = R"({ "deconvolution": { "tol": [10,10,10] },
+    "precursor_selection": { "rank_by": "qscore", "max_precursors": 3 }, "characterization": { "mode": "off" },
+    "ms_settings": { "ms1": { "analyzer": 5, "resolution": 120000 },
+                     "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 } } })";
+  TEST_EXCEPTION(std::invalid_argument, Config{int_ms1})
+}
+END_SECTION
+
 // An authored scan config pairing an activation with a zero on its coupled axis LOADS (ADR-0030).
 // This used to throw. The guard's stated purpose was to stop ScanFactory silently dropping a zero
 // reaction time so the instrument fell back to its own method default; that key is now gated on the
