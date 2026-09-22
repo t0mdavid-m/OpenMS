@@ -435,7 +435,38 @@ Three things follow, and the third is the trap:
 `scans[0] + overrides`, the production scan from `scans[0]` alone. That is the whole reason the
 original gate keyed on it. **MS2 is exempt** from the metric condition: `computeFragmentMatch_`'s
 whole-protein matcher is correct at MS2, so every MS2 variant is identified under every metric and an
-MS2 group cascades instead of re-acquiring.
+MS2 group cascades instead of re-acquiring — **with one exception that belongs to the analyzer, not
+the metric** (ADR-0045, below).
+
+### A trap pre-scan is measured, never identified (ADR-0045)
+
+A variant whose **own `ScanCommand`** names the ion trap (`isTrapAnalyzer(cmd.analyzer)`, read in
+`Exploration::feedResult` — the engine's **first** read of `ScanCommand::analyzer`; every other site
+is a write) is neither deconvolved nor matched nor fed to the ProteoformTracker, at any level, under
+any metric. The only thing read from it is the raw precursor-window sum behind the remaining-precursor
+ratio. Unit-resolution trap peaks have no business in a ppm-tolerance identification — and until
+ADR-0044 withdrew the ADR-0026 scan-range binding this was inert by accident, because a ~2 Th window
+deconvolves to nothing. Three mechanics, none of them optional:
+
+- `ExplorationVariant::measured_only` is set from the command, never from the returning scan
+  (ADR-0042's rule for every decision gate); `feedScan` and the FragmentCount batch re-score both
+  honour it, the latter with a `nullptr` rather than a scored-0 spectrum.
+- **`exploration_deconv_->storedMS2()` is stale after a skipped deconvolution.** `FLASHIda.cpp` reads
+  `explorationDeconvMassCount()` / `explorationDeconvSpectrum()` for the `scan_results` row, so without
+  `last_result_deconvolved_` a trap variant would log the *previous* variant's masses. Pinned by
+  `a_trap_pre_scan_is_measured_never_identified`.
+- **Only `remaining_precursor` may score a trap sweep.** `Config::validate` refuses an `IonTrap`
+  override under `mass_count`/`fragment_count`: with nothing deconvolved they score every variant 0,
+  and winner selection (seeded `-1.0`, strictly greater) crowns `ce_min` every time, silently. The
+  `-1.0` arm in `feedResultImpl_` for that pairing is therefore unreachable from config and exists to
+  fail closed. The ADR-0023 forced sweep is compatible by construction — it forces the one metric that
+  can read such a scan — but the load rule reads the *configured* metric, so a `fragment_count` +
+  `IonTrap` exhaustive config is refused even though its unassigned masses would have been fine.
+
+A trap sweep always carries overrides, so it is closed by the production follow-up through ADR-0020's
+gate #1; that scan carries all of the sweep's evidence. `scan_commands.tsv` has **no analyzer column**
+— the analyzer on both sides is pinned by `production_scan_is_built_from_the_unoverridden_config`
+(ctest), not by any golden.
 
 `planNextScans` emits `[MS3-PLAN] … reason=…` naming which of its zero-target causes fired
 (`all_mods_localized` is the common, *correct* one: ambiguity mode with everything already localized).
@@ -483,6 +514,14 @@ Traps worth internalizing before touching config code:
 - **`ScanConfig.analyzer`'s default flips by parse site**: the in-class default is `"Orbitrap"`, but
   the `ms_settings.ms{1,2,3}` parsers override it with `""` (strncpy'd straight into the
   `ScanCommand`). Only the two `follow_up_scan` blocks keep `"Orbitrap"`.
+  **The value is a closed set** (ADR-0045 decision 3): `"Orbitrap" | "IonTrap" | ""`, checked on the
+  **raw JSON** in `parseScanConfig` and in the overrides loop — `str()`'s `is_string()` guard would
+  otherwise coerce `"analyzer": 5` to `""` and load clean. `null` stays a default because the
+  generated `config_schema_reference.json` carries nulls. `isKnownAnalyzer` / `isTrapAnalyzer` live at
+  namespace scope beside `needsReactionTime` and are pinned as an exact set by
+  `Config_SchemaProjection_test::analyzer_is_a_closed_set`. An **unset** analyzer is not the trap: a
+  pre-scan that reaches the trap through the instrument method's default is invisible to the rule
+  (recorded gap).
 - **Selection is never authored per level any more** — it is projected from `characterization.mode`
   and `precursor_selection.rank_by`, so there is no "level present without a selection key" case
   left. `Config::level(n)` still returns a static `default_level_` with `selection = None` for a
