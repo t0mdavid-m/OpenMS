@@ -1250,30 +1250,17 @@ namespace OpenMS
             " requires a non-empty characterization.protein_sequence.");
     }
 
-    // RemainingPrecursor scores a variant from the intensity inside its isolation window alone
-    // (Exploration::precursorWindowIntensity_) and its winner is ALWAYS re-acquired by a production
-    // scan built from the un-overridden config, so its pre-scans are throwaway measurements --
-    // which is why ADR-0026 narrows their scan range to exactly that window. The narrowing leaves an
-    // MS2 pre-scan with no fragments in it, so the winning variant's deconvolved spectrum is a
-    // useless MS3 target list.
+    // ADR-0045 decision 2: a trap sweep must use remaining_precursor. A pre-scan read out by the ion
+    // trap is measured, never identified -- Exploration skips deconvolution, matching and pooling for
+    // it -- so a metric that COUNTS deconvolved masses or matched fragments scores every trap variant
+    // 0, and winner selection (seeded at -1.0, strictly greater) crowns ce_min every time: N scans per
+    // precursor to pick the first grid point, with no wrong value anywhere to notice. remaining_precursor
+    // scores from the raw window sum and is the one metric that can read such a scan.
     //
-    // This rejection does NOT protect the MS2->MS3 cascade -- it REPLACES its source. Exploration's
-    // post-winner handling is ONE if/else chain: `!level_config.overrides.empty() ||
-    // measuring_ms3_sweep` takes the production re-acquisition, and the cascade is that same chain's
-    // `else if (group.msn_level < 3)` arm, so the two are mutually exclusive. Forcing every MS2
-    // remaining_precursor config to carry non-empty overrides makes the first condition
-    // unconditionally true at MS2, which makes the cascade arm structurally UNREACHABLE for them.
-    // That is the intended outcome, not collateral: rather than cascading off a window-only
-    // spectrum, MS3 is dispatched off the FULL-RANGE production re-acquisition -- it is not an
-    // exploration variant, so it returns on the regular MS2 path and cascades from the stored MS2
-    // spectrum like any other MS2. A better cascade source, one scan later.
-    //
-    // Without the rejection, empty overrides fail BOTH conditions -- measuring_ms3_sweep is level-3
-    // only -- so the cascade arm does run, off the narrowed spectrum, and yields ZERO MS3 targets
-    // with no throw and no warning: only `[MS3-PLAN] no_containing_fragment` and a user concluding
-    // their protein did not fragment. Requiring non-empty overrides is the STATIC form of ADR-0020
-    // gate #1: the production re-acquisition that makes narrowing safe is guaranteed by the schema
-    // rather than by the author's habit of writing an analyzer override anyway.
+    // This loop shell used to carry ADR-0026's "remaining_precursor requires non-empty overrides"
+    // rejection, the interlock for a scan-range binding that ADR-0044 withdrew. Overrides are optional
+    // under every metric again; an empty-overrides remaining_precursor sweep behaves exactly as an
+    // empty-overrides mass_count sweep always has (at MS3, ADR-0020 gate #2 re-acquires the winner).
     for (const auto& [lvl, cfg] : levels_)
     {
       // levels_ always holds {1,2,3} (Config.cpp:755), but an exploration block is parsed for levels 2
@@ -1288,7 +1275,7 @@ namespace OpenMS
       // is PRESENT (Config.cpp:746) -- and nothing afterwards clears it, because
       // applyCharacterizationMode_ resets only `selection`. A leftover characterization.exploration
       // block therefore outlives characterization.mode == "off". Rejecting on it would make that
-      // leftover a LOAD ERROR for a run that emits no MS3 and narrows no pre-scan, breaking ADR-0013's
+      // leftover a LOAD ERROR for a run that emits no MS3 pre-scan at all, breaking ADR-0013's
       // promise that toggling MS3 off stays a one-word edit -- under "off" the MS3 keys are carried and
       // never read. Level 2 is deliberately not guarded: an MS2 sweep runs whatever
       // characterization.mode says.
@@ -1296,57 +1283,62 @@ namespace OpenMS
       // That promise is NOT upheld tree-wide, and the asymmetry is known rather than an oversight: the
       // FragmentCount / protein_sequence rejection a few loops above carries no such guard, so
       // `characterization: { mode: "off", exploration: { metric: "fragment_count" } }` with an empty
-      // protein_sequence still throws at load. The guard is applied HERE because THIS rejection is new
-      // with ADR-0026 and gets to be born correct; the FragmentCount check predates it, and widening an
-      // existing rejection's guard is a behaviour change to configs that load today -- out of scope for
-      // ADR-0026, not a claim that it is right.
+      // protein_sequence still throws at load. The guard is applied HERE because this rejection (and the
+      // ADR-0026 one before it) got to be born correct; the FragmentCount check predates both, and
+      // widening an existing rejection's guard is a behaviour change to configs that load today -- out
+      // of scope, not a claim that it is right.
       if (lvl == 3 && characterization_.mode == CharacterizationMode::Off) continue;
 
       const std::string sect = (lvl == 2 ? "precursor_selection" : "characterization");
-      if (cfg.exploration == ExplorationMetric::RemainingPrecursor && cfg.overrides.empty())
+      const auto ov = cfg.overrides.find("analyzer");
+      if (ov != cfg.overrides.end() && isTrapAnalyzer(ov->second)
+          && cfg.exploration != ExplorationMetric::None
+          && cfg.exploration != ExplorationMetric::RemainingPrecursor)
         throw std::invalid_argument(
-            sect + ".exploration.metric is \"remaining_precursor\" but " + sect
-            + ".exploration.overrides is empty. A remaining_precursor sweep never keeps its "
-              "pre-scans -- they are scanned over their isolation window only, and the winner is "
-              "re-acquired -- so it must declare the settings they run at. Add an overrides block, "
-              "e.g. \"overrides\": { \"analyzer\": \"IonTrap\" } (ADR-0026).");
+            sect + ".exploration.overrides.analyzer is \"IonTrap\" but " + sect + ".exploration.metric is not "
+            "\"remaining_precursor\". A trap pre-scan is measured, never identified -- it is not deconvolved or "
+            "matched -- so a metric that counts masses or fragments scores every variant 0 and the first grid "
+            "point always wins. Use \"remaining_precursor\", or an Orbitrap override (ADR-0045).");
     }
 
-    // Level-matched multiplexing. [first_mass, last_mass] is ONE interval and a notch set is not,
-    // so ADR-0026's binding cannot express a multiplexed readout: charge states 10-16 of a ~12 kDa
-    // protein scatter their 2 Th windows across ~463 Th, and binding to the anchor alone would
-    // isolate seven charge states while reading one, while spanning them all would cut the speed
-    // win from ~900x to ~4x. Two shapes stay LEGAL and are deliberately not caught here:
+    // Level-matched multiplexing (ADR-0026 decision 4, re-grounded by ADR-0044). The remaining-precursor
+    // ratio sums the ANCHOR's isolation window and nothing else (Exploration::precursorWindowIntensity_),
+    // so under co-isolation it reports one charge state's depletion while the same collision energy
+    // depletes its siblings at other rates -- a target met by the anchor decides nothing about the
+    // rest. The engine already RECORDS that anchor-only number for every multiplexed variant
+    // (remaining_ratio in scan_results.tsv); this stops it being DECIDED on. Two shapes stay LEGAL and
+    // are deliberately not caught here:
     //   - `separate` at BOTH levels: it fans out to one anchor per scan (buildMS2's notch guard at
-    //     ScanCommandQueue.cpp:314 tests `== Multiplexed` only), so every readout is a single
-    //     interval and each gets its own correct range.
+    //     ScanCommandQueue.cpp:314 tests `== Multiplexed` only), so the anchor window IS the whole
+    //     isolation and the ratio reads everything that was isolated.
     //   - the CROSS-LEVEL case -- an MS3 remaining_precursor sweep under
     //     precursor_selection.precursor_charges == multiplexed -- because stage-0 notches change
-    //     WHICH precursors are fragmented, not where the MS3 readout sits; the sub-fragment scan is
-    //     still one contiguous stage-1 window. Hence two pair-specific checks rather than one
-    //     "multiplexed anywhere" check.
+    //     WHICH precursors are fragmented, not what the stage-1 window isolates. Hence two
+    //     pair-specific checks rather than one "multiplexed anywhere" check.
     if (level(2).exploration == ExplorationMetric::RemainingPrecursor
         && targeting_.precursor_charges == ChargeAcquisitionMode::Multiplexed)
       throw std::invalid_argument(
           "precursor_selection.exploration.metric is \"remaining_precursor\" but "
-          "precursor_selection.precursor_charges is \"multiplexed\". A multiplexed scan reads "
-          "several non-contiguous isolation windows, which cannot be expressed as the one scan "
-          "range such a sweep's pre-scans are bound to. Set precursor_charges to \"single\" or "
-          "\"separate\", or pick a different exploration metric (ADR-0026).");
+          "precursor_selection.precursor_charges is \"multiplexed\". The remaining-precursor ratio sums "
+          "the ANCHOR's isolation window only, so under co-isolation it reports one charge state's "
+          "depletion while the same collision energy depletes its siblings at other rates -- a target "
+          "met by the anchor decides nothing about the rest. Set precursor_charges to \"single\" or "
+          "\"separate\", or pick a different exploration metric (ADR-0044 decision 4).");
 
     // Guarded on `mode` for the reason spelled out at the level-3 arm above: levels_[3].exploration
     // outlives characterization.mode == "off" (applyCharacterizationMode_ resets only `selection`),
-    // and under "off" no MS3 pre-scan is ever emitted or narrowed, so there is no bound readout for a
-    // multiplexed fragment isolation to conflict with (ADR-0013).
+    // and under "off" no MS3 pre-scan is ever emitted, so there is no sweep for a multiplexed fragment
+    // isolation to mislead (ADR-0013).
     if (characterization_.mode != CharacterizationMode::Off
         && level(3).exploration == ExplorationMetric::RemainingPrecursor
         && characterization_.fragment_charges == ChargeAcquisitionMode::Multiplexed)
       throw std::invalid_argument(
           "characterization.exploration.metric is \"remaining_precursor\" but "
-          "characterization.fragment_charges is \"multiplexed\". A multiplexed scan reads several "
-          "non-contiguous isolation windows, which cannot be expressed as the one scan range such "
-          "a sweep's pre-scans are bound to. Set fragment_charges to \"single\" or \"separate\", "
-          "or pick a different exploration metric (ADR-0026).");
+          "characterization.fragment_charges is \"multiplexed\". The remaining-precursor ratio sums the "
+          "ANCHOR's isolation window only, so under co-isolation it reports one charge state's depletion "
+          "while the same collision energy depletes its siblings at other rates -- a target met by the "
+          "anchor decides nothing about the rest. Set fragment_charges to \"single\" or \"separate\", "
+          "or pick a different exploration metric (ADR-0044 decision 4).");
 
     // Re-keyed onto `mode`. It used to fire off the UPSTREAM gate (any level >= 2 selecting), which
     // is why 17 test configs that run no MS3 at all had to carry a placeholder "SEQUENCE": their
