@@ -78,6 +78,8 @@ namespace OpenMS
       float tic_coverage = 0.0f;
       int fragment_count = 0;
       bool received = false;
+      bool measured_only = false;         ///< ADR-0045: read out by the ion trap -- window sum only; never
+                                          ///< deconvolved, matched or pooled. Decided on `cmd.analyzer`.
       DeconvolvedSpectrum result{0};
       ScanCommand cmd;
       FragmentAnalysis::ProteoformMatch identification_result;  ///< Per-fragment match details (populated at batch eval)
@@ -320,9 +322,11 @@ namespace OpenMS
 
     /// Mass count of the stored exploration-deconv MS2 spectrum (0 if none). Encapsulates the
     /// exploration_deconv_ access that processScan used to perform inline.
+    /// Both accessors report NOTHING after a measured-only feed (ADR-0045): the stored spectrum is then
+    /// the PREVIOUS variant's, and FLASHIda.cpp reads these for the scan_results row.
     int explorationDeconvMassCount() const
     {
-      return (exploration_deconv_ != nullptr && exploration_deconv_->hasStoredMS2())
+      return (last_result_deconvolved_ && exploration_deconv_ != nullptr && exploration_deconv_->hasStoredMS2())
                  ? static_cast<int>(exploration_deconv_->storedMS2().size()) : 0;
     }
 
@@ -330,7 +334,7 @@ namespace OpenMS
     /// engine-owned member (valid until the next exploration deconvolution).
     const DeconvolvedSpectrum* explorationDeconvSpectrum() const
     {
-      return (exploration_deconv_ != nullptr && exploration_deconv_->hasStoredMS2())
+      return (last_result_deconvolved_ && exploration_deconv_ != nullptr && exploration_deconv_->hasStoredMS2())
                  ? &exploration_deconv_->storedMS2() : nullptr;
     }
 
@@ -338,6 +342,9 @@ namespace OpenMS
     /// Internal deconvolution engine for exploration-variant MS2 spectra. Was public; now reached
     /// only via the accessors above plus Exploration's own internals.
     std::unique_ptr<Deconvolution> exploration_deconv_;
+    /// false after a measured-only feed (a trap pre-scan, ADR-0045), so the accessors above never hand
+    /// FLASHIda.cpp the previous variant's spectrum.
+    bool last_result_deconvolved_ = true;
 
     /// Get exploration group by ID (caller must ensure group exists). Test-only; reached via
     /// ExplorationTestAccess (was public).
@@ -358,10 +365,12 @@ namespace OpenMS
     /// Shared implementation: process a deconvolved spectrum for a tracked variant.
     /// @p tracker may be nullptr (test-only bypass via ExplorationTestAccess); production always passes a
     /// real tracker.
+    /// @p measured_only: the variant was read out by the ion trap (ADR-0045) -- score from the raw window
+    /// sum only; no matcher runs and nothing is fed to the tracker.
     FeedResultInfo feedResultImpl_(int tracking_id, const DeconvolvedSpectrum& msn_deconv,
                                    const double* mzs, const double* ints, int length,
                                    ScanCommandQueue& queue, ProteoformTracker* tracker = nullptr,
-                                   int precursor_id = 0);
+                                   int precursor_id = 0, bool measured_only = false);
 
     /// Parameters for one variant in a multi-activation sweep
     struct VariantParams

@@ -209,12 +209,9 @@ namespace OpenMS
     //   - The CENTRE needs no correction: buildMS2 computes (mz1 + mz2) / 2 BEFORE applying the margin
     //     (ScanCommandQueue.cpp:292), so the two sides already agree on precursor_mz.
     //
-    // This is also why the ADR-0026 binding below needs no floor of its own, and why the correction
-    // ships in the same push as that binding: a charge resolved at a SINGLE isotope has mz2 == mz1, and
-    // the margin turns that degenerate 0 into a 0.8 Th window. Without it the binding would emit
-    // first_mass == last_mass == precursor_mz -- two positive bounds, which FlashIDA/src/Flash/
-    // ScanFactory.cs:245-247 sends to the instrument as a zero-width "DefineMZRange". The margin IS the
-    // floor.
+    // The margin is also what keeps a charge resolved at a SINGLE isotope (mz2 == mz1) from handing the
+    // metric a zero-width window to sum over. Nothing downstream turns this width into a scan range any
+    // more -- a pre-scan reads out its level's configured range (ADR-0044).
     auto [mz1, mz2] = pg.getMzRange(charge);
     double precursor_mz = (mz1 + mz2) / 2.0;
     double isolation_width = (msn_level >= 3)
@@ -271,50 +268,6 @@ namespace OpenMS
     // Captured for the post-sweep production scan, which rebuilds from the winning VARIANT rather
     // than from the Ms3Target and so has no other route to the notch set (ADR-0016).
     if (stage1_notches != nullptr) group.stage1_notches = *stage1_notches;
-
-    // ADR-0026: a RemainingPrecursor sweep acquires only the window it reads. The metric scores a variant
-    // from raw peak intensity inside [precursor_mz +/- isolation_width/2] and discards everything else the
-    // pre-scan returned (precursorWindowIntensity_, :1215). On an ion trap scan time is proportional to the
-    // m/z range swept, so a 200-2000 Th pre-scan pays ~900x the time of the ~2 Th it actually sums. Written
-    // onto base_config, which is what makes it reach the CE-0 baseline for free: the baseline is
-    // variant_params[0] (inserted at :139) and takes the same unconditional `variant_config = base_config`
-    // at :274 as every other variant. Required, not incidental -- a full-range trap fill and a narrow trap
-    // fill are not comparable denominators for the ratio.
-    //
-    // GATED ON group.exploration_metric, NEVER ON cfg.exploration. The two differ on exactly one input: the
-    // ADR-0023 forcing at :199-201, where an exhaustive-mode unassigned mass (ion class 'u', which fails
-    // MS3FragmentMatcher::isKnownIonClass) is dragged onto RemainingPrecursor whatever the config asked for.
-    // A CONFIGURED sweep is guaranteed its full-range re-acquisition by ADR-0026 decision 3, which rejects
-    // `remaining_precursor` with an empty `overrides` map at config load. The FORCED sweep has no config
-    // entry to carry that guarantee and needs none, because it is safe BY CONSTRUCTION:
-    //     force fires  =>  msn_level >= 3  AND  metric == RemainingPrecursor (a measuring metric)
-    //                  =>  measuring_ms3_sweep (the gate at :748)
-    //                  =>  ADR-0020 gate #2 fires => full-range production scan re-acquires.
-    // The force's own precondition IS gate #2's condition, and the metric it forces is measuring by
-    // definition. MS3 is also terminal at the `< 3` MS4 wall (:817), so a narrowed MS3 pre-scan has no
-    // cascade to strand -- "a window-only spectrum yields zero next-level targets" is an MS2-only hazard,
-    // and at MS2 the config rejection is what covers it.
-    // DO NOT "fix" the asymmetry by adding a third config rejection: the forced path has no config entry to
-    // reject, and rejecting the exhaustive mode that triggers it would delete ADR-0023.
-    //
-    // THE SUPPRESSION TEST READS cfg.overrides AND NEVER base_config, and that is not a shortcut.
-    // applyOverrides already ran at :129, and an authored ms_settings.msN.first_mass lands in the SAME
-    // ScanConfig field (Config.cpp:130-131) with the SAME 0 default (Config.h:124) -- so
-    // `base_config.first_mass != 0` cannot tell an exploration override apart from a plain scan-config
-    // value, and would suppress the binding for every level whose scan config happens to name a range.
-    // Only the raw map separates them (ADR-0026 decision 5: an explicit range wins, quietly).
-    //
-    // Nothing here reaches the post-winner production scan: that one is rebuilt from level_config.scans[0]
-    // (:751), never from base_config, so it keeps its configured full range. Deliberate -- it is the one
-    // acquisition of the group that is meant to be identified.
-    if (group.exploration_metric == ExplorationMetric::RemainingPrecursor
-        && cfg.overrides.find("first_mass") == cfg.overrides.end()
-        && cfg.overrides.find("last_mass") == cfg.overrides.end())
-    {
-      const double half = isolation_width / 2.0;
-      base_config.first_mass = precursor_mz - half;
-      base_config.last_mass  = precursor_mz + half;
-    }
 
     // -1 is the baseline marker in the logged variant_index column, and there may now be one per
     // swept activation rather than exactly one per group. Real variants keep a single running
@@ -430,6 +383,10 @@ namespace OpenMS
     // With no notches this resolves to abs(anchor charge), i.e. the previous value, so every existing
     // golden stays byte-identical.
     int precursor_charge = group.precursor_charge;
+    // ADR-0045: a trap pre-scan is measured, never identified. Decided on the variant's OWN command --
+    // the engine's record of what it asked for -- never on anything the returning scan carries
+    // (ADR-0042). An out-of-range slot leaves it false, the same fallthrough precursor_charge takes.
+    bool measured_only = false;
     const int variant_slot = vit->second.variant_index;   // array index into group.variants,
                                                           // NOT ExplorationVariant::variant_index
                                                           // (which is -1 for the CE-0 baseline)
@@ -437,24 +394,28 @@ namespace OpenMS
     {
       const ScanCommand& vcmd = group.variants[variant_slot].cmd;
       if (vcmd.num_stages > 0) precursor_charge = maxIsolatedCharge(vcmd, vcmd.num_stages - 1);
+      measured_only = isTrapAnalyzer(vcmd.analyzer);
     }
 
-    // Deconvolve with correct precursor context from the group
+    // Deconvolve with correct precursor context from the group -- unless the variant is a trap
+    // pre-scan, which is never deconvolved: unit-resolution peaks have no business in a ppm-tolerance
+    // identification, and the only thing read from such a scan is the raw window sum.
     DeconvolvedSpectrum ms2_deconv(tracking_id);
-    if (mzs != nullptr && ints != nullptr && length > 0)
+    if (!measured_only && mzs != nullptr && ints != nullptr && length > 0)
     {
       exploration_deconv_->deconvolveMSn(mzs, ints, length, rt,
                                          group.precursor_mass, precursor_charge);
       ms2_deconv = exploration_deconv_->storedMS2();
     }
+    last_result_deconvolved_ = !measured_only;
 
-    return feedResultImpl_(tracking_id, ms2_deconv, mzs, ints, length, queue, tracker, precursor_id);
+    return feedResultImpl_(tracking_id, ms2_deconv, mzs, ints, length, queue, tracker, precursor_id, measured_only);
   }
 
   Exploration::FeedResultInfo Exploration::feedResultImpl_(int tracking_id,
       const DeconvolvedSpectrum& msn_deconv,
       const double* mzs, const double* ints, int length,
-      ScanCommandQueue& queue, ProteoformTracker* tracker, int precursor_id)
+      ScanCommandQueue& queue, ProteoformTracker* tracker, int precursor_id, bool measured_only)
   {
     FeedResultInfo info;
 
@@ -476,10 +437,25 @@ namespace OpenMS
     if (v.received) return info;
 
     v.result = msn_deconv;
+    v.measured_only = measured_only;
     double remaining_ratio = -1.0;
     FragmentAnalysis::ProteoformMatch frag{};
-    v.score = computeExplorationScore_(group.exploration_metric, msn_deconv, group, mzs, ints, length, &remaining_ratio, &frag, v.activation_type);
-    v.tic_coverage = computeTICCoverage_(msn_deconv);
+    if (measured_only)
+    {
+      // Window sum only (ADR-0045). The metric is remaining_precursor by config -- Config::validate
+      // refuses a trap sweep under a counting metric -- so the -1.0 arm is unreachable from config and
+      // fails closed: a variant with nothing to count must not win at 0 (winner selection seeds -1.0,
+      // strictly greater).
+      v.score = (group.exploration_metric == ExplorationMetric::RemainingPrecursor)
+                  ? computeRemainingPrecursorScore_(group, mzs, ints, length, v.activation_type, &remaining_ratio)
+                  : -1.0;
+    }
+    else
+    {
+      v.score = computeExplorationScore_(group.exploration_metric, msn_deconv, group, mzs, ints, length,
+                                         &remaining_ratio, &frag, v.activation_type);
+    }
+    v.tic_coverage = measured_only ? 0.0f : computeTICCoverage_(msn_deconv);
     v.fragment_count = frag.total_match_count;
     v.received = true;
 
@@ -546,7 +522,8 @@ namespace OpenMS
     // Stage this MS2 variant into the ProteoformTracker for pooling (MS3 evidence folds via foldMs3,
     // not here). The CE-0 baseline is excluded: it carries no fragmentation evidence and must never
     // pollute the pooled model.
-    if (tracker != nullptr && group.msn_level == 2 && !v.is_baseline)
+    // A measured-only (trap) variant is never pooled either (ADR-0045).
+    if (tracker != nullptr && group.msn_level == 2 && !v.is_baseline && !v.measured_only)
     {
       tracker->feedScan(precursor_id,
                         2,
@@ -649,7 +626,9 @@ namespace OpenMS
     {
       std::vector<const DeconvolvedSpectrum*> variant_spectra;
       for (auto& var : group.variants)
-        variant_spectra.push_back(var.received ? &var.result : nullptr);
+        // A measured-only variant has no spectrum to score; nullptr, so it is excluded rather than scored 0
+        // (unreachable from config -- a trap sweep cannot be FragmentCount -- but not from a direct initiate).
+        variant_spectra.push_back(var.received && !var.measured_only ? &var.result : nullptr);
 
       // Score the completed exploration group against the LIVE WINNER ("Full"), not the render context.
       // group.proteoform_ctx stays the triggering-scan RENDER context (drives buildMS3 + the MS2Context);
