@@ -16,7 +16,6 @@
 namespace OpenMS
 {
 inline const int min_tag_count = 2;
-inline const int max_hit_count = 20;
 FLASHTnTAlgorithm::FLASHTnTAlgorithm(): DefaultParamHandler("FLASHTnTAlgorithm"), ProgressLogger()
 {
   setDefaultParams_();
@@ -52,6 +51,16 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   defaults_.setValue("keep_decoy", "false", "Retains decoy hits in the results.");
   defaults_.setValidStrings("keep_decoy", {"true", "false"});
 
+  defaults_.setValue("protein_level_only", "false",
+                     "Stops after the protein-level search, skipping proteoform characterization. The candidate proteins "
+                     "and their scores are still reported, so this can be used to shortlist proteins cheaply.");
+  defaults_.setValidStrings("protein_level_only", {"true", "false"});
+
+  defaults_.setValue("max_protein_hits", 20,
+                     "Number of candidate proteins kept per spectrum by the protein-level search. When proteoform search "
+                     "runs, only these are characterized.");
+  defaults_.setMinInt("max_protein_hits", 1);
+
   defaults_.setValue("ion_type", std::vector<std::string> {"b", "y"}, "Specifies ion types to consider.");
   defaults_.setValidStrings("ion_type", {"b", "c", "a", "y", "z", "x", "zp1", "zp2"});
 
@@ -75,6 +84,8 @@ void FLASHTnTAlgorithm::updateMembers_()
   keep_decoy_ = param_.getValue("keep_decoy").toString() == "true";
   keep_underdetermined_ = param_.getValue("discard_underdetermined").toString() == "false";
   multiple_hits_per_spec_ = param_.getValue("only_single_hit").toString() == "false";
+  protein_level_only_ = param_.getValue("protein_level_only").toString() == "true";
+  max_protein_hits_ = param_.getValue("max_protein_hits");
 }
 
 bool FLASHTnTAlgorithm::areConsistent_(const ProteinHit& a, const ProteinHit& b, double tol)
@@ -559,14 +570,14 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
                                                  : (left.getScore() > right.getScore());
     });
 
-    if ((int)hits.size() > max_hit_count)
+    if ((int)hits.size() > max_protein_hits_)
     {
       // The score above comes from a coarse integer-mass alignment against the whole spectrum, which is
       // not very specific: a correct protein can end up far below the cut while long sequences collect
       // chance matches. The number of distinct matched tags is sequence-specific evidence, so keep the
       // best hits by that criterion as well and let the extension decide between them.
       std::vector<bool> keep(hits.size(), false);
-      for (int i = 0; i < max_hit_count; i++)
+      for (int i = 0; i < max_protein_hits_; i++)
       {
         keep[i] = true; // hits are already sorted by score
       }
@@ -577,20 +588,28 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       {
         by_tag_count.emplace_back(-(int)hits[i].getMetaValue("TagIndices").toIntList().size(), i);
       }
-      std::partial_sort(by_tag_count.begin(), by_tag_count.begin() + max_hit_count, by_tag_count.end());
-      for (int i = 0; i < max_hit_count; i++)
+      std::partial_sort(by_tag_count.begin(), by_tag_count.begin() + max_protein_hits_, by_tag_count.end());
+      for (int i = 0; i < max_protein_hits_; i++)
       {
         keep[by_tag_count[i].second] = true;
       }
 
       std::vector<ProteinHit> kept;
-      kept.reserve(2 * max_hit_count);
+      kept.reserve(2 * max_protein_hits_);
       for (Size i = 0; i < hits.size(); i++)
       {
         if (keep[i]) kept.push_back(hits[i]);
       }
       hits.swap(kept); // still in score order
     }
+
+    for (Size i = 0; i < hits.size(); i++)
+    {
+      hits[i].setMetaValue("ProteinRank", (int)i + 1);
+      protein_hits_.push_back(hits[i]);
+    }
+
+    if (protein_level_only_) { continue; }
 
     FLASHExtenderAlgorithm extender;
     extender.setParameters(extender_param_);

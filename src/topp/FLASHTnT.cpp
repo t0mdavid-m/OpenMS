@@ -53,6 +53,10 @@ protected:
     registerOutputFile_("out_tag", "<file>", "", "Output tag-level tsv file containing matched tags.");
     setValidFormats_("out_tag", ListUtils::create<String>("tsv"));
 
+    registerOutputFile_("out_protein", "<file>", "", "Output protein-level tsv file containing the candidate proteins and "
+                        "their scores, as ranked before proteoform characterization.", false);
+    setValidFormats_("out_protein", ListUtils::create<String>("tsv"));
+
     // Register PrSM-level FDR parameter
     registerDoubleOption_("prsm_fdr", "Specifies the PrSM-level FDR.", 1.0, "Specifies the PrSM-level FDR.", false);
     setMinFloat_("prsm_fdr", 0.0);
@@ -69,6 +73,16 @@ protected:
     registerFlag_("discard_underdetermined",
                           "Discards underdetermined proteoform IDs (e.g., those without exact precursor masses or start/end positions).");
     //setValidStrings_("discard_underdetermined", {"true", "false"});
+
+    // Register protein-level-only option
+    registerFlag_("protein_level_only",
+                  "Stops after the protein-level search, skipping proteoform characterization. Use with -out_protein to "
+                  "shortlist proteins cheaply.");
+
+    registerIntOption_("max_protein_hits", "<number>", 20,
+                       "Number of candidate proteins kept per spectrum by the protein-level search. When proteoform "
+                       "search runs, only these are characterized.", false);
+    setMinInt_("max_protein_hits", 1);
 
     // Register decoy retention option
     registerFlag_("keep_decoy", "Retains decoy hits in the results.");
@@ -111,6 +125,7 @@ protected:
     String out_tag_file = getStringOption_("out_tag");
     String out_prsm_file = getStringOption_("out_prsm");
     String out_pro_file = getStringOption_("out_pro");
+    String out_protein_file = getStringOption_("out_protein");
 
     //-------------------------------------------------------------
     // reading input
@@ -130,6 +145,7 @@ protected:
     tnt_param.remove("out_tag");
     tnt_param.remove("out_prsm");
     tnt_param.remove("out_pro");
+    tnt_param.remove("out_protein");
     tnt_param.remove("log");
     tnt_param.remove("debug");
     tnt_param.remove("threads");
@@ -151,6 +167,7 @@ protected:
     fstream out_tagger_stream;
     fstream out_prsm_stream;
     fstream out_pro_stream;
+    fstream out_protein_stream;
 
     if (! out_tag_file.empty())
     {
@@ -168,6 +185,12 @@ protected:
     {
       out_pro_stream = fstream(out_pro_file, fstream::out);
       FLASHTnTFile::writeProHeader(out_pro_stream);
+    }
+
+    if (! out_protein_file.empty())
+    {
+      out_protein_stream = fstream(out_protein_file, fstream::out);
+      FLASHTnTFile::writeProteinHeader(out_protein_stream);
     }
 
     FLASHTnTAlgorithm tnt;
@@ -190,6 +213,13 @@ protected:
     {
       FLASHTnTFile::writeProteoforms(proteoform_hits, out_pro_stream, pro_fdr);
       out_pro_stream.close();
+    }
+    if (! out_protein_file.empty())
+    {
+      std::vector<ProteinHit> protein_hits;
+      tnt.getProteinHits(protein_hits);
+      FLASHTnTFile::writeProteins(protein_hits, out_protein_stream);
+      out_protein_stream.close();
     }
 
     return EXECUTION_OK;

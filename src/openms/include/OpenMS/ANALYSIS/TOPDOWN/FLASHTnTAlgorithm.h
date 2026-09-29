@@ -64,6 +64,16 @@ public:
     }
   }
 
+  /// The protein-level hits, as they were ranked before proteoform characterization. Filled in
+  /// both modes, so a run can be used to shortlist proteins even when the extension is performed.
+  void getProteinHits(std::vector<ProteinHit>& hits) const
+  {
+    for (const auto& hit : protein_hits_)
+    {
+      hits.push_back(hit);
+    }
+  }
+
 protected:
   void updateMembers_() override;
   /// implemented for DefaultParamHandler
@@ -79,7 +89,10 @@ private:
   bool keep_decoy_ = false;
   bool keep_underdetermined_ = true;
   bool multiple_hits_per_spec_ = false;
+  bool protein_level_only_ = false;
+  int max_protein_hits_ = 20;
   std::vector<ProteinHit> proteoform_hits_;
+  std::vector<ProteinHit> protein_hits_;
   std::vector<FLASHHelperClasses::Tag> tags_;
   std::map<int, std::vector<int>> matching_hits_indices_;
   static bool areConsistent_(const ProteinHit& a, const ProteinHit& b, double tol) ;

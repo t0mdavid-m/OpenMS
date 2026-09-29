@@ -29,6 +29,12 @@ namespace OpenMS
     /// write header line for Proteoform output file
     static void writeProHeader(std::fstream& fs);
 
+    /// header for the protein-level output, written before proteoform characterization
+    static void writeProteinHeader(std::fstream& fs);
+
+    /// the candidate proteins and their protein-level scores
+    static void writeProteins(const std::vector<ProteinHit>& hits, std::fstream& fs);
+
     /// write the features in regular file output
     static void writeTags(const FLASHTnTAlgorithm& tnt, double flanking_mass_tol, std::fstream& fs);
 
