@@ -1192,6 +1192,20 @@ namespace
     for (const auto& v : vs) if (v.is_baseline) ++n;
     return n;
   }
+
+  /// A CE-only sweep config with an explicit range: ce_min..ce_max in steps of ce_step (ADR-0047 d.8).
+  std::string sweepCfgRange(const std::string& activations, double ce_min, double ce_max, double ce_step)
+  {
+    return std::string(R"({
+      "deconvolution": { "tol": [10, 10, 10] },
+      "precursor_selection": { "rank_by": "qscore", "max_precursors": 3,
+        "exploration": { "metric": "mass_count", "ce_min": )") + std::to_string(ce_min)
+        + R"(, "ce_max": )" + std::to_string(ce_max) + R"(, "ce_step": )" + std::to_string(ce_step)
+        + R"(, "activations": [)" + activations + R"(] } },
+      "characterization": { "mode": "off" },
+      "ms_settings": { "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
+                       "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 } } })";
+  }
 } // anonymous namespace
 
 
@@ -4615,6 +4629,40 @@ START_SECTION(non_swept_activation_gets_no_baseline)
   int tid = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
   auto info = exploration.feedResult(tid, mzs.data(), ints.data(), 1, 0.5, queue);
   TEST_EQUAL(info.group.winner_tracking_id, std::string(ScanCommandQueue::encode(cmds[0].scan_id)))
+}
+END_SECTION
+
+START_SECTION(a_sweep_always_acquires_both_edges)
+{
+  // Summary: 15..40/2 does not divide. The accumulating loop stopped at 39 and the top edge was never
+  // acquired. Purpose: the decimation study's result rests on "both edges acquired" (ADR-0047 d.8); the
+  // production method's MS3 grid is 15..40/2. In practice: no committed golden config has a
+  // non-dividing grid, so only etc/method.json's MS3 sweep gains a scan.
+  Config cfg{sweepCfgRange(R"("HCD")", 15.0, 40.0, 2.0)};
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  auto cmds = exploration.initiate(2, pg, 3, queue);
+  auto group = ExplorationTestAccess::group(exploration, 1);
+  std::vector<double> ces;
+  for (const auto& v : group.variants) if (!v.is_baseline) ces.push_back(v.collision_energy);
+  TEST_EQUAL((int)ces.size(), 14)                 // 15,17,...,39 (13) + 40
+  ABORT_IF(ces.size() != 14)
+  TEST_REAL_SIMILAR(ces.front(), 15.0)
+  TEST_REAL_SIMILAR(ces[12], 39.0)
+  TEST_REAL_SIMILAR(ces.back(), 40.0)
+  TEST_EQUAL((int)cmds.size(), (int)group.variants.size())
+
+  // A dividing grid is unchanged: 20..40/5 is still exactly 5 points.
+  Config cfg2{sweepCfgRange(R"("HCD")", 20.0, 40.0, 5.0)};
+  ScanCommandQueue q2(cfg2);
+  FragmentAnalysis f2(cfg2);
+  Exploration e2(cfg2, f2);
+  e2.initiate(2, pg, 3, q2);
+  int n2 = 0;
+  for (const auto& v : ExplorationTestAccess::group(e2, 1).variants) if (!v.is_baseline) ++n2;
+  TEST_EQUAL(n2, 5)
 }
 END_SECTION
 

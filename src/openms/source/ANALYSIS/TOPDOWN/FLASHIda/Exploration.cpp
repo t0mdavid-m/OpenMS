@@ -65,17 +65,20 @@ namespace OpenMS
     if (acts.empty())
       acts.push_back(base_config.activation);
 
-    // Build collision energy and reaction time value arrays
-    std::vector<double> ces;
-    for (double ce = cfg.ce_min; ce <= cfg.ce_max + 1e-9; ce += cfg.ce_step)
-      ces.push_back(ce);
-
+    // Grid points from min by step, then the top edge if the range does not divide (ADR-0047 decision 8).
+    // Index arithmetic, not accumulation: `ce += step` drifts, and the old `ce <= max + 1e-9` loop dropped
+    // the top edge of every range the step does not divide (15..40/2 stopped at 39) -- the decimation
+    // study whose result this engine implements rests on both edges being acquired.
+    auto grid = [](double lo, double hi, double step) {
+      std::vector<double> g;
+      const int n = static_cast<int>(std::floor((hi - lo) / step + 1e-9)) + 1;
+      for (int i = 0; i < n; ++i) g.push_back(lo + i * step);
+      if (g.empty() || g.back() < hi - 1e-9) g.push_back(hi);
+      return g;
+    };
+    std::vector<double> ces = grid(cfg.ce_min, cfg.ce_max, cfg.ce_step);
     std::vector<double> rts;
-    if (cfg.rt_max > cfg.rt_min)
-    {
-      for (double rt = cfg.rt_min; rt <= cfg.rt_max + 1e-9; rt += cfg.rt_step)
-        rts.push_back(rt);
-    }
+    if (cfg.rt_max > cfg.rt_min) rts = grid(cfg.rt_min, cfg.rt_max, cfg.rt_step);
 
     // "Is this the same commanded scan?" -- the two sweep loops above advance by accumulation, so
     // compare with the same 1e-9 epsilon they terminate on rather than with ==.
