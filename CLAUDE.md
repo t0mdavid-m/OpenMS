@@ -23,7 +23,7 @@ Headers under `src/openms/include/OpenMS/ANALYSIS/TOPDOWN/`, sources under
 `CandidateAdmission.h`, `Ms2Params.h`, `NotchSelection.h` and `ProteoformTracker.h` are live but
 unregistered (verified 2026-09-04 — the list is longer than it used to be). Glob the directory
 instead. It costs nothing to register a new header there and it keeps the drift from growing;
-`ScanRole.h` and `ScanCommandJoin.h` are.
+`ScanRole.h`, `ScanCommandJoin.h` and `KineticModel.h` are.
 
 ### The untouchable boundary
 
@@ -368,56 +368,77 @@ A returning regular MS3 is scored against the **live tracker winner**
 context supplies only `fragment_ion_type`/`fragment_ion_index`. No winner ⇒ empty context ⇒ the
 MS3 matches nothing. The cache entry is erased after use, so a duplicate/late MS3 yields no row.
 
-### One un-fragmented reference per swept activation (ADR-0029)
+### A sweep is exactly its grid, and every pre-scan carries its precursor share (ADR-0048)
 
 `exploration.activations` is a **list**, and `buildVariants_` emits each activation's whole sweep as a
-contiguous block before starting the next. A **baseline** heads each block: that activation's own
-variant with the **swept axis alone** turned off — CE for HCD/CID, reaction time for ETD, both for
-EThcD — and every other parameter left as its siblings carry it, so an ETD baseline keeps
-`base_config.collision_energy` rather than dropping to 0.
+contiguous block before starting the next — and **nothing else**. The per-activation CE-0 baseline
+of ADR-0029 is gone (superseded): no reference scan is synthesized under any metric, so
+`ExplorationVariant::is_baseline`, `ExplorationGroup::baseline_intensity`, the suppression-when-the-
+grid-contains-the-turn-off-point logic and the "empty reference bars its activation" arm no longer
+exist, and `variant_index` is one running counter from 0. The grid itself is **index arithmetic with
+the top edge appended** (ADR-0047 d.8): `n = floor((max−min)/step + 1e-9) + 1` points from `min`, then
+`max` if the last point fell short — so `15..40/2` ends at 40, not 39 (the old `ce += step` loop
+dropped the edge; `etc/method.json`'s MS3 grid is exactly that shape).
 
-⚠️ **The two axes turn off at different values, and the asymmetry is the instrument's.** A collision
-energy of 0 is commandable and simply does not fragment; a reaction time of 0 is **rejected**, so "no
-reaction" is `Config.h`'s `MIN_REACTION_TIME_MS` (0.03 ms, ~300× shorter than a working ETD time).
-Zeroing both would emit an ETD reference the instrument refuses to acquire. The authored sweep *grid*
-is deliberately **not** floored — `Config::validate` rejects a `reaction_time_min` below the floor
-when an ETD-family activation is swept, which is what lets the grid's first point still coincide with
-the baseline and be suppressed. Gate it on `needsReactionTime`, never unconditionally: every
-CE-only config leaves `reaction_time_min` at its 0 default.
+What every variant contributes instead is its **precursor share** (`ExplorationVariant::precursor_share`,
+computed by `precursorShare_` through `KineticModel::precursorShare`): Σ raw intensity inside the
+anchor's isolation window over Σ raw intensity of the **same scan**, −1 when the scan carried nothing.
+It is read for every variant under every metric, on trap and Orbitrap alike, and it is what
+`scan_results.precursor_share` logs. `remaining_precursor` scores `max(0, 1 − |share − target|)`
+against `remaining_precursor_target` — the key kept its name, its value is now a share — and a
+share of −1 scores **`-1.0`**, "not scored", so an unmeasured variant can never win while a fully
+depleted one (share 0) competes like any other.
 
-Three consequences that are easy to get backwards:
+⚠️ **The reaction-time floor survives the baseline it was written for.** A reaction time of 0 is
+**rejected** by the instrument, so `Config::validate` still throws on a `reaction_time_min` below
+`Config.h`'s `MIN_REACTION_TIME_MS` (0.03 ms) when an ETD-family activation is swept. Gate it on
+`needsReactionTime`, never unconditionally: every CE-only config leaves `reaction_time_min` at its 0
+default. `ScanCommandQueue::cancelByScanIds` keeps having no production caller.
 
-- **It is suppressed, not duplicated, when the sweep already contains its turn-off point.** With
-  `ce_min: 0` (or `reaction_time_min: 0.03`) the block's first sweep point *is* the reference, so it
-  is flagged in place and nothing is synthesized. `buildVariants_` decides this by comparing the two **emitted commands**, not by
-  testing `ce_min == 0` — which is what makes the flagged and synthesized forms provably the same scan
-  and covers EThcD's cross-product for free. `initiate` prepends **nothing**; it used to insert one
-  baseline stamped `base_config.activation`, which need not be a swept activation at all.
-- **An activation that sweeps neither axis gets no baseline** and competes normally. A baseline is
-  "this scan with fragmentation off"; with no swept axis there is nothing to turn off. Drop that guard
-  and such an activation's single variant is identical to its own baseline, gets flagged, and can never
-  win.
-- **`ExplorationGroup::baseline_intensity` is a `std::map<std::string, double>` carrying three
-  states**: absent = that activation's reference has not returned; `> 0` = usable denominator;
-  `<= 0` = returned empty. `has_baseline` and `baseline_failed` are gone — both were group-scalar facts
-  that are now per-activation.
+### The Kinetic Model decides by the modeled maximum (ADR-0047)
 
-⚠️ **An empty reference bars one activation; it cancels nothing.** Its variants are still acquired and
-score **`-1.0`**, and that value is load-bearing rather than stylistic: winner selection seeds
-`best_score = -1.0` and takes `score > best_score`, so `-1.0` is excluded by the existing comparison
-with no new flag — while `0.0` **wins the group at zero**, and at MS3 a measuring metric then fires a
-production scan at that coin-flip CE. Siblings are unaffected and supply the winner; only when every
-activation is de-referenced does `best_idx` stay `-1`. `ScanCommandQueue::cancelByScanIds` therefore
-has no production caller left and is kept as a tested queue primitive.
+`ExplorationMetric::KineticModel` (`"kinetic_model"`, logged as `4`) is the fourth metric and the odd
+one: **no variant wins.** `computeExplorationScore_`'s arm returns `-1.0` for every pre-scan (the
+share is still read and logged), and at group completion `feedResultImpl_` fits the Gompertz curve
+`P(CE) = P₀·exp(−exp((CE − c)/w))` to the (CE, share) points (`KineticModel::fitGompertz`), runs the
+fragment-pool recursion `B(k) = e^{−k₂}B(k−1) + s_k(1−e^{−k₂})/k₂` on the fitted rate `s = −dP/dCE`
+over 1..`ce_max` with the level's authored `kinetic_k2[activation]`, and takes the integer argmax
+(`KineticModel::modeledMaximum`). That energy is acquired as the follow-up **at every level, overrides
+or not** — it is computed, so there is never a pre-scan to cascade from; the follow-up is rebuilt from
+variant 0 (`ref_idx`), whose stage-0 context, fragment scores and `window_snr` the whole group shares.
+`winner_index` stays −1 and `winner_tracking_id` empty. A fit with fewer than `kMinPoints` (3) finite
+shares, or a non-converging lattice, ends the group with `[EXPL-ABORT] reason=no-fit` and **no
+follow-up** — there is no fallback to the authored energy (owner decision, d.7). An edge maximum
+(`ce == 1` or `ce == ce_max`) is still acquired and flagged. `[EXPL-MODELED]` prints the whole fit;
+`FeedResultInfo::KineticInfo` carries it to the `scan_results` row (`fit_p0 … energy_source`).
+
+⚠️ **The fit is the study's lattice search, ported verbatim — not Levenberg-Marquardt.** ADR-0047
+d.3 said LM; implementation measured LM against the vendored pipeline on 1080 fits and got the same
+CE* on 941 (within ±1 on 1035) — the Gompertz RSS has a flat valley in (P₀, w), and a 5-start LM made
+it *worse* (921). The lattice port agrees on 1080/1080 with identical mean regret, so it is what ships
+(`KineticModel.cpp` documents the lattice: c on 0..60/0.5, w on geomspace(0.25, 25, 41), closed-form
+P₀ clipped to 1.1× the highest share, a ±0.5/×1.3 refinement). `KineticModel_test` pins that
+equivalence against `FlashIDA/test-data/kinetic/kinetic_expected.tsv`, which is generated by the
+vendored pipeline in `FlashIDA/test-scripts/kinetic/` — change one without the other and the test
+says so.
+
+⚠️ **`k2` is never defaulted, and the kinetic sweep is one CE-swept activation.** `Config` throws
+when the metric is `kinetic_model` and the swept activation has no `kinetic_model.k2` entry, when the
+object is authored under any other metric (an authored value nobody reads is the ADR-0040 stomped-key
+shape), when more than one activation is swept (one k₂ feeds one pool), and when the swept activation
+is ETD-family (nothing on the CE axis to fit). An entry for an unswept activation is a `[CONFIG-WARN]`.
+The trap check admits both share-based metrics; the multiplexed rejection covers both too. The only
+measured k₂ is HCD's (LOPO 0.0364–0.0390, all-in 0.0388); the MS3 golden's CID value is a
+**placeholder**, and no kinetic sweep has yet run on hardware.
 
 ### Reading vs measuring exploration metrics — the MS3 evidence rule (ADR-0020)
 
 **Only `FragmentCount` identifies its own MS3 pre-scans.** It scores a variant *by* matching it, so
 `ProteoformTracker::scoreCalibratedVariants` — the only matcher that works on an MS3 spectrum, since
 it is seeded with the proteoform context and the parent ion index — runs inside a
-`metric == FragmentCount` guard in `Exploration.cpp`. `MassCount` and `RemainingPrecursor` are
-**measuring**: they score from peak counts and window intensity and never invoke a matcher.
-`isMeasuringMetric()` (`Config.h`, beside the enum) is the classification; do not open-code
+`metric == FragmentCount` guard in `Exploration.cpp`. `MassCount`, `RemainingPrecursor` and
+`KineticModel` are **measuring**: they score from peak counts and the precursor share and never invoke
+a matcher. `isMeasuringMetric()` (`Config.h`, beside the enum) is the classification; do not open-code
 `== FragmentCount`.
 
 Three things follow, and the third is the trap:
@@ -428,8 +449,10 @@ Three things follow, and the third is the trap:
   cannot fire — which is why a completed MS3 sweep used to contribute *nothing*: no
   `identification.tsv` row, no `foldMs3`, no pooled evidence, after paying for every pre-scan.
 - Therefore a **measuring metric at MS3 always emits a production scan**, regardless of `overrides`.
-  The post-winner dispatch fires on `!overrides.empty() || (msn_level >= 3 && isMeasuringMetric(...))`.
-  The follow-up returns on the *regular* MS3 path and is matched there.
+  The post-decision dispatch fires on
+  `kinetic || !overrides.empty() || (msn_level >= 3 && isMeasuringMetric(...))` — the first disjunct
+  is ADR-0047 d.5: the Kinetic Model's energy is computed, so there is never a pre-scan to cascade
+  from, at **either** level. The follow-up returns on the *regular* MSn path and is matched there.
 
 `overrides` means *"the pre-scans ran at degraded settings"* — variants are built from
 `scans[0] + overrides`, the production scan from `scans[0]` alone. That is the whole reason the
@@ -552,7 +575,7 @@ the caller's responsibility.
 |---|---|---|
 | `ida.log` | — | free-text MS1 summary (not a TSV) — the record of acquisition *decisions*, and the only stream keyed on the **instrument** scan number. It **no longer has a reader outside FLASHIda** (ADR-0046); `PrecursorSelection`'s `target_log_files` loader is the one that remains |
 | `scan_commands.tsv` | 34 | one row per **dequeued** command; the wide MS3-fragment stream (32→34 ADR-0026 `first_mass`/`last_mass`, between `faims_enabled` and the trailing `enqueue_ts`). **The stream FLASHDeconv reads** (`-FD:scan_commands`, ADR-0046) — see *Offline coupling* below |
-| `scan_results.tsv` | 36 | pure acquisition-**event** log per `processScan` (34→29 identification payload moved out, →28 per-charge deconv restructure, →29 `deconv_qscores`; →32 the identification-YIELD block `tag_count`/`fragment_count`/`tic_coverage` after `remaining_ratio`; →36 ADR-0038's quant block `quant_channels`/`quant_condition_means`/`quant_fold_change`/`quant_verdict`, **appended** after `dequeue_ts` because every `r.colIndex` pinned in `FLASHIda_LoggingFields_test` is ≤ 21 and appending is the only placement that invalidates none of them) |
+| `scan_results.tsv` | 50 | pure acquisition-**event** log per `processScan` (34→29 identification payload moved out, →28 per-charge deconv restructure, →29 `deconv_qscores`; →32 the identification-YIELD block `tag_count`/`fragment_count`/`tic_coverage` after column 12; →36 ADR-0038's quant block `quant_channels`/`quant_condition_means`/`quant_fold_change`/`quant_verdict`, **appended** after `dequeue_ts` because every `r.colIndex` pinned in `FLASHIda_LoggingFields_test` is ≤ 21 and appending is the only placement that invalidates none of them; →41 ADR-0040's `consensus_*` block; →50 ADR-0047's kinetic block `fit_p0`/`fit_ce_max_s`/`fit_width`/`k2`/`modeled_ce`/`modeled_b`/`fit_points`/`fit_rss`/`energy_source`, written on the row that completes a `kinetic_model` group and sentinel-valued everywhere else, `energy_source` alone also `measured`/`none` on every other metric's completing row. Column 12 is **`precursor_share`** (ADR-0048, renamed from `remaining_ratio` because the quantity changed): the anchor window's share of the scan's raw signal on EVERY MS2/MS3 row — pre-scan, follow-up, regular — read in the window the command isolated last, −1 on MS1 rows) |
 | `identification.tsv` | 34 | per-scan MS2/MS3 identification leaf (32→34: `tag_count` beside `flash_extender_score`, `fragment_qscores` inside the aligned fragment-mass table) |
 | `pooled_identification.tsv` | 19 | per-precursor cumulative proteoform trajectory |
 
@@ -774,8 +797,9 @@ acquire the same set and differ only in scan count.
 
 Two things notches deliberately do **not** carry: per-notch **scores** (the slots hold geometry only,
 and the `*_s1` block is two-stage, so `charge_snr`/`precursor_intensity` remain the anchor's), and a
-redefined **`window_snr`** (it feeds exploration's `RemainingPrecursor` scoring, so it stays the anchor
-window's purity rather than a union).
+redefined **`window_snr`** (it is carried onto the follow-up command and into the MS2/MS3 proteoform
+contexts, so it stays the anchor window's purity rather than a union; since ADR-0048 no metric scores
+from it — the precursor share is read from the raw scan instead).
 - **Delimiters: `';'` everywhere EXCEPT id lists, which use a space.** `child_ids` and
   `contributing_scan_ids` join with `' '` because base-94 tracking ids draw from 0x21–0x7E, which
   **includes `';'`** (an id like `!!;` would collide); space is the only printable char the alphabet
