@@ -141,12 +141,10 @@ namespace OpenMS
     auto variant_params = buildVariants_(cfg, base_config);
     if (variant_params.empty()) return commands;
 
-    // NOTHING IS PREPENDED HERE. buildVariants_ owns baseline placement now (ADR-0029): one per
-    // swept activation, at the head of that activation's own block, suppressed when the block's
-    // sweep already contains it. This used to insert a SINGLE baseline at base_config.activation,
-    // which for a multi-activation sweep both mislabelled it (the scan config's activation need not
-    // be one of the swept ones) and duplicated a real sweep point whenever ce_min was 0.
-    // Baselines are still skipped in winner selection and excluded from the ProteoformTracker feed.
+    // NOTHING IS PREPENDED HERE, and nothing is synthesized in buildVariants_ either: a group is exactly
+    // its grid points (ADR-0048). The CE-0 reference scan this used to insert -- first here, then per
+    // swept activation in buildVariants_ (ADR-0029) -- is gone; the precursor share is referenced
+    // against the scan's own total, so no variant needs a denominator scan.
 
     // Compute precursor_mz and isolation_width from PeakGroup. The interval a metric SUMS must be the
     // interval the instrument was told to ISOLATE (ADR-0026 decision 2). buildMS2 widens the measured
@@ -203,7 +201,12 @@ namespace OpenMS
     // a score of 0, the other as a SegFault that hid 44 of the file's 48 sections.
     const bool has_ion_identity  = (ion_type != '\0');
     const bool unprojectable_ion = has_ion_identity && !MS3FragmentMatcher::isKnownIonClass(ion_type);
-    group.exploration_metric = (msn_level >= 3 && unprojectable_ion)
+    // Every metric but kinetic_model: an unassigned mass cannot be READ (no ion identity to match), so it
+    // is measured by remaining_precursor instead (ADR-0023 d.11). kinetic_model already measures -- it
+    // fits the precursor share, which a 'u' target carries like any other -- and forcing it onto
+    // remaining_precursor would silently drop the authored k2 for every unassigned mass of an exhaustive
+    // run, the stomped-key shape ADR-0047 d.6 forbids. So it keeps its metric.
+    group.exploration_metric = (msn_level >= 3 && unprojectable_ion && cfg.exploration != ExplorationMetric::KineticModel)
                                  ? ExplorationMetric::RemainingPrecursor
                                  : cfg.exploration;
     group.precursor_mz = precursor_mz;

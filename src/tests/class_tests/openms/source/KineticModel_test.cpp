@@ -194,7 +194,7 @@ END_SECTION
 START_SECTION(the_engine_fit_reproduces_the_studys_modeled_maxima)
 {
   // Summary: 1080 fits (108 sweeps x 10 grid offsets at spacing 10, top edge always acquired) against the
-  // vendored pipeline's grid-search fit. Purpose: layer A of ADR-0047 d.10 -- the LM fit is "equivalent" under
+  // vendored pipeline's grid-search fit. Purpose: layer A of ADR-0047 d.10 -- the engine's fit (the lattice port, after the d.3 amendment) is "equivalent" under
   // the tolerances the owner set (Q15): CE* within +-1 on EVERY fit, identical on >= 95 %, mean regret within
   // 0.005 of the pipeline's, parameters within the grid's own resolution on >= 95 %.
   std::string prov;

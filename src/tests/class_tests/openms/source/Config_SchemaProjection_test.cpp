@@ -588,7 +588,10 @@ START_SECTION(kinetic_model_sweeps_one_ce_swept_activation)
 {
   // Plan-level constraint, flagged to the owner at plan review: the model is defined on collision energy and
   // one k2 feeds one pool, so a kinetic_model sweep names exactly one activation, and that activation must be
-  // CE-swept (HCD, CID or EThcD) -- an ETD sweep varies reaction time and has no CE axis to fit.
+  // CE-ONLY (HCD or CID). An ETD sweep varies reaction time and has no CE axis to fit; an EThcD sweep has BOTH
+  // axes, so validate requires a reaction-time range for it and buildVariants_ emits the CE x RT cross product --
+  // duplicate CEs at different reaction times, which the 1-D Gompertz does not model, and a follow-up whose
+  // reaction time nobody decided (final review, Important #2). Rejected at load.
   TEST_EXCEPTION(std::invalid_argument,
     Config(cfgJson(R"(, "exploration": { "metric": "kinetic_model", "activations": ["HCD", "CID"],
                                          "kinetic_model": { "k2": { "HCD": 0.0388, "CID": 0.004 } } })")))
@@ -596,6 +599,16 @@ START_SECTION(kinetic_model_sweeps_one_ce_swept_activation)
     Config(cfgJson(R"(, "exploration": { "metric": "kinetic_model", "activations": ["ETD"],
                                          "reaction_time_min": 5, "reaction_time_max": 25, "reaction_time_step": 5,
                                          "kinetic_model": { "k2": { "ETD": 0.01 } } })")))
+  // EThcD: a legal range on both axes, so the ONLY thing refusing it is the kinetic guard.
+  TEST_EXCEPTION(std::invalid_argument,
+    Config(cfgJson(R"(, "exploration": { "metric": "kinetic_model", "activations": ["EThcD"],
+                                         "ce_min": 20, "ce_max": 40, "ce_step": 10,
+                                         "reaction_time_min": 5, "reaction_time_max": 25, "reaction_time_step": 10,
+                                         "kinetic_model": { "k2": { "EThcD": 0.02 } } })")))
+  // CID is a CE-only activation and loads.
+  Config cid(cfgJson(R"(, "exploration": { "metric": "kinetic_model", "activations": ["CID"],
+                                           "kinetic_model": { "k2": { "CID": 0.0388 } } })"));
+  TEST_REAL_SIMILAR(cid.level(2).kinetic_k2.at("CID"), 0.0388)
 }
 END_SECTION
 

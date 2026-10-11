@@ -1338,12 +1338,12 @@ namespace OpenMS
             "Orbitrap override (ADR-0045, ADR-0047).");
     }
 
-    // Level-matched multiplexing (ADR-0026 decision 4, re-grounded by ADR-0044). The remaining-precursor
-    // ratio sums the ANCHOR's isolation window and nothing else (Exploration::precursorWindowIntensity_),
-    // so under co-isolation it reports one charge state's depletion while the same collision energy
-    // depletes its siblings at other rates -- a target met by the anchor decides nothing about the
-    // rest. The engine already RECORDS that anchor-only number for every multiplexed variant
-    // (remaining_ratio in scan_results.tsv); this stops it being DECIDED on. Two shapes stay LEGAL and
+    // Level-matched multiplexing (ADR-0026 decision 4, re-grounded by ADR-0044, extended to the Kinetic
+    // Model by ADR-0048). The precursor share sums the ANCHOR's isolation window and nothing else
+    // (Exploration::precursorShare_), so under co-isolation it reports one charge state's depletion while
+    // the same collision energy depletes its siblings at other rates -- a target met by the anchor decides
+    // nothing about the rest. The engine already RECORDS that anchor-only number for every multiplexed
+    // variant (precursor_share in scan_results.tsv); this stops it being DECIDED on. Two shapes stay LEGAL and
     // are deliberately not caught here:
     //   - `separate` at BOTH levels: it fans out to one anchor per scan (buildMS2's notch guard at
     //     ScanCommandQueue.cpp:314 tests `== Multiplexed` only), so the anchor window IS the whole
@@ -1432,10 +1432,13 @@ namespace OpenMS
             sect + ".exploration.reaction_time_step must be > 0 when a reaction-time range is set; got "
             + std::to_string(cfg.rt_step) + ". A non-positive step never terminates the sweep loop.");
 
-      // ADR-0047. The Kinetic Model is defined on collision energy and one k2 feeds one pool, so a
-      // kinetic_model sweep names exactly one activation, and that activation must be CE-swept -- an ETD
-      // sweep varies reaction time and has no CE axis to fit. (Plan-level constraints, not grilled;
-      // lifting either later is additive.)
+      // ADR-0047. The Kinetic Model is a one-dimensional model of collision energy and one k2 feeds one
+      // pool, so a kinetic_model sweep names exactly one activation, and that activation must be CE-ONLY
+      // (HCD, CID): an ETD sweep varies reaction time and has no CE axis to fit, and an EThcD sweep has
+      // BOTH axes -- validate requires a reaction-time range for it, buildVariants_ then emits the CE x RT
+      // cross product (duplicate CEs at different reaction times, which the Gompertz does not model) and
+      // the follow-up would carry a reaction time nobody decided. (Plan-level constraints, not grilled;
+      // lifting them later is additive and needs an ADR for the second axis.)
       if (cfg.exploration == ExplorationMetric::KineticModel)
       {
         if (acts.size() != 1)
@@ -1443,10 +1446,12 @@ namespace OpenMS
               sect + ".exploration.metric is \"kinetic_model\" but " + std::to_string(acts.size())
               + " activations are swept. One k2 feeds one pool, so a kinetic sweep names exactly one activation; "
                 "author one exploration block per activation instead (ADR-0047).");
-        if (!needsCollisionEnergy(acts[0]))
+        if (!needsCollisionEnergy(acts[0]) || needsReactionTime(acts[0]))
           throw std::invalid_argument(
               sect + ".exploration.metric is \"kinetic_model\" but the swept activation '" + acts[0]
-              + "' varies reaction time, not collision energy. The model is defined on collision energy (ADR-0047).");
+              + "' is not a collision-energy-only activation (HCD or CID). The model is one-dimensional in collision "
+                "energy: an ETD-family sweep varies reaction time, which it cannot fit, and EThcD would sweep both axes "
+                "and leave the follow-up's reaction time undecided (ADR-0047).");
         for (const auto& [a, v] : cfg.kinetic_k2)
           if (std::find(acts.begin(), acts.end(), a) == acts.end())
             std::cout << "[CONFIG-WARN] " << sect << ".exploration.kinetic_model.k2." << a

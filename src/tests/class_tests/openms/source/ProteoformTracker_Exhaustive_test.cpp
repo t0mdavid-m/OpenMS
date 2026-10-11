@@ -803,6 +803,64 @@ END_SECTION
 // the scores, the winner and the logged exploration_metric column -- with nothing to compensate,
 // because a measuring metric at MS2 is not a close-out case. The four goldens above move.
 /////////////////////////////////////////////////////////////
+START_SECTION(unassigned_ms3_sweep_keeps_kinetic_model)
+{
+  // ADR-0023 d.11 forces an unassigned ('u') target onto remaining_precursor because a READING metric
+  // cannot score a mass with no ion identity. kinetic_model does not read fragments either -- it fits
+  // the precursor share, which a 'u' target carries like any other -- so forcing it would silently
+  // drop the authored k2 for every unassigned mass of an exhaustive run: the stomped-key shape ADR-0047
+  // d.6 exists to forbid, reached through the back door (final review, Important #1). The swap now
+  // applies to every metric BUT kinetic_model.
+  const std::string cfg_json = R"JSON({
+    "deconvolution": {"tol": [10, 10, 10]},
+    "precursor_selection": {"rank_by": "qscore", "max_precursors": 3},
+    "characterization": {
+      "mode": "exhaustive",
+      "protein_sequence": "PEPTIDEK",
+      "max_targets": 3,
+      "exploration": {"metric": "kinetic_model", "ce_min": 20.0, "ce_max": 30.0, "ce_step": 5.0,
+                      "activations": ["CID"], "kinetic_model": {"k2": {"CID": 0.0388}}}
+    },
+    "ms_settings": {
+      "ms1": {"analyzer": "Orbitrap", "resolution": 120000},
+      "ms2": {"analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29},
+      "ms3": {"analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25}
+    }
+  })JSON";
+
+  Config cfg{cfg_json};
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+  TEST_EQUAL(static_cast<int>(cfg.level(3).exploration), static_cast<int>(ExplorationMetric::KineticModel))
+
+  ScanCommand ms2_ctx = makeMs2Ctx();
+  PeakGroup unassigned_pg = makeSyntheticPeakGroup(MASS_U1, 2);
+  std::vector<ScanCommand> cmds = exploration.initiate(3, unassigned_pg, 2, queue, nullptr, &ms2_ctx, 'u', 0);
+  TEST_EQUAL(static_cast<int>(cmds.size()), 3)
+  ABORT_IF(cmds.size() != 3)
+  auto grp = ExplorationTestAccess::group(exploration, 1);
+  TEST_EQUAL(static_cast<int>(grp.exploration_metric), static_cast<int>(ExplorationMetric::KineticModel))
+
+  // And the group is decided by the model: feed falling shares, expect a fit with the authored k2 and
+  // ONE two-stage follow-up (no winner) -- the same contract a 'b' target gets.
+  const double shares[3] = {0.8, 0.4, 0.1};
+  Exploration::FeedResultInfo last;
+  for (size_t i = 0; i < cmds.size(); ++i)
+  {
+    std::vector<double> mzs{MASS_U1 / 2.0 + 1.00728, MASS_U1 / 2.0 + 301.0}, ints{1000.0 * shares[i], 1000.0 * (1.0 - shares[i])};
+    last = exploration.feedResult(cmds[i].scan_id, mzs.data(), ints.data(), 2, 1.0, queue);
+  }
+  TEST_EQUAL(last.kinetic.fitted, true)
+  TEST_REAL_SIMILAR(last.kinetic.k2, 0.0388)
+  TEST_EQUAL(last.group.winner_tracking_id.empty(), true)
+  TEST_EQUAL(static_cast<int>(last.commands.size()), 1)
+  ABORT_IF(last.commands.empty())
+  TEST_EQUAL(last.commands[0].msn_level, 3)
+  TEST_REAL_SIMILAR(last.commands[0].stages[1].collision_energy, (double)last.kinetic.modeled_ce)
+}
+END_SECTION
+
 START_SECTION(ms2_exploration_metric_is_never_overridden)
 {
   // Both configurable metrics, because the guard must be metric-agnostic: the four golden modes do not
