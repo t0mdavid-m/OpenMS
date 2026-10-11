@@ -13,6 +13,7 @@ set(sources_list_h
         FLASHIda/Deconvolution.h
         FLASHIda/Exploration.h
         FLASHIda/FAIMS.h
+        FLASHIda/KineticModel.h
         FLASHIda/FragmentAnalysis.h
         FLASHIda/IdaLogger.h
         FLASHIda/MS3FragmentMatcher.h

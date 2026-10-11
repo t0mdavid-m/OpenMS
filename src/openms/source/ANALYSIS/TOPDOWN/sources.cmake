@@ -13,6 +13,7 @@ set(sources_list
         FLASHIda/Deconvolution.cpp
         FLASHIda/Exploration.cpp
         FLASHIda/FAIMS.cpp
+        FLASHIda/KineticModel.cpp
         FLASHIda/FragmentAnalysis.cpp
         FLASHIda/IdaLogger.cpp
         FLASHIda/MS3FragmentMatcher.cpp
