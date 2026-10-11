@@ -601,18 +601,52 @@ namespace OpenMS
       }
     }
 
-    // Select the winner: strict `> best_score` from -1.0, so a variant that was not scored (-1.0: no
-    // share could be read, or a trap pre-scan under a counting metric) can never win. If nothing was
-    // scored, best_idx stays -1 and the no-winner arm below handles it.
+    // The group's decision. Two shapes (ADR-0047):
+    //   * every metric but kinetic_model picks a WINNER -- strict `> best_score` from -1.0, so a variant
+    //     that was not scored (-1.0: no share could be read, or a trap pre-scan under a counting metric)
+    //     can never win; if nothing was scored, best_idx stays -1 and the no-winner arm handles it;
+    //   * kinetic_model fits the Kinetic Model to the shares and takes the MODELED MAXIMUM -- an energy no
+    //     pre-scan need have run at, so no variant wins and a follow-up is always acquired.
+    const bool kinetic = (group.exploration_metric == ExplorationMetric::KineticModel);
     int best_idx = -1;
     double best_score = -1.0;
-    for (int i = 0; i < static_cast<int>(group.variants.size()); ++i)
+    if (kinetic)
     {
-      if (group.variants[i].score > best_score)
+      std::vector<KineticModel::SharePoint> pts;
+      for (const auto& var : group.variants) pts.push_back({var.collision_energy, var.precursor_share});
+      group.kinetic_fit = KineticModel::fitGompertz(pts);
+      const auto& lvl = config_.level(group.msn_level);
+      // One activation per kinetic sweep (Config::validate), so the first variant's activation is the sweep's.
+      const auto k2_it = lvl.kinetic_k2.find(group.variants.front().activation_type);
+      group.kinetic_k2 = (k2_it != lvl.kinetic_k2.end()) ? k2_it->second : -1.0;
+      group.kinetic_max = KineticModel::modeledMaximum(group.kinetic_fit, group.kinetic_k2,
+                                                       static_cast<int>(std::lround(lvl.ce_max)));
+      info.kinetic.fitted = group.kinetic_fit.ok;
+      info.kinetic.fit_points = group.kinetic_fit.n_points;
+      info.kinetic.p0 = group.kinetic_fit.p0;
+      info.kinetic.ce_max_s = group.kinetic_fit.ce_max_s;
+      info.kinetic.width = group.kinetic_fit.width;
+      info.kinetic.rss = group.kinetic_fit.rss;
+      info.kinetic.k2 = group.kinetic_k2;
+      info.kinetic.modeled_ce = group.kinetic_max.ce;
+      info.kinetic.modeled_b = group.kinetic_max.b;
+      info.kinetic.at_lower_edge = group.kinetic_max.at_lower_edge;
+      info.kinetic.at_upper_edge = group.kinetic_max.at_upper_edge;
+      info.kinetic.energy_source = group.kinetic_max.ce <= 0 ? "none"
+                                 : group.kinetic_max.at_lower_edge ? "modeled_edge_lower"
+                                 : group.kinetic_max.at_upper_edge ? "modeled_edge_upper" : "modeled";
+    }
+    else
+    {
+      for (int i = 0; i < static_cast<int>(group.variants.size()); ++i)
       {
-        best_score = group.variants[i].score;
-        best_idx = i;
+        if (group.variants[i].score > best_score)
+        {
+          best_score = group.variants[i].score;
+          best_idx = i;
+        }
       }
+      info.kinetic.energy_source = best_idx >= 0 ? "measured" : "none";
     }
 
     // Finalize the proteoform model before the next-level dispatch below
@@ -621,26 +655,49 @@ namespace OpenMS
       tracker->finalizeMS2(precursor_id);
     }
 
-    if (best_idx < 0)
+    const bool decided = kinetic ? (group.kinetic_max.ce > 0) : (best_idx >= 0);
+    if (!decided)
     {
-      // No scorable variant: no winner, no follow-up scan. Falls through to the cleanup below
-      // (this replaces the old leaking `if (best_idx < 0) return info;`).
+      // No decision: no follow-up scan, and at MS3 the target is not acquired at this level (ADR-0047 d.7:
+      // no fallback to the authored energy -- an energy the model could not justify is not acquired in its
+      // name). Falls through to the cleanup below.
       group.complete = true;
       std::cout << "[EXPL-ABORT] group=" << group.group_id
-                << " reason=no-winner winner=none" << std::endl;
+                << " reason=" << (kinetic ? "no-fit" : "no-winner") << " winner=none" << std::endl;
     }
     else
     {
-      group.winner_index = best_idx;
+      // ref_idx: the variant whose command stands in for "the sweep's command" when the follow-up is
+      // rebuilt (stage-0 context, fragment scores, window_snr). Under kinetic_model no variant won, so the
+      // first one serves -- every variant of a group shares that context.
+      const int ref_idx = kinetic ? 0 : best_idx;
+      const int chosen_ce = kinetic ? group.kinetic_max.ce
+                                    : static_cast<int>(group.variants[best_idx].collision_energy);
       group.complete = true;
-      group.variants[best_idx].result.getOrCreateOptimizationMetadata().is_best_variant = true;
-      info.group.winner_tracking_id = group.variants[best_idx].tracking_id;
+      if (!kinetic)
+      {
+        group.winner_index = best_idx;
+        group.variants[best_idx].result.getOrCreateOptimizationMetadata().is_best_variant = true;
+        info.group.winner_tracking_id = group.variants[best_idx].tracking_id;
+      }
+      else
+      {
+        std::cout << "[EXPL-MODELED] group=" << group.group_id
+                  << " activation=" << group.variants[0].activation_type
+                  << " p0=" << group.kinetic_fit.p0 << " ce_max_s=" << group.kinetic_fit.ce_max_s
+                  << " w=" << group.kinetic_fit.width << " k2=" << group.kinetic_k2
+                  << " points=" << group.kinetic_fit.n_points << " rss=" << group.kinetic_fit.rss
+                  << " CE=" << chosen_ce << " B=" << group.kinetic_max.b
+                  << (group.kinetic_max.at_lower_edge ? " edge=lower" : group.kinetic_max.at_upper_edge ? " edge=upper" : "")
+                  << std::endl;
+      }
 
       // C: emit identification.tsv rows for NON-WINNER variants that did NOT self-identify (empty own FLASHTnT
       // match) but whose masses re-matched the WINNER ladder in finalizeMS2 (mapNonWinnerMs2_) — they fold into
       // the pool (contributing_scan_ids) yet would otherwise have no id row. Render the winner proteoform + the
-      // scan's re-matched fragments, flash_extender_score = -1 (no own ID = the distinguisher).
-      if (tracker != nullptr && group.msn_level == 2)
+      // scan's re-matched fragments, flash_extender_score = -1 (no own ID = the distinguisher). Not under the
+      // Kinetic Model: no exploration winner exists there; the follow-up is identified on the ordinary path.
+      if (!kinetic && tracker != nullptr && group.msn_level == 2)
       {
         for (size_t vi = 0; vi < group.variants.size(); ++vi)
         {
@@ -661,12 +718,13 @@ namespace OpenMS
         }
       }
 
-      std::cout << "[EXPL-WINNER] group=" << group.group_id
-                << " winner_idx=" << best_idx
-                << " activation=" << group.variants[best_idx].activation_type
-                << " CE=" << group.variants[best_idx].collision_energy
-                << " RT=" << group.variants[best_idx].reaction_time
-                << " score=" << best_score << std::endl;
+      if (!kinetic)
+        std::cout << "[EXPL-WINNER] group=" << group.group_id
+                  << " winner_idx=" << best_idx
+                  << " activation=" << group.variants[best_idx].activation_type
+                  << " CE=" << group.variants[best_idx].collision_energy
+                  << " RT=" << group.variants[best_idx].reaction_time
+                  << " score=" << best_score << std::endl;
 
       const auto& level_config = config_.level(group.msn_level);
 
@@ -683,13 +741,17 @@ namespace OpenMS
       // Deliberately MS3-only: an MS2 variant is matched under every metric (computeFragmentMatch_ runs
       // the whole-protein matcher, which is the right one at MS2), so an MS2 sweep already has its
       // evidence and cascades to MS3 instead of re-acquiring itself.
+      //
+      //  3. the Kinetic Model, at EVERY level (ADR-0047 d.5): its chosen energy is computed, and in general
+      //     no pre-scan ran at it, so there is nothing to cascade from. One rule, one code path -- a
+      //     pre-scan that happens to sit at the modeled energy is not reused.
       const bool measuring_ms3_sweep = group.msn_level >= 3 && isMeasuringMetric(group.exploration_metric);
-      if (!level_config.overrides.empty() || measuring_ms3_sweep)
+      if (kinetic || !level_config.overrides.empty() || measuring_ms3_sweep)
       {
         ScanConfig prod_config = level_config.scans[0];
-        prod_config.collision_energy = static_cast<int>(group.variants[best_idx].collision_energy);
-        prod_config.reaction_time = group.variants[best_idx].reaction_time;
-        prod_config.activation = group.variants[best_idx].activation_type;
+        prod_config.collision_energy = chosen_ce;
+        prod_config.reaction_time = group.variants[ref_idx].reaction_time;
+        prod_config.activation = group.variants[ref_idx].activation_type;
 
         ScanCommand prod_cmd;
         if (group.msn_level >= 3)
@@ -704,7 +766,7 @@ namespace OpenMS
           // Reconstruct the winning variant's stage-1 fragment scores for the production MS3 (buildMS3
           // keeps its explicit frag_scores param; the other callers pass genuine scores, so do not fold
           // this into buildMS3 — an ms2-command would carry zero-initialised *_s1 fields).
-          const ScanCommand& wcmd = group.variants[best_idx].cmd;
+          const ScanCommand& wcmd = group.variants[ref_idx].cmd;
           FragmentAnalysis::FragmentScores wfs;
           wfs.mono_mass = wcmd.mono_mass_s1;                 
           wfs.qscore = wcmd.qscore_s1;
@@ -719,9 +781,9 @@ namespace OpenMS
           // group.stage1_notches, not the winning variant's own notches: this rebuilds the fragment
           // stage from the group's descriptors, and the variant command's notch slots would be read
           // as stage-0's inherited set by buildMS3's own inheritance step.
-          prod_cmd = queue.buildMS3(group.variants[best_idx].cmd, prod_config,
+          prod_cmd = queue.buildMS3(group.variants[ref_idx].cmd, prod_config,
                                      group.precursor_mz, group.precursor_charge,
-                                     group.isolation_width, group.variants[best_idx].cmd.scan_id,
+                                     group.isolation_width, group.variants[ref_idx].cmd.scan_id,
                                      group.fragment_ion_type, group.fragment_ion_index, 1, wfs,
                                      nullptr, group.proteoform_ctx, &group.stage1_notches);
         }
@@ -732,9 +794,8 @@ namespace OpenMS
         }
 
         prod_cmd.faims_cv = group.faims_cv;
-        if (best_idx >= 0 && best_idx < static_cast<int>(group.variants.size()))
         {
-          const double inherited = group.variants[best_idx].cmd.window_snr;
+          const double inherited = group.variants[ref_idx].cmd.window_snr;
           if (inherited >= 0.0) prod_cmd.window_snr = inherited;
         }
 
@@ -745,7 +806,7 @@ namespace OpenMS
 
         info.commands.push_back(prod_cmd);
         if (group.msn_level >= 3)
-          info.ms2_context_cache.emplace_back(prod_cmd.scan_id, buildMS2ContextForVariant(best_idx));
+          info.ms2_context_cache.emplace_back(prod_cmd.scan_id, buildMS2ContextForVariant(ref_idx));
       }
       // Cascade to the next level. The `< 3` is the MS4 wall: it says "MS2 groups cascade, MS3 groups are
       // terminal" where the general rule would be "cascade while the next level has a selection criterion"

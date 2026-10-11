@@ -221,6 +221,20 @@ namespace OpenMS
         double precursor_share = -1.0;  ///< ADR-0048: anchor-window signal over the whole scan's (-1.0 = N/A)
       } metric;
 
+      /// ADR-0047 decision 9: the Kinetic Model's live fit and decision. Filled ONLY on the row that
+      /// completes a kinetic_model group; `energy_source` alone is also set on the completing row of any
+      /// other metric. Sentinels everywhere else, so scan_results carries them as -1 / 0 / "".
+      struct KineticInfo
+      {
+        bool   fitted = false;
+        double p0 = -1.0, ce_max_s = -1.0, width = -1.0, rss = -1.0, k2 = -1.0, modeled_b = -1.0;
+        int    modeled_ce = 0, fit_points = 0;
+        bool   at_lower_edge = false, at_upper_edge = false;
+        /// On the completing row: "modeled" | "modeled_edge_lower" | "modeled_edge_upper" (kinetic_model,
+        /// decided), "measured" (another metric, a winner), "none" (no fit / no winner). "" otherwise.
+        std::string energy_source;
+      } kinetic;
+
       /// The proteoform match + context written to identification.tsv.
       struct IdentificationInfo
       {

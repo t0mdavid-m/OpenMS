@@ -1186,6 +1186,51 @@ namespace
     return -1;
   }
 
+  /// An MS2 kinetic_model sweep (ADR-0047): HCD ce_min..ce_max/ce_step with the authored k2 JSON object and an
+  /// optional overrides fragment (", \"overrides\": {...}").
+  std::string kineticCfg(double ce_min, double ce_max, double ce_step,
+                         const std::string& k2_json = R"({"HCD": 0.039046})", const std::string& overrides = "")
+  {
+    return std::string(R"({
+      "deconvolution": { "tol": [10, 10, 10] },
+      "precursor_selection": { "rank_by": "qscore", "max_precursors": 3,
+        "exploration": { "metric": "kinetic_model", "ce_min": )") + std::to_string(ce_min)
+        + R"(, "ce_max": )" + std::to_string(ce_max) + R"(, "ce_step": )" + std::to_string(ce_step)
+        + R"(, "activations": ["HCD"], "kinetic_model": { "k2": )" + k2_json + R"( })" + overrides + R"( } },
+      "characterization": { "mode": "off" },
+      "ms_settings": { "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
+                       "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29,
+                                "first_mass": 150, "last_mass": 2000 } } })";
+  }
+
+  /// An MS3 kinetic_model sweep: CID ce_min..ce_max/ce_step on characterization.exploration with an authored
+  /// CID k2; mode off (the sweep is driven through initiate(3, ...) directly, which reads the level config).
+  std::string kineticMs3Cfg(double ce_min, double ce_max, double ce_step, double k2 = 0.0388)
+  {
+    return std::string(R"({
+      "deconvolution": { "tol": [10, 10, 10] },
+      "precursor_selection": { "rank_by": "qscore", "max_precursors": 3 },
+      "characterization": { "mode": "off", "max_targets": 3,
+        "exploration": { "metric": "kinetic_model", "ce_min": )") + std::to_string(ce_min)
+        + R"(, "ce_max": )" + std::to_string(ce_max) + R"(, "ce_step": )" + std::to_string(ce_step)
+        + R"(, "activations": ["CID"], "kinetic_model": { "k2": { "CID": )" + std::to_string(k2) + R"( } } } },
+      "ms_settings": { "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
+                       "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 },
+                       "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25,
+                                "first_mass": 200, "last_mass": 2000 } } })";
+  }
+
+  /// Feed one variant a two-peak spectrum whose precursor share is exactly `share`: that fraction of 1000
+  /// at the anchor m/z, the rest 300 Th away. share < 0 feeds an EMPTY spectrum (no measurement).
+  Exploration::FeedResultInfo feedShare(Exploration& e, ScanCommandQueue& q, const ScanCommand& cmd,
+                                        double anchor_mz, double share)
+  {
+    const int tid = q.decode(std::string(cmd.scan_description).substr(0, 3));
+    if (share < 0.0) return e.feedResult(tid, nullptr, nullptr, 0, 1.0, q);
+    std::vector<double> mzs{anchor_mz, anchor_mz + 300.0}, ints{1000.0 * share, 1000.0 * (1.0 - share)};
+    return e.feedResult(tid, mzs.data(), ints.data(), 2, 1.0, q);
+  }
+
   /// A CE-only sweep config with an explicit range: ce_min..ce_max in steps of ce_step (ADR-0047 d.8).
   std::string sweepCfgRange(const std::string& activations, double ce_min, double ce_max, double ce_step)
   {
@@ -4253,6 +4298,226 @@ START_SECTION(an_authored_ce_zero_is_an_ordinary_pre_scan)
   auto info = ExplorationTestAccess::feedResult(exploration, tid, ds, 0.5, queue);
   TEST_REAL_SIMILAR(info.metric.score, 4.0)
   TEST_EQUAL(info.group.variant_index, 0)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// ADR-0047: the Kinetic Model decides by the modeled maximum and always follows up
+/////////////////////////////////////////////////////////////
+
+START_SECTION(kinetic_model_sweep_emits_the_follow_up_at_the_modeled_maximum)
+{
+  // Summary: six synthetic pre-scans carrying ubiquitin 9+'s real shares at the study's offset-0 grid
+  // (1, 11, 21, 31, 41, 50); the group must end with ONE follow-up at the modeled maximum the vendored
+  // pipeline computed for that sweep (kinetic_expected.tsv, offset 0), no winner, no cascade.
+  // Purpose: ADR-0047 d.4 / d.5, and "the correct energy is found" on real shares (layer B).
+  const auto shares = ubiquitinOffsetZeroShares();
+  ABORT_IF(shares.size() != 6)
+  const auto expected = kineticExpected("Ubiquitin", "9", "1", 0);
+  ABORT_IF(expected.first < 1)
+
+  Config cfg{kineticCfg(1.0, 50.0, 10.0)};
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  auto cmds = exploration.initiate(2, pg, 3, queue);
+  TEST_EQUAL((int)cmds.size(), 6)                        // 1, 11, 21, 31, 41, 50: top edge acquired, no baseline
+  ABORT_IF(cmds.size() != 6)
+  for (size_t i = 0; i < 6; ++i) TEST_REAL_SIMILAR(cmds[i].stages[0].collision_energy, (double)shares[i].first)
+
+  Exploration::FeedResultInfo last;
+  for (size_t i = 0; i < cmds.size(); ++i)
+  {
+    last = feedShare(exploration, queue, cmds[i], 800.0, shares[i].second);
+    TEST_REAL_SIMILAR(last.metric.precursor_share, shares[i].second)   // the share the engine read IS the share fed
+    TEST_REAL_SIMILAR(last.metric.score, -1.0)                          // no pre-scan is scored under this metric
+  }
+  // The completing row carries the fit and the decision.
+  TEST_EQUAL(last.kinetic.fitted, true)
+  TEST_EQUAL(last.kinetic.fit_points, 6)
+  TEST_EQUAL(last.kinetic.energy_source, std::string("modeled"))
+  TEST_REAL_SIMILAR(last.kinetic.k2, expected.second)                   // the authored k2 is the fold k2 of the table
+  TEST_EQUAL(last.kinetic.modeled_ce, expected.first)                   // identical: the engine IS the study's lattice fit
+  TEST_EQUAL(last.kinetic.p0 > 0.0 && last.kinetic.width > 0.0 && last.kinetic.modeled_b > 0.0, true)
+  TEST_EQUAL(last.group.winner_tracking_id.empty(), true)               // no pre-scan wins under this metric
+  // Exactly one follow-up: an MS2 'R' at the modeled energy, built from the un-overridden config.
+  TEST_EQUAL((int)last.commands.size(), 1)
+  ABORT_IF(last.commands.empty())
+  TEST_EQUAL(last.commands[0].msn_level, 2)
+  TEST_EQUAL(std::string(last.commands[0].scan_description)[3], 'R')
+  TEST_REAL_SIMILAR(last.commands[0].stages[0].collision_energy, (double)last.kinetic.modeled_ce)
+  TEST_STRING_EQUAL(last.commands[0].analyzer, "Orbitrap")
+  TEST_EQUAL(exploration.activeGroupCount(), 0)
+}
+END_SECTION
+
+START_SECTION(kinetic_model_follows_up_with_and_without_overrides)
+{
+  // ADR-0047 d.5: the follow-up does not depend on overrides. Same shares, trap overrides -> pre-scans on the
+  // IonTrap, follow-up on the Orbitrap at the same modeled energy as the no-override run.
+  const auto shares = ubiquitinOffsetZeroShares();
+  ABORT_IF(shares.size() != 6)
+  int modeled_plain = 0, modeled_trap = 0;
+  for (int arm = 0; arm < 2; ++arm)
+  {
+    const std::string ov = arm == 0 ? "" : R"(, "overrides": { "analyzer": "IonTrap" })";
+    Config cfg{kineticCfg(1.0, 50.0, 10.0, R"({"HCD": 0.039046})", ov)};
+    ScanCommandQueue queue(cfg);
+    FragmentAnalysis fragments(cfg);
+    Exploration exploration(cfg, fragments);
+    auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+    auto cmds = exploration.initiate(2, pg, 3, queue);
+    ABORT_IF(cmds.size() != 6)
+    for (const auto& c : cmds) TEST_STRING_EQUAL(c.analyzer, arm == 0 ? "Orbitrap" : "IonTrap")
+    Exploration::FeedResultInfo last;
+    for (size_t i = 0; i < cmds.size(); ++i) last = feedShare(exploration, queue, cmds[i], 800.0, shares[i].second);
+    TEST_EQUAL((int)last.commands.size(), 1)
+    ABORT_IF(last.commands.empty())
+    TEST_STRING_EQUAL(last.commands[0].analyzer, "Orbitrap")          // the follow-up is production-grade either way
+    (arm == 0 ? modeled_plain : modeled_trap) = last.kinetic.modeled_ce;
+  }
+  TEST_EQUAL(modeled_plain > 0, true)
+  TEST_EQUAL(modeled_plain, modeled_trap)                              // the share is analyzer-independent in this feed
+}
+END_SECTION
+
+START_SECTION(kinetic_model_no_fit_aborts_without_a_follow_up)
+{
+  // Two finite shares (four scans empty) -> fewer than kMinPoints -> no fit, no follow-up, group erased
+  // (ADR-0047 d.7). No fallback to the authored collision energy: the owner chose to lose the target.
+  Config cfg{kineticCfg(1.0, 50.0, 10.0)};
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  auto cmds = exploration.initiate(2, pg, 3, queue);
+  ABORT_IF(cmds.size() != 6)
+  Exploration::FeedResultInfo last;
+  last = feedShare(exploration, queue, cmds[0], 800.0, 0.9);
+  last = feedShare(exploration, queue, cmds[1], 800.0, 0.8);
+  for (size_t i = 2; i < cmds.size(); ++i) last = feedShare(exploration, queue, cmds[i], 800.0, -1.0);   // empty scans
+  TEST_EQUAL(last.kinetic.fitted, false)
+  TEST_EQUAL(last.kinetic.fit_points, 2)
+  TEST_EQUAL(last.kinetic.energy_source, std::string("none"))
+  TEST_EQUAL(last.kinetic.modeled_ce, 0)
+  TEST_EQUAL((int)last.commands.size(), 0)
+  TEST_EQUAL(exploration.activeGroupCount(), 0)
+}
+END_SECTION
+
+START_SECTION(kinetic_model_excludes_non_finite_shares)
+{
+  // Review Focus 2: an empty scan in the middle is excluded (share -1), the remaining five still fit.
+  const auto shares = ubiquitinOffsetZeroShares();
+  ABORT_IF(shares.size() != 6)
+  Config cfg{kineticCfg(1.0, 50.0, 10.0)};
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  auto cmds = exploration.initiate(2, pg, 3, queue);
+  ABORT_IF(cmds.size() != 6)
+  Exploration::FeedResultInfo last;
+  for (size_t i = 0; i < cmds.size(); ++i)
+    last = feedShare(exploration, queue, cmds[i], 800.0, i == 2 ? -1.0 : shares[i].second);   // CE 21 empty
+  TEST_EQUAL(last.kinetic.fitted, true)
+  TEST_EQUAL(last.kinetic.fit_points, 5)
+  TEST_EQUAL((int)last.commands.size(), 1)
+}
+END_SECTION
+
+START_SECTION(kinetic_model_flat_shares_choose_the_upper_edge_and_flag_it)
+{
+  // Review Focus 1: shares 0.80, 0.80, 0.79, 0.79, 0.78, 0.78 -> the curve's fall lies beyond the range. An
+  // edge maximum is still acquired, and the completing row says which edge (ADR-0047 d.4).
+  Config cfg{kineticCfg(1.0, 50.0, 10.0)};
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  auto cmds = exploration.initiate(2, pg, 3, queue);
+  ABORT_IF(cmds.size() != 6)
+  const double flat[6] = {0.80, 0.80, 0.79, 0.79, 0.78, 0.78};
+  Exploration::FeedResultInfo last;
+  for (size_t i = 0; i < cmds.size(); ++i) last = feedShare(exploration, queue, cmds[i], 800.0, flat[i]);
+  TEST_EQUAL(last.kinetic.fitted, true)
+  TEST_EQUAL(last.kinetic.modeled_ce, 50)
+  TEST_EQUAL(last.kinetic.at_upper_edge, true)
+  TEST_EQUAL(last.kinetic.energy_source, std::string("modeled_edge_upper"))   // one column carries both facts
+  TEST_EQUAL((int)last.commands.size(), 1)                                      // an edge maximum is still acquired
+  ABORT_IF(last.commands.empty())
+  TEST_REAL_SIMILAR(last.commands[0].stages[0].collision_energy, 50.0)
+}
+END_SECTION
+
+START_SECTION(kinetic_model_ms3_reads_the_stage1_window_and_follows_up)
+{
+  // Review Focus 3 + ADR-0047 d.2 at MS3, on the REAL b32 CID sweep of 2026-07-08 (test-data/spectra/
+  // FIXTURES.md): stage 0 is cytC 12+ at m/z 1027.31 (the ms2 context), stage 1 is b32 (4+) at m/z 1027.63.
+  // The 13 pre-scans at CID 15..39 step 2 are the cut fixtures; the follow-up is an MS3 at the modeled energy
+  // with stage 0 untouched.
+  const std::map<int, std::string> b32 = {
+    {15, "450"}, {17, "451"}, {19, "452"}, {21, "453"}, {23, "455"}, {25, "456"}, {27, "457"},
+    {29, "458"}, {31, "459"}, {33, "460"}, {35, "461"}, {37, "462"}, {39, "463"}};
+  Config cfg{kineticMs3Cfg(15.0, 39.0, 2.0)};
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+
+  ScanCommand ms2_ctx = queue.buildMS2(makeSyntheticPeakGroup(1027.3131, 12315.67, 12), 12, cfg.level(2).scans[0], 2, 0);
+  PeakGroup frag_pg = makeSyntheticPeakGroup(1027.6311, 4106.49, 4);
+  auto cmds = exploration.initiate(3, frag_pg, 4, queue, nullptr, &ms2_ctx, 'b', 32);
+  TEST_EQUAL((int)cmds.size(), 13)                                              // 15, 17, ..., 39; no baseline
+  ABORT_IF(cmds.size() != 13)
+  auto group = ExplorationTestAccess::group(exploration, 1);
+  TEST_EQUAL(group.msn_level, 3)
+  TEST_REAL_SIMILAR(group.isolation_width, 2.0)                                 // the MS3 floor: [1026.63, 1028.63]
+
+  Exploration::FeedResultInfo last;
+  int fed = 0;
+  for (size_t i = 0; i < cmds.size(); ++i)
+  {
+    const int ce = static_cast<int>(std::lround(cmds[i].stages[1].collision_energy));
+    ABORT_IF(b32.find(ce) == b32.end())
+    // The directory literal stands alone so the container's fixture-path pre-check (a grep for the
+    // relative fixture-path literals in the test sources) sees a path that exists; the file name is
+    // assembled from it.
+    auto scans = loadTsvScans(std::string("../../FlashIDA/test-data/spectra/")
+                              + "ms3_cytc3_b32_ce" + std::to_string(ce) + "_scan" + b32.at(ce) + ".txt");
+    ABORT_IF(scans.empty())
+    const auto& d = scans[0];
+    last = exploration.feedResult(cmds[i].scan_id, d.mzs.data(), d.ints.data(), static_cast<int>(d.mzs.size()), d.rt, queue);
+    TEST_EQUAL(last.metric.precursor_share >= 0.0 && last.metric.precursor_share <= 1.0, true)
+    ++fed;
+  }
+  TEST_EQUAL(fed, 13)
+  TEST_EQUAL(last.kinetic.fitted, true)
+  TEST_EQUAL(last.kinetic.fit_points, 13)
+  TEST_EQUAL(last.kinetic.modeled_ce >= 1 && last.kinetic.modeled_ce <= 39, true)
+  TEST_REAL_SIMILAR(last.kinetic.k2, 0.0388)
+  TEST_EQUAL((int)last.commands.size(), 1)
+  ABORT_IF(last.commands.empty())
+  TEST_EQUAL(last.commands[0].msn_level, 3)
+  TEST_EQUAL(last.commands[0].num_stages, 2)
+  TEST_EQUAL(std::string(last.commands[0].scan_description)[3], 'R')
+  TEST_REAL_SIMILAR(last.commands[0].stages[1].collision_energy, (double)last.kinetic.modeled_ce)
+  TEST_REAL_SIMILAR(last.commands[0].stages[0].collision_energy, ms2_ctx.stages[0].collision_energy)   // stage 0 untouched
+  TEST_EQUAL((int)last.ms2_context_cache.size(), 1)                            // the regular MS3 path can identify it
+  TEST_EQUAL(exploration.activeGroupCount(), 0)
+
+  // The stage-1 window, on a group whose two stages sit far apart (800 vs 500 Th): a spectrum with 1000 at the
+  // STAGE-0 m/z and 100 at the STAGE-1 m/z reads share 100/1100 -- reading stage 0's window would give 1000/1100.
+  Config cfg2{kineticMs3Cfg(15.0, 39.0, 2.0)};
+  ScanCommandQueue q2(cfg2);
+  FragmentAnalysis f2(cfg2);
+  Exploration e2(cfg2, f2);
+  ScanCommand ctx2 = q2.buildMS2(makeSyntheticPeakGroup(800.0, 2400.0, 3), 3, cfg2.level(2).scans[0], 2, 0);
+  auto cmds2 = e2.initiate(3, makeSyntheticPeakGroup(500.0, 1000.0, 2), 2, q2, nullptr, &ctx2, 'b', 5);
+  ABORT_IF(cmds2.empty())
+  std::vector<double> mzs{500.0, 800.0}, ints{100.0, 1000.0};
+  auto info2 = e2.feedResult(cmds2[0].scan_id, mzs.data(), ints.data(), 2, 1.0, q2);
+  TEST_REAL_SIMILAR(info2.metric.precursor_share, 100.0 / 1100.0)
 }
 END_SECTION
 
