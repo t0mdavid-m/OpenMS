@@ -309,10 +309,20 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
   TEST_REAL_SIMILAR(cfg.level(2).exploration_tolerance_ppm, jex2["tolerance_ppm"].get<double>())
 
   const auto& jex3 = j["characterization"]["exploration"];
-  TEST_EQUAL((int)cfg.level(3).exploration, (int)ExplorationMetric::FragmentCount)
+  // ADR-0047: the reference authors kinetic_model at level 3 so the generated file proves the C# emitter
+  // carries the k2 map (a NON-default value, per BuildFullReferenceConfig's rule) and the C++ parser reads
+  // it back under the swept activation. Level 2 stays mass_count: a kinetic_model object there would be
+  // rejected, and the reference must load.
+  TEST_EQUAL((int)cfg.level(3).exploration, (int)ExplorationMetric::KineticModel)
   TEST_REAL_SIMILAR(cfg.level(3).ce_min, jex3["ce_min"].get<double>())
   TEST_REAL_SIMILAR(cfg.level(3).ce_max, jex3["ce_max"].get<double>())
   TEST_REAL_SIMILAR(cfg.level(3).exploration_tolerance_ppm, jex3["tolerance_ppm"].get<double>())
+  ABORT_IF(!jex3.contains("kinetic_model") || !jex3["kinetic_model"].is_object())
+  const std::string ms3_act = j["ms_settings"]["ms3"]["activation"].get<std::string>();   // the swept activation
+  TEST_EQUAL(cfg.level(3).kinetic_k2.count(ms3_act), 1)
+  TEST_REAL_SIMILAR(cfg.level(3).kinetic_k2.at(ms3_act), jex3["kinetic_model"]["k2"][ms3_act].get<double>())
+  TEST_EQUAL(jex2.contains("kinetic_model") && jex2["kinetic_model"].is_null(), true)   // emitted as null when unauthored
+  TEST_EQUAL(cfg.level(2).kinetic_k2.empty(), true)
 
   // --- the dispatch roster: ms_settings.ms2 first, then additional_scans IN ARRAY ORDER.
   //     Order must never come from iterating additional_ms2 -- nlohmann's object_t is a std::map,
