@@ -1186,13 +1186,6 @@ namespace
     return -1;
   }
 
-  int baselineCount(const std::vector<Exploration::ExplorationVariant>& vs)
-  {
-    int n = 0;
-    for (const auto& v : vs) if (v.is_baseline) ++n;
-    return n;
-  }
-
   /// A CE-only sweep config with an explicit range: ce_min..ce_max in steps of ce_step (ADR-0047 d.8).
   std::string sweepCfgRange(const std::string& activations, double ce_min, double ce_max, double ce_step)
   {
@@ -1295,18 +1288,13 @@ START_SECTION(exploration_group_creation)
   TEST_EQUAL(static_cast<int>(group.exploration_metric),
              static_cast<int>(ExplorationMetric::MassCount))
 
-  // baseline-on-all (#18) prepends one CE-0 baseline variant (variant_index -1, is_baseline) at [0].
-  // Assert the 5 real CE-sweep variants by filtering the baseline out — robust to the baseline rule.
-  TEST_EQUAL(static_cast<int>(group.variants.size()), 6)
-  TEST_EQUAL(group.variants[0].is_baseline, true)
-  TEST_EQUAL(group.variants[0].variant_index, -1)
-  TEST_REAL_SIMILAR(group.variants[0].collision_energy, 0.0)
+  // A sweep is exactly its grid points (ADR-0048 d.3): no CE-0 reference scan under any metric.
+  TEST_EQUAL(static_cast<int>(group.variants.size()), 5)
 
   const double expected_ce[5] = {20.0, 25.0, 30.0, 35.0, 40.0};
   int real_count = 0;
   for (const auto& v : group.variants)
   {
-    if (v.is_baseline) continue;
     TEST_EQUAL(v.received, false)
     TEST_EQUAL(v.variant_index, real_count)
     TEST_REAL_SIMILAR(v.collision_energy, expected_ce[real_count])
@@ -1314,7 +1302,7 @@ START_SECTION(exploration_group_creation)
   }
   TEST_EQUAL(real_count, 5)
 
-  TEST_EQUAL(static_cast<int>(cmds.size()), 6)  // baseline + 5 CE-sweep variants
+  TEST_EQUAL(static_cast<int>(cmds.size()), 5)  // the 5 CE-sweep variants, nothing else
 
   (void)group;
 }
@@ -1331,8 +1319,8 @@ START_SECTION(exploration_variants_priority_by_level)
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, queue);
 
-  TEST_EQUAL(static_cast<int>(cmds.size()), 6)  // baseline + 5 CE-sweep variants (all priority-2 'E')
-  for (int i = 0; i < 6; ++i)
+  TEST_EQUAL(static_cast<int>(cmds.size()), 5)  // 5 CE-sweep variants (all priority-2 'E'); no baseline (ADR-0048)
+  for (int i = 0; i < 5; ++i)
   {
     TEST_EQUAL(cmds[i].msn_level, 2)
     TEST_EQUAL(cmds[i].priority, 2)  // MS2 exploration variants at priority 2
@@ -1359,9 +1347,9 @@ START_SECTION(ms3_exploration_variants_use_buildMS3)
   ms2_ctx.faims_cv = -50.0;  // Item 1: CV travels via the context
   auto cmds = exploration.initiate(3, fragment_pg, 2, queue, nullptr, &ms2_ctx, 'y', 5);
 
-  TEST_EQUAL(static_cast<int>(cmds.size()), 6)  // baseline + 5 CE-sweep variants (all MS3 buildMS3)
+  TEST_EQUAL(static_cast<int>(cmds.size()), 5)  // 5 CE-sweep variants (all MS3 buildMS3); no baseline (ADR-0048)
 
-  for (int i = 0; i < 6; ++i)
+  for (int i = 0; i < 5; ++i)
   {
     TEST_EQUAL(cmds[i].msn_level, 3)
     TEST_EQUAL(cmds[i].num_stages, 2)
@@ -1376,7 +1364,7 @@ START_SECTION(ms3_exploration_variants_use_buildMS3)
   TEST_EQUAL(group.originating_cmd.num_stages > 0, true)
 
   // MS3 exploration descriptions must include fragment ion info
-  for (int i = 0; i < 6; ++i)
+  for (int i = 0; i < 5; ++i)
   {
     std::string desc(cmds[i].scan_description);
     TEST_EQUAL(desc[3], 'E')  // exploration marker
@@ -1415,15 +1403,14 @@ START_SECTION(ms3_exploration_winner_selection_and_cleanup)
   auto fragment_pg = makeSyntheticPeakGroup(500.0, 1000.0, 2);
   ms2_ctx.faims_cv = -50.0;  // Item 1: CV travels via the context
   auto cmds = exploration.initiate(3, fragment_pg, 2, queue, nullptr, &ms2_ctx);
-  TEST_EQUAL(static_cast<int>(cmds.size()), 6)  // baseline (cmds[0]) + 5 CE-sweep variants
+  TEST_EQUAL(static_cast<int>(cmds.size()), 5)  // 5 CE-sweep variants; no baseline (ADR-0048)
   TEST_EQUAL(exploration.activeGroupCount(), 1)
 
-  // cmds[0] is the CE-0 baseline (variant_index -1, skipped in winner selection); cmds[1..5] are the
-  // 5 real variants (variant_index 0..4) with peak counts {2,4,6,8,3}. Feeding ALL 6 completes the group;
-  // the winner is the real variant with 8 peaks (variant_index 3 == cmds[4]).
-  std::vector<int> peak_counts = {0, 2, 4, 6, 8, 3};  // baseline + 5 reals
+  // cmds[0..4] are the 5 variants (variant_index 0..4) with peak counts {2,4,6,8,3}. Feeding ALL 5
+  // completes the group; the winner is the variant with 8 peaks (variant_index 3 == cmds[3]).
+  std::vector<int> peak_counts = {2, 4, 6, 8, 3};
   Exploration::FeedResultInfo last_info;
-  for (int i = 0; i < 6; ++i)
+  for (int i = 0; i < 5; ++i)
   {
     DeconvolvedSpectrum ds = makeSyntheticDeconv(i + 1, peak_counts[i]);
     int tracking_id = queue.decode(std::string(cmds[i].scan_description).substr(0, 3));
@@ -1435,10 +1422,10 @@ START_SECTION(ms3_exploration_winner_selection_and_cleanup)
   // not the winner's (variant_index 3, score 8.0) — the winner-overwrite was removed.
   TEST_REAL_SIMILAR(last_info.metric.score, 3.0)            // completing variant's own score (was 8.0)
   TEST_EQUAL(last_info.group.variant_index, 4)             // its own index, not the winner's 3
-  // The winner stays identifiable via winner_tracking_id == variant_index 3's encoded command id (cmds[4]).
+  // The winner stays identifiable via winner_tracking_id == variant_index 3's encoded command id (cmds[3]).
   // (getGroup throws here — the group was erased on completion — so read it from last_info.)
   TEST_EQUAL(last_info.group.winner_tracking_id.empty(), false)
-  TEST_EQUAL(last_info.group.winner_tracking_id, std::string(cmds[4].scan_description).substr(0, 3))
+  TEST_EQUAL(last_info.group.winner_tracking_id, std::string(cmds[3].scan_description).substr(0, 3))
 
   // MS3 command format (num_stages=2, priority=1) is verified in
   // ms3_exploration_variants_use_buildMS3 via the initiate() path.
@@ -1468,11 +1455,11 @@ START_SECTION(ms3_exploration_winner_selection_and_cleanup)
   ABORT_IF(last_info.ms2_context_cache.empty())
   TEST_EQUAL(last_info.ms2_context_cache[0].first, last_info.commands[0].scan_id)
   // The production CE is the WINNER's, not the level default (25) and not the completing variant's
-  // (cmds[5], CE 35). mass_count scores spec.size(), so variant_index 3 — 8 peak groups, cmds[4],
-  // CE 30 on the 15/20/25/30/35 grid — won. Reading it off cmds[4] rather than hard-coding 30 keeps
+  // (cmds[4], CE 35). mass_count scores spec.size(), so variant_index 3 — 8 peak groups, cmds[3],
+  // CE 30 on the 15/20/25/30/35 grid — won. Reading it off cmds[3] rather than hard-coding 30 keeps
   // the assertion true if the fixture's sweep grid is ever retuned.
   TEST_REAL_SIMILAR(last_info.commands[0].stages[1].collision_energy,
-                    cmds[4].stages[1].collision_energy)
+                    cmds[3].stages[1].collision_energy)
 }
 END_SECTION
 
@@ -1513,14 +1500,13 @@ START_SECTION(ms3_measuring_metric_always_reacquires_without_overrides)
   ScanCommand ms2_ctx = queue.buildMS2(makeSyntheticPeakGroup(800.0, 2400.0, 3), 3,
                                        cfg.level(2).scans[0], 2, 0);
   auto cmds = exploration.initiate(3, fragment_pg, 2, queue, nullptr, &ms2_ctx);
-  TEST_EQUAL(static_cast<int>(cmds.size()), 6)  // baseline + CE 20,25,30,35,40
+  TEST_EQUAL(static_cast<int>(cmds.size()), 5)  // CE 20,25,30,35,40; no baseline (ADR-0048)
 
-  // cmds[0] is the CE-0 baseline (variant_index -1, skipped in winner selection); cmds[1..5] are the
-  // 5 real variants. mass_count scores spec.size(), so the counts below are the scores directly and
-  // the winner is the 8-peak variant at cmds[4].
-  std::vector<int> peak_counts = {0, 2, 4, 6, 8, 3};  // baseline + 5 reals
+  // cmds[0..4] are the 5 variants. mass_count scores spec.size(), so the counts below are the scores
+  // directly and the winner is the 8-peak variant at cmds[3].
+  std::vector<int> peak_counts = {2, 4, 6, 8, 3};
   Exploration::FeedResultInfo last_info;
-  for (int i = 0; i < 6; ++i)
+  for (int i = 0; i < 5; ++i)
   {
     DeconvolvedSpectrum ds = makeSyntheticDeconv(i + 1, peak_counts[i]);
     int tid = queue.decode(std::string(cmds[i].scan_description).substr(0, 3));
@@ -1529,7 +1515,7 @@ START_SECTION(ms3_measuring_metric_always_reacquires_without_overrides)
 
   TEST_EQUAL(exploration.activeGroupCount(), 0)                      // group completed
   TEST_EQUAL(last_info.group.winner_tracking_id.empty(), false)      // a winner was chosen
-  TEST_EQUAL(last_info.group.winner_tracking_id, std::string(cmds[4].scan_description).substr(0, 3))
+  TEST_EQUAL(last_info.group.winner_tracking_id, std::string(cmds[3].scan_description).substr(0, 3))
 
   // THE ASSERTION THIS TEST EXISTS FOR: exactly one production MS3, despite empty overrides.
   TEST_EQUAL(static_cast<int>(last_info.commands.size()), 1)
@@ -1570,23 +1556,25 @@ START_SECTION(ms3_measuring_metric_always_reacquires_without_overrides)
     ScanCommand rp_ms2_ctx = rp_queue.buildMS2(makeSyntheticPeakGroup(800.0, 2400.0, 3), 3,
                                                rp_cfg.level(2).scans[0], 2, 0);
     auto rp_cmds = rp_expl.initiate(3, rp_frag_pg, 2, rp_queue, nullptr, &rp_ms2_ctx);
-    TEST_EQUAL(static_cast<int>(rp_cmds.size()), 6)   // baseline + CE 20,25,30,35,40
-    ABORT_IF(rp_cmds.size() != 6)
+    TEST_EQUAL(static_cast<int>(rp_cmds.size()), 5)   // CE 20,25,30,35,40; no baseline (ADR-0048)
+    ABORT_IF(rp_cmds.size() != 5)
     for (const auto& c : rp_cmds) TEST_STRING_EQUAL(c.analyzer, "Orbitrap")   // no override: the level's own analyzer
 
-    // Raw arrays: one peak at the window centre, two 50 Th outside it. Ratios 0.9/0.7/0.4/0.1/0.05 against
-    // target 0.1 give scores 0.2/0.4/0.7/1.0/0.95, so the CE-35 variant (rp_cmds[4]) wins.
+    // Raw arrays: one peak at the window centre, two 50 Th outside it. The precursor SHARE is the centre
+    // peak over the whole scan (ADR-0048): 900/1900, 700/1700, 400/1400, 100/1100, 50/1050 = 0.474 /
+    // 0.412 / 0.286 / 0.091 / 0.048 against target 0.1 give scores 0.626 / 0.688 / 0.814 / 0.991 /
+    // 0.948, so the CE-35 variant (rp_cmds[3]) wins.
     auto rp_group = ExplorationTestAccess::group(rp_expl, 1);
     const double c_mz = rp_group.precursor_mz;
     std::vector<double> mzs{c_mz - 50.0, c_mz, c_mz + 50.0};
-    std::vector<std::vector<double>> ints{{300.0, 1000.0, 700.0}, {300.0, 900.0, 700.0}, {300.0, 700.0, 700.0},
+    std::vector<std::vector<double>> ints{{300.0, 900.0, 700.0}, {300.0, 700.0, 700.0},
                                           {300.0, 400.0, 700.0}, {300.0, 100.0, 700.0}, {300.0, 50.0, 700.0}};
     Exploration::FeedResultInfo rp_last;
-    for (int i = 0; i < 6; ++i)
+    for (int i = 0; i < 5; ++i)
       rp_last = rp_expl.feedResult(rp_cmds[i].scan_id, mzs.data(), ints[i].data(), 3, 0.5 * (i + 1), rp_queue);
 
     TEST_EQUAL(rp_expl.activeGroupCount(), 0)
-    TEST_EQUAL(rp_last.group.winner_tracking_id, ScanCommandQueue::encode(rp_cmds[4].scan_id))
+    TEST_EQUAL(rp_last.group.winner_tracking_id, ScanCommandQueue::encode(rp_cmds[3].scan_id))
     TEST_EQUAL(static_cast<int>(rp_last.commands.size()), 1)   // gate #2, with gate #1 provably false
     ABORT_IF(rp_last.commands.empty())
     TEST_EQUAL(rp_last.commands[0].msn_level, 3)
@@ -1620,11 +1608,11 @@ START_SECTION(ms3_reading_metric_does_not_reacquire_without_overrides)
   ScanCommand ms2_ctx = queue.buildMS2(makeSyntheticPeakGroup(800.0, 2400.0, 3), 3,
                                        cfg.level(2).scans[0], 2, 0);
   auto cmds = exploration.initiate(3, fragment_pg, 2, queue, nullptr, &ms2_ctx);
-  TEST_EQUAL(static_cast<int>(cmds.size()), 6)
+  TEST_EQUAL(static_cast<int>(cmds.size()), 5)   // no baseline (ADR-0048)
 
-  std::vector<int> peak_counts = {0, 2, 4, 6, 8, 3};
+  std::vector<int> peak_counts = {2, 4, 6, 8, 3};
   Exploration::FeedResultInfo last_info;
-  for (int i = 0; i < 6; ++i)
+  for (int i = 0; i < 5; ++i)
   {
     DeconvolvedSpectrum ds = makeSyntheticDeconv(i + 1, peak_counts[i]);
     int tracking_id = queue.decode(std::string(cmds[i].scan_description).substr(0, 3));
@@ -1650,19 +1638,19 @@ START_SECTION(winner_selection_by_score)
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, queue);
-  TEST_EQUAL(static_cast<int>(cmds.size()), 6)  // baseline (cmds[0]) + 5 CE-sweep variants
+  TEST_EQUAL(static_cast<int>(cmds.size()), 5)  // 5 CE-sweep variants; no baseline (ADR-0048)
 
-  std::vector<double> scores = {0.0, 1.0, 3.0, 2.0, 5.0, 0.0};  // baseline + 5 reals
+  std::vector<double> scores = {1.0, 3.0, 2.0, 5.0, 0.0};
   Exploration::FeedResultInfo last_info;
-  for (int i = 0; i < 6; ++i)
+  for (int i = 0; i < 5; ++i)
   {
     DeconvolvedSpectrum ds = makeSyntheticDeconv(i + 1, static_cast<int>(scores[i]));
     int tracking_id = queue.decode(std::string(cmds[i].scan_description).substr(0, 3));
     last_info = ExplorationTestAccess::feedResult(exploration,tracking_id, ds, static_cast<double>(i), queue);
   }
 
-  // mass_count metric -> remaining_ratio should be -1.0 (N/A)
-  TEST_REAL_SIMILAR(last_info.metric.remaining_ratio, -1.0)
+  // No raw arrays reached the engine (the deconvolution bypass), so no share could be read: -1 = N/A.
+  TEST_REAL_SIMILAR(last_info.metric.precursor_share, -1.0)
   TEST_EQUAL(exploration.activeGroupCount(), 0)
 }
 END_SECTION
@@ -1903,17 +1891,16 @@ START_SECTION(optimization_metadata_populated)
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, queue);
 
-  // cmds[0] is the CE-0 baseline (variant_index -1); feed the FIRST REAL variant (cmds[1], variant_index 0,
-  // CE 20) so the metadata under test belongs to a real CE-sweep variant, not the baseline.
+  // Feed the first variant (cmds[0], variant_index 0, CE 20); there is no baseline (ADR-0048).
   DeconvolvedSpectrum ds = makeSyntheticDeconv(1, 3);
-  int tracking_id = queue.decode(std::string(cmds[1].scan_description).substr(0, 3));
+  int tracking_id = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
   ExplorationTestAccess::feedResult(exploration,tracking_id, ds, 1.0, queue);
 
   TEST_EQUAL(exploration.activeGroupCount(), 1)
 
   auto group = ExplorationTestAccess::group(exploration,1);
-  TEST_EQUAL(group.variants[1].received, true)
-  auto& stored = group.variants[1].result;
+  TEST_EQUAL(group.variants[0].received, true)
+  auto& stored = group.variants[0].result;
   TEST_EQUAL(stored.hasOptimizationMetadata(), true)
 
   const auto* meta = stored.getOptimizationMetadata();
@@ -2037,7 +2024,7 @@ END_SECTION
 
 START_SECTION(remaining_precursor_score_no_raw_data)
 {
-  // RemainingPrecursor now prepends a CE=0 baseline scan: 1 baseline + 5 CE variants = 6
+  // 5 CE variants and no reference scan (ADR-0048): the share needs none.
   Config cfg{std::string(remaining_precursor_config)};
   ScanCommandQueue queue(cfg);
   Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
@@ -2046,45 +2033,37 @@ START_SECTION(remaining_precursor_score_no_raw_data)
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, queue);
-  TEST_EQUAL(static_cast<int>(cmds.size()), 6)
+  TEST_EQUAL(static_cast<int>(cmds.size()), 5)
 
-  // Verify first command is CE=0 baseline
-  TEST_REAL_SIMILAR(cmds[0].stages[0].collision_energy, 0.0)
+  // The first command is the first GRID point, not a CE-0 reference.
+  TEST_REAL_SIMILAR(cmds[0].stages[0].collision_energy, 20.0)
 
-  // Verify exploration group has RemainingPrecursor metric
   auto group = ExplorationTestAccess::group(exploration,1);
   TEST_EQUAL(static_cast<int>(group.exploration_metric),
              static_cast<int>(ExplorationMetric::RemainingPrecursor))
-  // Baseline variant at index 0 should have is_baseline=true, variant_index=-1
-  TEST_EQUAL(group.variants[0].is_baseline, true)
-  TEST_EQUAL(group.variants[0].variant_index, -1)
-  // Non-baseline variants should have is_baseline=false
-  for (int i = 1; i < 6; ++i)
-  {
-    TEST_EQUAL(group.variants[i].is_baseline, false)
-    TEST_EQUAL(group.variants[i].variant_index, i - 1)
-  }
+  for (int i = 0; i < 5; ++i) TEST_EQUAL(group.variants[i].variant_index, i)
 
-  // Feed all 6 variants via feedResultForTest (no raw data -> all scores = 0.0)
-  for (int i = 0; i < 6; ++i)
+  // Feed all 5 variants via the deconvolution bypass (no raw arrays -> no share -> not scored).
+  for (int i = 0; i < 5; ++i)
   {
     DeconvolvedSpectrum ds = makeSyntheticDeconv(i + 1, i + 1);
     int tracking_id = queue.decode(std::string(cmds[i].scan_description).substr(0, 3));
     auto info = ExplorationTestAccess::feedResult(exploration,tracking_id, ds, static_cast<double>(i), queue);
 
-    // total_variants should exclude baseline (= 5 real variants)
     TEST_EQUAL(info.group.total_variants, 5)
-    TEST_REAL_SIMILAR(info.metric.remaining_ratio, -1.0)
+    TEST_REAL_SIMILAR(info.metric.precursor_share, -1.0)   // no arrays reached the engine
+    TEST_REAL_SIMILAR(info.metric.score, -1.0)             // a share of -1 is "not scored", never 0
   }
 
-  // Group should be complete (all variants received)
+  // Group completes with no winner (nothing scored) and is erased.
   TEST_EQUAL(exploration.activeGroupCount(), 0)
 }
 END_SECTION
 
 START_SECTION(remaining_precursor_score_with_raw_data)
 {
-  // Test RemainingPrecursor scoring with raw data: baseline CE=0 + CE>0 variants
+  // RemainingPrecursor scores the precursor SHARE of each pre-scan (ADR-0048): the anchor window's raw
+  // intensity over the raw intensity of the same scan. No reference scan exists any more.
   Config cfg{std::string(remaining_precursor_config)};
   ScanCommandQueue queue(cfg);
   Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
@@ -2093,73 +2072,48 @@ START_SECTION(remaining_precursor_score_with_raw_data)
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, queue);
-  TEST_EQUAL(static_cast<int>(cmds.size()), 6)
+  TEST_EQUAL(static_cast<int>(cmds.size()), 5)
 
   auto group = ExplorationTestAccess::group(exploration,1);
   // Exact, not `> 0.0`: initiate() sets precursor_mz = midpoint of pg.getMzRange(charge), and the
   // synthetic group holds ONE peak at 800.0 at charge 3, so the midpoint is that peak (800+800)/2.
-  // The old `> 0.0` could not fail -- getMzRange returns (-1, -10) only when the charge is outside
-  // [min_abs_charge_, max_abs_charge_], which makeSyntheticPeakGroup(mz, mass, c) makes impossible
-  // by constructing PeakGroup(c, c, true) and feeding the peak at that same charge.
   TEST_REAL_SIMILAR(group.precursor_mz, 800.0)
 
-  // Feed CE=0 baseline with precursor-window signal (full intensity)
-  std::vector<double> baseline_mzs = {790.0, 800.0, 810.0, 900.0};
-  std::vector<double> baseline_ints = {100.0, 500.0, 200.0, 50.0};
-  // In-window sum depends on isolation_width; 800.0 is precursor_mz center.
-
-  int baseline_tid = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
-  exploration.feedResult(baseline_tid, baseline_mzs.data(), baseline_ints.data(),
-                         static_cast<int>(baseline_mzs.size()), 0.5, queue);
-
-  // After baseline, group should have baseline_intensity set.
-  //
-  // The exact value, not `>= 0.0` -- precursorWindowIntensity_ sums non-negative intensities, so the
-  // old form was a tautology that would have held just as well for the empty window this section
-  // exists to rule out. At MS2 there is NO 2.0 Th floor (Exploration.cpp:166-168 applies that to
-  // msn_level >= 3 only) and the synthetic group is a single peak, so mz2 - mz1 == 0 and the window is
-  // the ADR-0026 decision-2 margin alone: 2 * optimal_window_margin_ == 0.8 Th, i.e. [799.6, 800.4].
-  // precursorWindowIntensity_ tests `>= mz_low && <= mz_high`, so that window admits the 800.0 peak and
-  // rejects 790/810/900: the sum is that peak's 500.0 alone.
-  auto group_after_baseline = ExplorationTestAccess::group(exploration,1);
-  TEST_EQUAL(ExplorationTestAccess::hasAnyBaseline(group_after_baseline), true)
-  TEST_REAL_SIMILAR(ExplorationTestAccess::soleBaseline(group_after_baseline), 500.0)
-
-  // Feed second variant (CE=20) with reduced in-window signal (fragmentation removed some)
+  // At MS2 there is NO 2.0 Th floor (that arm is msn_level >= 3 only) and the synthetic group is a
+  // single peak, so mz2 - mz1 == 0 and the window is the ADR-0026 decision-2 margin alone:
+  // 2 * optimal_window_margin_ == 0.8 Th, i.e. [799.6, 800.4]. KineticModel::precursorShare tests
+  // `>= mz_low && <= mz_high`, so that window admits the 800.0 peak and rejects 790/810/900.
+  // Share = 200 / (50 + 200 + 100 + 50) = 0.5; target 0.1 -> score = 1 - 0.4 = 0.6.
   std::vector<double> frag_mzs = {790.0, 800.0, 810.0, 900.0};
   std::vector<double> frag_ints = {50.0, 200.0, 100.0, 50.0};
-
-  int ce20_tid = queue.decode(std::string(cmds[1].scan_description).substr(0, 3));
+  int ce20_tid = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
   auto ce20_info = exploration.feedResult(ce20_tid, frag_mzs.data(), frag_ints.data(),
                                           static_cast<int>(frag_mzs.size()), 1.0, queue);
 
-  // The CE>0 variant's exact score, not a [0, 1] range check. computeRemainingPrecursorScore_ ends in
-  // `score = 1.0 - deviation; if (score < 0.0) score = 0.0;` with deviation = |ratio - target| >= 0, so
-  // both bounds held BY CONSTRUCTION and the pair could not fail for any input at all -- they would have
-  // passed just as happily on the score-0 baseline-failure path the next section exercises.
-  // Derivation: the same 0.8 Th window admits only the 800.0 peak, so the variant's
-  // in-window intensity is 200.0 against the baseline's 500.0 -> ratio 0.4; remaining_precursor_target
-  // is unset in this fixture and defaults to 0.1 (Config.h:174, asserted in remaining_precursor_config_parsed),
-  // so deviation = 0.3 and score = 0.7.
   auto group_mid = ExplorationTestAccess::group(exploration,1);
-  TEST_EQUAL(group_mid.variants[1].received, true)
-  TEST_REAL_SIMILAR(group_mid.variants[1].score, 0.7)
+  TEST_EQUAL(group_mid.variants[0].received, true)
+  TEST_REAL_SIMILAR(group_mid.variants[0].precursor_share, 0.5)
+  TEST_REAL_SIMILAR(group_mid.variants[0].score, 0.6)
+  TEST_REAL_SIMILAR(ce20_info.metric.precursor_share, 0.5)
+  TEST_REAL_SIMILAR(ce20_info.metric.score, 0.6)
 
-  // remaining_ratio: 200.0 in-window / 500.0 baseline = 0.4. Unlike the score above, the two bounds this
-  // replaces were WEAK rather than unfailable -- the ratio is a raw quotient, so -1.0 (the "N/A" sentinel
-  // for no baseline or an empty one) and values above 1.0 (a variant brighter than the un-fragmented
-  // reference) are both reachable and both would have failed. But [0, 1] still admits every plausible
-  // depletion, so it never pinned WHICH scan the metric-independent block (Exploration.cpp:469-474)
-  // ratioed against -- the whole point of that block being keyed on the baseline.
-  TEST_REAL_SIMILAR(ce20_info.metric.remaining_ratio, 0.4)
+  // A second variant whose window carries a different fraction: 450 / 900 = 0.5 as well -- the share
+  // is a RATIO within the scan, so a scan twice as bright reads the same.
+  std::vector<double> bright_ints = {100.0, 450.0, 250.0, 100.0};
+  int ce25_tid = queue.decode(std::string(cmds[1].scan_description).substr(0, 3));
+  auto ce25_info = exploration.feedResult(ce25_tid, frag_mzs.data(), bright_ints.data(),
+                                          static_cast<int>(frag_mzs.size()), 1.5, queue);
+  TEST_REAL_SIMILAR(ce25_info.metric.precursor_share, 0.5)
+  TEST_REAL_SIMILAR(ce25_info.metric.score, 0.6)
 }
 END_SECTION
 
 START_SECTION(remaining_precursor_score_no_signal_in_window)
 {
-  // Feed a baseline with zero in-window signal, leaving this activation without a denominator. Its
-  // variants are still ACQUIRED and still received -- nothing is cancelled (ADR-0029) -- but they
-  // score -1.0, "not scored", which is what withdraws them from winner selection.
+  // Two distinct "nothing in the window" cases, and they must stay distinct (ADR-0048 d.5, Review
+  // Focus 2): a scan with signal elsewhere but none in the window has share 0 -- a fully depleted
+  // precursor, which is CLOSER to a 0.1 target than an intact one and scores 0.9 -- while a scan with
+  // no signal at all has NO share (-1) and is not scored (-1, so it can never win).
   Config cfg{std::string(remaining_precursor_config)};
   ScanCommandQueue queue(cfg);
   Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
@@ -2168,98 +2122,28 @@ START_SECTION(remaining_precursor_score_no_signal_in_window)
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, queue);
-  TEST_EQUAL(static_cast<int>(cmds.size()), 6)
+  TEST_EQUAL(static_cast<int>(cmds.size()), 5)
 
-  // Feed the baseline with raw data entirely OUTSIDE the precursor window
-  // -> this activation's reference is 0 -> its variants are barred, not cancelled
+  // Raw data entirely OUTSIDE the precursor window, total > 0 -> share 0 -> score 1 - |0 - 0.1| = 0.9.
   std::vector<double> mzs = {400.0, 500.0, 600.0, 1200.0};
   std::vector<double> intensities = {100.0, 200.0, 300.0, 400.0};
+  int ce20_tid = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
+  auto ce20_info = exploration.feedResult(ce20_tid, mzs.data(), intensities.data(),
+                                          static_cast<int>(mzs.size()), 0.5, queue);
+  TEST_REAL_SIMILAR(ce20_info.metric.precursor_share, 0.0)
+  TEST_REAL_SIMILAR(ce20_info.metric.score, 0.9)
 
-  int baseline_tid = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
-  exploration.feedResult(baseline_tid, mzs.data(), intensities.data(),
-                         static_cast<int>(mzs.size()), 0.5, queue);
-
-  auto group = ExplorationTestAccess::group(exploration,1);
-  TEST_EQUAL(ExplorationTestAccess::hasAnyBaseline(group), true)
-  TEST_REAL_SIMILAR(ExplorationTestAccess::soleBaseline(group), 0.0)
-
-  // Feed the CE=20 variant with GOOD signal inside the precursor window. It is unscoreable anyway:
-  // there is no reference to ratio it against. Good signal is the point -- a variant that merely
-  // scored badly would be indistinguishable from one that could not be scored at all.
-  std::vector<double> frag_mzs = {790.0, 800.0, 810.0, 900.0};
-  std::vector<double> frag_ints = {100.0, 500.0, 200.0, 50.0};
-
-  int ce20_tid = queue.decode(std::string(cmds[1].scan_description).substr(0, 3));
-  auto ce20_info = exploration.feedResult(ce20_tid, frag_mzs.data(), frag_ints.data(),
-                                          static_cast<int>(frag_mzs.size()), 1.0, queue);
-
+  // A scan with NO signal anywhere (an empty trap read): no share, not scored. Acquired and received
+  // all the same -- nothing is cancelled.
+  std::vector<double> zeros = {0.0, 0.0, 0.0, 0.0};
+  int ce25_tid = queue.decode(std::string(cmds[1].scan_description).substr(0, 3));
+  auto ce25_info = exploration.feedResult(ce25_tid, mzs.data(), zeros.data(),
+                                          static_cast<int>(mzs.size()), 1.0, queue);
   auto group_after = ExplorationTestAccess::group(exploration,1);
-  TEST_EQUAL(group_after.variants[1].received, true)   // acquired, not cancelled
-  // -1.0, NOT 0.0. Winner selection seeds best_score at -1.0 and takes `score > best_score`, so a
-  // 0.0 here WINS the group on a reference that does not exist -- and at MS3 a measuring metric
-  // would then fire a production scan at that coin-flip CE. -1.0 is ExplorationVariant::score's own
-  // "not scored" default and matches remaining_ratio's -1.0 = N/A on the next line.
+  TEST_EQUAL(group_after.variants[1].received, true)
+  TEST_REAL_SIMILAR(ce25_info.metric.precursor_share, -1.0)
+  TEST_REAL_SIMILAR(ce25_info.metric.score, -1.0)
   TEST_REAL_SIMILAR(group_after.variants[1].score, -1.0)
-  TEST_REAL_SIMILAR(ce20_info.metric.remaining_ratio, -1.0)
-}
-END_SECTION
-
-START_SECTION(remaining_precursor_empty_baseline_bars_activation_from_winning)
-{
-  // An empty reference window is a fact about ONE activation, so it withdraws that activation's
-  // variants from winner selection WITHOUT cancelling them (ADR-0029). This fixture sweeps a single
-  // activation, so "bars its activation" and "bars the group" coincide: no variant wins and no
-  // follow-up production scan is emitted -- but every child is still acquired.
-  //
-  // The -1.0 score is the whole mechanism, and it is why this is not merely a wasteful variant of
-  // the old abort: at 0.0 the first child would WIN, because winner selection seeds best_score at
-  // -1.0 and takes `score > best_score`.
-  Config cfg{std::string(remaining_precursor_config)};
-  ScanCommandQueue queue(cfg);
-  Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
-  FragmentAnalysis fragments(cfg);
-  Exploration exploration(cfg, fragments);
-
-  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
-  auto cmds = exploration.initiate(2, pg, 3, queue);
-  TEST_EQUAL(static_cast<int>(cmds.size()), 6)
-
-  // Push the 5 CE variants (children) into the queue; feed the baseline directly (already acquired).
-  for (size_t i = 1; i < cmds.size(); ++i) queue.push(cmds[i]);
-  TEST_EQUAL(static_cast<int>(queue.queueSize(2)), 5)
-
-  // CE=0 baseline with raw data entirely OUTSIDE the precursor window -> reference intensity 0.
-  std::vector<double> mzs = {400.0, 500.0, 600.0, 1200.0};
-  std::vector<double> intensities = {100.0, 200.0, 300.0, 400.0};
-  int baseline_tid = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
-  auto info = exploration.feedResult(baseline_tid, mzs.data(), intensities.data(),
-                                     static_cast<int>(mzs.size()), 0.5, queue);
-
-  // NOTHING is cancelled, and the group is still waiting on its 5 children.
-  TEST_EQUAL(static_cast<int>(queue.queueSize(2)), 5)
-  TEST_EQUAL(exploration.activeGroupCount(), 1)
-  TEST_EQUAL(static_cast<int>(info.commands.size()), 0)
-  TEST_REAL_SIMILAR(ExplorationTestAccess::soleBaseline(
-                      ExplorationTestAccess::group(exploration, 1)), 0.0)
-
-  // Every child returns with GOOD in-window signal. Under the old 0.0 return they would have been
-  // perfectly scoreable and one would have won on a reference that does not exist.
-  std::vector<double> frag_mzs  = {790.0, 800.0, 810.0, 900.0};
-  std::vector<double> frag_ints = {100.0, 500.0, 200.0,  50.0};
-  Exploration::FeedResultInfo last;
-  for (size_t i = 1; i < cmds.size(); ++i)
-  {
-    int tid = queue.decode(std::string(cmds[i].scan_description).substr(0, 3));
-    last = exploration.feedResult(tid, frag_mzs.data(), frag_ints.data(),
-                                  static_cast<int>(frag_mzs.size()), 1.0, queue);
-    TEST_REAL_SIMILAR(last.metric.score, -1.0)     // not scored -> cannot win
-    TEST_REAL_SIMILAR(last.metric.remaining_ratio, -1.0)   // N/A: no denominator
-  }
-
-  // Group completes with no winner and no follow-up production scan.
-  TEST_EQUAL(static_cast<int>(last.commands.size()), 0)
-  TEST_EQUAL(last.group.winner_tracking_id, std::string(""))
-  TEST_EQUAL(exploration.activeGroupCount(), 0)
 }
 END_SECTION
 
@@ -2281,19 +2165,14 @@ START_SECTION(remaining_precursor_late_child_after_group_cleanup_is_noop)
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, queue);
-  TEST_EQUAL(static_cast<int>(cmds.size()), 6)
-
-  // Baseline with good in-window signal, then every child -> the group completes and is erased.
-  std::vector<double> base_mzs  = {790.0, 800.0, 810.0, 900.0};
-  std::vector<double> base_ints = {100.0, 1000.0, 200.0, 50.0};
-  int baseline_tid = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
-  exploration.feedResult(baseline_tid, base_mzs.data(), base_ints.data(),
-                         static_cast<int>(base_mzs.size()), 0.5, queue);
+  TEST_EQUAL(static_cast<int>(cmds.size()), 5)   // no baseline (ADR-0048)
   TEST_EQUAL(exploration.activeGroupCount(), 1)
 
+  // Every child with in-window signal -> the group completes and is erased.
+  std::vector<double> base_mzs  = {790.0, 800.0, 810.0, 900.0};
   std::vector<double> frag_ints = {100.0, 500.0, 200.0, 50.0};
-  int replay_tid = queue.decode(std::string(cmds[1].scan_description).substr(0, 3));
-  for (size_t i = 1; i < cmds.size(); ++i)
+  int replay_tid = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
+  for (size_t i = 0; i < cmds.size(); ++i)
   {
     int tid = queue.decode(std::string(cmds[i].scan_description).substr(0, 3));
     exploration.feedResult(tid, base_mzs.data(), frag_ints.data(),
@@ -2548,19 +2427,14 @@ START_SECTION(pre_scans_read_out_the_levels_scan_range_ms2)
 
   PeakGroup pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   std::vector<ScanCommand> cmds = exploration.initiate(2, pg, 3, queue);
-  TEST_EQUAL(static_cast<int>(cmds.size()), 4)   // CE-0 baseline + CE 20 / 25 / 30
-  ABORT_IF(cmds.size() != 4)
+  TEST_EQUAL(static_cast<int>(cmds.size()), 3)   // CE 20 / 25 / 30; no baseline (ADR-0048)
+  ABORT_IF(cmds.size() != 3)
 
   auto group = ExplorationTestAccess::group(exploration, 1);
   TEST_EQUAL(group.msn_level, 2)
   TEST_EQUAL(static_cast<int>(group.exploration_metric), static_cast<int>(ExplorationMetric::RemainingPrecursor))
-
-  // cmds[0] IS THE CE-0 BASELINE, asserted rather than assumed, so the loop below provably covers the
-  // reference scan too: a binding reintroduced on the variants alone would leave the baseline at
-  // 300-1800 while its siblings read ~2 Th, and every ratio would divide a narrow fill by a full one.
-  TEST_EQUAL(group.variants[0].is_baseline, true)
-  TEST_EQUAL(group.variants[0].variant_index, -1)
-  TEST_REAL_SIMILAR(group.variants[0].collision_energy, 0.0)
+  TEST_EQUAL(group.variants[0].variant_index, 0)
+  TEST_REAL_SIMILAR(group.variants[0].collision_energy, 20.0)
   TEST_EQUAL(group.variants[0].cmd.scan_id, cmds[0].scan_id)
 
   // What a binding WOULD write, so the loop is a contrast and not a tautology: ~800 Th against 300.
@@ -2612,16 +2486,13 @@ START_SECTION(pre_scans_read_out_the_levels_scan_range_ms3)
                                        cfg.level(2).scans[0], 2, 0);
 
   std::vector<ScanCommand> cmds = exploration.initiate(3, fragment_pg, 2, queue, nullptr, &ms2_ctx);
-  TEST_EQUAL(static_cast<int>(cmds.size()), 4)   // CE-0 baseline + CE 20 / 25 / 30
-  ABORT_IF(cmds.size() != 4)
+  TEST_EQUAL(static_cast<int>(cmds.size()), 3)   // CE 20 / 25 / 30; no baseline (ADR-0048)
+  ABORT_IF(cmds.size() != 3)
 
   auto group = ExplorationTestAccess::group(exploration, 1);
   TEST_EQUAL(group.msn_level, 3)
   TEST_EQUAL(static_cast<int>(group.exploration_metric), static_cast<int>(ExplorationMetric::RemainingPrecursor))
-
-  // Same baseline pin as the MS2 section: the CE-0 scan is in the loop below, not exempt from it.
-  TEST_EQUAL(group.variants[0].is_baseline, true)
-  TEST_EQUAL(group.variants[0].variant_index, -1)
+  TEST_EQUAL(group.variants[0].variant_index, 0)
   TEST_EQUAL(group.variants[0].cmd.scan_id, cmds[0].scan_id)
 
   // ADR-0026 decision 2 STANDS: at MS3 isolation_width is std::max(mz2 - mz1, 2.0), and the fixture
@@ -2680,8 +2551,8 @@ START_SECTION(production_scan_is_built_from_the_unoverridden_config)
                                        cfg.level(2).scans[0], 2, 0);
 
   std::vector<ScanCommand> cmds = exploration.initiate(3, fragment_pg, 2, queue, nullptr, &ms2_ctx);
-  TEST_EQUAL(static_cast<int>(cmds.size()), 4)
-  ABORT_IF(cmds.size() != 4)
+  TEST_EQUAL(static_cast<int>(cmds.size()), 3)   // CE 20 / 25 / 30; no baseline (ADR-0048)
+  ABORT_IF(cmds.size() != 3)
 
   // Read the group BEFORE the sweep completes -- completion erases it from active_groups_.
   auto group = ExplorationTestAccess::group(exploration, 1);
@@ -2694,35 +2565,30 @@ START_SECTION(production_scan_is_built_from_the_unoverridden_config)
     TEST_REAL_SIMILAR(c.last_mass, cfg.level(3).scans[0].last_mass)
   }
 
-  // Drive the sweep to completion with RAW ARRAYS. RemainingPrecursor scores from isolation-window
-  // intensity alone, so one peak at the centre and two 50 Th away make the in-window sum exactly
-  // controllable; the ExplorationTestAccess deconvolution bypass the mass_count sections use cannot
-  // drive this metric at all. A baseline with no in-window signal leaves this activation without a
-  // denominator, so every one of its variants scores -1.0 and none is eligible; best_idx stays -1,
-  // the no-follow-up arm fires and no production scan is emitted -- the assertion below would then
-  // read as a missing command rather than a narrowed one. Hence the deliberate in-window baseline.
+  // Drive the sweep to completion with RAW ARRAYS. RemainingPrecursor scores the precursor SHARE --
+  // the centre peak over the whole scan (ADR-0048) -- so one peak at the centre and two 50 Th away
+  // make the share exactly controllable; the ExplorationTestAccess deconvolution bypass the mass_count
+  // sections use cannot drive this metric at all.
   const double mz_c = group.precursor_mz;
   std::vector<double> mzs{mz_c - 50.0, mz_c, mz_c + 50.0};
-  // score = 1 - |ratio - remaining_precursor_target|, target = 0.1 (the level default), so the
-  // ratios 0.9 / 0.4 / 0.1 give 0.2 / 0.7 / 1.0 and the LAST-fed variant wins. A tie-break-order
-  // winner would land on cmds[1] and the CE assertion below would catch it.
-  std::vector<double> baseline_ints{300.0, 1000.0, 700.0};
+  // score = 1 - |share - remaining_precursor_target|, target = 0.1 (the level default). Shares
+  // 900/1900 = 0.474, 400/1400 = 0.286, 100/1100 = 0.0909 give 0.626 / 0.814 / 0.991 and the LAST-fed
+  // variant wins. A tie-break-order winner would land on cmds[0] and the CE assertion below would catch it.
   std::vector<double> ce20_ints{300.0, 900.0, 700.0};
   std::vector<double> ce25_ints{300.0, 400.0, 700.0};
   std::vector<double> ce30_ints{300.0, 100.0, 700.0};
 
-  exploration.feedResult(cmds[0].scan_id, mzs.data(), baseline_ints.data(),
-                         static_cast<int>(mzs.size()), 0.5, queue);
-  exploration.feedResult(cmds[1].scan_id, mzs.data(), ce20_ints.data(),
+  exploration.feedResult(cmds[0].scan_id, mzs.data(), ce20_ints.data(),
                          static_cast<int>(mzs.size()), 1.0, queue);
-  exploration.feedResult(cmds[2].scan_id, mzs.data(), ce25_ints.data(),
+  exploration.feedResult(cmds[1].scan_id, mzs.data(), ce25_ints.data(),
                          static_cast<int>(mzs.size()), 1.5, queue);
-  auto info = exploration.feedResult(cmds[3].scan_id, mzs.data(), ce30_ints.data(),
+  auto info = exploration.feedResult(cmds[2].scan_id, mzs.data(), ce30_ints.data(),
                                      static_cast<int>(mzs.size()), 2.0, queue);
 
   TEST_EQUAL(exploration.activeGroupCount(), 0)
-  TEST_REAL_SIMILAR(info.metric.score, 1.0)
-  TEST_EQUAL(info.group.winner_tracking_id, ScanCommandQueue::encode(cmds[3].scan_id))
+  TEST_REAL_SIMILAR(info.metric.precursor_share, 100.0 / 1100.0)
+  TEST_REAL_SIMILAR(info.metric.score, 1.0 - std::abs(100.0 / 1100.0 - 0.1))
+  TEST_EQUAL(info.group.winner_tracking_id, ScanCommandQueue::encode(cmds[2].scan_id))
 
   // Exactly one close-out command. Both ADR-0020 gates hold here (non-empty overrides AND a
   // measuring MS3 metric), which is not a weakness of this section: WHICH gate fired is
@@ -2790,8 +2656,8 @@ START_SECTION(range_overrides_patch_pre_scans_like_any_key)
 
   PeakGroup pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   std::vector<ScanCommand> cmds = exploration.initiate(2, pg, 3, queue);
-  TEST_EQUAL(static_cast<int>(cmds.size()), 4)
-  ABORT_IF(cmds.size() != 4)
+  TEST_EQUAL(static_cast<int>(cmds.size()), 3)   // no baseline (ADR-0048)
+  ABORT_IF(cmds.size() != 3)
 
   auto group = ExplorationTestAccess::group(exploration, 1);
   TEST_EQUAL(static_cast<int>(group.exploration_metric), static_cast<int>(ExplorationMetric::RemainingPrecursor))
@@ -2856,13 +2722,12 @@ START_SECTION(forced_remaining_precursor_reads_the_configured_range)
 
   // 'u'/0 is exactly what planExhaustive_ labels a mass that matched no theoretical fragment.
   std::vector<ScanCommand> cmds = exploration.initiate(3, unassigned_pg, 2, queue, nullptr, &ms2_ctx, 'u', 0);
-  TEST_EQUAL(static_cast<int>(cmds.size()), 4)   // CE-0 baseline + CE 20 / 25 / 30
-  ABORT_IF(cmds.size() != 4)
+  TEST_EQUAL(static_cast<int>(cmds.size()), 3)   // CE 20 / 25 / 30; no baseline (ADR-0048)
+  ABORT_IF(cmds.size() != 3)
 
   auto group = ExplorationTestAccess::group(exploration, 1);
   TEST_EQUAL(group.msn_level, 3)
   TEST_EQUAL(static_cast<int>(group.exploration_metric), static_cast<int>(ExplorationMetric::RemainingPrecursor))
-  TEST_EQUAL(group.variants[0].is_baseline, true)
   TEST_EQUAL(group.variants[0].cmd.scan_id, cmds[0].scan_id)
 
   const double lo = group.precursor_mz - group.isolation_width / 2.0;
@@ -2892,41 +2757,36 @@ START_SECTION(remaining_precursor_target_aware_scoring)
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, queue);
-  TEST_EQUAL(static_cast<int>(cmds.size()), 6)
+  TEST_EQUAL(static_cast<int>(cmds.size()), 5)   // no baseline (ADR-0048)
 
   auto group = ExplorationTestAccess::group(exploration,1);
-  double iso_half = group.isolation_width / 2.0;
   double mz_center = group.precursor_mz;
 
-  std::vector<double> baseline_mzs = {mz_center};
-  std::vector<double> baseline_ints = {1000.0};
-  int baseline_tid = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
-  exploration.feedResult(baseline_tid, baseline_mzs.data(), baseline_ints.data(),
-                         static_cast<int>(baseline_mzs.size()), 0.5, queue);
-
-  std::vector<double> perfect_ints = {100.0};
-  int ce20_tid = queue.decode(std::string(cmds[1].scan_description).substr(0, 3));
-  auto info_perfect = exploration.feedResult(ce20_tid, baseline_mzs.data(), perfect_ints.data(),
-                                              1, 1.0, queue);
+  // Two peaks: the anchor at the window centre, the rest of the scan 100 Th away. The share is the
+  // anchor's fraction of the two (ADR-0048), so 100 / (100 + 900) = 0.1 hits the target exactly.
+  std::vector<double> two_mzs = {mz_center, mz_center + 100.0};
+  std::vector<double> perfect_ints = {100.0, 900.0};
+  int ce20_tid = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
+  auto info_perfect = exploration.feedResult(ce20_tid, two_mzs.data(), perfect_ints.data(),
+                                              2, 1.0, queue);
   double score_perfect = info_perfect.metric.score;
-  double ratio_perfect = info_perfect.metric.remaining_ratio;
+  double share_perfect = info_perfect.metric.precursor_share;
 
-  std::vector<double> over_ints = {500.0};
-  int ce25_tid = queue.decode(std::string(cmds[2].scan_description).substr(0, 3));
-  auto info_over = exploration.feedResult(ce25_tid, baseline_mzs.data(), over_ints.data(),
-                                           1, 2.0, queue);
+  // 500 / (500 + 500) = 0.5 -> |0.5 - 0.1| = 0.4 -> score 0.6.
+  std::vector<double> over_ints = {500.0, 500.0};
+  int ce25_tid = queue.decode(std::string(cmds[1].scan_description).substr(0, 3));
+  auto info_over = exploration.feedResult(ce25_tid, two_mzs.data(), over_ints.data(),
+                                           2, 2.0, queue);
   double score_over = info_over.metric.score;
-  double ratio_over = info_over.metric.remaining_ratio;
+  double share_over = info_over.metric.precursor_share;
 
   // (The former `score_perfect > score_over` ordering check is gone: the two exact values below
   // already imply it, and an ordering assertion that survives a shift of BOTH scores is the weaker
   // of the two claims, never an independent one.)
   TEST_REAL_SIMILAR(score_perfect, 1.0)
   TEST_REAL_SIMILAR(score_over, 0.6)
-  TEST_REAL_SIMILAR(ratio_perfect, 0.1)
-  TEST_REAL_SIMILAR(ratio_over, 0.5)
-
-  (void)iso_half;
+  TEST_REAL_SIMILAR(share_perfect, 0.1)
+  TEST_REAL_SIMILAR(share_over, 0.5)
 }
 END_SECTION
 
@@ -3021,14 +2881,10 @@ START_SECTION(fragment_count_zero_without_protein_sequence)
 
   auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
   auto cmds = exploration.initiate(2, pg, 3, queue);
-  TEST_EQUAL(static_cast<int>(cmds.size()), 6)
-
-  DeconvolvedSpectrum baseline_ds = makeSyntheticDeconv(0, 1);
-  int baseline_tid = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
-  ExplorationTestAccess::feedResult(exploration,baseline_tid, baseline_ds, 0.0, queue);
+  TEST_EQUAL(static_cast<int>(cmds.size()), 5)   // no baseline (ADR-0048)
 
   DeconvolvedSpectrum ds = makeSyntheticDeconv(1, 5);
-  int tracking_id = queue.decode(std::string(cmds[1].scan_description).substr(0, 3));
+  int tracking_id = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
   auto info = ExplorationTestAccess::feedResult(exploration,tracking_id, ds, 1.0, queue);
 
   TEST_EQUAL(info.metric.fragment_count, 0)
@@ -3076,8 +2932,8 @@ START_SECTION(ms3_remaining_precursor_isolation_width)
                                         cfg.level(2).scans[0], 2, 0);
 
   auto cmds = exploration.initiate(3, fragment_pg, 2, queue, nullptr, &ms2_ctx);
-  // RemainingPrecursor: 1 baseline + 5 CE variants (20,25,30,35,40) = 6
-  TEST_EQUAL(static_cast<int>(cmds.size()), 6)
+  // RemainingPrecursor: 5 CE variants (20,25,30,35,40); no baseline (ADR-0048)
+  TEST_EQUAL(static_cast<int>(cmds.size()), 5)
 
   auto group = ExplorationTestAccess::group(exploration,1);
   // isolation_width should be floored to 2.0 (not 0.0)
@@ -3085,29 +2941,15 @@ START_SECTION(ms3_remaining_precursor_isolation_width)
 
   double mz_center = group.precursor_mz;
 
-  // Feed baseline (CE=0) with signal at precursor center
-  std::vector<double> baseline_mzs = {mz_center};
-  std::vector<double> baseline_ints = {1000.0};
-  int baseline_tid = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
-  exploration.feedResult(baseline_tid, baseline_mzs.data(), baseline_ints.data(),
-                         static_cast<int>(baseline_mzs.size()), 0.5, queue);
+  // With the 2.0 Da window [499.0, 501.0], mz_center=500.0 is in-window and a peak 50 Th away is not.
+  // Share = 100 / (100 + 900) = 0.1 -> target 0.1, deviation 0, score 1.0. Under a zero width the
+  // window would admit nothing, the share would read 0 and the score 0.9.
+  std::vector<double> mzs = {mz_center, mz_center + 50.0};
+  std::vector<double> variant_ints = {100.0, 900.0};
+  int ce20_tid = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
+  auto info = exploration.feedResult(ce20_tid, mzs.data(), variant_ints.data(), 2, 1.0, queue);
 
-  auto group_after = ExplorationTestAccess::group(exploration,1);
-  TEST_EQUAL(ExplorationTestAccess::hasAnyBaseline(group_after), true)
-  // With 2.0 Da window [499.0, 501.0], mz_center=500.0 is in-window
-  TEST_REAL_SIMILAR(ExplorationTestAccess::soleBaseline(group_after), 1000.0)
-
-  // Feed CE=20 variant with 100.0 intensity -> ratio = 0.1
-  std::vector<double> variant_ints = {100.0};
-  int ce20_tid = queue.decode(std::string(cmds[1].scan_description).substr(0, 3));
-  auto info = exploration.feedResult(ce20_tid, baseline_mzs.data(), variant_ints.data(),
-                                      1, 1.0, queue);
-
-  // Score should be real (not -1.0), ratio = 100/1000 = 0.1
-  TEST_REAL_SIMILAR(info.metric.remaining_ratio, 0.1)
-  // target=0.1, deviation=0.0, score=1.0. (The former trailing `score > 0.0` is gone -- it was implied
-  // by this line and unfailable on its own: computeRemainingPrecursorScore_ floors at 0 and caps at 1,
-  // so it could only have caught the exact-zero case this exact assertion already excludes.)
+  TEST_REAL_SIMILAR(info.metric.precursor_share, 0.1)
   TEST_REAL_SIMILAR(info.metric.score, 1.0)
 }
 END_SECTION
@@ -3191,8 +3033,8 @@ START_SECTION(ms2_scoring_window_matches_commanded_isolation)
   pg.push_back(lp2);
 
   std::vector<ScanCommand> cmds = exploration.initiate(2, pg, 3, queue);
-  TEST_EQUAL(static_cast<int>(cmds.size()), 4)   // CE-0 baseline + CE 20 / 25 / 30
-  ABORT_IF(cmds.size() != 4)
+  TEST_EQUAL(static_cast<int>(cmds.size()), 3)   // CE 20 / 25 / 30; no baseline (ADR-0048)
+  ABORT_IF(cmds.size() != 3)
 
   auto group = ExplorationTestAccess::group(exploration, 1);
   TEST_EQUAL(group.msn_level, 2)
@@ -3204,28 +3046,23 @@ START_SECTION(ms2_scoring_window_matches_commanded_isolation)
   // section through optimal_window_margin_has_one_definition, not silently agree with a stale literal.
   TEST_REAL_SIMILAR(group.isolation_width, (802.0 - 800.0) + 2.0 * optimal_window_margin_)
 
-  // ...and the COMMANDED side of the same claim, read off the baseline command the group actually
+  // ...and the COMMANDED side of the same claim, read off the first command the group actually
   // emitted. This is ADR-0026 decision 2 in one line: the scored interval IS the isolated interval. It
   // is a second, independent way for a reverted MS2 arm to go red (group 2.0 against command 2.8), and
   // unlike the sum below it needs no fed peaks at all.
   TEST_REAL_SIMILAR(cmds[0].stages[0].precursor_mz, group.precursor_mz)
   TEST_REAL_SIMILAR(cmds[0].stages[0].isolation_width, group.isolation_width)
 
-  std::vector<double> baseline_mzs  = {799.8, 801.0, 802.2, 810.0};
-  std::vector<double> baseline_ints = {300.0, 1000.0, 200.0, 700.0};
-  exploration.feedResult(cmds[0].scan_id, baseline_mzs.data(), baseline_ints.data(),
-                         static_cast<int>(baseline_mzs.size()), 0.5, queue);
+  std::vector<double> peak_mzs  = {799.8, 801.0, 802.2, 810.0};
+  std::vector<double> peak_ints = {300.0, 1000.0, 200.0, 700.0};
+  auto info = exploration.feedResult(cmds[0].scan_id, peak_mzs.data(), peak_ints.data(),
+                                     static_cast<int>(peak_mzs.size()), 0.5, queue);
 
-  // THE ASSERTION THIS SECTION EXISTS FOR. 1500.0 with the margin, 1000.0 without it -- so a revert
-  // does not merely widen a tolerance, it changes the number. Read back off the group rather than out
-  // of the returned info because baseline_intensity is where the denominator of every later ratio in
-  // this group is stored, now keyed by the activation it was measured under (ADR-0029).
-  auto after = ExplorationTestAccess::group(exploration, 1);
-  TEST_EQUAL(ExplorationTestAccess::hasAnyBaseline(after), true)
-  TEST_REAL_SIMILAR(ExplorationTestAccess::soleBaseline(after), 1500.0)
-  // 1500 > 0, so this activation keeps a usable denominator and its variants stay scoreable --
-  // the live path, not the one where an empty reference bars them with a -1.0 score.
-  TEST_EQUAL(ExplorationTestAccess::soleBaseline(after) > 0.0, true)
+  // THE ASSERTION THIS SECTION EXISTS FOR. The precursor SHARE (ADR-0048) is the window sum over the
+  // whole scan's 2200: 1500/2200 with the margin, 1000/2200 without it -- so a revert does not merely
+  // widen a tolerance, it changes the number.
+  TEST_REAL_SIMILAR(info.metric.precursor_share, 1500.0 / 2200.0)
+  TEST_EQUAL(std::abs(info.metric.precursor_share - 1000.0 / 2200.0) > 0.1, true)
 }
 END_SECTION
 
@@ -3308,8 +3145,8 @@ START_SECTION(optimal_window_margin_has_one_definition)
   // THE Exploration SIDE -- the invariant ADR-0026 decision 2 establishes, on the same peak group.
   // Before the correction this read 3.0 against the command's 3.8.
   std::vector<ScanCommand> cmds = exploration.initiate(2, pg, 4, queue);
-  TEST_EQUAL(static_cast<int>(cmds.size()), 4)   // CE-0 baseline + CE 20 / 25 / 30
-  ABORT_IF(cmds.size() != 4)
+  TEST_EQUAL(static_cast<int>(cmds.size()), 3)   // CE 20 / 25 / 30; no baseline (ADR-0048)
+  ABORT_IF(cmds.size() != 3)
 
   auto group = ExplorationTestAccess::group(exploration, 1);
   TEST_REAL_SIMILAR(group.precursor_mz, 601.5)
@@ -3368,8 +3205,8 @@ START_SECTION(single_isotope_charge_keeps_the_margin_window)
   TEST_EQUAL(cfg.level(2).overrides.count("last_mass"), 0u)
 
   std::vector<ScanCommand> cmds = exploration.initiate(2, pg, 3, queue);
-  TEST_EQUAL(static_cast<int>(cmds.size()), 4)   // CE-0 baseline + CE 20 / 25 / 30
-  ABORT_IF(cmds.size() != 4)
+  TEST_EQUAL(static_cast<int>(cmds.size()), 3)   // CE 20 / 25 / 30; no baseline (ADR-0048)
+  ABORT_IF(cmds.size() != 3)
 
   auto group = ExplorationTestAccess::group(exploration, 1);
   TEST_EQUAL(static_cast<int>(group.exploration_metric), static_cast<int>(ExplorationMetric::RemainingPrecursor))
@@ -3627,16 +3464,14 @@ START_SECTION(exploration_group_creation_etd)
   int real_variants = 0;
   for (const auto& v : group.variants)
   {
-    if (v.is_baseline) continue;  // the ETD reference (RT at the instrument floor, not a sweep point)
     ++real_variants;
     TEST_STRING_EQUAL(v.activation_type, "ETD")
     TEST_EQUAL(std::isfinite(v.reaction_time), true)
     seen_rts.insert(v.reaction_time);
   }
-  // rt_min=5, rt_max=15, rt_step=5 -> 3 distinct reaction-time variants, plus this activation's own
-  // reference at the head of its block. Not suppressed: rt_min is 5, so the grid does not contain
-  // the floor the baseline sits at.
-  TEST_EQUAL(static_cast<int>(group.variants.size()), 4)  // baseline + 3 RT variants
+  // rt_min=5, rt_max=15, rt_step=5 -> 3 distinct reaction-time variants and nothing else: no
+  // reference scan under any metric (ADR-0048).
+  TEST_EQUAL(static_cast<int>(group.variants.size()), 3)
   TEST_EQUAL(real_variants, 3)
   TEST_EQUAL(static_cast<int>(seen_rts.size()), 3)
   TEST_EQUAL(seen_rts.count(5.0) == 1 && seen_rts.count(10.0) == 1 && seen_rts.count(15.0) == 1, true)
@@ -4328,310 +4163,6 @@ START_SECTION(ms3_min_charge_default_emits_ms3)
 }
 END_SECTION
 
-/////////////////////////////////////////////////////////////
-// ADR-0029: one un-fragmented reference per swept activation
-/////////////////////////////////////////////////////////////
-
-// T1. Every SWEPT activation gets its own reference, at the head of its own block.
-//
-// The old code prepended exactly ONE baseline for the whole group and stamped it with
-// base_config.activation -- which need not even be one of the swept activations. Here ms2.activation
-// is HCD while CID and ETD are also swept, so a single group-level baseline would leave CID and ETD
-// ratioing against a reference measured through a different ion path.
-START_SECTION(baseline_is_one_per_swept_activation)
-{
-  Config cfg{sweepCfg(R"("CID", "HCD", "ETD")", 15.0, 5.0)};
-  ScanCommandQueue queue(cfg);
-  FragmentAnalysis fragments(cfg);
-  Exploration exploration(cfg, fragments);
-
-  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
-  auto cmds = exploration.initiate(2, pg, 3, queue);
-
-  auto group = ExplorationTestAccess::group(exploration, 1);
-  const auto& vs = group.variants;
-
-  // CID 15/25/35 + HCD 15/25/35 + ETD RT 5/15/25, each block headed by its own baseline.
-  TEST_EQUAL(static_cast<int>(vs.size()), 12)
-  TEST_EQUAL(static_cast<int>(cmds.size()), 12)
-  TEST_EQUAL(baselineCount(vs), 3)
-
-  // Authored order is preserved and the blocks are contiguous.
-  TEST_EQUAL(blockStart(vs, "CID"), 0)
-  TEST_EQUAL(blockStart(vs, "HCD"), 4)
-  TEST_EQUAL(blockStart(vs, "ETD"), 8)
-
-  // The baseline of each block is its FIRST member -- which is what makes it dequeue ahead of the
-  // siblings it is the denominator for.
-  TEST_EQUAL(vs[0].is_baseline, true)
-  TEST_EQUAL(vs[4].is_baseline, true)
-  TEST_EQUAL(vs[8].is_baseline, true)
-  for (size_t i = 0; i < vs.size(); ++i)
-    if (i != 0 && i != 4 && i != 8) TEST_EQUAL(vs[i].is_baseline, false)
-
-  // A baseline is marked -1 in the logged variant_index column; real variants keep one running
-  // 0-based counter across the whole group.
-  TEST_EQUAL(vs[0].variant_index, -1)
-  TEST_EQUAL(vs[1].variant_index, 0)
-  TEST_EQUAL(vs[4].variant_index, -1)
-  TEST_EQUAL(vs[5].variant_index, 3)
-  TEST_EQUAL(vs[8].variant_index, -1)
-  TEST_EQUAL(vs[9].variant_index, 6)
-}
-END_SECTION
-
-// T2. When a block's sweep already CONTAINS its zero-point, the reference is that variant -- no
-// second scan is synthesized. This is the reported defect: with ce_min 0 the old code acquired
-// `HCD 0` as the group baseline and then `HCD 0` again as the HCD sweep's first point.
-START_SECTION(baseline_suppressed_when_sweep_contains_zero_point)
-{
-  // rt_min is MIN_REACTION_TIME_MS, not 0: Config::validate rejects a sub-floor reaction_time_min
-  // when an ETD-family activation is swept, because the instrument will not acquire a reaction time
-  // of 0. 0.03 is the "as near to no reaction as the hardware allows" floor, so the ETD grid's first
-  // point still coincides with the ETD baseline and is still suppressed -- which is the property
-  // this section exists to pin.
-  Config cfg{sweepCfg(R"("CID", "HCD", "ETD")", 0.0, MIN_REACTION_TIME_MS)};
-  ScanCommandQueue queue(cfg);
-  FragmentAnalysis fragments(cfg);
-  Exploration exploration(cfg, fragments);
-
-  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
-  auto cmds = exploration.initiate(2, pg, 3, queue);
-
-  auto group = ExplorationTestAccess::group(exploration, 1);
-  const auto& vs = group.variants;
-
-  // 3 blocks x 3 sweep points, and NOTHING synthesized: 9, not 12. Under the old code this was 10
-  // (nine sweep points plus one prepended baseline) with `HCD 0` acquired twice.
-  TEST_EQUAL(static_cast<int>(vs.size()), 9)
-  TEST_EQUAL(baselineCount(vs), 3)
-
-  TEST_EQUAL(blockStart(vs, "CID"), 0)
-  TEST_EQUAL(blockStart(vs, "HCD"), 3)
-  TEST_EQUAL(blockStart(vs, "ETD"), 6)
-
-  // The flagged variants ARE the sweeps' own turn-off points, not extra scans beside them. Note the
-  // two axes turn off at different values: CE at 0, reaction time at the instrument's floor.
-  TEST_EQUAL(vs[0].is_baseline, true)
-  TEST_REAL_SIMILAR(vs[0].collision_energy, 0.0)
-  TEST_EQUAL(vs[3].is_baseline, true)
-  TEST_REAL_SIMILAR(vs[3].collision_energy, 0.0)
-  TEST_EQUAL(vs[6].is_baseline, true)
-  TEST_REAL_SIMILAR(vs[6].reaction_time, MIN_REACTION_TIME_MS)
-
-  // No duplicate command: exactly one HCD variant sits at CE 0, and exactly one ETD variant sits at
-  // the reaction-time floor.
-  int hcd_at_zero = 0, etd_at_floor = 0;
-  for (const auto& v : vs)
-  {
-    if (v.activation_type == "HCD" && std::abs(v.collision_energy) < 1e-9) ++hcd_at_zero;
-    if (v.activation_type == "ETD" && std::abs(v.reaction_time - MIN_REACTION_TIME_MS) < 1e-9) ++etd_at_floor;
-  }
-  TEST_EQUAL(hcd_at_zero, 1)
-  TEST_EQUAL(etd_at_floor, 1)
-}
-END_SECTION
-
-// T3. A baseline zeroes ONLY the axis its activation sweeps, and copies the base scan config on
-// every other. An ETD baseline therefore keeps ms2.collision_energy rather than dropping to 0.
-//
-// This is what makes the synthesized form and the flagged form the same command: buildVariants_
-// gives ETD variants base_config.collision_energy, so a baseline that zeroed both axes would be a
-// different scan from the sweep's own RT-0 point and the suppression in T2 would be unsound.
-START_SECTION(baseline_matches_the_non_swept_axis)
-{
-  Config cfg{sweepCfg(R"("HCD", "ETD")", 15.0, 5.0, "mass_count", "HCD", 35)};
-  ScanCommandQueue queue(cfg);
-  FragmentAnalysis fragments(cfg);
-  Exploration exploration(cfg, fragments);
-
-  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
-  exploration.initiate(2, pg, 3, queue);
-
-  auto group = ExplorationTestAccess::group(exploration, 1);
-  const auto& vs = group.variants;
-
-  const int hcd = blockStart(vs, "HCD");
-  const int etd = blockStart(vs, "ETD");
-  ABORT_IF(hcd < 0 || etd < 0)
-
-  // HCD sweeps CE -> CE turned off at 0 (which IS commandable), reaction time copied from the base
-  // config (0 here, and correctly so: HCD has no ion-ion reaction, so 0 is the "not used" sentinel).
-  TEST_EQUAL(vs[hcd].is_baseline, true)
-  TEST_REAL_SIMILAR(vs[hcd].collision_energy, 0.0)
-  TEST_REAL_SIMILAR(vs[hcd].reaction_time, 0.0)
-
-  // ETD sweeps RT -> RT turned off at the instrument's FLOOR, not at 0: the hardware rejects a
-  // reaction time of 0, so a baseline emitted at 0.0 would never be acquired. Collision energy is
-  // copied: 35, NOT 0 -- and it matches what its own siblings carry, which is the property that
-  // makes the synthesized baseline and a flagged grid point the same command.
-  TEST_EQUAL(vs[etd].is_baseline, true)
-  TEST_REAL_SIMILAR(vs[etd].reaction_time, MIN_REACTION_TIME_MS)
-  TEST_REAL_SIMILAR(vs[etd].collision_energy, 35.0)
-  TEST_REAL_SIMILAR(vs[etd + 1].collision_energy, 35.0)
-
-  // The two axes turn off at DIFFERENT values, and that is the instrument's asymmetry rather than
-  // ours. A single shared "zero" would emit an unacquirable ETD baseline.
-  TEST_NOT_EQUAL(vs[etd].reaction_time, 0.0)
-}
-END_SECTION
-
-// T4. Each variant ratios against ITS OWN activation's reference. With one shared scalar the two
-// activations' references overwrote each other, so whichever returned last silently became the
-// denominator for both.
-START_SECTION(remaining_ratio_uses_its_own_activation_baseline)
-{
-  // sweep_overrides is REQUIRED here, not decoration: Config::validate rejects a
-  // remaining_precursor sweep whose overrides map is empty (ADR-0026). "Orbitrap" is inert -- it is
-  // what ms_settings.ms2.analyzer already says -- so it satisfies the rule without changing any
-  // acquired value.
-  Config cfg{sweepCfg(R"("HCD", "ETD")", 15.0, 5.0, "remaining_precursor", "HCD", 35, sweep_overrides)};
-  ScanCommandQueue queue(cfg);
-  FragmentAnalysis fragments(cfg);
-  Exploration exploration(cfg, fragments);
-
-  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
-  auto cmds = exploration.initiate(2, pg, 3, queue);
-
-  auto group = ExplorationTestAccess::group(exploration, 1);
-  const int hcd = blockStart(group.variants, "HCD");
-  const int etd = blockStart(group.variants, "ETD");
-  ABORT_IF(hcd < 0 || etd < 0)
-
-  auto feed = [&](int idx, double centre_intensity) {
-    std::vector<double> mzs{group.precursor_mz};
-    std::vector<double> ints{centre_intensity};
-    int tid = queue.decode(std::string(cmds[idx].scan_description).substr(0, 3));
-    return exploration.feedResult(tid, mzs.data(), ints.data(), 1, 0.5, queue);
-  };
-
-  // Deliberately DIFFERENT references per activation -- the whole point of keying them apart.
-  feed(hcd, 1000.0);
-  feed(etd, 400.0);
-
-  auto after = ExplorationTestAccess::group(exploration, 1);
-  TEST_EQUAL(static_cast<int>(after.baseline_intensity.size()), 2)
-  TEST_REAL_SIMILAR(after.baseline_intensity.at("HCD"), 1000.0)
-  TEST_REAL_SIMILAR(after.baseline_intensity.at("ETD"), 400.0)
-
-  // 200 against HCD's 1000 -> 0.2. Against ETD's 400 it would be 0.5.
-  auto hcd_info = feed(hcd + 1, 200.0);
-  TEST_REAL_SIMILAR(hcd_info.metric.remaining_ratio, 0.2)
-
-  // 200 against ETD's 400 -> 0.5. Against HCD's 1000 it would be 0.2.
-  auto etd_info = feed(etd + 1, 200.0);
-  TEST_REAL_SIMILAR(etd_info.metric.remaining_ratio, 0.5)
-}
-END_SECTION
-
-// T5. An empty reference bars ONLY its own activation. The other activation keeps scoring and
-// supplies the winner.
-//
-// Two failures at once: with a shared scalar the empty HCD reference would de-reference ETD too,
-// and with the old 0.0 return an unscoreable HCD variant would WIN at zero, because winner selection
-// seeds best_score at -1.0 and takes `score > best_score`.
-START_SECTION(empty_baseline_bars_only_its_own_activation)
-{
-  // sweep_overrides is REQUIRED, as above (ADR-0026). It also makes ADR-0020 gate #1 true, so this
-  // group emits a production scan at completion -- harmless here: the assertions below are on the
-  // per-variant scores, the winner, and activeGroupCount, none of which the extra command touches.
-  Config cfg{sweepCfg(R"("HCD", "ETD")", 15.0, 5.0, "remaining_precursor", "HCD", 35, sweep_overrides)};
-  ScanCommandQueue queue(cfg);
-  FragmentAnalysis fragments(cfg);
-  Exploration exploration(cfg, fragments);
-
-  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
-  auto cmds = exploration.initiate(2, pg, 3, queue);
-
-  auto group0 = ExplorationTestAccess::group(exploration, 1);
-  const double centre = group0.precursor_mz;
-  const int hcd = blockStart(group0.variants, "HCD");
-  const int etd = blockStart(group0.variants, "ETD");
-  ABORT_IF(hcd < 0 || etd < 0)
-
-  // `mz` far outside the isolation window -> that activation's reference sums to 0.
-  auto feed = [&](int idx, double mz, double intensity) {
-    std::vector<double> mzs{mz};
-    std::vector<double> ints{intensity};
-    int tid = queue.decode(std::string(cmds[idx].scan_description).substr(0, 3));
-    return exploration.feedResult(tid, mzs.data(), ints.data(), 1, 0.5, queue);
-  };
-
-  feed(hcd, centre + 500.0, 1000.0);   // HCD reference EMPTY
-  feed(etd, centre, 1000.0);           // ETD reference healthy
-
-  auto mid = ExplorationTestAccess::group(exploration, 1);
-  TEST_REAL_SIMILAR(mid.baseline_intensity.at("HCD"), 0.0)
-  TEST_REAL_SIMILAR(mid.baseline_intensity.at("ETD"), 1000.0)
-
-  // NOTHING was cancelled -- the de-referenced activation's variants are still acquired.
-  TEST_EQUAL(exploration.activeGroupCount(), 1)
-
-  // Every HCD variant scores -1.0 (not scored) even on good in-window signal. Under the old 0.0
-  // return the first of these would have won the group outright.
-  for (int k = 1; k <= 3; ++k)
-  {
-    auto hcd_info = feed(hcd + k, centre, 900.0);
-    TEST_REAL_SIMILAR(hcd_info.metric.score, -1.0)
-    TEST_REAL_SIMILAR(hcd_info.metric.remaining_ratio, -1.0)
-  }
-
-  // ETD variants score normally against their own 1000.0 reference.
-  // score = 1 - |ratio - target|, target = 0.1 (the level default).
-  auto etd1 = feed(etd + 1, centre, 900.0);      // ratio 0.9 -> 0.2
-  TEST_REAL_SIMILAR(etd1.metric.remaining_ratio, 0.9)
-  TEST_REAL_SIMILAR(etd1.metric.score, 0.2)
-
-  auto etd2 = feed(etd + 2, centre, 500.0);      // ratio 0.5 -> 0.6
-  TEST_REAL_SIMILAR(etd2.metric.remaining_ratio, 0.5)
-  TEST_REAL_SIMILAR(etd2.metric.score, 0.6)
-
-  auto etd3 = feed(etd + 3, centre, 100.0);      // ratio 0.1 -> 1.0, the best score in the group
-  TEST_REAL_SIMILAR(etd3.metric.remaining_ratio, 0.1)
-  TEST_REAL_SIMILAR(etd3.metric.score, 1.0)
-
-  // All 8 variants fed -> the group completes, and the winner is the best ETD variant. An HCD
-  // variant winning at 0.0 is exactly the defect the -1.0 bar exists to prevent.
-  TEST_EQUAL(exploration.activeGroupCount(), 0)
-  TEST_EQUAL(etd3.group.winner_tracking_id,
-             std::string(ScanCommandQueue::encode(cmds[etd + 3].scan_id)))
-}
-END_SECTION
-
-// T6. An activation that sweeps NEITHER axis gets no baseline and competes normally.
-//
-// Guards the `sweep_ce || sweep_rt` condition in buildVariants_. Without it that activation's single
-// variant is identical to its own synthesized baseline, the suppression step flags it, and the only
-// variant the activation has can never win.
-START_SECTION(non_swept_activation_gets_no_baseline)
-{
-  Config cfg{sweepCfg(R"("UVPD")", 15.0, 5.0)};
-  ScanCommandQueue queue(cfg);
-  FragmentAnalysis fragments(cfg);
-  Exploration exploration(cfg, fragments);
-
-  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
-  auto cmds = exploration.initiate(2, pg, 3, queue);
-
-  auto group = ExplorationTestAccess::group(exploration, 1);
-  const auto& vs = group.variants;
-
-  TEST_EQUAL(static_cast<int>(vs.size()), 1)
-  TEST_EQUAL(static_cast<int>(cmds.size()), 1)
-  TEST_EQUAL(baselineCount(vs), 0)
-  TEST_EQUAL(vs[0].is_baseline, false)
-  TEST_EQUAL(vs[0].variant_index, 0)      // a real variant, not the -1 baseline marker
-  TEST_EQUAL(vs[0].activation_type, std::string("UVPD"))
-
-  // It is eligible: fed a scorable result it becomes the winner.
-  std::vector<double> mzs{group.precursor_mz};
-  std::vector<double> ints{500.0};
-  int tid = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
-  auto info = exploration.feedResult(tid, mzs.data(), ints.data(), 1, 0.5, queue);
-  TEST_EQUAL(info.group.winner_tracking_id, std::string(ScanCommandQueue::encode(cmds[0].scan_id)))
-}
-END_SECTION
-
 START_SECTION(a_sweep_always_acquires_both_edges)
 {
   // Summary: 15..40/2 does not divide. The accumulating loop stopped at 39 and the top edge was never
@@ -4646,7 +4177,7 @@ START_SECTION(a_sweep_always_acquires_both_edges)
   auto cmds = exploration.initiate(2, pg, 3, queue);
   auto group = ExplorationTestAccess::group(exploration, 1);
   std::vector<double> ces;
-  for (const auto& v : group.variants) if (!v.is_baseline) ces.push_back(v.collision_energy);
+  for (const auto& v : group.variants) ces.push_back(v.collision_energy);
   TEST_EQUAL((int)ces.size(), 14)                 // 15,17,...,39 (13) + 40
   ABORT_IF(ces.size() != 14)
   TEST_REAL_SIMILAR(ces.front(), 15.0)
@@ -4660,9 +4191,68 @@ START_SECTION(a_sweep_always_acquires_both_edges)
   FragmentAnalysis f2(cfg2);
   Exploration e2(cfg2, f2);
   e2.initiate(2, pg, 3, q2);
-  int n2 = 0;
-  for (const auto& v : ExplorationTestAccess::group(e2, 1).variants) if (!v.is_baseline) ++n2;
-  TEST_EQUAL(n2, 5)
+  TEST_EQUAL((int)ExplorationTestAccess::group(e2, 1).variants.size(), 5)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// ADR-0048: a sweep is exactly its grid points -- no reference scan under any metric
+/////////////////////////////////////////////////////////////
+
+START_SECTION(a_sweep_acquires_exactly_its_grid_points)
+{
+  // Summary: CID + HCD + ETD swept together; every activation contributes its grid points and nothing
+  // else. Purpose: ADR-0048 d.3 supersedes ADR-0029 -- the precursor share is referenced against the
+  // scan's own spectrum, so the per-activation CE-0 / RT-floor reference scan is gone, under every
+  // metric. In practice: a sweep costs one scan less per swept activation.
+  Config cfg{sweepCfg(R"("CID", "HCD", "ETD")", 15.0, 5.0)};
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+
+  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  auto cmds = exploration.initiate(2, pg, 3, queue);
+  auto group = ExplorationTestAccess::group(exploration, 1);
+  const auto& vs = group.variants;
+
+  // CID 15/25/35 + HCD 15/25/35 + ETD RT 5/15/25: 9 variants, 9 commands, no head-of-block reference.
+  TEST_EQUAL(static_cast<int>(vs.size()), 9)
+  TEST_EQUAL(static_cast<int>(cmds.size()), 9)
+  TEST_EQUAL(blockStart(vs, "CID"), 0)
+  TEST_EQUAL(blockStart(vs, "HCD"), 3)
+  TEST_EQUAL(blockStart(vs, "ETD"), 6)
+  for (int i = 0; i < 9; ++i) TEST_EQUAL(vs[i].variant_index, i)      // one running counter, no -1
+  // No CE-0 and no RT-floor point anywhere: the grid starts at 15 / 5.
+  for (const auto& v : vs)
+  {
+    if (v.activation_type == "ETD") TEST_EQUAL(v.reaction_time >= 5.0, true)
+    else TEST_EQUAL(v.collision_energy >= 15.0, true)
+  }
+}
+END_SECTION
+
+START_SECTION(an_authored_ce_zero_is_an_ordinary_pre_scan)
+{
+  // A grid authored to start at CE 0 acquires that point as an ordinary first variant (variant_index 0),
+  // scored like any other; nothing is flagged, nothing is skipped (ADR-0048 d.3).
+  Config cfg{sweepCfg(R"("HCD")", 0.0, 5.0)};
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+
+  auto pg = makeSyntheticPeakGroup(800.0, 2400.0, 3);
+  auto cmds = exploration.initiate(2, pg, 3, queue);
+  auto group = ExplorationTestAccess::group(exploration, 1);
+  TEST_EQUAL(static_cast<int>(group.variants.size()), 3)             // 0 / 10 / 20
+  TEST_EQUAL(static_cast<int>(cmds.size()), 3)
+  TEST_REAL_SIMILAR(group.variants[0].collision_energy, 0.0)
+  TEST_EQUAL(group.variants[0].variant_index, 0)
+  // Fed a scorable result it competes: mass_count scores spec.size(), so it wins outright here.
+  DeconvolvedSpectrum ds = makeSyntheticDeconv(1, 4);
+  int tid = queue.decode(std::string(cmds[0].scan_description).substr(0, 3));
+  auto info = ExplorationTestAccess::feedResult(exploration, tid, ds, 0.5, queue);
+  TEST_REAL_SIMILAR(info.metric.score, 4.0)
+  TEST_EQUAL(info.group.variant_index, 0)
 }
 END_SECTION
 
@@ -5049,12 +4639,10 @@ START_SECTION(a_trap_pre_scan_is_measured_never_identified)
     Exploration exploration(cfg, fragments);
     auto pg = makeSyntheticPeakGroup(968.4916, 29006.3881, 30);   // intact CA z30 -- the fixture's precursor
     auto cmds = exploration.initiate(2, pg, 30, queue);
-    TEST_EQUAL(static_cast<int>(cmds.size()), 4)
-    if (cmds.size() < 2) return a;   // ABORT_IF is a `break`, unusable inside a lambda; the assertions below then fail on the defaults
+    TEST_EQUAL(static_cast<int>(cmds.size()), 3)   // CE 20 / 25 / 30; no baseline (ADR-0048)
+    if (cmds.empty()) return a;   // ABORT_IF is a `break`, unusable inside a lambda; the assertions below then fail on the defaults
     for (const auto& c : cmds) TEST_STRING_EQUAL(c.analyzer, analyzer)
-    exploration.feedResult(cmds[0].scan_id, d.mzs.data(), d.ints.data(), static_cast<int>(d.mzs.size()), d.rt,
-                           queue, &tracker, precursor_id);   // the CE-0 baseline
-    a.variant = exploration.feedResult(cmds[1].scan_id, d.mzs.data(), d.ints.data(), static_cast<int>(d.mzs.size()),
+    a.variant = exploration.feedResult(cmds[0].scan_id, d.mzs.data(), d.ints.data(), static_cast<int>(d.mzs.size()),
                                        d.rt, queue, &tracker, precursor_id);
     a.deconv_count = exploration.explorationDeconvMassCount();
     a.deconv_null  = (exploration.explorationDeconvSpectrum() == nullptr);
@@ -5070,9 +4658,10 @@ START_SECTION(a_trap_pre_scan_is_measured_never_identified)
   TEST_EQUAL(orbi.deconv_null, false)
   TEST_EQUAL(orbi.has_model, true)
 
-  // Measured: same spectrum as its own baseline, so the ratio is exactly 1 -- and analyzer-independent.
-  TEST_REAL_SIMILAR(trap.variant.metric.remaining_ratio, 1.0)
-  TEST_REAL_SIMILAR(trap.variant.metric.remaining_ratio, orbi.variant.metric.remaining_ratio)
+  // Measured: the precursor share is read from raw peaks on both arms, so it is analyzer-independent
+  // and a real fraction of the scan (ADR-0048).
+  TEST_EQUAL(trap.variant.metric.precursor_share > 0.0 && trap.variant.metric.precursor_share <= 1.0, true)
+  TEST_REAL_SIMILAR(trap.variant.metric.precursor_share, orbi.variant.metric.precursor_share)
   // Never identified.
   TEST_EQUAL(trap.variant.metric.fragment_count, 0)
   TEST_REAL_SIMILAR(trap.variant.metric.tic_coverage, 0.0)

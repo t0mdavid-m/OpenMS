@@ -712,8 +712,8 @@ START_SECTION(unassigned_ms3_sweep_is_scored_by_remaining_precursor)
 
   // 'u'/0 is exactly what planExhaustive_ labels a mass that matched no theoretical fragment.
   std::vector<ScanCommand> cmds = exploration.initiate(3, unassigned_pg, 2, queue, nullptr, &ms2_ctx, 'u', 0);
-  TEST_EQUAL(static_cast<int>(cmds.size()), 4)   // CE-0 baseline + CE 20 / 25 / 30
-  ABORT_IF(cmds.size() != 4)
+  TEST_EQUAL(static_cast<int>(cmds.size()), 3)   // CE 20 / 25 / 30; no baseline (ADR-0048)
+  ABORT_IF(cmds.size() != 3)
 
   auto grp = ExplorationTestAccess::group(exploration, 1);
   TEST_EQUAL(static_cast<int>(grp.exploration_metric), static_cast<int>(ExplorationMetric::RemainingPrecursor))
@@ -729,49 +729,39 @@ START_SECTION(unassigned_ms3_sweep_is_scored_by_remaining_precursor)
     TEST_EQUAL(desc.substr(3).find('u') == std::string::npos, true)
   }
 
-  // Drive the sweep with raw arrays. RemainingPrecursor scores from isolation-window intensity alone,
-  // so one peak inside the window and two far outside it make the in-window sum exactly controllable.
+  // Drive the sweep with raw arrays. RemainingPrecursor scores the precursor SHARE -- the in-window
+  // peak over the whole scan (ADR-0048) -- so one peak inside the window and two far outside it make
+  // the share exactly controllable.
   const double in_mz = grp.precursor_mz;                 // window is in_mz +- isolation_width/2 (>= 1.0 Th)
   std::vector<double> mzs{in_mz - 50.0, in_mz, in_mz + 50.0};
 
-  std::vector<double> baseline_ints{300.0, 1000.0, 700.0};
-  auto info_base = exploration.feedResult(cmds[0].scan_id, mzs.data(), baseline_ints.data(),
-                                          static_cast<int>(mzs.size()), 0.5, queue);
-  TEST_REAL_SIMILAR(info_base.metric.score, 0.0)   // the baseline never competes
-
-  // One swept activation here, so the group carries exactly one reference (ADR-0029).
-  auto grp_after_baseline = ExplorationTestAccess::group(exploration, 1);
-  TEST_EQUAL(ExplorationTestAccess::hasAnyBaseline(grp_after_baseline), true)
-  TEST_REAL_SIMILAR(ExplorationTestAccess::soleBaseline(grp_after_baseline), 1000.0)
-  // > 0, so the activation keeps a usable denominator and its variants stay scoreable.
-  TEST_EQUAL(ExplorationTestAccess::soleBaseline(grp_after_baseline) > 0.0, true)
-
-  // score = 1 - |ratio - remaining_precursor_target|, target = 0.1 (the level default).
-  // ratios 0.9 / 0.4 / 0.1 -> scores 0.2 / 0.7 / 1.0, so the WINNER is the last-fed variant rather
-  // than the first -- a tie-break-order winner would land on index 1 instead.
+  // score = 1 - |share - remaining_precursor_target|, target = 0.1 (the level default).
+  // shares 900/1900 / 400/1400 / 100/1100 = 0.474 / 0.286 / 0.091 -> scores 0.626 / 0.814 / 0.991, so
+  // the WINNER is the last-fed variant rather than the first -- a tie-break-order winner would land on
+  // index 0 instead.
   std::vector<double> ce20_ints{300.0, 900.0, 700.0};
   std::vector<double> ce25_ints{300.0, 400.0, 700.0};
   std::vector<double> ce30_ints{300.0, 100.0, 700.0};
 
-  auto info20 = exploration.feedResult(cmds[1].scan_id, mzs.data(), ce20_ints.data(),
+  auto info20 = exploration.feedResult(cmds[0].scan_id, mzs.data(), ce20_ints.data(),
                                        static_cast<int>(mzs.size()), 1.0, queue);
-  auto info25 = exploration.feedResult(cmds[2].scan_id, mzs.data(), ce25_ints.data(),
+  auto info25 = exploration.feedResult(cmds[1].scan_id, mzs.data(), ce25_ints.data(),
                                        static_cast<int>(mzs.size()), 1.5, queue);
-  auto info30 = exploration.feedResult(cmds[3].scan_id, mzs.data(), ce30_ints.data(),
+  auto info30 = exploration.feedResult(cmds[2].scan_id, mzs.data(), ce30_ints.data(),
                                        static_cast<int>(mzs.size()), 2.0, queue);
 
   TEST_EQUAL(info30.metric.exploration_metric, static_cast<int>(ExplorationMetric::RemainingPrecursor))
-  TEST_REAL_SIMILAR(info20.metric.score, 0.2)
-  TEST_REAL_SIMILAR(info25.metric.score, 0.7)
-  TEST_REAL_SIMILAR(info30.metric.score, 1.0)
+  TEST_REAL_SIMILAR(info20.metric.score, 1.0 - std::abs(900.0 / 1900.0 - 0.1))
+  TEST_REAL_SIMILAR(info25.metric.score, 1.0 - std::abs(400.0 / 1400.0 - 0.1))
+  TEST_REAL_SIMILAR(info30.metric.score, 1.0 - std::abs(100.0 / 1100.0 - 0.1))
   // Distinct and non-zero: the whole point. Under fragment_count these three are 0, 0, 0.
   TEST_EQUAL(info20.metric.score > 0.0 && info25.metric.score > info20.metric.score
              && info30.metric.score > info25.metric.score, true)
-  TEST_REAL_SIMILAR(info20.metric.remaining_ratio, 0.9)
-  TEST_REAL_SIMILAR(info30.metric.remaining_ratio, 0.1)
+  TEST_REAL_SIMILAR(info20.metric.precursor_share, 900.0 / 1900.0)
+  TEST_REAL_SIMILAR(info30.metric.precursor_share, 100.0 / 1100.0)
 
   // The winner is the best-scoring variant, and the group closes on the completing feed.
-  TEST_EQUAL(info30.group.winner_tracking_id, ScanCommandQueue::encode(cmds[3].scan_id))
+  TEST_EQUAL(info30.group.winner_tracking_id, ScanCommandQueue::encode(cmds[2].scan_id))
   TEST_EQUAL(exploration.activeGroupCount(), 0)
 
   // ADR-0020's close-out, earned with no edit at the dispatch site: RemainingPrecursor is a MEASURING
@@ -791,7 +781,7 @@ START_SECTION(unassigned_ms3_sweep_is_scored_by_remaining_precursor)
   // fragments for targets that can be matched.
   PeakGroup mapped_pg = makeSyntheticPeakGroup(MASS_B6, 2);
   std::vector<ScanCommand> mapped_cmds = exploration.initiate(3, mapped_pg, 2, queue, nullptr, &ms2_ctx, 'b', 6);
-  TEST_EQUAL(static_cast<int>(mapped_cmds.size()), 4)
+  TEST_EQUAL(static_cast<int>(mapped_cmds.size()), 3)   // CE 20 / 25 / 30; no baseline (ADR-0048)
   ABORT_IF(mapped_cmds.empty())
 
   auto mapped_grp = ExplorationTestAccess::group(exploration, 2);   // group ids are monotone; 1 has closed
@@ -850,7 +840,7 @@ START_SECTION(ms2_exploration_metric_is_never_overridden)
     // No ion_type argument, exactly as the MS2 call site FLASHIda.cpp:200 leaves it -- so the group is
     // formed with ion_type at its '\0' default, the shape the four goldens were captured with.
     std::vector<ScanCommand> cmds = exploration.initiate(2, pg, 2, queue);
-    TEST_EQUAL(static_cast<int>(cmds.size()), 4)
+    TEST_EQUAL(static_cast<int>(cmds.size()), 3)   // CE 20 / 25 / 30; no baseline (ADR-0048)
     auto grp = ExplorationTestAccess::group(exploration, 1);
     TEST_EQUAL(grp.msn_level, 2)
     TEST_EQUAL(static_cast<int>(grp.exploration_metric), static_cast<int>(metrics[mi]))
@@ -858,7 +848,7 @@ START_SECTION(ms2_exploration_metric_is_never_overridden)
     // And passing the default sentinel explicitly changes nothing -- the gate is on the LEVEL, so it
     // cannot be defeated by an unknown class arriving at MS2 through any route.
     std::vector<ScanCommand> explicit_cmds = exploration.initiate(2, pg, 2, queue, nullptr, nullptr, '\0', 0);
-    TEST_EQUAL(static_cast<int>(explicit_cmds.size()), 4)
+    TEST_EQUAL(static_cast<int>(explicit_cmds.size()), 3)
     auto explicit_grp = ExplorationTestAccess::group(exploration, 2);
     TEST_EQUAL(static_cast<int>(explicit_grp.exploration_metric), static_cast<int>(metrics[mi]))
   }
@@ -905,8 +895,8 @@ START_SECTION(ms3_unrecorded_ion_type_keeps_the_configured_metric)
 
   // Level 3, no ion identity recorded -- the initiate() default, reached explicitly here.
   std::vector<ScanCommand> cmds = exploration.initiate(3, pg, 2, queue, nullptr, &ms2_ctx, '\0', 0);
-  TEST_EQUAL(static_cast<int>(cmds.size()), 4)   // CE-0 baseline + CE 20 / 25 / 30
-  ABORT_IF(cmds.size() != 4)
+  TEST_EQUAL(static_cast<int>(cmds.size()), 3)   // CE 20 / 25 / 30; no baseline (ADR-0048)
+  ABORT_IF(cmds.size() != 3)
 
   auto grp = ExplorationTestAccess::group(exploration, 1);
   TEST_EQUAL(grp.msn_level, 3)

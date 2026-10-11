@@ -38,6 +38,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Deconvolution.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/KineticModel.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ProteoformTracker.h>
@@ -71,9 +72,11 @@ namespace OpenMS
       double reaction_time = 0.0;
       std::string activation_type;
       std::string tracking_id;
-      bool is_baseline = false;           ///< THIS activation's un-fragmented reference (ADR-0029),
-                                          ///< on every metric -- swept axis at 0, other axes as its
-                                          ///< siblings carry them. Skipped in winner selection.
+      /// ADR-0048: the precursor SHARE this pre-scan read -- raw signal in the anchor isolation window over
+      /// the raw signal of the whole scan. -1.0 = no measurement (no arrays, or an empty scan). Read for
+      /// every variant under every metric; it is what the share-based metrics score and what the
+      /// Kinetic Model fits (ADR-0047).
+      double precursor_share = -1.0;
       double score = -1.0;
       float tic_coverage = 0.0f;
       int fragment_count = 0;
@@ -130,16 +133,12 @@ namespace OpenMS
       std::vector<int> allowed_charges;
       double isolation_width = 0.0;
       double faims_cv = 0.0;
-      /// activation -> that activation's un-fragmented isolation-window intensity (ADR-0029).
-      /// THREE states, deliberately carried by one map:
-      ///   absent  = this activation's reference has not returned yet;
-      ///   > 0     = a usable denominator for its own activation's variants;
-      ///   <= 0    = it returned with no in-window signal, so its variants score -1 and can never
-      ///             win. They are still ACQUIRED -- an empty reference bars one activation, it
-      ///             does not cancel the group.
-      /// Keyed per activation because the ETD ion path (reagent injection, reaction cell) measures
-      /// a genuinely different reference from HCD's; a shared scalar silently mixed them.
-      std::map<std::string, double> baseline_intensity;
+      /// ADR-0047: the Kinetic Model's decision for this group, filled at completion under
+      /// ExplorationMetric::KineticModel and left at the defaults under every other metric. No
+      /// reference scan exists any more (ADR-0048 superseded ADR-0029's per-activation baseline).
+      KineticModel::GompertzFit kinetic_fit;
+      KineticModel::ModeledMaximum kinetic_max;
+      double kinetic_k2 = -1.0;            ///< the authored k2 used for this group's activation
       uint64_t start_ms = 0;
       std::vector<ExplorationVariant> variants;
       int winner_index = -1;
@@ -219,7 +218,7 @@ namespace OpenMS
         float tic_coverage = 0.0f;
         int fragment_count = 0;
         int exploration_metric = 0;
-        double remaining_ratio = -1.0;  ///< Raw remaining_intensity / baseline_intensity (-1.0 = N/A)
+        double precursor_share = -1.0;  ///< ADR-0048: anchor-window signal over the whole scan's (-1.0 = N/A)
       } metric;
 
       /// The proteoform match + context written to identification.tsv.
@@ -372,48 +371,40 @@ namespace OpenMS
                                    ScanCommandQueue& queue, ProteoformTracker* tracker = nullptr,
                                    int precursor_id = 0, bool measured_only = false);
 
-    /// Parameters for one variant in a multi-activation sweep
+    /// Parameters for one variant in a multi-activation sweep. A sweep is exactly its grid points: no
+    /// reference scan is synthesized under any metric (ADR-0048 superseded ADR-0029).
     struct VariantParams
     {
       std::string activation;
       double collision_energy = 0.0;
       double reaction_time = 0.0;
-      /// This variant IS its activation's un-fragmented reference -- either synthesized at the head
-      /// of that activation's block, or the block's own zero-point flagged in place when the sweep
-      /// already contains it. Never scored, never pooled, never a winner.
-      bool is_baseline = false;
     };
 
-    /// Generate variants across activation types with CE and/or RT sweep, each activation's block
-    /// headed by its own baseline (ADR-0029).
+    /// Generate variants across activation types with CE and/or RT sweep, one contiguous block per
+    /// activation, both edges of every range acquired (ADR-0047 d.8).
     std::vector<VariantParams> buildVariants_(const MSLevelConfig& cfg, const ScanConfig& base_config) const;
 
-    /// Dispatch to metric-specific scorer
+    /// Dispatch to metric-specific scorer. @p share is the variant's precursor share (-1 = no measurement).
     double computeExplorationScore_(ExplorationMetric metric, const DeconvolvedSpectrum& spec,
-                                    const ExplorationGroup& group,
-                                    const double* mzs, const double* ints, int length,
-                                    double* out_remaining_ratio,
+                                    const ExplorationGroup& group, double share,
                                     FragmentAnalysis::ProteoformMatch* out_frag,
                                     const std::string& activation_type) const;
 
     /// Score: number of deconvolved masses
     double computeMassCount_(const DeconvolvedSpectrum& spec) const;
 
-    /// Sum the deconvolved intensity inside the precursor isolation window [precursor_mz +/- isolation_width/2].
-    /// Single source of truth for the baseline intensity, the RemainingPrecursor score, and the per-variant
-    /// remaining_ratio, so all three agree on the measurement.
-    double precursorWindowIntensity_(const ExplorationGroup& group,
-                                     const double* mzs, const double* ints, int length) const;
+    /// The variant's precursor SHARE (ADR-0048): raw signal inside [precursor_mz +/- isolation_width/2]
+    /// over the raw signal of the whole scan, via KineticModel::precursorShare. -1.0 when no arrays were
+    /// handed in or the scan carried no signal. Single source of truth for the share-based metrics, the
+    /// Kinetic Model's fit and the logged precursor_share column.
+    double precursorShare_(const ExplorationGroup& group,
+                           const double* mzs, const double* ints, int length) const;
 
-    /// Score: fragmentation efficiency (higher = less remaining precursor).
-    /// Ratios against @p activation_type's OWN reference, not a group-wide one (ADR-0029). Returns
-    /// 0.0 while that reference is still outstanding, and -1.0 ("not scored") once it has returned
-    /// empty -- which is what bars the activation from winning, since winner selection seeds
-    /// best_score at -1.0 and compares strictly greater.
-    double computeRemainingPrecursorScore_(const ExplorationGroup& group,
-                                           const double* mzs, const double* ints, int length,
-                                           const std::string& activation_type,
-                                           double* out_ratio = nullptr) const;
+    /// Score: closeness of the precursor share to remaining_precursor_target (ADR-0048 d.2):
+    /// max(0, 1 - |share - target|). A share of -1 (no measurement) returns -1.0, "not scored", which
+    /// bars the variant from winning since winner selection seeds best_score at -1.0 and compares
+    /// strictly greater.
+    double computeRemainingPrecursorScore_(const ExplorationGroup& group, double share) const;
 
     /// Score: number of matched fragment ions + protein info
     FragmentAnalysis::ProteoformMatch computeFragmentMatch_(const DeconvolvedSpectrum& spec, int msn_level,

@@ -522,7 +522,7 @@ FLASHIda::FLASHIda(char* arg) :
         results_row.total_variants      = expl_result.group.total_variants;
         results_row.collision_energy    = std::to_string(expl_result.fragmentation.collision_energy);
         results_row.exploration_score   = expl_result.metric.score;
-        results_row.remaining_ratio     = expl_result.metric.remaining_ratio;
+        results_row.remaining_ratio     = expl_result.metric.precursor_share;   // the column is renamed in the logging task
         results_row.activation_type     = expl_result.fragmentation.activation_type;
         results_row.reaction_time       = std::to_string(expl_result.fragmentation.reaction_time);
         results_row.winner_tracking_id  = expl_result.group.winner_tracking_id;  // "" except the group-completing row
@@ -784,7 +784,7 @@ FLASHIda::FLASHIda(char* arg) :
         results_row.activation_type  = expl_result.fragmentation.stage0_activation_type + ";" + expl_result.fragmentation.activation_type;
         results_row.reaction_time    = std::to_string(expl_result.fragmentation.stage0_reaction_time) + ";" + std::to_string(expl_result.fragmentation.reaction_time);
         results_row.exploration_score   = expl_result.metric.score;
-        results_row.remaining_ratio     = expl_result.metric.remaining_ratio;
+        results_row.remaining_ratio     = expl_result.metric.precursor_share;   // the column is renamed in the logging task
         results_row.winner_tracking_id  = expl_result.group.winner_tracking_id;
 
         // Identification rows
