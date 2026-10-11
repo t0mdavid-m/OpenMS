@@ -148,7 +148,11 @@ namespace OpenMS
       int total_variants = 0;
       std::string collision_energy = "0";
       double exploration_score = -1.0;
-      double remaining_ratio = -1.0;
+      /// ADR-0048: the anchor isolation window's share of the scan's raw signal, on EVERY MS2/MS3 row
+      /// (pre-scan, follow-up, regular), read from the returning scan with the stage the command
+      /// isolated last. -1 on MS1 rows and on a scan that carried no signal. Replaces remaining_ratio,
+      /// which was a ratio against a CE-0 reference scan that no sweep acquires any more.
+      double precursor_share = -1.0;
       std::string activation_type;
       std::string reaction_time = "0";
       // Per-scan identification YIELD. Sentinels are load-bearing and the defaults encode them:
@@ -201,6 +205,22 @@ namespace OpenMS
       std::string consensus_agreement;      ///< "agreeing/total_ballots", e.g. "2/3"; abstentions excluded
       std::string consensus_charges;        ///< ';'-joined balloting charges, agreeing ones starred
       int         consensus_id_charge = 0;  ///< charge the bought 'R' used; 0 = nothing bought
+
+      // ---- the Kinetic Model's live fit (ADR-0047 decision 9) ----------------------------------
+      // Written on the ONE row that completes a kinetic_model exploration group -- the last pre-scan
+      // to return -- and sentinel-valued on every other row, the follow-up 'R' included. These are
+      // the numbers the engine decided on, verbatim: the Gompertz parameters, the authored k2 it was
+      // fed, the modeled maximum it then acquired. energy_source alone is also set on the completing
+      // row of every other metric ("measured" / "none"), so a reader can tell how every sweep ended.
+      double fit_p0       = -1.0;  ///< Gompertz plateau P0 (share at low energy)
+      double fit_ce_max_s = -1.0;  ///< Gompertz inflection c: the energy of maximal fragmentation rate
+      double fit_width    = -1.0;  ///< Gompertz width w, in NCE
+      double k2           = -1.0;  ///< the authored overfragmentation rate the pool was run with
+      int    modeled_ce   = 0;     ///< the acquired follow-up energy (integer argmax of the pool); 0 = none
+      double modeled_b    = -1.0;  ///< the pool value at modeled_ce
+      int    fit_points   = 0;     ///< finite shares the fit used; 0 = no kinetic decision on this row
+      double fit_rss      = -1.0;  ///< residual sum of squares of the fit
+      std::string energy_source;   ///< modeled | modeled_edge_lower | modeled_edge_upper | measured | none | ""
     };
 
     /// One identification.tsv row. All members are held BY VALUE because the sources (info.*, a local

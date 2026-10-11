@@ -715,6 +715,33 @@ namespace
     return cfg;
   }
 
+  // The C++-schema twin of test-data/configs/method_exploration_kinetic.json (ADR-0047): cytC 17+ pinned
+  // through inclusion_cytc_z17.txt, a kinetic_model HCD sweep 1..50/10 on the ion trap, the study's all-in
+  // HCD k2, follow-up on the Orbitrap. Already pinned, so no inclusionPin* step is needed on top.
+  // STRICT inclusion, like the golden method: a non-strict survey also acquires two untargeted species as
+  // regular 'R' MS2s on this fixture, and the one-follow-up assertion needs the sweep's 'R' to be the only one.
+  inline std::string kineticModelConfig()
+  {
+    return R"({
+      "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
+      "precursor_selection": { "rt_window": 180, "targeting": "inclusion", "consider_all_charges": false, "strict_inclusion": true, "tie_threshold": 0.1, "rank_by": "qscore", "max_precursors": 3,
+        "exploration": { "metric": "kinetic_model", "ce_min": 1.0, "ce_max": 50.0, "ce_step": 10.0, "activations": ["HCD"],
+                         "overrides": { "analyzer": "IonTrap", "agc_target": "10000", "max_it": "10", "microscans": "1" },
+                         "kinetic_model": { "k2": { "HCD": 0.0388 } } } },
+      "flashtnt": { "min_length": 3, "max_length": 8 },
+      "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
+      "faims": { "cv_values": [], "max_cv_skip": 0, "cv_precursor_threshold": 15 },
+      "ms_settings": {
+        "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 },
+        "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000, "first_mass": 150, "last_mass": 2000 }
+      },
+      "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 }, "agc_interval_seconds": 999999 },
+      "files": { "target_logs": [], "fasta": "", "inclusion_list": "../../FlashIDA/test-data/configs/inclusion_cytc_z17.txt", "ptm_list": "" },
+      "characterization": { "mode": "off", "protein_sequence": "MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE", "max_targets": 3 },
+      "conditional_ms2": false
+    })";
+  }
+
   // Drive a single exploration group end-to-end through FLASHIda — a THIN WRAPPER over the one canonical
   // driver runInterleaved (single_group_only=true): feed MS1 with the engine's own survey id until one forms
   // a group, then drain + feed each MS2 variant back so the winner fires MS3, and project AcqResult->ExplResult.

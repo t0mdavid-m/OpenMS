@@ -226,7 +226,13 @@ START_SECTION(schema_column_counts)
   // group and empty on every other row (36 -> 41). Appended for exactly the reason ADR-0038's block
   // was, and the argument still holds unchanged: every r.colIndex pinned below is <= 21, so only this
   // count and r.headers.back() move.
-  TEST_EQUAL(r.headers.size(), 41)
+  // Then ADR-0047/0048: remaining_ratio is RENAMED precursor_share in place (same index 12; the quantity
+  // changed from a ratio against a CE-0 reference to the anchor window's share of the whole scan, and a
+  // renamed column is what makes every golden fail closed rather than silently revalue), and the Kinetic
+  // Model's live fit is appended -- fit_p0/fit_ce_max_s/fit_width/k2/modeled_ce/modeled_b/fit_points/
+  // fit_rss/energy_source (41 -> 50), written only on the row that completes a kinetic_model group.
+  // Appended for the same reason as the two blocks before it: every pin below is <= 21.
+  TEST_EQUAL(r.headers.size(), 50)
   // I2: +6 iso/snr/intensity; P5: +precursor_id; +theoretical_masses/diff_da/diff_ppm; C2:
   // +ms3_fragment_coverage; + tic_coverage; C: + flash_extender_score; then + tag_count (beside
   // flash_extender_score, the other "how strong is this ID" scalar) and + fragment_qscores (inside the
@@ -249,7 +255,8 @@ START_SECTION(schema_column_counts)
   TEST_EQUAL(c.colIndex("faims_enabled"), 30)
   TEST_EQUAL(r.headers.front(), std::string("tracking_id"))
   TEST_EQUAL(r.colIndex("ms_level"), 1)
-  TEST_EQUAL(r.headers.back(), std::string("consensus_id_charge"))  // ADR-0040: the consensus block follows the quant one
+  TEST_EQUAL(r.headers.back(), std::string("energy_source"))  // ADR-0047: the kinetic block follows the consensus one
+  TEST_EQUAL(r.colIndex("precursor_share"), 12)               // ADR-0048: renamed in place, never moved
   TEST_EQUAL(r.colIndex("winner_tracking_id"), 21)
   TEST_EQUAL(r.colIndex("processing_duration_ms"), 10)           // grouped up front with the other duration columns
   TEST_EQUAL(r.colIndex("child_ids"), 4)
@@ -705,7 +712,12 @@ START_SECTION(results_ms1_columns)
     TEST_EQUAL(cell(res, row, "total_variants"), std::string("0"))
     TEST_EQUAL(cell(res, row, "activation_type"), std::string(""))
     TEST_TRUE(toD(cell(res, row, "exploration_score")) < 0.0)   // -1 sentinel
-    TEST_TRUE(toD(cell(res, row, "remaining_ratio")) < 0.0)
+    TEST_TRUE(toD(cell(res, row, "precursor_share")) < 0.0)   // an MS1 isolates nothing: -1 (ADR-0048)
+    // The kinetic block is sentinel-valued on every row that does not complete a kinetic_model group.
+    TEST_EQUAL(cell(res, row, "modeled_ce"), std::string("0"))
+    TEST_EQUAL(cell(res, row, "fit_points"), std::string("0"))
+    TEST_EQUAL(cell(res, row, "k2"), std::string("-1"))
+    TEST_EQUAL(cell(res, row, "energy_source"), std::string(""))
     TEST_TRUE(toD(cell(res, row, "rt")) >= 0.0 && toD(cell(res, row, "rt")) <= FI_RT_WINDOW)
   }
   TEST_TRUE(found)
@@ -1109,10 +1121,10 @@ START_SECTION(results_ms2_exploration_columns)
     found_expl = true;
     TEST_TRUE(gid >= 1)
     int metric = std::atoi(cell(res, row, "exploration_metric").c_str());
-    TEST_TRUE(metric >= 1 && metric <= 3)
+    TEST_TRUE(metric >= 1 && metric <= 4)   // 4 = kinetic_model (ADR-0047)
     int vi = std::atoi(cell(res, row, "variant_index").c_str());
     int tv = std::atoi(cell(res, row, "total_variants").c_str());
-    if (vi == -1) continue;  // CE-0 baseline row (variant_index -1, CE 0): a reference, not a sweep point
+    if (vi == -1) continue;  // defensive: since ADR-0048 no sweep acquires a reference row, so none carries -1
     TEST_TRUE(vi >= 0 && tv > 0 && vi < tv)
     TEST_TRUE(posFinite(toD(cell(res, row, "collision_energy"))))   // variant CE (single stage at MS2)
     TEST_TRUE(inActivationSet(cell(res, row, "activation_type")))
@@ -1273,10 +1285,10 @@ START_SECTION(results_ms3_exploration_columns)
     found_expl = true;
     TEST_TRUE(gid >= 1)
     int metric = std::atoi(cell(res, row, "exploration_metric").c_str());
-    TEST_TRUE(metric >= 1 && metric <= 3)
+    TEST_TRUE(metric >= 1 && metric <= 4)   // 4 = kinetic_model (ADR-0047)
     int vi = std::atoi(cell(res, row, "variant_index").c_str());
     int tv = std::atoi(cell(res, row, "total_variants").c_str());
-    if (vi == -1) continue;  // CE-0 baseline row (variant_index -1): a reference, not a sweep point
+    if (vi == -1) continue;  // defensive: since ADR-0048 no sweep acquires a reference row, so none carries -1
     TEST_TRUE(vi >= 0 && tv > 0 && vi < tv)
 
     // §I4b ISSUE(Issue-1): the MS3-exploration *result* rows used to log SINGLE-stage CE/activation
@@ -2594,6 +2606,90 @@ START_SECTION(ion_decode_parity_vectors)
     TEST_EQUAL(decoded, v.ok)
     if (v.ok) { TEST_EQUAL(key, std::string(v.expected)) }
   }
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// ADR-0047 d.9 / ADR-0048 d.4 -- scan_results.tsv: precursor_share on every MSn row, the Kinetic
+// Model's fit on the one row that completes the group, sentinels everywhere else
+/////////////////////////////////////////////////////////////
+START_SECTION(results_kinetic_columns_only_on_the_completing_row)
+{
+  // Drive a kinetic_model MS2 sweep through the ENGINE on the cytC 17+ fixtures: inclusion-pinned
+  // survey, six trap pre-scans at 1/11/21/31/41/50, one Orbitrap follow-up at the modeled energy.
+  // Every CE 0..50 is mapped so the follow-up resolves whatever the fit decides (no fallback).
+  auto ms1 = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc_z17.txt");
+  ABORT_IF(ms1.empty())
+  std::map<int, ScanData> ce_map;
+  for (int ce = 0; ce <= 50; ++ce)
+  {
+    auto s = loadTsvScans(std::string("../../FlashIDA/test-data/spectra/") + "ms2_cytc_z17_ce" + std::to_string(ce) + ".txt");
+    ABORT_IF(s.empty())
+    ce_map[ce] = s[0];
+  }
+  const std::string dir = freshLogDir("lf_kin");
+  std::string cfg = injectRuntime(kineticModelConfig(), dir);
+  FLASHIda ida(const_cast<char*>(cfg.c_str()));
+  AcqResult a = runInterleaved(&ida, ms1, std::vector<ScanData>{ce_map.at(31)}, nullptr, 600, true, 0.0, &ce_map);
+  TEST_TRUE(a.first_group_commands >= 6)
+
+  auto res = TSVFile::parse(dir + "/scan_results.tsv");
+  int completing = 0, with_source = 0, msn_rows = 0, ms1_rows = 0;
+  std::string modeled_ce_cell;
+  for (const auto& row : res.rows)
+  {
+    const std::string lvl = cell(res, row, "ms_level");
+    if (lvl == "1")
+    {
+      ++ms1_rows;
+      TEST_EQUAL(cell(res, row, "precursor_share"), std::string("-1"))
+    }
+    else
+    {
+      ++msn_rows;
+      const double s = toD(cell(res, row, "precursor_share"));      // every MSn row: pre-scan AND follow-up
+      TEST_TRUE(s >= 0.0 && s <= 1.0)
+    }
+    const std::string src = cell(res, row, "energy_source");
+    if (!src.empty()) { ++with_source; TEST_TRUE(src.rfind("modeled", 0) == 0) }
+    if (std::atoi(cell(res, row, "fit_points").c_str()) > 0)
+    {
+      ++completing;
+      TEST_EQUAL(cell(res, row, "exploration_metric"), std::string("4"))
+      TEST_TRUE(toD(cell(res, row, "fit_p0")) > 0.0)
+      TEST_TRUE(toD(cell(res, row, "fit_width")) >= 0.25 && toD(cell(res, row, "fit_width")) <= 25.0)
+      TEST_TRUE(toD(cell(res, row, "fit_rss")) >= 0.0)
+      TEST_TRUE(toD(cell(res, row, "k2")) > 0.0)
+      TEST_TRUE(toD(cell(res, row, "modeled_b")) > 0.0)
+      TEST_TRUE(std::atoi(cell(res, row, "modeled_ce").c_str()) >= 1)
+      TEST_EQUAL(cell(res, row, "winner_tracking_id"), std::string(""))   // no winner under kinetic_model
+      modeled_ce_cell = cell(res, row, "modeled_ce");
+    }
+    else
+    {
+      TEST_EQUAL(cell(res, row, "modeled_ce"), std::string("0"))
+      TEST_EQUAL(cell(res, row, "k2"), std::string("-1"))
+      TEST_EQUAL(cell(res, row, "fit_p0"), std::string("-1"))
+      TEST_EQUAL(cell(res, row, "energy_source"), std::string(""))
+    }
+  }
+  TEST_TRUE(ms1_rows >= 1)
+  TEST_TRUE(msn_rows >= 7)              // 6 pre-scans + the follow-up, at least
+  TEST_EQUAL(completing, 1)
+  TEST_EQUAL(with_source, 1)
+  // The follow-up command carries the modeled energy: exactly one MS2 'recording' row at level 2 whose
+  // collision energy equals the completing row's modeled_ce.
+  auto cmds = TSVFile::parse(dir + "/scan_commands.tsv");
+  int r_rows = 0;
+  bool r_at_modeled = false;
+  for (const auto& row : cmds.rows)
+  {
+    if (cell(cmds, row, "scan_type") != "recording" || cell(cmds, row, "ms_level") != "2") continue;
+    ++r_rows;
+    r_at_modeled = std::to_string((int)std::lround(toD(cell(cmds, row, "hcd_energy")))) == modeled_ce_cell;
+  }
+  TEST_EQUAL(r_rows, 1)
+  TEST_TRUE(r_at_modeled)
 }
 END_SECTION
 

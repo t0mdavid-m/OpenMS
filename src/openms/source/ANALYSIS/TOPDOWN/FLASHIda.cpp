@@ -35,6 +35,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
 
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/KineticModel.h>   // precursorShare on the regular MSn rows (ADR-0048)
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanRole.h>
 #include <OpenMS/DATASTRUCTURES/ListUtils.h>
@@ -330,6 +331,38 @@ FLASHIda::FLASHIda(char* arg) :
     return commands_pushed;
   }
 
+  namespace
+  {
+    /// ADR-0047 d.9: copy the Kinetic Model's decision onto the scan_results row, verbatim. Called on
+    /// both exploration arms; KineticInfo is sentinel-valued except on the group-completing row, so the
+    /// copy is unconditional and the row shows exactly what the engine decided on.
+    void fillKineticColumns(IdaLogger::ScanRowDescriptor& row, const Exploration::FeedResultInfo::KineticInfo& k)
+    {
+      row.fit_p0        = k.p0;
+      row.fit_ce_max_s  = k.ce_max_s;
+      row.fit_width     = k.width;
+      row.k2            = k.k2;
+      row.modeled_ce    = k.modeled_ce;
+      row.modeled_b     = k.modeled_b;
+      row.fit_points    = k.fit_points;
+      row.fit_rss       = k.rss;
+      row.energy_source = k.energy_source;
+    }
+
+    /// ADR-0048 d.4: the share the returning scan carries in the window its command isolated LAST
+    /// (stage 0 of an MS2, stage 1 of an MS3) -- the same window Exploration reads for a pre-scan, so
+    /// a regular row and an exploration row of the same scan are comparable. -1 when the command has no
+    /// stage (never the case past the context gate) or the scan carries no signal.
+    double regularRowShare(const ScanCommand& ctx, const double* mzs, const double* ints, int length)
+    {
+      if (ctx.num_stages <= 0) return -1.0;
+      const auto& st = ctx.stages[ctx.num_stages - 1];
+      return KineticModel::precursorShare(mzs, ints, length,
+                                          st.precursor_mz - st.isolation_width / 2.0,
+                                          st.precursor_mz + st.isolation_width / 2.0);
+    }
+  }
+
   int FLASHIda::processScan(const double* mzs, const double* ints, int length,
                              double rt_min, int ms_level, const char* scan_description,
                              double faims_cv, int instrument_scan_number)
@@ -522,7 +555,8 @@ FLASHIda::FLASHIda(char* arg) :
         results_row.total_variants      = expl_result.group.total_variants;
         results_row.collision_energy    = std::to_string(expl_result.fragmentation.collision_energy);
         results_row.exploration_score   = expl_result.metric.score;
-        results_row.remaining_ratio     = expl_result.metric.precursor_share;   // the column is renamed in the logging task
+        results_row.precursor_share     = expl_result.metric.precursor_share;   // ADR-0048: every variant, every metric
+        fillKineticColumns(results_row, expl_result.kinetic);                    // ADR-0047: the completing row's fit
         results_row.activation_type     = expl_result.fragmentation.activation_type;
         results_row.reaction_time       = std::to_string(expl_result.fragmentation.reaction_time);
         results_row.winner_tracking_id  = expl_result.group.winner_tracking_id;  // "" except the group-completing row
@@ -720,6 +754,9 @@ FLASHIda::FLASHIda(char* arg) :
         results_row.collision_energy   = ms2_collision_energy;
         results_row.activation_type    = ms2_activation_type;
         results_row.reaction_time      = ms2_reaction_time;
+        // ADR-0048 d.4: the share on a regular MS2 too -- the follow-up a sweep buys, a quantification
+        // scan, a plain DDA MS2 -- read in stage 0's window, so a dense run is a share dataset by itself.
+        results_row.precursor_share    = regularRowShare(parent_ctx, mzs, ints, length);
 
         std::cout << "[TRACK-RESOLVE] id=" << parent_id_str
                   << " rt=" << rt_min
@@ -784,7 +821,8 @@ FLASHIda::FLASHIda(char* arg) :
         results_row.activation_type  = expl_result.fragmentation.stage0_activation_type + ";" + expl_result.fragmentation.activation_type;
         results_row.reaction_time    = std::to_string(expl_result.fragmentation.stage0_reaction_time) + ";" + std::to_string(expl_result.fragmentation.reaction_time);
         results_row.exploration_score   = expl_result.metric.score;
-        results_row.remaining_ratio     = expl_result.metric.precursor_share;   // the column is renamed in the logging task
+        results_row.precursor_share     = expl_result.metric.precursor_share;   // ADR-0048: stage 1's window
+        fillKineticColumns(results_row, expl_result.kinetic);                    // ADR-0047: the completing row's fit
         results_row.winner_tracking_id  = expl_result.group.winner_tracking_id;
 
         // Identification rows
@@ -906,6 +944,10 @@ FLASHIda::FLASHIda(char* arg) :
         results_row.collision_energy   = ms3_collision_energy;
         results_row.activation_type    = ms3_activation_type;
         results_row.reaction_time      = ms3_reaction_time;
+        // ADR-0048 d.4: the share in STAGE 1's window (the fragment the MS3 isolated), never stage 0's,
+        // which would measure the intact precursor and sit flat across stage-1 energies. A dense Orbitrap
+        // MS3 run therefore yields the first MS3 share dataset an MS3 k2 can be fitted on.
+        results_row.precursor_share    = regularRowShare(parent_ctx, mzs, ints, length);
 
         return_code = 0;
       }

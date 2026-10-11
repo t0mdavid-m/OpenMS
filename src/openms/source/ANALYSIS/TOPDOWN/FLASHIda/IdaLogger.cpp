@@ -119,7 +119,11 @@ namespace OpenMS
         results_tsv_stream_ << "tracking_id\tms_level\tparent_tracking_id\t"
                             << "commands_pushed\tchild_ids\trt\t"
                             << "duration_ms\tduration_received_ms\tqueue_duration_ms\tinstrument_duration_ms\tprocessing_duration_ms\t"
-                            << "mass_count\tremaining_ratio\t"
+                            // ADR-0048: precursor_share RENAMED in place from remaining_ratio (same index,
+                            // 12). Deliberately a rename, not a reuse: the quantity changed (window over
+                            // the whole scan, not over a CE-0 reference), and a renamed column makes every
+                            // golden fail closed where a silently revalued one would pass.
+                            << "mass_count\tprecursor_share\t"
                             // Per-scan identification YIELD, beside the other "how much did this scan
                             // return" columns. -1 = no tagger ran (MS1, MS3); 0 = ran, read nothing;
                             // >0 = real. tic_coverage also appears on identification.tsv, per ID row.
@@ -141,7 +145,14 @@ namespace OpenMS
                             // block above was: every column index pinned in FLASHIda_LoggingFields_test
                             // is lower, so appending invalidates none of them.
                             << "\tconsensus_verdict\tconsensus_fold_change\tconsensus_agreement"
-                               "\tconsensus_charges\tconsensus_id_charge\n";
+                               "\tconsensus_charges\tconsensus_id_charge"
+                            // ADR-0047 d.9: the Kinetic Model's live fit, on the row that completes a
+                            // kinetic_model group and sentinel-valued everywhere else. APPENDED, for the
+                            // reason the two blocks above were: every scan_results index pinned in
+                            // FLASHIda_LoggingFields_test is <= 21, so only the count and headers.back()
+                            // move. energy_source is last and is the new headers.back().
+                            << "\tfit_p0\tfit_ce_max_s\tfit_width\tk2\tmodeled_ce\tmodeled_b"
+                               "\tfit_points\tfit_rss\tenergy_source\n";
         results_tsv_stream_.flush();
       }
     }
@@ -499,7 +510,7 @@ namespace OpenMS
     const int total_variants = row.total_variants;
     const std::string& collision_energy = row.collision_energy;
     const double exploration_score = row.exploration_score;
-    const double remaining_ratio = row.remaining_ratio;
+    const double precursor_share = row.precursor_share;
     const std::string& activation_type = row.activation_type;
     const std::string& reaction_time = row.reaction_time;
     const std::string& winner_tracking_id = row.winner_tracking_id;
@@ -535,10 +546,10 @@ namespace OpenMS
                         << instrument_duration << "\t"
                         << processing_duration << "\t"
                         << mass_count << "\t"
-                        << remaining_ratio << "\t"
+                        << precursor_share << "\t"
                         // Identification yield. Emitted raw: results_tsv_stream_ is the one IdaLogger
                         // stream deliberately never given a precision, and both fixed/setprecision are
-                        // sticky, so setting one here would reformat rt, remaining_ratio,
+                        // sticky, so setting one here would reformat rt, precursor_share,
                         // exploration_score and the next row's deconv block. Two are ints anyway.
                         << row.tag_count << "\t"
                         << row.fragment_count << "\t"
@@ -595,7 +606,7 @@ namespace OpenMS
       results_tsv_stream_ << "\t";
       // No std::fixed / setprecision here, deliberately: results_tsv_stream_ is the one IdaLogger stream
       // that is never given a precision, and both are STICKY -- setting them for this column would silently
-      // reformat rt, remaining_ratio, exploration_score and the NEXT row's deconv_masses.
+      // reformat rt, precursor_share, exploration_score and the NEXT row's deconv_masses.
       for (size_t i = 0; i < deconv_spectrum->size(); i++)
       {
         if (i > 0) results_tsv_stream_ << ";";
@@ -656,7 +667,7 @@ namespace OpenMS
                         // ADR-0038. No stream manipulator here on purpose: std::fixed/setprecision are
                         // STICKY on this stream (see the notes above), and results_tsv_stream_ is
                         // deliberately left at the default, which is what renders the -1.0 sentinel as
-                        // "-1" exactly like remaining_ratio and exploration_score already do.
+                        // "-1" exactly like precursor_share and exploration_score already do.
                         << "\t" << quant_channels_str
                         << "\t" << quant_means_str
                         << "\t" << row.quant_fold_change
@@ -668,7 +679,19 @@ namespace OpenMS
                         << "\t" << row.consensus_fold_change
                         << "\t" << row.consensus_agreement
                         << "\t" << row.consensus_charges
-                        << "\t" << row.consensus_id_charge << "\n";
+                        << "\t" << row.consensus_id_charge
+                        // ADR-0047 d.9. Same no-manipulator rule again: the stream default renders the
+                        // -1.0 sentinels as "-1" and the ints as themselves, and the real values at
+                        // six significant digits like exploration_score beside them.
+                        << "\t" << row.fit_p0
+                        << "\t" << row.fit_ce_max_s
+                        << "\t" << row.fit_width
+                        << "\t" << row.k2
+                        << "\t" << row.modeled_ce
+                        << "\t" << row.modeled_b
+                        << "\t" << row.fit_points
+                        << "\t" << row.fit_rss
+                        << "\t" << row.energy_source << "\n";
     results_tsv_stream_.flush();
   }
 
