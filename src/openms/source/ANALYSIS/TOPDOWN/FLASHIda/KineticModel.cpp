@@ -34,104 +34,80 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/KineticModel.h>
 
-#include <unsupported/Eigen/NonLinearOptimization>
-#include <unsupported/Eigen/NumericalDiff>
-
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace OpenMS::KineticModel
 {
   namespace
   {
-    inline double sigmoid(double t) { return 1.0 / (1.0 + std::exp(-t)); }
-    inline double logit(double p)
-    {
-      p = std::min(std::max(p, 1e-6), 1.0 - 1e-6);
-      return std::log(p / (1.0 - p));
-    }
-    /// curve_families.U clips the exponent to +-60 so exp(exp(u)) cannot overflow on a wild step.
+    /// curve_families.U clips the exponent to +-60 so exp(exp(u)) cannot overflow on a wild grid point.
     inline double clampU(double u) { return std::min(std::max(u, -60.0), 60.0); }
 
-    /// The coordinates LM walks: x(0) -> p0 through cap * sigmoid, x(1) = c free, x(2) -> w through the
-    /// log box. Each map is a smooth bijection of the real line onto the open box, so every point the
-    /// study's grid could return is reachable and nothing outside it is; the objective's value at a point
-    /// is unchanged, so its minimum over the box and over (x0, x1, x2) coincide (ADR-0047 decision 3).
-    struct Decoded { double p0, c, w; };
-    inline Decoded decode(const Eigen::VectorXd& x, double cap)
+    /// numpy.linspace(a, b, n): a + i * (b - a) / (n - 1), the last element set to b exactly.
+    std::vector<double> linspace(double a, double b, int n)
     {
-      return {cap * sigmoid(x(0)), x(1), kWidthMin * std::pow(kWidthMax / kWidthMin, sigmoid(x(2)))};
-    }
-    inline Eigen::VectorXd encode(double p0, double c, double w, double cap)
-    {
-      Eigen::VectorXd x(3);
-      x(0) = logit(p0 / cap);
-      x(1) = c;
-      x(2) = logit(std::log(w / kWidthMin) / std::log(kWidthMax / kWidthMin));
-      return x;
+      std::vector<double> v(static_cast<size_t>(n));
+      const double step = (b - a) / (n - 1);
+      for (int i = 0; i < n; ++i) v[static_cast<size_t>(i)] = a + i * step;
+      v.back() = b;
+      return v;
     }
 
-    // The functor shape Eigen's NumericalDiff / LevenbergMarquardt expect (same idiom as
-    // GumbelMaxLikelihoodFitter.cpp).
-    template<typename _Scalar, int NX = Eigen::Dynamic, int NY = Eigen::Dynamic>
-    struct Functor
+    /// numpy.geomspace(a, b, n): 10 ** linspace(log10 a, log10 b, n), the endpoints set exactly.
+    std::vector<double> geomspace(double a, double b, int n)
     {
-      typedef _Scalar Scalar;
-      enum { InputsAtCompileTime = NX, ValuesAtCompileTime = NY };
-      typedef Eigen::Matrix<Scalar, InputsAtCompileTime, 1> InputType;
-      typedef Eigen::Matrix<Scalar, ValuesAtCompileTime, 1> ValueType;
-      typedef Eigen::Matrix<Scalar, ValuesAtCompileTime, InputsAtCompileTime> JacobianType;
-      int m_inputs, m_values;
-      Functor(int inputs, int values) : m_inputs(inputs), m_values(values) {}
-      int inputs() const { return m_inputs; }
-      int values() const { return m_values; }
+      std::vector<double> v = linspace(std::log10(a), std::log10(b), n);
+      for (double& x : v) x = std::pow(10.0, x);
+      v.front() = a;
+      v.back() = b;
+      return v;
+    }
+
+    struct GridBest
+    {
+      double A = -1.0, c = -1.0, w = -1.0, sse = std::numeric_limits<double>::infinity();
     };
 
-    struct GompertzFunctor : Functor<double>
+    /// curve_families.fit's best_on for the Gompertz family: for every (c, w) of the lattice the plateau A is
+    /// the closed-form least-squares scale, clipped to [0, cap]; the lattice point with the smallest residual
+    /// wins, the FIRST such point on a tie (np.argmin over the c-major mesh). Verbatim behaviour, so the
+    /// engine's fit is the study's fit, tie-breaks included (ADR-0047 decision 3, as amended at
+    /// implementation: see KineticModel.h).
+    GridBest bestOn(const std::vector<SharePoint>& pts, double cap, const std::vector<double>& cs, const std::vector<double>& ws)
     {
-      const std::vector<SharePoint>& pts;
-      double cap;
-      GompertzFunctor(const std::vector<SharePoint>& p, double c) : Functor<double>(3, static_cast<int>(p.size())), pts(p), cap(c) {}
-      int operator()(const Eigen::VectorXd& x, Eigen::VectorXd& f) const
+      GridBest best;
+      std::vector<double> g(pts.size());
+      for (double c : cs)
       {
-        const Decoded d = decode(x, cap);
-        for (int i = 0; i < values(); ++i)
-          f(i) = pts[i].share - d.p0 * std::exp(-std::exp(clampU((pts[i].ce - d.c) / d.w)));
-        return 0;
-      }
-    };
-
-    /// The landmark read (the report's "read without a fit"): p0 = highest share; c = the first crossing
-    /// of p0/e after the maximum, linearly interpolated; w from the 0.85 p0 crossing,
-    /// w = (ce_85 - c) / ln(-ln 0.85) (ln(-ln 0.85) = -1.817, and ce_85 < c, so w > 0). Fallbacks:
-    /// c = the last energy, w = kSeedWidth.
-    Decoded landmarkSeed(const std::vector<SharePoint>& pts)
-    {
-      int imax = 0;
-      for (int i = 1; i < static_cast<int>(pts.size()); ++i)
-        if (pts[i].share > pts[imax].share) imax = i;
-      const double p0 = pts[imax].share;
-      auto crossing = [&](double level, bool& found) {
-        for (int i = imax; i + 1 < static_cast<int>(pts.size()); ++i)
+        for (double w : ws)
         {
-          if (pts[i].share >= level && pts[i + 1].share < level)
+          double gp = 0.0, gg = 0.0;
+          for (size_t i = 0; i < pts.size(); ++i)
           {
-            found = true;
-            const double t = (pts[i].share - level) / (pts[i].share - pts[i + 1].share);
-            return pts[i].ce + t * (pts[i + 1].ce - pts[i].ce);
+            g[i] = std::exp(-std::exp(clampU((pts[i].ce - c) / w)));
+            gp += g[i] * pts[i].share;
+            gg += g[i] * g[i];
+          }
+          double A = gp / std::max(gg, 1e-30);
+          A = std::min(std::max(A, 0.0), cap);
+          double sse = 0.0;
+          for (size_t i = 0; i < pts.size(); ++i)
+          {
+            const double r = pts[i].share - A * g[i];
+            sse += r * r;
+          }
+          if (sse < best.sse)
+          {
+            best.A = A;
+            best.c = c;
+            best.w = w;
+            best.sse = sse;
           }
         }
-        found = false;
-        return pts.back().ce;
-      };
-      bool fc = false, f85 = false;
-      const double c = crossing(p0 / std::exp(1.0), fc);
-      const double c85 = crossing(0.85 * p0, f85);
-      double w = kSeedWidth;
-      if (fc && f85) w = (c85 - c) / std::log(-std::log(0.85));
-      // Keep the seed strictly inside the box: logit() is undefined at its walls.
-      w = std::min(std::max(w, kWidthMin * 1.2), kWidthMax / 1.2);
-      return {std::max(p0, 1e-3), c, w};
+      }
+      return best;
     }
   } // namespace
 
@@ -173,32 +149,26 @@ namespace OpenMS::KineticModel
     double hi = 0.0;
     for (const auto& p : pts) hi = std::max(hi, p.share);
     if (hi <= 0.0) return out;
-    const double cap = kPlateauFactor * hi;
+    const double cap = kPlateauFactor * hi;   // curve_families.plateau_bound
 
-    const Decoded seed = landmarkSeed(pts);
-    Eigen::VectorXd x = encode(std::min(seed.p0, 0.99 * cap), seed.c, seed.w, cap);
-
-    GompertzFunctor functor(pts, cap);
-    Eigen::NumericalDiff<GompertzFunctor> nd(functor);
-    Eigen::LevenbergMarquardt<Eigen::NumericalDiff<GompertzFunctor>, double> lm(nd);
-    lm.parameters.maxfev = 2000;
-    const Eigen::LevenbergMarquardtSpace::Status status = lm.minimize(x);
-    // GaussFitter's rule: every status but these two is a good termination state.
-    if (status == Eigen::LevenbergMarquardtSpace::ImproperInputParameters
-        || status == Eigen::LevenbergMarquardtSpace::TooManyFunctionEvaluation)
-      return out;
-
-    const Decoded d = decode(x, cap);
-    Eigen::VectorXd f(pts.size());
-    functor(x, f);
-    const double rss = f.squaredNorm();
-    if (!std::isfinite(d.p0) || !std::isfinite(d.c) || !std::isfinite(d.w) || !std::isfinite(rss)) return out;
+    // The study's two passes (curve_families.fit, family "Gompertz"): the coarse lattice -- inflection
+    // 0..60 in steps of 0.5, 41 log-spaced widths over [kWidthMin, kWidthMax] -- then one refinement
+    // around the winner: 51 inflections within +-kRefineC, 41 widths within a factor kRefineW either way,
+    // the width floor at half the coarse floor exactly as the study has it.
+    std::vector<double> cs;
+    for (int i = 0; i <= 120; ++i) cs.push_back(0.5 * i);
+    const GridBest coarse = bestOn(pts, cap, cs, geomspace(kWidthMin, kWidthMax, 41));
+    if (!std::isfinite(coarse.sse)) return out;
+    const GridBest fine = bestOn(pts, cap,
+                                 linspace(std::max(coarse.c - kRefineC, cs.front()), coarse.c + kRefineC, 51),
+                                 geomspace(std::max(coarse.w / kRefineW, kWidthMin / 2.0), coarse.w * kRefineW, 41));
+    if (!std::isfinite(fine.sse)) return out;
 
     out.ok = true;
-    out.p0 = d.p0;
-    out.ce_max_s = d.c;
-    out.width = d.w;
-    out.rss = rss;
+    out.p0 = fine.A;
+    out.ce_max_s = fine.c;
+    out.width = fine.w;
+    out.rss = fine.sse;
     return out;
   }
 
