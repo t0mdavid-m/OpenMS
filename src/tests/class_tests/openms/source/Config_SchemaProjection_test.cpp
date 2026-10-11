@@ -538,6 +538,81 @@ START_SECTION(etd_sweep_rejects_sub_floor_reaction_time_min)
 }
 END_SECTION
 
+/////////////////////////////////////////////////////////////
+// ADR-0047: the kinetic_model metric and its authored, never-defaulted k2
+/////////////////////////////////////////////////////////////
+
+START_SECTION(kinetic_model_parses_and_requires_its_object)
+{
+  const std::string kin = R"(, "exploration": { "metric": "kinetic_model", "ce_min": 1, "ce_max": 50, "ce_step": 10,
+                               "activations": ["HCD"], "kinetic_model": { "k2": { "HCD": 0.0388 } } })";
+  Config cfg(cfgJson(kin));
+  TEST_EQUAL((int)cfg.level(2).exploration, (int)ExplorationMetric::KineticModel)
+  TEST_EQUAL(isMeasuringMetric(ExplorationMetric::KineticModel), true)
+  TEST_REAL_SIMILAR(cfg.level(2).kinetic_k2.at("HCD"), 0.0388)
+  // metric without the object -> throw
+  TEST_EXCEPTION(std::invalid_argument,
+    Config(cfgJson(R"(, "exploration": { "metric": "kinetic_model", "activations": ["HCD"] })")))
+  // swept activation without a k2 entry -> throw (no default, ADR-0047 d.6)
+  TEST_EXCEPTION(std::invalid_argument,
+    Config(cfgJson(R"(, "exploration": { "metric": "kinetic_model", "activations": ["CID"],
+                                         "kinetic_model": { "k2": { "HCD": 0.0388 } } })")))
+  // k2 <= 0 -> throw
+  TEST_EXCEPTION(std::invalid_argument,
+    Config(cfgJson(R"(, "exploration": { "metric": "kinetic_model", "activations": ["HCD"],
+                                         "kinetic_model": { "k2": { "HCD": 0 } } })")))
+  // unknown key inside the object -> throw (strict schema, ADR-0007)
+  TEST_EXCEPTION(std::invalid_argument,
+    Config(cfgJson(R"(, "exploration": { "metric": "kinetic_model", "activations": ["HCD"],
+                                         "kinetic_model": { "k2": { "HCD": 0.0388 }, "cap": 1.1 } })")))
+  // activations empty -> the base scan's activation (HCD) is the swept one and must have an entry
+  Config implicit(cfgJson(R"(, "exploration": { "metric": "kinetic_model",
+                                                "kinetic_model": { "k2": { "HCD": 0.0388 } } })"));
+  TEST_REAL_SIMILAR(implicit.level(2).kinetic_k2.at("HCD"), 0.0388)
+  TEST_EXCEPTION(std::invalid_argument,
+    Config(cfgJson(R"(, "exploration": { "metric": "kinetic_model",
+                                         "kinetic_model": { "k2": { "CID": 0.004 } } })")))
+}
+END_SECTION
+
+START_SECTION(kinetic_model_object_without_the_metric_throws)
+{
+  // Review Focus 5: an authored k2 nobody reads is the stomped-key shape (ADR-0040's snr_threshold).
+  TEST_EXCEPTION(std::invalid_argument,
+    Config(cfgJson(R"(, "exploration": { "metric": "remaining_precursor",
+                                         "kinetic_model": { "k2": { "HCD": 0.0388 } } })")))
+}
+END_SECTION
+
+START_SECTION(kinetic_model_sweeps_one_ce_swept_activation)
+{
+  // Plan-level constraint, flagged to the owner at plan review: the model is defined on collision energy and
+  // one k2 feeds one pool, so a kinetic_model sweep names exactly one activation, and that activation must be
+  // CE-swept (HCD, CID or EThcD) -- an ETD sweep varies reaction time and has no CE axis to fit.
+  TEST_EXCEPTION(std::invalid_argument,
+    Config(cfgJson(R"(, "exploration": { "metric": "kinetic_model", "activations": ["HCD", "CID"],
+                                         "kinetic_model": { "k2": { "HCD": 0.0388, "CID": 0.004 } } })")))
+  TEST_EXCEPTION(std::invalid_argument,
+    Config(cfgJson(R"(, "exploration": { "metric": "kinetic_model", "activations": ["ETD"],
+                                         "reaction_time_min": 5, "reaction_time_max": 25, "reaction_time_step": 5,
+                                         "kinetic_model": { "k2": { "ETD": 0.01 } } })")))
+}
+END_SECTION
+
+START_SECTION(kinetic_model_is_allowed_on_the_trap_and_rejected_under_multiplexing)
+{
+  Config trap(cfgJson(R"(, "exploration": { "metric": "kinetic_model", "activations": ["HCD"],
+                                            "overrides": { "analyzer": "IonTrap" },
+                                            "kinetic_model": { "k2": { "HCD": 0.0388 } } })"));
+  TEST_EQUAL((int)trap.level(2).exploration, (int)ExplorationMetric::KineticModel)
+  // the share reads the ANCHOR window only, so co-isolation decides nothing about the siblings (ADR-0048 d.1)
+  TEST_EXCEPTION(std::invalid_argument,
+    Config(cfgJson(R"(, "precursor_charges": "multiplexed",
+                        "exploration": { "metric": "kinetic_model", "activations": ["HCD"],
+                                         "kinetic_model": { "k2": { "HCD": 0.0388 } } })")))
+}
+END_SECTION
+
 START_SECTION(zero_on_a_coupled_axis_is_accepted)
 {
   // ms_settings.ms2 itself, NOT an additional_ms2 block: the check only ever ran over the dispatch

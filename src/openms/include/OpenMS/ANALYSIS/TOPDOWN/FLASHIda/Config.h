@@ -88,15 +88,17 @@ namespace OpenMS
   {
     None = 0,            ///< No exploration at this level (default)
     MassCount,           ///< Optimize for most deconvolved masses
-    RemainingPrecursor,  ///< Optimize for least remaining precursor intensity
-    FragmentCount        ///< Optimize for most fragment ions
+    RemainingPrecursor,  ///< Score each pre-scan's precursor SHARE against remaining_precursor_target (ADR-0048)
+    FragmentCount,       ///< Optimize for most fragment ions
+    KineticModel         ///< ADR-0047: fit the Kinetic Model to the pre-scans' precursor shares and acquire the
+                         ///< follow-up at the MODELED MAXIMUM -- no pre-scan wins; logged as 4
   };
 
   /**
     @brief True for a metric that weighs bulk signal without matching fragments (ADR-0020).
 
-    A **measuring** metric (MassCount, RemainingPrecursor) scores a variant from peak or
-    intensity counts alone, so it never produces a ProteoformMatch and its pre-scans leave no
+    A **measuring** metric (MassCount, RemainingPrecursor, KineticModel) scores a variant from peak
+    or intensity counts alone, so it never produces a ProteoformMatch and its pre-scans leave no
     identification behind. FragmentCount is the sole **reading** metric: it matches every
     variant against the proteoform in order to score it, so identification is a side effect of
     scoring.
@@ -104,13 +106,15 @@ namespace OpenMS
     At MS3 the distinction decides whether an exploration group produces any evidence at all,
     which is why a measuring MS3 sweep must always be closed by a production scan
     (`Exploration.cpp`, the post-winner dispatch). At MS2 it does not apply — every variant is
-    matched there regardless of metric.
+    matched there regardless of metric. KineticModel is closed by a follow-up at BOTH levels
+    regardless (ADR-0047 d.5): its chosen energy is computed, so there is no variant to cascade from.
 
     `None` is not a sweep, so it is not measuring.
   */
   inline bool isMeasuringMetric(ExplorationMetric metric)
   {
-    return metric == ExplorationMetric::MassCount || metric == ExplorationMetric::RemainingPrecursor;
+    return metric == ExplorationMetric::MassCount || metric == ExplorationMetric::RemainingPrecursor
+        || metric == ExplorationMetric::KineticModel;
   }
 
   /**
@@ -215,7 +219,14 @@ namespace OpenMS
     std::unordered_map<std::string, std::string> overrides;
     double tolerance_ppm = 10.0;
     double exploration_tolerance_ppm = 10.0;  ///< Resolved exploration tolerance (from overrides or base tol)
-    double remaining_precursor_target = 0.1;  ///< Target remaining precursor ratio (0.1 = 10%)
+    /// Target PRECURSOR SHARE for ExplorationMetric::RemainingPrecursor (ADR-0048 d.2): the key kept its
+    /// name when the quantity changed from a ratio to the CE-0 baseline to the share of the scan's own
+    /// signal. 0.1 = one tenth of the scan's signal is still precursor.
+    double remaining_precursor_target = 0.1;
+    /// ADR-0047 d.6: the overfragmentation rate k2 (per NCE) of the Kinetic Model, by activation name.
+    /// AUTHORED and never defaulted -- k2 differs by an order of magnitude between activations and is
+    /// unmeasured at MS3 and on the ion trap, so a swept activation without an entry is a load error.
+    std::unordered_map<std::string, double> kinetic_k2;
 
     /// MONITOR SCAN (ADR-0042): a periodic MS1 acquired WHILE THIS LEVEL IS SWEEPING, so the
     /// operator can watch the source. Deconvolved and logged; it selects nothing, excludes nothing,

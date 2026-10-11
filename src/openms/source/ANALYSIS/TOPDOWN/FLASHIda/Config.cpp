@@ -926,7 +926,7 @@ namespace OpenMS
       rejectUnknownKeys(e,
           {"metric", "ce_min", "ce_max", "ce_step", "overrides", "remaining_precursor_target",
            "reaction_time_min", "reaction_time_max", "reaction_time_step", "activations",
-           "tolerance_ppm", "monitor_ms1"},
+           "tolerance_ppm", "monitor_ms1", "kinetic_model"},
           path + ".exploration");
 
       MSLevelConfig& cfg = levels_[level];
@@ -939,10 +939,45 @@ namespace OpenMS
       else if (m == "mass_count") cfg.exploration = ExplorationMetric::MassCount;
       else if (m == "remaining_precursor") cfg.exploration = ExplorationMetric::RemainingPrecursor;
       else if (m == "fragment_count") cfg.exploration = ExplorationMetric::FragmentCount;
+      else if (m == "kinetic_model") cfg.exploration = ExplorationMetric::KineticModel;
       else
         throw std::invalid_argument(
             "Config: " + path + ".exploration.metric must be one of \"none\", \"mass_count\", "
-            "\"remaining_precursor\", \"fragment_count\"; got \"" + m + "\".");
+            "\"remaining_precursor\", \"fragment_count\", \"kinetic_model\"; got \"" + m + "\".");
+
+      // ADR-0047 decision 6. The kinetic_model object is required iff the metric is kinetic_model. An
+      // authored k2 nobody reads is the stomped-key shape (ADR-0040's snr_threshold), so the object
+      // without the metric is refused too, and there is NO default: k2 differs by an order of magnitude
+      // between activations and is unmeasured at MS3 and on the ion trap.
+      const bool has_kin = e.contains("kinetic_model") && !e["kinetic_model"].is_null();
+      if (cfg.exploration == ExplorationMetric::KineticModel && !has_kin)
+        throw std::invalid_argument(
+            "Config: " + path + ".exploration.metric is \"kinetic_model\" but " + path
+            + ".exploration.kinetic_model is absent. It must carry k2 (the overfragmentation rate per NCE) "
+              "for every swept activation, e.g. {\"k2\": {\"HCD\": 0.0388}}. There is no default (ADR-0047).");
+      if (has_kin && cfg.exploration != ExplorationMetric::KineticModel)
+        throw std::invalid_argument(
+            "Config: " + path + ".exploration.kinetic_model is authored but " + path
+            + ".exploration.metric is not \"kinetic_model\"; nothing would read it. Remove it or set the "
+              "metric (ADR-0047).");
+      if (has_kin)
+      {
+        const auto& k = e["kinetic_model"];
+        if (!k.is_object())
+          throw std::invalid_argument("Config: " + path + ".exploration.kinetic_model must be an object.");
+        rejectUnknownKeys(k, {"k2"}, path + ".exploration.kinetic_model");
+        if (!k.contains("k2") || !k["k2"].is_object())
+          throw std::invalid_argument(
+              "Config: " + path + ".exploration.kinetic_model.k2 must be an object of activation -> rate per NCE.");
+        for (auto it = k["k2"].begin(); it != k["k2"].end(); ++it)
+        {
+          if (!it.value().is_number() || !(it.value().get<double>() > 0.0))
+            throw std::invalid_argument(
+                "Config: " + path + ".exploration.kinetic_model.k2." + it.key()
+                + " must be a number > 0 (per NCE); got " + it.value().dump() + ".");
+          cfg.kinetic_k2[it.key()] = it.value().get<double>();
+        }
+      }
 
       cfg.ce_min = e.value("ce_min", 20.0);
       cfg.ce_max = e.value("ce_max", 40.0);
@@ -1293,12 +1328,14 @@ namespace OpenMS
       const auto ov = cfg.overrides.find("analyzer");
       if (ov != cfg.overrides.end() && isTrapAnalyzer(ov->second)
           && cfg.exploration != ExplorationMetric::None
-          && cfg.exploration != ExplorationMetric::RemainingPrecursor)
+          && cfg.exploration != ExplorationMetric::RemainingPrecursor
+          && cfg.exploration != ExplorationMetric::KineticModel)
         throw std::invalid_argument(
             sect + ".exploration.overrides.analyzer is \"IonTrap\" but " + sect + ".exploration.metric is not "
-            "\"remaining_precursor\". A trap pre-scan is measured, never identified -- it is not deconvolved or "
-            "matched -- so a metric that counts masses or fragments scores every variant 0 and the first grid "
-            "point always wins. Use \"remaining_precursor\", or an Orbitrap override (ADR-0045).");
+            "a share-based metric (\"remaining_precursor\" or \"kinetic_model\"). A trap pre-scan is measured, "
+            "never identified -- it is not deconvolved or matched -- so a metric that counts masses or fragments "
+            "scores every variant 0 and the first grid point always wins. Use a share-based metric, or an "
+            "Orbitrap override (ADR-0045, ADR-0047).");
     }
 
     // Level-matched multiplexing (ADR-0026 decision 4, re-grounded by ADR-0044). The remaining-precursor
@@ -1315,30 +1352,33 @@ namespace OpenMS
     //     precursor_selection.precursor_charges == multiplexed -- because stage-0 notches change
     //     WHICH precursors are fragmented, not what the stage-1 window isolates. Hence two
     //     pair-specific checks rather than one "multiplexed anywhere" check.
-    if (level(2).exploration == ExplorationMetric::RemainingPrecursor
+    auto shareBased = [](ExplorationMetric m) {
+      return m == ExplorationMetric::RemainingPrecursor || m == ExplorationMetric::KineticModel;
+    };
+    if (shareBased(level(2).exploration)
         && targeting_.precursor_charges == ChargeAcquisitionMode::Multiplexed)
       throw std::invalid_argument(
-          "precursor_selection.exploration.metric is \"remaining_precursor\" but "
-          "precursor_selection.precursor_charges is \"multiplexed\". The remaining-precursor ratio sums "
-          "the ANCHOR's isolation window only, so under co-isolation it reports one charge state's "
-          "depletion while the same collision energy depletes its siblings at other rates -- a target "
-          "met by the anchor decides nothing about the rest. Set precursor_charges to \"single\" or "
-          "\"separate\", or pick a different exploration metric (ADR-0044 decision 4).");
+          "precursor_selection.exploration.metric is a share-based metric (\"remaining_precursor\" or "
+          "\"kinetic_model\") but precursor_selection.precursor_charges is \"multiplexed\". The precursor "
+          "share sums the ANCHOR's isolation window only, so under co-isolation it reports one charge state's "
+          "depletion while the same collision energy depletes its siblings at other rates -- a reading of the "
+          "anchor decides nothing about the rest. Set precursor_charges to \"single\" or \"separate\", or "
+          "pick a different exploration metric (ADR-0044 decision 4, ADR-0048).");
 
     // Guarded on `mode` for the reason spelled out at the level-3 arm above: levels_[3].exploration
     // outlives characterization.mode == "off" (applyCharacterizationMode_ resets only `selection`),
     // and under "off" no MS3 pre-scan is ever emitted, so there is no sweep for a multiplexed fragment
     // isolation to mislead (ADR-0013).
     if (characterization_.mode != CharacterizationMode::Off
-        && level(3).exploration == ExplorationMetric::RemainingPrecursor
+        && shareBased(level(3).exploration)
         && characterization_.fragment_charges == ChargeAcquisitionMode::Multiplexed)
       throw std::invalid_argument(
-          "characterization.exploration.metric is \"remaining_precursor\" but "
-          "characterization.fragment_charges is \"multiplexed\". The remaining-precursor ratio sums the "
-          "ANCHOR's isolation window only, so under co-isolation it reports one charge state's depletion "
-          "while the same collision energy depletes its siblings at other rates -- a target met by the "
-          "anchor decides nothing about the rest. Set fragment_charges to \"single\" or \"separate\", "
-          "or pick a different exploration metric (ADR-0044 decision 4).");
+          "characterization.exploration.metric is a share-based metric (\"remaining_precursor\" or "
+          "\"kinetic_model\") but characterization.fragment_charges is \"multiplexed\". The precursor share "
+          "sums the ANCHOR's isolation window only, so under co-isolation it reports one charge state's "
+          "depletion while the same collision energy depletes its siblings at other rates -- a reading of the "
+          "anchor decides nothing about the rest. Set fragment_charges to \"single\" or \"separate\", or "
+          "pick a different exploration metric (ADR-0044 decision 4, ADR-0048).");
 
     // Re-keyed onto `mode`. It used to fire off the UPSTREAM gate (any level >= 2 selecting), which
     // is why 17 test configs that run no MS3 at all had to carry a placeholder "SEQUENCE": their
@@ -1392,10 +1432,38 @@ namespace OpenMS
             sect + ".exploration.reaction_time_step must be > 0 when a reaction-time range is set; got "
             + std::to_string(cfg.rt_step) + ". A non-positive step never terminates the sweep loop.");
 
+      // ADR-0047. The Kinetic Model is defined on collision energy and one k2 feeds one pool, so a
+      // kinetic_model sweep names exactly one activation, and that activation must be CE-swept -- an ETD
+      // sweep varies reaction time and has no CE axis to fit. (Plan-level constraints, not grilled;
+      // lifting either later is additive.)
+      if (cfg.exploration == ExplorationMetric::KineticModel)
+      {
+        if (acts.size() != 1)
+          throw std::invalid_argument(
+              sect + ".exploration.metric is \"kinetic_model\" but " + std::to_string(acts.size())
+              + " activations are swept. One k2 feeds one pool, so a kinetic sweep names exactly one activation; "
+                "author one exploration block per activation instead (ADR-0047).");
+        if (!needsCollisionEnergy(acts[0]))
+          throw std::invalid_argument(
+              sect + ".exploration.metric is \"kinetic_model\" but the swept activation '" + acts[0]
+              + "' varies reaction time, not collision energy. The model is defined on collision energy (ADR-0047).");
+        for (const auto& [a, v] : cfg.kinetic_k2)
+          if (std::find(acts.begin(), acts.end(), a) == acts.end())
+            std::cout << "[CONFIG-WARN] " << sect << ".exploration.kinetic_model.k2." << a
+                      << " names an activation this level does not sweep; the entry is inert, not invalid.\n";
+      }
+
       for (const auto& act : acts)
       {
         bool needs_ce = needsCollisionEnergy(act);
         bool needs_rt = needsReactionTime(act);
+
+        // ADR-0047 decision 6: k2 is never defaulted.
+        if (cfg.exploration == ExplorationMetric::KineticModel && cfg.kinetic_k2.find(act) == cfg.kinetic_k2.end())
+          throw std::invalid_argument(
+              sect + ".exploration.kinetic_model.k2 has no entry for the swept activation '" + act + "' at level "
+              + std::to_string(lvl) + ". k2 is never defaulted; author it, e.g. {\"k2\": {\"" + act
+              + "\": 0.0388}} (ADR-0047 decision 6).");
 
         if (needs_ce && cfg.ce_max <= cfg.ce_min)
           throw std::invalid_argument(
