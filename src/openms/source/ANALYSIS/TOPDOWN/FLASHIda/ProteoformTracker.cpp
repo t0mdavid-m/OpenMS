@@ -153,8 +153,35 @@ namespace OpenMS
         case CharacterizationObjective::Ambiguity: return "ambiguity";
         case CharacterizationObjective::Coverage: return "coverage";
         case CharacterizationObjective::Exhaustive: return "exhaustive";
+        case CharacterizationObjective::Discriminating: return "discriminating";
       }
       return "ambiguity";
+    }
+
+    // The winner scan's masses in the order runRefineMatching_ handed them to Refine (ascending mono mass, stable), and the
+    // intensities it used (PeakGroup::getIntensity). A Refine::Path's mass_idx indexes THIS list; order[i] is the
+    // winner_peaks index of its i-th entry.
+    inline void refineMassList(const std::vector<PeakRecord>& peaks, std::vector<double>& masses, std::vector<double>& intensities,
+                               std::vector<size_t>& order)
+    {
+      order.resize(peaks.size());
+      for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+      std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) { return peaks[a].mono_mass < peaks[b].mono_mass; });
+      masses.clear();
+      intensities.clear();
+      masses.reserve(order.size());
+      intensities.reserve(order.size());
+      for (size_t idx : order)
+      {
+        masses.push_back(peaks[idx].mono_mass);
+        intensities.push_back(peaks[idx].group_intensity);
+      }
+    }
+
+    // "b12" / "-" for the [DISCRIMINATING] marker.
+    inline std::string ionLabel(const std::optional<Refine::Path::Ion>& ion)
+    {
+      return ion ? std::string(1, ion->type) + std::to_string(ion->index) : std::string("-");
     }
 
     // The exhaustive pool's admission test, factored out because it answers "is this peak a target?"
@@ -319,6 +346,7 @@ namespace OpenMS
       pr.intensity = static_cast<double>(pg.getChargeIntensity(charge));
       pr.iso_width = mz2 - mz1;
       pr.stage1_scores = FragmentAnalysis::FragmentScores::fromPeakGroup(pg, charge);
+      pr.group_intensity = static_cast<double>(pg.getIntensity());
       // The FULL envelope alongside the representative charge, so fragment_charges has real
       // candidates. Same arithmetic as the four lines above, once per present charge. No SNR gate and
       // no ordering here: selectNotches owns both, in one place (ADR-0016).
@@ -389,6 +417,41 @@ namespace OpenMS
       m.modifications.push_back(ModificationState{s.mass_shift, s.start_position, s.end_position, 0.0, 0.0});
     }
 
+    // 3b) characterization.method refine (ADR-0049): keep the winner's candidate record on the model, and with two or
+    //     more totals the masses the two best paths explain differently -- the discriminating targets, intensity-desc.
+    //     The paths index the winner scan's masses in Refine's own order, so that list is rebuilt from winner_peaks.
+    m.refine.reset();
+    if (win->match.refine)
+    {
+      RefineState st;
+      st.candidates = win->match.refine;
+      const std::vector<Refine::Path>& c = st.candidates->assemble.candidates;
+      if (c.size() >= 2)
+      {
+        std::vector<double> masses, intensities;
+        std::vector<size_t> order;
+        refineMassList(m.winner_peaks, masses, intensities, order);
+        const double tol_ppm = config_.level(2).tolerance_ppm;
+        for (const Refine::Discriminating& d : Refine::discriminating(c[0], c[1], masses, intensities))
+        {
+          DiscriminatingRecord rec;
+          rec.target = d;
+          double best = std::numeric_limits<double>::max();
+          for (size_t i = 0; i < m.winner_peaks.size(); ++i)
+          {
+            const double diff = std::abs(m.winner_peaks[i].mono_mass - d.mass);
+            if (diff <= d.mass * tol_ppm * 1e-6 && diff < best)
+            {
+              best = diff;
+              rec.peak_index = static_cast<int>(i);
+            }
+          }
+          st.records.push_back(rec);
+        }
+      }
+      m.refine = std::move(st);
+    }
+
     // 4) Map EVERY staged scan's already-matched fragments onto the model
     m.fragments.clear();
     m.rematched_nonwinner_.clear();   // C: rebuilt below by mapNonWinnerMs2_ for empty-own-match contributors
@@ -451,7 +514,7 @@ namespace OpenMS
     if (m.proteoform_sequence.empty()) return no_plan("unidentified_precursor");
     if (!m.has_ms2_ctx) return no_plan("no_ms2_context");
 
-    const CharacterizationObjective obj = config_.characterization().objective;
+    CharacterizationObjective obj = config_.characterization().objective;
     const int budget = config_.level(2).max_targets;  // reuse the MS2 max_targets as the MS3 budget
     if (budget <= 0) return no_plan("zero_budget");
 
@@ -459,6 +522,15 @@ namespace OpenMS
     // ("identification is still required") reports through the SAME reason strings in every mode, and
     // before the objective-keyed pool build below, which exhaustive replaces wholesale (ADR-0023).
     if (obj == CharacterizationObjective::Exhaustive) return planExhaustive_(m, precursor_id, budget);
+
+    // Discriminating (ADR-0049): until the round's decision fires, the targets are the masses that tell Refine's two best
+    // paths apart. Once it has fired (or with no candidate record), the decided model's windows are localized exactly as
+    // under ambiguity -- the branch below.
+    if (obj == CharacterizationObjective::Discriminating)
+    {
+      if (m.refine && !m.refine->decided) return planDiscriminating_(m, precursor_id, budget);
+      obj = CharacterizationObjective::Ambiguity;
+    }
 
     const int P = static_cast<int>(m.proteoform_sequence.size());
     if (P <= 0) return no_plan("empty_sequence");
@@ -812,9 +884,6 @@ namespace OpenMS
     // path: separate and multiplexed acquire one species' whole charge envelope for ONE slot and differ
     // only in scan count (ADR-0016). Counting acquisitions instead is the pathology the modes exist to
     // avoid -- max_targets: 3 spent entirely on the first mass that happened to resolve at 3 charges.
-    const ChargeAcquisitionMode charge_mode = config_.characterization().fragment_charges;
-    const double snr_threshold = config_.targeting().snr_threshold;
-
     std::vector<Ms3Target> out;
     int species_selected = 0;
     for (const PoolEntry& e : pool)
@@ -823,52 +892,7 @@ namespace OpenMS
       const PeakRecord& pr = *e.peak;
       const std::pair<std::string, int> label = labelFor(pr);
 
-      // The acquisition charge set, chosen ONCE for both on-modes from the peak's own envelope: anchor
-      // plus the SNR-positive rest, most intense first, capped at a 10-plex. One selectNotches call for
-      // both is what keeps "they differ only in scan count" structural rather than aspirational.
-      std::vector<NotchCandidate> extra_charges;
-      if (charge_mode != ChargeAcquisitionMode::Single && !pr.by_charge.empty())
-      {
-        std::vector<NotchCandidate> cands;
-        cands.reserve(pr.by_charge.size());
-        for (const ChargeRecord& cr : pr.by_charge)
-          cands.push_back({cr.charge, cr.mz, cr.iso_width, cr.stage1_scores.charge_snr, cr.intensity});
-        extra_charges = selectNotches(cands, pr.charge, snr_threshold, MAX_NOTCHES_PER_STAGE,
-                                      "MS3 exhaustive m=" + std::to_string(pr.mono_mass));
-      }
-      // Multiplexed puts that set on ONE command as notches; separate spends one command per member.
-      const std::vector<NotchCandidate> frag_notches =
-          (charge_mode == ChargeAcquisitionMode::Multiplexed) ? extra_charges : std::vector<NotchCandidate>{};
-
-      // NOT named `emit`: Qt's qobjectdefs.h defines `emit` as an EMPTY macro, and OpenMS links
-      // Qt6Core, so `auto emit = ...` preprocesses to `auto = ...` -- MSVC then reports
-      // "no variable declared before '='" on a line that looks perfectly valid.
-      auto emitTarget = [&](double mz, int charge, double iso_width, const FragmentAnalysis::FragmentScores& s) {
-        Ms3Target t;
-        t.ion_type = label.first;
-        t.ion_index = label.second;
-        t.frag_mz = mz;
-        t.frag_charge = charge;
-        t.frag_mass = pr.mono_mass;
-        t.iso_width = iso_width;
-        // stage[0] REPLAYS the MS2 that produced this mass (ADR-0003), and for an unassigned mass there
-        // is no per-ion best observation to source it from -- the winner scan's own params ARE the
-        // acquisition that produced it, for mapped and unassigned masses alike.
-        t.stage0_params = m.winner_params;
-        t.stage1_scores = s;
-        t.notches = frag_notches;   // empty unless fragment_charges == Multiplexed
-        out.push_back(std::move(t));
-      };
-
-      emitTarget(pr.mz, pr.charge, pr.iso_width, pr.stage1_scores);
-      if (charge_mode == ChargeAcquisitionMode::Separate)
-      {
-        for (const NotchCandidate& n : extra_charges)
-        {
-          for (const ChargeRecord& cr : pr.by_charge)
-            if (cr.charge == n.charge) { emitTarget(cr.mz, cr.charge, cr.iso_width, cr.stage1_scores); break; }
-        }
-      }
+      emitRawMassTarget_(m, pr, label.first, label.second, "exhaustive", out);
 
       // Stamped only now: after every filter, and after the mass has actually become a target. The set
       // is monotone and dispatched-but-never-returned counts as done, so a stamp made any earlier is a
@@ -886,6 +910,274 @@ namespace OpenMS
               << " budget=" << budget
               << std::endl;
     return out;
+  }
+
+  void ProteoformTracker::emitRawMassTarget_(const ProteoformModel& m, const PeakRecord& pr, const std::string& ion_type,
+                                             int ion_index, const char* mode_name, std::vector<Ms3Target>& out) const
+  {
+    const ChargeAcquisitionMode charge_mode = config_.characterization().fragment_charges;
+    const double snr_threshold = config_.targeting().snr_threshold;
+
+    // The acquisition charge set, chosen ONCE for both on-modes from the peak's own envelope: anchor
+    // plus the SNR-positive rest, most intense first, capped at a 10-plex. One selectNotches call for
+    // both is what keeps "they differ only in scan count" structural rather than aspirational.
+    std::vector<NotchCandidate> extra_charges;
+    if (charge_mode != ChargeAcquisitionMode::Single && !pr.by_charge.empty())
+    {
+      std::vector<NotchCandidate> cands;
+      cands.reserve(pr.by_charge.size());
+      for (const ChargeRecord& cr : pr.by_charge)
+        cands.push_back({cr.charge, cr.mz, cr.iso_width, cr.stage1_scores.charge_snr, cr.intensity});
+      extra_charges = selectNotches(cands, pr.charge, snr_threshold, MAX_NOTCHES_PER_STAGE,
+                                    std::string("MS3 ") + mode_name + " m=" + std::to_string(pr.mono_mass));
+    }
+    // Multiplexed puts that set on ONE command as notches; separate spends one command per member.
+    const std::vector<NotchCandidate> frag_notches =
+        (charge_mode == ChargeAcquisitionMode::Multiplexed) ? extra_charges : std::vector<NotchCandidate>{};
+
+    // NOT named `emit`: Qt's qobjectdefs.h defines `emit` as an EMPTY macro, and OpenMS links
+    // Qt6Core, so `auto emit = ...` preprocesses to `auto = ...` -- MSVC then reports
+    // "no variable declared before '='" on a line that looks perfectly valid.
+    auto emitTarget = [&](double mz, int charge, double iso_width, const FragmentAnalysis::FragmentScores& s) {
+      Ms3Target t;
+      t.ion_type = ion_type;
+      t.ion_index = ion_index;
+      t.frag_mz = mz;
+      t.frag_charge = charge;
+      t.frag_mass = pr.mono_mass;
+      t.iso_width = iso_width;
+      // stage[0] REPLAYS the MS2 that produced this mass (ADR-0003), and for an unassigned mass there
+      // is no per-ion best observation to source it from -- the winner scan's own params ARE the
+      // acquisition that produced it, for mapped and unassigned masses alike.
+      t.stage0_params = m.winner_params;
+      t.stage1_scores = s;
+      t.notches = frag_notches;   // empty unless fragment_charges == Multiplexed
+      out.push_back(std::move(t));
+    };
+
+    emitTarget(pr.mz, pr.charge, pr.iso_width, pr.stage1_scores);
+    if (charge_mode == ChargeAcquisitionMode::Separate)
+    {
+      for (const NotchCandidate& n : extra_charges)
+      {
+        for (const ChargeRecord& cr : pr.by_charge)
+          if (cr.charge == n.charge) { emitTarget(cr.mz, cr.charge, cr.iso_width, cr.stage1_scores); break; }
+      }
+    }
+  }
+
+  std::vector<Ms3Target> ProteoformTracker::planDiscriminating_(ProteoformModel& m, int precursor_id, int budget)
+  {
+    // The same marker and zero-target vocabulary as the other planners.
+    auto no_plan = [precursor_id](const char* reason) -> std::vector<Ms3Target> {
+      std::cout << "[MS3-PLAN] precursor_id=" << precursor_id
+                << " objective=" << objectiveName(CharacterizationObjective::Discriminating)
+                << " targets=0 reason=" << reason << std::endl;
+      return {};
+    };
+
+    RefineState& st = *m.refine;
+    // One total (Detect found no level): nothing tells two paths apart, so there is nothing to acquire.
+    if (st.records.empty() || !st.candidates || st.candidates->assemble.candidates.size() < 2) return no_plan("single_candidate");
+
+    // --- 1) The pool: records not dispatched, isolatable, of a species this Precursor has not fragmented ------------
+    // The isolatability/charge-floor test is planExhaustive_'s (exhaustivePoolAdmits, no mass floor: min_target_mass is
+    // exhaustive's knob) and for its reason: a mass Exploration drops downstream must not be stamped into the monotone
+    // dispatch memory first (ADR-0023 D-d). A record with no winner peak (peak_index -1) has nothing to isolate.
+    const int charge_floor = config_.level(2).min_charge;
+    struct PoolEntry
+    {
+      DiscriminatingRecord* rec = nullptr;
+      int nominal = 0;
+    };
+    std::vector<PoolEntry> pool;
+    for (DiscriminatingRecord& rec : st.records)
+    {
+      if (rec.dispatched) continue;
+      if (rec.peak_index < 0 || rec.peak_index >= static_cast<int>(m.winner_peaks.size())) continue;
+      const PeakRecord& pr = m.winner_peaks[rec.peak_index];
+      if (!exhaustivePoolAdmits(pr, 0.0, charge_floor)) continue;
+      const int nominal = SpectralDeconvolution::getNominalMass(pr.mono_mass);
+      if (m.dispatched_nominal_masses.count(nominal) > 0) continue;
+      pool.push_back(PoolEntry{&rec, nominal});
+    }
+    if (pool.empty()) return no_plan("pool_exhausted");
+
+    // --- 2) Emit, budget-bounded, in the records' order (intensity-desc, Refine::discriminating) --------------------
+    // The budget counts SPECIES, as in planExhaustive_ (ADR-0016).
+    const std::vector<Refine::Path>& c = st.candidates->assemble.candidates;
+    std::vector<Ms3Target> out;
+    int species_selected = 0;
+    std::ostringstream masses;
+    masses << std::fixed << std::setprecision(4);
+    for (const PoolEntry& e : pool)
+    {
+      if (species_selected >= budget) break;
+      if (m.dispatched_nominal_masses.count(e.nominal) > 0) continue; // a second record of a species stamped above
+      DiscriminatingRecord& rec = *e.rec;
+      const PeakRecord& pr = m.winner_peaks[rec.peak_index];
+      const std::optional<Refine::Path::Ion>& ion = rec.target.ion_a ? rec.target.ion_a : rec.target.ion_b;
+      const std::string ion_type = ion ? std::string(1, ion->type) : std::string(kUnassignedIonType);
+      const int ion_index = ion ? ion->index : 0;
+
+      emitRawMassTarget_(m, pr, ion_type, ion_index, "discriminating", out);
+
+      rec.dispatched = true;
+      m.dispatched_nominal_masses.insert(e.nominal);
+      if (species_selected > 0) masses << ';';
+      masses << pr.mono_mass << ':' << ionLabel(rec.target.ion_a) << '|' << ionLabel(rec.target.ion_b);
+      ++species_selected;
+    }
+
+    {
+      std::ostringstream line;
+      line << std::fixed << std::setprecision(2);
+      line << "[DISCRIMINATING] precursor_id=" << precursor_id << " pair=" << c[0].total << '/' << c[1].total << " S=" << c[0].score << '/'
+           << c[1].score << " candidates=" << st.records.size() << " dispatched=" << species_selected
+           << " masses=" << (species_selected > 0 ? masses.str() : std::string("-"));
+      std::cout << line.str() << std::endl;
+    }
+    std::cout << "[MS3-PLAN] precursor_id=" << precursor_id
+              << " objective=" << objectiveName(CharacterizationObjective::Discriminating)
+              << " pool=" << pool.size()
+              << " targets=" << out.size()
+              << " species=" << species_selected
+              << " truncated=" << (static_cast<int>(pool.size()) - species_selected)
+              << " budget=" << budget
+              << std::endl;
+    return out;
+  }
+
+  bool ProteoformTracker::recordDiscriminatingScan(int precursor_id, double fragment_mass, const DeconvolvedSpectrum& ms3,
+                                                   double loose_ppm, double tight_ppm)
+  {
+    auto it = models_.find(precursor_id);
+    if (it == models_.end()) return false;
+    ProteoformModel& m = it->second;
+    if (!m.refine || !m.refine->candidates || m.refine->candidates->assemble.candidates.size() < 2) return false;
+    RefineState& st = *m.refine;
+
+    // The record of this mass: the nearest within the level-2 tolerance (the MS3 was commanded at the winner peak's mass).
+    const double tol_ppm = config_.level(2).tolerance_ppm;
+    DiscriminatingRecord* rec = nullptr;
+    double best = std::numeric_limits<double>::max();
+    for (DiscriminatingRecord& r : st.records)
+    {
+      const double diff = std::abs(r.target.mass - fragment_mass);
+      if (diff <= std::max(r.target.mass, fragment_mass) * tol_ppm * 1e-6 && diff < best)
+      {
+        best = diff;
+        rec = &r;
+      }
+    }
+    if (rec == nullptr) return false;
+
+    // Pool: a path is supported by this mass once ANY of its scans' pieces fit (decision 8).
+    const std::vector<Refine::Path>& c = st.candidates->assemble.candidates;
+    const Refine::PieceVerdict v = Refine::pieceTest(ms3, String(m.proteoform_sequence), c[0], c[1], rec->target, loose_ppm, tight_ppm);
+    rec->fits_a = rec->fits_a || v.fits_a;
+    rec->fits_b = rec->fits_b || v.fits_b;
+    rec->returned = true;
+    ++rec->scans;
+
+    // The round is complete when every dispatched record has returned at least once.
+    bool any_dispatched = false, all_returned = true;
+    for (const DiscriminatingRecord& r : st.records)
+    {
+      if (!r.dispatched) continue;
+      any_dispatched = true;
+      all_returned = all_returned && r.returned;
+    }
+    return !st.decided && any_dispatched && all_returned;
+  }
+
+  bool ProteoformTracker::decideRefine(int precursor_id)
+  {
+    auto it = models_.find(precursor_id);
+    if (it == models_.end()) return false;
+    ProteoformModel& m = it->second;
+    if (!m.refine || m.refine->decided || !m.refine->candidates || m.refine->candidates->assemble.candidates.size() < 2) return false;
+    RefineState& st = *m.refine;
+    const std::vector<Refine::Path>& c = st.candidates->assemble.candidates;
+    const Refine::Path& a = c[0];
+    const Refine::Path& b = c[1];
+
+    // EVERY record goes to the recount, not only the dispatched ones: shared = a path's explained masses minus the
+    // targets it explains, so a partial target list would make the two shared counts disagree (Refine::recount throws).
+    // A record not dispatched, or dispatched and never returned, confirms nothing.
+    std::vector<Refine::Discriminating> targets;
+    std::vector<std::pair<bool, bool>> confirmed;
+    targets.reserve(st.records.size());
+    confirmed.reserve(st.records.size());
+    for (const DiscriminatingRecord& r : st.records)
+    {
+      targets.push_back(r.target);
+      const bool seen = r.dispatched && r.returned;
+      confirmed.emplace_back(seen && r.fits_a, seen && r.fits_b);
+    }
+    const int penalty = config_.characterization().refine.jump_penalty;
+    const Refine::Recount rc = Refine::recount(a, b, targets, confirmed, penalty);
+    const bool flipped = !rc.a_wins;
+
+    if (flipped)
+    {
+      // The second path wins: re-seed the modifications from its windows and rebuild the fragments from the winner scan
+      // as path b explains it (the same construction runRefineMatching_ uses for the best path). Fragments folded from
+      // MS3 scans during the round are not re-mapped -- their staged scans are gone (pending was cleared at finalize).
+      st.winner_candidate = 1;
+      m.identification_score = b.score;
+      m.modifications.clear();
+      const std::vector<FragmentAnalysis::PTMSite> sites = Refine::ptmSites(b);
+      for (const FragmentAnalysis::PTMSite& s : sites)
+        m.modifications.push_back(ModificationState{s.mass_shift, s.start_position, s.end_position, 0.0, 0.0});
+
+      std::vector<double> masses, intensities;
+      std::vector<size_t> order;
+      refineMassList(m.winner_peaks, masses, intensities, order);
+      PendingScan ps;
+      ps.scan_id = m.winner_scan_id;
+      ps.ms_level = 2;
+      ps.params = m.winner_params;
+      ps.peaks = m.winner_peaks;
+      ps.id_score = b.score;
+      ps.match.score = b.score;
+      ps.match.tag_count = -1;
+      ps.match.region_start = 0;
+      ps.match.region_end = static_cast<int>(m.proteoform_sequence.size());
+      ps.match.proteoform_sequence = m.proteoform_sequence;
+      ps.match.matched_protein = "input_protein";
+      ps.match.ptm_sites = sites;
+      ps.match.refine = st.candidates;
+      for (const Refine::Path::Ion& ion : b.ions_explained)
+      {
+        if (ion.mass_idx < 0 || static_cast<size_t>(ion.mass_idx) >= masses.size()) continue;
+        FragmentAnalysis::ProteoformMatch::FragmentMatch fm;
+        fm.ion_type = std::string(1, ion.type);
+        fm.ion_index = ion.index;
+        fm.observed_mass = masses[ion.mass_idx];
+        fm.theoretical_mass = ion.theoretical;
+        fm.diff_da = fm.observed_mass - ion.theoretical;
+        fm.diff_ppm = (ion.theoretical != 0.0) ? (fm.diff_da / ion.theoretical * 1e6) : 0.0;
+        fm.qscore = m.winner_peaks[order[ion.mass_idx]].stage1_scores.qscore;
+        ps.match.fragments.push_back(fm);
+      }
+      ps.match.total_match_count = static_cast<int>(ps.match.fragments.size());
+      m.fragments.clear();
+      mapScanOntoModel_(m, ps);
+    }
+
+    {
+      std::ostringstream line;
+      line << std::fixed << std::setprecision(2);
+      line << "[MS3-DECIDE] precursor_id=" << precursor_id << " S=" << rc.score_a << '/' << rc.score_b << " confirmed=" << rc.confirmed_a
+           << '/' << rc.confirmed_b << " penalty=" << penalty << " winner=" << c[st.winner_candidate].total << " flipped=" << (flipped ? 1 : 0);
+      std::cout << line.str() << std::endl;
+    }
+
+    st.decided = true;
+    ++m.update_index;
+    emitPooledIDRow(m, "MS3-DECIDE", ScanCommandQueue::encode(m.winner_scan_id));
+    return flipped;
   }
 
   const FragmentAnalysis::ProteoformMatch* ProteoformTracker::getRematchedNonWinnerMatch(int precursor_id, int scan_id) const
@@ -1402,6 +1694,11 @@ namespace OpenMS
     }
     if (ion_types.empty()) return;
 
+    // characterization.method refine (ADR-0049): only a fragment that CARRIES the shift moves a boundary. A fragment that
+    // matches without it is what Refine's windows already account for (the window is every residue the jump may sit on
+    // keeping the explained ions), so under refine it neither confirms nor narrows anything.
+    const bool shift_only = config_.characterization().method == AnnotationMethod::Refine;
+
     // Process each ambiguous modification independently.
     for (size_t mi = 0; mi < m.modifications.size(); ++mi)
     {
@@ -1463,7 +1760,7 @@ namespace OpenMS
           if (f.is_prefix) tightenUpper(rs_region, re_region, mod.support_lower, mod.support_upper, f.cover_end, I);
           else             tightenLower(rs_region, re_region, mod.support_lower, mod.support_upper, f.cover_start, I);
         }
-        else
+        else if (!shift_only)   // matches WITHOUT the shift: the mod lies outside this fragment (not under refine)
         {
           if (f.is_prefix) tightenLower(rs_region, re_region, mod.support_lower, mod.support_upper, f.cover_end + 1, I);
           else             tightenUpper(rs_region, re_region, mod.support_lower, mod.support_upper, f.cover_start - 1, I);
@@ -1501,7 +1798,7 @@ namespace OpenMS
           if (f.is_prefix) tightenUpper(rs_region, re_region, mod.support_lower, mod.support_upper, f.cover_end, I);
           else             tightenLower(rs_region, re_region, mod.support_lower, mod.support_upper, f.cover_start, I);
         }
-        else                     // PTM is OUTSIDE this equiv ion's coverage
+        else if (!shift_only)    // PTM is OUTSIDE this equiv ion's coverage (not under refine)
         {
           if (f.is_prefix) tightenLower(rs_region, re_region, mod.support_lower, mod.support_upper, f.cover_end + 1, I);
           else             tightenUpper(rs_region, re_region, mod.support_lower, mod.support_upper, f.cover_start - 1, I);

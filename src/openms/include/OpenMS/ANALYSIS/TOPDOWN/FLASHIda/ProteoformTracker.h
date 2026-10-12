@@ -40,6 +40,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms2Params.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Refine.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 #include <OpenMS/config.h>
@@ -162,6 +163,11 @@ namespace OpenMS
     /// spectrum genuinely resolved ~38% of its fragment PeakGroups at two or more charges. Ungated
     /// and unranked here on purpose: selectNotches owns the SNR gate and the intensity order.
     std::vector<ChargeRecord> by_charge;
+
+    /// PeakGroup::getIntensity() -- the group's summed intensity, which is what runRefineMatching_ hands Refine's
+    /// Assemble. Refine::discriminating ranks its masses by it, so the tracker rebuilds that list with the SAME numbers
+    /// (intensity above is the representative charge's, a different quantity). APPEND-ONLY position.
+    double group_intensity = 0;
   };
 
   /// A deconvolved scan awaiting integration into a ProteoformModel
@@ -173,6 +179,26 @@ namespace OpenMS
     std::vector<PeakRecord> peaks;   ///< One entry per deconvolved PeakGroup
     FragmentAnalysis::ProteoformMatch match;
     double id_score = -1;
+  };
+
+  /// One discriminating mass of characterization.mode discriminating (ADR-0049): a mass Refine's two best candidate
+  /// paths explain differently, and what its MS3 scans said about it.
+  struct DiscriminatingRecord
+  {
+    Refine::Discriminating target;         ///< mass, intensity, ion_a, ion_b
+    int peak_index = -1;                   ///< into m.winner_peaks (matched by mono mass at finalize); -1 = no peak
+    bool dispatched = false, returned = false;
+    bool fits_a = false, fits_b = false;   ///< pooled: true once ANY scan's pieces fit
+    int scans = 0;                         ///< MS3 scans returned for this mass
+  };
+
+  /// Refine's candidate record on the model (characterization.method refine), and the discriminating round.
+  struct RefineState
+  {
+    std::shared_ptr<const RefineCandidates> candidates;   ///< from the winner match
+    std::vector<DiscriminatingRecord> records;            ///< intensity-desc, built at finalize; empty with one total
+    bool decided = false;                                 ///< the round's decision has fired
+    int winner_candidate = 0;                             ///< 0 = best total, 1 = second (after a flip)
   };
 
   /// Per-precursor accumulated state: fragments, modifications, pending scans
@@ -232,6 +258,10 @@ namespace OpenMS
     /// -- its pool never shrinks -- so this set IS its termination condition.
     std::set<int> dispatched_nominal_masses;
 
+    /// characterization.method refine only: the winner match's candidate record and the discriminating round
+    /// (ADR-0049). Set at finalize from the winner's ProteoformMatch::refine; empty under flashtnt.
+    std::optional<RefineState> refine;
+
     /// Fraction of proteoform residues covered by at least one fragment observation [0,1]
     double coveragePct() const;
 
@@ -289,6 +319,14 @@ namespace OpenMS
     /// Exhaustive forks to planExhaustive_ instead: its pool is the winner MS2 scan's raw deconvolved
     /// masses rather than the mapped-fragment table (ADR-0023).
     std::vector<Ms3Target> planNextScans(int precursor_id);
+
+    /// MS3 return under refine: pool pieces for the record whose mass matches @p fragment_mass; returns true when the
+    /// round is complete (every dispatched record returned) and the decision has not fired yet.
+    bool recordDiscriminatingScan(int precursor_id, double fragment_mass, const DeconvolvedSpectrum& ms3,
+                                  double loose_ppm, double tight_ppm);
+
+    /// Recount, decide, re-seed on a flip, emit the pooled row, log [MS3-DECIDE]. Returns whether the model flipped.
+    bool decideRefine(int precursor_id);
 
     /// Return a pointer to the model for @p precursor_id, or nullptr if absent.
     const ProteoformModel* getModel(int precursor_id) const;
@@ -400,6 +438,22 @@ namespace OpenMS
      * scans (ADR-0016).
      */
     std::vector<Ms3Target> planExhaustive_(ProteoformModel& m, int precursor_id, int budget);
+
+    /**
+     * @brief The CharacterizationObjective::Discriminating branch of planNextScans (ADR-0049).
+     *
+     * Pool = the RefineState records not yet dispatched whose nominal mass is not in dispatched_nominal_masses; up to
+     * @p budget of them (species, as in planExhaustive_), intensity-desc. MUTATES @p m: marks each emitted record
+     * dispatched and stamps its nominal mass.
+     */
+    std::vector<Ms3Target> planDiscriminating_(ProteoformModel& m, int precursor_id, int budget);
+
+    /// The emit step planExhaustive_ and planDiscriminating_ share: the MS3 target(s) of ONE raw winner-scan mass @p pr
+    /// labelled (@p ion_type, @p ion_index), with characterization.fragment_charges' handling (single: one target;
+    /// separate: one per SNR-positive charge; multiplexed: one target carrying the rest as notches) and stage[0] =
+    /// m.winner_params. Appends to @p out. @p mode_name only labels selectNotches' diagnostics.
+    void emitRawMassTarget_(const ProteoformModel& m, const PeakRecord& pr, const std::string& ion_type, int ion_index,
+                            const char* mode_name, std::vector<Ms3Target>& out) const;
 
     const Config& config_;
     IdaLogger& logger_;
