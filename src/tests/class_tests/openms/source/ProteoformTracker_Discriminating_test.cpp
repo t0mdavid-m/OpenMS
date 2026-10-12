@@ -189,7 +189,8 @@ namespace
 
   // Identify @p ml with the engine's own MS2 path (method refine) and feed the result as the one MS2 scan of the
   // precursor, then finalize. One scan: it is the winner by construction.
-  void feedAndFinalize(const Config& cfg, ProteoformTracker& tracker, int precursor_id, int scan_id, const MassList& ml)
+  void feedAndFinalize(const Config& cfg, ProteoformTracker& tracker, int precursor_id, int scan_id, const MassList& ml,
+                       const std::string& activation = "HCD")
   {
     DeconvolvedSpectrum ms2(scan_id);
     for (size_t i = 0; i < ml.masses.size(); ++i) ms2.push_back(makePeak(ml.masses[i], ml.intensities[i]));
@@ -206,7 +207,7 @@ namespace
 
     Ms2Params p;
     p.collision_energy = 29.0;
-    p.activation_type = "HCD";
+    p.activation_type = activation; // the winner's stage-0 activation (winner_params); identification above stays b/y
     p.reaction_time = 0.0;
     tracker.feedScan(precursor_id, 2, p, scan_id, ms2, match, match.score, makeMs2Ctx());
     tracker.finalizeMS2(precursor_id);
@@ -281,6 +282,27 @@ namespace
     while (std::getline(ss, cell, '\t')) out.push_back(cell);
     if (!line.empty() && line.back() == '\t') out.push_back("");
     return out;
+  }
+
+  // planNextScans with its stdout captured: the [MS3-PLAN] line names the reason for a zero-target plan.
+  std::vector<Ms3Target> planCapturing(ProteoformTracker& tracker, int precursor_id, std::string& out)
+  {
+    std::ostringstream captured;
+    std::streambuf* const real_cout = std::cout.rdbuf(captured.rdbuf());
+    std::vector<Ms3Target> plan;
+    try
+    {
+      plan = tracker.planNextScans(precursor_id);
+    }
+    catch (...)
+    {
+      std::cout.rdbuf(real_cout);
+      throw;
+    }
+    std::cout.rdbuf(real_cout);
+    out = captured.str();
+    std::cout << out; // keep the marker visible in the test log
+    return plan;
   }
 
   const double LOOSE = MS3FragmentMatcher::LOOSE_TOLERANCE_PPM;
@@ -370,7 +392,8 @@ END_SECTION
 //    and the model is still identified.
 //
 // FAILS UNDER: building records from a single candidate (c[1] out of range); falling through to the ambiguity branch
-// before a decision.
+// before a decision -- that branch also plans nothing here (no modification), so the REASON is what tells them apart:
+// the discriminating planner's single_candidate, not ambiguity's all_mods_localized.
 /////////////////////////////////////////////////////////////
 START_SECTION(single_candidate_dispatches_nothing)
 {
@@ -388,7 +411,9 @@ START_SECTION(single_candidate_dispatches_nothing)
   ABORT_IF(!m->refine.has_value())
   TEST_EQUAL(m->refine->candidates->assemble.candidates.size(), 1)
   TEST_EQUAL(m->refine->records.size(), 0)
-  TEST_EQUAL(tracker.planNextScans(pid).size(), 0)
+  std::string log;
+  TEST_EQUAL(planCapturing(tracker, pid, log).size(), 0)
+  TEST_TRUE(log.find("objective=discriminating targets=0 reason=single_candidate") != std::string::npos)
   TEST_EQUAL(m->dispatched_nominal_masses.size(), 0)
   TEST_EQUAL(tracker.decideRefine(pid), false)
   TEST_EQUAL(m->refine->decided, false)
@@ -420,6 +445,34 @@ START_SECTION(dispatched_masses_are_not_replanned)
   for (const auto& t : second) nominal.insert(SpectralDeconvolution::getNominalMass(t.frag_mass));
   TEST_EQUAL(nominal.size(), 6)
   TEST_EQUAL(countDispatched(*m), 6)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// 3a. A winner acquired with an activation that cannot feed an MS3 (ETD) plans no MS3, though two candidates and 14
+//     records exist; the reason names the capability and nothing is marked dispatched or stamped.
+//
+// FAILS UNDER: a discriminating planner without planExhaustive_'s capability guard (it would command 3 MS3 whose
+// stage 0 replays the ETD winner).
+/////////////////////////////////////////////////////////////
+START_SECTION(etd_winner_plans_no_ms3)
+{
+  const int pid = 39;
+  Config cfg{trackerConfig("discriminating", "refine", 3)};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+  feedAndFinalize(cfg, tracker, pid, 609, twoTotals(), "ETD");
+  const ProteoformModel* m = tracker.getModel(pid);
+  ABORT_IF(m == nullptr || !m->refine.has_value())
+  TEST_EQUAL(m->winner_params.activation_type, std::string("ETD"))
+  TEST_EQUAL(m->refine->candidates->assemble.candidates.size() >= 2, true)
+  TEST_EQUAL(m->refine->records.size(), 14)
+
+  std::string log;
+  TEST_EQUAL(planCapturing(tracker, pid, log).size(), 0)
+  TEST_TRUE(log.find("objective=discriminating targets=0 reason=winner_scan_not_ms3_capable") != std::string::npos)
+  TEST_EQUAL(countDispatched(*m), 0)
+  TEST_EQUAL(m->dispatched_nominal_masses.size(), 0)
 }
 END_SECTION
 
