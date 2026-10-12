@@ -1177,6 +1177,27 @@ START_SECTION(discriminating_under_refine_projects_level_selection)
 }
 END_SECTION
 
+START_SECTION(discriminating_with_ms3_exploration_throws)
+{
+  // The discriminating round pools evidence only on the regular MS3 return path; MS3 exploration variants return on
+  // the exploration branch and would leave the round incomplete forever, so the pairing is refused at load.
+  const std::string expl =
+    R"("exploration": { "metric": "fragment_count", "ce_min": 15, "ce_max": 35, "ce_step": 10 })";
+  const std::string msg = refineMessage(cfgJson("",
+    R"("characterization": { "mode": "discriminating", "method": "refine", "protein_sequence": "PEPTIDEK", )" + expl + " },",
+    kMs3));
+  TEST_EQUAL(contains(msg,
+    "characterization.mode \"discriminating\" does not yet pool MS3 exploration variants; disable "
+    "characterization.exploration or choose another mode (ADR-0049)."), true)
+
+  // Positive control: the same exploration block under another mode loads, so the block itself is not what fires.
+  Config ok(cfgJson("",
+    R"("characterization": { "mode": "exhaustive", "method": "refine", "protein_sequence": "PEPTIDEK", )" + expl + " },",
+    kMs3));
+  TEST_EQUAL(ok.hasExploration(3), true)
+}
+END_SECTION
+
 START_SECTION(refine_bounds_are_validated)
 {
   auto withRefine = [](const std::string& block) {

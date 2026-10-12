@@ -1349,6 +1349,13 @@ namespace OpenMS
             "characterization.mode \"discriminating\" requires characterization.method \"refine\" "
             "(ADR-0049): its targets are the fragments that tell Refine's candidate paths apart.");
     }
+    // The discriminating round pools MS3 evidence only on the REGULAR MS3 return path; an MS3 exploration variant
+    // returns on the exploration branch, never reaches recordDiscriminatingScan, and the round could never complete.
+    // Refused at load rather than wired untested.
+    if (characterization_.mode == CharacterizationMode::Discriminating && hasExploration(3))
+      throw std::invalid_argument(
+          "characterization.mode \"discriminating\" does not yet pool MS3 exploration variants; disable "
+          "characterization.exploration or choose another mode (ADR-0049).");
     {
       const RefineSettings& r = characterization_.refine;
       auto bound = [](bool ok, const std::string& key, const std::string& rule, const std::string& got) {
