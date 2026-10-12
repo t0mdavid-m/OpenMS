@@ -12,6 +12,7 @@
 
 #include <OpenMS/CONCEPT/ClassTest.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIdaBridgeFunctions.h>  // the C export ProcessScan (ADR-0051)
 
 #include "FLASHIda_TestHelpers.h"  // ground-truth harness: ScanData/loadTsvScans/AcqResult/runInterleaved/runFullCycle
 #include "FLASHIda_TestAccess.h"   // FLASHIdaTestAccess: push/queue/queueSize/explorationActive (private-state access)
@@ -2184,6 +2185,120 @@ START_SECTION(processScan_mass_exclusion_thresholded)
   for (int mz : pass2_order) TEST_EQUAL(excluded.count(mz) == 0, true)
 
   delete ida;
+}
+END_SECTION
+
+// ADR-0051: acquisition memory -- both exclusion bars and the qscore ledger -- expires once it is older
+// than rt_window SECONDS. processScan takes seconds and runInterleaved feeds the fixture's header times
+// straight in, so this is the engine's own contract, not the host's: it cannot see the bridge bug (the
+// export passing the host's minutes through unconverted) -- processScan_export_converts_the_hosts_minutes
+// _to_seconds below and the C# RetentionTimeWindowTests do. What it does see is a SECOND conversion
+// inside processScan (the bar would expire after half a fixture second, so the spacing collapses) and a
+// log that stopped writing minutes (the spacing read back from scan_results would be 60x too large).
+//
+// cytC under strict inclusion with tqscore_threshold 0.0 -- method_inclusion_cytc_strict.json -- so every
+// acquisition arms both bars. ms1_cytc.txt's 50 surveys run 8.2-72.0 s and resolve cytC at 8.3 s and,
+// after 38.3 s, first at 43.0 s: a 180 s window holds for the whole run, a 30 s one expires exactly once.
+START_SECTION(processScan_acquisition_memory_expires_after_rt_window_seconds)
+{
+  auto ms1 = loadTsvScans(FI_MS1_CYTC);
+  auto ms2 = loadTsvScans(FI_MS2_CYTC);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  // Survey retention time (s) of every MS2 commanded at cytC's nominal mass, in command order.
+  auto cytcSurveyTimes = [&](int window_s, const std::string& tag) {
+    const std::string dir = freshLogDir(tag);
+    std::string cfg = buildJsonWithLogDir(dir);
+    auto rep = [&cfg](const std::string& from, const std::string& to) {
+      auto p = cfg.find(from);
+      TEST_EQUAL(p != std::string::npos, true)   // a missing literal would leave the config silently unchanged
+      if (p != std::string::npos) cfg.replace(p, from.size(), to);
+    };
+    rep("\"tqscore_threshold\": 0.9", "\"tqscore_threshold\": 0.0");
+    rep("\"rt_window\": 180", "\"rt_window\": " + std::to_string(window_s));
+    rep("\"targeting\": \"none\"", "\"targeting\": \"inclusion\"");
+    rep("\"strict_inclusion\": false", "\"strict_inclusion\": true");
+    rep("\"inclusion_list\": \"\"", "\"inclusion_list\": \"../../FlashIDA/test-data/configs/inclusion_cytc.txt\"");
+    {
+      FLASHIda ida(const_cast<char*>(cfg.c_str()));
+      runInterleaved(&ida, ms1, ms2);
+    }
+
+    // scan_commands.tsv: the MS2 rows at nominal 12351 -> parent_tracking_id -> that survey's
+    // scan_results.tsv row -> rt, which the log writes in MINUTES.
+    auto cmds = TSVFile::parse(dir + "/scan_commands.tsv");
+    auto res = TSVFile::parse(dir + "/scan_results.tsv");
+    std::map<std::string, double> survey_rt_min;
+    for (const auto& row : res.rows)
+      if (cell(res, row, "ms_level") == "1") survey_rt_min[cell(res, row, "tracking_id")] = toD(cell(res, row, "rt"));
+    std::vector<double> times;
+    for (const auto& row : cmds.rows)
+    {
+      if (cell(cmds, row, "ms_level") != "2") continue;
+      if ((int)(toD(cell(cmds, row, "mono_mass")) + 0.5) != 12351) continue;
+      auto it = survey_rt_min.find(cell(cmds, row, "parent_tracking_id"));
+      TEST_EQUAL(it != survey_rt_min.end(), true)
+      if (it != survey_rt_min.end()) times.push_back(it->second * 60.0);
+    }
+    return times;
+  };
+
+  auto held = cytcSurveyTimes(180, "rt_window_180");
+  auto expired = cytcSurveyTimes(30, "rt_window_30");
+  TEST_EQUAL((int)held.size(), 1)     // 64 s of surveys inside a 180 s window: acquired once
+  TEST_EQUAL(expired.size() >= 2, true)
+  // Not before the window ends (>= 30 s), and at the first survey that resolves cytC after it (<= 40 s).
+  for (size_t i = 1; i < expired.size(); ++i)
+  {
+    TEST_EQUAL(expired[i] - expired[i - 1] >= 30.0, true)
+    TEST_EQUAL(expired[i] - expired[i - 1] <= 40.0, true)
+  }
+}
+END_SECTION
+
+// ADR-0051: the C export is where the host's minutes become the engine's seconds -- the one conversion,
+// and the bridge bug's own site. Called here exactly as FLASHIdaWrapper calls it, with 1.5 MINUTES: the
+// survey's spectrum must carry 90 s, and both log streams that record a retention time must still say
+// 1.5, because their readers -- the target-log loader, the run analyses -- read minutes. Before ADR-0051
+// the export passed 1.5 straight through and every retention-time check in selection was 60x off.
+START_SECTION(processScan_export_converts_the_hosts_minutes_to_seconds)
+{
+  auto ms1 = loadTsvScans(FI_MS1_STD);
+  ABORT_IF(ms1.empty())
+  const std::string dir = freshLogDir("export_rt_units");
+  const std::string cfg = buildJsonWithLogDir(dir);
+  std::string survey_id;
+  {
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    ScanCommand surv{};
+    TEST_EQUAL(ida.getNextScanCommand(surv), 1)     // a fresh engine's first command is the idle survey
+    TEST_EQUAL(surv.msn_level, 1)
+    survey_id = std::string(surv.scan_description).substr(0, 3);
+
+    // The export, called as the host calls it: retention time in MINUTES.
+    ProcessScan(&ida, ms1[0].mzs.data(), ms1[0].ints.data(), (int)ms1[0].mzs.size(), 1.5, 1,
+                surv.scan_description, 0.0, 7);
+    TEST_REAL_SIMILAR(FLASHIdaTestAccess::surveyDeconvRT(ida), 90.0)   // the engine saw seconds
+  }
+
+  // scan_results.tsv: that survey's row keeps the host's minutes.
+  auto res = TSVFile::parse(dir + "/scan_results.tsv");
+  bool found = false;
+  for (const auto& row : res.rows)
+  {
+    if (cell(res, row, "ms_level") != "1" || cell(res, row, "tracking_id") != survey_id) continue;
+    found = true;
+    TEST_REAL_SIMILAR(toD(cell(res, row, "rt")), 1.5)
+  }
+  TEST_EQUAL(found, true)
+
+  // ida.log: that survey's entry keeps the host's minutes.
+  std::ifstream ida_log(dir + "/ida.log");
+  std::string line;
+  bool rt_line = false;
+  while (std::getline(ida_log, line))
+    if (line.find("MS1 Scan# 7 RT 1.5000 ") != std::string::npos) rt_line = true;
+  TEST_EQUAL(rt_line, true)
 }
 END_SECTION
 
