@@ -179,6 +179,9 @@ namespace OpenMS
     std::vector<PeakRecord> peaks;   ///< One entry per deconvolved PeakGroup
     FragmentAnalysis::ProteoformMatch match;
     double id_score = -1;
+    /// characterization.method refine only: the scan's deconvolved spectrum, so finalizeMS2 can hand the winner's to
+    /// the model for the MS3 re-dispatch after the discriminating round (ADR-0049). Null under flashtnt -- no copy.
+    std::shared_ptr<const DeconvolvedSpectrum> spectrum;
   };
 
   /// One discriminating mass of characterization.mode discriminating (ADR-0049): a mass Refine's two best candidate
@@ -228,6 +231,9 @@ namespace OpenMS
     /// decision 10 ("identification is still required") holds without a second test.
     std::vector<PeakRecord> winner_peaks;
     Ms2Params winner_params;
+    /// characterization.method refine only: the winner MS2 scan's deconvolved spectrum (from its PendingScan), which the
+    /// MS3 return path re-dispatches from once the discriminating round has decided (ADR-0049). Null under flashtnt.
+    std::shared_ptr<const DeconvolvedSpectrum> winner_spectrum;
     int update_index = 0;
     std::vector<PendingScan> pending;
     std::vector<ModificationState> modifications;

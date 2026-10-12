@@ -358,6 +358,9 @@ namespace OpenMS
     ps.params = params;
     ps.match = match;
     ps.id_score = id_score;
+    // Refine only: keep the spectrum for the post-decision MS3 re-dispatch (finalizeMS2 -> winner_spectrum).
+    if (config_.characterization().method == AnnotationMethod::Refine)
+      ps.spectrum = std::make_shared<const DeconvolvedSpectrum>(deconv);
     for (size_t i = 0; i < deconv.size(); ++i)
     {
       const PeakGroup& pg = deconv[i];
@@ -433,6 +436,8 @@ namespace OpenMS
     // scan container would tie this mode's correctness to that container's retention policy.
     m.winner_peaks = win->peaks;
     m.winner_params = win->params;
+    // Refine only: the winner's spectrum, which the MS3 return path re-dispatches from after the round (ADR-0049).
+    if (config_.characterization().method == AnnotationMethod::Refine) m.winner_spectrum = win->spectrum;
 
     // 3) Seed modifications from the winner's PTM sites (full-protein 1-based ranges).
     m.modifications.clear();
