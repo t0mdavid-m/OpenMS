@@ -509,6 +509,44 @@ START_SECTION(round_waits_for_every_dispatched_mass)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
+// 3c (decision 9). An MS3 that ARRIVED but deconvolved to nothing is received with no evidence: the engine's MS3 return
+//    path hands recordDiscriminatingScan an empty DeconvolvedSpectrum(0), which marks the record returned with neither
+//    path fitting. Two dispatched, both empty: the round completes on the second, and the recount over confirmed 0/0
+//    keeps the best path.
+//
+// FAILS UNDER: an empty scan that does not mark its record returned (the round would never complete), one that throws,
+// or one that counts as a fit (a false positive for either path).
+/////////////////////////////////////////////////////////////
+START_SECTION(empty_ms3_counts_as_returned_without_evidence)
+{
+  const int pid = 40;
+  Config cfg{trackerConfig("discriminating", "refine", 2)};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+  feedAndFinalize(cfg, tracker, pid, 610, twoTotals());
+  TEST_EQUAL(tracker.planNextScans(pid).size(), 2)
+  const ProteoformModel* m = tracker.getModel(pid);
+  ABORT_IF(m == nullptr || !m->refine.has_value())
+  TEST_EQUAL(countDispatched(*m), 2)
+  const auto& recs = m->refine->records;
+  const DeconvolvedSpectrum no_evidence(0); // exactly what FLASHIda.cpp passes for a null/empty MS3
+
+  TEST_EQUAL(tracker.recordDiscriminatingScan(pid, recs[0].target.mass, no_evidence, LOOSE, TIGHT), false)
+  TEST_EQUAL(recs[0].returned, true)
+  TEST_EQUAL(recs[0].fits_a, false)
+  TEST_EQUAL(recs[0].fits_b, false)
+  TEST_EQUAL(tracker.recordDiscriminatingScan(pid, recs[1].target.mass, no_evidence, LOOSE, TIGHT), true)
+  TEST_EQUAL(recs[1].returned, true)
+  TEST_EQUAL(recs[1].fits_a, false)
+  TEST_EQUAL(recs[1].fits_b, false)
+
+  TEST_EQUAL(tracker.decideRefine(pid), false) // confirmed 0/0: no flip
+  TEST_EQUAL(m->refine->decided, true)
+  TEST_EQUAL(m->refine->winner_candidate, 0)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
 // 4. Pieces pool across the scans of one mass: a later scan that fits sets the verdict, a still later one that fits
 //    nothing does not clear it.
 //

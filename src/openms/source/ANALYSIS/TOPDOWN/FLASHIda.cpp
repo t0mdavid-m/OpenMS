@@ -877,6 +877,12 @@ FLASHIda::FLASHIda(char* arg) :
         // Identification: look up MS2 context from cache and run fragment matching
         {
           auto cache_it = ms2_context_cache_.find(parent_tracking_id);
+          // characterization.method refine, objective discriminating (ADR-0049): every MS3 that ARRIVES returns its
+          // discriminating record -- with its pieces when it deconvolved to something, with no evidence when it did
+          // not (decision 9: the round completes when every MS3 has been received). true only under refine.
+          const bool refine_discriminating = config_.characterization().method == AnnotationMethod::Refine
+              && config_.characterization().objective == CharacterizationObjective::Discriminating;
+          bool refine_round_complete = false;
           if (cache_it != ms2_context_cache_.end() && ms3_spec != nullptr && !ms3_spec->empty())
           {
             const auto& cached_ms2_ctx = cache_it->second;
@@ -926,49 +932,62 @@ FLASHIda::FLASHIda(char* arg) :
               }
             }
 
-            // characterization.method refine, objective discriminating (ADR-0049): pool this MS3's evidence on the
-            // discriminating record of its fragment mass -- whether or not the winner-context match above found
-            // anything, since a scan whose pieces fit neither path still returns its record. Once every dispatched
-            // record has returned, decide, and re-dispatch from the decided model through the same tail
-            // initiateNextLevel uses (planNextScans now plans the decided windows as under ambiguity).
-            if (config_.characterization().method == AnnotationMethod::Refine
-                && config_.characterization().objective == CharacterizationObjective::Discriminating
-                && tracker_.recordDiscriminatingScan(precursor_id, cached_ms2_ctx.fragment_mass, *ms3_spec,
-                                                     MS3FragmentMatcher::LOOSE_TOLERANCE_PPM, config_.level(3).tolerance_ppm))
-            {
-              tracker_.decideRefine(precursor_id);
-              const ProteoformModel* mdl = tracker_.getModel(precursor_id);
-              // config_.level(3).scans is non-empty: validate requires ms_settings.ms3 whenever mode != off.
-              if (mdl != nullptr && mdl->winner_spectrum && mdl->has_ms2_ctx)
-              {
-                // Local copies: planNextScans runs inside the dispatch and mutates the model these would point into.
-                const std::shared_ptr<const DeconvolvedSpectrum> winner_spectrum = mdl->winner_spectrum;
-                const ScanCommand winner_ms2_ctx = mdl->ms2_ctx;
-                auto next = exploration_.dispatchFromModel(precursor_id, *winner_spectrum, parent_ctx.faims_cv, queue_,
-                                                           &winner_ms2_ctx, &tracker_, tracker_.buildWinnerProteoformContext(precursor_id),
-                                                           config_.level(3).scans[0], config_.level(2).min_charge, 3,
-                                                           config_.characterization().protein_sequence);
-                int refine_pushed = 0;
-                for (auto& c : next.commands)
-                {
-                  stampAndPush_(c, precursor_id);  // the re-dispatched MS3 keep the precursor's id, like the MS2 branch's
-                  child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
-                  refine_pushed++;
-                }
-                // Cache the MS2 context of each new MS3 command, as the MS2 branch does, so it is identified on return.
-                for (size_t ci = 0; ci < next.commands.size(); ++ci)
-                {
-                  if (next.commands[ci].msn_level >= 3 && ci < next.ms3_contexts.size())
-                  {
-                    ms2_context_cache_[next.commands[ci].scan_id] = next.ms3_contexts[ci];
-                  }
-                }
-                results_row.commands_pushed = refine_pushed;
-                results_row.child_ids       = child_ids;
-              }
-            }
+            // Refine/discriminating: pool this MS3's evidence on the record of its fragment mass -- whether or not
+            // the winner-context match above found anything, since a scan whose pieces fit neither path still
+            // returns its record.
+            if (refine_discriminating)
+              refine_round_complete = tracker_.recordDiscriminatingScan(precursor_id, cached_ms2_ctx.fragment_mass, *ms3_spec,
+                                                                        MS3FragmentMatcher::LOOSE_TOLERANCE_PPM,
+                                                                        config_.level(3).tolerance_ppm);
 
             ms2_context_cache_.erase(cache_it);
+          }
+          else if (cache_it != ms2_context_cache_.end() && refine_discriminating)
+          {
+            // Refine/discriminating: the MS3 arrived but deconvolved to nothing. It is received with no evidence --
+            // its record returns with neither path fitting -- and its context is consumed like any other's.
+            const DeconvolvedSpectrum no_evidence(0);
+            refine_round_complete = tracker_.recordDiscriminatingScan(precursor_id, cache_it->second.fragment_mass, no_evidence,
+                                                                      MS3FragmentMatcher::LOOSE_TOLERANCE_PPM,
+                                                                      config_.level(3).tolerance_ppm);
+            ms2_context_cache_.erase(cache_it);
+          }
+
+          // The round is complete: decide, and re-dispatch from the decided model through the same tail
+          // initiateNextLevel uses (planNextScans now plans the decided windows as under ambiguity). AFTER the
+          // erase above: the re-dispatch inserts into ms2_context_cache_, which may rehash and invalidate cache_it.
+          if (refine_round_complete)
+          {
+            tracker_.decideRefine(precursor_id);
+            const ProteoformModel* mdl = tracker_.getModel(precursor_id);
+            // config_.level(3).scans is non-empty: validate requires ms_settings.ms3 whenever mode != off.
+            if (mdl != nullptr && mdl->winner_spectrum && mdl->has_ms2_ctx)
+            {
+              // Local copies: planNextScans runs inside the dispatch and mutates the model these would point into.
+              const std::shared_ptr<const DeconvolvedSpectrum> winner_spectrum = mdl->winner_spectrum;
+              const ScanCommand winner_ms2_ctx = mdl->ms2_ctx;
+              auto next = exploration_.dispatchFromModel(precursor_id, *winner_spectrum, parent_ctx.faims_cv, queue_,
+                                                         &winner_ms2_ctx, &tracker_, tracker_.buildWinnerProteoformContext(precursor_id),
+                                                         config_.level(3).scans[0], config_.level(2).min_charge, 3,
+                                                         config_.characterization().protein_sequence);
+              int refine_pushed = 0;
+              for (auto& c : next.commands)
+              {
+                stampAndPush_(c, precursor_id);  // the re-dispatched MS3 keep the precursor's id, like the MS2 branch's
+                child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
+                refine_pushed++;
+              }
+              // Cache the MS2 context of each new MS3 command, as the MS2 branch does, so it is identified on return.
+              for (size_t ci = 0; ci < next.commands.size(); ++ci)
+              {
+                if (next.commands[ci].msn_level >= 3 && ci < next.ms3_contexts.size())
+                {
+                  ms2_context_cache_[next.commands[ci].scan_id] = next.ms3_contexts[ci];
+                }
+              }
+              results_row.commands_pushed = refine_pushed;
+              results_row.child_ids       = child_ids;
+            }
           }
         }
 
