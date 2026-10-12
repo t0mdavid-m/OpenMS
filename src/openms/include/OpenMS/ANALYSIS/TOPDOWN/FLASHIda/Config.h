@@ -36,6 +36,7 @@
 
 #include <OpenMS/config.h>
 
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/RefineSettings.h>
 #include <OpenMS/DATASTRUCTURES/ListUtils.h>
 
 #include <cstdint>
@@ -53,7 +54,17 @@ namespace OpenMS
   {
     Ambiguity, ///< Resolve PTM site ambiguity
     Coverage,  ///< Extend sequence coverage
-    Exhaustive ///< Fragment every deconvolved mass of the winner MS2 scan, mapped or not (ADR-0023)
+    Exhaustive, ///< Fragment every deconvolved mass of the winner MS2 scan, mapped or not (ADR-0023)
+    Discriminating ///< Fragment what tells Refine's candidate paths apart (ADR-0049; requires method refine)
+  };
+
+  /// Which annotation method interprets the MS2 fragments against characterization.protein_sequence
+  /// (ADR-0049). FLASHTnT is the default and the pre-ADR-0049 behaviour; Refine detects a mass shift
+  /// before it builds a path.
+  enum class AnnotationMethod
+  {
+    FlashTnT,
+    Refine
   };
 
   /// Selection metric: how targets are ranked for MSn+1
@@ -357,7 +368,10 @@ namespace OpenMS
     /// Target every deconvolved mass of the winner MS2 scan, not only the ones that matched a
     /// theoretical fragment (ADR-0023). An unmatched mass is acquired identically and logged
     /// rather than matched.
-    Exhaustive
+    Exhaustive,
+    /// Target the fragments that discriminate between Refine's candidate paths (ADR-0049). Only
+    /// meaningful under characterization.method "refine" -- a load error otherwise.
+    Discriminating
   };
 
   /// Which quantification verdicts buy the identification scan (ADR-0039).
@@ -386,6 +400,18 @@ namespace OpenMS
   struct OPENMS_DLLAPI CharacterizationConfig
   {
     CharacterizationMode mode = CharacterizationMode::Off;
+
+    /// characterization.method (ADR-0049): "flashtnt" (default) | "refine". Case-sensitive; an
+    /// unknown value throws.
+    AnnotationMethod method = AnnotationMethod::FlashTnT;
+
+    /// characterization.refine.* -- the seven Refine knobs. tolerance_ppm is not authored here: it is
+    /// filled from levels_[2].tolerance_ppm at parse end, so Refine matches at the MS2 tolerance.
+    RefineSettings refine;
+
+    /// Whether characterization.refine was authored at all. Only for the load errors: a refine block
+    /// under method "flashtnt" is an authored value nobody reads, which Config refuses.
+    bool has_refine_block = false;
 
     /// Kept as a separate field so every existing objective read site (ProteoformTracker.cpp:353
     /// and friends) is untouched. It is derived from `mode` at parse time and is meaningless when

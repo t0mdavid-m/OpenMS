@@ -15,6 +15,7 @@ set(sources_list_h
         FLASHIda/FAIMS.h
         FLASHIda/KineticModel.h
         FLASHIda/Refine.h
+        FLASHIda/RefineSettings.h
         FLASHIda/FragmentAnalysis.h
         FLASHIda/IdaLogger.h
         FLASHIda/MS3FragmentMatcher.h

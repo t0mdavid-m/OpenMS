@@ -98,6 +98,7 @@ namespace
       case OpenMS::CharacterizationMode::Ambiguity: return "ambiguity";
       case OpenMS::CharacterizationMode::Coverage: return "coverage";
       case OpenMS::CharacterizationMode::Exhaustive: return "exhaustive";
+      case OpenMS::CharacterizationMode::Discriminating: return "discriminating";
     }
     return "off";  // unreachable for a valid enumerator; keeps return-path checks quiet
   }
@@ -500,7 +501,7 @@ namespace OpenMS
           "them into one MS3.");
     rejectUnknownKeys(charact,
         {"mode", "protein_sequence", "max_targets", "min_fragment_charge", "min_target_mass",
-         "fragment_charges", "exploration"},
+         "fragment_charges", "exploration", "method", "refine"},
         "characterization");
     {
       // Hard-rejected, not defaulted. The old parse was
@@ -528,11 +529,55 @@ namespace OpenMS
         // accepted, green, and inert (ADR-0023 D-a).
         characterization_.objective = CharacterizationObjective::Exhaustive;
       }
+      else if (m == "discriminating")
+      {
+        // ADR-0049. Same rule as exhaustive: the objective is what the engine branches on, so the
+        // mode without its objective would ship inert. Requires method "refine" (validate()).
+        characterization_.mode = CharacterizationMode::Discriminating;
+        characterization_.objective = CharacterizationObjective::Discriminating;
+      }
       else
         throw std::invalid_argument(
             "Config: characterization.mode must be one of \"off\", \"ambiguity\", \"coverage\", "
-            "\"exhaustive\"; "
+            "\"exhaustive\", \"discriminating\"; "
             "got \"" + m + "\" (values are case-sensitive).");
+
+      // ADR-0049. Which annotation method reads the MS2 fragments. Hard-rejected rather than
+      // defaulted, for mode's reason: a typo'd "Refine" must not silently run FLASHTnT.
+      // Absent and null both mean "unauthored" (ToCppJson's serializer emits nulls; see
+      // quantification.identify below for the idiom).
+      const std::string meth = (charact.contains("method") && !charact["method"].is_null())
+                                   ? charact["method"].get<std::string>()
+                                   : std::string("flashtnt");
+      if (meth == "flashtnt")
+        characterization_.method = AnnotationMethod::FlashTnT;
+      else if (meth == "refine")
+        characterization_.method = AnnotationMethod::Refine;
+      else
+        throw std::invalid_argument(
+            "Config: characterization.method must be one of \"flashtnt\", \"refine\"; "
+            "got \"" + meth + "\" (values are case-sensitive).");
+
+      // The seven Refine knobs. Bounds are checked in validate(); presence is recorded so a block
+      // authored under method "flashtnt" can be refused there rather than carried unread.
+      if (charact.contains("refine") && !charact["refine"].is_null())
+      {
+        const auto& ref = charact["refine"];
+        if (!ref.is_object())
+          throw std::invalid_argument("Config: characterization.refine must be an object.");
+        rejectUnknownKeys(ref,
+            {"fdr", "shuffles", "grid_da", "max_shift_da", "min_ions", "max_levels", "jump_penalty"},
+            "characterization.refine");
+        characterization_.has_refine_block = true;
+        RefineSettings& r = characterization_.refine;
+        r.fdr = ref.value("fdr", r.fdr);
+        r.shuffles = ref.value("shuffles", r.shuffles);
+        r.grid_da = ref.value("grid_da", r.grid_da);
+        r.max_shift_da = ref.value("max_shift_da", r.max_shift_da);
+        r.min_ions = ref.value("min_ions", r.min_ions);
+        r.max_levels = ref.value("max_levels", r.max_levels);
+        r.jump_penalty = ref.value("jump_penalty", r.jump_penalty);
+      }
 
       characterization_.protein_sequence = charact.value("protein_sequence", "");
       characterization_.max_targets = charact.value("max_targets", 3);
@@ -1056,6 +1101,10 @@ namespace OpenMS
         cfg.exploration_tolerance_ppm = tol_values[lvl - 1];
     }
 
+    // ADR-0049. Refine matches MS2 fragments, so it matches at the MS2 level's tolerance -- not an
+    // authored refine key, so the two can never disagree.
+    characterization_.refine.tolerance_ppm = levels_[2].tolerance_ppm;
+
     // Compute convenience boolean
     exploration_enabled_ = false;
     for (const auto& [lvl, cfg] : levels_)
@@ -1283,6 +1332,36 @@ namespace OpenMS
         throw std::invalid_argument(
             "ExplorationMetric::FragmentCount at level " + std::to_string(lvl) +
             " requires a non-empty characterization.protein_sequence.");
+    }
+
+    // --- characterization.method / refine (ADR-0049) --------------------------------------------
+    // Two cross-key refusals, both "an authored value nobody reads": a refine block under FLASHTnT,
+    // and the discriminating mode, whose targets only Refine's candidate paths can supply.
+    if (characterization_.method != AnnotationMethod::Refine)
+    {
+      if (characterization_.has_refine_block)
+        throw std::invalid_argument(
+            "characterization.refine is set but characterization.method is \"flashtnt\". The refine "
+            "block is read only under characterization.method \"refine\"; set the method or remove "
+            "the block.");
+      if (characterization_.mode == CharacterizationMode::Discriminating)
+        throw std::invalid_argument(
+            "characterization.mode \"discriminating\" requires characterization.method \"refine\" "
+            "(ADR-0049): its targets are the fragments that tell Refine's candidate paths apart.");
+    }
+    {
+      const RefineSettings& r = characterization_.refine;
+      auto bound = [](bool ok, const std::string& key, const std::string& rule, const std::string& got) {
+        if (!ok)
+          throw std::invalid_argument("characterization.refine." + key + " must be " + rule + "; got " + got + ".");
+      };
+      bound(r.fdr > 0.0 && r.fdr <= 1.0, "fdr", "in (0, 1]", std::to_string(r.fdr));
+      bound(r.shuffles >= 1, "shuffles", ">= 1", std::to_string(r.shuffles));
+      bound(r.grid_da > 0.0, "grid_da", "> 0", std::to_string(r.grid_da));
+      bound(r.max_shift_da > 0.0, "max_shift_da", "> 0", std::to_string(r.max_shift_da));
+      bound(r.min_ions >= 1, "min_ions", ">= 1", std::to_string(r.min_ions));
+      bound(r.max_levels >= 1, "max_levels", ">= 1", std::to_string(r.max_levels));
+      bound(r.jump_penalty >= 1, "jump_penalty", ">= 1", std::to_string(r.jump_penalty));
     }
 
     // ADR-0045 decision 2: a trap sweep must use remaining_precursor. A pre-scan read out by the ion

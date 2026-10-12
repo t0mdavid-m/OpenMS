@@ -10,6 +10,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 
 #include <string>
+#include <utility>
 
 using namespace OpenMS;
 
@@ -40,6 +41,21 @@ namespace
         + ms_settings_extra + R"(
       }
     })";
+  }
+
+  // ADR-0049 sections (characterization.method / refine / discriminating).
+  const std::string kMs3 =
+    R"(, "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25 })";
+
+  std::string refineMessage(const std::string& json)
+  {
+    try { Config c(json); } catch (const std::exception& e) { return std::string(e.what()); }
+    return std::string("<no exception>");
+  }
+
+  bool contains(const std::string& hay, const std::string& needle)
+  {
+    return hay.find(needle) != std::string::npos;
   }
 }
 
@@ -1058,6 +1074,145 @@ START_SECTION(charge_state_bounds_parse_and_an_unsatisfiable_pair_throws)
   Config floor_only(cfgJson(R"(, "min_charge_states": 2)"));
   TEST_EQUAL(floor_only.targeting().min_charge_states, 2)
   TEST_EQUAL(floor_only.targeting().max_charge_states, 0)
+}
+END_SECTION
+
+// ---------------------------------------------------------------------------------------------
+// characterization.method / characterization.refine / mode "discriminating" (ADR-0049).
+// Messages are asserted where a bare TEST_EXCEPTION could pass on a different, pre-existing guard.
+// Helpers (kMs3, refineMessage, contains) are in the anonymous namespace at the top of the file.
+
+START_SECTION(method_defaults_to_flashtnt_and_parses_refine)
+{
+  // No method, no block: FLASHTnT, and the seven defaults of RefineSettings.
+  {
+    Config c1(cfgJson("", R"("characterization": { "mode": "off", "protein_sequence": "PEPTIDEK" },)"));
+    TEST_EQUAL((int)c1.characterization().method, (int)AnnotationMethod::FlashTnT)
+    TEST_EQUAL(c1.characterization().has_refine_block, false)
+    const RefineSettings& d = c1.characterization().refine;
+    TEST_REAL_SIMILAR(d.fdr, 0.2)
+    TEST_EQUAL(d.shuffles, 300)
+    TEST_REAL_SIMILAR(d.grid_da, 0.01)
+    TEST_REAL_SIMILAR(d.max_shift_da, 700.0)
+    TEST_EQUAL(d.min_ions, 3)
+    TEST_EQUAL(d.max_levels, 20)
+    TEST_EQUAL(d.jump_penalty, 2)
+  }
+
+  // All seven authored non-default, and tolerance_ppm taken from level 2 (deconvolution.tol[1]).
+  {
+    Config c2(R"({
+      "deconvolution": { "tol": [10, 7, 5] },
+      "precursor_selection": { "rank_by": "qscore", "max_precursors": 5 },
+      "characterization": { "mode": "off", "protein_sequence": "PEPTIDEK", "method": "refine",
+        "refine": { "fdr": 0.25, "shuffles": 50, "grid_da": 0.02, "max_shift_da": 300, "min_ions": 4,
+                    "max_levels": 7, "jump_penalty": 3 } },
+      "ms_settings": {
+        "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
+        "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 }
+      }
+    })");
+    TEST_EQUAL((int)c2.characterization().method, (int)AnnotationMethod::Refine)
+    TEST_EQUAL(c2.characterization().has_refine_block, true)
+    const RefineSettings& r = c2.characterization().refine;
+    TEST_REAL_SIMILAR(r.fdr, 0.25)
+    TEST_EQUAL(r.shuffles, 50)
+    TEST_REAL_SIMILAR(r.grid_da, 0.02)
+    TEST_REAL_SIMILAR(r.max_shift_da, 300.0)
+    TEST_EQUAL(r.min_ions, 4)
+    TEST_EQUAL(r.max_levels, 7)
+    TEST_EQUAL(r.jump_penalty, 3)
+    TEST_REAL_SIMILAR(r.tolerance_ppm, c2.level(2).tolerance_ppm)
+    TEST_REAL_SIMILAR(r.tolerance_ppm, 7.0)  // distinguishes level 2 from levels 1 and 3
+  }
+
+  // Case-sensitive, like mode; and an unknown value throws with the method named.
+  TEST_EXCEPTION(std::invalid_argument,
+    Config(cfgJson("", R"("characterization": { "mode": "off", "protein_sequence": "PEPTIDEK", "method": "Refine" },)")))
+  TEST_EQUAL(contains(refineMessage(cfgJson("",
+    R"("characterization": { "mode": "off", "protein_sequence": "PEPTIDEK", "method": "tnt" },)")),
+    "characterization.method"), true)
+}
+END_SECTION
+
+START_SECTION(refine_block_under_flashtnt_throws)
+{
+  // Explicit flashtnt and the default alike.
+  for (const std::string& meth : {std::string(R"("method": "flashtnt", )"), std::string()})
+  {
+    const std::string msg = refineMessage(cfgJson("",
+      R"("characterization": { "mode": "off", "protein_sequence": "PEPTIDEK", )" + meth
+      + R"("refine": { "fdr": 0.2 } },)"));
+    TEST_EQUAL(contains(msg, "characterization.refine"), true)
+    TEST_EQUAL(contains(msg, "characterization.method"), true)
+  }
+}
+END_SECTION
+
+START_SECTION(discriminating_under_flashtnt_throws)
+{
+  // protein_sequence and ms3 present, so neither pre-existing mode guard can be what fires.
+  const std::string msg = refineMessage(cfgJson("",
+    R"("characterization": { "mode": "discriminating", "protein_sequence": "PEPTIDEK" },)", kMs3));
+  TEST_EQUAL(contains(msg,
+    "characterization.mode \"discriminating\" requires characterization.method \"refine\""), true)
+
+  // Case-sensitive like every other mode value.
+  TEST_EXCEPTION(std::invalid_argument,
+    Config(cfgJson("", R"("characterization": { "mode": "Discriminating", "method": "refine", "protein_sequence": "PEPTIDEK" },)", kMs3)))
+}
+END_SECTION
+
+START_SECTION(discriminating_under_refine_projects_level_selection)
+{
+  Config cfg(cfgJson("",
+    R"("characterization": { "mode": "discriminating", "method": "refine", "protein_sequence": "PEPTIDEK", "max_targets": 4 },)",
+    kMs3));
+  TEST_EQUAL((int)cfg.characterization().mode, (int)CharacterizationMode::Discriminating)
+  TEST_EQUAL((int)cfg.characterization().objective, (int)CharacterizationObjective::Discriminating)
+  TEST_EQUAL((int)cfg.level(1).selection, (int)SelectionMetric::QScore)
+  TEST_EQUAL(cfg.level(2).selection != SelectionMetric::None, true)
+  TEST_EQUAL(cfg.level(3).selection != SelectionMetric::None, true)
+  TEST_EQUAL(cfg.level(2).max_targets, 4)
+}
+END_SECTION
+
+START_SECTION(refine_bounds_are_validated)
+{
+  auto withRefine = [](const std::string& block) {
+    return cfgJson("",
+      R"("characterization": { "mode": "off", "protein_sequence": "PEPTIDEK", "method": "refine", "refine": { )"
+      + block + R"( } },)");
+  };
+  // Each violation throws and names its key.
+  const std::pair<const char*, const char*> bad[] = {
+    {"fdr", R"("fdr": 0)"},
+    {"fdr", R"("fdr": 1.5)"},
+    {"shuffles", R"("shuffles": 0)"},
+    {"grid_da", R"("grid_da": 0)"},
+    {"max_shift_da", R"("max_shift_da": -1)"},
+    {"min_ions", R"("min_ions": 0)"},
+    {"max_levels", R"("max_levels": 0)"},
+    {"jump_penalty", R"("jump_penalty": 0)"},
+  };
+  for (const auto& [key, block] : bad)
+  {
+    const std::string msg = refineMessage(withRefine(block));
+    TEST_EQUAL(contains(msg, std::string("characterization.refine.") + key), true)
+  }
+  // The edges that are legal load clean.
+  Config edge(withRefine(R"("fdr": 1.0, "shuffles": 1, "min_ions": 1, "max_levels": 1, "jump_penalty": 1)"));
+  TEST_REAL_SIMILAR(edge.characterization().refine.fdr, 1.0)
+  TEST_EQUAL(edge.characterization().refine.jump_penalty, 1)
+}
+END_SECTION
+
+START_SECTION(refine_block_unknown_key_throws)
+{
+  const std::string msg = refineMessage(cfgJson("",
+    R"("characterization": { "mode": "off", "protein_sequence": "PEPTIDEK", "method": "refine", "refine": { "fdr": 0.5, "alpha": 0.1 } },)"));
+  TEST_EQUAL(contains(msg, "unknown key(s) in 'characterization.refine'"), true)
+  TEST_EQUAL(contains(msg, "alpha"), true)
 }
 END_SECTION
 
