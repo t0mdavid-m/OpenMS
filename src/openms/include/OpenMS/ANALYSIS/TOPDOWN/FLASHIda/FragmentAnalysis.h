@@ -41,11 +41,14 @@
 #include <OpenMS/DATASTRUCTURES/String.h>
 
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace OpenMS
 {
+  /// Refine's candidate record (ADR-0049), defined in FLASHIda/Refine.h. Forward-declared: Refine.h includes this header.
+  struct RefineCandidates;
 
   /**
    * @brief Fragment analysis component for FLASHIda.
@@ -112,6 +115,10 @@ namespace OpenMS
       double ppm_offset = 0.0;        ///< Median PPM error from calibration pass (MS3 only)
       double correction_factor = 1.0;  ///< 1/(1 + ppm_offset * 1e-6) (MS3 only)
       float ms3_fragment_coverage = -1.0f;  ///< MS3 only: distinct backbone bonds covered / (L-1) over the matched sub-fragments; -1 = non-MS3/none
+
+      /// characterization.method refine only (ADR-0049): Detect, Assemble (every candidate) and the precursor mass
+      /// difference of the best path. nullptr under flashtnt. APPEND-ONLY position, like FragmentMatch::qscore.
+      std::shared_ptr<const RefineCandidates> refine;
     };
 
     /// Deconvolution scores of a selected MS2 fragment, copied into the stage-1 (fragment)
@@ -360,6 +367,23 @@ namespace OpenMS
                                     ProteoformMatch& result,
                                     const String& fragmentation_method = "HCD",
                                     double tolerance_ppm = 0.0);
+
+    /**
+     * @brief Refine's MS2 match (characterization.method refine, ADR-0049): the sibling of runTagBasedFragmentMatching_.
+     *
+     * Detect + Assemble on the stored MS2's deconvolved masses against @p protein_sequence; prints [LEVELS] and one
+     * [CANDIDATES] line per candidate, then fills @p result from the best path (score, the full-length region, ptm_sites
+     * from its windows, fragments = its explained ions, tag_count -1, refine = the candidate record) and @p matches from
+     * the same ions, sorted like the tag path (intensity descending).
+     *
+     * @return number of matches (explained ions)
+     */
+    int runRefineMatching_(const String& protein_sequence,
+                           std::vector<TagBasedFragmentMatch>& matches,
+                           DeconvolvedSpectrum& stored_ms2,
+                           ProteoformMatch& result,
+                           const String& fragmentation_method = "HCD",
+                           double tolerance_ppm = 0.0);
   };
 
 } // namespace OpenMS

@@ -34,6 +34,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Refine.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHExtenderAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
@@ -788,6 +789,144 @@ namespace
     return static_cast<int>(matches.size());
   }
 
+  // Refine's MS2 match (ADR-0049): the sibling of runTagBasedFragmentMatching_, chosen by characterization.method. Nothing
+  // here reaches into FLASHTnT; the ladder's residue arithmetic is computePTMAdjustedFragmentMasses (via Refine::ladder).
+  int FragmentAnalysis::runRefineMatching_(const String& protein_sequence,
+                                           std::vector<TagBasedFragmentMatch>& matches,
+                                           DeconvolvedSpectrum& stored_ms2,
+                                           ProteoformMatch& result,
+                                           const String& fragmentation_method,
+                                           double tolerance_ppm)
+  {
+    matches.clear();
+
+    if (stored_ms2.empty() || protein_sequence.empty())
+    {
+      return 0;
+    }
+
+    // 1. The deconvolved masses ascending (Refine's input), each with its index into stored_ms2 -- the out-arrays,
+    //    the m/z windows and the qscores are read off the PeakGroup itself, exactly as on the tag path.
+    std::vector<Size> order(stored_ms2.size());
+    for (Size i = 0; i < order.size(); ++i) order[i] = i;
+    std::stable_sort(order.begin(), order.end(),
+                     [&](Size a, Size b) { return stored_ms2[a].getMonoMass() < stored_ms2[b].getMonoMass(); });
+    std::vector<double> masses, intensities;
+    masses.reserve(order.size());
+    intensities.reserve(order.size());
+    for (Size idx : order)
+    {
+      masses.push_back(stored_ms2[idx].getMonoMass());
+      intensities.push_back(stored_ms2[idx].getIntensity());
+    }
+
+    // 2. Detect, Assemble. tolerance_ppm overrides the configured tolerance the way it does on the tag path.
+    RefineSettings settings = config_.characterization().refine;
+    if (tolerance_ppm > 0.0) settings.tolerance_ppm = tolerance_ppm;
+    const Refine::Ladder ladder = Refine::ladder(protein_sequence, FragmentAnalysis::getIonTypesForFragmentationMethod(fragmentation_method));
+    auto rec = std::make_shared<RefineCandidates>();
+    rec->detect = Refine::detect(masses, intensities, ladder, settings);
+    rec->assemble = Refine::assemble(masses, intensities, ladder, rec->detect, settings);
+    rec->cut = rec->detect.cut;
+    rec->n_levels = rec->detect.n_kept;
+
+    // 3. Markers (stdout, like [MS3-PLAN]). The caller's log line stamps the precursor id; here the scan number.
+    const int scan = stored_ms2.getScanNumber();
+    {
+      int n_loss = 0, n_sat = 0, n_cap = 0, n_b = 0, n_y = 0;
+      std::ostringstream shifts;
+      shifts << std::fixed << std::setprecision(2);
+      for (Size i = 0; i < rec->detect.levels.size(); ++i)
+      {
+        const Refine::Level& l = rec->detect.levels[i];
+        const char* letter = "";
+        switch (l.excluded)
+        {
+          case Refine::Level::Exclusion::None:
+            n_b += l.n_prefix > 0;
+            n_y += l.n_suffix > 0;
+            break;
+          case Refine::Level::Exclusion::NeutralLoss: letter = "N"; ++n_loss; break;
+          case Refine::Level::Exclusion::NeutronSatellite: letter = "S"; ++n_sat; break;
+          case Refine::Level::Exclusion::Capped: letter = "C"; ++n_cap; break;
+        }
+        if (i > 0) shifts << ';';
+        shifts << l.shift << ':' << l.signal << ':' << l.n_prefix << ':' << l.n_suffix << letter;
+      }
+      std::cout << "[LEVELS] scan=" << scan << " cut=" << rec->detect.cut << " n=" << rec->detect.n_kept << " b=" << n_b
+                << " y=" << n_y << " excluded=" << n_loss << '+' << n_sat << '+' << n_cap
+                << " shifts=" << (rec->detect.levels.empty() ? std::string("-") : shifts.str()) << std::endl;
+    }
+    for (const Refine::Path& p : rec->assemble.candidates) // every candidate (decision 5)
+    {
+      std::ostringstream line;
+      line << std::fixed << std::setprecision(2);
+      line << "[CANDIDATES] scan=" << scan << " total=" << p.total << " S=" << p.score << " jumps=" << p.jumps << " N=" << p.ions
+           << " levels=";
+      for (Size j = 0; j < p.levels.size(); ++j) line << (j > 0 ? "," : "") << p.levels[j];
+      line << " windows=";
+      if (p.windows.empty()) line << '-';
+      for (Size j = 0; j < p.windows.size(); ++j) line << (j > 0 ? ";" : "") << p.windows[j].first << '-' << p.windows[j].second;
+      std::cout << line.str() << std::endl;
+    }
+
+    result.tag_count = -1; // no tagger ran (identification.tsv's tag_count vocabulary)
+    result.refine = rec;
+    if (rec->assemble.candidates.empty())
+    {
+      return 0;
+    }
+
+    // 4. The best path fills the contract.
+    const Refine::Path& best = rec->assemble.candidates.front();
+    const double precursor_mass = stored_ms2.getPrecursorPeakGroup().getMonoMass();
+    rec->precursor_mass_difference = precursor_mass > 0 ? precursor_mass - (ladder.sequence_mass + best.total) : 0.0;
+
+    result.score = best.score;
+    result.region_start = 0;
+    result.region_end = static_cast<int>(protein_sequence.size());
+    result.proteoform_sequence = protein_sequence;
+    result.matched_protein = "input_protein";
+    result.ptm_sites = Refine::ptmSites(best);
+    result.fragments.clear();
+    result.fragments.reserve(best.ions_explained.size());
+    matches.reserve(best.ions_explained.size());
+    for (const Refine::Path::Ion& ion : best.ions_explained)
+    {
+      if (ion.mass_idx < 0 || static_cast<Size>(ion.mass_idx) >= order.size()) continue;
+      const Size peak_index = order[ion.mass_idx];
+      const PeakGroup& pg = stored_ms2[peak_index];
+      const double observed = masses[ion.mass_idx];
+
+      ProteoformMatch::FragmentMatch fm;
+      fm.ion_type = std::string(1, ion.type);
+      fm.ion_index = ion.index;
+      fm.observed_mass = observed;
+      fm.theoretical_mass = ion.theoretical;
+      fm.diff_da = observed - ion.theoretical;
+      fm.diff_ppm = (ion.theoretical != 0.0) ? (fm.diff_da / ion.theoretical * 1e6) : 0.0;
+      fm.qscore = pg.getQscore(); // the representative-charge read point, as on the tag path
+      result.fragments.push_back(fm);
+
+      TagBasedFragmentMatch m;
+      m.peak_index = static_cast<int>(peak_index);
+      m.observed_mass = observed;
+      m.theoretical_mass = ion.theoretical;
+      m.charge = pg.getMaxIntensityAbsCharge();
+      m.intensity = pg.getChargeIntensity(m.charge);
+      m.fragment_index = ion.index;
+      m.ion_type = ion.type;
+      m.ppm_error = std::abs(fm.diff_ppm);
+      matches.push_back(m);
+    }
+    result.total_match_count = static_cast<int>(result.fragments.size());
+
+    // the tag path's order for the out-arrays: intensity descending (stable: site order within a tie)
+    std::stable_sort(matches.begin(), matches.end(),
+                     [](const TagBasedFragmentMatch& a, const TagBasedFragmentMatch& b) { return a.intensity > b.intensity; });
+    return static_cast<int>(matches.size());
+  }
+
   int FragmentAnalysis::getTopFragmentMatches(const String& protein_sequence,
                                               int n,
                                               double* masses,
@@ -804,9 +943,13 @@ namespace
                                               FragmentScores* frag_scores)
   {
     std::cout << "Matching fragments!" << std::endl;
-    // Use tag-based matching workflow (FLASHTagger + FLASHExtender)
+    // characterization.method (ADR-0049): Refine, or the tag-based workflow (FLASHTagger + FLASHExtender)
     std::vector<TagBasedFragmentMatch> matches;
-    runTagBasedFragmentMatching_(protein_sequence, matches, stored_ms2, result, fragmentation_method, tolerance_ppm);
+    result.refine.reset(); // set only by the Refine path; a reused result must not carry a stale record
+    if (config_.characterization().method == AnnotationMethod::Refine)
+      runRefineMatching_(protein_sequence, matches, stored_ms2, result, fragmentation_method, tolerance_ppm);
+    else
+      runTagBasedFragmentMatching_(protein_sequence, matches, stored_ms2, result, fragmentation_method, tolerance_ppm);
 
     int output_idx = 0;
     for (size_t i = 0; i < matches.size() && output_idx < n; ++i)

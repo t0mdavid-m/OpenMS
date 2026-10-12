@@ -210,4 +210,15 @@ namespace OpenMS
     static Recount recount(const Path& a, const Path& b, const std::vector<Discriminating>& targets,
                            const std::vector<std::pair<bool, bool>>& confirmed /* per target: fits a, fits b */, int jump_penalty);
   };
+
+  /// What Refine decided on one MS2 scan (FragmentAnalysis::ProteoformMatch::refine, ADR-0049): Detect, every candidate
+  /// Assemble built (decision 5), and the precursor mass difference of the best path.
+  struct RefineCandidates
+  {
+    Refine::Detect detect;
+    Refine::Assemble assemble;
+    double precursor_mass_difference = 0; ///< precursor mono mass - (sequence mass + best total); 0 without a precursor mass
+    int cut = 0;                          ///< detect.cut
+    int n_levels = 0;                     ///< detect.n_kept (logged as n_levels)
+  };
 } // namespace OpenMS

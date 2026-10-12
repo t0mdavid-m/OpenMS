@@ -14,7 +14,11 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Refine.h>
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Deconvolution.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
+#include <OpenMS/CONCEPT/Constants.h>
 
 #include <algorithm>
 #include <cmath>
@@ -1011,6 +1015,182 @@ END_SECTION
 START_SECTION(corpus_betacasein_meets_criterion_a)
 {
   corpusCriterionA("betacasein");
+}
+END_SECTION
+
+// ---- characterization.method switches FragmentAnalysis::getTopFragmentMatches (ADR-0049) ----
+// Driven through FragmentAnalysis itself: the refine section reproduces the defaults table's best path through the contract,
+// the flashtnt section shows the same call under the default method never takes the Refine path.
+
+// A loadable config: mode off, the cytochrome c sequence, the named method; @p refine_block is spliced after the sequence.
+auto methodConfigJson = [](const std::string& method, const std::string& refine_block) {
+  return std::string(R"({
+    "deconvolution": { "tol": [10, 10, 10] },
+    "precursor_selection": { "rank_by": "qscore", "max_precursors": 5 },
+    "characterization": { "mode": "off", "method": ")") + method + R"(", "protein_sequence": ")" + std::string(CYTC105) + "\"" +
+         refine_block + R"( },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
+      "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 }
+    }
+  })";
+};
+
+// One PeakGroup per fixture mass: its mono mass and intensity, and a representative charge of mass / 1000 (at least 1 -- the
+// fixture's third column counts charges, it names none). One LogMzPeak at that charge carries the intensity and the m/z
+// window the out-arrays read; qscore 0.9 so the fragments' qscore column is seen to come from the PeakGroup.
+auto spectrumFromMassList = [](const MassList& m, int scan, double precursor_mono) {
+  DeconvolvedSpectrum ds(scan);
+  for (size_t i = 0; i < m.masses.size(); ++i)
+  {
+    const int z = std::max(1, static_cast<int>(std::lround(m.masses[i] / 1000.0)));
+    PeakGroup pg(z, z, true);
+    FLASHHelperClasses::LogMzPeak lp;
+    lp.mz = m.masses[i] / z + Constants::PROTON_MASS_U;
+    lp.intensity = static_cast<float>(m.intensities[i]);
+    lp.abs_charge = z;
+    lp.isotopeIndex = 0;
+    pg.push_back(lp);
+    pg.updateMonoMassAndIsotopeIntensities(0.0); // the group's intensity = the peak's
+    pg.setMonoisotopicMass(m.masses[i]);         // and the mass exactly as the fixture writes it
+    pg.setRepAbsCharge(z);
+    pg.setQscore(0.9);
+    ds.push_back(pg);
+  }
+  PeakGroup precursor;
+  precursor.setMonoisotopicMass(precursor_mono);
+  ds.setPrecursorPeakGroup(precursor);
+  return ds;
+};
+
+START_SECTION(getTopFragmentMatches_under_refine_fills_the_contract)
+{
+  const Config cfg(methodConfigJson("refine", R"(, "refine": {})"));
+  TEST_EQUAL((int)cfg.characterization().method, (int)AnnotationMethod::Refine)
+  FragmentAnalysis fa(cfg);
+  DeconvolvedSpectrum ms2 = spectrumFromMassList(fx, 4242, 12351.30);
+  TEST_EQUAL(ms2.size(), 150)
+  double masses[200], qscores[200], wstarts[200], wends[200];
+  int charges[200], frag_indices[200];
+  char ion_types[200];
+  FragmentAnalysis::ProteoformMatch r;
+  r.tag_count = 7; // anything but -1: the path must write it
+  const int found = fa.getTopFragmentMatches(CYTC105, 200, masses, qscores, charges, wstarts, wends, ion_types, frag_indices, ms2, r, "HCD",
+                                             0.0, nullptr);
+
+  const BestRow b1 = expectedBest("best1"); // total 526.14 S 61 shifts 2 N 65
+  TEST_EQUAL(b1.ions > 0, true)
+  TEST_EQUAL(r.score, b1.score)
+  TEST_EQUAL(r.tag_count, -1)
+  TEST_EQUAL(r.region_start, 0)
+  TEST_EQUAL(r.region_end, static_cast<int>(CYTC105.size()))
+  TEST_EQUAL(r.proteoform_sequence, std::string(CYTC105))
+  TEST_EQUAL(r.matched_protein, "input_protein")
+  TEST_EQUAL(static_cast<int>(r.fragments.size()), b1.ions)
+  TEST_EQUAL(r.total_match_count, b1.ions)
+  TEST_EQUAL(found, b1.ions)
+
+  // ptm_sites = the best path's windows, each with its level step: [1-8, -89.03], [14-22, 526.14 - (-89.03)]
+  const std::vector<std::string> lv = words(expected("best1_levels"));
+  const std::vector<std::string> wd = words(expected("best1_windows"));
+  TEST_EQUAL(r.ptm_sites.size(), wd.size())
+  TEST_EQUAL(lv.size(), wd.size() + 1)
+  for (size_t j = 0; j < wd.size() && j < r.ptm_sites.size() && j + 1 < lv.size(); ++j)
+  {
+    const size_t d = wd[j].find('-');
+    TEST_EQUAL(r.ptm_sites[j].start_position, std::stoi(wd[j].substr(0, d)))
+    TEST_EQUAL(r.ptm_sites[j].end_position, std::stoi(wd[j].substr(d + 1)))
+    TEST_REAL_SIMILAR_ABS(r.ptm_sites[j].mass_shift, std::stod(lv[j + 1]) - std::stod(lv[j]), 0.02)
+  }
+
+  // every fragment: the explaining mass within tolerance of its shifted ladder ion, the qscore read off its PeakGroup
+  int nb = 0, ny = 0;
+  for (const auto& f : r.fragments)
+  {
+    TEST_EQUAL(std::fabs(f.diff_ppm) <= 10.0 + 1e-6, true)
+    TEST_REAL_SIMILAR_ABS(f.diff_da, f.observed_mass - f.theoretical_mass, 1e-9)
+    TEST_REAL_SIMILAR_ABS(f.qscore, 0.9, 1e-9)
+    TEST_EQUAL(f.ion_index >= 1 && f.ion_index < static_cast<int>(CYTC105.size()), true)
+    (f.ion_type == "b" ? nb : ny)++;
+  }
+  const std::vector<std::string> by = words(expected("best1_ions_b_y"));
+  TEST_EQUAL(by.size(), 2)
+  if (by.size() == 2)
+  {
+    TEST_EQUAL(nb, std::stoi(by[0]))
+    TEST_EQUAL(ny, std::stoi(by[1]))
+  }
+  // the out-arrays come from the same ions: every reported mass is an explained fragment's, at the group's charge
+  for (int i = 0; i < found; ++i)
+  {
+    const bool known = std::any_of(r.fragments.begin(), r.fragments.end(), [&](const auto& f) {
+      return f.observed_mass == masses[i] && f.ion_index == frag_indices[i] && f.ion_type == std::string(1, ion_types[i]);
+    });
+    TEST_EQUAL(known, true)
+    TEST_EQUAL(charges[i], std::max(1, static_cast<int>(std::lround(masses[i] / 1000.0))))
+    TEST_EQUAL(wstarts[i] < wends[i], true)
+  }
+
+  // the candidate record: every lambda_k, the cut, the kept levels, the precursor mass difference
+  TEST_EQUAL(r.refine != nullptr, true)
+  if (r.refine)
+  {
+    TEST_EQUAL(static_cast<int>(r.refine->assemble.candidates.size()), expectedInt("totals"))
+    TEST_EQUAL(r.refine->cut, expectedInt("cut"))
+    TEST_EQUAL(r.refine->n_levels, expectedInt("levels_kept"))
+    TEST_EQUAL(static_cast<int>(r.refine->detect.levels.size()), expectedInt("levels"))
+    TEST_REAL_SIMILAR_ABS(r.refine->precursor_mass_difference, 12351.30 - (cytc_ladder.sequence_mass + b1.total), 0.05)
+  }
+}
+END_SECTION
+
+START_SECTION(getTopFragmentMatches_under_flashtnt_is_unchanged)
+{
+  // FI_MS2_CYTC ("Spec scan=N\tRT" then "mz\tintensity"), deconvolved by the engine: the existing path's input.
+  std::vector<double> mzs, ints;
+  double rt = 0;
+  {
+    std::ifstream in("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
+    std::string line;
+    while (std::getline(in, line))
+    {
+      if (!line.empty() && line.back() == '\r') line.pop_back();
+      const size_t tab = line.find('\t');
+      if (tab == std::string::npos) continue;
+      if (line.rfind("Spec", 0) == 0)
+      {
+        rt = std::stod(line.substr(tab + 1));
+        continue;
+      }
+      mzs.push_back(std::stod(line.substr(0, tab)));
+      ints.push_back(std::stod(line.substr(tab + 1)));
+    }
+  }
+  TEST_EQUAL(mzs.empty(), false)
+
+  double masses[50], qscores[50], wstarts[50], wends[50];
+  int charges[50], frag_indices[50];
+  char ion_types[50];
+  for (const std::string& method : {std::string("flashtnt"), std::string("refine")})
+  {
+    const Config cfg(methodConfigJson(method, method == "refine" ? R"(, "refine": {})" : ""));
+    Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
+    TEST_EQUAL(deconv.deconvolveMSn(mzs.data(), ints.data(), static_cast<int>(mzs.size()), rt, 0.0, 0) > 0, true)
+    FragmentAnalysis fa(cfg);
+    FragmentAnalysis::ProteoformMatch r;
+    r.tag_count = -7; // a sentinel neither path writes
+    fa.getTopFragmentMatches(CYTC105, 50, masses, qscores, charges, wstarts, wends, ion_types, frag_indices, deconv.storedMS2(), r);
+    if (method == "flashtnt")
+    {
+      TEST_EQUAL(r.refine == nullptr, true) // the tag path never builds a candidate record ...
+      TEST_EQUAL(r.tag_count >= 0, true)    // ... and records the tagger's tag count
+    }
+    else
+    {
+      TEST_EQUAL(r.refine != nullptr, true) // the same call under refine takes the other branch
+      TEST_EQUAL(r.tag_count, -1)
+    }
+  }
 }
 END_SECTION
 
