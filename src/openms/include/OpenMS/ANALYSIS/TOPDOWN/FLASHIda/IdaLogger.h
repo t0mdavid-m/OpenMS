@@ -131,7 +131,7 @@ namespace OpenMS
     {
       std::string tracking_id;
       int ms_level = 0;
-      double rt = 0.0;
+      double rt = 0.0;        ///< retention time in MINUTES, as the instrument reports it (ADR-0051)
       int mass_count = 0;
       int commands_pushed = 0;
       std::vector<std::string> child_ids;
@@ -287,6 +287,7 @@ namespace OpenMS
     /// routinely share one mass within a survey (ADR-0036), each with a different charge subset, so
     /// a lookup would pick one of several answers with nothing to notice. A short vector or a null
     /// entry falls back to the trigger charge, i.e. the pre-ADR-0035 output.
+    /// @p rt is in MINUTES -- the unit the target-log loader reads back (ADR-0035, ADR-0051).
     void writeIDALogEntry(double rt, int tracking_id, int instrument_scan_number,
                           const std::vector<ScanCommand>& ms2_commands,
                           const std::vector<const PeakGroup*>& ms2_sources,

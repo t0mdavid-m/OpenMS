@@ -184,13 +184,13 @@ FLASHIda::FLASHIda(char* arg) :
     // (FLASHDeconv no longer reads ida.log at all -- ADR-0046.)
   }
 
-  int FLASHIda::runSurveyMS1_(const double* mzs, const double* ints, int length, double rt_min,
+  int FLASHIda::runSurveyMS1_(const double* mzs, const double* ints, int length, double rt,
                               double faims_cv, int parent_tracking_id, const ScanCommand& parent_ctx,
                               int instrument_scan_number,
                               IdaLogger::ScanRowDescriptor& results_row,
                               std::vector<std::string>& child_ids)
   {
-    int n = selection_.filterAndRank(mzs, ints, length, rt_min, 1, faims_cv);
+    int n = selection_.filterAndRank(mzs, ints, length, rt, 1, faims_cv);
     const auto& selected = selection_.selectedPeakGroups();
     const auto& sel_charges = selection_.triggerCharges();
     int commands_pushed = 0;
@@ -290,7 +290,9 @@ FLASHIda::FLASHIda(char* arg) :
     }
 
     // IDA log entry (MS1 only).
-    logger_.writeIDALogEntry(rt_min, parent_tracking_id, instrument_scan_number,
+    // ida.log keeps the instrument's minutes: the target-log loader reads it back as minutes
+    // (ADR-0035, ADR-0051).
+    logger_.writeIDALogEntry(rt / 60.0, parent_tracking_id, instrument_scan_number,
                              ms2_commands, ms2_sources, selection_.deconvolvedMS1());
 
     for (const auto& c : ms2_commands)
@@ -364,7 +366,7 @@ FLASHIda::FLASHIda(char* arg) :
   }
 
   int FLASHIda::processScan(const double* mzs, const double* ints, int length,
-                             double rt_min, int ms_level, const char* scan_description,
+                             double rt, int ms_level, const char* scan_description,
                              double faims_cv, int instrument_scan_number)
   {
     std::lock_guard<std::mutex> lock(analysis_mutex_);
@@ -469,7 +471,7 @@ FLASHIda::FLASHIda(char* arg) :
     // own branch-specific fields; the rest keep their results_row{} sentinel defaults.
     results_row.tracking_id = parent_id_str;
     results_row.ms_level    = ms_level;   // gate guarantees ms_level in {1,2,3}
-    results_row.rt          = rt_min;
+    results_row.rt          = rt / 60.0;  // scan_results keeps the instrument's minutes (ADR-0051)
     results_row.enqueue_ts  = enqueue_ts;
     results_row.dequeue_ts  = dequeue_ts;
     results_row.received_ts = received_ts;
@@ -488,7 +490,7 @@ FLASHIda::FLASHIda(char* arg) :
       if (!roleDecides(cmd_role))
       {
         if (monitor_deconv_)
-          observeMonitoringMS1_(*monitor_deconv_, config_, mzs, ints, length, rt_min, faims_cv,
+          observeMonitoringMS1_(*monitor_deconv_, config_, mzs, ints, length, rt, faims_cv,
                                 results_row);
         // return_code stays 0, which the host already treats as an ordinary gate rejection. No
         // bridge or C# contract moves.
@@ -501,7 +503,7 @@ FLASHIda::FLASHIda(char* arg) :
       }
       else
       {
-        return_code = runSurveyMS1_(mzs, ints, length, rt_min, faims_cv,
+        return_code = runSurveyMS1_(mzs, ints, length, rt, faims_cv,
                                     parent_tracking_id, parent_ctx, instrument_scan_number,
                                     results_row, child_ids);
       }
@@ -520,7 +522,7 @@ FLASHIda::FLASHIda(char* arg) :
       // ===== MS2 (exploration variant): score variant -> push children -> fill row =====
       if (exploration_.isExplorationVariant(parent_tracking_id))
       {
-        auto expl_result = exploration_.feedResult(parent_tracking_id, mzs, ints, length, rt_min, queue_, &tracker_, precursor_id);
+        auto expl_result = exploration_.feedResult(parent_tracking_id, mzs, ints, length, rt, queue_, &tracker_, precursor_id);
         for (auto& c : expl_result.commands)
         {
           stampAndPush_(c, precursor_id);
@@ -582,7 +584,7 @@ FLASHIda::FLASHIda(char* arg) :
         // the highest member may itself carry that charge; capping at the anchor would discard real
         // fragments. Identical to stages[0].charge_state whenever there are no notches.
         int precursor_charge = maxIsolatedCharge(parent_ctx, 0);
-        deconv_.deconvolveMSn(mzs, ints, length, rt_min, precursor_mass, precursor_charge);
+        deconv_.deconvolveMSn(mzs, ints, length, rt, precursor_mass, precursor_charge);
 
         // Tag-based targeting. processMS2ForTagBasedTargeting returns how many tags matched the FASTA
         // target database, but nothing consumes that as a COUNT -- it is a gate, and the only question
@@ -606,7 +608,7 @@ FLASHIda::FLASHIda(char* arg) :
         // without the marker having to distinguish a follow-up from a primary.
         if (is_quant_scan && config_.quantification().enabled)
         {
-          const auto q = quant_.measure(mzs, ints, length, rt_min, 2, "ms2_quant");
+          const auto q = quant_.measure(mzs, ints, length, rt, 2, "ms2_quant");
 
           // Every field is logged, so what scan_results reports IS what the engine decided on.
           results_row.quant_verdict = Quantification::verdictName(q.verdict);
@@ -759,7 +761,7 @@ FLASHIda::FLASHIda(char* arg) :
         results_row.precursor_share    = regularRowShare(parent_ctx, mzs, ints, length);
 
         std::cout << "[TRACK-RESOLVE] id=" << parent_id_str
-                  << " rt=" << rt_min
+                  << " rt=" << rt
                   << " commands=" << commands_pushed
                   << std::endl;
 
@@ -777,7 +779,7 @@ FLASHIda::FLASHIda(char* arg) :
       // ===== MS3 (exploration variant): score variant -> push children -> fill row =====
       if (exploration_.isExplorationVariant(parent_tracking_id))
       {
-        auto expl_result = exploration_.feedResult(parent_tracking_id, mzs, ints, length, rt_min, queue_, &tracker_, precursor_id);
+        auto expl_result = exploration_.feedResult(parent_tracking_id, mzs, ints, length, rt, queue_, &tracker_, precursor_id);
         for (auto& c : expl_result.commands)
         {
           stampAndPush_(c, precursor_id);
@@ -856,7 +858,7 @@ FLASHIda::FLASHIda(char* arg) :
         int ms3_mass_count = 0;
         if (mzs != nullptr && ints != nullptr && length > 0)
         {
-          deconv_.deconvolveMSn(mzs, ints, length, rt_min, precursor_mass, precursor_charge);
+          deconv_.deconvolveMSn(mzs, ints, length, rt, precursor_mass, precursor_charge);
           ms3_mass_count = deconv_.hasStoredMS2()
               ? static_cast<int>(deconv_.storedMS2().size()) : 0;
         }

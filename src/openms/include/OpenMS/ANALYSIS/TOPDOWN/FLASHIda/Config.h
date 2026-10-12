@@ -289,7 +289,7 @@ namespace OpenMS
     int mode = 0;
     bool strict_inclusion = false;
     double tie_threshold = 0.1;
-    double rt_window = 180.0;
+    double rt_window = 180.0;          ///< retention-time window, SECONDS (ADR-0051)
     bool consider_all_charges = false;
     /// How many charge states of a selected precursor one MS2 acquires -- from
     /// precursor_selection.precursor_charges. Decides the isolation GEOMETRY of a single scan

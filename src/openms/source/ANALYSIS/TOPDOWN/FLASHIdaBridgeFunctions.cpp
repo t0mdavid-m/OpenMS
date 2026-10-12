@@ -65,7 +65,10 @@ namespace OpenMS
   {
     if (pObject != nullptr)
     {
-      return pObject->processScan(mzs, ints, length, rt_min, ms_level, scan_description, faims_cv,
+      // The host passes the instrument's retention time in MINUTES (Thermo StartTime). The engine
+      // decides in SECONDS -- the unit of rt_window and of every file it loads. This export is the only
+      // production caller of processScan, so this is the one conversion (ADR-0051).
+      return pObject->processScan(mzs, ints, length, rt_min * 60.0, ms_level, scan_description, faims_cv,
                                   instrument_scan_number);
     }
     return -1;

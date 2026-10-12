@@ -53,6 +53,8 @@ namespace OpenMS
 
   /// Process an incoming scan: deconvolve (MS1) or resolve tracking (MS2), enqueue commands.
   ///
+  /// @param rt_min the instrument's retention time in MINUTES, as the host receives it. The export
+  ///        converts it to the seconds FLASHIda::processScan takes -- the one conversion (ADR-0051).
   /// @param instrument_scan_number the number the INSTRUMENT assigned this scan; <= 0 = not supplied.
   ///
   /// It is APPENDED, never inserted, and that ordering is load-bearing. On x64 Windows arguments 5
