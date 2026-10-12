@@ -128,6 +128,13 @@ A sixth early return follows the gates: MS1 with `config_.level(1).selection == 
 before selection. None of these paths reaches the TSV writers, so an un-commanded scan produces no
 log row — but gates 3–5 do leave a stdout trace.
 
+**`processScan` takes retention time in SECONDS** (ADR-0051). The C export converts the host's
+minutes, and it is the only production caller; the C++ tests call `processScan` directly with
+seconds. Everything behind it decides in seconds — `rt_window`, the expiry of acquisition memory,
+inclusion rows, target logs, tag targets. The two log streams that record it (`scan_results` `rt`,
+`ida.log` `RT`) write `rt / 60`, because their readers read minutes; the stdout markers
+(`[TRACK-RESOLVE] rt=`, `[CHARGE-SET] rt=`) print seconds.
+
 ### Scan-description wire format
 
 `{3-char base-94 tracking id}{1-char type marker}{payload}`. The marker is decoded in exactly ONE
