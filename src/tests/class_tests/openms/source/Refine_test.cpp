@@ -171,6 +171,80 @@ namespace
     return t == 'a' || t == 'b' || t == 'c';
   }
 
+  // The corpus (criterion a): one deconvolved-mass fixture per proteoform under corpus/, and one expectation row per key in
+  // refine_expected_corpus.tsv, both written by FlashIDA/test-scripts/refine/make_refine_tables.py --corpus.
+  const std::string FI_REFINE_CORPUS = "../../FlashIDA/test-data/refine/corpus/";
+  const std::string FI_REFINE_EXPECTED_CORPUS = "../../FlashIDA/test-data/refine/refine_expected_corpus.tsv";
+
+  struct ExpectedShift
+  {
+    double mass = 0;
+    int lo = 0, hi = 0; ///< residues (1-based) the jump's window must hold; 0 = no site
+  };
+  struct CorpusRow
+  {
+    std::string backbone, activation;
+    double tolerance_ppm = 0, expected_total = 0, precursor_mass_observed = 0, proto_total = 0;
+    int proto_score = 0, proto_jumps = 0; ///< the prototype's S and the number of its best path's jumps (proto_shifts)
+    std::vector<ExpectedShift> shifts;
+  };
+
+  // refine_expected_corpus.tsv: '#' lines skipped, columns by header name; expected_shifts is `mass@lo-hi;...`, `mass@-` for a
+  // shift without a site, `-` for none. An absent file gives an empty map (the sections then fail on .at()).
+  std::map<std::string, CorpusRow> loadExpectations(const std::string& path)
+  {
+    std::map<std::string, CorpusRow> out;
+    std::ifstream in(path);
+    std::string line;
+    std::map<std::string, size_t> col;
+    auto split = [](const std::string& x, char sep) {
+      std::vector<std::string> f;
+      std::stringstream ss(x);
+      std::string c;
+      while (std::getline(ss, c, sep)) f.push_back(c);
+      return f;
+    };
+    while (std::getline(in, line))
+    {
+      if (!line.empty() && line.back() == '\r') line.pop_back();
+      if (line.empty() || line[0] == '#') continue;
+      const std::vector<std::string> f = split(line, '\t');
+      if (col.empty())
+      {
+        for (size_t i = 0; i < f.size(); ++i) col[f[i]] = i;
+        continue;
+      }
+      auto at = [&](const char* name) { return f.at(col.at(name)); };
+      CorpusRow r;
+      r.backbone = at("backbone");
+      r.activation = at("activation");
+      r.tolerance_ppm = std::stod(at("tolerance_ppm"));
+      r.expected_total = std::stod(at("expected_total"));
+      r.precursor_mass_observed = std::stod(at("precursor_mass_observed"));
+      r.proto_total = std::stod(at("proto_total"));
+      r.proto_score = std::stoi(at("proto_score"));
+      r.proto_jumps = at("proto_shifts") == "-" ? 0 : (int)split(at("proto_shifts"), ';').size();
+      if (at("expected_shifts") != "-")
+      {
+        for (const std::string& s : split(at("expected_shifts"), ';'))
+        {
+          const size_t a = s.find('@');
+          ExpectedShift e;
+          e.mass = std::stod(s.substr(0, a));
+          const std::string site = s.substr(a + 1);
+          if (site != "-")
+          {
+            const size_t d = site.find('-');
+            e.lo = std::stoi(site.substr(0, d));
+            e.hi = std::stoi(site.substr(d + 1));
+          }
+          r.shifts.push_back(e);
+        }
+      }
+      out[at("key")] = r;
+    }
+    return out;
+  }
 } // namespace
 
 START_TEST(Refine, "$Id$")
@@ -854,6 +928,89 @@ START_SECTION(recount_charges_the_penalty)
   const Refine::Recount r1 = Refine::recount(a, b, targets, confirmed, 1);
   TEST_EQUAL(r1.score_a, 9) // 10 + 1 - 2
   TEST_EQUAL(r1.score_b, 7) // 10 + 0 - 3
+}
+END_SECTION
+
+// ---- the corpus: seven characterized proteoforms, criterion a (the best total and every sited shift; the prototype's S and jumps).
+// The other seven rows of the corpus carry intact disulfides, outside the step-function model (ADR-0049 decision 11). ----
+
+const std::map<std::string, CorpusRow> corpus_rows = loadExpectations(FI_REFINE_EXPECTED_CORPUS);
+
+// One proteoform: Detect + Assemble on its fixture at the run's MS2 tolerance (every other setting the default), the ion
+// alphabet of its activation. The best path's total lies within 2 tol of the expected total, every expected shift with a site
+// is a jump within tol whose window holds the site (a shift without a site counts through the total), and S and the number of
+// jumps equal the prototype's exactly. tol = tolerance_ppm at the observed precursor mass.
+auto corpusCriterionA = [&](const std::string& key) {
+  const CorpusRow& e = corpus_rows.at(key);
+  const MassList m = loadMassList(FI_REFINE_CORPUS + key + ".tsv");
+  TEST_EQUAL(m.masses.empty(), false)
+  TEST_EQUAL(std::is_sorted(m.masses.begin(), m.masses.end()), true)
+  RefineSettings s;
+  s.tolerance_ppm = e.tolerance_ppm;
+  const Refine::Ladder lad = Refine::ladder(String(e.backbone), FragmentAnalysis::getIonTypesForFragmentationMethod(String(e.activation)));
+  TEST_EQUAL(lad.residues.size(), e.backbone.size())
+  const Refine::Detect d = Refine::detect(m.masses, m.intensities, lad, s);
+  const Refine::Assemble a = Refine::assemble(m.masses, m.intensities, lad, d, s);
+  TEST_EQUAL(a.candidates.empty(), false)
+  if (a.candidates.empty()) return;
+  const Refine::Path& best = a.candidates[0];
+  const double tol = e.tolerance_ppm * 1e-6 * e.precursor_mass_observed;
+  TEST_REAL_SIMILAR_ABS(best.total, e.expected_total, 2 * tol)
+  for (const ExpectedShift& x : e.shifts)
+  {
+    if (x.lo == 0) continue; // no site: the total carries it
+    bool found = false;
+    for (size_t j = 0; j + 1 < best.levels.size() && j < best.windows.size(); ++j)
+    {
+      found = found || (std::fabs(best.levels[j + 1] - best.levels[j] - x.mass) <= tol && best.windows[j].first <= x.lo &&
+                        best.windows[j].second >= x.hi);
+    }
+    if (!found) std::cout << "    " << key << ": no jump " << x.mass << " with a window holding " << x.lo << "-" << x.hi << "\n";
+    TEST_EQUAL(found, true)
+  }
+  TEST_EQUAL(best.score, e.proto_score)
+  TEST_EQUAL(best.jumps, e.proto_jumps)
+};
+
+START_SECTION(corpus_ca_meets_criterion_a)
+{
+  corpusCriterionA("ca");
+}
+END_SECTION
+
+START_SECTION(corpus_cytc_meets_criterion_a)
+{
+  corpusCriterionA("cytc");
+}
+END_SECTION
+
+START_SECTION(corpus_myoglobin_meets_criterion_a)
+{
+  corpusCriterionA("myoglobin");
+}
+END_SECTION
+
+START_SECTION(corpus_tia_red_meets_criterion_a)
+{
+  corpusCriterionA("tia_red");
+}
+END_SECTION
+
+START_SECTION(corpus_ubiquitin_meets_criterion_a)
+{
+  corpusCriterionA("ubiquitin");
+}
+END_SECTION
+
+START_SECTION(corpus_lactalbumin_red_meets_criterion_a)
+{
+  corpusCriterionA("lactalbumin_red");
+}
+END_SECTION
+
+START_SECTION(corpus_betacasein_meets_criterion_a)
+{
+  corpusCriterionA("betacasein");
 }
 END_SECTION
 
