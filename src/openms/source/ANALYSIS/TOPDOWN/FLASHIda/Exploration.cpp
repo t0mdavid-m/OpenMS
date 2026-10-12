@@ -1051,6 +1051,24 @@ namespace OpenMS
       }
     }
 
+    // The acquiring tail -- planNextScans over the finalized model, the per-target MS3 builds and the
+    // [MS3-DISPATCH] marker -- lives in dispatchFromModel so the refine MS3 return path can re-dispatch
+    // through the same code after a decision. Only commands and their contexts come back from it.
+    NextLevelResult dispatched = dispatchFromModel(precursor_id, result, faims_cv, queue, ms_ctx, tracker, proto_ctx,
+                                                   next_scan_config, charge_floor, next_level, nlr.proteoform_sequence);
+    nlr.commands = std::move(dispatched.commands);
+    nlr.ms3_contexts = std::move(dispatched.ms3_contexts);
+    return nlr;
+  }
+
+  Exploration::NextLevelResult Exploration::dispatchFromModel(int precursor_id, const DeconvolvedSpectrum& result,
+      double faims_cv, ScanCommandQueue& queue, const ScanCommand* ms_ctx, ProteoformTracker* tracker,
+      MS3FragmentMatcher::ProteoformContext proto_ctx, const ScanConfig& next_scan_config, int charge_floor,
+      int next_level, const std::string& proteoform_sequence)
+  {
+    NextLevelResult nlr;
+    nlr.proteoform_sequence = proteoform_sequence;
+
     const ProteoformModel* model = (tracker != nullptr && next_level >= 3 && ms_ctx != nullptr)
         ? tracker->getModel(precursor_id) : nullptr;
     if (model != nullptr && !model->proteoform_sequence.empty())

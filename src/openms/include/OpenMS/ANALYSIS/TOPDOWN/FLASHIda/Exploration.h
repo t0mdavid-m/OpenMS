@@ -323,6 +323,19 @@ namespace OpenMS
                                       ProteoformTracker* tracker = nullptr,
                                       int precursor_id = 0);
 
+    /// The acquiring tail of initiateNextLevel: plan the next-level targets from the precursor's FINALIZED
+    /// ProteoformTracker model (planNextScans), build one MS3 command per target (or one per CE variant when
+    /// the next level explores), and print the [MS3-DISPATCH] marker. Returns nothing (no commands, no
+    /// marker) when there is no tracker, no context, next_level < 3 or the model carries no sequence.
+    /// Only commands and ms3_contexts of the result are filled; proteoform_sequence is the value stamped
+    /// onto every MS2Context. Called by initiateNextLevel and by the refine MS3 return path, which
+    /// re-dispatches after a decision.
+    NextLevelResult dispatchFromModel(int precursor_id, const DeconvolvedSpectrum& result, double faims_cv,
+                                      ScanCommandQueue& queue, const ScanCommand* ms_ctx, ProteoformTracker* tracker,
+                                      MS3FragmentMatcher::ProteoformContext proto_ctx,
+                                      const ScanConfig& next_scan_config, int charge_floor, int next_level,
+                                      const std::string& proteoform_sequence);
+
     /// Number of currently active exploration groups
     int activeGroupCount() const;
 
