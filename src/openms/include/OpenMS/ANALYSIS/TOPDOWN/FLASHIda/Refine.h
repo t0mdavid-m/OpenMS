@@ -35,10 +35,13 @@
 #pragma once
 
 #include <OpenMS/config.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
 #include <OpenMS/DATASTRUCTURES/String.h>
 
 #include <cstdint>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 /**
@@ -120,5 +123,78 @@ namespace OpenMS
     /// Flags (never drops) a level whose region holds r - v for a reference r in {0} u {shift of a level with
     /// a strictly higher signal} and a loss v in {water, ammonia}, with 0.005 Da slack on either side.
     static void flagNeutralLosses(std::vector<Level>& levels);
+
+    // --- ASSEMBLE: one column DP per lambda_k (column_dp_v85.py), the targets (targets_v88.py), the MS3 recount (ms3_recount_v79.py) ---
+
+    /// The best path of one lambda_k: levels 0 = v_0, ..., v_k = lambda_k; a cleavage site n on v_j explains its prefix ion at
+    /// t_n + v_j and its suffix ion at m_seq - t_n + lambda_k - v_j.
+    struct Path
+    {
+      double total = 0;                        ///< lambda_k
+      int score = 0;                           ///< S = ions - jumps
+      int ions = 0;                            ///< N, the explained ions (one mass may explain two)
+      int jumps = 0;                           ///< mass shifts
+      double intensity_sum = 0;                ///< sum of the intensities of the distinct explained masses (a tie-break)
+      std::vector<double> levels;              ///< 0, ..., lambda_k in sequence order
+      std::vector<std::pair<int, int>> windows; ///< per jump: first and last residue (1-based) it may sit on keeping N
+      struct Ion
+      {
+        char type;          ///< the ladder's prefix or suffix ion type (b/c/a, y/z/x)
+        int index;          ///< ion number: n for a prefix ion of site n, L - n for a suffix ion
+        int mass_idx;       ///< index of the explaining observed mass
+        double level;       ///< the shift on this ion's own series: v_j (prefix), lambda_k - v_j (suffix)
+        double theoretical; ///< the unshifted ladder ion plus that shift
+      };
+      std::vector<Ion> ions_explained; ///< at the placement with every jump at its window's first residue, in site order
+    };
+    struct Assemble
+    {
+      std::vector<Path> candidates; ///< one per lambda_k; score desc, jumps asc, intensity_sum desc, then construction order
+    };
+    /// Assemble on one scan's deconvolved masses (ascending; @p intensities parallel). Lambda_b / Lambda_y = the levels of
+    /// @p d that are not neutral losses with at least one prefix / suffix ion.
+    static Assemble assemble(const std::vector<double>& masses_sorted, const std::vector<double>& intensities, const Ladder& ladder,
+                             const Detect& d, const RefineSettings& s);
+
+    /// An observed mass two paths explain differently: as different ions, or one path not at all.
+    struct Discriminating
+    {
+      int mass_idx = -1;
+      double mass = 0;
+      double intensity = 0;
+      std::optional<Path::Ion> ion_a, ion_b;
+    };
+    /// Masses the two paths explain differently (one or none, or different ions); intensity desc. One ion per mass and
+    /// path: a mass both paths give the same ion is shared; otherwise a path's second ion of a mass goes for the one in the
+    /// series of the other path's ion, else the prefix ion (targets_v88.py).
+    static std::vector<Discriminating> discriminating(const Path& a, const Path& b, const std::vector<double>& masses,
+                                                      const std::vector<double>& intensities);
+
+    /// PTM sites a path implies (full-protein 1-based ranges = windows), for MS3FragmentMatcher.
+    static std::vector<FragmentAnalysis::PTMSite> ptmSites(const Path& p);
+
+    struct PieceVerdict
+    {
+      bool fits_a = false, fits_b = false;
+      int shared_seen = 0;      ///< observed masses matching a shared piece at tight_ppm after the calibration
+      double correction = 1.0;  ///< 1 / (1 + median ppm of the shared pieces at loose_ppm)
+    };
+    /// One MS3 scan of one discriminating mass: calibrate on shared pieces, then test discriminating,
+    /// shift-carrying pieces per path (decision 8).
+    static PieceVerdict pieceTest(const DeconvolvedSpectrum& ms3, const String& sequence, const Path& a, const Path& b,
+                                  const Discriminating& target, double loose_ppm, double tight_ppm);
+
+    struct Recount
+    {
+      int score_a = 0, score_b = 0;
+      int confirmed_a = 0, confirmed_b = 0;
+      bool a_wins = true;
+    };
+    /// S after MS3 = shared + confirmed targets of the path - jumps (ms3_recount_v79.py); on equal S fewer jumps.
+    /// shared = the DISTINCT observed masses both paths explain alike (Version 88: one ion per mass and path), counted as
+    /// a path's explained masses minus the targets it explains -- masses, not ions (a path may explain one mass as two
+    /// ions). Equal for both paths by construction; throws Exception::InvalidParameter when it is not.
+    static Recount recount(const Path& a, const Path& b, const std::vector<Discriminating>& targets,
+                           const std::vector<std::pair<bool, bool>>& confirmed /* per target: fits a, fits b */);
   };
 } // namespace OpenMS
