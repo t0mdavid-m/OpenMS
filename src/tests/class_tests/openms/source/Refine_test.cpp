@@ -491,6 +491,52 @@ START_SECTION(piece_shared_when_masses_coincide)
 }
 END_SECTION
 
+START_SECTION(piece_test_calibrates_on_shared_pieces_only)
+{
+  // Both paths explain the target as b6 of PEPTIDEK with +42.0106 Da, path a on residue 1, path b on residue 3. So b1+d and
+  // b2+d are path a's discriminating, shift-carrying pieces, while b3+d and b4+d are shared. The MS3 masses read 30 ppm high.
+  const String seq = "PEPTIDEK";
+  const Refine::Ladder lad = Refine::ladder(seq, {"b", "y"});
+  const double delta = 42.010565, off = 1.0 + 30e-6;
+  Refine::Path pa, pb;
+  pa.levels = {0.0, delta};
+  pa.windows = {{1, 1}};
+  pa.jumps = 1;
+  pb.levels = {0.0, delta};
+  pb.windows = {{3, 3}};
+  pb.jumps = 1;
+  Refine::Discriminating target;
+  target.mass_idx = 0;
+  target.mass = lad.prefix[5] + delta;
+  target.intensity = 1.0;
+  target.ion_a = Refine::Path::Ion{'b', 6, 0, delta, lad.prefix[5] + delta};
+  target.ion_b = target.ion_a;
+  auto spectrum = [&](const std::vector<double>& theo) {
+    DeconvolvedSpectrum s(0);
+    for (double t : theo)
+    {
+      PeakGroup pg;
+      pg.setMonoisotopicMass(t * off);
+      s.push_back(pg);
+    }
+    return s;
+  };
+  // no shared piece seen: nothing calibrates, b2+d sits 30 ppm out of the 10 ppm window
+  const Refine::PieceVerdict alone = Refine::pieceTest(spectrum({lad.prefix[1] + delta}), seq, pa, pb, target, 500.0, 10.0);
+  TEST_EQUAL(alone.shared_seen, 0)
+  TEST_REAL_SIMILAR_ABS(alone.correction, 1.0, 1e-12)
+  TEST_EQUAL(alone.fits_a, false)
+  TEST_EQUAL(alone.fits_b, false)
+  // two shared pieces seen: their +30 ppm calibrates the copy and pulls b2+d into the window
+  const Refine::PieceVerdict cal =
+    Refine::pieceTest(spectrum({lad.prefix[1] + delta, lad.prefix[2] + delta, lad.prefix[3] + delta}), seq, pa, pb, target, 500.0, 10.0);
+  TEST_EQUAL(cal.shared_seen, 2) // one entry per coincident piece, not one per path
+  TEST_REAL_SIMILAR_ABS(cal.correction, 1.0 / off, 1e-9)
+  TEST_EQUAL(cal.fits_a, true)
+  TEST_EQUAL(cal.fits_b, false)
+}
+END_SECTION
+
 START_SECTION(no_level_gives_one_candidate)
 {
   // Detect found nothing (cut 0, no level): one matrix, lambda_k = 0, the path without a mass shift

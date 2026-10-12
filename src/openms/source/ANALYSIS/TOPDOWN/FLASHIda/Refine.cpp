@@ -801,15 +801,22 @@ namespace OpenMS
       return std::any_of(set.begin(), set.end(), [&](const TM& t) { return within(x, t.mass); });
     };
 
-    // the shared pieces: predicted masses (both paths) within tight_ppm of each other
-    std::vector<TM> shared;
+    // the shared pieces: predicted masses (both paths) within tight_ppm of each other, one entry per coincident piece
+    // (both paths' copies of one piece would let one observed mass count twice, in shared_seen and in the calibration)
+    std::vector<TM> both;
     for (const TM& t : sa.theo)
     {
-      if (nearAny(t.mass, sb.theo)) shared.push_back(t);
+      if (nearAny(t.mass, sb.theo)) both.push_back(t);
     }
     for (const TM& t : sb.theo)
     {
-      if (nearAny(t.mass, sa.theo)) shared.push_back(t);
+      if (nearAny(t.mass, sa.theo)) both.push_back(t);
+    }
+    std::stable_sort(both.begin(), both.end(), [](const TM& x, const TM& y) { return x.mass < y.mass; });
+    std::vector<TM> shared;
+    for (const TM& t : both)
+    {
+      if (shared.empty() || !within(t.mass, shared.back().mass)) shared.push_back(t);
     }
 
     // calibration: a loose pass against the shared pieces only, the median signed ppm
@@ -835,7 +842,9 @@ namespace OpenMS
     auto fits = [&](const Side& own, const Side& other) {
       if (!own.has) return false;
       std::vector<FragmentAnalysis::ProteoformMatch> detail;
-      MS3FragmentMatcher::calibrateAndScore({&corrected}, seq, own.ctx, own.type, own.index, tight_ppm, tight_ppm, &detail);
+      // loose = 0: calibrateAndScore's own pass 1 then matches nothing and leaves its correction at 1.0, so the only
+      // calibration is the shared-piece scaling above -- a path is never calibrated on the pieces whose fit is tested
+      MS3FragmentMatcher::calibrateAndScore({&corrected}, seq, own.ctx, own.type, own.index, 0.0, tight_ppm, &detail);
       if (detail.empty()) return false;
       int count = 0;
       for (const auto& fm : detail[0].fragments)
