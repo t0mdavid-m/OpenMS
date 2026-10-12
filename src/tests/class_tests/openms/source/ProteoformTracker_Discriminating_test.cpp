@@ -523,10 +523,25 @@ START_SECTION(empty_ms3_counts_as_returned_without_evidence)
   Config cfg{trackerConfig("discriminating", "refine", 2)};
   IdaLogger logger(cfg);
   ProteoformTracker tracker(cfg, logger);
+  // A first MS2 that identifies nothing, acquired at another energy: it fixes m.ms2_ctx (captured once, from the first
+  // fed scan) but cannot win. The re-dispatch must replay the WINNER's command, so winner_cmd is the second scan's.
+  {
+    ScanCommand first_cmd = makeMs2Ctx();
+    first_cmd.scan_id = 2;
+    first_cmd.stages[0].collision_energy = 17.0;
+    Ms2Params p17;
+    p17.collision_energy = 17.0;
+    p17.activation_type = "HCD";
+    tracker.feedScan(pid, 2, p17, 609, ms3Of({}), FragmentAnalysis::ProteoformMatch{}, -1.0, first_cmd);
+  }
   feedAndFinalize(cfg, tracker, pid, 610, twoTotals());
   TEST_EQUAL(tracker.planNextScans(pid).size(), 2)
   const ProteoformModel* m = tracker.getModel(pid);
   ABORT_IF(m == nullptr || !m->refine.has_value())
+  ABORT_IF(m->winner_cmd == nullptr)
+  TEST_EQUAL(m->winner_scan_id, 610)
+  TEST_REAL_SIMILAR(m->winner_cmd->stages[0].collision_energy, 29.0) // the winner's (makeMs2Ctx), not the first scan's 17
+  TEST_REAL_SIMILAR(m->ms2_ctx.stages[0].collision_energy, 17.0)     // ms2_ctx is the first fed scan's: why it cannot serve
   TEST_EQUAL(countDispatched(*m), 2)
   const auto& recs = m->refine->records;
   const DeconvolvedSpectrum no_evidence(0); // exactly what FLASHIda.cpp passes for a null/empty MS3

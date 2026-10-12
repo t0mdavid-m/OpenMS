@@ -365,6 +365,49 @@ FLASHIda::FLASHIda(char* arg) :
     }
   }
 
+  int FLASHIda::refineRoundClose_(int precursor_id, const ScanCommand& parent_ctx, std::vector<std::string>& child_ids,
+                                  IdaLogger::ScanRowDescriptor& results_row)
+  {
+    // Decide, then re-dispatch from the decided model through the same tail initiateNextLevel uses (planNextScans now
+    // plans the decided windows as under ambiguity).
+    tracker_.decideRefine(precursor_id);
+    const ProteoformModel* mdl = tracker_.getModel(precursor_id);
+    if (mdl == nullptr || !mdl->winner_spectrum || !mdl->winner_cmd)
+    {
+      // Never fall back to mdl->ms2_ctx: it is the FIRST fed scan's context, not the winner's.
+      std::cout << "[MS3-REDISPATCH] precursor_id=" << precursor_id
+                << " skipped reason=" << (mdl == nullptr ? "no_model" : !mdl->winner_spectrum ? "no_winner_spectrum" : "no_winner_command")
+                << std::endl;
+      return 0;
+    }
+    // Local copies: planNextScans runs inside the dispatch and mutates the model these would point into.
+    // config_.level(3).scans is non-empty: validate requires ms_settings.ms3 whenever mode != off.
+    const std::shared_ptr<const DeconvolvedSpectrum> winner_spectrum = mdl->winner_spectrum;
+    const std::shared_ptr<const ScanCommand> winner_cmd = mdl->winner_cmd;
+    auto next = exploration_.dispatchFromModel(precursor_id, *winner_spectrum, parent_ctx.faims_cv, queue_,
+                                               winner_cmd.get(), &tracker_, tracker_.buildWinnerProteoformContext(precursor_id),
+                                               config_.level(3).scans[0], config_.level(2).min_charge, 3,
+                                               config_.characterization().protein_sequence);
+    int pushed = 0;
+    for (auto& c : next.commands)
+    {
+      stampAndPush_(c, precursor_id);  // the re-dispatched MS3 keep the precursor's id, like the MS2 branch's
+      child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
+      pushed++;
+    }
+    // Cache the MS2 context of each new MS3 command, as the MS2 branch does, so it is identified on return.
+    for (size_t ci = 0; ci < next.commands.size(); ++ci)
+    {
+      if (next.commands[ci].msn_level >= 3 && ci < next.ms3_contexts.size())
+      {
+        ms2_context_cache_[next.commands[ci].scan_id] = next.ms3_contexts[ci];
+      }
+    }
+    results_row.commands_pushed = pushed;
+    results_row.child_ids       = child_ids;
+    return pushed;
+  }
+
   int FLASHIda::processScan(const double* mzs, const double* ints, int length,
                              double rt, int ms_level, const char* scan_description,
                              double faims_cv, int instrument_scan_number)
@@ -873,6 +916,8 @@ FLASHIda::FLASHIda(char* arg) :
         // ms3_tic must outlive the inner identification block (ms3_matches is scoped there, cache_it is erased
         // below); it feeds the identification row (moved from scan_results).
         float ms3_tic = 0.0f;
+        // Commands the refine round close pushed (0 everywhere else); becomes this branch's return_code.
+        int refine_pushed = 0;
 
         // Identification: look up MS2 context from cache and run fragment matching
         {
@@ -953,42 +998,10 @@ FLASHIda::FLASHIda(char* arg) :
             ms2_context_cache_.erase(cache_it);
           }
 
-          // The round is complete: decide, and re-dispatch from the decided model through the same tail
-          // initiateNextLevel uses (planNextScans now plans the decided windows as under ambiguity). AFTER the
-          // erase above: the re-dispatch inserts into ms2_context_cache_, which may rehash and invalidate cache_it.
+          // The round is complete: decide and re-dispatch (refineRoundClose_). AFTER the erase above: the re-dispatch
+          // inserts into ms2_context_cache_, which may rehash and invalidate cache_it.
           if (refine_round_complete)
-          {
-            tracker_.decideRefine(precursor_id);
-            const ProteoformModel* mdl = tracker_.getModel(precursor_id);
-            // config_.level(3).scans is non-empty: validate requires ms_settings.ms3 whenever mode != off.
-            if (mdl != nullptr && mdl->winner_spectrum && mdl->has_ms2_ctx)
-            {
-              // Local copies: planNextScans runs inside the dispatch and mutates the model these would point into.
-              const std::shared_ptr<const DeconvolvedSpectrum> winner_spectrum = mdl->winner_spectrum;
-              const ScanCommand winner_ms2_ctx = mdl->ms2_ctx;
-              auto next = exploration_.dispatchFromModel(precursor_id, *winner_spectrum, parent_ctx.faims_cv, queue_,
-                                                         &winner_ms2_ctx, &tracker_, tracker_.buildWinnerProteoformContext(precursor_id),
-                                                         config_.level(3).scans[0], config_.level(2).min_charge, 3,
-                                                         config_.characterization().protein_sequence);
-              int refine_pushed = 0;
-              for (auto& c : next.commands)
-              {
-                stampAndPush_(c, precursor_id);  // the re-dispatched MS3 keep the precursor's id, like the MS2 branch's
-                child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
-                refine_pushed++;
-              }
-              // Cache the MS2 context of each new MS3 command, as the MS2 branch does, so it is identified on return.
-              for (size_t ci = 0; ci < next.commands.size(); ++ci)
-              {
-                if (next.commands[ci].msn_level >= 3 && ci < next.ms3_contexts.size())
-                {
-                  ms2_context_cache_[next.commands[ci].scan_id] = next.ms3_contexts[ci];
-                }
-              }
-              results_row.commands_pushed = refine_pushed;
-              results_row.child_ids       = child_ids;
-            }
-          }
+            refine_pushed = refineRoundClose_(precursor_id, parent_ctx, child_ids, results_row);
         }
 
         std::string parent_id(parent_ctx.parent_scan_id);
@@ -1005,7 +1018,8 @@ FLASHIda::FLASHIda(char* arg) :
         // row above: no tagger runs on an MS3 spectrum. ms3_tic is this scan's real matched-fragment
         // ratio and is declared outside the identification block precisely so it can be read here.
         results_row.tic_coverage       = ms3_tic;
-        // commands_pushed keeps its 0 default; child_ids empty; exploration fields at defaults.
+        // commands_pushed and child_ids keep their 0/empty defaults, except after a refine round close, which writes
+        // both (refineRoundClose_); exploration fields at defaults.
         results_row.mass_count         = ms3_mass_count;
         results_row.deconv_spectrum    = ms3_spec;
         results_row.parent_tracking_id = parent_id;
@@ -1017,7 +1031,7 @@ FLASHIda::FLASHIda(char* arg) :
         // MS3 run therefore yields the first MS3 share dataset an MS3 k2 can be fitted on.
         results_row.precursor_share    = regularRowShare(parent_ctx, mzs, ints, length);
 
-        return_code = 0;
+        return_code = refine_pushed;
       }
     }
 

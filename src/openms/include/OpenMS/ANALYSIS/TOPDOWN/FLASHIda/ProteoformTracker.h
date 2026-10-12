@@ -182,6 +182,9 @@ namespace OpenMS
     /// characterization.method refine only: the scan's deconvolved spectrum, so finalizeMS2 can hand the winner's to
     /// the model for the MS3 re-dispatch after the discriminating round (ADR-0049). Null under flashtnt -- no copy.
     std::shared_ptr<const DeconvolvedSpectrum> spectrum;
+    /// characterization.method refine only: the command that acquired this scan, so finalizeMS2 can hand the winner's
+    /// to the model for that re-dispatch -- its isolation and stage-0 energy, not the first fed scan's. Null under flashtnt.
+    std::shared_ptr<const ScanCommand> cmd;
   };
 
   /// One discriminating mass of characterization.mode discriminating (ADR-0049): a mass Refine's two best candidate
@@ -234,6 +237,10 @@ namespace OpenMS
     /// characterization.method refine only: the winner MS2 scan's deconvolved spectrum (from its PendingScan), which the
     /// MS3 return path re-dispatches from once the discriminating round has decided (ADR-0049). Null under flashtnt.
     std::shared_ptr<const DeconvolvedSpectrum> winner_spectrum;
+    /// characterization.method refine only: the winner MS2 scan's own command (from its PendingScan). The re-dispatch
+    /// replays it as stage 0; ms2_ctx cannot serve, being the FIRST fed scan's context, which under MS2 exploration,
+    /// additional_scans or separate charges is another scan's isolation and energy. Null under flashtnt.
+    std::shared_ptr<const ScanCommand> winner_cmd;
     int update_index = 0;
     std::vector<PendingScan> pending;
     std::vector<ModificationState> modifications;

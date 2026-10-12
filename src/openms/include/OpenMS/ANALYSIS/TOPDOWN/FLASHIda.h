@@ -336,6 +336,19 @@ namespace OpenMS
                                       double rt, double faims_cv,
                                       IdaLogger::ScanRowDescriptor& results_row);
 
+    /**
+     * @brief Close a characterization.method refine discriminating round (ADR-0049): decide, then re-dispatch MS3 from
+     *        the decided model through Exploration::dispatchFromModel, replaying the WINNER MS2's own command as stage 0.
+     *
+     * Pushes the new MS3 (each stamped with @p precursor_id and appended to @p child_ids), caches their MS2 contexts so
+     * they are identified on return, and writes commands_pushed / child_ids into @p results_row. Without a winner
+     * spectrum or command nothing is re-dispatched and a warning line is printed.
+     *
+     * @return commands pushed; becomes processScan's return_code.
+     */
+    int refineRoundClose_(int precursor_id, const ScanCommand& parent_ctx, std::vector<std::string>& child_ids,
+                          IdaLogger::ScanRowDescriptor& results_row);
+
     /// Steady-clock reference for timestamps
     std::chrono::steady_clock::time_point engine_start_time_;
 
