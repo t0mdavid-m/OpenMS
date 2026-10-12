@@ -54,7 +54,8 @@ namespace OpenMS
   {
     constexpr double kWater = 18.010565;
     constexpr double kAmmonia = 17.026549;
-    constexpr double kLossSlack = 0.005; ///< Da; the neutral-loss test's slack on either side of a region
+    constexpr double kNeutron = 1.003355; ///< Da; one 13C - 12C spacing (the neutron-satellite rule)
+    constexpr double kLossSlack = 0.005; ///< Da; the neutral-loss and satellite tests' slack on either side of a region
     constexpr int kHMax = 60;            ///< the highest peak height FDR is evaluated at
     constexpr double kEps = 1e-9;        ///< grid units; a match exactly on a grid point counts
 
@@ -103,6 +104,35 @@ namespace OpenMS
         if (hit) ++count;
       }
       return count;
+    }
+
+    /// The cap's tie-break: the summed intensity of the observed masses the ions of @p theo match at @p shift (the neighbour
+    /// rule of countMatching), each mass counted once even when two ions match it.
+    double matchedIntensity(const std::vector<double>& theo, const std::vector<double>& masses_sorted, const std::vector<double>& intensities,
+                            double tol_ppm, double shift)
+    {
+      std::set<size_t> hit;
+      for (double t : theo)
+      {
+        const double x = t + shift;
+        const auto it = std::lower_bound(masses_sorted.begin(), masses_sorted.end(), x);
+        if (it != masses_sorted.end() && std::fabs(*it - x) <= tolerance(*it, tol_ppm)) hit.insert(it - masses_sorted.begin());
+        if (it != masses_sorted.begin() && std::fabs(*(it - 1) - x) <= tolerance(*(it - 1), tol_ppm)) hit.insert(it - 1 - masses_sorted.begin());
+      }
+      double sum = 0;
+      for (size_t k : hit) sum += k < intensities.size() ? intensities[k] : 0.0;
+      return sum;
+    }
+
+    /// {0} u {the shift of every level with a strictly higher signal than @p level}, excluded or not.
+    std::vector<double> references(const Refine::Level& level, const std::vector<Refine::Level>& levels)
+    {
+      std::vector<double> refs = {0.0};
+      for (const Refine::Level& other : levels)
+      {
+        if (other.signal > level.signal) refs.push_back(other.shift);
+      }
+      return refs;
     }
 
     std::vector<double> concat(const std::vector<double>& a, const std::vector<double>& b)
@@ -248,22 +278,58 @@ namespace OpenMS
     const double losses[] = {kWater, kAmmonia};
     for (Level& level : levels)
     {
-      std::vector<double> refs = {0.0};
-      for (const Level& other : levels)
-      {
-        if (other.signal > level.signal) refs.push_back(other.shift);
-      }
-      for (double r : refs)
+      for (double r : references(level, levels))
       {
         for (double v : losses)
         {
-          if (level.lo - kLossSlack <= r - v && r - v <= level.hi + kLossSlack) level.neutral_loss = true;
+          if (level.lo - kLossSlack <= r - v && r - v <= level.hi + kLossSlack) level.excluded = Level::Exclusion::NeutralLoss;
         }
       }
     }
   }
 
-  Refine::Detect Refine::detect(const std::vector<double>& masses_sorted, const Ladder& ladder, const RefineSettings& s)
+  void Refine::flagNeutronSatellites(std::vector<Level>& levels)
+  {
+    for (Level& level : levels)
+    {
+      if (level.excluded != Level::Exclusion::None) continue; // the first rule that matches: a neutral loss stays one
+      bool satellite = false;
+      for (double r : references(level, levels))
+      {
+        for (int n = 1; n <= 3; ++n)
+        {
+          for (double sign : {1.0, -1.0})
+          {
+            const double x = r + sign * n * kNeutron;
+            satellite = satellite || (level.lo - kLossSlack <= x && x <= level.hi + kLossSlack);
+          }
+        }
+      }
+      if (satellite) level.excluded = Level::Exclusion::NeutronSatellite;
+    }
+  }
+
+  int Refine::capLevels(std::vector<Level>& levels, const std::vector<double>& tie_intensity, int max_levels)
+  {
+    std::vector<size_t> kept;
+    for (size_t i = 0; i < levels.size(); ++i)
+    {
+      if (levels[i].excluded == Level::Exclusion::None) kept.push_back(i);
+    }
+    if (static_cast<int>(kept.size()) <= max_levels) return static_cast<int>(kept.size());
+    auto tie = [&tie_intensity](size_t i) { return i < tie_intensity.size() ? tie_intensity[i] : 0.0; };
+    std::stable_sort(kept.begin(), kept.end(), [&](size_t a, size_t b) {
+      if (levels[a].signal != levels[b].signal) return levels[a].signal > levels[b].signal;
+      if (tie(a) != tie(b)) return tie(a) > tie(b);
+      return std::fabs(levels[a].shift) < std::fabs(levels[b].shift);
+    });
+    const size_t keep = static_cast<size_t>(std::max(max_levels, 0));
+    for (size_t k = keep; k < kept.size(); ++k) levels[kept[k]].excluded = Level::Exclusion::Capped;
+    return static_cast<int>(keep);
+  }
+
+  Refine::Detect Refine::detect(const std::vector<double>& masses_sorted, const std::vector<double>& intensities, const Ladder& ladder,
+                                const RefineSettings& s)
   {
     Detect out;
     out.fdr_by_height.assign(kHMax + 1, -1.0);
@@ -349,7 +415,15 @@ namespace OpenMS
       out.levels.push_back(level);
       i = j + 1;
     }
+    // the exclusions, in this order: neutral loss, neutron satellite, then the cap over what is left
     flagNeutralLosses(out.levels);
+    flagNeutronSatellites(out.levels);
+    std::vector<double> tie(out.levels.size());
+    for (size_t i = 0; i < out.levels.size(); ++i)
+    {
+      tie[i] = matchedIntensity(T, masses_sorted, intensities, s.tolerance_ppm, out.levels[i].shift);
+    }
+    out.n_kept = capLevels(out.levels, tie, s.max_levels);
     return out;
   }
 
@@ -361,8 +435,9 @@ namespace OpenMS
   {
     constexpr long long kNeg = -1000000000LL; ///< the prototype's NEG = -10 ** 9
     constexpr long long kNegHalf = kNeg / 2;  ///< NEG // 2 (exact: NEG is even)
-    constexpr long long kIon = 1000;          ///< a' = 1000 a: on a tie the path with fewer mass shifts ...
-    constexpr long long kJump = 1001;         ///< ... a jump costs 1001 (column_dp_v85.py, "on a tie, fewer mass shifts")
+    constexpr long long kIon = 1000;          ///< a' = 1000 a; a jump costs 1000 x jump_penalty + 1, so the quotient of the best
+                                              ///< score is ions - penalty x jumps and the remainder the jump count (column_dp_v85.py's
+                                              ///< cost 1001 is penalty 1: "on a tie, fewer mass shifts")
 
     /// Python's floor division and modulo for a positive divisor.
     long long floorDiv(long long a, long long b)
@@ -474,11 +549,13 @@ namespace OpenMS
     const int L = NS + 1;
     const char ptype = prefixType(ladder), stype = suffixType(ladder);
 
-    // Lambda_b, Lambda_y: the levels that are not neutral losses with a prefix / suffix ion, ascending (column_dp_v85.py LB2/LY2)
+    const long long jump_cost = kIon * s.jump_penalty + 1; // the prototype's cost=1001 at penalty 1
+
+    // Lambda_b, Lambda_y: the levels not excluded with a prefix / suffix ion, ascending (column_dp_v85.py LB2/LY2)
     std::vector<double> LB, LY;
     for (const Level& l : d.levels)
     {
-      if (l.neutral_loss) continue;
+      if (l.excluded != Level::Exclusion::None) continue;
       if (l.n_prefix > 0) LB.push_back(l.shift);
       if (l.n_suffix > 0) LY.push_back(l.shift);
     }
@@ -551,7 +628,7 @@ namespace OpenMS
             {
               if (m != l) other = std::max(other, col[m]);
             }
-            long long jump = other > kNegHalf ? other - kJump : kNeg;
+            long long jump = other > kNegHalf ? other - jump_cost : kNeg;
             if (l == i0) jump = kNeg; // no jump into 0
             best[l] = std::max(best[l], jump);
           }
@@ -575,7 +652,7 @@ namespace OpenMS
             {
               if (m != l) other = std::max(other, col[m]);
             }
-            long long jump = other > kNegHalf ? other - kJump : kNeg;
+            long long jump = other > kNegHalf ? other - jump_cost : kNeg;
             if (l == ik) jump = kNeg;
             best[l] = std::max(best[l], jump);
           }
@@ -601,7 +678,7 @@ namespace OpenMS
             {
               if (F[n][l] + Am[mu][n + 1] + G[n + 1][mu] == S) cur[l].insert(next[mu].begin(), next[mu].end());
             }
-            else if (l != ik && mu != i0 && F[n][l] - kJump + Am[mu][n + 1] + G[n + 1][mu] == S)
+            else if (l != ik && mu != i0 && F[n][l] - jump_cost + Am[mu][n + 1] + G[n + 1][mu] == S)
             {
               for (const auto& sq : next[mu])
               {
@@ -619,8 +696,8 @@ namespace OpenMS
 
       Path p;
       p.total = lk;
-      p.score = static_cast<int>(-floorDiv(-S, 1000)); // rows: (-((-S) // 1000), (-S) % 1000, ...)
-      p.jumps = static_cast<int>(floorMod(-S, 1000));
+      p.score = static_cast<int>(-floorDiv(-S, kIon)); // rows: (-((-S) // 1000), (-S) % 1000, ...): ions - penalty x jumps
+      p.jumps = static_cast<int>(floorMod(-S, kIon));
       for (int c : order) p.levels.push_back(D[c]);
 
       // path_dp and windows over the chosen order, unscaled
@@ -872,7 +949,7 @@ namespace OpenMS
   // ======================================================================================================================
 
   Refine::Recount Refine::recount(const Path& a, const Path& b, const std::vector<Discriminating>& targets,
-                                  const std::vector<std::pair<bool, bool>>& confirmed)
+                                  const std::vector<std::pair<bool, bool>>& confirmed, int jump_penalty)
   {
     // shared = the masses a path explains minus the targets it explains (the prototype's N - len(only[k]), one ion per mass)
     auto masses = [](const Path& p) {
@@ -899,8 +976,8 @@ namespace OpenMS
                                         "Refine::recount: the two paths share " + std::to_string(shared_a) + " and " + std::to_string(shared_b) +
                                           " masses; the targets are not theirs");
     }
-    r.score_a = shared_a + r.confirmed_a - a.jumps;
-    r.score_b = shared_b + r.confirmed_b - b.jumps;
+    r.score_a = shared_a + r.confirmed_a - jump_penalty * a.jumps;
+    r.score_b = shared_b + r.confirmed_b - jump_penalty * b.jumps;
     r.a_wins = r.score_a > r.score_b || (r.score_a == r.score_b && a.jumps <= b.jumps);
     return r;
   }

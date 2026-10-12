@@ -54,22 +54,27 @@
   sequences (the residues permuted: composition, length and fragment count kept, only the ladder goes)
   counted against the unexplained masses. FDR(h) = mean decoy peaks with >= h ions / Signal peaks with
   >= h ions; the cut is the smallest h >= min_ions with FDR(h) <= fdr, and the LEVELS are the regions of
-  S at or above the cut, neutral losses flagged rather than dropped.
+  S at or above the cut. Three exclusions mark a level rather than drop it (ADR-0049 as amended 2026-10-12): a neutral
+  loss (water/ammonia below 0 or below a stronger level), then a neutron satellite (1-3 x 1.003355 Da beside 0 or a
+  stronger level), then the cap (of the rest, only the max_levels strongest are kept). ASSEMBLE builds its paths from
+  the kept levels and charges every jump jump_penalty ions.
 
   The reference implementation is the owner's prototype (trunc_core.py / detect_fdr.py of the Refine
   publication notes); every rule here is that prototype's, one to one.
 */
 namespace OpenMS
 {
-  /// The settings of one Refine run. The first five are characterization.refine.*; tolerance_ppm is level(2)'s.
+  /// The settings of one Refine run. All but tolerance_ppm are characterization.refine.*; tolerance_ppm is level(2)'s.
   struct OPENMS_DLLAPI RefineSettings
   {
-    double fdr = 0.5;            ///< characterization.refine.fdr
+    double fdr = 0.2;            ///< characterization.refine.fdr
     int shuffles = 300;          ///< characterization.refine.shuffles
     double grid_da = 0.01;       ///< characterization.refine.grid_da
     double max_shift_da = 700.0; ///< characterization.refine.max_shift_da  (grid runs -max..+max)
     int min_ions = 3;            ///< characterization.refine.min_ions      (smallest cut tried)
     double tolerance_ppm = 10.0; ///< level(2).tolerance_ppm
+    int max_levels = 20;         ///< characterization.refine.max_levels    (the cap on the kept levels)
+    int jump_penalty = 2;        ///< characterization.refine.jump_penalty  (ions a jump costs: S = ions - penalty x jumps)
     static constexpr uint64_t kSeed = 12345ULL; ///< the shuffle stream's seed (the prototype's)
     static constexpr double kSame = 0.004;      ///< two shifts within this are one (prototype SAME)
   };
@@ -94,22 +99,32 @@ namespace OpenMS
     /// One detected level: a region of the Signal at or above the cut.
     struct Level
     {
+      /// Why a level is not one Assemble builds from; the first rule that matches, in this order.
+      enum class Exclusion
+      {
+        None,             ///< kept
+        NeutralLoss,      ///< water/ammonia below 0 or below a stronger level
+        NeutronSatellite, ///< 1-3 neutrons (1.003355 Da) above or below 0 or a stronger level
+        Capped            ///< beyond the max_levels strongest of the rest
+      };
       double shift = 0;         ///< dm at the middle of the region's highest grid points
       int signal = 0;           ///< the region's maximum of S
       int n_prefix = 0;         ///< prefix-ladder ions that match at shift
       int n_suffix = 0;         ///< suffix-ladder ions that match at shift
       double lo = 0, hi = 0;    ///< dm of the region's first and last grid point
-      bool neutral_loss = false; ///< water/ammonia below 0 or below a stronger level
+      Exclusion excluded = Exclusion::None;
     };
     struct Detect
     {
       int cut = 0;                       ///< smallest h >= min_ions with FDR(h) <= fdr; 0 = none passes
-      std::vector<Level> levels;         ///< regions of S >= cut, ascending shift, neutral losses flagged
+      std::vector<Level> levels;         ///< regions of S >= cut, ascending shift, every exclusion marked (none dropped)
       std::vector<double> fdr_by_height; ///< index h (1..60): mean decoy peaks / signal peaks; -1 where S has none
       int observed_at_zero = 0;          ///< masses the unshifted ladder explains (|M n T|)
+      int n_kept = 0;                    ///< levels with excluded == None: what Lambda_b / Lambda_y are built from
     };
-    /// Detect on one scan's deconvolved masses (ascending).
-    static Detect detect(const std::vector<double>& masses_sorted, const Ladder& ladder, const RefineSettings& s);
+    /// Detect on one scan's deconvolved masses (ascending; @p intensities parallel -- the cap's tie-break reads them).
+    static Detect detect(const std::vector<double>& masses_sorted, const std::vector<double>& intensities, const Ladder& ladder,
+                         const RefineSettings& s);
 
     // --- building blocks, exposed for the unit sections ---
     /// n(f, h) for every h in [1, hmax]: maximal runs of consecutive grid points with f >= h.
@@ -120,9 +135,17 @@ namespace OpenMS
                                   double tol_ppm, double lo, double step, int n);
     /// Mask of masses the unshifted ladder explains within tolerance.
     static std::vector<bool> explained(const std::vector<double>& theo, const std::vector<double>& masses_sorted, double tol_ppm);
-    /// Flags (never drops) a level whose region holds r - v for a reference r in {0} u {shift of a level with
+    /// Marks NeutralLoss (never drops) a level whose region holds r - v for a reference r in {0} u {shift of a level with
     /// a strictly higher signal} and a loss v in {water, ammonia}, with 0.005 Da slack on either side.
     static void flagNeutralLosses(std::vector<Level>& levels);
+    /// Marks NeutronSatellite (never drops) a level not already excluded whose region holds r + s n 1.003355 for a reference
+    /// r in {0} u {shift of any level with a strictly higher signal}, n in {1, 2, 3}, s in {+1, -1}, with 0.005 Da slack.
+    /// Run after flagNeutralLosses: a level that is both stays a NeutralLoss.
+    static void flagNeutronSatellites(std::vector<Level>& levels);
+    /// The cap: if more than @p max_levels levels are not excluded, marks all but the max_levels strongest Capped -- by
+    /// signal (desc), then @p tie_intensity (desc; parallel to @p levels: the summed intensity of the masses the level's ions
+    /// match at its shift), then the smaller |shift|. Returns the number of levels left with excluded == None.
+    static int capLevels(std::vector<Level>& levels, const std::vector<double>& tie_intensity, int max_levels);
 
     // --- ASSEMBLE: one column DP per lambda_k (column_dp_v85.py), the targets (targets_v88.py), the MS3 recount (ms3_recount_v79.py) ---
 
@@ -131,7 +154,7 @@ namespace OpenMS
     struct Path
     {
       double total = 0;                        ///< lambda_k
-      int score = 0;                           ///< S = ions - jumps
+      int score = 0;                           ///< S = ions - jump_penalty x jumps
       int ions = 0;                            ///< N, the explained ions (one mass may explain two)
       int jumps = 0;                           ///< mass shifts
       double intensity_sum = 0;                ///< sum of the intensities of the distinct explained masses (a tie-break)
@@ -152,7 +175,7 @@ namespace OpenMS
       std::vector<Path> candidates; ///< one per lambda_k; score desc, jumps asc, intensity_sum desc, then construction order
     };
     /// Assemble on one scan's deconvolved masses (ascending; @p intensities parallel). Lambda_b / Lambda_y = the levels of
-    /// @p d that are not neutral losses with at least one prefix / suffix ion.
+    /// @p d that are not excluded with at least one prefix / suffix ion. A jump costs s.jump_penalty ions.
     static Assemble assemble(const std::vector<double>& masses_sorted, const std::vector<double>& intensities, const Ladder& ladder,
                              const Detect& d, const RefineSettings& s);
 
@@ -190,11 +213,12 @@ namespace OpenMS
       int confirmed_a = 0, confirmed_b = 0;
       bool a_wins = true;
     };
-    /// S after MS3 = shared + confirmed targets of the path - jumps (ms3_recount_v79.py); on equal S fewer jumps.
+    /// S after MS3 = shared + confirmed targets of the path - jump_penalty x jumps (ms3_recount_v79.py, with the amended
+    /// penalty); on equal S fewer jumps.
     /// shared = the DISTINCT observed masses both paths explain alike (Version 88: one ion per mass and path), counted as
     /// a path's explained masses minus the targets it explains -- masses, not ions (a path may explain one mass as two
     /// ions). Equal for both paths by construction; throws Exception::InvalidParameter when it is not.
     static Recount recount(const Path& a, const Path& b, const std::vector<Discriminating>& targets,
-                           const std::vector<std::pair<bool, bool>>& confirmed /* per target: fits a, fits b */);
+                           const std::vector<std::pair<bool, bool>>& confirmed /* per target: fits a, fits b */, int jump_penalty);
   };
 } // namespace OpenMS

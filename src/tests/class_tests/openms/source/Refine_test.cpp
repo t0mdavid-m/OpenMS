@@ -109,6 +109,58 @@ namespace
     return out;
   }
 
+  // refine_expected_cytc.tsv (make_refine_tables.py --cytc, at the engine's defaults): `quantity\tvalue`, '#' lines and the
+  // header skipped. An absent file gives an empty map, so every lookup below fails loudly rather than passing.
+  const std::string FI_REFINE_EXPECTED_CYTC = "../../FlashIDA/test-data/refine/refine_expected_cytc.tsv";
+  std::map<std::string, std::string> loadQuantities(const std::string& path)
+  {
+    std::map<std::string, std::string> out;
+    std::ifstream in(path);
+    std::string line;
+    while (std::getline(in, line))
+    {
+      if (!line.empty() && line.back() == '\r') line.pop_back();
+      if (line.empty() || line[0] == '#') continue;
+      const size_t tab = line.find('\t');
+      if (tab == std::string::npos) continue;
+      const std::string key = line.substr(0, tab);
+      if (key == "quantity") continue; // the header row
+      out[key] = line.substr(tab + 1);
+    }
+    return out;
+  }
+
+  std::vector<std::string> words(const std::string& x)
+  {
+    std::vector<std::string> out;
+    std::stringstream ss(x);
+    std::string w;
+    while (ss >> w) out.push_back(w);
+    return out;
+  }
+
+  std::string exclusionName(Refine::Level::Exclusion e)
+  {
+    switch (e)
+    {
+      case Refine::Level::Exclusion::None: return "none";
+      case Refine::Level::Exclusion::NeutralLoss: return "neutral_loss";
+      case Refine::Level::Exclusion::NeutronSatellite: return "neutron_satellite";
+      case Refine::Level::Exclusion::Capped: return "capped";
+    }
+    return "?";
+  }
+
+  Refine::Level makeLevel(double shift, int signal, double half_width = 0.03)
+  {
+    Refine::Level l;
+    l.shift = shift;
+    l.signal = signal;
+    l.lo = shift - half_width;
+    l.hi = shift + half_width;
+    return l;
+  }
+
   std::string label(const std::optional<Refine::Path::Ion>& ion)
   {
     return ion ? std::string(1, ion->type) + std::to_string(ion->index) : std::string("-");
@@ -118,6 +170,7 @@ namespace
   {
     return t == 'a' || t == 'b' || t == 'c';
   }
+
 } // namespace
 
 START_TEST(Refine, "$Id$")
@@ -183,14 +236,142 @@ START_SECTION(neutral_loss_levels_are_flagged_not_dropped)
   levels[1].shift = 526.14; levels[1].signal = 23; levels[1].lo = 526.05; levels[1].hi = 526.20;
   Refine::flagNeutralLosses(levels);
   TEST_EQUAL(levels.size(), 2)            // flagged, not dropped
-  TEST_EQUAL(levels[0].neutral_loss, true) // 526.14 - 18.0106 (water) lies in 508.07..508.16
-  TEST_EQUAL(levels[1].neutral_loss, false)
+  TEST_EQUAL(exclusionName(levels[0].excluded), std::string("neutral_loss")) // 526.14 - 18.0106 (water) lies in 508.07..508.16
+  TEST_EQUAL(exclusionName(levels[1].excluded), std::string("none"))
 
   // no stronger level than this one, but the reference 0 is always there: ammonia below 0
   std::vector<Refine::Level> alone(1);
   alone[0].shift = -17.03; alone[0].signal = 6; alone[0].lo = -17.07; alone[0].hi = -16.97;
   Refine::flagNeutralLosses(alone);
-  TEST_EQUAL(alone[0].neutral_loss, true)
+  TEST_EQUAL(exclusionName(alone[0].excluded), std::string("neutral_loss"))
+}
+END_SECTION
+
+START_SECTION(neutron_satellites_are_excluded_not_merged)
+{
+  // +655.14 and +654.13 sit 2 and 3 neutrons (1.003355 Da) below +657.17; +42.01 is near nothing
+  std::vector<Refine::Level> levels = {makeLevel(42.01, 7), makeLevel(654.13, 11), makeLevel(655.14, 15), makeLevel(657.17, 16)};
+  Refine::flagNeutralLosses(levels);
+  Refine::flagNeutronSatellites(levels);
+  TEST_EQUAL(levels.size(), 4) // marked, not merged into +657.17 and not dropped
+  TEST_EQUAL(exclusionName(levels[0].excluded), std::string("none"))
+  TEST_EQUAL(exclusionName(levels[1].excluded), std::string("neutron_satellite"))
+  TEST_EQUAL(exclusionName(levels[2].excluded), std::string("neutron_satellite"))
+  TEST_EQUAL(exclusionName(levels[3].excluded), std::string("none"))
+  TEST_REAL_SIMILAR_ABS(levels[2].shift, 655.14, 1e-12) // the shift is not moved onto the reference
+
+  // the references are the levels of higher signal, excluded or not: +507.13 is one neutron below +508.13, itself a water
+  // loss of +526.14, and nothing else explains it
+  std::vector<Refine::Level> chain = {makeLevel(507.13, 4), makeLevel(508.13, 10), makeLevel(526.14, 23)};
+  Refine::flagNeutralLosses(chain);
+  Refine::flagNeutronSatellites(chain);
+  TEST_EQUAL(exclusionName(chain[0].excluded), std::string("neutron_satellite"))
+  TEST_EQUAL(exclusionName(chain[1].excluded), std::string("neutral_loss"))
+  TEST_EQUAL(exclusionName(chain[2].excluded), std::string("none"))
+
+  // a satellite is only ever beside a STRONGER level (or 0): the weaker of two neutron-spaced levels is the satellite
+  std::vector<Refine::Level> pair = {makeLevel(300.00, 9), makeLevel(301.00, 3)};
+  Refine::flagNeutronSatellites(pair);
+  TEST_EQUAL(exclusionName(pair[0].excluded), std::string("none"))
+  TEST_EQUAL(exclusionName(pair[1].excluded), std::string("neutron_satellite"))
+  // and 0 is always a reference: +2.01 is two neutrons above the unshifted ladder
+  std::vector<Refine::Level> near0 = {makeLevel(2.01, 30)};
+  Refine::flagNeutronSatellites(near0);
+  TEST_EQUAL(exclusionName(near0[0].excluded), std::string("neutron_satellite"))
+}
+END_SECTION
+
+START_SECTION(a_neutral_loss_that_is_also_a_satellite_is_a_neutral_loss)
+{
+  // the two rules apart: +525.14 is one neutron below +526.14 (a satellite only), +508.13 a water loss of it (a loss only)
+  std::vector<Refine::Level> apart = {makeLevel(508.13, 5), makeLevel(525.14, 6), makeLevel(526.14, 23)};
+  Refine::flagNeutralLosses(apart);
+  Refine::flagNeutronSatellites(apart);
+  TEST_EQUAL(exclusionName(apart[0].excluded), std::string("neutral_loss"))
+  TEST_EQUAL(exclusionName(apart[1].excluded), std::string("neutron_satellite"))
+  TEST_EQUAL(exclusionName(apart[2].excluded), std::string("none"))
+
+  // both at once: the region 508.10..508.20 holds 526.14 - 18.0106 = 508.1294 (water) AND 509.20 - 1.003355 = 508.1966
+  // (one neutron below a stronger level) -- the first rule that matches decides, so it is a neutral loss
+  std::vector<Refine::Level> both = {makeLevel(508.15, 5, 0.05), makeLevel(509.20, 10), makeLevel(526.14, 23)};
+  Refine::flagNeutralLosses(both);
+  Refine::flagNeutronSatellites(both);
+  TEST_EQUAL(exclusionName(both[0].excluded), std::string("neutral_loss"))
+  TEST_EQUAL(exclusionName(both[1].excluded), std::string("none"))
+  TEST_EQUAL(exclusionName(both[2].excluded), std::string("none"))
+  // ... and on its own the neutron rule would have taken it (the overlap is real, not a miss of the satellite rule)
+  std::vector<Refine::Level> sat_only = {makeLevel(508.15, 5, 0.05), makeLevel(509.20, 10)};
+  Refine::flagNeutronSatellites(sat_only);
+  TEST_EQUAL(exclusionName(sat_only[0].excluded), std::string("neutron_satellite"))
+}
+END_SECTION
+
+START_SECTION(cap_keeps_the_strongest_levels_and_marks_the_rest)
+{
+  // 25 levels with distinct signals 1..25 plus one neutral loss stronger than all: the cap keeps the 20 strongest of the
+  // 25, marks the 5 weakest Capped, and neither counts nor touches the neutral loss
+  std::vector<Refine::Level> levels;
+  for (int i = 0; i < 25; ++i) levels.push_back(makeLevel(100.0 + 10.0 * i, i + 1));
+  levels.push_back(makeLevel(-18.01, 40));
+  levels.back().excluded = Refine::Level::Exclusion::NeutralLoss;
+  const int kept = Refine::capLevels(levels, std::vector<double>(levels.size(), 0.0), 20);
+  TEST_EQUAL(kept, 20)
+  int none = 0, capped = 0;
+  for (size_t i = 0; i < 25; ++i)
+  {
+    none += levels[i].excluded == Refine::Level::Exclusion::None;
+    capped += levels[i].excluded == Refine::Level::Exclusion::Capped;
+    TEST_EQUAL(exclusionName(levels[i].excluded), std::string(levels[i].signal <= 5 ? "capped" : "none"))
+  }
+  TEST_EQUAL(none, 20)
+  TEST_EQUAL(capped, 5)
+  TEST_EQUAL(levels.size(), 26) // marked, not dropped
+  TEST_EQUAL(exclusionName(levels[25].excluded), std::string("neutral_loss"))
+
+  // fewer levels than the cap: unchanged
+  std::vector<Refine::Level> few;
+  for (int i = 0; i < 15; ++i) few.push_back(makeLevel(100.0 + 10.0 * i, i + 1));
+  TEST_EQUAL(Refine::capLevels(few, std::vector<double>(few.size(), 0.0), 20), 15)
+  for (const auto& l : few) TEST_EQUAL(exclusionName(l.excluded), std::string("none"))
+
+  // a tie on signal goes to the level whose matched masses sum higher; a tie on both to the smaller |shift|
+  std::vector<Refine::Level> tie = {makeLevel(200.0, 5), makeLevel(300.0, 5), makeLevel(400.0, 9)};
+  TEST_EQUAL(Refine::capLevels(tie, {100.0, 200.0, 1.0}, 2), 2)
+  TEST_EQUAL(exclusionName(tie[0].excluded), std::string("capped"))
+  TEST_EQUAL(exclusionName(tie[1].excluded), std::string("none"))
+  TEST_EQUAL(exclusionName(tie[2].excluded), std::string("none"))
+  std::vector<Refine::Level> tie2 = {makeLevel(-300.0, 5), makeLevel(200.0, 5)};
+  TEST_EQUAL(Refine::capLevels(tie2, {7.0, 7.0}, 1), 1)
+  TEST_EQUAL(exclusionName(tie2[0].excluded), std::string("capped"))
+  TEST_EQUAL(exclusionName(tie2[1].excluded), std::string("none"))
+
+  // end to end through detect, where the tie-break is the summed intensity of the masses each level's ions match: +42.01 on
+  // b1, b3, b5 (intensity 1 each) and +80.00 on b2, b4, b6 (intensity 100 each), both of signal 3 (both shifts on the grid)
+  const Refine::Ladder lad = Refine::ladder("GASPVTLNDKEF", {"b", "y"});
+  std::vector<std::pair<double, double>> mi = {{lad.prefix[0] + 42.01, 1.0},   {lad.prefix[2] + 42.01, 1.0},
+                                               {lad.prefix[4] + 42.01, 1.0},   {lad.prefix[1] + 80.00, 100.0},
+                                               {lad.prefix[3] + 80.00, 100.0}, {lad.prefix[5] + 80.00, 100.0}};
+  std::sort(mi.begin(), mi.end());
+  std::vector<double> masses, intensities;
+  for (const auto& p : mi)
+  {
+    masses.push_back(p.first);
+    intensities.push_back(p.second);
+  }
+  RefineSettings s;
+  const Refine::Detect all = Refine::detect(masses, intensities, lad, s);
+  TEST_EQUAL(all.cut, 3)
+  TEST_EQUAL(all.levels.size(), 2)
+  TEST_EQUAL(all.n_kept, 2)
+  s.max_levels = 1;
+  const Refine::Detect one = Refine::detect(masses, intensities, lad, s);
+  TEST_EQUAL(one.levels.size(), 2)
+  TEST_EQUAL(one.n_kept, 1)
+  for (const auto& l : one.levels)
+  {
+    TEST_EQUAL(l.signal, 3)
+    TEST_EQUAL(exclusionName(l.excluded), std::string(std::fabs(l.shift - 80.00) < 0.006 ? "none" : "capped"))
+  }
 }
 END_SECTION
 
@@ -200,10 +381,11 @@ START_SECTION(no_level_gives_cut_zero)
   const Refine::Ladder lad = Refine::ladder("PEPTIDEK", {"b", "y"});
   std::vector<double> masses = concat(lad.prefix, lad.suffix);
   std::sort(masses.begin(), masses.end());
-  const Refine::Detect d = Refine::detect(masses, lad, RefineSettings());
+  const Refine::Detect d = Refine::detect(masses, std::vector<double>(masses.size(), 1.0), lad, RefineSettings());
   TEST_EQUAL(d.observed_at_zero, 14)
   TEST_EQUAL(d.cut, 0)
   TEST_EQUAL(d.levels.size(), 0)
+  TEST_EQUAL(d.n_kept, 0)
   TEST_EQUAL(d.fdr_by_height.size(), 61)
   TEST_EQUAL(std::count(d.fdr_by_height.begin() + 1, d.fdr_by_height.end(), -1.0), 60)
 }
@@ -223,7 +405,7 @@ START_SECTION(etd_scan_detects_on_c_and_z)
 
   std::vector<double> masses;
   for (double c : lad.prefix) masses.push_back(c + 42.0106);
-  const Refine::Detect d = Refine::detect(masses, lad, RefineSettings());
+  const Refine::Detect d = Refine::detect(masses, std::vector<double>(masses.size(), 1.0), lad, RefineSettings());
   TEST_EQUAL(d.observed_at_zero, 0)
   TEST_EQUAL(d.cut >= 3, true)
   const auto it = std::find_if(d.levels.begin(), d.levels.end(), [](const Refine::Level& l) { return std::fabs(l.shift - 42.01) < 0.006; });
@@ -233,123 +415,175 @@ START_SECTION(etd_scan_detects_on_c_and_z)
     TEST_EQUAL(it->signal, 7)
     TEST_EQUAL(it->n_prefix, 7)
     TEST_EQUAL(it->n_suffix, 0)
-    TEST_EQUAL(it->neutral_loss, false)
+    TEST_EQUAL(exclusionName(it->excluded), std::string("none"))
   }
 }
 END_SECTION
 
-// ---- the report's cytochrome c scan: Detect, Assemble (column_dp_v85.py), the targets (targets_v88.py), the recount ----
+// ---- the report's cytochrome c scan at the engine's DEFAULTS: Detect, Assemble, the targets, the recount ----
+// Every expected value comes from refine_expected_cytc.tsv, written by make_refine_tables.py --cytc: the vendored prototype with
+// the 2026-10-12 amendments (alpha 0.2, neutral-loss + neutron-satellite exclusions, cap 20, penalty 2) layered over it. These
+// are not the report's settings (alpha 0.5, penalty 1), so the numbers are not the report's either.
 
 const MassList fx = loadMassList(FI_REFINE_CYTC);
+const std::map<std::string, std::string> cytc_expected = loadQuantities(FI_REFINE_EXPECTED_CYTC);
 RefineSettings cytc_settings;
-cytc_settings.tolerance_ppm = 10; // defaults otherwise: fdr 0.5, K 300, grid 0.01, +-700, min 3
+cytc_settings.tolerance_ppm = 10; // and nothing else: every other setting is the engine default
 const Refine::Ladder cytc_ladder = Refine::ladder(CYTC105, {"b", "y"});
-const Refine::Detect cytc_detect = Refine::detect(fx.masses, cytc_ladder, cytc_settings);
+const Refine::Detect cytc_detect = Refine::detect(fx.masses, fx.intensities, cytc_ladder, cytc_settings);
 const Refine::Assemble cytc_assemble = Refine::assemble(fx.masses, fx.intensities, cytc_ladder, cytc_detect, cytc_settings);
 
-START_SECTION(cytc_detect_reproduces_the_report)
+// the table's value for a key ("" when absent, which every caller turns into a failure), as words / an int / a double
+auto expected = [&](const std::string& key) {
+  const auto it = cytc_expected.find(key);
+  if (it == cytc_expected.end()) std::cout << "    refine_expected_cytc.tsv has no '" << key << "'\n";
+  return it == cytc_expected.end() ? std::string() : it->second;
+};
+auto expectedInt = [&](const std::string& key) {
+  const std::string v = expected(key);
+  return v.empty() ? -999999 : std::stoi(v);
+};
+// "total 526.14 S 61 shifts 2 N 65" -> {total, S, shifts, N}
+struct BestRow
 {
+  double total = 0;
+  int score = -1, jumps = -1, ions = -1;
+};
+auto expectedBest = [&](const std::string& key) {
+  const std::vector<std::string> w = words(expected(key));
+  BestRow r;
+  if (w.size() == 8)
+  {
+    r.total = std::stod(w[1]);
+    r.score = std::stoi(w[3]);
+    r.jumps = std::stoi(w[5]);
+    r.ions = std::stoi(w[7]);
+  }
+  return r;
+};
+
+START_SECTION(cytc_detect_matches_the_defaults_table)
+{
+  TEST_EQUAL(cytc_expected.empty(), false)
   TEST_EQUAL(fx.masses.size(), 150)
-  TEST_EQUAL(cytc_detect.observed_at_zero, 36)
-  TEST_EQUAL(cytc_detect.cut, 4) // 73.7 % at 3, 44.4 % at 4 (K = 10,000); K = 300 gives the same cut
-  TEST_REAL_SIMILAR_ABS(cytc_detect.fdr_by_height[3], 0.737, 0.05)
-  TEST_REAL_SIMILAR_ABS(cytc_detect.fdr_by_height[4], 0.444, 0.05)
-  TEST_EQUAL(cytc_detect.levels.size(), 26)
-  int kept = 0, n_b = 0, n_y = 0;
+  TEST_EQUAL(cytc_detect.observed_at_zero, expectedInt("explained_unshifted"))
+  TEST_EQUAL(cytc_detect.cut, expectedInt("cut")) // 5 at alpha 0.2 (FDR 0.44 at 4, 0.18 at 5)
+  int fdr_rows = 0;
+  for (int h = 1; h <= 60; ++h)
+  {
+    const auto it = cytc_expected.find("fdr_h" + std::to_string(h));
+    if (it == cytc_expected.end()) continue;
+    ++fdr_rows;
+    // the decoys are another shuffle stream (std::mt19937_64 against numpy's), so the FDR agrees only within the noise of K 300
+    TEST_REAL_SIMILAR_ABS(cytc_detect.fdr_by_height[h], std::stod(it->second), 0.05)
+  }
+  TEST_EQUAL(fdr_rows >= 2, true)
+  const int n_levels = expectedInt("levels");
+  TEST_EQUAL(static_cast<int>(cytc_detect.levels.size()), n_levels)
+  TEST_EQUAL(cytc_detect.n_kept, expectedInt("levels_kept"))
+  int none = 0, nl = 0, sat = 0, capped = 0, n_b = 0, n_y = 0;
   for (const auto& l : cytc_detect.levels)
   {
-    if (l.neutral_loss) continue;
-    ++kept;
+    none += l.excluded == Refine::Level::Exclusion::None;
+    nl += l.excluded == Refine::Level::Exclusion::NeutralLoss;
+    sat += l.excluded == Refine::Level::Exclusion::NeutronSatellite;
+    capped += l.excluded == Refine::Level::Exclusion::Capped;
+    if (l.excluded != Refine::Level::Exclusion::None) continue;
     n_b += l.n_prefix > 0;
     n_y += l.n_suffix > 0;
   }
-  TEST_EQUAL(kept, 22) // -18.02, -17.02, +508.12, +637.18 flagged
-  TEST_EQUAL(n_b, 11)
-  TEST_EQUAL(n_y, 15)
-  auto level = [&](double shift) {
-    return *std::min_element(cytc_detect.levels.begin(), cytc_detect.levels.end(),
-                             [&](const Refine::Level& a, const Refine::Level& b) { return std::fabs(a.shift - shift) < std::fabs(b.shift - shift); });
-  };
-  const Refine::Level nt = level(-89.03), heme = level(526.14), nh3 = level(-17.02);
-  TEST_REAL_SIMILAR_ABS(nt.shift, -89.03, 0.006)
-  TEST_EQUAL(nt.signal, 7)
-  TEST_EQUAL(nt.n_prefix, 7)
-  TEST_EQUAL(nt.n_suffix, 0)
-  TEST_REAL_SIMILAR_ABS(heme.shift, 526.14, 0.006)
-  TEST_EQUAL(heme.signal, 23)
-  TEST_EQUAL(heme.n_prefix, 23)
-  TEST_EQUAL(heme.n_suffix, 0)
-  TEST_REAL_SIMILAR_ABS(nh3.shift, -17.02, 0.006)
-  TEST_EQUAL(nh3.neutral_loss, true)
-  TEST_EQUAL(nh3.n_suffix, 6)
-  int flagged_lt = 0; // the four flagged levels, by shift
-  for (double x : {-18.02, -17.02, 508.12, 637.18}) flagged_lt += level(x).neutral_loss && std::fabs(level(x).shift - x) < 0.006;
-  TEST_EQUAL(flagged_lt, 4)
+  TEST_EQUAL(none, expectedInt("levels_kept"))
+  TEST_EQUAL(nl, expectedInt("excluded_neutral_loss"))
+  TEST_EQUAL(sat, expectedInt("excluded_neutron_satellite"))
+  TEST_EQUAL(capped, expectedInt("excluded_capped"))
+  TEST_EQUAL(n_b, expectedInt("lambda_b"))
+  TEST_EQUAL(n_y, expectedInt("lambda_y"))
+  // every level, ascending shift: shift, signal, typed counts, exclusion
+  for (int i = 0; i < n_levels && i < static_cast<int>(cytc_detect.levels.size()); ++i)
+  {
+    const std::vector<std::string> w = words(expected("level" + std::to_string(i + 1)));
+    TEST_EQUAL(w.size(), 5)
+    if (w.size() != 5) continue;
+    const Refine::Level& l = cytc_detect.levels[i];
+    TEST_REAL_SIMILAR_ABS(l.shift, std::stod(w[0]), 0.006)
+    TEST_EQUAL(l.signal, std::stoi(w[1]))
+    TEST_EQUAL(l.n_prefix, std::stoi(w[2]))
+    TEST_EQUAL(l.n_suffix, std::stoi(w[3]))
+    TEST_EQUAL(exclusionName(l.excluded), w[4])
+  }
 }
 END_SECTION
 
-START_SECTION(cytc_assemble_reproduces_the_report)
+START_SECTION(cytc_assemble_matches_the_defaults_table)
 {
   const auto& c = cytc_assemble.candidates;
-  TEST_EQUAL(c.size(), 182) // one best path per lambda_k
-  const auto& best = c[0];
-  TEST_REAL_SIMILAR_ABS(best.total, 526.14, 0.01)
-  TEST_EQUAL(best.score, 63)
-  TEST_EQUAL(best.jumps, 2)
-  TEST_EQUAL(best.ions, 65)
-  TEST_EQUAL(best.levels.size(), 3)
-  TEST_REAL_SIMILAR_ABS(best.levels[0], 0.0, 1e-9)
-  TEST_REAL_SIMILAR_ABS(best.levels[1], -89.03, 0.01)
-  TEST_REAL_SIMILAR_ABS(best.levels[2], 526.14, 0.01)
-  TEST_EQUAL(best.windows.size(), 2)
-  TEST_EQUAL(best.windows[0].first, 1)
-  TEST_EQUAL(best.windows[0].second, 8)
-  TEST_EQUAL(best.windows[1].first, 14)
-  TEST_EQUAL(best.windows[1].second, 22)
-  int nb = 0, ny = 0;
-  for (const auto& ion : best.ions_explained) (isPrefixIon(ion.type) ? nb : ny)++;
-  TEST_EQUAL(nb, 29)
-  TEST_EQUAL(ny, 36)
-  TEST_EQUAL(best.ions_explained.size(), 65)
-
-  const auto& second = c[1];
-  TEST_REAL_SIMILAR_ABS(second.total, 655.19, 0.01)
-  TEST_EQUAL(second.score, 50)
-  TEST_EQUAL(second.jumps, 5)
-  TEST_EQUAL(second.ions, 55) // 55 ions from 52 masses (targets_v88.py)
-  TEST_EQUAL(second.levels.size(), 6)
-  const double second_levels[] = {0.0, -89.03, 526.14, 799.56, 171.18, 655.19};
-  for (size_t j = 0; j < 6; ++j) TEST_REAL_SIMILAR_ABS(second.levels[j], second_levels[j], 0.01)
-  const std::pair<int, int> second_windows[] = {{1, 8}, {14, 22}, {35, 35}, {38, 42}, {44, 45}};
-  TEST_EQUAL(second.windows.size(), 5)
-  for (size_t j = 0; j < 5 && j < second.windows.size(); ++j)
+  TEST_EQUAL(static_cast<int>(c.size()), expectedInt("totals")) // one best path per lambda_k
+  TEST_EQUAL(c.size() >= 6, true)
+  if (c.size() >= 6)
   {
-    TEST_EQUAL(second.windows[j].first, second_windows[j].first)
-    TEST_EQUAL(second.windows[j].second, second_windows[j].second)
+    // the best two, exactly; S = ions - jump_penalty x jumps
+    for (int i = 0; i < 2; ++i)
+    {
+      const std::string k = "best" + std::to_string(i + 1);
+      const BestRow e = expectedBest(k);
+      TEST_REAL_SIMILAR_ABS(c[i].total, e.total, 0.01)
+      TEST_EQUAL(c[i].score, e.score)
+      TEST_EQUAL(c[i].jumps, e.jumps)
+      TEST_EQUAL(c[i].ions, e.ions)
+      TEST_EQUAL(c[i].score, c[i].ions - cytc_settings.jump_penalty * c[i].jumps)
+      const std::vector<std::string> lv = words(expected(k + "_levels"));
+      TEST_EQUAL(c[i].levels.size(), lv.size())
+      for (size_t j = 0; j < lv.size() && j < c[i].levels.size(); ++j) TEST_REAL_SIMILAR_ABS(c[i].levels[j], std::stod(lv[j]), 0.01)
+      const std::vector<std::string> wd = words(expected(k + "_windows"));
+      TEST_EQUAL(c[i].windows.size(), wd.size())
+      for (size_t j = 0; j < wd.size() && j < c[i].windows.size(); ++j)
+      {
+        const size_t d = wd[j].find('-');
+        TEST_EQUAL(c[i].windows[j].first, std::stoi(wd[j].substr(0, d)))
+        TEST_EQUAL(c[i].windows[j].second, std::stoi(wd[j].substr(d + 1)))
+      }
+      const std::vector<std::string> by = words(expected(k + "_ions_b_y"));
+      int nb = 0, ny = 0;
+      for (const auto& ion : c[i].ions_explained) (isPrefixIon(ion.type) ? nb : ny)++;
+      TEST_EQUAL(by.size(), 2)
+      if (by.size() == 2)
+      {
+        TEST_EQUAL(nb, std::stoi(by[0]))
+        TEST_EQUAL(ny, std::stoi(by[1]))
+      }
+      TEST_EQUAL(static_cast<int>(c[i].ions_explained.size()), c[i].ions)
+    }
+    // third..fifth tie on S and jumps (the table says how many totals share that pair): the same set, ordered by intensity_sum
+    const BestRow b3 = expectedBest("best3");
+    const int ties = expectedInt("ties_with_best3");
+    TEST_EQUAL(ties, 3) // the table's tie block is exactly best3..best5; a wider tie would need another assertion shape
+    std::multiset<long> want, got;
+    for (int i = 2; i < 5; ++i)
+    {
+      const BestRow e = expectedBest("best" + std::to_string(i + 1));
+      TEST_EQUAL(e.score, b3.score)
+      TEST_EQUAL(e.jumps, b3.jumps)
+      want.insert(std::lround(e.total * 100));
+      got.insert(std::lround(c[i].total * 100));
+      TEST_EQUAL(c[i].score, e.score)
+      TEST_EQUAL(c[i].jumps, e.jumps)
+      TEST_EQUAL(c[i].ions, e.ions)
+    }
+    TEST_EQUAL(got == want, true)
+    TEST_EQUAL(c[2].intensity_sum >= c[3].intensity_sum && c[3].intensity_sum >= c[4].intensity_sum, true)
+    TEST_EQUAL(c[5].score < b3.score || (c[5].score == b3.score && c[5].jumps > b3.jumps), true) // nothing else ties the three
   }
-
-  // third..fifth: +412.04 / +525.12 / +655.22, all S 49, N 52, 3 mass shifts; their order is intensity_sum, descending
-  std::multiset<long> totals;
-  for (size_t i = 2; i < 5; ++i)
-  {
-    totals.insert(std::lround(c[i].total * 100));
-    TEST_EQUAL(c[i].score, 49)
-    TEST_EQUAL(c[i].ions, 52)
-    TEST_EQUAL(c[i].jumps, 3)
-  }
-  TEST_EQUAL(totals == std::multiset<long>({41204, 52512, 65522}), true)
-  TEST_EQUAL(c[2].intensity_sum >= c[3].intensity_sum && c[3].intensity_sum >= c[4].intensity_sum, true)
-  TEST_EQUAL(c[5].score < 49 || (c[5].score == 49 && c[5].jumps > 3), true) // nothing else ties the three
 }
 END_SECTION
 
 const std::vector<Refine::Discriminating> cytc_targets =
   Refine::discriminating(cytc_assemble.candidates[0], cytc_assemble.candidates[1], fx.masses, fx.intensities);
 
-START_SECTION(cytc_discriminating_masses_reproduce_the_report)
+START_SECTION(cytc_discriminating_masses_match_the_defaults_table)
 {
   const auto& t = cytc_targets;
-  TEST_EQUAL(t.size(), 21)
+  const int n = expectedInt("targets");
+  TEST_EQUAL(static_cast<int>(t.size()), n)
   int only_a = 0, only_b = 0, both = 0;
   for (const auto& x : t)
   {
@@ -357,39 +591,23 @@ START_SECTION(cytc_discriminating_masses_reproduce_the_report)
     only_b += !x.ion_a && x.ion_b;
     both += x.ion_a && x.ion_b;
   }
-  TEST_EQUAL(only_a, 15)
-  TEST_EQUAL(only_b, 2)
-  TEST_EQUAL(both, 4)
-  TEST_REAL_SIMILAR_ABS(t[0].mass, 8111.25, 0.01)
-  TEST_EQUAL(label(t[0].ion_a), "y71")
-  TEST_EQUAL(label(t[0].ion_b), "-")
-  // the whole list of targets_v88.txt, most intense first: mass, reported path's ion, +655.19 path's ion
-  const struct
+  TEST_EQUAL(only_a, expectedInt("targets_only_a"))
+  TEST_EQUAL(only_b, expectedInt("targets_only_b"))
+  TEST_EQUAL(both, expectedInt("targets_both"))
+  // the whole list, most intense first: mass, the best path's ion, the second's
+  for (int i = 0; i < n && i < static_cast<int>(t.size()); ++i)
   {
-    double mass;
-    const char* a;
-    const char* b;
-  } report[] = {{8111.25, "y71", "-"},  {6036.92, "b51", "-"},  {7649.77, "b65", "y68"}, {7435.65, "b63", "b62"}, {5255.60, "b44", "-"},
-                {7780.82, "b66", "-"},  {7177.56, "b61", "-"},  {5921.90, "b50", "-"},   {7909.86, "b67", "b66"}, {4297.06, "b35", "-"},
-                {5657.79, "b48", "-"},  {8072.92, "b68", "-"},  {9441.70, "b80", "-"},   {5556.74, "b47", "-"},   {8054.22, "y70", "-"},
-                {8315.04, "b70", "b69"}, {9960.94, "b85", "-"}, {6107.95, "b52", "-"},   {6222.01, "b53", "-"},   {5538.72, "-", "b46"},
-                {7650.78, "-", "y62"}};
-  for (size_t i = 0; i < 21 && i < t.size(); ++i)
-  {
-    TEST_REAL_SIMILAR_ABS(t[i].mass, report[i].mass, 0.01)
-    TEST_EQUAL(label(t[i].ion_a), report[i].a)
-    TEST_EQUAL(label(t[i].ion_b), report[i].b)
-  }
-  // masses both paths explain as the same ion are shared, not targets: y39 on 4570.49 and y40 on 4701.52 Da
-  for (const auto& x : t)
-  {
-    TEST_EQUAL(std::fabs(x.mass - 4570.49) > 0.01, true)
-    TEST_EQUAL(std::fabs(x.mass - 4701.52) > 0.01, true)
+    const std::vector<std::string> w = words(expected("target" + std::to_string(i + 1)));
+    TEST_EQUAL(w.size(), 3)
+    if (w.size() != 3) continue;
+    TEST_REAL_SIMILAR_ABS(t[i].mass, std::stod(w[0]), 0.01)
+    TEST_EQUAL(label(t[i].ion_a), w[1])
+    TEST_EQUAL(label(t[i].ion_b), w[2])
   }
 }
 END_SECTION
 
-START_SECTION(cytc_recount_after_july_ms3_reproduces_the_report)
+START_SECTION(cytc_recount_after_july_ms3_matches_the_defaults_table)
 {
   // july_ms3_pieces.tsv: for each of b47, b48, b51 the pooled deconvolved masses of its 14 July MS3 scans
   const std::map<std::string, DeconvolvedSpectrum> july = loadJulyPieces(FI_REFINE_JULY);
@@ -409,12 +627,13 @@ START_SECTION(cytc_recount_after_july_ms3_reproduces_the_report)
     confirmed[i] = {v.fits_a, v.fits_b};
   }
   TEST_EQUAL(tested, 3)
-  const Refine::Recount r = Refine::recount(a, b, cytc_targets, confirmed);
-  // shared 46 = 65−19 = 52−6; the 49/45 of the V79 script was against +637.18, excluded as a water loss since V85
-  TEST_EQUAL(r.score_a, 47) // 46 + 3 - 2
-  TEST_EQUAL(r.score_b, 41) // 46 + 0 - 5
-  TEST_EQUAL(r.confirmed_a, 3)
+  const Refine::Recount r = Refine::recount(a, b, cytc_targets, confirmed, cytc_settings.jump_penalty);
+  // S after MS3 = shared + confirmed - 2 x jumps, the best path (2 jumps) against the second (3 jumps)
+  TEST_EQUAL(r.score_a, expectedInt("recount_a"))
+  TEST_EQUAL(r.score_b, expectedInt("recount_b"))
+  TEST_EQUAL(r.confirmed_a, expectedInt("recount_confirmed_a"))
   TEST_EQUAL(r.confirmed_b, 0)
+  TEST_EQUAL(r.score_a - r.confirmed_a + cytc_settings.jump_penalty * a.jumps, expectedInt("recount_shared"))
   TEST_EQUAL(r.a_wins, true)
 }
 END_SECTION
@@ -444,7 +663,9 @@ START_SECTION(tie_on_score_and_shifts_resolves_by_intensity)
   d.levels[1].shift = 20.0;
   d.levels[1].signal = 3;
   d.levels[1].n_suffix = 2;
-  const Refine::Assemble a = Refine::assemble(masses, intensities, lad, d, RefineSettings());
+  RefineSettings s;
+  s.jump_penalty = 1; // the case is built at penalty 1: at 2, total 0 (4 ions, no jump) would tie both on S and win on jumps
+  const Refine::Assemble a = Refine::assemble(masses, intensities, lad, d, s);
   TEST_EQUAL(a.candidates.size(), 4)
   TEST_REAL_SIMILAR_ABS(a.candidates[0].total, 10.0, 1e-9)
   TEST_REAL_SIMILAR_ABS(a.candidates[1].total, 20.0, 1e-9)
@@ -554,6 +775,85 @@ START_SECTION(no_level_gives_one_candidate)
   TEST_EQUAL(a.candidates[0].levels.size(), 1)
   TEST_EQUAL(a.candidates[0].windows.size(), 0)
   TEST_REAL_SIMILAR_ABS(a.candidates[0].intensity_sum, 3.0, 1e-12)
+}
+END_SECTION
+
+START_SECTION(jump_penalty_two_rejects_a_two_ion_excursion)
+{
+  // A 10-residue sequence, b ions only. Unshifted: b1, b2 and b8. The excursion 0 -> +42.0106 (sites 3, 4) -> +100.0 (sites 5
+  // on): b3+d, b4+d, b5+l, b6+l. Total 0 stays at 0: b1, b2, b8 = 3 ions, 0 jumps. Total +100 through +42.01: b1, b2, b3+d,
+  // b4+d, b5+l, b6+l = 6 ions, 2 jumps -- the excursion buys exactly 3 ions (it loses b8). The alternatives: total +42.01 has
+  // 4 ions with 1 jump, total +100 straight from 0 has 4 ions with 1 jump.
+  const Refine::Ladder lad = Refine::ladder("GASPVTLNDK", {"b", "y"});
+  const double d = 42.0106, l = 100.0;
+  std::vector<double> masses = {lad.prefix[0],     lad.prefix[1],     lad.prefix[2] + d, lad.prefix[3] + d,
+                                lad.prefix[4] + l, lad.prefix[5] + l, lad.prefix[7]};
+  std::sort(masses.begin(), masses.end());
+  const std::vector<double> intensities(masses.size(), 1.0);
+  Refine::Detect det;
+  det.cut = 2;
+  det.levels = {makeLevel(d, 2), makeLevel(l, 2)};
+  det.levels[0].n_prefix = 2;
+  det.levels[1].n_prefix = 2;
+  det.n_kept = 2;
+  auto at = [](const Refine::Assemble& a, double total) {
+    return *std::find_if(a.candidates.begin(), a.candidates.end(), [total](const Refine::Path& p) { return std::fabs(p.total - total) < 1e-6; });
+  };
+
+  RefineSettings s1;
+  s1.jump_penalty = 1;
+  const Refine::Assemble a1 = Refine::assemble(masses, intensities, lad, det, s1);
+  TEST_EQUAL(a1.candidates.size(), 3) // totals 0, +42.01, +100
+  TEST_REAL_SIMILAR_ABS(a1.candidates[0].total, l, 1e-6)
+  TEST_EQUAL(a1.candidates[0].jumps, 2)
+  TEST_EQUAL(a1.candidates[0].ions, 6)
+  TEST_EQUAL(a1.candidates[0].score, 4) // 6 - 1 x 2, against 3 (total 0) and 4 - 1 = 3 (total +42.01)
+  TEST_EQUAL(a1.candidates[0].levels.size(), 3)
+  TEST_EQUAL(at(a1, 0.0).score, 3)
+  TEST_EQUAL(at(a1, d).score, 3)
+
+  RefineSettings s2; // the default, 2
+  TEST_EQUAL(s2.jump_penalty, 2)
+  const Refine::Assemble a2 = Refine::assemble(masses, intensities, lad, det, s2);
+  TEST_EQUAL(a2.candidates.size(), 3)
+  TEST_REAL_SIMILAR_ABS(a2.candidates[0].total, 0.0, 1e-12)
+  TEST_EQUAL(a2.candidates[0].jumps, 0)
+  TEST_EQUAL(a2.candidates[0].ions, 3)
+  TEST_EQUAL(a2.candidates[0].score, 3)
+  // total +100 now prefers the straight path (4 ions, 1 jump: 4 - 2 = 2) over the excursion (6 - 4 = 2) on the tie -- fewer jumps
+  const Refine::Path p100 = at(a2, l);
+  TEST_EQUAL(p100.jumps, 1)
+  TEST_EQUAL(p100.ions, 4)
+  TEST_EQUAL(p100.score, 2)
+  for (const auto& p : a2.candidates) TEST_EQUAL(p.score, p.ions - 2 * p.jumps)
+}
+END_SECTION
+
+START_SECTION(recount_charges_the_penalty)
+{
+  // path a explains masses 0..10, path b masses 0..9 and 11: shared 10; the two targets are mass 10 (a only) and mass 11
+  // (b only); MS3 confirmed a's. a has 2 jumps, b 3.
+  Refine::Path a, b;
+  a.jumps = 2;
+  b.jumps = 3;
+  for (int m = 0; m <= 10; ++m) a.ions_explained.push_back(Refine::Path::Ion{'b', m + 1, m, 0.0, 1000.0 + m});
+  for (int m = 0; m <= 9; ++m) b.ions_explained.push_back(Refine::Path::Ion{'b', m + 1, m, 0.0, 1000.0 + m});
+  b.ions_explained.push_back(Refine::Path::Ion{'y', 3, 11, 0.0, 1011.0});
+  std::vector<Refine::Discriminating> targets(2);
+  targets[0].mass_idx = 10;
+  targets[0].ion_a = a.ions_explained.back();
+  targets[1].mass_idx = 11;
+  targets[1].ion_b = b.ions_explained.back();
+  const std::vector<std::pair<bool, bool>> confirmed = {{true, false}, {false, false}};
+  const Refine::Recount r2 = Refine::recount(a, b, targets, confirmed, 2);
+  TEST_EQUAL(r2.confirmed_a, 1)
+  TEST_EQUAL(r2.confirmed_b, 0)
+  TEST_EQUAL(r2.score_a, 7) // 10 + 1 - 2 x 2
+  TEST_EQUAL(r2.score_b, 4) // 10 + 0 - 2 x 3
+  TEST_EQUAL(r2.a_wins, true)
+  const Refine::Recount r1 = Refine::recount(a, b, targets, confirmed, 1);
+  TEST_EQUAL(r1.score_a, 9) // 10 + 1 - 2
+  TEST_EQUAL(r1.score_b, 7) // 10 + 0 - 3
 }
 END_SECTION
 
