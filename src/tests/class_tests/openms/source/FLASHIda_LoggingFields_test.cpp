@@ -33,6 +33,7 @@
 
 #include "FLASHIda_TestHelpers.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
@@ -236,8 +237,11 @@ START_SECTION(schema_column_counts)
   // I2: +6 iso/snr/intensity; P5: +precursor_id; +theoretical_masses/diff_da/diff_ppm; C2:
   // +ms3_fragment_coverage; + tic_coverage; C: + flash_extender_score; then + tag_count (beside
   // flash_extender_score, the other "how strong is this ID" scalar) and + fragment_qscores (inside the
-  // aligned fragment-mass table it is index-parallel with) -> 32 -> 34. tic_coverage stays LAST.
-  TEST_EQUAL(i.headers.size(), 34)
+  // aligned fragment-mass table it is index-parallel with) -> 32 -> 34. Then ADR-0049: + annotation_score/
+  // total_shift/second_total_shift/second_score/cut/n_levels/precursor_mass_difference, Refine's candidate
+  // record, APPENDED after tic_coverage (34 -> 41) so every i.colIndex pinned below is unchanged and only
+  // this count and i.headers.back() move. Sentinel-valued under characterization.method flashtnt.
+  TEST_EQUAL(i.headers.size(), 41)
 
   // Spot-check exact header identities / order at the boundaries that matter for parsing.
   // NOTE: the four log streams were reordered for human legibility (LOG_COLUMN_ORDER_REFERENCE.md);
@@ -266,7 +270,14 @@ START_SECTION(schema_column_counts)
   TEST_EQUAL(r.colIndex("fragment_count"), 14)
   TEST_EQUAL(r.colIndex("tic_coverage"), 15)
   TEST_EQUAL(i.headers.front(), std::string("tracking_id"))      // reordered: identification now leads with tracking_id
-  TEST_EQUAL(i.headers.back(), std::string("tic_coverage"))      // reordered: tic_coverage is now the trailing column
+  TEST_EQUAL(i.headers.back(), std::string("precursor_mass_difference"))  // ADR-0049: the refine block is appended last
+  TEST_EQUAL(i.colIndex("annotation_score"), 34)                // the refine block, pinned as a contiguous run
+  TEST_EQUAL(i.colIndex("total_shift"), 35)
+  TEST_EQUAL(i.colIndex("second_total_shift"), 36)
+  TEST_EQUAL(i.colIndex("second_score"), 37)
+  TEST_EQUAL(i.colIndex("cut"), 38)
+  TEST_EQUAL(i.colIndex("n_levels"), 39)
+  TEST_EQUAL(i.colIndex("precursor_mass_difference"), 40)
   TEST_EQUAL(i.colIndex("flash_extender_score"), 7)             // moved up next to proteoform
   TEST_EQUAL(i.colIndex("tag_count"), 8)                        // beside it: the other per-ID evidence scalar
   TEST_EQUAL(i.colIndex("fragment_qscores"), 31)                // inside the aligned table, right after diff_ppm
@@ -1983,6 +1994,108 @@ START_SECTION(identification_R_rows_universal)
       TEST_TRUE(posFinite(toD(cell(idf, row, "ms3_charge_intensity"))))
     }
   }
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// §I1b -- identification.tsv : ADR-0049 refine columns
+/////////////////////////////////////////////////////////////
+// Under characterization.method flashtnt (the default every committed config runs) no match carries a
+// RefineCandidates record, so every identification row -- MS2 and MS3 alike -- ends in the seven sentinels:
+// annotation_score -1, total_shift empty, second_total_shift empty, second_score -1, cut -1, n_levels -1,
+// precursor_mass_difference empty. Asserted on the RAW line, because a tab-splitting parser can drop the
+// trailing empty field and the trailing-empty cell is exactly what is being pinned.
+START_SECTION(identification_refine_columns_are_sentinels_under_flashtnt)
+{
+  auto ms1 = loadTsvScans(CYTC_MS1);
+  auto ms2 = loadTsvScans(CYTC_MS2);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  const std::string dir = freshLogDir("lf_i1b");
+  std::string json = buildJsonWithLogDir(dir, true);
+  FLASHIda ida(const_cast<char*>(json.c_str()));
+  runFullCycle(&ida, ms1, ms2);
+
+  std::ifstream in(dir + "/identification.tsv");
+  std::string line;
+  std::getline(in, line);  // header
+  const std::string sentinel_tail = "\t-1\t\t\t-1\t-1\t-1\t";
+  int n_rows = 0, n_ms2 = 0;
+  while (std::getline(in, line))
+  {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    if (line.empty()) continue;
+    ++n_rows;
+    // 41 columns = 40 tabs, whatever the row type
+    TEST_EQUAL(std::count(line.begin(), line.end(), '\t'), 40)
+    const bool tail_ok = line.size() >= sentinel_tail.size()
+                         && line.compare(line.size() - sentinel_tail.size(), sentinel_tail.size(), sentinel_tail) == 0;
+    TEST_TRUE(tail_ok)
+    // ms_level is column 2
+    const size_t t1 = line.find('\t'), t2 = line.find('\t', t1 + 1), t3 = line.find('\t', t2 + 1);
+    if (line.substr(t2 + 1, t3 - t2 - 1) == "2") ++n_ms2;
+  }
+  TEST_TRUE(n_rows > 0)
+  TEST_TRUE(n_ms2 > 0)  // the MS2 identification row is the site Refine fills under method refine
+}
+END_SECTION
+
+// The writer's formatting of the seven columns, pinned on a descriptor built by hand from Refine's decision on
+// FI_REFINE_CYTC at the engine defaults (Refine_test: best S 61 at lambda 526.14, second S 46 at 655.19, cut 5,
+// 5 levels kept). Refine itself is not run here -- a mass list is not a spectrum, so processScan cannot reach it;
+// what is under test is that the values land in the right columns at the stream's float convention
+// (std::fixed, 4 decimals, set explicitly so no neighbouring precision is inherited) and that a single
+// candidate leaves second_total_shift empty and second_score -1.
+START_SECTION(identification_refine_columns_carry_the_candidates)
+{
+  const std::string dir = freshLogDir("lf_i1c");
+  Config cfg{buildJsonWithLogDir(dir, true)};
+  {
+    IdaLogger logger(cfg);
+
+    IdaLogger::IdRowDescriptor row;
+    row.tracking_id = "!!#";
+    row.ms_level = 2;
+    row.scan_mode = 'R';
+    row.match.proteoform_sequence = "GDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE";
+    FragmentAnalysis::ProteoformMatch::FragmentMatch f;
+    f.ion_type = "b";
+    f.ion_index = 10;
+    f.observed_mass = 1000.5;
+    row.match.fragments.push_back(f);
+    row.tic_coverage = 0.5f;
+    row.refine = true;
+    row.annotation_score = 61;
+    row.total_shift = 526.14;
+    row.has_second = true;
+    row.second_total_shift = 655.19;
+    row.second_score = 46;
+    row.cut = 5;
+    row.n_levels = 5;
+    row.precursor_mass_difference = -0.98;
+    logger.writeIdentificationRow(row);
+
+    // the same decision with a single candidate
+    row.has_second = false;
+    row.second_total_shift = 655.19;  // ignored without a second candidate
+    row.second_score = 46;            // ignored without a second candidate
+    logger.writeIdentificationRow(row);
+  }
+
+  std::ifstream in(dir + "/identification.tsv");
+  std::string header, two, one;
+  std::getline(in, header);
+  std::getline(in, two);
+  std::getline(in, one);
+  auto endsWith = [](const std::string& s, const std::string& tail) {
+    return s.size() >= tail.size() && s.compare(s.size() - tail.size(), tail.size(), tail) == 0;
+  };
+  // tic_coverage, then the seven
+  TEST_TRUE(endsWith(header, "\ttic_coverage\tannotation_score\ttotal_shift\tsecond_total_shift\tsecond_score\tcut\tn_levels\tprecursor_mass_difference"))
+  TEST_EQUAL(std::count(two.begin(), two.end(), '\t'), 40)
+  TEST_EQUAL(std::count(one.begin(), one.end(), '\t'), 40)
+  TEST_TRUE(endsWith(two, "\t0.5000\t61\t526.1400\t655.1900\t46\t5\t5\t-0.9800"))
+  TEST_TRUE(endsWith(one, "\t0.5000\t61\t526.1400\t\t-1\t5\t5\t-0.9800"))
 }
 END_SECTION
 

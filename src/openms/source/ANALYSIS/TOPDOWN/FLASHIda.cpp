@@ -37,6 +37,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/KineticModel.h>   // precursorShare on the regular MSn rows (ADR-0048)
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Refine.h>          // RefineCandidates for the identification refine columns (ADR-0049)
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanRole.h>
 #include <OpenMS/DATASTRUCTURES/ListUtils.h>
 
@@ -104,6 +105,28 @@ namespace OpenMS
         if (i < c.ballot_agreed.size() && c.ballot_agreed[i]) out += "*";
       }
       return out;
+    }
+
+    /// ADR-0049: fill identification.tsv's seven refine columns from the row's own match. A match Refine did not
+    /// decide (match.refine null: flashtnt, or no candidate record) leaves the descriptor at refine == false, so the
+    /// writer emits the sentinels. best = assemble.candidates[0], second = [1] when Assemble built more than one.
+    void fillRefineColumns(IdaLogger::IdRowDescriptor& row)
+    {
+      const auto& rec = row.match.refine;
+      if (!rec || rec->assemble.candidates.empty()) return;
+      const Refine::Path& best = rec->assemble.candidates[0];
+      row.refine = true;
+      row.annotation_score = best.score;
+      row.total_shift = best.total;
+      row.has_second = rec->assemble.candidates.size() > 1;
+      if (row.has_second)
+      {
+        row.second_total_shift = rec->assemble.candidates[1].total;
+        row.second_score = rec->assemble.candidates[1].score;
+      }
+      row.cut = rec->cut;
+      row.n_levels = rec->n_levels;
+      row.precursor_mass_difference = rec->precursor_mass_difference;
     }
   } // namespace
 
@@ -771,6 +794,8 @@ FLASHIda::FLASHIda(char* arg) :
             ms2_ctx.ms2_window_snr = parent_ctx.window_snr;  // Item 2: SNR travels on the command (was the queue map)
           }
           id_rows.push_back({parent_id_str, 2, 'R', ms2_ctx, ms3_targeting.proteoform_match, precursor_id, ms3_targeting.tic_coverage, ms3_targeting.proteoform_match.score});  // copy by value (ms2_ctx is local)
+          // ADR-0049: the regular MS2 row is the one Refine decides; every other id_rows site keeps the sentinels.
+          fillRefineColumns(id_rows.back());
         }
 
         int ms2_mass_count = deconv_.hasStoredMS2() ? static_cast<int>(deconv_.storedMS2().size()) : 0;

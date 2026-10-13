@@ -241,6 +241,18 @@ namespace OpenMS
       /// self-identify — it is a winner-re-matched non-winner row (fragments matched the WINNER ladder).
       /// Score presence is the sole distinguisher between self-ID rows and re-matched rows. Appended LAST.
       double flash_extender_score = -1.0;
+      /// ADR-0049: Refine's candidate record (characterization.method refine), the seven columns appended after
+      /// tic_coverage. Filled from match.refine on the MS2 identification row; when @p refine is false (flashtnt,
+      /// exploration, MS3) the writer emits the sentinels `-1`, ``, ``, `-1`, `-1`, `-1`, `` and ignores the values.
+      bool refine = false;
+      int annotation_score = -1;            ///< best path's S (assemble.candidates[0].score)
+      double total_shift = 0;               ///< best path's lambda_k (candidates[0].total)
+      bool has_second = false;              ///< a second candidate exists; else second_total_shift empty, second_score -1
+      double second_total_shift = 0;        ///< candidates[1].total
+      int second_score = -1;                ///< candidates[1].score
+      int cut = -1;                         ///< RefineCandidates::cut
+      int n_levels = -1;                    ///< RefineCandidates::n_levels (levels kept after both exclusions and the cap)
+      double precursor_mass_difference = 0; ///< RefineCandidates::precursor_mass_difference
     };
 
     /// One pooled_identification.tsv row: the current state of a ProteoformModel after each update.

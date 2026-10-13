@@ -194,7 +194,11 @@ namespace OpenMS
                                    // C2: MS3 per-ion fragment coverage (distinct backbone bonds / (L-1)); -1 on MS2.
                                    << "ms3_fragment_coverage\t"
                                    // Per-scan TIC / matched-fragment coverage (moved here from scan_results).
-                                   << "tic_coverage\n";
+                                   << "tic_coverage\t"
+                                   // ADR-0049: Refine's candidate record, APPENDED so no existing column moves.
+                                   // Sentinel-valued (-1 / empty) on every row Refine did not decide.
+                                   << "annotation_score\ttotal_shift\tsecond_total_shift\tsecond_score\t"
+                                   << "cut\tn_levels\tprecursor_mass_difference\n";
         identification_tsv_stream_.flush();
       }
     }
@@ -872,7 +876,27 @@ namespace OpenMS
       // C2: MS3 per-ion fragment coverage (distinct backbone bonds / (L-1)); -1 on MS2. std::fixed setprecision(4) in effect.
       << (ms_level == 3 ? match.ms3_fragment_coverage : -1.0f) << "\t"
       // Per-scan TIC / matched-fragment coverage (moved from scan_results); the scan's actual value at this row.
-      << row.tic_coverage << "\n";
+      << row.tic_coverage << "\t";
+    // ADR-0049: Refine's candidate record. The three doubles re-establish std::fixed + setprecision(4)
+    // themselves (the stream's float convention) rather than inheriting whatever the last field left sticky.
+    if (row.refine)
+    {
+      identification_tsv_stream_
+        << row.annotation_score << "\t"
+        << std::fixed << std::setprecision(4) << row.total_shift << "\t";
+      if (row.has_second)
+        identification_tsv_stream_ << std::fixed << std::setprecision(4) << row.second_total_shift << "\t" << row.second_score << "\t";
+      else
+        identification_tsv_stream_ << "\t" << -1 << "\t";
+      identification_tsv_stream_
+        << row.cut << "\t"
+        << row.n_levels << "\t"
+        << std::fixed << std::setprecision(4) << row.precursor_mass_difference << "\n";
+    }
+    else
+    {
+      identification_tsv_stream_ << "-1\t\t\t-1\t-1\t-1\t\n";
+    }
     identification_tsv_stream_.flush();
   }
 
