@@ -944,6 +944,13 @@ FLASHIda::FLASHIda(char* arg) :
           ms3_mass_count = deconv_.hasStoredMS2()
               ? static_cast<int>(deconv_.storedMS2().size()) : 0;
         }
+        else
+        {
+          // An MS3 that arrives with no peaks must not read back the PREVIOUS MSn deconvolution: deconvolveMSn
+          // clears the stored spectrum on entry (the MS2 branch calls it unconditionally), but this guard skipped
+          // it, so an empty MS3 was identified, folded and logged with the last scan's masses. Clear explicitly.
+          deconv_.clearStoredMS2();
+        }
 
         const DeconvolvedSpectrum* ms3_spec = deconv_.hasStoredMS2() ? &deconv_.storedMS2() : nullptr;
 
