@@ -204,23 +204,6 @@ namespace OpenMS
       return true;
     }
 
-    // Can the winner MS2 scan's raw masses be fragmented again? Asked by every planner that targets a raw winner-scan
-    // mass and copies m.winner_params into stage 0 (planExhaustive_, planDiscriminating_). ONE definition so the two
-    // can never disagree when the supported set changes; when the escalation ladder (ADR-0022) brings its own named
-    // predicate, fold this one into it rather than adding a second.
-    //
-    // NOT EMPTY *AND* NOT CAPABLE => refuse. An EMPTY activation counts as CAPABLE, and the asymmetry
-    // is deliberate: this mirrors upsertMappedObservation_'s only other capability test, whose comment
-    // records the reason at length. "" is not ETD -- it is "no activation recorded", which is what
-    // every hand-built C++ fixture and every scan config that omits the key produces. Failing closed on
-    // "" would return zero MS3 targets for all of them: a quieter failure than the one being prevented.
-    // (ADR-0023 decision 3 reads fail-closed; D-b corrects it.)
-    inline bool winnerIsMs3Capable(const ProteoformModel& m)
-    {
-      const std::string& act = m.winner_params.activation_type;
-      return act.empty() || act == "HCD" || act == "CID";
-    }
-
     // Does @p observed lie within the level-2 tolerance of a record's @p mass? The one test both finalizeMS2 (record ->
     // winner peak) and recordDiscriminatingScan (returned MS3 -> record) use.
     inline bool withinPpm(double mass, double observed, double tol_ppm)
@@ -855,9 +838,8 @@ namespace OpenMS
     // a scan archive: the pool is a property of the model, so the feature does not depend on any other
     // feature's retention policy for its raw material to still exist at plan time.
     if (m.winner_peaks.empty()) return no_plan("no_winner_scan");
-
-    // The capability test is winnerIsMs3Capable (shared with planDiscriminating_; see its comment).
-    if (!winnerIsMs3Capable(m)) return no_plan("winner_scan_not_ms3_capable");
+    // No activation test: an MS3's stage 0 replays the winner MS2 whatever its activation, ETD-family included
+    // (ADR-0054 d.1, amending ADR-0023 d.3). What an unannotatable target's MS3 yields is the matcher's business.
 
     const double min_target_mass = config_.characterization().min_target_mass;
     const int charge_floor = config_.level(2).min_charge;
@@ -1059,9 +1041,6 @@ namespace OpenMS
       return {};
     };
 
-    // Every target is a raw winner-scan mass re-fragmented with stage 0 = m.winner_params: the same refusal as exhaustive.
-    if (!winnerIsMs3Capable(m)) return dead_end("winner_scan_not_ms3_capable");
-
     // --- 1) The pool: records not dispatched, isolatable, of a species this Precursor has not fragmented ------------
     // The isolatability/charge-floor test is planExhaustive_'s (exhaustivePoolAdmits, no mass floor: min_target_mass is
     // exhaustive's knob) and for its reason: a mass Exploration drops downstream must not be stamped into the monotone
@@ -1189,6 +1168,23 @@ namespace OpenMS
     const std::vector<Refine::Path>& c = st.candidates->assemble.candidates;
     const Refine::Path& a = c[0];
     const Refine::Path& b = c[1];
+
+    // No dispatched record had a side the matcher can annotate (ADR-0054 d.4: an ETD winner's c/z records): the round
+    // ran, but no MS3 could confirm anything. The recount would then reduce to the MS2-only shared counts minus the jump
+    // penalties -- a second MS2 ranking that can flip the winner away from the higher-S path on no MS3 evidence at all.
+    // Keep path a instead, exactly as the dead_end fall-through does: no recount, no [MS3-DECIDE], no pooled row.
+    auto annotatable = [](const std::optional<Refine::Path::Ion>& ion) {
+      return ion && MS3FragmentMatcher::isAnnotatableMs3Precursor(ion->type);
+    };
+    bool any_annotatable = false;
+    for (const DiscriminatingRecord& r : st.records)
+      any_annotatable = any_annotatable || (r.dispatched && (annotatable(r.target.ion_a) || annotatable(r.target.ion_b)));
+    if (!any_annotatable)
+    {
+      st.decided = true;
+      std::cout << "[DISCRIMINATING] precursor_id=" << precursor_id << " decided=kept reason=no_annotatable_pieces" << std::endl;
+      return false;
+    }
 
     // EVERY record goes to the recount, not only the dispatched ones: shared = a path's explained masses minus the
     // targets it explains, so a partial target list would make the two shared counts disagree (Refine::recount throws).
