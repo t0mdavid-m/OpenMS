@@ -305,16 +305,27 @@ builds commands exclusively inside `if (model != nullptr && !model->proteoform_s
 every other path returns zero commands. No tracker, no finalized model, or an unidentified
 precursor ⇒ **zero MS3 by design**, with no intensity or legacy fallback.
 
-- **`characterization.mode`** (`off | ambiguity | coverage | exhaustive`) is the single MS3 switch
-  and also picks the targets: each of its **three** on-values *is* an objective, one for one
-  (ADR-0013, extended by ADR-0023). `Off` means no MS3 at all.
+- **`characterization.mode`** (`off | ambiguity | coverage | fragments | exhaustive | discriminating`)
+  is the single MS3 switch and also picks the targets: each on-value *is* an objective, one for one
+  (ADR-0013, extended by ADR-0023, ADR-0049, ADR-0052). `Off` means no MS3 at all.
+  **No objective is a set cover any more** (ADR-0052): `coverage` takes every fragment whose interior
+  still holds an MS2-unwitnessed bond, `fragments` every mapped fragment with a bond inside it, both
+  strongest `best_ms2` first until `max_targets`. The uncovered set is computed once and never
+  shrinks as targets are picked — the deleted `uncovered.erase` loop assumed an MS3 witnesses every
+  bond inside its parent and planned 2 of 67 targets on ubiquitin. One `eligible()` lambda in
+  `planNextScans` drops a **full-length ion** (`ion_index >= L`: b_L/y_L, the precursor itself) from
+  the ambiguity, coverage and fragments pools; it sits where the pools are BUILT, not in
+  `add_target`, whose `false` means "budget full" to callers that `break` on it. `planExhaustive_`
+  keeps full-length masses. The objective dispatch is now an explicit `if / else if / else` — the old
+  bare `else` meant any new objective silently ran coverage.
   **Unknown values throw** — the old `objective` parse was `if (== "coverage") … else Ambiguity`, so
   `"Coverage"` or any typo silently meant ambiguity, and with `mode` now carrying the on/off bit a
   typo'd `"Off"` would have silently *enabled* MS3. The struct still exposes
   `characterization().objective`, derived from `mode`, so every existing read site is unchanged.
   ⚠ **`mode` itself has zero read sites outside `Config.cpp`** — it is parsed, projected and quoted
   in error text there and nowhere else; the engine branches on `.objective`
-  (`ProteoformTracker.cpp:421`, `:524`). A new mode that does not also assign an objective therefore
+  (`ProteoformTracker::planNextScans`, plus one `== Discriminating` test in `FLASHIda.cpp`'s MS3
+  return path). A new mode that does not also assign an objective therefore
   ships byte-identical to `ambiguity`: accepted, green, and inert (ADR-0023 D-a).
 - **`exhaustive`** (ADR-0023) targets **every deconvolved mass of the winner MS2 scan**, not only the
   masses that matched the winning proteoform — in the reference cytC MS2 that is 117 masses rather
