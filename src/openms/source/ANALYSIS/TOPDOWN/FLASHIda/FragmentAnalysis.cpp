@@ -867,8 +867,9 @@ namespace
       line << " windows=";
       if (p.windows.empty()) line << '-';
       for (Size j = 0; j < p.windows.size(); ++j) line << (j > 0 ? ";" : "") << p.windows[j].first << '-' << p.windows[j].second;
-      std::cout << line.str() << std::endl;
+      std::cout << line.str() << '\n'; // no flush per candidate; one flush after the block
     }
+    std::cout << std::flush;
 
     result.tag_count = -1; // no tagger ran (identification.tsv's tag_count vocabulary)
     result.refine = rec;

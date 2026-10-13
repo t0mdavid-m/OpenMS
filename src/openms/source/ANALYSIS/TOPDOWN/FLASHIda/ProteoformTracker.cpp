@@ -566,7 +566,14 @@ namespace OpenMS
     // under ambiguity -- the branch below.
     if (obj == CharacterizationObjective::Discriminating)
     {
-      if (m.refine && !m.refine->decided) return planDiscriminating_(m, precursor_id, budget);
+      if (m.refine && !m.refine->decided)
+      {
+        std::vector<Ms3Target> plan = planDiscriminating_(m, precursor_id, budget);
+        // Still undecided: the round's plan (possibly empty while dispatched records await their return). Decided here
+        // means planDiscriminating_ found the round could never complete through MS3 and fell through: plan the same
+        // model as ambiguity in this same call rather than leave the precursor with no MS3 of any kind.
+        if (!m.refine->decided) return plan;
+      }
       obj = CharacterizationObjective::Ambiguity;
     }
 
@@ -1035,8 +1042,25 @@ namespace OpenMS
     RefineState& st = *m.refine;
     // One total (Detect found no level): nothing tells two paths apart, so there is nothing to acquire.
     if (st.records.empty() || !st.candidates || st.candidates->assemble.candidates.size() < 2) return no_plan("single_candidate");
+
+    // Nothing left to dispatch AND nothing awaiting a return: the round can never complete through the MS3 path, so the
+    // decision would never fire and the precursor would get no MS3 of any kind. Decide now (candidate 0 stands, no
+    // recount, no pooled row) and let planNextScans plan the model as ambiguity in the same call. A round with a
+    // dispatched record still awaiting its return keeps waiting: the decision never fires on a partial round.
+    auto awaiting_return = [&st]() {
+      for (const DiscriminatingRecord& r : st.records)
+        if (r.dispatched && !r.returned) return true;
+      return false;
+    };
+    auto dead_end = [&](const char* reason) -> std::vector<Ms3Target> {
+      if (awaiting_return()) return no_plan(reason);
+      st.decided = true;
+      std::cout << "[DISCRIMINATING] precursor_id=" << precursor_id << " decided=fallthrough reason=" << reason << std::endl;
+      return {};
+    };
+
     // Every target is a raw winner-scan mass re-fragmented with stage 0 = m.winner_params: the same refusal as exhaustive.
-    if (!winnerIsMs3Capable(m)) return no_plan("winner_scan_not_ms3_capable");
+    if (!winnerIsMs3Capable(m)) return dead_end("winner_scan_not_ms3_capable");
 
     // --- 1) The pool: records not dispatched, isolatable, of a species this Precursor has not fragmented ------------
     // The isolatability/charge-floor test is planExhaustive_'s (exhaustivePoolAdmits, no mass floor: min_target_mass is
@@ -1059,7 +1083,7 @@ namespace OpenMS
       if (m.dispatched_nominal_masses.count(nominal) > 0) continue;
       pool.push_back(PoolEntry{&rec, nominal});
     }
-    if (pool.empty()) return no_plan("pool_exhausted");
+    if (pool.empty()) return dead_end("pool_exhausted");
 
     // --- 2) Emit, budget-bounded, in the records' order (intensity-desc, Refine::discriminating) --------------------
     // The budget counts SPECIES, as in planExhaustive_ (ADR-0016).
@@ -1074,7 +1098,11 @@ namespace OpenMS
       if (m.dispatched_nominal_masses.count(e.nominal) > 0) continue; // a second record of a species stamped above
       DiscriminatingRecord& rec = *e.rec;
       const PeakRecord& pr = m.winner_peaks[rec.peak_index];
-      const std::optional<Refine::Path::Ion>& ion = rec.target.ion_a ? rec.target.ion_a : rec.target.ion_b;
+      // Labelled with the winner path's ion only. A mass only the second path explains goes out unassigned ('u'/0, as
+      // planExhaustive_ labels a mass with no ion identity), so the generic MS3 return path does not match and fold
+      // path b's claim against the winner's (path a's) context; recordDiscriminatingScan still finds the record by mass
+      // and tests both paths' ions.
+      const std::optional<Refine::Path::Ion>& ion = rec.target.ion_a;
       const std::string ion_type = ion ? std::string(1, ion->type) : std::string(kUnassignedIonType);
       const int ion_index = ion ? ion->index : 0;
 
@@ -1114,6 +1142,8 @@ namespace OpenMS
     ProteoformModel& m = it->second;
     if (!m.refine || !m.refine->candidates || m.refine->candidates->assemble.candidates.size() < 2) return false;
     RefineState& st = *m.refine;
+    // Records are frozen once the round has decided: nothing reads them afterwards, so skip the pieces test.
+    if (st.decided) return false;
 
     // The record of this mass: the nearest within the level-2 tolerance (the MS3 was commanded at the winner peak's mass).
     const double tol_ppm = config_.level(2).tolerance_ppm;

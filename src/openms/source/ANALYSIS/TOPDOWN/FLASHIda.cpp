@@ -403,6 +403,10 @@ FLASHIda::FLASHIda(char* arg) :
                 << std::endl;
       return 0;
     }
+    // No publishExplorationState_() after this dispatch, unlike the other dispatch sites: dispatchFromModel opens an
+    // exploration group only when hasExploration(3), and Config::validate refuses level-3 exploration under
+    // discriminating (the only objective that reaches this close), so the re-dispatch can never open a group. Whoever
+    // lifts that refusal must add the call here, or the drain never learns a group opened.
     // Local copies: planNextScans runs inside the dispatch and mutates the model these would point into.
     // config_.level(3).scans is non-empty: validate requires ms_settings.ms3 whenever mode != off.
     const std::shared_ptr<const DeconvolvedSpectrum> winner_spectrum = mdl->winner_spectrum;

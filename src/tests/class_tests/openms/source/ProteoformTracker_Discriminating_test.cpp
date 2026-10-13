@@ -146,6 +146,33 @@ namespace
     return ml;
   }
 
+  // The best path's shift is NOT localized: b3 unshifted and b6..b11 + X (no b4/b5) put X anywhere on residues 4..6, so
+  // the ambiguity branch has a window to plan containing fragments for. b7..b11 + Y keep the second path one ion behind:
+  //   +X: 7 + 6 = 13 ions, 1 jump -> S 11      +Y: 7 + 5 = 12 ions, 1 jump -> S 10
+  MassList ambiguousBest()
+  {
+    const Refine::Ladder lad = Refine::ladder(SEQ, {"b", "y"});
+    const int L = static_cast<int>(std::strlen(SEQ));
+    MassList ml;
+    for (int n = 1; n <= 3; ++n) ml.add(lad.prefix[n - 1], 50.0);
+    for (int m = 1; m <= 4; ++m) ml.add(lad.suffix[L - 1 - m], 50.0);
+    for (int k = 0; k < 6; ++k) ml.add(lad.prefix[5 + k] + SHIFT_X, 1000.0 - 100.0 * k); // b6..b11 + X
+    for (int k = 0; k < 5; ++k) ml.add(lad.prefix[6 + k] + SHIFT_Y, 950.0 - 100.0 * k);  // b7..b11 + Y
+    return ml;
+  }
+
+  // trackerConfig with characterization.min_fragment_charge set: every synthetic fragment is charge 1, so a floor of 2
+  // leaves no record isolatable (exhaustivePoolAdmits) while identification and the ambiguity branch are untouched.
+  std::string withFragmentChargeFloor(std::string cfg, int floor)
+  {
+    const std::string key = "\"max_targets\": ";
+    const size_t at = cfg.find(key);
+    if (at == std::string::npos) return cfg;
+    const size_t end = cfg.find_first_not_of("0123456789", at + key.size());
+    cfg.insert(end, ",\n    \"min_fragment_charge\": " + std::to_string(floor));
+    return cfg;
+  }
+
   // Unshifted ions only: every mass is explained at dm = 0, the Signal is 0 everywhere, no level -> one total.
   MassList oneTotal()
   {
@@ -313,7 +340,7 @@ START_TEST(ProteoformTracker_Discriminating, "$Id$")
 
 /////////////////////////////////////////////////////////////
 // 1. The records are Refine::discriminating(c0, c1) of the winner scan, intensity-desc, and the plan is their top
-//    `budget`, labelled with the ion the explaining path gives each mass.
+//    `budget`, labelled with the best path's ion; a mass only the second path explains goes out unassigned ('u'/0).
 //
 // FAILS UNDER: a tracker that does not keep ProteoformMatch::refine at finalize (no records); a mass list rebuilt in an
 // order other than Refine's (the paths' mass_idx then point at the wrong masses); ranking by the representative-charge
@@ -374,9 +401,8 @@ START_SECTION(plan_targets_are_the_masses_the_two_best_paths_explain_differently
   {
     const auto& r = m->refine->records[i];
     TEST_REAL_SIMILAR(plan[i].frag_mass, r.target.mass)
-    const auto& ion = r.target.ion_a ? r.target.ion_a : r.target.ion_b;
-    TEST_EQUAL(plan[i].ion_type, std::string(1, ion->type))
-    TEST_EQUAL(plan[i].ion_index, ion->index)
+    TEST_EQUAL(plan[i].ion_type, r.target.ion_a ? std::string(1, r.target.ion_a->type) : std::string("u"))
+    TEST_EQUAL(plan[i].ion_index, r.target.ion_a ? r.target.ion_a->index : 0)
     TEST_TRUE(plan[i].frag_mz > 0.0)
     TEST_EQUAL(plan[i].frag_charge, 1)
     TEST_EQUAL(plan[i].stage0_params.activation_type, std::string("HCD"))
@@ -449,8 +475,9 @@ START_SECTION(dispatched_masses_are_not_replanned)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
-// 3a. A winner acquired with an activation that cannot feed an MS3 (ETD) plans no MS3, though two candidates and 14
-//     records exist; the reason names the capability and nothing is marked dispatched or stamped.
+// 3a. A winner acquired with an activation that cannot feed an MS3 (ETD) plans no discriminating MS3, though two
+//     candidates and 14 records exist; the round can never complete, so it falls through (the reason names the
+//     capability) and nothing is marked dispatched or stamped.
 //
 // FAILS UNDER: a discriminating planner without planExhaustive_'s capability guard (it would command 3 MS3 whose
 // stage 0 replays the ETD winner).
@@ -470,7 +497,8 @@ START_SECTION(etd_winner_plans_no_ms3)
 
   std::string log;
   TEST_EQUAL(planCapturing(tracker, pid, log).size(), 0)
-  TEST_TRUE(log.find("objective=discriminating targets=0 reason=winner_scan_not_ms3_capable") != std::string::npos)
+  TEST_TRUE(log.find("[DISCRIMINATING] precursor_id=39 decided=fallthrough reason=winner_scan_not_ms3_capable") != std::string::npos)
+  TEST_EQUAL(m->refine->decided, true)
   TEST_EQUAL(countDispatched(*m), 0)
   TEST_EQUAL(m->dispatched_nominal_masses.size(), 0)
 }
@@ -738,6 +766,112 @@ START_SECTION(after_decision_planner_falls_through_to_ambiguity)
   }
   TEST_EQUAL(nominal.size(), plan.size())
   TEST_EQUAL(countDispatched(*m), 3)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// 7a (S1). A pool that is empty with nothing awaiting a return can never complete the round through MS3: the planner
+//     decides (candidate 0 stands) and returns the AMBIGUITY plan in the same call -- the same targets an ambiguity-mode
+//     tracker plans for the same scan. Control: a round whose pool is exhausted while a dispatched record has not yet
+//     returned keeps waiting -- no plan, not decided -- and completes on that return.
+//
+// FAILS UNDER: the dead end (no plan and never decided: no MS3 of any kind for the precursor); a fall-through that does
+// not plan in the same call; a fall-through that fires on a partial round.
+/////////////////////////////////////////////////////////////
+START_SECTION(exhausted_pool_falls_through_to_ambiguity)
+{
+  // Every record below the fragment-charge floor: nothing was ever dispatchable.
+  const int pid = 41;
+  Config cfg{withFragmentChargeFloor(trackerConfig("discriminating", "refine", 3), 2)};
+  TEST_EQUAL(cfg.level(2).min_charge, 2)
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+  feedAndFinalize(cfg, tracker, pid, 611, ambiguousBest());
+  const ProteoformModel* m = tracker.getModel(pid);
+  ABORT_IF(m == nullptr || !m->refine.has_value())
+  TEST_EQUAL(m->refine->candidates->assemble.candidates.size() >= 2, true)
+  TEST_EQUAL(m->refine->records.empty(), false)
+  ABORT_IF(m->modifications.empty())
+  TEST_TRUE(m->modifications[0].candidate_start < m->modifications[0].candidate_end) // the window ambiguity plans for
+
+  Config amb_cfg{withFragmentChargeFloor(trackerConfig("ambiguity", "refine", 3), 2)};
+  IdaLogger amb_logger(amb_cfg);
+  ProteoformTracker amb_tracker(amb_cfg, amb_logger);
+  feedAndFinalize(amb_cfg, amb_tracker, pid, 611, ambiguousBest());
+  const std::vector<Ms3Target> expected = amb_tracker.planNextScans(pid);
+  TEST_EQUAL(expected.empty(), false)
+
+  std::string log;
+  const std::vector<Ms3Target> plan = planCapturing(tracker, pid, log);
+  TEST_TRUE(log.find("[DISCRIMINATING] precursor_id=41 decided=fallthrough reason=pool_exhausted") != std::string::npos)
+  TEST_EQUAL(m->refine->decided, true)
+  TEST_EQUAL(m->refine->winner_candidate, 0)
+  TEST_EQUAL(countDispatched(*m), 0)
+  TEST_EQUAL(plan.size(), expected.size())
+  for (size_t i = 0; i < plan.size() && i < expected.size(); ++i)
+  {
+    TEST_EQUAL(plan[i].ion_type, expected[i].ion_type)
+    TEST_EQUAL(plan[i].ion_index, expected[i].ion_index)
+    TEST_REAL_SIMILAR(plan[i].frag_mass, expected[i].frag_mass)
+  }
+
+  // Control: every record dispatched, one not yet returned.
+  const int pid2 = 42;
+  Config cfg2{trackerConfig("discriminating", "refine", 20)};
+  IdaLogger logger2(cfg2);
+  ProteoformTracker tracker2(cfg2, logger2);
+  feedAndFinalize(cfg2, tracker2, pid2, 612, twoTotals());
+  const ProteoformModel* m2 = tracker2.getModel(pid2);
+  ABORT_IF(m2 == nullptr || !m2->refine.has_value())
+  const size_t n = m2->refine->records.size();
+  TEST_EQUAL(tracker2.planNextScans(pid2).size(), n)
+  TEST_EQUAL(countDispatched(*m2), static_cast<int>(n))
+  ABORT_IF(n < 2 || countDispatched(*m2) != static_cast<int>(n))
+  const DeconvolvedSpectrum empty = ms3Of({});
+  for (size_t i = 0; i + 1 < n; ++i) tracker2.recordDiscriminatingScan(pid2, m2->refine->records[i].target.mass, empty, LOOSE, TIGHT);
+  std::string log2;
+  TEST_EQUAL(planCapturing(tracker2, pid2, log2).size(), 0)
+  TEST_TRUE(log2.find("objective=discriminating targets=0 reason=pool_exhausted") != std::string::npos)
+  TEST_TRUE(log2.find("decided=fallthrough") == std::string::npos)
+  TEST_EQUAL(m2->refine->decided, false)
+  TEST_EQUAL(tracker2.recordDiscriminatingScan(pid2, m2->refine->records[n - 1].target.mass, empty, LOOSE, TIGHT), true)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// 7b (N1). A mass only the second path explains is dispatched UNASSIGNED ('u'/0, planExhaustive_'s marking for a mass
+//     with no ion identity), so the MS3 return path does not match and fold path b's claim against the winner's context;
+//     an a-only mass keeps its label. The returned scan still reaches its record by mass and is tested on path b's ion.
+//
+// FAILS UNDER: labelling a b-only target with path b's ion (the old `ion_a ? ion_a : ion_b`); unassigning every target;
+// a record lookup that keys on the label instead of the mass.
+/////////////////////////////////////////////////////////////
+START_SECTION(b_only_target_is_dispatched_unassigned)
+{
+  const int pid = 43;
+  Config cfg{trackerConfig("discriminating", "refine", 3)};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+  feedAndFinalize(cfg, tracker, pid, 613, twoTotals());
+  const std::vector<Ms3Target> plan = tracker.planNextScans(pid);
+  const ProteoformModel* m = tracker.getModel(pid);
+  ABORT_IF(plan.size() != 3 || m == nullptr || !m->refine.has_value())
+  const auto& recs = m->refine->records;
+  // records 0 and 2 are a-only (b4 + X, b5 + X), record 1 b-only (b6 + Y)
+  TEST_EQUAL(label(recs[1].target.ion_a), "-")
+  TEST_EQUAL(label(recs[1].target.ion_b), "b6")
+  TEST_EQUAL(plan[0].ion_type, std::string("b"))
+  TEST_EQUAL(plan[0].ion_index, 4)
+  TEST_EQUAL(plan[1].ion_type, std::string("u"))
+  TEST_EQUAL(plan[1].ion_index, 0)
+  TEST_REAL_SIMILAR(plan[1].frag_mass, recs[1].target.mass)
+  TEST_EQUAL(plan[2].ion_type, std::string("b"))
+  TEST_EQUAL(plan[2].ion_index, 5)
+
+  tracker.recordDiscriminatingScan(pid, recs[1].target.mass, fittingScan(*m, recs[1]), LOOSE, TIGHT);
+  TEST_EQUAL(recs[1].returned, true)
+  TEST_EQUAL(recs[1].fits_b, true)
+  TEST_EQUAL(recs[1].fits_a, false)
 }
 END_SECTION
 
