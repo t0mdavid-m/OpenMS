@@ -301,9 +301,10 @@ out-of-range priorities into [0,3].
 ## Characterization / MS3
 
 **`ProteoformTracker::planNextScans` is the only producer of MS3 targets.** `initiateNextLevel`
-builds commands exclusively inside `if (model != nullptr && !model->proteoform_sequence.empty())`;
-every other path returns zero commands. No tracker, no finalized model, or an unidentified
-precursor ⇒ **zero MS3 by design**, with no intensity or legacy fallback.
+builds commands only through `dispatchFromModel`, which needs a model that is identified **or**
+under `exhaustive` (ADR-0055); every other path returns zero commands. No tracker, no finalized
+model, or an unidentified precursor in any other mode ⇒ **zero MS3 by design**, with no intensity
+or legacy fallback.
 
 - **`characterization.mode`** (`off | ambiguity | coverage | fragments | exhaustive | discriminating`)
   is the single MS3 switch and also picks the targets: each on-value *is* an objective, one for one
@@ -340,6 +341,15 @@ precursor ⇒ **zero MS3 by design**, with no intensity or legacy fallback.
   target's CE sweep is forced onto `RemainingPrecursor` whatever the config asked for — gated
   `msn_level >= 3`, because `initiate`'s `ion_type` defaults to `'\0'` and an ungated test would
   drag every MS2 exploration group with it (ADR-0023 decisions 5 and 11, D-f, D-g).
+  **An unidentified Precursor is characterized too** (ADR-0055, amending ADR-0023 decision 10). Its
+  winner scan is the scan the dispatch comes from — the regular MS2, the sweep metric's winner
+  (`variants[best_idx]`, passed by the cascade) or the production follow-up — captured by
+  `initiateNextLevel`'s pooled-baseline block through `finalizeMS2(pid, dispatch_scan_id)`, a
+  fallback read only when nothing identified. The model gains `winner_peaks`/`winner_params` and
+  nothing else: no sequence, no fragments, no pooled row, and `foldMs3` refuses it. Every target is
+  therefore `'u'`/`0`. `planNextScans`' `unidentified_precursor` guard exempts `Exhaustive` alone, and
+  `[MS3-PLAN] … identified=0|1` says which case ran. Under `fragment_count` the sweep winner of an
+  unidentified Precursor is `ce_min` (every variant scores 0), accepted.
 - **`Config::applyCharacterizationMode_`** projects `mode` onto `levels_[2].selection` and
   `levels_[3].selection` after the whole document is parsed. MS3 needs BOTH non-`None`
   (`FLASHIda.cpp:366`, `Exploration.cpp:728` and `:730`), so driving them from one enum makes
