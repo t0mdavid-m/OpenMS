@@ -274,6 +274,26 @@ namespace
       if (t.ion_type == ion_type && t.ion_index == ion_index) return &t;
     return nullptr;
   }
+
+  // Sections 13-15 (ADR-0055). ONE MS2 that identified NOTHING -- the default ProteoformMatch, score -1 and
+  // an empty sequence -- finalized naming that scan as the winner, which is what initiateNextLevel does for an
+  // unidentified MS2 under exhaustive. HCD at 29, like feedWinnerScan, so stage 0 can be checked the same way.
+  void feedUnidentifiedScan(ProteoformTracker& tracker, int precursor_id, int scan_id,
+                            const std::vector<MassCharge>& peaks)
+  {
+    Ms2Params p;
+    p.collision_energy = 29.0;
+    p.activation_type = "HCD";
+    p.reaction_time = 0.0;
+
+    DeconvolvedSpectrum d(scan_id);
+    for (const MassCharge& mc : peaks) d.push_back(makeSyntheticPeakGroup(mc.mass, mc.charge));
+
+    ScanCommand ms2_ctx = makeMs2Ctx();
+    const FragmentAnalysis::ProteoformMatch none;
+    tracker.feedScan(precursor_id, 2, p, scan_id, d, none, none.score, ms2_ctx);
+    tracker.finalizeMS2(precursor_id, scan_id);
+  }
 }
 
 START_TEST(ProteoformTracker_Exhaustive, "$Id$")
@@ -1060,6 +1080,104 @@ START_SECTION(fragments_targets_every_mapped_fragment_with_an_interior)
     std::vector<Ms3Target> plan = tracker.planNextScans(precursor_id);
     TEST_EQUAL(static_cast<int>(plan.size()), 2)       // max_targets bounds it
     TEST_TRUE(targetForIon(plan, "b", 1) == nullptr)
+  }
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// 13. An unidentified Precursor plans from its winner scan (ADR-0055, amending ADR-0023 decision 10).
+//
+// FAILS UNDER: the unidentified_precursor guard still applying to exhaustive (empty plan), or finalizeMS2
+// ignoring the named winner scan (empty pool -> reason=no_winner_scan, empty plan). With no mapped fragment
+// every mass is 'u'/0, and stage 0 replays the scan the masses came from.
+/////////////////////////////////////////////////////////////
+START_SECTION(unidentified_precursor_plans_from_its_winner_scan)
+{
+  const int precursor_id = 60;
+  Config cfg{trackerConfig("exhaustive", 7, 0.0, 0)};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+  feedUnidentifiedScan(tracker, precursor_id, 601, SEVEN_MASSES);
+
+  std::vector<Ms3Target> plan = tracker.planNextScans(precursor_id);
+  TEST_EQUAL(static_cast<int>(plan.size()), 7)
+  ABORT_IF(plan.size() != 7)
+  TEST_EQUAL(countUnassigned(plan), 7)
+  for (const MassCharge& mc : SEVEN_MASSES) TEST_TRUE(targetAtMass(plan, mc.mass) != nullptr)
+  for (const Ms3Target& t : plan)
+  {
+    TEST_EQUAL(t.stage0_params.activation_type, std::string("HCD"))
+    TEST_TRUE(std::abs(t.stage0_params.collision_energy - 29.0) < 1e-6)
+  }
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// 14. ...and stays unidentified: the winner scan is all it gains.
+//
+// FAILS UNDER: the fallback seeding a sequence or fragments; a pooled_identification row for it
+// (update_index is bumped exactly where emitPooledIDRow is called, at all three sites); or foldMs3 folding a
+// returning MS3 into a model with no proteoform.
+/////////////////////////////////////////////////////////////
+START_SECTION(unidentified_precursor_stays_unidentified)
+{
+  const int precursor_id = 61;
+  Config cfg{trackerConfig("exhaustive", 7, 0.0, 0)};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+  feedUnidentifiedScan(tracker, precursor_id, 611, SEVEN_MASSES);
+
+  const ProteoformModel* mdl = tracker.getModel(precursor_id);
+  TEST_TRUE(mdl != nullptr)
+  ABORT_IF(mdl == nullptr)
+  TEST_EQUAL(mdl->proteoform_sequence, std::string(""))
+  TEST_EQUAL(static_cast<int>(mdl->fragments.size()), 0)
+  TEST_EQUAL(static_cast<int>(mdl->modifications.size()), 0)
+  TEST_EQUAL(mdl->update_index, 0)
+  TEST_EQUAL(mdl->winner_scan_id, 611)
+  TEST_EQUAL(static_cast<int>(mdl->winner_peaks.size()), 7)
+
+  // A returning MS3 of one of its masses: staged, then folded -- and refused.
+  Ms2Params p3;
+  p3.collision_energy = 25.0;
+  p3.activation_type = "CID";
+  DeconvolvedSpectrum ms3(612);
+  ms3.push_back(makeSyntheticPeakGroup(MASS_U1 / 2.0, 1));
+  ScanCommand ms3_ctx = makeMs2Ctx();
+  const FragmentAnalysis::ProteoformMatch none;
+  tracker.feedScan(precursor_id, 3, p3, 612, ms3, none, none.score, ms3_ctx);
+  tracker.foldMs3(precursor_id, "u0", "AAA");
+
+  mdl = tracker.getModel(precursor_id);
+  TEST_EQUAL(mdl->update_index, 0)
+  TEST_EQUAL(static_cast<int>(mdl->pending.size()), 0)
+  TEST_EQUAL(mdl->proteoform_sequence, std::string(""))
+  TEST_EQUAL(static_cast<int>(mdl->fragments.size()), 0)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// 15. Every other objective still refuses an unidentified Precursor: their targets are ions of a proteoform.
+//
+// FAILS UNDER: the guard relaxed for every objective rather than for exhaustive alone. The model is built
+// exactly as in section 13 -- winner scan and all -- so only planNextScans' objective test stands between
+// it and a plan. (discriminating is refine-only and shares that one predicate.)
+/////////////////////////////////////////////////////////////
+START_SECTION(other_objectives_still_refuse_an_unidentified_precursor)
+{
+  for (const char* mode : {"ambiguity", "coverage", "fragments"})
+  {
+    const int precursor_id = 62;
+    Config cfg{trackerConfig(mode, 7, 0.0, 0)};
+    IdaLogger logger(cfg);
+    ProteoformTracker tracker(cfg, logger);
+    feedUnidentifiedScan(tracker, precursor_id, 621, SEVEN_MASSES);
+
+    const ProteoformModel* mdl = tracker.getModel(precursor_id);
+    TEST_TRUE(mdl != nullptr)
+    ABORT_IF(mdl == nullptr)
+    TEST_EQUAL(static_cast<int>(mdl->winner_peaks.size()), 7)   // the pool exists; only the objective refuses
+    TEST_EQUAL(static_cast<int>(tracker.planNextScans(precursor_id).size()), 0)
   }
 }
 END_SECTION

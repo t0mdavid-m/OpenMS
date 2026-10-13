@@ -402,6 +402,40 @@ namespace
 }
 )";
 
+  // ADR-0055 fixtures: ms3_selection_only_config, cytC-pinned and switched to exhaustive, but naming UBIQUITIN as
+  // the protein -- so the real cytC MS2 identifies nothing, exactly like a contaminant MS2 under a cytC method.
+  // Without @p ms2_exploration the mass_count sweep is removed and the precursor gets one regular MS2. Every
+  // replace THROWS when it misses: a silent no-op would leave the fixture identifying and the sections vacuous.
+  std::string unidentifiedExhaustiveCytc(bool ms2_exploration)
+  {
+    std::string cfg = inclusionPinCytc(ms3_selection_only_config);
+    auto rep = [&cfg](const std::string& from, const std::string& to) {
+      auto p = cfg.find(from);
+      if (p == std::string::npos) throw std::runtime_error("unidentifiedExhaustiveCytc: no '" + from + "'");
+      cfg.replace(p, from.size(), to);
+    };
+    rep("\"mode\": \"ambiguity\"", "\"mode\": \"exhaustive\"");
+    rep("MGDVEKGKKIFVQKCAQCHTVEKGGKHKTGPNLHGLFGRKTGQAPGFTYTDANKNKGITWKEETLMEYLENPKKYIPGTKMIFAGIKKKTEREDLIAYLKKATNE",
+        "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG");
+    if (!ms2_exploration)
+      rep(",\n    \"exploration\": {\n      \"metric\": \"mass_count\",\n      \"ce_min\": 20.0,\n"
+          "      \"ce_max\": 40.0,\n      \"ce_step\": 5.0\n    }", "");
+    return cfg;
+  }
+
+  // An MS3 description in the no-ion form -- nothing after "@{fragment charge}" -- which is what a 'u'/0 target
+  // becomes on the wire (buildMS3's ion_index == 0 branch). A mapped b/y target would carry its ion here, so
+  // "every MS3 is no-ion" is also the proof that the precursor really went unidentified.
+  bool isNoIonDescription(const char* desc)
+  {
+    const std::string d(desc);
+    const auto at = d.rfind('@');
+    if (at == std::string::npos) return false;
+    size_t i = at + 1;
+    while (i < d.size() && std::isdigit(static_cast<unsigned char>(d[i]))) ++i;
+    return i > at + 1 && i == d.size();
+  }
+
   // Config with remaining_precursor exploration metric at MS2.
   //
   // The exploration.overrides map below MUST be non-empty: ADR-0026 rejects "remaining_precursor" with
@@ -1951,6 +1985,64 @@ START_SECTION(ms2_then_ms3_exploration_acquires_ms3)
   // two-level: the MS2-exploration winner cascades into MS3-level commands (two-stage).
   TEST_EQUAL(c.found_ms3, true)
   TEST_EQUAL(c.ms3_num_stages, 2)
+}
+END_SECTION
+
+START_SECTION(unidentified_regular_ms2_dispatches_exhaustive_ms3)
+{
+  // ADR-0055, no exploration at either level -- the shape of the only committed exhaustive method. The pinned
+  // cytC precursor is acquired but the method names ubiquitin, so its one MS2 identifies nothing. Before
+  // ADR-0055 planNextScans answered reason=unidentified_precursor and no MS3 left; now the MS2's own masses are
+  // the pool, every target is 'u'/0, and every MS3's stage 0 replays that MS2 (ms_settings.ms2: HCD at 29).
+  auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
+  auto ms2_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
+  ABORT_IF(ms1_scans.empty() || ms2_scans.empty())
+
+  std::string cfg_str = unidentifiedExhaustiveCytc(/*ms2_exploration=*/false);
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(cfg_str.c_str()));
+
+  const std::map<std::string, std::vector<ScanData>> no_ms3_fixtures;  // non-null + empty => record, never feed
+  const int budget = 256 + 64 * static_cast<int>(ms1_scans.size() + 1);
+  AcqResult a = runInterleaved(ida, ms1_scans, std::vector<ScanData>{ms2_scans[0]}, &no_ms3_fixtures,
+                               budget, /*single_group_only=*/true);
+  delete ida;
+
+  TEST_EQUAL(a.ms3_cmds.empty(), false)
+  for (const ScanCommand& c : a.ms3_cmds)
+  {
+    TEST_EQUAL(isNoIonDescription(c.scan_description), true)
+    TEST_REAL_SIMILAR(c.stages[0].collision_energy, 29.0)
+  }
+}
+END_SECTION
+
+START_SECTION(unidentified_ms2_sweep_dispatches_exhaustive_ms3_from_the_metric_winner)
+{
+  // ADR-0055 decision 2 on the cascade: a mass_count sweep 20/25/30/35/40 with no overrides, nothing identified.
+  // The pool must come from the METRIC's winner, so the fixture makes that winner something other than the
+  // first variant: every CE is fed the unfragmented CE-0 spectrum except 30, which gets the rich scan57.
+  // mass_count crowns 30; a "first staged scan" rule would put CE 20 on every MS3's stage 0 instead.
+  auto ms1_scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
+  auto rich = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_fresh_scan57.txt");
+  auto poor = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_cytc_ce0.txt");
+  ABORT_IF(ms1_scans.empty() || rich.empty() || poor.empty())
+  std::map<int, ScanData> ce_map{{20, poor[0]}, {25, poor[0]}, {30, rich[0]}, {35, poor[0]}, {40, poor[0]}};
+
+  std::string cfg_str = unidentifiedExhaustiveCytc(/*ms2_exploration=*/true);
+  FLASHIda* ida = new FLASHIda(const_cast<char*>(cfg_str.c_str()));
+
+  const std::map<std::string, std::vector<ScanData>> no_ms3_fixtures;
+  const int budget = 256 + 64 * static_cast<int>(ms1_scans.size() + 1);
+  AcqResult a = runInterleaved(ida, ms1_scans, std::vector<ScanData>{rich[0]}, &no_ms3_fixtures, budget,
+                               /*single_group_only=*/true, 0.0, &ce_map);
+  delete ida;
+
+  TEST_EQUAL(a.ms3_cmds.empty(), false)
+  for (const ScanCommand& c : a.ms3_cmds)
+  {
+    TEST_EQUAL(isNoIonDescription(c.scan_description), true)
+    TEST_REAL_SIMILAR(c.stages[0].collision_energy, 30.0)
+  }
 }
 END_SECTION
 
