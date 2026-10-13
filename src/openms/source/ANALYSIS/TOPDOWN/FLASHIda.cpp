@@ -631,12 +631,20 @@ FLASHIda::FLASHIda(char* arg) :
 
         // MS2 identification row (copy by value before expl_result goes out of scope).
         if (!expl_result.identification.proteoform_sequence.empty() && !expl_result.identification.result.fragments.empty())
+        {
           id_rows.push_back({parent_id_str, 2, 'E', expl_result.identification.ms2_context, expl_result.identification.result, precursor_id, expl_result.metric.tic_coverage, expl_result.identification.result.score});
+          fillRefineColumns(id_rows.back());   // ADR-0049: under method refine the variant's own match is a Refine match
+        }
         // C: winner-re-matched non-winner identification rows (MS2 'E'), each rendering the winner proteoform;
         // flash_extender_score = -1 marks "no own ID". Populated by Exploration after MS2 finalize.
         for (const auto& row : expl_result.identification.additional_rows)
           if (!row.identification_result.fragments.empty())
+          {
             id_rows.push_back({row.tracking_id, 2, 'E', row.ms2_context, row.identification_result, precursor_id, row.tic_coverage, row.flash_extender_score});
+            // ADR-0049: another variant's self-ID row carries its own Refine record; a winner-re-matched row's match
+            // is built fresh by the tracker with refine null, so it stays at the sentinels.
+            fillRefineColumns(id_rows.back());
+          }
 
         publishExplorationState_();
         return_code = static_cast<int>(expl_result.commands.size());
@@ -794,7 +802,8 @@ FLASHIda::FLASHIda(char* arg) :
             ms2_ctx.ms2_window_snr = parent_ctx.window_snr;  // Item 2: SNR travels on the command (was the queue map)
           }
           id_rows.push_back({parent_id_str, 2, 'R', ms2_ctx, ms3_targeting.proteoform_match, precursor_id, ms3_targeting.tic_coverage, ms3_targeting.proteoform_match.score});  // copy by value (ms2_ctx is local)
-          // ADR-0049: the regular MS2 row is the one Refine decides; every other id_rows site keeps the sentinels.
+          // ADR-0049: an MS2 row whose match Refine decided carries its record (here and on the exploration MS2
+          // rows); MS3 rows never run Refine and keep the sentinels.
           fillRefineColumns(id_rows.back());
         }
 
