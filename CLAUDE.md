@@ -427,8 +427,17 @@ unchanged.
   `planNextScans` returns `planDiscriminating_` **until the round's decision fires** (budget counts
   species, nominal-mass dedupe, emitted through `emitRawMassTarget_`, which it shares with
   `planExhaustive_`), and **ambiguity** after it — so a scan with only one total runs as ambiguity from
-  the start. Under `refine`, `narrowModifications_` runs `shift_only`: only a fragment that carries
-  the shift moves a boundary.
+  the start. **A round that can never close through MS3 is decided without a recount or a pooled
+  row**: when the pool is exhausted with nothing awaiting its return (every record refused by the
+  fragment-charge floor or dispatched in an earlier survey) or the winner MS2 cannot be isolated for
+  MS3 (an ETD MS2), `planDiscriminating_` sets `decided`, prints `[DISCRIMINATING] precursor_id=N
+  decided=fallthrough reason=pool_exhausted|winner_scan_not_ms3_capable`, and `planNextScans` plans
+  ambiguity **in the same call**; while a dispatched record is still unreturned it waits instead
+  (`[MS3-PLAN] … targets=0`). A record only path b explains (`ion_a` empty) is dispatched with the
+  **unassigned** label (`'u'`/0, as `planExhaustive_` marks a mass with no identity), never under
+  path b's label; and a record is frozen once the decision has fired — `recordDiscriminatingScan`
+  returns false and a late MS3 is folded by the ambiguity path. Under `refine`,
+  `narrowModifications_` runs `shift_only`: only a fragment that carries the shift moves a boundary.
 - **The MS3 return path closes the round** (`FLASHIda.cpp`, regular MS3 branch). Each returning MS3
   feeds `recordDiscriminatingScan` — whether or not the winner-context match found anything, and with
   an empty spectrum when the scan deconvolved to nothing, because the round closes only when **every
