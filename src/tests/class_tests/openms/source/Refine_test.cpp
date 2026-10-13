@@ -836,6 +836,45 @@ START_SECTION(piece_test_calibrates_on_shared_pieces_only)
 }
 END_SECTION
 
+START_SECTION(piece_test_ignores_an_unannotatable_side)
+{
+  // piece_test_calibrates_on_shared_pieces_only with ONE change: the target is c6, not b6 (an ETD winner's ion). A c
+  // precursor's MS3 pieces cannot be annotated (ADR-0054), so neither side predicts anything: no shared piece is seen,
+  // nothing calibrates, nothing fits -- on the very spectrum that gives b6 two shared pieces and a fit for path a.
+  //
+  // FAILS UNDER: no annotatability guard in pieceTest's predict -- getMS3IonTypes('c') yields the same a/b pieces of
+  // the same subsequence as 'b', so this returns shared_seen 2 and fits_a true, exactly the b6 section's verdict.
+  const String seq = "PEPTIDEK";
+  const Refine::Ladder lad = Refine::ladder(seq, {"b", "y"});
+  const double delta = 42.010565, off = 1.0 + 30e-6;
+  Refine::Path pa, pb;
+  pa.levels = {0.0, delta};
+  pa.windows = {{1, 1}};
+  pa.jumps = 1;
+  pb.levels = {0.0, delta};
+  pb.windows = {{3, 3}};
+  pb.jumps = 1;
+  Refine::Discriminating target;
+  target.mass_idx = 0;
+  target.mass = lad.prefix[5] + delta;
+  target.intensity = 1.0;
+  target.ion_a = Refine::Path::Ion{'c', 6, 0, delta, lad.prefix[5] + delta};
+  target.ion_b = target.ion_a;
+  DeconvolvedSpectrum s(0);
+  for (double t : {lad.prefix[1] + delta, lad.prefix[2] + delta, lad.prefix[3] + delta})
+  {
+    PeakGroup pg;
+    pg.setMonoisotopicMass(t * off);
+    s.push_back(pg);
+  }
+  const Refine::PieceVerdict v = Refine::pieceTest(s, seq, pa, pb, target, 500.0, 10.0);
+  TEST_EQUAL(v.shared_seen, 0)
+  TEST_REAL_SIMILAR_ABS(v.correction, 1.0, 1e-12)
+  TEST_EQUAL(v.fits_a, false)
+  TEST_EQUAL(v.fits_b, false)
+}
+END_SECTION
+
 START_SECTION(no_level_gives_one_candidate)
 {
   // Detect found nothing (cut 0, no level): one matrix, lambda_k = 0, the path without a mass shift

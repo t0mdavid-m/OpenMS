@@ -134,9 +134,9 @@ namespace
   };
 
   // The two-totals case of the header. y_m = suffix[L - 1 - m] (Refine::Ladder: suffix[n-1] = y_{L-n}).
-  MassList twoTotals()
+  MassList twoTotals(const std::vector<std::string>& ion_types = {"b", "y"})
   {
-    const Refine::Ladder lad = Refine::ladder(SEQ, {"b", "y"});
+    const Refine::Ladder lad = Refine::ladder(SEQ, ion_types);
     const int L = static_cast<int>(std::strlen(SEQ));
     MassList ml;
     for (int n = 1; n <= 3; ++n) ml.add(lad.prefix[n - 1], 50.0);
@@ -217,7 +217,7 @@ namespace
   // Identify @p ml with the engine's own MS2 path (method refine) and feed the result as the one MS2 scan of the
   // precursor, then finalize. One scan: it is the winner by construction.
   void feedAndFinalize(const Config& cfg, ProteoformTracker& tracker, int precursor_id, int scan_id, const MassList& ml,
-                       const std::string& activation = "HCD")
+                       const std::string& activation = "HCD", const std::string& annotate_as = "HCD")
   {
     DeconvolvedSpectrum ms2(scan_id);
     for (size_t i = 0; i < ml.masses.size(); ++i) ms2.push_back(makePeak(ml.masses[i], ml.intensities[i]));
@@ -230,11 +230,11 @@ namespace
     int charges[64], frag_indices[64];
     char ion_types[64];
     FragmentAnalysis::ProteoformMatch match;
-    fa.getTopFragmentMatches(SEQ, 64, masses, qscores, charges, wstarts, wends, ion_types, frag_indices, ms2, match, "HCD", 0.0, nullptr);
+    fa.getTopFragmentMatches(SEQ, 64, masses, qscores, charges, wstarts, wends, ion_types, frag_indices, ms2, match, annotate_as, 0.0, nullptr);
 
     Ms2Params p;
     p.collision_energy = 29.0;
-    p.activation_type = activation; // the winner's stage-0 activation (winner_params); identification above stays b/y
+    p.activation_type = activation; // the winner's stage-0 activation (winner_params); identification above follows annotate_as
     p.reaction_time = 0.0;
     tracker.feedScan(precursor_id, 2, p, scan_id, ms2, match, match.score, makeMs2Ctx());
     tracker.finalizeMS2(precursor_id);
@@ -475,14 +475,14 @@ START_SECTION(dispatched_masses_are_not_replanned)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
-// 3a. A winner acquired with an activation that cannot feed an MS3 (ETD) plans no discriminating MS3, though two
-//     candidates and 14 records exist; the round can never complete, so it falls through (the reason names the
-//     capability) and nothing is marked dispatched or stamped.
+// 3a. A winner acquired with ETD runs its round like any other (ADR-0054 d.1, d.4). This section used to pin the
+//     opposite -- `decided=fallthrough reason=winner_scan_not_ms3_capable`, no MS3 -- on the premise that an ETD MS2
+//     cannot be replayed as an MS3's stage 0. The identification here stays b/y (annotate_as HCD), so this is the
+//     planner alone: the activation no longer refuses anything.
 //
-// FAILS UNDER: a discriminating planner without planExhaustive_'s capability guard (it would command 3 MS3 whose
-// stage 0 replays the ETD winner).
+// FAILS UNDER: the old whitelist in planDiscriminating_ (plans 0, decided at once).
 /////////////////////////////////////////////////////////////
-START_SECTION(etd_winner_plans_no_ms3)
+START_SECTION(etd_winner_runs_the_round)
 {
   const int pid = 39;
   Config cfg{trackerConfig("discriminating", "refine", 3)};
@@ -492,15 +492,67 @@ START_SECTION(etd_winner_plans_no_ms3)
   const ProteoformModel* m = tracker.getModel(pid);
   ABORT_IF(m == nullptr || !m->refine.has_value())
   TEST_EQUAL(m->winner_params.activation_type, std::string("ETD"))
-  TEST_EQUAL(m->refine->candidates->assemble.candidates.size() >= 2, true)
   TEST_EQUAL(m->refine->records.size(), 14)
 
   std::string log;
-  TEST_EQUAL(planCapturing(tracker, pid, log).size(), 0)
-  TEST_TRUE(log.find("[DISCRIMINATING] precursor_id=39 decided=fallthrough reason=winner_scan_not_ms3_capable") != std::string::npos)
+  const std::vector<Ms3Target> plan = planCapturing(tracker, pid, log);
+  TEST_EQUAL(plan.size(), 3) // what the HCD winner of section 1 plans
+  for (const Ms3Target& t : plan) TEST_EQUAL(t.stage0_params.activation_type, std::string("ETD"))
+  TEST_TRUE(log.find("winner_scan_not_ms3_capable") == std::string::npos)
+  TEST_EQUAL(m->refine->decided, false)
+  TEST_EQUAL(countDispatched(*m), 3)
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// 3a-ii. An ETD winner identified with c/z (annotate_as ETD): every record is a c or z ion, whose MS3 the matcher cannot
+//     annotate (ADR-0054). The round still runs and closes -- every dispatched MS3 returns, each carrying the very piece
+//     that would fit if it could be read -- but with no annotatable side nothing confirms, and the recount would reduce
+//     to an MS2-only ranking that can flip the winner. So the round keeps path a: no recount, no [MS3-DECIDE], no pooled
+//     row, `decided=kept reason=no_annotatable_pieces`.
+//
+// FAILS UNDER: decideRefine running the recount anyway ([MS3-DECIDE] is printed).
+/////////////////////////////////////////////////////////////
+START_SECTION(no_annotatable_pieces_keeps_path_a_without_recount)
+{
+  const int pid = 44;
+  Config cfg{trackerConfig("discriminating", "refine", 3)};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+  feedAndFinalize(cfg, tracker, pid, 614, twoTotals({"c", "z"}), "ETD", "ETD");
+  const ProteoformModel* m = tracker.getModel(pid);
+  ABORT_IF(m == nullptr || !m->refine.has_value() || !m->refine->candidates)
+  TEST_TRUE(m->refine->candidates->assemble.candidates.size() >= 2)
+  ABORT_IF(m->refine->candidates->assemble.candidates.size() < 2)
+  for (const auto& r : m->refine->records)
+  {
+    for (const auto& ion : {r.target.ion_a, r.target.ion_b})
+      if (ion) TEST_TRUE(ion->type == 'c' || ion->type == 'z')
+  }
+
+  std::string log;
+  const std::vector<Ms3Target> plan = planCapturing(tracker, pid, log);
+  TEST_TRUE(plan.size() > 0)
+  ABORT_IF(plan.empty())
+  bool complete = false;
+  for (const auto& rec : m->refine->records)
+  {
+    if (!rec.dispatched) continue;
+    complete = tracker.recordDiscriminatingScan(pid, rec.target.mass, fittingScan(*m, rec), LOOSE, TIGHT);
+  }
+  TEST_EQUAL(complete, true)
+
+  std::ostringstream captured;
+  std::streambuf* const real_cout = std::cout.rdbuf(captured.rdbuf());
+  const bool flipped = tracker.decideRefine(pid);
+  std::cout.rdbuf(real_cout);
+  const std::string decided_log = captured.str();
+  std::cout << decided_log;
+  TEST_EQUAL(flipped, false)
+  TEST_TRUE(decided_log.find("[DISCRIMINATING] precursor_id=44 decided=kept reason=no_annotatable_pieces") != std::string::npos)
+  TEST_TRUE(decided_log.find("[MS3-DECIDE]") == std::string::npos)
   TEST_EQUAL(m->refine->decided, true)
-  TEST_EQUAL(countDispatched(*m), 0)
-  TEST_EQUAL(m->dispatched_nominal_masses.size(), 0)
+  TEST_EQUAL(m->refine->winner_candidate, 0)
 }
 END_SECTION
 

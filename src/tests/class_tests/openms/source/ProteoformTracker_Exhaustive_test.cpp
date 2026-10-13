@@ -554,60 +554,30 @@ START_SECTION(dispatch_memory_suppresses_duplicates_and_terminates)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
-// 6. The winner scan's MS3-capability gate, and its deliberate asymmetry (decision 3 + D-b).
+// 6. The winner scan's activation never refuses an MS3 (ADR-0054 d.1, amending ADR-0023 decision 3).
 //
-// An MS3's stage[0] REPLAYS the MS2 that made the fragment (ADR-0003), so an ETD winner makes every
-// mass in its scan MS3-incapable. But an EMPTY activation is "not recorded", not "incapable".
+// This section used to pin the opposite: an ETD winner planned NOTHING, because stage[0] replays the
+// MS2 that made the fragment (ADR-0003) and that replay was taken to be impossible for ETD. It is not;
+// what ETD changes is the targets' ion type (c/z), and whether THEIR MS3 can be annotated is the
+// matcher's question (MS3FragmentMatcher::isAnnotatableMs3Precursor), never the planner's. The old
+// "" asymmetry (D-b: an unrecorded activation counted as capable) is subsumed -- every activation plans.
 //
-// FAILS UNDER: no gate at all (the ETD case plans 7), or the gate written as the ADR's wording reads
-// -- fail-closed on "" -- which returns zero targets for every hand-built fixture and for any scan
-// config that omits the key. Both halves are asserted, because each is the other's regression.
+// FAILS UNDER: the old whitelist ("" | HCD | CID) -- the ETD and EThcD cases plan 0.
 /////////////////////////////////////////////////////////////
-START_SECTION(etd_winner_plans_nothing_but_an_unrecorded_activation_still_does)
+START_SECTION(every_winner_activation_plans_alike)
 {
-  // --- ETD: refuse, and burn nothing ---------------------------------------------------------------
+  int precursor_id = 27, scan_id = 507;
+  for (const char* activation : {"ETD", "EThcD", "", "CID"})
   {
-    const int precursor_id = 27;
     Config cfg{trackerConfig("exhaustive", 10, 0.0, 0)};
     IdaLogger logger(cfg);
     ProteoformTracker tracker(cfg, logger);
-    feedWinnerScan(tracker, precursor_id, 507, SEVEN_MASSES, TWO_FRAGS, "ETD");
-
-    std::vector<Ms3Target> plan = tracker.planNextScans(precursor_id);
-    TEST_EQUAL(static_cast<int>(plan.size()), 0)
-
-    const ProteoformModel* mdl = tracker.getModel(precursor_id);
-    TEST_TRUE(mdl != nullptr)
-    ABORT_IF(mdl == nullptr)
-    // A refusal must cost nothing: no nominal mass may be stamped by a plan that emitted no target.
-    TEST_EQUAL(static_cast<int>(mdl->dispatched_nominal_masses.size()), 0)
-    // (The companion assertion -- that the objective stays UNMET here so an MS2 rung can still rescue
-    // this Precursor -- needs objectiveUnmet, which belongs to the escalation ladder and is not in this
-    // branch. It lands with the ladder.)
-  }
-
-  // --- "" (no activation recorded): CAPABLE ---------------------------------------------------------
-  {
-    const int precursor_id = 28;
-    Config cfg{trackerConfig("exhaustive", 10, 0.0, 0)};
-    IdaLogger logger(cfg);
-    ProteoformTracker tracker(cfg, logger);
-    feedWinnerScan(tracker, precursor_id, 508, SEVEN_MASSES, TWO_FRAGS, "");
+    feedWinnerScan(tracker, precursor_id, scan_id, SEVEN_MASSES, TWO_FRAGS, activation);
 
     std::vector<Ms3Target> plan = tracker.planNextScans(precursor_id);
     TEST_EQUAL(static_cast<int>(plan.size()), 7)
-  }
-
-  // --- CID: the other classified-capable activation --------------------------------------------------
-  {
-    const int precursor_id = 29;
-    Config cfg{trackerConfig("exhaustive", 10, 0.0, 0)};
-    IdaLogger logger(cfg);
-    ProteoformTracker tracker(cfg, logger);
-    feedWinnerScan(tracker, precursor_id, 509, SEVEN_MASSES, TWO_FRAGS, "CID");
-
-    std::vector<Ms3Target> plan = tracker.planNextScans(precursor_id);
-    TEST_EQUAL(static_cast<int>(plan.size()), 7)
+    ++precursor_id;
+    ++scan_id;
   }
 }
 END_SECTION

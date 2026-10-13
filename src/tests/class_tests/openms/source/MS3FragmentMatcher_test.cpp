@@ -68,6 +68,23 @@ START_SECTION(getMS3IonTypes)
 }
 END_SECTION
 
+// ADR-0054: annotatable is b and y ONLY -- a narrower set than isKnownIonClass, on purpose. A c/z/a/x precursor keeps
+// its frame (it is targeted, its span is real) but its MS3 is never annotated.
+//
+// FAILS UNDER: the predicate written as isKnownIonClass (c/z/a/x would be annotated with b/y chemistry), or
+// isKnownIonClass narrowed to b/y instead (the last loop: c/z would lose their frame and every c/z sweep would be
+// forced onto remaining_precursor).
+START_SECTION(annotatable_ms3_precursor_is_b_and_y_only)
+{
+  for (char c : {'b', 'y'})
+    TEST_EQUAL(MS3FragmentMatcher::isAnnotatableMs3Precursor(c), true)
+  for (char c : {'a', 'c', 'x', 'z', 'u', '\0', 'B', 'Y'})
+    TEST_EQUAL(MS3FragmentMatcher::isAnnotatableMs3Precursor(c), false)
+  for (char c : {'a', 'c', 'x', 'z'})
+    TEST_EQUAL(MS3FragmentMatcher::isKnownIonClass(c), true)
+}
+END_SECTION
+
 START_SECTION(isPrefixIonType)
 {
   TEST_TRUE(MS3FragmentMatcher::isPrefixIonType("a"))
@@ -493,6 +510,44 @@ START_SECTION(calibrateAndScore)
   // Verify by testing matchSpectrum directly at 10 ppm with unshifted theoretical
   int direct_count = MS3FragmentMatcher::matchSpectrum(var0, theoretical, 10.0);
   TEST_EQUAL(direct_count, 0) // 50 ppm shift exceeds 10 ppm tolerance
+}
+END_SECTION
+
+// ADR-0054: the same spectrum, the same span, two precursor classes. As b10 it is annotated; as c10 it is not, because
+// getMS3IonTypes reads a c precursor with b/y chemistry (its yb/ya pieces ~17 Da low).
+//
+// FAILS UNDER: no annotatability guard in calibrateAndScore -- extractSubsequence('c', 10) is the same ACDEFGHIKL and
+// getMS3IonTypes('c') predicts the same a/b pieces as 'b', so c10 would score exactly what b10 scores.
+START_SECTION(calibrate_and_score_annotates_only_a_b_or_y_precursor)
+{
+  std::string protein = "ACDEFGHIKLMNPQRSTVWY";
+  MS3FragmentMatcher::ProteoformContext ctx;
+  ctx.region_start = 0;
+  ctx.region_end = 20;
+  const int frag_index = 10;
+
+  const auto theoretical = MS3FragmentMatcher::computeTheoreticalMasses(
+    MS3FragmentMatcher::extractSubsequence(protein, ctx, 'b', frag_index), MS3FragmentMatcher::getMS3IonTypes('b'));
+  DeconvolvedSpectrum spec(0);
+  for (int i = 0; i < 5 && i < static_cast<int>(theoretical.size()); ++i)
+  {
+    PeakGroup pg(1, 1, true);
+    pg.setMonoisotopicMass(theoretical[i].mass);
+    spec.push_back(pg);
+  }
+  std::vector<const DeconvolvedSpectrum*> variants = {&spec};
+
+  std::vector<FragmentAnalysis::ProteoformMatch> det_b, det_c;
+  const auto scores_b = MS3FragmentMatcher::calibrateAndScore(variants, protein, ctx, 'b', frag_index,
+                                                              MS3FragmentMatcher::LOOSE_TOLERANCE_PPM, 10.0, &det_b);
+  TEST_TRUE(scores_b[0] > 0.0) // the control: the fixture does match as b10
+  TEST_EQUAL(det_b.empty(), false)
+
+  const auto scores_c = MS3FragmentMatcher::calibrateAndScore(variants, protein, ctx, 'c', frag_index,
+                                                              MS3FragmentMatcher::LOOSE_TOLERANCE_PPM, 10.0, &det_c);
+  TEST_EQUAL(scores_c.size(), 1)
+  TEST_REAL_SIMILAR(scores_c[0], 0.0)
+  TEST_EQUAL(det_c.empty(), true)
 }
 END_SECTION
 

@@ -1422,6 +1422,35 @@ START_SECTION(ms3_exploration_variants_use_buildMS3)
 }
 END_SECTION
 
+// ADR-0054 d.5: an MS3 sweep on a c ion (an ETD winner's fragment) keeps its CONFIGURED metric, here fragment_count --
+// every variant then scores 0 and ce_min wins, accepted knowingly. Only a target with NO frame ('u') is forced onto
+// remaining_precursor (ADR-0023 d.11), and that stays so.
+//
+// FAILS UNDER: annotatability folded into MS3FragmentMatcher::isKnownIonClass -- the c sweep would be forced too.
+START_SECTION(ms3_sweep_on_a_c_ion_keeps_its_configured_metric)
+{
+  Config cfg{std::string(ms3_exploration_config)};
+  TEST_EQUAL(static_cast<int>(cfg.level(3).exploration), static_cast<int>(ExplorationMetric::FragmentCount))
+
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+  ScanCommand ms2_ctx = queue.buildMS2(makeSyntheticPeakGroup(800.0, 2400.0, 3), 3, cfg.level(2).scans[0], 2, 0);
+  TEST_EQUAL(exploration.initiate(3, makeSyntheticPeakGroup(500.0, 1000.0, 2), 2, queue, nullptr, &ms2_ctx, 'c', 5).empty(), false)
+  TEST_EQUAL(static_cast<int>(ExplorationTestAccess::group(exploration, 1).exploration_metric),
+             static_cast<int>(ExplorationMetric::FragmentCount))
+
+  // the control: an unassigned target in the same config is still forced
+  ScanCommandQueue queue_u(cfg);
+  FragmentAnalysis fragments_u(cfg);
+  Exploration exploration_u(cfg, fragments_u);
+  ScanCommand ms2_ctx_u = queue_u.buildMS2(makeSyntheticPeakGroup(800.0, 2400.0, 3), 3, cfg.level(2).scans[0], 2, 0);
+  TEST_EQUAL(exploration_u.initiate(3, makeSyntheticPeakGroup(500.0, 1000.0, 2), 2, queue_u, nullptr, &ms2_ctx_u, 'u', 0).empty(), false)
+  TEST_EQUAL(static_cast<int>(ExplorationTestAccess::group(exploration_u, 1).exploration_metric),
+             static_cast<int>(ExplorationMetric::RemainingPrecursor))
+}
+END_SECTION
+
 START_SECTION(ms3_exploration_winner_selection_and_cleanup)
 {
   // makeSyntheticDeconv() below produces empty (mass-0) PeakGroups, so the MS3 FragmentCount path

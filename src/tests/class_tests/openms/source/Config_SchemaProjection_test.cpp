@@ -448,24 +448,28 @@ START_SECTION(activation_coupling_predicates_are_the_declared_set)
 {
   TEST_EQUAL(needsReactionTime("ETD"), true)
   TEST_EQUAL(needsReactionTime("EThcD"), true)
+  TEST_EQUAL(needsReactionTime("ETciD"), true)
   TEST_EQUAL(needsReactionTime("HCD"), false)
   TEST_EQUAL(needsReactionTime("CID"), false)
   TEST_EQUAL(needsReactionTime("UVPD"), false)
   TEST_EQUAL(needsReactionTime(""), false)
   TEST_EQUAL(needsReactionTime("etd"), false)     // ordinal, case-sensitive -- see the C# mirror
+  TEST_EQUAL(needsReactionTime("EtCID"), false)   // the one spelling is ETciD (PSI-MS MS:1003182; ADR-0054 d.7)
 
   TEST_EQUAL(needsCollisionEnergy("HCD"), true)
   TEST_EQUAL(needsCollisionEnergy("CID"), true)
   TEST_EQUAL(needsCollisionEnergy("EThcD"), true)
+  TEST_EQUAL(needsCollisionEnergy("ETciD"), true)
   TEST_EQUAL(needsCollisionEnergy("ETD"), false)
   TEST_EQUAL(needsCollisionEnergy("UVPD"), false)
   TEST_EQUAL(needsCollisionEnergy(""), false)
   TEST_EQUAL(needsCollisionEnergy("hcd"), false)
+  TEST_EQUAL(needsCollisionEnergy("EtCID"), false)
 
-  // EThcD is the only activation in both sets, and that is load-bearing: it is what makes
-  // buildVariants_ take the cross-product branch and turn off BOTH axes for an EThcD baseline --
-  // CE at 0, reaction time at MIN_REACTION_TIME_MS, since the two axes turn off at different values.
+  // EThcD and ETciD are the activations in both sets, and that is load-bearing: it is what makes
+  // buildVariants_ take the cross-product branch and sweep BOTH axes for them.
   TEST_EQUAL(needsCollisionEnergy("EThcD") && needsReactionTime("EThcD"), true)
+  TEST_EQUAL(needsCollisionEnergy("ETciD") && needsReactionTime("ETciD"), true)
 }
 END_SECTION
 
