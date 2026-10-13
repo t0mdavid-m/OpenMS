@@ -371,15 +371,16 @@ END_SECTION
 /////////////////////////////////////////////////////////////
 // Coverage objective (backbone-cleavage-site model): planNextScans targets observed fragments whose
 // span-INTERIOR carries a still-unwitnessed bond (so an MS3 re-feed can witness it), strongest-MS2
-// first, marginal-skip (a fragment whose interior is already fully witnessed contributes nothing).
+// first, until the budget (ADR-0052). A fragment whose interior is already fully witnessed is not a
+// target: its MS3 could add nothing.
 //
 // WINNER_SEQ = PEPTIDEK, L=8 -> backbone bonds 1..7. Each fed fragment witnesses ONE bond in MS2
 // (prefix b_k -> bond k; suffix y_m -> bond L-m). Its MS3-reachable interior is prefix [1..k] -> bonds
 // 1..k-1; suffix [L-m+1..L] -> bonds (L-m+1)..(L-1). Fragments feed one-per-scan (winner pooled
 // verbatim, non-winners re-matched by mass against the theoretical PEPTIDEK ladder). Synthetic peak
-// groups have getChargeIntensity==0, so these fixtures are built to be ORDER-INDEPENDENT (marginal-skip
-// via already-witnessed interiors, not pick order); intensity-driven ordering among overlapping useful
-// parents is exercised end-to-end by the C# ms3_coverage_cytc golden.
+// groups have getChargeIntensity==0, so these fixtures are built to be ORDER-INDEPENDENT (b2/b3 drop out
+// because MS2 already witnesses their interiors, not because of pick order); intensity ordering is
+// exercised end-to-end by the C# ms3_coverage_cytc golden.
 /////////////////////////////////////////////////////////////
 START_SECTION(planNextScans_coverage_targets_gaps_and_skips_redundant)
 {
@@ -418,7 +419,7 @@ START_SECTION(planNextScans_coverage_targets_gaps_and_skips_redundant)
   // Witnessed sites: b1->1, b2->2, b3->3, b6->6, y3->(L-3)=5  =>  {1,2,3,5,6}; uncovered bonds {4,7}.
   //   b6 interior {1..5} covers bond 4  -> SELECTED (prefix gap-filler)
   //   y3 interior {6,7}  covers bond 7  -> SELECTED (suffix gap-filler)
-  //   b2 interior {1}, b3 interior {1,2}: already witnessed -> marginal-skip (order-independent)
+  //   b2 interior {1}, b3 interior {1,2}: already witnessed -> not targets (order-independent)
   //   b1 has no interior bond.
   feedFrag("b", 1);
   feedFrag("b", 2);
@@ -434,8 +435,8 @@ START_SECTION(planNextScans_coverage_targets_gaps_and_skips_redundant)
   std::vector<Ms3Target> targets = tracker.planNextScans(precursor_id);
   TEST_TRUE(findTarget(targets, "b", 6) != nullptr)   // gap -> spanning prefix parent selected
   TEST_TRUE(findTarget(targets, "y", 3) != nullptr)   // suffix parent fills the C-terminal gap
-  TEST_TRUE(findTarget(targets, "b", 2) == nullptr)   // marginal-skip: interior {1} already witnessed
-  TEST_TRUE(findTarget(targets, "b", 3) == nullptr)   // marginal-skip: interior {1,2} already witnessed
+  TEST_TRUE(findTarget(targets, "b", 2) == nullptr)   // interior {1} already witnessed
+  TEST_TRUE(findTarget(targets, "b", 3) == nullptr)   // interior {1,2} already witnessed
   TEST_TRUE(findTarget(targets, "b", 1) == nullptr)   // no interior bonds
   TEST_EQUAL(static_cast<int>(targets.size()), 2)
 }

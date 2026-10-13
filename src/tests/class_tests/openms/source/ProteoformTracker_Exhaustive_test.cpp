@@ -257,6 +257,23 @@ namespace
   const std::vector<MassCharge> SEVEN_MASSES{
     {MASS_U1, 2}, {MASS_B6, 2}, {MASS_U2, 2}, {MASS_Y6, 2}, {MASS_U3, 2}, {MASS_U4, 2}, {MASS_U5, 2}};
   const std::vector<FragSpec> TWO_FRAGS{{"b", 6, MASS_B6}, {"y", 6, MASS_Y6}};
+
+  // Sections 10-12 (ADR-0052). Four b-ions whose interiors overlap, and the two full-length ions.
+  const double MASS_B1 = 150.0;
+  const double MASS_B2 = 250.0;
+  const double MASS_B7 = 800.0;
+  const double MASS_B8 = 1100.0;   // b_L: the whole region, i.e. the precursor minus water
+  const double MASS_Y8 = 1300.0;   // y_L: the whole region
+
+  const std::vector<MassCharge> LADDER_MASSES{{MASS_B1, 1}, {MASS_B2, 1}, {MASS_B6, 2}, {MASS_B7, 2}};
+  const std::vector<FragSpec> LADDER_FRAGS{{"b", 1, MASS_B1}, {"b", 2, MASS_B2}, {"b", 6, MASS_B6}, {"b", 7, MASS_B7}};
+
+  const Ms3Target* targetForIon(const std::vector<Ms3Target>& targets, const std::string& ion_type, int ion_index)
+  {
+    for (const Ms3Target& t : targets)
+      if (t.ion_type == ion_type && t.ion_index == ion_index) return &t;
+    return nullptr;
+  }
 }
 
 START_TEST(ProteoformTracker_Exhaustive, "$Id$")
@@ -960,6 +977,120 @@ START_SECTION(ms3_unrecorded_ion_type_keeps_the_configured_metric)
   TEST_EQUAL(grp.msn_level, 3)
   // The CONFIGURED metric survives. Under the shipped-and-reverted gate this read RemainingPrecursor.
   TEST_EQUAL(static_cast<int>(grp.exploration_metric), static_cast<int>(ExplorationMetric::FragmentCount))
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// 10-12. The ion-labelled objectives acquire every relevant fragment up to the budget (ADR-0052).
+//
+// Same fixture as the sections above: one winner scan whose match is pooled verbatim, PEPTIDEK, L = 8,
+// every intensity 0 -- so these sections pin WHICH fragments come back, never their order (the C#
+// ms3_coverage_cytc / ms3_fragments_cytc goldens pin the order).
+//
+// The shared four-fragment ladder: b1, b2, b6 and b7 witness bonds 1, 2, 6 and 7, leaving {3,4,5}
+// uncovered. b6's interior is bonds 1..5 and b7's is 1..6 -- they overlap, and both still hold an
+// uncovered bond. b2's interior {1} is already witnessed; b1 has no interior at all. (LADDER_MASSES /
+// LADDER_FRAGS and targetForIon are defined with the other fixtures at the top of the file.)
+/////////////////////////////////////////////////////////////
+
+// 10. Coverage no longer lets one target excuse another.
+//
+// FAILS UNDER: the set cover ADR-0052 removed -- whichever of b6/b7 the tie-broken sort puts first
+// marks its whole interior covered, and the other is skipped: 1 target, not 2.
+START_SECTION(coverage_keeps_overlapping_targets)
+{
+  const int precursor_id = 40;
+  Config cfg{trackerConfig("coverage", 10, 0.0, 0)};
+  IdaLogger logger(cfg);
+  ProteoformTracker tracker(cfg, logger);
+  feedWinnerScan(tracker, precursor_id, 520, LADDER_MASSES, LADDER_FRAGS, "HCD");
+
+  std::vector<Ms3Target> plan = tracker.planNextScans(precursor_id);
+  TEST_TRUE(targetForIon(plan, "b", 6) != nullptr)   // interior 1..5 holds {3,4,5}
+  TEST_TRUE(targetForIon(plan, "b", 7) != nullptr)   // interior 1..6 overlaps b6's and still holds {3,4,5}
+  TEST_TRUE(targetForIon(plan, "b", 2) == nullptr)   // interior {1} already witnessed: still not relevant
+  TEST_TRUE(targetForIon(plan, "b", 1) == nullptr)   // no interior
+  TEST_EQUAL(static_cast<int>(plan.size()), 2)
+}
+END_SECTION
+
+// 11. A full-length ion is the precursor, not a fragment: never a target under the ion-labelled
+//     objectives, still a target under exhaustive, whose contract is every deconvolved mass.
+//
+// FAILS UNDER: no full-length filter -- coverage takes b8/y8 (their interiors are every bond) and
+// ambiguity takes them as containers (they contain every range). Also fails if the filter is applied
+// inside planExhaustive_, which must keep labelling the b8 mass "b8".
+START_SECTION(full_length_ion_is_never_a_target_except_exhaustive)
+{
+  const std::vector<MassCharge> peaks{{MASS_B6, 2}, {MASS_B8, 2}, {MASS_Y8, 2}};
+  const std::vector<FragSpec> frags{{"b", 6, MASS_B6}, {"b", 8, MASS_B8}, {"y", 8, MASS_Y8}};
+
+  int precursor_id = 41;
+  for (const std::string mode : {"coverage", "ambiguity", "fragments"})
+  {
+    Config cfg{trackerConfig(mode, 10, 0.0, 0)};
+    IdaLogger logger(cfg);
+    ProteoformTracker tracker(cfg, logger);
+    // The ambiguous modification over [4,5] gives ambiguity something to localize; b6 contains it.
+    feedWinnerScan(tracker, precursor_id, 530 + precursor_id, peaks, frags, "HCD",
+                   /*with_ambiguous_ptm=*/mode == "ambiguity");
+
+    std::vector<Ms3Target> plan = tracker.planNextScans(precursor_id);
+    TEST_TRUE(targetForIon(plan, "b", 6) != nullptr)
+    TEST_TRUE(targetForIon(plan, "b", 8) == nullptr)
+    TEST_TRUE(targetForIon(plan, "y", 8) == nullptr)
+    TEST_EQUAL(static_cast<int>(plan.size()), 1)
+    ++precursor_id;
+  }
+
+  {
+    Config cfg{trackerConfig("exhaustive", 10, 0.0, 0)};
+    IdaLogger logger(cfg);
+    ProteoformTracker tracker(cfg, logger);
+    feedWinnerScan(tracker, precursor_id, 540, peaks, frags, "HCD");
+
+    std::vector<Ms3Target> plan = tracker.planNextScans(precursor_id);
+    TEST_TRUE(targetForIon(plan, "b", 8) != nullptr)   // exhaustive keeps the full-length mass, labelled
+    TEST_TRUE(targetForIon(plan, "y", 8) != nullptr)
+    TEST_EQUAL(static_cast<int>(plan.size()), 3)
+  }
+}
+END_SECTION
+
+// 12. fragments targets every mapped fragment that has a bond inside it -- no coverage test.
+//
+// FAILS UNDER: a "fragments" mode that assigns CharacterizationMode but not CharacterizationObjective
+// (it would run as ambiguity: no ambiguous mod -> 0 targets), or one routed into the coverage branch
+// (b2 dropped as already witnessed -> 2 targets). The second half pins the budget bound.
+START_SECTION(fragments_targets_every_mapped_fragment_with_an_interior)
+{
+  {
+    const int precursor_id = 50;
+    Config cfg{trackerConfig("fragments", 10, 0.0, 0)};
+    TEST_EQUAL(static_cast<int>(cfg.characterization().objective), static_cast<int>(CharacterizationObjective::Fragments))
+    IdaLogger logger(cfg);
+    ProteoformTracker tracker(cfg, logger);
+    feedWinnerScan(tracker, precursor_id, 550, LADDER_MASSES, LADDER_FRAGS, "HCD");
+
+    std::vector<Ms3Target> plan = tracker.planNextScans(precursor_id);
+    TEST_TRUE(targetForIon(plan, "b", 2) != nullptr)   // kept: there is no coverage test in this mode
+    TEST_TRUE(targetForIon(plan, "b", 6) != nullptr)
+    TEST_TRUE(targetForIon(plan, "b", 7) != nullptr)
+    TEST_TRUE(targetForIon(plan, "b", 1) == nullptr)   // no interior: an MS3 of one residue cleaves nothing
+    TEST_EQUAL(static_cast<int>(plan.size()), 3)
+    TEST_EQUAL(countUnassigned(plan), 0)
+  }
+  {
+    const int precursor_id = 51;
+    Config cfg{trackerConfig("fragments", 2, 0.0, 0)};
+    IdaLogger logger(cfg);
+    ProteoformTracker tracker(cfg, logger);
+    feedWinnerScan(tracker, precursor_id, 551, LADDER_MASSES, LADDER_FRAGS, "HCD");
+
+    std::vector<Ms3Target> plan = tracker.planNextScans(precursor_id);
+    TEST_EQUAL(static_cast<int>(plan.size()), 2)       // max_targets bounds it
+    TEST_TRUE(targetForIon(plan, "b", 1) == nullptr)
+  }
 }
 END_SECTION
 

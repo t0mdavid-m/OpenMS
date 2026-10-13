@@ -111,6 +111,18 @@ START_SECTION(projection_covers_all_three_levels)
     TEST_EQUAL((int)cfg.characterization().objective, (int)CharacterizationObjective::Coverage)
   }
 
+  // fragments (ADR-0052) carries its own objective -- without it the mode would run as ambiguity --
+  // and switches levels 2 and 3 on like every other on-value.
+  {
+    Config cfg(cfgJson("",
+      R"("characterization": { "mode": "fragments", "protein_sequence": "PEPTIDEK" },)",
+      R"(, "ms3": { "analyzer": "Orbitrap", "activation": "CID", "collision_energy": 25 })"));
+    TEST_EQUAL((int)cfg.characterization().mode, (int)CharacterizationMode::Fragments)
+    TEST_EQUAL((int)cfg.characterization().objective, (int)CharacterizationObjective::Fragments)
+    TEST_EQUAL(cfg.level(2).selection != SelectionMetric::None, true)
+    TEST_EQUAL(cfg.level(3).selection != SelectionMetric::None, true)
+  }
+
   // levels_ is always {1,2,3}. toleranceList() walks it POSITIONALLY to build the DoubleList that
   // constructs Deconvolution, so a level going missing would shift every tols_[ms_level-1] index.
   {
