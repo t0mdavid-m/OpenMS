@@ -395,6 +395,33 @@ engine's `last_result_deconvolved_` (ADR-0045 below). **No unit test pins it** (
 was outside the approved set of the change that found it); the `refine_discriminating_cytc` golden's
 `scan_results` MS3 rows at `mass_count 0` are the only witness. Do not remove the `else` as dead code.
 
+### Any MS2 activation feeds an MS3; only a b/y precursor's MS3 is annotated (ADR-0054)
+
+No activation refuses an MS3: `winnerIsMs3Capable` (`"" | HCD | CID`) is **deleted**, so `exhaustive`
+and `discriminating` plan behind an ETD/EThcD/ETciD winner like the other modes, whose MS3s already
+went out as `ETD;HCD`. What ETD changes is the targets' **ion type** (c/z), and two predicates in
+`MS3FragmentMatcher` keep the two questions apart — **do not merge them**:
+
+- **`isKnownIonClass`** (a b c x y z) — *has a frame*: a span to target and to project through.
+  Unchanged. It also keys `Exploration`'s ADR-0023 forced `remaining_precursor` sweep, so narrowing it
+  would force every c/z sweep too, which ADR-0054 d.5 rejects (a c/z sweep keeps its metric; under
+  `fragment_count` every variant scores 0 and `ce_min` wins, knowingly).
+- **`isAnnotatableMs3Precursor`** (b y) — *its sub-ions are predicted correctly*. `getMS3IonTypes`
+  reads c/a as b and z/x as y, so a c precursor's yb/ya pieces sit ~17 Da low. Gates the two places
+  sub-ions are predicted: `calibrateAndScore` (the regular MS3 return and the `fragment_count`
+  re-score both go through it) and `Refine::pieceTest`'s per-side `predict`. A gated MS3 is acquired
+  and logged and matches nothing, so the existing `if` skips the identification row, `feedScan` and
+  `foldMs3`; the regular return prints `[MS3-UNANNOTATED] precursor_id= ion= scan=` (stdout only,
+  frame-having classes only — `'u'`/`'\0'` stay silent).
+
+`decideRefine` keeps path a **without a recount** when no dispatched record has a b/y side
+(`[DISCRIMINATING] … decided=kept reason=no_annotatable_pieces`, no `[MS3-DECIDE]`, no pooled row):
+with no MS3 confirmation the recount degenerates to an MS2-only ranking that can flip the winner. The
+whole-protein matcher an MS3 *exploration variant* also runs (`computeFragmentMatch_`) never reads the
+precursor class and is left alone — its full-protein ions are right whatever the precursor was.
+`ETciD` (one spelling, PSI-MS MS:1003182) joins both `needsCollisionEnergy` and `needsReactionTime`.
+**No ETD→MS3 has run on hardware**; whether the instrument takes `ReactionTime "7;0"` is open.
+
 ### `characterization.method` picks the MS2 annotator; Refine is the second one (ADR-0049)
 
 `FragmentAnalysis::getTopFragmentMatches` is **the one switch**: `AnnotationMethod::Refine` →
@@ -429,10 +456,10 @@ unchanged.
   `planExhaustive_`), and **ambiguity** after it — so a scan with only one total runs as ambiguity from
   the start. **A round that can never close through MS3 is decided without a recount or a pooled
   row**: when the pool is exhausted with nothing awaiting its return (every record refused by the
-  fragment-charge floor or dispatched in an earlier survey) or the winner MS2 cannot be isolated for
-  MS3 (an ETD MS2), `planDiscriminating_` sets `decided`, prints `[DISCRIMINATING] precursor_id=N
-  decided=fallthrough reason=pool_exhausted|winner_scan_not_ms3_capable`, and `planNextScans` plans
-  ambiguity **in the same call**; while a dispatched record is still unreturned it waits instead
+  fragment-charge floor or dispatched in an earlier survey), `planDiscriminating_` sets `decided`,
+  prints `[DISCRIMINATING] precursor_id=N decided=fallthrough reason=pool_exhausted`, and
+  `planNextScans` plans ambiguity **in the same call** (an ETD winner is no longer a second reason —
+  ADR-0054; see the section above); while a dispatched record is still unreturned it waits instead
   (`[MS3-PLAN] … targets=0`). A record only path b explains (`ion_a` empty) is dispatched with the
   **unassigned** label (`'u'`/0, as `planExhaustive_` marks a mass with no identity), never under
   path b's label; and a record is frozen once the decision has fired — `recordDiscriminatingScan`
