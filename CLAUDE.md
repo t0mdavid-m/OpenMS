@@ -23,7 +23,7 @@ Headers under `src/openms/include/OpenMS/ANALYSIS/TOPDOWN/`, sources under
 `CandidateAdmission.h`, `Ms2Params.h`, `NotchSelection.h` and `ProteoformTracker.h` are live but
 unregistered (verified 2026-09-04 — the list is longer than it used to be). Glob the directory
 instead. It costs nothing to register a new header there and it keeps the drift from growing;
-`ScanRole.h`, `ScanCommandJoin.h` and `KineticModel.h` are.
+`ScanRole.h`, `ScanCommandJoin.h`, `KineticModel.h`, `Refine.h` and `RefineSettings.h` are.
 
 ### The untouchable boundary
 
@@ -386,6 +386,75 @@ A returning regular MS3 is scored against the **live tracker winner**
 context supplies only `fragment_ion_type`/`fragment_ion_index`. No winner ⇒ empty context ⇒ the
 MS3 matches nothing. The cache entry is erased after use, so a duplicate/late MS3 yields no row.
 
+⚠️ **An MS3 that arrives with zero peaks clears the stored deconvolution** (OpenMS `3ea17e49cb`). The
+regular MS3 branch calls `deconvolveMSn` only when `mzs`/`ints`/`length > 0`, and `deconvolveMSn` is
+what clears `storedMS2()` on entry — so an empty MS3 used to read back the **previous** MSn scan's
+deconvolution and was identified, folded and logged with it, in every mode, on the instrument too.
+The `else deconv_.clearStoredMS2();` is the fix; it is the regular-path twin of the exploration
+engine's `last_result_deconvolved_` (ADR-0045 below). **No unit test pins it** (`FLASHIda_ProcessScan_test`
+was outside the approved set of the change that found it); the `refine_discriminating_cytc` golden's
+`scan_results` MS3 rows at `mass_count 0` are the only witness. Do not remove the `else` as dead code.
+
+### `characterization.method` picks the MS2 annotator; Refine is the second one (ADR-0049)
+
+`FragmentAnalysis::getTopFragmentMatches` is **the one switch**: `AnnotationMethod::Refine` →
+`runRefineMatching_`, else `runTagBasedFragmentMatching_` (FLASHTagger + FLASHExtender, the default
+`flashtnt`). Every MS2 route reaches it — the regular MS2 through `initiateNextLevel` →
+`ProteoformTracker::selectNextLevelTargets` and every exploration variant through
+`computeFragmentMatch_` → `ProteoformTracker::identifyExplorationFragments` — so there is no second
+place to switch. The two config-unreachable matchers
+(`getAmbiguityEnclosingIons`, `getTerminalFragmentIons`) still call the tag path directly.
+`runRefineMatching_` touches nothing in FLASHTnT, so the two-files-reach-into-FLASHTnT rule above is
+unchanged.
+
+- **`Refine` (`FLASHIda/Refine.{h,cpp}`) is pure static functions** — `ladder`, `detect`, `assemble`,
+  `discriminating`, `ptmSites`, `pieceTest`, `recount` — with no engine state, the same shape as
+  `KineticModel`. `RefineSettings` lives in its own `RefineSettings.h` **because of an include cycle**,
+  not for tidiness: `Refine.h` needs `FragmentAnalysis.h`, which includes `Config.h`, which holds the
+  settings by value. Do not fold it back. `RefineSettings::tolerance_ppm` is not authored — `Config`
+  copies level 2's tolerance into it after parsing the tolerances, so the two can never disagree.
+  `Detect::levels` keeps **every** level with its `Level::excluded` reason (`None | NeutralLoss |
+  NeutronSatellite | Capped`, first match wins); `Detect::n_kept` is what is built from and what
+  `identification.tsv` logs as `n_levels`.
+- **The contract is the tag path's** (decision 6): score = S, `ptm_sites` = the best path's windows,
+  `fragments` = its explained ions, `tag_count` −1, plus one extra member,
+  `ProteoformMatch::refine` (`shared_ptr<const RefineCandidates>`: Detect, every candidate path, the
+  precursor mass difference). `getTopFragmentMatches` **resets it before the switch**, so a reused
+  result never carries a stale record; only the tracker reads it.
+- **The tracker owns the round.** At finalize the winner's record becomes `ProteoformModel::refine`
+  (`RefineState`); with two or more totals, the masses the two best paths explain differently become
+  `DiscriminatingRecord`s, intensity-descending. Under `CharacterizationObjective::Discriminating`,
+  `planNextScans` returns `planDiscriminating_` **until the round's decision fires** (budget counts
+  species, nominal-mass dedupe, emitted through `emitRawMassTarget_`, which it shares with
+  `planExhaustive_`), and **ambiguity** after it — so a scan with only one total runs as ambiguity from
+  the start. Under `refine`, `narrowModifications_` runs `shift_only`: only a fragment that carries
+  the shift moves a boundary.
+- **The MS3 return path closes the round** (`FLASHIda.cpp`, regular MS3 branch). Each returning MS3
+  feeds `recordDiscriminatingScan` — whether or not the winner-context match found anything, and with
+  an empty spectrum when the scan deconvolved to nothing, because the round closes only when **every
+  dispatched record has returned**. Then `refineRoundClose_` calls `decideRefine` (recount over
+  **every** record, dispatched or not: `Refine::recount` throws `InvalidParameter` when the two paths'
+  shared counts disagree, which a partial target list produces; a flip re-seeds the modifications and
+  fragments from path b; the pooled row's trigger is `MS3-DECIDE`) and re-dispatches through
+  `Exploration::dispatchFromModel` — the tail of `initiateNextLevel`, extracted byte-identical —
+  replaying the **winner MS2's own command** (`ProteoformModel::winner_cmd`), never `ms2_ctx`, which
+  is the *first* fed scan's. The close runs **after** the context-cache erase: the re-dispatch inserts
+  into `ms2_context_cache_` and may rehash.
+- **`Config::validate` throws three ways**: a `refine` block under `flashtnt`; `discriminating` under
+  `flashtnt`; and `discriminating` with level-3 exploration enabled — an exploration MS3 returns on the
+  exploration branch, never reaches `recordDiscriminatingScan`, and the round could never complete.
+- **Markers, stdout only** (none in `ida.log`, ADR-0032): `[REFINE]` (one attribution line naming the
+  precursor and scan, because `[LEVELS]`/`[CANDIDATES]` print `scan=0` — the stored MS2 carries no
+  scan number), `[LEVELS]`, `[CANDIDATES]` (one per total), `[DISCRIMINATING]`, `[MS3-DECIDE]`,
+  `[MS3-REDISPATCH]`.
+
+Accepted limits, each deliberate for now: MS3 evidence folded during a round is **dropped on a flip**
+(the fragments are rebuilt from the winner scan as path b explains it; the round's staged scans are
+gone); `Refine::assemble` returns an empty result **silently** on a prefix/suffix ladder size
+mismatch; a re-matched non-winner (`getRematchedNonWinnerMatch`) is **stale after a flip**;
+`[REFINE]` is **not printed on the exploration MS2 path**; and the golden's empty-fixture MS3 rows
+carry rt 0 (cosmetic — the zero-peak fixture has no retention time).
+
 ### A sweep is exactly its grid, and every pre-scan carries its precursor share (ADR-0048)
 
 `exploration.activations` is a **list**, and `buildVariants_` emits each activation's whole sweep as a
@@ -594,7 +663,7 @@ the caller's responsibility.
 | `ida.log` | — | free-text MS1 summary (not a TSV) — the record of acquisition *decisions*, and the only stream keyed on the **instrument** scan number. It **no longer has a reader outside FLASHIda** (ADR-0046); `PrecursorSelection`'s `target_log_files` loader is the one that remains |
 | `scan_commands.tsv` | 34 | one row per **dequeued** command; the wide MS3-fragment stream (32→34 ADR-0026 `first_mass`/`last_mass`, between `faims_enabled` and the trailing `enqueue_ts`). **The stream FLASHDeconv reads** (`-FD:scan_commands`, ADR-0046) — see *Offline coupling* below |
 | `scan_results.tsv` | 50 | pure acquisition-**event** log per `processScan` (34→29 identification payload moved out, →28 per-charge deconv restructure, →29 `deconv_qscores`; →32 the identification-YIELD block `tag_count`/`fragment_count`/`tic_coverage` after column 12; →36 ADR-0038's quant block `quant_channels`/`quant_condition_means`/`quant_fold_change`/`quant_verdict`, **appended** after `dequeue_ts` because every `r.colIndex` pinned in `FLASHIda_LoggingFields_test` is ≤ 21 and appending is the only placement that invalidates none of them; →41 ADR-0040's `consensus_*` block; →50 ADR-0047's kinetic block `fit_p0`/`fit_ce_max_s`/`fit_width`/`k2`/`modeled_ce`/`modeled_b`/`fit_points`/`fit_rss`/`energy_source`, written on the row that completes a `kinetic_model` group and sentinel-valued everywhere else, `energy_source` alone also `measured`/`none` on every other metric's completing row. Column 12 is **`precursor_share`** (ADR-0048, renamed from `remaining_ratio` because the quantity changed): the anchor window's share of the scan's raw signal on EVERY MS2/MS3 row — pre-scan, follow-up, regular — read in the window the command isolated last, −1 on MS1 rows) |
-| `identification.tsv` | 34 | per-scan MS2/MS3 identification leaf (32→34: `tag_count` beside `flash_extender_score`, `fragment_qscores` inside the aligned fragment-mass table) |
+| `identification.tsv` | 41 | per-scan MS2/MS3 identification leaf (32→34: `tag_count` beside `flash_extender_score`, `fragment_qscores` inside the aligned fragment-mass table; →41 ADR-0049's Refine block `annotation_score`/`total_shift`/`second_total_shift`/`second_score`/`cut`/`n_levels`/`precursor_mass_difference`, **appended**, valued on the regular AND the exploration self-identification MS2 rows under `refine` and sentinel-valued everywhere else — `-1`, empty, empty, `-1`, `-1`, `-1`, empty. A real score of −1 is told from the sentinel by a non-empty `total_shift`; `flash_extender_score` and `tag_count` stay −1 under `refine`) |
 | `pooled_identification.tsv` | 19 | per-precursor cumulative proteoform trajectory |
 
 - **`ida.log`'s two identifiers are different quantities and neither substitutes for the other**
