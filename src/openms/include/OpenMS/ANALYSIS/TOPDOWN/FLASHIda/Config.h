@@ -52,10 +52,11 @@ namespace OpenMS
   /// Objective driving characterization scan planning for a proteoform
   enum class CharacterizationObjective
   {
-    Ambiguity, ///< Resolve PTM site ambiguity
-    Coverage,  ///< Extend sequence coverage
+    Ambiguity, ///< Resolve PTM site ambiguity: containers of each ambiguous modification
+    Coverage,  ///< Every fragment whose interior holds a bond MS2 never witnessed (ADR-0052)
     Exhaustive, ///< Fragment every deconvolved mass of the winner MS2 scan, mapped or not (ADR-0023)
-    Discriminating ///< Fragment what tells Refine's candidate paths apart (ADR-0049; requires method refine)
+    Discriminating, ///< Fragment what tells Refine's candidate paths apart (ADR-0049; requires method refine)
+    Fragments  ///< Every mapped fragment with a bond inside it (ADR-0052)
   };
 
   /// Which annotation method interprets the MS2 fragments against characterization.protein_sequence
@@ -371,7 +372,10 @@ namespace OpenMS
     Exhaustive,
     /// Target the fragments that discriminate between Refine's candidate paths (ADR-0049). Only
     /// meaningful under characterization.method "refine" -- a load error otherwise.
-    Discriminating
+    Discriminating,
+    /// Target every mapped fragment that has a bond inside it, strongest first, up to the budget,
+    /// with no coverage test (ADR-0052).
+    Fragments
   };
 
   /// Which quantification verdicts buy the identification scan (ADR-0039).

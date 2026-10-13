@@ -99,6 +99,7 @@ namespace
       case OpenMS::CharacterizationMode::Coverage: return "coverage";
       case OpenMS::CharacterizationMode::Exhaustive: return "exhaustive";
       case OpenMS::CharacterizationMode::Discriminating: return "discriminating";
+      case OpenMS::CharacterizationMode::Fragments: return "fragments";
     }
     return "off";  // unreachable for a valid enumerator; keeps return-path checks quiet
   }
@@ -332,7 +333,7 @@ namespace OpenMS
           "  ms2.min_charge   -> characterization.min_fragment_charge\n"
           "  ms3.exploration  -> characterization.exploration\n"
           "  ms2.selection and ms3.selection are replaced by characterization.mode "
-          "(off|ambiguity|coverage|exhaustive); ms3.max_targets and ms3.min_charge were never read and are "
+          "(off|ambiguity|coverage|fragments|exhaustive|discriminating); ms3.max_targets and ms3.min_charge were never read and are "
           "deleted.");
     rejectUnknownKeys(config,
         {"global", "deconvolution", "precursor_selection", "flashtnt", "tagging", "conditional_ms2",
@@ -536,10 +537,16 @@ namespace OpenMS
         characterization_.mode = CharacterizationMode::Discriminating;
         characterization_.objective = CharacterizationObjective::Discriminating;
       }
+      else if (m == "fragments")
+      {
+        // ADR-0052. Same rule again: without its objective the mode would ship as ambiguity.
+        characterization_.mode = CharacterizationMode::Fragments;
+        characterization_.objective = CharacterizationObjective::Fragments;
+      }
       else
         throw std::invalid_argument(
             "Config: characterization.mode must be one of \"off\", \"ambiguity\", \"coverage\", "
-            "\"exhaustive\", \"discriminating\"; "
+            "\"fragments\", \"exhaustive\", \"discriminating\"; "
             "got \"" + m + "\" (values are case-sensitive).");
 
       // ADR-0049. Which annotation method reads the MS2 fragments. Hard-rejected rather than

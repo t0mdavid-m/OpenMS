@@ -266,9 +266,10 @@ namespace OpenMS
     /// Dispatched-but-never-returned counts as DONE, deliberately: a target with no record that it was
     /// tried is re-dispatched forever.
     ///
-    /// Unused by ambiguity/coverage, which are self-limiting by construction (a localized mod leaves
-    /// the ambiguous list; a witnessed bond leaves the uncovered set). Exhaustive has no such feedback
-    /// -- its pool never shrinks -- so this set IS its termination condition.
+    /// Unused by ambiguity/coverage, whose pools shrink as evidence arrives (a localized mod leaves
+    /// the ambiguous list; a witnessed bond leaves the uncovered set), and by fragments, whose pool
+    /// does not -- a re-plan of the same model returns the same fragments (ADR-0052). Exhaustive has
+    /// no such feedback either, and there this set IS its termination condition.
     std::set<int> dispatched_nominal_masses;
 
     /// characterization.method refine only: the winner match's candidate record and the discriminating round
@@ -287,8 +288,9 @@ namespace OpenMS
    *
    * Accumulates fragment observations from MS2 and MS3 scans belonging to the same
    * precursor_id (one MS1 selection), maps them onto a ProteoformModel, narrows modification
-   * localization, and plans the next acquisition scans to maximize coverage or
-   * resolve ambiguity.
+   * localization, and plans the next acquisition scans per characterization.mode -- resolve
+   * ambiguity, extend coverage, every mapped fragment, every deconvolved mass, or Refine's
+   * discriminating masses.
    *
    * Key design principle: ProteoformTracker returns commands, never pushes them.
    * The caller (orchestrator) enqueues.
@@ -325,8 +327,9 @@ namespace OpenMS
      * Inspects the current ProteoformModel and returns a list of MS3 targets (descriptors,
      * not commands) the executor (Exploration) builds and dispatches. The model is the
      * dispatch authority (ADR-0002); it selects WHICH fragments to characterize, ordered by
-     * the configured CharacterizationObjective (Ambiguity | Coverage), bounded by the MS3
-     * budget, deduped, and skipping any fragment with no best-MS2 observation. Returns empty
+     * the configured CharacterizationObjective (Ambiguity | Coverage | Fragments), bounded by the
+     * MS3 budget, deduped, and skipping any fragment with no best-MS2 observation and any
+     * full-length ion (b_L / y_L -- the precursor, not a fragment; ADR-0052). Returns empty
      * if there is no identified model, no MS2 context, or no MS3 config.
      */
     /// Exhaustive forks to planExhaustive_ instead: its pool is the winner MS2 scan's raw deconvolved

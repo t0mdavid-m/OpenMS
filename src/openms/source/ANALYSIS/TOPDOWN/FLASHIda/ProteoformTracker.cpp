@@ -154,6 +154,7 @@ namespace OpenMS
         case CharacterizationObjective::Coverage: return "coverage";
         case CharacterizationObjective::Exhaustive: return "exhaustive";
         case CharacterizationObjective::Discriminating: return "discriminating";
+        case CharacterizationObjective::Fragments: return "fragments";
       }
       return "ambiguity";
     }
@@ -526,8 +527,8 @@ namespace OpenMS
 
   std::vector<Ms3Target> ProteoformTracker::planNextScans(int precursor_id)
   {
-    // "This run fired no MS3" resolves to one of NINE causes below (seven return sites; the last one
-    // splits three ways by objective). Every one of them used to return an empty plan silently,
+    // "This run fired no MS3" resolves to one of TEN causes below (seven return sites; the last one
+    // splits four ways by objective). Every one of them used to return an empty plan silently,
     // leaving the reason to be inferred from empty columns in pooled_identification.tsv. Name it
     // instead (ADR-0020). The zero-target outcome is frequently CORRECT -- ambiguity mode with every
     // modification already localized has nothing an MS3 could narrow -- so this is an explanation,
@@ -582,6 +583,24 @@ namespace OpenMS
     std::vector<const MappedFragment*> targets;
     std::set<FragmentKey> chosen;
 
+    // The one admission test every ion-labelled pool below applies (ADR-0052). A full-length ion
+    // (b_L, y_L: ion_index == L, so it spans the whole region) is the precursor itself, not a
+    // fragment -- re-fragmenting it yields nothing the MS2 could not -- yet it contains every
+    // ambiguous range and its interior is every bond, so without this test it wins under both
+    // ambiguity and coverage. Applied where the pools are BUILT, not inside add_target: add_target's
+    // `false` means "budget full" to its callers, which `break` on it. Exhaustive does not come here.
+    auto eligible = [L](const MappedFragment& f) {
+      return f.best_ms2.has_value() && f.ion_index < L;
+    };
+    // Bonds an MS3 re-feed of this parent could witness: prefix [1..k] -> bonds 1..k-1; suffix
+    // [c..L] -> bonds c..L-1. Empty for a one-residue ion (b1, y1), whose MS3 cleaves nothing.
+    auto interior = [L](const MappedFragment& f) -> std::pair<int, int> {
+      return {f.is_prefix ? 1 : f.cover_start, f.is_prefix ? (f.cover_end - 1) : (L - 1)};
+    };
+    auto by_intensity = [](const MappedFragment* a, const MappedFragment* b) {
+      return a->best_ms2->intensity > b->best_ms2->intensity;  // strongest first
+    };
+
     auto add_target = [&](const MappedFragment* f) -> bool {
       if (f == nullptr || !f->best_ms2.has_value()) return false;
       const FragmentKey key{f->ion_type, f->ion_index};
@@ -626,7 +645,7 @@ namespace OpenMS
         for (const auto& kv : m.fragments)
         {
           const MappedFragment& f = kv.second;
-          if (!f.best_ms2.has_value()) continue;
+          if (!eligible(f)) continue;
           if (!fragmentContains(f, rs_region, re_region)) continue;
           cands.push_back(&f);
         }
@@ -655,17 +674,19 @@ namespace OpenMS
         if (!any_at_rank) break;  // exhausted every mod's candidate list
       }
     }
-    else  // CharacterizationObjective::Coverage
+    else if (obj == CharacterizationObjective::Coverage)
     {
       // Backbone-cleavage-site coverage (same model as ProteoformModel::coveragePct, NOT a residue-span
       // union). Each observed fragment witnesses exactly ONE bond in MS2 (prefix b_k -> bond cover_end;
       // suffix -> bond cover_start-1). "Uncovered" = the L-1 inter-residue bonds not yet witnessed.
-      // MS3-ing a parent re-fragments its span, so it can witness the bonds INTERIOR to that span
-      // (prefix [1..k] -> bonds 1..k-1; suffix [c..L] -> bonds c..L-1). Target every observed fragment,
-      // strongest best-MS2 first, whose interior adds >=1 still-uncovered bond, marking that interior
-      // covered (marginal-skip so we don't re-target the same gap), bounded by budget.
+      // MS3-ing a parent re-fragments its span, so it can witness the bonds INTERIOR to that span.
+      // Target EVERY observed fragment whose interior holds >= 1 uncovered bond, strongest best-MS2
+      // first, until the budget (ADR-0052). The uncovered set is computed once and never shrinks as
+      // targets are chosen: one target does not excuse another because their interiors overlap. (It
+      // used to -- a set cover on the assumption that an MS3 witnesses every bond inside its parent,
+      // which no MS3 does; on ubiquitin it planned 2 targets of 67 against a budget of 1000.)
       //
-      // NB: a residue-SPAN union (the previous implementation) is unusable here: every fragment's span
+      // NB: a residue-SPAN union (an earlier implementation) is unusable here: every fragment's span
       // is a terminal slab [1,k] or [c,L], so the complement is always an INTERNAL gap that no terminal
       // fragment can fully contain (fragmentContains) -> it selected 0 targets for all real data.
       std::set<int> uncovered;
@@ -679,29 +700,39 @@ namespace OpenMS
 
       std::vector<const MappedFragment*> cands;
       for (const auto& kv : m.fragments)
-        if (kv.second.best_ms2.has_value()) cands.push_back(&kv.second);
-      std::sort(cands.begin(), cands.end(),
-                [](const MappedFragment* a, const MappedFragment* b) {
-                  return a->best_ms2->intensity > b->best_ms2->intensity;  // strongest first
-                });
+        if (eligible(kv.second)) cands.push_back(&kv.second);
+      std::sort(cands.begin(), cands.end(), by_intensity);
 
       for (const MappedFragment* f : cands)
       {
-        // Interior bonds an MS3 re-feed of this parent could witness.
-        const int lo = f->is_prefix ? 1 : f->cover_start;
-        const int hi = f->is_prefix ? (f->cover_end - 1) : (L - 1);
+        const auto [lo, hi] = interior(*f);
         if (hi < lo) continue;  // no interior bonds (e.g. b1)
         bool adds = false;
         for (int b = lo; b <= hi && !adds; ++b) adds = (uncovered.count(b) > 0);
-        if (!adds) continue;  // marginal-skip: contributes no new coverage
-        for (int b = lo; b <= hi; ++b) uncovered.erase(b);  // optimistic: MS3 drills its interior
+        if (!adds) continue;  // interior already fully witnessed in MS2: an MS3 could add nothing
         if (!add_target(f)) break;  // dedup + budget bound (existing lambda; false => budget full)
       }
+    }
+    else  // CharacterizationObjective::Fragments
+    {
+      // Every mapped fragment that has a bond inside it, strongest best-MS2 first, until the budget
+      // (ADR-0052): coverage without the uncovered-bond test. A one-residue ion is skipped -- its MS3
+      // cleaves nothing -- and a full-length one never reaches here (eligible).
+      std::vector<const MappedFragment*> cands;
+      for (const auto& kv : m.fragments)
+      {
+        const auto [lo, hi] = interior(kv.second);
+        if (eligible(kv.second) && hi >= lo) cands.push_back(&kv.second);
+      }
+      std::sort(cands.begin(), cands.end(), by_intensity);
+      for (const MappedFragment* f : cands)
+        if (!add_target(f)) break;  // dedup + budget bound (false => budget full)
     }
 
     if (targets.empty())
     {
-      if (obj != CharacterizationObjective::Ambiguity) return no_plan("no_fragment_adds_coverage");
+      if (obj == CharacterizationObjective::Coverage) return no_plan("no_fragment_adds_coverage");
+      if (obj == CharacterizationObjective::Fragments) return no_plan("no_mapped_fragment");
       // The run-B case: MS2 alone localized every modification, so there is no range left for an MS3
       // to narrow and zero targets is the correct answer, not a failure.
       return no_plan(had_ambiguous_mod ? "no_containing_fragment" : "all_mods_localized");
@@ -798,7 +829,7 @@ namespace OpenMS
               << " targets=" << out.size()
               << " fragments=" << fragments_selected
               << " budget=" << budget
-              << " objective=" << (obj == CharacterizationObjective::Ambiguity ? "ambiguity" : "coverage")
+              << " objective=" << objectiveName(obj)
               << std::endl;
     return out;
   }
