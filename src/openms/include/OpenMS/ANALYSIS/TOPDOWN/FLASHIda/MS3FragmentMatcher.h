@@ -85,6 +85,14 @@ namespace OpenMS
     /// identifications instead of none.
     static bool isKnownIonClass(char ion_class);
 
+    /// The precursor classes whose MS3 sub-ions this matcher predicts CORRECTLY: b and y, nothing else
+    /// (ADR-0054). getMS3IonTypes reads every other known class as if it were b or y, so a c precursor's
+    /// yb/ya pieces sit ~17 Da low, a z precursor's a/b pieces are wrong, and a/x are off by CO the same
+    /// way. Such a precursor still has a frame (isKnownIonClass) -- it can be targeted and its span is
+    /// real -- but its MS3 is acquired and logged, never annotated. Every annotator (calibrateAndScore,
+    /// Refine::pieceTest) refuses on this predicate; the projection sites keep refusing on isKnownIonClass.
+    static bool isAnnotatableMs3Precursor(char ion_class);
+
     /// Select MS3 ion types based on precursor fragment class. Empty for an unknown class (isKnownIonClass).
     static std::vector<std::string> getMS3IonTypes(char precursor_ion_class);
 

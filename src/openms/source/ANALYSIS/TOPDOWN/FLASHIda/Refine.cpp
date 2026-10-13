@@ -856,7 +856,9 @@ namespace OpenMS
     // the pieces exactly as calibrateAndScore computes them: subsequence, rebased PTM sites, MS3 ion types
     auto predict = [&](const Path& p, const std::optional<Path::Ion>& ion) {
       Side sd;
-      if (!ion) return sd;
+      // A side whose ion the matcher cannot annotate (ADR-0054: anything but b/y) predicts nothing: no shared pieces,
+      // no fit. Per side, because a record can be unassigned on one path and a real ion on the other.
+      if (!ion || !MS3FragmentMatcher::isAnnotatableMs3Precursor(ion->type)) return sd;
       sd.ctx.region_start = 0;
       sd.ctx.region_end = L;
       sd.ctx.ptm_sites = ptmSites(p);

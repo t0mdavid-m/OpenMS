@@ -24,6 +24,11 @@ namespace OpenMS
     return ion_class == 'a' || ion_class == 'b' || ion_class == 'c' || ion_class == 'x' || ion_class == 'y' || ion_class == 'z';
   }
 
+  bool MS3FragmentMatcher::isAnnotatableMs3Precursor(char ion_class)
+  {
+    return ion_class == 'b' || ion_class == 'y';
+  }
+
   std::vector<std::string> MS3FragmentMatcher::getMS3IonTypes(char precursor_ion_class)
   {
     switch (precursor_ion_class)
@@ -555,6 +560,10 @@ namespace OpenMS
     // -- every variant getting a real, wrong match count (ADR-0023 decision 5). A zero score per variant is
     // the same "nothing matched" the empty-subsequence exit just below already reports.
     if (!isKnownIonClass(fragment_ion_type)) return scores;
+
+    // Annotatability guard (ADR-0054): a c/z/a/x precursor has a frame, but getMS3IonTypes would predict
+    // its sub-ions with b/y chemistry -- a real, wrong match count. Same "nothing matched" as above.
+    if (!isAnnotatableMs3Precursor(fragment_ion_type)) return scores;
 
     // Extract subsequence
     std::string subseq = extractSubsequence(protein_sequence, ctx, fragment_ion_type, fragment_ion_index);

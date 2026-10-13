@@ -976,6 +976,15 @@ FLASHIda::FLASHIda(char* arg) :
           if (cache_it != ms2_context_cache_.end() && ms3_spec != nullptr && !ms3_spec->empty())
           {
             const auto& cached_ms2_ctx = cache_it->second;
+            // A precursor with a frame but no correct sub-ion chemistry (c/z/a/x, ADR-0054): the scoring below matches
+            // nothing for it, so the scan is acquired and logged, never annotated. Say so, once per scan. 'u' and '\0'
+            // have no frame at all and were never annotated (ADR-0023), so they stay silent.
+            const char ion = cached_ms2_ctx.fragment_ion_type;
+            if (MS3FragmentMatcher::isKnownIonClass(ion) && !MS3FragmentMatcher::isAnnotatableMs3Precursor(ion))
+            {
+              std::cout << "[MS3-UNANNOTATED] precursor_id=" << precursor_id << " ion=" << ion << cached_ms2_ctx.fragment_ion_index
+                        << " scan=" << parent_id_str << std::endl;
+            }
             // Score the returning MS3 against the LIVE WINNER proteoform held by the tracker
             // (ADR-0002), not this triggering MS2 scan's cached context. fragment_ion_type/index still
             // come from cached_ms2_ctx below. Empty context (no finalized winner) => MS3 matches nothing.
