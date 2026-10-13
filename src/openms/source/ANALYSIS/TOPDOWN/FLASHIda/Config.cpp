@@ -239,11 +239,11 @@ namespace OpenMS
   // so the answer had two definitions that could disagree without anything noticing.
   bool needsCollisionEnergy(const std::string& act)
   {
-    return act == "HCD" || act == "CID" || act == "EThcD";
+    return act == "HCD" || act == "CID" || act == "EThcD" || act == "ETciD";
   }
   bool needsReactionTime(const std::string& act)
   {
-    return act == "ETD" || act == "EThcD";
+    return act == "ETD" || act == "EThcD" || act == "ETciD";
   }
 
   // ADR-0045 decision 3. Exact set; the engine reads this string to decide whether a pre-scan is

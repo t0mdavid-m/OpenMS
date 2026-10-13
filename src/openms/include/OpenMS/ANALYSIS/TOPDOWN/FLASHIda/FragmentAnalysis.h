@@ -163,7 +163,7 @@ namespace OpenMS
 
     /// Map fragmentation method name to ion type strings for FLASHTagger/FLASHExtender.
     /// Case-insensitive. Returns {"b","y"} for HCD/CID, {"c","z"} for ETD,
-    /// {"b","c","y","z"} for EThcD/EtCID, {"a","b","c","x","y","z"} for UVPD.
+    /// {"b","c","y","z"} for EThcD/ETciD, {"a","b","c","x","y","z"} for UVPD.
     /// Defaults to {"b","y"} for unknown methods.
     static std::vector<std::string> getIonTypesForFragmentationMethod(const String& method);
 
