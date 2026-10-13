@@ -383,7 +383,7 @@ namespace OpenMS
     m.pending.push_back(std::move(ps));
   }
 
-  void ProteoformTracker::finalizeMS2(int precursor_id)
+  void ProteoformTracker::finalizeMS2(int precursor_id, std::optional<int> unidentified_winner_scan_id)
   {
     auto it = models_.find(precursor_id);
     if (it == models_.end()) return;
@@ -401,7 +401,19 @@ namespace OpenMS
 
     if (win == nullptr)
     {
-      // No scan identified anything -> keep the model empty (no header, no row, no plan).
+      // No scan identified anything -> no proteoform, no fragments, no pooled row. With a named winner scan
+      // (exhaustive, ADR-0055) the model still takes that scan's masses and parameters, which is all
+      // planExhaustive_ reads; it stays unidentified, so foldMs3 and every other objective still refuse it.
+      if (unidentified_winner_scan_id)
+      {
+        for (const PendingScan& ps : m.pending)
+        {
+          if (ps.scan_id != *unidentified_winner_scan_id) continue;
+          m.winner_scan_id = ps.scan_id;
+          m.winner_peaks = ps.peaks;
+          m.winner_params = ps.params;
+        }
+      }
       m.pending.clear();
       m.finalized = true;
       return;
@@ -531,17 +543,19 @@ namespace OpenMS
     auto it = models_.find(precursor_id);
     if (it == models_.end()) return no_plan("no_model");
     ProteoformModel& m = it->second;
-    // No identified model / no captured MS2 context -> no plan (ADR-0002).
-    if (m.proteoform_sequence.empty()) return no_plan("unidentified_precursor");
+    CharacterizationObjective obj = config_.characterization().objective;
+    // No identified model / no captured MS2 context -> no plan (ADR-0002). Exhaustive alone plans for an
+    // unidentified Precursor: its targets are the winner scan's masses, not ions of a proteoform (ADR-0055).
+    if (m.proteoform_sequence.empty() && obj != CharacterizationObjective::Exhaustive)
+      return no_plan("unidentified_precursor");
     if (!m.has_ms2_ctx) return no_plan("no_ms2_context");
 
-    CharacterizationObjective obj = config_.characterization().objective;
     const int budget = config_.level(2).max_targets;  // reuse the MS2 max_targets as the MS3 budget
     if (budget <= 0) return no_plan("zero_budget");
 
-    // The fork sits HERE deliberately: after every identification/context/budget guard, so decision 10
-    // ("identification is still required") reports through the SAME reason strings in every mode, and
-    // before the objective-keyed pool build below, which exhaustive replaces wholesale (ADR-0023).
+    // The fork sits HERE deliberately: after every context/budget guard, so those report through the SAME
+    // reason strings in every mode, and before the objective-keyed pool build below, which exhaustive
+    // replaces wholesale (ADR-0023). An unidentified model without a winner scan reports no_winner_scan.
     if (obj == CharacterizationObjective::Exhaustive) return planExhaustive_(m, precursor_id, budget);
 
     // Discriminating (ADR-0049): until the round's decision fires, the targets are the masses that tell Refine's two best
@@ -948,6 +962,7 @@ namespace OpenMS
 
     std::cout << "[MS3-PLAN] precursor_id=" << precursor_id
               << " objective=" << objectiveName(CharacterizationObjective::Exhaustive)
+              << " identified=" << (m.proteoform_sequence.empty() ? 0 : 1)
               << " pool=" << pool.size()
               << " targets=" << out.size()
               << " species=" << species_selected

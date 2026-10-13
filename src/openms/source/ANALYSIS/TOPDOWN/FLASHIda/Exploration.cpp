@@ -45,6 +45,7 @@
 #include <cstdio>
 #include <cstring>
 #include <iostream>
+#include <optional>
 
 namespace OpenMS
 {
@@ -1030,14 +1031,21 @@ namespace OpenMS
     // MS3-target count; under AmbiguityResolution an unambiguous ID selects zero targets (found==0) yet still
     // carries a real proteoform match — keying on the match keeps that ID in pooled_identification.tsv. For
     // intensity/qscore metrics found>0 iff fragments non-empty, so this is equivalent for shipped configs.
+    // Exhaustive builds a model WITHOUT a match too (ADR-0055): its pool is the winner scan's masses, and for an
+    // unidentified Precursor the winner scan is the one this dispatch comes from -- the regular MS2, the MS2
+    // exploration metric's winner (the cascade passes variants[best_idx]), or the production follow-up MS2.
+    const bool identified = !frag_result.proteoform_sequence.empty() && !frag_result.fragments.empty();
+    const bool exhaustive = config_.characterization().objective == CharacterizationObjective::Exhaustive;
     if (tracker != nullptr && next_level >= 3 && ms_ctx != nullptr && ms_ctx->num_stages > 0
-        && !frag_result.proteoform_sequence.empty() && !frag_result.fragments.empty())
+        && (identified || exhaustive))
     {
       // NOT a bail: this block RUNS when no model exists. It is the one-shot baseline for the
       // non-exploration MS2->MS3 path, where nothing upstream has fed the tracker -- the MS2 exploration
       // path finalizes its own model in feedResult, so `existing` is already populated there and this is
       // skipped. Turning it into an early-out would leave the regular path with no model, and
       // planNextScans below returns zero targets without one: no MS3 at all, silently.
+      // An unidentified model is re-pointed at every new dispatch scan; dispatched_nominal_masses survives
+      // finalize, so a species already fragmented for this Precursor is never re-targeted.
       const ProteoformModel* existing = tracker->getModel(precursor_id);
       if (existing == nullptr || existing->proteoform_sequence.empty())
       {
@@ -1047,7 +1055,7 @@ namespace OpenMS
         p.reaction_time    = ms_ctx->stages[0].reaction_time;
         tracker->feedScan(precursor_id, /*ms_level=*/2, p, ms_ctx->scan_id, result, frag_result,
                           frag_result.score, *ms_ctx);
-        tracker->finalizeMS2(precursor_id);
+        tracker->finalizeMS2(precursor_id, identified ? std::nullopt : std::optional<int>(ms_ctx->scan_id));
       }
     }
 
@@ -1071,7 +1079,9 @@ namespace OpenMS
 
     const ProteoformModel* model = (tracker != nullptr && next_level >= 3 && ms_ctx != nullptr)
         ? tracker->getModel(precursor_id) : nullptr;
-    if (model != nullptr && !model->proteoform_sequence.empty())
+    // Exhaustive dispatches for an unidentified model too (ADR-0055); planExhaustive_ refuses one with no pool.
+    if (model != nullptr && (!model->proteoform_sequence.empty()
+                             || config_.characterization().objective == CharacterizationObjective::Exhaustive))
     {
       // Render/annotation seed = the finalized ProteoformTracker model (the SAME object
       // pooled_identification emits), NOT the exploration-metric winner's frag_result. Under a CE sweep

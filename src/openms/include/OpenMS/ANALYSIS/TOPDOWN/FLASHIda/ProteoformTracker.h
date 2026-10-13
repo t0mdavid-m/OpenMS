@@ -230,8 +230,9 @@ namespace OpenMS
     /// of a scan container at plan time would instead make this mode's correctness depend on another
     /// feature's retention policy, and plan nothing the moment that policy changed.
     ///
-    /// Empty until finalizeMS2 picks a winner; an unidentified Precursor never gets one, which is how
-    /// decision 10 ("identification is still required") holds without a second test.
+    /// Empty until finalizeMS2 picks a winner. An unidentified Precursor gets one only when the caller
+    /// names its winner scan (ADR-0055: exhaustive plans from the scan the MS2 decision chose); the model
+    /// then carries these two fields and nothing else -- no sequence, no fragments, no pooled row.
     std::vector<PeakRecord> winner_peaks;
     Ms2Params winner_params;
     /// characterization.method refine only: the winner MS2 scan's deconvolved spectrum (from its PendingScan), which the
@@ -314,7 +315,9 @@ namespace OpenMS
                   const ScanCommand& ms2_ctx);
 
     /// Mark the model for @p precursor_id as finalized (no further scans expected).
-    void finalizeMS2(int precursor_id);
+    /// @p unidentified_winner_scan_id is read ONLY when no staged scan identified: the staged scan with that
+    /// id becomes the winner scan (winner_peaks/winner_params) of a model that stays unidentified (ADR-0055).
+    void finalizeMS2(int precursor_id, std::optional<int> unidentified_winner_scan_id = std::nullopt);
 
     /// Additively fold one already-staged MS3 scan into the EXISTING finalized model (no winner re-pick,
     /// no fragments reset), re-narrow, and emit one pooled trajectory row tagged with the driving fragment
