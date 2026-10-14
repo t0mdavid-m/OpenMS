@@ -17,6 +17,7 @@
 #include <boost/dynamic_bitset.hpp>
 #include <iomanip>
 #include <iostream>
+#include <set>
 
 namespace OpenMS
 {
@@ -91,12 +92,17 @@ private:
   bool multiple_hits_per_spec_ = false;
   bool protein_level_only_ = false;
   int max_protein_hits_ = 20;
+  int min_protein_hits_ = 5;
+  double protein_fdr_ = 0.1;
   std::vector<ProteinHit> proteoform_hits_;
   std::vector<ProteinHit> protein_hits_;
   std::vector<FLASHHelperClasses::Tag> tags_;
   std::map<int, std::vector<int>> matching_hits_indices_;
   static bool areConsistent_(const ProteinHit& a, const ProteinHit& b, double tol) ;
   void markRepresentativeProteoformHits_(double tol);
+  /// fasta indices of the proteins (targets and decoys) whose run-level q-value passes protein_fdr_, from each
+  /// protein's best tag-based score in protein_hits_
+  std::set<Size> getProteinsPassingFDR_(const std::vector<FASTAFile::FASTAEntry>& fasta_entry) const;
   static void vectorizeProteinSequence_(const std::vector<std::string>& cleaned_protein_seqs,
                             std::vector<std::unordered_set<int>>& vec_pro,
                             std::vector<std::unordered_set<int>>& rev_vec_pro);
