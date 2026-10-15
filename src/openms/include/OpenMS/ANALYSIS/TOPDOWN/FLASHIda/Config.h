@@ -401,6 +401,38 @@ namespace OpenMS
     None
   };
 
+  /// Which test turns six reporter channels into differential / not_differential (ADR-0056).
+  /// Every test computes the same two numbers -- the geometric fold change and the two-sided Welch
+  /// p on the log2 channels -- and differs only in which of them the verdict reads.
+  enum class QuantTest
+  {
+    /// The fold change clears fold_change_threshold in either direction. THE DEFAULT.
+    FoldChange,
+    /// p <= p_value_threshold.
+    Welch,
+    /// Both. The offline pipeline's volcano rule.
+    WelchAndFoldChange
+  };
+
+  /// What a condition empty in every assigned channel, against one measured in every channel, means
+  /// (ADR-0056 decision 4). Read BEFORE any test: a test has nothing to compute on one empty side.
+  enum class EmptyCondition
+  {
+    /// The species is present on one side and absent on the other: the strongest result the
+    /// experiment can produce (ADR-0038). THE DEFAULT.
+    Differential,
+    /// A measurement that cannot be tested: incomplete_channels, buys nothing but under identify: all.
+    Incomplete
+  };
+
+  /// How a quantification group's usable members are combined per channel (ADR-0056 decision 5).
+  enum class QuantAggregate
+  {
+    Median,  ///< THE DEFAULT, and the offline pipeline's QUANT_AGG; an even count takes the mean of the middle two
+    Mean,
+    Sum
+  };
+
   struct OPENMS_DLLAPI CharacterizationConfig
   {
     CharacterizationMode mode = CharacterizationMode::Off;
@@ -481,12 +513,27 @@ namespace OpenMS
     double fold_change_threshold = 1.4;
     /// ADR-0039. Which verdicts buy `identification_scan`. The default reproduces ADR-0038 exactly.
     QuantIdentify identify = QuantIdentify::Differential;
+    /// ADR-0056. Which test decides; both numbers are computed and logged under every test.
+    QuantTest test = QuantTest::FoldChange;
+    /// ADR-0056. Two-sided Welch p at or below this is a hit (`p <= threshold`, the pipeline's rule).
+    double p_value_threshold = 0.05;
+    /// ADR-0056. What a wholly empty condition against a fully measured one means.
+    EmptyCondition empty_condition = EmptyCondition::Differential;
+    /// ADR-0056. Scale each group member to its share of its own assigned reporter signal before
+    /// combining, so a bright charge state does not dominate the aggregate.
+    bool scan_normalize = true;
+    /// ADR-0056. How the usable members of a group are combined per channel.
+    QuantAggregate aggregate = QuantAggregate::Median;
+    /// ADR-0056. A group decides only when at least this many members are usable (or, when none is,
+    /// at least this many are wholly-absent-against-full). Replaces ADR-0040's decision-time read of
+    /// precursor_selection.min_charge_states.
+    int min_usable_scans = 1;
     /// ADR-0039. Ordinal into `conditions` that a species must be ENRICHED IN for a Differential
     /// verdict to buy the identification scan. `-1` = either direction (the default, and the
     /// symmetric test ADR-0038 shipped). Resolved from the authored CONDITION NAME at load, so no
     /// consumer downstream needs the name table -- the same treatment channel names get.
     ///
-    /// Named by condition, NEVER as up/down. fold_change = mean(conditions[0]) / mean(conditions[1]),
+    /// Named by condition, NEVER as up/down. fold_change = gmean(conditions[0]) / gmean(conditions[1]),
     /// so "up" would mean *enriched in conditions[0]* -- on method_quant.json, enriched in CONTROL,
     /// the opposite of what anyone writing "up" intends -- and would silently invert the experiment
     /// the moment someone reordered the array.
@@ -497,7 +544,7 @@ namespace OpenMS
     /// condition and absent in the other -- the strongest result the experiment can produce.
     int enriched_in = -1;
     /// EXACTLY TWO, and the ARRAY ORDER IS THE RATIO DIRECTION:
-    ///   fold_change = mean(conditions[0]) / mean(conditions[1])
+    ///   fold_change = gmean(conditions[0]) / gmean(conditions[1])   (geometric means, ADR-0056)
     /// Authored as a JSON array rather than an object because nlohmann's object_t is a std::map,
     /// so an object would sort the two conditions alphabetically and silently decide which is the
     /// numerator -- the same trap Config.cpp already documents for additional_ms2 dispatch order.

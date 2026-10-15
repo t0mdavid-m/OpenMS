@@ -9,6 +9,8 @@
 #include <OpenMS/CONCEPT/ClassTest.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 
+#include <iostream>
+#include <sstream>
 #include <string>
 #include <utility>
 
@@ -1038,6 +1040,158 @@ START_SECTION(quantification_inert_enriched_in_is_a_warning_not_a_throw)
   Config diff(withBoth("differential", "b"));
   TEST_EQUAL(diff.quantification().enriched_in, 1)
   TEST_EQUAL(diff.quantification().identify == QuantIdentify::Differential, true)
+}
+END_SECTION
+
+// ---- ADR-0056: the authored quantification test, the empty condition, the group aggregate --------
+
+// Function-scope lambdas, not a namespace: START_TEST opens a function body.
+// A quantification section with the shared conditions plus `body`, under precursor_selection
+// `precursor_extra`. Every ADR-0056 section below builds its config through this one helper.
+auto quantCfg = [](const std::string& body, const std::string& precursor_extra = std::string()) {
+  return cfgJson(precursor_extra,
+                 QUANT_ON(R"({ "enabled": true, "labelling": "tmt6plex", )"
+                          + std::string(QUANT_CONDS) + (body.empty() ? std::string() : ", " + body) + R"( })"),
+                 MS2_QUANT);
+};
+
+// Loads `json` and returns everything Config printed to stdout, so a [CONFIG-WARN] is ASSERTED
+// rather than inferred from "it loaded". Restores cout even when the load throws.
+auto loadAndCapture = [](const std::string& json) {
+  std::ostringstream buf;
+  std::streambuf* old = std::cout.rdbuf(buf.rdbuf());
+  try { Config c(json); }
+  catch (...) { std::cout.rdbuf(old); throw; }
+  std::cout.rdbuf(old);
+  return buf.str();
+};
+
+START_SECTION(quantification_test_parses_and_rejects)
+{
+  // Each value reaches its enumerator -- a parse that accepted the string and assigned nothing would
+  // ship byte-identical to fold_change, the inert-mode trap ADR-0023 D-a names.
+  TEST_EQUAL(Config(quantCfg(R"("test": "fold_change")")).quantification().test == QuantTest::FoldChange, true)
+  TEST_EQUAL(Config(quantCfg(R"("test": "welch")")).quantification().test == QuantTest::Welch, true)
+  TEST_EQUAL(Config(quantCfg(R"("test": "welch_and_fold_change")")).quantification().test
+                 == QuantTest::WelchAndFoldChange, true)
+  // Unauthored and explicit null (the C# serializer emits nulls) are the default, fold_change.
+  TEST_EQUAL(Config(quantCfg("")).quantification().test == QuantTest::FoldChange, true)
+  TEST_EQUAL(Config(quantCfg(R"("test": null)")).quantification().test == QuantTest::FoldChange, true)
+  // Rejected, never defaulted.
+  TEST_EXCEPTION(std::invalid_argument, Config(quantCfg(R"("test": "Welch")")))
+  TEST_EXCEPTION(std::invalid_argument, Config(quantCfg(R"("test": "t_test")")))
+  TEST_EXCEPTION(std::invalid_argument, Config(quantCfg(R"("test": "")")))
+
+  // The scalar keys reach the struct with their authored values, and default where unauthored.
+  Config d(quantCfg(""));
+  TEST_REAL_SIMILAR(d.quantification().p_value_threshold, 0.05)
+  TEST_REAL_SIMILAR(d.quantification().fold_change_threshold, 1.4)
+  TEST_EQUAL(d.quantification().scan_normalize, true)
+  TEST_EQUAL(d.quantification().min_usable_scans, 1)
+  Config a(quantCfg(R"("test": "welch", "p_value_threshold": 0.01, "scan_normalize": false)"));
+  TEST_REAL_SIMILAR(a.quantification().p_value_threshold, 0.01)
+  TEST_EQUAL(a.quantification().scan_normalize, false)
+}
+END_SECTION
+
+START_SECTION(quantification_empty_condition_and_aggregate_parse_and_reject)
+{
+  TEST_EQUAL(Config(quantCfg("")).quantification().empty_condition == EmptyCondition::Differential, true)
+  TEST_EQUAL(Config(quantCfg(R"("empty_condition": "differential")")).quantification().empty_condition
+                 == EmptyCondition::Differential, true)
+  TEST_EQUAL(Config(quantCfg(R"("empty_condition": "incomplete")")).quantification().empty_condition
+                 == EmptyCondition::Incomplete, true)
+  TEST_EQUAL(Config(quantCfg(R"("empty_condition": null)")).quantification().empty_condition
+                 == EmptyCondition::Differential, true)
+  TEST_EXCEPTION(std::invalid_argument, Config(quantCfg(R"("empty_condition": "incomplete_channels")")))
+  TEST_EXCEPTION(std::invalid_argument, Config(quantCfg(R"("empty_condition": "absent")")))
+
+  TEST_EQUAL(Config(quantCfg("")).quantification().aggregate == QuantAggregate::Median, true)
+  TEST_EQUAL(Config(quantCfg(R"("aggregate": "median")")).quantification().aggregate == QuantAggregate::Median, true)
+  TEST_EQUAL(Config(quantCfg(R"("aggregate": "mean")")).quantification().aggregate == QuantAggregate::Mean, true)
+  TEST_EQUAL(Config(quantCfg(R"("aggregate": "sum")")).quantification().aggregate == QuantAggregate::Sum, true)
+  TEST_EQUAL(Config(quantCfg(R"("aggregate": null)")).quantification().aggregate == QuantAggregate::Median, true)
+  TEST_EXCEPTION(std::invalid_argument, Config(quantCfg(R"("aggregate": "Median")")))
+  TEST_EXCEPTION(std::invalid_argument, Config(quantCfg(R"("aggregate": "polish")")))
+}
+END_SECTION
+
+START_SECTION(quantification_welch_needs_two_channels_per_condition)
+{
+  // A Welch test computes a variance per condition, which needs two values. One channel is legal
+  // under fold_change (a ratio of one to three is a ratio) and a load error under either Welch test.
+  const std::string one_v_three =
+    R"("conditions": [ { "name": "a", "channels": ["126"] }, { "name": "b", "channels": ["129","130","131"] } ])";
+  auto cfg = [&](const std::string& test, bool enabled) {
+    return cfgJson("", QUANT_ON(R"({ "enabled": )" + std::string(enabled ? "true" : "false")
+                                + R"(, "labelling": "tmt6plex", )" + one_v_three
+                                + R"(, "test": ")" + test + R"(" })"), MS2_QUANT);
+  };
+  Config fc(cfg("fold_change", true));
+  TEST_EQUAL(fc.quantification().conditions[0].channels.size(), 1)
+  TEST_EXCEPTION(std::invalid_argument, Config(cfg("welch", true)))
+  TEST_EXCEPTION(std::invalid_argument, Config(cfg("welch_and_fold_change", true)))
+  // Like its siblings, the rule lives inside `if (enabled)`: a disabled section is never rejected.
+  Config off(cfg("welch", false));
+  TEST_EQUAL(off.quantification().enabled, false)
+}
+END_SECTION
+
+START_SECTION(quantification_min_usable_scans_needs_separate)
+{
+  // single and multiplexed put one member in every group, so a floor above 1 could never be met.
+  TEST_EXCEPTION(std::invalid_argument, Config(quantCfg(R"("min_usable_scans": 2)")))
+  TEST_EXCEPTION(std::invalid_argument,
+                 Config(quantCfg(R"("min_usable_scans": 2)", R"(, "precursor_charges": "multiplexed")")))
+  Config sep(quantCfg(R"("min_usable_scans": 2)",
+                      R"(, "precursor_charges": "separate", "min_charge_states": 2, "max_charge_states": 3)"));
+  TEST_EQUAL(sep.quantification().min_usable_scans, 2)
+  // 1 is legal everywhere.
+  Config one(quantCfg(R"("min_usable_scans": 1)", R"(, "precursor_charges": "multiplexed")"));
+  TEST_EQUAL(one.quantification().min_usable_scans, 1)
+  // Disabled: not rejected.
+  Config off(cfgJson("", QUANT_ON(R"({ "enabled": false, "labelling": "tmt6plex", )"
+                                  + std::string(QUANT_CONDS) + R"(, "min_usable_scans": 2 })"), MS2_QUANT));
+  TEST_EQUAL(off.quantification().min_usable_scans, 2)
+}
+END_SECTION
+
+START_SECTION(quantification_min_usable_scans_is_bounded_by_the_charge_set)
+{
+  // Above max_charge_states no group can ever hold enough members: a throw, the A27 min > max shape.
+  TEST_EXCEPTION(std::invalid_argument,
+                 Config(quantCfg(R"("min_usable_scans": 4)",
+                                 R"(, "precursor_charges": "separate", "min_charge_states": 2, "max_charge_states": 3)")))
+  // max_charge_states 0 means "no cap", so there is nothing to exceed.
+  const std::string uncapped = loadAndCapture(
+      quantCfg(R"("min_usable_scans": 4)", R"(, "precursor_charges": "separate", "min_charge_states": 4)"));
+  TEST_EQUAL(uncapped.find("min_usable_scans") == std::string::npos, true)
+  // Above min_charge_states it can be met only by species resolving more charges than admission
+  // requires: loads, and says so.
+  const std::string warned = loadAndCapture(
+      quantCfg(R"("min_usable_scans": 2)", R"(, "precursor_charges": "separate", "min_charge_states": 1)"));
+  TEST_EQUAL(warned.find("[CONFIG-WARN] quantification.min_usable_scans") != std::string::npos, true)
+  // At or below min_charge_states: silent.
+  const std::string quiet = loadAndCapture(
+      quantCfg(R"("min_usable_scans": 2)", R"(, "precursor_charges": "separate", "min_charge_states": 2)"));
+  TEST_EQUAL(quiet.find("min_usable_scans") == std::string::npos, true)
+}
+END_SECTION
+
+START_SECTION(quantification_unread_threshold_is_a_warning_not_a_throw)
+{
+  // A threshold the authored test does not read is announced, never rejected, so flipping `test`
+  // never invalidates a template (ADR-0039's enriched_in treatment, ADR-0056 decision 1).
+  const std::string p_under_fc = loadAndCapture(quantCfg(R"("test": "fold_change", "p_value_threshold": 0.01)"));
+  TEST_EQUAL(p_under_fc.find("[CONFIG-WARN] quantification.p_value_threshold") != std::string::npos, true)
+  const std::string fc_under_welch = loadAndCapture(quantCfg(R"("test": "welch", "fold_change_threshold": 1.5)"));
+  TEST_EQUAL(fc_under_welch.find("[CONFIG-WARN] quantification.fold_change_threshold") != std::string::npos, true)
+  // Both are read under welch_and_fold_change, and a default value is not "authored": silent.
+  const std::string both = loadAndCapture(
+      quantCfg(R"("test": "welch_and_fold_change", "p_value_threshold": 0.01, "fold_change_threshold": 1.5)"));
+  TEST_EQUAL(both.find("_threshold") == std::string::npos, true)
+  const std::string defaults = loadAndCapture(quantCfg(R"("test": "welch")"));
+  TEST_EQUAL(defaults.find("_threshold") == std::string::npos, true)
 }
 END_SECTION
 

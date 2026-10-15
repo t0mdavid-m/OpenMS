@@ -120,6 +120,27 @@ namespace
     return "differential";  // unreachable for a valid enumerator; keeps return-path checks quiet
   }
 
+  // ADR-0056. The authored spelling of a quantification test, for the [CONFIG-WARN] lines. No
+  // `default:`, as above.
+  const char* quantTestName(OpenMS::QuantTest t)
+  {
+    switch (t)
+    {
+      case OpenMS::QuantTest::FoldChange: return "fold_change";
+      case OpenMS::QuantTest::Welch: return "welch";
+      case OpenMS::QuantTest::WelchAndFoldChange: return "welch_and_fold_change";
+    }
+    return "fold_change";  // unreachable for a valid enumerator
+  }
+
+  // ADR-0056. A string key that may be absent or null (the C# serializer emits nulls), returned as
+  // its default in both cases -- the `identify` idiom, shared by the three enum keys below.
+  std::string nullableString(const nlohmann::json& obj, const char* key, const char* fallback)
+  {
+    return (obj.contains(key) && !obj[key].is_null()) ? obj[key].get<std::string>()
+                                                       : std::string(fallback);
+  }
+
   // One lenient scan-config allowlist for every scan object (ms1/ms2/ms3/follow_up_scan): the union
   // of MS1- and MS2/MS3-level keys. Rejects non-schema scan keys such as the removed 'IsolationMode'.
   const std::set<std::string> kScanKeys = {
@@ -613,19 +634,57 @@ namespace OpenMS
     if (quant.contains("only_one_condition"))
       throw std::invalid_argument(
           "Config: 'quantification.only_one_condition' is retired (ADR-0038). It was never "
-          "reachable -- no emit DTO carried it -- and its intent is now unconditional: a condition "
-          "that is WHOLLY absent reports 'differential', because a species present in one condition "
-          "and absent in the other is the strongest result the experiment can produce.");
+          "reachable -- no emit DTO carried it. What a WHOLLY absent condition means is now authored "
+          "as 'quantification.empty_condition': 'differential' (the default -- a species present in "
+          "one condition and absent in the other is the strongest result the experiment can produce) "
+          "or 'incomplete' (ADR-0056).");
 
     rejectUnknownKeys(quant,
         {"enabled", "labelling", "reporter_mz_tol", "fold_change_threshold",
          "conditions", "correction_matrix",
-         "identify", "enriched_in"},  // ADR-0039
+         "identify", "enriched_in",  // ADR-0039
+         "test", "p_value_threshold", "empty_condition", "scan_normalize", "aggregate",
+         "min_usable_scans"},  // ADR-0056
         "quantification");
     quant_.enabled = quant.value("enabled", false);
     quant_.labelling = quant.value("labelling", std::string("tmt6plex"));
     quant_.reporter_mz_tol = quant.value("reporter_mz_tol", 0.002);
     quant_.fold_change_threshold = quant.value("fold_change_threshold", 1.4);
+    quant_.p_value_threshold = quant.value("p_value_threshold", 0.05);
+    quant_.scan_normalize = quant.value("scan_normalize", true);
+    quant_.min_usable_scans = quant.value("min_usable_scans", 1);
+
+    // ADR-0056. Three string enums, hard-rejected rather than defaulted for identify's reason below:
+    // a typo must not silently select a different statistic.
+    {
+      const std::string t = nullableString(quant, "test", "fold_change");
+      if (t == "fold_change")                quant_.test = QuantTest::FoldChange;
+      else if (t == "welch")                 quant_.test = QuantTest::Welch;
+      else if (t == "welch_and_fold_change") quant_.test = QuantTest::WelchAndFoldChange;
+      else
+        throw std::invalid_argument(
+            "Config: quantification.test must be one of \"fold_change\", \"welch\", "
+            "\"welch_and_fold_change\"; got \"" + t + "\" (values are case-sensitive). It selects "
+            "which test turns the reporter channels into a verdict (ADR-0056).");
+
+      const std::string e = nullableString(quant, "empty_condition", "differential");
+      if (e == "differential")    quant_.empty_condition = EmptyCondition::Differential;
+      else if (e == "incomplete") quant_.empty_condition = EmptyCondition::Incomplete;
+      else
+        throw std::invalid_argument(
+            "Config: quantification.empty_condition must be \"differential\" or \"incomplete\"; "
+            "got \"" + e + "\". It decides what a condition empty in every channel, against one "
+            "measured in every channel, means (ADR-0056).");
+
+      const std::string g = nullableString(quant, "aggregate", "median");
+      if (g == "median")    quant_.aggregate = QuantAggregate::Median;
+      else if (g == "mean") quant_.aggregate = QuantAggregate::Mean;
+      else if (g == "sum")  quant_.aggregate = QuantAggregate::Sum;
+      else
+        throw std::invalid_argument(
+            "Config: quantification.aggregate must be one of \"median\", \"mean\", \"sum\"; got \""
+            + g + "\". It combines a quantification group's usable members per channel (ADR-0056).");
+    }
 
     // ADR-0039. Which verdicts buy the identification scan. Hard-rejected rather than defaulted,
     // for exactly characterization.mode's reason: a typo'd "Differential" must not silently select
@@ -686,7 +745,7 @@ namespace OpenMS
         throw std::invalid_argument(
             "Config: 'quantification.conditions' must be an ARRAY of exactly two objects "
             "{name, channels}. The array order is the ratio direction: "
-            "fold_change = mean(conditions[0]) / mean(conditions[1]).");
+            "fold_change = gmean(conditions[0]) / gmean(conditions[1]) (geometric means).");
 
       const std::vector<std::string> channel_names = Quantification::channelNames(quant_.labelling);
       std::string known_channels;
@@ -1264,7 +1323,7 @@ namespace OpenMS
         throw std::invalid_argument(
             "Config: quantification.conditions must name EXACTLY TWO conditions (got "
             + std::to_string(quant_.conditions.size())
-            + "). fold_change = mean(conditions[0]) / mean(conditions[1]) is a two-group ratio; a "
+            + "). fold_change = gmean(conditions[0]) / gmean(conditions[1]) is a two-group ratio; a "
               "time course or dose series needs a different statistic, not a ratio of the first "
               "two groups.");
 
@@ -1301,6 +1360,57 @@ namespace OpenMS
       // time `identify` is flipped and would invalidate a template that sets enriched_in once, so
       // the inertness is announced instead -- the same [CONFIG-WARN] treatment an unreferenced
       // ms_settings.additional_ms2 block gets in the constructor above.
+      // ADR-0056 5. A Welch test computes a variance per condition, which needs two values.
+      if (quant_.test != QuantTest::FoldChange)
+      {
+        for (const auto& cond : quant_.conditions)
+        {
+          if (cond.channels.size() < 2)
+            throw std::invalid_argument(
+                "Config: quantification.test \"" + std::string(quantTestName(quant_.test))
+                + "\" needs at least two channels per condition (a Welch test computes a variance "
+                  "per condition); condition '" + cond.name + "' names "
+                + std::to_string(cond.channels.size()) + ". Use test \"fold_change\" or assign a "
+                  "second channel (ADR-0056).");
+        }
+      }
+
+      // ADR-0056 6. single and multiplexed put ONE member in every quantification group, so a floor
+      // above one could never be met and every group would end incomplete_channels, silently.
+      if (quant_.min_usable_scans > 1 && targeting_.precursor_charges != ChargeAcquisitionMode::Separate)
+        throw std::invalid_argument(
+            "Config: quantification.min_usable_scans is " + std::to_string(quant_.min_usable_scans)
+            + " but precursor_selection.precursor_charges is not \"separate\". A quantification "
+              "group has one member under single and multiplexed, so it could never reach the floor "
+              "(ADR-0056).");
+
+      // ADR-0056 7. The floor against the acquisition charge set: above the cap no group can ever hold
+      // enough members (a throw, the min > max shape); above the admission floor only species that
+      // resolve more charges than admission requires can reach it (a warning).
+      if (targeting_.max_charge_states > 0 && quant_.min_usable_scans > targeting_.max_charge_states)
+        throw std::invalid_argument(
+            "Config: quantification.min_usable_scans (" + std::to_string(quant_.min_usable_scans)
+            + ") exceeds precursor_selection.max_charge_states ("
+            + std::to_string(targeting_.max_charge_states) + "): no quantification group can ever "
+              "hold that many members, so none would ever decide (ADR-0056).");
+      if (quant_.min_usable_scans > 1 && quant_.min_usable_scans > targeting_.min_charge_states)
+        std::cout << "[CONFIG-WARN] quantification.min_usable_scans (" << quant_.min_usable_scans
+                  << ") exceeds precursor_selection.min_charge_states (" << targeting_.min_charge_states
+                  << "): only species that resolve more charge states than admission requires can "
+                     "reach it; every other group ends incomplete_channels.\n";
+
+      // ADR-0056 1. A threshold the authored test does not read. Warned, never thrown, so flipping
+      // `test` never invalidates a template. Non-default is the only authored-ness visible here: the
+      // C# side emits every key, with these same defaults.
+      if (quant_.test == QuantTest::FoldChange && quant_.p_value_threshold != 0.05)
+        std::cout << "[CONFIG-WARN] quantification.p_value_threshold is " << quant_.p_value_threshold
+                  << " but quantification.test is \"fold_change\", which does not read it; the p-value "
+                     "is still computed and logged.\n";
+      if (quant_.test == QuantTest::Welch && quant_.fold_change_threshold != 1.4)
+        std::cout << "[CONFIG-WARN] quantification.fold_change_threshold is " << quant_.fold_change_threshold
+                  << " but quantification.test is \"welch\", which does not read it; the fold change "
+                     "is still computed and logged.\n";
+
       if (quant_.enriched_in >= 0 && quant_.identify != QuantIdentify::Differential)
         std::cout << "[CONFIG-WARN] quantification.enriched_in is set but quantification.identify "
                      "is \""
