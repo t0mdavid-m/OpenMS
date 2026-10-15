@@ -173,6 +173,18 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
   TEST_EQUAL(cfg.quantification().enabled, j["quantification"]["enabled"].get<bool>())
   TEST_REAL_SIMILAR(cfg.quantification().reporter_mz_tol, j["quantification"]["reporter_mz_tol"].get<double>())
   TEST_REAL_SIMILAR(cfg.quantification().fold_change_threshold, j["quantification"]["fold_change_threshold"].get<double>())
+  // ADR-0056. The reference authors every key NON-DEFAULT, so each pin proves the authored value
+  // crossed the bridge rather than a default round-tripping. The enums are compared through their
+  // spelling in the reference, so a parse that dropped the value would read the default and fail.
+  TEST_EQUAL(j["quantification"]["test"].get<std::string>(), "welch_and_fold_change")
+  TEST_EQUAL(cfg.quantification().test == QuantTest::WelchAndFoldChange, true)
+  TEST_REAL_SIMILAR(cfg.quantification().p_value_threshold, j["quantification"]["p_value_threshold"].get<double>())
+  TEST_EQUAL(j["quantification"]["empty_condition"].get<std::string>(), "incomplete")
+  TEST_EQUAL(cfg.quantification().empty_condition == EmptyCondition::Incomplete, true)
+  TEST_EQUAL(cfg.quantification().scan_normalize, j["quantification"]["scan_normalize"].get<bool>())
+  TEST_EQUAL(j["quantification"]["aggregate"].get<std::string>(), "sum")
+  TEST_EQUAL(cfg.quantification().aggregate == QuantAggregate::Sum, true)
+  TEST_EQUAL(cfg.quantification().min_usable_scans, j["quantification"]["min_usable_scans"].get<int>())
 
   // --- faims ---
   TEST_EQUAL(cfg.faims().cv_values.size(), j["faims"]["cv_values"].size())
