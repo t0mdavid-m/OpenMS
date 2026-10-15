@@ -167,6 +167,28 @@ START_SECTION(a_partially_empty_condition_is_incomplete_not_differential)
 }
 END_SECTION
 
+START_SECTION(a_wholly_absent_condition_against_a_partial_one_is_incomplete)
+{
+  // ADR-0038, amended 2026-10-15: absence is read only against a FULLY measured condition. The two
+  // rules above were stated without a precedence, and checking the wholly-absent one first let a
+  // single reporter in one of three replicates, against an empty condition, read as the strongest
+  // result the experiment can produce -- and buy an identification scan (seen on hardware).
+  Config cfg(quantJson(kThreeVsThree, thresh14()));
+
+  auto b_absent_a_partial = run(cfg, {0, 1489, 0, 0, 0, 0});  // the hardware row
+  TEST_STRING_EQUAL(std::string(Quantification::verdictName(b_absent_a_partial.verdict)), "incomplete_channels")
+  TEST_REAL_SIMILAR(b_absent_a_partial.fold_change, -1.0)
+
+  // The mirror: wholly_absent[0] is a separate arm of the same test.
+  auto a_absent_b_partial = run(cfg, {0, 0, 0, 0, 5000, 0});
+  TEST_STRING_EQUAL(std::string(Quantification::verdictName(a_absent_b_partial.verdict)), "incomplete_channels")
+
+  // Two of three is still partial.
+  auto two_of_three = run(cfg, {5000, 5000, 0, 0, 0, 0});
+  TEST_STRING_EQUAL(std::string(Quantification::verdictName(two_of_three.verdict)), "incomplete_channels")
+}
+END_SECTION
+
 START_SECTION(a_channel_in_no_condition_is_ignored_by_the_gate_but_still_logged)
 {
   // Four samples in six-plex chemistry, or an 11-plex bridge channel. The old gate read EVERY

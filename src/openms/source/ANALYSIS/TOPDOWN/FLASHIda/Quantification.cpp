@@ -434,25 +434,28 @@ namespace OpenMS
       else if (empties > 0)        { any_assigned_empty = true; }
     }
 
-    // A condition that is WHOLLY absent is not missing data, it is the measurement: the species is
-    // present in one condition and not the other, which is the strongest result the experiment can
-    // produce. There is no finite ratio, so fold_change stays -1 and condition_means carries the
-    // truth. Both absent means no signal at all.
+    // Both absent means no signal at all.
     if (wholly_absent[0] && wholly_absent[1])
     {
       out.verdict = Result::Verdict::IncompleteChannels;
       return out;
     }
-    if (wholly_absent[0] || wholly_absent[1])
-    {
-      out.verdict = Result::Verdict::Differential;
-      return out;
-    }
     // A PARTIALLY empty condition is untrustworthy rather than informative: the zero is folded into
-    // the mean and biases the ratio, and there is no honest number to report.
+    // the mean and biases the ratio, and there is no honest number to report. It is checked BEFORE
+    // the wholly-absent rule (ADR-0038, amended 2026-10-15): absence is read only against a fully
+    // measured condition, so one reporter in one of three replicates against an empty condition is
+    // a partial measurement, not the strongest result the experiment can produce.
     if (any_assigned_empty)
     {
       out.verdict = Result::Verdict::IncompleteChannels;
+      return out;
+    }
+    // A condition that is WHOLLY absent, against one measured in every channel, is not missing data,
+    // it is the measurement: the species is present in one condition and not the other. There is no
+    // finite ratio, so fold_change stays -1 and condition_means carries the truth.
+    if (wholly_absent[0] || wholly_absent[1])
+    {
+      out.verdict = Result::Verdict::Differential;
       return out;
     }
 
