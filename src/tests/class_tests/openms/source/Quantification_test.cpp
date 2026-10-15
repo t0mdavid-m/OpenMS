@@ -112,6 +112,9 @@ START_SECTION(differential_and_not_differential_are_both_reachable)
   TEST_REAL_SIMILAR(up.fold_change, 4.0)
   TEST_REAL_SIMILAR(up.condition_means[0], 4000.0)
   TEST_REAL_SIMILAR(up.condition_means[1], 1000.0)
+  // ADR-0056: the p-value is computed under every test. Exact repeats have no variance, so it is 0
+  // for different means; the fold change of equal channels is the same geometric or arithmetic.
+  TEST_REAL_SIMILAR(up.p_value, 0.0)
 
   // Symmetric: the test is (fc > t || 1/fc > t), so the direction must not matter.
   auto down = run(cfg, {1000, 1000, 1000, 4000, 4000, 4000});
@@ -121,6 +124,7 @@ START_SECTION(differential_and_not_differential_are_both_reachable)
   auto flat = run(cfg, {1000, 1000, 1000, 1000, 1000, 1000});
   TEST_STRING_EQUAL(std::string(Quantification::verdictName(flat.verdict)), "not_differential")
   TEST_REAL_SIMILAR(flat.fold_change, 1.0)
+  TEST_REAL_SIMILAR(flat.p_value, 1.0)
 
   // Just inside the threshold, so the comparison is strict rather than approximate.
   auto just_under = run(cfg, {1300, 1300, 1300, 1000, 1000, 1000});
@@ -312,6 +316,378 @@ START_SECTION(labelling_vocabulary_matches_the_shipped_schemes)
   TEST_EQUAL(Quantification::channelNames("itraq4plex").size(), 4)
   // "none" is NOT a labelling here: quantification.enabled is the switch.
   TEST_EQUAL(Quantification::channelNames("none").empty(), true)
+}
+END_SECTION
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// ADR-0056 -- the authored test, the geometric ratio, the empty condition, and the group aggregate.
+//
+// Every expected number below was computed with scipy.stats.ttest_ind(equal_var=False) on log2
+// channels -- the offline pipeline's call -- not with this engine, so the literals are independent
+// of the implementation they check. The hardware vectors are LOGGED channels of the 2026-10-13
+// `separate` R1 run (already isotope-corrected there), so they are fed with correction OFF.
+//
+///////////////////////////////////////////////////////////////////////////////
+
+// Real Q scans, 2026-10-13 separate R1 (glucose 126-128 / acetate 129-131).
+const std::vector<double> kScan13301 {322572, 328683, 255722, 144385, 147727, 150777};       // 7838 Da z9
+const std::vector<double> kScan9107  {243326, 303897, 297053, 332567, 343227, 385884};       // 10393 Da z13
+const std::vector<double> kScan9108  {259410, 306478, 296230, 349575, 355020, 374754};       // 10393 Da z12
+const std::vector<double> kScan13373 {302887, 291906, 233010, 126518, 137301, 151060};       // 18295 Da z23
+const std::vector<double> kScan13375 {204293, 204299, 165680, 85729.7, 83777, 95913.6};      // 18295 Da z22
+// The synthetic fixture's RAW reporter peaks (ms2_quant_tmt.txt).
+const std::vector<double> kSynthetic {3866.58, 9540.50, 1857.11, 13153.43, 9235.59, 7387.50};
+// kScan13373 with the acetate condition wholly absent, and with one acetate channel missing.
+const std::vector<double> kAcetateAbsent  {302887, 291906, 233010, 0, 0, 0};
+const std::vector<double> kAcetatePartial {302887, 291906, 233010, 126518, 0, 151060};
+const std::vector<double> kNoReporters    {0, 0, 0, 0, 0, 0};
+
+auto withTest = [](const std::string& test, const std::string& more = std::string()) {
+  return std::string(R"(, "test": ")") + test + R"(")" + more + kNoCorrection;
+};
+
+// A separate-mode config, so a min_usable_scans above one loads (ADR-0056 decision 7).
+auto groupJson = [](const std::string& extra) {
+  return std::string(R"({
+    "deconvolution": { "tol": [10, 10, 10] },
+    "precursor_selection": { "rank_by": "qscore", "max_precursors": 5, "precursor_charges": "separate",
+                             "min_charge_states": 2, "max_charge_states": 3 },
+    "characterization": { "mode": "off" },
+    "quantification": { "enabled": true, "labelling": "tmt6plex", "reporter_mz_tol": 0.002,
+                        "conditions": )") + kThreeVsThree + extra + kNoCorrection + R"( },
+    "ms_settings": {
+      "ms1": { "analyzer": "Orbitrap", "resolution": 120000 },
+      "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29 },
+      "ms2_quant": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 30 }
+    }
+  })";
+};
+
+// One group member's command: tracking id, charge, window_snr, intensity.
+auto memberCmd = [](int tracking_id, int charge, double window_snr, double intensity) {
+  ScanCommand c {};
+  c.scan_id = tracking_id;
+  c.num_stages = 1;
+  c.stages[0].charge_state = charge;
+  c.window_snr = window_snr;
+  c.precursor_intensity = intensity;
+  return c;
+};
+
+using V = Quantification::Result::Verdict;
+
+START_SECTION(welch_p_is_the_pipelines_number)
+{
+  Config cfg(quantJson(kThreeVsThree, withTest("welch")));
+  auto r = run(cfg, kScan13301);
+  TEST_EQUAL(r.complete, true)
+  TEST_REAL_SIMILAR(r.fold_change, 2.03525259)
+  TEST_REAL_SIMILAR(r.p_value, 0.01120125581)
+  TEST_STRING_EQUAL(std::string(Quantification::verdictName(r.verdict)), "differential")
+}
+END_SECTION
+
+START_SECTION(the_three_tests_decide_differently_on_the_same_channels)
+{
+  // The synthetic fixture: a large ratio (1/FC 2.36) on scattered channels (p 0.204).
+  TEST_EQUAL(run(Config(quantJson(kThreeVsThree, withTest("fold_change"))), kSynthetic).verdict == V::Differential, true)
+  TEST_EQUAL(run(Config(quantJson(kThreeVsThree, withTest("welch"))), kSynthetic).verdict == V::NotDifferential, true)
+  TEST_EQUAL(run(Config(quantJson(kThreeVsThree, withTest("welch_and_fold_change"))), kSynthetic).verdict
+                 == V::NotDifferential, true)
+  // A real scan the other way round: a small ratio (1/FC 1.25) on tight channels (p 0.032).
+  TEST_EQUAL(run(Config(quantJson(kThreeVsThree, withTest("fold_change"))), kScan9108).verdict == V::NotDifferential, true)
+  TEST_EQUAL(run(Config(quantJson(kThreeVsThree, withTest("welch"))), kScan9108).verdict == V::Differential, true)
+  TEST_EQUAL(run(Config(quantJson(kThreeVsThree, withTest("welch_and_fold_change"))), kScan9108).verdict
+                 == V::NotDifferential, true)
+  // Both numbers are computed under every test; only the verdict differs.
+  auto fc = run(Config(quantJson(kThreeVsThree, withTest("fold_change"))), kSynthetic);
+  TEST_REAL_SIMILAR(fc.fold_change, 0.4242073633)
+  TEST_REAL_SIMILAR(fc.p_value, 0.2043606735)
+}
+END_SECTION
+
+START_SECTION(condition_means_are_geometric_and_the_ratio_is_their_quotient)
+{
+  // A skewed triple separates the means: arithmetic 34000 vs geometric 4641.6.
+  auto r = run(Config(quantJson(kThreeVsThree, withTest("fold_change"))), {1000, 1000, 100000, 10000, 10000, 10000});
+  TEST_REAL_SIMILAR(r.condition_means[0], 4641.588834)
+  TEST_REAL_SIMILAR(r.condition_means[1], 10000.0)
+  TEST_REAL_SIMILAR(r.fold_change, r.condition_means[0] / r.condition_means[1])
+  TEST_REAL_SIMILAR(r.fold_change, 0.4641588834)
+  // Direction is the ratio's: an arithmetic mean would have called condition a enriched here.
+  TEST_EQUAL(r.condition_means[0] < r.condition_means[1], true)
+  TEST_EQUAL(r.verdict == V::Differential, true)
+}
+END_SECTION
+
+START_SECTION(an_empty_condition_is_authored)
+{
+  for (const std::string test : {"fold_change", "welch", "welch_and_fold_change"})
+  {
+    auto diff = run(Config(quantJson(kThreeVsThree, withTest(test, R"(, "empty_condition": "differential")"))),
+                    kAcetateAbsent);
+    TEST_EQUAL(diff.verdict == V::Differential, true)
+    TEST_EQUAL(diff.complete, false)
+    TEST_REAL_SIMILAR(diff.fold_change, -1.0)
+    TEST_REAL_SIMILAR(diff.p_value, -1.0)
+    TEST_EQUAL(diff.condition_means[0] > 0.0, true)
+    TEST_REAL_SIMILAR(diff.condition_means[1], 0.0)
+
+    auto inc = run(Config(quantJson(kThreeVsThree, withTest(test, R"(, "empty_condition": "incomplete")"))),
+                   kAcetateAbsent);
+    TEST_EQUAL(inc.verdict == V::IncompleteChannels, true)
+
+    // A PARTIAL condition is never an empty condition, under either setting.
+    for (const std::string ec : {"differential", "incomplete"})
+    {
+      auto part = run(Config(quantJson(kThreeVsThree, withTest(test, R"(, "empty_condition": ")" + ec + R"(")"))),
+                      kAcetatePartial);
+      TEST_EQUAL(part.verdict == V::IncompleteChannels, true)
+    }
+  }
+}
+END_SECTION
+
+START_SECTION(zero_variance_takes_p_0_or_1)
+{
+  // Exact repeats have no variance: t is undefined, and scipy's answer is p 0 for different means
+  // and p 1 for equal ones. The value used is the value logged.
+  auto apart = run(Config(quantJson(kThreeVsThree, withTest("welch"))), {4000, 4000, 4000, 1000, 1000, 1000});
+  TEST_REAL_SIMILAR(apart.p_value, 0.0)
+  TEST_EQUAL(apart.verdict == V::Differential, true)
+  auto same = run(Config(quantJson(kThreeVsThree, withTest("welch"))), {1000, 1000, 1000, 1000, 1000, 1000});
+  TEST_REAL_SIMILAR(same.p_value, 1.0)
+  TEST_EQUAL(same.verdict == V::NotDifferential, true)
+}
+END_SECTION
+
+START_SECTION(p_is_logged_under_fold_change_too_and_minus_one_without_two_channels)
+{
+  auto three = run(Config(quantJson(kThreeVsThree, withTest("fold_change"))), kScan13301);
+  TEST_REAL_SIMILAR(three.p_value, 0.01120125581)
+  // One channel in a condition: legal under fold_change, no variance, no p.
+  const char* one_v_three = R"([ { "name": "a", "channels": ["126"] }, { "name": "b", "channels": ["129","130","131"] } ])";
+  auto one = run(Config(quantJson(one_v_three, withTest("fold_change"))), kScan13301);
+  TEST_REAL_SIMILAR(one.p_value, -1.0)
+  TEST_EQUAL(one.complete, true)
+  TEST_EQUAL(one.verdict == V::Differential, true)
+}
+END_SECTION
+
+START_SECTION(a_group_is_decided_on_the_median_of_shares_not_by_vote)
+{
+  // Two charge states of one real species. Alone, z13 is NOT a Welch hit (p 0.061) and z12 IS
+  // (p 0.032): a vote would have tied 1-1. The aggregate is a hit (p 0.043).
+  Config welch(groupJson(R"(, "test": "welch")"));
+  Quantification q(welch);
+  q.addMember(7, memberCmd(101, 13, 2.0, 1e6), 501);
+  q.addMember(7, memberCmd(102, 12, 1.0, 1e6), 502);
+  TEST_EQUAL(q.deposit(101, run(welch, kScan9107)), 7)
+  TEST_EQUAL(q.isComplete(7), false)
+  TEST_EQUAL(q.deposit(102, run(welch, kScan9108)), 7)
+  TEST_EQUAL(q.isComplete(7), true)
+  auto g = q.decide(7);
+  TEST_EQUAL(g.result.verdict == V::Differential, true)
+  TEST_REAL_SIMILAR(g.result.fold_change, 0.7950028757)
+  TEST_REAL_SIMILAR(g.result.p_value, 0.04286976721)
+  TEST_EQUAL(g.usable, 2)
+  TEST_EQUAL(g.members, 2)
+  TEST_EQUAL(g.has_winner, true)
+  TEST_EQUAL(g.winner_charge, 13)        // the higher window_snr
+  TEST_EQUAL(g.winner_precursor_id, 501)
+  TEST_EQUAL(g.result.channels.size(), 6)
+  TEST_REAL_SIMILAR(g.result.channels[0], 0.1306408534)
+  TEST_REAL_SIMILAR(g.result.channels[5], 0.1977442951)
+
+  // Same group under welch_and_fold_change: a hit by p, not by ratio (1/FC 1.26 < 1.4).
+  Config both(groupJson(R"(, "test": "welch_and_fold_change")"));
+  Quantification q2(both);
+  q2.addMember(8, memberCmd(201, 13, 2.0, 1e6), 601);
+  q2.addMember(8, memberCmd(202, 12, 1.0, 1e6), 602);
+  q2.deposit(201, run(both, kScan9107));
+  q2.deposit(202, run(both, kScan9108));
+  auto g2 = q2.decide(8);
+  TEST_EQUAL(g2.result.verdict == V::NotDifferential, true)
+  TEST_EQUAL(g2.has_winner, true)
+}
+END_SECTION
+
+START_SECTION(aggregate_sum_mean_median_and_scan_normalize)
+{
+  auto decideTwo = [&](const std::string& extra) {
+    Config cfg(groupJson(extra));
+    Quantification q(cfg);
+    q.addMember(1, memberCmd(11, 23, 1.8, 6.2e6), 1);
+    q.addMember(1, memberCmd(12, 22, 1.8, 6.0e6), 2);
+    q.deposit(11, run(cfg, kScan13373));
+    q.deposit(12, run(cfg, kScan13375));
+    return q.decide(1);
+  };
+  // Even count: the median is the mean of the two middle values (= the mean of two shares).
+  auto med = decideTwo(R"(, "aggregate": "median")");
+  TEST_REAL_SIMILAR(med.result.fold_change, 2.069697842)
+  TEST_REAL_SIMILAR(med.result.p_value, 0.002788670769)
+  TEST_REAL_SIMILAR(med.result.channels[0], 0.2435158024)
+  // window_snr ties: intensity breaks it, as before.
+  TEST_EQUAL(med.winner_charge, 23)
+
+  // Without normalisation, sum and mean give the SAME ratio and p -- they differ by a constant per
+  // channel -- so only the logged channels can tell a `sum` that runs `mean` from a real one.
+  auto sum = decideTwo(R"(, "scan_normalize": false, "aggregate": "sum")");
+  auto mean = decideTwo(R"(, "scan_normalize": false, "aggregate": "mean")");
+  TEST_REAL_SIMILAR(sum.result.fold_change, 2.053398224)
+  TEST_REAL_SIMILAR(sum.result.p_value, 0.002989884053)
+  TEST_REAL_SIMILAR(mean.result.fold_change, 2.053398224)
+  TEST_REAL_SIMILAR(sum.result.channels[0], 507180.0)
+  TEST_REAL_SIMILAR(mean.result.channels[0], 253590.0)
+
+  // Three members: the median picks the MIDDLE share per channel, never a mean.
+  Config cfg(groupJson(R"(, "aggregate": "median")"));
+  Quantification q(cfg);
+  q.addMember(2, memberCmd(21, 9, 1.0, 1e6), 1);
+  q.addMember(2, memberCmd(22, 23, 1.0, 1e6), 1);
+  q.addMember(2, memberCmd(23, 22, 1.0, 1e6), 1);
+  q.deposit(21, run(cfg, kScan13301));
+  q.deposit(22, run(cfg, kScan13373));
+  q.deposit(23, run(cfg, kScan13375));
+  auto three = q.decide(2);
+  TEST_EQUAL(three.usable, 3)
+  TEST_REAL_SIMILAR(three.result.channels[0], 0.2432950737)
+  TEST_REAL_SIMILAR(three.result.channels[2], 0.1894425076)
+  TEST_REAL_SIMILAR(three.result.fold_change, 2.063504791)
+  TEST_REAL_SIMILAR(three.result.p_value, 0.006533441894)
+}
+END_SECTION
+
+START_SECTION(complete_members_decide_and_absence_only_when_none_is_complete)
+{
+  // A complete member and an absent one: the complete one IS the group (pipeline's COMPLETE_ONLY).
+  Config cfg(groupJson(""));
+  Quantification q(cfg);
+  q.addMember(1, memberCmd(11, 23, 1.0, 1e6), 1);
+  q.addMember(1, memberCmd(12, 22, 5.0, 1e6), 2);   // the absent one has the better window
+  q.deposit(11, run(cfg, kScan13373));
+  q.deposit(12, run(cfg, kAcetateAbsent));
+  auto g = q.decide(1);
+  TEST_EQUAL(g.usable, 1)
+  TEST_EQUAL(g.members, 2)
+  TEST_REAL_SIMILAR(g.result.fold_change, 1.98750199)
+  TEST_EQUAL(g.winner_charge, 23)                     // usable members only, whatever its window
+
+  // No complete member, two absent against full: the empty condition decides.
+  auto twoAbsent = [&](const std::string& extra) {
+    Config c(groupJson(extra));
+    Quantification qq(c);
+    qq.addMember(3, memberCmd(31, 23, 1.0, 1e6), 1);
+    qq.addMember(3, memberCmd(32, 22, 4.0, 1e6), 2);
+    qq.deposit(31, run(c, kAcetateAbsent));
+    qq.deposit(32, run(c, kAcetateAbsent));
+    return qq.decide(3);
+  };
+  auto diff = twoAbsent(R"(, "empty_condition": "differential")");
+  TEST_EQUAL(diff.result.verdict == V::Differential, true)
+  TEST_REAL_SIMILAR(diff.result.fold_change, -1.0)
+  TEST_EQUAL(diff.has_winner, true)
+  TEST_EQUAL(diff.winner_charge, 22)
+  TEST_EQUAL(diff.usable, 0)
+  auto inc = twoAbsent(R"(, "empty_condition": "incomplete")");
+  TEST_EQUAL(inc.result.verdict == V::IncompleteChannels, true)
+  TEST_EQUAL(inc.has_winner, true)                    // undecided, still a window: identify all buys it
+}
+END_SECTION
+
+START_SECTION(the_floor_applies_to_both_paths)
+{
+  auto decide = [&](const std::string& extra, const std::vector<double>& a, const std::vector<double>& b) {
+    Config c(groupJson(extra));
+    Quantification q(c);
+    q.addMember(1, memberCmd(11, 15, 2.0, 1e6), 1);
+    q.addMember(1, memberCmd(12, 16, 1.0, 1e6), 2);
+    q.deposit(11, run(c, a));
+    q.deposit(12, run(c, b));
+    return q.decide(1);
+  };
+  const std::string floor2 = R"(, "min_usable_scans": 2)";
+  // A: one complete + one absent, floor 2 -> not enough usable members.
+  auto A = decide(floor2, kScan13373, kAcetateAbsent);
+  TEST_EQUAL(A.result.verdict == V::IncompleteChannels, true)
+  TEST_EQUAL(A.usable, 1)
+  TEST_EQUAL(A.has_winner, true)
+  // B: two absent against full, floor 2 -> the absence path is met.
+  auto B = decide(floor2, kAcetateAbsent, kAcetateAbsent);
+  TEST_EQUAL(B.result.verdict == V::Differential, true)
+  // C: one absent + one with no reporters, floor 2 -> the absence path is NOT met.
+  auto C = decide(floor2, kAcetateAbsent, kNoReporters);
+  TEST_EQUAL(C.result.verdict == V::IncompleteChannels, true)
+  // Floor 1: A is decided by its complete member, C by its absent one.
+  auto A1 = decide("", kScan13373, kAcetateAbsent);
+  TEST_EQUAL(A1.result.verdict == V::Differential, true)
+  TEST_REAL_SIMILAR(A1.result.fold_change, 1.98750199)
+  auto C1 = decide("", kAcetateAbsent, kNoReporters);
+  TEST_EQUAL(C1.result.verdict == V::Differential, true)
+  TEST_EQUAL(C1.winner_charge, 15)
+}
+END_SECTION
+
+START_SECTION(an_undecided_group_still_names_its_identification_window)
+{
+  // Neither member is usable nor absent-against-full: incomplete, and the window is still named,
+  // so `identify: all` can buy it (ADR-0056 decision 9).
+  Config cfg(groupJson(""));
+  Quantification q(cfg);
+  q.addMember(1, memberCmd(11, 15, 1.0, 1e6), 1);
+  q.addMember(1, memberCmd(12, 16, 3.0, 1e6), 2);
+  q.deposit(11, run(cfg, kAcetatePartial));
+  q.deposit(12, run(cfg, kNoReporters));
+  auto g = q.decide(1);
+  TEST_EQUAL(g.result.verdict == V::IncompleteChannels, true)
+  TEST_EQUAL(g.has_winner, true)
+  TEST_EQUAL(g.winner_charge, 16)
+  TEST_EQUAL(g.usable, 0)
+}
+END_SECTION
+
+START_SECTION(an_unusable_member_is_absent_from_the_aggregate_not_opposed_to_it)
+{
+  Config cfg(groupJson(""));
+  Quantification q(cfg);
+  q.addMember(1, memberCmd(11, 15, 1.0, 1e6), 1);
+  q.addMember(1, memberCmd(12, 16, 9.0, 1e6), 2);
+  q.deposit(11, run(cfg, kScan13301));
+  q.deposit(12, run(cfg, kNoReporters));
+  auto g = q.decide(1);
+  TEST_EQUAL(g.usable, 1)
+  TEST_EQUAL(g.members, 2)
+  TEST_REAL_SIMILAR(g.result.fold_change, 2.03525259)
+  TEST_REAL_SIMILAR(g.result.p_value, 0.01120125581)
+  TEST_EQUAL(g.winner_charge, 15)
+  TEST_EQUAL(g.usable_charges.size(), 1)
+  TEST_EQUAL(g.usable_charges[0], 15)
+}
+END_SECTION
+
+START_SECTION(a_sub_count_channel_is_present_and_dominates_a_geometric_mean)
+{
+  // The presence floor stays 1e-3 (owner, 2026-10-15): 0.01 counts is PRESENT, and under log2 it
+  // pulls condition a's mean from 6667 (arithmetic) to 100. Pinned so it is a known quantity.
+  auto r = run(Config(quantJson(kThreeVsThree, withTest("fold_change"))), {10000, 10000, 0.01, 10000, 10000, 10000});
+  TEST_EQUAL(r.complete, true)
+  TEST_REAL_SIMILAR(r.condition_means[0], 100.0)
+  TEST_REAL_SIMILAR(r.fold_change, 0.01)
+  TEST_EQUAL(r.verdict == V::Differential, true)
+}
+END_SECTION
+
+START_SECTION(a_partial_condition_logs_zero_means)
+{
+  // A geometric mean of a condition with a 0 channel is undefined; it is logged as 0, never NaN.
+  auto r = run(Config(quantJson(kThreeVsThree, withTest("fold_change"))), {5000, 5000, 0, 1000, 1000, 1000});
+  TEST_EQUAL(r.verdict == V::IncompleteChannels, true)
+  TEST_REAL_SIMILAR(r.condition_means[0], 0.0)
+  TEST_REAL_SIMILAR(r.condition_means[1], 1000.0)
+  TEST_REAL_SIMILAR(r.fold_change, -1.0)
+  TEST_REAL_SIMILAR(r.p_value, -1.0)
 }
 END_SECTION
 

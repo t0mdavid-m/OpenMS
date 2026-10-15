@@ -190,21 +190,23 @@ namespace OpenMS
       /// "not measured", two values with -1 means "measured, but a condition was wholly absent so
       /// the ratio has no finite value".
       std::vector<double> quant_condition_means;
-      double quant_fold_change = -1.0;    ///< mean(conditions[0]) / mean(conditions[1]); -1 = no finite ratio
+      double quant_fold_change = -1.0;    ///< gmean(conditions[0]) / gmean(conditions[1]) (ADR-0056); -1 = no finite ratio
+      double quant_p_value = -1.0;        ///< two-sided Welch p on the log2 channels, under every test; -1 = not computable
       std::string quant_verdict;          ///< differential | not_differential | incomplete_channels | extraction_failed
 
-      // ---- the QUANTIFICATION GROUP's consensus (ADR-0040) ------------------------------------
+      // ---- the QUANTIFICATION GROUP's decision (ADR-0040, ADR-0056) -----------------------------
       // Populated on the 'Q' that COMPLETED its group, empty on every other row -- the same shape
       // the quant_* block above uses off a 'Q'.
       //
-      // Named consensus_* and not quant_* deliberately: the row these sit on is whichever member
-      // happened to return LAST, which is not necessarily the row the decision was about. Reading
-      // them as per-scan is the one misinterpretation the column names have to prevent.
-      std::string consensus_verdict;        ///< as quant_verdict; the GROUP's, from the majority vote
-      double      consensus_fold_change = -1.0;  ///< intensity-weighted over the AGREEING members
-      std::string consensus_agreement;      ///< "agreeing/total_ballots", e.g. "2/3"; abstentions excluded
-      std::string consensus_charges;        ///< ';'-joined balloting charges, agreeing ones starred
-      int         consensus_id_charge = 0;  ///< charge the bought 'R' used; 0 = nothing bought
+      // Named group_* and not quant_* deliberately: the row these sit on is whichever member
+      // happened to return LAST, which is not necessarily the row the decision was about.
+      std::string group_verdict;              ///< as quant_verdict; the GROUP's, from one test on its aggregate
+      double      group_fold_change = -1.0;   ///< geometric ratio of the aggregated channels; -1 = none
+      double      group_p_value = -1.0;       ///< Welch p on the aggregated channels; -1 = not computable
+      std::vector<double> group_channels;     ///< the aggregate tested (shares when normalised); EMPTY = none
+      std::string group_usable;               ///< "usable/members", e.g. "2/3"
+      std::string group_charges;              ///< ';'-joined charges of the usable members
+      int         group_id_charge = 0;        ///< charge the bought 'R' used; 0 = nothing bought
 
       // ---- the Kinetic Model's live fit (ADR-0047 decision 9) ----------------------------------
       // Written on the ONE row that completes a kinetic_model exploration group -- the last pre-scan

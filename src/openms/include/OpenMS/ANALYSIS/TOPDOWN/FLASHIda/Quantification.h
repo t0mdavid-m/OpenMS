@@ -81,13 +81,21 @@ namespace OpenMS
       Verdict verdict = Verdict::ExtractionFailed;
       /// All N corrected channel intensities, in getChannelInformation() order. Every channel is
       /// reported, including any assigned to no condition -- gating ignores those, the log does not.
+      /// For a GROUP result (ADR-0056) these are the aggregated channels the group was decided on.
       std::vector<double> channels;
-      /// Mean of each condition, in `quantification.conditions` order (== the ratio direction).
+      /// GEOMETRIC mean of each condition, 2^mean(log2), in `quantification.conditions` order (== the
+      /// ratio direction) -- ADR-0056. 0 for any condition with an empty assigned channel, where a
+      /// geometric mean is undefined.
       std::array<double, 2> condition_means {{0.0, 0.0}};
-      /// mean(conditions[0]) / mean(conditions[1]); -1.0 when a condition is wholly absent, so the
-      /// ratio has no finite value. Callers distinguish that from "not measured" by the presence of
-      /// condition_means, never by this field alone.
+      /// condition_means[0] / condition_means[1] (the geometric ratio, ADR-0056); -1.0 when no
+      /// finite ratio exists. Callers tell "measured, one condition wholly absent" from "not
+      /// measured" by condition_means, never by this field alone.
       double fold_change = -1.0;
+      /// Two-sided Welch p on the log2 channels (ADR-0056), computed under EVERY test whenever both
+      /// conditions are complete with at least two channels each; -1.0 otherwise.
+      double p_value = -1.0;
+      /// Every assigned channel was measured. Only a complete result is a USABLE group member.
+      bool complete = false;
     };
 
     /// Measure the reporter channels of one quantification scan.
@@ -105,17 +113,23 @@ namespace OpenMS
     Result measure(const double* mzs, const double* ints, int length,
                    double rt, int ms_level, const char* name) const;
 
+    /// The channel -> verdict step (ADR-0056), shared by measure() on one scan and decide() on a
+    /// group's aggregate, so a group is decided by exactly the function a scan is. A channel below
+    /// @p empty_floor (or not above 0) is empty: kEmptyChannel for raw intensities, 0 for an
+    /// aggregate of shares, which can legitimately sit below 1e-3.
+    static Result evaluate(const std::vector<double>& channels, const QuantConfig& cfg, double empty_floor);
+
     /// Render a Verdict as the string logged in scan_results.tsv's `quant_verdict`.
     static const char* verdictName(Result::Verdict v);
 
-    // ---- the QUANTIFICATION GROUP, and its vote (ADR-0040) -------------------------------------
+    // ---- the QUANTIFICATION GROUP (ADR-0040, decided by ADR-0056) -------------------------------
     //
     // Under precursor_charges "separate" one species gets one 'Q' per charge state. The reporter ion
-    // is charge-INDEPENDENT, so a clean species must give the same ratio at every charge -- which is
-    // what makes cross-charge disagreement evidence of chimericity, and what makes pooling REPORTER
-    // measurements sound where pooling FRAGMENT evidence across charges is not (CONTEXT.md).
+    // is charge-INDEPENDENT, so the members measure the same population through different windows,
+    // and pooling REPORTER measurements is sound where pooling FRAGMENT evidence is not (CONTEXT.md).
     //
-    // The group is what buys the identification scan, never a member on its own.
+    // The group is what buys the identification scan, never a member on its own. Since ADR-0056 it
+    // is decided by ONE test on the aggregate of its usable members -- there is no vote.
 
     /// One quantification scan of a group: the command that produced it, and what it measured.
     struct GroupMember
@@ -123,8 +137,8 @@ namespace OpenMS
       int    tracking_id  = 0;
       int    precursor_id = 0;   ///< the WINNER's is what the bought 'R' inherits
       int    charge       = 0;
-      double window_snr   = 0.0; ///< ranks the ID charge and breaks a tied vote (ADR-0040 d.4/d.5)
-      double intensity    = 0.0; ///< this charge's own; weights the aggregate
+      double window_snr   = 0.0; ///< ranks the identification member (the purest window wins)
+      double intensity    = 0.0; ///< tiebreak only, after window_snr
       ScanCommand cmd {};        ///< handed to buildFollowUp as ctx, so the 'R' inherits its geometry
       bool   received     = false;
       Result result {};
@@ -132,22 +146,22 @@ namespace OpenMS
 
     /// What a completed group decided. Carries the winner outright so the caller needs no second
     /// lookup and the group can be closed immediately.
-    struct Consensus
+    struct GroupDecision
     {
-      /// The synthesized measurement. Deliberately a plain Result, so quantBuysIdentification --
-      /// and therefore `identify` and `enriched_in` -- work on it UNCHANGED (ADR-0039).
+      /// The group's result. Deliberately a plain Result, so quantBuysIdentification -- and
+      /// therefore `identify` and `enriched_in` -- work on it UNCHANGED (ADR-0039).
       Result result {};
 
-      bool   has_winner = false;      ///< false = too few ballots; nothing is bought
+      /// True whenever any member returned (ADR-0056 decision 9): even an undecided group names the
+      /// window an identification scan would be built from, so `identify: all` can buy it.
+      bool   has_winner = false;
       int    winner_charge = 0;
       int    winner_precursor_id = 0;
       ScanCommand winner_cmd {};
 
-      int    agreeing = 0;            ///< ballots in the winning bloc
-      int    total_ballots = 0;       ///< ballots cast; abstentions are NOT counted
-      /// Every balloting charge, and whether it agreed. Index-parallel; drives consensus_charges.
-      std::vector<int>  ballot_charges;
-      std::vector<bool> ballot_agreed;
+      int    usable = 0;              ///< members whose every assigned channel was measured
+      int    members = 0;             ///< members registered for the group
+      std::vector<int> usable_charges; ///< drives group_charges
     };
 
     /// Register one 'Q' command as a member of @p group_id. Called at MS1, once per emitted 'Q'.
@@ -161,10 +175,10 @@ namespace OpenMS
     /// -- and, like it, has NO timeout: a scan the instrument never returns leaves its group open.
     bool isComplete(int group_id) const;
 
-    /// Run the vote. See Quantification.cpp for the policy; the short version is a DIRECTIONAL
-    /// majority (verdict + which condition is enriched), abstentions excluded, ties broken by
-    /// window_snr, and an intensity-weighted aggregate over the AGREEING members only.
-    Consensus decide(int group_id) const;
+    /// Decide the group (ADR-0056). Usable members are scaled to reporter shares, combined per
+    /// channel, and evaluate()d once; with no usable member, wholly-absent-against-full members
+    /// decide through quantification.empty_condition; both paths need min_usable_scans members.
+    GroupDecision decide(int group_id) const;
 
     /// Drop a group and its tracking-id index entries. Call once the consensus has been used.
     void closeGroup(int group_id);

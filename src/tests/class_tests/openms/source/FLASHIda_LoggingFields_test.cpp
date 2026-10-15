@@ -233,7 +233,8 @@ START_SECTION(schema_column_counts)
   // Model's live fit is appended -- fit_p0/fit_ce_max_s/fit_width/k2/modeled_ce/modeled_b/fit_points/
   // fit_rss/energy_source (41 -> 50), written only on the row that completes a kinetic_model group.
   // Appended for the same reason as the two blocks before it: every pin below is <= 21.
-  TEST_EQUAL(r.headers.size(), 50)
+  // ADR-0056: +quant_p_value, consensus_* renamed group_* with +group_p_value and +group_channels (50 -> 53).
+  TEST_EQUAL(r.headers.size(), 53)
   // I2: +6 iso/snr/intensity; P5: +precursor_id; +theoretical_masses/diff_da/diff_ppm; C2:
   // +ms3_fragment_coverage; + tic_coverage; C: + flash_extender_score; then + tag_count (beside
   // flash_extender_score, the other "how strong is this ID" scalar) and + fragment_qscores (inside the

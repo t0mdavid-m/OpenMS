@@ -49,8 +49,12 @@
 #include <OpenMS/KERNEL/MSSpectrum.h>
 #include <OpenMS/METADATA/Precursor.h>
 
+#include <boost/math/distributions/complement.hpp>
+#include <boost/math/distributions/students_t.hpp>
+
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <sstream>
 #include <memory>
@@ -90,6 +94,41 @@ namespace OpenMS
     /// documented way to turn correction off in this schema, so the engine honours that by not
     /// running the corrector at all -- which is also why FLASHDeconv exposes correction as a
     /// boolean instead.
+    /// Two-sided Welch p for two samples of log2 values (ADR-0056): Welch-Satterthwaite degrees of
+    /// freedom, the Student t distribution, exactly scipy.stats.ttest_ind(equal_var=False). -1 when
+    /// either sample has fewer than two values. With no variance on either side t is undefined, and
+    /// the answer is scipy's: p 0 for different means, p 1 for equal ones.
+    double welchP(const std::vector<double>& a, const std::vector<double>& b)
+    {
+      if (a.size() < 2 || b.size() < 2) return -1.0;
+      auto meanVar = [](const std::vector<double>& x, double& mean, double& var) {
+        mean = std::accumulate(x.begin(), x.end(), 0.0) / static_cast<double>(x.size());
+        double ss = 0.0;
+        for (double v : x) ss += (v - mean) * (v - mean);
+        var = ss / static_cast<double>(x.size() - 1);
+      };
+      double ma, va, mb, vb;
+      meanVar(a, ma, va);
+      meanVar(b, mb, vb);
+      const double sa = va / static_cast<double>(a.size());
+      const double sb = vb / static_cast<double>(b.size());
+      const double se2 = sa + sb;
+      if (!(se2 > 0.0)) return (ma != mb) ? 0.0 : 1.0;
+      const double t  = (ma - mb) / std::sqrt(se2);
+      const double nu = se2 * se2 / (sa * sa / static_cast<double>(a.size() - 1)
+                                     + sb * sb / static_cast<double>(b.size() - 1));
+      const boost::math::students_t dist(nu);
+      return std::min(1.0, 2.0 * boost::math::cdf(boost::math::complement(dist, std::fabs(t))));
+    }
+
+    /// Median of a non-empty sample; an even count takes the mean of the two middle values.
+    double medianOf(std::vector<double> v)
+    {
+      std::sort(v.begin(), v.end());
+      const size_t n = v.size();
+      return (n % 2 == 1) ? v[n / 2] : 0.5 * (v[n / 2 - 1] + v[n / 2]);
+    }
+
     bool isNoCorrection(const std::vector<std::string>& matrix)
     {
       for (const auto& row : matrix)
@@ -197,129 +236,111 @@ namespace OpenMS
     groups_.erase(it);
   }
 
-  Quantification::Consensus Quantification::decide(const int group_id) const
+  Quantification::GroupDecision Quantification::decide(const int group_id) const
   {
-    Consensus out;
+    GroupDecision out;
     auto git = groups_.find(group_id);
     if (git == groups_.end()) return out;
     const std::vector<GroupMember>& members = git->second;
+    const auto& cfg = config_.quantification();
+    out.members = static_cast<int>(members.size());
 
-    // ---- ballots -------------------------------------------------------------------------------
-    // A member that measured nothing usable ABSTAINS; it is evidence of nothing, not evidence of
-    // disagreement, and counting it as dissent would manufacture chimericity out of a weak charge.
-    std::vector<const GroupMember*> ballots;
-    bool any_returned = false;
+    // ---- who can speak ------------------------------------------------------------------------
+    // USABLE: every assigned channel measured (the pipeline's COMPLETE_ONLY). ABSENT: wholly absent
+    // in one condition against a full other, read as Differential by evaluate() only under
+    // empty_condition "differential" -- under "incomplete" such a member is IncompleteChannels and
+    // so is neither. Everything else that returned is neither, and is never averaged in.
+    std::vector<const GroupMember*> received, usable, absent;
     for (const GroupMember& m : members)
     {
-      if (m.received) any_returned = true;
       if (!m.received) continue;
-      if (m.result.verdict == Result::Verdict::Differential
-          || m.result.verdict == Result::Verdict::NotDifferential)
-        ballots.push_back(&m);
+      received.push_back(&m);
+      if (m.result.complete) usable.push_back(&m);
+      else if (m.result.verdict == Result::Verdict::Differential) absent.push_back(&m);
     }
+    out.usable = static_cast<int>(usable.size());
+    for (const GroupMember* m : usable) out.usable_charges.push_back(m->charge);
 
-    // The floor, CAPPED BY THE GROUP'S SIZE. min_charge_states is a requirement on the acquisition
-    // charge SET and is enforced once, at MS1 admission (admitCandidate). This is its decision-time
-    // half -- "too many members abstained to trust the vote" -- and the two are the same number only
-    // under `separate`. `multiplexed` co-isolates the whole set into ONE measurement, so an uncapped
-    // floor of 2 rejects its single ballot and the mode can never produce a result at all: measured
-    // as `incomplete_channels | 0/1` on every row of the quant_multiplexed golden mode.
-    //
-    // A geometry that can only ever produce one measurement satisfies the floor with one.
-    const int min_ballots = std::min<int>(std::max(1, config_.targeting().min_charge_states),
-                                          static_cast<int>(members.size()));
-    if (static_cast<int>(ballots.size()) < min_ballots)
-    {
-      // Not a verdict about the SPECIES but about the MEASUREMENT, and it reads as one. Folding it
-      // into IncompleteChannels follows ADR-0039's own reasoning that the two failure values "differ
-      // only in why" -- and each member's own why is already on its own scan_results row.
-      out.result.verdict = any_returned ? Result::Verdict::IncompleteChannels
-                                        : Result::Verdict::ExtractionFailed;
-      for (const GroupMember* b : ballots) { out.ballot_charges.push_back(b->charge);
-                                             out.ballot_agreed.push_back(false); }
-      out.total_ballots = static_cast<int>(ballots.size());
-      return out;
-    }
-
-    // ---- the DIRECTIONAL key -------------------------------------------------------------------
-    // Voting on the verdict ALONE is insufficient and fails silently: fold changes 2.50 / 2.50 /
-    // 0.42 are all Differential and vote 3-0 unanimous while disagreeing about WHICH condition is
-    // enriched -- precisely the interference this feature exists to detect.
-    //
-    // The direction is read from condition_means, NEVER from fold_change: a wholly-absent condition
-    // is Differential with fold_change == -1.0, a SENTINEL, so any fold_change-based test silently
-    // drops the strongest results in the experiment (ADR-0039).
-    auto ballotKey = [](const GroupMember* m) -> std::pair<int, int> {
-      const int verdict = static_cast<int>(m->result.verdict);
-      if (m->result.verdict != Result::Verdict::Differential) return {verdict, -1};
-      const int enriched = m->result.condition_means[0] > m->result.condition_means[1] ? 0 : 1;
-      return {verdict, enriched};
-    };
-
-    std::map<std::pair<int, int>, std::vector<const GroupMember*>> blocs;
-    for (const GroupMember* b : ballots) blocs[ballotKey(b)].push_back(b);
-
-    // ---- pick the winning bloc -----------------------------------------------------------------
-    // Majority; a tie goes to the bloc holding the highest-window_snr ballot. Breaking it on
-    // window_snr rather than intensity is what makes the tie-breaking ballot the ID charge BY
-    // CONSTRUCTION -- the same member wins both comparisons, so the two can never name different
-    // charges (ADR-0040 decision 5).
+    // The identification window: the purest (window_snr), then the brightest, then the lower
+    // charge -- total and reproducible, since window_snr saturates at 1000.0.
     auto better = [](const GroupMember* a, const GroupMember* b) {
       if (a->window_snr != b->window_snr) return a->window_snr > b->window_snr;
       if (a->intensity  != b->intensity)  return a->intensity  > b->intensity;
-      return a->charge < b->charge;    // total and reproducible: window_snr saturates at 1000.0
+      return a->charge < b->charge;
+    };
+    auto pick = [&](const std::vector<const GroupMember*>& set) -> const GroupMember* {
+      const GroupMember* best = nullptr;
+      for (const GroupMember* m : set) if (best == nullptr || better(m, best)) best = m;
+      return best;
     };
 
-    const std::vector<const GroupMember*>* winner_bloc = nullptr;
+    const size_t floor = static_cast<size_t>(std::max(1, cfg.min_usable_scans));
     const GroupMember* winner = nullptr;
-    for (const auto& kv : blocs)
-    {
-      const std::vector<const GroupMember*>& bloc = kv.second;
-      const GroupMember* best = bloc.front();
-      for (const GroupMember* m : bloc) if (better(m, best)) best = m;
 
-      if (winner_bloc == nullptr
-          || bloc.size() > winner_bloc->size()
-          || (bloc.size() == winner_bloc->size() && better(best, winner)))
+    if (!usable.empty() && usable.size() >= floor)
+    {
+      // ---- the aggregate (ADR-0056 decision 5) --------------------------------------------------
+      // Each member scaled to its share of its own ASSIGNED reporter signal -- the channels that
+      // enter the test, as the pipeline's SCAN_NORMALIZE divides by its QUANT_COLS -- so a bright
+      // charge state does not dominate; then one value per channel by the authored aggregate.
+      std::vector<size_t> assigned;
+      for (const auto& cond : cfg.conditions) for (size_t idx : cond.channels) assigned.push_back(idx);
+      const size_t n = usable.front()->result.channels.size();
+      std::vector<std::vector<double>> per_channel(n);
+      for (const GroupMember* m : usable)
       {
-        winner_bloc = &bloc;
-        winner      = best;
+        const auto& ch = m->result.channels;
+        double scale = 1.0;
+        if (cfg.scan_normalize)
+        {
+          double total = 0.0;
+          for (size_t idx : assigned) if (idx < ch.size()) total += ch[idx];
+          if (total > 0.0) scale = 1.0 / total;
+        }
+        for (size_t i = 0; i < n && i < ch.size(); ++i) per_channel[i].push_back(ch[i] * scale);
       }
+      std::vector<double> aggregate(n, 0.0);
+      for (size_t i = 0; i < n; ++i)
+      {
+        const auto& v = per_channel[i];
+        if (v.empty()) continue;
+        const double sum = std::accumulate(v.begin(), v.end(), 0.0);
+        switch (cfg.aggregate)
+        {
+          case QuantAggregate::Median: aggregate[i] = medianOf(v); break;
+          case QuantAggregate::Mean:   aggregate[i] = sum / static_cast<double>(v.size()); break;
+          case QuantAggregate::Sum:    aggregate[i] = sum; break;
+        }
+      }
+      // Floor 0: a share can legitimately sit below 1e-3, and usability already guaranteed every
+      // assigned channel was measured.
+      out.result = evaluate(aggregate, cfg, 0.0);
+      winner = pick(usable);
+    }
+    else if (usable.empty() && !absent.empty() && absent.size() >= floor)
+    {
+      // ---- the empty condition decides (ADR-0056 decisions 4 and 6) ---------------------------
+      // Only when no member was complete, and -- owner, 2026-10-15 -- only when at least the floor's
+      // worth of members say so. Its condition_means carry the direction enriched_in reads.
+      winner = pick(absent);
+      out.result = winner->result;
+    }
+    else
+    {
+      // ---- undecided -------------------------------------------------------------------------
+      // A verdict about the MEASUREMENT, not the species. The window is still named (ADR-0056
+      // decision 9) so `identify: all` buys it; quantified/differential refuse it on the verdict.
+      out.result.verdict = received.empty() ? Result::Verdict::ExtractionFailed
+                                            : Result::Verdict::IncompleteChannels;
+      winner = pick(received);
     }
 
-    // ---- the aggregate, over the AGREEING members only ------------------------------------------
-    // Intensity-WEIGHTED, by summing condition_means and ratioing the sums rather than averaging
-    // the per-charge ratios: summing IS the weighting, and ratios of small numbers are noisy. The
-    // vote above is deliberately UNWEIGHTED -- a weak charge's opinion is still evidence of
-    // interference. SNR admits, intensity ranks; the same split selectNotches already makes.
-    std::array<double, 2> sums {{0.0, 0.0}};
-    std::vector<double> channels;
-    for (const GroupMember* m : *winner_bloc)
+    if (winner != nullptr)
     {
-      sums[0] += m->result.condition_means[0];
-      sums[1] += m->result.condition_means[1];
-      if (channels.size() < m->result.channels.size()) channels.resize(m->result.channels.size(), 0.0);
-      for (size_t i = 0; i < m->result.channels.size(); ++i) channels[i] += m->result.channels[i];
-    }
-
-    out.result.verdict         = winner_bloc->front()->result.verdict;
-    out.result.condition_means = sums;
-    out.result.channels        = channels;
-    // Inherit ADR-0038's sentinel rules: no finite ratio when a condition is wholly absent.
-    out.result.fold_change = (sums[0] > 0.0 && sums[1] > 0.0) ? sums[0] / sums[1] : -1.0;
-
-    out.has_winner         = true;
-    out.winner_charge      = winner->charge;
-    out.winner_precursor_id= winner->precursor_id;
-    out.winner_cmd         = winner->cmd;
-    out.agreeing           = static_cast<int>(winner_bloc->size());
-    out.total_ballots      = static_cast<int>(ballots.size());
-
-    for (const GroupMember* b : ballots)
-    {
-      out.ballot_charges.push_back(b->charge);
-      out.ballot_agreed.push_back(
-          std::find(winner_bloc->begin(), winner_bloc->end(), b) != winner_bloc->end());
+      out.has_winner          = true;
+      out.winner_charge       = winner->charge;
+      out.winner_precursor_id = winner->precursor_id;
+      out.winner_cmd          = winner->cmd;
     }
     return out;
   }
@@ -408,30 +429,43 @@ namespace OpenMS
     }
     if (seen != n) return out;  // ExtractionFailed: no usable channel set for this spectrum
 
-    // ---- condition means, over ASSIGNED channels only -----------------------------------------
+    return evaluate(out.channels, cfg, kEmptyChannel);
+  }
+
+  Quantification::Result Quantification::evaluate(const std::vector<double>& channels,
+                                                   const QuantConfig& cfg, const double empty_floor)
+  {
+    Result out;
+    out.channels = channels;
+    const size_t n = channels.size();
+
+    // ---- condition by condition, over ASSIGNED channels only ----------------------------------
     // A channel named in no condition is unassigned: ignored here, still reported in `channels`.
-    // That is what makes a bridge channel, or a kit run below capacity, legal -- the old gate read
-    // every channel in the scheme, so four samples in six-plex chemistry rejected every spectrum.
+    // That is what makes a bridge channel, or a kit run below capacity, legal.
     if (cfg.conditions.size() != 2) return out;  // Config rejects this at load
 
-    bool any_assigned_empty = false;
+    std::array<std::vector<double>, 2> log2v;
     std::array<bool, 2> wholly_absent {{false, false}};
+    bool any_assigned_empty = false;
     for (size_t c = 0; c < 2; ++c)
     {
       const auto& chans = cfg.conditions[c].channels;
       if (chans.empty()) return out;  // Config rejects this at load
 
-      double sum = 0.0;
       size_t empties = 0;
       for (size_t idx : chans)
       {
-        const double v = (idx < n) ? out.channels[idx] : 0.0;
-        if (v < kEmptyChannel) ++empties;
-        sum += v;
+        const double v = (idx < n) ? channels[idx] : 0.0;
+        if (!(v > 0.0) || v < empty_floor) { ++empties; continue; }
+        log2v[c].push_back(std::log2(v));
       }
-      out.condition_means[c] = sum / static_cast<double>(chans.size());
       if (empties == chans.size()) { wholly_absent[c] = true; }
       else if (empties > 0)        { any_assigned_empty = true; }
+      // GEOMETRIC mean (ADR-0056), defined only for a fully measured condition; 0 otherwise -- a
+      // geometric mean of a 0 is undefined, and 0 is what an absent condition has always logged.
+      if (empties == 0)
+        out.condition_means[c] = std::exp2(std::accumulate(log2v[c].begin(), log2v[c].end(), 0.0)
+                                           / static_cast<double>(log2v[c].size()));
     }
 
     // Both absent means no signal at all.
@@ -440,30 +474,43 @@ namespace OpenMS
       out.verdict = Result::Verdict::IncompleteChannels;
       return out;
     }
-    // A PARTIALLY empty condition is untrustworthy rather than informative: the zero is folded into
-    // the mean and biases the ratio, and there is no honest number to report. It is checked BEFORE
-    // the wholly-absent rule (ADR-0038, amended 2026-10-15): absence is read only against a fully
-    // measured condition, so one reporter in one of three replicates against an empty condition is
-    // a partial measurement, not the strongest result the experiment can produce.
+    // A PARTIALLY empty condition is untrustworthy rather than informative, and is checked BEFORE
+    // the empty-condition rule (ADR-0038, amended 2026-10-15): absence is read only against a fully
+    // measured condition.
     if (any_assigned_empty)
     {
       out.verdict = Result::Verdict::IncompleteChannels;
       return out;
     }
-    // A condition that is WHOLLY absent, against one measured in every channel, is not missing data,
-    // it is the measurement: the species is present in one condition and not the other. There is no
-    // finite ratio, so fold_change stays -1 and condition_means carries the truth.
+    // A WHOLLY absent condition against one measured in every channel: what it means is authored
+    // (ADR-0056 decision 4), and it is read BEFORE any test -- a test has nothing to compute on an
+    // empty side. Under "differential" the species is present on one side and not the other, the
+    // strongest result the experiment can produce; fold_change and p stay -1, condition_means carry
+    // the direction.
     if (wholly_absent[0] || wholly_absent[1])
     {
-      out.verdict = Result::Verdict::Differential;
+      out.verdict = (cfg.empty_condition == EmptyCondition::Differential)
+                        ? Result::Verdict::Differential
+                        : Result::Verdict::IncompleteChannels;
       return out;
     }
 
+    // ---- complete: both numbers, under every test, then the authored test reads one or both ----
+    out.complete    = true;
     out.fold_change = out.condition_means[0] / out.condition_means[1];
+    out.p_value     = welchP(log2v[0], log2v[1]);
+
     const double t = cfg.fold_change_threshold;
-    out.verdict = (out.fold_change > t || (1.0 / out.fold_change) > t)
-                      ? Result::Verdict::Differential
-                      : Result::Verdict::NotDifferential;
+    const bool ratio_hit = out.fold_change > t || (1.0 / out.fold_change) > t;
+    const bool p_hit     = out.p_value >= 0.0 && out.p_value <= cfg.p_value_threshold;
+    bool hit = ratio_hit;
+    switch (cfg.test)
+    {
+      case QuantTest::FoldChange:         hit = ratio_hit; break;
+      case QuantTest::Welch:              hit = p_hit; break;
+      case QuantTest::WelchAndFoldChange: hit = ratio_hit && p_hit; break;
+    }
+    out.verdict = hit ? Result::Verdict::Differential : Result::Verdict::NotDifferential;
     return out;
   }
 

@@ -140,12 +140,12 @@ namespace OpenMS
                             // FLASHIda_LoggingFields_test's schema_column_counts is <= 21, so appending
                             // is the one placement that adds columns without invalidating a single pin
                             // -- only the count and headers.back() move.
-                            << "quant_channels\tquant_condition_means\tquant_fold_change\tquant_verdict"
-                            // ADR-0040's group consensus, APPENDED for the same reason the quant
-                            // block above was: every column index pinned in FLASHIda_LoggingFields_test
-                            // is lower, so appending invalidates none of them.
-                            << "\tconsensus_verdict\tconsensus_fold_change\tconsensus_agreement"
-                               "\tconsensus_charges\tconsensus_id_charge"
+                            << "quant_channels\tquant_condition_means\tquant_fold_change\tquant_p_value\tquant_verdict"
+                            // ADR-0040's group block, renamed group_* by ADR-0056 (no vote any more)
+                            // and carrying the aggregate it was decided on. APPENDED for the same reason
+                            // the quant block above was: every pinned column index is lower.
+                            << "\tgroup_verdict\tgroup_fold_change\tgroup_p_value\tgroup_channels"
+                               "\tgroup_usable\tgroup_charges\tgroup_id_charge"
                             // ADR-0047 d.9: the Kinetic Model's live fit, on the row that completes a
                             // kinetic_model group and sentinel-valued everywhere else. APPENDED, for the
                             // reason the two blocks above were: every scan_results index pinned in
@@ -664,6 +664,7 @@ namespace OpenMS
     };
     const std::string quant_channels_str = joinQuant(row.quant_channels);
     const std::string quant_means_str    = joinQuant(row.quant_condition_means);
+    const std::string group_channels_str = joinQuant(row.group_channels);
 
     results_tsv_stream_ << "\t" << resolve_ts
                         << "\t" << received_ts
@@ -675,15 +676,18 @@ namespace OpenMS
                         << "\t" << quant_channels_str
                         << "\t" << quant_means_str
                         << "\t" << row.quant_fold_change
+                        << "\t" << row.quant_p_value
                         << "\t" << row.quant_verdict
-                        // ADR-0040. Same no-manipulator rule as the quant block above: the stream's
-                        // sticky flags are left at the default so consensus_fold_change's -1.0
-                        // sentinel renders as "-1", identically to quant_fold_change beside it.
-                        << "\t" << row.consensus_verdict
-                        << "\t" << row.consensus_fold_change
-                        << "\t" << row.consensus_agreement
-                        << "\t" << row.consensus_charges
-                        << "\t" << row.consensus_id_charge
+                        // ADR-0040/ADR-0056. Same no-manipulator rule as the quant block above: the
+                        // stream's sticky flags are left at the default so the -1.0 sentinels render
+                        // as "-1", identically to quant_fold_change beside them.
+                        << "\t" << row.group_verdict
+                        << "\t" << row.group_fold_change
+                        << "\t" << row.group_p_value
+                        << "\t" << group_channels_str
+                        << "\t" << row.group_usable
+                        << "\t" << row.group_charges
+                        << "\t" << row.group_id_charge
                         // ADR-0047 d.9. Same no-manipulator rule again: the stream default renders the
                         // -1.0 sentinels as "-1" and the ints as themselves, and the real values at
                         // six significant digits like exploration_score beside them.

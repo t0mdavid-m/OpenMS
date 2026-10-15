@@ -1446,6 +1446,10 @@ namespace
   // absent one -- it is only distinguishable when the absent condition is the numerator.
   const std::string ms2_quant_treated_absent_tsv_path =
       "../../FlashIDA/test-data/spectra/ms2_quant_tmt_treated_absent.txt";
+  // ADR-0056: ms2_quant_tmt.txt minus the 130 reporter row, so `treated` is PARTIALLY measured --
+  // incomplete_channels under every test and every empty_condition.
+  const std::string ms2_quant_partial_tsv_path =
+      "../../FlashIDA/test-data/spectra/ms2_quant_tmt_partial.txt";
   const std::string ms1_cytc_tsv_path = "../../FlashIDA/test-data/spectra/ms1_cytc.txt";
   const std::string ms2_cytc_tsv_path = "../../FlashIDA/test-data/spectra/ms2_cytc_scan149.txt";
   // Fresh real Mode-2 MS3 CytC run (20250121): intact-cytC MS2 (HCD CE40, scan 57) with a rich b/y
@@ -1543,10 +1547,10 @@ namespace
   // `pushed` directly rather than having to classify what came back.
   //
   // The two conditions are named control/treated to match method_quant.json, and their channel
-  // split is the same 3-vs-3. fold_change = mean(control) / mean(treated), so on the TMT fixture
-  // (control mean 5088.06, treated mean 9925.51) the species is enriched in TREATED and the raw
-  // ratio is < 1 -- which is exactly why direction is authored by condition NAME and never as
-  // "up": "up" here would have meant enriched in control.
+  // split is the same 3-vs-3. fold_change = gmean(control) / gmean(treated) (geometric, ADR-0056),
+  // so on the TMT fixture the species is enriched in TREATED and the ratio is < 1 -- which is
+  // exactly why direction is authored by condition NAME and never as "up": "up" here would have
+  // meant enriched in control.
   std::string quantObjectiveJson(const std::string& fold_change_threshold,
                                  const std::string& identify_key_or_empty,
                                  const std::string& enriched_in_key_or_empty,
@@ -1646,7 +1650,7 @@ namespace
     return out;
   }
 
-  /// separate + a floor of 2: the configuration the majority vote needs.
+  /// separate + an admission floor of 2, so a species is screened at two charges or more.
   std::string quantGroupJson(const std::string& identify_key_or_empty = "")
   {
     return quantObjectiveJson("1.4", identify_key_or_empty, "",
@@ -3757,7 +3761,7 @@ START_SECTION(quant_group_buys_exactly_one_identification_on_its_last_return)
 
   // Non-vacuity: without a real fan-out every assertion below is trivially true.
   // Measured: this species fans out to 10 charges (the anchor + MAX_NOTCHES_PER_STAGE), so the
-  // dissent and abstention sections below genuinely out-vote rather than skipping their guards.
+  // unusable-member section below genuinely aggregates over several members.
   TEST_EQUAL(r.q_count >= 2, true)
   TEST_EQUAL(r.pushed_total, 1)                                  // exactly ONE 'R', for the group
 
@@ -3768,34 +3772,79 @@ START_SECTION(quant_group_buys_exactly_one_identification_on_its_last_return)
 }
 END_SECTION
 
-// Q40-2: a DISSENTING charge is out-voted, and the group still buys.
+// Q56-1: the COMPLETE member decides; an absent member is not averaged in and not voted with
+// (ADR-0056 decisions 5 and 6).
 //
-// The dissenter is fed ms2_quant_tmt_treated_absent.txt -- Differential enriched in CONTROL -- while
-// the majority get ms2_quant_tmt.txt, which is Differential enriched in TREATED. Same verdict,
-// opposite direction: a vote keyed on the verdict ALONE would call this unanimous.
-START_SECTION(quant_group_outvotes_a_dissenting_charge)
+// Two members. The one with the PUREST window is fed ms2_quant_tmt_treated_absent.txt -- wholly
+// absent in treated against a full control -- and the other the complete ms2_quant_tmt.txt. Under
+// ADR-0040's vote that was a 1-1 tie broken by window_snr, so the absent member's bloc won and the
+// identification scan was built at ITS charge. Under the aggregate the complete member is the only
+// usable one, so the scan is built at the COMPLETE member's charge. The charge of the bought 'R'
+// therefore separates the two engines; a pushed count alone could not.
+START_SECTION(quant_group_aggregates_without_a_dissenting_member)
 {
   auto ms1 = loadTsvScans(ms1_cytc_tsv_path);
   auto tmt = loadTsvScans(ms2_tmt_tsv_path);
   auto opp = loadTsvScans(ms2_quant_treated_absent_tsv_path);
   ABORT_IF(ms1.empty() || tmt.empty() || opp.empty())
 
-  GroupRun unan = runQuantGroup(quantGroupJson(), ms1, tmt[0], tmt[0], -1);
-  ABORT_IF(unan.q_count < 3)   // a 2-member group would TIE rather than out-vote
+  const std::string cfg = quantObjectiveJson(
+      "1.4", "", "", R"(, "precursor_charges": "separate", "min_charge_states": 2, "max_charge_states": 2)");
+  FLASHIda ida(const_cast<char*>(cfg.c_str()));
+  AcqResult acq = runInterleaved(&ida, ms1, {});
 
-  GroupRun split = runQuantGroup(quantGroupJson(), ms1, tmt[0], opp[0], 0);
-  TEST_EQUAL(split.q_count, unan.q_count)   // same acquisition either way; only the returns differ
-  TEST_EQUAL(split.pushed_total, 1)         // the majority still buys, exactly once
+  // The group: same parent survey and nominal mass as the first 'Q' (runQuantGroup's rule).
+  std::vector<ScanCommand> qs;
+  for (const auto& c : acq.ms2_cmds)
+  {
+    if (std::strlen(c.scan_description) < 4 || c.scan_description[3] != 'Q') continue;
+    if (qs.empty()) { qs.push_back(c); continue; }
+    if (std::string(c.parent_scan_id) == std::string(qs.front().parent_scan_id)
+        && std::llround(c.mono_mass) == std::llround(qs.front().mono_mass))
+      qs.push_back(c);
+  }
+  ABORT_IF(qs.size() != 2)
+
+  // The purest window, by the engine's own order: window_snr, then intensity, then lower charge.
+  auto better = [](const ScanCommand& a, const ScanCommand& b) {
+    if (a.window_snr != b.window_snr) return a.window_snr > b.window_snr;
+    if (a.precursor_intensity != b.precursor_intensity) return a.precursor_intensity > b.precursor_intensity;
+    return std::abs(a.stages[0].charge_state) < std::abs(b.stages[0].charge_state);
+  };
+  const size_t purest   = better(qs[0], qs[1]) ? 0 : 1;
+  const size_t complete = 1 - purest;
+  const int complete_charge = std::abs(qs[complete].stages[0].charge_state);
+  ABORT_IF(complete_charge == std::abs(qs[purest].stages[0].charge_state))
+
+  int pushed = 0;
+  for (size_t i = 0; i < qs.size(); ++i)
+  {
+    const ScanData& s = (i == purest) ? opp[0] : tmt[0];
+    const int p = ida.processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 2,
+                                  qs[i].scan_description, 0.0, instrumentScanNumberOf(s));
+    if (p > 0) pushed += p;
+  }
+  TEST_EQUAL(pushed, 1)
+
+  // Drain to the bought 'R' (bounded: the drain never returns 0, it idles on a priority-3 MS1).
+  int r_charge = 0;
+  for (int k = 0; k < 64 && r_charge == 0; ++k)
+  {
+    ScanCommand out {};
+    ida.getNextScanCommand(out);
+    if (out.msn_level == 1 && out.priority == 3) break;
+    if (out.msn_level == 2 && std::strlen(out.scan_description) >= 4 && out.scan_description[3] == 'R')
+      r_charge = std::abs(out.stages[0].charge_state);
+  }
+  TEST_EQUAL(r_charge, complete_charge)
 }
 END_SECTION
 
-// Q40-3: ABSTENTIONS are not dissent.
+// Q40-3: an UNUSABLE member is absent from the aggregate, not opposed to it (ADR-0056).
 //
-// ms2_hcd_fragment.txt carries no reporter ions at all, so that member cannot be measured. It must
-// lower the BALLOT COUNT, never the agreement -- a charge with no signal is evidence of nothing, and
-// counting it as disagreement would manufacture chimericity out of a weak charge.
-//
-// With min_charge_states 2 and one abstainer, the remaining members still clear the floor and buy.
+// ms2_hcd_fragment.txt carries no reporter ions at all, so that member cannot be measured. It is
+// left out of the aggregate -- a charge with no signal is evidence of nothing -- and the remaining
+// members decide and buy.
 START_SECTION(quant_group_abstention_is_not_dissent)
 {
   auto ms1 = loadTsvScans(ms1_cytc_tsv_path);
@@ -3804,16 +3853,16 @@ START_SECTION(quant_group_abstention_is_not_dissent)
   ABORT_IF(ms1.empty() || tmt.empty() || inert.empty())
 
   GroupRun r = runQuantGroup(quantGroupJson(), ms1, tmt[0], inert[0], 0);
-  ABORT_IF(r.q_count < 3)   // 2 members minus 1 abstainer would fall BELOW the floor, not over it
+  ABORT_IF(r.q_count < 2)
 
-  TEST_EQUAL(r.pushed_total, 1)   // the abstainer is ignored; the rest agree and buy
+  TEST_EQUAL(r.pushed_total, 1)   // the unusable member is ignored; the rest decide and buy
 }
 END_SECTION
 
-// Q40-4: `identify` still governs, on the CONSENSUS rather than on any member.
+// Q40-4: `identify` still governs, on the GROUP's verdict rather than on any member.
 //
-// This is the property that keeps ADR-0039 intact: decide() synthesizes a plain Result, so
-// quantBuysIdentification is reached unchanged. "none" must buy nothing however the vote went.
+// This is the property that keeps ADR-0039 intact: decide() returns a plain Result, so
+// quantBuysIdentification is reached unchanged. "none" must buy nothing however the group decided.
 START_SECTION(quant_group_consensus_is_what_identify_cuts_on)
 {
   auto ms1 = loadTsvScans(ms1_cytc_tsv_path);
@@ -3827,9 +3876,8 @@ START_SECTION(quant_group_consensus_is_what_identify_cuts_on)
 }
 END_SECTION
 
-// Q40-5: `single` is BYTE-IDENTICAL -- a group of one completes on its first return and the
-// consensus of one measurement is that measurement. This is what keeps 24 of 25 golden modes still,
-// so it is asserted rather than assumed.
+// Q40-5: under `single` a group of one completes on its first return, and the group verdict of one
+// measurement is that measurement's verdict.
 START_SECTION(quant_group_of_one_reproduces_the_pre_ADR_0040_buy)
 {
   auto ms1 = loadTsvScans(ms1_cytc_tsv_path);
@@ -3844,17 +3892,13 @@ START_SECTION(quant_group_of_one_reproduces_the_pre_ADR_0040_buy)
 }
 END_SECTION
 
-// Q40-6: MULTIPLEXED reaches a consensus and buys, with min_charge_states above 1.
+// Q40-6: MULTIPLEXED reaches a group verdict and buys, with min_charge_states above 1.
 //
-// Regression for a defect that shipped to CI: the ballot floor was min_charge_states flat, but
-// multiplexed co-isolates the whole charge set into ONE scan -- so its single ballot fell below a
-// floor of 2 and the mode reported `incomplete_channels | 0/1` on every row and bought nothing,
-// permanently. min_charge_states is a requirement on the acquisition charge SET, enforced at MS1
-// admission; the ballot floor is its decision-time half, and the two are the same number only under
-// `separate`. Capping the floor by the group's size is what separates them.
-//
-// Adversarially: revert the std::min cap and this reads 0.
-START_SECTION(quant_multiplexed_group_of_one_still_reaches_a_consensus)
+// Regression for a defect that shipped to CI under ADR-0040: the ballot floor was min_charge_states,
+// and multiplexed co-isolates the whole charge set into ONE scan, so it bought nothing. Since
+// ADR-0056 the decision floor is quantification.min_usable_scans, which is never read from
+// min_charge_states and must be 1 outside `separate` -- this keeps the one-member group honest.
+START_SECTION(quant_multiplexed_group_of_one_still_reaches_a_group_verdict)
 {
   auto ms1 = loadTsvScans(ms1_cytc_tsv_path);
   auto tmt = loadTsvScans(ms2_tmt_tsv_path);
@@ -3866,6 +3910,26 @@ START_SECTION(quant_multiplexed_group_of_one_still_reaches_a_consensus)
   GroupRun r = runQuantGroup(cfg, ms1, tmt[0], tmt[0], -1);
   TEST_EQUAL(r.q_count, 1)        // one co-isolated 'Q' however many charges it carries
   TEST_EQUAL(r.pushed_total, 1)   // ...which is enough: the floor cannot exceed what the mode emits
+}
+END_SECTION
+
+// Q56-2: `identify: all` buys a group that could not decide (ADR-0056 decision 9).
+//
+// One partially measured scan under `single`: incomplete_channels. ADR-0040 gave such a group no
+// winner, so even `all` -- "every screened precursor, verdict irrelevant" (ADR-0039) -- bought
+// nothing. The window is now named whenever a member returned; `quantified` still refuses it.
+START_SECTION(quant_identify_all_buys_an_undecided_group)
+{
+  auto ms1 = loadTsvScans(ms1_tsv_path);
+  auto partial = loadTsvScans(ms2_quant_partial_tsv_path);
+  ABORT_IF(ms1.empty() || partial.empty())
+
+  const std::string all = quantObjectiveJson("1.4", R"( "identify": "all",)", "");
+  TEST_EQUAL(quantPushedFor(all.c_str(), ms1, partial), 1)
+  const std::string quantified = quantObjectiveJson("1.4", R"( "identify": "quantified",)", "");
+  TEST_EQUAL(quantPushedFor(quantified.c_str(), ms1, partial), 0)
+  const std::string differential = quantObjectiveJson("1.4", "", "");
+  TEST_EQUAL(quantPushedFor(differential.c_str(), ms1, partial), 0)
 }
 END_SECTION
 

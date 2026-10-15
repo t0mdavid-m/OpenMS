@@ -905,7 +905,7 @@ START_SECTION(quantification_enriched_in_resolves_by_condition_name)
   };
 
   // Named by CONDITION, resolved to an ordinal at load. Direction is never authored as up/down:
-  // fold_change = mean(conditions[0]) / mean(conditions[1]), so "up" would mean enriched in
+  // fold_change = gmean(conditions[0]) / gmean(conditions[1]), so "up" would mean enriched in
   // conditions[0] and would invert silently if the array were reordered.
   TEST_EQUAL(Config(withEnriched(R"("enriched_in": "a")")).quantification().enriched_in, 0)
   TEST_EQUAL(Config(withEnriched(R"("enriched_in": "b")")).quantification().enriched_in, 1)

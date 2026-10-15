@@ -89,20 +89,15 @@ namespace OpenMS
       return false;  // unreachable for a valid enumerator
     }
 
-    /// consensus_charges: every balloting charge, with the agreeing ones starred (ADR-0040).
-    ///
-    /// ';'-joined, matching every other list column. The star is what makes a dissent legible at a
-    /// glance -- `11*;14*;17` says which charge was discarded and therefore which population the
-    /// identification scan was NOT taken from. Abstentions do not appear: they cast no ballot, so
-    /// listing them would read as dissent.
-    std::string formatConsensusCharges_(const Quantification::Consensus& c)
+    /// group_charges: the charges of the members the group was decided on (ADR-0056), ';'-joined
+    /// like every other list column. No stars: there is no vote, so nothing dissents.
+    std::string formatGroupCharges_(const Quantification::GroupDecision& g)
     {
       std::string out;
-      for (size_t i = 0; i < c.ballot_charges.size(); ++i)
+      for (int z : g.usable_charges)
       {
         if (!out.empty()) out += ";";
-        out += std::to_string(c.ballot_charges[i]);
-        if (i < c.ballot_agreed.size() && c.ballot_agreed[i]) out += "*";
+        out += std::to_string(z);
       }
       return out;
     }
@@ -691,6 +686,7 @@ FLASHIda::FLASHIda(char* arg) :
           // Every field is logged, so what scan_results reports IS what the engine decided on.
           results_row.quant_verdict = Quantification::verdictName(q.verdict);
           results_row.quant_fold_change = q.fold_change;
+          results_row.quant_p_value = q.p_value;
           results_row.quant_channels = q.channels;
           results_row.quant_condition_means = {q.condition_means[0], q.condition_means[1]};
 
@@ -702,20 +698,19 @@ FLASHIda::FLASHIda(char* arg) :
           {
             const auto cons = quant_.decide(gid);
 
-            // The consensus belongs to the GROUP, not to any one scan, so it is written on
-            // whichever 'Q' completed it and left empty everywhere else. consensus_id_charge is
-            // carried explicitly so a reader never has to infer that this row is not the row the
-            // decision was about.
-            results_row.consensus_verdict     = Quantification::verdictName(cons.result.verdict);
-            results_row.consensus_fold_change = cons.result.fold_change;
-            results_row.consensus_agreement   = std::to_string(cons.agreeing) + "/"
-                                                + std::to_string(cons.total_ballots);
-            results_row.consensus_charges     = formatConsensusCharges_(cons);
-            results_row.consensus_id_charge   = cons.winner_charge;
+            // The group's decision belongs to the GROUP, not to any one scan, so it is written on
+            // whichever 'Q' completed it and left empty everywhere else (ADR-0056 decision 8).
+            results_row.group_verdict     = Quantification::verdictName(cons.result.verdict);
+            results_row.group_fold_change = cons.result.fold_change;
+            results_row.group_p_value     = cons.result.p_value;
+            // Empty unless an aggregate was tested: the absence and undecided paths have none.
+            if (cons.result.complete) results_row.group_channels = cons.result.channels;
+            results_row.group_usable      = std::to_string(cons.usable) + "/" + std::to_string(cons.members);
+            results_row.group_charges     = formatGroupCharges_(cons);
 
-            // ADR-0039's predicate, UNCHANGED: it receives the synthesized consensus Result, so
-            // `identify` and `enriched_in` keep working -- including the condition_means-not-
-            // fold_change trap, because the aggregate carries real means.
+            // ADR-0039's predicate, UNCHANGED: it receives the group's Result, so `identify` and
+            // `enriched_in` keep working -- including the condition_means-not-fold_change trap,
+            // because the aggregate carries real (geometric) means.
             if (cons.has_winner && quantBuysIdentification(cons.result, config_.quantification()))
             {
               // BOTH the geometry and the precursor_id come from the WINNER, never from the scan
@@ -728,6 +723,9 @@ FLASHIda::FLASHIda(char* arg) :
               stampAndPush_(ident, cons.winner_precursor_id);
               child_ids.push_back(ScanCommandQueue::encode(ident.scan_id));
               commands_pushed++;
+              // Only here, so "0 = nothing bought" is true (ADR-0056 decision 8); ADR-0040's column
+              // wrote the winner's charge whether or not anything was bought.
+              results_row.group_id_charge = cons.winner_charge;
             }
             quant_.closeGroup(gid);
           }
