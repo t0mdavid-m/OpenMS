@@ -78,6 +78,15 @@ is airtight:
 > `false` default), and **an all-zero `correction_matrix` is handled by FLASHIda rather than passed
 > through**: `IsobaricIsotopeCorrector` *throws* on an identity matrix, so delegating would abort
 > every scan instead of skipping the correction.
+>
+> ⚠️ **`channel_normalization` (ADR-0057) is applied in `Quantification::evaluate()` and nowhere
+> else** — subtracted in log2 *after* the empty check, so a factor never decides whether a channel
+> was measured, and never written into `Result::channels`, which is what `scan_results.tsv` logs.
+> `decide()` needs no code of its own: it already hands its aggregate to `evaluate()`. Moving the
+> division to the top of `evaluate()` (or into `measure()`) would revalue the logged channels and
+> make the offline pipeline normalise twice; `Quantification_test`'s
+> `a_factor_shifts_the_ratio_and_leaves_the_reported_channels_raw` and
+> `emptiness_is_judged_on_the_raw_value` pin both.
 
 ### Ownership tree — declaration order is load-bearing
 
