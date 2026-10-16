@@ -457,7 +457,11 @@ namespace OpenMS
       {
         const double v = (idx < n) ? channels[idx] : 0.0;
         if (!(v > 0.0) || v < empty_floor) { ++empties; continue; }
-        log2v[c].push_back(std::log2(v));
+        // ADR-0057: emptiness above is judged on the RAW value; the authored channel
+        // normalisation enters only what the test reads. `out.channels` stays raw -- it is what
+        // scan_results.tsv logs, and the offline pipeline normalises those columns itself.
+        const double f = cfg.channel_normalization.empty() ? 1.0 : cfg.channel_normalization[idx];
+        log2v[c].push_back(std::log2(v) - std::log2(f));
       }
       if (empties == chans.size()) { wholly_absent[c] = true; }
       else if (empties > 0)        { any_assigned_empty = true; }

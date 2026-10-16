@@ -40,6 +40,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Quantification.h>
 
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <stdexcept>
 #include <set>
@@ -644,7 +645,8 @@ namespace OpenMS
          "conditions", "correction_matrix",
          "identify", "enriched_in",  // ADR-0039
          "test", "p_value_threshold", "empty_condition", "scan_normalize", "aggregate",
-         "min_usable_scans"},  // ADR-0056
+         "min_usable_scans",  // ADR-0056
+         "channel_normalization"},  // ADR-0057
         "quantification");
     quant_.enabled = quant.value("enabled", false);
     quant_.labelling = quant.value("labelling", std::string("tmt6plex"));
@@ -811,6 +813,55 @@ namespace OpenMS
                 "condition a species must be ENRICHED IN for a differential verdict to buy the "
                 "identification scan (ADR-0039).");
         }
+      }
+    }
+
+    // ADR-0057. Channel normalisation factors: an OBJECT keyed by channel name (unordered, so
+    // nlohmann's sorting is harmless here, unlike `conditions`), resolved to ordinals like the
+    // condition channels above. Outside `enabled` for the same reason channel resolution is.
+    // Null-tolerant for the JavaScriptSerializer reason above; `{}` means off, like absence.
+    if (quant.contains("channel_normalization") && !quant["channel_normalization"].is_null())
+    {
+      const auto& cn = quant["channel_normalization"];
+      if (!cn.is_object())
+        throw std::invalid_argument(
+            "Config: 'quantification.channel_normalization' must be an OBJECT mapping channel name "
+            "to a positive divisor, e.g. {\"126\": 0.171, \"127\": 0.158, ...} (ADR-0057).");
+      if (!cn.empty())
+      {
+        const std::vector<std::string> channel_names = Quantification::channelNames(quant_.labelling);
+        std::string known_channels;
+        for (const auto& c : channel_names)
+        { if (!known_channels.empty()) known_channels += ", "; known_channels += c; }
+
+        std::vector<double> factors(channel_names.size(), 1.0);
+        std::vector<bool> authored(channel_names.size(), false);
+        for (auto it = cn.begin(); it != cn.end(); ++it)
+        {
+          auto pos = std::find(channel_names.begin(), channel_names.end(), it.key());
+          if (pos == channel_names.end())
+            throw std::invalid_argument(
+                "Config: quantification.channel_normalization names unknown channel '" + it.key()
+                + "'. Valid channels for " + quant_.labelling + ": " + known_channels + ".");
+          const double f = it.value().is_number() ? it.value().get<double>() : -1.0;
+          if (!std::isfinite(f) || f <= 0.0)
+            throw std::invalid_argument(
+                "Config: quantification.channel_normalization['" + it.key()
+                + "'] must be a finite number above 0; a channel is DIVIDED by it (ADR-0057).");
+          const size_t idx = static_cast<size_t>(pos - channel_names.begin());
+          factors[idx] = f;
+          authored[idx] = true;
+        }
+        // Every ASSIGNED channel must carry a factor: a silent 1.0 would compare a corrected
+        // channel against an uncorrected one inside the same condition.
+        for (const auto& cond : quant_.conditions)
+          for (size_t idx : cond.channels)
+            if (!authored[idx])
+              throw std::invalid_argument(
+                  "Config: quantification.channel_normalization has no factor for channel '"
+                  + channel_names[idx] + "', which condition '" + cond.name + "' uses. Once "
+                  "authored, it must name every channel the conditions assign (ADR-0057).");
+        quant_.channel_normalization = std::move(factors);
       }
     }
 

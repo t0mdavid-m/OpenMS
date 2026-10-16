@@ -554,6 +554,14 @@ namespace OpenMS
     /// corrects impurity and does nothing else because `normalization` defaults false). An
     /// all-zero matrix yields the identity, i.e. correction off.
     std::vector<std::string> correction_matrix;
+    /// ADR-0057. Channel normalisation factors, one divisor per channel of `labelling` in
+    /// getChannelInformation() order; EMPTY = off. Authored by name as
+    /// `quantification.channel_normalization` from a previous run (the offline pipeline's
+    /// run-wide channel medians, which a live run cannot compute). Unassigned channels the author
+    /// left out hold 1.0. Applied ONLY to what the test reads (log2 values, condition means, fold
+    /// change, p) -- emptiness is judged and channels are logged RAW. Not `correction_matrix`,
+    /// which is the label lot's isotope impurity.
+    std::vector<double> channel_normalization;
     /// `ms_settings.ms2`: the scan a differential verdict buys. In a quant config it is
     /// deliberately NOT on levels_[2].scans -- the quantification scan holds that slot, and that
     /// swap is the whole of ADR-0038.
