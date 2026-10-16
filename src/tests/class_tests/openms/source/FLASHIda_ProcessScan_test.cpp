@@ -2531,6 +2531,52 @@ START_SECTION(processScan_enriched_in_survives_a_wholly_absent_condition)
 }
 END_SECTION
 
+// ---------------------------------------------------------------------------------------------
+// ADR-0057: authored channel normalisation, end to end. The factors enter the decision and the
+// decision numbers in scan_results.tsv, while the logged CHANNELS stay the measurement -- the
+// offline pipeline normalises those columns itself, so corrected channels would normalise twice.
+// ---------------------------------------------------------------------------------------------
+
+START_SECTION(processScan_channel_normalization_decides_and_logs_raw)
+{
+  auto ms1_scans = loadTsvScans(ms1_tsv_path);
+  auto ms2_tmt_scans = loadTsvScans(ms2_tmt_tsv_path);
+  ABORT_IF(ms1_scans.empty() || ms2_tmt_scans.empty())
+
+  // Drive one 'Q' through the engine with logging on; return its scan_results row's
+  // (quant_channels, quant_fold_change). The factors ride quantObjectiveJson's verbatim key slot.
+  auto quantRow = [&](const std::string& tag, const std::string& extra_keys) {
+    const std::string dir = freshLogDir(tag);
+    std::string cfg = quantObjectiveJson("0.01", "", extra_keys);
+    cfg.insert(cfg.rfind('}'), R"(, "runtime": { "log_dir": ")" + dir + R"(" })");
+    {
+      TEST_EQUAL(quantPushedFor(cfg.c_str(), ms1_scans, ms2_tmt_scans), 1)
+    }
+    auto res = TSVFile::parse(dir + "/scan_results.tsv");
+    std::pair<std::string, double> out {"", -1.0};
+    int q_rows = 0;
+    for (const auto& row : res.rows)
+    {
+      const std::string v = cell(res, row, "quant_verdict");
+      if (v != "differential" && v != "not_differential") continue;
+      ++q_rows;
+      out = {cell(res, row, "quant_channels"), toD(cell(res, row, "quant_fold_change"))};
+    }
+    TEST_EQUAL(q_rows, 1)
+    return out;
+  };
+
+  auto raw  = quantRow("chnorm_raw", "");
+  auto norm = quantRow("chnorm_doubled",
+                       R"( "channel_normalization": { "126": 1, "127": 1, "128": 1, "129": 2, "130": 2, "131": 2 },)");
+  TEST_EQUAL(raw.first.empty(), false)
+  TEST_STRING_EQUAL(norm.first, raw.first)              // the measurement, byte for byte
+  TOLERANCE_RELATIVE(1.0001)                            // both cells are six significant digits
+  TEST_REAL_SIMILAR(norm.second, 2.0 * raw.second)      // the decision, corrected
+  TOLERANCE_RELATIVE(1.0 + 1e-5)                        // the ClassTest default, for later sections
+}
+END_SECTION
+
 START_SECTION(processScan_quant_followup)
 {
   auto ms1_scans = loadTsvScans(ms1_tsv_path);

@@ -8,9 +8,11 @@
 
 #include <OpenMS/CONCEPT/ClassTest.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Quantification.h>
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -185,6 +187,21 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
   TEST_EQUAL(j["quantification"]["aggregate"].get<std::string>(), "sum")
   TEST_EQUAL(cfg.quantification().aggregate == QuantAggregate::Sum, true)
   TEST_EQUAL(cfg.quantification().min_usable_scans, j["quantification"]["min_usable_scans"].get<int>())
+  // ADR-0057. Every authored factor crossed the bridge to its channel's ordinal -- including the
+  // reference's one UNASSIGNED channel, which proves such a channel is accepted rather than refused.
+  {
+    const auto& jn = j["quantification"]["channel_normalization"];
+    const auto names = Quantification::channelNames(cfg.quantification().labelling);
+    const auto& f = cfg.quantification().channel_normalization;
+    TEST_EQUAL(jn.is_object() && jn.size() == 5, true)
+    TEST_EQUAL(f.size(), names.size())
+    for (auto it = jn.begin(); it != jn.end(); ++it)
+    {
+      const size_t idx = static_cast<size_t>(std::find(names.begin(), names.end(), it.key()) - names.begin());
+      TEST_EQUAL(idx < f.size(), true)
+      if (idx < f.size()) TEST_REAL_SIMILAR(f[idx], it.value().get<double>())
+    }
+  }
 
   // --- faims ---
   TEST_EQUAL(cfg.faims().cv_values.size(), j["faims"]["cv_values"].size())

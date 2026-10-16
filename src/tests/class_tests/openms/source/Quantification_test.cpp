@@ -10,6 +10,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Quantification.h>
 
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -688,6 +689,120 @@ START_SECTION(a_partial_condition_logs_zero_means)
   TEST_REAL_SIMILAR(r.condition_means[1], 1000.0)
   TEST_REAL_SIMILAR(r.fold_change, -1.0)
   TEST_REAL_SIMILAR(r.p_value, -1.0)
+}
+END_SECTION
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// ADR-0057 -- authored channel normalisation. Each channel is divided by its factor before the test
+// reads it; emptiness is judged, and channels are reported, RAW.
+//
+///////////////////////////////////////////////////////////////////////////////
+
+auto factors = [](const std::string& body) {
+  return std::string(R"(, "channel_normalization": {)") + body + "}";
+};
+const char* kUnitFactors = R"("126": 1, "127": 1, "128": 1, "129": 1, "130": 1, "131": 1)";
+// The pipeline's own scale: median shares sit near 1/6.
+const char* kShareFactors = R"("126": 0.17, "127": 0.17, "128": 0.17, "129": 0.17, "130": 0.17, "131": 0.17)";
+const char* kAcetateDoubled = R"("126": 1, "127": 1, "128": 1, "129": 2, "130": 2, "131": 2)";
+
+START_SECTION(a_common_scale_on_every_factor_changes_nothing)
+{
+  // Only the factors' RATIOS matter: the geometric fold change and the Welch test are both
+  // invariant to one constant on every channel, so the pipeline's ~1/6 shares paste in unchanged.
+  for (const std::string test : {"fold_change", "welch"})
+  {
+    auto unit  = run(Config(quantJson(kThreeVsThree, withTest(test, factors(kUnitFactors)))), kScan13301);
+    auto share = run(Config(quantJson(kThreeVsThree, withTest(test, factors(kShareFactors)))), kScan13301);
+    auto none  = run(Config(quantJson(kThreeVsThree, withTest(test))), kScan13301);
+    TEST_REAL_SIMILAR(share.fold_change, unit.fold_change)
+    TEST_REAL_SIMILAR(share.p_value, unit.p_value)
+    TEST_EQUAL(share.verdict == unit.verdict, true)
+    // ...and unit factors are exactly the unauthored behaviour.
+    TEST_REAL_SIMILAR(unit.fold_change, none.fold_change)
+    TEST_REAL_SIMILAR(unit.p_value, none.p_value)
+  }
+}
+END_SECTION
+
+START_SECTION(a_factor_shifts_the_ratio_and_leaves_the_reported_channels_raw)
+{
+  auto raw  = run(Config(quantJson(kThreeVsThree, withTest("fold_change"))), {4000, 4000, 4000, 1000, 1000, 1000});
+  auto norm = run(Config(quantJson(kThreeVsThree, withTest("fold_change", factors(kAcetateDoubled)))),
+                  {4000, 4000, 4000, 1000, 1000, 1000});
+  TEST_REAL_SIMILAR(raw.fold_change, 4.0)
+  TEST_REAL_SIMILAR(norm.fold_change, 8.0)
+  TEST_REAL_SIMILAR(norm.condition_means[0], 4000.0)
+  TEST_REAL_SIMILAR(norm.condition_means[1], 500.0)
+  // The channels are what scan_results.tsv logs; they must be the measurement, not the corrected
+  // values, or the offline pipeline normalises twice. Dividing the vector at the top of evaluate()
+  // would fail here.
+  TEST_EQUAL(norm.channels.size(), raw.channels.size())
+  for (size_t i = 0; i < raw.channels.size(); ++i) TEST_REAL_SIMILAR(norm.channels[i], raw.channels[i])
+  // The factor decides: at threshold 1.4 both are differential, so pin a verdict that flips.
+  auto flat_raw  = run(Config(quantJson(kThreeVsThree, withTest("fold_change"))), {1000, 1000, 1000, 2000, 2000, 2000});
+  auto flat_norm = run(Config(quantJson(kThreeVsThree, withTest("fold_change", factors(kAcetateDoubled)))),
+                       {1000, 1000, 1000, 2000, 2000, 2000});
+  TEST_EQUAL(flat_raw.verdict == V::Differential, true)      // 1/fc = 2.0 > 1.4
+  TEST_EQUAL(flat_norm.verdict == V::NotDifferential, true)  // a 2x loading imbalance, corrected away
+  TEST_REAL_SIMILAR(flat_norm.fold_change, 1.0)
+}
+END_SECTION
+
+START_SECTION(within_condition_offsets_removed_by_the_factors_lower_p)
+{
+  // Channel 127 under-loaded by 20 %: the offset inflates condition a's variance. Its factor
+  // removes it, so the Welch p falls; the fold change moves by exactly 0.8^(-1/3).
+  const std::vector<double> ch {1000, 800, 1050, 500, 520, 480};
+  auto raw  = run(Config(quantJson(kThreeVsThree, withTest("welch"))), ch);
+  auto norm = run(Config(quantJson(kThreeVsThree,
+                  withTest("welch", factors(R"("126": 1, "127": 0.8, "128": 1, "129": 1, "130": 1, "131": 1)")))), ch);
+  TEST_EQUAL(raw.complete && norm.complete, true)
+  TEST_EQUAL(norm.p_value < raw.p_value, true)
+  TEST_REAL_SIMILAR(norm.fold_change, raw.fold_change * std::pow(0.8, -1.0 / 3.0))
+}
+END_SECTION
+
+START_SECTION(emptiness_is_judged_on_the_raw_value)
+{
+  // 5e-4 is below the presence floor (1e-3). Divided by 0.01 it would read 0.05 and count as
+  // measured -- the factor must not turn an empty channel into a measured one.
+  Config cfg(quantJson(kThreeVsThree, withTest("fold_change",
+             factors(R"("126": 1, "127": 1, "128": 0.01, "129": 1, "130": 1, "131": 1)"))));
+  auto r = Quantification::evaluate({4000, 4000, 5e-4, 1000, 1000, 1000}, cfg.quantification(), 1e-3);
+  TEST_EQUAL(r.verdict == V::IncompleteChannels, true)
+  TEST_EQUAL(r.complete, false)
+  // ...and a wholly absent condition stays absent whatever its factors.
+  Config cfg2(quantJson(kThreeVsThree, withTest("fold_change",
+              factors(R"("126": 1, "127": 1, "128": 1, "129": 1e-6, "130": 1e-6, "131": 1e-6)"))));
+  auto a = Quantification::evaluate({4000, 4000, 4000, 5e-4, 5e-4, 5e-4}, cfg2.quantification(), 1e-3);
+  TEST_EQUAL(a.verdict == V::Differential, true)
+  TEST_REAL_SIMILAR(a.fold_change, -1.0)
+}
+END_SECTION
+
+START_SECTION(a_group_is_normalised_on_its_aggregate)
+{
+  auto decideTwo = [&](const std::string& extra) {
+    Config cfg(groupJson(extra));
+    Quantification q(cfg);
+    q.addMember(1, memberCmd(11, 23, 1.8, 6.2e6), 1);
+    q.addMember(1, memberCmd(12, 22, 1.8, 6.0e6), 2);
+    q.deposit(11, run(cfg, kScan13373));
+    q.deposit(12, run(cfg, kScan13375));
+    return q.decide(1);
+  };
+  auto plain = decideTwo(R"(, "aggregate": "median")");
+  auto norm  = decideTwo(R"(, "aggregate": "median")" + factors(kAcetateDoubled));
+  TEST_EQUAL(norm.usable, 2)
+  // The aggregate (median of shares) is logged raw...
+  for (size_t i = 0; i < plain.result.channels.size(); ++i)
+    TEST_REAL_SIMILAR(norm.result.channels[i], plain.result.channels[i])
+  // ...and decided corrected: halving condition b doubles the ratio. (The Welch p moves too -- a
+  // factor uniform within a condition keeps that condition's variance but shifts its mean.)
+  TEST_REAL_SIMILAR(plain.result.fold_change, 2.069697842)
+  TEST_REAL_SIMILAR(norm.result.fold_change, 2.0 * 2.069697842)
 }
 END_SECTION
 

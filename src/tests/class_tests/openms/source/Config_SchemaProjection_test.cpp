@@ -1178,6 +1178,54 @@ START_SECTION(quantification_min_usable_scans_is_bounded_by_the_charge_set)
 }
 END_SECTION
 
+// ---- ADR-0057: authored channel normalisation ------------------------------------------------------
+
+START_SECTION(quantification_channel_normalization_parses_and_rejects)
+{
+  // Absent, null and {} are all "off".
+  TEST_EQUAL(Config(quantCfg("")).quantification().channel_normalization.empty(), true)
+  TEST_EQUAL(Config(quantCfg(R"("channel_normalization": null)")).quantification().channel_normalization.empty(), true)
+  TEST_EQUAL(Config(quantCfg(R"("channel_normalization": {})")).quantification().channel_normalization.empty(), true)
+
+  // All six, resolved to ORDINALS in channel order regardless of authoring order.
+  Config all(quantCfg(R"("channel_normalization": { "131": 0.6, "126": 0.1, "127": 0.2, "128": 0.3, "129": 0.4, "130": 0.5 })"));
+  const auto& f = all.quantification().channel_normalization;
+  TEST_EQUAL(f.size(), 6)
+  TEST_REAL_SIMILAR(f[0], 0.1)
+  TEST_REAL_SIMILAR(f[3], 0.4)
+  TEST_REAL_SIMILAR(f[5], 0.6)
+
+  // The assigned channels are all that is required; an unassigned one would hold 1.0. (tmt6plex
+  // has no unassigned channel under QUANT_CONDS, so the unassigned case is a 2-vs-2 grouping.)
+  Config two(cfgJson("", QUANT_ON(R"({ "enabled": true, "labelling": "tmt6plex",
+      "conditions": [ { "name": "a", "channels": ["126","127"] }, { "name": "b", "channels": ["129","130"] } ],
+      "channel_normalization": { "126": 0.5, "127": 0.5, "129": 0.25, "130": 0.25 } })"), MS2_QUANT));
+  TEST_REAL_SIMILAR(two.quantification().channel_normalization[2], 1.0)   // 128, unassigned
+  TEST_REAL_SIMILAR(two.quantification().channel_normalization[3], 0.25)
+
+  // An assigned channel without a factor would compare corrected against uncorrected.
+  TEST_EXCEPTION(std::invalid_argument,
+                 Config(quantCfg(R"("channel_normalization": { "126": 1, "127": 1, "128": 1, "130": 1, "131": 1 })")))
+  // A channel the scheme does not have.
+  TEST_EXCEPTION(std::invalid_argument,
+                 Config(quantCfg(R"("channel_normalization": { "126": 1, "127": 1, "128": 1, "129": 1, "130": 1, "131": 1, "127N": 1 })")))
+  // Not a positive finite divisor.
+  TEST_EXCEPTION(std::invalid_argument,
+                 Config(quantCfg(R"("channel_normalization": { "126": 0, "127": 1, "128": 1, "129": 1, "130": 1, "131": 1 })")))
+  TEST_EXCEPTION(std::invalid_argument,
+                 Config(quantCfg(R"("channel_normalization": { "126": -1, "127": 1, "128": 1, "129": 1, "130": 1, "131": 1 })")))
+  TEST_EXCEPTION(std::invalid_argument,
+                 Config(quantCfg(R"("channel_normalization": { "126": "1", "127": 1, "128": 1, "129": 1, "130": 1, "131": 1 })")))
+  // An array would be positional -- exactly what naming the channels exists to avoid.
+  TEST_EXCEPTION(std::invalid_argument, Config(quantCfg(R"("channel_normalization": [1, 1, 1, 1, 1, 1])")))
+  // Validated outside `enabled`, like the channel names it resolves.
+  TEST_EXCEPTION(std::invalid_argument,
+                 Config(cfgJson("", QUANT_ON(R"({ "enabled": false, "labelling": "tmt6plex", )"
+                                             + std::string(QUANT_CONDS) + R"(, "channel_normalization": { "126": 1 } })"),
+                                MS2_QUANT)))
+}
+END_SECTION
+
 START_SECTION(quantification_unread_threshold_is_a_warning_not_a_throw)
 {
   // A threshold the authored test does not read is announced, never rejected, so flipping `test`
