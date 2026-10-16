@@ -4,6 +4,7 @@ set(directory include/OpenMS/ANALYSIS/TOPDOWN)
 ### list all header files of the directory here
 set(sources_list_h
         DeconvolvedSpectrum.h
+        FLASHAnnotatorAlgorithm.h
         SpectralDeconvolution.h
         FLASHDeconvAlgorithm.h
         FLASHHelperClasses.h
