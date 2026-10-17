@@ -1076,12 +1076,26 @@ namespace OpenMS
     std::vector<PeakGroup> filtered_peak_groups;
     filtered_peak_groups.reserve(selected_count);
 
-    Size index = selected.find_first();
-    while (index != selected.npos)
+    // Candidates from different charge ranges can converge to the same monoisotopic mass, and masses move by isotope offsets during
+    // scoring, so the groups are not sorted by mass here. Sort them, and of the groups with the same mass (within tolerance) keep the
+    // one explaining the most signal: the first one in candidate order may cover only part of the ion's charge states.
+    std::vector<Size> selected_indices;
+    selected_indices.reserve(selected_count);
+    for (Size index = selected.find_first(); index != selected.npos; index = selected.find_next(index))
     {
-      if (filtered_peak_groups.empty() || filtered_peak_groups.back().getMonoMass() < deconvolved_spectrum_[index].getMonoMass())
-        filtered_peak_groups.push_back(deconvolved_spectrum_[index]);
-      index = selected.find_next(index);
+      selected_indices.push_back(index);
+    }
+    std::stable_sort(selected_indices.begin(), selected_indices.end(),
+                     [this](Size a, Size b) { return deconvolved_spectrum_[a].getMonoMass() < deconvolved_spectrum_[b].getMonoMass(); });
+    for (Size index : selected_indices)
+    {
+      const auto& peak_group = deconvolved_spectrum_[index];
+      if (! filtered_peak_groups.empty() && peak_group.getMonoMass() - filtered_peak_groups.back().getMonoMass() <= peak_group.getMonoMass() * tol)
+      {
+        if (peak_group.getIntensity() > filtered_peak_groups.back().getIntensity()) { filtered_peak_groups.back() = peak_group; }
+        continue;
+      }
+      filtered_peak_groups.push_back(peak_group);
     }
 
     if (target_decoy_type_ == PeakGroup::noise_decoy)
@@ -1139,7 +1153,7 @@ namespace OpenMS
     }
 
     filtered_peak_groups.reserve(selected_count);
-    index = selected.find_first();
+    Size index = selected.find_first();
 
     while (index != selected.npos)
     {

@@ -712,8 +712,12 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
       loffset = loffset <= 0 ? isolation_window_size_ / 2.0 : loffset;
       uoffest = uoffest <= 0 ? isolation_window_size_ / 2.0 : uoffest;
 
-      start_mz = loffset > 100.0 ? loffset : -loffset + precursor.getMZ();
-      end_mz = uoffest > 100.0 ? uoffest : uoffest + precursor.getMZ();
+      // mzML isolation window offsets are relative to the isolation window target m/z. MzMLHandler stores the selected ion m/z as the
+      // precursor m/z and, when the two differ, keeps the target as a meta value.
+      double target_mz = precursor.metaValueExists("isolation window target m/z") ? (double)precursor.getMetaValue("isolation window target m/z")
+                                                                                  : precursor.getMZ();
+      start_mz = loffset > 100.0 ? loffset : -loffset + target_mz;
+      end_mz = uoffest > 100.0 ? uoffest : uoffest + target_mz;
     }
 
     double sum_intensity = .0;
