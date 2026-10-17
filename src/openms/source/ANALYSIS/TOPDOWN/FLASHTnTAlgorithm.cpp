@@ -11,6 +11,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHExtenderAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTAlgorithm.h>
+#include <unordered_map>
 #ifdef _OPENMP
   #include <omp.h>
 #endif
@@ -73,14 +74,14 @@ void FLASHTnTAlgorithm::setDefaultParams_()
 
   defaults_.setValue("min_protein_hits", 5,
                      "Number of best-scoring candidate proteins per spectrum that are always characterized. The other "
-                     "candidates are characterized only if their protein passes protein_fdr. Used only when the database "
+                     "candidates are characterized only if their protein, or its target-decoy partner, passes protein_fdr. Used only when the database "
                      "contains decoys (DECOY prefix); otherwise all candidates kept by max_protein_hits are characterized.");
   defaults_.setMinInt("min_protein_hits", 1);
 
   defaults_.setValue("protein_fdr", 0.1,
                      "Run-level protein FDR, from each protein's best tag-based score over all spectra, that a candidate "
-                     "beyond min_protein_hits must pass to be characterized. Needs decoys in the database. 1 characterizes "
-                     "all candidates kept by max_protein_hits.");
+                     "beyond min_protein_hits (or its target-decoy partner) must pass to be characterized. Needs decoys in the "
+                     "database. 1 characterizes all candidates kept by max_protein_hits.");
   defaults_.setMinFloat("protein_fdr", 0.0);
   defaults_.setMaxFloat("protein_fdr", 1.0);
 
@@ -155,6 +156,34 @@ std::set<Size> FLASHTnTAlgorithm::getProteinsPassingFDR_(const std::vector<FASTA
     qvalue = std::min(qvalue, fdr[k]);
     if (qvalue <= protein_fdr_) passing.insert(ranked[k].second);
   }
+
+  // Add the target-decoy partner of every passing protein. A protein present in the sample passes through its true matches in
+  // other spectra, which a decoy never has; extended in a spectrum that is not its own, it can give a false match that no decoy
+  // mirrors (Eclip_1480: beyond the top candidates 237 target vs 0 decoy matches). With its decoy partner extended under the same
+  // condition, that kind of false match is counted by the target-decoy competition too.
+  std::unordered_map<std::string, Size> index_of;
+  index_of.reserve(fasta_entry.size());
+  for (Size i = 0; i < fasta_entry.size(); i++)
+  {
+    index_of.emplace(fasta_entry[i].identifier, i);
+  }
+  std::set<Size> partners;
+  for (Size i : passing)
+  {
+    const String& id = fasta_entry[i].identifier;
+    std::vector<std::string> names;
+    if (id.hasPrefix("DECOY_")) { names.push_back(id.substr(6)); }
+    else if (id.hasPrefix("DECOY")) { names.push_back(id.substr(5)); }
+    else { names = {"DECOY_" + id, "DECOY" + id}; }
+    for (const auto& name : names)
+    {
+      auto it = index_of.find(name);
+      if (it == index_of.end()) continue;
+      partners.insert(it->second);
+      break;
+    }
+  }
+  passing.insert(partners.begin(), partners.end());
   return passing;
 }
 
@@ -731,8 +760,9 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
 
   if (! protein_level_only_)
   {
-    // Beyond the min_protein_hits best candidates of a spectrum, extend only those whose protein passes the
-    // run-level protein FDR. That needs decoys; without them every candidate is extended, as before.
+    // Beyond the min_protein_hits best candidates of a spectrum (a fair target-decoy competition: they are chosen by this spectrum
+    // alone), extend only those whose protein, or its target-decoy partner, passes the run-level protein FDR. That needs decoys;
+    // without them every candidate is extended, as before.
     const bool use_protein_fdr = decoy_factor_ > 0 && protein_fdr_ < 1.0;
     std::set<Size> passing_proteins;
     if (use_protein_fdr) { passing_proteins = getProteinsPassingFDR_(fasta_entry); }

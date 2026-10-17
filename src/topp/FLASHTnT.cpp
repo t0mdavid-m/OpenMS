@@ -92,13 +92,13 @@ protected:
 
     registerIntOption_("min_protein_hits", "<number>", 5,
                        "Number of best-scoring candidate proteins per spectrum that are always characterized. The other "
-                       "candidates are characterized only if their protein passes -protein_fdr. Used only when the database "
+                       "candidates are characterized only if their protein, or its target-decoy partner, passes -protein_fdr. Used only when the database "
                        "contains decoys (DECOY prefix).", false);
     setMinInt_("min_protein_hits", 1);
 
     registerDoubleOption_("protein_fdr", "<value>", 0.1,
                           "Run-level protein FDR, from each protein's best tag-based score, that a candidate beyond "
-                          "-min_protein_hits must pass to be characterized. Needs decoys in the database; without them all "
+                          "-min_protein_hits (or its target-decoy partner) must pass to be characterized. Needs decoys in the database; without them all "
                           "candidates kept by -max_protein_hits are characterized. 1 characterizes them all.", false);
     setMinFloat_("protein_fdr", 0.0);
     setMaxFloat_("protein_fdr", 1.0);
