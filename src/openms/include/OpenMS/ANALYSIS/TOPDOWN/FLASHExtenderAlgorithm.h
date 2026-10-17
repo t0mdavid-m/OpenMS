@@ -145,13 +145,6 @@ private:
   /// @p sorted_masses than at any of 200 masses moved by up to +-300 Da (chance in this spectrum)
   bool hasComplementaryPairSupport_(const std::vector<double>& sorted_masses, double precursor_mass) const;
 
-  /// true if @p masses (modifications of the both-termini path) holds one that is not in @p terminal_masses (within the tolerances) and is
-  /// not an isotope offset of 1-3 Da, an N-terminal Met loss, an acetylation or both
-  static bool hasUnexplainedNewModification_(const std::vector<double>& terminal_masses,
-                                             const std::vector<double>& terminal_tols,
-                                             const std::vector<double>& masses,
-                                             const std::vector<double>& tols);
-
   void calculatePrecursorMass_(const ProteinHit& hit,
                                const std::map<int, std::vector<Size>>& best_path_map,
                                HitInformation& hi);

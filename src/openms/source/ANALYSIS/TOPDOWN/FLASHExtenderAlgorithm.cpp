@@ -143,37 +143,6 @@ namespace OpenMS
     return true;
   }
 
-  bool FLASHExtenderAlgorithm::hasUnexplainedNewModification_(const std::vector<double>& terminal_masses,
-                                                             const std::vector<double>& terminal_tols,
-                                                             const std::vector<double>& masses,
-                                                             const std::vector<double>& tols)
-  {
-    // isotope offsets of 1-3 Da, N-terminal Met loss, acetylation, and both
-    static const std::vector<double> explained {-3 * Constants::C13C12_MASSDIFF_U, -2 * Constants::C13C12_MASSDIFF_U, -Constants::C13C12_MASSDIFF_U,
-                                                Constants::C13C12_MASSDIFF_U,      2 * Constants::C13C12_MASSDIFF_U,  3 * Constants::C13C12_MASSDIFF_U,
-                                                -131.040485,                       42.010565,                         -89.029920};
-    std::vector<bool> used(terminal_masses.size(), false);
-    for (Size i = 0; i < masses.size(); i++)
-    {
-      const double tol = std::max(0.05, i < tols.size() ? tols[i] : 0.0);
-      if (std::abs(masses[i]) <= tol) continue;
-      bool found = false;
-      for (Size j = 0; j < terminal_masses.size() && ! found; j++)
-      {
-        if (used[j]) continue;
-        if (std::abs(terminal_masses[j] - masses[i]) <= std::max(tol, j < terminal_tols.size() ? terminal_tols[j] : 0.0))
-        {
-          used[j] = true;
-          found = true;
-        }
-      }
-      if (found) continue;
-      if (std::any_of(explained.begin(), explained.end(), [&](double e) { return std::abs(masses[i] - e) <= tol; })) continue;
-      return true;
-    }
-    return false;
-  }
-
   void FLASHExtenderAlgorithm::calculatePrecursorMass_(const ProteinHit& hit, const std::map<int, std::vector<Size>>& best_path_map, HitInformation& hi)
   {
     hi.calculated_precursor_mass_ = -1;
@@ -1023,16 +992,24 @@ namespace OpenMS
         }
 
         // A mass inferred from fragments is the sum of one C- and one N-terminal fragment mass; nothing checks that both come from one
-        // precursor. It is rejected when the both-termini path can only explain it with a modification that neither terminal path has
-        // (other than an isotope offset or N-terminal Met loss / acetylation), the MS1 precursor mass does not confirm it, and the
-        // spectrum's complementary fragment pairs do not single it out (native intact-antibody spectra: the light-chain masses were off
-        // by +33 to +2985 Da; on lysates such masses mostly have strong pair support and are kept). Then the MS1 precursor mass is
-        // tried instead; without one, the terminal result is kept with an undetermined mass.
-        const bool given_mass_agrees = given_precursor_mass_ > 0 && std::abs(given_precursor_mass_ - hi.calculated_precursor_mass_) <= tol_ * given_precursor_mass_;
-        if (hi.mode_ == 2 && precursor_by_fragment && total_score > 0 && ! given_mass_agrees // the MS1 precursor mass confirms it
-            && hasUnexplainedNewModification_(terminal_mod_masses, terminal_mod_tols, mod_masses, mod_tols)
-            && ! hasComplementaryPairSupport_(sorted_masses, hi.calculated_precursor_mass_))
+        // precursor. It is kept only with evidence in the data: the MS1 precursor mass confirms it, or the spectrum's complementary
+        // fragment pairs single it out (native intact-antibody spectra: light-chain masses off by +33 to +2985 Da or by one residue).
+        // Any precursor mass is also given up when the proteoform needs a blind modification beyond max_mod_mass. A rejected inferred
+        // mass is replaced by the MS1 precursor mass if there is one; otherwise the terminal result is kept with an undetermined mass.
+        bool reject_mass = false;
+        if (hi.mode_ == 2 && total_score > 0)
         {
+          // a blind modification beyond max_mod_mass is outside the search's own condition
+          for (Size i = 0; i < mod_masses.size() && ! reject_mass; i++)
+            reject_mass = std::abs(mod_masses[i]) > max_mod_mass_ + std::max(0.05, i < mod_tols.size() ? mod_tols[i] : 0.0);
+          const bool given_mass_agrees
+            = given_precursor_mass_ > 0 && std::abs(given_precursor_mass_ - hi.calculated_precursor_mass_) <= tol_ * given_precursor_mass_;
+          if (! reject_mass && precursor_by_fragment && ! given_mass_agrees) // the MS1 precursor mass confirms it
+            reject_mass = ! hasComplementaryPairSupport_(sorted_masses, hi.calculated_precursor_mass_);
+        }
+        if (reject_mass)
+        {
+          const bool inferred = precursor_by_fragment;
           total_score = terminal_score;
           used_mode = terminal_used_mode;
           mod_starts = terminal_mod_starts;
@@ -1046,7 +1023,7 @@ namespace OpenMS
           all_path_map.erase(2);
           precursor_by_fragment = false;
           hi.calculated_precursor_mass_ = -1;
-          if (! retried_with_given_mass && given_precursor_mass_ > 0)
+          if (inferred && ! retried_with_given_mass && given_precursor_mass_ > 0)
           {
             retried_with_given_mass = true; // mode 2 again, without inference: it takes the given precursor mass
             hi.mode_ = 1;
