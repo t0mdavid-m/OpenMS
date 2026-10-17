@@ -8,6 +8,11 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
+#ifdef _OPENMP
+  #include <omp.h>
+#else
+  #define omp_in_parallel() 0
+#endif
 #include <utility>
 #include <OpenMS/ANALYSIS/ID/PeptideIndexing.h>
 
@@ -707,6 +712,61 @@ void FLASHTaggerAlgorithm::runMatching(std::vector<ProteinHit>& hits,
     if (! n_spec_pro_diffs.empty()) { getScoreAndMatchCount_(spec_vec, vec_pro[index], n_spec_pro_diffs, spec_scores, match_score1); }
     if (! c_spec_pro_diffs.empty()) { getScoreAndMatchCount_(spec_vec, rev_vec_pro[index], c_spec_pro_diffs, spec_scores, match_score2); }
     hit.setScore(std::max(match_score1, match_score2));
+  }
+}
+
+void FLASHTaggerAlgorithm::runMatchingExact(std::vector<ProteinHit>& hits,
+                                            const std::vector<ProteinShifts>& shifts,
+                                            const DeconvolvedSpectrum& deconvolved_spectrum,
+                                            const std::vector<std::vector<double>>& prefix_masses,
+                                            const std::vector<std::vector<double>>& suffix_masses,
+                                            double tol_ppm)
+{
+  // the masses with their node scores; mass 0 (score 1) stands for the terminus, as in runMatching
+  std::vector<double> masses {0.0};
+  std::vector<int> node_scores {1};
+  masses.reserve(deconvolved_spectrum.size() + 1);
+  node_scores.reserve(deconvolved_spectrum.size() + 1);
+  for (const auto& pg : deconvolved_spectrum)
+  {
+    masses.push_back(pg.getMonoMass());
+    node_scores.push_back(getNodeScore(pg));
+  }
+
+  // the shift with the most matches, as getScoreAndMatchCount_
+  auto side_score = [&](const std::vector<double>& residue_sums, const std::vector<double>& side_shifts, const std::vector<double>& flanks) {
+    int max_score = 0, match_cntr = 0;
+    for (Size j = 0; j < side_shifts.size(); j++)
+    {
+      int score = 0, cntr = 0;
+      for (Size k = 0; k < masses.size(); k++)
+      {
+        const double target = masses[k] + side_shifts[j];
+        const double margin = tol_ppm * 1e-6 * (std::max(masses[k], target) + flanks[j]);
+        auto it = std::lower_bound(residue_sums.begin(), residue_sums.end(), target - margin);
+        if (it == residue_sums.end() || *it > target + margin) continue;
+        score += node_scores[k];
+        cntr++;
+      }
+      if (cntr > match_cntr)
+      {
+        match_cntr = cntr;
+        max_score = std::max(max_score, score);
+      }
+    }
+    return max_score;
+  };
+
+  // FLASHTnT calls this from a loop that is already parallel over spectra; nesting would oversubscribe the threads
+#pragma omp parallel for schedule(dynamic) if (! omp_in_parallel())
+  for (int i = 0; i < (int)hits.size(); i++)
+  {
+    auto& hit = hits[i];
+    const auto& sh = shifts[i];
+    const Size index = sh.fasta_index;
+    const int score1 = sh.n_shifts.empty() ? 0 : side_score(prefix_masses[index], sh.n_shifts, sh.n_flanks);
+    const int score2 = sh.c_shifts.empty() ? 0 : side_score(suffix_masses[index], sh.c_shifts, sh.c_flanks);
+    hit.setScore(std::max(score1, score2));
   }
 }
 

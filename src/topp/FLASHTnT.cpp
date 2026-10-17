@@ -79,10 +79,16 @@ protected:
                   "Stops after the protein-level search, skipping proteoform characterization. Use with -out_protein to "
                   "shortlist proteins cheaply.");
 
-    registerIntOption_("max_protein_hits", "<number>", 20,
+    registerIntOption_("max_protein_hits", "<number>", 50,
                        "Number of candidate proteins kept per spectrum by the protein-level search. When proteoform "
                        "search runs, only these are characterized.", false);
     setMinInt_("max_protein_hits", 1);
+
+    registerDoubleOption_("protein_tol", "<ppm>", 0.0,
+                          "Mass tolerance (ppm) of the protein-level search: a deconvolved mass, moved by a tag-derived shift, "
+                          "matches a protein residue sum within it. 0: the MS2 deconvolution tolerance recorded in the input file.",
+                          false);
+    setMinFloat_("protein_tol", 0.0);
 
     registerIntOption_("min_protein_hits", "<number>", 5,
                        "Number of best-scoring candidate proteins per spectrum that are always characterized. The other "

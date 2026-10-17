@@ -85,13 +85,17 @@ private:
   Param tagger_param_, extender_param_;
   double decoy_factor_ = 0, prsm_fdr_ = 1;
   /// how many nodes (massses) will be used
-  Size max_node_cntr_ = 300;
+  /// at most this many masses (best Qscore first) per spectrum are used. 300 cut key fragments of native spectra (440-570 masses from
+  /// centroid input); 400 recovered them at about 1.8x the native search time, and lysate MS2 spectra rarely have this many masses.
+  Size max_node_cntr_ = 400;
 
   bool keep_decoy_ = false;
   bool keep_underdetermined_ = true;
   bool multiple_hits_per_spec_ = false;
   bool protein_level_only_ = false;
-  int max_protein_hits_ = 20;
+  int max_protein_hits_ = 50;
+  /// mass tolerance (ppm) of the protein-level search; <= 0: the MS2 deconvolution tolerance of the input
+  double protein_tol_ = 0;
   int min_protein_hits_ = 5;
   double protein_fdr_ = 0.1;
   std::vector<ProteinHit> proteoform_hits_;
