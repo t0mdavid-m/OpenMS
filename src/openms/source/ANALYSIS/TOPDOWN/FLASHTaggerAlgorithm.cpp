@@ -14,6 +14,7 @@
   #define omp_in_parallel() 0
 #endif
 #include <utility>
+#include <boost/math/special_functions/gamma.hpp>
 #include <OpenMS/ANALYSIS/ID/PeptideIndexing.h>
 
 namespace OpenMS
@@ -722,39 +723,44 @@ void FLASHTaggerAlgorithm::runMatchingExact(std::vector<ProteinHit>& hits,
                                             const std::vector<std::vector<double>>& suffix_masses,
                                             double tol_ppm)
 {
-  // the masses with their node scores; mass 0 (score 1) stands for the terminus, as in runMatching
+  // the masses; mass 0 stands for the terminus, as in runMatching
   std::vector<double> masses {0.0};
-  std::vector<int> node_scores {1};
   masses.reserve(deconvolved_spectrum.size() + 1);
-  node_scores.reserve(deconvolved_spectrum.size() + 1);
   for (const auto& pg : deconvolved_spectrum)
   {
     masses.push_back(pg.getMonoMass());
-    node_scores.push_back(getNodeScore(pg));
   }
 
-  // the shift with the most matches, as getScoreAndMatchCount_
+  // The score of one side is the chance probability of its best shift, as -log10. For a shift, a mass whose shifted value lies on the
+  // protein (0 .. the last residue sum) lands within its margin of one of the L residue sums by chance with probability
+  // 2 * margin * L / (protein mass); lambda sums these over the masses. The match count k is compared with Poisson(lambda), and the
+  // smallest P(X >= k) over the shifts is multiplied by the number of shifts tried. A summed node score instead grows with the protein
+  // length (more residue sums to land on, more tag positions to try): in a native spectrum with ~240 masses, decoys of 1000-1500
+  // residues scored 77 on average vs 52 for those under 700, so long noise proteins outranked real ones.
   auto side_score = [&](const std::vector<double>& residue_sums, const std::vector<double>& side_shifts, const std::vector<double>& flanks) {
-    int max_score = 0, match_cntr = 0;
+    if (side_shifts.empty() || residue_sums.size() < 2) return 0.0;
+    const double protein_mass = residue_sums.back();
+    const double density = (double)(residue_sums.size() - 1) / protein_mass;
+    double best = 0; // -log10 P
     for (Size j = 0; j < side_shifts.size(); j++)
     {
-      int score = 0, cntr = 0;
+      int cntr = 0;
+      double lambda = 0;
       for (Size k = 0; k < masses.size(); k++)
       {
         const double target = masses[k] + side_shifts[j];
         const double margin = tol_ppm * 1e-6 * (std::max(masses[k], target) + flanks[j]);
+        if (target < -margin || target > protein_mass + margin) continue;
+        lambda += std::min(1.0, 2.0 * margin * density);
         auto it = std::lower_bound(residue_sums.begin(), residue_sums.end(), target - margin);
         if (it == residue_sums.end() || *it > target + margin) continue;
-        score += node_scores[k];
         cntr++;
       }
-      if (cntr > match_cntr)
-      {
-        match_cntr = cntr;
-        max_score = std::max(max_score, score);
-      }
+      if (cntr == 0) continue;
+      const double p = boost::math::gamma_p((double)cntr, std::max(lambda, 1e-12)); // P(Poisson(lambda) >= cntr)
+      best = std::max(best, -std::log10(std::max(p, 1e-300)));
     }
-    return max_score;
+    return std::max(0.0, best - std::log10((double)side_shifts.size()));
   };
 
   // FLASHTnT calls this from a loop that is already parallel over spectra; nesting would oversubscribe the threads
@@ -764,9 +770,7 @@ void FLASHTaggerAlgorithm::runMatchingExact(std::vector<ProteinHit>& hits,
     auto& hit = hits[i];
     const auto& sh = shifts[i];
     const Size index = sh.fasta_index;
-    const int score1 = sh.n_shifts.empty() ? 0 : side_score(prefix_masses[index], sh.n_shifts, sh.n_flanks);
-    const int score2 = sh.c_shifts.empty() ? 0 : side_score(suffix_masses[index], sh.c_shifts, sh.c_flanks);
-    hit.setScore(std::max(score1, score2));
+    hit.setScore(std::max(side_score(prefix_masses[index], sh.n_shifts, sh.n_flanks), side_score(suffix_masses[index], sh.c_shifts, sh.c_flanks)));
   }
 }
 

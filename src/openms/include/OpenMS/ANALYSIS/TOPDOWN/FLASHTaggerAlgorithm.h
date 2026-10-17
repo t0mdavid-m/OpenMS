@@ -81,10 +81,11 @@ public:
   };
 
   /**
-   * @brief Score protein hits like runMatching, but with exact masses: a deconvolved mass, moved by a shift, matches a protein residue
-   * sum within @p tol_ppm (of the mass plus the tag flanking mass the shift was computed from) instead of falling in the same 1 Da
-   * integer bin. As in runMatching, the shift with the most matches gives the score (summed node scores), the larger of the N- and
-   * C-terminal sides.
+   * @brief Score protein hits with exact masses: a deconvolved mass, moved by a tag-derived shift, matches a protein residue sum within
+   * @p tol_ppm (of the mass plus the tag flanking mass the shift was computed from). The score is -log10 of the chance of the match
+   * count: P(Poisson(lambda) >= count) at the best shift times the number of shifts, where lambda is the expected number of chance
+   * matches on this protein (masses that fall on it times 2 * margin * residues per Da). The larger of the N- and C-terminal sides.
+   * Unlike a summed node score it does not grow with the protein length.
    * @param hits protein hits to score (meta value FastaIndex)
    * @param shifts the shifts of each hit, in the order of @p hits
    * @param deconvolved_spectrum deconvolved spectrum

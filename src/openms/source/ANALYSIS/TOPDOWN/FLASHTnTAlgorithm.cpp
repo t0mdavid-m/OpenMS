@@ -671,8 +671,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
 
     if (hits.empty()) continue;
 
-    // exact masses at the deconvolution tolerance: 1 Da integer bins let many chance masses match, so that weak spectra rank noise
-    // proteins above the correct one
+    // exact masses at the deconvolution tolerance, scored by the chance probability of the match count: 1 Da integer bins and summed
+    // node scores let chance matches (more of them on longer proteins) rank noise proteins above the correct one
     FLASHTaggerAlgorithm::runMatchingExact(hits, hit_shifts, dspec, pro_prefix, pro_suffix, protein_tol);
 
     std::sort(hits.begin(), hits.end(), [](const ProteinHit& left, const ProteinHit& right) {
@@ -683,10 +683,9 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
 
     if ((int)hits.size() > max_protein_hits_)
     {
-      // The score above comes from a coarse integer-mass alignment against the whole spectrum, which is
-      // not very specific: a correct protein can end up far below the cut while long sequences collect
-      // chance matches. The number of distinct matched tags is sequence-specific evidence, so keep the
-      // best hits by that criterion as well and let the extension decide between them.
+      // The score above uses the masses of the whole spectrum against the protein; a correct protein with few of them can end up below
+      // the cut. The number of distinct matched tags is sequence-specific evidence, so keep the best hits by that criterion as well and
+      // let the extension decide between them.
       std::vector<bool> keep(hits.size(), false);
       for (int i = 0; i < max_protein_hits_; i++)
       {
