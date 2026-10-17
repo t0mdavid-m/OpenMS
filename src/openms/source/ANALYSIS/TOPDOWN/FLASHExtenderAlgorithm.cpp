@@ -101,6 +101,79 @@ namespace OpenMS
 
   // take the hits. Just calculate the mass of truncated protein. Then add modification masses if they are disjoint. If they overlap and the same mass,
   // we have a single one. If they are overlapping but different, we add all of them. the max mod count is also adjusted.
+  bool FLASHExtenderAlgorithm::hasComplementaryPairSupport_(const std::vector<double>& sorted_masses, double precursor_mass) const
+  {
+    if (precursor_mass <= 0 || sorted_masses.size() < 2) return false;
+    // a prefix and a suffix fragment of one precursor sum to the precursor mass plus their ion offsets minus water
+    std::vector<double> offsets;
+    for (double p : prefix_shifts_)
+      for (double q : suffix_shifts_)
+        offsets.push_back(p + q - i2f_mass);
+    if (offsets.empty()) return false;
+    auto count_pairs = [&](double mass) {
+      int count = 0;
+      const double margin = tol_ * mass;
+      for (double offset : offsets)
+      {
+        const double target = mass + offset;
+        for (Size i = 0; i < sorted_masses.size() && sorted_masses[i] * 2 < target + margin; i++)
+        {
+          auto lo = std::lower_bound(sorted_masses.begin() + i + 1, sorted_masses.end(), target - sorted_masses[i] - margin);
+          for (; lo != sorted_masses.end() && *lo <= target - sorted_masses[i] + margin; ++lo) count++;
+        }
+      }
+      return count;
+    };
+    const int observed = count_pairs(precursor_mass);
+    if (observed == 0) return false;
+    // Chance: the same count at masses moved by up to +-300 Da, avoiding shifts that real neighbours of the precursor produce (isotopes,
+    // water / ammonia loss, oxidation, sodium). In a spectrum crowded with masses (native complexes, 200-400 masses) the moved masses
+    // collect as many pairs as the inferred one; in a sparse one (lysate MS2) they collect almost none.
+    static const std::vector<double> neighbours {-4 * Constants::C13C12_MASSDIFF_U, -3 * Constants::C13C12_MASSDIFF_U, -2 * Constants::C13C12_MASSDIFF_U,
+                                                 -Constants::C13C12_MASSDIFF_U,     0.0,                                Constants::C13C12_MASSDIFF_U,
+                                                 2 * Constants::C13C12_MASSDIFF_U,  3 * Constants::C13C12_MASSDIFF_U,  4 * Constants::C13C12_MASSDIFF_U,
+                                                 -18.010565,                        -17.026549,                         15.994915,
+                                                 21.981943,                         -36.021129,                         31.989829};
+    for (int k = 0; k < 200; k++)
+    {
+      const double shift = -300.0 + k * 3.0157;
+      if (std::any_of(neighbours.begin(), neighbours.end(), [&](double n) { return std::abs(shift - n) < 0.3; })) continue;
+      if (count_pairs(precursor_mass + shift) >= observed) return false;
+    }
+    return true;
+  }
+
+  bool FLASHExtenderAlgorithm::hasUnexplainedNewModification_(const std::vector<double>& terminal_masses,
+                                                             const std::vector<double>& terminal_tols,
+                                                             const std::vector<double>& masses,
+                                                             const std::vector<double>& tols)
+  {
+    // isotope offsets of 1-3 Da, N-terminal Met loss, acetylation, and both
+    static const std::vector<double> explained {-3 * Constants::C13C12_MASSDIFF_U, -2 * Constants::C13C12_MASSDIFF_U, -Constants::C13C12_MASSDIFF_U,
+                                                Constants::C13C12_MASSDIFF_U,      2 * Constants::C13C12_MASSDIFF_U,  3 * Constants::C13C12_MASSDIFF_U,
+                                                -131.040485,                       42.010565,                         -89.029920};
+    std::vector<bool> used(terminal_masses.size(), false);
+    for (Size i = 0; i < masses.size(); i++)
+    {
+      const double tol = std::max(0.05, i < tols.size() ? tols[i] : 0.0);
+      if (std::abs(masses[i]) <= tol) continue;
+      bool found = false;
+      for (Size j = 0; j < terminal_masses.size() && ! found; j++)
+      {
+        if (used[j]) continue;
+        if (std::abs(terminal_masses[j] - masses[i]) <= std::max(tol, j < terminal_tols.size() ? terminal_tols[j] : 0.0))
+        {
+          used[j] = true;
+          found = true;
+        }
+      }
+      if (found) continue;
+      if (std::any_of(explained.begin(), explained.end(), [&](double e) { return std::abs(masses[i] - e) <= tol; })) continue;
+      return true;
+    }
+    return false;
+  }
+
   void FLASHExtenderAlgorithm::calculatePrecursorMass_(const ProteinHit& hit, const std::map<int, std::vector<Size>>& best_path_map, HitInformation& hi)
   {
     hi.calculated_precursor_mass_ = -1;
@@ -644,7 +717,12 @@ namespace OpenMS
     startProgress(0, (int)hits.size(), "running FLASHExtender ...");
     std::vector<std::pair<int, ProteinHit>> found; // (candidate index, proteoform hit)
 
-  #pragma omp parallel for default(none) schedule(dynamic) if (! omp_in_parallel()) shared(hits, tags, dspec, multiple_hits_per_spec, i2f_mass, spec_vec, vec_pro, rev_vec_pro, std::cout, found, mi_tag_indices, mi_fasta_index, mi_modification_ids, mi_modification_accs, mi_modifications, mi_modification_starts, mi_modification_ends, mi_matched_aa, mi_start_position, mi_end_position, mi_given_mass, mi_mass, mi_rt, mi_num_mass, mi_precursor_score, mi_precursor_snr, mi_mass_by_fragments)
+    std::vector<double> sorted_masses; // for the complementary-pair check of inferred precursor masses
+    sorted_masses.reserve(dspec.size());
+    for (const auto& pg : dspec) sorted_masses.push_back(pg.getMonoMass());
+    std::sort(sorted_masses.begin(), sorted_masses.end());
+
+  #pragma omp parallel for default(none) schedule(dynamic) if (! omp_in_parallel()) shared(hits, tags, dspec, multiple_hits_per_spec, i2f_mass, spec_vec, sorted_masses, vec_pro, rev_vec_pro, std::cout, found, mi_tag_indices, mi_fasta_index, mi_modification_ids, mi_modification_accs, mi_modifications, mi_modification_starts, mi_modification_ends, mi_matched_aa, mi_start_position, mi_end_position, mi_given_mass, mi_mass, mi_rt, mi_num_mass, mi_precursor_score, mi_precursor_snr, mi_mass_by_fragments)
     for (int i = 0; i < ((int)hits.size()); i++)
     {
       nextProgress();
@@ -686,6 +764,7 @@ namespace OpenMS
       std::vector<double> terminal_mod_masses, terminal_mod_tols;
       std::map<int, std::set<int>> terminal_matched_position_map;
       int terminal_start = -1, terminal_end = -1;
+      bool retried_with_given_mass = false;
 
       for (hi.mode_ = 0; hi.mode_ <= 2; hi.mode_++)
       {
@@ -705,7 +784,8 @@ namespace OpenMS
         }
         if (hi.mode_ == 2 && hi.calculated_precursor_mass_ <= 0)
         { // const ProteinHit& hit,
-          if (!skip_precursor_inference_ && max_nterm_index + max_cterm_rindex >= (int)hit.getSequence().size()) calculatePrecursorMass_(hit, best_path_map, hi);
+          if (! skip_precursor_inference_ && ! retried_with_given_mass && max_nterm_index + max_cterm_rindex >= (int)hit.getSequence().size())
+            calculatePrecursorMass_(hit, best_path_map, hi);
           max_mod_cntr_for_last_mode = std::min(max_blind_mod_cntr_, (int)mod_starts.size() + 1);
 
           if (hi.calculated_precursor_mass_ <= 0) hi.calculated_precursor_mass_ = given_precursor_mass_;
@@ -940,6 +1020,39 @@ namespace OpenMS
             total_score += mode_score;
             used_mode.push_back(m);
           }
+        }
+
+        // A mass inferred from fragments is the sum of one C- and one N-terminal fragment mass; nothing checks that both come from one
+        // precursor. It is rejected when the both-termini path can only explain it with a modification that neither terminal path has
+        // (other than an isotope offset or N-terminal Met loss / acetylation), the MS1 precursor mass does not confirm it, and the
+        // spectrum's complementary fragment pairs do not single it out (native intact-antibody spectra: the light-chain masses were off
+        // by +33 to +2985 Da; on lysates such masses mostly have strong pair support and are kept). Then the MS1 precursor mass is
+        // tried instead; without one, the terminal result is kept with an undetermined mass.
+        const bool given_mass_agrees = given_precursor_mass_ > 0 && std::abs(given_precursor_mass_ - hi.calculated_precursor_mass_) <= tol_ * given_precursor_mass_;
+        if (hi.mode_ == 2 && precursor_by_fragment && total_score > 0 && ! given_mass_agrees // the MS1 precursor mass confirms it
+            && hasUnexplainedNewModification_(terminal_mod_masses, terminal_mod_tols, mod_masses, mod_tols)
+            && ! hasComplementaryPairSupport_(sorted_masses, hi.calculated_precursor_mass_))
+        {
+          total_score = terminal_score;
+          used_mode = terminal_used_mode;
+          mod_starts = terminal_mod_starts;
+          mod_ends = terminal_mod_ends;
+          mod_masses = terminal_mod_masses;
+          mod_tols = terminal_mod_tols;
+          matched_position_map = terminal_matched_position_map;
+          hi.protein_start_position_ = terminal_start;
+          hi.protein_end_position_ = terminal_end;
+          best_path_map.erase(2);
+          all_path_map.erase(2);
+          precursor_by_fragment = false;
+          hi.calculated_precursor_mass_ = -1;
+          if (! retried_with_given_mass && given_precursor_mass_ > 0)
+          {
+            retried_with_given_mass = true; // mode 2 again, without inference: it takes the given precursor mass
+            hi.mode_ = 1;
+            continue;
+          }
+          break;
         }
       }
 
