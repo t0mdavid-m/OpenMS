@@ -745,6 +745,9 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
 
     for (auto& pg : precursor_deconvolved_spectrum)
     {
+      // With decoy reporting the survey spectrum also holds decoy masses. A decoy precursor would make the MS2 spectrum a decoy
+      // (DeconvolvedSpectrum::isDecoy) and drop it from the output, so only target masses can be precursors.
+      if (pg.getTargetDecoyType() != PeakGroup::target) { continue; }
       if (pg[0].mz > end_mz || pg.back().mz < start_mz) { continue; }
 
       double max_intensity = .0;

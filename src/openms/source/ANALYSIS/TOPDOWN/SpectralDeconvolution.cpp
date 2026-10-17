@@ -1342,6 +1342,37 @@ namespace OpenMS
       }
     }
 
+    // A peak shared by groups of different charges counts as overlapped for a group only by the part that the winning group's own
+    // isotope envelope explains: its averagine pattern scaled on its peaks at that charge that no other group claims (without such
+    // peaks the whole peak is its). A low-charge fragment mixed with a weaker high-charge envelope on the same peaks then keeps them.
+    std::map<std::pair<int, int>, double> envelope_scales; // (group index, charge) -> scale of the averagine pattern
+    auto explained_intensity = [&](int j, int z, double pmz, float pint) -> float {
+      const auto& iso = avg_.get(dspec[j].getMonoMass());
+      auto it = envelope_scales.find({j, z});
+      if (it == envelope_scales.end())
+      {
+        double num = 0, den = 0;
+        for (const auto& p : dspec[j])
+        {
+          if (p.abs_charge != z || p.isotopeIndex < 0 || p.isotopeIndex >= (int)iso.size()) continue;
+          auto shared = peak_to_pgs.find(p.mz);
+          if (shared != peak_to_pgs.end() && shared->second.size() > 1) continue;
+          const double e = iso[p.isotopeIndex].getIntensity();
+          num += e * p.intensity;
+          den += e * e;
+        }
+        it = envelope_scales.emplace(std::make_pair(j, z), den > 0 ? num / den : -1.0).first;
+      }
+      if (it->second < 0) return pint;
+      for (const auto& p : dspec[j])
+      {
+        if (p.abs_charge != z || p.mz != pmz) continue;
+        if (p.isotopeIndex < 0 || p.isotopeIndex >= (int)iso.size()) return pint;
+        return std::min(pint, (float)(it->second * iso[p.isotopeIndex].getIntensity()));
+      }
+      return pint;
+    };
+
     for (const auto& e : peak_to_pgs)
     {
       const auto& pg_is = e.second;
@@ -1353,6 +1384,7 @@ namespace OpenMS
       for (auto i : pg_is)
       {
         bool is_overlap = false;
+        float overlap_part = pint;
         double mass1 = dspec[i].getMonoMass();
         int repz1 = (int)round(mass1 / (pmz - FLASHHelperClasses::getChargeMass(is_positive_)));
         const double high_snr = 10;
@@ -1368,10 +1400,10 @@ namespace OpenMS
           if (dspec[i].getChargeSNR(repz1) > dspec[j].getChargeSNR(repz2)) { continue; }
 
           is_overlap = true;
-
+          overlap_part = explained_intensity((int)j, repz2, pmz, pint);
           break;
         }
-        if (is_overlap) overlap_intensity[i] += pint;
+        if (is_overlap) overlap_intensity[i] += overlap_part;
       }
     }
 
