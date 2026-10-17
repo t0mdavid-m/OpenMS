@@ -14,6 +14,7 @@
 #include <OpenMS/CONCEPT/Constants.h>
 #include <OpenMS/FEATUREFINDER/MassTraceDetection.h>
 #include <boost/dynamic_bitset.hpp>
+#include <limits>
 
 namespace OpenMS
 {
@@ -290,6 +291,117 @@ namespace OpenMS
 
     /// A generic Directed Acyclic Graph structure for FLASHTaggerAlgorithm and FLASHExtensionAlgorithm.
     /// It is a 1-D graph so multiple dimension graph should be changed into 1-D to use this structure.
+    /**
+       @brief A set of vertex indices for graphs whose vertex space is huge but sparsely visited. A paged bitset: pages of 2^15 vertices
+       (4 KB) are created when first touched, so memory follows the touched part of the space, and a lookup is a page lookup (the last
+       page is cached; vertex indices of one search are clustered) plus a bit test.
+    */
+    class OPENMS_DLLAPI VisitedVertexSet
+    {
+    public:
+      /// true if vertex was not in the set
+      bool insert(Size vertex)
+      {
+        uint64_t* page = page_(vertex >> page_bits_, true);
+        const Size bit = vertex & (page_size_ - 1);
+        uint64_t& word = page[bit >> 6];
+        const uint64_t mask = uint64_t(1) << (bit & 63);
+        if (word & mask) return false;
+        word |= mask;
+        ++count_;
+        return true;
+      }
+
+      bool contains(Size vertex) const
+      {
+        const uint64_t* page = const_cast<VisitedVertexSet*>(this)->page_(vertex >> page_bits_, false);
+        if (page == nullptr) return false;
+        const Size bit = vertex & (page_size_ - 1);
+        return (page[bit >> 6] >> (bit & 63)) & 1;
+      }
+
+      void clear()
+      {
+        std::fill(table_keys_.begin(), table_keys_.end(), empty_);
+        words_.clear();
+        page_count_ = 0;
+        count_ = 0;
+        last_page_id_ = empty_;
+      }
+
+      Size size() const
+      {
+        return count_;
+      }
+
+    private:
+      static constexpr Size page_bits_ = 15;
+      static constexpr Size page_size_ = Size(1) << page_bits_;
+      static constexpr Size page_words_ = page_size_ / 64;
+      static constexpr Size empty_ = std::numeric_limits<Size>::max();
+
+      std::vector<uint64_t> words_;     // pages, page_words_ words each
+      std::vector<Size> table_keys_;    // page id per slot (open addressing)
+      std::vector<Size> table_values_;  // page number per slot
+      Size table_mask_ = 0;
+      Size page_count_ = 0;
+      Size count_ = 0;
+      Size last_page_id_ = empty_;
+      Size last_page_number_ = 0;
+
+      static Size slot_(Size id, Size mask)
+      {
+        return (Size)((id * 0x9E3779B97F4A7C15ULL) >> 24) & mask;
+      }
+
+      uint64_t* page_(Size id, bool create)
+      {
+        if (id == last_page_id_) return words_.data() + last_page_number_ * page_words_;
+        if (! table_keys_.empty())
+        {
+          for (Size i = slot_(id, table_mask_);; i = (i + 1) & table_mask_)
+          {
+            if (table_keys_[i] == id)
+            {
+              last_page_id_ = id;
+              last_page_number_ = table_values_[i];
+              return words_.data() + last_page_number_ * page_words_;
+            }
+            if (table_keys_[i] == empty_) break;
+          }
+        }
+        if (! create) return nullptr;
+        if ((page_count_ + 1) * 2 > table_keys_.size()) grow_table_();
+        Size i = slot_(id, table_mask_);
+        while (table_keys_[i] != empty_) i = (i + 1) & table_mask_;
+        table_keys_[i] = id;
+        table_values_[i] = page_count_;
+        words_.resize((page_count_ + 1) * page_words_, 0);
+        last_page_id_ = id;
+        last_page_number_ = page_count_++;
+        return words_.data() + last_page_number_ * page_words_;
+      }
+
+      void grow_table_()
+      {
+        std::vector<Size> old_keys, old_values;
+        old_keys.swap(table_keys_);
+        old_values.swap(table_values_);
+        const Size n = old_keys.empty() ? 64 : old_keys.size() * 2;
+        table_keys_.assign(n, empty_);
+        table_values_.assign(n, 0);
+        table_mask_ = n - 1;
+        for (Size k = 0; k < old_keys.size(); k++)
+        {
+          if (old_keys[k] == empty_) continue;
+          Size i = slot_(old_keys[k], table_mask_);
+          while (table_keys_[i] != empty_) i = (i + 1) & table_mask_;
+          table_keys_[i] = old_keys[k];
+          table_values_[i] = old_values[k];
+        }
+      }
+    };
+
     class OPENMS_DLLAPI DAG
     {
     public:
@@ -303,6 +415,16 @@ namespace OpenMS
       Size size() const
       {
         return vertex_count_;
+      }
+
+      /// same as the bitset version, for callers whose vertex space is huge but sparsely visited (FLASHExtender)
+      bool addEdge(Size vertex1, Size vertex2, VisitedVertexSet& visited)
+      {
+        if (vertex1 >= vertex_count_ || vertex2 >= vertex_count_) return false;
+        if (! visited.contains(vertex2)) return false;
+        visited.insert(vertex1);
+        adj_list_for_speed_up_[vertex2].insert(vertex1);
+        return true;
       }
 
       bool addEdge(Size vertex1, Size vertex2, boost::dynamic_bitset<>& visited)

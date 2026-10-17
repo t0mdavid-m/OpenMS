@@ -100,8 +100,10 @@ private:
   struct OPENMS_DLLAPI HitInformation
   {
   public:
-    /// if a vertex is already considered (visited) when building a DAG.
-    boost::dynamic_bitset<> visited_;
+    /// vertices already reached when building the DAG. A set, not a bitset over the whole vertex space: that space (spectrum nodes x
+    /// protein positions x modification counts x path scores) takes tens to hundreds of MB per hit while only ~10^2-10^4 vertices are
+    /// reached.
+    FLASHHelperClasses::VisitedVertexSet visited_;
     /// The DAG consisting of paths representing proteoforms
     FLASHHelperClasses::DAG dag_;
     /// We perform three times of extensions - for suffix, for prefix, and for both termini
