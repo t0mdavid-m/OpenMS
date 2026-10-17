@@ -179,6 +179,7 @@ START_SECTION((void annotate(const std::vector<PeakArrays>& spectra, const std::
   TEST_REAL_SIMILAR(results[0].calibration_ppm, 0.0)
   for (const auto& e : results[0].envelopes)
   {
+    if (e.first >= 0) continue; // internal fragments are tested below
     TEST_EQUAL(e.charge >= 1 && e.charge <= 3, true)
     TEST_EQUAL(e.matched_peaks, e.predicted_peaks)
     TEST_EQUAL(e.cosine > 0.99 && e.pearson > 0.99, true)
@@ -213,6 +214,58 @@ START_SECTION((void annotate(const std::vector<PeakArrays>& spectra, const std::
   TEST_EQUAL(results[0].covered_bonds, 39)
   TEST_REAL_SIMILAR(results[0].chance_rate, -1.0)
   TEST_REAL_SIMILAR(results[0].score, -1.0)
+
+  // internal fragments: a ladder of four pieces starting right after D11 (0-based 11) makes that Asp cleavage authentic, and a
+  // lone piece ending with D11 then counts too; a lone piece starting after D6 (no ladder there) does not. Pieces of at least
+  // ~1.2 kDa have three isotope peaks above 10%.
+  {
+    FLASHAnnotatorAlgorithm ialgo;
+    auto peaks = syntheticSpectrum(ialgo, prsm, 3, 0.0, 0.0);
+    std::vector<FLASHAnnotatorAlgorithm::Result> base;
+    std::vector<FLASHAnnotatorAlgorithm::PeakArrays> ispectra {peaks};
+    ialgo.annotate(ispectra, {prsm}, base);
+    TEST_EQUAL(base[0].internal_matched, 0) // only terminal envelopes in the spectrum: no internal fragment counts
+
+    MSSpectrum ispec;
+    for (Size i = 0; i < peaks.mzs.size(); i++) ispec.emplace_back(peaks.mzs[i], (float)peaks.intensities[i]);
+    const double water = 18.010565;
+    std::vector<std::pair<int, int>> pieces {{12, 26}, {12, 27}, {12, 28}, {12, 29}, {1, 11}, {7, 20}};
+    std::vector<double> mzs, intensities;
+    for (const auto& [first, last] : pieces)
+    {
+      const double mass = FLASHAnnotatorAlgorithm::getProteoformMass(sequence.substr(first, last - first + 1), {}) - water; // b/y internal
+      ialgo.getIsotopeEnvelope(mass, 2, mzs, intensities);
+      for (Size j = 0; j < mzs.size(); j++) ispec.emplace_back(mzs[j], (float)(intensities[j] * 700.0));
+    }
+    ispec.sortByPosition();
+    FLASHAnnotatorAlgorithm::toPeakArrays(ispec, ispectra[0]);
+    ialgo.annotate(ispectra, {prsm}, results);
+    TEST_EQUAL(results[0].authentic_cleavages, 1)
+    TEST_EQUAL(results[0].internal_matched, 4) // default extension 'tag1': the lone piece [1, 11] has no neighbor
+    Param ip = ialgo.getParameters();
+    ip.setValue("internal_extension", "all");
+    ialgo.setParameters(ip);
+    ialgo.annotate(ispectra, {prsm}, results);
+    TEST_EQUAL(results[0].internal_matched, 5) // the four ladder pieces and [1, 11]
+    TEST_EQUAL(results[0].internal_hypotheses > 5, true)
+    TEST_EQUAL(results[0].internal_score > 0, true)
+    TEST_EQUAL(results[0].coverage_with_internal >= results[0].coverage, true)
+    int internal_envelopes = 0;
+    for (const auto& e : results[0].envelopes)
+    {
+      if (e.first < 0) continue;
+      internal_envelopes++;
+      TEST_EQUAL(e.first == 7, false)
+    }
+    TEST_EQUAL(internal_envelopes >= 5, true)
+
+    // an undetermined start: no extension, the ladder still counts
+    FLASHAnnotatorAlgorithm::PrSM no_start = prsm;
+    no_start.known_n_term = false;
+    ialgo.annotate(ispectra, {no_start}, results);
+    TEST_EQUAL(results[0].authentic_cleavages, 1)
+    TEST_EQUAL(results[0].internal_matched, 4)
+  }
 
   // a PrSM without its spectrum is not annotated
   FLASHAnnotatorAlgorithm::PrSM missing = prsm;

@@ -12,6 +12,8 @@
 #include <OpenMS/DATASTRUCTURES/String.h>
 #include <OpenMS/KERNEL/MSSpectrum.h>
 #include <limits>
+#include <set>
+#include <utility>
 #include <vector>
 
 namespace OpenMS
@@ -105,7 +107,10 @@ public:
   /// an accepted isotope envelope
   struct OPENMS_DLLAPI Envelope
   {
+    /// index into getIonTypes(), or for an internal fragment into getInternalIonTypes()
     int ion_type = 0;
+    /// first residue (0-based) of an internal fragment; -1 for a terminal fragment
+    int first = -1;
     int length = 0;
     int bond = 0;
     int charge = 0;
@@ -120,6 +125,12 @@ public:
     double intensity = 0;
     /// ppm error of the most abundant peak after calibration
     double ppm_error = 0;
+    /// fraction of the spectrum's peaks that are not more intense than the matched most abundant peak
+    double intensity_rank = 0;
+    /// observed peaks per Th within 1 Th of the most abundant peak (the local density sets the chance of a match)
+    double local_density = 0;
+    /// 0 for a target envelope; the mass shift of a decoy envelope (written only with report_decoy_envelopes)
+    double decoy_shift = 0;
   };
 
   /**
@@ -143,10 +154,24 @@ public:
     double chance_rate = -1;
     /// -log10 P(X >= k), X ~ Binomial(n, p0)
     double score = -1;
+    /// -log10 of the combined p-value of the calibrated terminal and internal evidence (Fisher); -1 if not computed
+    double fa_score = -1;
     double llr = std::numeric_limits<double>::quiet_NaN();
     double calibration_ppm = std::numeric_limits<double>::quiet_NaN();
     /// number of envelopes the calibration was computed from
     int calibration_envelopes = 0;
+    /// internal fragments (with internal_ions): pieces with both ends inside the proteoform that are tested (n), counted (k), counted
+    /// in the decoy sets (summed; only with report_decoy_envelopes, else -1), the calibrated chance of at least one counted piece, the
+    /// calibrated -log10 P(K >= k | n), and the authentic internal cleavages (with a ladder)
+    int internal_hypotheses = -1;
+    int internal_matched = -1;
+    int internal_decoy_matched = -1;
+    double internal_chance_rate = -1;
+    double internal_score = -1;
+    int authentic_cleavages = -1;
+    /// bonds covered by terminal and accepted internal fragments (both ends of an internal fragment), and their percentage
+    int covered_bonds_with_internal = -1;
+    double coverage_with_internal = -1;
   };
 
   /// constructor
@@ -177,6 +202,9 @@ public:
 
   /// the ion types, in the order Fragment::ion_type and Envelope::ion_type refer to
   const std::vector<String>& getIonTypes() const;
+
+  /// the internal ion types (C-end type/N-end type, e.g. "b/y"), in the order Envelope::ion_type of an internal fragment refers to
+  const std::vector<String>& getInternalIonTypes() const;
 
   /// neutral monoisotopic mass of the proteoform (residues + water + modifications); -1 for an unknown residue
   static double getProteoformMass(const String& sequence, const std::vector<Modification>& modifications);
@@ -214,6 +242,8 @@ private:
   {
     int matched = 0;
     int apex_peak = -1;
+    /// indices of the matched observed peaks
+    std::vector<int> peaks;
     double cosine = 0;
     double pearson = 0;
     double intensity = 0;
@@ -230,20 +260,81 @@ private:
   bool matchEnvelope_(const PeakArrays& spec, double mono_mass, int bin, int z, double cal_factor, EnvelopeMatch& match) const;
   /// the median ppm error of the calibration envelopes, or 0 if there are fewer than min_calibration_envelopes_
   double calibrate_(const PeakArrays& spec, const std::vector<Fragment>& fragments, int& count) const;
-  /// annotate one PrSM (without the scores, which are computed afterwards)
-  void annotateOne_(const PeakArrays& spec, const PrSM& prsm, Result& result) const;
+  /// annotate one PrSM (without the scores, which are computed afterwards); @p sorted_intensities: the spectrum's intensities, sorted
+  void annotateOne_(const PeakArrays& spec, const std::vector<double>& sorted_intensities, const PrSM& prsm, Result& result) const;
+
+  /**
+    The internal pieces of a proteoform: residues [first, last] with 1 <= first < last <= L - 2 (both ends inside) and at most
+    internal_max_length residues, for every internal ion type. Index (first, last, offset) = base[first] + (last - first - 1) *
+    offsets + offset. A piece that splits a modification range, or has no charge in the spectrum's m/z range, has mono_mass -1.
+  */
+  struct InternalPieces
+  {
+    int length = 0;
+    int offsets = 0;
+    int max_length = 0;
+    std::vector<int> base;
+    std::vector<double> mono_mass;
+    std::vector<int> max_charge;
+    int index(int first, int last, int offset) const { return base[first] + (last - first - 1) * offsets + offset; }
+    /// the last residue of the longest piece starting at first
+    int lastMax(int first) const { return std::min(length - 2, first + max_length - 1); }
+  };
+
+  /**
+    Internal fragments of one world (the target, or the pieces moved by @p shift): every piece is tested at all its charges (an
+    envelope whose most abundant peak is a peak of an accepted terminal envelope, @p terminal_peaks, is not used). The cleavage after
+    residue a is authentic if, for one internal ion type, pieces of consecutive lengths that all end with a, or all start right after
+    it, are accepted: at least min_tag_length_asp + 1 of them if a is Asp, else min_tag_length + 1 (a tag of that length). Ladder
+    pieces count. Beyond the ladders, accepted pieces with an end at an authentic cleavage (found here or given in @p given_authentic:
+    a decoy world gets the target's, so that chance matches of the extension at real cleavages are measured too) count if they lie
+    in a run of at least @p extension_min_run consecutive lengths there (1: every piece, 2: a tag of length one; 0: none). Returns
+    the counted pieces as (first, last); their envelopes are added to @p envelopes if @p record; @p authentic (one flag per residue)
+    receives the authentic cleavages found in this world.
+  */
+  std::set<std::pair<int, int>> annotateInternal_(const PeakArrays& spec, const std::vector<double>& sorted_intensities,
+                                                  const InternalPieces& pieces, const String& sequence,
+                                                  const std::vector<char>& terminal_peaks, double cal_factor, double shift, bool record,
+                                                  int extension_min_run, const std::vector<char>& given_authentic,
+                                                  std::vector<Envelope>& envelopes, std::vector<char>& authentic) const;
+
+  /// matched peaks an envelope with @p predicted kept isotope peaks needs; -1 if it cannot be annotated
+  int requiredPeaks_(int predicted) const;
+  /// -log10 of the calibrated p-value of a RawScore
+  double calibratedTerminalLog10P_(double score) const;
+  /// -log10 P(K >= k | n) of the internal evidence, from the calibration model
+  double internalLog10P_(int k, int n) const;
+
+  /// observed peaks per Th within 1 Th of @p mz
+  static double densityAt_(const PeakArrays& spec, double mz);
+  /// fraction of @p sorted_intensities not above @p intensity
+  static double rankOf_(const std::vector<double>& sorted_intensities, double intensity);
 
   /// parameters
   double tol_ = 10.0;
   double cal_tol_ = 20.0;
   bool calibrate_on_ = true;
   int min_peaks_ = 3;
+  int min_peaks_small_ = 2;
+  std::vector<double> terminal_calibration_ {0.479, 0.697};
+  std::vector<double> internal_calibration_ {-11.531, 2.062, -0.471};
   double min_rel_iso_ = 0.1;
   double min_cos_ = 0.8;
   double min_pearson_ = 0.7;
   double min_mass_per_charge_ = 300.0;
   double max_mass_ = 200000.0;
   double p1_ = 0.3;
+  bool report_decoys_ = false;
+  bool internal_on_ = true;
+  int internal_max_length_ = 150;
+  /// pieces in a ladder that make a cleavage authentic: after Asp, and elsewhere (tag length + 1)
+  int min_run_asp_ = 2;
+  int min_run_other_ = 4;
+  /// minimum run of consecutive lengths for pieces beyond the ladders: 0 none, 1 all, 2 a tag of length one
+  int extension_min_run_ = 2;
+  /// internal ion types: mass added to the residue sum (C-end prefix shift + N-end suffix shift - H2O), and their names
+  std::vector<double> internal_offsets_;
+  std::vector<String> internal_ion_types_;
   std::vector<double> decoy_shifts_;
   std::vector<String> ion_types_;
   /// mass added to the residue sum of a fragment, per ion type; and whether the ion type is a prefix (N-terminal) one

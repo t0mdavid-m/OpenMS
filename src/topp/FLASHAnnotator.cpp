@@ -247,10 +247,11 @@ protected:
   }
 
   /// the appended PrSM columns and the envelope header
-  static constexpr const char* prsm_columns_ = "\tRawScore\tRawLLR\tRawMatchedFragments\tRawFragmentHypotheses\tRawChanceRate\tRawCoveredBonds"
-                                                "\tRawCoverage(%)\tRawCalibrationPPM";
+  static constexpr const char* prsm_columns_ = "\tFAScore\tRawScore\tRawLLR\tRawMatchedFragments\tRawFragmentHypotheses\tRawChanceRate\tRawCoveredBonds"
+                                                "\tRawCoverage(%)\tRawCalibrationPPM\tRawInternalScore\tRawInternalMatched\tRawInternalHypotheses\tRawInternalChanceRate"
+                                                "\tRawAuthenticCleavages\tRawCoverageWithInternal(%)";
   static constexpr const char* envelope_header_ = "PrSMIndex\tScan\tIonType\tLength\tBond\tCharge\tMonoMass\tMostAbundantMz\tMatchedPeaks"
-                                                   "\tPredictedPeaks\tCosine\tPearson\tIntensity\tPPMError";
+                                                   "\tPredictedPeaks\tCosine\tPearson\tIntensity\tPPMError\tIntensityRank\tLocalDensity\tDecoyShift\tInternalFirst";
 
   ExitCodes main_(int, const char**) override
   {
@@ -520,8 +521,10 @@ protected:
       for (Size r = 0; r < rows.size(); r++)
       {
         const auto& res = results[r];
-        out << lines[r] << "\t" << res.score << "\t" << format_(res.llr) << "\t" << res.matched_fragments << "\t" << res.fragment_hypotheses
-            << "\t" << res.chance_rate << "\t" << res.covered_bonds << "\t" << res.coverage << "\t" << format_(res.calibration_ppm) << "\n";
+        out << lines[r] << "\t" << res.fa_score << "\t" << res.score << "\t" << format_(res.llr) << "\t" << res.matched_fragments << "\t" << res.fragment_hypotheses
+            << "\t" << res.chance_rate << "\t" << res.covered_bonds << "\t" << res.coverage << "\t" << format_(res.calibration_ppm) << "\t"
+            << res.internal_score << "\t" << res.internal_matched << "\t" << res.internal_hypotheses << "\t" << res.internal_chance_rate << "\t"
+            << res.authentic_cleavages << "\t" << res.coverage_with_internal << "\n";
       }
     }
     if (! out_annotation_file.empty())
@@ -530,6 +533,7 @@ protected:
       if (! out) { throw Exception::UnableToCreateFile(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, out_annotation_file); }
       out << envelope_header_ << "\n";
       const auto& ion_types = annotator.getIonTypes();
+      const auto& internal_ion_types = annotator.getInternalIonTypes();
       for (Size r = 0; r < rows.size(); r++)
       {
         const String prsm_index = field(rows[r], col_index);
@@ -537,10 +541,11 @@ protected:
         std::ostringstream ss;
         for (const auto& e : results[r].envelopes)
         {
-          ss << prsm_index << "\t" << scan << "\t" << ion_types[e.ion_type] << "\t" << e.length << "\t" << e.bond << "\t" << e.charge << "\t"
+          ss << prsm_index << "\t" << scan << "\t" << (e.first >= 0 ? String("int(") + internal_ion_types[e.ion_type] + ")" : ion_types[e.ion_type]) << "\t" << e.length << "\t" << e.bond << "\t" << e.charge << "\t"
              << std::fixed << std::setprecision(5) << e.mono_mass << "\t" << e.most_abundant_mz << "\t" << e.matched_peaks << "\t"
              << e.predicted_peaks << "\t" << std::setprecision(4) << e.cosine << "\t" << e.pearson << "\t" << std::setprecision(1) << e.intensity
-             << "\t" << std::setprecision(2) << e.ppm_error << "\n";
+             << "\t" << std::setprecision(2) << e.ppm_error << "\t" << std::setprecision(4) << e.intensity_rank << "\t"
+             << std::setprecision(1) << e.local_density << "\t" << std::setprecision(3) << e.decoy_shift << "\t" << (e.first + 1) << "\n";
         }
         out << ss.str();
       }
