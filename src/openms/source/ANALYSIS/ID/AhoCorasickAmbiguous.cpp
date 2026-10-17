@@ -11,6 +11,7 @@
 #include <OpenMS/CONCEPT/Exception.h>
 #include <OpenMS/CONCEPT/LogStream.h>
 #include <algorithm>
+#include <bit>
 #include <cassert>
 #include <queue>
 #include <tuple>
@@ -284,8 +285,8 @@ namespace OpenMS
   Index ACTrie::add_(const Index index, const AA label)
   {
     if (vec_index2children_naive_.size() <= index())
-    { // double...
-      vec_index2children_naive_.resize(vec_index2children_naive_.size() * 2);
+    { // grow to the next power of 2 that holds index (one doubling is not enough when index is more than twice the size)
+      vec_index2children_naive_.resize(std::bit_ceil(index() + 1));
     }
     Index ch = findChildNaive_(index, label);
     if (ch.isInvalid())
