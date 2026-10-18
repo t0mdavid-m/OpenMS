@@ -117,6 +117,10 @@ protected:
                           "only (gapped tags instead of sequence tags). Where a gapped tag lands on a protein anchors the extension as a sequence "
                           "tag does.", false);
     setValidStrings_("gapped_tags", {"off", "fallback", "both", "only"});
+    registerStringOption_("learn_var_mod_penalty", "<bool>", "true",
+                          "Raises the penalty of a variable modification that target PrSMs use per opportunity (fitting residue or terminus) no more often than decoy PrSMs "
+                          "(chance), up to that of a blind shift, and extends the spectra that used it again. Needs decoys.", false, true);
+    setValidStrings_("learn_var_mod_penalty", {"true", "false"});
 
     registerSubsection_("tag", "Tag algorithm parameters");
     registerSubsection_("ex", "Extension algorithm parameters");

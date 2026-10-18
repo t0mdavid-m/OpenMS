@@ -102,6 +102,11 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "which no sequence tag proposes a protein); both (every spectrum, proteins not proposed by sequence tags); only (gapped "
                      "tags instead of sequence tags). Where a gapped tag lands on a protein anchors the extension as a sequence tag does.");
   defaults_.setValidStrings("gapped_tags", {"off", "fallback", "both", "only"});
+  defaults_.setValue("learn_var_mod_penalty", "true",
+                     "Raises the penalty of a variable modification that target PrSMs use per opportunity (fitting residue or terminus) no more often than decoy PrSMs "
+                     "(chance), up to that of a blind shift, and extends the spectra that used it again. Needs decoys and at least 50 decoy PrSMs.");
+  defaults_.setValidStrings("learn_var_mod_penalty", {"true", "false"});
+  defaults_.addTag("learn_var_mod_penalty", "advanced");
   defaults_.insert("gapped:", FLASHGappedTaggerAlgorithm().getDefaults());
   defaultsToParam_();
 }
@@ -114,6 +119,7 @@ void FLASHTnTAlgorithm::updateMembers_()
   extender_param_.setValue("ion_type", param_.getValue("ion_type"));
   gapped_param_ = param_.copy("gapped:", true);
   gapped_mode_ = param_.getValue("gapped_tags").toString();
+  learn_var_mod_penalty_ = param_.getValue("learn_var_mod_penalty").toString() == "true";
   prsm_fdr_ = param_.getValue("prsm_fdr");
   keep_decoy_ = param_.getValue("keep_decoy").toString() == "true";
   keep_underdetermined_ = param_.getValue("discard_underdetermined").toString() == "false";
@@ -902,12 +908,11 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
 #else
     const bool extend_over_spectra = false;
 #endif
-#pragma omp parallel for schedule(dynamic) if (extend_over_spectra)
-    for (int d = 0; d < (int)dspecs.size(); d++)
-    {
-      nextProgress();
+    // the extension of one spectrum's candidates with the given extension parameters
+    auto extendSpectrum = [&](int d, const Param& eparam) {
+      spec_proteoforms[d].clear();
       const auto [first, second] = candidate_ranges[d];
-      if (first == second) continue;
+      if (first == second) return;
 
       std::vector<ProteinHit> hits;
       for (Size i = first; i < second; i++)
@@ -927,12 +932,125 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       }
 
       FLASHExtenderAlgorithm extender;
-      extender.setParameters(extender_param_);
+      extender.setParameters(eparam);
       extender.setCandidateBlindModificationMap(blind_mod_map);
 
       extender.run(hits, dspec, spec_vec, vec_pro, rev_vec_pro, tags_, tol, multiple_hits_per_spec_);
 
       extender.fillProteoforms(spec_proteoforms[d]);
+    };
+#pragma omp parallel for schedule(dynamic) if (extend_over_spectra)
+    for (int d = 0; d < (int)dspecs.size(); d++)
+    {
+      nextProgress();
+      extendSpectrum(d, extender_param_);
+    }
+
+    // Variable modification penalties from this run: a decoy (shuffled) protein can use a modification only by chance, so a modification
+    // that target PrSMs use per opportunity (a fitting residue in the proteoform, or the proteoform terminus) no more often than decoy PrSMs
+    // explains nothing and gets a penalty up to that of a blind shift. Penalties only go up, so only the spectra in which some PrSM used a
+    // raised modification are extended again: the paths of the others keep their scores and the result equals a second full extension.
+    FLASHExtenderAlgorithm probe;
+    probe.setParameters(extender_param_);
+    const auto var_names = probe.getVariableModificationNames();
+    const auto var_residues = probe.getVariableModificationResidues();
+    const auto var_positions = probe.getVariableModificationPositions();
+    if (learn_var_mod_penalty_ && ! var_names.empty() && decoy_factor_ > 0)
+    {
+      const Size n_mods = var_names.size();
+      std::map<String, Size> name_to_mod;
+      for (Size i = n_mods; i-- > 0;) name_to_mod[var_names[i]] = i;
+      const UInt mi_variable_modifications = registry.registerName("VariableModifications");
+      // the modifications a PrSM used (every alternative named for a shift counts)
+      auto usedMods = [&](const ProteinHit& h, std::vector<char>& used) {
+        used.assign(n_mods, 0);
+        if (! h.metaValueExists(mi_variable_modifications)) return;
+        for (const auto& entry : h.getMetaValue(mi_variable_modifications).toStringList())
+        {
+          std::vector<String> alternatives;
+          String(entry).split(',', alternatives);
+          for (const auto& alt : alternatives)
+          {
+            std::vector<String> names;
+            alt.split('+', names);
+            for (const auto& nm : names)
+            {
+              auto it = name_to_mod.find(nm);
+              if (it != name_to_mod.end()) used[it->second] = 1;
+            }
+          }
+        }
+      };
+      // uses and opportunities per modification, targets and decoys
+      std::vector<double> use_t(n_mods, 0), use_d(n_mods, 0), opp_t(n_mods, 0), opp_d(n_mods, 0);
+      double n_d = 0;
+      std::vector<char> used;
+      for (const auto& v : spec_proteoforms)
+      {
+        for (const auto& h : v)
+        {
+          const bool decoy = h.getAccession().hasPrefix("DECOY");
+          const String& seq = h.getSequence();
+          int s = h.metaValueExists("StartPosition") ? (int)h.getMetaValue("StartPosition") - 1 : 0;
+          int e = h.metaValueExists("EndPosition") ? (int)h.getMetaValue("EndPosition") : (int)seq.size();
+          if (s < 0) s = 0;
+          if (e <= s || e > (int)seq.size()) e = (int)seq.size();
+          n_d += decoy;
+          usedMods(h, used);
+          for (Size m = 0; m < n_mods; m++)
+          {
+            double opportunities = 0;
+            if (var_positions[m] == 1) opportunities = var_residues[m].empty() || var_residues[m].has(seq[s]);
+            else if (var_positions[m] == 2) opportunities = var_residues[m].empty() || var_residues[m].has(seq[e - 1]);
+            else
+            {
+              for (int p = s; p < e; p++) opportunities += var_residues[m].empty() || var_residues[m].has(seq[p]);
+            }
+            (decoy ? opp_d : opp_t)[m] += opportunities;
+            if (used[m]) (decoy ? use_d : use_t)[m] += 1;
+          }
+        }
+      }
+      // enough decoy PrSMs to estimate chance usage
+      if (n_d >= 50)
+      {
+        std::vector<int> penalties(n_mods, 2);
+        bool raised = false;
+        for (Size m = 0; m < n_mods; m++)
+        {
+          // usage per opportunity, target over decoy, with one pseudo-use on each side; 8x enrichment or more keeps the default
+          // penalty 2, none gives 19 (a blind shift)
+          if (opp_t[m] <= 0 || opp_d[m] <= 0) continue;
+          const double enrichment = ((use_t[m] + 1) / opp_t[m]) / ((use_d[m] + 1) / opp_d[m]);
+          penalties[m] = std::max(2, std::min(19, (int)std::lround(19.0 - 17.0 / 3.0 * std::log2(std::max(1.0, enrichment)))));
+          raised |= penalties[m] > 2;
+          OPENMS_LOG_INFO << "Variable modification " << var_names[m] << ": used by " << use_t[m] << " target and " << use_d[m]
+                          << " decoy PrSMs, enrichment per opportunity " << enrichment << ", penalty " << penalties[m] << std::endl;
+        }
+        if (raised)
+        {
+          Param eparam = extender_param_;
+          eparam.setValue("var_mod_penalty", penalties);
+          std::vector<int> again;
+          for (int d = 0; d < (int)dspecs.size(); d++)
+          {
+            bool hit_raised = false;
+            for (const auto& h : spec_proteoforms[d])
+            {
+              usedMods(h, used);
+              for (Size m = 0; m < n_mods && ! hit_raised; m++) hit_raised = used[m] && penalties[m] > 2;
+              if (hit_raised) break;
+            }
+            if (hit_raised) again.push_back(d);
+          }
+          OPENMS_LOG_INFO << "Extending " << again.size() << " spectra again with the learned penalties" << std::endl;
+#pragma omp parallel for schedule(dynamic) if (extend_over_spectra)
+          for (int k = 0; k < (int)again.size(); k++)
+          {
+            extendSpectrum(again[k], eparam);
+          }
+        }
+      }
     }
     for (auto& v : spec_proteoforms)
     {

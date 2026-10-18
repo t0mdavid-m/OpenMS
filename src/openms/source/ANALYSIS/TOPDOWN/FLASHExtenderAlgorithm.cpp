@@ -56,6 +56,10 @@ namespace OpenMS
     defaults_.setValue("max_var_mod_count", 3, "Maximum number of variable modifications per proteoform (used only when variable modifications "
                        "are given).");
     defaults_.setMinInt("max_var_mod_count", 0);
+    defaults_.setValue("var_mod_penalty", std::vector<int> {},
+                       "Score penalty of each variable modification, in the order given (var_mod, then var_mod_file); missing or lower: 2. "
+                       "FLASHTnT raises it for modifications its decoy PrSMs use about as often as its target PrSMs.");
+    defaults_.addTag("var_mod_penalty", "advanced");
 
     defaults_.setValue("cleavage_weight", 5.0, "Weight of the backbone cleavage propensity: a matched fragment mass adds round(weight x (w_before + "
                        "w_after)) to the path score (at most +-4), where w is log2(cleavage rate / mean) of the residues before and after the bond "
@@ -180,6 +184,14 @@ namespace OpenMS
         if (f.size() > 4 && ! f[4].trim().empty()) vm.unimod = f[4].toInt();
         var_mod_list_.push_back(vm);
       }
+    }
+
+    // a penalty per modification; never below the default, so a raised penalty only removes paths
+    var_mod_penalties_.assign(var_mod_list_.size(), var_mod_penalty);
+    const auto given_penalties = param_.getValue("var_mod_penalty").toIntVector();
+    for (Size i = 0; i < std::min(given_penalties.size(), var_mod_penalties_.size()); i++)
+    {
+      var_mod_penalties_[i] = std::max(var_mod_penalty, given_penalties[i]);
     }
 
     max_var_mod_cntr_ = var_mod_list_.empty() ? 0 : (int)param_.getValue("max_var_mod_count");
@@ -952,6 +964,7 @@ namespace OpenMS
     const UInt mi_modification_starts = registry.registerName("ModificationStarts");
     const UInt mi_modification_ends = registry.registerName("ModificationEnds");
     const UInt mi_blind_mod_count = registry.registerName("BlindModCount");
+    const UInt mi_variable_modifications = registry.registerName("VariableModifications");
     const UInt mi_matched_aa = registry.registerName("MatchedAA");
     const UInt mi_start_position = registry.registerName("StartPosition");
     const UInt mi_end_position = registry.registerName("EndPosition");
@@ -971,7 +984,7 @@ namespace OpenMS
     for (const auto& pg : dspec) sorted_masses.push_back(pg.getMonoMass());
     std::sort(sorted_masses.begin(), sorted_masses.end());
 
-  #pragma omp parallel for default(none) schedule(dynamic) if (! omp_in_parallel()) shared(hits, tags, dspec, multiple_hits_per_spec, i2f_mass, spec_vec, sorted_masses, vec_pro, rev_vec_pro, std::cout, found, mi_tag_indices, mi_fasta_index, mi_modification_ids, mi_modification_accs, mi_modifications, mi_modification_starts, mi_modification_ends, mi_blind_mod_count, mi_matched_aa, mi_start_position, mi_end_position, mi_given_mass, mi_mass, mi_rt, mi_num_mass, mi_precursor_score, mi_precursor_snr, mi_mass_by_fragments)
+  #pragma omp parallel for default(none) schedule(dynamic) if (! omp_in_parallel()) shared(hits, tags, dspec, multiple_hits_per_spec, i2f_mass, spec_vec, sorted_masses, vec_pro, rev_vec_pro, std::cout, found, mi_tag_indices, mi_fasta_index, mi_modification_ids, mi_modification_accs, mi_modifications, mi_modification_starts, mi_modification_ends, mi_blind_mod_count, mi_variable_modifications, mi_matched_aa, mi_start_position, mi_end_position, mi_given_mass, mi_mass, mi_rt, mi_num_mass, mi_precursor_score, mi_precursor_snr, mi_mass_by_fragments)
     for (int i = 0; i < ((int)hits.size()); i++)
     {
       nextProgress();
@@ -1520,6 +1533,15 @@ namespace OpenMS
       hit.setMetaValue(mi_modification_starts, mod_starts);
       hit.setMetaValue(mi_modification_ends, mod_ends);
       hit.setMetaValue(mi_blind_mod_count, (int)std::count(mod_vars.begin(), mod_vars.end(), 0));
+      {
+        // the variable modification names of the path ("A+B," per shift, alternatives separated by ","), for FLASHTnT's penalty learning
+        std::vector<String> var_entries;
+        for (Size k = 0; k < mod_vars.size(); k++)
+        {
+          if (mod_vars[k]) var_entries.push_back(mod_var_names[k]);
+        }
+        hit.setMetaValue(mi_variable_modifications, var_entries);
+      }
       hit.setMetaValue(mi_matched_aa, matched_positions.size());
       hit.setMetaValue(mi_tag_indices, refined_tag_indices);
 
@@ -1942,7 +1964,7 @@ namespace OpenMS
               var_search_success = true;
               num_var_mod += (int)iter->mods.size();
               next_cumulative_mod_mass = cumulative_mod_mass + iter->mass;
-              next_score -= var_mod_penalty * (int)iter->mods.size();
+              for (int mod : iter->mods) next_score -= var_mod_penalties_[mod];
               break;
             }
           }
