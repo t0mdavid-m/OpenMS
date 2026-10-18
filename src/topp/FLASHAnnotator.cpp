@@ -11,11 +11,7 @@
 #include <OpenMS/APPLICATIONS/TOPPBase.h>
 #include <OpenMS/CHEMISTRY/ProForma.h>
 #include <OpenMS/CONCEPT/Constants.h>
-#include <OpenMS/FORMAT/MzMLFile.h>
-#include <OpenMS/INTERFACES/IMSDataConsumer.h>
-#include <OpenMS/METADATA/ExperimentalSettings.h>
-#include <OpenMS/METADATA/SpectrumLookup.h>
-#include <OpenMS/PROCESSING/CENTROIDING/PeakPickerHiRes.h>
+#include <OpenMS/KERNEL/MSSpectrum.h>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -79,72 +75,6 @@ using namespace std;
 // We do not want this class to show up in the docu:
 /// @cond TOPPCLASSES
 
-/// keeps, of the spectra read by MzMLFile::transform, the first MS2 (or higher level) spectrum of every needed scan number
-class NeededSpectraConsumer : public Interfaces::IMSDataConsumer
-{
-public:
-  /// with @p scan_from_index, scan numbers are spectrum index + 1 unless the native ID carries one (all spectra must be read)
-  NeededSpectraConsumer(const std::set<int>& needed_scans, bool scan_from_index): needed_scans_(needed_scans), scan_from_index_(scan_from_index)
-  {
-  }
-
-  void setExperimentalSettings(const ExperimentalSettings& settings) override
-  {
-    // as FLASHDeconvAlgorithm::getScanNumber
-    type_accession_ = "MS:1000768";
-    if (! settings.getSourceFiles().empty() && ! settings.getSourceFiles()[0].getNativeIDTypeAccession().empty())
-    {
-      type_accession_ = settings.getSourceFiles()[0].getNativeIDTypeAccession();
-    }
-  }
-
-  void setExpectedSize(Size, Size) override
-  {
-  }
-
-  void consumeSpectrum(SpectrumType& spec) override
-  {
-    const int index = read_count_++;
-    std::vector<String> native_ids;
-    spec.getNativeID().split(",", native_ids);
-    int scan = native_ids.empty() ? -1 : SpectrumLookup::extractScanNumber(native_ids.back(), type_accession_);
-    if (scan < 0)
-    {
-      without_scan_number_ = true;
-      if (! scan_from_index_) return;
-      scan = index + 1;
-    }
-    if (spec.getMSLevel() < 2 || needed_scans_.find(scan) == needed_scans_.end() || scan_to_slot.find(scan) != scan_to_slot.end()) return;
-    scan_to_slot[scan] = (int)spectra.size();
-    spectra.push_back(std::move(spec));
-  }
-
-  void consumeChromatogram(ChromatogramType&) override
-  {
-  }
-
-  /// the kept spectra and the scan number -> index into spectra map
-  std::vector<MSSpectrum> spectra;
-  std::map<int, int> scan_to_slot;
-
-  int readCount() const
-  {
-    return read_count_;
-  }
-
-  /// true if a spectrum had no scan number in its native ID
-  bool withoutScanNumber() const
-  {
-    return without_scan_number_;
-  }
-
-private:
-  const std::set<int>& needed_scans_;
-  bool scan_from_index_;
-  String type_accession_ = "MS:1000768";
-  int read_count_ = 0;
-  bool without_scan_number_ = false;
-};
 
 class TOPPFLASHAnnotator : public TOPPBase
 {
@@ -358,25 +288,17 @@ protected:
     // raw spectra: only the MS2 spectra of the PrSM scans are kept
     //-------------------------------------------------------------
     time = std::chrono::steady_clock::now();
-    MzMLFile mzml;
-    mzml.setLogType(log_type_);
-    PeakFileOptions options = mzml.getOptions();
-    options.setMSLevels({2, 3, 4, 5});
-    // chromatograms are not skipped: with setSkipChromatograms(true), MzMLHandler ends a progress it did not start
-    mzml.setOptions(options);
-    auto consumer = std::make_unique<NeededSpectraConsumer>(needed_scans, false);
-    mzml.transform(in_file, consumer.get(), true);
-    if (consumer->withoutScanNumber())
+    std::map<int, MSSpectrum> raw_map;
+    const Size read_count = FLASHAnnotatorAlgorithm::loadSpectra(in_file, needed_scans, raw_map);
+    std::vector<MSSpectrum> raw_spectra;
+    std::map<int, int> scan_to_slot;
+    raw_spectra.reserve(raw_map.size());
+    for (auto& [scan, spec] : raw_map)
     {
-      // scan numbers then come from the spectrum indices, which require all spectra
-      OPENMS_LOG_INFO << "Native IDs without scan numbers: reading all spectra" << endl;
-      options.setMSLevels({});
-      mzml.setOptions(options);
-      consumer = std::make_unique<NeededSpectraConsumer>(needed_scans, true);
-      mzml.transform(in_file, consumer.get(), true);
+      scan_to_slot[scan] = (int)raw_spectra.size();
+      raw_spectra.push_back(std::move(spec));
     }
-    std::vector<MSSpectrum>& raw_spectra = consumer->spectra;
-    const std::map<int, int>& scan_to_slot = consumer->scan_to_slot;
+    raw_map.clear();
     const double load_time = seconds_(time);
 
     //-------------------------------------------------------------
@@ -384,20 +306,12 @@ protected:
     //-------------------------------------------------------------
     time = std::chrono::steady_clock::now();
     std::vector<FLASHAnnotatorAlgorithm::PeakArrays> spectra(raw_spectra.size());
-    PeakPickerHiRes picker;
     int profile_count = 0;
 #pragma omp parallel for schedule(dynamic) reduction(+ : profile_count)
     for (int s = 0; s < (int)raw_spectra.size(); s++)
     {
       MSSpectrum& spec = raw_spectra[s];
-      if (spec.getType(true) == SpectrumSettings::PROFILE)
-      {
-        MSSpectrum picked;
-        picker.pick(spec, picked);
-        FLASHAnnotatorAlgorithm::toPeakArrays(picked, spectra[s]);
-        profile_count++;
-      }
-      else { FLASHAnnotatorAlgorithm::toPeakArrays(spec, spectra[s]); }
+      profile_count += FLASHAnnotatorAlgorithm::toCentroidedPeakArrays(spec, spectra[s]) ? 1 : 0;
       spec.clear(false);
       spec.shrink_to_fit();
     }
@@ -484,14 +398,9 @@ protected:
     }
 
     // precursor charges. The isotope table is computed once, beyond the heaviest PrSM (the annotation then reuses it).
-    int charge_from_raw = 0, charge_from_prsm = 0, charge_larger = 0, charge_from_mass = 0, charge_uncapped = 0;
+    int charge_reasons[5] = {0, 0, 0, 0, 0};
     std::vector<double> iso_mzs, iso_intensities;
     if (fixed_precursor_charge == 0) annotator.getIsotopeEnvelope(max_prsm_mass + 200.0, 1, iso_mzs, iso_intensities);
-    // true if an isotope peak of mass at charge z lies in [low, high]
-    auto in_window = [&](double mass, int z, double low, double high) -> bool {
-      annotator.getIsotopeEnvelope(mass, z, iso_mzs, iso_intensities);
-      return ! iso_mzs.empty() && iso_mzs.front() <= high && iso_mzs.back() >= low;
-    };
     for (Size r = 0; r < rows.size(); r++)
     {
       auto& prsm = prsms[r];
@@ -501,51 +410,9 @@ protected:
         prsm.precursor_charge = fixed_precursor_charge;
         continue;
       }
-      const auto& spec = raw_spectra[prsm.spectrum_index];
-      const double mass = prsm_masses[r];
-      int raw_charge = 0;
-      double precursor_mz = 0, low = 0, high = 0;
-      if (! spec.getPrecursors().empty())
-      {
-        const auto& precursor = spec.getPrecursors()[0];
-        raw_charge = precursor.getCharge();
-        precursor_mz = precursor.getMZ();
-        low = precursor_mz - precursor.getIsolationWindowLowerOffset();
-        high = precursor_mz + precursor.getIsolationWindowUpperOffset();
-      }
-      // the charge at which the precursor mass has the isolation target m/z
-      const int implied_charge = (mass > 0 && precursor_mz > Constants::PROTON_MASS_U) ?
-                                   std::max(1, (int)std::round(mass / (precursor_mz - Constants::PROTON_MASS_U))) : 0;
-      if (raw_charge > 0)
-      {
-        // a harmonic or co-isolated raw charge does not fit the proteoform: fragments above it would never be tried
-        if (implied_charge <= 0 || implied_charge == raw_charge || in_window(mass, raw_charge, low, high))
-        {
-          prsm.precursor_charge = raw_charge;
-          charge_from_raw++;
-        }
-        else if (in_window(mass, implied_charge, low, high))
-        {
-          prsm.precursor_charge = implied_charge;
-          charge_from_prsm++;
-        }
-        else
-        {
-          prsm.precursor_charge = std::max(raw_charge, implied_charge);
-          charge_larger++;
-        }
-      }
-      else if (implied_charge > 0)
-      {
-        prsm.precursor_charge = implied_charge;
-        charge_from_mass++;
-      }
-      else
-      {
-        // no precursor charge or mass: the fragment charges are capped by their own masses only
-        prsm.precursor_charge = 0;
-        charge_uncapped++;
-      }
+      int reason = 4;
+      prsm.precursor_charge = annotator.precursorChargeCap(raw_spectra[prsm.spectrum_index], prsm_masses[r], reason);
+      charge_reasons[reason]++;
     }
     const double centroid_time = seconds_(time);
 
@@ -608,14 +475,13 @@ protected:
     OPENMS_LOG_INFO << "PrSMs: " << rows.size() << " (" << annotated << " annotated, " << missing_scan << " without their scan in the mzML, "
                     << invalid_proforma << " with an invalid or unsupported ProForma string, " << (rows.size() - annotated - missing_scan - invalid_proforma)
                     << " with an unknown residue); accepted envelopes: " << envelopes << endl;
-    OPENMS_LOG_INFO << "Spectra: " << consumer->readCount() << " read, " << spectra.size() << " kept and annotated (" << profile_count
-                    << " centroided)" << endl;
+    OPENMS_LOG_INFO << "Spectra: " << read_count << " read, " << spectra.size() << " kept and annotated (" << profile_count << " centroided)" << endl;
     if (fixed_precursor_charge == 0)
     {
-      OPENMS_LOG_INFO << "Precursor charge: " << charge_from_raw << " from the raw precursor, " << charge_from_prsm
-                      << " from the precursor mass and the isolation window (raw charge does not fit), " << charge_larger
-                      << " the larger of both (neither fits), " << charge_from_mass << " from the precursor mass (no raw charge), "
-                      << charge_uncapped << " without a precursor cap" << endl;
+      OPENMS_LOG_INFO << "Precursor charge: " << charge_reasons[0] << " from the raw precursor, " << charge_reasons[1]
+                      << " from the precursor mass and the isolation window (raw charge does not fit), " << charge_reasons[2]
+                      << " the larger of both (neither fits), " << charge_reasons[3] << " from the precursor mass (no raw charge), "
+                      << charge_reasons[4] << " without a precursor cap" << endl;
     }
     OPENMS_LOG_INFO << std::fixed << std::setprecision(2) << "Timing (s): PrSM file " << read_time << ", mzML load " << load_time
                     << ", centroiding " << centroid_time << ", annotation " << annotation_time << ", writing " << write_time
