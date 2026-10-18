@@ -253,6 +253,12 @@ namespace OpenMS
     upper_seq_ = seq_.toUpper();
   }
 
+  FLASHHelperClasses::Tag::Tag(String seq, double n_mass, double c_mass, std::vector<double>& mzs, std::vector<int>& scores, int scan, Size length) :
+      seq_(std::move(seq)), n_mass_(n_mass), c_mass_(c_mass), mzs_(mzs), scores_(scores), scan_(scan), length_(length)
+  {
+    upper_seq_ = seq_.toUpper();
+  }
+
   const String& FLASHHelperClasses::Tag::getSequence() const
   {
     return seq_;

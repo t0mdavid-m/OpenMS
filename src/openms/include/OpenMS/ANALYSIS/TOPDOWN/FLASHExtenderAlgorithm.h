@@ -64,6 +64,28 @@ public:
            const DeconvolvedSpectrum& dspec, const std::vector<int>& spec_vec, const std::vector<std::unordered_set<int>>& vec_pro,
            const std::vector<std::unordered_set<int>>& rev_vec_pro, const std::vector<FLASHHelperClasses::Tag>& tags, double ppm, bool multiple_hits_per_spec);
 
+  /// names of the variable modifications, in the order of the var_mod_penalty parameter
+  std::vector<String> getVariableModificationNames() const
+  {
+    std::vector<String> names;
+    for (const auto& vm : var_mod_list_) names.push_back(vm.name);
+    return names;
+  }
+  /// residues each variable modification can sit on (empty: any), in the same order
+  std::vector<String> getVariableModificationResidues() const
+  {
+    std::vector<String> residues;
+    for (const auto& vm : var_mod_list_) residues.push_back(vm.residues);
+    return residues;
+  }
+  /// position of each variable modification: 0 anywhere, 1 proteoform N-terminal residue, 2 proteoform C-terminal residue
+  std::vector<int> getVariableModificationPositions() const
+  {
+    std::vector<int> positions;
+    for (const auto& vm : var_mod_list_) positions.push_back(vm.position);
+    return positions;
+  }
+
   /// fill the characterized proteoforms in @p hits
   void fillProteoforms(std::vector<ProteinHit>& hits) const
   {
@@ -135,6 +157,8 @@ private:
   /// modification mass to modification index. To use find nearest function
   std::map<double, std::vector<ResidueModification>> candidate_blind_mod_map_;
   std::vector<VariableModification> var_mod_list_;
+  /// score penalty of each modification of var_mod_list_
+  std::vector<int> var_mod_penalties_;
   /// all combinations of up to max_var_mod_count variable modifications, sorted by mass
   std::vector<VariableModificationCombination> var_mod_combinations_;
 

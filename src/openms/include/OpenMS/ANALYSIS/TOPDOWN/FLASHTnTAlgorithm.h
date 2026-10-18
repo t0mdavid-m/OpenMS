@@ -86,7 +86,13 @@ protected:
 
 private:
 
-  Param tagger_param_, extender_param_;
+  Param tagger_param_, extender_param_, gapped_param_;
+  /// candidates from gapped tags: off, fallback (spectra without sequence-tag candidates), both, only
+  String gapped_mode_ = "fallback";
+  /// learn variable modification penalties from target and decoy usage
+  bool learn_var_mod_penalty_ = true;
+  /// search spectra with MS1-based PrSMs again with decoy precursor masses, as decoys of the precursor in the FDR
+  bool decoy_precursor_ = false;
   double decoy_factor_ = 0, prsm_fdr_ = 1;
   /// how many nodes (massses) will be used
   /// at most this many masses (best Qscore first) per spectrum are used. 300 cut key fragments of native spectra (440-570 masses from

@@ -499,6 +499,7 @@ set(analysis_executables_list
   # FLASHDeconvAlgorithm_test       # offline FLASHDeconv tool, not the real-time IDA bridge
   # FLASHDeconvHelperStructs_test   # OpenMS/FLASHDeconv helper-struct unit test, out of scope
   # FLASHTaggerAlgorithm_test       # offline tagger; test is stale (hardcoded paths) - needs rewrite
+  # FLASHGappedTaggerAlgorithm_test  # offline FLASHTnT gapped tagger, not the real-time IDA bridge
   IDBoostGraph_test
   IDMapper_test
   IDMergerAlgorithm_test
