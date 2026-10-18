@@ -8,7 +8,9 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHExtenderAlgorithm.h>
+#include <OpenMS/CHEMISTRY/ModificationsDB.h>
 #include <OpenMS/CHEMISTRY/ResidueDB.h>
+#include <fstream>
 #ifdef _OPENMP
   #include <omp.h>
 #else
@@ -25,6 +27,9 @@ namespace OpenMS
   // Base penalty for a terminal truncation, equivalent to the base blind-modification (mass-shift)
   // penalty applied in findSubPathsBetweenTagEndPoints. Equals 19.
   inline const int truncation_penalty = 1 + 2 * (multi_ion_score + FLASHTaggerAlgorithm::max_node_score);
+  // Penalty per variable modification: a known residue-specific shift costs far less than a blind modification, but more than
+  // nothing, so that an unmodified path wins a tie.
+  inline const int var_mod_penalty = 1 + multi_ion_score;
   FLASHExtenderAlgorithm::FLASHExtenderAlgorithm(): DefaultParamHandler("FLASHExtenderAlgorithm"), ProgressLogger()
   {
     setDefaultParams_();
@@ -43,6 +48,15 @@ namespace OpenMS
     defaults_.setValue("max_mod_mass", 500.0, "Maximum mass shift allowed for modifications.");
     defaults_.setValue("max_mod_count", 2, "Maximum number of blind modifications.");
 
+    defaults_.setValue("var_mod", std::vector<std::string> {}, "Variable modifications, by name as in Unimod/PSI-MOD (e.g. 'Oxidation (M)', "
+                       "'Acetyl (N-term)', 'Phospho (S)'). Searched with their own count, independently of blind modifications; both can occur "
+                       "in one proteoform.");
+    defaults_.setValue("var_mod_file", "", "Variable modifications in TopPIC's format, one per line: name,mass,residues,position,unimod "
+                       "(residues: one-letter codes or *; position: any, N-term or C-term; # starts a comment). Added to var_mod.");
+    defaults_.setValue("max_var_mod_count", 3, "Maximum number of variable modifications per proteoform (used only when variable modifications "
+                       "are given).");
+    defaults_.setMinInt("max_var_mod_count", 0);
+
     defaults_.setValue("ion_type", std::vector<std::string> {"b", "y"}, "Specifies ion types to consider");
     defaults_.setValidStrings("ion_type", {"b", "c", "a", "y", "z", "x", "zp1", "zp2"});
     defaults_.setValue("skip_precursor_inference", "false", "Set to skip precursor mass inference with complimentary fragment ion pairs. Precursor masses inferred from MSn-1 will be used in MSn");
@@ -57,6 +71,7 @@ namespace OpenMS
     max_blind_mod_cntr_ = param_.getValue("max_mod_count");
     max_mod_mass_ = param_.getValue("max_mod_mass");
     skip_precursor_inference_ = param_.getValue("skip_precursor_inference") == "true";
+    loadVariableModifications_();
 
     // precomputed vertex-packing spans (invariant during run(); used by the get*Vertex helpers on the hot path)
     var_span_ = (Size)max_var_mod_cntr_ + 1;
@@ -64,6 +79,138 @@ namespace OpenMS
     blind_span_ = (Size)max_blind_mod_cntr_ + 1;
     var_score_span_ = var_span_ * score_span_;
     var_score_blind_span_ = var_score_span_ * blind_span_;
+  }
+
+  void FLASHExtenderAlgorithm::loadVariableModifications_()
+  {
+    var_mod_list_.clear();
+    var_mod_combinations_.clear();
+    max_var_mod_mass_ = 0;
+
+    const auto inst = ModificationsDB::getInstance();
+    for (const auto& name : param_.getValue("var_mod").toStringVector())
+    {
+      if (String(name).trim().empty()) continue;
+      const ResidueModification* mod = inst->getModification(name);
+      VariableModification vm;
+      vm.name = mod->getId();
+      vm.mass = mod->getDiffMonoMass();
+      const char origin = mod->getOrigin();
+      vm.residues = (origin == 'X' || origin == '\0' || origin == '.') ? String("") : String(1, origin);
+      const auto term = mod->getTermSpecificity();
+      vm.position = (term == ResidueModification::N_TERM || term == ResidueModification::PROTEIN_N_TERM) ? 1
+                    : (term == ResidueModification::C_TERM || term == ResidueModification::PROTEIN_C_TERM) ? 2 : 0;
+      vm.unimod = mod->getUniModRecordId();
+      var_mod_list_.push_back(vm);
+    }
+
+    const String file = param_.getValue("var_mod_file").toString();
+    if (! file.empty())
+    {
+      std::ifstream in(file);
+      if (! in.good()) throw Exception::FileNotFound(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, file);
+      String line;
+      while (std::getline(in, line))
+      {
+        line.trim();
+        if (line.empty() || line.hasPrefix("#")) continue;
+        std::vector<String> f;
+        line.split(',', f);
+        if (f.size() < 4) throw Exception::ParseError(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, line, "expected name,mass,residues,position[,unimod]");
+        VariableModification vm;
+        vm.name = f[0].trim();
+        vm.mass = f[1].toDouble();
+        vm.residues = f[2].trim() == "*" ? String("") : f[2].trim();
+        const String pos = String(f[3]).trim().toLower();
+        vm.position = pos.hasSubstring("n-term") ? 1 : pos.hasSubstring("c-term") ? 2 : 0;
+        if (f.size() > 4 && ! f[4].trim().empty()) vm.unimod = f[4].toInt();
+        var_mod_list_.push_back(vm);
+      }
+    }
+
+    max_var_mod_cntr_ = var_mod_list_.empty() ? 0 : (int)param_.getValue("max_var_mod_count");
+    if (max_var_mod_cntr_ == 0) return;
+
+    for (const auto& vm : var_mod_list_) max_var_mod_mass_ = std::max(max_var_mod_mass_, std::abs(vm.mass));
+    // every multiset of up to max_var_mod_cntr_ modifications, sorted by mass
+    std::vector<int> idx;
+    std::function<void(int, double)> add = [&](int from, double mass) {
+      if (! idx.empty()) var_mod_combinations_.push_back({mass, idx});
+      if ((int)idx.size() == max_var_mod_cntr_) return;
+      for (int i = from; i < (int)var_mod_list_.size(); i++)
+      {
+        idx.push_back(i);
+        add(i, mass + var_mod_list_[i].mass);
+        idx.pop_back();
+      }
+    };
+    add(0, 0);
+    std::sort(var_mod_combinations_.begin(), var_mod_combinations_.end(),
+              [](const VariableModificationCombination& a, const VariableModificationCombination& b) { return a.mass < b.mass || (a.mass == b.mass && a.mods < b.mods); });
+  }
+
+  bool FLASHExtenderAlgorithm::combinationFits_(const VariableModificationCombination& combination, const String& seq, int from, int to, int n_site,
+                                                int c_site) const
+  {
+    // called in the innermost loop of the extension: no allocation
+    to = std::min(to, (int)seq.size());
+    auto fits_at = [&](const VariableModification& vm, int p) {
+      if (vm.position == 1 && p != n_site) return false; // the proteoform's first residue
+      if (vm.position == 2 && p != c_site) return false; // the proteoform's last residue
+      return vm.residues.empty() || vm.residues.find(seq[p]) != std::string::npos;
+    };
+    const auto& mods = combination.mods;
+    if (mods.size() == 1)
+    {
+      const auto& vm = var_mod_list_[mods[0]];
+      for (int p = from; p < to; p++)
+        if (fits_at(vm, p)) return true;
+      return false;
+    }
+    // distinct residues for all modifications: depth-first over at most max_var_mod_cntr_ of them
+    const int k_max = (int)mods.size();
+    int site[16];
+    if (k_max > 16) return false;
+    int k = 0;
+    site[0] = from - 1;
+    while (k >= 0)
+    {
+      int p = site[k] + 1;
+      for (; p < to; p++)
+      {
+        if (! fits_at(var_mod_list_[mods[k]], p)) continue;
+        bool taken = false;
+        for (int q = 0; q < k && ! taken; q++) taken = site[q] == p;
+        if (! taken) break;
+      }
+      if (p >= to) { k--; continue; } // backtrack
+      site[k] = p;
+      if (++k == k_max) return true;
+      site[k] = from - 1;
+    }
+    return false;
+  }
+
+  String FLASHExtenderAlgorithm::variableModificationNames_(double mass, double tol, const String& seq, int from, int to, int n_site, int c_site,
+                                                            String& accessions) const
+  {
+    String names;
+    accessions = "";
+    auto iter = std::lower_bound(var_mod_combinations_.begin(), var_mod_combinations_.end(), mass - tol,
+                                 [](const VariableModificationCombination& c, double m) { return c.mass < m; });
+    for (; iter != var_mod_combinations_.end() && iter->mass <= mass + tol; ++iter)
+    {
+      if (! combinationFits_(*iter, seq, from, to, n_site, c_site)) continue;
+      for (Size k = 0; k < iter->mods.size(); k++)
+      {
+        const auto& vm = var_mod_list_[iter->mods[k]];
+        names += (k ? "+" : "") + vm.name;
+        accessions += (k ? String("+") : String("")) + (vm.unimod >= 0 ? String(vm.unimod) : String("-"));
+      }
+      names += ",";
+      accessions += ",";
+    }
+    return names;
   }
 
   inline Size FLASHExtenderAlgorithm::getVertex_(int node_index, int pro_index, int score, int num_blind_mod, int num_var_mod, Size pro_mass_size) const
@@ -444,6 +591,8 @@ namespace OpenMS
     hi.cur_node_spec_ = &node_spec;
     hi.cur_pro_masses_ = &pro_masses;
     hi.cur_tol_spec_ = &hi.tol_spec_map_[hi.mode_];
+    hi.cur_oriented_seq_ = hit.getSequence();
+    if (hi.mode_ == 0) hi.cur_oriented_seq_.reverse();
     hi.dag_ = FLASHHelperClasses::DAG((1 + max_var_mod_cntr_) * (1 + node_spec.size()) * (1 + pro_masses.size()) * (1 + max_blind_mod_cntr_)
                                       * (1 + max_path_score_ - min_path_score_));
 
@@ -672,6 +821,7 @@ namespace OpenMS
     const UInt mi_modifications = registry.registerName("Modifications");
     const UInt mi_modification_starts = registry.registerName("ModificationStarts");
     const UInt mi_modification_ends = registry.registerName("ModificationEnds");
+    const UInt mi_blind_mod_count = registry.registerName("BlindModCount");
     const UInt mi_matched_aa = registry.registerName("MatchedAA");
     const UInt mi_start_position = registry.registerName("StartPosition");
     const UInt mi_end_position = registry.registerName("EndPosition");
@@ -691,7 +841,7 @@ namespace OpenMS
     for (const auto& pg : dspec) sorted_masses.push_back(pg.getMonoMass());
     std::sort(sorted_masses.begin(), sorted_masses.end());
 
-  #pragma omp parallel for default(none) schedule(dynamic) if (! omp_in_parallel()) shared(hits, tags, dspec, multiple_hits_per_spec, i2f_mass, spec_vec, sorted_masses, vec_pro, rev_vec_pro, std::cout, found, mi_tag_indices, mi_fasta_index, mi_modification_ids, mi_modification_accs, mi_modifications, mi_modification_starts, mi_modification_ends, mi_matched_aa, mi_start_position, mi_end_position, mi_given_mass, mi_mass, mi_rt, mi_num_mass, mi_precursor_score, mi_precursor_snr, mi_mass_by_fragments)
+  #pragma omp parallel for default(none) schedule(dynamic) if (! omp_in_parallel()) shared(hits, tags, dspec, multiple_hits_per_spec, i2f_mass, spec_vec, sorted_masses, vec_pro, rev_vec_pro, std::cout, found, mi_tag_indices, mi_fasta_index, mi_modification_ids, mi_modification_accs, mi_modifications, mi_modification_starts, mi_modification_ends, mi_blind_mod_count, mi_matched_aa, mi_start_position, mi_end_position, mi_given_mass, mi_mass, mi_rt, mi_num_mass, mi_precursor_score, mi_precursor_snr, mi_mass_by_fragments)
     for (int i = 0; i < ((int)hits.size()); i++)
     {
       nextProgress();
@@ -700,6 +850,8 @@ namespace OpenMS
       int total_score = 0;
       std::vector<int> mod_starts, mod_ends;
       std::vector<double> mod_masses, mod_tols;
+      std::vector<int> mod_vars;                 // 1: the modification is a variable one (named in mod_var_names), 0: blind
+      std::vector<String> mod_var_names, mod_var_accs;
       int max_nterm_index = 0, max_cterm_rindex = 0;
 
       std::map<int, std::map<int, std::vector<Size>>> all_path_map; // mode, num_mod, path
@@ -729,8 +881,9 @@ namespace OpenMS
       // undetermined mass instead of dropping the hit.
       bool terminal_kept = false;
       int terminal_score = 0;
-      std::vector<int> terminal_used_mode, terminal_mod_starts, terminal_mod_ends;
+      std::vector<int> terminal_used_mode, terminal_mod_starts, terminal_mod_ends, terminal_mod_vars;
       std::vector<double> terminal_mod_masses, terminal_mod_tols;
+      std::vector<String> terminal_mod_var_names, terminal_mod_var_accs;
       std::map<int, std::set<int>> terminal_matched_position_map;
       int terminal_start = -1, terminal_end = -1;
       bool retried_with_given_mass = false;
@@ -747,6 +900,9 @@ namespace OpenMS
           terminal_mod_ends = mod_ends;
           terminal_mod_masses = mod_masses;
           terminal_mod_tols = mod_tols;
+          terminal_mod_vars = mod_vars;
+          terminal_mod_var_names = mod_var_names;
+          terminal_mod_var_accs = mod_var_accs;
           terminal_matched_position_map = matched_position_map;
           terminal_start = hi.protein_start_position_;
           terminal_end = hi.protein_end_position_;
@@ -755,7 +911,7 @@ namespace OpenMS
         { // const ProteinHit& hit,
           if (! skip_precursor_inference_ && ! retried_with_given_mass && max_nterm_index + max_cterm_rindex >= (int)hit.getSequence().size())
             calculatePrecursorMass_(hit, best_path_map, hi);
-          max_mod_cntr_for_last_mode = std::min(max_blind_mod_cntr_, (int)mod_starts.size() + 1);
+          max_mod_cntr_for_last_mode = std::min(max_blind_mod_cntr_, (int)std::count(mod_vars.begin(), mod_vars.end(), 0) + 1);
 
           if (hi.calculated_precursor_mass_ <= 0) hi.calculated_precursor_mass_ = given_precursor_mass_;
           else
@@ -853,6 +1009,9 @@ namespace OpenMS
           mod_ends.clear();
           mod_masses.clear();
           mod_tols.clear();
+          mod_vars.clear();
+          mod_var_names.clear();
+          mod_var_accs.clear();
           //
           //        int mode0_score = best_path_map.find(0) == best_path_map.end() ||  best_path_map[0].empty() ? 0 :  getScore_(best_path_map[0][0]);
           //        int mode1_score = best_path_map.find(1) == best_path_map.end() ||  best_path_map[1].empty() ? 0 :  getScore_(best_path_map[1][0]);
@@ -876,6 +1035,9 @@ namespace OpenMS
           mod_ends.erase(mod_ends.begin() + from, mod_ends.begin() + to);
           mod_masses.erase(mod_masses.begin() + from, mod_masses.begin() + to);
           mod_tols.erase(mod_tols.begin() + from, mod_tols.begin() + to);
+          mod_vars.erase(mod_vars.begin() + from, mod_vars.begin() + to);
+          mod_var_names.erase(mod_var_names.begin() + from, mod_var_names.begin() + to);
+          mod_var_accs.erase(mod_var_accs.begin() + from, mod_var_accs.begin() + to);
         };
         for (int m = hi.mode_ == 2 ? 2 : 0; m <= hi.mode_; m++)
         {
@@ -886,7 +1048,9 @@ namespace OpenMS
           auto& t_node_spec = hi.node_spec_map_[m];
 
           double prev_mass_shift = 0;
-          int prev_mod_count = 0;
+          int prev_mod_count = 0, prev_var_count = 0;
+          String oriented_seq = hit.getSequence();
+          if (m == 0) oriented_seq.reverse();
           int pre_pro_index = 0;
           int pre_node_index = 0;
           double mod_mass = 0; //, total_mod_mass = 0;
@@ -897,7 +1061,8 @@ namespace OpenMS
             auto pro_index = getProIndex_(*iter, t_pro_masses.size());
             auto node_index = getNodeIndex_(*iter, t_pro_masses.size());
             auto mass_shift = t_node_spec[node_index].getMZ() - t_pro_masses[pro_index];
-            auto mod_count = getBlindModNumber_(*iter);
+            const int var_count = getVarModNumber_(*iter);
+            auto mod_count = getBlindModNumber_(*iter) + var_count; // blind and variable modifications so far
 
             if (node_index == 0)
             {
@@ -936,10 +1101,44 @@ namespace OpenMS
                 }
               }
 
+              const double mod_tol = hi.tol_spec_map_[m][node_index].getIntensity();
+              bool is_var = var_count != prev_var_count;
+              String var_names, var_accs;
+              if (is_var)
+              {
+                // the residues the fragment ladder leaves for the shift (start + 1 .. end), in this mode's orientation
+                const int len = (int)hit.getSequence().size();
+                const int from = m > 0 ? start + 1 : len - 1 - end;
+                const int to = m > 0 ? end + 1 : len - 1 - start;
+                const int n_site = (m != 0 && pre_node_index == 0) ? pre_pro_index : -1;
+                const int c_site = (m == 0 && pre_node_index == 0) ? pre_pro_index : (m == 2 && node_index == (int)t_node_spec.size() - 1) ? pro_index - 1 : -1;
+                var_names = variableModificationNames_(mod_mass, mod_tol, oriented_seq, from, to, n_site, c_site, var_accs);
+                if (var_names.empty()) is_var = false; // the ladder puts the shift where no variable modification fits
+                // a single named modification with one possible residue in the range is localized there
+                std::vector<int> sites;
+                if (! var_names.empty() && var_names.find('+') == std::string::npos && var_names.find(',') == var_names.size() - 1)
+                {
+                  for (const auto& vm : var_mod_list_)
+                  {
+                    if (vm.name + "," != var_names || vm.residues.empty()) continue;
+                    for (int pi = start + 1; pi <= end && pi < (int)hit.getSequence().size(); pi++)
+                      if (pi >= 0 && vm.residues.find(hit.getSequence()[pi]) != std::string::npos) sites.push_back(pi);
+                    break;
+                  }
+                }
+                if (sites.size() == 1)
+                {
+                  start = sites[0] - 1;
+                  end = sites[0];
+                }
+              }
               mod_starts.push_back(start + 1);
               mod_ends.push_back(end);
               mod_masses.push_back(mod_mass);
-              mod_tols.push_back(hi.tol_spec_map_[m][node_index].getIntensity());
+              mod_tols.push_back(mod_tol);
+              mod_vars.push_back(is_var ? 1 : 0);
+              mod_var_names.push_back(var_names);
+              mod_var_accs.push_back(var_accs);
             }
 
             if (debug)
@@ -956,6 +1155,7 @@ namespace OpenMS
 
             if (mod_count > 0 && prev_mod_count != mod_count) prev_mass_shift = mass_shift;
             prev_mod_count = mod_count;
+            prev_var_count = var_count;
             pre_pro_index = pro_index;
             pre_node_index = node_index;
           }
@@ -1001,7 +1201,7 @@ namespace OpenMS
         {
           // a blind modification beyond max_mod_mass is outside the search's own condition
           for (Size i = 0; i < mod_masses.size() && ! reject_mass; i++)
-            reject_mass = std::abs(mod_masses[i]) > max_mod_mass_ + std::max(0.05, i < mod_tols.size() ? mod_tols[i] : 0.0);
+            reject_mass = mod_vars[i] == 0 && std::abs(mod_masses[i]) > max_mod_mass_ + std::max(0.05, i < mod_tols.size() ? mod_tols[i] : 0.0);
           const bool given_mass_agrees
             = given_precursor_mass_ > 0 && std::abs(given_precursor_mass_ - hi.calculated_precursor_mass_) <= tol_ * given_precursor_mass_;
           if (! reject_mass && precursor_by_fragment && ! given_mass_agrees) // the MS1 precursor mass confirms it
@@ -1016,6 +1216,9 @@ namespace OpenMS
           mod_ends = terminal_mod_ends;
           mod_masses = terminal_mod_masses;
           mod_tols = terminal_mod_tols;
+          mod_vars = terminal_mod_vars;
+          mod_var_names = terminal_mod_var_names;
+          mod_var_accs = terminal_mod_var_accs;
           matched_position_map = terminal_matched_position_map;
           hi.protein_start_position_ = terminal_start;
           hi.protein_end_position_ = terminal_end;
@@ -1041,6 +1244,9 @@ namespace OpenMS
         mod_ends = terminal_mod_ends;
         mod_masses = terminal_mod_masses;
         mod_tols = terminal_mod_tols;
+        mod_vars = terminal_mod_vars;
+        mod_var_names = terminal_mod_var_names;
+        mod_var_accs = terminal_mod_var_accs;
         matched_position_map = terminal_matched_position_map;
         hi.protein_start_position_ = terminal_start;
         hi.protein_end_position_ = terminal_end;
@@ -1052,12 +1258,16 @@ namespace OpenMS
       if (used_mode.empty()) continue;
 
       const auto t_mod_masses = mod_masses, t_mod_tols = mod_tols;
-      const auto t_mod_starts = mod_starts, t_mod_ends = mod_ends;
+      const auto t_mod_starts = mod_starts, t_mod_ends = mod_ends, t_mod_vars = mod_vars;
+      const auto t_mod_var_names = mod_var_names, t_mod_var_accs = mod_var_accs;
 
       mod_masses.clear();
       mod_starts.clear();
       mod_ends.clear();
       mod_tols.clear();
+      mod_vars.clear();
+      mod_var_names.clear();
+      mod_var_accs.clear();
 
       for (int k = 0; k < (int)t_mod_masses.size(); k++)
       {
@@ -1067,11 +1277,20 @@ namespace OpenMS
         mod_starts.push_back(t_mod_starts[k]);
         mod_ends.push_back(t_mod_ends[k]);
         mod_tols.push_back(t_mod_tols[k]);
+        mod_vars.push_back(t_mod_vars[k]);
+        mod_var_names.push_back(t_mod_var_names[k]);
+        mod_var_accs.push_back(t_mod_var_accs[k]);
       }
       std::vector<String> mod_ids, mod_accs;
 
       for (int k = 0; k < (int)mod_masses.size(); k++)
       {
+        if (mod_vars[k])
+        {
+          mod_ids.push_back(mod_var_names[k]);
+          mod_accs.push_back(mod_var_accs[k]);
+          continue;
+        }
         auto mod_mass = mod_masses[k];
         auto iter = candidate_blind_mod_map_.lower_bound(mod_mass - mod_tols[k]);
         String mod_id = "";
@@ -1180,6 +1399,7 @@ namespace OpenMS
       hit.setMetaValue(mi_modifications, mod_masses);
       hit.setMetaValue(mi_modification_starts, mod_starts);
       hit.setMetaValue(mi_modification_ends, mod_ends);
+      hit.setMetaValue(mi_blind_mod_count, (int)std::count(mod_vars.begin(), mod_vars.end(), 0));
       hit.setMetaValue(mi_matched_aa, matched_positions.size());
       hit.setMetaValue(mi_tag_indices, refined_tag_indices);
 
@@ -1393,7 +1613,7 @@ namespace OpenMS
           for (int j = 0; j < (int)pro_masses.size(); j++)
           {
             if (std::abs(hi.calculated_precursor_mass_ + truncation_mass - pro_masses[j])
-                > max_mod_mass_ * (max_blind_mod_cntr_ - getBlindModNumber_(vertex)))
+                > max_mod_mass_ * (max_blind_mod_cntr_ - getBlindModNumber_(vertex)) + max_var_mod_mass_ * (max_var_mod_cntr_ - getVarModNumber_(vertex)))
               continue;
 
             findSubPathsBetweenTagEndPoints(sinks, hi, vertex, hi.cur_node_spec_->size() - 1, j, 0, truncation_mass, cumulative_shift,
@@ -1426,7 +1646,9 @@ namespace OpenMS
     int start_score = getScore_(start_vertex);
     int start_num_blind_mod = getBlindModNumber_(start_vertex);
     int start_num_var_mod = getVarModNumber_(start_vertex);
-    if (start_num_blind_mod == max_blind_mod_cntr) diagonal_counter = 1e5;
+    // no modification left: only unmodified stretches
+    if (start_num_blind_mod == max_blind_mod_cntr && start_num_var_mod >= max_var_mod_cntr_) diagonal_counter = 1e5;
+    const double var_mod_room = max_var_mod_mass_ * (max_var_mod_cntr_ - start_num_var_mod);
 
     const auto src = getVertex_(0, 0, 0, 0, 0, pro_mass_size);
     const auto& node_spec = *hi.cur_node_spec_;
@@ -1437,10 +1659,10 @@ namespace OpenMS
       end_pro_index = 0;
       if (hi.protein_end_position_ >= 0)
         while (end_pro_index < pro_mass_size
-               && pro_masses[end_pro_index] - pro_masses[hi.protein_end_position_ - 1] < max_mod_mass_ * (max_blind_mod_cntr - start_num_blind_mod) - 1)
+               && pro_masses[end_pro_index] - pro_masses[hi.protein_end_position_ - 1] < max_mod_mass_ * (max_blind_mod_cntr - start_num_blind_mod) + var_mod_room - 1)
           end_pro_index++;
       else
-        end_pro_index = ((start_num_blind_mod < max_blind_mod_cntr) && diagonal_counter == 0)
+        end_pro_index = ((start_num_blind_mod < max_blind_mod_cntr || start_num_var_mod < max_var_mod_cntr_) && diagonal_counter == 0)
                           ? start_pro_index + max_extension_stretch_
                           : ((int)pro_mass_size - 1); // if sink is not specified, stretch up to max_extension_stretch_ amino acids.
       end_pro_index = std::min(end_pro_index, (int)pro_mass_size - 1);
@@ -1494,7 +1716,7 @@ namespace OpenMS
       double end_node_mass = node_spec[end_node_index].getMZ();
       double end_delta_mass = end_node_mass - pro_masses[end_pro_index];
       double margin = tol_spec[end_node_index].getIntensity(); // tol_spec[end_node_index].getIntensity();
-      if (std::abs(end_delta_mass - cumulative_mod_mass + truncation_mass) > max_mod_mass_ * (max_blind_mod_cntr - start_num_blind_mod) + margin)
+      if (std::abs(end_delta_mass - cumulative_mod_mass + truncation_mass) > max_mod_mass_ * (max_blind_mod_cntr - start_num_blind_mod) + var_mod_room + margin)
       {
         return;
       }
@@ -1554,7 +1776,9 @@ namespace OpenMS
       double t_node_mass = node_spec[node_i].getMZ();
       double t_margin = tol_spec[node_i].getIntensity();
 
-      const double max_mod_with_margin = max_mod_mass_ + t_margin;
+      const double max_mod_with_margin = std::max(max_mod_mass_, var_mod_combinations_.empty() ? 0.0 : std::max(std::abs(var_mod_combinations_.front().mass),
+                                                                                                                std::abs(var_mod_combinations_.back().mass)))
+                                         + t_margin;
 
       for (int pro_i = start_pro_index; pro_i <= end_pro_index; pro_i++)
       {
@@ -1578,19 +1802,30 @@ namespace OpenMS
           if (abs_delta_delta < 0.036386 - t_margin) continue;
           if (abs_delta_delta > 0.036386 + t_margin && abs_delta_delta < 0.947630 - t_margin) continue;
 
-          // variable modification search
+          // variable modifications: a known shift on residues of this stretch (start_pro_index, pro_i], counted apart from blind ones
           bool var_search_success = false;
-          if (!var_mods_.empty())
+          if (! var_mod_combinations_.empty() && num_var_mod < max_var_mod_cntr_ && diagonal_counter == 0)
           {
-            auto iter = var_mods_.lower_bound(delta_delta - t_margin);
-            if (iter != var_mods_.end() && std::abs(delta_delta - iter->first) < t_margin)
+            auto iter = std::lower_bound(var_mod_combinations_.begin(), var_mod_combinations_.end(), delta_delta - t_margin,
+                                         [](const VariableModificationCombination& c, double m) { return c.mass < m; });
+            for (; iter != var_mod_combinations_.end() && iter->mass <= delta_delta + t_margin; ++iter)
             {
-              num_var_mod++;
-              if (num_var_mod > max_var_mod_cntr_) continue;
+              if (num_var_mod + (int)iter->mods.size() > max_var_mod_cntr_) continue;
+              // terminal residues this stretch reaches: the path start (N-terminal for prefix paths, C-terminal for suffix paths) and, in
+              // mode 2, the precursor mass node at the C-terminus
+              const int n_site = (hi.mode_ != 0 && start_node_index == 0) ? start_pro_index : -1;
+              const int c_site = (hi.mode_ == 0 && start_node_index == 0) ? start_pro_index
+                                 : (hi.mode_ == 2 && node_i == (int)node_spec.size() - 1) ? pro_i - 1 : -1;
+              if (! combinationFits_(*iter, hi.cur_oriented_seq_, start_pro_index, pro_i, n_site, c_site)) continue;
+              var_search_success = true;
+              num_var_mod += (int)iter->mods.size();
+              next_cumulative_mod_mass = cumulative_mod_mass + iter->mass;
+              next_score -= var_mod_penalty * (int)iter->mods.size();
+              break;
             }
           }
 
-          if (!var_search_success)
+          if (! var_search_success)
           {
             num_blind_mod++;
             if (num_blind_mod > max_blind_mod_cntr) continue;

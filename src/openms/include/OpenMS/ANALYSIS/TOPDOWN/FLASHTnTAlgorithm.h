@@ -103,6 +103,8 @@ private:
   std::vector<FLASHHelperClasses::Tag> tags_;
   std::map<int, std::vector<int>> matching_hits_indices_;
   static bool areConsistent_(const ProteinHit& a, const ProteinHit& b, double tol) ;
+  /// number of blind modifications of a proteoform hit (variable modifications excluded)
+  static Size blindModCount_(const ProteinHit& hit);
   void markRepresentativeProteoformHits_(double tol);
   /// fasta indices of the proteins (targets and decoys) whose run-level q-value passes protein_fdr_, from each
   /// protein's best tag-based score in protein_hits_

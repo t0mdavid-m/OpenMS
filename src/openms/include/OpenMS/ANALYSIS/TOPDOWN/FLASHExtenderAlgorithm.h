@@ -17,6 +17,7 @@
 #include <OpenMS/FORMAT/FASTAFile.h>
 #include <OpenMS/METADATA/ProteinHit.h>
 #include <boost/dynamic_bitset.hpp>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <unordered_map>
@@ -25,7 +26,8 @@ namespace OpenMS
 {
 /**
 @brief Extend between tags found by FLASHTaggerAlgorithm. In practice, the proteoform characterization is
- performed here. Only blind modification is implemented, and variable modification search is under development.
+ performed here. Mass shifts are explained by variable modifications (a given list, residue-specific) or by blind
+ modifications (any mass up to max_mod_mass); the two are counted separately and can occur in the same proteoform.
 @ingroup Topdown
 */
 
@@ -78,18 +80,6 @@ public:
       candidate_blind_mod_map_ = mod_map;
   }
 
-    /// set variable modifications to be considered for variable modification search.
-    void setVariableModificationMap(const std::map<double, ResidueModification>& var_mods)
-    {
-        var_mods_ = var_mods;
-    }
-
-    /// set terminal modifications to be considered for variable modification search.
-    void setTerminalModificationMap(const std::map<double, ResidueModification>& terminal_mods)
-    {
-        terminal_mods_ = terminal_mods;
-    }
-
 protected:
   void updateMembers_() override;
   /// implemented for DefaultParamHandler
@@ -122,11 +112,42 @@ private:
     const std::vector<double>* cur_pro_masses_ = nullptr;
     const MSSpectrum* cur_node_spec_ = nullptr;
     const MSSpectrum* cur_tol_spec_ = nullptr;
+    /// the protein sequence in the orientation of the current mode's protein masses (reversed for mode 0)
+    String cur_oriented_seq_;
+  };
+
+  /// a variable modification: a residue-specific mass shift searched with its own count, independently of blind modifications
+  struct VariableModification
+  {
+    String name;
+    double mass = 0;
+    String residues;       ///< one-letter codes of the residues it can sit on; empty or "*" for any residue
+    int position = 0;      ///< 0 anywhere, 1 proteoform N-terminal residue, 2 proteoform C-terminal residue
+    int unimod = -1;
+  };
+
+  /// one or more variable modifications explaining one mass shift between two matched masses
+  struct VariableModificationCombination
+  {
+    double mass = 0;
+    std::vector<int> mods; ///< indices into var_mod_list_, ascending
   };
 
   /// modification mass to modification index. To use find nearest function
   std::map<double, std::vector<ResidueModification>> candidate_blind_mod_map_;
-  std::map<double, ResidueModification> var_mods_, terminal_mods_;
+  std::vector<VariableModification> var_mod_list_;
+  /// all combinations of up to max_var_mod_count variable modifications, sorted by mass
+  std::vector<VariableModificationCombination> var_mod_combinations_;
+
+  /// read -var_mod (modification names) and -var_mod_file (TopPIC format: name,mass,residues,position,unimod)
+  void loadVariableModifications_();
+
+  /// can the modifications of @p combination sit on distinct residues among @p seq[from, to) (current mode orientation)?
+  /// @p n_site / @p c_site: the index in @p seq of the proteoform's N- / C-terminal residue if this stretch can reach it, else -1
+  bool combinationFits_(const VariableModificationCombination& combination, const String& seq, int from, int to, int n_site, int c_site) const;
+
+  /// names of the variable modification combinations of mass @p mass within @p tol that fit @p seq[from, to)
+  String variableModificationNames_(double mass, double tol, const String& seq, int from, int to, int n_site, int c_site, String& accessions) const;
 
   /** get protein prefix or suffix masses (depending on the mode)
    * @param hit protein hit
@@ -272,6 +293,8 @@ private:
   const int min_path_score_ = -20;
   const int max_extension_stretch_ = 50;
   double max_mod_mass_ = 500.0;
+  /// largest absolute mass of a single variable modification (0 without them)
+  double max_var_mod_mass_ = 0;
   double given_precursor_mass_ = -1;
 
   /// precomputed vertex-packing spans (set in updateMembers_): var, score, blind, and their products. Invariant during run().

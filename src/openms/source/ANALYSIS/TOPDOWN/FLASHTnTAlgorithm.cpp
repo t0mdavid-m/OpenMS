@@ -187,6 +187,12 @@ std::set<Size> FLASHTnTAlgorithm::getProteinsPassingFDR_(const std::vector<FASTA
   return passing;
 }
 
+Size FLASHTnTAlgorithm::blindModCount_(const ProteinHit& hit)
+{
+  if (hit.metaValueExists("BlindModCount")) return (Size)(int)hit.getMetaValue("BlindModCount");
+  return hit.getMetaValue("Modifications").toDoubleList().size();
+}
+
 bool FLASHTnTAlgorithm::areConsistent_(const ProteinHit& a, const ProteinHit& b, double tol)
 {
   if (a == b) return true;
@@ -845,8 +851,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
 
         for (auto& hit : proteoform_hits_)
         {
-          std::vector<double> mod_masses = hit.getMetaValue("Modifications");
-          if (mod_masses.size() != mod) continue;
+          // FDR per number of blind modifications; variable modifications do not count
+          if (blindModCount_(hit) != mod) continue;
           if (k == 0
               && ((double)hit.getMetaValue("Mass") < 0 || (int)hit.getMetaValue("StartPosition") < 0 || (int)hit.getMetaValue("EndPosition") < 0))
           {
@@ -894,8 +900,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
 
         for (auto& hit : proteoform_hits_)
         {
-          std::vector<double> mod_masses = hit.getMetaValue("Modifications");
-          if (mod_masses.size() != mod) continue;
+          // FDR per number of blind modifications; variable modifications do not count
+          if (blindModCount_(hit) != mod) continue;
           if (k == 0
               && ((double)hit.getMetaValue("Mass") < 0 || (int)hit.getMetaValue("StartPosition") < 0 || (int)hit.getMetaValue("EndPosition") < 0))
             continue;
