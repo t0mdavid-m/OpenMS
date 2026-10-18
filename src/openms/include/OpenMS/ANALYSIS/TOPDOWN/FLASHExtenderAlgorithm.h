@@ -124,6 +124,7 @@ private:
     String residues;       ///< one-letter codes of the residues it can sit on; empty or "*" for any residue
     int position = 0;      ///< 0 anywhere, 1 proteoform N-terminal residue, 2 proteoform C-terminal residue
     int unimod = -1;
+    int sites = 1;         ///< residues it needs (2 for a residue written twice, e.g. "CC" for a disulfide)
   };
 
   /// one or more variable modifications explaining one mass shift between two matched masses
@@ -146,8 +147,18 @@ private:
   /// @p n_site / @p c_site: the index in @p seq of the proteoform's N- / C-terminal residue if this stretch can reach it, else -1
   bool combinationFits_(const VariableModificationCombination& combination, const String& seq, int from, int to, int n_site, int c_site) const;
 
-  /// names of the variable modification combinations of mass @p mass within @p tol that fit @p seq[from, to)
-  String variableModificationNames_(double mass, double tol, const String& seq, int from, int to, int n_site, int c_site, String& accessions) const;
+  /// names of the variable modification combinations of mass @p mass within @p tol that fit @p seq[from, to); @p site is the only
+  /// possible residue (index in @p seq) if a single one-site modification fits at a single residue, else -1
+  String variableModificationNames_(double mass, double tol, const String& seq, int from, int to, int n_site, int c_site, String& accessions,
+                                    int& site) const;
+
+  /// largest |mass| that up to @p count variable modifications can explain (0 without them)
+  double varModRoom_(int count) const
+  {
+    if (count <= 0 || var_mod_room_.empty()) return 0;
+    return var_mod_room_[std::min(count, (int)var_mod_room_.size() - 1)];
+  }
+  std::vector<double> var_mod_room_;
 
   /** get protein prefix or suffix masses (depending on the mode)
    * @param hit protein hit
