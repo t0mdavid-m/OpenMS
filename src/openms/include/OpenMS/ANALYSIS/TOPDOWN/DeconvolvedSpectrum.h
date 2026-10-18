@@ -126,6 +126,26 @@ namespace OpenMS
     /// set precursor peakGroup
     void setPrecursorPeakGroup(const PeakGroup& pg);
 
+    /// mass of the decoy precursor: the best MS1 decoy mass (noise or signal decoy, with report_FDR) in the isolation window, -1 if none
+    double getDecoyPrecursorMass() const
+    {
+      return decoy_precursor_mass_;
+    }
+    void setDecoyPrecursorMass(double mass)
+    {
+      decoy_precursor_mass_ = mass;
+    }
+    /// weight of the decoy precursor in an FDR, as FLASHDeconv counts its decoys: 1 for a signal decoy, the noise decoy weight for a noise
+    /// decoy (negative until that weight is known)
+    double getDecoyPrecursorWeight() const
+    {
+      return decoy_precursor_weight_;
+    }
+    void setDecoyPrecursorWeight(double weight)
+    {
+      decoy_precursor_weight_ = weight;
+    }
+
     /// original spectrum setter
     void setOriginalSpectrum(const MSSpectrum& spec);
 
@@ -173,6 +193,9 @@ namespace OpenMS
     MSSpectrum spec_;
     /// precursor peakGroup (or mass)
     PeakGroup precursor_peak_group_;
+    /// the best MS1 decoy mass in the isolation window (decoy precursor), -1 if none
+    double decoy_precursor_mass_ = -1;
+    double decoy_precursor_weight_ = 1;
     /// precursor raw peak (not deconvolved one)
     Precursor precursor_peak_;
     /// precursor deconvolved peak

@@ -124,6 +124,10 @@ namespace OpenMS
     std::map<String, Precursor> native_id_precursor_peak_map_;
     /// a map from native ID to precursor peak group
     std::map<String, PeakGroup> native_id_precursor_peak_group_map_;
+    /// per MSn native id, the best MS1 decoy mass in the isolation window (with report_FDR), chosen as the target precursor is
+    std::map<String, double> native_id_decoy_precursor_mass_map_;
+    /// per MSn native id, whether that decoy precursor is a noise decoy (weighted by the noise decoy weight in an FDR)
+    std::map<String, bool> native_id_decoy_precursor_noise_map_;
     /// a map from native ID to precursor mass - intensity pair (within isolation window)
     std::map<String, std::vector<std::tuple<double, double>>> native_id_precursor_mass_intensity_map_;
 

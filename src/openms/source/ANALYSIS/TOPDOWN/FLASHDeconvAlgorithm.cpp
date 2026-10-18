@@ -310,6 +310,13 @@ void FLASHDeconvAlgorithm::runSpectralDeconvolution_(MSExperiment& map, std::vec
       if (native_id_precursor_peak_group_map_.find(native_id) != native_id_precursor_peak_group_map_.end())
       {
         deconvolved_spectrum.setDeconvolvedPrecursor(native_id_precursor_peak_map_[native_id]);
+        auto decoy_it = native_id_decoy_precursor_mass_map_.find(native_id);
+        if (decoy_it != native_id_decoy_precursor_mass_map_.end())
+        {
+          deconvolved_spectrum.setDecoyPrecursorMass(decoy_it->second);
+          // a noise decoy counts with the noise decoy weight, known after the q-values below
+          deconvolved_spectrum.setDecoyPrecursorWeight(native_id_decoy_precursor_noise_map_[native_id] ? -1.0 : 1.0);
+        }
       }
 
       if (native_id_precursor_mass_intensity_map_.find(native_id) != native_id_precursor_mass_intensity_map_.end())
@@ -511,6 +518,10 @@ void FLASHDeconvAlgorithm::run(MSExperiment& map,
   runFeatureFinding_(deconvolved_spectra, deconvolved_features);
 
   noise_decoy_weight_ = Qvalue::updatePeakGroupQvalues(deconvolved_spectra);
+  for (auto& dspec : deconvolved_spectra)
+  {
+    if (dspec.getDecoyPrecursorMass() > 0 && dspec.getDecoyPrecursorWeight() < 0) dspec.setDecoyPrecursorWeight(noise_decoy_weight_);
+  }
 
   TopDownIsobaricQuantification quantifier;
   Param quant_param = param_.copy("iq:", true);
@@ -738,17 +749,34 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
     }
 
 
-    double max_snr = -1.0;
+    double max_snr = -1.0, max_decoy_snr = -1.0;
     //auto o_spec = precursor_deconvolved_spectrum.getOriginalSpectrum();
     std::map<double, double> mass_to_intensity;
     mass_to_intensity[.0] = sum_intensity; // total intensity
 
     for (auto& pg : precursor_deconvolved_spectrum)
     {
-      // With decoy reporting the survey spectrum also holds decoy masses. A decoy precursor would make the MS2 spectrum a decoy
-      // (DeconvolvedSpectrum::isDecoy) and drop it from the output, so only target masses can be precursors.
-      if (pg.getTargetDecoyType() != PeakGroup::target) { continue; }
       if (pg[0].mz > end_mz || pg.back().mz < start_mz) { continue; }
+      // With decoy reporting the survey spectrum also holds decoy masses (noise and signal decoys). The best of them in the window,
+      // chosen as the target precursor is, becomes the decoy precursor of the MSn spectrum (a decoy spectrum with that mass instead of
+      // the precursor mass, e.g. for FLASHTnT -decoy_precursor); only target masses are precursors.
+      if (pg.getTargetDecoyType() != PeakGroup::target)
+      {
+        int c = int(round(pg.getMonoMass() / start_mz));
+        const FLASHHelperClasses::LogMzPeak* top = nullptr;
+        for (auto& tmp_peak : pg)
+        {
+          if (tmp_peak.abs_charge != c || tmp_peak.mz < start_mz || tmp_peak.mz > end_mz) { continue; }
+          if (top == nullptr || tmp_peak.intensity > top->intensity) top = &tmp_peak;
+        }
+        if (top == nullptr) { continue; }
+        const double snr = pg.getChargeSNR(top->abs_charge);
+        if (snr < max_decoy_snr) { continue; }
+        max_decoy_snr = snr;
+        native_id_decoy_precursor_mass_map_[native_id] = pg.getMonoMass();
+        native_id_decoy_precursor_noise_map_[native_id] = pg.getTargetDecoyType() == PeakGroup::TargetDecoyType::noise_decoy;
+        continue;
+      }
 
       double max_intensity = .0;
       const FLASHHelperClasses::LogMzPeak* tmp_precursor = nullptr;

@@ -122,8 +122,9 @@ protected:
                           "(chance), up to that of a blind shift, and extends the spectra that used it again. Needs decoys.", false, true);
     setValidStrings_("learn_var_mod_penalty", {"true", "false"});
     registerFlag_("decoy_precursor",
-                  "Decoy precursor masses: spectra whose PrSM took its mass from MS1 are searched again with the precursor mass moved by 5 Da to "
-                  "ex:max_mod_mass; a PrSM reporting the moved mass competes with the spectrum's own and counts as a decoy in the FDR.");
+                  "Decoy precursors: spectra whose PrSM took its mass from MS1 are searched again with the best MS1 decoy mass of their isolation "
+                  "window instead of the precursor mass (FLASHDeconv -FD:report_FDR true writes it); a PrSM reporting that mass competes with the "
+                  "spectrum's own and counts as a decoy in the FDR.");
 
     registerSubsection_("tag", "Tag algorithm parameters");
     registerSubsection_("ex", "Extension algorithm parameters");

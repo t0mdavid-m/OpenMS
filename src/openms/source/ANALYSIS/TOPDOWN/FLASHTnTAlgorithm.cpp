@@ -104,9 +104,10 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "tags instead of sequence tags). Where a gapped tag lands on a protein anchors the extension as a sequence tag does.");
   defaults_.setValidStrings("gapped_tags", {"off", "fallback", "both", "only"});
   defaults_.setValue("decoy_precursor", "false",
-                     "Decoy precursor masses: spectra whose PrSM took its mass from MS1 are searched again with the precursor mass moved by 5 Da "
-                     "to ex:max_mod_mass; a PrSM reporting the moved mass competes with the spectrum's own and counts as a decoy in the FDR. Controls "
-                     "wrong MS1 precursor masses; PrSMs with masses from fragment pairs are not affected.");
+                     "Decoy precursors: spectra whose PrSM took its mass from MS1 are searched again with the best MS1 decoy mass of their isolation "
+                     "window instead of the precursor mass (FLASHDeconv -FD:report_FDR true writes it); a PrSM reporting that mass competes with the "
+                     "spectrum's own and counts as a decoy in the FDR. Controls wrong MS1 precursor masses; PrSMs with masses from fragment pairs "
+                     "or without a mass are not affected.");
   defaults_.setValidStrings("decoy_precursor", {"true", "false"});
   defaults_.setValue("learn_var_mod_penalty", "true",
                      "Raises the penalty of a variable modification that target PrSMs use per opportunity (fitting residue or terminus) no more often than decoy PrSMs "
@@ -504,6 +505,19 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       int s_loc_prem_s = deconv_meta_str.find("precursormass=") + 14;
       int s_loc_prem_e = deconv_meta_str.find(";", s_loc_prem_s);
       precursor_mass = stod(deconv_meta_str.substr(s_loc_prem_s, s_loc_prem_e - s_loc_prem_s));
+    }
+
+    if (deconv_meta_str.hasSubstring("decoyprecursormass="))
+    {
+      int s_loc_dm_s = deconv_meta_str.find("decoyprecursormass=") + 19;
+      int s_loc_dm_e = deconv_meta_str.find(";", s_loc_dm_s);
+      dspec.setDecoyPrecursorMass(stod(deconv_meta_str.substr(s_loc_dm_s, s_loc_dm_e == (int)String::npos ? String::npos : s_loc_dm_e - s_loc_dm_s)));
+      if (deconv_meta_str.hasSubstring("decoyprecursorweight="))
+      {
+        int s_loc_dw_s = deconv_meta_str.find("decoyprecursorweight=") + 21;
+        int s_loc_dw_e = deconv_meta_str.find(";", s_loc_dw_s);
+        dspec.setDecoyPrecursorWeight(stod(deconv_meta_str.substr(s_loc_dw_s, s_loc_dw_e == (int)String::npos ? String::npos : s_loc_dw_e - s_loc_dw_s)));
+      }
     }
 
     // a precursor mass may be given (e.g. by precursor_charge/precursor_mz options) even if no precursor scan is present
@@ -1061,42 +1075,44 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         }
       }
     }
-    // Decoy precursors: a spectrum whose PrSM took its mass from MS1 is extended again with the precursor mass moved by 5 to max_mod_mass
-    // Da (a fixed pseudo-random shift per scan). A PrSM of that copy that reports the moved MS1 mass (not a mass from fragment pairs) is a
-    // decoy of the precursor; it competes with the spectrum's own PrSMs (the best one stays) and counts as a decoy in the FDR. If the MS1
-    // mass is right, the copy needs a blind shift or a truncation and loses; if it is wrong, both are alike and the decoy wins half the time.
+    // Decoy precursors: a spectrum whose PrSM took its mass from MS1 is searched again as a decoy spectrum whose precursor mass is the
+    // best MS1 decoy mass (noise or signal decoy) of its isolation window, as FLASHDeconv chose it with report_FDR. A PrSM of that copy
+    // that reports the decoy mass (not a mass from fragment pairs) is a decoy of the precursor: it competes with the spectrum's MS1-based
+    // PrSMs (the higher score stays) and counts as a decoy in the FDR. PrSMs with masses from fragment pairs or without a mass (-1) are
+    // not affected.
     if (decoy_precursor_)
     {
-      const double max_shift = std::max(10.0, (double)extender_param_.getValue("max_mod_mass"));
       const double iso = Constants::C13C12_MASSDIFF_U;
       auto ms1Based = [](const ProteinHit& h) {
         return (double)h.getMetaValue("Mass") > 0 && (int)h.getMetaValue("ProteoformMassByFragmentMass") == 0;
       };
       const Param& eparam_now = learned_extender_param.empty() ? extender_param_ : learned_extender_param;
       std::vector<std::vector<ProteinHit>> decoy_proteoforms(dspecs.size());
-      int copies = 0;
+      int copies = 0, without_decoy = 0;
       std::vector<int> todo;
       for (int d = 0; d < (int)dspecs.size(); d++)
       {
         if (dspecs[d].getPrecursorPeakGroup().getMonoMass() <= 0) continue;
         if (std::none_of(spec_proteoforms[d].begin(), spec_proteoforms[d].end(), ms1Based)) continue;
+        if (dspecs[d].getDecoyPrecursorMass() <= 0)
+        {
+          without_decoy++;
+          continue;
+        }
         todo.push_back(d);
       }
       copies = (int)todo.size();
+      if (copies == 0)
+      {
+        OPENMS_LOG_WARN << "Decoy precursors: the input has no decoy precursor masses; run FLASHDeconv with -FD:report_FDR true" << std::endl;
+      }
 #pragma omp parallel for schedule(dynamic) if (extend_over_spectra)
       for (int k = 0; k < (int)todo.size(); k++)
       {
         const int d = todo[k];
         DeconvolvedSpectrum decoy_spec = dspecs[d];
         auto pg = decoy_spec.getPrecursorPeakGroup();
-        // pseudo-random shift in [5, max_shift] Da, either sign, fixed by the scan number
-        std::uint64_t x = (std::uint64_t)decoy_spec.getScanNumber() * 0x9E3779B97F4A7C15ULL;
-        x ^= x >> 29;
-        x *= 0xBF58476D1CE4E5B9ULL;
-        x ^= x >> 32;
-        const double u = (double)(x % 1000003ULL) / 1000003.0;
-        const double shift = (5.0 + u * (max_shift - 5.0)) * ((x >> 40) & 1 ? 1.0 : -1.0);
-        const double decoy_mass = pg.getMonoMass() + shift;
+        const double decoy_mass = decoy_spec.getDecoyPrecursorMass();
         pg.setMonoisotopicMass(decoy_mass);
         decoy_spec.setPrecursorPeakGroup(pg);
         std::vector<ProteinHit> out;
@@ -1105,7 +1121,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         {
           if (! ms1Based(h)) continue;
           if (std::abs((double)h.getMetaValue("Mass") - decoy_mass) > 3 * iso + 0.1) continue; // the moved mass, up to isotope errors
-          h.setMetaValue("DecoyPrecursor", 1);
+          h.setMetaValue("DecoyPrecursor", decoy_spec.getDecoyPrecursorWeight()); // its weight as a decoy (FLASHDeconv's noise decoy weight)
           decoy_proteoforms[d].push_back(std::move(h));
         }
       }
@@ -1133,7 +1149,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         }
         spec_proteoforms[d].swap(kept);
       }
-      OPENMS_LOG_INFO << "Decoy precursors: " << copies << " spectra with an MS1-based PrSM, decoy precursor wins in " << decoy_wins << std::endl;
+      OPENMS_LOG_INFO << "Decoy precursors: " << copies << " spectra with an MS1-based PrSM and an MS1 decoy mass (" << without_decoy
+                      << " without one), decoy precursor wins in " << decoy_wins << std::endl;
     }
 
     for (auto& v : spec_proteoforms)
@@ -1188,8 +1205,9 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
           bool is_rep = (int)hit.getMetaValue("Representative") == 1;
           if (is_decoy)
           {
-            // one decoy precursor per spectrum: it stands for one target, a protein decoy for 1 / decoy_factor_
-            const double w = decoy_precursor && ! hit.getAccession().hasPrefix("DECOY") ? 1.0 : 1.0 / decoy_factor_;
+            // a decoy precursor counts with its weight (1 for a signal decoy, FLASHDeconv's noise decoy weight for a noise decoy), a protein
+            // decoy for 1 / decoy_factor_
+            const double w = decoy_precursor && ! hit.getAccession().hasPrefix("DECOY") ? (double)hit.getMetaValue("DecoyPrecursor") : 1.0 / decoy_factor_;
             decoy_count += w;
             if (is_rep) decoy_count_pro += w;
           }
