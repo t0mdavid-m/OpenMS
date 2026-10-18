@@ -98,8 +98,10 @@ namespace OpenMS
     /// current minimum MS level.
     UInt current_min_ms_level_ = 0;
 
-    /// the number of preceding full scans from which MS2 precursor mass will be searched.
-    //int precursor_MS1_window_ = 0;
+    /// MS1 spectra before and after the precursor spectrum searched for a precursor the precursor spectrum lacks (0: off)
+    int precursor_rescue_window_ = 2;
+    /// precursors taken from a neighbouring MS1 spectrum in this run
+    Size rescued_precursors_ = 0;
 
     /// FLASHIda log file name
     String ida_log_file_;

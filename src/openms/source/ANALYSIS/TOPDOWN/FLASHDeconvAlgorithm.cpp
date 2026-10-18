@@ -57,6 +57,14 @@ FLASHDeconvAlgorithm::FLASHDeconvAlgorithm(): DefaultParamHandler("FLASHDeconvAl
     "Specify the isolation window width for precursor determination. Used when this information is absent in the mzML file.");
   defaults_.addTag("isolation_window", "advanced");
 
+  defaults_.setValue("precursor_rescue_window", 2,
+                     "Number of MS1 spectra before and after the precursor (preceding MS1) spectrum of an MS2 spectrum that are searched for its "
+                     "precursor mass when the precursor spectrum has no deconvolved mass in the isolation window: in an LC-MS run the precursor "
+                     "elutes over several MS1 scans, so a mass missing from one scan is often in the neighbours (the best charge SNR in the "
+                     "window wins). 0 turns the rescue off, e.g. for native or targeted data.");
+  defaults_.setMinInt("precursor_rescue_window", 0);
+  defaults_.addTag("precursor_rescue_window", "advanced");
+
   defaults_.setValue("merging_method", 0,
                      "Method for merging spectra before deconvolution. 0: No merging  1: Gaussian averaging per MS level, effective for Q-TOF datasets. For MSn (n > 1), only the spectra from the same precursor mass "
                      "(subject to tolerance set by SD:tol) are averaged. 2: Block merging, combining all spectra into one per MS level (e.g., for NativeMS datasets).");
@@ -104,6 +112,7 @@ void FLASHDeconvAlgorithm::updateMembers_()
 
   merge_spec_ = param_.getValue("merging_method");
   isolation_window_size_ = param_.getValue("isolation_window");
+  precursor_rescue_window_ = param_.getValue("precursor_rescue_window");
   ida_log_file_ = param_.getValue("ida_log").toString();
   current_min_ms_level_ = max_ms_level_;
   current_max_ms_level_ = 0;
@@ -673,47 +682,47 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
 
 
 
-    DeconvolvedSpectrum precursor_deconvolved_spectrum;
-    MSSpectrum precursor_raw_spec;
-
-    auto index_copy = index;
-    while (index_copy > 0)
+    // the survey (MS n-1) spectra of the same CV around this spectrum: the preceding one first, then the neighbours by distance
+    // (one before, one after, two before, ...) up to precursor_rescue_window_ away; an LC-MS precursor elutes over several survey
+    // scans, so a mass missing from the preceding scan is often in a neighbour (TopFD takes its precursors from LC-MS features)
+    auto cv_of = [](const MSSpectrum& sp) {
+      auto fs = sp.getMetaValue("filter string").toString();
+      Size p = fs.find("cv=");
+      if (p == String::npos) return 1e5;
+      Size e = fs.find(" ", p);
+      if (e == String::npos) e = fs.length() - 1;
+      return std::stod(fs.substr(p + 3, e - p));
+    };
+    std::vector<Size> before, after;
+    for (int i = (int)index - 1; i >= 0 && (int)before.size() <= precursor_rescue_window_; i--)
     {
-      index_copy--;
-      if (map[index_copy].getMSLevel() == ms_level - 1)
-      {
-        auto _filter_str = map[index_copy].getMetaValue("filter string").toString();
-        Size _pos = _filter_str.find("cv=");
-        double _cv = 1e5;
-
-        if (_pos != String::npos)
-        {
-          Size _end = _filter_str.find(" ", _pos);
-          if (_end == String::npos) _end = _filter_str.length() - 1;
-          _cv = std::stod(_filter_str.substr(_pos + 3, _end - _pos));
-        }
-        if (cv == _cv)
-        {
-          precursor_raw_spec = map[index_copy];
-          break;
-        }
-      }
+      if (map[i].getMSLevel() == ms_level - 1 && cv_of(map[i]) == cv) before.push_back((Size)i);
     }
-
-    if (precursor_raw_spec.empty()) continue;
-
-    auto iter = std::lower_bound(deconvolved_spectra.begin(), deconvolved_spectra.end(), DeconvolvedSpectrum(scan_number));
-    while (iter != deconvolved_spectra.begin())
+    for (Size i = index + 1; i < map.size() && (int)after.size() < precursor_rescue_window_; i++)
     {
-      if (std::abs(iter->getOriginalSpectrum().getRT() - precursor_raw_spec.getRT()) < 1e-5)
-      {
-        precursor_deconvolved_spectrum = *iter;
-        break;
-      }
-      iter--;
+      if (map[i].getMSLevel() == ms_level - 1 && cv_of(map[i]) == cv) after.push_back(i);
     }
+    if (before.empty()) continue;
+    std::vector<Size> survey_indices {before[0]};
+    for (int k = 1; k <= precursor_rescue_window_; k++)
+    {
+      if ((Size)k < before.size()) survey_indices.push_back(before[k]);
+      if ((Size)(k - 1) < after.size()) survey_indices.push_back(after[k - 1]);
+    }
+    // the deconvolved spectrum of a survey spectrum, by its RT (deconvolved_spectra are sorted by scan number)
+    auto deconvolved_of = [&](Size survey_index) -> const DeconvolvedSpectrum* {
+      const double rt = map[survey_index].getRT();
+      auto it = std::lower_bound(deconvolved_spectra.begin(), deconvolved_spectra.end(), DeconvolvedSpectrum(getScanNumber(map, survey_index) + 1));
+      while (it != deconvolved_spectra.begin())
+      {
+        --it;
+        if (std::abs(it->getOriginalSpectrum().getRT() - rt) < 1e-5) return &*it;
+        if (it->getOriginalSpectrum().getRT() < rt - 1e-5 && it->getOriginalSpectrum().getMSLevel() == ms_level - 1) break;
+      }
+      return nullptr;
+    };
 
-    // register the best precursor, starting from the most recent one. Out of the masses in a single scan, use the max SNR one.
+    // the isolation window
     double start_mz = 0;
     double end_mz = 0;
     for (auto& precursor : spec.getPrecursors())
@@ -731,94 +740,144 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
       end_mz = uoffest > 100.0 ? uoffest : uoffest + target_mz;
     }
 
-    double sum_intensity = .0;
-
-    const Size k = precursor_raw_spec.findNearest(start_mz);
-    for (Size l = k + 1; l < precursor_raw_spec.size(); l++)
-    {
-      if (precursor_raw_spec[l].getMZ() < start_mz) continue;
-      if (precursor_raw_spec[l].getMZ() > end_mz) break;
-      sum_intensity += precursor_raw_spec[l].getIntensity();
-    }
-
-    for (Size l = k; ; l--)
-    {
-      if (precursor_raw_spec[l].getMZ() < start_mz) break;
-      if (precursor_raw_spec[l].getMZ() <= end_mz) { sum_intensity += precursor_raw_spec[l].getIntensity(); }
-      if (l == 0) break;
-    }
-
-
-    double max_snr = -1.0, max_decoy_snr = -1.0;
-    //auto o_spec = precursor_deconvolved_spectrum.getOriginalSpectrum();
-    std::map<double, double> mass_to_intensity;
-    mass_to_intensity[.0] = sum_intensity; // total intensity
-
-    for (auto& pg : precursor_deconvolved_spectrum)
-    {
-      if (pg[0].mz > end_mz || pg.back().mz < start_mz) { continue; }
-      // With decoy reporting the survey spectrum also holds decoy masses (noise and signal decoys). The best of them in the window,
-      // chosen as the target precursor is, becomes the decoy precursor of the MSn spectrum (a decoy spectrum with that mass instead of
-      // the precursor mass, e.g. for FLASHTnT -decoy_precursor); only target masses are precursors.
-      if (pg.getTargetDecoyType() != PeakGroup::target)
+    // The best precursor of one survey spectrum: among the target masses whose peaks lie in the window, the one of the highest charge
+    // SNR (at the charge the window implies). With commit, it is registered for this MSn spectrum together with the masses in the
+    // window and their intensities, and the best decoy mass of the window (with decoy reporting) as the decoy precursor. Returns the
+    // SNR of the best target, or -1 if the window holds none.
+    auto scan_survey = [&](Size survey_index, bool commit) -> double {
+      const DeconvolvedSpectrum* ds = deconvolved_of(survey_index);
+      if (ds == nullptr) return -1.0;
+      const MSSpectrum& precursor_raw_spec = map[survey_index];
+      double sum_intensity = .0;
+      if (! precursor_raw_spec.empty())
       {
+        const Size k = precursor_raw_spec.findNearest(start_mz);
+        for (Size l = k + 1; l < precursor_raw_spec.size(); l++)
+        {
+          if (precursor_raw_spec[l].getMZ() < start_mz) continue;
+          if (precursor_raw_spec[l].getMZ() > end_mz) break;
+          sum_intensity += precursor_raw_spec[l].getIntensity();
+        }
+        for (Size l = k;; l--)
+        {
+          if (precursor_raw_spec[l].getMZ() < start_mz) break;
+          if (precursor_raw_spec[l].getMZ() <= end_mz) { sum_intensity += precursor_raw_spec[l].getIntensity(); }
+          if (l == 0) break;
+        }
+      }
+
+      double max_snr = -1.0, max_decoy_snr = -1.0;
+      std::map<double, double> mass_to_intensity;
+      mass_to_intensity[.0] = sum_intensity; // total intensity
+      const PeakGroup* best_pg = nullptr;
+      const FLASHHelperClasses::LogMzPeak* best_peak = nullptr;
+      double decoy_mass = 0;
+      bool decoy_noise = false;
+
+      for (auto& pg : *ds)
+      {
+        if (pg[0].mz > end_mz || pg[pg.size() - 1].mz < start_mz) { continue; }
+        // With decoy reporting the survey spectrum also holds decoy masses (noise and signal decoys). The best of them in the window,
+        // chosen as the target precursor is, becomes the decoy precursor of the MSn spectrum (a decoy spectrum with that mass instead
+        // of the precursor mass, e.g. for FLASHTnT -decoy_precursor); only target masses are precursors.
+        if (pg.getTargetDecoyType() != PeakGroup::target)
+        {
+          int c = int(round(pg.getMonoMass() / start_mz));
+          const FLASHHelperClasses::LogMzPeak* top = nullptr;
+          for (auto& tmp_peak : pg)
+          {
+            if (tmp_peak.abs_charge != c || tmp_peak.mz < start_mz || tmp_peak.mz > end_mz) { continue; }
+            if (top == nullptr || tmp_peak.intensity > top->intensity) top = &tmp_peak;
+          }
+          if (top == nullptr) { continue; }
+          const double snr = pg.getChargeSNR(top->abs_charge);
+          if (snr < max_decoy_snr) { continue; }
+          max_decoy_snr = snr;
+          decoy_mass = pg.getMonoMass();
+          decoy_noise = pg.getTargetDecoyType() == PeakGroup::TargetDecoyType::noise_decoy;
+          continue;
+        }
+
+        double max_intensity = .0;
+        const FLASHHelperClasses::LogMzPeak* tmp_precursor = nullptr;
+
         int c = int(round(pg.getMonoMass() / start_mz));
-        const FLASHHelperClasses::LogMzPeak* top = nullptr;
+        double intensity = 0;
         for (auto& tmp_peak : pg)
         {
-          if (tmp_peak.abs_charge != c || tmp_peak.mz < start_mz || tmp_peak.mz > end_mz) { continue; }
-          if (top == nullptr || tmp_peak.intensity > top->intensity) top = &tmp_peak;
+          if (tmp_peak.abs_charge != c) { continue; }
+          if (tmp_peak.mz < start_mz || tmp_peak.mz > end_mz) { continue; }
+          intensity += tmp_peak.intensity;
+
+          if (tmp_peak.intensity < max_intensity) { continue; }
+          max_intensity = tmp_peak.intensity;
+          tmp_precursor = &tmp_peak;
         }
-        if (top == nullptr) { continue; }
-        const double snr = pg.getChargeSNR(top->abs_charge);
-        if (snr < max_decoy_snr) { continue; }
-        max_decoy_snr = snr;
-        native_id_decoy_precursor_mass_map_[native_id] = pg.getMonoMass();
-        native_id_decoy_precursor_noise_map_[native_id] = pg.getTargetDecoyType() == PeakGroup::TargetDecoyType::noise_decoy;
-        continue;
+
+        if (tmp_precursor == nullptr) { continue; }
+        mass_to_intensity[pg.getMonoMass()] = intensity;
+
+        auto snr = pg.getChargeSNR(tmp_precursor->abs_charge); // the highest snr one should determine the mass
+
+        if (snr < max_snr) { continue; }
+        max_snr = snr;
+        best_pg = &pg;
+        best_peak = tmp_precursor;
       }
 
-      double max_intensity = .0;
-      const FLASHHelperClasses::LogMzPeak* tmp_precursor = nullptr;
-
-      int c = int(round(pg.getMonoMass() / start_mz));
-      double intensity = 0;
-      for (auto& tmp_peak : pg)
+      if (! commit) return max_snr;
+      if (max_decoy_snr >= 0)
       {
-        if (tmp_peak.abs_charge != c) { continue; }
-        if (tmp_peak.mz < start_mz || tmp_peak.mz > end_mz) { continue; }
-        intensity += tmp_peak.intensity;
-
-        if (tmp_peak.intensity < max_intensity) { continue; }
-        max_intensity = tmp_peak.intensity;
-        tmp_precursor = &tmp_peak;
+        native_id_decoy_precursor_mass_map_[native_id] = decoy_mass;
+        native_id_decoy_precursor_noise_map_[native_id] = decoy_noise;
       }
+      if (best_pg != nullptr)
+      {
+        native_id_precursor_peak_group_map_[native_id] = *best_pg;
+        Precursor precursor;
+        precursor.setCharge(best_pg->getRepAbsCharge());
+        precursor.setMZ(best_peak->mz);
+        precursor.setIntensity(best_peak->intensity);
+        native_id_precursor_peak_map_[native_id] = precursor;
+      }
+      auto& mi = native_id_precursor_mass_intensity_map_[native_id];
+      mi.clear();
+      for (const auto& [m, j] : mass_to_intensity) mi.emplace_back(m, j);
+      return max_snr;
+    };
 
-      if (tmp_precursor == nullptr) { continue; }
-      mass_to_intensity[pg.getMonoMass()] = intensity;
-
-      auto snr= pg.getChargeSNR(tmp_precursor->abs_charge); // the highest snr one should determine the mass
-
-      if (snr < max_snr) { continue; }
-      max_snr = snr;
-
-      native_id_precursor_peak_group_map_[native_id] = pg;
-      Precursor precursor;
-      precursor.setCharge(pg.getRepAbsCharge());
-      precursor.setMZ(tmp_precursor->mz);
-      precursor.setIntensity(tmp_precursor->intensity);
-
-      native_id_precursor_peak_map_[native_id] = precursor;
-    }
-
-    for (const auto& [m, j] : mass_to_intensity)
+    // the preceding survey spectrum as before; the neighbours only when it holds no precursor
+    double snr = scan_survey(survey_indices[0], true);
+    if (snr < 0 && survey_indices.size() > 1)
     {
-      native_id_precursor_mass_intensity_map_[native_id].emplace_back(m, j);
+      double best_snr = -1.0;
+      Size best_index = 0;
+      for (Size k = 1; k < survey_indices.size(); k++)
+      {
+        const double s = scan_survey(survey_indices[k], false);
+        if (s > best_snr) // ties keep the nearer scan
+        {
+          best_snr = s;
+          best_index = survey_indices[k];
+        }
+      }
+      if (best_snr >= 0)
+      {
+        native_id_decoy_precursor_mass_map_.erase(native_id);
+        native_id_decoy_precursor_noise_map_.erase(native_id);
+        scan_survey(best_index, true);
+        rescued_precursors_++;
+      }
     }
     if (native_id_precursor_peak_group_map_.find(native_id) == native_id_precursor_peak_group_map_.end())
     {
       findPrecursorPeakGroupsFormIdaLog_(map, index, start_mz, end_mz);
     }
+  }
+  if (rescued_precursors_ > 0)
+  {
+    OPENMS_LOG_INFO << "Precursor masses taken from a neighbouring MS" << (ms_level - 1) << " spectrum (none in the preceding one): " << rescued_precursors_
+                    << std::endl;
   }
 }
 
