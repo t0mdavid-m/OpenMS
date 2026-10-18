@@ -1093,6 +1093,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
 #else
     const bool extend_over_spectra = false;
 #endif
+    const bool keep_all_candidates = (bool)raw_loader_;
     // the extension of one spectrum's candidates with the given extension parameters
     auto extendSpectrumInto = [&](int d, const Param& eparam, const DeconvolvedSpectrum& dspec, std::vector<ProteinHit>& out) {
       out.clear();
@@ -1132,7 +1133,10 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         FLASHExtenderAlgorithm extender;
         extender.setParameters(eparam);
         extender.setCandidateBlindModificationMap(blind_mod_map);
-        extender.run(candidates, dspec, spec_vec, vec_pro, rev_vec_pro, tags_, tol, multiple_hits_per_spec_);
+        // with raw-spectrum scoring, every candidate's PrSM is kept here and the best one per spectrum is chosen by the combined score in
+        // annotateOnRawSpectra_: the extension score alone (deconvolved masses) picked another protein in 1 of 15 spectra of Eclip_1480
+        // where TopPIC's protein had the better raw evidence (offline: 5252 -> 5451 PrSMs, 1435 -> 1500 proteoforms at 1%)
+        extender.run(candidates, dspec, spec_vec, vec_pro, rev_vec_pro, tags_, tol, multiple_hits_per_spec_ || keep_all_candidates);
         extender.fillProteoforms(proteoforms);
       };
       extend(hits, out);
@@ -1150,14 +1154,14 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       auto is_determined = [](const ProteinHit& h) {
         return (double)h.getMetaValue("Mass") > 0 && (int)h.getMetaValue("StartPosition") > 0 && (int)h.getMetaValue("EndPosition") > 0;
       };
-      if (multiple_hits_per_spec_) { out.insert(out.end(), determined.begin(), determined.end()); }
+      if (multiple_hits_per_spec_ || keep_all_candidates) { out.insert(out.end(), determined.begin(), determined.end()); }
       else if (! determined.empty() && (out.empty() || ! is_determined(out[0]) || determined[0].getScore() > out[0].getScore()))
       {
         // a ladder PrSM that explains the precursor mass also replaces an undetermined one of a higher score
         out.swap(determined);
       }
       if (fill && out.empty()) out.swap(undetermined);
-      else if (fill && multiple_hits_per_spec_) { out.insert(out.end(), undetermined.begin(), undetermined.end()); }
+      else if (fill && (multiple_hits_per_spec_ || keep_all_candidates)) { out.insert(out.end(), undetermined.begin(), undetermined.end()); }
     };
     auto extendSpectrum = [&](int d, const Param& eparam) { extendSpectrumInto(d, eparam, dspecs[d], spec_proteoforms[d]); };
 #pragma omp parallel for schedule(dynamic) if (extend_over_spectra)
@@ -1667,6 +1671,36 @@ void FLASHTnTAlgorithm::annotateOnRawSpectra_()
   }
   OPENMS_LOG_INFO << "Raw spectra: " << spectra.size() << " loaded (" << profile_count << " centroided); PrSMs annotated: " << annotated << " of "
                   << proteoform_hits_.size() << " (" << without_spectrum << " without their scan in the raw file)" << std::endl;
+
+  // one PrSM per spectrum: the best by the combined score (a determined mass and termini break a tie, then the coverage); the
+  // extension kept every candidate's PrSM for this choice
+  if (! multiple_hits_per_spec_)
+  {
+    std::map<int, Size> best;
+    auto is_determined = [](const ProteinHit& h) {
+      return (double)h.getMetaValue("Mass") > 0 && (int)h.getMetaValue("StartPosition") > 0 && (int)h.getMetaValue("EndPosition") > 0;
+    };
+    auto better = [&](const ProteinHit& a, const ProteinHit& b) {
+      if (a.getScore() != b.getScore()) return a.getScore() > b.getScore();
+      if (is_determined(a) != is_determined(b)) return is_determined(a);
+      return a.getCoverage() > b.getCoverage();
+    };
+    for (Size i = 0; i < proteoform_hits_.size(); i++)
+    {
+      const int scan = proteoform_hits_[i].getMetaValue("Scan");
+      auto it = best.find(scan);
+      if (it == best.end()) best[scan] = i;
+      else if (better(proteoform_hits_[i], proteoform_hits_[it->second])) it->second = i;
+    }
+    std::vector<ProteinHit> kept;
+    kept.reserve(best.size());
+    for (Size i = 0; i < proteoform_hits_.size(); i++)
+    {
+      if (best[(int)proteoform_hits_[i].getMetaValue("Scan")] == i) kept.push_back(std::move(proteoform_hits_[i]));
+    }
+    OPENMS_LOG_INFO << "PrSMs: " << proteoform_hits_.size() << " of all candidates, " << kept.size() << " best per spectrum by the combined score" << std::endl;
+    proteoform_hits_.swap(kept);
+  }
 }
 
 void FLASHTnTAlgorithm::getProteoformHitsMatchedBy(const FLASHHelperClasses::Tag& tag, std::vector<ProteinHit>& hits) const
