@@ -603,7 +603,9 @@ namespace OpenMS
             double mass = pg.getMonoMass() - suffix_shifts_[si];
             if (mass <= 0 || mass >= proteoform_mass - i2f_mass) continue;
             double prefix_mass = proteoform_mass - i2f_mass - mass;
-            nodes.push_back({prefix_mass, (float)std::max(1, FLASHTaggerAlgorithm::getNodeScore(pg)), tol_ * pg.getMonoMass(), suffix_series_[si]});
+            // the converted mass carries the error of the precursor mass as well as that of the fragment mass (both at the input tolerance)
+            nodes.push_back({prefix_mass, (float)std::max(1, FLASHTaggerAlgorithm::getNodeScore(pg)), tol_ * (pg.getMonoMass() + proteoform_mass),
+                             suffix_series_[si]});
           }
         }
       }
@@ -771,8 +773,10 @@ namespace OpenMS
             if (std::abs(start_mass + seq_mass - end_mass) > end_mass * tol_) end_mass = start_mass + seq_mass;
           }
 
-          start_tols.push_back(start_mass * tol_);
-          end_tols.push_back(end_mass * tol_);
+          // converted with the precursor mass (mode 2), a suffix mass also carries the precursor mass error
+          const double converted = hi.mode_ == 2 ? hi.calculated_precursor_mass_ : 0;
+          start_tols.push_back((start_mass + converted) * tol_);
+          end_tols.push_back((end_mass + converted) * tol_);
 
           if (hi.mode_ == 2)
           {
