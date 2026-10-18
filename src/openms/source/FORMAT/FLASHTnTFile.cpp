@@ -28,7 +28,8 @@ void FLASHTnTFile::writePrSMHeader(std::fstream& fs)
   fs << "PrSMIndex\tScan\tRetentionTime\tNumMass\tProteinAccession\tProteinDescription\tPrecursorMass\tProteoformMass\tProteoformMassFromComplementaryFragmentIonPairs\tDatabaseSequence\tProteinSequence\tProf"
         "orma\tMatchingFragments\tCoverage(%)\tStartPosition\tEndPosition"
         "\tTagCount\tTagIndices\tModCount\tModMass\tModID\tModAccession\tModStart\tModEnd\tPrecursorQscore\tPrecursorSNR\tScore\tPrSMLevelQvalue\tProteoformLevelQvalue"
-        "\tProteoformIndex\tCandidateSource\tFDRClass\tModVariable\tDecoyPrecursorWeight\tProteinLevelQvalue\n";
+        "\tProteoformIndex\tCandidateSource\tFDRClass\tModVariable\tDecoyPrecursorWeight\tProteinLevelQvalue"
+        "\tExtensionScore\tRawScore\tRawMatchedFragments\tRawFragmentHypotheses\tRawCoverage(%)\n";
 }
 
 /// write header line for Proteoform file
@@ -36,7 +37,8 @@ void FLASHTnTFile::writeProHeader(std::fstream& fs)
 {
   fs << "ProteoformIndex\tPrSMIndices\tScan\tRetentionTime\tNumMass\tProteinAccession\tProteinDescription\tPrecursorMass\tProteoformMass\tProteoformMassFromComplementaryFragmentIonPairs\tDatabaseSequence\tProteinSequence\tProf"
         "orma\tMatchingFragments\tCoverage(%)\tStartPosition\tEndPosition"
-        "\tTagCount\tTagIndices\tModCount\tModMass\tModID\tModAccession\tModStart\tModEnd\tPrecursorQscore\tPrecursorSNR\tScore\tProteoformLevelQvalue\tCandidateSource\tFDRClass\tModVariable\tProteinLevelQvalue\n";
+        "\tTagCount\tTagIndices\tModCount\tModMass\tModID\tModAccession\tModStart\tModEnd\tPrecursorQscore\tPrecursorSNR\tScore\tProteoformLevelQvalue\tCandidateSource\tFDRClass\tModVariable\tProteinLevelQvalue"
+        "\tExtensionScore\tRawScore\tRawMatchedFragments\tRawFragmentHypotheses\tRawCoverage(%)\n";
 }
 
 /// write the features in regular file output
@@ -160,6 +162,18 @@ namespace
       if (! out.empty()) out += ";";
       out += v != 0 ? "1" : "0";
     }
+    return out;
+  }
+
+  /// the raw-evidence columns: extension score, raw score, matched fragments, fragment hypotheses, coverage (-1 without a raw file)
+  OpenMS::String rawColumns(const OpenMS::ProteinHit& hit)
+  {
+    OpenMS::String out = "\t";
+    out += OpenMS::String(hit.metaValueExists("ExtensionScore") ? (double)hit.getMetaValue("ExtensionScore") : hit.getScore());
+    out += "\t" + OpenMS::String(hit.metaValueExists("RawScore") ? (double)hit.getMetaValue("RawScore") : -1.0);
+    out += "\t" + OpenMS::String(hit.metaValueExists("RawMatchedFragments") ? (int)hit.getMetaValue("RawMatchedFragments") : -1);
+    out += "\t" + OpenMS::String(hit.metaValueExists("RawFragmentHypotheses") ? (int)hit.getMetaValue("RawFragmentHypotheses") : -1);
+    out += "\t" + OpenMS::String(hit.metaValueExists("RawCoverage") ? (double)hit.getMetaValue("RawCoverage") : -1.0);
     return out;
   }
 } // namespace
@@ -326,7 +340,7 @@ void OpenMS::FLASHTnTFile::writePrSMs(const std::vector<ProteinHit>& hits, std::
        << (hit.metaValueExists("ProteoformIndex") ? (int)hit.getMetaValue("ProteoformIndex") : -1) << "\t" << candidateSource(hit) << "\t"
        << (hit.metaValueExists("FDRClass") ? hit.getMetaValue("FDRClass").toString() : String()) << "\t" << modVariable(hit) << "\t"
        << (hit.metaValueExists("DecoyPrecursor") ? (double)hit.getMetaValue("DecoyPrecursor") : 0.0) << "\t"
-       << std::to_string(hit.metaValueExists("ProteinQvalue") ? (double)hit.getMetaValue("ProteinQvalue") : -1) << "\n";
+       << std::to_string(hit.metaValueExists("ProteinQvalue") ? (double)hit.getMetaValue("ProteinQvalue") : -1) << rawColumns(hit) << "\n";
   }
   fs << ss.str();
 }
@@ -402,7 +416,7 @@ void OpenMS::FLASHTnTFile::writeProteoforms(const std::vector<ProteinHit>& hits,
        << modmasses << "\t" << modids << "\t" << modaccs << "\t" << modstarts << "\t" << modends << "\t" << hit.getMetaValue("PrecursorScore") << "\t" << hit.getMetaValue("PrecursorSNR") << "\t" << hit.getScore() << "\t"
        << std::to_string((hit.metaValueExists("proqvalue") ? (double)hit.getMetaValue("proqvalue") : -1)) << "\t" << candidateSource(hit) << "\t"
        << (hit.metaValueExists("FDRClass") ? hit.getMetaValue("FDRClass").toString() : String()) << "\t" << modVariable(hit) << "\t"
-       << std::to_string(hit.metaValueExists("ProteinQvalue") ? (double)hit.getMetaValue("ProteinQvalue") : -1) << "\n";
+       << std::to_string(hit.metaValueExists("ProteinQvalue") ? (double)hit.getMetaValue("ProteinQvalue") : -1) << rawColumns(hit) << "\n";
   }
   fs << ss.str();
 }

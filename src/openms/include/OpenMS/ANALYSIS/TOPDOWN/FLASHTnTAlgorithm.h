@@ -15,8 +15,10 @@
 #include <OpenMS/FORMAT/FASTAFile.h>
 #include <OpenMS/METADATA/ProteinHit.h>
 #include <boost/dynamic_bitset.hpp>
+#include <functional>
 #include <iomanip>
 #include <iostream>
+#include <map>
 #include <set>
 
 namespace OpenMS
@@ -65,6 +67,16 @@ public:
     }
   }
 
+  /// a function that loads the raw MSn spectra of the given scan numbers (FLASHAnnotatorAlgorithm::loadSpectra on the raw mzML)
+  using RawSpectrumLoader = std::function<void(const std::set<int>&, std::map<int, MSSpectrum>&)>;
+
+  /// With a loader, every PrSM (targets and decoys alike) is annotated on its raw spectrum before the FDR (FLASHAnnotatorAlgorithm, the
+  /// raw: parameters) and ranked by its extension score plus raw_score_weight times its raw score.
+  void setRawSpectrumLoader(RawSpectrumLoader loader)
+  {
+    raw_loader_ = std::move(loader);
+  }
+
   /// The protein-level hits, as they were ranked before proteoform characterization. Filled in
   /// both modes, so a run can be used to shortlist proteins even when the extension is performed.
   void getProteinHits(std::vector<ProteinHit>& hits) const
@@ -82,7 +94,12 @@ protected:
 
 private:
 
-  Param tagger_param_, extender_param_, gapped_param_;
+  Param tagger_param_, extender_param_, gapped_param_, annotator_param_;
+  RawSpectrumLoader raw_loader_;
+  /// weight of the raw-spectrum evidence score added to the extension score for the FDR
+  double raw_score_weight_ = 8.0;
+  /// annotate every proteoform hit on its raw spectrum (raw_loader_) and set the combined score
+  void annotateOnRawSpectra_();
   /// candidates from gapped tags: off, fallback (spectra without sequence-tag candidates), both, only
   String gapped_mode_ = "fallback";
   /// candidates from terminal ladders (residue sums from an intact protein terminus) in every spectrum

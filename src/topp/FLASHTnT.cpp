@@ -7,6 +7,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHAnnotatorAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTAlgorithm.h>
 #include <OpenMS/APPLICATIONS/TOPPBase.h>
 #include <OpenMS/FORMAT/FASTAFile.h>
@@ -43,6 +44,13 @@ protected:
 
     registerInputFile_("fasta", "<file>", "", "Input proteome database file (fasta)", true);
     setValidFormats_("fasta", ListUtils::create<String>("fasta"));
+
+    registerInputFile_("in_raw", "<file>", "",
+                       "Raw mzML file (profile or centroid) FLASHDeconv was run on. With it, every PrSM (targets and decoys) is annotated on its raw "
+                       "spectrum (fragment isotope envelopes at every charge, as FLASHAnnotator) before the FDR, and ranked by its extension score "
+                       "plus -raw_score_weight times its raw score. The raw annotation columns are written in the PrSM and proteoform files.",
+                       false);
+    setValidFormats_("in_raw", ListUtils::create<String>("mzML"));
 
     registerOutputFile_("out_pro", "<file>", "", "Output proteoform-level tsv file containing proteoform IDs. ", true);
     setValidFormats_("out_pro", ListUtils::create<String>("tsv"));
@@ -122,6 +130,11 @@ protected:
                           "N-terminus also without the initiator Met and with acetylation), found without a sequence tag. In every spectrum the "
                           "min_protein_hits best proteins by the chance probability of their ladder are characterized, anchored on the ladder.", false);
     setValidStrings_("terminal_ladders", {"true", "false"});
+    registerDoubleOption_("raw_score_weight", "<weight>", 8.0,
+                          "With -in_raw: every PrSM is ranked for the FDR by its extension score plus this weight times its raw score (-log10 of the "
+                          "chance of the fragment isotope envelopes matched in the raw spectrum). 0: the raw score is reported but not used in the ranking.",
+                          false);
+    setMinFloat_("raw_score_weight", 0.0);
     registerStringOption_("learn_var_mod_penalty", "<bool>", "true",
                           "Raises the penalty of a variable modification that target PrSMs use per opportunity (fitting residue or terminus) no more often than decoy PrSMs "
                           "(chance), up to that of a blind shift, and extends the spectra that used it again. Needs decoys.", false, true);
@@ -134,6 +147,7 @@ protected:
     registerSubsection_("tag", "Tag algorithm parameters");
     registerSubsection_("ex", "Extension algorithm parameters");
     registerSubsection_("gapped", "Gapped tag parameters (with -gapped_tags)");
+    registerSubsection_("raw", "Raw spectrum annotation parameters (with -in_raw)");
 
   }
 
@@ -153,6 +167,11 @@ protected:
       auto tnt_param = FLASHTnTAlgorithm().getDefaults();
       return tnt_param.copy("gapped:", true);
     }
+    else if (prefix == "raw")
+    {
+      auto tnt_param = FLASHTnTAlgorithm().getDefaults();
+      return tnt_param.copy("raw:", true);
+    }
     else { throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "Unknown subsection", prefix); }
   }
 
@@ -166,6 +185,7 @@ protected:
 
     String in_file = getStringOption_("in");
     String in_fasta = getStringOption_("fasta");
+    String in_raw = getStringOption_("in_raw");
 
     String out_tag_file = getStringOption_("out_tag");
     String out_prsm_file = getStringOption_("out_prsm");
@@ -187,6 +207,7 @@ protected:
     auto tnt_param = getParam_();
     tnt_param.remove("in");
     tnt_param.remove("fasta");
+    tnt_param.remove("in_raw");
     tnt_param.remove("out_tag");
     tnt_param.remove("out_prsm");
     tnt_param.remove("out_pro");
@@ -240,6 +261,12 @@ protected:
 
     FLASHTnTAlgorithm tnt;
     tnt.setParameters(tnt_param);
+    if (! in_raw.empty())
+    {
+      tnt.setRawSpectrumLoader([&in_raw](const std::set<int>& scans, std::map<int, MSSpectrum>& spectra) {
+        FLASHAnnotatorAlgorithm::loadSpectra(in_raw, scans, spectra);
+      });
+    }
     tnt.run(map, fasta_entry);
     tnt.getProteoforms(proteoform_hits);
 
