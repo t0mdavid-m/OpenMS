@@ -134,6 +134,11 @@ namespace OpenMS
         vm.name = f[0].trim();
         vm.mass = f[1].toDouble();
         vm.residues = f[2].trim() == "*" ? String("") : f[2].trim();
+        if (vm.residues.size() == 2 && vm.residues[0] == vm.residues[1]) // e.g. CC: a disulfide needs two cysteines
+        {
+          vm.residues = vm.residues.substr(0, 1);
+          vm.sites = 2;
+        }
         const String pos = String(f[3]).trim().toLower();
         vm.position = pos.hasSubstring("n-term") ? 1 : pos.hasSubstring("c-term") ? 2 : 0;
         if (f.size() > 4 && ! f[4].trim().empty()) vm.unimod = f[4].toInt();
@@ -145,19 +150,27 @@ namespace OpenMS
     if (max_var_mod_cntr_ == 0) return;
 
     for (const auto& vm : var_mod_list_) max_var_mod_mass_ = std::max(max_var_mod_mass_, std::abs(vm.mass));
-    // every multiset of up to max_var_mod_cntr_ modifications, sorted by mass
+    // every multiset of up to max_var_mod_cntr_ modifications that can sit on one proteoform (at most one N- and one C-terminal
+    // modification), sorted by mass
     std::vector<int> idx;
-    std::function<void(int, double)> add = [&](int from, double mass) {
-      if (! idx.empty()) var_mod_combinations_.push_back({mass, idx});
+    var_mod_room_.assign(max_var_mod_cntr_ + 1, 0.0);
+    std::function<void(int, double, int, int)> add = [&](int from, double mass, int n_terms, int c_terms) {
+      if (! idx.empty())
+      {
+        var_mod_combinations_.push_back({mass, idx});
+        for (int k = (int)idx.size(); k <= max_var_mod_cntr_; k++) var_mod_room_[k] = std::max(var_mod_room_[k], std::abs(mass));
+      }
       if ((int)idx.size() == max_var_mod_cntr_) return;
       for (int i = from; i < (int)var_mod_list_.size(); i++)
       {
+        const int n = n_terms + (var_mod_list_[i].position == 1), c = c_terms + (var_mod_list_[i].position == 2);
+        if (n > 1 || c > 1) continue;
         idx.push_back(i);
-        add(i, mass + var_mod_list_[i].mass);
+        add(i, mass + var_mod_list_[i].mass, n, c);
         idx.pop_back();
       }
     };
-    add(0, 0);
+    add(0, 0, 0, 0);
     std::sort(var_mod_combinations_.begin(), var_mod_combinations_.end(),
               [](const VariableModificationCombination& a, const VariableModificationCombination& b) { return a.mass < b.mass || (a.mass == b.mass && a.mods < b.mods); });
   }
@@ -173,17 +186,25 @@ namespace OpenMS
       return vm.residues.empty() || vm.residues.find(seq[p]) != std::string::npos;
     };
     const auto& mods = combination.mods;
-    if (mods.size() == 1)
+    if (mods.size() == 1 && var_mod_list_[mods[0]].sites == 1)
     {
       const auto& vm = var_mod_list_[mods[0]];
       for (int p = from; p < to; p++)
         if (fits_at(vm, p)) return true;
       return false;
     }
-    // distinct residues for all modifications: depth-first over at most max_var_mod_cntr_ of them
-    const int k_max = (int)mods.size();
+    // distinct residues for all modification sites (a two-site modification takes two): depth-first
+    int site_mod[16];
+    int k_max = 0;
+    for (int m : mods)
+    {
+      for (int t = 0; t < var_mod_list_[m].sites; t++)
+      {
+        if (k_max == 16) return false;
+        site_mod[k_max++] = m;
+      }
+    }
     int site[16];
-    if (k_max > 16) return false;
     int k = 0;
     site[0] = from - 1;
     while (k >= 0)
@@ -191,7 +212,7 @@ namespace OpenMS
       int p = site[k] + 1;
       for (; p < to; p++)
       {
-        if (! fits_at(var_mod_list_[mods[k]], p)) continue;
+        if (! fits_at(var_mod_list_[site_mod[k]], p)) continue;
         bool taken = false;
         for (int q = 0; q < k && ! taken; q++) taken = site[q] == p;
         if (! taken) break;
@@ -205,15 +226,20 @@ namespace OpenMS
   }
 
   String FLASHExtenderAlgorithm::variableModificationNames_(double mass, double tol, const String& seq, int from, int to, int n_site, int c_site,
-                                                            String& accessions) const
+                                                            String& accessions, int& site) const
   {
     String names;
     accessions = "";
+    site = -1;
+    int fitting = 0;
+    const VariableModificationCombination* last = nullptr;
     auto iter = std::lower_bound(var_mod_combinations_.begin(), var_mod_combinations_.end(), mass - tol,
                                  [](const VariableModificationCombination& c, double m) { return c.mass < m; });
     for (; iter != var_mod_combinations_.end() && iter->mass <= mass + tol; ++iter)
     {
       if (! combinationFits_(*iter, seq, from, to, n_site, c_site)) continue;
+      fitting++;
+      last = &*iter;
       for (Size k = 0; k < iter->mods.size(); k++)
       {
         const auto& vm = var_mod_list_[iter->mods[k]];
@@ -222,6 +248,20 @@ namespace OpenMS
       }
       names += ",";
       accessions += ",";
+    }
+    if (fitting == 1 && last->mods.size() == 1 && var_mod_list_[last->mods[0]].sites == 1)
+    {
+      const auto& vm = var_mod_list_[last->mods[0]];
+      int count = 0;
+      for (int p = from; p < std::min(to, (int)seq.size()); p++)
+      {
+        if (vm.position == 1 && p != n_site) continue;
+        if (vm.position == 2 && p != c_site) continue;
+        if (! vm.residues.empty() && vm.residues.find(seq[p]) == std::string::npos) continue;
+        site = p;
+        count++;
+      }
+      if (count != 1) site = -1;
     }
     return names;
   }
@@ -1131,24 +1171,14 @@ namespace OpenMS
                 const int to = m > 0 ? end + 1 : len - 1 - start;
                 const int n_site = (m != 0 && pre_node_index == 0) ? pre_pro_index : -1;
                 const int c_site = (m == 0 && pre_node_index == 0) ? pre_pro_index : (m == 2 && node_index == (int)t_node_spec.size() - 1) ? pro_index - 1 : -1;
-                var_names = variableModificationNames_(mod_mass, mod_tol, oriented_seq, from, to, n_site, c_site, var_accs);
+                int oriented_site = -1;
+                var_names = variableModificationNames_(mod_mass, mod_tol, oriented_seq, from, to, n_site, c_site, var_accs, oriented_site);
                 if (var_names.empty()) is_var = false; // the ladder puts the shift where no variable modification fits
-                // a single named modification with one possible residue in the range is localized there
-                std::vector<int> sites;
-                if (! var_names.empty() && var_names.find('+') == std::string::npos && var_names.find(',') == var_names.size() - 1)
+                else if (oriented_site >= 0)         // one possible residue: localized there
                 {
-                  for (const auto& vm : var_mod_list_)
-                  {
-                    if (vm.name + "," != var_names || vm.residues.empty()) continue;
-                    for (int pi = start + 1; pi <= end && pi < (int)hit.getSequence().size(); pi++)
-                      if (pi >= 0 && vm.residues.find(hit.getSequence()[pi]) != std::string::npos) sites.push_back(pi);
-                    break;
-                  }
-                }
-                if (sites.size() == 1)
-                {
-                  start = sites[0] - 1;
-                  end = sites[0];
+                  const int pos = m > 0 ? oriented_site : len - 1 - oriented_site;
+                  start = pos - 1;
+                  end = pos;
                 }
               }
               mod_starts.push_back(start + 1);
@@ -1632,7 +1662,7 @@ namespace OpenMS
           for (int j = 0; j < (int)pro_masses.size(); j++)
           {
             if (std::abs(hi.calculated_precursor_mass_ + truncation_mass - pro_masses[j])
-                > max_mod_mass_ * (max_blind_mod_cntr_ - getBlindModNumber_(vertex)) + max_var_mod_mass_ * (max_var_mod_cntr_ - getVarModNumber_(vertex)))
+                > max_mod_mass_ * (max_blind_mod_cntr_ - getBlindModNumber_(vertex)) + varModRoom_(max_var_mod_cntr_ - getVarModNumber_(vertex)))
               continue;
 
             findSubPathsBetweenTagEndPoints(sinks, hi, vertex, hi.cur_node_spec_->size() - 1, j, 0, truncation_mass, cumulative_shift,
@@ -1667,7 +1697,7 @@ namespace OpenMS
     int start_num_var_mod = getVarModNumber_(start_vertex);
     // no modification left: only unmodified stretches
     if (start_num_blind_mod == max_blind_mod_cntr && start_num_var_mod >= max_var_mod_cntr_) diagonal_counter = 1e5;
-    const double var_mod_room = max_var_mod_mass_ * (max_var_mod_cntr_ - start_num_var_mod);
+    const double var_mod_room = varModRoom_(max_var_mod_cntr_ - start_num_var_mod);
 
     const auto src = getVertex_(0, 0, 0, 0, 0, pro_mass_size);
     const auto& node_spec = *hi.cur_node_spec_;
@@ -1848,6 +1878,7 @@ namespace OpenMS
           {
             num_blind_mod++;
             if (num_blind_mod > max_blind_mod_cntr) continue;
+            if (abs_delta_delta > max_mod_mass_ + t_margin) continue; // variable combinations may reach further; blind shifts may not
             if (diagonal_counter > 0) continue;
 
             next_cumulative_mod_mass = t_delta_mass + truncation_mass;
