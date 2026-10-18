@@ -9,6 +9,7 @@
 #include <OpenMS/ANALYSIS/ID/AhoCorasickAmbiguous.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHExtenderAlgorithm.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHGappedTaggerAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTAlgorithm.h>
 #include <unordered_map>
@@ -95,6 +96,13 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   eparam.remove("ion_type");
 
   defaults_.insert("ex:", eparam);
+
+  defaults_.setValue("gapped_tags", "fallback",
+                     "Candidate proteins from gapped tags (masses whose differences are sums of one or more residues): off; fallback (spectra in "
+                     "which no sequence tag proposes a protein); both (every spectrum, proteins not proposed by sequence tags); only (gapped "
+                     "tags instead of sequence tags). Where a gapped tag lands on a protein anchors the extension as a sequence tag does.");
+  defaults_.setValidStrings("gapped_tags", {"off", "fallback", "both", "only"});
+  defaults_.insert("gapped:", FLASHGappedTaggerAlgorithm().getDefaults());
   defaultsToParam_();
 }
 
@@ -104,6 +112,8 @@ void FLASHTnTAlgorithm::updateMembers_()
   tagger_param_.setValue("ion_type", param_.getValue("ion_type"));
   extender_param_ = param_.copy("ex:", true);
   extender_param_.setValue("ion_type", param_.getValue("ion_type"));
+  gapped_param_ = param_.copy("gapped:", true);
+  gapped_mode_ = param_.getValue("gapped_tags").toString();
   prsm_fdr_ = param_.getValue("prsm_fdr");
   keep_decoy_ = param_.getValue("keep_decoy").toString() == "true";
   keep_underdetermined_ = param_.getValue("discard_underdetermined").toString() == "false";
@@ -618,11 +628,21 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   auto& registry = MetaInfoInterface::metaRegistry();
   const UInt mi_scan = registry.registerName("Scan"), mi_matched_aa = registry.registerName("MatchedAA"),
              mi_tag_indices = registry.registerName("TagIndices"), mi_tag_positions = registry.registerName("TagPositions"),
-             mi_fasta_index = registry.registerName("FastaIndex"), mi_protein_rank = registry.registerName("ProteinRank");
+             mi_fasta_index = registry.registerName("FastaIndex"), mi_protein_rank = registry.registerName("ProteinRank"),
+             mi_gapped = registry.registerName("GappedTag");
+  // gapped tags (only for spectra in which no sequence tag proposes a protein); their tags are kept per spectrum until appended to tags_
+  FLASHGappedTaggerAlgorithm gapped_tagger;
+  if (gapped_mode_ != "off")
+  {
+    gapped_tagger.setParameters(gapped_param_);
+    gapped_tagger.buildIndex(protein_seqs);
+    OPENMS_LOG_INFO << "Gapped tag index: " << gapped_tagger.getIndexBytes() / (1024 * 1024) << " MB" << std::endl;
+  }
+  std::vector<std::vector<FLASHHelperClasses::Tag>> spec_gapped_tags(dspecs.size());
   // Parallel over spectra only when there are at least as many spectra with tags as threads; otherwise (e.g. a targeted native run with
   // one or a few spectra) the threads go to the scoring of each spectrum's candidates (runMatchingExact).
   int spectra_with_tags = 0;
-  for (const auto& dspec : dspecs) spectra_with_tags += scan_to_tag_indices.count(dspec.getScanNumber()) > 0;
+  for (const auto& dspec : dspecs) spectra_with_tags += gapped_mode_ != "off" || scan_to_tag_indices.count(dspec.getScanNumber()) > 0;
 #ifdef _OPENMP
   const bool parallel_over_spectra = spectra_with_tags >= omp_get_max_threads();
 #else
@@ -634,74 +654,136 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     const auto& dspec = dspecs[d];
     nextProgress();
     const auto tag_it = scan_to_tag_indices.find(dspec.getScanNumber());
-    if (tag_it == scan_to_tag_indices.end()) continue;
-    const auto& tag_indices = tag_it->second;
     std::vector<ProteinHit> hits;
     std::vector<FLASHTaggerAlgorithm::ProteinShifts> hit_shifts; // in the order of hits
-    std::map<Size, std::set<Size>> pi_to_pos;         // protein index to covered positions
-    std::map<Size, std::set<Size>> pi_to_tag_indices; // protein index to tag indices
-    // per protein: shifts (protein residue sum up to the tag minus the tag flanking mass) and the tag flanking masses
-    std::map<Size, std::vector<double>> pi_to_n_shifts, pi_to_n_flanks, pi_to_c_shifts, pi_to_c_flanks;
-    for (const auto& tag_index : tag_indices)
+    if (gapped_mode_ != "only" && tag_it != scan_to_tag_indices.end())
     {
-      const auto& tag = tags_[tag_index];
-      const auto& seq = tag.getUppercaseSequence();
-
-      const auto& pis = tag_to_protein_indices.at(seq);
-      const auto& pps = tag_to_protein_positions.at(seq);
-
-      for (Size i = 0; i < pis.size(); i++)
+      const auto& tag_indices = tag_it->second;
+      std::map<Size, std::set<Size>> pi_to_pos;         // protein index to covered positions
+      std::map<Size, std::set<Size>> pi_to_tag_indices; // protein index to tag indices
+      // per protein: shifts (protein residue sum up to the tag minus the tag flanking mass) and the tag flanking masses
+      std::map<Size, std::vector<double>> pi_to_n_shifts, pi_to_n_flanks, pi_to_c_shifts, pi_to_c_flanks;
+      for (const auto& tag_index : tag_indices)
       {
-        const auto& pseq = cleaned_protein_seqs[pis[i]];
+        const auto& tag = tags_[tag_index];
+        const auto& seq = tag.getUppercaseSequence();
 
-        if (tag.getNtermMass() >= 0 && pps[i] > 0 && pps[i] <= pseq.length() + seq.length())
-        {
-          double nmass = tag_to_n_flanking_masses.at(seq)[i];
-          if (tag.getNtermMass() > nmass + max_mod_mass + 200) continue;
-          pi_to_n_shifts[pis[i]].push_back(nmass - tag.getNtermMass());
-          pi_to_n_flanks[pis[i]].push_back(tag.getNtermMass());
-        }
-        if (tag.getCtermMass() >= 0 && pps[i] + seq.length() >= 0 && pseq.length() > pps[i] + seq.length())
-        {
-          double cmass = tag_to_c_flanking_masses.at(seq)[i];
-          if (tag.getCtermMass() > cmass + max_mod_mass + 200) continue;
-          pi_to_c_shifts[pis[i]].push_back(cmass - tag.getCtermMass());
-          pi_to_c_flanks[pis[i]].push_back(tag.getCtermMass());
-        }
+        const auto& pis = tag_to_protein_indices.at(seq);
+        const auto& pps = tag_to_protein_positions.at(seq);
 
-        pi_to_tag_indices[pis[i]].insert(tag_index);
-        pi_to_pos[pis[i]].insert(pps[i]);
+        for (Size i = 0; i < pis.size(); i++)
+        {
+          const auto& pseq = cleaned_protein_seqs[pis[i]];
+
+          if (tag.getNtermMass() >= 0 && pps[i] > 0 && pps[i] <= pseq.length() + seq.length())
+          {
+            double nmass = tag_to_n_flanking_masses.at(seq)[i];
+            if (tag.getNtermMass() > nmass + max_mod_mass + 200) continue;
+            pi_to_n_shifts[pis[i]].push_back(nmass - tag.getNtermMass());
+            pi_to_n_flanks[pis[i]].push_back(tag.getNtermMass());
+          }
+          if (tag.getCtermMass() >= 0 && pps[i] + seq.length() >= 0 && pseq.length() > pps[i] + seq.length())
+          {
+            double cmass = tag_to_c_flanking_masses.at(seq)[i];
+            if (tag.getCtermMass() > cmass + max_mod_mass + 200) continue;
+            pi_to_c_shifts[pis[i]].push_back(cmass - tag.getCtermMass());
+            pi_to_c_flanks[pis[i]].push_back(tag.getCtermMass());
+          }
+
+          pi_to_tag_indices[pis[i]].insert(tag_index);
+          pi_to_pos[pis[i]].insert(pps[i]);
+        }
       }
+
+      for (const auto& [pi, pp] : pi_to_pos)
+      {
+        const auto& fe = fasta_entry[pi];
+        Size covered_pos = pp.size();
+        if (covered_pos < min_tag_count) continue;
+
+        // check flanking masses ...
+        double coverage = (double)covered_pos / (double)fe.sequence.length();
+        std::vector<int> positions(pp.begin(), pp.end());
+
+        //if (positions.size() < min_tag_count) continue;
+        ProteinHit hit(coverage, 0, fe.identifier, fe.sequence); //
+        hit.setDescription(fe.description);
+        hit.setMetaValue(mi_scan, dspec.getScanNumber());
+        hit.setMetaValue(mi_matched_aa, covered_pos);
+        hit.setCoverage(coverage);
+        FLASHTaggerAlgorithm::ProteinShifts sh;
+        sh.fasta_index = pi;
+        sh.n_shifts = std::move(pi_to_n_shifts[pi]);
+        sh.n_flanks = std::move(pi_to_n_flanks[pi]);
+        sh.c_shifts = std::move(pi_to_c_shifts[pi]);
+        sh.c_flanks = std::move(pi_to_c_flanks[pi]);
+        hit_shifts.push_back(std::move(sh));
+
+        hit.setMetaValue(mi_tag_indices, std::vector<int>(pi_to_tag_indices[pi].begin(), pi_to_tag_indices[pi].end()));
+        hit.setMetaValue(mi_tag_positions, positions);
+        hit.setMetaValue(mi_fasta_index, pi);
+        hits.push_back(hit);
+      }
+
     }
 
-    for (const auto& [pi, pp] : pi_to_pos)
+    // gapped tags: proteins proposed where gapped tags land. Candidates are scored and cut first; only the survivors get their
+    // sequence and their landings as tags (a landing becomes a tag spanning the landed residues, with the masses at the gap
+    // boundaries), so the protein score (shifts) and the extension (anchors) use it as they use a sequence tag.
+    std::vector<FLASHGappedTaggerAlgorithm::Landing> landings;
+    std::vector<std::vector<Size>> gapped_groups; // per gapped candidate, its landings
+    if (gapped_mode_ == "only" || gapped_mode_ == "both" || (gapped_mode_ == "fallback" && hits.empty()))
     {
-      const auto& fe = fasta_entry[pi];
-      Size covered_pos = pp.size();
-      if (covered_pos < min_tag_count) continue;
-
-      // check flanking masses ...
-      double coverage = (double)covered_pos / (double)fe.sequence.length();
-      std::vector<int> positions(pp.begin(), pp.end());
-
-      //if (positions.size() < min_tag_count) continue;
-      ProteinHit hit(coverage, 0, fe.identifier, fe.sequence); //
-      hit.setDescription(fe.description);
-      hit.setMetaValue(mi_scan, dspec.getScanNumber());
-      hit.setMetaValue(mi_matched_aa, covered_pos);
-      hit.setCoverage(coverage);
-      FLASHTaggerAlgorithm::ProteinShifts sh;
-      sh.fasta_index = pi;
-      sh.n_shifts = std::move(pi_to_n_shifts[pi]);
-      sh.n_flanks = std::move(pi_to_n_flanks[pi]);
-      sh.c_shifts = std::move(pi_to_c_shifts[pi]);
-      sh.c_flanks = std::move(pi_to_c_flanks[pi]);
-      hit_shifts.push_back(std::move(sh));
-
-      hit.setMetaValue(mi_tag_indices, std::vector<int>(pi_to_tag_indices[pi].begin(), pi_to_tag_indices[pi].end()));
-      hit.setMetaValue(mi_tag_positions, positions);
-      hit.setMetaValue(mi_fasta_index, pi);
-      hits.push_back(hit);
+      std::set<Size> proposed; // proteins already proposed by sequence tags
+      for (const auto& h : hits) proposed.insert((Size)(int)h.getMetaValue(mi_fasta_index));
+      gapped_tagger.search(dspec, ms2_tol > 0 ? ms2_tol : tol, landings);
+      for (Size l0 = 0; l0 < landings.size();)
+      {
+        Size l1 = l0;
+        while (l1 < landings.size() && landings[l1].protein == landings[l0].protein) ++l1; // landings are sorted by protein
+        const Size pi = landings[l0].protein;
+        FLASHTaggerAlgorithm::ProteinShifts sh;
+        sh.fasta_index = pi;
+        std::vector<Size> group;
+        std::vector<int> positions;
+        for (Size l = l0; l < l1 && proposed.count(pi) == 0; ++l)
+        {
+          const auto& la = landings[l];
+          // the lowest mass borders the residues before (prefix) or after (suffix) the landed span
+          const double flank = la.masses[0];
+          if (flank > la.flank_mass + max_mod_mass + 200) continue;
+          if (la.prefix)
+          {
+            sh.n_shifts.push_back(la.flank_mass - flank);
+            sh.n_flanks.push_back(flank);
+          }
+          else
+          {
+            sh.c_shifts.push_back(la.flank_mass - flank);
+            sh.c_flanks.push_back(flank);
+          }
+          group.push_back(l);
+          positions.push_back(la.start);
+        }
+        l0 = l1;
+        if (group.empty()) continue;
+        std::sort(positions.begin(), positions.end());
+        positions.erase(std::unique(positions.begin(), positions.end()), positions.end());
+        const auto& fe = fasta_entry[pi];
+        const double coverage = (double)positions.size() / (double)fe.sequence.length();
+        ProteinHit hit(coverage, 0, fe.identifier, ""); // the sequence is set if the candidate survives the cut
+        hit.setDescription(fe.description);
+        hit.setMetaValue(mi_scan, dspec.getScanNumber());
+        hit.setMetaValue(mi_matched_aa, (int)positions.size());
+        hit.setCoverage(coverage);
+        hit.setMetaValue(mi_tag_indices, std::vector<int>(group.size(), 0)); // as many as its tags: the cut below counts them
+        hit.setMetaValue(mi_tag_positions, positions);
+        hit.setMetaValue(mi_fasta_index, pi);
+        hit.setMetaValue(mi_gapped, (int)gapped_groups.size());
+        gapped_groups.push_back(std::move(group));
+        hits.push_back(hit);
+        hit_shifts.push_back(std::move(sh));
+      }
     }
 
     if (hits.empty()) continue;
@@ -752,12 +834,48 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     {
       hits[i].setMetaValue(mi_protein_rank, (int)i + 1);
     }
+    // the surviving gapped candidates: sequence and tags (indices local to this spectrum until appended to tags_ below)
+    auto& gtags = spec_gapped_tags[d];
+    for (auto& hit : hits)
+    {
+      if (! hit.metaValueExists(mi_gapped)) continue;
+      const Size pi = (Size)(int)hit.getMetaValue(mi_fasta_index);
+      hit.setSequence(fasta_entry[pi].sequence);
+      std::vector<int> indices;
+      for (Size l : gapped_groups[(int)hit.getMetaValue(mi_gapped)])
+      {
+        auto& la = landings[l];
+        const double flank = la.masses[0];
+        gtags.emplace_back(String(protein_seqs[pi].substr(la.start, la.end - la.start)), la.prefix ? flank : -1.0, la.prefix ? -1.0 : flank,
+                           la.masses, la.scores, dspec.getScanNumber(), (Size)(la.end - la.start));
+        gtags.back().setRetentionTime((float)dspec.getOriginalSpectrum().getRT());
+        indices.push_back((int)gtags.size() - 1);
+      }
+      hit.setMetaValue(mi_tag_indices, indices);
+      hit.setMetaValue(mi_gapped, 1);
+    }
     spec_hits[d] = std::move(hits);
   }
   for (Size d = 0; d < dspecs.size(); d++)
   {
+    // gapped tags of this spectrum join tags_; the tag indices of its candidates become global
+    const int tag_base = (int)tags_.size();
+    for (auto& t : spec_gapped_tags[d])
+    {
+      t.setIndex((int)tags_.size());
+      tags_.push_back(std::move(t));
+    }
     candidate_ranges[d].first = protein_hits_.size();
-    for (auto& hit : spec_hits[d]) protein_hits_.push_back(std::move(hit));
+    for (auto& hit : spec_hits[d])
+    {
+      if (hit.metaValueExists(mi_gapped))
+      {
+        auto indices = hit.getMetaValue(mi_tag_indices).toIntList();
+        for (auto& i : indices) i += tag_base;
+        hit.setMetaValue(mi_tag_indices, indices);
+      }
+      protein_hits_.push_back(std::move(hit));
+    }
     candidate_ranges[d].second = protein_hits_.size();
   }
   std::vector<std::vector<ProteinHit>>().swap(spec_hits);

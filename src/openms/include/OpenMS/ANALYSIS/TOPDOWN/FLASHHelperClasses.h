@@ -237,6 +237,9 @@ namespace OpenMS
       /// constructor
       explicit Tag(String seq, double n_mass, double c_mass, std::vector<double>& mzs, std::vector<int>& scores, int scan);
 
+      /// constructor of a gapped tag: @p mzs are the masses at the gap boundaries only, so the residue length is given explicitly
+      explicit Tag(String seq, double n_mass, double c_mass, std::vector<double>& mzs, std::vector<int>& scores, int scan, Size length);
+
       /// copy constructor
       Tag(const Tag&) = default;
 
@@ -251,7 +254,13 @@ namespace OpenMS
       [[nodiscard]] const String& getUppercaseSequence() const;
       [[nodiscard]] double getNtermMass() const;
       [[nodiscard]] double getCtermMass() const;
+      /// number of residues the tag spans (for a gapped tag more than the number of mass gaps)
       Size getLength() const;
+      /// true if consecutive masses of the tag may be more than one residue apart
+      bool isGapped() const
+      {
+        return length_ + 1 != mzs_.size();
+      }
       int getScore() const;
       int getScore(int pos) const;
       int getScan() const;

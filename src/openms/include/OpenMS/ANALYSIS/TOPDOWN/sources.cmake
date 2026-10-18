@@ -18,6 +18,7 @@ set(sources_list_h
         Qvalue.h
         TopDownIsobaricQuantification.h
         FLASHTaggerAlgorithm.h
+        FLASHGappedTaggerAlgorithm.h
 )
 
 ### add path to the filenames

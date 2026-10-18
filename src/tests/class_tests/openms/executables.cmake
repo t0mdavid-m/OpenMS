@@ -460,6 +460,7 @@ set(analysis_executables_list
   FIAMSDataProcessor_test
   # FIAMSScheduler_test
   FLASHAnnotatorAlgorithm_test
+  FLASHGappedTaggerAlgorithm_test
   # FLASHDeconvAlgorithm_test
   # FLASHDeconvHelperStructs_test
   # FLASHTaggerAlgorithm_test

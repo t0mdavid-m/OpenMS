@@ -129,7 +129,7 @@ void FLASHTnTFile::writeTags(const FLASHTnTAlgorithm& tnt, double flanking_mass_
         ss << std::to_string(mz) << ",";
       }
       ss << "\t";
-      for (size_t i = 0; i <= tag.getLength(); i++) // Fixed signed/unsigned comparison issue
+      for (size_t i = 0; i < tag.getMzs().size(); i++) // one score per mass (a gapped tag spans more residues than masses)
       {
         ss << std::to_string(tag.getScore(i)) << ",";
       }

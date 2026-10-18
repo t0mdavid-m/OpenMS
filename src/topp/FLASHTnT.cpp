@@ -111,8 +111,16 @@ protected:
     registerStringList_("ion_type", "Specifies ion types to consider.", ListUtils::toStringList(std::vector<std::string>{"b", "y"}), "Specifies ion types to consider.", false);
     setValidStrings_("ion_type", {"b", "c", "a", "y", "z", "x", "zp1", "zp2"});
 
+    registerStringOption_("gapped_tags", "<mode>", "fallback",
+                          "Candidate proteins from gapped tags (masses whose differences are sums of one or more residues): off; fallback "
+                          "(spectra in which no sequence tag proposes a protein); both (every spectrum, proteins not proposed by sequence tags); "
+                          "only (gapped tags instead of sequence tags). Where a gapped tag lands on a protein anchors the extension as a sequence "
+                          "tag does.", false);
+    setValidStrings_("gapped_tags", {"off", "fallback", "both", "only"});
+
     registerSubsection_("tag", "Tag algorithm parameters");
     registerSubsection_("ex", "Extension algorithm parameters");
+    registerSubsection_("gapped", "Gapped tag parameters (with -gapped_tags)");
 
   }
 
@@ -126,6 +134,11 @@ protected:
     else if (prefix == "ex") {
       auto tnt_param = FLASHTnTAlgorithm().getDefaults();
       return tnt_param.copy("ex:", true);
+    }
+    else if (prefix == "gapped")
+    {
+      auto tnt_param = FLASHTnTAlgorithm().getDefaults();
+      return tnt_param.copy("gapped:", true);
     }
     else { throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "Unknown subsection", prefix); }
   }

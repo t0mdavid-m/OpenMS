@@ -18,6 +18,7 @@ set(sources_list
         Qvalue.cpp
         TopDownIsobaricQuantification.cpp
         FLASHTaggerAlgorithm.cpp
+        FLASHGappedTaggerAlgorithm.cpp
 )
 
 ### add path to the filenames
