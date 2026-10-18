@@ -41,6 +41,10 @@ namespace OpenMS
     std::stringstream precursor_ss;
     if (dspec.getOriginalSpectrum().getMSLevel() > 1)
     {
+      // the decoy precursor mass of the isolation window (FLASHTnT -decoy_precursor) and its weight in the FDR
+      const String decoy_precursor = dspec.getDecoyPrecursorMass() > 0
+                                       ? String(std::to_string(dspec.getDecoyPrecursorMass())) + "\t" + String(dspec.getDecoyPrecursorWeight()) + "\t"
+                                       : String("NaN\tNaN\t");
       precursor_ss << dspec.getPrecursorScanNumber() << "\t"
                    << (dspec.getPrecursorPeakGroup().getFeatureIndex() == 0 ? "NaN" : std::to_string(dspec.getPrecursorPeakGroup().getFeatureIndex()))
                    << "\t" << std::to_string(dspec.getPrecursor().getMZ()) << "\t"  << dspec.getPrecursor().getIntensity() << "\t";
@@ -58,7 +62,7 @@ namespace OpenMS
       if (dspec.getPrecursorPeakGroup().empty())
       {
         precursor_ss << "NaN\tNaN\tNaN\tNaN\tNaN\tNaN\tNaN\tNaN\t0\tNaN\tNaN\t" << std::to_string(total_int) << "\t";
-        if (report_decoy) precursor_ss << "NaN\t";
+        if (report_decoy) precursor_ss << "NaN\t" << decoy_precursor;
       }
       else
       {
@@ -111,7 +115,7 @@ namespace OpenMS
         precursor_ss <<std::to_string(dspec.getDeconvolvedPrecursor().getMZ()) << "\t" << dspec.getDeconvolvedPrecursor().getIntensity()  << "\t" << pg_intensity << "\t"
                      << dspec.getPrecursorMassIntensityMap().size() - 1 << "\t" << mass_str << "\t" << int_str << "\t" << total_int << "\t";
 
-        if (report_decoy) { precursor_ss << dspec.getPrecursorPeakGroup().getQvalue() << "\t"; }
+        if (report_decoy) { precursor_ss << dspec.getPrecursorPeakGroup().getQvalue() << "\t" << decoy_precursor; }
       }
     }
 
@@ -328,7 +332,7 @@ namespace OpenMS
               "MassIntensityRatiosWithinIsolationWindow\tTotalPeakIntensityWithinIsolationWindow\t";
         if (report_decoy)
         {
-          fs << "PrecursorQvalue\t";
+          fs << "PrecursorQvalue\tDecoyPrecursorMass\tDecoyPrecursorWeight\t";
         }
         fs << "IsotopeCosine\tChargeCosine\tChargeScore\tMassSNR\tChargeSNR\tAveragePPMError\tRepresentativeCharge\tRepresentativeMzStart\tRepresentativeMzEnd\tQscore\tQscore2D\t";
         if (report_decoy)
@@ -372,7 +376,7 @@ namespace OpenMS
               "MassIntensityRatiosWithinIsolationWindow\tTotalPeakIntensityWithinIsolationWindow\t";
         if (report_decoy)
         {
-          fs << "PrecursorQvalue\t";
+          fs << "PrecursorQvalue\tDecoyPrecursorMass\tDecoyPrecursorWeight\t";
         }
         fs << "IsotopeCosine\tChargeCosine\tChargeScore\tMassSNR\tChargeSNR\tAveragePPMError\tRepresentativeCharge\tRepresentativeMzStart\tRepresentativeMzEnd\tQscore\tQscore2D\t";
         if (report_decoy)

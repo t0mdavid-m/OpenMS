@@ -9,6 +9,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHAnnotatorAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvAlgorithm.h>
 #include <OpenMS/APPLICATIONS/TOPPBase.h>
+#include <OpenMS/CHEMISTRY/ProForma.h>
 #include <OpenMS/CONCEPT/Constants.h>
 #include <OpenMS/FORMAT/MzMLFile.h>
 #include <OpenMS/INTERFACES/IMSDataConsumer.h>
@@ -35,6 +36,11 @@ using namespace std;
 @page TOPP_FLASHAnnotator FLASHAnnotator
 
   @brief FLASHAnnotator annotates the PrSMs reported by FLASHTnT on the raw MS2 spectra.
+
+  PrSMs of other tools are read as ProForma 2.0 strings: a tsv file with the columns Scan and ProForma (and optionally
+  PrecursorMass) and no ProteinSequence column. Modifications are given by name, accession, formula or mass, on residues, ranges or
+  termini; one at an unknown position spans the sequence and a labile one is left out of the fragments (see ProForma for what is
+  supported). All other columns are written unchanged.
 
   For each PrSM of a FLASHTnT PrSM file (-out_prsm of FLASHTnT), the theoretical isotope envelope of every terminal
   fragment of the reported proteoform is placed at every plausible charge on the centroided raw MS2 spectrum (profile
@@ -157,7 +163,7 @@ protected:
     registerInputFile_("in", "<file>", "", "Input raw mzML file (profile or centroid) the PrSMs were identified from.", true);
     setValidFormats_("in", ListUtils::create<String>("mzML"));
 
-    registerInputFile_("in_prsm", "<file>", "", "Input PrSM tsv file (-out_prsm of FLASHTnT).", true);
+    registerInputFile_("in_prsm", "<file>", "", "Input PrSM tsv file: -out_prsm of FLASHTnT, or any tsv with the columns Scan and ProForma (optionally PrecursorMass).", true);
     setValidFormats_("in_prsm", ListUtils::create<String>("tsv"));
 
     registerOutputFile_("out", "<file>", "", "Output PrSM tsv file: the input rows followed by the raw annotation columns.", true);
@@ -314,9 +320,13 @@ protected:
     const int col_mod_mass = column("ModMass");
     const int col_mod_start = column("ModStart");
     const int col_mod_end = column("ModEnd");
-    if (col_scan < 0 || col_sequence < 0)
+    // a PrSM file of another tool: one ProForma string per PrSM (column ProForma), read when there is no ProteinSequence column
+    int col_proforma = column("ProForma");
+    if (col_proforma < 0) col_proforma = column("Proforma");
+    const bool use_proforma = col_sequence < 0 && col_proforma >= 0;
+    if (col_scan < 0 || (col_sequence < 0 && ! use_proforma))
     {
-      OPENMS_LOG_ERROR << "The PrSM file has no Scan or ProteinSequence column: " << in_prsm_file << endl;
+      OPENMS_LOG_ERROR << "The PrSM file needs a Scan column and either a ProteinSequence (FLASHTnT) or a ProForma column: " << in_prsm_file << endl;
       return INCOMPATIBLE_INPUT_DATA;
     }
     auto field = [](const std::vector<String>& row, int col) -> String { return (col >= 0 && col < (int)row.size()) ? row[col] : String(); };
@@ -396,11 +406,47 @@ protected:
     std::vector<FLASHAnnotatorAlgorithm::PrSM> prsms(rows.size());
     std::vector<double> prsm_masses(rows.size(), -1.0);
     double max_prsm_mass = 0;
-    int missing_scan = 0;
+    int missing_scan = 0, invalid_proforma = 0;
     for (Size r = 0; r < rows.size(); r++)
     {
       const auto& row = rows[r];
       auto& prsm = prsms[r];
+      if (use_proforma)
+      {
+        // a ProForma proteoform: both termini known; a terminal modification sits on the terminal residue, one at an unknown position
+        // spans the sequence, and a labile one is not on the fragments
+        try
+        {
+          const ProForma proforma = ProForma::fromString(field(row, col_proforma).trim());
+          prsm.sequence = proforma.getSequence();
+          const int last = (int)prsm.sequence.size() - 1;
+          for (const auto& m : proforma.getModifications())
+          {
+            FLASHAnnotatorAlgorithm::Modification mod;
+            mod.mass = m.mass;
+            if (m.site == ProForma::Site::LABILE) continue;
+            if (m.site == ProForma::Site::RESIDUE)
+            {
+              mod.start = m.start;
+              mod.end = m.end;
+            }
+            else
+            {
+              mod.start = m.site == ProForma::Site::C_TERM ? last : 0;
+              mod.end = m.site == ProForma::Site::N_TERM ? 0 : last;
+            }
+            prsm.modifications.push_back(mod);
+          }
+        }
+        catch (const Exception::BaseException& e)
+        {
+          invalid_proforma++;
+          OPENMS_LOG_WARN << "PrSM " << (r + 1) << ": " << e.what() << endl;
+          continue;
+        }
+      }
+      else
+      {
       prsm.sequence = field(row, col_sequence).trim();
       const int start = toInt_(field(row, col_start), 1);
       const int end = toInt_(field(row, col_end), 1);
@@ -419,6 +465,7 @@ protected:
         mod.start = toInt_(mod_starts[m], 1) - 1 - start_in_seq;
         mod.end = toInt_(mod_ends[m], 1) - 1 - start_in_seq;
         prsm.modifications.push_back(mod);
+      }
       }
 
       // the precursor mass only: the proteoform mass is not the precursor mass when the precursor is a complex or a
@@ -559,7 +606,8 @@ protected:
       envelopes += res.envelopes.size();
     }
     OPENMS_LOG_INFO << "PrSMs: " << rows.size() << " (" << annotated << " annotated, " << missing_scan << " without their scan in the mzML, "
-                    << (rows.size() - annotated - missing_scan) << " with an unknown residue); accepted envelopes: " << envelopes << endl;
+                    << invalid_proforma << " with an invalid or unsupported ProForma string, " << (rows.size() - annotated - missing_scan - invalid_proforma)
+                    << " with an unknown residue); accepted envelopes: " << envelopes << endl;
     OPENMS_LOG_INFO << "Spectra: " << consumer->readCount() << " read, " << spectra.size() << " kept and annotated (" << profile_count
                     << " centroided)" << endl;
     if (fixed_precursor_charge == 0)
