@@ -17,6 +17,7 @@
   #include <omp.h>
 #endif
 #include <OpenMS/CHEMISTRY/ModificationsDB.h>
+#include <OpenMS/CONCEPT/Constants.h>
 
 namespace OpenMS
 {
@@ -102,6 +103,11 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "which no sequence tag proposes a protein); both (every spectrum, proteins not proposed by sequence tags); only (gapped "
                      "tags instead of sequence tags). Where a gapped tag lands on a protein anchors the extension as a sequence tag does.");
   defaults_.setValidStrings("gapped_tags", {"off", "fallback", "both", "only"});
+  defaults_.setValue("decoy_precursor", "false",
+                     "Decoy precursor masses: spectra whose PrSM took its mass from MS1 are searched again with the precursor mass moved by 5 Da "
+                     "to ex:max_mod_mass; a PrSM reporting the moved mass competes with the spectrum's own and counts as a decoy in the FDR. Controls "
+                     "wrong MS1 precursor masses; PrSMs with masses from fragment pairs are not affected.");
+  defaults_.setValidStrings("decoy_precursor", {"true", "false"});
   defaults_.setValue("learn_var_mod_penalty", "true",
                      "Raises the penalty of a variable modification that target PrSMs use per opportunity (fitting residue or terminus) no more often than decoy PrSMs "
                      "(chance), up to that of a blind shift, and extends the spectra that used it again. Needs decoys and at least 50 decoy PrSMs.");
@@ -120,6 +126,7 @@ void FLASHTnTAlgorithm::updateMembers_()
   gapped_param_ = param_.copy("gapped:", true);
   gapped_mode_ = param_.getValue("gapped_tags").toString();
   learn_var_mod_penalty_ = param_.getValue("learn_var_mod_penalty").toString() == "true";
+  decoy_precursor_ = param_.getValue("decoy_precursor").toString() == "true";
   prsm_fdr_ = param_.getValue("prsm_fdr");
   keep_decoy_ = param_.getValue("keep_decoy").toString() == "true";
   keep_underdetermined_ = param_.getValue("discard_underdetermined").toString() == "false";
@@ -909,8 +916,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     const bool extend_over_spectra = false;
 #endif
     // the extension of one spectrum's candidates with the given extension parameters
-    auto extendSpectrum = [&](int d, const Param& eparam) {
-      spec_proteoforms[d].clear();
+    auto extendSpectrumInto = [&](int d, const Param& eparam, const DeconvolvedSpectrum& dspec, std::vector<ProteinHit>& out) {
+      out.clear();
       const auto [first, second] = candidate_ranges[d];
       if (first == second) return;
 
@@ -922,7 +929,6 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         hits.push_back(protein_hits_[i]);
       }
 
-      const auto& dspec = dspecs[d];
       std::vector<int> spec_vec;
       spec_vec.reserve(dspec.size() + 1);
       spec_vec.push_back(0);
@@ -937,8 +943,9 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
 
       extender.run(hits, dspec, spec_vec, vec_pro, rev_vec_pro, tags_, tol, multiple_hits_per_spec_);
 
-      extender.fillProteoforms(spec_proteoforms[d]);
+      extender.fillProteoforms(out);
     };
+    auto extendSpectrum = [&](int d, const Param& eparam) { extendSpectrumInto(d, eparam, dspecs[d], spec_proteoforms[d]); };
 #pragma omp parallel for schedule(dynamic) if (extend_over_spectra)
     for (int d = 0; d < (int)dspecs.size(); d++)
     {
@@ -950,6 +957,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     // that target PrSMs use per opportunity (a fitting residue in the proteoform, or the proteoform terminus) no more often than decoy PrSMs
     // explains nothing and gets a penalty up to that of a blind shift. Penalties only go up, so only the spectra in which some PrSM used a
     // raised modification are extended again: the paths of the others keep their scores and the result equals a second full extension.
+    Param learned_extender_param; // empty unless penalties were raised
     FLASHExtenderAlgorithm probe;
     probe.setParameters(extender_param_);
     const auto var_names = probe.getVariableModificationNames();
@@ -1031,6 +1039,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         {
           Param eparam = extender_param_;
           eparam.setValue("var_mod_penalty", penalties);
+          learned_extender_param = eparam;
           std::vector<int> again;
           for (int d = 0; d < (int)dspecs.size(); d++)
           {
@@ -1052,6 +1061,81 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         }
       }
     }
+    // Decoy precursors: a spectrum whose PrSM took its mass from MS1 is extended again with the precursor mass moved by 5 to max_mod_mass
+    // Da (a fixed pseudo-random shift per scan). A PrSM of that copy that reports the moved MS1 mass (not a mass from fragment pairs) is a
+    // decoy of the precursor; it competes with the spectrum's own PrSMs (the best one stays) and counts as a decoy in the FDR. If the MS1
+    // mass is right, the copy needs a blind shift or a truncation and loses; if it is wrong, both are alike and the decoy wins half the time.
+    if (decoy_precursor_)
+    {
+      const double max_shift = std::max(10.0, (double)extender_param_.getValue("max_mod_mass"));
+      const double iso = Constants::C13C12_MASSDIFF_U;
+      auto ms1Based = [](const ProteinHit& h) {
+        return (double)h.getMetaValue("Mass") > 0 && (int)h.getMetaValue("ProteoformMassByFragmentMass") == 0;
+      };
+      const Param& eparam_now = learned_extender_param.empty() ? extender_param_ : learned_extender_param;
+      std::vector<std::vector<ProteinHit>> decoy_proteoforms(dspecs.size());
+      int copies = 0;
+      std::vector<int> todo;
+      for (int d = 0; d < (int)dspecs.size(); d++)
+      {
+        if (dspecs[d].getPrecursorPeakGroup().getMonoMass() <= 0) continue;
+        if (std::none_of(spec_proteoforms[d].begin(), spec_proteoforms[d].end(), ms1Based)) continue;
+        todo.push_back(d);
+      }
+      copies = (int)todo.size();
+#pragma omp parallel for schedule(dynamic) if (extend_over_spectra)
+      for (int k = 0; k < (int)todo.size(); k++)
+      {
+        const int d = todo[k];
+        DeconvolvedSpectrum decoy_spec = dspecs[d];
+        auto pg = decoy_spec.getPrecursorPeakGroup();
+        // pseudo-random shift in [5, max_shift] Da, either sign, fixed by the scan number
+        std::uint64_t x = (std::uint64_t)decoy_spec.getScanNumber() * 0x9E3779B97F4A7C15ULL;
+        x ^= x >> 29;
+        x *= 0xBF58476D1CE4E5B9ULL;
+        x ^= x >> 32;
+        const double u = (double)(x % 1000003ULL) / 1000003.0;
+        const double shift = (5.0 + u * (max_shift - 5.0)) * ((x >> 40) & 1 ? 1.0 : -1.0);
+        const double decoy_mass = pg.getMonoMass() + shift;
+        pg.setMonoisotopicMass(decoy_mass);
+        decoy_spec.setPrecursorPeakGroup(pg);
+        std::vector<ProteinHit> out;
+        extendSpectrumInto(d, eparam_now, decoy_spec, out);
+        for (auto& h : out)
+        {
+          if (! ms1Based(h)) continue;
+          if (std::abs((double)h.getMetaValue("Mass") - decoy_mass) > 3 * iso + 0.1) continue; // the moved mass, up to isotope errors
+          h.setMetaValue("DecoyPrecursor", 1);
+          decoy_proteoforms[d].push_back(std::move(h));
+        }
+      }
+      // per spectrum, the decoy precursor competes with the spectrum's PrSMs that took their mass from MS1: the higher score stays
+      int decoy_wins = 0;
+      for (int d : todo)
+      {
+        if (decoy_proteoforms[d].empty()) continue;
+        double best_decoy = -1e10, best_own = -1e10;
+        for (const auto& h : decoy_proteoforms[d]) best_decoy = std::max(best_decoy, h.getScore());
+        for (const auto& h : spec_proteoforms[d])
+        {
+          if (ms1Based(h)) best_own = std::max(best_own, h.getScore());
+        }
+        if (best_decoy <= best_own) continue;
+        decoy_wins++;
+        std::vector<ProteinHit> kept;
+        for (auto& h : spec_proteoforms[d])
+        {
+          if (! ms1Based(h)) kept.push_back(std::move(h));
+        }
+        for (auto& h : decoy_proteoforms[d])
+        {
+          if (h.getScore() == best_decoy) kept.push_back(std::move(h));
+        }
+        spec_proteoforms[d].swap(kept);
+      }
+      OPENMS_LOG_INFO << "Decoy precursors: " << copies << " spectra with an MS1-based PrSM, decoy precursor wins in " << decoy_wins << std::endl;
+    }
+
     for (auto& v : spec_proteoforms)
     {
       for (auto& h : v) proteoform_hits_.push_back(std::move(h));
@@ -1099,12 +1183,15 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
                        && (int)hit.getMetaValue("EndPosition") > 0))
             continue;
 
-          bool is_decoy = hit.getAccession().hasPrefix("DECOY");
+          const bool decoy_precursor = hit.metaValueExists("DecoyPrecursor");
+          bool is_decoy = hit.getAccession().hasPrefix("DECOY") || decoy_precursor;
           bool is_rep = (int)hit.getMetaValue("Representative") == 1;
           if (is_decoy)
           {
-            decoy_count += 1.0 / decoy_factor_;
-            if (is_rep) decoy_count_pro += 1.0 / decoy_factor_;
+            // one decoy precursor per spectrum: it stands for one target, a protein decoy for 1 / decoy_factor_
+            const double w = decoy_precursor && ! hit.getAccession().hasPrefix("DECOY") ? 1.0 : 1.0 / decoy_factor_;
+            decoy_count += w;
+            if (is_rep) decoy_count_pro += w;
           }
           else
           {
@@ -1145,7 +1232,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
               && ((double)hit.getMetaValue("Mass") > 0 && (int)hit.getMetaValue("StartPosition") > 0 && (int)hit.getMetaValue("EndPosition") > 0))
             continue;
 
-          bool is_decoy = hit.getAccession().hasPrefix("DECOY");
+          bool is_decoy = hit.getAccession().hasPrefix("DECOY") || hit.metaValueExists("DecoyPrecursor");
           double qvalue = map_qvalue[hit.getScore()];
           hit.setMetaValue("qvalue", qvalue);
           if (! keep_decoy_ && is_decoy) continue;
