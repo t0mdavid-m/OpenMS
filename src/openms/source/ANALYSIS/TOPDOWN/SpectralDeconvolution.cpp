@@ -92,15 +92,15 @@ namespace OpenMS
       return;
     }
 
-    // Get precursor from spectrum if available, otherwise create one from target parameters
+    // Get precursor from spectrum if available, to keep its isolation window and other metadata
     Precursor precursor;
     if (!spec.getPrecursors().empty())
     {
       precursor = spec.getPrecursors()[0];
     }
-    else
+    // An explicitly specified target m/z takes precedence over the one from the spectrum
+    if (target_precursor_mz_ > 0)
     {
-      // Create precursor from target parameters when spectrum has no precursors
       precursor.setMZ(target_precursor_mz_);
     }
 
@@ -471,7 +471,7 @@ namespace OpenMS
                 int harmonic_cntr = 0;
                 if (ms_level_ > 1 && hc * abs_charge > current_max_charge_) { break; }
 
-                const int hdiff = (int)round((double)(next_iso_bin - mz_bin_index)) / hc * (hc / 2);
+                const int hdiff = (int)round((double)((int)next_iso_bin - (int)mz_bin_index)) / hc * (hc / 2);
                 const int next_harmonic_iso_bin = (int)mz_bin_index + hdiff;
                 // check if there are harmonic peaks between the current peak and the next isotope peak.
 
@@ -1078,12 +1078,26 @@ namespace OpenMS
     std::vector<PeakGroup> filtered_peak_groups;
     filtered_peak_groups.reserve(selected_count);
 
-    Size index = selected.find_first();
-    while (index != selected.npos)
+    // Candidates from different charge ranges can converge to the same monoisotopic mass, and masses move by isotope offsets during
+    // scoring, so the groups are not sorted by mass here. Sort them, and of the groups with the same mass (within tolerance) keep the
+    // one explaining the most signal: the first one in candidate order may cover only part of the ion's charge states.
+    std::vector<Size> selected_indices;
+    selected_indices.reserve(selected_count);
+    for (Size index = selected.find_first(); index != selected.npos; index = selected.find_next(index))
     {
-      if (filtered_peak_groups.empty() || filtered_peak_groups.back().getMonoMass() < deconvolved_spectrum_[index].getMonoMass())
-        filtered_peak_groups.push_back(deconvolved_spectrum_[index]);
-      index = selected.find_next(index);
+      selected_indices.push_back(index);
+    }
+    std::stable_sort(selected_indices.begin(), selected_indices.end(),
+                     [this](Size a, Size b) { return deconvolved_spectrum_[a].getMonoMass() < deconvolved_spectrum_[b].getMonoMass(); });
+    for (Size index : selected_indices)
+    {
+      const auto& peak_group = deconvolved_spectrum_[index];
+      if (! filtered_peak_groups.empty() && peak_group.getMonoMass() - filtered_peak_groups.back().getMonoMass() <= peak_group.getMonoMass() * tol)
+      {
+        if (peak_group.getIntensity() > filtered_peak_groups.back().getIntensity()) { filtered_peak_groups.back() = peak_group; }
+        continue;
+      }
+      filtered_peak_groups.push_back(peak_group);
     }
 
     if (target_decoy_type_ == PeakGroup::noise_decoy)
@@ -1142,7 +1156,7 @@ namespace OpenMS
     }
 
     filtered_peak_groups.reserve(selected_count);
-    index = selected.find_first();
+    Size index = selected.find_first();
 
     while (index != selected.npos)
     {
@@ -1157,9 +1171,7 @@ namespace OpenMS
     deconvolved_spectrum_.sort();
 
     removeOverlappingPeakGroups_(deconvolved_spectrum_, tol * 1.2, target_decoy_type_);
-    removeExcludedMasses_(deconvolved_spectrum_, excluded_masses_, tol);
 
-    /// test
     filtered_peak_groups.clear();
     filtered_peak_groups.reserve(deconvolved_spectrum_.size());
 
@@ -1211,6 +1223,7 @@ namespace OpenMS
     }
 
     deconvolved_spectrum_.setPeakGroups(filtered_peak_groups);
+    removeExcludedMasses_(deconvolved_spectrum_, excluded_masses_, tol);
     deconvolved_spectrum_.sort();
   }
 
@@ -1332,6 +1345,37 @@ namespace OpenMS
       }
     }
 
+    // A peak shared by groups of different charges counts as overlapped for a group only by the part that the winning group's own
+    // isotope envelope explains: its averagine pattern scaled on its peaks at that charge that no other group claims (without such
+    // peaks the whole peak is its). A low-charge fragment mixed with a weaker high-charge envelope on the same peaks then keeps them.
+    std::map<std::pair<int, int>, double> envelope_scales; // (group index, charge) -> scale of the averagine pattern
+    auto explained_intensity = [&](int j, int z, double pmz, float pint) -> float {
+      const auto& iso = avg_.get(dspec[j].getMonoMass());
+      auto it = envelope_scales.find({j, z});
+      if (it == envelope_scales.end())
+      {
+        double num = 0, den = 0;
+        for (const auto& p : dspec[j])
+        {
+          if (p.abs_charge != z || p.isotopeIndex < 0 || p.isotopeIndex >= (int)iso.size()) continue;
+          auto shared = peak_to_pgs.find(p.mz);
+          if (shared != peak_to_pgs.end() && shared->second.size() > 1) continue;
+          const double e = iso[p.isotopeIndex].getIntensity();
+          num += e * p.intensity;
+          den += e * e;
+        }
+        it = envelope_scales.emplace(std::make_pair(j, z), den > 0 ? num / den : -1.0).first;
+      }
+      if (it->second < 0) return pint;
+      for (const auto& p : dspec[j])
+      {
+        if (p.abs_charge != z || p.mz != pmz) continue;
+        if (p.isotopeIndex < 0 || p.isotopeIndex >= (int)iso.size()) return pint;
+        return std::min(pint, (float)(it->second * iso[p.isotopeIndex].getIntensity()));
+      }
+      return pint;
+    };
+
     for (const auto& e : peak_to_pgs)
     {
       const auto& pg_is = e.second;
@@ -1343,6 +1387,7 @@ namespace OpenMS
       for (auto i : pg_is)
       {
         bool is_overlap = false;
+        float overlap_part = pint;
         double mass1 = dspec[i].getMonoMass();
         int repz1 = (int)round(mass1 / (pmz - FLASHHelperClasses::getChargeMass(is_positive_)));
         const double high_snr = 10;
@@ -1358,10 +1403,10 @@ namespace OpenMS
           if (dspec[i].getChargeSNR(repz1) > dspec[j].getChargeSNR(repz2)) { continue; }
 
           is_overlap = true;
-
+          overlap_part = explained_intensity((int)j, repz2, pmz, pint);
           break;
         }
-        if (is_overlap) overlap_intensity[i] += pint;
+        if (is_overlap) overlap_intensity[i] += overlap_part;
       }
     }
 

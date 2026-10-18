@@ -8,7 +8,13 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
+#ifdef _OPENMP
+  #include <omp.h>
+#else
+  #define omp_in_parallel() 0
+#endif
 #include <utility>
+#include <boost/math/special_functions/gamma.hpp>
 #include <OpenMS/ANALYSIS/ID/PeptideIndexing.h>
 
 namespace OpenMS
@@ -405,9 +411,6 @@ void FLASHTaggerAlgorithm::run(const DeconvolvedSpectrum& deconvolved_spectrum, 
   // setLogType(CMD);
   if (deconvolved_spectrum.empty() || deconvolved_spectrum.isDecoy()) return;
 
-  auto tags = std::vector<FLASHHelperClasses::Tag>();
-  tags.reserve(max_tag_length_ * max_tag_counts_.back());
-
   for (int mode = 0; mode < (common_shifts_.empty() ? 3 : 1); mode++)
     generateTags_(deconvolved_spectrum, ppm, mode);
 
@@ -594,11 +597,11 @@ void FLASHTaggerAlgorithm::getTags_(const std::vector<double>& mzs, const std::v
   int max_vertex_score = *std::max_element(_scores.begin(), _scores.end());
   int min_vertex_score = *std::min_element(_scores.begin(), _scores.end());
 
-  max_path_score_ = std::max(max_vertex_score, max_vertex_score) * (max_tag_length_ + 2);
-  min_path_score_ = std::max(min_vertex_score, min_vertex_score) * (max_tag_length_ + 2);
+  max_path_score_ = max_vertex_score * (max_tag_length_ + 2);
+  min_path_score_ = min_vertex_score * (max_tag_length_ + 2);
 
-  max_path_score_ = std::max(max_path_score_, std::max(max_vertex_score, max_vertex_score) * (min_tag_length_ - 2));
-  min_path_score_ = std::min(min_path_score_, std::max(min_vertex_score, min_vertex_score) * (min_tag_length_ - 2));
+  max_path_score_ = std::max(max_path_score_, max_vertex_score * (min_tag_length_ - 2));
+  min_path_score_ = std::min(min_path_score_, min_vertex_score * (min_tag_length_ - 2));
   min_path_score_ = std::max(0, min_path_score_);
 
   std::set<FLASHHelperClasses::Tag> tagSet;
@@ -655,7 +658,7 @@ void FLASHTaggerAlgorithm::getTags_(const std::vector<double>& mzs, const std::v
 
 Size FLASHTaggerAlgorithm::find_with_X_(const std::string_view& A, const String& B, Size pos) // allow a single X. pos is in A
 {
-  if (A.length() <= B.length()) return String::npos;
+  if (A.length() < B.length()) return String::npos;
   for (size_t i = pos; i <= A.length() - B.length(); ++i)
   {
     bool match = true;
@@ -679,7 +682,7 @@ Size FLASHTaggerAlgorithm::find_with_X_(const std::string_view& A, const String&
 // Make output struct containing all information about matched entries and tags, coverage, score etc.
 void FLASHTaggerAlgorithm::runMatching(std::vector<ProteinHit>& hits,
                                        const DeconvolvedSpectrum& deconvolved_spectrum,
-                                       const std::vector<int> spec_vec,
+                                       const std::vector<int>& spec_vec,
                                        const std::vector<std::unordered_set<int>>& vec_pro,
                                        const std::vector<std::unordered_set<int>>& rev_vec_pro,
                                        const double max_mod_mass)
@@ -698,10 +701,9 @@ void FLASHTaggerAlgorithm::runMatching(std::vector<ProteinHit>& hits,
 #pragma omp parallel for default(none)                                                                                                     \
   shared(spec_vec, spec_scores, deconvolved_spectrum, hits, vec_pro, \
            rev_vec_pro, scan, max_mod_mass, std::cout)
-  for (int i = 0; i < hits.size(); i++)
+  for (int i = 0; i < (int)hits.size(); i++)
   {
     auto& hit = hits[i];
-    std::vector<int> matched_tag_indices;
     std::vector<int> n_spec_pro_diffs = hit.getMetaValue("NtermFlankingMasses").toIntList(),
                      c_spec_pro_diffs = hit.getMetaValue("CtermFlankingMasses").toIntList();
     int index = hit.getMetaValue("FastaIndex");
@@ -711,6 +713,64 @@ void FLASHTaggerAlgorithm::runMatching(std::vector<ProteinHit>& hits,
     if (! n_spec_pro_diffs.empty()) { getScoreAndMatchCount_(spec_vec, vec_pro[index], n_spec_pro_diffs, spec_scores, match_score1); }
     if (! c_spec_pro_diffs.empty()) { getScoreAndMatchCount_(spec_vec, rev_vec_pro[index], c_spec_pro_diffs, spec_scores, match_score2); }
     hit.setScore(std::max(match_score1, match_score2));
+  }
+}
+
+void FLASHTaggerAlgorithm::runMatchingExact(std::vector<ProteinHit>& hits,
+                                            const std::vector<ProteinShifts>& shifts,
+                                            const DeconvolvedSpectrum& deconvolved_spectrum,
+                                            const std::vector<std::vector<double>>& prefix_masses,
+                                            const std::vector<std::vector<double>>& suffix_masses,
+                                            double tol_ppm)
+{
+  // the masses; mass 0 stands for the terminus, as in runMatching
+  std::vector<double> masses {0.0};
+  masses.reserve(deconvolved_spectrum.size() + 1);
+  for (const auto& pg : deconvolved_spectrum)
+  {
+    masses.push_back(pg.getMonoMass());
+  }
+
+  // The score of one side is the chance probability of its best shift, as -log10. For a shift, a mass whose shifted value lies on the
+  // protein (0 .. the last residue sum) lands within its margin of one of the L residue sums by chance with probability
+  // 2 * margin * L / (protein mass); lambda sums these over the masses. The match count k is compared with Poisson(lambda), and the
+  // smallest P(X >= k) over the shifts is multiplied by the number of shifts tried. A summed node score instead grows with the protein
+  // length (more residue sums to land on, more tag positions to try): in a native spectrum with ~240 masses, decoys of 1000-1500
+  // residues scored 77 on average vs 52 for those under 700, so long noise proteins outranked real ones.
+  auto side_score = [&](const std::vector<double>& residue_sums, const std::vector<double>& side_shifts, const std::vector<double>& flanks) {
+    if (side_shifts.empty() || residue_sums.size() < 2) return 0.0;
+    const double protein_mass = residue_sums.back();
+    const double density = (double)(residue_sums.size() - 1) / protein_mass;
+    double best = 0; // -log10 P
+    for (Size j = 0; j < side_shifts.size(); j++)
+    {
+      int cntr = 0;
+      double lambda = 0;
+      for (Size k = 0; k < masses.size(); k++)
+      {
+        const double target = masses[k] + side_shifts[j];
+        const double margin = tol_ppm * 1e-6 * (std::max(masses[k], target) + flanks[j]);
+        if (target < -margin || target > protein_mass + margin) continue;
+        lambda += std::min(1.0, 2.0 * margin * density);
+        auto it = std::lower_bound(residue_sums.begin(), residue_sums.end(), target - margin);
+        if (it == residue_sums.end() || *it > target + margin) continue;
+        cntr++;
+      }
+      if (cntr == 0) continue;
+      const double p = boost::math::gamma_p((double)cntr, std::max(lambda, 1e-12)); // P(Poisson(lambda) >= cntr)
+      best = std::max(best, -std::log10(std::max(p, 1e-300)));
+    }
+    return std::max(0.0, best - std::log10((double)side_shifts.size()));
+  };
+
+  // FLASHTnT calls this from a loop that is already parallel over spectra; nesting would oversubscribe the threads
+#pragma omp parallel for schedule(dynamic) if (! omp_in_parallel())
+  for (int i = 0; i < (int)hits.size(); i++)
+  {
+    auto& hit = hits[i];
+    const auto& sh = shifts[i];
+    const Size index = sh.fasta_index;
+    hit.setScore(std::max(side_score(prefix_masses[index], sh.n_shifts, sh.n_flanks), side_score(suffix_masses[index], sh.c_shifts, sh.c_flanks)));
   }
 }
 

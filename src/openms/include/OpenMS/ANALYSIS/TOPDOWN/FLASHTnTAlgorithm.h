@@ -17,6 +17,7 @@
 #include <boost/dynamic_bitset.hpp>
 #include <iomanip>
 #include <iostream>
+#include <set>
 
 namespace OpenMS
 {
@@ -68,6 +69,16 @@ public:
     return max_total_mod_mass_;
   }
 
+  /// The protein-level hits, as they were ranked before proteoform characterization. Filled in
+  /// both modes, so a run can be used to shortlist proteins even when the extension is performed.
+  void getProteinHits(std::vector<ProteinHit>& hits) const
+  {
+    for (const auto& hit : protein_hits_)
+    {
+      hits.push_back(hit);
+    }
+  }
+
 protected:
   void updateMembers_() override;
   /// implemented for DefaultParamHandler
@@ -78,17 +89,31 @@ private:
   Param tagger_param_, extender_param_;
   double decoy_factor_ = 0, prsm_fdr_ = 1;
   /// how many nodes (massses) will be used
-  Size max_node_cntr_ = 300;
+  /// at most this many masses (best Qscore first) per spectrum are used. 300 cut key fragments of native spectra (440-570 masses from
+  /// centroid input); 400 recovered them at about 1.8x the native search time, and lysate MS2 spectra rarely have this many masses.
+  Size max_node_cntr_ = 400;
   double max_total_mod_mass_ = 0;
 
   bool keep_decoy_ = false;
   bool keep_underdetermined_ = true;
   bool multiple_hits_per_spec_ = false;
+  bool protein_level_only_ = false;
+  int max_protein_hits_ = 50;
+  /// mass tolerance (ppm) of the protein-level search; <= 0: the MS2 deconvolution tolerance of the input
+  double protein_tol_ = 0;
+  int min_protein_hits_ = 5;
+  double protein_fdr_ = 0.1;
   std::vector<ProteinHit> proteoform_hits_;
+  std::vector<ProteinHit> protein_hits_;
   std::vector<FLASHHelperClasses::Tag> tags_;
   std::map<int, std::vector<int>> matching_hits_indices_;
   static bool areConsistent_(const ProteinHit& a, const ProteinHit& b, double tol) ;
+  /// number of blind modifications of a proteoform hit (variable modifications excluded)
+  static Size blindModCount_(const ProteinHit& hit);
   void markRepresentativeProteoformHits_(double tol);
+  /// fasta indices of the proteins (targets and decoys) whose run-level q-value passes protein_fdr_, from each
+  /// protein's best tag-based score in protein_hits_
+  std::set<Size> getProteinsPassingFDR_(const std::vector<FASTAFile::FASTAEntry>& fasta_entry) const;
   static void vectorizeProteinSequence_(const std::vector<std::string>& cleaned_protein_seqs,
                             std::vector<std::unordered_set<int>>& vec_pro,
                             std::vector<std::unordered_set<int>>& rev_vec_pro);

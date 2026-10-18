@@ -4,6 +4,7 @@ set(directory source/ANALYSIS/TOPDOWN)
 ### list all filenames of the directory here
 set(sources_list
         DeconvolvedSpectrum.cpp
+        FLASHAnnotatorAlgorithm.cpp
         SpectralDeconvolution.cpp
         FLASHDeconvAlgorithm.cpp
         FLASHHelperClasses.cpp
