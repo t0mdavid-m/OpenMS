@@ -114,6 +114,11 @@ private:
     const MSSpectrum* cur_tol_spec_ = nullptr;
     /// the protein sequence in the orientation of the current mode's protein masses (reversed for mode 0)
     String cur_oriented_seq_;
+    /// per mode, the fragment series of each node: 0 a/b/x/y, 1 c/z, -1 node 0, the precursor or a merged node of both
+    std::map<int, std::vector<int>> node_series_map_;
+    const std::vector<int>* cur_node_series_ = nullptr;
+    /// per series, the cleavage weight of a matched mass at each protein index of the current mode (index k: the bond after k residues)
+    std::vector<int> cur_bond_weight_[2];
   };
 
   /// a variable modification: a residue-specific mass shift searched with its own count, independently of blind modifications
@@ -292,6 +297,13 @@ private:
 
   std::vector<std::string> ion_types_str_;
   std::vector<double> prefix_shifts_;
+  std::vector<int> prefix_series_, suffix_series_; ///< 0 a/b/x/y, 1 c/z, index-parallel to the shifts
+
+  /// log2(cleavage rate / mean) of a bond by the residue before and after it, per series (0 b/y, 1 c/z), indexed by residue - 'A'
+  double cleavage_before_[2][26] = {}, cleavage_after_[2][26] = {};
+  double cleavage_weight_ = 0;
+  /// fill the built-in cleavage tables, or read cleavage_table (series<TAB>before|after<TAB>residue<TAB>log2 ratio)
+  void loadCleavageTables_();
   std::vector<double> suffix_shifts_;
   std::vector<ProteinHit> proteoform_hits_;
   double tol_;
