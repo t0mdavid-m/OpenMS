@@ -85,6 +85,8 @@ private:
   Param tagger_param_, extender_param_, gapped_param_;
   /// candidates from gapped tags: off, fallback (spectra without sequence-tag candidates), both, only
   String gapped_mode_ = "fallback";
+  /// candidates from terminal ladders (residue sums from an intact protein terminus) in every spectrum
+  bool terminal_ladders_ = true;
   /// learn variable modification penalties from target and decoy usage
   bool learn_var_mod_penalty_ = true;
   /// search spectra with MS1-based PrSMs again with decoy precursor masses, as decoys of the precursor in the FDR

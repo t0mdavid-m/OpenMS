@@ -117,6 +117,11 @@ protected:
                           "only (gapped tags instead of sequence tags). Where a gapped tag lands on a protein anchors the extension as a sequence "
                           "tag does.", false);
     setValidStrings_("gapped_tags", {"off", "fallback", "both", "only"});
+    registerStringOption_("terminal_ladders", "<bool>", "true",
+                          "Candidate proteins from terminal ladders: deconvolved masses that are residue sums from an intact protein terminus (the "
+                          "N-terminus also without the initiator Met and with acetylation), found without a sequence tag. In every spectrum the "
+                          "min_protein_hits best proteins by the chance probability of their ladder are characterized, anchored on the ladder.", false);
+    setValidStrings_("terminal_ladders", {"true", "false"});
     registerStringOption_("learn_var_mod_penalty", "<bool>", "true",
                           "Raises the penalty of a variable modification that target PrSMs use per opportunity (fitting residue or terminus) no more often than decoy PrSMs "
                           "(chance), up to that of a blind shift, and extends the spectra that used it again. Needs decoys.", false, true);
