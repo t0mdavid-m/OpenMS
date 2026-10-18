@@ -59,6 +59,13 @@ namespace OpenMS
                        "are given).");
     defaults_.setMinInt("max_var_mod_count", 0);
 
+    defaults_.setValue("cleavage_weight", 5.0, "Weight of the backbone cleavage propensity: a matched fragment mass adds round(weight x (w_before + "
+                       "w_after)) to the path score (at most +-4), where w is log2(cleavage rate / mean) of the residues before and after the bond "
+                       "for its series (b/y or c/z). 0 switches it off.");
+    defaults_.setMinFloat("cleavage_weight", 0.0);
+    defaults_.setValue("cleavage_table", "", "Cleavage propensities replacing the built-in ones, one per line: series (by or cz), before or after, "
+                       "residue, log2(rate / mean). Built-in: b/y from HCD E. coli lysates, c/z from ECD native proteins.");
+
     defaults_.setValue("ion_type", std::vector<std::string> {"b", "y"}, "Specifies ion types to consider");
     defaults_.setValidStrings("ion_type", {"b", "c", "a", "y", "z", "x", "zp1", "zp2"});
     defaults_.setValue("skip_precursor_inference", "false", "Set to skip precursor mass inference with complimentary fragment ion pairs. Precursor masses inferred from MSn-1 will be used in MSn");
@@ -74,6 +81,8 @@ namespace OpenMS
     max_mod_mass_ = param_.getValue("max_mod_mass");
     skip_precursor_inference_ = param_.getValue("skip_precursor_inference") == "true";
     loadVariableModifications_();
+    cleavage_weight_ = param_.getValue("cleavage_weight");
+    loadCleavageTables_();
 
     const auto inst = ModificationsDB::getInstance();
     candidate_blind_mod_map_.clear();
@@ -92,6 +101,46 @@ namespace OpenMS
     blind_span_ = (Size)max_blind_mod_cntr_ + 1;
     var_score_span_ = var_span_ * score_span_;
     var_score_blind_span_ = var_score_span_ * blind_span_;
+  }
+
+  void FLASHExtenderAlgorithm::loadCleavageTables_()
+  {
+    // log2(cleavage rate / mean) of the residue before / after a bond, A C D E F G H I K L M N P Q R S T V W Y.
+    // b/y: Eclip_1476/1479/1480 (HCD), 4592 unmodified PrSMs at 1% FDR, 618,683 bonds; the three runs agree (r >= 0.986).
+    // c/z: ECD native proteins (NIST mAb, Infliximab, AQPZ, DLDH, OMPA/OMPF/G3P1), 49 PrSMs, 18,005 bonds, shrunk with 600 pseudo-bonds.
+    static const char aa[] = "ACDEFGHIKLMNPQRSTVWY";
+    static const double by_before[] = {+0.04, -0.90, +0.63, +0.51, -0.25, -0.79, +0.14, +0.33, -0.18, +0.07, -0.56, -0.05, -1.13, +0.13, -1.61, -0.12, -0.07, +0.48, -0.08, -0.23};
+    static const double by_after[] = {+0.06, -0.26, -0.07, -0.07, -0.08, -0.05, -0.10, +0.22, -0.42, +0.02, -0.49, +0.01, +0.80, +0.11, -2.09, +0.36, +0.14, +0.25, -0.15, -0.18};
+    static const double cz_before[] = {-0.24, +0.22, +0.19, -0.28, +0.10, +0.31, +0.19, -0.18, -0.19, -0.27, -0.29, -0.22, -0.04, +0.14, -0.39, +0.53, +0.14, +0.07, -0.20, -0.11};
+    static const double cz_after[] = {-0.24, -0.03, -0.06, -0.30, +0.30, +0.18, +0.09, -0.12, +0.13, -0.24, -0.23, -0.02, -0.45, +0.14, -0.30, +0.49, +0.29, -0.04, -0.05, +0.04};
+    for (int s = 0; s < 2; s++)
+    {
+      for (int r = 0; r < 26; r++) cleavage_before_[s][r] = cleavage_after_[s][r] = 0;
+    }
+    for (int i = 0; i < 20; i++)
+    {
+      const int r = aa[i] - 'A';
+      cleavage_before_[0][r] = by_before[i];
+      cleavage_after_[0][r] = by_after[i];
+      cleavage_before_[1][r] = cz_before[i];
+      cleavage_after_[1][r] = cz_after[i];
+    }
+    const String file = param_.getValue("cleavage_table").toString();
+    if (file.empty()) return;
+    std::ifstream in(file);
+    if (! in.good()) throw Exception::FileNotFound(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, file);
+    String line;
+    while (std::getline(in, line))
+    {
+      line.trim();
+      if (line.empty() || line.hasPrefix("#")) continue;
+      std::vector<String> f;
+      line.split('\t', f);
+      if (f.size() < 4 || f[2].size() != 1 || f[2][0] < 'A' || f[2][0] > 'Z' || (f[0] != "by" && f[0] != "cz") || (f[1] != "before" && f[1] != "after"))
+        throw Exception::ParseError(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, line, "expected: by|cz <tab> before|after <tab> residue <tab> log2 ratio");
+      const int series = f[0] == "by" ? 0 : 1;
+      (f[1] == "before" ? cleavage_before_ : cleavage_after_)[series][f[2][0] - 'A'] = f[3].toDouble();
+    }
   }
 
   void FLASHExtenderAlgorithm::loadVariableModifications_()
@@ -521,10 +570,17 @@ namespace OpenMS
     }
     for (int iso : isos)
     {
-      MSSpectrum node_spec, tol_spec;
-      node_spec.reserve(dspec.size() * ion_types_str_.size() + 1);
-      tol_spec.reserve(dspec.size() * ion_types_str_.size() + 1);
       double proteoform_mass = hi.calculated_precursor_mass_ + iso * Constants::C13C12_MASSDIFF_U;
+      // (mass, score, tolerance, series) of every fragment mass of this mode, sorted together so that the series stays with its mass
+      struct Node
+      {
+        double mass;
+        float score;
+        double tol;
+        int series;
+      };
+      std::vector<Node> nodes;
+      nodes.reserve(dspec.size() * ion_types_str_.size() + 1);
 
       for (const auto& pg : dspec)
       {
@@ -532,37 +588,45 @@ namespace OpenMS
                              : (hi.mode_ == 1) ? prefix_shifts_
                              : (hi.mode_ == 2) ? prefix_shifts_
                                                : std::vector<double> {};
+        const auto& series = hi.mode_ == 0 ? suffix_series_ : prefix_series_;
 
-        for (const auto& shift : shifts)
+        for (Size si = 0; si < shifts.size(); si++)
         {
-          double mass = pg.getMonoMass() - shift;
+          double mass = pg.getMonoMass() - shifts[si];
           if (mass <= 0 || mass > max_mass + 1) continue;
-          node_spec.emplace_back(mass, std::max(1, FLASHTaggerAlgorithm::getNodeScore(pg)));
-          tol_spec.emplace_back(mass, tol_ * pg.getMonoMass());
+          nodes.push_back({mass, (float)std::max(1, FLASHTaggerAlgorithm::getNodeScore(pg)), tol_ * pg.getMonoMass(), series[si]});
         }
 
         if (hi.mode_ == 2 && hi.calculated_precursor_mass_ > 0)
         {
-          for (const auto& shift : suffix_shifts_)
+          for (Size si = 0; si < suffix_shifts_.size(); si++)
           {
-            double mass = pg.getMonoMass() - shift;
+            double mass = pg.getMonoMass() - suffix_shifts_[si];
             if (mass <= 0 || mass >= proteoform_mass - i2f_mass) continue;
             double prefix_mass = proteoform_mass - i2f_mass - mass;
-            node_spec.emplace_back(prefix_mass, std::max(1, FLASHTaggerAlgorithm::getNodeScore(pg)));
-            tol_spec.emplace_back(prefix_mass, tol_ * pg.getMonoMass());
+            nodes.push_back({prefix_mass, (float)std::max(1, FLASHTaggerAlgorithm::getNodeScore(pg)), tol_ * pg.getMonoMass(), suffix_series_[si]});
           }
         }
       }
-
-      node_spec.sortByPosition();
-      tol_spec.sortByPosition();
+      std::stable_sort(nodes.begin(), nodes.end(), [](const Node& a, const Node& b) { return a.mass < b.mass; });
+      MSSpectrum node_spec, tol_spec;
+      node_spec.reserve(nodes.size());
+      tol_spec.reserve(nodes.size());
+      for (const auto& n : nodes)
+      {
+        node_spec.emplace_back(n.mass, n.score);
+        tol_spec.emplace_back(n.mass, n.tol);
+      }
 
       MSSpectrum t_node_spec, t_tol_spec;
+      std::vector<int> t_series;
       t_node_spec.reserve(node_spec.size() + 1);
       t_tol_spec.reserve(node_spec.size() + 1);
+      t_series.reserve(node_spec.size() + 1);
 
       t_node_spec.emplace_back(0, 0);
       t_tol_spec.emplace_back(0, 0);
+      t_series.push_back(-1);
       float overlapped_score = 0;
 
       for (Size k = 0; k < node_spec.size(); k++)
@@ -570,6 +634,7 @@ namespace OpenMS
         const auto& p = node_spec[k];
         double mass = p.getMZ();
         float score = p.getIntensity();
+        int series = nodes[k].series;
         double prev_margin = k == 0 ? .0 : tol_spec[k - 1].getIntensity();
         double margin = tol_spec[k].getIntensity();
 
@@ -582,8 +647,10 @@ namespace OpenMS
           mass = (mass + orig_margin + t_node_spec.back().getMZ() - prev_margin) / 2.0;
           if (t_node_spec.size() > 1)
           {
+            if (t_series.back() != series) series = -1; // a merged b/y and c/z mass: no series
             t_node_spec.pop_back();
             t_tol_spec.pop_back();
+            t_series.pop_back();
           }
           score = multi_ion_score + std::max(prev_score, score);
           // score = suffix_prefix == prev_suffix_prefix ? multi_ion_score + std::max(prev_score, score) : multi_ion_score + prev_score + score;
@@ -594,12 +661,14 @@ namespace OpenMS
 
         t_node_spec.emplace_back(mass, score);
         t_tol_spec.emplace_back(mass, margin);
+        t_series.push_back(series);
       }
 
       if (max_score < overlapped_score - multi_ion_score)
       {
         hi.node_spec_map_[hi.mode_] = t_node_spec;
         hi.tol_spec_map_[hi.mode_] = t_tol_spec;
+        hi.node_series_map_[hi.mode_] = t_series;
         max_score = overlapped_score;
         max_proteoform_mass = proteoform_mass;
       }
@@ -612,6 +681,7 @@ namespace OpenMS
       hi.calculated_precursor_mass_ = max_proteoform_mass;
       hi.node_spec_map_[hi.mode_].emplace_back(hi.calculated_precursor_mass_ - i2f_mass, 1);
       hi.tol_spec_map_[hi.mode_].emplace_back(hi.calculated_precursor_mass_ - i2f_mass, tol_ * hi.calculated_precursor_mass_);
+      hi.node_series_map_[hi.mode_].push_back(-1);
     }
   }
 
@@ -646,6 +716,26 @@ namespace OpenMS
     hi.cur_tol_spec_ = &hi.tol_spec_map_[hi.mode_];
     hi.cur_oriented_seq_ = hit.getSequence();
     if (hi.mode_ == 0) hi.cur_oriented_seq_.reverse();
+    hi.cur_node_series_ = &hi.node_series_map_[hi.mode_];
+    {
+      // weight of a matched mass at protein index k (the bond after k residues in this mode's orientation)
+      const String& os = hi.cur_oriented_seq_;
+      const int L = (int)os.size();
+      for (int sr = 0; sr < 2; sr++)
+      {
+        auto& w = hi.cur_bond_weight_[sr];
+        w.assign(L + 1, 0);
+        if (cleavage_weight_ <= 0) continue;
+        for (int k = 1; k < L; k++)
+        {
+          const char before = hi.mode_ == 0 ? os[k] : os[k - 1]; // N-terminal side of the bond
+          const char after = hi.mode_ == 0 ? os[k - 1] : os[k];
+          if (before < 'A' || before > 'Z' || after < 'A' || after > 'Z') continue;
+          const double v = cleavage_weight_ * (cleavage_before_[sr][before - 'A'] + cleavage_after_[sr][after - 'A']);
+          w[k] = std::max(-4, std::min(4, (int)std::lround(v)));
+        }
+      }
+    }
     hi.dag_ = FLASHHelperClasses::DAG((1 + max_var_mod_cntr_) * (1 + node_spec.size()) * (1 + pro_masses.size()) * (1 + max_blind_mod_cntr_)
                                       * (1 + max_path_score_ - min_path_score_));
 
@@ -850,14 +940,14 @@ namespace OpenMS
     std::sort(ion_types_str_.begin(), ion_types_str_.end());
     for (const auto& ion_str : ion_types_str_)
     {
-      if (ion_str == "a") { prefix_shifts_.push_back(Residue::getInternalToAIon().getMonoWeight()); }
-      else if (ion_str == "b") { prefix_shifts_.push_back(Residue::getInternalToBIon().getMonoWeight()); }
-      else if (ion_str == "c") { prefix_shifts_.push_back(Residue::getInternalToCIon().getMonoWeight()); }
-      else if (ion_str == "x") { suffix_shifts_.push_back(Residue::getInternalToXIon().getMonoWeight()); }
-      else if (ion_str == "y") { suffix_shifts_.push_back(Residue::getInternalToYIon().getMonoWeight()); }
-      else if (ion_str == "z") { suffix_shifts_.push_back(Residue::getInternalToZIon().getMonoWeight()); }
-      else if (ion_str == "zp1") { suffix_shifts_.push_back(Residue::getInternalToZp1Ion().getMonoWeight()); }
-      else if (ion_str == "zp2") { suffix_shifts_.push_back(Residue::getInternalToZp2Ion().getMonoWeight()); }
+      if (ion_str == "a") { prefix_shifts_.push_back(Residue::getInternalToAIon().getMonoWeight()); prefix_series_.push_back(0); }
+      else if (ion_str == "b") { prefix_shifts_.push_back(Residue::getInternalToBIon().getMonoWeight()); prefix_series_.push_back(0); }
+      else if (ion_str == "c") { prefix_shifts_.push_back(Residue::getInternalToCIon().getMonoWeight()); prefix_series_.push_back(1); }
+      else if (ion_str == "x") { suffix_shifts_.push_back(Residue::getInternalToXIon().getMonoWeight()); suffix_series_.push_back(0); }
+      else if (ion_str == "y") { suffix_shifts_.push_back(Residue::getInternalToYIon().getMonoWeight()); suffix_series_.push_back(0); }
+      else if (ion_str == "z") { suffix_shifts_.push_back(Residue::getInternalToZIon().getMonoWeight()); suffix_series_.push_back(1); }
+      else if (ion_str == "zp1") { suffix_shifts_.push_back(Residue::getInternalToZp1Ion().getMonoWeight()); suffix_series_.push_back(1); }
+      else if (ion_str == "zp2") { suffix_shifts_.push_back(Residue::getInternalToZp2Ion().getMonoWeight()); suffix_series_.push_back(1); }
       else { continue; }
     }
 
@@ -1841,6 +1931,8 @@ namespace OpenMS
         int num_var_mod = start_num_var_mod;
         int num_blind_mod = start_num_blind_mod;
         int next_score = score;
+        const int series = (*hi.cur_node_series_)[node_i];
+        if (series >= 0) next_score += hi.cur_bond_weight_[series][pro_i]; // cleavage propensity of the bond this mass falls on
         double next_cumulative_mod_mass = cumulative_mod_mass;
 
         const double abs_delta_delta = std::abs(delta_delta); //
