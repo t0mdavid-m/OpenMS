@@ -187,7 +187,13 @@ namespace OpenMS
     {
       return max_abs_charge;
     }
-    return std::min(max_abs_charge, abs(precursor_peak_group_.getRepAbsCharge()));
+    // A fragment ion carries at most the charge of the isolated precursor ion: its mass over the isolation m/z (precursor_peak_). The
+    // charge state of the precursor mass with the best SNR in MS1 (the rep charge) is often lower: on Eclip_1480, 42% of the spectra
+    // whose proteoforms TopPIC found and FLASHTnT did not were isolated above that charge, and the fragments in between were never
+    // deconvolved.
+    const int iso_z = abs(precursor_peak_.getCharge());
+    const int bound = iso_z > 0 ? iso_z : abs(precursor_peak_group_.getRepAbsCharge());
+    return std::min(max_abs_charge, bound);
   }
 
   const Precursor& DeconvolvedSpectrum::getPrecursor() const

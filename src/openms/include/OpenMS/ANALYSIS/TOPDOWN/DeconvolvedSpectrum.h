@@ -86,8 +86,9 @@ namespace OpenMS
     /// @param min_mass the min mass specified by the user
     double getCurrentMinMass(double min_mass) const;
 
-    /// get possible max charge of the deconvolved masses - for MS1, max charge specified by user
-    /// for MSn, min value between max charge specified by the user and precursor charge
+    /// get possible max charge of the deconvolved masses - for MS1 (or without a precursor peak group), max charge specified by user
+    /// for MSn, min value between max charge specified by the user and the charge of the isolated precursor ion (precursor peak; the
+    /// representative charge of the precursor peak group if it is unknown)
     /// @param max_abs_charge the max absolute value of the charge specified by the user
     int getCurrentMaxAbsCharge(int max_abs_charge) const;
 
