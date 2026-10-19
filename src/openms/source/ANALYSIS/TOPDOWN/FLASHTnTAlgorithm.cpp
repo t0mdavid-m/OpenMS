@@ -111,7 +111,7 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "proteins by the chance probability of their ladder are characterized, anchored on the ladder.");
   defaults_.setValidStrings("terminal_ladders", {"true", "false"});
   defaults_.setValue("decoy_precursor", "false",
-                     "Decoy precursors: spectra whose PrSM took its mass from MS1 are searched again with the best MS1 decoy mass of their isolation "
+                     "Decoy precursors: spectra whose PrSM took its mass from MS1 are searched again with the decoy precursor mass of their isolation "
                      "window instead of the precursor mass (FLASHDeconv -FD:report_FDR true writes it); a PrSM reporting that mass competes with the "
                      "spectrum's own and counts as a decoy in the FDR. Controls wrong MS1 precursor masses; PrSMs with masses from fragment pairs "
                      "or without a mass are not affected.");
@@ -1280,7 +1280,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       }
     }
     // Decoy precursors: a spectrum whose PrSM took its mass from MS1 is searched again as a decoy spectrum whose precursor mass is the
-    // best MS1 decoy mass (noise or signal decoy) of its isolation window, as FLASHDeconv chose it with report_FDR. A PrSM of that copy
+    // decoy precursor mass (noise or signal decoy) of its isolation window, as FLASHDeconv chose it with report_FDR. A PrSM of that copy
     // that reports the decoy mass (not a mass from fragment pairs) is a decoy of the precursor: it competes with the spectrum's MS1-based
     // PrSMs (the higher score stays) and counts as a decoy in the FDR. PrSMs with masses from fragment pairs or without a mass (-1) are
     // not affected.

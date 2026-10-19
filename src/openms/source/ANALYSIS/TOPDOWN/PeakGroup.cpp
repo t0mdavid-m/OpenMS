@@ -977,6 +977,32 @@ namespace OpenMS
     return iso_da_distance_;
   }
 
+  void PeakGroup::setWindowBounds(const double max_mass, const int max_charge)
+  {
+    window_max_mass_ = max_mass;
+    window_max_charge_ = max_charge;
+  }
+
+  double PeakGroup::getWindowMaxMass() const
+  {
+    return window_max_mass_;
+  }
+
+  int PeakGroup::getWindowMaxCharge() const
+  {
+    return window_max_charge_;
+  }
+
+  void PeakGroup::setUseWindowBounds(const bool use)
+  {
+    use_window_bounds_ = use;
+  }
+
+  bool PeakGroup::useWindowBounds() const
+  {
+    return use_window_bounds_;
+  }
+
   void PeakGroup::setIndex(const uint i)
   {
     index_ = i;

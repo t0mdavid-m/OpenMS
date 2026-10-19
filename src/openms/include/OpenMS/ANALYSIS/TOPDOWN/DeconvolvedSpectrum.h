@@ -76,8 +76,9 @@ namespace OpenMS
     /// get CV for FAIMS
     double getCV() const;
 
-    /// get possible max mass of the deconvolved masses - for MS1, max mass specified by user
-    /// for MSn, min value between max mass specified by the user and precursor mass
+    /// get possible max mass of the deconvolved masses - for MS1 (or without a precursor peak group), max mass specified by user
+    /// for MSn, min value between max mass specified by the user and precursor mass. If the precursor peak group uses the window bounds
+    /// (PeakGroup::useWindowBounds), the precursor mass is raised to the heaviest mass in the isolation window
     /// @param max_mass the max mass specified by the user
     double getCurrentMaxMass(double max_mass) const;
 
@@ -88,7 +89,8 @@ namespace OpenMS
 
     /// get possible max charge of the deconvolved masses - for MS1 (or without a precursor peak group), max charge specified by user
     /// for MSn, min value between max charge specified by the user and the charge of the isolated precursor ion (precursor peak; the
-    /// representative charge of the precursor peak group if it is unknown)
+    /// representative charge of the precursor peak group if it is unknown). If the precursor peak group uses the window bounds
+    /// (PeakGroup::useWindowBounds), that charge is raised to the highest charge in the isolation window
     /// @param max_abs_charge the max absolute value of the charge specified by the user
     int getCurrentMaxAbsCharge(int max_abs_charge) const;
 
@@ -127,7 +129,8 @@ namespace OpenMS
     /// set precursor peakGroup
     void setPrecursorPeakGroup(const PeakGroup& pg);
 
-    /// mass of the decoy precursor: the best MS1 decoy mass (noise or signal decoy, with report_FDR) in the isolation window, -1 if none
+    /// mass of the decoy precursor (with report_FDR): the MS1 decoy mass (noise or signal decoy) of the isolation window that beat the
+    /// precursor by the fragments (precursor_by_fragments), or the one of the highest charge SNR without it; -1 if none
     double getDecoyPrecursorMass() const
     {
       return decoy_precursor_mass_;
@@ -194,7 +197,7 @@ namespace OpenMS
     MSSpectrum spec_;
     /// precursor peakGroup (or mass)
     PeakGroup precursor_peak_group_;
-    /// the best MS1 decoy mass in the isolation window (decoy precursor), -1 if none
+    /// the decoy precursor mass (see getDecoyPrecursorMass), -1 if none
     double decoy_precursor_mass_ = -1;
     double decoy_precursor_weight_ = 1;
     /// precursor raw peak (not deconvolved one)

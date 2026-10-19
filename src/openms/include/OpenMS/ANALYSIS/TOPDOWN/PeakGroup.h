@@ -217,6 +217,27 @@ namespace OpenMS
     /// get distance between consecutive isotopes
     double getIsotopeDaDistance() const;
 
+    /**
+     * For a precursor peak group: set the bounds of its isolation window, i.e., the heaviest mass and the highest charge (at which the
+     * window holds a peak of the mass) among all the target masses in the window
+     * @param max_mass the heaviest mass in the window
+     * @param max_charge the highest charge in the window
+     */
+    void setWindowBounds(double max_mass, int max_charge);
+
+    /// get the heaviest mass in the isolation window of this precursor peak group (0 if not set)
+    double getWindowMaxMass() const;
+
+    /// get the highest charge in the isolation window of this precursor peak group (0 if not set)
+    int getWindowMaxCharge() const;
+
+    /// set if the MSn spectrum of this precursor peak group is deconvolved within the window bounds (the maximum mass and charge over all
+    /// the masses in the isolation window) instead of the bounds of this mass alone
+    void setUseWindowBounds(bool use);
+
+    /// get if the MSn spectrum of this precursor peak group is deconvolved within the window bounds
+    bool useWindowBounds() const;
+
     /// get minimum neagative isotope index
     int getMinNegativeIsotopeIndex() const;
 
@@ -327,6 +348,11 @@ namespace OpenMS
     int max_snr_abs_charge_ = -1;
     /// cosine score between averagine and the observed isotope pattern
     float isotope_cosine_score_ = 0.f;
+    /// for a precursor peak group, the heaviest mass and the highest charge among all the target masses in its isolation window
+    double window_max_mass_ = 0;
+    int window_max_charge_ = 0;
+    /// if the MSn spectrum is deconvolved within the window bounds instead of the bounds of this mass
+    bool use_window_bounds_ = false;
     /// charge fit score
     float charge_score_ = 0.f;
     /// quality score

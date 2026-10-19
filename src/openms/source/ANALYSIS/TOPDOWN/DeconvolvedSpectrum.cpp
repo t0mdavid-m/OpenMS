@@ -169,7 +169,11 @@ namespace OpenMS
     {
       return max_mass;
     }
-    return std::min(max_mass, precursor_peak_group_.getMonoMass());
+    // with the window bounds, the heaviest mass in the isolation window (see getCurrentMaxAbsCharge)
+    const double precursor_mass = precursor_peak_group_.useWindowBounds()
+                                    ? std::max(precursor_peak_group_.getMonoMass(), precursor_peak_group_.getWindowMaxMass())
+                                    : precursor_peak_group_.getMonoMass();
+    return std::min(max_mass, precursor_mass);
   }
 
   double DeconvolvedSpectrum::getCurrentMinMass(const double min_mass) const
@@ -192,7 +196,10 @@ namespace OpenMS
     // whose proteoforms TopPIC found and FLASHTnT did not were isolated above that charge, and the fragments in between were never
     // deconvolved.
     const int iso_z = abs(precursor_peak_.getCharge());
-    const int bound = iso_z > 0 ? iso_z : abs(precursor_peak_group_.getRepAbsCharge());
+    int bound = iso_z > 0 ? iso_z : abs(precursor_peak_group_.getRepAbsCharge());
+    // with the window bounds (the pass that chooses the precursor among the masses of the isolation window by the fragments), any
+    // of those masses may be the fragmented one
+    if (precursor_peak_group_.useWindowBounds()) bound = std::max(bound, precursor_peak_group_.getWindowMaxCharge());
     return std::min(max_abs_charge, bound);
   }
 
