@@ -467,10 +467,26 @@ namespace OpenMS
     int max_sig_charge = 0;
     double max_sig = 0;
 
+    // Noise floor: a charge without a detected noise peak does not have zero noise, its noise is below the detection limit of the spectrum.
+    // Each isotope position examined for noise at a charge (recruitAllPeaksInSpectrum: isotope 0 up to the highest signal isotope) contributes
+    // at most the power of a peak at the detection limit. Without the floor, a charge with no unmatched peak in its isotope window scored
+    // signal^2 in raw intensity units (1e10 - 1e14) and became the anchor with one to three coincidental peaks, so the range collapsed around
+    // it. The floor replaces the unit-less "1 +" and makes the per-charge SNR dimensionless (independent of the intensity scale).
+    int max_isotope_index = 0;
+    for (const auto& p : logMzpeaks_)
+    {
+      max_isotope_index = std::max(max_isotope_index, p.isotopeIndex);
+    }
+    const double noise_floor_pwr = (double)(max_isotope_index + 1) * detection_limit_ * detection_limit_;
+    auto get_charge_snr = [&](const int z) -> double {
+      if (noise_floor_pwr <= 0) { return per_charge_int_[z] * per_charge_int_[z] / (1 + per_charge_noise_pwr_[z]); } // no detection limit set
+      return (double)per_charge_int_[z] * per_charge_int_[z] / (per_charge_noise_pwr_[z] + noise_floor_pwr);
+    };
+
     // first, find the maximum snr charge.
     for (int z = min_abs_charge_; z <= max_abs_charge_; z++)
     {
-      double tmp_snr = per_charge_int_[z] * per_charge_int_[z] / (1 + per_charge_noise_pwr_[z]);
+      double tmp_snr = get_charge_snr(z);
       if (max_sig < tmp_snr)
       {
         max_sig = tmp_snr;
@@ -488,15 +504,13 @@ namespace OpenMS
     double threshold = std::min(max_sig / 10, 1.0);
     for (int z = max_sig_charge; z <= max_abs_charge_; z++)
     {
-      float per_charge_signal_power = per_charge_int_[z] * per_charge_int_[z];
-      if ((per_charge_signal_power / (1 + per_charge_noise_pwr_[z])) < threshold) { break; }
+      if (get_charge_snr(z) < threshold) { break; }
       new_max_abs_charge = z;
     }
 
     for (int z = max_sig_charge; z >= min_abs_charge_; z--)
     {
-      float per_charge_signal_power = per_charge_int_[z] * per_charge_int_[z];
-      if ((per_charge_signal_power / (1 + per_charge_noise_pwr_[z])) < threshold) { break; }
+      if (get_charge_snr(z) < threshold) { break; }
       new_min_abs_charge = z;
     }
 
@@ -975,6 +989,11 @@ namespace OpenMS
   double PeakGroup::getIsotopeDaDistance() const
   {
     return iso_da_distance_;
+  }
+
+  void PeakGroup::setDetectionLimit(const float intensity)
+  {
+    detection_limit_ = intensity;
   }
 
   void PeakGroup::setWindowBounds(const double max_mass, const int max_charge)

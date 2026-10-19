@@ -218,6 +218,13 @@ namespace OpenMS
     double getIsotopeDaDistance() const;
 
     /**
+     * @brief set the detection limit of the spectrum in which this peak group is scored: the intensity of the weakest peak of that spectrum.
+     * Noise below it cannot be observed, so it floors the per-charge noise power when the charge range is determined (updateChargeRange_).
+     * @param intensity detection limit. 0 (default) keeps the former unit-less floor of 1
+     */
+    void setDetectionLimit(float intensity);
+
+    /**
      * For a precursor peak group: set the bounds of its isolation window, i.e., the heaviest mass and the highest charge (at which the
      * window holds a peak of the mass) among all the target masses in the window
      * @param max_mass the heaviest mass in the window
@@ -293,7 +300,7 @@ namespace OpenMS
     void getPerIsotopeIntensities_(std::vector<float>& intensities, int& min_isotope_index, int& max_isotope_index, int abs_charge, int min_negative_isotope_index, double tol);
       /// update per charge intensities, noise power, and squared intensities. used for SNR estimation
     void updatePerChargeInformation_(const std::vector<LogMzPeak>& noisy_peaks, double tol, bool is_last);
-    /// update the charge range using the calculated per charge information
+    /// update the charge range using the calculated per charge information (per charge SNR with the noise power floored by the detection limit)
     void updateChargeRange_();
     /// update per charge cosine values
     void updatePerChargeCos_(const FLASHHelperClasses::PrecalculatedAveragine& avg, double tol);
@@ -343,6 +350,8 @@ namespace OpenMS
 
     /// distance between consecutive isotopes. Can be different for decoys
     double iso_da_distance_ = Constants::ISOTOPE_MASSDIFF_55K_U;
+    /// detection limit (intensity of the weakest peak) of the spectrum in which this peak group is scored. Floors the per-charge noise power
+    float detection_limit_ = 0.f;
     /// scoring variables
     /// the charge for which the charge SNR is maximized
     int max_snr_abs_charge_ = -1;

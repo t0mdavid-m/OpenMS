@@ -999,13 +999,22 @@ namespace OpenMS
     double tol = tolerance_[ms_level_ - 1];
     auto selected = boost::dynamic_bitset<>(deconvolved_spectrum_.size());
     double snr_threshold = min_snr_[ms_level_ - 1];
+    // detection limit of the spectrum: the intensity of its weakest peak (after the peak filter). Noise below it cannot be observed;
+    // it floors the per-charge noise power of the peak groups (PeakGroup::updateChargeRange_)
+    float detection_limit = 0;
+    for (const auto& p : deconvolved_spectrum_.getOriginalSpectrum())
+    {
+      if (p.getIntensity() <= 0) { continue; }
+      if (detection_limit == 0 || p.getIntensity() < detection_limit) { detection_limit = p.getIntensity(); }
+    }
 
-  #pragma omp parallel for default(none) shared(tol, selected, snr_threshold, std::cout)
+  #pragma omp parallel for default(none) shared(tol, selected, snr_threshold, detection_limit, std::cout)
     for (int i = 0; i < (int)deconvolved_spectrum_.size(); i++)
     {
       int offset = 0;
       auto& peak_group = deconvolved_spectrum_[i];
       peak_group.setTargetDecoyType(target_decoy_type_);
+      peak_group.setDetectionLimit(detection_limit);
 
       if (isPeakGroupInExcludedMassForDecoyRuns_(peak_group, tol)) { continue; }
 
@@ -1122,7 +1131,7 @@ namespace OpenMS
     selected = boost::dynamic_bitset<>(deconvolved_spectrum_.size());
     filtered_peak_groups = std::vector<PeakGroup>();
 
-  #pragma omp parallel for default(none) shared(tol, selected, harmonic_charges_)
+  #pragma omp parallel for default(none) shared(tol, selected, harmonic_charges_, detection_limit)
     for (int i = 0; i < (int)deconvolved_spectrum_.size(); i++)
     {
       const auto& peak_group = deconvolved_spectrum_[i];
@@ -1133,6 +1142,7 @@ namespace OpenMS
       {
         PeakGroup pg(std::min(current_max_charge_, z1 * hz), std::min(current_max_charge_, z2 * hz), is_positive_);
         pg.setIsotopeDaDistance(iso_da_distance_);
+        pg.setDetectionLimit(detection_limit);
         const auto& [z1_, z2_] = pg.getAbsChargeRange();
         if (z2 - z1 > z2_ - z1_) break; // if harmonic charges are too high stop
         pg.setMonoisotopicMass(peak_group.getMonoMass() * hz);
