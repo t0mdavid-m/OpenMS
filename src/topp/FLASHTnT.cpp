@@ -135,6 +135,8 @@ protected:
     tnt_param.remove("test");
 
     double pro_fdr = tnt_param.getValue("pro_fdr");
+    // the chimeric columns are written only with the residual search, so that other outputs keep their format
+    const bool chimeric = (int)tnt_param.getValue("chimeric_rounds") > 0;
     OPENMS_LOG_INFO << "Finding sequence tags from deconvolved spectra ..." << endl;
 
     FASTAFile fasta_file;
@@ -158,13 +160,13 @@ protected:
     if (! out_prsm_file.empty())
     {
       out_prsm_stream = fstream(out_prsm_file, fstream::out);
-      FLASHTnTFile::writePrSMHeader(out_prsm_stream);
+      FLASHTnTFile::writePrSMHeader(out_prsm_stream, chimeric);
     }
 
     if (! out_pro_file.empty())
     {
       out_pro_stream = fstream(out_pro_file, fstream::out);
-      FLASHTnTFile::writeProHeader(out_pro_stream);
+      FLASHTnTFile::writeProHeader(out_pro_stream, chimeric);
     }
 
     if (! out_protein_file.empty())
@@ -193,12 +195,12 @@ protected:
     }
     if (! out_prsm_file.empty())
     {
-      FLASHTnTFile::writePrSMs(proteoform_hits, out_prsm_stream);
+      FLASHTnTFile::writePrSMs(proteoform_hits, out_prsm_stream, chimeric);
       out_prsm_stream.close();
     }
     if (! out_pro_file.empty())
     {
-      FLASHTnTFile::writeProteoforms(proteoform_hits, out_pro_stream, pro_fdr);
+      FLASHTnTFile::writeProteoforms(proteoform_hits, out_pro_stream, pro_fdr, chimeric);
       out_pro_stream.close();
     }
     if (! out_protein_file.empty())

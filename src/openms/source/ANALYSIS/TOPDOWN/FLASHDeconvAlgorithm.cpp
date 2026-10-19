@@ -64,6 +64,19 @@ FLASHDeconvAlgorithm::FLASHDeconvAlgorithm(): DefaultParamHandler("FLASHDeconvAl
                      "window wins). 0 turns the rescue off, e.g. for native or targeted data.");
   defaults_.setMinInt("precursor_rescue_window", 0);
   defaults_.addTag("precursor_rescue_window", "advanced");
+  defaults_.setValue("precursor_by_fragments", "true",
+                     "The precursor of an MSn spectrum is chosen among the deconvolved target masses in its isolation window by the complementary "
+                     "fragment pairs (b + y, c + z) of each mass beyond chance (the mean count at shifted masses): the spectrum is deconvolved once "
+                     "with the bounds of all of them (the heaviest mass and the highest charge), and the mass of the highest charge SNR stays the "
+                     "precursor unless another mass has at least two pairs beyond chance and two more than it; the spectrum is then deconvolved "
+                     "with the chosen precursor's own bounds. With report_FDR, the decoy masses of the window then compete in the same way against "
+                     "the chosen precursor, on the same fragment masses (with a single target mass in the window, those of its own deconvolution), "
+                     "i.e., within the bounds of the target masses: a decoy mass heavier than all of them pairs only fragments up to the heaviest "
+                     "one and can hardly win. A decoy mass that beats the precursor becomes the decoy precursor of the spectrum (FLASHTnT "
+                     "-decoy_precursor), otherwise the spectrum has none. With false, the precursor is the target mass and the decoy precursor the "
+                     "decoy mass of the window of the highest charge SNR (unchecked: every MSn spectrum with a decoy mass in its window has one).");
+  defaults_.setValidStrings("precursor_by_fragments", {"true", "false"});
+  defaults_.addTag("precursor_by_fragments", "advanced");
 
   defaults_.setValue("merging_method", 0,
                      "Method for merging spectra before deconvolution. 0: No merging  1: Gaussian averaging per MS level, effective for Q-TOF datasets. For MSn (n > 1), only the spectra from the same precursor mass "
@@ -114,6 +127,7 @@ void FLASHDeconvAlgorithm::updateMembers_()
   isolation_window_size_ = param_.getValue("isolation_window");
   scan_commands_file_ = param_.getValue("scan_commands").toString();
   precursor_rescue_window_ = param_.getValue("precursor_rescue_window");
+  precursor_by_fragments_ = param_.getValue("precursor_by_fragments").toString() == "true";
   current_min_ms_level_ = max_ms_level_;
   current_max_ms_level_ = 0;
 }
@@ -310,10 +324,74 @@ void FLASHDeconvAlgorithm::runSpectralDeconvolution_(MSExperiment& map, std::vec
       if (native_id_precursor_peak_group_map_.find(native_id) != native_id_precursor_peak_group_map_.end())
         precursor_pg = native_id_precursor_peak_group_map_[native_id];
 
+      // The precursor by the fragments, in two rounds on the same fragment masses. Round 1 (several target masses in the isolation
+      // window): the MSn spectrum is deconvolved once within the bounds of all of them (the heaviest mass and the highest charge), the
+      // target masses compete, and one whose complementary fragment pairs beat chance by the margin over the registered precursor's
+      // replaces it. Round 2 (decoy masses in the window, i.e., report_FDR): the decoy masses of the window, as generated, compete against
+      // the precursor of round 1 by the same score and margin on the fragment masses of round 1, or, with a single target mass in the
+      // window, on those of its final deconvolution below (the same bounds, but for a rare window charge above that of the isolated ion);
+      // decoy masses get no wider bounds. One that wins becomes the decoy precursor of the spectrum, and without a winner the spectrum has
+      // none. Round 2 changes nothing of the target output. The spectrum is then deconvolved with the chosen precursor's own bounds (so
+      // that the fragments reported stay within its mass and charge bounds).
+      auto sorted_masses = [](const DeconvolvedSpectrum& dspec) {
+        std::vector<double> masses;
+        masses.reserve(dspec.size());
+        for (const auto& pg : dspec) masses.push_back(pg.getMonoMass());
+        std::sort(masses.begin(), masses.end());
+        return masses;
+      };
+      const std::vector<std::pair<double, bool>>* window_decoys = nullptr; // the challengers of round 2, if any
+      std::vector<double> fragment_masses;                                   // the fragment masses both rounds score on
+      bool round1 = false;                                                   // whether round 1 ran (several target masses)
+      if (precursor_by_fragments_ && ms_level > 1 && ! precursor_pg.empty())
+      {
+        const auto cit = native_id_window_candidates_.find(native_id);
+        const auto dit = native_id_window_decoys_.find(native_id);
+        if (dit != native_id_window_decoys_.end() && ! dit->second.empty()) window_decoys = &dit->second;
+        if (cit != native_id_window_candidates_.end() && cit->second.size() > 1)
+        {
+          round1 = true;
+          spectra_with_several_window_masses_++;
+          PeakGroup union_pg = precursor_pg;
+          union_pg.setUseWindowBounds(true);
+          sd_.performSpectrumDeconvolution(spec, scan_number, union_pg);
+          fragment_masses = sorted_masses(sd_.getDeconvolvedSpectrum());
+
+          std::vector<double> cand_masses;
+          cand_masses.reserve(cit->second.size());
+          for (const auto& cand : cit->second) cand_masses.push_back(cand.first.getMonoMass());
+          const int best = choosePrecursorByFragments_(fragment_masses, cand_masses, precursor_pg.getMonoMass(), tols_[ms_level - 1]);
+          if (best >= 0 && std::abs(cand_masses[best] - precursor_pg.getMonoMass()) > 1e-6)
+          {
+            precursors_by_fragments_++;
+            precursor_pg = cit->second[best].first;
+            native_id_precursor_peak_group_map_[native_id] = precursor_pg;
+            native_id_precursor_peak_map_[native_id] = cit->second[best].second;
+          }
+        }
+      }
       // now do it
       sd_.performSpectrumDeconvolution(spec, scan_number, precursor_pg);
 
       auto& deconvolved_spectrum = sd_.getDeconvolvedSpectrum();
+
+      // round 2, before the precursor information is added and the decoy masses of this spectrum are appended below
+      if (window_decoys != nullptr)
+      {
+        spectra_with_window_decoys_++;
+        if (! round1) fragment_masses = sorted_masses(deconvolved_spectrum);
+        // the chosen precursor first (the default), then the decoy masses
+        std::vector<double> cand_masses {precursor_pg.getMonoMass()};
+        cand_masses.reserve(window_decoys->size() + 1);
+        for (const auto& decoy : *window_decoys) cand_masses.push_back(decoy.first);
+        const int best = choosePrecursorByFragments_(fragment_masses, cand_masses, precursor_pg.getMonoMass(), tols_[ms_level - 1]);
+        if (best > 0)
+        {
+          decoy_precursors_by_fragments_++;
+          native_id_decoy_precursor_mass_map_[native_id] = (*window_decoys)[best - 1].first;
+          native_id_decoy_precursor_noise_map_[native_id] = (*window_decoys)[best - 1].second;
+        }
+      }
 
       // add precursor information
       if (native_id_precursor_peak_group_map_.find(native_id) != native_id_precursor_peak_group_map_.end())
@@ -372,6 +450,23 @@ void FLASHDeconvAlgorithm::runSpectralDeconvolution_(MSExperiment& map, std::vec
     std::sort(deconvolved_spectra.begin(), deconvolved_spectra.end());
   }
   endProgress();
+  // each part only if its case occurred in this run (decoy masses in a window only with report_FDR)
+  if (spectra_with_several_window_masses_ > 0 || spectra_with_window_decoys_ > 0)
+  {
+    String by_fragments = "Precursors by the fragments", sep = ": ";
+    if (spectra_with_several_window_masses_ > 0)
+    {
+      by_fragments += sep + "masses chosen among the target masses of the isolation window in " + String(precursors_by_fragments_) + " of "
+                      + String(spectra_with_several_window_masses_) + " MSn spectra with several";
+      sep = "; ";
+    }
+    if (spectra_with_window_decoys_ > 0)
+    {
+      by_fragments += sep + "decoy precursors (a decoy mass of the window beat the chosen precursor) in " + String(decoy_precursors_by_fragments_)
+                      + " of " + String(spectra_with_window_decoys_) + " MSn spectra with a precursor and decoy masses in the window";
+    }
+    OPENMS_LOG_INFO << by_fragments << std::endl;
+  }
 }
 
 
@@ -592,6 +687,60 @@ PeakGroup FLASHDeconvAlgorithm::peakGroupFromCommand_(const ScanCommandJoin::Loc
   return precursor_pg;
 }
 
+int FLASHDeconvAlgorithm::choosePrecursorByFragments_(const std::vector<double>& fragment_masses, const std::vector<double>& cand_masses,
+                                                      double default_mass, double tol_ppm)
+{
+  // complementary pairs summing to the mass (b + y) or the mass + H (c + z) within twice the tolerance. Two masses less than 10 Da apart
+  // are no pair: a mass at about half the candidate (e.g., the unfragmented precursor deconvolved at half its mass, with its isotope and
+  // hydrogen variants) would pair with itself
+  auto pairs_at = [&](double mass) {
+    int n = 0;
+    for (double band : {0.0, Constants::PROTON_MASS_U})
+    {
+      const double target = mass + band, tol = target * tol_ppm * 1e-6 * 2;
+      for (double m : fragment_masses)
+      {
+        if (m > target / 2 + tol) break;
+        const double t = target - m;
+        if (t - m < 10.0) continue;
+        auto it = std::lower_bound(fragment_masses.begin(), fragment_masses.end(), t - tol);
+        if (it != fragment_masses.end() && *it <= t + tol) n++;
+      }
+    }
+    return n;
+  };
+  static const std::vector<double> shifts {4.3,  -4.3,  6.7,  -6.7,  9.1,  -9.1,  11.3, -11.3, 13.7, -13.7,
+                                           17.9, -17.9, 21.3, -21.3, 25.1, -25.1, 29.7, -29.7, 33.3, -33.3};
+  std::vector<double> score(cand_masses.size(), 0);
+  for (Size i = 0; i < cand_masses.size(); i++)
+  {
+    const double mass = cand_masses[i];
+    double chance = 0;
+    for (double s : shifts) chance += pairs_at(mass + s);
+    score[i] = pairs_at(mass) - chance / (double)shifts.size();
+  }
+  // the default is the registered precursor among the target masses (the candidate of the highest charge SNR, chosen without fragments
+  // by scan_survey in findPrecursorPeakGroupsForMSnSpectra_; the last such candidate on an exact SNR tie), and the chosen precursor
+  // against the decoy masses; another mass replaces it only with at least two pairs beyond chance and two more than the default has
+  Size def = cand_masses.size();
+  for (Size i = 0; i < cand_masses.size(); i++)
+  {
+    if (std::abs(cand_masses[i] - default_mass) < 1e-6)
+    {
+      def = i;
+      break;
+    }
+  }
+  if (def == cand_masses.size()) return -1;
+  int best = (int)def;
+  for (Size i = 0; i < cand_masses.size(); i++)
+  {
+    if (i == def) continue;
+    if (score[i] >= 2.0 && score[i] >= score[def] + 2.0 && score[i] > score[best] + 1e-9) best = (int)i;
+  }
+  return best == (int)def ? -1 : best;
+}
+
 void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperiment& map,
                                                                  const std::vector<DeconvolvedSpectrum>& deconvolved_spectra,
                                                                  uint ms_level)
@@ -697,8 +846,11 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
     // The best precursor of one survey spectrum: among the target masses whose peaks lie in the window, the one of the highest charge
     // SNR (at the charge the window implies); for a located scan the COMMANDED mass wins when the survey holds it (ADR-0046: same
     // isotope only, so an isotope-off call competes as an ordinary candidate). With commit, it is registered for this MSn spectrum
-    // together with the masses in the window and their intensities, and the best decoy mass of the window (with decoy reporting) as
-    // the decoy precursor. Returns the SNR of the best target (0 or more), or -1 if the window holds none.
+    // together with the masses in the window and their intensities, the window bounds, and the target masses of the window as the
+    // candidates for the choice by the fragments (with precursor_by_fragments). With decoy reporting, the decoy masses of the window are
+    // registered as the challengers of the chosen precursor for the decoy precursor (with precursor_by_fragments, see
+    // runSpectralDeconvolution_), or else the one of the highest charge SNR as the decoy precursor. Returns the SNR of the best target
+    // (0 or more), or -1 if the window holds none.
     auto scan_survey = [&](Size survey_index, bool commit) -> double {
       const DeconvolvedSpectrum* ds = deconvolved_of(survey_index);
       if (ds == nullptr) return -1.0;
@@ -730,13 +882,22 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
       const FLASHHelperClasses::LogMzPeak* best_peak = nullptr;
       double decoy_mass = 0;
       bool decoy_noise = false;
+      // the window bounds (the heaviest target mass and the highest charge at which a target mass has a peak in the window), and, only
+      // with commit and precursor_by_fragments, the precursor candidates (the target masses in the window) and their challengers for
+      // the decoy precursor (the decoy masses in the window with their noise flags; they do not widen the window bounds)
+      double window_max_mass = 0;
+      int window_max_charge = 0;
+      std::vector<std::pair<PeakGroup, Precursor>> window_cands;
+      std::vector<std::pair<double, bool>> window_decoys;
 
       for (auto& pg : *ds)
       {
         if (pg[0].mz > end_mz || pg[pg.size() - 1].mz < start_mz) { continue; }
-        // With decoy reporting the survey spectrum also holds decoy masses (noise and signal decoys). The best of them in the window,
-        // chosen as the target precursor is, becomes the decoy precursor of the MSn spectrum (a decoy spectrum with that mass instead
-        // of the precursor mass, e.g. for FLASHTnT -decoy_precursor); only target masses are precursors.
+        // With decoy reporting the survey spectrum also holds decoy masses (noise and signal decoys), each in the window if it has a
+        // peak there at the charge the window implies. With precursor_by_fragments, all of them challenge the precursor the fragments
+        // chose, and one that beats it becomes the decoy precursor of the MSn spectrum (a decoy spectrum with that mass instead of the
+        // precursor mass, e.g. for FLASHTnT -decoy_precursor); without, the one of the highest charge SNR becomes it unchecked. Only
+        // target masses are precursors.
         if (pg.getTargetDecoyType() != PeakGroup::target)
         {
           int c = int(round(pg.getMonoMass() / start_mz));
@@ -747,11 +908,17 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
             if (top == nullptr || tmp_peak.intensity > top->intensity) top = &tmp_peak;
           }
           if (top == nullptr) { continue; }
+          const bool noise = pg.getTargetDecoyType() == PeakGroup::TargetDecoyType::noise_decoy;
+          if (precursor_by_fragments_)
+          {
+            if (commit) window_decoys.emplace_back(pg.getMonoMass(), noise);
+            continue;
+          }
           const double snr = pg.getChargeSNR(top->abs_charge);
           if (snr < max_decoy_snr) { continue; }
           max_decoy_snr = snr;
           decoy_mass = pg.getMonoMass();
-          decoy_noise = pg.getTargetDecoyType() == PeakGroup::TargetDecoyType::noise_decoy;
+          decoy_noise = noise;
           continue;
         }
 
@@ -773,6 +940,16 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
 
         if (tmp_precursor == nullptr) { continue; }
         mass_to_intensity[pg.getMonoMass()] = intensity;
+        window_max_mass = std::max(window_max_mass, pg.getMonoMass());
+        window_max_charge = std::max(window_max_charge, c);
+        if (commit && precursor_by_fragments_)
+        {
+          Precursor cand_precursor;
+          cand_precursor.setCharge(c);
+          cand_precursor.setMZ(tmp_precursor->mz);
+          cand_precursor.setIntensity(tmp_precursor->intensity);
+          window_cands.emplace_back(pg, cand_precursor);
+        }
 
         // ADR-0046: for a located scan the COMMANDED mass wins when this survey holds it -- SAME isotope only, so an
         // isotope-off call no longer stands in for it and competes as an ordinary candidate. When the window holds
@@ -802,7 +979,13 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
       }
 
       if (! commit) return best_pg == nullptr ? -1.0 : std::max(max_snr, 0.0);
-      if (max_decoy_snr >= 0)
+      if (precursor_by_fragments_)
+      {
+        // the decoy precursor is decided by the fragments (runSpectralDeconvolution_)
+        if (window_decoys.empty()) { native_id_window_decoys_.erase(native_id); }
+        else { native_id_window_decoys_[native_id] = std::move(window_decoys); }
+      }
+      else if (max_decoy_snr >= 0)
       {
         native_id_decoy_precursor_mass_map_[native_id] = decoy_mass;
         native_id_decoy_precursor_noise_map_[native_id] = decoy_noise;
@@ -810,6 +993,10 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
       if (best_pg != nullptr)
       {
         native_id_precursor_peak_group_map_[native_id] = *best_pg;
+        native_id_precursor_peak_group_map_[native_id].setWindowBounds(window_max_mass, window_max_charge);
+        // only a window of several candidates leaves the fragments a choice
+        if (window_cands.size() > 1) { native_id_window_candidates_[native_id] = std::move(window_cands); }
+        else { native_id_window_candidates_.erase(native_id); }
         Precursor precursor;
         precursor.setCharge(best_pg->getRepAbsCharge());
         precursor.setMZ(best_peak->mz);

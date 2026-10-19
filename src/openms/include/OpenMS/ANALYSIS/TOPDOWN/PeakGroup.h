@@ -232,6 +232,34 @@ namespace OpenMS
     /// get distance between consecutive isotopes
     double getIsotopeDaDistance() const;
 
+    /**
+     * @brief set the detection limit of the spectrum in which this peak group is scored: the intensity of the weakest peak of that spectrum.
+     * Noise below it cannot be observed, so it floors the per-charge noise power when the charge range is determined (updateChargeRange_).
+     * @param intensity detection limit. 0 (default) keeps the former unit-less floor of 1
+     */
+    void setDetectionLimit(float intensity);
+
+    /**
+     * For a precursor peak group: set the bounds of its isolation window, i.e., the heaviest mass and the highest charge (at which the
+     * window holds a peak of the mass) among all the target masses in the window
+     * @param max_mass the heaviest mass in the window
+     * @param max_charge the highest charge in the window
+     */
+    void setWindowBounds(double max_mass, int max_charge);
+
+    /// get the heaviest mass in the isolation window of this precursor peak group (0 if not set)
+    double getWindowMaxMass() const;
+
+    /// get the highest charge in the isolation window of this precursor peak group (0 if not set)
+    int getWindowMaxCharge() const;
+
+    /// set if the MSn spectrum of this precursor peak group is deconvolved within the window bounds (the maximum mass and charge over all
+    /// the masses in the isolation window) instead of the bounds of this mass alone
+    void setUseWindowBounds(bool use);
+
+    /// get if the MSn spectrum of this precursor peak group is deconvolved within the window bounds
+    bool useWindowBounds() const;
+
     /// get minimum neagative isotope index
     int getMinNegativeIsotopeIndex() const;
 
@@ -287,7 +315,7 @@ namespace OpenMS
     void getPerIsotopeIntensities_(std::vector<float>& intensities, int& min_isotope_index, int& max_isotope_index, int abs_charge, int min_negative_isotope_index, double tol);
       /// update per charge intensities, noise power, and squared intensities. used for SNR estimation
     void updatePerChargeInformation_(const std::vector<LogMzPeak>& noisy_peaks, double tol, bool is_last);
-    /// update the charge range using the calculated per charge information
+    /// update the charge range using the calculated per charge information (per charge SNR with the noise power floored by the detection limit)
     void updateChargeRange_();
     /// update per charge cosine values
     void updatePerChargeCos_(const FLASHHelperClasses::PrecalculatedAveragine& avg, double tol);
@@ -337,11 +365,18 @@ namespace OpenMS
 
     /// distance between consecutive isotopes. Can be different for decoys
     double iso_da_distance_ = Constants::ISOTOPE_MASSDIFF_55K_U;
+    /// detection limit (intensity of the weakest peak) of the spectrum in which this peak group is scored. Floors the per-charge noise power
+    float detection_limit_ = 0.f;
     /// scoring variables
     /// the charge for which the charge SNR is maximized
     int max_snr_abs_charge_ = -1;
     /// cosine score between averagine and the observed isotope pattern
     float isotope_cosine_score_ = 0.f;
+    /// for a precursor peak group, the heaviest mass and the highest charge among all the target masses in its isolation window
+    double window_max_mass_ = 0;
+    int window_max_charge_ = 0;
+    /// if the MSn spectrum is deconvolved within the window bounds instead of the bounds of this mass
+    bool use_window_bounds_ = false;
     /// charge fit score
     float charge_score_ = 0.f;
     /// quality score

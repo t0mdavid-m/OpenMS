@@ -354,7 +354,8 @@ namespace OpenMS
   }
 
   // Find candidate mass bins from the current spectrum. The runtime of FLASHDeconv is determined by this function.
-  void SpectralDeconvolution::updateCandidateMassBins_(std::vector<float>& mass_intensities, const std::vector<float>& mz_intensities)
+  void SpectralDeconvolution::updateCandidateMassBins_(std::vector<float>& mass_intensities, const std::vector<float>& mz_intensities,
+                                                       std::vector<std::pair<Size, long>>& chain_redirects)
   { //
     Size mz_bin_index = binned_log_mz_peaks_.find_first();
     auto mz_bin_index_reverse = std::vector<Size>();
@@ -373,7 +374,8 @@ namespace OpenMS
       = std::vector<unsigned short>(binned_log_masses_.size(), 0); // per mass bin how many peaks are present to support that mass bin
 
     // to calculate continuous charges, the previous charge value per mass should be stored
-    auto prev_charges = std::vector<unsigned short>(binned_log_masses_.size(), current_max_charge_ + 2);
+    const unsigned short no_charge = (unsigned short)(current_max_charge_ + 2);
+    auto prev_charges = std::vector<unsigned short>(binned_log_masses_.size(), no_charge);
 
     // not just charges but intensities are stored to see the intensity fold change
     auto prev_intensities = std::vector<float>(binned_log_masses_.size(), .0f);
@@ -383,10 +385,50 @@ namespace OpenMS
     double bin_mul_factor = bin_mul_factors_[ms_level_ - 1];
     std::vector<float> sub_max_h_intensity(h_charge_size, .0f);
 
+    // A high charge (> low_charge_) is accepted only as part of a chain of consecutive charges of one mass, and that continuity is decided
+    // on the unrounded masses, not by mass bin identity. A mass bin is the m/z bin of the peak plus the rounded charge offset, so two peaks
+    // of one isotope at consecutive charges land in the same mass bin only by chance (two roundings and the m/z error of each peak): on
+    // Eclip_1480, 70% of such pairs of real high-charge envelopes (median difference 1.5 ppm) fell in different 2-ppm bins, which broke the
+    // chain of their mass. A high-charge peak continues the chain of the previous charge whose last peak is within the tolerance
+    // (tol_div_factor bins) in unrounded mass, the closest one, and adds to the mass bin of that chain. A low-charge peak (and every peak in
+    // MSn) is accepted by its own isotope peaks; there the chain keeps the mass bin identity: with the unrounded rule at every charge,
+    // coincidental chains of unrelated peaks took peaks from their own masses (Eclip_1480 MSn: 5% fewer complementary fragment pairs).
+    // Per mass bin: the unrounded position (in bins) of its last peak relative to the bin and the offset from the bin to the chain's bin.
+    auto prev_residuals = std::vector<float>(binned_log_masses_.size(), .0f);
+    auto chain_offsets = std::vector<short>(binned_log_masses_.size(), 0);
+    const double chain_tol = tol_div_factor;                // tolerance in mass bins (= the input ppm tolerance)
+    const long chain_search = (long)(chain_tol + 2.0);      // + the two rounding errors (each <= 1/2 bin) of each of the two peaks
+    std::vector<double> exact_mass_offsets(current_max_charge_); // unrounded binned_universal_pattern_
+    for (int j = 0; j < current_max_charge_; j++)
+    {
+      exact_mass_offsets[j] = (mz_bin_min_value_ - universal_pattern_[j] - mass_bin_min_value_) * bin_mul_factor;
+    }
+    // unrounded position of each m/z bin (in bins): its most intense peak
+    std::vector<double> exact_mz_positions(mz_bin_index_reverse.size(), .0);
+    {
+      Size k = 0;
+      float max_intensity = -1;
+      for (const auto& p : log_mz_peaks_)
+      {
+        Size bi = getBinNumber_(p.logMz, mz_bin_min_value_, bin_mul_factor);
+        while (k < mz_bin_index_reverse.size() && mz_bin_index_reverse[k] < bi)
+        {
+          k++;
+          max_intensity = -1;
+        }
+        if (k >= mz_bin_index_reverse.size()) { break; }
+        if (mz_bin_index_reverse[k] != bi || p.intensity <= max_intensity) { continue; }
+        max_intensity = p.intensity;
+        exact_mz_positions[k] = (p.logMz - mz_bin_min_value_) * bin_mul_factor;
+      }
+    }
+    chain_redirects.clear();
+
     // traverse from right to left in the log mz bin space
     for (auto iter = mz_bin_index_reverse.rbegin(); iter < mz_bin_index_reverse.rend(); iter++)
     {
       mz_bin_index = *iter;
+      const double exact_mz_position = exact_mz_positions[mz_bin_index_reverse.rend() - iter - 1];
       const float intensity = mz_intensities[mz_bin_index];
       const double log_mz = getBinValue_(mz_bin_index, mz_bin_min_value_, bin_mul_factor); // uncharged log mz;
       const double mz = exp(log_mz);                                                       // uncharged mz
@@ -402,11 +444,7 @@ namespace OpenMS
 
         if (! excluded_mass_bins_for_decoy_runs_.empty() && excluded_mass_bins_for_decoy_runs_[mass_bin_index]) { continue; }
 
-        auto& spc = support_peak_count[mass_bin_index];
         const int abs_charge = (j + 1);
-        float& prev_intensity = prev_intensities[mass_bin_index];
-        auto& prev_charge = prev_charges[mass_bin_index];
-        const bool charge_not_continous = prev_charge - j != -1 && (prev_charge <= current_max_charge_);
         bool pass_first_check = false;
 
         // intensity ratio between consecutive charges should not exceed the factor.
@@ -415,24 +453,60 @@ namespace OpenMS
         // intensity ratio between consecutive charges for possible harmonic should be within this factor
 
         const float hfactor = factor / 2.0f;
+        auto get_intensity_ratio = [&](const float prev_int) {
+          float r = prev_int <= 0 ? (factor + 1) : (intensity / prev_int);
+          return r < 1 ? 1.0f / r : r;
+        };
+
+        // the chain of the previous charge this peak continues: the mass bin (for a high charge within chain_search bins, else its own) whose
+        // last peak is at the previous charge and within chain_tol in unrounded mass; of those, one within the intensity ratio factor first,
+        // then the closest
+        const float residual = (float)(exact_mz_position + exact_mass_offsets[j] - (double)mass_bin_index);
+        long chain_bin = -1;
+        double chain_dist = 0;
+        bool chain_ratio_ok = false;
+        if (j > 0)
+        {
+          const long search = abs_charge > low_charge_ ? chain_search : 0;
+          for (long s = std::max(0L, mass_bin_index - search); s <= std::min(bin_end - 1, mass_bin_index + search); s++)
+          {
+            if (prev_charges[s] != j - 1) { continue; }
+            const double d = std::abs((double)(mass_bin_index - s) + residual - prev_residuals[s]);
+            if (d > chain_tol) { continue; }
+            const bool ratio_ok = get_intensity_ratio(prev_intensities[s]) <= factor;
+            if (chain_bin < 0 || (ratio_ok && ! chain_ratio_ok) || (ratio_ok == chain_ratio_ok && d < chain_dist))
+            {
+              chain_bin = s;
+              chain_dist = d;
+              chain_ratio_ok = ratio_ok;
+            }
+          }
+        }
+        const bool charge_continous = chain_bin >= 0;
+        // the mass bin this peak adds to: the bin of the chain it continues, else its own
+        const long target_bin = charge_continous ? chain_bin + chain_offsets[chain_bin] : mass_bin_index;
+        unsigned short spc = charge_continous ? support_peak_count[chain_bin] : 0;
+        const float prev_intensity = charge_continous ? prev_intensities[chain_bin] : prev_intensities[mass_bin_index];
+
         // intensity of previous charge
         // intensity ratio between current and previous charges
-        float intensity_ratio = prev_intensity <= 0 ? (factor + 1) : (intensity / prev_intensity);
-        intensity_ratio = intensity_ratio < 1 ? 1.0f / intensity_ratio : intensity_ratio;
+        float intensity_ratio = get_intensity_ratio(prev_intensity);
         float support_peak_intensity = 0;
         // check if peaks of continuous charges are present
         std::fill(sub_max_h_intensity.begin(), sub_max_h_intensity.end(), .0f);
 
         // if charge not continuous or intensity ratio is too high reset support_peak_count
-        if (charge_not_continous || intensity_ratio > factor) { spc = 0; }
+        if (! charge_continous || intensity_ratio > factor) { spc = 0; }
         else
         {
           pass_first_check = true;
           if (spc == 0 && abs_charge > low_charge_) { support_peak_intensity = prev_intensity; }
         }
 
-        // for low charges, check isotope peak presence.
-        if (! pass_first_check && abs_charge <= low_charge_)
+        // for low charges, check isotope peak presence. In MSn spectra for every charge: a fragment ion mostly appears at a single
+        // charge state, so the consecutive-charge check above rarely passes for it (Eclip_1480: of 588 fragments of the TopPIC-only
+        // PrSMs seen at one charge above 10, 5 were reported without this).
+        if (! pass_first_check && (abs_charge <= low_charge_ || ms_level_ > 1))
         {
           // find the next isotope peak(s) and try to avoid harmonic masses
           for (int d = 1; d >= (avg_.getApexIndex(mz * abs_charge) > 0 ? -1 : 1); d -= 2)
@@ -448,7 +522,11 @@ namespace OpenMS
                      < tol_div_factor) // if different charges are not distinguishable, we ignore. Not informative and the source of the errors.
               break;
 
-            for (int t = -1; t < 2; t++)
+            // in MSn the neighbouring isotope peak is looked for within +-2 bins (~0.8 x the input tolerance), not within +-1 bin
+            // (~0.4 x, 2 ppm at 5 ppm): on Eclip_1480 the +-1 bin window lost 11% of the real fragment envelopes (fragments of the
+            // proteoforms TopPIC found and FLASHTnT did not), mostly at charges 1-4
+            const int iso_t = ms_level_ > 1 ? (int)tol_div_factor : 1;
+            for (int t = -iso_t; t <= iso_t; t++)
             {
               int nibt = nib + t;
               if (std::abs(nibt - (int)mz_bin_index) >= tol_div_factor && nibt > 0 && nibt < (int)binned_log_mz_peaks_.size()
@@ -498,7 +576,7 @@ namespace OpenMS
 
         if (pass_first_check)
         {
-          if (prev_charge - j == -1) // check harmonic artifacts for high charge ranges
+          if (charge_continous) // check harmonic artifacts for high charge ranges
           {
             float max_intensity = intensity;
             float min_intensity = prev_intensity;
@@ -548,33 +626,39 @@ namespace OpenMS
 
             if (! is_harmonic) // if it is not harmonic
             {
-              mass_intensities[mass_bin_index] += intensity + support_peak_intensity;
+              mass_intensities[target_bin] += intensity + support_peak_intensity;
 
-              if (! binned_log_masses_[mass_bin_index])
+              if (! binned_log_masses_[target_bin])
               {
                 spc++;
-                if (spc >= min_support_peak_count_ || spc >= abs_charge / 2) { binned_log_masses_[mass_bin_index] = true; }
+                if (spc >= min_support_peak_count_ || spc >= abs_charge / 2) { binned_log_masses_[target_bin] = true; }
               }
             }
             else // if harmonic
             {
-              mass_intensities[mass_bin_index]
+              mass_intensities[target_bin]
                 -= *std::max_element(sub_max_h_intensity.begin(), sub_max_h_intensity.end());
               if (spc > 0) { spc--; }
             }
           }
-          else if (abs_charge <= low_charge_) // for low charge, include the mass if isotope is present
+          else if (abs_charge <= low_charge_ || ms_level_ > 1) // for low charge (every charge in MSn), include the mass if isotope is present
           {
-            mass_intensities[mass_bin_index] += intensity + support_peak_intensity;
-            if (! binned_log_masses_[mass_bin_index])
+            mass_intensities[target_bin] += intensity + support_peak_intensity;
+            if (! binned_log_masses_[target_bin])
             {
               spc++;
-              binned_log_masses_[mass_bin_index] = true;
+              binned_log_masses_[target_bin] = true;
             }
           }
         }
-        prev_intensity = intensity;
-        prev_charge = j;
+        // the chain continues from this peak (its state is kept in the peak's own mass bin); the chain it continued cannot be continued again
+        if (charge_continous && chain_bin != mass_bin_index) { prev_charges[chain_bin] = no_charge; }
+        if (target_bin != mass_bin_index) { chain_redirects.emplace_back(mz_bin_index * current_max_charge_ + j, target_bin); }
+        prev_intensities[mass_bin_index] = intensity;
+        prev_charges[mass_bin_index] = (unsigned short)j;
+        support_peak_count[mass_bin_index] = spc;
+        prev_residuals[mass_bin_index] = residual;
+        chain_offsets[mass_bin_index] = (short)(target_bin - mass_bin_index);
       }
     }
   }
@@ -582,8 +666,10 @@ namespace OpenMS
   // Subfunction of updateMassBins_. If a peak corresponds to multiple masses, only one mass is selected for the peak based on intensities.
   // mass level harmonic check is also performed in this function
   // it also outputs the charge range of each mass bin
-  Matrix<int> SpectralDeconvolution::filterMassBins_(const std::vector<float>& mass_intensities)
+  Matrix<int> SpectralDeconvolution::filterMassBins_(const std::vector<float>& mass_intensities, std::vector<std::pair<Size, long>>& chain_redirects)
   {
+    std::sort(chain_redirects.begin(), chain_redirects.end());
+    Size redirect_index = 0;
     Matrix<int> abs_charge_ranges(2, binned_log_masses_.size(), INT_MAX);
     for (Size i = 0; i < binned_log_masses_.size(); i++)
     {
@@ -612,6 +698,11 @@ namespace OpenMS
 
         if (mass_bin_index < 0) { continue; }
         if (mass_bin_index >= bin_size) { break; }
+
+        // a peak that continued a consecutive-charge chain counts for the mass bin of the chain (updateCandidateMassBins_)
+        const Size key = mz_bin_index * current_max_charge_ + j;
+        while (redirect_index < chain_redirects.size() && chain_redirects[redirect_index].first < key) { redirect_index++; }
+        if (redirect_index < chain_redirects.size() && chain_redirects[redirect_index].first == key) { mass_bin_index = chain_redirects[redirect_index].second; }
 
         if (! target_mono_masses_.empty() && target_mass_bins_[mass_bin_index])
         {
@@ -679,9 +770,10 @@ namespace OpenMS
   Matrix<int> SpectralDeconvolution::updateMassBins_(const std::vector<float>& mz_intensities)
   {
     std::vector<float> mass_intensities;
-    updateCandidateMassBins_(mass_intensities, mz_intensities); // universal pattern matching
+    std::vector<std::pair<Size, long>> chain_redirects;
+    updateCandidateMassBins_(mass_intensities, mz_intensities, chain_redirects); // universal pattern matching
 
-    auto per_mass_abs_charge_ranges = filterMassBins_(mass_intensities);
+    auto per_mass_abs_charge_ranges = filterMassBins_(mass_intensities, chain_redirects);
 
     return per_mass_abs_charge_ranges;
   }
@@ -995,13 +1087,22 @@ namespace OpenMS
     const int num_peak_groups = static_cast<int>(deconvolved_spectrum_.size());
     auto selected = boost::dynamic_bitset<>(num_peak_groups);
     double snr_threshold = min_snr_[ms_level_ - 1];
+    // detection limit of the spectrum: the intensity of its weakest peak (after the peak filter). Noise below it cannot be observed;
+    // it floors the per-charge noise power of the peak groups (PeakGroup::updateChargeRange_)
+    float detection_limit = 0;
+    for (const auto& p : deconvolved_spectrum_.getOriginalSpectrum())
+    {
+      if (p.getIntensity() <= 0) { continue; }
+      if (detection_limit == 0 || p.getIntensity() < detection_limit) { detection_limit = p.getIntensity(); }
+    }
 
-  #pragma omp parallel for default(none) shared(tol, selected, snr_threshold, num_peak_groups, std::cout) if(num_peak_groups > 100)
+  #pragma omp parallel for default(none) shared(tol, selected, snr_threshold, num_peak_groups, detection_limit, std::cout) if(num_peak_groups > 100)
     for (int i = 0; i < num_peak_groups; i++)
     {
       int offset = 0;
       auto& peak_group = deconvolved_spectrum_[i];
       peak_group.setTargetDecoyType(target_decoy_type_);
+      peak_group.setDetectionLimit(detection_limit);
 
       if (isPeakGroupInExcludedMassForDecoyRuns_(peak_group, tol)) { continue; }
 
@@ -1045,7 +1146,8 @@ namespace OpenMS
 
       auto [z1, z2] = peak_group.getAbsChargeRange();
 
-      if (z1 > low_charge_ && (z2 - z1) < min_support_peak_count_) { continue; }
+      // a high-charge mass must span several charge states in MS1; fragment ions in MSn mostly appear at one charge
+      if (ms_level_ == 1 && z1 > low_charge_ && (z2 - z1) < min_support_peak_count_) { continue; }
 
       if (! target_mono_masses_.empty())
       {
@@ -1118,7 +1220,7 @@ namespace OpenMS
     selected = boost::dynamic_bitset<>(num_harmonics);
     filtered_peak_groups = std::vector<PeakGroup>();
 
-  #pragma omp parallel for default(none) shared(tol, selected, harmonic_charges_, num_harmonics) if(num_harmonics > 100)
+  #pragma omp parallel for default(none) shared(tol, selected, harmonic_charges_, num_harmonics, detection_limit) if(num_harmonics > 100)
     for (int i = 0; i < num_harmonics; i++)
     {
       const auto& peak_group = deconvolved_spectrum_[i];
@@ -1129,6 +1231,7 @@ namespace OpenMS
       {
         PeakGroup pg(std::min(current_max_charge_, z1 * hz), std::min(current_max_charge_, z2 * hz), is_positive_);
         pg.setIsotopeDaDistance(iso_da_distance_);
+        pg.setDetectionLimit(detection_limit);
         const auto& [z1_, z2_] = pg.getAbsChargeRange();
         if (z2 - z1 > z2_ - z1_) break; // if harmonic charges are too high stop
         pg.setMonoisotopicMass(peak_group.getMonoMass() * hz);

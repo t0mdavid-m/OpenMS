@@ -8,6 +8,7 @@
 
 #include <OpenMS/FORMAT/FLASHDeconvSpectrumFile.h>
 #include <OpenMS/FORMAT/MzMLFile.h>
+#include <algorithm>
 #include <random>
 
 namespace OpenMS
@@ -20,6 +21,17 @@ namespace OpenMS
 
   inline std::default_random_engine generator_;
   inline std::uniform_real_distribution<double> distribution_(0.0,1.0);
+
+  namespace
+  {
+    // The number of target masses of a deconvolved spectrum. With report_FDR, a spectrum also holds the decoy masses; the counts and
+    // limits of the target output are taken over the target masses only, so that it does not change with report_FDR.
+    Size countTargetMasses(const DeconvolvedSpectrum& dspec)
+    {
+      return (Size)std::count_if(dspec.begin(), dspec.end(),
+                                 [](const PeakGroup& pg) { return pg.getTargetDecoyType() == PeakGroup::TargetDecoyType::target; });
+    }
+  } // namespace
 
   void FLASHDeconvSpectrumFile::writeDeconvolvedMasses(DeconvolvedSpectrum& dspec, std::fstream& fs, const String& file_name, const FLASHHelperClasses::PrecalculatedAveragine& avg, const FLASHHelperClasses::PrecalculatedAveragine& decoy_avg, double tol,
                                                        const bool write_detail, const bool report_decoy, const double noise_decoy_weight)
@@ -119,6 +131,7 @@ namespace OpenMS
       }
     }
 
+    const Size target_mass_count = countTargetMasses(dspec);
     for (int i = 0; i < dspec.size(); i++)
     {
       auto& pg = dspec[i];
@@ -154,7 +167,7 @@ namespace OpenMS
       {
         ss << pg.getTargetDecoyType() << "\t";
       }
-      ss << std::to_string(dspec.getOriginalSpectrum().getRT()/60.0) << "\t" << dspec.size() << "\t" << std::to_string(avg_mass) << "\t" << std::to_string(mono_mass) << "\t" << intensity << "\t"
+      ss << std::to_string(dspec.getOriginalSpectrum().getRT()/60.0) << "\t" << target_mass_count << "\t" << std::to_string(avg_mass) << "\t" << std::to_string(mono_mass) << "\t" << intensity << "\t"
          << min_charge << "\t" << max_charge << "\t" << pg.size() << "\t";
 
       if (write_detail)
@@ -507,7 +520,7 @@ namespace OpenMS
         ss << "NaN\tNaN\tNaN\t0\tNaN\tNaN\t";
       }
 
-      ss << total_int << "\t" << dspec.getOriginalSpectrum().getRT() << "\t" << dspec.size() << "\t" << ch_count << "\t"
+      ss << total_int << "\t" << dspec.getOriginalSpectrum().getRT() << "\t" << countTargetMasses(dspec) << "\t" << ch_count << "\t"
          << (dspec.getActivationMethod() < Precursor::ActivationMethod::SIZE_OF_ACTIVATIONMETHOD
                ? Precursor::NamesOfActivationMethodShort[dspec.getActivationMethod()]
                : "N/A")
@@ -666,7 +679,9 @@ namespace OpenMS
       }
     }
 
-    if (dspec.size() < topFD_min_peak_count_)
+    // the peak count limits and the Qscore cut below are taken over the target masses (with report_FDR the spectrum also holds decoys)
+    const Size target_mass_count = countTargetMasses(dspec);
+    if (target_mass_count < topFD_min_peak_count_)
     {
       return;
     }
@@ -706,11 +721,12 @@ namespace OpenMS
     double qscore_threshold = 0;
     std::vector<double> qscores;
 
-    if (dspec.size() > topFD_max_peak_count_) // max peak count for TopPic = 500
+    if (target_mass_count > topFD_max_peak_count_) // max peak count for TopPic = 500
     {
-      qscores.reserve(dspec.size());
+      qscores.reserve(target_mass_count);
       for (auto& pg : dspec)
       {
+        if (pg.getTargetDecoyType() != PeakGroup::TargetDecoyType::target) continue;
         qscores.push_back(pg.getQscore2D());
       }
       std::sort(qscores.begin(), qscores.end());

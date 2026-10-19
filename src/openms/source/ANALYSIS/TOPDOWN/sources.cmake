@@ -32,6 +32,7 @@ set(sources_list
         PeakGroupScoring.cpp
         Qvalue.cpp
         TopDownIsobaricQuantification.cpp
+        MassLadderAlgorithm.cpp
 )
 
 ### add path to the filenames

@@ -95,6 +95,15 @@ public:
     }
   }
 
+  /// With @p report, every proteoform hit carries the deconvolved masses its best path matched (meta value MatchedMassIndices: indices
+  /// into the deconvolved spectrum given to run(), ascending): the masses of every node of the path whose protein position counts as
+  /// matched (MatchedAA), every mass merged into such a node included (e.g. the b and c ion of one position, or a suffix mass moved to the
+  /// prefix side by the precursor mass); the precursor node is no mass. Off by default; it changes no path, score or other meta value.
+  void setReportMatchedMasses(bool report)
+  {
+    report_matched_masses_ = report;
+  }
+
 protected:
   void updateMembers_() override;
   /// implemented for DefaultParamHandler
@@ -123,6 +132,11 @@ private:
     double calculated_precursor_mass_ = -1;
     /// the precursor mass is taken as given (no isotope offsets tried): set when an inferred mass gave no path and the MS1 mass is tried
     bool precursor_as_given_ = false;
+    /// the suffix and prefix node masses (residue sums) whose sum defined calculated_precursor_mass_ when it was inferred from fragments; -1 if not
+    double inferred_suffix_node_ = -1, inferred_prefix_node_ = -1;
+    /// in mode 2, the start position of the terminal (prefix) result bounds the start of the precursor-mass path only when unshifted prefix
+    /// masses read from that start support it (see min_n_term_ladder)
+    bool start_prior_ = true;
     /// n and c term best mass shift between spec and protein. For speed up
     int n_best_shift_ = 0, c_best_shift_ = 0;
     /// cached pointers to the current-mode (mode_) entries of the maps above; set once per mode to avoid re-resolving the std::map lookup on every recursion frame.
@@ -133,6 +147,11 @@ private:
     String cur_oriented_seq_;
     /// per mode, the fragment series of each node: 0 a/b/x/y, 1 c/z, -1 node 0, the precursor or a merged node of both
     std::map<int, std::vector<int>> node_series_map_;
+    /// with report_matched_masses_, per mode: the deconvolved-spectrum index of each mass of the mode before merging (node_source_map_, in
+    /// mass order) and, per node of node_spec_map_, the range [first, last] of those masses merged into it (first > last: node 0 and the
+    /// precursor node, which are no masses)
+    std::map<int, std::vector<int>> node_source_map_;
+    std::map<int, std::vector<std::pair<int, int>>> node_range_map_;
     const std::vector<int>* cur_node_series_ = nullptr;
     /// per series, the cleavage weight of a matched mass at each protein index of the current mode (index k: the bond after k residues)
     std::vector<int> cur_bond_weight_[2];
@@ -176,6 +195,13 @@ private:
   String variableModificationNames_(double mass, double tol, const String& seq, int from, int to, int n_site, int c_site, String& accessions,
                                     int& site) const;
 
+  /// the residues that can carry the shift between two matched masses of a path, (@p pre_node, @p pre_pro) and (@p node, @p pro), whose
+  /// summed shift at (@p node, @p pro) is @p mass_shift: [@p pre_pro, returned end) in this mode's orientation, where the end is the first
+  /// protein index in (@p pre_pro, @p pro) that a mass in between matches with the whole shift, else @p pro. Used for the DAG edge and for
+  /// the report of the path, so that a variable modification is tested and named on the same residues.
+  int shiftRangeEnd_(const MSSpectrum& node_spec, const MSSpectrum& tol_spec, const std::vector<double>& pro_masses, int pre_node, int pre_pro,
+                     int node, int pro, double mass_shift) const;
+
   /// largest |mass| that up to @p count variable modifications can explain (0 without them)
   double varModRoom_(int count) const
   {
@@ -199,7 +225,7 @@ private:
    */
   /// true if more complementary fragment pairs (prefix + suffix mass = @p precursor_mass, for the ion types in use) are found in
   /// @p sorted_masses than at any of 200 masses moved by up to +-300 Da (chance in this spectrum)
-  bool hasComplementaryPairSupport_(const std::vector<double>& sorted_masses, double precursor_mass) const;
+  bool hasComplementaryPairSupport_(const std::vector<double>& sorted_masses, double precursor_mass, double suffix_node = -1, double prefix_node = -1) const;
 
   void calculatePrecursorMass_(const ProteinHit& hit,
                                const std::map<int, std::vector<Size>>& best_path_map,
@@ -328,6 +354,8 @@ private:
   double tol_;
 
   bool skip_precursor_inference_ = true;
+  /// set MatchedMassIndices on every proteoform hit (setReportMatchedMasses)
+  bool report_matched_masses_ = false;
   int max_blind_mod_cntr_ = 1;
   int max_var_mod_cntr_ = 0;
   int allowed_isotope_error_ = 1;

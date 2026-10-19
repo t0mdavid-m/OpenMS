@@ -35,6 +35,7 @@ set(sources_list_h
         PeakGroupScoring.h
         Qvalue.h
         TopDownIsobaricQuantification.h
+        MassLadderAlgorithm.h
 )
 
 ### add path to the filenames

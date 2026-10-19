@@ -23,11 +23,15 @@ namespace OpenMS
     /// write header line for tag output file
     static void writeTagHeader(std::fstream& fs);
 
-    /// write header line for PrSM output file
-    static void writePrSMHeader(std::fstream& fs);
+    /// write header line for PrSM output file. With @p chimeric (FLASHTnT -chimeric_rounds > 0), the chimeric columns follow the others:
+    /// ChimericRound (0: the search of the whole spectrum, r: residual round r), MatchedMasses (deconvolved masses on the PrSM's path),
+    /// RemovedMasses (masses removed from the spectrum before the PrSM's round), ResidualNullScore (the best extension score of the other
+    /// decoy PrSMs of the same residual search; -1: none or round 0) and ResidualScoreRatio (extension score / ResidualNullScore; -1:
+    /// undefined)
+    static void writePrSMHeader(std::fstream& fs, bool chimeric = false);
 
-    /// write header line for Proteoform output file
-    static void writeProHeader(std::fstream& fs);
+    /// write header line for Proteoform output file (@p chimeric: as writePrSMHeader, the values of the representative PrSM)
+    static void writeProHeader(std::fstream& fs, bool chimeric = false);
 
     /// header for the protein-level output, written before proteoform characterization
     static void writeProteinHeader(std::fstream& fs);
@@ -38,7 +42,7 @@ namespace OpenMS
     /// write the features in regular file output
     static void writeTags(const FLASHTnTAlgorithm& tnt, double flanking_mass_tol, std::fstream& fs);
 
-    static void writePrSMs(const std::vector<ProteinHit>& hits, std::fstream& fs);
+    static void writePrSMs(const std::vector<ProteinHit>& hits, std::fstream& fs, bool chimeric = false);
 
     /**
       @brief the ProForma 2.0 string of a PrSM or proteoform hit; empty if a terminus is undetermined (ProForma cannot express it)
@@ -49,6 +53,6 @@ namespace OpenMS
     */
     static String getProFormaString(const ProteinHit& hit);
 
-    static void writeProteoforms(const std::vector<ProteinHit>& hits, std::fstream& fs, double pro_fdr);
+    static void writeProteoforms(const std::vector<ProteinHit>& hits, std::fstream& fs, double pro_fdr, bool chimeric = false);
   };
 } // namespace OpenMS
