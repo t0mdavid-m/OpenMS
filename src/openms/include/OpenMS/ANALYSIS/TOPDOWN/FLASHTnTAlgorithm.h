@@ -104,6 +104,8 @@ private:
   String gapped_mode_ = "fallback";
   /// candidates from terminal ladders (residue sums from an intact protein terminus) in every spectrum
   bool terminal_ladders_ = true;
+  /// candidates from precursor-anchored ladders (windows whose unmodified mass is the precursor mass) in every spectrum with a precursor mass
+  bool precursor_ladders_ = true;
   /// learn variable modification penalties from target and decoy usage
   bool learn_var_mod_penalty_ = true;
   /// search spectra with MS1-based PrSMs again with decoy precursor masses, as decoys of the precursor in the FDR

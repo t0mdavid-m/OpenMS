@@ -147,6 +147,7 @@ namespace
   /// where the candidate protein of a hit came from
   String candidateSource(const OpenMS::ProteinHit& hit)
   {
+    if (hit.metaValueExists("PrecursorLadder")) return "precursor ladder";
     if (hit.metaValueExists("TerminalLadder")) return "terminal ladder";
     if (hit.metaValueExists("GappedTag")) return "gapped tag";
     return "sequence tag";

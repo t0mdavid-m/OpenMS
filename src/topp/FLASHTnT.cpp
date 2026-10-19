@@ -129,6 +129,18 @@ protected:
                           "N-terminus also without the initiator Met and with acetylation), found without a sequence tag. In every spectrum the "
                           "min_protein_hits best proteins by the chance probability of their ladder are characterized, anchored on the ladder.", false);
     setValidStrings_("terminal_ladders", {"true", "false"});
+    registerStringOption_("precursor_ladders", "<bool>", "true",
+                          "Candidate proteins from precursor-anchored ladders: in each MSn spectrum with a precursor mass, every stretch of a protein "
+                          "(between non-standard residues) whose unmodified mass equals the precursor mass (within the MS1 deconvolution tolerance of "
+                          "the input, or -protein_tol's tolerance if the input has no MS1 spectra; isotope errors -1 to +1) is scored by the chance "
+                          "probability of the deconvolved masses on its prefix and suffix fragment ladders (a position counts once per side, whatever "
+                          "ion types match it). The stretches are unmodified: N-terminal acetylation and other modifications are not proposed "
+                          "(initiator Met removal is a stretch from residue 2). The -min_protein_hits best stretches are characterized from tags on "
+                          "their ladders. Only their PrSMs of determined mass and termini that are not the same proteoform as a determined PrSM of "
+                          "another source in the spectrum are kept; they form their own FDR class (\"precursor ladder\"). Not used with "
+                          "-protein_level_only. Without any precursor mass in the input, results are unchanged; otherwise the PrSMs of this source can "
+                          "also change the others' results (the pooled protein-level null, the best PrSM of a spectrum, proteoform clusters).", false);
+    setValidStrings_("precursor_ladders", {"true", "false"});
     registerDoubleOption_("raw_score_weight", "<weight>", 8.0,
                           "With -in_raw: every PrSM is ranked for the FDR by its extension score plus this weight times its raw score (-log10 of the "
                           "chance of the fragment isotope envelopes matched in the raw spectrum). 0: the raw score is reported but not used in the ranking.",
