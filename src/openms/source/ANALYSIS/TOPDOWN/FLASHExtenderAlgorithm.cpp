@@ -28,9 +28,10 @@ namespace OpenMS
   // penalty applied in findSubPathsBetweenTagEndPoints. Equals 19.
   inline const int truncation_penalty = 1 + 2 * (multi_ion_score + FLASHTaggerAlgorithm::max_node_score);
   // Minimum number of unshifted suffix fragment masses from the protein C-terminus against which a precursor-mass path ending before
-  // the C-terminus is not accepted: terminal ladders of k >= 6 had no chance hits in the own-candidate entrapment study
-  // (final_all/sliding/own_cand).
-  inline const int min_c_term_ladder = 6;
+  // the C-terminus is not accepted. Set from an empirical null on Eclip_1480: ladders read from a wrong C-terminus of the right protein
+  // (78,686 internal positions of 1% PrSMs) reach k >= 4 at a rate of 7.6e-5 (shuffled decoys: 1.6e-5 of 378,800), so the about 200
+  // tests of a lysate run give about 0.015 chance rejections; k >= 3 would give about 0.1.
+  inline const int min_c_term_ladder = 4;
   // Penalty per variable modification: a known residue-specific shift costs far less than a blind modification, but more than
   // nothing, so that an unmodified path wins a tie.
   inline const int var_mod_penalty = 1 + multi_ion_score;
