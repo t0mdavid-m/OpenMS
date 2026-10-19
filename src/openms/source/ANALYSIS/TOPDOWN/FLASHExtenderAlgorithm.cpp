@@ -27,6 +27,10 @@ namespace OpenMS
   // Base penalty for a terminal truncation, equivalent to the base blind-modification (mass-shift)
   // penalty applied in findSubPathsBetweenTagEndPoints. Equals 19.
   inline const int truncation_penalty = 1 + 2 * (multi_ion_score + FLASHTaggerAlgorithm::max_node_score);
+  // Minimum number of unshifted suffix fragment masses from the protein C-terminus against which a precursor-mass path ending before
+  // the C-terminus is not accepted: terminal ladders of k >= 6 had no chance hits in the own-candidate entrapment study
+  // (final_all/sliding/own_cand).
+  inline const int min_c_term_ladder = 6;
   // Penalty per variable modification: a known residue-specific shift costs far less than a blind modification, but more than
   // nothing, so that an unmodified path wins a tie.
   inline const int var_mod_penalty = 1 + multi_ion_score;
@@ -1039,6 +1043,8 @@ namespace OpenMS
       std::vector<String> terminal_mod_var_names, terminal_mod_var_accs;
       std::map<int, std::set<int>> terminal_matched_position_map;
       int terminal_start = -1, terminal_end = -1;
+      // suffix fragment masses matched on the suffix path before its first shift, i.e. measured from where that path starts
+      int c_ladder = 0, terminal_c_ladder = 0;
       bool retried_with_given_mass = false;
 
       for (hi.mode_ = 0; hi.mode_ <= 2; hi.mode_++)
@@ -1059,6 +1065,7 @@ namespace OpenMS
           terminal_matched_position_map = matched_position_map;
           terminal_start = hi.protein_start_position_;
           terminal_end = hi.protein_end_position_;
+          terminal_c_ladder = c_ladder;
         }
         if (hi.mode_ == 2 && hi.calculated_precursor_mass_ <= 0)
         { // const ProteinHit& hit,
@@ -1196,6 +1203,7 @@ namespace OpenMS
         {
           if (best_path_map.empty() || best_path_map.find(m) == best_path_map.end() || best_path_map[m].empty()) continue;
           mods_before[m] = mod_starts.size();
+          if (m == 0) c_ladder = 0;
           auto& best_path = best_path_map[m];
           auto& t_pro_masses = hi.pro_mass_map_[m];
           auto& t_node_spec = hi.node_spec_map_[m];
@@ -1228,6 +1236,7 @@ namespace OpenMS
             if (node_index > 0 && t_node_spec[node_index].getMZ() != hi.calculated_precursor_mass_ - i2f_mass)
             {
               matched_position_map[m].insert(pro_seq_index);
+              if (m == 0 && mod_count == 0) c_ladder++;
             }
 
             if (m == 0) max_cterm_rindex = std::max(max_cterm_rindex, pro_index);
@@ -1349,6 +1358,13 @@ namespace OpenMS
             = given_precursor_mass_ > 0 && std::abs(given_precursor_mass_ - hi.calculated_precursor_mass_) <= tol_ * given_precursor_mass_;
           if (! reject_mass && precursor_by_fragment && ! given_mass_agrees) // the MS1 precursor mass confirms it
             reject_mass = ! hasComplementaryPairSupport_(sorted_masses, hi.calculated_precursor_mass_);
+          // Unshifted suffix fragment masses measured from the C-terminus cannot come from a proteoform that ends before it. A precursor
+          // mass of a co-isolated species makes the path end where that mass fits and absorb the rest with blind shifts: on Eclip_1480
+          // scan 8324, YCII 1-76 [+28.0, -484.8] scored 37, the terminal result 1-98 with 21 y ions 228.
+          const int len = (int)hit.getSequence().size();
+          if (! reject_mass && terminal_end == len && terminal_c_ladder >= min_c_term_ladder && hi.protein_end_position_ < len
+              && total_score < terminal_score)
+            reject_mass = true;
         }
         // A mass that gives no path is given up as well when it is not the MS1 precursor mass as given (inferred from fragments, or moved by
         // an isotope offset), so that the MS1 mass is tried as it is: on Eclip_1480 scan 4032 (RL27 without the initiator Met, MS1 mass
