@@ -430,8 +430,10 @@ namespace OpenMS
           if (spc == 0 && abs_charge > low_charge_) { support_peak_intensity = prev_intensity; }
         }
 
-        // for low charges, check isotope peak presence.
-        if (! pass_first_check && abs_charge <= low_charge_)
+        // for low charges, check isotope peak presence. In MSn spectra for every charge: a fragment ion mostly appears at a single
+        // charge state, so the consecutive-charge check above rarely passes for it (Eclip_1480: of 588 fragments of the TopPIC-only
+        // PrSMs seen at one charge above 10, 5 were reported without this).
+        if (! pass_first_check && (abs_charge <= low_charge_ || ms_level_ > 1))
         {
           // find the next isotope peak(s) and try to avoid harmonic masses
           for (int d = 1; d >= (avg_.getApexIndex(mz * abs_charge) > 0 ? -1 : 1); d -= 2)
@@ -447,7 +449,11 @@ namespace OpenMS
                      < tol_div_factor) // if different charges are not distinguishable, we ignore. Not informative and the source of the errors.
               break;
 
-            for (int t = -1; t < 2; t++)
+            // in MSn the neighbouring isotope peak is looked for within +-2 bins (~0.8 x the input tolerance), not within +-1 bin
+            // (~0.4 x, 2 ppm at 5 ppm): on Eclip_1480 the +-1 bin window lost 11% of the real fragment envelopes (fragments of the
+            // proteoforms TopPIC found and FLASHTnT did not), mostly at charges 1-4
+            const int iso_t = ms_level_ > 1 ? (int)tol_div_factor : 1;
+            for (int t = -iso_t; t <= iso_t; t++)
             {
               int nibt = nib + t;
               if (std::abs(nibt - (int)mz_bin_index) >= tol_div_factor && nibt > 0 && nibt < (int)binned_log_mz_peaks_.size()
@@ -562,7 +568,7 @@ namespace OpenMS
               if (spc > 0) { spc--; }
             }
           }
-          else if (abs_charge <= low_charge_) // for low charge, include the mass if isotope is present
+          else if (abs_charge <= low_charge_ || ms_level_ > 1) // for low charge (every charge in MSn), include the mass if isotope is present
           {
             mass_intensities[mass_bin_index] += intensity + support_peak_intensity;
             if (! binned_log_masses_[mass_bin_index])
@@ -1043,7 +1049,8 @@ namespace OpenMS
 
       auto [z1, z2] = peak_group.getAbsChargeRange();
 
-      if (z1 > low_charge_ && (z2 - z1) < min_support_peak_count_) { continue; }
+      // a high-charge mass must span several charge states in MS1; fragment ions in MSn mostly appear at one charge
+      if (ms_level_ == 1 && z1 > low_charge_ && (z2 - z1) < min_support_peak_count_) { continue; }
 
       if (! target_mono_masses_.empty())
       {
