@@ -572,7 +572,7 @@ namespace OpenMS
     float max_score = -(float)max_path_score_;
 
     std::vector<int> isos {0};
-    if (hi.mode_ == 2 && hi.calculated_precursor_mass_ > 0)
+    if (hi.mode_ == 2 && hi.calculated_precursor_mass_ > 0 && ! hi.precursor_as_given_)
     {
       for (int i = 1; i <= allowed_isotope_error_; ++i)
       {
@@ -616,7 +616,9 @@ namespace OpenMS
             double mass = pg.getMonoMass() - suffix_shifts_[si];
             if (mass <= 0 || mass >= proteoform_mass - i2f_mass) continue;
             double prefix_mass = proteoform_mass - i2f_mass - mass;
-            nodes.push_back({prefix_mass, (float)std::max(1, FLASHTaggerAlgorithm::getNodeScore(pg)), tol_ * pg.getMonoMass(), suffix_series_[si]});
+            // the converted mass carries the error of the precursor mass as well as that of the fragment mass (both at the input tolerance)
+            nodes.push_back({prefix_mass, (float)std::max(1, FLASHTaggerAlgorithm::getNodeScore(pg)), tol_ * (pg.getMonoMass() + proteoform_mass),
+                             suffix_series_[si]});
           }
         }
       }
@@ -784,8 +786,10 @@ namespace OpenMS
             if (std::abs(start_mass + seq_mass - end_mass) > end_mass * tol_) end_mass = start_mass + seq_mass;
           }
 
-          start_tols.push_back(start_mass * tol_);
-          end_tols.push_back(end_mass * tol_);
+          // converted with the precursor mass (mode 2), a suffix mass also carries the precursor mass error
+          const double converted = hi.mode_ == 2 ? hi.calculated_precursor_mass_ : 0;
+          start_tols.push_back((start_mass + converted) * tol_);
+          end_tols.push_back((end_mass + converted) * tol_);
 
           if (hi.mode_ == 2)
           {
@@ -983,6 +987,7 @@ namespace OpenMS
     const UInt mi_modification_ends = registry.registerName("ModificationEnds");
     const UInt mi_blind_mod_count = registry.registerName("BlindModCount");
     const UInt mi_variable_modifications = registry.registerName("VariableModifications");
+    const UInt mi_modification_variable = registry.registerName("ModificationVariable");
     const UInt mi_matched_aa = registry.registerName("MatchedAA");
     const UInt mi_start_position = registry.registerName("StartPosition");
     const UInt mi_end_position = registry.registerName("EndPosition");
@@ -1002,7 +1007,7 @@ namespace OpenMS
     for (const auto& pg : dspec) sorted_masses.push_back(pg.getMonoMass());
     std::sort(sorted_masses.begin(), sorted_masses.end());
 
-  #pragma omp parallel for default(none) schedule(dynamic) if (! omp_in_parallel()) shared(hits, tags, dspec, multiple_hits_per_spec, i2f_mass, spec_vec, sorted_masses, vec_pro, rev_vec_pro, std::cout, found, mi_tag_indices, mi_fasta_index, mi_modification_ids, mi_modification_accs, mi_modifications, mi_modification_starts, mi_modification_ends, mi_blind_mod_count, mi_variable_modifications, mi_matched_aa, mi_start_position, mi_end_position, mi_given_mass, mi_mass, mi_rt, mi_num_mass, mi_precursor_score, mi_precursor_snr, mi_mass_by_fragments)
+  #pragma omp parallel for default(none) schedule(dynamic) if (! omp_in_parallel()) shared(hits, tags, dspec, multiple_hits_per_spec, i2f_mass, spec_vec, sorted_masses, vec_pro, rev_vec_pro, std::cout, found, mi_tag_indices, mi_fasta_index, mi_modification_ids, mi_modification_accs, mi_modifications, mi_modification_starts, mi_modification_ends, mi_blind_mod_count, mi_variable_modifications, mi_modification_variable, mi_matched_aa, mi_start_position, mi_end_position, mi_given_mass, mi_mass, mi_rt, mi_num_mass, mi_precursor_score, mi_precursor_snr, mi_mass_by_fragments)
     for (int i = 0; i < ((int)hits.size()); i++)
     {
       nextProgress();
@@ -1359,9 +1364,16 @@ namespace OpenMS
           if (! reject_mass && precursor_by_fragment && ! given_mass_agrees) // the MS1 precursor mass confirms it
             reject_mass = ! hasComplementaryPairSupport_(sorted_masses, hi.calculated_precursor_mass_);
         }
+        // A mass that gives no path is given up as well when it is not the MS1 precursor mass as given (inferred from fragments, or moved by
+        // an isotope offset), so that the MS1 mass is tried as it is: on Eclip_1480 scan 4032 (RL27 without the initiator Met, MS1 mass
+        // 1.8 ppm from it) a fragment pair inferred the mass 1 Da lower, mode 2 found no path, and the proteoform was reported with an
+        // undetermined mass.
+        const bool moved = hi.mode_ == 2 && given_precursor_mass_ > 0 && ! retried_with_given_mass
+                           && (precursor_by_fragment || std::abs(hi.calculated_precursor_mass_ - given_precursor_mass_) > tol_ * given_precursor_mass_);
+        if (moved && total_score <= 0) reject_mass = true;
         if (reject_mass)
         {
-          const bool inferred = precursor_by_fragment;
+          const bool inferred = precursor_by_fragment || moved;
           total_score = terminal_score;
           used_mode = terminal_used_mode;
           mod_starts = terminal_mod_starts;
@@ -1381,6 +1393,9 @@ namespace OpenMS
           if (inferred && ! retried_with_given_mass && given_precursor_mass_ > 0)
           {
             retried_with_given_mass = true; // mode 2 again, without inference: it takes the given precursor mass
+            // as it is: the isotope offset with the most overlapping fragment masses took 1 Da off the right MS1 mass of RL27 (Eclip_1480
+            // scan 4032), and the retry failed the same way
+            hi.precursor_as_given_ = true;
             hi.mode_ = 1;
             continue;
           }
@@ -1552,6 +1567,7 @@ namespace OpenMS
       hit.setMetaValue(mi_modification_starts, mod_starts);
       hit.setMetaValue(mi_modification_ends, mod_ends);
       hit.setMetaValue(mi_blind_mod_count, (int)std::count(mod_vars.begin(), mod_vars.end(), 0));
+      hit.setMetaValue(mi_modification_variable, mod_vars); // 1: a variable (searched) modification, 0: a blind shift
       {
         // the variable modification names of the path ("A+B," per shift, alternatives separated by ","), for FLASHTnT's penalty learning
         std::vector<String> var_entries;

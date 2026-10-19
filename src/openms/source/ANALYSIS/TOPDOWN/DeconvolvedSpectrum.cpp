@@ -49,6 +49,10 @@ namespace OpenMS
     {
       val << ";precursorscan=0;precursormass=0;precursorQscore=0;precursorSNR=0";
     }
+    if (decoy_precursor_mass_ > 0)
+    {
+      val << ";decoyprecursormass=" << std::to_string(decoy_precursor_mass_) << ";decoyprecursorweight=" << std::to_string(decoy_precursor_weight_);
+    }
 
     val << ";peaks=";
     out_spec.reserve(size());

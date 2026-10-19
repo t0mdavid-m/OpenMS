@@ -121,6 +121,8 @@ private:
     int protein_start_position_ = -1, protein_end_position_ = -1;
     /// calculated precursor mass from fragment mass pairing (representing complementary ion pairs)
     double calculated_precursor_mass_ = -1;
+    /// the precursor mass is taken as given (no isotope offsets tried): set when an inferred mass gave no path and the MS1 mass is tried
+    bool precursor_as_given_ = false;
     /// n and c term best mass shift between spec and protein. For speed up
     int n_best_shift_ = 0, c_best_shift_ = 0;
     /// cached pointers to the current-mode (mode_) entries of the maps above; set once per mode to avoid re-resolving the std::map lookup on every recursion frame.

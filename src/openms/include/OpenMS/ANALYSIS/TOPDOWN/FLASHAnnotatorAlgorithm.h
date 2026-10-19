@@ -12,6 +12,7 @@
 #include <OpenMS/DATASTRUCTURES/String.h>
 #include <OpenMS/KERNEL/MSSpectrum.h>
 #include <limits>
+#include <map>
 #include <set>
 #include <utility>
 #include <vector>
@@ -211,6 +212,28 @@ public:
 
   /// -log10 P(X >= k) for X ~ Binomial(n, p), computed in log space and capped at max_score_
   static double binomialTailScore(int n, int k, double p);
+
+  /**
+    @brief the MSn spectra of the given scan numbers of a raw mzML file, read in one pass
+
+    Only those spectra are kept in memory. Scan numbers come from the native IDs; when they carry none, they are the spectrum
+    index + 1 (the file is then read a second time, all spectra). The spectra are as in the file (profile or centroided).
+    @return the number of spectra read
+  */
+  static Size loadSpectra(const String& mzml_file, const std::set<int>& scans, std::map<int, MSSpectrum>& spectra);
+
+  /// the peak arrays of a raw spectrum, centroided with PeakPickerHiRes if it is a profile spectrum; true if it was centroided here
+  static bool toCentroidedPeakArrays(const MSSpectrum& spec, PeakArrays& peaks);
+
+  /**
+    @brief the charge that caps the fragment charges of a PrSM
+
+    The charge of the raw precursor if @p precursor_mass has an isotope peak in the isolation window at that charge (or no mass is
+    given, or the charges agree); else the charge implied by the mass and the isolation target m/z if that one does; else the
+    larger of the two. Without a raw charge, the implied charge; without a mass either, 0 (no cap beyond min_mass_per_charge).
+    @param reason 0 raw charge, 1 implied charge, 2 the larger of both, 3 implied charge (no raw charge), 4 no cap
+  */
+  int precursorChargeCap(const MSSpectrum& raw, double precursor_mass, int& reason);
 
 protected:
   void updateMembers_() override;

@@ -40,11 +40,14 @@ namespace OpenMS
 
     static void writePrSMs(const std::vector<ProteinHit>& hits, std::fstream& fs);
 
-    static String generateProFormaString_(const String& sequence, int seq_start, int seq_end,
-                                  const std::vector<double>& mod_masses,
-                                  const std::vector<int>& mod_starts,
-                                  const std::vector<int>& mod_ends,
-                                  const std::vector<String>& mod_ids);
+    /**
+      @brief the ProForma 2.0 string of a PrSM or proteoform hit; empty if a terminus is undetermined (ProForma cannot express it)
+
+      A variable (searched) modification is written by its name (two names joined by '+' as two tags), a blind shift by its mass: the
+      Unimod names listed for a blind shift (ModID) are only those of matching mass. Overlapping ranges, which ProForma does not
+      allow, are written as one range with their summed mass.
+    */
+    static String getProFormaString(const ProteinHit& hit);
 
     static void writeProteoforms(const std::vector<ProteinHit>& hits, std::fstream& fs, double pro_fdr);
   };

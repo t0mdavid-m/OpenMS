@@ -7,6 +7,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHAnnotatorAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTAlgorithm.h>
 #include <OpenMS/APPLICATIONS/TOPPBase.h>
 #include <OpenMS/FORMAT/FASTAFile.h>
@@ -43,6 +44,13 @@ protected:
 
     registerInputFile_("fasta", "<file>", "", "Input proteome database file (fasta)", true);
     setValidFormats_("fasta", ListUtils::create<String>("fasta"));
+
+    registerInputFile_("in_raw", "<file>", "",
+                       "Raw mzML file (profile or centroid) FLASHDeconv was run on. With it, every PrSM (targets and decoys) is annotated on its raw "
+                       "spectrum (fragment isotope envelopes at every charge, as FLASHAnnotator) before the FDR, and ranked by its extension score "
+                       "plus -raw_score_weight times its raw score. The raw annotation columns are written in the PrSM and proteoform files.",
+                       false);
+    setValidFormats_("in_raw", ListUtils::create<String>("mzML"));
 
     registerOutputFile_("out_pro", "<file>", "", "Output proteoform-level tsv file containing proteoform IDs. ", true);
     setValidFormats_("out_pro", ListUtils::create<String>("tsv"));
@@ -92,6 +100,7 @@ protected:
 
     String in_file = getStringOption_("in");
     String in_fasta = getStringOption_("fasta");
+    String in_raw = getStringOption_("in_raw");
 
     String out_tag_file = getStringOption_("out_tag");
     String out_prsm_file = getStringOption_("out_prsm");
@@ -113,6 +122,7 @@ protected:
     auto tnt_param = getParam_();
     tnt_param.remove("in");
     tnt_param.remove("fasta");
+    tnt_param.remove("in_raw");
     tnt_param.remove("out_tag");
     tnt_param.remove("out_prsm");
     tnt_param.remove("out_pro");
@@ -165,6 +175,12 @@ protected:
 
     FLASHTnTAlgorithm tnt;
     tnt.setParameters(tnt_param);
+    if (! in_raw.empty())
+    {
+      tnt.setRawSpectrumLoader([&in_raw](const std::set<int>& scans, std::map<int, MSSpectrum>& spectra) {
+        FLASHAnnotatorAlgorithm::loadSpectra(in_raw, scans, spectra);
+      });
+    }
     tnt.run(map, fasta_entry);
     tnt.getProteoforms(proteoform_hits);
 

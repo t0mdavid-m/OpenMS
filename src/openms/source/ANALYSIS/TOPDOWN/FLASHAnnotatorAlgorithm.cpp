@@ -12,6 +12,11 @@
 #include <OpenMS/CHEMISTRY/Residue.h>
 #include <OpenMS/CHEMISTRY/ResidueDB.h>
 #include <OpenMS/CONCEPT/Constants.h>
+#include <OpenMS/FORMAT/MzMLFile.h>
+#include <OpenMS/INTERFACES/IMSDataConsumer.h>
+#include <OpenMS/METADATA/ExperimentalSettings.h>
+#include <OpenMS/METADATA/SpectrumLookup.h>
+#include <OpenMS/PROCESSING/CENTROIDING/PeakPickerHiRes.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -1177,5 +1182,150 @@ void FLASHAnnotatorAlgorithm::annotate(const std::vector<PeakArrays>& spectra, c
     const double log_p = -x / 2.0 + std::log1p(x / 2.0);                     // ln P(chi2_4 >= x)
     r.fa_score = std::min(max_score_, std::max(0.0, -log_p / std::log(10.0)));
   }
+}
+
+namespace
+{
+  /// keeps, of the spectra read by MzMLFile::transform, the first MSn spectrum of every needed scan number
+  class NeededSpectraConsumer : public Interfaces::IMSDataConsumer
+  {
+  public:
+    /// with @p scan_from_index, scan numbers are spectrum index + 1 unless the native ID carries one (all spectra must be read)
+    NeededSpectraConsumer(const std::set<int>& needed_scans, bool scan_from_index, std::map<int, MSSpectrum>& out):
+      needed_scans_(needed_scans), scan_from_index_(scan_from_index), out_(out)
+    {
+    }
+    void setExperimentalSettings(const ExperimentalSettings& settings) override
+    {
+      // as FLASHDeconvAlgorithm::getScanNumber
+      type_accession_ = "MS:1000768";
+      if (! settings.getSourceFiles().empty() && ! settings.getSourceFiles()[0].getNativeIDTypeAccession().empty())
+      {
+        type_accession_ = settings.getSourceFiles()[0].getNativeIDTypeAccession();
+      }
+    }
+    void setExpectedSize(Size, Size) override
+    {
+    }
+    void consumeSpectrum(SpectrumType& spec) override
+    {
+      const int index = read_count_++;
+      std::vector<String> native_ids;
+      spec.getNativeID().split(",", native_ids);
+      int scan = native_ids.empty() ? -1 : SpectrumLookup::extractScanNumber(native_ids.back(), type_accession_);
+      if (scan < 0)
+      {
+        without_scan_number_ = true;
+        if (! scan_from_index_) return;
+        scan = index + 1;
+      }
+      if (spec.getMSLevel() < 2 || needed_scans_.find(scan) == needed_scans_.end() || out_.find(scan) != out_.end()) return;
+      out_[scan] = std::move(spec);
+    }
+    void consumeChromatogram(ChromatogramType&) override
+    {
+    }
+    int readCount() const
+    {
+      return read_count_;
+    }
+    bool withoutScanNumber() const
+    {
+      return without_scan_number_;
+    }
+
+  private:
+    const std::set<int>& needed_scans_;
+    bool scan_from_index_;
+    std::map<int, MSSpectrum>& out_;
+    String type_accession_ = "MS:1000768";
+    int read_count_ = 0;
+    bool without_scan_number_ = false;
+  };
+} // namespace
+
+Size FLASHAnnotatorAlgorithm::loadSpectra(const String& mzml_file, const std::set<int>& scans, std::map<int, MSSpectrum>& spectra)
+{
+  MzMLFile mzml;
+  mzml.setLogType(ProgressLogger::NONE);
+  PeakFileOptions options = mzml.getOptions();
+  options.setMSLevels({2, 3, 4, 5});
+  // chromatograms are not skipped: with setSkipChromatograms(true), MzMLHandler ends a progress it did not start
+  mzml.setOptions(options);
+  NeededSpectraConsumer consumer(scans, false, spectra);
+  mzml.transform(mzml_file, &consumer, true);
+  Size read = consumer.readCount();
+  if (consumer.withoutScanNumber())
+  {
+    // scan numbers then come from the spectrum indices, which require all spectra
+    spectra.clear();
+    options.setMSLevels({});
+    mzml.setOptions(options);
+    NeededSpectraConsumer all(scans, true, spectra);
+    mzml.transform(mzml_file, &all, true);
+    read = all.readCount();
+  }
+  return read;
+}
+
+bool FLASHAnnotatorAlgorithm::toCentroidedPeakArrays(const MSSpectrum& spec, PeakArrays& peaks)
+{
+  if (spec.getType(true) == SpectrumSettings::PROFILE)
+  {
+    PeakPickerHiRes picker;
+    MSSpectrum picked;
+    picker.pick(spec, picked);
+    toPeakArrays(picked, peaks);
+    return true;
+  }
+  toPeakArrays(spec, peaks);
+  return false;
+}
+
+int FLASHAnnotatorAlgorithm::precursorChargeCap(const MSSpectrum& raw, double precursor_mass, int& reason)
+{
+  int raw_charge = 0;
+  double precursor_mz = 0, low = 0, high = 0;
+  if (! raw.getPrecursors().empty())
+  {
+    const auto& precursor = raw.getPrecursors()[0];
+    raw_charge = precursor.getCharge();
+    precursor_mz = precursor.getMZ();
+    low = precursor_mz - precursor.getIsolationWindowLowerOffset();
+    high = precursor_mz + precursor.getIsolationWindowUpperOffset();
+  }
+  std::vector<double> iso_mzs, iso_intensities;
+  // true if an isotope peak of mass at charge z lies in [low, high]
+  auto in_window = [&](double mass, int z) {
+    getIsotopeEnvelope(mass, z, iso_mzs, iso_intensities);
+    return ! iso_mzs.empty() && iso_mzs.front() <= high && iso_mzs.back() >= low;
+  };
+  // the charge at which the precursor mass has the isolation target m/z
+  const int implied_charge = (precursor_mass > 0 && precursor_mz > Constants::PROTON_MASS_U)
+                               ? std::max(1, (int)std::round(precursor_mass / (precursor_mz - Constants::PROTON_MASS_U)))
+                               : 0;
+  if (raw_charge > 0)
+  {
+    // a harmonic or co-isolated raw charge does not fit the proteoform: fragments above it would never be tried
+    if (implied_charge <= 0 || implied_charge == raw_charge || in_window(precursor_mass, raw_charge))
+    {
+      reason = 0;
+      return raw_charge;
+    }
+    if (in_window(precursor_mass, implied_charge))
+    {
+      reason = 1;
+      return implied_charge;
+    }
+    reason = 2;
+    return std::max(raw_charge, implied_charge);
+  }
+  if (implied_charge > 0)
+  {
+    reason = 3;
+    return implied_charge;
+  }
+  reason = 4;
+  return 0;
 }
 } // namespace OpenMS

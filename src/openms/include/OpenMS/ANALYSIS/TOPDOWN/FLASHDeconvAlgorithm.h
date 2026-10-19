@@ -99,8 +99,10 @@ namespace OpenMS
     /// current minimum MS level.
     UInt current_min_ms_level_ = 0;
 
-    /// the number of preceding full scans from which MS2 precursor mass will be searched.
-    //int precursor_MS1_window_ = 0;
+    /// MS1 spectra before and after the precursor spectrum searched for a precursor the precursor spectrum lacks (0: off)
+    int precursor_rescue_window_ = 2;
+    /// precursors taken from a neighbouring MS1 spectrum in this run
+    Size rescued_precursors_ = 0;
 
     /// the FLASHIda acquisition's scan_commands.tsv (ADR-0046); empty = no coupling
     String scan_commands_file_;
@@ -125,6 +127,10 @@ namespace OpenMS
     std::map<String, Precursor> native_id_precursor_peak_map_;
     /// a map from native ID to precursor peak group
     std::map<String, PeakGroup> native_id_precursor_peak_group_map_;
+    /// per MSn native id, the best MS1 decoy mass in the isolation window (with report_FDR), chosen as the target precursor is
+    std::map<String, double> native_id_decoy_precursor_mass_map_;
+    /// per MSn native id, whether that decoy precursor is a noise decoy (weighted by the noise decoy weight in an FDR)
+    std::map<String, bool> native_id_decoy_precursor_noise_map_;
     /// a map from native ID to precursor mass - intensity pair (within isolation window)
     std::map<String, std::vector<std::tuple<double, double>>> native_id_precursor_mass_intensity_map_;
 
