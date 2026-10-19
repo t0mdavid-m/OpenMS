@@ -158,6 +158,14 @@ namespace OpenMS
 
     if (ms_level == 2)
     {
+      // The MS1 target features by their index. A precursor without one got an index beyond them in the MS1 pass above, which may be
+      // the index of a decoy feature (report_FDR) or an MSn feature as well, so a feature is looked up by its index among these only.
+      std::map<uint, const FLASHHelperClasses::MassFeature*> ms1_features;
+      for (const auto& mass_feature : mass_features)
+      {
+        if (mass_feature.ms_level != 1 || mass_feature.is_decoy) continue;
+        ms1_features[mass_feature.index] = &mass_feature;
+      }
       for (auto& dspec : deconvolved_spectra)
       {
         if (dspec.getOriginalSpectrum().getMSLevel() == 1 || dspec.getPrecursorPeakGroup().empty()) continue;
@@ -166,9 +174,10 @@ namespace OpenMS
         int ms2_scan_number = dspec.getScanNumber();
         ss << file_name << "\t0\t" << ms2_scan_number - 1 << "\t" << ms2_scan_number << "\t" << pg.getScanNumber() - 1 << "\t" << pg.getScanNumber() << "\t" << pg.getFeatureIndex() << "\t";
 
-        if (pg.getFeatureIndex() < mass_features.size() + 1)
+        const auto fit = ms1_features.find(pg.getFeatureIndex());
+        if (fit != ms1_features.end())
         {
-          const auto& mass_feature = mass_features[pg.getFeatureIndex() - 1];
+          const auto& mass_feature = *fit->second;
           const auto& apex = mass_feature.mt[mass_feature.mt.findMaxByIntPeak()];
           double sum_intensity = .0;
 
