@@ -59,6 +59,11 @@ constexpr Size null_min_class_decoys = 20;
 constexpr double fdr_p_floor = 1e-300;
 // precursor ladders: a window needs this many matched ladder positions to be a candidate (the prototype's calibrated setting)
 constexpr int precursor_ladder_min_k = 3;
+// variable modification penalties: learned from a pilot extension of every var_mod_pilot_stride-th spectrum in input order (a fixed
+// subset that samples the whole run, the same for every thread count), so that only that share of the spectra is extended twice
+constexpr int var_mod_pilot_stride = 4;
+// variable modification penalties: with fewer decoy PrSMs, chance usage is not estimated and the penalties are not learned
+constexpr Size var_mod_min_decoy_prsms = 50;
 
 // mass and both termini known (unknown: -1)
 bool isDetermined(const ProteinHit& hit)
@@ -480,7 +485,9 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   defaults_.setValidStrings("decoy_precursor", {"true", "false"});
   defaults_.setValue("learn_var_mod_penalty", "true",
                      "Raises the penalty of a variable modification that target PrSMs use per opportunity (fitting residue or terminus) no more often than decoy PrSMs "
-                     "(chance), up to that of a blind shift, and then extends all spectra again. Needs decoys and at least 50 decoy PrSMs.");
+                     "(chance), up to that of a blind shift. The usage is counted in a pilot pass over every 4th spectrum (all spectra if the pilot "
+                     "has fewer than 50 decoy PrSMs); with a raised penalty, all spectra are then extended once with the learned penalties. "
+                     "Needs decoys and at least 50 decoy PrSMs.");
   defaults_.setValidStrings("learn_var_mod_penalty", {"true", "false"});
   defaults_.addTag("learn_var_mod_penalty", "advanced");
   defaults_.insert("gapped:", FLASHGappedTaggerAlgorithm().getDefaults());
@@ -1754,24 +1761,27 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     std::set<Size> passing_proteins;
     if (use_protein_fdr) { passing_proteins = getProteinsPassingFDR_(fasta_entry); }
 
-    startProgress(0, (SignedSize)dspecs.size(), "Running extension algorithm ...");
     // spectra in parallel, each with its own extender; proteoforms are appended in spectrum order afterwards
     std::vector<std::vector<ProteinHit>> spec_proteoforms(dspecs.size());
     // as above: over spectra only with enough spectra to extend, otherwise over each spectrum's candidates inside the extender
-    int spectra_with_candidates = 0;
-    for (Size d = 0; d < dspecs.size(); d++)
-    {
-      spectra_with_candidates += candidate_ranges[d].first != candidate_ranges[d].second || ladder_ranges[d].first != ladder_ranges[d].second
-                                 || pl_ranges[d].first != pl_ranges[d].second;
-    }
+    auto hasCandidates = [&](int d) {
+      return candidate_ranges[d].first != candidate_ranges[d].second || ladder_ranges[d].first != ladder_ranges[d].second
+             || pl_ranges[d].first != pl_ranges[d].second;
+    };
+    auto overSpectra = [&](const std::vector<int>& spectra) {
+      [[maybe_unused]] const auto with_candidates = std::count_if(spectra.begin(), spectra.end(), hasCandidates);
 #ifdef _OPENMP
-    const bool extend_over_spectra = spectra_with_candidates >= omp_get_max_threads();
+      return with_candidates >= omp_get_max_threads();
 #else
-    const bool extend_over_spectra = false;
+      return false;
 #endif
+    };
+    std::vector<int> all_spectra(dspecs.size());
+    std::iota(all_spectra.begin(), all_spectra.end(), 0);
+    const bool extend_over_spectra = overSpectra(all_spectra);
     const bool keep_all_candidates = (bool)raw_loader_;
-    // precursor-ladder PrSMs of the first extension: kept (determined; of them at both window ends, at the window start only, at the window
-    // end only), dropped as the same proteoform as a determined PrSM of another source, dropped as undetermined
+    // precursor-ladder PrSMs of the extension that is kept: kept (determined; of them at both window ends, at the window start only, at the
+    // window end only), dropped as the same proteoform as a determined PrSM of another source, dropped as undetermined
     std::atomic<Size> pl_determined {0}, pl_at_both_ends {0}, pl_at_start {0}, pl_at_end {0}, pl_duplicates {0}, pl_undetermined {0};
     // The extension of one spectrum's candidates with the given extension parameters. With decoy_mass, the spectrum is the decoy copy at
     // the decoy precursor mass (decoy_precursor), and its precursor-ladder candidates are those of the windows that fit that mass.
@@ -1897,29 +1907,53 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         else if (! pl_kept.empty() && (out.empty() || pl_kept[0].getScore() > out[0].getScore())) { out.swap(pl_kept); }
       }
     };
-    auto extendSpectrum = [&](int d, const Param& eparam) { extendSpectrumInto(d, eparam, dspecs[d], spec_proteoforms[d], false); };
-#pragma omp parallel for schedule(dynamic) if (extend_over_spectra)
-    for (int d = 0; d < (int)dspecs.size(); d++)
-    {
-      nextProgress();
-      extendSpectrum(d, extender_param_);
-    }
+    // Extends the given spectra with the given parameters. Each spectrum is extended on its own and writes only its own slot, so the result
+    // depends neither on the thread count and schedule nor on which other spectra are extended in the same call.
+    auto extendSpectra = [&](const std::vector<int>& spectra, const Param& eparam) {
+      const bool over_spectra = overSpectra(spectra);
+#pragma omp parallel for schedule(dynamic) if (over_spectra)
+      for (int k = 0; k < (int)spectra.size(); k++)
+      {
+        nextProgress();
+        const int d = spectra[k];
+        extendSpectrumInto(d, eparam, dspecs[d], spec_proteoforms[d], false);
+      }
+    };
 
     // Variable modification penalties from this run: a decoy (shuffled) protein can use a modification only by chance, so a modification
     // that target PrSMs use per opportunity (a fitting residue in the proteoform, or the proteoform terminus) no more often than decoy PrSMs
-    // explains nothing and gets a penalty up to that of a blind shift. When a penalty is raised, every spectrum is extended again with the
-    // learned penalties, so the result is exactly one extension at them. Re-extending only the spectra whose kept PrSMs used a raised
-    // modification is not the same: a candidate whose best path used one can have been dropped afterwards (e.g. the terminal- and
-    // precursor-ladder rules drop undetermined PrSMs and the same proteoform as another source's) while, at the raised penalty, another path
-    // of it is kept (Eclip_1480: a better unmodified 1% PrSM missed in 25 spectra, CISY lost, a false RS11_BACTN reported).
+    // explains nothing and gets a penalty up to that of a blind shift. The usage is counted in a pilot pass: every var_mod_pilot_stride-th
+    // spectrum in input order, extended with the first-pass penalties. If the pilot has fewer than var_mod_min_decoy_prsms decoy PrSMs, the
+    // other spectra are extended with the first-pass penalties too and the usage is counted over all spectra (a small run gains nothing
+    // from a pilot). Then the main pass makes the result exactly one extension of every spectrum at the penalties that are used:
+    // - a raised penalty: every spectrum is extended with the learned penalties, the pilot spectra again. Re-extending only the spectra
+    //   whose kept PrSMs used a raised modification is not the same: a candidate whose best path used one can have been dropped afterwards
+    //   (e.g. the terminal- and precursor-ladder rules drop undetermined PrSMs and the same proteoform as another source's) while, at the
+    //   raised penalty, another path of it is kept (Eclip_1480: a better unmodified 1% PrSM missed in 25 spectra, CISY lost, a false
+    //   RS11_BACTN reported).
+    // - no raised penalty (or none learned): only the spectra not extended yet are extended, with the first-pass penalties. A spectrum's
+    //   extension depends only on the spectrum, its candidates and the parameters, none of which changes between the passes, so the pilot
+    //   spectra keep exactly the PrSMs a single pass gives them.
+    // Without learning, the main pass is the only one.
     Param learned_extender_param; // empty unless penalties were raised
     FLASHExtenderAlgorithm probe;
     probe.setParameters(extender_param_);
     const auto var_names = probe.getVariableModificationNames();
     const auto var_residues = probe.getVariableModificationResidues();
     const auto var_positions = probe.getVariableModificationPositions();
+    std::vector<int> not_extended = all_spectra; // the spectra without PrSMs at the first-pass penalties yet
     if (learn_var_mod_penalty_ && ! var_names.empty() && decoy_factor_ > 0)
     {
+      std::vector<int> pilot;
+      not_extended.clear();
+      for (int d : all_spectra)
+      {
+        (d % var_mod_pilot_stride == 0 ? pilot : not_extended).push_back(d);
+      }
+      startProgress(0, (SignedSize)pilot.size(), "Running extension algorithm (pilot pass for the variable modification penalties) ...");
+      extendSpectra(pilot, extender_param_);
+      endProgress();
+
       const Size n_mods = var_names.size();
       std::map<String, Size> name_to_mod;
       for (Size i = n_mods; i-- > 0;) name_to_mod[var_names[i]] = i;
@@ -1944,42 +1978,65 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
           }
         }
       };
-      // uses and opportunities per modification, targets and decoys. Precursor-ladder PrSMs take no part: their source proposes only
-      // windows whose unmodified mass is the precursor mass, so they are unmodified by selection, not by chance, and their opportunities
-      // without uses would move the target/decoy enrichment by the share of targets and decoys among them
-      std::vector<double> use_t(n_mods, 0), use_d(n_mods, 0), opp_t(n_mods, 0), opp_d(n_mods, 0);
-      double n_d = 0;
-      std::vector<char> used;
-      for (const auto& v : spec_proteoforms)
-      {
-        for (const auto& h : v)
+      // uses and opportunities per modification, targets and decoys, over the PrSMs of the given spectra (in spectrum order, so the sums
+      // are the same in every run). Precursor-ladder PrSMs take no part: their source proposes only windows whose unmodified mass is the
+      // precursor mass, so they are unmodified by selection, not by chance, and their opportunities without uses would move the
+      // target/decoy enrichment by the share of targets and decoys among them
+      std::vector<double> use_t, use_d, opp_t, opp_d;
+      Size n_d = 0;
+      auto countUsage = [&](const std::vector<int>& spectra) {
+        use_t.assign(n_mods, 0);
+        use_d.assign(n_mods, 0);
+        opp_t.assign(n_mods, 0);
+        opp_d.assign(n_mods, 0);
+        n_d = 0;
+        std::vector<char> used;
+        for (int d : spectra)
         {
-          if (h.metaValueExists(mi_precursor_ladder)) continue;
-          const bool decoy = h.getAccession().hasPrefix("DECOY");
-          const String& seq = h.getSequence();
-          int s = h.metaValueExists("StartPosition") ? (int)h.getMetaValue("StartPosition") - 1 : 0;
-          int e = h.metaValueExists("EndPosition") ? (int)h.getMetaValue("EndPosition") : (int)seq.size();
-          if (s < 0) s = 0;
-          if (e <= s || e > (int)seq.size()) e = (int)seq.size();
-          n_d += decoy;
-          usedMods(h, used);
-          for (Size m = 0; m < n_mods; m++)
+          for (const auto& h : spec_proteoforms[d])
           {
-            double opportunities = 0;
-            if (var_positions[m] == 1) opportunities = var_residues[m].empty() || var_residues[m].has(seq[s]);
-            else if (var_positions[m] == 2) opportunities = var_residues[m].empty() || var_residues[m].has(seq[e - 1]);
-            else
+            if (h.metaValueExists(mi_precursor_ladder)) continue;
+            const bool decoy = h.getAccession().hasPrefix("DECOY");
+            const String& seq = h.getSequence();
+            int s = h.metaValueExists("StartPosition") ? (int)h.getMetaValue("StartPosition") - 1 : 0;
+            int e = h.metaValueExists("EndPosition") ? (int)h.getMetaValue("EndPosition") : (int)seq.size();
+            if (s < 0) s = 0;
+            if (e <= s || e > (int)seq.size()) e = (int)seq.size();
+            n_d += decoy;
+            usedMods(h, used);
+            for (Size m = 0; m < n_mods; m++)
             {
-              for (int p = s; p < e; p++) opportunities += var_residues[m].empty() || var_residues[m].has(seq[p]);
+              double opportunities = 0;
+              if (var_positions[m] == 1) opportunities = var_residues[m].empty() || var_residues[m].has(seq[s]);
+              else if (var_positions[m] == 2) opportunities = var_residues[m].empty() || var_residues[m].has(seq[e - 1]);
+              else
+              {
+                for (int p = s; p < e; p++) opportunities += var_residues[m].empty() || var_residues[m].has(seq[p]);
+              }
+              (decoy ? opp_d : opp_t)[m] += opportunities;
+              if (used[m]) (decoy ? use_d : use_t)[m] += 1;
             }
-            (decoy ? opp_d : opp_t)[m] += opportunities;
-            if (used[m]) (decoy ? use_d : use_t)[m] += 1;
           }
         }
+      };
+      countUsage(pilot);
+      const std::vector<int>* learned_from = &pilot;
+      if (n_d < var_mod_min_decoy_prsms)
+      {
+        OPENMS_LOG_INFO << "Variable modification penalties: " << n_d << " decoy PrSMs in the pilot pass (fewer than " << var_mod_min_decoy_prsms
+                        << "), so the other spectra are extended with the first-pass penalties too and all spectra are used" << std::endl;
+        startProgress(0, (SignedSize)not_extended.size(), "Running extension algorithm (the other spectra for the variable modification penalties) ...");
+        extendSpectra(not_extended, extender_param_);
+        endProgress();
+        not_extended.clear();
+        countUsage(all_spectra);
+        learned_from = &all_spectra;
       }
       // enough decoy PrSMs to estimate chance usage
-      if (n_d >= 50)
+      if (n_d >= var_mod_min_decoy_prsms)
       {
+        OPENMS_LOG_INFO << "Variable modification penalties from the PrSMs of " << learned_from->size() << " of " << dspecs.size() << " spectra ("
+                        << n_d << " decoy PrSMs)" << std::endl;
         std::vector<int> penalties(n_mods, 2);
         bool raised = false;
         for (Size m = 0; m < n_mods; m++)
@@ -1995,26 +2052,34 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         }
         if (raised)
         {
-          Param eparam = extender_param_;
-          eparam.setValue("var_mod_penalty", penalties);
-          learned_extender_param = eparam;
-          OPENMS_LOG_INFO << "Extending all " << dspecs.size() << " spectra again with the learned penalties" << std::endl;
-          // the precursor-ladder counts describe the extension that is kept
-          pl_determined = 0;
-          pl_at_both_ends = 0;
-          pl_at_start = 0;
-          pl_at_end = 0;
-          pl_duplicates = 0;
-          pl_undetermined = 0;
-          // each spectrum is extended on its own and replaces only its own PrSMs: the result does not depend on the thread schedule
-#pragma omp parallel for schedule(dynamic) if (extend_over_spectra)
-          for (int d = 0; d < (int)dspecs.size(); d++)
-          {
-            extendSpectrum(d, eparam);
-          }
+          learned_extender_param = extender_param_;
+          learned_extender_param.setValue("var_mod_penalty", penalties);
         }
       }
+      else
+      {
+        OPENMS_LOG_INFO << "Variable modification penalties not learned: " << n_d << " decoy PrSMs in all spectra (fewer than "
+                        << var_mod_min_decoy_prsms << ")" << std::endl;
+      }
     }
+
+    // Main pass: with learned penalties every spectrum, otherwise the spectra not extended yet with the first-pass penalties. The
+    // precursor-ladder counts describe the extension that is kept: they restart before a pass that replaces the pilot's PrSMs, and otherwise
+    // the counts of the passes add up to those of a single pass.
+    const bool penalties_learned = ! learned_extender_param.empty();
+    if (penalties_learned)
+    {
+      OPENMS_LOG_INFO << "Extending all " << dspecs.size() << " spectra with the learned penalties" << std::endl;
+      pl_determined = 0;
+      pl_at_both_ends = 0;
+      pl_at_start = 0;
+      pl_at_end = 0;
+      pl_duplicates = 0;
+      pl_undetermined = 0;
+    }
+    const std::vector<int>& main_spectra = penalties_learned ? all_spectra : not_extended;
+    startProgress(0, (SignedSize)main_spectra.size(), "Running extension algorithm ...");
+    extendSpectra(main_spectra, penalties_learned ? learned_extender_param : extender_param_);
     if (use_precursor_ladders)
     {
       OPENMS_LOG_INFO << "Precursor-ladder PrSMs: " << pl_determined.load() << " of determined mass and termini kept (" << pl_at_both_ends.load()
