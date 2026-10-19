@@ -492,9 +492,9 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     {
       PeakGroup pg;
       pg.setMonoisotopicMass(precursor_mass);
-      if (deconv_meta_str.hasSubstring("precursorscore="))
+      if (deconv_meta_str.hasSubstring("precursorQscore="))
       {
-        int s_loc_preq_s = deconv_meta_str.find("precursorscore=") + 15;
+        int s_loc_preq_s = deconv_meta_str.find("precursorQscore=") + 16;
         int s_loc_preq_e = deconv_meta_str.find(";", s_loc_preq_s);
         double precursor_qscore = stod(deconv_meta_str.substr(s_loc_preq_s, s_loc_preq_e - s_loc_preq_s));
         pg.setQscore2D(precursor_qscore);
