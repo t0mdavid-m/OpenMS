@@ -562,52 +562,80 @@ void FLASHTnTAlgorithm::setProteinQvalues_(const std::vector<int>& hit_class, co
   // with fewer than null_min_class_decoys, as the determined classes with 0 to 3 decoys each in the E. coli lysate runs), the density of
   // the targets' p-values (TargetPvalueDensity) and the share of false targets pi0 = (decoy weight + 1) / targets. A decoy precursor
   // carries the target accession: it is a decoy of the precursor, not of the protein, and ranks no protein.
+  //
+  // A determined PrSM that is not the whole protein (an internal terminus: start > 2 or end before the protein's last residue), and every
+  // precursor-ladder PrSM, is scored here with the model of the class "undetermined, both termini" (its null, pi0 and target density; that
+  // class itself is unchanged), not with that of its determined class. Its mass agreement is closed by where the free terminus is put
+  // (many windows of a long protein fit any mass), so it is no more evidence than termini without a mass; the determined classes have
+  // 0 to 2 decoys, so their pi0 is about 1 / targets and their null the pooled one, and such a PrSM got a local FDR of about 0.002 at any
+  // score. Over five E. coli lysate runs, 63 of 65 chance determined PrSMs (decoys and B. theta entrapment) were truncated; of the
+  // determined PrSMs scoring 85 or less, whole-protein ones were 533 E. coli, 0 B. theta and 0 decoys. On Eclip_1480 against E. coli +
+  // B. theta, the false proteins at 1% went from 5 to 4 (all four homologs of E. coli proteins, which shuffled decoys cannot model) and
+  // the E. coli-only search from 299 to 292 proteins; on the held-out search against E. coli + human, from 2 false proteins to 0 (287 ->
+  // 289 E. coli proteins). The PrSM and proteoform q-values are unchanged.
   const Size hit_count = proteoform_hits_.size();
-
-  // null of the PrSM score per class
-  std::vector<std::vector<double>> class_decoy_scores(fdr_class_count);
-  std::vector<double> class_decoy_weight(fdr_class_count, 0.0), pooled_decoy_scores;
+  const int protein_class_count = fdr_class_count + 1, c3_model = fdr_class_count;
+  std::vector<int> protein_class(hit_count, -1);
   for (Size i = 0; i < hit_count; i++)
   {
-    if (hit_class[i] < 0 || ! decoys[i]) continue;
-    class_decoy_scores[hit_class[i]].push_back(proteoform_hits_[i].getScore());
-    class_decoy_weight[hit_class[i]] += decoy_weights[i]; // a decoy precursor of weight 0 still enters the null's sample
+    const int c = hit_class[i];
+    if (c < 0) continue;
+    const auto& hit = proteoform_hits_[i];
+    const int start = hit.getMetaValue("StartPosition"), end = hit.getMetaValue("EndPosition");
+    const bool whole_protein = isDetermined(hit) && start >= 1 && start <= 2 && end == (int)hit.getSequence().size();
+    protein_class[i] = (c == fdr_class_precursor_ladder || (c <= fdr_class_max_blind && ! whole_protein)) ? c3_model : c;
+  }
+
+  // null of the PrSM score per class
+  std::vector<std::vector<double>> class_decoy_scores(protein_class_count);
+  std::vector<double> class_decoy_weight(protein_class_count, 0.0), pooled_decoy_scores;
+  for (Size i = 0; i < hit_count; i++)
+  {
+    if (protein_class[i] < 0 || ! decoys[i]) continue;
+    class_decoy_scores[protein_class[i]].push_back(proteoform_hits_[i].getScore());
+    class_decoy_weight[protein_class[i]] += decoy_weights[i]; // a decoy precursor of weight 0 still enters the null's sample
     pooled_decoy_scores.push_back(proteoform_hits_[i].getScore());
   }
   std::vector<DecoyScoreNull> nulls; // nulls[0]: the pooled one
-  std::vector<Size> class_null(fdr_class_count, 0);
-  nulls.reserve(fdr_class_count + 1);
+  std::vector<Size> class_null(protein_class_count, 0);
+  nulls.reserve(protein_class_count + 1);
   nulls.emplace_back(std::move(pooled_decoy_scores));
-  for (int c = 0; c < fdr_class_count; c++)
+  for (int c = 0; c < protein_class_count; c++)
   {
     if (class_decoy_scores[c].size() < null_min_class_decoys) continue;
     class_null[c] = nulls.size();
     nulls.emplace_back(std::move(class_decoy_scores[c]));
   }
   std::vector<double> pvalues(hit_count, 1.0);
-  std::vector<std::vector<double>> class_target_pvalues(fdr_class_count);
+  std::vector<std::vector<double>> class_target_pvalues(protein_class_count);
   for (Size i = 0; i < hit_count; i++)
   {
-    if (hit_class[i] < 0) continue;
-    pvalues[i] = nulls[class_null[hit_class[i]]].pValue(proteoform_hits_[i].getScore());
-    if (! decoys[i]) class_target_pvalues[hit_class[i]].push_back(pvalues[i]);
+    if (protein_class[i] < 0) continue;
+    pvalues[i] = nulls[class_null[protein_class[i]]].pValue(proteoform_hits_[i].getScore());
+    if (! decoys[i]) class_target_pvalues[protein_class[i]].push_back(pvalues[i]);
   }
 
   // two-group local FDR of every PrSM, targets and decoys, in its class
   std::vector<double> pi0;
   std::vector<TargetPvalueDensity> densities;
-  densities.reserve(fdr_class_count);
-  for (int c = 0; c < fdr_class_count; c++)
+  densities.reserve(protein_class_count);
+  for (int c = 0; c < protein_class_count; c++)
   {
     pi0.push_back(std::min(1.0, (class_decoy_weight[c] + 1.0) / std::max(1.0, (double)class_target_pvalues[c].size())));
     densities.emplace_back(std::move(class_target_pvalues[c]));
   }
+  // the PrSMs scored with the model of "undetermined, both termini"
+  for (Size i = 0; i < hit_count; i++)
+  {
+    if (protein_class[i] == c3_model) pvalues[i] = nulls[class_null[fdr_class_both_termini]].pValue(proteoform_hits_[i].getScore());
+  }
   std::vector<double> local_fdr(hit_count, 1.0);
   for (Size i = 0; i < hit_count; i++)
   {
-    if (hit_class[i] < 0) continue;
-    const double density = densities[hit_class[i]].density(pvalues[i]); // +inf gives 0
-    local_fdr[i] = density <= 0 ? 1.0 : std::min(1.0, pi0[hit_class[i]] / density);
+    if (protein_class[i] < 0) continue;
+    const int model = protein_class[i] == c3_model ? fdr_class_both_termini : protein_class[i];
+    const double density = densities[model].density(pvalues[i]); // +inf gives 0
+    local_fdr[i] = density <= 0 ? 1.0 : std::min(1.0, pi0[model] / density);
   }
 
   // protein key: (evidence, -best score), smaller is better
@@ -2247,7 +2275,9 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       }
       String line = String("FDR class \"") + fdr_class_names[c] + "\": " + String(targets) + " target and " + String(decoy_count)
                     + " decoy PrSMs (decoy weight " + String(weight) + "); protein-level null: "
-                    + (decoy_count >= null_min_class_decoys ? "own" : "pooled");
+                    + (c == fdr_class_precursor_ladder ? String("that of \"undetermined, both termini\" (setProteinQvalues_)")
+                       : String(decoy_count >= null_min_class_decoys ? "own" : "pooled")
+                           + (c <= fdr_class_max_blind ? "; those not the whole protein: that of \"undetermined, both termini\"" : ""));
       if (c == fdr_class_precursor_ladder && ! class_hits[c].empty())
       {
         line += "; target/decoy PrSMs by blind modifications: 0: " + String(blind_targets[0]) + "/" + String(blind_decoys[0]) + ", 1: "
