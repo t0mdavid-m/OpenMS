@@ -610,12 +610,14 @@ namespace OpenMS
         float score;
         double tol;
         int series;
+        int source; // index of the mass in dspec
       };
       std::vector<Node> nodes;
       nodes.reserve(dspec.size() * ion_types_str_.size() + 1);
 
-      for (const auto& pg : dspec)
+      for (Size source = 0; source < dspec.size(); source++)
       {
+        const auto& pg = dspec[source];
         const auto& shifts = (hi.mode_ == 0)   ? suffix_shifts_
                              : (hi.mode_ == 1) ? prefix_shifts_
                              : (hi.mode_ == 2) ? prefix_shifts_
@@ -626,7 +628,7 @@ namespace OpenMS
         {
           double mass = pg.getMonoMass() - shifts[si];
           if (mass <= 0 || mass > max_mass + 1) continue;
-          nodes.push_back({mass, (float)std::max(1, FLASHTaggerAlgorithm::getNodeScore(pg)), tol_ * pg.getMonoMass(), series[si]});
+          nodes.push_back({mass, (float)std::max(1, FLASHTaggerAlgorithm::getNodeScore(pg)), tol_ * pg.getMonoMass(), series[si], (int)source});
         }
 
         if (hi.mode_ == 2 && hi.calculated_precursor_mass_ > 0)
@@ -638,7 +640,7 @@ namespace OpenMS
             double prefix_mass = proteoform_mass - i2f_mass - mass;
             // the converted mass carries the error of the precursor mass as well as that of the fragment mass (both at the input tolerance)
             nodes.push_back({prefix_mass, (float)std::max(1, FLASHTaggerAlgorithm::getNodeScore(pg)), tol_ * (pg.getMonoMass() + proteoform_mass),
-                             suffix_series_[si]});
+                             suffix_series_[si], (int)source});
           }
         }
       }
@@ -661,6 +663,9 @@ namespace OpenMS
       t_node_spec.emplace_back(0, 0);
       t_tol_spec.emplace_back(0, 0);
       t_series.push_back(-1);
+      // with report_matched_masses_: per node, the masses k merged into it, [first, last] (a merge only joins consecutive masses)
+      std::vector<std::pair<int, int>> t_ranges;
+      if (report_matched_masses_) t_ranges.emplace_back(0, -1);
       float overlapped_score = 0;
 
       for (Size k = 0; k < node_spec.size(); k++)
@@ -669,6 +674,7 @@ namespace OpenMS
         double mass = p.getMZ();
         float score = p.getIntensity();
         int series = nodes[k].series;
+        int range_first = (int)k;
         // the half-width of the node merged so far (t_node_spec.back()), not that of the raw mass k - 1: after a merge they differ, and
         // comparing or merging with the raw one missed overlaps and shifted the merged centre. At k == 0, back() is the (0, 0) entry.
         const double prev_margin = t_tol_spec.back().getIntensity();
@@ -687,6 +693,11 @@ namespace OpenMS
             t_node_spec.pop_back();
             t_tol_spec.pop_back();
             t_series.pop_back();
+            if (report_matched_masses_)
+            {
+              range_first = t_ranges.back().first;
+              t_ranges.pop_back();
+            }
           }
           score = multi_ion_score + std::max(prev_score, score);
           // score = suffix_prefix == prev_suffix_prefix ? multi_ion_score + std::max(prev_score, score) : multi_ion_score + prev_score + score;
@@ -698,6 +709,7 @@ namespace OpenMS
         t_node_spec.emplace_back(mass, score);
         t_tol_spec.emplace_back(mass, margin);
         t_series.push_back(series);
+        if (report_matched_masses_) t_ranges.emplace_back(range_first, (int)k);
       }
 
       if (max_score < overlapped_score - multi_ion_score)
@@ -705,6 +717,14 @@ namespace OpenMS
         hi.node_spec_map_[hi.mode_] = t_node_spec;
         hi.tol_spec_map_[hi.mode_] = t_tol_spec;
         hi.node_series_map_[hi.mode_] = t_series;
+        if (report_matched_masses_)
+        {
+          auto& sources = hi.node_source_map_[hi.mode_];
+          sources.clear();
+          sources.reserve(nodes.size());
+          for (const auto& n : nodes) sources.push_back(n.source);
+          hi.node_range_map_[hi.mode_] = t_ranges;
+        }
         max_score = overlapped_score;
         max_proteoform_mass = proteoform_mass;
       }
@@ -718,6 +738,7 @@ namespace OpenMS
       hi.node_spec_map_[hi.mode_].emplace_back(hi.calculated_precursor_mass_ - i2f_mass, 1);
       hi.tol_spec_map_[hi.mode_].emplace_back(hi.calculated_precursor_mass_ - i2f_mass, tol_ * hi.calculated_precursor_mass_);
       hi.node_series_map_[hi.mode_].push_back(-1);
+      if (report_matched_masses_) hi.node_range_map_[hi.mode_].emplace_back(0, -1); // the precursor node: no mass
     }
   }
 
@@ -1015,6 +1036,7 @@ namespace OpenMS
     const UInt mi_precursor_score = registry.registerName("PrecursorScore");
     const UInt mi_precursor_snr = registry.registerName("PrecursorSNR");
     const UInt mi_mass_by_fragments = registry.registerName("ProteoformMassByFragmentMass");
+    const UInt mi_matched_mass_indices = registry.registerName("MatchedMassIndices");
 
     startProgress(0, (int)hits.size(), "running FLASHExtender ...");
     std::vector<std::pair<int, ProteinHit>> found; // (candidate index, proteoform hit)
@@ -1024,7 +1046,7 @@ namespace OpenMS
     for (const auto& pg : dspec) sorted_masses.push_back(pg.getMonoMass());
     std::sort(sorted_masses.begin(), sorted_masses.end());
 
-  #pragma omp parallel for default(none) schedule(dynamic) if (! omp_in_parallel()) shared(hits, tags, dspec, multiple_hits_per_spec, i2f_mass, spec_vec, sorted_masses, vec_pro, rev_vec_pro, std::cout, found, mi_tag_indices, mi_fasta_index, mi_modification_ids, mi_modification_accs, mi_modifications, mi_modification_starts, mi_modification_ends, mi_blind_mod_count, mi_variable_modifications, mi_modification_variable, mi_matched_aa, mi_start_position, mi_end_position, mi_given_mass, mi_mass, mi_rt, mi_num_mass, mi_precursor_score, mi_precursor_snr, mi_mass_by_fragments)
+  #pragma omp parallel for default(none) schedule(dynamic) if (! omp_in_parallel()) shared(hits, tags, dspec, multiple_hits_per_spec, i2f_mass, spec_vec, sorted_masses, vec_pro, rev_vec_pro, std::cout, found, mi_tag_indices, mi_fasta_index, mi_modification_ids, mi_modification_accs, mi_modifications, mi_modification_starts, mi_modification_ends, mi_blind_mod_count, mi_variable_modifications, mi_modification_variable, mi_matched_aa, mi_start_position, mi_end_position, mi_given_mass, mi_mass, mi_rt, mi_num_mass, mi_precursor_score, mi_precursor_snr, mi_mass_by_fragments, mi_matched_mass_indices)
     for (int i = 0; i < ((int)hits.size()); i++)
     {
       nextProgress();
@@ -1053,6 +1075,9 @@ namespace OpenMS
       }
 
       std::map<int, std::set<int>> matched_position_map;
+      // with report_matched_masses_: per mode, the dspec indices of the masses of the matched positions (kept, restored and erased with
+      // matched_position_map)
+      std::map<int, std::set<int>> matched_mass_map;
       bool precursor_by_fragment = false;
 
       hi.n_best_shift_ = getBestMassShift_(spec_vec, vec_pro[hit.getMetaValue(mi_fasta_index)]);
@@ -1067,7 +1092,7 @@ namespace OpenMS
       std::vector<int> terminal_used_mode, terminal_mod_starts, terminal_mod_ends, terminal_mod_vars;
       std::vector<double> terminal_mod_masses, terminal_mod_tols;
       std::vector<String> terminal_mod_var_names, terminal_mod_var_accs;
-      std::map<int, std::set<int>> terminal_matched_position_map;
+      std::map<int, std::set<int>> terminal_matched_position_map, terminal_matched_mass_map;
       int terminal_start = -1, terminal_end = -1;
       // suffix fragment masses matched on the suffix path before its first shift, i.e. measured from where that path starts
       int c_ladder = 0, terminal_c_ladder = 0;
@@ -1089,6 +1114,7 @@ namespace OpenMS
           terminal_mod_var_names = mod_var_names;
           terminal_mod_var_accs = mod_var_accs;
           terminal_matched_position_map = matched_position_map;
+          terminal_matched_mass_map = matched_mass_map;
           terminal_start = hi.protein_start_position_;
           terminal_end = hi.protein_end_position_;
           terminal_c_ladder = c_ladder;
@@ -1262,6 +1288,15 @@ namespace OpenMS
             if (node_index > 0 && t_node_spec[node_index].getMZ() != hi.calculated_precursor_mass_ - i2f_mass)
             {
               matched_position_map[m].insert(pro_seq_index);
+              if (report_matched_masses_)
+              {
+                const auto& ranges = hi.node_range_map_[m];
+                const auto& sources = hi.node_source_map_[m];
+                if (node_index < (int)ranges.size())
+                {
+                  for (int k = ranges[node_index].first; k <= ranges[node_index].second; k++) matched_mass_map[m].insert(sources[k]);
+                }
+              }
               if (m == 0 && mod_count == 0) c_ladder++;
             }
 
@@ -1344,6 +1379,7 @@ namespace OpenMS
               hi.protein_start_position_ = -1;
               erase_mods(mods_before[1], mod_starts.size());
               matched_position_map.erase(1);
+              matched_mass_map.erase(1);
               break;
             }
             else // mode 1 wins
@@ -1351,6 +1387,7 @@ namespace OpenMS
               hi.protein_end_position_ = -1;
               if (mods_before.count(0)) erase_mods(mods_before[0], mods_before[1]);
               matched_position_map.erase(0);
+              matched_mass_map.erase(0);
               total_score = mode_score;
               used_mode.pop_back();
               used_mode.push_back(m);
@@ -1407,6 +1444,7 @@ namespace OpenMS
           mod_var_names = terminal_mod_var_names;
           mod_var_accs = terminal_mod_var_accs;
           matched_position_map = terminal_matched_position_map;
+          matched_mass_map = terminal_matched_mass_map;
           hi.protein_start_position_ = terminal_start;
           hi.protein_end_position_ = terminal_end;
           best_path_map.erase(2);
@@ -1438,6 +1476,7 @@ namespace OpenMS
         mod_var_names = terminal_mod_var_names;
         mod_var_accs = terminal_mod_var_accs;
         matched_position_map = terminal_matched_position_map;
+        matched_mass_map = terminal_matched_mass_map;
         hi.protein_start_position_ = terminal_start;
         hi.protein_end_position_ = terminal_end;
         best_path_map.erase(2);
@@ -1506,7 +1545,7 @@ namespace OpenMS
         mod_accs.push_back(mod_acc);
       }
       // remove unmatched tags.
-      std::set<int> to_exclude_tag_indices, matched_positions;
+      std::set<int> to_exclude_tag_indices, matched_positions, matched_masses;
 
       for (int m = (used_mode.back() == 2 ? 2 : 0); m <= (used_mode.back() == 2 ? 2 : 1); m++)
       {
@@ -1522,6 +1561,8 @@ namespace OpenMS
         {
           for (int pos : matched_position_map[m])
             matched_positions.insert(pos);
+          for (int mass_index : matched_mass_map[m])
+            matched_masses.insert(mass_index);
         }
         for (int j = 0; j < (int)matched_tags.size(); j++) // for each tag
         {
@@ -1620,6 +1661,7 @@ namespace OpenMS
       hit.setMetaValue(mi_precursor_snr,
                        dspec.getPrecursorPeakGroup().getSNR()); // it should be charge SNR in theory. But mass SNR was written for ease of coding.
       hit.setMetaValue(mi_mass_by_fragments, precursor_by_fragment ? 1 : 0);
+      if (report_matched_masses_) hit.setMetaValue(mi_matched_mass_indices, std::vector<int>(matched_masses.begin(), matched_masses.end()));
       // hit.setMetaValue("Proforma", string)
   #pragma omp critical
       found.emplace_back(i, hit);

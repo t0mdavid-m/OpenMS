@@ -102,6 +102,15 @@ public:
       candidate_blind_mod_map_ = mod_map;
   }
 
+  /// With @p report, every proteoform hit carries the deconvolved masses its best path matched (meta value MatchedMassIndices: indices
+  /// into the deconvolved spectrum given to run(), ascending): the masses of every node of the path whose protein position counts as
+  /// matched (MatchedAA), every mass merged into such a node included (e.g. the b and c ion of one position, or a suffix mass moved to the
+  /// prefix side by the precursor mass); the precursor node is no mass. Off by default; it changes no path, score or other meta value.
+  void setReportMatchedMasses(bool report)
+  {
+    report_matched_masses_ = report;
+  }
+
 protected:
   void updateMembers_() override;
   /// implemented for DefaultParamHandler
@@ -140,6 +149,11 @@ private:
     String cur_oriented_seq_;
     /// per mode, the fragment series of each node: 0 a/b/x/y, 1 c/z, -1 node 0, the precursor or a merged node of both
     std::map<int, std::vector<int>> node_series_map_;
+    /// with report_matched_masses_, per mode: the deconvolved-spectrum index of each mass of the mode before merging (node_source_map_, in
+    /// mass order) and, per node of node_spec_map_, the range [first, last] of those masses merged into it (first > last: node 0 and the
+    /// precursor node, which are no masses)
+    std::map<int, std::vector<int>> node_source_map_;
+    std::map<int, std::vector<std::pair<int, int>>> node_range_map_;
     const std::vector<int>* cur_node_series_ = nullptr;
     /// per series, the cleavage weight of a matched mass at each protein index of the current mode (index k: the bond after k residues)
     std::vector<int> cur_bond_weight_[2];
@@ -342,6 +356,8 @@ private:
   double tol_;
 
   bool skip_precursor_inference_ = false;
+  /// set MatchedMassIndices on every proteoform hit (setReportMatchedMasses)
+  bool report_matched_masses_ = false;
   int max_blind_mod_cntr_ = 1;
   int max_var_mod_cntr_ = 0;
   int allowed_isotope_error_ = 1;

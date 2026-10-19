@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHAnnotatorAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvAlgorithm.h>
 #include <OpenMS/CHEMISTRY/Residue.h>
 #include <OpenMS/CHEMISTRY/ResidueDB.h>
@@ -98,8 +99,24 @@ private:
   RawSpectrumLoader raw_loader_;
   /// weight of the raw-spectrum evidence score added to the extension score for the FDR
   double raw_score_weight_ = 8.0;
-  /// annotate every proteoform hit on its raw spectrum (raw_loader_) and set the combined score
-  void annotateOnRawSpectra_();
+  /// the raw spectra of loadRawSpectra_, by position (raw_slot_: scan to position): their peaks centroided into raw_peaks_ and removed
+  /// from raw_spectra_, which keep the precursor information
+  std::vector<MSSpectrum> raw_spectra_;
+  std::vector<FLASHAnnotatorAlgorithm::PeakArrays> raw_peaks_;
+  std::map<int, int> raw_slot_;
+  /// how many of the loaded raw spectra were profile spectra (centroided here)
+  int raw_profile_count_ = 0;
+  /// load the raw spectra of @p scans (raw_loader_) for annotateOnRawSpectra_
+  void loadRawSpectra_(const std::set<int>& scans);
+  /// free the raw spectra of loadRawSpectra_
+  void releaseRawSpectra_();
+  /// annotate every hit of @p hits on its raw spectrum (loaded by loadRawSpectra_) and set the combined score
+  void annotateOnRawSpectra_(std::vector<ProteinHit>& hits) const;
+  /// one PrSM per spectrum: the best by score (a determined mass and termini break a tie, then the coverage, then the earlier PrSM);
+  /// @p label and @p score_name go into the log line
+  static void keepBestPerSpectrum_(std::vector<ProteinHit>& hits, const String& label, const String& score_name);
+  /// residual search rounds of chimeric spectra after the first search (0: off)
+  int chimeric_rounds_ = 0;
   /// candidates from gapped tags: off, fallback (spectra without sequence-tag candidates), both, only
   String gapped_mode_ = "fallback";
   /// candidates from terminal ladders (residue sums from an intact protein terminus) in every spectrum

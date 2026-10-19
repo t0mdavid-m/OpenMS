@@ -156,6 +156,18 @@ protected:
                   "Decoy precursors: spectra whose PrSM took its mass from MS1 are searched again with the decoy precursor mass of their isolation "
                   "window instead of the precursor mass (FLASHDeconv -FD:report_FDR true writes it); a PrSM reporting that mass competes with the "
                   "spectrum's own and counts as a decoy in the FDR.");
+    registerIntOption_("chimeric_rounds", "<number>", 0,
+                       "Residual search of chimeric spectra: rounds after the first search (0: off). In each round, every spectrum with a PrSM "
+                       "(target or decoy alike) loses the deconvolved masses its best PrSM matched (also those one or two isotope spacings away, "
+                       "and its proteoform mass), and the residual is searched again: tags, candidate proteins (sequence and gapped tags, terminal "
+                       "ladders; no precursor ladders) without the proteins of the earlier best PrSMs and their target-decoy partners, and the "
+                       "extension, without the precursor mass. Residual PrSMs are added to the scan with ChimericRound r and form their own FDR "
+                       "class per round (\"residual 1\", \"residual 2\"). Their evidence in a single spectrum (e.g. a native run) is written as well: "
+                       "the extension score over the best other decoy PrSM of the same residual search (ResidualScoreRatio) and the masses on the "
+                       "path (MatchedMasses); in native spectra, a ratio of at least 2.5 with at least 8 masses called the expected partners "
+                       "without false calls (prototype). The chimeric columns are written only with this option.", false);
+    setMinInt_("chimeric_rounds", 0);
+    setMaxInt_("chimeric_rounds", 2);
 
     registerSubsection_("tag", "Tag algorithm parameters");
     registerSubsection_("ex", "Extension algorithm parameters");
@@ -234,6 +246,8 @@ protected:
     double max_mod_mass = tnt_param.getValue("ex:max_mod_mass");
     int max_mod_count = tnt_param.getValue("ex:max_mod_count");
     double pro_fdr = tnt_param.getValue("pro_fdr");
+    // the chimeric columns are written only with the residual search, so that other outputs keep their format
+    const bool chimeric = (int)tnt_param.getValue("chimeric_rounds") > 0;
     OPENMS_LOG_INFO << "Finding sequence tags from deconvolved spectra ..." << endl;
 
     FASTAFile fasta_file;
@@ -257,13 +271,13 @@ protected:
     if (! out_prsm_file.empty())
     {
       out_prsm_stream = fstream(out_prsm_file, fstream::out);
-      FLASHTnTFile::writePrSMHeader(out_prsm_stream);
+      FLASHTnTFile::writePrSMHeader(out_prsm_stream, chimeric);
     }
 
     if (! out_pro_file.empty())
     {
       out_pro_stream = fstream(out_pro_file, fstream::out);
-      FLASHTnTFile::writeProHeader(out_pro_stream);
+      FLASHTnTFile::writeProHeader(out_pro_stream, chimeric);
     }
 
     if (! out_protein_file.empty())
@@ -291,12 +305,12 @@ protected:
     }
     if (! out_prsm_file.empty())
     {
-      FLASHTnTFile::writePrSMs(proteoform_hits, out_prsm_stream);
+      FLASHTnTFile::writePrSMs(proteoform_hits, out_prsm_stream, chimeric);
       out_prsm_stream.close();
     }
     if (! out_pro_file.empty())
     {
-      FLASHTnTFile::writeProteoforms(proteoform_hits, out_pro_stream, pro_fdr);
+      FLASHTnTFile::writeProteoforms(proteoform_hits, out_pro_stream, pro_fdr, chimeric);
       out_pro_stream.close();
     }
     if (! out_protein_file.empty())
