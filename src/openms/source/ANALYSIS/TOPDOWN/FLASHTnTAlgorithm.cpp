@@ -69,6 +69,11 @@ constexpr Size null_min_class_decoys = 20;
 constexpr double fdr_p_floor = 1e-300;
 // precursor ladders: a window needs this many matched ladder positions to be a candidate (the prototype's calibrated setting)
 constexpr int precursor_ladder_min_k = 3;
+// precursor ladders: a window has at least this many residues. Shorter windows were chance hits: on Eclip_1480 against E. coli + B. theta
+// (keep-decoy), the PrSMs of windows under 10 residues were 3 decoys, 1 B. theta and 2 E. coli PrSMs; from 10 residues on, 1 decoy, 2
+// B. theta and 167 E. coli PrSMs (none of the B. theta or decoy ones at 1%). A short window has few ladder positions, its masses are
+// where fragment masses are densest, and many windows fit a small precursor mass.
+constexpr int precursor_ladder_min_length = 10;
 // variable modification penalties: learned from a pilot extension of every var_mod_pilot_stride-th spectrum in input order (a fixed
 // subset that samples the whole run, the same for every thread count), so that only that share of the spectra is extended twice
 constexpr int var_mod_pilot_stride = 4;
@@ -333,9 +338,11 @@ struct Result
 // this is the count of every set. Several types of one side (b y c z) would count a position up to twice per side, with correlated
 // chance matches (the b and c ions of one fragment of another proteoform), so k >= min_k could come from one or two positions. A window
 // with k >= min_k is scored by the chance probability of k, lambda = (j - i - 1) / V x the tolerance widths of all sets up to
-// V = S(j) - S(i); with several types per side this bounds the chance rate of a position on a side from above.
+// V = S(j) - S(i); with several types per side this bounds the chance rate of a position on a side from above. Windows of fewer than
+// min_length residues are not considered (nor counted as hypotheses).
 inline void search(const std::vector<TargetSet>& sets, const std::vector<Segment>& segments, const std::vector<const double*>& sums,
-                   double precursor_mass, double precursor_tol_ppm, double h2o, double isotope_mass, int min_k, std::size_t top_n, Result& result)
+                   double precursor_mass, double precursor_tol_ppm, double h2o, double isotope_mass, int min_k, int min_length, std::size_t top_n,
+                   Result& result)
 {
   result.hypotheses = 0;
   result.top.clear();
@@ -356,6 +363,7 @@ inline void search(const std::vector<TargetSet>& sets, const std::vector<Segment
       while (jp <= seg.b && S[jp] - si < low) jp++;
       for (std::size_t j = jp; j <= seg.b && S[j] - si <= high; j++)
       {
+        if ((int)(j - i) < min_length) continue; // not a hypothesis either
         const double mass = S[j] - si;
         int isotope = 2; // none
         for (int v = -1; v <= 1; v++)
@@ -1677,7 +1685,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       precursor_ladder::Result found;
       auto candidatesAt = [&](double precursor_mass, std::vector<ProteinHit>& candidates) {
         precursor_ladder::search(sets, pl_segments, pl_sums, precursor_mass, pl_precursor_tol, h2o, Constants::C13C12_MASSDIFF_U,
-                                 precursor_ladder_min_k, (Size)min_protein_hits_, found);
+                                 precursor_ladder_min_k, precursor_ladder_min_length, (Size)min_protein_hits_, found);
         const double log_hypotheses = std::log10((double)std::max(found.hypotheses, (std::size_t)1));
         for (Size r = 0; r < found.top.size(); r++)
         {
