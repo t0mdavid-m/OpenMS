@@ -13,11 +13,10 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHGappedTaggerAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTAlgorithm.h>
-#include <boost/math/special_functions/gamma.hpp>
+#include <OpenMS/ANALYSIS/TOPDOWN/MassLadderAlgorithm.h>
 #include <algorithm>
 #include <atomic>
 #include <cmath>
-#include <cstdint>
 #include <iterator>
 #include <limits>
 #include <numeric>
@@ -67,13 +66,6 @@ constexpr Size null_min_tail_decoys = 5;
 constexpr Size null_min_class_decoys = 20;
 // protein level: floor of a null p-value and of a local FDR before its log
 constexpr double fdr_p_floor = 1e-300;
-// precursor ladders: a window needs this many matched ladder positions to be a candidate (the prototype's calibrated setting)
-constexpr int precursor_ladder_min_k = 3;
-// precursor ladders: a window has at least this many residues. Shorter windows were chance hits: on Eclip_1480 against E. coli + B. theta
-// (keep-decoy), the PrSMs of windows under 10 residues were 3 decoys, 1 B. theta and 2 E. coli PrSMs; from 10 residues on, 1 decoy, 2
-// B. theta and 167 E. coli PrSMs (none of the B. theta or decoy ones at 1%). A short window has few ladder positions, its masses are
-// where fragment masses are densest, and many windows fit a small precursor mass.
-constexpr int precursor_ladder_min_length = 10;
 // variable modification penalties: learned from a pilot extension of every var_mod_pilot_stride-th spectrum in input order (a fixed
 // subset that samples the whole run, the same for every thread count), so that only that share of the spectra is extended twice
 constexpr int var_mod_pilot_stride = 4;
@@ -227,187 +219,6 @@ private:
   std::vector<double> slopes_; // of the segments between them
 };
 
-// BEGIN precursor ladder kernel
-// Precursor-anchored ladders (option precursor_ladders): the windows (i, j) of the database proteins whose unmodified mass equals the
-// precursor mass, scored by the deconvolved masses on their prefix ladder (read from i) and their suffix ladder (read from j). This block
-// uses the standard library and boost::math::gamma_p only, so that it can be compiled on its own and checked against its prototype
-// (kernel K4 of final_all/sliding/src/slide.cpp, calibrated by entrapment on Eclip_1480).
-namespace precursor_ladder
-{
-// the residue sums a..b of a protein (residues a..b-1, all standard): a window never crosses a non-standard residue
-struct Segment
-{
-  std::uint32_t protein, a, b;
-};
-
-// The deconvolved masses of a spectrum read as residue sums of one ion type: a mass m matches the residue sum v when v is within tol ppm
-// of max(m, t) of t = m + shift. Masses with t < 50 are left out (no residue is lighter). A bitset of 1.000495 Da bins only pre-filters
-// the interval test, so it never changes a result.
-class TargetSet
-{
-public:
-  TargetSet(const std::vector<double>& masses, double shift, bool prefix, double tol_ppm): prefix_(prefix)
-  {
-    cum_weight_.push_back(0.0);
-    for (std::size_t i = 0; i < masses.size(); i++)
-    {
-      const double m = masses[i], t = m + shift;
-      if (t < 50) continue;
-      const double margin = tol_ppm * 1e-6 * std::max(m, t);
-      t_.push_back(t);
-      lo_.push_back(t - margin);
-      hi_.push_back(t + margin);
-      source_.push_back(i);
-      cum_weight_.push_back(cum_weight_.back() + 2 * margin);
-    }
-    max_value_ = hi_.empty() ? 0 : hi_.back();
-    const std::size_t bit_count = (std::size_t)(max_value_ * bin_inverse_ + bin_phase_) + 2;
-    bits_.assign(bit_count / 64 + 2, 0);
-    for (std::size_t i = 0; i < lo_.size(); i++)
-    {
-      const std::size_t b0 = (std::size_t)(lo_[i] * bin_inverse_ + bin_phase_), b1 = (std::size_t)(hi_[i] * bin_inverse_ + bin_phase_);
-      for (std::size_t b = b0; b <= b1; b++) bits_[b >> 6] |= std::uint64_t(1) << (b & 63);
-    }
-  }
-
-  // a prefix ion type (the ladder is read from the window start), else a suffix ion type (read from the window end)
-  bool isPrefix() const
-  {
-    return prefix_;
-  }
-
-  // the index (into the masses) of a mass that matches the residue sum v (> 0), or -1; the first by interval end if intervals overlap
-  long massIndex(double v) const
-  {
-    if (! (v <= max_value_)) return -1;
-    const std::size_t b = (std::size_t)(v * bin_inverse_ + bin_phase_);
-    if (((bits_[b >> 6] >> (b & 63)) & 1) == 0) return -1;
-    const std::size_t idx = (std::size_t)(std::lower_bound(hi_.begin(), hi_.end(), v) - hi_.begin());
-    return idx < hi_.size() && lo_[idx] <= v ? (long)source_[idx] : -1;
-  }
-
-  // the summed tolerance widths of the masses with t <= v: the expected number of chance matches per ladder position, times its mass
-  // density, up to v
-  double weightUpTo(double v) const
-  {
-    return cum_weight_[(std::size_t)(std::upper_bound(t_.begin(), t_.end(), v) - t_.begin())];
-  }
-
-private:
-  static constexpr double bin_inverse_ = 1.0 / 1.000495;
-  static constexpr double bin_phase_ = 0.5;
-  bool prefix_;
-  std::vector<double> t_, lo_, hi_, cum_weight_; // ascending; cum_weight_[i]: the widths of the first i
-  std::vector<std::size_t> source_;              // the mass index of each target
-  double max_value_ = 0;
-  std::vector<std::uint64_t> bits_;
-};
-
-// a window: residues i..j-1 (0-based) of a protein
-struct Window
-{
-  double log_p = 0;           // -log10 P(X >= k), X ~ Poisson(lambda)
-  double lambda = 0;          // expected chance matches
-  int k = 0;                  // matched (position, side) pairs: a ladder position counts once per side, whatever ion types match it
-  std::uint32_t protein = 0, i = 0, j = 0;
-  int isotope = 0;            // the isotope error (-1, 0, 1) at which the window mass equals the precursor mass
-  std::vector<int> counts;    // matched positions per target set (for the tags)
-};
-
-// LogP descending, k descending, then protein, i and j ascending
-inline bool isBetter(const Window& a, const Window& b)
-{
-  if (a.log_p != b.log_p) return a.log_p > b.log_p;
-  if (a.k != b.k) return a.k > b.k;
-  if (a.protein != b.protein) return a.protein < b.protein;
-  if (a.i != b.i) return a.i < b.i;
-  return a.j < b.j;
-}
-
-struct Result
-{
-  std::size_t hypotheses = 0; // the windows whose mass equals the precursor mass (whatever their count)
-  std::vector<Window> top;    // the best top_n windows with at least min_k matched positions, best first
-};
-
-// Every window (i, j) inside a segment whose unmodified mass S(j) - S(i) + h2o equals the precursor mass (within precursor_tol_ppm of it,
-// also at isotope errors -1 and +1, isotope_mass apart), found by a two-pointer sweep over the residue sums S of each segment
-// (sums[protein]). A ladder position x in (i, j) counts once per side: on the prefix side if S(x) - S(i) matches a prefix set, on the
-// suffix side if S(j) - S(x) matches a suffix set (any of the run's ion types of that side); k is the number of such (position, side)
-// matches, and the whole window (the precursor) is no position. With one ion type per side (b y, the prototype's calibrated setting)
-// this is the count of every set. Several types of one side (b y c z) would count a position up to twice per side, with correlated
-// chance matches (the b and c ions of one fragment of another proteoform), so k >= min_k could come from one or two positions. A window
-// with k >= min_k is scored by the chance probability of k, lambda = (j - i - 1) / V x the tolerance widths of all sets up to
-// V = S(j) - S(i); with several types per side this bounds the chance rate of a position on a side from above. Windows of fewer than
-// min_length residues are not considered (nor counted as hypotheses).
-inline void search(const std::vector<TargetSet>& sets, const std::vector<Segment>& segments, const std::vector<const double*>& sums,
-                   double precursor_mass, double precursor_tol_ppm, double h2o, double isotope_mass, int min_k, int min_length, std::size_t top_n,
-                   Result& result)
-{
-  result.hypotheses = 0;
-  result.top.clear();
-  if (top_n == 0 || precursor_mass <= 0) return;
-  const double tol = precursor_tol_ppm * 1e-6 * precursor_mass;
-  const double low = precursor_mass - h2o - isotope_mass - tol, high = precursor_mass - h2o + isotope_mass + tol;
-  std::vector<int> counts(sets.size(), 0);
-  for (const auto& seg : segments)
-  {
-    const double* S = sums[seg.protein];
-    if (S[seg.b] - S[seg.a] < low) continue; // no window of the segment is that heavy (residue sums rise within a segment)
-    std::size_t jp = seg.a + 1;
-    for (std::size_t i = seg.a; i < seg.b; i++)
-    {
-      const double si = S[i];
-      if (S[seg.b] - si < low) break; // nor from this start or any later one
-      if (jp < i + 1) jp = i + 1;
-      while (jp <= seg.b && S[jp] - si < low) jp++;
-      for (std::size_t j = jp; j <= seg.b && S[j] - si <= high; j++)
-      {
-        if ((int)(j - i) < min_length) continue; // not a hypothesis either
-        const double mass = S[j] - si;
-        int isotope = 2; // none
-        for (int v = -1; v <= 1; v++)
-        {
-          if (std::abs(mass + h2o - (precursor_mass + v * isotope_mass)) <= tol) isotope = v;
-        }
-        if (isotope == 2) continue;
-        result.hypotheses++;
-        const double sj = S[j];
-        std::fill(counts.begin(), counts.end(), 0);
-        int k = 0;
-        for (std::size_t x = i + 1; x < j; x++)
-        {
-          bool on_prefix = false, on_suffix = false;
-          for (std::size_t s = 0; s < sets.size(); s++)
-          {
-            const bool prefix = sets[s].isPrefix();
-            if (sets[s].massIndex(prefix ? S[x] - si : sj - S[x]) < 0) continue;
-            counts[s]++;
-            (prefix ? on_prefix : on_suffix) = true;
-          }
-          k += (int)on_prefix + (int)on_suffix;
-        }
-        if (k < min_k) continue;
-        double weight = 0;
-        for (const auto& set : sets) weight += set.weightUpTo(mass);
-        Window w;
-        w.lambda = mass > 0 ? (double)(j - i - 1) / mass * weight : 0;
-        w.log_p = -std::log10(std::max(boost::math::gamma_p((double)k, std::max(w.lambda, 1e-12)), 1e-300));
-        w.k = k;
-        w.protein = seg.protein;
-        w.i = (std::uint32_t)i;
-        w.j = (std::uint32_t)j;
-        w.isotope = isotope;
-        if (result.top.size() >= top_n && ! isBetter(w, result.top.back())) continue;
-        w.counts = counts;
-        result.top.insert(std::upper_bound(result.top.begin(), result.top.end(), w, isBetter), std::move(w));
-        if (result.top.size() > top_n) result.top.pop_back();
-      }
-    }
-  }
-}
-} // namespace precursor_ladder
-// END precursor ladder kernel
 } // namespace
 
 FLASHTnTAlgorithm::FLASHTnTAlgorithm(): DefaultParamHandler("FLASHTnTAlgorithm"), ProgressLogger()
@@ -1201,128 +1012,16 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   }
   std::vector<std::vector<FLASHHelperClasses::Tag>> spec_gapped_tags(dspecs.size());
 
-  // per ion type of ion_type: whether it is a prefix ion, and the shift that makes its fragment mass a residue sum (mass + shift)
-  std::vector<std::pair<bool, double>> ion_residue_shifts;
-  for (const auto& ion : param_.getValue("ion_type").toStringVector())
-  {
-    double offset = 0;
-    bool prefix = true;
-    if (ion == "a") offset = Residue::getInternalToAIon().getMonoWeight();
-    else if (ion == "b") offset = Residue::getInternalToBIon().getMonoWeight();
-    else if (ion == "c") offset = Residue::getInternalToCIon().getMonoWeight();
-    else
-    {
-      prefix = false;
-      if (ion == "x") offset = Residue::getInternalToXIon().getMonoWeight();
-      else if (ion == "y") offset = Residue::getInternalToYIon().getMonoWeight();
-      else if (ion == "z") offset = Residue::getInternalToZIon().getMonoWeight();
-      else if (ion == "zp1") offset = Residue::getInternalToZp1Ion().getMonoWeight();
-      else if (ion == "zp2") offset = Residue::getInternalToZp2Ion().getMonoWeight();
-    }
-    ion_residue_shifts.emplace_back(prefix, -offset);
-  }
-  const std::string standard_residues = "ACDEFGHIKLMNPQRSTVWYUO"; // the residues of terminal and precursor ladders
-
-  // Terminal ladders: the residue sums of every protein from its N- and from its C-terminus (up to the first non-standard residue), and
-  // all of them sorted by mass. A deconvolved mass plus a shift (of its ion type and, at the N-terminus, of the forms without the
-  // initiator Met and with acetylation) that lands on a residue sum reads from the intact terminus; no sequence tag is needed.
-  struct LadderEntry
-  {
-    double mass;
-    std::uint32_t protein;
-  };
-  std::vector<std::vector<double>> ladder_pre, ladder_suf;
-  std::vector<LadderEntry> ladder_pre_index, ladder_suf_index;
-  std::vector<double> n_ladder_shifts, c_ladder_shifts; // observed mass + shift = residue sum from the terminus
-  if (terminal_ladders_)
-  {
-    const auto* rdb = ResidueDB::getInstance();
-    const std::string& standard = standard_residues;
-    auto sums = [&](const std::string& seq, bool reverse, std::vector<double>& out) {
-      out.assign(1, 0.0);
-      for (Size j = 0; j < seq.size(); j++)
-      {
-        const char aa = seq[reverse ? seq.size() - 1 - j : j];
-        if (standard.find(aa) == std::string::npos) break;
-        out.push_back(out.back() + rdb->getResidue(aa)->getMonoWeight(Residue::Internal));
-      }
-    };
-    ladder_pre.resize(protein_seqs.size());
-    ladder_suf.resize(protein_seqs.size());
-    for (Size k = 0; k < protein_seqs.size(); k++)
-    {
-      sums(protein_seqs[k], false, ladder_pre[k]);
-      sums(protein_seqs[k], true, ladder_suf[k]);
-      for (Size j = 1; j < ladder_pre[k].size(); j++) ladder_pre_index.push_back({ladder_pre[k][j], (std::uint32_t)k});
-      for (Size j = 1; j < ladder_suf[k].size(); j++) ladder_suf_index.push_back({ladder_suf[k][j], (std::uint32_t)k});
-    }
-    auto by_mass = [](const LadderEntry& a, const LadderEntry& b) { return a.mass < b.mass; };
-    std::sort(ladder_pre_index.begin(), ladder_pre_index.end(), by_mass);
-    std::sort(ladder_suf_index.begin(), ladder_suf_index.end(), by_mass);
-
-    const double met = rdb->getResidue('M')->getMonoWeight(Residue::Internal);
-    const double acetyl = EmpiricalFormula("C2H2O").getMonoWeight();
-    for (const auto& [prefix, shift] : ion_residue_shifts)
-    {
-      if (prefix)
-      {
-        for (double form : {0.0, met, -acetyl, met - acetyl}) n_ladder_shifts.push_back(form + shift); // form - offset
-      }
-      else { c_ladder_shifts.push_back(shift); }
-    }
-  }
-
-  // Precursor-anchored ladders: the database as runs of standard residues (segments) with their residue sums, for the window search of
-  // every spectrum with a precursor mass. A protein of standard residues only uses its pro_prefix sums (no copy); a protein with other
-  // residues gets its own sums, in which those add 0 (no window crosses them). Built only if a spectrum has a precursor mass.
+  // Mass ladders (MassLadderAlgorithm): terminal ladders from the residue sums of every protein from its termini, and precursor-anchored
+  // ladders from the runs of standard residues of the database, for the window search of every spectrum with a precursor mass. The
+  // precursor ladders are built only if a spectrum has a precursor mass.
   bool any_precursor_mass = false;
   for (const auto& dspec : dspecs) any_precursor_mass |= dspec.getPrecursorPeakGroup().getMonoMass() > 0;
   const bool use_precursor_ladders = precursor_ladders_ && ! protein_level_only_ && any_precursor_mass;
-  std::vector<precursor_ladder::Segment> pl_segments;
-  std::vector<const double*> pl_sums;
-  std::vector<std::vector<double>> pl_own_sums;
+  MassLadderAlgorithm mass_ladders;
+  mass_ladders.buildIndex(protein_seqs, param_.getValue("ion_type").toStringVector(), terminal_ladders_, use_precursor_ladders);
   // the precursor tolerance of the windows: the MS1 tolerance of the input, else (no MS1 spectra) the fragment tolerance
   const double pl_precursor_tol = precursor_tol > 0 ? precursor_tol : protein_tol;
-  const double h2o = Residue::getInternalToFull().getMonoWeight();
-  if (use_precursor_ladders)
-  {
-    const auto* rdb = ResidueDB::getInstance();
-    std::vector<Size> other;
-    for (Size k = 0; k < protein_seqs.size(); k++)
-    {
-      if (protein_seqs[k].find_first_not_of(standard_residues) != std::string::npos) other.push_back(k);
-    }
-    pl_sums.assign(protein_seqs.size(), nullptr);
-    pl_own_sums.resize(other.size()); // not resized below: the pointers into it stay valid
-    for (Size n = 0; n < other.size(); n++)
-    {
-      const auto& seq = protein_seqs[other[n]];
-      auto& sums = pl_own_sums[n];
-      sums.reserve(seq.size() + 1);
-      sums.push_back(0);
-      for (const char aa : seq)
-      {
-        sums.push_back(sums.back() + (standard_residues.find(aa) == std::string::npos ? 0.0 : rdb->getResidue(aa)->getMonoWeight(Residue::Internal)));
-      }
-      pl_sums[other[n]] = sums.data();
-    }
-    for (Size k = 0; k < protein_seqs.size(); k++)
-    {
-      if (pl_sums[k] == nullptr) pl_sums[k] = pro_prefix[k].data(); // cleaned_protein_seqs[k] == protein_seqs[k] (no X)
-      const auto& seq = protein_seqs[k];
-      long a = -1;
-      for (Size x = 0; x <= seq.size(); x++)
-      {
-        const bool standard = x < seq.size() && standard_residues.find(seq[x]) != std::string::npos;
-        if (standard && a < 0) a = (long)x;
-        if (! standard && a >= 0)
-        {
-          pl_segments.push_back({(std::uint32_t)k, (std::uint32_t)a, (std::uint32_t)x});
-          a = -1;
-        }
-      }
-    }
-  }
   // per spectrum: the windows that fit its precursor mass (hypotheses), and the candidates; the same at the decoy precursor mass
   // (decoy_precursor), so that the decoy copy of a spectrum has this source as its target does
   std::vector<std::vector<ProteinHit>> spec_pl_hits(dspecs.size()), spec_decoy_pl_hits(dspecs.size());
@@ -1342,6 +1041,42 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
 #else
   const bool parallel_over_spectra = false;
 #endif
+  // A mass-ladder candidate as a protein hit; its ladders become tags (@p gtags) spanning them, with the lowest mass as flanking mass. The
+  // tag indices of the hit are -(local index + 1), made global with the gapped tags when appended to tags_.
+  auto ladderCandidateHit = [&](const DeconvolvedSpectrum& dspec, const MassLadderAlgorithm::Candidate& cand,
+                                std::vector<FLASHHelperClasses::Tag>& gtags) {
+    const auto& pseq = protein_seqs[cand.protein];
+    std::vector<int> indices, positions;
+    int matched = 0;
+    for (const auto& ladder : cand.ladders)
+    {
+      std::vector<double> tag_masses;
+      std::vector<int> tag_scores;
+      for (Size mi : ladder.mass_indices)
+      {
+        tag_masses.push_back(dspec[mi].getMonoMass());
+        tag_scores.push_back(FLASHTaggerAlgorithm::getNodeScore(dspec[mi]));
+      }
+      matched += (int)tag_masses.size();
+      gtags.emplace_back(String(pseq.substr(ladder.start, ladder.end - ladder.start)), ladder.prefix ? tag_masses[0] : -1.0,
+                         ladder.prefix ? -1.0 : tag_masses[0], tag_masses, tag_scores, dspec.getScanNumber(), (Size)(ladder.end - ladder.start));
+      gtags.back().setRetentionTime((float)dspec.getOriginalSpectrum().getRT());
+      indices.push_back(-(int)gtags.size());
+      positions.push_back(ladder.start);
+    }
+    const auto& fe = fasta_entry[cand.protein];
+    ProteinHit hit(cand.score, 0, fe.identifier, fe.sequence);
+    hit.setDescription(fe.description);
+    hit.setMetaValue(mi_scan, dspec.getScanNumber());
+    hit.setMetaValue(mi_matched_aa, matched);
+    hit.setCoverage((double)matched / (double)fe.sequence.length());
+    hit.setMetaValue(mi_tag_indices, indices);
+    std::sort(positions.begin(), positions.end());
+    hit.setMetaValue(mi_tag_positions, positions);
+    hit.setMetaValue(mi_fasta_index, cand.protein);
+    hit.setMetaValue(mi_protein_rank, cand.rank);
+    return hit;
+  };
   // The candidate proteins of one spectrum: from its sequence tags (@p tag_indices_of_scan, indices into tags_; none: nullptr), gapped tags,
   // terminal ladders and, with @p with_precursor_ladders, precursor ladders. The proteins in @p excluded (fasta indices) are not proposed
   // by any source (the chimeric search: the proteins of the spectrum's earlier best PrSMs). Writes only its outputs: the sequence- and
@@ -1546,209 +1281,58 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       hit.setMetaValue(mi_gapped, 1);
     }
 
-    // Terminal ladders: per protein and shift, the masses landing on a residue sum from the terminus. A protein is scored as
-    // runMatchingExact scores a side (the chance probability of the match count, times the number of shifts of the side), without the
-    // terminus itself: its match would only tell proteins starting with Met from shuffled decoys. The min_protein_hits best proteins are
-    // characterized; the ladder of the best shift of each side becomes a tag spanning it (as a gapped tag does), so the extension is
-    // anchored there. They are kept apart from the other candidates, also when a sequence tag proposed the same protein.
-    if (terminal_ladders_ && ! dspec.empty())
+    // the deconvolved masses (ascending) for the mass ladders
+    std::vector<double> masses;
+    if ((terminal_ladders_ || with_precursor_ladders) && ! dspec.empty())
     {
-      const Size n_proteins = protein_seqs.size(), n_n = n_ladder_shifts.size(), n_shifts = n_n + c_ladder_shifts.size();
-      std::vector<double> masses; // ascending
       masses.reserve(dspec.size());
       for (const auto& pg : dspec) masses.push_back(pg.getMonoMass());
-      auto shift_of = [&](Size si) { return si < n_n ? n_ladder_shifts[si] : c_ladder_shifts[si - n_n]; };
-      std::vector<std::uint16_t> counts(n_proteins * n_shifts, 0);
-      std::vector<Size> touched;
-      for (Size si = 0; si < n_shifts; si++)
+    }
+
+    // Terminal ladders (MassLadderAlgorithm::searchTerminalLadders): proteins by the chance probability of the masses landing on a residue
+    // sum from a terminus. The min_protein_hits best proteins are characterized; the ladder of the best shift of each side becomes a tag
+    // spanning it (as a gapped tag does), so the extension is anchored there. They are kept apart from the other candidates, also when a
+    // sequence tag proposed the same protein.
+    if (terminal_ladders_ && ! dspec.empty())
+    {
+      std::vector<MassLadderAlgorithm::Candidate> found;
+      mass_ladders.searchTerminalLadders(masses, protein_tol, (Size)min_protein_hits_, excluded, found);
+      for (const auto& cand : found)
       {
-        const auto& index = si < n_n ? ladder_pre_index : ladder_suf_index;
-        for (double m : masses)
-        {
-          const double t = m + shift_of(si);
-          const double margin = protein_tol * 1e-6 * std::max(m, t);
-          auto it = std::lower_bound(index.begin(), index.end(), t - margin, [](const LadderEntry& e, double v) { return e.mass < v; });
-          for (; it != index.end() && it->mass <= t + margin; ++it)
-          {
-            const Size c = it->protein * n_shifts + si;
-            if (counts[c]++ == 0) touched.push_back(c);
-          }
-        }
-      }
-      // per shift: the masses' cumulative tolerance weight, for the expected number of chance matches on a protein
-      std::vector<std::vector<double>> cum_weight(n_shifts, std::vector<double>(masses.size() + 1, 0.0));
-      for (Size si = 0; si < n_shifts; si++)
-      {
-        for (Size i = 0; i < masses.size(); i++) cum_weight[si][i + 1] = cum_weight[si][i] + std::max(masses[i], masses[i] + shift_of(si));
-      }
-      std::map<Size, std::pair<double, double>> side_scores; // protein -> best N side, best C side (-log10 P)
-      std::map<Size, std::pair<Size, Size>> best_shifts;      // protein -> its best N and C shift
-      for (Size c : touched)
-      {
-        const int k = counts[c];
-        if (k < 2) continue;
-        const Size p = c / n_shifts, si = c % n_shifts;
-        const auto& sums = si < n_n ? ladder_pre[p] : ladder_suf[p];
-        const double s = shift_of(si);
-        const Size lo = std::lower_bound(masses.begin(), masses.end(), -s) - masses.begin();
-        const Size hi = std::upper_bound(masses.begin(), masses.end(), sums.back() - s) - masses.begin();
-        const double lambda = hi > lo ? 2.0 * protein_tol * 1e-6 * (double)(sums.size() - 1) / sums.back() * (cum_weight[si][hi] - cum_weight[si][lo]) : 0;
-        const double score = -std::log10(std::max(boost::math::gamma_p((double)k, std::max(lambda, 1e-12)), 1e-300));
-        auto& sc = side_scores[p];
-        auto& bs = best_shifts.emplace(p, std::make_pair(n_shifts, n_shifts)).first->second;
-        if (si < n_n && score > sc.first) { sc.first = score; bs.first = si; }
-        else if (si >= n_n && score > sc.second) { sc.second = score; bs.second = si; }
-      }
-      std::vector<std::pair<double, Size>> ranked; // score, protein
-      for (const auto& [p, sc] : side_scores)
-      {
-        if (excluded.count(p) > 0) continue;
-        const double score = std::max(n_n > 0 ? sc.first - std::log10((double)n_n) : 0.0, n_shifts > n_n ? sc.second - std::log10((double)(n_shifts - n_n)) : 0.0);
-        if (score > 0) ranked.emplace_back(score, p);
-      }
-      const Size top = std::min(ranked.size(), (Size)min_protein_hits_);
-      std::partial_sort(ranked.begin(), ranked.begin() + top, ranked.end(),
-                        [](const auto& a, const auto& b) { return a.first != b.first ? a.first > b.first : a.second < b.second; });
-      for (Size r = 0; r < top; r++)
-      {
-        const double score = ranked[r].first;
-        const Size p = ranked[r].second;
-        const auto& pseq = protein_seqs[p];
-        const Size bn = best_shifts[p].first, bc = best_shifts[p].second;
-        std::vector<int> indices, positions; // tag indices: -(local index + 1), made global with the gapped tags below
-        int matched = 0;
-        for (Size si : {bn, bc})
-        {
-          if (si >= n_shifts) continue;
-          const bool prefix = si < n_n;
-          const auto& sums = prefix ? ladder_pre[p] : ladder_suf[p];
-          const double s = shift_of(si);
-          std::vector<double> tag_masses;
-          std::vector<int> tag_scores;
-          int first = -1, last = -1; // residues from the terminus at the lowest and the highest ladder mass
-          for (const auto& pg : dspec)
-          {
-            const double m = pg.getMonoMass(), t = m + s, margin = protein_tol * 1e-6 * std::max(m, t);
-            auto it = std::lower_bound(sums.begin() + 1, sums.end(), t - margin);
-            if (it == sums.end() || *it > t + margin) continue;
-            const int j = (int)(it - sums.begin());
-            // the whole sequence is no fragment: that mass is the precursor (y) or the precursor minus water (b)
-            if (j <= last || j >= (int)pseq.size()) continue;
-            if (first < 0) first = j;
-            last = j;
-            tag_masses.push_back(m);
-            tag_scores.push_back(FLASHTaggerAlgorithm::getNodeScore(pg));
-          }
-          if (tag_masses.size() < 2) continue;
-          matched += (int)tag_masses.size();
-          const int start = prefix ? first : (int)pseq.size() - last, end = prefix ? last : (int)pseq.size() - first;
-          gtags.emplace_back(String(pseq.substr(start, end - start)), prefix ? tag_masses[0] : -1.0, prefix ? -1.0 : tag_masses[0], tag_masses,
-                             tag_scores, dspec.getScanNumber(), (Size)(end - start));
-          gtags.back().setRetentionTime((float)dspec.getOriginalSpectrum().getRT());
-          indices.push_back(-(int)gtags.size());
-          positions.push_back(start);
-        }
-        if (indices.empty()) continue;
-        const auto& fe = fasta_entry[p];
-        const double coverage = (double)matched / (double)fe.sequence.length();
-        ProteinHit hit(score, 0, fe.identifier, fe.sequence);
-        hit.setDescription(fe.description);
-        hit.setMetaValue(mi_scan, dspec.getScanNumber());
-        hit.setMetaValue(mi_matched_aa, matched);
-        hit.setCoverage(coverage);
-        hit.setMetaValue(mi_tag_indices, indices);
-        std::sort(positions.begin(), positions.end());
-        hit.setMetaValue(mi_tag_positions, positions);
-        hit.setMetaValue(mi_fasta_index, p);
-        hit.setMetaValue(mi_protein_rank, (int)r + 1);
+        ProteinHit hit = ladderCandidateHit(dspec, cand, gtags);
         hit.setMetaValue(mi_terminal, 1);
         ladder_out.push_back(std::move(hit));
       }
     }
 
     // Precursor-anchored ladders: the windows of the database (targets and decoys alike) whose unmodified mass is the precursor mass, by
-    // the chance probability of the masses on their prefix and suffix ladders (precursor_ladder::search). The min_protein_hits best
-    // windows are characterized; the matched masses of the best prefix and the best suffix ion type become tags spanning them (as
-    // terminal-ladder tags), from which the extension can start and end the proteoform at the window. FLASHExtender places the tags by
-    // their sequence and reaches an internal start or end only within its truncation range around the protein's best mass shift
+    // the chance probability of the masses on their prefix and suffix ladders (MassLadderAlgorithm::searchPrecursorLadders). The
+    // min_protein_hits best windows are characterized; the matched masses of the best prefix and the best suffix ion type become tags
+    // spanning them (as terminal-ladder tags), from which the extension can start and end the proteoform at the window. FLASHExtender places
+    // the tags by their sequence and reaches an internal start or end only within its truncation range around the protein's best mass shift
     // (getBestMassShift_), not at the window it is given: the window is stored on the candidate (PrecursorLadderStart and End, 1-based as
     // StartPosition and EndPosition, and PrecursorLadderIsotope), and the log line after the extension counts the PrSMs at its ends. Kept
-    // apart from the other candidates; searched before the check for tag candidates, so spectra without any are searched too.
+    // apart from the other candidates; searched before the check for tag candidates, so spectra without any are searched too. The same at
+    // the decoy precursor mass (decoy_precursor).
     if (with_precursor_ladders && ! dspec.empty() && dspec.getPrecursorPeakGroup().getMonoMass() > 0)
     {
-      std::vector<double> masses; // ascending
-      masses.reserve(dspec.size());
-      for (const auto& pg : dspec) masses.push_back(pg.getMonoMass());
-      std::vector<precursor_ladder::TargetSet> sets;
-      sets.reserve(ion_residue_shifts.size());
-      for (const auto& [prefix, shift] : ion_residue_shifts) sets.emplace_back(masses, shift, prefix, protein_tol);
-      precursor_ladder::Result found;
-      auto candidatesAt = [&](double precursor_mass, std::vector<ProteinHit>& candidates) {
-        precursor_ladder::search(sets, pl_segments, pl_sums, precursor_mass, pl_precursor_tol, h2o, Constants::C13C12_MASSDIFF_U,
-                                 precursor_ladder_min_k, precursor_ladder_min_length, (Size)min_protein_hits_, found);
-        const double log_hypotheses = std::log10((double)std::max(found.hypotheses, (std::size_t)1));
-        for (Size r = 0; r < found.top.size(); r++)
+      std::vector<double> precursor_masses {dspec.getPrecursorPeakGroup().getMonoMass()};
+      if (decoy_precursor_ && dspec.getDecoyPrecursorMass() > 0) precursor_masses.push_back(dspec.getDecoyPrecursorMass());
+      std::vector<MassLadderAlgorithm::PrecursorLadderResult> found;
+      mass_ladders.searchPrecursorLadders(masses, precursor_masses, protein_tol, pl_precursor_tol, (Size)min_protein_hits_, found);
+      pl_windows = found[0].windows;
+      for (Size n = 0; n < found.size(); n++)
+      {
+        for (const auto& cand : found[n].candidates)
         {
-          const auto& win = found.top[r];
-          const double* sums = pl_sums[win.protein];
-          const auto& pseq = protein_seqs[win.protein];
-          // per side, the ion type with the most matched positions (the first in ion_type among equal ones)
-          int best_prefix = -1, best_suffix = -1;
-          for (int s = 0; s < (int)sets.size(); s++)
-          {
-            int& best = sets[s].isPrefix() ? best_prefix : best_suffix;
-            if (best < 0 || win.counts[s] > win.counts[best]) best = s;
-          }
-          std::vector<int> indices, positions; // tag indices: -(local index + 1), made global with the gapped tags below
-          int matched = 0;
-          for (int s : {best_prefix, best_suffix})
-          {
-            if (s < 0) continue;
-            const auto& set = sets[s];
-            const bool prefix = set.isPrefix();
-            std::vector<double> tag_masses; // ascending: prefix positions from the start, suffix positions from the end
-            std::vector<int> tag_scores, tag_positions;
-            for (Size step = 1; step < win.j - win.i; step++)
-            {
-              const Size x = prefix ? win.i + step : win.j - step;
-              const long mi = set.massIndex(prefix ? sums[x] - sums[win.i] : sums[win.j] - sums[x]);
-              if (mi < 0) continue;
-              tag_positions.push_back((int)x);
-              tag_masses.push_back(masses[mi]);
-              tag_scores.push_back(FLASHTaggerAlgorithm::getNodeScore(dspec[mi]));
-            }
-            if (tag_masses.size() < 2) continue;
-            matched += (int)tag_masses.size();
-            // the tag spans the positions of its lowest and its highest mass; its flanking mass is the lowest (the ladder read from i or j)
-            const int start = prefix ? tag_positions.front() : tag_positions.back(), end = prefix ? tag_positions.back() : tag_positions.front();
-            gtags.emplace_back(String(pseq.substr(start, end - start)), prefix ? tag_masses[0] : -1.0, prefix ? -1.0 : tag_masses[0], tag_masses,
-                               tag_scores, dspec.getScanNumber(), (Size)(end - start));
-            gtags.back().setRetentionTime((float)dspec.getOriginalSpectrum().getRT());
-            indices.push_back(-(int)gtags.size());
-            positions.push_back(start);
-          }
-          if (indices.empty()) continue; // only possible with more than one ion type per side
-          const auto& fe = fasta_entry[win.protein];
-          ProteinHit hit(win.log_p - log_hypotheses, 0, fe.identifier, fe.sequence);
-          hit.setDescription(fe.description);
-          hit.setMetaValue(mi_scan, dspec.getScanNumber());
-          hit.setMetaValue(mi_matched_aa, matched);
-          hit.setCoverage((double)matched / (double)fe.sequence.length());
-          hit.setMetaValue(mi_tag_indices, indices);
-          std::sort(positions.begin(), positions.end());
-          hit.setMetaValue(mi_tag_positions, positions);
-          hit.setMetaValue(mi_fasta_index, (Size)win.protein);
-          hit.setMetaValue(mi_protein_rank, (int)r + 1);
+          ProteinHit hit = ladderCandidateHit(dspec, cand, gtags);
           hit.setMetaValue(mi_precursor_ladder, 1);
-          hit.setMetaValue(mi_pl_start, (int)win.i + 1); // residues i..j-1 (0-based) are i+1..j (1-based, inclusive)
-          hit.setMetaValue(mi_pl_end, (int)win.j);
-          hit.setMetaValue(mi_pl_isotope, win.isotope);
-          candidates.push_back(std::move(hit));
+          hit.setMetaValue(mi_pl_start, cand.window_start + 1); // residues i..j-1 (0-based) are i+1..j (1-based, inclusive)
+          hit.setMetaValue(mi_pl_end, cand.window_end);
+          hit.setMetaValue(mi_pl_isotope, cand.isotope);
+          (n == 0 ? pl_out : decoy_pl_out).push_back(std::move(hit));
         }
-      };
-      candidatesAt(dspec.getPrecursorPeakGroup().getMonoMass(), pl_out);
-      pl_windows = found.hypotheses;
-      if (decoy_precursor_ && dspec.getDecoyPrecursorMass() > 0) candidatesAt(dspec.getDecoyPrecursorMass(), decoy_pl_out);
+      }
     }
 
     if (hits.empty()) return;
@@ -1831,9 +1415,9 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     std::nth_element(windows.begin(), windows.begin() + windows.size() / 2, windows.end());
     String at_decoy_masses;
     if (decoy_precursor_) at_decoy_masses = ", " + String(decoy_pl_candidates.size()) + " at the decoy precursor masses";
-    OPENMS_LOG_INFO << "Precursor ladders: " << pl_segments.size() << " segments; " << windows.size() << " spectra with a precursor mass, " << total
+    OPENMS_LOG_INFO << "Precursor ladders: " << mass_ladders.getSegmentCount() << " segments; " << windows.size() << " spectra with a precursor mass, " << total
                     << " windows (median " << (windows.empty() ? 0 : windows[windows.size() / 2]) << " per spectrum), " << pl_candidates.size()
-                    << " candidates (top " << min_protein_hits_ << ", at least " << precursor_ladder_min_k << " matched positions)" << at_decoy_masses
+                    << " candidates (top " << min_protein_hits_ << ", at least " << MassLadderAlgorithm::precursor_ladder_min_k << " matched positions)" << at_decoy_masses
                     << std::endl;
   }
 

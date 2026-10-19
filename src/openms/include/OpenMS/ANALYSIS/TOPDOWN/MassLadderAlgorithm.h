@@ -1,0 +1,157 @@
+// Copyright (c) 2002-2026, The OpenMS Team -- EKU Tuebingen, ETH Zurich, and FU Berlin
+// SPDX-License-Identifier: BSD-3-Clause
+//
+// --------------------------------------------------------------------------
+// $Maintainer: Kyowon Jeong $
+// $Authors: Kyowon Jeong $
+// --------------------------------------------------------------------------
+
+#pragma once
+
+#include <OpenMS/CONCEPT/Types.h>
+#include <cstdint>
+#include <set>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace OpenMS
+{
+/**
+@brief Candidate proteins from mass ladders: deconvolved fragment masses read as residue sums of a database protein, without any
+sequence tag. Mass ladders are a candidate source of their own, next to sequence tags (FLASHTaggerAlgorithm) and gapped tags
+(FLASHGappedTaggerAlgorithm).
+
+- Terminal ladders: masses that are residue sums from an intact protein terminus (the N-terminus also without the initiator Met and
+  with acetylation). A protein is scored by the chance probability of the number of masses on its ladder.
+- Precursor-anchored ladders: the windows (stretches) of the proteins whose unmodified mass equals the precursor mass, scored by the
+  chance probability of the masses on their prefix ladder (read from the window start) and their suffix ladder (read from the window
+  end).
+
+Only the standard residues (ACDEFGHIKLMNPQRSTVWYUO) make up a ladder: a terminal ladder ends at the first other residue, and no window
+crosses one. buildIndex builds the database side once, from the protein sequences and the run's ion types; the searches of a spectrum
+only read it, so spectra can be searched in parallel. A search returns plain candidates (protein, rank, score, and the matched masses of
+the best ion type of each side as a ladder spanning residues of the protein), from which the caller makes its tags and protein hits.
+@ingroup Topdown
+*/
+class OPENMS_DLLAPI MassLadderAlgorithm
+{
+public:
+  /// precursor ladders: a window needs this many matched ladder positions to be a candidate (the prototype's calibrated setting)
+  static constexpr int precursor_ladder_min_k = 3;
+  /// precursor ladders: a window has at least this many residues. Shorter windows were chance hits: on Eclip_1480 against E. coli + B.
+  /// theta (keep-decoy), the PrSMs of windows under 10 residues were 3 decoys, 1 B. theta and 2 E. coli PrSMs; from 10 residues on, 1
+  /// decoy, 2 B. theta and 167 E. coli PrSMs (none of the B. theta or decoy ones at 1%). A short window has few ladder positions, its
+  /// masses are where fragment masses are densest, and many windows fit a small precursor mass.
+  static constexpr int precursor_ladder_min_length = 10;
+
+  /// the matched masses of one ion type of a candidate, read from one end (a protein terminus or a window end)
+  struct Ladder
+  {
+    bool prefix = true;             ///< a prefix ion type (read from the N-terminal end); otherwise a suffix ion type (from the C-terminal end)
+    int start = 0;                  ///< first residue it spans (0-based): the residues between its lowest and its highest mass
+    int end = 0;                    ///< one past the last residue it spans
+    std::vector<Size> mass_indices; ///< the matched masses (indices into the masses searched), from the lowest; at least two
+  };
+
+  /// a candidate protein of a spectrum
+  struct Candidate
+  {
+    Size protein = 0;            ///< index of the protein in the sequences given to buildIndex
+    int rank = 0;                ///< rank among the best candidates of the spectrum (1-based); a ranked protein without a ladder is left out, its rank unused
+    double score = 0;            ///< terminal ladders: -log10 P of the better side, corrected for its number of shifts; precursor ladders:
+                                 ///< -log10 P of the window minus log10 of the number of windows that fit the precursor mass
+    std::vector<Ladder> ladders; ///< the prefix side first, then the suffix side (each side at most once)
+    int window_start = -1;       ///< precursor ladders: the window is residues window_start..window_end-1 (0-based); -1 for terminal ladders
+    int window_end = -1;
+    int isotope = 0;             ///< precursor ladders: the isotope error (-1, 0, 1) at which the window mass equals the precursor mass
+  };
+
+  /// the precursor-ladder candidates of one precursor mass
+  struct PrecursorLadderResult
+  {
+    Size windows = 0;                  ///< the windows whose mass equals the precursor mass (hypotheses), whatever their match count
+    std::vector<Candidate> candidates; ///< the best windows with at least precursor_ladder_min_k matched positions, best first
+  };
+
+  /// precursor ladders: a run of standard residues a..b-1 of a protein, in which the windows lie
+  struct Segment
+  {
+    std::uint32_t protein, a, b;
+  };
+
+  MassLadderAlgorithm() = default;
+  /// not copyable: the window residue sums point into the object's own storage
+  MassLadderAlgorithm(const MassLadderAlgorithm&) = delete;
+  MassLadderAlgorithm& operator=(const MassLadderAlgorithm&) = delete;
+  MassLadderAlgorithm(MassLadderAlgorithm&&) = default;
+  MassLadderAlgorithm& operator=(MassLadderAlgorithm&&) = default;
+  ~MassLadderAlgorithm() = default;
+
+  /**
+    @brief build the database side of the searches
+    @param protein_seqs the protein sequences (the candidates refer to them by index)
+    @param ion_types the run's ion types (a, b, c prefix; x, y, z, zp1, zp2 suffix)
+    @param terminal_ladders build the index of searchTerminalLadders
+    @param precursor_ladders build the segments of searchPrecursorLadders
+  */
+  void buildIndex(const std::vector<std::string>& protein_seqs, const std::vector<std::string>& ion_types, bool terminal_ladders,
+                  bool precursor_ladders);
+
+  /**
+    @brief the terminal-ladder candidates of a spectrum. Thread safe once the index is built.
+    @param masses the deconvolved masses of the spectrum, ascending
+    @param tol_ppm mass tolerance of a deconvolved mass in ppm
+    @param top_n at most this many candidates (the best proteins by score; ties by protein index)
+    @param excluded proteins (indices) that are not proposed
+    @param candidates output, best first
+  */
+  void searchTerminalLadders(const std::vector<double>& masses, double tol_ppm, Size top_n, const std::set<Size>& excluded,
+                             std::vector<Candidate>& candidates) const;
+
+  /**
+    @brief the precursor-ladder candidates of a spectrum for each of @p precursor_masses (e.g. its precursor mass and its decoy precursor
+    mass; the masses are prepared once). Thread safe once the index is built.
+    @param masses the deconvolved masses of the spectrum, ascending
+    @param precursor_masses the precursor masses; one result per mass, in this order
+    @param fragment_tol_ppm mass tolerance of a deconvolved mass in ppm
+    @param precursor_tol_ppm mass tolerance of a window mass against a precursor mass in ppm
+    @param top_n at most this many candidates per precursor mass
+    @param results output
+  */
+  void searchPrecursorLadders(const std::vector<double>& masses, const std::vector<double>& precursor_masses, double fragment_tol_ppm,
+                              double precursor_tol_ppm, Size top_n, std::vector<PrecursorLadderResult>& results) const;
+
+  /// the number of runs of standard residues (segments) the precursor-ladder windows lie in
+  Size getSegmentCount() const
+  {
+    return segments_.size();
+  }
+
+private:
+  /// a residue sum from a terminus and its protein, in the mass-sorted terminal ladder index
+  struct LadderEntry
+  {
+    double mass;
+    std::uint32_t protein;
+  };
+
+  /// per ion type: whether it is a prefix ion, and the shift that makes its fragment mass a residue sum (mass + shift)
+  std::vector<std::pair<bool, double>> ion_residue_shifts_;
+  /// the protein lengths
+  std::vector<Size> protein_lengths_;
+  /// per protein, the residue sums from its N- and from its C-terminus (up to the first non-standard residue): the terminal ladders
+  /// (ladder_suf_ only with terminal ladders); ladder_pre_ is also the window sums of a protein of standard residues only
+  std::vector<std::vector<double>> ladder_pre_, ladder_suf_;
+  /// terminal ladders: all of them sorted by mass (a sum of 0 left out)
+  std::vector<LadderEntry> ladder_pre_index_, ladder_suf_index_;
+  /// terminal ladders: observed mass + shift = residue sum from the terminus
+  std::vector<double> n_ladder_shifts_, c_ladder_shifts_;
+  /// precursor ladders: the runs of standard residues of the database
+  std::vector<Segment> segments_;
+  /// precursor ladders: per protein, its residue sums from the N-terminus, in which a non-standard residue adds 0 (no window crosses it)
+  std::vector<const double*> window_sums_;
+  /// precursor ladders: the storage of window_sums_ (the sums of a protein of standard residues only are its ladder_pre_ sums)
+  std::vector<std::vector<double>> window_own_sums_;
+};
+} // namespace OpenMS
