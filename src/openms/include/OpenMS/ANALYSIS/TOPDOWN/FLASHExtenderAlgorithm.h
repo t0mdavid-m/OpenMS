@@ -139,6 +139,11 @@ private:
     double calculated_precursor_mass_ = -1;
     /// the precursor mass is taken as given (no isotope offsets tried): set when an inferred mass gave no path and the MS1 mass is tried
     bool precursor_as_given_ = false;
+    /// the suffix and prefix node masses (residue sums) whose sum defined calculated_precursor_mass_ when it was inferred from fragments; -1 if not
+    double inferred_suffix_node_ = -1, inferred_prefix_node_ = -1;
+    /// in mode 2, the start position of the terminal (prefix) result bounds the start of the precursor-mass path only when unshifted prefix
+    /// masses read from that start support it (see min_n_term_ladder)
+    bool start_prior_ = true;
     /// n and c term best mass shift between spec and protein. For speed up
     int n_best_shift_ = 0, c_best_shift_ = 0;
     /// cached pointers to the current-mode (mode_) entries of the maps above; set once per mode to avoid re-resolving the std::map lookup on every recursion frame.
@@ -227,7 +232,7 @@ private:
    */
   /// true if more complementary fragment pairs (prefix + suffix mass = @p precursor_mass, for the ion types in use) are found in
   /// @p sorted_masses than at any of 200 masses moved by up to +-300 Da (chance in this spectrum)
-  bool hasComplementaryPairSupport_(const std::vector<double>& sorted_masses, double precursor_mass) const;
+  bool hasComplementaryPairSupport_(const std::vector<double>& sorted_masses, double precursor_mass, double suffix_node = -1, double prefix_node = -1) const;
 
   void calculatePrecursorMass_(const ProteinHit& hit,
                                const std::map<int, std::vector<Size>>& best_path_map,

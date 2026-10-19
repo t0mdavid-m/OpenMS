@@ -24,6 +24,7 @@ namespace OpenMS
   inline const int multi_ion_score = 1;
   inline const bool debug = false;
   inline const double i2f_mass = Residue::getInternalToFull().getMonoWeight();
+  inline const double c13_spacing = Constants::C13C12_MASSDIFF_U; // one isotope (shared by name in the parallel extension loop)
   // Base penalty for a terminal truncation, equivalent to the base blind-modification (mass-shift)
   // penalty applied in findSubPathsBetweenTagEndPoints. Equals 19.
   inline const int truncation_penalty = 1 + 2 * (multi_ion_score + FLASHTaggerAlgorithm::max_node_score);
@@ -32,7 +33,13 @@ namespace OpenMS
   // (78,686 internal positions of 1% PrSMs) reach k >= 4 at a rate of 7.6e-5 (shuffled decoys: 1.6e-5 of 378,800), so the about 200
   // tests of a lysate run give about 0.015 chance rejections; k >= 3 would give about 0.1.
   inline const int min_c_term_ladder = 4;
-  // Penalty per variable modification: a known residue-specific shift costs far less than a blind modification, but more than
+  // Minimum number of unshifted prefix fragment masses read from the start of the terminal (prefix) result for that start to bound the start
+  // of the precursor-mass path (mode 2). A prefix path that starts at residue 1 with a blind shift at once reads no prefix ladder from it,
+  // and bounding the precursor-mass path to within the largest shift of residue 1 kept short internal fragments from their start: on
+  // Eclip_1480, 2-3.4 kDa fragments such as ISCR 131-154 at the right MS1 precursor mass were reported as 1-154 with a +282 Da shift and an
+  // undetermined mass (12 of TopPIC's unmodified proteoforms we lacked, 19 more we reported without a mass). The same count as the
+  // C-terminal rule: fewer such masses are within chance.
+  inline const int min_n_term_ladder = min_c_term_ladder;  // Penalty per variable modification: a known residue-specific shift costs far less than a blind modification, but more than
   // nothing, so that an unmodified path wins a tie.
   inline const int var_mod_penalty = 1 + multi_ion_score;
   FLASHExtenderAlgorithm::FLASHExtenderAlgorithm(): DefaultParamHandler("FLASHExtenderAlgorithm"), ProgressLogger()
@@ -379,9 +386,39 @@ namespace OpenMS
 
   // take the hits. Just calculate the mass of truncated protein. Then add modification masses if they are disjoint. If they overlap and the same mass,
   // we have a single one. If they are overlapping but different, we add all of them. the max mod count is also adjusted.
-  bool FLASHExtenderAlgorithm::hasComplementaryPairSupport_(const std::vector<double>& sorted_masses, double precursor_mass) const
+  bool FLASHExtenderAlgorithm::hasComplementaryPairSupport_(const std::vector<double>& all_masses, double precursor_mass, double suffix_node,
+                                                            double prefix_node) const
   {
-    if (precursor_mass <= 0 || sorted_masses.size() < 2) return false;
+    if (precursor_mass <= 0 || all_masses.size() < 2) return false;
+    // The pair that defined an inferred mass (suffix_node, prefix_node: residue sums) sums to it by construction and is no evidence for
+    // it: its masses (every ion type, and one isotope off) are left out, here and in the control. Counted with it, a single pair of a
+    // sparse spectrum (lysate MS2) passed the check: on Eclip_1480, 243 of the 302 1% PrSMs whose mass was inferred and differed from the
+    // MS1 precursor mass had no other pair, and TopPIC's mass agreed with the MS1 mass 116 times, with the inferred one 39 times.
+    std::vector<double> kept;
+    const std::vector<double>* masses_ptr = &all_masses;
+    if (suffix_node > 0 || prefix_node > 0)
+    {
+      kept.reserve(all_masses.size());
+      for (double m : all_masses)
+      {
+        const double margin = 2 * tol_ * m;
+        bool defining = false;
+        for (int iso = -1; iso <= 1 && ! defining; iso++)
+        {
+          const double mi = m - iso * Constants::C13C12_MASSDIFF_U;
+          if (suffix_node > 0)
+            for (double s : suffix_shifts_)
+              defining = defining || std::abs(mi - (suffix_node + s)) <= margin;
+          if (prefix_node > 0)
+            for (double p : prefix_shifts_)
+              defining = defining || std::abs(mi - (prefix_node + p)) <= margin;
+        }
+        if (! defining) kept.push_back(m);
+      }
+      masses_ptr = &kept;
+    }
+    const std::vector<double>& sorted_masses = *masses_ptr;
+    if (sorted_masses.size() < 2) return false;
     // a prefix and a suffix fragment of one precursor sum to the precursor mass plus their ion offsets minus water
     std::vector<double> offsets;
     for (double p : prefix_shifts_)
@@ -424,6 +461,7 @@ namespace OpenMS
   void FLASHExtenderAlgorithm::calculatePrecursorMass_(const ProteinHit& hit, const std::map<int, std::vector<Size>>& best_path_map, HitInformation& hi)
   {
     hi.calculated_precursor_mass_ = -1;
+    hi.inferred_suffix_node_ = hi.inferred_prefix_node_ = -1;
     if (hi.protein_start_position_ < 0 || hi.protein_end_position_ < 0) return;
     // the inference needs a path from each terminus. The check above already implies both (the start position is set only by a prefix
     // path, the end position only by a suffix path); this keeps at() from throwing inside the parallel loop should that ever change
@@ -476,10 +514,16 @@ namespace OpenMS
       max_score = score;
       hi.calculated_precursor_mass_
         = hi.node_spec_map_.at(0)[getNodeIndex_(*iter0, pro_size)].getMZ() + hi.node_spec_map_.at(1)[getNodeIndex_(*iter1, pro_size)].getMZ();
+      hi.inferred_suffix_node_ = hi.inferred_prefix_node_ = -1;
 
       if (proi + proj > (int)hit.getSequence().size())
       {
         hi.calculated_precursor_mass_ += hi.pro_mass_map_[0].back() - (hi.pro_mass_map_[0][proi] + hi.pro_mass_map_[1][proj]);
+      }
+      else // the two masses are complementary: they sum to the inferred mass
+      {
+        hi.inferred_suffix_node_ = hi.node_spec_map_.at(0)[getNodeIndex_(*iter0, pro_size)].getMZ();
+        hi.inferred_prefix_node_ = hi.node_spec_map_.at(1)[getNodeIndex_(*iter1, pro_size)].getMZ();
       }
     }
     if (hi.calculated_precursor_mass_ > 0) hi.calculated_precursor_mass_ += i2f_mass;
@@ -1046,7 +1090,7 @@ namespace OpenMS
     for (const auto& pg : dspec) sorted_masses.push_back(pg.getMonoMass());
     std::sort(sorted_masses.begin(), sorted_masses.end());
 
-  #pragma omp parallel for default(none) schedule(dynamic) if (! omp_in_parallel()) shared(hits, tags, dspec, multiple_hits_per_spec, i2f_mass, spec_vec, sorted_masses, vec_pro, rev_vec_pro, std::cout, found, mi_tag_indices, mi_fasta_index, mi_modification_ids, mi_modification_accs, mi_modifications, mi_modification_starts, mi_modification_ends, mi_blind_mod_count, mi_variable_modifications, mi_modification_variable, mi_matched_aa, mi_start_position, mi_end_position, mi_given_mass, mi_mass, mi_rt, mi_num_mass, mi_precursor_score, mi_precursor_snr, mi_mass_by_fragments, mi_matched_mass_indices)
+  #pragma omp parallel for default(none) schedule(dynamic) if (! omp_in_parallel()) shared(hits, tags, dspec, multiple_hits_per_spec, i2f_mass, c13_spacing, spec_vec, sorted_masses, vec_pro, rev_vec_pro, std::cout, found, mi_tag_indices, mi_fasta_index, mi_modification_ids, mi_modification_accs, mi_modifications, mi_modification_starts, mi_modification_ends, mi_blind_mod_count, mi_variable_modifications, mi_modification_variable, mi_matched_aa, mi_start_position, mi_end_position, mi_given_mass, mi_mass, mi_rt, mi_num_mass, mi_precursor_score, mi_precursor_snr, mi_mass_by_fragments, mi_matched_mass_indices)
     for (int i = 0; i < ((int)hits.size()); i++)
     {
       nextProgress();
@@ -1096,7 +1140,10 @@ namespace OpenMS
       int terminal_start = -1, terminal_end = -1;
       // suffix fragment masses matched on the suffix path before its first shift, i.e. measured from where that path starts
       int c_ladder = 0, terminal_c_ladder = 0;
+      // prefix fragment masses matched on the prefix path before its first shift, i.e. read from where that path starts
+      int n_ladder = 0, terminal_n_ladder = 0;
       bool retried_with_given_mass = false;
+      bool retried_with_isotopes = false;
 
       for (hi.mode_ = 0; hi.mode_ <= 2; hi.mode_++)
       {
@@ -1118,6 +1165,8 @@ namespace OpenMS
           terminal_start = hi.protein_start_position_;
           terminal_end = hi.protein_end_position_;
           terminal_c_ladder = c_ladder;
+          terminal_n_ladder = n_ladder;
+          hi.start_prior_ = terminal_n_ladder >= min_n_term_ladder;
         }
         if (hi.mode_ == 2 && hi.calculated_precursor_mass_ <= 0)
         { // const ProteinHit& hit,
@@ -1256,6 +1305,7 @@ namespace OpenMS
           if (best_path_map.empty() || best_path_map.find(m) == best_path_map.end() || best_path_map[m].empty()) continue;
           mods_before[m] = mod_starts.size();
           if (m == 0) c_ladder = 0;
+          if (m == 1) n_ladder = 0;
           auto& best_path = best_path_map[m];
           auto& t_pro_masses = hi.pro_mass_map_[m];
           auto& t_node_spec = hi.node_spec_map_[m];
@@ -1298,6 +1348,7 @@ namespace OpenMS
                 }
               }
               if (m == 0 && mod_count == 0) c_ladder++;
+              if (m == 1 && mod_count == 0) n_ladder++;
             }
 
             if (m == 0) max_cterm_rindex = std::max(max_cterm_rindex, pro_index);
@@ -1415,7 +1466,7 @@ namespace OpenMS
           const bool given_mass_agrees
             = given_precursor_mass_ > 0 && std::abs(given_precursor_mass_ - hi.calculated_precursor_mass_) <= tol_ * given_precursor_mass_;
           if (! reject_mass && precursor_by_fragment && ! given_mass_agrees) // the MS1 precursor mass confirms it
-            reject_mass = ! hasComplementaryPairSupport_(sorted_masses, hi.calculated_precursor_mass_);
+            reject_mass = ! hasComplementaryPairSupport_(sorted_masses, hi.calculated_precursor_mass_, hi.inferred_suffix_node_, hi.inferred_prefix_node_);
           // Unshifted suffix fragment masses measured from the C-terminus cannot come from a proteoform that ends before it. A precursor
           // mass of a co-isolated species makes the path end where that mass fits and absorb the rest with blind shifts: on Eclip_1480
           // scan 8324, YCII 1-76 [+28.0, -484.8] scored 37, the terminal result 1-98 with 21 y ions 228.
@@ -1431,6 +1482,11 @@ namespace OpenMS
         const bool moved = hi.mode_ == 2 && given_precursor_mass_ > 0 && ! retried_with_given_mass
                            && (precursor_by_fragment || std::abs(hi.calculated_precursor_mass_ - given_precursor_mass_) > tol_ * given_precursor_mass_);
         if (moved && total_score <= 0) reject_mass = true;
+        // The MS1 mass taken as given (no isotope offsets) after a rejected inferred mass can be one isotope off and then give no path that
+        // scores above 0: it is tried once more as a mass that was never inferred is, with its isotope offsets (Eclip_1480 scan 5579: YEGP
+        // 2-110 at the MS1 mass one isotope high stayed without a mass).
+        const bool retry_isotopes = hi.mode_ == 2 && total_score <= 0 && retried_with_given_mass && hi.precursor_as_given_ && ! retried_with_isotopes;
+        if (retry_isotopes) reject_mass = true;
         if (reject_mass)
         {
           const bool inferred = precursor_by_fragment || moved;
@@ -1451,6 +1507,13 @@ namespace OpenMS
           all_path_map.erase(2);
           precursor_by_fragment = false;
           hi.calculated_precursor_mass_ = -1;
+          if (retry_isotopes)
+          {
+            retried_with_isotopes = true;
+            hi.precursor_as_given_ = false;
+            hi.mode_ = 1;
+            continue;
+          }
           if (inferred && ! retried_with_given_mass && given_precursor_mass_ > 0)
           {
             retried_with_given_mass = true; // mode 2 again, without inference: it takes the given precursor mass
@@ -1509,6 +1572,41 @@ namespace OpenMS
         mod_vars.push_back(t_mod_vars[k]);
         mod_var_names.push_back(t_mod_var_names[k]);
         mod_var_accs.push_back(t_mod_var_accs[k]);
+      }
+      // A precursor-mass path reads the suffix masses as prefix masses through the precursor mass (updateHitInformation_), so a precursor
+      // mass one isotope off puts a shift of that isotope where the path changes from prefix to converted suffix masses. That is an error of
+      // the precursor mass, not a modification: the shift is removed and the proteoform mass corrected by it (one such shift per path). A
+      // blind shift within its own tolerance of 0 is no shift either. On Eclip_1480, 131 blind shifts of the 1% proteoforms were +-1
+      // isotope (no Unimod modification but deamidation, +0.984 Da, which cannot be told from it here) and 27 were within the tolerance of 0.
+      if (! used_mode.empty() && used_mode.back() == 2 && hi.calculated_precursor_mass_ > 0)
+      {
+        int iso_k = -1;
+        double iso_diff = 0;
+        for (int k = 0; k < (int)mod_masses.size(); k++)
+        {
+          if (mod_vars[k]) continue;
+          for (int iso : {-1, 1})
+          {
+            const double d = std::abs(mod_masses[k] - iso * c13_spacing);
+            if (d <= mod_tols[k] && (iso_k < 0 || d < iso_diff))
+            {
+              iso_k = k;
+              iso_diff = d;
+            }
+          }
+        }
+        if (iso_k >= 0) hi.calculated_precursor_mass_ -= std::round(mod_masses[iso_k] / c13_spacing) * c13_spacing;
+        for (int k = (int)mod_masses.size() - 1; k >= 0; k--)
+        {
+          if (k != iso_k && (mod_vars[k] || std::abs(mod_masses[k]) > mod_tols[k])) continue;
+          mod_masses.erase(mod_masses.begin() + k);
+          mod_starts.erase(mod_starts.begin() + k);
+          mod_ends.erase(mod_ends.begin() + k);
+          mod_tols.erase(mod_tols.begin() + k);
+          mod_vars.erase(mod_vars.begin() + k);
+          mod_var_names.erase(mod_var_names.begin() + k);
+          mod_var_accs.erase(mod_var_accs.begin() + k);
+        }
       }
       std::vector<String> mod_ids, mod_accs;
 
@@ -1913,7 +2011,7 @@ namespace OpenMS
     if (start_vertex == src)
     {
       double max_shift = max_mod_mass_ * (max_var_mod_cntr_ + max_blind_mod_cntr - start_num_blind_mod) + 1.1;
-      double pms = hi.protein_start_position_ >= 0? pro_masses[hi.protein_start_position_] : -1;
+      double pms = hi.protein_start_position_ >= 0 && (hi.mode_ != 2 || hi.start_prior_) ? pro_masses[hi.protein_start_position_] : -1;
       double delta = end_node_index >= 0? node_spec[end_node_index].getMZ() - pro_masses[end_pro_index] : 1e100;
 
       for (int pro_i = start_pro_index + 1; pro_i <= end_pro_index; pro_i++) // change later

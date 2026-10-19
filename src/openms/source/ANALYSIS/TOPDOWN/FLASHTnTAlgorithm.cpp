@@ -2908,6 +2908,29 @@ void FLASHTnTAlgorithm::keepBestPerSpectrum_(std::vector<ProteinHit>& hits, cons
     if (it == best.end()) best[scan] = i;
     else if (isBetterPrSM(hits[i], hits[it->second])) it->second = i;
   }
+  // A PrSM without a mass is replaced by the best PrSM of the same spectrum and protein that has a mass and the same known termini: it is
+  // the same proteoform, and the precursor mass confirms it. Its higher score is no evidence against it: the terminal paths are scored
+  // apart, so the b and y ions of one bond count twice there and once on the precursor-mass path, which is also penalised for an internal
+  // end (Eclip_1480: RL3 180-209 at the right MS1 mass scored 116, the same range without a mass 169, and the latter was reported).
+  {
+    std::map<int, Size> best_with_mass;
+    for (Size i = 0; i < hits.size(); i++)
+    {
+      const auto& h = hits[i];
+      const int scan = h.getMetaValue("Scan");
+      const auto& b = hits[best[scan]];
+      if ((double)b.getMetaValue("Mass") > 0 || (double)h.getMetaValue("Mass") <= 0 || ! isDetermined(h)) continue;
+      if (h.getAccession() != b.getAccession() || h.metaValueExists("DecoyPrecursor") != b.metaValueExists("DecoyPrecursor")) continue;
+      const int bs = b.getMetaValue("StartPosition"), be = b.getMetaValue("EndPosition");
+      if ((bs >= 0 && bs != (int)h.getMetaValue("StartPosition")) || (be >= 0 && be != (int)h.getMetaValue("EndPosition"))) continue;
+      auto it = best_with_mass.find(scan);
+      if (it == best_with_mass.end() || isBetterPrSM(h, hits[it->second])) best_with_mass[scan] = i;
+    }
+    for (const auto& [scan, i] : best_with_mass) best[scan] = i;
+    if (! best_with_mass.empty())
+      OPENMS_LOG_INFO << "PrSMs" << label << ": " << best_with_mass.size() << " spectra report the PrSM with a mass instead of the same proteoform without one"
+                      << std::endl;
+  }
   std::vector<ProteinHit> kept;
   kept.reserve(best.size());
   for (Size i = 0; i < hits.size(); i++)
