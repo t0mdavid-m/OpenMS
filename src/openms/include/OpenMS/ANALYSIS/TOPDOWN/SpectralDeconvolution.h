@@ -264,15 +264,20 @@ namespace OpenMS
 
     /** @brief Subfunction of updateMassBins_.
         @param mass_intensities per mass bin intensity
+        @param chain_redirects (m/z bin x current max charge + charge index, mass bin) for the peaks updateCandidateMassBins_ added to the mass bin
+               of their consecutive-charge chain instead of their own (rounded) mass bin, sorted here
         @return a matrix containing charge ranges for all found masses
      */
-    Matrix<int> filterMassBins_(const std::vector<float>& mass_intensities);
+    Matrix<int> filterMassBins_(const std::vector<float>& mass_intensities, std::vector<std::pair<Size, long>>& chain_redirects);
 
     /** @brief Subfunction of updateMassBins_. It select candidate masses and update binned_log_masses_ using the universal pattern, eliminate possible harmonic masses
         @param mass_intensities mass bin intensities which are updated in this function
         @param mz_intensities mz bin intensities
+        @param chain_redirects output: (m/z bin x current max charge + charge index, mass bin) for the peaks added to the mass bin of their
+               consecutive-charge chain instead of their own (rounded) mass bin
      */
-    void updateCandidateMassBins_(std::vector<float>& mass_intensities, const std::vector<float>& mz_intensities);
+    void updateCandidateMassBins_(std::vector<float>& mass_intensities, const std::vector<float>& mz_intensities,
+                                  std::vector<std::pair<Size, long>>& chain_redirects);
 
     /** @brief For selected masses in binned_log_masses_, select the peaks from the original spectrum. Also isotopic peaks are clustered in this function.
         @param per_mass_abs_charge_ranges charge range per mass
