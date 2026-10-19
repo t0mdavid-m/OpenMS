@@ -183,6 +183,13 @@ private:
   String variableModificationNames_(double mass, double tol, const String& seq, int from, int to, int n_site, int c_site, String& accessions,
                                     int& site) const;
 
+  /// the residues that can carry the shift between two matched masses of a path, (@p pre_node, @p pre_pro) and (@p node, @p pro), whose
+  /// summed shift at (@p node, @p pro) is @p mass_shift: [@p pre_pro, returned end) in this mode's orientation, where the end is the first
+  /// protein index in (@p pre_pro, @p pro) that a mass in between matches with the whole shift, else @p pro. Used for the DAG edge and for
+  /// the report of the path, so that a variable modification is tested and named on the same residues.
+  int shiftRangeEnd_(const MSSpectrum& node_spec, const MSSpectrum& tol_spec, const std::vector<double>& pro_masses, int pre_node, int pre_pro,
+                     int node, int pro, double mass_shift) const;
+
   /// largest |mass| that up to @p count variable modifications can explain (0 without them)
   double varModRoom_(int count) const
   {

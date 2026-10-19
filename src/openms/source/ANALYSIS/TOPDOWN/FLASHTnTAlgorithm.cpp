@@ -480,7 +480,7 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   defaults_.setValidStrings("decoy_precursor", {"true", "false"});
   defaults_.setValue("learn_var_mod_penalty", "true",
                      "Raises the penalty of a variable modification that target PrSMs use per opportunity (fitting residue or terminus) no more often than decoy PrSMs "
-                     "(chance), up to that of a blind shift, and extends the spectra that used it again. Needs decoys and at least 50 decoy PrSMs.");
+                     "(chance), up to that of a blind shift, and then extends all spectra again. Needs decoys and at least 50 decoy PrSMs.");
   defaults_.setValidStrings("learn_var_mod_penalty", {"true", "false"});
   defaults_.addTag("learn_var_mod_penalty", "advanced");
   defaults_.insert("gapped:", FLASHGappedTaggerAlgorithm().getDefaults());
@@ -1904,18 +1904,14 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       nextProgress();
       extendSpectrum(d, extender_param_);
     }
-    if (use_precursor_ladders)
-    {
-      OPENMS_LOG_INFO << "Precursor-ladder PrSMs: " << pl_determined.load() << " of determined mass and termini kept (" << pl_at_both_ends.load()
-                      << " at both window ends, " << pl_at_start.load() << " at the window start only, " << pl_at_end.load()
-                      << " at the window end only), " << pl_duplicates.load() << " dropped as the same proteoform as a determined PrSM of another source, "
-                      << pl_undetermined.load() << " undetermined dropped" << std::endl;
-    }
 
     // Variable modification penalties from this run: a decoy (shuffled) protein can use a modification only by chance, so a modification
     // that target PrSMs use per opportunity (a fitting residue in the proteoform, or the proteoform terminus) no more often than decoy PrSMs
-    // explains nothing and gets a penalty up to that of a blind shift. Penalties only go up, so only the spectra in which some PrSM used a
-    // raised modification are extended again: the paths of the others keep their scores and the result equals a second full extension.
+    // explains nothing and gets a penalty up to that of a blind shift. When a penalty is raised, every spectrum is extended again with the
+    // learned penalties, so the result is exactly one extension at them. Re-extending only the spectra whose kept PrSMs used a raised
+    // modification is not the same: a candidate whose best path used one can have been dropped afterwards (e.g. the terminal- and
+    // precursor-ladder rules drop undetermined PrSMs and the same proteoform as another source's) while, at the raised penalty, another path
+    // of it is kept (Eclip_1480: a better unmodified 1% PrSM missed in 25 spectra, CISY lost, a false RS11_BACTN reported).
     Param learned_extender_param; // empty unless penalties were raised
     FLASHExtenderAlgorithm probe;
     probe.setParameters(extender_param_);
@@ -2002,26 +1998,29 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
           Param eparam = extender_param_;
           eparam.setValue("var_mod_penalty", penalties);
           learned_extender_param = eparam;
-          std::vector<int> again;
+          OPENMS_LOG_INFO << "Extending all " << dspecs.size() << " spectra again with the learned penalties" << std::endl;
+          // the precursor-ladder counts describe the extension that is kept
+          pl_determined = 0;
+          pl_at_both_ends = 0;
+          pl_at_start = 0;
+          pl_at_end = 0;
+          pl_duplicates = 0;
+          pl_undetermined = 0;
+          // each spectrum is extended on its own and replaces only its own PrSMs: the result does not depend on the thread schedule
+#pragma omp parallel for schedule(dynamic) if (extend_over_spectra)
           for (int d = 0; d < (int)dspecs.size(); d++)
           {
-            bool hit_raised = false;
-            for (const auto& h : spec_proteoforms[d])
-            {
-              usedMods(h, used);
-              for (Size m = 0; m < n_mods && ! hit_raised; m++) hit_raised = used[m] && penalties[m] > 2;
-              if (hit_raised) break;
-            }
-            if (hit_raised) again.push_back(d);
-          }
-          OPENMS_LOG_INFO << "Extending " << again.size() << " spectra again with the learned penalties" << std::endl;
-#pragma omp parallel for schedule(dynamic) if (extend_over_spectra)
-          for (int k = 0; k < (int)again.size(); k++)
-          {
-            extendSpectrum(again[k], eparam);
+            extendSpectrum(d, eparam);
           }
         }
       }
+    }
+    if (use_precursor_ladders)
+    {
+      OPENMS_LOG_INFO << "Precursor-ladder PrSMs: " << pl_determined.load() << " of determined mass and termini kept (" << pl_at_both_ends.load()
+                      << " at both window ends, " << pl_at_start.load() << " at the window start only, " << pl_at_end.load()
+                      << " at the window end only), " << pl_duplicates.load() << " dropped as the same proteoform as a determined PrSM of another source, "
+                      << pl_undetermined.load() << " undetermined dropped" << std::endl;
     }
     // Decoy precursors: a spectrum whose PrSM took its mass from MS1 is searched again as a decoy spectrum whose precursor mass is the
     // decoy precursor mass (noise or signal decoy) of its isolation window, as FLASHDeconv chose it with report_FDR. A PrSM of that copy

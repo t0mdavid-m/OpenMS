@@ -148,7 +148,7 @@ protected:
     setMinFloat_("raw_score_weight", 0.0);
     registerStringOption_("learn_var_mod_penalty", "<bool>", "true",
                           "Raises the penalty of a variable modification that target PrSMs use per opportunity (fitting residue or terminus) no more often than decoy PrSMs "
-                          "(chance), up to that of a blind shift, and extends the spectra that used it again. Needs decoys.", false, true);
+                          "(chance), up to that of a blind shift, and then extends all spectra again. Needs decoys.", false, true);
     setValidStrings_("learn_var_mod_penalty", {"true", "false"});
     registerFlag_("decoy_precursor",
                   "Decoy precursors: spectra whose PrSM took its mass from MS1 are searched again with the decoy precursor mass of their isolation "

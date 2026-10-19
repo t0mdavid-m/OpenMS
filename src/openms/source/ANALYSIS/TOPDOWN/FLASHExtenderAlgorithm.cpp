@@ -318,6 +318,31 @@ namespace OpenMS
     return names;
   }
 
+  int FLASHExtenderAlgorithm::shiftRangeEnd_(const MSSpectrum& node_spec, const MSSpectrum& tol_spec, const std::vector<double>& pro_masses, int pre_node,
+                                             int pre_pro, int node, int pro, double mass_shift) const
+  {
+    // A mass between the two nodes that matches protein index pi with the whole shift puts the shift on residues before pi; the smallest
+    // such pi ends the range. Called on DAG edges (the innermost loop of the extension): per mass in between, the candidate indices are
+    // found by binary search in the protein masses (non-decreasing), and each is tested exactly as |(mass_shift + protein mass) - node
+    // mass| <= tolerance. The search bounds are 1e-6 Da wider than the tolerance, far above rounding, so no match is skipped.
+    int end = pro;
+    for (int ni = pre_node + 1; ni < node && end > pre_pro + 1; ni++)
+    {
+      const double nm = node_spec[ni].getMZ();
+      const double margin = tol_spec[ni].getIntensity();
+      const auto last = pro_masses.begin() + end; // only indices below the current end can end the range earlier
+      auto it = std::lower_bound(pro_masses.begin() + (pre_pro + 1), last, nm - margin - mass_shift - 1e-6);
+      for (; it != last && *it <= nm + margin - mass_shift + 1e-6; ++it)
+      {
+        const double pm = mass_shift + *it;
+        if (std::abs(pm - nm) > margin) continue;
+        end = (int)(it - pro_masses.begin());
+        break;
+      }
+    }
+    return end;
+  }
+
   inline Size FLASHExtenderAlgorithm::getVertex_(int node_index, int pro_index, int score, int num_blind_mod, int num_var_mod, Size pro_mass_size) const
   {
     return (((node_index * pro_mass_size + pro_index) * blind_span_ + num_blind_mod) * score_span_
@@ -1246,37 +1271,32 @@ namespace OpenMS
             {
               mod_mass = mass_shift - prev_mass_shift;
               // total_mod_mass += mod_mass;
-              int end = m > 0 ? (pro_index - 1) : ((int)hit.getSequence().size() - 1 - pre_pro_index);
-              int start = m > 0 ? (pre_pro_index - 1) : ((int)hit.getSequence().size() - 1 - pro_index);
-
-              for (int pi = pre_pro_index + 1; pi < pro_index; pi++)
-              {
-                double pm = mass_shift + t_pro_masses[pi];
-                for (int ni = pre_node_index + 1; ni < node_index; ni++)
-                {
-                  double nm = t_node_spec[ni].getMZ();
-                  if (std::abs(pm - nm) > hi.tol_spec_map_[m][ni].getIntensity()) continue;
-                  int t_end = m > 0 ? (pi - 1) : ((int)hit.getSequence().size() - 1 - pre_pro_index);
-                  int t_start = m > 0 ? (pre_pro_index - 1) : ((int)hit.getSequence().size() - 1 - pi);
-                  end = std::min(t_end, end);
-                  start = std::max(start, t_start);
-                }
-              }
+              // the residues the fragment ladder leaves for the shift, [pre_pro_index, to) in this mode's orientation: the range the DAG edge
+              // tested the variable modifications on (shiftRangeEnd_ of the same two vertices and the same summed shift)
+              const int len = (int)hit.getSequence().size();
+              const int to = shiftRangeEnd_(t_node_spec, hi.tol_spec_map_[m], t_pro_masses, pre_node_index, pre_pro_index, node_index, pro_index, mass_shift);
+              int end = m > 0 ? (to - 1) : (len - 1 - pre_pro_index);
+              int start = m > 0 ? (pre_pro_index - 1) : (len - 1 - to);
 
               const double mod_tol = hi.tol_spec_map_[m][node_index].getIntensity();
               bool is_var = var_count != prev_var_count;
               String var_names, var_accs;
               if (is_var)
               {
-                // the residues the fragment ladder leaves for the shift (start + 1 .. end), in this mode's orientation
-                const int len = (int)hit.getSequence().size();
-                const int from = m > 0 ? start + 1 : len - 1 - end;
-                const int to = m > 0 ? end + 1 : len - 1 - start;
+                const int from = pre_pro_index;
                 const int n_site = (m != 0 && pre_node_index == 0) ? pre_pro_index : -1;
                 const int c_site = (m == 0 && pre_node_index == 0) ? pre_pro_index : (m == 2 && node_index == (int)t_node_spec.size() - 1) ? pro_index - 1 : -1;
                 int oriented_site = -1;
                 var_names = variableModificationNames_(mod_mass, mod_tol, oriented_seq, from, to, n_site, c_site, var_accs, oriented_site);
-                if (var_names.empty()) is_var = false; // the ladder puts the shift where no variable modification fits
+                // The edge fitted a combination on these residues; a name is missing only if the shift measured here (from the previous
+                // shift as observed) is outside the tolerance that the edge's shift met (from the previous shift as searched: the nominal
+                // mass of an earlier variable modification, or a mode-2 blind shift moved to the precursor mass). It is then reported as a
+                // blind shift, though scored and counted as a variable one.
+                if (var_names.empty())
+                {
+                  is_var = false;
+                  if (debug) std::cout << hit.getAccession() << "\tvariable shift " << mod_mass << " without a fitting name, reported as blind" << std::endl;
+                }
                 else if (oriented_site >= 0)         // one possible residue: localized there
                 {
                   const int pos = m > 0 ? oriented_site : len - 1 - oriented_site;
@@ -1983,21 +2003,29 @@ namespace OpenMS
           if (abs_delta_delta < 0.036386 - t_margin) continue;
           if (abs_delta_delta > 0.036386 + t_margin && abs_delta_delta < 0.947630 - t_margin) continue;
 
-          // variable modifications: a known shift on residues of this stretch (start_pro_index, pro_i], counted apart from blind ones
+          // variable modifications: a known shift on the residues of this stretch (start_pro_index, pro_i] that can carry it, counted apart
+          // from blind ones. Those residues end before a mass in between that already carries the whole shift (shiftRangeEnd_); the report
+          // of the path names the modification on the same residues. A shift that no combination fits there is a blind one, with the blind
+          // penalty and count: tested on the whole stretch, such shifts were scored and counted as variable and then reported as blind, up
+          // to 3 blind shifts with max_mod_count 2 (Eclip_1480 scans 8498 RL11, 6613 CSPA).
           bool var_search_success = false;
           if (! var_mod_combinations_.empty() && num_var_mod < max_var_mod_cntr_ && diagonal_counter == 0)
           {
+            // terminal residues this stretch reaches: the path start (N-terminal for prefix paths, C-terminal for suffix paths) and, in
+            // mode 2, the precursor mass node at the C-terminus
+            const int n_site = (hi.mode_ != 0 && start_node_index == 0) ? start_pro_index : -1;
+            const int c_site = (hi.mode_ == 0 && start_node_index == 0) ? start_pro_index
+                               : (hi.mode_ == 2 && node_i == (int)node_spec.size() - 1) ? pro_i - 1 : -1;
+            int range_end = -1; // computed once, for the first combination that fits the whole stretch
             auto iter = std::lower_bound(var_mod_combinations_.begin(), var_mod_combinations_.end(), delta_delta - t_margin,
                                          [](const VariableModificationCombination& c, double m) { return c.mass < m; });
             for (; iter != var_mod_combinations_.end() && iter->mass <= delta_delta + t_margin; ++iter)
             {
               if (num_var_mod + (int)iter->mods.size() > max_var_mod_cntr_) continue;
-              // terminal residues this stretch reaches: the path start (N-terminal for prefix paths, C-terminal for suffix paths) and, in
-              // mode 2, the precursor mass node at the C-terminus
-              const int n_site = (hi.mode_ != 0 && start_node_index == 0) ? start_pro_index : -1;
-              const int c_site = (hi.mode_ == 0 && start_node_index == 0) ? start_pro_index
-                                 : (hi.mode_ == 2 && node_i == (int)node_spec.size() - 1) ? pro_i - 1 : -1;
+              // the whole stretch first (cheap; a combination that does not fit it fits no part of it), then the residues that can carry it
               if (! combinationFits_(*iter, hi.cur_oriented_seq_, start_pro_index, pro_i, n_site, c_site)) continue;
+              if (range_end < 0) range_end = shiftRangeEnd_(node_spec, tol_spec, pro_masses, start_node_index, start_pro_index, node_i, pro_i, t_delta_mass);
+              if (range_end < pro_i && ! combinationFits_(*iter, hi.cur_oriented_seq_, start_pro_index, range_end, n_site, c_site)) continue;
               var_search_success = true;
               num_var_mod += (int)iter->mods.size();
               next_cumulative_mod_mass = cumulative_mod_mass + iter->mass;
