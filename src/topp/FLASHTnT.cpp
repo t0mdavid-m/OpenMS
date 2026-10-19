@@ -53,6 +53,10 @@ protected:
     registerOutputFile_("out_tag", "<file>", "", "Output tag-level tsv file containing matched tags.");
     setValidFormats_("out_tag", ListUtils::create<String>("tsv"));
 
+    registerOutputFile_("out_protein", "<file>", "", "Output protein-level tsv file containing the candidate proteins and "
+                        "their scores, as ranked before proteoform characterization.", false);
+    setValidFormats_("out_protein", ListUtils::create<String>("tsv"));
+
     auto tnt_param = FLASHTnTAlgorithm().getDefaults();
     tnt_param.removeAll("tag:");
     tnt_param.removeAll("ex:");
@@ -92,6 +96,7 @@ protected:
     String out_tag_file = getStringOption_("out_tag");
     String out_prsm_file = getStringOption_("out_prsm");
     String out_pro_file = getStringOption_("out_pro");
+    String out_protein_file = getStringOption_("out_protein");
 
     //-------------------------------------------------------------
     // reading input
@@ -111,6 +116,7 @@ protected:
     tnt_param.remove("out_tag");
     tnt_param.remove("out_prsm");
     tnt_param.remove("out_pro");
+    tnt_param.remove("out_protein");
     tnt_param.remove("log");
     tnt_param.remove("debug");
     tnt_param.remove("threads");
@@ -131,6 +137,7 @@ protected:
     fstream out_tagger_stream;
     fstream out_prsm_stream;
     fstream out_pro_stream;
+    fstream out_protein_stream;
 
     if (! out_tag_file.empty())
     {
@@ -148,6 +155,12 @@ protected:
     {
       out_pro_stream = fstream(out_pro_file, fstream::out);
       FLASHTnTFile::writeProHeader(out_pro_stream);
+    }
+
+    if (! out_protein_file.empty())
+    {
+      out_protein_stream = fstream(out_protein_file, fstream::out);
+      FLASHTnTFile::writeProteinHeader(out_protein_stream);
     }
 
     FLASHTnTAlgorithm tnt;
@@ -171,6 +184,13 @@ protected:
     {
       FLASHTnTFile::writeProteoforms(proteoform_hits, out_pro_stream, pro_fdr);
       out_pro_stream.close();
+    }
+    if (! out_protein_file.empty())
+    {
+      std::vector<ProteinHit> protein_hits;
+      tnt.getProteinHits(protein_hits);
+      FLASHTnTFile::writeProteins(protein_hits, out_protein_stream);
+      out_protein_stream.close();
     }
 
     return EXECUTION_OK;

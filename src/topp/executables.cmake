@@ -39,6 +39,7 @@ FileConverter
 FileFilter
 FileInfo
 FileMerger
+FLASHAnnotator
 FLASHDeconv
 FLASHTnT
 FuzzyDiff

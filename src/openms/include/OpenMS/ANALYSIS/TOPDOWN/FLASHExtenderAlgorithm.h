@@ -17,14 +17,17 @@
 #include <OpenMS/FORMAT/FASTAFile.h>
 #include <OpenMS/METADATA/ProteinHit.h>
 #include <boost/dynamic_bitset.hpp>
+#include <functional>
 #include <iomanip>
 #include <iostream>
+#include <unordered_map>
 
 namespace OpenMS
 {
 /**
 @brief Extend between tags found by FLASHTaggerAlgorithm. In practice, the proteoform characterization is
- performed here. Only blind modification is implemented, and variable modification search is under development.
+ performed here. Mass shifts are explained by variable modifications (a given list, residue-specific) or by blind
+ modifications (any mass up to max_mod_mass); the two are counted separately and can occur in the same proteoform.
 @ingroup Topdown
 */
 
@@ -58,8 +61,30 @@ public:
    * @param multiple_hits_per_spec should multiple proteins be considered per spectrum or only the best protein should be considered?
    */
   void run(std::vector<ProteinHit>& hits,
-           const DeconvolvedSpectrum& dspec, const std::vector<int> spec_vec, const std::vector<std::unordered_set<int>>& vec_pro,
+           const DeconvolvedSpectrum& dspec, const std::vector<int>& spec_vec, const std::vector<std::unordered_set<int>>& vec_pro,
            const std::vector<std::unordered_set<int>>& rev_vec_pro, const std::vector<FLASHHelperClasses::Tag>& tags, double ppm, bool multiple_hits_per_spec);
+
+  /// names of the variable modifications, in the order of the var_mod_penalty parameter
+  std::vector<String> getVariableModificationNames() const
+  {
+    std::vector<String> names;
+    for (const auto& vm : var_mod_list_) names.push_back(vm.name);
+    return names;
+  }
+  /// residues each variable modification can sit on (empty: any), in the same order
+  std::vector<String> getVariableModificationResidues() const
+  {
+    std::vector<String> residues;
+    for (const auto& vm : var_mod_list_) residues.push_back(vm.residues);
+    return residues;
+  }
+  /// position of each variable modification: 0 anywhere, 1 proteoform N-terminal residue, 2 proteoform C-terminal residue
+  std::vector<int> getVariableModificationPositions() const
+  {
+    std::vector<int> positions;
+    for (const auto& vm : var_mod_list_) positions.push_back(vm.position);
+    return positions;
+  }
 
   /// fill the characterized proteoforms in @p hits
   void fillProteoforms(std::vector<ProteinHit>& hits) const
@@ -80,8 +105,10 @@ private:
   struct OPENMS_DLLAPI HitInformation
   {
   public:
-    /// if a vertex is already considered (visited) when building a DAG.
-    boost::dynamic_bitset<> visited_;
+    /// vertices already reached when building the DAG. A set, not a bitset over the whole vertex space: that space (spectrum nodes x
+    /// protein positions x modification counts x path scores) takes tens to hundreds of MB per hit while only ~10^2-10^4 vertices are
+    /// reached.
+    FLASHHelperClasses::VisitedVertexSet visited_;
     /// The DAG consisting of paths representing proteoforms
     FLASHHelperClasses::DAG dag_;
     /// We perform three times of extensions - for suffix, for prefix, and for both termini
@@ -96,11 +123,64 @@ private:
     double calculated_precursor_mass_ = -1;
     /// n and c term best mass shift between spec and protein. For speed up
     int n_best_shift_ = 0, c_best_shift_ = 0;
+    /// cached pointers to the current-mode (mode_) entries of the maps above; set once per mode to avoid re-resolving the std::map lookup on every recursion frame.
+    const std::vector<double>* cur_pro_masses_ = nullptr;
+    const MSSpectrum* cur_node_spec_ = nullptr;
+    const MSSpectrum* cur_tol_spec_ = nullptr;
+    /// the protein sequence in the orientation of the current mode's protein masses (reversed for mode 0)
+    String cur_oriented_seq_;
+    /// per mode, the fragment series of each node: 0 a/b/x/y, 1 c/z, -1 node 0, the precursor or a merged node of both
+    std::map<int, std::vector<int>> node_series_map_;
+    const std::vector<int>* cur_node_series_ = nullptr;
+    /// per series, the cleavage weight of a matched mass at each protein index of the current mode (index k: the bond after k residues)
+    std::vector<int> cur_bond_weight_[2];
+  };
+
+  /// a variable modification: a residue-specific mass shift searched with its own count, independently of blind modifications
+  struct VariableModification
+  {
+    String name;
+    double mass = 0;
+    String residues;       ///< one-letter codes of the residues it can sit on; empty or "*" for any residue
+    int position = 0;      ///< 0 anywhere, 1 proteoform N-terminal residue, 2 proteoform C-terminal residue
+    int unimod = -1;
+    int sites = 1;         ///< residues it needs (2 for a residue written twice, e.g. "CC" for a disulfide)
+  };
+
+  /// one or more variable modifications explaining one mass shift between two matched masses
+  struct VariableModificationCombination
+  {
+    double mass = 0;
+    std::vector<int> mods; ///< indices into var_mod_list_, ascending
   };
 
   /// modification mass to modification index. To use find nearest function
   std::map<double, std::vector<ResidueModification>> candidate_blind_mod_map_;
-  std::map<char, std::map<double, std::vector<ResidueModification>>> var_mods_;
+  std::vector<VariableModification> var_mod_list_;
+  /// score penalty of each modification of var_mod_list_
+  std::vector<int> var_mod_penalties_;
+  /// all combinations of up to max_var_mod_count variable modifications, sorted by mass
+  std::vector<VariableModificationCombination> var_mod_combinations_;
+
+  /// read var_mod (modification names) and var_mod_file (TopPIC format: name,mass,residues,position,unimod)
+  void loadVariableModifications_();
+
+  /// can the modifications of @p combination sit on distinct residues among @p seq[from, to) (current mode orientation)?
+  /// @p n_site / @p c_site: the index in @p seq of the proteoform's N- / C-terminal residue if this stretch can reach it, else -1
+  bool combinationFits_(const VariableModificationCombination& combination, const String& seq, int from, int to, int n_site, int c_site) const;
+
+  /// names of the variable modification combinations of mass @p mass within @p tol that fit @p seq[from, to); @p site is the only
+  /// possible residue (index in @p seq) if a single one-site modification fits at a single residue, else -1
+  String variableModificationNames_(double mass, double tol, const String& seq, int from, int to, int n_site, int c_site, String& accessions,
+                                    int& site) const;
+
+  /// largest |mass| that up to @p count variable modifications can explain (0 without them)
+  double varModRoom_(int count) const
+  {
+    if (count <= 0 || var_mod_room_.empty()) return 0;
+    return var_mod_room_[std::min(count, (int)var_mod_room_.size() - 1)];
+  }
+  std::vector<double> var_mod_room_;
 
   /** get protein prefix or suffix masses (depending on the mode)
    * @param hit protein hit
@@ -115,6 +195,10 @@ private:
    * @param best_path_map best path(s) per mode (key: mode value: paths)
    * @param hi protein hit information
    */
+  /// true if more complementary fragment pairs (prefix + suffix mass = @p precursor_mass, for the ion types in use) are found in
+  /// @p sorted_masses than at any of 200 masses moved by up to +-300 Da (chance in this spectrum)
+  bool hasComplementaryPairSupport_(const std::vector<double>& sorted_masses, double precursor_mass) const;
+
   void calculatePrecursorMass_(const ProteinHit& hit,
                                const std::map<int, std::vector<Size>>& best_path_map,
                                HitInformation& hi);
@@ -193,7 +277,7 @@ private:
                            Size vertex,
                            double truncation_mass,
                            double cumulative_shift,
-                           std::map<Size, std::map<Size, int>>& node_max_score_map,
+                           std::unordered_map<Size, std::unordered_map<Size, int>>& node_max_score_map,
                            const std::vector<std::vector<int>>& tag_edges,
                            int max_mod_cntr_for_last_mode,
                            bool use_tags);
@@ -219,7 +303,7 @@ private:
                           int diagonal_counter,
                           double truncation_mass,
                           double cumulative_mod_mass,
-                          std::map<Size, std::map<Size, int>>& node_max_score_map,
+                          std::unordered_map<Size, std::unordered_map<Size, int>>& node_max_score_map,
                           int max_blind_mod_cntr_for_last_mode);
 
   /// get proteoform specific information from the input @p path and relevant data.
@@ -230,6 +314,13 @@ private:
 
   std::vector<std::string> ion_types_str_;
   std::vector<double> prefix_shifts_;
+  std::vector<int> prefix_series_, suffix_series_; ///< 0 a/b/x/y, 1 c/z, index-parallel to the shifts
+
+  /// log2(cleavage rate / mean) of a bond by the residue before and after it, per series (0 b/y, 1 c/z), indexed by residue - 'A'
+  double cleavage_before_[2][26] = {}, cleavage_after_[2][26] = {};
+  double cleavage_weight_ = 0;
+  /// fill the built-in cleavage tables, or read cleavage_table (series<TAB>before|after<TAB>residue<TAB>log2 ratio)
+  void loadCleavageTables_();
   std::vector<double> suffix_shifts_;
   std::vector<ProteinHit> proteoform_hits_;
   double tol_;
@@ -242,6 +333,11 @@ private:
   const int min_path_score_ = -20;
   const int max_extension_stretch_ = 50;
   double max_mod_mass_ = 500.0;
+  /// largest absolute mass of a single variable modification (0 without them)
+  double max_var_mod_mass_ = 0;
   double given_precursor_mass_ = -1;
+
+  /// precomputed vertex-packing spans (set in updateMembers_): var, score, blind, and their products. Invariant during run().
+  Size var_span_ = 1, score_span_ = 1221, blind_span_ = 2, var_score_span_ = 1221, var_score_blind_span_ = 2442;
 };
 } // namespace OpenMS

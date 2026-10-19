@@ -495,9 +495,11 @@ set(analysis_executables_list
   # bridge, not OpenMS/offline-FLASHDeconv library units). See
   # docs/superpowers/plans/2026-06-11-test-falsepass-mitigation.md (D2).
   # FIAMSScheduler_test             # offline FIA-MS batch scheduler, not FLASHIda
+  # FLASHAnnotatorAlgorithm_test    # offline FLASHAnnotator tool, not the real-time IDA bridge
   # FLASHDeconvAlgorithm_test       # offline FLASHDeconv tool, not the real-time IDA bridge
   # FLASHDeconvHelperStructs_test   # OpenMS/FLASHDeconv helper-struct unit test, out of scope
   # FLASHTaggerAlgorithm_test       # offline tagger; test is stale (hardcoded paths) - needs rewrite
+  # FLASHGappedTaggerAlgorithm_test  # offline FLASHTnT gapped tagger, not the real-time IDA bridge
   IDBoostGraph_test
   IDMapper_test
   IDMergerAlgorithm_test

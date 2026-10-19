@@ -67,10 +67,38 @@ public:
    */
   static void runMatching(std::vector<ProteinHit>& hits,
                           const DeconvolvedSpectrum& deconvolved_spectrum,
-                          const std::vector<int> spec_vec,
+                          const std::vector<int>& spec_vec,
                           const std::vector<std::unordered_set<int>>& vec_pro,
                           const std::vector<std::unordered_set<int>>& rev_vec_pro,
                           const double max_mod_mass = 0);
+
+  /// tag-derived shifts of one candidate protein: protein residue sum up to the tag minus the tag flanking mass, with that flanking mass
+  struct OPENMS_DLLAPI ProteinShifts
+  {
+    std::vector<double> n_shifts, n_flanks, c_shifts, c_flanks;
+    /// index of the protein in the database (the residue sums passed to runMatchingExact)
+    Size fasta_index = 0;
+  };
+
+  /**
+   * @brief Score protein hits with exact masses: a deconvolved mass, moved by a tag-derived shift, matches a protein residue sum within
+   * @p tol_ppm (of the mass plus the tag flanking mass the shift was computed from). The score is -log10 of the chance of the match
+   * count: P(Poisson(lambda) >= count) at the best shift times the number of shifts, where lambda is the expected number of chance
+   * matches on this protein (masses that fall on it times 2 * margin * residues per Da). The larger of the N- and C-terminal sides.
+   * Unlike a summed node score it does not grow with the protein length.
+   * @param hits protein hits to score (meta value FastaIndex)
+   * @param shifts the shifts of each hit, in the order of @p hits
+   * @param deconvolved_spectrum deconvolved spectrum
+   * @param prefix_masses per protein (FastaIndex), the sorted residue sums from the N-terminus, 0 included
+   * @param suffix_masses per protein, the sorted residue sums from the C-terminus, 0 included
+   * @param tol_ppm mass tolerance in ppm
+   */
+  static void runMatchingExact(std::vector<ProteinHit>& hits,
+                               const std::vector<ProteinShifts>& shifts,
+                               const DeconvolvedSpectrum& deconvolved_spectrum,
+                               const std::vector<std::vector<double>>& prefix_masses,
+                               const std::vector<std::vector<double>>& suffix_masses,
+                               double tol_ppm);
 
   /**
    * @brief fill tags with the length of @p tag_length in @p tags

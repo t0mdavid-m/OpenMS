@@ -39,6 +39,24 @@ void FLASHTnTFile::writeProHeader(std::fstream& fs)
 }
 
 /// write the features in regular file output
+void FLASHTnTFile::writeProteinHeader(std::fstream& fs)
+{
+  fs << "Rank\tScan\tProteinAccession\tProteinDescription\tProteinLength\tScore\tMatchedTagCount\tMatchedPositionCount\tTagIndices\n";
+}
+
+void FLASHTnTFile::writeProteins(const std::vector<ProteinHit>& hits, std::fstream& fs)
+{
+  for (const auto& hit : hits)
+  {
+    const std::vector<int> tag_indices = hit.getMetaValue("TagIndices").toIntList();
+    fs << (int)hit.getMetaValue("ProteinRank") << "\t" << (int)hit.getMetaValue("Scan") << "\t" << hit.getAccession() << "\t"
+       << hit.getDescription() << "\t" << hit.getSequence().size() << "\t" << hit.getScore() << "\t" << tag_indices.size() << "\t"
+       << (int)hit.getMetaValue("MatchedAA") << "\t";
+    for (int ti : tag_indices) { fs << ti << ";"; }
+    fs << "\n";
+  }
+}
+
 void FLASHTnTFile::writeTags(const FLASHTnTAlgorithm& tnt, double flanking_mass_tol, std::fstream& fs)
 {
   std::stringstream ss;
@@ -111,7 +129,7 @@ void FLASHTnTFile::writeTags(const FLASHTnTAlgorithm& tnt, double flanking_mass_
         ss << std::to_string(mz) << ",";
       }
       ss << "\t";
-      for (size_t i = 0; i <= tag.getLength(); i++) // Fixed signed/unsigned comparison issue
+      for (size_t i = 0; i < tag.getMzs().size(); i++) // one score per mass (a gapped tag spans more residues than masses)
       {
         ss << std::to_string(tag.getScore(i)) << ",";
       }
