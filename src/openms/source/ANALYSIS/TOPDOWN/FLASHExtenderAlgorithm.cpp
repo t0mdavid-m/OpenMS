@@ -395,6 +395,9 @@ namespace OpenMS
   {
     hi.calculated_precursor_mass_ = -1;
     if (hi.protein_start_position_ < 0 || hi.protein_end_position_ < 0) return;
+    // the inference needs a path from each terminus. The check above already implies both (the start position is set only by a prefix
+    // path, the end position only by a suffix path); this keeps at() from throwing inside the parallel loop should that ever change
+    if (best_path_map.find(0) == best_path_map.end() || best_path_map.find(1) == best_path_map.end()) return;
 
     const auto& bp0 = best_path_map.at(0);
     const auto& bp1 = best_path_map.at(1);
@@ -636,7 +639,9 @@ namespace OpenMS
         double mass = p.getMZ();
         float score = p.getIntensity();
         int series = nodes[k].series;
-        double prev_margin = k == 0 ? .0 : tol_spec[k - 1].getIntensity();
+        // the half-width of the node merged so far (t_node_spec.back()), not that of the raw mass k - 1: after a merge they differ, and
+        // comparing or merging with the raw one missed overlaps and shifted the merged centre. At k == 0, back() is the (0, 0) entry.
+        const double prev_margin = t_tol_spec.back().getIntensity();
         double margin = tol_spec[k].getIntensity();
 
         if (mass - margin < t_node_spec.back().getMZ() + prev_margin) // they are the same
