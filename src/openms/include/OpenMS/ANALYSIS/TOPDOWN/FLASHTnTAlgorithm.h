@@ -108,7 +108,7 @@ private:
   bool learn_var_mod_penalty_ = true;
   /// search spectra with MS1-based PrSMs again with decoy precursor masses, as decoys of the precursor in the FDR
   bool decoy_precursor_ = false;
-  double decoy_factor_ = 0, prsm_fdr_ = 1;
+  double decoy_factor_ = 0, pro_fdr_ = 1;
   /// how many nodes (massses) will be used
   /// at most this many masses (best Qscore first) per spectrum are used. 300 cut key fragments of native spectra (440-570 masses from
   /// centroid input); 400 recovered them at about 1.8x the native search time, and lysate MS2 spectra rarely have this many masses.
@@ -130,7 +130,18 @@ private:
   static bool areConsistent_(const ProteinHit& a, const ProteinHit& b, double tol) ;
   /// number of blind modifications of a proteoform hit (variable modifications excluded)
   static Size blindModCount_(const ProteinHit& hit);
-  void markRepresentativeProteoformHits_(double tol);
+  /// Groups the PrSMs of each protein into proteoforms (areConsistent_ with the representative) and marks the representatives
+  /// (meta values Index, Representative, PrSMIndices). With @p by_qvalue, only PrSMs in an FDR class (@p hit_class >= 0) take part, and a
+  /// determined PrSM with PrSM q-value (@p qvalues) <= @p rep_q, then the lowest q-value, comes first as representative; otherwise every
+  /// PrSM takes part. Then a PrSM with a mass comes first, then the best scoring. Returns the proteoforms as positions in proteoform_hits_,
+  /// the representative first, in the order of their representatives.
+  std::vector<std::vector<Size>> markRepresentativeProteoformHits_(double tol, const std::vector<int>& hit_class, const std::vector<double>& qvalues,
+                                                                   double rep_q, bool by_qvalue);
+  /// Protein-level q-values (meta value ProteinQvalue on every hit). @p hit_class is the FDR class of each hit (-1: none; such a hit takes
+  /// no part), @p qvalues its PrSM q-value, @p decoys and @p decoy_weights its decoy flag and weight, @p clusters the proteoforms
+  /// (positions in proteoform_hits_, the representative first), @p rep_q the PrSM q-value of a passing PrSM.
+  void setProteinQvalues_(const std::vector<int>& hit_class, const std::vector<double>& qvalues, const std::vector<bool>& decoys,
+                          const std::vector<double>& decoy_weights, const std::vector<std::vector<Size>>& clusters, double rep_q);
   /// fasta indices of the proteins (targets and decoys) whose run-level q-value passes protein_fdr_, from each
   /// protein's best tag-based score in protein_hits_
   std::set<Size> getProteinsPassingFDR_(const std::vector<FASTAFile::FASTAEntry>& fasta_entry) const;

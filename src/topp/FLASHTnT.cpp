@@ -65,12 +65,11 @@ protected:
                         "their scores, as ranked before proteoform characterization.", false);
     setValidFormats_("out_protein", ListUtils::create<String>("tsv"));
 
-    // Register PrSM-level FDR parameter
-    registerDoubleOption_("prsm_fdr", "Specifies the PrSM-level FDR.", 1.0, "Specifies the PrSM-level FDR.", false);
-    setMinFloat_("prsm_fdr", 0.0);
-
-    // Register proteoform-level FDR parameter
-    registerDoubleOption_("pro_fdr", "Specifies the proteoform-level FDR.", 1.0, "Specifies the proteoform-level FDR.", false);
+    // Register proteoform-level FDR parameter (no PrSM-level filter: the reported PrSMs are those of the reported proteoforms)
+    registerDoubleOption_("pro_fdr", "Specifies the proteoform-level FDR.", 1.0,
+                          "Specifies the proteoform-level FDR; proteins are reported at the same level. The reported PrSMs are those of the "
+                          "reported proteoforms (there is no PrSM-level filter).",
+                          false);
     setMinFloat_("pro_fdr", 0.0);
 
     // Register single-hit-only option
