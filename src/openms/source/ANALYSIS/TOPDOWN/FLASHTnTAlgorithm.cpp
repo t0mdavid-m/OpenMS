@@ -15,6 +15,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/MassLadderAlgorithm.h>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <iterator>
@@ -953,35 +954,128 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
 
   // tag_seqs protein_seqs
 
+  // Internal residue masses by one-letter code, for the flanking masses of the tag hits. AASequence::fromString() of a string of these
+  // letters is one residue per letter (ResidueDB::getResidue(char)), and AASequence::getMonoWeight(Residue::Internal) adds their
+  // masses to 0, from the first residue to the last; the same additions in the same order give the same doubles. A protein with any
+  // other character (e.g. X, which cleaned_protein_seqs drops, so that its positions are no longer those of the hits) keeps the
+  // AASequence computation.
+  std::array<double, 256> aa_internal_mass {};
+  std::array<bool, 256> aa_plain {};
+  {
+    const ResidueDB* rdb = ResidueDB::getInstance();
+    const Residue* unknown = rdb->getResidue(String("X"));
+    for (int c = 'A'; c <= 'Z'; c++)
+    {
+      if (c == 'X') continue;
+      const Residue* r = rdb->getResidue((unsigned char)c);
+      if (r == nullptr || r == unknown) continue;
+      aa_plain[c] = true;
+      aa_internal_mass[c] = r->getMonoWeight(Residue::Internal);
+    }
+  }
+
   // The database positions and flanking masses of the tag sequences @p seqs (their entries in tag_to_protein_indices and the other maps
-  // exist, empty): one pass of an Aho-Corasick trie of them over the proteins. Also used for the new tag sequences of the chimeric search.
+  // exist, empty): an Aho-Corasick trie of them over the proteins. Also used for the new tag sequences of the chimeric search.
+  // Proteins run in parallel in blocks (each thread with its own trie state); the hits of a block are appended to the maps in protein
+  // order, so every vector is the same as that of one pass over the proteins.
   auto searchTagSequences = [&](const std::vector<std::string>& seqs) {
     ACTrie ac_trie(0, 0); // no ambiguities, no mismatches
     ac_trie.addNeedlesAndCompress(seqs);
-    OpenMS::ACTrieState ac_state;
+
+    // the vectors of every tag sequence (std::map elements do not move)
+    std::vector<std::vector<Size>*> indices_of(seqs.size()), positions_of(seqs.size());
+    std::vector<std::vector<double>*> n_masses_of(seqs.size()), c_masses_of(seqs.size());
+    for (Size j = 0; j < seqs.size(); j++)
+    {
+      const String seq = seqs[j];
+      indices_of[j] = &tag_to_protein_indices[seq];
+      positions_of[j] = &tag_to_protein_positions[seq];
+      n_masses_of[j] = &tag_to_n_flanking_masses[seq];
+      c_masses_of[j] = &tag_to_c_flanking_masses[seq];
+    }
+
+    struct TagHit
+    {
+      OpenMS::Hit::T needle_index;
+      OpenMS::Hit::T query_pos;
+      bool summed; // false: the flanking masses are computed with AASequence when the hit is appended (serially, in protein order)
+      double nmass;
+      double cmass;
+    };
 
     startProgress(0, (SignedSize)protein_seqs.size(), "Searching tags against database ...");
 
-    for (int i = 0; i < protein_seqs.size(); i++) // // Natural19WithoutI
+    const Size block_size = 4096;
+    std::vector<std::vector<TagHit>> block_hits(block_size);
+    for (Size block_start = 0; block_start < protein_seqs.size(); block_start += block_size)
     {
-      nextProgress();
-      const String& pseq = protein_seqs[i];
-      const String& cleanseq = cleaned_protein_seqs[i];
-      ac_state.setQuery(pseq);
-      ac_trie.getAllHits(ac_state);
-
-      for (const auto& h : ac_state.hits)
+      const Size block_end = std::min(protein_seqs.size(), block_start + block_size);
+#pragma omp parallel
       {
-        String seq = seqs[h.needle_index];
-        tag_to_protein_indices[seq].push_back(i);
-        tag_to_protein_positions[seq].push_back(h.query_pos);
+        OpenMS::ACTrieState ac_state;
+        std::vector<double> prefix; // residue sums from the N-terminus
+#pragma omp for schedule(dynamic, 16)
+        for (SignedSize i = (SignedSize)block_start; i < (SignedSize)block_end; i++) // // Natural19WithoutI
+        {
+          auto& hits = block_hits[i - block_start];
+          hits.clear();
+          const std::string& pseq = protein_seqs[i];
+          ac_state.setQuery(pseq);
+          ac_trie.getAllHits(ac_state);
+          if (ac_state.hits.empty()) continue;
+          hits.reserve(ac_state.hits.size());
 
-        double nmass = h.query_pos <= 0 ? .0 : AASequence::fromString(cleanseq.substr(0, h.query_pos)).getMonoWeight(Residue::Internal);
-        double cmass = cleanseq.length() - seq.length() <= h.query_pos ? .0 :
-           AASequence::fromString(cleanseq.substr(h.query_pos + seq.length(), cleanseq.length() - h.query_pos - seq.length())).getMonoWeight(Residue::Internal);
+          bool plain = true;
+          for (const char c : pseq)
+          {
+            if (! aa_plain[(unsigned char)c])
+            {
+              plain = false;
+              break;
+            }
+          }
+          const Size n = pseq.size();
+          if (plain)
+          {
+            prefix.resize(n + 1);
+            prefix[0] = .0;
+            for (Size k = 0; k < n; k++) prefix[k + 1] = prefix[k] + aa_internal_mass[(unsigned char)pseq[k]];
+          }
+          for (const auto& h : ac_state.hits)
+          {
+            const Size end = (Size)h.query_pos + seqs[h.needle_index].length();
+            if (! plain || end > n)
+            {
+              hits.push_back({h.needle_index, h.query_pos, false, .0, .0});
+              continue;
+            }
+            const double nmass = h.query_pos <= 0 ? .0 : prefix[h.query_pos];
+            double cmass = .0;
+            for (Size k = end; k < n; k++) cmass += aa_internal_mass[(unsigned char)pseq[k]];
+            hits.push_back({h.needle_index, h.query_pos, true, nmass, cmass});
+          }
+        }
+      }
 
-        tag_to_n_flanking_masses[seq].push_back(nmass);
-        tag_to_c_flanking_masses[seq].push_back(cmass);
+      for (Size i = block_start; i < block_end; i++)
+      {
+        nextProgress();
+        for (const auto& h : block_hits[i - block_start])
+        {
+          double nmass = h.nmass, cmass = h.cmass;
+          if (! h.summed)
+          {
+            const String& cleanseq = cleaned_protein_seqs[i];
+            const String& seq = seqs[h.needle_index];
+            nmass = h.query_pos <= 0 ? .0 : AASequence::fromString(cleanseq.substr(0, h.query_pos)).getMonoWeight(Residue::Internal);
+            cmass = cleanseq.length() - seq.length() <= h.query_pos ? .0 :
+              AASequence::fromString(cleanseq.substr(h.query_pos + seq.length(), cleanseq.length() - h.query_pos - seq.length())).getMonoWeight(Residue::Internal);
+          }
+          indices_of[h.needle_index]->push_back(i);
+          positions_of[h.needle_index]->push_back(h.query_pos);
+          n_masses_of[h.needle_index]->push_back(nmass);
+          c_masses_of[h.needle_index]->push_back(cmass);
+        }
       }
     }
 
