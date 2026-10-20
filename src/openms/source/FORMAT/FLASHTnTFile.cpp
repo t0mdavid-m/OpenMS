@@ -222,7 +222,7 @@ String FLASHTnTFile::getProFormaString(const ProteinHit& hit)
     const std::vector<double> masses = hit.getMetaValue("Modifications");
     const std::vector<int> starts = hit.getMetaValue("ModificationStarts");
     const std::vector<int> ends = hit.getMetaValue("ModificationEnds");
-    const std::vector<String> ids = hit.metaValueExists("ModificationIDs") ? (std::vector<String>)hit.getMetaValue("ModificationIDs") : std::vector<String>();
+    const std::vector<String> ids = hit.metaValueExists("ModificationIDs") ? hit.getMetaValue("ModificationIDs").toStringList() : std::vector<String>();
     const std::vector<int> variable = hit.metaValueExists("ModificationVariable") ? (std::vector<int>)hit.getMetaValue("ModificationVariable").toIntList() : std::vector<int>();
     for (Size i = 0; i < masses.size() && i < starts.size() && i < ends.size(); i++)
     {

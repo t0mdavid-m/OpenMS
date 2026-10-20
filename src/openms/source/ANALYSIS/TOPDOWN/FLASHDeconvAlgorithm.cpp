@@ -783,7 +783,6 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
     auto spec = map[index]; // MS2 index
     if (spec.getMSLevel() != ms_level) { continue; }
 
-    int scan_number = getScanNumber(map, index);
     String native_id = spec.getNativeID();
 
     auto filter_str = spec.getMetaValue("filter string").toString();
