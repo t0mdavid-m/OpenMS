@@ -2281,10 +2281,23 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
           }
           removed_count[d] += all.size() - kept.size();
           removed_total += all.size() - kept.size();
-          // the protein of the best PrSM and its target-decoy partner are not proposed again in this spectrum
-          const Size fasta_index = (Size)(int)best_hit.getMetaValue(mi_fasta_index);
-          excluded[d].insert(fasta_index);
-          if (const long partner = partnerOf(fasta_index); partner >= 0) excluded[d].insert((Size)partner);
+          // the protein of the best PrSM and its target-decoy partner are not proposed again in this spectrum; in native mode, where every
+          // kept candidate's PrSM is reported, none of the proteins reported in the spectrum (one PrSM per protein)
+          std::vector<Size> reported {(Size)(int)best_hit.getMetaValue(mi_fasta_index)};
+          if (native_)
+          {
+            for (Size i = last_first; i < last_end; i++)
+            {
+              const auto& h = proteoform_hits_[i];
+              const auto it = spectrum_of_scan.find((int)h.getMetaValue(mi_scan));
+              if (it != spectrum_of_scan.end() && it->second == d && h.metaValueExists(mi_fasta_index)) reported.push_back((Size)(int)h.getMetaValue(mi_fasta_index));
+            }
+          }
+          for (Size fasta_index : reported)
+          {
+            excluded[d].insert(fasta_index);
+            if (const long partner = partnerOf(fasta_index); partner >= 0) excluded[d].insert((Size)partner);
+          }
           // the residual: no precursor mass, and of the original spectrum only what the search reads (retention time, MS level)
           DeconvolvedSpectrum res(dspecs[d].getScanNumber());
           MSSpectrum original;
