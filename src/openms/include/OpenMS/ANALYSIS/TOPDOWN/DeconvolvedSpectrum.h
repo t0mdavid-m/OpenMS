@@ -161,6 +161,16 @@ namespace OpenMS
     {
       decoy_precursor_qscore_ = qscore;
     }
+    /// the decoy precursor's Qscore in its survey scan alone (1D), the score a decoy spectrum competes on: a decoy is rarely traced over
+    /// several scans, so the 2D Qscore favours the precursor; -1 if unknown
+    double getDecoyPrecursorQscore1D() const
+    {
+      return decoy_precursor_qscore1d_;
+    }
+    void setDecoyPrecursorQscore1D(double qscore)
+    {
+      decoy_precursor_qscore1d_ = qscore;
+    }
 
     /// original spectrum setter
     void setOriginalSpectrum(const MSSpectrum& spec);
@@ -228,6 +238,7 @@ namespace OpenMS
     double decoy_precursor_mass_ = -1;
     double decoy_precursor_weight_ = 1;
     double decoy_precursor_qscore_ = -1;
+    double decoy_precursor_qscore1d_ = -1;
     /// precursor raw peak (not deconvolved one)
     Precursor precursor_peak_;
     /// precursor deconvolved peak

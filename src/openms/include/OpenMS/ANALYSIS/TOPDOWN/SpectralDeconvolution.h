@@ -17,6 +17,7 @@
 #include <OpenMS/KERNEL/MSSpectrum.h>
 #include <boost/dynamic_bitset.hpp>
 #include <iostream>
+#include <memory>
 
 namespace OpenMS
 {
@@ -130,6 +131,23 @@ namespace OpenMS
     void updateMembers_() override;
 
   private:
+    /// FLASHDeconvAlgorithm attaches one immutable averagine to its per-thread spectrum workers (setSharedAveragine_)
+    friend class FLASHDeconvAlgorithm;
+
+    /**
+      @brief Use @p avg, an immutable averagine shared by several instances (the spectrum workers of FLASHDeconvAlgorithm), instead of the
+      own one. calculateAveragine and setAveragine return to the own averagine.
+      @param avg the shared averagine (not null; not modified while shared)
+      @throws Exception::InvalidParameter if @p avg is null
+    */
+    void setSharedAveragine_(std::shared_ptr<const PrecalculatedAveragine> avg);
+
+    /// the averagine in use: the shared one if set, otherwise the own one
+    const PrecalculatedAveragine& activeAveragine_() const noexcept
+    {
+      return shared_avg_ ? *shared_avg_ : avg_;
+    }
+
     /// FLASHDeconv parameters
 
     /// allowed isotope error in deconvolved mass to calculate qvalue
@@ -170,6 +188,8 @@ namespace OpenMS
 
     /// precalculated averagine distributions for fast averagine generation
     FLASHHelperClasses::PrecalculatedAveragine avg_;
+    /// an immutable averagine shared with other instances (setSharedAveragine_); used instead of avg_ when set
+    std::shared_ptr<const PrecalculatedAveragine> shared_avg_;
 
     /// mass bins that are targeted for FLASHIda global targeting mode
     boost::dynamic_bitset<> target_mass_bins_;

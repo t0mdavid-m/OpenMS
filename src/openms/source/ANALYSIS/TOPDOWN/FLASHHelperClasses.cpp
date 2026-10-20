@@ -8,7 +8,12 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
 #include <OpenMS/CHEMISTRY/ModificationsDB.h>
+#include <exception>
+#include <typeinfo>
 #include <utility>
+#ifdef _OPENMP
+  #include <omp.h>
+#endif
 
 namespace OpenMS
 {
@@ -17,9 +22,9 @@ namespace OpenMS
       mass_interval_(delta),
       min_mass_(min_mass)
   {
+    // the mass grid
+    std::vector<double> masses;
     int i = 0;
-    int max_left_count = 0;
-    int max_right_count = 0;
     while (true)
     {
       double mass = i * mass_interval_;
@@ -32,8 +37,24 @@ namespace OpenMS
       {
         break;
       }
+      masses.push_back(mass);
+    }
 
-      auto iso = use_RNA_averagine ? generator.estimateFromRNAMonoWeight(mass) : generator.estimateFromPeptideMonoWeight(mass);
+    const Size bin_count = masses.size();
+    apex_index_.resize(bin_count);
+    right_count_from_apex_.resize(bin_count);
+    left_count_from_apex_.resize(bin_count);
+    average_mono_mass_difference_.resize(bin_count);
+    abundant_mono_mass_difference_.resize(bin_count);
+    isotopes_.resize(bin_count);
+    snr_mul_factor_.resize(bin_count);
+    std::vector<std::exception_ptr> errors(bin_count);
+
+    // The bins are independent of each other (the left and right counts are made cumulative below), so they are calculated in parallel,
+    // each thread with its own copy of the generator.
+    const auto calculate_bin = [&](const Size index, CoarseIsotopePatternGenerator& local_generator) {
+      const double mass = masses[index];
+      auto iso = use_RNA_averagine ? local_generator.estimateFromRNAMonoWeight(mass) : local_generator.estimateFromPeptideMonoWeight(mass);
 
       if (decoy_iso_distance > 0)
       {
@@ -120,16 +141,58 @@ namespace OpenMS
       left_count = left_count < min_left_right_count ? min_left_right_count : left_count;
       right_count = right_count < min_left_right_count ? min_left_right_count : right_count;
 
-      max_left_count = std::max(max_left_count, left_count);
-      max_right_count = std::max(max_right_count, right_count);
+      apex_index_[index] = most_abundant_index_;
+      right_count_from_apex_[index] = right_count;
+      left_count_from_apex_[index] = left_count;
+      average_mono_mass_difference_[index] = iso.averageMass() - iso[0].getMZ();
+      abundant_mono_mass_difference_[index] = iso.getMostAbundant().getMZ() - iso[0].getMZ();
+      isotopes_[index] = iso;
+      snr_mul_factor_[index] = intensity_sum * intensity_sum;
+    };
 
-      apex_index_.push_back(most_abundant_index_);
-      right_count_from_apex_.push_back(max_right_count);
-      left_count_from_apex_.push_back(max_left_count);
-      average_mono_mass_difference_.push_back(iso.averageMass() - iso[0].getMZ());
-      abundant_mono_mass_difference_.push_back(iso.getMostAbundant().getMZ() - iso[0].getMZ());
-      isotopes_.push_back(iso);
-      snr_mul_factor_.push_back(intensity_sum * intensity_sum);
+    // a generator of a derived class would be sliced by a copy: it runs serially on the caller's generator
+    if (typeid(generator) != typeid(CoarseIsotopePatternGenerator))
+    {
+      for (Size index = 0; index < bin_count; ++index)
+      {
+        calculate_bin(index, generator);
+      }
+    }
+    else
+    {
+      int worker_count = 1;
+#ifdef _OPENMP
+      if (! omp_in_parallel()) { worker_count = std::max(1, (int)std::min(bin_count, (Size)omp_get_max_threads())); }
+#endif
+      std::vector<CoarseIsotopePatternGenerator> generators(worker_count, generator); // copied here: no allocation inside the region
+#pragma omp parallel for num_threads(worker_count) schedule(static) if (worker_count > 1)
+      for (SignedSize index = 0; index < (SignedSize)bin_count; ++index)
+      {
+        int worker = 0;
+#ifdef _OPENMP
+        worker = omp_get_thread_num();
+#endif
+        try
+        {
+          calculate_bin((Size)index, generators[worker]);
+        }
+        catch (...)
+        {
+          errors[index] = std::current_exception();
+        }
+      }
+    }
+
+    // the first error in mass order; the left and right counts are the maxima up to each mass
+    int max_left_count = 0;
+    int max_right_count = 0;
+    for (Size index = 0; index < bin_count; ++index)
+    {
+      if (errors[index]) { std::rethrow_exception(errors[index]); }
+      max_left_count = std::max(max_left_count, left_count_from_apex_[index]);
+      max_right_count = std::max(max_right_count, right_count_from_apex_[index]);
+      left_count_from_apex_[index] = max_left_count;
+      right_count_from_apex_[index] = max_right_count;
     }
   }
 

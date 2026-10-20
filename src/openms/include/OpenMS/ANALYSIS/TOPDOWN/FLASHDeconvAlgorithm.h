@@ -145,8 +145,12 @@ namespace OpenMS
     std::map<String, std::vector<std::pair<double, bool>>> native_id_window_decoys_;
     /// per MSn spectrum: the precursor score (2D Qscore) of each window decoy mass, as scored when the window was scanned
     std::map<String, std::map<double, double>> native_id_window_decoy_qscores_;
+    /// and its Qscore in that survey scan alone (1D)
+    std::map<String, std::map<double, double>> native_id_window_decoy_qscores1d_;
     /// precursor score of the decoy precursor of each MSn spectrum (refined after the feature tracing, updatePrecursorQScores_)
     std::map<String, double> native_id_decoy_precursor_qscore_map_;
+    /// and its 1D Qscore
+    std::map<String, double> native_id_decoy_precursor_qscore1d_map_;
     /// per MSn native id, the decoy precursor mass (with report_FDR). With precursor_by_fragments, the decoy mass of the isolation window
     /// that beat the chosen precursor by the fragments (no entry if none did); otherwise the decoy mass of the window of the highest charge
     /// SNR
@@ -164,6 +168,22 @@ namespace OpenMS
 
     /// run spectral deconvolution
     void runSpectralDeconvolution_(MSExperiment& map, std::vector<DeconvolvedSpectrum>& deconvolved_spectra);
+
+    /// one spectrum to deconvolve (runSpectralDeconvolution_): its input and its result with the changes of this instance's state it implies
+    struct SpectrumJob_;
+
+    /**
+     * @brief Deconvolve one spectrum of @p map with @p sd (the precursor by the fragments, the decoy precursor and, with report_FDR, the
+     * decoy masses by @p noise_decoy_sd and @p signal_decoy_sd, whose target spectrum is that of @p sd). Only reads the state of this
+     * instance: the changes of its state (the precursor chosen by the fragments, the decoy precursor, the counters) go into @p job and are
+     * applied by commitSpectrum_, in the input order. The deconvolved spectrum stays in @p sd. Several spectra can be deconvolved in
+     * parallel, each with its own SpectralDeconvolution instances, as long as their native IDs differ.
+     */
+    void deconvolveSpectrum_(const MSExperiment& map, SpectrumJob_& job, SpectralDeconvolution& sd, SpectralDeconvolution& noise_decoy_sd,
+                             SpectralDeconvolution& signal_decoy_sd) const;
+
+    /// apply the changes of this instance's state that the deconvolution of a spectrum implies (deconvolveSpectrum_)
+    void commitSpectrum_(const MSExperiment& map, const SpectrumJob_& job);
 
     /// run feature finding to get deconvolved features
     void runFeatureFinding_(std::vector<DeconvolvedSpectrum>& deconvolved_spectra, std::vector<FLASHHelperClasses::MassFeature>& deconvolved_features);

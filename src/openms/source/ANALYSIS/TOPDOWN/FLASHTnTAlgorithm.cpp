@@ -900,6 +900,12 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         int s_loc_dw_e = deconv_meta_str.find(";", s_loc_dw_s);
         dspec.setDecoyPrecursorWeight(stod(deconv_meta_str.substr(s_loc_dw_s, s_loc_dw_e == (int)String::npos ? String::npos : s_loc_dw_e - s_loc_dw_s)));
       }
+      if (deconv_meta_str.hasSubstring("decoyprecursorQscore1D="))
+      {
+        int s_loc_dq1_s = deconv_meta_str.find("decoyprecursorQscore1D=") + 23;
+        int s_loc_dq1_e = deconv_meta_str.find(";", s_loc_dq1_s);
+        dspec.setDecoyPrecursorQscore1D(stod(deconv_meta_str.substr(s_loc_dq1_s, s_loc_dq1_e == (int)String::npos ? String::npos : s_loc_dq1_e - s_loc_dq1_s)));
+      }
       if (deconv_meta_str.hasSubstring("decoyprecursorQscore="))
       {
         int s_loc_dq_s = deconv_meta_str.find("decoyprecursorQscore=") + 21;
@@ -919,6 +925,12 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         int s_loc_preq_e = deconv_meta_str.find(";", s_loc_preq_s);
         double precursor_qscore = stod(deconv_meta_str.substr(s_loc_preq_s, s_loc_preq_e - s_loc_preq_s));
         pg.setQscore2D(precursor_qscore);
+      }
+      if (deconv_meta_str.hasSubstring("precursorQscore1D="))
+      {
+        int s_loc_pq1_s = deconv_meta_str.find("precursorQscore1D=") + 18; // the precursor's comes before the decoy precursor's
+        int s_loc_pq1_e = deconv_meta_str.find(";", s_loc_pq1_s);
+        pg.setQscore(stod(deconv_meta_str.substr(s_loc_pq1_s, s_loc_pq1_e - s_loc_pq1_s)));
       }
       if (deconv_meta_str.hasSubstring("precursorSNR="))
       {
@@ -1990,8 +2002,15 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         {
           if (ms1Based(h)) best_own = std::max(best_own, h.getScore());
         }
-        const double decoy_qscore = dspecs[d].getDecoyPrecursorQscore();
-        if (decoy_qscore >= 0)
+        // on the Qscores in the survey scan alone (1D) when the input has them: a decoy is rarely traced over several scans, so the 2D
+        // Qscore favours the precursor (Eclip_1480: of 137 decoy spectra giving a PrSM with the decoy mass, 12 decoys beat the precursor on
+        // the 1D Qscore, 6 on the 2D one)
+        const double decoy_qscore1d = dspecs[d].getDecoyPrecursorQscore1D(), decoy_qscore = dspecs[d].getDecoyPrecursorQscore();
+        if (decoy_qscore1d >= 0)
+        {
+          if (decoy_qscore1d <= dspecs[d].getPrecursorPeakGroup().getQscore()) continue;
+        }
+        else if (decoy_qscore >= 0)
         {
           if (decoy_qscore <= dspecs[d].getPrecursorPeakGroup().getQscore2D()) continue;
         }
