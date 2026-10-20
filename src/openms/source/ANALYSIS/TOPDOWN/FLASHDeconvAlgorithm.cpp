@@ -543,7 +543,7 @@ void FLASHDeconvAlgorithm::runSpectralDeconvolution_(MSExperiment& map, std::vec
   std::vector<SpectrumWorker> workers;
 #ifdef _OPENMP
   const Param sd_param = sd_.getParameters();
-  if (merge_spec_ == 0 && ida_log_file_.empty() && omp_get_level() == 0 && (int)sd_param.getValue("precursor_charge") == 0
+  if (merge_spec_ == 0 && ida_log_file_.empty() && ! omp_in_parallel() && (int)sd_param.getValue("precursor_charge") == 0
       && (double)sd_param.getValue("precursor_mz") == 0)
   {
     std::vector<Size> level_counts(current_max_ms_level_ + 1, 0);
