@@ -52,11 +52,25 @@ namespace
     peaks wins). The first index with m/z >= target - w is searched in [lo, hi), which must contain it (or hi if it is
     hi), and returned in @p lb so that the next isotope peak can be searched in a narrower range.
   */
-  inline int nearestPeak(const std::vector<double>& mzs, int lo, int hi, double target, double w, int& lb)
+  // the index of the peak nearest to target within w among peaks lo .. hi - 1, -1 if none; lb is the first index in lo .. hi at or above
+  // target - w. With the bucket index of the spectrum, that index is searched in one bucket only: the first peak at or above target - w
+  // of the whole spectrum lies between the starts of its bucket and the next, and clamped to lo .. hi it is the one of the range.
+  inline int nearestPeak(const FLASHAnnotatorAlgorithm::PeakArrays& spec, int lo, int hi, double target, double w, int& lb)
   {
-    const double* base = mzs.data();
-    const int size = (int)mzs.size();
-    lb = (int)(std::lower_bound(base + lo, base + hi, target - w) - base);
+    const double* base = spec.mzs.data();
+    const int size = (int)spec.mzs.size();
+    const double low = target - w;
+    int first; // in the whole spectrum
+    const auto& buckets = spec.bucket_start;
+    if (buckets.empty()) { first = (int)(std::lower_bound(base, base + size, low) - base); }
+    else
+    {
+      const double b = std::floor(low / FLASHAnnotatorAlgorithm::PeakArrays::bucket_width);
+      if (b < 0) first = 0;
+      else if (b + 1 >= (double)buckets.size()) first = size;
+      else first = (int)(std::lower_bound(base + buckets[(Size)b], base + buckets[(Size)b + 1], low) - base);
+    }
+    lb = std::max(lo, std::min(hi, first));
     int best = -1;
     double best_d = 0;
     for (int i = lb; i < size && base[i] <= target + w; i++)
@@ -336,6 +350,20 @@ double FLASHAnnotatorAlgorithm::rankOf_(const std::vector<double>& sorted_intens
          / (double)sorted_intensities.size();
 }
 
+void FLASHAnnotatorAlgorithm::PeakArrays::indexBuckets()
+{
+  bucket_start.clear();
+  if (mzs.empty()) return;
+  const Size count = (Size)std::floor(mzs.back() / bucket_width) + 2;
+  bucket_start.resize(count);
+  Size i = 0;
+  for (Size b = 0; b < count; b++)
+  {
+    while (i < mzs.size() && mzs[i] < (double)b * bucket_width) i++;
+    bucket_start[b] = (int)i;
+  }
+}
+
 void FLASHAnnotatorAlgorithm::toPeakArrays(const MSSpectrum& spec, PeakArrays& peaks)
 {
   peaks.mzs.clear();
@@ -351,6 +379,7 @@ void FLASHAnnotatorAlgorithm::toPeakArrays(const MSSpectrum& spec, PeakArrays& p
       peaks.mzs.push_back(p.getMZ());
       peaks.intensities.push_back(p.getIntensity());
     }
+    peaks.indexBuckets();
     return;
   }
 
@@ -367,6 +396,7 @@ void FLASHAnnotatorAlgorithm::toPeakArrays(const MSSpectrum& spec, PeakArrays& p
     peaks.mzs.push_back(mz);
     peaks.intensities.push_back(intensity);
   }
+  peaks.indexBuckets();
 }
 
 double FLASHAnnotatorAlgorithm::getProteoformMass(const String& sequence, const std::vector<Modification>& modifications)
@@ -561,7 +591,7 @@ bool FLASHAnnotatorAlgorithm::matchEnvelope_(const PeakArrays& spec, double mono
   // the most abundant peak first: it is required
   double target = (base + table_.iso_index[apex] * Constants::C13C12_MASSDIFF_U) * scale;
   int apex_lb;
-  const int apex_peak = nearestPeak(spec.mzs, 0, size, target, target * tol, apex_lb);
+  const int apex_peak = nearestPeak(spec, 0, size, target, target * tol, apex_lb);
   if (apex_peak < 0) return false;
 
   match.peaks.clear();
@@ -577,7 +607,7 @@ bool FLASHAnnotatorAlgorithm::matchEnvelope_(const PeakArrays& spec, double mono
   for (int j = apex + 1; j < end; j++)
   {
     target = (base + table_.iso_index[j] * Constants::C13C12_MASSDIFF_U) * scale;
-    const int peak = nearestPeak(spec.mzs, lb, size, target, target * tol, lb);
+    const int peak = nearestPeak(spec, lb, size, target, target * tol, lb);
     unsearched--;
     if (peak < 0)
     {
@@ -597,7 +627,7 @@ bool FLASHAnnotatorAlgorithm::matchEnvelope_(const PeakArrays& spec, double mono
   for (int j = apex - 1; j >= begin; j--)
   {
     target = (base + table_.iso_index[j] * Constants::C13C12_MASSDIFF_U) * scale;
-    const int peak = nearestPeak(spec.mzs, 0, lb, target, target * tol, lb);
+    const int peak = nearestPeak(spec, 0, lb, target, target * tol, lb);
     unsearched--;
     if (peak < 0)
     {
@@ -664,12 +694,12 @@ double FLASHAnnotatorAlgorithm::calibrate_(const PeakArrays& spec, const std::ve
       // the error is measured on the monoisotopic peak if it is kept and matched, else on the most abundant one
       double target = (base + table_.iso_index[apex] * Constants::C13C12_MASSDIFF_U) / z;
       int apex_lb, lb;
-      const int apex_peak = nearestPeak(spec.mzs, 0, size, target, target * tol, apex_lb);
+      const int apex_peak = nearestPeak(spec, 0, size, target, target * tol, apex_lb);
       int mono_peak = -1;
       if (mono >= 0 && mono != apex)
       {
         const double mono_target = base / z;
-        mono_peak = nearestPeak(spec.mzs, 0, apex_lb, mono_target, mono_target * tol, lb);
+        mono_peak = nearestPeak(spec, 0, apex_lb, mono_target, mono_target * tol, lb);
       }
       else if (mono == apex) { mono_peak = apex_peak; }
       if (apex_peak < 0 && mono_peak < 0) continue;
@@ -682,7 +712,7 @@ double FLASHAnnotatorAlgorithm::calibrate_(const PeakArrays& spec, const std::ve
       {
         target = (base + table_.iso_index[j] * Constants::C13C12_MASSDIFF_U) / z;
         unsearched--;
-        if (nearestPeak(spec.mzs, lb, size, target, target * tol, lb) >= 0) matched++;
+        if (nearestPeak(spec, lb, size, target, target * tol, lb) >= 0) matched++;
         else fail = matched + unsearched < min_peaks_;
       }
       lb = apex_lb;
@@ -691,7 +721,7 @@ double FLASHAnnotatorAlgorithm::calibrate_(const PeakArrays& spec, const std::ve
         if (j == mono) continue;
         target = (base + table_.iso_index[j] * Constants::C13C12_MASSDIFF_U) / z;
         unsearched--;
-        if (nearestPeak(spec.mzs, 0, lb, target, target * tol, lb) >= 0) matched++;
+        if (nearestPeak(spec, 0, lb, target, target * tol, lb) >= 0) matched++;
         else fail = matched + unsearched < min_peaks_;
       }
       if (fail || matched < min_peaks_) continue;
