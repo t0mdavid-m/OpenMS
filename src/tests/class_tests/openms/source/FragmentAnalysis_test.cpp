@@ -960,6 +960,25 @@ START_SECTION(narrowFragmentPTMSites)
 }
 END_SECTION
 
+// ADR-0059: isolation purity = the species' signal over ALL raw intensity inside the window.
+START_SECTION(windowPurity)
+{
+  MSSpectrum spec;
+  for (auto [mz, in] : std::vector<std::pair<double, double>>{{600.0, 100.0}, {600.5, 50.0}, {601.0, 50.0}})
+  {
+    Peak1D p;
+    p.setMZ(mz);
+    p.setIntensity(in);
+    spec.push_back(p);
+  }
+  TEST_REAL_SIMILAR(FragmentAnalysis::windowPurity(spec, 599.9, 601.1, 100.0), 0.5)
+  TEST_REAL_SIMILAR(FragmentAnalysis::windowPurity(spec, 599.9, 600.1, 100.0), 1.0)   // nothing else in the window
+  TEST_REAL_SIMILAR(FragmentAnalysis::windowPurity(spec, 599.9, 601.1, 0.0), -1.0)    // no signal
+  TEST_REAL_SIMILAR(FragmentAnalysis::windowPurity(spec, 700.0, 701.0, 100.0), -1.0)  // empty window
+  TEST_REAL_SIMILAR(FragmentAnalysis::windowPurity(spec, 599.9, 600.1, 300.0), 1.0)   // clamped, never > 1
+}
+END_SECTION
+
 /////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////
 END_TEST

@@ -23,6 +23,10 @@
 #include <OpenMS/CONCEPT/ClassTest.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Deconvolution.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/PrecursorSelection.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 
 #include "FLASHIda_TestHelpers.h"  // ground-truth harness: ScanData/loadTsvScans/runInterleaved
 
@@ -88,7 +92,9 @@ namespace
                      // ADR-0040. Emitted unconditionally at their INERT defaults, so every existing
                      // caller's config is unchanged in behaviour while the keys stay exercised.
                      int max_charge_states = 0,
-                     int min_charge_states = 1)
+                     int min_charge_states = 1,
+                     // ADR-0059. Emitted unconditionally at its default ("snr").
+                     const std::string& charge_selection = "snr")
   {
     return std::string(R"JSON({
   "deconvolution": {
@@ -119,7 +125,8 @@ namespace
     "max_precursors": )JSON" + std::to_string(max_precursors) + R"JSON(,
     "precursor_charges": ")JSON" + precursor_charges + R"JSON(",
     "max_charge_states": )JSON" + std::to_string(max_charge_states) + R"JSON(,
-    "min_charge_states": )JSON" + std::to_string(min_charge_states) + R"JSON(
+    "min_charge_states": )JSON" + std::to_string(min_charge_states) + R"JSON(,
+    "charge_selection": ")JSON" + charge_selection + R"JSON("
   },
   "characterization": { "mode": "off", "max_targets": 10 },
   "ms_settings": {
@@ -207,6 +214,75 @@ namespace
   {
     return runInterleaved(&ida, scans, {}, nullptr, /*max_iters=*/4000);
   }
+
+  // ---- ADR-0059 oracle -------------------------------------------------------------------------
+  //
+  // The charge_selection sections below check the engine against an INDEPENDENT reading of the
+  // same PeakGroup: raw accessors and a purity summed here over the survey spectrum, never the
+  // engine's peakGroupNotchCandidates / windowPurity / rankCharges. A synthetic PeakGroup cannot
+  // carry per-charge intensity or qscores (only PeakGroup's private deconvolution path fills them),
+  // so these run on real ms1_cytc surveys.
+  struct OracleCharge { int z; double snr, intensity, qscore, purity; };
+
+  std::vector<OracleCharge> oracleCharges(const PeakGroup& pg, const MSSpectrum& raw, int min_charge)
+  {
+    std::vector<OracleCharge> out;
+    const auto qs = pg.getAllQscores();
+    auto [min_c, max_c] = pg.getAbsChargeRange();
+    for (int z = min_c; z <= max_c; ++z)
+    {
+      auto [lo, hi] = pg.getMzRange(z);
+      if (hi <= lo) continue;
+      if (min_charge > 0 && z < min_charge) continue;
+      const double s = pg.getChargeIntensity(z);
+      double total = 0.0;
+      for (const auto& p : raw)
+        if (p.getMZ() >= lo - 0.4 && p.getMZ() <= hi + 0.4) total += p.getIntensity();
+      const double purity = (s <= 0.0 || total <= 0.0) ? -1.0 : std::min(1.0, s / total);
+      const auto q = qs.find(z);
+      out.push_back({z, pg.getChargeSNR(z), s, q != qs.end() ? (double)q->second : pg.getQscore(), purity});
+    }
+    return out;
+  }
+
+  double oracleKey(const OracleCharge& c, const std::string& rule)
+  {
+    if (rule == "snr") return c.snr;
+    if (rule == "qscore") return c.qscore;
+    if (rule == "intensity") return c.intensity;
+    return c.purity;
+  }
+
+  // The rule's order: key descending, then intensity descending, then the lower charge.
+  std::vector<int> oracleOrder(std::vector<OracleCharge> cands, const std::string& rule)
+  {
+    std::sort(cands.begin(), cands.end(), [&rule](const OracleCharge& a, const OracleCharge& b) {
+      const double ka = oracleKey(a, rule), kb = oracleKey(b, rule);
+      if (ka != kb) return ka > kb;
+      if (a.intensity != b.intensity) return a.intensity > b.intensity;
+      return a.z < b.z;
+    });
+    std::vector<int> out;
+    for (const auto& c : cands) out.push_back(c.z);
+    return out;
+  }
+
+  // Drive PrecursorSelection survey by survey -- the decision whose charges buildMS2 is handed.
+  template <typename F>
+  void forEachSurvey(const std::string& cfg_json, const std::vector<ScanData>& scans, F fn)
+  {
+    Config cfg{cfg_json};
+    Deconvolution deconv(cfg, cfg.toleranceList());
+    PrecursorSelection ps(cfg, deconv);
+    for (size_t si = 0; si < scans.size(); ++si)
+    {
+      const auto& s = scans[si];
+      const int n = ps.filterAndRank(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1, 0.0);
+      fn(cfg, ps, n, (int)si);
+    }
+  }
+
+  const std::vector<std::string> kRules{"snr", "qscore", "intensity", "purity"};
 }
 
 START_TEST(FLASHIda_ChargeModes, "$Id$")
@@ -723,6 +799,206 @@ START_SECTION(max_charge_states_caps_the_acquired_set)
   for (const auto& kv : cgroups) capped_widest = std::max(capped_widest, kv.second.size());
   TEST_EQUAL(capped_widest <= 3, true)   // 4 here means the -1 was dropped at the call site
   TEST_EQUAL(capped_widest, 3)           // and the cap is REACHED, so it is not merely unreachable
+}
+END_SECTION
+
+// CM-10 (ADR-0059): under multiplexed the WIRE isolates the set admission recorded. buildMS2 used to
+// re-derive the notches with its own cap of nine, so max_charge_states never reached the instrument
+// for an unrestricted row (the quant_multiplexed golden: cap 3, ten charges isolated).
+START_SECTION(multiplexed_wire_respects_max_charge_states)
+{
+  auto scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(scans.empty())
+
+  // Uncapped, the fixture co-isolates more than three charges -- else the cap below is vacuous.
+  const std::string uncapped_cfg = cfgFor("multiplexed");
+  FLASHIda uncapped(const_cast<char*>(uncapped_cfg.c_str()));
+  AcqResult ua = runMode(uncapped, scans);
+  int uncapped_widest = 0;
+  for (const auto& c : ua.ms2_cmds) uncapped_widest = std::max(uncapped_widest, 1 + notchesForStage(c, 0).second);
+  TEST_EQUAL(uncapped_widest > 3, true)
+
+  // End to end, capped at 3: no command isolates more, and at least one reaches it.
+  const std::string capped_cfg = cfgFor("multiplexed", "none", "", 10, false, /*max_charge_states=*/3);
+  FLASHIda capped(const_cast<char*>(capped_cfg.c_str()));
+  AcqResult ca = runMode(capped, scans);
+  TEST_EQUAL(ca.ms2_cmds.size() > 0, true)
+  int capped_widest = 0;
+  for (const auto& c : ca.ms2_cmds) capped_widest = std::max(capped_widest, 1 + notchesForStage(c, 0).second);
+  TEST_EQUAL(capped_widest, 3)
+
+  // The wire equals the record: anchor then notches, in order, is exactly the acquisition set.
+  int compared = 0, mismatches = 0;
+  forEachSurvey(capped_cfg, scans, [&](const Config& cfg, PrecursorSelection& ps, int n, int) {
+    ScanCommandQueue q(cfg);
+    const auto& sel = ps.selectedPeakGroups();
+    for (int i = 0; i < n; ++i)
+    {
+      const std::vector<int>& set = ps.triggerAcquisitionSets()[i];
+      ScanCommand cmd = q.buildMS2(sel[i], ps.triggerCharges()[i], cfg.level(2).scans[0], 2, 1, &set);
+      std::vector<int> wire{cmd.stages[0].charge_state};
+      auto [first, count] = notchesForStage(cmd, 0);
+      for (int k = 0; k < count; ++k) wire.push_back(first[k].charge_state);
+      ++compared;
+      if (wire != set) ++mismatches;
+    }
+  });
+  TEST_EQUAL(compared > 0, true)
+  TEST_EQUAL(mismatches, 0)
+}
+END_SECTION
+
+// CM-11 (ADR-0059): under single, the anchor is the first charge of charge_selection's ranking.
+// snr and qscore are defined by the PeakGroup accessors they used before the key existed, so those
+// two are checked as "the accessor, and nothing ranks higher"; intensity and purity against the
+// oracle's argmax. The non-vacuity guard needs intensity and purity each to disagree with snr on
+// at least one species, or every assertion here could pass with the rule ignored.
+START_SECTION(anchor_follows_charge_selection)
+{
+  auto scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(scans.empty())
+
+  std::map<std::string, std::map<std::pair<int, long long>, int>> anchors;   // rule -> (survey, mass) -> z
+  for (const std::string& rule : kRules)
+  {
+    int checked = 0, wrong = 0;
+    forEachSurvey(cfgFor("single", "none", "", 10, false, 0, 1, rule), scans,
+                  [&](const Config& cfg, PrecursorSelection& ps, int n, int si) {
+      const auto& sel = ps.selectedPeakGroups();
+      const MSSpectrum& raw = ps.deconvolvedMS1().getOriginalSpectrum();
+      for (int i = 0; i < n; ++i)
+      {
+        const PeakGroup& pg = sel[i];
+        const int z = ps.triggerCharges()[i];
+        const auto cands = oracleCharges(pg, raw, cfg.level(1).min_charge);
+        anchors[rule][{si, std::llround(pg.getMonoMass())}] = z;
+        ++checked;
+        bool ok;
+        if (rule == "snr" || rule == "qscore")
+        {
+          ok = (rule == "snr") ? z == pg.getRepAbsCharge() : z == pg.getBestQScoreCharge();
+          if (rule == "qscore") ok = ok && !pg.getAllQscores().empty();
+          double kz = -1e300;
+          for (const auto& c : cands) if (c.z == z) kz = oracleKey(c, rule);
+          for (const auto& c : cands) if (oracleKey(c, rule) > kz + 1e-9) ok = false;
+        }
+        else
+        {
+          ok = !cands.empty() && z == oracleOrder(cands, rule).front();
+        }
+        if (!ok)
+        {
+          ++wrong;
+          std::cout << "[CM-11] rule=" << rule << " survey=" << si << " mass=" << pg.getMonoMass()
+                    << " engine z=" << z << std::endl;
+        }
+      }
+    });
+    TEST_EQUAL(checked > 0, true)
+    TEST_EQUAL(wrong, 0)
+  }
+
+  for (const std::string& rule : {std::string("intensity"), std::string("purity")})
+  {
+    int differs = 0;
+    for (const auto& kv : anchors[rule])
+    {
+      auto it = anchors["snr"].find(kv.first);
+      if (it != anchors["snr"].end() && it->second != kv.second) ++differs;
+    }
+    if (differs == 0) std::cout << "[CM-11] " << rule << " never disagreed with snr -- vacuous" << std::endl;
+    TEST_EQUAL(differs > 0, true)
+  }
+}
+END_SECTION
+
+// CM-12 (ADR-0059): under separate the emitted charges of one species are the anchor followed by
+// the rule's next members among the SNR-gated charges, cut at max_charge_states (3).
+START_SECTION(separate_set_follows_charge_selection)
+{
+  auto scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(scans.empty())
+
+  for (const std::string& rule : kRules)
+  {
+    int groups = 0, wrong = 0;
+    forEachSurvey(cfgFor("separate", "none", "", 10, false, /*max_charge_states=*/3, 1, rule), scans,
+                  [&](const Config& cfg, PrecursorSelection& ps, int n, int si) {
+      const auto& sel = ps.selectedPeakGroups();
+      const auto& trig = ps.triggerCharges();
+      const MSSpectrum& raw = ps.deconvolvedMS1().getOriginalSpectrum();
+      for (int i = 0; i < n;)
+      {
+        // One species' emissions are consecutive and share its PeakGroup.
+        int j = i;
+        std::vector<int> emitted;
+        while (j < n && sel[j].getMonoMass() == sel[i].getMonoMass()) emitted.push_back(trig[j++]);
+        const PeakGroup& pg = sel[i];
+        const int anchor = emitted.front();
+
+        std::vector<OracleCharge> gated;
+        for (const auto& c : oracleCharges(pg, raw, 0))
+          if (c.z != anchor && c.snr >= cfg.targeting().snr_threshold) gated.push_back(c);
+        std::vector<int> expected{anchor};
+        for (int z : oracleOrder(gated, rule))
+          if ((int)expected.size() < 3) expected.push_back(z);
+
+        bool ok = emitted == expected;
+        if (rule == "intensity" || rule == "purity")
+          ok = ok && anchor == oracleOrder(oracleCharges(pg, raw, cfg.level(1).min_charge), rule).front();
+        ++groups;
+        if (!ok)
+        {
+          ++wrong;
+          std::cout << "[CM-12] rule=" << rule << " survey=" << si << " mass=" << pg.getMonoMass() << " emitted=";
+          for (int z : emitted) std::cout << " " << z;
+          std::cout << " expected=";
+          for (int z : expected) std::cout << " " << z;
+          std::cout << std::endl;
+        }
+        i = j;
+      }
+    });
+    TEST_EQUAL(groups > 0, true)
+    TEST_EQUAL(wrong, 0)
+  }
+}
+END_SECTION
+
+// CM-13 (ADR-0059): an authored charge set only narrows -- the rule chooses among the named charges.
+// Checked on the species' FIRST emission of each run, where no named charge is spent yet.
+START_SECTION(authored_anchor_follows_charge_selection)
+{
+  auto scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(scans.empty())
+
+  for (const std::string& rule : kRules)
+  {
+    bool seen = false;
+    int checked = 0, wrong = 0;
+    forEachSurvey(cfgFor("single", "inclusion", charge_set_list, 10, false, 0, 1, rule), scans,
+                  [&](const Config& cfg, PrecursorSelection& ps, int n, int si) {
+      const auto& sel = ps.selectedPeakGroups();
+      const MSSpectrum& raw = ps.deconvolvedMS1().getOriginalSpectrum();
+      for (int i = 0; i < n && !seen; ++i)
+      {
+        if (std::llround(sel[i].getMonoMass()) != authored_mass) continue;
+        seen = true;
+        std::vector<OracleCharge> named;
+        for (const auto& c : oracleCharges(sel[i], raw, cfg.level(1).min_charge))
+          if (authored_charges.count(c.z)) named.push_back(c);
+        const int z = ps.triggerCharges()[i];
+        ++checked;
+        if (named.empty() || z != oracleOrder(named, rule).front())
+        {
+          ++wrong;
+          std::cout << "[CM-13] rule=" << rule << " survey=" << si << " engine z=" << z << std::endl;
+        }
+      }
+    });
+    TEST_EQUAL(checked, 1)
+    TEST_EQUAL(wrong, 0)
+  }
 }
 END_SECTION
 

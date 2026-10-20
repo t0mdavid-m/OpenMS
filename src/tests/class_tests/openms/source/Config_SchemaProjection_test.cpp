@@ -409,6 +409,56 @@ START_SECTION(charge_acquisition_unknown_value_throws)
 }
 END_SECTION
 
+// ---------------------------------------------------------------------------------------------
+// ADR-0059: precursor_selection.charge_selection and reselect_charges.
+START_SECTION(charge_selection_parses)
+{
+  TEST_EQUAL((int)Config(cfgJson()).targeting().charge_selection, (int)ChargeSelection::Snr)   // absent => snr
+  TEST_EQUAL((int)Config(cfgJson(R"(, "charge_selection": "snr")")).targeting().charge_selection, (int)ChargeSelection::Snr)
+  TEST_EQUAL((int)Config(cfgJson(R"(, "charge_selection": "qscore")")).targeting().charge_selection, (int)ChargeSelection::Qscore)
+  TEST_EQUAL((int)Config(cfgJson(R"(, "charge_selection": "intensity")")).targeting().charge_selection, (int)ChargeSelection::Intensity)
+  TEST_EQUAL((int)Config(cfgJson(R"(, "charge_selection": "purity")")).targeting().charge_selection, (int)ChargeSelection::Purity)
+}
+END_SECTION
+
+START_SECTION(charge_selection_unknown_value_throws)
+{
+  TEST_EXCEPTION(std::invalid_argument, Config(cfgJson(R"(, "charge_selection": "SNR")")))
+  TEST_EXCEPTION(std::invalid_argument, Config(cfgJson(R"(, "charge_selection": "purest")")))
+  try
+  {
+    Config bad(cfgJson(R"(, "charge_selection": "purest")"));
+  }
+  catch (const std::invalid_argument& e)
+  {
+    const std::string msg = e.what();
+    for (const char* v : {"\"snr\"", "\"qscore\"", "\"intensity\"", "\"purity\""})
+      TEST_EQUAL(msg.find(v) != std::string::npos, true)   // the error names all four values
+  }
+}
+END_SECTION
+
+START_SECTION(purity_under_multiplexed_throws)
+{
+  TEST_EXCEPTION(std::invalid_argument,
+      Config(cfgJson(R"(, "charge_selection": "purity", "precursor_charges": "multiplexed")")))
+  // single and separate load; so does any other rule under multiplexed.
+  Config single(cfgJson(R"(, "charge_selection": "purity", "precursor_charges": "single")"));
+  Config separate(cfgJson(R"(, "charge_selection": "purity", "precursor_charges": "separate")"));
+  Config mux(cfgJson(R"(, "charge_selection": "intensity", "precursor_charges": "multiplexed")"));
+  TEST_EQUAL((int)separate.targeting().charge_selection, (int)ChargeSelection::Purity)
+  TEST_EQUAL((int)mux.targeting().charge_selection, (int)ChargeSelection::Intensity)
+}
+END_SECTION
+
+START_SECTION(reselect_charges_parses)
+{
+  TEST_EQUAL(Config(cfgJson()).targeting().reselect_charges, false)   // absent => false
+  TEST_EQUAL(Config(cfgJson(R"(, "reselect_charges": true)")).targeting().reselect_charges, true)
+  TEST_EQUAL(Config(cfgJson(R"(, "reselect_charges": false)")).targeting().reselect_charges, false)
+}
+END_SECTION
+
 // The retired bool gets a migration error naming its replacement, not the generic unknown-key
 // message -- checked before the allowlist precisely so the message can be specific.
 START_SECTION(ms3_all_charges_is_a_migration_error)

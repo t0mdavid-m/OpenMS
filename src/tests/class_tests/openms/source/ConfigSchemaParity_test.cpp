@@ -304,6 +304,18 @@ START_SECTION(EveryKey_ParsesToOnDiskValue)
                      : pc == "separate"  ? ChargeAcquisitionMode::Separate
                                          : ChargeAcquisitionMode::Single))
   }
+  // ADR-0059. The reference carries non-default values (intensity, true), so a reader that ignored
+  // either key would read snr / false here.
+  {
+    const std::string cs = j["precursor_selection"]["charge_selection"].get<std::string>();
+    TEST_EQUAL((int)cfg.targeting().charge_selection,
+               (int)(cs == "qscore"    ? ChargeSelection::Qscore
+                     : cs == "intensity" ? ChargeSelection::Intensity
+                     : cs == "purity"    ? ChargeSelection::Purity
+                                         : ChargeSelection::Snr))
+    TEST_EQUAL(cs != "snr", true)
+    TEST_EQUAL(cfg.targeting().reselect_charges, j["precursor_selection"]["reselect_charges"].get<bool>())
+  }
 
   // --- the projection: characterization.mode drives levels 2 and 3, and the MS3 budget/charge
   //     floor are AUTHORED in characterization but READ off level 2. Pinning both sides here is

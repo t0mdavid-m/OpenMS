@@ -108,16 +108,17 @@ START_SECTION(anchor_without_an_authored_set_is_the_representative_charge)
 }
 END_SECTION
 
-// CA-B2: consider_all_charges reads the PER-CHARGE qscore map, which only updateQscore populates.
+// CA-B2: charge_selection "qscore" reads the PER-CHARGE qscore map, which only updateQscore populates.
 // A PeakGroup that never went through it has no per-charge scores at all, so this ranks over an
 // empty map and yields no anchor. Pinned rather than worked around: it is the honest boundary of
 // what a synthetic PeakGroup can express, and a future helper that starts populating qscores_ should
 // have to notice this expectation change rather than silently strengthen four other tests.
-START_SECTION(consider_all_charges_ranks_over_the_per_charge_qscore_map)
+// (Before ADR-0059 this rule was selected by consider_all_charges.)
+START_SECTION(charge_selection_qscore_ranks_over_the_per_charge_qscore_map)
 {
   PeakGroup pg = makeEnvelope(12351.39, {12, 13, 14}, 0.94, 10.0f);
   AnchorContext ctx = anchorCtx();
-  ctx.consider_all_charges = true;
+  ctx.charge_selection = ChargeSelection::Qscore;
 
   AnchorChoice a = pickAnchor(pg, ctx);
 
