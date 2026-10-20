@@ -17,6 +17,7 @@
 #include <OpenMS/PROCESSING/FILTERING/ThresholdMower.h>
 #include <OpenMS/METADATA/SpectrumLookup.h>
 #include <OpenMS/MATH/STATISTICS/GaussFitter.h>
+#include <numeric>
 
 #ifdef _OPENMP
   #include <omp.h>
@@ -73,7 +74,7 @@ FLASHDeconvAlgorithm::FLASHDeconvAlgorithm(): DefaultParamHandler("FLASHDeconvAl
                      "the chosen precursor, on the same fragment masses (with a single target mass in the window, those of its own deconvolution), "
                      "i.e., within the bounds of the target masses: a decoy mass heavier than all of them pairs only fragments up to the heaviest "
                      "one and can hardly win. A decoy mass that beats the precursor becomes the decoy precursor of the spectrum (FLASHTnT "
-                     "-decoy_precursor), otherwise the spectrum has none. With false, the precursor is the target mass and the decoy precursor the "
+                     "-decoy_precursor); otherwise the decoy precursor is chosen among the window's decoy masses by the same rule (the one of the highest charge SNR unless the fragments single out another), so every MSn spectrum with a decoy mass in its window has one. With false, the precursor is the target mass and the decoy precursor the "
                      "decoy mass of the window of the highest charge SNR (unchecked: every MSn spectrum with a decoy mass in its window has one).");
   defaults_.setValidStrings("precursor_by_fragments", {"true", "false"});
   defaults_.addTag("precursor_by_fragments", "advanced");
@@ -384,13 +385,20 @@ void FLASHDeconvAlgorithm::runSpectralDeconvolution_(MSExperiment& map, std::vec
         std::vector<double> cand_masses {precursor_pg.getMonoMass()};
         cand_masses.reserve(window_decoys->size() + 1);
         for (const auto& decoy : *window_decoys) cand_masses.push_back(decoy.first);
-        const int best = choosePrecursorByFragments_(fragment_masses, cand_masses, precursor_pg.getMonoMass(), tols_[ms_level - 1]);
-        if (best > 0)
+        int best = choosePrecursorByFragments_(fragment_masses, cand_masses, precursor_pg.getMonoMass(), tols_[ms_level - 1]);
+        if (best > 0) { decoy_precursors_by_fragments_++; }
+        else
         {
-          decoy_precursors_by_fragments_++;
-          native_id_decoy_precursor_mass_map_[native_id] = (*window_decoys)[best - 1].first;
-          native_id_decoy_precursor_noise_map_[native_id] = (*window_decoys)[best - 1].second;
+          // No decoy beats the precursor. The spectrum still gets a decoy precursor, chosen among the window's decoy masses by the rule
+          // that chose the precursor among its target masses (the decoy of the highest charge SNR unless the fragments single out
+          // another), so that every spectrum with a precursor from MS1 also has a decoy spectrum downstream (FLASHTnT -decoy_precursor):
+          // with only the decoys that win here (1-3 of ~4100 spectra per E. coli lysate run), FLASHTnT saw almost no wrong precursor.
+          std::vector<double> decoy_masses(cand_masses.begin() + 1, cand_masses.end());
+          best = 1 + choosePrecursorByFragments_(fragment_masses, decoy_masses, decoy_masses[0], tols_[ms_level - 1]);
         }
+        decoy_precursors_++;
+        native_id_decoy_precursor_mass_map_[native_id] = (*window_decoys)[best - 1].first;
+        native_id_decoy_precursor_noise_map_[native_id] = (*window_decoys)[best - 1].second;
       }
 
       // add precursor information
@@ -462,7 +470,7 @@ void FLASHDeconvAlgorithm::runSpectralDeconvolution_(MSExperiment& map, std::vec
     }
     if (spectra_with_window_decoys_ > 0)
     {
-      by_fragments += sep + "decoy precursors (a decoy mass of the window beat the chosen precursor) in " + String(decoy_precursors_by_fragments_)
+      by_fragments += sep + "decoy precursors in " + String(decoy_precursors_) + " (a decoy mass of the window beat the chosen precursor in " + String(decoy_precursors_by_fragments_) + ")"
                       + " of " + String(spectra_with_window_decoys_) + " MSn spectra with a precursor and decoy masses in the window";
     }
     OPENMS_LOG_INFO << by_fragments << std::endl;
@@ -889,6 +897,7 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
       int window_max_charge = 0;
       std::vector<std::pair<PeakGroup, Precursor>> window_cands;
       std::vector<std::pair<double, bool>> window_decoys;
+      std::vector<double> window_decoy_snrs; // charge SNR of each window decoy (to order them, the highest first)
 
       for (auto& pg : *ds)
       {
@@ -909,12 +918,16 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
           }
           if (top == nullptr) { continue; }
           const bool noise = pg.getTargetDecoyType() == PeakGroup::TargetDecoyType::noise_decoy;
+          const double snr = pg.getChargeSNR(top->abs_charge);
           if (precursor_by_fragments_)
           {
-            if (commit) window_decoys.emplace_back(pg.getMonoMass(), noise);
+            if (commit)
+            {
+              window_decoys.emplace_back(pg.getMonoMass(), noise);
+              window_decoy_snrs.push_back(snr);
+            }
             continue;
           }
-          const double snr = pg.getChargeSNR(top->abs_charge);
           if (snr < max_decoy_snr) { continue; }
           max_decoy_snr = snr;
           decoy_mass = pg.getMonoMass();
@@ -983,7 +996,15 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
       {
         // the decoy precursor is decided by the fragments (runSpectralDeconvolution_)
         if (window_decoys.empty()) { native_id_window_decoys_.erase(native_id); }
-        else { native_id_window_decoys_[native_id] = std::move(window_decoys); }
+        else
+        {
+          std::vector<Size> order(window_decoys.size());
+          std::iota(order.begin(), order.end(), 0);
+          std::stable_sort(order.begin(), order.end(), [&](Size a, Size b) { return window_decoy_snrs[a] > window_decoy_snrs[b]; });
+          auto& sorted = native_id_window_decoys_[native_id];
+          sorted.clear();
+          for (Size k : order) sorted.push_back(window_decoys[k]);
+        }
       }
       else if (max_decoy_snr >= 0)
       {

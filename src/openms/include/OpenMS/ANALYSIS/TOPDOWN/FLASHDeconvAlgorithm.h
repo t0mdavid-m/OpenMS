@@ -110,7 +110,7 @@ namespace OpenMS
     int spectra_with_several_window_masses_ = 0, precursors_by_fragments_ = 0;
     /// MSn spectra with a precursor and decoy masses in the isolation window and those in which a decoy mass beat the chosen precursor
     /// (and became the decoy precursor), in this run
-    int spectra_with_window_decoys_ = 0, decoy_precursors_by_fragments_ = 0;
+    int spectra_with_window_decoys_ = 0, decoy_precursors_by_fragments_ = 0, decoy_precursors_ = 0;
 
     /// the FLASHIda acquisition's scan_commands.tsv (ADR-0046); empty = no coupling
     String scan_commands_file_;

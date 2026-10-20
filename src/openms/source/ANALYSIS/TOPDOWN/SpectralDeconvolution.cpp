@@ -467,7 +467,7 @@ namespace OpenMS
         bool chain_ratio_ok = false;
         if (j > 0)
         {
-          const long search = abs_charge > low_charge_ ? chain_search : 0;
+          const long search = (abs_charge > low_charge_ && ms_level_ == 1) ? chain_search : 0; // MSn keeps the mass bin identity
           for (long s = std::max(0L, mass_bin_index - search); s <= std::min(bin_end - 1, mass_bin_index + search); s++)
           {
             if (prev_charges[s] != j - 1) { continue; }
