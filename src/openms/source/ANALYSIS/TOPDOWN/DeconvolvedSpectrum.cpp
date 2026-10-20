@@ -42,7 +42,8 @@ namespace OpenMS
     if (!precursor_peak_group_.empty())
     {
       val << ";precursorscan=" << precursor_scan_number_ << ";precursormass=" << std::to_string(precursor_peak_group_.getMonoMass())
-          << ";precursorQscore=" << std::to_string(precursor_peak_group_.getQscore2D())  << ";precursorSNR=" << std::to_string(precursor_peak_group_.getChargeSNR(precursor_peak_.getCharge())) ;
+          << ";precursorQscore=" << std::to_string(precursor_peak_group_.getQscore2D())  << ";precursorSNR=" << std::to_string(precursor_peak_group_.getChargeSNR(precursor_peak_.getCharge()))
+          << ";precursorQscore1D=" << std::to_string(precursor_peak_group_.getQscore());
     }
     else
     {
@@ -51,7 +52,7 @@ namespace OpenMS
     if (decoy_precursor_mass_ > 0)
     {
       val << ";decoyprecursormass=" << std::to_string(decoy_precursor_mass_) << ";decoyprecursorweight=" << std::to_string(decoy_precursor_weight_)
-          << ";decoyprecursorQscore=" << std::to_string(decoy_precursor_qscore_);
+          << ";decoyprecursorQscore=" << std::to_string(decoy_precursor_qscore_) << ";decoyprecursorQscore1D=" << std::to_string(decoy_precursor_qscore1d_);
     }
 
     val << ";peaks=";

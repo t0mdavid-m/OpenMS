@@ -300,7 +300,7 @@ struct FLASHDeconvAlgorithm::SpectrumJob_
   /// round 2 ran (decoy masses in the window): the decoy precursor and whether a decoy mass beat the precursor
   bool window_decoys = false;
   bool decoy_by_fragments = false;
-  double decoy_mass = 0, decoy_qscore = 0;
+  double decoy_mass = 0, decoy_qscore = 0, decoy_qscore1d = -1;
   bool decoy_noise = false;
 
   /// the deconvolved spectrum, when it was deconvolved by a spectrum worker
@@ -389,7 +389,8 @@ void FLASHDeconvAlgorithm::deconvolveSpectrum_(const MSExperiment& map, Spectrum
       // another), so that every spectrum with a precursor from MS1 also has a decoy spectrum downstream (FLASHTnT -decoy_precursor):
       // with only the decoys that win here (1-3 of ~4100 spectra per E. coli lysate run), FLASHTnT saw almost no wrong precursor.
       std::vector<double> decoy_masses(cand_masses.begin() + 1, cand_masses.end());
-      best = 1 + choosePrecursorByFragments_(fragment_masses, decoy_masses, decoy_masses[0], tols_[ms_level - 1]);
+      // (choosePrecursorByFragments_ returns -1 when the default, the first decoy, stays)
+      best = 1 + std::max(0, choosePrecursorByFragments_(fragment_masses, decoy_masses, decoy_masses[0], tols_[ms_level - 1]));
     }
     job.decoy_mass = (*window_decoys)[best - 1].first;
     job.decoy_noise = (*window_decoys)[best - 1].second;
@@ -400,6 +401,12 @@ void FLASHDeconvAlgorithm::deconvolveSpectrum_(const MSExperiment& map, Spectrum
     {
       const auto q = qit->second.find(job.decoy_mass);
       if (q != qit->second.end()) job.decoy_qscore = q->second;
+    }
+    const auto q1it = native_id_window_decoy_qscores1d_.find(native_id);
+    if (q1it != native_id_window_decoy_qscores1d_.end())
+    {
+      const auto q = q1it->second.find(job.decoy_mass);
+      if (q != q1it->second.end()) job.decoy_qscore1d = q->second;
     }
   }
 
@@ -414,7 +421,7 @@ void FLASHDeconvAlgorithm::deconvolveSpectrum_(const MSExperiment& map, Spectrum
     }
     // the decoy precursor: of round 2, else as registered with the precursor (without precursor_by_fragments)
     bool has_decoy = job.window_decoys;
-    double decoy_mass = job.decoy_mass, decoy_qscore = job.decoy_qscore;
+    double decoy_mass = job.decoy_mass, decoy_qscore = job.decoy_qscore, decoy_qscore1d = job.decoy_qscore1d;
     bool decoy_noise = job.decoy_noise;
     if (! has_decoy)
     {
@@ -425,6 +432,8 @@ void FLASHDeconvAlgorithm::deconvolveSpectrum_(const MSExperiment& map, Spectrum
         decoy_mass = decoy_it->second;
         const auto qit = native_id_decoy_precursor_qscore_map_.find(native_id);
         decoy_qscore = qit != native_id_decoy_precursor_qscore_map_.end() ? qit->second : 0;
+        const auto q1it = native_id_decoy_precursor_qscore1d_map_.find(native_id);
+        decoy_qscore1d = q1it != native_id_decoy_precursor_qscore1d_map_.end() ? q1it->second : -1;
         const auto nit = native_id_decoy_precursor_noise_map_.find(native_id);
         decoy_noise = nit != native_id_decoy_precursor_noise_map_.end() && nit->second;
       }
@@ -433,6 +442,7 @@ void FLASHDeconvAlgorithm::deconvolveSpectrum_(const MSExperiment& map, Spectrum
     {
       deconvolved_spectrum.setDecoyPrecursorMass(decoy_mass);
       deconvolved_spectrum.setDecoyPrecursorQscore(decoy_qscore);
+      deconvolved_spectrum.setDecoyPrecursorQscore1D(decoy_qscore1d);
       // a noise decoy counts with the noise decoy weight, known after the q-values below
       deconvolved_spectrum.setDecoyPrecursorWeight(decoy_noise ? -1.0 : 1.0);
     }
@@ -502,6 +512,7 @@ void FLASHDeconvAlgorithm::commitSpectrum_(const MSExperiment& map, const Spectr
     native_id_decoy_precursor_mass_map_[native_id] = job.decoy_mass;
     native_id_decoy_precursor_noise_map_[native_id] = job.decoy_noise;
     native_id_decoy_precursor_qscore_map_[native_id] = job.decoy_qscore;
+    native_id_decoy_precursor_qscore1d_map_[native_id] = job.decoy_qscore1d;
   }
 }
 
@@ -1162,7 +1173,7 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
       mass_to_intensity[.0] = sum_intensity; // total intensity
       const PeakGroup* best_pg = nullptr;
       const FLASHHelperClasses::LogMzPeak* best_peak = nullptr;
-      double decoy_mass = 0, decoy_qscore = 0;
+      double decoy_mass = 0, decoy_qscore = 0, decoy_qscore1d = 0;
       bool decoy_noise = false;
       // the window bounds (the heaviest target mass and the highest charge at which a target mass has a peak in the window), and, only
       // with commit and precursor_by_fragments, the precursor candidates (the target masses in the window) and their challengers for
@@ -1172,7 +1183,7 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
       std::vector<std::pair<PeakGroup, Precursor>> window_cands;
       std::vector<std::pair<double, bool>> window_decoys;
       std::vector<double> window_decoy_snrs; // charge SNR of each window decoy (to order them, the highest first)
-      std::vector<double> window_decoy_qscores; // and its precursor score
+      std::vector<double> window_decoy_qscores, window_decoy_qscores1d; // and its precursor score (2D, 1D)
 
       for (auto& pg : *ds)
       {
@@ -1201,6 +1212,7 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
               window_decoys.emplace_back(pg.getMonoMass(), noise);
               window_decoy_snrs.push_back(snr);
               window_decoy_qscores.push_back(pg.getQscore2D());
+              window_decoy_qscores1d.push_back(pg.getQscore());
             }
             continue;
           }
@@ -1209,6 +1221,7 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
           decoy_mass = pg.getMonoMass();
           decoy_noise = noise;
           decoy_qscore = pg.getQscore2D();
+          decoy_qscore1d = pg.getQscore();
           continue;
         }
 
@@ -1275,18 +1288,22 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
         {
           native_id_window_decoys_.erase(native_id);
           native_id_window_decoy_qscores_.erase(native_id);
+          native_id_window_decoy_qscores1d_.erase(native_id);
         }
         else
         {
           std::stable_sort(order.begin(), order.end(), [&](Size a, Size b) { return window_decoy_snrs[a] > window_decoy_snrs[b]; });
           auto& sorted = native_id_window_decoys_[native_id];
           auto& qscores = native_id_window_decoy_qscores_[native_id];
+          auto& qscores1d = native_id_window_decoy_qscores1d_[native_id];
+          qscores1d.clear();
           sorted.clear();
           qscores.clear();
           for (Size k : order)
           {
             sorted.push_back(window_decoys[k]);
             qscores[window_decoys[k].first] = window_decoy_qscores[k];
+            qscores1d[window_decoys[k].first] = window_decoy_qscores1d[k];
           }
         }
       }
@@ -1295,6 +1312,7 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
         native_id_decoy_precursor_mass_map_[native_id] = decoy_mass;
         native_id_decoy_precursor_noise_map_[native_id] = decoy_noise;
         native_id_decoy_precursor_qscore_map_[native_id] = decoy_qscore;
+        native_id_decoy_precursor_qscore1d_map_[native_id] = decoy_qscore1d;
       }
       if (best_pg != nullptr)
       {
@@ -1335,6 +1353,7 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
         native_id_decoy_precursor_mass_map_.erase(native_id);
         native_id_decoy_precursor_noise_map_.erase(native_id);
         native_id_decoy_precursor_qscore_map_.erase(native_id);
+        native_id_decoy_precursor_qscore1d_map_.erase(native_id);
         scan_survey(best_index, true);
         rescued_precursors_++;
       }

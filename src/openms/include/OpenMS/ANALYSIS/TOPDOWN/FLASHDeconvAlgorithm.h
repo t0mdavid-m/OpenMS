@@ -144,8 +144,12 @@ namespace OpenMS
     std::map<String, std::vector<std::pair<double, bool>>> native_id_window_decoys_;
     /// per MSn spectrum: the precursor score (2D Qscore) of each window decoy mass, as scored when the window was scanned
     std::map<String, std::map<double, double>> native_id_window_decoy_qscores_;
+    /// and its Qscore in that survey scan alone (1D)
+    std::map<String, std::map<double, double>> native_id_window_decoy_qscores1d_;
     /// precursor score of the decoy precursor of each MSn spectrum (refined after the feature tracing, updatePrecursorQScores_)
     std::map<String, double> native_id_decoy_precursor_qscore_map_;
+    /// and its 1D Qscore
+    std::map<String, double> native_id_decoy_precursor_qscore1d_map_;
     /// per MSn native id, the decoy precursor mass (with report_FDR). With precursor_by_fragments, the decoy mass of the isolation window
     /// that beat the chosen precursor by the fragments (no entry if none did); otherwise the decoy mass of the window of the highest charge
     /// SNR
