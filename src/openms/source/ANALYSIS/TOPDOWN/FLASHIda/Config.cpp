@@ -83,6 +83,19 @@ namespace
         "got \"" + v + "\" (values are case-sensitive).");
   }
 
+  // precursor_selection.charge_selection (ADR-0059). Hard-rejected, not defaulted, per ADR-0007.
+  OpenMS::ChargeSelection parseChargeSelection(const nlohmann::json& obj)
+  {
+    const std::string v = obj.value("charge_selection", std::string("snr"));
+    if (v == "snr")       return OpenMS::ChargeSelection::Snr;
+    if (v == "qscore")    return OpenMS::ChargeSelection::Qscore;
+    if (v == "intensity") return OpenMS::ChargeSelection::Intensity;
+    if (v == "purity")    return OpenMS::ChargeSelection::Purity;
+    throw std::invalid_argument(
+        "Config: precursor_selection.charge_selection must be one of \"snr\", \"qscore\", \"intensity\", "
+        "\"purity\"; got \"" + v + "\" (values are case-sensitive).");
+  }
+
   // The authored spelling of a characterization mode, for error messages that quote the user's
   // config back at them.
   //
@@ -416,11 +429,16 @@ namespace OpenMS
         {"rt_window", "targeting", "consider_all_charges",
          "precursor_charges", "strict_inclusion", "tie_threshold",
          "rank_by", "max_precursors", "min_precursor_charge", "additional_scans", "exploration",
-         "tag_expansion", "snr_threshold", "max_charge_states", "min_charge_states"},
+         "tag_expansion", "snr_threshold", "max_charge_states", "min_charge_states",
+         "charge_selection", "reselect_charges"},
         "precursor_selection");
     targeting_.rt_window = ps.value("rt_window", 180.0);
     targeting_.consider_all_charges = ps.value("consider_all_charges", false);
     targeting_.precursor_charges = parseChargeMode(ps, "precursor_charges", "precursor_selection");
+    // ADR-0059: one ranking of a species' charges (anchor first, then the set), and whether to re-run
+    // it on a newer survey for the commands still waiting in the queue.
+    targeting_.charge_selection = parseChargeSelection(ps);
+    targeting_.reselect_charges = ps.value("reselect_charges", false);
     targeting_.strict_inclusion = ps.value("strict_inclusion", false);
     targeting_.tie_threshold = ps.value("tie_threshold", 0.1);
 
@@ -1618,6 +1636,21 @@ namespace OpenMS
           "depletion while the same collision energy depletes its siblings at other rates -- a reading of the "
           "anchor decides nothing about the rest. Set precursor_charges to \"single\" or \"separate\", or "
           "pick a different exploration metric (ADR-0044 decision 4, ADR-0048).");
+
+    // ADR-0059 decision 3. Every notch of a multiplexed scan fires into ONE fill, so what decides that
+    // scan is the combined purity of all its windows -- a quantity that is not defined. Ranking notches
+    // by their own purity would mean something else under the same name.
+    if (targeting_.charge_selection == ChargeSelection::Purity
+        && targeting_.precursor_charges == ChargeAcquisitionMode::Multiplexed)
+      throw std::invalid_argument(
+          "precursor_selection.charge_selection is \"purity\" but precursor_selection.precursor_charges is "
+          "\"multiplexed\". Every notch of a multiplexed scan shares one fill, so ranking notches by their own "
+          "isolation purity does not rank what the scan transmits. Use \"snr\", \"qscore\" or \"intensity\", or "
+          "acquire \"single\" / \"separate\" (ADR-0059).");
+    if (targeting_.reselect_charges && targeting_.precursor_charges == ChargeAcquisitionMode::Multiplexed)
+      std::cout << "[CONFIG-WARN] precursor_selection.reselect_charges is true but precursor_charges is "
+                   "\"multiplexed\"; a co-isolated set is never reselected, so the key is inert (ADR-0059)."
+                << std::endl;
 
     // Guarded on `mode` for the reason spelled out at the level-3 arm above: levels_[3].exploration
     // outlives characterization.mode == "off" (applyCharacterizationMode_ resets only `selection`),

@@ -161,6 +161,13 @@ namespace OpenMS
     /// Reads existing peak intensities only — never re-runs deconvolution. Returns 0 for signal<=0.
     static double windowSnr(const MSSpectrum& source, double lo, double hi, double signal_intensity);
 
+    /// Isolation purity (ADR-0059): the same ingredients as windowSnr, as a fraction -- the species'
+    /// signal over ALL raw intensity of @p source inside [lo, hi]. 1 when nothing else is in the
+    /// window, below 0.5 when a co-isolated neighbour carries most of it. Clamped to [0, 1] (the
+    /// signal is the deconvolved charge intensity, which need not equal the in-window raw sum).
+    /// Returns -1 when there is no signal or the window holds no peak at all.
+    static double windowPurity(const MSSpectrum& source, double lo, double hi, double signal_intensity);
+
     /// Map fragmentation method name to ion type strings for FLASHTagger/FLASHExtender.
     /// Case-insensitive. Returns {"b","y"} for HCD/CID, {"c","z"} for ETD,
     /// {"b","c","y","z"} for EThcD/ETciD, {"a","b","c","x","y","z"} for UVPD.

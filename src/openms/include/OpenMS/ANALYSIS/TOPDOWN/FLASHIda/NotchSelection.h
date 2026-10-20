@@ -9,6 +9,8 @@
 #pragma once
 
 #include <OpenMS/config.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 
@@ -16,6 +18,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace OpenMS
@@ -27,9 +30,10 @@ namespace OpenMS
   /// mz and width are MEASURED (PeakGroup::getMzRange for a precursor, the stored observation for a
   /// fragment), never derived from theory — an isolation window must match what was actually seen.
   ///
-  /// snr and intensity have distinct jobs and are not interchangeable: SNR is the ADMISSION test
-  /// ("is there signal here at all"), intensity is the RANKING ("which charges carry the ion current
-  /// worth spending a fill on"). A weak-but-clean charge passes the gate and still loses the slot.
+  /// SNR is the ADMISSION test ("is there signal here at all") and always stays one. Which of the
+  /// admitted charges rank first is authored (ChargeSelection, ADR-0059): snr, qscore, intensity or
+  /// purity. qscore is the charge's own per-charge qscore; purity is its isolation purity on the
+  /// survey the candidates were built from, -1 when no spectrum was supplied.
   struct OPENMS_DLLAPI NotchCandidate
   {
     int charge = 0;
@@ -37,7 +41,36 @@ namespace OpenMS
     double width = 0;
     double snr = 0;
     double intensity = 0;
+    double qscore = 0;
+    double purity = -1.0;
   };
+
+  /// The ranking key of @p c under @p rule. Higher ranks first.
+  inline double chargeRankKey(const NotchCandidate& c, ChargeSelection rule)
+  {
+    switch (rule)
+    {
+      case ChargeSelection::Snr:       return c.snr;
+      case ChargeSelection::Qscore:    return c.qscore;
+      case ChargeSelection::Intensity: return c.intensity;
+      case ChargeSelection::Purity:    return c.purity;
+    }
+    return c.intensity;
+  }
+
+  /// Order @p candidates by @p rule: the rule's key descending, then intensity descending, then the
+  /// lower charge -- total, so the output is reproducible when two charges tie on the key.
+  inline void rankCharges(std::vector<NotchCandidate>& candidates, ChargeSelection rule)
+  {
+    std::sort(candidates.begin(), candidates.end(),
+              [rule](const NotchCandidate& a, const NotchCandidate& b) {
+                const double ka = chargeRankKey(a, rule);
+                const double kb = chargeRankKey(b, rule);
+                if (ka != kb) return ka > kb;
+                if (a.intensity != b.intensity) return a.intensity > b.intensity;
+                return a.charge < b.charge;
+              });
+  }
 
   /// Pick the co-isolation notches for one acquisition charge set (ADR-0016).
   ///
@@ -48,27 +81,29 @@ namespace OpenMS
   ///      a charge contributing no signal still consumes part of the scan's ion budget, and under
   ///      MSX the budget is shared with equal injection time per notch, so a junk notch actively
   ///      costs the good ones,
-  ///   3. order by descending INTENSITY, so a clamp keeps the charges carrying the most ion current,
+  ///   3. order by @p rule (rankCharges), so a clamp keeps the charges the rule ranks first,
   ///   4. clamp to @p max_notches and SAY what was dropped — a silent truncation reads as "we
   ///      isolated the whole envelope" when we did not.
   ///
-  /// Ordering by intensity rather than SNR is deliberate. SNR is a purity measure: a charge sitting
-  /// in a clean part of the spectrum can out-score a far more abundant one in a crowded region, and
-  /// under a clamp that trades away most of the envelope's ion current for tidiness. What a
-  /// co-isolated fill is *for* is harvesting that current, so intensity ranks and SNR only admits.
+  /// The rule is authored for a precursor (precursor_selection.charge_selection, ADR-0059) and is
+  /// the same one that chose the anchor, so the anchor is the set's first member by construction.
+  /// MS3 passes Intensity: a co-isolated fragment fill is for harvesting ion current, and the
+  /// authored key is a precursor_selection key.
   ///
   /// The anchor is always kept — it is the stage itself and the scan's identity channel (ADR-0008) —
-  /// so the isolated set is the anchor plus the @p max_notches most intense of the rest. With an
-  /// envelope of 10 or fewer charges that is every SNR-positive charge, and the order is moot.
+  /// so the isolated set is the anchor plus the @p max_notches first-ranked of the rest. With an
+  /// envelope of 10 or fewer charges and no authored cap that is every SNR-positive charge.
   ///
   /// @param candidates every observed charge of the species, anchor included
   /// @param anchor_charge the charge the cascade stage itself isolates
   /// @param snr_threshold the same targeting().snr_threshold the selector already applies
-  /// @param max_notches MAX_NOTCHES_PER_STAGE — this stage's own budget, not shared with the other
+  /// @param max_notches this stage's own budget (at most MAX_NOTCHES_PER_STAGE)
+  /// @param rule the ranking that decides order and which charges survive the clamp
   /// @param where short label for the drop message (e.g. "MS2 z=17 m=12358.3")
   inline std::vector<NotchCandidate> selectNotches(std::vector<NotchCandidate> candidates,
                                                    int anchor_charge, double snr_threshold,
-                                                   int max_notches, const std::string& where = "")
+                                                   int max_notches, ChargeSelection rule,
+                                                   const std::string& where = "")
   {
     std::vector<NotchCandidate> out;
     if (max_notches <= 0) return out;
@@ -81,21 +116,15 @@ namespace OpenMS
       out.push_back(c);
     }
 
-    // Descending intensity, charge as the tiebreak so the order is total and the output reproducible
-    // (two charges of one envelope can carry byte-equal intensities).
-    std::sort(out.begin(), out.end(),
-              [](const NotchCandidate& a, const NotchCandidate& b) {
-                if (a.intensity != b.intensity) return a.intensity > b.intensity;
-                return a.charge < b.charge;
-              });
+    rankCharges(out, rule);
 
     if (static_cast<int>(out.size()) > max_notches)
     {
       const int dropped = static_cast<int>(out.size()) - max_notches;
       out.resize(max_notches);
       std::cout << "[NOTCH-CLAMP] " << where << " kept=" << max_notches << " dropped=" << dropped
-                << " (least intense charge states; cap is MAX_NOTCHES_PER_STAGE, the instrument's"
-                   " 10 MSX windows per fragmentation stage minus the anchor)" << std::endl;
+                << " (last-ranked charge states; cap is max_charge_states - 1, at most MAX_NOTCHES_PER_STAGE,"
+                   " the instrument's 10 MSX windows per fragmentation stage minus the anchor)" << std::endl;
     }
     return out;
   }
@@ -138,16 +167,32 @@ namespace OpenMS
   ///
   /// @p margin is optimal_window_margin_ above, applied symmetrically as it is for the anchor stage,
   /// so a notch's width is computed the same way the cascade stage's is.
-  inline std::vector<NotchCandidate> peakGroupNotchCandidates(const PeakGroup& pg, double margin)
+  ///
+  /// @p raw is the survey's raw spectrum. When given, each candidate's isolation purity is measured
+  /// over exactly the window it would be commanded with (FragmentAnalysis::windowPurity); without it
+  /// purity stays -1, which only the Purity rule reads. qscore is the charge's own per-charge qscore,
+  /// falling back to the PeakGroup's qscore for one that never went through updateQscore.
+  inline std::vector<NotchCandidate> peakGroupNotchCandidates(const PeakGroup& pg, double margin,
+                                                              const MSSpectrum* raw = nullptr)
   {
     std::vector<NotchCandidate> cands;
+    const std::unordered_map<int, float> qscores = pg.getAllQscores();
     auto [min_c, max_c] = pg.getAbsChargeRange();
     for (int c = min_c; c <= max_c; ++c)
     {
       auto [lo, hi] = pg.getMzRange(c);
       if (hi <= lo) continue;   // charge not present in this envelope
-      cands.push_back({c, (lo + hi) / 2.0, (hi + margin) - (lo - margin), pg.getChargeSNR(c),
-                       static_cast<double>(pg.getChargeIntensity(c))});
+      NotchCandidate n;
+      n.charge = c;
+      n.mz = (lo + hi) / 2.0;
+      n.width = (hi + margin) - (lo - margin);
+      n.snr = pg.getChargeSNR(c);
+      n.intensity = static_cast<double>(pg.getChargeIntensity(c));
+      const auto qs = qscores.find(c);
+      n.qscore = qs != qscores.end() ? static_cast<double>(qs->second) : pg.getQscore();
+      if (raw != nullptr)
+        n.purity = FragmentAnalysis::windowPurity(*raw, n.mz - n.width / 2.0, n.mz + n.width / 2.0, n.intensity);
+      cands.push_back(n);
     }
     return cands;
   }

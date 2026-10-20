@@ -1376,6 +1376,19 @@ namespace
     return signal_intensity / denom;
   }
 
+  double FragmentAnalysis::windowPurity(const MSSpectrum& source, double lo, double hi, double signal_intensity)
+  {
+    if (signal_intensity <= 0.0 || hi <= lo) return -1.0;
+    double total = 0.0;
+    for (const auto& peak : source)
+    {
+      const double mz = peak.getMZ();
+      if (mz >= lo && mz <= hi) total += peak.getIntensity();
+    }
+    if (total <= 0.0) return -1.0;
+    return std::min(1.0, signal_intensity / total);
+  }
+
   std::string FragmentAnalysis::toProForma(const std::string& sequence,
                                            const std::vector<PTMSite>& ptm_sites)
   {

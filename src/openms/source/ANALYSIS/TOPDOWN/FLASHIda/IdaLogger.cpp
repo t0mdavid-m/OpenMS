@@ -585,7 +585,7 @@ namespace OpenMS
     // intensities do -- and for a mass that was selected it equals that command's scan_commands.qscore.
     //
     // It is written unconditionally, on every MS level, and deliberately is NOT the config-dependent
-    // selection score (consider_all_charges swaps in getBestQScore() at the selection site). One
+    // selection score (charge_selection decides which charge's qscore that is, ADR-0059). One
     // definition everywhere means a reader can compare the column across rows, runs and configs without
     // first knowing which selection knobs were set. The one caveat is provenance, not definition:
     // exploration-variant rows are deconvolved by Exploration's SECOND Deconvolution instance, built

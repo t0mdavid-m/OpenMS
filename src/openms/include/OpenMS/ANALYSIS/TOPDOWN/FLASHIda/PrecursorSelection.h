@@ -163,15 +163,14 @@ namespace OpenMS
     /// Access trigger IDs
     const std::vector<int>& triggerIds() const { return trigger_ids_; }
 
-    /// Per trigger, the charge states that acquisition is allowed to isolate -- the ACQUISITION
-    /// CHARGE SET already resolved here, anchor included. EMPTY means unrestricted.
+    /// Per trigger, the ACQUISITION CHARGE SET resolved here, anchor first: carried for every row
+    /// under Multiplexed and for authored rows otherwise. EMPTY means unrestricted.
     ///
-    /// It exists because ScanCommandQueue::buildMS2 walks the PeakGroup a SECOND time to write the
-    /// isolation geometry, and NotchSelection.h requires the two walks to agree by construction.
-    /// Handing it this list rather than letting it re-derive one is what keeps "recorded as
-    /// acquired" and "actually isolated" the same set once an authored charge set is in play
-    /// (ADR-0028); they diverged for exactly one CI run when only this side was filtered.
-    const std::vector<std::vector<int>>& triggerAuthoredCharges() const { return trigger_authored_charges_; }
+    /// ScanCommandQueue::buildMS2 writes exactly this set as the notches, so "recorded as acquired"
+    /// and "actually isolated" are one set by construction -- including the max_charge_states cap
+    /// and the charge_selection order, which a re-derivation there lost (ADR-0059; the same
+    /// divergence ADR-0028 hit for one CI run when only this side was filtered).
+    const std::vector<std::vector<int>>& triggerAcquisitionSets() const { return trigger_acquisition_sets_; }
 
     /**
      * @brief Process stored MS2 deconvolution for protein family detection and inclusion list expansion
@@ -211,7 +210,7 @@ namespace OpenMS
     std::vector<double> trigger_left_isolation_mzs_;
     std::vector<double> trigger_right_isolation_mzs_;
     std::vector<int> trigger_ids_;
-    std::vector<std::vector<int>> trigger_authored_charges_;
+    std::vector<std::vector<int>> trigger_acquisition_sets_;
 
     /**
      * @brief ACQUISITION MEMORY: everything this class remembers ACROSS surveys.

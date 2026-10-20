@@ -283,8 +283,8 @@ namespace OpenMS
     trigger_right_isolation_mzs_.reserve(mass_count);
     trigger_ids_.clear();
     trigger_ids_.reserve(mass_count);
-    trigger_authored_charges_.clear();
-    trigger_authored_charges_.reserve(mass_count);
+    trigger_acquisition_sets_.clear();
+    trigger_acquisition_sets_.reserve(mass_count);
     std::vector<int>* charges = nullptr;
 
     selected_peak_groups_.reserve(mass_count);
@@ -465,7 +465,8 @@ namespace OpenMS
           anchor_ctx.spent_charges = spent_charges;
           anchor_ctx.seen = seen;
           anchor_ctx.min_charge = config_.level(ms_level).min_charge;
-          anchor_ctx.consider_all_charges = config_.targeting().consider_all_charges;
+          anchor_ctx.charge_selection = config_.targeting().charge_selection;
+          anchor_ctx.raw = &deconv_.deconvolvedMS1().getOriginalSpectrum();
 
           const AnchorChoice anchor = pickAnchor(pg, anchor_ctx);
           if (anchor.reason != AdmissionReason::Admitted) { continue; }
@@ -683,6 +684,8 @@ namespace OpenMS
                     ? std::min(config_.targeting().max_charge_states - 1, MAX_NOTCHES_PER_STAGE)
                     : MAX_NOTCHES_PER_STAGE;
             adm_ctx.min_charge_states = config_.targeting().min_charge_states;
+            adm_ctx.charge_selection = config_.targeting().charge_selection;
+            adm_ctx.raw = &deconv_.deconvolvedMS1().getOriginalSpectrum();
             adm_ctx.where = "MS2 z=" + std::to_string(charge);
 
             const AdmissionVerdict verdict = admitCandidate(pg, charge, score, adm_ctx);
@@ -873,20 +876,16 @@ namespace OpenMS
               memory_.id_mz_map_[memory_.window_id_] = (int)round(e_center_mz);
               memory_.id_qscore_map_[memory_.window_id_] = score;
               memory_.id_charge_map_[memory_.window_id_] = emit_charge;
-              // The set the geometry writer must not exceed, carried for AUTHORED triggers only.
-              //
-              // It matters for those because a SIBLING's set is REDUCED by what the species already
-              // isolated this survey (ADR-0036), and buildMS2 re-derives its notches from the
-              // PeakGroup's own envelope. Left empty, the filter would be skipped and the sibling
-              // would re-isolate charges the first scan already took -- the wire disagreeing with
-              // every record of itself, which is the failure this field exists to prevent.
-              //
-              // Deliberately NOT carried for an unrestricted row. Such a row has no sibling to
-              // reduce against (its intended set is empty), so the value would always equal what
-              // buildMS2 derives anyway -- but pushing it flips ScanCommandQueue's
-              // `!allowed_charges->empty()` branch and runs a filter that has never run for one.
-              // "It should trim nothing" is an argument, not a gate; an empty vector is the gate.
-              trigger_authored_charges_.push_back(has_authored ? acquired_charges : std::vector<int>());
+              // The set the geometry writer isolates. Under Multiplexed it is carried for EVERY row:
+              // buildMS2 writes exactly these notches, so the cap (max_charge_states), the ranking
+              // (charge_selection) and a sibling's reduction (ADR-0036) reach the wire as admission
+              // recorded them. Before ADR-0059 it was carried for authored rows only and buildMS2
+              // re-derived the rest with its own cap of nine, so max_charge_states never reached the
+              // instrument for an unrestricted row. Outside Multiplexed it stays the authored set
+              // (empty for an unrestricted row), which is what the exploration path filters on.
+              const bool multiplexed =
+                  config_.targeting().precursor_charges == ChargeAcquisitionMode::Multiplexed;
+              trigger_acquisition_sets_.push_back((has_authored || multiplexed) ? acquired_charges : std::vector<int>());
 
               trigger_ids_.push_back(memory_.window_id_);
               memory_.window_id_++;

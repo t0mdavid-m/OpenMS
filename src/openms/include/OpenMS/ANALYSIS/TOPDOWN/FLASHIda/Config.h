@@ -95,6 +95,23 @@ namespace OpenMS
     Multiplexed   ///< ONE scan co-isolating the whole set as notches; one Precursor, one model.
   };
 
+  /// The ONE ranking of a selected species' charge states (ADR-0059), from
+  /// precursor_selection.charge_selection. Its first member is the ANCHOR (the window a single-charge
+  /// scan isolates) and its first max_charge_states members are the acquisition charge set. It only
+  /// orders: the SNR gate still decides which charges are eligible at all.
+  ///
+  /// Snr and Qscore resolve the anchor through PeakGroup::getRepAbsCharge / getBestQScoreCharge, the
+  /// accessors used before ADR-0059, so a single-charge anchor is unchanged by the key's introduction.
+  /// Purity is the species' share of the raw MS1 signal inside the window that would be commanded
+  /// (windowPurity); it is refused under Multiplexed, whose notches share one fill.
+  enum class ChargeSelection
+  {
+    Snr = 0,     ///< highest charge SNR. Default.
+    Qscore,      ///< highest per-charge qscore
+    Intensity,   ///< most intense charge -- the set's ranking before ADR-0059
+    Purity       ///< highest isolation purity
+  };
+
   /// Exploration metric: what to optimize during CE sweep (MS2+ only)
   enum class ExplorationMetric
   {
@@ -302,7 +319,14 @@ namespace OpenMS
     bool strict_inclusion = false;
     double tie_threshold = 0.1;
     double rt_window = 180.0;          ///< retention-time window, SECONDS (ADR-0051)
+    /// Orders SPECIES only (Deconvolution.cpp's sortByLevelMetric). Before ADR-0059 it also chose the
+    /// anchor charge (best qscore); that is charge_selection's job now.
     bool consider_all_charges = false;
+    /// precursor_selection.charge_selection -- ranks a species' charges (ADR-0059).
+    ChargeSelection charge_selection = ChargeSelection::Snr;
+    /// precursor_selection.reselect_charges -- re-run charge_selection on each newer survey for the
+    /// commands still waiting in the queue (ADR-0059). Inert under Multiplexed.
+    bool reselect_charges = false;
     /// How many charge states of a selected precursor one MS2 acquires -- from
     /// precursor_selection.precursor_charges. Decides the isolation GEOMETRY of a single scan
     /// (ADR-0016), and since ADR-0021 it is the only thing that does. Exclusion is mass-keyed.

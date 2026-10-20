@@ -781,7 +781,7 @@ namespace OpenMS
           cands.push_back({kv.second.frag_charge, kv.second.frag_mz, kv.second.iso_width,
                            kv.second.stage1_scores.charge_snr, kv.second.intensity});
         extra_charges = selectNotches(cands, f->best_ms2->frag_charge, snr_threshold,
-                                      MAX_NOTCHES_PER_STAGE,
+                                      MAX_NOTCHES_PER_STAGE, ChargeSelection::Intensity,  // MS3 keeps intensity (ADR-0059)
                                       "MS3 " + f->ion_type + std::to_string(f->ion_index));
       }
 
@@ -989,6 +989,7 @@ namespace OpenMS
       for (const ChargeRecord& cr : pr.by_charge)
         cands.push_back({cr.charge, cr.mz, cr.iso_width, cr.stage1_scores.charge_snr, cr.intensity});
       extra_charges = selectNotches(cands, pr.charge, snr_threshold, MAX_NOTCHES_PER_STAGE,
+                                    ChargeSelection::Intensity,  // MS3 keeps intensity (ADR-0059)
                                     std::string("MS3 ") + mode_name + " m=" + std::to_string(pr.mono_mass));
     }
     // Multiplexed puts that set on ONE command as notches; separate spends one command per member.

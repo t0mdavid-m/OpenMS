@@ -78,16 +78,17 @@ namespace OpenMS
 
     /// Build MS2 ScanCommand from a PeakGroup + ScanConfig (unified factory).
     /// parent_scan_id is MANDATORY (0 = no parent / root); stamped onto the command at creation.
-    /// @p allowed_charges, when non-null and non-empty, is the ACQUISITION CHARGE SET the caller
-    /// already resolved (PrecursorSelection::triggerAuthoredCharges). Co-isolation is confined to
-    /// it. Defaulted, so callers that never restrict compile and behave exactly as before.
+    /// @p acquisition_set, when non-null and non-empty, is the ACQUISITION CHARGE SET admission
+    /// recorded (PrecursorSelection::triggerAcquisitionSets): under Multiplexed exactly its members
+    /// become the notches, in its order. Without one the notches are selected here from config with
+    /// the same rule and cap (ADR-0059).
     /// @p marker is the scan_description type character (index 3): 'R' for an ordinary
     /// identification MS2, 'Q' for the quantification scan (ADR-0038). Defaulted to 'R' so every
     /// non-quant caller is unchanged. It is a parameter rather than something derived from
     /// @p scan_config because a scan config carries instrument parameters, never an acquisition
     /// role (ADR-0009) -- two roster entries can be byte-identical configs in different roles.
     ScanCommand buildMS2(const PeakGroup& pg, int charge, const ScanConfig& scan_config, int priority, int parent_scan_id,
-                         const std::vector<int>* allowed_charges = nullptr, char marker = 'R');
+                         const std::vector<int>* acquisition_set = nullptr, char marker = 'R');
 
     /// Build MS3 ScanCommand from MS2 context + fragment target + MS3 config for CE/activation.
     /// parent_scan_id is MANDATORY (the immediate parent's tracking id); stamped at creation.

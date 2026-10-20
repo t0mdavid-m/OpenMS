@@ -300,7 +300,7 @@ namespace OpenMS
   }
 
   ScanCommand ScanCommandQueue::buildMS2(const PeakGroup& pg, int charge, const ScanConfig& scan_config, int priority, int parent_scan_id,
-                                         const std::vector<int>* allowed_charges, char marker)
+                                         const std::vector<int>* acquisition_set, char marker)
   {
     std::lock_guard<std::mutex> lock(queue_mutex_);
     ScanCommand cmd{};
@@ -362,33 +362,41 @@ namespace OpenMS
 
     // Co-isolation notches: the other charge states of THIS SAME PeakGroup, when the acquisition mode
     // asks for them (ADR-0016). Geometry comes from getMzRange(z) per charge -- the same measured
-    // window the anchor uses, never derived from theory -- the SNR gate is the one the selector
-    // already applies, and the cap is this stage's own 10-plex budget.
+    // window the anchor uses, never derived from theory.
+    //
+    // WHICH charges is the caller's decision, not this function's: @p acquisition_set is the set
+    // admission recorded (anchor first, then the rest in charge_selection order, already gated,
+    // authored-filtered, sibling-reduced and capped at max_charge_states). This walk is the one that
+    // reaches the instrument, so it writes exactly that set. It used to re-run selectNotches here with
+    // MAX_NOTCHES_PER_STAGE, so max_charge_states never reached the wire for an unrestricted row
+    // (ADR-0059: the quant_multiplexed golden, cap 3, isolated ten charges) -- the wire disagreeing
+    // with every record of itself, as an unfiltered authored set once did (acquired=16,13,10 logged
+    // while the command carried all ten windows).
+    //
+    // With no set supplied (a direct caller with no admission behind it) the same policy is applied
+    // here from config, so there is still exactly one ranking and one cap.
     if (config_.targeting().precursor_charges == ChargeAcquisitionMode::Multiplexed)
     {
       std::vector<NotchCandidate> notch_candidates = peakGroupNotchCandidates(pg, optimal_window_margin_);
-
-      // An AUTHORED CHARGE SET (ADR-0028) confines co-isolation to the charges the caller resolved.
-      // THIS walk is the one that reaches the instrument, so leaving it unfiltered is not a
-      // bookkeeping discrepancy: it is the wire disagreeing with every record of itself, and the
-      // engine reporting a restriction it never applied. That shipped for one CI run -- the
-      // selector logged acquired=16,13,10 while the command carried all ten windows.
-      if (allowed_charges != nullptr && !allowed_charges->empty())
+      std::vector<NotchCandidate> notches;
+      if (acquisition_set != nullptr && !acquisition_set->empty())
       {
-        notch_candidates.erase(
-            std::remove_if(notch_candidates.begin(), notch_candidates.end(),
-                           [allowed_charges](const NotchCandidate& n) {
-                             return std::find(allowed_charges->begin(), allowed_charges->end(), n.charge)
-                                    == allowed_charges->end();
-                           }),
-            notch_candidates.end());
+        for (int c : *acquisition_set)
+        {
+          if (c == charge) continue;   // the anchor is the stage itself
+          for (const NotchCandidate& n : notch_candidates)
+            if (n.charge == c) { notches.push_back(n); break; }
+        }
       }
-
-      writeNotchesForStage(cmd, 0,
-          selectNotches(notch_candidates,
-                        charge, config_.targeting().snr_threshold,
-                        MAX_NOTCHES_PER_STAGE,
-                        "MS2 z=" + std::to_string(charge)));
+      else
+      {
+        const int max_charge_states = config_.targeting().max_charge_states;
+        const int max_notches = max_charge_states > 0 ? std::min(max_charge_states - 1, MAX_NOTCHES_PER_STAGE)
+                                                      : MAX_NOTCHES_PER_STAGE;
+        notches = selectNotches(notch_candidates, charge, config_.targeting().snr_threshold, max_notches,
+                                config_.targeting().charge_selection, "MS2 z=" + std::to_string(charge));
+      }
+      writeNotchesForStage(cmd, 0, notches);
     }
 
     // Scan description: {3-char ID}R{mass_kDa}k@{charge}  (adaptive-precision mass token)

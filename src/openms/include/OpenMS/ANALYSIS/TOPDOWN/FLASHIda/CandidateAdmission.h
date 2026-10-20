@@ -132,7 +132,11 @@ namespace OpenMS
     /// (ADR-0036, amended 2026-08-28). SNR likewise only ever gated the notches, never the named
     /// set: under an authored row SNR ORDERS the anchor candidates and does not admit them.
     int    min_charge = 0;           ///< the level's charge floor; 0 = no floor
-    bool consider_all_charges = false;  ///< rank across the envelope rather than the representative charge
+    /// The one ranking of the species' charges (ADR-0059); its first member is the anchor.
+    ChargeSelection charge_selection = ChargeSelection::Snr;
+    /// The survey's raw spectrum, which isolation purity is measured on. nullptr = no purity (-1),
+    /// which only the Purity rule reads.
+    const MSSpectrum* raw = nullptr;
   };
 
   /// Everything the admission decision needs, past the anchor.
@@ -176,6 +180,8 @@ namespace OpenMS
     double tqscore_threshold = 0.0;
     int    max_notches = MAX_NOTCHES_PER_STAGE;
     int    min_charge_states = 1;    ///< floor on the ACQUIRED set size; 1 = no floor. Siblings exempt.
+    ChargeSelection charge_selection = ChargeSelection::Snr;  ///< ranks the set; same rule as the anchor
+    const MSSpectrum* raw = nullptr; ///< the survey's raw spectrum, for isolation purity
     std::string where;               ///< short label for selectNotches' clamp message
   };
 
@@ -281,12 +287,14 @@ namespace OpenMS
   /// Pick the anchor charge of one candidate.
   ///
   /// Under an AUTHORED charge set the anchor is drawn from the SET rather than from the envelope, so
-  /// it has to be resolved before anything else looks at the PeakGroup. SNR ORDERS the named charges
-  /// here; it does not gate them — a matched target's anchor is exempt from the SNR threshold, which
-  /// is most of why one authors a target, and the notch side keeps the gate.
+  /// it has to be resolved before anything else looks at the PeakGroup. The rule ORDERS the named
+  /// charges here; it does not gate them — a matched target's anchor is exempt from the SNR
+  /// threshold, which is most of why one authors a target, and the notch side keeps the gate.
   ///
-  /// With no authored set the anchor is the envelope's own: the best-qscore charge under
-  /// `consider_all_charges`, otherwise the representative charge.
+  /// With no authored set the anchor is the envelope's own, chosen by `charge_selection` (ADR-0059):
+  /// Snr is the representative charge (PeakGroup's max-SNR charge) and Qscore the best-qscore charge,
+  /// exactly the two accessors used before the key existed; Intensity and Purity take the first of
+  /// rankCharges over the resolved charges at or above the floor.
   inline AnchorChoice pickAnchor(const PeakGroup& pg, const AnchorContext& ctx)
   {
     AnchorChoice out;
@@ -294,6 +302,8 @@ namespace OpenMS
     if (!ctx.authored.empty())
     {
       int   charge = -1;
+      std::vector<NotchCandidate> named;
+      const std::vector<NotchCandidate> all = peakGroupNotchCandidates(pg, optimal_window_margin_, ctx.raw);
       float best_snr = -1.0f;
       for (int c : ctx.authored)
       {
@@ -302,8 +312,16 @@ namespace OpenMS
         auto [lo, hi] = pg.getMzRange(c);
         if (hi <= lo) continue;  // never resolved -- there is no MEASURED window to isolate
         if (CandidateAdmissionDetail::contains(ctx.spent_charges, c)) continue;  // already spent
+        // Snr keeps the pre-ADR-0059 loop exactly: strictly greater, so the first named charge wins a tie.
         const float snr = pg.getChargeSNR(c);
         if (snr > best_snr) { best_snr = snr; charge = c; }
+        for (const NotchCandidate& n : all)
+          if (n.charge == c) named.push_back(n);
+      }
+      if (ctx.charge_selection != ChargeSelection::Snr && !named.empty())
+      {
+        rankCharges(named, ctx.charge_selection);
+        charge = named.front().charge;
       }
       // Every named charge spent, absent, or below the floor: the species is finished. There is
       // deliberately no fallback to an unnamed charge -- that would be the set ADDING.
@@ -336,15 +354,29 @@ namespace OpenMS
       return out;
     }
 
-    if (ctx.consider_all_charges)
+    switch (ctx.charge_selection)
     {
-      out.charge = pg.getBestQScoreCharge();
-      out.score  = pg.getBestQScore();
-    }
-    else
-    {
-      out.charge = pg.getRepAbsCharge();
-      out.score  = pg.getQscore();
+      case ChargeSelection::Snr:
+        out.charge = pg.getRepAbsCharge();
+        out.score  = pg.getQscore();
+        break;
+      case ChargeSelection::Qscore:
+        out.charge = pg.getBestQScoreCharge();
+        out.score  = pg.getBestQScore();
+        break;
+      case ChargeSelection::Intensity:
+      case ChargeSelection::Purity:
+      {
+        std::vector<NotchCandidate> cands = peakGroupNotchCandidates(pg, optimal_window_margin_, ctx.raw);
+        cands.erase(std::remove_if(cands.begin(), cands.end(),
+                                   [&ctx](const NotchCandidate& n) { return ctx.min_charge > 0 && n.charge < ctx.min_charge; }),
+                    cands.end());
+        if (cands.empty()) { out.reason = AdmissionReason::NoAnchorResolved; return out; }
+        rankCharges(cands, ctx.charge_selection);
+        out.charge = cands.front().charge;
+        out.score  = cands.front().qscore;   // the anchor's OWN per-charge qscore
+        break;
+      }
     }
     out.reason = AdmissionReason::Admitted;
     return out;
@@ -367,7 +399,7 @@ namespace OpenMS
     std::vector<int> out {anchor_charge};
     if (!ctx.fan_out) return out;
 
-    std::vector<NotchCandidate> notch_candidates = peakGroupNotchCandidates(pg, optimal_window_margin_);
+    std::vector<NotchCandidate> notch_candidates = peakGroupNotchCandidates(pg, optimal_window_margin_, ctx.raw);
     if (ctx.has_authored)
     {
       notch_candidates.erase(
@@ -380,7 +412,8 @@ namespace OpenMS
           notch_candidates.end());
     }
     for (const NotchCandidate& n :
-         selectNotches(notch_candidates, anchor_charge, ctx.snr_threshold, ctx.max_notches, ctx.where))
+         selectNotches(notch_candidates, anchor_charge, ctx.snr_threshold, ctx.max_notches,
+                       ctx.charge_selection, ctx.where))
       out.push_back(n.charge);
 
     // A SIBLING isolates only what the species has not already isolated this survey (ADR-0036), so
