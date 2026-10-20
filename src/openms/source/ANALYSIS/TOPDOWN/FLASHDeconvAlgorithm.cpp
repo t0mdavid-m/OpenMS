@@ -399,6 +399,7 @@ void FLASHDeconvAlgorithm::runSpectralDeconvolution_(MSExperiment& map, std::vec
         decoy_precursors_++;
         native_id_decoy_precursor_mass_map_[native_id] = (*window_decoys)[best - 1].first;
         native_id_decoy_precursor_noise_map_[native_id] = (*window_decoys)[best - 1].second;
+        native_id_decoy_precursor_qscore_map_[native_id] = native_id_window_decoy_qscores_[native_id][(*window_decoys)[best - 1].first];
       }
 
       // add precursor information
@@ -409,6 +410,7 @@ void FLASHDeconvAlgorithm::runSpectralDeconvolution_(MSExperiment& map, std::vec
         if (decoy_it != native_id_decoy_precursor_mass_map_.end())
         {
           deconvolved_spectrum.setDecoyPrecursorMass(decoy_it->second);
+          deconvolved_spectrum.setDecoyPrecursorQscore(native_id_decoy_precursor_qscore_map_[native_id]);
           // a noise decoy counts with the noise decoy weight, known after the q-values below
           deconvolved_spectrum.setDecoyPrecursorWeight(native_id_decoy_precursor_noise_map_[native_id] ? -1.0 : 1.0);
         }
@@ -888,7 +890,7 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
       mass_to_intensity[.0] = sum_intensity; // total intensity
       const PeakGroup* best_pg = nullptr;
       const FLASHHelperClasses::LogMzPeak* best_peak = nullptr;
-      double decoy_mass = 0;
+      double decoy_mass = 0, decoy_qscore = 0;
       bool decoy_noise = false;
       // the window bounds (the heaviest target mass and the highest charge at which a target mass has a peak in the window), and, only
       // with commit and precursor_by_fragments, the precursor candidates (the target masses in the window) and their challengers for
@@ -898,6 +900,7 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
       std::vector<std::pair<PeakGroup, Precursor>> window_cands;
       std::vector<std::pair<double, bool>> window_decoys;
       std::vector<double> window_decoy_snrs; // charge SNR of each window decoy (to order them, the highest first)
+      std::vector<double> window_decoy_qscores; // and its precursor score
 
       for (auto& pg : *ds)
       {
@@ -925,6 +928,7 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
             {
               window_decoys.emplace_back(pg.getMonoMass(), noise);
               window_decoy_snrs.push_back(snr);
+              window_decoy_qscores.push_back(pg.getQscore2D());
             }
             continue;
           }
@@ -932,6 +936,7 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
           max_decoy_snr = snr;
           decoy_mass = pg.getMonoMass();
           decoy_noise = noise;
+          decoy_qscore = pg.getQscore2D();
           continue;
         }
 
@@ -994,22 +999,49 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
       if (! commit) return best_pg == nullptr ? -1.0 : std::max(max_snr, 0.0);
       if (precursor_by_fragments_)
       {
-        // the decoy precursor is decided by the fragments (runSpectralDeconvolution_)
-        if (window_decoys.empty()) { native_id_window_decoys_.erase(native_id); }
+        // the decoy precursor is decided by the fragments (runSpectralDeconvolution_). A decoy mass within three isotopes of a target mass
+        // of the window is that mass with another monoisotopic peak, not a wrong mass: as a decoy precursor it took the fragments of the
+        // right proteoform (FLASHExtender corrects isotope errors back), so most decoys that won were such siblings. It is no decoy here.
+        std::vector<Size> order;
+        for (Size k = 0; k < window_decoys.size(); k++)
+        {
+          bool sibling = false;
+          for (const auto& [m, j] : mass_to_intensity)
+          {
+            if (m <= 0) continue;
+            const double max_diff = m * tols_[0] * 2e-6;
+            for (int iso = -3; iso <= 3 && ! sibling; iso++)
+            {
+              sibling = std::abs(window_decoys[k].first - m - iso * Constants::ISOTOPE_MASSDIFF_55K_U) <= max_diff;
+            }
+            if (sibling) break;
+          }
+          if (! sibling) order.push_back(k);
+        }
+        if (order.empty())
+        {
+          native_id_window_decoys_.erase(native_id);
+          native_id_window_decoy_qscores_.erase(native_id);
+        }
         else
         {
-          std::vector<Size> order(window_decoys.size());
-          std::iota(order.begin(), order.end(), 0);
           std::stable_sort(order.begin(), order.end(), [&](Size a, Size b) { return window_decoy_snrs[a] > window_decoy_snrs[b]; });
           auto& sorted = native_id_window_decoys_[native_id];
+          auto& qscores = native_id_window_decoy_qscores_[native_id];
           sorted.clear();
-          for (Size k : order) sorted.push_back(window_decoys[k]);
+          qscores.clear();
+          for (Size k : order)
+          {
+            sorted.push_back(window_decoys[k]);
+            qscores[window_decoys[k].first] = window_decoy_qscores[k];
+          }
         }
       }
       else if (max_decoy_snr >= 0)
       {
         native_id_decoy_precursor_mass_map_[native_id] = decoy_mass;
         native_id_decoy_precursor_noise_map_[native_id] = decoy_noise;
+        native_id_decoy_precursor_qscore_map_[native_id] = decoy_qscore;
       }
       if (best_pg != nullptr)
       {
@@ -1049,6 +1081,7 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
       {
         native_id_decoy_precursor_mass_map_.erase(native_id);
         native_id_decoy_precursor_noise_map_.erase(native_id);
+        native_id_decoy_precursor_qscore_map_.erase(native_id);
         scan_survey(best_index, true);
         rescued_precursors_++;
       }
@@ -1101,6 +1134,19 @@ void FLASHDeconvAlgorithm::updatePrecursorQScores_(std::vector<DeconvolvedSpectr
     }
     else { precursor_pg.setFeatureIndex(0); }
     dspec.setPrecursorPeakGroup(precursor_pg);
+    // the decoy precursor comes from the same survey spectrum: its precursor score is the 2D Qscore of that decoy mass there, the score
+    // FLASHDeconv compares its target and decoy masses with (Qvalue), so that the decoy spectrum competes with the spectrum on the precursor
+    if (dspec.getDecoyPrecursorMass() > 0)
+    {
+      // (within 1 ppm; when it is not found, the score it had when the window was scanned stays)
+      double traced = -1;
+      for (const auto& pg : fullscan)
+      {
+        if (pg.getTargetDecoyType() == PeakGroup::target || std::abs(pg.getMonoMass() - dspec.getDecoyPrecursorMass()) > dspec.getDecoyPrecursorMass() * 1e-6) continue;
+        traced = std::max(traced, pg.getQscore2D());
+      }
+      if (traced >= 0) dspec.setDecoyPrecursorQscore(traced);
+    }
   }
 }
 
