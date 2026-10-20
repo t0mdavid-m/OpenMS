@@ -168,6 +168,17 @@ protected:
                        "without false calls (prototype). The chimeric columns are written only with this option.", false);
     setMinInt_("chimeric_rounds", 0);
     setMaxInt_("chimeric_rounds", 2);
+    registerFlag_("native",
+                  "Native and targeted top-down (one or a few spectra, often several proteins per spectrum): the candidate proteins of each "
+                  "source (sequence tags; sliding ladders, read from any start or to any end of a protein, instead of terminal ladders; precursor "
+                  "ladders) are characterized when their candidate score exceeds that of the best "
+                  "decoy candidate of the same source in the same spectrum by -native_margin, and every such candidate's PrSM is reported, also "
+                  "without a determined mass, one per protein. Gapped tags are not used and -only_single_hit is ignored. Needs decoys in the "
+                  "database (DECOY prefix).");
+    registerDoubleOption_("native_margin", "<-log10>", 2.0,
+                          "With -native: the margin (-log10 of the chance probability) by which a candidate's score must exceed that of the best "
+                          "decoy candidate of its source in its spectrum.", false, true);
+    setMinFloat_("native_margin", 0.0);
 
     registerSubsection_("tag", "Tag algorithm parameters");
     registerSubsection_("ex", "Extension algorithm parameters");

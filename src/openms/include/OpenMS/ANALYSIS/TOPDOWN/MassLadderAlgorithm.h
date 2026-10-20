@@ -27,6 +27,8 @@ sequence tag. Mass ladders are a candidate source of their own, next to sequence
 - Precursor-anchored ladders: the windows (stretches) of the proteins whose unmodified mass equals the precursor mass, scored by the
   chance probability of the masses on their prefix ladder (read from the window start) and their suffix ladder (read from the window
   end).
+- Sliding ladders: masses read from any start of a protein (prefix ion types) or to any end (suffix ion types), without a precursor
+  mass; a protein is scored by the chance probability of its best ladder, corrected for the starts or ends tested.
 
 Only the standard residues (ACDEFGHIKLMNPQRSTVWYUO) make up a ladder: a terminal ladder ends at the first other residue, and no window
 crosses one. buildIndex builds the database side once, from the protein sequences and the run's ion types; the searches of a spectrum
@@ -60,7 +62,8 @@ public:
     Size protein = 0;            ///< index of the protein in the sequences given to buildIndex
     int rank = 0;                ///< rank among the best candidates of the spectrum (1-based); a ranked protein without a ladder is left out, its rank unused
     double score = 0;            ///< terminal ladders: -log10 P of the better side, corrected for its number of shifts; precursor ladders:
-                                 ///< -log10 P of the window minus log10 of the number of windows that fit the precursor mass
+                                 ///< -log10 P of the window minus log10 of the number of windows that fit the precursor mass; sliding
+                                 ///< ladders: -log10 P of the best ladder minus log10 of the anchors tested of its class (termini, others)
     std::vector<Ladder> ladders; ///< the prefix side first, then the suffix side (each side at most once)
     int window_start = -1;       ///< precursor ladders: the window is residues window_start..window_end-1 (0-based); -1 for terminal ladders
     int window_end = -1;
@@ -121,6 +124,19 @@ public:
   */
   void searchPrecursorLadders(const std::vector<double>& masses, const std::vector<double>& precursor_masses, double fragment_tol_ppm,
                               double precursor_tol_ppm, Size top_n, std::vector<PrecursorLadderResult>& results) const;
+
+  /**
+    @brief the sliding-ladder candidates of a spectrum: masses read as residue sums from any start of a protein (prefix ion types) or to
+    any end (suffix ion types), so that proteoforms truncated at either end are proposed without a sequence tag or a precursor mass.
+    Needs the segments (buildIndex with @p precursor_ladders). Thread safe once the index is built.
+    @param masses the deconvolved masses of the spectrum, ascending
+    @param tol_ppm mass tolerance of a deconvolved mass in ppm
+    @param top_n at most this many candidates (the best proteins by score; ties by protein index)
+    @param excluded proteins (indices) that are not proposed
+    @param candidates output, best first
+  */
+  void searchSlidingLadders(const std::vector<double>& masses, double tol_ppm, Size top_n, const std::set<Size>& excluded,
+                            std::vector<Candidate>& candidates) const;
 
   /// the number of runs of standard residues (segments) the precursor-ladder windows lie in
   Size getSegmentCount() const

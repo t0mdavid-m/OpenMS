@@ -326,6 +326,19 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "best keeps it (by its PrSM with the fewest blind modifications, then the higher score, then more PrSMs at that mass); the "
                      "other proteins' PrSMs are reported without a mass. Masses from fragment pairs and decoy precursors are not affected.");
   defaults_.setValidStrings("one_proteoform_per_feature", {"true", "false"});
+  defaults_.setValue("native", "false",
+                     "Native and targeted top-down (one or a few spectra, often several proteins per spectrum, no MS1 survey): the candidate "
+                     "proteins of each source (sequence tags; sliding ladders, i.e. masses read as residue sums from any start or to any end of a "
+                     "protein, instead of terminal ladders; precursor ladders) are characterized when their candidate score "
+                     "(-log10 of the chance probability of their matches) exceeds that of the best decoy candidate of the same source in the same "
+                     "spectrum by native_margin (at most max_protein_hits per source), and every such candidate's PrSM is reported, also without a "
+                     "determined mass, one per protein (the better one). Gapped tags are not used and only_single_hit is ignored. Needs decoys in "
+                     "the database (DECOY prefix); without them, the candidates are chosen as without the option.");
+  defaults_.setValidStrings("native", {"true", "false"});
+  defaults_.setValue("native_margin", 2.0,
+                     "With native: the margin (-log10 units) by which a candidate's score must exceed that of the best decoy candidate of its source "
+                     "in its spectrum.");
+  defaults_.setMinFloat("native_margin", 0.0);
   defaults_.setValue("decoy_precursor", "false",
                      "Decoy precursors: spectra whose PrSM took its mass from MS1 are searched again with the decoy precursor mass of their isolation "
                      "window instead of the precursor mass (FLASHDeconv -FD:report_FDR true writes it and its score). When that search gives a PrSM "
@@ -392,6 +405,13 @@ void FLASHTnTAlgorithm::updateMembers_()
   protein_tol_ = param_.getValue("protein_tol");
   min_protein_hits_ = param_.getValue("min_protein_hits");
   protein_fdr_ = param_.getValue("protein_fdr");
+  native_ = param_.getValue("native").toString() == "true";
+  native_margin_ = param_.getValue("native_margin");
+  if (native_)
+  {
+    gapped_mode_ = "off";
+    multiple_hits_per_spec_ = true;
+  }
 }
 
 std::set<Size> FLASHTnTAlgorithm::getProteinsPassingFDR_(const std::vector<FASTAFile::FASTAEntry>& fasta_entry) const
@@ -1163,6 +1183,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
              mi_tag_indices = registry.registerName("TagIndices"), mi_tag_positions = registry.registerName("TagPositions"),
              mi_fasta_index = registry.registerName("FastaIndex"), mi_protein_rank = registry.registerName("ProteinRank"),
              mi_gapped = registry.registerName("GappedTag"), mi_terminal = registry.registerName("TerminalLadder"),
+             mi_sliding = registry.registerName("SlidingLadder"),
              mi_precursor_ladder = registry.registerName("PrecursorLadder"),
              mi_pl_start = registry.registerName("PrecursorLadderStart"), mi_pl_end = registry.registerName("PrecursorLadderEnd"),
              mi_pl_isotope = registry.registerName("PrecursorLadderIsotope");
@@ -1179,11 +1200,27 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   // Mass ladders (MassLadderAlgorithm): terminal ladders from the residue sums of every protein from its termini, and precursor-anchored
   // ladders from the runs of standard residues of the database, for the window search of every spectrum with a precursor mass. The
   // precursor ladders are built only if a spectrum has a precursor mass.
+  // Native mode (native): the candidates of a source in a spectrum are kept when their score exceeds that of the best decoy candidate of
+  // the same source in the spectrum by native_margin_ (decoys thereby never), best first, at most max_protein_hits_. A spectrum is its own
+  // null here: native runs have one or a few spectra, too few for an FDR over spectra. Native mode reads ladders from any start or end of a
+  // protein (sliding ladders, MassLadderAlgorithm::searchSlidingLadders) instead of the intact termini only: the outer membrane proteins
+  // of the targeted test spectra lack their signal peptides (OMPA from residue 22). Gapped-tag candidates were never an expected protein
+  // of the native test spectra, so they are not used. Margin 2 (a hundred times the chance probability of the best decoy) was set
+  // beforehand. On 25 native and targeted test spectra (OMPA, OMPF, TSX, DLDH and GapA mixtures, DLDH, AQPZ, NISTmAb 1-6, SIGMAmAb,
+  // Infliximab, carbonic anhydrase, VAMP2, semiSWEET; 43 expected proteins) against E. coli + the expected proteins, native mode found as
+  // many expected proteins as without it (29) and 8 other proteins instead of 27 (6 instead of 8 of them chains of another antibody or
+  // porins next to OMPF); against databases without the expected proteins, it called 1 protein instead of 33.
+  const bool native_rule = native_ && decoy_factor_ > 0;
+  if (native_ && ! native_rule)
+  {
+    OPENMS_LOG_WARN << "native: the database has no decoys (DECOY prefix); the candidates are chosen as without the option." << std::endl;
+  }
   bool any_precursor_mass = false;
   for (const auto& dspec : dspecs) any_precursor_mass |= dspec.getPrecursorPeakGroup().getMonoMass() > 0;
   const bool use_precursor_ladders = precursor_ladders_ && ! protein_level_only_ && any_precursor_mass;
   MassLadderAlgorithm mass_ladders;
-  mass_ladders.buildIndex(protein_seqs, param_.getValue("ion_type").toStringVector(), terminal_ladders_, use_precursor_ladders);
+  // the sliding ladders of native mode read the runs of standard residues of the precursor ladders
+  mass_ladders.buildIndex(protein_seqs, param_.getValue("ion_type").toStringVector(), terminal_ladders_, use_precursor_ladders || native_rule);
   // the precursor tolerance of the windows: the MS1 tolerance of the input, else (no MS1 spectra) the fragment tolerance
   const double pl_precursor_tol = precursor_tol > 0 ? precursor_tol : protein_tol;
   // per spectrum: the windows that fit its precursor mass (hypotheses), and the candidates; the same at the decoy precursor mass
@@ -1205,6 +1242,35 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
 #else
   const bool parallel_over_spectra = false;
 #endif
+  const Size native_ladder_top = 1000; // ladder candidates ranked per spectrum and source for the decoy margin
+  const std::vector<String> native_sources {"sequence tags", "sliding ladders", "precursor ladders"};
+  std::vector<std::atomic<Size>> native_kept(native_sources.size());
+  for (auto& k : native_kept) k = 0;
+  // @p truncated: the ranking stopped at native_ladder_top, so a decoy missing from it scored at most the last candidate's score
+  auto nativeCut = [&](auto& cands, auto score_of, auto protein_of, bool truncated, int source, String& note) {
+    auto is_decoy = [&](const auto& c) { return fasta_entry[protein_of(c)].identifier.hasPrefix("DECOY"); };
+    std::stable_sort(cands.begin(), cands.end(), [&](const auto& a, const auto& b) { return score_of(a) > score_of(b); });
+    double best_decoy = -1;
+    for (const auto& c : cands)
+    {
+      if (is_decoy(c)) { best_decoy = std::max(best_decoy, (double)score_of(c)); }
+    }
+    if (best_decoy < 0) best_decoy = truncated && ! cands.empty() ? (double)score_of(cands.back()) : 0.0;
+    const Size n = cands.size();
+    std::remove_reference_t<decltype(cands)> kept;
+    String names;
+    for (auto& c : cands)
+    {
+      if ((int)kept.size() >= max_protein_hits_ || score_of(c) < best_decoy + native_margin_) break;
+      if (is_decoy(c)) continue;
+      names += String(kept.empty() ? " " : ", ") + fasta_entry[protein_of(c)].identifier + " " + String::number(score_of(c), 1);
+      kept.push_back(std::move(c));
+    }
+    native_kept[source] += kept.size();
+    note += "; " + native_sources[source] + ": " + String(n) + " candidates, best decoy " + String::number(best_decoy, 1) + ", kept " +
+            String(kept.size()) + names;
+    cands.swap(kept);
+  };
   // A mass-ladder candidate as a protein hit; its ladders become tags (@p gtags) spanning them, with the lowest mass as flanking mass. The
   // tag indices of the hit are -(local index + 1), made global with the gapped tags when appended to tags_.
   auto ladderCandidateHit = [&](const DeconvolvedSpectrum& dspec, const MassLadderAlgorithm::Candidate& cand,
@@ -1245,11 +1311,11 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   // terminal ladders and, with @p with_precursor_ladders, precursor ladders. The proteins in @p excluded (fasta indices) are not proposed
   // by any source (the chimeric search: the proteins of the spectrum's earlier best PrSMs). Writes only its outputs: the sequence- and
   // gapped-tag candidates (@p hits_out, ranked), the terminal- and precursor-ladder candidates, the gapped and ladder tags (@p gtags, local
-  // indices until appended to tags_) and the number of precursor-ladder windows.
+  // indices until appended to tags_), the number of precursor-ladder windows and, with native, what the decoy margin kept (@p note).
   auto searchCandidates = [&](const DeconvolvedSpectrum& dspec, const std::vector<Size>* tag_indices_of_scan, const std::set<Size>& excluded,
                               bool with_precursor_ladders, std::vector<ProteinHit>& hits_out, std::vector<ProteinHit>& ladder_out,
                               std::vector<ProteinHit>& pl_out, std::vector<ProteinHit>& decoy_pl_out,
-                              std::vector<FLASHHelperClasses::Tag>& gtags, Size& pl_windows) {
+                              std::vector<FLASHHelperClasses::Tag>& gtags, Size& pl_windows, String& note) {
     std::vector<ProteinHit> hits;
     std::vector<FLASHTaggerAlgorithm::ProteinShifts> hit_shifts; // in the order of hits
     if (gapped_mode_ != "only" && tag_indices_of_scan != nullptr)
@@ -1393,7 +1459,12 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
                                                  : (left.getScore() > right.getScore());
     });
 
-    if ((int)hits.size() > max_protein_hits_)
+    if (native_rule)
+    {
+      nativeCut(hits, [](const ProteinHit& h) { return h.getScore(); }, [&](const ProteinHit& h) { return (Size)(int)h.getMetaValue(mi_fasta_index); },
+                false, 0, note);
+    }
+    else if ((int)hits.size() > max_protein_hits_)
     {
       // The score above uses the masses of the whole spectrum against the protein; a correct protein with few of them can end up below
       // the cut. The number of distinct matched tags is sequence-specific evidence, so keep the best hits by that criterion as well and
@@ -1447,7 +1518,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
 
     // the deconvolved masses (ascending) for the mass ladders
     std::vector<double> masses;
-    if ((terminal_ladders_ || with_precursor_ladders) && ! dspec.empty())
+    if ((terminal_ladders_ || with_precursor_ladders || native_rule) && ! dspec.empty())
     {
       masses.reserve(dspec.size());
       for (const auto& pg : dspec) masses.push_back(pg.getMonoMass());
@@ -1457,14 +1528,21 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     // sum from a terminus. The min_protein_hits best proteins are characterized; the ladder of the best shift of each side becomes a tag
     // spanning it (as a gapped tag does), so the extension is anchored there. They are kept apart from the other candidates, also when a
     // sequence tag proposed the same protein.
-    if (terminal_ladders_ && ! dspec.empty())
+    // Native mode: sliding ladders (from any start or to any end of a protein) instead, kept by the decoy margin.
+    if ((terminal_ladders_ || native_rule) && ! dspec.empty())
     {
       std::vector<MassLadderAlgorithm::Candidate> found;
-      mass_ladders.searchTerminalLadders(masses, protein_tol, (Size)min_protein_hits_, excluded, found);
+      if (native_rule)
+      {
+        mass_ladders.searchSlidingLadders(masses, protein_tol, native_ladder_top, excluded, found);
+        nativeCut(found, [](const MassLadderAlgorithm::Candidate& c) { return c.score; }, [](const MassLadderAlgorithm::Candidate& c) { return c.protein; },
+                  found.size() >= native_ladder_top, 1, note);
+      }
+      else { mass_ladders.searchTerminalLadders(masses, protein_tol, (Size)min_protein_hits_, excluded, found); }
       for (const auto& cand : found)
       {
         ProteinHit hit = ladderCandidateHit(dspec, cand, gtags);
-        hit.setMetaValue(mi_terminal, 1);
+        hit.setMetaValue(native_rule ? mi_sliding : mi_terminal, 1);
         ladder_out.push_back(std::move(hit));
       }
     }
@@ -1483,8 +1561,16 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       std::vector<double> precursor_masses {dspec.getPrecursorPeakGroup().getMonoMass()};
       if (decoy_precursor_ && dspec.getDecoyPrecursorMass() > 0) precursor_masses.push_back(dspec.getDecoyPrecursorMass());
       std::vector<MassLadderAlgorithm::PrecursorLadderResult> found;
-      mass_ladders.searchPrecursorLadders(masses, precursor_masses, protein_tol, pl_precursor_tol, (Size)min_protein_hits_, found);
+      mass_ladders.searchPrecursorLadders(masses, precursor_masses, protein_tol, pl_precursor_tol, native_rule ? native_ladder_top : (Size)min_protein_hits_, found);
       pl_windows = found[0].windows;
+      for (auto& result : found)
+      {
+        if (native_rule)
+        {
+          nativeCut(result.candidates, [](const MassLadderAlgorithm::Candidate& c) { return c.score; },
+                    [](const MassLadderAlgorithm::Candidate& c) { return c.protein; }, result.candidates.size() >= native_ladder_top, 2, note);
+        }
+      }
       for (Size n = 0; n < found.size(); n++)
       {
         for (const auto& cand : found[n].candidates)
@@ -1507,14 +1593,27 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     hits_out = std::move(hits);
   };
   const std::set<Size> no_exclusion;
+  std::vector<String> native_notes(dspecs.size());
 #pragma omp parallel for schedule(dynamic) if (parallel_over_spectra)
   for (int d = 0; d < (int)dspecs.size(); d++)
   {
     nextProgress();
     const auto tag_it = scan_to_tag_indices.find(dspecs[d].getScanNumber());
     searchCandidates(dspecs[d], tag_it == scan_to_tag_indices.end() ? nullptr : &tag_it->second, no_exclusion, use_precursor_ladders, spec_hits[d],
-                     spec_ladder_hits[d], spec_pl_hits[d], spec_decoy_pl_hits[d], spec_gapped_tags[d], spec_pl_windows[d]);
+                     spec_ladder_hits[d], spec_pl_hits[d], spec_decoy_pl_hits[d], spec_gapped_tags[d], spec_pl_windows[d], native_notes[d]);
   }
+  if (native_rule)
+  {
+    OPENMS_LOG_INFO << "Native candidates (score above the best decoy of the source in the spectrum + " << native_margin_ << "):";
+    for (Size k = 0; k < native_sources.size(); k++) OPENMS_LOG_INFO << (k ? ", " : " ") << native_sources[k] << " " << (Size)native_kept[k];
+    OPENMS_LOG_INFO << " (" << dspecs.size() << " spectra)" << std::endl;
+    // the evidence per spectrum, for the few spectra of a native run
+    for (Size d = 0; d < dspecs.size() && dspecs.size() <= 20; d++)
+    {
+      if (! native_notes[d].empty()) OPENMS_LOG_INFO << "  scan " << dspecs[d].getScanNumber() << native_notes[d] << std::endl;
+    }
+  }
+  std::vector<String>().swap(native_notes);
   // gapped and ladder tags of a spectrum join tags_; returns the index of the first, from which the tag indices of its candidates become global
   auto appendSpectrumTags = [&](std::vector<FLASHHelperClasses::Tag>& gtags) {
     const int tag_base = (int)tags_.size();
@@ -1636,7 +1735,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       for (Size i = first; i < second; i++)
       {
         const bool gapped = tag_candidates[i].metaValueExists(mi_gapped);
-        bool top = (gapped ? rank_gapped++ : rank_tag++) < min_protein_hits_;
+        // native: the decoy margin chose the candidates
+        bool top = (gapped ? rank_gapped++ : rank_tag++) < min_protein_hits_ || native_rule;
         if (use_protein_fdr && ! top && passing_proteins.count((Size)(int)tag_candidates[i].getMetaValue(mi_fasta_index)) == 0) continue;
         hits.push_back(tag_candidates[i]);
       }
@@ -1671,6 +1771,15 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         extender.fillProteoforms(proteoforms);
       };
       extend(hits, out);
+      // native: every candidate's PrSM is reported, one per protein (the better one)
+      auto mergeNative = [&out](std::vector<ProteinHit>& from) {
+        for (auto& h : from)
+        {
+          auto it = std::find_if(out.begin(), out.end(), [&h](const ProteinHit& o) { return o.getAccession() == h.getAccession(); });
+          if (it == out.end()) { out.push_back(std::move(h)); }
+          else if (h.getScore() > it->getScore()) { *it = std::move(h); }
+        }
+      };
       auto is_determined = [](const ProteinHit& h) {
         return (double)h.getMetaValue("Mass") > 0 && (int)h.getMetaValue("StartPosition") > 0 && (int)h.getMetaValue("EndPosition") > 0;
       };
@@ -1681,17 +1790,23 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         std::vector<ProteinHit> determined, undetermined;
         for (auto& h : ladder_out)
         {
-          h.setMetaValue(mi_terminal, 1);
+          h.setMetaValue(native_rule ? mi_sliding : mi_terminal, 1);
           (is_determined(h) ? determined : undetermined).push_back(h);
         }
         const bool fill = out.empty();
-        if (keep_all) { out.insert(out.end(), determined.begin(), determined.end()); }
+        if (native_rule)
+        {
+          mergeNative(determined);
+          mergeNative(undetermined);
+        }
+        else if (keep_all) { out.insert(out.end(), determined.begin(), determined.end()); }
         else if (! determined.empty() && (out.empty() || ! is_determined(out[0]) || determined[0].getScore() > out[0].getScore()))
         {
           // a ladder PrSM that explains the precursor mass also replaces an undetermined one of a higher score
           out.swap(determined);
         }
-        if (fill && out.empty()) out.swap(undetermined);
+        if (native_rule) {}
+        else if (fill && out.empty()) out.swap(undetermined);
         else if (fill && keep_all) { out.insert(out.end(), undetermined.begin(), undetermined.end()); }
       }
       // Precursor-ladder candidates: extended on their own, as the terminal-ladder ones. Only their PrSMs of determined mass and termini
@@ -1742,7 +1857,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         pl_at_end += at_end;
         pl_duplicates += duplicates;
         pl_undetermined += undetermined;
-        if (keep_all) { out.insert(out.end(), pl_kept.begin(), pl_kept.end()); }
+        if (native_rule) { mergeNative(pl_kept); }
+        else if (keep_all) { out.insert(out.end(), pl_kept.begin(), pl_kept.end()); }
         else if (! pl_kept.empty() && (out.empty() || pl_kept[0].getScore() > out[0].getScore())) { out.swap(pl_kept); }
       }
     };
@@ -2247,8 +2363,9 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         for (int k = 0; k < (int)searched.size(); k++)
         {
           const int d = searched[k];
+          String note; // the native note of the first search is the one logged
           searchCandidates(residual[d], &residual_tags[d], excluded[d], false, r_hits[d], r_ladder_hits[d], r_pl_hits[d], r_decoy_pl_hits[d],
-                           r_gapped_tags[d], r_windows[d]);
+                           r_gapped_tags[d], r_windows[d], note);
         }
         std::vector<ProteinHit> r_candidates, r_ladder_candidates;
         std::vector<std::pair<Size, Size>> r_ranges(dspecs.size(), {0, 0}), r_ladder_ranges(dspecs.size(), {0, 0});

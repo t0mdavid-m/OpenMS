@@ -151,6 +151,7 @@ namespace
   {
     if (hit.metaValueExists("PrecursorLadder")) return "precursor ladder";
     if (hit.metaValueExists("TerminalLadder")) return "terminal ladder";
+    if (hit.metaValueExists("SlidingLadder")) return "sliding ladder";
     if (hit.metaValueExists("GappedTag")) return "gapped tag";
     return "sequence tag";
   }
