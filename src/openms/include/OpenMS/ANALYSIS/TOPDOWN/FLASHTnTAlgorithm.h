@@ -127,6 +127,8 @@ private:
   bool learn_var_mod_penalty_ = true;
   /// search spectra with MS1-based PrSMs again with decoy precursor masses, as decoys of the precursor in the FDR
   bool decoy_precursor_ = false;
+  /// co-isolation: an MS1 mass reported by PrSMs of different proteins stays with the protein that explains it best
+  bool one_proteoform_per_feature_ = true;
   double decoy_factor_ = 0, pro_fdr_ = 1;
   /// how many nodes (massses) will be used
   /// at most this many masses (best Qscore first) per spectrum are used. 300 cut key fragments of native spectra (440-570 masses from

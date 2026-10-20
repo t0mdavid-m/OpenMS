@@ -21,6 +21,7 @@
 #include <iterator>
 #include <limits>
 #include <numeric>
+#include <functional>
 #include <unordered_map>
 #ifdef _OPENMP
   #include <omp.h>
@@ -319,6 +320,12 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "results are unchanged; otherwise the PrSMs of this source can also change the others' results (the pooled protein-level null, "
                      "the best PrSM of a spectrum, proteoform clusters).");
   defaults_.setValidStrings("precursor_ladders", {"true", "false"});
+  defaults_.setValue("one_proteoform_per_feature", "true",
+                     "Co-isolation: when PrSMs of different proteins report the same mass taken from MS1 (within twice the precursor tolerance, "
+                     "one isotope apart allowed) within 2 min, the mass is one MS1 feature of one proteoform, and only the protein that explains it "
+                     "best keeps it (by its PrSM with the fewest blind modifications, then the higher score, then more PrSMs at that mass); the "
+                     "other proteins' PrSMs are reported without a mass. Masses from fragment pairs and decoy precursors are not affected.");
+  defaults_.setValidStrings("one_proteoform_per_feature", {"true", "false"});
   defaults_.setValue("decoy_precursor", "false",
                      "Decoy precursors: spectra whose PrSM took its mass from MS1 are searched again with the decoy precursor mass of their isolation "
                      "window instead of the precursor mass (FLASHDeconv -FD:report_FDR true writes it and its score). When that search gives a PrSM "
@@ -374,6 +381,7 @@ void FLASHTnTAlgorithm::updateMembers_()
   precursor_ladders_ = param_.getValue("precursor_ladders").toString() == "true";
   learn_var_mod_penalty_ = param_.getValue("learn_var_mod_penalty").toString() == "true";
   decoy_precursor_ = param_.getValue("decoy_precursor").toString() == "true";
+  one_proteoform_per_feature_ = param_.getValue("one_proteoform_per_feature").toString() == "true";
   chimeric_rounds_ = param_.getValue("chimeric_rounds");
   pro_fdr_ = param_.getValue("pro_fdr");
   keep_decoy_ = param_.getValue("keep_decoy").toString() == "true";
@@ -2338,6 +2346,93 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
                                                                                             : (left.getCoverage() > right.getCoverage()))
                                                : (left.getScore() > right.getScore());
   });
+
+  // One MS1 feature, one proteoform: a co-isolated precursor is one real mass of one proteoform. When PrSMs of different proteins report
+  // the same MS1-based mass in the same elution (within 2 min), FLASHExtender fitted at least one of them to it by truncation or blind
+  // shifts (Eclip_1480: 55 PrSMs at 1% reported a mass of another protein's 1% proteoform nearby and never their own, against 8 with the
+  // retention times moved by 20 min; e.g. TATA 41-89 +16.02 and MALE 328-373 -90.1 +473.1 both at 5549.62 in scans 2325 and 2326). Per
+  // group of such PrSMs, each protein is ranked by its PrSM with the fewest blind modifications, then by its best score, then by its
+  // number of PrSMs at the mass; the first keeps the mass, the others' PrSMs lose it (Mass -1: undetermined, their own FDR class).
+  if (one_proteoform_per_feature_ && precursor_tol > 0)
+  {
+    const double iso = Constants::ISOTOPE_MASSDIFF_55K_U, rt_window = 120.0;
+    std::vector<Size> idx;
+    for (Size i = 0; i < proteoform_hits_.size(); i++)
+    {
+      const auto& h = proteoform_hits_[i];
+      if ((double)h.getMetaValue("Mass") <= 0 || (int)h.getMetaValue("ProteoformMassByFragmentMass", 0) != 0 || h.metaValueExists("DecoyPrecursor")) continue;
+      idx.push_back(i);
+    }
+    std::sort(idx.begin(), idx.end(), [&](Size l, Size r) { return (double)proteoform_hits_[l].getMetaValue("Mass") < (double)proteoform_hits_[r].getMetaValue("Mass"); });
+    // conflicts: pairs of PrSMs of different proteins at the same mass (or one isotope apart) and elution; union-find over them
+    std::vector<Size> parent(idx.size());
+    std::iota(parent.begin(), parent.end(), 0);
+    std::function<Size(Size)> root = [&](Size a) { return parent[a] == a ? a : parent[a] = root(parent[a]); };
+    std::vector<bool> in_conflict(idx.size(), false);
+    for (Size a = 0; a < idx.size(); a++)
+    {
+      const auto& ha = proteoform_hits_[idx[a]];
+      const double ma = ha.getMetaValue("Mass"), ra = ha.getMetaValue("RT"), max_diff = ma * precursor_tol * 2e-6;
+      for (Size b = a + 1; b < idx.size(); b++)
+      {
+        const auto& hb = proteoform_hits_[idx[b]];
+        const double mb = hb.getMetaValue("Mass");
+        if (mb - ma > iso + max_diff) break;
+        if (std::abs((double)hb.getMetaValue("RT") - ra) > rt_window) continue;
+        const double diff = mb - ma;
+        if (std::abs(diff) > max_diff && std::abs(diff - iso) > max_diff) continue;
+        // the same protein is the same proteoform here; a target and its decoy are different proteins
+        if (ha.getAccession() == hb.getAccession()) { parent[root(a)] = root(b); continue; }
+        in_conflict[a] = in_conflict[b] = true;
+        parent[root(a)] = root(b);
+      }
+    }
+    std::map<Size, std::vector<Size>> groups;
+    for (Size a = 0; a < idx.size(); a++) groups[root(a)].push_back(a);
+    Size demoted = 0, groups_with_conflict = 0;
+    for (const auto& [g, members] : groups)
+    {
+      if (std::none_of(members.begin(), members.end(), [&](Size a) { return (bool)in_conflict[a]; })) continue;
+      groups_with_conflict++;
+      // per protein: fewest blind modifications, best score, PrSM count
+      std::map<String, std::tuple<Size, double, Size>> by_protein;
+      for (Size a : members)
+      {
+        const auto& h = proteoform_hits_[idx[a]];
+        auto it = by_protein.find(h.getAccession());
+        const Size blind = blindModCount_(h);
+        if (it == by_protein.end()) { by_protein[h.getAccession()] = {blind, h.getScore(), 1}; continue; }
+        auto& [b0, s0, n0] = it->second;
+        b0 = std::min(b0, blind);
+        s0 = std::max(s0, h.getScore());
+        n0++;
+      }
+      String owner;
+      std::tuple<Size, double, Size> best {};
+      bool first = true;
+      for (const auto& [acc, key] : by_protein)
+      {
+        const auto& [b, s, n] = key;
+        const auto& [bb, bs, bn] = best;
+        if (first || b < bb || (b == bb && (s > bs || (s == bs && n > bn))))
+        {
+          owner = acc;
+          best = key;
+          first = false;
+        }
+      }
+      for (Size a : members)
+      {
+        auto& h = proteoform_hits_[idx[a]];
+        if (h.getAccession() == owner) continue;
+        h.setMetaValue("Mass", -1.0);
+        h.setMetaValue("MassLostToFeatureOwner", owner);
+        demoted++;
+      }
+    }
+    OPENMS_LOG_INFO << "One proteoform per MS1 feature: " << groups_with_conflict << " masses claimed by PrSMs of several proteins; " << demoted
+                    << " PrSMs of the other proteins lost the mass" << std::endl;
+  }
 
   // FDR by target-decoy counting with a +1 pseudo-count (targetDecoyQvalues) at three levels:
   // - PrSMs, per class (fdr_class_names): determined mass and termini with 0, 1, or 2 or more blind modifications (variable modifications
