@@ -173,8 +173,8 @@ protected:
                   "source (sequence tags; sliding ladders, read from any start or to any end of a protein, instead of terminal ladders; precursor "
                   "ladders) are characterized when their candidate score exceeds that of the best "
                   "decoy candidate of the same source in the same spectrum by -native_margin, and every such candidate's PrSM is reported, also "
-                  "without a determined mass, one per protein. Gapped tags are not used and -only_single_hit is ignored. Needs decoys in the "
-                  "database (DECOY prefix).");
+                  "without a determined mass, one per protein. Gapped tags are not used, -only_single_hit is ignored, and at least one residual "
+                  "round (-chimeric_rounds) is searched for co-isolated proteins. Needs decoys in the database (DECOY prefix).");
     registerDoubleOption_("native_margin", "<-log10>", 2.0,
                           "With -native: the margin (-log10 of the chance probability) by which a candidate's score must exceed that of the best "
                           "decoy candidate of its source in its spectrum.", false, true);
@@ -258,7 +258,7 @@ protected:
     int max_mod_count = tnt_param.getValue("ex:max_mod_count");
     double pro_fdr = tnt_param.getValue("pro_fdr");
     // the chimeric columns are written only with the residual search, so that other outputs keep their format
-    const bool chimeric = (int)tnt_param.getValue("chimeric_rounds") > 0;
+    const bool chimeric = (int)tnt_param.getValue("chimeric_rounds") > 0 || tnt_param.getValue("native").toString() == "true"; // -native searches a residual round
     OPENMS_LOG_INFO << "Finding sequence tags from deconvolved spectra ..." << endl;
 
     FASTAFile fasta_file;

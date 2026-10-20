@@ -332,8 +332,9 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "protein, instead of terminal ladders; precursor ladders) are characterized when their candidate score "
                      "(-log10 of the chance probability of their matches) exceeds that of the best decoy candidate of the same source in the same "
                      "spectrum by native_margin (at most max_protein_hits per source), and every such candidate's PrSM is reported, also without a "
-                     "determined mass, one per protein (the better one). Gapped tags are not used and only_single_hit is ignored. Needs decoys in "
-                     "the database (DECOY prefix); without them, the candidates are chosen as without the option.");
+                     "determined mass, one per protein (the better one). Gapped tags are not used, only_single_hit is ignored, and at least one "
+                     "residual round of chimeric_rounds is searched (co-isolated proteins). Needs decoys in the database (DECOY prefix); without "
+                     "them, the candidates are chosen as without the option.");
   defaults_.setValidStrings("native", {"true", "false"});
   defaults_.setValue("native_margin", 2.0,
                      "With native: the margin (-log10 units) by which a candidate's score must exceed that of the best decoy candidate of its source "
@@ -411,6 +412,10 @@ void FLASHTnTAlgorithm::updateMembers_()
   {
     gapped_mode_ = "off";
     multiple_hits_per_spec_ = true;
+    // and at least one residual round (chimeric_rounds): on 25 native and targeted test spectra it added 4 expected proteins (three
+    // antibody heavy chains, a co-isolated OMPF) without another protein called against the null databases (29 -> 33 of 43; other
+    // proteins 8 -> 8; null-database calls 1 -> 1), at 4.2 instead of 3.3 s per spectrum
+    chimeric_rounds_ = std::max(chimeric_rounds_, 1);
   }
 }
 
