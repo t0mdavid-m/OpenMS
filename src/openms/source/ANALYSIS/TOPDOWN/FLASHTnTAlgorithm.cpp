@@ -545,9 +545,23 @@ std::vector<std::vector<Size>> FLASHTnTAlgorithm::markRepresentativeProteoformHi
           hit2.setMetaValue("Representative", 0);
         }
       }
-      hit.setMetaValue("Representative", 1);
-      hit.setMetaValue("PrSMIndices", prsm_indices);
       clusters.emplace_back(prsm_indices.begin(), prsm_indices.end());
+      // The row that describes the proteoform: the PrSM with the fewest blind shifts among its determined PrSMs passing rep_q (then in the
+      // order above). A blind shift equal to the residues a moved terminus left out explains the same mass worse (Eclip_1480 SODM: 2-206
+      // unmodified and 6-206 +464.215, the mass of residues 2-5); which one represented the proteoform followed q-values differing in the
+      // fourth digit. The cluster and its q-value stay with the representative chosen above (clusters keeps it first).
+      Size row = 0;
+      if (passing_determined[hit_idx[i]])
+      {
+        for (Size k = 1; k < prsm_indices.size(); k++)
+        {
+          const int m = prsm_indices[k];
+          if (passing_determined[m] && blindModCount_(proteoform_hits_[m]) < blindModCount_(proteoform_hits_[prsm_indices[row]])) row = k;
+        }
+      }
+      std::swap(prsm_indices[0], prsm_indices[row]);
+      for (Size k = 0; k < prsm_indices.size(); k++) proteoform_hits_[prsm_indices[k]].setMetaValue("Representative", k == 0 ? 1 : 0);
+      proteoform_hits_[prsm_indices[0]].setMetaValue("PrSMIndices", prsm_indices);
     }
   }
   // in the order of the representatives in proteoform_hits_
