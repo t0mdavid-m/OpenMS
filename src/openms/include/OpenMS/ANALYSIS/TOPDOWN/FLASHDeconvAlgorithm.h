@@ -164,6 +164,22 @@ namespace OpenMS
     /// run spectral deconvolution
     void runSpectralDeconvolution_(MSExperiment& map, std::vector<DeconvolvedSpectrum>& deconvolved_spectra);
 
+    /// one spectrum to deconvolve (runSpectralDeconvolution_): its input and its result with the changes of this instance's state it implies
+    struct SpectrumJob_;
+
+    /**
+     * @brief Deconvolve one spectrum of @p map with @p sd (the precursor by the fragments, the decoy precursor and, with report_FDR, the
+     * decoy masses by @p noise_decoy_sd and @p signal_decoy_sd, whose target spectrum is that of @p sd). Only reads the state of this
+     * instance: the changes of its state (the precursor chosen by the fragments, the decoy precursor, the counters) go into @p job and are
+     * applied by commitSpectrum_, in the input order. The deconvolved spectrum stays in @p sd. Several spectra can be deconvolved in
+     * parallel, each with its own SpectralDeconvolution instances, as long as their native IDs differ.
+     */
+    void deconvolveSpectrum_(const MSExperiment& map, SpectrumJob_& job, SpectralDeconvolution& sd, SpectralDeconvolution& noise_decoy_sd,
+                             SpectralDeconvolution& signal_decoy_sd) const;
+
+    /// apply the changes of this instance's state that the deconvolution of a spectrum implies (deconvolveSpectrum_)
+    void commitSpectrum_(const MSExperiment& map, const SpectrumJob_& job);
+
     /// run feature finding to get deconvolved features
     void runFeatureFinding_(std::vector<DeconvolvedSpectrum>& deconvolved_spectra, std::vector<FLASHHelperClasses::MassFeature>& deconvolved_features);
 
