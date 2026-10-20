@@ -30,7 +30,8 @@ namespace OpenMS
   {
     //  //File_name	Fraction_ID	Spectrum_ID	Scans	MS_one_ID	MS_one_scans	Fraction_feature_ID	Fraction_feature_intensity
     // Fraction_feature_score	Fraction_feature_min_time	Fraction_feature_max_time
-    // Fraction_feature_apex_time	Precursor_monoisotopic_mz	Precursor_average_mz	Precursor_charge	Precursor_intensity
+    // Fraction_feature_apex_time	Precursor_neutral_monoisotopic_mass	Precursor_monoisotopic_mz	Precursor_average_mz	Precursor_charge	Precursor_intensity
+    // (TopPIC 2.x layout; TopPIC 2.x reads the columns by position and crashes on the 1.x layout without Precursor_neutral_monoisotopic_mass)
 
     if (ms_level == 1)
     {
@@ -38,7 +39,7 @@ namespace OpenMS
     }
     else
     {
-      fs << "File_name\tFraction_ID\tSpectrum_ID\tScans\tMS_one_ID\tMS_one_scans\tFraction_feature_ID\tFraction_feature_intensity\tFraction_feature_score\tFraction_feature_min_time\tFraction_feature_max_time\tFraction_feature_apex_time\tPrecursor_monoisotopic_mz\tPrecursor_average_mz\tPrecursor_charge\tPrecursor_intensity\n";
+      fs << "File_name\tFraction_ID\tSpectrum_ID\tScans\tMS_one_ID\tMS_one_scans\tFraction_feature_ID\tFraction_feature_intensity\tFraction_feature_score\tFraction_feature_min_time\tFraction_feature_max_time\tFraction_feature_apex_time\tPrecursor_neutral_monoisotopic_mass\tPrecursor_monoisotopic_mz\tPrecursor_average_mz\tPrecursor_charge\tPrecursor_intensity\n";
     }
     fs.flush();
   }
@@ -161,6 +162,7 @@ namespace OpenMS
       // The MS1 target features by their index. A precursor without one got an index beyond them in the MS1 pass above, which may be
       // the index of a decoy feature (report_FDR) or an MSn feature as well, so a feature is looked up by its index among these only.
       std::map<uint, const FLASHHelperClasses::MassFeature*> ms1_features;
+      auto mono_mz = [](double mono_mass, int charge) { return charge == 0 ? .0 : mono_mass / charge + Constants::PROTON_MASS_U; };
       for (const auto& mass_feature : mass_features)
       {
         if (mass_feature.ms_level != 1 || mass_feature.is_decoy) continue;
@@ -187,7 +189,7 @@ namespace OpenMS
           }
           ss << std::to_string(sum_intensity) << "\t0\t" << std::to_string(mass_feature.mt.begin()->getRT()/60.0)
              << "\t" << std::to_string(mass_feature.mt.rbegin()->getRT()/60.0) << "\t" << std::to_string(apex.getRT()/60.0) << "\t" << std::to_string(mass_feature.mt.getCentroidMZ())
-             << "\t" << std::to_string(mass_feature.rep_mz) << "\t" << mass_feature.rep_charge << "\t" << std::to_string(dspec.getPrecursor().getIntensity()) << "\n";
+             << "\t" << std::to_string(mono_mz(mass_feature.mt.getCentroidMZ(), mass_feature.rep_charge)) << "\t" << std::to_string(mass_feature.rep_mz) << "\t" << mass_feature.rep_charge << "\t" << std::to_string(dspec.getPrecursor().getIntensity()) << "\n";
         }
         else
         {
@@ -205,7 +207,7 @@ namespace OpenMS
 
           ss << std::to_string(pg.getIntensity()) << "\t0\t" << std::to_string(rt)
              << "\t" << std::to_string(rt) << "\t" << std::to_string(rt) << "\t" << std::to_string(pg.getMonoMass())
-             << "\t" << std::to_string(rep_mz) << "\t" << pg.getRepAbsCharge() << "\t" << std::to_string(dspec.getPrecursor().getIntensity()) << "\n";
+             << "\t" << std::to_string(mono_mz(pg.getMonoMass(), pg.getRepAbsCharge())) << "\t" << std::to_string(rep_mz) << "\t" << pg.getRepAbsCharge() << "\t" << std::to_string(dspec.getPrecursor().getIntensity()) << "\n";
         }
       }
     }
