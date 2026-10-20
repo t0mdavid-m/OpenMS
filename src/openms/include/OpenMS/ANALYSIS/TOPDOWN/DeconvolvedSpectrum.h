@@ -149,6 +149,16 @@ namespace OpenMS
     {
       decoy_precursor_weight_ = weight;
     }
+    /// precursor score (2D Qscore, as FLASHDeconv scores its target and decoy masses for its own FDR) of the decoy precursor, so that a
+    /// decoy spectrum competes with the spectrum on the precursor; -1 if unknown (a decoy mass can score 0)
+    double getDecoyPrecursorQscore() const
+    {
+      return decoy_precursor_qscore_;
+    }
+    void setDecoyPrecursorQscore(double qscore)
+    {
+      decoy_precursor_qscore_ = qscore;
+    }
 
     /// original spectrum setter
     void setOriginalSpectrum(const MSSpectrum& spec);
@@ -200,6 +210,7 @@ namespace OpenMS
     /// the decoy precursor mass (see getDecoyPrecursorMass), -1 if none
     double decoy_precursor_mass_ = -1;
     double decoy_precursor_weight_ = 1;
+    double decoy_precursor_qscore_ = -1;
     /// precursor raw peak (not deconvolved one)
     Precursor precursor_peak_;
     /// precursor deconvolved peak

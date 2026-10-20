@@ -50,7 +50,8 @@ namespace OpenMS
     }
     if (decoy_precursor_mass_ > 0)
     {
-      val << ";decoyprecursormass=" << std::to_string(decoy_precursor_mass_) << ";decoyprecursorweight=" << std::to_string(decoy_precursor_weight_);
+      val << ";decoyprecursormass=" << std::to_string(decoy_precursor_mass_) << ";decoyprecursorweight=" << std::to_string(decoy_precursor_weight_)
+          << ";decoyprecursorQscore=" << std::to_string(decoy_precursor_qscore_);
     }
 
     val << ";peaks=";

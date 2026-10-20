@@ -321,9 +321,11 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   defaults_.setValidStrings("precursor_ladders", {"true", "false"});
   defaults_.setValue("decoy_precursor", "false",
                      "Decoy precursors: spectra whose PrSM took its mass from MS1 are searched again with the decoy precursor mass of their isolation "
-                     "window instead of the precursor mass (FLASHDeconv -FD:report_FDR true writes it); a PrSM reporting that mass competes with the "
-                     "spectrum's own and counts as a decoy in the FDR. Controls wrong MS1 precursor masses; PrSMs with masses from fragment pairs "
-                     "or without a mass are not affected.");
+                     "window instead of the precursor mass (FLASHDeconv -FD:report_FDR true writes it and its score). When that search gives a PrSM "
+                     "reporting the decoy mass, the decoy precursor wins if its precursor score (FLASHDeconv's 2D Qscore) is higher than the "
+                     "precursor's; the winning decoy PrSM replaces the spectrum's MS1-based PrSMs and counts as a decoy in the FDR, at the "
+                     "proteoform level only against proteoforms whose mass came from MS1. Controls wrong MS1 precursor masses; PrSMs with masses "
+                     "from fragment pairs or without a mass are not affected.");
   defaults_.setValidStrings("decoy_precursor", {"true", "false"});
   defaults_.setValue("chimeric_rounds", 0,
                      "Residual search of chimeric spectra: rounds after the first search (0: off). In each round, every spectrum with a PrSM (target or "
@@ -871,6 +873,12 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         int s_loc_dw_s = deconv_meta_str.find("decoyprecursorweight=") + 21;
         int s_loc_dw_e = deconv_meta_str.find(";", s_loc_dw_s);
         dspec.setDecoyPrecursorWeight(stod(deconv_meta_str.substr(s_loc_dw_s, s_loc_dw_e == (int)String::npos ? String::npos : s_loc_dw_e - s_loc_dw_s)));
+      }
+      if (deconv_meta_str.hasSubstring("decoyprecursorQscore="))
+      {
+        int s_loc_dq_s = deconv_meta_str.find("decoyprecursorQscore=") + 21;
+        int s_loc_dq_e = deconv_meta_str.find(";", s_loc_dq_s);
+        dspec.setDecoyPrecursorQscore(stod(deconv_meta_str.substr(s_loc_dq_s, s_loc_dq_e == (int)String::npos ? String::npos : s_loc_dq_e - s_loc_dq_s)));
       }
     }
 
@@ -1941,18 +1949,32 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
           decoy_proteoforms[d].push_back(std::move(h));
         }
       }
-      // per spectrum, the decoy precursor competes with the spectrum's PrSMs that took their mass from MS1: the higher score stays
-      int decoy_wins = 0;
+      // Per spectrum, the decoy precursor competes with the spectrum's PrSMs that took their mass from MS1, on the precursor: the decoy
+      // spectrum has to give a PrSM that reports the decoy mass (the try), and that decoy wins when its precursor score (FLASHDeconv's 2D
+      // Qscore, the score its own FDR compares target and decoy masses with) is higher than the precursor's. The fragments cannot decide
+      // the mass: a related or wrong mass explains nearly the same ladders, only the MS1 signal tells them apart. Inputs from FLASHDeconv
+      // versions that do not write the decoy precursor's score fall back to the fragment score (the higher PrSM score wins).
+      int decoy_wins = 0, decoy_tries = 0, decoy_by_fragments = 0;
       for (int d : todo)
       {
         if (decoy_proteoforms[d].empty()) continue;
+        decoy_tries++;
         double best_decoy = -1e10, best_own = -1e10;
         for (const auto& h : decoy_proteoforms[d]) best_decoy = std::max(best_decoy, h.getScore());
         for (const auto& h : spec_proteoforms[d])
         {
           if (ms1Based(h)) best_own = std::max(best_own, h.getScore());
         }
-        if (best_decoy <= best_own) continue;
+        const double decoy_qscore = dspecs[d].getDecoyPrecursorQscore();
+        if (decoy_qscore >= 0)
+        {
+          if (decoy_qscore <= dspecs[d].getPrecursorPeakGroup().getQscore2D()) continue;
+        }
+        else
+        {
+          decoy_by_fragments++;
+          if (best_decoy <= best_own) continue;
+        }
         decoy_wins++;
         std::vector<ProteinHit> kept;
         for (auto& h : spec_proteoforms[d])
@@ -1966,7 +1988,9 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         spec_proteoforms[d].swap(kept);
       }
       OPENMS_LOG_INFO << "Decoy precursors: " << copies << " spectra with an MS1-based PrSM and an MS1 decoy mass (" << without_decoy
-                      << " without one), decoy precursor wins in " << decoy_wins << std::endl;
+                      << " without one); the decoy spectrum gave a PrSM with the decoy mass in " << decoy_tries << ", the decoy precursor wins in "
+                      << decoy_wins << (decoy_by_fragments > 0 ? " (" + String(decoy_by_fragments) + " decided on the fragments: no decoy precursor score in the input)" : String(""))
+                      << std::endl;
     }
 
     for (auto& v : spec_proteoforms)
@@ -2422,9 +2446,26 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         ranked.push_back({{qvalues[rep], -proteoform_hits_[rep].getScore()}, decoys[rep], decoy_weights[rep]});
       }
       const auto proteoform_qvalues = targetDecoyQvalues(ranked);
+      // Decoy precursors model wrong MS1 masses, which only a proteoform whose mass came from MS1 can have: they count against those, and a
+      // proteoform without a mass or with a mass from fragment pairs takes its q-value from the same ranking without them (identical when
+      // there are no decoy precursors).
+      std::vector<RankedItem<std::pair<double, double>>> ranked_no_dp;
+      std::vector<Size> no_dp_pos(order.size(), (Size)-1);
       for (Size k = 0; k < order.size(); k++)
       {
-        for (Size i : clusters[order[k]]) proteoform_hits_[i].setMetaValue("proqvalue", proteoform_qvalues[k]);
+        const Size rep = clusters[order[k]][0];
+        if (decoys[rep] && proteoform_hits_[rep].metaValueExists("DecoyPrecursor") && ! proteoform_hits_[rep].getAccession().hasPrefix("DECOY")) continue;
+        no_dp_pos[k] = ranked_no_dp.size();
+        ranked_no_dp.push_back(ranked[k]);
+      }
+      const auto proteoform_qvalues_no_dp = ranked_no_dp.size() < ranked.size() ? targetDecoyQvalues(ranked_no_dp) : proteoform_qvalues;
+      for (Size k = 0; k < order.size(); k++)
+      {
+        const Size rep = clusters[order[k]][0];
+        const bool ms1_mass = (double)proteoform_hits_[rep].getMetaValue("Mass", -1.0) > 0
+                              && (int)proteoform_hits_[rep].getMetaValue("ProteoformMassByFragmentMass", 0) == 0;
+        const double pq = (ms1_mass || no_dp_pos[k] == (Size)-1) ? proteoform_qvalues[k] : proteoform_qvalues_no_dp[ranked_no_dp.size() < ranked.size() ? no_dp_pos[k] : k];
+        for (Size i : clusters[order[k]]) proteoform_hits_[i].setMetaValue("proqvalue", pq);
       }
     }
     setProteinQvalues_(hit_class, qvalues, decoys, decoy_weights, clusters, rep_q);
