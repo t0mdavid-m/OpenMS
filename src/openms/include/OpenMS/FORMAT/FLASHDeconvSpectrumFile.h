@@ -64,6 +64,13 @@ namespace OpenMS
                                        bool write_detail,
                                        bool record_decoy, double noise_decoy_weight);
 
+    /// writeDeconvolvedMasses for every spectrum of @p spectra whose MS level has a file in @p out_files (open in @p streams), in input order and
+    /// with the same bytes; without @p record_decoy the spectra are formatted in parallel
+    static void writeDeconvolvedMasses(std::vector<DeconvolvedSpectrum>& spectra, std::vector<std::fstream>& streams, const std::vector<String>& out_files,
+                                       const String& file_name, const FLASHHelperClasses::PrecalculatedAveragine& avg,
+                                       const FLASHHelperClasses::PrecalculatedAveragine& decoy_avg, const std::vector<double>& tols, bool write_detail,
+                                       bool record_decoy, double noise_decoy_weight);
+
     /**
      *
      * @param map

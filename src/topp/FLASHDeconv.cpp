@@ -338,16 +338,20 @@ protected:
       }
 
 
+#ifdef TRAIN_OUT
       for (auto& deconvolved_spectrum : deconvolved_spectra)
       {
         uint ms_level = deconvolved_spectrum.getOriginalSpectrum().getMSLevel();
         if (out_spec_file[ms_level - 1].empty()) continue;
         FLASHDeconvSpectrumFile::writeDeconvolvedMasses(deconvolved_spectrum, out_spec_streams[ms_level - 1], in_file, fd.getAveragine(), fd.getDecoyAveragine(),
                                                         tols[ms_level - 1], write_detail, report_decoy, fd.getNoiseDecoyWeight());
-#ifdef TRAIN_OUT
         Qscore::writeAttCsvForQscoreTraining(deconvolved_spectrum, out_train_streams[ms_level - 1]);
-#endif
       }
+#else
+      // the same rows in the same order, formatted in parallel (serially with report_FDR)
+      FLASHDeconvSpectrumFile::writeDeconvolvedMasses(deconvolved_spectra, out_spec_streams, out_spec_file, in_file, fd.getAveragine(), fd.getDecoyAveragine(), tols,
+                                                      write_detail, report_decoy, fd.getNoiseDecoyWeight());
+#endif
 
       for (Size i = 0; i < out_spec_file.size(); i++)
       {
