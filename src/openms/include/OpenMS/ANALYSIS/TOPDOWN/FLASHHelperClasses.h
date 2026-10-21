@@ -450,7 +450,7 @@ namespace OpenMS
         if (vertex1 >= vertex_count_ || vertex2 >= vertex_count_) return false;
         if (! visited.contains(vertex2)) return false;
         visited.insert(vertex1);
-        adj_list_for_speed_up_[vertex2].insert(vertex1);
+        edges_.emplace_back(vertex1, vertex2);
         return true;
       }
 
@@ -459,7 +459,7 @@ namespace OpenMS
         if (vertex1 >= vertex_count_ || vertex2 >= vertex_count_) return false;
         if (! visited[vertex2]) return false;
         visited[vertex1] = true;
-        adj_list_for_speed_up_[vertex2].insert(vertex1); //
+        edges_.emplace_back(vertex1, vertex2); //
         return true;
       }
 
@@ -475,19 +475,26 @@ namespace OpenMS
         std::unordered_set<Size> visited;
         std::vector<Size> path;
 
-        if (adj_list_.empty())
+        // the adjacency is built once (at the first search that finds it empty): every edge once, by source and then target, so the
+        // targets of a vertex are in ascending order
+        if (! adjacency_used_)
         {
-          for (const auto& [v2, vertices] : adj_list_for_speed_up_)
+          std::sort(edges_.begin(), edges_.end());
+          edges_.erase(std::unique(edges_.begin(), edges_.end()), edges_.end());
+          sources_.clear();
+          offsets_.clear();
+          targets_.clear();
+          for (const auto& [v1, v2] : edges_)
           {
-            for (const auto& v1 : vertices)
+            if (sources_.empty() || sources_.back() != v1)
             {
-              adj_list_[v1].push_back(v2);
+              sources_.push_back(v1);
+              offsets_.push_back(targets_.size());
             }
+            targets_.push_back(v2);
           }
-          for (auto& v : adj_list_)
-          {
-            std::sort(v.second.begin(), v.second.end());
-          }
+          offsets_.push_back(targets_.size());
+          adjacency_used_ = ! sources_.empty();
         }
         findAllPaths_(source, sink, visited, path, all_paths, max_count); // reverse traveling
       }
@@ -495,8 +502,12 @@ namespace OpenMS
     private:
       Size vertex_count_;
       // 0, 1, 2, ... ,vertex_count - 1
-      std::map<Size, std::vector<Size>> adj_list_; //
-      std::unordered_map<Size, std::unordered_set<Size>> adj_list_for_speed_up_; // vertex swapped for fast storing of edges
+      /// the edges as added (vertex1, vertex2), duplicates included
+      std::vector<std::pair<Size, Size>> edges_;
+      /// the adjacency of findAllPaths: the vertices with edges (ascending), and per vertex its targets (ascending) in targets_
+      std::vector<Size> sources_, offsets_, targets_;
+      /// whether the adjacency is built and kept (a search visited a vertex's adjacency, or it has an edge)
+      bool adjacency_used_ = false;
       /// recursive part for the findAllPaths(..)
       void findAllPaths_(Size current,
                          Size destination,
@@ -513,9 +524,16 @@ namespace OpenMS
         if (current == destination) { all_paths.push_back(path);}
         else
         {
-          for (Size i : adj_list_[current])
+          adjacency_used_ = true;
+          const auto it = std::lower_bound(sources_.begin(), sources_.end(), current);
+          if (it != sources_.end() && *it == current)
           {
-            if (visited.find(i) == visited.end()) { findAllPaths_(i, destination, visited, path, all_paths, max_count); }
+            const Size k = (Size)(it - sources_.begin());
+            for (Size e = offsets_[k]; e < offsets_[k + 1]; e++)
+            {
+              const Size i = targets_[e];
+              if (visited.find(i) == visited.end()) { findAllPaths_(i, destination, visited, path, all_paths, max_count); }
+            }
           }
         }
 

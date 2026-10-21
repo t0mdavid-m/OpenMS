@@ -598,8 +598,11 @@ namespace OpenMS
     // counts per integer shift in a reused array instead of a hash map; the visiting order (and so the winner among equal counts) is
     // unchanged
     const auto [smin, smax] = std::minmax_element(spec_vec.begin(), spec_vec.end());
-    int pmin = *pro_vec.begin(), pmax = pmin;
-    for (int p : pro_vec)
+    // the set in its own iteration order, contiguous for the double loop below
+    static thread_local std::vector<int> pros;
+    pros.assign(pro_vec.begin(), pro_vec.end());
+    int pmin = pros.front(), pmax = pmin;
+    for (int p : pros)
     {
       pmin = std::min(pmin, p);
       pmax = std::max(pmax, p);
@@ -610,7 +613,7 @@ namespace OpenMS
     if (deltas.size() < range) deltas.assign(range, 0);
     for (int s : spec_vec)
     {
-      for (int p : pro_vec)
+      for (int p : pros)
       {
         const int d = p - s;
         const int cnt = ++deltas[d - offset];
@@ -623,7 +626,7 @@ namespace OpenMS
     }
     for (int s : spec_vec) // reset only the touched entries
     {
-      for (int p : pro_vec) deltas[p - s - offset] = 0;
+      for (int p : pros) deltas[p - s - offset] = 0;
     }
     return ret;
   }
