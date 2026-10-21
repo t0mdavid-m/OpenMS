@@ -83,6 +83,13 @@ public:
     std::uint32_t protein, a, b;
   };
 
+  /// precursor ladders: a window found by preparePrecursorWindows, residues a + start .. a + start + length - 1 of a segment
+  struct PreparedWindow
+  {
+    std::uint32_t segment;
+    std::uint16_t start, length;
+  };
+
   MassLadderAlgorithm() = default;
   /// not copyable: the window residue sums point into the object's own storage
   MassLadderAlgorithm(const MassLadderAlgorithm&) = delete;
@@ -124,6 +131,19 @@ public:
   */
   void searchPrecursorLadders(const std::vector<double>& masses, const std::vector<double>& precursor_masses, double fragment_tol_ppm,
                               double precursor_tol_ppm, Size top_n, std::vector<PrecursorLadderResult>& results) const;
+
+  /**
+    @brief precursor ladders: the windows that fit each of @p precursor_masses (e.g. those of all spectra of a run), found in one pass over
+    the database. searchPrecursorLadders then reads the windows of a prepared mass instead of sweeping the database for it, with the same
+    results; other masses (or another precursor tolerance) are swept as before, and so are all with fewer than 256 distinct masses. Not
+    thread safe: call it before the searches. Needs the segments (buildIndex with @p precursor_ladders).
+    @param precursor_masses the precursor masses (any order; repeats and masses <= 0 are ignored)
+    @param precursor_tol_ppm mass tolerance of a window mass against a precursor mass in ppm, as given to searchPrecursorLadders
+  */
+  void preparePrecursorWindows(const std::vector<double>& precursor_masses, double precursor_tol_ppm);
+
+  /// frees the windows of preparePrecursorWindows (the searches sweep the database again)
+  void clearPrecursorWindows();
 
   /**
     @brief the sliding-ladder candidates of a spectrum: masses read as residue sums from any start of a protein (prefix ion types) or to
@@ -169,5 +189,13 @@ private:
   std::vector<const double*> window_sums_;
   /// precursor ladders: the storage of window_sums_ (the sums of a protein of standard residues only are its ladder_pre_ sums)
   std::vector<std::vector<double>> window_own_sums_;
+  /// precursor ladders, preparePrecursorWindows: the precursor tolerance, the prepared masses (ascending, distinct) and their windows, by
+  /// chunk of segments and in a chunk by mass (in the order of the sweep): those of mass n in chunk c start at
+  /// prepared_offsets_[n * prepared_chunks_ + c] (a row more than masses for the ends)
+  double prepared_tol_ppm_ = -1;
+  std::vector<double> prepared_masses_;
+  Size prepared_chunks_ = 0;
+  std::vector<PreparedWindow> prepared_windows_;
+  std::vector<std::uint32_t> prepared_offsets_;
 };
 } // namespace OpenMS

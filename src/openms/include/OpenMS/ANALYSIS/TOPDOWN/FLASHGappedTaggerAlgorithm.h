@@ -98,6 +98,7 @@ private:
 
   // mass index: bin -> slot of a non-empty bin; per slot a sorted posting list of window start positions
   std::int64_t key_min_ = 0, key_max_ = 0;
+  double index_bin_width_ = 0.1; ///< bin_width when the index was built
   std::vector<std::uint32_t> slot_;
   std::vector<std::uint64_t> post_offsets_;
   std::vector<std::uint32_t> postings_;

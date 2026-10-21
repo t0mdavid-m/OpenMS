@@ -101,6 +101,15 @@ public:
                                double tol_ppm);
 
   /**
+   * @brief The score of one side of a protein in runMatchingExact: -log10 of the chance of the match count at the best of the @p count
+   * shifts @p shifts (with the tag flanking masses @p flanks they were computed from), times @p count.
+   * @param masses mass 0 (the terminus), then the deconvolved masses, ascending
+   * @param residue_sums the sorted residue sums of the side, 0 included
+   */
+  static double scoreShifts(const std::vector<double>& masses, const std::vector<double>& residue_sums, const double* shifts,
+                            const double* flanks, Size count, double tol_ppm);
+
+  /**
    * @brief fill tags with the length of @p tag_length in @p tags
    * @param tags
    * @param tag_length
