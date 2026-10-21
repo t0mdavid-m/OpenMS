@@ -137,6 +137,7 @@ StaticModification
 TextExporter
 TICCalculator
 TriqlerConverter
+UniPEFF
 XFDR
 XMLValidator
 )

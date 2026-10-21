@@ -253,6 +253,7 @@ set(format_executables_list
   TraMLFile_test
   TransformationXMLFile_test
   UnimodXMLFile_test
+  UniProtXMLFile_test
   XMassFile_test
   XMLFile_test
   XMLHandler_test
