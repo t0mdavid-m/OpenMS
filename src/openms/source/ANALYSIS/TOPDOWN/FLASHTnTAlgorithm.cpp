@@ -436,10 +436,15 @@ void FLASHTnTAlgorithm::updateMembers_()
   protein_fdr_ = param_.getValue("protein_fdr");
   native_ = param_.getValue("native").toString() == "true";
   native_margin_ = param_.getValue("native_margin");
+  max_node_cntr_ = 400;
   if (native_)
   {
     gapped_mode_ = "off";
     multiple_hits_per_spec_ = true;
+    // every mass of the spectrum: the cap of 400 cut ladder masses of native spectra (Q3930 DLDH: 4 of the 8 masses of its C-terminal y
+    // ladder below the cap). On the 25 native and targeted test spectra: expected proteins 33 -> 34 of 43, other proteins 9 -> 9,
+    // null-database calls 2 -> 2, the same time; a cap of 600 gives the same
+    max_node_cntr_ = std::numeric_limits<Size>::max();
     // and at least one residual round (chimeric_rounds): on 25 native and targeted test spectra it added 4 expected proteins (three
     // antibody heavy chains, a co-isolated OMPF) without another protein called against the null databases (29 -> 33 of 43; other
     // proteins 8 -> 8; null-database calls 1 -> 1), at 4.2 instead of 3.3 s per spectrum

@@ -139,8 +139,8 @@ private:
   double native_margin_ = 2.0;
   double decoy_factor_ = 0, pro_fdr_ = 1;
   /// how many nodes (massses) will be used
-  /// at most this many masses (best Qscore first) per spectrum are used. 300 cut key fragments of native spectra (440-570 masses from
-  /// centroid input); 400 recovered them at about 1.8x the native search time, and lysate MS2 spectra rarely have this many masses.
+  /// at most this many masses (best Qscore first) per spectrum are used: 400, lysate MS2 spectra rarely have this many masses; no cap with
+  /// native_ (native spectra have 440-570 masses from centroid input, and the cap cut key ladder masses)
   Size max_node_cntr_ = 400;
   double max_total_mod_mass_ = 0;
 
