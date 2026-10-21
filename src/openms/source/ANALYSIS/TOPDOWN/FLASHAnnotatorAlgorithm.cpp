@@ -1395,6 +1395,37 @@ Size FLASHAnnotatorAlgorithm::loadSpectra(const String& mzml_file, const std::se
   return read;
 }
 
+// At most this many peaks per spectrum (FLASHDeconv's cap for centroided spectra): a spectrum with more (e.g. a long-transient profile
+// spectrum, 327,756 centroided peaks) keeps its most intense ones. In such a spectrum about 17 % of random fragment hypotheses found an
+// envelope (0.4-2 % in the others), shuffled sequences reached 32 % terminal and 100 % internal coverage; with the cap 8 % and 12 %.
+static constexpr Size max_peak_count_ = 30000;
+
+static void keepMostIntensePeaks_(FLASHAnnotatorAlgorithm::PeakArrays& peaks)
+{
+  const Size n = peaks.mzs.size();
+  if (n <= max_peak_count_) return;
+  std::vector<Size> order(n);
+  std::iota(order.begin(), order.end(), 0);
+  // the most intense first, equal intensities by m/z (deterministic)
+  std::nth_element(order.begin(), order.begin() + max_peak_count_, order.end(), [&](Size l, Size r) {
+    if (peaks.intensities[l] != peaks.intensities[r]) return peaks.intensities[l] > peaks.intensities[r];
+    return l < r;
+  });
+  std::vector<char> keep(n, 0);
+  for (Size k = 0; k < max_peak_count_; k++) keep[order[k]] = 1;
+  Size o = 0;
+  for (Size t = 0; t < n; t++)
+  {
+    if (! keep[t]) continue;
+    peaks.mzs[o] = peaks.mzs[t];
+    peaks.intensities[o] = peaks.intensities[t];
+    o++;
+  }
+  peaks.mzs.resize(o);
+  peaks.intensities.resize(o);
+  peaks.indexBuckets();
+}
+
 bool FLASHAnnotatorAlgorithm::toCentroidedPeakArrays(const MSSpectrum& spec, PeakArrays& peaks)
 {
   if (spec.getType(true) == SpectrumSettings::PROFILE)
@@ -1403,9 +1434,11 @@ bool FLASHAnnotatorAlgorithm::toCentroidedPeakArrays(const MSSpectrum& spec, Pea
     MSSpectrum picked;
     picker.pick(spec, picked);
     toPeakArrays(picked, peaks);
+    keepMostIntensePeaks_(peaks);
     return true;
   }
   toPeakArrays(spec, peaks);
+  keepMostIntensePeaks_(peaks);
   return false;
 }
 

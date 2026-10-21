@@ -228,7 +228,8 @@ public:
   */
   static Size loadSpectra(const String& mzml_file, const std::set<int>& scans, std::map<int, MSSpectrum>& spectra);
 
-  /// the peak arrays of a raw spectrum, centroided with PeakPickerHiRes if it is a profile spectrum; true if it was centroided here
+  /// the peak arrays of a raw spectrum, centroided with PeakPickerHiRes if it is a profile spectrum, at most the 30000 most intense peaks
+  /// (FLASHDeconv's cap for centroided spectra); true if it was centroided here
   static bool toCentroidedPeakArrays(const MSSpectrum& spec, PeakArrays& peaks);
 
   /**
