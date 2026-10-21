@@ -24,6 +24,7 @@
 #include <numeric>
 #include <optional>
 #include <set>
+#include <tuple>
 
 #ifdef _OPENMP
   #include <omp.h>
@@ -1155,6 +1156,7 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
     // the isolation window
     double start_mz = 0;
     double end_mz = 0;
+    double window_target_mz = 0;
     for (auto& precursor : spec.getPrecursors())
     {
       double loffset = precursor.getIsolationWindowLowerOffset();
@@ -1166,6 +1168,7 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
       // precursor m/z and, when the two differ, keeps the target as a meta value.
       double target_mz = precursor.metaValueExists("isolation window target m/z") ? (double)precursor.getMetaValue("isolation window target m/z")
                                                                                   : precursor.getMZ();
+      window_target_mz = target_mz;
       start_mz = loffset > 100.0 ? loffset : -loffset + target_mz;
       end_mz = uoffest > 100.0 ? uoffest : uoffest + target_mz;
     }
@@ -1178,6 +1181,33 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
     // registered as the challengers of the chosen precursor for the decoy precursor (with precursor_by_fragments, see
     // runSpectralDeconvolution_), or else the one of the highest charge SNR as the decoy precursor. Returns the SNR of the best target
     // (0 or more), or -1 if the window holds none.
+    // The raw intensity of a mass's isotope comb at charge c in the isolation window of a survey spectrum (the nearest raw peak within
+    // 5 ppm of each isotope position), and whether one of its isotope positions is the isolation target peak (a raw peak within 10 ppm of
+    // the target m/z): the window evidence of a candidate, read from the raw spectrum rather than from the deconvolved peak group.
+    auto raw_comb = [&](const MSSpectrum& raw, double m, int c) {
+      double w = 0;
+      if (raw.empty() || c <= 0) return w;
+      for (int k = 0; k < 80; k++)
+      {
+        const double x = (m + k * Constants::ISOTOPE_MASSDIFF_55K_U) / c + Constants::PROTON_MASS_U;
+        if (x < start_mz) continue;
+        if (x > end_mz) break;
+        const Size j = raw.findNearest(x);
+        if (std::abs(raw[j].getMZ() - x) <= 5e-6 * x) w += raw[j].getIntensity();
+      }
+      return w;
+    };
+    auto owns_target = [&](const MSSpectrum& raw, double m, int c) {
+      const double t = window_target_mz;
+      if (raw.empty() || c <= 0 || t <= 0) return false;
+      const Size j = raw.findNearest(t);
+      if (std::abs(raw[j].getMZ() - t) > 10e-6 * t) return false;
+      const int k = (int)std::round(((t - Constants::PROTON_MASS_U) * c - m) / Constants::ISOTOPE_MASSDIFF_55K_U);
+      if (k < 0) return false;
+      const double x = (m + k * Constants::ISOTOPE_MASSDIFF_55K_U) / c + Constants::PROTON_MASS_U;
+      return std::abs(x - t) <= 10e-6 * t;
+    };
+
     auto scan_survey = [&](Size survey_index, bool commit) -> double {
       const DeconvolvedSpectrum* ds = deconvolved_of(survey_index);
       if (ds == nullptr) return -1.0;
@@ -1218,6 +1248,8 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
       std::vector<std::pair<double, bool>> window_decoys;
       std::vector<double> window_decoy_snrs; // charge SNR of each window decoy (to order them, the highest first)
       std::vector<double> window_decoy_qscores, window_decoy_qscores1d; // and its precursor score (2D, 1D)
+      // every target mass of the window with its most intense peak there and the charge the window implies
+      std::vector<std::tuple<const PeakGroup*, const FLASHHelperClasses::LogMzPeak*, int>> window_masses;
 
       for (auto& pg : *ds)
       {
@@ -1277,6 +1309,7 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
 
         if (tmp_precursor == nullptr) { continue; }
         mass_to_intensity[pg.getMonoMass()] = intensity;
+        window_masses.emplace_back(&pg, tmp_precursor, c);
         window_max_mass = std::max(window_max_mass, pg.getMonoMass());
         window_max_charge = std::max(window_max_charge, c);
         if (commit && precursor_by_fragments_)
@@ -1316,6 +1349,40 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
       }
 
       if (! commit) return best_pg == nullptr ? -1.0 : std::max(max_snr, 0.0);
+      // The charge SNR is computed over the whole envelope and cannot tell which ion of the window was isolated. Another mass of the
+      // window replaces the choice when its raw comb holds at least 3x the intensity and it is either the same species 14-18 Da away
+      // (an oxidation or methylation partner on one comb: the charge SNR took the heavier form in 70 of 71 such TopPIC-only cases) or
+      // the owner of the isolation target peak that the choice does not own (Eclip_1476 scan 4033: 4026.21 Da z7 owns the target, share
+      // 0.85; the charge SNR took 6311.40 Da z11, share 0.06). On the lysates: 4333 -> 4341 proteoforms at 1%, 3861 -> 3887 with a mass;
+      // of 411 changed precursors, raw MS1/MS2 support gained 130 and lost 5. Not for a commanded mass.
+      if (best_pg != nullptr && ! found_commanded && window_masses.size() > 1)
+      {
+        const double m0 = best_pg->getMonoMass();
+        const int c0 = int(round(m0 / start_mz));
+        const double w0 = raw_comb(precursor_raw_spec, m0, c0);
+        const std::tuple<const PeakGroup*, const FLASHHelperClasses::LogMzPeak*, int>* top = nullptr;
+        double top_w = 0;
+        for (const auto& wm : window_masses)
+        {
+          const double w = raw_comb(precursor_raw_spec, std::get<0>(wm)->getMonoMass(), std::get<2>(wm));
+          if (w > top_w)
+          {
+            top_w = w;
+            top = &wm;
+          }
+        }
+        if (top != nullptr && std::get<0>(*top) != best_pg && top_w >= 3 * w0)
+        {
+          const double m1 = std::get<0>(*top)->getMonoMass();
+          const double d = std::abs(m1 - m0);
+          if ((d >= 13.5 && d <= 18.5) || (owns_target(precursor_raw_spec, m1, std::get<2>(*top)) && ! owns_target(precursor_raw_spec, m0, c0)))
+          {
+            best_pg = std::get<0>(*top);
+            best_peak = std::get<1>(*top);
+            switched_precursors_++;
+          }
+        }
+      }
       if (precursor_by_fragments_)
       {
         // the decoy precursor is decided by the fragments (runSpectralDeconvolution_). A decoy mass within three isotopes of a target mass
@@ -1423,6 +1490,12 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
     {
       native_id_precursor_peak_group_map_[native_id] = peakGroupFromCommand_(*located);
     }
+  }
+  if (switched_precursors_ > 0)
+  {
+    OPENMS_LOG_INFO << "Precursor masses switched to a window mass with at least 3x the raw intensity (a 14-18 Da partner or the owner of "
+                       "the isolation target peak): "
+                    << switched_precursors_ << std::endl;
   }
   if (rescued_precursors_ > 0)
   {

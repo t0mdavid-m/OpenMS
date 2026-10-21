@@ -105,6 +105,8 @@ namespace OpenMS
     int precursor_rescue_window_ = 2;
     /// precursors taken from a neighbouring MS1 spectrum in this run
     Size rescued_precursors_ = 0;
+    /// precursors switched from the charge-SNR choice to a window mass with at least 3x its raw intensity, in this run
+    Size switched_precursors_ = 0;
     /// choose the precursor of an MSn spectrum by the complementary fragment pairs among the target masses in its isolation window and,
     /// with report_FDR, its decoy precursor among the decoy masses of the window against the chosen precursor (precursor_by_fragments)
     bool precursor_by_fragments_ = true;
