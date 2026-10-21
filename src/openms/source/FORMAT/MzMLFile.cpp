@@ -260,12 +260,33 @@ namespace OpenMS
       {
         if (e) { std::rethrow_exception(e); }
       }
+      // Each chunk handler creates its own DataProcessing objects. The serial loader shares one object per
+      // dataProcessing element, and the writer compares these pointers, so equal ones are shared again.
+      std::vector<DataProcessingPtr> shared;
+      const auto share = [&shared](std::vector<DataProcessingPtr>& dps) {
+        for (auto& dp : dps)
+        {
+          auto it = std::find_if(shared.begin(), shared.end(), [&dp](const DataProcessingPtr& s) { return s == dp || *s == *dp; });
+          if (it == shared.end()) { shared.push_back(dp); }
+          else { dp = *it; }
+        }
+      };
       map = std::move(parts[0]);
       map.reserveSpaceSpectra(spectrum_offsets.size());
+      for (auto& spectrum : map.getSpectra()) { share(spectrum.getDataProcessing()); }
+      for (auto& chromatogram : map.getChromatograms()) { share(chromatogram.getDataProcessing()); }
       for (Size c = 1; c < parts_n; ++c)
       {
-        for (auto& spectrum : parts[c].getSpectra()) { map.addSpectrum(std::move(spectrum)); }
-        for (auto& chromatogram : parts[c].getChromatograms()) { map.addChromatogram(std::move(chromatogram)); }
+        for (auto& spectrum : parts[c].getSpectra())
+        {
+          share(spectrum.getDataProcessing());
+          map.addSpectrum(std::move(spectrum));
+        }
+        for (auto& chromatogram : parts[c].getChromatograms())
+        {
+          share(chromatogram.getDataProcessing());
+          map.addChromatogram(std::move(chromatogram));
+        }
         parts[c] = MSExperiment();
       }
       map.setLoadedFileType(file);
