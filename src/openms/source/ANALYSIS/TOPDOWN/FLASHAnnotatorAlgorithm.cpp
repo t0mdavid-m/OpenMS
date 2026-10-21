@@ -47,6 +47,19 @@ namespace
     return masses;
   }
 
+  // the index of the first peak at or above low in the whole spectrum (the size if none)
+  inline int firstPeakAtOrAbove(const FLASHAnnotatorAlgorithm::PeakArrays& spec, double low)
+  {
+    const double* base = spec.mzs.data();
+    const int size = (int)spec.mzs.size();
+    const auto& buckets = spec.bucket_start;
+    if (buckets.empty()) return (int)(std::lower_bound(base, base + size, low) - base);
+    const double b = std::floor(low / FLASHAnnotatorAlgorithm::PeakArrays::bucket_width);
+    if (b < 0) return 0;
+    if (b + 1 >= (double)buckets.size()) return size;
+    return (int)(std::lower_bound(base + buckets[(Size)b], base + buckets[(Size)b + 1], low) - base);
+  }
+
   /**
     Index of the observed peak nearest to @p target within [target - w, target + w], or -1 (the first of equally near
     peaks wins). The first index with m/z >= target - w is searched in [lo, hi), which must contain it (or hi if it is
@@ -59,18 +72,7 @@ namespace
   {
     const double* base = spec.mzs.data();
     const int size = (int)spec.mzs.size();
-    const double low = target - w;
-    int first; // in the whole spectrum
-    const auto& buckets = spec.bucket_start;
-    if (buckets.empty()) { first = (int)(std::lower_bound(base, base + size, low) - base); }
-    else
-    {
-      const double b = std::floor(low / FLASHAnnotatorAlgorithm::PeakArrays::bucket_width);
-      if (b < 0) first = 0;
-      else if (b + 1 >= (double)buckets.size()) first = size;
-      else first = (int)(std::lower_bound(base + buckets[(Size)b], base + buckets[(Size)b + 1], low) - base);
-    }
-    lb = std::max(lo, std::min(hi, first));
+    lb = std::max(lo, std::min(hi, firstPeakAtOrAbove(spec, target - w)));
     int best = -1;
     double best_d = 0;
     for (int i = lb; i < size && base[i] <= target + w; i++)
@@ -364,6 +366,52 @@ void FLASHAnnotatorAlgorithm::PeakArrays::indexBuckets()
   }
 }
 
+void FLASHAnnotatorAlgorithm::PeakOccupancy::build(const PeakArrays& spec)
+{
+  bits.clear();
+  if (spec.mzs.empty()) return;
+  first_mz = spec.mzs.front();
+  last_mz = spec.mzs.back();
+  // bins_per_th is a power of two: mz * bins_per_th is exact, and the bin of a peak in [low, high] lies between the bins of low and high
+  first_bin = std::floor(first_mz * bins_per_th);
+  const double bins = std::floor(last_mz * bins_per_th) - first_bin + 1;
+  // not built for an unusual m/z range; nor with negative m/z, where the bucket search of nearestPeak starts at the first peak
+  if (! (first_mz >= 0 && bins >= 1 && bins <= (double)(1 << 24))) return;
+  bits.assign(((Size)bins + 63) / 64, 0);
+  double previous = first_mz;
+  for (const double mz : spec.mzs)
+  {
+    if (! (mz >= previous && mz <= last_mz)) // not sorted: not built
+    {
+      bits.clear();
+      return;
+    }
+    previous = mz;
+    const Size b = (Size)(std::floor(mz * bins_per_th) - first_bin);
+    bits[b >> 6] |= UInt64(1) << (b & 63);
+  }
+}
+
+bool FLASHAnnotatorAlgorithm::PeakOccupancy::mayHavePeak(double low, double high) const
+{
+  if (bits.empty()) return true;
+  // a peak in [low, high] lies in [l, h], the window within the peaks' m/z range
+  const double l = std::max(low, first_mz);
+  const double h = std::min(high, last_mz);
+  if (l > h) return false;
+  if (! (l <= h)) return true; // not a number: searched
+  const Size lo = (Size)(std::floor(l * bins_per_th) - first_bin);
+  const Size hi = (Size)(std::floor(h * bins_per_th) - first_bin);
+  for (Size word = lo >> 6; word <= hi >> 6; word++)
+  {
+    UInt64 m = bits[word];
+    if (word == lo >> 6) m &= ~UInt64(0) << (lo & 63);
+    if (word == hi >> 6) m &= ~UInt64(0) >> (63 - (hi & 63));
+    if (m != 0) return true;
+  }
+  return false;
+}
+
 void FLASHAnnotatorAlgorithm::toPeakArrays(const MSSpectrum& spec, PeakArrays& peaks)
 {
   peaks.mzs.clear();
@@ -573,19 +621,30 @@ bool FLASHAnnotatorAlgorithm::getFragments(const PrSM& prsm, std::vector<Fragmen
   return true;
 }
 
-bool FLASHAnnotatorAlgorithm::matchEnvelope_(const PeakArrays& spec, double mono_mass, int bin, int z, double cal_factor, EnvelopeMatch& match) const
+bool FLASHAnnotatorAlgorithm::matchEnvelope_(const PeakArrays& spec, const PeakOccupancy& occupancy, double mono_mass, int bin, int z, double cal_factor,
+                                             EnvelopeMatch& match) const
+{
+  const int begin = table_.offset[bin];
+  if (requiredPeaks_(table_.offset[bin + 1] - begin) < 0) return false;
+  // predicted m/z on the observed scale (observed / cal_factor is the calibrated m/z), and the tolerance with it
+  const double scale = cal_factor / z;
+  const double base = mono_mass + z * Constants::PROTON_MASS_U;
+  const double tol = tol_ * 1e-6;
+  // the most abundant peak is required: not searched if its window holds no peak (most envelopes)
+  const double target = (base + table_.iso_index[begin + table_.apex_pos[bin]] * Constants::C13C12_MASSDIFF_U) * scale;
+  if (! occupancy.mayHavePeak(target - target * tol, target + target * tol)) return false;
+  return searchEnvelope_(spec, occupancy, base, scale, bin, match);
+}
+
+bool FLASHAnnotatorAlgorithm::searchEnvelope_(const PeakArrays& spec, const PeakOccupancy& occupancy, double base, double scale, int bin,
+                                              EnvelopeMatch& match) const
 {
   const int begin = table_.offset[bin];
   const int end = table_.offset[bin + 1];
   const int predicted = end - begin;
   const int required = requiredPeaks_(predicted);
-  if (required < 0) return false;
-
   const int size = (int)spec.mzs.size();
   const int apex = begin + table_.apex_pos[bin];
-  // predicted m/z on the observed scale (observed / cal_factor is the calibrated m/z), and the tolerance with it
-  const double scale = cal_factor / z;
-  const double base = mono_mass + z * Constants::PROTON_MASS_U;
   const double tol = tol_ * 1e-6;
 
   // the most abundant peak first: it is required
@@ -593,6 +652,7 @@ bool FLASHAnnotatorAlgorithm::matchEnvelope_(const PeakArrays& spec, double mono
   int apex_lb;
   const int apex_peak = nearestPeak(spec, 0, size, target, target * tol, apex_lb);
   if (apex_peak < 0) return false;
+  const double apex_low = target - target * tol;
 
   match.peaks.clear();
   match.peaks.push_back(apex_peak);
@@ -602,12 +662,27 @@ bool FLASHAnnotatorAlgorithm::matchEnvelope_(const PeakArrays& spec, double mono
   int matched = 1;
   int unsearched = predicted - 1;
 
-  // isotope peaks above the most abundant one, in increasing m/z
+  // isotope peaks above the most abundant one, in increasing m/z. A window that holds no peak is not searched (the search finds
+  // none), so lb, where the next search starts, does not move up to it: caught up if a later window starts below a skipped one
   int lb = apex_lb;
+  bool skipped = false;
+  double skipped_low = 0; // the highest start of the windows skipped since the last search
   for (int j = apex + 1; j < end; j++)
   {
     target = (base + table_.iso_index[j] * Constants::C13C12_MASSDIFF_U) * scale;
-    const int peak = nearestPeak(spec, lb, size, target, target * tol, lb);
+    const double w = target * tol;
+    int peak = -1;
+    if (occupancy.mayHavePeak(target - w, target + w))
+    {
+      if (skipped && target - w < skipped_low) lb = std::max(lb, firstPeakAtOrAbove(spec, skipped_low));
+      skipped = false;
+      peak = nearestPeak(spec, lb, size, target, w, lb);
+    }
+    else if (! skipped || target - w > skipped_low)
+    {
+      skipped = true;
+      skipped_low = target - w;
+    }
     unsearched--;
     if (peak < 0)
     {
@@ -622,12 +697,29 @@ bool FLASHAnnotatorAlgorithm::matchEnvelope_(const PeakArrays& spec, double mono
     syy += y * y;
     intensity += spec.intensities[peak];
   }
-  // and below it, in decreasing m/z
+  // and below it, in decreasing m/z. A window that holds no peak is skipped only if no earlier window started below it (its search
+  // would start at its first peak and find none); lb, where the next search starts, is caught up as above
   lb = apex_lb;
+  skipped = false; // skipped_low: the lowest start of the windows skipped since the last search
+  double min_low = apex_low; // the lowest start of the windows so far
   for (int j = apex - 1; j >= begin; j--)
   {
     target = (base + table_.iso_index[j] * Constants::C13C12_MASSDIFF_U) * scale;
-    const int peak = nearestPeak(spec, 0, lb, target, target * tol, lb);
+    const double w = target * tol;
+    const double low = target - w;
+    int peak = -1;
+    if (low <= min_low && ! occupancy.mayHavePeak(low, target + w))
+    {
+      if (! skipped || low < skipped_low) skipped_low = low;
+      skipped = true;
+    }
+    else
+    {
+      if (skipped && low > skipped_low) lb = std::min(lb, firstPeakAtOrAbove(spec, skipped_low));
+      skipped = false;
+      peak = nearestPeak(spec, 0, lb, target, w, lb);
+    }
+    min_low = std::min(min_low, low);
     unsearched--;
     if (peak < 0)
     {
@@ -766,6 +858,8 @@ void FLASHAnnotatorAlgorithm::annotateOne_(const PeakArrays& spec, const std::ve
   const double min_mz = empty ? 0 : spec.mzs.front();
   const double max_mz = empty ? 0 : spec.mzs.back();
   const double tol = tol_ * 1e-6;
+  PeakOccupancy occupancy;
+  occupancy.build(spec);
 
   // fragment hypotheses (ion type group, length): ion types whose envelopes fall on the same peaks count once
   const int hypothesis_count = ion_group_count_ * std::max(1, length);
@@ -790,7 +884,7 @@ void FLASHAnnotatorAlgorithm::annotateOne_(const PeakArrays& spec, const std::ve
       if (observed * (1 - tol) > max_mz) continue;
       if (observed * (1 + tol) < min_mz) break; // higher charges are further below
       testable[hypothesis] = 1;
-      if (! matchEnvelope_(spec, f.mono_mass, bin, z, cal_factor, match)) continue;
+      if (! matchEnvelope_(spec, occupancy, f.mono_mass, bin, z, cal_factor, match)) continue;
       matched[hypothesis] = 1;
       covered[f.bond] = 1;
       for (int k : match.peaks) terminal_peaks[k] = 1;
@@ -839,7 +933,7 @@ void FLASHAnnotatorAlgorithm::annotateOne_(const PeakArrays& spec, const std::ve
         const double observed = apex_mz * cal_factor;
         if (observed * (1 - tol) > max_mz) continue;
         if (observed * (1 + tol) < min_mz) break;
-        if (matchEnvelope_(spec, mono_mass, bin, z, cal_factor, match))
+        if (matchEnvelope_(spec, occupancy, mono_mass, bin, z, cal_factor, match))
         {
           if (! decoy_matched_hypothesis[hypothesis]) decoy_matched++; // a hypothesis counts once, whatever the number of charges and ion types
           decoy_matched_hypothesis[hypothesis] = 1;
@@ -899,7 +993,7 @@ void FLASHAnnotatorAlgorithm::annotateOne_(const PeakArrays& spec, const std::ve
   }
   pieces.mono_mass.assign(total, -1.0);
   pieces.max_charge.assign(total, 0);
-  std::set<std::pair<int, int>> testable_pieces;
+  int testable_pieces = 0; // pieces (first, last) testable with at least one internal ion type
   for (int first = 1; first <= length - 3; first++)
   {
     for (int last = first + 1; last <= pieces.lastMax(first); last++)
@@ -913,6 +1007,7 @@ void FLASHAnnotatorAlgorithm::annotateOne_(const PeakArrays& spec, const std::ve
         else if (me >= first && ms <= last) split = true; // the piece splits the modification range: its mass is unknown
       }
       if (split) continue;
+      bool testable = false;
       for (int o = 0; o < pieces.offsets; o++)
       {
         const double mono_mass = mass + internal_offsets_[o];
@@ -934,15 +1029,16 @@ void FLASHAnnotatorAlgorithm::annotateOne_(const PeakArrays& spec, const std::ve
         const int idx = pieces.index(first, last, o);
         pieces.mono_mass[idx] = mono_mass;
         pieces.max_charge[idx] = max_charge;
-        testable_pieces.emplace(first, last);
+        testable = true;
       }
+      if (testable) testable_pieces++;
     }
   }
 
   // no extension where the proteoform's start or end is undetermined: its "internal" pieces may touch the real terminus
   const int extension_min_run = (prsm.known_n_term && prsm.known_c_term) ? extension_min_run_ : 0;
   std::vector<char> authentic, decoy_authentic;
-  const auto counted = annotateInternal_(spec, sorted_intensities, pieces, prsm.sequence, terminal_peaks, cal_factor, 0.0, true,
+  const auto counted = annotateInternal_(spec, occupancy, sorted_intensities, pieces, prsm.sequence, terminal_peaks, cal_factor, 0.0, true,
                                          extension_min_run, std::vector<char>(length, 0), result.envelopes, authentic);
   // the decoy worlds of the internal fragments are only needed to study chance (the internal p-value comes from the calibration
   // model): they run with report_decoy_envelopes only
@@ -950,7 +1046,7 @@ void FLASHAnnotatorAlgorithm::annotateOne_(const PeakArrays& spec, const std::ve
   for (Size s = 0; report_decoys_ && s < decoy_shifts_.size(); s++)
   {
     decoy_counted = std::max(0, decoy_counted);
-    decoy_counted += (int)annotateInternal_(spec, sorted_intensities, pieces, prsm.sequence, terminal_peaks, cal_factor, decoy_shifts_[s],
+    decoy_counted += (int)annotateInternal_(spec, occupancy, sorted_intensities, pieces, prsm.sequence, terminal_peaks, cal_factor, decoy_shifts_[s],
                                             true, extension_min_run, authentic, result.envelopes, decoy_authentic)
                        .size();
   }
@@ -966,7 +1062,7 @@ void FLASHAnnotatorAlgorithm::annotateOne_(const PeakArrays& spec, const std::ve
   {
     covered_all_bonds += covered_all[b];
   }
-  result.internal_hypotheses = (int)testable_pieces.size();
+  result.internal_hypotheses = testable_pieces;
   result.internal_matched = (int)counted.size();
   result.internal_decoy_matched = decoy_counted;
   result.authentic_cleavages = (int)std::count(authentic.begin(), authentic.end(), 1);
@@ -974,7 +1070,8 @@ void FLASHAnnotatorAlgorithm::annotateOne_(const PeakArrays& spec, const std::ve
   result.coverage_with_internal = 100.0 * covered_all_bonds / (length - 1);
 }
 
-std::set<std::pair<int, int>> FLASHAnnotatorAlgorithm::annotateInternal_(const PeakArrays& spec, const std::vector<double>& sorted_intensities,
+std::set<std::pair<int, int>> FLASHAnnotatorAlgorithm::annotateInternal_(const PeakArrays& spec, const PeakOccupancy& occupancy,
+                                                                         const std::vector<double>& sorted_intensities,
                                                                          const InternalPieces& pieces, const String& sequence,
                                                                          const std::vector<char>& terminal_peaks, double cal_factor, double shift,
                                                                          bool record, int extension_min_run, const std::vector<char>& given_authentic,
@@ -1008,7 +1105,7 @@ std::set<std::pair<int, int>> FLASHAnnotatorAlgorithm::annotateInternal_(const P
           const double observed = apex_mz * cal_factor;
           if (observed * (1 - tol) > max_mz) continue;
           if (observed * (1 + tol) < min_mz) break;
-          if (! matchEnvelope_(spec, mono_mass, bin, z, cal_factor, match) || terminal_peaks[match.apex_peak]) continue;
+          if (! matchEnvelope_(spec, occupancy, mono_mass, bin, z, cal_factor, match) || terminal_peaks[match.apex_peak]) continue;
           accepted[idx] = 1;
           if (! record) break;
           Envelope e;

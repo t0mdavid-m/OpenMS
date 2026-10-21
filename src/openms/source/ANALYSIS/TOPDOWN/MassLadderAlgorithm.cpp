@@ -14,6 +14,7 @@
 #include <boost/math/special_functions/gamma.hpp>
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <map>
 #ifdef _OPENMP
@@ -89,6 +90,16 @@ public:
     return idx < hi_.size() && lo_[idx] <= v ? (long)source_[idx] : -1;
   }
 
+  // whether a mass matches the residue sum v: massIndex(v) >= 0
+  bool matches(double v) const
+  {
+    if (! (v <= max_value_)) return false;
+    const std::size_t b = (std::size_t)(v * bin_inverse_ + bin_phase_);
+    if (((bits_[b >> 6] >> (b & 63)) & 1) == 0) return false;
+    const std::size_t idx = (std::size_t)(std::lower_bound(hi_.begin(), hi_.end(), v) - hi_.begin());
+    return idx < hi_.size() && lo_[idx] <= v;
+  }
+
   // the summed tolerance widths of the masses with t <= v: the expected number of chance matches per ladder position, times its mass
   // density, up to v
   double weightUpTo(double v) const
@@ -133,6 +144,90 @@ struct Result
   std::vector<Window> top;    // the best top_n windows with at least min_k matched positions, best first
 };
 
+// a precursor mass: a window of residue sum m fits it when low <= m <= high and m + h2o is within tol of it at an isotope error of -1, 0
+// or 1 (isotopeOf)
+struct Query
+{
+  double mass = 0, tol = 0, low = 0, high = 0;
+};
+
+inline Query makeQuery(double precursor_mass, double precursor_tol_ppm, double h2o, double isotope_mass)
+{
+  Query q;
+  q.mass = precursor_mass;
+  q.tol = precursor_tol_ppm * 1e-6 * precursor_mass;
+  q.low = precursor_mass - h2o - isotope_mass - q.tol;
+  q.high = precursor_mass - h2o + isotope_mass + q.tol;
+  return q;
+}
+
+// the isotope error (-1, 0, 1; the last of several) at which a window of residue sum m fits the precursor mass; 2 if none
+inline int isotopeOf(double mass, const Query& q, double h2o, double isotope_mass)
+{
+  int isotope = 2; // none
+  for (int v = -1; v <= 1; v++)
+  {
+    if (std::abs(mass + h2o - (q.mass + v * isotope_mass)) <= q.tol) isotope = v;
+  }
+  return isotope;
+}
+
+// A hypothesis: the window i..j-1 of a protein (S its residue sums, mass = S(j) - S(i)) that fits the precursor mass at the isotope
+// error isotope. Counts its matched ladder positions and keeps it among the top_n best windows of result.
+inline void scoreWindow(const std::vector<TargetSet>& sets, const double* S, std::uint32_t protein, std::size_t i, std::size_t j, double mass,
+                        int isotope, int min_k, std::size_t top_n, std::vector<int>& counts, Result& result)
+{
+  result.hypotheses++;
+  const double si = S[i], sj = S[j];
+  std::fill(counts.begin(), counts.end(), 0);
+  int k = 0;
+  if (sets.size() == 2 && sets[0].isPrefix() != sets[1].isPrefix())
+  {
+    // one ion type per side (b y): k is the sum of their counts
+    const std::size_t p = sets[0].isPrefix() ? 0 : 1;
+    const TargetSet &prefix_set = sets[p], &suffix_set = sets[1 - p];
+    int on_prefix = 0, on_suffix = 0;
+    for (std::size_t x = i + 1; x < j; x++)
+    {
+      on_prefix += (int)prefix_set.matches(S[x] - si);
+      on_suffix += (int)suffix_set.matches(sj - S[x]);
+    }
+    counts[p] = on_prefix;
+    counts[1 - p] = on_suffix;
+    k = on_prefix + on_suffix;
+  }
+  else
+  {
+    for (std::size_t x = i + 1; x < j; x++)
+    {
+      bool on_prefix = false, on_suffix = false;
+      for (std::size_t s = 0; s < sets.size(); s++)
+      {
+        const bool prefix = sets[s].isPrefix();
+        if (sets[s].massIndex(prefix ? S[x] - si : sj - S[x]) < 0) continue;
+        counts[s]++;
+        (prefix ? on_prefix : on_suffix) = true;
+      }
+      k += (int)on_prefix + (int)on_suffix;
+    }
+  }
+  if (k < min_k) return;
+  double weight = 0;
+  for (const auto& set : sets) weight += set.weightUpTo(mass);
+  Window w;
+  w.lambda = mass > 0 ? (double)(j - i - 1) / mass * weight : 0;
+  w.log_p = -std::log10(std::max(boost::math::gamma_p((double)k, std::max(w.lambda, 1e-12)), 1e-300));
+  w.k = k;
+  w.protein = protein;
+  w.i = (std::uint32_t)i;
+  w.j = (std::uint32_t)j;
+  w.isotope = isotope;
+  if (result.top.size() >= top_n && ! isBetter(w, result.top.back())) return;
+  w.counts = counts;
+  result.top.insert(std::upper_bound(result.top.begin(), result.top.end(), w, isBetter), std::move(w));
+  if (result.top.size() > top_n) result.top.pop_back();
+}
+
 // Every window (i, j) inside a segment whose unmodified mass S(j) - S(i) + h2o equals the precursor mass (within precursor_tol_ppm of it,
 // also at isotope errors -1 and +1, isotope_mass apart), found by a two-pointer sweep over the residue sums S of each segment
 // (sums[protein]). A ladder position x in (i, j) counts once per side: on the prefix side if S(x) - S(i) matches a prefix set, on the
@@ -150,8 +245,8 @@ inline void search(const std::vector<TargetSet>& sets, const std::vector<Segment
   result.hypotheses = 0;
   result.top.clear();
   if (top_n == 0 || precursor_mass <= 0) return;
-  const double tol = precursor_tol_ppm * 1e-6 * precursor_mass;
-  const double low = precursor_mass - h2o - isotope_mass - tol, high = precursor_mass - h2o + isotope_mass + tol;
+  const Query q = makeQuery(precursor_mass, precursor_tol_ppm, h2o, isotope_mass);
+  const double low = q.low, high = q.high;
   std::vector<int> counts(sets.size(), 0);
   for (const auto& seg : segments)
   {
@@ -168,46 +263,227 @@ inline void search(const std::vector<TargetSet>& sets, const std::vector<Segment
       {
         if ((int)(j - i) < min_length) continue; // not a hypothesis either
         const double mass = S[j] - si;
-        int isotope = 2; // none
-        for (int v = -1; v <= 1; v++)
-        {
-          if (std::abs(mass + h2o - (precursor_mass + v * isotope_mass)) <= tol) isotope = v;
-        }
+        const int isotope = isotopeOf(mass, q, h2o, isotope_mass);
         if (isotope == 2) continue;
-        result.hypotheses++;
-        const double sj = S[j];
-        std::fill(counts.begin(), counts.end(), 0);
-        int k = 0;
-        for (std::size_t x = i + 1; x < j; x++)
-        {
-          bool on_prefix = false, on_suffix = false;
-          for (std::size_t s = 0; s < sets.size(); s++)
-          {
-            const bool prefix = sets[s].isPrefix();
-            if (sets[s].massIndex(prefix ? S[x] - si : sj - S[x]) < 0) continue;
-            counts[s]++;
-            (prefix ? on_prefix : on_suffix) = true;
-          }
-          k += (int)on_prefix + (int)on_suffix;
-        }
-        if (k < min_k) continue;
-        double weight = 0;
-        for (const auto& set : sets) weight += set.weightUpTo(mass);
-        Window w;
-        w.lambda = mass > 0 ? (double)(j - i - 1) / mass * weight : 0;
-        w.log_p = -std::log10(std::max(boost::math::gamma_p((double)k, std::max(w.lambda, 1e-12)), 1e-300));
-        w.k = k;
-        w.protein = seg.protein;
-        w.i = (std::uint32_t)i;
-        w.j = (std::uint32_t)j;
-        w.isotope = isotope;
-        if (result.top.size() >= top_n && ! isBetter(w, result.top.back())) continue;
-        w.counts = counts;
-        result.top.insert(std::upper_bound(result.top.begin(), result.top.end(), w, isBetter), std::move(w));
-        if (result.top.size() > top_n) result.top.pop_back();
+        scoreWindow(sets, S, seg.protein, i, j, mass, isotope, min_k, top_n, counts, result);
       }
     }
   }
+}
+
+// The same as search for the windows of the precursor mass listed by findWindows (the hypotheses of the sweep, in its order): those of
+// chunk c are windows[begin[c] .. end[c] - 1].
+inline void searchListed(const std::vector<TargetSet>& sets, const std::vector<Segment>& segments, const std::vector<const double*>& sums,
+                         const MassLadderAlgorithm::PreparedWindow* windows, const std::uint32_t* begin, const std::uint32_t* end, std::size_t chunks,
+                         double precursor_mass, double precursor_tol_ppm, double h2o, double isotope_mass, int min_k, std::size_t top_n, Result& result)
+{
+  result.hypotheses = 0;
+  result.top.clear();
+  if (top_n == 0 || precursor_mass <= 0) return;
+  const Query q = makeQuery(precursor_mass, precursor_tol_ppm, h2o, isotope_mass);
+  std::vector<int> counts(sets.size(), 0);
+  for (std::size_t c = 0; c < chunks; c++)
+  {
+    for (std::uint32_t t = begin[c]; t < end[c]; t++)
+    {
+      const auto& seg = segments[windows[t].segment];
+      const double* S = sums[seg.protein];
+      const std::size_t i = (std::size_t)seg.a + windows[t].start, j = i + windows[t].length;
+      const double mass = S[j] - S[i];
+      scoreWindow(sets, S, seg.protein, i, j, mass, isotopeOf(mass, q, h2o, isotope_mass), min_k, top_n, counts, result);
+    }
+  }
+}
+
+// The hypotheses of search (the windows that fit a precursor mass) for many precursor masses (queries, ascending and distinct) in one
+// pass over the database instead of one sweep per mass. A bitset of 1/32 Da bins of the residue sums that can fit a query (its three
+// isotope intervals, widened far beyond rounding errors) pre-filters the windows of at least min_length residues up to the largest such
+// sum; a window in a set bin is tested against the queries whose [low, high] can hold its mass, exactly as search tests it. Pass 1 counts
+// the hypotheses of each query per chunk of consecutive segments, pass 2 writes them grouped by query, each group in the order of search
+// (segment, i, j) over the chunks. Only the ascending queries whose hypotheses fit max_windows in all are listed (prepared).
+// Returns false (nothing listed) if the windows are not listed: a segment of 65536 residues or more, residue sums beyond 10 MDa or
+// isotope intervals of more than 2^25 bins in all (precursor tolerances far beyond those of mass spectrometers).
+inline bool findWindows(const std::vector<Segment>& segments, const std::vector<const double*>& sums, const std::vector<Query>& queries,
+                        double h2o, double isotope_mass, int min_length, std::size_t max_windows, std::size_t& prepared, std::size_t& chunks_out,
+                        std::vector<MassLadderAlgorithm::PreparedWindow>& windows, std::vector<std::uint32_t>& offsets)
+{
+  prepared = 0;
+  chunks_out = 0;
+  windows.clear();
+  offsets.clear();
+  const std::size_t n_queries = queries.size();
+  if (n_queries == 0 || segments.empty()) return true;
+  if (n_queries >= ((std::size_t)1 << 31)) return false;
+  max_windows = std::min(max_windows, ((std::size_t)1 << 31) - 1);
+  for (const auto& seg : segments)
+  {
+    if (seg.b - seg.a > 65535) return false;
+  }
+  // the bins of the residue sums that can fit a query: a sum m that passes isotopeOf at v is within tol of mass + v x isotope_mass - h2o
+  // up to rounding errors of a few ulps (about 1e-15 x mass), far below pad
+  constexpr double bin_inverse = 32.0;
+  auto interval = [&](const Query& q, int v) {
+    const double center = q.mass + v * isotope_mass - h2o, pad = 1e-9 * q.mass + 1e-6;
+    return std::make_pair(center - q.tol - pad, center + q.tol + pad);
+  };
+  double max_value = 0; // the largest residue sum that can fit a query
+  for (const auto& q : queries)
+  {
+    for (int v = -1; v <= 1; v++) max_value = std::max(max_value, interval(q, v).second);
+  }
+  if (! (max_value <= 1e7)) return false;
+  auto binRange = [&](const Query& q, int v, std::size_t& b0, std::size_t& b1) {
+    const auto [lo, hi] = interval(q, v);
+    if (! (hi > 0)) return false;
+    b0 = lo > 0 ? (std::size_t)(lo * bin_inverse) : 0;
+    b1 = (std::size_t)(hi * bin_inverse);
+    return true;
+  };
+  std::size_t entries = 0; // bins per query, at most
+  for (const auto& q : queries)
+  {
+    for (int v = -1; v <= 1; v++)
+    {
+      std::size_t b0, b1;
+      if (binRange(q, v, b0, b1)) entries += b1 - b0 + 1;
+    }
+  }
+  if (entries > ((std::size_t)1 << 25)) return false;
+  const std::size_t bin_count = (std::size_t)(max_value * bin_inverse) + 1;
+  std::vector<std::uint64_t> bits(bin_count / 64 + 1, 0);
+  for (const auto& q : queries)
+  {
+    for (int v = -1; v <= 1; v++)
+    {
+      std::size_t b0, b1;
+      if (! binRange(q, v, b0, b1)) continue;
+      for (std::size_t b = b0; b <= b1; b++) bits[b >> 6] |= std::uint64_t(1) << (b & 63);
+    }
+  }
+  // per set bin (by its rank among them), the queries that can fit a sum in it (bin_queries[bin_offset[r] .. bin_offset[r + 1] - 1])
+  std::vector<std::uint32_t> word_rank(bits.size() + 1, 0); // the set bins in the words before
+  for (std::size_t w = 0; w < bits.size(); w++) word_rank[w + 1] = word_rank[w] + (std::uint32_t)std::popcount(bits[w]);
+  auto rankOf = [&](std::size_t b) { return word_rank[b >> 6] + (std::uint32_t)std::popcount(bits[b >> 6] & ((std::uint64_t(1) << (b & 63)) - 1)); };
+  const std::size_t set_bins = word_rank.back();
+  std::vector<std::uint32_t> bin_offset(set_bins + 1, 0), last(set_bins, (std::uint32_t)n_queries), bin_queries;
+  for (int fill = 0; fill < 2; fill++)
+  {
+    if (fill == 1)
+    {
+      for (std::size_t r = 0; r < set_bins; r++) bin_offset[r + 1] += bin_offset[r];
+      bin_queries.resize(bin_offset.back());
+      std::fill(last.begin(), last.end(), (std::uint32_t)n_queries);
+    }
+    std::vector<std::uint32_t> next(bin_offset.begin(), bin_offset.end() - 1);
+    for (std::size_t n = 0; n < n_queries; n++)
+    {
+      for (int v = -1; v <= 1; v++)
+      {
+        std::size_t b0, b1;
+        if (! binRange(queries[n], v, b0, b1)) continue;
+        for (std::size_t b = b0; b <= b1; b++)
+        {
+          const std::uint32_t r = rankOf(b);
+          if (last[r] == n) continue; // the isotope intervals of a query overlap
+          last[r] = (std::uint32_t)n;
+          if (fill == 0) bin_offset[r + 1]++;
+          else bin_queries[next[r]++] = (std::uint32_t)n;
+        }
+      }
+    }
+  }
+  // the windows of the segments s0..s1-1 tested against the queries that can fit them, in the order of search: f(hypothesis of the query,
+  // query, segment, i, j); hypotheses are tested without branches (most tests pass, but which ones is unpredictable)
+  const std::size_t j_min = (std::size_t)std::max(min_length, 1);
+  auto enumerate = [&](std::size_t s0, std::size_t s1, auto&& f) {
+    for (std::size_t s = s0; s < s1; s++)
+    {
+      const auto& seg = segments[s];
+      const double* S = sums[seg.protein];
+      for (std::size_t i = seg.a; i + j_min <= seg.b; i++)
+      {
+        const double si = S[i];
+        for (std::size_t j = i + j_min; j <= seg.b; j++)
+        {
+          const double mass = S[j] - si;
+          if (mass > max_value) break; // residue sums rise within a segment
+          const std::size_t bin = (std::size_t)(mass * bin_inverse);
+          if (((bits[bin >> 6] >> (bin & 63)) & 1) == 0) continue;
+          const std::uint32_t r = rankOf(bin);
+          for (std::uint32_t t = bin_offset[r]; t < bin_offset[r + 1]; t++)
+          {
+            const Query& q = queries[bin_queries[t]];
+            f((mass >= q.low) & (mass <= q.high) & (isotopeOf(mass, q, h2o, isotope_mass) != 2), bin_queries[t], s, i, j);
+          }
+        }
+      }
+    }
+  };
+  // chunks of consecutive segments of about equal work (windows up to max_value: at most max_value / 57 residues long)
+  int threads = 1;
+#ifdef _OPENMP
+  threads = omp_in_parallel() ? 1 : omp_get_max_threads();
+#endif
+  const std::size_t chunk_count = std::min(segments.size(), (std::size_t)(16 * std::max(threads, 1)));
+  const double max_length = max_value / 57.0 + 1;
+  double total_work = 0;
+  for (const auto& seg : segments) total_work += (double)(seg.b - seg.a) * std::min((double)(seg.b - seg.a), max_length);
+  std::vector<std::size_t> chunk_start {0};
+  double work = 0;
+  for (std::size_t s = 0; s < segments.size(); s++)
+  {
+    work += (double)(segments[s].b - segments[s].a) * std::min((double)(segments[s].b - segments[s].a), max_length);
+    if (work >= total_work * (double)chunk_start.size() / (double)chunk_count && chunk_start.size() < chunk_count) chunk_start.push_back(s + 1);
+  }
+  if (chunk_start.back() != segments.size()) chunk_start.push_back(segments.size());
+  const std::size_t chunks = chunk_start.size() - 1;
+  // pass 1: the hypotheses per chunk and query (counts above max_windows are not needed)
+  std::vector<std::uint32_t> table(chunks * n_queries, 0);
+#pragma omp parallel for schedule(dynamic, 1) if (threads > 1)
+  for (long c = 0; c < (long)chunks; c++)
+  {
+    std::uint32_t* count = table.data() + (std::size_t)c * n_queries;
+    enumerate(chunk_start[c], chunk_start[c + 1], [&](bool fits, std::uint32_t n, std::size_t, std::size_t, std::size_t) {
+      count[n] += (std::uint32_t)(fits & (count[n] <= max_windows));
+    });
+  }
+  // the queries listed: from the lowest mass while their hypotheses fit max_windows
+  std::size_t total = 0;
+  for (; prepared < n_queries; prepared++)
+  {
+    std::size_t sum = 0;
+    for (std::size_t c = 0; c < chunks; c++) sum += table[c * n_queries + prepared];
+    if (total + sum > max_windows) break;
+    total += sum;
+  }
+  if (prepared == 0) return true;
+  // the windows by chunk, in a chunk by query (so that a chunk writes to its own part only): offsets[n * chunks + c] is the first of
+  // query n in chunk c, offsets[prepared * chunks + c] the end of chunk c
+  chunks_out = chunks;
+  offsets.assign((prepared + 1) * chunks, 0);
+  std::size_t position = 0;
+  for (std::size_t c = 0; c < chunks; c++)
+  {
+    for (std::size_t n = 0; n < prepared; n++)
+    {
+      offsets[n * chunks + c] = (std::uint32_t)position;
+      position += table[c * n_queries + n];
+      table[c * n_queries + n] = offsets[n * chunks + c];
+    }
+    offsets[prepared * chunks + c] = (std::uint32_t)position;
+  }
+  // pass 2: the hypotheses of the listed queries
+  windows.resize(total);
+#pragma omp parallel for schedule(dynamic, 1) if (threads > 1)
+  for (long c = 0; c < (long)chunks; c++)
+  {
+    std::uint32_t* next = table.data() + (std::size_t)c * n_queries;
+    enumerate(chunk_start[c], chunk_start[c + 1], [&](bool fits, std::uint32_t n, std::size_t s, std::size_t i, std::size_t j) {
+      if (! fits || n >= prepared) return;
+      windows[next[n]++] = {(std::uint32_t)s, (std::uint16_t)(i - segments[s].a), (std::uint16_t)(j - i)};
+    });
+  }
+  return true;
 }
 } // namespace precursor_ladder
 // END precursor ladder kernel
@@ -227,6 +503,7 @@ void MassLadderAlgorithm::buildIndex(const std::vector<std::string>& protein_seq
   segments_.clear();
   window_sums_.clear();
   window_own_sums_.clear();
+  clearPrecursorWindows();
 
   // per ion type: whether it is a prefix ion, and the shift that makes its fragment mass a residue sum (mass + shift)
   for (const auto& ion : ion_types)
@@ -453,8 +730,20 @@ void MassLadderAlgorithm::searchPrecursorLadders(const std::vector<double>& mass
   precursor_ladder::Result found;
   for (Size n = 0; n < precursor_masses.size(); n++)
   {
-    precursor_ladder::search(sets, segments_, window_sums_, precursor_masses[n], precursor_tol_ppm, h2o, Constants::C13C12_MASSDIFF_U,
-                             precursor_ladder_min_k, precursor_ladder_min_length, top_n, found);
+    // the windows of a prepared mass are listed (preparePrecursorWindows); any other mass is swept
+    const auto prepared = std::lower_bound(prepared_masses_.begin(), prepared_masses_.end(), precursor_masses[n]);
+    if (prepared != prepared_masses_.end() && *prepared == precursor_masses[n] && precursor_tol_ppm == prepared_tol_ppm_)
+    {
+      const Size q = (Size)(prepared - prepared_masses_.begin());
+      precursor_ladder::searchListed(sets, segments_, window_sums_, prepared_windows_.data(), prepared_offsets_.data() + q * prepared_chunks_,
+                                     prepared_offsets_.data() + (q + 1) * prepared_chunks_, prepared_chunks_, precursor_masses[n], precursor_tol_ppm,
+                                     h2o, Constants::C13C12_MASSDIFF_U, precursor_ladder_min_k, top_n, found);
+    }
+    else
+    {
+      precursor_ladder::search(sets, segments_, window_sums_, precursor_masses[n], precursor_tol_ppm, h2o, Constants::C13C12_MASSDIFF_U,
+                               precursor_ladder_min_k, precursor_ladder_min_length, top_n, found);
+    }
     auto& result = results[n];
     result.windows = found.hypotheses;
     const double log_hypotheses = std::log10((double)std::max(found.hypotheses, (std::size_t)1));
@@ -502,6 +791,47 @@ void MassLadderAlgorithm::searchPrecursorLadders(const std::vector<double>& mass
       result.candidates.push_back(std::move(cand));
     }
   }
+}
+
+// Precursor ladders of many spectra: the windows of all their precursor masses in one pass over the database (precursor_ladder::findWindows)
+// instead of one sweep per mass, which costs more than the rest of the search. Masses up to 1 MDa at precursor tolerances up to 1000 ppm;
+// at most 2^27 windows (1 GB) are listed, those of the lowest masses first. The other masses are swept.
+void MassLadderAlgorithm::preparePrecursorWindows(const std::vector<double>& precursor_masses, double precursor_tol_ppm)
+{
+  clearPrecursorWindows();
+  if (segments_.empty() || ! (precursor_tol_ppm >= 0 && precursor_tol_ppm <= 1000)) return;
+  std::vector<double> masses;
+  for (double m : precursor_masses)
+  {
+    if (m > 0 && m <= 1e6) masses.push_back(m);
+  }
+  std::sort(masses.begin(), masses.end());
+  masses.erase(std::unique(masses.begin(), masses.end()), masses.end());
+  if (masses.size() < 256) return; // the pass costs about as much as 150 sweeps (E. coli database), so a few masses are swept
+  const double h2o = Residue::getInternalToFull().getMonoWeight();
+  std::vector<precursor_ladder::Query> queries;
+  queries.reserve(masses.size());
+  for (double m : masses) queries.push_back(precursor_ladder::makeQuery(m, precursor_tol_ppm, h2o, Constants::C13C12_MASSDIFF_U));
+  Size prepared = 0;
+  if (! precursor_ladder::findWindows(segments_, window_sums_, queries, h2o, Constants::C13C12_MASSDIFF_U, precursor_ladder_min_length,
+                                      (Size)1 << 27, prepared, prepared_chunks_, prepared_windows_, prepared_offsets_)
+      || prepared == 0)
+  {
+    clearPrecursorWindows();
+    return;
+  }
+  masses.resize(prepared);
+  prepared_masses_ = std::move(masses);
+  prepared_tol_ppm_ = precursor_tol_ppm;
+}
+
+void MassLadderAlgorithm::clearPrecursorWindows()
+{
+  prepared_tol_ppm_ = -1;
+  std::vector<double>().swap(prepared_masses_);
+  prepared_chunks_ = 0;
+  std::vector<PreparedWindow>().swap(prepared_windows_);
+  std::vector<std::uint32_t>().swap(prepared_offsets_);
 }
 
 // Sliding ladders: per protein, every start i of a prefix ladder (masses = S(x) - S(i) on prefix ion types) and every end j of a suffix

@@ -9,6 +9,8 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/CHEMISTRY/ProForma.h> // added for ProForma
 #include <OpenMS/FORMAT/FLASHTnTFile.h>
+#include <exception>
+#include <sstream>
 
 namespace OpenMS
 {
@@ -64,84 +66,106 @@ void FLASHTnTFile::writeProteins(const std::vector<ProteinHit>& hits, std::fstre
 
 void FLASHTnTFile::writeTags(const FLASHTnTAlgorithm& tnt, double flanking_mass_tol, std::fstream& fs)
 {
-  std::stringstream ss;
   auto tags = std::vector<FLASHHelperClasses::Tag>();
   tnt.getTags(tags);
 
-  for (int c = 0; c < 2; c++)
+  // the lines of the tags with PrSMs first, then those of the others, each in tag order; formatted in parallel by blocks of tags
+  const int tag_count = (int)tags.size();
+  const int block_size = 4096;
+  const int block_count = (tag_count + block_size - 1) / block_size;
+  std::vector<std::string> with_hits(block_count), without_hits(block_count);
+  std::vector<std::exception_ptr> errors(block_count);
+#pragma omp parallel for schedule(dynamic)
+  for (int b = 0; b < block_count; b++)
   {
-    for (const auto& tag : tags)
+    try
     {
-      auto hits = std::vector<ProteinHit>();
-      tnt.getProteoformHitsMatchedBy(tag, hits);
-      if (c == 0 && hits.empty()) continue;
-      if (c == 1 && ! hits.empty()) continue;
-
-      String acc = "";
-      String description = "";
-      String hitindices = "";
-      String positions = "";
-      String delta_masses = "";
-      for (const auto& hit : hits)
+      std::stringstream ss_with, ss_without;
+      for (int t = b * block_size; t < std::min(tag_count, (b + 1) * block_size); t++)
       {
-        if (! hitindices.empty()) {
-          acc += ";";
-          description += ";";
-          hitindices += ";";
-          positions += ";";
-          delta_masses += ";";
-        }
+        const auto& tag = tags[t];
+        auto hits = std::vector<ProteinHit>();
+        tnt.getProteoformHitsMatchedBy(tag, hits);
+        std::stringstream& ss = hits.empty() ? ss_without : ss_with;
 
-        acc += hit.getAccession();
-
-        String proteindescription = hit.getDescription();
-        if (proteindescription.empty()) { proteindescription = " "; }
-        description += proteindescription;
-        hitindices += (String)hit.getMetaValue("Index");
-
-        auto pos = std::vector<int>();
-        auto masses = std::vector<double>();
-        auto pos_in_truncated = std::vector<int>();
-        auto masses_in_truncated = std::vector<double>();
-
-        int protein_start_position = hit.getMetaValue("StartPosition");
-        int protein_end_position = hit.getMetaValue("EndPosition");
-        protein_start_position--;
-        String seq = hit.getSequence();
-        FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(pos, masses, -1, seq, tag);
-
-        if (protein_end_position >= 0) seq = seq.substr(0, protein_end_position);
-        if (protein_start_position >= 0) seq = seq.substr(protein_start_position);
-        FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(pos_in_truncated, masses_in_truncated, flanking_mass_tol, seq, tag);
-        if (!pos_in_truncated.empty())
+        String acc = "";
+        String description = "";
+        String hitindices = "";
+        String positions = "";
+        String delta_masses = "";
+        for (const auto& hit : hits)
         {
-          for (int i = 0; i < pos.size(); i++)
+          if (! hitindices.empty()) {
+            acc += ";";
+            description += ";";
+            hitindices += ";";
+            positions += ";";
+            delta_masses += ";";
+          }
+
+          acc += hit.getAccession();
+
+          String proteindescription = hit.getDescription();
+          if (proteindescription.empty()) { proteindescription = " "; }
+          description += proteindescription;
+          hitindices += (String)hit.getMetaValue("Index");
+
+          auto pos = std::vector<int>();
+          auto masses = std::vector<double>();
+          auto pos_in_truncated = std::vector<int>();
+          auto masses_in_truncated = std::vector<double>();
+
+          int protein_start_position = hit.getMetaValue("StartPosition");
+          int protein_end_position = hit.getMetaValue("EndPosition");
+          protein_start_position--;
+          String seq = hit.getSequence();
+          FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(pos, masses, -1, seq, tag);
+
+          if (protein_end_position >= 0) seq = seq.substr(0, protein_end_position);
+          if (protein_start_position >= 0) seq = seq.substr(protein_start_position);
+          FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(pos_in_truncated, masses_in_truncated, flanking_mass_tol, seq, tag);
+          if (!pos_in_truncated.empty())
           {
-            if (pos[i] - (protein_start_position < 0 ? 0 : protein_start_position) != pos_in_truncated[0]) continue;
-            positions += std::to_string(pos[i] + 1);
-            delta_masses += std::to_string(masses[i]);
-            break;
+            for (int i = 0; i < pos.size(); i++)
+            {
+              if (pos[i] - (protein_start_position < 0 ? 0 : protein_start_position) != pos_in_truncated[0]) continue;
+              positions += std::to_string(pos[i] + 1);
+              delta_masses += std::to_string(masses[i]);
+              break;
+            }
           }
         }
-      }
 
-      ss << tag.getIndex() << "\t" << tag.getScan() << "\t" << tag.getRetentionTime() << "\t" << hitindices << "\t" << acc << "\t" << description
-         << "\t" << tag.getSequence() << "\t" << std::to_string(tag.getNtermMass()) << "\t" << std::to_string(tag.getCtermMass()) << "\t" << positions
-         << "\t" << delta_masses << "\t" << tag.getLength() << "\t" << tag.getScore() << "\t";
+        ss << tag.getIndex() << "\t" << tag.getScan() << "\t" << tag.getRetentionTime() << "\t" << hitindices << "\t" << acc << "\t" << description
+           << "\t" << tag.getSequence() << "\t" << std::to_string(tag.getNtermMass()) << "\t" << std::to_string(tag.getCtermMass()) << "\t" << positions
+           << "\t" << delta_masses << "\t" << tag.getLength() << "\t" << tag.getScore() << "\t";
 
-      for (const auto& mz : tag.getMzs())
-      {
-        ss << std::to_string(mz) << ",";
+        for (const auto& mz : tag.getMzs())
+        {
+          ss << std::to_string(mz) << ",";
+        }
+        ss << "\t";
+        for (size_t i = 0; i < tag.getMzs().size(); i++) // one score per mass (a gapped tag spans more residues than masses)
+        {
+          ss << std::to_string(tag.getScore(i)) << ",";
+        }
+        ss << "\n";
       }
-      ss << "\t";
-      for (size_t i = 0; i < tag.getMzs().size(); i++) // one score per mass (a gapped tag spans more residues than masses)
-      {
-        ss << std::to_string(tag.getScore(i)) << ",";
-      }
-      ss << "\n";
+      with_hits[b] = ss_with.str();
+      without_hits[b] = ss_without.str();
+    }
+    catch (...)
+    {
+      errors[b] = std::current_exception();
     }
   }
-  fs << ss.str();
+  // an error is rethrown before anything is written, as by the serial loop
+  for (const auto& e : errors)
+  {
+    if (e) std::rethrow_exception(e);
+  }
+  for (const auto& lines : with_hits) fs << lines;
+  for (const auto& lines : without_hits) fs << lines;
 }
 
 namespace

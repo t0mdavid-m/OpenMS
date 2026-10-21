@@ -11,10 +11,15 @@
 #include <OpenMS/CHEMISTRY/Residue.h>
 #include <OpenMS/CHEMISTRY/ResidueDB.h>
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
+#include <map>
 #include <numeric>
 #include <unordered_map>
+#ifdef _OPENMP
+  #include <omp.h>
+#endif
 
 namespace OpenMS
 {
@@ -27,14 +32,12 @@ constexpr double min_residue_mass = 57.02146;
 /// this much (35 x 0.05 mDa), so a plausibility window is widened by it
 constexpr double plausible_margin = 0.002;
 
-/// dst |= src << shift (bits), both of the same length
-void orShifted(std::vector<std::uint64_t>& dst, const std::vector<std::uint64_t>& src, std::int64_t shift)
+/// dst |= src << shift (bits) in the words [begin, end) of dst, both of the same length and distinct
+void orShifted(std::vector<std::uint64_t>& dst, const std::vector<std::uint64_t>& src, std::int64_t shift, Size begin, Size end)
 {
-  const Size n = dst.size();
   const Size word_shift = (Size)(shift >> 6);
   const int bit_shift = (int)(shift & 63);
-  if (word_shift >= n) return;
-  for (Size i = n; i-- > word_shift;)
+  for (Size i = std::max(begin, word_shift); i < end; ++i)
   {
     const Size j = i - word_shift;
     std::uint64_t v = src[j] << bit_shift;
@@ -119,6 +122,7 @@ Size FLASHGappedTaggerAlgorithm::getIndexBytes() const
 
 void FLASHGappedTaggerAlgorithm::buildIndex(const std::vector<std::string>& protein_seqs)
 {
+  index_bin_width_ = bin_width_;
   double aa_mass[128] = {0};
   for (const char* c = standard_residues; *c; ++c)
   {
@@ -151,10 +155,26 @@ void FLASHGappedTaggerAlgorithm::buildIndex(const std::vector<std::string>& prot
   key_min_ = 0;
   key_max_ = key_(max_gap_mass_);
   const int max_length = (int)(max_gap_mass_ / min_residue_mass);
-  std::vector<std::uint64_t> counts((Size)key_max_ + 1, 0), cursor;
+  const Size n_bins = (Size)key_max_ + 1, n_proteins = offsets_.size() - 1;
+  int threads = 1;
+#ifdef _OPENMP
+  if (! omp_in_parallel()) threads = std::max(1, omp_get_max_threads());
+#endif
+  // the proteins in chunks of about equal residue counts, counted and filled in parallel: a bin receives the positions of the chunks
+  // in chunk order, so they stay ascending
+  const int n_chunks = threads;
+  std::vector<Size> chunk_begin(n_chunks + 1, n_proteins);
+  for (int c = 0; c < n_chunks; ++c)
+  {
+    const auto first = std::lower_bound(offsets_.begin(), offsets_.begin() + (std::ptrdiff_t)n_proteins, total * c / n_chunks);
+    chunk_begin[c] = (Size)(first - offsets_.begin());
+  }
+  // per chunk and bin the number of windows, then where the next window goes in the posting list of the bin
+  std::vector<std::vector<std::uint64_t>> counts(n_chunks, std::vector<std::uint64_t>(n_bins, 0));
   // first pass counts the windows per bin, the second fills the posting lists
-  auto enumerate = [&](bool fill) {
-    for (Size p = 0; p + 1 < offsets_.size(); ++p)
+  auto enumerate = [&](int chunk, bool fill) {
+    auto& cursor = counts[chunk];
+    for (Size p = chunk_begin[chunk]; p < chunk_begin[chunk + 1]; ++p)
     {
       const Size begin = offsets_[p], end = offsets_[p + 1];
       for (Size start = begin; start < end; ++start)
@@ -166,24 +186,32 @@ void FLASHGappedTaggerAlgorithm::buildIndex(const std::vector<std::string>& prot
           if (! valid_[stop - 1]) break;
           const std::int64_t key = key_(cum_mass_[stop] - cum_mass_[start]);
           if (key > key_max_) break;
-          if (fill) { postings_[cursor[slot_[(Size)key]]++] = (std::uint32_t)start; }
-          else { ++counts[(Size)key]; }
+          if (fill) { postings_[cursor[(Size)key]++] = (std::uint32_t)start; }
+          else { ++cursor[(Size)key]; }
         }
       }
     }
   };
-  enumerate(false);
-  slot_.assign((Size)key_max_ + 1, std::numeric_limits<std::uint32_t>::max());
+#pragma omp parallel for schedule(dynamic, 1) if (threads > 1)
+  for (int c = 0; c < n_chunks; ++c) enumerate(c, false);
+  slot_.assign(n_bins, std::numeric_limits<std::uint32_t>::max());
   post_offsets_.assign(1, 0);
-  for (Size key = 0; key < counts.size(); ++key)
+  for (Size key = 0; key < n_bins; ++key)
   {
-    if (counts[key] == 0) continue;
+    std::uint64_t cursor = post_offsets_.back();
+    for (auto& chunk_counts : counts)
+    {
+      const std::uint64_t count = chunk_counts[key];
+      chunk_counts[key] = cursor;
+      cursor += count;
+    }
+    if (cursor == post_offsets_.back()) continue;
     slot_[key] = (std::uint32_t)(post_offsets_.size() - 1);
-    post_offsets_.push_back(post_offsets_.back() + counts[key]);
+    post_offsets_.push_back(cursor);
   }
   postings_.assign(post_offsets_.back(), 0);
-  cursor.assign(post_offsets_.begin(), post_offsets_.end() - 1);
-  enumerate(true);
+#pragma omp parallel for schedule(dynamic, 1) if (threads > 1)
+  for (int c = 0; c < n_chunks; ++c) enumerate(c, true);
 
   // sums of 1 .. max_length residues on a 0.1 mDa grid (subset sum by shifted bit sets), with the set bits counted before each word
   plausible_units_ = (std::int64_t)std::llround(max_gap_mass_ * plausible_scale_);
@@ -199,18 +227,26 @@ void FLASHGappedTaggerAlgorithm::buildIndex(const std::vector<std::string>& prot
   plausible_bits_.assign(words, 0);
   current[0] = 1;
   const Size tail = (Size)((plausible_units_ + 1) & 63);
+  // the words in blocks, in parallel (bits ORed, in any order)
+  const Size block_words = 4096;
+  const int n_blocks = (int)((words + block_words - 1) / block_words);
   for (int len = 1; len <= max_length; ++len)
   {
-    std::fill(next.begin(), next.end(), 0);
-    for (auto u : units) orShifted(next, current, u);
-    if (tail) next.back() &= (1ULL << tail) - 1;
-    current.swap(next);
     bool any = false;
-    for (Size i = 0; i < words; ++i)
+#pragma omp parallel for schedule(static) reduction(|| : any) if (threads > 1)
+    for (int b = 0; b < n_blocks; ++b)
     {
-      plausible_bits_[i] |= current[i];
-      any |= current[i] != 0;
+      const Size begin = (Size)b * block_words, end = std::min(words, begin + block_words);
+      std::fill(next.begin() + (std::ptrdiff_t)begin, next.begin() + (std::ptrdiff_t)end, 0);
+      for (auto u : units) orShifted(next, current, u, begin, end);
+      if (tail && end == words) next.back() &= (1ULL << tail) - 1;
+      for (Size i = begin; i < end; ++i)
+      {
+        plausible_bits_[i] |= next[i];
+        any = any || next[i] != 0;
+      }
     }
+    current.swap(next);
     if (! any) break;
   }
   plausible_rank_.assign(words + 1, 0);
@@ -319,7 +355,7 @@ void FLASHGappedTaggerAlgorithm::search(const DeconvolvedSpectrum& dspec, double
   std::vector<int> rows, cand_rows, order;
   std::vector<double> score, cand_score;
   std::vector<std::pair<std::int64_t, std::int64_t>> ranges;
-  std::vector<Size> sizes;
+  std::vector<Size> sizes, idx;
 
   // keep the `width` best rows (score, then row order) of a row-major block, preserving row order
   auto keepTop = [&](std::vector<int>& block, std::vector<double>& sc, int cols) {
@@ -342,6 +378,48 @@ void FLASHGappedTaggerAlgorithm::search(const DeconvolvedSpectrum& dspec, double
     sc.resize(beam_width_);
   };
 
+  // result: the positions also found in the posting lists of the key range
+  auto intersectWith = [&](std::int64_t lo, std::int64_t hi) {
+    partial.clear();
+    for (std::int64_t key = std::max(lo, key_min_); key <= std::min(hi, key_max_); ++key)
+    {
+      const auto s = slot_[(Size)key];
+      if (s == std::numeric_limits<std::uint32_t>::max()) continue;
+      // a start position has at most one window per bin of a tolerance window (lengths differ by a residue), so the parts are disjoint
+      intersectSorted(result.data(), result.size(), postings_.data() + post_offsets_[s], (Size)(post_offsets_[s + 1] - post_offsets_[s]),
+                      partial);
+    }
+    std::sort(partial.begin(), partial.end());
+    result.swap(partial);
+  };
+  // f(position) for every posting in the key range
+  auto forEachPosting = [&](std::int64_t lo, std::int64_t hi, auto&& f) {
+    for (std::int64_t key = std::max(lo, key_min_); key <= std::min(hi, key_max_); ++key)
+    {
+      const auto s = slot_[(Size)key];
+      if (s == std::numeric_limits<std::uint32_t>::max()) continue;
+      const std::uint32_t* const end = postings_.data() + post_offsets_[s + 1];
+      for (const std::uint32_t* q = postings_.data() + post_offsets_[s]; q != end; ++q) f(*q);
+    }
+  };
+  // The tags of a spectrum share masses (beam rows), so the same smallest key ranges recur: the positions after the two and the
+  // three smallest ranges are kept per spectrum, keyed by the ranges. A key range narrower than the lightest residue (50 Da here)
+  // holds a start position at most once (two windows of a position differ by a residue), so two such ranges are intersected as
+  // sets, through a bit set marking the positions of the smaller.
+  auto narrow = [&](const std::pair<std::int64_t, std::int64_t>& r) {
+    return ((double)r.second - (double)r.first + 1) * index_bin_width_ < 50.0;
+  };
+  std::vector<std::uint64_t> marks;
+  std::map<std::array<std::int64_t, 4>, std::vector<std::uint32_t>> pair_cache;
+  std::map<std::array<std::int64_t, 6>, std::vector<std::uint32_t>> triple_cache;
+  Size cached = 0; // positions kept in both
+  const Size max_cached = Size(1) << 20;
+  auto keep = [&](auto& cache, const auto& key) {
+    if (cached + result.size() > max_cached) return;
+    cached += result.size();
+    cache.emplace(key, result);
+  };
+
   // positions (global, ascending) where windows start with a mass in every key range
   auto intersectRanges = [&]() {
     result.clear();
@@ -351,24 +429,59 @@ void FLASHGappedTaggerAlgorithm::search(const DeconvolvedSpectrum& dspec, double
       sizes[k] = countRange_(ranges[k].first, ranges[k].second);
       if (sizes[k] == 0) return;
     }
-    std::vector<Size> idx(ranges.size());
+    idx.resize(ranges.size());
     std::iota(idx.begin(), idx.end(), 0);
     std::sort(idx.begin(), idx.end(), [&](Size a, Size b) { return sizes[a] < sizes[b]; });
-    collect_(ranges[idx[0]].first, ranges[idx[0]].second, result);
-    for (Size k = 1; k < idx.size() && ! result.empty(); ++k)
+    if (idx.size() == 1)
     {
-      partial.clear();
-      const auto [lo, hi] = ranges[idx[k]];
-      for (std::int64_t key = std::max(lo, key_min_); key <= std::min(hi, key_max_); ++key)
+      collect_(ranges[idx[0]].first, ranges[idx[0]].second, result);
+      return;
+    }
+    const auto [lo0, hi0] = ranges[idx[0]];
+    const auto [lo1, hi1] = ranges[idx[1]];
+    const std::array<std::int64_t, 4> pair_key {lo0, hi0, lo1, hi1};
+    if (const auto it = pair_cache.find(pair_key); it != pair_cache.end()) { result = it->second; }
+    else
+    {
+      if (narrow(ranges[idx[0]]) && narrow(ranges[idx[1]]) && sizes[idx[0]] * 16 >= sizes[idx[1]])
       {
-        const auto s = slot_[(Size)key];
-        if (s == std::numeric_limits<std::uint32_t>::max()) continue;
-        // a start position has at most one window per bin of a tolerance window (lengths differ by a residue), so the parts are disjoint
-        intersectSorted(result.data(), result.size(), postings_.data() + post_offsets_[s], (Size)(post_offsets_[s + 1] - post_offsets_[s]),
-                        partial);
+        if (marks.empty()) marks.assign((Size)(offsets_.back() >> 6) + 1, 0);
+        std::uint64_t* const mark = marks.data();
+        forEachPosting(lo0, hi0, [mark](std::uint32_t p) { mark[p >> 6] |= 1ULL << (p & 63); });
+        if (operand.size() < sizes[idx[1]]) operand.resize(sizes[idx[1]]); // the number of positions of the second range
+        std::uint32_t* const out = operand.data();
+        Size n = 0;
+        forEachPosting(lo1, hi1, [mark, out, &n](std::uint32_t p) {
+          out[n] = p;
+          n += (mark[p >> 6] >> (p & 63)) & 1;
+        });
+        result.assign(operand.begin(), operand.begin() + (std::ptrdiff_t)n);
+        forEachPosting(lo0, hi0, [mark](std::uint32_t p) { mark[p >> 6] = 0; });
+        std::sort(result.begin(), result.end());
       }
-      std::sort(partial.begin(), partial.end());
-      result.swap(partial);
+      else
+      {
+        collect_(lo0, hi0, result);
+        intersectWith(lo1, hi1);
+      }
+      keep(pair_cache, pair_key);
+    }
+    Size k = 2;
+    if (k < idx.size() && ! result.empty())
+    {
+      const auto [lo2, hi2] = ranges[idx[2]];
+      const std::array<std::int64_t, 6> triple_key {lo0, hi0, lo1, hi1, lo2, hi2};
+      if (const auto it = triple_cache.find(triple_key); it != triple_cache.end()) { result = it->second; }
+      else
+      {
+        intersectWith(lo2, hi2);
+        keep(triple_cache, triple_key);
+      }
+      k = 3;
+    }
+    for (; k < idx.size() && ! result.empty(); ++k)
+    {
+      intersectWith(ranges[idx[k]].first, ranges[idx[k]].second);
     }
   };
 
@@ -457,13 +570,16 @@ void FLASHGappedTaggerAlgorithm::search(const DeconvolvedSpectrum& dspec, double
           l.end = l.start + length;
           l.prefix = prefix;
           l.flank_mass = prefix ? cum_mass_[p] - cum_mass_[offsets_[protein]] : cum_mass_[protein_end] - cum_mass_[p + length];
+          l.masses.reserve(n);
+          l.scores.reserve(n);
           for (int j = 0; j < n; ++j)
           {
             l.masses.push_back(nodes[path[j]].mass);
             l.scores.push_back(nodes[path[j]].score);
           }
           l.qscore_sum = qsum;
-          best_landing[id] = std::move(l);
+          if (it != best_landing.end()) { it->second = std::move(l); }
+          else { best_landing.emplace(id, std::move(l)); }
           landed = true;
         }
       }

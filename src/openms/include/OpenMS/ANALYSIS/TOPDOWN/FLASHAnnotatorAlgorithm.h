@@ -278,15 +278,33 @@ private:
     double intensity = 0;
   };
 
+  /// the 1/128 Th bins of a spectrum that hold a peak: a window without a peak is not searched (most windows hold none)
+  struct PeakOccupancy
+  {
+    /// one bit per bin, from the bin of the first peak; empty: not built (every window may hold a peak)
+    std::vector<UInt64> bits;
+    double first_mz = 0;
+    double last_mz = 0;
+    /// floor(first_mz * bins_per_th)
+    double first_bin = 0;
+    static constexpr double bins_per_th = 128.0;
+    void build(const PeakArrays& spec);
+    /// false only if no peak of the spectrum lies in [low, high]
+    bool mayHavePeak(double low, double high) const;
+  };
+
   /// make sure the isotope table covers @p mass (computed in parallel, once per needed mass range)
   void ensureIsotopeTable_(double mass);
   /// averagine mass bin of a monoisotopic mass
   int massToBin_(double mass) const;
   /**
     Test the envelope of mass @p mono_mass at charge @p z with the isotope peaks of bin @p bin, the predicted m/z scaled by
-    @p cal_factor (1 + calibration ppm * 1e-6). True if accepted; @p match is then filled.
+    @p cal_factor (1 + calibration ppm * 1e-6). True if accepted; @p match is then filled. @p occupancy is that of @p spec.
   */
-  bool matchEnvelope_(const PeakArrays& spec, double mono_mass, int bin, int z, double cal_factor, EnvelopeMatch& match) const;
+  bool matchEnvelope_(const PeakArrays& spec, const PeakOccupancy& occupancy, double mono_mass, int bin, int z, double cal_factor,
+                      EnvelopeMatch& match) const;
+  /// matchEnvelope_ once the window of the most abundant peak may hold a peak; @p base = mass + z * proton, @p scale = cal_factor / z
+  bool searchEnvelope_(const PeakArrays& spec, const PeakOccupancy& occupancy, double base, double scale, int bin, EnvelopeMatch& match) const;
   /// the median ppm error of the calibration envelopes, or 0 if there are fewer than min_calibration_envelopes_
   double calibrate_(const PeakArrays& spec, const std::vector<Fragment>& fragments, int& count) const;
   /// annotate one PrSM (without the scores, which are computed afterwards); @p sorted_intensities: the spectrum's intensities, sorted
@@ -321,7 +339,7 @@ private:
     the counted pieces as (first, last); their envelopes are added to @p envelopes if @p record; @p authentic (one flag per residue)
     receives the authentic cleavages found in this world.
   */
-  std::set<std::pair<int, int>> annotateInternal_(const PeakArrays& spec, const std::vector<double>& sorted_intensities,
+  std::set<std::pair<int, int>> annotateInternal_(const PeakArrays& spec, const PeakOccupancy& occupancy, const std::vector<double>& sorted_intensities,
                                                   const InternalPieces& pieces, const String& sequence,
                                                   const std::vector<char>& terminal_peaks, double cal_factor, double shift, bool record,
                                                   int extension_min_run, const std::vector<char>& given_authentic,
