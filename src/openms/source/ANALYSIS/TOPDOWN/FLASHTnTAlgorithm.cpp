@@ -2631,13 +2631,20 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         std::vector<std::vector<Size>> residual_tags(dspecs.size());
         std::vector<std::string> new_seqs;
         Size tag_count = 0, new_tag_count = 0;
-        for (int d : searched)
+        // the tagging of the residual spectra in parallel (each spectrum its own tagger and slot), the tags then taken in spectrum order
+        std::vector<std::vector<FLASHHelperClasses::Tag>> found_of(dspecs.size());
+#pragma omp parallel for schedule(dynamic)
+        for (int k = 0; k < (int)searched.size(); k++)
         {
+          const int d = searched[k];
           FLASHTaggerAlgorithm tagger;
           tagger.setParameters(tagger_param_);
           tagger.run(residual[d], spectrum_tols[d]);
-          std::vector<FLASHHelperClasses::Tag> found;
-          tagger.fillTags(found);
+          tagger.fillTags(found_of[d]);
+        }
+        for (int d : searched)
+        {
+          auto& found = found_of[d];
           tag_count += found.size();
           auto& known = tags_of_scan[residual[d].getScanNumber()];
           for (auto& tag : found)
@@ -2660,12 +2667,13 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
                 new_seqs.push_back(seq);
               }
               tag.setIndex((int)index);
-              tags_.push_back(tag);
+              tags_.push_back(std::move(tag));
               known.push_back(index);
               new_tag_count++;
             }
             residual_tags[d].push_back(index);
           }
+          std::vector<FLASHHelperClasses::Tag>().swap(found);
         }
         if (! new_seqs.empty()) searchTagSequences(new_seqs);
 
