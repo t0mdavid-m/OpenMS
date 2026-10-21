@@ -102,9 +102,10 @@ namespace OpenMS
      */
     std::vector<LogMzPeak> recruitAllPeaksInSpectrum(const MSSpectrum& spec, double tol, const FLASHHelperClasses::PrecalculatedAveragine& avg, double mono_mass, bool renew_signal_peaks = true);
 
-    /// as above, but writes the noisy peaks into @p noisy_peaks (cleared first) so callers can reuse its capacity
+    /// as above, but writes the noisy peaks into @p noisy_peaks (cleared first) so callers can reuse its capacity. @p log_mzs, if given,
+    /// holds the log m/z of every peak of @p spec (FLASHHelperClasses::getLogMz with this group's polarity), computed once per spectrum
     void recruitAllPeaksInSpectrum(const MSSpectrum& spec, double tol, const FLASHHelperClasses::PrecalculatedAveragine& avg, double mono_mass,
-                                   std::vector<LogMzPeak>& noisy_peaks, bool renew_signal_peaks = true);
+                                   std::vector<LogMzPeak>& noisy_peaks, bool renew_signal_peaks = true, const std::vector<double>* log_mzs = nullptr);
 
     /// set scan number
     void setScanNumber(int scan_number);

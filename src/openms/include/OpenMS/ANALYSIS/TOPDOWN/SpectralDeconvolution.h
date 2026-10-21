@@ -209,6 +209,9 @@ namespace OpenMS
     DeconvolvedSpectrum deconvolved_spectrum_;
     /// binned_log_masses_ stores the selected bins for this spectrum + overlapped spectrum (previous a few spectra).
     boost::dynamic_bitset<> binned_log_masses_;
+    /// log m/z of every peak of the original spectrum of deconvolved_spectrum_, computed once per spectrum (FLASHHelperClasses::getLogMz)
+    std::vector<double> original_log_mzs_;
+
     /// binned_log_mz_peaks_ stores the binned log mz peaks
     boost::dynamic_bitset<> binned_log_mz_peaks_;
 

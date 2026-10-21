@@ -584,9 +584,15 @@ namespace OpenMS
                                             const FLASHHelperClasses::PrecalculatedAveragine& avg,
                                             double mono_mass,
                                             std::vector<LogMzPeak>& noisy_peaks,
-                                            bool renew_signal_peaks)
+                                            bool renew_signal_peaks,
+                                            const std::vector<double>* log_mzs)
   {
     const double mul_tol = .8; // not all peaks within tolerance are considered as signal peaks.
+    if (log_mzs != nullptr && log_mzs->size() != spec.size()) { log_mzs = nullptr; }
+    // the log m/z of a peak: precomputed for the spectrum, or computed here
+    const auto make_peak = [&](Size index) {
+      return log_mzs != nullptr ? LogMzPeak(spec[index], is_positive_, (*log_mzs)[index]) : LogMzPeak(spec[index], is_positive_);
+    };
     noisy_peaks.clear();
     // keep this group's own capacity instead of freeing it on every renewal
     if (renew_signal_peaks) logMzpeaks_.clear();
@@ -631,7 +637,7 @@ namespace OpenMS
 
         if (abs(pmz - cmz - iso_index * iso_delta) <= pmz * tol * mul_tol)
         {
-          auto p = LogMzPeak(spec[index], is_positive_);
+          auto p = make_peak(index);
           p.isotopeIndex = iso_index;
           p.abs_charge = c;
           if (iso_index < 0) { negative_iso_peaks_.push_back(p); }
@@ -643,7 +649,7 @@ namespace OpenMS
         }
         else if (iso_index >= 0)
         {
-          auto p = LogMzPeak(spec[index], is_positive_);
+          auto p = make_peak(index);
           int noise_iso_index = (int)floor((pmz - cmz) / iso_delta);
 
           p.isotopeIndex = noise_iso_index;

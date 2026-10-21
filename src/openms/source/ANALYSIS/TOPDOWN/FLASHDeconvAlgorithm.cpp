@@ -492,11 +492,12 @@ void FLASHDeconvAlgorithm::deconvolveSpectrum_(const MSExperiment& map, Spectrum
     deconvolved_spectrum.reserve(deconvolved_spectrum.size() + signal_decoy_sd.getDeconvolvedSpectrum().size()
                                  + noise_decoy_sd.getDeconvolvedSpectrum().size());
 
-    for (const auto& pg : signal_decoy_sd.getDeconvolvedSpectrum())
-      deconvolved_spectrum.push_back(pg);
+    // the decoy spectra are rebuilt for the next spectrum, so their peak groups are moved
+    for (auto& pg : signal_decoy_sd.getDeconvolvedSpectrum())
+      deconvolved_spectrum.push_back(std::move(pg));
 
-    for (const auto& pg : noise_decoy_sd.getDeconvolvedSpectrum())
-      deconvolved_spectrum.push_back(pg);
+    for (auto& pg : noise_decoy_sd.getDeconvolvedSpectrum())
+      deconvolved_spectrum.push_back(std::move(pg));
 
     deconvolved_spectrum.sort();
   }
@@ -646,7 +647,12 @@ void FLASHDeconvAlgorithm::runSpectralDeconvolution_(MSExperiment& map, std::vec
       {
         std::vector<std::exception_ptr> errors(jobs.size());
         const int team_size = (int)std::min(workers.size(), jobs.size());
-#pragma omp parallel num_threads(team_size) default(none) shared(map, jobs, workers, errors)
+        // the most expensive spectra (peak count as the cost proxy) start first, which shortens the tail of the wave; the results stay in
+        // their job slots, so the output order is unchanged
+        std::vector<SignedSize> job_order(jobs.size());
+        std::iota(job_order.begin(), job_order.end(), 0);
+        std::stable_sort(job_order.begin(), job_order.end(), [&](SignedSize a, SignedSize b) { return map[jobs[a].index].size() > map[jobs[b].index].size(); });
+#pragma omp parallel num_threads(team_size) default(none) shared(map, jobs, workers, errors, job_order)
         {
           int worker_index = 0;
 #ifdef _OPENMP
@@ -654,8 +660,9 @@ void FLASHDeconvAlgorithm::runSpectralDeconvolution_(MSExperiment& map, std::vec
 #endif
           auto& worker = workers[worker_index];
 #pragma omp for schedule(dynamic, 1)
-          for (SignedSize j = 0; j < (SignedSize)jobs.size(); j++)
+          for (SignedSize position = 0; position < (SignedSize)jobs.size(); position++)
           {
+            const SignedSize j = job_order[position];
             try
             {
               deconvolveSpectrum_(map, jobs[j], worker.sd, worker.noise_decoy_sd, worker.signal_decoy_sd);

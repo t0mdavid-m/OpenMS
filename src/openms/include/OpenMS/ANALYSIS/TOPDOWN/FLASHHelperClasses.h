@@ -225,6 +225,12 @@ namespace OpenMS
       */
       explicit LogMzPeak(const Peak1D& peak, bool positive);
 
+      /// constructor from Peak1D with its log m/z already computed (getLogMz(peak.getMZ(), positive))
+      LogMzPeak(const Peak1D& peak, bool positive, double log_mz) :
+          mz(peak.getMZ()), intensity(peak.getIntensity()), logMz(log_mz), abs_charge(0), is_positive(positive), isotopeIndex(0)
+      {
+      }
+
       /// copy constructor
       LogMzPeak(const LogMzPeak&) = default;
 

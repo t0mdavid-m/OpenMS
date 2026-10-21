@@ -132,6 +132,10 @@ namespace OpenMS
     }
 
     const Size target_mass_count = countTargetMasses(dspec);
+    // log m/z of the original peaks, computed once for the noisy peaks of all masses of the spectrum
+    std::vector<double> log_mzs;
+    bool log_mzs_positive = true;
+    std::vector<FLASHHelperClasses::LogMzPeak> noisy_peaks;
     for (int i = 0; i < dspec.size(); i++)
     {
       auto& pg = dspec[i];
@@ -172,7 +176,14 @@ namespace OpenMS
 
       if (write_detail)
       {
-        auto noisy_peaks = pg.recruitAllPeaksInSpectrum(dspec.getOriginalSpectrum(), tol * 1e-6, avg_, pg.getMonoMass(), false);
+        const auto& spec = dspec.getOriginalSpectrum();
+        if (log_mzs.size() != spec.size() || log_mzs_positive != pg.isPositive())
+        {
+          log_mzs_positive = pg.isPositive();
+          log_mzs.resize(spec.size());
+          for (Size k = 0; k < spec.size(); k++) log_mzs[k] = FLASHHelperClasses::getLogMz(spec[k].getMZ(), log_mzs_positive);
+        }
+        pg.recruitAllPeaksInSpectrum(spec, tol * 1e-6, avg_, pg.getMonoMass(), noisy_peaks, false, &log_mzs);
 
         std::sort(noisy_peaks.begin(), noisy_peaks.end());
         ss << std::fixed << std::setprecision(2);
