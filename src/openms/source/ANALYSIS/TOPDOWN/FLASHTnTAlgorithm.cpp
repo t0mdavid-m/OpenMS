@@ -3176,6 +3176,25 @@ void FLASHTnTAlgorithm::getProteoformHitsMatchedBy(const FLASHHelperClasses::Tag
   }
 }
 
+void FLASHTnTAlgorithm::releaseResults()
+{
+  // hundreds of thousands of hits with sequences and meta values: their destructors in parallel instead of serially at exit
+  auto release = [](auto& v) {
+    using T = typename std::decay_t<decltype(v)>::value_type;
+#pragma omp parallel for schedule(dynamic, 1024)
+    for (SignedSize i = 0; i < (SignedSize)v.size(); i++)
+    {
+      v[i] = T();
+    }
+    std::decay_t<decltype(v)>().swap(v);
+  };
+  release(protein_hits_);
+  release(proteoform_hits_);
+  release(tags_);
+  matching_hits_indices_.clear();
+  releaseRawSpectra_();
+}
+
 void FLASHTnTAlgorithm::getTags(std::vector<FLASHHelperClasses::Tag>& tags) const
 {
   for (const auto& tag : tags_)

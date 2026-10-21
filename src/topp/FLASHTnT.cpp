@@ -154,7 +154,6 @@ protected:
     FASTAFile fasta_file;
     std::vector<FASTAFile::FASTAEntry> fasta_entry;
     fasta_file.load(in_fasta, fasta_entry);
-    std::vector<ProteinHit> proteoform_hits;
     // Run here!
     OPENMS_LOG_INFO << "Processing : " << in_file << endl;
 
@@ -196,7 +195,7 @@ protected:
       });
     }
     tnt.run(map, fasta_entry);
-    tnt.getProteoforms(proteoform_hits);
+    const auto& proteoform_hits = tnt.getProteoforms();
 
     OPENMS_LOG_INFO << "FLASHTnT run complete. Now writing the results in output files ..." << endl;
     if (! out_tag_file.empty())
@@ -217,12 +216,17 @@ protected:
     }
     if (! out_protein_file.empty())
     {
-      std::vector<ProteinHit> protein_hits;
-      tnt.getProteinHits(protein_hits);
-      FLASHTnTFile::writeProteins(protein_hits, out_protein_stream);
+      FLASHTnTFile::writeProteins(tnt.getProteinHits(), out_protein_stream);
       out_protein_stream.close();
     }
 
+    // the results and the input are freed with all threads instead of by the serial destructors
+    tnt.releaseResults();
+#pragma omp parallel for schedule(dynamic, 64)
+    for (SignedSize i = 0; i < (SignedSize)map.size(); ++i)
+    {
+      map[i] = MSSpectrum();
+    }
     return EXECUTION_OK;
   }
 };

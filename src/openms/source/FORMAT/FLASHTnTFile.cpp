@@ -53,21 +53,50 @@ void FLASHTnTFile::writeProteinHeader(std::fstream& fs)
 
 void FLASHTnTFile::writeProteins(const std::vector<ProteinHit>& hits, std::fstream& fs)
 {
-  for (const auto& hit : hits)
+  // one line per candidate protein of every spectrum (hundreds of thousands): formatted in parallel blocks, written in order; the meta
+  // values by index, because a lookup by name takes the registry's critical section
+  auto& registry = MetaInfoInterface::metaRegistry();
+  const UInt mi_tag_indices = registry.registerName("TagIndices"), mi_rank = registry.registerName("ProteinRank"), mi_scan = registry.registerName("Scan"),
+             mi_matched_aa = registry.registerName("MatchedAA");
+  const SignedSize block_size = 2048;
+  const SignedSize block_count = ((SignedSize)hits.size() + block_size - 1) / block_size;
+  std::vector<std::string> lines(block_count);
+  std::vector<std::exception_ptr> errors(block_count);
+#pragma omp parallel for schedule(dynamic)
+  for (SignedSize b = 0; b < block_count; b++)
   {
-    const std::vector<int> tag_indices = hit.getMetaValue("TagIndices").toIntList();
-    fs << (int)hit.getMetaValue("ProteinRank") << "\t" << (int)hit.getMetaValue("Scan") << "\t" << hit.getAccession() << "\t"
-       << hit.getDescription() << "\t" << hit.getSequence().size() << "\t" << hit.getScore() << "\t" << tag_indices.size() << "\t"
-       << (int)hit.getMetaValue("MatchedAA") << "\t";
-    for (int ti : tag_indices) { fs << ti << ";"; }
-    fs << "\n";
+    try
+    {
+      std::stringstream ss; // the default formatting, as that of the file stream
+      for (SignedSize i = b * block_size; i < std::min((SignedSize)hits.size(), (b + 1) * block_size); i++)
+      {
+        const auto& hit = hits[i];
+        const std::vector<int> tag_indices = hit.getMetaValue(mi_tag_indices).toIntList();
+        ss << (int)hit.getMetaValue(mi_rank) << "\t" << (int)hit.getMetaValue(mi_scan) << "\t" << hit.getAccession() << "\t" << hit.getDescription()
+           << "\t" << hit.getSequence().size() << "\t" << hit.getScore() << "\t" << tag_indices.size() << "\t" << (int)hit.getMetaValue(mi_matched_aa) << "\t";
+        for (int ti : tag_indices) { ss << ti << ";"; }
+        ss << "\n";
+      }
+      lines[b] = ss.str();
+    }
+    catch (...)
+    {
+      errors[b] = std::current_exception();
+    }
   }
+  // an error is rethrown before anything is written, as by the serial loop
+  for (const auto& e : errors)
+  {
+    if (e) std::rethrow_exception(e);
+  }
+  for (const auto& l : lines) fs << l;
 }
 
 void FLASHTnTFile::writeTags(const FLASHTnTAlgorithm& tnt, double flanking_mass_tol, std::fstream& fs)
 {
-  auto tags = std::vector<FLASHHelperClasses::Tag>();
-  tnt.getTags(tags);
+  const auto& tags = tnt.getTags();
+  const auto& proteoforms = tnt.getProteoforms();
+  const std::vector<int> no_hits;
 
   // the lines of the tags with PrSMs first, then those of the others, each in tag order; formatted in parallel by blocks of tags
   const int tag_count = (int)tags.size();
@@ -84,17 +113,18 @@ void FLASHTnTFile::writeTags(const FLASHTnTAlgorithm& tnt, double flanking_mass_
       for (int t = b * block_size; t < std::min(tag_count, (b + 1) * block_size); t++)
       {
         const auto& tag = tags[t];
-        auto hits = std::vector<ProteinHit>();
-        tnt.getProteoformHitsMatchedBy(tag, hits);
-        std::stringstream& ss = hits.empty() ? ss_without : ss_with;
+        const std::vector<int>* matched = tag.getIndex() < 0 ? nullptr : tnt.getProteoformIndicesMatchedBy(tag.getIndex());
+        const auto& hit_indices = matched == nullptr ? no_hits : *matched;
+        std::stringstream& ss = hit_indices.empty() ? ss_without : ss_with;
 
         String acc = "";
         String description = "";
         String hitindices = "";
         String positions = "";
         String delta_masses = "";
-        for (const auto& hit : hits)
+        for (const int hit_index : hit_indices)
         {
+          const auto& hit = proteoforms[hit_index];
           if (! hitindices.empty()) {
             acc += ";";
             description += ";";

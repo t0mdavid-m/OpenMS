@@ -67,6 +67,29 @@ public:
       hits.push_back(hit);
     }
   }
+  /// the PrSMs, as getProteoforms copies them
+  const std::vector<ProteinHit>& getProteoforms() const
+  {
+    return proteoform_hits_;
+  }
+  /// the tags, as getTags copies them
+  const std::vector<FLASHHelperClasses::Tag>& getTags() const
+  {
+    return tags_;
+  }
+  /// positions in getProteoforms() of the PrSMs matched by the tag of index @p tag_index; nullptr if none
+  const std::vector<int>* getProteoformIndicesMatchedBy(int tag_index) const
+  {
+    auto it = matching_hits_indices_.find(tag_index);
+    return it == matching_hits_indices_.end() ? nullptr : &it->second;
+  }
+  /// the protein-level hits, as getProteinHits copies them
+  const std::vector<ProteinHit>& getProteinHits() const
+  {
+    return protein_hits_;
+  }
+  /// free the results (PrSMs, protein hits, tags) with all threads; they are empty afterwards
+  void releaseResults();
   double getMaxTotalModificationMass() const
   {
     return max_total_mod_mass_;
