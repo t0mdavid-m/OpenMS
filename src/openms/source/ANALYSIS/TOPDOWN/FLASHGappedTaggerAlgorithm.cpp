@@ -120,7 +120,7 @@ Size FLASHGappedTaggerAlgorithm::getIndexBytes() const
          + plausible_rank_.size() * sizeof(std::uint32_t);
 }
 
-void FLASHGappedTaggerAlgorithm::buildIndex(const std::vector<std::string>& protein_seqs)
+void FLASHGappedTaggerAlgorithm::buildIndex(const std::vector<std::string>& protein_seqs, const std::vector<std::vector<std::pair<int, double>>>* fixed)
 {
   index_bin_width_ = bin_width_;
   double aa_mass[128] = {0};
@@ -137,8 +137,10 @@ void FLASHGappedTaggerAlgorithm::buildIndex(const std::vector<std::string>& prot
   offsets_.assign(1, 0);
   offsets_.reserve(protein_seqs.size() + 1);
   Size pos = 0;
-  for (const auto& s : protein_seqs)
+  for (Size k = 0; k < protein_seqs.size(); k++)
   {
+    const auto& s = protein_seqs[k];
+    const Size first = pos;
     for (char ch : s)
     {
       const int c = std::toupper((unsigned char)ch);
@@ -146,6 +148,21 @@ void FLASHGappedTaggerAlgorithm::buildIndex(const std::vector<std::string>& prot
       valid_[pos] = m > 0;
       cum_mass_[pos + 1] = cum_mass_[pos] + m;
       ++pos;
+    }
+    // fixed modifications: added to the residue sums from their residue on (a non-standard residue keeps none)
+    if (fixed != nullptr && k < fixed->size() && ! (*fixed)[k].empty())
+    {
+      std::vector<double> extra(s.size(), 0.0);
+      for (const auto& [p, mass] : (*fixed)[k])
+      {
+        if (p >= 0 && p < (int)s.size() && valid_[first + p]) extra[p] += mass;
+      }
+      double added = 0;
+      for (Size i = 0; i < s.size(); i++)
+      {
+        added += extra[i];
+        cum_mass_[first + i + 1] += added;
+      }
     }
     offsets_.push_back(pos);
   }

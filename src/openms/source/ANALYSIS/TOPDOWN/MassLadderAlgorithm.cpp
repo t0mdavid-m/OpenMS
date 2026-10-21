@@ -7,6 +7,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/MassLadderAlgorithm.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/ProteoformDatabase.h>
 #include <OpenMS/CHEMISTRY/EmpiricalFormula.h>
 #include <OpenMS/CHEMISTRY/Residue.h>
 #include <OpenMS/CHEMISTRY/ResidueDB.h>
@@ -173,10 +174,13 @@ inline int isotopeOf(double mass, const Query& q, double h2o, double isotope_mas
 }
 
 // A hypothesis: the window i..j-1 of a protein (S its residue sums, mass = S(j) - S(i)) that fits the precursor mass at the isotope
-// error isotope. Counts its matched ladder positions and keeps it among the top_n best windows of result.
+// error isotope. Counts its matched ladder positions and keeps it among the top_n best windows of result. A window that another entry
+// of the protein owns (owners, ProteoformDatabase) is no hypothesis of this one.
 inline void scoreWindow(const std::vector<TargetSet>& sets, const double* S, std::uint32_t protein, std::size_t i, std::size_t j, double mass,
-                        int isotope, int min_k, std::size_t top_n, std::vector<int>& counts, Result& result)
+                        int isotope, int min_k, std::size_t top_n, std::vector<int>& counts, Result& result,
+                        const MassLadderAlgorithm::WindowOwnership* owners)
 {
+  if (owners != nullptr && ! owners->owns(protein, i, j)) return;
   result.hypotheses++;
   const double si = S[i], sj = S[j];
   std::fill(counts.begin(), counts.end(), 0);
@@ -237,10 +241,11 @@ inline void scoreWindow(const std::vector<TargetSet>& sets, const double* S, std
 // chance matches (the b and c ions of one fragment of another proteoform), so k >= min_k could come from one or two positions. A window
 // with k >= min_k is scored by the chance probability of k, lambda = (j - i - 1) / V x the tolerance widths of all sets up to
 // V = S(j) - S(i); with several types per side this bounds the chance rate of a position on a side from above. Windows of fewer than
-// min_length residues are not considered (nor counted as hypotheses).
+// min_length residues are not considered (nor counted as hypotheses), nor are those without every fixed modification of their entry
+// (i > i_max or j < j_min of the segment).
 inline void search(const std::vector<TargetSet>& sets, const std::vector<Segment>& segments, const std::vector<const double*>& sums,
                    double precursor_mass, double precursor_tol_ppm, double h2o, double isotope_mass, int min_k, int min_length, std::size_t top_n,
-                   Result& result)
+                   Result& result, const MassLadderAlgorithm::WindowOwnership* owners)
 {
   result.hypotheses = 0;
   result.top.clear();
@@ -255,6 +260,7 @@ inline void search(const std::vector<TargetSet>& sets, const std::vector<Segment
     std::size_t jp = seg.a + 1;
     for (std::size_t i = seg.a; i < seg.b; i++)
     {
+      if (i > seg.i_max) break; // a later start leaves a fixed modification out
       const double si = S[i];
       if (S[seg.b] - si < low) break; // nor from this start or any later one
       if (jp < i + 1) jp = i + 1;
@@ -262,10 +268,11 @@ inline void search(const std::vector<TargetSet>& sets, const std::vector<Segment
       for (std::size_t j = jp; j <= seg.b && S[j] - si <= high; j++)
       {
         if ((int)(j - i) < min_length) continue; // not a hypothesis either
+        if (j < seg.j_min) continue;
         const double mass = S[j] - si;
         const int isotope = isotopeOf(mass, q, h2o, isotope_mass);
         if (isotope == 2) continue;
-        scoreWindow(sets, S, seg.protein, i, j, mass, isotope, min_k, top_n, counts, result);
+        scoreWindow(sets, S, seg.protein, i, j, mass, isotope, min_k, top_n, counts, result, owners);
       }
     }
   }
@@ -275,7 +282,8 @@ inline void search(const std::vector<TargetSet>& sets, const std::vector<Segment
 // chunk c are windows[begin[c] .. end[c] - 1].
 inline void searchListed(const std::vector<TargetSet>& sets, const std::vector<Segment>& segments, const std::vector<const double*>& sums,
                          const MassLadderAlgorithm::PreparedWindow* windows, const std::uint32_t* begin, const std::uint32_t* end, std::size_t chunks,
-                         double precursor_mass, double precursor_tol_ppm, double h2o, double isotope_mass, int min_k, std::size_t top_n, Result& result)
+                         double precursor_mass, double precursor_tol_ppm, double h2o, double isotope_mass, int min_k, std::size_t top_n, Result& result,
+                         const MassLadderAlgorithm::WindowOwnership* owners)
 {
   result.hypotheses = 0;
   result.top.clear();
@@ -290,7 +298,7 @@ inline void searchListed(const std::vector<TargetSet>& sets, const std::vector<S
       const double* S = sums[seg.protein];
       const std::size_t i = (std::size_t)seg.a + windows[t].start, j = i + windows[t].length;
       const double mass = S[j] - S[i];
-      scoreWindow(sets, S, seg.protein, i, j, mass, isotopeOf(mass, q, h2o, isotope_mass), min_k, top_n, counts, result);
+      scoreWindow(sets, S, seg.protein, i, j, mass, isotopeOf(mass, q, h2o, isotope_mass), min_k, top_n, counts, result, owners);
     }
   }
 }
@@ -400,10 +408,10 @@ inline bool findWindows(const std::vector<Segment>& segments, const std::vector<
     {
       const auto& seg = segments[s];
       const double* S = sums[seg.protein];
-      for (std::size_t i = seg.a; i + j_min <= seg.b; i++)
+      for (std::size_t i = seg.a; i + j_min <= seg.b && i <= seg.i_max; i++)
       {
         const double si = S[i];
-        for (std::size_t j = i + j_min; j <= seg.b; j++)
+        for (std::size_t j = std::max(i + j_min, (std::size_t)seg.j_min); j <= seg.b; j++)
         {
           const double mass = S[j] - si;
           if (mass > max_value) break; // residue sums rise within a segment
@@ -510,10 +518,17 @@ template<typename Entry> void indexByDalton(const std::vector<Entry>& index, std
 } // namespace
 
 void MassLadderAlgorithm::buildIndex(const std::vector<std::string>& protein_seqs, const std::vector<std::string>& ion_types, bool terminal_ladders,
-                                     bool precursor_ladders)
+                                     bool precursor_ladders, const ProteoformDatabase* db)
 {
   ion_residue_shifts_.clear();
   protein_lengths_.clear();
+  entry_protein_.clear();
+  entry_fixed_count_.clear();
+  entry_offset_.clear();
+  ladder_pre_fixed_.clear();
+  ladder_suf_fixed_.clear();
+  window_fixed_sums_.clear();
+  window_owners_ = WindowOwnership();
   ladder_pre_.clear();
   ladder_suf_.clear();
   ladder_pre_index_.clear();
@@ -548,6 +563,20 @@ void MassLadderAlgorithm::buildIndex(const std::vector<std::string>& protein_seq
   }
   protein_lengths_.reserve(protein_seqs.size());
   for (const auto& seq : protein_seqs) protein_lengths_.push_back(seq.size());
+  // a database of entries (ProteoformDatabase): their fixed modifications (per entry, (position, mass)), and the protein of each entry
+  const std::vector<std::vector<std::pair<int, double>>>* fixed = nullptr;
+  if (db != nullptr && ! db->isIdentity() && db->entries.size() == protein_seqs.size())
+  {
+    entry_protein_ = db->proteinOfEntry();
+    entry_fixed_count_.reserve(db->entries.size());
+    entry_offset_.reserve(db->entries.size());
+    for (const auto& entry : db->entries)
+    {
+      entry_fixed_count_.push_back(entry.fixed.size());
+      entry_offset_.push_back(entry.offset);
+    }
+    if (db->hasFixedModifications()) fixed = &db->fixedMasses();
+  }
   if (! terminal_ladders && ! precursor_ladders) return;
 
   // Terminal ladders: the residue sums of every protein from its N- and from its C-terminus (up to the first non-standard residue), and
@@ -556,24 +585,51 @@ void MassLadderAlgorithm::buildIndex(const std::vector<std::string>& protein_seq
   // from the N-terminus are also built for the precursor ladders alone: they are the window sums of a protein of standard residues only.
   const auto* rdb = ResidueDB::getInstance();
   const std::string& standard = standard_residues;
-  auto sums = [&](const std::string& seq, bool reverse, std::vector<double>& out) {
+  // the fixed modification masses of an entry by residue (empty: none)
+  auto fixedByResidue = [&](Size k, std::vector<double>& extra) {
+    extra.clear();
+    if (fixed == nullptr || (*fixed)[k].empty()) return;
+    extra.assign(protein_seqs[k].size(), 0.0);
+    for (const auto& [pos, mass] : (*fixed)[k])
+    {
+      if (pos >= 0 && pos < (int)extra.size()) extra[pos] += mass;
+    }
+  };
+  auto sums = [&](const std::string& seq, bool reverse, const std::vector<double>& extra, std::vector<double>& out) {
     out.assign(1, 0.0);
     for (Size j = 0; j < seq.size(); j++)
     {
-      const char aa = seq[reverse ? seq.size() - 1 - j : j];
+      const Size pos = reverse ? seq.size() - 1 - j : j;
+      const char aa = seq[pos];
       if (standard.find(aa) == std::string::npos) break;
-      out.push_back(out.back() + rdb->getResidue(aa)->getMonoWeight(Residue::Internal));
+      if (extra.empty()) out.push_back(out.back() + rdb->getResidue(aa)->getMonoWeight(Residue::Internal));
+      else out.push_back(out.back() + rdb->getResidue(aa)->getMonoWeight(Residue::Internal) + extra[pos]);
     }
   };
   ladder_pre_.resize(protein_seqs.size());
   if (terminal_ladders) ladder_suf_.resize(protein_seqs.size());
+  if (fixed != nullptr)
+  {
+    ladder_pre_fixed_.assign(protein_seqs.size(), 0.0);
+    ladder_suf_fixed_.assign(protein_seqs.size(), 0.0);
+  }
   // the sums of the proteins in parallel (each its own), then the index entries of each protein at its place: the entries of the proteins
   // one after the other, as appended protein by protein
 #pragma omp parallel for schedule(dynamic, 64) if (! omp_in_parallel())
   for (long k = 0; k < (long)protein_seqs.size(); k++)
   {
-    sums(protein_seqs[k], false, ladder_pre_[k]);
-    if (terminal_ladders) sums(protein_seqs[k], true, ladder_suf_[k]);
+    std::vector<double> extra;
+    fixedByResidue((Size)k, extra);
+    sums(protein_seqs[k], false, extra, ladder_pre_[k]);
+    if (terminal_ladders) sums(protein_seqs[k], true, extra, ladder_suf_[k]);
+    if (extra.empty()) continue;
+    // the fixed masses in the sums (up to the first non-standard residue from either end)
+    const Size n = extra.size();
+    for (Size j = 0; j + 1 < ladder_pre_[k].size(); j++) ladder_pre_fixed_[k] += extra[j];
+    if (terminal_ladders)
+    {
+      for (Size j = 0; j + 1 < ladder_suf_[k].size(); j++) ladder_suf_fixed_[k] += extra[n - 1 - j];
+    }
   }
   if (terminal_ladders)
   {
@@ -632,18 +688,41 @@ void MassLadderAlgorithm::buildIndex(const std::vector<std::string>& protein_seq
     {
       const auto& seq = protein_seqs[other[n]];
       auto& own = window_own_sums_[n];
+      std::vector<double> extra;
+      fixedByResidue(other[n], extra);
       own.reserve(seq.size() + 1);
       own.push_back(0);
-      for (const char aa : seq)
+      for (Size x = 0; x < seq.size(); x++)
       {
-        own.push_back(own.back() + (standard_residues.find(aa) == std::string::npos ? 0.0 : rdb->getResidue(aa)->getMonoWeight(Residue::Internal)));
+        const char aa = seq[x];
+        const double mass = standard_residues.find(aa) == std::string::npos ? 0.0 : rdb->getResidue(aa)->getMonoWeight(Residue::Internal);
+        if (extra.empty()) own.push_back(own.back() + mass);
+        else own.push_back(own.back() + mass + (mass > 0 ? extra[x] : 0.0));
       }
       window_sums_[other[n]] = own.data();
     }
+    if (fixed != nullptr) window_fixed_sums_.resize(protein_seqs.size());
     for (Size k = 0; k < protein_seqs.size(); k++)
     {
       if (window_sums_[k] == nullptr) window_sums_[k] = ladder_pre_[k].data(); // standard residues only: the sums of the whole protein
       const auto& seq = protein_seqs[k];
+      // the fixed masses in the window sums up to each residue (a non-standard residue carries none)
+      if (fixed != nullptr && ! (*fixed)[k].empty())
+      {
+        std::vector<double> extra;
+        fixedByResidue(k, extra);
+        auto& fs = window_fixed_sums_[k];
+        fs.assign(1, 0.0);
+        for (Size x = 0; x < seq.size(); x++) fs.push_back(fs.back() + (standard_residues.find(seq[x]) == std::string::npos ? 0.0 : extra[x]));
+      }
+      // a window contains every fixed modification of its entry: no other window is new (the same window of the entry without the
+      // modifications outside it is one already)
+      std::uint32_t i_max = UINT32_MAX, j_min = 0;
+      if (fixed != nullptr && ! (*fixed)[k].empty())
+      {
+        i_max = (std::uint32_t)(*fixed)[k].front().first;
+        j_min = (std::uint32_t)(*fixed)[k].back().first + 1;
+      }
       long a = -1;
       for (Size x = 0; x <= seq.size(); x++)
       {
@@ -651,12 +730,86 @@ void MassLadderAlgorithm::buildIndex(const std::vector<std::string>& protein_seq
         if (is_standard && a < 0) a = (long)x;
         if (! is_standard && a >= 0)
         {
-          segments_.push_back({(std::uint32_t)k, (std::uint32_t)a, (std::uint32_t)x});
+          segments_.push_back({(std::uint32_t)k, (std::uint32_t)a, (std::uint32_t)x, i_max, j_min});
           a = -1;
         }
       }
     }
+    // windows of several entries of a protein with the same residues and fixed modifications are one hypothesis (WindowOwnership):
+    // classes of the entries of a protein with the same fixed modifications at the same protein positions
+    if (! entry_protein_.empty())
+    {
+      std::map<std::pair<Size, std::vector<std::pair<int, double>>>, std::vector<std::uint32_t>> classes;
+      for (Size k = 0; k < protein_seqs.size(); k++)
+      {
+        std::vector<std::pair<int, double>> key;
+        if (fixed != nullptr)
+        {
+          for (const auto& [pos, mass] : (*fixed)[k]) key.emplace_back(db->entries[k].offset + pos, mass);
+        }
+        classes[{entry_protein_[k], key}].push_back((std::uint32_t)k);
+      }
+      auto& wo = window_owners_;
+      wo.offset.resize(protein_seqs.size());
+      wo.length.resize(protein_seqs.size());
+      wo.class_first.resize(protein_seqs.size());
+      wo.class_size.resize(protein_seqs.size());
+      for (Size k = 0; k < protein_seqs.size(); k++)
+      {
+        wo.offset[k] = db->entries[k].offset;
+        wo.length[k] = (int)protein_seqs[k].size();
+      }
+      bool shared = false;
+      for (auto& [key, members] : classes)
+      {
+        std::stable_sort(members.begin(), members.end(), [&](std::uint32_t l, std::uint32_t r) { return wo.length[l] < wo.length[r]; });
+        shared |= members.size() > 1;
+        for (std::uint32_t m : members)
+        {
+          wo.class_first[m] = (std::uint32_t)wo.members.size();
+          wo.class_size[m] = (std::uint32_t)members.size();
+        }
+        wo.members.insert(wo.members.end(), members.begin(), members.end());
+      }
+      if (! shared) window_owners_ = WindowOwnership();
+    }
   }
+}
+
+void MassLadderAlgorithm::bestEntryPerProtein_(std::vector<std::pair<double, Size>>& ranked, const std::vector<EntryEvidence>& evidence) const
+{
+  if (entry_protein_.empty()) return;
+  auto simpler = [&](Size r, Size k) {
+    const Size e = ranked[r].second, ek = ranked[k].second;
+    return entry_fixed_count_[e] < entry_fixed_count_[ek] || (entry_fixed_count_[e] == entry_fixed_count_[ek] && e < ek);
+  };
+  std::map<Size, std::pair<Size, double>> best; // protein -> position in ranked, best score
+  for (Size r = 0; r < ranked.size(); r++)
+  {
+    const auto [it, inserted] = best.emplace(entry_protein_[ranked[r].second], std::make_pair(r, ranked[r].first));
+    if (inserted) continue;
+    const Size b = it->second.first;
+    if (evidence[r].score_sum > evidence[b].score_sum || (evidence[r].score_sum == evidence[b].score_sum && simpler(r, b))) it->second.first = r;
+    it->second.second = std::max(it->second.second, ranked[r].first);
+  }
+  std::map<Size, Size> kept; // protein -> position in ranked
+  for (const auto& [p, b] : best) kept[p] = b.first;
+  for (Size r = 0; r < ranked.size(); r++)
+  {
+    const Size e = ranked[r].second, p = entry_protein_[e], b = best[p].first, eb = ranked[b].second;
+    Size& k = kept[p];
+    if (entry_offset_[e] == entry_offset_[eb] && protein_lengths_[e] == protein_lengths_[eb] && evidence[r].n == evidence[b].n
+        && evidence[r].c == evidence[b].c && simpler(r, k))
+      k = r;
+  }
+  std::vector<std::pair<double, Size>> out;
+  out.reserve(kept.size());
+  for (Size r = 0; r < ranked.size(); r++)
+  {
+    const Size p = entry_protein_[ranked[r].second];
+    if (kept[p] == r) out.emplace_back(best[p].second, ranked[r].second);
+  }
+  ranked.swap(out);
 }
 
 // Terminal ladders: per protein and shift, the masses landing on a residue sum from the terminus. A protein is scored as
@@ -714,7 +867,9 @@ void MassLadderAlgorithm::searchTerminalLadders(const std::vector<double>& masse
     const double s = shift_of(si);
     const Size lo = std::lower_bound(masses.begin(), masses.end(), -s) - masses.begin();
     const Size hi = std::upper_bound(masses.begin(), masses.end(), sums.back() - s) - masses.begin();
-    const double lambda = hi > lo ? 2.0 * tol_ppm * 1e-6 * (double)(sums.size() - 1) / sums.back() * (cum_weight[si][hi] - cum_weight[si][lo]) : 0;
+    // the residues of an entry with fixed modifications spread without them (FLASHTaggerAlgorithm::scoreShifts)
+    const double spread = ladder_pre_fixed_.empty() ? sums.back() : sums.back() - (si < n_n ? ladder_pre_fixed_[p] : ladder_suf_fixed_[p]);
+    const double lambda = hi > lo ? 2.0 * tol_ppm * 1e-6 * (double)(sums.size() - 1) / spread * (cum_weight[si][hi] - cum_weight[si][lo]) : 0;
     const double score = -std::log10(std::max(boost::math::gamma_p((double)k, std::max(lambda, 1e-12)), 1e-300));
     auto& sc = side_scores[p];
     auto& bs = best_shifts.emplace(p, std::make_pair(n_shifts, n_shifts)).first->second;
@@ -722,12 +877,21 @@ void MassLadderAlgorithm::searchTerminalLadders(const std::vector<double>& masse
     else if (si >= n_n && score > sc.second) { sc.second = score; bs.second = si; }
   }
   std::vector<std::pair<double, Size>> ranked; // score, protein
+  std::vector<EntryEvidence> ranked_evidence; // with several entries per protein
   for (const auto& [p, sc] : side_scores)
   {
     if (excluded.count(p) > 0) continue;
-    const double score = std::max(n_n > 0 ? sc.first - std::log10((double)n_n) : 0.0, n_shifts > n_n ? sc.second - std::log10((double)(n_shifts - n_n)) : 0.0);
-    if (score > 0) ranked.emplace_back(score, p);
+    const double n_score = n_n > 0 ? sc.first - std::log10((double)n_n) : 0.0;
+    const double c_score = n_shifts > n_n ? sc.second - std::log10((double)(n_shifts - n_n)) : 0.0;
+    const double score = std::max(n_score, c_score);
+    if (! (score > 0)) continue;
+    ranked.emplace_back(score, p);
+    if (entry_protein_.empty()) continue;
+    const auto& bs = best_shifts.at(p);
+    ranked_evidence.push_back({std::max(0.0, n_score) + std::max(0.0, c_score), bs.first < n_shifts ? (int)counts[p * n_shifts + bs.first] : 0,
+                               bs.second < n_shifts ? (int)counts[p * n_shifts + bs.second] : 0});
   }
+  bestEntryPerProtein_(ranked, ranked_evidence);
   const Size top = std::min(ranked.size(), top_n);
   std::partial_sort(ranked.begin(), ranked.begin() + top, ranked.end(),
                     [](const auto& a, const auto& b) { return a.first != b.first ? a.first > b.first : a.second < b.second; });
@@ -783,6 +947,7 @@ void MassLadderAlgorithm::searchPrecursorLadders(const std::vector<double>& mass
   sets.reserve(ion_residue_shifts_.size());
   for (const auto& [prefix, shift] : ion_residue_shifts_) sets.emplace_back(masses, shift, prefix, fragment_tol_ppm);
   precursor_ladder::Result found;
+  const WindowOwnership* owners = window_owners_.empty() ? nullptr : &window_owners_;
   for (Size n = 0; n < precursor_masses.size(); n++)
   {
     // the windows of a prepared mass are listed (preparePrecursorWindows); any other mass is swept
@@ -792,12 +957,12 @@ void MassLadderAlgorithm::searchPrecursorLadders(const std::vector<double>& mass
       const Size q = (Size)(prepared - prepared_masses_.begin());
       precursor_ladder::searchListed(sets, segments_, window_sums_, prepared_windows_.data(), prepared_offsets_.data() + q * prepared_chunks_,
                                      prepared_offsets_.data() + (q + 1) * prepared_chunks_, prepared_chunks_, precursor_masses[n], precursor_tol_ppm,
-                                     h2o, Constants::C13C12_MASSDIFF_U, precursor_ladder_min_k, top_n, found);
+                                     h2o, Constants::C13C12_MASSDIFF_U, precursor_ladder_min_k, top_n, found, owners);
     }
     else
     {
       precursor_ladder::search(sets, segments_, window_sums_, precursor_masses[n], precursor_tol_ppm, h2o, Constants::C13C12_MASSDIFF_U,
-                               precursor_ladder_min_k, precursor_ladder_min_length, top_n, found);
+                               precursor_ladder_min_k, precursor_ladder_min_length, top_n, found, owners);
     }
     auto& result = results[n];
     result.windows = found.hypotheses;
@@ -915,6 +1080,7 @@ void MassLadderAlgorithm::searchSlidingLadders(const std::vector<double>& masses
     long anchor = -1;    // the best anchor (i of a prefix, j of a suffix ladder)
     std::uint32_t a = 0, b = 0; // the run of standard residues of the best anchor
     Size tested = 0;     // the anchors tested on this side of the protein
+    int k = 0;           // the best anchor's matched positions
   };
   // Per side two classes of anchors, each corrected for its own number of tests: the intact termini (prefix: the protein start, also
   // without the initiator residue; suffix: the protein end) and every other start or end, so that a ladder from an intact terminus does
@@ -928,6 +1094,10 @@ void MassLadderAlgorithm::searchSlidingLadders(const std::vector<double>& masses
     const auto& seg = segments_[si];
     if (excluded.count(seg.protein) > 0) continue;
     const double* S = window_sums_[seg.protein];
+    // an entry with fixed modifications: its window sums without them spread its positions (FLASHTaggerAlgorithm::scoreShifts)
+    const double* F = window_fixed_sums_.empty() || window_fixed_sums_[seg.protein].empty() ? nullptr : window_fixed_sums_[seg.protein].data();
+    // the second residue of an entry counts as its terminus (initiator Met removed) only for a form that starts at residue 1
+    const bool met_start = entry_offset_.empty() || entry_offset_[seg.protein] == 0;
     for (int side = 0; side < 2; side++)
     {
       if (max_value[side] <= 0) continue; // no ion type of this side
@@ -935,17 +1105,18 @@ void MassLadderAlgorithm::searchSlidingLadders(const std::vector<double>& masses
       // prefix: anchors i = a .. b-2, positions x = i+1 .. b-1; suffix: anchors j = a+2 .. b, positions x = j-1 .. a+1
       for (long anchor = prefix ? (long)seg.a : (long)seg.a + 2; prefix ? anchor + 2 <= (long)seg.b : anchor <= (long)seg.b; anchor++)
       {
-        const bool terminus = prefix ? anchor <= 1 : anchor == (long)protein_lengths_[seg.protein];
+        const bool terminus = prefix ? (anchor == 0 || (anchor == 1 && met_start)) : anchor == (long)protein_lengths_[seg.protein];
         auto& b = seg_best[si][side * 2 + (terminus ? 1 : 0)];
         b.tested++;
         int k = 0, positions = 0;
-        double v_far = 0;
+        double v_far = 0, f_far = 0;
         for (long x = prefix ? anchor + 1 : anchor - 1; prefix ? x < (long)seg.b : x > (long)seg.a; x += prefix ? 1 : -1)
         {
           const double v = prefix ? S[x] - S[anchor] : S[anchor] - S[x];
           if (v > max_value[side]) break;
           positions++;
           v_far = v;
+          if (F != nullptr) f_far = prefix ? F[x] - F[anchor] : F[anchor] - F[x];
           for (const auto& set : sets)
           {
             if (set.isPrefix() != prefix || set.massIndex(v) < 0) continue;
@@ -959,7 +1130,7 @@ void MassLadderAlgorithm::searchSlidingLadders(const std::vector<double>& masses
         {
           if (set.isPrefix() == prefix) weight += set.weightUpTo(v_far);
         }
-        const double lambda = (double)positions / v_far * weight;
+        const double lambda = (double)positions / (F != nullptr ? v_far - f_far : v_far) * weight;
         const double log_p = -std::log10(std::max(boost::math::gamma_p((double)k, std::max(lambda, 1e-12)), 1e-300));
         if (log_p > b.log_p) // the first anchor among equal ones
         {
@@ -967,6 +1138,7 @@ void MassLadderAlgorithm::searchSlidingLadders(const std::vector<double>& masses
           b.anchor = anchor;
           b.a = seg.a;
           b.b = seg.b;
+          b.k = k;
         }
       }
     }
@@ -992,17 +1164,27 @@ void MassLadderAlgorithm::searchSlidingLadders(const std::vector<double>& masses
   auto corrected = [](const Side& b) { return b.anchor < 0 ? 0.0 : b.log_p - std::log10((double)std::max(b.tested, (Size)1)); };
   std::vector<std::array<int, 2>> chosen(best.size(), {0, 0});
   std::vector<std::pair<double, Size>> ranked; // score, protein
+  std::vector<EntryEvidence> ranked_evidence;  // per side: its ladder's score and matched positions
   for (Size p = 0; p < best.size(); p++)
   {
     double score = 0;
+    EntryEvidence evidence;
     for (int side = 0; side < 2; side++)
     {
       const int c = corrected(best[p][side * 2 + 1]) > corrected(best[p][side * 2]) ? 1 : 0;
       chosen[p][side] = side * 2 + c;
       score = std::max(score, corrected(best[p][side * 2 + c]));
+      if (best[p][side * 2 + c].anchor < 0) continue;
+      evidence.score_sum += std::max(0.0, corrected(best[p][side * 2 + c]));
+      (side == 0 ? evidence.n : evidence.c) = best[p][side * 2 + c].k;
     }
-    if (score > 0) ranked.emplace_back(score, p);
+    if (score > 0)
+    {
+      ranked.emplace_back(score, p);
+      ranked_evidence.push_back(evidence);
+    }
   }
+  bestEntryPerProtein_(ranked, ranked_evidence);
   const Size top = std::min(ranked.size(), top_n);
   std::partial_sort(ranked.begin(), ranked.begin() + top, ranked.end(),
                     [](const auto& a, const auto& b) { return a.first != b.first ? a.first > b.first : a.second < b.second; });

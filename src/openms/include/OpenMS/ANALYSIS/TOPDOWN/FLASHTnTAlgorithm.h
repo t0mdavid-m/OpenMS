@@ -10,6 +10,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHAnnotatorAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvAlgorithm.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/ProteoformDatabase.h>
 #include <OpenMS/CHEMISTRY/Residue.h>
 #include <OpenMS/CHEMISTRY/ResidueDB.h>
 #include <OpenMS/DATASTRUCTURES/DefaultParamHandler.h>
@@ -54,10 +55,12 @@ public:
     Overlapping PeakGroups in merged spectra are also removed.
 
     @param map spectra deconvolved by FLASHDeconv.
-    @param fasta_entry fasta entry to searched against
+    @param fasta_entry fasta entry to searched against: the database entries (with @p db, its entries' letters in the same order)
+    @param db the database of the entries (ProteoformDatabase::loadPEFF: several entries per protein, fixed modifications); nullptr: the
+    entries are the proteins (ProteoformDatabase::fromFASTA)
 
   */
-  void run(const MSExperiment& map, const std::vector<FASTAFile::FASTAEntry>& fasta_entry);
+  void run(const MSExperiment& map, const std::vector<FASTAFile::FASTAEntry>& fasta_entry, const ProteoformDatabase* db = nullptr);
   void getProteoformHitsMatchedBy(const FLASHHelperClasses::Tag& tag, std::vector<ProteinHit>& hits) const;
   void getTags(std::vector<FLASHHelperClasses::Tag>& tags) const;
   void getProteoforms(std::vector<ProteinHit>& hits) const
@@ -169,14 +172,18 @@ private:
                                                                    double rep_q, bool by_qvalue);
   /// Protein-level q-values (meta value ProteinQvalue on every hit). @p hit_class is the FDR class of each hit (-1: none; such a hit takes
   /// no part), @p qvalues its PrSM q-value, @p decoys and @p decoy_weights its decoy flag and weight, @p clusters the proteoforms
-  /// (positions in proteoform_hits_, the representative first), @p rep_q the PrSM q-value of a passing PrSM.
+  /// (positions in proteoform_hits_, the representative first), @p rep_q the PrSM q-value of a passing PrSM, @p db the database (the
+  /// processed forms of a protein, for a whole-protein PrSM).
   void setProteinQvalues_(const std::vector<int>& hit_class, const std::vector<double>& qvalues, const std::vector<bool>& decoys,
-                          const std::vector<double>& decoy_weights, const std::vector<std::vector<Size>>& clusters, double rep_q);
-  /// fasta indices of the proteins (targets and decoys) whose run-level q-value passes protein_fdr_, from each
-  /// protein's best tag-based score in protein_hits_
-  std::set<Size> getProteinsPassingFDR_(const std::vector<FASTAFile::FASTAEntry>& fasta_entry) const;
+                          const std::vector<double>& decoy_weights, const std::vector<std::vector<Size>>& clusters, double rep_q,
+                          const ProteoformDatabase& db);
+  /// protein indices (into @p db's proteins; the fasta indices of a FASTA search) of the proteins (targets and decoys) whose run-level
+  /// q-value passes protein_fdr_, from each protein's best tag-based score over its entries in protein_hits_, and of their partners
+  std::set<Size> getProteinsPassingFDR_(const ProteoformDatabase& db) const;
+  /// @p fixed: per sequence, (position, mass) of its fixed modifications in the sequence (nullptr: none)
   static void vectorizeProteinSequence_(const std::vector<std::string>& cleaned_protein_seqs,
                             std::vector<std::unordered_set<int>>& vec_pro,
-                            std::vector<std::unordered_set<int>>& rev_vec_pro);
+                            std::vector<std::unordered_set<int>>& rev_vec_pro,
+                            const std::vector<std::vector<std::pair<int, double>>>* fixed = nullptr);
 };
 } // namespace OpenMS

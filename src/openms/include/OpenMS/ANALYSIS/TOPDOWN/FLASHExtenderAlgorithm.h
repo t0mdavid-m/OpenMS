@@ -26,6 +26,8 @@
 
 namespace OpenMS
 {
+class ProteoformDatabase;
+
 /**
 @brief Extend between tags found by FLASHTaggerAlgorithm. In practice, the proteoform characterization is
  performed here. Mass shifts are explained by variable modifications (a given list, residue-specific) or by blind
@@ -100,6 +102,12 @@ public:
   /// set modification map to be considered for blind modification search. Note that they are not for variable modification search.
   /// The mass shifts found by blind modifications matching to the masses of these modifications are annotated.
   void setCandidateBlindModificationMap(const std::map<double, std::vector<ResidueModification>>& mod_map);
+
+  /// The fixed modifications of the database entries (ProteoformDatabase; the hits' FastaIndex is the entry): their masses are part of
+  /// the residue masses, and no variable modification sits where a fixed one does (a side-chain one on a residue with a fixed side-chain
+  /// modification, an N- or C-terminal one on a terminal residue with a fixed one of that terminus). nullptr (the default) or a database
+  /// without fixed modifications: none. The database must outlive the extension.
+  void setFixedModifications(const ProteoformDatabase* db);
 
   /// With @p report, every proteoform hit carries the deconvolved masses its best path matched (meta value MatchedMassIndices: indices
   /// into the deconvolved spectrum given to run(), ascending): the masses of every node of the path whose protein position counts as
@@ -237,6 +245,11 @@ private:
     double cur_mass_slack_ = 0;
     /// per series, the cleavage weight of a matched mass at each protein index of the current mode (index k: the bond after k residues)
     std::vector<int> cur_bond_weight_[2];
+    /// the fixed modifications of the hit's entry (setFixedModifications; nullptr: none), and their kinds per residue (bits 1 side chain,
+    /// 2 N-terminal, 4 C-terminal) in the orientation of cur_oriented_seq_ (empty: none)
+    const std::vector<std::pair<int, double>>* fixed_ = nullptr;
+    const std::vector<std::pair<int, std::uint8_t>>* occupancy_ = nullptr;
+    std::vector<std::uint8_t> cur_occupied_;
   };
 
   /// a variable modification: a residue-specific mass shift searched with its own count, independently of blind modifications
@@ -311,13 +324,21 @@ private:
   void loadVariableModifications_();
 
   /// can the modifications of @p combination sit on distinct residues among @p seq[from, to) (current mode orientation)?
-  /// @p n_site / @p c_site: the index in @p seq of the proteoform's N- / C-terminal residue if this stretch can reach it, else -1
-  bool combinationFits_(const VariableModificationCombination& combination, const String& seq, int from, int to, int n_site, int c_site) const;
+  /// @p n_site / @p c_site: the index in @p seq of the proteoform's N- / C-terminal residue if this stretch can reach it, else -1;
+  /// @p occupied: per residue of @p seq, the kinds of its fixed modifications (HitInformation::cur_occupied_), nullptr: none
+  bool combinationFits_(const VariableModificationCombination& combination, const String& seq, int from, int to, int n_site, int c_site,
+                        const std::uint8_t* occupied = nullptr) const;
 
   /// names of the variable modification combinations of mass @p mass within @p tol that fit @p seq[from, to); @p site is the only
   /// possible residue (index in @p seq) if a single one-site modification fits at a single residue, else -1
   String variableModificationNames_(double mass, double tol, const String& seq, int from, int to, int n_site, int c_site, String& accessions,
-                                    int& site) const;
+                                    int& site, const std::uint8_t* occupied = nullptr) const;
+
+  /// whether a variable modification at @p position (0 anywhere, 1 N-terminal, 2 C-terminal) may sit on a residue with fixed kinds @p bits
+  static bool freeFor_(std::uint8_t bits, int position)
+  {
+    return (bits & (position == 0 ? 1 : (position == 1 ? 2 : 4))) == 0;
+  }
 
   /// the residues that can carry the shift between two matched masses of a path, (@p pre_node, @p pre_pro) and (@p node, @p pro), whose
   /// summed shift at (@p node, @p pro) is @p mass_shift: [@p pre_pro, returned end) in this mode's orientation, where the end is the first
@@ -339,7 +360,8 @@ private:
    * @param pro_masses protein prefix or suffix masses to be filled
    * @param mode mode
    */
-  static void getProMasses_(const ProteinHit& hit, std::vector<double>& pro_masses, int mode);
+  static void getProMasses_(const ProteinHit& hit, std::vector<double>& pro_masses, int mode,
+                            const std::vector<std::pair<int, double>>* fixed = nullptr);
 
   /***
    * calculate precursor mass with fragment mass pairs
@@ -365,6 +387,11 @@ private:
                    double max_mass);
 
   static int getBestMassShift_(const std::vector<int>& spec_vec, const std::unordered_set<int>& pro_vec);
+
+  /// of the placements @p positions of @p tag on @p seq (by its letters), those whose residues, with the fixed modifications @p fixed
+  /// (position in @p seq, mass), have the mass span of the tag's masses; a tag with lowercase letters is only kept off fixed residues
+  void keepFixedConsistentPlacements_(const String& seq, const FLASHHelperClasses::Tag& tag, const std::vector<std::pair<int, double>>& fixed,
+                                      std::vector<int>& positions) const;
 
   /**
    * The main function to perform extension algorithm for each hit.
@@ -481,6 +508,9 @@ private:
   bool skip_precursor_inference_ = true;
   /// set MatchedMassIndices on every proteoform hit (setReportMatchedMasses)
   bool report_matched_masses_ = false;
+  /// per database entry, its fixed modifications (position, mass) and their kinds (setFixedModifications); nullptr: none
+  const std::vector<std::vector<std::pair<int, double>>>* fixed_masses_ = nullptr;
+  const std::vector<std::vector<std::pair<int, std::uint8_t>>>* occupancy_ = nullptr;
   int max_blind_mod_cntr_ = 1;
   int max_var_mod_cntr_ = 0;
   int allowed_isotope_error_ = 1;

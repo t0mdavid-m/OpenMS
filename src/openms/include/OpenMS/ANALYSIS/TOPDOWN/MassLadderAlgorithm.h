@@ -17,6 +17,8 @@
 
 namespace OpenMS
 {
+class ProteoformDatabase;
+
 /**
 @brief Candidate proteins from mass ladders: deconvolved fragment masses read as residue sums of a database protein, without any
 sequence tag. Mass ladders are a candidate source of their own, next to sequence tags (FLASHTaggerAlgorithm) and gapped tags
@@ -77,10 +79,40 @@ public:
     std::vector<Candidate> candidates; ///< the best windows with at least precursor_ladder_min_k matched positions, best first
   };
 
-  /// precursor ladders: a run of standard residues a..b-1 of a protein, in which the windows lie
+  /// precursor ladders: a run of standard residues a..b-1 of a protein, in which the windows lie. A window i..j-1 of it contains every
+  /// fixed modification of its entry (ProteoformDatabase): i <= i_max and j >= j_min (no bound without fixed modifications).
   struct Segment
   {
     std::uint32_t protein, a, b;
+    std::uint32_t i_max = UINT32_MAX, j_min = 0;
+  };
+
+  /// precursor ladders of a database with several entries per protein (ProteoformDatabase): the windows of entries of one protein that
+  /// are the same residues with the same fixed modifications are one hypothesis, the window of the entry with the shortest form that
+  /// contains it (then the lowest index). Empty: every window is its own.
+  struct WindowOwnership
+  {
+    std::vector<int> offset, length;          ///< per entry: residues of its protein before it, and its residues
+    std::vector<std::uint32_t> class_first;   ///< per entry: its class, members[class_first .. class_first + class_size - 1]
+    std::vector<std::uint32_t> class_size;
+    std::vector<std::uint32_t> members;       ///< per class: its entries by length, then index
+
+    bool empty() const
+    {
+      return offset.empty();
+    }
+
+    /// whether the window i..j-1 of @p entry is that entry's hypothesis
+    bool owns(std::uint32_t entry, std::size_t i, std::size_t j) const
+    {
+      const long s = (long)offset[entry] + (long)i, t = (long)offset[entry] + (long)j;
+      for (std::uint32_t k = class_first[entry]; k < class_first[entry] + class_size[entry]; k++)
+      {
+        const std::uint32_t m = members[k];
+        if (offset[m] <= s && t <= (long)offset[m] + length[m]) return m == entry;
+      }
+      return true;
+    }
   };
 
   /// precursor ladders: a window found by preparePrecursorWindows, residues a + start .. a + start + length - 1 of a segment
@@ -104,9 +136,11 @@ public:
     @param ion_types the run's ion types (a, b, c prefix; x, y, z, zp1, zp2 suffix)
     @param terminal_ladders build the index of searchTerminalLadders
     @param precursor_ladders build the segments of searchPrecursorLadders
+    @param db the database the sequences are the entries of (their fixed modifications are added to the residue sums, and the searches
+    rank one entry per protein); nullptr or an identity database: every sequence is a protein of its own
   */
   void buildIndex(const std::vector<std::string>& protein_seqs, const std::vector<std::string>& ion_types, bool terminal_ladders,
-                  bool precursor_ladders);
+                  bool precursor_ladders, const ProteoformDatabase* db = nullptr);
 
   /**
     @brief the terminal-ladder candidates of a spectrum. Thread safe once the index is built.
@@ -176,6 +210,27 @@ private:
   std::vector<std::pair<bool, double>> ion_residue_shifts_;
   /// the protein lengths
   std::vector<Size> protein_lengths_;
+  /// with a database of several entries per protein: per entry (sequence) its protein, its number of fixed modifications and its offset in
+  /// the protein, by which the searches keep one entry per protein (bestEntryPerProtein_); empty: none
+  std::vector<Size> entry_protein_, entry_fixed_count_;
+  std::vector<int> entry_offset_;
+  /// per entry, the fixed masses in its terminal ladder sums (ladder_pre_, ladder_suf_; the chance of a match is taken from the residues
+  /// without them), and the running sum of its fixed masses by residue for the window sums (sliding ladders); empty: no fixed masses
+  std::vector<double> ladder_pre_fixed_, ladder_suf_fixed_;
+  std::vector<std::vector<double>> window_fixed_sums_;
+  /// precursor ladders: the windows of several entries that are one hypothesis
+  WindowOwnership window_owners_;
+  /// the evidence of a ranked entry for bestEntryPerProtein_: the scores of both sides summed, and the matches of each side
+  struct EntryEvidence
+  {
+    double score_sum = 0;
+    int n = 0, c = 0;
+  };
+  /// Keep one candidate entry per protein of @p ranked (score, entry), as entry_protein_ says: the entry with the best scores of both
+  /// sides summed (@p evidence, parallel to @p ranked; then fewer fixed modifications, then the lower index), or, of its processed form,
+  /// the entry with as many matches on each side and the fewest fixed modifications (then the lowest index); the kept one carries the
+  /// protein's best score (FLASHTnTAlgorithm's candidate collapse).
+  void bestEntryPerProtein_(std::vector<std::pair<double, Size>>& ranked, const std::vector<EntryEvidence>& evidence) const;
   /// per protein, the residue sums from its N- and from its C-terminus (up to the first non-standard residue): the terminal ladders
   /// (ladder_suf_ only with terminal ladders); ladder_pre_ is also the window sums of a protein of standard residues only
   std::vector<std::vector<double>> ladder_pre_, ladder_suf_;

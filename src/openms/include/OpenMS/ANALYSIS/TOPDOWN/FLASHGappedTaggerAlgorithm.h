@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace OpenMS
@@ -53,8 +54,10 @@ public:
   FLASHGappedTaggerAlgorithm& operator=(const FLASHGappedTaggerAlgorithm&) = default;
   ~FLASHGappedTaggerAlgorithm() override = default;
 
-  /// index the protein sequences; residues other than the 20 standard ones end every window containing them
-  void buildIndex(const std::vector<std::string>& protein_seqs);
+  /// index the protein sequences; residues other than the 20 standard ones end every window containing them. With @p fixed (per
+  /// sequence, (position, mass) of its fixed modifications; ProteoformDatabase::fixedMasses), the window masses and the flanking masses
+  /// of the landings include them; the residue sums of the gaps (plausibility) do not.
+  void buildIndex(const std::vector<std::string>& protein_seqs, const std::vector<std::vector<std::pair<int, double>>>* fixed = nullptr);
 
   /**
     @brief the gapped tags of a spectrum and where they land. Thread safe once the index is built.

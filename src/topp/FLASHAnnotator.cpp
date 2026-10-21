@@ -250,6 +250,7 @@ protected:
     const int col_mod_mass = column("ModMass");
     const int col_mod_start = column("ModStart");
     const int col_mod_end = column("ModEnd");
+    const int col_database = column("DatabaseSequence");
     // a PrSM file of another tool: one ProForma string per PrSM (column ProForma), read when there is no ProteinSequence column
     int col_proforma = column("ProForma");
     if (col_proforma < 0) col_proforma = column("Proforma");
@@ -367,8 +368,15 @@ protected:
       // FLASHTnT writes -1 for a start or end it could not determine: those fragments have no defined mass
       prsm.known_n_term = start > 0;
       prsm.known_c_term = end > 0;
-      // modification positions are 1-based protein positions
-      const int start_in_seq = start < 0 ? 0 : start - 1;
+      // modification positions are 1-based protein positions. With an open N-terminus the sequence ends at the known end, or (both
+      // termini open) lies in the database sequence: it starts after residue 1 when FLASHTnT bounds it by a PEFF entry's processed form
+      int start_in_seq = start < 0 ? 0 : start - 1;
+      if (start < 0 && end > 0) start_in_seq = std::max(0, end - (int)prsm.sequence.size());
+      else if (start < 0 && col_database >= 0)
+      {
+        const Size at = field(row, col_database).trim().find(prsm.sequence);
+        if (at != String::npos) start_in_seq = (int)at;
+      }
       const auto mod_masses = splitList_(field(row, col_mod_mass));
       const auto mod_starts = splitList_(field(row, col_mod_start));
       const auto mod_ends = splitList_(field(row, col_mod_end));

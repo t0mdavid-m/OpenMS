@@ -7,8 +7,11 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/ProteoformDatabase.h>
 #include <OpenMS/CHEMISTRY/ProForma.h> // added for ProForma
+#include <OpenMS/CONCEPT/Exception.h>
 #include <OpenMS/FORMAT/FLASHTnTFile.h>
+#include <algorithm>
 #include <exception>
 #include <sstream>
 
@@ -57,7 +60,8 @@ void FLASHTnTFile::writeProteins(const std::vector<ProteinHit>& hits, std::fstre
   {
     const std::vector<int> tag_indices = hit.getMetaValue("TagIndices").toIntList();
     fs << (int)hit.getMetaValue("ProteinRank") << "\t" << (int)hit.getMetaValue("Scan") << "\t" << hit.getAccession() << "\t"
-       << hit.getDescription() << "\t" << hit.getSequence().size() << "\t" << hit.getScore() << "\t" << tag_indices.size() << "\t"
+       << hit.getDescription() << "\t" << (hit.metaValueExists("ProteinLength") ? (Size)(int)hit.getMetaValue("ProteinLength") : hit.getSequence().size())
+       << "\t" << hit.getScore() << "\t" << tag_indices.size() << "\t"
        << (int)hit.getMetaValue("MatchedAA") << "\t";
     for (int ti : tag_indices) { fs << ti << ";"; }
     fs << "\n";
@@ -75,6 +79,11 @@ void FLASHTnTFile::writeTags(const FLASHTnTAlgorithm& tnt, double flanking_mass_
   const int block_count = (tag_count + block_size - 1) / block_size;
   std::vector<std::string> with_hits(block_count), without_hits(block_count);
   std::vector<std::exception_ptr> errors(block_count);
+  // read by index inside the parallel loop (a lookup by name takes the registry's critical section)
+  auto& registry = MetaInfoInterface::metaRegistry();
+  const UInt mi_mod_variable = registry.registerName("ModificationVariable"), mi_modifications = registry.registerName("Modifications"),
+             mi_mod_starts = registry.registerName("ModificationStarts"), mi_entry_start = registry.registerName("EntryStart"),
+             mi_entry_end = registry.registerName("EntryEnd");
 #pragma omp parallel for schedule(dynamic)
   for (int b = 0; b < block_count; b++)
   {
@@ -119,16 +128,41 @@ void FLASHTnTFile::writeTags(const FLASHTnTAlgorithm& tnt, double flanking_mass_
           int protein_end_position = hit.getMetaValue("EndPosition");
           protein_start_position--;
           String seq = hit.getSequence();
-          FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(pos, masses, -1, seq, tag);
+          // the proteoform's residues [first, last): an open terminus bounded by the database entry's processed form (EntryStart, EntryEnd
+          // of a PEFF entry; else the protein's ends)
+          const int first = protein_start_position >= 0 ? protein_start_position
+                                                        : (hit.metaValueExists(mi_entry_start) ? std::max(0, (int)hit.getMetaValue(mi_entry_start) - 1) : 0);
+          const int last = protein_end_position >= 0 ? protein_end_position
+                                                     : (hit.metaValueExists(mi_entry_end) ? (int)hit.getMetaValue(mi_entry_end) : (int)seq.size());
+          // the fixed modifications of a PEFF entry (ModificationVariable 2) are part of the flanking residue masses: on the protein, and
+          // on the proteoform's residues
+          std::vector<std::pair<int, double>> fixed, fixed_in_truncated;
+          if (hit.metaValueExists(mi_mod_variable))
+          {
+            const std::vector<int> variable = hit.getMetaValue(mi_mod_variable).toIntList();
+            if (std::find(variable.begin(), variable.end(), 2) != variable.end())
+            {
+              const std::vector<double> fixed_masses = hit.getMetaValue(mi_modifications);
+              const std::vector<int> fixed_starts = hit.getMetaValue(mi_mod_starts).toIntList();
+              for (Size m = 0; m < variable.size() && m < fixed_masses.size() && m < fixed_starts.size(); m++)
+              {
+                if (variable[m] != 2) continue;
+                fixed.emplace_back(fixed_starts[m], fixed_masses[m]);
+                if (fixed_starts[m] >= first && fixed_starts[m] < last) fixed_in_truncated.emplace_back(fixed_starts[m] - first, fixed_masses[m]);
+              }
+            }
+          }
+          FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(pos, masses, -1, seq, tag, fixed.empty() ? nullptr : &fixed);
 
-          if (protein_end_position >= 0) seq = seq.substr(0, protein_end_position);
-          if (protein_start_position >= 0) seq = seq.substr(protein_start_position);
-          FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(pos_in_truncated, masses_in_truncated, flanking_mass_tol, seq, tag);
+          if (last < (int)seq.size()) seq = seq.substr(0, std::max(0, last));
+          if (first > 0) seq = seq.substr(std::min((int)seq.size(), first));
+          FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(pos_in_truncated, masses_in_truncated, flanking_mass_tol, seq, tag,
+                                                                         fixed.empty() ? nullptr : &fixed_in_truncated);
           if (!pos_in_truncated.empty())
           {
             for (int i = 0; i < pos.size(); i++)
             {
-              if (pos[i] - (protein_start_position < 0 ? 0 : protein_start_position) != pos_in_truncated[0]) continue;
+              if (pos[i] - first != pos_in_truncated[0]) continue;
               positions += std::to_string(pos[i] + 1);
               delta_masses += std::to_string(masses[i]);
               break;
@@ -180,7 +214,7 @@ namespace
     return "sequence tag";
   }
 
-  /// 1 for a variable (searched) modification, 0 for a blind shift, per modification
+  /// 1 for a variable (searched) modification, 0 for a blind shift, 2 for a fixed one of the database entry (PEFF), per modification
   OpenMS::String modVariable(const OpenMS::ProteinHit& hit)
   {
     OpenMS::String out;
@@ -188,9 +222,22 @@ namespace
     for (int v : hit.getMetaValue("ModificationVariable").toIntList())
     {
       if (! out.empty()) out += ";";
-      out += v != 0 ? "1" : "0";
+      out += v == 2 ? "2" : (v != 0 ? "1" : "0");
     }
     return out;
+  }
+
+  /// the residues [first, end) of the hit's sequence that the ProteinSequence column shows: the proteoform, an open terminus bounded by
+  /// the database entry's processed form (EntryStart, EntryEnd of a PEFF entry; else the protein's ends)
+  std::pair<int, int> proteinSequenceRange(const OpenMS::ProteinHit& hit)
+  {
+    const int start = hit.getMetaValue("StartPosition"), end = hit.getMetaValue("EndPosition");
+    const int size = (int)hit.getSequence().size();
+    const int entry_first = hit.metaValueExists("EntryStart") ? (int)hit.getMetaValue("EntryStart") - 1 : 0;
+    const int entry_end = hit.metaValueExists("EntryEnd") ? (int)hit.getMetaValue("EntryEnd") : size;
+    const int first = start < 0 ? entry_first : (start - 1);
+    const int last = end < 0 ? entry_end : end;
+    return {first, last};
   }
 
   /// the raw-evidence columns: extension score, raw score, matched fragments, fragment hypotheses, coverage (-1 without a raw file)
@@ -240,6 +287,7 @@ String FLASHTnTFile::getProFormaString(const ProteinHit& hit)
     double mass;
     String names;
     bool variable;
+    String fixed_accession; // a fixed modification of the database entry (ModificationVariable 2): its accession; else empty
   };
   std::vector<Entry> entries;
   if (hit.metaValueExists("Modifications"))
@@ -248,12 +296,15 @@ String FLASHTnTFile::getProFormaString(const ProteinHit& hit)
     const std::vector<int> starts = hit.getMetaValue("ModificationStarts");
     const std::vector<int> ends = hit.getMetaValue("ModificationEnds");
     const std::vector<String> ids = hit.metaValueExists("ModificationIDs") ? hit.getMetaValue("ModificationIDs").toStringList() : std::vector<String>();
+    const std::vector<String> accs = hit.metaValueExists("ModificationACCs") ? hit.getMetaValue("ModificationACCs").toStringList() : std::vector<String>();
     const std::vector<int> variable = hit.metaValueExists("ModificationVariable") ? (std::vector<int>)hit.getMetaValue("ModificationVariable").toIntList() : std::vector<int>();
     for (Size i = 0; i < masses.size() && i < starts.size() && i < ends.size(); i++)
     {
       const int s = std::max(0, std::min(length - 1, std::min(starts[i], ends[i]) - offset));
       const int e = std::max(0, std::min(length - 1, std::max(starts[i], ends[i]) - offset));
-      entries.push_back({s, e, masses[i], i < ids.size() ? ids[i] : String(), i < variable.size() && variable[i] != 0});
+      const bool fixed = i < variable.size() && variable[i] == 2;
+      entries.push_back({s, e, masses[i], i < ids.size() ? ids[i] : String(), i < variable.size() && variable[i] == 1,
+                         fixed ? (i < accs.size() && ! accs[i].empty() ? accs[i] : String("-")) : String()});
     }
   }
   std::stable_sort(entries.begin(), entries.end(), [](const Entry& l, const Entry& r) { return l.start < r.start; });
@@ -272,6 +323,7 @@ String FLASHTnTFile::getProFormaString(const ProteinHit& hit)
         m.mass += entry.mass;
         m.names = "";
         m.variable = false;
+        m.fixed_accession = "";
         combined = true;
         break;
       }
@@ -280,6 +332,20 @@ String FLASHTnTFile::getProFormaString(const ProteinHit& hit)
   }
   for (const auto& m : merged)
   {
+    // a fixed modification of the database entry: its mass with its accession as an alternative (e.g. K[+42.010565|MOD:00064];
+    // ProteoformDatabase::proformaTag)
+    if (! m.fixed_accession.empty())
+    {
+      try
+      {
+        pf.addModification(m.start, m.end, m.mass, ProteoformDatabase::proformaTag(m.fixed_accession, m.mass));
+      }
+      catch (const Exception::InvalidValue&)
+      {
+        return "";
+      }
+      continue;
+    }
     // the names of a variable modification ("A," or "A+B,"; alternatives "A,B," leave the identity open)
     std::vector<std::pair<String, double>> named;
     String names = m.names;
@@ -365,8 +431,7 @@ void OpenMS::FLASHTnTFile::writePrSMs(const std::vector<ProteinHit>& hits, std::
     int start = hit.getMetaValue("StartPosition");
     int end = hit.getMetaValue("EndPosition");
 
-    int start_in_seq = start < 0 ? 0 : (start - 1);
-    int end_in_seq = end < 0 ? hit.getSequence().size() : end;
+    const auto [start_in_seq, end_in_seq] = proteinSequenceRange(hit);
 
     // Use ProForma for sequence generation
     String proformaStr = getProFormaString(hit);
@@ -443,8 +508,7 @@ void OpenMS::FLASHTnTFile::writeProteoforms(const std::vector<ProteinHit>& hits,
     int start = hit.getMetaValue("StartPosition");
     int end = hit.getMetaValue("EndPosition");
 
-    int start_in_seq = start < 0 ? 0 : (start - 1);
-    int end_in_seq = end < 0 ? hit.getSequence().size() : end;
+    const auto [start_in_seq, end_in_seq] = proteinSequenceRange(hit);
 
     // Use ProForma to generate ProForma string
     String proformaStr = getProFormaString(hit);

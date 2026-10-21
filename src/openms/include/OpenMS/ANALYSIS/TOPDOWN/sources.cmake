@@ -37,6 +37,7 @@ set(sources_list_h
         Qvalue.h
         TopDownIsobaricQuantification.h
         MassLadderAlgorithm.h
+        ProteoformDatabase.h
 )
 
 ### add path to the filenames

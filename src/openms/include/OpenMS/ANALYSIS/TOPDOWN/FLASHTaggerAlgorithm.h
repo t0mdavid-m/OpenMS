@@ -106,16 +106,21 @@ public:
    * shifts @p shifts (with the tag flanking masses @p flanks they were computed from), times @p count.
    * @param masses mass 0 (the terminus), then the deconvolved masses, ascending
    * @param residue_sums the sorted residue sums of the side, 0 included
+   * @param density_mass the mass over which the residue sums are spread for the chance of a match (residues / mass); 0: the last
+   * residue sum. A database entry with fixed modifications (ProteoformDatabase) passes the mass of its residues without them, so that
+   * fixed masses no match touches do not raise its score over the same entry without them.
+   * @param best_count if not nullptr: the match count of the best shift (0 if none)
    */
   static double scoreShifts(const std::vector<double>& masses, const std::vector<double>& residue_sums, const double* shifts,
-                            const double* flanks, Size count, double tol_ppm);
+                            const double* flanks, Size count, double tol_ppm, double density_mass = 0, int* best_count = nullptr);
 
   /**
    * @brief scoreShifts with the residue sum at or above a mass looked up in @p sum_index (indexResidueSums of @p residue_sums) instead of
    * walked to; the same result. An empty index: scoreShifts without it.
    */
   static double scoreShifts(const std::vector<double>& masses, const std::vector<double>& residue_sums, const std::vector<std::uint32_t>& sum_index,
-                            const double* shifts, const double* flanks, Size count, double tol_ppm);
+                            const double* shifts, const double* flanks, Size count, double tol_ppm, double density_mass = 0,
+                            int* best_count = nullptr);
 
   /// the index of scoreShifts: per 64 Da from 0, the number of residue sums below; empty unless the sums are sorted, from 0 or above
   static void indexResidueSums(const std::vector<double>& residue_sums, std::vector<std::uint32_t>& sum_index);
@@ -138,12 +143,14 @@ public:
   * @param flanking_mass_tol up to how large mass flanking mass is allowed?
   * @param seq the input protein sequence
   * @param tag the tags to be matched against sequence
+  * @param fixed fixed modifications of @p seq (position in @p seq, mass; ProteoformDatabase), added to the flanking residue sums; nullptr: none
   */
   static void fillMatchedPositionsAndFlankingMassDiffs(std::vector<int>& positions,
                                                       std::vector<double>& masses,
                                                       double flanking_mass_tol,
                                                       const String& seq,
-                                                      const FLASHHelperClasses::Tag& tag);
+                                                      const FLASHHelperClasses::Tag& tag,
+                                                      const std::vector<std::pair<int, double>>* fixed = nullptr);
 
   /// maximum node score for tag generation and extension
   const static int max_node_score = 8;

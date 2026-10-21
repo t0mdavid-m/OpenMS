@@ -9,6 +9,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHAnnotatorAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTAlgorithm.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/ProteoformDatabase.h>
 #include <OpenMS/APPLICATIONS/TOPPBase.h>
 #include <OpenMS/FORMAT/FASTAFile.h>
 #include <OpenMS/FORMAT/FLASHTnTFile.h>
@@ -42,8 +43,26 @@ protected:
     registerInputFile_("in", "<file>", "", "Input file (deconv.mzML from FLASHDeconv mzML output).", true);
     setValidFormats_("in", ListUtils::create<String>("mzML"));
 
-    registerInputFile_("fasta", "<file>", "", "Input proteome database file (fasta)", true);
+    registerInputFile_("fasta", "<file>", "",
+                       "Input proteome database file (FASTA or PEFF). A PEFF file (PSI Extended FASTA, e.g. from UniPEFF; first line '# PEFF' or "
+                       "the extension .peff) gives every annotated proteoform of a protein as a database entry: its processed forms (mature chains, "
+                       "without the initiator Met, signal, transit peptide or propeptide) with up to peff_max_mods annotated modifications fixed "
+                       "on them (a residue with any of its modifications on distinct sites of it, or all disulfide bonds of a form, counts as one); variable and blind "
+                       "modifications are searched on top. Every target protein without a decoy (DECOY prefix) in the file gets one: its residues "
+                       "shuffled within the processed forms, their first and last residues kept, the modifications moved with their residues.",
+                       true);
     setValidFormats_("fasta", ListUtils::create<String>("fasta"));
+
+    registerIntOption_("peff_max_mods", "<number>", 1,
+                       "PEFF input: at most this many annotated modification units fixed on an entry (0: the processed forms only).", false);
+    setMinInt_("peff_max_mods", 0);
+    registerStringList_("peff_mod_masses", "<accession=mass>",
+                        ListUtils::create<String>("MOD:01819=100.016044,MOD:01893=86.000394,MOD:01614=329.05252,MOD:01956=15.994915,"
+                                                  "MOD:00657=14.999666,MOD:00017=skip,MOD:00223=skip,MOD:01976=skip,MOD:01780=skip"),
+                        "PEFF input: masses of modification accessions that replace those of the modification database (PSI-MOD, Unimod), or "
+                        "'skip' to leave the modification out. The default fills the gaps of the bundled PSI-MOD for E. coli (UniProt ptmlist "
+                        "masses). A modification without a mass is left out (counted in the log).",
+                        false);
 
     registerInputFile_("in_raw", "<file>", "",
                        "Raw mzML file (profile or centroid) FLASHDeconv was run on. With it, every PrSM (targets and decoys) is annotated on its raw "
@@ -122,6 +141,8 @@ protected:
     auto tnt_param = getParam_();
     tnt_param.remove("in");
     tnt_param.remove("fasta");
+    tnt_param.remove("peff_max_mods");
+    tnt_param.remove("peff_mod_masses");
     tnt_param.remove("in_raw");
     tnt_param.remove("out_tag");
     tnt_param.remove("out_prsm");
@@ -139,9 +160,73 @@ protected:
     const bool chimeric = (int)tnt_param.getValue("chimeric_rounds") > 0 || tnt_param.getValue("native").toString() == "true"; // -native searches a residual round
     OPENMS_LOG_INFO << "Finding sequence tags from deconvolved spectra ..." << endl;
 
-    FASTAFile fasta_file;
     std::vector<FASTAFile::FASTAEntry> fasta_entry;
-    fasta_file.load(in_fasta, fasta_entry);
+    // a PEFF file: its proteoform entries (ProteoformDatabase); a FASTA file: its entries are the proteins
+    ProteoformDatabase database;
+    const bool peff = ProteoformDatabase::isPEFF(in_fasta);
+    if (peff)
+    {
+      database.loadPEFF(in_fasta, getIntOption_("peff_max_mods"), getStringList_("peff_mod_masses"), fasta_entry);
+      const auto& st = database.getLoadStatistics();
+      Size targets = 0, with_mods = 0;
+      for (const auto& p : database.proteins) targets += ! p.decoy;
+      for (const auto& e : database.entries) with_mods += ! e.fixed.empty();
+      OPENMS_LOG_INFO << "PEFF database: " << st.input_targets << " target and " << st.input_decoys << " decoy proteins in the file, "
+                      << st.generated_decoys << " decoys generated; " << targets << " target and " << database.proteins.size() - targets
+                      << " decoy proteins, " << database.entries.size() << " entries (" << with_mods << " with fixed modifications; "
+                      << st.forms << " processed forms of the targets, peff_max_mods " << getIntOption_("peff_max_mods") << "); "
+                      << st.modification_sites << " modification sites and " << st.disulfide_bonds << " disulfide bonds of the targets used"
+                      << endl;
+      if (st.unpaired_half_cystines > 0)
+      {
+        OPENMS_LOG_WARN << "PEFF database: " << st.unpaired_half_cystines
+                        << " half cystines without a disulfide bond pair are left out (write the PEFF with UniPEFF -annotation_identifiers)" << endl;
+      }
+      if (st.length_mismatches > 0)
+      {
+        OPENMS_LOG_WARN << "PEFF database: " << st.length_mismatches << " entries whose \\Length differs from their sequence" << endl;
+      }
+      if (st.empty_sequences > 0) { OPENMS_LOG_WARN << "PEFF database: " << st.empty_sequences << " entries without residues left out" << endl; }
+      if (st.unpaired_decoys > 0)
+      {
+        OPENMS_LOG_WARN << "PEFF database: " << st.unpaired_decoys << " decoys of the file without a target of their name or accession" << endl;
+      }
+      if (st.unmirrored_decoys > 0)
+      {
+        OPENMS_LOG_WARN << "PEFF database: " << st.unmirrored_decoys
+                        << " decoys of the file whose entries do not mirror their target's (their number or masses); without decoys in the "
+                           "file, mirrored ones are generated"
+                        << endl;
+      }
+      auto siteList = [](const std::map<String, Size>& counts, Size& sites) {
+        String list;
+        sites = 0;
+        for (const auto& [acc, n] : counts)
+        {
+          sites += n;
+          list += (list.empty() ? "" : ", ") + acc + " (" + String(n) + ")";
+        }
+        return list;
+      };
+      if (! st.unresolved.empty())
+      {
+        Size sites = 0;
+        const String list = siteList(st.unresolved, sites);
+        OPENMS_LOG_INFO << "PEFF database: " << sites << " modification sites without a mass left out (peff_mod_masses): " << list << endl;
+      }
+      if (! st.wrong_residue.empty())
+      {
+        Size sites = 0;
+        const String list = siteList(st.wrong_residue, sites);
+        OPENMS_LOG_WARN << "PEFF database: " << sites << " modification sites on a residue that is not the modification's origin left out: " << list
+                        << endl;
+      }
+    }
+    else
+    {
+      FASTAFile fasta_file;
+      fasta_file.load(in_fasta, fasta_entry);
+    }
     std::vector<ProteinHit> proteoform_hits;
     // Run here!
     OPENMS_LOG_INFO << "Processing : " << in_file << endl;
@@ -183,7 +268,7 @@ protected:
         FLASHAnnotatorAlgorithm::loadSpectra(in_raw, scans, spectra);
       });
     }
-    tnt.run(map, fasta_entry);
+    tnt.run(map, fasta_entry, peff ? &database : nullptr);
     tnt.getProteoforms(proteoform_hits);
 
     OPENMS_LOG_INFO << "FLASHTnT run complete. Now writing the results in output files ..." << endl;

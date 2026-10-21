@@ -8,6 +8,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHExtenderAlgorithm.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/ProteoformDatabase.h>
 #include <OpenMS/CHEMISTRY/ModificationsDB.h>
 #include <OpenMS/CHEMISTRY/ResidueDB.h>
 #include <fstream>
@@ -283,13 +284,14 @@ namespace OpenMS
   }
 
   bool FLASHExtenderAlgorithm::combinationFits_(const VariableModificationCombination& combination, const String& seq, int from, int to, int n_site,
-                                                int c_site) const
+                                                int c_site, const std::uint8_t* occupied) const
   {
     // called in the innermost loop of the extension: no allocation
     to = std::min(to, (int)seq.size());
     auto fits_at = [&](const VariableModification& vm, int p) {
       if (vm.position == 1 && p != n_site) return false; // the proteoform's first residue
       if (vm.position == 2 && p != c_site) return false; // the proteoform's last residue
+      if (occupied != nullptr && ! freeFor_(occupied[p], vm.position)) return false; // a fixed modification sits there
       return vm.residues.empty() || vm.residues.find(seq[p]) != std::string::npos;
     };
     const auto& mods = combination.mods;
@@ -333,7 +335,7 @@ namespace OpenMS
   }
 
   String FLASHExtenderAlgorithm::variableModificationNames_(double mass, double tol, const String& seq, int from, int to, int n_site, int c_site,
-                                                            String& accessions, int& site) const
+                                                            String& accessions, int& site, const std::uint8_t* occupied) const
   {
     String names;
     accessions = "";
@@ -344,7 +346,7 @@ namespace OpenMS
                                  [](const VariableModificationCombination& c, double m) { return c.mass < m; });
     for (; iter != var_mod_combinations_.end() && iter->mass <= mass + tol; ++iter)
     {
-      if (! combinationFits_(*iter, seq, from, to, n_site, c_site)) continue;
+      if (! combinationFits_(*iter, seq, from, to, n_site, c_site, occupied)) continue;
       fitting++;
       last = &*iter;
       for (Size k = 0; k < iter->mods.size(); k++)
@@ -364,6 +366,7 @@ namespace OpenMS
       {
         if (vm.position == 1 && p != n_site) continue;
         if (vm.position == 2 && p != c_site) continue;
+        if (occupied != nullptr && ! freeFor_(occupied[p], vm.position)) continue;
         if (! vm.residues.empty() && vm.residues.find(seq[p]) == std::string::npos) continue;
         site = p;
         count++;
@@ -437,6 +440,13 @@ namespace OpenMS
       blind_mod_buckets_[b] = (UInt)i;
     }
     blind_mod_bucket_scale_ = scale;
+  }
+
+  void FLASHExtenderAlgorithm::setFixedModifications(const ProteoformDatabase* db)
+  {
+    const bool with_fixed = db != nullptr && db->hasFixedModifications();
+    fixed_masses_ = with_fixed ? &db->fixedMasses() : nullptr;
+    occupancy_ = with_fixed ? &db->occupancy() : nullptr;
   }
 
   inline Size FLASHExtenderAlgorithm::blindModLowerBound_(double mass) const
@@ -630,7 +640,8 @@ namespace OpenMS
     if (hi.calculated_precursor_mass_ > 0) hi.calculated_precursor_mass_ += i2f_mass;
   }
 
-  void FLASHExtenderAlgorithm::getProMasses_(const ProteinHit& hit, std::vector<double>& pro_masses, int mode)
+  void FLASHExtenderAlgorithm::getProMasses_(const ProteinHit& hit, std::vector<double>& pro_masses, int mode,
+                                             const std::vector<std::pair<int, double>>* fixed)
   {
     pro_masses.reserve(hit.getSequence().size() + 1);
     pro_masses.push_back(0);
@@ -638,11 +649,29 @@ namespace OpenMS
     auto seq = hit.getSequence();
 
     if (mode == 0) seq = seq.reverse();
-    for (const auto& aa : seq)
+    if (fixed == nullptr || fixed->empty())
     {
+      for (const auto& aa : seq)
+      {
+        if (aa == 'X') pro_masses.push_back(pro_masses.back()); // repeat the previous mass
+        else
+          pro_masses.push_back(pro_masses.back() + ResidueDB::getInstance()->getResidue(aa)->getMonoWeight(Residue::Internal));
+      }
+      return;
+    }
+    // the fixed modification masses of the residues in this orientation (reversed in mode 0)
+    const int length = (int)seq.size();
+    std::vector<double> extra(length, 0.0);
+    for (const auto& [p, mass] : *fixed)
+    {
+      if (p >= 0 && p < length) extra[mode == 0 ? length - 1 - p : p] += mass;
+    }
+    for (int k = 0; k < length; k++)
+    {
+      const char aa = seq[k];
       if (aa == 'X') pro_masses.push_back(pro_masses.back()); // repeat the previous mass
       else
-        pro_masses.push_back(pro_masses.back() + ResidueDB::getInstance()->getResidue(aa)->getMonoWeight(Residue::Internal));
+        pro_masses.push_back(pro_masses.back() + ResidueDB::getInstance()->getResidue(aa)->getMonoWeight(Residue::Internal) + extra[k]);
     }
   }
 
@@ -732,6 +761,53 @@ namespace OpenMS
     return ret;
   }
 
+
+  void FLASHExtenderAlgorithm::keepFixedConsistentPlacements_(const String& seq, const FLASHHelperClasses::Tag& tag,
+                                                              const std::vector<std::pair<int, double>>& fixed, std::vector<int>& positions) const
+  {
+    // A tag is placed by its letters. On an entry with fixed modifications, its masses must also span the residues it is placed on, the
+    // fixed masses included: a de novo tag (residue masses only) is not placed across a fixed residue, and a ladder or gapped tag built
+    // across one (residue sums with the fixed masses) not where the same letters carry none. The span of the masses is within the sum of
+    // their tolerances of the residues' (the steps of a tag telescope); fixed masses are about 1 Da or more.
+    const String& tag_seq = tag.getUppercaseSequence();
+    const int length = (int)tag_seq.size();
+    const bool lower_case = std::any_of(tag.getSequence().begin(), tag.getSequence().end(), ::islower);
+    auto masses = tag.getMzs();
+    std::sort(masses.begin(), masses.end());
+    const bool with_span = ! lower_case && masses.size() >= 2;
+    const double tag_span = with_span ? masses.back() - masses.front() : 0;
+    const double margin = with_span ? std::max(0.05, 2 * tol_ * (masses.front() + masses.back())) : 0;
+    const auto* rdb = ResidueDB::getInstance();
+    std::vector<int> kept;
+    kept.reserve(positions.size());
+    for (int pos : positions)
+    {
+      double fixed_sum = 0;
+      bool across = false;
+      for (const auto& [p, mass] : fixed)
+      {
+        if (p < pos || p >= pos + length) continue;
+        fixed_sum += mass;
+        across = true;
+      }
+      double span = fixed_sum;
+      bool plain = with_span;
+      for (int k = pos; plain && k < pos + length; k++)
+      {
+        const char c = k < (int)seq.size() ? seq[k] : 'X';
+        if (c < 'A' || c > 'Z' || c == 'X' || c == 'B' || c == 'J' || c == 'Z') plain = false;
+        else span += rdb->getResidue(c)->getMonoWeight(Residue::Internal);
+      }
+      // without a mass span to compare (lowercase letters, an unknown residue): placed only off the fixed residues
+      if (! plain)
+      {
+        if (! across) kept.push_back(pos);
+        continue;
+      }
+      if (std::abs(span - tag_span) <= margin) kept.push_back(pos);
+    }
+    positions.swap(kept);
+  }
 
   void FLASHExtenderAlgorithm::updateHitInformation_(const DeconvolvedSpectrum& dspec, HitInformation& hi, double max_mass)
   {
@@ -923,6 +999,16 @@ namespace OpenMS
     hi.cur_oriented_seq_ = hit.getSequence();
     if (hi.mode_ == 0) hi.cur_oriented_seq_.reverse();
     hi.cur_node_series_ = &hi.node_series_map_[hi.mode_];
+    hi.cur_occupied_.clear();
+    if (hi.occupancy_ != nullptr)
+    {
+      const int length = (int)hi.cur_oriented_seq_.size();
+      hi.cur_occupied_.assign(length, 0);
+      for (const auto& [p, bits] : *hi.occupancy_)
+      {
+        if (p >= 0 && p < length) hi.cur_occupied_[hi.mode_ == 0 ? length - 1 - p : p] |= bits;
+      }
+    }
     {
       // per node, the smallest mass and the largest tolerance from it to the last node (NaN if any is NaN)
       const auto& tol_spec = *hi.cur_tol_spec_;
@@ -992,6 +1078,7 @@ namespace OpenMS
       {
         std::vector<double> masses;
         FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(positions, masses, -1, seq, tag);
+        if (hi.fixed_ != nullptr) keepFixedConsistentPlacements_(seq, tag, *hi.fixed_, positions);
         positions_set = true;
       }
       auto tag_masses = tag.getMzs();
@@ -1249,6 +1336,16 @@ namespace OpenMS
       std::vector<int> used_mode;
 
       if (! hit.metaValueExists(mi_tag_indices)) continue;
+      // the fixed modifications of the hit's database entry
+      if (fixed_masses_ != nullptr)
+      {
+        const int entry = hit.getMetaValue(mi_fasta_index);
+        if (entry >= 0 && entry < (int)fixed_masses_->size() && ! (*fixed_masses_)[entry].empty())
+        {
+          hi.fixed_ = &(*fixed_masses_)[entry];
+          hi.occupancy_ = &(*occupancy_)[entry];
+        }
+      }
 
       const std::vector<int>& tag_indices = hit.getMetaValue(mi_tag_indices).toIntList();
 
@@ -1327,7 +1424,7 @@ namespace OpenMS
         // auto& node_spec = hi.node_spec_map_[hi.mode_] = MSSpectrum();
         // auto& tol_spec = hi.tol_spec_map_[hi.mode_] = MSSpectrum();
 
-        getProMasses_(hit, pro_masses, hi.mode_);
+        getProMasses_(hit, pro_masses, hi.mode_, hi.fixed_);
         updateHitInformation_(dspec, hi, pro_masses.back());
 
         hi.visited_.clear(); // dag_ is rebuilt per mode
@@ -1457,6 +1554,17 @@ namespace OpenMS
           int prev_mod_count = 0, prev_var_count = 0;
           String oriented_seq = hit.getSequence();
           if (m == 0) oriented_seq.reverse();
+          // the kinds of the fixed modifications per residue in this orientation, as cur_occupied_ in the DAG (empty: none)
+          std::vector<std::uint8_t> oriented_occupied;
+          if (hi.occupancy_ != nullptr)
+          {
+            const int length = (int)oriented_seq.size();
+            oriented_occupied.assign(length, 0);
+            for (const auto& [p, bits] : *hi.occupancy_)
+            {
+              if (p >= 0 && p < length) oriented_occupied[m == 0 ? length - 1 - p : p] |= bits;
+            }
+          }
           int pre_pro_index = 0;
           int pre_node_index = 0;
           double mod_mass = 0; //, total_mod_mass = 0;
@@ -1517,7 +1625,8 @@ namespace OpenMS
                 const int n_site = (m != 0 && pre_node_index == 0) ? pre_pro_index : -1;
                 const int c_site = (m == 0 && pre_node_index == 0) ? pre_pro_index : (m == 2 && node_index == (int)t_node_spec.size() - 1) ? pro_index - 1 : -1;
                 int oriented_site = -1;
-                var_names = variableModificationNames_(mod_mass, mod_tol, oriented_seq, from, to, n_site, c_site, var_accs, oriented_site);
+                var_names = variableModificationNames_(mod_mass, mod_tol, oriented_seq, from, to, n_site, c_site, var_accs, oriented_site,
+                                                       oriented_occupied.empty() ? nullptr : oriented_occupied.data());
                 // The edge fitted a combination on these residues; a name is missing only if the shift measured here (from the previous
                 // shift as observed) is outside the tolerance that the edge's shift met (from the previous shift as searched: the nominal
                 // mass of an earlier variable modification, or a mode-2 blind shift moved to the precursor mass). It is then reported as a
@@ -1845,8 +1954,19 @@ namespace OpenMS
 
               if (hi.protein_end_position_ >= 0) seq = seq.substr(0, hi.protein_end_position_);
               if (hi.protein_start_position_ >= 0) seq = seq.substr(hi.protein_start_position_);
+              // the fixed modifications of the proteoform's residues, as positions in seq
+              std::vector<std::pair<int, double>> seq_fixed;
+              if (hi.fixed_ != nullptr)
+              {
+                const int first = std::max(0, hi.protein_start_position_);
+                for (const auto& [p, mass] : *hi.fixed_)
+                {
+                  if (p >= first && p - first < (int)seq.size()) seq_fixed.emplace_back(p - first, mass);
+                }
+              }
 
-              FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(positions, masses, max_mod_mass_ * max_blind_mod_cntr_ + 1, seq, tag);
+              FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(positions, masses, max_mod_mass_ * max_blind_mod_cntr_ + 1, seq, tag,
+                                                                             hi.fixed_ != nullptr ? &seq_fixed : nullptr);
               tag_matched = ! positions.empty();
               break;
             }
@@ -2131,6 +2251,7 @@ namespace OpenMS
     // no modification left: only unmodified stretches
     if (start_num_blind_mod == max_blind_mod_cntr && start_num_var_mod >= max_var_mod_cntr_) diagonal_counter = 1e5;
     const double var_mod_room = varModRoom_(max_var_mod_cntr_ - start_num_var_mod);
+    const std::uint8_t* occupied = hi.cur_occupied_.empty() ? nullptr : hi.cur_occupied_.data();
 
     const auto src = getVertex_(0, 0, 0, 0, 0, pro_mass_size);
     const auto& node_spec = *hi.cur_node_spec_;
@@ -2351,9 +2472,9 @@ namespace OpenMS
             {
               if (num_var_mod + (int)iter->mods.size() > max_var_mod_cntr_) continue;
               // the whole stretch first (cheap; a combination that does not fit it fits no part of it), then the residues that can carry it
-              if (! combinationFits_(*iter, hi.cur_oriented_seq_, start_pro_index, pro_i, n_site, c_site)) continue;
+              if (! combinationFits_(*iter, hi.cur_oriented_seq_, start_pro_index, pro_i, n_site, c_site, occupied)) continue;
               if (range_end < 0) range_end = shiftRangeEnd_(node_spec, tol_spec, pro_masses, start_node_index, start_pro_index, node_i, pro_i, t_delta_mass);
-              if (range_end < pro_i && ! combinationFits_(*iter, hi.cur_oriented_seq_, start_pro_index, range_end, n_site, c_site)) continue;
+              if (range_end < pro_i && ! combinationFits_(*iter, hi.cur_oriented_seq_, start_pro_index, range_end, n_site, c_site, occupied)) continue;
               var_search_success = true;
               num_var_mod += (int)iter->mods.size();
               next_cumulative_mod_mass = cumulative_mod_mass + iter->mass;
