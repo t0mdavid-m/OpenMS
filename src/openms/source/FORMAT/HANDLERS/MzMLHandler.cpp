@@ -18,12 +18,107 @@
 #include <OpenMS/INTERFACES/IMSDataConsumer.h>
 #include <OpenMS/SYSTEM/File.h>
 
+#include <condition_variable>
 #include <map>
+#include <mutex>
+#include <system_error>
+#include <thread>
+
+#ifdef _OPENMP
+  #include <omp.h>
+#endif
 
 namespace OpenMS::Internal
 {
 
     thread_local ProgressLogger pg_outer; ///< an extra logger for nested logging
+
+    /// Decodes one full stack of spectra at a time in its own thread, with its own team of OpenMP threads, while the handler's thread
+    /// parses the next one. The handler hands a stack over (submit) only after it took the previous one back (take).
+    class MzMLHandler::BackgroundDecoder_
+    {
+    public:
+      BackgroundDecoder_(MzMLHandler& handler, int threads) :
+        handler_(handler), threads_(threads), thread_([this] { run_(); })
+      {
+      }
+
+      /// waits for a stack being decoded (a stack handed over but not started is not decoded)
+      ~BackgroundDecoder_()
+      {
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          stop_ = true;
+        }
+        cv_.notify_all();
+        thread_.join();
+      }
+
+      /// hands @p batch over (swapped with the empty stack taken back last)
+      void submit(std::vector<SpectrumData>& batch)
+      {
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          batch_.swap(batch);
+          pending_ = true;
+          done_ = false;
+        }
+        cv_.notify_all();
+      }
+
+      /// waits for the stack handed over last and swaps it into @p batch; false if none is pending
+      bool take(std::vector<SpectrumData>& batch, int& error_count, String& error_message)
+      {
+        std::unique_lock<std::mutex> lock(mutex_);
+        if (!pending_) return false;
+        cv_.wait(lock, [this] { return done_; });
+        batch.swap(batch_);
+        batch_.clear();
+        error_count = error_count_;
+        error_message = error_message_;
+        pending_ = false;
+        done_ = false;
+        return true;
+      }
+
+    private:
+      void run_()
+      {
+        std::unique_lock<std::mutex> lock(mutex_);
+        while (true)
+        {
+          cv_.wait(lock, [this] { return stop_ || (pending_ && !done_); });
+          if (stop_) return;
+          lock.unlock();
+          String message;
+          int count = 0;
+          try
+          {
+            count = handler_.decodeSpectrumBatch_(batch_, threads_, message);
+          }
+          catch (...)
+          {
+            count = 1;
+            message = "Unknown exception during spectrum data population";
+          }
+          lock.lock();
+          error_count_ = count;
+          error_message_ = message;
+          done_ = true;
+          cv_.notify_all();
+        }
+      }
+
+      MzMLHandler& handler_;
+      const int threads_;
+      std::mutex mutex_;
+      std::condition_variable cv_;
+      std::vector<SpectrumData> batch_;
+      bool pending_ = false, done_ = false, stop_ = false;
+      int error_count_ = 0;
+      String error_message_;
+      std::thread thread_; // last: starts when the members above exist
+    };
 
     /// Constructor for a read-only handler
     MzMLHandler::MzMLHandler(MapType& exp, const String& filename, const String& version, const ProgressLogger& logger)
@@ -57,7 +152,10 @@ namespace OpenMS::Internal
 
 
     /// Destructor
-    MzMLHandler::~MzMLHandler() = default;
+    MzMLHandler::~MzMLHandler()
+    {
+      background_decoder_.reset(); // joins its thread (after a parse error: once the stack it decodes is done)
+    }
 
     /// Set the peak file options
     void MzMLHandler::setOptions(const PeakFileOptions& opt)
@@ -117,6 +215,141 @@ namespace OpenMS::Internal
 
     void MzMLHandler::populateSpectraWithData_()
     {
+      // A full stack of spectra is decoded in the background while the parse goes on, by all threads but the parsing one, when an
+      // experiment is loaded (a consumer gets the spectra at the same points of the parse as before, e.g. between its chromatograms)
+      // with three or more threads and not inside a parallel region; the spectra are appended in the same order.
+      int threads = 1;
+#ifdef _OPENMP
+      if (!omp_in_parallel()) threads = omp_get_max_threads();
+#endif
+      if (background_decoder_ == nullptr && (threads < 3 || consumer_ != nullptr || !options_.getFillData()))
+      {
+        populateSpectraNow_();
+        return;
+      }
+      if (background_decoder_ == nullptr)
+      {
+        try
+        {
+          background_decoder_ = std::make_shared<BackgroundDecoder_>(*this, threads - 1);
+        }
+        catch (const std::system_error&) // no thread: decode here
+        {
+          populateSpectraNow_();
+          return;
+        }
+      }
+      std::vector<SpectrumData> decoded;
+      int error_count = 0;
+      String error_message;
+      if (background_decoder_->take(decoded, error_count, error_message))
+      {
+        if (error_count != 0)
+        {
+          std::cerr << "  Parsing error: '" << error_message  << "'" << std::endl;
+          std::cerr << "  You could try to disable sorting spectra while loading." << std::endl;
+          throw Exception::ParseError(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, file_, "Error during parsing of binary data: '" + error_message + "'");
+        }
+        appendSpectra_(decoded);
+      }
+      // the stack is swapped with the (empty) one taken back
+      background_decoder_->submit(spectrum_data_);
+      spectrum_data_.clear();
+      spectrum_data_.reserve(options_.getMaxDataPoolSize());
+    }
+
+    void MzMLHandler::flushSpectraWithData_()
+    {
+      if (background_decoder_ != nullptr)
+      {
+        std::vector<SpectrumData> decoded;
+        int error_count = 0;
+        String error_message;
+        const bool taken = background_decoder_->take(decoded, error_count, error_message);
+        background_decoder_.reset(); // its thread ends here
+        if (taken)
+        {
+          if (error_count != 0)
+          {
+            std::cerr << "  Parsing error: '" << error_message  << "'" << std::endl;
+            std::cerr << "  You could try to disable sorting spectra while loading." << std::endl;
+            throw Exception::ParseError(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, file_, "Error during parsing of binary data: '" + error_message + "'");
+          }
+          appendSpectra_(decoded);
+        }
+      }
+      populateSpectraNow_();
+    }
+
+    void MzMLHandler::decodeSpectrumData_(SpectrumData& spectrum_data)
+    {
+      populateSpectraWithData_(spectrum_data.data,
+                                spectrum_data.default_array_length,
+                                options_,
+                                spectrum_data.spectrum);
+      if (options_.getSortSpectraByMZ() && !spectrum_data.spectrum.isSorted())
+      {
+        spectrum_data.spectrum.sortByPosition();
+      }
+    }
+
+    int MzMLHandler::decodeSpectrumBatch_(std::vector<SpectrumData>& batch, int threads, String& error_message)
+    {
+      std::atomic<int> errCount = 0;
+      #pragma omp parallel for schedule(dynamic, 1) num_threads(threads)
+      for (SignedSize i = 0; i < (SignedSize)batch.size(); i++)
+      {
+        // parallel exception catching and re-throwing business
+        if (!errCount) // no need to parse further if already an error was encountered
+        {
+          try
+          {
+            decodeSpectrumData_(batch[i]);
+            std::vector<BinaryData>().swap(batch[i].data); // the encoded and decoded arrays are freed here, in parallel
+          }
+          catch (OpenMS::Exception::BaseException& e)
+          {
+            #pragma omp critical(MZMLErrorHandling)
+            {
+              ++errCount;
+              error_message = e.what();
+            }
+          }
+          catch (...)
+          {
+            #pragma omp critical(MZMLErrorHandling)
+            {
+              ++errCount;
+              error_message = "Unknown exception during spectrum data population";
+            }
+          }
+        }
+      }
+      return errCount;
+    }
+
+    void MzMLHandler::appendSpectra_(std::vector<SpectrumData>& batch)
+    {
+      // Append all spectra to experiment / consumer
+      for (Size i = 0; i < batch.size(); i++)
+      {
+        if (consumer_ != nullptr)
+        {
+          consumer_->consumeSpectrum(batch[i].spectrum);
+          if (options_.getAlwaysAppendData())
+          {
+            exp_->addSpectrum(std::move(batch[i].spectrum));
+          }
+        }
+        else
+        {
+          exp_->addSpectrum(std::move(batch[i].spectrum));
+        }
+      }
+    }
+
+    void MzMLHandler::populateSpectraNow_()
+    {
 
       // Whether spectrum should be populated with data
       if (options_.getFillData())
@@ -131,14 +364,7 @@ namespace OpenMS::Internal
           {
           try
           {
-            populateSpectraWithData_(spectrum_data_[i].data,
-                                      spectrum_data_[i].default_array_length,
-                                      options_,
-                                      spectrum_data_[i].spectrum);
-            if (options_.getSortSpectraByMZ() && !spectrum_data_[i].spectrum.isSorted())
-            {
-              spectrum_data_[i].spectrum.sortByPosition();
-            }
+            decodeSpectrumData_(spectrum_data_[i]);
           }
 
           catch (OpenMS::Exception::BaseException& e)
@@ -165,21 +391,7 @@ namespace OpenMS::Internal
       }
 
       // Append all spectra to experiment / consumer
-      for (Size i = 0; i < spectrum_data_.size(); i++)
-      {
-        if (consumer_ != nullptr)
-        {
-          consumer_->consumeSpectrum(spectrum_data_[i].spectrum);
-          if (options_.getAlwaysAppendData())
-          {
-            exp_->addSpectrum(std::move(spectrum_data_[i].spectrum));
-          }
-        }
-        else
-        {
-          exp_->addSpectrum(std::move(spectrum_data_[i].spectrum));
-        }
-      }
+      appendSpectra_(spectrum_data_);
 
       // Delete batch
       spectrum_data_.clear();
@@ -1392,7 +1604,7 @@ namespace OpenMS::Internal
         processing_.clear();
 
         // Flush the remaining data
-        populateSpectraWithData_();
+        flushSpectraWithData_();
         populateChromatogramsWithData_();
         pg_outer.endProgress(File::fileSize(file_)); // we cannot query the offset within the file when SAX'ing it (Xerces does not support that)
                                                      // , so we can only report I/O at the very end

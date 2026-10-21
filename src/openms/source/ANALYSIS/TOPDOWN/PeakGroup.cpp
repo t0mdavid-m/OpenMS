@@ -17,6 +17,24 @@
 
 namespace OpenMS
 {
+  namespace
+  {
+    // per-worker scratch of PeakGroup::getNoisePeakPower_ (one thread_local, so one TLS lookup per call)
+    struct NoisePowerScratch
+    {
+      std::vector<std::pair<Peak1D, bool>> all_peaks;
+      std::vector<float> intensities;
+      std::vector<double> peak_masses;
+      std::vector<float> peak_intensities;
+      std::vector<unsigned> edge_table;
+      std::vector<double> chain_bounds;
+      std::vector<std::uint32_t> edge_bins;
+      std::vector<std::uint32_t> target_bins;
+      std::vector<std::uint32_t> head_bins;
+      std::vector<char> unused;      // per peak: not yet in a chain sum
+    };
+  } // namespace
+
   PeakGroup::PeakGroup(const int min_abs_charge, const int max_abs_charge, const bool is_positive):
       min_abs_charge_(min_abs_charge),
       max_abs_charge_(max_abs_charge),
@@ -147,6 +165,55 @@ namespace OpenMS
     }
   }
 
+  // The per-charge noise powers of the last scoring iteration, computed when first read (chargeNoisePower_) from the same noisy and signal
+  // peaks as before. A lower bound of each: the square of the most intense noise peak of the charge. getNoisePeakPower_ always takes that
+  // peak (it is above the intensity threshold), adds its intensity to one of the non-negative sums it squares, and adds the non-negative
+  // squares: with finite non-negative intensities every float step is monotone, so the noise power is at least the bound.
+  struct PeakGroup::ChargeNoise_
+  {
+    const std::vector<FLASHHelperClasses::LogMzPeak>* noisy_peaks = nullptr;
+    const std::vector<FLASHHelperClasses::LogMzPeak>* signal_peaks = nullptr;
+    int charge_count = 0;
+    double tol = 0;
+    int min_charge = 1, max_charge = 0;
+    std::vector<float> lower_bounds; // per charge (index 0 and charges without noise peaks: 0)
+    std::vector<char> computed;      // per charge
+
+    /// set up for the charges [@p min_z, @p max_z]; false (nothing left to compute later) unless all intensities are finite, non-negative and
+    /// sum to less than 1e30 (no NaN, no overflow of the float sums)
+    bool prepare(const std::vector<FLASHHelperClasses::LogMzPeak>& noisy, const std::vector<FLASHHelperClasses::LogMzPeak>& signal, const int count,
+                 const double t, const int min_z, const int max_z)
+    {
+      if (min_z < 1 || max_z < min_z) { return false; }
+      double total = 0;
+      for (const auto& p : signal)
+      {
+        if (! (p.intensity >= 0) || ! std::isfinite(p.intensity)) { return false; }
+        total += p.intensity;
+      }
+      lower_bounds.assign(max_z + 1, .0f);
+      for (const auto& p : noisy)
+      {
+        if (! (p.intensity >= 0) || ! std::isfinite(p.intensity)) { return false; }
+        total += p.intensity;
+        if (p.abs_charge >= min_z && p.abs_charge <= max_z) { lower_bounds[p.abs_charge] = std::max(lower_bounds[p.abs_charge], p.intensity); }
+      }
+      if (! (total < 1e30)) { return false; }
+      for (int z = min_z; z <= max_z; z++)
+      {
+        lower_bounds[z] = lower_bounds[z] * lower_bounds[z];
+      }
+      computed.assign(max_z + 1, 0);
+      noisy_peaks = &noisy;
+      signal_peaks = &signal;
+      charge_count = count;
+      tol = t;
+      min_charge = min_z;
+      max_charge = max_z;
+      return true;
+    }
+  };
+
   int PeakGroup::updateQscore(const std::vector<LogMzPeak>& noisy_peaks,
                               const FLASHHelperClasses::PrecalculatedAveragine& avg,
                               const double min_cos,
@@ -164,9 +231,14 @@ namespace OpenMS
     const int charge_count = max_abs_charge_ - min_abs_charge_ + 1;
     static thread_local std::vector<LogMzPeak> signal_peaks; // per-worker scratch
     if (defer_total_noise) { signal_peaks.assign(logMzpeaks_.begin(), logMzpeaks_.end()); }
-    updatePerChargeInformation_(noisy_peaks, tol, is_last);
+    // The per-charge noise powers of the last iteration are also computed when first read, from those signal peaks: updateChargeRange_ reads
+    // only the charges that can have the largest SNR or decide the new charge range, updateSNR_ those in the new range
+    static thread_local ChargeNoise_ charge_noise; // per-worker scratch
+    ChargeNoise_* const lazy_noise
+      = defer_total_noise && charge_noise.prepare(noisy_peaks, signal_peaks, charge_count, tol, min_abs_charge_, max_abs_charge_) ? &charge_noise : nullptr;
+    updatePerChargeInformation_(noisy_peaks, tol, is_last, lazy_noise);
     if (is_last && ! defer_total_noise) { per_charge_noise_pwr_[0] = getNoisePeakPower_(noisy_peaks, logMzpeaks_, charge_count, 0, tol); }
-    updateChargeRange_();
+    updateChargeRange_(lazy_noise);
     updateChargeFitScoreAndChargeIntensities_(is_low_charge);
     if (charge_score_ < .7f) //
     {
@@ -187,7 +259,7 @@ namespace OpenMS
     if (defer_total_noise) { per_charge_noise_pwr_[0] = getNoisePeakPower_(noisy_peaks, signal_peaks, charge_count, 0, tol); }
     updatePerChargeCos_(avg, tol);
     updateAvgMassError_();
-    updateSNR_((float)avg.getSNRMultiplicationFactor(monoisotopic_mass_));
+    updateSNR_((float)avg.getSNRMultiplicationFactor(monoisotopic_mass_), lazy_noise);
     //if (target_decoy_type_ == PeakGroup::signal_decoy) isotope_cosine_score_ = std::min(1.0f, isotope_cosine_score_ + .02f); // the smaller
 
     for (int abs_charge = min_abs_charge_; abs_charge <= max_abs_charge_; abs_charge++)
@@ -211,7 +283,8 @@ namespace OpenMS
     constexpr Size bin_number_margin = 8;
     constexpr Size max_bin_number = bin_number_margin + 12; // 12 bin + 8 extra bin
     float threshold = -1;
-    static thread_local std::vector<std::pair<Peak1D, bool>> all_peaks; // peak + is signal? (reused across calls)
+    static thread_local NoisePowerScratch scratch; // one per worker, reused across calls
+    auto& all_peaks = scratch.all_peaks;           // peak + is signal?
     all_peaks.clear();
     all_peaks.reserve(max_noisy_peak_number + signal_peaks.size());
 
@@ -223,7 +296,7 @@ namespace OpenMS
     // get intensity threshold
     if (noise_peak_count > (int)max_noisy_peak_number)
     {
-      static thread_local std::vector<float> intensities;
+      auto& intensities = scratch.intensities;
       intensities.clear();
       intensities.reserve(noise_peak_count);
       for (const auto& noisy_peak : noisy_peaks)
@@ -260,23 +333,38 @@ namespace OpenMS
     float charge_noise_pwr = 0;
     const Size peak_count = all_peaks.size();
 
-    // per-worker tables reused across calls: masses and intensities of the sorted peaks, and per peak (row) the edge of each bin (0 = none),
-    // the bins in which it is the target of an edge, and the bins in which it heads a chain (has an edge but is no target)
-    static thread_local std::vector<double> peak_masses;
-    static thread_local std::vector<float> peak_intensities;
-    static thread_local std::vector<unsigned> edge_table;
-    static thread_local std::vector<std::uint32_t> target_bins;
-    static thread_local std::vector<std::uint32_t> head_bins;
-    peak_masses.resize(peak_count);
-    peak_intensities.resize(peak_count);
-    edge_table.resize(peak_count * max_bin_number);
-    target_bins.assign(peak_count, 0);
-    head_bins.resize(peak_count);
+    // per-worker tables (grown, never shrunk): masses and intensities of the sorted peaks, and per peak (row) the edge of each bin (0 = none),
+    // the bins in which it has an edge, in which it is the target of an edge, and in which it heads a chain (has an edge but is no target)
+    if (scratch.peak_masses.size() < peak_count)
+    {
+      scratch.peak_masses.resize(peak_count);
+      scratch.peak_intensities.resize(peak_count);
+      scratch.edge_table.resize(peak_count * max_bin_number);
+      scratch.chain_bounds.resize(peak_count * max_bin_number);
+      scratch.edge_bins.resize(peak_count);
+      scratch.target_bins.resize(peak_count);
+      scratch.head_bins.resize(peak_count);
+      scratch.unused.resize(peak_count);
+    }
+    double* const peak_masses = scratch.peak_masses.data();
+    float* const peak_intensities = scratch.peak_intensities.data();
+    unsigned* const edge_table = scratch.edge_table.data();
+    std::uint32_t* const edge_bins_of = scratch.edge_bins.data();
+    std::uint32_t* const target_bins = scratch.target_bins.data();
+    std::uint32_t* const head_bins = scratch.head_bins.data();
+    std::fill_n(target_bins, peak_count, 0u);
+    // bounded_chains: finite non-negative intensities whose float sums cannot overflow (for the chain sum bounds below)
+    bool bounded_chains = peak_count < (Size(1) << 20);
+    double intensity_total = 0;
     for (Size i = 0; i < peak_count; i++)
     {
+      const float intensity = all_peaks[i].first.getIntensity();
       peak_masses[i] = all_peaks[i].first.getMZ();
-      peak_intensities[i] = all_peaks[i].first.getIntensity();
+      peak_intensities[i] = intensity;
+      bounded_chains = bounded_chains && intensity >= 0 && std::isfinite(intensity);
+      intensity_total += intensity;
     }
+    bounded_chains = bounded_chains && intensity_total < 1e30;
 
     // (sum, bin) pairs; equal sums keep the last bin like a std::map would, visited by descending sum
     std::array<std::pair<float, Size>, max_bin_number> max_intensity_sum_to_bin;
@@ -286,6 +374,7 @@ namespace OpenMS
     // first collect all possible edges. An edge means mass difference between two peaks.
     // largest normalized distance that can still produce an edge; beyond this even the largest divisor lands outside the bin range
     const double max_edge_normalized_dist = ((double)max_bin_number - 0.5) * div_factors.back() / (double)(max_bin_number - bin_number_margin);
+    Size edge_count = 0, merged_edge_count = 0; // edges, and those into a peak that is already the target of an edge of the bin
     std::array<double, max_bin_number> per_bin_error {}; // of the edge of peak i in a bin, valid for the bins in edge_bins
     std::array<unsigned, max_bin_number> per_bin_edge {};
     for (Size i = 0; i < peak_count; i++)
@@ -320,42 +409,117 @@ namespace OpenMS
           edge_bins |= std::uint32_t(1) << bin;
         }
       }
-      unsigned* edges = edge_table.data() + i * max_bin_number;
+      unsigned* edges = edge_table + i * max_bin_number;
       std::fill(edges, edges + max_bin_number, 0u);
       for (std::uint32_t b = edge_bins; b != 0; b &= b - 1)
       {
         const int bin = std::countr_zero(b);
         edges[bin] = per_bin_edge[bin];
+        merged_edge_count += target_bins[per_bin_edge[bin]] >> bin & 1;
         target_bins[per_bin_edge[bin]] |= std::uint32_t(1) << bin;
+        edge_count++;
       }
+      edge_bins_of[i] = edge_bins;
       // edges point to later peaks only, so all edges into peak i are known here
       head_bins[i] = edge_bins & ~target_bins[i];
     }
 
-    // then from each bin find the highest intensity path consisting of the same mass differences.
-    // each chain is walked once from its head, in peak order per bin; the chain sum is maximized at the head (intensities are non-negative)
+    // then from each bin find the highest intensity path consisting of the same mass differences: per bin the largest chain sum (walked from
+    // its head, float) and the first head in peak order that has it, as when every chain is walked in peak order with a strict "<" update
     std::array<float, max_bin_number> max_sum_intensity {};
     std::array<int, max_bin_number> per_bin_start_index; // -2 means bin is empty. -1 means bin is used. zero or positive = edge index
     for (Size k = 0; k < max_bin_number; k++)
     {
       per_bin_start_index[k] = (used_bins >> k & 1) ? -1 : -2;
     }
-    for (Size i = 0; i < peak_count; i++)
+    const auto chain_sum = [&](Size head, int bin) {
+      float sum_intensity = peak_intensities[head];
+      for (Size j = edge_table[head * max_bin_number + bin]; j != 0; j = edge_table[j * max_bin_number + bin])
+      {
+        sum_intensity += peak_intensities[j];
+      }
+      return sum_intensity;
+    };
+    // (the bounds pay off when chains merge, so that heads share their walks; otherwise, or for a few peaks, the plain walks are cheaper)
+    if (bounded_chains && peak_count >= 32 && merged_edge_count * 4 >= edge_count)
     {
-      for (std::uint32_t b = head_bins[i]; b != 0; b &= b - 1)
+      // Upper bounds of the chain sums, so that most chains need no walk: the chain sum from each peak in double, in reverse peak order (edges
+      // point to later peaks), times a factor covering the rounding of a float sum of up to peak_count non-negative terms (each step at most
+      // 1 + 2^-24) and of the double sums (1 - 2^-53 per step): bound >= float chain sum.
+      double* const chain_bounds = scratch.chain_bounds.data();
+      for (Size i = peak_count; i-- > 0;)
+      {
+        const unsigned* edges = edge_table + i * max_bin_number;
+        for (std::uint32_t b = edge_bins_of[i]; b != 0; b &= b - 1)
+        {
+          const int bin = std::countr_zero(b);
+          const Size j = edges[bin];
+          const double rest = (edge_bins_of[j] >> bin & 1) ? chain_bounds[j * max_bin_number + bin] : (double)peak_intensities[j];
+          chain_bounds[i * max_bin_number + bin] = (double)peak_intensities[i] + rest;
+        }
+      }
+      const double bound_factor = 1.0 + (double)(peak_count + 1) * 0x1p-22;
+      // per bin, the head with the largest bound is walked first; a head whose bound is below the best sum so far cannot reach it
+      std::array<double, max_bin_number> best_bound {};
+      std::array<int, max_bin_number> best_head;
+      best_head.fill(-1);
+      for (Size i = 0; i < peak_count; i++)
+      {
+        for (std::uint32_t b = head_bins[i]; b != 0; b &= b - 1)
+        {
+          const int bin = std::countr_zero(b);
+          const double bound = chain_bounds[i * max_bin_number + bin];
+          if (best_head[bin] < 0 || best_bound[bin] < bound)
+          {
+            best_bound[bin] = bound;
+            best_head[bin] = (int)i;
+          }
+        }
+      }
+      std::array<float, max_bin_number> best_sum {};
+      for (std::uint32_t b = used_bins; b != 0; b &= b - 1)
       {
         const int bin = std::countr_zero(b);
-        float sum_intensity = peak_intensities[i];
-
-        for (Size j = edge_table[i * max_bin_number + bin]; j != 0; j = edge_table[j * max_bin_number + bin])
+        if (best_head[bin] >= 0) { best_sum[bin] = chain_sum(best_head[bin], bin); }
+      }
+      for (Size i = 0; i < peak_count; i++)
+      {
+        for (std::uint32_t b = head_bins[i]; b != 0; b &= b - 1)
         {
-          sum_intensity += peak_intensities[j];
+          const int bin = std::countr_zero(b);
+          if ((int)i == best_head[bin] || chain_bounds[i * max_bin_number + bin] * bound_factor < best_sum[bin]) { continue; }
+          const float sum_intensity = chain_sum(i, bin);
+          if (best_sum[bin] < sum_intensity || (best_sum[bin] == sum_intensity && (int)i < best_head[bin]))
+          {
+            best_sum[bin] = sum_intensity;
+            best_head[bin] = (int)i;
+          }
         }
-
-        if (max_sum_intensity[bin] < sum_intensity) // at least two edges should be there.
+      }
+      for (std::uint32_t b = used_bins; b != 0; b &= b - 1)
+      {
+        const int bin = std::countr_zero(b);
+        if (best_head[bin] >= 0 && max_sum_intensity[bin] < best_sum[bin]) // at least two edges should be there.
         {
-          max_sum_intensity[bin] = sum_intensity;
-          per_bin_start_index[bin] = (int)i; //
+          max_sum_intensity[bin] = best_sum[bin];
+          per_bin_start_index[bin] = best_head[bin];
+        }
+      }
+    }
+    else
+    {
+      // each chain is walked once from its head, in peak order per bin
+      for (Size i = 0; i < peak_count; i++)
+      {
+        for (std::uint32_t b = head_bins[i]; b != 0; b &= b - 1)
+        {
+          const int bin = std::countr_zero(b);
+          const float sum_intensity = chain_sum(i, bin);
+          if (max_sum_intensity[bin] < sum_intensity) // at least two edges should be there.
+          {
+            max_sum_intensity[bin] = sum_intensity;
+            per_bin_start_index[bin] = (int)i; //
+          }
         }
       }
     }
@@ -376,10 +540,20 @@ namespace OpenMS
       if (! replaced) { max_intensity_sum_to_bin[max_intensity_sum_count++] = {max_sum_intensity[k], k}; }
     }
 
-    static thread_local std::vector<char> unused; // reused across calls
-    unused.assign(peak_count, 1);
-    std::sort(max_intensity_sum_to_bin.begin(), max_intensity_sum_to_bin.begin() + max_intensity_sum_count,
-              [](const auto& l, const auto& r) { return l.first > r.first; });
+    char* const unused = scratch.unused.data();
+    std::fill_n(unused, peak_count, 1);
+    // by descending sum. The sums are distinct (equal ones were merged above) and never NaN (a maximum starting at 0 with "<" updates), so
+    // every sort gives this order: insertion sort of the at most max_bin_number pairs
+    for (Size m = 1; m < max_intensity_sum_count; m++)
+    {
+      const auto pair = max_intensity_sum_to_bin[m];
+      Size k = m;
+      for (; k > 0 && max_intensity_sum_to_bin[k - 1].first < pair.first; k--)
+      {
+        max_intensity_sum_to_bin[k] = max_intensity_sum_to_bin[k - 1];
+      }
+      max_intensity_sum_to_bin[k] = pair;
+    }
 
     // Now from the highest intensity path to the lowest, sum up intensities excluding already used peaks or signal peaks.
     for (auto it = max_intensity_sum_to_bin.begin(); it != max_intensity_sum_to_bin.begin() + max_intensity_sum_count; ++it)
@@ -461,7 +635,7 @@ namespace OpenMS
     // if still peaks are remaining, add their individual power.
     double prev_mass = .0;
     float tmp_int_sum = 0;
-    for (Size index = 0; index < unused.size(); ++index)
+    for (Size index = 0; index < peak_count; ++index)
     {
       if (! unused[index]) { continue; }
       if (! all_peaks[index].second)
@@ -482,7 +656,7 @@ namespace OpenMS
   }
 
 
-  void PeakGroup::updatePerChargeInformation_(const std::vector<LogMzPeak>& noisy_peaks, const double tol, const bool is_last)
+  void PeakGroup::updatePerChargeInformation_(const std::vector<LogMzPeak>& noisy_peaks, const double tol, const bool is_last, ChargeNoise_* lazy_noise)
   {
     // assign reuses the capacity of the previous call (same sizes and values as new vectors)
     per_charge_sum_signal_squared_.assign(1 + max_abs_charge_, .0f);
@@ -500,13 +674,16 @@ namespace OpenMS
     static thread_local std::vector<std::uint64_t> touched_cells; // one bit per matrix cell that a peak was added to
     const Size iso_cols = 1 + (Size)max_iso;
     const Size cell_count = (1 + (Size)max_abs_charge_) * iso_cols;
-    per_charge_isotope_int.assign(cell_count, .0f);
+    if (per_charge_isotope_int.size() < cell_count) { per_charge_isotope_int.resize(cell_count); }
     touched_cells.assign((cell_count + 63) / 64, 0);
     for (const auto& p : logMzpeaks_)
     {
       const Size cell = p.abs_charge * iso_cols + p.isotopeIndex;
+      const std::uint64_t cell_bit = std::uint64_t(1) << (cell % 64);
+      // only touched cells are read below: each is set to +0 when first touched instead of zeroing the whole matrix
+      if (! (touched_cells[cell / 64] & cell_bit)) { per_charge_isotope_int[cell] = .0f; }
       per_charge_isotope_int[cell] += p.intensity;
-      touched_cells[cell / 64] |= std::uint64_t(1) << (cell % 64);
+      touched_cells[cell / 64] |= cell_bit;
     }
 
     // The other cells are +0, and adding their squares leaves the sums unchanged: only the touched cells are summed, in the same order
@@ -531,7 +708,7 @@ namespace OpenMS
     // for each charge calculate signal and noise power
     per_charge_noise_pwr_.assign(1 + max_abs_charge_, .0f);
 
-    if (is_last) // the noise power over all charges (index 0) is set by updateQscore
+    if (is_last && lazy_noise == nullptr) // the noise power over all charges (index 0) is set by updateQscore; lazy ones by chargeNoisePower_
     {
       const int charge_count = max_abs_charge_ - min_abs_charge_ + 1;
       for (int z = min_abs_charge_; z <= max_abs_charge_; z++)
@@ -539,7 +716,7 @@ namespace OpenMS
         per_charge_noise_pwr_[z] = getNoisePeakPower_(noisy_peaks, logMzpeaks_, charge_count, z, tol);
       }
     }
-    else
+    else if (! is_last)
     {
       for (const auto& p : noisy_peaks)
       {
@@ -551,7 +728,17 @@ namespace OpenMS
     }
   }
 
-  void PeakGroup::updateChargeRange_()
+  float PeakGroup::chargeNoisePower_(const int z, ChargeNoise_* lazy_noise)
+  {
+    if (lazy_noise != nullptr && z >= lazy_noise->min_charge && z <= lazy_noise->max_charge && ! lazy_noise->computed[z])
+    {
+      per_charge_noise_pwr_[z] = getNoisePeakPower_(*lazy_noise->noisy_peaks, *lazy_noise->signal_peaks, lazy_noise->charge_count, z, lazy_noise->tol);
+      lazy_noise->computed[z] = 1;
+    }
+    return per_charge_noise_pwr_[z];
+  }
+
+  void PeakGroup::updateChargeRange_(ChargeNoise_* lazy_noise)
   {
     int max_sig_charge = 0;
     double max_sig = 0;
@@ -568,18 +755,65 @@ namespace OpenMS
     }
     const double noise_floor_pwr = (double)(max_isotope_index + 1) * detection_limit_ * detection_limit_;
     auto get_charge_snr = [&](const int z) -> double {
-      if (noise_floor_pwr <= 0) { return per_charge_int_[z] * per_charge_int_[z] / (1 + per_charge_noise_pwr_[z]); } // no detection limit set
-      return (double)per_charge_int_[z] * per_charge_int_[z] / (per_charge_noise_pwr_[z] + noise_floor_pwr);
+      const float noise_pwr = chargeNoisePower_(z, lazy_noise);
+      if (noise_floor_pwr <= 0) { return per_charge_int_[z] * per_charge_int_[z] / (1 + noise_pwr); } // no detection limit set
+      return (double)per_charge_int_[z] * per_charge_int_[z] / (noise_pwr + noise_floor_pwr);
+    };
+    // With lazy noise powers and a detection limit: an upper bound of the SNR of a charge, the same SNR with the lower bound of its noise power
+    // (the SNR falls as the noise power grows; intensities are finite and non-negative). A charge whose bound is below what a decision needs
+    // is decided without its noise power, as it would be with it.
+    const bool bounded = lazy_noise != nullptr && noise_floor_pwr > 0;
+    auto charge_snr_bound = [&](const int z) -> double {
+      return (double)per_charge_int_[z] * per_charge_int_[z] / ((double)lazy_noise->lower_bounds[z] + noise_floor_pwr);
     };
 
     // first, find the maximum snr charge.
-    for (int z = min_abs_charge_; z <= max_abs_charge_; z++)
+    if (bounded)
     {
-      double tmp_snr = get_charge_snr(z);
-      if (max_sig < tmp_snr)
+      // the first charge with the largest SNR as in the loop below: the charge with the largest bound first, then the charges whose bound
+      // reaches the best SNR so far (any other charge has a smaller SNR), equal SNRs keeping the lower charge
+      int first_charge = -1;
+      double first_bound = 0;
+      for (int z = min_abs_charge_; z <= max_abs_charge_; z++)
       {
-        max_sig = tmp_snr;
-        max_sig_charge = z;
+        const double bound = charge_snr_bound(z);
+        if (first_charge < 0 || first_bound < bound)
+        {
+          first_bound = bound;
+          first_charge = z;
+        }
+      }
+      if (first_charge >= 0)
+      {
+        double best_snr = get_charge_snr(first_charge);
+        int best_charge = first_charge;
+        for (int z = min_abs_charge_; z <= max_abs_charge_; z++)
+        {
+          if (z == first_charge || charge_snr_bound(z) < best_snr) { continue; }
+          const double tmp_snr = get_charge_snr(z);
+          if (best_snr < tmp_snr || (best_snr == tmp_snr && z < best_charge))
+          {
+            best_snr = tmp_snr;
+            best_charge = z;
+          }
+        }
+        if (max_sig < best_snr)
+        {
+          max_sig = best_snr;
+          max_sig_charge = best_charge;
+        }
+      }
+    }
+    else
+    {
+      for (int z = min_abs_charge_; z <= max_abs_charge_; z++)
+      {
+        double tmp_snr = get_charge_snr(z);
+        if (max_sig < tmp_snr)
+        {
+          max_sig = tmp_snr;
+          max_sig_charge = z;
+        }
       }
     }
 
@@ -593,13 +827,13 @@ namespace OpenMS
     double threshold = std::min(max_sig / 10, 1.0);
     for (int z = max_sig_charge; z <= max_abs_charge_; z++)
     {
-      if (get_charge_snr(z) < threshold) { break; }
+      if ((bounded && charge_snr_bound(z) < threshold) || get_charge_snr(z) < threshold) { break; }
       new_max_abs_charge = z;
     }
 
     for (int z = max_sig_charge; z >= min_abs_charge_; z--)
     {
-      if (get_charge_snr(z) < threshold) { break; }
+      if ((bounded && charge_snr_bound(z) < threshold) || get_charge_snr(z) < threshold) { break; }
       new_min_abs_charge = z;
     }
 
@@ -634,10 +868,12 @@ namespace OpenMS
                                             double mono_mass,
                                             std::vector<LogMzPeak>& noisy_peaks,
                                             bool renew_signal_peaks,
-                                            const std::vector<double>* log_mzs)
+                                            const std::vector<double>* log_mzs,
+                                            const NearestPeakIndex* nearest_peaks)
   {
     const double mul_tol = .8; // not all peaks within tolerance are considered as signal peaks.
     if (log_mzs != nullptr && log_mzs->size() != spec.size()) { log_mzs = nullptr; }
+    if (nearest_peaks != nullptr && ! nearest_peaks->usableFor(spec)) { nearest_peaks = nullptr; }
     // the log m/z of a peak: precomputed for the spectrum, or computed here
     const auto make_peak = [&](Size index) {
       return log_mzs != nullptr ? LogMzPeak(spec[index], is_positive_, (*log_mzs)[index]) : LogMzPeak(spec[index], is_positive_);
@@ -665,16 +901,28 @@ namespace OpenMS
 
     noisy_peaks.reserve(max_isotope * (max_abs_charge_ - min_abs_charge_ + 1) * 2);
 
+    // the signal peaks are noted (peak, isotope index, charge) in scan order and made LogMzPeaks at the end, in a vector grown once
+    struct RecruitedPeak
+    {
+      Size index;
+      int isotope_index;
+      int abs_charge;
+    };
+    static thread_local std::vector<RecruitedPeak> signal_recruits; // per-worker scratch
+    signal_recruits.clear();
+    const Size peak_count = spec.size();
+
     // scan from the largest to the smallest charges and recruit the raw peaks for this monoisotopic_mass
     for (int c = max_abs_charge_; c >= min_abs_charge_; c--)
     {
       if (c <= 0) { break; }
       double cmz = (mono_mass) / c + FLASHHelperClasses::getChargeMass(is_positive_);
       double left_mz = (mono_mass - (1 - min_negative_isotope_index_) * iso_da_distance_) / c + FLASHHelperClasses::getChargeMass(is_positive_);
-      Size index = spec.findNearest(left_mz * (1 - tol * mul_tol));
+      const double first_mz = left_mz * (1 - tol * mul_tol);
+      Size index = nearest_peaks != nullptr ? nearest_peaks->findNearest(spec, first_mz) : spec.findNearest(first_mz);
       double iso_delta = iso_da_distance_ / c;
 
-      for (; index < spec.size(); index++)
+      for (; index < peak_count; index++)
       {
         float pint = spec[index].getIntensity();
         if (pint <= 0) { continue; }
@@ -686,14 +934,17 @@ namespace OpenMS
 
         if (std::abs(pmz - cmz - iso_index * iso_delta) <= pmz * tol * mul_tol)
         {
-          auto p = make_peak(index);
-          p.isotopeIndex = iso_index;
-          p.abs_charge = c;
-          if (iso_index < 0) { negative_iso_peaks_.push_back(p); }
+          if (iso_index < 0)
+          {
+            auto p = make_peak(index);
+            p.isotopeIndex = iso_index;
+            p.abs_charge = c;
+            negative_iso_peaks_.push_back(p);
+          }
           else
           {
             max_signal_isotope = std::max(max_signal_isotope, iso_index);
-            if (renew_signal_peaks) logMzpeaks_.push_back(p);
+            if (renew_signal_peaks) signal_recruits.push_back({index, iso_index, c});
           }
         }
         else if (iso_index >= 0)
@@ -707,11 +958,101 @@ namespace OpenMS
         }
       }
 
-      if (index >= spec.size()) { break; }
+      if (index >= peak_count) { break; }
     }
 
+    if (renew_signal_peaks)
+    {
+      logMzpeaks_.reserve(signal_recruits.size());
+      for (const auto& r : signal_recruits)
+      {
+        auto p = make_peak(r.index);
+        p.isotopeIndex = r.isotope_index;
+        p.abs_charge = r.abs_charge;
+        logMzpeaks_.push_back(p);
+      }
+    }
     noisy_peaks.erase(std::remove_if(noisy_peaks.begin(), noisy_peaks.end(), [max_signal_isotope](const LogMzPeak& p) { return p.isotopeIndex > max_signal_isotope; }),
                       noisy_peaks.end());
+  }
+
+  void PeakGroup::NearestPeakIndex::build(const MSSpectrum& spec)
+  {
+    size_ = spec.size();
+    usable_ = size_ > 0;
+    for (Size i = 0; usable_ && i < size_; i++)
+    {
+      const double mz = spec[i].getMZ();
+      usable_ = std::isfinite(mz) && (i == 0 || spec[i - 1].getMZ() <= mz);
+    }
+    if (! usable_)
+    {
+      first_peaks_.clear();
+      return;
+    }
+    first_mz_ = spec[0].getMZ();
+    last_mz_ = spec[size_ - 1].getMZ();
+    const Size cell_count = 2 * size_;
+    const double range = last_mz_ - first_mz_;
+    cells_per_mz_ = range > 0 ? (double)cell_count / range : 0;
+    if (! std::isfinite(cells_per_mz_)) { cells_per_mz_ = 0; } // only the start of the search depends on the grid
+    first_peaks_.resize(cell_count + 1);
+    Size i = 0;
+    for (Size k = 0; k <= cell_count; k++)
+    {
+      const double cell_start = cells_per_mz_ > 0 ? first_mz_ + (double)k / cells_per_mz_ : first_mz_;
+      while (i < size_ && spec[i].getMZ() < cell_start) { i++; }
+      first_peaks_[k] = i;
+    }
+  }
+
+  bool PeakGroup::NearestPeakIndex::usableFor(const MSSpectrum& spec) const
+  {
+    return usable_ && spec.size() == size_;
+  }
+
+  Size PeakGroup::NearestPeakIndex::findNearest(const MSSpectrum& spec, const double mz) const
+  {
+    const Size n = size_;
+    // the lower bound: the first peak whose m/z is not below mz (MSSpectrum::MZBegin), unique as the m/z values are sorted
+    Size lower;
+    if (! (mz > first_mz_)) { lower = 0; } // also for NaN, as MZBegin
+    else if (mz > last_mz_) { lower = n; }
+    else
+    {
+      // from the first peak of the cell of mz, step to the lower bound; a binary search on the remaining side after a few steps
+      const double cell = (mz - first_mz_) * cells_per_mz_;
+      const Size last_cell = first_peaks_.size() - 1;
+      lower = first_peaks_[cell < (double)last_cell ? (Size)cell : last_cell];
+      const int max_steps = 8;
+      if (lower < n && spec[lower].getMZ() < mz)
+      {
+        for (int step = 0; lower < n && spec[lower].getMZ() < mz; step++, lower++)
+        {
+          if (step == max_steps)
+          {
+            lower = spec.MZBegin(spec.begin() + lower, mz, spec.end()) - spec.begin();
+            break;
+          }
+        }
+      }
+      else
+      {
+        for (int step = 0; lower > 0 && ! (spec[lower - 1].getMZ() < mz); step++, lower--)
+        {
+          if (step == max_steps)
+          {
+            lower = spec.MZBegin(spec.begin(), mz, spec.begin() + lower) - spec.begin();
+            break;
+          }
+        }
+      }
+    }
+    // the nearer of the lower bound and the peak before it, as MSSpectrum::findNearest
+    if (lower == 0) { return 0; }
+    if (lower == n) { return n - 1; }
+    if (std::fabs(spec[lower].getMZ() - mz) < std::fabs(spec[lower - 1].getMZ() - mz)) { return lower; }
+    return lower - 1;
   }
 
   void PeakGroup::updateChargeFitScoreAndChargeIntensities_(bool is_low_charge)
@@ -1091,7 +1432,7 @@ namespace OpenMS
     return is_targeted_;
   }
 
-  void PeakGroup::updateSNR_(float mul_factor)
+  void PeakGroup::updateSNR_(float mul_factor, ChargeNoise_* lazy_noise)
   {
     per_charge_snr_.assign(1 + max_abs_charge_, .0f);
     float total_nom = 0;
@@ -1103,7 +1444,7 @@ namespace OpenMS
         float per_charge_cos_squared = per_charge_cos_[c] * per_charge_cos_[c];
         float sig_pwr = per_charge_sum_signal_squared_[c] * per_charge_cos_squared;
         float nom = 1e-6f * mul_factor + mul_factor * sig_pwr;
-        float denom = 1e-6f * mul_factor + per_charge_noise_pwr_[c] + (1 - per_charge_cos_squared) * per_charge_sum_signal_squared_[c];
+        float denom = 1e-6f * mul_factor + chargeNoisePower_((int)c, lazy_noise) + (1 - per_charge_cos_squared) * per_charge_sum_signal_squared_[c];
 
         per_charge_snr_[c] = denom <= 0 ? .0f : (nom / denom);
 

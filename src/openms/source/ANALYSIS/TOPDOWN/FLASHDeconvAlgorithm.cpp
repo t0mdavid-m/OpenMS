@@ -17,7 +17,9 @@
 #include <OpenMS/PROCESSING/FILTERING/ThresholdMower.h>
 #include <OpenMS/METADATA/SpectrumLookup.h>
 #include <OpenMS/MATH/STATISTICS/GaussFitter.h>
+#include <algorithm>
 #include <exception>
+#include <functional>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -169,6 +171,7 @@ void FLASHDeconvAlgorithm::filterLowPeaks_(MSExperiment& map)
 #pragma omp parallel default(none), shared(map, threshold_mower_filter)
   {
     ThresholdMower mower(threshold_mower_filter);
+    std::vector<float> intensities; // scratch of the fast path
 #pragma omp for schedule(dynamic, 4)
     for (int i = 0; i < (int) map.size(); i++)
     {
@@ -176,6 +179,39 @@ void FLASHDeconvAlgorithm::filterLowPeaks_(MSExperiment& map)
       mower.filterSpectrum(it);
       if (it.empty()) continue;
       Size count = it.getType(false) == SpectrumSettings::CENTROID ? max_peak_count_for_centroid_ : max_peak_count_for_profile_;
+      // The same result without the two sorts below: with strictly increasing m/z and no data arrays, the sort by position restores
+      // the m/z order of the peaks the sort by intensity left, so the result is the peaks above the threshold in their order. The
+      // threshold is the intensity of rank count (0-based) in descending order and the highest intensity / 1000 (the mower left no
+      // NaN intensity). With exactly count peaks the code below reads past the end, so it stays as it is.
+      if (it.size() != count && it.getFloatDataArrays().empty() && it.getStringDataArrays().empty() && it.getIntegerDataArrays().empty())
+      {
+        bool increasing = true;
+        float max_intensity = it[0].getIntensity();
+        for (Size k = 1; k < it.size(); k++)
+        {
+          if (! (it[k - 1].getMZ() < it[k].getMZ()))
+          {
+            increasing = false;
+            break;
+          }
+          max_intensity = std::max(max_intensity, it[k].getIntensity());
+        }
+        if (increasing)
+        {
+          double threshold = 0;
+          if (it.size() > count)
+          {
+            intensities.clear();
+            for (const auto& p : it)
+              intensities.push_back(p.getIntensity());
+            std::nth_element(intensities.begin(), intensities.begin() + (SignedSize)count, intensities.end(), std::greater<float>());
+            threshold = intensities[count];
+          }
+          threshold = std::max(threshold, (double)max_intensity / 1000);
+          it.erase(std::remove_if(it.begin(), it.end(), [threshold](const Peak1D& p) { return p.getIntensity() <= threshold; }), it.end());
+          continue;
+        }
+      }
       it.sortByIntensity(true);
       double threshold = it.size() < count ? 0 : it[count].getIntensity();
       threshold = std::max(threshold, (double)it.begin()->getIntensity() / 1000);
@@ -1515,26 +1551,51 @@ void FLASHDeconvAlgorithm::runFeatureFinding_(std::vector<DeconvolvedSpectrum>& 
       feature_index_set[findex].push_back(i);
     }
 
-    for (const auto& element : feature_index_set)
+    // The groups are traced in parallel, each from its own spectra (every spectrum is in one group; the tracing reads no feature index or
+    // 2D Qscore), and numbered and labelled afterwards in the group order (the target, then the decoy features of a group), the order in
+    // which they were traced and numbered one after the other before.
+    std::vector<std::pair<uint, std::vector<Size>>> groups(feature_index_set.begin(), feature_index_set.end());
+    std::vector<MassFeatureTrace::TracedFeatures> traced(groups.size()), traced_decoy(report_decoy_ ? groups.size() : 0);
+    std::vector<std::exception_ptr> errors(groups.size());
+    bool parallel = groups.size() > 1;
+#ifdef _OPENMP
+    parallel = parallel && ! omp_in_parallel();
+#endif
+#pragma omp parallel if (parallel) default(none) shared(groups, traced, traced_decoy, errors, deconvolved_spectra, mass_tracer, ms_level)
     {
-      std::vector<DeconvolvedSpectrum> tmp_dspec;
-      tmp_dspec.reserve(element.second.size());
-      // moved out and back: each spectrum is in one feature group, and nothing else reads it in between
-      for (Size i : element.second)
-        tmp_dspec.push_back(std::move(deconvolved_spectra[i]));
-
-      const auto& df = mass_tracer.findFeaturesAndUpdateQscore2D(sd_.getAveragine(), tmp_dspec, ms_level, false);
-      deconvolved_features.insert(deconvolved_features.end(), df.begin(), df.end());
-
+      MassFeatureTrace tracer(mass_tracer);
+#pragma omp for schedule(dynamic, 1)
+      for (SignedSize g = 0; g < (SignedSize)groups.size(); g++)
+      {
+        const auto& indices = groups[g].second;
+        std::vector<DeconvolvedSpectrum> tmp_dspec;
+        // moved out and back: each spectrum is in one feature group, and nothing else reads it in between
+        try
+        {
+          tmp_dspec.reserve(indices.size());
+          for (Size i : indices)
+            tmp_dspec.push_back(std::move(deconvolved_spectra[i]));
+          traced[g] = tracer.traceFeatures(sd_.getAveragine(), tmp_dspec, ms_level, false);
+          if (report_decoy_) traced_decoy[g] = tracer.traceFeatures(sd_.getAveragine(), tmp_dspec, ms_level, true);
+        }
+        catch (...)
+        {
+          errors[g] = std::current_exception();
+        }
+        for (Size j = 0; j < tmp_dspec.size(); j++)
+          deconvolved_spectra[indices[j]] = std::move(tmp_dspec[j]);
+      }
+    }
+    for (Size g = 0; g < groups.size(); g++)
+    {
+      if (errors[g]) std::rethrow_exception(errors[g]);
+      auto df = MassFeatureTrace::numberFeatures(traced[g], deconvolved_spectra, groups[g].second);
+      deconvolved_features.insert(deconvolved_features.end(), std::make_move_iterator(df.begin()), std::make_move_iterator(df.end()));
       if (report_decoy_)
       {
-        const auto& df_decoy = mass_tracer.findFeaturesAndUpdateQscore2D(sd_.getAveragine(), tmp_dspec, ms_level, true);
-        deconvolved_features.insert(deconvolved_features.end(), df_decoy.begin(), df_decoy.end());
+        auto df_decoy = MassFeatureTrace::numberFeatures(traced_decoy[g], deconvolved_spectra, groups[g].second);
+        deconvolved_features.insert(deconvolved_features.end(), std::make_move_iterator(df_decoy.begin()), std::make_move_iterator(df_decoy.end()));
       }
-
-      Size j = 0;
-      for (Size i : element.second)
-        deconvolved_spectra[i] = std::move(tmp_dspec[j++]);
     }
   }
 }

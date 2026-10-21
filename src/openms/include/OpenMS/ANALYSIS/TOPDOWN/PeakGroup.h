@@ -38,6 +38,29 @@ namespace OpenMS
     };
 
 
+    /**
+      @brief The index of the peak of a spectrum nearest to an m/z, the same as MSSpectrum::findNearest, from a grid over the m/z range of the
+      spectrum (built once per spectrum) instead of a binary search. Built only for a spectrum whose m/z values are finite and sorted
+      (non-decreasing); for any other spectrum it stays unusable, and recruitAllPeaksInSpectrum calls MSSpectrum::findNearest.
+    */
+    class OPENMS_DLLAPI NearestPeakIndex
+    {
+    public:
+      /// build the grid for @p spec (unusable if @p spec is empty, or its m/z values are not finite and sorted)
+      void build(const MSSpectrum& spec);
+      /// whether the grid is usable and was built for a spectrum of the size of @p spec (it must have been built for @p spec)
+      bool usableFor(const MSSpectrum& spec) const;
+      /// the index of the peak of @p spec nearest to @p mz, as spec.findNearest(mz); only if usableFor(spec)
+      Size findNearest(const MSSpectrum& spec, double mz) const;
+
+    private:
+      Size size_ = 0;
+      bool usable_ = false;
+      double first_mz_ = 0, last_mz_ = 0, cells_per_mz_ = 0;
+      /// per cell: the first peak whose m/z is not below the start of the cell
+      std::vector<Size> first_peaks_;
+    };
+
     /// default constructor
     PeakGroup() = default;
 
@@ -103,9 +126,11 @@ namespace OpenMS
     std::vector<LogMzPeak> recruitAllPeaksInSpectrum(const MSSpectrum& spec, double tol, const FLASHHelperClasses::PrecalculatedAveragine& avg, double mono_mass, bool renew_signal_peaks = true);
 
     /// as above, but writes the noisy peaks into @p noisy_peaks (cleared first) so callers can reuse its capacity. @p log_mzs, if given,
-    /// holds the log m/z of every peak of @p spec (FLASHHelperClasses::getLogMz with this group's polarity), computed once per spectrum
+    /// holds the log m/z of every peak of @p spec (FLASHHelperClasses::getLogMz with this group's polarity), computed once per spectrum.
+    /// @p nearest_peaks, if given, is a NearestPeakIndex built for @p spec (the first peak of each charge is looked up there)
     void recruitAllPeaksInSpectrum(const MSSpectrum& spec, double tol, const FLASHHelperClasses::PrecalculatedAveragine& avg, double mono_mass,
-                                   std::vector<LogMzPeak>& noisy_peaks, bool renew_signal_peaks = true, const std::vector<double>* log_mzs = nullptr);
+                                   std::vector<LogMzPeak>& noisy_peaks, bool renew_signal_peaks = true, const std::vector<double>* log_mzs = nullptr,
+                                   const NearestPeakIndex* nearest_peaks = nullptr);
 
     /// set scan number
     void setScanNumber(int scan_number);
@@ -307,6 +332,9 @@ namespace OpenMS
     void sort();
 
   private:
+    /// the per-charge noise powers of the last scoring iteration, computed when first needed (defined in PeakGroup.cpp)
+    struct ChargeNoise_;
+
     /// update chargefit score and also update per charge intensities here.
     void updateChargeFitScoreAndChargeIntensities_(bool is_low_charge);
     /// update avg ppm error
@@ -319,16 +347,19 @@ namespace OpenMS
     float getPPMError_(const LogMzPeak& p) const;
     /// get Da error of a logMzPeak from the closest isotope
     float getDaError_(const LogMzPeak& p) const;
-    /// using signal and total (signal + noise) power, update SNR value
-    void updateSNR_(float mul_factor);
+    /// using signal and total (signal + noise) power, update SNR value. @p lazy_noise: see updatePerChargeInformation_
+    void updateSNR_(float mul_factor, ChargeNoise_* lazy_noise = nullptr);
     /// clear peaks
     void clear_();
     /// calculate per isotope intensities. When abs_charge == 0, all peaks are considered
     void getPerIsotopeIntensities_(std::vector<float>& intensities, int& min_isotope_index, int& max_isotope_index, int abs_charge, int min_negative_isotope_index, double tol);
       /// update per charge intensities, noise power, and squared intensities. used for SNR estimation
-    void updatePerChargeInformation_(const std::vector<LogMzPeak>& noisy_peaks, double tol, bool is_last);
+    /// (with @p is_last and @p lazy_noise, the per-charge noise powers are left to chargeNoisePower_, computed when first read)
+    void updatePerChargeInformation_(const std::vector<LogMzPeak>& noisy_peaks, double tol, bool is_last, ChargeNoise_* lazy_noise = nullptr);
     /// update the charge range using the calculated per charge information (per charge SNR with the noise power floored by the detection limit)
-    void updateChargeRange_();
+    void updateChargeRange_(ChargeNoise_* lazy_noise = nullptr);
+    /// the noise power of charge @p z (per_charge_noise_pwr_), first computed here if it is left to @p lazy_noise
+    float chargeNoisePower_(int z, ChargeNoise_* lazy_noise);
     /// update per charge cosine values
     void updatePerChargeCos_(const FLASHHelperClasses::PrecalculatedAveragine& avg, double tol);
 

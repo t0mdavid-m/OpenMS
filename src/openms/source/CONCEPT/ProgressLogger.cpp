@@ -229,12 +229,16 @@ public:
     return type_;
   }
 
+  // The recursion depth is shared by all loggers, also those of different threads (e.g. mass trace detections running in parallel), so it
+  // is read and changed in a critical section.
   void ProgressLogger::startProgress(SignedSize begin, SignedSize end, const String& label) const
   {
     OPENMS_PRECONDITION(begin <= end, "ProgressLogger::init : invalid range!");
     last_invoke_ = time(nullptr);
-    current_logger_->startProgress(begin, end, label, recursion_depth_);
-    ++recursion_depth_;
+    int depth;
+#pragma omp critical (ProgressLogger_recursion_depth)
+    depth = recursion_depth_++;
+    current_logger_->startProgress(begin, end, label, depth);
   }
 
   void ProgressLogger::setProgress(SignedSize value) const
@@ -245,7 +249,10 @@ public:
       return;
     }
     last_invoke_ = time(nullptr);
-    current_logger_->setProgress(value, recursion_depth_);
+    int depth;
+#pragma omp critical (ProgressLogger_recursion_depth)
+    depth = recursion_depth_;
+    current_logger_->setProgress(value, depth);
   }
   void ProgressLogger::nextProgress() const
   {
@@ -257,16 +264,24 @@ public:
     }
 
     last_invoke_ = time(nullptr);
-    current_logger_->setProgress(p, recursion_depth_);
+    int depth;
+#pragma omp critical (ProgressLogger_recursion_depth)
+    depth = recursion_depth_;
+    current_logger_->setProgress(p, depth);
   }
 
   void ProgressLogger::endProgress(UInt64 bytes_processed) const
   {
-    if (recursion_depth_)
+    int depth;
+#pragma omp critical (ProgressLogger_recursion_depth)
     {
-      --recursion_depth_;
+      if (recursion_depth_)
+      {
+        --recursion_depth_;
+      }
+      depth = recursion_depth_;
     }
-    current_logger_->endProgress(recursion_depth_, bytes_processed);
+    current_logger_->endProgress(depth, bytes_processed);
   }
 
 } //namespace OpenMS

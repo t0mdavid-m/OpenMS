@@ -14,6 +14,12 @@
 
 namespace OpenMS
 {
+  namespace
+  {
+    /// the process-wide feature index (numberFeatures)
+    uint next_feature_index = 1;
+  }
+
   MassFeatureTrace::MassFeatureTrace() : DefaultParamHandler("MassFeatureTrace")
   {
     Param mtd_defaults = MassTraceDetection().getDefaults();
@@ -44,13 +50,40 @@ namespace OpenMS
   std::vector<FLASHHelperClasses::MassFeature> MassFeatureTrace::findFeaturesAndUpdateQscore2D(const PrecalculatedAveragine& averagine, std::vector<DeconvolvedSpectrum>& deconvolved_spectra,
                                                                                                      int ms_level, bool is_decoy)
   {
-    static uint findex = 1;
+    auto traced = traceFeatures(averagine, deconvolved_spectra, ms_level, is_decoy);
+    return numberFeatures(traced, deconvolved_spectra);
+  }
+
+  std::vector<FLASHHelperClasses::MassFeature> MassFeatureTrace::numberFeatures(TracedFeatures& traced, std::vector<DeconvolvedSpectrum>& deconvolved_spectra,
+                                                                                const std::vector<Size>& spectrum_indices)
+  {
+    // the tracing reads no feature index or 2D Qscore, so labelling the peak groups of all features after it (in the feature order, so a
+    // peak group labelled twice keeps the later one) leaves them as labelling each feature when it was found did
+    for (Size f = 0; f < traced.features.size(); f++)
+    {
+      for (const auto& [s, k] : traced.peak_groups[f])
+      {
+        auto& pg = deconvolved_spectra[spectrum_indices.empty() ? s : spectrum_indices[s]][k];
+        pg.setFeatureIndex(next_feature_index);
+        if (next_feature_index > 0)
+          pg.setQscore2D(traced.qscores[f]);
+      }
+      traced.features[f].index = next_feature_index;
+      next_feature_index++;
+    }
+    return std::move(traced.features);
+  }
+
+  MassFeatureTrace::TracedFeatures MassFeatureTrace::traceFeatures(const PrecalculatedAveragine& averagine, const std::vector<DeconvolvedSpectrum>& deconvolved_spectra,
+                                                                   int ms_level, bool is_decoy) const
+  {
+    TracedFeatures traced;
     MSExperiment map;
     std::map<int, MSSpectrum> index_spec_map;
     int min_abs_charge = INT_MAX;
     int max_abs_charge = INT_MIN;
     bool is_positive = true;
-    std::vector<FLASHHelperClasses::MassFeature> mass_features;
+    auto& mass_features = traced.features;
     std::map<double, Size> rt_index_map;
 
     std::map<int, int> prev_scans;
@@ -91,7 +124,7 @@ namespace OpenMS
     // when map size is less than 3, MassTraceDetection aborts - too few spectra for mass tracing.
     if (map.size() < 3)
     {
-      return mass_features;
+      return traced;
     }
 
     MassTraceDetection mtdet;
@@ -107,9 +140,10 @@ namespace OpenMS
     mtdet.run(map, m_traces); // m_traces : output of this function
     int charge_range = max_abs_charge - min_abs_charge + 1;
 
-    // peak group behind a trace point (same filter as above); dspec.end() if none
-    auto peakGroupAt = [&](const Peak2D& p2, std::vector<PeakGroup>::iterator& out) {
-      auto& dspec = deconvolved_spectra[rt_index_map[p2.getRT()]];
+    // peak group behind a trace point (same filter as above) and the index of its spectrum; dspec.end() if none
+    auto peakGroupAt = [&](const Peak2D& p2, std::vector<PeakGroup>::const_iterator& out, Size& spec_index) {
+      spec_index = rt_index_map[p2.getRT()];
+      const auto& dspec = deconvolved_spectra[spec_index];
       out = dspec.end();
       if (dspec.empty()) return false;
       PeakGroup comp;
@@ -128,8 +162,9 @@ namespace OpenMS
     double d = Constants::ISOTOPE_MASSDIFF_55K_U;
     for (const auto& mt : m_traces)
     {
-      std::vector<PeakGroup>::iterator pg;
-      if (mt.getSize() > 0 && peakGroupAt(*mt.begin(), pg)) { d = pg->getIsotopeDaDistance(); break; }
+      std::vector<PeakGroup>::const_iterator pg;
+      Size spec_index;
+      if (mt.getSize() > 0 && peakGroupAt(*mt.begin(), pg, spec_index)) { d = pg->getIsotopeDaDistance(); break; }
     }
     std::vector<Size> parent(m_traces.size());
     std::iota(parent.begin(), parent.end(), 0);
@@ -186,13 +221,15 @@ namespace OpenMS
 
       // Peak groups per scan. Two labels in one scan are the same raw peaks in most cases: then only the more intense one counts;
       // if they share less than half of their peaks they are distinct signal and both count.
-      std::vector<std::vector<PeakGroup>::iterator> pgs, all_pgs;
+      std::vector<std::vector<PeakGroup>::const_iterator> pgs;
+      std::vector<std::pair<Size, Size>> all_pgs; // spectrum and peak group index of every peak group of the trace points
       std::vector<double> pg_rt; // RT of the scan of each entry of pgs
       for (const auto& p2 : points)
       {
-        std::vector<PeakGroup>::iterator pg;
-        if (!peakGroupAt(p2, pg)) continue;
-        all_pgs.push_back(pg);
+        std::vector<PeakGroup>::const_iterator pg;
+        Size spec_index;
+        if (!peakGroupAt(p2, pg, spec_index)) continue;
+        all_pgs.emplace_back(spec_index, (Size)(pg - deconvolved_spectra[spec_index].begin()));
         if (!pgs.empty() && pgs.back()->getScanNumber() == pg->getScanNumber())
         {
           auto& prev = pgs.back();
@@ -293,12 +330,9 @@ namespace OpenMS
         continue;
       }
 
-      for (auto& pg : all_pgs)
-      {
-        pg->setFeatureIndex(findex);
-        if (findex > 0)
-          pg->setQscore2D(qscore_2D);
-      }
+      // labelled with the feature index by numberFeatures
+      traced.peak_groups.push_back(std::move(all_pgs));
+      traced.qscores.push_back(qscore_2D);
 
       MassTrace mt = m_traces[members[0]];
       if (merged) // one trace point per scan at the feature mass; two distinct labels of a scan contribute their sum
@@ -346,13 +380,12 @@ namespace OpenMS
       mass_feature.min_scan_number = min_scan_number;
       mass_feature.max_scan_number = max_scan_number;
       mass_feature.rep_charge = rep_pg.getRepAbsCharge();
-      mass_feature.index = findex;
+      mass_feature.index = 0; // numberFeatures
       mass_feature.is_decoy = is_decoy;
       mass_feature.ms_level = ms_level;
-      mass_features.push_back(mass_feature);
-      findex++;
+      mass_features.push_back(std::move(mass_feature));
     }
-    return mass_features;
+    return traced;
   }
 
   void MassFeatureTrace::updateMembers_()

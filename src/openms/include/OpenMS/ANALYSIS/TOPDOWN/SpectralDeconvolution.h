@@ -211,6 +211,8 @@ namespace OpenMS
     boost::dynamic_bitset<> binned_log_masses_;
     /// log m/z of every peak of the original spectrum of deconvolved_spectrum_, computed once per spectrum (FLASHHelperClasses::getLogMz)
     std::vector<double> original_log_mzs_;
+    /// nearest-peak lookup of the original spectrum of deconvolved_spectrum_, built once per spectrum (PeakGroup::recruitAllPeaksInSpectrum)
+    PeakGroup::NearestPeakIndex original_nearest_peaks_;
 
     /// binned_log_mz_peaks_ stores the binned log mz peaks
     boost::dynamic_bitset<> binned_log_mz_peaks_;
@@ -249,6 +251,37 @@ namespace OpenMS
       int min_charge_index;
       int max_charge_index;
     };
+
+    /// the state per mass bin of updateMassBins_, kept from spectrum to spectrum so that it is not allocated and filled for every spectrum
+    /// (see updateCandidateMassBins_); a copy starts empty
+    struct MassBinScratch_
+    {
+      /// the rest of the state of a mass bin in the consecutive-charge chain search, valid only where prev_charges holds a tag of the current spectrum
+      struct ChainState
+      {
+        float prev_intensity;
+        float prev_residual;
+        unsigned short support_peak_count;
+        short chain_offset;
+      };
+      /// charge index of the last peak per mass bin, as a tag: charge_tag_base + charge index in the current spectrum; lower values: none
+      std::vector<unsigned short> prev_charges;
+      std::vector<ChainState> chain_states;
+      /// the tag of charge index 0 in the next spectrum; 0: prev_charges must be reset first
+      int charge_tag_base = 0;
+      /// intensity per mass bin; all zero between spectra (when mass_intensities_clean)
+      std::vector<float> mass_intensities;
+      /// the mass bins of mass_intensities written in the current spectrum (to zero them again)
+      std::vector<Size> written_mass_bins;
+      bool mass_intensities_clean = true;
+
+      MassBinScratch_() = default;
+      MassBinScratch_(const MassBinScratch_&) {}
+      MassBinScratch_(MassBinScratch_&&) = default;
+      MassBinScratch_& operator=(const MassBinScratch_&) { return *this; }
+      MassBinScratch_& operator=(MassBinScratch_&&) = default;
+    };
+    MassBinScratch_ mass_bin_scratch_;
 
     /** @brief static function that converts bin to value
         @param bin bin number
@@ -302,13 +335,12 @@ namespace OpenMS
     std::vector<MassBinChargeRange_> filterMassBins_(const std::vector<float>& mass_intensities, std::vector<std::pair<Size, long>>& chain_redirects);
 
     /** @brief Subfunction of updateMassBins_. It select candidate masses and update binned_log_masses_ using the universal pattern, eliminate possible harmonic masses
-        @param mass_intensities mass bin intensities which are updated in this function
+        The mass bin intensities go to mass_bin_scratch_.mass_intensities (the written bins to mass_bin_scratch_.written_mass_bins).
         @param mz_intensities mz bin intensities
         @param chain_redirects output: (m/z bin x current max charge + charge index, mass bin) for the peaks added to the mass bin of their
                consecutive-charge chain instead of their own (rounded) mass bin
      */
-    void updateCandidateMassBins_(std::vector<float>& mass_intensities, const std::vector<float>& mz_intensities,
-                                  std::vector<std::pair<Size, long>>& chain_redirects);
+    void updateCandidateMassBins_(const std::vector<float>& mz_intensities, std::vector<std::pair<Size, long>>& chain_redirects);
 
     /** @brief For the selected mass bins, select the peaks from the original spectrum. Also isotopic peaks are clustered in this function.
         @param mass_bin_charge_ranges the selected mass bins in increasing order, each with its charge range (filterMassBins_)

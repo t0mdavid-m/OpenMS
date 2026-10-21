@@ -415,6 +415,19 @@ protected:
       }
     }
 
+    // All outputs are written: the deconvolved spectra (their peak groups) and the input spectra are released in parallel instead of one
+    // after the other by the destructors at the end of this function (each element is moved into a local that is destroyed).
+#pragma omp parallel for schedule(dynamic, 64)
+    for (SignedSize i = 0; i < (SignedSize)deconvolved_spectra.size(); i++)
+    {
+      DeconvolvedSpectrum released(std::move(deconvolved_spectra[i]));
+    }
+#pragma omp parallel for schedule(dynamic, 64)
+    for (SignedSize i = 0; i < (SignedSize)map.size(); i++)
+    {
+      MSSpectrum released(std::move(map[i]));
+    }
+
     return EXECUTION_OK;
   }
 };
