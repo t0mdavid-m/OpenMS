@@ -69,6 +69,15 @@ public:
     void loadBuffer(const std::string& buffer, PeakMap& map);
 
     /**
+      @brief Loads an indexed, uncompressed mzML file with @p threads threads, using the current options.
+
+      The spectrum list is cut at index offsets into byte-balanced chunks of whole spectra, each parsed by its own handler,
+      and the parts are concatenated in input order. Returns false, with @p map cleared, when the file has no usable
+      index or anything else fails; the caller then loads the file with load(), which does not rely on the index.
+    */
+    bool loadIndexedParallel(const String& filename, PeakMap& map, int threads);
+
+    /**
       @brief Only count the number of spectra and chromatograms from a file
 
       This method honors PeakOptions (if specified) for spectra, i.e. only spectra within the specified

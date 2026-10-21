@@ -14,6 +14,13 @@
 #include <OpenMS/FORMAT/FileTypes.h>
 #include <OpenMS/FORMAT/MzMLFile.h>
 #include <QFileInfo>
+#include <limits>
+#if defined(__GLIBC__)
+  #include <malloc.h>
+#endif
+#ifdef _OPENMP
+  #include <omp.h>
+#endif
 #ifdef TRAIN_OUT
   #include <OpenMS/ANALYSIS/TOPDOWN/Qscore.h>
 #endif
@@ -249,7 +256,12 @@ protected:
 
     mzml.setLogType(log_type_);
     mzml.setOptions(opt);
-    mzml.load(in_file, map);
+    int threads = 1;
+#ifdef _OPENMP
+    threads = omp_get_max_threads();
+#endif
+    // indexed mzML is parsed in byte-balanced chunks by all threads; other inputs use the ordinary loader
+    if (! mzml.loadIndexedParallel(in_file, map, threads)) { mzml.load(in_file, map); }
 
     std::vector<DeconvolvedSpectrum> deconvolved_spectra;
     std::vector<FLASHHelperClasses::MassFeature> deconvolved_features;
@@ -415,6 +427,17 @@ protected:
       }
     }
 
+    // release results and input in parallel instead of in the serial destructors
+#pragma omp parallel for schedule(dynamic, 16)
+    for (SignedSize i = 0; i < (SignedSize)deconvolved_spectra.size(); ++i)
+    {
+      deconvolved_spectra[i] = DeconvolvedSpectrum();
+    }
+#pragma omp parallel for schedule(dynamic, 16)
+    for (SignedSize i = 0; i < (SignedSize)map.size(); ++i)
+    {
+      map[i] = MSSpectrum();
+    }
     return EXECUTION_OK;
   }
 };
@@ -422,6 +445,12 @@ protected:
 // the actual main function needed to create an executable
 int main(int argc, const char** argv)
 {
+#if defined(__GLIBC__)
+  // Keep freed heap memory in the per-thread arenas instead of trimming it back to the kernel after every
+  // spectrum: trim, refault and heap regrowth serialise on the process-wide mmap lock at high thread counts.
+  mallopt(M_TRIM_THRESHOLD, std::numeric_limits<int>::max());
+  mallopt(M_TOP_PAD, 256 << 20);
+#endif
   TOPPFLASHDeconv tool;
   return tool.main(argc, argv);
 }

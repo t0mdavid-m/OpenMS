@@ -423,12 +423,16 @@ namespace OpenMS
       return;
     }
 
-    // Update spectrum ranges
+    // Update the ranges of each spectrum (independent per spectrum, so in parallel for large experiments)
+#pragma omp parallel for schedule(dynamic, 16) if (spectra_.size() > 1024)
+    for (SignedSize i = 0; i < (SignedSize)spectra_.size(); ++i)
+    {
+      spectra_[i].updateRanges();
+    }
+
+    // Combine (min/max only, so the order of extension does not matter)
     for (Base::iterator it = spectra_.begin(); it != spectra_.end(); ++it)
-    {      
-      // Update ranges for the spectrum itself
-      it->updateRanges();
-      
+    {
       // Update spectrum range manager with this spectrum's ranges
       // Add to both general ranges and MS level-specific ranges
       spectrum_ranges_.extendUnsafe(*it);
