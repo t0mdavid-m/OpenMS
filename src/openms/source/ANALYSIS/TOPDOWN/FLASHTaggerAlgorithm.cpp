@@ -13,6 +13,7 @@
 #else
   #define omp_in_parallel() 0
 #endif
+#include <cmath>
 #include <utility>
 #include <boost/math/special_functions/gamma.hpp>
 #include <OpenMS/ANALYSIS/ID/PeptideIndexing.h>
@@ -729,6 +730,12 @@ double FLASHTaggerAlgorithm::scoreShifts(const std::vector<double>& masses, cons
   const double protein_mass = residue_sums.back();
   const double density = (double)(residue_sums.size() - 1) / protein_mass;
   double best = 0; // -log10 P
+  // log(k!) for the bound below (std::lgamma would write the global signgam from every thread)
+  static const std::vector<double> log_factorial = [] {
+    std::vector<double> t(4096, 0.0);
+    for (Size k = 2; k < t.size(); k++) t[k] = t[k - 1] + std::log((double)k);
+    return t;
+  }();
   for (Size j = 0; j < count; j++)
   {
     int cntr = 0;
@@ -749,7 +756,11 @@ double FLASHTaggerAlgorithm::scoreShifts(const std::vector<double>& masses, cons
       cntr++;
     }
     if (cntr == 0) continue;
-    const double p = boost::math::gamma_p((double)cntr, std::max(lambda, 1e-12)); // P(Poisson(lambda) >= cntr)
+    // -log10 P(Poisson >= cntr) is at most -log10 P(Poisson = cntr): a shift whose bound cannot beat the best (with a margin far above
+    // the rounding of either) cannot change the maximum, so its tail probability (long double, the costly part) is not computed
+    const double lam = std::max(lambda, 1e-12);
+    if (best > 0 && cntr < (int)log_factorial.size() && (lam - cntr * std::log(lam) + log_factorial[cntr]) / std::log(10.0) + 1e-6 < best) continue;
+    const double p = boost::math::gamma_p((double)cntr, lam); // P(Poisson(lambda) >= cntr)
     best = std::max(best, -std::log10(std::max(p, 1e-300)));
   }
   return std::max(0.0, best - std::log10((double)count));

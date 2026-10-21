@@ -1888,9 +1888,15 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     }
     mass_ladders.preparePrecursorWindows(all_precursor_masses, pl_precursor_tol);
   }
+  // the spectra with the most masses first (each writes its own slots, so the order does not change the result): a few heavy spectra
+  // at the end of the dynamic schedule were the tail of this loop
+  std::vector<int> search_order(dspecs.size());
+  std::iota(search_order.begin(), search_order.end(), 0);
+  std::stable_sort(search_order.begin(), search_order.end(), [&](int l, int r) { return dspecs[l].size() > dspecs[r].size(); });
 #pragma omp parallel for schedule(dynamic) if (parallel_over_spectra)
-  for (int d = 0; d < (int)dspecs.size(); d++)
+  for (int k = 0; k < (int)dspecs.size(); k++)
   {
+    const int d = search_order[k];
     nextProgress();
     const auto tag_it = scan_to_tag_indices.find(dspecs[d].getScanNumber());
     searchCandidates(dspecs[d], tag_it == scan_to_tag_indices.end() ? nullptr : &tag_it->second, no_exclusion, use_precursor_ladders, spec_hits[d],
