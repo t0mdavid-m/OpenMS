@@ -425,7 +425,9 @@ void FLASHTnTAlgorithm::updateMembers_()
   keep_underdetermined_ = param_.getValue("discard_underdetermined").toString() == "false";
   multiple_hits_per_spec_ = param_.getValue("only_single_hit").toString() == "false";
 
-  max_total_mod_mass_ = (double)param_.getValue("max_blind_mod_count") * (double)extender_param_.getValue("max_mod_mass") + 1.1; /// TODO
+  // the largest total mass shift of the blind modifications of a proteoform (+ 1 Da): the bound of the tag flanking masses and of the
+  // candidate blind modifications annotated by the extension
+  max_total_mod_mass_ = (double)param_.getValue("max_blind_mod_count") * (double)extender_param_.getValue("max_mod_mass") + 1.0;
 
   protein_level_only_ = param_.getValue("protein_level_only").toString() == "true";
   max_protein_hits_ = param_.getValue("max_protein_hits");
@@ -846,6 +848,20 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     }
 
     decoy_factor_ = decoy_count / taget_count;
+  }
+
+  // the candidate blind modifications: those of ModificationsDB within the largest total blind shift
+  std::map<double, std::vector<ResidueModification>> blind_mod_map;
+  {
+    const auto inst = ModificationsDB::getInstance();
+    std::vector<String> mod_strs;
+    inst->getAllSearchModifications(mod_strs);
+    for (const auto& mod_str : mod_strs)
+    {
+      const auto mod = *inst->getModification(mod_str);
+      if (std::abs(mod.getDiffMonoMass()) > max_total_mod_mass_) continue;
+      blind_mod_map[mod.getDiffMonoMass()].push_back(mod);
+    }
   }
 
   double precursor_tol = -1, tol, ms2_tol = -1;
@@ -1957,6 +1973,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         if (candidates.empty()) return;
         FLASHExtenderAlgorithm extender;
         extender.setParameters(eparam);
+        extender.setCandidateBlindModificationMap(blind_mod_map);
         // the chimeric search removes the masses of a spectrum's best PrSM before the next round
         extender.setReportMatchedMasses(chimeric_rounds_ > 0);
         // with raw-spectrum scoring, every candidate's PrSM is kept here and the best one per spectrum is chosen by the combined score in

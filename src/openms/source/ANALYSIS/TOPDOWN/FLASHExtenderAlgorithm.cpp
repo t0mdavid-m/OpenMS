@@ -1138,10 +1138,6 @@ namespace OpenMS
                                    const std::vector<std::unordered_set<int>>& rev_vec_pro, const std::vector<FLASHHelperClasses::Tag>& tags, double ppm, bool multiple_hits_per_spec)
   {
     if (hits.empty()) return;
-    // setLogType(CMD);
-    //
-    //var_mods_[27.994915	] = ResidueModification();
-    (void)ModificationsDB::getInstance()->getModification("Carbamidomethyl (M)");
     //mod->getTermSpecificity() == ResidueModification::PROTEIN_N_TERM
     // mod.getOrigin() char
 
