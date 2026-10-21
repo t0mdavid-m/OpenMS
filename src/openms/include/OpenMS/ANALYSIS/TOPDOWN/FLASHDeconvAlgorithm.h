@@ -10,6 +10,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandJoin.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
 #include <OpenMS/DATASTRUCTURES/DefaultParamHandler.h>
@@ -113,6 +114,14 @@ namespace OpenMS
 
     /// FLASHIda log file name
     String ida_log_file_;
+    /// the FLASHIda acquisition's scan_commands.tsv (ADR-0046); empty = no coupling
+    String scan_commands_file_;
+    /// with scan_commands: the fragments may replace the commanded mass (precursor_by_fragments), as for an uncommanded spectrum
+    bool scan_commands_by_fragments_ = false;
+    /// ADR-0046: the commanded MS2 scans by scan number, each naming the survey its command was decided from
+    std::map<int, ScanCommandJoin::Located> located_by_scan_;
+    /// commanded MS2 spectra whose precursor is the commanded mass, another mass of the commanded window, or rebuilt from the command
+    Size commanded_found_ = 0, commanded_other_ = 0, commanded_rebuilt_ = 0;
 
     /// mass tolerances, and minimum cosine scores per MS level
     DoubleList tols_, min_cos_;
@@ -192,6 +201,9 @@ namespace OpenMS
 
     /// find precursor peak groups from FLASHIda log file
     void findPrecursorPeakGroupsFormIdaLog_(const MSExperiment& map, Size index, double start_mz, double end_mz);
+
+    /// ADR-0046: the one-peak precursor peak group of a commanded scan whose survey holds no mass in the isolation window
+    PeakGroup peakGroupFromCommand_(const ScanCommandJoin::Located& located) const;
 
     /// register the precursor peak group (or mass) if possible for MSn (n>1) spectrum.
     void findPrecursorPeakGroupsForMSnSpectra_(const MSExperiment& map, const std::vector<DeconvolvedSpectrum>& deconvolved_spectra, uint ms_level);

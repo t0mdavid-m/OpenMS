@@ -10,6 +10,7 @@ set(sources_list_h
         FLASHHelperClasses.h
         FLASHExtenderAlgorithm.h
         FLASHIda.h
+        FLASHIda/ScanCommandJoin.h
         FLASHIdaBridgeFunctions.h
         FLASHTnTAlgorithm.h
         MassFeatureTrace.h
