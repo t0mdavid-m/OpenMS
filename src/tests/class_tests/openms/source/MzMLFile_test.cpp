@@ -16,6 +16,7 @@
 #include <OpenMS/FORMAT/FileTypes.h>
 #include <OpenMS/FORMAT/HANDLERS/MzMLHandler.h>
 #include <OpenMS/KERNEL/MSExperiment.h>
+#include <algorithm>
 
 using namespace OpenMS;
 using namespace std;
@@ -1260,6 +1261,73 @@ START_SECTION((test negative isolation window offsets are skipped))
   // Verify that the negative offsets were NOT set (should remain at default value of 0)
   TEST_REAL_SIMILAR(exp[1].getPrecursors()[0].getIsolationWindowLowerOffset(), 0.0)
   TEST_REAL_SIMILAR(exp[1].getPrecursors()[0].getIsolationWindowUpperOffset(), 0.0)
+}
+END_SECTION
+
+START_SECTION((bool loadIndexedParallel(const String& filename, PeakMap& map, int threads, const std::function<void(Size first_spectrum, PeakMap& chunk)>& chunk_filter = {})))
+{
+  // an indexed file of 200 spectra, loaded in parallel chunks and the ordinary way: the same experiment (stored, byte for byte)
+  PeakMap original;
+  for (Size i = 0; i < 200; ++i)
+  {
+    MSSpectrum s;
+    s.setRT((double)i);
+    s.setMSLevel(i % 4 == 0 ? 1 : 2);
+    s.setNativeID(String("scan=") + String(i + 1));
+    for (Size p = 0; p < 20; ++p) s.push_back(Peak1D(100.0 + (double)i + 0.5 * (double)p, 1.0f + (float)p));
+    original.addSpectrum(s);
+  }
+  String tmp;
+  NEW_TMP_FILE(tmp);
+  MzMLFile file;
+  file.getOptions().setWriteIndex(true);
+  file.store(tmp, original);
+  PeakMap plain, parallel;
+  file.load(tmp, plain);
+  TEST_EQUAL(file.loadIndexedParallel(tmp, parallel, 4), true)
+  TEST_EQUAL(parallel.size(), 200)
+  std::string out_plain, out_parallel;
+  file.storeBuffer(out_plain, plain);
+  file.storeBuffer(out_parallel, parallel);
+  TEST_EQUAL(out_parallel == out_plain, true)
+
+  // a chunk filter that keeps the MS2 spectra: every chunk once, contiguous from spectrum 0; the MS2 spectra in file order
+  std::vector<std::pair<Size, Size>> chunks; // first spectrum, size
+  PeakMap filtered;
+  TEST_EQUAL(file.loadIndexedParallel(tmp, filtered, 4, [&chunks](Size first, PeakMap& chunk) {
+               std::vector<MSSpectrum> kept;
+               for (auto& spec : chunk.getSpectra())
+               {
+                 if (spec.getMSLevel() == 2) kept.push_back(std::move(spec));
+               }
+#pragma omp critical(MzMLFile_test_chunks)
+               chunks.emplace_back(first, chunk.size());
+               chunk.getSpectra() = std::move(kept);
+             }), true)
+  std::sort(chunks.begin(), chunks.end());
+  TEST_EQUAL(chunks.size() > 1, true)
+  Size next = 0;
+  for (const auto& [first, size] : chunks)
+  {
+    TEST_EQUAL(first, next)
+    next += size;
+  }
+  TEST_EQUAL(next, 200)
+  TEST_EQUAL(filtered.size(), 150)
+  Size k = 0;
+  for (const auto& spec : plain)
+  {
+    if (spec.getMSLevel() != 2) continue;
+    TEST_STRING_EQUAL(filtered[k].getNativeID(), spec.getNativeID())
+    TEST_EQUAL(filtered[k].size(), spec.size())
+    TEST_REAL_SIMILAR(filtered[k].back().getMZ(), spec.back().getMZ())
+    ++k;
+  }
+
+  // not loaded this way (compressed): false, the map empty
+  PeakMap none;
+  TEST_EQUAL(file.loadIndexedParallel(OPENMS_GET_TEST_DATA_PATH("MzMLFile_6_uncompressed.mzML.gz"), none, 4), false)
+  TEST_EQUAL(none.size(), 0)
 }
 END_SECTION
 

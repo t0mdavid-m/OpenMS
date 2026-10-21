@@ -541,6 +541,7 @@ set(analysis_executables_list
   MassDecompositionAlgorithm_test
   MassDecomposition_test
   MassFeatureTrace_test
+  MassLadderAlgorithm_test
   MetaboliteFeatureDeconvolution_test
   MetaboliteSpectralMatching_test
   ModifiedPeptideGenerator_test
