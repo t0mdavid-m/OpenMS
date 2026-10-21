@@ -2212,10 +2212,19 @@ namespace OpenMS
         }
         else
         {
+          // The positions j the path may end at: the precursor node (the precursor mass as a residue sum, without water) minus the
+          // modifications so far plus the truncation must reach the residue sum at j within the room left for modifications and the node's
+          // tolerance -- the test findSubPathsBetweenTagEndPoints applies at the end node. It compared the precursor mass itself (with
+          // water) without the tolerance; the room of a blind modification (max_mod_mass) hid both, and without blind modifications
+          // (max_blind_mod_count 0) no path reached the precursor: no mass was determined at all.
+          const Size precursor_node = hi.cur_node_spec_->size() - 1;
+          const double precursor_node_mass = (*hi.cur_node_spec_)[precursor_node].getMZ();
+          const double precursor_margin = (*hi.cur_tol_spec_)[precursor_node].getIntensity();
           for (int j = 0; j < (int)pro_masses.size(); j++)
           {
-            if (std::abs(hi.calculated_precursor_mass_ + truncation_mass - pro_masses[j])
-                > max_mod_mass_ * (max_blind_mod_cntr_ - getBlindModNumber_(vertex)) + varModRoom_(max_var_mod_cntr_ - getVarModNumber_(vertex)))
+            if (std::abs(precursor_node_mass - cumulative_shift + truncation_mass - pro_masses[j])
+                > max_mod_mass_ * (max_blind_mod_cntr_ - getBlindModNumber_(vertex)) + varModRoom_(max_var_mod_cntr_ - getVarModNumber_(vertex))
+                    + precursor_margin)
               continue;
 
             findSubPathsBetweenTagEndPoints(sinks, hi, vertex, hi.cur_node_spec_->size() - 1, j, 0, truncation_mass, cumulative_shift,
