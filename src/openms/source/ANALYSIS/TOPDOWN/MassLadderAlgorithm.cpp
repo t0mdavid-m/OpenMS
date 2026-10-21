@@ -19,6 +19,7 @@
 #include <array>
 #include <bit>
 #include <cmath>
+#include <numeric>
 #include <map>
 #ifdef _OPENMP
   #include <omp.h>
@@ -110,10 +111,14 @@ public:
     return cum_weight_[(std::size_t)(std::upper_bound(t_.begin(), t_.end(), v) - t_.begin())];
   }
 
-  // the 1 Da bins (bin_inverse, bin_phase) that hold a target interval, as bits
-  const std::vector<std::uint64_t>& bits() const
+  // the target intervals [lo, hi], ascending
+  const std::vector<double>& lows() const
   {
-    return bits_;
+    return lo_;
+  }
+  const std::vector<double>& highs() const
+  {
+    return hi_;
   }
 
   static constexpr double bin_inverse = 1.0 / 1.000495;
@@ -976,8 +981,15 @@ void MassLadderAlgorithm::searchSlidingLadders(const std::vector<const std::vect
   // those exactly as for one spectrum. Per spectrum the anchors are visited in the same order, with the same tests, sums and scores, so the
   // candidates are those of a search of each spectrum alone.
   constexpr Size batch_size = 64;
-  constexpr double bin_inverse = precursor_ladder::TargetSet::bin_inverse, bin_phase = precursor_ladder::TargetSet::bin_phase;
+  // the mask bins are 1/16 Da: a target interval (a few hundredths to tenths of a Da) covers one to a few, so few positions with a bit set
+  // fail the exact test
+  constexpr double bin_inverse = 16.0;
   std::vector<SegmentBest> seg_best;               // [(s * segments + si) * 4 + slot]
+  // the segments longest first, for the balance of the dynamic schedule (each segment has its own slots, so the order does not matter)
+  std::vector<std::uint32_t> segment_order(segments_.size());
+  std::iota(segment_order.begin(), segment_order.end(), 0);
+  std::stable_sort(segment_order.begin(), segment_order.end(),
+                   [&](std::uint32_t l, std::uint32_t r) { return segments_[l].b - segments_[l].a > segments_[r].b - segments_[r].a; });
   std::vector<std::array<Size, 4>> seg_tested(segments_.size()); // anchors tested per segment and slot (the same for every spectrum)
   for (Size first = 0; first < masses.size(); first += batch_size)
   {
@@ -1002,11 +1014,14 @@ void MassLadderAlgorithm::searchSlidingLadders(const std::vector<const std::vect
       for (const auto& set : sets[s])
       {
         auto& mask = bin_mask[set.isPrefix() ? 0 : 1];
-        const auto& bits = set.bits();
-        if (mask.size() < bits.size() * 64) mask.resize(bits.size() * 64, 0);
-        for (Size w = 0; w < bits.size(); w++)
+        const auto& lo = set.lows();
+        const auto& hi = set.highs();
+        if (hi.empty()) continue;
+        if (mask.size() < (Size)(hi.back() * bin_inverse) + 2) mask.resize((Size)(hi.back() * bin_inverse) + 2, 0);
+        for (Size t = 0; t < lo.size(); t++)
         {
-          for (std::uint64_t word = bits[w]; word != 0; word &= word - 1) mask[w * 64 + (Size)std::countr_zero(word)] |= std::uint64_t(1) << s;
+          // every bin that a sum inside [lo, hi] can fall into (a negative lo cannot match a positive sum)
+          for (Size b = (Size)(std::max(lo[t], 0.0) * bin_inverse); b <= (Size)(hi[t] * bin_inverse); b++) mask[b] |= std::uint64_t(1) << s;
         }
       }
     }
@@ -1017,9 +1032,10 @@ void MassLadderAlgorithm::searchSlidingLadders(const std::vector<const std::vect
       std::vector<int> k(n, 0);
       std::vector<Size> touched;
       touched.reserve(n);
-#pragma omp for schedule(dynamic, 64)
-      for (long si = 0; si < (long)n_segments; si++)
+#pragma omp for schedule(dynamic, 1)
+      for (long oi = 0; oi < (long)n_segments; oi++)
       {
+        const long si = segment_order[oi];
         const auto& seg = segments_[si];
         std::uint64_t included = 0;
         for (Size s = 0; s < n; s++)
@@ -1044,7 +1060,7 @@ void MassLadderAlgorithm::searchSlidingLadders(const std::vector<const std::vect
             {
               const double v = prefix ? S[x] - S[anchor] : S[anchor] - S[x];
               if (v > batch_max[side]) break;
-              const Size bin = (Size)(v * bin_inverse + bin_phase);
+              const Size bin = (Size)(v * bin_inverse);
               if (bin >= mask.size()) continue;
               for (std::uint64_t m = mask[bin] & active; m != 0; m &= m - 1)
               {
