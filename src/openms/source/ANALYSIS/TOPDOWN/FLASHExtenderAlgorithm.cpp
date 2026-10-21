@@ -1790,7 +1790,7 @@ namespace OpenMS
     hi.visited_.insert(src);
     std::set<Size> visited_tag_edges;
     std::map<Size, std::set<std::pair<double, double>>> sink_map;
-    std::unordered_map<Size, std::unordered_map<Size, int>> node_max_score_map; // node, cumulative mass, score
+    NodeScoreMap node_max_score_map; // node, cumulative mass, score
 
     findPathsAlongTagEndPoints(visited_tag_edges, hi, sink_map, src, 0, 0, node_max_score_map, tag_edges, max_mod_cntr_for_last_mode, use_tags);
 
@@ -1806,7 +1806,7 @@ namespace OpenMS
                                                           Size vertex,
                                                           double truncation_mass,
                                                           double cumulative_shift,
-                                                          std::unordered_map<Size, std::unordered_map<Size, int>>& node_max_score_map,
+                                                          NodeScoreMap& node_max_score_map,
                                                           const std::vector<std::vector<int>>& tag_edges,
                                                           int max_mod_cntr_for_last_mode,
                                                           bool use_tags)
@@ -1972,7 +1972,7 @@ namespace OpenMS
                                                                int diagonal_counter,
                                                                double truncation_mass,
                                                                double cumulative_mod_mass,
-                                                               std::unordered_map<Size, std::unordered_map<Size, int>>& node_max_score_map,
+                                                               NodeScoreMap& node_max_score_map,
                                                                int max_blind_mod_cntr_for_last_mode)
   {
     // TODO N term mod vs. 1st amino acid mod distinction
@@ -2074,17 +2074,12 @@ namespace OpenMS
       for (int nvm = 0; nvm <= start_num_var_mod; nvm++)
       {
         Size zero_score_vertex = getVertex_(start_node_index, start_pro_index, 0, nbm, nvm, pro_mass_size);
-        auto it_vertex = node_max_score_map.find(zero_score_vertex);
-        if (it_vertex != node_max_score_map.end())
+        const int* best = node_max_score_map.find(zero_score_vertex, key_to_score_map);
+        if (best != nullptr)
         {
-          auto& kts = it_vertex->second;
-          auto it_score = kts.find(key_to_score_map);
-          if (it_score != kts.end())
-          {
-            if (it_score->second > start_score) { return; }
-            else if (key_to_score_map != 0 && it_score->second == start_score)
-              same_score_node = true;
-          }
+          if (*best > start_score) { return; }
+          else if (key_to_score_map != 0 && *best == start_score)
+            same_score_node = true;
         }
       }
     }
@@ -2107,9 +2102,15 @@ namespace OpenMS
       return;
     if (start_num_blind_mod > 0 && same_score_node) return; // exclude truncation
 
-    node_max_score_map[getVertex_(start_node_index, start_pro_index, 0, start_num_blind_mod, start_num_var_mod, pro_mass_size)][key_to_score_map]
-      = start_score;
+    node_max_score_map.set(getVertex_(start_node_index, start_pro_index, 0, start_num_blind_mod, start_num_var_mod, pro_mass_size), key_to_score_map,
+                           start_score);
 
+    // pro_masses ascend, so delta_delta below descends with pro_i. The positions skipped by the first test of the loop (delta_delta above
+    // max_mod_with_margin) form a prefix; with a diagonal counter, so do all with delta_delta above t_margin, and those below -t_margin
+    // end the loop: off the diagonal, the loop body skips every position then (no variable modification is searched, and a blind one
+    // is refused by the diagonal counter). The first position past the prefix is walked along with the node masses (ascending).
+    const bool diagonal_only = diagonal_counter > 0;
+    int first_pro_i = start_pro_index;
     for (int node_i = start_node_index + 1; node_i <= (end_node_index < 0 ? ((int)node_spec.size() - 1) : end_node_index); node_i++)
     {
       int score = start_score + (int)node_spec[node_i].getIntensity();
@@ -2120,7 +2121,12 @@ namespace OpenMS
                                                                                                                 std::abs(var_mod_combinations_.back().mass)))
                                          + t_margin;
 
-      for (int pro_i = start_pro_index; pro_i <= end_pro_index; pro_i++)
+      const double skip_above = diagonal_only ? t_margin : max_mod_with_margin;
+      // with the loop's own arithmetic
+      const auto skipped = [&](int pi) { return t_node_mass - pro_masses[pi] - cumulative_mod_mass + truncation_mass > skip_above; };
+      while (first_pro_i > start_pro_index && ! skipped(first_pro_i - 1)) first_pro_i--;
+      while (first_pro_i <= end_pro_index && skipped(first_pro_i)) first_pro_i++;
+      for (int pro_i = first_pro_i; pro_i <= end_pro_index; pro_i++)
       {
         const double pro_mass = pro_masses[pro_i]; // 캐싱
         const double t_delta_mass = t_node_mass - pro_mass;
@@ -2128,6 +2134,7 @@ namespace OpenMS
 
         if (delta_delta > max_mod_with_margin) continue;
         if (delta_delta < -max_mod_with_margin) break;
+        if (diagonal_only && delta_delta < -t_margin) break;
 
         int num_var_mod = start_num_var_mod;
         int num_blind_mod = start_num_blind_mod;

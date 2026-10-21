@@ -20,7 +20,9 @@
 #include <functional>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <unordered_map>
+#include <vector>
 
 namespace OpenMS
 {
@@ -117,6 +119,76 @@ protected:
   void setDefaultParams_();
 
 private:
+  /// The best score per (zero-score vertex, stretch key) while one DAG is built: lookups and stores only, on one flat open-addressing
+  /// table (a map of hash maps allocated a node per store, and its stores took more than half of the extension time)
+  class NodeScoreMap
+  {
+  public:
+    /// the stored score of (@p vertex, @p key), or nullptr
+    const int* find(Size vertex, Size key) const
+    {
+      if (table_.empty()) return nullptr;
+      for (Size i = slot_(vertex, key); ; i = (i + 1) & mask_)
+      {
+        const auto& e = table_[i];
+        if (e.vertex == empty_) return nullptr;
+        if (e.vertex == vertex && e.key == key) return &e.score;
+      }
+    }
+
+    /// store (or overwrite) the score of (@p vertex, @p key)
+    void set(Size vertex, Size key, int score)
+    {
+      if ((count_ + 1) * 2 > table_.size()) grow_();
+      for (Size i = slot_(vertex, key); ; i = (i + 1) & mask_)
+      {
+        auto& e = table_[i];
+        if (e.vertex == empty_)
+        {
+          e = {vertex, key, score};
+          ++count_;
+          return;
+        }
+        if (e.vertex == vertex && e.key == key)
+        {
+          e.score = score;
+          return;
+        }
+      }
+    }
+
+  private:
+    struct Entry
+    {
+      Size vertex;
+      Size key;
+      int score;
+    };
+    static constexpr Size empty_ = std::numeric_limits<Size>::max(); // no vertex of a DAG (vertex < DAG size)
+    std::vector<Entry> table_;
+    Size mask_ = 0;
+    Size count_ = 0;
+
+    Size slot_(Size vertex, Size key) const
+    {
+      Size h = vertex * 0x9E3779B97F4A7C15ULL ^ (key + 0x632BE59BD9B4E019ULL) * 0xC2B2AE3D27D4EB4FULL;
+      return (h ^ (h >> 29)) & mask_;
+    }
+
+    void grow_()
+    {
+      std::vector<Entry> old;
+      old.swap(table_);
+      table_.assign(old.empty() ? 1024 : old.size() * 2, Entry {empty_, 0, 0});
+      mask_ = table_.size() - 1;
+      count_ = 0;
+      for (const auto& e : old)
+      {
+        if (e.vertex != empty_) set(e.vertex, e.key, e.score);
+      }
+    }
+  };
+
   /// Protein hit information that should be retained throughout the run.
   struct OPENMS_DLLAPI HitInformation
   {
@@ -312,7 +384,7 @@ private:
                            Size vertex,
                            double truncation_mass,
                            double cumulative_shift,
-                           std::unordered_map<Size, std::unordered_map<Size, int>>& node_max_score_map,
+                           NodeScoreMap& node_max_score_map,
                            const std::vector<std::vector<int>>& tag_edges,
                            int max_mod_cntr_for_last_mode,
                            bool use_tags);
@@ -338,7 +410,7 @@ private:
                           int diagonal_counter,
                           double truncation_mass,
                           double cumulative_mod_mass,
-                          std::unordered_map<Size, std::unordered_map<Size, int>>& node_max_score_map,
+                          NodeScoreMap& node_max_score_map,
                           int max_blind_mod_cntr_for_last_mode);
 
   /// get proteoform specific information from the input @p path and relevant data.
