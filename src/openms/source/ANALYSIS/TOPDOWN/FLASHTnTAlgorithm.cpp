@@ -454,19 +454,25 @@ void FLASHTnTAlgorithm::updateMembers_()
 
 std::set<Size> FLASHTnTAlgorithm::getProteinsPassingFDR_(const std::vector<FASTAFile::FASTAEntry>& fasta_entry) const
 {
-  std::map<Size, double> best_score; // fasta index to the protein's best tag-based score over the run
+  // fasta index to the protein's best tag-based score over the run (scored: has one); the meta value read by its index, without a lookup
+  // of the name in the registry (a critical section) per hit
+  std::vector<double> best_score(fasta_entry.size(), 0.0);
+  std::vector<bool> scored(fasta_entry.size(), false);
+  const UInt mi_fasta_index = MetaInfoInterface::metaRegistry().registerName("FastaIndex");
   for (const auto& hit : protein_hits_)
   {
-    Size fi = (int)hit.getMetaValue("FastaIndex");
-    auto it = best_score.find(fi);
-    if (it == best_score.end() || it->second < hit.getScore()) best_score[fi] = hit.getScore();
+    Size fi = (int)hit.getMetaValue(mi_fasta_index);
+    if (! scored[fi] || best_score[fi] < hit.getScore())
+    {
+      best_score[fi] = hit.getScore();
+      scored[fi] = true;
+    }
   }
 
   std::vector<std::pair<double, Size>> ranked;
-  ranked.reserve(best_score.size());
-  for (const auto& [fi, score] : best_score)
+  for (Size fi = 0; fi < best_score.size(); fi++)
   {
-    ranked.emplace_back(score, fi);
+    if (scored[fi]) ranked.emplace_back(best_score[fi], fi);
   }
   std::sort(ranked.begin(), ranked.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
 
@@ -1244,6 +1250,14 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     for (Size j = 0; j < seq.size(); j++) pre.push_back(pre.back() + ResidueDB::getInstance()->getResidue(seq[j])->getMonoWeight(Residue::Internal));
     for (Size j = 0; j < seq.size(); j++) suf.push_back(suf.back() + ResidueDB::getInstance()->getResidue(seq[seq.size() - 1 - j])->getMonoWeight(Residue::Internal));
   }
+  // their bucket indices, with which FLASHTaggerAlgorithm::scoreShifts looks the residue sum of a mass up instead of walking to it
+  std::vector<std::vector<std::uint32_t>> pro_prefix_index(cleaned_protein_seqs.size()), pro_suffix_index(cleaned_protein_seqs.size());
+#pragma omp parallel for schedule(dynamic, 64)
+  for (int k = 0; k < (int)cleaned_protein_seqs.size(); k++)
+  {
+    FLASHTaggerAlgorithm::indexResidueSums(pro_prefix[k], pro_prefix_index[k]);
+    FLASHTaggerAlgorithm::indexResidueSums(pro_suffix[k], pro_suffix_index[k]);
+  }
   const double protein_tol = protein_tol_ > 0 ? protein_tol_ : (ms2_tol > 0 ? ms2_tol : tol);
 
   // The protein-level search runs on every spectrum before any extension, because the run-level protein FDR
@@ -1598,17 +1612,17 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       if ((Size)i < seq_count)
       {
         const auto& c = seq_candidates[i];
-        scores[i] = std::max(FLASHTaggerAlgorithm::scoreShifts(score_masses, pro_prefix[c.protein], shift_values.data() + c.n_first,
-                                                               flank_values.data() + c.n_first, c.n_count, protein_tol),
-                             FLASHTaggerAlgorithm::scoreShifts(score_masses, pro_suffix[c.protein], shift_values.data() + c.c_first,
-                                                               flank_values.data() + c.c_first, c.c_count, protein_tol));
+        scores[i] = std::max(FLASHTaggerAlgorithm::scoreShifts(score_masses, pro_prefix[c.protein], pro_prefix_index[c.protein],
+                                                               shift_values.data() + c.n_first, flank_values.data() + c.n_first, c.n_count, protein_tol),
+                             FLASHTaggerAlgorithm::scoreShifts(score_masses, pro_suffix[c.protein], pro_suffix_index[c.protein],
+                                                               shift_values.data() + c.c_first, flank_values.data() + c.c_first, c.c_count, protein_tol));
         continue;
       }
       const auto& sh = hit_shifts[i - seq_count];
-      scores[i] = std::max(FLASHTaggerAlgorithm::scoreShifts(score_masses, pro_prefix[sh.fasta_index], sh.n_shifts.data(), sh.n_flanks.data(),
-                                                             sh.n_shifts.size(), protein_tol),
-                           FLASHTaggerAlgorithm::scoreShifts(score_masses, pro_suffix[sh.fasta_index], sh.c_shifts.data(), sh.c_flanks.data(),
-                                                             sh.c_shifts.size(), protein_tol));
+      scores[i] = std::max(FLASHTaggerAlgorithm::scoreShifts(score_masses, pro_prefix[sh.fasta_index], pro_prefix_index[sh.fasta_index],
+                                                             sh.n_shifts.data(), sh.n_flanks.data(), sh.n_shifts.size(), protein_tol),
+                           FLASHTaggerAlgorithm::scoreShifts(score_masses, pro_suffix[sh.fasta_index], pro_suffix_index[sh.fasta_index],
+                                                             sh.c_shifts.data(), sh.c_flanks.data(), sh.c_shifts.size(), protein_tol));
     }
 
     // Ranked by score, coverage and description with std::sort. The keys are those the hits had, so every comparison and with it the
@@ -1868,6 +1882,24 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     }
     range.second = to.size();
   };
+  {
+    // room for all, so that the vectors do not grow (and copy the tags and hits) while they are appended
+    Size n_tags = tags_.size(), n_hits = protein_hits_.size(), n_ladder = ladder_candidates.size(), n_pl = pl_candidates.size(),
+         n_decoy_pl = decoy_pl_candidates.size();
+    for (Size d = 0; d < dspecs.size(); d++)
+    {
+      n_tags += spec_gapped_tags[d].size();
+      n_hits += spec_hits[d].size();
+      n_ladder += spec_ladder_hits[d].size();
+      n_pl += spec_pl_hits[d].size();
+      n_decoy_pl += spec_decoy_pl_hits[d].size();
+    }
+    tags_.reserve(n_tags);
+    protein_hits_.reserve(n_hits);
+    ladder_candidates.reserve(n_ladder);
+    pl_candidates.reserve(n_pl);
+    decoy_pl_candidates.reserve(n_decoy_pl);
+  }
   for (Size d = 0; d < dspecs.size(); d++)
   {
     const int tag_base = appendSpectrumTags(spec_gapped_tags[d]);

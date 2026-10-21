@@ -231,6 +231,10 @@ private:
     const std::vector<int>* cur_node_series_ = nullptr;
     /// per node k of the current mode, the smallest mass and the largest tolerance of the nodes k, k + 1, ... (index node count: none)
     std::vector<double> cur_tail_min_mass_, cur_tail_max_margin_;
+    /// the protein masses of the current mode by 1 Da (bit b: a mass in [b, b + 1)), for the node filter of diagonal steps; empty (no
+    /// filter) unless the masses ascend within [0, 2^24). The filter's rounding slack: 1e-9 of the largest magnitudes of the mode.
+    std::vector<uint64_t> cur_mass_bits_;
+    double cur_mass_slack_ = 0;
     /// per series, the cleavage weight of a matched mass at each protein index of the current mode (index k: the bond after k residues)
     std::vector<int> cur_bond_weight_[2];
   };
@@ -265,6 +269,38 @@ private:
   double blind_mod_bucket_scale_ = 0;
   /// the index of the first mass of blind_mod_masses_ not below @p mass, as std::lower_bound (and std::map::lower_bound) give it
   Size blindModLowerBound_(double mass) const;
+  /// blind_mod_masses_ followed by four +inf (blindModNear_ compares four masses from a bucket's first one without bounds checks)
+  std::vector<double> blind_mod_padded_;
+  /// whether the first mass of blind_mod_masses_ not below @p delta - @p tol exists and lies within @p tol of @p delta (the blind-shift
+  /// test of findSubPathsBetweenTagEndPoints, called for most positions there): the result of blindModLowerBound_ and that test. Kept
+  /// inline in that large function (the compiler called it otherwise).
+#if defined(__GNUC__)
+  __attribute__((always_inline))
+#endif
+  bool blindModNear_(double delta, double tol) const
+  {
+    const double mass = delta - tol;
+    const auto& masses = blind_mod_masses_;
+    Size i;
+    if (blind_mod_buckets_.empty()) i = blindModLowerBound_(mass);
+    else if (! (mass > masses.front())) i = 0; // no mass below it (or NaN): std::lower_bound gives the first
+    else
+    {
+      // The masses before the first one of the bucket of `mass` are below it and those of later buckets are not (see
+      // blindModLowerBound_), so the masses below it from that first one on are the first `below` of the next four, counted without
+      // branches; only a crowded bucket can hold more.
+      const double cell = (mass - masses.front()) * blind_mod_bucket_scale_;
+      i = cell < (double)(blind_mod_buckets_.size() - 1) ? blind_mod_buckets_[(Size)cell] : blind_mod_buckets_.back();
+      const double* m = blind_mod_padded_.data() + i;
+      const Size below = (Size)(m[0] < mass) + (Size)(m[1] < mass) + (Size)(m[2] < mass) + (Size)(m[3] < mass);
+      i += below;
+      if (below == 4)
+      {
+        while (blind_mod_padded_[i] < mass) i++; // stops at the first +inf (index blind_mod_masses_.size()) at the latest
+      }
+    }
+    return i < masses.size() && ! (std::abs(delta - blind_mod_padded_[i]) > tol);
+  }
   std::vector<VariableModification> var_mod_list_;
   /// score penalty of each modification of var_mod_list_
   std::vector<int> var_mod_penalties_;

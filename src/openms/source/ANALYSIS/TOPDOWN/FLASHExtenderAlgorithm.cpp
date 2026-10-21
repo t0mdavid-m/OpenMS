@@ -43,6 +43,22 @@ namespace OpenMS
   inline const int min_n_term_ladder = min_c_term_ladder;  // Penalty per variable modification: a known residue-specific shift costs far less than a blind modification, but more than
   // nothing, so that an unmodified path wins a tie.
   inline const int var_mod_penalty = 1 + multi_ion_score;
+
+  // whether a set bit of @p bits (bit b: a protein mass in [b, b + 1)) lies in [floor(lo), floor(hi)], i.e. whether a protein mass can be in
+  // [lo, hi]. True (no filtering) for NaN or a range of 64 Da or more; false for an empty range.
+  static inline bool anyMassBit(const std::vector<uint64_t>& bits, double lo, double hi)
+  {
+    if (! (hi - lo < 64.0)) return true;
+    const double size = (double)(bits.size() * 64);
+    if (hi < 0 || lo >= size || lo > hi) return false;
+    const Size b0 = lo > 0 ? (Size)lo : 0;
+    const Size b1 = hi < size ? (Size)hi : bits.size() * 64 - 1;
+    const uint64_t first = bits[b0 >> 6] & (~uint64_t(0) << (b0 & 63));
+    const uint64_t last_mask = ~uint64_t(0) >> (63 - (b1 & 63));
+    if ((b0 >> 6) == (b1 >> 6)) return (first & last_mask) != 0;
+    return (first | (bits[b1 >> 6] & last_mask)) != 0; // b1 - b0 <= 64: neighbouring words
+  }
+
   FLASHExtenderAlgorithm::FLASHExtenderAlgorithm(): DefaultParamHandler("FLASHExtenderAlgorithm"), ProgressLogger()
   {
     setDefaultParams_();
@@ -403,8 +419,11 @@ namespace OpenMS
       }
     }
     blind_mod_offsets_.push_back(blind_mod_ids_.size());
+    blind_mod_padded_ = blind_mod_masses_;
+    blind_mod_padded_.resize(blind_mod_masses_.size() + 4, std::numeric_limits<double>::infinity());
 
-    // buckets of 0.5 Da (at most 2^16 of them). blindModLowerBound_ corrects any start, so they only set how far it walks.
+    // buckets of 0.5 Da (at most 2^16 of them). blindModLowerBound_ corrects any start, so they only set how far it walks. The masses
+    // before a bucket's first one are below every mass of the bucket, those of later buckets above (the bucket of a mass is monotone in it).
     if (blind_mod_masses_.size() < 2 || blind_mod_masses_.size() >= (Size)std::numeric_limits<UInt>::max()) return;
     const double front = blind_mod_masses_.front();
     const double span = blind_mod_masses_.back() - front;
@@ -918,6 +937,19 @@ namespace OpenMS
         const double margin = tol_spec[j].getIntensity();
         tail_mass[j] = std::isnan(mass) || std::isnan(tail_mass[j + 1]) ? nan : std::min(mass, tail_mass[j + 1]);
         tail_margin[j] = std::isnan(margin) || std::isnan(tail_margin[j + 1]) ? nan : std::max(margin, tail_margin[j + 1]);
+      }
+      // the protein masses by 1 Da for the node filter of diagonal steps (findSubPathsBetweenTagEndPoints), if they ascend in [0, 2^24)
+      auto& bits = hi.cur_mass_bits_;
+      bits.clear();
+      bool ascending = ! pro_masses.empty() && pro_masses.front() >= 0 && pro_masses.back() < 16777216.0;
+      for (Size k = 1; ascending && k < pro_masses.size(); k++) ascending = pro_masses[k - 1] <= pro_masses[k];
+      if (ascending)
+      {
+        bits.assign(((Size)pro_masses.back() >> 6) + 1, 0);
+        for (const double mass : pro_masses) bits[(Size)mass >> 6] |= uint64_t(1) << ((Size)mass & 63);
+        double node_max = 0; // NaN masses or tolerances are skipped here; the filter does not apply to them
+        for (Size j = 0; j < node_spec.size(); j++) node_max = std::max(node_max, std::abs(node_spec[j].getMZ()) + std::abs((double)tol_spec[j].getIntensity()));
+        hi.cur_mass_slack_ = 1e-9 * (1.0 + pro_masses.back() + node_max);
       }
     }
     {
@@ -2153,7 +2185,7 @@ namespace OpenMS
         }
 
         Size vertex2 = getVertex_(0, pro_i, -truncation_penalty, 0, 0, pro_mass_size); // penalize terminal truncation
-        bool connected = hi.dag_.addEdge(vertex2, start_vertex, hi.visited_);
+        bool connected = hi.dag_.addEdgeFromVisited(vertex2, start_vertex, hi.visited_); // start_vertex: visited (tested on entry)
 
         if (vertex2 >= hi.dag_.size() || ! connected) continue;
         findSubPathsBetweenTagEndPoints(sinks, hi, vertex2, end_node_index, end_pro_index, diagonal_counter, pro_masses[pro_i], cumulative_mod_mass,
@@ -2201,7 +2233,9 @@ namespace OpenMS
 
     if (end_node_index < 0)
     {
-      if (start_vertex != src) { sinks[start_vertex].insert(std::pair<double, double> {truncation_mass, cumulative_mod_mass}); }
+      // Without an end node (free extension) the sink map is constructDAG_'s, or a map moved into it, which reads only its keys: the
+      // (truncation, cumulative) pairs are read only from the maps of searches between tag ends (end_node_index >= 0).
+      if (start_vertex != src) sinks.try_emplace(start_vertex);
     }
     else if (start_node_index == node_spec.size() - 1)
     {
@@ -2223,8 +2257,25 @@ namespace OpenMS
     const double max_mod = std::max(max_mod_mass_, var_mod_combinations_.empty() ? 0.0 : std::max(std::abs(var_mod_combinations_.front().mass),
                                                                                                   std::abs(var_mod_combinations_.back().mass)));
     int first_pro_i = start_pro_index;
-    for (int node_i = start_node_index + 1; node_i <= (end_node_index < 0 ? ((int)node_spec.size() - 1) : end_node_index); node_i++)
+    const int last_node_index = end_node_index < 0 ? ((int)node_spec.size() - 1) : end_node_index;
+    // With diagonal steps only, a node acts only at positions with |delta_delta| <= t_margin (the loop below skips or ends at the others,
+    // and a blind or variable shift is refused there): their protein masses lie within t_margin of node mass - cumulative_mod_mass +
+    // truncation_mass, up to rounding (far below the slack). Nodes without any protein mass there are passed over. first_pro_i, the first
+    // position not skipped, does not depend on the nodes before (the walks below give it from any start), so it is found by bisection.
+    const bool filter_nodes = diagonal_only && ! hi.cur_mass_bits_.empty() && start_pro_index <= end_pro_index;
+    const double filter_slack = filter_nodes ? hi.cur_mass_slack_ + 1e-9 * (std::abs(cumulative_mod_mass) + std::abs(truncation_mass)) : 0;
+    for (int node_i = start_node_index + 1; node_i <= last_node_index; node_i++)
     {
+      if (filter_nodes)
+      {
+        for (; node_i <= last_node_index; node_i++)
+        {
+          const double centre = node_spec[node_i].getMZ() - cumulative_mod_mass + truncation_mass;
+          const double slack = (double)tol_spec[node_i].getIntensity() + filter_slack;
+          if (anyMassBit(hi.cur_mass_bits_, centre - slack, centre + slack)) break;
+        }
+        if (node_i > last_node_index) break;
+      }
       int score = start_score + (int)node_spec[node_i].getIntensity();
       double t_node_mass = node_spec[node_i].getMZ();
       double t_margin = tol_spec[node_i].getIntensity();
@@ -2232,10 +2283,19 @@ namespace OpenMS
       const double max_mod_with_margin = max_mod + t_margin;
 
       const double skip_above = diagonal_only ? t_margin : max_mod_with_margin;
-      // with the loop's own arithmetic
-      const auto skipped = [&](int pi) { return t_node_mass - pro_masses[pi] - cumulative_mod_mass + truncation_mass > skip_above; };
-      while (first_pro_i > start_pro_index && ! skipped(first_pro_i - 1)) first_pro_i--;
-      while (first_pro_i <= end_pro_index && skipped(first_pro_i)) first_pro_i++;
+      if (filter_nodes)
+      {
+        first_pro_i = (int)(std::partition_point(pro_masses.begin() + start_pro_index, pro_masses.begin() + end_pro_index + 1,
+                                                 [&](double pm) { return t_node_mass - pm - cumulative_mod_mass + truncation_mass > skip_above; })
+                            - pro_masses.begin());
+      }
+      else
+      {
+        // with the loop's own arithmetic
+        const auto skipped = [&](int pi) { return t_node_mass - pro_masses[pi] - cumulative_mod_mass + truncation_mass > skip_above; };
+        while (first_pro_i > start_pro_index && ! skipped(first_pro_i - 1)) first_pro_i--;
+        while (first_pro_i <= end_pro_index && skipped(first_pro_i)) first_pro_i++;
+      }
       if (first_pro_i > end_pro_index)
       {
         // No position is left for this node. A later node j only tests end_pro_index (the walk back above) and finds it skipped as well if
@@ -2330,9 +2390,7 @@ namespace OpenMS
             }
 
             next_score -= 1 + 2 * (multi_ion_score + FLASHTaggerAlgorithm::max_node_score);
-            const Size mod_index = blindModLowerBound_(delta_delta - t_margin);
-            if (mod_index == blind_mod_masses_.size() || std::abs(delta_delta - blind_mod_masses_[mod_index]) > t_margin)
-              next_score -= multi_ion_score + FLASHTaggerAlgorithm::max_node_score;
+            if (! blindModNear_(delta_delta, t_margin)) next_score -= multi_ion_score + FLASHTaggerAlgorithm::max_node_score;
           }
         }
 
@@ -2342,7 +2400,7 @@ namespace OpenMS
         const Size next_vertex = getVertex_(node_i, pro_i, next_score, num_blind_mod, num_var_mod, pro_mass_size);
         if (next_vertex >= hi.dag_.size()) continue;
         if (next_score >= max_path_score_ && !sinks.empty() && hi.visited_.contains(next_vertex)) continue;
-        if (!hi.dag_.addEdge(next_vertex, start_vertex, hi.visited_)) continue;
+        if (! hi.dag_.addEdgeFromVisited(next_vertex, start_vertex, hi.visited_)) continue; // start_vertex: visited (tested on entry)
 
         int next_diagonal_counter = diagonal_counter;
         if (diagonal_counter > 0) next_diagonal_counter--;

@@ -756,6 +756,90 @@ double FLASHTaggerAlgorithm::scoreShifts(const std::vector<double>& masses, cons
   return std::max(0.0, best - std::log10((double)count));
 }
 
+namespace
+{
+// the buckets of indexResidueSums: a power of two, so that a mass times its inverse is exact and the bucket of a mass starts at or below it
+constexpr double sum_bucket_width = 64.0;
+constexpr double sum_bucket_inverse = 1.0 / sum_bucket_width;
+} // namespace
+
+void FLASHTaggerAlgorithm::indexResidueSums(const std::vector<double>& residue_sums, std::vector<std::uint32_t>& sum_index)
+{
+  sum_index.clear();
+  if (residue_sums.size() < 2 || residue_sums.size() >= (Size)UINT32_MAX || ! (residue_sums[0] >= 0)
+      || ! (residue_sums.back() < 1e12))
+  {
+    return;
+  }
+  for (Size i = 1; i < residue_sums.size(); i++)
+  {
+    if (! (residue_sums[i - 1] <= residue_sums[i])) return; // not sorted
+  }
+  const Size buckets = (Size)(residue_sums.back() * sum_bucket_inverse) + 1;
+  sum_index.resize(buckets);
+  Size i = 0;
+  for (Size b = 0; b < buckets; b++)
+  {
+    const double start = (double)b * sum_bucket_width;
+    while (residue_sums[i] < start) i++; // the last sum is at or above the start of the last bucket
+    sum_index[b] = (std::uint32_t)i;
+  }
+}
+
+// scoreShifts, the same operations in the same order, but the first residue sum at or above low (the position of the walk there, which
+// for sorted sums is that whatever the earlier masses were, and stays put for a NaN) is looked up: from the first sum of the bucket of low,
+// past at most two sums (no residue is lighter than 32 Da), without a branch that depends on the masses.
+double FLASHTaggerAlgorithm::scoreShifts(const std::vector<double>& masses, const std::vector<double>& residue_sums,
+                                         const std::vector<std::uint32_t>& sum_index, const double* shifts, const double* flanks, Size count,
+                                         double tol_ppm)
+{
+  // the index of other sums (not of the same size and maximum) is not used
+  if (sum_index.empty() || residue_sums.size() < 2 || ! (residue_sums.back() >= 0 && residue_sums.back() < 1e12)
+      || sum_index.size() != (Size)(residue_sums.back() * sum_bucket_inverse) + 1 || sum_index.back() >= residue_sums.size())
+  {
+    return scoreShifts(masses, residue_sums, shifts, flanks, count, tol_ppm);
+  }
+  if (count == 0) return 0.0;
+  const double protein_mass = residue_sums.back();
+  const double density = (double)(residue_sums.size() - 1) / protein_mass;
+  const double* const sums = residue_sums.data();
+  const std::uint32_t* const first = sum_index.data();
+  const Size end = residue_sums.size();
+  double best = 0; // -log10 P
+  for (Size j = 0; j < count; j++)
+  {
+    int cntr = 0;
+    double lambda = 0;
+    Size it = 0;
+    for (Size k = 0; k < masses.size(); k++)
+    {
+      const double target = masses[k] + shifts[j];
+      const double margin = tol_ppm * 1e-6 * (std::max(masses[k], target) + flanks[j]);
+      if (target < -margin || target > protein_mass + margin) continue;
+      lambda += std::min(1.0, 2.0 * margin * density);
+      const double low = target - margin;
+      if (low > sums[0])
+      {
+        if (low > protein_mass) { it = end; }
+        else
+        {
+          it = first[(Size)(low * sum_bucket_inverse)];
+          it += (Size)(sums[it] < low);
+          it += (Size)(sums[it] < low);
+          while (sums[it] < low) ++it;
+        }
+      }
+      else if (low <= sums[0]) { it = 0; }
+      if (it == end || sums[it] > target + margin) continue;
+      cntr++;
+    }
+    if (cntr == 0) continue;
+    const double p = boost::math::gamma_p((double)cntr, std::max(lambda, 1e-12)); // P(Poisson(lambda) >= cntr)
+    best = std::max(best, -std::log10(std::max(p, 1e-300)));
+  }
+  return std::max(0.0, best - std::log10((double)count));
+}
+
 void FLASHTaggerAlgorithm::runMatchingExact(std::vector<ProteinHit>& hits,
                                             const std::vector<ProteinShifts>& shifts,
                                             const DeconvolvedSpectrum& deconvolved_spectrum,

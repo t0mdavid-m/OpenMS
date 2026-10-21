@@ -489,6 +489,26 @@ inline bool findWindows(const std::vector<Segment>& segments, const std::vector<
 // END precursor ladder kernel
 } // namespace
 
+namespace
+{
+// For a terminal-ladder index sorted by mass (all masses above 0): first[b] is the first entry at or above b Da, for b = 0 .. the largest
+// mass + 1, so that the entries at or above a mass v in (0, largest] lie from first[floor(v)] on, and from first[floor(v) + 1] on all are
+// above v. Not built (empty) for an index of 2^32 entries or more or a mass beyond 10 MDa.
+template<typename Entry> void indexByDalton(const std::vector<Entry>& index, std::vector<std::uint32_t>& first)
+{
+  first.clear();
+  if (index.empty() || index.size() >= (Size)UINT32_MAX || ! (index.front().mass > 0) || ! (index.back().mass <= 1e7)) return;
+  const Size buckets = (Size)index.back().mass + 2;
+  first.resize(buckets);
+  Size i = 0;
+  for (Size b = 0; b < buckets; b++)
+  {
+    while (i < index.size() && index[i].mass < (double)b) i++;
+    first[b] = (std::uint32_t)i;
+  }
+}
+} // namespace
+
 void MassLadderAlgorithm::buildIndex(const std::vector<std::string>& protein_seqs, const std::vector<std::string>& ion_types, bool terminal_ladders,
                                      bool precursor_ladders)
 {
@@ -498,6 +518,8 @@ void MassLadderAlgorithm::buildIndex(const std::vector<std::string>& protein_seq
   ladder_suf_.clear();
   ladder_pre_index_.clear();
   ladder_suf_index_.clear();
+  ladder_pre_first_.clear();
+  ladder_suf_first_.clear();
   n_ladder_shifts_.clear();
   c_ladder_shifts_.clear();
   segments_.clear();
@@ -545,19 +567,39 @@ void MassLadderAlgorithm::buildIndex(const std::vector<std::string>& protein_seq
   };
   ladder_pre_.resize(protein_seqs.size());
   if (terminal_ladders) ladder_suf_.resize(protein_seqs.size());
-  for (Size k = 0; k < protein_seqs.size(); k++)
+  // the sums of the proteins in parallel (each its own), then the index entries of each protein at its place: the entries of the proteins
+  // one after the other, as appended protein by protein
+#pragma omp parallel for schedule(dynamic, 64) if (! omp_in_parallel())
+  for (long k = 0; k < (long)protein_seqs.size(); k++)
   {
     sums(protein_seqs[k], false, ladder_pre_[k]);
-    if (! terminal_ladders) continue;
-    sums(protein_seqs[k], true, ladder_suf_[k]);
-    for (Size j = 1; j < ladder_pre_[k].size(); j++) ladder_pre_index_.push_back({ladder_pre_[k][j], (std::uint32_t)k});
-    for (Size j = 1; j < ladder_suf_[k].size(); j++) ladder_suf_index_.push_back({ladder_suf_[k][j], (std::uint32_t)k});
+    if (terminal_ladders) sums(protein_seqs[k], true, ladder_suf_[k]);
   }
   if (terminal_ladders)
   {
+    std::vector<Size> pre_first(protein_seqs.size() + 1, 0), suf_first(protein_seqs.size() + 1, 0);
+    for (Size k = 0; k < protein_seqs.size(); k++)
+    {
+      pre_first[k + 1] = pre_first[k] + ladder_pre_[k].size() - 1;
+      suf_first[k + 1] = suf_first[k] + ladder_suf_[k].size() - 1;
+    }
+    ladder_pre_index_.resize(pre_first.back());
+    ladder_suf_index_.resize(suf_first.back());
+#pragma omp parallel for schedule(dynamic, 64) if (! omp_in_parallel())
+    for (long k = 0; k < (long)protein_seqs.size(); k++)
+    {
+      for (Size j = 1; j < ladder_pre_[k].size(); j++) ladder_pre_index_[pre_first[k] + j - 1] = {ladder_pre_[k][j], (std::uint32_t)k};
+      for (Size j = 1; j < ladder_suf_[k].size(); j++) ladder_suf_index_[suf_first[k] + j - 1] = {ladder_suf_[k][j], (std::uint32_t)k};
+    }
+    // the two sorts at the same time, each as before
     auto by_mass = [](const LadderEntry& a, const LadderEntry& b) { return a.mass < b.mass; };
-    std::sort(ladder_pre_index_.begin(), ladder_pre_index_.end(), by_mass);
-    std::sort(ladder_suf_index_.begin(), ladder_suf_index_.end(), by_mass);
+#pragma omp parallel sections if (! omp_in_parallel())
+    {
+#pragma omp section
+      std::sort(ladder_pre_index_.begin(), ladder_pre_index_.end(), by_mass);
+#pragma omp section
+      std::sort(ladder_suf_index_.begin(), ladder_suf_index_.end(), by_mass);
+    }
 
     const double met = rdb->getResidue('M')->getMonoWeight(Residue::Internal);
     const double acetyl = EmpiricalFormula("C2H2O").getMonoWeight();
@@ -569,6 +611,9 @@ void MassLadderAlgorithm::buildIndex(const std::vector<std::string>& protein_seq
       }
       else { c_ladder_shifts_.push_back(shift); }
     }
+    // per Da, the first entry of each index: searchTerminalLadders looks a mass up within its Da
+    indexByDalton(ladder_pre_index_, ladder_pre_first_);
+    indexByDalton(ladder_suf_index_, ladder_suf_first_);
   }
 
   // Precursor-anchored ladders: the database as runs of standard residues (segments) with their residue sums, for the window search of
@@ -630,11 +675,21 @@ void MassLadderAlgorithm::searchTerminalLadders(const std::vector<double>& masse
   for (Size si = 0; si < n_shifts; si++)
   {
     const auto& index = si < n_n ? ladder_pre_index_ : ladder_suf_index_;
+    const auto& first = si < n_n ? ladder_pre_first_ : ladder_suf_first_;
+    auto below = [](const LadderEntry& e, double v) { return e.mass < v; };
     for (double m : masses)
     {
       const double t = m + shift_of(si);
       const double margin = tol_ppm * 1e-6 * std::max(m, t);
-      auto it = std::lower_bound(index.begin(), index.end(), t - margin, [](const LadderEntry& e, double v) { return e.mass < v; });
+      const double v = t - margin;
+      // the first entry at or above v (std::lower_bound of the whole index): within the Da of v (indexByDalton); none above the largest mass
+      auto it = index.end();
+      if (first.empty() || ! (v > 0)) { it = std::lower_bound(index.begin(), index.end(), v, below); }
+      else if (v <= index.back().mass)
+      {
+        const Size b = (Size)v;
+        it = std::lower_bound(index.begin() + first[b], index.begin() + first[b + 1], v, below);
+      }
       for (; it != index.end() && it->mass <= t + margin; ++it)
       {
         const Size c = it->protein * n_shifts + si;

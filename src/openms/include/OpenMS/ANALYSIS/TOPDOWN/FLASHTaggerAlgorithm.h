@@ -15,6 +15,7 @@
 #include <OpenMS/FORMAT/FASTAFile.h>
 #include <OpenMS/METADATA/ProteinHit.h>
 #include <boost/dynamic_bitset.hpp>
+#include <cstdint>
 #include <iomanip>
 #include <iostream>
 
@@ -108,6 +109,16 @@ public:
    */
   static double scoreShifts(const std::vector<double>& masses, const std::vector<double>& residue_sums, const double* shifts,
                             const double* flanks, Size count, double tol_ppm);
+
+  /**
+   * @brief scoreShifts with the residue sum at or above a mass looked up in @p sum_index (indexResidueSums of @p residue_sums) instead of
+   * walked to; the same result. An empty index: scoreShifts without it.
+   */
+  static double scoreShifts(const std::vector<double>& masses, const std::vector<double>& residue_sums, const std::vector<std::uint32_t>& sum_index,
+                            const double* shifts, const double* flanks, Size count, double tol_ppm);
+
+  /// the index of scoreShifts: per 64 Da from 0, the number of residue sums below; empty unless the sums are sorted, from 0 or above
+  static void indexResidueSums(const std::vector<double>& residue_sums, std::vector<std::uint32_t>& sum_index);
 
   /**
    * @brief fill tags with the length of @p tag_length in @p tags

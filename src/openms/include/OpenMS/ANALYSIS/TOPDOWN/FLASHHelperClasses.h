@@ -379,7 +379,9 @@ namespace OpenMS
     /**
        @brief A set of vertex indices for graphs whose vertex space is huge but sparsely visited. A paged bitset: pages of 2^15 vertices
        (4 KB) are created when first touched, so memory follows the touched part of the space, and a lookup is a page lookup (the last
-       page is cached; vertex indices of one search are clustered) plus a bit test.
+       page is cached; vertex indices of one search are clustered) plus a bit test. Pages are kept in blocks of 16 that never move (one
+       growing array copied all pages at every reallocation); clear() keeps the blocks for the next use, and a page is zeroed when it is
+       handed out again (a new block is zero already).
     */
     class OPENMS_DLLAPI VisitedVertexSet
     {
@@ -408,7 +410,6 @@ namespace OpenMS
       void clear()
       {
         std::fill(table_keys_.begin(), table_keys_.end(), empty_);
-        words_.clear();
         page_count_ = 0;
         count_ = 0;
         last_page_id_ = empty_;
@@ -424,8 +425,11 @@ namespace OpenMS
       static constexpr Size page_size_ = Size(1) << page_bits_;
       static constexpr Size page_words_ = page_size_ / 64;
       static constexpr Size empty_ = std::numeric_limits<Size>::max();
+      static constexpr Size block_bits_ = 4;
+      static constexpr Size block_pages_ = Size(1) << block_bits_;
 
-      std::vector<uint64_t> words_;     // pages, page_words_ words each
+      std::vector<std::vector<uint64_t>> blocks_; // pages, block_pages_ per block, page_words_ words each
+      Size used_pages_ = 0;                        // pages handed out since the blocks were allocated (those below are zeroed on reuse)
       std::vector<Size> table_keys_;    // page id per slot (open addressing)
       std::vector<Size> table_values_;  // page number per slot
       Size table_mask_ = 0;
@@ -439,9 +443,14 @@ namespace OpenMS
         return (Size)((id * 0x9E3779B97F4A7C15ULL) >> 24) & mask;
       }
 
+      uint64_t* pageData_(Size number)
+      {
+        return blocks_[number >> block_bits_].data() + (number & (block_pages_ - 1)) * page_words_;
+      }
+
       uint64_t* page_(Size id, bool create)
       {
-        if (id == last_page_id_) return words_.data() + last_page_number_ * page_words_;
+        if (id == last_page_id_) return pageData_(last_page_number_);
         if (! table_keys_.empty())
         {
           for (Size i = slot_(id, table_mask_);; i = (i + 1) & table_mask_)
@@ -450,7 +459,7 @@ namespace OpenMS
             {
               last_page_id_ = id;
               last_page_number_ = table_values_[i];
-              return words_.data() + last_page_number_ * page_words_;
+              return pageData_(last_page_number_);
             }
             if (table_keys_[i] == empty_) break;
           }
@@ -461,10 +470,13 @@ namespace OpenMS
         while (table_keys_[i] != empty_) i = (i + 1) & table_mask_;
         table_keys_[i] = id;
         table_values_[i] = page_count_;
-        words_.resize((page_count_ + 1) * page_words_, 0);
+        if ((page_count_ >> block_bits_) == blocks_.size()) blocks_.emplace_back(block_pages_ * page_words_, uint64_t(0));
+        uint64_t* page = pageData_(page_count_);
+        if (page_count_ < used_pages_) std::fill(page, page + page_words_, uint64_t(0));
+        else used_pages_ = page_count_ + 1;
         last_page_id_ = id;
         last_page_number_ = page_count_++;
-        return words_.data() + last_page_number_ * page_words_;
+        return page;
       }
 
       void grow_table_()
@@ -507,6 +519,16 @@ namespace OpenMS
       {
         if (vertex1 >= vertex_count_ || vertex2 >= vertex_count_) return false;
         if (! visited.contains(vertex2)) return false;
+        visited.insert(vertex1);
+        edges_.emplace_back(vertex1, vertex2);
+        return true;
+      }
+
+      /// addEdge for a @p vertex2 the caller knows to be in @p visited: the same without that lookup (FLASHExtender adds the edges of a
+      /// search from its start vertex, which it tests once)
+      bool addEdgeFromVisited(Size vertex1, Size vertex2, VisitedVertexSet& visited)
+      {
+        if (vertex1 >= vertex_count_ || vertex2 >= vertex_count_) return false;
         visited.insert(vertex1);
         edges_.emplace_back(vertex1, vertex2);
         return true;

@@ -181,6 +181,8 @@ private:
   std::vector<std::vector<double>> ladder_pre_, ladder_suf_;
   /// terminal ladders: all of them sorted by mass (a sum of 0 left out)
   std::vector<LadderEntry> ladder_pre_index_, ladder_suf_index_;
+  /// terminal ladders: per Da of mass from 0, the first entry of the index at or above it (empty: not built, e.g. beyond 10 MDa)
+  std::vector<std::uint32_t> ladder_pre_first_, ladder_suf_first_;
   /// terminal ladders: observed mass + shift = residue sum from the terminus
   std::vector<double> n_ladder_shifts_, c_ladder_shifts_;
   /// precursor ladders: the runs of standard residues of the database
