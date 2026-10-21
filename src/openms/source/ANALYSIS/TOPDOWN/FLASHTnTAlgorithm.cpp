@@ -808,6 +808,22 @@ void FLASHTnTAlgorithm::vectorizeProteinSequence_(const std::vector<std::string>
   }
 }
 
+
+namespace
+{
+  /// free the elements of @p v with all threads (each moved out and destroyed by the thread that took it), then @p v itself
+  template<typename V>
+  void releaseInParallel(V& v)
+  {
+    using T = typename V::value_type;
+#pragma omp parallel for schedule(dynamic, 256)
+    for (SignedSize i = 0; i < (SignedSize)v.size(); i++)
+    {
+      T released(std::move(v[i]));
+    }
+    V().swap(v);
+  }
+} // namespace
 void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile::FASTAEntry>& original_fasta_entry)
 {
   setLogType(CMD);
@@ -1301,7 +1317,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
              mi_sliding = registry.registerName("SlidingLadder"),
              mi_precursor_ladder = registry.registerName("PrecursorLadder"),
              mi_pl_start = registry.registerName("PrecursorLadderStart"), mi_pl_end = registry.registerName("PrecursorLadderEnd"),
-             mi_pl_isotope = registry.registerName("PrecursorLadderIsotope");
+             mi_pl_isotope = registry.registerName("PrecursorLadderIsotope"), mi_description = registry.registerName("Description");
   // gapped tags (only for spectra in which no sequence tag proposes a protein); their tags are kept per spectrum until appended to tags_
   FLASHGappedTaggerAlgorithm gapped_tagger;
   if (gapped_mode_ != "off")
@@ -1411,7 +1427,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     }
     const auto& fe = fasta_entry[cand.protein];
     ProteinHit hit(cand.score, 0, fe.identifier, fe.sequence);
-    hit.setDescription(fe.description);
+    hit.setMetaValue(mi_description, fe.description); // as setDescription, without its registry lookup
     hit.setMetaValue(mi_scan, dspec.getScanNumber());
     hit.setMetaValue(mi_matched_aa, matched);
     hit.setCoverage((double)matched / (double)fe.sequence.length());
@@ -1604,7 +1620,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         const auto& fe = fasta_entry[pi];
         const double coverage = (double)positions.size() / (double)fe.sequence.length();
         ProteinHit hit(coverage, 0, fe.identifier, ""); // the sequence is set if the candidate survives the cut
-        hit.setDescription(fe.description);
+        hit.setMetaValue(mi_description, fe.description); // as setDescription, without its registry lookup
         hit.setMetaValue(mi_scan, dspec.getScanNumber());
         hit.setMetaValue(mi_matched_aa, (int)positions.size());
         hit.setCoverage(coverage);
@@ -1683,7 +1699,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       double coverage = (double)covered_pos / (double)fe.sequence.length();
       std::vector<int> positions(cand_positions.begin() + c.positions_first, cand_positions.begin() + (c.positions_first + covered_pos));
       ProteinHit hit(coverage, 0, fe.identifier, fe.sequence);
-      hit.setDescription(fe.description);
+      hit.setMetaValue(mi_description, fe.description); // as setDescription, without its registry lookup
       hit.setMetaValue(mi_scan, dspec.getScanNumber());
       hit.setMetaValue(mi_matched_aa, covered_pos);
       hit.setCoverage(coverage);
@@ -3097,6 +3113,17 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       hit.setMetaValue("ProteoformIndex", it == prsm_to_proteoform.end() ? -1 : it->second);
     }
   }
+  // the large locals freed with all threads instead of by their destructors on return
+  releaseInParallel(dspecs);
+  releaseInParallel(uncapped_masses);
+  releaseInParallel(tag_db);
+  releaseInParallel(vec_pro);
+  releaseInParallel(rev_vec_pro);
+  releaseInParallel(pro_prefix);
+  releaseInParallel(pro_suffix);
+  releaseInParallel(ladder_candidates);
+  releaseInParallel(pl_candidates);
+  releaseInParallel(decoy_pl_candidates);
   // TODO
   // per scan, get the scan number and the precursor mass - maybe given or maybe deconvolved.
   // get all protoeforms - mass and score.
@@ -3269,18 +3296,9 @@ void FLASHTnTAlgorithm::getProteoformHitsMatchedBy(const FLASHHelperClasses::Tag
 void FLASHTnTAlgorithm::releaseResults()
 {
   // hundreds of thousands of hits with sequences and meta values: their destructors in parallel instead of serially at exit
-  auto release = [](auto& v) {
-    using T = typename std::decay_t<decltype(v)>::value_type;
-#pragma omp parallel for schedule(dynamic, 1024)
-    for (SignedSize i = 0; i < (SignedSize)v.size(); i++)
-    {
-      T released(std::move(v[i])); // its memory is freed here, by this thread
-    }
-    std::decay_t<decltype(v)>().swap(v);
-  };
-  release(protein_hits_);
-  release(proteoform_hits_);
-  release(tags_);
+  releaseInParallel(protein_hits_);
+  releaseInParallel(proteoform_hits_);
+  releaseInParallel(tags_);
   matching_hits_indices_.clear();
   releaseRawSpectra_();
 }

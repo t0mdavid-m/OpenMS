@@ -57,7 +57,7 @@ void FLASHTnTFile::writeProteins(const std::vector<ProteinHit>& hits, std::fstre
   // values by index, because a lookup by name takes the registry's critical section
   auto& registry = MetaInfoInterface::metaRegistry();
   const UInt mi_tag_indices = registry.registerName("TagIndices"), mi_rank = registry.registerName("ProteinRank"), mi_scan = registry.registerName("Scan"),
-             mi_matched_aa = registry.registerName("MatchedAA");
+             mi_matched_aa = registry.registerName("MatchedAA"), mi_description = registry.registerName("Description");
   const SignedSize block_size = 2048;
   const SignedSize block_count = ((SignedSize)hits.size() + block_size - 1) / block_size;
   std::vector<std::string> lines(block_count);
@@ -72,7 +72,7 @@ void FLASHTnTFile::writeProteins(const std::vector<ProteinHit>& hits, std::fstre
       {
         const auto& hit = hits[i];
         const std::vector<int> tag_indices = hit.getMetaValue(mi_tag_indices).toIntList();
-        ss << (int)hit.getMetaValue(mi_rank) << "\t" << (int)hit.getMetaValue(mi_scan) << "\t" << hit.getAccession() << "\t" << hit.getDescription()
+        ss << (int)hit.getMetaValue(mi_rank) << "\t" << (int)hit.getMetaValue(mi_scan) << "\t" << hit.getAccession() << "\t" << hit.getMetaValue(mi_description).toString()
            << "\t" << hit.getSequence().size() << "\t" << hit.getScore() << "\t" << tag_indices.size() << "\t" << (int)hit.getMetaValue(mi_matched_aa) << "\t";
         for (int ti : tag_indices) { ss << ti << ";"; }
         ss << "\n";
@@ -97,6 +97,10 @@ void FLASHTnTFile::writeTags(const FLASHTnTAlgorithm& tnt, double flanking_mass_
   const auto& tags = tnt.getTags();
   const auto& proteoforms = tnt.getProteoforms();
   const std::vector<int> no_hits;
+  // meta values by index: a lookup by name takes the registry's critical section, in every thread below
+  auto& registry = MetaInfoInterface::metaRegistry();
+  const UInt mi_description = registry.registerName("Description"), mi_index = registry.registerName("Index"),
+             mi_start = registry.registerName("StartPosition"), mi_end = registry.registerName("EndPosition");
 
   // the lines of the tags with PrSMs first, then those of the others, each in tag order; formatted in parallel by blocks of tags
   const int tag_count = (int)tags.size();
@@ -135,18 +139,18 @@ void FLASHTnTFile::writeTags(const FLASHTnTAlgorithm& tnt, double flanking_mass_
 
           acc += hit.getAccession();
 
-          String proteindescription = hit.getDescription();
+          String proteindescription = hit.getMetaValue(mi_description).toString(); // as getDescription()
           if (proteindescription.empty()) { proteindescription = " "; }
           description += proteindescription;
-          hitindices += (String)hit.getMetaValue("Index");
+          hitindices += (String)hit.getMetaValue(mi_index);
 
           auto pos = std::vector<int>();
           auto masses = std::vector<double>();
           auto pos_in_truncated = std::vector<int>();
           auto masses_in_truncated = std::vector<double>();
 
-          int protein_start_position = hit.getMetaValue("StartPosition");
-          int protein_end_position = hit.getMetaValue("EndPosition");
+          int protein_start_position = hit.getMetaValue(mi_start);
+          int protein_end_position = hit.getMetaValue(mi_end);
           protein_start_position--;
           String seq = hit.getSequence();
           FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(pos, masses, -1, seq, tag);
