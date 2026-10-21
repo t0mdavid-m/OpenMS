@@ -206,6 +206,8 @@ namespace OpenMS
       // Byte-balanced chunks of whole <spectrum> elements: at least 4 per thread and at most ~64 MiB of text
       // each, which bounds the raw text in flight. The last chunk runs to the end of the file.
       const std::streamoff body = file_size - first;
+      // at most one thread per 2 MiB of spectra: more threads only add chunk overhead (79 MB file: 32 threads 0.19 s, 192 threads 0.36 s)
+      threads = (int)std::min<std::streamoff>(std::max(1, threads), body / (2 << 20) + 1);
       const Size chunk_count = std::min<Size>(spectrum_offsets.size(), std::max<Size>((Size)std::max(1, threads) * 4, (Size)(body >> 26) + 1));
       const double target = double(body) / chunk_count;
       std::vector<Size> starts {0};

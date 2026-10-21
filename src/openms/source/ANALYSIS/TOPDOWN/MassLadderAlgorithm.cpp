@@ -428,9 +428,9 @@ inline bool findWindows(const std::vector<Segment>& segments, const std::vector<
 #ifdef _OPENMP
   threads = omp_in_parallel() ? 1 : omp_get_max_threads();
 #endif
-  // a few chunks per thread: the windows of a query are in segment order whatever the chunks, and the chunks x queries table below
-  // and its serial scans grow with the chunk count
-  const std::size_t chunk_count = std::min(segments.size(), (std::size_t)(4 * std::max(threads, 1)));
+  // two chunks per thread (fastest of 1-16 per thread on 192 threads): the windows of a query are in segment order whatever the chunks,
+  // and the chunks x queries table below and its serial scans grow with the chunk count
+  const std::size_t chunk_count = std::min(segments.size(), (std::size_t)(2 * std::max(threads, 1)));
   const double max_length = max_value / 57.0 + 1;
   double total_work = 0;
   for (const auto& seg : segments) total_work += (double)(seg.b - seg.a) * std::min((double)(seg.b - seg.a), max_length);
