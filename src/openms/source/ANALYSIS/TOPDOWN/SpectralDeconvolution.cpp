@@ -470,6 +470,7 @@ namespace OpenMS
             __builtin_prefetch(&prev_charges[next_mass_bin_index - chain_search]);
             __builtin_prefetch(&prev_charges[next_mass_bin_index + chain_search]);
             __builtin_prefetch(&chain_states[next_mass_bin_index], 1);
+            __builtin_prefetch(&mass_intensities[next_mass_bin_index], 1);
           }
         }
 #endif
