@@ -10,6 +10,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
 #include <OpenMS/CONCEPT/Exception.h>
+#include <array>
 #ifdef _OPENMP
   #include <omp.h>
 #endif
@@ -381,20 +382,28 @@ namespace OpenMS
     size_t h_charge_size = harmonic_charges_.size();
     long bin_end = (long)binned_log_masses_.size();
 
-    auto support_peak_count
-      = std::vector<unsigned short>(binned_log_masses_.size(), 0); // per mass bin how many peaks are present to support that mass bin
-
     // to calculate continuous charges, the previous charge value per mass should be stored
     const unsigned short no_charge = (unsigned short)(current_max_charge_ + 2);
     auto prev_charges = std::vector<unsigned short>(binned_log_masses_.size(), no_charge);
 
-    // not just charges but intensities are stored to see the intensity fold change
-    auto prev_intensities = std::vector<float>(binned_log_masses_.size(), .0f);
+    // the rest of the state per mass bin in one struct (one cache line per peak and charge, not one per array), zero-initialized: not just
+    // charges but intensities are stored to see the intensity fold change, how many peaks are present to support that mass bin, and (see
+    // below) the unrounded position of the last peak and the offset to the chain's bin. prev_charges stays apart for the chain search.
+    struct ChainState
+    {
+      float prev_intensity;
+      float prev_residual;
+      unsigned short support_peak_count;
+      short chain_offset;
+    };
+    auto chain_states = std::vector<ChainState>(binned_log_masses_.size());
 
     mass_intensities = std::vector<float>(binned_log_masses_.size(), .0f);
 
     double bin_mul_factor = bin_mul_factors_[ms_level_ - 1];
-    std::vector<float> sub_max_h_intensity(h_charge_size, .0f);
+    // per harmonic charge; fixed size, so that zeroing it per charge is two stores, not a memset call
+    std::array<float, 5> sub_max_h_intensity {};
+    if (h_charge_size != sub_max_h_intensity.size()) { throw Exception::Precondition(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "five harmonic charges"); }
 
     // A high charge (> low_charge_) is accepted only as part of a chain of consecutive charges of one mass, and that continuity is decided
     // on the unrounded masses, not by mass bin identity. A mass bin is the m/z bin of the peak plus the rounded charge offset, so two peaks
@@ -404,9 +413,8 @@ namespace OpenMS
     // (tol_div_factor bins) in unrounded mass, the closest one, and adds to the mass bin of that chain. A low-charge peak (and every peak in
     // MSn) is accepted by its own isotope peaks; there the chain keeps the mass bin identity: with the unrounded rule at every charge,
     // coincidental chains of unrelated peaks took peaks from their own masses (Eclip_1480 MSn: 5% fewer complementary fragment pairs).
-    // Per mass bin: the unrounded position (in bins) of its last peak relative to the bin and the offset from the bin to the chain's bin.
-    auto prev_residuals = std::vector<float>(binned_log_masses_.size(), .0f);
-    auto chain_offsets = std::vector<short>(binned_log_masses_.size(), 0);
+    // Per mass bin (ChainState): the unrounded position (in bins) of its last peak relative to the bin and the offset from the bin to the
+    // chain's bin.
     const double chain_tol = tol_div_factor;                // tolerance in mass bins (= the input ppm tolerance)
     const long chain_search = (long)(chain_tol + 2.0);      // + the two rounding errors (each <= 1/2 bin) of each of the two peaks
     std::vector<double> exact_mass_offsets(current_max_charge_); // unrounded binned_universal_pattern_
@@ -482,9 +490,9 @@ namespace OpenMS
           for (long s = std::max(0L, mass_bin_index - search); s <= std::min(bin_end - 1, mass_bin_index + search); s++)
           {
             if (prev_charges[s] != j - 1) { continue; }
-            const double d = std::abs((double)(mass_bin_index - s) + residual - prev_residuals[s]);
+            const double d = std::abs((double)(mass_bin_index - s) + residual - chain_states[s].prev_residual);
             if (d > chain_tol) { continue; }
-            const bool ratio_ok = get_intensity_ratio(prev_intensities[s]) <= factor;
+            const bool ratio_ok = get_intensity_ratio(chain_states[s].prev_intensity) <= factor;
             if (chain_bin < 0 || (ratio_ok && ! chain_ratio_ok) || (ratio_ok == chain_ratio_ok && d < chain_dist))
             {
               chain_bin = s;
@@ -495,16 +503,17 @@ namespace OpenMS
         }
         const bool charge_continous = chain_bin >= 0;
         // the mass bin this peak adds to: the bin of the chain it continues, else its own
-        const long target_bin = charge_continous ? chain_bin + chain_offsets[chain_bin] : mass_bin_index;
-        unsigned short spc = charge_continous ? support_peak_count[chain_bin] : 0;
-        const float prev_intensity = charge_continous ? prev_intensities[chain_bin] : prev_intensities[mass_bin_index];
+        const long target_bin = charge_continous ? chain_bin + chain_states[chain_bin].chain_offset : mass_bin_index;
+        unsigned short spc = charge_continous ? chain_states[chain_bin].support_peak_count : 0;
+        // read only for a continued chain (below); not loaded otherwise (a cache miss per peak and charge)
+        const float prev_intensity = charge_continous ? chain_states[chain_bin].prev_intensity : .0f;
 
         // intensity of previous charge
         // intensity ratio between current and previous charges
         float intensity_ratio = get_intensity_ratio(prev_intensity);
         float support_peak_intensity = 0;
         // check if peaks of continuous charges are present
-        std::fill(sub_max_h_intensity.begin(), sub_max_h_intensity.end(), .0f);
+        sub_max_h_intensity.fill(.0f);
 
         // if charge not continuous or intensity ratio is too high reset support_peak_count
         if (! charge_continous || intensity_ratio > factor) { spc = 0; }
@@ -520,7 +529,8 @@ namespace OpenMS
         if (! pass_first_check && (abs_charge <= low_charge_ || ms_level_ > 1))
         {
           // find the next isotope peak(s) and try to avoid harmonic masses
-          for (int d = 1; d >= (activeAveragine_().getApexIndex(mz * abs_charge) > 0 ? -1 : 1); d -= 2)
+          const int last_d = activeAveragine_().getApexIndex(mz * abs_charge) > 0 ? -1 : 1; // once, not per loop condition check
+          for (int d = 1; d >= last_d; d -= 2)
           {
             bool iso_exist = false;
             int next_iso_bin = 0;
@@ -665,11 +675,12 @@ namespace OpenMS
         // the chain continues from this peak (its state is kept in the peak's own mass bin); the chain it continued cannot be continued again
         if (charge_continous && chain_bin != mass_bin_index) { prev_charges[chain_bin] = no_charge; }
         if (target_bin != mass_bin_index) { chain_redirects.emplace_back(mz_bin_index * current_max_charge_ + j, target_bin); }
-        prev_intensities[mass_bin_index] = intensity;
+        auto& chain_state = chain_states[mass_bin_index];
+        chain_state.prev_intensity = intensity;
         prev_charges[mass_bin_index] = (unsigned short)j;
-        support_peak_count[mass_bin_index] = spc;
-        prev_residuals[mass_bin_index] = residual;
-        chain_offsets[mass_bin_index] = (short)(target_bin - mass_bin_index);
+        chain_state.support_peak_count = spc;
+        chain_state.prev_residual = residual;
+        chain_state.chain_offset = (short)(target_bin - mass_bin_index);
       }
     }
   }
@@ -677,15 +688,13 @@ namespace OpenMS
   // Subfunction of updateMassBins_. If a peak corresponds to multiple masses, only one mass is selected for the peak based on intensities.
   // mass level harmonic check is also performed in this function
   // it also outputs the charge range of each mass bin
-  Matrix<int> SpectralDeconvolution::filterMassBins_(const std::vector<float>& mass_intensities, std::vector<std::pair<Size, long>>& chain_redirects)
+  std::vector<SpectralDeconvolution::MassBinChargeRange_> SpectralDeconvolution::filterMassBins_(const std::vector<float>& mass_intensities,
+                                                                                                 std::vector<std::pair<Size, long>>& chain_redirects)
   {
     std::sort(chain_redirects.begin(), chain_redirects.end());
     Size redirect_index = 0;
-    Matrix<int> abs_charge_ranges(2, binned_log_masses_.size(), INT_MAX);
-    for (Size i = 0; i < binned_log_masses_.size(); i++)
-    {
-      abs_charge_ranges.setValue(1, (int)i, INT_MIN);
-    }
+    // (mass bin, charge index) per selection, reduced to a charge range per mass bin at the end: no table over all mass bins to fill
+    std::vector<std::pair<Size, int>> selections;
     Size mz_bin_index = binned_log_mz_peaks_.find_first();
     long bin_size = (long)binned_log_masses_.size();
 
@@ -766,31 +775,37 @@ namespace OpenMS
         int max_intensity_abs_charge_range = max_intensity_abs_charge_ranges[i];
         if (max_index >= 0 && max_index < bin_size)
         {
-          abs_charge_ranges.setValue(0, max_index, std::min(abs_charge_ranges.getValue(0, max_index), max_intensity_abs_charge_range));
-          abs_charge_ranges.setValue(1, max_index, std::max(abs_charge_ranges.getValue(1, max_index), max_intensity_abs_charge_range));
+          selections.emplace_back((Size)max_index, max_intensity_abs_charge_range);
           binned_log_masses_[max_index] = true;
         }
       }
       mz_bin_index = binned_log_mz_peaks_.find_next(mz_bin_index);
     }
 
-    return abs_charge_ranges;
+    // per selected mass bin (the set bits of binned_log_masses_, in increasing order) the min and max of its charge indices
+    std::sort(selections.begin(), selections.end());
+    std::vector<MassBinChargeRange_> mass_bin_charge_ranges;
+    mass_bin_charge_ranges.reserve(selections.size());
+    for (const auto& [bin, charge_index] : selections)
+    {
+      if (mass_bin_charge_ranges.empty() || mass_bin_charge_ranges.back().bin != bin) { mass_bin_charge_ranges.push_back({bin, charge_index, charge_index}); }
+      else { mass_bin_charge_ranges.back().max_charge_index = charge_index; }
+    }
+    return mass_bin_charge_ranges;
   }
 
   // update mass bins which will be used to select peaks in the input spectrum...
-  Matrix<int> SpectralDeconvolution::updateMassBins_(const std::vector<float>& mz_intensities)
+  std::vector<SpectralDeconvolution::MassBinChargeRange_> SpectralDeconvolution::updateMassBins_(const std::vector<float>& mz_intensities)
   {
     std::vector<float> mass_intensities;
     std::vector<std::pair<Size, long>> chain_redirects;
     updateCandidateMassBins_(mass_intensities, mz_intensities, chain_redirects); // universal pattern matching
 
-    auto per_mass_abs_charge_ranges = filterMassBins_(mass_intensities, chain_redirects);
-
-    return per_mass_abs_charge_ranges;
+    return filterMassBins_(mass_intensities, chain_redirects);
   }
 
-  // With binned_log_masses_ from updateMassBins_ function, select peaks from the same mass in the original input spectrum
-  void SpectralDeconvolution::getCandidatePeakGroups_(const Matrix<int>& per_mass_abs_charge_ranges)
+  // With the mass bins selected by updateMassBins_, select peaks from the same mass in the original input spectrum
+  void SpectralDeconvolution::getCandidatePeakGroups_(const std::vector<MassBinChargeRange_>& mass_bin_charge_ranges)
   {
     double bin_mul_factor = bin_mul_factors_[ms_level_ - 1];
     double tol = tolerance_[ms_level_ - 1];
@@ -799,8 +814,8 @@ namespace OpenMS
     int log_mz_peak_size = (int)log_mz_peaks_.size();
     // this stores which peak is now being considered per charge. Per charge, peak is considered from left (lowest m/z) to right (highest m/z).
     auto current_peak_index = std::vector<int>(charge_range, 0);
-    deconvolved_spectrum_.reserve(binned_log_masses_.count());
-    Size mass_bin_index = binned_log_masses_.find_first();
+    deconvolved_spectrum_.reserve(mass_bin_charge_ranges.size());
+    Size range_index = 0; // the selected mass bin in mass_bin_charge_ranges
     auto peak_bin_numbers = std::vector<Size>(log_mz_peak_size);
     // per peak, store the m/z bin number for fast processing
     for (int i = 0; i < log_mz_peak_size; i++)
@@ -808,9 +823,11 @@ namespace OpenMS
       peak_bin_numbers[i] = getBinNumber_(log_mz_peaks_[i].logMz, mz_bin_min_value_, bin_mul_factor);
     }
 
-    // main iteration. per_mass_abs_charge_ranges gives the range of charges for each mass bin
-    while (mass_bin_index != binned_log_masses_.npos)
+    // main iteration. mass_bin_charge_ranges gives the range of charges for each mass bin
+    while (range_index < mass_bin_charge_ranges.size())
     {
+      const MassBinChargeRange_& charge_range_of_bin = mass_bin_charge_ranges[range_index];
+      const Size mass_bin_index = charge_range_of_bin.bin;
       double log_m = getBinValue_(mass_bin_index, mass_bin_min_value_, bin_mul_factor);
       double mass = exp(log_m);
 
@@ -823,7 +840,7 @@ namespace OpenMS
       Size left_index = activeAveragine_().getLeftCountFromApex(mass);
 
       // scan through charge - from mass to m/z
-      for (size_t j = per_mass_abs_charge_ranges.getValue(0, mass_bin_index); j <= (size_t)per_mass_abs_charge_ranges.getValue(1, mass_bin_index); j++)
+      for (size_t j = charge_range_of_bin.min_charge_index; j <= (size_t)charge_range_of_bin.max_charge_index; j++)
       {
         int max_peak_index = -1;
         size_t abs_charge = j + 1;
@@ -947,7 +964,7 @@ namespace OpenMS
 
         if (min_off != max_off)
         {
-          PeakGroup pg(1, per_mass_abs_charge_ranges.getValue(1, mass_bin_index) + 1, // make an empty peakGroup (mass)
+          PeakGroup pg(1, charge_range_of_bin.max_charge_index + 1, // make an empty peakGroup (mass)
                        is_positive_);
           pg.setIsotopeDaDistance(iso_da_distance_);
           std::vector<LogMzPeak> exact_peaks(new_peaks.begin(), new_peaks.end());
@@ -961,7 +978,7 @@ namespace OpenMS
           deconvolved_spectrum_.push_back(std::move(pg)); //
         }
       }
-      mass_bin_index = binned_log_masses_.find_next(mass_bin_index);
+      range_index++;
     }
   }
 
@@ -1067,9 +1084,9 @@ namespace OpenMS
     }
 
     // main algorithm to generate mass bins
-    const auto per_mass_abs_charge_ranges = updateMassBins_(binned_log_mz_peak_intensities);
+    const auto mass_bin_charge_ranges = updateMassBins_(binned_log_mz_peak_intensities);
     // main algorithm to generate peak groups
-    getCandidatePeakGroups_(per_mass_abs_charge_ranges);
+    getCandidatePeakGroups_(mass_bin_charge_ranges);
     scoreAndFilterPeakGroups_();
   }
 
