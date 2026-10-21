@@ -479,19 +479,37 @@ namespace OpenMS
         // targets of a vertex are in ascending order
         if (! adjacency_used_)
         {
-          std::sort(edges_.begin(), edges_.end());
-          edges_.erase(std::unique(edges_.begin(), edges_.end()), edges_.end());
           sources_.clear();
           offsets_.clear();
           targets_.clear();
-          for (const auto& [v1, v2] : edges_)
-          {
+          auto add = [this](Size v1, Size v2) {
             if (sources_.empty() || sources_.back() != v1)
             {
               sources_.push_back(v1);
               offsets_.push_back(targets_.size());
             }
             targets_.push_back(v2);
+          };
+          // vertices are below vertex_count_ <= 2^bits: if an edge fits in 64 bits as (vertex1 << bits) | vertex2, the edges are sorted
+          // as these numbers, which order them as the pairs do
+          int bits = 1;
+          while (bits < 64 && (Size(1) << bits) < vertex_count_) bits++;
+          if (2 * bits <= 64)
+          {
+            std::vector<uint64_t> keys(edges_.size());
+            for (Size e = 0; e < edges_.size(); e++) keys[e] = (uint64_t(edges_[e].first) << bits) | uint64_t(edges_[e].second);
+            // not needed any more: an edge makes the adjacency non-empty, so it is never built again (see adjacency_used_)
+            std::vector<std::pair<Size, Size>>().swap(edges_);
+            sortKeys_(keys, 2 * bits);
+            keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+            const uint64_t mask = (uint64_t(1) << bits) - 1;
+            for (uint64_t key : keys) add((Size)(key >> bits), (Size)(key & mask));
+          }
+          else
+          {
+            std::sort(edges_.begin(), edges_.end());
+            edges_.erase(std::unique(edges_.begin(), edges_.end()), edges_.end());
+            for (const auto& [v1, v2] : edges_) add(v1, v2);
           }
           offsets_.push_back(targets_.size());
           adjacency_used_ = ! sources_.empty();
@@ -508,6 +526,37 @@ namespace OpenMS
       std::vector<Size> sources_, offsets_, targets_;
       /// whether the adjacency is built and kept (a search visited a vertex's adjacency, or it has an edge)
       bool adjacency_used_ = false;
+
+      /// sort @p keys (all below 2^@p key_bits) ascending: large ones by an LSD radix sort over bytes (skipping bytes equal in all keys)
+      static void sortKeys_(std::vector<uint64_t>& keys, int key_bits)
+      {
+        if (keys.size() < 16384)
+        {
+          std::sort(keys.begin(), keys.end());
+          return;
+        }
+        const int passes = (key_bits + 7) / 8;
+        std::vector<Size> counts(passes * 256, 0);
+        for (uint64_t key : keys)
+        {
+          for (int p = 0; p < passes; p++) counts[p * 256 + ((key >> (8 * p)) & 255)]++;
+        }
+        std::vector<uint64_t> buffer(keys.size());
+        for (int p = 0; p < passes; p++)
+        {
+          Size* count = counts.data() + p * 256;
+          if (count[(keys[0] >> (8 * p)) & 255] == keys.size()) continue; // the same byte in all keys
+          Size sum = 0;
+          for (int d = 0; d < 256; d++)
+          {
+            const Size n = count[d];
+            count[d] = sum;
+            sum += n;
+          }
+          for (uint64_t key : keys) buffer[count[(key >> (8 * p)) & 255]++] = key;
+          keys.swap(buffer);
+        }
+      }
       /// recursive part for the findAllPaths(..)
       void findAllPaths_(Size current,
                          Size destination,
