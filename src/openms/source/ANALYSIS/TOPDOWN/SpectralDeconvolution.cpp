@@ -453,11 +453,26 @@ namespace OpenMS
       const double log_mz = getBinValue_(mz_bin_index, mz_bin_min_value_, bin_mul_factor); // uncharged log mz;
       const double mz = exp(log_mz);                                                       // uncharged mz
       const double iso_div_by_mz = iso_da_distance_ / mz;
+      // the m/z bin processed next: its mass bins are far from this one's (a cache miss per charge in the arrays over all mass bins), so they
+      // are prefetched one peak ahead, per charge
+      const long next_mz_bin_index = iter + 1 < mz_bin_index_reverse.rend() ? (long)*(iter + 1) : -1;
       // scan through charges
       for (int j = 0; j < current_max_charge_; j++) // loop over all charges
       {
         // mass is given by shifting by binned_universal_pattern_[j]
         const long mass_bin_index = (long)mz_bin_index + binned_universal_pattern_[j];
+#if defined(__GNUC__) || defined(__clang__)
+        if (next_mz_bin_index >= 0)
+        {
+          const long next_mass_bin_index = next_mz_bin_index + binned_universal_pattern_[j];
+          if (next_mass_bin_index >= chain_search && next_mass_bin_index + chain_search < bin_end)
+          {
+            __builtin_prefetch(&prev_charges[next_mass_bin_index - chain_search]);
+            __builtin_prefetch(&prev_charges[next_mass_bin_index + chain_search]);
+            __builtin_prefetch(&chain_states[next_mass_bin_index], 1);
+          }
+        }
+#endif
 
         if (mass_bin_index < 0) { continue; }
         if (mass_bin_index >= bin_end) { break; }
