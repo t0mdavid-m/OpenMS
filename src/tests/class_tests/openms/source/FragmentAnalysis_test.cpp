@@ -7,6 +7,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/CONCEPT/ClassTest.h>
+#include <OpenMS/test_config.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
@@ -17,9 +18,12 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
 #include <OpenMS/DATASTRUCTURES/Param.h>
+#include <OpenMS/FORMAT/MzMLFile.h>
+#include <OpenMS/KERNEL/MSExperiment.h>
 
 #include "FLASHIda_TestAccess.h"   // ExplorationTestAccess::feedResult (private-state access)
 
+#include <algorithm>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -537,6 +541,42 @@ namespace
     return pg;
   }
 
+  /// One spectrum of OpenMS's own FLASHDeconv sample (test data of this repository, not a FlashIDA fixture):
+  /// index 0 is an intact-protein scan that deconvolves at either MS level.
+  struct SampleScan
+  {
+    std::vector<double> mzs;
+    std::vector<double> ints;
+    double rt = 0.0;
+  };
+
+  SampleScan loadSampleScan(Size index)
+  {
+    PeakMap exp;
+    MzMLFile().load(OPENMS_GET_TEST_DATA_PATH("FLASHDeconv_sample_input1.mzML"), exp);
+    SampleScan scan;
+    if (index >= exp.size()) return scan;
+    for (const auto& p : exp[index])
+    {
+      scan.mzs.push_back(p.getMZ());
+      scan.ints.push_back(p.getIntensity());
+    }
+    scan.rt = exp[index].getRT();
+    return scan;
+  }
+
+  std::vector<double> monoMasses(const DeconvolvedSpectrum& spec)
+  {
+    std::vector<double> masses;
+    for (const auto& pg : spec) masses.push_back(pg.getMonoMass());
+    return masses;
+  }
+
+  Size targetedCount(const DeconvolvedSpectrum& spec)
+  {
+    return static_cast<Size>(std::count_if(spec.begin(), spec.end(), [](const PeakGroup& pg) { return pg.isTargeted(); }));
+  }
+
 } // anonymous namespace
 
 
@@ -957,6 +997,69 @@ START_SECTION(narrowFragmentPTMSites)
   // Flip-frame classification (the projection property the old leaf ignored): a raw suffix-family ion ("yb")
   // whose equivalent is a prefix ("b") is a complement flip.
   TEST_TRUE(MS3FragmentMatcher::isPrefixIonType("b") != MS3FragmentMatcher::isPrefixIonType("yb"))
+}
+END_SECTION
+
+START_SECTION(deconvolveMSn_ignores_the_ms1_target_masses)
+{
+  // PrecursorSelection::filterAndRank sets the survey's inclusion targets on the SpectralDeconvolution that
+  // deconvolveMSn shares (engine().setTargetMasses). A target is an intact precursor mass and says nothing
+  // about a fragment, so an MSn deconvolution must come out exactly as if no survey had set any. The targets
+  // here are the very masses the spectrum deconvolves to -- the strongest exposure there is: while the targets
+  // leaked, the targeted pass flagged its masses targeted (and they skipped the charge-error and overlap filters).
+  const SampleScan scan = loadSampleScan(0);
+  ABORT_IF(scan.mzs.empty())
+  const int n = static_cast<int>(scan.mzs.size());
+
+  Config cfg{std::string(fragment_test_config)};
+  Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
+
+  // Two untargeted passes: the first primes the engine (setTargetMasses reads the isotope spacing that a
+  // deconvolution sets), the second is the reference.
+  deconv.deconvolveMSn(scan.mzs.data(), scan.ints.data(), n, scan.rt, 0.0, 0);
+  const int untargeted_count = deconv.deconvolveMSn(scan.mzs.data(), scan.ints.data(), n, scan.rt, 0.0, 0);
+  TEST_EQUAL(untargeted_count > 0, true)
+  const std::vector<double> untargeted = monoMasses(deconv.storedMS2());
+  ABORT_IF(untargeted.empty())
+
+  std::vector<double> targets = untargeted;
+  std::sort(targets.begin(), targets.end());
+  deconv.engine().setTargetMasses(targets, false);   // what filterAndRank leaves on the engine in inclusion mode
+
+  TEST_EQUAL(deconv.deconvolveMSn(scan.mzs.data(), scan.ints.data(), n, scan.rt, 0.0, 0), untargeted_count)
+  TEST_EQUAL(targetedCount(deconv.storedMS2()), 0)
+  const std::vector<double> targeted = monoMasses(deconv.storedMS2());
+  TEST_EQUAL(targeted.size(), untargeted.size())
+  TEST_EQUAL(targeted == untargeted, true)   // the same masses, bit for bit, in the same order
+}
+END_SECTION
+
+START_SECTION(the_ms1_target_masses_still_reach_the_next_survey)
+{
+  // The other half of the contract: deconvolveMSn clears the targets on the shared engine and the caller sets
+  // them again before every survey (filterAndRank), so a survey that follows an MSn scan is still targeted.
+  const SampleScan scan = loadSampleScan(0);
+  ABORT_IF(scan.mzs.empty())
+  const int n = static_cast<int>(scan.mzs.size());
+
+  Config cfg{std::string(fragment_test_config)};
+  Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
+
+  deconv.deconvolveMS1(scan.mzs.data(), scan.ints.data(), n, scan.rt, 0.0);
+  std::vector<double> targets = monoMasses(deconv.deconvolvedMS1());
+  ABORT_IF(targets.empty())
+  std::sort(targets.begin(), targets.end());
+
+  deconv.engine().setTargetMasses(targets, false);   // survey 1
+  deconv.deconvolveMS1(scan.mzs.data(), scan.ints.data(), n, scan.rt, 0.0);
+  TEST_EQUAL(targetedCount(deconv.deconvolvedMS1()) > 0, true)
+
+  deconv.deconvolveMSn(scan.mzs.data(), scan.ints.data(), n, scan.rt, 0.0, 0);   // an MSn scan in between
+  TEST_EQUAL(targetedCount(deconv.storedMS2()), 0)
+
+  deconv.engine().setTargetMasses(targets, false);   // survey 2, as filterAndRank sets them
+  deconv.deconvolveMS1(scan.mzs.data(), scan.ints.data(), n, scan.rt, 0.0);
+  TEST_EQUAL(targetedCount(deconv.deconvolvedMS1()) > 0, true)
 }
 END_SECTION
 

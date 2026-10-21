@@ -19,6 +19,7 @@ set(sources_list_h
         FLASHIda/RefineSettings.h
         FLASHIda/FragmentAnalysis.h
         FLASHIda/IdaLogger.h
+        FLASHIda/LogCell.h
         FLASHIda/MS3FragmentMatcher.h
         FLASHIda/PrecursorSelection.h
         FLASHIda/Quantification.h

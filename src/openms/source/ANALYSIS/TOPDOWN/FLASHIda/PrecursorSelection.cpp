@@ -71,14 +71,14 @@ namespace OpenMS
         int charge;
         while (std::getline(instream, line))
         {
-          // " 0 targets" WITH THE LEADING SPACE — the same anchor as IdaLogger::parseFLASHIdaLog,
-          // and for the same reason: the bare substring also matches "10 targets" / "20 targets".
-          // Here the consequence is different and worse than a mis-keyed map. A dropped header leaves
-          // `rt` at the PREVIOUS header's value (or 0.0 at the head of the file), so those masses are
-          // filed in target_mass_rt_map_ against the wrong retention time — and mode 3 discards
-          // rt == 0 entries outright.
-          if (line.find(" 0 targets") != line.npos)
-            continue;
+          // EVERY MS1 header sets `rt`, a "- 0 targets" one included. This loop used to skip those
+          // headers, copying IdaLogger::parseFLASHIdaLog -- whose skip only keeps target-less scans
+          // out of ITS map. Here a skipped header leaves `rt` at the PREVIOUS header's value, while
+          // the survey's own AllMass= line still follows it (a 0-target survey writes one like any
+          // other), so mode 3 filed that survey's masses under another survey's retention time --
+          // and, before the first header with targets, under 0.0, which filterAndRank applies at
+          // EVERY retention time (`prt != 0`). A 0-target header has no Mass= lines (the writer
+          // prints one per command), so modes 1 and 2 load exactly what they loaded before.
           if (line.hasPrefix("MS1"))
           {
             Size st = line.find("RT ") + 3;
@@ -192,37 +192,7 @@ namespace OpenMS
     excluded_masses_.clear();
     if (config_.targeting().mode == 1)  // Unified inclusion mode (merged mode 4 functionality)
     {
-      active_targets_.clear();
-      target_priority_map_.clear();
-
-      if (!inclusion_targets_.empty())  // TSV-based targets
-      {
-        for (const auto& target : inclusion_targets_)
-        {
-          if (target.isActiveAt(rt))
-          {
-            active_targets_.push_back(&target);
-            target_masses_.push_back(target.mass);
-
-            // Build priority map for tie-breaking (use highest priority for each nominal mass)
-            int nominal = SpectralDeconvolution::getNominalMass(target.mass);
-            if (target_priority_map_.find(nominal) == target_priority_map_.end()
-                || target.priority > target_priority_map_[nominal])
-            {
-              target_priority_map_[nominal] = target.priority;
-            }
-          }
-        }
-      }
-      else  // Legacy .log/.out targets (existing behavior)
-      {
-        for (const auto& [mass, rts] : target_mass_rt_map_)
-        {
-          target_masses_.push_back(mass);
-        }
-      }
-
-      std::sort(target_masses_.begin(), target_masses_.end());
+      collectInclusionTargets_(rt);
       deconv_.engine().setTargetMasses(target_masses_, false);
     }
     else if (config_.targeting().mode == 3)
@@ -247,6 +217,47 @@ namespace OpenMS
     return (int)selected_peak_groups_.size();
   }
 
+  void PrecursorSelection::collectInclusionTargets_(double rt)
+  {
+    target_masses_.clear();
+    active_targets_.clear();
+    target_priority_map_.clear();
+
+    // An active row's mass, and its priority for tie-breaking (the highest per nominal mass).
+    auto addActive = [&](const InclusionTarget& target) {
+      if (!target.isActiveAt(rt)) return;
+      active_targets_.push_back(&target);
+      target_masses_.push_back(target.mass);
+      int nominal = SpectralDeconvolution::getNominalMass(target.mass);
+      if (target_priority_map_.find(nominal) == target_priority_map_.end()
+          || target.priority > target_priority_map_[nominal])
+      {
+        target_priority_map_[nominal] = target.priority;
+      }
+    };
+
+    if (!inclusion_targets_.empty())  // TSV-based targets
+    {
+      for (const auto& target : inclusion_targets_) addActive(target);
+    }
+    else  // Legacy .log/.out targets (existing behavior)
+    {
+      for (const auto& [mass, rts] : target_mass_rt_map_)
+      {
+        target_masses_.push_back(mass);
+      }
+    }
+
+    // The tag-expanded targets ADD to the reference list, whichever it is. Read from their own
+    // container: in inclusion_targets_ they made the TSV branch above fire and silently replaced
+    // the ida.log targets. The order of active_targets_ decides nothing (target_masses_ is sorted
+    // below, the priority map keeps the maximum, authoredChargesFor_ takes a sorted union), so a
+    // TSV run sees exactly what it saw when these rows were interleaved with its own.
+    for (const auto& target : dynamic_targets_) addActive(target);
+
+    std::sort(target_masses_.begin(), target_masses_.end());
+  }
+
   void PrecursorSelection::filterPeakGroupsUsingMassExclusion_(const int ms_level, const double rt)
   {
     // The RANKING sort now lives in Deconvolution.h so the observing arm can share it -- a monitor
@@ -255,8 +266,10 @@ namespace OpenMS
     // The inclusion-priority stable_sort immediately below stays HERE: it is a selection decision.
     sortByLevelMetric(deconv_.deconvolvedMS1(), config_, ms_level);
 
-    // Apply priority tie-breaking when TSV targets are loaded
-    if (config_.targeting().mode == 1 && !inclusion_targets_.empty())
+    // Apply priority tie-breaking when TSV or tag-expanded targets exist (the ida.log targets carry
+    // no priority). The second operand keeps it on wherever it was on while the tag-expanded rows
+    // lived in inclusion_targets_.
+    if (config_.targeting().mode == 1 && (!inclusion_targets_.empty() || !dynamic_targets_.empty()))
     {
       std::stable_sort(deconv_.deconvolvedMS1().begin(), deconv_.deconvolvedMS1().end(),
         [this](const PeakGroup& a, const PeakGroup& b) {
@@ -285,7 +298,6 @@ namespace OpenMS
     trigger_ids_.reserve(mass_count);
     trigger_authored_charges_.clear();
     trigger_authored_charges_.reserve(mass_count);
-    std::vector<int>* charges = nullptr;
 
     selected_peak_groups_.reserve(mass_count);
     // What THIS survey has already done to each species, keyed by nominal mass (ADR-0036).
@@ -390,6 +402,17 @@ namespace OpenMS
     // for target inclusive masses, qscore precursor snr threshold is not applied.
     // In all phase, for target exclusive mode, all the exclusive masses are excluded. For target inclusive mode, only the target masses are considered.
 
+    // The SURVEY's species count, shared by every pass below. Two configurations walk the candidate
+    // list more than once in one survey: in-depth mode (iteration 0, then the back-fill iteration 1)
+    // and non-strict inclusion with live targets (phase 0 for targets, phase 1 for everything else).
+    // A later pass may only fill the slots an earlier one left, and for single and multiplexed that
+    // has always held, because their per-charge guard below reads selected_peak_groups_.size(),
+    // which is per survey. "separate" skips that guard (it pushes once per CHARGE), and the
+    // per-pass species_selected that bounds it instead restarted at 0 on every pass -- so each
+    // pass spent max_precursors afresh and a survey could fragment twice the authored number of
+    // species. This counter is what the per-charge guard reads for "separate".
+    Size species_in_survey = 0;
+
     for (int iteration = config_.targeting().mode == 2 ? 0 : 1; iteration < 2; iteration++)
     // for mass exclusion, first collect masses with exclusion list. Then collect without exclusion. This works the best
     {
@@ -412,6 +435,7 @@ namespace OpenMS
         // in a single scan. Counting acquisitions instead would make max_precursors: 3 spend everything
         // on the first species the moment it had three charges. In every other mode a PeakGroup pushes at
         // most once, so this equals selected_peak_groups_.size() and nothing changes.
+        // Counted per PASS; the survey-wide count is species_in_survey above.
         Size species_selected = 0;
 
         // Did the candidate list end because the slot budget ran out, rather than because it ran
@@ -478,18 +502,27 @@ namespace OpenMS
             // No budget check for the additional charges of THIS species under "separate": the slot was
             // already paid for by the per-PeakGroup guard above, and the mode's contract is the whole
             // SNR-positive envelope. The set is bounded by the observed charge range and the SNR gate.
-            if (config_.targeting().precursor_charges != ChargeAcquisitionMode::Separate
-                && selected_peak_groups_.size() >= mass_count) { break; }
+            //
+            // The SURVEY-wide budget, which is what lets a later pass fill only what is left. single
+            // and multiplexed push once per PeakGroup, so their acquisition count is the budget, as it
+            // always was. "separate" pushes once per charge, so its budget is the survey's species
+            // count: within the first pass it equals species_selected and this check cannot fire
+            // before the per-PeakGroup guard does; it only stops a later pass from spending the
+            // budget a second time.
+            const bool survey_budget_spent =
+                config_.targeting().precursor_charges == ChargeAcquisitionMode::Separate
+                    ? species_in_survey >= mass_count
+                    : selected_peak_groups_.size() >= mass_count;
+            if (survey_budget_spent) { break; }
             int charge = cc.charge;
             double score = cc.score;
 
             // Per-level charge filter: ms1.min_charge controls what MS1 picks.
             //
             // Kept HERE, ahead of the geometry, rather than relying on admitCandidate's own copy of
-            // the same rule. Moving it down would let a below-floor candidate reach the legacy
-            // charge-list matching below, which assigns the `charges` pointer -- and that pointer
-            // outlives this iteration, so a later candidate would erase from a list an earlier,
-            // refused one had selected. admitCandidate re-checks the floor because it must be
+            // the same rule. It used to guard the legacy charge-list matching below, whose `charges`
+            // pointer outlived the candidate; that pointer is now per candidate, so the placement is
+            // simply the original order. admitCandidate re-checks the floor because it must be
             // decidable on its own; that copy is unreachable from here and is meant to be.
             if (config_.level(ms_level).min_charge > 0 && charge < config_.level(ms_level).min_charge)
               continue;
@@ -506,6 +539,14 @@ namespace OpenMS
 
             int nominal_mass = SpectralDeconvolution::getNominalMass(mass);
             bool target_matched = false;
+            // The charge list of the legacy ida.log target THIS candidate is checked against (its Z=
+            // values, target_mass_charge_map_), or null. Declared per candidate: it used to be declared
+            // once per survey, so a candidate that matched no target -- admitted as a non-target in
+            // non-strict inclusion's phase 1 -- still held the list an EARLIER candidate had looked at,
+            // and the erase after admission took this candidate's charge out of that unrelated target
+            // for the rest of the run. Strict inclusion admits matched candidates only, and every match
+            // assigns the pointer first, so it never saw a stale one.
+            std::vector<int>* charges = nullptr;
             double snr_threshold = config_.targeting().snr_threshold;
             double qscore_threshold = config_.targeting().qscore_threshold;
             double tqscore_factor_for_exclusion = 1.0;
@@ -558,6 +599,15 @@ namespace OpenMS
                         {
                           target_matched = true;
                         }
+                      }
+                      else
+                      {
+                        // A tag-expanded target among the ida.log ones (collectInclusionTargets_):
+                        // a mass hypothesis with no charge list, matched on mass alone, as the TSV
+                        // path matches it. `charges` is cleared so the erase below cannot take this
+                        // charge out of a list an earlier candidate pointed it at.
+                        charges = nullptr;
+                        target_matched = true;
                       }
                     }
                     else  // Legacy mode without charge (mass-only matching)
@@ -925,7 +975,10 @@ namespace OpenMS
           // survey 20 of the inclusion golden carries five PeakGroups at 12351.30x against
           // max_precursors 5 -- and would contradict the admission decision in the same breath.
           if (selected_peak_groups_.size() > pushed_before_pg && !verdict_was_sibling)
+          {
             ++species_selected;
+            ++species_in_survey;
+          }
         }
 
         // The slot budget ended the candidate list while a named charge was still owed (ADR-0036).
@@ -973,30 +1026,45 @@ namespace OpenMS
 
   void PrecursorSelection::removeFromExclusionList(int id)
   {
-    // Check if id is valid
-    if (id >= memory_.window_id_) { return; }
+    // Only an id this class recorded has anything to undo. Looked up with find(), not operator[]: the
+    // old `id >= window_id_` guard let a negative id through, and operator[] then default-inserted a
+    // record for it -- nominal mass 0, m/z 0 -- into acquisition memory.
+    const auto mass_it = memory_.id_mass_map_.find(id);
+    if (mass_it == memory_.id_mass_map_.end()) { return; }
+    const int nominal_mass = mass_it->second;
+    const int integer_mz = memory_.id_mz_map_[id];
+    const double qscore = memory_.id_qscore_map_[id];
+    const int charge = memory_.id_charge_map_[id];
 
-    // Obtain information needed for removal
-    int nominal_mass = memory_.id_mass_map_[id];
-    int integer_mz = memory_.id_mz_map_[id];
-    double qscore = memory_.id_qscore_map_[id];
-
-    // Remove from mass exclusion
-    if (memory_.tqscore_exceeding_mass_rt_map_.find(nominal_mass) != memory_.tqscore_exceeding_mass_rt_map_.end())
-    {
-      memory_.tqscore_exceeding_mass_rt_map_.erase(nominal_mass);
-    }
-
-    // Remove from mz exclusion
-    if (memory_.tqscore_exceeding_mz_rt_map_.find(integer_mz) != memory_.tqscore_exceeding_mz_rt_map_.end()) { memory_.tqscore_exceeding_mz_rt_map_.erase(integer_mz); }
+    // The two dynamic-exclusion bars.
+    memory_.tqscore_exceeding_mass_rt_map_.erase(nominal_mass);
+    memory_.tqscore_exceeding_mz_rt_map_.erase(integer_mz);
 
     // Remove the per-charge entry an authored charge set would have written (ADR-0028). Keyed on
     // the charge this very window isolated, so the named charge becomes selectable again rather
     // than the whole set.
-    memory_.authored_acquired_rt_map_.erase({nominal_mass, memory_.id_charge_map_[id]});
+    memory_.authored_acquired_rt_map_.erase({nominal_mass, charge});
 
-    // Remove qscore from further calculations
-    if (memory_.mass_qscore_map_.find(nominal_mass) != memory_.mass_qscore_map_.end()) { memory_.mass_qscore_map_[nominal_mass] /= 1 - qscore; }
+    // The qscore ledger holds the score the species was LAST admitted at: admitCandidate admits only
+    // a score >= the stored one and the caller then overwrites it (`4457abeb4c change algorithm to
+    // max qscore`). This used to divide the stored value by (1 - qscore), the inverse of the running
+    // product 1 - prod(1 - q_i) the ledger held before that change. Against a stored SCORE the
+    // division RAISES the bar -- 0.6 / (1 - 0.6) = 1.5, which no survey reaches before the entry
+    // expires -- so "remove" barred the mass harder than the acquisition had, and qscore 1 divided by
+    // zero. A maximum cannot be un-taken, so the inverse is to forget the entry when THIS window set
+    // it; a later acquisition of the same mass that stored another score is not being removed and
+    // keeps its bar.
+    const auto bar_it = memory_.mass_qscore_map_.find(nominal_mass);
+    if (bar_it != memory_.mass_qscore_map_.end() && bar_it->second == qscore)
+    {
+      memory_.mass_qscore_map_.erase(bar_it);
+    }
+
+    // The record is consumed, so a second call for the same id undoes nothing twice.
+    memory_.id_mass_map_.erase(id);
+    memory_.id_mz_map_.erase(id);
+    memory_.id_qscore_map_.erase(id);
+    memory_.id_charge_map_.erase(id);
   }
 
   std::vector<int> PrecursorSelection::authoredChargesFor_(double mass, double delta) const
@@ -1210,10 +1278,11 @@ namespace OpenMS
                                               double rt,
                                               int priority)
   {
-    // Add new targets to inclusion list
+    // Add new targets to the dynamic inclusion list.
     // Note: target_masses_ and deconv_.engine().setTargetMasses() are managed by filterAndRank()
-    // which clears and rebuilds them from inclusion_targets_ on each MS1 scan.
-    // We only need to add to inclusion_targets_ here.
+    // which clears and rebuilds them (collectInclusionTargets_) on each MS1 scan from the reference
+    // targets PLUS these. NOT into inclusion_targets_: a non-empty inclusion_targets_ means "a TSV
+    // list was loaded" there, so one detection used to drop every ida.log target of the run.
     for (double mass : masses)
     {
       InclusionTarget target;
@@ -1225,12 +1294,8 @@ namespace OpenMS
       target.rt_end = rt + config_.targeting().rt_window;
       target.priority = priority;
 
-      inclusion_targets_.push_back(target);
+      dynamic_targets_.push_back(target);
     }
-
-    // Re-sort inclusion_targets_ by mass for efficient lookup
-    std::sort(inclusion_targets_.begin(), inclusion_targets_.end(),
-      [](const InclusionTarget& a, const InclusionTarget& b) { return a.mass < b.mass; });
 
     std::cout << "Added " << masses.size() << " dynamic target masses (RT window: "
               << rt << "-" << (rt + config_.targeting().rt_window) << "s)\n";
@@ -1298,7 +1363,6 @@ namespace OpenMS
     std::set<Size> matched_protein_indices;
     for (const auto& tag : tags)
     {
-      std::cout << tag.getSequence() << std::endl;
       for (Size protein_idx = 0; protein_idx < protein_seqs.size(); ++protein_idx)
       {
         const String& pseq = protein_seqs[protein_idx];

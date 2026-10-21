@@ -34,6 +34,7 @@
 
 #pragma once
 
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/LogCell.h>
 #include <OpenMS/CONCEPT/Constants.h>
 #include <OpenMS/CONCEPT/Exception.h>
 #include <OpenMS/DATASTRUCTURES/String.h>
@@ -130,8 +131,10 @@ namespace OpenMS
     }
 
     /// Read a scan_commands.tsv. Columns are resolved BY HEADER NAME, so a reorder is free and every file the
-    /// engine has ever written parses. Throws FileNotFound, ParseError (a missing required column, a short or
-    /// long row, a non-numeric cell) or InvalidValue (a duplicate tracking_id).
+    /// engine has ever written parses. The two id cells are unquoted with unquoteLogId (LogCell.h): ids 8,836
+    /// to 17,671 begin with '"' and are written quoted; a file written before that holds them raw.
+    /// Throws FileNotFound, ParseError (a missing required column, a short or long row, a non-numeric cell)
+    /// or InvalidValue (a duplicate tracking_id).
     static std::map<std::string, Row> parse(const std::string& path)
     {
       std::ifstream in(path);
@@ -165,8 +168,8 @@ namespace OpenMS
                                       String("line ") + line_no + " has " + cell.size() + " cells, the header has " + header.size());
         }
         Row r;
-        r.tracking_id = cell[col["tracking_id"]];
-        r.parent_tracking_id = cell[col["parent_tracking_id"]];
+        r.tracking_id = unquoteLogId(cell[col["tracking_id"]]);
+        r.parent_tracking_id = unquoteLogId(cell[col["parent_tracking_id"]]);
         try
         {
           r.ms_level = String(cell[col["ms_level"]]).toInt();

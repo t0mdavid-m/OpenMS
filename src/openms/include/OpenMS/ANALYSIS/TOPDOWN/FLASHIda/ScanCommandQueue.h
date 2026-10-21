@@ -152,10 +152,38 @@ namespace OpenMS
       std::lock_guard<std::mutex> lock(queue_mutex_);
       auto it = pending_scan_map_.find(id);
       if (it == pending_scan_map_.end()) return std::nullopt;
-      return it->second;
+      return it->second.cmd;
     }
 
-    /// Remove expired commands from pending_scan_map_ using timeout_ms
+    /**
+     * @brief How many commands may be SENT after an unanswered one before the engine stops waiting
+     * for it.
+     *
+     * pending_scan_map_ is only ever emptied by an answer (resolvePending) or an exploration abort
+     * (cancelByScanIds), so a command whose scan never comes back -- dropped by the host or the
+     * instrument, or simply not fed, as in every MS1-only replay -- used to stay for the life of the
+     * engine, ~2 KB each. Every registration is therefore numbered, and every
+     * IN_FLIGHT_SWEEP_EVERY registrations the entries more than MAX_IN_FLIGHT registrations old are
+     * dropped with a `[TRACK-LOST]` line. A result that does arrive later is then refused at the
+     * not_found gate, exactly as an id the engine never minted is.
+     *
+     * Counted in commands SENT, not in time, on purpose: an instrument pause or a slow (-O0) test
+     * build cannot age an entry, and the bound holds for a replay that runs faster than real time.
+     * The instrument holds a handful of scans in flight; 10000 later commands is about an hour of a
+     * top-down lysate run (the Eclip runs acquired ~14,700 scans in 90 min) and still ten minutes at
+     * 15 scans/s, far beyond any processScan backlog the host's queue could hold. The map stays
+     * below MAX_IN_FLIGHT + IN_FLIGHT_SWEEP_EVERY entries (~23 MB at 2 KB per command).
+     *
+     * Deliberately NOT tied to scheduling.scan_timeout. That timeout drops QUEUED commands that
+     * waited too long to be worth sending (cleanupExpired); an in-flight command was already sent,
+     * its scan is real data, and dropping its context after 30 s would discard results that are
+     * merely late.
+     */
+    static constexpr uint64_t MAX_IN_FLIGHT = 10000;
+    static constexpr uint64_t IN_FLIGHT_SWEEP_EVERY = 1024;
+
+    /// Drop QUEUED commands that waited longer than scheduling.scan_timeout, when that timeout is
+    /// enabled. In-flight commands (pending_scan_map_) are not touched here; see MAX_IN_FLIGHT.
     void cleanupExpired();
 
     /// Take (find + erase + return) the wide MS3 fragment ProForma stashed for @p scan_id at buildMS3 time;
@@ -271,8 +299,19 @@ namespace OpenMS
     /// as well as the fresh engine.
     int tracking_id_counter_ = 1;
 
-    /// Map of tracking ID -> ScanCommand for pending (in-flight) scans
-    std::unordered_map<int, ScanCommand> pending_scan_map_;
+    /// One in-flight command and its registration number (pending_registrations_ at the time).
+    struct PendingEntry
+    {
+      ScanCommand cmd;
+      uint64_t registration = 0;
+    };
+
+    /// Map of tracking ID -> pending (in-flight) command
+    std::unordered_map<int, PendingEntry> pending_scan_map_;
+
+    /// Registrations into pending_scan_map_ so far (dequeue_ and registerPending). Numbers the
+    /// entries for the MAX_IN_FLIGHT sweep.
+    uint64_t pending_registrations_ = 0;
 
     /// scan_id -> wide MS3 fragment ProForma, stashed at buildMS3 time, drained by takeMS3Proteoform for
     /// the scan_commands.tsv ms3_proteoform column. Only MS3 commands ever have an entry. Guarded by queue_mutex_.
@@ -301,6 +340,10 @@ namespace OpenMS
     /// non-recursive, so it could not simply call the public wrappers.
     void push_(ScanCommand cmd);
     std::optional<ScanCommand> dequeue_();
+
+    /// Insert @p cmd into pending_scan_map_ and, every IN_FLIGHT_SWEEP_EVERY registrations, drop the
+    /// entries more than MAX_IN_FLIGHT registrations old. Caller must hold queue_mutex_.
+    void registerPending_(const ScanCommand& cmd);
 
   };
 

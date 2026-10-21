@@ -19,9 +19,12 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <mutex>
+#include <utility>
+#include <vector>
 
 namespace OpenMS
 {
@@ -61,6 +64,23 @@ namespace OpenMS
     /// reading the map, so the test exercises the same path the drain does.
     static int precursorIdFor(const FLASHIda& f, int tracking_id) { return f.precursorIdForTracking_(tracking_id); }
 
+    // ---- The target-log loader (PrecursorSelection's constructor, targeting.target_log_files) --------
+
+    /// What the loader filed for exclusion_masses (mode 3): survey rt in SECONDS -> that survey's
+    /// AllMass= masses. Taken from a PrecursorSelection, not a FLASHIda, so a test can build one from a
+    /// Config alone -- the loader needs no spectrum.
+    static std::map<double, std::vector<double>> exclusionRtMasses(const PrecursorSelection& s)
+    {
+      return s.exclusion_rt_masses_map_;
+    }
+
+    /// What the loader filed for inclusion / in_depth (modes 1, 2): reference mass -> the rts (SECONDS)
+    /// of its Mass= lines.
+    static std::map<double, std::vector<double>> targetMassRts(const PrecursorSelection& s)
+    {
+      return s.target_mass_rt_map_;
+    }
+
     // ---- ADR-0042: the monitor scan's two observables --------------------------------------------
 
     /// The engine's ACQUISITION MEMORY -- everything PrecursorSelection remembers across surveys.
@@ -75,6 +95,11 @@ namespace OpenMS
     /// Next precursor id the engine would mint. Part of the neutrality fingerprint: a monitor scan
     /// must not consume one, and an id counter that moved is the cheapest evidence that it selected.
     static int nextPrecursorId(const FLASHIda& f) { return f.next_precursor_id_; }
+
+    /// A PrecursorSelection's acquisition memory, WRITABLE. For a member that no engine path reaches --
+    /// removeFromExclusionList has had no caller since its C export was removed -- the only way to
+    /// exercise it is to lay down the record a survey would have written and call it directly.
+    static PrecursorSelection::SurveyMemory& selectionMemory(PrecursorSelection& s) { return s.memory_; }
 
     /// The FAIMS wheel's current CV. A monitor scan must not advance it (advanceToNextCV lives on the
     /// survey arm), so this is the third leg of the fingerprint.
@@ -102,6 +127,31 @@ namespace OpenMS
     /// monitor_ms1, which is what makes the feature free when off.
     static bool hasMonitorDeconv(const FLASHIda& f) { return f.monitor_deconv_ != nullptr; }
 
+    // ---- One survey's selection on chosen PeakGroups (PrecursorSelection) -------------------------
+
+    /// Run one MS1 survey's selection at @p rt (SECONDS) on @p peak_groups in place of a deconvolved
+    /// spectrum, and return how many acquisitions it selected. filterAndRank runs first on an EMPTY
+    /// spectrum: that rebuilds the survey's target list exactly as a real survey does and deconvolves
+    /// nothing. The PeakGroups then go where the deconvolution leaves its result, and the selection
+    /// proper runs on them -- so order, masses and charges are the test's, not a fixture's.
+    static int selectFrom(PrecursorSelection& s, const std::vector<PeakGroup>& peak_groups, double rt)
+    {
+      s.filterAndRank(nullptr, nullptr, 0, rt, 1, 0.0);
+      DeconvolvedSpectrum& ms1 = s.deconv_.deconvolvedMS1();
+      ms1.clear();
+      for (const PeakGroup& pg : peak_groups) ms1.push_back(pg);
+      s.selected_peak_groups_.clear();
+      s.filterPeakGroupsUsingMassExclusion_(1, rt);
+      return (int)s.selected_peak_groups_.size();
+    }
+
+    /// The legacy ida.log targets' charge lists (inclusion mode with target_logs): reference mass ->
+    /// the Z= values still owed. A matched candidate's acquisition erases its charge from the list.
+    static std::map<double, std::vector<int>> targetMassCharges(const PrecursorSelection& s)
+    {
+      return s.target_mass_charge_map_;
+    }
+
     /// Retention time stamped on each of the two MS1 deconvolution results. This is the ONLY
     /// observable that separates the two MS1 arms unconditionally.
     ///
@@ -119,6 +169,56 @@ namespace OpenMS
     static double monitorDeconvRT(const FLASHIda& f)
     {
       return f.monitor_deconv_ ? f.monitor_deconv_->deconvolvedMS1().getOriginalSpectrum().getRT() : -1.0;
+    }
+
+    // ---- Precursor selection on a caller-built survey --------------------------------------------
+
+    /// Run ONE survey's precursor selection on a deconvolved MS1 the caller built, skipping the
+    /// deconvolution. Returns one (monoisotopic mass, isolated charge) pair per acquisition the survey
+    /// emitted, in emit order -- under "separate" a species contributes one pair per charge.
+    ///
+    /// It is filterAndRank minus deconvolveMS1: the selection is cleared, the engine's deconvolved
+    /// MS1 is replaced, and the same filterPeakGroupsUsingMassExclusion_ runs with the engine's own
+    /// config and acquisition memory. It exists because a synthetic PeakGroup can put more
+    /// resolvable species into one survey than any committed fixture does (ms1_standard yields <= 1
+    /// selectable mass per scan, ms1_cytc one species), and the slot budget only matters once there
+    /// are more species than slots.
+    ///
+    /// @p target_masses stands in for the list filterAndRank builds for inclusion mode from target
+    /// logs (mass-only matching); leave it empty for every other mode. With it non-empty and
+    /// strict_inclusion false, the survey runs both the target phase and the non-target phase.
+    static std::vector<std::pair<double, int>> selectFromDeconvolved(FLASHIda& f, const DeconvolvedSpectrum& ms1,
+                                                                     double rt,
+                                                                     std::vector<double> target_masses = {})
+    {
+      PrecursorSelection& sel = f.selection_;
+      std::sort(target_masses.begin(), target_masses.end());
+      sel.target_masses_ = std::move(target_masses);
+      sel.selected_peak_groups_.clear();
+      sel.deconv_.deconvolvedMS1() = ms1;
+      sel.filterPeakGroupsUsingMassExclusion_(1, rt);
+
+      std::vector<std::pair<double, int>> out;
+      const std::vector<int>& charges = sel.triggerCharges();
+      for (size_t i = 0; i < sel.selected_peak_groups_.size() && i < charges.size(); ++i)
+        out.emplace_back(sel.selected_peak_groups_[i].getMonoMass(), charges[i]);
+      return out;
+    }
+
+    // ---- FASTA tag-based targeting: what an inclusion-mode survey matches against -----------------
+
+    /// Add tag-expanded targets exactly as a tag detection does (PrecursorSelection::addDynamicTargets_).
+    static void addDynamicTargets(PrecursorSelection& s, const std::vector<double>& masses, double rt, int priority)
+    {
+      s.addDynamicTargets_(masses, rt, priority);
+    }
+
+    /// The sorted target masses of an inclusion-mode survey at @p rt (seconds) -- the list filterAndRank
+    /// hands the deconvolution engine and matches every candidate against.
+    static std::vector<double> inclusionTargetMasses(PrecursorSelection& s, double rt)
+    {
+      s.collectInclusionTargets_(rt);
+      return s.target_masses_;
     }
   };
 

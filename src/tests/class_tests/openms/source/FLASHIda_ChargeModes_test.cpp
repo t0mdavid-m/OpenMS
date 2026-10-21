@@ -207,6 +207,66 @@ namespace
   {
     return runInterleaved(&ida, scans, {}, nullptr, /*max_iters=*/4000);
   }
+
+  // ---- A survey with more species than slots (CM-12, CM-13) -------------------------------------
+  //
+  // No committed fixture has one: ms1_standard yields <= 1 selectable mass per scan and ms1_cytc is
+  // one species. So these build the deconvolved survey directly and run the engine's own selection
+  // on it (FLASHIdaTestAccess::selectFromDeconvolved), which needs no fixture at all.
+
+  /// A synthetic MS1 PeakGroup resolving every charge in [z_lo, z_hi]. Three peaks per charge, as in
+  /// FLASHIda_CandidateAdmission_test's makeEnvelope: with one peak getMzRange returns {mz, mz},
+  /// which every consumer reads as "not resolved", and the fan-out would silently shrink to the anchor.
+  PeakGroup syntheticSpecies(double mono_mass, int z_lo, int z_hi, double qscore)
+  {
+    const double proton = 1.00727646677;
+    const double iso_gap = 1.00235;
+    PeakGroup pg(z_lo, z_hi, true);
+    pg.setMonoisotopicMass(mono_mass);
+    for (int z = z_lo; z <= z_hi; ++z)
+    {
+      for (int iso = 0; iso < 3; ++iso)
+      {
+        FLASHHelperClasses::LogMzPeak lp;
+        lp.mz = (mono_mass + z * proton + iso * iso_gap) / z;
+        lp.abs_charge = z;
+        pg.push_back(lp);
+      }
+      pg.setChargeSNR(z, 10.0f);
+      pg.setChargeIsotopeCosine(z, 0.99f);
+    }
+    pg.setQscore(qscore);
+    pg.setRepAbsCharge(z_lo);
+    return pg;
+  }
+
+  /// Six well-separated species, each resolved at charges 8..11, with strictly decreasing qscores so
+  /// the ranking is total: rank k is mass 10000 + 1500 k.
+  const int syn_species = 6;
+  double synMass(int k) { return 10000.0 + 1500.0 * k; }
+
+  DeconvolvedSpectrum syntheticSurvey()
+  {
+    DeconvolvedSpectrum ds(1);
+    for (int k = 0; k < syn_species; ++k)
+      ds.push_back(syntheticSpecies(synMass(k), 8, 11, 0.95 - 0.01 * k));
+    return ds;
+  }
+
+  /// The species (rounded masses) one survey acquired.
+  std::set<long long> speciesOf(const std::vector<std::pair<double, int>>& acquisitions)
+  {
+    std::set<long long> out;
+    for (const auto& a : acquisitions) out.insert(std::llround(a.first));
+    return out;
+  }
+
+  /// One survey of a fresh engine on the synthetic spectrum. @p targets as in selectFromDeconvolved.
+  std::vector<std::pair<double, int>> selectSynthetic(const std::string& cfg, std::vector<double> targets = {})
+  {
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    return FLASHIdaTestAccess::selectFromDeconvolved(ida, syntheticSurvey(), /*rt=*/60.0, std::move(targets));
+  }
 }
 
 START_TEST(FLASHIda_ChargeModes, "$Id$")
@@ -723,6 +783,71 @@ START_SECTION(max_charge_states_caps_the_acquired_set)
   for (const auto& kv : cgroups) capped_widest = std::max(capped_widest, kv.second.size());
   TEST_EQUAL(capped_widest <= 3, true)   // 4 here means the -1 was dropped at the call site
   TEST_EQUAL(capped_widest, 3)           // and the cap is REACHED, so it is not merely unreachable
+}
+END_SECTION
+
+// CM-12: max_precursors is a budget per SURVEY under "separate" too, when the survey walks the
+// candidate list twice. In-depth mode does: iteration 0, then the back-fill iteration 1, which may
+// only fill what iteration 0 left. "separate" skips the acquisition-count guard that bounds single and
+// multiplexed across both passes, and its own species count restarted at 0 on the second pass, so
+// with six eligible species and max_precursors 2 it fragmented FOUR species (16 scans) per survey.
+//
+// Multiplexed is the reference: ADR-0016 says the two modes acquire the same species and charge
+// sets and differ only in scan count. No fixture: the survey is built from synthetic PeakGroups.
+START_SECTION(separate_respects_the_survey_budget_in_depth_mode)
+{
+  const std::vector<std::pair<double, int>> sep = selectSynthetic(cfgFor("separate", "in_depth", "", /*max_precursors=*/2));
+  const std::vector<std::pair<double, int>> mux = selectSynthetic(cfgFor("multiplexed", "in_depth", "", 2));
+  const std::vector<std::pair<double, int>> one = selectSynthetic(cfgFor("single", "in_depth", "", 2));
+
+  // Non-vacuity: "separate" really fans out here (four charges per species), and the budget is
+  // really contended (six eligible species against two slots).
+  TEST_EQUAL(sep.size() > speciesOf(sep).size(), true)
+  TEST_EQUAL((int)speciesOf(one).size(), 2)
+
+  if (speciesOf(sep).size() > 2)
+    std::cout << "[CM-12] separate acquired " << speciesOf(sep).size() << " species in one survey "
+              << "against max_precursors 2 -- the back-fill iteration spent the budget again" << std::endl;
+  TEST_EQUAL((int)speciesOf(sep).size(), 2)
+  TEST_EQUAL((int)sep.size(), 8)   // 2 species x charges 8..11
+  TEST_EQUAL(speciesOf(sep) == speciesOf(mux), true)
+  TEST_EQUAL(speciesOf(sep) == speciesOf(one), true)
+  TEST_EQUAL(speciesOf(sep).count(std::llround(synMass(0))) == 1 && speciesOf(sep).count(std::llround(synMass(1))) == 1, true)
+}
+END_SECTION
+
+// CM-13: the same budget under NON-STRICT inclusion, the other configuration with two passes: phase 0
+// takes the targets, phase 1 everything else. One target (rank 4) and max_precursors 2 leave ONE slot
+// for phase 1. Under the defect "separate" restarted its count in phase 1 and took two non-targets,
+// three species in all.
+START_SECTION(separate_respects_the_survey_budget_under_non_strict_inclusion)
+{
+  const std::vector<double> targets {synMass(4)};
+  const std::vector<std::pair<double, int>> sep =
+      selectSynthetic(cfgFor("separate", "inclusion", "", /*max_precursors=*/2, /*strict_inclusion=*/false), targets);
+  const std::vector<std::pair<double, int>> mux =
+      selectSynthetic(cfgFor("multiplexed", "inclusion", "", 2, false), targets);
+
+  TEST_EQUAL(sep.size() > speciesOf(sep).size(), true)   // non-vacuity: it fans out
+
+  if (speciesOf(sep).size() > 2)
+    std::cout << "[CM-13] separate acquired " << speciesOf(sep).size() << " species in one survey "
+              << "against max_precursors 2 -- the non-target phase spent the budget again" << std::endl;
+  TEST_EQUAL((int)speciesOf(sep).size(), 2)
+  TEST_EQUAL(speciesOf(sep) == speciesOf(mux), true)
+  // The target comes first (phase 0), and the one slot left goes to the best non-target.
+  TEST_EQUAL(sep.empty() ? 0LL : std::llround(sep.front().first), std::llround(synMass(4)))
+  TEST_EQUAL((int)speciesOf(sep).count(std::llround(synMass(0))), 1)
+}
+END_SECTION
+
+// CM-14: the single-pass configurations are untouched -- "separate" with no targeting already spent
+// exactly max_precursors species, and must still fan out over all of them.
+START_SECTION(separate_single_pass_budget_is_unchanged)
+{
+  const std::vector<std::pair<double, int>> sep = selectSynthetic(cfgFor("separate", "none", "", /*max_precursors=*/2));
+  TEST_EQUAL((int)speciesOf(sep).size(), 2)
+  TEST_EQUAL((int)sep.size(), 8)
 }
 END_SECTION
 

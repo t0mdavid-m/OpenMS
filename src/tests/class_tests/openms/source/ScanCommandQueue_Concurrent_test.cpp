@@ -440,5 +440,92 @@ START_SECTION(cancelByScanIds_concurrent)
 }
 END_SECTION
 
+// T10: an in-flight command whose scan never comes back is dropped once MAX_IN_FLIGHT later commands
+// have been sent -- and not before. Until this, pending_scan_map_ was emptied only by an answer or a
+// cancel, so every unanswered command (~2 KB) stayed for the life of the engine.
+//
+// The drive mimics a host: each later command is dequeued (which registers it) and answered at once.
+// The sweep runs every IN_FLIGHT_SWEEP_EVERY registrations, so the lost command (registration 1) must
+// survive every sweep up to the first one at which it is MORE than MAX_IN_FLIGHT registrations old.
+START_SECTION(an_unanswered_command_is_dropped_after_max_in_flight_later_commands)
+{
+  Config cfg{std::string(minimal_config)};
+  ScanCommandQueue queue(cfg);
+
+  const uint64_t max_in_flight = ScanCommandQueue::MAX_IN_FLIGHT;
+  const uint64_t every = ScanCommandQueue::IN_FLIGHT_SWEEP_EVERY;
+  // The first sweep at which registration 1 is more than max_in_flight registrations old.
+  const uint64_t deciding = ((max_in_flight + 1) / every + 1) * every;
+  TEST_EQUAL(deciding > max_in_flight + 1 && deciding % every == 0 && deciding - every <= max_in_flight + 1, true)
+
+  ScanCommand lost{};
+  lost.msn_level = 2;
+  lost.scan_id = queue.nextTrackingId();
+  queue.registerPending(lost);                                   // registration 1, never answered
+
+  int recent_orphan = -1;
+  bool lost_survived_until_deciding = true;
+  for (uint64_t r = 2; r <= deciding; ++r)
+  {
+    ScanCommand cmd{};
+    cmd.msn_level = 2;
+    cmd.priority = 2;
+    cmd.scan_id = queue.nextTrackingId();
+    queue.push(cmd);
+    auto sent = queue.dequeue();                                 // registration r
+    TEST_EQUAL(sent.has_value() && sent->scan_id == cmd.scan_id, true)
+    // One more command that never comes back, but recent: it must outlive the deciding sweep.
+    if (r == deciding - 100)
+    {
+      recent_orphan = cmd.scan_id;
+      continue;
+    }
+    TEST_EQUAL(queue.resolvePending(cmd.scan_id).has_value(), true)
+    if (r < deciding && !queue.peekPending(lost.scan_id).has_value()) lost_survived_until_deciding = false;
+  }
+
+  TEST_EQUAL(lost_survived_until_deciding, true)                 // not dropped early
+  TEST_EQUAL(queue.peekPending(lost.scan_id).has_value(), false) // dropped at the deciding sweep
+  TEST_EQUAL(queue.resolvePending(lost.scan_id).has_value(), false)
+  TEST_EQUAL(queue.peekPending(recent_orphan).has_value(), true) // a recent one is still awaited
+  TEST_EQUAL(static_cast<int>(queue.pendingScanMapSize()), 1)    // and nothing else is left
+}
+END_SECTION
+
+// T11: the age is counted from an entry's LATEST registration. Registering an id again (it is
+// re-sent) restarts its count, so the sweep must not drop it on the strength of the first one.
+START_SECTION(a_re_registered_command_is_aged_from_its_latest_registration)
+{
+  Config cfg{std::string(minimal_config)};
+  ScanCommandQueue queue(cfg);
+
+  const uint64_t max_in_flight = ScanCommandQueue::MAX_IN_FLIGHT;
+  const uint64_t every = ScanCommandQueue::IN_FLIGHT_SWEEP_EVERY;
+  const uint64_t deciding = ((max_in_flight + 1) / every + 1) * every;
+
+  ScanCommand resent{};
+  resent.msn_level = 2;
+  resent.scan_id = queue.nextTrackingId();
+  queue.registerPending(resent);                                 // registration 1
+
+  for (uint64_t r = 2; r <= deciding; ++r)
+  {
+    if (r == deciding - 10)
+    {
+      queue.registerPending(resent);                             // registration r: sent again
+      continue;
+    }
+    ScanCommand cmd{};
+    cmd.msn_level = 2;
+    cmd.scan_id = queue.nextTrackingId();
+    queue.registerPending(cmd);
+    queue.resolvePending(cmd.scan_id);
+  }
+
+  TEST_EQUAL(queue.peekPending(resent.scan_id).has_value(), true)
+  TEST_EQUAL(static_cast<int>(queue.pendingScanMapSize()), 1)
+}
+END_SECTION
+
 /////////////////////////////////////////////////////////////
 END_TEST

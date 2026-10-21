@@ -2192,6 +2192,65 @@ START_SECTION(processScan_mass_exclusion_thresholded)
 }
 END_SECTION
 
+// removeFromExclusionList undoes ONE acquisition's mark on acquisition memory. It has had no caller
+// since its C export went with the legacy bridge exports (fdc795f297), and it still divided the qscore
+// ledger by (1 - q) -- the inverse of the running product the ledger held before `4457abeb4c change
+// algorithm to max qscore`. Against the stored SCORE that raised the bar it was meant to lift (0.6 became
+// 1.5, which no survey can reach) and divided by zero at q = 1. Driven on a record laid down by hand,
+// as filterPeakGroupsUsingMassExclusion_ writes it, because no engine path reaches the member.
+START_SECTION(removeFromExclusionList_lifts_the_bars_and_the_ledger_entry_it_set)
+{
+  const std::string dir = freshLogDir("remove_from_exclusion_list");
+  Config config(buildJsonWithLogDir(dir));
+  Deconvolution deconv(config, config.toleranceList());
+  PrecursorSelection selection(config, deconv);
+  auto& mem = FLASHIdaTestAccess::selectionMemory(selection);
+
+  // One admitted, bar-arming acquisition: window id -> nominal mass, integer m/z, qscore, charge.
+  auto record = [&mem](int id, int nominal, int mz, double q, int z, double rt) {
+    mem.id_mass_map_[id] = nominal;
+    mem.id_mz_map_[id] = mz;
+    mem.id_qscore_map_[id] = q;
+    mem.id_charge_map_[id] = z;
+    mem.all_mass_rt_map_[nominal] = rt;
+    mem.mass_qscore_map_[nominal] = q;
+    mem.tqscore_exceeding_mass_rt_map_[nominal] = rt;
+    mem.tqscore_exceeding_mz_rt_map_[mz] = rt;
+    mem.window_id_ = std::max(mem.window_id_, id + 1);
+  };
+  record(0, 12345, 824, 0.6, 15, 10.0);
+  record(1, 8600, 957, 1.0, 9, 10.0);
+
+  // An id never recorded -- not yet issued, or negative -- changes nothing. The negative one used to
+  // slip past `id >= window_id_` and default-insert a record for nominal mass 0 through operator[].
+  const auto before = mem;
+  selection.removeFromExclusionList(2);
+  selection.removeFromExclusionList(-1);
+  TEST_EQUAL(mem == before, true)
+
+  selection.removeFromExclusionList(0);
+  TEST_EQUAL(mem.tqscore_exceeding_mass_rt_map_.count(12345), 0)
+  TEST_EQUAL(mem.tqscore_exceeding_mz_rt_map_.count(824), 0)
+  TEST_EQUAL(mem.mass_qscore_map_.count(12345), 0)   // forgotten -- not raised to 0.6 / 0.4 = 1.5
+  TEST_EQUAL(mem.id_mass_map_.count(0), 0)           // the record is consumed
+  TEST_EQUAL(mem.tqscore_exceeding_mass_rt_map_.count(8600), 1)  // the other acquisition is untouched
+  TEST_EQUAL(mem.mass_qscore_map_.count(8600), 1)
+
+  // q = 1 used to divide by zero.
+  selection.removeFromExclusionList(1);
+  TEST_EQUAL(mem.mass_qscore_map_.count(8600), 0)
+  TEST_EQUAL(mem.tqscore_exceeding_mz_rt_map_.count(957), 0)
+
+  // A LATER acquisition of the same mass stored its own score; removing the earlier one leaves that
+  // ledger entry alone (it is the later acquisition's, not the removed one's).
+  record(2, 5000, 600, 0.5, 8, 20.0);
+  record(3, 5000, 601, 0.7, 8, 30.0);
+  selection.removeFromExclusionList(2);
+  TEST_EQUAL(mem.mass_qscore_map_.count(5000), 1)
+  if (mem.mass_qscore_map_.count(5000) == 1) { TEST_REAL_SIMILAR(mem.mass_qscore_map_.at(5000), 0.7) }
+}
+END_SECTION
+
 // ADR-0051: acquisition memory -- both exclusion bars and the qscore ledger -- expires once it is older
 // than rt_window SECONDS. processScan takes seconds and runInterleaved feeds the fixture's header times
 // straight in, so this is the engine's own contract, not the host's: it cannot see the bridge bug (the
@@ -2256,6 +2315,80 @@ START_SECTION(processScan_acquisition_memory_expires_after_rt_window_seconds)
   {
     TEST_EQUAL(expired[i] - expired[i - 1] >= 30.0, true)
     TEST_EQUAL(expired[i] - expired[i - 1] <= 40.0, true)
+  }
+}
+END_SECTION
+
+// Legacy ida.log targets (targeting "inclusion" + target_logs) carry the reference charge as Z=, and a
+// matched candidate's acquisition erases its charge from that target's list (target_mass_charge_map_).
+// The pointer to that list was declared once per SURVEY, so under non-strict inclusion a candidate that
+// matched no target -- admitted in phase 1 -- erased its own charge from the list of whichever target an
+// earlier candidate had last been checked against: an unrelated target lost a charge for the rest of
+// the run. Synthetic PeakGroups, so the ranking and the charges are exactly the ones that trigger it.
+START_SECTION(a_non_target_does_not_spend_a_reference_targets_charge)
+{
+  const std::string dir = freshLogDir("stale_target_charges");
+  const std::string ref_log = dir + "/reference_ida.log";
+  {
+    std::ofstream f(ref_log);
+    // One reference target: 10000.0000 Da, acquired at charge 10 at 1 min.
+    f << "MS1 Scan# 1 RT 1.0000 (Access ID !!\") - 1 targets\n";
+    f << "Mass=10000.0000\tZ=10\tScore=0.90000\tWindow=[1000.5000-1001.9000]"
+         "\tPrecursorIntensity=1.00000\tPrecursorMassIntensity=2.00000"
+         "\tFeatures=[0.9,1.0,0.9,1.0,0.9,1.0]\tChargeRange=[8-12]\tHCD=0\n";
+    f << "AllMass=10000.0000\n";
+  }
+  std::string cfg = buildJsonWithLogDir(dir);   // strict_inclusion false, max_precursors 5
+  {
+    auto rep = [&cfg](const std::string& from, const std::string& to) {
+      auto p = cfg.find(from);
+      TEST_EQUAL(p != std::string::npos, true)   // a missing literal would leave the config silently unchanged
+      if (p != std::string::npos) cfg.replace(p, from.size(), to);
+    };
+    rep("\"targeting\": \"none\"", "\"targeting\": \"inclusion\"");
+    rep("\"target_logs\": []", "\"target_logs\": [\"" + ref_log + "\"]");
+  }
+  Config config(cfg);
+  Deconvolution deconv(config, config.toleranceList());
+  PrecursorSelection selection(config, deconv);
+
+  // A synthetic MS1 PeakGroup resolving exactly @p charges -- three isotopes each, so every charge has a
+  // measured m/z window -- with the first as its representative charge.
+  auto envelope = [](double mono_mass, const std::vector<int>& charges, double qscore) {
+    const double proton = 1.00727646677;
+    const double iso_gap = 1.00235;
+    PeakGroup pg(charges.front(), charges.back(), true);
+    pg.setMonoisotopicMass(mono_mass);
+    for (int z : charges)
+    {
+      for (int iso = 0; iso < 3; ++iso)
+      {
+        FLASHHelperClasses::LogMzPeak lp;
+        lp.mz = (mono_mass + z * proton + iso * iso_gap) / z;
+        lp.abs_charge = z;
+        pg.push_back(lp);
+      }
+      pg.setChargeSNR(z, 5.0f);
+      pg.setChargeIsotopeCosine(z, 0.99f);
+    }
+    pg.setQscore(qscore);
+    pg.setRepAbsCharge(charges.front());
+    return pg;
+  };
+  // X sits on the target's mass at a charge the reference never acquired: it is checked against the
+  // target's list and does not match. Y is nowhere near a target, at the target's charge 10. Ranked X,
+  // then Y; under non-strict inclusion neither is taken in phase 0 (targets only), both in phase 1.
+  const PeakGroup x = envelope(10000.0, {12, 13, 14}, 0.9);
+  const PeakGroup y = envelope(15000.0, {10, 11, 12}, 0.8);
+  TEST_EQUAL(FLASHIdaTestAccess::selectFrom(selection, {x, y}, 60.0), 2)
+
+  // Y matched no target, so it must not have spent the target's charge 10.
+  const auto lists = FLASHIdaTestAccess::targetMassCharges(selection);
+  TEST_EQUAL(lists.size(), 1)
+  if (lists.size() == 1)
+  {
+    const std::vector<int>& owed = lists.begin()->second;
+    TEST_EQUAL(std::count(owed.begin(), owed.end(), 10), 1)
   }
 }
 END_SECTION
