@@ -128,7 +128,7 @@ protected:
 #ifdef _OPENMP
     threads = omp_get_max_threads();
 #endif
-    // indexed mzML is parsed in byte-balanced chunks by all threads; other inputs use the ordinary loader
+    // indexed mzML is parsed in parallel, byte-balanced chunks; other inputs use the ordinary loader
     if (! mzml.loadIndexedParallel(in_file, map, threads)) { mzml.load(in_file, map); }
 
     auto tnt_param = getParam_();
@@ -236,7 +236,7 @@ int main(int argc, const char** argv)
 {
 #if defined(__GLIBC__)
   // Keep freed heap memory in the per-thread arenas instead of trimming it back to the kernel after every
-  // spectrum: trim, refault and heap regrowth serialise on the process-wide mmap lock at high thread counts.
+  // work item: trim, refault and heap regrowth serialise on the process-wide mmap lock at high thread counts.
   mallopt(M_TRIM_THRESHOLD, std::numeric_limits<int>::max());
   mallopt(M_TOP_PAD, 256 << 20);
 #endif

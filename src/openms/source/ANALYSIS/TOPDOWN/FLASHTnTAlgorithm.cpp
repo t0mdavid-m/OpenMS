@@ -808,7 +808,6 @@ void FLASHTnTAlgorithm::vectorizeProteinSequence_(const std::vector<std::string>
   }
 }
 
-
 namespace
 {
   /// free the elements of @p v with all threads (each moved out and destroyed by the thread that took it), then @p v itself
@@ -824,6 +823,7 @@ namespace
     V().swap(v);
   }
 } // namespace
+
 void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile::FASTAEntry>& original_fasta_entry)
 {
   setLogType(CMD);
@@ -1136,10 +1136,10 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     }
   }
 
-  // The database positions and flanking masses of the tag sequences @p seqs (their entries in tag_db
-  // exist, empty): an Aho-Corasick trie of them over the proteins. Also used for the new tag sequences of the chimeric search.
-  // Proteins run in parallel in blocks (each thread with its own trie state); the hits of a block are appended to the maps in protein
-  // order, so every vector is the same as that of one pass over the proteins.
+  // The database positions and flanking masses of the tag sequences @p seqs (their entries in tag_db exist, empty): an Aho-Corasick
+  // trie of them over the proteins. Also used for the new tag sequences of the chimeric search. Proteins run in parallel in blocks (each
+  // thread with its own trie state); the hits of a block are appended to tag_db in protein order, so every vector is the same as that
+  // of one pass over the proteins.
   auto searchTagSequences = [&](const std::vector<std::string>& seqs) {
     ACTrie ac_trie(0, 0); // no ambiguities, no mismatches
     ac_trie.addNeedlesAndCompress(seqs);
