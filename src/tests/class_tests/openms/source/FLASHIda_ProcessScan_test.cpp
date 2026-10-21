@@ -2387,6 +2387,99 @@ START_SECTION(ida_log_targets_are_masses_within_the_rt_window)
 }
 END_SECTION
 
+// The GTM behaviour of 2025-07 to 2026-10, kept as options: log_target_rt_window false (an ida.log target at every retention time)
+// and log_target_charges "reference" (only at a charge the reference acquired it at, each acquisition using that charge up). Under
+// non-strict inclusion a candidate that matched no target must not use up a charge of a target an earlier candidate was checked against.
+START_SECTION(ida_log_target_legacy_options)
+{
+  const std::string dir = freshLogDir("gtm_legacy_options");
+  const std::string ref_log = dir + "/reference_ida.log";
+  {
+    std::ofstream f(ref_log);
+    // One reference target: 10000.0000 Da, acquired at charge 10 at 1 min.
+    f << "MS1 Scan# 1 RT 1.0000 (Access ID !!\") - 1 targets\n";
+    f << "Mass=10000.0000\tZ=10\tScore=0.90000\tWindow=[1000.5000-1001.9000]"
+         "\tPrecursorIntensity=1.00000\tPrecursorMassIntensity=2.00000"
+         "\tFeatures=[0.9,1.0,0.9,1.0,0.9,1.0]\tChargeRange=[8-12]\tHCD=0\n";
+    f << "AllMass=10000.0000\n";
+  }
+  // rt_window 180 s, max_precursors 5; inclusion with the reference log, strictness and options as given
+  auto config_with = [&](bool strict, const std::string& options) {
+    std::string cfg = buildJsonWithLogDir(dir);
+    auto rep = [&cfg](const std::string& from, const std::string& to) {
+      auto p = cfg.find(from);
+      TEST_EQUAL(p != std::string::npos, true)
+      if (p != std::string::npos) cfg.replace(p, from.size(), to);
+    };
+    rep("\"targeting\": \"none\"", "\"targeting\": \"inclusion\"");
+    rep("\"strict_inclusion\": false", std::string("\"strict_inclusion\": ") + (strict ? "true" : "false") + ", " + options);
+    rep("\"target_logs\": []", "\"target_logs\": [\"" + ref_log + "\"]");
+    return cfg;
+  };
+  auto envelope = [](double mono_mass, const std::vector<int>& charges, double qscore) {
+    const double proton = 1.00727646677;
+    const double iso_gap = 1.00235;
+    PeakGroup pg(charges.front(), charges.back(), true);
+    pg.setMonoisotopicMass(mono_mass);
+    for (int z : charges)
+    {
+      for (int iso = 0; iso < 3; ++iso)
+      {
+        FLASHHelperClasses::LogMzPeak lp;
+        lp.mz = (mono_mass + z * proton + iso * iso_gap) / z;
+        lp.abs_charge = z;
+        pg.push_back(lp);
+      }
+      pg.setChargeSNR(z, 5.0f);
+      pg.setChargeIsotopeCosine(z, 0.99f);
+    }
+    pg.setQscore(qscore);
+    pg.setRepAbsCharge(charges.front());
+    return pg;
+  };
+  const PeakGroup other_charges = envelope(10000.0, {12, 13, 14}, 0.9);
+  const PeakGroup same_charge = envelope(10000.0, {10, 11, 12}, 0.9);
+  const PeakGroup no_target = envelope(15000.0, {10, 11, 12}, 0.8);
+  auto count_10 = [](const PrecursorSelection& selection) {
+    const auto lists = FLASHIdaTestAccess::targetMassCharges(selection);
+    TEST_EQUAL(lists.size(), 1)
+    return lists.empty() ? -1 : (int)std::count(lists.begin()->second.begin(), lists.begin()->second.end(), 10);
+  };
+  {
+    // log_target_rt_window false: the target is active 10 min after its reference acquisition
+    Config config(config_with(true, "\"log_target_rt_window\": false"));
+    Deconvolution deconv(config, config.toleranceList());
+    PrecursorSelection selection(config, deconv);
+    TEST_EQUAL(FLASHIdaTestAccess::selectFrom(selection, {same_charge, no_target}, 660.0), 1)
+  }
+  {
+    // log_target_charges "reference", strict: not at the charges the reference never acquired
+    Config config(config_with(true, "\"log_target_charges\": \"reference\""));
+    Deconvolution deconv(config, config.toleranceList());
+    PrecursorSelection selection(config, deconv);
+    TEST_EQUAL(FLASHIdaTestAccess::selectFrom(selection, {other_charges, no_target}, 180.0), 0)
+    TEST_EQUAL(count_10(selection), 1)
+  }
+  {
+    // ... at its reference charge 10, which the acquisition uses up
+    Config config(config_with(true, "\"log_target_charges\": \"reference\""));
+    Deconvolution deconv(config, config.toleranceList());
+    PrecursorSelection selection(config, deconv);
+    TEST_EQUAL(FLASHIdaTestAccess::selectFrom(selection, {same_charge, no_target}, 180.0), 1)
+    TEST_EQUAL(count_10(selection), 0)
+  }
+  {
+    // non-strict: the target's mass at charges 12-14 is checked against the target and does not match; the other mass, at
+    // charge 10, matches no target; both are taken in phase 1, and the target keeps its charge 10
+    Config config(config_with(false, "\"log_target_charges\": \"reference\""));
+    Deconvolution deconv(config, config.toleranceList());
+    PrecursorSelection selection(config, deconv);
+    TEST_EQUAL(FLASHIdaTestAccess::selectFrom(selection, {other_charges, no_target}, 60.0), 2)
+    TEST_EQUAL(count_10(selection), 1)
+  }
+}
+END_SECTION
+
 // ADR-0051: the C export is where the host's minutes become the engine's seconds -- the one conversion,
 // and the bridge bug's own site. Called here exactly as FLASHIdaWrapper calls it, with 1.5 MINUTES: the
 // survey's spectrum must carry 90 s, and both log streams that record a retention time must still say

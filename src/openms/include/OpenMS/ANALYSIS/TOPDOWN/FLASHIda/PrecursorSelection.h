@@ -291,6 +291,8 @@ namespace OpenMS
     /// Maps for global inclusion targeting
     std::map<double, std::vector<double>> target_mass_rt_map_;
     std::map<double, std::vector<double>> target_mass_qscore_map_;
+    /// with log_target_charges "reference": per ida.log target mass, the charges (Z=) still to be acquired
+    std::map<double, std::vector<int>> target_mass_charge_map_;
     std::vector<double> target_masses_;
 
     /// Maps for global exclusion

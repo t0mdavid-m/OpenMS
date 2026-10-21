@@ -134,6 +134,13 @@ namespace OpenMS
     /// spectrum: that rebuilds the survey's target list exactly as a real survey does and deconvolves
     /// nothing. The PeakGroups then go where the deconvolution leaves its result, and the selection
     /// proper runs on them -- so order, masses and charges are the test's, not a fixture's.
+    /// With log_target_charges "reference": the ida.log targets' charge lists (reference mass -> the Z= values still to be
+    /// acquired). An acquisition of a matched candidate erases its charge from the list.
+    static std::map<double, std::vector<int>> targetMassCharges(const PrecursorSelection& s)
+    {
+      return s.target_mass_charge_map_;
+    }
+
     static int selectFrom(PrecursorSelection& s, const std::vector<PeakGroup>& peak_groups, double rt)
     {
       s.filterAndRank(nullptr, nullptr, 0, rt, 1, 0.0);
