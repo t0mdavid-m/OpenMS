@@ -320,11 +320,13 @@ namespace OpenMS
     /**
      * calculate noisy peak power. The goal of this function is to group noisy peaks that are possibly from the same molecule and sum their intensities before calculate power
      * @param noisy_peaks noisy peaks to calculate power
-     * @param z charge
+     * @param signal_peaks signal peaks of this peak group
+     * @param charge_count number of charges in the charge range (limits the number of noisy peaks when z is 0)
+     * @param z charge (0: all charges)
      * @param tol ppm tolerance
      * @return calculated noise power
      */
-    float getNoisePeakPower_(const std::vector<LogMzPeak>& noisy_peaks, int z, double tol) const;
+    float getNoisePeakPower_(const std::vector<LogMzPeak>& noisy_peaks, const std::vector<LogMzPeak>& signal_peaks, int charge_count, int z, double tol) const;
 
     /// log Mz peaks
     std::vector<FLASHHelperClasses::LogMzPeak> logMzpeaks_;

@@ -18,7 +18,9 @@
 #include <OpenMS/KERNEL/MSExperiment.h>
 #include <OpenMS/KERNEL/MSSpectrum.h>
 #include <boost/dynamic_bitset.hpp>
+#include <exception>
 #include <iostream>
+#include <optional>
 
 namespace OpenMS
 {
@@ -167,6 +169,10 @@ namespace OpenMS
     std::map<String, bool> native_id_decoy_precursor_noise_map_;
     /// a map from native ID to precursor mass - intensity pair (within isolation window)
     std::map<String, std::vector<std::tuple<double, double>>> native_id_precursor_mass_intensity_map_;
+    /// the features of the minimum MS level when they were traced during the wave of the next (last) MS level, or the error of that
+    /// tracing (runSpectralDeconvolution_); taken by runFeatureFinding_
+    std::optional<std::vector<FLASHHelperClasses::MassFeature>> min_level_features_;
+    std::exception_ptr min_level_trace_error_;
 
     /// read dataset to update ms level information
     void updateMSLevels_(MSExperiment& map);
@@ -195,6 +201,12 @@ namespace OpenMS
 
     /// run feature finding to get deconvolved features
     void runFeatureFinding_(std::vector<DeconvolvedSpectrum>& deconvolved_spectra, std::vector<FLASHHelperClasses::MassFeature>& deconvolved_features);
+
+    /// the feature tracing parameters (of the minimum MS level)
+    Param featureTraceParam_() const;
+
+    /// trace the features of the minimum MS level (and with report_FDR those of its decoy masses), updating the Qscore2D of its masses
+    std::vector<FLASHHelperClasses::MassFeature> traceMinLevelFeatures_(std::vector<DeconvolvedSpectrum>& deconvolved_spectra);
 
     /// with found deconvolved features, update QScores for masses that are contained in features.
     static void updatePrecursorQScores_(std::vector<DeconvolvedSpectrum>& deconvolved_spectra, int ms_level);

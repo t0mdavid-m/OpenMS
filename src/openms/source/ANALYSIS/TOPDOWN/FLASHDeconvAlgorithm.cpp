@@ -175,24 +175,30 @@ void FLASHDeconvAlgorithm::filterLowPeaks_(MSExperiment& map)
   Param t_filter_param = threshold_mower_filter.getParameters(); //"threshold", .00001
   t_filter_param.setValue("threshold", 1e-6);
   threshold_mower_filter.setParameters(t_filter_param);
-  threshold_mower_filter.filterPeakMap(map);
 
-#pragma omp parallel for default(none), shared(map)
-  for (int i = 0; i < (int) map.size(); i++)
+  // the threshold mower (filterPeakMap, spectrum by spectrum) and the trimming below in one parallel pass over the spectra, each thread
+  // with its own copy of the mower; dynamic, as the spectra differ much in size
+#pragma omp parallel default(none), shared(map, threshold_mower_filter)
   {
-    auto& it = map[i];
-    if (it.empty()) continue;
-    Size count = it.getType(false) == SpectrumSettings::CENTROID ? max_peak_count_for_centroid_ : max_peak_count_for_profile_;
-    it.sortByIntensity(true);
-    double threshold = it.size() < count ? 0 : it[count].getIntensity();
-    threshold = std::max(threshold, (double)it.begin()->getIntensity() / 1000);
-    // pop back the low intensity peaks using threshold
-
-    while (! it.empty() && it.back().getIntensity() <= threshold)
+    ThresholdMower mower(threshold_mower_filter);
+#pragma omp for schedule(dynamic, 4)
+    for (int i = 0; i < (int) map.size(); i++)
     {
-      it.pop_back();
+      auto& it = map[i];
+      mower.filterSpectrum(it);
+      if (it.empty()) continue;
+      Size count = it.getType(false) == SpectrumSettings::CENTROID ? max_peak_count_for_centroid_ : max_peak_count_for_profile_;
+      it.sortByIntensity(true);
+      double threshold = it.size() < count ? 0 : it[count].getIntensity();
+      threshold = std::max(threshold, (double)it.begin()->getIntensity() / 1000);
+      // pop back the low intensity peaks using threshold
+
+      while (! it.empty() && it.back().getIntensity() <= threshold)
+      {
+        it.pop_back();
+      }
+      it.sortByPosition();
     }
-    it.sortByPosition();
   }
   OPENMS_LOG_INFO << "Done" << std::endl;
 }
@@ -652,13 +658,36 @@ void FLASHDeconvAlgorithm::runSpectralDeconvolution_(MSExperiment& map, std::vec
         std::vector<SignedSize> job_order(jobs.size());
         std::iota(job_order.begin(), job_order.end(), 0);
         std::stable_sort(job_order.begin(), job_order.end(), [&](SignedSize a, SignedSize b) { return map[jobs[a].index].size() > map[jobs[b].index].size(); });
-#pragma omp parallel num_threads(team_size) default(none) shared(map, jobs, workers, errors, job_order)
+        // The features of the minimum MS level depend only on its deconvolved spectra (all of deconvolved_spectra here), which the spectra
+        // of this level neither read nor change: when this is the last level, one thread traces them (runFeatureFinding_ takes them) while
+        // the others deconvolve. The tracing visits the spectra in the order the serial path does (in the scan order of all spectra) only
+        // when their scan numbers are unique, so only then.
+        bool trace_in_wave = merge_spec_ != 2 && ms_level == current_min_ms_level_ + 1 && ms_level == current_max_ms_level_;
+        for (Size i = 1; trace_in_wave && i < deconvolved_spectra.size(); i++)
+        {
+          if (deconvolved_spectra[i].getScanNumber() == deconvolved_spectra[i - 1].getScanNumber()) trace_in_wave = false;
+        }
+#pragma omp parallel num_threads(team_size) default(none) shared(map, jobs, workers, errors, job_order, deconvolved_spectra, trace_in_wave)
         {
           int worker_index = 0;
 #ifdef _OPENMP
           worker_index = omp_get_thread_num();
 #endif
           auto& worker = workers[worker_index];
+          if (trace_in_wave)
+          {
+#pragma omp single nowait
+            {
+              try
+              {
+                min_level_features_ = traceMinLevelFeatures_(deconvolved_spectra);
+              }
+              catch (...)
+              {
+                min_level_trace_error_ = std::current_exception();
+              }
+            }
+          }
 #pragma omp for schedule(dynamic, 1)
           for (SignedSize position = 0; position < (SignedSize)jobs.size(); position++)
           {
@@ -849,6 +878,8 @@ void FLASHDeconvAlgorithm::run(MSExperiment& map,
 {
   // initialize
   precursor_map_for_ida_ = FLASHIda::parseFLASHIdaLog(ida_log_file_); // ms1 scan -> mass, charge ,score, mz range, precursor int, mass int, color
+  min_level_features_.reset();
+  min_level_trace_error_ = nullptr;
 
   // ADR-0046: join this data file to its acquisition BEFORE any deconvolution, so a scan_commands file that does not belong to it aborts
   // in seconds. Metadata only -- nothing below has touched the spectra yet.
@@ -1095,7 +1126,7 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
 {
   for (Size index = 0; index < map.size(); index++)
   {
-    auto spec = map[index]; // MS2 index
+    const auto& spec = map[index]; // MS2 index
     if (spec.getMSLevel() != ms_level) { continue; }
 
     String native_id = spec.getNativeID();
@@ -1561,14 +1592,8 @@ void FLASHDeconvAlgorithm::updatePrecursorQScores_(std::vector<DeconvolvedSpectr
   }
 }
 
-void FLASHDeconvAlgorithm::runFeatureFinding_(std::vector<DeconvolvedSpectrum>& deconvolved_spectra,
-                                              std::vector<FLASHHelperClasses::MassFeature>& deconvolved_features)
+Param FLASHDeconvAlgorithm::featureTraceParam_() const
 {
-  if (merge_spec_ == 2) return;
-
-  auto mass_tracer = MassFeatureTrace();
-  auto decoy_mass_tracer = MassFeatureTrace();
-
   Param mf_param = param_.copy("ft:", true);
 
   if (((double)mf_param.getValue("mass_error_ppm")) < 0) { mf_param.setValue("mass_error_ppm", tols_[0]); }
@@ -1579,17 +1604,45 @@ void FLASHDeconvAlgorithm::runFeatureFinding_(std::vector<DeconvolvedSpectrum>& 
   mf_param.setValue("trace_termination_criterion", "outlier");
   mf_param.setValue("trace_termination_outliers", 20);
   mf_param.setValue("chrom_peak_snr", .0);
+  return mf_param;
+}
 
-  mass_tracer.setParameters(mf_param); // maybe go to set param
+std::vector<FLASHHelperClasses::MassFeature> FLASHDeconvAlgorithm::traceMinLevelFeatures_(std::vector<DeconvolvedSpectrum>& deconvolved_spectra)
+{
+  auto mass_tracer = MassFeatureTrace();
+  mass_tracer.setParameters(featureTraceParam_()); // maybe go to set param
   // Find features for MS1 or the minimum MS level in the dataset.
-  deconvolved_features = mass_tracer.findFeaturesAndUpdateQscore2D(sd_.getAveragine(), deconvolved_spectra, (int)current_min_ms_level_, false);
+  auto deconvolved_features = mass_tracer.findFeaturesAndUpdateQscore2D(sd_.getAveragine(), deconvolved_spectra, (int)current_min_ms_level_, false);
 
   if (report_decoy_)
   {
     const auto& decoy_deconvolved_features = mass_tracer.findFeaturesAndUpdateQscore2D(sd_.getAveragine(), deconvolved_spectra, (int)current_min_ms_level_, true);
     deconvolved_features.insert(deconvolved_features.end(), decoy_deconvolved_features.begin(), decoy_deconvolved_features.end());
   }
+  return deconvolved_features;
+}
 
+void FLASHDeconvAlgorithm::runFeatureFinding_(std::vector<DeconvolvedSpectrum>& deconvolved_spectra,
+                                              std::vector<FLASHHelperClasses::MassFeature>& deconvolved_features)
+{
+  if (merge_spec_ == 2) return;
+
+  // the features of the minimum MS level: traced during the wave of the last MS level if possible (runSpectralDeconvolution_)
+  if (min_level_trace_error_)
+  {
+    auto error = min_level_trace_error_;
+    min_level_trace_error_ = nullptr;
+    std::rethrow_exception(error);
+  }
+  if (min_level_features_)
+  {
+    deconvolved_features = std::move(*min_level_features_);
+    min_level_features_.reset();
+  }
+  else { deconvolved_features = traceMinLevelFeatures_(deconvolved_spectra); }
+
+  auto mass_tracer = MassFeatureTrace();
+  Param mf_param = featureTraceParam_();
   mf_param.setValue("min_trace_length", 1e-5); // allow all traces for MSn
   mass_tracer.setParameters(mf_param);
   // Find features for MSn
@@ -1611,8 +1664,9 @@ void FLASHDeconvAlgorithm::runFeatureFinding_(std::vector<DeconvolvedSpectrum>& 
     {
       std::vector<DeconvolvedSpectrum> tmp_dspec;
       tmp_dspec.reserve(element.second.size());
+      // moved out and back: each spectrum is in one feature group, and nothing else reads it in between
       for (Size i : element.second)
-        tmp_dspec.push_back(deconvolved_spectra[i]);
+        tmp_dspec.push_back(std::move(deconvolved_spectra[i]));
 
       const auto& df = mass_tracer.findFeaturesAndUpdateQscore2D(sd_.getAveragine(), tmp_dspec, ms_level, false);
       deconvolved_features.insert(deconvolved_features.end(), df.begin(), df.end());
@@ -1625,7 +1679,7 @@ void FLASHDeconvAlgorithm::runFeatureFinding_(std::vector<DeconvolvedSpectrum>& 
 
       Size j = 0;
       for (Size i : element.second)
-        deconvolved_spectra[i] = tmp_dspec[j++];
+        deconvolved_spectra[i] = std::move(tmp_dspec[j++]);
     }
   }
 }
