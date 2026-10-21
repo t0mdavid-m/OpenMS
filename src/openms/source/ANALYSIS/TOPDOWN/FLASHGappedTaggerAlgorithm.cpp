@@ -80,17 +80,21 @@ void intersectSorted(const std::uint32_t* a, Size na, const std::uint32_t* b, Si
 
 FLASHGappedTaggerAlgorithm::FLASHGappedTaggerAlgorithm() : DefaultParamHandler("FLASHGappedTaggerAlgorithm")
 {
-  defaults_.setValue("max_gap_mass", 2000.0,
+  defaults_.setValue("max_gap_mass", 5000.0,
                      "Largest residue mass a gapped tag spans, from its lowest to its highest mass (Da); the protein windows are indexed up "
-                     "to this mass.");
+                     "to this mass. Fragments of native top-down spectra are often 8-20 residues apart, so a tag of min_tag_size masses "
+                     "needs several kDa.");
   defaults_.setMinFloat("max_gap_mass", 100.0);
-  defaults_.setValue("min_tag_size", 4, "Smallest number of masses in a gapped tag (with 3, a tag lands on a decoy about as often as on the right protein).");
+  defaults_.setValue("min_tag_size", 5,
+                     "Smallest number of masses in a gapped tag. Gaps of many residues are sums of residues almost always, so a short tag "
+                     "lands on a decoy about as often as on the right protein (with 3, nearly always; with 4, often in crowded spectra); "
+                     "chance landings also take the candidate places of other sources.");
   defaults_.setMinInt("min_tag_size", 3);
   defaults_.setValue("max_tag_size", 7, "Largest number of masses in a gapped tag.");
   defaults_.setMinInt("max_tag_size", 3);
-  defaults_.setValue("beam_width", 100, "Number of gapped tags of each size proposed per spectrum, highest summed Qscore first.");
+  defaults_.setValue("beam_width", 1000, "Number of gapped tags of each size proposed per spectrum, highest summed Qscore first.");
   defaults_.setMinInt("beam_width", 1);
-  defaults_.setValue("top_n", 100, "Number of masses per spectrum (highest Qscore) used for gapped tags.");
+  defaults_.setValue("top_n", 400, "Number of masses per spectrum (highest Qscore) used for gapped tags.");
   defaults_.setMinInt("top_n", 3);
   defaults_.setValue("stop_at_first_size", "false",
                      "Use only the largest tag size that lands anywhere (as in GappedFiltration); false: every size, and the protein score ranks "
