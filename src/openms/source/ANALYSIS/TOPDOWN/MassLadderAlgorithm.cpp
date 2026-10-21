@@ -1025,8 +1025,8 @@ void MassLadderAlgorithm::searchSlidingLadders(const std::vector<const std::vect
         }
       }
     }
-    seg_best.assign(n * segments_.size() * 4, SegmentBest());
     const Size n_segments = segments_.size();
+    if (seg_best.size() < n * n_segments * 4) seg_best.resize(n * n_segments * 4); // reset per segment below, by the thread that scans it
 #pragma omp parallel if (! omp_in_parallel())
     {
       std::vector<int> k(n, 0);
@@ -1044,6 +1044,10 @@ void MassLadderAlgorithm::searchSlidingLadders(const std::vector<const std::vect
         }
         const double* S = window_sums_[seg.protein];
         seg_tested[si] = {0, 0, 0, 0};
+        for (Size s = 0; s < n; s++)
+        {
+          for (int slot = 0; slot < 4; slot++) seg_best[(s * n_segments + (Size)si) * 4 + slot] = SegmentBest();
+        }
         for (int side = 0; side < 2; side++)
         {
           const std::uint64_t active = side_active[side] & included;
