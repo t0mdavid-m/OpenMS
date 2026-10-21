@@ -15,7 +15,10 @@
 #include <OpenMS/FORMAT/FLASHTnTFile.h>
 #include <OpenMS/FORMAT/FileTypes.h>
 #include <OpenMS/FORMAT/MzMLFile.h>
+#include <OpenMS/FORMAT/UniPEFFConverter.h>
+#include <OpenMS/SYSTEM/File.h>
 #include <QFileInfo>
+#include <fstream>
 
 using namespace OpenMS;
 using namespace std;
@@ -24,6 +27,41 @@ using namespace std;
 // Doxygen docu
 //-------------------------------------------------------------
 // We do not want this class to show up in the docu:
+
+namespace
+{
+  /// the format of a protein database file
+  enum class DatabaseFormat
+  {
+    FASTA,
+    PEFF,
+    UNIPROT_XML
+  };
+
+  /// the format of @p file by its content (gzip: a UniProtKB .xml.gz download; '# PEFF'; an XML declaration or <uniprot>), else by its
+  /// name (.peff; .xml); FASTA otherwise
+  DatabaseFormat databaseFormat_(const String& file)
+  {
+    std::ifstream in(file, std::ios::binary);
+    char magic[2] = {0, 0};
+    in.read(magic, 2);
+    if (in.gcount() == 2 && (unsigned char)magic[0] == 0x1f && (unsigned char)magic[1] == 0x8b) return DatabaseFormat::UNIPROT_XML;
+    in.clear();
+    in.seekg(0);
+    String line;
+    while (std::getline(in, line))
+    {
+      line.trim();
+      if (! line.empty()) break;
+    }
+    if (line.hasPrefix("# PEFF")) return DatabaseFormat::PEFF;
+    if (line.hasPrefix("<?xml") || line.hasPrefix("<uniprot")) return DatabaseFormat::UNIPROT_XML;
+    const String name = String(file).toLower();
+    if (name.hasSuffix(".peff")) return DatabaseFormat::PEFF;
+    if (name.hasSuffix(".xml") || name.hasSuffix(".xml.gz")) return DatabaseFormat::UNIPROT_XML;
+    return DatabaseFormat::FASTA;
+  }
+} // namespace
 
 class TOPPFLASHTnT : public TOPPBase
 {
@@ -43,23 +81,30 @@ protected:
     registerInputFile_("in", "<file>", "", "Input file (deconv.mzML from FLASHDeconv mzML output).", true);
     setValidFormats_("in", ListUtils::create<String>("mzML"));
 
-    registerInputFile_("fasta", "<file>", "",
-                       "Input proteome database file (FASTA or PEFF). A PEFF file (PSI Extended FASTA, e.g. from UniPEFF; first line '# PEFF' or "
-                       "the extension .peff) gives every annotated proteoform of a protein as a database entry: its processed forms (mature chains, "
-                       "without the initiator Met, signal, transit peptide or propeptide) with up to peff_max_mods annotated modifications fixed "
-                       "on them (a residue with any of its modifications on distinct sites of it, or all disulfide bonds of a form, counts as one); variable and blind "
-                       "modifications are searched on top. Every target protein without a decoy (DECOY prefix) in the file gets one: its residues "
-                       "shuffled within the processed forms, their first and last residues kept, the modifications moved with their residues.",
+    registerInputFile_("db", "<file>", "",
+                       "Protein database. Three formats, recognised from the file content (else from the file name):\n"
+                       "- FASTA (e.g. .fasta, .fa): one entry per protein. The file must contain the decoys (accessions with the prefix DECOY_).\n"
+                       "- PEFF, PSI Extended FASTA (first line '# PEFF', or .peff; e.g. written by UniPEFF -annotation_identifiers): every annotated "
+                       "proteoform is a database entry, i.e. each processed form of a protein (full length, mature chains, without the initiator Met, "
+                       "signal, transit peptide or propeptide) with up to -peff_max_mods annotated modification units fixed on it (\\ModResPsi, "
+                       "\\ModResUnimod; disulfide bonds from \\DisulfideBond pairs). Variable and blind modifications are searched on top. A target "
+                       "without a decoy in the file gets one (its residues shuffled within the processed forms, the ends of each form kept, the fixed "
+                       "modifications moved with their residues); decoys in the file are used as given. Sequence variants are not used.\n"
+                       "- UniProtKB XML (.xml or .xml.gz, e.g. a UniProt proteome download in XML format): converted on the fly to PEFF as "
+                       "'UniPEFF -annotation_identifiers' writes it, then read as PEFF.\n"
+                       "Results: a FASTA or PEFF file gives the same results as with the former -fasta option; a UniProtKB XML file gives the same "
+                       "results as the PEFF converted from it.",
                        true);
-    setValidFormats_("fasta", ListUtils::create<String>("fasta"));
 
     registerIntOption_("peff_max_mods", "<number>", 1,
-                       "PEFF input: at most this many annotated modification units fixed on an entry (0: the processed forms only).", false);
+                       "PEFF or UniProtKB XML database: at most this many annotated modification units fixed on an entry (0: the processed forms "
+                       "only). A unit is a residue with one or more of its annotated modifications on distinct sites of it, or all disulfide bonds of "
+                       "a form.", false);
     setMinInt_("peff_max_mods", 0);
     registerStringList_("peff_mod_masses", "<accession=mass>",
                         ListUtils::create<String>("MOD:01819=100.016044,MOD:01893=86.000394,MOD:01614=329.05252,MOD:01956=15.994915,"
                                                   "MOD:00657=14.999666,MOD:00017=skip,MOD:00223=skip,MOD:01976=skip,MOD:01780=skip"),
-                        "PEFF input: masses of modification accessions that replace those of the modification database (PSI-MOD, Unimod), or "
+                        "PEFF or UniProtKB XML database: masses of modification accessions that replace those of the modification database (PSI-MOD, Unimod), or "
                         "'skip' to leave the modification out. The default fills the gaps of the bundled PSI-MOD for E. coli (UniProt ptmlist "
                         "masses). A modification without a mass is left out (counted in the log).",
                         false);
@@ -77,7 +122,7 @@ protected:
     registerOutputFile_("out_prsm", "<file>", "", "Output PrSM-level tsv file containing PrSMs.");
     setValidFormats_("out_prsm", ListUtils::create<String>("tsv"));
 
-    registerOutputFile_("out_tag", "<file>", "", "Output tag-level tsv file containing matched tags.");
+    registerOutputFile_("out_tag", "<file>", "", "Output tag-level tsv file containing matched tags.", false);
     setValidFormats_("out_tag", ListUtils::create<String>("tsv"));
 
     registerOutputFile_("out_protein", "<file>", "", "Output protein-level tsv file containing the candidate proteins and "
@@ -118,7 +163,7 @@ protected:
     //-------------------------------------------------------------
 
     String in_file = getStringOption_("in");
-    String in_fasta = getStringOption_("fasta");
+    const String in_db = getStringOption_("db");
     String in_raw = getStringOption_("in_raw");
 
     String out_tag_file = getStringOption_("out_tag");
@@ -140,7 +185,7 @@ protected:
 
     auto tnt_param = getParam_();
     tnt_param.remove("in");
-    tnt_param.remove("fasta");
+    tnt_param.remove("db");
     tnt_param.remove("peff_max_mods");
     tnt_param.remove("peff_mod_masses");
     tnt_param.remove("in_raw");
@@ -161,12 +206,22 @@ protected:
     OPENMS_LOG_INFO << "Finding sequence tags from deconvolved spectra ..." << endl;
 
     std::vector<FASTAFile::FASTAEntry> fasta_entry;
-    // a PEFF file: its proteoform entries (ProteoformDatabase); a FASTA file: its entries are the proteins
+    // PEFF (or UniProtKB XML, converted to PEFF): its proteoform entries (ProteoformDatabase); FASTA: its entries are the proteins
     ProteoformDatabase database;
-    const bool peff = ProteoformDatabase::isPEFF(in_fasta);
+    const DatabaseFormat db_format = databaseFormat_(in_db);
+    String peff_file = in_db;
+    if (db_format == DatabaseFormat::UNIPROT_XML)
+    {
+      peff_file = File::getTemporaryFile();
+      UniPEFFConverter::Options conversion;
+      conversion.annotation_identifiers = true; // the disulfide bond pairs
+      const Size converted = UniPEFFConverter::convert(in_db, peff_file, conversion);
+      OPENMS_LOG_INFO << "UniProtKB XML database " << in_db << ": " << converted << " entries converted to PEFF" << endl;
+    }
+    const bool peff = db_format != DatabaseFormat::FASTA;
     if (peff)
     {
-      database.loadPEFF(in_fasta, getIntOption_("peff_max_mods"), getStringList_("peff_mod_masses"), fasta_entry);
+      database.loadPEFF(peff_file, getIntOption_("peff_max_mods"), getStringList_("peff_mod_masses"), fasta_entry);
       const auto& st = database.getLoadStatistics();
       Size targets = 0, with_mods = 0;
       for (const auto& p : database.proteins) targets += ! p.decoy;
@@ -225,7 +280,7 @@ protected:
     else
     {
       FASTAFile fasta_file;
-      fasta_file.load(in_fasta, fasta_entry);
+      fasta_file.load(in_db, fasta_entry);
     }
     std::vector<ProteinHit> proteoform_hits;
     // Run here!
