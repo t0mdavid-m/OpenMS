@@ -539,8 +539,8 @@ namespace OpenMS
             const int nibr
               = abs_charge > 1 ? (int)getBinNumber_(log_mz + (d * iso_div_by_mz / (abs_charge - 1)), mz_bin_min_value_, bin_mul_factor) : 0;
             const int nibl = (int)getBinNumber_(log_mz + (d * iso_div_by_mz / (abs_charge + 1)), mz_bin_min_value_, bin_mul_factor);
-            if (abs(nib - nibr) < tol_div_factor
-                || abs(nib - nibl)
+            if (std::abs(nib - nibr) < tol_div_factor
+                || std::abs(nib - nibl)
                      < tol_div_factor) // if different charges are not distinguishable, we ignore. Not informative and the source of the errors.
               break;
 
@@ -635,7 +635,7 @@ namespace OpenMS
                   if (h_intensity > low_threshold && h_intensity < high_threshold)
                   {
                     is_harmonic = true;
-                    if (abs(t) < min_dis)
+                    if (std::abs(t) < min_dis)
                     {
                       harmonic_intensity = h_intensity;
                       min_dis = abs(t);

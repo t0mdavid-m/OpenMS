@@ -16,6 +16,7 @@
 #include <utility>
 #include <boost/math/special_functions/gamma.hpp>
 #include <OpenMS/ANALYSIS/ID/PeptideIndexing.h>
+#include <cmath>
 
 namespace OpenMS
 {
@@ -517,7 +518,7 @@ void FLASHTaggerAlgorithm::updateTagSet_(std::set<FLASHHelperClasses::Tag>& tag_
       for (const auto& pt : iter->second)
       {
         if (pt.getNtermMass() < 0) continue;
-        if (abs(pt.getNtermMass() - flanking_mass) / std::max(pt.getNtermMass(), flanking_mass) * 1e6 > ppm) continue;
+        if (std::abs(pt.getNtermMass() - flanking_mass) / std::max(pt.getNtermMass(), flanking_mass) * 1e6 > ppm) continue;
         pass = false;
         break;
       }
@@ -537,7 +538,7 @@ void FLASHTaggerAlgorithm::updateTagSet_(std::set<FLASHHelperClasses::Tag>& tag_
       for (const auto& pt : iter->second)
       {
         if (pt.getCtermMass() < 0) continue;
-        if (abs(pt.getCtermMass() - flanking_mass) / std::max(pt.getCtermMass(), flanking_mass) * 1e6 > ppm) continue;
+        if (std::abs(pt.getCtermMass() - flanking_mass) / std::max(pt.getCtermMass(), flanking_mass) * 1e6 > ppm) continue;
         pass = false;
         break;
       }
