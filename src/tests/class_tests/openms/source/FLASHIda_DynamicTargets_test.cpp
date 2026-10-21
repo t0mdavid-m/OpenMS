@@ -102,10 +102,11 @@ START_SECTION(tag_expanded_targets_add_to_ida_log_targets)
   TEST_TRUE(std::is_sorted(during.begin(), during.end()))   // the selection loop binary-searches it
 
   // Past the tag-expanded rows' window the reference list is back to itself -- and is still there.
-  // Pre-fix: EMPTY, which under strict inclusion means no MS2 for the rest of the run.
+  // Pre-fix: EMPTY, which under strict inclusion means no MS2 for the rest of the run. Each ida.log
+  // target is active within rt_window (180 s) of its reference acquisition: at 231 s that is 10261.3901
+  // (acquired at 54 s), not 3897.6156 (acquired at 30 s).
   const std::vector<double> after = FLASHIdaTestAccess::inclusionTargetMasses(sel, 50.0 + 180.0 + 1.0);
-  TEST_EQUAL(after.size(), 2)
-  TEST_TRUE(has(after, 3897.6156))
+  TEST_EQUAL(after.size(), 1)
   TEST_TRUE(has(after, 10261.3901))
 }
 END_SECTION

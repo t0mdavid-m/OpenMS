@@ -68,7 +68,6 @@ namespace OpenMS
       {
         String line;
         double rt = .0, mass, qscore;
-        int charge;
         while (std::getline(instream, line))
         {
           // EVERY MS1 header sets `rt`, a "- 0 targets" one included. This loop used to skip those
@@ -98,11 +97,6 @@ namespace OpenMS
             n = line.substr(st, ed - st + 1);
             qscore = atof(n.c_str());
 
-            st = line.find("Z=") + 2;
-            ed = line.find('\t', st);
-            n = line.substr(st, ed - st + 1);
-            charge = n.toInt();
-
             if (targeting.mode == 1 || targeting.mode == 2)
             {
               if (target_mass_rt_map_.find(mass) == target_mass_rt_map_.end())
@@ -111,9 +105,6 @@ namespace OpenMS
               if (target_mass_qscore_map_.find(mass) == target_mass_qscore_map_.end())
                 target_mass_qscore_map_[mass] = std::vector<double>();
               target_mass_qscore_map_[mass].push_back(qscore);
-              if (target_mass_charge_map_.find(mass) == target_mass_charge_map_.end())
-                target_mass_charge_map_[mass] = std::vector<int>();
-              target_mass_charge_map_[mass].push_back(charge);
             }
           }
           else if (line.hasPrefix("AllMass"))
@@ -240,11 +231,18 @@ namespace OpenMS
     {
       for (const auto& target : inclusion_targets_) addActive(target);
     }
-    else  // Legacy .log/.out targets (existing behavior)
+    else  // Legacy .log/.out targets: a reference mass is a target within rt_window of a reference acquisition of it
     {
       for (const auto& [mass, rts] : target_mass_rt_map_)
       {
-        target_masses_.push_back(mass);
+        for (double prt : rts)
+        {
+          if (std::abs(rt - prt) < config_.targeting().rt_window)
+          {
+            target_masses_.push_back(mass);
+            break;
+          }
+        }
       }
     }
 
@@ -539,14 +537,6 @@ namespace OpenMS
 
             int nominal_mass = SpectralDeconvolution::getNominalMass(mass);
             bool target_matched = false;
-            // The charge list of the legacy ida.log target THIS candidate is checked against (its Z=
-            // values, target_mass_charge_map_), or null. Declared per candidate: it used to be declared
-            // once per survey, so a candidate that matched no target -- admitted as a non-target in
-            // non-strict inclusion's phase 1 -- still held the list an EARLIER candidate had looked at,
-            // and the erase after admission took this candidate's charge out of that unrelated target
-            // for the rest of the run. Strict inclusion admits matched candidates only, and every match
-            // assigns the pointer first, so it never saw a stale one.
-            std::vector<int>* charges = nullptr;
             double snr_threshold = config_.targeting().snr_threshold;
             double qscore_threshold = config_.targeting().qscore_threshold;
             double tqscore_factor_for_exclusion = 1.0;
@@ -589,28 +579,7 @@ namespace OpenMS
                       // committed list writes -1, which hit the `charge < 0` arm on the first row.
                       target_matched = true;
                     }
-                    else if (!target_mass_charge_map_.empty())  // Legacy .log mode with charge
-                    {
-                      auto it = target_mass_charge_map_.find(*ub);
-                      if (it != target_mass_charge_map_.end())
-                      {
-                        charges = &it->second;
-                        if (std::find(charges->begin(), charges->end(), charge) != charges->end())
-                        {
-                          target_matched = true;
-                        }
-                      }
-                      else
-                      {
-                        // A tag-expanded target among the ida.log ones (collectInclusionTargets_):
-                        // a mass hypothesis with no charge list, matched on mass alone, as the TSV
-                        // path matches it. `charges` is cleared so the erase below cannot take this
-                        // charge out of a list an earlier candidate pointed it at.
-                        charges = nullptr;
-                        target_matched = true;
-                      }
-                    }
-                    else  // Legacy mode without charge (mass-only matching)
+                    else  // ida.log targets (and the tag-expanded ones among them): mass targeting, any charge
                     {
                       target_matched = true;
                     }
@@ -875,14 +844,6 @@ namespace OpenMS
               {
                 memory_.tqscore_exceeding_mass_rt_map_[nominal_mass] = rt;
                 memory_.tqscore_exceeding_mz_rt_map_[integer_mz] = rt;
-              }
-            }
-
-            // For legacy .log mode with charge targeting, remove this charge from list
-            if (config_.targeting().mode == 1 && charges != nullptr) {
-              auto it = std::find(charges->begin(), charges->end(), charge);
-              if (it != charges->end()) {
-                charges->erase(it);
               }
             }
 

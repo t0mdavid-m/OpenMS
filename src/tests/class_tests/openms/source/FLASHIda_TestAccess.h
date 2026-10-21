@@ -145,13 +145,6 @@ namespace OpenMS
       return (int)s.selected_peak_groups_.size();
     }
 
-    /// The legacy ida.log targets' charge lists (inclusion mode with target_logs): reference mass ->
-    /// the Z= values still owed. A matched candidate's acquisition erases its charge from the list.
-    static std::map<double, std::vector<int>> targetMassCharges(const PrecursorSelection& s)
-    {
-      return s.target_mass_charge_map_;
-    }
-
     /// Retention time stamped on each of the two MS1 deconvolution results. This is the ONLY
     /// observable that separates the two MS1 arms unconditionally.
     ///

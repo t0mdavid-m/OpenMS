@@ -2319,15 +2319,12 @@ START_SECTION(processScan_acquisition_memory_expires_after_rt_window_seconds)
 }
 END_SECTION
 
-// Legacy ida.log targets (targeting "inclusion" + target_logs) carry the reference charge as Z=, and a
-// matched candidate's acquisition erases its charge from that target's list (target_mass_charge_map_).
-// The pointer to that list was declared once per SURVEY, so under non-strict inclusion a candidate that
-// matched no target -- admitted in phase 1 -- erased its own charge from the list of whichever target an
-// earlier candidate had last been checked against: an unrelated target lost a charge for the rest of
-// the run. Synthetic PeakGroups, so the ranking and the charges are exactly the ones that trigger it.
-START_SECTION(a_non_target_does_not_spend_a_reference_targets_charge)
+// GTM: the ida.log targets (targeting "inclusion" + target_logs) are masses. A reference mass is a target at any charge (not
+// only at its reference Z=, and no charge is used up by an acquisition), and only within rt_window of a reference acquisition
+// of it. Synthetic PeakGroups under strict inclusion, so a PeakGroup is taken exactly when it matches an active target.
+START_SECTION(ida_log_targets_are_masses_within_the_rt_window)
 {
-  const std::string dir = freshLogDir("stale_target_charges");
+  const std::string dir = freshLogDir("gtm_mass_targets");
   const std::string ref_log = dir + "/reference_ida.log";
   {
     std::ofstream f(ref_log);
@@ -2338,7 +2335,7 @@ START_SECTION(a_non_target_does_not_spend_a_reference_targets_charge)
          "\tFeatures=[0.9,1.0,0.9,1.0,0.9,1.0]\tChargeRange=[8-12]\tHCD=0\n";
     f << "AllMass=10000.0000\n";
   }
-  std::string cfg = buildJsonWithLogDir(dir);   // strict_inclusion false, max_precursors 5
+  std::string cfg = buildJsonWithLogDir(dir);   // rt_window 180 s, max_precursors 5
   {
     auto rep = [&cfg](const std::string& from, const std::string& to) {
       auto p = cfg.find(from);
@@ -2346,11 +2343,9 @@ START_SECTION(a_non_target_does_not_spend_a_reference_targets_charge)
       if (p != std::string::npos) cfg.replace(p, from.size(), to);
     };
     rep("\"targeting\": \"none\"", "\"targeting\": \"inclusion\"");
+    rep("\"strict_inclusion\": false", "\"strict_inclusion\": true");
     rep("\"target_logs\": []", "\"target_logs\": [\"" + ref_log + "\"]");
   }
-  Config config(cfg);
-  Deconvolution deconv(config, config.toleranceList());
-  PrecursorSelection selection(config, deconv);
 
   // A synthetic MS1 PeakGroup resolving exactly @p charges -- three isotopes each, so every charge has a
   // measured m/z window -- with the first as its representative charge.
@@ -2375,21 +2370,20 @@ START_SECTION(a_non_target_does_not_spend_a_reference_targets_charge)
     pg.setRepAbsCharge(charges.front());
     return pg;
   };
-  // X sits on the target's mass at a charge the reference never acquired: it is checked against the
-  // target's list and does not match. Y is nowhere near a target, at the target's charge 10. Ranked X,
-  // then Y; under non-strict inclusion neither is taken in phase 0 (targets only), both in phase 1.
-  const PeakGroup x = envelope(10000.0, {12, 13, 14}, 0.9);
-  const PeakGroup y = envelope(15000.0, {10, 11, 12}, 0.8);
-  TEST_EQUAL(FLASHIdaTestAccess::selectFrom(selection, {x, y}, 60.0), 2)
-
-  // Y matched no target, so it must not have spent the target's charge 10.
-  const auto lists = FLASHIdaTestAccess::targetMassCharges(selection);
-  TEST_EQUAL(lists.size(), 1)
-  if (lists.size() == 1)
-  {
-    const std::vector<int>& owed = lists.begin()->second;
-    TEST_EQUAL(std::count(owed.begin(), owed.end(), 10), 1)
-  }
+  const PeakGroup other_charges = envelope(10000.0, {12, 13, 14}, 0.9);   // the target's mass, charges never acquired in the reference
+  const PeakGroup same_charge = envelope(10000.0, {10, 11, 12}, 0.9);     // the target's mass at its reference charge 10
+  const PeakGroup no_target = envelope(15000.0, {10, 11, 12}, 0.8);
+  auto taken = [&cfg](const std::vector<PeakGroup>& pgs, double rt) {
+    Config config(cfg);
+    Deconvolution deconv(config, config.toleranceList());
+    PrecursorSelection selection(config, deconv);
+    return FLASHIdaTestAccess::selectFrom(selection, pgs, rt);
+  };
+  // 2 min after the reference acquisition (inside the 180 s window): the target's mass is taken at any charge, the other mass is not.
+  TEST_EQUAL(taken({other_charges, no_target}, 180.0), 1)
+  TEST_EQUAL(taken({same_charge, no_target}, 180.0), 1)
+  // 10 min after it: no target is active, so nothing is taken under strict inclusion.
+  TEST_EQUAL(taken({same_charge, no_target}, 660.0), 0)
 }
 END_SECTION
 
