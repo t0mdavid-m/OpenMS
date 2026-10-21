@@ -18,10 +18,14 @@
 #include <OpenMS/METADATA/SpectrumLookup.h>
 #include <OpenMS/PROCESSING/CENTROIDING/PeakPickerHiRes.h>
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdlib>
 #include <numeric>
 #include <unordered_map>
+#ifdef _OPENMP
+  #include <omp.h>
+#endif
 
 namespace OpenMS
 {
@@ -1371,8 +1375,84 @@ namespace
   };
 } // namespace
 
+namespace
+{
+  /// loadSpectra for an indexed mzML: parsed in parallel chunks, each reduced right away to the MSn spectra that one of the two numberings
+  /// of the serial reading can need (the scan number of the native ID, or, if an MSn spectrum of levels 2-5 has none, the spectrum index + 1
+  /// for those without); the numbering is chosen once all spectra are read, as the serial reading chooses it. False: not loaded this way.
+  bool loadSpectraParallel(const String& mzml_file, const std::set<int>& scans, std::map<int, MSSpectrum>& spectra, Size& read)
+  {
+    int threads = 1;
+#ifdef _OPENMP
+    threads = omp_get_max_threads();
+#endif
+    if (threads < 2) return false;
+    struct Kept
+    {
+      Size index;      // in the file
+      int native_scan; // -1: none
+    };
+    std::vector<std::pair<Size, std::vector<Kept>>> kept_by_chunk;
+    std::atomic<Size> all_count {0}, msn_count {0}; // spectra; of MS levels 2-5
+    std::atomic<bool> without_scan_number {false};
+    auto keep = [&](Size first, MSExperiment& chunk) {
+      String type_accession = "MS:1000768"; // as FLASHDeconvAlgorithm::getScanNumber
+      if (! chunk.getSourceFiles().empty() && ! chunk.getSourceFiles()[0].getNativeIDTypeAccession().empty())
+      {
+        type_accession = chunk.getSourceFiles()[0].getNativeIDTypeAccession();
+      }
+      std::vector<Kept> kept;
+      std::vector<MSSpectrum> kept_spectra;
+      for (Size k = 0; k < chunk.size(); k++)
+      {
+        auto& spec = chunk[k];
+        const UInt level = spec.getMSLevel();
+        std::vector<String> native_ids;
+        spec.getNativeID().split(",", native_ids);
+        const int native_scan = native_ids.empty() ? -1 : SpectrumLookup::extractScanNumber(native_ids.back(), type_accession);
+        if (level >= 2 && level <= 5)
+        {
+          ++msn_count;
+          if (native_scan < 0) without_scan_number = true;
+        }
+        if (level < 2 || scans.count(native_scan >= 0 ? native_scan : (int)(first + k + 1)) == 0) continue;
+        kept.push_back({first + k, native_scan});
+        kept_spectra.push_back(std::move(spec));
+      }
+      all_count += chunk.size();
+      chunk.getSpectra() = std::move(kept_spectra);
+#pragma omp critical(FLASHAnnotatorLoadSpectra)
+      kept_by_chunk.emplace_back(first, std::move(kept));
+    };
+    MzMLFile mzml;
+    mzml.setLogType(ProgressLogger::NONE);
+    MSExperiment exp;
+    if (! mzml.loadIndexedParallel(mzml_file, exp, threads, keep)) return false;
+    std::sort(kept_by_chunk.begin(), kept_by_chunk.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    std::vector<Kept> kept;
+    for (auto& [first, k] : kept_by_chunk) kept.insert(kept.end(), k.begin(), k.end());
+    if (kept.size() != exp.size()) return false;
+    // as the serial reading: the scan of the native ID (levels 2-5 only), or with an MSn spectrum without one, the index + 1 for those
+    // without; the first spectrum of a scan in the file is kept
+    const bool by_index = without_scan_number;
+    for (Size k = 0; k < kept.size(); k++)
+    {
+      const UInt level = exp[k].getMSLevel();
+      int scan = kept[k].native_scan;
+      if (by_index && scan < 0) scan = (int)(kept[k].index + 1);
+      if (scan < 0 || (! by_index && level > 5) || scans.count(scan) == 0 || spectra.count(scan) > 0) continue;
+      spectra[scan] = std::move(exp[k]);
+    }
+    read = by_index ? all_count.load() : msn_count.load();
+    return true;
+  }
+} // namespace
+
 Size FLASHAnnotatorAlgorithm::loadSpectra(const String& mzml_file, const std::set<int>& scans, std::map<int, MSSpectrum>& spectra)
 {
+  Size parallel_read = 0;
+  if (loadSpectraParallel(mzml_file, scans, spectra, parallel_read)) return parallel_read;
+  spectra.clear();
   MzMLFile mzml;
   mzml.setLogType(ProgressLogger::NONE);
   PeakFileOptions options = mzml.getOptions();

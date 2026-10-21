@@ -157,7 +157,8 @@ namespace OpenMS
 
   namespace
   {
-    bool loadIndexedParallel_(const std::string& file, const PeakFileOptions& options, MSExperiment& map, int threads)
+    bool loadIndexedParallel_(const std::string& file, const PeakFileOptions& options, MSExperiment& map, int threads,
+                              const std::function<void(Size, MSExperiment&)>& chunk_filter)
     {
       std::ifstream in(file, std::ios::binary);
       if (! in) { return false; }
@@ -235,6 +236,7 @@ namespace OpenMS
         mzml.getOptions() = options;
         mzml.setLogType(ProgressLogger::NONE);
         mzml.loadBuffer(buffer, parts[c]);
+        if (chunk_filter) { chunk_filter(first_spectrum, parts[c]); }
       };
       {
         // Parse the header alone first: initialises Xerces and the CV singletons before the threads start.
@@ -296,11 +298,11 @@ namespace OpenMS
     }
   }
 
-  bool MzMLFile::loadIndexedParallel(const String& filename, PeakMap& map, int threads)
+  bool MzMLFile::loadIndexedParallel(const String& filename, PeakMap& map, int threads, const std::function<void(Size, PeakMap&)>& chunk_filter)
   {
     try
     {
-      if (loadIndexedParallel_(filename, options_, map, threads)) { return true; }
+      if (loadIndexedParallel_(filename, options_, map, threads, chunk_filter)) { return true; }
     }
     catch (...)
     {

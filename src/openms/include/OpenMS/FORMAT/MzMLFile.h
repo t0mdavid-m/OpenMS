@@ -17,6 +17,7 @@
 #include <OpenMS/DATASTRUCTURES/ListUtils.h> // StringList
 #include <OpenMS/INTERFACES/IMSDataConsumer.h>
 
+#include <functional>
 #include <map>
 
 namespace OpenMS
@@ -74,8 +75,11 @@ public:
       The spectrum list is cut at index offsets into byte-balanced chunks of whole spectra, each parsed by its own handler,
       and the parts are concatenated in input order. Returns false, with @p map cleared, when the file has no usable
       index or anything else fails; the caller then loads the file with load(), which does not rely on the index.
+      @p chunk_filter, if set, is called (concurrently) on every parsed chunk with the index of its first spectrum in the file, and may
+      remove spectra from it before the chunks are joined, which bounds the memory to the spectra kept.
     */
-    bool loadIndexedParallel(const String& filename, PeakMap& map, int threads);
+    bool loadIndexedParallel(const String& filename, PeakMap& map, int threads,
+                             const std::function<void(Size first_spectrum, PeakMap& chunk)>& chunk_filter = {});
 
     /**
       @brief Only count the number of spectra and chromatograms from a file
