@@ -825,15 +825,29 @@ namespace OpenMS
 
     new_max_abs_charge = new_min_abs_charge = max_sig_charge;
     double threshold = std::min(max_sig / 10, 1.0);
+    // a charge below the threshold is passed over (another species' peaks inside the isotope span at one charge make its SNR collapse);
+    // the range ends at the last charge above it before the third weak charge in a row
+    int weak = 0;
     for (int z = max_sig_charge; z <= max_abs_charge_; z++)
     {
-      if ((bounded && charge_snr_bound(z) < threshold) || get_charge_snr(z) < threshold) { break; }
+      if ((bounded && charge_snr_bound(z) < threshold) || get_charge_snr(z) < threshold)
+      {
+        if (++weak > 2) { break; }
+        continue;
+      }
+      weak = 0;
       new_max_abs_charge = z;
     }
 
+    weak = 0;
     for (int z = max_sig_charge; z >= min_abs_charge_; z--)
     {
-      if ((bounded && charge_snr_bound(z) < threshold) || get_charge_snr(z) < threshold) { break; }
+      if ((bounded && charge_snr_bound(z) < threshold) || get_charge_snr(z) < threshold)
+      {
+        if (++weak > 2) { break; }
+        continue;
+      }
+      weak = 0;
       new_min_abs_charge = z;
     }
 
