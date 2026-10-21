@@ -1446,7 +1446,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   auto searchCandidates = [&](const DeconvolvedSpectrum& dspec, const std::vector<Size>* tag_indices_of_scan, const std::set<Size>& excluded,
                               bool with_precursor_ladders, std::vector<ProteinHit>& hits_out, std::vector<ProteinHit>& ladder_out,
                               std::vector<ProteinHit>& pl_out, std::vector<ProteinHit>& decoy_pl_out,
-                              std::vector<FLASHHelperClasses::Tag>& gtags, Size& pl_windows, String& note) {
+                              std::vector<FLASHHelperClasses::Tag>& gtags, Size& pl_windows, String& note,
+                              const std::vector<MassLadderAlgorithm::Candidate>* sliding) {
     // The sequence-tag candidates (proteins hit by a tag of the spectrum; thousands per spectrum) stay records until the cut below, and only
     // the kept ones become ProteinHits. Per candidate, ascending by protein: its covered positions and its tags (distinct, ascending), and
     // its shifts (protein residue sum up to the tag minus the tag flanking mass) with the tag flanking masses, in the order of the tags and
@@ -1789,7 +1790,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       std::vector<MassLadderAlgorithm::Candidate> found;
       if (native_rule)
       {
-        mass_ladders.searchSlidingLadders(masses, protein_tol, native_ladder_top, excluded, found);
+        if (sliding != nullptr) found = *sliding; // searched for all spectra at once (searchSlidingSpectra)
+        else mass_ladders.searchSlidingLadders(masses, protein_tol, native_ladder_top, excluded, found);
         nativeCut(found, [](const MassLadderAlgorithm::Candidate& c) { return c.score; }, [](const MassLadderAlgorithm::Candidate& c) { return c.protein; },
                   found.size() >= native_ladder_top, 1, note);
       }
@@ -1849,6 +1851,31 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   };
   const std::set<Size> no_exclusion;
   std::vector<String> native_notes(dspecs.size());
+  // native mode: the sliding ladders of the spectra @p ds (with the proteins @p excluded_of of each, nullptr: none) in one batched pass
+  // over the database (MassLadderAlgorithm::searchSlidingLadders for many spectra), indexed by spectrum in @p out
+  auto searchSlidingSpectra = [&](const std::vector<DeconvolvedSpectrum>& ds, const std::vector<int>& which, const std::vector<std::set<Size>>* excluded_of,
+                                  std::vector<std::vector<MassLadderAlgorithm::Candidate>>& out) {
+    out.assign(ds.size(), {});
+    std::vector<std::vector<double>> masses(which.size());
+    std::vector<const std::vector<double>*> masses_of;
+    std::vector<const std::set<Size>*> excluded;
+    for (Size k = 0; k < which.size(); k++)
+    {
+      for (const auto& pg : ds[which[k]]) masses[k].push_back(pg.getMonoMass()); // as searchCandidates
+      masses_of.push_back(&masses[k]);
+      excluded.push_back(excluded_of == nullptr ? &no_exclusion : &(*excluded_of)[which[k]]);
+    }
+    std::vector<std::vector<MassLadderAlgorithm::Candidate>> found;
+    mass_ladders.searchSlidingLadders(masses_of, protein_tol, native_ladder_top, excluded, found);
+    for (Size k = 0; k < which.size(); k++) out[which[k]] = std::move(found[k]);
+  };
+  std::vector<std::vector<MassLadderAlgorithm::Candidate>> sliding_of;
+  if (native_rule)
+  {
+    std::vector<int> all(dspecs.size());
+    std::iota(all.begin(), all.end(), 0);
+    searchSlidingSpectra(dspecs, all, nullptr, sliding_of);
+  }
   // the precursor-ladder windows of all precursor masses searched below, in one pass over the database (the same windows as a sweep per mass)
   if (use_precursor_ladders)
   {
@@ -1867,7 +1894,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     nextProgress();
     const auto tag_it = scan_to_tag_indices.find(dspecs[d].getScanNumber());
     searchCandidates(dspecs[d], tag_it == scan_to_tag_indices.end() ? nullptr : &tag_it->second, no_exclusion, use_precursor_ladders, spec_hits[d],
-                     spec_ladder_hits[d], spec_pl_hits[d], spec_decoy_pl_hits[d], spec_gapped_tags[d], spec_pl_windows[d], native_notes[d]);
+                     spec_ladder_hits[d], spec_pl_hits[d], spec_decoy_pl_hits[d], spec_gapped_tags[d], spec_pl_windows[d], native_notes[d],
+                     native_rule ? &sliding_of[d] : nullptr);
   }
   mass_ladders.clearPrecursorWindows();
   if (native_rule)
@@ -2681,6 +2709,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         std::vector<std::vector<ProteinHit>> r_hits(dspecs.size()), r_ladder_hits(dspecs.size()), r_pl_hits(dspecs.size()), r_decoy_pl_hits(dspecs.size());
         std::vector<std::vector<FLASHHelperClasses::Tag>> r_gapped_tags(dspecs.size());
         std::vector<Size> r_windows(dspecs.size(), 0);
+        std::vector<std::vector<MassLadderAlgorithm::Candidate>> r_sliding;
+        if (native_rule) searchSlidingSpectra(residual, searched, &excluded, r_sliding);
 #ifdef _OPENMP
         const bool residual_over_spectra = (int)searched.size() >= omp_get_max_threads();
 #else
@@ -2692,7 +2722,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
           const int d = searched[k];
           String note; // the native note of the first search is the one logged
           searchCandidates(residual[d], &residual_tags[d], excluded[d], false, r_hits[d], r_ladder_hits[d], r_pl_hits[d], r_decoy_pl_hits[d],
-                           r_gapped_tags[d], r_windows[d], note);
+                           r_gapped_tags[d], r_windows[d], note, native_rule ? &r_sliding[d] : nullptr);
         }
         std::vector<ProteinHit> r_candidates, r_ladder_candidates;
         std::vector<std::pair<Size, Size>> r_ranges(dspecs.size(), {0, 0}), r_ladder_ranges(dspecs.size(), {0, 0});

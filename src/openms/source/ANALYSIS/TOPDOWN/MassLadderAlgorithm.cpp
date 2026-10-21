@@ -110,9 +110,18 @@ public:
     return cum_weight_[(std::size_t)(std::upper_bound(t_.begin(), t_.end(), v) - t_.begin())];
   }
 
+  // the 1 Da bins (bin_inverse, bin_phase) that hold a target interval, as bits
+  const std::vector<std::uint64_t>& bits() const
+  {
+    return bits_;
+  }
+
+  static constexpr double bin_inverse = 1.0 / 1.000495;
+  static constexpr double bin_phase = 0.5;
+
 private:
-  static constexpr double bin_inverse_ = 1.0 / 1.000495;
-  static constexpr double bin_phase_ = 0.5;
+  static constexpr double bin_inverse_ = bin_inverse;
+  static constexpr double bin_phase_ = bin_phase;
   bool prefix_;
   std::vector<double> t_, lo_, hi_, cum_weight_; // ascending; cum_weight_[i]: the widths of the first i
   std::vector<std::size_t> source_;              // the mass index of each target
@@ -869,13 +878,16 @@ void MassLadderAlgorithm::clearPrecursorWindows()
 void MassLadderAlgorithm::searchSlidingLadders(const std::vector<double>& masses, double tol_ppm, Size top_n, const std::set<Size>& excluded,
                                                std::vector<Candidate>& candidates) const
 {
-  candidates.clear();
-  if (masses.empty() || segments_.empty() || top_n == 0) return;
-  std::vector<precursor_ladder::TargetSet> sets;
-  sets.reserve(ion_residue_shifts_.size());
-  for (const auto& [prefix, shift] : ion_residue_shifts_) sets.emplace_back(masses, shift, prefix, tol_ppm);
-  double max_value[2] = {0, 0}; // per side (0 prefix, 1 suffix): the largest residue sum a mass can match
-  for (const auto& set : sets) max_value[set.isPrefix() ? 0 : 1] = std::max(max_value[set.isPrefix() ? 0 : 1], set.maxValue());
+  std::vector<std::vector<Candidate>> found;
+  searchSlidingLadders({&masses}, tol_ppm, top_n, {&excluded}, found);
+  candidates = std::move(found[0]);
+}
+
+void MassLadderAlgorithm::searchSlidingLadders(const std::vector<const std::vector<double>*>& masses, double tol_ppm, Size top_n,
+                                               const std::vector<const std::set<Size>*>& excluded, std::vector<std::vector<Candidate>>& candidates) const
+{
+  candidates.assign(masses.size(), {});
+  if (segments_.empty() || top_n == 0) return;
 
   struct Side
   {
@@ -884,143 +896,228 @@ void MassLadderAlgorithm::searchSlidingLadders(const std::vector<double>& masses
     std::uint32_t a = 0, b = 0; // the run of standard residues of the best anchor
     Size tested = 0;     // the anchors tested on this side of the protein
   };
-  // Per side two classes of anchors, each corrected for its own number of tests: the intact termini (prefix: the protein start, also
-  // without the initiator residue; suffix: the protein end) and every other start or end, so that a ladder from an intact terminus does
-  // not pay for every start of its protein. Slot side * 2 + class (0 other, 1 terminus).
-  // Per segment (its own slots, so segments are searched in parallel when the caller is not parallel itself, e.g. one native spectrum),
-  // then per protein: the best anchor over its segments (the first among equal ones) and the anchors tested on all of them.
-  std::vector<std::array<Side, 4>> seg_best(segments_.size());
-#pragma omp parallel for schedule(dynamic, 256) if (! omp_in_parallel())
-  for (long si = 0; si < (long)segments_.size(); si++)
+  struct SegmentBest
   {
-    const auto& seg = segments_[si];
-    if (excluded.count(seg.protein) > 0) continue;
-    const double* S = window_sums_[seg.protein];
-    for (int side = 0; side < 2; side++)
-    {
-      if (max_value[side] <= 0) continue; // no ion type of this side
-      const bool prefix = side == 0;
-      // prefix: anchors i = a .. b-2, positions x = i+1 .. b-1; suffix: anchors j = a+2 .. b, positions x = j-1 .. a+1
-      for (long anchor = prefix ? (long)seg.a : (long)seg.a + 2; prefix ? anchor + 2 <= (long)seg.b : anchor <= (long)seg.b; anchor++)
+    double log_p = 0;
+    long anchor = -1;
+  };
+  // the ranking and the ladders of one spectrum from the best anchor per protein and slot
+  auto finish = [&](const std::vector<precursor_ladder::TargetSet>& sets, std::vector<std::array<Side, 4>>& best, std::vector<Candidate>& candidates) {
+      // per protein and side, the class of the better corrected score (its best anchor is the ladder of that side)
+      auto corrected = [](const Side& b) { return b.anchor < 0 ? 0.0 : b.log_p - std::log10((double)std::max(b.tested, (Size)1)); };
+      std::vector<std::array<int, 2>> chosen(best.size(), {0, 0});
+      std::vector<std::pair<double, Size>> ranked; // score, protein
+      for (Size p = 0; p < best.size(); p++)
       {
-        const bool terminus = prefix ? anchor <= 1 : anchor == (long)protein_lengths_[seg.protein];
-        auto& b = seg_best[si][side * 2 + (terminus ? 1 : 0)];
-        b.tested++;
-        int k = 0, positions = 0;
-        double v_far = 0;
-        for (long x = prefix ? anchor + 1 : anchor - 1; prefix ? x < (long)seg.b : x > (long)seg.a; x += prefix ? 1 : -1)
+        double score = 0;
+        for (int side = 0; side < 2; side++)
         {
-          const double v = prefix ? S[x] - S[anchor] : S[anchor] - S[x];
-          if (v > max_value[side]) break;
-          positions++;
-          v_far = v;
+          const int c = corrected(best[p][side * 2 + 1]) > corrected(best[p][side * 2]) ? 1 : 0;
+          chosen[p][side] = side * 2 + c;
+          score = std::max(score, corrected(best[p][side * 2 + c]));
+        }
+        if (score > 0) ranked.emplace_back(score, p);
+      }
+      const Size top = std::min(ranked.size(), top_n);
+      std::partial_sort(ranked.begin(), ranked.begin() + top, ranked.end(),
+                        [](const auto& a, const auto& b) { return a.first != b.first ? a.first > b.first : a.second < b.second; });
+      for (Size r = 0; r < top; r++)
+      {
+        const Size p = ranked[r].second;
+        const double* S = window_sums_[p];
+        Candidate cand;
+        for (int side = 0; side < 2; side++)
+        {
+          const auto& b = best[p][chosen[p][side]];
+          if (b.anchor < 0) continue;
+          const bool prefix = side == 0;
+          const long seg_a = b.a, seg_b = b.b;
+          // the ion type of this side with the most matched positions at the anchor (the first in ion_type among equal ones)
+          Ladder ladder;
+          ladder.prefix = prefix;
+          std::vector<int> positions;
           for (const auto& set : sets)
           {
-            if (set.isPrefix() != prefix || set.massIndex(v) < 0) continue;
-            k++;
-            break;
+            if (set.isPrefix() != prefix) continue;
+            Ladder l;
+            l.prefix = prefix;
+            std::vector<int> pos;
+            for (long x = prefix ? b.anchor + 1 : b.anchor - 1; prefix ? x < seg_b : x > seg_a; x += prefix ? 1 : -1)
+            {
+              const double v = prefix ? S[x] - S[b.anchor] : S[b.anchor] - S[x];
+              if (v > set.maxValue()) break;
+              const long mi = set.massIndex(v);
+              if (mi < 0) continue;
+              pos.push_back((int)x);
+              l.mass_indices.push_back((Size)mi);
+            }
+            if (l.mass_indices.size() > ladder.mass_indices.size())
+            {
+              ladder = std::move(l);
+              positions = std::move(pos);
+            }
+          }
+          if (ladder.mass_indices.size() < 2) continue;
+          // as a precursor-ladder window side: the ladder spans the positions of its lowest and its highest mass, its first mass the lowest
+          ladder.start = prefix ? positions.front() : positions.back();
+          ladder.end = prefix ? positions.back() : positions.front();
+          cand.ladders.push_back(std::move(ladder));
+        }
+        if (cand.ladders.empty()) continue;
+        cand.protein = p;
+        cand.rank = (int)r + 1;
+        cand.score = ranked[r].first;
+        candidates.push_back(std::move(cand));
+      }
+  };
+
+  // Spectra are searched in batches of up to 64, one pass over the anchors and positions of the database per batch: the residue sum of a
+  // position is computed once and tested against the spectra whose target sets have a target in its 1 Da bin (a mask per bin), each of
+  // those exactly as for one spectrum. Per spectrum the anchors are visited in the same order, with the same tests, sums and scores, so the
+  // candidates are those of a search of each spectrum alone.
+  constexpr Size batch_size = 64;
+  constexpr double bin_inverse = precursor_ladder::TargetSet::bin_inverse, bin_phase = precursor_ladder::TargetSet::bin_phase;
+  std::vector<SegmentBest> seg_best;               // [(s * segments + si) * 4 + slot]
+  std::vector<std::array<Size, 4>> seg_tested(segments_.size()); // anchors tested per segment and slot (the same for every spectrum)
+  for (Size first = 0; first < masses.size(); first += batch_size)
+  {
+    const Size n = std::min(batch_size, masses.size() - first);
+    std::vector<std::vector<precursor_ladder::TargetSet>> sets(n);
+    std::vector<std::array<double, 2>> max_value(n, {0.0, 0.0}); // per spectrum and side (0 prefix, 1 suffix)
+    std::uint64_t side_active[2] = {0, 0};                      // the spectra with masses and an ion type of the side
+    double batch_max[2] = {0, 0};
+    std::vector<std::uint64_t> bin_mask[2];
+    for (Size s = 0; s < n; s++)
+    {
+      if (masses[first + s]->empty()) continue;
+      sets[s].reserve(ion_residue_shifts_.size());
+      for (const auto& [prefix, shift] : ion_residue_shifts_) sets[s].emplace_back(*masses[first + s], shift, prefix, tol_ppm);
+      for (const auto& set : sets[s]) max_value[s][set.isPrefix() ? 0 : 1] = std::max(max_value[s][set.isPrefix() ? 0 : 1], set.maxValue());
+      for (int side = 0; side < 2; side++)
+      {
+        if (max_value[s][side] <= 0) continue;
+        side_active[side] |= std::uint64_t(1) << s;
+        batch_max[side] = std::max(batch_max[side], max_value[s][side]);
+      }
+      for (const auto& set : sets[s])
+      {
+        auto& mask = bin_mask[set.isPrefix() ? 0 : 1];
+        const auto& bits = set.bits();
+        if (mask.size() < bits.size() * 64) mask.resize(bits.size() * 64, 0);
+        for (Size w = 0; w < bits.size(); w++)
+        {
+          for (std::uint64_t word = bits[w]; word != 0; word &= word - 1) mask[w * 64 + (Size)std::countr_zero(word)] |= std::uint64_t(1) << s;
+        }
+      }
+    }
+    seg_best.assign(n * segments_.size() * 4, SegmentBest());
+    const Size n_segments = segments_.size();
+#pragma omp parallel if (! omp_in_parallel())
+    {
+      std::vector<int> k(n, 0);
+      std::vector<Size> touched;
+      touched.reserve(n);
+#pragma omp for schedule(dynamic, 64)
+      for (long si = 0; si < (long)n_segments; si++)
+      {
+        const auto& seg = segments_[si];
+        std::uint64_t included = 0;
+        for (Size s = 0; s < n; s++)
+        {
+          if (excluded[first + s]->count(seg.protein) == 0) included |= std::uint64_t(1) << s;
+        }
+        const double* S = window_sums_[seg.protein];
+        seg_tested[si] = {0, 0, 0, 0};
+        for (int side = 0; side < 2; side++)
+        {
+          const std::uint64_t active = side_active[side] & included;
+          if (active == 0) continue;
+          const bool prefix = side == 0;
+          const auto& mask = bin_mask[side];
+          // prefix: anchors i = a .. b-2, positions x = i+1 .. b-1; suffix: anchors j = a+2 .. b, positions x = j-1 .. a+1
+          for (long anchor = prefix ? (long)seg.a : (long)seg.a + 2; prefix ? anchor + 2 <= (long)seg.b : anchor <= (long)seg.b; anchor++)
+          {
+            const bool terminus = prefix ? anchor <= 1 : anchor == (long)protein_lengths_[seg.protein];
+            const int slot = side * 2 + (terminus ? 1 : 0);
+            seg_tested[si][slot]++;
+            for (long x = prefix ? anchor + 1 : anchor - 1; prefix ? x < (long)seg.b : x > (long)seg.a; x += prefix ? 1 : -1)
+            {
+              const double v = prefix ? S[x] - S[anchor] : S[anchor] - S[x];
+              if (v > batch_max[side]) break;
+              const Size bin = (Size)(v * bin_inverse + bin_phase);
+              if (bin >= mask.size()) continue;
+              for (std::uint64_t m = mask[bin] & active; m != 0; m &= m - 1)
+              {
+                const Size s = (Size)std::countr_zero(m);
+                for (const auto& set : sets[s])
+                {
+                  if (set.isPrefix() != prefix || ! set.matches(v)) continue;
+                  if (k[s]++ == 0) touched.push_back(s);
+                  break;
+                }
+              }
+            }
+            for (Size s : touched)
+            {
+              const int matched = k[s];
+              k[s] = 0;
+              if (matched < precursor_ladder_min_k) continue;
+              // the positions up to the spectrum's largest residue sum of this side, and the farthest of them (residue sums rise along x)
+              long positions = 0;
+              double v_far = 0;
+              for (long x = prefix ? anchor + 1 : anchor - 1; prefix ? x < (long)seg.b : x > (long)seg.a; x += prefix ? 1 : -1)
+              {
+                const double v = prefix ? S[x] - S[anchor] : S[anchor] - S[x];
+                if (v > max_value[s][side]) break;
+                positions++;
+                v_far = v;
+              }
+              double weight = 0;
+              for (const auto& set : sets[s])
+              {
+                if (set.isPrefix() == prefix) weight += set.weightUpTo(v_far);
+              }
+              const double lambda = (double)positions / v_far * weight;
+              const double log_p = -std::log10(std::max(boost::math::gamma_p((double)matched, std::max(lambda, 1e-12)), 1e-300));
+              auto& b = seg_best[(s * n_segments + (Size)si) * 4 + slot];
+              if (log_p > b.log_p) // the first anchor among equal ones
+              {
+                b.log_p = log_p;
+                b.anchor = anchor;
+              }
+            }
+            touched.clear();
           }
         }
-        if (k < precursor_ladder_min_k) continue;
-        double weight = 0;
-        for (const auto& set : sets)
-        {
-          if (set.isPrefix() == prefix) weight += set.weightUpTo(v_far);
-        }
-        const double lambda = (double)positions / v_far * weight;
-        const double log_p = -std::log10(std::max(boost::math::gamma_p((double)k, std::max(lambda, 1e-12)), 1e-300));
-        if (log_p > b.log_p) // the first anchor among equal ones
-        {
-          b.log_p = log_p;
-          b.anchor = anchor;
-          b.a = seg.a;
-          b.b = seg.b;
-        }
       }
     }
-  }
-  std::vector<std::array<Side, 4>> best(protein_lengths_.size());
-  for (Size si = 0; si < segments_.size(); si++)
-  {
-    for (int side = 0; side < 4; side++)
+    // per spectrum: per protein, the best anchor over its segments (the first among equal ones) and the anchors tested on all of them
+#pragma omp parallel for schedule(dynamic, 1) if (! omp_in_parallel())
+    for (long s = 0; s < (long)n; s++)
     {
-      auto& b = best[segments_[si].protein][side];
-      const auto& sb = seg_best[si][side];
-      b.tested += sb.tested;
-      if (sb.anchor >= 0 && (b.anchor < 0 || sb.log_p > b.log_p))
+      if (masses[first + s]->empty()) continue;
+      std::vector<std::array<Side, 4>> best(protein_lengths_.size());
+      for (Size si = 0; si < n_segments; si++)
       {
-        const Size tested = b.tested;
-        b = sb;
-        b.tested = tested;
-      }
-    }
-  }
-
-  // per protein and side, the class of the better corrected score (its best anchor is the ladder of that side)
-  auto corrected = [](const Side& b) { return b.anchor < 0 ? 0.0 : b.log_p - std::log10((double)std::max(b.tested, (Size)1)); };
-  std::vector<std::array<int, 2>> chosen(best.size(), {0, 0});
-  std::vector<std::pair<double, Size>> ranked; // score, protein
-  for (Size p = 0; p < best.size(); p++)
-  {
-    double score = 0;
-    for (int side = 0; side < 2; side++)
-    {
-      const int c = corrected(best[p][side * 2 + 1]) > corrected(best[p][side * 2]) ? 1 : 0;
-      chosen[p][side] = side * 2 + c;
-      score = std::max(score, corrected(best[p][side * 2 + c]));
-    }
-    if (score > 0) ranked.emplace_back(score, p);
-  }
-  const Size top = std::min(ranked.size(), top_n);
-  std::partial_sort(ranked.begin(), ranked.begin() + top, ranked.end(),
-                    [](const auto& a, const auto& b) { return a.first != b.first ? a.first > b.first : a.second < b.second; });
-  for (Size r = 0; r < top; r++)
-  {
-    const Size p = ranked[r].second;
-    const double* S = window_sums_[p];
-    Candidate cand;
-    for (int side = 0; side < 2; side++)
-    {
-      const auto& b = best[p][chosen[p][side]];
-      if (b.anchor < 0) continue;
-      const bool prefix = side == 0;
-      const long seg_a = b.a, seg_b = b.b;
-      // the ion type of this side with the most matched positions at the anchor (the first in ion_type among equal ones)
-      Ladder ladder;
-      ladder.prefix = prefix;
-      std::vector<int> positions;
-      for (const auto& set : sets)
-      {
-        if (set.isPrefix() != prefix) continue;
-        Ladder l;
-        l.prefix = prefix;
-        std::vector<int> pos;
-        for (long x = prefix ? b.anchor + 1 : b.anchor - 1; prefix ? x < seg_b : x > seg_a; x += prefix ? 1 : -1)
+        const auto& seg = segments_[si];
+        if (excluded[first + s]->count(seg.protein) > 0) continue;
+        for (int slot = 0; slot < 4; slot++)
         {
-          const double v = prefix ? S[x] - S[b.anchor] : S[b.anchor] - S[x];
-          if (v > set.maxValue()) break;
-          const long mi = set.massIndex(v);
-          if (mi < 0) continue;
-          pos.push_back((int)x);
-          l.mass_indices.push_back((Size)mi);
-        }
-        if (l.mass_indices.size() > ladder.mass_indices.size())
-        {
-          ladder = std::move(l);
-          positions = std::move(pos);
+          if (max_value[s][slot / 2] <= 0) continue; // no ion type of this side
+          auto& b = best[seg.protein][slot];
+          const auto& sb = seg_best[((Size)s * n_segments + si) * 4 + slot];
+          b.tested += seg_tested[si][slot];
+          if (sb.anchor >= 0 && (b.anchor < 0 || sb.log_p > b.log_p))
+          {
+            b.log_p = sb.log_p;
+            b.anchor = sb.anchor;
+            b.a = seg.a;
+            b.b = seg.b;
+          }
         }
       }
-      if (ladder.mass_indices.size() < 2) continue;
-      // as a precursor-ladder window side: the ladder spans the positions of its lowest and its highest mass, its first mass the lowest
-      ladder.start = prefix ? positions.front() : positions.back();
-      ladder.end = prefix ? positions.back() : positions.front();
-      cand.ladders.push_back(std::move(ladder));
+      finish(sets[s], best, candidates[first + s]);
     }
-    if (cand.ladders.empty()) continue;
-    cand.protein = p;
-    cand.rank = (int)r + 1;
-    cand.score = ranked[r].first;
-    candidates.push_back(std::move(cand));
   }
 }
 } // namespace OpenMS
