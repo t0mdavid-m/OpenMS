@@ -1399,7 +1399,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
              mi_sliding = registry.registerName("SlidingLadder"),
              mi_precursor_ladder = registry.registerName("PrecursorLadder"),
              mi_pl_start = registry.registerName("PrecursorLadderStart"), mi_pl_end = registry.registerName("PrecursorLadderEnd"),
-             mi_pl_isotope = registry.registerName("PrecursorLadderIsotope");
+             mi_pl_isotope = registry.registerName("PrecursorLadderIsotope"), mi_entry_of_kept = registry.registerName("EntryOfKeptProtein");
   // gapped tags (only for spectra in which no sequence tag proposes a protein); their tags are kept per spectrum until appended to tags_
   FLASHGappedTaggerAlgorithm gapped_tagger;
   if (gapped_mode_ != "off")
@@ -1770,6 +1770,9 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     // 1%, now 7). The kept candidate carries the protein's best score. The choice reads neither the precursor mass nor a label: the decoy
     // precursor copy of a spectrum extends the same entries.
     std::vector<bool> active(candidate_count, true);
+    // by_entry: the other candidates (entries) of each protein; the cuts below count proteins (one candidate each), and after them every
+    // candidate entry of a kept protein is extended: an annotated residue is a residue of its entry, and the extension decides
+    std::unordered_map<Size, std::vector<Size>> others_of;
     if (by_entry)
     {
       auto entryOf = [&](Size i) { return i < seq_count ? seq_candidates[i].protein : hit_shifts[i - seq_count].fasta_index; };
@@ -1794,7 +1797,11 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         const auto& best_entry = db->entries[entryOf(b)];
         if (entry.offset == best_entry.offset && entry.length == best_entry.length && side_counts[i] == side_counts[b] && simpler(i, k)) k = i;
       }
-      for (Size i = 0; i < candidate_count; i++) active[i] = kept_of[protein_of[entryOf(i)]] == i;
+      for (Size i = 0; i < candidate_count; i++)
+      {
+        active[i] = kept_of[protein_of[entryOf(i)]] == i;
+        if (! active[i]) others_of[protein_of[entryOf(i)]].push_back(i);
+      }
       for (const auto& [protein, k] : kept_of) scores[k] = best_of[protein].second;
     }
 
@@ -1887,6 +1894,27 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       {
         if (keep[i]) ranked_hits.push_back(candidateHit(ranked[i].index)); // in score order
       }
+    }
+    if (by_entry && ! others_of.empty())
+    {
+      std::vector<ProteinHit> with_entries;
+      with_entries.reserve(ranked_hits.size());
+      for (auto& kept : ranked_hits)
+      {
+        const Size p = protein_of[(Size)(int)kept.getMetaValue(mi_fasta_index)];
+        const double kept_score = kept.getScore();
+        with_entries.push_back(std::move(kept));
+        auto it = others_of.find(p);
+        if (it == others_of.end()) continue;
+        for (Size i : it->second)
+        {
+          ProteinHit other = candidateHit(i);
+          other.setScore(std::min(scores[i], kept_score));
+          other.setMetaValue(mi_entry_of_kept, 1);
+          with_entries.push_back(std::move(other));
+        }
+      }
+      ranked_hits.swap(with_entries);
     }
     hits = std::move(ranked_hits);
 
@@ -2240,11 +2268,12 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       // the min_protein_hits best candidates of each origin (sequence tags, gapped tags) are always extended, so gapped candidates
       // add chances without taking the places of sequence-tag candidates
       int rank_tag = 0, rank_gapped = 0;
+      bool top = false; // of the protein of the last counted candidate: the other entries of a kept protein follow it (by_entry)
       for (Size i = first; i < second; i++)
       {
         const bool gapped = tag_candidates[i].metaValueExists(mi_gapped);
         // native: the decoy margin chose the candidates
-        bool top = (gapped ? rank_gapped++ : rank_tag++) < min_protein_hits_ || native_rule;
+        if (! tag_candidates[i].metaValueExists(mi_entry_of_kept)) top = (gapped ? rank_gapped++ : rank_tag++) < min_protein_hits_ || native_rule;
         if (use_protein_fdr && ! top && passing_proteins.count(protein_of[(Size)(int)tag_candidates[i].getMetaValue(mi_fasta_index)]) == 0) continue;
         hits.push_back(tag_candidates[i]);
       }
@@ -2292,6 +2321,32 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
             kept++;
           }
           proteoforms.resize(kept);
+          // several entries of a protein extended: its PrSM is the one of determined mass, then fewer blind modifications, then the
+          // higher score, then more fixed (annotated) modifications; the others are dropped. The same rule for targets and decoys (decoy
+          // entries carry the annotations moved with their residues) and for the decoy precursor copy.
+          auto blindCount = [](const ProteinHit& h) { return h.metaValueExists("BlindModCount") ? (int)h.getMetaValue("BlindModCount") : 0; };
+          auto fixedCount = [&](const ProteinHit& h) {
+            if (! h.metaValueExists(mi_mod_variable)) return 0;
+            const auto v = h.getMetaValue(mi_mod_variable).toIntList();
+            return (int)std::count(v.begin(), v.end(), 2);
+          };
+          auto determined = [](const ProteinHit& h) { return h.metaValueExists("Mass") && (double)h.getMetaValue("Mass") > 0; };
+          auto better = [&](const ProteinHit& a, const ProteinHit& b) {
+            if (determined(a) != determined(b)) return determined(a);
+            if (blindCount(a) != blindCount(b)) return blindCount(a) < blindCount(b);
+            if (a.getScore() != b.getScore()) return a.getScore() > b.getScore();
+            return fixedCount(a) > fixedCount(b);
+          };
+          std::vector<ProteinHit> one_per_protein;
+          one_per_protein.reserve(proteoforms.size());
+          for (auto& h : proteoforms)
+          {
+            auto it = std::find_if(one_per_protein.begin(), one_per_protein.end(),
+                                   [&h](const ProteinHit& o) { return o.getAccession() == h.getAccession(); });
+            if (it == one_per_protein.end()) one_per_protein.push_back(std::move(h));
+            else if (better(h, *it)) *it = std::move(h);
+          }
+          proteoforms.swap(one_per_protein);
         }
       };
       extend(hits, out);

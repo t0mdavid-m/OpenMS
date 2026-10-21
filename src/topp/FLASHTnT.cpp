@@ -89,11 +89,14 @@ protected:
                        "signal, transit peptide or propeptide) with up to -peff_max_mods annotated modification units fixed on it (\\ModResPsi, "
                        "\\ModResUnimod; disulfide bonds from \\DisulfideBond pairs). Variable and blind modifications are searched on top. A target "
                        "without a decoy in the file gets one (its residues shuffled within the processed forms, the ends of each form kept, the fixed "
-                       "modifications moved with their residues); decoys in the file are used as given. Sequence variants are not used.\n"
+                       "modifications moved with their residues); decoys in the file are used as given. Sequence variants are not used. Every "
+                       "entry that the tags, gapped tags or mass ladders support is extended, and the protein keeps the PrSM of a determined mass, "
+                       "then the fewest blind modifications, the best score and the most annotated modifications. With -max_blind_mod_count 0 only "
+                       "the annotated (and variable) modifications are used: a stricter search (E. coli lysates: about half the proteoforms, almost "
+                       "no entrapment hits).\n"
                        "- UniProtKB XML (.xml or .xml.gz, e.g. a UniProt proteome download in XML format): converted on the fly to PEFF as "
                        "'UniPEFF -annotation_identifiers' writes it, then read as PEFF.\n"
-                       "Results: a FASTA or PEFF file gives the same results as with the former -fasta option; a UniProtKB XML file gives the same "
-                       "results as the PEFF converted from it.",
+                       "A UniProtKB XML file gives the same results as the PEFF converted from it.",
                        true);
 
     registerIntOption_("peff_max_mods", "<number>", 1,

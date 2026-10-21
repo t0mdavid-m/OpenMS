@@ -231,6 +231,10 @@ private:
   /// the entry with as many matches on each side and the fewest fixed modifications (then the lowest index); the kept one carries the
   /// protein's best score (FLASHTnTAlgorithm's candidate collapse).
   void bestEntryPerProtein_(std::vector<std::pair<double, Size>>& ranked, const std::vector<EntryEvidence>& evidence) const;
+  /// After the cut to the top proteins (@p ranked: one entry per protein, the first @p top kept): every entry of those proteins in
+  /// @p all (the entries with evidence, before bestEntryPerProtein_) follows its protein's entry, so that each is extended; @p top grows
+  /// to the number kept.
+  void addEntriesOfTopProteins_(std::vector<std::pair<double, Size>>& ranked, Size& top, const std::vector<std::pair<double, Size>>& all) const;
   /// per protein, the residue sums from its N- and from its C-terminus (up to the first non-standard residue): the terminal ladders
   /// (ladder_suf_ only with terminal ladders); ladder_pre_ is also the window sums of a protein of standard residues only
   std::vector<std::vector<double>> ladder_pre_, ladder_suf_;

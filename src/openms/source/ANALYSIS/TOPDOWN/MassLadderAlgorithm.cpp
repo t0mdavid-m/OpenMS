@@ -812,6 +812,28 @@ void MassLadderAlgorithm::bestEntryPerProtein_(std::vector<std::pair<double, Siz
   ranked.swap(out);
 }
 
+void MassLadderAlgorithm::addEntriesOfTopProteins_(std::vector<std::pair<double, Size>>& ranked, Size& top,
+                                                   const std::vector<std::pair<double, Size>>& all) const
+{
+  if (entry_protein_.empty()) return;
+  std::map<Size, std::vector<std::pair<double, Size>>> others; // protein -> its other entries with evidence
+  for (Size r = 0; r < top; r++) others[entry_protein_[ranked[r].second]];
+  for (const auto& a : all)
+  {
+    auto it = others.find(entry_protein_[a.second]);
+    if (it != others.end()) it->second.push_back(a);
+  }
+  std::vector<std::pair<double, Size>> out;
+  for (Size r = 0; r < top; r++)
+  {
+    out.push_back(ranked[r]);
+    for (const auto& a : others[entry_protein_[ranked[r].second]])
+      if (a.second != ranked[r].second) out.push_back(a);
+  }
+  top = out.size();
+  ranked.swap(out);
+}
+
 // Terminal ladders: per protein and shift, the masses landing on a residue sum from the terminus. A protein is scored as
 // FLASHTaggerAlgorithm::runMatchingExact scores a side (the chance probability of the match count, times the number of shifts of the
 // side), without the terminus itself: its match would only tell proteins starting with Met from shuffled decoys. The top_n best proteins
@@ -891,10 +913,13 @@ void MassLadderAlgorithm::searchTerminalLadders(const std::vector<double>& masse
     ranked_evidence.push_back({std::max(0.0, n_score) + std::max(0.0, c_score), bs.first < n_shifts ? (int)counts[p * n_shifts + bs.first] : 0,
                                bs.second < n_shifts ? (int)counts[p * n_shifts + bs.second] : 0});
   }
+  const std::vector<std::pair<double, Size>> with_evidence = ranked; // every entry with evidence (several per protein: PEFF)
   bestEntryPerProtein_(ranked, ranked_evidence);
-  const Size top = std::min(ranked.size(), top_n);
+  Size top = std::min(ranked.size(), top_n);
   std::partial_sort(ranked.begin(), ranked.begin() + top, ranked.end(),
                     [](const auto& a, const auto& b) { return a.first != b.first ? a.first > b.first : a.second < b.second; });
+  // the top proteins are the cut; each of their entries with evidence is a candidate (annotated residues are residues of the entry)
+  addEntriesOfTopProteins_(ranked, top, with_evidence);
   for (Size r = 0; r < top; r++)
   {
     Candidate cand;
@@ -1184,10 +1209,13 @@ void MassLadderAlgorithm::searchSlidingLadders(const std::vector<double>& masses
       ranked_evidence.push_back(evidence);
     }
   }
+  const std::vector<std::pair<double, Size>> with_evidence = ranked; // every entry with evidence (several per protein: PEFF)
   bestEntryPerProtein_(ranked, ranked_evidence);
-  const Size top = std::min(ranked.size(), top_n);
+  Size top = std::min(ranked.size(), top_n);
   std::partial_sort(ranked.begin(), ranked.begin() + top, ranked.end(),
                     [](const auto& a, const auto& b) { return a.first != b.first ? a.first > b.first : a.second < b.second; });
+  // the top proteins are the cut; each of their entries with evidence is a candidate (annotated residues are residues of the entry)
+  addEntriesOfTopProteins_(ranked, top, with_evidence);
   for (Size r = 0; r < top; r++)
   {
     const Size p = ranked[r].second;
