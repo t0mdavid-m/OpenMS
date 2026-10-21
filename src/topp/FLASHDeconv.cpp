@@ -348,7 +348,7 @@ protected:
         Qscore::writeAttCsvForQscoreTraining(deconvolved_spectrum, out_train_streams[ms_level - 1]);
       }
 #else
-      // the same rows in the same order, formatted in parallel (serially with report_FDR)
+      // the same rows in the same order, formatted in parallel (with report_FDR, the noise-decoy draws are replayed serially up front)
       FLASHDeconvSpectrumFile::writeDeconvolvedMasses(deconvolved_spectra, out_spec_streams, out_spec_file, in_file, fd.getAveragine(), fd.getDecoyAveragine(), tols,
                                                       write_detail, report_decoy, fd.getNoiseDecoyWeight());
 #endif
