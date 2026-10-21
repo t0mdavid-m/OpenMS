@@ -14,6 +14,7 @@
   #define omp_in_parallel() 0
 #endif
 #include <cmath>
+#include <limits>
 #include <utility>
 #include <boost/math/special_functions/gamma.hpp>
 #include <OpenMS/ANALYSIS/ID/PeptideIndexing.h>
@@ -736,6 +737,16 @@ double FLASHTaggerAlgorithm::scoreShifts(const std::vector<double>& masses, cons
     for (Size k = 2; k < t.size(); k++) t[k] = t[k - 1] + std::log((double)k);
     return t;
   }();
+  // first the match count and lambda of every shift (cheap), then the tail probabilities (long double, the costly part) in descending order
+  // of their bound below: the best shift tends to come first and the rest are skipped. The maximum does not depend on the order.
+  struct ShiftCount
+  {
+    double bound; // -log10 P(Poisson = cntr) >= -log10 P(Poisson >= cntr)
+    double lam;
+    int cntr;
+  };
+  static thread_local std::vector<ShiftCount> counted; // per-worker scratch
+  counted.clear();
   for (Size j = 0; j < count; j++)
   {
     int cntr = 0;
@@ -756,11 +767,18 @@ double FLASHTaggerAlgorithm::scoreShifts(const std::vector<double>& masses, cons
       cntr++;
     }
     if (cntr == 0) continue;
-    // -log10 P(Poisson >= cntr) is at most -log10 P(Poisson = cntr): a shift whose bound cannot beat the best (with a margin far above
-    // the rounding of either) cannot change the maximum, so its tail probability (long double, the costly part) is not computed
     const double lam = std::max(lambda, 1e-12);
-    if (best > 0 && cntr < (int)log_factorial.size() && (lam - cntr * std::log(lam) + log_factorial[cntr]) / std::log(10.0) + 1e-6 < best) continue;
-    const double p = boost::math::gamma_p((double)cntr, lam); // P(Poisson(lambda) >= cntr)
+    const double bound = cntr < (int)log_factorial.size() ? (lam - cntr * std::log(lam) + log_factorial[cntr]) / std::log(10.0)
+                                                          : std::numeric_limits<double>::infinity();
+    counted.push_back({bound, lam, cntr});
+  }
+  std::sort(counted.begin(), counted.end(), [](const ShiftCount& l, const ShiftCount& r) { return l.bound > r.bound; });
+  for (const auto& c : counted)
+  {
+    // a shift whose bound cannot beat the best (with a margin far above the rounding of either) cannot change the maximum, nor can the
+    // shifts after it (smaller bounds)
+    if (best > 0 && c.bound + 1e-6 < best) break;
+    const double p = boost::math::gamma_p((double)c.cntr, c.lam); // P(Poisson(lambda) >= cntr)
     best = std::max(best, -std::log10(std::max(p, 1e-300)));
   }
   return std::max(0.0, best - std::log10((double)count));
