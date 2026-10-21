@@ -319,6 +319,12 @@ namespace OpenMS
       /// copy constructor
       Tag(const Tag&) = default;
 
+      /// move constructor (the declared copy constructor would otherwise make every move a copy)
+      Tag(Tag&&) noexcept = default;
+
+      Tag& operator=(const Tag&) = default;
+      Tag& operator=(Tag&&) noexcept = default;
+
       /// destructor
       ~Tag() = default;
 

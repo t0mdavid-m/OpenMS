@@ -3184,7 +3184,7 @@ void FLASHTnTAlgorithm::releaseResults()
 #pragma omp parallel for schedule(dynamic, 1024)
     for (SignedSize i = 0; i < (SignedSize)v.size(); i++)
     {
-      v[i] = T();
+      T released(std::move(v[i])); // its memory is freed here, by this thread
     }
     std::decay_t<decltype(v)>().swap(v);
   };
