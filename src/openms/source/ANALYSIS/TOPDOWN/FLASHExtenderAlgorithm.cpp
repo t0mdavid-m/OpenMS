@@ -11,6 +11,7 @@
 #include <OpenMS/CHEMISTRY/ModificationsDB.h>
 #include <OpenMS/CHEMISTRY/ResidueDB.h>
 #include <fstream>
+#include <mutex>
 #ifdef _OPENMP
   #include <omp.h>
 #else
@@ -100,16 +101,33 @@ namespace OpenMS
     cleavage_weight_ = param_.getValue("cleavage_weight");
     loadCleavageTables_();
 
-    const auto inst = ModificationsDB::getInstance();
-    candidate_blind_mod_map_.clear();
-    std::vector<String> mod_strs;
-    inst->getAllSearchModifications(mod_strs);
-    for (const auto & mod_str : mod_strs)
+    // the candidate blind modifications: those of ModificationsDB within max_mod_mass_, built once per process for a max_mod_mass_ and
+    // database size. FLASHTnT makes an extender per spectrum, and every ModificationsDB call takes one critical section: building the map
+    // per extender kept the threads waiting for each other most of the extension.
+    const std::map<double, std::vector<ResidueModification>>* candidate_blind_mod_map = nullptr;
     {
-      const auto mod = *inst->getModification(mod_str);
-      if (std::abs(mod.getDiffMonoMass()) > max_mod_mass_) continue;
-      candidate_blind_mod_map_[mod.getDiffMonoMass()].push_back(mod);
+      static std::mutex cache_mutex;
+      static std::map<std::pair<double, Size>, std::map<double, std::vector<ResidueModification>>> cache; // entries are never erased
+      const auto inst = ModificationsDB::getInstance();
+      const std::pair<double, Size> key {max_mod_mass_, inst->getNumberOfModifications()};
+      std::lock_guard<std::mutex> lock(cache_mutex);
+      auto it = cache.find(key);
+      if (it == cache.end())
+      {
+        std::map<double, std::vector<ResidueModification>> mod_map;
+        std::vector<String> mod_strs;
+        inst->getAllSearchModifications(mod_strs);
+        for (const auto & mod_str : mod_strs)
+        {
+          const auto mod = *inst->getModification(mod_str);
+          if (std::abs(mod.getDiffMonoMass()) > max_mod_mass_) continue;
+          mod_map[mod.getDiffMonoMass()].push_back(mod);
+        }
+        it = cache.emplace(key, std::move(mod_map)).first;
+      }
+      candidate_blind_mod_map = &it->second; // stays valid: std::map nodes do not move
     }
+    setCandidateBlindModificationMap(*candidate_blind_mod_map);
 
     // precomputed vertex-packing spans (invariant during run(); used by the get*Vertex helpers on the hot path)
     var_span_ = (Size)max_var_mod_cntr_ + 1;
@@ -364,6 +382,57 @@ namespace OpenMS
     return end;
   }
 
+  void FLASHExtenderAlgorithm::setCandidateBlindModificationMap(const std::map<double, std::vector<ResidueModification>>& mod_map)
+  {
+    blind_mod_masses_.clear();
+    blind_mod_offsets_.clear();
+    blind_mod_unimods_.clear();
+    blind_mod_ids_.clear();
+    blind_mod_buckets_.clear();
+    blind_mod_bucket_scale_ = 0;
+    blind_mod_masses_.reserve(mod_map.size());
+    blind_mod_offsets_.reserve(mod_map.size() + 1);
+    for (const auto& [mass, mods] : mod_map)
+    {
+      blind_mod_masses_.push_back(mass);
+      blind_mod_offsets_.push_back(blind_mod_ids_.size());
+      for (const auto& mod : mods)
+      {
+        blind_mod_unimods_.push_back(mod.getUniModRecordId());
+        blind_mod_ids_.push_back(mod.getId());
+      }
+    }
+    blind_mod_offsets_.push_back(blind_mod_ids_.size());
+
+    // buckets of 0.5 Da (at most 2^16 of them). blindModLowerBound_ corrects any start, so they only set how far it walks.
+    if (blind_mod_masses_.size() < 2 || blind_mod_masses_.size() >= (Size)std::numeric_limits<UInt>::max()) return;
+    const double front = blind_mod_masses_.front();
+    const double span = blind_mod_masses_.back() - front;
+    if (! (span > 0 && span < std::numeric_limits<double>::max())) return;
+    const double scale = span * 2.0 > 65535.0 ? 65535.0 / span : 2.0;
+    blind_mod_buckets_.resize((Size)(span * scale) + 1);
+    Size i = 0;
+    for (Size b = 0; b < blind_mod_buckets_.size(); b++)
+    {
+      while (i < blind_mod_masses_.size() && (blind_mod_masses_[i] - front) * scale < (double)b) i++;
+      blind_mod_buckets_[b] = (UInt)i;
+    }
+    blind_mod_bucket_scale_ = scale;
+  }
+
+  inline Size FLASHExtenderAlgorithm::blindModLowerBound_(double mass) const
+  {
+    const auto& masses = blind_mod_masses_;
+    // a binary search without buckets, and for a mass not above the first one (or NaN)
+    if (blind_mod_buckets_.empty() || ! (mass > masses.front())) return (Size)(std::lower_bound(masses.begin(), masses.end(), mass) - masses.begin());
+    // from the first index of the mass's bucket, walk to the first mass not below it: the result is that of std::lower_bound for any start
+    const double cell = (mass - masses.front()) * blind_mod_bucket_scale_;
+    Size i = cell < (double)(blind_mod_buckets_.size() - 1) ? blind_mod_buckets_[(Size)cell] : blind_mod_buckets_.back();
+    while (i > 0 && ! (masses[i - 1] < mass)) i--;
+    while (i < masses.size() && masses[i] < mass) i++;
+    return i;
+  }
+
   inline Size FLASHExtenderAlgorithm::getVertex_(int node_index, int pro_index, int score, int num_blind_mod, int num_var_mod, Size pro_mass_size) const
   {
     return (((node_index * pro_mass_size + pro_index) * blind_span_ + num_blind_mod) * score_span_
@@ -611,8 +680,11 @@ namespace OpenMS
     // counts per integer shift in a reused array instead of a hash map; the visiting order (and so the winner among equal counts) is
     // unchanged
     const auto [smin, smax] = std::minmax_element(spec_vec.begin(), spec_vec.end());
-    int pmin = *pro_vec.begin(), pmax = pmin;
-    for (int p : pro_vec)
+    // the set in its own iteration order, contiguous for the double loop below
+    static thread_local std::vector<int> pros;
+    pros.assign(pro_vec.begin(), pro_vec.end());
+    int pmin = pros.front(), pmax = pmin;
+    for (int p : pros)
     {
       pmin = std::min(pmin, p);
       pmax = std::max(pmax, p);
@@ -623,7 +695,7 @@ namespace OpenMS
     if (deltas.size() < range) deltas.assign(range, 0);
     for (int s : spec_vec)
     {
-      for (int p : pro_vec)
+      for (int p : pros)
       {
         const int d = p - s;
         const int cnt = ++deltas[d - offset];
@@ -636,7 +708,7 @@ namespace OpenMS
     }
     for (int s : spec_vec) // reset only the touched entries
     {
-      for (int p : pro_vec) deltas[p - s - offset] = 0;
+      for (int p : pros) deltas[p - s - offset] = 0;
     }
     return ret;
   }
@@ -802,6 +874,7 @@ namespace OpenMS
   void FLASHExtenderAlgorithm::run_(const ProteinHit& hit,
                                     HitInformation& hi,
                                     const std::vector<FLASHHelperClasses::Tag>& matched_tags,
+                                    std::vector<std::pair<bool, std::vector<int>>>& tag_positions,
                                     std::map<int, std::vector<Size>>& all_paths_per_mode,
                                     int max_mod_cntr_for_last_mode) // per hit
   {
@@ -832,6 +905,22 @@ namespace OpenMS
     if (hi.mode_ == 0) hi.cur_oriented_seq_.reverse();
     hi.cur_node_series_ = &hi.node_series_map_[hi.mode_];
     {
+      // per node, the smallest mass and the largest tolerance from it to the last node (NaN if any is NaN)
+      const auto& tol_spec = *hi.cur_tol_spec_;
+      const double nan = std::numeric_limits<double>::quiet_NaN();
+      auto& tail_mass = hi.cur_tail_min_mass_;
+      auto& tail_margin = hi.cur_tail_max_margin_;
+      tail_mass.assign(node_spec.size() + 1, std::numeric_limits<double>::infinity());
+      tail_margin.assign(node_spec.size() + 1, -std::numeric_limits<double>::infinity());
+      for (Size j = node_spec.size(); j-- > 0;)
+      {
+        const double mass = node_spec[j].getMZ();
+        const double margin = tol_spec[j].getIntensity();
+        tail_mass[j] = std::isnan(mass) || std::isnan(tail_mass[j + 1]) ? nan : std::min(mass, tail_mass[j + 1]);
+        tail_margin[j] = std::isnan(margin) || std::isnan(tail_margin[j + 1]) ? nan : std::max(margin, tail_margin[j + 1]);
+      }
+    }
+    {
       // weight of a matched mass at protein index k (the bond after k residues in this mode's orientation)
       const String& os = hi.cur_oriented_seq_;
       const int L = (int)os.size();
@@ -856,18 +945,23 @@ namespace OpenMS
     bool tag_found = false;
     const String& seq = hit.getSequence();
 
-    for (const auto& tag : matched_tags)
+    for (Size t = 0; t < matched_tags.size(); t++)
     {
+      const auto& tag = matched_tags[t];
       if (hi.mode_ == 2 && hi.calculated_precursor_mass_ <= 0) continue;
       const auto& upper_tag_seq = tag.getUppercaseSequence();
       bool has_lower_case = std::any_of(tag.getSequence().begin(), tag.getSequence().end(), ::islower);
       if (has_lower_case && upper_case_seqs.find(upper_tag_seq) != upper_case_seqs.end()) continue;
 
       tag_found = true;
-      std::vector<int> positions;
-      std::vector<double> masses;
-
-      FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(positions, masses, -1, seq, tag);
+      // the same in every mode: computed at the first use
+      auto& [positions_set, positions] = tag_positions[t];
+      if (! positions_set)
+      {
+        std::vector<double> masses;
+        FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(positions, masses, -1, seq, tag);
+        positions_set = true;
+      }
       auto tag_masses = tag.getMzs();
       std::sort(tag_masses.begin(), tag_masses.end());
 
@@ -1135,6 +1229,8 @@ namespace OpenMS
       {
         matched_tags.push_back(tags[ti]);
       }
+      // per matched tag, its positions in the protein once found (run_)
+      std::vector<std::pair<bool, std::vector<int>>> tag_positions(matched_tags.size());
 
       std::map<int, std::set<int>> matched_position_map;
       // with report_matched_masses_: per mode, the dspec indices of the masses of the matched positions (kept, restored and erased with
@@ -1208,7 +1304,7 @@ namespace OpenMS
 
         hi.visited_.clear(); // dag_ is rebuilt per mode
 
-        run_(hit, hi, matched_tags, all_path_map[hi.mode_], max_mod_cntr_for_last_mode);
+        run_(hit, hi, matched_tags, tag_positions, all_path_map[hi.mode_], max_mod_cntr_for_last_mode);
 
         if (hi.mode_ < 2)
         {
@@ -1638,25 +1734,24 @@ namespace OpenMS
           continue;
         }
         auto mod_mass = mod_masses[k];
-        auto iter = candidate_blind_mod_map_.lower_bound(mod_mass - mod_tols[k]);
         String mod_id = "";
         String mod_acc = "";
         std::set<int> mod_int_acc;
-        while (iter != candidate_blind_mod_map_.end())
+        for (Size b = blindModLowerBound_(mod_mass - mod_tols[k]); b < blind_mod_masses_.size(); b++)
         {
-          double diff = iter->first - mod_mass;
+          double diff = blind_mod_masses_[b] - mod_mass;
           if (diff > mod_tols[k]) break;
           if (diff > -mod_tols[k])
           {
-            for (const auto& mod : iter->second)
+            for (Size j = blind_mod_offsets_[b]; j < blind_mod_offsets_[b + 1]; j++)
             {
-              if (mod_int_acc.find(mod.getUniModRecordId()) != mod_int_acc.end()) continue;
-              mod_int_acc.insert(mod.getUniModRecordId());
-              mod_acc += std::to_string(mod.getUniModRecordId()) + ",";
-              mod_id += mod.getId() + ",";
+              const int unimod = blind_mod_unimods_[j];
+              if (mod_int_acc.find(unimod) != mod_int_acc.end()) continue;
+              mod_int_acc.insert(unimod);
+              mod_acc += std::to_string(unimod) + ",";
+              mod_id += blind_mod_ids_[j] + ",";
             }
           }
-          iter++;
         }
         mod_ids.push_back(mod_id);
         mod_accs.push_back(mod_acc);
@@ -1809,13 +1904,13 @@ namespace OpenMS
     hi.visited_.insert(src);
     std::set<Size> visited_tag_edges;
     std::map<Size, std::set<std::pair<double, double>>> sink_map;
-    std::unordered_map<Size, std::unordered_map<Size, int>> node_max_score_map; // node, cumulative mass, score
+    NodeScoreMap node_max_score_map; // node, cumulative mass, score
 
     findPathsAlongTagEndPoints(visited_tag_edges, hi, sink_map, src, 0, 0, node_max_score_map, tag_edges, max_mod_cntr_for_last_mode, use_tags);
 
     for (const auto& sink : sink_map)
     {
-      sinks.insert(sink.first);
+      sinks.insert(sinks.end(), sink.first); // ascending
     }
   }
 
@@ -1825,7 +1920,7 @@ namespace OpenMS
                                                           Size vertex,
                                                           double truncation_mass,
                                                           double cumulative_shift,
-                                                          std::unordered_map<Size, std::unordered_map<Size, int>>& node_max_score_map,
+                                                          NodeScoreMap& node_max_score_map,
                                                           const std::vector<std::vector<int>>& tag_edges,
                                                           int max_mod_cntr_for_last_mode,
                                                           bool use_tags)
@@ -1936,7 +2031,7 @@ namespace OpenMS
 
         if (node_start < 0)
         {
-          sinks = next_vertices;
+          sinks = std::move(next_vertices);
           return;
         }
 
@@ -1991,7 +2086,7 @@ namespace OpenMS
                                                                int diagonal_counter,
                                                                double truncation_mass,
                                                                double cumulative_mod_mass,
-                                                               std::unordered_map<Size, std::unordered_map<Size, int>>& node_max_score_map,
+                                                               NodeScoreMap& node_max_score_map,
                                                                int max_blind_mod_cntr_for_last_mode)
   {
     // TODO N term mod vs. 1st amino acid mod distinction
@@ -2093,17 +2188,12 @@ namespace OpenMS
       for (int nvm = 0; nvm <= start_num_var_mod; nvm++)
       {
         Size zero_score_vertex = getVertex_(start_node_index, start_pro_index, 0, nbm, nvm, pro_mass_size);
-        auto it_vertex = node_max_score_map.find(zero_score_vertex);
-        if (it_vertex != node_max_score_map.end())
+        const int* best = node_max_score_map.find(zero_score_vertex, key_to_score_map);
+        if (best != nullptr)
         {
-          auto& kts = it_vertex->second;
-          auto it_score = kts.find(key_to_score_map);
-          if (it_score != kts.end())
-          {
-            if (it_score->second > start_score) { return; }
-            else if (key_to_score_map != 0 && it_score->second == start_score)
-              same_score_node = true;
-          }
+          if (*best > start_score) { return; }
+          else if (key_to_score_map != 0 && *best == start_score)
+            same_score_node = true;
         }
       }
     }
@@ -2126,20 +2216,42 @@ namespace OpenMS
       return;
     if (start_num_blind_mod > 0 && same_score_node) return; // exclude truncation
 
-    node_max_score_map[getVertex_(start_node_index, start_pro_index, 0, start_num_blind_mod, start_num_var_mod, pro_mass_size)][key_to_score_map]
-      = start_score;
+    node_max_score_map.set(getVertex_(start_node_index, start_pro_index, 0, start_num_blind_mod, start_num_var_mod, pro_mass_size), key_to_score_map,
+                           start_score);
 
+    // pro_masses ascend, so delta_delta below descends with pro_i. The positions skipped by the first test of the loop (delta_delta above
+    // max_mod_with_margin) form a prefix; with a diagonal counter, so do all with delta_delta above t_margin, and those below -t_margin
+    // end the loop: off the diagonal, the loop body skips every position then (no variable modification is searched, and a blind one
+    // is refused by the diagonal counter). The first position past the prefix is walked along with the node masses (ascending).
+    const bool diagonal_only = diagonal_counter > 0;
+    const double max_mod = std::max(max_mod_mass_, var_mod_combinations_.empty() ? 0.0 : std::max(std::abs(var_mod_combinations_.front().mass),
+                                                                                                  std::abs(var_mod_combinations_.back().mass)));
+    int first_pro_i = start_pro_index;
     for (int node_i = start_node_index + 1; node_i <= (end_node_index < 0 ? ((int)node_spec.size() - 1) : end_node_index); node_i++)
     {
       int score = start_score + (int)node_spec[node_i].getIntensity();
       double t_node_mass = node_spec[node_i].getMZ();
       double t_margin = tol_spec[node_i].getIntensity();
 
-      const double max_mod_with_margin = std::max(max_mod_mass_, var_mod_combinations_.empty() ? 0.0 : std::max(std::abs(var_mod_combinations_.front().mass),
-                                                                                                                std::abs(var_mod_combinations_.back().mass)))
-                                         + t_margin;
+      const double max_mod_with_margin = max_mod + t_margin;
 
-      for (int pro_i = start_pro_index; pro_i <= end_pro_index; pro_i++)
+      const double skip_above = diagonal_only ? t_margin : max_mod_with_margin;
+      // with the loop's own arithmetic
+      const auto skipped = [&](int pi) { return t_node_mass - pro_masses[pi] - cumulative_mod_mass + truncation_mass > skip_above; };
+      while (first_pro_i > start_pro_index && ! skipped(first_pro_i - 1)) first_pro_i--;
+      while (first_pro_i <= end_pro_index && skipped(first_pro_i)) first_pro_i++;
+      if (first_pro_i > end_pro_index)
+      {
+        // No position is left for this node. A later node j only tests end_pro_index (the walk back above) and finds it skipped as well if
+        // its test holds with the smallest mass and the largest tolerance of the nodes after this one (the test is monotone in both).
+        const double tail_margin = hi.cur_tail_max_margin_[node_i + 1];
+        const double tail_skip_above = diagonal_only ? tail_margin : max_mod + tail_margin;
+        if (hi.cur_tail_min_mass_[node_i + 1] - pro_masses[end_pro_index] - cumulative_mod_mass + truncation_mass > tail_skip_above) break;
+        continue;
+      }
+      const int series = (*hi.cur_node_series_)[node_i];
+      const int* bond_weight = series >= 0 ? hi.cur_bond_weight_[series].data() : nullptr;
+      for (int pro_i = first_pro_i; pro_i <= end_pro_index; pro_i++)
       {
         const double pro_mass = pro_masses[pro_i]; // 캐싱
         const double t_delta_mass = t_node_mass - pro_mass;
@@ -2147,12 +2259,12 @@ namespace OpenMS
 
         if (delta_delta > max_mod_with_margin) continue;
         if (delta_delta < -max_mod_with_margin) break;
+        if (diagonal_only && delta_delta < -t_margin) break;
 
         int num_var_mod = start_num_var_mod;
         int num_blind_mod = start_num_blind_mod;
         int next_score = score;
-        const int series = (*hi.cur_node_series_)[node_i];
-        if (series >= 0) next_score += hi.cur_bond_weight_[series][pro_i]; // cleavage propensity of the bond this mass falls on
+        if (bond_weight != nullptr) next_score += bond_weight[pro_i]; // cleavage propensity of the bond this mass falls on
         double next_cumulative_mod_mass = cumulative_mod_mass;
 
         const double abs_delta_delta = std::abs(delta_delta); //
@@ -2200,6 +2312,8 @@ namespace OpenMS
             if (num_blind_mod > max_blind_mod_cntr) continue;
             if (abs_delta_delta > max_mod_mass_ + t_margin) continue; // variable combinations may reach further; blind shifts may not
             if (diagonal_counter > 0) continue;
+            // below min_path_score_ already with the base penalty: dropped below whatever the precursor correction and the lookup give
+            if (next_score - (1 + 2 * (multi_ion_score + FLASHTaggerAlgorithm::max_node_score)) < min_path_score_) continue;
 
             next_cumulative_mod_mass = t_delta_mass + truncation_mass;
 
@@ -2220,8 +2334,8 @@ namespace OpenMS
             }
 
             next_score -= 1 + 2 * (multi_ion_score + FLASHTaggerAlgorithm::max_node_score);
-            auto iter = candidate_blind_mod_map_.lower_bound(delta_delta - t_margin);
-            if (iter == candidate_blind_mod_map_.end() || std::abs(delta_delta - iter->first) > t_margin)
+            const Size mod_index = blindModLowerBound_(delta_delta - t_margin);
+            if (mod_index == blind_mod_masses_.size() || std::abs(delta_delta - blind_mod_masses_[mod_index]) > t_margin)
               next_score -= multi_ion_score + FLASHTaggerAlgorithm::max_node_score;
           }
         }

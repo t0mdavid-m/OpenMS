@@ -9,6 +9,7 @@
 #include <OpenMS/FORMAT/FLASHDeconvSpectrumFile.h>
 #include <OpenMS/FORMAT/MzMLFile.h>
 #include <algorithm>
+#include <exception>
 #include <random>
 
 namespace OpenMS
@@ -132,6 +133,10 @@ namespace OpenMS
     }
 
     const Size target_mass_count = countTargetMasses(dspec);
+    // log m/z of the original peaks, computed once for the noisy peaks of all masses of the spectrum
+    std::vector<double> log_mzs;
+    bool log_mzs_positive = true;
+    std::vector<FLASHHelperClasses::LogMzPeak> noisy_peaks;
     for (int i = 0; i < dspec.size(); i++)
     {
       auto& pg = dspec[i];
@@ -172,7 +177,14 @@ namespace OpenMS
 
       if (write_detail)
       {
-        auto noisy_peaks = pg.recruitAllPeaksInSpectrum(dspec.getOriginalSpectrum(), tol * 1e-6, avg_, pg.getMonoMass(), false);
+        const auto& spec = dspec.getOriginalSpectrum();
+        if (log_mzs.size() != spec.size() || log_mzs_positive != pg.isPositive())
+        {
+          log_mzs_positive = pg.isPositive();
+          log_mzs.resize(spec.size());
+          for (Size k = 0; k < spec.size(); k++) log_mzs[k] = FLASHHelperClasses::getLogMz(spec[k].getMZ(), log_mzs_positive);
+        }
+        pg.recruitAllPeaksInSpectrum(spec, tol * 1e-6, avg_, pg.getMonoMass(), noisy_peaks, false, &log_mzs);
 
         std::sort(noisy_peaks.begin(), noisy_peaks.end());
         ss << std::fixed << std::setprecision(2);
@@ -572,27 +584,47 @@ namespace OpenMS
     MSExperiment deconvolved_map;
     MSExperiment annotated_map;
 
+    // the experimental settings of the input map without its spectra (what a copy of it cleared of its spectra and chromatograms keeps but
+    // the ranges, which the writer does not read), without copying the spectra
     if (!deconvolved_mzML_file.empty())
     {
-      deconvolved_map = MSExperiment(map);
-      deconvolved_map.clear(false);
+      deconvolved_map = static_cast<const ExperimentalSettings&>(map);
     }
     if (!annotated_mzML_file.empty())
     {
-      annotated_map = MSExperiment(map);
-      annotated_map.clear(false);
+      annotated_map = static_cast<const ExperimentalSettings&>(map);
     }
 
-    for (auto & deconvolved_spectrum : deconvolved_spectra)
+    // the deconvolved spectra in parallel (each from its own deconvolved spectrum), added below in the input order
+    std::vector<MSSpectrum> deconvolved_mzMLs(deconvolved_spectra.size());
+    std::vector<std::exception_ptr> errors(deconvolved_spectra.size());
+#pragma omp parallel for schedule(dynamic, 16)
+    for (SignedSize i = 0; i < (SignedSize)deconvolved_spectra.size(); i++)
     {
+      auto& deconvolved_spectrum = deconvolved_spectra[i];
+      if (deconvolved_spectrum.empty() || deconvolved_spectrum.isDecoy()) continue;
+      try
+      {
+        deconvolved_mzMLs[i] = deconvolved_spectrum.toSpectrum(mzml_charge, tols[deconvolved_spectrum.getOriginalSpectrum().getMSLevel() - 1], false);
+      }
+      catch (...)
+      {
+        errors[i] = std::current_exception();
+      }
+    }
+
+    for (Size i = 0; i < deconvolved_spectra.size(); i++)
+    {
+      auto& deconvolved_spectrum = deconvolved_spectra[i];
       if (deconvolved_spectrum.empty()) continue;
       if (deconvolved_spectrum.isDecoy()) continue;
-      auto deconvolved_mzML = deconvolved_spectrum.toSpectrum(mzml_charge, tols[deconvolved_spectrum.getOriginalSpectrum().getMSLevel() - 1], false);
+      if (errors[i]) std::rethrow_exception(errors[i]);
+      auto deconvolved_mzML = std::move(deconvolved_mzMLs[i]);
       if (!deconvolved_mzML_file.empty())
       {
         if (deconvolved_mzML.empty())
           continue;
-        deconvolved_map.addSpectrum(deconvolved_mzML);
+        deconvolved_map.addSpectrum(std::move(deconvolved_mzML));
       }
       if (!annotated_mzML_file.empty())
       {

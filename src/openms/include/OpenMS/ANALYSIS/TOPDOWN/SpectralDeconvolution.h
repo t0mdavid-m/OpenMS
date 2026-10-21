@@ -209,6 +209,9 @@ namespace OpenMS
     DeconvolvedSpectrum deconvolved_spectrum_;
     /// binned_log_masses_ stores the selected bins for this spectrum + overlapped spectrum (previous a few spectra).
     boost::dynamic_bitset<> binned_log_masses_;
+    /// log m/z of every peak of the original spectrum of deconvolved_spectrum_, computed once per spectrum (FLASHHelperClasses::getLogMz)
+    std::vector<double> original_log_mzs_;
+
     /// binned_log_mz_peaks_ stores the binned log mz peaks
     boost::dynamic_bitset<> binned_log_mz_peaks_;
 
@@ -238,6 +241,14 @@ namespace OpenMS
 
     /// this is additional mass tolerance in Da to get more high signal-to-ratio peaks in this candidate peakgroup finding
     double max_mass_dalton_tolerance_ = .16;
+
+    /// a mass bin selected by filterMassBins_ and the range of the charge indices (charge - 1) it was selected for
+    struct MassBinChargeRange_
+    {
+      Size bin;
+      int min_charge_index;
+      int max_charge_index;
+    };
 
     /** @brief static function that converts bin to value
         @param bin bin number
@@ -278,17 +289,17 @@ namespace OpenMS
 
     /** @brief Update binned_log_masses_. It select candidate mass bins using the universal pattern, eliminate possible harmonic masses. This function does not perform deisotoping
         @param mz_intensities per mz bin intensity
-        @return a matrix containing charge ranges for all found masses
+        @return the selected mass bins in increasing order, each with its charge range
      */
-    Matrix<int> updateMassBins_(const std::vector<float>& mz_intensities);
+    std::vector<MassBinChargeRange_> updateMassBins_(const std::vector<float>& mz_intensities);
 
     /** @brief Subfunction of updateMassBins_.
         @param mass_intensities per mass bin intensity
         @param chain_redirects (m/z bin x current max charge + charge index, mass bin) for the peaks updateCandidateMassBins_ added to the mass bin
                of their consecutive-charge chain instead of their own (rounded) mass bin, sorted here
-        @return a matrix containing charge ranges for all found masses
+        @return the selected mass bins in increasing order, each with its charge range
      */
-    Matrix<int> filterMassBins_(const std::vector<float>& mass_intensities, std::vector<std::pair<Size, long>>& chain_redirects);
+    std::vector<MassBinChargeRange_> filterMassBins_(const std::vector<float>& mass_intensities, std::vector<std::pair<Size, long>>& chain_redirects);
 
     /** @brief Subfunction of updateMassBins_. It select candidate masses and update binned_log_masses_ using the universal pattern, eliminate possible harmonic masses
         @param mass_intensities mass bin intensities which are updated in this function
@@ -299,10 +310,10 @@ namespace OpenMS
     void updateCandidateMassBins_(std::vector<float>& mass_intensities, const std::vector<float>& mz_intensities,
                                   std::vector<std::pair<Size, long>>& chain_redirects);
 
-    /** @brief For selected masses in binned_log_masses_, select the peaks from the original spectrum. Also isotopic peaks are clustered in this function.
-        @param per_mass_abs_charge_ranges charge range per mass
+    /** @brief For the selected mass bins, select the peaks from the original spectrum. Also isotopic peaks are clustered in this function.
+        @param mass_bin_charge_ranges the selected mass bins in increasing order, each with its charge range (filterMassBins_)
      */
-    void getCandidatePeakGroups_(const Matrix<int>& per_mass_abs_charge_ranges);
+    void getCandidatePeakGroups_(const std::vector<MassBinChargeRange_>& mass_bin_charge_ranges);
 
     /// Make the universal pattern.
     void setFilters_();

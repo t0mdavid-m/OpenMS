@@ -136,7 +136,7 @@ protected:
 
     double pro_fdr = tnt_param.getValue("pro_fdr");
     // the chimeric columns are written only with the residual search, so that other outputs keep their format
-    const bool chimeric = (int)tnt_param.getValue("chimeric_rounds") > 0;
+    const bool chimeric = (int)tnt_param.getValue("chimeric_rounds") > 0 || tnt_param.getValue("native").toString() == "true"; // -native searches a residual round
     OPENMS_LOG_INFO << "Finding sequence tags from deconvolved spectra ..." << endl;
 
     FASTAFile fasta_file;

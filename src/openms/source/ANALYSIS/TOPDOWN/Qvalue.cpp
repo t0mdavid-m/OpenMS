@@ -8,6 +8,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/Qvalue.h>
+#include <cmath>
 
 namespace OpenMS
 {
@@ -35,7 +36,7 @@ namespace OpenMS
     std::map<uint, std::map<double, double>> qscore_qvalue_map; // mapping from qscore to qvalue
 
     // to calculate qvalues per ms level, store Qscores per ms level
-    std::set<uint> used_feature_indices;
+    std::vector<bool> used_feature_indices; // the feature indices seen so far, by index
 
     for (auto& deconvolved_spectrum : deconvolved_spectra)
     {
@@ -45,9 +46,11 @@ namespace OpenMS
       uint ms_level = deconvolved_spectrum.getOriginalSpectrum().getMSLevel();
       for (auto& pg : deconvolved_spectrum)
       {
-        if (pg.getFeatureIndex() > 0 && used_feature_indices.find(pg.getFeatureIndex()) != used_feature_indices.end())
+        const uint feature_index = pg.getFeatureIndex();
+        if (feature_index > 0 && feature_index < used_feature_indices.size() && used_feature_indices[feature_index])
           continue;
-        used_feature_indices.insert(pg.getFeatureIndex());
+        if (feature_index >= used_feature_indices.size()) used_feature_indices.resize((Size)feature_index + 1, false);
+        used_feature_indices[feature_index] = true;
 
         if (pg.getTargetDecoyType() == PeakGroup::TargetDecoyType::target)
         {
@@ -165,6 +168,70 @@ namespace OpenMS
           cummin = std::min(rit->second, cummin);
           rit->second = cummin;
         }
+      }
+
+      // The q-values below are looked up without inserting, the spectra in parallel: std::map::operator[] gave a Qscore2D without a q-value
+      // (of a decoy mass, or of a mass of a feature counted once) 0 and inserted it, which a later lookup of that Qscore2D found as 0 again.
+      // That holds for ordered keys; with a NaN among the keys or the Qscore2D looked up, the serial loop with operator[] stays.
+      bool has_nan = false;
+      for (const auto& [qs, qv] : map_qvalue)
+      {
+        has_nan = has_nan || std::isnan(qs);
+      }
+#pragma omp parallel for schedule(dynamic, 64) reduction(|| : has_nan)
+      for (SignedSize s = 0; s < (SignedSize)deconvolved_spectra.size(); s++)
+      {
+        const auto& deconvolved_spectrum = deconvolved_spectra[s];
+        if (deconvolved_spectrum.empty() || deconvolved_spectrum.isDecoy())
+          continue;
+        if (deconvolved_spectrum.getOriginalSpectrum().getMSLevel() == ms_level + 1 && !deconvolved_spectrum.getPrecursorPeakGroup().empty())
+        {
+          has_nan = has_nan || std::isnan(deconvolved_spectrum.getPrecursorPeakGroup().getQscore2D());
+        }
+        if (deconvolved_spectrum.getOriginalSpectrum().getMSLevel() != ms_level)
+        {
+          continue;
+        }
+        for (const auto& pg : deconvolved_spectrum)
+        {
+          has_nan = has_nan || std::isnan(pg.getQscore2D());
+        }
+      }
+
+      if (! has_nan)
+      {
+        const auto qvalue_of = [&map_qvalue](double qs) {
+          const auto it = map_qvalue.find(qs);
+          return it == map_qvalue.end() ? .0 : it->second;
+        };
+#pragma omp parallel for schedule(dynamic, 64)
+        for (SignedSize s = 0; s < (SignedSize)deconvolved_spectra.size(); s++)
+        {
+          auto& deconvolved_spectrum = deconvolved_spectra[s];
+          if (deconvolved_spectrum.empty() || deconvolved_spectrum.isDecoy())
+            continue;
+
+          // set precursor Qvalue here
+          if (deconvolved_spectrum.getOriginalSpectrum().getMSLevel() == ms_level + 1 && !deconvolved_spectrum.getPrecursorPeakGroup().empty())
+          {
+            auto precursor_pg = deconvolved_spectrum.getPrecursorPeakGroup();
+            double qs = precursor_pg.getQscore2D();
+
+            precursor_pg.setQvalue(qvalue_of(qs));
+            deconvolved_spectrum.setPrecursorPeakGroup(precursor_pg);
+          }
+
+          if (deconvolved_spectrum.getOriginalSpectrum().getMSLevel() != ms_level)
+          {
+            continue;
+          }
+
+          for (auto& pg : deconvolved_spectrum)
+          {
+            pg.setQvalue(qvalue_of(pg.getQscore2D()));
+          }
+        }
+        continue;
       }
 
       for (auto& deconvolved_spectrum : deconvolved_spectra)

@@ -259,48 +259,6 @@ namespace OpenMS
   {
   }
 
-  double FLASHHelperClasses::LogMzPeak::getUnchargedMass() const
-  {
-    if (abs_charge == 0)
-    {
-      return .0;
-    }
-    if (mass <= 0)
-    {
-      return (mz - getChargeMass(is_positive)) * (float)abs_charge;
-    }
-    return mass;
-  }
-
-  bool FLASHHelperClasses::LogMzPeak::operator<(const LogMzPeak& a) const
-  {
-    if (this->logMz == a.logMz)
-    {
-      return this->intensity < a.intensity;
-    }
-    return this->logMz < a.logMz;
-  }
-
-  bool FLASHHelperClasses::LogMzPeak::operator>(const LogMzPeak& a) const
-  {
-    if (this->logMz == a.logMz)
-    {
-      return this->intensity > a.intensity;
-    }
-    return this->logMz > a.logMz;
-  }
-
-  bool FLASHHelperClasses::LogMzPeak::operator==(const LogMzPeak& a) const
-  {
-    return this->logMz == a.logMz && this->intensity == a.intensity;
-  }
-
-
-  float FLASHHelperClasses::getChargeMass(const bool positive_ioniziation_mode)
-  {
-    return (float)(positive_ioniziation_mode ? Constants::PROTON_MASS_U : -Constants::PROTON_MASS_U);
-  }
-
   double FLASHHelperClasses::getLogMz(const double mz, const bool positive)
   {
     return std::log(mz - getChargeMass(positive));

@@ -65,6 +65,12 @@ public:
   {
     std::vector<double> mzs;
     std::vector<double> intensities;
+    /// per m/z bucket b (bucket_width Th wide), the index of the first peak at or above b * bucket_width (indexBuckets; empty: not built).
+    /// A peak search then looks only inside the bucket of its lower end instead of the whole spectrum.
+    std::vector<int> bucket_start;
+    static constexpr double bucket_width = 1.0;
+    /// builds bucket_start from mzs (ascending)
+    void indexBuckets();
   };
 
   /// a blind modification: its mass and its 0-based inclusive residue range in the proteoform

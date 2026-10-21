@@ -54,6 +54,9 @@ namespace OpenMS
     /// assignment operator
     DeconvolvedSpectrum& operator=(const DeconvolvedSpectrum& deconvolved_spectrum) = default;
 
+    /// move assignment
+    DeconvolvedSpectrum& operator=(DeconvolvedSpectrum&& deconvolved_spectrum) noexcept = default;
+
     /// Convert DeconvolvedSpectrum to MSSpectrum (e.g., used to store in mzML format).
     /// @param to_charge the charge of each peak in mzml output.
     /// @param tol the ppm tolerance
@@ -178,6 +181,9 @@ namespace OpenMS
     /// set peak groups in this spectrum
     void setPeakGroups(const std::vector<PeakGroup>& x);
 
+    /// set peak groups in this spectrum, taking ownership of @p x
+    void setPeakGroups(std::vector<PeakGroup>&& x);
+
     void setPrecursorMassIntensityMap(const std::vector<std::tuple<double, double>>& map);
 
     /// iterators and vector operators for std::vector<PeakGroup> peak_groups_ in this spectrum
@@ -191,6 +197,10 @@ namespace OpenMS
     const PeakGroup& operator[](Size i) const;
     PeakGroup& operator[](Size i);
     void push_back(const PeakGroup& pg);
+    void push_back(PeakGroup&& pg);
+
+    /// exchange the peak group vector with @p x (lets callers recycle vector capacity)
+    void swapPeakGroups(std::vector<PeakGroup>& x);
     void emplace_back(const PeakGroup& pg);
     void pop_back();
     PeakGroup& back();

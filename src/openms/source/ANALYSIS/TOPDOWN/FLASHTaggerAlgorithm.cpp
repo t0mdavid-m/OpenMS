@@ -746,13 +746,18 @@ void FLASHTaggerAlgorithm::runMatchingExact(std::vector<ProteinHit>& hits,
     {
       int cntr = 0;
       double lambda = 0;
+      // masses ascend, and so does target - margin (the margin grows by a ppm fraction of the mass): the first residue sum at or above it
+      // is found by a pointer that only moves forward, as std::lower_bound would find it
+      auto it = residue_sums.begin();
       for (Size k = 0; k < masses.size(); k++)
       {
         const double target = masses[k] + side_shifts[j];
         const double margin = tol_ppm * 1e-6 * (std::max(masses[k], target) + flanks[j]);
         if (target < -margin || target > protein_mass + margin) continue;
         lambda += std::min(1.0, 2.0 * margin * density);
-        auto it = std::lower_bound(residue_sums.begin(), residue_sums.end(), target - margin);
+        const double low = target - margin;
+        if (it != residue_sums.begin() && *(it - 1) >= low) it = std::lower_bound(residue_sums.begin(), it, low); // never moves back in practice
+        while (it != residue_sums.end() && *it < low) ++it;
         if (it == residue_sums.end() || *it > target + margin) continue;
         cntr++;
       }

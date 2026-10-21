@@ -20,7 +20,9 @@
 #include <functional>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <unordered_map>
+#include <vector>
 
 namespace OpenMS
 {
@@ -95,6 +97,10 @@ public:
     }
   }
 
+  /// set modification map to be considered for blind modification search. Note that they are not for variable modification search.
+  /// The mass shifts found by blind modifications matching to the masses of these modifications are annotated.
+  void setCandidateBlindModificationMap(const std::map<double, std::vector<ResidueModification>>& mod_map);
+
   /// With @p report, every proteoform hit carries the deconvolved masses its best path matched (meta value MatchedMassIndices: indices
   /// into the deconvolved spectrum given to run(), ascending): the masses of every node of the path whose protein position counts as
   /// matched (MatchedAA), every mass merged into such a node included (e.g. the b and c ion of one position, or a suffix mass moved to the
@@ -110,6 +116,76 @@ protected:
   void setDefaultParams_();
 
 private:
+  /// The best score per (zero-score vertex, stretch key) while one DAG is built: lookups and stores only, on one flat open-addressing
+  /// table (a map of hash maps allocated a node per store, and its stores took more than half of the extension time)
+  class NodeScoreMap
+  {
+  public:
+    /// the stored score of (@p vertex, @p key), or nullptr
+    const int* find(Size vertex, Size key) const
+    {
+      if (table_.empty()) return nullptr;
+      for (Size i = slot_(vertex, key); ; i = (i + 1) & mask_)
+      {
+        const auto& e = table_[i];
+        if (e.vertex == empty_) return nullptr;
+        if (e.vertex == vertex && e.key == key) return &e.score;
+      }
+    }
+
+    /// store (or overwrite) the score of (@p vertex, @p key)
+    void set(Size vertex, Size key, int score)
+    {
+      if ((count_ + 1) * 2 > table_.size()) grow_();
+      for (Size i = slot_(vertex, key); ; i = (i + 1) & mask_)
+      {
+        auto& e = table_[i];
+        if (e.vertex == empty_)
+        {
+          e = {vertex, key, score};
+          ++count_;
+          return;
+        }
+        if (e.vertex == vertex && e.key == key)
+        {
+          e.score = score;
+          return;
+        }
+      }
+    }
+
+  private:
+    struct Entry
+    {
+      Size vertex;
+      Size key;
+      int score;
+    };
+    static constexpr Size empty_ = std::numeric_limits<Size>::max(); // no vertex of a DAG (vertex < DAG size)
+    std::vector<Entry> table_;
+    Size mask_ = 0;
+    Size count_ = 0;
+
+    Size slot_(Size vertex, Size key) const
+    {
+      Size h = vertex * 0x9E3779B97F4A7C15ULL ^ (key + 0x632BE59BD9B4E019ULL) * 0xC2B2AE3D27D4EB4FULL;
+      return (h ^ (h >> 29)) & mask_;
+    }
+
+    void grow_()
+    {
+      std::vector<Entry> old;
+      old.swap(table_);
+      table_.assign(old.empty() ? 1024 : old.size() * 2, Entry {empty_, 0, 0});
+      mask_ = table_.size() - 1;
+      count_ = 0;
+      for (const auto& e : old)
+      {
+        if (e.vertex != empty_) set(e.vertex, e.key, e.score);
+      }
+    }
+  };
+
   /// Protein hit information that should be retained throughout the run.
   struct OPENMS_DLLAPI HitInformation
   {
@@ -153,6 +229,8 @@ private:
     std::map<int, std::vector<int>> node_source_map_;
     std::map<int, std::vector<std::pair<int, int>>> node_range_map_;
     const std::vector<int>* cur_node_series_ = nullptr;
+    /// per node k of the current mode, the smallest mass and the largest tolerance of the nodes k, k + 1, ... (index node count: none)
+    std::vector<double> cur_tail_min_mass_, cur_tail_max_margin_;
     /// per series, the cleavage weight of a matched mass at each protein index of the current mode (index k: the bond after k residues)
     std::vector<int> cur_bond_weight_[2];
   };
@@ -175,8 +253,18 @@ private:
     std::vector<int> mods; ///< indices into var_mod_list_, ascending
   };
 
-  /// modification mass to modification index. To use find nearest function
-  std::map<double, std::vector<ResidueModification>> candidate_blind_mod_map_;
+  /// the candidate blind modifications (setCandidateBlindModificationMap) in flat arrays: the masses of the map (ascending) and, per mass k,
+  /// the UniMod record ids and ids of its modifications in the map's order at [blind_mod_offsets_[k], blind_mod_offsets_[k + 1]). The
+  /// map's nodes were looked up in the innermost loop of the extension, and copied for every extender.
+  std::vector<double> blind_mod_masses_;
+  std::vector<Size> blind_mod_offsets_;
+  std::vector<int> blind_mod_unimods_;
+  std::vector<String> blind_mod_ids_;
+  /// per bucket of 1 / blind_mod_bucket_scale_ Da from blind_mod_masses_.front(), the first mass index in it: where blindModLowerBound_ starts
+  std::vector<UInt> blind_mod_buckets_;
+  double blind_mod_bucket_scale_ = 0;
+  /// the index of the first mass of blind_mod_masses_ not below @p mass, as std::lower_bound (and std::map::lower_bound) give it
+  Size blindModLowerBound_(double mass) const;
   std::vector<VariableModification> var_mod_list_;
   /// score penalty of each modification of var_mod_list_
   std::vector<int> var_mod_penalties_;
@@ -247,11 +335,12 @@ private:
    * @param hit the target protein hit
    * @param hi the HitInformation of the hit
    * @param matched_tags matched tags
+   * @param tag_positions per matched tag, whether its protein positions are found yet and the positions (the same in every mode)
    * @param all_paths_per_mode all found paths per mode
    * @param max_mod_cntr_for_last_mode the maximum number of modifications for the last mode (mode == 2)
    */
   void run_(const ProteinHit& hit, HitInformation& hi,
-            const std::vector<FLASHHelperClasses::Tag>& matched_tags,
+            const std::vector<FLASHHelperClasses::Tag>& matched_tags, std::vector<std::pair<bool, std::vector<int>>>& tag_positions,
             std::map<int, std::vector<Size>>& all_paths_per_mode, int max_mod_cntr_for_last_mode); // per hit
 
   /**
@@ -305,7 +394,7 @@ private:
                            Size vertex,
                            double truncation_mass,
                            double cumulative_shift,
-                           std::unordered_map<Size, std::unordered_map<Size, int>>& node_max_score_map,
+                           NodeScoreMap& node_max_score_map,
                            const std::vector<std::vector<int>>& tag_edges,
                            int max_mod_cntr_for_last_mode,
                            bool use_tags);
@@ -331,7 +420,7 @@ private:
                           int diagonal_counter,
                           double truncation_mass,
                           double cumulative_mod_mass,
-                          std::unordered_map<Size, std::unordered_map<Size, int>>& node_max_score_map,
+                          NodeScoreMap& node_max_score_map,
                           int max_blind_mod_cntr_for_last_mode);
 
   /// get proteoform specific information from the input @p path and relevant data.
