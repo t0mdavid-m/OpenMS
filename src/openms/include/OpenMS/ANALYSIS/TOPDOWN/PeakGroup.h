@@ -56,7 +56,7 @@ namespace OpenMS
     PeakGroup(const PeakGroup&) = default;
 
     /// move constructor
-    PeakGroup(PeakGroup&& other) = default;
+    PeakGroup(PeakGroup&& other) noexcept = default;
 
     /// comparison operators
     bool operator<(const PeakGroup& a) const;
@@ -67,6 +67,9 @@ namespace OpenMS
 
     /// assignment operator
     PeakGroup& operator=(const PeakGroup& t) = default;
+
+    /// move assignment (without it std::sort and vector moves deep-copy every peak vector)
+    PeakGroup& operator=(PeakGroup&& t) noexcept = default;
 
     /**
            @brief add monoisotopic indices of peaks by offset and discard negative isotope peaks. Total intensity is also updated
@@ -98,6 +101,10 @@ namespace OpenMS
      * @return returns the noisy peaks for this peakgroup - i.e., the raw peaks within the range of this peakGroup that are not matched to any istope of this peakGroup mass.
      */
     std::vector<LogMzPeak> recruitAllPeaksInSpectrum(const MSSpectrum& spec, double tol, const FLASHHelperClasses::PrecalculatedAveragine& avg, double mono_mass, bool renew_signal_peaks = true);
+
+    /// as above, but writes the noisy peaks into @p noisy_peaks (cleared first) so callers can reuse its capacity
+    void recruitAllPeaksInSpectrum(const MSSpectrum& spec, double tol, const FLASHHelperClasses::PrecalculatedAveragine& avg, double mono_mass,
+                                   std::vector<LogMzPeak>& noisy_peaks, bool renew_signal_peaks = true);
 
     /// set scan number
     void setScanNumber(int scan_number);
@@ -288,6 +295,10 @@ namespace OpenMS
     void updateChargeFitScoreAndChargeIntensities_(bool is_low_charge);
     /// update avg ppm error
     void updateAvgMassError_();
+    /// average absolute per-isotope mass error (same arithmetic as averaging getMassErrors(ppm))
+    float averageAbsMassError_(bool ppm) const;
+    /// sort peaks, skipping std::sort when already strictly increasing
+    void sortPeaks_();
     /// update avg Da error
     float getPPMError_(const LogMzPeak& p) const;
     /// get Da error of a logMzPeak from the closest isotope

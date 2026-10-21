@@ -57,7 +57,7 @@ namespace OpenMS
     int prev_scan = 0;
     for (Size i = 0; i < deconvolved_spectra.size(); i++)
     {
-      auto deconvolved_spectrum = deconvolved_spectra[i];
+      const auto& deconvolved_spectrum = deconvolved_spectra[i]; // read only: no per-spectrum deep copy
       if (deconvolved_spectrum.empty())
         continue;
       if ((int)deconvolved_spectrum.getOriginalSpectrum().getMSLevel() != ms_level)
@@ -85,7 +85,7 @@ namespace OpenMS
         Peak1D tp(pg.getMonoMass(), (float)pg.getIntensity());
         deconv_spec.push_back(tp);
       }
-      map.addSpectrum(deconv_spec);
+      map.addSpectrum(std::move(deconv_spec));
     }
     map.sortSpectra();
     // when map size is less than 3, MassTraceDetection aborts - too few spectra for mass tracing.
@@ -240,7 +240,9 @@ namespace OpenMS
       }
       qscore_2D = 1.0 - qscore_2D;
 
-      PeakGroup rep_pg = **std::max_element(pgs.begin(), pgs.end(), [](const auto& x, const auto& y) { return x->getIntensity() < y->getIntensity(); });
+      // representative group by reference (only its mass, charge and scan number are read, which the
+      // feature index / 2D q-score updates below do not touch)
+      const PeakGroup& rep_pg = **std::max_element(pgs.begin(), pgs.end(), [](const auto& x, const auto& y) { return x->getIntensity() < y->getIntensity(); });
 
       // Reference mass of the feature: a single trace keeps its centroid (unchanged behaviour). A merged group is placed at the isotope
       // label that carries the most intensity; member masses are then averaged in that label's frame.

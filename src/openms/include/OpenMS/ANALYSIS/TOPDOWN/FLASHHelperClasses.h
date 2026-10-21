@@ -18,6 +18,9 @@
 
 namespace OpenMS
 {
+  class PeakGroup;
+  class SpectralDeconvolution;
+
   /**
    * @brief Wrapper struct for all the structs needed by the FLASHDeconv
    * The following structures/classes are defined: PrecalculatedAveragine, MassFeature, IsobaricQuantities, LogMzPeak,
@@ -64,6 +67,15 @@ namespace OpenMS
       double min_mass_;
       /// calculate the mass bin index from mass
       Size massToIndex_(double mass) const;
+
+      friend class OpenMS::PeakGroup;
+      friend class OpenMS::SpectralDeconvolution;
+
+      /// borrow the cached distribution for read-only scoring (same bin as get(); valid while this model lives)
+      const IsotopeDistribution& getReference_(double mass) const
+      {
+        return isotopes_[massToIndex_(mass)];
+      }
 
     public:
       /// default constructor
@@ -520,4 +532,46 @@ namespace OpenMS
     */
     static float getChargeMass(bool positive_ioniziation_mode);
   };
+
+  // Hot in every peak-group sort and mass computation: defined inline (same arithmetic as before).
+  inline float FLASHHelperClasses::getChargeMass(const bool positive_ioniziation_mode)
+  {
+    return (float)(positive_ioniziation_mode ? Constants::PROTON_MASS_U : -Constants::PROTON_MASS_U);
+  }
+
+  inline double FLASHHelperClasses::LogMzPeak::getUnchargedMass() const
+  {
+    if (abs_charge == 0)
+    {
+      return .0;
+    }
+    if (mass <= 0)
+    {
+      return (mz - getChargeMass(is_positive)) * (float)abs_charge;
+    }
+    return mass;
+  }
+
+  inline bool FLASHHelperClasses::LogMzPeak::operator<(const LogMzPeak& a) const
+  {
+    if (this->logMz == a.logMz)
+    {
+      return this->intensity < a.intensity;
+    }
+    return this->logMz < a.logMz;
+  }
+
+  inline bool FLASHHelperClasses::LogMzPeak::operator>(const LogMzPeak& a) const
+  {
+    if (this->logMz == a.logMz)
+    {
+      return this->intensity > a.intensity;
+    }
+    return this->logMz > a.logMz;
+  }
+
+  inline bool FLASHHelperClasses::LogMzPeak::operator==(const LogMzPeak& a) const
+  {
+    return this->logMz == a.logMz && this->intensity == a.intensity;
+  }
 } // namespace OpenMS
