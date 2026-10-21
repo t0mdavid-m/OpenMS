@@ -13,6 +13,9 @@
 #include <OpenMS/CONCEPT/Constants.h>
 #include <boost/math/special_functions/gamma.hpp>
 #include <algorithm>
+#if defined(_OPENMP) && defined(__GLIBCXX__)
+  #include <parallel/algorithm>
+#endif
 #include <array>
 #include <bit>
 #include <cmath>
@@ -305,11 +308,12 @@ inline void searchListed(const std::vector<TargetSet>& sets, const std::vector<S
 // isotope intervals of more than 2^25 bins in all (precursor tolerances far beyond those of mass spectrometers).
 inline bool findWindows(const std::vector<Segment>& segments, const std::vector<const double*>& sums, const std::vector<Query>& queries,
                         double h2o, double isotope_mass, int min_length, std::size_t max_windows, std::size_t& prepared, std::size_t& chunks_out,
-                        std::vector<MassLadderAlgorithm::PreparedWindow>& windows, std::vector<std::uint32_t>& offsets)
+                        std::unique_ptr<MassLadderAlgorithm::PreparedWindow[]>& windows, std::size_t& window_count, std::vector<std::uint32_t>& offsets)
 {
   prepared = 0;
   chunks_out = 0;
-  windows.clear();
+  windows.reset();
+  window_count = 0;
   offsets.clear();
   const std::size_t n_queries = queries.size();
   if (n_queries == 0 || segments.empty()) return true;
@@ -424,7 +428,9 @@ inline bool findWindows(const std::vector<Segment>& segments, const std::vector<
 #ifdef _OPENMP
   threads = omp_in_parallel() ? 1 : omp_get_max_threads();
 #endif
-  const std::size_t chunk_count = std::min(segments.size(), (std::size_t)(16 * std::max(threads, 1)));
+  // a few chunks per thread: the windows of a query are in segment order whatever the chunks, and the chunks x queries table below
+  // and its serial scans grow with the chunk count
+  const std::size_t chunk_count = std::min(segments.size(), (std::size_t)(4 * std::max(threads, 1)));
   const double max_length = max_value / 57.0 + 1;
   double total_work = 0;
   for (const auto& seg : segments) total_work += (double)(seg.b - seg.a) * std::min((double)(seg.b - seg.a), max_length);
@@ -472,8 +478,9 @@ inline bool findWindows(const std::vector<Segment>& segments, const std::vector<
     }
     offsets[prepared * chunks + c] = (std::uint32_t)position;
   }
-  // pass 2: the hypotheses of the listed queries
-  windows.resize(total);
+  // pass 2: the hypotheses of the listed queries (not value-initialized: every one is written below, by the thread of its chunk)
+  windows = std::make_unique_for_overwrite<MassLadderAlgorithm::PreparedWindow[]>(total);
+  window_count = total;
 #pragma omp parallel for schedule(dynamic, 1) if (threads > 1)
   for (long c = 0; c < (long)chunks; c++)
   {
@@ -545,19 +552,34 @@ void MassLadderAlgorithm::buildIndex(const std::vector<std::string>& protein_seq
   };
   ladder_pre_.resize(protein_seqs.size());
   if (terminal_ladders) ladder_suf_.resize(protein_seqs.size());
-  for (Size k = 0; k < protein_seqs.size(); k++)
+#pragma omp parallel for schedule(dynamic, 64)
+  for (SignedSize k = 0; k < (SignedSize)protein_seqs.size(); k++)
   {
     sums(protein_seqs[k], false, ladder_pre_[k]);
-    if (! terminal_ladders) continue;
-    sums(protein_seqs[k], true, ladder_suf_[k]);
-    for (Size j = 1; j < ladder_pre_[k].size(); j++) ladder_pre_index_.push_back({ladder_pre_[k][j], (std::uint32_t)k});
-    for (Size j = 1; j < ladder_suf_[k].size(); j++) ladder_suf_index_.push_back({ladder_suf_[k][j], (std::uint32_t)k});
+    if (terminal_ladders) sums(protein_seqs[k], true, ladder_suf_[k]);
   }
   if (terminal_ladders)
   {
-    auto by_mass = [](const LadderEntry& a, const LadderEntry& b) { return a.mass < b.mass; };
-    std::sort(ladder_pre_index_.begin(), ladder_pre_index_.end(), by_mass);
-    std::sort(ladder_suf_index_.begin(), ladder_suf_index_.end(), by_mass);
+    // all sums of all proteins, filled in parallel at their offsets and sorted by mass in parallel. The order of equal masses does not
+    // matter: searchTerminalLadders only counts matches per protein and shift.
+    auto fill = [&](const std::vector<std::vector<double>>& ladders, std::vector<LadderEntry>& index) {
+      std::vector<Size> offset(ladders.size() + 1, 0);
+      for (Size k = 0; k < ladders.size(); k++) offset[k + 1] = offset[k] + (ladders[k].empty() ? 0 : ladders[k].size() - 1);
+      index.resize(offset.back());
+#pragma omp parallel for schedule(dynamic, 64)
+      for (SignedSize k = 0; k < (SignedSize)ladders.size(); k++)
+      {
+        for (Size j = 1; j < ladders[k].size(); j++) index[offset[k] + j - 1] = {ladders[k][j], (std::uint32_t)k};
+      }
+      auto by_mass = [](const LadderEntry& a, const LadderEntry& b) { return a.mass < b.mass; };
+#if defined(_OPENMP) && defined(__GLIBCXX__)
+      __gnu_parallel::sort(index.begin(), index.end(), by_mass);
+#else
+      std::sort(index.begin(), index.end(), by_mass);
+#endif
+    };
+    fill(ladder_pre_, ladder_pre_index_);
+    fill(ladder_suf_, ladder_suf_index_);
 
     const double met = rdb->getResidue('M')->getMonoWeight(Residue::Internal);
     const double acetyl = EmpiricalFormula("C2H2O").getMonoWeight();
@@ -735,7 +757,7 @@ void MassLadderAlgorithm::searchPrecursorLadders(const std::vector<double>& mass
     if (prepared != prepared_masses_.end() && *prepared == precursor_masses[n] && precursor_tol_ppm == prepared_tol_ppm_)
     {
       const Size q = (Size)(prepared - prepared_masses_.begin());
-      precursor_ladder::searchListed(sets, segments_, window_sums_, prepared_windows_.data(), prepared_offsets_.data() + q * prepared_chunks_,
+      precursor_ladder::searchListed(sets, segments_, window_sums_, prepared_windows_.get(), prepared_offsets_.data() + q * prepared_chunks_,
                                      prepared_offsets_.data() + (q + 1) * prepared_chunks_, prepared_chunks_, precursor_masses[n], precursor_tol_ppm,
                                      h2o, Constants::C13C12_MASSDIFF_U, precursor_ladder_min_k, top_n, found);
     }
@@ -814,7 +836,7 @@ void MassLadderAlgorithm::preparePrecursorWindows(const std::vector<double>& pre
   for (double m : masses) queries.push_back(precursor_ladder::makeQuery(m, precursor_tol_ppm, h2o, Constants::C13C12_MASSDIFF_U));
   Size prepared = 0;
   if (! precursor_ladder::findWindows(segments_, window_sums_, queries, h2o, Constants::C13C12_MASSDIFF_U, precursor_ladder_min_length,
-                                      (Size)1 << 27, prepared, prepared_chunks_, prepared_windows_, prepared_offsets_)
+                                      (Size)1 << 27, prepared, prepared_chunks_, prepared_windows_, prepared_window_count_, prepared_offsets_)
       || prepared == 0)
   {
     clearPrecursorWindows();
@@ -830,7 +852,8 @@ void MassLadderAlgorithm::clearPrecursorWindows()
   prepared_tol_ppm_ = -1;
   std::vector<double>().swap(prepared_masses_);
   prepared_chunks_ = 0;
-  std::vector<PreparedWindow>().swap(prepared_windows_);
+  prepared_windows_.reset();
+  prepared_window_count_ = 0;
   std::vector<std::uint32_t>().swap(prepared_offsets_);
 }
 

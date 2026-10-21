@@ -10,6 +10,7 @@
 
 #include <OpenMS/CONCEPT/Types.h>
 #include <cstdint>
+#include <memory>
 #include <set>
 #include <string>
 #include <utility>
@@ -195,7 +196,8 @@ private:
   double prepared_tol_ppm_ = -1;
   std::vector<double> prepared_masses_;
   Size prepared_chunks_ = 0;
-  std::vector<PreparedWindow> prepared_windows_;
+  std::unique_ptr<PreparedWindow[]> prepared_windows_; // not value-initialized: written once, by the threads that fill it
+  Size prepared_window_count_ = 0;
   std::vector<std::uint32_t> prepared_offsets_;
 };
 } // namespace OpenMS
