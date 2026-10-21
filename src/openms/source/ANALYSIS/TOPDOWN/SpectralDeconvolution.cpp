@@ -1905,6 +1905,10 @@ namespace OpenMS
           target_mono_masses_.push_back(m + iso_da_distance_ * j);
       }
     }
+    // the lookups (upper_bound, then a walk down; the target bin loop stops at the first mass past the last bin) need ascending
+    // order, which the isotope masses of two targets within 1 Da break
+    if (excluded) std::sort(excluded_masses_.begin(), excluded_masses_.end());
+    else std::sort(target_mono_masses_.begin(), target_mono_masses_.end());
   }
 
   void SpectralDeconvolution::setAveragine(const SpectralDeconvolution::PrecalculatedAveragine& avg)

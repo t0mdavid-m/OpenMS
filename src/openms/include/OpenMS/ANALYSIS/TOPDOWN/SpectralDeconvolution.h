@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <OpenMS/CONCEPT/Constants.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
@@ -234,8 +235,8 @@ namespace OpenMS
     /// current ms Level
     uint ms_level_;
 
-    /// isotope dalton distance
-    double iso_da_distance_;
+    /// isotope dalton distance (set per spectrum; initialised for setTargetMasses before the first deconvolution)
+    double iso_da_distance_ = Constants::ISOTOPE_MASSDIFF_55K_U;
 
     /// for precursor targetting.
     int target_precursor_charge_ = 0;
