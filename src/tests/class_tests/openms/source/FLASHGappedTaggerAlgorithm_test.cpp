@@ -29,21 +29,27 @@ namespace
     return m;
   }
 
-  /// a spectrum of the given masses (Qscore 0.9) plus masses no residue sum connects
-  DeconvolvedSpectrum spectrum(const std::vector<double>& masses)
+  /// a spectrum of the given masses with the given Qscores
+  DeconvolvedSpectrum spectrum(const std::vector<double>& masses, const std::vector<double>& qscores)
   {
     DeconvolvedSpectrum dspec(1);
-    std::vector<double> all = masses;
-    for (double m : {1234.567, 2345.678, 3456.789}) all.push_back(m);
-    for (double m : all)
+    for (Size i = 0; i < masses.size(); ++i)
     {
       PeakGroup pg(1, 10, true);
-      pg.setMonoisotopicMass(m);
-      pg.setQscore(0.9);
+      pg.setMonoisotopicMass(masses[i]);
+      pg.setQscore(qscores[i]);
       dspec.push_back(pg);
     }
     dspec.sort();
     return dspec;
+  }
+
+  /// a spectrum of the given masses (Qscore 0.9) plus masses no residue sum connects
+  DeconvolvedSpectrum spectrum(const std::vector<double>& masses)
+  {
+    std::vector<double> all = masses;
+    for (double m : {1234.567, 2345.678, 3456.789}) all.push_back(m);
+    return spectrum(all, std::vector<double>(all.size(), 0.9));
   }
 } // namespace
 
@@ -114,6 +120,49 @@ START_SECTION(void search(const DeconvolvedSpectrum& dspec, double ppm, std::vec
   found = false;
   for (const auto& l : landings) found |= l.protein == 1 && l.start == 30;
   TEST_EQUAL(found, false)
+
+  // the search is complete: the b-like masses land with a low Qscore among 60 masses of a high Qscore whose differences are mostly sums
+  // of residues (a beam over summed Qscores would keep paths of the latter only)
+  masses.clear();
+  std::vector<double> qscores;
+  for (Size c : cuts)
+  {
+    masses.push_back(residueSum(seq, 0, c) + Constants::PROTON_MASS_U);
+    qscores.push_back(0.1);
+  }
+  for (int i = 0; i < 60; ++i)
+  {
+    masses.push_back(2500.0 + 61.3 * i + 0.37 * (i % 7));
+    qscores.push_back(0.99);
+  }
+  tagger.search(spectrum(masses, qscores), 5.0, landings);
+  found = false;
+  for (const auto& l : landings)
+  {
+    if (l.protein != 1 || l.start != 30 || ! l.prefix) continue;
+    Size true_masses = 0; // another mass may land with them by chance
+    for (double m : l.masses)
+    {
+      for (Size i = 0; i < cuts.size(); ++i) true_masses += m == masses[i];
+    }
+    found |= true_masses == cuts.size();
+  }
+  TEST_EQUAL(found, true)
+
+  // every mass that lands with a tag is reported, beyond min_tag_size
+  const std::vector<Size> cuts9 = {30, 32, 33, 36, 38, 40, 41, 44, 47};
+  masses.clear();
+  for (Size c : cuts9) masses.push_back(residueSum(seq, 0, c) + Constants::PROTON_MASS_U);
+  tagger.search(spectrum(masses), 5.0, landings);
+  found = false;
+  for (const auto& l : landings)
+  {
+    if (l.protein != 1 || l.start != 30 || ! l.prefix) continue;
+    found = true;
+    TEST_EQUAL(l.end, 47)
+    TEST_EQUAL(l.masses.size(), 9)
+  }
+  TEST_EQUAL(found, true)
 }
 END_SECTION
 

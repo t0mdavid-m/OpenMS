@@ -11,11 +11,8 @@
 #include <OpenMS/CHEMISTRY/Residue.h>
 #include <OpenMS/CHEMISTRY/ResidueDB.h>
 #include <algorithm>
-#include <array>
 #include <bit>
 #include <cmath>
-#include <map>
-#include <numeric>
 #include <unordered_map>
 #ifdef _OPENMP
   #include <omp.h>
@@ -45,37 +42,6 @@ void orShifted(std::vector<std::uint64_t>& dst, const std::vector<std::uint64_t>
     dst[i] |= v;
   }
 }
-
-/// values of sorted @p a found in sorted @p b (exponential then binary search of each value of the shorter list in the longer one),
-/// appended to @p out in ascending order
-void intersectSorted(const std::uint32_t* a, Size na, const std::uint32_t* b, Size nb, std::vector<std::uint32_t>& out)
-{
-  if (na == 0 || nb == 0) return;
-  if (na > nb)
-  {
-    std::swap(a, b);
-    std::swap(na, nb);
-  }
-  Size lo = 0;
-  for (Size i = 0; i < na && lo < nb; ++i)
-  {
-    const std::uint32_t v = a[i];
-    if (b[lo] > v) continue;
-    Size step = 1;
-    while (lo + step < nb && b[lo + step] < v)
-    {
-      lo += step;
-      step <<= 1;
-    }
-    const Size hi = std::min(lo + step, nb - 1);
-    lo = (Size)(std::lower_bound(b + lo, b + hi + 1, v) - b);
-    if (lo < nb && b[lo] == v)
-    {
-      out.push_back(v);
-      ++lo;
-    }
-  }
-}
 } // namespace
 
 FLASHGappedTaggerAlgorithm::FLASHGappedTaggerAlgorithm() : DefaultParamHandler("FLASHGappedTaggerAlgorithm")
@@ -86,20 +52,19 @@ FLASHGappedTaggerAlgorithm::FLASHGappedTaggerAlgorithm() : DefaultParamHandler("
                      "needs several kDa.");
   defaults_.setMinFloat("max_gap_mass", 100.0);
   defaults_.setValue("min_tag_size", 5,
-                     "Smallest number of masses in a gapped tag. Gaps of many residues are sums of residues almost always, so a short tag "
-                     "lands on a decoy about as often as on the right protein (with 3, nearly always; with 4, often in crowded spectra); "
-                     "chance landings also take the candidate places of other sources.");
+                     "Smallest number of masses in a gapped tag; every tag of at least this many masses is found, with all the masses that "
+                     "land with it. Gaps of many residues are sums of residues almost always, so a short tag lands on a decoy about as often "
+                     "as on the right protein (with 3, nearly always; with 4, often in crowded spectra); chance landings also take the "
+                     "candidate places of other sources.");
   defaults_.setMinInt("min_tag_size", 3);
-  defaults_.setValue("max_tag_size", 7, "Largest number of masses in a gapped tag.");
-  defaults_.setMinInt("max_tag_size", 3);
-  defaults_.setValue("beam_width", 1000, "Number of gapped tags of each size proposed per spectrum, highest summed Qscore first.");
-  defaults_.setMinInt("beam_width", 1);
+  defaults_.setMaxInt("min_tag_size", 100);
   defaults_.setValue("top_n", 400, "Number of masses per spectrum (highest Qscore) used for gapped tags.");
   defaults_.setMinInt("top_n", 3);
-  defaults_.setValue("stop_at_first_size", "false",
-                     "Use only the largest tag size that lands anywhere (as in GappedFiltration); false: every size, and the protein score ranks "
-                     "the candidates.");
-  defaults_.setValidStrings("stop_at_first_size", {"true", "false"});
+  defaults_.setValue("max_proteins", 100,
+                     "Number of proteins per spectrum whose gapped-tag landings are reported. Every tag is found, and the proteins they land "
+                     "on are ranked by the score FLASHTnT ranks candidates by (the masses of the spectrum against the protein at the "
+                     "landings' shifts); in a crowded spectrum, tags of min_tag_size masses land on most proteins of a database by chance.");
+  defaults_.setMinInt("max_proteins", 1);
   defaults_.setValue("bin_width", 0.1, "Mass bin width of the protein window index (Da). A tolerance window is looked up in every bin it touches.");
   defaults_.setMinFloat("bin_width", 0.001);
   defaults_.addTag("bin_width", "advanced");
@@ -110,10 +75,8 @@ void FLASHGappedTaggerAlgorithm::updateMembers_()
 {
   max_gap_mass_ = param_.getValue("max_gap_mass");
   min_tag_size_ = param_.getValue("min_tag_size");
-  max_tag_size_ = std::max(min_tag_size_, (int)param_.getValue("max_tag_size"));
-  beam_width_ = param_.getValue("beam_width");
   top_n_ = param_.getValue("top_n");
-  stop_at_first_size_ = param_.getValue("stop_at_first_size").toString() == "true";
+  max_proteins_ = param_.getValue("max_proteins");
   bin_width_ = param_.getValue("bin_width");
 }
 
@@ -126,7 +89,6 @@ Size FLASHGappedTaggerAlgorithm::getIndexBytes() const
 
 void FLASHGappedTaggerAlgorithm::buildIndex(const std::vector<std::string>& protein_seqs)
 {
-  index_bin_width_ = bin_width_;
   double aa_mass[128] = {0};
   for (const char* c = standard_residues; *c; ++c)
   {
@@ -277,30 +239,6 @@ bool FLASHGappedTaggerAlgorithm::plausible_(double lo, double hi) const
   return rank(hi_u + 1) > rank(lo_u);
 }
 
-Size FLASHGappedTaggerAlgorithm::countRange_(std::int64_t key_lo, std::int64_t key_hi) const
-{
-  Size n = 0;
-  for (std::int64_t key = std::max(key_lo, key_min_); key <= std::min(key_hi, key_max_); ++key)
-  {
-    const auto s = slot_[(Size)key];
-    if (s != std::numeric_limits<std::uint32_t>::max()) n += post_offsets_[s + 1] - post_offsets_[s];
-  }
-  return n;
-}
-
-void FLASHGappedTaggerAlgorithm::collect_(std::int64_t key_lo, std::int64_t key_hi, std::vector<std::uint32_t>& out) const
-{
-  out.clear();
-  for (std::int64_t key = std::max(key_lo, key_min_); key <= std::min(key_hi, key_max_); ++key)
-  {
-    const auto s = slot_[(Size)key];
-    if (s == std::numeric_limits<std::uint32_t>::max()) continue;
-    const Size before = out.size();
-    out.insert(out.end(), postings_.begin() + (std::ptrdiff_t)post_offsets_[s], postings_.begin() + (std::ptrdiff_t)post_offsets_[s + 1]);
-    if (before) std::inplace_merge(out.begin(), out.begin() + (std::ptrdiff_t)before, out.end());
-  }
-}
-
 void FLASHGappedTaggerAlgorithm::search(const DeconvolvedSpectrum& dspec, double ppm, std::vector<Landing>& landings) const
 {
   landings.clear();
@@ -329,266 +267,241 @@ void FLASHGappedTaggerAlgorithm::search(const DeconvolvedSpectrum& dspec, double
   std::sort(nodes.begin(), nodes.end(), [](const Node& a, const Node& b) { return a.mass < b.mass; });
   const int M = (int)nodes.size();
   if (M < min_tag_size_) return;
-
-  // mass graph: an edge i -> j when the difference is a sum of residues within the tolerance of both masses
-  std::vector<std::vector<int>> fwd(M);
-  for (int i = 0; i < M; ++i)
-  {
-    for (int j = i + 1; j < M; ++j)
-    {
-      const double gap = nodes[j].mass - nodes[i].mass;
-      const double d = tol * (nodes[i].mass + nodes[j].mass);
-      if (gap + d < min_residue_mass) continue;
-      if (gap - d > max_gap_mass_) break;
-      if (! plausible_(gap - d - plausible_margin, gap + d + plausible_margin)) continue;
-      fwd[i].push_back(j);
-    }
-  }
-  // longest path (in edges) from each mass: a tag of n masses can start at i only if it is at least n - 1
-  std::vector<int> fdepth(M, 0);
-  for (int i = M - 1; i >= 0; --i)
-  {
-    int best = -1;
-    for (int j : fwd[i]) best = std::max(best, fdepth[j]);
-    fdepth[i] = best + 1;
-  }
-
-  // landing per (global start position, series): the largest tag, then the highest Qscore sum
-  std::unordered_map<std::uint64_t, Landing> best_landing;
-  std::vector<std::uint32_t> result, partial, operand;
-  std::vector<int> rows, cand_rows, order;
-  std::vector<double> score, cand_score;
-  std::vector<std::pair<std::int64_t, std::int64_t>> ranges;
-  std::vector<Size> sizes, idx;
-
-  // keep the `width` best rows (score, then row order) of a row-major block, preserving row order
-  auto keepTop = [&](std::vector<int>& block, std::vector<double>& sc, int cols) {
-    const int n_rows = (int)sc.size();
-    if (n_rows <= beam_width_) return;
-    order.resize(n_rows);
-    std::iota(order.begin(), order.end(), 0);
-    std::nth_element(order.begin(), order.begin() + beam_width_, order.end(),
-                     [&](int a, int b) { return sc[a] != sc[b] ? sc[a] > sc[b] : a < b; });
-    order.resize(beam_width_);
-    std::sort(order.begin(), order.end());
-    for (int r = 0; r < beam_width_; ++r)
-    {
-      if (order[r] == r) continue;
-      std::copy(block.begin() + (std::ptrdiff_t)order[r] * cols, block.begin() + (std::ptrdiff_t)(order[r] + 1) * cols,
-                block.begin() + (std::ptrdiff_t)r * cols);
-      sc[r] = sc[order[r]];
-    }
-    block.resize((Size)beam_width_ * cols);
-    sc.resize(beam_width_);
-  };
-
-  // result: the positions also found in the posting lists of the key range
-  auto intersectWith = [&](std::int64_t lo, std::int64_t hi) {
-    partial.clear();
-    for (std::int64_t key = std::max(lo, key_min_); key <= std::min(hi, key_max_); ++key)
-    {
-      const auto s = slot_[(Size)key];
-      if (s == std::numeric_limits<std::uint32_t>::max()) continue;
-      // a start position has at most one window per bin of a tolerance window (lengths differ by a residue), so the parts are disjoint
-      intersectSorted(result.data(), result.size(), postings_.data() + post_offsets_[s], (Size)(post_offsets_[s + 1] - post_offsets_[s]),
-                      partial);
-    }
-    std::sort(partial.begin(), partial.end());
-    result.swap(partial);
-  };
-  // f(position) for every posting in the key range
-  auto forEachPosting = [&](std::int64_t lo, std::int64_t hi, auto&& f) {
-    for (std::int64_t key = std::max(lo, key_min_); key <= std::min(hi, key_max_); ++key)
-    {
-      const auto s = slot_[(Size)key];
-      if (s == std::numeric_limits<std::uint32_t>::max()) continue;
-      const std::uint32_t* const end = postings_.data() + post_offsets_[s + 1];
-      for (const std::uint32_t* q = postings_.data() + post_offsets_[s]; q != end; ++q) f(*q);
-    }
-  };
-  // The tags of a spectrum share masses (beam rows), so the same smallest key ranges recur: the positions after the two and the
-  // three smallest ranges are kept per spectrum, keyed by the ranges. A key range narrower than the lightest residue (50 Da here)
-  // holds a start position at most once (two windows of a position differ by a residue), so two such ranges are intersected as
-  // sets, through a bit set marking the positions of the smaller.
-  auto narrow = [&](const std::pair<std::int64_t, std::int64_t>& r) {
-    return ((double)r.second - (double)r.first + 1) * index_bin_width_ < 50.0;
-  };
-  std::vector<std::uint64_t> marks;
-  std::map<std::array<std::int64_t, 4>, std::vector<std::uint32_t>> pair_cache;
-  std::map<std::array<std::int64_t, 6>, std::vector<std::uint32_t>> triple_cache;
-  Size cached = 0; // positions kept in both
-  const Size max_cached = Size(1) << 20;
-  auto keep = [&](auto& cache, const auto& key) {
-    if (cached + result.size() > max_cached) return;
-    cached += result.size();
-    cache.emplace(key, result);
-  };
-
-  // positions (global, ascending) where windows start with a mass in every key range
-  auto intersectRanges = [&]() {
-    result.clear();
-    sizes.resize(ranges.size());
-    for (Size k = 0; k < ranges.size(); ++k)
-    {
-      sizes[k] = countRange_(ranges[k].first, ranges[k].second);
-      if (sizes[k] == 0) return;
-    }
-    idx.resize(ranges.size());
-    std::iota(idx.begin(), idx.end(), 0);
-    std::sort(idx.begin(), idx.end(), [&](Size a, Size b) { return sizes[a] < sizes[b]; });
-    if (idx.size() == 1)
-    {
-      collect_(ranges[idx[0]].first, ranges[idx[0]].second, result);
-      return;
-    }
-    const auto [lo0, hi0] = ranges[idx[0]];
-    const auto [lo1, hi1] = ranges[idx[1]];
-    const std::array<std::int64_t, 4> pair_key {lo0, hi0, lo1, hi1};
-    if (const auto it = pair_cache.find(pair_key); it != pair_cache.end()) { result = it->second; }
-    else
-    {
-      if (narrow(ranges[idx[0]]) && narrow(ranges[idx[1]]) && sizes[idx[0]] * 16 >= sizes[idx[1]])
-      {
-        if (marks.empty()) marks.assign((Size)(offsets_.back() >> 6) + 1, 0);
-        std::uint64_t* const mark = marks.data();
-        forEachPosting(lo0, hi0, [mark](std::uint32_t p) { mark[p >> 6] |= 1ULL << (p & 63); });
-        if (operand.size() < sizes[idx[1]]) operand.resize(sizes[idx[1]]); // the number of positions of the second range
-        std::uint32_t* const out = operand.data();
-        Size n = 0;
-        forEachPosting(lo1, hi1, [mark, out, &n](std::uint32_t p) {
-          out[n] = p;
-          n += (mark[p >> 6] >> (p & 63)) & 1;
-        });
-        result.assign(operand.begin(), operand.begin() + (std::ptrdiff_t)n);
-        forEachPosting(lo0, hi0, [mark](std::uint32_t p) { mark[p >> 6] = 0; });
-        std::sort(result.begin(), result.end());
-      }
-      else
-      {
-        collect_(lo0, hi0, result);
-        intersectWith(lo1, hi1);
-      }
-      keep(pair_cache, pair_key);
-    }
-    Size k = 2;
-    if (k < idx.size() && ! result.empty())
-    {
-      const auto [lo2, hi2] = ranges[idx[2]];
-      const std::array<std::int64_t, 6> triple_key {lo0, hi0, lo1, hi1, lo2, hi2};
-      if (const auto it = triple_cache.find(triple_key); it != triple_cache.end()) { result = it->second; }
-      else
-      {
-        intersectWith(lo2, hi2);
-        keep(triple_cache, triple_key);
-      }
-      k = 3;
-    }
-    for (; k < idx.size() && ! result.empty(); ++k)
-    {
-      intersectWith(ranges[idx[k]].first, ranges[idx[k]].second);
-    }
-  };
-
+  const int need = min_tag_size_ - 1; // masses of a tag besides its base
   const int max_length = (int)(max_gap_mass_ / min_residue_mass);
-  for (int n = std::min(max_tag_size_, M); n >= min_tag_size_; --n)
-  {
-    // beam over paths of n masses, highest summed Qscore first; a path spans at most max_gap_mass
-    rows.clear();
-    score.clear();
-    for (int i = 0; i < M; ++i)
-    {
-      if (fdepth[i] < n - 1) continue;
-      rows.push_back(i);
-      score.push_back(nodes[i].qscore);
-    }
-    if (rows.empty()) continue;
-    keepTop(rows, score, 1);
-    for (int k = 2; k <= n && ! score.empty(); ++k)
-    {
-      const int cols = k - 1;
-      cand_rows.clear();
-      cand_score.clear();
-      for (Size r = 0; r < score.size(); ++r)
-      {
-        const int first = rows[r * cols], last = rows[r * cols + cols - 1];
-        for (int child : fwd[last])
-        {
-          const double span = nodes[child].mass - nodes[first].mass;
-          if (span - tol * (nodes[child].mass + nodes[first].mass) > max_gap_mass_) break;
-          if (fdepth[child] < n - k) continue;
-          cand_rows.insert(cand_rows.end(), rows.begin() + (std::ptrdiff_t)r * cols, rows.begin() + (std::ptrdiff_t)(r + 1) * cols);
-          cand_rows.push_back(child);
-          cand_score.push_back(score[r] + nodes[child].qscore);
-        }
-      }
-      rows.swap(cand_rows);
-      score.swap(cand_score);
-      keepTop(rows, score, k);
-    }
-    if (score.empty()) continue;
 
-    bool landed = false;
-    for (Size r = 0; r < score.size(); ++r)
+  // the offsets of a base to the other masses within max_gap_mass, ascending, as the index keys of their tolerance windows, if they are
+  // sums of residues (no window has any other mass). The base is the lowest mass of a prefix tag, the highest of a suffix tag.
+  struct Offset
+  {
+    int node;
+    std::int64_t key_lo, key_hi;
+  };
+  std::vector<Offset> offs;
+  auto offsetsOf = [&](int b, bool prefix) {
+    offs.clear();
+    const int step = prefix ? 1 : -1;
+    for (int j = b + step; j >= 0 && j < M; j += step)
     {
-      const int* path = rows.data() + r * n;
-      const double base = nodes[path[0]].mass, top = nodes[path[n - 1]].mass;
-      for (int series = 0; series < 2; ++series)
+      const double off = prefix ? nodes[j].mass - nodes[b].mass : nodes[b].mass - nodes[j].mass;
+      const double d = tol * (nodes[j].mass + nodes[b].mass);
+      if (off - d > max_gap_mass_) break;
+      if (off + d < min_residue_mass || ! plausible_(off - d - plausible_margin, off + d + plausible_margin)) continue;
+      offs.push_back({j, std::max(key_(off - d), key_min_), std::min(key_(off + d), key_max_)});
+    }
+  };
+  // the masses whose offsets the windows starting at p match, one per window (the highest Qscore: two offsets in the range of one
+  // window would otherwise both count), and the window length of each
+  std::vector<int> aligned, lengths;
+  auto align = [&](std::uint32_t p, Size protein_end) {
+    aligned.clear();
+    lengths.clear();
+    int len = 1;
+    for (const auto& o : offs)
+    {
+      // the offsets ascend, so the window matching the next one is not shorter
+      std::int64_t key = 0;
+      for (; len <= max_length && p + len <= protein_end && valid_[p + len - 1]; ++len)
       {
-        const bool prefix = series == 0;
-        // offsets of the masses from the lowest (prefix) or the highest (suffix); every offset is a window starting at one position
-        ranges.clear();
-        for (int j = 1; j < n; ++j)
+        key = key_(cum_mass_[p + len] - cum_mass_[p]);
+        if (key >= o.key_lo) break;
+      }
+      if (len > max_length || p + len > protein_end || ! valid_[p + len - 1]) break;
+      if (key > o.key_hi) continue;
+      if (! lengths.empty() && lengths.back() == len)
+      {
+        if (nodes[o.node].qscore > nodes[aligned.back()].qscore) aligned.back() = o.node;
+        continue;
+      }
+      aligned.push_back(o.node);
+      lengths.push_back(len);
+    }
+  };
+  auto proteinOf = [&](std::uint32_t p) {
+    return (Size)(std::upper_bound(offsets_.begin(), offsets_.end(), (Size)p) - offsets_.begin()) - 1;
+  };
+
+  // Every tag: each offset of a base votes for the window starts with a window in its key range (a range narrower than a residue holds
+  // a start at most once, as the windows of a start differ by a residue). The votes are counted for a block of starts (positions in the
+  // concatenated proteins) at a time, small enough for the first-level cache: the posting list of each bin ascends, so all lists of a
+  // base are consumed block by block, each from where it stopped. Per start in the block, the offsets that reach it (saturating; zero
+  // again after the block).
+  constexpr std::uint32_t block_size = 1u << 15;
+  const std::uint32_t n_positions = (std::uint32_t)(cum_mass_.size() - 1);
+  std::vector<std::uint8_t> votes(block_size, 0);
+  std::vector<std::uint32_t> voted(block_size + 1), reached; // + 1: the branchless append writes before it counts
+  struct Stream
+  {
+    const std::uint32_t* q;
+    const std::uint32_t* end;
+  };
+  std::vector<Stream> streams;
+  // a landing: window start, base, its lowest mass and series; its other masses are recovered for the reported landings only
+  struct Found
+  {
+    std::uint32_t p;
+    int base, low;
+    bool prefix;
+    Size protein;
+    double shift; ///< as FLASHTnT turns a landing into a shift: residue mass before (prefix) or after (suffix) the tag minus its lowest mass
+  };
+  std::vector<Found> found;
+  for (int series = 0; series < 2; ++series)
+  {
+    const bool prefix = series == 0;
+    for (int b = 0; b < M; ++b)
+    {
+      offsetsOf(b, prefix);
+      if ((int)offs.size() < need) continue;
+      streams.clear();
+      for (const auto& o : offs)
+      {
+        for (std::int64_t key = o.key_lo; key <= o.key_hi; ++key)
         {
-          const double m = prefix ? nodes[path[j]].mass : nodes[path[n - 1 - j]].mass;
-          const double off = prefix ? m - base : top - m;
-          const double d = tol * (m + (prefix ? base : top));
-          ranges.emplace_back(key_(off - d), key_(off + d));
-        }
-        intersectRanges();
-        if (result.empty()) continue;
-        const auto [span_lo, span_hi] = ranges.back();
-        for (std::uint32_t p : result)
-        {
-          const Size protein = (Size)(std::upper_bound(offsets_.begin(), offsets_.end(), (Size)p) - offsets_.begin()) - 1;
-          const Size protein_end = offsets_[protein + 1];
-          // the residue length of the span offset
-          int length = 0;
-          for (int len = 1; len <= max_length && p + len <= protein_end && valid_[p + len - 1]; ++len)
-          {
-            const std::int64_t key = key_(cum_mass_[p + len] - cum_mass_[p]);
-            if (key > span_hi) break;
-            if (key >= span_lo)
-            {
-              length = len;
-              break;
-            }
-          }
-          if (length == 0) continue;
-          const std::uint64_t id = ((std::uint64_t)p << 1) | (prefix ? 1 : 0);
-          auto it = best_landing.find(id);
-          double qsum = score[r];
-          if (it != best_landing.end() && ((int)it->second.masses.size() > n || it->second.qscore_sum >= qsum)) continue;
-          Landing l;
-          l.protein = protein;
-          l.start = (int)(p - offsets_[protein]);
-          l.end = l.start + length;
-          l.prefix = prefix;
-          l.flank_mass = prefix ? cum_mass_[p] - cum_mass_[offsets_[protein]] : cum_mass_[protein_end] - cum_mass_[p + length];
-          l.masses.reserve(n);
-          l.scores.reserve(n);
-          for (int j = 0; j < n; ++j)
-          {
-            l.masses.push_back(nodes[path[j]].mass);
-            l.scores.push_back(nodes[path[j]].score);
-          }
-          l.qscore_sum = qsum;
-          if (it != best_landing.end()) { it->second = std::move(l); }
-          else { best_landing.emplace(id, std::move(l)); }
-          landed = true;
+          const auto s = slot_[(Size)key];
+          if (s == std::numeric_limits<std::uint32_t>::max()) continue;
+          streams.push_back({postings_.data() + post_offsets_[s], postings_.data() + post_offsets_[s + 1]});
         }
       }
+      reached.clear();
+      for (std::uint32_t block = 0; block < n_positions && ! streams.empty(); block += block_size)
+      {
+        const std::uint32_t block_end = std::min(n_positions, block + block_size);
+        Size n_voted = 0;
+        for (Size i = 0; i < streams.size();)
+        {
+          auto& st = streams[i];
+          for (; st.q != st.end && *st.q < block_end; ++st.q)
+          {
+            const std::uint32_t at = *st.q - block;
+            std::uint8_t& v = votes[at];
+            voted[n_voted] = at; // kept if this is the first vote of the start (without a branch)
+            n_voted += v == 0;
+            v += v != std::numeric_limits<std::uint8_t>::max();
+          }
+          if (st.q == st.end)
+          {
+            st = streams.back(); // exhausted
+            streams.pop_back();
+          }
+          else ++i;
+        }
+        for (Size i = 0; i < n_voted; ++i)
+        {
+          if (votes[voted[i]] >= need) reached.push_back(block + voted[i]);
+          votes[voted[i]] = 0;
+        }
+      }
+      for (std::uint32_t p : reached)
+      {
+        const Size protein = proteinOf(p);
+        const Size protein_end = offsets_[protein + 1];
+        align(p, protein_end);
+        if ((int)aligned.size() < need) continue;
+        const int low = prefix ? b : aligned.back();
+        const double flank_mass = prefix ? cum_mass_[p] - cum_mass_[offsets_[protein]] : cum_mass_[protein_end] - cum_mass_[p + lengths.back()];
+        found.push_back({p, b, low, prefix, protein, flank_mass - nodes[low].mass});
+      }
     }
-    if (landed && stop_at_first_size_) break;
+  }
+
+  // Per protein, the score FLASHTnT ranks candidates by: the masses of the spectrum against the residue sums of a side at the shifts of
+  // its landings (FLASHTaggerAlgorithm::scoreShifts; shifts within the tolerance count once), the better side. Only the landings of the
+  // max_proteins best proteins are reported.
+  std::vector<double> score_masses {0.0}; // mass 0 stands for the terminus, as in FLASHTnT
+  score_masses.reserve(dspec.size() + 1);
+  for (const auto& pg : dspec) score_masses.push_back(pg.getMonoMass());
+  std::sort(score_masses.begin() + 1, score_masses.end());
+  std::sort(found.begin(), found.end(), [](const Found& a, const Found& c) {
+    return a.protein != c.protein ? a.protein < c.protein : (a.prefix != c.prefix ? a.prefix > c.prefix : a.shift < c.shift);
+  });
+  std::vector<std::pair<double, Size>> protein_scores; // score, first landing of the protein in found
+  std::vector<double> residue_sums, shifts, flanks;
+  for (Size f0 = 0; f0 < found.size();)
+  {
+    Size f1 = f0;
+    while (f1 < found.size() && found[f1].protein == found[f0].protein) ++f1;
+    const Size begin = offsets_[found[f0].protein], end = offsets_[found[f0].protein + 1];
+    double score = 0;
+    for (Size s0 = f0; s0 < f1;)
+    {
+      Size s1 = s0;
+      while (s1 < f1 && found[s1].prefix == found[s0].prefix) ++s1;
+      const bool prefix = found[s0].prefix;
+      shifts.clear();
+      flanks.clear();
+      for (Size k = s0; k < s1; ++k)
+      {
+        const double flank = nodes[found[k].low].mass;
+        if (! shifts.empty() && found[k].shift - shifts.back() <= tol * (flank + flanks.back())) continue;
+        shifts.push_back(found[k].shift);
+        flanks.push_back(flank);
+      }
+      residue_sums.clear(); // ascending, 0 included
+      for (Size q = begin; q <= end; ++q)
+      {
+        residue_sums.push_back(prefix ? cum_mass_[q] - cum_mass_[begin] : cum_mass_[end] - cum_mass_[end - (q - begin)]);
+      }
+      score = std::max(score, FLASHTaggerAlgorithm::scoreShifts(score_masses, residue_sums, shifts.data(), flanks.data(), shifts.size(), ppm));
+      s0 = s1;
+    }
+    protein_scores.emplace_back(score, f0);
+    f0 = f1;
+  }
+  if ((int)protein_scores.size() > max_proteins_)
+  {
+    std::nth_element(protein_scores.begin(), protein_scores.begin() + max_proteins_, protein_scores.end(),
+                     [](const auto& a, const auto& c) { return a.first != c.first ? a.first > c.first : a.second < c.second; });
+    protein_scores.resize(max_proteins_);
+  }
+
+  // the reported landings with their masses: per window start and series, the tag with the most masses, then the highest Qscore sum
+  std::unordered_map<std::uint64_t, Landing> best_landing;
+  for (const auto& [score, f0] : protein_scores)
+  {
+    for (Size k = f0; k < found.size() && found[k].protein == found[f0].protein; ++k)
+    {
+      const auto& f = found[k];
+      const Size protein_end = offsets_[f.protein + 1];
+      offsetsOf(f.base, f.prefix);
+      align(f.p, protein_end);
+      double qsum = nodes[f.base].qscore;
+      for (int j : aligned) qsum += nodes[j].qscore;
+      const int n = (int)aligned.size() + 1;
+      const std::uint64_t id = ((std::uint64_t)f.p << 1) | (f.prefix ? 1 : 0);
+      auto it = best_landing.find(id);
+      if (it != best_landing.end()
+          && ((int)it->second.masses.size() > n || ((int)it->second.masses.size() == n && it->second.qscore_sum >= qsum)))
+        continue;
+      Landing l;
+      l.protein = f.protein;
+      l.start = (int)(f.p - offsets_[f.protein]);
+      l.end = l.start + lengths.back();
+      l.prefix = f.prefix;
+      l.flank_mass = f.prefix ? cum_mass_[f.p] - cum_mass_[offsets_[f.protein]] : cum_mass_[protein_end] - cum_mass_[f.p + lengths.back()];
+      // ascending: the base first (prefix) or last (suffix, whose offsets ascend as the masses descend)
+      l.masses.reserve(n);
+      l.scores.reserve(n);
+      if (f.prefix)
+      {
+        l.masses.push_back(nodes[f.base].mass);
+        l.scores.push_back(nodes[f.base].score);
+      }
+      for (int i = 0; i < (int)aligned.size(); ++i)
+      {
+        const int j = aligned[f.prefix ? i : (int)aligned.size() - 1 - i];
+        l.masses.push_back(nodes[j].mass);
+        l.scores.push_back(nodes[j].score);
+      }
+      if (! f.prefix)
+      {
+        l.masses.push_back(nodes[f.base].mass);
+        l.scores.push_back(nodes[f.base].score);
+      }
+      l.qscore_sum = qsum;
+      if (it != best_landing.end()) { it->second = std::move(l); }
+      else { best_landing.emplace(id, std::move(l)); }
+    }
   }
 
   landings.reserve(best_landing.size());
