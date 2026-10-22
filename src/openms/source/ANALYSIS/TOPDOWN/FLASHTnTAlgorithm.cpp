@@ -292,8 +292,10 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   defaults_.setValue("ion_type", std::vector<std::string> {"b", "y"}, "Specifies ion types to consider.");
   defaults_.setValidStrings("ion_type", {"b", "c", "a", "y", "z", "x", "zp1", "zp2"});
 
-  defaults_.setValue("fixed_mod", std::vector<std::string> {""}, "Specifies the fixed modifications.");
-  defaults_.setValue("var_mod", std::vector<std::string> {""}, "Specifies the fixed modifications.");
+  defaults_.setValue("var_mod", std::vector<std::string> {}, "Variable modifications, by name as in Unimod/PSI-MOD (e.g. 'Oxidation (M)', "
+                     "'Acetyl (N-term)', 'Phospho (S)'). Searched with their own count (max_var_mod_count), independently of blind "
+                     "modifications; both can occur in one proteoform. More in a file: ex:var_mod_file. Fixed modifications: the FLASHTnT tool's "
+                     "fixed_mod.");
 
   defaults_.setValue("max_var_mod_count", 3, "Maximum number of variable modifications per proteoform.");
   defaults_.setValue("max_blind_mod_count", 2, "Maximum number of blind modifications per proteoform.");
@@ -301,7 +303,7 @@ void FLASHTnTAlgorithm::setDefaultParams_()
 
   auto tparam = FLASHTaggerAlgorithm().getDefaults();
   tparam.remove("ion_type");
-  tparam.remove("fixed_mod");
+  tparam.remove("fixed_mod"); // unused by the tagger (FLASHIda sets it); fixed modifications are the FLASHTnT tool's fixed_mod
   defaults_.insert("tag:", tparam);
 
   auto eparam = FLASHExtenderAlgorithm().getDefaults();
@@ -309,7 +311,7 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   eparam.remove("max_var_mod_count");
   eparam.remove("max_blind_mod_count");
   eparam.remove("max_mod_mass");
-  eparam.remove("fixed_mod");
+  eparam.remove("fixed_mod"); // unused by the extender (FLASHIda sets it)
   eparam.remove("var_mod");
 
   defaults_.insert("ex:", eparam);
@@ -400,14 +402,12 @@ void FLASHTnTAlgorithm::updateMembers_()
 {
   tagger_param_ = param_.copy("tag:", true);
   tagger_param_.setValue("ion_type", param_.getValue("ion_type"));
-  tagger_param_.setValue("fixed_mod", param_.getValue("fixed_mod"));
 
   extender_param_ = param_.copy("ex:", true);
   extender_param_.setValue("ion_type", param_.getValue("ion_type"));
   extender_param_.setValue("max_var_mod_count", param_.getValue("max_var_mod_count"));
   extender_param_.setValue("max_blind_mod_count", param_.getValue("max_blind_mod_count"));
   extender_param_.setValue("max_mod_mass", param_.getValue("max_mod_mass"));
-  extender_param_.setValue("fixed_mod", param_.getValue("fixed_mod"));
   extender_param_.setValue("var_mod", param_.getValue("var_mod"));
 
   gapped_param_ = param_.copy("gapped:", true);
