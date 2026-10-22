@@ -199,6 +199,19 @@ namespace OpenMS
     /// original write order sort by `seq`.
     static std::vector<MemoryStamp> flatten(const SpeciesStamps& species);
 
+    /// The PeakGroups of the last deconvolved survey (deconvolvedMS1(), ALL of them, not only the selected)
+    /// whose nominal mass is within ±1 of @p nominal: one species, its ADR-0036 siblings included. Pointers
+    /// into that spectrum, valid until the next MS1 deconvolution.
+    std::vector<const PeakGroup*> findSpecies(int nominal) const;
+
+    /// Survey re-planning: re-choose a waiting species' charges on the last deconvolved survey. Every charge
+    /// of findSpecies(@p nominal) that is isolatable and clears targeting().snr_threshold, ranked by
+    /// targeting().charge_selection (chargeRanksBefore), each measured on the PeakGroup that resolved it --
+    /// a charge two siblings both resolve is taken from the one that ranks it higher. Drops @p exclude, keeps
+    /// only @p allowed when it is non-empty, and returns at most @p count (none when @p count <= 0), best first.
+    std::vector<std::pair<int, const PeakGroup*>> rechooseCharges(int nominal, const std::vector<int>& exclude,
+                                                                  const std::vector<int>& allowed, int count) const;
+
     /**
      * @brief Process stored MS2 deconvolution for protein family detection and inclusion list expansion
      *

@@ -45,6 +45,7 @@
 #include <climits>
 #include <cmath>
 #include <functional>
+#include <limits>
 #include <map>
 #include <set>
 #include <sstream>
@@ -360,16 +361,106 @@ FLASHIda::FLASHIda(char* arg) :
               git = quant_group_by_nominal.emplace(nominal, allocQuantGroupId_()).first;
               unit.quant_group_ids.push_back(git->second);
             }
-            quant_.addMember(git->second, cmd, precursor_id);
+            // The charges this survey resolved for the species: the only ones a newer survey may move the
+            // R this group buys to (survey re-planning: a replacement must be resolved on both surveys).
+            std::vector<int> resolved;
+            for (const auto& [z, pg] : selection_.rechooseCharges(nominal, {}, {}, std::numeric_limits<int>::max()))
+              resolved.push_back(z);
+            quant_.addMember(git->second, cmd, precursor_id, std::move(resolved), parent_tracking_id);
           }
         }
+      }
+    }
+
+    // What a committed species still has waiting at this CV stays adjustable in exactly two shapes: a
+    // non-quant `separate` remainder (its unsent charges) and a bought R. Both are re-chosen on THIS survey.
+    std::vector<int> replace_remainder_of;
+    std::vector<AdjustRequest> adjust;
+    {
+      const ScanCommandQueue::Waiting waiting = queue_.waitingAt(faims_cv);
+      const int cap = config_.targeting().max_charge_states > 0 ? config_.targeting().max_charge_states : std::numeric_limits<int>::max();
+
+      // A `separate` remainder is re-derived, not fixed at its original count: the species' charges are
+      // re-ranked on this survey, the ones already sent are excluded, and the remainder is what is left of
+      // min(max_charge_states, |admissible here|). Nothing admissible here keeps it as decided. The new
+      // remainder replaces the old one's queued commands at the swap, which re-syncs sent_charges then.
+      for (const PlanUnit& old : waiting.committed_units)
+      {
+        if (!old.separate || old.role != UnitRole::Plain) continue;
+        // An authored charge set restricts and never extends (ADR-0028): such a species is re-chosen only
+        // among the authored charges it still holds stamps for.
+        std::vector<int> authored;
+        for (const auto& [z, stamps] : old.stamps.per_charge)
+        {
+          if (std::any_of(stamps.begin(), stamps.end(),
+                          [](const MemoryStamp& s) { return s.kind == MemoryStamp::Kind::AuthoredAcquired; }))
+            authored.push_back(z);
+        }
+        const int admissible = static_cast<int>(selection_.rechooseCharges(old.nominal_mass, {}, {}, std::numeric_limits<int>::max()).size());
+        const int count = std::min(cap, admissible) - static_cast<int>(old.sent_charges.size());
+        const auto picks = selection_.rechooseCharges(old.nominal_mass, old.sent_charges, authored, count);
+        if (picks.empty()) continue;
+
+        PlanUnit rem;
+        rem.faims_cv = faims_cv;
+        rem.nominal_mass = old.nominal_mass;
+        rem.decision_survey_id = parent_tracking_id;
+        rem.role = UnitRole::Plain;
+        rem.separate = true;
+        rem.committed = true; // the species committed with its first charge
+        rem.sent_charges = old.sent_charges;
+        rem.stamps.nominal_mass = old.nominal_mass;
+        for (const auto& [z, pg] : picks)
+        {
+          const auto pc = old.stamps.per_charge.find(z);
+          if (pc != old.stamps.per_charge.end()) rem.stamps.per_charge[z] = pc->second;
+        }
+        // A remainder is a new decision of this survey, so this survey is its parent; one precursor_id per
+        // charge, as `separate` mints for its own selection entries.
+        for (const auto& [z, pg] : picks)
+        {
+          const int precursor_id = allocPrecursorId_();
+          for (const ScanConfig& ms2_config : config_.level(2).scans)
+          {
+            ScanCommand cmd = queue_.buildMS2(*pg, z, ms2_config, 2, parent_tracking_id);
+            cmd.faims_cv = faims_cv;
+            if (cmd.num_stages > 0)
+            {
+              const double half = cmd.stages[0].isolation_width / 2.0;
+              cmd.window_snr = FragmentAnalysis::windowSnr(raw_ms1, cmd.stages[0].precursor_mz - half,
+                                                           cmd.stages[0].precursor_mz + half, cmd.precursor_intensity);
+            }
+            plan_ms2_command(rem, cmd, precursor_id, *pg);
+          }
+        }
+        replace_remainder_of.push_back(old.unit_id);
+        units.push_back(std::move(rem));
+      }
+
+      // A bought R (ADR-0038/0039) is re-chosen among the charges resolved on BOTH its Q's survey and this
+      // one, by charge_selection; a multiplexed one re-chooses its whole set. Re-confirming the same charge
+      // counts as re-chosen: the decision survey and the queue time move to this survey all the same. With
+      // nothing resolved on both it goes out as decided, still attributed to the Q's survey.
+      for (const auto& [r, resolved_on_q] : waiting.adjustable)
+      {
+        if (std::abs(r.faims_cv - faims_cv) >= 1e-6) continue; // only a survey at its own CV re-plans it
+        const int count = r.stage0_notch_count > 0 ? cap : 1;
+        const auto picks = selection_.rechooseCharges(SpectralDeconvolution::getNominalMass(r.mono_mass), {}, resolved_on_q, count);
+        if (picks.empty()) continue;
+        ScanCommand rewritten = ScanCommandQueue::reisolate(r, picks, optimal_window_margin_, 'R');
+        const double half = rewritten.stages[0].isolation_width / 2.0;
+        const double lo = rewritten.stages[0].precursor_mz - half;
+        const double hi = rewritten.stages[0].precursor_mz + half;
+        rewritten.window_snr = FragmentAnalysis::windowSnr(raw_ms1, lo, hi, rewritten.precursor_intensity);
+        adjust.push_back({r.scan_id, rewritten, parent_tracking_id,
+                          FragmentAnalysis::windowPurity(raw_ms1, lo, hi, rewritten.precursor_intensity)});
       }
     }
 
     // The swap: this survey's plan replaces the still-uncommitted work of its CV in one queue_mutex_ hold.
     // Committed units stay; a unit whose species the drain committed since the fold is reconciled away.
     beforeReplan_();
-    const ReplanResult replan = queue_.replacePlan(faims_cv, std::move(units), {}, {});
+    const ReplanResult replan = queue_.replacePlan(faims_cv, std::move(units), adjust, replace_remainder_of);
 
     // Outside the queue lock: what left the queue -- dropped from an older plan, or reconciled out of this
     // one -- undoes its side effects. Groups were opened and precursor ids stamped when it was planned.
@@ -813,6 +904,11 @@ FLASHIda::FLASHIda(char* arg) :
               // target downstream of it -- under another charge's proteoform model.
               auto ident = queue_.buildFollowUp(cons.winner_cmd,
                                                 config_.quantification().identification_scan, 'R');
+              // Adjustable, never droppable: while it waits, each newer survey at its CV may re-choose its
+              // charge among those the winner Q's survey resolved; until one does, that survey decided it.
+              // Registered BEFORE the push: once pushed, the drain may dequeue it at once, and a registration
+              // after that would leave an entry no dequeue ever erases.
+              queue_.registerAdjustable(ident.scan_id, cons.winner_resolved_charges, cons.winner_survey_id);
               stampAndPush_(ident, cons.winner_precursor_id);
               child_ids.push_back(ScanCommandQueue::encode(ident.scan_id));
               commands_pushed++;

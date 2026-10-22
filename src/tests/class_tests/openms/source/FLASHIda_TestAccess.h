@@ -23,6 +23,7 @@
 #include <cstddef>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <vector>
 
 namespace OpenMS
@@ -93,6 +94,39 @@ namespace OpenMS
       std::lock_guard<std::mutex> lock(q.queue_mutex_);
       return static_cast<int>(q.units_.size());
     }
+
+    /// Every command still queued, highest priority first and FIFO within one -- the order the drain would hand
+    /// them out -- read without dequeuing (dequeue commits, so a test that must look before the drain does reads
+    /// through here).
+    static std::vector<ScanCommand> queuedCommands(const ScanCommandQueue& q)
+    {
+      std::lock_guard<std::mutex> lock(q.queue_mutex_);
+      std::vector<ScanCommand> out;
+      for (const auto& dq : q.queues_) out.insert(out.end(), dq.begin(), dq.end());
+      return out;
+    }
+
+    /// The decision info the queue holds for @p scan_id, read without taking it; nullopt if none.
+    static std::optional<DecisionInfo> decisionInfo(const ScanCommandQueue& q, int scan_id)
+    {
+      std::lock_guard<std::mutex> lock(q.queue_mutex_);
+      const auto it = q.decision_info_.find(scan_id);
+      if (it == q.decision_info_.end()) return std::nullopt;
+      return it->second;
+    }
+
+    /// The charges an adjustable bought R was registered with (resolved on its Q's survey); nullopt if
+    /// @p scan_id is not a queued adjustable command.
+    static std::optional<std::vector<int>> adjustableResolvedCharges(const ScanCommandQueue& q, int scan_id)
+    {
+      std::lock_guard<std::mutex> lock(q.queue_mutex_);
+      const auto it = q.adjustable_.find(scan_id);
+      if (it == q.adjustable_.end()) return std::nullopt;
+      return it->second.resolved_charges;
+    }
+
+    /// The survey deconvolution selection last read: every PeakGroup of the last MS1, selected or not.
+    static const DeconvolvedSpectrum& surveyDeconvolution(const FLASHIda& f) { return f.selection_.deconvolvedMS1(); }
 
     /// Next precursor id the engine would mint. Part of the neutrality fingerprint: a monitor scan
     /// must not consume one, and an id counter that moved is the cheapest evidence that it selected.

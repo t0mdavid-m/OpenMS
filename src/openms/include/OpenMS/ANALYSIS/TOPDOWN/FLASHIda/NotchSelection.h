@@ -58,18 +58,24 @@ namespace OpenMS
     return c.intensity;
   }
 
-  /// Order @p candidates by @p rule: the rule's key descending, then intensity descending, then the
-  /// lower charge -- total, so the output is reproducible when two charges tie on the key.
+  /// Does @p a rank before @p b under @p rule? The rule's key descending, then intensity descending, then
+  /// the lower charge -- total, so an order built from it is reproducible when two charges tie on the key.
+  /// The one ordering of charges: rankCharges sorts by it, and so does a caller that ranks candidates
+  /// carried beside other data (PrecursorSelection::rechooseCharges keeps each with its PeakGroup).
+  inline bool chargeRanksBefore(const NotchCandidate& a, const NotchCandidate& b, ChargeSelection rule)
+  {
+    const double ka = chargeRankKey(a, rule);
+    const double kb = chargeRankKey(b, rule);
+    if (ka != kb) return ka > kb;
+    if (a.intensity != b.intensity) return a.intensity > b.intensity;
+    return a.charge < b.charge;
+  }
+
+  /// Order @p candidates by @p rule (chargeRanksBefore).
   inline void rankCharges(std::vector<NotchCandidate>& candidates, ChargeSelection rule)
   {
     std::sort(candidates.begin(), candidates.end(),
-              [rule](const NotchCandidate& a, const NotchCandidate& b) {
-                const double ka = chargeRankKey(a, rule);
-                const double kb = chargeRankKey(b, rule);
-                if (ka != kb) return ka > kb;
-                if (a.intensity != b.intensity) return a.intensity > b.intensity;
-                return a.charge < b.charge;
-              });
+              [rule](const NotchCandidate& a, const NotchCandidate& b) { return chargeRanksBefore(a, b, rule); });
   }
 
   /// Pick the co-isolation notches for one acquisition charge set (ADR-0016).

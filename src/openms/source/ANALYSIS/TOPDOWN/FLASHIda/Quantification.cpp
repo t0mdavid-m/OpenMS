@@ -188,7 +188,8 @@ namespace OpenMS
 
   // ---- the quantification group and its vote (ADR-0040) ----------------------------------------
 
-  void Quantification::addMember(const int group_id, const ScanCommand& cmd, const int precursor_id)
+  void Quantification::addMember(const int group_id, const ScanCommand& cmd, const int precursor_id, std::vector<int> resolved_charges,
+                                 const int survey_id)
   {
     GroupMember m;
     m.tracking_id  = cmd.scan_id;
@@ -197,6 +198,8 @@ namespace OpenMS
     m.window_snr   = cmd.window_snr;
     m.intensity    = cmd.precursor_intensity;
     m.cmd          = cmd;
+    m.resolved_charges = std::move(resolved_charges);
+    m.survey_id    = survey_id;
     groups_[group_id].push_back(m);
     group_by_tracking_[cmd.scan_id] = group_id;
   }
@@ -341,6 +344,8 @@ namespace OpenMS
       out.winner_charge       = winner->charge;
       out.winner_precursor_id = winner->precursor_id;
       out.winner_cmd          = winner->cmd;
+      out.winner_resolved_charges = winner->resolved_charges;
+      out.winner_survey_id    = winner->survey_id;
     }
     return out;
   }

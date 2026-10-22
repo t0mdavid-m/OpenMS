@@ -1066,6 +1066,50 @@ namespace OpenMS
     return out;
   }
 
+  std::vector<const PeakGroup*> PrecursorSelection::findSpecies(int nominal) const
+  {
+    std::vector<const PeakGroup*> out;
+    for (const auto& pg : deconv_.deconvolvedMS1())
+    {
+      if (std::abs(SpectralDeconvolution::getNominalMass(pg.getMonoMass()) - nominal) <= 1) out.push_back(&pg);
+    }
+    return out;
+  }
+
+  std::vector<std::pair<int, const PeakGroup*>> PrecursorSelection::rechooseCharges(int nominal, const std::vector<int>& exclude,
+                                                                                    const std::vector<int>& allowed, int count) const
+  {
+    std::vector<std::pair<int, const PeakGroup*>> out;
+    if (count <= 0) return out;
+    const auto contains = [](const std::vector<int>& v, int z) { return std::find(v.begin(), v.end(), z) != v.end(); };
+
+    // The same candidates, gate and ranking admission uses (peakGroupNotchCandidates, snr_threshold,
+    // charge_selection), so a re-chosen charge is one this survey would have admitted.
+    const MSSpectrum& raw = deconv_.deconvolvedMS1().getOriginalSpectrum();
+    std::vector<std::pair<NotchCandidate, const PeakGroup*>> cands;
+    for (const PeakGroup* pg : findSpecies(nominal))
+    {
+      for (const NotchCandidate& n : peakGroupNotchCandidates(*pg, optimal_window_margin_, &raw))
+      {
+        if (n.charge <= 0 || n.mz <= 0 || n.width <= 0) continue; // not isolatable
+        if (n.snr < config_.targeting().snr_threshold) continue;  // below noise
+        if (contains(exclude, n.charge)) continue;
+        if (!allowed.empty() && !contains(allowed, n.charge)) continue;
+        cands.emplace_back(n, pg);
+      }
+    }
+    const ChargeSelection rule = config_.targeting().charge_selection;
+    std::stable_sort(cands.begin(), cands.end(),
+                     [rule](const auto& a, const auto& b) { return chargeRanksBefore(a.first, b.first, rule); });
+    for (const auto& [n, pg] : cands)
+    {
+      if (static_cast<int>(out.size()) >= count) break;
+      const bool seen = std::any_of(out.begin(), out.end(), [&n](const auto& p) { return p.first == n.charge; });
+      if (!seen) out.emplace_back(n.charge, pg);
+    }
+    return out;
+  }
+
   void PrecursorSelection::removeFromExclusionList(int id)
   {
     // Check if id is valid

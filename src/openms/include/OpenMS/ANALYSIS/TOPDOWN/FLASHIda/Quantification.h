@@ -140,6 +140,10 @@ namespace OpenMS
       double window_snr   = 0.0; ///< ranks the identification member (the purest window wins)
       double intensity    = 0.0; ///< tiebreak only, after window_snr
       ScanCommand cmd {};        ///< handed to buildFollowUp as ctx, so the 'R' inherits its geometry
+      /// Survey re-planning: the charges of this species the Q's survey resolved (SNR-admissible, isolatable),
+      /// and that survey. The bought R is adjustable to a charge a newer survey prefers only if it is one of these.
+      std::vector<int> resolved_charges;
+      int    survey_id    = 0;
       bool   received     = false;
       Result result {};
     };
@@ -158,14 +162,17 @@ namespace OpenMS
       int    winner_charge = 0;
       int    winner_precursor_id = 0;
       ScanCommand winner_cmd {};
+      std::vector<int> winner_resolved_charges; ///< the winner's GroupMember::resolved_charges
+      int    winner_survey_id = 0;           ///< the winner's GroupMember::survey_id
 
       int    usable = 0;              ///< members whose every assigned channel was measured
       int    members = 0;             ///< members registered for the group
       std::vector<int> usable_charges; ///< drives group_charges
     };
 
-    /// Register one 'Q' command as a member of @p group_id. Called at MS1, once per emitted 'Q'.
-    void addMember(int group_id, const ScanCommand& cmd, int precursor_id);
+    /// Register one 'Q' command as a member of @p group_id. Called at MS1, once per emitted 'Q'. @p resolved_charges
+    /// and @p survey_id are what survey re-planning needs to adjust the R the group may buy (GroupMember).
+    void addMember(int group_id, const ScanCommand& cmd, int precursor_id, std::vector<int> resolved_charges = {}, int survey_id = 0);
 
     /// Record a returning scan's measurement. Returns its group_id, or 0 if the scan is not a
     /// member of any group (which is every scan in a non-quant run).
