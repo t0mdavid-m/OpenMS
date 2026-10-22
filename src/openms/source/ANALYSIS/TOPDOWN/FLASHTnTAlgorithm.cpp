@@ -75,10 +75,24 @@ constexpr int var_mod_pilot_stride = 4;
 // variable modification penalties: with fewer decoy PrSMs, chance usage is not estimated and the penalties are not learned
 constexpr Size var_mod_min_decoy_prsms = 50;
 
+// the registry index of a meta value name used below, registered once: a lookup by name takes the registry's critical section (the map is
+// read-only after its construction, so threads share it without a lock)
+UInt tntKey(const char* name)
+{
+  static const std::unordered_map<std::string, UInt> keys = [] {
+    auto& registry = MetaInfoInterface::metaRegistry();
+    std::unordered_map<std::string, UInt> k;
+    for (const char* n : {"BlindModCount", "DeconvMassInfo", "DecoyPrecursor", "EndPosition", "ExtensionScore", "FDRClass", "FastaIndex", "GivenMass", "Index", "Mass", "MassLostToFeatureOwner", "ModificationEnds", "ModificationStarts", "Modifications", "PrSMIndices", "ProteinQvalue", "ProteoformIndex", "ProteoformMassByFragmentMass", "RT", "RawCoverage", "RawFragmentHypotheses", "RawMatchedFragments", "RawScore", "Representative", "Scan", "StartPosition", "TagIndices", "proqvalue", "qvalue"})
+      k.emplace(n, registry.registerName(n));
+    return k;
+  }();
+  return keys.at(name);
+}
+
 // mass and both termini known (unknown: -1)
 bool isDetermined(const ProteinHit& hit)
 {
-  return ! ((double)hit.getMetaValue("Mass") < 0 || (int)hit.getMetaValue("StartPosition") < 0 || (int)hit.getMetaValue("EndPosition") < 0);
+  return ! ((double)hit.getMetaValue(tntKey("Mass")) < 0 || (int)hit.getMetaValue(tntKey("StartPosition")) < 0 || (int)hit.getMetaValue(tntKey("EndPosition")) < 0);
 }
 
 // The better of two PrSMs of a spectrum, as the best PrSM per spectrum is chosen after raw-spectrum scoring: the higher score, then a
@@ -86,7 +100,7 @@ bool isDetermined(const ProteinHit& hit)
 bool isBetterPrSM(const ProteinHit& a, const ProteinHit& b)
 {
   auto is_determined = [](const ProteinHit& h) {
-    return (double)h.getMetaValue("Mass") > 0 && (int)h.getMetaValue("StartPosition") > 0 && (int)h.getMetaValue("EndPosition") > 0;
+    return (double)h.getMetaValue(tntKey("Mass")) > 0 && (int)h.getMetaValue(tntKey("StartPosition")) > 0 && (int)h.getMetaValue(tntKey("EndPosition")) > 0;
   };
   if (a.getScore() != b.getScore()) return a.getScore() > b.getScore();
   if (is_determined(a) != is_determined(b)) return is_determined(a);
@@ -523,8 +537,8 @@ std::set<Size> FLASHTnTAlgorithm::getProteinsPassingFDR_(const std::vector<FASTA
 
 Size FLASHTnTAlgorithm::blindModCount_(const ProteinHit& hit)
 {
-  if (hit.metaValueExists("BlindModCount")) return (Size)(int)hit.getMetaValue("BlindModCount");
-  return hit.getMetaValue("Modifications").toDoubleList().size();
+  if (hit.metaValueExists(tntKey("BlindModCount"))) return (Size)(int)hit.getMetaValue(tntKey("BlindModCount"));
+  return hit.getMetaValue(tntKey("Modifications")).toDoubleList().size();
 }
 
 bool FLASHTnTAlgorithm::areConsistent_(const ProteinHit& a, const ProteinHit& b, double tol)
@@ -544,9 +558,9 @@ bool FLASHTnTAlgorithm::areConsistent_(const ProteinHit& a, const ProteinHit& b,
   //   counted a determined proteoform again (232 of 511 undetermined proteoform rows of Eclip_1480 shared their known termini with a
   //   determined proteoform).
   if (a == b) return true;
-  const double mass1 = a.getMetaValue("Mass"), mass2 = b.getMetaValue("Mass");
-  const int sp1 = a.getMetaValue("StartPosition"), ep1 = a.getMetaValue("EndPosition");
-  const int sp2 = b.getMetaValue("StartPosition"), ep2 = b.getMetaValue("EndPosition");
+  const double mass1 = a.getMetaValue(tntKey("Mass")), mass2 = b.getMetaValue(tntKey("Mass"));
+  const int sp1 = a.getMetaValue(tntKey("StartPosition")), ep1 = a.getMetaValue(tntKey("EndPosition"));
+  const int sp2 = b.getMetaValue(tntKey("StartPosition")), ep2 = b.getMetaValue(tntKey("EndPosition"));
   if (mass1 > 0 && mass2 > 0)
   {
     const bool overlap = (sp1 < 0 || ep2 < 0 || sp1 <= ep2) && (sp2 < 0 || ep1 < 0 || sp2 <= ep1);
@@ -566,8 +580,8 @@ std::vector<std::vector<Size>> FLASHTnTAlgorithm::markRepresentativeProteoformHi
   for (int i = 0; i < hit_count; i++)
   {
     auto& hit = proteoform_hits_[i];
-    hit.setMetaValue("Index", i);
-    with_mass[i] = (double)hit.getMetaValue("Mass") > 0;
+    hit.setMetaValue(tntKey("Index"), i);
+    with_mass[i] = (double)hit.getMetaValue(tntKey("Mass")) > 0;
     if (by_qvalue)
     {
       // A PrSM in no FDR class (undetermined, with discard_underdetermined) has no q-value and is in no proteoform. Sorted as q = 0, it
@@ -594,18 +608,18 @@ std::vector<std::vector<Size>> FLASHTnTAlgorithm::markRepresentativeProteoformHi
     for (Size i = 0; i < hit_idx.size(); i++)
     {
       auto& hit = proteoform_hits_[hit_idx[i]];
-      if (hit.metaValueExists("Representative")) continue;
-      std::vector<int> prsm_indices {(int)hit.getMetaValue("Index")};
+      if (hit.metaValueExists(tntKey("Representative"))) continue;
+      std::vector<int> prsm_indices {(int)hit.getMetaValue(tntKey("Index"))};
       for (Size j = i + 1; j < hit_idx.size(); j++)
       {
         auto& hit2 = proteoform_hits_[hit_idx[j]];
-        if (hit2.metaValueExists("Representative")) continue;
+        if (hit2.metaValueExists(tntKey("Representative"))) continue;
         // a decoy precursor PrSM carries the target accession: merged into a target proteoform, the decoy would no longer be counted
-        if (hit.metaValueExists("DecoyPrecursor") != hit2.metaValueExists("DecoyPrecursor")) continue;
+        if (hit.metaValueExists(tntKey("DecoyPrecursor")) != hit2.metaValueExists(tntKey("DecoyPrecursor"))) continue;
         if (areConsistent_(hit, hit2, tol))
         {
-          prsm_indices.push_back(hit2.getMetaValue("Index"));
-          hit2.setMetaValue("Representative", 0);
+          prsm_indices.push_back(hit2.getMetaValue(tntKey("Index")));
+          hit2.setMetaValue(tntKey("Representative"), 0);
         }
       }
       clusters.emplace_back(prsm_indices.begin(), prsm_indices.end());
@@ -623,8 +637,8 @@ std::vector<std::vector<Size>> FLASHTnTAlgorithm::markRepresentativeProteoformHi
         }
       }
       std::swap(prsm_indices[0], prsm_indices[row]);
-      for (Size k = 0; k < prsm_indices.size(); k++) proteoform_hits_[prsm_indices[k]].setMetaValue("Representative", k == 0 ? 1 : 0);
-      proteoform_hits_[prsm_indices[0]].setMetaValue("PrSMIndices", prsm_indices);
+      for (Size k = 0; k < prsm_indices.size(); k++) proteoform_hits_[prsm_indices[k]].setMetaValue(tntKey("Representative"), k == 0 ? 1 : 0);
+      proteoform_hits_[prsm_indices[0]].setMetaValue(tntKey("PrSMIndices"), prsm_indices);
     }
   }
   // in the order of the representatives in proteoform_hits_
@@ -661,7 +675,7 @@ void FLASHTnTAlgorithm::setProteinQvalues_(const std::vector<int>& hit_class, co
     const int c = hit_class[i];
     if (c < 0) continue;
     const auto& hit = proteoform_hits_[i];
-    const int start = hit.getMetaValue("StartPosition"), end = hit.getMetaValue("EndPosition");
+    const int start = hit.getMetaValue(tntKey("StartPosition")), end = hit.getMetaValue(tntKey("EndPosition"));
     const bool whole_protein = isDetermined(hit) && start >= 1 && start <= 2 && end == (int)hit.getSequence().size();
     protein_class[i] = (c == fdr_class_precursor_ladder || (c <= fdr_class_max_blind && ! whole_protein)) ? c3_model : c;
   }
@@ -723,7 +737,7 @@ void FLASHTnTAlgorithm::setProteinQvalues_(const std::vector<int>& hit_class, co
   for (const auto& members : clusters)
   {
     const auto& rep = proteoform_hits_[members[0]];
-    if (rep.metaValueExists("DecoyPrecursor")) continue;
+    if (rep.metaValueExists(tntKey("DecoyPrecursor"))) continue;
     double min_local_fdr = local_fdr[members[0]];
     for (Size i : members) min_local_fdr = std::min(min_local_fdr, local_fdr[i]);
     evidence_terms[rep.getAccession()].push_back(std::log(std::max(fdr_p_floor, min_local_fdr)));
@@ -732,7 +746,7 @@ void FLASHTnTAlgorithm::setProteinQvalues_(const std::vector<int>& hit_class, co
   for (Size i = 0; i < hit_count; i++)
   {
     const auto& hit = proteoform_hits_[i];
-    if (hit_class[i] < 0 || hit.metaValueExists("DecoyPrecursor")) continue;
+    if (hit_class[i] < 0 || hit.metaValueExists(tntKey("DecoyPrecursor"))) continue;
     const auto it = best_score.find(hit.getAccession());
     if (it == best_score.end() || it->second < hit.getScore()) best_score[hit.getAccession()] = hit.getScore();
     if (qvalues[i] > rep_q) continue;
@@ -766,7 +780,7 @@ void FLASHTnTAlgorithm::setProteinQvalues_(const std::vector<int>& hit_class, co
   for (auto& hit : proteoform_hits_)
   {
     const auto it = protein_q.find(hit.getAccession());
-    hit.setMetaValue("ProteinQvalue", it == protein_q.end() ? 1.0 : it->second);
+    hit.setMetaValue(tntKey("ProteinQvalue"), it == protein_q.end() ? 1.0 : it->second);
   }
 }
 
@@ -927,7 +941,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
 
     DeconvolvedSpectrum dspec(scan);
     dspec.setOriginalSpectrum(spec);
-    String deconv_meta_str = spec.getMetaValue("DeconvMassInfo").toString();
+    String deconv_meta_str = spec.getMetaValue(tntKey("DeconvMassInfo")).toString();
 
     int tol_loc_s = deconv_meta_str.find("tol=") + 4;
     int tol_loc_e = deconv_meta_str.find(";", tol_loc_s);
@@ -1581,6 +1595,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     // boundaries), so the protein score (shifts) and the extension (anchors) use it as they use a sequence tag.
     std::vector<FLASHGappedTaggerAlgorithm::Landing> landings;
     std::vector<std::vector<Size>> gapped_groups; // per gapped candidate, its landings
+    std::vector<Size> gapped_tag_counts;          // per gapped candidate, its number of tags (for the cut below)
     if (gapped_mode_ == "only" || gapped_mode_ == "both" || (gapped_mode_ == "fallback" && seq_candidates.empty()))
     {
       std::set<Size> proposed; // proteins already proposed by sequence tags
@@ -1620,12 +1635,11 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         positions.erase(std::unique(positions.begin(), positions.end()), positions.end());
         const auto& fe = fasta_entry[pi];
         const double coverage = (double)positions.size() / (double)fe.sequence.length();
-        ProteinHit hit(coverage, 0, fe.identifier, ""); // the sequence is set if the candidate survives the cut
-        hit.setMetaValue(mi_description, fe.description); // as setDescription, without its registry lookup
+        ProteinHit hit(coverage, 0, fe.identifier, ""); // the sequence, description and tags are set if the candidate survives the cut
         hit.setMetaValue(mi_scan, dspec.getScanNumber());
         hit.setMetaValue(mi_matched_aa, (int)positions.size());
         hit.setCoverage(coverage);
-        hit.setMetaValue(mi_tag_indices, std::vector<int>(group.size(), 0)); // as many as its tags: the cut below counts them
+        gapped_tag_counts.push_back(group.size());
         hit.setMetaValue(mi_tag_positions, positions);
         hit.setMetaValue(mi_fasta_index, pi);
         hit.setMetaValue(mi_gapped, (int)gapped_groups.size());
@@ -1736,7 +1750,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         for (Size i = 0; i < candidate_count; i++)
         {
           const Size c = ranked[i].index;
-          const Size tag_count = c < seq_count ? seq_candidates[c].tag_count : hits[c - seq_count].getMetaValue(mi_tag_indices).toIntList().size();
+          const Size tag_count = c < seq_count ? seq_candidates[c].tag_count : gapped_tag_counts[c - seq_count];
           by_tag_count.emplace_back(-(int)tag_count, i);
         }
         std::partial_sort(by_tag_count.begin(), by_tag_count.begin() + max_protein_hits_, by_tag_count.end());
@@ -1758,6 +1772,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       if (! hit.metaValueExists(mi_gapped)) continue;
       const Size pi = (Size)(int)hit.getMetaValue(mi_fasta_index);
       hit.setSequence(fasta_entry[pi].sequence);
+      hit.setMetaValue(mi_description, fasta_entry[pi].description); // as setDescription, without its registry lookup
       std::vector<int> indices;
       for (Size l : gapped_groups[(int)hit.getMetaValue(mi_gapped)])
       {
@@ -2124,7 +2139,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         }
       };
       auto is_determined = [](const ProteinHit& h) {
-        return (double)h.getMetaValue("Mass") > 0 && (int)h.getMetaValue("StartPosition") > 0 && (int)h.getMetaValue("EndPosition") > 0;
+        return (double)h.getMetaValue(tntKey("Mass")) > 0 && (int)h.getMetaValue(tntKey("StartPosition")) > 0 && (int)h.getMetaValue(tntKey("EndPosition")) > 0;
       };
       if (! ladder_hits.empty())
       {
@@ -2187,8 +2202,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
             duplicates++;
             continue;
           }
-          const bool start_ok = (int)h.getMetaValue("StartPosition") == (int)h.getMetaValue(mi_pl_start);
-          const bool end_ok = (int)h.getMetaValue("EndPosition") == (int)h.getMetaValue(mi_pl_end);
+          const bool start_ok = (int)h.getMetaValue(tntKey("StartPosition")) == (int)h.getMetaValue(mi_pl_start);
+          const bool end_ok = (int)h.getMetaValue(tntKey("EndPosition")) == (int)h.getMetaValue(mi_pl_end);
           at_both_ends += start_ok && end_ok;
           at_start += start_ok && ! end_ok;
           at_end += end_ok && ! start_ok;
@@ -2303,8 +2318,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
             if (h.metaValueExists(mi_precursor_ladder)) continue;
             const bool decoy = h.getAccession().hasPrefix("DECOY");
             const String& seq = h.getSequence();
-            int s = h.metaValueExists("StartPosition") ? (int)h.getMetaValue("StartPosition") - 1 : 0;
-            int e = h.metaValueExists("EndPosition") ? (int)h.getMetaValue("EndPosition") : (int)seq.size();
+            int s = h.metaValueExists(tntKey("StartPosition")) ? (int)h.getMetaValue(tntKey("StartPosition")) - 1 : 0;
+            int e = h.metaValueExists(tntKey("EndPosition")) ? (int)h.getMetaValue(tntKey("EndPosition")) : (int)seq.size();
             if (s < 0) s = 0;
             if (e <= s || e > (int)seq.size()) e = (int)seq.size();
             n_d += decoy;
@@ -2401,7 +2416,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     {
       const double iso = Constants::C13C12_MASSDIFF_U;
       auto ms1Based = [](const ProteinHit& h) {
-        return (double)h.getMetaValue("Mass") > 0 && (int)h.getMetaValue("ProteoformMassByFragmentMass") == 0;
+        return (double)h.getMetaValue(tntKey("Mass")) > 0 && (int)h.getMetaValue(tntKey("ProteoformMassByFragmentMass")) == 0;
       };
       const Param& eparam_now = learned_extender_param.empty() ? extender_param_ : learned_extender_param;
       std::vector<std::vector<ProteinHit>> decoy_proteoforms(dspecs.size());
@@ -2437,8 +2452,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         for (auto& h : out)
         {
           if (! ms1Based(h)) continue;
-          if (std::abs((double)h.getMetaValue("Mass") - decoy_mass) > 3 * iso + 0.1) continue; // the moved mass, up to isotope errors
-          h.setMetaValue("DecoyPrecursor", decoy_spec.getDecoyPrecursorWeight()); // its weight as a decoy (FLASHDeconv's noise decoy weight)
+          if (std::abs((double)h.getMetaValue(tntKey("Mass")) - decoy_mass) > 3 * iso + 0.1) continue; // the moved mass, up to isotope errors
+          h.setMetaValue(tntKey("DecoyPrecursor"), decoy_spec.getDecoyPrecursorWeight()); // its weight as a decoy (FLASHDeconv's noise decoy weight)
           decoy_proteoforms[d].push_back(std::move(h));
         }
       }
@@ -2503,7 +2518,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     if (raw_loader_ && ! proteoform_hits_.empty())
     {
       std::set<int> scans;
-      for (const auto& hit : proteoform_hits_) scans.insert((int)hit.getMetaValue("Scan"));
+      for (const auto& hit : proteoform_hits_) scans.insert((int)hit.getMetaValue(tntKey("Scan")));
       loadRawSpectra_(scans);
       annotateOnRawSpectra_(proteoform_hits_);
       // one PrSM per spectrum: the best by the combined score; the extension kept every candidate's PrSM for this choice
@@ -2790,7 +2805,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         Size targets = 0, decoys = 0;
         for (auto& h : round_hits)
         {
-          const double extension_score = h.metaValueExists("ExtensionScore") ? (double)h.getMetaValue("ExtensionScore") : h.getScore();
+          const double extension_score = h.metaValueExists(tntKey("ExtensionScore")) ? (double)h.getMetaValue(tntKey("ExtensionScore")) : h.getScore();
           const double null_score = h.getMetaValue(mi_null);
           h.setMetaValue(mi_ratio, null_score > 0 ? extension_score / null_score : -1.0);
           (h.getAccession().hasPrefix("DECOY") ? decoys : targets)++;
@@ -2819,10 +2834,10 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   {
     if (std::isfinite(hit.getScore())) continue;
     throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
-                                  "PrSM score must be finite (scan " + hit.getMetaValue("Scan").toString() + ")", std::to_string(hit.getScore()));
+                                  "PrSM score must be finite (scan " + hit.getMetaValue(tntKey("Scan")).toString() + ")", std::to_string(hit.getScore()));
   }
   std::sort(proteoform_hits_.begin(), proteoform_hits_.end(), [](const ProteinHit& left, const ProteinHit& right) {
-    return left.getScore() == right.getScore() ? (left.getCoverage() == right.getCoverage() ? (left.getMetaValue("Scan") > right.getMetaValue("Scan"))
+    return left.getScore() == right.getScore() ? (left.getCoverage() == right.getCoverage() ? (left.getMetaValue(tntKey("Scan")) > right.getMetaValue(tntKey("Scan")))
                                                                                             : (left.getCoverage() > right.getCoverage()))
                                                : (left.getScore() > right.getScore());
   });
@@ -2840,10 +2855,10 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     for (Size i = 0; i < proteoform_hits_.size(); i++)
     {
       const auto& h = proteoform_hits_[i];
-      if ((double)h.getMetaValue("Mass") <= 0 || (int)h.getMetaValue("ProteoformMassByFragmentMass", 0) != 0 || h.metaValueExists("DecoyPrecursor")) continue;
+      if ((double)h.getMetaValue(tntKey("Mass")) <= 0 || (int)h.getMetaValue(tntKey("ProteoformMassByFragmentMass"), 0) != 0 || h.metaValueExists(tntKey("DecoyPrecursor"))) continue;
       idx.push_back(i);
     }
-    std::sort(idx.begin(), idx.end(), [&](Size l, Size r) { return (double)proteoform_hits_[l].getMetaValue("Mass") < (double)proteoform_hits_[r].getMetaValue("Mass"); });
+    std::sort(idx.begin(), idx.end(), [&](Size l, Size r) { return (double)proteoform_hits_[l].getMetaValue(tntKey("Mass")) < (double)proteoform_hits_[r].getMetaValue(tntKey("Mass")); });
     // conflicts: pairs of PrSMs of different proteins at the same mass (or one isotope apart) and elution; union-find over them
     std::vector<Size> parent(idx.size());
     std::iota(parent.begin(), parent.end(), 0);
@@ -2852,13 +2867,13 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     for (Size a = 0; a < idx.size(); a++)
     {
       const auto& ha = proteoform_hits_[idx[a]];
-      const double ma = ha.getMetaValue("Mass"), ra = ha.getMetaValue("RT"), max_diff = ma * precursor_tol * 2e-6;
+      const double ma = ha.getMetaValue(tntKey("Mass")), ra = ha.getMetaValue(tntKey("RT")), max_diff = ma * precursor_tol * 2e-6;
       for (Size b = a + 1; b < idx.size(); b++)
       {
         const auto& hb = proteoform_hits_[idx[b]];
-        const double mb = hb.getMetaValue("Mass");
+        const double mb = hb.getMetaValue(tntKey("Mass"));
         if (mb - ma > iso + max_diff) break;
-        if (std::abs((double)hb.getMetaValue("RT") - ra) > rt_window) continue;
+        if (std::abs((double)hb.getMetaValue(tntKey("RT")) - ra) > rt_window) continue;
         const double diff = mb - ma;
         if (std::abs(diff) > max_diff && std::abs(diff - iso) > max_diff) continue;
         // the same protein is the same proteoform here; a target and its decoy are different proteins
@@ -2905,8 +2920,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       {
         auto& h = proteoform_hits_[idx[a]];
         if (h.getAccession() == owner) continue;
-        h.setMetaValue("Mass", -1.0);
-        h.setMetaValue("MassLostToFeatureOwner", owner);
+        h.setMetaValue(tntKey("Mass"), -1.0);
+        h.setMetaValue(tntKey("MassLostToFeatureOwner"), owner);
         demoted++;
       }
     }
@@ -2933,11 +2948,11 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   // - proteins: setProteinQvalues_.
   // Without decoys in the database and without discard_underdetermined no q-value is set.
   const bool use_fdr = decoy_factor_ > 0 || ! keep_underdetermined_;
-  auto is_decoy = [](const ProteinHit& hit) { return hit.getAccession().hasPrefix("DECOY") || hit.metaValueExists("DecoyPrecursor"); };
+  auto is_decoy = [](const ProteinHit& hit) { return hit.getAccession().hasPrefix("DECOY") || hit.metaValueExists(tntKey("DecoyPrecursor")); };
   // a decoy precursor counts with its weight (1 for a signal decoy, FLASHDeconv's noise decoy weight for a noise decoy), a protein decoy
   // for 1 / decoy_factor_
   auto decoy_weight = [this](const ProteinHit& hit) {
-    return hit.metaValueExists("DecoyPrecursor") && ! hit.getAccession().hasPrefix("DECOY") ? (double)hit.getMetaValue("DecoyPrecursor") : 1.0 / decoy_factor_;
+    return hit.metaValueExists(tntKey("DecoyPrecursor")) && ! hit.getAccession().hasPrefix("DECOY") ? (double)hit.getMetaValue(tntKey("DecoyPrecursor")) : 1.0 / decoy_factor_;
   };
   // PrSM q-value of a passing PrSM for the representatives and the protein ranking: the reported level, or 1% without a filter
   // (pro_fdr 1, as in keep_decoy runs for offline evaluation), so that such a run has the proteoforms of a 1% run
@@ -2968,7 +2983,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       else if (! keep_underdetermined_) continue;
       else
       {
-        const bool both_termini = (int)hit.getMetaValue("StartPosition") > 0 && (int)hit.getMetaValue("EndPosition") > 0;
+        const bool both_termini = (int)hit.getMetaValue(tntKey("StartPosition")) > 0 && (int)hit.getMetaValue(tntKey("EndPosition")) > 0;
         c = both_termini ? fdr_class_both_termini : fdr_class_open_terminus;
       }
       hit_class[i] = c;
@@ -3026,8 +3041,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       {
         const Size i = class_hits[c][k];
         qvalues[i] = class_qvalues[k];
-        proteoform_hits_[i].setMetaValue("qvalue", qvalues[i]);
-        proteoform_hits_[i].setMetaValue("FDRClass", fdr_class_names[c]);
+        proteoform_hits_[i].setMetaValue(tntKey("qvalue"), qvalues[i]);
+        proteoform_hits_[i].setMetaValue(tntKey("FDRClass"), fdr_class_names[c]);
       }
     }
   }
@@ -3062,7 +3077,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       for (Size k = 0; k < order.size(); k++)
       {
         const Size rep = clusters[order[k]][0];
-        if (decoys[rep] && proteoform_hits_[rep].metaValueExists("DecoyPrecursor") && ! proteoform_hits_[rep].getAccession().hasPrefix("DECOY")) continue;
+        if (decoys[rep] && proteoform_hits_[rep].metaValueExists(tntKey("DecoyPrecursor")) && ! proteoform_hits_[rep].getAccession().hasPrefix("DECOY")) continue;
         no_dp_pos[k] = ranked_no_dp.size();
         ranked_no_dp.push_back(ranked[k]);
       }
@@ -3070,10 +3085,10 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       for (Size k = 0; k < order.size(); k++)
       {
         const Size rep = clusters[order[k]][0];
-        const bool ms1_mass = (double)proteoform_hits_[rep].getMetaValue("Mass", -1.0) > 0
-                              && (int)proteoform_hits_[rep].getMetaValue("ProteoformMassByFragmentMass", 0) == 0;
+        const bool ms1_mass = (double)proteoform_hits_[rep].getMetaValue(tntKey("Mass"), -1.0) > 0
+                              && (int)proteoform_hits_[rep].getMetaValue(tntKey("ProteoformMassByFragmentMass"), 0) == 0;
         const double pq = (ms1_mass || no_dp_pos[k] == (Size)-1) ? proteoform_qvalues[k] : proteoform_qvalues_no_dp[ranked_no_dp.size() < ranked.size() ? no_dp_pos[k] : k];
-        for (Size i : clusters[order[k]]) proteoform_hits_[i].setMetaValue("proqvalue", pq);
+        for (Size i : clusters[order[k]]) proteoform_hits_[i].setMetaValue(tntKey("proqvalue"), pq);
       }
     }
     setProteinQvalues_(hit_class, qvalues, decoys, decoy_weights, clusters, rep_q);
@@ -3084,7 +3099,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       if (hit_class[i] < 0) continue; // in no class, without a q-value (undetermined, with keep_underdetermined_ false)
       if (! keep_decoy_ && decoys[i]) continue;
       // no PrSM-level filter: a PrSM is reported when its proteoform passes (every member carries its cluster's proteoform q-value)
-      if (pro_fdr_ < 1 && (double)proteoform_hits_[i].getMetaValue("proqvalue", 1.0) > pro_fdr_) continue;
+      if (pro_fdr_ < 1 && (double)proteoform_hits_[i].getMetaValue(tntKey("proqvalue"), 1.0) > pro_fdr_) continue;
       filtered_proteoform_hits.push_back(std::move(proteoform_hits_[i]));
     }
     proteoform_hits_.swap(filtered_proteoform_hits);
@@ -3111,12 +3126,12 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
 
   for (auto& hit : proteoform_hits_)
   {
-    int fasta_index = hit.getMetaValue("FastaIndex");
+    int fasta_index = hit.getMetaValue(tntKey("FastaIndex"));
     hit.setSequence(original_fasta_entry[fasta_index].sequence);
 
-    prsm_index_map[hit.getMetaValue("Index")] = prsm_index; // from previous to new index
-    hit.setMetaValue("Index", prsm_index);
-    for (int tag_index : (std::vector<int>)hit.getMetaValue("TagIndices").toIntList())
+    prsm_index_map[hit.getMetaValue(tntKey("Index"))] = prsm_index; // from previous to new index
+    hit.setMetaValue(tntKey("Index"), prsm_index);
+    for (int tag_index : (std::vector<int>)hit.getMetaValue(tntKey("TagIndices")).toIntList())
     {
       matching_hits_indices_[tag_index].push_back(prsm_index);
     }
@@ -3126,8 +3141,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   // redefine prsm indices for representative proteoforms
   for (auto& hit : proteoform_hits_)
   {
-    if ((int)hit.getMetaValue("Representative") == 0) continue;
-    auto prsm_indices = hit.getMetaValue("PrSMIndices").toIntList();
+    if ((int)hit.getMetaValue(tntKey("Representative")) == 0) continue;
+    auto prsm_indices = hit.getMetaValue(tntKey("PrSMIndices")).toIntList();
     std::vector<int> new_prsm_indices;
     for (int i : prsm_indices)
     {
@@ -3136,7 +3151,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       if (it != prsm_index_map.end()) new_prsm_indices.push_back(it->second);
     }
     std::sort(new_prsm_indices.begin(), new_prsm_indices.end());
-    hit.setMetaValue("PrSMIndices", new_prsm_indices);
+    hit.setMetaValue(tntKey("PrSMIndices"), new_prsm_indices);
   }
   // the index of the reported proteoform (as FLASHTnTFile::writeProteoforms numbers them) on every PrSM of it; -1: not reported
   {
@@ -3145,16 +3160,16 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     int proteoform_index = 0;
     for (const auto& hit : proteoform_hits_)
     {
-      if ((int)hit.getMetaValue("Representative") == 0) continue;
-      if (hit.metaValueExists("proqvalue") && (double)hit.getMetaValue("proqvalue") > pro_fdr) continue;
-      for (int i : hit.getMetaValue("PrSMIndices").toIntList()) prsm_to_proteoform[i] = proteoform_index;
-      prsm_to_proteoform[(int)hit.getMetaValue("Index")] = proteoform_index;
+      if ((int)hit.getMetaValue(tntKey("Representative")) == 0) continue;
+      if (hit.metaValueExists(tntKey("proqvalue")) && (double)hit.getMetaValue(tntKey("proqvalue")) > pro_fdr) continue;
+      for (int i : hit.getMetaValue(tntKey("PrSMIndices")).toIntList()) prsm_to_proteoform[i] = proteoform_index;
+      prsm_to_proteoform[(int)hit.getMetaValue(tntKey("Index"))] = proteoform_index;
       proteoform_index++;
     }
     for (auto& hit : proteoform_hits_)
     {
-      const auto it = prsm_to_proteoform.find((int)hit.getMetaValue("Index"));
-      hit.setMetaValue("ProteoformIndex", it == prsm_to_proteoform.end() ? -1 : it->second);
+      const auto it = prsm_to_proteoform.find((int)hit.getMetaValue(tntKey("Index")));
+      hit.setMetaValue(tntKey("ProteoformIndex"), it == prsm_to_proteoform.end() ? -1 : it->second);
     }
   }
   // the large locals freed with all threads instead of by their destructors on return
@@ -3227,16 +3242,16 @@ void FLASHTnTAlgorithm::annotateOnRawSpectra_(std::vector<ProteinHit>& hits) con
     const auto& hit = hits[i];
     auto& prsm = prsms[i];
     const String& seq = hit.getSequence();
-    const int start = hit.getMetaValue("StartPosition"), end = hit.getMetaValue("EndPosition");
+    const int start = hit.getMetaValue(tntKey("StartPosition")), end = hit.getMetaValue(tntKey("EndPosition"));
     const int start_in_seq = start <= 0 ? 0 : std::min((int)seq.size(), start - 1);
     const int end_in_seq = end <= 0 ? (int)seq.size() : std::max(start_in_seq, std::min((int)seq.size(), end));
     prsm.sequence = seq.substr(start_in_seq, end_in_seq - start_in_seq);
     prsm.known_n_term = start > 0;
     prsm.known_c_term = end > 0;
-    if (hit.metaValueExists("Modifications"))
+    if (hit.metaValueExists(tntKey("Modifications")))
     {
-      const std::vector<double> masses = hit.getMetaValue("Modifications");
-      const std::vector<int> starts = hit.getMetaValue("ModificationStarts"), ends = hit.getMetaValue("ModificationEnds");
+      const std::vector<double> masses = hit.getMetaValue(tntKey("Modifications"));
+      const std::vector<int> starts = hit.getMetaValue(tntKey("ModificationStarts")), ends = hit.getMetaValue(tntKey("ModificationEnds"));
       for (Size m = 0; m < masses.size() && m < starts.size() && m < ends.size(); m++)
       {
         FLASHAnnotatorAlgorithm::Modification mod;
@@ -3246,9 +3261,9 @@ void FLASHTnTAlgorithm::annotateOnRawSpectra_(std::vector<ProteinHit>& hits) con
         prsm.modifications.push_back(mod);
       }
     }
-    precursor_masses[i] = hit.metaValueExists("GivenMass") ? (double)hit.getMetaValue("GivenMass") : -1.0;
+    precursor_masses[i] = hit.metaValueExists(tntKey("GivenMass")) ? (double)hit.getMetaValue(tntKey("GivenMass")) : -1.0;
     max_mass = std::max({max_mass, precursor_masses[i], FLASHAnnotatorAlgorithm::getProteoformMass(prsm.sequence, prsm.modifications)});
-    const auto it = raw_slot_.find((int)hit.getMetaValue("Scan"));
+    const auto it = raw_slot_.find((int)hit.getMetaValue(tntKey("Scan")));
     if (it == raw_slot_.end()) without_spectrum++;
     else prsm.spectrum_index = it->second;
   }
@@ -3270,11 +3285,11 @@ void FLASHTnTAlgorithm::annotateOnRawSpectra_(std::vector<ProteinHit>& hits) con
     auto& hit = hits[i];
     const auto& res = results[i];
     annotated += res.annotated ? 1 : 0;
-    hit.setMetaValue("ExtensionScore", hit.getScore());
-    hit.setMetaValue("RawScore", res.score);
-    hit.setMetaValue("RawMatchedFragments", res.matched_fragments);
-    hit.setMetaValue("RawFragmentHypotheses", res.fragment_hypotheses);
-    hit.setMetaValue("RawCoverage", res.coverage);
+    hit.setMetaValue(tntKey("ExtensionScore"), hit.getScore());
+    hit.setMetaValue(tntKey("RawScore"), res.score);
+    hit.setMetaValue(tntKey("RawMatchedFragments"), res.matched_fragments);
+    hit.setMetaValue(tntKey("RawFragmentHypotheses"), res.fragment_hypotheses);
+    hit.setMetaValue(tntKey("RawCoverage"), res.coverage);
     hit.setScore(hit.getScore() + raw_score_weight_ * std::max(0.0, res.score));
   }
   OPENMS_LOG_INFO << "Raw spectra: " << raw_peaks_.size() << " loaded (" << raw_profile_count_ << " centroided); PrSMs annotated: " << annotated
@@ -3286,7 +3301,7 @@ void FLASHTnTAlgorithm::keepBestPerSpectrum_(std::vector<ProteinHit>& hits, cons
   std::map<int, Size> best;
   for (Size i = 0; i < hits.size(); i++)
   {
-    const int scan = hits[i].getMetaValue("Scan");
+    const int scan = hits[i].getMetaValue(tntKey("Scan"));
     auto it = best.find(scan);
     if (it == best.end()) best[scan] = i;
     else if (isBetterPrSM(hits[i], hits[it->second])) it->second = i;
@@ -3300,12 +3315,12 @@ void FLASHTnTAlgorithm::keepBestPerSpectrum_(std::vector<ProteinHit>& hits, cons
     for (Size i = 0; i < hits.size(); i++)
     {
       const auto& h = hits[i];
-      const int scan = h.getMetaValue("Scan");
+      const int scan = h.getMetaValue(tntKey("Scan"));
       const auto& b = hits[best[scan]];
-      if ((double)b.getMetaValue("Mass") > 0 || (double)h.getMetaValue("Mass") <= 0 || ! isDetermined(h)) continue;
-      if (h.getAccession() != b.getAccession() || h.metaValueExists("DecoyPrecursor") != b.metaValueExists("DecoyPrecursor")) continue;
-      const int bs = b.getMetaValue("StartPosition"), be = b.getMetaValue("EndPosition");
-      if ((bs >= 0 && bs != (int)h.getMetaValue("StartPosition")) || (be >= 0 && be != (int)h.getMetaValue("EndPosition"))) continue;
+      if ((double)b.getMetaValue(tntKey("Mass")) > 0 || (double)h.getMetaValue(tntKey("Mass")) <= 0 || ! isDetermined(h)) continue;
+      if (h.getAccession() != b.getAccession() || h.metaValueExists(tntKey("DecoyPrecursor")) != b.metaValueExists(tntKey("DecoyPrecursor"))) continue;
+      const int bs = b.getMetaValue(tntKey("StartPosition")), be = b.getMetaValue(tntKey("EndPosition"));
+      if ((bs >= 0 && bs != (int)h.getMetaValue(tntKey("StartPosition"))) || (be >= 0 && be != (int)h.getMetaValue(tntKey("EndPosition")))) continue;
       auto it = best_with_mass.find(scan);
       if (it == best_with_mass.end() || isBetterPrSM(h, hits[it->second])) best_with_mass[scan] = i;
     }
@@ -3318,7 +3333,7 @@ void FLASHTnTAlgorithm::keepBestPerSpectrum_(std::vector<ProteinHit>& hits, cons
   kept.reserve(best.size());
   for (Size i = 0; i < hits.size(); i++)
   {
-    if (best[(int)hits[i].getMetaValue("Scan")] == i) kept.push_back(std::move(hits[i]));
+    if (best[(int)hits[i].getMetaValue(tntKey("Scan"))] == i) kept.push_back(std::move(hits[i]));
   }
   OPENMS_LOG_INFO << "PrSMs" << label << ": " << hits.size() << " of all candidates, " << kept.size() << " best per spectrum by the " << score_name
                   << std::endl;
