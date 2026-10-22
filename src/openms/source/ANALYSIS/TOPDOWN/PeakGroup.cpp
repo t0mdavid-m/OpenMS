@@ -245,7 +245,16 @@ namespace OpenMS
     constexpr Size bin_number_margin = 8;
     constexpr Size max_bin_number = bin_number_margin + 12; // 12 bin + 8 extra bin
     float threshold = -1;
-    static thread_local std::vector<std::pair<Peak1D, bool>> all_peaks; // peak + is signal? (reused across calls)
+    // (mass, intensity, is signal) as 16-byte records; std::sort's permutation depends only on the comparison results, so sorting them in
+    // the same initial order (noisy, then signal) with the same comparator gives the order of the former std::pair<Peak1D, bool> sort,
+    // ties included
+    struct SortedPeak
+    {
+      double mass;
+      float intensity;
+      bool signal;
+    };
+    static thread_local std::vector<SortedPeak> all_peaks; // reused across calls
     all_peaks.clear();
     all_peaks.reserve(max_noisy_peak_number + (signal_end - signal_begin));
 
@@ -266,7 +275,7 @@ namespace OpenMS
     for (const LogMzPeak* p = noisy_begin; p != noisy_end; ++p)
     {
       if (p->intensity < threshold) continue;
-      all_peaks.emplace_back(Peak1D(p->getUnchargedMass(), p->intensity), false);
+      all_peaks.push_back({p->getUnchargedMass(), p->intensity, false});
     }
 
     if (all_peaks.empty()) return 0;
@@ -274,11 +283,10 @@ namespace OpenMS
     for (const LogMzPeak* p = signal_begin; p != signal_end; ++p)
     {
       if (p->intensity < threshold) continue;
-      all_peaks.emplace_back(Peak1D(p->getUnchargedMass(), p->intensity), true);
+      all_peaks.push_back({p->getUnchargedMass(), p->intensity, true});
     }
 
-    std::sort(all_peaks.begin(), all_peaks.end(),
-              [](std::pair<Peak1D, bool>& left, std::pair<Peak1D, bool>& right) { return left.first.getMZ() < right.first.getMZ(); }); //
+    std::sort(all_peaks.begin(), all_peaks.end(), [](const SortedPeak& left, const SortedPeak& right) { return left.mass < right.mass; });
 
     float charge_noise_pwr = 0;
     const Size peak_count = all_peaks.size();
@@ -297,8 +305,8 @@ namespace OpenMS
     head_bins.resize(peak_count);
     for (Size i = 0; i < peak_count; i++)
     {
-      peak_masses[i] = all_peaks[i].first.getMZ();
-      peak_intensities[i] = all_peaks[i].first.getIntensity();
+      peak_masses[i] = all_peaks[i].mass;
+      peak_intensities[i] = all_peaks[i].intensity;
     }
 
     // (sum, bin) pairs; equal sums keep the last bin like a std::map would, visited by descending sum
@@ -324,7 +332,7 @@ namespace OpenMS
     };
     for (Size i = 0; i < peak_count; i++)
     {
-      const bool p1_signal = all_peaks[i].second;
+      const bool p1_signal = all_peaks[i].signal;
       const double p1_mass = peak_masses[i];
       std::uint32_t edge_bins = 0;
       for (Size j = i + 1; j < peak_count; j++)
@@ -332,7 +340,7 @@ namespace OpenMS
         const double normalized_dist = (peak_masses[j] - p1_mass) / iso_da_distance_;
         if (normalized_dist >= max_edge_normalized_dist) break; // peaks sorted by mass: no further j can form an edge
 
-        if (p1_signal && all_peaks[j].second
+        if (p1_signal && all_peaks[j].signal
             && normalized_dist >= .75) // if both are signals, and they are different from each other by more than .75 isotope distance, do not connect.
                                        // Otherwise, connect as they may a part of consecutive other noisy peaks.
         {
@@ -507,7 +515,7 @@ namespace OpenMS
     for (Size index = 0; index < unused.size(); ++index)
     {
       if (! unused[index]) { continue; }
-      if (! all_peaks[index].second)
+      if (! all_peaks[index].signal)
       {
         const double p_mass = peak_masses[index];
         if (p_mass - prev_mass > p_mass * tol)
