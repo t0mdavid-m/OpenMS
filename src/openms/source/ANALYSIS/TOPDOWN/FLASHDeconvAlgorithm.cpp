@@ -372,11 +372,12 @@ void FLASHDeconvAlgorithm::deconvolveSpectrum_(const MSExperiment& map, Spectrum
         job.new_precursor_pg = precursor_pg;
         job.new_precursor = cit->second[best].second;
       }
-      else
+      else if ((int)sd.getParameters().getValue("precursor_charge") == 0 && (double)sd.getParameters().getValue("precursor_mz") == 0)
       {
         // The precursor stays. The deconvolution below differs from round 1 only by the window bounds; when they widen neither the mass
         // nor the charge bound (the heaviest and the most charged mass of the window are the precursor's), both are the same function of
-        // the same inputs, and round 1's result is kept with the precursor as the deconvolution below would register it.
+        // the same inputs, and round 1's result is kept with the precursor as the deconvolution below would register it. Not with a
+        // given precursor charge or m/z: the deconvolution then registers a precursor of its own instead of the one passed.
         auto& round1_spectrum = sd.getDeconvolvedSpectrum();
         const int union_charge = round1_spectrum.getCurrentMaxAbsCharge(std::numeric_limits<int>::max());
         const double union_mass = round1_spectrum.getCurrentMaxMass(std::numeric_limits<double>::max());
