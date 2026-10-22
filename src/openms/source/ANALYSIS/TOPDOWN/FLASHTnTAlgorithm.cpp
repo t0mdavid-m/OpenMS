@@ -3735,7 +3735,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   //   the proteoforms included.
   // - proteoforms: per proteoform class (a partition: determined, undetermined with both termini, with an open terminus, residual r),
   //   ranked by the best score of the PrSMs that decide the class (proteoformQvalues; -native: one ranking by PrSM q-value);
-  // - proteins: setProteinQvalues_.
+  // - proteins: ranked by their best proteoform (the lowest proteoform q-value, then the best score of its PrSMs) and target-decoy counted,
+  //   so that a protein is identified by a proteoform; -native: setProteinQvalues_ (local-FDR evidence of all PrSMs).
   // Without decoys in the database and without discard_underdetermined no q-value is set.
   //   With search_cascade, the PrSM q-values are computed per class and stage (meta value SearchStage), so that the gapped-tag PrSMs of
   //   stage 2, from the spectra stage 1 did not identify, compete only with the decoys of stage 2.
@@ -3746,9 +3747,80 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   const auto clusters = proteoformQvalues(hit_class, qvalues, decoys, decoy_weights, true);
   const Size hit_count = proteoform_hits_.size();
 
+  if (use_fdr && native_rule) { setProteinQvalues_(hit_class, qvalues, decoys, decoy_weights, clusters, rep_q, *db); }
+  else if (use_fdr)
+  {
+    // Protein q-values from the proteoforms: a protein is ranked by its best proteoform (the lowest proteoform q-value, then the best
+    // score of the proteoform's PrSMs), targets and decoys alike, and the proteins are target-decoy counted. The local-FDR evidence of
+    // all PrSMs (setProteinQvalues_) also counted PrSMs of no 1% proteoform and was not calibrated against the proteoform classes: on
+    // Eclip_1480, 16 proteins passed without a 1% proteoform and 18 with one did not. A decoy precursor carries the target accession: a
+    // decoy of the mass, not of the protein, it ranks no protein.
+    // The proteins are counted in two classes by their best proteoform: one that reaches a terminus of the protein (its first residue,
+    // or the second after an initiator Met, or its last; of a PEFF entry, those of a processed form) and one inside it (an internal
+    // stretch). An internal stretch of a long protein fits a mass at many windows, so it is weaker evidence of the protein: counted
+    // with the others, it passed B. theta entrapment proteins on Eclip_1480 (3 of 6, single stretches of about 2.9 kDa); apart (73 target
+    // and 18 decoy proteins), 5 of 325 proteins were B. theta instead of 6 of 321, with the same 322 E. coli proteins of the E. coli search.
+    struct ProteinBest
+    {
+      std::pair<double, double> key {2.0, 0.0}; // lowest proteoform q-value, -best score
+      bool internal = false;
+    };
+    std::map<String, ProteinBest> best_of;
+    for (const auto& members : clusters)
+    {
+      const auto& rep = proteoform_hits_[members[0]];
+      if (rep.metaValueExists("DecoyPrecursor") && ! rep.getAccession().hasPrefix("DECOY")) continue;
+      const double q = rep.getMetaValue("proqvalue", 1.0);
+      double score = 0;
+      for (Size i : members) score = std::max(score, proteoform_hits_[i].getScore());
+      const std::pair<double, double> key {q, -score};
+      auto& b = best_of[rep.getAccession()];
+      if (! (key < b.key)) continue;
+      b.key = key;
+      const int start = rep.getMetaValue("StartPosition"), end = rep.getMetaValue("EndPosition");
+      bool terminal = (start >= 1 && start <= 2) || (end > 0 && end == (int)rep.getSequence().size());
+      if (rep.metaValueExists("EntryStart"))
+      {
+        terminal = false;
+        for (const auto& [form_start, form_end] : db->proteins[db->proteinOfEntry()[(Size)(int)rep.getMetaValue("FastaIndex")]].forms)
+        {
+          terminal = terminal || (start > 0 && (start == form_start || (form_start == 1 && start == 2))) || (end > 0 && end == form_end);
+        }
+      }
+      b.internal = ! terminal;
+    }
+    std::map<String, double> protein_q;
+    const double protein_decoy_weight = 1.0 / std::max(decoy_factor_, 1e-9);
+    for (const bool internal : {false, true})
+    {
+      std::vector<std::pair<std::pair<double, double>, String>> ranked_proteins;
+      for (const auto& [acc, b] : best_of)
+      {
+        if (b.internal == internal) ranked_proteins.emplace_back(b.key, acc);
+      }
+      std::sort(ranked_proteins.begin(), ranked_proteins.end());
+      std::vector<RankedItem<std::pair<double, double>>> items;
+      items.reserve(ranked_proteins.size());
+      for (const auto& [key, acc] : ranked_proteins) items.push_back({key, acc.hasPrefix("DECOY"), protein_decoy_weight});
+      const auto protein_qvalues = targetDecoyQvalues(items);
+      Size targets = 0, decoy_count = 0, passing = 0;
+      for (Size k = 0; k < ranked_proteins.size(); k++)
+      {
+        protein_q[ranked_proteins[k].second] = protein_qvalues[k];
+        if (items[k].decoy) decoy_count++;
+        else { targets++; passing += protein_qvalues[k] <= rep_q; }
+      }
+      OPENMS_LOG_INFO << "Protein class \"" << (internal ? "internal stretch" : "reaches a terminus") << "\": " << targets << " target and " << decoy_count
+                      << " decoy proteins, " << passing << " targets at q <= " << rep_q << std::endl;
+    }
+    for (auto& hit : proteoform_hits_)
+    {
+      const auto it = protein_q.find(hit.getAccession());
+      hit.setMetaValue("ProteinQvalue", it == protein_q.end() ? 1.0 : it->second);
+    }
+  }
   if (use_fdr)
   {
-    setProteinQvalues_(hit_class, qvalues, decoys, decoy_weights, clusters, rep_q, *db);
     std::vector<ProteinHit> filtered_proteoform_hits;
     filtered_proteoform_hits.reserve(proteoform_hits_.size());
     for (Size i = 0; i < hit_count; i++)
