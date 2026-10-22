@@ -30,7 +30,8 @@ namespace OpenMS
     - with OpenMP thread binding requested (OMP_PROC_BIND, OMP_PLACES, GOMP_CPU_AFFINITY, KMP_AFFINITY): the OpenMP runtime then binds the
       main thread to the first place before main, and the re-executed process would inherit that one-CPU mask, so every thread would run on
       one CPU. With binding, set GLIBC_TUNABLES=glibc.malloc.hugetlb=1 directly;
-    - under valgrind, where /proc/self/exe is valgrind's own executable.
+    - under valgrind, where /proc/self/exe is valgrind's own executable, or when argv[0] names another file than /proc/self/exe
+      (started through the dynamic loader, or a link with another name).
   */
   inline void useTransparentHugePages(const char** argv)
   {
@@ -41,6 +42,14 @@ namespace OpenMS
       return;
     const char* preload = std::getenv("LD_PRELOAD");
     if (preload != nullptr && std::strstr(preload, "vgpreload") != nullptr) return;
+    // started through the dynamic loader (ld.so ./FLASHDeconv ...): /proc/self/exe is the loader, not this tool
+    char exe[4096];
+    const ssize_t exe_length = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+    if (exe_length <= 0 || argv[0] == nullptr) return;
+    exe[exe_length] = '\0';
+    const char* exe_name = std::strrchr(exe, '/');
+    const char* arg_name = std::strrchr(argv[0], '/');
+    if (std::strcmp(exe_name != nullptr ? exe_name + 1 : exe, arg_name != nullptr ? arg_name + 1 : argv[0]) != 0) return;
     const char* tunables = std::getenv("GLIBC_TUNABLES");
     if (tunables != nullptr && std::strstr(tunables, "glibc.malloc.hugetlb") != nullptr) return;
     const std::string tunables_before = tunables != nullptr ? tunables : "";
