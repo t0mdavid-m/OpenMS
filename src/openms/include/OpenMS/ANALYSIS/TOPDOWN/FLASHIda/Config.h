@@ -324,9 +324,6 @@ namespace OpenMS
     bool consider_all_charges = false;
     /// precursor_selection.charge_selection -- ranks a species' charges (ADR-0059).
     ChargeSelection charge_selection = ChargeSelection::Snr;
-    /// precursor_selection.reselect_charges -- re-run charge_selection on each newer survey for the
-    /// commands still waiting in the queue (ADR-0059). Inert under Multiplexed.
-    bool reselect_charges = false;
     /// How many charge states of a selected precursor one MS2 acquires -- from
     /// precursor_selection.precursor_charges. Decides the isolation GEOMETRY of a single scan
     /// (ADR-0016), and since ADR-0021 it is the only thing that does. Exclusion is mass-keyed.

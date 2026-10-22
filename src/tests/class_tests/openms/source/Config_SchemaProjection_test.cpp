@@ -410,7 +410,7 @@ START_SECTION(charge_acquisition_unknown_value_throws)
 END_SECTION
 
 // ---------------------------------------------------------------------------------------------
-// ADR-0059: precursor_selection.charge_selection and reselect_charges.
+// ADR-0059: precursor_selection.charge_selection (and the retired reselect_charges).
 START_SECTION(charge_selection_parses)
 {
   TEST_EQUAL((int)Config(cfgJson()).targeting().charge_selection, (int)ChargeSelection::Snr)   // absent => snr
@@ -451,11 +451,22 @@ START_SECTION(purity_under_multiplexed_throws)
 }
 END_SECTION
 
-START_SECTION(reselect_charges_parses)
+// Retired before it shipped: every survey now re-plans the waiting work of its CV, so there is
+// nothing left to switch. Either value is a migration error, and the message names the ADR.
+START_SECTION(reselect_charges_is_a_migration_error)
 {
-  TEST_EQUAL(Config(cfgJson()).targeting().reselect_charges, false)   // absent => false
-  TEST_EQUAL(Config(cfgJson(R"(, "reselect_charges": true)")).targeting().reselect_charges, true)
-  TEST_EQUAL(Config(cfgJson(R"(, "reselect_charges": false)")).targeting().reselect_charges, false)
+  TEST_EXCEPTION(std::invalid_argument, Config(cfgJson(R"(, "reselect_charges": true)")))
+  TEST_EXCEPTION(std::invalid_argument, Config(cfgJson(R"(, "reselect_charges": false)")))
+  try
+  {
+    Config bad(cfgJson(R"(, "reselect_charges": false)"));
+  }
+  catch (const std::invalid_argument& e)
+  {
+    const std::string msg = e.what();
+    TEST_EQUAL(msg.find("reselect_charges is retired") != std::string::npos, true)
+    TEST_EQUAL(msg.find("ADR-0060") != std::string::npos, true)
+  }
 }
 END_SECTION
 

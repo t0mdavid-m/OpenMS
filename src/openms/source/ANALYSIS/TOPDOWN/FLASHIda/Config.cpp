@@ -424,21 +424,25 @@ namespace OpenMS
           "  precursor_selection.precursor_charges: \"multiplexed\"  one MS2 co-isolating them\n"
           "Exclusion is mass-keyed. There is no replacement for re-selecting one mass at a "
           "different charge on a LATER survey.");
+    // Retired before it shipped (ADR-0059 decision 4 is superseded): re-planning is no longer a switch,
+    // so either value is refused rather than accepted and ignored.
+    if (ps.contains("reselect_charges"))
+      throw std::invalid_argument(
+          "precursor_selection.reselect_charges is retired: every survey now re-plans the waiting work of its CV "
+          "(ADR-0060). Delete the key.");
 
     rejectUnknownKeys(ps,
         {"rt_window", "targeting", "consider_all_charges",
          "precursor_charges", "strict_inclusion", "tie_threshold",
          "rank_by", "max_precursors", "min_precursor_charge", "additional_scans", "exploration",
          "tag_expansion", "snr_threshold", "max_charge_states", "min_charge_states",
-         "charge_selection", "reselect_charges"},
+         "charge_selection"},
         "precursor_selection");
     targeting_.rt_window = ps.value("rt_window", 180.0);
     targeting_.consider_all_charges = ps.value("consider_all_charges", false);
     targeting_.precursor_charges = parseChargeMode(ps, "precursor_charges", "precursor_selection");
-    // ADR-0059: one ranking of a species' charges (anchor first, then the set), and whether to re-run
-    // it on a newer survey for the commands still waiting in the queue.
+    // ADR-0059: one ranking of a species' charges (anchor first, then the set).
     targeting_.charge_selection = parseChargeSelection(ps);
-    targeting_.reselect_charges = ps.value("reselect_charges", false);
     targeting_.strict_inclusion = ps.value("strict_inclusion", false);
     targeting_.tie_threshold = ps.value("tie_threshold", 0.1);
 
@@ -1647,10 +1651,6 @@ namespace OpenMS
           "\"multiplexed\". Every notch of a multiplexed scan shares one fill, so ranking notches by their own "
           "isolation purity does not rank what the scan transmits. Use \"snr\", \"qscore\" or \"intensity\", or "
           "acquire \"single\" / \"separate\" (ADR-0059).");
-    if (targeting_.reselect_charges && targeting_.precursor_charges == ChargeAcquisitionMode::Multiplexed)
-      std::cout << "[CONFIG-WARN] precursor_selection.reselect_charges is true but precursor_charges is "
-                   "\"multiplexed\"; a co-isolated set is never reselected, so the key is inert (ADR-0059)."
-                << std::endl;
 
     // Guarded on `mode` for the reason spelled out at the level-3 arm above: levels_[3].exploration
     // outlives characterization.mode == "off" (applyCharacterizationMode_ resets only `selection`),
