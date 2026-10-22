@@ -141,6 +141,15 @@ protected:
                           "-protein_level_only. Without any precursor mass in the input, results are unchanged; otherwise the PrSMs of this source can "
                           "also change the others' results (the pooled protein-level null, the best PrSM of a spectrum, proteoform clusters).", false);
     setValidStrings_("precursor_ladders", {"true", "false"});
+    registerStringOption_("search_cascade", "<bool>", "false",
+                          "Search the candidate sources in stages: sequence tags in every spectrum; gapped tags (unless -gapped_tags off) only in the "
+                          "spectra without a target PrSM that passes the PrSM-level FDR (-pro_fdr, 1% without a filter) of the stage before; terminal "
+                          "and precursor ladders (if on) only in the spectra no stage before identified. The PrSM q-values are computed per stage "
+                          "(and FDR class), so the PrSMs of a later stage compete only with that stage's decoys. The variable modification penalties "
+                          "are learned in the first stage. Not used with -native, with -protein_level_only or without decoys in the database; the "
+                          "chimeric rounds search with all sources.",
+                          false);
+    setValidStrings_("search_cascade", {"true", "false"});
     registerDoubleOption_("raw_score_weight", "<weight>", 8.0,
                           "With -in_raw: every PrSM is ranked for the FDR by its extension score plus this weight times its raw score (-log10 of the "
                           "chance of the fragment isotope envelopes matched in the raw spectrum). 0: the raw score is reported but not used in the ranking.",

@@ -123,6 +123,8 @@ private:
   bool terminal_ladders_ = true;
   /// candidates from precursor-anchored ladders (windows whose unmodified mass is the precursor mass) in every spectrum with a precursor mass
   bool precursor_ladders_ = true;
+  /// search cascade: sequence tags, then gapped tags, then ladders, each only in the spectra the stages before identify nothing in
+  bool search_cascade_ = false;
   /// learn variable modification penalties from target and decoy usage
   bool learn_var_mod_penalty_ = true;
   /// search spectra with MS1-based PrSMs again with decoy precursor masses, as decoys of the precursor in the FDR
