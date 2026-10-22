@@ -18,6 +18,7 @@
 #include <OpenMS/METADATA/SpectrumLookup.h>
 #include <OpenMS/MATH/STATISTICS/GaussFitter.h>
 #include <exception>
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -345,6 +346,7 @@ void FLASHDeconvAlgorithm::deconvolveSpectrum_(const MSExperiment& map, Spectrum
   const std::vector<std::pair<double, bool>>* window_decoys = nullptr; // the challengers of round 2, if any
   std::vector<double> fragment_masses;                                   // the fragment masses both rounds score on
   bool round1 = false;                                                   // whether round 1 ran (several target masses)
+  bool reuse_round1 = false; // round 1's deconvolution is the final one (same precursor, same mass and charge bounds)
   if (precursor_by_fragments_ && ms_level > 1 && ! precursor_pg.empty())
   {
     const auto cit = native_id_window_candidates_.find(native_id);
@@ -370,10 +372,22 @@ void FLASHDeconvAlgorithm::deconvolveSpectrum_(const MSExperiment& map, Spectrum
         job.new_precursor_pg = precursor_pg;
         job.new_precursor = cit->second[best].second;
       }
+      else
+      {
+        // The precursor stays. The deconvolution below differs from round 1 only by the window bounds; when they widen neither the mass
+        // nor the charge bound (the heaviest and the most charged mass of the window are the precursor's), both are the same function of
+        // the same inputs, and round 1's result is kept with the precursor as the deconvolution below would register it.
+        auto& round1_spectrum = sd.getDeconvolvedSpectrum();
+        const int union_charge = round1_spectrum.getCurrentMaxAbsCharge(std::numeric_limits<int>::max());
+        const double union_mass = round1_spectrum.getCurrentMaxMass(std::numeric_limits<double>::max());
+        round1_spectrum.setPrecursorPeakGroup(precursor_pg);
+        reuse_round1 = round1_spectrum.getCurrentMaxAbsCharge(std::numeric_limits<int>::max()) == union_charge
+                       && round1_spectrum.getCurrentMaxMass(std::numeric_limits<double>::max()) == union_mass;
+      }
     }
   }
   // now do it
-  sd.performSpectrumDeconvolution(spec, scan_number, precursor_pg);
+  if (! reuse_round1) sd.performSpectrumDeconvolution(spec, scan_number, precursor_pg);
 
   auto& deconvolved_spectrum = sd.getDeconvolvedSpectrum();
 
