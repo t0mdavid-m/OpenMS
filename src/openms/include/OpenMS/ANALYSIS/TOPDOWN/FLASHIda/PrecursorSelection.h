@@ -187,7 +187,8 @@ namespace OpenMS
     /// both tqscore_exceeding_* maps, authored_acquired_rt_map_ and target_mass_charge_map_.
     ///
     /// It does NOT touch window_id_ or the id_*_map_ window bookkeeping: they are never a decision
-    /// input, and window ids must keep advancing.
+    /// input, and window ids must keep advancing. A no-op unless the last filterAndRank was an MS1 that
+    /// reached its snapshot, so it can never restore an older survey's entry state.
     void rollbackAcquisitionMemory();
 
     /// Replay @p stamps into acquisition memory, in vector order, with the operations the in-place
@@ -330,6 +331,10 @@ namespace OpenMS
     };
 
     AcquisitionSnapshot acq_entry_;
+
+    /// acq_entry_ belongs to the CURRENT journal: set where the MS1 path takes it, cleared where the journal is
+    /// reset. A rollback without it (no survey since, or a non-MS1 call) is a no-op, never a restore of an older one.
+    bool acq_entry_valid_ = false;
 
     /// The last survey's journal, and the write counter its stamps' `seq` is drawn from.
     SelectionJournal journal_;

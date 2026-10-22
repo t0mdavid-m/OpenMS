@@ -79,7 +79,10 @@ namespace OpenMS
     std::vector<int> dropped_scan_ids;     ///< for ida.log Superseded= and forgetTracking_
     std::vector<int> dropped_quant_groups; ///< caller: quant_.closeGroup
     std::vector<int> dropped_sweep_groups; ///< caller: exploration_.dropGroup
-    std::vector<int> reconciled_unit_ids;  ///< new units refused because their species committed meanwhile
+    std::vector<int> reconciled_unit_ids;  ///< new units refused: species committed meanwhile, or a remainder with nothing to replace
+    std::vector<int> reconciled_scan_ids;  ///< every command reconcile kept out of the queue (forgetTracking_)
+    std::vector<int> reconciled_quant_groups; ///< groups of the refused units: caller closes them
+    std::vector<int> reconciled_sweep_groups; ///< groups of the refused units: caller drops them
     int kept = 0;     ///< committed units at the CV whose queued commands stay
     int added = 0;    ///< units inserted
     int adjusted = 0; ///< adjustable commands rewritten
@@ -210,10 +213,13 @@ namespace OpenMS
     /// Atomically: drop every UNCOMMITTED unit at @p cv; insert @p units (minus reconciled ones) at the back of their
     /// priority deques; apply @p adjust in place. Stamps enqueue_timestamp_ms on everything inserted or adjusted.
     /// A new uncommitted unit is reconciled away when the stamps committed since the last fold would have barred
-    /// its anchor (wouldBar). A unit arriving already committed (a re-planned remainder) is not reconciled.
+    /// its anchor (wouldBar). A unit arriving already committed is a re-planned remainder: it inherits the
+    /// sent_charges the unit it replaces (same nominal mass) holds AT THE SWAP, a command of it whose charge is among
+    /// them is not inserted, and the whole unit is reconciled away when that unit is gone or nothing of it is left.
+    /// Every reconciled unit and command is reported in the ReplanResult.
     /// @p replace_remainder_of: committed units whose QUEUED commands are dropped because @p units carries their
     /// re-planned remainder (non-quant `separate` R only).
-    /// A unit's unit_id is kept when it is > 0 and not in use, otherwise one is minted.
+    /// An empty unit is skipped. A unit's unit_id is kept when it is > 0 and not in use, otherwise one is minted.
     ReplanResult replacePlan(double cv, std::vector<PlanUnit> units, const std::vector<AdjustRequest>& adjust,
                              const std::vector<int>& replace_remainder_of);
 
@@ -403,6 +409,9 @@ namespace OpenMS
     /// Remove the registered, QUEUED command @p scan_id from the registry (not from the deques): its unit loses a
     /// command and is erased when none is left. Caller must hold queue_mutex_.
     void forgetQueued_(int scan_id);
+
+    /// Every charge @p cmd isolates at its precursor stage: the anchor first, then stage 0's notches (multiplexed).
+    static std::vector<int> isolatedCharges_(const ScanCommand& cmd);
 
     /// Test scaffolding reads the plan registry through this friend rather than through a public getter.
     friend struct FLASHIdaTestAccess;

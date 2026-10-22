@@ -16,9 +16,11 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <iostream>
 #include <map>
 #include <random>
 #include <set>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -721,6 +723,150 @@ START_SECTION(enqueue_timestamp_reset_on_insert_and_adjust)
   const auto adjusted = q.dequeue();
   ABORT_IF(!adjusted.has_value())
   TEST_EQUAL(adjusted->enqueue_timestamp_ms >= before_adjust, true)
+}
+END_SECTION
+
+// A multiplexed command isolates its anchor AND its stage-0 notches, so its dequeue commits the per-charge
+// stamps of every charge it isolates -- under an authored charge set those are what keep the notch charges
+// from being selected again (ADR-0028).
+START_SECTION(multiplexed_command_commits_every_notch_charge)
+{
+  Config cfg{std::string(minimal_config)};
+  ScanCommandQueue q(cfg);
+
+  ScanCommand cmd = ms2(81, 13);
+  cmd.stage0_notch_count = 2;
+  cmd.notches[0].charge_state = 14;
+  cmd.notches[1].charge_state = 16;
+  PlanUnit u = unit(12351, {cmd}, 0.0);
+  u.stamps.per_charge[14].push_back(stamp(MemoryStamp::Kind::AuthoredAcquired, 12351, 14));
+  u.stamps.per_charge[16].push_back(stamp(MemoryStamp::Kind::AuthoredAcquired, 12351, 16));
+  q.replacePlan(0.0, {u}, {}, {});
+  ABORT_IF(!q.dequeue().has_value())
+
+  std::vector<MemoryStamp> expected = u.stamps.species_level;
+  for (int z : {13, 14, 16}) expected.insert(expected.end(), u.stamps.per_charge.at(z).begin(), u.stamps.per_charge.at(z).end());
+  TEST_EQUAL(signature(q.takeCommitted()) == signature(expected), true)
+}
+END_SECTION
+
+// A cancelled member leaves the registry exactly as an expired one does: its unit empties when the rest is sent,
+// and nothing derived from it is mistaken for the child of a command that never went out.
+START_SECTION(cancelled_member_leaves_registry)
+{
+  Config cfg{std::string(minimal_config)};
+  ScanCommandQueue q(cfg);
+
+  q.replacePlan(0.0, {unit(12351, {ms2(91, 13), ms2(92, 14)}, 0.0)}, {}, {});
+  TEST_EQUAL(q.cancelByScanIds({91}) == std::vector<int>({91}), true)
+  const auto second = q.dequeue();
+  ABORT_IF(!second.has_value())
+  TEST_EQUAL(second->scan_id, 92)
+  TEST_EQUAL(FLASHIdaTestAccess::planUnitCount(q), 0)
+
+  ScanCommand child = ms2(93, 13, 951.0, 0);
+  const std::string parent = ScanCommandQueue::encode(91);
+  std::copy(parent.begin(), parent.end(), child.parent_scan_id);
+  std::ostringstream captured;
+  std::streambuf* const real_cout = std::cout.rdbuf(captured.rdbuf());
+  q.push(child);
+  std::cout.rdbuf(real_cout);
+  TEST_EQUAL(captured.str().find("[REPLAN-INVARIANT]") == std::string::npos, true)
+}
+END_SECTION
+
+// A reconciled unit is reported with everything its caller must undo: its commands (never queued, so their
+// tracking is forgotten) and the quant and sweep groups planned for it.
+START_SECTION(reconciled_unit_is_reported_in_full)
+{
+  Config cfg{std::string(minimal_config)};
+  ScanCommandQueue q(cfg);
+
+  q.replacePlan(0.0, {unit(12351, {ms2(101, 13)}, 0.0)}, {}, {});
+  ABORT_IF(!q.dequeue().has_value())
+
+  PlanUnit u2 = unit(12351, {ms2(102, 13), ms2(103, 14)}, 0.0, 2);
+  u2.unit_id = 78;
+  u2.quant_group_ids = {5};
+  u2.sweep_group_ids = {7};
+  const ReplanResult r = q.replacePlan(0.0, {u2}, {}, {});
+
+  TEST_EQUAL(r.reconciled_unit_ids == std::vector<int>({78}), true)
+  TEST_EQUAL(r.reconciled_scan_ids == idsOf(u2), true)
+  TEST_EQUAL(r.reconciled_quant_groups == std::vector<int>({5}), true)
+  TEST_EQUAL(r.reconciled_sweep_groups == std::vector<int>({7}), true)
+}
+END_SECTION
+
+// Review focus 1: a `separate` remainder is re-planned from a waitingAt snapshot, and the drain may send one of its
+// charges before the swap. The replacement inherits what was sent AT THE SWAP, so that charge is not sent twice.
+START_SECTION(remainder_replacement_skips_a_charge_sent_after_waitingAt)
+{
+  Config cfg{std::string(minimal_config)};
+  ScanCommandQueue q(cfg);
+
+  PlanUnit u1 = unit(12351, {ms2(111, 13), ms2(112, 14), ms2(113, 16)}, 0.0);
+  u1.separate = true;
+  q.replacePlan(0.0, {u1}, {}, {});
+  std::vector<int> sent_charges;
+  const auto first = q.dequeue();   // z13: the species commits
+  ABORT_IF(!first.has_value())
+  sent_charges.push_back(first->stages[0].charge_state);
+
+  const ScanCommandQueue::Waiting w = q.waitingAt(0.0);
+  ABORT_IF(w.committed_units.size() != 1)
+  TEST_EQUAL(idsOf(w.committed_units[0]) == std::vector<int>({112, 113}), true)
+
+  const auto raced = q.dequeue();   // z14 goes out between the snapshot and the swap
+  ABORT_IF(!raced.has_value())
+  sent_charges.push_back(raced->stages[0].charge_state);
+
+  PlanUnit remainder = unit(12351, {ms2(114, 14), ms2(115, 17)}, 0.0, 2);
+  remainder.separate = true;
+  remainder.committed = true;
+  const ReplanResult r = q.replacePlan(0.0, {remainder}, {}, {w.committed_units[0].unit_id});
+
+  TEST_EQUAL(r.dropped_scan_ids == std::vector<int>({113}), true)
+  TEST_EQUAL(r.reconciled_scan_ids == std::vector<int>({114}), true)
+  std::vector<int> rest;
+  while (auto c = q.dequeue())
+  {
+    rest.push_back(c->scan_id);
+    sent_charges.push_back(c->stages[0].charge_state);
+  }
+  TEST_EQUAL(rest == std::vector<int>({115}), true)
+  TEST_EQUAL(std::set<int>(sent_charges.begin(), sent_charges.end()).size(), sent_charges.size())
+}
+END_SECTION
+
+// ...and when the drain sent the whole remainder before the swap, the named unit is gone: there is nothing left to
+// replace, so the replacement is refused rather than acquiring the species past its plan.
+START_SECTION(remainder_replacement_refused_when_old_unit_emptied)
+{
+  Config cfg{std::string(minimal_config)};
+  ScanCommandQueue q(cfg);
+
+  PlanUnit u1 = unit(12351, {ms2(121, 13), ms2(122, 14), ms2(123, 16)}, 0.0);
+  u1.separate = true;
+  q.replacePlan(0.0, {u1}, {}, {});
+  ABORT_IF(!q.dequeue().has_value())
+
+  const ScanCommandQueue::Waiting w = q.waitingAt(0.0);
+  ABORT_IF(w.committed_units.size() != 1)
+  ABORT_IF(!q.dequeue().has_value())
+  ABORT_IF(!q.dequeue().has_value())
+
+  PlanUnit remainder = unit(12351, {ms2(124, 14), ms2(125, 17)}, 0.0, 2);
+  remainder.unit_id = 88;
+  remainder.separate = true;
+  remainder.committed = true;
+  const ReplanResult r = q.replacePlan(0.0, {remainder}, {}, {w.committed_units[0].unit_id});
+
+  TEST_EQUAL(r.reconciled_unit_ids == std::vector<int>({88}), true)
+  TEST_EQUAL(r.reconciled_scan_ids == idsOf(remainder), true)
+  TEST_EQUAL(r.added, 0)
+  TEST_EQUAL(drainIds(q).empty(), true)
+  TEST_EQUAL(FLASHIdaTestAccess::planUnitCount(q), 0)
 }
 END_SECTION
 

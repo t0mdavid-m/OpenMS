@@ -718,13 +718,13 @@ namespace OpenMS
         pending_scan_map_[cmd.scan_id] = cmd;
 
         // Commit at dequeue: the first command of a unit to go out commits its species, and each command
-        // commits its own charge's stamps. Both move to the inbox the analysis thread folds, in commit order.
+        // commits the stamps of every charge it isolates (a multiplexed one: its notches too). Both move to the
+        // inbox the analysis thread folds, in commit order.
         auto u = unit_of_.find(cmd.scan_id);
         if (u != unit_of_.end())
         {
           const int unit_id = u->second;
           PlanUnit& unit = units_.at(unit_id);
-          const int z = cmd.num_stages > 0 ? std::abs(cmd.stages[0].charge_state) : 0;
           if (!unit.committed)
           {
             unit.committed = true;
@@ -734,17 +734,20 @@ namespace OpenMS
               committed_since_fold_.push_back(s);
             }
           }
-          auto pc = unit.stamps.per_charge.find(z);
-          if (pc != unit.stamps.per_charge.end())
+          for (const int z : isolatedCharges_(cmd))
           {
-            for (const auto& s : pc->second)
+            auto pc = unit.stamps.per_charge.find(z);
+            if (pc != unit.stamps.per_charge.end())
             {
-              inbox_.push_back(s);
-              committed_since_fold_.push_back(s);
+              for (const auto& s : pc->second)
+              {
+                inbox_.push_back(s);
+                committed_since_fold_.push_back(s);
+              }
+              unit.stamps.per_charge.erase(pc);
             }
-            unit.stamps.per_charge.erase(pc);
+            unit.sent_charges.push_back(z);
           }
-          unit.sent_charges.push_back(z);
           unit_of_.erase(u);
           if (--unit.commands_left == 0) units_.erase(unit_id);
         }
@@ -764,6 +767,16 @@ namespace OpenMS
     auto it = units_.find(u->second);
     unit_of_.erase(u);
     if (it != units_.end() && --it->second.commands_left == 0) units_.erase(it); // an uncommitted unit's stamps go with it
+  }
+
+  std::vector<int> ScanCommandQueue::isolatedCharges_(const ScanCommand& cmd)
+  {
+    std::vector<int> zs;
+    if (cmd.num_stages <= 0) return zs;
+    zs.push_back(std::abs(cmd.stages[0].charge_state));
+    const auto [notches, count] = notchesForStage(cmd, 0);
+    for (int j = 0; j < count; ++j) zs.push_back(std::abs(notches[j].charge_state));
+    return zs;
   }
 
   std::optional<ScanCommand> ScanCommandQueue::pushAndDequeue(ScanCommand cmd)
@@ -881,7 +894,10 @@ namespace OpenMS
 
     // 1. Which units at this CV lose their queued commands: every uncommitted one, and the committed ones whose
     //    remainder the new plan re-derives. Every other committed unit is kept as it is.
+    //    A replaced remainder hands over what it has sent AT THE SWAP: the drain may have sent more since the
+    //    waitingAt snapshot the new plan was built from.
     std::set<int> leaving;
+    std::map<int, std::vector<int>> sent_by_remainder; // nominal mass -> charges the replaced remainder sent
     for (const auto& [id, u] : units_)
     {
       if (!sameCv(u.faims_cv, cv)) continue;
@@ -889,6 +905,7 @@ namespace OpenMS
       if (!u.committed || remainder)
       {
         leaving.insert(id);
+        if (u.committed) sent_by_remainder[u.nominal_mass] = u.sent_charges;
         if (!u.committed)
         {
           r.dropped_quant_groups.insert(r.dropped_quant_groups.end(), u.quant_group_ids.begin(), u.quant_group_ids.end());
@@ -926,9 +943,17 @@ namespace OpenMS
     }
 
     // 2. Insert the new plan. A unit whose species committed since the last fold would have been refused had the
-    //    survey seen that commit; it is reconciled away instead. A unit arriving committed is a remainder.
+    //    survey seen that commit; it is reconciled away instead. A unit arriving committed is a remainder: it
+    //    inherits what the unit it replaces sent, and is refused when that unit is gone (nothing left to replace).
+    auto reconcile = [&r](const PlanUnit& refused) {
+      r.reconciled_unit_ids.push_back(refused.unit_id);
+      for (const auto& c : refused.commands) r.reconciled_scan_ids.push_back(c.scan_id);
+      r.reconciled_quant_groups.insert(r.reconciled_quant_groups.end(), refused.quant_group_ids.begin(), refused.quant_group_ids.end());
+      r.reconciled_sweep_groups.insert(r.reconciled_sweep_groups.end(), refused.sweep_group_ids.begin(), refused.sweep_group_ids.end());
+    };
     for (auto& unit : units)
     {
+      if (unit.commands.empty()) continue;
       if (unit.unit_id <= 0 || units_.count(unit.unit_id) > 0)
       {
         do
@@ -937,11 +962,43 @@ namespace OpenMS
         } while (units_.count(unit_id_counter_) > 0);
         unit.unit_id = unit_id_counter_;
       }
-      if (unit.commands.empty()) continue;
       if (!unit.committed && wouldBar(committed_since_fold_, anchorKey(unit)))
       {
-        r.reconciled_unit_ids.push_back(unit.unit_id);
+        reconcile(unit);
         continue;
+      }
+      if (unit.committed)
+      {
+        auto sent = sent_by_remainder.find(unit.nominal_mass);
+        if (sent == sent_by_remainder.end())
+        {
+          reconcile(unit);
+          continue;
+        }
+        unit.sent_charges = sent->second;
+        PlanUnit unsent = unit;
+        unsent.commands.clear();
+        unsent.purity.clear();
+        std::vector<int> already_sent; // a charge sent at the swap is never sent twice
+        for (size_t k = 0; k < unit.commands.size(); ++k)
+        {
+          const ScanCommand& cmd = unit.commands[k];
+          const int z = cmd.num_stages > 0 ? std::abs(cmd.stages[0].charge_state) : 0;
+          if (std::find(unit.sent_charges.begin(), unit.sent_charges.end(), z) != unit.sent_charges.end())
+          {
+            already_sent.push_back(cmd.scan_id);
+            continue;
+          }
+          unsent.commands.push_back(cmd);
+          unsent.purity.push_back(k < unit.purity.size() ? unit.purity[k] : -1.0);
+        }
+        if (unsent.commands.empty())
+        {
+          reconcile(unit);
+          continue;
+        }
+        r.reconciled_scan_ids.insert(r.reconciled_scan_ids.end(), already_sent.begin(), already_sent.end());
+        unit = std::move(unsent);
       }
       unit.faims_cv = cv;
       unit.commands_left = static_cast<int>(unit.commands.size());
@@ -1057,6 +1114,7 @@ namespace OpenMS
           std::cout << "[TRACK-CANCEL] id=" << encode(it->scan_id)
                     << " ms_level=" << it->msn_level << " state=queued" << std::endl;
           ms3_cmd_proteoform_.erase(it->scan_id);  // drop any stashed MS3 proteoform (no-op for non-MS3)
+          forgetQueued_(it->scan_id);              // never acquired: leaves the plan registry (no-op if unregistered)
           it = queues_[p].erase(it);
         }
         else
@@ -1077,6 +1135,7 @@ namespace OpenMS
         std::cout << "[TRACK-CANCEL] id=" << encode(pit->first)
                   << " ms_level=" << pit->second.msn_level << " state=in-flight" << std::endl;
         ms3_cmd_proteoform_.erase(pit->first);  // drop any stashed MS3 proteoform (no-op for non-MS3)
+        forgetQueued_(pit->first);              // registry hygiene, as for a queued one (no-op once dequeued)
         pit = pending_scan_map_.erase(pit);
       }
       else

@@ -1173,6 +1173,31 @@ START_SECTION(rollback_restores_exactly_the_acquisition_containers)
 }
 END_SECTION
 
+// A non-MS1 filterAndRank resets the journal and takes no snapshot, so the entry state still on hand belongs to
+// the PREVIOUS survey. A rollback after it must therefore do nothing, or it would undo a survey nobody asked to undo.
+START_SECTION(rollback_after_a_non_ms1_call_is_a_noop)
+{
+  const auto scans = loadTsvScans(ms1_ecoli_path);
+  ABORT_IF(scans.empty())
+
+  Config cfg{cfgFor("single")};
+  Deconvolution deconv(cfg, cfg.toleranceList());
+  PrecursorSelection ps(cfg, deconv);
+
+  const auto& s0 = scans[0];
+  TEST_EQUAL(ps.filterAndRank(s0.mzs.data(), s0.ints.data(), (int)s0.mzs.size(), s0.rt, 1, 0.0) > 0, true)
+  const auto after_survey = FLASHIdaTestAccess::surveyMemory(ps);
+  const auto after_survey_targets = FLASHIdaTestAccess::targetMassCharges(ps);
+  TEST_EQUAL(after_survey.all_mass_rt_map_.empty(), false)  // the survey wrote: a rollback that ran would show
+
+  TEST_EQUAL(ps.filterAndRank(s0.mzs.data(), s0.ints.data(), (int)s0.mzs.size(), s0.rt, 2, 0.0), 0)
+  ps.rollbackAcquisitionMemory();
+
+  TEST_EQUAL(FLASHIdaTestAccess::surveyMemory(ps) == after_survey, true)
+  TEST_EQUAL(FLASHIdaTestAccess::targetMassCharges(ps) == after_survey_targets, true)
+}
+END_SECTION
+
 // ADR-0036: the PeakGroups of one split envelope are ONE Precursor. Their stamps therefore land in one
 // SpeciesStamps, keyed by nominal mass, with every charge the survey acquired across all of them --
 // which is what lets a later push commit the species once.

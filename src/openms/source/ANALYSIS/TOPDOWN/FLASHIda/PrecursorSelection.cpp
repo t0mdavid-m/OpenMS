@@ -185,6 +185,7 @@ namespace OpenMS
   {
     journal_ = SelectionJournal();
     journal_seq_ = 0;
+    acq_entry_valid_ = false;
     if (ms_level != 1)
     {
       return 0;
@@ -393,6 +394,7 @@ namespace OpenMS
     acq_entry_.mass_qscore_map_ = memory_.mass_qscore_map_;
     acq_entry_.authored_acquired_rt_map_ = memory_.authored_acquired_rt_map_;
     acq_entry_.target_mass_charge_map_ = target_mass_charge_map_;
+    acq_entry_valid_ = true;
 
     const int selection_phase_start = 0;
     const int selection_phase_end = 2; // inclusive
@@ -1021,6 +1023,7 @@ namespace OpenMS
 
   void PrecursorSelection::rollbackAcquisitionMemory()
   {
+    if (!acq_entry_valid_) return; // no snapshot of the current journal: there is nothing of it to undo
     memory_.tqscore_exceeding_mz_rt_map_ = acq_entry_.tqscore_exceeding_mz_rt_map_;
     memory_.tqscore_exceeding_mass_rt_map_ = acq_entry_.tqscore_exceeding_mass_rt_map_;
     memory_.all_mass_rt_map_ = acq_entry_.all_mass_rt_map_;
