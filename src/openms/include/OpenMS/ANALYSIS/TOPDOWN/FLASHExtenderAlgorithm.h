@@ -97,6 +97,16 @@ public:
     }
   }
 
+  /// move the characterized proteoforms into @p hits (appended as by fillProteoforms; none are left here)
+  void takeProteoforms(std::vector<ProteinHit>& hits)
+  {
+    for (auto& hit : proteoform_hits_)
+    {
+      hits.push_back(std::move(hit));
+    }
+    proteoform_hits_.clear();
+  }
+
   /// set modification map to be considered for blind modification search. Note that they are not for variable modification search.
   /// The mass shifts found by blind modifications matching to the masses of these modifications are annotated.
   void setCandidateBlindModificationMap(const std::map<double, std::vector<ResidueModification>>& mod_map);

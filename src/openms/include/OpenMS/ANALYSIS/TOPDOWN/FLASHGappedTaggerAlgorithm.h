@@ -13,10 +13,40 @@
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <new>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace OpenMS
 {
+/// an allocator whose value-less construction leaves the element uninitialized (resize without zero-filling), for buffers that are
+/// written in full before they are read
+template<class T>
+struct DefaultInitAllocator : std::allocator<T>
+{
+  template<class U>
+  struct rebind
+  {
+    using other = DefaultInitAllocator<U>;
+  };
+  DefaultInitAllocator() noexcept = default;
+  template<class U>
+  DefaultInitAllocator(const DefaultInitAllocator<U>&) noexcept
+  {
+  }
+  template<class U>
+  void construct(U* p) noexcept(std::is_nothrow_default_constructible<U>::value)
+  {
+    ::new (static_cast<void*>(p)) U;
+  }
+  template<class U, class... Args>
+  void construct(U* p, Args&&... args)
+  {
+    ::new (static_cast<void*>(p)) U(std::forward<Args>(args)...);
+  }
+};
+
 /**
 @brief Gapped tags: protein candidates and anchors for spectra in which no sequence tag is found.
 
@@ -101,7 +131,7 @@ private:
   double index_bin_width_ = 0.1; ///< bin_width when the index was built
   std::vector<std::uint32_t> slot_;
   std::vector<std::uint64_t> post_offsets_;
-  std::vector<std::uint32_t> postings_;
+  std::vector<std::uint32_t, DefaultInitAllocator<std::uint32_t>> postings_; // written in full by the index build before any read
 
   // residue sums on a 0.1 mDa grid up to max_gap_mass, and the number of set bits before each 64-bit word
   std::vector<std::uint64_t> plausible_bits_;

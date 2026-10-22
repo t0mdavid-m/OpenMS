@@ -209,7 +209,10 @@ void FLASHGappedTaggerAlgorithm::buildIndex(const std::vector<std::string>& prot
     slot_[key] = (std::uint32_t)(post_offsets_.size() - 1);
     post_offsets_.push_back(cursor);
   }
-  postings_.assign(post_offsets_.back(), 0);
+  // not zero-filled: the second pass writes every element (it enumerates the windows the first pass counted), and its threads touch the
+  // pages first
+  postings_.clear();
+  postings_.resize(post_offsets_.back());
 #pragma omp parallel for schedule(dynamic, 1) if (threads > 1)
   for (int c = 0; c < n_chunks; ++c) enumerate(c, true);
 

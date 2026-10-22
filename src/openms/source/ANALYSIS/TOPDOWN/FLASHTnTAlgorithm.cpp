@@ -1644,7 +1644,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         hit.setMetaValue(mi_fasta_index, pi);
         hit.setMetaValue(mi_gapped, (int)gapped_groups.size());
         gapped_groups.push_back(std::move(group));
-        hits.push_back(hit);
+        hits.push_back(std::move(hit));
         hit_shifts.push_back(std::move(sh));
       }
     }
@@ -2126,7 +2126,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         // annotateOnRawSpectra_: the extension score alone (deconvolved masses) picked another protein in 1 of 15 spectra of Eclip_1480
         // where TopPIC's protein had the better raw evidence (offline: 5252 -> 5451 PrSMs, 1435 -> 1500 proteoforms at 1%)
         extender.run(candidates, dspec, spec_vec, vec_pro, rev_vec_pro, tags_, tol, keep_all);
-        extender.fillProteoforms(proteoforms);
+        extender.takeProteoforms(proteoforms);
       };
       extend(hits, out);
       // native: every candidate's PrSM is reported, one per protein (the better one)
