@@ -435,6 +435,14 @@ namespace OpenMS
     // chain's bin.
     const double chain_tol = tol_div_factor;                // tolerance in mass bins (= the input ppm tolerance)
     const long chain_search = (long)(chain_tol + 2.0);      // + the two rounding errors (each <= 1/2 bin) of each of the two peaks
+    // intensity-ratio factor per charge (the former per-step expression, evaluated once per spectrum)
+    std::vector<float> charge_factors(current_max_charge_ > 0 ? current_max_charge_ : 0);
+    for (int j = 0; j < current_max_charge_; j++)
+    {
+      const int abs_charge = j + 1;
+      const float highest_factor = 10.0f;
+      charge_factors[j] = abs_charge <= low_charge_ ? highest_factor : (highest_factor / 2 + highest_factor / 2 * low_charge_ / (float)abs_charge);
+    }
     std::vector<double> exact_mass_offsets(current_max_charge_); // unrounded binned_universal_pattern_
     for (int j = 0; j < current_max_charge_; j++)
     {
@@ -501,8 +509,7 @@ namespace OpenMS
         bool pass_first_check = false;
 
         // intensity ratio between consecutive charges should not exceed the factor.
-        const float highest_factor = 10.0f;
-        const float factor = abs_charge <= low_charge_ ? highest_factor : (highest_factor / 2 + highest_factor / 2 * low_charge_ / (float)abs_charge);
+        const float factor = charge_factors[j];
         // intensity ratio between consecutive charges for possible harmonic should be within this factor
 
         const float hfactor = factor / 2.0f;
