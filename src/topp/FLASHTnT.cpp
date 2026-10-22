@@ -107,7 +107,7 @@ protected:
 
     registerStringList_("fixed_mod", "<name>", std::vector<String>(),
                         "Fixed modifications, by name with the residue (e.g. 'Carbamidomethyl (C)' for alkylated cysteines, 'TMT6plex (K)') or by Unimod "
-                        "accession with the residue (e.g. 'UNIMOD:4 (C)'). "
+                        "accession number with the residue (e.g. '4 (C)'; 'UNIMOD:4 (C)' is the same). "
                         "The residue's mass is changed for the whole search: every occurrence in targets and decoys, in sequence tags (a tag reads "
                         "the modified residue as its letter), mass ladders, the extension, the raw-spectrum scoring and the reported masses. Only "
                         "modifications of a residue anywhere, one per residue (not terminal ones). Written as ProForma global modifications, "

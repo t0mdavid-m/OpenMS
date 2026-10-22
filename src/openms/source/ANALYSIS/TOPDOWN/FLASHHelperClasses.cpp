@@ -270,10 +270,16 @@ namespace OpenMS
     const auto* db = ModificationsDB::getInstance();
     String upper = spec;
     upper.toUpper();
-    if (! upper.hasPrefix("UNIMOD:")) return db->getModification(spec);
-
-    // a Unimod accession, with its site in parentheses or bare
-    String rest = spec.substr(7), number = rest, site;
+    // a Unimod accession: its number, with or without "UNIMOD:", with its site in parentheses or bare. Only digits before the site, so
+    // that names starting with a digit (e.g. 4-ONE) stay names.
+    String rest = upper.hasPrefix("UNIMOD:") ? spec.substr(7) : spec;
+    {
+      String head = rest.substr(0, std::min(rest.find('('), rest.size()));
+      head.trim();
+      const bool digits = ! head.empty() && std::all_of(head.begin(), head.end(), [](char c) { return std::isdigit((unsigned char)c); });
+      if (! upper.hasPrefix("UNIMOD:") && ! digits) return db->getModification(spec);
+    }
+    String number = rest, site;
     const Size open = rest.find('(');
     if (open != std::string::npos)
     {
@@ -286,7 +292,7 @@ namespace OpenMS
     site.trim();
     if (number.empty() || ! std::all_of(number.begin(), number.end(), [](char c) { return std::isdigit((unsigned char)c); }))
     {
-      throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "a Unimod accession is UNIMOD:<number>, e.g. UNIMOD:35 (M)", spec);
+      throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "a Unimod accession is its number (or UNIMOD:<number>), e.g. 35 (M)", spec);
     }
     String residue;
     ResidueModification::TermSpecificity term = ResidueModification::NUMBER_OF_TERM_SPECIFICITY;
@@ -329,7 +335,7 @@ namespace OpenMS
     if (by_site.size() > 1)
     {
       String list;
-      for (const auto& [key, m] : by_site) list += (list.empty() ? "" : ", ") + String("UNIMOD:") + number + " (" + key + ")";
+      for (const auto& [key, m] : by_site) list += (list.empty() ? "" : ", ") + number + " (" + key + ")";
       throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "the modification has several sites; give one: " + list, spec);
     }
     return by_site.begin()->second;
