@@ -60,6 +60,13 @@ namespace OpenMS
     std::vector<FLASHHelperClasses::MassFeature> findFeaturesAndUpdateQscore2D(const PrecalculatedAveragine& averagine, std::vector<DeconvolvedSpectrum>& deconvolved_spectra, int ms_level = 1,
                                                                                      bool is_decoy = false);
 
+    /// the same with the feature indices taken from @p feature_index (advanced by one per feature) instead of nextFeatureIndex()
+    std::vector<FLASHHelperClasses::MassFeature> findFeaturesAndUpdateQscore2D(const PrecalculatedAveragine& averagine, std::vector<DeconvolvedSpectrum>& deconvolved_spectra, int ms_level,
+                                                                                     bool is_decoy, uint& feature_index);
+
+    /// the index of the next feature, continued over all calls of the overload above that takes none (starts at 1)
+    static uint& nextFeatureIndex();
+
   protected:
     void updateMembers_() override;
 

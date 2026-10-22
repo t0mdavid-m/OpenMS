@@ -1036,6 +1036,24 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
                                                                  const std::vector<DeconvolvedSpectrum>& deconvolved_spectra,
                                                                  uint ms_level)
 {
+  auto cv_of = [](const MSSpectrum& sp) {
+    auto fs = sp.getMetaValue("filter string").toString();
+    Size p = fs.find("cv=");
+    if (p == String::npos) return 1e5;
+    Size e = fs.find(" ", p);
+    if (e == String::npos) e = fs.length() - 1;
+    return std::stod(fs.substr(p + 3, e - p));
+  };
+  // the CV of every spectrum of this level and the one below, parsed once (the search below reads them for many neighbours of each scan)
+  std::vector<double> spectrum_cvs(map.size(), 0.0);
+  std::vector<std::exception_ptr> cv_errors(map.size());
+#pragma omp parallel for schedule(dynamic, 256)
+  for (SignedSize i = 0; i < (SignedSize)map.size(); i++)
+  {
+    if (map[i].getMSLevel() != ms_level && map[i].getMSLevel() != ms_level - 1) continue;
+    try { spectrum_cvs[i] = cv_of(map[i]); }
+    catch (...) { cv_errors[i] = std::current_exception(); }
+  }
   for (Size index = 0; index < map.size(); index++)
   {
     const auto& spec = map[index]; // MS2 index
@@ -1053,15 +1071,12 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
       if (lit != located_by_scan_.end() && lit->second.parent_scan_number > 0) { located = &lit->second; }
     }
 
-    auto cv_of = [](const MSSpectrum& sp) {
-      auto fs = sp.getMetaValue("filter string").toString();
-      Size p = fs.find("cv=");
-      if (p == String::npos) return 1e5;
-      Size e = fs.find(" ", p);
-      if (e == String::npos) e = fs.length() - 1;
-      return std::stod(fs.substr(p + 3, e - p));
+    // as the serial parse would: the first spectrum (in this order) whose CV does not parse throws
+    const auto cv_at = [&](Size i) {
+      if (cv_errors[i]) std::rethrow_exception(cv_errors[i]);
+      return spectrum_cvs[i];
     };
-    const double cv = cv_of(spec);
+    const double cv = cv_at(index);
 
     // The survey (MS n-1) spectra searched for the precursor. A located scan reads the survey its COMMAND names, however many newer
     // surveys were acquired in between (ADR-0046; 88 % of commanded MS2 have at least one), and only that one. Otherwise the preceding
@@ -1085,11 +1100,11 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
       std::vector<Size> before, after;
       for (int i = (int)index - 1; i >= 0 && (int)before.size() <= precursor_rescue_window_; i--)
       {
-        if (map[i].getMSLevel() == ms_level - 1 && cv_of(map[i]) == cv) before.push_back((Size)i);
+        if (map[i].getMSLevel() == ms_level - 1 && cv_at((Size)i) == cv) before.push_back((Size)i);
       }
       for (Size i = index + 1; i < map.size() && (int)after.size() < precursor_rescue_window_; i++)
       {
-        if (map[i].getMSLevel() == ms_level - 1 && cv_of(map[i]) == cv) after.push_back(i);
+        if (map[i].getMSLevel() == ms_level - 1 && cv_at(i) == cv) after.push_back(i);
       }
       if (! before.empty())
       {
@@ -1496,10 +1511,8 @@ void FLASHDeconvAlgorithm::runFeatureFinding_(std::vector<DeconvolvedSpectrum>& 
   }
   else { deconvolved_features = traceMinLevelFeatures_(deconvolved_spectra); }
 
-  auto mass_tracer = MassFeatureTrace();
   Param mf_param = featureTraceParam_();
   mf_param.setValue("min_trace_length", 1e-5); // allow all traces for MSn
-  mass_tracer.setParameters(mf_param);
   // Find features for MSn
   for (int ms_level = (int)current_min_ms_level_ + 1; ms_level <= (int)current_max_ms_level_; ms_level++)
   {
@@ -1515,26 +1528,78 @@ void FLASHDeconvAlgorithm::runFeatureFinding_(std::vector<DeconvolvedSpectrum>& 
       feature_index_set[findex].push_back(i);
     }
 
-    for (const auto& element : feature_index_set)
+    // The groups (one per precursor feature) are traced in parallel: each spectrum is in one group, and a group reads only its own spectra.
+    // The feature indices continue over the groups in this order (MassFeatureTrace::nextFeatureIndex), so each group counts from 1 and is
+    // shifted after the join by the features of the groups before it: its features, and the peak groups it labelled (their indices are
+    // cleared before and restored where the group labelled none).
+    std::vector<const std::vector<Size>*> groups;
+    groups.reserve(feature_index_set.size());
+    for (const auto& element : feature_index_set) groups.push_back(&element.second);
+    struct GroupResult
     {
-      std::vector<DeconvolvedSpectrum> tmp_dspec;
-      tmp_dspec.reserve(element.second.size());
-      // moved out and back: each spectrum is in one feature group, and nothing else reads it in between
-      for (Size i : element.second)
-        tmp_dspec.push_back(std::move(deconvolved_spectra[i]));
-
-      const auto& df = mass_tracer.findFeaturesAndUpdateQscore2D(sd_.getAveragine(), tmp_dspec, ms_level, false);
-      deconvolved_features.insert(deconvolved_features.end(), df.begin(), df.end());
-
-      if (report_decoy_)
+      std::vector<FLASHHelperClasses::MassFeature> features; // target, then decoy
+      uint count = 0;                                        // features of the group
+      std::vector<uint> previous_indices;                    // per peak group of its spectra, in order: the index before the group
+      std::exception_ptr error;
+    };
+    std::vector<GroupResult> results(groups.size());
+#pragma omp parallel for schedule(dynamic, 1)
+    for (SignedSize g = 0; g < (SignedSize)groups.size(); g++)
+    {
+      auto& result = results[g];
+      try
       {
-        const auto& df_decoy = mass_tracer.findFeaturesAndUpdateQscore2D(sd_.getAveragine(), tmp_dspec, ms_level, true);
-        deconvolved_features.insert(deconvolved_features.end(), df_decoy.begin(), df_decoy.end());
+        std::vector<DeconvolvedSpectrum> tmp_dspec;
+        tmp_dspec.reserve(groups[g]->size());
+        // moved out and back: each spectrum is in one feature group, and nothing else reads it in between
+        for (Size i : *groups[g])
+          tmp_dspec.push_back(std::move(deconvolved_spectra[i]));
+        for (auto& dspec : tmp_dspec)
+        {
+          for (auto& pg : dspec)
+          {
+            result.previous_indices.push_back(pg.getFeatureIndex());
+            pg.setFeatureIndex(0);
+          }
+        }
+        MassFeatureTrace tracer;
+        tracer.setParameters(mf_param);
+        uint findex = 1;
+        result.features = tracer.findFeaturesAndUpdateQscore2D(sd_.getAveragine(), tmp_dspec, ms_level, false, findex);
+        if (report_decoy_)
+        {
+          const auto df_decoy = tracer.findFeaturesAndUpdateQscore2D(sd_.getAveragine(), tmp_dspec, ms_level, true, findex);
+          result.features.insert(result.features.end(), df_decoy.begin(), df_decoy.end());
+        }
+        result.count = findex - 1;
+        Size j = 0;
+        for (Size i : *groups[g])
+          deconvolved_spectra[i] = std::move(tmp_dspec[j++]);
       }
-
-      Size j = 0;
-      for (Size i : element.second)
-        deconvolved_spectra[i] = std::move(tmp_dspec[j++]);
+      catch (...)
+      {
+        result.error = std::current_exception();
+      }
+    }
+    uint& next_index = MassFeatureTrace::nextFeatureIndex();
+    for (Size g = 0; g < groups.size(); g++)
+    {
+      auto& result = results[g];
+      if (result.error) std::rethrow_exception(result.error);
+      const uint offset = next_index - 1;
+      Size k = 0;
+      for (Size i : *groups[g])
+      {
+        for (auto& pg : deconvolved_spectra[i])
+        {
+          const uint local = pg.getFeatureIndex();
+          pg.setFeatureIndex(local > 0 ? local + offset : result.previous_indices[k]);
+          k++;
+        }
+      }
+      for (auto& feature : result.features) feature.index += offset;
+      deconvolved_features.insert(deconvolved_features.end(), result.features.begin(), result.features.end());
+      next_index += result.count;
     }
   }
 }

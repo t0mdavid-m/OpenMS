@@ -41,10 +41,21 @@ namespace OpenMS
     defaultsToParam_();
   }
 
+  uint& MassFeatureTrace::nextFeatureIndex()
+  {
+    static uint findex = 1;
+    return findex;
+  }
+
   std::vector<FLASHHelperClasses::MassFeature> MassFeatureTrace::findFeaturesAndUpdateQscore2D(const PrecalculatedAveragine& averagine, std::vector<DeconvolvedSpectrum>& deconvolved_spectra,
                                                                                                      int ms_level, bool is_decoy)
   {
-    static uint findex = 1;
+    return findFeaturesAndUpdateQscore2D(averagine, deconvolved_spectra, ms_level, is_decoy, nextFeatureIndex());
+  }
+
+  std::vector<FLASHHelperClasses::MassFeature> MassFeatureTrace::findFeaturesAndUpdateQscore2D(const PrecalculatedAveragine& averagine, std::vector<DeconvolvedSpectrum>& deconvolved_spectra,
+                                                                                                     int ms_level, bool is_decoy, uint& findex)
+  {
     MSExperiment map;
     std::map<int, MSSpectrum> index_spec_map;
     int min_abs_charge = INT_MAX;
