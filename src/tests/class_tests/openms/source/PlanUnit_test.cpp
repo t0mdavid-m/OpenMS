@@ -8,10 +8,19 @@
 
 #include <OpenMS/CONCEPT/ClassTest.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/CandidateAdmission.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Deconvolution.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/PlanUnit.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/PrecursorSelection.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
 
 #include "FLASHIda_TestAccess.h"
+#include "FLASHIda_TestHelpers.h"  // loadTsvScans
 
+#include <algorithm>
+#include <cmath>
+#include <iostream>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -122,6 +131,50 @@ namespace
     k.has_authored = authored;
     return k;
   }
+
+  /// A DDA survey config for PrecursorSelection driven directly: max_precursors 3, and the arming threshold
+  /// as the one varying value, so one run arms the mass bars and the other leaves only the qscore bar.
+  std::string realSurveyConfig(double tqscore_threshold)
+  {
+    return std::string(R"JSON({
+  "deconvolution": {
+    "score_threshold": 0.0,
+    "tqscore_threshold": )JSON") + std::to_string(tqscore_threshold) + R"JSON(,
+    "min_charge": 4,
+    "max_charge": 50,
+    "min_mass": 500,
+    "max_mass": 50000,
+    "tol": [10, 10, 10]
+  },
+  "flashtnt": { "min_length": 3, "max_length": 8 },
+  "faims": { "cv_values": [], "max_cv_skip": 0 },
+  "scheduling": {
+    "cycle_time": { "enabled": false, "value_ms": 60000 },
+    "scan_timeout": { "enabled": true, "value_ms": 30000 },
+    "agc_interval_seconds": 30
+  },
+  "files": { "target_logs": [], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+  "precursor_selection": {
+    "rt_window": 180,
+    "targeting": "none",
+    "consider_all_charges": false,
+    "strict_inclusion": false,
+    "tie_threshold": 0.1,
+    "rank_by": "qscore",
+    "max_precursors": 3,
+    "precursor_charges": "single"
+  },
+  "characterization": { "mode": "off", "max_targets": 10 },
+  "ms_settings": {
+    "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000,
+             "agc_target": 800000, "max_it": 246 },
+    "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 }
+  },
+  "tagging": {},
+  "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 }
+}
+)JSON";
+  }
 }
 
 START_TEST(PlanUnit, "$Id$")
@@ -177,6 +230,87 @@ START_SECTION(wouldBar_empty_never_bars)
   TEST_EQUAL(wouldBar({}, key(0.90)), false)
   TEST_EQUAL(wouldBar({}, key(0.0, true)), false)
   TEST_EQUAL(wouldBar({}, UnitAdmissionKey{}), false)
+}
+END_SECTION
+
+// The same guard on a REAL survey, against the whole selection loop rather than admitCandidate alone.
+// Survey N admits its species and journals their stamps; those stamps are applied the way a commit will
+// apply them (roll the survey back, replay); survey N+1 sees the SAME spectrum at the same retention
+// time. A species admitted at N must be refused at N+1 exactly when wouldBar says its stamps bar it.
+//
+// Run twice so both answers occur: with the mass bars armed every species is barred, and with the
+// arming threshold above every qscore only the qscore bar remains, which an equal score does not fail.
+START_SECTION(wouldBar_agrees_with_selection_on_a_real_survey)
+{
+  const auto scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_ecoli_rich.txt");
+  ABORT_IF(scans.empty())
+  const auto& s = scans.front();
+
+  int barred = 0, readmitted = 0;
+  for (double tq : {0.3, 1.0})
+  {
+    const std::string cfg_json = realSurveyConfig(tq);
+    Config cfg{cfg_json};
+    Deconvolution deconv(cfg, cfg.toleranceList());
+    PrecursorSelection ps(cfg, deconv);
+
+    const int n = ps.filterAndRank(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1, 0.0);
+    TEST_EQUAL(n > 0, true)
+
+    // The admission key of every species admitted at N. The score is the one selection recorded (the
+    // MassQscore stamp), not triggerScores(), which is a float and would round across the bar.
+    std::vector<UnitAdmissionKey> keys;
+    for (int i = 0; i < n; ++i)
+    {
+      const PeakGroup& pg = ps.selectedPeakGroups()[i];
+      UnitAdmissionKey k;
+      k.nominal_mass = SpectralDeconvolution::getNominalMass(pg.getMonoMass());
+      k.anchor_charge = ps.triggerCharges()[i];
+      const auto [lo, hi] = pg.getMzRange(k.anchor_charge);
+      k.integer_mz = (int)round((lo + hi) / 2.0);
+      const auto sp = ps.journal().species.find(k.nominal_mass);
+      ABORT_IF(sp == ps.journal().species.end())
+      bool has_score = false;
+      for (const auto& st : sp->second.species_level)
+      {
+        if (st.kind == MemoryStamp::Kind::MassQscore)
+        {
+          k.score = st.value;
+          has_score = true;
+        }
+      }
+      TEST_EQUAL(has_score, true)
+      keys.push_back(k);
+    }
+
+    // Every stamp of survey N, in write order, applied onto its entry state.
+    std::vector<MemoryStamp> stamps = ps.journal().survey_level;
+    for (const auto& kv : ps.journal().species)
+    {
+      const auto f = PrecursorSelection::flatten(kv.second);
+      stamps.insert(stamps.end(), f.begin(), f.end());
+    }
+    std::sort(stamps.begin(), stamps.end(), [](const MemoryStamp& a, const MemoryStamp& b) { return a.seq < b.seq; });
+    ps.rollbackAcquisitionMemory();
+    ps.applyStamps(stamps);
+
+    const int n2 = ps.filterAndRank(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 1, 0.0);
+    std::set<int> admitted_again;
+    for (int i = 0; i < n2; ++i)
+      admitted_again.insert(SpectralDeconvolution::getNominalMass(ps.selectedPeakGroups()[i].getMonoMass()));
+
+    for (const auto& k : keys)
+    {
+      const bool bars = wouldBar(stamps, k);
+      const bool refused = admitted_again.count(k.nominal_mass) == 0;
+      (bars ? barred : readmitted) += 1;
+      const std::string name = "tq=" + std::to_string(tq) + " nominal=" + std::to_string(k.nominal_mass);
+      TEST_EQUAL(name + (bars ? ": bars" : ": admits"), name + (refused ? ": bars" : ": admits"))
+    }
+  }
+  // Both directions were exercised, so agreement is not vacuous on either side.
+  TEST_EQUAL(barred > 0, true)
+  TEST_EQUAL(readmitted > 0, true)
 }
 END_SECTION
 
