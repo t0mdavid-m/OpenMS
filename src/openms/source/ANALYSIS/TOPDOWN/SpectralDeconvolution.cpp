@@ -455,7 +455,7 @@ namespace OpenMS
       const double iso_div_by_mz = iso_da_distance_ / mz;
       // the m/z bin processed next: its mass bins are far from this one's (a cache miss per charge in the arrays over all mass bins), so they
       // are prefetched one peak ahead, per charge
-      const long next_mz_bin_index = iter + 1 < mz_bin_index_reverse.rend() ? (long)*(iter + 1) : -1;
+      [[maybe_unused]] const long next_mz_bin_index = iter + 1 < mz_bin_index_reverse.rend() ? (long)*(iter + 1) : -1;
       // scan through charges
       for (int j = 0; j < current_max_charge_; j++) // loop over all charges
       {
