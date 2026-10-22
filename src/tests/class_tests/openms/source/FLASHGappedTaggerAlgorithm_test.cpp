@@ -114,6 +114,27 @@ START_SECTION(void search(const DeconvolvedSpectrum& dspec, double ppm, std::vec
   found = false;
   for (const auto& l : landings) found |= l.protein == 1 && l.start == 30;
   TEST_EQUAL(found, false)
+
+  // a mass the index bins admit but the tolerance does not (bins of 1 Da; the sixth b-like mass 0.2 Da heavy) is left out of the
+  // landing, which keeps the other five and ends at their last residue
+  FLASHGappedTaggerAlgorithm coarse;
+  Param param = coarse.getParameters();
+  param.setValue("bin_width", 1.0);
+  coarse.setParameters(param);
+  coarse.buildIndex(proteins);
+  masses.clear();
+  for (Size c : cuts) masses.push_back(residueSum(seq, 0, c) + Constants::PROTON_MASS_U);
+  masses.push_back(residueSum(seq, 0, 40) + Constants::PROTON_MASS_U + 0.2);
+  coarse.search(spectrum(masses), 5.0, landings);
+  found = false;
+  for (const auto& l : landings)
+  {
+    if (l.protein != 1 || l.start != 30 || ! l.prefix) continue;
+    found = true;
+    TEST_EQUAL(l.masses.size(), 5)
+    TEST_EQUAL(l.end, 38)
+  }
+  TEST_EQUAL(found, true)
 }
 END_SECTION
 

@@ -330,7 +330,7 @@ void FLASHGappedTaggerAlgorithm::search(const DeconvolvedSpectrum& dspec, double
   // landing per (global start position, series): the largest tag, then the highest Qscore sum
   std::unordered_map<std::uint64_t, Landing> best_landing;
   std::vector<std::uint32_t> result;
-  std::vector<int> rows, cand_rows, order;
+  std::vector<int> rows, cand_rows, order, kept;
   std::vector<double> score, cand_score;
   std::vector<std::pair<std::int64_t, std::int64_t>> ranges;
   std::vector<Size> sizes, idx;
@@ -515,40 +515,49 @@ void FLASHGappedTaggerAlgorithm::search(const DeconvolvedSpectrum& dspec, double
         }
         intersectRanges();
         if (result.empty()) continue;
-        const auto [span_lo, span_hi] = ranges.back();
         for (std::uint32_t p : result)
         {
           const Size protein = (Size)(std::upper_bound(offsets_.begin(), offsets_.end(), (Size)p) - offsets_.begin()) - 1;
           const Size protein_end = offsets_[protein + 1];
-          // the residue length of the span offset
+          // The index bins widen the tolerance of an offset by up to half a bin; the extension places the tag masses within the tolerance
+          // itself, and finds no path through a mass outside it. So every offset is checked against the windows starting at p with the
+          // exact tolerance, the masses that match are kept (the base always), and the landing is kept if min_tag_size of them remain.
+          // The offsets ascend, so the window matching the next one is not shorter.
+          kept.clear();
+          kept.push_back(prefix ? 0 : n - 1);
           int length = 0;
-          for (int len = 1; len <= max_length && p + len <= protein_end && valid_[p + len - 1]; ++len)
+          for (int j = 1, len = 1; j < n; ++j)
           {
-            const std::int64_t key = key_(cum_mass_[p + len] - cum_mass_[p]);
-            if (key > span_hi) break;
-            if (key >= span_lo)
-            {
-              length = len;
-              break;
-            }
+            const int k = prefix ? j : n - 1 - j;
+            const double m = nodes[path[k]].mass;
+            const double off = prefix ? m - base : top - m;
+            const double d = tol * (m + (prefix ? base : top));
+            while (len <= max_length && p + len <= protein_end && valid_[p + len - 1] && cum_mass_[p + len] - cum_mass_[p] < off - d) ++len;
+            if (len > max_length || p + len > protein_end || ! valid_[p + len - 1]) break;
+            if (cum_mass_[p + len] - cum_mass_[p] > off + d) continue;
+            kept.push_back(k);
+            length = len;
           }
-          if (length == 0) continue;
+          if ((int)kept.size() < min_tag_size_) continue;
+          std::sort(kept.begin(), kept.end()); // ascending in mass, as the path
+          const int kn = (int)kept.size();
+          double qsum = 0;
+          for (int k : kept) qsum += nodes[path[k]].qscore;
           const std::uint64_t id = ((std::uint64_t)p << 1) | (prefix ? 1 : 0);
           auto it = best_landing.find(id);
-          double qsum = score[r];
-          if (it != best_landing.end() && ((int)it->second.masses.size() > n || it->second.qscore_sum >= qsum)) continue;
+          if (it != best_landing.end() && ((int)it->second.masses.size() > kn || it->second.qscore_sum >= qsum)) continue;
           Landing l;
           l.protein = protein;
           l.start = (int)(p - offsets_[protein]);
           l.end = l.start + length;
           l.prefix = prefix;
           l.flank_mass = prefix ? cum_mass_[p] - cum_mass_[offsets_[protein]] : cum_mass_[protein_end] - cum_mass_[p + length];
-          l.masses.reserve(n);
-          l.scores.reserve(n);
-          for (int j = 0; j < n; ++j)
+          l.masses.reserve(kn);
+          l.scores.reserve(kn);
+          for (int k : kept)
           {
-            l.masses.push_back(nodes[path[j]].mass);
-            l.scores.push_back(nodes[path[j]].score);
+            l.masses.push_back(nodes[path[k]].mass);
+            l.scores.push_back(nodes[path[k]].score);
           }
           l.qscore_sum = qsum;
           if (it != best_landing.end()) { it->second = std::move(l); }
