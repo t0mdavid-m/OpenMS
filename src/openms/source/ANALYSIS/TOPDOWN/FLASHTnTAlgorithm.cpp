@@ -24,6 +24,7 @@
 #include <numeric>
 #include <functional>
 #include <unordered_map>
+#include <unordered_set>
 #ifdef _OPENMP
   #include <omp.h>
 #endif
@@ -2293,7 +2294,35 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       // keep it: the best score, the earlier candidate among equal ones), and an undetermined one is reported only for a spectrum without
       // any other PrSM, in its own FDR class.
       std::vector<ProteinHit> ladder_hits(ladder_candidates_now.begin() + ladder_range.first, ladder_candidates_now.begin() + ladder_range.second);
-      auto extend = [&](std::vector<ProteinHit>& candidates, std::vector<ProteinHit>& proteoforms) {
+      // several entries of a protein extended (by_entry): its PrSM is the one of determined mass, then fewer blind modifications, then the
+      // higher score, then more fixed (annotated) modifications; the others are dropped. The same rule for targets and decoys (decoy
+      // entries carry the annotations moved with their residues) and for the decoy precursor copy.
+      auto blindCount = [](const ProteinHit& h) { return h.metaValueExists("BlindModCount") ? (int)h.getMetaValue("BlindModCount") : 0; };
+      auto fixedCount = [&](const ProteinHit& h) {
+        if (! h.metaValueExists(mi_mod_variable)) return 0;
+        const auto v = h.getMetaValue(mi_mod_variable).toIntList();
+        return (int)std::count(v.begin(), v.end(), 2);
+      };
+      auto determined = [](const ProteinHit& h) { return h.metaValueExists("Mass") && (double)h.getMetaValue("Mass") > 0; };
+      auto better = [&](const ProteinHit& a, const ProteinHit& b) {
+        if (determined(a) != determined(b)) return determined(a);
+        if (blindCount(a) != blindCount(b)) return blindCount(a) < blindCount(b);
+        if (a.getScore() != b.getScore()) return a.getScore() > b.getScore();
+        return fixedCount(a) > fixedCount(b);
+      };
+      auto onePerProtein = [&](std::vector<ProteinHit>& proteoforms) {
+        std::vector<ProteinHit> one_per_protein;
+        one_per_protein.reserve(proteoforms.size());
+        for (auto& h : proteoforms)
+        {
+          auto it = std::find_if(one_per_protein.begin(), one_per_protein.end(),
+                                 [&h](const ProteinHit& o) { return o.getAccession() == h.getAccession(); });
+          if (it == one_per_protein.end()) one_per_protein.push_back(std::move(h));
+          else if (better(h, *it)) *it = std::move(h);
+        }
+        proteoforms.swap(one_per_protein);
+      };
+      auto extendAll = [&](std::vector<ProteinHit>& candidates, std::vector<ProteinHit>& proteoforms) {
         proteoforms.clear();
         if (candidates.empty()) return;
         FLASHExtenderAlgorithm extender;
@@ -2321,33 +2350,36 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
             kept++;
           }
           proteoforms.resize(kept);
-          // several entries of a protein extended: its PrSM is the one of determined mass, then fewer blind modifications, then the
-          // higher score, then more fixed (annotated) modifications; the others are dropped. The same rule for targets and decoys (decoy
-          // entries carry the annotations moved with their residues) and for the decoy precursor copy.
-          auto blindCount = [](const ProteinHit& h) { return h.metaValueExists("BlindModCount") ? (int)h.getMetaValue("BlindModCount") : 0; };
-          auto fixedCount = [&](const ProteinHit& h) {
-            if (! h.metaValueExists(mi_mod_variable)) return 0;
-            const auto v = h.getMetaValue(mi_mod_variable).toIntList();
-            return (int)std::count(v.begin(), v.end(), 2);
-          };
-          auto determined = [](const ProteinHit& h) { return h.metaValueExists("Mass") && (double)h.getMetaValue("Mass") > 0; };
-          auto better = [&](const ProteinHit& a, const ProteinHit& b) {
-            if (determined(a) != determined(b)) return determined(a);
-            if (blindCount(a) != blindCount(b)) return blindCount(a) < blindCount(b);
-            if (a.getScore() != b.getScore()) return a.getScore() > b.getScore();
-            return fixedCount(a) > fixedCount(b);
-          };
-          std::vector<ProteinHit> one_per_protein;
-          one_per_protein.reserve(proteoforms.size());
-          for (auto& h : proteoforms)
-          {
-            auto it = std::find_if(one_per_protein.begin(), one_per_protein.end(),
-                                   [&h](const ProteinHit& o) { return o.getAccession() == h.getAccession(); });
-            if (it == one_per_protein.end()) one_per_protein.push_back(std::move(h));
-            else if (better(h, *it)) *it = std::move(h);
-          }
-          proteoforms.swap(one_per_protein);
+          onePerProtein(proteoforms);
         }
+      };
+      // With several entries per protein, the protein's ranked entry is extended first, and its other entries (EntryOfKeptProtein) only
+      // if that gave a PrSM another entry may better: an undetermined mass or a blind modification (an annotation can explain a shift).
+      // A settled PrSM (determined, no blind modification) is not bettered by the rule above except by the score among equally settled
+      // ones; a ranked entry without any PrSM rarely has an entry that has one (Eclip_1480: 1529 -> 1526 proteoforms, 54 -> 44 s when
+      // these are skipped too). With one PrSM per spectrum the extension compares all entries at once.
+      auto extend = [&](std::vector<ProteinHit>& candidates, std::vector<ProteinHit>& proteoforms) {
+        if (! by_entry || ! keep_all)
+        {
+          extendAll(candidates, proteoforms);
+          return;
+        }
+        std::vector<ProteinHit> first, later;
+        for (auto& c : candidates) (c.metaValueExists(mi_entry_of_kept) ? later : first).push_back(std::move(c));
+        extendAll(first, proteoforms);
+        if (later.empty()) return;
+        // the proteins whose ranked entry gave a PrSM that another entry may better: an undetermined mass or a blind modification
+        std::unordered_set<std::string> open;
+        for (const auto& h : proteoforms)
+          if (! determined(h) || blindCount(h) > 0) open.insert(h.getAccession());
+        std::vector<ProteinHit> rest;
+        for (auto& c : later)
+          if (open.count(c.getAccession()) > 0) rest.push_back(std::move(c));
+        if (rest.empty()) return;
+        std::vector<ProteinHit> more;
+        extendAll(rest, more);
+        for (auto& h : more) proteoforms.push_back(std::move(h));
+        onePerProtein(proteoforms);
       };
       extend(hits, out);
       // native: every candidate's PrSM is reported, one per protein (the better one)
