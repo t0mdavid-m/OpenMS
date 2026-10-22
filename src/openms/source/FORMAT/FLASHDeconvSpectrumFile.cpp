@@ -575,26 +575,12 @@ namespace OpenMS
     fs << ss.str();
   }
 
-  void FLASHDeconvSpectrumFile::writeMzML(const MSExperiment& map, std::vector<DeconvolvedSpectrum>& deconvolved_spectra, const String& deconvolved_mzML_file, const String& annotated_mzML_file,
-                                          int mzml_charge, DoubleList tols)
+  void FLASHDeconvSpectrumFile::toDeconvolvedMap(const MSExperiment& map, std::vector<DeconvolvedSpectrum>& deconvolved_spectra, int mzml_charge,
+                                                 const DoubleList& tols, MSExperiment& deconvolved_map)
   {
-    if (deconvolved_mzML_file.empty() && annotated_mzML_file.empty())
-      return;
-
-    MSExperiment deconvolved_map;
-    MSExperiment annotated_map;
-
     // the experimental settings of the input map without its spectra (what a copy of it cleared of its spectra and chromatograms keeps but
     // the ranges, which the writer does not read), without copying the spectra
-    if (!deconvolved_mzML_file.empty())
-    {
-      deconvolved_map = static_cast<const ExperimentalSettings&>(map);
-    }
-    if (!annotated_mzML_file.empty())
-    {
-      annotated_map = static_cast<const ExperimentalSettings&>(map);
-    }
-
+    deconvolved_map = static_cast<const ExperimentalSettings&>(map);
     // the deconvolved spectra in parallel (each from its own deconvolved spectrum), added below in the input order
     std::vector<MSSpectrum> deconvolved_mzMLs(deconvolved_spectra.size());
     std::vector<std::exception_ptr> errors(deconvolved_spectra.size());
@@ -612,22 +598,34 @@ namespace OpenMS
         errors[i] = std::current_exception();
       }
     }
-
     for (Size i = 0; i < deconvolved_spectra.size(); i++)
     {
-      auto& deconvolved_spectrum = deconvolved_spectra[i];
-      if (deconvolved_spectrum.empty()) continue;
-      if (deconvolved_spectrum.isDecoy()) continue;
       if (errors[i]) std::rethrow_exception(errors[i]);
-      auto deconvolved_mzML = std::move(deconvolved_mzMLs[i]);
-      if (!deconvolved_mzML_file.empty())
+      if (deconvolved_mzMLs[i].empty()) continue;
+      deconvolved_map.addSpectrum(std::move(deconvolved_mzMLs[i]));
+    }
+  }
+
+  void FLASHDeconvSpectrumFile::writeMzML(const MSExperiment& map, std::vector<DeconvolvedSpectrum>& deconvolved_spectra, const String& deconvolved_mzML_file, const String& annotated_mzML_file,
+                                          int mzml_charge, DoubleList tols)
+  {
+    if (deconvolved_mzML_file.empty() && annotated_mzML_file.empty())
+      return;
+
+    MSExperiment deconvolved_map;
+    MSExperiment annotated_map;
+    if (!deconvolved_mzML_file.empty())
+    {
+      toDeconvolvedMap(map, deconvolved_spectra, mzml_charge, tols, deconvolved_map);
+    }
+    if (!annotated_mzML_file.empty())
+    {
+      annotated_map = static_cast<const ExperimentalSettings&>(map);
+      for (Size i = 0; i < deconvolved_spectra.size(); i++)
       {
-        if (deconvolved_mzML.empty())
-          continue;
-        deconvolved_map.addSpectrum(std::move(deconvolved_mzML));
-      }
-      if (!annotated_mzML_file.empty())
-      {
+        auto& deconvolved_spectrum = deconvolved_spectra[i];
+        if (deconvolved_spectrum.empty()) continue;
+        if (deconvolved_spectrum.isDecoy()) continue;
         auto anno_spec = MSSpectrum(deconvolved_spectrum.getOriginalSpectrum());
         anno_spec.sortByPosition();
         std::stringstream val {};

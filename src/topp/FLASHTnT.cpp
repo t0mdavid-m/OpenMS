@@ -8,6 +8,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHAnnotatorAlgorithm.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/ProteoformDatabase.h>
 #include <OpenMS/APPLICATIONS/TOPPBase.h>
@@ -16,10 +17,12 @@
 #include <OpenMS/CHEMISTRY/ResidueDB.h>
 #include <OpenMS/CHEMISTRY/ResidueModification.h>
 #include <OpenMS/FORMAT/FASTAFile.h>
+#include <OpenMS/FORMAT/FLASHDeconvSpectrumFile.h>
 #include <OpenMS/FORMAT/FLASHTnTFile.h>
 #include <OpenMS/FORMAT/FileTypes.h>
 #include <OpenMS/FORMAT/MzMLFile.h>
 #include <OpenMS/FORMAT/UniPEFFConverter.h>
+#include <OpenMS/METADATA/SpectrumLookup.h>
 #include <OpenMS/SYSTEM/File.h>
 #include <QFileInfo>
 #include <cctype>
@@ -84,7 +87,12 @@ protected:
   // it gets automatically called on tool execution
   void registerOptionsAndFlags_() override
   {
-    registerInputFile_("in", "<file>", "", "Input file (deconv.mzML from FLASHDeconv mzML output).", true);
+    registerInputFile_("in", "<file>", "",
+                       "Input mzML: the deconvolved mzML of FLASHDeconv (-out_mzml), or a raw mzML (profile or centroid; recognised by spectra "
+                       "without FLASHDeconv's deconvolved masses). A raw mzML is deconvolved here with FLASHDeconv's algorithm (parameters fd:, "
+                       "FLASHDeconv's defaults), and its MSn spectra, as read before deconvolution, serve the raw-spectrum scoring as -in_raw "
+                       "would (-in_raw is then not needed and not read): the same results as FLASHDeconv and FLASHTnT -in_raw run one after "
+                       "the other, without reading the raw file twice or writing the deconvolved mzML.", true);
     setValidFormats_("in", ListUtils::create<String>("mzML"));
 
     registerInputFile_("db", "<file>", "",
@@ -156,6 +164,7 @@ protected:
     //registerSubsection_("tnt", "TnT algorithm parameters");
     registerSubsection_("tag", "Tag algorithm parameters");
     registerSubsection_("ex", "Extension algorithm parameters");
+    registerSubsection_("fd", "FLASHDeconv parameters, used when -in is a raw mzML (the same as FLASHDeconv's FD:, SD:, ft: and iq: parameters)");
   }
 
   Param getSubsectionDefaults_(const String& prefix) const override
@@ -169,6 +178,7 @@ protected:
       auto tnt_param = FLASHTnTAlgorithm().getDefaults();
       return tnt_param.copy("ex:", true);
     }
+    else if (prefix == "fd") { return FLASHDeconvAlgorithm().getDefaults(); }
     else { throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "Unknown subsection", prefix); }
   }
 
@@ -256,6 +266,50 @@ protected:
     mzml.setLogType(log_type_);
     mzml.load(in_file, map);
 
+    // A raw mzML (no spectrum with FLASHDeconv's deconvolved masses) is deconvolved here, as FLASHDeconv does before writing its
+    // deconvolved mzML (FLASHDeconvSpectrumFile::toDeconvolvedMap, uncharged masses), and its MSn spectra are kept for the raw-spectrum
+    // scoring as they were read: FLASHDeconv removes low peaks from the spectra it is given, which the scoring of a separate -in_raw read
+    // never saw. The spectra are keyed by scan number as FLASHAnnotatorAlgorithm::loadSpectra reads them from the file.
+    std::map<int, MSSpectrum> raw_msn_spectra;
+    const bool raw_input = std::none_of(map.begin(), map.end(), [](const MSSpectrum& spec) { return spec.metaValueExists("DeconvMassInfo"); });
+    if (raw_input)
+    {
+      OPENMS_LOG_INFO << "-in has no deconvolved masses: deconvolving it with FLASHDeconv's algorithm (fd: parameters)" << endl;
+      String type_accession = "MS:1000768";
+      if (! map.getSourceFiles().empty() && ! map.getSourceFiles()[0].getNativeIDTypeAccession().empty())
+      {
+        type_accession = map.getSourceFiles()[0].getNativeIDTypeAccession();
+      }
+      auto scanOf = [&type_accession](const MSSpectrum& spec) {
+        std::vector<String> native_ids;
+        spec.getNativeID().split(",", native_ids);
+        return native_ids.empty() ? -1 : SpectrumLookup::extractScanNumber(native_ids.back(), type_accession);
+      };
+      // scan numbers from the native IDs; if an MSn spectrum has none, every spectrum's index + 1 instead (unless its native ID has one)
+      const bool from_index = std::any_of(map.begin(), map.end(), [&](const MSSpectrum& spec) { return spec.getMSLevel() >= 2 && scanOf(spec) < 0; });
+      for (Size i = 0; i < map.size(); i++)
+      {
+        const auto& spec = map[i];
+        if (spec.getMSLevel() < 2) continue;
+        int scan = scanOf(spec);
+        if (scan < 0)
+        {
+          if (! from_index) continue;
+          scan = (int)i + 1;
+        }
+        raw_msn_spectra.emplace(scan, spec); // the first spectrum of a scan number, as the file reader keeps it
+      }
+      FLASHDeconvAlgorithm fd;
+      fd.setParameters(getParam_().copy("fd:", true));
+      std::vector<DeconvolvedSpectrum> deconvolved_spectra;
+      std::vector<FLASHHelperClasses::MassFeature> deconvolved_features;
+      fd.run(map, deconvolved_spectra, deconvolved_features);
+      MSExperiment deconvolved_map;
+      FLASHDeconvSpectrumFile::toDeconvolvedMap(map, deconvolved_spectra, 0, fd.getTolerances(), deconvolved_map);
+      map = std::move(deconvolved_map);
+      if (! in_raw.empty()) OPENMS_LOG_WARN << "-in_raw is not read: the raw spectra are those of -in" << endl;
+    }
+
     auto tnt_param = getParam_();
     tnt_param.remove("in");
     tnt_param.remove("db");
@@ -263,6 +317,7 @@ protected:
     tnt_param.remove("peff_max_mods");
     tnt_param.remove("peff_mod_masses");
     tnt_param.remove("in_raw");
+    tnt_param.removeAll("fd:");
     tnt_param.remove("out_tag");
     tnt_param.remove("out_prsm");
     tnt_param.remove("out_pro");
@@ -391,7 +446,17 @@ protected:
 
     FLASHTnTAlgorithm tnt;
     tnt.setParameters(tnt_param);
-    if (! in_raw.empty())
+    if (raw_input)
+    {
+      tnt.setRawSpectrumLoader([&raw_msn_spectra](const std::set<int>& scans, std::map<int, MSSpectrum>& spectra) {
+        for (int scan : scans)
+        {
+          const auto it = raw_msn_spectra.find(scan);
+          if (it != raw_msn_spectra.end() && spectra.find(scan) == spectra.end()) spectra.emplace(scan, it->second);
+        }
+      });
+    }
+    else if (! in_raw.empty())
     {
       tnt.setRawSpectrumLoader([&in_raw](const std::set<int>& scans, std::map<int, MSSpectrum>& spectra) {
         FLASHAnnotatorAlgorithm::loadSpectra(in_raw, scans, spectra);

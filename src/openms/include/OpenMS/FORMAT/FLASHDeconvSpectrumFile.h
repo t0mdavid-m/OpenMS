@@ -79,6 +79,11 @@ namespace OpenMS
                           const String& annotated_mzML_file,
                           int mzml_charge, DoubleList tols);
 
+    /// The deconvolved map writeMzML stores as the deconvolved mzML (the experimental settings of @p map and one spectrum per non-empty,
+    /// non-decoy deconvolved spectrum with masses, in input order), built in memory, e.g. for FLASHTnT on a raw mzML.
+    static void toDeconvolvedMap(const MSExperiment& map, std::vector<DeconvolvedSpectrum>& deconvolved_spectra, int mzml_charge,
+                                 const DoubleList& tols, MSExperiment& deconvolved_map);
+
     /**
      * write isobaric quantification results
      * @param fs
