@@ -26,6 +26,7 @@
 #include <OpenMS/SYSTEM/File.h>
 #include <QFileInfo>
 #include <cctype>
+#include <chrono>
 #include <fstream>
 #include <set>
 
@@ -335,6 +336,7 @@ protected:
     OPENMS_LOG_INFO << "Finding sequence tags from deconvolved spectra ..." << endl;
 
     std::vector<FASTAFile::FASTAEntry> fasta_entry;
+    const auto db_read_start = std::chrono::steady_clock::now();
     // PEFF (or UniProtKB XML, converted to PEFF): its proteoform entries (ProteoformDatabase); FASTA: its entries are the proteins
     ProteoformDatabase database;
     const DatabaseFormat db_format = databaseFormat_(in_db);
@@ -411,6 +413,8 @@ protected:
       FASTAFile fasta_file;
       fasta_file.load(in_db, fasta_entry);
     }
+    OPENMS_LOG_INFO << "Database read: " << fasta_entry.size() << " entries in "
+                    << std::chrono::duration<double>(std::chrono::steady_clock::now() - db_read_start).count() << " s" << endl;
     std::vector<ProteinHit> proteoform_hits;
     // Run here!
     OPENMS_LOG_INFO << "Processing : " << in_file << endl;

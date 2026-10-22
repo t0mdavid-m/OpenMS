@@ -83,6 +83,11 @@ FLASHGappedTaggerAlgorithm::FLASHGappedTaggerAlgorithm() : DefaultParamHandler("
                      "Use only the largest tag size that lands anywhere (as in GappedFiltration); false: every size, and the protein score ranks "
                      "the candidates.");
   defaults_.setValidStrings("stop_at_first_size", {"true", "false"});
+  defaults_.setValue("skip_consecutive", "true",
+                     "Drop the gapped tags whose every gap is one residue and no sum of two (a sequence tag of the same masses lands there), so "
+                     "that the beam holds tags with longer gaps. A gap that is also a sum of two residues (GG = N, GA = Q, GV ~ R, GE ~ W) is "
+                     "kept: a sequence tag reads it as the single residue only.");
+  defaults_.setValidStrings("skip_consecutive", {"true", "false"});
   defaults_.setValue("bin_width", 0.1, "Mass bin width of the protein window index (Da). A tolerance window is looked up in every bin it touches.");
   defaults_.setMinFloat("bin_width", 0.001);
   defaults_.addTag("bin_width", "advanced");
@@ -97,6 +102,7 @@ void FLASHGappedTaggerAlgorithm::updateMembers_()
   beam_width_ = param_.getValue("beam_width");
   top_n_ = param_.getValue("top_n");
   stop_at_first_size_ = param_.getValue("stop_at_first_size").toString() == "true";
+  skip_consecutive_ = param_.getValue("skip_consecutive").toString() == "true";
   bin_width_ = param_.getValue("bin_width");
 }
 
@@ -340,6 +346,29 @@ void FLASHGappedTaggerAlgorithm::search(const DeconvolvedSpectrum& dspec, double
   const int M = (int)nodes.size();
   if (M < min_tag_size_) return;
 
+  // gaps of one residue and of no sum of two (skip_consecutive): the residue masses and the sums of two, ascending. A sum of three or more
+  // residues weighs at least 171.07 Da (GGG), where no residue lies within a tolerance, so two suffice.
+  std::vector<double> residue_masses, dipeptide_masses;
+  if (skip_consecutive_)
+  {
+    for (const char* c = standard_residues; *c; ++c) residue_masses.push_back(ResidueDB::getInstance()->getResidue(*c)->getMonoWeight(Residue::Internal));
+    std::sort(residue_masses.begin(), residue_masses.end());
+    for (double a : residue_masses)
+    {
+      for (double b : residue_masses) dipeptide_masses.push_back(a + b);
+    }
+    std::sort(dipeptide_masses.begin(), dipeptide_masses.end());
+  }
+  auto near = [](const std::vector<double>& sorted, double v, double d) {
+    const auto it = std::lower_bound(sorted.begin(), sorted.end(), v - d);
+    return it != sorted.end() && *it <= v + d;
+  };
+  // the gap between masses a < b is one residue only (a sequence tag reads it)
+  auto oneResidueOnly = [&](double a, double b) {
+    const double gap = b - a, d = tol * (a + b);
+    return near(residue_masses, gap, d) && ! near(dipeptide_masses, gap, d);
+  };
+
   // mass graph: an edge i -> j when the difference is a sum of residues within the tolerance of both masses
   std::vector<std::vector<int>> fwd(M);
   for (int i = 0; i < M; ++i)
@@ -372,6 +401,7 @@ void FLASHGappedTaggerAlgorithm::search(const DeconvolvedSpectrum& dspec, double
   std::vector<Size> sizes, idx;
 
   // keep the `width` best rows (score, then row order) of a row-major block, preserving row order
+  std::vector<std::uint8_t> consecutive, cand_consecutive; // per beam row: every gap so far is one residue only (skip_consecutive)
   auto keepTop = [&](std::vector<int>& block, std::vector<double>& sc, int cols) {
     const int n_rows = (int)sc.size();
     if (n_rows <= beam_width_) return;
@@ -387,9 +417,11 @@ void FLASHGappedTaggerAlgorithm::search(const DeconvolvedSpectrum& dspec, double
       std::copy(block.begin() + (std::ptrdiff_t)order[r] * cols, block.begin() + (std::ptrdiff_t)(order[r] + 1) * cols,
                 block.begin() + (std::ptrdiff_t)r * cols);
       sc[r] = sc[order[r]];
+      if (skip_consecutive_) consecutive[r] = consecutive[order[r]];
     }
     block.resize((Size)beam_width_ * cols);
     sc.resize(beam_width_);
+    if (skip_consecutive_) consecutive.resize(beam_width_);
   };
 
   // Positions (global, ascending) where windows start with a mass in every key range, from the Roaring bitmaps of the bins (a range of
@@ -543,11 +575,13 @@ void FLASHGappedTaggerAlgorithm::search(const DeconvolvedSpectrum& dspec, double
     // beam over paths of n masses, highest summed Qscore first; a path spans at most max_gap_mass
     rows.clear();
     score.clear();
+    consecutive.clear();
     for (int i = 0; i < M; ++i)
     {
       if (fdepth[i] < n - 1) continue;
       rows.push_back(i);
       score.push_back(nodes[i].qscore);
+      if (skip_consecutive_) consecutive.push_back(1);
     }
     if (rows.empty()) continue;
     keepTop(rows, score, 1);
@@ -556,6 +590,7 @@ void FLASHGappedTaggerAlgorithm::search(const DeconvolvedSpectrum& dspec, double
       const int cols = k - 1;
       cand_rows.clear();
       cand_score.clear();
+      cand_consecutive.clear();
       for (Size r = 0; r < score.size(); ++r)
       {
         const int first = rows[r * cols], last = rows[r * cols + cols - 1];
@@ -564,13 +599,17 @@ void FLASHGappedTaggerAlgorithm::search(const DeconvolvedSpectrum& dspec, double
           const double span = nodes[child].mass - nodes[first].mass;
           if (span - tol * (nodes[child].mass + nodes[first].mass) > max_gap_mass_) break;
           if (fdepth[child] < n - k) continue;
+          const bool all_one = skip_consecutive_ && consecutive[r] && oneResidueOnly(nodes[last].mass, nodes[child].mass);
+          if (all_one && k == n) continue; // a complete tag of one-residue gaps: a sequence tag
           cand_rows.insert(cand_rows.end(), rows.begin() + (std::ptrdiff_t)r * cols, rows.begin() + (std::ptrdiff_t)(r + 1) * cols);
           cand_rows.push_back(child);
           cand_score.push_back(score[r] + nodes[child].qscore);
+          if (skip_consecutive_) cand_consecutive.push_back(all_one ? 1 : 0);
         }
       }
       rows.swap(cand_rows);
       score.swap(cand_score);
+      consecutive.swap(cand_consecutive);
       keepTop(rows, score, k);
     }
     if (score.empty()) continue;

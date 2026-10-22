@@ -16,6 +16,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/MassLadderAlgorithm.h>
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <atomic>
 #include <cmath>
 #include <exception>
@@ -1386,8 +1387,17 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   searchTagSequences(tag_seqs);
   startProgress(0, (SignedSize)dspecs.size(), "Running candidate protein filtration ...");
 
+  // wall time of the database indexes below (logged after the mass ladders)
+  auto index_clock = std::chrono::steady_clock::now();
+  auto lap = [&index_clock]() {
+    const auto now = std::chrono::steady_clock::now();
+    const double s = std::chrono::duration<double>(now - index_clock).count();
+    index_clock = now;
+    return s;
+  };
   std::vector<std::unordered_set<int>> vec_pro, rev_vec_pro;
   vectorizeProteinSequence_(cleaned_protein_seqs, vec_pro, rev_vec_pro, with_fixed ? &cleaned_fixed : nullptr);
+  const double t_mass_sets = lap();
 
   // exact residue sums from the N- and the C-terminus per protein, for the protein-level score (FLASHTaggerAlgorithm::runMatchingExact);
   // with the fixed masses of an entry, whose residues without them (pro_plain_mass; 0: none fixed) set the chance of a match
@@ -1429,6 +1439,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     FLASHTaggerAlgorithm::indexResidueSums(pro_prefix[k], pro_prefix_index[k]);
     FLASHTaggerAlgorithm::indexResidueSums(pro_suffix[k], pro_suffix_index[k]);
   }
+  const double t_residue_sums = lap();
   const double protein_tol = protein_tol_ > 0 ? protein_tol_ : (ms2_tol > 0 ? ms2_tol : tol);
 
   // The protein-level search runs on every spectrum before any extension, because the run-level protein FDR
@@ -1455,6 +1466,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
              mi_pl_isotope = registry.registerName("PrecursorLadderIsotope"), mi_entry_of_kept = registry.registerName("EntryOfKeptProtein");
   // gapped tags (only for spectra in which no sequence tag proposes a protein); their tags are kept per spectrum until appended to tags_
   FLASHGappedTaggerAlgorithm gapped_tagger;
+  lap();
   if (gapped_mode_ != "off")
   {
     gapped_tagger.setParameters(gapped_param_);
@@ -1462,6 +1474,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     OPENMS_LOG_INFO << "Gapped tag index: " << gapped_tagger.getIndexBytes() / (1024 * 1024) << " MB" << std::endl;
   }
   std::vector<std::vector<FLASHHelperClasses::Tag>> spec_gapped_tags(dspecs.size());
+  const double t_gapped = lap();
 
   // Mass ladders (MassLadderAlgorithm): terminal ladders from the residue sums of every protein from its termini, and precursor-anchored
   // ladders from the runs of standard residues of the database, for the window search of every spectrum with a precursor mass. The
@@ -1486,7 +1499,10 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   const bool use_precursor_ladders = precursor_ladders_ && ! protein_level_only_ && any_precursor_mass;
   MassLadderAlgorithm mass_ladders;
   // the sliding ladders of native mode read the runs of standard residues of the precursor ladders
+  lap();
   mass_ladders.buildIndex(protein_seqs, param_.getValue("ion_type").toStringVector(), terminal_ladders_, use_precursor_ladders || native_rule, db);
+  OPENMS_LOG_INFO << "Database indexes (wall s): protein mass sets " << t_mass_sets << ", residue sums " << t_residue_sums << ", gapped tags "
+                  << t_gapped << ", mass ladders " << lap() << std::endl;
   // the precursor tolerance of the windows: the MS1 tolerance of the input, else (no MS1 spectra) the fragment tolerance
   const double pl_precursor_tol = precursor_tol > 0 ? precursor_tol : protein_tol;
   // per spectrum: the windows that fit its precursor mass (hypotheses), and the candidates; the same at the decoy precursor mass

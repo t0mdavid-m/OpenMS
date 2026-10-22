@@ -94,6 +94,7 @@ private:
   int beam_width_ = 1000;
   int top_n_ = 400;
   bool stop_at_first_size_ = false;
+  bool skip_consecutive_ = true;
 
   // proteins: residues concatenated, prefix sums of residue masses (0 for a non-standard residue), protein start offsets
   std::vector<double> cum_mass_;
