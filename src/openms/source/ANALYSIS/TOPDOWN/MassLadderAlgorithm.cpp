@@ -70,6 +70,16 @@ public:
       const std::size_t b0 = (std::size_t)(lo_[i] * bin_inverse_ + bin_phase_), b1 = (std::size_t)(hi_[i] * bin_inverse_ + bin_phase_);
       for (std::size_t b = b0; b <= b1; b++) bits_[b >> 6] |= std::uint64_t(1) << (b & 63);
     }
+    // per 64 bins (a word of bits_), the first target whose interval end falls in or after them. The bin of a value is monotone in it, so
+    // for v in word w every target before word_first_[w] ends below v and every target from word_first_[w + 1] on ends above it: the
+    // std::lower_bound of v over all interval ends lies in [word_first_[w], word_first_[w + 1]] and is found there
+    word_first_.assign(bits_.size() + 1, (std::uint32_t)hi_.size());
+    std::size_t i = 0;
+    for (std::size_t w = 0; w < word_first_.size(); w++)
+    {
+      while (i < hi_.size() && ((std::size_t)(hi_[i] * bin_inverse_ + bin_phase_) >> 6) < w) i++;
+      word_first_[w] = (std::uint32_t)i;
+    }
   }
 
   // a prefix ion type (the ladder is read from the window start), else a suffix ion type (read from the window end)
@@ -90,7 +100,7 @@ public:
     if (! (v <= max_value_)) return -1;
     const std::size_t b = (std::size_t)(v * bin_inverse_ + bin_phase_);
     if (((bits_[b >> 6] >> (b & 63)) & 1) == 0) return -1;
-    const std::size_t idx = (std::size_t)(std::lower_bound(hi_.begin(), hi_.end(), v) - hi_.begin());
+    const std::size_t idx = lowerBound_(v, b);
     return idx < hi_.size() && lo_[idx] <= v ? (long)source_[idx] : -1;
   }
 
@@ -100,7 +110,7 @@ public:
     if (! (v <= max_value_)) return false;
     const std::size_t b = (std::size_t)(v * bin_inverse_ + bin_phase_);
     if (((bits_[b >> 6] >> (b & 63)) & 1) == 0) return false;
-    const std::size_t idx = (std::size_t)(std::lower_bound(hi_.begin(), hi_.end(), v) - hi_.begin());
+    const std::size_t idx = lowerBound_(v, b);
     return idx < hi_.size() && lo_[idx] <= v;
   }
 
@@ -125,6 +135,13 @@ public:
   static constexpr double bin_phase = 0.5;
 
 private:
+  // std::lower_bound of v over the interval ends, searched among the targets of v's word (b: the bin of v)
+  std::size_t lowerBound_(double v, std::size_t b) const
+  {
+    const auto first = hi_.begin() + word_first_[b >> 6], last = hi_.begin() + word_first_[(b >> 6) + 1];
+    return (std::size_t)(std::lower_bound(first, last, v) - hi_.begin());
+  }
+
   static constexpr double bin_inverse_ = bin_inverse;
   static constexpr double bin_phase_ = bin_phase;
   bool prefix_;
@@ -132,6 +149,7 @@ private:
   std::vector<std::size_t> source_;              // the mass index of each target
   double max_value_ = 0;
   std::vector<std::uint64_t> bits_;
+  std::vector<std::uint32_t> word_first_; // see the constructor
 };
 
 // a window: residues i..j-1 (0-based) of a protein
