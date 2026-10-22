@@ -8,6 +8,10 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
 #include <OpenMS/CHEMISTRY/ModificationsDB.h>
+#include <algorithm>
+#include <cctype>
+#include <map>
+#include <set>
 #include <exception>
 #include <typeinfo>
 #include <utility>
@@ -257,6 +261,78 @@ namespace OpenMS
   FLASHHelperClasses::LogMzPeak::LogMzPeak(const Peak1D& peak, const bool positive) :
       mz(peak.getMZ()), intensity(peak.getIntensity()), logMz(getLogMz(peak.getMZ(), positive)), abs_charge(0), is_positive(positive), isotopeIndex(0)
   {
+  }
+
+  const ResidueModification* FLASHHelperClasses::resolveModification(const String& spec_in)
+  {
+    String spec = spec_in;
+    spec.trim();
+    const auto* db = ModificationsDB::getInstance();
+    String upper = spec;
+    upper.toUpper();
+    if (! upper.hasPrefix("UNIMOD:")) return db->getModification(spec);
+
+    // a Unimod accession, with its site in parentheses or bare
+    String rest = spec.substr(7), number = rest, site;
+    const Size open = rest.find('(');
+    if (open != std::string::npos)
+    {
+      const Size close = rest.find(')', open);
+      if (close == std::string::npos) throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "missing ')' in the modification", spec);
+      number = rest.substr(0, open);
+      site = rest.substr(open + 1, close - open - 1);
+    }
+    number.trim();
+    site.trim();
+    if (number.empty() || ! std::all_of(number.begin(), number.end(), [](char c) { return std::isdigit((unsigned char)c); }))
+    {
+      throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "a Unimod accession is UNIMOD:<number>, e.g. UNIMOD:35 (M)", spec);
+    }
+    String residue;
+    ResidueModification::TermSpecificity term = ResidueModification::NUMBER_OF_TERM_SPECIFICITY;
+    if (! site.empty())
+    {
+      String lower = site;
+      lower.toLower();
+      if (lower == "n-term") term = ResidueModification::N_TERM;
+      else if (lower == "c-term") term = ResidueModification::C_TERM;
+      else if (lower == "protein n-term") term = ResidueModification::PROTEIN_N_TERM;
+      else if (lower == "protein c-term") term = ResidueModification::PROTEIN_C_TERM;
+      else if (site.size() == 1 && std::isalpha((unsigned char)site[0]))
+      {
+        residue = String(1, (char)std::toupper((unsigned char)site[0]));
+        term = ResidueModification::ANYWHERE;
+      }
+      else
+      {
+        throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
+                                      "the site of a modification is a residue letter, N-term, C-term, Protein N-term or Protein C-term", spec);
+      }
+    }
+    std::set<const ResidueModification*> found;
+    db->searchModifications(found, "UniMod:" + number, residue, term);
+    if (found.empty()) throw Exception::ElementNotFound(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, spec);
+    // the sites found (a site can have several records, e.g. from Unimod and PSI-MOD): one site is the modification
+    auto siteOf = [](const ResidueModification* m) {
+      const auto t = m->getTermSpecificity();
+      if (t == ResidueModification::ANYWHERE) return String(1, m->getOrigin());
+      return String(m->getTermSpecificityName(t));
+    };
+    std::map<String, const ResidueModification*> by_site;
+    for (const auto* m : found)
+    {
+      const String key = siteOf(m);
+      auto it = by_site.find(key);
+      // prefer the Unimod record of that number
+      if (it == by_site.end() || (it->second->getUniModRecordId() != number.toInt() && m->getUniModRecordId() == number.toInt())) by_site[key] = m;
+    }
+    if (by_site.size() > 1)
+    {
+      String list;
+      for (const auto& [key, m] : by_site) list += (list.empty() ? "" : ", ") + String("UNIMOD:") + number + " (" + key + ")";
+      throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "the modification has several sites; give one: " + list, spec);
+    }
+    return by_site.begin()->second;
   }
 
   double FLASHHelperClasses::getLogMz(const double mz, const bool positive)

@@ -292,8 +292,9 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   defaults_.setValue("ion_type", std::vector<std::string> {"b", "y"}, "Specifies ion types to consider.");
   defaults_.setValidStrings("ion_type", {"b", "c", "a", "y", "z", "x", "zp1", "zp2"});
 
-  defaults_.setValue("var_mod", std::vector<std::string> {}, "Variable modifications, by name as in Unimod/PSI-MOD (e.g. 'Oxidation (M)', "
-                     "'Acetyl (N-term)', 'Phospho (S)'). Searched with their own count (max_var_mod_count), independently of blind "
+  defaults_.setValue("var_mod", std::vector<std::string> {}, "Variable modifications, by name with the site as in Unimod/PSI-MOD (e.g. "
+                     "'Oxidation (M)', 'Acetyl (N-term)', 'Phospho (S)') or by Unimod accession with the site (e.g. 'UNIMOD:35 (M)', 'UNIMOD:1 "
+                     "(N-term)'; a bare accession only if it has one site). Searched with their own count (max_var_mod_count), independently of blind "
                      "modifications; both can occur in one proteoform. More in a file: ex:var_mod_file. Fixed modifications: the FLASHTnT tool's "
                      "fixed_mod.");
 

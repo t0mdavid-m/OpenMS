@@ -105,16 +105,14 @@ protected:
                        "A UniProtKB XML file gives the same results as the PEFF converted from it.",
                        true);
 
-    std::vector<String> all_mods;
-    ModificationsDB::getInstance()->getAllSearchModifications(all_mods);
     registerStringList_("fixed_mod", "<name>", std::vector<String>(),
-                        "Fixed modifications, as Unimod names with their residue, e.g. 'Carbamidomethyl (C)' (alkylated cysteines) or 'TMT6plex (K)'. "
+                        "Fixed modifications, by name with the residue (e.g. 'Carbamidomethyl (C)' for alkylated cysteines, 'TMT6plex (K)') or by Unimod "
+                        "accession with the residue (e.g. 'UNIMOD:4 (C)'). "
                         "The residue's mass is changed for the whole search: every occurrence in targets and decoys, in sequence tags (a tag reads "
                         "the modified residue as its letter), mass ladders, the extension, the raw-spectrum scoring and the reported masses. Only "
                         "modifications of a residue anywhere, one per residue (not terminal ones). Written as ProForma global modifications, "
                         "e.g. <[+57.021464|UNIMOD:4]@C>. With a PEFF database an annotated modification of such a residue adds to it.",
                         false);
-    setValidStrings_("fixed_mod", all_mods);
 
     registerIntOption_("peff_max_mods", "<number>", 1,
                        "PEFF or UniProtKB XML database: at most this many annotated modification units fixed on an entry (0: the processed forms "
@@ -193,7 +191,16 @@ protected:
       for (const String& name : getStringList_("fixed_mod"))
       {
         if (name.empty()) continue;
-        const ResidueModification* mod = ModificationsDB::getInstance()->getModification(name);
+        const ResidueModification* mod = nullptr;
+        try
+        {
+          mod = FLASHHelperClasses::resolveModification(name); // a name or a Unimod accession, with its residue
+        }
+        catch (const Exception::BaseException& e)
+        {
+          OPENMS_LOG_ERROR << "-fixed_mod " << name << ": " << e.what() << endl;
+          return ILLEGAL_PARAMETERS;
+        }
         const char origin = mod->getOrigin();
         if (mod->getTermSpecificity() != ResidueModification::ANYWHERE || ! std::isupper((unsigned char)origin) || origin == 'X')
         {
@@ -216,6 +223,20 @@ protected:
       }
     }
     FLASHTnTFile::setGlobalFixedModifications(fixed_proforma);
+    // variable modifications: checked here, so that a name or an accession the database does not know stops the run with a clear message
+    for (const auto& name : getParam_().getValue("var_mod").toStringVector())
+    {
+      if (String(name).trim().empty()) continue;
+      try
+      {
+        FLASHHelperClasses::resolveModification(name);
+      }
+      catch (const Exception::BaseException& e)
+      {
+        OPENMS_LOG_ERROR << "-var_mod " << name << ": " << e.what() << endl;
+        return ILLEGAL_PARAMETERS;
+      }
+    }
     String in_raw = getStringOption_("in_raw");
 
     String out_tag_file = getStringOption_("out_tag");

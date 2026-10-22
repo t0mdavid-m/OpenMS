@@ -19,6 +19,7 @@
 namespace OpenMS
 {
   class PeakGroup;
+  class ResidueModification;
   class SpectralDeconvolution;
 
   /**
@@ -684,6 +685,15 @@ namespace OpenMS
        @param positive_ioniziation_mode Determines the charge carrier mass (true = positive or false = negative)
     */
     static float getChargeMass(bool positive_ioniziation_mode);
+
+    /**
+       @brief The modification a user names (FLASHTnT var_mod and fixed_mod): a name with its site as in Unimod/PSI-MOD, e.g. "Oxidation (M)",
+       or a Unimod accession with its site, e.g. "UNIMOD:35 (M)", "UNIMOD:1 (N-term)" (sites: a residue letter, N-term, C-term, Protein N-term,
+       Protein C-term; "UniMod:" is the same). A bare accession ("UNIMOD:35") is taken only if the database knows one site for it.
+       @throw Exception::ElementNotFound for an unknown name, or an accession unknown at the site
+       @throw Exception::InvalidValue for a bare accession of several sites (the message lists them) or a malformed accession
+    */
+    static const ResidueModification* resolveModification(const String& spec);
   };
 
   // Hot in every peak-group sort and mass computation: defined inline (same arithmetic as before).

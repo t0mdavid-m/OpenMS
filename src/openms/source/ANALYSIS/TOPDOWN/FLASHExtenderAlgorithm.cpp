@@ -200,11 +200,10 @@ namespace OpenMS
     var_mod_combinations_.clear();
     max_var_mod_mass_ = 0;
 
-    const auto inst = ModificationsDB::getInstance();
     for (const auto& name : param_.getValue("var_mod").toStringVector())
     {
       if (String(name).trim().empty()) continue;
-      const ResidueModification* mod = inst->getModification(name);
+      const ResidueModification* mod = FLASHHelperClasses::resolveModification(name); // a name or a Unimod accession, with its site
       VariableModification vm;
       vm.name = mod->getId();
       vm.mass = mod->getDiffMonoMass();
