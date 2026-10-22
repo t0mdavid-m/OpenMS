@@ -682,8 +682,9 @@ namespace OpenMS
     const double mul_tol = .8; // not all peaks within tolerance are considered as signal peaks.
     if (log_mzs != nullptr && log_mzs->size() != spec.size()) { log_mzs = nullptr; }
     // the log m/z of a peak: precomputed for the spectrum, or computed here
-    const auto make_peak = [&](Size index) {
-      return log_mzs != nullptr ? LogMzPeak(spec[index], is_positive_, (*log_mzs)[index]) : LogMzPeak(spec[index], is_positive_);
+    // built in place at the end of the target vector
+    const auto emplace_peak = [&](std::vector<LogMzPeak>& target, Size index) -> LogMzPeak& {
+      return log_mzs != nullptr ? target.emplace_back(spec[index], is_positive_, (*log_mzs)[index]) : target.emplace_back(spec[index], is_positive_);
     };
     noisy_peaks.clear();
     // keep this group's own capacity instead of freeing it on every renewal
@@ -729,24 +730,18 @@ namespace OpenMS
 
         if (std::abs(pmz - cmz - iso_index * iso_delta) <= pmz * tol * mul_tol)
         {
-          auto p = make_peak(index);
+          if (iso_index >= 0) { max_signal_isotope = std::max(max_signal_isotope, iso_index); }
+          if (iso_index >= 0 && ! renew_signal_peaks) { continue; }
+          auto& p = emplace_peak(iso_index < 0 ? negative_iso_peaks_ : logMzpeaks_, index);
           p.isotopeIndex = iso_index;
           p.abs_charge = c;
-          if (iso_index < 0) { negative_iso_peaks_.push_back(p); }
-          else
-          {
-            max_signal_isotope = std::max(max_signal_isotope, iso_index);
-            if (renew_signal_peaks) logMzpeaks_.push_back(p);
-          }
         }
         else if (iso_index >= 0)
         {
-          auto p = make_peak(index);
           int noise_iso_index = (int)floor((pmz - cmz) / iso_delta);
-
+          auto& p = emplace_peak(noisy_peaks, index);
           p.isotopeIndex = noise_iso_index;
           p.abs_charge = c;
-          noisy_peaks.push_back(p);
         }
       }
 
