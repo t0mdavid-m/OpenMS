@@ -119,6 +119,15 @@ private:
   void releaseRawSpectra_();
   /// annotate every hit of @p hits on its raw spectrum (loaded by loadRawSpectra_) and set the combined score
   void annotateOnRawSpectra_(std::vector<ProteinHit>& hits) const;
+  /// the raw-spectrum PrSM of @p hit (its proteoform, bounded by the entry where a terminus is open) and its given precursor mass (-1:
+  /// none); false if its spectrum is not loaded
+  bool toRawPrSM_(const ProteinHit& hit, FLASHAnnotatorAlgorithm::PrSM& prsm, double& precursor_mass) const;
+  /// the raw-evidence score of a hit for the path alternatives of the extension (raw_score_weight x raw score, as annotateOnRawSpectra_
+  /// adds it); the raw spectra must stay loaded while it is used
+  std::function<double(const ProteinHit&)> alternativeRawScorer_() const;
+  /// path_alternatives (-1 resolved) and path_alternative_margin
+  int path_alternatives_ = 0;
+  int path_alternative_margin_ = 19;
   /// one PrSM per spectrum: the best by score (a determined mass and termini break a tie, then the coverage, then the earlier PrSM);
   /// @p label and @p score_name go into the log line
   static void keepBestPerSpectrum_(std::vector<ProteinHit>& hits, const String& label, const String& score_name);

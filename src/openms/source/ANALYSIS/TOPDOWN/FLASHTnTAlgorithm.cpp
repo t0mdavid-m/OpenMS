@@ -21,6 +21,7 @@
 #include <exception>
 #include <iterator>
 #include <limits>
+#include <memory>
 #include <numeric>
 #include <functional>
 #include <unordered_map>
@@ -395,6 +396,20 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "fragments at every charge) and ranked for the FDR by its extension score plus this weight times its raw score (-log10 of the "
                      "chance of the matched fragments). 0: the raw score is reported but not used in the ranking.");
   defaults_.setMinFloat("raw_score_weight", 0.0);
+  defaults_.setValue("path_alternatives", -1,
+                     "With the raw mzML (-in_raw): per candidate protein, how many more of its distinct proteoforms (protein length, modification "
+                     "mass) are extended and scored on the raw spectrum, the next-ranked paths of one extension mode (N-terminal, C-terminal, "
+                     "precursor mass) within path_alternative_margin of that mode's best path score; its PrSM is the one of the best extension + "
+                     "raw score (the usual one among equal ones), for targets and decoys alike. Otherwise the extension keeps one path per mode, "
+                     "chosen among equal scores by the smaller modification mass without looking at the raw spectrum (a native OMPF spectrum: "
+                     "205-362 instead of 1-362 at the same score, with the weaker raw evidence). -1: 2 with -native, else 0 (off).");
+  defaults_.setMinInt("path_alternatives", -1);
+  defaults_.addTag("path_alternatives", "advanced");
+  defaults_.setValue("path_alternative_margin", 19,
+                     "Path score margin of the path alternatives (path_alternatives) below a mode's best path score; 19 is the penalty of one "
+                     "blind modification, 0 takes equal scores only.");
+  defaults_.setMinInt("path_alternative_margin", 0);
+  defaults_.addTag("path_alternative_margin", "advanced");
   auto aparam = FLASHAnnotatorAlgorithm().getDefaults();
   aparam.remove("ion_type");
   defaults_.insert("raw:", aparam);
@@ -439,6 +454,9 @@ void FLASHTnTAlgorithm::updateMembers_()
   min_protein_hits_ = param_.getValue("min_protein_hits");
   protein_fdr_ = param_.getValue("protein_fdr");
   native_ = param_.getValue("native").toString() == "true";
+  path_alternatives_ = param_.getValue("path_alternatives");
+  if (path_alternatives_ < 0) path_alternatives_ = native_ ? 2 : 0;
+  path_alternative_margin_ = param_.getValue("path_alternative_margin");
   native_margin_ = param_.getValue("native_margin");
   max_node_cntr_ = 400;
   if (native_)
@@ -2259,6 +2277,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     // tag_candidates[tag_range], the terminal-ladder candidates ladder_candidates_now[ladder_range] and the precursor-ladder candidates
     // pl_candidates_now[pl_range]. With keep_all, every candidate's PrSM is kept (multiple_hits_per_spec_, raw-spectrum scoring, the
     // residual rounds of the chimeric search); otherwise the extension keeps one.
+    // the raw-evidence score of path alternatives (path_alternatives; set below, with the raw spectra loaded)
+    std::function<double(const ProteinHit&)> alternative_scorer;
     auto extendCandidatesInto = [&](const Param& eparam, const DeconvolvedSpectrum& dspec, const std::vector<ProteinHit>& tag_candidates,
                                     std::pair<Size, Size> tag_range, const std::vector<ProteinHit>& ladder_candidates_now, std::pair<Size, Size> ladder_range,
                                     const std::vector<ProteinHit>& pl_candidates_now, std::pair<Size, Size> pl_range, std::vector<ProteinHit>& out,
@@ -2334,6 +2354,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         extender.setFixedModifications(db);
         // the chimeric search removes the masses of a spectrum's best PrSM before the next round
         extender.setReportMatchedMasses(chimeric_rounds_ > 0);
+        extender.setPathAlternatives(alternative_scorer, path_alternatives_, path_alternative_margin_);
         // with raw-spectrum scoring, every candidate's PrSM is kept here and the best one per spectrum is chosen by the combined score in
         // annotateOnRawSpectra_: the extension score alone (deconvolved masses) picked another protein in 1 of 15 spectra of Eclip_1480
         // where TopPIC's protein had the better raw evidence (offline: 5252 -> 5451 PrSMs, 1435 -> 1500 proteoforms at 1%)
@@ -2495,6 +2516,15 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         extendSpectrumInto(d, eparam, dspecs[d], spec_proteoforms[d], false);
       }
     };
+
+    // path alternatives are chosen on the raw spectra: all of them are loaded before the first extension (annotateOnRawSpectra_ uses them)
+    if (raw_loader_ && path_alternatives_ > 0)
+    {
+      std::set<int> scans;
+      for (const auto& dspec : dspecs) scans.insert(dspec.getScanNumber());
+      loadRawSpectra_(scans);
+      alternative_scorer = alternativeRawScorer_();
+    }
 
     // Variable modification penalties from this run: a decoy (shuffled) protein can use a modification only by chance, so a modification
     // that target PrSMs use per opportunity (a fitting residue in the proteoform, or the proteoform terminus) no more often than decoy PrSMs
@@ -3433,6 +3463,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
 
 void FLASHTnTAlgorithm::loadRawSpectra_(const std::set<int>& scans)
 {
+  // loaded already (path alternatives load every spectrum before the extension)
+  if (! raw_slot_.empty() && std::all_of(scans.begin(), scans.end(), [this](int scan) { return raw_slot_.count(scan) > 0; })) return;
   releaseRawSpectra_();
   std::map<int, MSSpectrum> raw;
   raw_loader_(scans, raw);
@@ -3462,6 +3494,65 @@ void FLASHTnTAlgorithm::releaseRawSpectra_()
   raw_profile_count_ = 0;
 }
 
+bool FLASHTnTAlgorithm::toRawPrSM_(const ProteinHit& hit, FLASHAnnotatorAlgorithm::PrSM& prsm, double& precursor_mass) const
+{
+  const UInt mi_entry_start = MetaInfoInterface::metaRegistry().registerName("EntryStart"),
+             mi_entry_end = MetaInfoInterface::metaRegistry().registerName("EntryEnd");
+  const String& seq = hit.getSequence();
+  const int start = hit.getMetaValue("StartPosition"), end = hit.getMetaValue("EndPosition");
+  // an open terminus is bounded by the database entry's processed form (EntryStart, EntryEnd; a FASTA protein: its ends)
+  const int entry_first = hit.metaValueExists(mi_entry_start) ? (int)hit.getMetaValue(mi_entry_start) - 1 : 0;
+  const int entry_end = hit.metaValueExists(mi_entry_end) ? (int)hit.getMetaValue(mi_entry_end) : (int)seq.size();
+  const int start_in_seq = start <= 0 ? std::min((int)seq.size(), entry_first) : std::min((int)seq.size(), start - 1);
+  const int end_in_seq = end <= 0 ? std::max(start_in_seq, std::min((int)seq.size(), entry_end)) : std::max(start_in_seq, std::min((int)seq.size(), end));
+  prsm.sequence = seq.substr(start_in_seq, end_in_seq - start_in_seq);
+  prsm.known_n_term = start > 0;
+  prsm.known_c_term = end > 0;
+  if (hit.metaValueExists("Modifications"))
+  {
+    const std::vector<double> masses = hit.getMetaValue("Modifications");
+    const std::vector<int> starts = hit.getMetaValue("ModificationStarts"), ends = hit.getMetaValue("ModificationEnds");
+    for (Size m = 0; m < masses.size() && m < starts.size() && m < ends.size(); m++)
+    {
+      FLASHAnnotatorAlgorithm::Modification mod;
+      mod.mass = masses[m];
+      mod.start = starts[m] - start_in_seq;
+      mod.end = ends[m] - start_in_seq;
+      prsm.modifications.push_back(mod);
+    }
+  }
+  precursor_mass = hit.metaValueExists("GivenMass") ? (double)hit.getMetaValue("GivenMass") : -1.0;
+  const auto it = raw_slot_.find((int)hit.getMetaValue("Scan"));
+  if (it == raw_slot_.end()) return false;
+  prsm.spectrum_index = it->second;
+  return true;
+}
+
+std::function<double(const ProteinHit&)> FLASHTnTAlgorithm::alternativeRawScorer_() const
+{
+  // as annotateOnRawSpectra_, one PrSM at a time; serial, as the scores of FLASHAnnotatorAlgorithm::annotate are (std::lgamma)
+  auto annotator = std::make_shared<FLASHAnnotatorAlgorithm>();
+  Param aparam = annotator_param_;
+  aparam.setValue("internal_ions", "false");
+  annotator->setParameters(aparam);
+  return [this, annotator](const ProteinHit& hit) {
+    FLASHAnnotatorAlgorithm::PrSM prsm;
+    double precursor_mass = -1.0;
+    if (! toRawPrSM_(hit, prsm, precursor_mass)) return 0.0;
+    std::vector<FLASHAnnotatorAlgorithm::Result> results;
+#pragma omp critical(flashtnt_alternative_raw_score)
+    {
+      std::vector<double> iso_mzs, iso_intensities;
+      annotator->getIsotopeEnvelope(std::max(precursor_mass, FLASHAnnotatorAlgorithm::getProteoformMass(prsm.sequence, prsm.modifications)) + 200.0, 1,
+                                    iso_mzs, iso_intensities);
+      int reason = 4;
+      prsm.precursor_charge = annotator->precursorChargeCap(raw_spectra_[prsm.spectrum_index], precursor_mass, reason);
+      annotator->annotate(raw_peaks_, {prsm}, results);
+    }
+    return raw_score_weight_ * std::max(0.0, results[0].score);
+  };
+}
+
 void FLASHTnTAlgorithm::annotateOnRawSpectra_(std::vector<ProteinHit>& hits) const
 {
   // The extension score counts deconvolved masses on the path; the raw score (FLASHAnnotatorAlgorithm) is the chance of the fragment isotope
@@ -3476,42 +3567,13 @@ void FLASHTnTAlgorithm::annotateOnRawSpectra_(std::vector<ProteinHit>& hits) con
   annotator.setParameters(aparam);
   std::vector<FLASHAnnotatorAlgorithm::PrSM> prsms(hits.size());
   std::vector<double> precursor_masses(hits.size(), -1.0);
-  const UInt mi_entry_start = MetaInfoInterface::metaRegistry().registerName("EntryStart"),
-             mi_entry_end = MetaInfoInterface::metaRegistry().registerName("EntryEnd");
   double max_mass = 0;
   Size without_spectrum = 0;
   for (Size i = 0; i < hits.size(); i++)
   {
-    const auto& hit = hits[i];
     auto& prsm = prsms[i];
-    const String& seq = hit.getSequence();
-    const int start = hit.getMetaValue("StartPosition"), end = hit.getMetaValue("EndPosition");
-    // an open terminus is bounded by the database entry's processed form (EntryStart, EntryEnd; a FASTA protein: its ends)
-    const int entry_first = hit.metaValueExists(mi_entry_start) ? (int)hit.getMetaValue(mi_entry_start) - 1 : 0;
-    const int entry_end = hit.metaValueExists(mi_entry_end) ? (int)hit.getMetaValue(mi_entry_end) : (int)seq.size();
-    const int start_in_seq = start <= 0 ? std::min((int)seq.size(), entry_first) : std::min((int)seq.size(), start - 1);
-    const int end_in_seq = end <= 0 ? std::max(start_in_seq, std::min((int)seq.size(), entry_end)) : std::max(start_in_seq, std::min((int)seq.size(), end));
-    prsm.sequence = seq.substr(start_in_seq, end_in_seq - start_in_seq);
-    prsm.known_n_term = start > 0;
-    prsm.known_c_term = end > 0;
-    if (hit.metaValueExists("Modifications"))
-    {
-      const std::vector<double> masses = hit.getMetaValue("Modifications");
-      const std::vector<int> starts = hit.getMetaValue("ModificationStarts"), ends = hit.getMetaValue("ModificationEnds");
-      for (Size m = 0; m < masses.size() && m < starts.size() && m < ends.size(); m++)
-      {
-        FLASHAnnotatorAlgorithm::Modification mod;
-        mod.mass = masses[m];
-        mod.start = starts[m] - start_in_seq;
-        mod.end = ends[m] - start_in_seq;
-        prsm.modifications.push_back(mod);
-      }
-    }
-    precursor_masses[i] = hit.metaValueExists("GivenMass") ? (double)hit.getMetaValue("GivenMass") : -1.0;
+    if (! toRawPrSM_(hits[i], prsm, precursor_masses[i])) without_spectrum++;
     max_mass = std::max({max_mass, precursor_masses[i], FLASHAnnotatorAlgorithm::getProteoformMass(prsm.sequence, prsm.modifications)});
-    const auto it = raw_slot_.find((int)hit.getMetaValue("Scan"));
-    if (it == raw_slot_.end()) without_spectrum++;
-    else prsm.spectrum_index = it->second;
   }
   // the isotope table once, beyond the heaviest PrSM; then the precursor charge caps
   std::vector<double> iso_mzs, iso_intensities;

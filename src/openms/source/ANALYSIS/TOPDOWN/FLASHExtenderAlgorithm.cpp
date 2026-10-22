@@ -970,8 +970,9 @@ namespace OpenMS
                                     const std::vector<FLASHHelperClasses::Tag>& matched_tags,
                                     std::vector<std::pair<bool, std::vector<int>>>& tag_positions,
                                     std::map<int, std::vector<Size>>& all_paths_per_mode,
-                                    int max_mod_cntr_for_last_mode) // per hit
+                                    int max_mod_cntr_for_last_mode, int alternative, int& alternatives) // per hit
   {
+    alternatives = 0;
     std::vector<std::vector<int>> tag_edges(4); // pro start end indices and node start end indices
     std::set<Size> sinks;
     std::set<String> upper_case_seqs;
@@ -1211,43 +1212,58 @@ namespace OpenMS
       max_scores[num_mod] = getScore_(sink);
     }
     std::vector<std::vector<std::vector<Size>>> paths(max_blind_mod_cntr_ + 1, std::vector<std::vector<Size>>());
+    // with path alternatives, also the paths within the margin of the best score (setPathAlternatives)
+    const int margin = max_path_alternatives_ > 0 ? path_alternative_margin_ : 0;
 
     for (Size sink : sinks)
     {
       int num_mod = getBlindModNumber_(sink);
-      if (sink == src || getScore_(sink) < max_scores[num_mod]) continue; //
+      if (sink == src || getScore_(sink) < max_scores[num_mod] - margin) continue; //
       if (hi.calculated_precursor_mass_ > 0 && getNodeIndex_(sink, pro_masses.size()) < (int)node_spec.size() - 1) continue;
       // std::vector<std::vector<Size>> sub_paths;
       hi.dag_.findAllPaths(sink, src, paths[num_mod], 0);
     }
     for (int num_mod = 0; num_mod <= max_blind_mod_cntr_; num_mod++)
     {
-      for (const auto& path : paths[num_mod])
+      const auto& mod_paths = paths[num_mod];
+      if (mod_paths.empty()) continue;
+      // the paths ranked: the higher score, then the smaller modification mass, the longer protein, fewer modified residues; the earlier
+      // path among equal ones (the first one is the path of a single choice)
+      struct Ranked
       {
-        double mass = getSpecMassSpan_(path, node_spec, pro_masses.size());
-        double pro_mass = getProteinMassSpan_(path, pro_masses);
-        int pro_len = getProteinLength_(path, pro_masses);
-
-        auto iter = all_paths_per_mode.find(num_mod);
-
-        if (iter == all_paths_per_mode.end()) { all_paths_per_mode[num_mod] = path; }
-        else
-        {
-          double mod_mass_
-            = num_mod == 0 ? 0 : std::abs(getSpecMassSpan_(iter->second, node_spec, pro_masses.size()) - getProteinMassSpan_(iter->second, pro_masses));
-          double mod_mass = num_mod == 0 ? 0 : std::abs(mass - pro_mass);
-          if (mod_mass_ < mod_mass) continue;
-
-          // Prefer the path with smaller mod mass
-          if (mod_mass_ > mod_mass
-              || (mod_mass_ == mod_mass
-                  && (getProteinLength_(iter->second, pro_masses) < pro_len
-                      || (getProteinLength_(iter->second, pro_masses) == pro_len && getModifiedAACount_(path) < getModifiedAACount_(iter->second)))))
-          {
-            all_paths_per_mode[num_mod] = path;
-          }
-        }
+        int score;
+        double mod_mass;
+        int length;
+        int modified;
+        Size index;
+      };
+      std::vector<Ranked> ranked;
+      ranked.reserve(mod_paths.size());
+      for (Size k = 0; k < mod_paths.size(); k++)
+      {
+        const auto& path = mod_paths[k];
+        const double mod_mass = num_mod == 0 ? 0 : std::abs(getSpecMassSpan_(path, node_spec, pro_masses.size()) - getProteinMassSpan_(path, pro_masses));
+        ranked.push_back({getScore_(path[0]), mod_mass, getProteinLength_(path, pro_masses), getModifiedAACount_(path), k});
       }
+      std::stable_sort(ranked.begin(), ranked.end(), [](const Ranked& a, const Ranked& b) {
+        if (a.score != b.score) return a.score > b.score;
+        if (a.mod_mass != b.mod_mass) return a.mod_mass < b.mod_mass;
+        if (a.length != b.length) return a.length > b.length;
+        return a.modified < b.modified;
+      });
+      // distinct proteoforms (protein length, modification mass within 0.05 Da), in rank order
+      std::vector<Size> distinct;
+      for (const auto& r : ranked)
+      {
+        if (std::any_of(distinct.begin(), distinct.end(), [&](Size d) {
+              return ranked[d].length == r.length && std::abs(ranked[d].mod_mass - r.mod_mass) < 0.05;
+            }))
+          continue;
+        distinct.push_back(&r - ranked.data());
+        if (max_path_alternatives_ == 0) break;
+      }
+      alternatives = std::max(alternatives, (int)distinct.size());
+      all_paths_per_mode[num_mod] = mod_paths[ranked[distinct[std::min((Size)std::max(0, alternative), distinct.size() - 1)]].index];
     }
   }
 
@@ -1320,427 +1336,483 @@ namespace OpenMS
     for (int i = 0; i < ((int)hits.size()); i++)
     {
       nextProgress();
-      auto& hit = hits[i];
-      HitInformation hi;
-      int total_score = 0;
-      std::vector<int> mod_starts, mod_ends;
-      std::vector<double> mod_masses, mod_tols;
-      std::vector<int> mod_vars;                 // 1: the modification is a variable one (named in mod_var_names), 0: blind
-      std::vector<String> mod_var_names, mod_var_accs;
-      int max_nterm_index = 0, max_cterm_rindex = 0;
-
-      std::map<int, std::map<int, std::vector<Size>>> all_path_map; // mode, num_mod, path
-      std::map<int, std::vector<Size>> best_path_map;               // mode, best paths
-
-      std::vector<int> used_mode;
-
-      if (! hit.metaValueExists(mi_tag_indices)) continue;
-      // the fixed modifications of the hit's database entry
-      if (fixed_masses_ != nullptr)
+      // the candidate's hit (variant 0: the first-ranked path in every mode) and, with path alternatives, its hits with the next-ranked
+      // distinct proteoforms of one mode (setPathAlternatives): the one of the best extension score + alternative_scorer_ is kept
+      std::vector<std::pair<int, int>> variants {{-1, 0}}; // (mode, rank)
+      int mode_alternatives[3] = {0, 0, 0};
+      std::vector<ProteinHit> variant_hits;
+      for (Size v = 0;; v++)
       {
-        const int entry = hit.getMetaValue(mi_fasta_index);
-        if (entry >= 0 && entry < (int)fixed_masses_->size() && ! (*fixed_masses_)[entry].empty())
+        if (v == 1)
         {
-          hi.fixed_ = &(*fixed_masses_)[entry];
-          hi.occupancy_ = &(*occupancy_)[entry];
+          for (int m = 0; m <= 2; m++)
+            for (int r = 1; r < mode_alternatives[m] && r <= max_path_alternatives_; r++) variants.emplace_back(m, r);
         }
-      }
+        if (v >= variants.size()) break;
+        const auto variant = variants[v];
+        ProteinHit hit = hits[i];
+        HitInformation hi;
+        int total_score = 0;
+        std::vector<int> mod_starts, mod_ends;
+        std::vector<double> mod_masses, mod_tols;
+        std::vector<int> mod_vars;                 // 1: the modification is a variable one (named in mod_var_names), 0: blind
+        std::vector<String> mod_var_names, mod_var_accs;
+        int max_nterm_index = 0, max_cterm_rindex = 0;
 
-      const std::vector<int>& tag_indices = hit.getMetaValue(mi_tag_indices).toIntList();
+        std::map<int, std::map<int, std::vector<Size>>> all_path_map; // mode, num_mod, path
+        std::map<int, std::vector<Size>> best_path_map;               // mode, best paths
 
-      std::vector<FLASHHelperClasses::Tag> matched_tags;
-      for (const auto ti : tag_indices)
-      {
-        matched_tags.push_back(tags[ti]);
-      }
-      // per matched tag, its positions in the protein once found (run_)
-      std::vector<std::pair<bool, std::vector<int>>> tag_positions(matched_tags.size());
+        std::vector<int> used_mode;
 
-      std::map<int, std::set<int>> matched_position_map;
-      // with report_matched_masses_: per mode, the dspec indices of the masses of the matched positions (kept, restored and erased with
-      // matched_position_map)
-      std::map<int, std::set<int>> matched_mass_map;
-      bool precursor_by_fragment = false;
-
-      hi.n_best_shift_ = getBestMassShift_(spec_vec, vec_pro[hit.getMetaValue(mi_fasta_index)]);
-      hi.c_best_shift_ = getBestMassShift_(spec_vec, rev_vec_pro[hit.getMetaValue(mi_fasta_index)]);
-
-      // The result of the terminal modes (0: suffix, 1: prefix), kept when mode 2 starts. Mode 2 (both termini, constrained by the
-      // precursor mass) replaces their score; if it finds no path, or only one that scores <= 0 (e.g. a fragment truncated at both
-      // ends that the precursor mass does not admit, or a wrong precursor mass), the terminal result is restored with an
-      // undetermined mass instead of dropping the hit.
-      bool terminal_kept = false;
-      int terminal_score = 0;
-      std::vector<int> terminal_used_mode, terminal_mod_starts, terminal_mod_ends, terminal_mod_vars;
-      std::vector<double> terminal_mod_masses, terminal_mod_tols;
-      std::vector<String> terminal_mod_var_names, terminal_mod_var_accs;
-      std::map<int, std::set<int>> terminal_matched_position_map, terminal_matched_mass_map;
-      int terminal_start = -1, terminal_end = -1;
-      // suffix fragment masses matched on the suffix path before its first shift, i.e. measured from where that path starts
-      int c_ladder = 0, terminal_c_ladder = 0;
-      // prefix fragment masses matched on the prefix path before its first shift, i.e. read from where that path starts
-      int n_ladder = 0, terminal_n_ladder = 0;
-      bool retried_with_given_mass = false;
-      bool retried_with_isotopes = false;
-
-      for (hi.mode_ = 0; hi.mode_ <= 2; hi.mode_++)
-      {
-        int max_mod_cntr_for_last_mode = -1;
-        if (hi.mode_ == 2)
+        if (! hit.metaValueExists(mi_tag_indices)) continue;
+        // the fixed modifications of the hit's database entry
+        if (fixed_masses_ != nullptr)
         {
-          terminal_kept = true;
-          terminal_score = total_score;
-          terminal_used_mode = used_mode;
-          terminal_mod_starts = mod_starts;
-          terminal_mod_ends = mod_ends;
-          terminal_mod_masses = mod_masses;
-          terminal_mod_tols = mod_tols;
-          terminal_mod_vars = mod_vars;
-          terminal_mod_var_names = mod_var_names;
-          terminal_mod_var_accs = mod_var_accs;
-          terminal_matched_position_map = matched_position_map;
-          terminal_matched_mass_map = matched_mass_map;
-          terminal_start = hi.protein_start_position_;
-          terminal_end = hi.protein_end_position_;
-          terminal_c_ladder = c_ladder;
-          terminal_n_ladder = n_ladder;
-          hi.start_prior_ = terminal_n_ladder >= min_n_term_ladder;
-        }
-        if (hi.mode_ == 2 && hi.calculated_precursor_mass_ <= 0)
-        { // const ProteinHit& hit,
-          if (! skip_precursor_inference_ && ! retried_with_given_mass && max_nterm_index + max_cterm_rindex >= (int)hit.getSequence().size())
-            calculatePrecursorMass_(hit, best_path_map, hi);
-          max_mod_cntr_for_last_mode = std::min(max_blind_mod_cntr_, (int)std::count(mod_vars.begin(), mod_vars.end(), 0) + 1);
-
-          if (hi.calculated_precursor_mass_ <= 0) hi.calculated_precursor_mass_ = given_precursor_mass_;
-          else
-            precursor_by_fragment = true;
-
-          if (hi.calculated_precursor_mass_ <= 0) break;
-        }
-
-        auto& pro_masses = hi.pro_mass_map_[hi.mode_] = std::vector<double>();
-        // auto& node_spec = hi.node_spec_map_[hi.mode_] = MSSpectrum();
-        // auto& tol_spec = hi.tol_spec_map_[hi.mode_] = MSSpectrum();
-
-        getProMasses_(hit, pro_masses, hi.mode_, hi.fixed_);
-        updateHitInformation_(dspec, hi, pro_masses.back());
-
-        hi.visited_.clear(); // dag_ is rebuilt per mode
-
-        run_(hit, hi, matched_tags, tag_positions, all_path_map[hi.mode_], max_mod_cntr_for_last_mode);
-
-        if (hi.mode_ < 2)
-        {
-          const auto paths_c = all_path_map.find(0);
-          const auto paths_n = all_path_map.find(1);
-
-          std::map<int, int> nscores, cscores; // mod and score
-
-          if (paths_n != all_path_map.end())
+          const int entry = hit.getMetaValue(mi_fasta_index);
+          if (entry >= 0 && entry < (int)fixed_masses_->size() && ! (*fixed_masses_)[entry].empty())
           {
-            for (const auto& [mod, path] : paths_n->second)
+            hi.fixed_ = &(*fixed_masses_)[entry];
+            hi.occupancy_ = &(*occupancy_)[entry];
+          }
+        }
+
+        const std::vector<int>& tag_indices = hit.getMetaValue(mi_tag_indices).toIntList();
+
+        std::vector<FLASHHelperClasses::Tag> matched_tags;
+        for (const auto ti : tag_indices)
+        {
+          matched_tags.push_back(tags[ti]);
+        }
+        // per matched tag, its positions in the protein once found (run_)
+        std::vector<std::pair<bool, std::vector<int>>> tag_positions(matched_tags.size());
+
+        std::map<int, std::set<int>> matched_position_map;
+        // with report_matched_masses_: per mode, the dspec indices of the masses of the matched positions (kept, restored and erased with
+        // matched_position_map)
+        std::map<int, std::set<int>> matched_mass_map;
+        bool precursor_by_fragment = false;
+
+        hi.n_best_shift_ = getBestMassShift_(spec_vec, vec_pro[hit.getMetaValue(mi_fasta_index)]);
+        hi.c_best_shift_ = getBestMassShift_(spec_vec, rev_vec_pro[hit.getMetaValue(mi_fasta_index)]);
+
+        // The result of the terminal modes (0: suffix, 1: prefix), kept when mode 2 starts. Mode 2 (both termini, constrained by the
+        // precursor mass) replaces their score; if it finds no path, or only one that scores <= 0 (e.g. a fragment truncated at both
+        // ends that the precursor mass does not admit, or a wrong precursor mass), the terminal result is restored with an
+        // undetermined mass instead of dropping the hit.
+        bool terminal_kept = false;
+        int terminal_score = 0;
+        std::vector<int> terminal_used_mode, terminal_mod_starts, terminal_mod_ends, terminal_mod_vars;
+        std::vector<double> terminal_mod_masses, terminal_mod_tols;
+        std::vector<String> terminal_mod_var_names, terminal_mod_var_accs;
+        std::map<int, std::set<int>> terminal_matched_position_map, terminal_matched_mass_map;
+        int terminal_start = -1, terminal_end = -1;
+        // suffix fragment masses matched on the suffix path before its first shift, i.e. measured from where that path starts
+        int c_ladder = 0, terminal_c_ladder = 0;
+        // prefix fragment masses matched on the prefix path before its first shift, i.e. read from where that path starts
+        int n_ladder = 0, terminal_n_ladder = 0;
+        bool retried_with_given_mass = false;
+        bool retried_with_isotopes = false;
+
+        for (hi.mode_ = 0; hi.mode_ <= 2; hi.mode_++)
+        {
+          int max_mod_cntr_for_last_mode = -1;
+          if (hi.mode_ == 2)
+          {
+            terminal_kept = true;
+            terminal_score = total_score;
+            terminal_used_mode = used_mode;
+            terminal_mod_starts = mod_starts;
+            terminal_mod_ends = mod_ends;
+            terminal_mod_masses = mod_masses;
+            terminal_mod_tols = mod_tols;
+            terminal_mod_vars = mod_vars;
+            terminal_mod_var_names = mod_var_names;
+            terminal_mod_var_accs = mod_var_accs;
+            terminal_matched_position_map = matched_position_map;
+            terminal_matched_mass_map = matched_mass_map;
+            terminal_start = hi.protein_start_position_;
+            terminal_end = hi.protein_end_position_;
+            terminal_c_ladder = c_ladder;
+            terminal_n_ladder = n_ladder;
+            hi.start_prior_ = terminal_n_ladder >= min_n_term_ladder;
+          }
+          if (hi.mode_ == 2 && hi.calculated_precursor_mass_ <= 0)
+          { // const ProteinHit& hit,
+            if (! skip_precursor_inference_ && ! retried_with_given_mass && max_nterm_index + max_cterm_rindex >= (int)hit.getSequence().size())
+              calculatePrecursorMass_(hit, best_path_map, hi);
+            max_mod_cntr_for_last_mode = std::min(max_blind_mod_cntr_, (int)std::count(mod_vars.begin(), mod_vars.end(), 0) + 1);
+
+            if (hi.calculated_precursor_mass_ <= 0) hi.calculated_precursor_mass_ = given_precursor_mass_;
+            else
+              precursor_by_fragment = true;
+
+            if (hi.calculated_precursor_mass_ <= 0) break;
+          }
+
+          auto& pro_masses = hi.pro_mass_map_[hi.mode_] = std::vector<double>();
+          // auto& node_spec = hi.node_spec_map_[hi.mode_] = MSSpectrum();
+          // auto& tol_spec = hi.tol_spec_map_[hi.mode_] = MSSpectrum();
+
+          getProMasses_(hit, pro_masses, hi.mode_, hi.fixed_);
+          updateHitInformation_(dspec, hi, pro_masses.back());
+
+          hi.visited_.clear(); // dag_ is rebuilt per mode
+
+          int alternatives = 0;
+          run_(hit, hi, matched_tags, tag_positions, all_path_map[hi.mode_], max_mod_cntr_for_last_mode, variant.first == hi.mode_ ? variant.second : 0,
+               alternatives);
+          if (v == 0) mode_alternatives[hi.mode_] = std::max(mode_alternatives[hi.mode_], alternatives);
+
+          if (hi.mode_ < 2)
+          {
+            const auto paths_c = all_path_map.find(0);
+            const auto paths_n = all_path_map.find(1);
+
+            std::map<int, int> nscores, cscores; // mod and score
+
+            if (paths_n != all_path_map.end())
             {
-              if (path.empty()) continue;
-              nscores[mod] = getScore_(path[0]);
+              for (const auto& [mod, path] : paths_n->second)
+              {
+                if (path.empty()) continue;
+                nscores[mod] = getScore_(path[0]);
+              }
+            }
+            if (paths_c != all_path_map.end())
+            {
+              for (const auto& [mod, path] : paths_c->second)
+              {
+                if (path.empty()) continue;
+                cscores[mod] = getScore_(path[0]);
+              }
+            }
+            int max_score = 0;
+
+            if (nscores.empty()) // only c term
+            {
+              for (const auto& [mod, path] : paths_c->second)
+              {
+                if (path.empty()) continue;
+                if (max_score >= getScore_(path[0])) continue;
+                max_score = getScore_(path[0]);
+                best_path_map[0] = path;
+              }
+            }
+            else if (cscores.empty()) // only n term
+            {
+              for (const auto& [mod, path] : paths_n->second)
+              {
+                if (path.empty()) continue;
+                if (max_score >= getScore_(path[0])) continue;
+                max_score = getScore_(path[0]);
+                best_path_map[1] = path;
+              }
+            }
+            else // both terms
+            {
+              for (int mc = 0; mc <= max_blind_mod_cntr_; mc++)
+              {
+                if (cscores.find(mc) == cscores.end()) continue;
+                const auto& cpath = paths_c->second[mc];
+                for (int mn = 0; mc + mn <= max_blind_mod_cntr_; mn++)
+                {
+                  if (nscores.find(mn) == nscores.end()) continue;
+                  int sum_score = nscores[mn] + cscores[mc];
+                  if (max_score >= sum_score) continue;
+                  max_score = sum_score;
+                  best_path_map[0] = cpath;
+                  best_path_map[1] = paths_n->second[mn];
+                }
+              }
             }
           }
-          if (paths_c != all_path_map.end())
+          else if (hi.mode_ == 2)
           {
-            for (const auto& [mod, path] : paths_c->second)
-            {
-              if (path.empty()) continue;
-              cscores[mod] = getScore_(path[0]);
-            }
-          }
-          int max_score = 0;
+            int max_score = 0;
+            const auto paths = all_path_map.find(2);
 
-          if (nscores.empty()) // only c term
-          {
-            for (const auto& [mod, path] : paths_c->second)
+            for (const auto& [mod, path] : paths->second)
             {
               if (path.empty()) continue;
               if (max_score >= getScore_(path[0])) continue;
               max_score = getScore_(path[0]);
-              best_path_map[0] = path;
+              best_path_map[2] = path;
             }
+            mod_starts.clear();
+            mod_ends.clear();
+            mod_masses.clear();
+            mod_tols.clear();
+            mod_vars.clear();
+            mod_var_names.clear();
+            mod_var_accs.clear();
+            //
+            //        int mode0_score = best_path_map.find(0) == best_path_map.end() ||  best_path_map[0].empty() ? 0 :  getScore_(best_path_map[0][0]);
+            //        int mode1_score = best_path_map.find(1) == best_path_map.end() ||  best_path_map[1].empty() ? 0 :  getScore_(best_path_map[1][0]);
+            //
+            //        if (max_score < mode0_score + mode1_score)
+            //        {
+            //          precursor_by_fragment = false;
+            //          hi.calculated_precursor_mass_ = -1;
+            //          break;
+            //        }
           }
-          else if (cscores.empty()) // only n term
+          if (hi.mode_ == 0) continue;
+          total_score = 0;
+          // find the best paths per mode. Mode 0 and 1 should be considered together (since the modification counts for N C term paths should be summed
+          // up).
+          // number of modifications recorded before each mode's path was read, so that the modifications of a mode dropped below can be
+          // removed again
+          std::map<int, Size> mods_before;
+          auto erase_mods = [&](Size from, Size to) {
+            mod_starts.erase(mod_starts.begin() + from, mod_starts.begin() + to);
+            mod_ends.erase(mod_ends.begin() + from, mod_ends.begin() + to);
+            mod_masses.erase(mod_masses.begin() + from, mod_masses.begin() + to);
+            mod_tols.erase(mod_tols.begin() + from, mod_tols.begin() + to);
+            mod_vars.erase(mod_vars.begin() + from, mod_vars.begin() + to);
+            mod_var_names.erase(mod_var_names.begin() + from, mod_var_names.begin() + to);
+            mod_var_accs.erase(mod_var_accs.begin() + from, mod_var_accs.begin() + to);
+          };
+          for (int m = hi.mode_ == 2 ? 2 : 0; m <= hi.mode_; m++)
           {
-            for (const auto& [mod, path] : paths_n->second)
+            if (best_path_map.empty() || best_path_map.find(m) == best_path_map.end() || best_path_map[m].empty()) continue;
+            mods_before[m] = mod_starts.size();
+            if (m == 0) c_ladder = 0;
+            if (m == 1) n_ladder = 0;
+            auto& best_path = best_path_map[m];
+            auto& t_pro_masses = hi.pro_mass_map_[m];
+            auto& t_node_spec = hi.node_spec_map_[m];
+
+            double prev_mass_shift = 0;
+            int prev_mod_count = 0, prev_var_count = 0;
+            String oriented_seq = hit.getSequence();
+            if (m == 0) oriented_seq.reverse();
+            // the kinds of the fixed modifications per residue in this orientation, as cur_occupied_ in the DAG (empty: none)
+            std::vector<std::uint8_t> oriented_occupied;
+            if (hi.occupancy_ != nullptr)
             {
-              if (path.empty()) continue;
-              if (max_score >= getScore_(path[0])) continue;
-              max_score = getScore_(path[0]);
-              best_path_map[1] = path;
-            }
-          }
-          else // both terms
-          {
-            for (int mc = 0; mc <= max_blind_mod_cntr_; mc++)
-            {
-              if (cscores.find(mc) == cscores.end()) continue;
-              const auto& cpath = paths_c->second[mc];
-              for (int mn = 0; mc + mn <= max_blind_mod_cntr_; mn++)
+              const int length = (int)oriented_seq.size();
+              oriented_occupied.assign(length, 0);
+              for (const auto& [p, bits] : *hi.occupancy_)
               {
-                if (nscores.find(mn) == nscores.end()) continue;
-                int sum_score = nscores[mn] + cscores[mc];
-                if (max_score >= sum_score) continue;
-                max_score = sum_score;
-                best_path_map[0] = cpath;
-                best_path_map[1] = paths_n->second[mn];
+                if (p >= 0 && p < length) oriented_occupied[m == 0 ? length - 1 - p : p] |= bits;
               }
             }
-          }
-        }
-        else if (hi.mode_ == 2)
-        {
-          int max_score = 0;
-          const auto paths = all_path_map.find(2);
+            int pre_pro_index = 0;
+            int pre_node_index = 0;
+            double mod_mass = 0; //, total_mod_mass = 0;
+            // int total_mod_count = getBlindModNumber_(*best_path.begin());
 
-          for (const auto& [mod, path] : paths->second)
-          {
-            if (path.empty()) continue;
-            if (max_score >= getScore_(path[0])) continue;
-            max_score = getScore_(path[0]);
-            best_path_map[2] = path;
-          }
-          mod_starts.clear();
-          mod_ends.clear();
-          mod_masses.clear();
-          mod_tols.clear();
-          mod_vars.clear();
-          mod_var_names.clear();
-          mod_var_accs.clear();
-          //
-          //        int mode0_score = best_path_map.find(0) == best_path_map.end() ||  best_path_map[0].empty() ? 0 :  getScore_(best_path_map[0][0]);
-          //        int mode1_score = best_path_map.find(1) == best_path_map.end() ||  best_path_map[1].empty() ? 0 :  getScore_(best_path_map[1][0]);
-          //
-          //        if (max_score < mode0_score + mode1_score)
-          //        {
-          //          precursor_by_fragment = false;
-          //          hi.calculated_precursor_mass_ = -1;
-          //          break;
-          //        }
-        }
-        if (hi.mode_ == 0) continue;
-        total_score = 0;
-        // find the best paths per mode. Mode 0 and 1 should be considered together (since the modification counts for N C term paths should be summed
-        // up).
-        // number of modifications recorded before each mode's path was read, so that the modifications of a mode dropped below can be
-        // removed again
-        std::map<int, Size> mods_before;
-        auto erase_mods = [&](Size from, Size to) {
-          mod_starts.erase(mod_starts.begin() + from, mod_starts.begin() + to);
-          mod_ends.erase(mod_ends.begin() + from, mod_ends.begin() + to);
-          mod_masses.erase(mod_masses.begin() + from, mod_masses.begin() + to);
-          mod_tols.erase(mod_tols.begin() + from, mod_tols.begin() + to);
-          mod_vars.erase(mod_vars.begin() + from, mod_vars.begin() + to);
-          mod_var_names.erase(mod_var_names.begin() + from, mod_var_names.begin() + to);
-          mod_var_accs.erase(mod_var_accs.begin() + from, mod_var_accs.begin() + to);
-        };
-        for (int m = hi.mode_ == 2 ? 2 : 0; m <= hi.mode_; m++)
-        {
-          if (best_path_map.empty() || best_path_map.find(m) == best_path_map.end() || best_path_map[m].empty()) continue;
-          mods_before[m] = mod_starts.size();
-          if (m == 0) c_ladder = 0;
-          if (m == 1) n_ladder = 0;
-          auto& best_path = best_path_map[m];
-          auto& t_pro_masses = hi.pro_mass_map_[m];
-          auto& t_node_spec = hi.node_spec_map_[m];
-
-          double prev_mass_shift = 0;
-          int prev_mod_count = 0, prev_var_count = 0;
-          String oriented_seq = hit.getSequence();
-          if (m == 0) oriented_seq.reverse();
-          // the kinds of the fixed modifications per residue in this orientation, as cur_occupied_ in the DAG (empty: none)
-          std::vector<std::uint8_t> oriented_occupied;
-          if (hi.occupancy_ != nullptr)
-          {
-            const int length = (int)oriented_seq.size();
-            oriented_occupied.assign(length, 0);
-            for (const auto& [p, bits] : *hi.occupancy_)
+            for (auto iter = best_path.rbegin(); iter != best_path.rend(); iter++)
             {
-              if (p >= 0 && p < length) oriented_occupied[m == 0 ? length - 1 - p : p] |= bits;
-            }
-          }
-          int pre_pro_index = 0;
-          int pre_node_index = 0;
-          double mod_mass = 0; //, total_mod_mass = 0;
-          // int total_mod_count = getBlindModNumber_(*best_path.begin());
+              auto pro_index = getProIndex_(*iter, t_pro_masses.size());
+              auto node_index = getNodeIndex_(*iter, t_pro_masses.size());
+              auto mass_shift = t_node_spec[node_index].getMZ() - t_pro_masses[pro_index];
+              const int var_count = getVarModNumber_(*iter);
+              auto mod_count = getBlindModNumber_(*iter) + var_count; // blind and variable modifications so far
 
-          for (auto iter = best_path.rbegin(); iter != best_path.rend(); iter++)
-          {
-            auto pro_index = getProIndex_(*iter, t_pro_masses.size());
-            auto node_index = getNodeIndex_(*iter, t_pro_masses.size());
-            auto mass_shift = t_node_spec[node_index].getMZ() - t_pro_masses[pro_index];
-            const int var_count = getVarModNumber_(*iter);
-            auto mod_count = getBlindModNumber_(*iter) + var_count; // blind and variable modifications so far
-
-            if (node_index == 0)
-            {
-              if (m > 0) hi.protein_start_position_ = pro_index;
-              if (m == 0) hi.protein_end_position_ = (int)hit.getSequence().size() - pro_index; //
-              if (mod_count == 0) prev_mass_shift = mass_shift;
-            }
-
-            int pro_seq_index = m > 0 ? pro_index : ((int)hit.getSequence().size() - pro_index);
-            if (node_index > 0 && t_node_spec[node_index].getMZ() != hi.calculated_precursor_mass_ - i2f_mass)
-            {
-              matched_position_map[m].insert(pro_seq_index);
-              if (report_matched_masses_)
+              if (node_index == 0)
               {
-                const auto& ranges = hi.node_range_map_[m];
-                const auto& sources = hi.node_source_map_[m];
-                if (node_index < (int)ranges.size())
-                {
-                  for (int k = ranges[node_index].first; k <= ranges[node_index].second; k++) matched_mass_map[m].insert(sources[k]);
-                }
+                if (m > 0) hi.protein_start_position_ = pro_index;
+                if (m == 0) hi.protein_end_position_ = (int)hit.getSequence().size() - pro_index; //
+                if (mod_count == 0) prev_mass_shift = mass_shift;
               }
-              if (m == 0 && mod_count == 0) c_ladder++;
-              if (m == 1 && mod_count == 0) n_ladder++;
-            }
 
-            if (m == 0) max_cterm_rindex = std::max(max_cterm_rindex, pro_index);
-            if (m == 1) max_nterm_index = std::max(max_nterm_index, pro_index);
-            if (m == 2) hi.protein_end_position_ = pro_index;
-            if (mod_count != prev_mod_count)
-            {
-              mod_mass = mass_shift - prev_mass_shift;
-              // total_mod_mass += mod_mass;
-              // the residues the fragment ladder leaves for the shift, [pre_pro_index, to) in this mode's orientation: the range the DAG edge
-              // tested the variable modifications on (shiftRangeEnd_ of the same two vertices and the same summed shift)
-              const int len = (int)hit.getSequence().size();
-              const int to = shiftRangeEnd_(t_node_spec, hi.tol_spec_map_[m], t_pro_masses, pre_node_index, pre_pro_index, node_index, pro_index, mass_shift);
-              int end = m > 0 ? (to - 1) : (len - 1 - pre_pro_index);
-              int start = m > 0 ? (pre_pro_index - 1) : (len - 1 - to);
-
-              const double mod_tol = hi.tol_spec_map_[m][node_index].getIntensity();
-              bool is_var = var_count != prev_var_count;
-              String var_names, var_accs;
-              if (is_var)
+              int pro_seq_index = m > 0 ? pro_index : ((int)hit.getSequence().size() - pro_index);
+              if (node_index > 0 && t_node_spec[node_index].getMZ() != hi.calculated_precursor_mass_ - i2f_mass)
               {
-                const int from = pre_pro_index;
-                const int n_site = (m != 0 && pre_node_index == 0) ? pre_pro_index : -1;
-                const int c_site = (m == 0 && pre_node_index == 0) ? pre_pro_index : (m == 2 && node_index == (int)t_node_spec.size() - 1) ? pro_index - 1 : -1;
-                int oriented_site = -1;
-                var_names = variableModificationNames_(mod_mass, mod_tol, oriented_seq, from, to, n_site, c_site, var_accs, oriented_site,
-                                                       oriented_occupied.empty() ? nullptr : oriented_occupied.data());
-                // The edge fitted a combination on these residues; a name is missing only if the shift measured here (from the previous
-                // shift as observed) is outside the tolerance that the edge's shift met (from the previous shift as searched: the nominal
-                // mass of an earlier variable modification, or a mode-2 blind shift moved to the precursor mass). It is then reported as a
-                // blind shift, though scored and counted as a variable one.
-                if (var_names.empty())
+                matched_position_map[m].insert(pro_seq_index);
+                if (report_matched_masses_)
                 {
-                  is_var = false;
-                  if (debug) std::cout << hit.getAccession() << "\tvariable shift " << mod_mass << " without a fitting name, reported as blind" << std::endl;
+                  const auto& ranges = hi.node_range_map_[m];
+                  const auto& sources = hi.node_source_map_[m];
+                  if (node_index < (int)ranges.size())
+                  {
+                    for (int k = ranges[node_index].first; k <= ranges[node_index].second; k++) matched_mass_map[m].insert(sources[k]);
+                  }
                 }
-                else if (oriented_site >= 0)         // one possible residue: localized there
-                {
-                  const int pos = m > 0 ? oriented_site : len - 1 - oriented_site;
-                  start = pos - 1;
-                  end = pos;
-                }
+                if (m == 0 && mod_count == 0) c_ladder++;
+                if (m == 1 && mod_count == 0) n_ladder++;
               }
-              mod_starts.push_back(start + 1);
-              mod_ends.push_back(end);
-              mod_masses.push_back(mod_mass);
-              mod_tols.push_back(mod_tol);
-              mod_vars.push_back(is_var ? 1 : 0);
-              mod_var_names.push_back(var_names);
-              mod_var_accs.push_back(var_accs);
-            }
 
-            if (debug)
-            {
-              std::cout << hit.getAccession() << "\tmode\t" << m << "\tinput pre\t" << given_precursor_mass_ << "\tcal pre\t"
-                        << std::to_string(hi.calculated_precursor_mass_) << "\tscore\t" << getScore_(*iter) << "\t ni: "
-                        << node_index << "\t pi: " << pro_index
-                        << "\tin\t" << t_node_spec.size() << "\t" << t_pro_masses.size() << "\tmasses\t" << t_pro_masses.back() << "\t"
-                        << std::to_string(t_pro_masses[pro_index]) << "\t" << std::to_string(t_pro_masses.back() - t_pro_masses[pro_index]) << "\t"
-                        << std::to_string(t_node_spec[node_index].getMZ()) << " node score " << t_node_spec[node_index].getIntensity()
-                        << "\t tolspec: " << hi.tol_spec_map_[m][node_index].getIntensity() << " tol: " << t_node_spec[node_index].getMZ() / 1e5 << "\t"
-                        << std::to_string(mass_shift) << "\tmod mass: " << std::to_string(mod_mass) << "\t" << mod_count << std::endl;
-            }
+              if (m == 0) max_cterm_rindex = std::max(max_cterm_rindex, pro_index);
+              if (m == 1) max_nterm_index = std::max(max_nterm_index, pro_index);
+              if (m == 2) hi.protein_end_position_ = pro_index;
+              if (mod_count != prev_mod_count)
+              {
+                mod_mass = mass_shift - prev_mass_shift;
+                // total_mod_mass += mod_mass;
+                // the residues the fragment ladder leaves for the shift, [pre_pro_index, to) in this mode's orientation: the range the DAG edge
+                // tested the variable modifications on (shiftRangeEnd_ of the same two vertices and the same summed shift)
+                const int len = (int)hit.getSequence().size();
+                const int to = shiftRangeEnd_(t_node_spec, hi.tol_spec_map_[m], t_pro_masses, pre_node_index, pre_pro_index, node_index, pro_index, mass_shift);
+                int end = m > 0 ? (to - 1) : (len - 1 - pre_pro_index);
+                int start = m > 0 ? (pre_pro_index - 1) : (len - 1 - to);
 
-            if (mod_count > 0 && prev_mod_count != mod_count) prev_mass_shift = mass_shift;
-            prev_mod_count = mod_count;
-            prev_var_count = var_count;
-            pre_pro_index = pro_index;
-            pre_node_index = node_index;
-          }
-          if (debug) { std::cout << std::endl; }
-          int mode_score = getScore_(best_path[0]);
-          if (m == 2 && hi.protein_end_position_ >= 0 && hi.protein_end_position_ < (int)hit.getSequence().size())
-            mode_score -= truncation_penalty; // penalize C-terminal truncation in the both-termini path
-          if (m == 1 && hi.protein_start_position_ >= 0 && hi.protein_end_position_ >= 0 && hi.protein_start_position_ >= hi.protein_end_position_)
-          {
-            // the N- and C-terminal paths overlap: keep one of them, and drop the modifications and matched positions of the other
-            if (total_score > mode_score) // mode 0 wins
-            {
-              hi.protein_start_position_ = -1;
-              erase_mods(mods_before[1], mod_starts.size());
-              matched_position_map.erase(1);
-              matched_mass_map.erase(1);
-              break;
+                const double mod_tol = hi.tol_spec_map_[m][node_index].getIntensity();
+                bool is_var = var_count != prev_var_count;
+                String var_names, var_accs;
+                if (is_var)
+                {
+                  const int from = pre_pro_index;
+                  const int n_site = (m != 0 && pre_node_index == 0) ? pre_pro_index : -1;
+                  const int c_site = (m == 0 && pre_node_index == 0) ? pre_pro_index : (m == 2 && node_index == (int)t_node_spec.size() - 1) ? pro_index - 1 : -1;
+                  int oriented_site = -1;
+                  var_names = variableModificationNames_(mod_mass, mod_tol, oriented_seq, from, to, n_site, c_site, var_accs, oriented_site,
+                                                         oriented_occupied.empty() ? nullptr : oriented_occupied.data());
+                  // The edge fitted a combination on these residues; a name is missing only if the shift measured here (from the previous
+                  // shift as observed) is outside the tolerance that the edge's shift met (from the previous shift as searched: the nominal
+                  // mass of an earlier variable modification, or a mode-2 blind shift moved to the precursor mass). It is then reported as a
+                  // blind shift, though scored and counted as a variable one.
+                  if (var_names.empty())
+                  {
+                    is_var = false;
+                    if (debug) std::cout << hit.getAccession() << "\tvariable shift " << mod_mass << " without a fitting name, reported as blind" << std::endl;
+                  }
+                  else if (oriented_site >= 0)         // one possible residue: localized there
+                  {
+                    const int pos = m > 0 ? oriented_site : len - 1 - oriented_site;
+                    start = pos - 1;
+                    end = pos;
+                  }
+                }
+                mod_starts.push_back(start + 1);
+                mod_ends.push_back(end);
+                mod_masses.push_back(mod_mass);
+                mod_tols.push_back(mod_tol);
+                mod_vars.push_back(is_var ? 1 : 0);
+                mod_var_names.push_back(var_names);
+                mod_var_accs.push_back(var_accs);
+              }
+
+              if (debug)
+              {
+                std::cout << hit.getAccession() << "\tmode\t" << m << "\tinput pre\t" << given_precursor_mass_ << "\tcal pre\t"
+                          << std::to_string(hi.calculated_precursor_mass_) << "\tscore\t" << getScore_(*iter) << "\t ni: "
+                          << node_index << "\t pi: " << pro_index
+                          << "\tin\t" << t_node_spec.size() << "\t" << t_pro_masses.size() << "\tmasses\t" << t_pro_masses.back() << "\t"
+                          << std::to_string(t_pro_masses[pro_index]) << "\t" << std::to_string(t_pro_masses.back() - t_pro_masses[pro_index]) << "\t"
+                          << std::to_string(t_node_spec[node_index].getMZ()) << " node score " << t_node_spec[node_index].getIntensity()
+                          << "\t tolspec: " << hi.tol_spec_map_[m][node_index].getIntensity() << " tol: " << t_node_spec[node_index].getMZ() / 1e5 << "\t"
+                          << std::to_string(mass_shift) << "\tmod mass: " << std::to_string(mod_mass) << "\t" << mod_count << std::endl;
+              }
+
+              if (mod_count > 0 && prev_mod_count != mod_count) prev_mass_shift = mass_shift;
+              prev_mod_count = mod_count;
+              prev_var_count = var_count;
+              pre_pro_index = pro_index;
+              pre_node_index = node_index;
             }
-            else // mode 1 wins
+            if (debug) { std::cout << std::endl; }
+            int mode_score = getScore_(best_path[0]);
+            if (m == 2 && hi.protein_end_position_ >= 0 && hi.protein_end_position_ < (int)hit.getSequence().size())
+              mode_score -= truncation_penalty; // penalize C-terminal truncation in the both-termini path
+            if (m == 1 && hi.protein_start_position_ >= 0 && hi.protein_end_position_ >= 0 && hi.protein_start_position_ >= hi.protein_end_position_)
             {
-              hi.protein_end_position_ = -1;
-              if (mods_before.count(0)) erase_mods(mods_before[0], mods_before[1]);
-              matched_position_map.erase(0);
-              matched_mass_map.erase(0);
-              total_score = mode_score;
-              used_mode.pop_back();
+              // the N- and C-terminal paths overlap: keep one of them, and drop the modifications and matched positions of the other
+              if (total_score > mode_score) // mode 0 wins
+              {
+                hi.protein_start_position_ = -1;
+                erase_mods(mods_before[1], mod_starts.size());
+                matched_position_map.erase(1);
+                matched_mass_map.erase(1);
+                break;
+              }
+              else // mode 1 wins
+              {
+                hi.protein_end_position_ = -1;
+                if (mods_before.count(0)) erase_mods(mods_before[0], mods_before[1]);
+                matched_position_map.erase(0);
+                matched_mass_map.erase(0);
+                total_score = mode_score;
+                used_mode.pop_back();
+                used_mode.push_back(m);
+                break;
+              }
+            }
+            else
+            {
+              total_score += mode_score;
               used_mode.push_back(m);
-              break;
             }
           }
-          else
+
+          // A mass inferred from fragments is the sum of one C- and one N-terminal fragment mass; nothing checks that both come from one
+          // precursor. It is kept only with evidence in the data: the MS1 precursor mass confirms it, or the spectrum's complementary
+          // fragment pairs single it out (native intact-antibody spectra: light-chain masses off by +33 to +2985 Da or by one residue).
+          // Any precursor mass is also given up when the proteoform needs a blind modification beyond max_mod_mass. A rejected inferred
+          // mass is replaced by the MS1 precursor mass if there is one; otherwise the terminal result is kept with an undetermined mass.
+          bool reject_mass = false;
+          if (hi.mode_ == 2 && total_score > 0)
           {
-            total_score += mode_score;
-            used_mode.push_back(m);
+            // a blind modification beyond max_mod_mass is outside the search's own condition
+            for (Size i = 0; i < mod_masses.size() && ! reject_mass; i++)
+              reject_mass = mod_vars[i] == 0 && std::abs(mod_masses[i]) > max_mod_mass_ + std::max(0.05, i < mod_tols.size() ? mod_tols[i] : 0.0);
+            const bool given_mass_agrees
+              = given_precursor_mass_ > 0 && std::abs(given_precursor_mass_ - hi.calculated_precursor_mass_) <= tol_ * given_precursor_mass_;
+            if (! reject_mass && precursor_by_fragment && ! given_mass_agrees) // the MS1 precursor mass confirms it
+              reject_mass = ! hasComplementaryPairSupport_(sorted_masses, hi.calculated_precursor_mass_, hi.inferred_suffix_node_, hi.inferred_prefix_node_);
+            // Unshifted suffix fragment masses measured from the C-terminus cannot come from a proteoform that ends before it. A precursor
+            // mass of a co-isolated species makes the path end where that mass fits and absorb the rest with blind shifts: on Eclip_1480
+            // scan 8324, YCII 1-76 [+28.0, -484.8] scored 37, the terminal result 1-98 with 21 y ions 228.
+            const int len = (int)hit.getSequence().size();
+            if (! reject_mass && terminal_end == len && terminal_c_ladder >= min_c_term_ladder && hi.protein_end_position_ < len
+                && total_score < terminal_score)
+              reject_mass = true;
+          }
+          // A mass that gives no path is given up as well when it is not the MS1 precursor mass as given (inferred from fragments, or moved by
+          // an isotope offset), so that the MS1 mass is tried as it is: on Eclip_1480 scan 4032 (RL27 without the initiator Met, MS1 mass
+          // 1.8 ppm from it) a fragment pair inferred the mass 1 Da lower, mode 2 found no path, and the proteoform was reported with an
+          // undetermined mass.
+          const bool moved = hi.mode_ == 2 && given_precursor_mass_ > 0 && ! retried_with_given_mass
+                             && (precursor_by_fragment || std::abs(hi.calculated_precursor_mass_ - given_precursor_mass_) > tol_ * given_precursor_mass_);
+          if (moved && total_score <= 0) reject_mass = true;
+          // The MS1 mass taken as given (no isotope offsets) after a rejected inferred mass can be one isotope off and then give no path that
+          // scores above 0: it is tried once more as a mass that was never inferred is, with its isotope offsets (Eclip_1480 scan 5579: YEGP
+          // 2-110 at the MS1 mass one isotope high stayed without a mass).
+          const bool retry_isotopes = hi.mode_ == 2 && total_score <= 0 && retried_with_given_mass && hi.precursor_as_given_ && ! retried_with_isotopes;
+          if (retry_isotopes) reject_mass = true;
+          if (reject_mass)
+          {
+            const bool inferred = precursor_by_fragment || moved;
+            total_score = terminal_score;
+            used_mode = terminal_used_mode;
+            mod_starts = terminal_mod_starts;
+            mod_ends = terminal_mod_ends;
+            mod_masses = terminal_mod_masses;
+            mod_tols = terminal_mod_tols;
+            mod_vars = terminal_mod_vars;
+            mod_var_names = terminal_mod_var_names;
+            mod_var_accs = terminal_mod_var_accs;
+            matched_position_map = terminal_matched_position_map;
+            matched_mass_map = terminal_matched_mass_map;
+            hi.protein_start_position_ = terminal_start;
+            hi.protein_end_position_ = terminal_end;
+            best_path_map.erase(2);
+            all_path_map.erase(2);
+            precursor_by_fragment = false;
+            hi.calculated_precursor_mass_ = -1;
+            if (retry_isotopes)
+            {
+              retried_with_isotopes = true;
+              hi.precursor_as_given_ = false;
+              hi.mode_ = 1;
+              continue;
+            }
+            if (inferred && ! retried_with_given_mass && given_precursor_mass_ > 0)
+            {
+              retried_with_given_mass = true; // mode 2 again, without inference: it takes the given precursor mass
+              // as it is: the isotope offset with the most overlapping fragment masses took 1 Da off the right MS1 mass of RL27 (Eclip_1480
+              // scan 4032), and the retry failed the same way
+              hi.precursor_as_given_ = true;
+              hi.mode_ = 1;
+              continue;
+            }
+            break;
           }
         }
 
-        // A mass inferred from fragments is the sum of one C- and one N-terminal fragment mass; nothing checks that both come from one
-        // precursor. It is kept only with evidence in the data: the MS1 precursor mass confirms it, or the spectrum's complementary
-        // fragment pairs single it out (native intact-antibody spectra: light-chain masses off by +33 to +2985 Da or by one residue).
-        // Any precursor mass is also given up when the proteoform needs a blind modification beyond max_mod_mass. A rejected inferred
-        // mass is replaced by the MS1 precursor mass if there is one; otherwise the terminal result is kept with an undetermined mass.
-        bool reject_mass = false;
-        if (hi.mode_ == 2 && total_score > 0)
+        if (terminal_kept && total_score <= 0 && terminal_score > 0)
         {
-          // a blind modification beyond max_mod_mass is outside the search's own condition
-          for (Size i = 0; i < mod_masses.size() && ! reject_mass; i++)
-            reject_mass = mod_vars[i] == 0 && std::abs(mod_masses[i]) > max_mod_mass_ + std::max(0.05, i < mod_tols.size() ? mod_tols[i] : 0.0);
-          const bool given_mass_agrees
-            = given_precursor_mass_ > 0 && std::abs(given_precursor_mass_ - hi.calculated_precursor_mass_) <= tol_ * given_precursor_mass_;
-          if (! reject_mass && precursor_by_fragment && ! given_mass_agrees) // the MS1 precursor mass confirms it
-            reject_mass = ! hasComplementaryPairSupport_(sorted_masses, hi.calculated_precursor_mass_, hi.inferred_suffix_node_, hi.inferred_prefix_node_);
-          // Unshifted suffix fragment masses measured from the C-terminus cannot come from a proteoform that ends before it. A precursor
-          // mass of a co-isolated species makes the path end where that mass fits and absorb the rest with blind shifts: on Eclip_1480
-          // scan 8324, YCII 1-76 [+28.0, -484.8] scored 37, the terminal result 1-98 with 21 y ions 228.
-          const int len = (int)hit.getSequence().size();
-          if (! reject_mass && terminal_end == len && terminal_c_ladder >= min_c_term_ladder && hi.protein_end_position_ < len
-              && total_score < terminal_score)
-            reject_mass = true;
-        }
-        // A mass that gives no path is given up as well when it is not the MS1 precursor mass as given (inferred from fragments, or moved by
-        // an isotope offset), so that the MS1 mass is tried as it is: on Eclip_1480 scan 4032 (RL27 without the initiator Met, MS1 mass
-        // 1.8 ppm from it) a fragment pair inferred the mass 1 Da lower, mode 2 found no path, and the proteoform was reported with an
-        // undetermined mass.
-        const bool moved = hi.mode_ == 2 && given_precursor_mass_ > 0 && ! retried_with_given_mass
-                           && (precursor_by_fragment || std::abs(hi.calculated_precursor_mass_ - given_precursor_mass_) > tol_ * given_precursor_mass_);
-        if (moved && total_score <= 0) reject_mass = true;
-        // The MS1 mass taken as given (no isotope offsets) after a rejected inferred mass can be one isotope off and then give no path that
-        // scores above 0: it is tried once more as a mass that was never inferred is, with its isotope offsets (Eclip_1480 scan 5579: YEGP
-        // 2-110 at the MS1 mass one isotope high stayed without a mass).
-        const bool retry_isotopes = hi.mode_ == 2 && total_score <= 0 && retried_with_given_mass && hi.precursor_as_given_ && ! retried_with_isotopes;
-        if (retry_isotopes) reject_mass = true;
-        if (reject_mass)
-        {
-          const bool inferred = precursor_by_fragment || moved;
           total_score = terminal_score;
           used_mode = terminal_used_mode;
           mod_starts = terminal_mod_starts;
@@ -1755,275 +1827,251 @@ namespace OpenMS
           hi.protein_start_position_ = terminal_start;
           hi.protein_end_position_ = terminal_end;
           best_path_map.erase(2);
-          all_path_map.erase(2);
-          precursor_by_fragment = false;
           hi.calculated_precursor_mass_ = -1;
-          if (retry_isotopes)
-          {
-            retried_with_isotopes = true;
-            hi.precursor_as_given_ = false;
-            hi.mode_ = 1;
-            continue;
-          }
-          if (inferred && ! retried_with_given_mass && given_precursor_mass_ > 0)
-          {
-            retried_with_given_mass = true; // mode 2 again, without inference: it takes the given precursor mass
-            // as it is: the isotope offset with the most overlapping fragment masses took 1 Da off the right MS1 mass of RL27 (Eclip_1480
-            // scan 4032), and the retry failed the same way
-            hi.precursor_as_given_ = true;
-            hi.mode_ = 1;
-            continue;
-          }
-          break;
+          precursor_by_fragment = false;
         }
-      }
+        if (hi.protein_start_position_ >= 0 && hi.protein_end_position_ >= 0 && hi.protein_start_position_ >= hi.protein_end_position_) { continue; }
+        if (used_mode.empty()) continue;
 
-      if (terminal_kept && total_score <= 0 && terminal_score > 0)
-      {
-        total_score = terminal_score;
-        used_mode = terminal_used_mode;
-        mod_starts = terminal_mod_starts;
-        mod_ends = terminal_mod_ends;
-        mod_masses = terminal_mod_masses;
-        mod_tols = terminal_mod_tols;
-        mod_vars = terminal_mod_vars;
-        mod_var_names = terminal_mod_var_names;
-        mod_var_accs = terminal_mod_var_accs;
-        matched_position_map = terminal_matched_position_map;
-        matched_mass_map = terminal_matched_mass_map;
-        hi.protein_start_position_ = terminal_start;
-        hi.protein_end_position_ = terminal_end;
-        best_path_map.erase(2);
-        hi.calculated_precursor_mass_ = -1;
-        precursor_by_fragment = false;
-      }
-      if (hi.protein_start_position_ >= 0 && hi.protein_end_position_ >= 0 && hi.protein_start_position_ >= hi.protein_end_position_) { continue; }
-      if (used_mode.empty()) continue;
+        const auto t_mod_masses = mod_masses, t_mod_tols = mod_tols;
+        const auto t_mod_starts = mod_starts, t_mod_ends = mod_ends, t_mod_vars = mod_vars;
+        const auto t_mod_var_names = mod_var_names, t_mod_var_accs = mod_var_accs;
 
-      const auto t_mod_masses = mod_masses, t_mod_tols = mod_tols;
-      const auto t_mod_starts = mod_starts, t_mod_ends = mod_ends, t_mod_vars = mod_vars;
-      const auto t_mod_var_names = mod_var_names, t_mod_var_accs = mod_var_accs;
+        mod_masses.clear();
+        mod_starts.clear();
+        mod_ends.clear();
+        mod_tols.clear();
+        mod_vars.clear();
+        mod_var_names.clear();
+        mod_var_accs.clear();
 
-      mod_masses.clear();
-      mod_starts.clear();
-      mod_ends.clear();
-      mod_tols.clear();
-      mod_vars.clear();
-      mod_var_names.clear();
-      mod_var_accs.clear();
+        for (int k = 0; k < (int)t_mod_masses.size(); k++)
+        {
+          if (hi.protein_start_position_ >= 0 && t_mod_starts[k] < hi.protein_start_position_) continue;
+          if (hi.protein_end_position_ >= 0 && t_mod_ends[k] > hi.protein_end_position_) continue;
+          mod_masses.push_back(t_mod_masses[k]);
+          mod_starts.push_back(t_mod_starts[k]);
+          mod_ends.push_back(t_mod_ends[k]);
+          mod_tols.push_back(t_mod_tols[k]);
+          mod_vars.push_back(t_mod_vars[k]);
+          mod_var_names.push_back(t_mod_var_names[k]);
+          mod_var_accs.push_back(t_mod_var_accs[k]);
+        }
+        // A precursor-mass path reads the suffix masses as prefix masses through the precursor mass (updateHitInformation_), so a precursor
+        // mass one isotope off puts a shift of that isotope where the path changes from prefix to converted suffix masses. That is an error of
+        // the precursor mass, not a modification: the shift is removed and the proteoform mass corrected by it (one such shift per path). A
+        // blind shift within its own tolerance of 0 is no shift either. On Eclip_1480, 131 blind shifts of the 1% proteoforms were +-1
+        // isotope (no Unimod modification but deamidation, +0.984 Da, which cannot be told from it here) and 27 were within the tolerance of 0.
+        if (! used_mode.empty() && used_mode.back() == 2 && hi.calculated_precursor_mass_ > 0)
+        {
+          int iso_k = -1;
+          double iso_diff = 0;
+          for (int k = 0; k < (int)mod_masses.size(); k++)
+          {
+            if (mod_vars[k]) continue;
+            for (int iso : {-1, 1})
+            {
+              const double d = std::abs(mod_masses[k] - iso * c13_spacing);
+              if (d <= mod_tols[k] && (iso_k < 0 || d < iso_diff))
+              {
+                iso_k = k;
+                iso_diff = d;
+              }
+            }
+          }
+          if (iso_k >= 0) hi.calculated_precursor_mass_ -= std::round(mod_masses[iso_k] / c13_spacing) * c13_spacing;
+          for (int k = (int)mod_masses.size() - 1; k >= 0; k--)
+          {
+            if (k != iso_k && (mod_vars[k] || std::abs(mod_masses[k]) > mod_tols[k])) continue;
+            mod_masses.erase(mod_masses.begin() + k);
+            mod_starts.erase(mod_starts.begin() + k);
+            mod_ends.erase(mod_ends.begin() + k);
+            mod_tols.erase(mod_tols.begin() + k);
+            mod_vars.erase(mod_vars.begin() + k);
+            mod_var_names.erase(mod_var_names.begin() + k);
+            mod_var_accs.erase(mod_var_accs.begin() + k);
+          }
+        }
+        std::vector<String> mod_ids, mod_accs;
 
-      for (int k = 0; k < (int)t_mod_masses.size(); k++)
-      {
-        if (hi.protein_start_position_ >= 0 && t_mod_starts[k] < hi.protein_start_position_) continue;
-        if (hi.protein_end_position_ >= 0 && t_mod_ends[k] > hi.protein_end_position_) continue;
-        mod_masses.push_back(t_mod_masses[k]);
-        mod_starts.push_back(t_mod_starts[k]);
-        mod_ends.push_back(t_mod_ends[k]);
-        mod_tols.push_back(t_mod_tols[k]);
-        mod_vars.push_back(t_mod_vars[k]);
-        mod_var_names.push_back(t_mod_var_names[k]);
-        mod_var_accs.push_back(t_mod_var_accs[k]);
-      }
-      // A precursor-mass path reads the suffix masses as prefix masses through the precursor mass (updateHitInformation_), so a precursor
-      // mass one isotope off puts a shift of that isotope where the path changes from prefix to converted suffix masses. That is an error of
-      // the precursor mass, not a modification: the shift is removed and the proteoform mass corrected by it (one such shift per path). A
-      // blind shift within its own tolerance of 0 is no shift either. On Eclip_1480, 131 blind shifts of the 1% proteoforms were +-1
-      // isotope (no Unimod modification but deamidation, +0.984 Da, which cannot be told from it here) and 27 were within the tolerance of 0.
-      if (! used_mode.empty() && used_mode.back() == 2 && hi.calculated_precursor_mass_ > 0)
-      {
-        int iso_k = -1;
-        double iso_diff = 0;
         for (int k = 0; k < (int)mod_masses.size(); k++)
         {
-          if (mod_vars[k]) continue;
-          for (int iso : {-1, 1})
+          if (mod_vars[k])
           {
-            const double d = std::abs(mod_masses[k] - iso * c13_spacing);
-            if (d <= mod_tols[k] && (iso_k < 0 || d < iso_diff))
-            {
-              iso_k = k;
-              iso_diff = d;
-            }
+            mod_ids.push_back(mod_var_names[k]);
+            mod_accs.push_back(mod_var_accs[k]);
+            continue;
           }
-        }
-        if (iso_k >= 0) hi.calculated_precursor_mass_ -= std::round(mod_masses[iso_k] / c13_spacing) * c13_spacing;
-        for (int k = (int)mod_masses.size() - 1; k >= 0; k--)
-        {
-          if (k != iso_k && (mod_vars[k] || std::abs(mod_masses[k]) > mod_tols[k])) continue;
-          mod_masses.erase(mod_masses.begin() + k);
-          mod_starts.erase(mod_starts.begin() + k);
-          mod_ends.erase(mod_ends.begin() + k);
-          mod_tols.erase(mod_tols.begin() + k);
-          mod_vars.erase(mod_vars.begin() + k);
-          mod_var_names.erase(mod_var_names.begin() + k);
-          mod_var_accs.erase(mod_var_accs.begin() + k);
-        }
-      }
-      std::vector<String> mod_ids, mod_accs;
-
-      for (int k = 0; k < (int)mod_masses.size(); k++)
-      {
-        if (mod_vars[k])
-        {
-          mod_ids.push_back(mod_var_names[k]);
-          mod_accs.push_back(mod_var_accs[k]);
-          continue;
-        }
-        auto mod_mass = mod_masses[k];
-        String mod_id = "";
-        String mod_acc = "";
-        std::set<int> mod_int_acc;
-        for (Size b = blindModLowerBound_(mod_mass - mod_tols[k]); b < blind_mod_masses_.size(); b++)
-        {
-          double diff = blind_mod_masses_[b] - mod_mass;
-          if (diff > mod_tols[k]) break;
-          if (diff > -mod_tols[k])
+          auto mod_mass = mod_masses[k];
+          String mod_id = "";
+          String mod_acc = "";
+          std::set<int> mod_int_acc;
+          for (Size b = blindModLowerBound_(mod_mass - mod_tols[k]); b < blind_mod_masses_.size(); b++)
           {
-            for (Size j = blind_mod_offsets_[b]; j < blind_mod_offsets_[b + 1]; j++)
+            double diff = blind_mod_masses_[b] - mod_mass;
+            if (diff > mod_tols[k]) break;
+            if (diff > -mod_tols[k])
             {
-              const int unimod = blind_mod_unimods_[j];
-              if (mod_int_acc.find(unimod) != mod_int_acc.end()) continue;
-              mod_int_acc.insert(unimod);
-              mod_acc += std::to_string(unimod) + ",";
-              mod_id += blind_mod_ids_[j] + ",";
-            }
-          }
-        }
-        mod_ids.push_back(mod_id);
-        mod_accs.push_back(mod_acc);
-      }
-      // remove unmatched tags.
-      std::set<int> to_exclude_tag_indices, matched_positions, matched_masses;
-
-      for (int m = (used_mode.back() == 2 ? 2 : 0); m <= (used_mode.back() == 2 ? 2 : 1); m++)
-      {
-        std::vector<Size> best_path;
-        const auto& t_pro_masses = hi.pro_mass_map_[m];
-        if (std::find(used_mode.begin(), used_mode.end(), m) == used_mode.end() || best_path_map.empty() || best_path_map.find(m) == best_path_map.end()
-            || best_path_map[m].empty())
-          ;
-        else
-          best_path = best_path_map[m];
-
-        if (std::find(used_mode.begin(), used_mode.end(), m) != used_mode.end())
-        {
-          for (int pos : matched_position_map[m])
-            matched_positions.insert(pos);
-          for (int mass_index : matched_mass_map[m])
-            matched_masses.insert(mass_index);
-        }
-        for (int j = 0; j < (int)matched_tags.size(); j++) // for each tag
-        {
-          const auto& tag = matched_tags[j];
-
-          if ((tag.getNtermMass() > 0 && m == 0) || (tag.getCtermMass() > 0 && m == 1)) { continue; }
-          bool tag_matched = false;
-          for (auto iter = best_path.rbegin(); iter != best_path.rend(); iter++) // compare against each path
-          {
-            auto node_index = getNodeIndex_(*iter, t_pro_masses.size());
-            double node_mz = hi.node_spec_map_[m][node_index].getMZ();
-
-            if (tag.getNtermMass() > 0)
-            {
-              for (const auto& shift : prefix_shifts_)
+              for (Size j = blind_mod_offsets_[b]; j < blind_mod_offsets_[b + 1]; j++)
               {
-                double t_mass = tag.getNtermMass() - shift;
-                if (std::abs(t_mass - node_mz) > 1.1) continue;
-                tag_matched = true;
-                break;
+                const int unimod = blind_mod_unimods_[j];
+                if (mod_int_acc.find(unimod) != mod_int_acc.end()) continue;
+                mod_int_acc.insert(unimod);
+                mod_acc += std::to_string(unimod) + ",";
+                mod_id += blind_mod_ids_[j] + ",";
               }
             }
-            else
-            {
-              for (const auto& shift : suffix_shifts_)
-              {
-                double t_mass = tag.getCtermMass() - shift;
-                if (m == 2 && hi.calculated_precursor_mass_ > 0) t_mass = hi.calculated_precursor_mass_ - i2f_mass - t_mass;
-                if (std::abs(t_mass - node_mz) > 1.1) continue;
-                tag_matched = true;
-                break;
-              }
-            }
+          }
+          mod_ids.push_back(mod_id);
+          mod_accs.push_back(mod_acc);
+        }
+        // remove unmatched tags.
+        std::set<int> to_exclude_tag_indices, matched_positions, matched_masses;
 
-            if (tag_matched)
-            {
-              std::vector<int> positions;
-              std::vector<double> masses;
-              String seq = hit.getSequence();
+        for (int m = (used_mode.back() == 2 ? 2 : 0); m <= (used_mode.back() == 2 ? 2 : 1); m++)
+        {
+          std::vector<Size> best_path;
+          const auto& t_pro_masses = hi.pro_mass_map_[m];
+          if (std::find(used_mode.begin(), used_mode.end(), m) == used_mode.end() || best_path_map.empty() || best_path_map.find(m) == best_path_map.end()
+              || best_path_map[m].empty())
+            ;
+          else
+            best_path = best_path_map[m];
 
-              if (hi.protein_end_position_ >= 0) seq = seq.substr(0, hi.protein_end_position_);
-              if (hi.protein_start_position_ >= 0) seq = seq.substr(hi.protein_start_position_);
-              // the fixed modifications of the proteoform's residues, as positions in seq
-              std::vector<std::pair<int, double>> seq_fixed;
-              if (hi.fixed_ != nullptr)
+          if (std::find(used_mode.begin(), used_mode.end(), m) != used_mode.end())
+          {
+            for (int pos : matched_position_map[m])
+              matched_positions.insert(pos);
+            for (int mass_index : matched_mass_map[m])
+              matched_masses.insert(mass_index);
+          }
+          for (int j = 0; j < (int)matched_tags.size(); j++) // for each tag
+          {
+            const auto& tag = matched_tags[j];
+
+            if ((tag.getNtermMass() > 0 && m == 0) || (tag.getCtermMass() > 0 && m == 1)) { continue; }
+            bool tag_matched = false;
+            for (auto iter = best_path.rbegin(); iter != best_path.rend(); iter++) // compare against each path
+            {
+              auto node_index = getNodeIndex_(*iter, t_pro_masses.size());
+              double node_mz = hi.node_spec_map_[m][node_index].getMZ();
+
+              if (tag.getNtermMass() > 0)
               {
-                const int first = std::max(0, hi.protein_start_position_);
-                for (const auto& [p, mass] : *hi.fixed_)
+                for (const auto& shift : prefix_shifts_)
                 {
-                  if (p >= first && p - first < (int)seq.size()) seq_fixed.emplace_back(p - first, mass);
+                  double t_mass = tag.getNtermMass() - shift;
+                  if (std::abs(t_mass - node_mz) > 1.1) continue;
+                  tag_matched = true;
+                  break;
+                }
+              }
+              else
+              {
+                for (const auto& shift : suffix_shifts_)
+                {
+                  double t_mass = tag.getCtermMass() - shift;
+                  if (m == 2 && hi.calculated_precursor_mass_ > 0) t_mass = hi.calculated_precursor_mass_ - i2f_mass - t_mass;
+                  if (std::abs(t_mass - node_mz) > 1.1) continue;
+                  tag_matched = true;
+                  break;
                 }
               }
 
-              FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(positions, masses, max_mod_mass_ * max_blind_mod_cntr_ + 1, seq, tag,
-                                                                             hi.fixed_ != nullptr ? &seq_fixed : nullptr);
-              tag_matched = ! positions.empty();
-              break;
+              if (tag_matched)
+              {
+                std::vector<int> positions;
+                std::vector<double> masses;
+                String seq = hit.getSequence();
+
+                if (hi.protein_end_position_ >= 0) seq = seq.substr(0, hi.protein_end_position_);
+                if (hi.protein_start_position_ >= 0) seq = seq.substr(hi.protein_start_position_);
+                // the fixed modifications of the proteoform's residues, as positions in seq
+                std::vector<std::pair<int, double>> seq_fixed;
+                if (hi.fixed_ != nullptr)
+                {
+                  const int first = std::max(0, hi.protein_start_position_);
+                  for (const auto& [p, mass] : *hi.fixed_)
+                  {
+                    if (p >= first && p - first < (int)seq.size()) seq_fixed.emplace_back(p - first, mass);
+                  }
+                }
+
+                FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(positions, masses, max_mod_mass_ * max_blind_mod_cntr_ + 1, seq, tag,
+                                                                               hi.fixed_ != nullptr ? &seq_fixed : nullptr);
+                tag_matched = ! positions.empty();
+                break;
+              }
             }
+            if (! tag_matched) to_exclude_tag_indices.insert(tag_indices[j]);
           }
-          if (! tag_matched) to_exclude_tag_indices.insert(tag_indices[j]);
         }
-      }
 
-      std::vector<int> refined_tag_indices;
-      for (auto index : tag_indices)
-      {
-        if (to_exclude_tag_indices.find(index) != to_exclude_tag_indices.end()) continue;
-        refined_tag_indices.push_back(index);
-      }
-
-      if (refined_tag_indices.empty() || total_score <= 0) continue;
-
-      hi.protein_start_position_ += hi.protein_start_position_ >= 0 ? 1 : 0;
-      hit.setMetaValue(mi_modification_ids, mod_ids); // TODO matching masses vs. all masses?
-      hit.setMetaValue(mi_modification_accs, mod_accs);
-      hit.setMetaValue(mi_modifications, mod_masses);
-      hit.setMetaValue(mi_modification_starts, mod_starts);
-      hit.setMetaValue(mi_modification_ends, mod_ends);
-      hit.setMetaValue(mi_blind_mod_count, (int)std::count(mod_vars.begin(), mod_vars.end(), 0));
-      hit.setMetaValue(mi_modification_variable, mod_vars); // 1: a variable (searched) modification, 0: a blind shift
-      {
-        // the variable modification names of the path ("A+B," per shift, alternatives separated by ","), for FLASHTnT's penalty learning
-        std::vector<String> var_entries;
-        for (Size k = 0; k < mod_vars.size(); k++)
+        std::vector<int> refined_tag_indices;
+        for (auto index : tag_indices)
         {
-          if (mod_vars[k]) var_entries.push_back(mod_var_names[k]);
+          if (to_exclude_tag_indices.find(index) != to_exclude_tag_indices.end()) continue;
+          refined_tag_indices.push_back(index);
         }
-        hit.setMetaValue(mi_variable_modifications, var_entries);
+
+        if (refined_tag_indices.empty() || total_score <= 0) continue;
+
+        hi.protein_start_position_ += hi.protein_start_position_ >= 0 ? 1 : 0;
+        hit.setMetaValue(mi_modification_ids, mod_ids); // TODO matching masses vs. all masses?
+        hit.setMetaValue(mi_modification_accs, mod_accs);
+        hit.setMetaValue(mi_modifications, mod_masses);
+        hit.setMetaValue(mi_modification_starts, mod_starts);
+        hit.setMetaValue(mi_modification_ends, mod_ends);
+        hit.setMetaValue(mi_blind_mod_count, (int)std::count(mod_vars.begin(), mod_vars.end(), 0));
+        hit.setMetaValue(mi_modification_variable, mod_vars); // 1: a variable (searched) modification, 0: a blind shift
+        {
+          // the variable modification names of the path ("A+B," per shift, alternatives separated by ","), for FLASHTnT's penalty learning
+          std::vector<String> var_entries;
+          for (Size k = 0; k < mod_vars.size(); k++)
+          {
+            if (mod_vars[k]) var_entries.push_back(mod_var_names[k]);
+          }
+          hit.setMetaValue(mi_variable_modifications, var_entries);
+        }
+        hit.setMetaValue(mi_matched_aa, matched_positions.size());
+        hit.setMetaValue(mi_tag_indices, refined_tag_indices);
+
+        double protein_len = hit.getSequence().size();
+        if (hi.protein_end_position_ > 0) { protein_len -= (protein_len - hi.protein_end_position_); }
+        if (hi.protein_start_position_ > 0) { protein_len -= hi.protein_start_position_ - 1; }
+
+        hit.setCoverage((double)matched_positions.size() / protein_len);
+        hit.setScore(total_score);
+        hit.setMetaValue(mi_start_position, hi.protein_start_position_);
+        hit.setMetaValue(mi_end_position, hi.protein_end_position_);
+        hit.setMetaValue(mi_given_mass, given_precursor_mass_);
+        hit.setMetaValue(mi_mass, hi.calculated_precursor_mass_);
+        hit.setMetaValue(mi_rt, dspec.getOriginalSpectrum().getRT());
+        hit.setMetaValue(mi_num_mass, dspec.size());
+        hit.setMetaValue(mi_precursor_score,
+                         dspec.getPrecursorPeakGroup().getQscore2D()); // dspec.getPrecursorPeakGroup().getChargeSNR(dspec.getPrecursor().getCharge())
+        hit.setMetaValue(mi_precursor_snr,
+                         dspec.getPrecursorPeakGroup().getSNR()); // it should be charge SNR in theory. But mass SNR was written for ease of coding.
+        hit.setMetaValue(mi_mass_by_fragments, precursor_by_fragment ? 1 : 0);
+        if (report_matched_masses_) hit.setMetaValue(mi_matched_mass_indices, std::vector<int>(matched_masses.begin(), matched_masses.end()));
+        // hit.setMetaValue("Proforma", string)
+        variant_hits.push_back(std::move(hit));
       }
-      hit.setMetaValue(mi_matched_aa, matched_positions.size());
-      hit.setMetaValue(mi_tag_indices, refined_tag_indices);
-
-      double protein_len = hit.getSequence().size();
-      if (hi.protein_end_position_ > 0) { protein_len -= (protein_len - hi.protein_end_position_); }
-      if (hi.protein_start_position_ > 0) { protein_len -= hi.protein_start_position_ - 1; }
-
-      hit.setCoverage((double)matched_positions.size() / protein_len);
-      hit.setScore(total_score);
-      hit.setMetaValue(mi_start_position, hi.protein_start_position_);
-      hit.setMetaValue(mi_end_position, hi.protein_end_position_);
-      hit.setMetaValue(mi_given_mass, given_precursor_mass_);
-      hit.setMetaValue(mi_mass, hi.calculated_precursor_mass_);
-      hit.setMetaValue(mi_rt, dspec.getOriginalSpectrum().getRT());
-      hit.setMetaValue(mi_num_mass, dspec.size());
-      hit.setMetaValue(mi_precursor_score,
-                       dspec.getPrecursorPeakGroup().getQscore2D()); // dspec.getPrecursorPeakGroup().getChargeSNR(dspec.getPrecursor().getCharge())
-      hit.setMetaValue(mi_precursor_snr,
-                       dspec.getPrecursorPeakGroup().getSNR()); // it should be charge SNR in theory. But mass SNR was written for ease of coding.
-      hit.setMetaValue(mi_mass_by_fragments, precursor_by_fragment ? 1 : 0);
-      if (report_matched_masses_) hit.setMetaValue(mi_matched_mass_indices, std::vector<int>(matched_masses.begin(), matched_masses.end()));
-      // hit.setMetaValue("Proforma", string)
+      if (variant_hits.empty()) continue;
+      Size best = 0;
+      if (variant_hits.size() > 1)
+      {
+        double best_score = 0;
+        for (Size k = 0; k < variant_hits.size(); k++)
+        {
+          const double score = variant_hits[k].getScore() + alternative_scorer_(variant_hits[k]);
+          if (k > 0 && score <= best_score) continue;
+          best = k;
+          best_score = score;
+        }
+      }
   #pragma omp critical
-      found.emplace_back(i, hit);
+      found.emplace_back(i, std::move(variant_hits[best]));
     }
     endProgress();
 

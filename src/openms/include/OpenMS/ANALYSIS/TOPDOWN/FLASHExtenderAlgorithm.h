@@ -17,6 +17,7 @@
 #include <OpenMS/FORMAT/FASTAFile.h>
 #include <OpenMS/METADATA/ProteinHit.h>
 #include <boost/dynamic_bitset.hpp>
+#include <algorithm>
 #include <functional>
 #include <iomanip>
 #include <iostream>
@@ -116,6 +117,20 @@ public:
   void setReportMatchedMasses(bool report)
   {
     report_matched_masses_ = report;
+  }
+
+  /// Path alternatives. The extension keeps one path per candidate: in each mode, the best score, then the smaller modification mass, the
+  /// longer protein and fewer modified residues. Among equal or close scores this choice ignores the raw spectrum (a native OMPF spectrum:
+  /// two N-terminal paths of equal score, 1-362 and 205-362; the smaller shift chose 205-362, whose raw evidence was the weaker). With
+  /// @p scorer (a hit's raw-evidence score on the scale of the extension score) and @p max_alternatives > 0, a candidate with distinct
+  /// proteoforms (protein length, modification mass) among the paths of a mode within @p margin of that mode's best score is also extended
+  /// with each of the next @p max_alternatives of them in that mode (the best one in the other modes), and the hit with the best extension
+  /// score + scorer is kept (the usual one among equal ones). Targets and decoys alike. Without (the default): one path, as before.
+  void setPathAlternatives(std::function<double(const ProteinHit&)> scorer, int max_alternatives, int margin)
+  {
+    alternative_scorer_ = std::move(scorer);
+    max_path_alternatives_ = alternative_scorer_ ? std::max(0, max_alternatives) : 0;
+    path_alternative_margin_ = std::max(0, margin);
   }
 
 protected:
@@ -401,10 +416,13 @@ private:
    * @param tag_positions per matched tag, whether its protein positions are found yet and the positions (the same in every mode)
    * @param all_paths_per_mode all found paths per mode
    * @param max_mod_cntr_for_last_mode the maximum number of modifications for the last mode (mode == 2)
+   * @param alternative per blind modification count, the rank of the distinct proteoform taken (0: the usual path; a count with fewer
+   * distinct ones takes its last); see setPathAlternatives
+   * @param alternatives set to the most distinct proteoforms of any blind modification count among the ranked paths
    */
   void run_(const ProteinHit& hit, HitInformation& hi,
             const std::vector<FLASHHelperClasses::Tag>& matched_tags, std::vector<std::pair<bool, std::vector<int>>>& tag_positions,
-            std::map<int, std::vector<Size>>& all_paths_per_mode, int max_mod_cntr_for_last_mode); // per hit
+            std::map<int, std::vector<Size>>& all_paths_per_mode, int max_mod_cntr_for_last_mode, int alternative, int& alternatives); // per hit
 
   /**
    * get the vertex number from the values describing the position on the multidimensional graph for extension algorithm
@@ -508,6 +526,10 @@ private:
   bool skip_precursor_inference_ = true;
   /// set MatchedMassIndices on every proteoform hit (setReportMatchedMasses)
   bool report_matched_masses_ = false;
+  /// setPathAlternatives
+  std::function<double(const ProteinHit&)> alternative_scorer_;
+  int max_path_alternatives_ = 0;
+  int path_alternative_margin_ = 0;
   /// per database entry, its fixed modifications (position, mass) and their kinds (setFixedModifications); nullptr: none
   const std::vector<std::vector<std::pair<int, double>>>* fixed_masses_ = nullptr;
   const std::vector<std::vector<std::pair<int, std::uint8_t>>>* occupancy_ = nullptr;
