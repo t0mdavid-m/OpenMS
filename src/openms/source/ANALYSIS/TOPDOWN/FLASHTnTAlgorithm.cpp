@@ -111,9 +111,10 @@ struct RankedItem
   double weight; // of a decoy
 };
 
-// q-values of a target-decoy ranking (best first). After each tie group, FDR = (D + 1) / (D + T + 1) with D the decoy weight and T the
-// target count so far: with the +1 pseudo-count, a ranking without a decoy above an item does not give q = 0 there (Eclip_1480
-// entrapment: such classes passed false proteins at several times the nominal rate). q is the running minimum of the FDR from the bottom.
+// q-values of a target-decoy ranking (best first). After each tie group, FDR = D / (D + T) with D the decoy weight and T the target
+// count so far; q is the running minimum of the FDR from the bottom. No pseudo-count: with (D + 1) / (D + T + 1), a class of fewer than
+// 99 targets above its best decoy passed nothing at 1% (a single ETD SEC fraction of PXD012247: 83 determined proteoforms and no decoy,
+// none reported).
 template<typename Key>
 std::vector<double> targetDecoyQvalues(const std::vector<RankedItem<Key>>& items)
 {
@@ -127,7 +128,7 @@ std::vector<double> targetDecoyQvalues(const std::vector<RankedItem<Key>>& items
       if (items[j].decoy) decoy_count += items[j].weight;
       else target_count++;
     }
-    std::fill(qvalues.begin() + i, qvalues.begin() + j, std::min(1.0, (decoy_count + 1.0) / (decoy_count + target_count + 1.0)));
+    std::fill(qvalues.begin() + i, qvalues.begin() + j, std::min(1.0, decoy_count / std::max(1.0, decoy_count + target_count)));
     i = j;
   }
   double cummin = 1.0;
@@ -2373,14 +2374,13 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     if (use_fdr && ! native_rule)
     {
       // Proteoform q-values per proteoform class: the classes partition the proteoforms (each in exactly one, by a fixed precedence on its
-      // PrSMs, the same for targets and decoys), and each class is target-decoy counted on its own (+1 pseudo-count), so that no class
+      // PrSMs, the same for targets and decoys), and each class (or group of small classes, below) is target-decoy counted on its own, so that no class
       // passes on the decoy-free margin of another. Ranked against each other in one list by their PrSM q-values, the proteoforms of
       // every class passed at 1% together (Eclip_1480: 1418), but the undetermined ones among them at 6-11% (both termini 100 targets
       // and 6 decoys, open terminus 45 and 5; in the B. theta entrapment run 7 of the 113 with both termini were B. theta); one list by
       // score passed 140 fewer determined ones instead.
       // The determined classes of the PrSMs (0, 1, 2 blind, precursor ladder) are one proteoform class: their decoys are nearly absent
-      // (2 for 1273 targets), so apart the smaller ones (2 blind 73, precursor ladder 68 targets, no decoys) could not reach 1% with the
-      // pseudo-count. Precedence: a determined PrSM of the main search (any blind count, precursor ladders included) makes the
+      // (2 for 1273 targets): apart, the smaller ones (2 blind 73, precursor ladder 68 targets) would be decided by no decoy. Precedence: a determined PrSM of the main search (any blind count, precursor ladders included) makes the
       // proteoform "determined"; else one with both termini "undetermined, both termini"; else "undetermined, open terminus"; a
       // proteoform of residual-round PrSMs only is "residual r" (its lowest round). A proteoform is ranked by the best score of the PrSMs
       // that decide its class, and its row (Representative) is one of them: of a determined proteoform the determined PrSM passing rep_q
@@ -2447,11 +2447,53 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         }
         proteoform_hits_[row].setMetaValue("PrSMIndices", prsm_indices);
       }
-      std::map<int, std::array<Size, 3>> class_counts; // targets, decoys, targets passing rep_q
+      // Classes with few targets are counted together: in the order of the classes, a group takes classes until it has min_class_targets
+      // targets, and a last group with fewer joins the one before. The classes of a lysate run have hundreds of targets each and stay
+      // apart; in a small run (a single SEC fraction of PXD012247: 83 determined, 20 and 90 undetermined targets) a class alone is
+      // decided by its few decoys, or by none.
+      constexpr Size min_class_targets = 100;
+      std::vector<Size> class_targets(pf_class_count, 0), class_size(pf_class_count, 0);
+      for (Size k = 0; k < clusters.size(); k++)
+      {
+        if (cluster_class[k] < 0) continue;
+        class_size[cluster_class[k]]++;
+        class_targets[cluster_class[k]] += decoys[clusters[k][0]] ? 0 : 1;
+      }
+      std::vector<std::vector<int>> groups;
+      Size group_targets = 0;
       for (int c = 0; c < pf_class_count; c++)
       {
+        if (class_size[c] == 0) continue;
+        if (groups.empty() || group_targets >= min_class_targets)
+        {
+          groups.push_back({});
+          group_targets = 0;
+        }
+        groups.back().push_back(c);
+        group_targets += class_targets[c];
+      }
+      if (groups.size() > 1 && group_targets < min_class_targets)
+      {
+        groups[groups.size() - 2].insert(groups[groups.size() - 2].end(), groups.back().begin(), groups.back().end());
+        groups.pop_back();
+      }
+      std::vector<int> group_of(pf_class_count, -1);
+      std::vector<String> group_names;
+      for (Size g = 0; g < groups.size(); g++)
+      {
+        String name;
+        for (int c : groups[g])
+        {
+          group_of[c] = (int)g;
+          name += (name.empty() ? "" : " + ") + String(pf_class_names[c]);
+        }
+        group_names.push_back(name);
+      }
+      std::map<int, std::array<Size, 3>> class_counts; // per group: targets, decoys, targets passing rep_q
+      for (int c = 0; c < (int)groups.size(); c++)
+      {
         std::vector<Size> order;
-        for (Size k = 0; k < clusters.size(); k++) { if (cluster_class[k] == c) order.push_back(k); }
+        for (Size k = 0; k < clusters.size(); k++) { if (cluster_class[k] >= 0 && group_of[cluster_class[k]] == c) order.push_back(k); }
         if (order.empty()) continue;
         std::stable_sort(order.begin(), order.end(), [&](Size l, Size r) { return cluster_score[l] > cluster_score[r]; });
         std::vector<RankedItem<double>> ranked;
@@ -2483,7 +2525,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
           for (Size i : clusters[order[k]])
           {
             proteoform_hits_[i].setMetaValue("proqvalue", pq);
-            proteoform_hits_[i].setMetaValue("ProteoformFDRClass", pf_class_names[c]);
+            proteoform_hits_[i].setMetaValue("ProteoformFDRClass", group_names[c]);
           }
           if (decoys[rep]) counts[1]++;
           else { counts[0]++; counts[2] += pq <= rep_q; }
@@ -2492,13 +2534,13 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       for (const auto& [c, counts] : class_counts)
       {
         if (! log) break;
-        OPENMS_LOG_INFO << "Proteoform class \"" << pf_class_names[c] << "\": " << counts[0] << " target and " << counts[1] << " decoy proteoforms, "
+        OPENMS_LOG_INFO << "Proteoform class \"" << group_names[c] << "\": " << counts[0] << " target and " << counts[1] << " decoy proteoforms, "
                         << counts[2] << " targets at q <= " << rep_q << std::endl;
       }
     }
     else if (use_fdr)
       // -native: all representatives (targets and decoys of every class) in one ranking by their PrSM q-value, as before the proteoform
-      // classes (a native run has too few spectra for a class of its own to reach 1% with the pseudo-count). Every PrSM of a proteoform
+      // classes (a native run has a few proteoforms per class at most). Every PrSM of a proteoform
       // carries the proteoform's q-value, which can be lower than its own PrSM q-value.
       {
         std::vector<Size> order(clusters.size());
@@ -3676,7 +3718,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
                     << " PrSMs of the other proteins lost the mass" << std::endl;
   }
 
-  // FDR by target-decoy counting with a +1 pseudo-count (targetDecoyQvalues) at three levels:
+  // FDR by target-decoy counting (targetDecoyQvalues, no pseudo-count) at three levels:
   // - PrSMs, per class (fdr_class_names): determined mass and termini with 0, 1, or 2 or more blind modifications (variable modifications
   //   do not count), and undetermined with both termini known (the mass is then open only inside) or with an open terminus. Their decoy
   //   rates differ widely (Eclip_1480 with decoys kept: 2 decoys for 3770 determined targets, 97 for 1070 undetermined with both
