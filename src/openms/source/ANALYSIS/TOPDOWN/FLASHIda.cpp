@@ -46,6 +46,7 @@
 #include <cmath>
 #include <functional>
 #include <map>
+#include <set>
 #include <sstream>
 #ifdef _OPENMP
   #include <omp.h>
@@ -208,29 +209,77 @@ FLASHIda::FLASHIda(char* arg) :
                               IdaLogger::ScanRowDescriptor& results_row,
                               std::vector<std::string>& child_ids)
   {
+    // Survey re-planning, the fold: what the drain committed since the last survey, and that survey's own
+    // survey-level stamps, enter acquisition memory BEFORE this survey reads it. Memory holds committed
+    // decisions only; a decision still waiting in the queue is in no one's memory but its plan unit's.
+    selection_.applyStamps(queue_.takeCommitted());
+    selection_.applyStamps(survey_level_stamps_);
+
     int n = selection_.filterAndRank(mzs, ints, length, rt, 1, faims_cv);
+    // filterAndRank writes this survey's decisions in place, because admission reads them back within the
+    // survey; undo them now that it is done. They live on as the journal: per species in that species' plan
+    // unit (applied when the drain commits it), the survey-level rest held for the next survey's fold.
+    // The ONLY rollback call, and it follows an MS1 filterAndRank by construction.
+    selection_.rollbackAcquisitionMemory();
+    const SelectionJournal& journal = selection_.journal();
+    survey_level_stamps_ = journal.survey_level;
+
     const auto& selected = selection_.selectedPeakGroups();
     const auto& sel_charges = selection_.triggerCharges();
-    int commands_pushed = 0;
     std::vector<ScanCommand> ms2_commands;
     // Index-parallel to ms2_commands; points into selection_.selectedPeakGroups(), a member vector
     // that outlives the writeIDALogEntry call below.
     std::vector<const PeakGroup*> ms2_sources;
     const MSSpectrum& raw_ms1 = selection_.deconvolvedMS1().getOriginalSpectrum();
 
-    // Shared MS2 push: stamp the precursor_id, enqueue, and remember the command for the IDA log.
-    // Equal-priority commands drain FIFO, so this preserves scan_commands row order and child_ids.
+    // The plan: one unit per SPECIES, keyed by nominal mass -- the key the journal keeps its stamps under, so
+    // ADR-0036 siblings (two PeakGroups of one species) fall into one unit and commit once. Units are in
+    // order of first appearance and keep their commands in build order, which is the order they are queued in.
+    std::vector<PlanUnit> units;
+    std::map<int, size_t> unit_index_by_nominal;
+    auto unitFor = [&](const PeakGroup& pg, UnitRole role) -> PlanUnit& {
+      const int nominal = SpectralDeconvolution::getNominalMass(pg.getMonoMass());
+      auto it = unit_index_by_nominal.find(nominal);
+      if (it == unit_index_by_nominal.end())
+      {
+        PlanUnit unit;
+        unit.faims_cv = faims_cv;
+        unit.nominal_mass = nominal;
+        unit.decision_survey_id = parent_tracking_id;
+        unit.role = role;
+        unit.separate = config_.targeting().precursor_charges == ChargeAcquisitionMode::Separate && role != UnitRole::Quant;
+        const auto js = journal.species.find(nominal);
+        if (js != journal.species.end()) unit.stamps = js->second;
+        unit.stamps.nominal_mass = nominal;
+        it = unit_index_by_nominal.emplace(nominal, units.size()).first;
+        units.push_back(std::move(unit));
+      }
+      return units[it->second];
+    };
+
+    // Shared MS2 planning: stamp the precursor_id, measure the window's purity on this survey, and put the
+    // command in its species' unit and in the IDA-log record.
+    // The precursor_id is stamped BEFORE replacePlan inserts the command: replacePlan releases queue_mutex_
+    // and the drain's dequeue acquires it, which is the happens-before edge stampAndPush_ relies on.
     // @p src is the PeakGroup this command was built from. Recorded index-parallel to
     // ms2_commands so ida.log's ChargeRange can report the species' real charge envelope without
     // looking the mass back up in the deconvolved spectrum -- several PeakGroups routinely share
     // one mass in a survey (ADR-0036) and each carries a different charge subset, so a lookup
     // would pick one of them arbitrarily. See ADR-0035 decision 6.
-    auto push_ms2_command = [&](ScanCommand& c, int precursor_id, const PeakGroup& src)
+    auto plan_ms2_command = [&](PlanUnit& unit, const ScanCommand& c, int precursor_id, const PeakGroup& src)
     {
-      stampAndPush_(c, precursor_id);
+      setPrecursorForTracking_(c.scan_id, precursor_id);
+      double purity = -1.0;
+      if (c.num_stages > 0)
+      {
+        const double half = c.stages[0].isolation_width / 2.0;
+        purity = FragmentAnalysis::windowPurity(raw_ms1, c.stages[0].precursor_mz - half, c.stages[0].precursor_mz + half,
+                                                c.precursor_intensity);
+      }
+      unit.commands.push_back(c);
+      unit.purity.push_back(purity);
       ms2_commands.push_back(c);
       ms2_sources.push_back(&src);
-      commands_pushed++;
     };
 
     if (config_.hasExploration(2))
@@ -250,8 +299,13 @@ FLASHIda::FLASHIda(char* arg) :
             i < (int)selection_.triggerAcquisitionSets().size() ? &selection_.triggerAcquisitionSets()[i] : nullptr;
         auto cmds = exploration_.initiate(2, selected[i], sel_charges[i], queue_, &raw_ms1, &ms1_ctx,
                                           '\0', 0, {}, {}, nullptr, nullptr, allowed_i);
-        for (auto& c : cmds)
-          push_ms2_command(c, precursor_id, selected[i]);
+        // An empty initiate returns before it mints a group (Exploration.cpp), so lastGroupId() would name the
+        // previous one: only a sweep that produced commands owns a group.
+        if (cmds.empty()) continue;
+        PlanUnit& unit = unitFor(selected[i], UnitRole::Sweep);
+        unit.sweep_group_ids.push_back(exploration_.lastGroupId());
+        for (const auto& c : cmds)
+          plan_ms2_command(unit, c, precursor_id, selected[i]);
       }
     }
     else
@@ -265,15 +319,15 @@ FLASHIda::FLASHIda(char* arg) :
       // committed fixtures), and those are ONE reporter population. Nominal mass is the ~1 Da bin
       // every other acquisition map already keys on, so it groups them and adjacency would not.
       std::map<int, int> quant_group_by_nominal;   // survey-local: nominal mass -> group_id
+      // With quantification on, Config puts the quantification scan in the roster's PRIMARY
+      // slot and holds ms_settings.ms2 back as the scan a differential verdict buys, so
+      // scans[0] is the 'Q' (ADR-0038). Everything else on the roster is an ordinary 'R'.
+      const bool quant_owns_primary =
+          config_.quantification().enabled && config_.quantification().has_quant_scan;
       for (int i = 0; i < n; i++)
       {
         // One precursor_id per MS1-selected precursor; all of its MS2 scan-config commands share it.
         const int precursor_id = allocPrecursorId_();
-        // With quantification on, Config puts the quantification scan in the roster's PRIMARY
-        // slot and holds ms_settings.ms2 back as the scan a differential verdict buys, so
-        // scans[0] is the 'Q' (ADR-0038). Everything else on the roster is an ordinary 'R'.
-        const bool quant_owns_primary =
-            config_.quantification().enabled && config_.quantification().has_quant_scan;
         const auto& roster = config_.level(2).scans;
         for (size_t si = 0; si < roster.size(); ++si)
         {
@@ -291,21 +345,60 @@ FLASHIda::FLASHIda(char* arg) :
             cmd.window_snr = FragmentAnalysis::windowSnr(raw_ms1, cmd.stages[0].precursor_mz - half,
                                                          cmd.stages[0].precursor_mz + half, cmd.precursor_intensity);
           }
-          push_ms2_command(cmd, precursor_id, selected[i]);
+          PlanUnit& unit = unitFor(selected[i], quant_owns_primary ? UnitRole::Quant : UnitRole::Plain);
+          plan_ms2_command(unit, cmd, precursor_id, selected[i]);
 
-          // Register the 'Q' with its species' group. AFTER the push, because addMember indexes on
-          // cmd.scan_id and reads the window_snr/intensity set above -- both are final only here.
+          // Register the 'Q' with its species' group. addMember indexes on cmd.scan_id and reads the
+          // window_snr/intensity set above -- both final here. It runs before replacePlan inserts the
+          // command, so a unit the swap reconciles away has its group closed again below.
           if (marker == 'Q')
           {
             const int nominal = SpectralDeconvolution::getNominalMass(selected[i].getMonoMass());
             auto git = quant_group_by_nominal.find(nominal);
             if (git == quant_group_by_nominal.end())
+            {
               git = quant_group_by_nominal.emplace(nominal, allocQuantGroupId_()).first;
+              unit.quant_group_ids.push_back(git->second);
+            }
             quant_.addMember(git->second, cmd, precursor_id);
           }
         }
       }
     }
+
+    // The swap: this survey's plan replaces the still-uncommitted work of its CV in one queue_mutex_ hold.
+    // Committed units stay; a unit whose species the drain committed since the fold is reconciled away.
+    beforeReplan_();
+    const ReplanResult replan = queue_.replacePlan(faims_cv, std::move(units), {}, {});
+
+    // Outside the queue lock: what left the queue -- dropped from an older plan, or reconciled out of this
+    // one -- undoes its side effects. Groups were opened and precursor ids stamped when it was planned.
+    for (int g : replan.dropped_quant_groups) quant_.closeGroup(g);
+    for (int g : replan.reconciled_quant_groups) quant_.closeGroup(g);
+    for (int g : replan.dropped_sweep_groups) exploration_.dropGroup(g);
+    for (int g : replan.reconciled_sweep_groups) exploration_.dropGroup(g);
+    forgetTracking_(replan.dropped_scan_ids);
+    forgetTracking_(replan.reconciled_scan_ids);
+    std::cout << "[REPLAN] cv=" << faims_cv << " survey=" << ScanCommandQueue::encode(parent_tracking_id) << " kept=" << replan.kept
+              << " dropped=" << replan.dropped_scan_ids.size() << " added=" << replan.added << " adjusted=" << replan.adjusted
+              << std::endl;
+
+    // The survey's record covers the commands it actually queued: a reconciled one never was.
+    if (!replan.reconciled_scan_ids.empty())
+    {
+      const std::set<int> reconciled(replan.reconciled_scan_ids.begin(), replan.reconciled_scan_ids.end());
+      std::vector<ScanCommand> inserted;
+      std::vector<const PeakGroup*> inserted_sources;
+      for (size_t k = 0; k < ms2_commands.size(); ++k)
+      {
+        if (reconciled.count(ms2_commands[k].scan_id) > 0) continue;
+        inserted.push_back(ms2_commands[k]);
+        inserted_sources.push_back(ms2_sources[k]);
+      }
+      ms2_commands = std::move(inserted);
+      ms2_sources = std::move(inserted_sources);
+    }
+    const int commands_pushed = static_cast<int>(ms2_commands.size());
 
     // IDA log entry (MS1 only).
     // ida.log keeps the instrument's minutes: the target-log loader reads it back as minutes

@@ -459,6 +459,7 @@ set(analysis_executables_list
   FLASHIda_ChargeModes_test
   FLASHIda_CandidateAdmission_test
   PlanUnit_test
+  FLASHIda_Replan_test
   ScanCommandLayout_test
   FLASHIda_exploration_test
   KineticModel_test

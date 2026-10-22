@@ -54,6 +54,7 @@
 #include <cstdint>
 #include <deque>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <memory>
 #include <mutex>
@@ -268,6 +269,14 @@ namespace OpenMS
       precursor_id_by_tracking_[tracking_id] = precursor_id;
     }
 
+    /// Survey re-planning: forget the precursor ids of commands a re-plan took out of the queue -- dropped,
+    /// or reconciled away before they were ever inserted. Self-locking, and a leaf like the two above.
+    void forgetTracking_(const std::vector<int>& tracking_ids)
+    {
+      std::lock_guard<std::mutex> lk(precursor_map_mutex_);
+      for (int id : tracking_ids) precursor_id_by_tracking_.erase(id);
+    }
+
     /// Stamp a command with its precursor_id and enqueue it -- in that order, always.
     ///
     /// The ORDER is the entire point of this helper. The drain reads the map for a command it has
@@ -351,6 +360,20 @@ namespace OpenMS
 
     /// Steady-clock reference for timestamps
     std::chrono::steady_clock::time_point engine_start_time_;
+
+    /// Survey re-planning: the last survey's survey-level stamps -- writes of candidates that cleared
+    /// exclusion and were then refused, so no plan unit owns them. Folded at the start of the next survey,
+    /// beside the stamps the drain committed since. Nothing reads acquisition memory in between, so holding
+    /// them until then is identical to applying them at once.
+    std::vector<MemoryStamp> survey_level_stamps_;
+
+    /// Test seam between a survey's plan and its swap (replacePlan), so a test can commit work in exactly
+    /// that gap. Empty in production; only FLASHIda_TestAccess.h sets it.
+    std::function<void()> before_replan_;
+    void beforeReplan_()
+    {
+      if (before_replan_) before_replan_();
+    }
 
   };
 }
