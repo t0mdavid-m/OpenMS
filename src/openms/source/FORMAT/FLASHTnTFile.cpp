@@ -265,6 +265,16 @@ namespace
   }
 } // namespace
 
+namespace
+{
+  String global_fixed_proforma; // FLASHTnTFile::setGlobalFixedModifications
+}
+
+void FLASHTnTFile::setGlobalFixedModifications(const String& proforma_prefix)
+{
+  global_fixed_proforma = proforma_prefix;
+}
+
 String FLASHTnTFile::getProFormaString(const ProteinHit& hit)
 {
   const int start = hit.getMetaValue("StartPosition"), end = hit.getMetaValue("EndPosition");
@@ -381,7 +391,7 @@ String FLASHTnTFile::getProFormaString(const ProteinHit& hit)
       return "";
     }
   }
-  return pf.toString();
+  return global_fixed_proforma + pf.toString();
 }
 
 

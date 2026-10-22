@@ -53,6 +53,10 @@ namespace OpenMS
     */
     static String getProFormaString(const ProteinHit& hit);
 
+    /// the fixed modifications of the whole search (FLASHTnT -fixed_mod) as ProForma global modifications, e.g. "<[+57.021464|UNIMOD:4]@C>",
+    /// written before every ProForma string (empty: none)
+    static void setGlobalFixedModifications(const String& proforma_prefix);
+
     static void writeProteoforms(const std::vector<ProteinHit>& hits, std::fstream& fs, double pro_fdr, bool chimeric = false);
   };
 } // namespace OpenMS

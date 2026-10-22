@@ -11,6 +11,10 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/ProteoformDatabase.h>
 #include <OpenMS/APPLICATIONS/TOPPBase.h>
+#include <OpenMS/CHEMISTRY/ModificationsDB.h>
+#include <OpenMS/CHEMISTRY/Residue.h>
+#include <OpenMS/CHEMISTRY/ResidueDB.h>
+#include <OpenMS/CHEMISTRY/ResidueModification.h>
 #include <OpenMS/FORMAT/FASTAFile.h>
 #include <OpenMS/FORMAT/FLASHTnTFile.h>
 #include <OpenMS/FORMAT/FileTypes.h>
@@ -18,7 +22,9 @@
 #include <OpenMS/FORMAT/UniPEFFConverter.h>
 #include <OpenMS/SYSTEM/File.h>
 #include <QFileInfo>
+#include <cctype>
 #include <fstream>
+#include <set>
 
 using namespace OpenMS;
 using namespace std;
@@ -99,6 +105,17 @@ protected:
                        "A UniProtKB XML file gives the same results as the PEFF converted from it.",
                        true);
 
+    std::vector<String> all_mods;
+    ModificationsDB::getInstance()->getAllSearchModifications(all_mods);
+    registerStringList_("fixed_mod", "<name>", std::vector<String>(),
+                        "Fixed modifications, as Unimod names with their residue, e.g. 'Carbamidomethyl (C)' (alkylated cysteines) or 'TMT6plex (K)'. "
+                        "The residue's mass is changed for the whole search: every occurrence in targets and decoys, in sequence tags (a tag reads "
+                        "the modified residue as its letter), mass ladders, the extension, the raw-spectrum scoring and the reported masses. Only "
+                        "modifications of a residue anywhere, one per residue (not terminal ones). Written as ProForma global modifications, "
+                        "e.g. <[+57.021464|UNIMOD:4]@C>. With a PEFF database an annotated modification of such a residue adds to it.",
+                        false);
+    setValidStrings_("fixed_mod", all_mods);
+
     registerIntOption_("peff_max_mods", "<number>", 1,
                        "PEFF or UniProtKB XML database: at most this many annotated modification units fixed on an entry (0: the processed forms "
                        "only). A unit is a residue with one or more of its annotated modifications on distinct sites of it, or all disulfide bonds of "
@@ -167,6 +184,38 @@ protected:
 
     String in_file = getStringOption_("in");
     const String in_db = getStringOption_("db");
+
+    // Fixed modifications change the residue masses of the search, the in-process amino acid set (ResidueDB), before anything reads them:
+    // every mass of the search -- tags, ladders, the extension, the raw annotation, the reported masses -- is that residue's.
+    String fixed_proforma;
+    {
+      std::set<char> fixed_residues;
+      for (const String& name : getStringList_("fixed_mod"))
+      {
+        if (name.empty()) continue;
+        const ResidueModification* mod = ModificationsDB::getInstance()->getModification(name);
+        const char origin = mod->getOrigin();
+        if (mod->getTermSpecificity() != ResidueModification::ANYWHERE || ! std::isupper((unsigned char)origin) || origin == 'X')
+        {
+          OPENMS_LOG_ERROR << "-fixed_mod " << name << ": only a modification of a residue anywhere can be fixed (not a terminal one)." << endl;
+          return ILLEGAL_PARAMETERS;
+        }
+        if (! fixed_residues.insert(origin).second)
+        {
+          OPENMS_LOG_ERROR << "-fixed_mod: two fixed modifications of residue " << origin << "." << endl;
+          return ILLEGAL_PARAMETERS;
+        }
+        Residue* residue = const_cast<Residue*>(ResidueDB::getInstance()->getResidue((unsigned char)origin));
+        const double before = residue->getMonoWeight(Residue::Internal);
+        residue->setMonoWeight(residue->getMonoWeight(Residue::Full) + mod->getDiffMonoMass());
+        String accession = mod->getUniModAccession();
+        accession.substitute("UniMod:", "UNIMOD:");
+        fixed_proforma += "<[" + ProteoformDatabase::proformaTag(accession, mod->getDiffMonoMass()) + "]@" + String(origin) + ">";
+        OPENMS_LOG_INFO << "Fixed modification " << mod->getFullId() << ": residue " << origin << " " << before << " -> "
+                        << residue->getMonoWeight(Residue::Internal) << " Da" << endl;
+      }
+    }
+    FLASHTnTFile::setGlobalFixedModifications(fixed_proforma);
     String in_raw = getStringOption_("in_raw");
 
     String out_tag_file = getStringOption_("out_tag");
@@ -189,6 +238,7 @@ protected:
     auto tnt_param = getParam_();
     tnt_param.remove("in");
     tnt_param.remove("db");
+    tnt_param.remove("fixed_mod");
     tnt_param.remove("peff_max_mods");
     tnt_param.remove("peff_mod_masses");
     tnt_param.remove("in_raw");
