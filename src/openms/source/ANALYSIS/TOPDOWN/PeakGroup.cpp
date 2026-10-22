@@ -19,6 +19,28 @@
 
 namespace OpenMS
 {
+  namespace
+  {
+    /**
+      round() and floor() of the quotient a / b, given inv_b = 1 / b, without the division. The product a * inv_b is
+      within |a / b| * 6e-16 of the correctly rounded quotient, so whenever its fractional part is more than 1e-7 away
+      from 0, 0.5 and 1 both functions give the same integers as for fl(a / b). Returns false otherwise (and for large
+      or non-finite quotients); the caller then divides.
+    */
+    inline bool roundedQuotient(double a, double inv_b, int& rounded, int& floored)
+    {
+      const double q = a * inv_b;
+      if (! (std::fabs(q) < 1e8)) { return false; }
+      const long long t = (long long)q;                   // toward zero
+      const long long f = t - (long long)(q < (double)t); // floor
+      const double frac = q - (double)f;                  // in [0, 1)
+      if (! (frac > 1e-7 && frac < 1 - 1e-7 && std::fabs(frac - 0.5) > 1e-7)) { return false; }
+      floored = (int)f;
+      rounded = (int)(f + (long long)(frac > 0.5));
+      return true;
+    }
+  } // namespace
+
   PeakGroup::PeakGroup(const int min_abs_charge, const int max_abs_charge, const bool is_positive):
       min_abs_charge_(min_abs_charge),
       max_abs_charge_(max_abs_charge),
@@ -717,13 +739,19 @@ namespace OpenMS
       double left_mz = (mono_mass - (1 - min_negative_isotope_index_) * iso_da_distance_) / c + FLASHHelperClasses::getChargeMass(is_positive_);
       Size index = spec.findNearest(left_mz * (1 - tol * mul_tol));
       double iso_delta = iso_da_distance_ / c;
+      const double inv_iso_delta = 1.0 / iso_delta;
 
       for (; index < spec.size(); index++)
       {
         float pint = spec[index].getIntensity();
         if (pint <= 0) { continue; }
         double pmz = spec[index].getMZ();
-        int iso_index = (int)round((pmz - cmz) / iso_delta);
+        int iso_index, iso_floor;
+        if (! roundedQuotient(pmz - cmz, inv_iso_delta, iso_index, iso_floor))
+        {
+          iso_index = (int)round((pmz - cmz) / iso_delta);
+          iso_floor = (int)floor((pmz - cmz) / iso_delta);
+        }
         if (iso_index > max_isotope) { break; }
 
         if (iso_index < min_isotope) { continue; }
@@ -738,7 +766,7 @@ namespace OpenMS
         }
         else if (iso_index >= 0)
         {
-          int noise_iso_index = (int)floor((pmz - cmz) / iso_delta);
+          int noise_iso_index = iso_floor;
           auto& p = emplace_peak(noisy_peaks, index);
           p.isotopeIndex = noise_iso_index;
           p.abs_charge = c;

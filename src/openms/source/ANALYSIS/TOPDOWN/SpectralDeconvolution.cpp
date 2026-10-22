@@ -18,6 +18,23 @@
 
 namespace OpenMS
 {
+  namespace
+  {
+    /// round(a / b) given inv_b = 1 / b, without the division; false when the product is within 1e-7 of a rounding
+    /// boundary (or large or non-finite), in which case the caller divides. Same reasoning as in PeakGroup.cpp.
+    inline bool roundedQuotient(double a, double inv_b, int& rounded)
+    {
+      const double q = a * inv_b;
+      if (! (std::fabs(q) < 1e8)) { return false; }
+      const long long t = (long long)q;
+      const long long f = t - (long long)(q < (double)t);
+      const double frac = q - (double)f;
+      if (! (frac > 1e-7 && frac < 1 - 1e-7 && std::fabs(frac - 0.5) > 1e-7)) { return false; }
+      rounded = (int)(f + (long long)(frac > 0.5));
+      return true;
+    }
+  } // namespace
+
   /// harmonic charge factors that will be considered for harmonic mass reduction.
   inline const std::vector<int> harmonic_charges_ {2, 3, 5, 7, 11};
   /// high and low charges are differently deconvolved. This value determines the (inclusive) threshold for low charge.
@@ -901,6 +918,7 @@ namespace OpenMS
         // now we have a matching peak for this mass of charge  abs_charge. From here, isotope peaks are collected
         const double mz = log_mz_peaks_[max_peak_index].mz; // charged mz
         const double iso_delta = iso_da_distance_ / (double)abs_charge;
+        const double inv_iso_delta = 1.0 / iso_delta;
         double mz_delta = std::min(max_mass_dalton_tolerance_ / (double)abs_charge, tol * mz); //
 
         double max_mz = mz;
@@ -909,7 +927,8 @@ namespace OpenMS
         {
           const double observed_mz = log_mz_peaks_[peak_index].mz;
           double mz_diff = observed_mz - mz;
-          int tmp_i = (int)round(mz_diff / iso_delta);
+          int tmp_i;
+          if (! roundedQuotient(mz_diff, inv_iso_delta, tmp_i)) { tmp_i = (int)round(mz_diff / iso_delta); }
 
           if (observed_mz - max_mz > (double)right_index * iso_delta + mz_delta) { break; }
 
@@ -930,7 +949,8 @@ namespace OpenMS
         {
           const double observed_mz = log_mz_peaks_[peak_index].mz;
           double mz_diff = observed_mz - mz;
-          int tmp_i = (int)round(mz_diff / iso_delta);
+          int tmp_i;
+          if (! roundedQuotient(mz_diff, inv_iso_delta, tmp_i)) { tmp_i = (int)round(mz_diff / iso_delta); }
 
           if (max_mz - observed_mz > (float)left_index * iso_delta + mz_delta) { break; }
           if (std::abs(mz_diff - tmp_i * iso_delta) < mz_delta)
