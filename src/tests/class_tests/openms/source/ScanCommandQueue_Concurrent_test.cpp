@@ -870,6 +870,69 @@ START_SECTION(remainder_replacement_refused_when_old_unit_emptied)
 }
 END_SECTION
 
+// reisolate is buildMS2's geometry applied to an existing command: whatever the command isolated before, the
+// re-isolated one carries the same stage-0 window, notches and scan_description suffix as buildMS2 builds for
+// the same PeakGroup and charge set -- and keeps its own scan id. Multiplexed, so the notch write is exercised.
+START_SECTION(reisolate_matches_buildMS2_geometry)
+{
+  std::string multiplexed(minimal_config);
+  const std::string from = "\"rank_by\": \"qscore\",";
+  multiplexed.replace(multiplexed.find(from), from.size(), from + " \"precursor_charges\": \"multiplexed\",");
+  Config cfg{multiplexed};
+  ScanCommandQueue q(cfg);
+
+  // One species at charges 12..16, three isotopes each, so every charge has a measured m/z range.
+  const double mass = 12351.3933;
+  PeakGroup pg(12, 16, true);
+  pg.setMonoisotopicMass(mass);
+  for (int z = 12; z <= 16; ++z)
+  {
+    for (int iso = 0; iso < 3; ++iso)
+    {
+      FLASHHelperClasses::LogMzPeak lp;
+      lp.mz = (mass + iso * 1.003355) / z + 1.007276;
+      lp.abs_charge = z;
+      lp.isotopeIndex = iso;
+      lp.intensity = 1000.0f * z;
+      pg.push_back(lp);
+    }
+  }
+  ScanConfig sc;
+  sc.collision_energy = 29;
+  sc.activation = "HCD";
+
+  // The command to re-isolate: another charge with another notch set, as a bought R a survey ago would be.
+  const std::vector<int> old_set = {13, 15};
+  const ScanCommand r = q.buildMS2(pg, 13, sc, 0, 0, &old_set, 'R');
+  ABORT_IF(r.stage0_notch_count != 1)
+
+  for (const std::vector<int>& set : std::vector<std::vector<int>>{{14, 12, 16}, {16}})
+  {
+    const ScanCommand expected = q.buildMS2(pg, set.front(), sc, 0, 0, &set, 'R');
+    std::vector<std::pair<int, const PeakGroup*>> picks;
+    for (int z : set) picks.emplace_back(z, &pg);
+    const ScanCommand got = ScanCommandQueue::reisolate(r, picks, optimal_window_margin_, 'R');
+
+    TEST_EQUAL(got.scan_id, r.scan_id)
+    TEST_EQUAL(got.stages[0].charge_state, expected.stages[0].charge_state)
+    TEST_REAL_SIMILAR(got.stages[0].precursor_mz, expected.stages[0].precursor_mz)
+    TEST_REAL_SIMILAR(got.stages[0].isolation_width, expected.stages[0].isolation_width)
+    TEST_EQUAL(got.stage0_notch_count, expected.stage0_notch_count)
+    TEST_EQUAL(got.stage0_notch_count, static_cast<int>(set.size()) - 1)
+    for (int j = 0; j < MAX_NOTCHES_PER_STAGE; ++j) // the used slots match, and no stale slot survives
+    {
+      TEST_EQUAL(got.notches[j].charge_state, expected.notches[j].charge_state)
+      TEST_EQUAL(got.notches[j].precursor_mz == expected.notches[j].precursor_mz, true)
+      TEST_EQUAL(got.notches[j].isolation_width == expected.notches[j].isolation_width, true)
+    }
+    TEST_EQUAL(std::string(got.scan_description).substr(3), std::string(expected.scan_description).substr(3))
+    TEST_EQUAL(std::string(got.scan_description).substr(0, 3), ScanCommandQueue::encode(r.scan_id))
+    TEST_REAL_SIMILAR(got.mono_mass, expected.mono_mass)
+    TEST_REAL_SIMILAR(got.precursor_intensity, expected.precursor_intensity)
+  }
+}
+END_SECTION
+
 // The race at queue level: four drains dequeue while one analysis thread re-plans and pushes unregistered
 // work. Nothing may be dequeued twice, nothing unregistered lost, and a unit is either sent (from its first
 // dequeue on, never dropped) or dropped (none of it ever sent).

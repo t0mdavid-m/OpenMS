@@ -225,6 +225,87 @@ namespace OpenMS
     cmd.hcd_energy_s1 = cmd.num_stages > 1 ? static_cast<int32_t>(std::lround(cmd.stages[1].collision_energy)) : 0;
   }
 
+  // --- MS2 isolation geometry, shared by buildMS2 and reisolate ---
+  //
+  // Factored out of buildMS2 byte for byte, so a bought R a newer survey re-isolates (reisolate) carries
+  // exactly the window buildMS2 would command for the same PeakGroup and charge -- one geometry, not two.
+
+  void ScanCommandQueue::applyIsolation_(ScanCommand& cmd, const PeakGroup& pg, int charge, double margin)
+  {
+    auto [mz1, mz2] = pg.getMzRange(charge);
+    double center_mz = (mz1 + mz2) / 2.0;
+    mz1 -= margin;
+    mz2 += margin;
+    double iso_width = mz2 - mz1;
+
+    cmd.stages[0].precursor_mz = center_mz;
+    cmd.stages[0].isolation_width = iso_width;
+    cmd.stages[0].charge_state = charge;
+  }
+
+  std::vector<NotchCandidate> ScanCommandQueue::notchesFor_(const std::vector<NotchCandidate>& candidates, int anchor_charge,
+                                                            const std::vector<int>& charges)
+  {
+    std::vector<NotchCandidate> notches;
+    for (int c : charges)
+    {
+      if (c == anchor_charge) continue;   // the anchor is the stage itself
+      for (const NotchCandidate& n : candidates)
+        if (n.charge == c) { notches.push_back(n); break; }
+    }
+    return notches;
+  }
+
+  void ScanCommandQueue::applyPrecursorScores_(ScanCommand& cmd, const PeakGroup& pg, int charge)
+  {
+    cmd.qscore = pg.getQscore();
+    cmd.mono_mass = pg.getMonoMass();
+    cmd.charge_cos = pg.getChargeIsotopeCosine(std::abs(charge));
+    cmd.charge_snr = pg.getChargeSNR(std::abs(charge));
+    cmd.iso_cos = pg.getIsotopeCosine();
+    cmd.snr = pg.getSNR();
+    cmd.charge_score = pg.getChargeScore();
+    cmd.ppm_error = pg.getAvgPPMError();
+    cmd.precursor_intensity = pg.getChargeIntensity(std::abs(charge));
+    cmd.peakgroup_intensity = pg.getIntensity();
+  }
+
+  void ScanCommandQueue::writeMs2Description_(ScanCommand& cmd, const std::string& id_str, char marker, double mono_mass, int charge)
+  {
+    std::string mass_tok = formatMassToken(mono_mass / 1000.0, charge, '\0', 0);
+    std::snprintf(cmd.scan_description, 16, "%s%c%s@%d", id_str.c_str(), marker, mass_tok.c_str(), charge);
+  }
+
+  ScanCommand ScanCommandQueue::reisolate(const ScanCommand& r, const std::vector<std::pair<int, const PeakGroup*>>& picks,
+                                          double margin, char marker)
+  {
+    ScanCommand cmd = r;
+    if (picks.empty() || picks.front().second == nullptr) return cmd;
+    const int anchor = picks.front().first;
+    const PeakGroup& anchor_pg = *picks.front().second;
+    applyIsolation_(cmd, anchor_pg, anchor, margin);
+
+    // Stage 0's notches are the rest of the picks, each measured on the PeakGroup that resolved it (ADR-0036
+    // siblings can split one species' charges across PeakGroups). The old set is cleared first: a rewrite with
+    // fewer charges must not leave a stale window behind the new count.
+    std::vector<NotchCandidate> notches;
+    for (size_t k = 1; k < picks.size(); ++k)
+    {
+      if (picks[k].second == nullptr) continue;
+      const auto found = notchesFor_(peakGroupNotchCandidates(*picks[k].second, margin), anchor, {picks[k].first});
+      notches.insert(notches.end(), found.begin(), found.end());
+    }
+    for (int j = 0; j < MAX_NOTCHES_PER_STAGE; ++j) cmd.notches[j] = Notch{};
+    writeNotchesForStage(cmd, 0, notches);
+
+    // What the window now isolates is described from the PeakGroup it was measured on, exactly as buildMS2
+    // describes it: the scan_description's mass token and @z, and the precursor fields every log reads.
+    applyPrecursorScores_(cmd, anchor_pg, anchor);
+    writeMs2Description_(cmd, encode(r.scan_id), marker, anchor_pg.getMonoMass(), anchor);
+    syncEnergyMirrors_(cmd);
+    return cmd;
+  }
+
   ScanCommand ScanCommandQueue::makeMS1() const
   {
     ScanCommand cmd{};
@@ -342,15 +423,8 @@ namespace OpenMS
     cmd.scan_rate[sizeof(cmd.scan_rate) - 1] = '\0';
 
     // Isolation window from peak group m/z range
-    auto [mz1, mz2] = pg.getMzRange(charge);
-    double center_mz = (mz1 + mz2) / 2.0;
-    mz1 -= optimal_window_margin_;
-    mz2 += optimal_window_margin_;
-    double iso_width = mz2 - mz1;
-
-    cmd.stages[0].precursor_mz = center_mz;
-    cmd.stages[0].isolation_width = iso_width;
-    cmd.stages[0].charge_state = charge;
+    applyIsolation_(cmd, pg, charge, optimal_window_margin_);
+    const double center_mz = cmd.stages[0].precursor_mz;
 
     // CE and activation from scan_config
     cmd.stages[0].collision_energy = static_cast<double>(scan_config.collision_energy);
@@ -382,12 +456,7 @@ namespace OpenMS
       std::vector<NotchCandidate> notches;
       if (acquisition_set != nullptr && !acquisition_set->empty())
       {
-        for (int c : *acquisition_set)
-        {
-          if (c == charge) continue;   // the anchor is the stage itself
-          for (const NotchCandidate& n : notch_candidates)
-            if (n.charge == c) { notches.push_back(n); break; }
-        }
+        notches = notchesFor_(notch_candidates, charge, *acquisition_set);
       }
       else
       {
@@ -402,23 +471,13 @@ namespace OpenMS
 
     // Scan description: {3-char ID}R{mass_kDa}k@{charge}  (adaptive-precision mass token)
     std::string id_str = encode(id);
-    std::string mass_tok = formatMassToken(pg.getMonoMass() / 1000.0, charge, '\0', 0);
     // `marker` is 'R' for an identification MS2 and 'Q' for the quantification scan (ADR-0038).
     // Both are built by this one function because they are the same KIND of command -- a rostered
     // MS2 of a selected precursor -- differing only in role, which is exactly what the marker says.
-    std::snprintf(cmd.scan_description, 16, "%s%c%s@%d", id_str.c_str(), marker, mass_tok.c_str(), charge);
+    writeMs2Description_(cmd, id_str, marker, pg.getMonoMass(), charge);
 
     // Precursor scoring data for diagnostic TSV output
-    cmd.qscore = pg.getQscore();
-    cmd.mono_mass = pg.getMonoMass();
-    cmd.charge_cos = pg.getChargeIsotopeCosine(std::abs(charge));
-    cmd.charge_snr = pg.getChargeSNR(std::abs(charge));
-    cmd.iso_cos = pg.getIsotopeCosine();
-    cmd.snr = pg.getSNR();
-    cmd.charge_score = pg.getChargeScore();
-    cmd.ppm_error = pg.getAvgPPMError();
-    cmd.precursor_intensity = pg.getChargeIntensity(std::abs(charge));
-    cmd.peakgroup_intensity = pg.getIntensity();
+    applyPrecursorScores_(cmd, pg, charge);
     cmd.pad2 = 0;   // hcd_energy is derived from stages[0] by syncEnergyMirrors_ below
 
     // Parent tracking ID. `> 0` is exactly right, but only because nextTrackingIdInt_ never issues

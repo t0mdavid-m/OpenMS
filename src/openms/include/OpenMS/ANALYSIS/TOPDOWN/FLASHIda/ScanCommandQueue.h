@@ -124,6 +124,15 @@ namespace OpenMS
     ScanCommand buildMS2(const PeakGroup& pg, int charge, const ScanConfig& scan_config, int priority, int parent_scan_id,
                          const std::vector<int>* acquisition_set = nullptr, char marker = 'R');
 
+    /// Re-isolate @p r on a newer survey (survey re-planning: the bought R a newer survey adjusts). A copy of
+    /// @p r -- same scan id, parent, scan parameters and FAIMS CV -- whose stage-0 anchor is `picks[0]` and whose
+    /// stage-0 notches are `picks[1..]`, each measured on the PeakGroup that resolved it with the geometry
+    /// buildMS2 uses (@p margin is optimal_window_margin_). The precursor fields and the scan_description are
+    /// rewritten from the anchor's PeakGroup, keeping @p r's 3-char id: a stale `@z` would otherwise reach the
+    /// instrument and every log. Static and lock-free -- it mints nothing. Empty @p picks returns @p r unchanged.
+    static ScanCommand reisolate(const ScanCommand& r, const std::vector<std::pair<int, const PeakGroup*>>& picks, double margin,
+                                 char marker);
+
     /// Build MS3 ScanCommand from MS2 context + fragment target + MS3 config for CE/activation.
     /// parent_scan_id is MANDATORY (the immediate parent's tracking id); stamped at creation.
     /// stage0_params: if non-null, overrides the stage[0] CE/activation/reaction_time copied from
@@ -412,6 +421,21 @@ namespace OpenMS
 
     /// Every charge @p cmd isolates at its precursor stage: the anchor first, then stage 0's notches (multiplexed).
     static std::vector<int> isolatedCharges_(const ScanCommand& cmd);
+
+    /// buildMS2's stage-0 anchor geometry: the centre of @p pg's measured m/z range at @p charge, that range
+    /// widened by @p margin on each side, and the charge. Shared with reisolate.
+    static void applyIsolation_(ScanCommand& cmd, const PeakGroup& pg, int charge, double margin);
+
+    /// The notches for an explicit charge list: each member of @p charges but @p anchor_charge, in @p charges
+    /// order, taken from @p candidates; a charge absent from them is skipped.
+    static std::vector<NotchCandidate> notchesFor_(const std::vector<NotchCandidate>& candidates, int anchor_charge,
+                                                   const std::vector<int>& charges);
+
+    /// buildMS2's precursor scoring fields, from @p pg at @p charge.
+    static void applyPrecursorScores_(ScanCommand& cmd, const PeakGroup& pg, int charge);
+
+    /// buildMS2's scan_description: `{id}{marker}{mass token}@{charge}`.
+    static void writeMs2Description_(ScanCommand& cmd, const std::string& id_str, char marker, double mono_mass, int charge);
 
     /// Test scaffolding reads the plan registry through this friend rather than through a public getter.
     friend struct FLASHIdaTestAccess;
