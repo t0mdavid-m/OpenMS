@@ -67,6 +67,7 @@ set(OPENMS_DEP_PRIVATE_LIBRARIES
   Boost::date_time
   Boost::iostreams
   Boost::regex
+  CRoaring
   GTE
   Quadtree
   SIMDe

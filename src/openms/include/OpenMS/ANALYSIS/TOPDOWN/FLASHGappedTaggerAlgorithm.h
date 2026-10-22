@@ -12,6 +12,7 @@
 #include <OpenMS/DATASTRUCTURES/DefaultParamHandler.h>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -28,8 +29,9 @@ residue, and the tag masses, which is what the extension needs to anchor a path 
 
 Port of GappedFiltration (T. D. Mueller, https://github.com/t0mdavid-m/GappedFiltration) following its C++ form GappedFiltrationPP
 (O. Kohlbacher, https://github.com/okohlbacher/GappedFiltrationPP): every window of 1 to max_gap_mass / 57 residues is binned by mass
-into sorted posting lists of start positions, a bit set with a rank structure marks the masses that are sums of residues, and a beam
-over the mass graph proposes the tags. Differences: the tolerance of a gap or an offset is the deconvolution tolerance of each of its
+into a Roaring bitmap (CRoaring) of its start positions, a bit set with a rank structure marks the masses that are sums of residues,
+a beam over the mass graph proposes the tags, and a tag lands where the bitmaps of its offsets intersect (smallest first, stopping
+at an empty intersection). Differences: the tolerance of a gap or an offset is the deconvolution tolerance of each of its
 two masses (not a fraction of the gap), and every mass bin the tolerance window touches is looked up; landings are reported for
 the extension rather than counted per protein.
 */
@@ -74,10 +76,9 @@ protected:
   void updateMembers_() override;
 
 private:
-  /// start positions (ascending) of the windows whose mass bin lies in [key_lo, key_hi]
-  void collect_(std::int64_t key_lo, std::int64_t key_hi, std::vector<std::uint32_t>& out) const;
-  /// number of postings in the bins [key_lo, key_hi]
-  Size countRange_(std::int64_t key_lo, std::int64_t key_hi) const;
+  /// the Roaring bitmaps of the non-empty mass bins (defined in the source file, so that CRoaring stays private to the library)
+  struct BinBitmaps;
+
   /// true if a sum of residues lies in [lo, hi] Da
   bool plausible_(double lo, double hi) const;
   std::int64_t key_(double mass) const
@@ -86,12 +87,12 @@ private:
   }
 
   // parameters
-  double max_gap_mass_ = 2000;
+  double max_gap_mass_ = 5000;
   double bin_width_ = 0.1;
-  int min_tag_size_ = 4;
+  int min_tag_size_ = 5;
   int max_tag_size_ = 7;
-  int beam_width_ = 100;
-  int top_n_ = 100;
+  int beam_width_ = 1000;
+  int top_n_ = 400;
   bool stop_at_first_size_ = false;
 
   // proteins: residues concatenated, prefix sums of residue masses (0 for a non-standard residue), protein start offsets
@@ -99,12 +100,12 @@ private:
   std::vector<std::uint8_t> valid_;
   std::vector<Size> offsets_;
 
-  // mass index: bin -> slot of a non-empty bin; per slot a sorted posting list of window start positions
+  // mass index: bin -> slot of a non-empty bin; per slot the bitmap of the window start positions and their number (shared by
+  // copies, never changed after buildIndex)
   std::int64_t key_min_ = 0, key_max_ = 0;
-  double index_bin_width_ = 0.1; ///< bin_width when the index was built
   std::vector<std::uint32_t> slot_;
-  std::vector<std::uint64_t> post_offsets_;
-  std::vector<std::uint32_t> postings_;
+  std::vector<std::uint64_t> slot_count_;
+  std::shared_ptr<const BinBitmaps> bins_;
 
   // residue sums on a 0.1 mDa grid up to max_gap_mass, and the number of set bits before each 64-bit word
   std::vector<std::uint64_t> plausible_bits_;
