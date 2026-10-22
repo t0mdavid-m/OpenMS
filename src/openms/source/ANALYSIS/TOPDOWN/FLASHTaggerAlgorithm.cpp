@@ -13,6 +13,7 @@
 #else
   #define omp_in_parallel() 0
 #endif
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <utility>
