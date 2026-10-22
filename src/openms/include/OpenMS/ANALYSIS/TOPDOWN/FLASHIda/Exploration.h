@@ -346,6 +346,14 @@ namespace OpenMS
     /// to be answerable separately. Each group already records its msn_level; this only filters.
     int activeGroupCount(int msn_level) const;
 
+    /// Forget an exploration group none of whose variants was received (a re-planned survey dropped it):
+    /// the group and its variants' routing entries are erased. Returns false if the group is unknown or any
+    /// variant was already received. The caller republishes the exploration atomics.
+    bool dropGroup(int group_id);
+
+    /// Id of the group the last initiate() created (0 before the first).
+    int lastGroupId() const;
+
     /// Mass count of the stored exploration-deconv MS2 spectrum (0 if none). Encapsulates the
     /// exploration_deconv_ access that processScan used to perform inline.
     /// Both accessors report NOTHING after a measured-only feed (ADR-0045): the stored spectrum is then

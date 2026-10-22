@@ -1253,6 +1253,24 @@ namespace OpenMS
     return n;
   }
 
+  bool Exploration::dropGroup(int group_id)
+  {
+    auto git = active_groups_.find(group_id);
+    if (git == active_groups_.end()) return false;
+    for (const auto& v : git->second.variants)
+      if (v.received) return false;
+    for (const auto& v : git->second.variants)
+      variant_tracking_map_.erase(v.cmd.scan_id);
+    active_groups_.erase(git);
+    std::cout << "[EXPL-DROP] group=" << group_id << std::endl;
+    return true;
+  }
+
+  int Exploration::lastGroupId() const
+  {
+    return next_group_id_ - 1;
+  }
+
   Exploration::ExplorationGroup Exploration::getGroup(int group_id) const
   {
     return active_groups_.at(group_id);

@@ -5083,4 +5083,47 @@ START_SECTION(a_trap_sweep_must_use_remaining_precursor)
   TEST_EQUAL(static_cast<int>(off_l3.level(3).exploration), static_cast<int>(ExplorationMetric::MassCount))
 }
 END_SECTION
+
+START_SECTION(dropGroup_forgets_an_unsent_group)
+{
+  // Survey re-planning: a newer survey that drops a sweep none of whose variants was sent must leave no trace of
+  // it -- no active group (which would hold cycle_time suppression) and no variant routing entry.
+  Config cfg{std::string(exploration_config)};
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+
+  auto cmds = exploration.initiate(2, makeSyntheticPeakGroup(800.0, 2400.0, 3), 3, queue);
+  const int g = exploration.lastGroupId();
+  TEST_EQUAL(g, 1)
+  TEST_EQUAL(static_cast<int>(cmds.size()), 5)
+  TEST_EQUAL(exploration.activeGroupCount(2), 1)
+
+  TEST_EQUAL(exploration.dropGroup(g), true)
+  TEST_EQUAL(exploration.activeGroupCount(2), 0)
+  for (const auto& c : cmds)
+    TEST_EQUAL(exploration.isExplorationVariant(c.scan_id), false)
+  TEST_EQUAL(exploration.dropGroup(g), false)   // already gone
+}
+END_SECTION
+
+START_SECTION(dropGroup_refuses_a_group_with_a_received_variant)
+{
+  // A variant that came back means the sweep was acquired: the group is committed and must be left to complete.
+  Config cfg{std::string(exploration_config)};
+  ScanCommandQueue queue(cfg);
+  FragmentAnalysis fragments(cfg);
+  Exploration exploration(cfg, fragments);
+
+  auto cmds = exploration.initiate(2, makeSyntheticPeakGroup(800.0, 2400.0, 3), 3, queue);
+  const int g = exploration.lastGroupId();
+  TEST_EQUAL(static_cast<int>(cmds.size()), 5)
+  ExplorationTestAccess::feedResult(exploration, cmds[0].scan_id, makeSyntheticDeconv(1, 3), 0.0, queue);
+
+  TEST_EQUAL(exploration.dropGroup(g), false)
+  TEST_EQUAL(exploration.activeGroupCount(2), 1)
+  for (std::size_t i = 1; i < cmds.size(); ++i)
+    TEST_EQUAL(exploration.isExplorationVariant(cmds[i].scan_id), true)
+}
+END_SECTION
 END_TEST
