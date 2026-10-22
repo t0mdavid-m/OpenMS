@@ -131,7 +131,7 @@ private:
   /// candidates from precursor-anchored ladders (windows whose unmodified mass is the precursor mass) in every spectrum with a precursor mass
   bool precursor_ladders_ = true;
   /// learn variable modification penalties from target and decoy usage
-  bool learn_var_mod_penalty_ = true;
+  bool learn_var_mod_penalty_ = false;
   /// search spectra with MS1-based PrSMs again with decoy precursor masses, as decoys of the precursor in the FDR
   bool decoy_precursor_ = false;
   /// co-isolation: an MS1 mass reported by PrSMs of different proteins stays with the protein that explains it best

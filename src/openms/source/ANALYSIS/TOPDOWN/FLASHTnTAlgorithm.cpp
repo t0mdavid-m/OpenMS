@@ -380,11 +380,13 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "and MatchedMasses, the masses on the path. Without the option, results are unchanged.");
   defaults_.setMinInt("chimeric_rounds", 0);
   defaults_.setMaxInt("chimeric_rounds", max_chimeric_rounds);
-  defaults_.setValue("learn_var_mod_penalty", "true",
+  defaults_.setValue("learn_var_mod_penalty", "false",
                      "Raises the penalty of a variable modification that target PrSMs use per opportunity (fitting residue or terminus) no more often than decoy PrSMs "
                      "(chance), up to that of a blind shift. The usage is counted in a pilot pass over every 4th spectrum (all spectra if the pilot "
                      "has fewer than 50 decoy PrSMs); with a raised penalty, all spectra are then extended once with the learned penalties. "
-                     "Needs decoys and at least 50 decoy PrSMs.");
+                     "Needs decoys and at least 50 decoy PrSMs. Off by default: a listed variable modification keeps its small penalty (2, a blind "
+                     "shift costs 19); on E. coli lysates, learning raised most of them to the blind-shift penalty and the variable modifications "
+                     "added no proteoforms, while the small penalty added 1.4% at unchanged entrapment.");
   defaults_.setValidStrings("learn_var_mod_penalty", {"true", "false"});
   defaults_.addTag("learn_var_mod_penalty", "advanced");
   defaults_.insert("gapped:", FLASHGappedTaggerAlgorithm().getDefaults());
