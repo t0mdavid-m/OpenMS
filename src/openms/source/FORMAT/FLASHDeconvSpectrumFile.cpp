@@ -9,9 +9,13 @@
 #include <OpenMS/FORMAT/FLASHDeconvSpectrumFile.h>
 #include <OpenMS/FORMAT/MzMLFile.h>
 #include <algorithm>
+#include <atomic>
 #include <exception>
+#include <memory>
+#include <mutex>
 #include <random>
 #include <sstream>
+#include <thread>
 #ifdef _OPENMP
   #include <omp.h>
 #endif
@@ -366,45 +370,92 @@ namespace OpenMS
       jobs.push_back(s);
     }
     // A spectrum's rows depend only on the spectrum, the index of its first row and, with report_decoy, the state of the random sequence the
-    // noise decoys are drawn from (one sequence in spectrum order). Both are advanced up front per spectrum (by one per target mass, or with
-    // report_decoy by replaying the draws), the spectra are formatted in parallel in waves, and each wave is written in input order.
+    // noise decoys are drawn from (one sequence in spectrum order). Both are advanced up front per spectrum, in input order (by one per target
+    // mass, or with report_decoy by replaying the draws). The spectra are then formatted in parallel, and the formatted rows are written in
+    // input order as they become ready, by whichever thread holds the write lock: no thread waits at a barrier, and a buffer is released as
+    // soon as it is written.
     auto& indices = writerIndices_();
+    const Size n = jobs.size();
+    std::vector<uint> first_index(n, 0);
+    std::vector<std::default_random_engine> first_gen; // with report_decoy only (otherwise generator_ is not advanced here)
+    if (report_decoy) first_gen.assign(n, generator_);
+    std::vector<char> skip(n, 0);
+    for (Size k = 0; k < n; k++)
+    {
+      const auto& dspec = spectra[jobs[k]];
+      if ((! report_decoy && dspec.isDecoy()) || dspec.empty())
+      {
+        skip[k] = 1;
+        continue;
+      }
+      const uint ms_level = dspec.getOriginalSpectrum().getMSLevel();
+      while (indices.size() <= ms_level) indices.push_back(1);
+      first_index[k] = indices[ms_level - 1];
+      if (report_decoy) first_gen[k] = generator_;
+      indices[ms_level - 1] += (uint)(report_decoy ? countDecoyReportRows_(dspec, noise_decoy_weight, generator_) : countTargetMasses(dspec));
+    }
+
     int threads = 1;
 #ifdef _OPENMP
     threads = omp_get_max_threads();
 #endif
-    const Size wave = 16 * (Size)std::max(1, threads); // bounds the formatted text held at once
-    std::vector<std::string> buffers;
-    std::vector<uint> first_index;
-    std::vector<std::default_random_engine> first_gen;
-    std::vector<std::exception_ptr> errors;
-    for (Size begin = 0; begin < jobs.size(); begin += wave)
-    {
-      const Size count = std::min(wave, jobs.size() - begin);
-      buffers.assign(count, std::string());
-      first_index.assign(count, 0);
-      first_gen.assign(count, generator_);
-      errors.assign(count, nullptr);
-      for (Size k = 0; k < count; k++)
+    // a spectrum is formatted at most this many spectra ahead of the next one to be written: bounds the formatted text held at once
+    const Size window = 16 * (Size)std::max(1, threads);
+    std::vector<std::string> buffers(n);
+    std::vector<std::exception_ptr> errors(n);
+    std::unique_ptr<std::atomic<bool>[]> ready(new std::atomic<bool>[n]);
+    for (Size k = 0; k < n; k++) ready[k].store(false, std::memory_order_relaxed);
+    std::atomic<Size> next_write {0};  // the next spectrum to be written
+    std::atomic<bool> failed {false};  // a spectrum failed (its exception is rethrown after the loop; nothing after it is written)
+    std::mutex write_mutex;
+    // writes the formatted spectra in input order as far as they are ready; the caller holds write_mutex
+    const auto write_ready = [&]() {
+      while (! failed.load() && next_write.load() < n && ready[next_write.load()].load(std::memory_order_acquire))
       {
-        const auto& dspec = spectra[jobs[begin + k]];
-        if ((! report_decoy && dspec.isDecoy()) || dspec.empty()) continue;
-        const uint ms_level = dspec.getOriginalSpectrum().getMSLevel();
-        while (indices.size() <= ms_level) indices.push_back(1);
-        first_index[k] = indices[ms_level - 1];
-        first_gen[k] = generator_;
-        indices[ms_level - 1] += (uint)(report_decoy ? countDecoyReportRows_(dspec, noise_decoy_weight, generator_) : countTargetMasses(dspec));
-      }
-#pragma omp parallel for schedule(dynamic, 1)
-      for (SignedSize k = 0; k < (SignedSize)count; k++)
-      {
-        auto& dspec = spectra[jobs[begin + k]];
-        if ((! report_decoy && dspec.isDecoy()) || dspec.empty()) continue;
+        const Size k = next_write.load();
+        if (errors[k])
+        {
+          failed = true;
+          break;
+        }
         try
         {
+          streams[spectra[jobs[k]].getOriginalSpectrum().getMSLevel() - 1] << buffers[k];
+        }
+        catch (...)
+        {
+          errors[k] = std::current_exception();
+          failed = true;
+          break;
+        }
+        std::string().swap(buffers[k]);
+        next_write.store(k + 1);
+      }
+    };
+// the spectra are taken in input order (the write window relies on it): a nonmonotonic schedule (the OpenMP >= 5.0 default, e.g. the work
+// stealing of clang/libomp) could hand out spectra far ahead of an unassigned one
+#if defined(_OPENMP) && _OPENMP >= 201511
+  #pragma omp parallel for schedule(monotonic: dynamic, 1)
+#else
+  #pragma omp parallel for schedule(dynamic, 1)
+#endif
+    for (SignedSize k = 0; k < (SignedSize)n; k++)
+    {
+      // wait (writing what is ready) while this spectrum is too far ahead of the next one to be written
+      while ((Size)k >= next_write.load() + window && ! failed.load())
+      {
+        std::unique_lock<std::mutex> lock(write_mutex, std::try_to_lock);
+        if (lock.owns_lock()) { write_ready(); }
+        else { std::this_thread::yield(); }
+      }
+      if (! skip[k] && ! failed.load())
+      {
+        try
+        {
+          auto& dspec = spectra[jobs[k]];
           std::ostringstream os;
           uint index = first_index[k];
-          auto gen = first_gen[k];
+          auto gen = report_decoy ? first_gen[k] : generator_;
           writeDeconvolvedMasses_(dspec, os, file_name, avg, decoy_avg, tols[dspec.getOriginalSpectrum().getMSLevel() - 1], write_detail, report_decoy,
                                   noise_decoy_weight, index, gen);
           buffers[k] = os.str();
@@ -414,12 +465,15 @@ namespace OpenMS
           errors[k] = std::current_exception();
         }
       }
-      for (Size k = 0; k < count; k++)
-      {
-        if (errors[k]) std::rethrow_exception(errors[k]);
-        streams[spectra[jobs[begin + k]].getOriginalSpectrum().getMSLevel() - 1] << buffers[k];
-      }
+      ready[k].store(true, std::memory_order_release);
+      std::unique_lock<std::mutex> lock(write_mutex, std::try_to_lock);
+      if (lock.owns_lock()) { write_ready(); }
     }
+    {
+      std::lock_guard<std::mutex> lock(write_mutex);
+      write_ready(); // what is not written yet, after the join
+    }
+    if (failed) { std::rethrow_exception(errors[next_write.load()]); }
   }
 
   void FLASHDeconvSpectrumFile::writeDeconvolvedMassesHeader(std::fstream& fs, const uint ms_level, const bool detail, const bool report_decoy)

@@ -388,7 +388,8 @@ namespace OpenMS
                                                        std::vector<std::pair<Size, long>>& chain_redirects)
   { //
     Size mz_bin_index = binned_log_mz_peaks_.find_first();
-    auto mz_bin_index_reverse = std::vector<Size>();
+    auto& mz_bin_index_reverse = mz_bin_index_reverse_pool_; // pooled: refilled here
+    mz_bin_index_reverse.clear();
     mz_bin_index_reverse.reserve(binned_log_mz_peaks_.count());
     // invert mz bins so charges are counted from small to large given a mass
 
@@ -402,21 +403,16 @@ namespace OpenMS
 
     // to calculate continuous charges, the previous charge value per mass should be stored
     const unsigned short no_charge = (unsigned short)(current_max_charge_ + 2);
-    auto prev_charges = std::vector<unsigned short>(binned_log_masses_.size(), no_charge);
+    auto& prev_charges = prev_charges_pool_; // pooled: refilled here
+    prev_charges.assign(binned_log_masses_.size(), no_charge);
 
     // the rest of the state per mass bin in one struct (one cache line per peak and charge, not one per array), zero-initialized: not just
     // charges but intensities are stored to see the intensity fold change, how many peaks are present to support that mass bin, and (see
     // below) the unrounded position of the last peak and the offset to the chain's bin. prev_charges stays apart for the chain search.
-    struct ChainState
-    {
-      float prev_intensity;
-      float prev_residual;
-      unsigned short support_peak_count;
-      short chain_offset;
-    };
-    auto chain_states = std::vector<ChainState>(binned_log_masses_.size());
+    auto& chain_states = chain_states_pool_; // pooled: refilled here with value-initialized (all zero) states
+    chain_states.assign(binned_log_masses_.size(), MassBinChainState_ {});
 
-    mass_intensities = std::vector<float>(binned_log_masses_.size(), .0f);
+    mass_intensities.assign(binned_log_masses_.size(), .0f);
 
     double bin_mul_factor = bin_mul_factors_[ms_level_ - 1];
     // per harmonic charge; fixed size, so that zeroing it per charge is two stores, not a memset call
@@ -431,7 +427,7 @@ namespace OpenMS
     // (tol_div_factor bins) in unrounded mass, the closest one, and adds to the mass bin of that chain. A low-charge peak (and every peak in
     // MSn) is accepted by its own isotope peaks; there the chain keeps the mass bin identity: with the unrounded rule at every charge,
     // coincidental chains of unrelated peaks took peaks from their own masses (Eclip_1480 MSn: 5% fewer complementary fragment pairs).
-    // Per mass bin (ChainState): the unrounded position (in bins) of its last peak relative to the bin and the offset from the bin to the
+    // Per mass bin (MassBinChainState_): the unrounded position (in bins) of its last peak relative to the bin and the offset from the bin to the
     // chain's bin.
     const double chain_tol = tol_div_factor;                // tolerance in mass bins (= the input ppm tolerance)
     const long chain_search = (long)(chain_tol + 2.0);      // + the two rounding errors (each <= 1/2 bin) of each of the two peaks
@@ -449,7 +445,8 @@ namespace OpenMS
       exact_mass_offsets[j] = (mz_bin_min_value_ - universal_pattern_[j] - mass_bin_min_value_) * bin_mul_factor;
     }
     // unrounded position of each m/z bin (in bins): its most intense peak
-    std::vector<double> exact_mz_positions(mz_bin_index_reverse.size(), .0);
+    auto& exact_mz_positions = exact_mz_positions_pool_; // pooled: refilled here
+    exact_mz_positions.assign(mz_bin_index_reverse.size(), .0);
     {
       Size k = 0;
       float max_intensity = -1;
@@ -739,7 +736,9 @@ namespace OpenMS
     Size mz_bin_index = binned_log_mz_peaks_.find_first();
     long bin_size = (long)binned_log_masses_.size();
 
-    auto to_skip = binned_log_masses_.flip();
+    binned_log_masses_.flip();
+    auto& to_skip = to_skip_pool_; // pooled: assigned here
+    to_skip = binned_log_masses_;
     binned_log_masses_.reset();
 
     const int select_top_N = 2; // select top N charges per peak. We allow up to 2 just to consider frequent coelution.
@@ -838,11 +837,10 @@ namespace OpenMS
   // update mass bins which will be used to select peaks in the input spectrum...
   std::vector<SpectralDeconvolution::MassBinChargeRange_> SpectralDeconvolution::updateMassBins_(const std::vector<float>& mz_intensities)
   {
-    std::vector<float> mass_intensities;
-    std::vector<std::pair<Size, long>> chain_redirects;
-    updateCandidateMassBins_(mass_intensities, mz_intensities, chain_redirects); // universal pattern matching
+    // both pooled: refilled by updateCandidateMassBins_
+    updateCandidateMassBins_(mass_intensities_pool_, mz_intensities, chain_redirects_pool_); // universal pattern matching
 
-    return filterMassBins_(mass_intensities, chain_redirects);
+    return filterMassBins_(mass_intensities_pool_, chain_redirects_pool_);
   }
 
   // With the mass bins selected by updateMassBins_, select peaks from the same mass in the original input spectrum
@@ -855,9 +853,14 @@ namespace OpenMS
     int log_mz_peak_size = (int)log_mz_peaks_.size();
     // this stores which peak is now being considered per charge. Per charge, peak is considered from left (lowest m/z) to right (highest m/z).
     auto current_peak_index = std::vector<int>(charge_range, 0);
+    // the candidates go into the vector of the previous spectrum's candidates (pooled, empty), for its capacity
+    candidate_pool_.clear();
+    deconvolved_spectrum_.swapPeakGroups(candidate_pool_);
+    candidate_pool_.clear(); // what the spectrum held before (nothing: generatePeakGroupsFromSpectrum_ cleared it) is dropped
     deconvolved_spectrum_.reserve(mass_bin_charge_ranges.size());
     Size range_index = 0; // the selected mass bin in mass_bin_charge_ranges
-    auto peak_bin_numbers = std::vector<Size>(log_mz_peak_size);
+    auto& peak_bin_numbers = peak_bin_numbers_pool_; // pooled: every element is set below
+    peak_bin_numbers.resize(log_mz_peak_size);
     // per peak, store the m/z bin number for fast processing
     for (int i = 0; i < log_mz_peak_size; i++)
     {
@@ -1019,7 +1022,8 @@ namespace OpenMS
           pg.setScanNumber(deconvolved_spectrum_.getScanNumber());
           pg.sort();
 
-          deconvolved_spectrum_.push_back(std::move(pg)); //
+          // fused: scored now (as scoreAndFilterPeakGroups_ would, in candidate order), and only kept if it passes
+          if (! fused_scoring_ || scorePeakGroup_(pg)) { deconvolved_spectrum_.push_back(std::move(pg)); }
         }
       }
       range_index++;
@@ -1077,7 +1081,8 @@ namespace OpenMS
     }
 
     Size mz_bin_number = getBinNumber_(mz_bin_max_value, mz_bin_min_value_, bin_mul_factor) + 1;
-    auto binned_log_mz_peak_intensities = std::vector<float>(mz_bin_number, .0f);
+    auto& binned_log_mz_peak_intensities = mz_intensities_pool_; // pooled: refilled here
+    binned_log_mz_peak_intensities.assign(mz_bin_number, .0f);
 
     // bin log mzs
     binLogMzPeaks_(mz_bin_number, binned_log_mz_peak_intensities);
@@ -1129,6 +1134,23 @@ namespace OpenMS
 
     // main algorithm to generate mass bins
     const auto mass_bin_charge_ranges = updateMassBins_(binned_log_mz_peak_intensities);
+
+    // detection limit of the spectrum: the intensity of its weakest peak (after the peak filter). Noise below it cannot be observed;
+    // it floors the per-charge noise power of the peak groups (PeakGroup::updateChargeRange_)
+    detection_limit_ = 0;
+    for (const auto& p : deconvolved_spectrum_.getOriginalSpectrum())
+    {
+      if (p.getIntensity() <= 0) { continue; }
+      if (detection_limit_ == 0 || p.getIntensity() < detection_limit_) { detection_limit_ = p.getIntensity(); }
+    }
+    // Inside an active parallel region (the spectrum workers of FLASHDeconvAlgorithm, or the two decoy runs of a spectrum) the candidates
+    // are scored serially in candidate order (scoreAndFilterPeakGroups_). There each candidate is scored as soon as it is built and kept
+    // only if it passes, so that a worker never holds all candidates of a spectrum: the scoring of a candidate reads only the candidate and
+    // state fixed before the candidates are built, so the kept groups, their scores and their order are the same.
+    fused_scoring_ = false;
+#ifdef _OPENMP
+    fused_scoring_ = omp_in_parallel();
+#endif
     // main algorithm to generate peak groups
     getCandidatePeakGroups_(mass_bin_charge_ranges);
     scoreAndFilterPeakGroups_();
@@ -1158,20 +1180,87 @@ namespace OpenMS
   }
 
 
+  bool SpectralDeconvolution::scorePeakGroup_(PeakGroup& peak_group)
+  {
+    const double tol = tolerance_[ms_level_ - 1];
+    const double snr_threshold = min_snr_[ms_level_ - 1];
+    int offset = 0;
+    peak_group.setTargetDecoyType(target_decoy_type_);
+    peak_group.setDetectionLimit(detection_limit_);
+
+    if (isPeakGroupInExcludedMassForDecoyRuns_(peak_group, tol)) { return false; }
+
+    static thread_local std::vector<LogMzPeak> noisy_peaks; // per-worker scratch
+    int num_iteration = 10;
+    bool mass_determined = false;
+    double prev_cos = 0;
+    // isotope pattern matching and qscore update part. Isotope pattern matching is done multiple times until finding the maximum isotope cosine
+    for (int k = 0; k < num_iteration; k++)
+    {
+      peak_group.recruitAllPeaksInSpectrum(deconvolved_spectrum_.getOriginalSpectrum(), tol, activeAveragine_(),
+                                           peak_group.getMonoMass() + offset * iso_da_distance_, noisy_peaks, true, &original_log_mzs_);
+      if (isPeakGroupInExcludedMassForDecoyRuns_(peak_group, tol)) { break; }
+      // min cosine is checked in here. mono mass is also updated one last time. SNR, per charge SNR, and avg errors are updated here.
+      const auto& [z1, z2] = peak_group.getAbsChargeRange();
+      offset = peak_group.updateQscore(noisy_peaks, activeAveragine_(), min_isotope_cosine_[ms_level_ - 1], tol,
+                                       (z1 + z2) < 2 * low_charge_, excluded_masses_for_decoy_runs_, false);
+
+      if (prev_cos > peak_group.getIsotopeCosine() || offset == 0 || k >= num_iteration - 1) //
+      {
+        if (peak_group.getChargeSNR(peak_group.getRepAbsCharge()) < snr_threshold) // to speed up
+          break;
+        if (offset != 0) peak_group.recruitAllPeaksInSpectrum(deconvolved_spectrum_.getOriginalSpectrum(), tol, activeAveragine_(),
+                                                              peak_group.getMonoMass() + offset * iso_da_distance_, noisy_peaks, true, &original_log_mzs_);
+
+        peak_group.updateQscore(noisy_peaks, activeAveragine_(), min_isotope_cosine_[ms_level_ - 1], tol,
+                                (z1 + z2) < 2 * low_charge_, excluded_masses_for_decoy_runs_, true);
+        mass_determined = true;
+        break;
+      }
+      prev_cos = peak_group.getIsotopeCosine();
+    }
+
+    if (isPeakGroupInExcludedMassForDecoyRuns_(peak_group, tol))
+    {
+      return false;
+    }
+
+    if (! mass_determined || peak_group.empty() || peak_group.getQscore() <= 0 || peak_group.getMonoMass() < current_min_mass_
+        || peak_group.getMonoMass() > current_max_mass_)
+      return false;
+
+    auto [z1, z2] = peak_group.getAbsChargeRange();
+
+    // a high-charge mass must span several charge states in MS1; fragment ions in MSn mostly appear at one charge
+    if (ms_level_ == 1 && z1 > low_charge_ && (z2 - z1) < min_support_peak_count_) { return false; }
+
+    if (! target_mono_masses_.empty())
+    {
+      double delta = peak_group.getMonoMass() * tolerance_[ms_level_ - 1] * 2;
+      auto upper = std::upper_bound(target_mono_masses_.begin(), target_mono_masses_.end(), peak_group.getMonoMass() + delta);
+
+      while (! peak_group.isTargeted())
+      {
+        if (upper != target_mono_masses_.end())
+        {
+          if (std::abs(*upper - peak_group.getMonoMass()) < delta) { peak_group.setTargeted(); }
+          if (peak_group.getMonoMass() - *upper > delta) { break; }
+        }
+        if (upper == target_mono_masses_.begin()) { break; }
+        --upper;
+      }
+    }
+    return true;
+  }
+
   void SpectralDeconvolution::scoreAndFilterPeakGroups_()
   {
     double tol = tolerance_[ms_level_ - 1];
     const int num_peak_groups = static_cast<int>(deconvolved_spectrum_.size());
     auto selected = boost::dynamic_bitset<>(num_peak_groups);
     double snr_threshold = min_snr_[ms_level_ - 1];
-    // detection limit of the spectrum: the intensity of its weakest peak (after the peak filter). Noise below it cannot be observed;
-    // it floors the per-charge noise power of the peak groups (PeakGroup::updateChargeRange_)
-    float detection_limit = 0;
-    for (const auto& p : deconvolved_spectrum_.getOriginalSpectrum())
-    {
-      if (p.getIntensity() <= 0) { continue; }
-      if (detection_limit == 0 || p.getIntensity() < detection_limit) { detection_limit = p.getIntensity(); }
-    }
+    // detection limit of the spectrum (generatePeakGroupsFromSpectrum_)
+    const float detection_limit = detection_limit_;
 
     // The peak groups are scored independently of each other, in parallel, except inside an active parallel region (the spectrum workers
     // of FLASHDeconvAlgorithm, which deconvolve whole spectra in parallel): there the loops run serially as plain loops, so that an
@@ -1181,77 +1270,14 @@ namespace OpenMS
     parallel_peak_groups = ! omp_in_parallel();
 #endif
     // whether peak group i is kept
-    const auto score_peak_group = [&](const int i) -> bool {
-      int offset = 0;
-      auto& peak_group = deconvolved_spectrum_[i];
-      peak_group.setTargetDecoyType(target_decoy_type_);
-      peak_group.setDetectionLimit(detection_limit);
-
-      if (isPeakGroupInExcludedMassForDecoyRuns_(peak_group, tol)) { return false; }
-
-      static thread_local std::vector<LogMzPeak> noisy_peaks; // per-worker scratch
-      int num_iteration = 10;
-      bool mass_determined = false;
-      double prev_cos = 0;
-      // isotope pattern matching and qscore update part. Isotope pattern matching is done multiple times until finding the maximum isotope cosine
-      for (int k = 0; k < num_iteration; k++)
-      {
-        peak_group.recruitAllPeaksInSpectrum(deconvolved_spectrum_.getOriginalSpectrum(), tol, activeAveragine_(),
-                                             peak_group.getMonoMass() + offset * iso_da_distance_, noisy_peaks, true, &original_log_mzs_);
-        if (isPeakGroupInExcludedMassForDecoyRuns_(peak_group, tol)) { break; }
-        // min cosine is checked in here. mono mass is also updated one last time. SNR, per charge SNR, and avg errors are updated here.
-        const auto& [z1, z2] = peak_group.getAbsChargeRange();
-        offset = peak_group.updateQscore(noisy_peaks, activeAveragine_(), min_isotope_cosine_[ms_level_ - 1], tol,
-                                         (z1 + z2) < 2 * low_charge_, excluded_masses_for_decoy_runs_, false);
-
-        if (prev_cos > peak_group.getIsotopeCosine() || offset == 0 || k >= num_iteration - 1) //
-        {
-          if (peak_group.getChargeSNR(peak_group.getRepAbsCharge()) < snr_threshold) // to speed up
-            break;
-          if (offset != 0) peak_group.recruitAllPeaksInSpectrum(deconvolved_spectrum_.getOriginalSpectrum(), tol, activeAveragine_(),
-                                                                peak_group.getMonoMass() + offset * iso_da_distance_, noisy_peaks, true, &original_log_mzs_);
-
-          peak_group.updateQscore(noisy_peaks, activeAveragine_(), min_isotope_cosine_[ms_level_ - 1], tol,
-                                  (z1 + z2) < 2 * low_charge_, excluded_masses_for_decoy_runs_, true);
-          mass_determined = true;
-          break;
-        }
-        prev_cos = peak_group.getIsotopeCosine();
-      }
-
-      if (isPeakGroupInExcludedMassForDecoyRuns_(peak_group, tol))
-      {
-        return false;
-      }
-
-      if (! mass_determined || peak_group.empty() || peak_group.getQscore() <= 0 || peak_group.getMonoMass() < current_min_mass_
-          || peak_group.getMonoMass() > current_max_mass_)
-        return false;
-
-      auto [z1, z2] = peak_group.getAbsChargeRange();
-
-      // a high-charge mass must span several charge states in MS1; fragment ions in MSn mostly appear at one charge
-      if (ms_level_ == 1 && z1 > low_charge_ && (z2 - z1) < min_support_peak_count_) { return false; }
-
-      if (! target_mono_masses_.empty())
-      {
-        double delta = peak_group.getMonoMass() * tolerance_[ms_level_ - 1] * 2;
-        auto upper = std::upper_bound(target_mono_masses_.begin(), target_mono_masses_.end(), peak_group.getMonoMass() + delta);
-
-        while (! peak_group.isTargeted())
-        {
-          if (upper != target_mono_masses_.end())
-          {
-            if (std::abs(*upper - peak_group.getMonoMass()) < delta) { peak_group.setTargeted(); }
-            if (peak_group.getMonoMass() - *upper > delta) { break; }
-          }
-          if (upper == target_mono_masses_.begin()) { break; }
-          --upper;
-        }
-      }
-      return true;
-    };
-    if (parallel_peak_groups && num_peak_groups > 100) // a small spectrum (e.g. FLASHIda's, in real time) is scored serially
+    const auto score_peak_group = [&](const int i) -> bool { return scorePeakGroup_(deconvolved_spectrum_[i]); };
+    if (fused_scoring_)
+    {
+      // the candidates were scored as they were built (getCandidatePeakGroups_), and only those that passed were kept
+      selected.set();
+      fused_scoring_ = false;
+    }
+    else if (parallel_peak_groups && num_peak_groups > 100) // a small spectrum (e.g. FLASHIda's, in real time) is scored serially
     {
   #pragma omp parallel for default(none) shared(selected, score_peak_group)
       for (int i = 0; i < (int)deconvolved_spectrum_.size(); i++)
@@ -1272,7 +1298,9 @@ namespace OpenMS
     Size selected_count = selected.count();
     if (selected_count == 0)
     {
-      deconvolved_spectrum_.clear();
+      // no peak groups: the candidates are destroyed now, their vector (capacity) goes back to the pool
+      deconvolved_spectrum_.swapPeakGroups(candidate_pool_);
+      candidate_pool_.clear();
       return;
     }
 
@@ -1309,7 +1337,10 @@ namespace OpenMS
       }
     }
 
-    deconvolved_spectrum_.setPeakGroups(std::move(filtered_peak_groups));
+    deconvolved_spectrum_.swapPeakGroups(filtered_peak_groups);
+    // the remaining (moved-from or unselected) candidates are destroyed now, their vector (capacity) goes back to the pool
+    filtered_peak_groups.clear();
+    candidate_pool_.swap(filtered_peak_groups);
     deconvolved_spectrum_.sort();
 
     removeChargeErrorPeakGroups_(deconvolved_spectrum_, target_decoy_type_);
