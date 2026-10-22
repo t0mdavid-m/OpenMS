@@ -546,12 +546,14 @@ namespace OpenMS
       per_charge_int_[p.abs_charge] += p.intensity;
       max_iso = std::max(max_iso, p.isotopeIndex);
     }
-    // per-worker scratch replaces a fresh (charge x isotope) matrix per call; row-major, same summation order
+    // per-worker scratch replaces a fresh (charge x isotope) matrix per call; row-major, same summation order. The matrix is all +0 between
+    // calls: the cells a peak was added to are reset below instead of zero-filling the whole matrix on every call (the allocations happen
+    // before any cell is modified)
     static thread_local std::vector<float> per_charge_isotope_int;
     static thread_local std::vector<std::uint64_t> touched_cells; // one bit per matrix cell that a peak was added to
     const Size iso_cols = 1 + (Size)max_iso;
     const Size cell_count = (1 + (Size)max_abs_charge_) * iso_cols;
-    per_charge_isotope_int.assign(cell_count, .0f);
+    if (per_charge_isotope_int.size() < cell_count) { per_charge_isotope_int.resize(cell_count, .0f); }
     touched_cells.assign((cell_count + 63) / 64, 0);
     for (const auto& p : logMzpeaks_)
     {
@@ -577,6 +579,10 @@ namespace OpenMS
           per_charge_sum_signal_squared_[z] += v * v;
         }
       }
+    }
+    for (Size w = 0; w < touched_cells.size(); w++)
+    {
+      for (std::uint64_t bits = touched_cells[w]; bits != 0; bits &= bits - 1) { per_charge_isotope_int[w * 64 + std::countr_zero(bits)] = .0f; }
     }
 
     // for each charge calculate signal and noise power
