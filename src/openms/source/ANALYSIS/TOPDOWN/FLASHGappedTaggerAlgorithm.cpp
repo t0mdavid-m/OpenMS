@@ -51,6 +51,10 @@ void orShifted(std::vector<std::uint64_t>& dst, const std::vector<std::uint64_t>
 struct FLASHGappedTaggerAlgorithm::BinBitmaps
 {
   std::vector<roaring::Roaring> bitmaps; ///< per slot
+  /// per position, the end (exclusive) of its run of standard residues in its protein: a window starting there ends at most there
+  std::vector<std::uint32_t> stretch_end;
+  /// every standard residue weighs more than 0 (with its fixed modifications): the windows from a position then ascend in mass
+  bool increasing = true;
 };
 
 FLASHGappedTaggerAlgorithm::FLASHGappedTaggerAlgorithm() : DefaultParamHandler("FLASHGappedTaggerAlgorithm")
@@ -60,12 +64,16 @@ FLASHGappedTaggerAlgorithm::FLASHGappedTaggerAlgorithm() : DefaultParamHandler("
                      "to this mass. Fragments of native top-down spectra are often 8-20 residues apart, so a tag of min_tag_size masses "
                      "needs several kDa.");
   defaults_.setMinFloat("max_gap_mass", 100.0);
-  defaults_.setValue("min_tag_size", 5,
+  defaults_.setValue("min_tag_size", 4,
                      "Smallest number of masses in a gapped tag. Gaps of many residues are sums of residues almost always, so a short tag "
-                     "lands on a decoy about as often as on the right protein (with 3, nearly always; with 4, often in crowded spectra); "
-                     "chance landings also take the candidate places of other sources.");
+                     "lands on a decoy about as often as on the right protein (with 3, nearly always; with 4, often in crowded spectra). In "
+                     "FLASHTnT's search cascade (search_cascade, the default) gapped tags search only the spectra the other sources did not "
+                     "identify, so their chance landings take no candidate place of another source, and 4 identifies the most (Eclip_1480: "
+                     "1431 proteoforms vs 1418 with 5-7, B. theta entrapment 10 vs 10).");
   defaults_.setMinInt("min_tag_size", 3);
-  defaults_.setValue("max_tag_size", 7, "Largest number of masses in a gapped tag.");
+  defaults_.setValue("max_tag_size", 4,
+                     "Largest number of masses in a gapped tag. Tags of more masses than min_tag_size are searched first, larger first; with "
+                     "min_tag_size 4 they added no identification on Eclip_1480 (4-7: the same proteoforms as 4 alone) and only time.");
   defaults_.setMinInt("max_tag_size", 3);
   defaults_.setValue("beam_width", 1000, "Number of gapped tags of each size proposed per spectrum, highest summed Qscore first.");
   defaults_.setMinInt("beam_width", 1);
@@ -219,6 +227,17 @@ void FLASHGappedTaggerAlgorithm::buildIndex(const std::vector<std::string>& prot
   // the positions of each bin as a Roaring bitmap (run containers where they are smaller)
   const Size n_slots = post_offsets.size() - 1;
   auto bins = std::make_shared<BinBitmaps>();
+  bins->stretch_end.assign(total, 0);
+  for (Size k = 0; k < n_proteins; ++k)
+  {
+    Size end = offsets_[k + 1];
+    for (Size i = end; i-- > offsets_[k];)
+    {
+      if (! valid_[i]) end = i;
+      bins->stretch_end[i] = (std::uint32_t)end;
+      bins->increasing = bins->increasing && (! valid_[i] || cum_mass_[i + 1] > cum_mass_[i]);
+    }
+  }
   bins->bitmaps.resize(n_slots);
   slot_count_.assign(n_slots, 0);
 #pragma omp parallel for schedule(dynamic, 64) if (threads > 1)
@@ -384,6 +403,9 @@ void FLASHGappedTaggerAlgorithm::search(const DeconvolvedSpectrum& dspec, double
   std::map<std::array<std::int64_t, 6>, std::vector<std::uint32_t>> triple_cache;
   Size cached = 0; // positions kept in both
   const Size max_cached = Size(1) << 20;
+  // at most this many positions in the smallest range are tested on the residue sums instead of intersecting bitmaps (Eclip_1480, gapped
+  // tags of 4 masses: stage 2 of the search cascade took 17.6 s with bitmaps only, 16.7 s with 256, 17.4 s with 1024, 24.6 s with 4096)
+  constexpr Size direct_max_positions = 256;
   roaring::Roaring both;
   std::vector<const roaring::Roaring*> union_inputs;
   // the positions of @p positions in a bin of range k, in place
@@ -400,6 +422,24 @@ void FLASHGappedTaggerAlgorithm::search(const DeconvolvedSpectrum& dspec, double
       }
     }
     positions.resize(kept);
+  };
+  // Whether a window starting at position p (a start in a bin of another range) has its key in range k, as the index decides it: the
+  // windows from p end within its run of standard residues and at most max_length residues on, and ascend in mass, so the first with a
+  // key at or above the range's low end is found by bisection.
+  const int max_length = (int)(max_gap_mass_ / min_residue_mass);
+  const auto& stretch_end = bins_->stretch_end;
+  auto startsWindowIn = [&](std::uint32_t p, Size k) {
+    const std::int64_t lo = std::max(ranges[k].first, key_min_), hi = std::min(ranges[k].second, key_max_);
+    const Size last = std::min<Size>(stretch_end[p], (Size)p + (Size)max_length);
+    const double base = cum_mass_[p];
+    Size a = (Size)p + 1, b = last + 1;
+    while (a < b)
+    {
+      const Size mid = a + (b - a) / 2;
+      if (key_(cum_mass_[mid] - base) < lo) a = mid + 1;
+      else b = mid;
+    }
+    return a <= last && key_(cum_mass_[a] - base) <= hi;
   };
   auto intersectRanges = [&]() {
     result.clear();
@@ -422,6 +462,29 @@ void FLASHGappedTaggerAlgorithm::search(const DeconvolvedSpectrum& dspec, double
     idx.resize(ranges.size());
     std::iota(idx.begin(), idx.end(), 0);
     std::stable_sort(idx.begin(), idx.end(), [&](Size a, Size b) { return sizes[a] < sizes[b]; });
+    // Few positions in the smallest range: each of them is tested against the other ranges on the residue sums (startsWindowIn), the same
+    // positions as the ANDs of the bitmaps, without them. Intersected bin by bin, an AND walks every container of the two bitmaps, and a
+    // tag of n masses at 10 ppm takes up to 25 ANDs: they were 65% of the gapped-tag search of Eclip_1480.
+    if (idx.size() > 1 && bins_->increasing && sizes[idx[0]] <= direct_max_positions)
+    {
+      for (std::uint32_t s : range_slots[idx[0]])
+      {
+        const Size old = result.size();
+        result.resize(old + (Size)bitmaps[s].cardinality());
+        bitmaps[s].toUint32Array(result.data() + old);
+      }
+      // a range is narrower than the lightest residue, so a position is in one of its bins at most
+      if (range_slots[idx[0]].size() > 1) std::sort(result.begin(), result.end());
+      Size kept = 0;
+      for (std::uint32_t p : result)
+      {
+        bool in_all = true;
+        for (Size t = 1; t < idx.size() && in_all; ++t) in_all = startsWindowIn(p, idx[t]);
+        if (in_all) result[kept++] = p;
+      }
+      result.resize(kept);
+      return;
+    }
     if (idx.size() == 1)
     {
       union_inputs.clear();
@@ -475,7 +538,6 @@ void FLASHGappedTaggerAlgorithm::search(const DeconvolvedSpectrum& dspec, double
     for (; k < idx.size() && ! result.empty(); ++k) keepInRange(result, idx[k]);
   };
 
-  const int max_length = (int)(max_gap_mass_ / min_residue_mass);
   for (int n = std::min(max_tag_size_, M); n >= min_tag_size_; --n)
   {
     // beam over paths of n masses, highest summed Qscore first; a path spans at most max_gap_mass

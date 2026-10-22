@@ -273,7 +273,8 @@ private:
     String name;
     double mass = 0;
     String residues;       ///< one-letter codes of the residues it can sit on; empty or "*" for any residue
-    int position = 0;      ///< 0 anywhere, 1 proteoform N-terminal residue, 2 proteoform C-terminal residue
+    int position = 0;      ///< 0 anywhere, 1 proteoform N-terminal residue, 2 proteoform C-terminal residue, 3 protein N-terminal residue
+                           ///< (the proteoform's first residue and the protein's first, or its second after an initiator Met)
     int unimod = -1;
     int sites = 1;         ///< residues it needs (2 for a residue written twice, e.g. "CC" for a disulfide)
   };
@@ -352,7 +353,13 @@ private:
   /// whether a variable modification at @p position (0 anywhere, 1 N-terminal, 2 C-terminal) may sit on a residue with fixed kinds @p bits
   static bool freeFor_(std::uint8_t bits, int position)
   {
-    return (bits & (position == 0 ? 1 : (position == 1 ? 2 : 4))) == 0;
+    return (bits & (position == 0 ? 1 : (position == 1 || position == 3 ? 2 : 4))) == 0;
+  }
+
+  /// whether residue @p p of @p seq (a prefix orientation) is the protein's N-terminal residue: the first, or the second after an initiator Met
+  static bool isProteinNTerminal_(const String& seq, int p)
+  {
+    return p == 0 || (p == 1 && ! seq.empty() && seq[0] == 'M');
   }
 
   /// the residues that can carry the shift between two matched masses of a path, (@p pre_node, @p pre_pro) and (@p node, @p pro), whose

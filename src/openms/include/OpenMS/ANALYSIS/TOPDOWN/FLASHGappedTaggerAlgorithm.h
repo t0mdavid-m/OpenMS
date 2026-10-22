@@ -89,8 +89,8 @@ private:
   // parameters
   double max_gap_mass_ = 5000;
   double bin_width_ = 0.1;
-  int min_tag_size_ = 5;
-  int max_tag_size_ = 7;
+  int min_tag_size_ = 4;
+  int max_tag_size_ = 4;
   int beam_width_ = 1000;
   int top_n_ = 400;
   bool stop_at_first_size_ = false;

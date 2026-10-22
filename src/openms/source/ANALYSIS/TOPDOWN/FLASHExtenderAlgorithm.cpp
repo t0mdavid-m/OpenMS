@@ -210,7 +210,7 @@ namespace OpenMS
       const char origin = mod->getOrigin();
       vm.residues = (origin == 'X' || origin == '\0' || origin == '.') ? String("") : String(1, origin);
       const auto term = mod->getTermSpecificity();
-      vm.position = (term == ResidueModification::N_TERM || term == ResidueModification::PROTEIN_N_TERM) ? 1
+      vm.position = term == ResidueModification::N_TERM ? 1 : term == ResidueModification::PROTEIN_N_TERM ? 3
                     : (term == ResidueModification::C_TERM || term == ResidueModification::PROTEIN_C_TERM) ? 2 : 0;
       vm.unimod = mod->getUniModRecordId();
       var_mod_list_.push_back(vm);
@@ -239,7 +239,7 @@ namespace OpenMS
           vm.sites = 2;
         }
         const String pos = String(f[3]).trim().toLower();
-        vm.position = pos.hasSubstring("n-term") ? 1 : pos.hasSubstring("c-term") ? 2 : 0;
+        vm.position = pos.hasSubstring("protein n-term") ? 3 : pos.hasSubstring("n-term") ? 1 : pos.hasSubstring("c-term") ? 2 : 0;
         if (f.size() > 4 && ! f[4].trim().empty()) vm.unimod = f[4].toInt();
         var_mod_list_.push_back(vm);
       }
@@ -251,6 +251,12 @@ namespace OpenMS
     for (Size i = 0; i < std::min(given_penalties.size(), var_mod_penalties_.size()); i++)
     {
       var_mod_penalties_[i] = std::max(var_mod_penalty, given_penalties[i]);
+    }
+    // Acetylation of the protein N-terminus (with or without the initiator Met) is a form of the intact N-terminus, as TopPIC's
+    // N-terminal forms M_ACETYLATION and NME_ACETYLATION (its default, with NONE and NME): no penalty.
+    for (Size i = 0; i < var_mod_list_.size(); i++)
+    {
+      if (var_mod_list_[i].position == 3 && var_mod_list_[i].unimod == 1) var_mod_penalties_[i] = 0;
     }
 
     max_var_mod_cntr_ = var_mod_list_.empty() ? 0 : (int)param_.getValue("max_var_mod_count");
@@ -270,7 +276,7 @@ namespace OpenMS
       if ((int)idx.size() == max_var_mod_cntr_) return;
       for (int i = from; i < (int)var_mod_list_.size(); i++)
       {
-        const int n = n_terms + (var_mod_list_[i].position == 1), c = c_terms + (var_mod_list_[i].position == 2);
+        const int n = n_terms + (var_mod_list_[i].position == 1 || var_mod_list_[i].position == 3), c = c_terms + (var_mod_list_[i].position == 2);
         if (n > 1 || c > 1) continue;
         idx.push_back(i);
         add(i, mass + var_mod_list_[i].mass, n, c);
@@ -289,6 +295,7 @@ namespace OpenMS
     to = std::min(to, (int)seq.size());
     auto fits_at = [&](const VariableModification& vm, int p) {
       if (vm.position == 1 && p != n_site) return false; // the proteoform's first residue
+      if (vm.position == 3 && (p != n_site || ! isProteinNTerminal_(seq, p))) return false; // and the protein's
       if (vm.position == 2 && p != c_site) return false; // the proteoform's last residue
       if (occupied != nullptr && ! freeFor_(occupied[p], vm.position)) return false; // a fixed modification sits there
       return vm.residues.empty() || vm.residues.find(seq[p]) != std::string::npos;
@@ -364,6 +371,7 @@ namespace OpenMS
       for (int p = from; p < std::min(to, (int)seq.size()); p++)
       {
         if (vm.position == 1 && p != n_site) continue;
+        if (vm.position == 3 && (p != n_site || ! isProteinNTerminal_(seq, p))) continue;
         if (vm.position == 2 && p != c_site) continue;
         if (occupied != nullptr && ! freeFor_(occupied[p], vm.position)) continue;
         if (! vm.residues.empty() && vm.residues.find(seq[p]) == std::string::npos) continue;
@@ -2361,7 +2369,11 @@ namespace OpenMS
           continue;
         }
 
-        Size vertex2 = getVertex_(0, pro_i, -truncation_penalty, 0, 0, pro_mass_size); // penalize terminal truncation
+        // A start after the protein's first residue is a terminal truncation and penalized, except the removal of an initiator Met in a
+        // prefix path (modes 1, 2): like TopPIC's N-terminal form NME, a form of the intact N-terminus. Penalized, it cost as much as a
+        // blind shift, and Met-less proteoforms were reported with Met kept and a -131.04 Da shift (Eclip_1480 YBCJ 1-70).
+        const bool met_removal = hi.mode_ != 0 && pro_i == 1 && ! hi.cur_oriented_seq_.empty() && hi.cur_oriented_seq_[0] == 'M';
+        Size vertex2 = getVertex_(0, pro_i, met_removal ? 0 : -truncation_penalty, 0, 0, pro_mass_size); // penalize terminal truncation
         bool connected = hi.dag_.addEdgeFromVisited(vertex2, start_vertex, hi.visited_); // start_vertex: visited (tested on entry)
 
         if (vertex2 >= hi.dag_.size() || ! connected) continue;
