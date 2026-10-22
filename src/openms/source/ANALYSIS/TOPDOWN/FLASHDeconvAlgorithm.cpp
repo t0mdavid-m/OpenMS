@@ -507,6 +507,8 @@ void FLASHDeconvAlgorithm::deconvolveSpectrum_(const MSExperiment& map, Spectrum
 
     for (auto& pg : noise_decoy_sd.getDeconvolvedSpectrum())
       deconvolved_spectrum.push_back(std::move(pg));
+    noise_decoy_sd.releasePools();
+    signal_decoy_sd.releasePools();
 
     deconvolved_spectrum.sort();
   }

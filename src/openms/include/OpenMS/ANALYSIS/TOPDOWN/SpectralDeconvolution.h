@@ -142,6 +142,10 @@ namespace OpenMS
     */
     void setSharedAveragine_(std::shared_ptr<const PrecalculatedAveragine> avg);
 
+    /// frees the pooled per-spectrum arrays; the decoy instances of an FDR run call it after each spectrum, so a worker keeps one set
+    /// of pools instead of three
+    void releasePools();
+
     /// the averagine in use: the shared one if set, otherwise the own one
     const PrecalculatedAveragine& activeAveragine_() const noexcept
     {

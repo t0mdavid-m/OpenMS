@@ -1798,6 +1798,19 @@ namespace OpenMS
     if (! avg) { throw Exception::InvalidParameter(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "The shared averagine must not be null"); }
     shared_avg_ = std::move(avg);
   }
+  void SpectralDeconvolution::releasePools()
+  {
+    std::vector<float>().swap(mz_intensities_pool_);
+    std::vector<float>().swap(mass_intensities_pool_);
+    std::vector<unsigned short>().swap(prev_charges_pool_);
+    std::vector<MassBinChainState_>().swap(chain_states_pool_);
+    std::vector<double>().swap(exact_mz_positions_pool_);
+    std::vector<Size>().swap(mz_bin_index_reverse_pool_);
+    std::vector<Size>().swap(peak_bin_numbers_pool_);
+    std::vector<std::pair<Size, long>>().swap(chain_redirects_pool_);
+    boost::dynamic_bitset<>().swap(to_skip_pool_);
+    std::vector<PeakGroup>().swap(candidate_pool_);
+  }
   double SpectralDeconvolution::getMassFromMassBin_(Size mass_bin, double bin_mul_factor) const
   {
     return exp(getBinValue_(mass_bin, mass_bin_min_value_, bin_mul_factor));
