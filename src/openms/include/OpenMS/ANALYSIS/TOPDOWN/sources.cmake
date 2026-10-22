@@ -8,6 +8,7 @@ set(sources_list_h
         SpectralDeconvolution.h
         FLASHDeconvAlgorithm.h
         FLASHHelperClasses.h
+        FLASHHugePages.h
         FLASHExtenderAlgorithm.h
         FLASHIda.h
         FLASHIda/Config.h

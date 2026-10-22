@@ -8,6 +8,7 @@
 //#define TRAIN_OUT  //
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvAlgorithm.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHHugePages.h>
 #include <OpenMS/APPLICATIONS/TOPPBase.h>
 #include <OpenMS/FORMAT/FLASHDeconvFeatureFile.h>
 #include <OpenMS/FORMAT/FLASHDeconvSpectrumFile.h>
@@ -45,6 +46,10 @@ using namespace std;
   takes its own deconvolved mass for the commanded precursor from the MS1 spectrum that command was decided from.
 
 See https://openms.de/FLASHDeconv for more information.
+
+On Linux with glibc, FLASHDeconv (like FLASHTnT) re-executes itself once at start-up to put its heap on transparent huge pages
+(GLIBC_TUNABLES=glibc.malloc.hugetlb=1; ~20 % faster at high thread counts, identical output). Set FLASH_NO_HUGETLB to prevent this. With
+OpenMP thread binding (OMP_PROC_BIND, OMP_PLACES, GOMP_CPU_AFFINITY, KMP_AFFINITY) it is skipped; set GLIBC_TUNABLES yourself there.
 
 
 <B>The command line parameters of this tool are:</B>
@@ -449,6 +454,7 @@ protected:
 // the actual main function needed to create an executable
 int main(int argc, const char** argv)
 {
+  useTransparentHugePages(argv);
 #if defined(__GLIBC__)
   // Keep freed heap memory in the per-thread arenas instead of trimming it back to the kernel after every
   // spectrum: trim, refault and heap regrowth serialise on the process-wide mmap lock at high thread counts.

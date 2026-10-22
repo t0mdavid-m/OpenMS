@@ -8,6 +8,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHAnnotatorAlgorithm.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHHugePages.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTAlgorithm.h>
 #include <OpenMS/APPLICATIONS/TOPPBase.h>
 #include <OpenMS/FORMAT/FASTAFile.h>
@@ -234,6 +235,7 @@ protected:
 // the actual main function needed to create an executable
 int main(int argc, const char** argv)
 {
+  useTransparentHugePages(argv);
 #if defined(__GLIBC__)
   // Keep freed heap memory in the per-thread arenas instead of trimming it back to the kernel after every
   // work item: trim, refault and heap regrowth serialise on the process-wide mmap lock at high thread counts.
