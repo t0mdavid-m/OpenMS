@@ -15,6 +15,7 @@
 #include <array>
 #include <bit>
 #include <cstdint>
+#include <cstring>
 
 namespace OpenMS
 {
@@ -286,8 +287,19 @@ namespace OpenMS
     // first collect all possible edges. An edge means mass difference between two peaks.
     // largest normalized distance that can still produce an edge; beyond this even the largest divisor lands outside the bin range
     const double max_edge_normalized_dist = ((double)max_bin_number - 0.5) * div_factors.back() / (double)(max_bin_number - bin_number_margin);
-    std::array<double, max_bin_number> per_bin_error {}; // of the edge of peak i in a bin, valid for the bins in edge_bins
-    std::array<unsigned, max_bin_number> per_bin_edge {};
+    // of the edge of peak i in a bin, valid for the bins in edge_bins; slot max_bin_number is a dummy target for the updates that are skipped
+    std::array<double, max_bin_number + 1> per_bin_error {};
+    std::array<unsigned, max_bin_number + 1> per_bin_edge {};
+    const auto to_bits = [](double x) {
+      std::uint64_t u;
+      std::memcpy(&u, &x, sizeof(u));
+      return u;
+    };
+    const auto from_bits = [](std::uint64_t u) {
+      double x;
+      std::memcpy(&x, &u, sizeof(x));
+      return x;
+    };
     for (Size i = 0; i < peak_count; i++)
     {
       const bool p1_signal = all_peaks[i].second;
@@ -305,21 +317,28 @@ namespace OpenMS
           continue;
         }
 
+        // The per-bin update is done with bit masks instead of branches (its outcome is data-dependent and mispredicts):
+        // divisors whose bin is 0 or out of range update the dummy slot max_bin_number, which is never read as a bin.
+        // Arithmetic, the update condition and the update order are unchanged.
         for (double d : div_factors)
         {
           double distance = normalized_dist / d * (max_bin_number - bin_number_margin);
           // == (Size)round(distance) for the non-negative distances of the mass-sorted peaks, without the libm call
           const Size bin_floor = (Size)distance;
-          Size bin = bin_floor + (distance - (double)bin_floor >= 0.5 ? 1 : 0);
-          if (bin == 0) { continue; }
-          if (bin >= max_bin_number) { continue; } // larger divisors give smaller bins that may still be in range, so skip (not break) this d
+          const Size bin = bin_floor + (Size)(distance - (double)bin_floor >= 0.5);
+          // bin 0 is skipped; larger divisors give smaller bins that may still be in range, so an out-of-range bin skips only this d
+          const std::uint32_t valid = (std::uint32_t)(bin != 0) & (std::uint32_t)(bin < max_bin_number);
+          const Size slot = max_bin_number ^ ((max_bin_number ^ bin) & (Size)(0 - (Size)valid));
 
-          used_bins |= std::uint32_t(1) << bin;
-          double current_error = d * max_bin_number + std::abs((double)bin - distance); // larger when d gets larger. For the same d, comparable.
-          if ((edge_bins >> bin & 1) && per_bin_error[bin] < current_error) { continue; }
-          per_bin_edge[bin] = (unsigned)j;
-          per_bin_error[bin] = current_error;
-          edge_bins |= std::uint32_t(1) << bin;
+          used_bins |= valid << slot;
+          const double current_error = d * max_bin_number + std::abs((double)bin - distance); // larger when d gets larger. For the same d, comparable.
+          const double previous_error = per_bin_error[slot];
+          // edge_bins never has the dummy bit set
+          const std::uint32_t take = valid & (std::uint32_t)! ((std::uint32_t)(edge_bins >> slot & 1) & (std::uint32_t)(previous_error < current_error));
+          const std::uint64_t mask = 0 - (std::uint64_t)take;
+          per_bin_edge[slot] ^= (per_bin_edge[slot] ^ (unsigned)j) & (unsigned)mask;
+          per_bin_error[slot] = from_bits(to_bits(previous_error) ^ ((to_bits(previous_error) ^ to_bits(current_error)) & mask));
+          edge_bins |= take << slot;
         }
       }
       unsigned* edges = edge_table.data() + i * max_bin_number;
