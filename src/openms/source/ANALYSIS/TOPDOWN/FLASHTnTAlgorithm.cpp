@@ -323,8 +323,8 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   defaults_.setValidStrings("precursor_ladders", {"true", "false"});
   defaults_.setValue("search_cascade", "false",
                      "Search the candidate sources in stages: sequence tags in every spectrum; gapped tags (if gapped_tags is not off) only in the "
-                     "spectra without a target PrSM that passes the PrSM-level FDR (pro_fdr, 1% without a filter) of the stage before; terminal "
-                     "and precursor ladders (if on) only in the spectra no stage before identified. The PrSM q-values are computed per stage "
+                     "spectra not identified so far (no target PrSM whose proteoform passes pro_fdr, 1% without a filter); terminal and precursor "
+                     "ladders (if on) only in the spectra still not identified. An identified spectrum is searched by no later stage. The PrSM q-values are computed per stage "
                      "(and FDR class), so the PrSMs of a later stage compete only with that stage's decoys. The variable modification penalties are "
                      "learned in the first stage. Not used with native, with protein_level_only or without decoys in the database; the chimeric "
                      "rounds search with all sources.");
@@ -1942,6 +1942,158 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     return (int)(both_termini ? fdr_class_both_termini : fdr_class_open_terminus);
   };
 
+  // the order of the PrSMs for the FDR: best score first, then the higher coverage, then the higher scan number
+  auto byScore = [](const ProteinHit& left, const ProteinHit& right) {
+    return left.getScore() == right.getScore() ? (left.getCoverage() == right.getCoverage() ? (left.getMetaValue("Scan") > right.getMetaValue("Scan"))
+                                                                                            : (left.getCoverage() > right.getCoverage()))
+                                               : (left.getScore() > right.getScore());
+  };
+  // The PrSM and proteoform q-values of proteoform_hits_ (sorted by byScore), as described at the FDR below: per PrSM its FDR class
+  // (hit_class), PrSM q-value, decoy flag and decoy weight; the proteoforms (markRepresentativeProteoformHits_) are returned and every
+  // PrSM gets its proteoform's q-value (proqvalue). With @p log, the classes are logged. Used by the FDR below and, on a copy, by the
+  // search cascade between its stages.
+  auto proteoformQvalues = [&](std::vector<int>& hit_class, std::vector<double>& qvalues, std::vector<bool>& decoys,
+                               std::vector<double>& decoy_weights, bool log) {
+    const Size hit_count = proteoform_hits_.size();
+    hit_class.assign(hit_count, -1);
+    qvalues.assign(hit_count, 1.0);
+    decoy_weights.assign(hit_count, 0.0);
+    decoys.assign(hit_count, false);
+    if (use_fdr)
+    {
+      std::vector<std::vector<Size>> class_hits(fdr_class_count); // in the order above
+      for (Size i = 0; i < hit_count; i++)
+      {
+        const auto& hit = proteoform_hits_[i];
+        decoys[i] = is_decoy(hit);
+        if (decoys[i]) decoy_weights[i] = decoy_weight(hit);
+        const int c = fdrClassOf(hit);
+        if (c < 0) continue;
+        hit_class[i] = c;
+        class_hits[c].push_back(i);
+      }
+      // per class: targets and decoys (count and weight), and the protein-level null it uses (its own from null_min_class_decoys decoys on,
+      // else the pooled one); for the precursor-ladder class also by blind modification count, for a residual class by determined mass and
+      // termini. The residual classes are logged only with the chimeric search.
+      for (int c = 0; log && c < fdr_class_residual + chimeric_rounds_; c++)
+      {
+        Size targets = 0, decoy_count = 0, blind_targets[3] = {0, 0, 0}, blind_decoys[3] = {0, 0, 0}, determined_targets = 0, determined_decoys = 0;
+        double weight = 0;
+        for (Size i : class_hits[c])
+        {
+          const Size b = std::min(blindModCount_(proteoform_hits_[i]), (Size)2);
+          const bool determined = isDetermined(proteoform_hits_[i]);
+          if (decoys[i])
+          {
+            decoy_count++;
+            weight += decoy_weights[i];
+            blind_decoys[b]++;
+            determined_decoys += determined;
+          }
+          else
+          {
+            targets++;
+            blind_targets[b]++;
+            determined_targets += determined;
+          }
+        }
+        String line = String("FDR class \"") + fdr_class_names[c] + "\": " + String(targets) + " target and " + String(decoy_count)
+                      + " decoy PrSMs (decoy weight " + String(weight) + "); protein-level null: "
+                      + (c == fdr_class_precursor_ladder ? String("that of \"undetermined, both termini\" (setProteinQvalues_)")
+                         : String(decoy_count >= null_min_class_decoys ? "own" : "pooled")
+                             + (c <= fdr_class_max_blind ? "; those not the whole protein: that of \"undetermined, both termini\"" : ""));
+        if (c == fdr_class_precursor_ladder && ! class_hits[c].empty())
+        {
+          line += "; target/decoy PrSMs by blind modifications: 0: " + String(blind_targets[0]) + "/" + String(blind_decoys[0]) + ", 1: "
+                  + String(blind_targets[1]) + "/" + String(blind_decoys[1]) + ", 2 or more: " + String(blind_targets[2]) + "/" + String(blind_decoys[2]);
+        }
+        if (c >= fdr_class_residual && ! class_hits[c].empty())
+        {
+          line += "; target/decoy PrSMs determined: " + String(determined_targets) + "/" + String(determined_decoys) + ", undetermined: "
+                  + String(targets - determined_targets) + "/" + String(decoy_count - determined_decoys);
+        }
+        OPENMS_LOG_INFO << line << std::endl;
+      }
+      const UInt mi_search_stage = registry.registerName("SearchStage");
+      std::map<int, std::pair<Size, Size>> stage_counts; // search cascade: target and decoy PrSMs in a class per stage
+      for (int c = 0; c < fdr_class_count; c++)
+      {
+        // the class's PrSMs by stage (0: no search cascade, or a residual round), each in the order above
+        std::map<int, std::vector<Size>> by_stage;
+        for (Size i : class_hits[c])
+        {
+          const int stage = proteoform_hits_[i].metaValueExists(mi_search_stage) ? (int)proteoform_hits_[i].getMetaValue(mi_search_stage) : 0;
+          by_stage[stage].push_back(i);
+          if (stage > 0) (decoys[i] ? stage_counts[stage].second : stage_counts[stage].first)++;
+        }
+        for (const auto& [stage, hits] : by_stage)
+        {
+          std::vector<RankedItem<double>> ranked;
+          ranked.reserve(hits.size());
+          for (Size i : hits) ranked.push_back({proteoform_hits_[i].getScore(), decoys[i], decoy_weights[i]});
+          const auto class_qvalues = targetDecoyQvalues(ranked);
+          for (Size k = 0; k < hits.size(); k++)
+          {
+            const Size i = hits[k];
+            qvalues[i] = class_qvalues[k];
+            proteoform_hits_[i].setMetaValue("qvalue", qvalues[i]);
+            proteoform_hits_[i].setMetaValue("FDRClass", fdr_class_names[c]);
+          }
+        }
+      }
+      for (const auto& [stage, counts] : stage_counts)
+      {
+        if (! log) break;
+        OPENMS_LOG_INFO << "Search cascade stage " << stage << ": " << counts.first << " target and " << counts.second
+                        << " decoy PrSMs in FDR classes (q-values per class within the stage)" << std::endl;
+      }
+    }
+    // the proteoforms: positions of their PrSMs in proteoform_hits_ (Index), the representative first; representatives in the order above
+    auto clusters = markRepresentativeProteoformHits_(precursor_tol, hit_class, qvalues, rep_q, use_fdr);
+    if (use_fdr)
+      // Proteoform q-values: all representatives (targets and decoys of every class) in one ranking. Every PrSM of a proteoform carries
+      // the proteoform's q-value, which can be lower than its own PrSM q-value.
+      {
+        std::vector<Size> order(clusters.size());
+        std::iota(order.begin(), order.end(), 0);
+        std::stable_sort(order.begin(), order.end(), [&](Size l, Size r) {
+          const Size rep_l = clusters[l][0], rep_r = clusters[r][0];
+          if (qvalues[rep_l] != qvalues[rep_r]) return qvalues[rep_l] < qvalues[rep_r];
+          return proteoform_hits_[rep_l].getScore() > proteoform_hits_[rep_r].getScore();
+        });
+        std::vector<RankedItem<std::pair<double, double>>> ranked;
+        ranked.reserve(order.size());
+        for (Size k : order)
+        {
+          const Size rep = clusters[k][0];
+          ranked.push_back({{qvalues[rep], -proteoform_hits_[rep].getScore()}, decoys[rep], decoy_weights[rep]});
+        }
+        const auto proteoform_qvalues = targetDecoyQvalues(ranked);
+        // Decoy precursors model wrong MS1 masses, which only a proteoform whose mass came from MS1 can have: they count against those, and a
+        // proteoform without a mass or with a mass from fragment pairs takes its q-value from the same ranking without them (identical when
+        // there are no decoy precursors).
+        std::vector<RankedItem<std::pair<double, double>>> ranked_no_dp;
+        std::vector<Size> no_dp_pos(order.size(), (Size)-1);
+        for (Size k = 0; k < order.size(); k++)
+        {
+          const Size rep = clusters[order[k]][0];
+          if (decoys[rep] && proteoform_hits_[rep].metaValueExists("DecoyPrecursor") && ! proteoform_hits_[rep].getAccession().hasPrefix("DECOY")) continue;
+          no_dp_pos[k] = ranked_no_dp.size();
+          ranked_no_dp.push_back(ranked[k]);
+        }
+        const auto proteoform_qvalues_no_dp = ranked_no_dp.size() < ranked.size() ? targetDecoyQvalues(ranked_no_dp) : proteoform_qvalues;
+        for (Size k = 0; k < order.size(); k++)
+        {
+          const Size rep = clusters[order[k]][0];
+          const bool ms1_mass = (double)proteoform_hits_[rep].getMetaValue("Mass", -1.0) > 0
+                                && (int)proteoform_hits_[rep].getMetaValue("ProteoformMassByFragmentMass", 0) == 0;
+          const double pq = (ms1_mass || no_dp_pos[k] == (Size)-1) ? proteoform_qvalues[k] : proteoform_qvalues_no_dp[ranked_no_dp.size() < ranked.size() ? no_dp_pos[k] : k];
+          for (Size i : clusters[order[k]]) proteoform_hits_[i].setMetaValue("proqvalue", pq);
+        }
+      }
+    return clusters;
+  };
+
   if (! protein_level_only_)
   {
     // Beyond the min_protein_hits best candidates of a spectrum (a fair target-decoy competition: they are chosen by this spectrum
@@ -2446,37 +2598,28 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       }
     };
 
-    // The spectra a stage of the search cascade identifies: with a target PrSM of the stage (proteoform_hits_[from, end)) whose q-value
-    // among the stage's PrSMs of its FDR class is at most rep_q, the PrSM level of the FDR below (the proteoform level needs every stage).
+    // The spectra identified after a stage of the search cascade: with a target PrSM, of any stage so far, whose proteoform q-value is at
+    // most rep_q, the level at which proteoforms are reported. The q-values are those the FDR below gives the PrSMs so far (per class and
+    // stage, the proteoforms over all of them), computed on a copy; the one proteoform per MS1 feature rule is applied at the end only.
+    // An identified spectrum is searched by no later stage.
     std::map<int, int> spectrum_of_scan_number;
     for (int d = 0; d < (int)dspecs.size(); d++) spectrum_of_scan_number[dspecs[d].getScanNumber()] = d;
-    auto identifiedInStage = [&](Size from) {
-      std::vector<std::vector<Size>> class_hits(fdr_class_count);
-      for (Size i = from; i < proteoform_hits_.size(); i++)
-      {
-        const int c = fdrClassOf(proteoform_hits_[i]);
-        if (c >= 0) class_hits[c].push_back(i);
-      }
+    auto identifiedSoFar = [&]() {
+      std::vector<ProteinHit> kept = proteoform_hits_;
+      std::sort(proteoform_hits_.begin(), proteoform_hits_.end(), byScore);
+      std::vector<int> hit_class;
+      std::vector<double> qvalues, decoy_weights;
+      std::vector<bool> decoys;
+      proteoformQvalues(hit_class, qvalues, decoys, decoy_weights, false);
       std::set<int> identified;
-      for (auto& hits : class_hits)
+      for (Size i = 0; i < proteoform_hits_.size(); i++)
       {
-        // best first, as the ranking of the FDR below (equal scores are tied there whatever their order)
-        std::stable_sort(hits.begin(), hits.end(), [&](Size l, Size r) { return proteoform_hits_[l].getScore() > proteoform_hits_[r].getScore(); });
-        std::vector<RankedItem<double>> ranked;
-        ranked.reserve(hits.size());
-        for (Size i : hits)
-        {
-          const bool decoy = is_decoy(proteoform_hits_[i]);
-          ranked.push_back({proteoform_hits_[i].getScore(), decoy, decoy ? decoy_weight(proteoform_hits_[i]) : 0.0});
-        }
-        const auto q = targetDecoyQvalues(ranked);
-        for (Size k = 0; k < hits.size(); k++)
-        {
-          if (ranked[k].decoy || q[k] > rep_q) continue;
-          const auto it = spectrum_of_scan_number.find((int)proteoform_hits_[hits[k]].getMetaValue(mi_scan));
-          if (it != spectrum_of_scan_number.end()) identified.insert(it->second);
-        }
+        const auto& hit = proteoform_hits_[i];
+        if (decoys[i] || hit_class[i] < 0 || (double)hit.getMetaValue("proqvalue", 1.0) > rep_q) continue;
+        const auto it = spectrum_of_scan_number.find((int)hit.getMetaValue(mi_scan));
+        if (it != spectrum_of_scan_number.end()) identified.insert(it->second);
       }
+      proteoform_hits_.swap(kept);
       return identified;
     };
 
@@ -2494,15 +2637,22 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       const Size from = proteoform_hits_.size();
       extendStage(stage, stage_spectra);
       if (stage == 0) continue;
-      const auto identified = identifiedInStage(from);
+      if (s + 1 == stages.size())
+      {
+        OPENMS_LOG_INFO << "Search cascade stage " << stage << " (" << (stage == 1 ? "sequence tags" : stage == 2 ? "gapped tags" : "terminal and precursor ladders")
+                        << "): " << stage_spectra.size() << " spectra searched, " << proteoform_hits_.size() - from << " PrSMs" << std::endl;
+        continue;
+      }
+      const auto identified = identifiedSoFar();
       std::vector<int> rest;
       for (int d : stage_spectra)
       {
         if (identified.count(d) == 0) rest.push_back(d);
       }
-      OPENMS_LOG_INFO << "Search cascade stage " << stage << " (" << (stage == 1 ? "sequence tags" : stage == 2 ? "gapped tags" : "terminal and precursor ladders")
-                      << "): " << stage_spectra.size() << " spectra searched, " << proteoform_hits_.size() - from << " PrSMs, " << identified.size()
-                      << " spectra identified (target PrSM q-value <= " << rep_q << " in the stage)" << std::endl;
+      OPENMS_LOG_INFO << "Search cascade stage " << stage << " (" << (stage == 1 ? "sequence tags" : "gapped tags") << "): " << stage_spectra.size()
+                      << " spectra searched, " << proteoform_hits_.size() - from << " PrSMs, " << stage_spectra.size() - rest.size()
+                      << " of the spectra identified (a target PrSM at proteoform q-value <= " << rep_q << "); the next stage searches the other "
+                      << rest.size() << std::endl;
       stage_spectra.swap(rest);
     }
     // the chimeric rounds score their PrSMs on the raw spectra of every stage
@@ -2817,11 +2967,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
                                   "PrSM score must be finite (scan " + hit.getMetaValue("Scan").toString() + ")", std::to_string(hit.getScore()));
   }
-  std::sort(proteoform_hits_.begin(), proteoform_hits_.end(), [](const ProteinHit& left, const ProteinHit& right) {
-    return left.getScore() == right.getScore() ? (left.getCoverage() == right.getCoverage() ? (left.getMetaValue("Scan") > right.getMetaValue("Scan"))
-                                                                                            : (left.getCoverage() > right.getCoverage()))
-                                               : (left.getScore() > right.getScore());
-  });
+  std::sort(proteoform_hits_.begin(), proteoform_hits_.end(), byScore);
 
   // One MS1 feature, one proteoform: a co-isolated precursor is one real mass of one proteoform. When PrSMs of different proteins report
   // the same MS1-based mass in the same elution (within 2 min), FLASHExtender fitted at least one of them to it by truncation or blind
@@ -2930,143 +3076,15 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   // Without decoys in the database and without discard_underdetermined no q-value is set.
   //   With search_cascade, the PrSM q-values are computed per class and stage (meta value SearchStage), so that the PrSMs of a later
   //   stage, from the spectra the stages before did not identify, compete only with that stage's decoys.
-  const Size hit_count = proteoform_hits_.size();
-  std::vector<int> hit_class(hit_count, -1); // index into fdr_class_names; -1: in no class
-  std::vector<double> qvalues(hit_count, 1.0), decoy_weights(hit_count, 0.0);
-  std::vector<bool> decoys(hit_count, false);
-  if (use_fdr)
-  {
-    std::vector<std::vector<Size>> class_hits(fdr_class_count); // in the order above
-    for (Size i = 0; i < hit_count; i++)
-    {
-      const auto& hit = proteoform_hits_[i];
-      decoys[i] = is_decoy(hit);
-      if (decoys[i]) decoy_weights[i] = decoy_weight(hit);
-      const int c = fdrClassOf(hit);
-      if (c < 0) continue;
-      hit_class[i] = c;
-      class_hits[c].push_back(i);
-    }
-    // per class: targets and decoys (count and weight), and the protein-level null it uses (its own from null_min_class_decoys decoys on,
-    // else the pooled one); for the precursor-ladder class also by blind modification count, for a residual class by determined mass and
-    // termini. The residual classes are logged only with the chimeric search.
-    for (int c = 0; c < fdr_class_residual + chimeric_rounds_; c++)
-    {
-      Size targets = 0, decoy_count = 0, blind_targets[3] = {0, 0, 0}, blind_decoys[3] = {0, 0, 0}, determined_targets = 0, determined_decoys = 0;
-      double weight = 0;
-      for (Size i : class_hits[c])
-      {
-        const Size b = std::min(blindModCount_(proteoform_hits_[i]), (Size)2);
-        const bool determined = isDetermined(proteoform_hits_[i]);
-        if (decoys[i])
-        {
-          decoy_count++;
-          weight += decoy_weights[i];
-          blind_decoys[b]++;
-          determined_decoys += determined;
-        }
-        else
-        {
-          targets++;
-          blind_targets[b]++;
-          determined_targets += determined;
-        }
-      }
-      String line = String("FDR class \"") + fdr_class_names[c] + "\": " + String(targets) + " target and " + String(decoy_count)
-                    + " decoy PrSMs (decoy weight " + String(weight) + "); protein-level null: "
-                    + (c == fdr_class_precursor_ladder ? String("that of \"undetermined, both termini\" (setProteinQvalues_)")
-                       : String(decoy_count >= null_min_class_decoys ? "own" : "pooled")
-                           + (c <= fdr_class_max_blind ? "; those not the whole protein: that of \"undetermined, both termini\"" : ""));
-      if (c == fdr_class_precursor_ladder && ! class_hits[c].empty())
-      {
-        line += "; target/decoy PrSMs by blind modifications: 0: " + String(blind_targets[0]) + "/" + String(blind_decoys[0]) + ", 1: "
-                + String(blind_targets[1]) + "/" + String(blind_decoys[1]) + ", 2 or more: " + String(blind_targets[2]) + "/" + String(blind_decoys[2]);
-      }
-      if (c >= fdr_class_residual && ! class_hits[c].empty())
-      {
-        line += "; target/decoy PrSMs determined: " + String(determined_targets) + "/" + String(determined_decoys) + ", undetermined: "
-                + String(targets - determined_targets) + "/" + String(decoy_count - determined_decoys);
-      }
-      OPENMS_LOG_INFO << line << std::endl;
-    }
-    const UInt mi_search_stage = registry.registerName("SearchStage");
-    std::map<int, std::pair<Size, Size>> stage_counts; // search cascade: target and decoy PrSMs in a class per stage
-    for (int c = 0; c < fdr_class_count; c++)
-    {
-      // the class's PrSMs by stage (0: no search cascade, or a residual round), each in the order above
-      std::map<int, std::vector<Size>> by_stage;
-      for (Size i : class_hits[c])
-      {
-        const int stage = proteoform_hits_[i].metaValueExists(mi_search_stage) ? (int)proteoform_hits_[i].getMetaValue(mi_search_stage) : 0;
-        by_stage[stage].push_back(i);
-        if (stage > 0) (decoys[i] ? stage_counts[stage].second : stage_counts[stage].first)++;
-      }
-      for (const auto& [stage, hits] : by_stage)
-      {
-        std::vector<RankedItem<double>> ranked;
-        ranked.reserve(hits.size());
-        for (Size i : hits) ranked.push_back({proteoform_hits_[i].getScore(), decoys[i], decoy_weights[i]});
-        const auto class_qvalues = targetDecoyQvalues(ranked);
-        for (Size k = 0; k < hits.size(); k++)
-        {
-          const Size i = hits[k];
-          qvalues[i] = class_qvalues[k];
-          proteoform_hits_[i].setMetaValue("qvalue", qvalues[i]);
-          proteoform_hits_[i].setMetaValue("FDRClass", fdr_class_names[c]);
-        }
-      }
-    }
-    for (const auto& [stage, counts] : stage_counts)
-    {
-      OPENMS_LOG_INFO << "Search cascade stage " << stage << ": " << counts.first << " target and " << counts.second
-                      << " decoy PrSMs in FDR classes (q-values per class within the stage)" << std::endl;
-    }
-  }
+  std::vector<int> hit_class; // index into fdr_class_names; -1: in no class
+  std::vector<double> qvalues, decoy_weights;
+  std::vector<bool> decoys;
   // the proteoforms: positions of their PrSMs in proteoform_hits_ (Index), the representative first; representatives in the order above
-  const auto clusters = markRepresentativeProteoformHits_(precursor_tol, hit_class, qvalues, rep_q, use_fdr);
+  const auto clusters = proteoformQvalues(hit_class, qvalues, decoys, decoy_weights, true);
+  const Size hit_count = proteoform_hits_.size();
 
   if (use_fdr)
   {
-    // Proteoform q-values: all representatives (targets and decoys of every class) in one ranking. Every PrSM of a proteoform carries
-    // the proteoform's q-value, which can be lower than its own PrSM q-value.
-    {
-      std::vector<Size> order(clusters.size());
-      std::iota(order.begin(), order.end(), 0);
-      std::stable_sort(order.begin(), order.end(), [&](Size l, Size r) {
-        const Size rep_l = clusters[l][0], rep_r = clusters[r][0];
-        if (qvalues[rep_l] != qvalues[rep_r]) return qvalues[rep_l] < qvalues[rep_r];
-        return proteoform_hits_[rep_l].getScore() > proteoform_hits_[rep_r].getScore();
-      });
-      std::vector<RankedItem<std::pair<double, double>>> ranked;
-      ranked.reserve(order.size());
-      for (Size k : order)
-      {
-        const Size rep = clusters[k][0];
-        ranked.push_back({{qvalues[rep], -proteoform_hits_[rep].getScore()}, decoys[rep], decoy_weights[rep]});
-      }
-      const auto proteoform_qvalues = targetDecoyQvalues(ranked);
-      // Decoy precursors model wrong MS1 masses, which only a proteoform whose mass came from MS1 can have: they count against those, and a
-      // proteoform without a mass or with a mass from fragment pairs takes its q-value from the same ranking without them (identical when
-      // there are no decoy precursors).
-      std::vector<RankedItem<std::pair<double, double>>> ranked_no_dp;
-      std::vector<Size> no_dp_pos(order.size(), (Size)-1);
-      for (Size k = 0; k < order.size(); k++)
-      {
-        const Size rep = clusters[order[k]][0];
-        if (decoys[rep] && proteoform_hits_[rep].metaValueExists("DecoyPrecursor") && ! proteoform_hits_[rep].getAccession().hasPrefix("DECOY")) continue;
-        no_dp_pos[k] = ranked_no_dp.size();
-        ranked_no_dp.push_back(ranked[k]);
-      }
-      const auto proteoform_qvalues_no_dp = ranked_no_dp.size() < ranked.size() ? targetDecoyQvalues(ranked_no_dp) : proteoform_qvalues;
-      for (Size k = 0; k < order.size(); k++)
-      {
-        const Size rep = clusters[order[k]][0];
-        const bool ms1_mass = (double)proteoform_hits_[rep].getMetaValue("Mass", -1.0) > 0
-                              && (int)proteoform_hits_[rep].getMetaValue("ProteoformMassByFragmentMass", 0) == 0;
-        const double pq = (ms1_mass || no_dp_pos[k] == (Size)-1) ? proteoform_qvalues[k] : proteoform_qvalues_no_dp[ranked_no_dp.size() < ranked.size() ? no_dp_pos[k] : k];
-        for (Size i : clusters[order[k]]) proteoform_hits_[i].setMetaValue("proqvalue", pq);
-      }
-    }
     setProteinQvalues_(hit_class, qvalues, decoys, decoy_weights, clusters, rep_q);
     std::vector<ProteinHit> filtered_proteoform_hits;
     filtered_proteoform_hits.reserve(proteoform_hits_.size());

@@ -143,8 +143,9 @@ protected:
     setValidStrings_("precursor_ladders", {"true", "false"});
     registerStringOption_("search_cascade", "<bool>", "false",
                           "Search the candidate sources in stages: sequence tags in every spectrum; gapped tags (unless -gapped_tags off) only in the "
-                          "spectra without a target PrSM that passes the PrSM-level FDR (-pro_fdr, 1% without a filter) of the stage before; terminal "
-                          "and precursor ladders (if on) only in the spectra no stage before identified. The PrSM q-values are computed per stage "
+                          "spectra not identified so far (no target PrSM whose proteoform passes -pro_fdr, 1% without a filter); terminal and "
+                          "precursor ladders (if on) only in the spectra still not identified. An identified spectrum is searched by no later stage. "
+                          "The PrSM q-values are computed per stage "
                           "(and FDR class), so the PrSMs of a later stage compete only with that stage's decoys. The variable modification penalties "
                           "are learned in the first stage. Not used with -native, with -protein_level_only or without decoys in the database; the "
                           "chimeric rounds search with all sources.",
