@@ -25,12 +25,16 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Deconvolution.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/PlanUnit.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/PrecursorSelection.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 
+#include "FLASHIda_TestAccess.h"   // PrecursorSelection's acquisition memory, read without a public getter
 #include "FLASHIda_TestHelpers.h"  // ground-truth harness: ScanData/loadTsvScans/runInterleaved
 
+#include <algorithm>
 #include <cmath>
+#include <fstream>
 #include <iostream>
 #include <map>
 #include <set>
@@ -283,6 +287,38 @@ namespace
   }
 
   const std::vector<std::string> kRules{"snr", "qscore", "intensity", "purity"};
+
+  // ---- Survey re-planning: the selection journal -----------------------------------------------
+  //
+  // filterAndRank still writes acquisition memory in place; it ALSO journals every such write as a
+  // MemoryStamp, so a later push can roll the in-place writes back and apply a species' stamps only
+  // when it commits. These helpers serve the sections that pin the journal against the writes.
+
+  const std::string ms1_standard_path = "../../FlashIDA/test-data/spectra/ms1_standard.txt";
+  const std::string ms1_ecoli_path    = "../../FlashIDA/test-data/spectra/ms1_ecoli_rich.txt";
+  const std::string target_log_path   = "../../FlashIDA/test-data/configs/test_target_log.log";
+
+  /// Every stamp one survey journaled, merged back into WRITE order -- the order the in-place writes
+  /// were made in, which replay must reproduce because mass_qscore_map_ is an overwrite.
+  std::vector<MemoryStamp> allStampsBySeq(const SelectionJournal& j)
+  {
+    std::vector<MemoryStamp> all = j.survey_level;
+    for (const auto& kv : j.species)
+    {
+      const std::vector<MemoryStamp> f = PrecursorSelection::flatten(kv.second);
+      all.insert(all.end(), f.begin(), f.end());
+    }
+    std::sort(all.begin(), all.end(), [](const MemoryStamp& a, const MemoryStamp& b) { return a.seq < b.seq; });
+    return all;
+  }
+
+  /// cfgFor with one target log -- the input of the two modes that read one (in_depth, legacy inclusion).
+  std::string withTargetLog(std::string cfg, const std::string& log_path)
+  {
+    const std::string none = "\"target_logs\": []";
+    cfg.replace(cfg.find(none), none.size(), "\"target_logs\": [\"" + log_path + "\"]");
+    return cfg;
+  }
 }
 
 START_TEST(FLASHIda_ChargeModes, "$Id$")
@@ -999,6 +1035,226 @@ START_SECTION(authored_anchor_follows_charge_selection)
     TEST_EQUAL(checked, 1)
     TEST_EQUAL(wrong, 0)
   }
+}
+END_SECTION
+
+// ---- Survey re-planning: the selection journal ---------------------------------------------------
+//
+// The journal is only worth anything if replaying it IS the in-place write sequence. Each survey is
+// therefore compared against itself: A is acquisition memory as production left it, B is the survey's
+// entry state (rollbackAcquisitionMemory) plus every journaled stamp in write order. Replay restores A
+// exactly, so the run continues on production's own trajectory and every later survey is compared too.
+//
+// The modes cover every write site: single / separate / multiplexed (the mass-keyed writes and the
+// species fan-out), an authored charge set (the per-charge record, ADR-0028), in_depth (two iterations
+// over one survey, the intra-survey read-after-write the journal must not disturb) and legacy .log
+// inclusion (the charge erase in target_mass_charge_map_, the one write outside SurveyMemory).
+START_SECTION(journal_replay_reproduces_in_place_memory)
+{
+  const auto cytc = loadTsvScans(ms1_tsv_path);
+  const auto standard = loadTsvScans(ms1_standard_path);
+  ABORT_IF(cytc.empty() || standard.empty())
+
+  // test_target_log.log names three small masses ms1_cytc never carries, so on its own the legacy erase
+  // could pass by never firing. This log names the fixture's own species at every charge it resolves.
+  const std::string cytc_log = "chargemodes_journal_cytc_target.log";
+  {
+    std::ofstream lg(cytc_log);
+    lg << "MS1 RT 0.05 (scan)\n";
+    for (int z = 8; z <= 20; ++z) lg << "Mass 12351.3\tScore=0.9\tZ=" << z << "\n";
+  }
+
+  struct Case
+  {
+    std::string name;
+    std::string cfg;
+    const std::vector<ScanData>* scans;
+  };
+  const std::vector<Case> cases = {
+    {"single", cfgFor("single"), &cytc},
+    {"separate", cfgFor("separate"), &cytc},
+    {"multiplexed", cfgFor("multiplexed"), &cytc},
+    {"authored inclusion", cfgFor("single", "inclusion", charge_set_list, 5), &cytc},
+    {"in_depth", withTargetLog(cfgFor("single", "in_depth"), target_log_path), &standard},
+    {"in_depth cytc", withTargetLog(cfgFor("single", "in_depth"), target_log_path), &cytc},
+    {"legacy inclusion", withTargetLog(cfgFor("single", "inclusion"), target_log_path), &standard},
+    {"legacy inclusion cytc", withTargetLog(cfgFor("single", "inclusion"), cytc_log), &cytc},
+  };
+
+  int legacy_erases = 0;
+  for (const auto& c : cases)
+  {
+    int stamps_seen = 0, rollbacks_that_undid_something = 0, mismatches = 0;
+    forEachSurvey(c.cfg, *c.scans, [&](const Config&, PrecursorSelection& ps, int, int si) {
+      const auto in_place = FLASHIdaTestAccess::surveyMemory(ps);
+      const auto in_place_targets = FLASHIdaTestAccess::targetMassCharges(ps);
+      const std::vector<MemoryStamp> stamps = allStampsBySeq(ps.journal());
+
+      stamps_seen += (int)stamps.size();
+      for (size_t i = 1; i < stamps.size(); ++i) TEST_EQUAL(stamps[i - 1].seq < stamps[i].seq, true)
+      for (const auto& s : stamps)
+        if (s.kind == MemoryStamp::Kind::LegacyTargetChargeErase) ++legacy_erases;
+
+      ps.rollbackAcquisitionMemory();
+      if (!(FLASHIdaTestAccess::surveyMemory(ps) == in_place)
+          || FLASHIdaTestAccess::targetMassCharges(ps) != in_place_targets)
+        ++rollbacks_that_undid_something;
+
+      ps.applyStamps(stamps);
+      const bool same = FLASHIdaTestAccess::surveyMemory(ps) == in_place
+                        && FLASHIdaTestAccess::targetMassCharges(ps) == in_place_targets;
+      if (!same)
+      {
+        ++mismatches;
+        std::cout << "[JOURNAL] " << c.name << " survey=" << si << ": replay does not reproduce the in-place memory"
+                  << std::endl;
+      }
+    });
+    std::cout << "[JOURNAL] " << c.name << " stamps=" << stamps_seen << " rollbacks=" << rollbacks_that_undid_something
+              << std::endl;
+    TEST_EQUAL(c.name + " mismatches=" + std::to_string(mismatches), c.name + " mismatches=0")
+    // Non-vacuity: a rollback and a replay that both did nothing would agree with anything.
+    TEST_EQUAL(c.name + (stamps_seen > 0 ? " journaled" : " journaled nothing"), c.name + " journaled")
+    TEST_EQUAL(c.name + (rollbacks_that_undid_something > 0 ? " rolled back" : " never rolled back"),
+               c.name + " rolled back")
+  }
+  TEST_EQUAL(legacy_erases > 0, true)
+}
+END_SECTION
+
+// The rollback restores the ACQUISITION containers and nothing else. window_id_ and the id_*_map_
+// window bookkeeping must keep advancing -- they are never a decision input -- so rolling them back
+// with the rest would hand the next survey ids the last one already issued.
+//
+// The entry state is read the only way the class offers: a survey whose spectrum selects nothing runs
+// the same expiry pass at the same retention time and writes nothing after it.
+START_SECTION(rollback_restores_exactly_the_acquisition_containers)
+{
+  const auto scans = loadTsvScans(ms1_ecoli_path);
+  ABORT_IF(scans.size() < 2)
+
+  const std::string cfg_json = cfgFor("single");
+  Config cfg{cfg_json};
+  Deconvolution deconv(cfg, cfg.toleranceList());
+  PrecursorSelection ps(cfg, deconv);
+
+  const auto& s0 = scans[0];
+  const auto& s1 = scans[1];
+  TEST_EQUAL(ps.filterAndRank(s0.mzs.data(), s0.ints.data(), (int)s0.mzs.size(), s0.rt, 1, 0.0) > 0, true)
+
+  const std::vector<double> lone_mz{500.0}, lone_int{1.0};
+  TEST_EQUAL(ps.filterAndRank(lone_mz.data(), lone_int.data(), 1, s1.rt, 1, 0.0), 0)
+  const auto entry = FLASHIdaTestAccess::surveyMemory(ps);
+  const auto entry_targets = FLASHIdaTestAccess::targetMassCharges(ps);
+  TEST_EQUAL(entry.all_mass_rt_map_.empty(), false)  // the first survey's writes survived: a non-trivial entry
+
+  ps.filterAndRank(s1.mzs.data(), s1.ints.data(), (int)s1.mzs.size(), s1.rt, 1, 0.0);
+  TEST_EQUAL(ps.journal().species.size() >= 2, true)
+  const auto after = FLASHIdaTestAccess::surveyMemory(ps);
+  TEST_EQUAL(after == entry, false)
+  TEST_EQUAL(after.window_id_ > entry.window_id_, true)
+
+  ps.rollbackAcquisitionMemory();
+  const auto rolled = FLASHIdaTestAccess::surveyMemory(ps);
+
+  TEST_EQUAL(rolled.tqscore_exceeding_mz_rt_map_ == entry.tqscore_exceeding_mz_rt_map_, true)
+  TEST_EQUAL(rolled.tqscore_exceeding_mass_rt_map_ == entry.tqscore_exceeding_mass_rt_map_, true)
+  TEST_EQUAL(rolled.all_mass_rt_map_ == entry.all_mass_rt_map_, true)
+  TEST_EQUAL(rolled.mass_qscore_map_ == entry.mass_qscore_map_, true)
+  TEST_EQUAL(rolled.authored_acquired_rt_map_ == entry.authored_acquired_rt_map_, true)
+  TEST_EQUAL(FLASHIdaTestAccess::targetMassCharges(ps) == entry_targets, true)
+
+  // Bookkeeping is NOT rolled back.
+  TEST_EQUAL(rolled.window_id_, after.window_id_)
+  TEST_EQUAL(rolled.id_mass_map_ == after.id_mass_map_, true)
+  TEST_EQUAL(rolled.id_mz_map_ == after.id_mz_map_, true)
+  TEST_EQUAL(rolled.id_qscore_map_ == after.id_qscore_map_, true)
+  TEST_EQUAL(rolled.id_charge_map_ == after.id_charge_map_, true)
+}
+END_SECTION
+
+// ADR-0036: the PeakGroups of one split envelope are ONE Precursor. Their stamps therefore land in one
+// SpeciesStamps, keyed by nominal mass, with every charge the survey acquired across all of them --
+// which is what lets a later push commit the species once.
+START_SECTION(siblings_share_one_species_stamp_set)
+{
+  auto scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(scans.empty())
+
+  int surveys_with_siblings = 0;
+  forEachSurvey(cfgFor("single", "inclusion", wide_set_list, /*max_precursors=*/2, /*strict_inclusion=*/true), scans,
+                [&](const Config&, PrecursorSelection& ps, int n, int si) {
+                  // Every acquisition row of the survey, grouped by species.
+                  std::map<int, std::set<int>> charges_by_species;
+                  std::map<int, int> rows_by_species;
+                  for (int i = 0; i < n; ++i)
+                  {
+                    const int nm = SpectralDeconvolution::getNominalMass(ps.selectedPeakGroups()[i].getMonoMass());
+                    charges_by_species[nm].insert(ps.triggerCharges()[i]);
+                    ++rows_by_species[nm];
+                  }
+                  for (const auto& kv : rows_by_species)
+                  {
+                    if (kv.second < 2) continue;  // one PeakGroup: no sibling this survey
+                    ++surveys_with_siblings;
+                    TEST_EQUAL(ps.journal().species.count(kv.first), 1)
+                    const auto it = ps.journal().species.find(kv.first);
+                    if (it == ps.journal().species.end()) continue;
+                    std::set<int> journaled;
+                    for (const auto& pc : it->second.per_charge) journaled.insert(pc.first);
+                    if (journaled != charges_by_species[kv.first])
+                      std::cout << "[JOURNAL] survey=" << si << " nominal=" << kv.first
+                                << ": per_charge does not hold every acquired charge" << std::endl;
+                    TEST_EQUAL(journaled == charges_by_species[kv.first], true)
+                    TEST_EQUAL(it->second.nominal_mass, kv.first)
+                  }
+                });
+  TEST_EQUAL(surveys_with_siblings > 0, true)
+}
+END_SECTION
+
+// A candidate that clears exclusion and is then refused still refreshes all_mass_rt_map_ -- that is
+// what keeps its stored qscore alive through expiry. No unit owns it, so its stamp is SURVEY-level.
+//
+// The refusal is ScoreNotBetter: the species was acquired on an earlier survey at a score this one
+// does not beat. tqscore_threshold is lifted above every qscore so the mass bars never arm and the
+// qscore ledger is what decides.
+START_SECTION(refused_candidate_stamp_is_survey_level)
+{
+  auto scans = loadTsvScans(ms1_tsv_path);
+  ABORT_IF(scans.empty())
+
+  std::string cfg = cfgFor("single");
+  const std::string tq = "\"tqscore_threshold\": 0.3";
+  cfg.replace(cfg.find(tq), tq.size(), "\"tqscore_threshold\": 1.0");
+
+  int refused = 0, admitted = 0;
+  // SurveyMemory is private; its type is reached through the test seam, as PlanUnit_test does.
+  decltype(FLASHIdaTestAccess::surveyMemory(std::declval<const PrecursorSelection&>())) before;  // as the previous survey left it
+  bool have_before = false;
+  forEachSurvey(cfg, scans, [&](const Config&, PrecursorSelection& ps, int, int) {
+    const SelectionJournal& j = ps.journal();
+    for (const auto& s : j.survey_level)
+    {
+      if (s.kind != MemoryStamp::Kind::AllMassRt) continue;
+      ++refused;
+      TEST_EQUAL(j.species.count(s.key), 0)
+      // ...refused against a bar an EARLIER survey set, i.e. the second candidate of this mass.
+      TEST_EQUAL(have_before && before.mass_qscore_map_.count(s.key) > 0, true)
+    }
+    for (const auto& kv : j.species)
+    {
+      ++admitted;
+      int all_mass = 0;
+      for (const auto& s : kv.second.species_level)
+        if (s.kind == MemoryStamp::Kind::AllMassRt && s.key == kv.first) ++all_mass;
+      TEST_EQUAL(all_mass, 1)  // an admitted candidate's stamp goes with its species, not the survey
+    }
+    before = FLASHIdaTestAccess::surveyMemory(ps);
+    have_before = true;
+  });
+  TEST_EQUAL(admitted > 0, true)
+  TEST_EQUAL(refused > 0, true)
 }
 END_SECTION
 

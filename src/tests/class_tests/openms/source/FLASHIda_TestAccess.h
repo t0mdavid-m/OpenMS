@@ -21,7 +21,9 @@
 
 #include <atomic>
 #include <cstddef>
+#include <map>
 #include <mutex>
+#include <vector>
 
 namespace OpenMS
 {
@@ -71,6 +73,18 @@ namespace OpenMS
     /// with a hand-picked tuple of members -- that is precisely the checklist step the struct exists
     /// to delete.
     static PrecursorSelection::SurveyMemory surveyMemory(const FLASHIda& f) { return f.selection_.memory_; }
+
+    // ---- Survey re-planning: a PrecursorSelection driven directly -----------------------------------
+
+    /// The same whole-struct read for a PrecursorSelection driven without an engine around it.
+    static PrecursorSelection::SurveyMemory surveyMemory(const PrecursorSelection& ps) { return ps.memory_; }
+
+    /// The legacy .log target charge lists -- the one container selection writes on admission that sits
+    /// OUTSIDE SurveyMemory, so a journal replay must be compared on it separately.
+    static std::map<double, std::vector<int>> targetMassCharges(const PrecursorSelection& ps)
+    {
+      return ps.target_mass_charge_map_;
+    }
 
     /// Next precursor id the engine would mint. Part of the neutrality fingerprint: a monitor scan
     /// must not consume one, and an id counter that moved is the cheapest evidence that it selected.

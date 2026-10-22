@@ -37,6 +37,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Deconvolution.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/PlanUnit.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/SpectralDeconvolution.h>
 #include <OpenMS/FORMAT/FASTAFile.h>
 
@@ -172,6 +173,31 @@ namespace OpenMS
     /// divergence ADR-0028 hit for one CI run when only this side was filtered).
     const std::vector<std::vector<int>>& triggerAcquisitionSets() const { return trigger_acquisition_sets_; }
 
+    /// Every acquisition-memory write the last filterAndRank made, as stamps: per admitted species, plus
+    /// the survey-level ones no species owns (a candidate that cleared exclusion and was then refused).
+    ///
+    /// The writes are STILL made in place, exactly as before -- intra-survey read-after-write is
+    /// load-bearing (see SurveyMemory). The journal is the same sequence recorded beside them, so survey
+    /// re-planning can roll a survey back (rollbackAcquisitionMemory) and apply a species' stamps only
+    /// when it commits (applyStamps). Each stamp carries its write order in `seq`.
+    const SelectionJournal& journal() const { return journal_; }
+
+    /// Restore the ACQUISITION containers to their state at the end of the last survey's expiry pass,
+    /// i.e. undo that survey's in-place writes. Restores exactly all_mass_rt_map_, mass_qscore_map_,
+    /// both tqscore_exceeding_* maps, authored_acquired_rt_map_ and target_mass_charge_map_.
+    ///
+    /// It does NOT touch window_id_ or the id_*_map_ window bookkeeping: they are never a decision
+    /// input, and window ids must keep advancing.
+    void rollbackAcquisitionMemory();
+
+    /// Replay @p stamps into acquisition memory, in vector order, with the operations the in-place
+    /// writes use (an overwrite per map entry; an erase for a legacy target charge).
+    void applyStamps(const std::vector<MemoryStamp>& stamps);
+
+    /// All of a species' stamps, species-level first then per charge. NOT sorted: callers that need the
+    /// original write order sort by `seq`.
+    static std::vector<MemoryStamp> flatten(const SpeciesStamps& species);
+
     /**
      * @brief Process stored MS2 deconvolution for protein family detection and inclusion list expansion
      *
@@ -289,6 +315,28 @@ namespace OpenMS
     /// Maps for global exclusion
     std::map<double, std::vector<double>> exclusion_rt_masses_map_;
     std::vector<double> excluded_masses_;
+
+    /// The ACQUISITION containers as the current survey's expiry pass left them -- the state
+    /// rollbackAcquisitionMemory() restores. Per survey, not cross-survey state, so it is deliberately
+    /// NOT part of SurveyMemory (whose == is the monitor scan's neutrality fingerprint).
+    struct AcquisitionSnapshot
+    {
+      std::unordered_map<int, double> tqscore_exceeding_mz_rt_map_;
+      std::unordered_map<int, double> tqscore_exceeding_mass_rt_map_;
+      std::unordered_map<int, double> all_mass_rt_map_;
+      std::unordered_map<int, double> mass_qscore_map_;
+      std::map<std::pair<int, int>, double> authored_acquired_rt_map_;
+      std::map<double, std::vector<int>> target_mass_charge_map_;
+    };
+
+    AcquisitionSnapshot acq_entry_;
+
+    /// The last survey's journal, and the write counter its stamps' `seq` is drawn from.
+    SelectionJournal journal_;
+    int journal_seq_ = 0;
+
+    /// A stamp of one in-place write, numbered in write order.
+    MemoryStamp stamp_(MemoryStamp::Kind kind, int key, double value, int charge = 0, double legacy_mass = 0.0);
 
     /// TSV-based inclusion targets
     std::vector<InclusionTarget> inclusion_targets_;

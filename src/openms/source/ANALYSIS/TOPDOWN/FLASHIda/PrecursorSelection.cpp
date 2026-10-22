@@ -183,6 +183,8 @@ namespace OpenMS
   int PrecursorSelection::filterAndRank(const double* mzs, const double* ints, int length,
                                         double rt, int ms_level, double faims_cv)
   {
+    journal_ = SelectionJournal();
+    journal_seq_ = 0;
     if (ms_level != 1)
     {
       return 0;
@@ -286,6 +288,7 @@ namespace OpenMS
     trigger_acquisition_sets_.clear();
     trigger_acquisition_sets_.reserve(mass_count);
     std::vector<int>* charges = nullptr;
+    double charges_key = 0.0;  // the target_mass_charge_map_ key `charges` points into, for the journal
 
     selected_peak_groups_.reserve(mass_count);
     // What THIS survey has already done to each species, keyed by nominal mass (ADR-0036).
@@ -381,6 +384,15 @@ namespace OpenMS
     std::unordered_map<int, double>().swap(new_all_mass_rt_map_);
     new_mass_score_map_.swap(memory_.mass_qscore_map_);
     std::unordered_map<int, double>().swap(new_mass_score_map_);
+
+    // The entry state rollbackAcquisitionMemory() restores: after expiry, before any of this survey's
+    // writes. Taken every survey whether or not anything rolls back.
+    acq_entry_.tqscore_exceeding_mz_rt_map_ = memory_.tqscore_exceeding_mz_rt_map_;
+    acq_entry_.tqscore_exceeding_mass_rt_map_ = memory_.tqscore_exceeding_mass_rt_map_;
+    acq_entry_.all_mass_rt_map_ = memory_.all_mass_rt_map_;
+    acq_entry_.mass_qscore_map_ = memory_.mass_qscore_map_;
+    acq_entry_.authored_acquired_rt_map_ = memory_.authored_acquired_rt_map_;
+    acq_entry_.target_mass_charge_map_ = target_mass_charge_map_;
 
     const int selection_phase_start = 0;
     const int selection_phase_end = 2; // inclusive
@@ -555,6 +567,7 @@ namespace OpenMS
                       if (it != target_mass_charge_map_.end())
                       {
                         charges = &it->second;
+                        charges_key = it->first;
                         if (std::find(charges->begin(), charges->end(), charge) != charges->end())
                         {
                           target_matched = true;
@@ -694,9 +707,19 @@ namespace OpenMS
             // can refuse, so a candidate the ledger turns away still refreshes the record that keeps
             // its stored score alive through expiry. That ordering is the whole reason the verdict
             // reports passing exclusion separately from being admitted.
-            if (verdict.passed_exclusion) { memory_.all_mass_rt_map_[nominal_mass] = rt; }
+            //
+            // Journaled the same way: the stamp is pending on the candidate, and goes with its species
+            // if the candidate is admitted, or to the survey -- owned by no species -- if it is refused.
+            if (verdict.passed_exclusion)
+            {
+              memory_.all_mass_rt_map_[nominal_mass] = rt;
+              (verdict.admit ? journal_.species[nominal_mass].species_level : journal_.survey_level)
+                  .push_back(stamp_(MemoryStamp::Kind::AllMassRt, nominal_mass, rt));
+            }
             if (! verdict.admit) { continue; }
             verdict_was_sibling = verdict.is_sibling;
+            SpeciesStamps& species_stamps = journal_.species[nominal_mass];
+            species_stamps.nominal_mass = nominal_mass;
 
             // The species' ACQUISITION CHARGE SET -- every charge this survey will fragment, not just
             // the anchor. Both non-single modes acquire the SAME set and differ only in scan count
@@ -725,7 +748,12 @@ namespace OpenMS
             {
               // Per-charge exclusion (ADR-0028): record what was actually isolated, charge by
               // charge, and write NO mass-keyed entry -- see the memory_.mass_qscore_map_ block below.
-              for (int c : acquired_charges) { memory_.authored_acquired_rt_map_[{nominal_mass, c}] = rt; }
+              // Each charge is journaled under ITSELF: under `separate` it commits with its own command.
+              for (int c : acquired_charges)
+              {
+                memory_.authored_acquired_rt_map_[{nominal_mass, c}] = rt;
+                species_stamps.per_charge[c].push_back(stamp_(MemoryStamp::Kind::AuthoredAcquired, nominal_mass, rt, c));
+              }
 
               // Say what was named and refused. A silent drop reads as "we isolated everything you
               // asked for" when we did not -- the same failure shape [NOTCH-CLAMP] exists for.
@@ -824,18 +852,27 @@ namespace OpenMS
             if (! has_authored)
             {
               memory_.mass_qscore_map_[nominal_mass] = verdict.record_score;
+              species_stamps.species_level.push_back(stamp_(MemoryStamp::Kind::MassQscore, nominal_mass, verdict.record_score));
               if (verdict.arms_bars)
               {
                 memory_.tqscore_exceeding_mass_rt_map_[nominal_mass] = rt;
                 memory_.tqscore_exceeding_mz_rt_map_[integer_mz] = rt;
+                species_stamps.species_level.push_back(stamp_(MemoryStamp::Kind::TqMassRt, nominal_mass, rt));
+                species_stamps.species_level.push_back(stamp_(MemoryStamp::Kind::TqMzRt, integer_mz, rt));
               }
             }
 
             // For legacy .log mode with charge targeting, remove this charge from list
+            //
+            // Journaled exactly as erased. `charges` can still point at an EARLIER candidate's entry
+            // (it outlives the iteration that set it), so the stamp names the map key the pointer was
+            // taken from, not this candidate's mass -- the quirk is recorded as it behaves, not fixed.
             if (config_.targeting().mode == 1 && charges != nullptr) {
               auto it = std::find(charges->begin(), charges->end(), charge);
               if (it != charges->end()) {
                 charges->erase(it);
+                species_stamps.species_level.push_back(
+                    stamp_(MemoryStamp::Kind::LegacyTargetChargeErase, nominal_mass, 0.0, charge, charges_key));
               }
             }
 
@@ -968,6 +1005,62 @@ namespace OpenMS
         }
       }
     }
+  }
+
+  MemoryStamp PrecursorSelection::stamp_(MemoryStamp::Kind kind, int key, double value, int charge, double legacy_mass)
+  {
+    MemoryStamp s;
+    s.kind = kind;
+    s.key = key;
+    s.charge = charge;
+    s.value = value;
+    s.legacy_mass = legacy_mass;
+    s.seq = journal_seq_++;
+    return s;
+  }
+
+  void PrecursorSelection::rollbackAcquisitionMemory()
+  {
+    memory_.tqscore_exceeding_mz_rt_map_ = acq_entry_.tqscore_exceeding_mz_rt_map_;
+    memory_.tqscore_exceeding_mass_rt_map_ = acq_entry_.tqscore_exceeding_mass_rt_map_;
+    memory_.all_mass_rt_map_ = acq_entry_.all_mass_rt_map_;
+    memory_.mass_qscore_map_ = acq_entry_.mass_qscore_map_;
+    memory_.authored_acquired_rt_map_ = acq_entry_.authored_acquired_rt_map_;
+    target_mass_charge_map_ = acq_entry_.target_mass_charge_map_;
+  }
+
+  void PrecursorSelection::applyStamps(const std::vector<MemoryStamp>& stamps)
+  {
+    using K = MemoryStamp::Kind;
+    for (const MemoryStamp& s : stamps)
+    {
+      switch (s.kind)
+      {
+        case K::AllMassRt: memory_.all_mass_rt_map_[s.key] = s.value; break;
+        case K::MassQscore: memory_.mass_qscore_map_[s.key] = s.value; break;
+        case K::TqMassRt: memory_.tqscore_exceeding_mass_rt_map_[s.key] = s.value; break;
+        case K::TqMzRt: memory_.tqscore_exceeding_mz_rt_map_[s.key] = s.value; break;
+        case K::AuthoredAcquired: memory_.authored_acquired_rt_map_[{s.key, s.charge}] = s.value; break;
+        case K::LegacyTargetChargeErase:
+        {
+          auto it = target_mass_charge_map_.find(s.legacy_mass);
+          if (it == target_mass_charge_map_.end()) break;
+          auto c = std::find(it->second.begin(), it->second.end(), s.charge);
+          if (c != it->second.end()) it->second.erase(c);
+          break;
+        }
+      }
+    }
+  }
+
+  std::vector<MemoryStamp> PrecursorSelection::flatten(const SpeciesStamps& species)
+  {
+    std::vector<MemoryStamp> out = species.species_level;
+    for (const auto& [charge, stamps] : species.per_charge)
+    {
+      out.insert(out.end(), stamps.begin(), stamps.end());
+    }
+    return out;
   }
 
   void PrecursorSelection::removeFromExclusionList(int id)
