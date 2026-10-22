@@ -10,6 +10,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
 #include <OpenMS/CHEMISTRY/Residue.h>
 #include <OpenMS/CHEMISTRY/ResidueDB.h>
+#include <roaring.hh>
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -45,38 +46,12 @@ void orShifted(std::vector<std::uint64_t>& dst, const std::vector<std::uint64_t>
     dst[i] |= v;
   }
 }
-
-/// values of sorted @p a found in sorted @p b (exponential then binary search of each value of the shorter list in the longer one),
-/// appended to @p out in ascending order
-void intersectSorted(const std::uint32_t* a, Size na, const std::uint32_t* b, Size nb, std::vector<std::uint32_t>& out)
-{
-  if (na == 0 || nb == 0) return;
-  if (na > nb)
-  {
-    std::swap(a, b);
-    std::swap(na, nb);
-  }
-  Size lo = 0;
-  for (Size i = 0; i < na && lo < nb; ++i)
-  {
-    const std::uint32_t v = a[i];
-    if (b[lo] > v) continue;
-    Size step = 1;
-    while (lo + step < nb && b[lo + step] < v)
-    {
-      lo += step;
-      step <<= 1;
-    }
-    const Size hi = std::min(lo + step, nb - 1);
-    lo = (Size)(std::lower_bound(b + lo, b + hi + 1, v) - b);
-    if (lo < nb && b[lo] == v)
-    {
-      out.push_back(v);
-      ++lo;
-    }
-  }
-}
 } // namespace
+
+struct FLASHGappedTaggerAlgorithm::BinBitmaps
+{
+  std::vector<roaring::Roaring> bitmaps; ///< per slot
+};
 
 FLASHGappedTaggerAlgorithm::FLASHGappedTaggerAlgorithm() : DefaultParamHandler("FLASHGappedTaggerAlgorithm")
 {
@@ -119,14 +94,17 @@ void FLASHGappedTaggerAlgorithm::updateMembers_()
 
 Size FLASHGappedTaggerAlgorithm::getIndexBytes() const
 {
-  return postings_.size() * sizeof(std::uint32_t) + post_offsets_.size() * sizeof(std::uint64_t) + slot_.size() * sizeof(std::uint32_t)
-         + cum_mass_.size() * sizeof(double) + valid_.size() + plausible_bits_.size() * sizeof(std::uint64_t)
+  Size bitmap_bytes = 0;
+  if (bins_)
+  {
+    for (const auto& b : bins_->bitmaps) bitmap_bytes += b.getSizeInBytes(false);
+  }
+  return bitmap_bytes + slot_count_.size() * sizeof(std::uint64_t) + slot_.size() * sizeof(std::uint32_t) + cum_mass_.size() * sizeof(double) + valid_.size() + plausible_bits_.size() * sizeof(std::uint64_t)
          + plausible_rank_.size() * sizeof(std::uint32_t);
 }
 
 void FLASHGappedTaggerAlgorithm::buildIndex(const std::vector<std::string>& protein_seqs)
 {
-  index_bin_width_ = bin_width_;
   double aa_mass[128] = {0};
   for (const char* c = standard_residues; *c; ++c)
   {
@@ -173,9 +151,12 @@ void FLASHGappedTaggerAlgorithm::buildIndex(const std::vector<std::string>& prot
     const auto first = std::lower_bound(offsets_.begin(), offsets_.begin() + (std::ptrdiff_t)n_proteins, total * c / n_chunks);
     chunk_begin[c] = (Size)(first - offsets_.begin());
   }
-  // per chunk and bin the number of windows, then where the next window goes in the posting list of the bin
+  // per chunk and bin the number of windows, then where the next window goes in the positions of the bin
   std::vector<std::vector<std::uint64_t>> counts(n_chunks, std::vector<std::uint64_t>(n_bins, 0));
-  // first pass counts the windows per bin, the second fills the posting lists
+  // the start positions of the windows grouped by bin, ascending in each (staged for the bitmaps)
+  std::vector<std::uint64_t> post_offsets;
+  std::vector<std::uint32_t> postings;
+  // first pass counts the windows per bin, the second fills the positions
   auto enumerate = [&](int chunk, bool fill) {
     auto& cursor = counts[chunk];
     for (Size p = chunk_begin[chunk]; p < chunk_begin[chunk + 1]; ++p)
@@ -190,7 +171,7 @@ void FLASHGappedTaggerAlgorithm::buildIndex(const std::vector<std::string>& prot
           if (! valid_[stop - 1]) break;
           const std::int64_t key = key_(cum_mass_[stop] - cum_mass_[start]);
           if (key > key_max_) break;
-          if (fill) { postings_[cursor[(Size)key]++] = (std::uint32_t)start; }
+          if (fill) { postings[cursor[(Size)key]++] = (std::uint32_t)start; }
           else { ++cursor[(Size)key]; }
         }
       }
@@ -199,23 +180,40 @@ void FLASHGappedTaggerAlgorithm::buildIndex(const std::vector<std::string>& prot
 #pragma omp parallel for schedule(dynamic, 1) if (threads > 1)
   for (int c = 0; c < n_chunks; ++c) enumerate(c, false);
   slot_.assign(n_bins, std::numeric_limits<std::uint32_t>::max());
-  post_offsets_.assign(1, 0);
+  post_offsets.assign(1, 0);
   for (Size key = 0; key < n_bins; ++key)
   {
-    std::uint64_t cursor = post_offsets_.back();
+    std::uint64_t cursor = post_offsets.back();
     for (auto& chunk_counts : counts)
     {
       const std::uint64_t count = chunk_counts[key];
       chunk_counts[key] = cursor;
       cursor += count;
     }
-    if (cursor == post_offsets_.back()) continue;
-    slot_[key] = (std::uint32_t)(post_offsets_.size() - 1);
-    post_offsets_.push_back(cursor);
+    if (cursor == post_offsets.back()) continue;
+    slot_[key] = (std::uint32_t)(post_offsets.size() - 1);
+    post_offsets.push_back(cursor);
   }
-  postings_.assign(post_offsets_.back(), 0);
+  postings.assign(post_offsets.back(), 0);
 #pragma omp parallel for schedule(dynamic, 1) if (threads > 1)
   for (int c = 0; c < n_chunks; ++c) enumerate(c, true);
+  counts.clear();
+
+  // the positions of each bin as a Roaring bitmap (run containers where they are smaller)
+  const Size n_slots = post_offsets.size() - 1;
+  auto bins = std::make_shared<BinBitmaps>();
+  bins->bitmaps.resize(n_slots);
+  slot_count_.assign(n_slots, 0);
+#pragma omp parallel for schedule(dynamic, 64) if (threads > 1)
+  for (long s = 0; s < (long)n_slots; ++s)
+  {
+    auto& bitmap = bins->bitmaps[s];
+    slot_count_[s] = post_offsets[s + 1] - post_offsets[s];
+    bitmap.addMany((size_t)slot_count_[s], postings.data() + post_offsets[s]);
+    bitmap.runOptimize();
+    bitmap.shrinkToFit();
+  }
+  bins_ = std::move(bins);
 
   // sums of 1 .. max_length residues on a 0.1 mDa grid (subset sum by shifted bit sets), with the set bits counted before each word
   plausible_units_ = (std::int64_t)std::llround(max_gap_mass_ * plausible_scale_);
@@ -277,34 +275,10 @@ bool FLASHGappedTaggerAlgorithm::plausible_(double lo, double hi) const
   return rank(hi_u + 1) > rank(lo_u);
 }
 
-Size FLASHGappedTaggerAlgorithm::countRange_(std::int64_t key_lo, std::int64_t key_hi) const
-{
-  Size n = 0;
-  for (std::int64_t key = std::max(key_lo, key_min_); key <= std::min(key_hi, key_max_); ++key)
-  {
-    const auto s = slot_[(Size)key];
-    if (s != std::numeric_limits<std::uint32_t>::max()) n += post_offsets_[s + 1] - post_offsets_[s];
-  }
-  return n;
-}
-
-void FLASHGappedTaggerAlgorithm::collect_(std::int64_t key_lo, std::int64_t key_hi, std::vector<std::uint32_t>& out) const
-{
-  out.clear();
-  for (std::int64_t key = std::max(key_lo, key_min_); key <= std::min(key_hi, key_max_); ++key)
-  {
-    const auto s = slot_[(Size)key];
-    if (s == std::numeric_limits<std::uint32_t>::max()) continue;
-    const Size before = out.size();
-    out.insert(out.end(), postings_.begin() + (std::ptrdiff_t)post_offsets_[s], postings_.begin() + (std::ptrdiff_t)post_offsets_[s + 1]);
-    if (before) std::inplace_merge(out.begin(), out.begin() + (std::ptrdiff_t)before, out.end());
-  }
-}
-
 void FLASHGappedTaggerAlgorithm::search(const DeconvolvedSpectrum& dspec, double ppm, std::vector<Landing>& landings) const
 {
   landings.clear();
-  if (postings_.empty()) return;
+  if (! bins_ || slot_count_.empty()) return;
   const double tol = ppm * 1e-6;
 
   // masses with the highest Qscore, ascending in mass
@@ -355,7 +329,7 @@ void FLASHGappedTaggerAlgorithm::search(const DeconvolvedSpectrum& dspec, double
 
   // landing per (global start position, series): the largest tag, then the highest Qscore sum
   std::unordered_map<std::uint64_t, Landing> best_landing;
-  std::vector<std::uint32_t> result, partial, operand;
+  std::vector<std::uint32_t> result;
   std::vector<int> rows, cand_rows, order;
   std::vector<double> score, cand_score;
   std::vector<std::pair<std::int64_t, std::int64_t>> ranges;
@@ -382,111 +356,106 @@ void FLASHGappedTaggerAlgorithm::search(const DeconvolvedSpectrum& dspec, double
     sc.resize(beam_width_);
   };
 
-  // result: the positions also found in the posting lists of the key range
-  auto intersectWith = [&](std::int64_t lo, std::int64_t hi) {
-    partial.clear();
-    for (std::int64_t key = std::max(lo, key_min_); key <= std::min(hi, key_max_); ++key)
-    {
-      const auto s = slot_[(Size)key];
-      if (s == std::numeric_limits<std::uint32_t>::max()) continue;
-      // a start position has at most one window per bin of a tolerance window (lengths differ by a residue), so the parts are disjoint
-      intersectSorted(result.data(), result.size(), postings_.data() + post_offsets_[s], (Size)(post_offsets_[s + 1] - post_offsets_[s]),
-                      partial);
-    }
-    std::sort(partial.begin(), partial.end());
-    result.swap(partial);
-  };
-  // f(position) for every posting in the key range
-  auto forEachPosting = [&](std::int64_t lo, std::int64_t hi, auto&& f) {
-    for (std::int64_t key = std::max(lo, key_min_); key <= std::min(hi, key_max_); ++key)
-    {
-      const auto s = slot_[(Size)key];
-      if (s == std::numeric_limits<std::uint32_t>::max()) continue;
-      const std::uint32_t* const end = postings_.data() + post_offsets_[s + 1];
-      for (const std::uint32_t* q = postings_.data() + post_offsets_[s]; q != end; ++q) f(*q);
-    }
-  };
-  // The tags of a spectrum share masses (beam rows), so the same smallest key ranges recur: the positions after the two and the
-  // three smallest ranges are kept per spectrum, keyed by the ranges. A key range narrower than the lightest residue (50 Da here)
-  // holds a start position at most once (two windows of a position differ by a residue), so two such ranges are intersected as
-  // sets, through a bit set marking the positions of the smaller.
-  auto narrow = [&](const std::pair<std::int64_t, std::int64_t>& r) {
-    return ((double)r.second - (double)r.first + 1) * index_bin_width_ < 50.0;
-  };
-  std::vector<std::uint64_t> marks;
+  // Positions (global, ascending) where windows start with a mass in every key range, from the Roaring bitmaps of the bins (a range of
+  // a tolerance window touches a few bins; it is narrower than the lightest residue, so it holds a start position at most once): the two
+  // ranges of the fewest positions are intersected bitmap by bitmap (the union of the ANDs of their bins), and the positions left are
+  // looked up in the bins of the other ranges, from the fewest positions on. The tags of a spectrum share masses (beam rows), so the same
+  // two and three smallest ranges recur: their positions are kept per spectrum, keyed by the ranges, up to a number of positions.
+  const auto& bitmaps = bins_->bitmaps;
+  std::vector<std::vector<std::uint32_t>> range_slots;
   std::map<std::array<std::int64_t, 4>, std::vector<std::uint32_t>> pair_cache;
   std::map<std::array<std::int64_t, 6>, std::vector<std::uint32_t>> triple_cache;
   Size cached = 0; // positions kept in both
   const Size max_cached = Size(1) << 20;
-  auto keep = [&](auto& cache, const auto& key) {
-    if (cached + result.size() > max_cached) return;
-    cached += result.size();
-    cache.emplace(key, result);
+  roaring::Roaring both;
+  std::vector<const roaring::Roaring*> union_inputs;
+  // the positions of @p positions in a bin of range k, in place
+  auto keepInRange = [&](std::vector<std::uint32_t>& positions, Size k) {
+    const auto& bin_slots = range_slots[k];
+    Size kept = 0;
+    for (std::uint32_t p : positions)
+    {
+      for (std::uint32_t s : bin_slots)
+      {
+        if (! bitmaps[s].contains(p)) continue;
+        positions[kept++] = p;
+        break;
+      }
+    }
+    positions.resize(kept);
   };
-
-  // positions (global, ascending) where windows start with a mass in every key range
   auto intersectRanges = [&]() {
     result.clear();
+    range_slots.resize(ranges.size());
     sizes.resize(ranges.size());
     for (Size k = 0; k < ranges.size(); ++k)
     {
-      sizes[k] = countRange_(ranges[k].first, ranges[k].second);
+      auto& bin_slots = range_slots[k];
+      bin_slots.clear();
+      sizes[k] = 0;
+      for (std::int64_t key = std::max(ranges[k].first, key_min_); key <= std::min(ranges[k].second, key_max_); ++key)
+      {
+        const auto s = slot_[(Size)key];
+        if (s == std::numeric_limits<std::uint32_t>::max()) continue;
+        bin_slots.push_back(s);
+        sizes[k] += slot_count_[s];
+      }
       if (sizes[k] == 0) return;
     }
     idx.resize(ranges.size());
     std::iota(idx.begin(), idx.end(), 0);
-    std::sort(idx.begin(), idx.end(), [&](Size a, Size b) { return sizes[a] < sizes[b]; });
+    std::stable_sort(idx.begin(), idx.end(), [&](Size a, Size b) { return sizes[a] < sizes[b]; });
     if (idx.size() == 1)
     {
-      collect_(ranges[idx[0]].first, ranges[idx[0]].second, result);
+      union_inputs.clear();
+      for (std::uint32_t s : range_slots[idx[0]]) union_inputs.push_back(&bitmaps[s]);
+      both = roaring::Roaring::fastunion(union_inputs.size(), union_inputs.data());
+      result.resize((Size)both.cardinality());
+      both.toUint32Array(result.data());
       return;
     }
     const auto [lo0, hi0] = ranges[idx[0]];
     const auto [lo1, hi1] = ranges[idx[1]];
     const std::array<std::int64_t, 4> pair_key {lo0, hi0, lo1, hi1};
-    if (const auto it = pair_cache.find(pair_key); it != pair_cache.end()) { result = it->second; }
+    if (const auto it = pair_cache.find(pair_key); it != pair_cache.end()) result = it->second;
     else
     {
-      if (narrow(ranges[idx[0]]) && narrow(ranges[idx[1]]) && sizes[idx[0]] * 16 >= sizes[idx[1]])
+      bool first = true;
+      for (std::uint32_t a : range_slots[idx[0]])
       {
-        if (marks.empty()) marks.assign((Size)(offsets_.back() >> 6) + 1, 0);
-        std::uint64_t* const mark = marks.data();
-        forEachPosting(lo0, hi0, [mark](std::uint32_t p) { mark[p >> 6] |= 1ULL << (p & 63); });
-        if (operand.size() < sizes[idx[1]]) operand.resize(sizes[idx[1]]); // the number of positions of the second range
-        std::uint32_t* const out = operand.data();
-        Size n = 0;
-        forEachPosting(lo1, hi1, [mark, out, &n](std::uint32_t p) {
-          out[n] = p;
-          n += (mark[p >> 6] >> (p & 63)) & 1;
-        });
-        result.assign(operand.begin(), operand.begin() + (std::ptrdiff_t)n);
-        forEachPosting(lo0, hi0, [mark](std::uint32_t p) { mark[p >> 6] = 0; });
-        std::sort(result.begin(), result.end());
+        for (std::uint32_t b : range_slots[idx[1]])
+        {
+          if (first) both = bitmaps[a] & bitmaps[b];
+          else both |= bitmaps[a] & bitmaps[b];
+          first = false;
+        }
       }
-      else
+      result.resize((Size)both.cardinality());
+      both.toUint32Array(result.data());
+      if (cached + result.size() <= max_cached)
       {
-        collect_(lo0, hi0, result);
-        intersectWith(lo1, hi1);
+        cached += result.size();
+        pair_cache.emplace(pair_key, result);
       }
-      keep(pair_cache, pair_key);
     }
     Size k = 2;
     if (k < idx.size() && ! result.empty())
     {
       const auto [lo2, hi2] = ranges[idx[2]];
       const std::array<std::int64_t, 6> triple_key {lo0, hi0, lo1, hi1, lo2, hi2};
-      if (const auto it = triple_cache.find(triple_key); it != triple_cache.end()) { result = it->second; }
+      if (const auto it = triple_cache.find(triple_key); it != triple_cache.end()) result = it->second;
       else
       {
-        intersectWith(lo2, hi2);
-        keep(triple_cache, triple_key);
+        keepInRange(result, idx[2]);
+        if (cached + result.size() <= max_cached)
+        {
+          cached += result.size();
+          triple_cache.emplace(triple_key, result);
+        }
       }
       k = 3;
     }
-    for (; k < idx.size() && ! result.empty(); ++k)
-    {
-      intersectWith(ranges[idx[k]].first, ranges[idx[k]].second);
-    }
+    for (; k < idx.size() && ! result.empty(); ++k) keepInRange(result, idx[k]);
   };
 
   const int max_length = (int)(max_gap_mass_ / min_residue_mass);

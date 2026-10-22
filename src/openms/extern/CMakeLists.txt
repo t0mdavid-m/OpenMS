@@ -30,6 +30,7 @@ add_subdirectory(eol-bspline)
 add_subdirectory(IsoSpec)
 add_subdirectory(GTE)
 add_subdirectory(Quadtree)
+add_subdirectory(CRoaring)
 
 if(ENABLE_TDL)
     add_subdirectory(tool_description_lib)
