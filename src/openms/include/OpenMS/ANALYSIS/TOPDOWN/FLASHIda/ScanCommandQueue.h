@@ -39,20 +39,51 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Ms2Params.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/NotchSelection.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/PlanUnit.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommand.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanRole.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 
 #include <chrono>
 #include <deque>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace OpenMS
 {
+
+  /// A bought R rewritten in place by a newer survey (it is adjustable, never droppable).
+  struct AdjustRequest
+  {
+    int scan_id = 0;
+    ScanCommand rewritten{};
+    int decision_survey_id = 0;
+    double isolation_purity = -1.0;
+  };
+
+  /// What a survey decided a command on, written when the command is planned and taken by the drain.
+  struct DecisionInfo
+  {
+    int decision_survey_id = 0;
+    double isolation_purity = -1.0;
+  };
+
+  /// What one replacePlan call did. The caller closes / drops the groups AFTER the queue lock is released.
+  struct ReplanResult
+  {
+    std::vector<int> dropped_scan_ids;     ///< for ida.log Superseded= and forgetTracking_
+    std::vector<int> dropped_quant_groups; ///< caller: quant_.closeGroup
+    std::vector<int> dropped_sweep_groups; ///< caller: exploration_.dropGroup
+    std::vector<int> reconciled_unit_ids;  ///< new units refused because their species committed meanwhile
+    int kept = 0;     ///< committed units at the CV whose queued commands stay
+    int added = 0;    ///< units inserted
+    int adjusted = 0; ///< adjustable commands rewritten
+  };
 
   /**
    * @brief Manages scan command building, priority queuing, and tracking ID encoding for FLASHIda.
@@ -156,7 +187,8 @@ namespace OpenMS
       return it->second;
     }
 
-    /// Remove expired commands from pending_scan_map_ using timeout_ms
+    /// Remove commands that have waited in the queued deques longer than timeout_ms. A plan unit's expired
+    /// member leaves the registry; an uncommitted unit that empties is discarded with its stamps.
     void cleanupExpired();
 
     /// Take (find + erase + return) the wide MS3 fragment ProForma stashed for @p scan_id at buildMS3 time;
@@ -165,8 +197,44 @@ namespace OpenMS
 
     /// Cancel commands by scan_id: remove any matching entries from the priority
     /// queues AND the pending (in-flight) map. Returns the scan_ids actually removed.
-    /// Used to abort an exploration group's child scans when its baseline fails.
+    /// No production caller: the baseline abort it was written for went with the baseline (ADR-0048).
     std::vector<int> cancelByScanIds(const std::vector<int>& scan_ids);
+
+    // --- Survey re-planning: the plan registry (all thread-safe) ---
+    //
+    // A survey's MS2 decisions stay provisional while they wait here. A survey hands its whole plan for one CV
+    // to replacePlan, which replaces that CV's still-UNCOMMITTED units; the drain's dequeue commits a unit and
+    // moves its stamps to an inbox the analysis thread folds (takeCommitted). A committed unit is never dropped.
+    // Commands no survey planned (follow-ups, MS3, MS1-family) never enter the registry and are never touched.
+
+    /// Atomically: drop every UNCOMMITTED unit at @p cv; insert @p units (minus reconciled ones) at the back of their
+    /// priority deques; apply @p adjust in place. Stamps enqueue_timestamp_ms on everything inserted or adjusted.
+    /// A new uncommitted unit is reconciled away when the stamps committed since the last fold would have barred
+    /// its anchor (wouldBar). A unit arriving already committed (a re-planned remainder) is not reconciled.
+    /// @p replace_remainder_of: committed units whose QUEUED commands are dropped because @p units carries their
+    /// re-planned remainder (non-quant `separate` R only).
+    /// A unit's unit_id is kept when it is > 0 and not in use, otherwise one is minted.
+    ReplanResult replacePlan(double cv, std::vector<PlanUnit> units, const std::vector<AdjustRequest>& adjust,
+                             const std::vector<int>& replace_remainder_of);
+
+    /// Register a queued bought R as adjustable (never droppable). @p resolved_charges = charges resolved on the
+    /// Q's survey, @p q_survey_id = that survey, which stays its decision survey until an adjust says otherwise.
+    void registerAdjustable(int scan_id, std::vector<int> resolved_charges, int q_survey_id);
+
+    /// Commands of committed units at a CV that are still queued, grouped by unit, and the adjustable bought Rs
+    /// still queued with their resolved charges. Snapshot copies.
+    struct Waiting
+    {
+      std::vector<PlanUnit> committed_units;
+      std::vector<std::pair<ScanCommand, std::vector<int>>> adjustable;
+    };
+    Waiting waitingAt(double cv) const;
+
+    /// Move out every stamp committed since the last call, in commit order (the analysis thread folds them).
+    std::vector<MemoryStamp> takeCommitted();
+
+    /// Take (find + erase) the decision info written for @p scan_id; nullopt for commands no survey decided.
+    std::optional<DecisionInfo> takeDecisionInfo(int scan_id);
 
     /// Check if an AGC scan is needed based on agc_interval_ms
     bool needsAGC() const;
@@ -279,6 +347,35 @@ namespace OpenMS
     /// the scan_commands.tsv ms3_proteoform column. Only MS3 commands ever have an entry. Guarded by queue_mutex_.
     std::unordered_map<int, std::string> ms3_cmd_proteoform_;
 
+    // --- Survey re-planning: the plan registry. All guarded by queue_mutex_. ---
+
+    /// A bought R a newer survey may rewrite: the charges its Q's survey resolved, and that survey.
+    struct AdjustableR
+    {
+      std::vector<int> resolved_charges;
+      int q_survey_id = 0;
+    };
+
+    /// unit_id -> unit. A unit leaves when its last queued command is dequeued, dropped or expired.
+    std::map<int, PlanUnit> units_;
+
+    /// scan_id -> unit_id, for registered commands still QUEUED (erased on dequeue, drop and expiry).
+    std::unordered_map<int, int> unit_of_;
+
+    /// scan_id -> adjustable bought R, while it is queued.
+    std::unordered_map<int, AdjustableR> adjustable_;
+
+    /// Stamps committed by dequeue_ since the last takeCommitted, in COMMIT order -- wouldBar takes the last
+    /// MassQscore by position, so neither may ever be sorted or merged out of order.
+    std::vector<MemoryStamp> inbox_;
+    std::vector<MemoryStamp> committed_since_fold_;
+
+    /// scan_id -> what the survey decided it on, written by replacePlan / registerAdjustable, taken by the drain.
+    std::unordered_map<int, DecisionInfo> decision_info_;
+
+    /// Last unit id minted by replacePlan.
+    int unit_id_counter_ = 0;
+
     /// Timestamp of last MS1 scan (for cycle time logic)
     std::chrono::steady_clock::time_point last_ms1_time_ = std::chrono::steady_clock::now();
 
@@ -303,6 +400,12 @@ namespace OpenMS
     void push_(ScanCommand cmd);
     std::optional<ScanCommand> dequeue_();
 
+    /// Remove the registered, QUEUED command @p scan_id from the registry (not from the deques): its unit loses a
+    /// command and is erased when none is left. Caller must hold queue_mutex_.
+    void forgetQueued_(int scan_id);
+
+    /// Test scaffolding reads the plan registry through this friend rather than through a public getter.
+    friend struct FLASHIdaTestAccess;
   };
 
 } // namespace OpenMS

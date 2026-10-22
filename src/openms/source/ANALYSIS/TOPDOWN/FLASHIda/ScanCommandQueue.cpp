@@ -41,6 +41,7 @@
 #include <cstdio>
 #include <cstring>
 #include <iostream>
+#include <set>
 #include <string>
 
 namespace OpenMS
@@ -681,6 +682,15 @@ namespace OpenMS
     // command that reaches the queue without going through a builder still holds the invariant.
     syncEnergyMirrors_(cmd);
 
+    // Causal invariant of survey re-planning: a command is only ever derived from one that went out. A parent
+    // still registered in the plan registry was never dequeued, so its child could survive the parent's drop.
+    const char* const parent_begin = cmd.parent_scan_id;
+    const std::string parent(parent_begin, std::find(parent_begin, parent_begin + sizeof(cmd.parent_scan_id), '\0'));
+    if (!parent.empty() && unit_of_.count(decode(parent)) > 0)
+    {
+      std::cout << "[REPLAN-INVARIANT] child=" << encode(cmd.scan_id) << " parent=" << parent << std::endl;
+    }
+
     cmd.enqueue_timestamp_ms = static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
@@ -706,10 +716,54 @@ namespace OpenMS
           std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count());
         pending_scan_map_[cmd.scan_id] = cmd;
+
+        // Commit at dequeue: the first command of a unit to go out commits its species, and each command
+        // commits its own charge's stamps. Both move to the inbox the analysis thread folds, in commit order.
+        auto u = unit_of_.find(cmd.scan_id);
+        if (u != unit_of_.end())
+        {
+          const int unit_id = u->second;
+          PlanUnit& unit = units_.at(unit_id);
+          const int z = cmd.num_stages > 0 ? std::abs(cmd.stages[0].charge_state) : 0;
+          if (!unit.committed)
+          {
+            unit.committed = true;
+            for (const auto& s : unit.stamps.species_level)
+            {
+              inbox_.push_back(s);
+              committed_since_fold_.push_back(s);
+            }
+          }
+          auto pc = unit.stamps.per_charge.find(z);
+          if (pc != unit.stamps.per_charge.end())
+          {
+            for (const auto& s : pc->second)
+            {
+              inbox_.push_back(s);
+              committed_since_fold_.push_back(s);
+            }
+            unit.stamps.per_charge.erase(pc);
+          }
+          unit.sent_charges.push_back(z);
+          unit_of_.erase(u);
+          if (--unit.commands_left == 0) units_.erase(unit_id);
+        }
+        adjustable_.erase(cmd.scan_id);
         return cmd;
       }
     }
     return std::nullopt;
+  }
+
+  void ScanCommandQueue::forgetQueued_(int scan_id)
+  {
+    adjustable_.erase(scan_id);
+    decision_info_.erase(scan_id);
+    auto u = unit_of_.find(scan_id);
+    if (u == unit_of_.end()) return;
+    auto it = units_.find(u->second);
+    unit_of_.erase(u);
+    if (it != units_.end() && --it->second.commands_left == 0) units_.erase(it); // an uncommitted unit's stamps go with it
   }
 
   std::optional<ScanCommand> ScanCommandQueue::pushAndDequeue(ScanCommand cmd)
@@ -762,6 +816,7 @@ namespace OpenMS
                     << " ms_level=" << it->msn_level
                     << std::endl;
           ms3_cmd_proteoform_.erase(it->scan_id);  // drop any stashed MS3 proteoform (no-op for non-MS3)
+          forgetQueued_(it->scan_id);              // never acquired: leaves the plan registry (no-op if unregistered)
           it = queues_[p].erase(it);
         }
         else
@@ -780,6 +835,205 @@ namespace OpenMS
     std::string pf = std::move(it->second);
     ms3_cmd_proteoform_.erase(it);
     return pf;
+  }
+
+  // --- Survey re-planning: the plan registry ---
+
+  namespace
+  {
+    /// FAIMS CVs are authored values copied, never computed, so equality is exact up to representation.
+    bool sameCv(double a, double b)
+    {
+      return std::abs(a - b) < 1e-6;
+    }
+
+    /// The admission key of a unit's anchor (its first command), as selection keyed the species: the nominal mass,
+    /// the integer centre m/z buildMS2 isolated, the anchor charge, the score selection recorded (the unit's own
+    /// MassQscore stamp, else the command's qscore) and whether an authored charge set governs it.
+    UnitAdmissionKey anchorKey(const PlanUnit& u)
+    {
+      const ScanCommand& a = u.commands.front();
+      UnitAdmissionKey k;
+      k.nominal_mass = u.nominal_mass;
+      k.anchor_charge = a.num_stages > 0 ? std::abs(a.stages[0].charge_state) : 0;
+      k.integer_mz = static_cast<int>(std::round(a.stages[0].precursor_mz));
+      k.score = a.qscore;
+      for (const auto& s : u.stamps.species_level)
+      {
+        if (s.kind == MemoryStamp::Kind::MassQscore) k.score = s.value;
+      }
+      for (const auto& [z, stamps] : u.stamps.per_charge)
+      {
+        for (const auto& s : stamps)
+        {
+          if (s.kind == MemoryStamp::Kind::AuthoredAcquired) k.has_authored = true;
+        }
+      }
+      return k;
+    }
+  } // namespace
+
+  ReplanResult ScanCommandQueue::replacePlan(double cv, std::vector<PlanUnit> units, const std::vector<AdjustRequest>& adjust,
+                                             const std::vector<int>& replace_remainder_of)
+  {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    ReplanResult r;
+
+    // 1. Which units at this CV lose their queued commands: every uncommitted one, and the committed ones whose
+    //    remainder the new plan re-derives. Every other committed unit is kept as it is.
+    std::set<int> leaving;
+    for (const auto& [id, u] : units_)
+    {
+      if (!sameCv(u.faims_cv, cv)) continue;
+      const bool remainder = std::find(replace_remainder_of.begin(), replace_remainder_of.end(), id) != replace_remainder_of.end();
+      if (!u.committed || remainder)
+      {
+        leaving.insert(id);
+        if (!u.committed)
+        {
+          r.dropped_quant_groups.insert(r.dropped_quant_groups.end(), u.quant_group_ids.begin(), u.quant_group_ids.end());
+          r.dropped_sweep_groups.insert(r.dropped_sweep_groups.end(), u.sweep_group_ids.begin(), u.sweep_group_ids.end());
+        }
+      }
+      else
+      {
+        ++r.kept;
+      }
+    }
+    if (!leaving.empty())
+    {
+      for (int p = 0; p < 4; ++p)
+      {
+        auto it = queues_[p].begin();
+        while (it != queues_[p].end())
+        {
+          auto u = unit_of_.find(it->scan_id);
+          if (u != unit_of_.end() && leaving.count(u->second) > 0)
+          {
+            r.dropped_scan_ids.push_back(it->scan_id);
+            decision_info_.erase(it->scan_id);
+            ms3_cmd_proteoform_.erase(it->scan_id);
+            unit_of_.erase(u);
+            it = queues_[p].erase(it);
+          }
+          else
+          {
+            ++it;
+          }
+        }
+      }
+      for (int id : leaving) units_.erase(id); // an uncommitted unit's stamps go with it: never acquired, never excluded
+    }
+
+    // 2. Insert the new plan. A unit whose species committed since the last fold would have been refused had the
+    //    survey seen that commit; it is reconciled away instead. A unit arriving committed is a remainder.
+    for (auto& unit : units)
+    {
+      if (unit.unit_id <= 0 || units_.count(unit.unit_id) > 0)
+      {
+        do
+        {
+          ++unit_id_counter_;
+        } while (units_.count(unit_id_counter_) > 0);
+        unit.unit_id = unit_id_counter_;
+      }
+      if (unit.commands.empty()) continue;
+      if (!unit.committed && wouldBar(committed_since_fold_, anchorKey(unit)))
+      {
+        r.reconciled_unit_ids.push_back(unit.unit_id);
+        continue;
+      }
+      unit.faims_cv = cv;
+      unit.commands_left = static_cast<int>(unit.commands.size());
+      for (size_t k = 0; k < unit.commands.size(); ++k)
+      {
+        const ScanCommand& cmd = unit.commands[k];
+        decision_info_[cmd.scan_id] = DecisionInfo{unit.decision_survey_id, k < unit.purity.size() ? unit.purity[k] : -1.0};
+        push_(cmd);
+        unit_of_[cmd.scan_id] = unit.unit_id;
+      }
+      ++r.added;
+      const int id = unit.unit_id;
+      units_[id] = std::move(unit);
+    }
+
+    // 3. Rewrite the adjustable commands in place: same scan id, same queue position, a fresh enqueue time.
+    const auto now_ms = static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+    for (const auto& a : adjust)
+    {
+      if (adjustable_.count(a.scan_id) == 0) continue;
+      for (int p = 0; p < 4; ++p)
+      {
+        auto it = std::find_if(queues_[p].begin(), queues_[p].end(), [&a](const ScanCommand& c) { return c.scan_id == a.scan_id; });
+        if (it == queues_[p].end()) continue;
+        ScanCommand cmd = a.rewritten;
+        cmd.scan_id = a.scan_id;
+        cmd.priority = it->priority;
+        syncEnergyMirrors_(cmd);
+        cmd.enqueue_timestamp_ms = now_ms;
+        *it = cmd;
+        decision_info_[a.scan_id] = DecisionInfo{a.decision_survey_id, a.isolation_purity};
+        ++r.adjusted;
+        break;
+      }
+    }
+    return r;
+  }
+
+  void ScanCommandQueue::registerAdjustable(int scan_id, std::vector<int> resolved_charges, int q_survey_id)
+  {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    adjustable_[scan_id] = AdjustableR{std::move(resolved_charges), q_survey_id};
+    decision_info_[scan_id] = DecisionInfo{q_survey_id, -1.0};
+  }
+
+  ScanCommandQueue::Waiting ScanCommandQueue::waitingAt(double cv) const
+  {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    Waiting w;
+    for (const auto& [id, u] : units_)
+    {
+      if (!u.committed || !sameCv(u.faims_cv, cv)) continue;
+      PlanUnit copy = u;
+      copy.commands.clear();
+      copy.purity.clear();
+      for (size_t k = 0; k < u.commands.size(); ++k)
+      {
+        if (unit_of_.count(u.commands[k].scan_id) == 0) continue; // already sent
+        copy.commands.push_back(u.commands[k]);
+        copy.purity.push_back(k < u.purity.size() ? u.purity[k] : -1.0);
+      }
+      if (!copy.commands.empty()) w.committed_units.push_back(std::move(copy));
+    }
+    for (int p = 0; p < 4; ++p)
+    {
+      for (const auto& c : queues_[p])
+      {
+        auto a = adjustable_.find(c.scan_id);
+        if (a != adjustable_.end()) w.adjustable.emplace_back(c, a->second.resolved_charges);
+      }
+    }
+    return w;
+  }
+
+  std::vector<MemoryStamp> ScanCommandQueue::takeCommitted()
+  {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    std::vector<MemoryStamp> out = std::move(inbox_);
+    inbox_.clear();
+    committed_since_fold_.clear();
+    return out;
+  }
+
+  std::optional<DecisionInfo> ScanCommandQueue::takeDecisionInfo(int scan_id)
+  {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    auto it = decision_info_.find(scan_id);
+    if (it == decision_info_.end()) return std::nullopt;
+    DecisionInfo info = it->second;
+    decision_info_.erase(it);
+    return info;
   }
 
   std::vector<int> ScanCommandQueue::cancelByScanIds(const std::vector<int>& scan_ids)

@@ -11,8 +11,15 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Config.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 
+#include "FLASHIda_TestAccess.h"   // the queue's plan registry, read without a public getter
+
 #include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <map>
+#include <random>
 #include <set>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -78,6 +85,93 @@ namespace
   }
 }
 )";
+
+  // ---- Survey re-planning: plan units built by hand -------------------------------------------------
+
+  /// The minimal config with scan_timeout at @p ms, for the expiry section.
+  std::string configWithTimeout(int ms)
+  {
+    std::string s(minimal_config);
+    const std::string from = "\"value_ms\": 100";
+    s.replace(s.find(from), from.size(), "\"value_ms\": " + std::to_string(ms));
+    return s;
+  }
+
+  /// An MS2 at @p charge isolating @p mz, parented to nothing (a survey's MS2s carry the survey's id;
+  /// the queue reads the parent only for the causal invariant, which none of these sections exercises).
+  ScanCommand ms2(int scan_id, int charge, double mz = 951.0, int priority = 2)
+  {
+    ScanCommand cmd{};
+    cmd.scan_id = scan_id;
+    cmd.msn_level = 2;
+    cmd.priority = priority;
+    cmd.num_stages = 1;
+    cmd.stages[0].charge_state = charge;
+    cmd.stages[0].precursor_mz = mz;
+    cmd.qscore = 0.9;
+    return cmd;
+  }
+
+  MemoryStamp stamp(MemoryStamp::Kind kind, int key, int charge = 0, double value = 60.0)
+  {
+    MemoryStamp s;
+    s.kind = kind;
+    s.key = key;
+    s.charge = charge;
+    s.value = value;
+    return s;
+  }
+
+  /// One species of one survey: a command per charge, a species-level TqMassRt stamp and a per-charge
+  /// AllMassRt stamp keyed on the charge, so which stamps were committed is readable off their charges.
+  PlanUnit unit(int nominal, const std::vector<ScanCommand>& cmds, double cv, int decision_survey_id = 1)
+  {
+    PlanUnit u;
+    u.faims_cv = cv;
+    u.nominal_mass = nominal;
+    u.decision_survey_id = decision_survey_id;
+    u.commands = cmds;
+    for (const auto& c : cmds)
+    {
+      u.purity.push_back(0.5);
+      u.stamps.per_charge[c.stages[0].charge_state].push_back(stamp(MemoryStamp::Kind::AllMassRt, nominal, c.stages[0].charge_state));
+    }
+    u.stamps.nominal_mass = nominal;
+    u.stamps.species_level.push_back(stamp(MemoryStamp::Kind::TqMassRt, nominal));
+    return u;
+  }
+
+  std::vector<int> idsOf(const PlanUnit& u)
+  {
+    std::vector<int> ids;
+    for (const auto& c : u.commands) ids.push_back(c.scan_id);
+    return ids;
+  }
+
+  /// Dequeue until empty; the scan ids in dequeue order.
+  std::vector<int> drainIds(ScanCommandQueue& q)
+  {
+    std::vector<int> ids;
+    while (auto c = q.dequeue()) ids.push_back(c->scan_id);
+    return ids;
+  }
+
+  /// (kind, key, charge) of each stamp, so a committed sequence compares as a value.
+  std::vector<std::string> signature(const std::vector<MemoryStamp>& stamps)
+  {
+    std::vector<std::string> out;
+    for (const auto& s : stamps)
+    {
+      out.push_back(std::to_string(static_cast<int>(s.kind)) + ":" + std::to_string(s.key) + ":" + std::to_string(s.charge));
+    }
+    return out;
+  }
+
+  uint64_t steadyNowMs()
+  {
+    return static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+  }
 }
 
 START_TEST(ScanCommandQueue_Concurrent, "$Id$")
@@ -437,6 +531,305 @@ START_SECTION(cancelByScanIds_concurrent)
 
   TEST_EQUAL(total_removed, N)                          // each of the 1000 original ids removed exactly once
   TEST_EQUAL(static_cast<int>(queue.queueSize(1)), 250) // the 250 newly pushed (untargeted) ids remain
+}
+END_SECTION
+
+// ---- Survey re-planning: the plan registry -----------------------------------------------------------
+//
+// A survey hands the queue its whole plan for one CV (replacePlan). A plan unit stays UNCOMMITTED, and so
+// droppable by the next survey at that CV, until the drain dequeues one of its commands; the dequeue commits
+// it and moves its stamps into the inbox the analysis thread folds (takeCommitted).
+
+START_SECTION(replacePlan_drops_uncommitted_units_at_its_cv_only)
+{
+  Config cfg{std::string(minimal_config)};
+  ScanCommandQueue q(cfg);
+
+  const PlanUnit u1 = unit(12351, {ms2(1, 13), ms2(2, 14)}, -40.0);
+  const PlanUnit u2 = unit(13000, {ms2(3, 13, 1001.0)}, -60.0);
+  const PlanUnit u3 = unit(14000, {ms2(4, 13, 1078.0)}, -40.0);
+
+  q.replacePlan(-40.0, {u1}, {}, {});
+  q.replacePlan(-60.0, {u2}, {}, {});
+  const ReplanResult r = q.replacePlan(-40.0, {u3}, {}, {});
+
+  std::set<int> dropped(r.dropped_scan_ids.begin(), r.dropped_scan_ids.end());
+  TEST_EQUAL(dropped == std::set<int>({1, 2}), true)
+  TEST_EQUAL(r.added, 1)
+  const std::vector<int> drained = drainIds(q);
+  TEST_EQUAL(std::set<int>(drained.begin(), drained.end()) == std::set<int>({3, 4}), true)
+  TEST_EQUAL(static_cast<int>(drained.size()), 2)
+}
+END_SECTION
+
+START_SECTION(dequeue_commits_the_unit_and_keeps_it)
+{
+  Config cfg{std::string(minimal_config)};
+  ScanCommandQueue q(cfg);
+
+  const PlanUnit u1 = unit(12351, {ms2(11, 13), ms2(12, 14)}, 0.0);
+  q.replacePlan(0.0, {u1}, {}, {});
+
+  const auto first = q.dequeue();
+  ABORT_IF(!first.has_value())
+  TEST_EQUAL(first->scan_id, 11)
+
+  // The species is committed: a newer survey at its CV that no longer plans it does not drop its remainder.
+  const ReplanResult r = q.replacePlan(0.0, {}, {}, {});
+  TEST_EQUAL(r.dropped_scan_ids.empty(), true)
+
+  const auto second = q.dequeue();
+  ABORT_IF(!second.has_value())
+  TEST_EQUAL(second->scan_id, 12)
+
+  std::vector<MemoryStamp> expected = u1.stamps.species_level;
+  expected.insert(expected.end(), u1.stamps.per_charge.at(13).begin(), u1.stamps.per_charge.at(13).end());
+  expected.insert(expected.end(), u1.stamps.per_charge.at(14).begin(), u1.stamps.per_charge.at(14).end());
+  TEST_EQUAL(signature(q.takeCommitted()) == signature(expected), true)
+}
+END_SECTION
+
+START_SECTION(per_charge_stamps_commit_with_their_own_command)
+{
+  Config cfg{std::string(minimal_config)};
+  ScanCommandQueue q(cfg);
+
+  PlanUnit u = unit(12351, {ms2(21, 13), ms2(22, 14), ms2(23, 16)}, 0.0);
+  u.separate = true;
+  q.replacePlan(0.0, {u}, {}, {});
+
+  const auto first = q.dequeue();
+  ABORT_IF(!first.has_value())
+  TEST_EQUAL(first->scan_id, 21)
+
+  // The species-level stamps and charge 13's own; 14 and 16 commit only when their commands go out.
+  std::vector<MemoryStamp> expected = u.stamps.species_level;
+  expected.insert(expected.end(), u.stamps.per_charge.at(13).begin(), u.stamps.per_charge.at(13).end());
+  TEST_EQUAL(signature(q.takeCommitted()) == signature(expected), true)
+}
+END_SECTION
+
+START_SECTION(reconcile_refuses_a_unit_committed_since_the_fold)
+{
+  Config cfg{std::string(minimal_config)};
+  ScanCommandQueue q(cfg);
+
+  // U1 commits between the newer survey's plan and its swap; the analysis thread has not folded it yet,
+  // so that survey selected A again. The reconcile step reads the commit and refuses the new unit.
+  q.replacePlan(0.0, {unit(12351, {ms2(31, 13)}, 0.0)}, {}, {});
+  ABORT_IF(!q.dequeue().has_value())
+
+  PlanUnit u2 = unit(12351, {ms2(32, 13)}, 0.0, 2);
+  u2.unit_id = 77;
+  const ReplanResult r = q.replacePlan(0.0, {u2}, {}, {});
+
+  TEST_EQUAL(r.reconciled_unit_ids == std::vector<int>({77}), true)
+  TEST_EQUAL(r.added, 0)
+  TEST_EQUAL(drainIds(q).empty(), true)   // U2's command never reached the queue
+}
+END_SECTION
+
+START_SECTION(unregistered_commands_are_never_dropped)
+{
+  Config cfg{std::string(minimal_config)};
+  ScanCommandQueue q(cfg);
+
+  // A follow-up and a monitor MS1 belong to no survey's plan, so no replacePlan may touch them.
+  ScanCommand follow_up = ms2(41, 13, 951.0, 0);
+  ScanCommand monitor{};
+  monitor.scan_id = 42;
+  monitor.msn_level = 1;
+  monitor.priority = 0;
+  q.push(follow_up);
+  q.push(monitor);
+
+  const ReplanResult r = q.replacePlan(0.0, {}, {}, {});
+  TEST_EQUAL(r.dropped_scan_ids.empty(), true)
+  TEST_EQUAL(drainIds(q) == std::vector<int>({41, 42}), true)
+}
+END_SECTION
+
+START_SECTION(adjustable_is_rewritten_never_dropped)
+{
+  Config cfg{std::string(minimal_config)};
+  ScanCommandQueue q(cfg);
+
+  q.push(ms2(51, 13, 951.0, 0));   // the bought R
+  q.registerAdjustable(51, {13, 14}, 5);
+  std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  const uint64_t before_adjust = steadyNowMs();
+
+  const ReplanResult r = q.replacePlan(0.0, {}, {{51, ms2(51, 14, 882.0, 0), 9, 0.7}}, {});
+  TEST_EQUAL(r.adjusted, 1)
+  TEST_EQUAL(r.dropped_scan_ids.empty(), true)
+
+  const ReplanResult r2 = q.replacePlan(0.0, {}, {}, {});
+  TEST_EQUAL(r2.dropped_scan_ids.empty(), true)
+
+  const auto cmd = q.dequeue();
+  ABORT_IF(!cmd.has_value())
+  TEST_EQUAL(cmd->scan_id, 51)
+  TEST_EQUAL(cmd->stages[0].charge_state, 14)
+  TEST_EQUAL(cmd->enqueue_timestamp_ms >= before_adjust, true)   // reset by the adjust, not left at the push
+
+  const auto info = q.takeDecisionInfo(51);
+  ABORT_IF(!info.has_value())
+  TEST_EQUAL(info->decision_survey_id, 9)
+  TEST_REAL_SIMILAR(info->isolation_purity, 0.7)
+  TEST_EQUAL(q.takeDecisionInfo(51).has_value(), false)   // a take, not a peek
+}
+END_SECTION
+
+START_SECTION(expired_member_leaves_registry)
+{
+  Config cfg{configWithTimeout(1)};
+  ScanCommandQueue q(cfg);
+
+  q.replacePlan(0.0, {unit(12351, {ms2(61, 13), ms2(62, 14)}, 0.0)}, {}, {});
+  std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  q.cleanupExpired();
+
+  // Never acquired, so never excluded: an uncommitted unit that empties is discarded with its stamps.
+  TEST_EQUAL(q.takeCommitted().empty(), true)
+  TEST_EQUAL(FLASHIdaTestAccess::planUnitCount(q), 0)
+  TEST_EQUAL(drainIds(q).empty(), true)
+}
+END_SECTION
+
+START_SECTION(enqueue_timestamp_reset_on_insert_and_adjust)
+{
+  Config cfg{std::string(minimal_config)};
+  ScanCommandQueue q(cfg);
+
+  // A stale timestamp on the way in is overwritten on insert ...
+  ScanCommand planned = ms2(71, 13);
+  planned.enqueue_timestamp_ms = 1;
+  const uint64_t before_insert = steadyNowMs();
+  q.replacePlan(0.0, {unit(12351, {planned}, 0.0)}, {}, {});
+  const auto inserted = q.dequeue();
+  ABORT_IF(!inserted.has_value())
+  TEST_EQUAL(inserted->enqueue_timestamp_ms >= before_insert, true)
+
+  // ... and on adjust, where the rewritten command carries one too.
+  q.push(ms2(72, 13, 951.0, 0));
+  q.registerAdjustable(72, {13, 14}, 5);
+  std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  ScanCommand rewritten = ms2(72, 14, 882.0, 0);
+  rewritten.enqueue_timestamp_ms = 1;
+  const uint64_t before_adjust = steadyNowMs();
+  q.replacePlan(0.0, {}, {{72, rewritten, 9, 0.7}}, {});
+  const auto adjusted = q.dequeue();
+  ABORT_IF(!adjusted.has_value())
+  TEST_EQUAL(adjusted->enqueue_timestamp_ms >= before_adjust, true)
+}
+END_SECTION
+
+// The race at queue level: four drains dequeue while one analysis thread re-plans and pushes unregistered
+// work. Nothing may be dequeued twice, nothing unregistered lost, and a unit is either sent (from its first
+// dequeue on, never dropped) or dropped (none of it ever sent).
+START_SECTION(replacePlan_vs_concurrent_dequeue_conservation)
+{
+  Config cfg{std::string(minimal_config)};
+  ScanCommandQueue q(cfg);
+
+  const int N_DRAINS = 4;
+  std::atomic<bool> stop{false};
+  std::vector<std::vector<int>> dequeued(N_DRAINS + 1);
+  auto drain = [&](int t)
+  {
+    while (!stop.load(std::memory_order_acquire))
+    {
+      if (auto c = q.dequeue()) dequeued[t].push_back(c->scan_id);
+      else std::this_thread::yield();
+    }
+  };
+
+  std::set<int> unregistered, dropped, reconciled_ids, registered;
+  std::map<int, int> unit_of;   // scan id -> unit id
+  std::set<int> dropped_units;
+  auto replanner = [&]()
+  {
+    std::mt19937 rng(20261022);
+    int next_id = 1000, next_unit = 1;
+    for (int i = 0; i < 500; ++i)
+    {
+      const double cv = (rng() % 2 == 0) ? -40.0 : -60.0;
+      std::vector<PlanUnit> units;
+      const int n_units = static_cast<int>(rng() % 4);
+      for (int k = 0; k < n_units; ++k)
+      {
+        const int nominal = 10000 + static_cast<int>(rng() % 20);
+        std::vector<ScanCommand> cmds;
+        const int n_cmds = 1 + static_cast<int>(rng() % 3);
+        for (int c = 0; c < n_cmds; ++c) cmds.push_back(ms2(next_id++, 10 + c, 900.0 + (nominal - 10000)));
+        PlanUnit u = unit(nominal, cmds, cv);
+        u.unit_id = next_unit++;
+        for (int id : idsOf(u))
+        {
+          unit_of[id] = u.unit_id;
+          registered.insert(id);
+        }
+        units.push_back(u);
+      }
+      std::map<int, std::vector<int>> ids_of_unit;
+      for (const auto& u : units) ids_of_unit[u.unit_id] = idsOf(u);
+
+      const ReplanResult r = q.replacePlan(cv, std::move(units), {}, {});
+      for (int id : r.dropped_scan_ids)
+      {
+        dropped.insert(id);
+        dropped_units.insert(unit_of[id]);
+      }
+      for (int uid : r.reconciled_unit_ids)
+      {
+        for (int id : ids_of_unit[uid]) reconciled_ids.insert(id);
+      }
+
+      if (rng() % 2 == 0)
+      {
+        unregistered.insert(next_id);
+        q.push(ms2(next_id++, 13, 951.0, 0));
+      }
+      if (i % 50 == 49) q.takeCommitted();   // the analysis thread's fold
+    }
+  };
+
+  std::vector<std::thread> threads;
+  for (int t = 0; t < N_DRAINS; ++t) threads.emplace_back(drain, t);
+  std::thread planner(replanner);
+  planner.join();
+  stop.store(true, std::memory_order_release);
+  for (auto& th : threads) th.join();
+  dequeued[N_DRAINS] = drainIds(q);
+
+  std::map<int, int> times;
+  for (const auto& v : dequeued)
+    for (int id : v) ++times[id];
+
+  bool none_twice = true, unregistered_once = true, dropped_never_sent = true, dropped_unit_never_sent = true,
+       reconciled_never_sent = true, conserved = true;
+  for (const auto& [id, n] : times)
+  {
+    if (n != 1) none_twice = false;
+    if (dropped.count(id)) dropped_never_sent = false;
+    if (reconciled_ids.count(id)) reconciled_never_sent = false;
+    if (registered.count(id) && dropped_units.count(unit_of[id])) dropped_unit_never_sent = false;
+  }
+  for (int id : unregistered)
+    if (times[id] != 1) unregistered_once = false;
+  for (int id : registered)   // every planned command is sent, dropped or was never inserted -- exactly one
+  {
+    const int fates = (times.count(id) ? 1 : 0) + (dropped.count(id) ? 1 : 0) + (reconciled_ids.count(id) ? 1 : 0);
+    if (fates != 1) conserved = false;
+  }
+
+  TEST_EQUAL(none_twice, true)
+  TEST_EQUAL(unregistered_once, true)
+  TEST_EQUAL(dropped_never_sent, true)
+  TEST_EQUAL(dropped_unit_never_sent, true)
+  TEST_EQUAL(reconciled_never_sent, true)
+  TEST_EQUAL(conserved, true)
+  TEST_EQUAL(FLASHIdaTestAccess::planUnitCount(q), 0)   // every unit sent in full or dropped: none left behind
 }
 END_SECTION
 

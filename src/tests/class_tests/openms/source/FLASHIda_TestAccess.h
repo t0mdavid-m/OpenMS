@@ -86,6 +86,14 @@ namespace OpenMS
       return ps.target_mass_charge_map_;
     }
 
+    /// Plan units the queue still holds. A unit leaves the registry when its last command is dequeued,
+    /// dropped or expired, so a drained queue must read 0 -- anything else is a unit leaked with its stamps.
+    static int planUnitCount(const ScanCommandQueue& q)
+    {
+      std::lock_guard<std::mutex> lock(q.queue_mutex_);
+      return static_cast<int>(q.units_.size());
+    }
+
     /// Next precursor id the engine would mint. Part of the neutrality fingerprint: a monitor scan
     /// must not consume one, and an id counter that moved is the cheapest evidence that it selected.
     static int nextPrecursorId(const FLASHIda& f) { return f.next_precursor_id_; }
