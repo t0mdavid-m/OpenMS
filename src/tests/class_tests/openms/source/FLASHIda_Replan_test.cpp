@@ -197,7 +197,9 @@ namespace
     return out;
   }
 
-  /// scan_commands.tsv rows with the one column that carries wall-clock time (enqueue_ts) removed.
+  /// scan_commands.tsv rows with three columns removed by header name: the one that carries wall-clock time
+  /// (enqueue_ts), and the two re-planning added after the Push 1 tip capture below was taken (decision_survey_id,
+  /// isolation_purity) -- the capture has neither, and every other column must stay identical.
   std::vector<std::vector<std::string>> stableCommandRows(const std::string& path, std::vector<std::string>& headers)
   {
     const TSVFile tsv = TSVFile::parse(path);
@@ -205,7 +207,8 @@ namespace
     std::vector<int> keep;
     for (size_t i = 0; i < tsv.headers.size(); ++i)
     {
-      if (tsv.headers[i] == "enqueue_ts") continue;
+      const std::string& h = tsv.headers[i];
+      if (h == "enqueue_ts" || h == "decision_survey_id" || h == "isolation_purity") continue;
       keep.push_back(static_cast<int>(i));
       headers.push_back(tsv.headers[i]);
     }
@@ -217,6 +220,24 @@ namespace
       rows.push_back(cells);
     }
     return rows;
+  }
+
+  /// The decision_survey_id cell of every scan_commands.tsv row in @p log_dir, keyed by the row's tracking_id (both
+  /// encoded). The drain consumes the engine's decision record as it writes the row, so after the drain the log is
+  /// where the decision survey is read -- and the logged value is the decided one.
+  std::map<std::string, std::string> decisionSurveys(const std::string& log_dir)
+  {
+    const TSVFile tsv = TSVFile::parse(log_dir + "/scan_commands.tsv");
+    std::map<std::string, std::string> out;
+    for (const auto& row : tsv.rows) out[cell(tsv, row, "tracking_id")] = cell(tsv, row, "decision_survey_id");
+    return out;
+  }
+
+  /// The logged decision survey of the command with tracking id @p id; empty when it has no row or no survey decided it.
+  std::string decidedBy(const std::map<std::string, std::string>& surveys, int id)
+  {
+    const auto it = surveys.find(ScanCommandQueue::encode(id));
+    return it == surveys.end() ? std::string() : it->second;
   }
 
   /// Cells agree: byte-identical, or -- token by token over the ';' and ',' sub-cell axes -- identical
@@ -612,17 +633,17 @@ namespace
   }
 
   /// method_faims_3cv.json's twin, on FLASHIdaFAIMS_test's three CVs: CV cycling over -40/-50/-60, three precursors.
-  std::string faims3cvConfig()
+  std::string faims3cvConfig(const std::string& log_dir = "")
   {
-    return with(with(topn5Config(), R"("cv_values": [])", R"("cv_values": [-40, -50, -60])"), R"("max_precursors": 5)",
+    return with(with(topn5Config(log_dir),R"("cv_values": [])", R"("cv_values": [-40, -50, -60])"), R"("max_precursors": 5)",
                 R"("max_precursors": 3)");
   }
 
   /// method_cytc_separate_charges.json's twin with max_charge_states 3: inclusion of cytC, one precursor, `separate`
   /// -- one MS2 per charge -- and ambiguity characterization of the M-starting cytC proteoform.
-  std::string cytcSeparateConfig()
+  std::string cytcSeparateConfig(const std::string& log_dir = "")
   {
-    std::string cfg = with(topn5Config(), R"("tqscore_threshold": 0.9)", R"("tqscore_threshold": 0.0)");
+    std::string cfg = with(topn5Config(log_dir),R"("tqscore_threshold": 0.9)", R"("tqscore_threshold": 0.0)");
     cfg = with(cfg, R"("inclusion_list": "")", R"("inclusion_list": "../../FlashIDA/test-data/configs/inclusion_cytc.txt")");
     cfg = with(cfg, R"("targeting": "none")", R"("targeting": "inclusion")");
     cfg = with(cfg, R"("max_precursors": 5)", R"("max_precursors": 1, "precursor_charges": "separate", "max_charge_states": 3)");
@@ -659,10 +680,14 @@ namespace
   }
 
   /// method_quant_separate.json's twin: quantTwinConfig's multiplexed method (the same quantification block, fold
-  /// change 1.4) with the charges acquired `separate` -- a Q per charge of the one species.
-  std::string quantSeparateConfig()
+  /// change 1.4) with the charges acquired `separate` -- a Q per charge of the one species. With @p log_dir set, the
+  /// five streams are written there (quantTwinConfig itself carries no runtime block).
+  std::string quantSeparateConfig(const std::string& log_dir = "")
   {
-    return with(quantTwinConfig("multiplexed"), R"("precursor_charges": "multiplexed")", R"("precursor_charges": "separate")");
+    std::string cfg = with(quantTwinConfig("multiplexed"), R"("precursor_charges": "multiplexed")", R"("precursor_charges": "separate")");
+    if (log_dir.empty()) return cfg;
+    return with(cfg, R"("tagging": {},)", R"("tagging": {},
+  "runtime": { "log_dir": ")" + log_dir + R"(" },)");
   }
 
   int nominalOf(const ScanCommand& c) { return SpectralDeconvolution::getNominalMass(c.mono_mass); }
@@ -959,18 +984,14 @@ START_SECTION(newer_survey_replaces_unsent_species)
 {
   const auto ms1 = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_ecoli_rich.txt");
   ABORT_IF(ms1.empty())
-  const std::string cfg = topn5Config();
+  const std::string log_dir = freshLogDir("replan_newer_survey");
+  const std::string cfg = topn5Config(log_dir);
   StaleDrive d;
-  std::map<int, int> decided_by;
   const std::string out = captureCout([&] {
     FLASHIda ida(const_cast<char*>(cfg.c_str()));
     d = driveStaleSurvey(ida, ms1[0], at(ms1[0], ms1[0].rt + 2.0), 0);
-    for (const auto& c : ms2Of(d.after_b))
-    {
-      const auto info = FLASHIdaTestAccess::decisionInfo(FLASHIdaTestAccess::queue(ida), c.scan_id);
-      decided_by[c.scan_id] = info ? info->decision_survey_id : 0;
-    }
   });
+  const auto decided_by = decisionSurveys(log_dir);
   TEST_EQUAL(d.a_plan.size(), 5) // S1..S5
   TEST_EQUAL(replanOf(out, d.b_id).dropped, 5)
 
@@ -979,7 +1000,7 @@ START_SECTION(newer_survey_replaces_unsent_species)
   for (const auto& c : sent)
   {
     TEST_EQUAL(std::string(c.parent_scan_id), ScanCommandQueue::encode(d.b_id))
-    TEST_EQUAL(decided_by[c.scan_id], d.b_id)
+    TEST_EQUAL(decidedBy(decided_by, c.scan_id), ScanCommandQueue::encode(d.b_id))
   }
   for (const auto& a : d.a_plan) TEST_EQUAL(hasId(d.after_b, a.scan_id), false)
 }
@@ -1025,21 +1046,17 @@ START_SECTION(quant_group_frozen_after_first_q)
 {
   const auto ms1 = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
   ABORT_IF(ms1.size() < 9)
-  const std::string cfg = quantSeparateConfig();
+  const std::string log_dir = freshLogDir("replan_quant_frozen");
+  const std::string cfg = quantSeparateConfig(log_dir);
   const ScanData& a = ms1[8];
   StaleDrive d;
   size_t open_groups = 0;
-  std::map<int, int> decided_by;
   const std::string out = captureCout([&] {
     FLASHIda ida(const_cast<char*>(cfg.c_str()));
     d = driveStaleSurvey(ida, a, at(a, a.rt + 2.0), 1);
     open_groups = FLASHIdaTestAccess::quantOpenGroupCount(ida);
-    for (const auto& c : ms2Of(d.after_b))
-    {
-      const auto info = FLASHIdaTestAccess::decisionInfo(FLASHIdaTestAccess::queue(ida), c.scan_id);
-      decided_by[c.scan_id] = info ? info->decision_survey_id : 0;
-    }
   });
+  const auto decided_by = decisionSurveys(log_dir);
   ABORT_IF(d.a_plan.size() < 2 || d.before_b.size() != 1)
   for (const auto& c : d.a_plan) TEST_EQUAL(c.scan_description[3], 'Q')
   const int x = nominalOf(d.before_b[0]);
@@ -1049,7 +1066,7 @@ START_SECTION(quant_group_frozen_after_first_q)
     const ScanCommand& q = d.a_plan[i];
     TEST_EQUAL(hasId(d.after_b, q.scan_id), true)
     TEST_EQUAL(std::string(q.parent_scan_id), ScanCommandQueue::encode(d.a_id))
-    TEST_EQUAL(decided_by[q.scan_id], d.a_id)
+    TEST_EQUAL(decidedBy(decided_by, q.scan_id), ScanCommandQueue::encode(d.a_id))
   }
   std::set<int> new_species;
   for (const auto& c : ms2Of(d.after_b))
@@ -1072,21 +1089,17 @@ START_SECTION(separate_r_remainder_is_rederived)
 {
   const auto ms1 = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
   ABORT_IF(ms1.size() < kSeparateB + 1)
-  const std::string cfg = cytcSeparateConfig();
+  const std::string log_dir = freshLogDir("replan_separate_rederived");
+  const std::string cfg = cytcSeparateConfig(log_dir);
   const ScanData& a = ms1[8];
   StaleDrive d;
   std::vector<int> ranked_b;
-  std::map<int, int> decided_by;
   const std::string out = captureCout([&] {
     FLASHIda ida(const_cast<char*>(cfg.c_str()));
     d = driveStaleSurvey(ida, a, at(ms1[kSeparateB], a.rt + 2.0), 1);
     if (!d.before_b.empty()) ranked_b = rankedCharges(FLASHIdaTestAccess::surveyDeconvolution(ida), nominalOf(d.before_b[0]), {});
-    for (const auto& c : ms2Of(d.after_b))
-    {
-      const auto info = FLASHIdaTestAccess::decisionInfo(FLASHIdaTestAccess::queue(ida), c.scan_id);
-      decided_by[c.scan_id] = info ? info->decision_survey_id : 0;
-    }
   });
+  const auto decided_by = decisionSurveys(log_dir);
   ABORT_IF(d.before_b.size() != 1)
   const int x = nominalOf(d.before_b[0]);
   const int sent_z = std::abs(d.before_b[0].stages[0].charge_state);
@@ -1115,7 +1128,7 @@ START_SECTION(separate_r_remainder_is_rederived)
     if (std::abs(nominalOf(c) - x) > 1) continue;
     got.push_back(std::abs(c.stages[0].charge_state));
     TEST_EQUAL(std::string(c.parent_scan_id), ScanCommandQueue::encode(d.b_id))
-    TEST_EQUAL(decided_by[c.scan_id], d.b_id)
+    TEST_EQUAL(decidedBy(decided_by, c.scan_id), ScanCommandQueue::encode(d.b_id))
     TEST_EQUAL(c.enqueue_timestamp_ms >= d.b_start_ms, true)
   }
   std::sort(got.begin(), got.end());
@@ -1131,21 +1144,17 @@ START_SECTION(separate_r_remainder_kept_when_unresolved)
   const auto ms1 = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
   const auto standard = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_standard.txt");
   ABORT_IF(ms1.size() < 9 || standard.empty())
-  const std::string cfg = cytcSeparateConfig();
+  const std::string log_dir = freshLogDir("replan_separate_kept");
+  const std::string cfg = cytcSeparateConfig(log_dir);
   const ScanData& a = ms1[8];
   StaleDrive d;
   std::vector<int> ranked_b;
-  std::map<int, int> decided_by;
   const std::string out = captureCout([&] {
     FLASHIda ida(const_cast<char*>(cfg.c_str()));
     d = driveStaleSurvey(ida, a, at(standard[0], a.rt + 2.0), 1);
     if (!d.before_b.empty()) ranked_b = rankedCharges(FLASHIdaTestAccess::surveyDeconvolution(ida), nominalOf(d.before_b[0]), {});
-    for (const auto& c : ms2Of(d.after_b))
-    {
-      const auto info = FLASHIdaTestAccess::decisionInfo(FLASHIdaTestAccess::queue(ida), c.scan_id);
-      decided_by[c.scan_id] = info ? info->decision_survey_id : 0;
-    }
   });
+  const auto decided_by = decisionSurveys(log_dir);
   ABORT_IF(d.before_b.size() != 1)
   const auto x_plan = ofSpecies(d.a_plan, nominalOf(d.before_b[0])); // X: the species whose first charge went
   ABORT_IF(x_plan.size() != 3)
@@ -1155,7 +1164,7 @@ START_SECTION(separate_r_remainder_kept_when_unresolved)
     const ScanCommand& rest = x_plan[i];
     TEST_EQUAL(hasId(d.after_b, rest.scan_id), true)
     TEST_EQUAL(std::string(rest.parent_scan_id), ScanCommandQueue::encode(d.a_id))
-    TEST_EQUAL(decided_by[rest.scan_id], d.a_id)
+    TEST_EQUAL(decidedBy(decided_by, rest.scan_id), ScanCommandQueue::encode(d.a_id))
   }
   // B drops only the second species (never sent, unresolved on B); nothing of X's is among the dropped commands
   size_t gone = 0;
@@ -1236,25 +1245,21 @@ START_SECTION(other_cv_survey_does_not_replan)
 {
   const auto ms1 = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_ecoli_rich.txt");
   ABORT_IF(ms1.empty())
-  const std::string cfg = faims3cvConfig();
+  const std::string log_dir = freshLogDir("replan_other_cv");
+  const std::string cfg = faims3cvConfig(log_dir);
   StaleDrive d;
-  std::map<int, int> decided_by;
   const std::string out = captureCout([&] {
     FLASHIda ida(const_cast<char*>(cfg.c_str()));
     d = driveStaleSurvey(ida, ms1[0], at(ms1[0], ms1[0].rt + 2.0), 0, nullptr, -60.0);
-    for (const auto& c : ms2Of(d.after_b))
-    {
-      const auto info = FLASHIdaTestAccess::decisionInfo(FLASHIdaTestAccess::queue(ida), c.scan_id);
-      decided_by[c.scan_id] = info ? info->decision_survey_id : 0;
-    }
   });
+  const auto decided_by = decisionSurveys(log_dir);
   ABORT_IF(d.a_plan.empty())
   for (const auto& c : d.a_plan)
   {
     TEST_REAL_SIMILAR(c.faims_cv, -40.0)
     TEST_EQUAL(hasId(d.after_b, c.scan_id), true)
     TEST_EQUAL(std::string(c.parent_scan_id), ScanCommandQueue::encode(d.a_id))
-    TEST_EQUAL(decided_by[c.scan_id], d.a_id)
+    TEST_EQUAL(decidedBy(decided_by, c.scan_id), ScanCommandQueue::encode(d.a_id))
   }
   const ReplanLine r = replanOf(out, d.b_id);
   TEST_EQUAL(r.dropped, 0)
@@ -1306,6 +1311,8 @@ START_SECTION(race_commit_between_plan_and_swap)
     for (const auto& [k, n] : by_id) dup = dup || n > 1;
     for (const auto& [k, n] : by_nominal) dup = dup || n > 1;
     if (dup) ++twice;
+    // b_sent == added holds only because topn5 is `single`: one command per unit. Under `separate` or a sweep a unit
+    // sends several commands and the two would differ without anything being lost.
     if (b_sent != replanOf(r.out, r.b_id).added) ++lost;
     if (r.units_left != 0 || r.queued_left != 0) ++leaked;
     if (r.out.find("[REPLAN-INVARIANT]") != std::string::npos) ++invariant;
