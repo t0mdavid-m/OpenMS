@@ -25,6 +25,7 @@
 #include "FLASHIda_TestAccess.h"  // FLASHIdaTestAccess::explorationActive (private-state access)
 
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -33,6 +34,7 @@
 #include <fstream>
 #include <limits>
 #include <map>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -813,6 +815,84 @@ namespace
       cmd = ScanCommand{};
     }
     return 0;
+  }
+
+  // ----------------------------------------------------------------------------
+  // A STALE survey: one that reaches the engine while an older survey's MS2s still wait in the queue.
+  //
+  // runInterleaved cannot produce one -- it drains at depth 1, so every MS2 a survey planned is dequeued
+  // before the next survey is fed, and in the goldens only FAIMS cycling ever puts a survey ahead of waiting
+  // work. This drive does it directly: feed survey A (the idle survey, at its own CV), dequeue k of A's
+  // commands WITHOUT feeding their responses (they are sent, so committed), mint and feed survey B the way a
+  // cycle-time or CV-transition MS1 reaches the engine, then answer the k sent MS2s and drain.
+  //
+  // The drain stops at the idle survey (msn_level 1, priority 3), which the engine mints only when every
+  // queue is empty -- GetNextScanCommand never returns 0 -- and max_drain bounds it. With @p ms2 set, every
+  // MS2 the drain hands out is answered with it (so a sweep can complete and a tag can raise a follow-up);
+  // an MS1 or MS3 the drain hands out is not answered.
+  // ----------------------------------------------------------------------------
+  struct StaleDrive
+  {
+    int a_id = 0;                       // survey A's tracking id
+    int b_id = 0;                       // survey B's tracking id
+    int a_returned = 0;                 // processScan(A)
+    int b_returned = 0;                 // processScan(B)
+    std::vector<ScanCommand> a_plan;    // A's MS2s as queued, before anything was dequeued
+    std::vector<ScanCommand> before_b;  // the k commands dequeued between A and B
+    std::vector<ScanCommand> after_b;   // everything dequeued after B, the idle survey last
+    uint64_t b_start_ms = 0;            // steady clock just before processScan(B), in enqueue_timestamp_ms units
+  };
+
+  inline StaleDrive driveStaleSurvey(FLASHIda& ida, const ScanData& ms1_a, const ScanData& ms1_b, int k,
+                                     const ScanData* ms2 = nullptr, std::optional<double> cv_b = std::nullopt,
+                                     int max_drain = 4000)
+  {
+    StaleDrive d;
+    ScanCommandQueue& q = FLASHIdaTestAccess::queue(ida);
+    auto answer = [&](const ScanCommand& c) {
+      if (ms2 == nullptr || c.msn_level != 2) return;
+      ida.processScan(ms2->mzs.data(), ms2->ints.data(), (int)ms2->mzs.size(), ms2->rt, 2, c.scan_description, 0.0,
+                      instrumentScanNumberOf(*ms2));
+    };
+
+    ScanCommand a{};
+    ida.getNextScanCommand(a); // the idle survey
+    if (a.msn_level != 1) return d;
+    d.a_id = a.scan_id;
+    d.a_returned = ida.processScan(ms1_a.mzs.data(), ms1_a.ints.data(), (int)ms1_a.mzs.size(), ms1_a.rt, 1,
+                                   a.scan_description, a.faims_cv, instrumentScanNumberOf(ms1_a));
+    for (const ScanCommand& c : FLASHIdaTestAccess::queuedCommands(q))
+      if (c.msn_level == 2) d.a_plan.push_back(c);
+
+    for (int i = 0; i < k; ++i)
+    {
+      ScanCommand c{};
+      ida.getNextScanCommand(c);
+      if (c.msn_level == 1 && c.priority == 3) break; // nothing of A's left to send
+      d.before_b.push_back(c);
+    }
+
+    ScanCommand b = q.makeMS1();
+    b.scan_id = q.nextTrackingId();
+    b.faims_cv = cv_b ? *cv_b : a.faims_cv;
+    ScanCommandQueue::writeMs1Description(b, ScanRole::Survey);
+    q.registerPending(b);
+    d.b_id = b.scan_id;
+    d.b_start_ms = static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+    d.b_returned = ida.processScan(ms1_b.mzs.data(), ms1_b.ints.data(), (int)ms1_b.mzs.size(), ms1_b.rt, 1,
+                                   b.scan_description, b.faims_cv, instrumentScanNumberOf(ms1_b));
+
+    for (const ScanCommand& c : d.before_b) answer(c);
+    for (int i = 0; i < max_drain; ++i)
+    {
+      ScanCommand c{};
+      if (ida.getNextScanCommand(c) != 1) break;
+      d.after_b.push_back(c);
+      if (c.msn_level == 1 && c.priority == 3) break; // the idle survey: every queue is empty
+      answer(c);
+    }
+    return d;
   }
 
   // Project an AcqResult's MS2 commands to (charge, mz, isolation_width) rows (stage-0 of each MS2 command).

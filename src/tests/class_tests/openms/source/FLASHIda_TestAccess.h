@@ -21,6 +21,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -127,6 +128,18 @@ namespace OpenMS
 
     /// The survey deconvolution selection last read: every PeakGroup of the last MS1, selected or not.
     static const DeconvolvedSpectrum& surveyDeconvolution(const FLASHIda& f) { return f.selection_.deconvolvedMS1(); }
+
+    /// Run @p fn inside the next surveys, between the plan and its swap (replacePlan), on the analysis thread --
+    /// the one gap in which a commit can race a re-plan. Sets the engine's private beforeReplan_ hook (owner
+    /// 2026-10-22: a private hook, not a production seam); an empty function clears it.
+    static void onBeforeReplan(FLASHIda& f, std::function<void()> fn) { f.before_replan_ = std::move(fn); }
+
+    /// Quantification groups still open: a frozen group stays open until its last member returns.
+    static size_t quantOpenGroupCount(const FLASHIda& f) { return f.quant_.openGroupCount(); }
+
+    /// Exploration groups still active, and the id of the last one minted.
+    static int explorationActiveGroupCount(const FLASHIda& f) { return f.exploration_.activeGroupCount(); }
+    static int explorationLastGroupId(const FLASHIda& f) { return f.exploration_.lastGroupId(); }
 
     /// Next precursor id the engine would mint. Part of the neutrality fingerprint: a monitor scan
     /// must not consume one, and an id counter that moved is the cheapest evidence that it selected.
