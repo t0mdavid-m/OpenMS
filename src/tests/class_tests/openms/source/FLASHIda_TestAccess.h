@@ -115,14 +115,14 @@ namespace OpenMS
       return it->second;
     }
 
-    /// The charges an adjustable bought R was registered with (resolved on its Q's survey); nullopt if
-    /// @p scan_id is not a queued adjustable command.
+    /// The charges an adjustable bought R was registered with (the charges its group's Q scans covered);
+    /// nullopt if @p scan_id is not a queued adjustable command.
     static std::optional<std::vector<int>> adjustableResolvedCharges(const ScanCommandQueue& q, int scan_id)
     {
       std::lock_guard<std::mutex> lock(q.queue_mutex_);
       const auto it = q.adjustable_.find(scan_id);
       if (it == q.adjustable_.end()) return std::nullopt;
-      return it->second.resolved_charges;
+      return it->second.covered_charges;
     }
 
     /// The survey deconvolution selection last read: every PeakGroup of the last MS1, selected or not.

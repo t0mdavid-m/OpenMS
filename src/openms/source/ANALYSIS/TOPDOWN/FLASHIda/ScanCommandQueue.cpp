@@ -793,7 +793,7 @@ namespace OpenMS
               committed_since_fold_.push_back(s);
             }
           }
-          for (const int z : isolatedCharges_(cmd))
+          for (const int z : isolatedCharges(cmd))
           {
             auto pc = unit.stamps.per_charge.find(z);
             if (pc != unit.stamps.per_charge.end())
@@ -828,7 +828,7 @@ namespace OpenMS
     if (it != units_.end() && --it->second.commands_left == 0) units_.erase(it); // an uncommitted unit's stamps go with it
   }
 
-  std::vector<int> ScanCommandQueue::isolatedCharges_(const ScanCommand& cmd)
+  std::vector<int> ScanCommandQueue::isolatedCharges(const ScanCommand& cmd)
   {
     std::vector<int> zs;
     if (cmd.num_stages <= 0) return zs;
@@ -1097,10 +1097,11 @@ namespace OpenMS
     return r;
   }
 
-  void ScanCommandQueue::registerAdjustable(int scan_id, std::vector<int> resolved_charges, int q_survey_id)
+  void ScanCommandQueue::registerAdjustable(int scan_id, std::vector<int> covered_charges, int q_survey_id, int nominal_mass)
   {
+    if (covered_charges.empty()) return; // nothing it may move to: it goes out as bought
     std::lock_guard<std::mutex> lock(queue_mutex_);
-    adjustable_[scan_id] = AdjustableR{std::move(resolved_charges), q_survey_id};
+    adjustable_[scan_id] = AdjustableR{std::move(covered_charges), q_survey_id, nominal_mass};
     decision_info_[scan_id] = DecisionInfo{q_survey_id, -1.0};
   }
 
@@ -1127,7 +1128,7 @@ namespace OpenMS
       for (const auto& c : queues_[p])
       {
         auto a = adjustable_.find(c.scan_id);
-        if (a != adjustable_.end()) w.adjustable.emplace_back(c, a->second.resolved_charges);
+        if (a != adjustable_.end()) w.adjustable.push_back({c, a->second.covered_charges, a->second.nominal_mass});
       }
     }
     return w;

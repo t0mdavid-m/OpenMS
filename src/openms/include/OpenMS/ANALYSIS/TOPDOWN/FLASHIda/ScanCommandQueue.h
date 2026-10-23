@@ -133,6 +133,10 @@ namespace OpenMS
     static ScanCommand reisolate(const ScanCommand& r, const std::vector<std::pair<int, const PeakGroup*>>& picks, double margin,
                                  char marker);
 
+    /// Every charge @p cmd isolates at its precursor stage: the anchor first, then stage 0's notches (multiplexed).
+    /// What a dequeue commits, and what a quantification group's Q scans cover for the R it may buy.
+    static std::vector<int> isolatedCharges(const ScanCommand& cmd);
+
     /// Build MS3 ScanCommand from MS2 context + fragment target + MS3 config for CE/activation.
     /// parent_scan_id is MANDATORY (the immediate parent's tracking id); stamped at creation.
     /// stage0_params: if non-null, overrides the stage[0] CE/activation/reaction_time copied from
@@ -232,16 +236,27 @@ namespace OpenMS
     ReplanResult replacePlan(double cv, std::vector<PlanUnit> units, const std::vector<AdjustRequest>& adjust,
                              const std::vector<int>& replace_remainder_of);
 
-    /// Register a queued bought R as adjustable (never droppable). @p resolved_charges = charges resolved on the
-    /// Q's survey, @p q_survey_id = that survey, which stays its decision survey until an adjust says otherwise.
-    void registerAdjustable(int scan_id, std::vector<int> resolved_charges, int q_survey_id);
+    /// Register a queued bought R as adjustable (never droppable). @p covered_charges = the charges its group's Q
+    /// scans isolated, the only ones it may move to; @p q_survey_id = the winner Q's survey, which stays its
+    /// decision survey until an adjust says otherwise; @p nominal_mass = the species' nominal mass now, which the
+    /// re-choice keys on (a rewrite moves mono_mass). An empty @p covered_charges registers nothing: there is no
+    /// charge the R may move to, and an empty set must never read as "unrestricted".
+    void registerAdjustable(int scan_id, std::vector<int> covered_charges, int q_survey_id, int nominal_mass = 0);
+
+    /// An adjustable bought R still queued, as waitingAt sees it.
+    struct WaitingAdjustable
+    {
+      ScanCommand cmd{};
+      std::vector<int> covered_charges;
+      int nominal_mass = 0;
+    };
 
     /// Commands of committed units at a CV that are still queued, grouped by unit, and the adjustable bought Rs
-    /// still queued with their resolved charges. Snapshot copies.
+    /// still queued with their covered charges and nominal mass. Snapshot copies.
     struct Waiting
     {
       std::vector<PlanUnit> committed_units;
-      std::vector<std::pair<ScanCommand, std::vector<int>>> adjustable;
+      std::vector<WaitingAdjustable> adjustable;
     };
     Waiting waitingAt(double cv) const;
 
@@ -364,11 +379,13 @@ namespace OpenMS
 
     // --- Survey re-planning: the plan registry. All guarded by queue_mutex_. ---
 
-    /// A bought R a newer survey may rewrite: the charges its Q's survey resolved, and that survey.
+    /// A bought R a newer survey may rewrite: the charges its group's Q scans covered, the survey that decided
+    /// the winner Q, and the species' nominal mass as it was when the R was bought.
     struct AdjustableR
     {
-      std::vector<int> resolved_charges;
+      std::vector<int> covered_charges;
       int q_survey_id = 0;
+      int nominal_mass = 0;
     };
 
     /// unit_id -> unit. A unit leaves when its last queued command is dequeued, dropped or expired.
@@ -418,9 +435,6 @@ namespace OpenMS
     /// Remove the registered, QUEUED command @p scan_id from the registry (not from the deques): its unit loses a
     /// command and is erased when none is left. Caller must hold queue_mutex_.
     void forgetQueued_(int scan_id);
-
-    /// Every charge @p cmd isolates at its precursor stage: the anchor first, then stage 0's notches (multiplexed).
-    static std::vector<int> isolatedCharges_(const ScanCommand& cmd);
 
     /// buildMS2's stage-0 anchor geometry: the centre of @p pg's measured m/z range at @p charge, that range
     /// widened by @p margin on each side, and the charge. Shared with reisolate.

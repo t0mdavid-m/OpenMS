@@ -427,14 +427,15 @@ namespace
 })JSON";
   }
 
-  /// A bought R, caught while it waits: the command as queued, the charges it was registered with, and the
-  /// survey that decided its Q.
+  /// A bought R, caught while it waits: the command as queued, the charges it was registered with, the
+  /// survey that decided its Q, and every charge the Qs fed back to the engine isolated (sorted, unique).
   struct WaitingR
   {
     bool bought = false;
     ScanCommand r{};
-    std::vector<int> resolved_on_q;
+    std::vector<int> covered;
     int q_survey = 0;
+    std::vector<int> q_charges;
   };
 
   /// Feed @p a as the engine's first survey and return its 'Q' scans the two real iTMT spectra of one species by
@@ -454,16 +455,20 @@ namespace
     {
       for (const ScanCommand& c : FLASHIdaTestAccess::queuedCommands(q))
       {
-        const auto resolved = FLASHIdaTestAccess::adjustableResolvedCharges(q, c.scan_id);
-        if (!resolved) continue;
+        const auto covered = FLASHIdaTestAccess::adjustableResolvedCharges(q, c.scan_id);
+        if (!covered) continue;
         out.bought = true;
         out.r = c;
-        out.resolved_on_q = *resolved;
+        out.covered = *covered;
+        std::sort(out.q_charges.begin(), out.q_charges.end());
+        out.q_charges.erase(std::unique(out.q_charges.begin(), out.q_charges.end()), out.q_charges.end());
         return out;
       }
       cmd = ScanCommand{};
       ida.getNextScanCommand(cmd);
       if (cmd.msn_level != 2 || cmd.scan_description[3] != 'Q') return out; // the plan ran out before a buy
+      out.q_charges.push_back(std::abs(cmd.stages[0].charge_state));
+      for (int j = 0; j < cmd.stage0_notch_count; ++j) out.q_charges.push_back(std::abs(cmd.notches[j].charge_state));
       const ScanData& s = std::abs(cmd.stages[0].charge_state) % 2 == 1 ? q_odd : q_even;
       ida.processScan(s.mzs.data(), s.ints.data(), (int)s.mzs.size(), s.rt, 2, cmd.scan_description, 0.0,
                       instrumentScanNumberOf(s));
@@ -641,10 +646,11 @@ END_SECTION
 // two real iTMT spectra) buys an identification R at its purest window, z13 -- while charge_selection ("snr")
 // ranks z14 first on that survey. The R is caught WAITING, a newer survey reaches the engine ahead of it, and the
 // drain then takes it. Every expected charge is ranked by rankedCharges from the PeakGroups, not by the engine.
+// The R may move only among the charges its group's Q scans covered (owner 2026-10-23): the anchors and notches of
+// the Qs that returned, registered with the R.
 
-// A newer survey that ranks another charge first, resolved on both surveys, moves the R there: the R row's charge
-// is the newer survey's choice, that survey decided it, its parent is still the winning Q, and its queue time
-// restarts.
+// A newer survey that ranks another Q's charge first moves the R there: the R row's charge is the newer survey's
+// choice, that survey decided it, its parent is still the winning Q, and its queue time restarts.
 START_SECTION(bought_r_adjusted_to_better_charge)
 {
   const auto ms1 = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
@@ -665,7 +671,7 @@ START_SECTION(bought_r_adjusted_to_better_charge)
     std::this_thread::sleep_for(std::chrono::milliseconds(5)); // a queue-time reset is then a strictly later stamp
     b_id = feedSurvey(ida, a, a.rt + 2.0);                      // the same spectrum, two seconds on
     const auto ranked = rankedCharges(FLASHIdaTestAccess::surveyDeconvolution(ida), SpectralDeconvolution::getNominalMass(w.r.mono_mass),
-                                      w.resolved_on_q);
+                                      w.covered);
     if (!ranked.empty()) expected = ranked.front();
     after = queued(ida, w.r.scan_id);
     decision = FLASHIdaTestAccess::decisionInfo(FLASHIdaTestAccess::queue(ida), w.r.scan_id);
@@ -673,8 +679,10 @@ START_SECTION(bought_r_adjusted_to_better_charge)
   });
   ABORT_IF(!w.bought)
   TEST_EQUAL(std::abs(w.r.stages[0].charge_state), 13)
-  TEST_EQUAL(expected, 14) // non-vacuity: the newer survey prefers another charge, and the Q's survey resolved it
-  TEST_EQUAL(std::find(w.resolved_on_q.begin(), w.resolved_on_q.end(), expected) != w.resolved_on_q.end(), true)
+  TEST_EQUAL(w.covered == w.q_charges, true) // registered with exactly the charges the group's Qs isolated
+  TEST_EQUAL(w.covered.size() > 1, true)
+  TEST_EQUAL(expected, 14) // non-vacuity: the newer survey prefers another charge, and a Q covered it
+  TEST_EQUAL(std::find(w.covered.begin(), w.covered.end(), expected) != w.covered.end(), true)
 
   TEST_EQUAL(after.scan_id, w.r.scan_id)
   TEST_EQUAL(std::abs(after.stages[0].charge_state), expected)
@@ -698,7 +706,7 @@ END_SECTION
 
 // A newer survey that ranks the R's own charge first re-confirms it (owner 2026-10-22): the charge stays, but the
 // newer survey is now the one that decided it, and the queue time restarts. The newer survey is A without whichever
-// charges outrank the R's on it, so the R's charge leads among those both surveys resolved.
+// charges outrank the R's on it, so the R's charge leads among those the Qs covered.
 START_SECTION(bought_r_reconfirmed_same_charge_resets_decision)
 {
   const auto ms1 = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
@@ -719,7 +727,7 @@ START_SECTION(bought_r_reconfirmed_same_charge_resets_decision)
     if (!w.bought) return;
     const int nominal = SpectralDeconvolution::getNominalMass(w.r.mono_mass);
     const int own = std::abs(w.r.stages[0].charge_state);
-    ranked_on_a = rankedCharges(FLASHIdaTestAccess::surveyDeconvolution(ida), nominal, w.resolved_on_q);
+    ranked_on_a = rankedCharges(FLASHIdaTestAccess::surveyDeconvolution(ida), nominal, w.covered);
     // Take out whatever charge outranks the R's, one at a time, until the R's leads: removing an envelope moves the
     // others' SNR, so the charges to remove are found on a scratch engine's deconvolution of each candidate.
     std::vector<int> removed;
@@ -730,7 +738,7 @@ START_SECTION(bought_r_reconfirmed_same_charge_resets_decision)
       {
         FLASHIda scratch(const_cast<char*>(cfg.c_str()));
         feedSurvey(scratch, b, a.rt + 2.0);
-        ranked = rankedCharges(FLASHIdaTestAccess::surveyDeconvolution(scratch), nominal, w.resolved_on_q);
+        ranked = rankedCharges(FLASHIdaTestAccess::surveyDeconvolution(scratch), nominal, w.covered);
       }
       if (ranked.empty() || ranked.front() == own) break;
       removed.push_back(ranked.front());
@@ -738,7 +746,7 @@ START_SECTION(bought_r_reconfirmed_same_charge_resets_decision)
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
     b_id = feedSurvey(ida, b, a.rt + 2.0);
-    const auto ranked = rankedCharges(FLASHIdaTestAccess::surveyDeconvolution(ida), nominal, w.resolved_on_q);
+    const auto ranked = rankedCharges(FLASHIdaTestAccess::surveyDeconvolution(ida), nominal, w.covered);
     if (!ranked.empty()) expected = ranked.front();
     after = queued(ida, w.r.scan_id);
     decision = FLASHIdaTestAccess::decisionInfo(FLASHIdaTestAccess::queue(ida), w.r.scan_id);
@@ -760,11 +768,10 @@ START_SECTION(bought_r_reconfirmed_same_charge_resets_decision)
 }
 END_SECTION
 
-// A newer survey whose best charge the Q's survey never resolved cannot move the R: a replacement must be resolved
-// on both. The Q's survey is A without cytC's z7..9, so they are not among the R's resolved charges; the newer
-// survey is A without every charge the Q's survey did resolve, so it resolves cytC only at z7..9. The R goes out
-// as decided, at its charge, still attributed to the Q's survey.
-START_SECTION(bought_r_keeps_charge_unresolved_on_q_survey)
+// A newer survey that resolves the species only at charges no Q covered cannot move the R: the newer survey is A
+// without every covered charge, so it still resolves cytC, at charges the group never measured. The R goes out as
+// decided, at its charge, still attributed to the Q's survey.
+START_SECTION(bought_r_keeps_charge_when_no_covered_charge_resolves)
 {
   const auto ms1 = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
   const auto q_odd = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_quant_itmt_z23_18295.txt");
@@ -772,7 +779,6 @@ START_SECTION(bought_r_keeps_charge_unresolved_on_q_survey)
   ABORT_IF(ms1.size() < 9 || q_odd.empty() || q_even.empty())
   const std::string cfg = quantTwinConfig("separate");
   const ScanData& a = ms1[8];
-  const double cytc = 12351.3; // the species ms1_cytc.txt[8]'s verdict buys an R for (the sections above)
 
   WaitingR w;
   std::vector<int> ranked_on_b, ranked_on_both;
@@ -780,20 +786,20 @@ START_SECTION(bought_r_keeps_charge_unresolved_on_q_survey)
   std::optional<DecisionInfo> decision;
   const std::string out = captureCout([&] {
     FLASHIda ida(const_cast<char*>(cfg.c_str()));
-    w = buyR(ida, withoutCharges(a, cytc, {7, 8, 9}), q_odd[0], q_even[0]);
+    w = buyR(ida, a, q_odd[0], q_even[0]);
     if (!w.bought) return;
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    feedSurvey(ida, withoutCharges(a, cytc, w.resolved_on_q), a.rt + 2.0);
+    feedSurvey(ida, withoutCharges(a, w.r.mono_mass, w.covered), a.rt + 2.0);
     const int nominal = SpectralDeconvolution::getNominalMass(w.r.mono_mass);
     ranked_on_b = rankedCharges(FLASHIdaTestAccess::surveyDeconvolution(ida), nominal, {});
-    ranked_on_both = rankedCharges(FLASHIdaTestAccess::surveyDeconvolution(ida), nominal, w.resolved_on_q);
+    ranked_on_both = rankedCharges(FLASHIdaTestAccess::surveyDeconvolution(ida), nominal, w.covered);
     after = queued(ida, w.r.scan_id);
     decision = FLASHIdaTestAccess::decisionInfo(FLASHIdaTestAccess::queue(ida), w.r.scan_id);
     ida.getNextScanCommand(sent);
   });
   ABORT_IF(!w.bought || ranked_on_b.empty())
-  // Non-vacuity: the newer survey resolves cytC, and ranks first a charge the Q's survey did not resolve.
-  TEST_EQUAL(std::find(w.resolved_on_q.begin(), w.resolved_on_q.end(), ranked_on_b.front()) == w.resolved_on_q.end(), true)
+  // Non-vacuity: the newer survey resolves cytC, at no charge a Q covered.
+  TEST_EQUAL(std::find(w.covered.begin(), w.covered.end(), ranked_on_b.front()) == w.covered.end(), true)
   TEST_EQUAL(ranked_on_both.empty(), true)
 
   TEST_EQUAL(after.scan_id, w.r.scan_id)
@@ -811,9 +817,10 @@ START_SECTION(bought_r_keeps_charge_unresolved_on_q_survey)
 }
 END_SECTION
 
-// A multiplexed bought R re-chooses its whole SET (owner 2026-10-22): anchor and notches become the newer survey's
-// top max_charge_states (3) among the charges both surveys resolved, and its scan_description names the new
-// anchor. The newer survey is A without the last charge of the R's set, so its top three differ.
+// A multiplexed bought R re-chooses its whole SET (owner 2026-10-22) within the charges its Q covered -- the Q's
+// anchor and notches (owner 2026-10-23): anchor and notches become those charges in the newer survey's order, and
+// its scan_description names the new anchor. The newer survey is A without the last charge of the R's set: it
+// still resolves cytC at charges the Q never isolated, and none of them may fill the freed slot.
 START_SECTION(bought_r_multiplexed_set_rechosen)
 {
   const auto ms1 = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
@@ -825,7 +832,7 @@ START_SECTION(bought_r_multiplexed_set_rechosen)
 
   WaitingR w;
   int b_id = 0;
-  std::vector<int> expected;
+  std::vector<int> expected, ranked_on_b;
   ScanCommand after{};
   std::optional<DecisionInfo> decision;
   const std::string out = captureCout([&] {
@@ -833,16 +840,21 @@ START_SECTION(bought_r_multiplexed_set_rechosen)
     w = buyR(ida, a, q_odd[0], q_even[0]);
     if (!w.bought) return;
     b_id = feedSurvey(ida, withoutCharges(a, w.r.mono_mass, {isolatedCharges(w.r).back()}), a.rt + 2.0);
-    expected = rankedCharges(FLASHIdaTestAccess::surveyDeconvolution(ida), SpectralDeconvolution::getNominalMass(w.r.mono_mass),
-                             w.resolved_on_q);
+    const int nominal = SpectralDeconvolution::getNominalMass(w.r.mono_mass);
+    ranked_on_b = rankedCharges(FLASHIdaTestAccess::surveyDeconvolution(ida), nominal, {});
+    expected = rankedCharges(FLASHIdaTestAccess::surveyDeconvolution(ida), nominal, w.covered);
     if (expected.size() > 3) expected.resize(3);
     after = queued(ida, w.r.scan_id);
     decision = FLASHIdaTestAccess::decisionInfo(FLASHIdaTestAccess::queue(ida), w.r.scan_id);
   });
   ABORT_IF(!w.bought)
   TEST_EQUAL(isolatedCharges(w.r).size(), 3)
-  TEST_EQUAL(expected.size(), 3)
-  TEST_EQUAL(expected != isolatedCharges(w.r), true) // non-vacuity: the newer survey's set differs
+  std::vector<int> isolated_sorted = isolatedCharges(w.r);
+  std::sort(isolated_sorted.begin(), isolated_sorted.end());
+  TEST_EQUAL(w.covered == isolated_sorted, true) // the one Q's anchor and notches, which the R inherited
+  TEST_EQUAL(expected.size(), 2)                 // the freed slot stays empty ...
+  TEST_EQUAL(ranked_on_b.size() > expected.size(), true) // ... though the newer survey resolves more charges
+  TEST_EQUAL(expected != isolatedCharges(w.r), true)     // non-vacuity: the newer survey's set differs
 
   TEST_EQUAL(after.scan_id, w.r.scan_id)
   TEST_EQUAL(isolatedCharges(after) == expected, true)
@@ -853,6 +865,109 @@ START_SECTION(bought_r_multiplexed_set_rechosen)
   const auto lines = replanLines(out);
   ABORT_IF(lines.empty())
   TEST_EQUAL(lines.back().adjusted, 1)
+}
+END_SECTION
+
+// The covered set is a FILTER, not a preference: a newer survey that ranks a charge no Q covered first and a
+// covered one after it moves the R to the covered one. The Q's survey is A without A's own top charge, so that
+// charge is not covered; the newer survey is A without the R's charge, so the top charge leads again and the R
+// cannot stay where it is.
+START_SECTION(bought_r_moves_only_among_covered_charges)
+{
+  const auto ms1 = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
+  const auto q_odd = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_quant_itmt_z23_18295.txt");
+  const auto q_even = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_quant_itmt_z22_18295.txt");
+  ABORT_IF(ms1.size() < 9 || q_odd.empty() || q_even.empty())
+  const std::string cfg = quantTwinConfig("separate");
+  const ScanData& a = ms1[8];
+  const double cytc = 12351.3; // the species ms1_cytc.txt[8]'s verdict buys an R for (the sections above)
+
+  int top_on_a = 0;
+  {
+    FLASHIda scratch(const_cast<char*>(cfg.c_str()));
+    captureCout([&] { feedSurvey(scratch, a, a.rt); });
+    const auto ranked = rankedCharges(FLASHIdaTestAccess::surveyDeconvolution(scratch), SpectralDeconvolution::getNominalMass(cytc), {});
+    if (!ranked.empty()) top_on_a = ranked.front();
+  }
+  ABORT_IF(top_on_a == 0)
+
+  WaitingR w;
+  int b_id = 0, expected = 0;
+  std::vector<int> ranked_on_b;
+  ScanCommand after{};
+  std::optional<DecisionInfo> decision;
+  const std::string out = captureCout([&] {
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    w = buyR(ida, withoutCharges(a, cytc, {top_on_a}), q_odd[0], q_even[0]);
+    if (!w.bought) return;
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    b_id = feedSurvey(ida, withoutCharges(a, w.r.mono_mass, {std::abs(w.r.stages[0].charge_state)}), a.rt + 2.0);
+    const int nominal = SpectralDeconvolution::getNominalMass(w.r.mono_mass);
+    ranked_on_b = rankedCharges(FLASHIdaTestAccess::surveyDeconvolution(ida), nominal, {});
+    const auto ranked = rankedCharges(FLASHIdaTestAccess::surveyDeconvolution(ida), nominal, w.covered);
+    if (!ranked.empty()) expected = ranked.front();
+    after = queued(ida, w.r.scan_id);
+    decision = FLASHIdaTestAccess::decisionInfo(FLASHIdaTestAccess::queue(ida), w.r.scan_id);
+  });
+  ABORT_IF(!w.bought || ranked_on_b.empty() || expected == 0)
+  const int bought_z = std::abs(w.r.stages[0].charge_state);
+  // Non-vacuity: the newer survey's best charge is one no Q covered, and a covered charge other than the R's own
+  // follows it.
+  TEST_EQUAL(std::find(w.covered.begin(), w.covered.end(), top_on_a) == w.covered.end(), true)
+  TEST_EQUAL(std::find(w.covered.begin(), w.covered.end(), ranked_on_b.front()) == w.covered.end(), true)
+  TEST_EQUAL(expected != bought_z, true)
+
+  TEST_EQUAL(after.scan_id, w.r.scan_id)
+  TEST_EQUAL(std::abs(after.stages[0].charge_state), expected)
+  ABORT_IF(!decision)
+  TEST_EQUAL(decision->decision_survey_id, b_id)
+  const auto lines = replanLines(out);
+  ABORT_IF(lines.empty())
+  TEST_EQUAL(lines.back().adjusted, 1)
+}
+END_SECTION
+
+// A multiplexed R the newer survey could re-isolate at fewer than min_charge_states (2) of its covered charges is
+// kept as decided (owner 2026-10-23, ADR-0040's floor): its set, its description and its decision survey stay. The
+// newer survey is A without every covered charge but one.
+START_SECTION(bought_r_multiplexed_below_floor_is_kept)
+{
+  const auto ms1 = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
+  const auto q_odd = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_quant_itmt_z23_18295.txt");
+  const auto q_even = loadTsvScans("../../FlashIDA/test-data/spectra/ms2_quant_itmt_z22_18295.txt");
+  ABORT_IF(ms1.size() < 9 || q_odd.empty() || q_even.empty())
+  const std::string cfg = quantTwinConfig("multiplexed");
+  const ScanData& a = ms1[8];
+
+  WaitingR w;
+  std::vector<int> ranked_on_b;
+  ScanCommand after{};
+  std::optional<DecisionInfo> decision;
+  const std::string out = captureCout([&] {
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    w = buyR(ida, a, q_odd[0], q_even[0]);
+    if (!w.bought || w.covered.empty()) return;
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    const std::vector<int> others(w.covered.begin() + 1, w.covered.end());
+    feedSurvey(ida, withoutCharges(a, w.r.mono_mass, others), a.rt + 2.0);
+    ranked_on_b = rankedCharges(FLASHIdaTestAccess::surveyDeconvolution(ida), SpectralDeconvolution::getNominalMass(w.r.mono_mass),
+                                w.covered);
+    after = queued(ida, w.r.scan_id);
+    decision = FLASHIdaTestAccess::decisionInfo(FLASHIdaTestAccess::queue(ida), w.r.scan_id);
+  });
+  ABORT_IF(!w.bought)
+  TEST_EQUAL(isolatedCharges(w.r).size(), 3)
+  TEST_EQUAL(ranked_on_b.size(), 1) // non-vacuity: one covered charge resolves, so there was something to move to
+
+  TEST_EQUAL(after.scan_id, w.r.scan_id)
+  TEST_EQUAL(isolatedCharges(after) == isolatedCharges(w.r), true)
+  TEST_EQUAL(std::string(after.scan_description), std::string(w.r.scan_description))
+  TEST_EQUAL(after.enqueue_timestamp_ms, w.r.enqueue_timestamp_ms) // nothing re-chose it
+  ABORT_IF(!decision)
+  TEST_EQUAL(decision->decision_survey_id, w.q_survey)
+  const auto lines = replanLines(out);
+  ABORT_IF(lines.empty())
+  TEST_EQUAL(lines.back().adjusted, 0)
 }
 END_SECTION
 

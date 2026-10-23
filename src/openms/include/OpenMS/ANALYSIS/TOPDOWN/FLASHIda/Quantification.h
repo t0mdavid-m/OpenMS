@@ -140,9 +140,10 @@ namespace OpenMS
       double window_snr   = 0.0; ///< ranks the identification member (the purest window wins)
       double intensity    = 0.0; ///< tiebreak only, after window_snr
       ScanCommand cmd {};        ///< handed to buildFollowUp as ctx, so the 'R' inherits its geometry
-      /// Survey re-planning: the charges of this species the Q's survey resolved (SNR-admissible, isolatable),
-      /// and that survey. The bought R is adjustable to a charge a newer survey prefers only if it is one of these.
-      std::vector<int> resolved_charges;
+      /// Survey re-planning: every charge this Q isolates (ScanCommandQueue::isolatedCharges: its anchor, then
+      /// its notches), and the survey that decided it. The bought R may move only among the charges its group's
+      /// Q scans covered (owner 2026-10-23).
+      std::vector<int> isolated_charges;
       int    survey_id    = 0;
       bool   received     = false;
       Result result {};
@@ -162,7 +163,9 @@ namespace OpenMS
       int    winner_charge = 0;
       int    winner_precursor_id = 0;
       ScanCommand winner_cmd {};
-      std::vector<int> winner_resolved_charges; ///< the winner's GroupMember::resolved_charges
+      /// The union of isolated_charges over every member whose Q returned, sorted and unique: the charges the
+      /// bought R may move to.
+      std::vector<int> q_covered_charges;
       int    winner_survey_id = 0;           ///< the winner's GroupMember::survey_id
 
       int    usable = 0;              ///< members whose every assigned channel was measured
@@ -170,9 +173,9 @@ namespace OpenMS
       std::vector<int> usable_charges; ///< drives group_charges
     };
 
-    /// Register one 'Q' command as a member of @p group_id. Called at MS1, once per emitted 'Q'. @p resolved_charges
-    /// and @p survey_id are what survey re-planning needs to adjust the R the group may buy (GroupMember).
-    void addMember(int group_id, const ScanCommand& cmd, int precursor_id, std::vector<int> resolved_charges = {}, int survey_id = 0);
+    /// Register one 'Q' command as a member of @p group_id. Called at MS1, once per emitted 'Q'. The charges it
+    /// isolates are read off @p cmd; @p survey_id is the survey that decided it (GroupMember).
+    void addMember(int group_id, const ScanCommand& cmd, int precursor_id, int survey_id = 0);
 
     /// Record a returning scan's measurement. Returns its group_id, or 0 if the scan is not a
     /// member of any group (which is every scan in a non-quant run).

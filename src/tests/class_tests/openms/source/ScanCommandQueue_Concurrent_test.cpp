@@ -933,6 +933,29 @@ START_SECTION(reisolate_matches_buildMS2_geometry)
 }
 END_SECTION
 
+// A bought R may move only among the charges its group's Q scans covered (owner 2026-10-23). With none, there
+// is nothing it may move to: the registration is refused, so no survey can re-choose it -- an empty set must
+// never read as "no restriction" -- and the R goes out exactly as bought.
+START_SECTION(bought_r_empty_covered_set_is_not_adjustable)
+{
+  Config cfg{std::string(minimal_config)};
+  ScanCommandQueue q(cfg);
+
+  q.push(ms2(91, 13, 951.0, 0));   // the bought R
+  q.registerAdjustable(91, {}, 5, 12351);
+  TEST_EQUAL(FLASHIdaTestAccess::adjustableResolvedCharges(q, 91).has_value(), false)
+  TEST_EQUAL(q.waitingAt(0.0).adjustable.empty(), true)
+
+  const ReplanResult r = q.replacePlan(0.0, {}, {{91, ms2(91, 14, 882.0, 0), 9, 0.7}}, {});
+  TEST_EQUAL(r.adjusted, 0)
+  const auto cmd = q.dequeue();
+  ABORT_IF(!cmd.has_value())
+  TEST_EQUAL(cmd->scan_id, 91)
+  TEST_EQUAL(cmd->stages[0].charge_state, 13)
+  TEST_REAL_SIMILAR(cmd->stages[0].precursor_mz, 951.0)
+}
+END_SECTION
+
 // The race at queue level: four drains dequeue while one analysis thread re-plans and pushes unregistered
 // work. Nothing may be dequeued twice, nothing unregistered lost, and a unit is either sent (from its first
 // dequeue on, never dropped) or dropped (none of it ever sent).

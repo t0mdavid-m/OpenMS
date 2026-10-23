@@ -361,12 +361,7 @@ FLASHIda::FLASHIda(char* arg) :
               git = quant_group_by_nominal.emplace(nominal, allocQuantGroupId_()).first;
               unit.quant_group_ids.push_back(git->second);
             }
-            // The charges this survey resolved for the species: the only ones a newer survey may move the
-            // R this group buys to (survey re-planning: a replacement must be resolved on both surveys).
-            std::vector<int> resolved;
-            for (const auto& [z, pg] : selection_.rechooseCharges(nominal, {}, {}, std::numeric_limits<int>::max()))
-              resolved.push_back(z);
-            quant_.addMember(git->second, cmd, precursor_id, std::move(resolved), parent_tracking_id);
+            quant_.addMember(git->second, cmd, precursor_id, parent_tracking_id);
           }
         }
       }
@@ -437,16 +432,21 @@ FLASHIda::FLASHIda(char* arg) :
         units.push_back(std::move(rem));
       }
 
-      // A bought R (ADR-0038/0039) is re-chosen among the charges resolved on BOTH its Q's survey and this
-      // one, by charge_selection; a multiplexed one re-chooses its whole set. Re-confirming the same charge
-      // counts as re-chosen: the decision survey and the queue time move to this survey all the same. With
-      // nothing resolved on both it goes out as decided, still attributed to the Q's survey.
-      for (const auto& [r, resolved_on_q] : waiting.adjustable)
+      // A bought R (ADR-0038/0039) is re-chosen on this survey by charge_selection, but only among the charges
+      // its group's Q scans covered (owner 2026-10-23); a multiplexed one re-chooses its whole set, and keeps it
+      // when fewer than min_charge_states of those resolve here (ADR-0040's floor). Re-confirming the same charge
+      // counts as re-chosen: the decision survey and the queue time move to this survey all the same. Otherwise
+      // it goes out as decided, still attributed to the Q's survey. The species is the one it was bought for --
+      // the nominal mass registered then, never the R's own mono_mass, which a rewrite moves.
+      const int min_set = std::max(1, config_.targeting().min_charge_states);
+      for (const auto& [r, covered, nominal] : waiting.adjustable)
       {
         if (std::abs(r.faims_cv - faims_cv) >= 1e-6) continue; // only a survey at its own CV re-plans it
-        const int count = r.stage0_notch_count > 0 ? cap : 1;
-        const auto picks = selection_.rechooseCharges(SpectralDeconvolution::getNominalMass(r.mono_mass), {}, resolved_on_q, count);
+        if (covered.empty()) continue;                       // never "unrestricted"; registration refuses it too
+        const bool multiplexed = r.stage0_notch_count > 0;
+        const auto picks = selection_.rechooseCharges(nominal, {}, covered, multiplexed ? cap : 1);
         if (picks.empty()) continue;
+        if (multiplexed && static_cast<int>(picks.size()) < min_set) continue;
         ScanCommand rewritten = ScanCommandQueue::reisolate(r, picks, optimal_window_margin_, 'R');
         const double half = rewritten.stages[0].isolation_width / 2.0;
         const double lo = rewritten.stages[0].precursor_mz - half;
@@ -905,10 +905,16 @@ FLASHIda::FLASHIda(char* arg) :
               auto ident = queue_.buildFollowUp(cons.winner_cmd,
                                                 config_.quantification().identification_scan, 'R');
               // Adjustable, never droppable: while it waits, each newer survey at its CV may re-choose its
-              // charge among those the winner Q's survey resolved; until one does, that survey decided it.
-              // Registered BEFORE the push: once pushed, the drain may dequeue it at once, and a registration
-              // after that would leave an entry no dequeue ever erases.
-              queue_.registerAdjustable(ident.scan_id, cons.winner_resolved_charges, cons.winner_survey_id);
+              // charge among those the group's Q scans covered; until one does, the winner Q's survey decided
+              // it. Keyed on the species' nominal mass now, before any rewrite moves the R's mono_mass. With no
+              // covered charge there is nothing to move to, and it is not registered. Registered BEFORE the
+              // push: once pushed, the drain may dequeue it at once, and a registration after that would leave
+              // an entry no dequeue ever erases.
+              if (!cons.q_covered_charges.empty())
+              {
+                queue_.registerAdjustable(ident.scan_id, cons.q_covered_charges, cons.winner_survey_id,
+                                          SpectralDeconvolution::getNominalMass(cons.winner_cmd.mono_mass));
+              }
               stampAndPush_(ident, cons.winner_precursor_id);
               child_ids.push_back(ScanCommandQueue::encode(ident.scan_id));
               commands_pushed++;

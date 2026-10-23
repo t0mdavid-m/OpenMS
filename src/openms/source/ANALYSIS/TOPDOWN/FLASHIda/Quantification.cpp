@@ -33,6 +33,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/Quantification.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 
 #include <OpenMS/ANALYSIS/QUANTITATION/IsobaricChannelExtractor.h>
 #include <OpenMS/ANALYSIS/QUANTITATION/IsobaricQuantifier.h>
@@ -188,8 +189,7 @@ namespace OpenMS
 
   // ---- the quantification group and its vote (ADR-0040) ----------------------------------------
 
-  void Quantification::addMember(const int group_id, const ScanCommand& cmd, const int precursor_id, std::vector<int> resolved_charges,
-                                 const int survey_id)
+  void Quantification::addMember(const int group_id, const ScanCommand& cmd, const int precursor_id, const int survey_id)
   {
     GroupMember m;
     m.tracking_id  = cmd.scan_id;
@@ -198,7 +198,7 @@ namespace OpenMS
     m.window_snr   = cmd.window_snr;
     m.intensity    = cmd.precursor_intensity;
     m.cmd          = cmd;
-    m.resolved_charges = std::move(resolved_charges);
+    m.isolated_charges = ScanCommandQueue::isolatedCharges(cmd);
     m.survey_id    = survey_id;
     groups_[group_id].push_back(m);
     group_by_tracking_[cmd.scan_id] = group_id;
@@ -263,6 +263,13 @@ namespace OpenMS
     }
     out.usable = static_cast<int>(usable.size());
     for (const GroupMember* m : usable) out.usable_charges.push_back(m->charge);
+
+    // The charges the group's Q scans covered -- every one that returned, usable or not, since each isolated its
+    // charges whatever it measured: the only ones the bought R may move to (survey re-planning).
+    for (const GroupMember* m : received)
+      out.q_covered_charges.insert(out.q_covered_charges.end(), m->isolated_charges.begin(), m->isolated_charges.end());
+    std::sort(out.q_covered_charges.begin(), out.q_covered_charges.end());
+    out.q_covered_charges.erase(std::unique(out.q_covered_charges.begin(), out.q_covered_charges.end()), out.q_covered_charges.end());
 
     // The identification window: the purest (window_snr), then the brightest, then the lower
     // charge -- total and reproducible, since window_snr saturates at 1000.0.
@@ -344,7 +351,6 @@ namespace OpenMS
       out.winner_charge       = winner->charge;
       out.winner_precursor_id = winner->precursor_id;
       out.winner_cmd          = winner->cmd;
-      out.winner_resolved_charges = winner->resolved_charges;
       out.winner_survey_id    = winner->survey_id;
     }
     return out;
