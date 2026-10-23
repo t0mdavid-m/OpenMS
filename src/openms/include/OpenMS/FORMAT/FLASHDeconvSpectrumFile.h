@@ -28,11 +28,13 @@ namespace OpenMS
             @param ms_level ms level of the spectrum
             @param detail if set true, detailed information of the mass (e.g., peak list for the mass) is written
             @param report_decoy if set true, decoy and qvalue information will be written.
+            @param write_abundance if set true (FLASHDeconv -quant), the MS1 header ends with the columns Abundance and AbundanceTraceCount.
        */
     static void writeDeconvolvedMassesHeader(std::fstream& fs,
                                              uint ms_level,
                                              bool detail,
-                                             bool report_decoy);
+                                             bool report_decoy,
+                                             bool write_abundance = false);
     /**
           @brief write the deconvolved masses in the output file (spectrum level)
           @param dspec deconvolved spectrum to write
@@ -44,6 +46,8 @@ namespace OpenMS
           @param write_detail if this is set, more detailed information on each mass will be written in the output file.
           @param report_decoy if set true, decoy and qvalue information will be written.
           @param noise_decoy_weight noise decoy weight. Determines how often the noise decoy masses will be written
+          @param abundances (FLASHDeconv -quant) per mass of @p dspec (by its position): the abundance and the number of raw mass traces it is
+          summed over, appended to each MS1 row (nan and 0 for a decoy). Without it, the rows are written as before.
           Default MS1 headers are:
             FileName, ScanNum, TargetDecoyType, RetentionTime, MassCountInSpec, AverageMass, MonoisotopicMass,
             SumIntensity, MinCharge, MaxCharge,
@@ -62,14 +66,17 @@ namespace OpenMS
                                        const FLASHHelperClasses::PrecalculatedAveragine& decoy_avg,
                                        double tol,
                                        bool write_detail,
-                                       bool report_decoy, double noise_decoy_weight);
+                                       bool report_decoy, double noise_decoy_weight,
+                                       const std::vector<std::pair<double, Size>>* abundances = nullptr);
 
     /// writeDeconvolvedMasses for every spectrum of @p spectra whose MS level has a file in @p out_files (open in @p streams), in input order and
-    /// with the same bytes; the spectra are formatted in parallel (with @p report_decoy, the noise-decoy draws are replayed serially up front)
+    /// with the same bytes; the spectra are formatted in parallel (with @p report_decoy, the noise-decoy draws are replayed serially up front).
+    /// @p abundances (FLASHDeconv -quant) is indexed by the position of a spectrum in @p spectra, then of the mass in it
     static void writeDeconvolvedMasses(std::vector<DeconvolvedSpectrum>& spectra, std::vector<std::fstream>& streams, const std::vector<String>& out_files,
                                        const String& file_name, const FLASHHelperClasses::PrecalculatedAveragine& avg,
                                        const FLASHHelperClasses::PrecalculatedAveragine& decoy_avg, const std::vector<double>& tols, bool write_detail,
-                                       bool report_decoy, double noise_decoy_weight);
+                                       bool report_decoy, double noise_decoy_weight,
+                                       const std::vector<std::vector<std::pair<double, Size>>>* abundances = nullptr);
 
     /**
      *

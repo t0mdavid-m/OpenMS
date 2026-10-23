@@ -9,6 +9,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHHugePages.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHQuantAlgorithm.h>
 #include <OpenMS/APPLICATIONS/TOPPBase.h>
 #include <OpenMS/FORMAT/FLASHDeconvFeatureFile.h>
 #include <OpenMS/FORMAT/FLASHDeconvSpectrumFile.h>
@@ -132,6 +133,16 @@ protected:
     setMinInt_("mzml_mass_charge", -1);
     setMaxInt_("mzml_mass_charge", 1);
 
+    registerFlag_("quant",
+                  "Quantify every MS1 mass from its raw signal (FLASHQuant). Input: the MS1 spectra of -in as loaded, centroided (as for "
+                  "FLASHDeconv itself). The deconvolved masses are the starting point: the masses of one feature, or a mass without a feature, "
+                  "take the raw mass traces their peaks lie on (FLASHQuant's mass trace and elution peak detection); traces that several masses "
+                  "share are resolved as in FLASHQuant (elution model and isotope pattern of each mass, non-negative least squares). Output: the "
+                  "columns Abundance and AbundanceTraceCount at the end of the -out feature tsv and of the -out_spec1 tsv (one value per feature, "
+                  "and each MS1 mass the value of its feature): FLASHQuant's quantity (area of each trace down to 10% of its apex, summed; "
+                  "intensity x seconds), or, for a mass without a raw trace of at least 4 peaks, its deconvolved intensities times the MS1 cycle "
+                  "time with a trace count of 0. Without the flag, nothing changes: the same masses, features and output files as before.");
+
     registerFlag_("write_detail",
                   "Include detailed peak information (m/z, intensity, charge, isotope index) for each deconvolved mass in the output spectrum tsv files specified by out_spec* options.",
                   false);
@@ -202,6 +213,7 @@ protected:
     String out_quant_file = getStringOption_("out_quant");
 
     bool write_detail = getFlag_("write_detail");
+    const bool quant = getFlag_("quant");
     int mzml_charge = getIntOption_("mzml_mass_charge");
     double min_mz = getDoubleOption_("min_mz");
     double max_mz = getDoubleOption_("max_mz");
@@ -264,11 +276,33 @@ protected:
     std::vector<FLASHHelperClasses::MassFeature> deconvolved_features;
     std::map<int, double> scan_rt_map;
 
+    // -quant: the MS1 spectra as loaded (FLASHDeconv removes low peaks from map in place)
+    PeakMap ms1_raw;
+    if (quant)
+    {
+      for (const auto& spec : map)
+      {
+        if (spec.getMSLevel() == 1) ms1_raw.addSpectrum(spec);
+      }
+      ms1_raw.sortSpectra(true);
+    }
+
     // Run FLASHDeconvAlgorithm here!
     OPENMS_LOG_INFO << "Processing : " << in_file << endl;
 
     fd.run(map, deconvolved_spectra, deconvolved_features);
     tols = fd.getTolerances();
+
+    std::vector<std::vector<FLASHQuantAlgorithm::MassAbundance>> mass_abundances;
+    std::map<uint, FLASHQuantAlgorithm::MassAbundance> feature_abundances;
+    if (quant)
+    {
+      OPENMS_LOG_INFO << "Quantifying the MS1 masses from their raw signal (FLASHQuant) ..." << endl;
+      FLASHQuantAlgorithm fq;
+      fq.setLogType(log_type_);
+      fq.runFromDeconvolvedMasses(ms1_raw, deconvolved_spectra, fd.getAveragine(), mass_abundances, feature_abundances);
+      ms1_raw.clear(true);
+    }
     // collect statistics for information
     for (auto& it : map)
     {
@@ -307,8 +341,8 @@ protected:
       fstream out_stream;
       out_stream.open(out_file, fstream::out);
 
-      FLASHDeconvFeatureFile::writeHeader(out_stream, report_decoy);
-      FLASHDeconvFeatureFile::writeFeatures(deconvolved_features, in_file, out_stream, report_decoy);
+      FLASHDeconvFeatureFile::writeHeader(out_stream, report_decoy, quant);
+      FLASHDeconvFeatureFile::writeFeatures(deconvolved_features, in_file, out_stream, report_decoy, quant ? &feature_abundances : nullptr);
       out_stream.close();
     }
     // Per ms level spectrum deconvolution tsv output
@@ -327,7 +361,7 @@ protected:
 
         out_spec_streams[i].open(out_spec_file[i], fstream::out);
 
-        FLASHDeconvSpectrumFile::writeDeconvolvedMassesHeader(out_spec_streams[i], i + 1, write_detail, report_decoy);
+        FLASHDeconvSpectrumFile::writeDeconvolvedMassesHeader(out_spec_streams[i], i + 1, write_detail, report_decoy, quant && i == 0);
 #ifdef TRAIN_OUT
         out_train_streams[i].open(out_spec_file[i] + "_train.csv", fstream::out);
         Qscore::writeAttCsvForQscoreTrainingHeader(out_train_streams[i]);
@@ -347,7 +381,7 @@ protected:
 #else
       // the same rows in the same order, formatted in parallel (with report_FDR, the noise-decoy draws are replayed serially up front)
       FLASHDeconvSpectrumFile::writeDeconvolvedMasses(deconvolved_spectra, out_spec_streams, out_spec_file, in_file, fd.getAveragine(), fd.getDecoyAveragine(), tols,
-                                                      write_detail, report_decoy, fd.getNoiseDecoyWeight());
+                                                      write_detail, report_decoy, fd.getNoiseDecoyWeight(), quant ? &mass_abundances : nullptr);
 #endif
 
       for (Size i = 0; i < out_spec_file.size(); i++)

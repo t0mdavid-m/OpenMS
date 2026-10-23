@@ -18,15 +18,16 @@ namespace OpenMS
      @ingroup FileIO
 **/
 
-  void FLASHDeconvFeatureFile::writeHeader(std::fstream& fs, bool report_decoy)
+  void FLASHDeconvFeatureFile::writeHeader(std::fstream& fs, bool report_decoy, bool write_abundance)
   {
     fs << "FeatureIndex\tFileName\tMSLevel";
     if (report_decoy) fs << "\tIsDecoy";
 
     fs << "\tMonoisotopicMass\tAverageMass\tMassCount\tStartRetentionTime"
           "\tEndRetentionTime\tRetentionTimeDuration\tApexRetentionTime"
-          "\tSumIntensity\tMaxIntensity\tFeatureQuantity\tMinCharge\tMaxCharge\tChargeCount\tIsotopeCosineScore\tQscore2D\tPerChargeIntensity\tPerIsotopeIntensity"
-          "\n";
+          "\tSumIntensity\tMaxIntensity\tFeatureQuantity\tMinCharge\tMaxCharge\tChargeCount\tIsotopeCosineScore\tQscore2D\tPerChargeIntensity\tPerIsotopeIntensity";
+    if (write_abundance) { fs << "\tAbundance\tAbundanceTraceCount"; }
+    fs << "\n";
   }
 
   void FLASHDeconvFeatureFile::writeTopFDFeatureHeader(std::fstream& fs, uint ms_level)
@@ -49,10 +50,11 @@ namespace OpenMS
     fs.flush();
   }
 
-  void FLASHDeconvFeatureFile::writeFeatures(const std::vector<FLASHHelperClasses::MassFeature>& mass_features, const String& file_name, std::fstream& fs, bool report_decoy)
+  void FLASHDeconvFeatureFile::writeFeatures(const std::vector<FLASHHelperClasses::MassFeature>& mass_features, const String& file_name, std::fstream& fs, bool report_decoy,
+                                             const std::map<uint, std::pair<double, Size>>* abundances)
   {
     // the row of a feature
-    const auto write_row = [&file_name, report_decoy](const FLASHHelperClasses::MassFeature& mass_feature, std::stringstream& ss) {
+    const auto write_row = [&file_name, report_decoy, abundances](const FLASHHelperClasses::MassFeature& mass_feature, std::stringstream& ss) {
       const auto& mt = mass_feature.mt;
       double mass = mt.getCentroidMZ() + mass_feature.iso_offset * Constants::ISOTOPE_MASSDIFF_55K_U;
       double avg_mass = mass_feature.avg_mass;
@@ -100,6 +102,12 @@ namespace OpenMS
         if (i < iso_end_index)
         { ss << ";";
         }
+      }
+      if (abundances != nullptr)
+      {
+        const auto it = abundances->find(mass_feature.index);
+        if (it != abundances->end()) { ss << "\t" << std::to_string(it->second.first) << "\t" << it->second.second; }
+        else { ss << "\tnan\t0"; }
       }
       ss << "\n";
     };

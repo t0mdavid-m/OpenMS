@@ -14,6 +14,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/config.h>
 #include <iomanip>
+#include <map>
 #include <iostream>
 
 
@@ -27,14 +28,16 @@ namespace OpenMS
   class OPENMS_DLLAPI FLASHDeconvFeatureFile
   {
   public:
-    /// write header line for regular file output
-    static void writeHeader(std::fstream& fs, bool report_decoy = false);
+    /// write header line for regular file output; with @p write_abundance, the columns Abundance and AbundanceTraceCount (FLASHDeconv -quant) are appended
+    static void writeHeader(std::fstream& fs, bool report_decoy = false, bool write_abundance = false);
 
     /// write header line for topFD feature file
     static void writeTopFDFeatureHeader(std::fstream& fs, uint ms_level);
 
-    /// write the features in regular file output
-    static void writeFeatures(const std::vector<FLASHHelperClasses::MassFeature>& mass_features, const String& file_name, std::fstream& fs, bool report_decoy = false);
+    /// write the features in regular file output; with @p abundances (feature index -> abundance and the number of raw mass traces it is
+    /// summed over, FLASHDeconv -quant), the two columns are appended to each row (nan and 0 for a feature without an entry)
+    static void writeFeatures(const std::vector<FLASHHelperClasses::MassFeature>& mass_features, const String& file_name, std::fstream& fs, bool report_decoy = false,
+                              const std::map<uint, std::pair<double, Size>>* abundances = nullptr);
 
     /**
      * @brief Find mass features and write features in TopFD format files.

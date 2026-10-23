@@ -28,6 +28,8 @@ set(sources_list
         FLASHTaggerAlgorithm.cpp
         FLASHTnTAlgorithm.cpp
         FLASHTnTCandidateRanker.cpp
+        FLASHQuantAlgorithm.cpp
+        FLASHQuantHelper.cpp
         MassFeatureTrace.cpp
         PeakGroup.cpp
         PeakGroupScoring.cpp

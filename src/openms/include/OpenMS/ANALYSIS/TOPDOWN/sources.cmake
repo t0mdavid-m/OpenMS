@@ -33,6 +33,8 @@ set(sources_list_h
         FLASHTaggerAlgorithm.h
         FLASHTnTAlgorithm.h
         FLASHTnTCandidateRanker.h
+        FLASHQuantAlgorithm.h
+        FLASHQuantHelper.h
         MassFeatureTrace.h
         PeakGroup.h
         PeakGroupScoring.h

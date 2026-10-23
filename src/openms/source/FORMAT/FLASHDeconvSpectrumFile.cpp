@@ -77,7 +77,8 @@ namespace OpenMS
     /// the rows of the non-empty spectrum @p dspec into @p fs, numbered from @p index on (advanced past them); noise decoys are drawn from @p gen
     void writeDeconvolvedMasses_(DeconvolvedSpectrum& dspec, std::ostream& fs, const String& file_name, const FLASHHelperClasses::PrecalculatedAveragine& avg,
                                  const FLASHHelperClasses::PrecalculatedAveragine& decoy_avg, double tol, const bool write_detail, const bool report_decoy,
-                                 const double noise_decoy_weight, uint& index, std::default_random_engine& gen)
+                                 const double noise_decoy_weight, uint& index, std::default_random_engine& gen,
+                                 const std::vector<std::pair<double, Size>>* abundances = nullptr)
     {
     std::stringstream ss;
 
@@ -335,6 +336,14 @@ namespace OpenMS
           }
         }
       }
+      if (abundances != nullptr && dspec.getOriginalSpectrum().getMSLevel() == 1)
+      {
+        if (pg.getTargetDecoyType() == PeakGroup::TargetDecoyType::target && i >= 0 && (Size)i < abundances->size())
+        {
+          ss << "\t" << std::to_string((*abundances)[i].first) << "\t" << (*abundances)[i].second;
+        }
+        else { ss << "\tnan\t0"; }
+      }
       ss << "\n";
     }
     fs << ss.str();
@@ -342,7 +351,8 @@ namespace OpenMS
   } // namespace
 
   void FLASHDeconvSpectrumFile::writeDeconvolvedMasses(DeconvolvedSpectrum& dspec, std::fstream& fs, const String& file_name, const FLASHHelperClasses::PrecalculatedAveragine& avg, const FLASHHelperClasses::PrecalculatedAveragine& decoy_avg, double tol,
-                                                       const bool write_detail, const bool report_decoy, const double noise_decoy_weight)
+                                                       const bool write_detail, const bool report_decoy, const double noise_decoy_weight,
+                                                       const std::vector<std::pair<double, Size>>* abundances)
   {
     if (!report_decoy && dspec.isDecoy()) return;
     if (dspec.empty()) return;
@@ -352,14 +362,15 @@ namespace OpenMS
       indices.push_back(1);
     }
     writeDeconvolvedMasses_(dspec, fs, file_name, avg, decoy_avg, tol, write_detail, report_decoy, noise_decoy_weight, indices[dspec.getOriginalSpectrum().getMSLevel() - 1],
-                            generator_);
+                            generator_, abundances);
   }
 
   void FLASHDeconvSpectrumFile::writeDeconvolvedMasses(std::vector<DeconvolvedSpectrum>& spectra, std::vector<std::fstream>& streams,
                                                        const std::vector<String>& out_files, const String& file_name,
                                                        const FLASHHelperClasses::PrecalculatedAveragine& avg,
                                                        const FLASHHelperClasses::PrecalculatedAveragine& decoy_avg, const std::vector<double>& tols,
-                                                       const bool write_detail, const bool report_decoy, const double noise_decoy_weight)
+                                                       const bool write_detail, const bool report_decoy, const double noise_decoy_weight,
+                                                       const std::vector<std::vector<std::pair<double, Size>>>* abundances)
   {
     // the spectra of the files to be written, in input order
     std::vector<Size> jobs;
@@ -457,7 +468,8 @@ namespace OpenMS
           uint index = first_index[k];
           auto gen = report_decoy ? first_gen[k] : generator_;
           writeDeconvolvedMasses_(dspec, os, file_name, avg, decoy_avg, tols[dspec.getOriginalSpectrum().getMSLevel() - 1], write_detail, report_decoy,
-                                  noise_decoy_weight, index, gen);
+                                  noise_decoy_weight, index, gen,
+                                  abundances != nullptr && jobs[k] < abundances->size() ? &(*abundances)[jobs[k]] : nullptr);
           buffers[k] = os.str();
         }
         catch (...)
@@ -476,7 +488,8 @@ namespace OpenMS
     if (failed) { std::rethrow_exception(errors[next_write.load()]); }
   }
 
-  void FLASHDeconvSpectrumFile::writeDeconvolvedMassesHeader(std::fstream& fs, const uint ms_level, const bool detail, const bool report_decoy)
+  void FLASHDeconvSpectrumFile::writeDeconvolvedMassesHeader(std::fstream& fs, const uint ms_level, const bool detail, const bool report_decoy,
+                                                             const bool write_abundance)
   {
     if (detail)
     {
@@ -496,7 +509,9 @@ namespace OpenMS
         {
           fs << "Qvalue\t";
         }
-        fs << "PerChargeIntensity\tPerIsotopeIntensity\n";
+        fs << "PerChargeIntensity\tPerIsotopeIntensity";
+        if (write_abundance) { fs << "\tAbundance\tAbundanceTraceCount"; }
+        fs << "\n";
       }
       else
       {
@@ -541,6 +556,7 @@ namespace OpenMS
         {
           fs << "Qvalue";
         }
+        if (write_abundance) { fs << (report_decoy ? "\t" : "") << "Abundance\tAbundanceTraceCount"; }
         fs << "\n";
       }
       else
