@@ -418,7 +418,7 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   defaults_.setValue("one_proteoform_per_feature", "true",
                      "Co-isolation: when PrSMs of different proteins report the same mass taken from MS1 (within twice the precursor tolerance, "
                      "one isotope apart allowed) within 2 min, the mass is one MS1 feature of one proteoform, and only the protein that explains it "
-                     "best keeps it (by its PrSM with the fewest blind modifications, then the higher score, then more PrSMs at that mass); the "
+                     "best keeps it (by its best PrSM score, which already prices blind shifts, then fewer blind modifications, then more PrSMs at that mass); the "
                      "other proteins' PrSMs are reported without a mass. Masses from fragment pairs and decoy precursors are not affected.");
   defaults_.setValidStrings("one_proteoform_per_feature", {"true", "false"});
   defaults_.setValue("native", "false",
@@ -3820,8 +3820,12 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   // the same MS1-based mass in the same elution (within 2 min), FLASHExtender fitted at least one of them to it by truncation or blind
   // shifts (Eclip_1480: 55 PrSMs at 1% reported a mass of another protein's 1% proteoform nearby and never their own, against 8 with the
   // retention times moved by 20 min; e.g. TATA 41-89 +16.02 and MALE 328-373 -90.1 +473.1 both at 5549.62 in scans 2325 and 2326). Per
-  // group of such PrSMs, each protein is ranked by its PrSM with the fewest blind modifications, then by its best score, then by its
-  // number of PrSMs at the mass; the first keeps the mass, the others' PrSMs lose it (Mass -1: undetermined, their own FDR class).
+  // group of such PrSMs, each protein is ranked by its best score, then by its fewest blind modifications, then by its number of PrSMs at
+  // the mass; the first keeps the mass, the others' PrSMs lose it (Mass -1: undetermined, their own FDR class). The score already prices
+  // a blind shift (raw score minus log10 of the windows it opens); ranked by blind count first, low-scoring PrSMs that fit the mass by
+  // truncation alone (mostly decoys and PrSMs far below 1%) took the masses of real one-shift proteoforms in the same feature (Eclip_1480:
+  // 544 PrSMs lost the mass, 625 with the B. theta entrapment database; 323 of the 342 E. coli proteoforms that only the entrapment search
+  // left undetermined had lost the mass to a PrSM outside the 1% list).
   if (one_proteoform_per_feature_ && precursor_tol > 0)
   {
     const double iso = Constants::ISOTOPE_MASSDIFF_55K_U, rt_window = 120.0;
@@ -3863,7 +3867,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     {
       if (std::none_of(members.begin(), members.end(), [&](Size a) { return (bool)in_conflict[a]; })) continue;
       groups_with_conflict++;
-      // per protein: fewest blind modifications, best score, PrSM count
+      // per protein: best score, fewest blind modifications, PrSM count
       std::map<String, std::tuple<Size, double, Size>> by_protein;
       for (Size a : members)
       {
@@ -3883,7 +3887,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       {
         const auto& [b, s, n] = key;
         const auto& [bb, bs, bn] = best;
-        if (first || b < bb || (b == bb && (s > bs || (s == bs && n > bn))))
+        if (first || s > bs || (s == bs && (b < bb || (b == bb && n > bn))))
         {
           owner = acc;
           best = key;
