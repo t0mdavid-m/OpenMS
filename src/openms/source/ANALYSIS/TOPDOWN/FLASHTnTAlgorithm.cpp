@@ -61,9 +61,9 @@ const char* const fdr_class_names[] = {"determined; 0 blind", "determined; 1 bli
 static_assert(std::size(fdr_class_names) == (Size)fdr_class_count, "one label per FDR class");
 // proteoform classes (a partition of the proteoforms; the FDR below): the determined PrSM classes are one, the undetermined ones and the
 // residual rounds as for PrSMs
-constexpr int pf_class_determined = 0, pf_class_both_termini = 1, pf_class_open_terminus = 2, pf_class_residual = 3;
+constexpr int pf_class_determined = 0, pf_class_both_termini = 1, pf_class_open_terminus = 2, pf_class_precursor_ladder = 3, pf_class_residual = 4;
 constexpr int pf_class_count = pf_class_residual + max_chimeric_rounds;
-const char* const pf_class_names[] = {"determined", "undetermined, both termini", "undetermined, open terminus", "residual 1", "residual 2"};
+const char* const pf_class_names[] = {"determined", "undetermined, both termini", "undetermined, open terminus", "precursor ladder", "residual 1", "residual 2"};
 static_assert(std::size(pf_class_names) == (Size)pf_class_count, "one label per proteoform class");
 // chimeric search: with a mass matched by the best PrSM, the masses within the spectrum's tolerance of it moved by up to this many isotope
 // spacings are removed as well (FLASHDeconv's monoisotopic errors of the same fragment). On the 20 native spectra of the prototype, the
@@ -2503,13 +2503,16 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       // every class passed at 1% together (Eclip_1480: 1418), but the undetermined ones among them at 6-11% (both termini 100 targets
       // and 6 decoys, open terminus 45 and 5; in the B. theta entrapment run 7 of the 113 with both termini were B. theta); one list by
       // score passed 140 fewer determined ones instead.
-      // The determined classes of the PrSMs (0, 1, 2 blind, precursor ladder) are one proteoform class: their decoys are nearly absent
-      // (2 for 1273 targets): apart, the smaller ones (2 blind 73, precursor ladder 68 targets) would be decided by no decoy. Precedence: a determined PrSM of the main search (any blind count, precursor ladders included) makes the
-      // proteoform "determined"; else one with both termini "undetermined, both termini"; else "undetermined, open terminus"; a
-      // proteoform of residual-round PrSMs only is "residual r" (its lowest round). A proteoform is ranked by the best score of the PrSMs
-      // that decide its class, and its row (Representative) is one of them: of a determined proteoform the determined PrSM passing rep_q
-      // with the fewest blind modifications, else the best scoring one. Every PrSM carries the proteoform's q-value and class
-      // (ProteoformFDRClass).
+      // The determined classes of the PrSMs (0, 1, 2 blind) are one proteoform class: their decoys are nearly absent (2 for 1273 targets):
+      // apart, the smaller ones would be decided by no decoy. Precursor-ladder proteoforms are a class of their own (with few targets it is
+      // counted together with its neighbours, below): their wrong windows are near misses of a similar sequence that shuffled decoys do not
+      // show (B. theta entrapment of the three lysates: in one class with the determined proteoforms, 18 B. theta precursor-ladder
+      // proteoforms at 1%, 9% estimated error; in a class of their own 4, with 9 more E. coli proteins over the runs). Precedence: a determined PrSM of the
+      // main search other than a precursor-ladder one (any blind count) makes the proteoform "determined"; else a precursor-ladder PrSM
+      // "precursor ladder"; else one with both termini "undetermined, both termini"; else "undetermined, open terminus"; a proteoform of
+      // residual-round PrSMs only is "residual r" (its lowest round). A proteoform is ranked by the best score of the PrSMs that decide its
+      // class, and its row (Representative) is one of them: of a determined or precursor-ladder proteoform the PrSM passing rep_q with the
+      // fewest blind modifications, else the best scoring one. Every PrSM carries the proteoform's q-value and class (ProteoformFDRClass).
       std::vector<int> cluster_class(clusters.size(), -1);
       std::vector<double> cluster_score(clusters.size(), 0.0);
       for (Size k = 0; k < clusters.size(); k++)
@@ -2525,8 +2528,13 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         }
         if (! main_members.empty())
         {
-          for (Size i : main_members) { if (isDetermined(proteoform_hits_[i])) defining.push_back(i); }
+          for (Size i : main_members) { if (isDetermined(proteoform_hits_[i]) && hit_class[i] != fdr_class_precursor_ladder) defining.push_back(i); }
           cluster_class[k] = pf_class_determined;
+          if (defining.empty())
+          {
+            for (Size i : main_members) { if (hit_class[i] == fdr_class_precursor_ladder) defining.push_back(i); }
+            cluster_class[k] = pf_class_precursor_ladder;
+          }
           if (defining.empty())
           {
             for (Size i : main_members)
@@ -2551,7 +2559,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         for (Size i : defining)
         {
           cluster_score[k] = std::max(cluster_score[k], proteoform_hits_[i].getScore());
-          if (cluster_class[k] == pf_class_determined)
+          if (cluster_class[k] == pf_class_determined || cluster_class[k] == pf_class_precursor_ladder)
           {
             // passing first, then fewer blind modifications, then the higher score
             const bool pass_i = qvalues[i] <= rep_q, pass_row = qvalues[row] <= rep_q;
