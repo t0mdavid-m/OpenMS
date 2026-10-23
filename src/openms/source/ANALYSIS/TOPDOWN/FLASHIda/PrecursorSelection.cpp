@@ -66,10 +66,38 @@ namespace OpenMS
       std::ifstream instream(log_file);
       if (instream.good())
       {
-        String line;
+        // Two passes over one file (survey re-planning). A Superseded= line names commands a LATER survey's re-plan
+        // dropped before they were acquired, so it follows the Mass= lines it cancels: read the whole file first and
+        // collect those ids, then parse as before, skipping a Mass= line whose ID= is among them -- a decision that
+        // was never acquired is no observation for in_depth's 1 - prod(1 - qscore). Per file, because tracking ids
+        // restart in every run. A log written before ID= existed has no such line and loads exactly as it did.
+        std::vector<String> lines;
+        std::set<std::string> superseded;
+        {
+          String raw;
+          while (std::getline(instream, raw))
+          {
+            if (!raw.empty() && raw.back() == '\r') raw.pop_back();
+            if (raw.hasPrefix("Superseded="))
+            {
+              std::stringstream ids(raw.substr(11));
+              std::string id;
+              while (std::getline(ids, id, ' '))
+                if (!id.empty()) superseded.insert(id);
+            }
+            lines.push_back(raw);
+          }
+        }
+        auto idOf = [](const String& mass_line) {
+          const Size st = mass_line.find("\tID=");
+          if (st == String::npos) return std::string();
+          const Size ed = mass_line.find('\t', st + 4);
+          return std::string(mass_line.substr(st + 4, ed == String::npos ? String::npos : ed - st - 4));
+        };
+
         double rt = .0, mass, qscore;
         int charge;
-        while (std::getline(instream, line))
+        for (const String& line : lines)
         {
           // " 0 targets" WITH THE LEADING SPACE — the same anchor as IdaLogger::parseFLASHIdaLog,
           // and for the same reason: the bare substring also matches "10 targets" / "20 targets".
@@ -88,6 +116,7 @@ namespace OpenMS
           }
           if (line.hasPrefix("Mass"))
           {
+            if (!superseded.empty() && superseded.count(idOf(line)) > 0) continue;
             Size st = 5;
             Size ed = line.find('\t');
             String n = line.substr(st, ed - st + 1);

@@ -495,7 +495,7 @@ FLASHIda::FLASHIda(char* arg) :
     // ida.log keeps the instrument's minutes: the target-log loader reads it back as minutes
     // (ADR-0035, ADR-0051).
     logger_.writeIDALogEntry(rt / 60.0, parent_tracking_id, instrument_scan_number,
-                             ms2_commands, ms2_sources, selection_.deconvolvedMS1());
+                             ms2_commands, ms2_sources, selection_.deconvolvedMS1(), replan.dropped_scan_ids);
 
     for (const auto& c : ms2_commands)
       child_ids.push_back(ScanCommandQueue::encode(c.scan_id));
@@ -1488,7 +1488,10 @@ FLASHIda::FLASHIda(char* arg) :
     // Take the wide MS3 fragment ProForma stashed at buildMS3 time (empty for non-MS3 commands) so the
     // scan_commands.tsv row carries the fired MS3 target's fragment identity.
     std::string ms3pf = (out.msn_level == 3) ? queue_.takeMS3Proteoform(out.scan_id) : std::string();
-    logger_.writeScanCommandRow(out, precursorIdForTracking_(out.scan_id), ms3pf);
+    // What the survey that planned it decided it on, set at the swap; a one-shot take under queue_mutex_ like the
+    // proteoform above. A command no survey decided has none.
+    const std::optional<DecisionInfo> decision = queue_.takeDecisionInfo(out.scan_id);
+    logger_.writeScanCommandRow(out, precursorIdForTracking_(out.scan_id), ms3pf, decision ? &*decision : nullptr);
     return 1;
   }
 

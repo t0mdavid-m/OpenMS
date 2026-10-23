@@ -44,6 +44,10 @@ namespace
   // spectra facts from that run's mzML: survey !!= is scan 32, survey !!> is scan 33, and MS2 !!B is
   // scan 37 isolating 531.790649. A newer survey really does sit between the command's survey and
   // its scan -- which is the whole reason the join exists.
+  //
+  // The header carries survey re-planning's decision_survey_id / isolation_purity, EMPTY in every fixture row:
+  // an empty decision_survey_id is what a row the survey did not decide carries, so the join walks as it did
+  // for the original file. withoutDecisionColumns() takes them out again for the file as it was written.
   using Cells = std::vector<std::string>;
 
   const Cells kCmdHeader = {"tracking_id", "scan_type", "ms_level", "parent_tracking_id", "precursor_id", "priority",
@@ -51,7 +55,8 @@ namespace
                             "charge_snr", "iso_cos", "snr", "charge_score", "activation", "collision_energy",
                             "hcd_energy", "reaction_time", "reagent_max_it", "reagent_agc_target", "ppm_error",
                             "precursor_intensity", "peakgroup_intensity", "ion_type", "ion_index", "ms3_proteoform",
-                            "scan_description", "faims_cv", "faims_enabled", "first_mass", "last_mass", "enqueue_ts"};
+                            "scan_description", "faims_cv", "faims_enabled", "first_mass", "last_mass",
+                            "decision_survey_id", "isolation_purity", "enqueue_ts"};
 
   Cells surveyRow(const std::string& id, const std::string& enqueue_ts)
   {
@@ -59,7 +64,7 @@ namespace
             "0", "0", "0", "0", "0", "0", "0", "0", "0", "0",   // mono_mass .. charge_score: stage-less placeholders
             "none",
             "0", "0", "0", "0", "0", "0", "0", "0",             // collision_energy .. peakgroup_intensity
-            "", "0", "", id + "S", "0", "0", "500.0000", "2000.0000", enqueue_ts};
+            "", "0", "", id + "S", "0", "0", "500.0000", "2000.0000", "", "", enqueue_ts};
   }
 
   const Cells kS32 = surveyRow("!!=", "267351474");
@@ -67,7 +72,16 @@ namespace
   const Cells kM37 = {"!!B", "recording", "2", "!!=", "1", "2", "5305.33", "10", "531.791", "0.901196", "0.443474",
                       "0.738412", "5.70422", "0.859759", "3.90517", "1", "HCD", "29", "29", "0", "0", "0", "0.608297",
                       "2134.16", "2947.43", "", "0", "", "!!BR5.30533k@10", "0", "0", "200.0000", "2000.0000",
-                      "267352272"};
+                      "", "", "267352272"};
+
+  // @p row without the two survey re-planning columns: the layout every run folder written before them has.
+  Cells withoutDecisionColumns(const Cells& row)
+  {
+    Cells out;
+    for (size_t i = 0; i < row.size(); ++i)
+      if (kCmdHeader[i] != "decision_survey_id" && kCmdHeader[i] != "isolation_purity") out.push_back(row[i]);
+    return out;
+  }
 
   // @p row with one named cell replaced.
   Cells withCell(Cells row, const std::string& column, const std::string& value)
@@ -898,6 +912,40 @@ START_SECTION(scan_commands_join_walks_a_follow_up_up_to_its_survey)
   TEST_EQUAL(located.size(), 2)
   ABORT_IF(located.count(40) == 0)
   TEST_EQUAL(located[40].parent_scan_number, 32)   // through !!B, up to !!=
+}
+END_SECTION
+
+// T11b -- survey re-planning: a newer survey that re-plans a waiting command becomes the survey it was DECIDED
+// on, while its parent_tracking_id keeps the lineage. The join locates on the decision.
+// Fails if the parent walk still wins when decision_survey_id names a survey.
+START_SECTION(scan_commands_join_prefers_decision_survey_id)
+{
+  auto rows = ScanCommandJoin::parse(writeCommandsFile("scj_t11b", {kCmdHeader, kS32, kS33, withCell(kM37, "decision_survey_id", "!!>")}));
+  auto located = ScanCommandJoin::join(realScans(), rows);
+  ABORT_IF(located.count(37) == 0)
+  TEST_EQUAL(located[37].row.parent_tracking_id, std::string("!!="))   // the walk would land on scan 32
+  TEST_EQUAL(located[37].parent_scan_number, 33)
+}
+END_SECTION
+
+// T11c -- a run folder written before the column has no decision_survey_id at all: the walk answers, exactly as
+// before (T10 / T11 on the file as it was written).
+// Fails if the column became required, or if its absence changes a located survey.
+START_SECTION(scan_commands_join_falls_back_to_the_walk_without_the_column)
+{
+  Cells c40 = withCell(withCell(withCell(withCell(kM37, "tracking_id", "!!C"), "scan_type", "conditional"),
+                                "parent_tracking_id", "!!B"), "scan_description", "!!CC5.30533k@10");
+  auto rows = ScanCommandJoin::parse(writeCommandsFile("scj_t11c", {withoutDecisionColumns(kCmdHeader), withoutDecisionColumns(kS32),
+                                                                   withoutDecisionColumns(kS33), withoutDecisionColumns(kM37),
+                                                                   withoutDecisionColumns(c40)}));
+  auto scans = realScans();
+  scans.push_back(scanOf(40, 2, "!!CC5.30533k@10", {531.790649}));
+  auto located = ScanCommandJoin::join(scans, rows);
+  TEST_EQUAL(located.size(), 2)
+  ABORT_IF(located.count(37) == 0 || located.count(40) == 0)
+  TEST_EQUAL(located[37].parent_scan_number, 32)
+  TEST_EQUAL(located[40].parent_scan_number, 32)   // through !!B, up to !!=
+  TEST_TRUE(std::abs(located[37].row.mono_mass - 5305.33) < 1e-9)
 }
 END_SECTION
 

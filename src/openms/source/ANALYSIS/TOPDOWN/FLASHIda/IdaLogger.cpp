@@ -103,6 +103,10 @@ namespace OpenMS
                              // scan_commands column indices, all <= 30, so slots 31/32 are the only pair of positions
                              // that satisfies both.
                              << "first_mass\tlast_mass\t"
+                             // Survey re-planning: the survey whose ranking last chose the command (it may be newer
+                             // than parent_tracking_id, the lineage) and the purity of its window on that survey.
+                             // Empty on every row no survey decided. Same gap as above, for the same reason.
+                             << "decision_survey_id\tisolation_purity\t"
                              << "enqueue_ts\n";
         commands_tsv_stream_.flush();
       }
@@ -226,7 +230,8 @@ namespace OpenMS
   void IdaLogger::writeIDALogEntry(double rt, int tracking_id, int instrument_scan_number,
                                     const std::vector<ScanCommand>& ms2_commands,
                                     const std::vector<const PeakGroup*>& ms2_sources,
-                                    const DeconvolvedSpectrum& all_peak_groups)
+                                    const DeconvolvedSpectrum& all_peak_groups,
+                                    const std::vector<int>& superseded)
   {
     if (!ida_log_stream_.is_open()) return;
     // After the is_open() check, so a run with no log_dir pays nothing at all.
@@ -259,6 +264,17 @@ namespace OpenMS
                     << " RT " << std::fixed << std::setprecision(4) << rt
                     << " (Access ID " << tracking_id_str << ") - "
                     << ms2_commands.size() << " targets\n";
+
+    // Survey re-planning: the waiting commands this survey's re-plan dropped. ida.log stays a decision-time record,
+    // so their Mass= lines stand in the older entries that decided them; this line is what tells the target-log
+    // loader not to count them. Space-joined: the id alphabet has no space and does contain ';'.
+    if (!superseded.empty())
+    {
+      ida_log_stream_ << "Superseded=";
+      for (size_t i = 0; i < superseded.size(); ++i)
+        ida_log_stream_ << (i > 0 ? " " : "") << ScanCommandQueue::encode(superseded[i]);
+      ida_log_stream_ << "\n";
+    }
 
     // Indexed, not range-for: ms2_sources is index-parallel to ms2_commands.
     for (size_t ci = 0; ci < ms2_commands.size(); ++ci)
@@ -318,7 +334,8 @@ namespace OpenMS
                         << cmd.charge_score << ","
                         << cmd.ppm_error << "]"
                       << "\tChargeRange=[" << z_lo << "-" << z_hi << "]"
-                      << "\tHCD=" << cmd.hcd_energy << "\n";
+                      << "\tHCD=" << cmd.hcd_energy
+                      << "\tID=" << ScanCommandQueue::encode(cmd.scan_id) << "\n";   // what a later Superseded= names
     }
 
     // AllMass line
@@ -345,7 +362,8 @@ namespace OpenMS
     return roleNameOf(cmd);
   }
 
-  void IdaLogger::writeScanCommandRow(const ScanCommand& cmd, int precursor_id, const std::string& ms3_proteoform)
+  void IdaLogger::writeScanCommandRow(const ScanCommand& cmd, int precursor_id, const std::string& ms3_proteoform,
+                                      const DecisionInfo* decision)
   {
     if (!commands_tsv_stream_.is_open()) return;
     // The one writer called from the instrument event thread. Its own lock, so it never queues
@@ -454,6 +472,14 @@ namespace OpenMS
       if (cmd.num_stages == 0) { return std::string("0"); }
       std::ostringstream os; os << std::fixed << std::setprecision(4) << v0; if (cmd.msn_level == 3) { os << ';' << v1; } return os.str();
     };
+    // The decision columns. Tracking id 0 is never issued, so 0 means no survey; a purity below 0 is
+    // windowPurity's "not measurable" and is left empty rather than logged as a fraction it is not.
+    std::string decision_survey, isolation_purity;
+    if (decision != nullptr && decision->decision_survey_id > 0)
+    {
+      decision_survey = ScanCommandQueue::encode(decision->decision_survey_id);
+      if (decision->isolation_purity >= 0.0) { isolation_purity = mz(decision->isolation_purity); }
+    }
     commands_tsv_stream_ << id_str << "\t"
                          << scan_type << "\t"
                          << cmd.msn_level << "\t"
@@ -487,6 +513,8 @@ namespace OpenMS
                          << cmd.faims_enabled << "\t"     // 0/1; disambiguates CV 0 from no FAIMS
                          << mz(cmd.first_mass) << "\t"    // ADR-0026 d6: 0 = unset (instrument method default), a real value
                          << mz(cmd.last_mass) << "\t"
+                         << decision_survey << "\t"
+                         << isolation_purity << "\t"
                          << cmd.enqueue_timestamp_ms << "\n";
     commands_tsv_stream_.flush();
   }

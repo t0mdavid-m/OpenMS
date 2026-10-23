@@ -30,6 +30,8 @@
 
 #include <OpenMS/CONCEPT/ClassTest.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/FragmentAnalysis.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 
 #include "FLASHIda_TestHelpers.h"
 
@@ -199,10 +201,12 @@ START_SECTION(schema_column_counts)
   auto r = TSVFile::parse(dir + "/scan_results.tsv");
   auto i = TSVFile::parse(dir + "/identification.tsv");
 
-  TEST_EQUAL(c.headers.size(), 34)   // E6: + scan_description; P5: + precursor_id; + ms3_proteoform (wide MS3 fragment); ADR-0012: + faims_enabled;
+  TEST_EQUAL(c.headers.size(), 36)   // E6: + scan_description; P5: + precursor_id; + ms3_proteoform (wide MS3 fragment); ADR-0012: + faims_enabled;
                                      // ADR-0026 d6: + first_mass/last_mass (32 -> 34). Inserted between faims_enabled and
                                      // enqueue_ts, so every c.colIndex pinned below and c.headers.back() are unchanged --
                                      // that they still pass IS the proof the insertion point was the only admissible one.
+                                     // Survey re-planning: + decision_survey_id/isolation_purity (34 -> 36), in the same
+                                     // gap before enqueue_ts and for the same reason.
   // E5: + ms_level; F5: + winner_tracking_id; slim-down: -5 id-payload cols (34->29); per-charge
   // deconv output replaced 4 columns (masses/intensities/min_charge/max_charge) with 3
   // (masses/charges/intensities), min and max being derivable from the charge list (29->28); then
@@ -258,6 +262,8 @@ START_SECTION(schema_column_counts)
   // is the one position that adds a column without invalidating an existing pin.
   TEST_EQUAL(c.colIndex("faims_cv"), 29)
   TEST_EQUAL(c.colIndex("faims_enabled"), 30)
+  TEST_EQUAL(c.colIndex("decision_survey_id"), 33)
+  TEST_EQUAL(c.colIndex("isolation_purity"), 34)
   TEST_EQUAL(r.headers.front(), std::string("tracking_id"))
   TEST_EQUAL(r.colIndex("ms_level"), 1)
   TEST_EQUAL(r.headers.back(), std::string("energy_source"))  // ADR-0047: the kinetic block follows the consensus one
@@ -645,6 +651,117 @@ START_SECTION(commands_exploration_marker)
     }
   }
   TEST_TRUE(found_expl)  // exploration CE-sweep variants overwrite the desc marker to 'E'
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
+// §C(decision) -- decision_survey_id / isolation_purity on every survey-decided MS2 (survey re-planning)
+/////////////////////////////////////////////////////////////
+START_SECTION(decision_columns_on_every_survey_decided_ms2)
+{
+  // A command a survey DECIDED is one that survey's scan_results row lists in child_ids: the commands its plan
+  // put in the queue, a re-planned remainder included (under the survey that re-planned it). Every such MS2
+  // names that survey in decision_survey_id, and its isolation_purity is the purity of its own window on that
+  // survey's raw spectrum -- recomputed here from the fixture the drive fed for that id, so the logged value is
+  // checked against the decision's input rather than against itself. Every other row -- MS1, MS3, a sweep's
+  // production follow-up -- was decided by no survey and leaves both cells empty.
+  struct Counts { int decided = 0, decided_expl = 0, undecided_ms2 = 0, ms3 = 0; };
+  auto check = [](const std::string& dir, const AcqResult& acq, const std::vector<ScanData>& ms1) {
+    Counts n;
+    std::map<std::string, const ScanData*> spectrum_of;   // survey tracking id -> the spectrum fed for it
+    for (size_t k = 0; k < acq.ms1_cmds.size() && k < ms1.size(); ++k)
+      spectrum_of[ScanCommandQueue::encode(acq.ms1_cmds[k].scan_id)] = &ms1[k];
+    std::map<std::string, ScanCommand> cmd_of;           // the dequeued command, at full double precision
+    for (const auto& c : acq.all_cmds) cmd_of[ScanCommandQueue::encode(c.scan_id)] = c;
+
+    auto res = TSVFile::parse(dir + "/scan_results.tsv");
+    auto cmds = TSVFile::parse(dir + "/scan_commands.tsv");
+    std::map<std::string, std::string> decided_by;       // child id -> the survey that listed it
+    for (const auto& row : res.rows)
+    {
+      if (cell(res, row, "ms_level") != "1") continue;
+      for (const auto& kid : splitTokens(cell(res, row, "child_ids"), ' '))
+        decided_by[kid] = cell(res, row, "tracking_id");
+    }
+
+    for (const auto& row : cmds.rows)
+    {
+      const std::string id = cell(cmds, row, "tracking_id");
+      const std::string survey = cell(cmds, row, "decision_survey_id");
+      const std::string purity = cell(cmds, row, "isolation_purity");
+      const int level = std::atoi(cell(cmds, row, "ms_level").c_str());
+      const auto d = decided_by.find(id);
+      if (level != 2 || d == decided_by.end())
+      {
+        if (level == 2) n.undecided_ms2++;
+        if (level == 3) n.ms3++;
+        TEST_TRUE(survey.empty())
+        TEST_TRUE(purity.empty())
+        continue;
+      }
+      n.decided++;
+      const std::string type = cell(cmds, row, "scan_type");
+      if (type == "exploration") n.decided_expl++;
+      TEST_TRUE(type == "recording" || type == "quantification" || type == "exploration")   // R / Q / E
+      TEST_EQUAL(survey, d->second)
+      TEST_TRUE(!purity.empty())
+      const double logged = toD(purity);
+      TEST_TRUE(inUnit(logged))
+
+      const auto s = spectrum_of.find(survey);
+      const auto c = cmd_of.find(id);
+      TEST_TRUE(s != spectrum_of.end() && c != cmd_of.end())
+      if (s == spectrum_of.end() || c == cmd_of.end()) continue;
+      MSSpectrum raw;
+      for (size_t i = 0; i < s->second->mzs.size(); ++i)
+        if (s->second->ints[i] > 0) raw.emplace_back(s->second->mzs[i], s->second->ints[i]);
+      const ScanCommand& cmd = c->second;
+      const double half = cmd.stages[0].isolation_width / 2.0;
+      const double expected = FragmentAnalysis::windowPurity(raw, cmd.stages[0].precursor_mz - half,
+                                                             cmd.stages[0].precursor_mz + half, cmd.precursor_intensity);
+      // Written at four decimals: half a unit in the last place, plus rounding slack.
+      const bool same = std::abs(logged - expected) <= 6e-5;
+      if (!same) std::cout << "[DECISION] id=" << id << " logged=" << purity << " expected=" << expected << std::endl;
+      TEST_TRUE(same)
+    }
+    return n;
+  };
+
+  // 1) Regular MS2 + MS3 (cytC, inclusion, ambiguity): R rows decided, MS3 rows not.
+  {
+    auto ms1 = loadTsvScans(FI_MS1_CYTC);
+    auto ms2 = loadTsvScans(FI_MS2_CYTC);
+    ABORT_IF(ms1.empty() || ms2.empty())
+    const std::string dir = freshLogDir("lf_decision_regular");
+    std::string json = buildJsonWithLogDir(dir, true);
+    FLASHIda ida(const_cast<char*>(json.c_str()));
+    const int budget = 256 + 64 * static_cast<int>(ms1.size() + ms2.size());
+    AcqResult acq = runInterleaved(&ida, ms1, ms2, nullptr, budget);
+    const Counts n = check(dir, acq, ms1);
+    TEST_TRUE(n.decided > 0)   // vacuity guards: both row shapes must occur
+    TEST_TRUE(n.ms3 > 0)
+  }
+
+  // 2) An MS2 sweep closed by a production follow-up: E variants decided, the follow-up not.
+  {
+    auto ms1 = loadTsvScans(CYTC_MS1);
+    auto ms2 = loadTsvScans(CYTC_MS2);
+    ABORT_IF(ms1.empty() || ms2.empty())
+    std::string cfg = inclusionPinCytc(ms3SelectionOnlyConfig());
+    {
+      auto p = cfg.find("\"metric\": \"mass_count\"");
+      ABORT_IF(p == std::string::npos)
+      cfg.insert(p, "\"overrides\": { \"analyzer\": \"Orbitrap\" }, ");   // non-empty overrides -> production follow-up
+    }
+    const std::string dir = freshLogDir("lf_decision_sweep");
+    cfg = injectRuntime(cfg, dir);
+    FLASHIda ida(const_cast<char*>(cfg.c_str()));
+    const int budget = 256 + 64 * static_cast<int>(ms1.size() + 1);
+    AcqResult acq = runInterleaved(&ida, ms1, std::vector<ScanData>{ms2[0]}, nullptr, budget);
+    const Counts n = check(dir, acq, ms1);
+    TEST_TRUE(n.decided_expl > 0)
+    TEST_TRUE(n.undecided_ms2 > 0)
+  }
 }
 END_SECTION
 
@@ -1807,6 +1924,93 @@ START_SECTION(target_log_double_digit_target_count_is_not_skipped)
 END_SECTION
 
 /////////////////////////////////////////////////////////////
+// §F8c -- target-log reader : a superseded decision is not an observation (survey re-planning)
+/////////////////////////////////////////////////////////////
+START_SECTION(target_log_skips_superseded_masses)
+{
+  // A survey's re-plan can drop a waiting MS2 an older survey decided. That decision stays in the older
+  // entry's Mass= line (ida.log is a decision-time record), and the newer entry names it on a Superseded=
+  // line. The target_logs loader must not count it: in_depth's 1 - prod(1 - qscore) would otherwise read a
+  // command that was never acquired as an extra observation, and push the mass over tqscore_threshold.
+  //
+  // Same drive as the section above: rich ecoli surveys, rt_window 60, in_depth, ONE MS2 slot. Two
+  // observations at 0.7 give 0.91 > 0.9 and suppress `target`; one gives 0.7 and does not.
+  const std::string FI_MS1_ECOLI = "../../FlashIDA/test-data/spectra/ms1_ecoli_rich.txt";
+  auto ms1 = loadTsvScans(FI_MS1_ECOLI);
+  auto ms2 = loadTsvScans(FI_MS2_HCD);
+  ABORT_IF(ms1.empty() || ms2.empty())
+
+  auto cfg = [](const char* targeting, const std::string& target_log_json) {
+    std::ostringstream o;
+    o << R"({
+      "deconvolution": { "score_threshold": 0.0, "tqscore_threshold": 0.9, "min_charge": 4, "max_charge": 50, "min_mass": 500, "max_mass": 50000, "tol": [10, 10, 10] },
+      "precursor_selection": { "rt_window": 60, "targeting": ")" << targeting << R"(", "consider_all_charges": false, "strict_inclusion": false, "tie_threshold": 0.1, "rank_by": "qscore", "max_precursors": 1 },
+      "flashtnt": { "min_length": 3, "max_length": 8 },
+      "quantification": { "enabled": false, "reporter_mz_tol": 0.002, "fold_change_threshold": 1.4 },
+      "faims": { "cv_values": [], "max_cv_skip": 0 },
+      "ms_settings": { "ms1": { "analyzer": "Orbitrap", "first_mass": 500, "last_mass": 2000, "resolution": 120000, "agc_target": 800000, "max_it": 246 }, "ms2": { "analyzer": "Orbitrap", "activation": "HCD", "collision_energy": 29, "resolution": 120000 } },
+      "scheduling": { "cycle_time": { "enabled": false, "value_ms": 60000 }, "scan_timeout": { "enabled": false, "value_ms": 30000 }, "agc_interval_seconds": 999999 },
+      "files": { "target_logs": [)" << target_log_json << R"(], "fasta": "", "inclusion_list": "", "ptm_list": "" },
+      "characterization": { "mode": "off" }
+    })";
+    return o.str();
+  };
+  auto selectedMs2Masses = [&](const std::string& json, const std::string& tag) {
+    const std::string dir = freshLogDir(tag);
+    std::string full = injectRuntime(json, dir);
+    FLASHIda ida(const_cast<char*>(full.c_str()));
+    runFullCycle(&ida, ms1, ms2);
+    auto cmds = TSVFile::parse(dir + "/scan_commands.tsv");
+    std::vector<double> masses;
+    for (const auto& row : cmds.rows)
+      if (std::atoi(cell(cmds, row, "ms_level").c_str()) == 2)
+        masses.push_back(toD(cell(cmds, row, "mono_mass")));
+    return masses;
+  };
+  auto hasNear = [](const std::vector<double>& v, double t) {
+    for (double m : v) if (std::abs(m - t) < 0.5) return true;   // suppression is per-NOMINAL mass
+    return false;
+  };
+
+  auto dda = selectedMs2Masses(cfg("none", ""), "lf_f8c_dda");
+  ABORT_IF(dda.size() < 2)
+  const double target = dda[0];
+
+  // Two entries, each deciding `target` under its own command id (!!# then !!%). With @p supersede the
+  // second entry names the first decision on its Superseded= line, right after its header -- where the
+  // writer puts it.
+  auto writeLog = [&](const std::string& path, bool supersede) {
+    std::ofstream lg(path);
+    const char* ids[2] = {"!!#", "!!%"};
+    for (int i = 0; i < 2; i++)
+    {
+      lg << "MS1 Scan# " << (7 + i) << " RT 2.6000 (Access ID !!" << (i == 0 ? "\"" : "$") << ") - 1 targets\n";
+      if (supersede && i == 1) lg << "Superseded=!!#\n";
+      lg << "Mass=" << std::to_string(target) << "\tZ=4\tScore=0.70000"
+         << "\tWindow=[500.0000-501.0000]\tPrecursorIntensity=1.00000"
+         << "\tPrecursorMassIntensity=2.00000\tFeatures=[0.9,1.0,0.9,1.0,0.9,1.0]"
+         << "\tChargeRange=[4-6]\tHCD=0\tID=" << ids[i] << "\n";
+      lg << "AllMass=" << std::to_string(target) << "\n";
+    }
+  };
+
+  // CONTROL: both decisions stand -> two observations -> suppressed. Proves the ID= suffix leaves the
+  // Mass= line readable and that suppression is live here; without it the assertion below is vacuous.
+  const std::string log_kept = "lf_f8c_kept.log";
+  writeLog(log_kept, false);
+  TEST_TRUE(!hasNear(selectedMs2Masses(cfg("in_depth", "\"" + log_kept + "\""), "lf_f8c_kept"), target))
+
+  // The first decision superseded -> one observation at 0.7 -> below threshold -> `target` keeps the slot.
+  const std::string log_superseded = "lf_f8c_superseded.log";
+  writeLog(log_superseded, true);
+  TEST_TRUE(hasNear(selectedMs2Masses(cfg("in_depth", "\"" + log_superseded + "\""), "lf_f8c_superseded"), target))
+
+  std::remove(log_kept.c_str());
+  std::remove(log_superseded.c_str());
+}
+END_SECTION
+
+/////////////////////////////////////////////////////////////
 // [REMOVED §F9] results_ms3_fragment_and_tag_count_are_sentinel — asserted scan_results MS3
 //   fragment_count==-1 && tag_count==-1; both columns were removed in the scan_results slim-down
 //   (fragment_count derivable from identification.tsv ms3_fragments; tag_count dropped entirely).
@@ -2345,8 +2549,11 @@ START_SECTION(ida_log_target_line_precision_is_pinned)
         const std::size_t eq = part.find('=');
         if (eq != std::string::npos) fld[part.substr(0, eq)] = part.substr(eq + 1);
       }
-      TEST_EQUAL(fld.size(), 9)          // Mass Z Score Window PrecursorIntensity
-                                         // PrecursorMassIntensity Features ChargeRange HCD
+      TEST_EQUAL(fld.size(), 10)         // Mass Z Score Window PrecursorIntensity
+                                         // PrecursorMassIntensity Features ChargeRange HCD ID
+      // ID is the command's encoded tracking id, not a number: no precision applies to it, and since
+      // '.' is a letter of the base-94 alphabet it is pinned by shape rather than by decimalsOf.
+      TEST_TRUE(isTrackingId(fld["ID"]))
       TEST_EQUAL(decimalsOf(fld["Mass"]), 4)                       // == AllMass, byte for byte
       TEST_EQUAL(decimalsOf(fld["Z"]), 0)                          // int32_t
       TEST_EQUAL(decimalsOf(fld["Score"]), 5)

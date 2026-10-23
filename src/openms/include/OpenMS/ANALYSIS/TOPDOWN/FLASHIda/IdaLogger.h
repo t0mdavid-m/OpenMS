@@ -53,6 +53,8 @@
 namespace OpenMS
 {
 
+  struct DecisionInfo;
+
   /**
    * @brief Owns all FLASHIda output logging: the five append-only streams
    * (ida.log, scan_commands.tsv, scan_results.tsv, identification.tsv,
@@ -302,15 +304,23 @@ namespace OpenMS
     /// a lookup would pick one of several answers with nothing to notice. A short vector or a null
     /// entry falls back to the trigger charge, i.e. the pre-ADR-0035 output.
     /// @p rt is in MINUTES -- the unit the target-log loader reads back (ADR-0035, ADR-0051).
+    /// @p superseded are the tracking ids of waiting commands this survey's re-plan dropped. They were decided by
+    /// an earlier survey and logged in its entry, so they are named on a `Superseded=` line of THIS entry, right
+    /// after its header, and the target-log loader stops counting them as observations. Empty = no line.
+    /// Every Mass= line ends in `ID=` + the command's own tracking id, which is what such a line names.
     void writeIDALogEntry(double rt, int tracking_id, int instrument_scan_number,
                           const std::vector<ScanCommand>& ms2_commands,
                           const std::vector<const PeakGroup*>& ms2_sources,
-                          const DeconvolvedSpectrum& all_peak_groups);
+                          const DeconvolvedSpectrum& all_peak_groups,
+                          const std::vector<int>& superseded);
 
     /// Write one TSV row for a dequeued scan command. @p precursor_id is the per-MS1-selection
     /// identity for this command (sourced from the engine-side tracking_id->precursor_id map);
     /// 0 for commands with no precursor (MS1 / AGC) or an untracked id. No ScanCommand ABI change.
-    void writeScanCommandRow(const ScanCommand& cmd, int precursor_id = 0, const std::string& ms3_proteoform = "");
+    /// @p decision is what the survey that planned the command decided it on (survey re-planning): its
+    /// decision_survey_id and isolation_purity columns. Null -- a command no survey decided -- leaves both empty.
+    void writeScanCommandRow(const ScanCommand& cmd, int precursor_id = 0, const std::string& ms3_proteoform = "",
+                             const DecisionInfo* decision = nullptr);
 
     /// Write one TSV row for a processScan result (ms_level is logged at scan_results col 1)
     void writeScanResultRow(const ScanRowDescriptor& row);

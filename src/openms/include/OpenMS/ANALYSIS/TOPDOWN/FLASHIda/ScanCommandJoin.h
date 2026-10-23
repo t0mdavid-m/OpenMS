@@ -81,6 +81,9 @@ namespace OpenMS
     {
       std::string tracking_id;
       std::string parent_tracking_id;   ///< "" for a root command
+      /// The survey whose ranking last chose the command (survey re-planning): newer than the parent when a later
+      /// survey re-planned it. "" when no survey decided it, or the file predates the column.
+      std::string decision_survey_id;
       int ms_level = 0;
       // Everything below is filled for ms_level == 2 rows ONLY (ADR-0046 decision 8).
       double mono_mass = 0;             ///< the commanded precursor's monoisotopic mass
@@ -167,6 +170,9 @@ namespace OpenMS
         Row r;
         r.tracking_id = cell[col["tracking_id"]];
         r.parent_tracking_id = cell[col["parent_tracking_id"]];
+        // Optional: every file written before survey re-planning lacks it, and must keep parsing.
+        const auto decision_col = col.find("decision_survey_id");
+        if (decision_col != col.end()) { r.decision_survey_id = cell[decision_col->second]; }
         try
         {
           r.ms_level = String(cell[col["ms_level"]]).toInt();
@@ -287,9 +293,20 @@ namespace OpenMS
     /// "17,16,15" -> "17": the anchor comes first, its co-isolated notches after (ADR-0016).
     static std::string anchorOf_(const std::string& cell) { return cell.substr(0, cell.find(',')); }
 
-    /// Walk parent_tracking_id up the ROWS to the MS1 survey, then ask which spectrum carries that id.
+    /// The survey the command was DECIDED on, when the row names one; otherwise walk parent_tracking_id up the ROWS to
+    /// the MS1 survey. Either way, then ask which spectrum carries that id. A re-planned command keeps its lineage in
+    /// parent_tracking_id while a newer survey chose it, and that survey is the one whose PeakGroups match its window.
     static int surveyScanNumber_(const Row& row, const std::map<std::string, Row>& rows, const std::map<std::string, const Scan*>& scan_of)
     {
+      if (!row.decision_survey_id.empty())
+      {
+        auto r = rows.find(row.decision_survey_id);
+        if (r != rows.end() && r->second.ms_level == 1)
+        {
+          auto s = scan_of.find(row.decision_survey_id);
+          return s == scan_of.end() ? -1 : s->second->scan_number;
+        }
+      }
       std::string parent = row.parent_tracking_id;
       for (int hop = 0; hop < MAX_PARENT_HOPS && !parent.empty(); ++hop)
       {
