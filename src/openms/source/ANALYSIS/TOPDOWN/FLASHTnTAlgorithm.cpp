@@ -30,7 +30,9 @@
 #ifdef _OPENMP
   #include <omp.h>
 #endif
+#include <OpenMS/CHEMISTRY/EmpiricalFormula.h>
 #include <OpenMS/CHEMISTRY/ModificationsDB.h>
+#include <OpenMS/CHEMISTRY/ResidueDB.h>
 #include <OpenMS/CONCEPT/Constants.h>
 #include <OpenMS/CONCEPT/Exception.h>
 
@@ -96,6 +98,33 @@ UInt tntKey(const char* name)
     return k;
   }();
   return keys.at(name);
+}
+
+// The candidate proteoforms a blind shift opens on a protein: the windows (residue i to j) of @p sequence whose mass is within @p max_shift of
+// @p mass, each of which a shift would make fit; every window when the mass is unknown (<= 0). Without a shift only the windows at the
+// mass itself are candidates, so the count is the multiple-testing burden of a PrSM with a shift, as TopPIC counts its candidates by type.
+double shiftedCandidateCount(const String& sequence, double mass, double max_shift)
+{
+  const Size n = sequence.size();
+  if (n == 0) return 1.0;
+  if (mass <= 0) return (double)n * (double)(n + 1) / 2.0;
+  std::vector<double> prefix(n + 1, 0.0);
+  for (Size i = 0; i < n; i++)
+  {
+    const Residue* r = ResidueDB::getInstance()->getResidue((unsigned char)sequence[i]);
+    prefix[i + 1] = prefix[i] + (r != nullptr ? r->getMonoWeight(Residue::Internal) : 0.0);
+  }
+  static const double water = EmpiricalFormula("H2O").getMonoWeight();
+  double count = 0;
+  for (Size i = 0; i < n; i++)
+  {
+    // windows i..j-1 with prefix[j] in [prefix[i] + mass - water - max_shift, prefix[i] + mass - water + max_shift]
+    const double low = prefix[i] + mass - water - max_shift, high = prefix[i] + mass - water + max_shift;
+    const auto first = std::lower_bound(prefix.begin() + (long)i + 1, prefix.end(), low);
+    const auto last = std::upper_bound(first, prefix.end(), high);
+    count += (double)(last - first);
+  }
+  return std::max(1.0, count);
 }
 
 // mass and both termini known (unknown: -1)
@@ -4222,7 +4251,17 @@ void FLASHTnTAlgorithm::annotateOnRawSpectra_(std::vector<ProteinHit>& hits) con
     hit.setMetaValue(tntKey("RawMatchedFragments"), res.matched_fragments);
     hit.setMetaValue(tntKey("RawFragmentHypotheses"), res.fragment_hypotheses);
     hit.setMetaValue(tntKey("RawCoverage"), res.coverage);
-    hit.setScore(hit.getScore() + raw_score_weight_ * std::max(0.0, res.score));
+    // with a blind shift, the raw score's chance probability is multiplied by the candidates the shift opens (shiftedCandidateCount): a
+    // shift fits the precursor mass for any window within max_total_mod_mass_ of it, and absorbed the sequence differences of a similar
+    // protein. Before, a fixed extension penalty stood for it: on the B. theta entrapment the determined proteoforms with one shift held
+    // 15 B. theta of 2188, without one 6 of 1786 (and preferring PrSMs with a mass over those without took in 25 more, all with a shift).
+    double raw = std::max(0.0, res.score);
+    if (blindModCount_(hit) > 0)
+    {
+      const double mass = (double)hit.getMetaValue(tntKey("Mass"), -1.0);
+      raw = std::max(0.0, raw - std::log10(shiftedCandidateCount(hit.getSequence(), mass, max_total_mod_mass_)));
+    }
+    hit.setScore(hit.getScore() + raw_score_weight_ * raw);
   }
   OPENMS_LOG_INFO << "Raw spectra: " << raw_peaks_.size() << " loaded (" << raw_profile_count_ << " centroided); PrSMs annotated: " << annotated
                   << " of " << hits.size() << " (" << without_spectrum << " without their scan in the raw file)" << std::endl;
@@ -4230,13 +4269,20 @@ void FLASHTnTAlgorithm::annotateOnRawSpectra_(std::vector<ProteinHit>& hits) con
 
 void FLASHTnTAlgorithm::keepBestPerSpectrum_(std::vector<ProteinHit>& hits, const String& label, const String& score_name)
 {
+  // A PrSM whose proteoform fits the precursor mass (determined) is kept before one that does not, whatever their scores, as TopPIC
+  // reports only the former: a free blind shift on a PrSM without a mass took up the sequence differences of a similar protein and outscored
+  // the right one (B. theta entrapment, Eclip_1480 scan 9171: KPRS_ECOLI 243-315 at the MS1 mass 78, Q8A535_BACTN 1-799 without a mass 112).
+  const auto better = [](const ProteinHit& a, const ProteinHit& b) {
+    if (isDetermined(a) != isDetermined(b)) return isDetermined(a);
+    return isBetterPrSM(a, b);
+  };
   std::map<int, Size> best;
   for (Size i = 0; i < hits.size(); i++)
   {
     const int scan = hits[i].getMetaValue(tntKey("Scan"));
     auto it = best.find(scan);
     if (it == best.end()) best[scan] = i;
-    else if (isBetterPrSM(hits[i], hits[it->second])) it->second = i;
+    else if (better(hits[i], hits[it->second])) it->second = i;
   }
   // A PrSM without a mass is replaced by the best PrSM of the same spectrum and protein that has a mass and the same known termini: it is
   // the same proteoform, and the precursor mass confirms it. Its higher score is no evidence against it: the terminal paths are scored
