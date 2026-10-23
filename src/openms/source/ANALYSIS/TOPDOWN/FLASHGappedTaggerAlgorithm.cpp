@@ -186,7 +186,7 @@ void FLASHGappedTaggerAlgorithm::buildIndex(const std::vector<std::string>& prot
   std::vector<std::vector<std::uint64_t>> counts(n_chunks, std::vector<std::uint64_t>(n_bins, 0));
   // the start positions of the windows grouped by bin, ascending in each (staged for the bitmaps)
   std::vector<std::uint64_t> post_offsets;
-  std::vector<std::uint32_t> postings;
+  std::vector<std::uint32_t, DefaultInitAllocator<std::uint32_t>> postings; // written in full by the second pass before any read
   // first pass counts the windows per bin, the second fills the positions
   auto enumerate = [&](int chunk, bool fill) {
     auto& cursor = counts[chunk];
@@ -225,7 +225,10 @@ void FLASHGappedTaggerAlgorithm::buildIndex(const std::vector<std::string>& prot
     slot_[key] = (std::uint32_t)(post_offsets.size() - 1);
     post_offsets.push_back(cursor);
   }
-  postings.assign(post_offsets.back(), 0);
+  // not zero-filled: the second pass writes every element (it enumerates the windows the first pass counted), and its threads touch the
+  // pages first
+  postings.clear();
+  postings.resize(post_offsets.back());
 #pragma omp parallel for schedule(dynamic, 1) if (threads > 1)
   for (int c = 0; c < n_chunks; ++c) enumerate(c, true);
   counts.clear();

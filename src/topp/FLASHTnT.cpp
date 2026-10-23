@@ -9,6 +9,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHAnnotatorAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvAlgorithm.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHHugePages.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/ProteoformDatabase.h>
 #include <OpenMS/APPLICATIONS/TOPPBase.h>
@@ -29,6 +30,10 @@
 #include <chrono>
 #include <fstream>
 #include <set>
+#include <limits>
+#if defined(__GLIBC__)
+  #include <malloc.h>
+#endif
 
 using namespace OpenMS;
 using namespace std;
@@ -415,7 +420,6 @@ protected:
     }
     OPENMS_LOG_INFO << "Database read: " << fasta_entry.size() << " entries in "
                     << std::chrono::duration<double>(std::chrono::steady_clock::now() - db_read_start).count() << " s" << endl;
-    std::vector<ProteinHit> proteoform_hits;
     // Run here!
     OPENMS_LOG_INFO << "Processing : " << in_file << endl;
 
@@ -467,7 +471,7 @@ protected:
       });
     }
     tnt.run(map, fasta_entry, peff ? &database : nullptr);
-    tnt.getProteoforms(proteoform_hits);
+    const auto& proteoform_hits = tnt.getProteoforms();
 
     OPENMS_LOG_INFO << "FLASHTnT run complete. Now writing the results in output files ..." << endl;
     if (! out_tag_file.empty())
@@ -488,12 +492,17 @@ protected:
     }
     if (! out_protein_file.empty())
     {
-      std::vector<ProteinHit> protein_hits;
-      tnt.getProteinHits(protein_hits);
-      FLASHTnTFile::writeProteins(protein_hits, out_protein_stream);
+      FLASHTnTFile::writeProteins(tnt.getProteinHits(), out_protein_stream);
       out_protein_stream.close();
     }
 
+    // the results and the input are freed with all threads instead of by the serial destructors
+    tnt.releaseResults();
+#pragma omp parallel for schedule(dynamic, 64)
+    for (SignedSize i = 0; i < (SignedSize)map.size(); ++i)
+    {
+      map[i] = MSSpectrum();
+    }
     return EXECUTION_OK;
   }
 };
@@ -501,6 +510,13 @@ protected:
 // the actual main function needed to create an executable
 int main(int argc, const char** argv)
 {
+  useTransparentHugePages(argv);
+#if defined(__GLIBC__)
+  // Keep freed heap memory in the per-thread arenas instead of trimming it back to the kernel after every
+  // work item: trim, refault and heap regrowth serialise on the process-wide mmap lock at high thread counts.
+  mallopt(M_TRIM_THRESHOLD, std::numeric_limits<int>::max());
+  mallopt(M_TOP_PAD, 256 << 20);
+#endif
   TOPPFLASHTnT tool;
   return tool.main(argc, argv);
 }

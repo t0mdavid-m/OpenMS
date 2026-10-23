@@ -17,6 +17,8 @@
 #include <boost/math/special_functions/gamma.hpp>
 #include <OpenMS/ANALYSIS/ID/PeptideIndexing.h>
 #include <cmath>
+#include <algorithm>
+#include <limits>
 
 namespace OpenMS
 {
@@ -717,6 +719,62 @@ void FLASHTaggerAlgorithm::runMatching(std::vector<ProteinHit>& hits,
   }
 }
 
+namespace
+{
+// the match count and lambda of one shift (j: its index), and a bound of its score: -log10 P(Poisson(lam) = cntr) >= -log10 P(Poisson(lam) >= cntr)
+struct ShiftCount
+{
+  double bound;
+  double lam;
+  int cntr;
+  Size j;
+};
+
+// log(k!) for the bound (std::lgamma would write the global signgam from every thread)
+const std::vector<double>& logFactorials()
+{
+  static const std::vector<double> log_factorial = [] {
+    std::vector<double> t(4096, 0.0);
+    for (Size k = 2; k < t.size(); k++) t[k] = t[k - 1] + std::log((double)k);
+    return t;
+  }();
+  return log_factorial;
+}
+
+ShiftCount shiftCount(const int cntr, const double lambda, const Size j)
+{
+  const auto& log_factorial = logFactorials();
+  const double lam = std::max(lambda, 1e-12);
+  const double bound = cntr < (int)log_factorial.size() ? (lam - cntr * std::log(lam) + log_factorial[cntr]) / std::log(10.0)
+                                                        : std::numeric_limits<double>::infinity();
+  return {bound, lam, cntr, j};
+}
+
+// The best score (-log10 P) of the counted shifts and the match count of the first shift (in shift order) that has it, as when the tail
+// probabilities are evaluated in shift order with a strict ">" update. They (long double, the costly part) are evaluated in descending order of
+// their bound: the best shift tends to come first, and a shift whose bound is below the best (with a margin far above the rounding of either)
+// cannot reach it, nor can the shifts after it.
+double bestShiftScore(std::vector<ShiftCount>& counted, int* best_count)
+{
+  std::sort(counted.begin(), counted.end(), [](const ShiftCount& l, const ShiftCount& r) { return l.bound > r.bound; });
+  double best = 0;
+  Size best_j = 0;
+  for (const auto& c : counted)
+  {
+    if (best > 0 && c.bound + 1e-6 < best) break;
+    const double p = boost::math::gamma_p((double)c.cntr, c.lam); // P(Poisson(lambda) >= cntr)
+    const double log_p = -std::log10(std::max(p, 1e-300));
+    if (log_p > best || (log_p == best && best > 0 && c.j < best_j))
+    {
+      best = log_p;
+      best_j = c.j;
+      if (best_count != nullptr) *best_count = c.cntr;
+    }
+  }
+  return best;
+}
+} // namespace
+
 // The score of one side is the chance probability of its best shift, as -log10. For a shift, a mass whose shifted value lies on the
 // protein (0 .. the last residue sum) lands within its margin of one of the L residue sums by chance with probability
 // 2 * margin * L / (protein mass); lambda sums these over the masses. The match count k is compared with Poisson(lambda), and the
@@ -730,7 +788,8 @@ double FLASHTaggerAlgorithm::scoreShifts(const std::vector<double>& masses, cons
   if (count == 0 || residue_sums.size() < 2) return 0.0;
   const double protein_mass = residue_sums.back();
   const double density = (double)(residue_sums.size() - 1) / (density_mass > 0 ? density_mass : protein_mass);
-  double best = 0; // -log10 P
+  static thread_local std::vector<ShiftCount> counted; // per-worker scratch
+  counted.clear();
   for (Size j = 0; j < count; j++)
   {
     int cntr = 0;
@@ -751,14 +810,9 @@ double FLASHTaggerAlgorithm::scoreShifts(const std::vector<double>& masses, cons
       cntr++;
     }
     if (cntr == 0) continue;
-    const double p = boost::math::gamma_p((double)cntr, std::max(lambda, 1e-12)); // P(Poisson(lambda) >= cntr)
-    const double log_p = -std::log10(std::max(p, 1e-300));
-    if (log_p > best)
-    {
-      best = log_p;
-      if (best_count != nullptr) *best_count = cntr;
-    }
+    counted.push_back(shiftCount(cntr, lambda, j));
   }
+  const double best = bestShiftScore(counted, best_count); // -log10 P
   return std::max(0.0, best - std::log10((double)count));
 }
 
@@ -812,7 +866,8 @@ double FLASHTaggerAlgorithm::scoreShifts(const std::vector<double>& masses, cons
   const double* const sums = residue_sums.data();
   const std::uint32_t* const first = sum_index.data();
   const Size end = residue_sums.size();
-  double best = 0; // -log10 P
+  static thread_local std::vector<ShiftCount> counted; // per-worker scratch
+  counted.clear();
   for (Size j = 0; j < count; j++)
   {
     int cntr = 0;
@@ -841,14 +896,9 @@ double FLASHTaggerAlgorithm::scoreShifts(const std::vector<double>& masses, cons
       cntr++;
     }
     if (cntr == 0) continue;
-    const double p = boost::math::gamma_p((double)cntr, std::max(lambda, 1e-12)); // P(Poisson(lambda) >= cntr)
-    const double log_p = -std::log10(std::max(p, 1e-300));
-    if (log_p > best)
-    {
-      best = log_p;
-      if (best_count != nullptr) *best_count = cntr;
-    }
+    counted.push_back(shiftCount(cntr, lambda, j));
   }
+  const double best = bestShiftScore(counted, best_count); // -log10 P
   return std::max(0.0, best - std::log10((double)count));
 }
 

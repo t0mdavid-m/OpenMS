@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <exception>
 #include <sstream>
+#include <unordered_map>
 
 namespace OpenMS
 {
@@ -56,22 +57,59 @@ void FLASHTnTFile::writeProteinHeader(std::fstream& fs)
 
 void FLASHTnTFile::writeProteins(const std::vector<ProteinHit>& hits, std::fstream& fs)
 {
-  for (const auto& hit : hits)
+  // one line per candidate protein of every spectrum (hundreds of thousands): formatted in parallel blocks, written in order; the meta
+  // values by index, because a lookup by name takes the registry's critical section
+  auto& registry = MetaInfoInterface::metaRegistry();
+  const UInt mi_tag_indices = registry.registerName("TagIndices"), mi_rank = registry.registerName("ProteinRank"), mi_scan = registry.registerName("Scan"),
+             mi_matched_aa = registry.registerName("MatchedAA"), mi_description = registry.registerName("Description"),
+             mi_protein_length = registry.registerName("ProteinLength");
+  const SignedSize block_size = 2048;
+  const SignedSize block_count = ((SignedSize)hits.size() + block_size - 1) / block_size;
+  std::vector<std::string> lines(block_count);
+  std::vector<std::exception_ptr> errors(block_count);
+#pragma omp parallel for schedule(dynamic)
+  for (SignedSize b = 0; b < block_count; b++)
   {
-    const std::vector<int> tag_indices = hit.getMetaValue("TagIndices").toIntList();
-    fs << (int)hit.getMetaValue("ProteinRank") << "\t" << (int)hit.getMetaValue("Scan") << "\t" << hit.getAccession() << "\t"
-       << hit.getDescription() << "\t" << (hit.metaValueExists("ProteinLength") ? (Size)(int)hit.getMetaValue("ProteinLength") : hit.getSequence().size())
-       << "\t" << hit.getScore() << "\t" << tag_indices.size() << "\t"
-       << (int)hit.getMetaValue("MatchedAA") << "\t";
-    for (int ti : tag_indices) { fs << ti << ";"; }
-    fs << "\n";
+    try
+    {
+      std::stringstream ss; // the default formatting, as that of the file stream
+      for (SignedSize i = b * block_size; i < std::min((SignedSize)hits.size(), (b + 1) * block_size); i++)
+      {
+        const auto& hit = hits[i];
+        const std::vector<int> tag_indices = hit.getMetaValue(mi_tag_indices).toIntList();
+        ss << (int)hit.getMetaValue(mi_rank) << "\t" << (int)hit.getMetaValue(mi_scan) << "\t" << hit.getAccession() << "\t" << hit.getMetaValue(mi_description).toString()
+           << "\t" << (hit.metaValueExists(mi_protein_length) ? (Size)(int)hit.getMetaValue(mi_protein_length) : hit.getSequence().size()) << "\t"
+           << hit.getScore() << "\t" << tag_indices.size() << "\t" << (int)hit.getMetaValue(mi_matched_aa) << "\t";
+        for (int ti : tag_indices) { ss << ti << ";"; }
+        ss << "\n";
+      }
+      lines[b] = ss.str();
+    }
+    catch (...)
+    {
+      errors[b] = std::current_exception();
+    }
   }
+  // an error is rethrown before anything is written, as by the serial loop
+  for (const auto& e : errors)
+  {
+    if (e) std::rethrow_exception(e);
+  }
+  for (const auto& l : lines) fs << l;
 }
 
 void FLASHTnTFile::writeTags(const FLASHTnTAlgorithm& tnt, double flanking_mass_tol, std::fstream& fs)
 {
-  auto tags = std::vector<FLASHHelperClasses::Tag>();
-  tnt.getTags(tags);
+  const auto& tags = tnt.getTags();
+  const auto& proteoforms = tnt.getProteoforms();
+  const std::vector<int> no_hits;
+  // meta values by index: a lookup by name takes the registry's critical section, in every thread below
+  auto& registry = MetaInfoInterface::metaRegistry();
+  const UInt mi_description = registry.registerName("Description"), mi_index = registry.registerName("Index"),
+             mi_start = registry.registerName("StartPosition"), mi_end = registry.registerName("EndPosition"),
+             mi_mod_variable = registry.registerName("ModificationVariable"), mi_modifications = registry.registerName("Modifications"),
+             mi_mod_starts = registry.registerName("ModificationStarts"), mi_entry_start = registry.registerName("EntryStart"),
+             mi_entry_end = registry.registerName("EntryEnd");
 
   // the lines of the tags with PrSMs first, then those of the others, each in tag order; formatted in parallel by blocks of tags
   const int tag_count = (int)tags.size();
@@ -79,11 +117,6 @@ void FLASHTnTFile::writeTags(const FLASHTnTAlgorithm& tnt, double flanking_mass_
   const int block_count = (tag_count + block_size - 1) / block_size;
   std::vector<std::string> with_hits(block_count), without_hits(block_count);
   std::vector<std::exception_ptr> errors(block_count);
-  // read by index inside the parallel loop (a lookup by name takes the registry's critical section)
-  auto& registry = MetaInfoInterface::metaRegistry();
-  const UInt mi_mod_variable = registry.registerName("ModificationVariable"), mi_modifications = registry.registerName("Modifications"),
-             mi_mod_starts = registry.registerName("ModificationStarts"), mi_entry_start = registry.registerName("EntryStart"),
-             mi_entry_end = registry.registerName("EntryEnd");
 #pragma omp parallel for schedule(dynamic)
   for (int b = 0; b < block_count; b++)
   {
@@ -93,17 +126,18 @@ void FLASHTnTFile::writeTags(const FLASHTnTAlgorithm& tnt, double flanking_mass_
       for (int t = b * block_size; t < std::min(tag_count, (b + 1) * block_size); t++)
       {
         const auto& tag = tags[t];
-        auto hits = std::vector<ProteinHit>();
-        tnt.getProteoformHitsMatchedBy(tag, hits);
-        std::stringstream& ss = hits.empty() ? ss_without : ss_with;
+        const std::vector<int>* matched = tag.getIndex() < 0 ? nullptr : tnt.getProteoformIndicesMatchedBy(tag.getIndex());
+        const auto& hit_indices = matched == nullptr ? no_hits : *matched;
+        std::stringstream& ss = hit_indices.empty() ? ss_without : ss_with;
 
         String acc = "";
         String description = "";
         String hitindices = "";
         String positions = "";
         String delta_masses = "";
-        for (const auto& hit : hits)
+        for (const int hit_index : hit_indices)
         {
+          const auto& hit = proteoforms[hit_index];
           if (! hitindices.empty()) {
             acc += ";";
             description += ";";
@@ -114,18 +148,18 @@ void FLASHTnTFile::writeTags(const FLASHTnTAlgorithm& tnt, double flanking_mass_
 
           acc += hit.getAccession();
 
-          String proteindescription = hit.getDescription();
+          String proteindescription = hit.getMetaValue(mi_description).toString(); // as getDescription()
           if (proteindescription.empty()) { proteindescription = " "; }
           description += proteindescription;
-          hitindices += (String)hit.getMetaValue("Index");
+          hitindices += (String)hit.getMetaValue(mi_index);
 
           auto pos = std::vector<int>();
           auto masses = std::vector<double>();
           auto pos_in_truncated = std::vector<int>();
           auto masses_in_truncated = std::vector<double>();
 
-          int protein_start_position = hit.getMetaValue("StartPosition");
-          int protein_end_position = hit.getMetaValue("EndPosition");
+          int protein_start_position = hit.getMetaValue(mi_start);
+          int protein_end_position = hit.getMetaValue(mi_end);
           protein_start_position--;
           String seq = hit.getSequence();
           // the proteoform's residues [first, last): an open terminus bounded by the database entry's processed form (EntryStart, EntryEnd
@@ -204,13 +238,30 @@ void FLASHTnTFile::writeTags(const FLASHTnTAlgorithm& tnt, double flanking_mass_
 
 namespace
 {
+  /// the registry index of a meta value name of the PrSM output, registered once: a lookup by name takes the registry's critical section,
+  /// which serialised the writers (the map is read-only after its construction, so threads share it without a lock)
+  OpenMS::UInt prsmKey(const char* name)
+  {
+    static const std::unordered_map<std::string, OpenMS::UInt> keys = [] {
+      auto& registry = OpenMS::MetaInfoInterface::metaRegistry();
+      std::unordered_map<std::string, OpenMS::UInt> k;
+      for (const char* n : {"ChimericRound", "DecoyPrecursor", "Description", "EndPosition", "ExtensionScore", "FDRClass", "GappedTag", "GivenMass", "Index", "Mass", "MatchedAA", "MatchedMassIndices", "ModificationACCs", "ModificationEnds", "ModificationIDs", "ModificationStarts", "ModificationVariable", "Modifications", "NumMass", "PrecursorLadder", "PrecursorSNR", "PrecursorScore", "ProteinQvalue", "ProteoformIndex", "ProteoformMassByFragmentMass", "RT", "RawCoverage", "RawFragmentHypotheses", "RawMatchedFragments", "RawScore", "RemovedMasses", "ResidualNullScore", "ResidualScoreRatio", "Scan", "SlidingLadder", "StartPosition", "TagIndices", "TerminalLadder", "proqvalue", "qvalue"})
+        k.emplace(n, registry.registerName(n));
+      return k;
+    }();
+    return keys.at(name);
+  }
+} // namespace
+
+namespace
+{
   /// where the candidate protein of a hit came from
   String candidateSource(const OpenMS::ProteinHit& hit)
   {
-    if (hit.metaValueExists("PrecursorLadder")) return "precursor ladder";
-    if (hit.metaValueExists("TerminalLadder")) return "terminal ladder";
-    if (hit.metaValueExists("SlidingLadder")) return "sliding ladder";
-    if (hit.metaValueExists("GappedTag")) return "gapped tag";
+    if (hit.metaValueExists(prsmKey("PrecursorLadder"))) return "precursor ladder";
+    if (hit.metaValueExists(prsmKey("TerminalLadder"))) return "terminal ladder";
+    if (hit.metaValueExists(prsmKey("SlidingLadder"))) return "sliding ladder";
+    if (hit.metaValueExists(prsmKey("GappedTag"))) return "gapped tag";
     return "sequence tag";
   }
 
@@ -218,8 +269,8 @@ namespace
   OpenMS::String modVariable(const OpenMS::ProteinHit& hit)
   {
     OpenMS::String out;
-    if (! hit.metaValueExists("ModificationVariable")) return out;
-    for (int v : hit.getMetaValue("ModificationVariable").toIntList())
+    if (! hit.metaValueExists(prsmKey("ModificationVariable"))) return out;
+    for (int v : hit.getMetaValue(prsmKey("ModificationVariable")).toIntList())
     {
       if (! out.empty()) out += ";";
       out += v == 2 ? "2" : (v != 0 ? "1" : "0");
@@ -244,11 +295,11 @@ namespace
   OpenMS::String rawColumns(const OpenMS::ProteinHit& hit)
   {
     OpenMS::String out = "\t";
-    out += OpenMS::String(hit.metaValueExists("ExtensionScore") ? (double)hit.getMetaValue("ExtensionScore") : hit.getScore());
-    out += "\t" + OpenMS::String(hit.metaValueExists("RawScore") ? (double)hit.getMetaValue("RawScore") : -1.0);
-    out += "\t" + OpenMS::String(hit.metaValueExists("RawMatchedFragments") ? (int)hit.getMetaValue("RawMatchedFragments") : -1);
-    out += "\t" + OpenMS::String(hit.metaValueExists("RawFragmentHypotheses") ? (int)hit.getMetaValue("RawFragmentHypotheses") : -1);
-    out += "\t" + OpenMS::String(hit.metaValueExists("RawCoverage") ? (double)hit.getMetaValue("RawCoverage") : -1.0);
+    out += OpenMS::String(hit.metaValueExists(prsmKey("ExtensionScore")) ? (double)hit.getMetaValue(prsmKey("ExtensionScore")) : hit.getScore());
+    out += "\t" + OpenMS::String(hit.metaValueExists(prsmKey("RawScore")) ? (double)hit.getMetaValue(prsmKey("RawScore")) : -1.0);
+    out += "\t" + OpenMS::String(hit.metaValueExists(prsmKey("RawMatchedFragments")) ? (int)hit.getMetaValue(prsmKey("RawMatchedFragments")) : -1);
+    out += "\t" + OpenMS::String(hit.metaValueExists(prsmKey("RawFragmentHypotheses")) ? (int)hit.getMetaValue(prsmKey("RawFragmentHypotheses")) : -1);
+    out += "\t" + OpenMS::String(hit.metaValueExists(prsmKey("RawCoverage")) ? (double)hit.getMetaValue(prsmKey("RawCoverage")) : -1.0);
     return out;
   }
 
@@ -256,11 +307,11 @@ namespace
   OpenMS::String chimericColumns(const OpenMS::ProteinHit& hit)
   {
     OpenMS::String out = "\t";
-    out += OpenMS::String(hit.metaValueExists("ChimericRound") ? (int)hit.getMetaValue("ChimericRound") : 0);
-    out += "\t" + OpenMS::String(hit.metaValueExists("MatchedMassIndices") ? (int)hit.getMetaValue("MatchedMassIndices").toIntList().size() : -1);
-    out += "\t" + OpenMS::String(hit.metaValueExists("RemovedMasses") ? (int)hit.getMetaValue("RemovedMasses") : 0);
-    out += "\t" + OpenMS::String(hit.metaValueExists("ResidualNullScore") ? (double)hit.getMetaValue("ResidualNullScore") : -1.0);
-    out += "\t" + OpenMS::String(hit.metaValueExists("ResidualScoreRatio") ? (double)hit.getMetaValue("ResidualScoreRatio") : -1.0);
+    out += OpenMS::String(hit.metaValueExists(prsmKey("ChimericRound")) ? (int)hit.getMetaValue(prsmKey("ChimericRound")) : 0);
+    out += "\t" + OpenMS::String(hit.metaValueExists(prsmKey("MatchedMassIndices")) ? (int)hit.getMetaValue(prsmKey("MatchedMassIndices")).toIntList().size() : -1);
+    out += "\t" + OpenMS::String(hit.metaValueExists(prsmKey("RemovedMasses")) ? (int)hit.getMetaValue(prsmKey("RemovedMasses")) : 0);
+    out += "\t" + OpenMS::String(hit.metaValueExists(prsmKey("ResidualNullScore")) ? (double)hit.getMetaValue(prsmKey("ResidualNullScore")) : -1.0);
+    out += "\t" + OpenMS::String(hit.metaValueExists(prsmKey("ResidualScoreRatio")) ? (double)hit.getMetaValue(prsmKey("ResidualScoreRatio")) : -1.0);
     return out;
   }
 } // namespace
@@ -277,7 +328,7 @@ void FLASHTnTFile::setGlobalFixedModifications(const String& proforma_prefix)
 
 String FLASHTnTFile::getProFormaString(const ProteinHit& hit)
 {
-  const int start = hit.getMetaValue("StartPosition"), end = hit.getMetaValue("EndPosition");
+  const int start = hit.getMetaValue(prsmKey("StartPosition")), end = hit.getMetaValue(prsmKey("EndPosition"));
   const String& sequence = hit.getSequence();
   if (start <= 0 || end <= 0 || end < start || end > (int)sequence.size()) return "";
   const int offset = start - 1, length = end - offset;
@@ -300,14 +351,14 @@ String FLASHTnTFile::getProFormaString(const ProteinHit& hit)
     String fixed_accession; // a fixed modification of the database entry (ModificationVariable 2): its accession; else empty
   };
   std::vector<Entry> entries;
-  if (hit.metaValueExists("Modifications"))
+  if (hit.metaValueExists(prsmKey("Modifications")))
   {
-    const std::vector<double> masses = hit.getMetaValue("Modifications");
-    const std::vector<int> starts = hit.getMetaValue("ModificationStarts");
-    const std::vector<int> ends = hit.getMetaValue("ModificationEnds");
-    const std::vector<String> ids = hit.metaValueExists("ModificationIDs") ? hit.getMetaValue("ModificationIDs").toStringList() : std::vector<String>();
-    const std::vector<String> accs = hit.metaValueExists("ModificationACCs") ? hit.getMetaValue("ModificationACCs").toStringList() : std::vector<String>();
-    const std::vector<int> variable = hit.metaValueExists("ModificationVariable") ? (std::vector<int>)hit.getMetaValue("ModificationVariable").toIntList() : std::vector<int>();
+    const std::vector<double> masses = hit.getMetaValue(prsmKey("Modifications"));
+    const std::vector<int> starts = hit.getMetaValue(prsmKey("ModificationStarts"));
+    const std::vector<int> ends = hit.getMetaValue(prsmKey("ModificationEnds"));
+    const std::vector<String> ids = hit.metaValueExists(prsmKey("ModificationIDs")) ? hit.getMetaValue(prsmKey("ModificationIDs")).toStringList() : std::vector<String>();
+    const std::vector<String> accs = hit.metaValueExists(prsmKey("ModificationACCs")) ? hit.getMetaValue(prsmKey("ModificationACCs")).toStringList() : std::vector<String>();
+    const std::vector<int> variable = hit.metaValueExists(prsmKey("ModificationVariable")) ? (std::vector<int>)hit.getMetaValue(prsmKey("ModificationVariable")).toIntList() : std::vector<int>();
     for (Size i = 0; i < masses.size() && i < starts.size() && i < ends.size(); i++)
     {
       const int s = std::max(0, std::min(length - 1, std::min(starts[i], ends[i]) - offset));
@@ -397,16 +448,25 @@ String FLASHTnTFile::getProFormaString(const ProteinHit& hit)
 
 void OpenMS::FLASHTnTFile::writePrSMs(const std::vector<ProteinHit>& hits, std::fstream& fs, bool chimeric)
 {
-  std::stringstream ss;
-  for (const auto& hit : hits)
+  // the rows formatted in parallel, each into its own string, written in input order; an error is rethrown before anything is written, as
+  // by the serial loop
+  prsmKey("Index"); // the keys registered before the threads
+  std::vector<std::string> rows(hits.size());
+  std::vector<std::exception_ptr> errors(hits.size());
+#pragma omp parallel for schedule(dynamic, 64)
+  for (SignedSize h = 0; h < (SignedSize)hits.size(); h++)
   {
-    if (! hit.metaValueExists("Index")) continue;
+    const auto& hit = hits[h];
+    if (! hit.metaValueExists(prsmKey("Index"))) continue;
+    try
+    {
+    std::stringstream ss;
     String tagindices = "", modmasses = "", modstarts = "", modends = "", modids = "", modaccs = "";
 
     int cntr = 0;
     std::vector<FLASHHelperClasses::Tag> tags;
     std::vector<int> indices;
-    if (hit.metaValueExists("TagIndices")) indices = (std::vector<int>)hit.getMetaValue("TagIndices").toIntList();
+    if (hit.metaValueExists(prsmKey("TagIndices"))) indices = (std::vector<int>)hit.getMetaValue(prsmKey("TagIndices")).toIntList();
     for (const int& index : indices)
     {
       if (! tagindices.empty()) tagindices += ";";
@@ -414,11 +474,11 @@ void OpenMS::FLASHTnTFile::writePrSMs(const std::vector<ProteinHit>& hits, std::
       cntr++;
     }
 
-    std::vector<double> mod_masses = hit.getMetaValue("Modifications");
-    std::vector<int> mod_starts = hit.getMetaValue("ModificationStarts");
-    std::vector<int> mod_ends = hit.getMetaValue("ModificationEnds");
-    std::vector<String> mod_ids = hit.getMetaValue("ModificationIDs");
-    std::vector<String> mod_accs = hit.getMetaValue("ModificationACCs");
+    std::vector<double> mod_masses = hit.getMetaValue(prsmKey("Modifications"));
+    std::vector<int> mod_starts = hit.getMetaValue(prsmKey("ModificationStarts"));
+    std::vector<int> mod_ends = hit.getMetaValue(prsmKey("ModificationEnds"));
+    std::vector<String> mod_ids = hit.getMetaValue(prsmKey("ModificationIDs"));
+    std::vector<String> mod_accs = hit.getMetaValue(prsmKey("ModificationACCs"));
 
     for (size_t i = 0; i < mod_masses.size(); i++) // Fixed signed/unsigned comparison issue
     {
@@ -438,27 +498,37 @@ void OpenMS::FLASHTnTFile::writePrSMs(const std::vector<ProteinHit>& hits, std::
       modaccs += mod_accs[i];
     }
 
-    int start = hit.getMetaValue("StartPosition");
-    int end = hit.getMetaValue("EndPosition");
+    int start = hit.getMetaValue(prsmKey("StartPosition"));
+    int end = hit.getMetaValue(prsmKey("EndPosition"));
 
     const auto [start_in_seq, end_in_seq] = proteinSequenceRange(hit);
 
     // Use ProForma for sequence generation
     String proformaStr = getProFormaString(hit);
-    ss << hit.getMetaValue("Index") << "\t" << hit.getMetaValue("Scan") << "\t" << hit.getMetaValue("RT") << "\t" << hit.getMetaValue("NumMass")
-       << "\t" << hit.getAccession() << "\t" << hit.getDescription() << "\t" << hit.getMetaValue("GivenMass")  << "\t" << hit.getMetaValue("Mass") << "\t" << ((int)hit.getMetaValue("ProteoformMassByFragmentMass") > 0) << "\t" <<  hit.getSequence() << "\t"
-       << hit.getSequence().substr(start_in_seq, end_in_seq - start_in_seq) << "\t" << proformaStr << "\t" << hit.getMetaValue("MatchedAA") << "\t"
+    ss << hit.getMetaValue(prsmKey("Index")) << "\t" << hit.getMetaValue(prsmKey("Scan")) << "\t" << hit.getMetaValue(prsmKey("RT")) << "\t" << hit.getMetaValue(prsmKey("NumMass"))
+       << "\t" << hit.getAccession() << "\t" << hit.getMetaValue(prsmKey("Description")).toString() << "\t" << hit.getMetaValue(prsmKey("GivenMass"))  << "\t" << hit.getMetaValue(prsmKey("Mass")) << "\t" << ((int)hit.getMetaValue(prsmKey("ProteoformMassByFragmentMass")) > 0) << "\t" <<  hit.getSequence() << "\t"
+       << hit.getSequence().substr(start_in_seq, end_in_seq - start_in_seq) << "\t" << proformaStr << "\t" << hit.getMetaValue(prsmKey("MatchedAA")) << "\t"
        << 100.0 * hit.getCoverage() << "\t" << start << "\t" << end << "\t" << cntr << "\t" << tagindices << "\t" << mod_masses.size() << "\t"
-       << modmasses << "\t" << modids << "\t" << modaccs << "\t" << modstarts << "\t" << modends << "\t" << hit.getMetaValue("PrecursorScore")  << "\t" << hit.getMetaValue("PrecursorSNR")  << "\t" << hit.getScore() << "\t"
-       << std::to_string((hit.metaValueExists("qvalue") ? (double)hit.getMetaValue("qvalue") : -1)) << "\t"
-       << std::to_string((hit.metaValueExists("proqvalue") ? (double)hit.getMetaValue("proqvalue") : -1)) << "\t"
-       << (hit.metaValueExists("ProteoformIndex") ? (int)hit.getMetaValue("ProteoformIndex") : -1) << "\t" << candidateSource(hit) << "\t"
-       << (hit.metaValueExists("FDRClass") ? hit.getMetaValue("FDRClass").toString() : String()) << "\t" << modVariable(hit) << "\t"
-       << (hit.metaValueExists("DecoyPrecursor") ? (double)hit.getMetaValue("DecoyPrecursor") : 0.0) << "\t"
-       << std::to_string(hit.metaValueExists("ProteinQvalue") ? (double)hit.getMetaValue("ProteinQvalue") : -1) << rawColumns(hit)
+       << modmasses << "\t" << modids << "\t" << modaccs << "\t" << modstarts << "\t" << modends << "\t" << hit.getMetaValue(prsmKey("PrecursorScore"))  << "\t" << hit.getMetaValue(prsmKey("PrecursorSNR"))  << "\t" << hit.getScore() << "\t"
+       << std::to_string((hit.metaValueExists(prsmKey("qvalue")) ? (double)hit.getMetaValue(prsmKey("qvalue")) : -1)) << "\t"
+       << std::to_string((hit.metaValueExists(prsmKey("proqvalue")) ? (double)hit.getMetaValue(prsmKey("proqvalue")) : -1)) << "\t"
+       << (hit.metaValueExists(prsmKey("ProteoformIndex")) ? (int)hit.getMetaValue(prsmKey("ProteoformIndex")) : -1) << "\t" << candidateSource(hit) << "\t"
+       << (hit.metaValueExists(prsmKey("FDRClass")) ? hit.getMetaValue(prsmKey("FDRClass")).toString() : String()) << "\t" << modVariable(hit) << "\t"
+       << (hit.metaValueExists(prsmKey("DecoyPrecursor")) ? (double)hit.getMetaValue(prsmKey("DecoyPrecursor")) : 0.0) << "\t"
+       << std::to_string(hit.metaValueExists(prsmKey("ProteinQvalue")) ? (double)hit.getMetaValue(prsmKey("ProteinQvalue")) : -1) << rawColumns(hit)
        << (chimeric ? chimericColumns(hit) : String()) << "\n";
+    rows[h] = ss.str();
+    }
+    catch (...)
+    {
+      errors[h] = std::current_exception();
+    }
   }
-  fs << ss.str();
+  for (const auto& e : errors)
+  {
+    if (e) std::rethrow_exception(e);
+  }
+  for (const auto& row : rows) fs << row;
 }
 
 void OpenMS::FLASHTnTFile::writeProteoforms(const std::vector<ProteinHit>& hits, std::fstream& fs, double pro_fdr, bool chimeric)

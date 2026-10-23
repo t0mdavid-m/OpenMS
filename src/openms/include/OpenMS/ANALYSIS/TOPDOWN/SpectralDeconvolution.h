@@ -143,6 +143,10 @@ namespace OpenMS
     */
     void setSharedAveragine_(std::shared_ptr<const PrecalculatedAveragine> avg);
 
+    /// frees the pooled per-spectrum arrays; the decoy instances of an FDR run call it after each spectrum, so a worker keeps one set
+    /// of pools instead of three
+    void releasePools();
+
     /// the averagine in use: the shared one if set, otherwise the own one
     const PrecalculatedAveragine& activeAveragine_() const noexcept
     {
@@ -284,6 +288,22 @@ namespace OpenMS
     };
     MassBinScratch_ mass_bin_scratch_;
 
+    /// Pools for the per-spectrum arrays (sized by the m/z bins, several MB, or by the peaks; the mass-bin state is mass_bin_scratch_) and
+    /// the candidate peak group vector:
+    /// an instance reuses their capacity from spectrum to spectrum instead of allocating (and faulting in) fresh pages every time. Only
+    /// the capacity carries over; every use refills them first, so the values are those of freshly constructed vectors.
+    std::vector<float> mz_intensities_pool_;
+    std::vector<double> exact_mz_positions_pool_;
+    std::vector<Size> mz_bin_index_reverse_pool_;
+    std::vector<Size> peak_bin_numbers_pool_;
+    std::vector<PeakGroup> candidate_pool_;
+
+    /// whether getCandidatePeakGroups_ scores each candidate as soon as it is built and keeps only those that pass (set per spectrum by
+    /// generatePeakGroupsFromSpectrum_: inside a parallel region, where the scoring loop runs serially anyway)
+    bool fused_scoring_ = false;
+    /// detection limit of the current spectrum (the intensity of its weakest positive peak), set by generatePeakGroupsFromSpectrum_
+    float detection_limit_ = 0;
+
     /** @brief static function that converts bin to value
         @param bin bin number
         @param min_value minimum value (corresponding to bin number = 0)
@@ -353,6 +373,9 @@ namespace OpenMS
 
     /// function for peak group scoring and filtering
     void scoreAndFilterPeakGroups_();
+
+    /// isotope/charge scoring of one candidate peak group (the first filter of scoreAndFilterPeakGroups_); true if it is kept
+    bool scorePeakGroup_(PeakGroup& peak_group);
 
     /// filter out charge error masses
     void removeChargeErrorPeakGroups_(DeconvolvedSpectrum& dspec, const PeakGroup::TargetDecoyType& target_decoy_type) const;

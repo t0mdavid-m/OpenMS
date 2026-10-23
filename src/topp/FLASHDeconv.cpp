@@ -8,12 +8,17 @@
 //#define TRAIN_OUT  //
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvAlgorithm.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHHugePages.h>
 #include <OpenMS/APPLICATIONS/TOPPBase.h>
 #include <OpenMS/FORMAT/FLASHDeconvFeatureFile.h>
 #include <OpenMS/FORMAT/FLASHDeconvSpectrumFile.h>
 #include <OpenMS/FORMAT/FileTypes.h>
 #include <OpenMS/FORMAT/MzMLFile.h>
 #include <QFileInfo>
+#include <limits>
+#if defined(__GLIBC__)
+  #include <malloc.h>
+#endif
 #ifdef TRAIN_OUT
   #include <OpenMS/ANALYSIS/TOPDOWN/Qscore.h>
 #endif
@@ -38,6 +43,10 @@ using namespace std;
   takes its own deconvolved mass for the commanded precursor from the MS1 spectrum that command was decided from.
 
 See https://openms.de/FLASHDeconv for more information.
+
+On Linux with glibc, FLASHDeconv (like FLASHTnT) re-executes itself once at start-up to put its heap on transparent huge pages
+(GLIBC_TUNABLES=glibc.malloc.hugetlb=1; ~20 % faster at high thread counts, identical output). Set FLASH_NO_HUGETLB to prevent this. With
+OpenMP thread binding (OMP_PROC_BIND, OMP_PLACES, GOMP_CPU_AFFINITY, KMP_AFFINITY) it is skipped; set GLIBC_TUNABLES yourself there.
 
 
 <B>The command line parameters of this tool are:</B>
@@ -326,16 +335,20 @@ protected:
       }
 
 
+#ifdef TRAIN_OUT
       for (auto& deconvolved_spectrum : deconvolved_spectra)
       {
         uint ms_level = deconvolved_spectrum.getOriginalSpectrum().getMSLevel();
         if (out_spec_file[ms_level - 1].empty()) continue;
         FLASHDeconvSpectrumFile::writeDeconvolvedMasses(deconvolved_spectrum, out_spec_streams[ms_level - 1], in_file, fd.getAveragine(), fd.getDecoyAveragine(),
                                                         tols[ms_level - 1], write_detail, report_decoy, fd.getNoiseDecoyWeight());
-#ifdef TRAIN_OUT
         Qscore::writeAttCsvForQscoreTraining(deconvolved_spectrum, out_train_streams[ms_level - 1]);
-#endif
       }
+#else
+      // the same rows in the same order, formatted in parallel (with report_FDR, the noise-decoy draws are replayed serially up front)
+      FLASHDeconvSpectrumFile::writeDeconvolvedMasses(deconvolved_spectra, out_spec_streams, out_spec_file, in_file, fd.getAveragine(), fd.getDecoyAveragine(), tols,
+                                                      write_detail, report_decoy, fd.getNoiseDecoyWeight());
+#endif
 
       for (Size i = 0; i < out_spec_file.size(); i++)
       {
@@ -435,6 +448,13 @@ protected:
 // the actual main function needed to create an executable
 int main(int argc, const char** argv)
 {
+  useTransparentHugePages(argv);
+#if defined(__GLIBC__)
+  // Keep freed heap memory in the per-thread arenas instead of trimming it back to the kernel after every
+  // spectrum: trim, refault and heap regrowth serialise on the process-wide mmap lock at high thread counts.
+  mallopt(M_TRIM_THRESHOLD, std::numeric_limits<int>::max());
+  mallopt(M_TOP_PAD, 256 << 20);
+#endif
   TOPPFLASHDeconv tool;
   return tool.main(argc, argv);
 }

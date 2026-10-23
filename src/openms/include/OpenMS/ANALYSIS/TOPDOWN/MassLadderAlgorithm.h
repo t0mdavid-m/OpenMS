@@ -10,6 +10,7 @@
 
 #include <OpenMS/CONCEPT/Types.h>
 #include <cstdint>
+#include <memory>
 #include <set>
 #include <string>
 #include <utility>
@@ -192,6 +193,11 @@ public:
   void searchSlidingLadders(const std::vector<double>& masses, double tol_ppm, Size top_n, const std::set<Size>& excluded,
                             std::vector<Candidate>& candidates) const;
 
+  /// searchSlidingLadders for many spectra (@p masses and @p excluded per spectrum) at once: the database is read once per batch of 64
+  /// spectra instead of once per spectrum; candidates[s] is what the search of spectrum s alone gives
+  void searchSlidingLadders(const std::vector<const std::vector<double>*>& masses, double tol_ppm, Size top_n,
+                            const std::vector<const std::set<Size>*>& excluded, std::vector<std::vector<Candidate>>& candidates) const;
+
   /// the number of runs of standard residues (segments) the precursor-ladder windows lie in
   Size getSegmentCount() const
   {
@@ -256,7 +262,8 @@ private:
   double prepared_tol_ppm_ = -1;
   std::vector<double> prepared_masses_;
   Size prepared_chunks_ = 0;
-  std::vector<PreparedWindow> prepared_windows_;
+  std::unique_ptr<PreparedWindow[]> prepared_windows_; // not value-initialized: written once, by the threads that fill it
+  Size prepared_window_count_ = 0;
   std::vector<std::uint32_t> prepared_offsets_;
 };
 } // namespace OpenMS

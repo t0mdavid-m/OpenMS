@@ -19,6 +19,33 @@
 
 namespace OpenMS
 {
+/// an allocator whose value-less construction leaves the element uninitialized (resize without zero-filling), for buffers that are
+/// written in full before they are read
+template<class T>
+struct DefaultInitAllocator : std::allocator<T>
+{
+  template<class U>
+  struct rebind
+  {
+    using other = DefaultInitAllocator<U>;
+  };
+  DefaultInitAllocator() noexcept = default;
+  template<class U>
+  DefaultInitAllocator(const DefaultInitAllocator<U>&) noexcept
+  {
+  }
+  template<class U>
+  void construct(U* p) noexcept(std::is_nothrow_default_constructible<U>::value)
+  {
+    ::new (static_cast<void*>(p)) U;
+  }
+  template<class U, class... Args>
+  void construct(U* p, Args&&... args)
+  {
+    ::new (static_cast<void*>(p)) U(std::forward<Args>(args)...);
+  }
+};
+
 /**
 @brief Gapped tags: protein candidates and anchors for spectra in which no sequence tag is found.
 

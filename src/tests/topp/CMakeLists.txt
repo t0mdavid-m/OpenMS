@@ -760,6 +760,15 @@ add_test("TOPP_FLASHDeconv_1" ${TOPP_BIN_PATH}/FLASHDeconv -test -in ${DATA_DIR_
 # Currently just testing if the tool runs
 # We cannot currently test the correctness of the tsv output
 # FuzzyDiff cannot give out tolerances/whitelist for tabular format outputs (.tsv)
+# The outputs must not depend on the thread count (spectra deconvolved, and spectrum tsv rows formatted, in parallel; with decoys, the
+# noise-decoy draws replayed per spectrum): one thread against four, the latter with OpenMP thread binding (no huge-page re-execution),
+# compared byte for byte (the sample input holds MS1 spectra only)
+add_test("TOPP_FLASHDeconv_2" ${TOPP_BIN_PATH}/FLASHDeconv -test -threads 1 -in ${DATA_DIR_TOPP}/FLASHDeconv_sample_input.mzML -FD:report_FDR -out FLASHDeconv_2.tmp.tsv -out_spec1 FLASHDeconv_2_ms1.tmp.tsv)
+add_test("TOPP_FLASHDeconv_3" ${TOPP_BIN_PATH}/FLASHDeconv -test -threads 4 -in ${DATA_DIR_TOPP}/FLASHDeconv_sample_input.mzML -FD:report_FDR -out FLASHDeconv_3.tmp.tsv -out_spec1 FLASHDeconv_3_ms1.tmp.tsv)
+set_tests_properties("TOPP_FLASHDeconv_3" PROPERTIES ENVIRONMENT "OMP_PROC_BIND=true")
+add_test("TOPP_FLASHDeconv_3_out1" ${CMAKE_COMMAND} -E compare_files FLASHDeconv_3.tmp.tsv FLASHDeconv_2.tmp.tsv)
+add_test("TOPP_FLASHDeconv_3_out2" ${CMAKE_COMMAND} -E compare_files FLASHDeconv_3_ms1.tmp.tsv FLASHDeconv_2_ms1.tmp.tsv)
+set_tests_properties("TOPP_FLASHDeconv_3_out1" "TOPP_FLASHDeconv_3_out2" PROPERTIES DEPENDS "TOPP_FLASHDeconv_2;TOPP_FLASHDeconv_3")
 
 #------------------------------------------------------------------------------
 # GNPSExport tests

@@ -8,6 +8,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/Qvalue.h>
+#include <algorithm>
 #include <cmath>
 
 namespace OpenMS
@@ -33,7 +34,9 @@ namespace OpenMS
     std::map<uint, std::vector<double>> score_map_target; // target PeakGroupScoring vector per ms level
     std::map<uint, std::vector<double>> score_signal_decoy_map; // signal decoy PeakGroupScoring vector per ms level
     std::map<uint, std::vector<double>> score_noise_decoy_map; // noise decoy PeakGroupScoring vector per ms level
-    std::map<uint, std::map<double, double>> qscore_qvalue_map; // mapping from qscore to qvalue
+    // qscore -> qvalue per ms level as two arrays, filled with the unique qscores in descending order (a std::map built from them in this
+    // insertion order is the former table)
+    std::map<uint, std::pair<std::vector<double>, std::vector<double>>> qscore_qvalue_arrays;
 
     // to calculate qvalues per ms level, store Qscores per ms level
     std::vector<bool> used_feature_indices; // the feature indices seen so far, by index
@@ -124,7 +127,9 @@ namespace OpenMS
       std::sort(scores_noise_decoy.rbegin(), scores_noise_decoy.rend());
 
       // now get the qvalues
-      auto& map_qvalue = qscore_qvalue_map[ms_level];
+      auto& [qscore_keys, qvalue_values] = qscore_qvalue_arrays[ms_level];
+      qscore_keys.reserve(scores_target.size());
+      qvalue_values.reserve(scores_target.size());
       double nom_i = 0, nom_c = 0, nom_n = 0;
       Size j_i = 0, j_n = 0;
 
@@ -151,7 +156,8 @@ namespace OpenMS
         nom_i += di;
         nom_c += dc;
         double tmp_q = (nom_i + nom_c + nom_n) / double(1 + i);
-        map_qvalue[ts] = std::min(1.0, tmp_q);
+        qscore_keys.push_back(ts);
+        qvalue_values.push_back(std::min(1.0, tmp_q));
       }
     }
 
@@ -159,25 +165,38 @@ namespace OpenMS
     for (const auto& titem : score_map_target)
     {
       uint ms_level = titem.first;
-      auto& map_qvalue = qscore_qvalue_map[ms_level];
+      auto& [qscore_keys, qvalue_values] = qscore_qvalue_arrays[ms_level];
+      bool key_nan = false;
+      for (double qs : qscore_keys) key_nan = key_nan || std::isnan(qs);
+      // the former table, built by the same insertions (needed only with a NaN among the keys or the qscores looked up below)
+      std::map<double, double> map_qvalue;
 
       double cummin = 1.0;
+      if (key_nan)
       {
+        for (Size k = 0; k < qscore_keys.size(); k++) map_qvalue[qscore_keys[k]] = qvalue_values[k];
         for (auto&& rit = map_qvalue.begin(); rit != map_qvalue.end(); ++rit)
         {
           cummin = std::min(rit->second, cummin);
           rit->second = cummin;
         }
       }
+      else
+      {
+        // unique keys in descending order: reversed, they are in the ascending order of the map's iteration
+        std::reverse(qscore_keys.begin(), qscore_keys.end());
+        std::reverse(qvalue_values.begin(), qvalue_values.end());
+        for (auto& qvalue : qvalue_values)
+        {
+          cummin = std::min(qvalue, cummin);
+          qvalue = cummin;
+        }
+      }
 
       // The q-values below are looked up without inserting, the spectra in parallel: std::map::operator[] gave a Qscore2D without a q-value
       // (of a decoy mass, or of a mass of a feature counted once) 0 and inserted it, which a later lookup of that Qscore2D found as 0 again.
       // That holds for ordered keys; with a NaN among the keys or the Qscore2D looked up, the serial loop with operator[] stays.
-      bool has_nan = false;
-      for (const auto& [qs, qv] : map_qvalue)
-      {
-        has_nan = has_nan || std::isnan(qs);
-      }
+      bool has_nan = key_nan;
 #pragma omp parallel for schedule(dynamic, 64) reduction(|| : has_nan)
       for (SignedSize s = 0; s < (SignedSize)deconvolved_spectra.size(); s++)
       {
@@ -200,9 +219,10 @@ namespace OpenMS
 
       if (! has_nan)
       {
-        const auto qvalue_of = [&map_qvalue](double qs) {
-          const auto it = map_qvalue.find(qs);
-          return it == map_qvalue.end() ? .0 : it->second;
+        // binary search in the ascending keys, as std::map::find
+        const auto qvalue_of = [&qscore_keys, &qvalue_values](double qs) {
+          const auto it = std::lower_bound(qscore_keys.begin(), qscore_keys.end(), qs);
+          return it == qscore_keys.end() || *it != qs ? .0 : qvalue_values[it - qscore_keys.begin()];
         };
 #pragma omp parallel for schedule(dynamic, 64)
         for (SignedSize s = 0; s < (SignedSize)deconvolved_spectra.size(); s++)
@@ -234,6 +254,11 @@ namespace OpenMS
         continue;
       }
 
+      if (! key_nan)
+      {
+        // the refined table as a map, for the serial lookups that insert (std::map::operator[])
+        for (Size k = 0; k < qscore_keys.size(); k++) map_qvalue.emplace_hint(map_qvalue.end(), qscore_keys[k], qvalue_values[k]);
+      }
       for (auto& deconvolved_spectrum : deconvolved_spectra)
       {
         if (deconvolved_spectrum.empty() || deconvolved_spectrum.isDecoy())

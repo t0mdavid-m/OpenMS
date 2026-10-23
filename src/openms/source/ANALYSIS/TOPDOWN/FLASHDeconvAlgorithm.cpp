@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <exception>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -382,6 +383,7 @@ void FLASHDeconvAlgorithm::deconvolveSpectrum_(const MSExperiment& map, Spectrum
   const std::vector<std::pair<double, bool>>* window_decoys = nullptr; // the challengers of round 2, if any
   std::vector<double> fragment_masses;                                   // the fragment masses both rounds score on
   bool round1 = false;                                                   // whether round 1 ran (several target masses)
+  bool reuse_round1 = false; // round 1's deconvolution is the final one (same precursor, same mass and charge bounds)
   if (precursor_by_fragments_ && ms_level > 1 && ! precursor_pg.empty())
   {
     const auto cit = native_id_window_candidates_.find(native_id);
@@ -407,10 +409,23 @@ void FLASHDeconvAlgorithm::deconvolveSpectrum_(const MSExperiment& map, Spectrum
         job.new_precursor_pg = precursor_pg;
         job.new_precursor = cit->second[best].second;
       }
+      else if ((int)sd.getParameters().getValue("precursor_charge") == 0 && (double)sd.getParameters().getValue("precursor_mz") == 0)
+      {
+        // The precursor stays. The deconvolution below differs from round 1 only by the window bounds; when they widen neither the mass
+        // nor the charge bound (the heaviest and the most charged mass of the window are the precursor's), both are the same function of
+        // the same inputs, and round 1's result is kept with the precursor as the deconvolution below would register it. Not with a
+        // given precursor charge or m/z: the deconvolution then registers a precursor of its own instead of the one passed.
+        auto& round1_spectrum = sd.getDeconvolvedSpectrum();
+        const int union_charge = round1_spectrum.getCurrentMaxAbsCharge(std::numeric_limits<int>::max());
+        const double union_mass = round1_spectrum.getCurrentMaxMass(std::numeric_limits<double>::max());
+        round1_spectrum.setPrecursorPeakGroup(precursor_pg);
+        reuse_round1 = round1_spectrum.getCurrentMaxAbsCharge(std::numeric_limits<int>::max()) == union_charge
+                       && round1_spectrum.getCurrentMaxMass(std::numeric_limits<double>::max()) == union_mass;
+      }
     }
   }
   // now do it
-  sd.performSpectrumDeconvolution(spec, scan_number, precursor_pg);
+  if (! reuse_round1) sd.performSpectrumDeconvolution(spec, scan_number, precursor_pg);
 
   auto& deconvolved_spectrum = sd.getDeconvolvedSpectrum();
 
@@ -529,6 +544,8 @@ void FLASHDeconvAlgorithm::deconvolveSpectrum_(const MSExperiment& map, Spectrum
 
     for (auto& pg : noise_decoy_sd.getDeconvolvedSpectrum())
       deconvolved_spectrum.push_back(std::move(pg));
+    noise_decoy_sd.releasePools();
+    signal_decoy_sd.releasePools();
 
     deconvolved_spectrum.sort();
   }
@@ -713,7 +730,12 @@ void FLASHDeconvAlgorithm::runSpectralDeconvolution_(MSExperiment& map, std::vec
               }
             }
           }
-#pragma omp for schedule(dynamic, 1)
+// the costliest spectra first (job_order) only with a monotonic schedule (nonmonotonic is the OpenMP >= 5.0 default, e.g. clang/libomp)
+#if defined(_OPENMP) && _OPENMP >= 201511
+  #pragma omp for schedule(monotonic: dynamic, 1)
+#else
+  #pragma omp for schedule(dynamic, 1)
+#endif
           for (SignedSize position = 0; position < (SignedSize)jobs.size(); position++)
           {
             const SignedSize j = job_order[position];
@@ -1073,6 +1095,24 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
                                                                  const std::vector<DeconvolvedSpectrum>& deconvolved_spectra,
                                                                  uint ms_level)
 {
+  auto cv_of = [](const MSSpectrum& sp) {
+    auto fs = sp.getMetaValue("filter string").toString();
+    Size p = fs.find("cv=");
+    if (p == String::npos) return 1e5;
+    Size e = fs.find(" ", p);
+    if (e == String::npos) e = fs.length() - 1;
+    return std::stod(fs.substr(p + 3, e - p));
+  };
+  // the CV of every spectrum of this level and the one below, parsed once (the search below reads them for many neighbours of each scan)
+  std::vector<double> spectrum_cvs(map.size(), 0.0);
+  std::vector<std::exception_ptr> cv_errors(map.size());
+#pragma omp parallel for schedule(dynamic, 256)
+  for (SignedSize i = 0; i < (SignedSize)map.size(); i++)
+  {
+    if (map[i].getMSLevel() != ms_level && map[i].getMSLevel() != ms_level - 1) continue;
+    try { spectrum_cvs[i] = cv_of(map[i]); }
+    catch (...) { cv_errors[i] = std::current_exception(); }
+  }
   for (Size index = 0; index < map.size(); index++)
   {
     const auto& spec = map[index]; // MS2 index
@@ -1090,15 +1130,12 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
       if (lit != located_by_scan_.end() && lit->second.parent_scan_number > 0) { located = &lit->second; }
     }
 
-    auto cv_of = [](const MSSpectrum& sp) {
-      auto fs = sp.getMetaValue("filter string").toString();
-      Size p = fs.find("cv=");
-      if (p == String::npos) return 1e5;
-      Size e = fs.find(" ", p);
-      if (e == String::npos) e = fs.length() - 1;
-      return std::stod(fs.substr(p + 3, e - p));
+    // as the serial parse would: the first spectrum (in this order) whose CV does not parse throws
+    const auto cv_at = [&](Size i) {
+      if (cv_errors[i]) std::rethrow_exception(cv_errors[i]);
+      return spectrum_cvs[i];
     };
-    const double cv = cv_of(spec);
+    const double cv = cv_at(index);
 
     // The survey (MS n-1) spectra searched for the precursor. A located scan reads the survey its COMMAND names, however many newer
     // surveys were acquired in between (ADR-0046; 88 % of commanded MS2 have at least one), and only that one. Otherwise the preceding
@@ -1122,11 +1159,11 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
       std::vector<Size> before, after;
       for (int i = (int)index - 1; i >= 0 && (int)before.size() <= precursor_rescue_window_; i--)
       {
-        if (map[i].getMSLevel() == ms_level - 1 && cv_of(map[i]) == cv) before.push_back((Size)i);
+        if (map[i].getMSLevel() == ms_level - 1 && cv_at((Size)i) == cv) before.push_back((Size)i);
       }
       for (Size i = index + 1; i < map.size() && (int)after.size() < precursor_rescue_window_; i++)
       {
-        if (map[i].getMSLevel() == ms_level - 1 && cv_of(map[i]) == cv) after.push_back(i);
+        if (map[i].getMSLevel() == ms_level - 1 && cv_at(i) == cv) after.push_back(i);
       }
       if (! before.empty())
       {

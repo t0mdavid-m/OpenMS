@@ -134,13 +134,28 @@ namespace OpenMS::Internal
       cexp_ = &exp;
     }
 
+    namespace
+    {
+      /// The PSI-MS CV mapping rules are immutable: parse ms-mapping.xml once per process instead of once per
+      /// handler (every mzML read constructs a handler; parallel chunk parsing constructs hundreds).
+      const CVMappings& psiMsMapping_()
+      {
+        static const CVMappings mapping = [] {
+          CVMappings m;
+          CVMappingFile().load(File::find("/MAPPING/ms-mapping.xml"), m);
+          return m;
+        }();
+        return mapping;
+      }
+    }
+
     /// delegated c'tor for the common things
     MzMLHandler::MzMLHandler(const String& filename, const String& version, const ProgressLogger& logger)
       : XMLHandler(filename, version),
         logger_(logger),
-        cv_(ControlledVocabulary::getPSIMSCV())
+        cv_(ControlledVocabulary::getPSIMSCV()),
+        mapping_(psiMsMapping_())
     {
-      CVMappingFile().load(File::find("/MAPPING/ms-mapping.xml"), mapping_);
 
       // check the version number of the mzML handler
       if (VersionInfo::VersionDetails::create(version_) == VersionInfo::VersionDetails::EMPTY)
