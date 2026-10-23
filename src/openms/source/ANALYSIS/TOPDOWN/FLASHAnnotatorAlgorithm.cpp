@@ -560,9 +560,10 @@ void FLASHAnnotatorAlgorithm::getIsotopeEnvelope(double mono_mass, int charge, s
   }
 }
 
-bool FLASHAnnotatorAlgorithm::getFragments(const PrSM& prsm, std::vector<Fragment>& fragments) const
+bool FLASHAnnotatorAlgorithm::getFragments(const PrSM& prsm, std::vector<Fragment>& fragments, std::vector<Fragment>* span_fragments) const
 {
   fragments.clear();
+  if (span_fragments != nullptr) span_fragments->clear();
   const auto& aa = residueMasses();
   const int length = (int)prsm.sequence.size();
   std::vector<double> prefix_mass(length + 1, .0);
@@ -601,10 +602,9 @@ bool FLASHAnnotatorAlgorithm::getFragments(const PrSM& prsm, std::vector<Fragmen
         else if (ranges[m].second >= first && ranges[m].first <= last)
         {
           split = true; // the fragment contains only part of the modification range: its mass is unknown
-          break;
         }
       }
-      if (split) continue;
+      if (split && span_fragments == nullptr) continue;
 
       Fragment f;
       f.ion_type = t;
@@ -615,7 +615,7 @@ bool FLASHAnnotatorAlgorithm::getFragments(const PrSM& prsm, std::vector<Fragmen
       f.max_charge = (int)std::floor(f.mono_mass / min_mass_per_charge_);
       if (prsm.precursor_charge > 0) f.max_charge = std::min(f.max_charge, prsm.precursor_charge);
       if (f.max_charge < 1) continue;
-      fragments.push_back(f);
+      (split ? *span_fragments : fragments).push_back(f);
     }
   }
   return true;
@@ -841,8 +841,8 @@ void FLASHAnnotatorAlgorithm::annotateOne_(const PeakArrays& spec, const std::ve
 {
   auto density_at = [&spec](double mz) { return densityAt_(spec, mz); };
   auto rank_of = [&sorted_intensities](double intensity) { return rankOf_(sorted_intensities, intensity); };
-  std::vector<Fragment> fragments;
-  if (! getFragments(prsm, fragments)) return;
+  std::vector<Fragment> fragments, span_fragments;
+  if (! getFragments(prsm, fragments, &span_fragments)) return;
 
   const int length = (int)prsm.sequence.size();
   result.annotated = true;
@@ -907,6 +907,23 @@ void FLASHAnnotatorAlgorithm::annotateOne_(const PeakArrays& spec, const std::ve
       result.envelopes.push_back(e);
     }
   }
+  // fragments across an unlocalized modification range: their mass is unknown, so they are never matched, but they are hypotheses the
+  // proteoform makes (a long range would otherwise shrink the hypotheses to the few fragments outside it and inflate the score)
+  for (const auto& f : span_fragments)
+  {
+    if (empty) break;
+    const int bin = massToBin_(f.mono_mass);
+    if (requiredPeaks_(table_.offset[bin + 1] - table_.offset[bin]) < 0) continue;
+    const double apex_shift = table_.iso_index[table_.offset[bin] + table_.apex_pos[bin]] * Constants::C13C12_MASSDIFF_U;
+    for (int z = 1; z <= f.max_charge; z++)
+    {
+      const double observed = (f.mono_mass + apex_shift + z * Constants::PROTON_MASS_U) / z * cal_factor;
+      if (observed * (1 - tol) > max_mz) continue;
+      if (observed * (1 + tol) < min_mz) break;
+      testable[ion_group_[f.ion_type] * length + f.length] = 1;
+      break;
+    }
+  }
   const int hypotheses = (int)std::count(testable.begin(), testable.end(), 1);
   const int matched_hypotheses = (int)std::count(matched.begin(), matched.end(), 1);
 
@@ -918,8 +935,9 @@ void FLASHAnnotatorAlgorithm::annotateOne_(const PeakArrays& spec, const std::ve
   {
     const double shift = decoy_shifts_[s];
     std::fill(decoy_matched_hypothesis.begin(), decoy_matched_hypothesis.end(), 0);
-    for (const auto& f : fragments)
+    for (Size i = 0; i < fragments.size() + span_fragments.size(); i++)
     {
+      const auto& f = i < fragments.size() ? fragments[i] : span_fragments[i - fragments.size()];
       const int hypothesis = ion_group_[f.ion_type] * length + f.length;
       if (! testable[hypothesis] || (decoy_matched_hypothesis[hypothesis] && ! report_decoys_)) continue;
       const double mono_mass = f.mono_mass + shift;
@@ -1286,13 +1304,26 @@ void FLASHAnnotatorAlgorithm::annotate(const std::vector<PeakArrays>& spectra, c
   }
 
   // scores (serial: std::lgamma need not be thread safe). Without a testable hypothesis there is nothing to score.
+  // The chance rate is that of the spectrum: the decoy fragments of every PrSM annotated on it here, over all their hypotheses. A rate of
+  // each PrSM's own decoys (a few matches among some hundred tests) differed several-fold between PrSMs of one spectrum by chance, which
+  // decided between them more than their matched fragments did.
   const double decoy_sets = (double)decoy_shifts_.size();
-  for (auto& r : results)
+  std::vector<double> spectrum_decoys(spectrum_count, 0.0), spectrum_tests(spectrum_count, 0.0);
+  for (Size i = 0; i < results.size(); i++)
   {
+    const auto& r = results[i];
+    if (! r.annotated || decoy_shifts_.empty() || r.fragment_hypotheses <= 0) continue;
+    spectrum_decoys[prsms[i].spectrum_index] += r.decoy_matched_fragments;
+    spectrum_tests[prsms[i].spectrum_index] += decoy_sets * r.fragment_hypotheses;
+  }
+  for (Size i = 0; i < results.size(); i++)
+  {
+    auto& r = results[i];
     if (! r.annotated || decoy_shifts_.empty() || r.fragment_hypotheses <= 0) continue;
     const int n = r.fragment_hypotheses;
     const int k = r.matched_fragments;
-    const double p0 = (r.decoy_matched_fragments + 1.0) / (decoy_sets * n + 2.0);
+    const int s = prsms[i].spectrum_index;
+    const double p0 = (spectrum_decoys[s] + 1.0) / (spectrum_tests[s] + 2.0);
     r.chance_rate = p0;
     r.score = binomialTailScore(n, k, p0);
     r.llr = k * std::log(p1_ / p0) + (n - k) * std::log((1.0 - p1_) / (1.0 - p0));

@@ -157,7 +157,7 @@ public:
     int fragment_hypotheses = -1;
     /// matched decoy hypotheses, summed over the decoy shifts
     int decoy_matched_fragments = -1;
-    /// p0
+    /// p0: the chance rate of the spectrum, from the decoy fragments of all PrSMs annotated on it in the same annotate() call
     double chance_rate = -1;
     /// -log10 P(X >= k), X ~ Binomial(n, p0)
     double score = -1;
@@ -201,8 +201,12 @@ public:
   */
   void annotate(const std::vector<PeakArrays>& spectra, const std::vector<PrSM>& prsms, std::vector<Result>& results);
 
-  /// the terminal fragments of @p prsm that are annotated; false if the sequence contains an unknown residue
-  bool getFragments(const PrSM& prsm, std::vector<Fragment>& fragments) const;
+  /**
+    @brief The terminal fragments of @p prsm that are annotated; false if the sequence contains an unknown residue.
+    @param span_fragments if given, the terminal fragments that contain only part of a modification range (their mass is unknown): with the
+    modifications they contain whole, and without the ones they split. They are not annotated, but count as fragment hypotheses.
+  */
+  bool getFragments(const PrSM& prsm, std::vector<Fragment>& fragments, std::vector<Fragment>* span_fragments = nullptr) const;
 
   /// theoretical m/z and relative intensities (most abundant = 1) of the kept isotope peaks of a fragment
   void getIsotopeEnvelope(double mono_mass, int charge, std::vector<double>& mzs, std::vector<double>& intensities);
