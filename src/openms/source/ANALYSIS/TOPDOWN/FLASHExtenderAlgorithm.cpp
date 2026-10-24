@@ -1402,6 +1402,48 @@ namespace OpenMS
 
         hi.n_best_shift_ = getBestMassShift_(spec_vec, vec_pro[hit.getMetaValue(mi_fasta_index)]);
         hi.c_best_shift_ = getBestMassShift_(spec_vec, rev_vec_pro[hit.getMetaValue(mi_fasta_index)]);
+        // The best shifts are votes of the whole spectrum's integer masses; with few matching masses a chance shift wins (the
+        // extension failures of the TopPIC-only survey spectra: median 5-6 votes for the winner, 2 at the true shift; an open
+        // terminus outside the window in 136 of 194). Where a tag lands gives the shift at its terminus exactly, and the precursor
+        // mass (P - H2O: the residue sum between the termini, up to a blind shift) the shift at the other one.
+        {
+          const String& seq = hit.getSequence();
+          std::vector<double> pre, suf;
+          getProMasses_(hit, pre, 1, hi.fixed_);
+          getProMasses_(hit, suf, 0, hi.fixed_);
+          const int L = (int)seq.size();
+          const double room = pre.back() - (given_precursor_mass_ - i2f_mass);
+          for (Size t = 0; t < matched_tags.size(); t++)
+          {
+            const auto& tag = matched_tags[t];
+            auto& [positions_set, positions] = tag_positions[t];
+            if (! positions_set)
+            {
+              std::vector<double> masses;
+              FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(positions, masses, -1, seq, tag);
+              if (hi.fixed_ != nullptr) keepFixedConsistentPlacements_(seq, tag, *hi.fixed_, positions);
+              positions_set = true;
+            }
+            for (int pos : positions)
+            {
+              if (pos < 0 || pos + (int)tag.getLength() > L) continue;
+              if (tag.getNtermMass() >= 0)
+              {
+                const double n = pre[pos] - tag.getNtermMass();
+                hi.n_tag_shifts_.push_back(n);
+                if (given_precursor_mass_ > 0) hi.c_tag_shifts_.push_back(room - n);
+              }
+              if (tag.getCtermMass() >= 0)
+              {
+                const double c = suf[L - pos - tag.getLength()] - tag.getCtermMass();
+                hi.c_tag_shifts_.push_back(c);
+                if (given_precursor_mass_ > 0) hi.n_tag_shifts_.push_back(room - c);
+              }
+            }
+          }
+          std::sort(hi.n_tag_shifts_.begin(), hi.n_tag_shifts_.end());
+          std::sort(hi.c_tag_shifts_.begin(), hi.c_tag_shifts_.end());
+        }
 
         // The result of the terminal modes (0: suffix, 1: prefix), kept when mode 2 starts. Mode 2 (both termini, constrained by the
         // precursor mass) replaces their score; if it finds no path, or only one that scores <= 0 (e.g. a fragment truncated at both
@@ -2344,15 +2386,15 @@ namespace OpenMS
       for (int pro_i = start_pro_index + 1; pro_i <= end_pro_index; pro_i++) // change later
       {
         double pm = pro_masses[pro_i];
-        if (hi.mode_ == 0)
+        // within max_shift of the best shift or of a shift the hit's tags imply (n_tag_shifts_, c_tag_shifts_; ascending)
+        if (hi.mode_ == 0 || hi.mode_ == 1)
         {
-          if(hi.c_best_shift_ - max_shift > pm) continue;
-          if(hi.c_best_shift_ + max_shift < pm) break;
-        }
-        else if (hi.mode_ == 1)
-        {
-          if(hi.n_best_shift_ - max_shift > pm) continue;
-          if(hi.n_best_shift_ + max_shift < pm) break;
+          const double best = hi.mode_ == 0 ? hi.c_best_shift_ : hi.n_best_shift_;
+          const auto& tag_shifts = hi.mode_ == 0 ? hi.c_tag_shifts_ : hi.n_tag_shifts_;
+          const double top = tag_shifts.empty() ? best : std::max(best, tag_shifts.back());
+          if (top + max_shift < pm) break;
+          const auto it = std::lower_bound(tag_shifts.begin(), tag_shifts.end(), pm - max_shift);
+          if (std::abs(pm - best) > max_shift && (it == tag_shifts.end() || *it > pm + max_shift)) continue;
         }
 
         if (pms >= 0

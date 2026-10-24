@@ -248,6 +248,9 @@ private:
     bool start_prior_ = true;
     /// n and c term best mass shift between spec and protein. For speed up
     int n_best_shift_ = 0, c_best_shift_ = 0;
+    /// the shifts at the termini (protein residue sum outside the proteoform, as pro_masses) implied by the hit's tags where they
+    /// land, and with the precursor mass at the other terminus; a truncated terminus is also searched around these (sorted)
+    std::vector<double> n_tag_shifts_, c_tag_shifts_;
     /// cached pointers to the current-mode (mode_) entries of the maps above; set once per mode to avoid re-resolving the std::map lookup on every recursion frame.
     const std::vector<double>* cur_pro_masses_ = nullptr;
     const MSSpectrum* cur_node_spec_ = nullptr;
