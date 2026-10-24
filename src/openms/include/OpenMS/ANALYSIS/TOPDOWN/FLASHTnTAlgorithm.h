@@ -158,6 +158,8 @@ private:
   int chimeric_rounds_ = 0;
   /// candidates from gapped tags: off, fallback (spectra without sequence-tag candidates), both, only
   String gapped_mode_ = "fallback";
+  /// how the candidate proteins of a spectrum are cut (candidate_ranking): union, fusion, poisson, precursor, twosided
+  String candidate_ranking_ = "union";
   /// candidates from terminal ladders (residue sums from an intact protein terminus) in every spectrum
   bool terminal_ladders_ = true;
   /// candidates from precursor-anchored ladders (windows whose unmodified mass is the precursor mass) in every spectrum with a precursor mass

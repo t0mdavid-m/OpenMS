@@ -14,6 +14,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/MassLadderAlgorithm.h>
+#include <boost/math/special_functions/gamma.hpp>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -390,6 +391,13 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "of 1549, for about a third of the run time. Alone, gapped tags find about as much as sequence tags (1480 without the "
                      "cascade: 4547 spectra by gapped tags vs 4117 by sequence tags, 1538 and 1579 proteoforms, 305 proteins each).");
   defaults_.setValidStrings("gapped_tags", {"off", "fallback", "both", "only"});
+  defaults_.setValue("candidate_ranking", "union", "How the candidate proteins of a spectrum are cut to max_protein_hits: "
+                     "union (the max_protein_hits best by score and those by matched tags); the others keep as many as union would, chosen by: fusion "
+                     "(reciprocal rank fusion of the two ranks, 1/(60+r)); poisson (-log10 P(Poisson >= its tag count), the rate from the tags per "
+                     "residue of the spectrum's candidates times its length); precursor (a start and an end implied by a tag and the precursor mass "
+                     "both on residue boundaries first, then score); twosided (the score of a tag's side plus that of the other side at the shift the "
+                     "precursor mass implies).");
+  defaults_.setValidStrings("candidate_ranking", {"union", "fusion", "poisson", "precursor", "twosided"});
   defaults_.setValue("terminal_ladders", "true",
                      "Candidate proteins from terminal ladders: deconvolved masses that are residue sums from an intact protein terminus (the N-terminus "
                      "also without the initiator Met and with acetylation), found without a sequence tag. In every spectrum the min_protein_hits best "
@@ -510,6 +518,7 @@ void FLASHTnTAlgorithm::updateMembers_()
   annotator_param_.setValue("ion_type", param_.getValue("ion_type"));
   raw_score_weight_ = param_.getValue("raw_score_weight");
   gapped_mode_ = param_.getValue("gapped_tags").toString();
+  candidate_ranking_ = param_.getValue("candidate_ranking").toString();
   terminal_ladders_ = param_.getValue("terminal_ladders").toString() == "true";
   precursor_ladders_ = param_.getValue("precursor_ladders").toString() == "true";
   search_cascade_ = param_.getValue("search_cascade").toString() == "true";
@@ -2063,6 +2072,132 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         {
           keep[by_tag_count[i].second] = true;
         }
+      }
+      if (candidate_ranking_ != "union" && (int)ranked_count > max_protein_hits_)
+      {
+        const Size kept_count = (Size)std::count(keep.begin(), keep.end(), true);
+        auto entryOf = [&](Size c) { return c < seq_count ? seq_candidates[c].protein : hit_shifts[c - seq_count].fasta_index; };
+        auto tagCount = [&](Size c) { return c < seq_count ? (double)seq_candidates[c].tag_count : (double)gapped_tag_counts[c - seq_count]; };
+        // a side's shifts and tag flanking masses
+        auto shiftsOf = [&](Size c, bool n_side, const double*& s, const double*& f, Size& n) {
+          if (c < seq_count)
+          {
+            const auto& sc = seq_candidates[c];
+            const Size first = n_side ? sc.n_first : sc.c_first;
+            s = shift_values.data() + first;
+            f = flank_values.data() + first;
+            n = n_side ? sc.n_count : sc.c_count;
+          }
+          else
+          {
+            const auto& sh = hit_shifts[c - seq_count];
+            const auto& sv = n_side ? sh.n_shifts : sh.c_shifts;
+            s = sv.data();
+            f = (n_side ? sh.n_flanks : sh.c_flanks).data();
+            n = sv.size();
+          }
+        };
+        const double precursor = dspec.getPrecursorPeakGroup().getMonoMass();
+        const double h2o = EmpiricalFormula("H2O").getMonoWeight();
+        std::vector<double> key(ranked_count, 0.0);
+        if (candidate_ranking_ == "fusion")
+        {
+          // rank by score is i; rank by matched tags from a stable sort of the score order
+          std::vector<Size> by_tags(ranked_count);
+          std::iota(by_tags.begin(), by_tags.end(), 0);
+          std::stable_sort(by_tags.begin(), by_tags.end(), [&](Size a, Size b) { return tagCount(ranked[a].index) > tagCount(ranked[b].index); });
+          std::vector<Size> tag_rank(ranked_count);
+          for (Size r = 0; r < ranked_count; r++) tag_rank[by_tags[r]] = r;
+          for (Size i = 0; i < ranked_count; i++) key[i] = 1.0 / (60.0 + i) + 1.0 / (60.0 + tag_rank[i]);
+        }
+        else if (candidate_ranking_ == "poisson")
+        {
+          // chance tag hits grow with the length: the spectrum's tag hits per candidate residue times the length
+          double hit_sum = 0, len_sum = 0;
+          for (const auto& r : ranked)
+          {
+            hit_sum += tagCount(r.index);
+            len_sum += fasta_entry[entryOf(r.index)].sequence.length();
+          }
+          for (Size i = 0; i < ranked_count; i++)
+          {
+            const double k = tagCount(ranked[i].index);
+            const double lam = hit_sum * fasta_entry[entryOf(ranked[i].index)].sequence.length() / std::max(1.0, len_sum);
+            key[i] = k > 0 && lam > 0 ? -std::log10(std::max(boost::math::gamma_p(k, lam), 1e-300)) : 0.0;
+          }
+        }
+        else if (candidate_ranking_ == "precursor")
+        {
+          // 1 if a tag shift and its precursor complement both land on residue boundaries, start before end; 0 otherwise
+          for (Size i = 0; i < ranked_count && precursor > 0; i++)
+          {
+            const Size e = entryOf(ranked[i].index);
+            const auto& pre = pro_prefix[e];
+            const auto& suf = pro_suffix[e];
+            const double room = pre.back() - (precursor - h2o);
+            const int len = (int)pre.size() - 1;
+            // index of a residue sum within the margin, or -1
+            auto boundary = [&](const std::vector<double>& sums, double m) {
+              const double margin = protein_tol * 1e-6 * (precursor + std::abs(m));
+              const auto it = std::lower_bound(sums.begin(), sums.end(), m - margin);
+              return it != sums.end() && *it <= m + margin ? (int)(it - sums.begin()) : -1;
+            };
+            for (int side = 0; side < 2 && key[i] == 0; side++)
+            {
+              const double* s;
+              const double* f;
+              Size n;
+              shiftsOf(ranked[i].index, side == 0, s, f, n);
+              for (Size j = 0; j < n; j++)
+              {
+                const int a = boundary(side == 0 ? pre : suf, s[j]), b = boundary(side == 0 ? suf : pre, room - s[j]);
+                if (a >= 0 && b >= 0 && a + b < len)
+                {
+                  key[i] = 1;
+                  break;
+                }
+              }
+            }
+          }
+        }
+        else // twosided
+        {
+          for (Size i = 0; i < ranked_count; i++)
+          {
+            const Size c = ranked[i].index, e = entryOf(c);
+            const double plain_mass = with_fixed ? pro_plain_mass[e] : 0.0;
+            if (precursor <= 0)
+            {
+              key[i] = scores[c];
+              continue;
+            }
+            const double room = pro_prefix[e].back() - (precursor - h2o);
+            double best = 0;
+            for (int side = 0; side < 2; side++)
+            {
+              const double* s;
+              const double* f;
+              Size n;
+              shiftsOf(c, side == 0, s, f, n);
+              if (n == 0) continue;
+              std::vector<double> comp(n);
+              for (Size j = 0; j < n; j++) comp[j] = room - s[j];
+              const auto& own = side == 0 ? pro_prefix[e] : pro_suffix[e];
+              const auto& own_index = side == 0 ? pro_prefix_index[e] : pro_suffix_index[e];
+              const auto& other = side == 0 ? pro_suffix[e] : pro_prefix[e];
+              const auto& other_index = side == 0 ? pro_suffix_index[e] : pro_prefix_index[e];
+              best = std::max(best, FLASHTaggerAlgorithm::scoreShifts(score_masses, own, own_index, s, f, n, protein_tol, plain_mass)
+                                      + FLASHTaggerAlgorithm::scoreShifts(score_masses, other, other_index, comp.data(), f, n, protein_tol, plain_mass));
+            }
+            key[i] = best;
+          }
+        }
+        // the kept_count best by the key; ties in score order
+        std::vector<Size> order(ranked_count);
+        std::iota(order.begin(), order.end(), 0);
+        std::stable_sort(order.begin(), order.end(), [&](Size a, Size b) { return key[a] > key[b]; });
+        std::fill(keep.begin(), keep.end(), false);
+        for (Size j = 0; j < kept_count; j++) keep[order[j]] = true;
       }
       for (Size i = 0; i < ranked_count; i++)
       {
