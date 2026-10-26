@@ -109,8 +109,14 @@ mirrors the declaration order exactly (`FLASHIda.cpp:54-64`).
 
 ### Enqueue discipline: return, don't push
 
-`FLASHIda.cpp` is the **sole enqueuer** — exactly nine `queue_.push(` sites; no `.push(` on a
-`ScanCommandQueue` exists anywhere else under `TOPDOWN/`. The `ScanCommandQueue&` that
+`FLASHIda.cpp` is the **sole enqueuer**, and since ADR-0060 its sites come in three kinds, pinned as a
+table by `FLASHIda_Replan_test::push_site_inventory` (a new or moved site fails it until the table says
+what the site is): a survey's MS2s enter through **one** `queue_.replacePlan(` in `runSurveyMS1_`; six
+**permanent** sites go through `stampAndPush_` (`FLASHIda.h`, the one `queue_.push` that stamps a
+precursor id first: refine re-dispatch, exploration MS2 return, the bought `R`, the tag follow-up, MS3
+targeting, exploration MS3 return); three MS1-family `queue_.push(` sites (CV transition, cycle time,
+monitor) plus the idle survey's `pushAndDequeue`; and one `registerAdjustable` (the quant verdict). No
+`.push(` on a `ScanCommandQueue` exists anywhere else under `TOPDOWN/`. The `ScanCommandQueue&` that
 `Exploration::initiate/feedResult/initiateNextLevel` receive is a **command builder, not an
 enqueue target**: `buildMS2`/`buildMS3`/`buildFollowUp` allocate a tracking id and return a
 `ScanCommand` by value. Any new command-producing component must follow the same contract.
@@ -118,6 +124,52 @@ enqueue target**: `buildMS2`/`buildMS3`/`buildFollowUp` allocate a tracking id a
 They also do **not** register in the pending-scan map — that happens only in `dequeue()` and in
 explicit `registerPending()` calls, which `FLASHIda.cpp` makes itself on the drain path.
 ⚠️ The doc comment at `ScanCommandQueue.h:59-60` claiming builders register is **stale**.
+
+### A survey's MS2s are a plan until the drain commits them (ADR-0060)
+
+```
+runSurveyMS1_ (analysis thread, analysis_mutex_)          getNextScanCommand (event thread, no analysis lock)
+  applyStamps(takeCommitted())  fold what the drain committed   dequeue_ -- commit the unit (queue_mutex_)
+  filterAndRank -> journal(); rollbackAcquisitionMemory()       its stamps --> inbox_ --> takeCommitted()
+  units per nominal mass (+ remainder re-plan, bought-R adjust)
+  replacePlan(cv, units, adjust, replace_remainder_of)  -- one queue_mutex_ hold
+  then, OUTSIDE the lock: closeGroup / dropGroup / forgetTracking_ for dropped AND reconciled units
+```
+
+- **`memory_` holds committed state only.** `filterAndRank` still writes acquisition memory as it admits
+  (the admission logic was not touched); `rollbackAcquisitionMemory()` then restores the snapshot taken on
+  the MS1 path, and the writes survive only as the journal's **stamps** (`PlanUnit.h`). The rollback is
+  guarded by `acq_entry_valid_`, so it is a no-op after a non-MS1 call and can never restore an older
+  survey's state. Survey-level stamps (refused candidates' `AllMassRt`) are held to the next survey's fold,
+  which is equivalent because nothing reads them in between.
+- **The commit rule.** A species commits when any of its commands is dequeued, and a committed species is
+  never dropped. `dequeue_` commits every charge the command isolates (`isolatedCharges`: anchor + stage-0
+  notches), so a multiplexed authored set cannot leak re-selectable charges. Only a non-quant `separate`
+  remainder (re-derived by `rechooseCharges`, sent charges excluded) and the bought `R` stay adjustable.
+- **`replacePlan` reconciles at the swap.** A new unit whose species committed after the survey read memory
+  is refused by `wouldBar`, which must mirror `admitCandidate`'s exclusion gate and qscore bar — a
+  bidirectional drift-guard test pins the two together. The last `MassQscore` is taken **by vector
+  position**, so `committed_since_fold_` stays in commit order. A remainder replacement inherits the old
+  unit's `sent_charges` *at swap time* and drops any charge sent in between; if the old unit emptied, it is
+  refused. Reconciled units are reported in full (`reconciled_scan_ids` / `_quant_groups` /
+  `_sweep_groups`) because their `addMember` / `initiate` side effects already happened and must be undone
+  like a dropped unit's.
+- **The bought `R`.** Registered with `ScanCommandQueue::isolatedCharges` of the group's measured `Q`s
+  (`GroupDecision::q_covered_charges`) and the species' nominal mass **at registration** — the adjust keys on
+  that, never on the `R`'s current `mono_mass`, which `reisolate` rewrites. An empty covered set registers
+  nothing. `reisolate` shares `buildMS2`'s geometry byte for byte (`applyIsolation_`) and rebuilds the
+  description's `@charge`, because `replacePlan`'s adjust does not touch the description.
+- **Registry hygiene.** `cleanupExpired` and `cancelByScanIds` both call `forgetQueued_`, so an expired or
+  cancelled member leaves its unit and an emptied staged unit is discarded with its stamps (never acquired,
+  never excluded). An unregistered push whose parent sits in a still-staged unit prints `[REPLAN-INVARIANT]`.
+- **`decision_info_` is consumed at the drain** (`takeDecisionInfo` erases), so a test must read
+  `decision_survey_id` from `scan_commands.tsv`, not from `FLASHIdaTestAccess::decisionInfo` after a drain.
+- ⚠️ **`Exploration::initiate` can return empty before it mints a group id**, so `lastGroupId()` then names
+  the PREVIOUS group; `runSurveyMS1_` records a sweep group only after a non-empty return.
+- ⚠️ **Depth-1 drives never re-plan.** `runInterleaved` and the C# harness return every MS2 before the next
+  survey, and no committed config sets `cycle_time`, so outside FAIMS cycling the goldens cannot see this.
+  `FLASHIda_Replan_test` drives stale surveys directly and forces the race through the private
+  `beforeReplan_` seam (`FLASHIdaTestAccess::onBeforeReplan`), which commits in the gap every round.
 
 ## `processScan` — five admission gates
 
@@ -254,7 +306,9 @@ Two subtleties:
   when it fires it stamps priority 0, pushes, and deliberately falls through to Steps 3–4.
 - **The five steps are not atomic** — no lock is held across the body (explicit comment at :619).
   Each `ScanCommandQueue` call takes `queue_mutex_` independently, so one drain is many short
-  critical sections. `analysis_mutex_` is held only around the three `writeScanCommandRow` calls.
+  critical sections. The drain takes **no** `analysis_mutex_` anywhere, the `writeScanCommandRow` calls
+  included (ADR-0025; `IdaLogger` serialises each stream itself), and ADR-0060's commit happens inside
+  `dequeue_`'s own `queue_mutex_` hold. Lock order wherever both are taken: `analysis_mutex_` → `queue_mutex_`.
   The only lock-free `processScan` → `getNextScanCommand` channel is two atomics
   (`exploration_active_`, `current_faims_cv_`), written release / read acquire.
 
@@ -535,7 +589,8 @@ depleted one (share 0) competes like any other.
 **rejected** by the instrument, so `Config::validate` still throws on a `reaction_time_min` below
 `Config.h`'s `MIN_REACTION_TIME_MS` (0.03 ms) when an ETD-family activation is swept. Gate it on
 `needsReactionTime`, never unconditionally: every CE-only config leaves `reaction_time_min` at its 0
-default. `ScanCommandQueue::cancelByScanIds` keeps having no production caller.
+default. `ScanCommandQueue::cancelByScanIds` keeps having no production caller: a newer survey drops an
+unsent sweep through `replacePlan` and forgets it with `Exploration::dropGroup` (ADR-0060).
 
 ### The Kinetic Model decides by the modeled maximum (ADR-0047)
 
@@ -716,7 +771,7 @@ the caller's responsibility.
 | Stream | Cols | Role |
 |---|---|---|
 | `ida.log` | — | free-text MS1 summary (not a TSV) — the record of acquisition *decisions*, and the only stream keyed on the **instrument** scan number. It **no longer has a reader outside FLASHIda** (ADR-0046); `PrecursorSelection`'s `target_log_files` loader is the one that remains |
-| `scan_commands.tsv` | 34 | one row per **dequeued** command; the wide MS3-fragment stream (32→34 ADR-0026 `first_mass`/`last_mass`, between `faims_enabled` and the trailing `enqueue_ts`). **The stream FLASHDeconv reads** (`-FD:scan_commands`, ADR-0046) — see *Offline coupling* below |
+| `scan_commands.tsv` | 36 | one row per **dequeued** command, so a re-planned-away command has none; the wide MS3-fragment stream (32→34 ADR-0026 `first_mass`/`last_mass`, between `faims_enabled` and the trailing `enqueue_ts`; →36 ADR-0060 `decision_survey_id`/`isolation_purity` in the same gap — the survey whose ranking last chose the window and the purity read there, both empty on follow-ups, MS3 and MS1 rows; a bought `R` carries its `Q`'s survey and an empty purity unless a newer survey adjusted it). **The stream FLASHDeconv reads** (`-FD:scan_commands`, ADR-0046) — see *Offline coupling* below |
 | `scan_results.tsv` | 53 | pure acquisition-**event** log per `processScan` (34→29 identification payload moved out, →28 per-charge deconv restructure, →29 `deconv_qscores`; →32 the identification-YIELD block `tag_count`/`fragment_count`/`tic_coverage` after column 12; →36 ADR-0038's quant block `quant_channels`/`quant_condition_means`/`quant_fold_change`/`quant_verdict`, **appended** after `dequeue_ts` because every `r.colIndex` pinned in `FLASHIda_LoggingFields_test` is ≤ 21 and appending is the only placement that invalidates none of them; →41 ADR-0040's `consensus_*` block, renamed `group_*` by ADR-0056 (→53 with `quant_p_value`, `group_p_value`, `group_channels`; no vote — one test on the group's share-normalised aggregate); →50 ADR-0047's kinetic block `fit_p0`/`fit_ce_max_s`/`fit_width`/`k2`/`modeled_ce`/`modeled_b`/`fit_points`/`fit_rss`/`energy_source`, written on the row that completes a `kinetic_model` group and sentinel-valued everywhere else, `energy_source` alone also `measured`/`none` on every other metric's completing row. Column 12 is **`precursor_share`** (ADR-0048, renamed from `remaining_ratio` because the quantity changed): the anchor window's share of the scan's raw signal on EVERY MS2/MS3 row — pre-scan, follow-up, regular — read in the window the command isolated last, −1 on MS1 rows) |
 | `identification.tsv` | 41 | per-scan MS2/MS3 identification leaf (32→34: `tag_count` beside `flash_extender_score`, `fragment_qscores` inside the aligned fragment-mass table; →41 ADR-0049's Refine block `annotation_score`/`total_shift`/`second_total_shift`/`second_score`/`cut`/`n_levels`/`precursor_mass_difference`, **appended**, valued on the regular AND the exploration self-identification MS2 rows under `refine` and sentinel-valued everywhere else — `-1`, empty, empty, `-1`, `-1`, `-1`, empty. A real score of −1 is told from the sentinel by a non-empty `total_shift`; `flash_extender_score` and `tag_count` stay −1 under `refine`) |
 | `pooled_identification.tsv` | 19 | per-precursor cumulative proteoform trajectory |
@@ -737,6 +792,13 @@ the caller's responsibility.
   writer round-trip sections in the logging tests, and it stays where it is by decision;
   `PrecursorSelection`'s `targeting.target_log_files` loader is the other, and it is in-scope —
   feeding an engine-written `ida.log` back in is a supported round trip.
+- **Every `Mass=` line ends in `\tID=<tracking id>`, and a re-plan writes `Superseded=`** (ADR-0060).
+  `ida.log` stays a decision-time record: a survey whose `replacePlan` dropped commands lists their ids on
+  one `Superseded=<id> <id> …` line right after its MS1 header, and the `target_logs` loader collects every
+  such id in a first pass and skips the `Mass=` lines carrying one, so a superseded decision is not an
+  extra observation in `in_depth`'s `1 − ∏(1 − qscore)`. A log without `ID=` loads as before.
+  `scan_results`' MS1 `child_ids` likewise stays decision-time and still lists a superseded id.
+  `NormalizeIdaLog` masks both id kinds, so no golden sees their values.
 - **`Mass=` and `AllMass=` are the same rendering, and that is asserted** (ADR-0035 decision 5).
   Both are `std::fixed << setprecision(4)`, so a target's mass appears **verbatim** among its own
   entry's `AllMass=` tokens. `Mass=` used to say `std::defaultfloat` with no precision of its own —
@@ -809,7 +871,8 @@ runs FLASHDeconv at all.
 
 ```
 mzML spectrum ── "scan description"[0..2] = tracking id ──► scan_commands.tsv row
-row.parent_tracking_id ── walked UP the rows to the ms_level 1 row ──► the survey the command was decided from
+row.decision_survey_id (ADR-0060) ── an ms_level 1 row ──► the survey whose ranking last chose the window
+  (absent column / empty cell: row.parent_tracking_id ── walked UP the rows to the ms_level 1 row)
 FLASHDeconv then takes ITS OWN PeakGroup nearest row.mono_mass from THAT survey
 ```
 
@@ -831,7 +894,9 @@ FLASHDeconv then takes ITS OWN PeakGroup nearest row.mono_mass from THAT survey
   stay in the header, now with no reader outside its own tests: the call site requires rank `== 0`.
 - **A follow-up MS2's parent is the MS2 that triggered it**, not the survey
   (`ScanCommandQueue::buildFollowUp`), which is why `join` *walks* the parent chain rather than
-  reading one hop.
+  reading one hop. Since ADR-0060 the walk is the **fallback**: `surveyScanNumber_` first reads
+  `decision_survey_id`, because a re-planned command's survey is the newer one, and a bought `R`'s parent
+  is its `Q` while its window may have been re-chosen on a later survey.
 - **The join fails closed, before any deconvolution.** Tracking ids restart in every run, so a
   foreign `scan_commands.tsv` joins 100 % of scans by id; the row-vs-spectrum check (MS level, anchor
   m/z within 0.01) is what tells them apart. A duplicate id, or a file that joins nothing, aborts too.
@@ -870,12 +935,13 @@ A `Notch` has no collision energy or activation field, which is the correct enco
 a stage fire into one fragmentation event" — under the old layout the writer copied `stages[k]`, so a
 per-notch CE existed and merely happened to agree.
 
-`NotchSelection.h` holds the whole policy — SNR **gate**, descending-**intensity** order (charge as the
-tiebreak), clamp-with-report — plus `peakGroupNotchCandidates`, shared by `PrecursorSelection` and
+`NotchSelection.h` holds the whole policy — SNR **gate**, the authored **`charge_selection`** order
+(`chargeRanksBefore`: the rule's key, then intensity, then the lower charge; ADR-0059), clamp-with-report — plus `peakGroupNotchCandidates`, shared by `PrecursorSelection` and
 `buildMS2` (which writes the geometry), so the set recorded as acquired is by construction the set
-isolated. SNR admits and intensity ranks: SNR is a purity measure, so ordering by it would let a
-clean-but-faint charge displace an abundant one under a clamp and trade away the ion current the fill
-exists to harvest.
+isolated. Until ADR-0059 SNR admitted and **intensity** ranked, on the argument that SNR-ordering lets a
+clean-but-faint charge displace an abundant one under a clamp; the ranking is now authored
+(`snr | qscore | intensity | purity`, default `snr`, `purity` refused under `multiplexed`) and the same
+rule picks the anchor.
 
 **Three of the policy's inputs are now AUTHORED, and all three are inert by default** (ADR-0040,
 `precursor_selection`). `snr_threshold` is the same gate as ever but reachable — it used to be
