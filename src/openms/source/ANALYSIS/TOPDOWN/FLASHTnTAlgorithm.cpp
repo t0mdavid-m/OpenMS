@@ -3631,10 +3631,12 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       }
     };
 
-    // The spectra identified after a stage of the search cascade: with a target PrSM, of any stage so far, whose proteoform q-value is at
-    // most rep_q, the level at which proteoforms are reported. The q-values are those the FDR below gives the PrSMs so far (per class and
-    // stage, the proteoforms over all of them), computed on a copy; the one proteoform per MS1 feature rule is applied at the end only.
-    // An identified spectrum is searched by no later stage.
+    // The spectra identified after a stage of the search cascade: whose best PrSM (by score, of any stage so far) is a target whose
+    // proteoform q-value is at most rep_q, the level at which proteoforms are reported. A passing target below a better decoy or a better
+    // failing target does not identify its spectrum (survey benchmark: 187 gapped-tag identifications had a decoy best PrSM in stage 1 and
+    // were never searched with gapped tags). The q-values are those the FDR below gives the PrSMs so far (per class and stage, the
+    // proteoforms over all of them), computed on a copy; the one proteoform per MS1 feature rule is applied at the end only. An identified
+    // spectrum is searched by no later stage.
     std::map<int, int> spectrum_of_scan_number;
     for (int d = 0; d < (int)dspecs.size(); d++) spectrum_of_scan_number[dspecs[d].getScanNumber()] = d;
     auto identifiedSoFar = [&]() {
@@ -3644,13 +3646,15 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       std::vector<double> qvalues, decoy_weights;
       std::vector<bool> decoys;
       proteoformQvalues(hit_class, qvalues, decoys, decoy_weights, false);
-      std::set<int> identified;
+      std::set<int> identified, seen;
       for (Size i = 0; i < proteoform_hits_.size(); i++)
       {
         const auto& hit = proteoform_hits_[i];
-        if (decoys[i] || hit_class[i] < 0 || (double)hit.getMetaValue("proqvalue", 1.0) > rep_q) continue;
         const auto it = spectrum_of_scan_number.find((int)hit.getMetaValue(mi_scan));
-        if (it != spectrum_of_scan_number.end()) identified.insert(it->second);
+        // the spectrum's best PrSM only (proteoform_hits_ is in byScore order here)
+        if (it == spectrum_of_scan_number.end() || ! seen.insert(it->second).second) continue;
+        if (decoys[i] || hit_class[i] < 0 || (double)hit.getMetaValue("proqvalue", 1.0) > rep_q) continue;
+        identified.insert(it->second);
       }
       proteoform_hits_.swap(kept);
       return identified;
