@@ -1363,6 +1363,59 @@ namespace OpenMS
     });
 
     std::map<std::vector<Size>, std::shared_ptr<EGHTraceFitter>> fit_cache; // the elution models fitted in this cluster
+#ifdef _OPENMP
+    if (omp_in_parallel() == 0)
+#endif
+    {
+      // A cluster resolved alone (a large one) runs its regions one after the other, and most regions have too few features to fit
+      // them in parallel. The features of the cluster, as a region forms them from the groups as they are now, are fitted ahead in
+      // parallel into the cache the regions read. A fit depends only on the unique traces named in its key, which no region changes,
+      // so a region finds the same model it would fit; a feature whose traces a region changed gets another key and is fitted then.
+      std::vector<Feature> ahead;
+      std::set<std::pair<Size, int>> seen;
+      for (const auto& [trace_index, group_and_charges] : shared_mt_N_features)
+      {
+        for (const auto& [group_index, charge] : group_and_charges)
+        {
+          if (!seen.emplace(group_index, charge).second) continue;
+          FeatureGroup& group = feature_groups[group_index];
+          Feature feature;
+          feature.charge = charge;
+          feature.feature_group_index = group_index;
+          for (const auto& seed : group)
+          {
+            if (seed.getCharge() != charge || shared_m_traces_indices[seed.getTraceIndex()].size() > 1) continue;
+            feature.unique_traces.push_back(seed);
+            feature.unique_trace_indices.push_back(seed.getTraceIndex());
+          }
+          if (isEligibleFeatureForConflictResolution_(feature, shared_m_traces_indices, group)) ahead.push_back(std::move(feature));
+        }
+      }
+      std::vector<std::vector<Size>> keys(ahead.size());
+      std::vector<std::shared_ptr<EGHTraceFitter>> models(ahead.size());
+#pragma omp parallel for schedule(dynamic, 4)
+      for (SignedSize i = 0; i < (SignedSize)ahead.size(); ++i)
+      {
+        auto& key = keys[i];
+        key.push_back(ahead[i].feature_group_index);
+        key.push_back((Size)ahead[i].charge);
+        key.insert(key.end(), ahead[i].unique_trace_indices.begin(), ahead[i].unique_trace_indices.end());
+        try
+        {
+          auto model = std::make_shared<EGHTraceFitter>();
+          fitTraceModelFromUniqueTraces_(ahead[i], model.get());
+          models[i] = model;
+        }
+        catch (...)
+        {
+          // not cached: a region fitting this feature fits it again, and fails the same way there
+        }
+      }
+      for (Size i = 0; i < ahead.size(); ++i)
+      {
+        if (models[i]) fit_cache.emplace(std::move(keys[i]), std::move(models[i]));
+      }
+    }
     /// 3. start from the highest intensity, iterate shared MT and get conflicting region (collecting conflicting Features)
     std::multimap<Size, Feature> solved_features; // key: feature group index, value: solved Feature
     // The shared traces by intensity, each starting a region unless an earlier region took it (it was erased from the list, from its
@@ -1439,7 +1492,7 @@ namespace OpenMS
           if (!isEligibleFeatureForConflictResolution_(new_feature, shared_m_traces_indices, org_featgroup))
           {
             // this feature will not be used
-            features_not_for_resolution.push_back(new_feature);
+            features_not_for_resolution.push_back(std::move(new_feature));
             continue;
           }
           new_feature.shrinkVectors();
@@ -1453,7 +1506,7 @@ namespace OpenMS
               region_queue.push_back(mt_idx);
             }
           }
-          conflicting_features.push_back(new_feature);
+          conflicting_features.push_back(std::move(new_feature));
         }
       }
 

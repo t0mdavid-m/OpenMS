@@ -44,6 +44,9 @@ namespace FLASHQuantHelper
     /// assignment operator
     FeatureSeed &operator=(const FeatureSeed &seed) = default;
 
+    /// move assignment (erasing from a FeatureGroup moves the seeds behind; without it they were copied, mass trace and all)
+    FeatureSeed &operator=(FeatureSeed &&seed) noexcept = default;
+
     /// constructor from MassTrace
     FeatureSeed(const MassTrace &mt, bool use_smoothed_ints) :
         mass_trace_(mt),
@@ -146,6 +149,9 @@ namespace FLASHQuantHelper
 
     /// assignment operator
     FeatureGroup &operator=(const FeatureGroup &t) = default;
+
+    /// move assignment
+    FeatureGroup &operator=(FeatureGroup &&t) noexcept = default;
 
     /// constructor with PeakGroup
     FeatureGroup(PeakGroup &pgroup)
@@ -347,6 +353,12 @@ namespace FLASHQuantHelper
 
     /// default destructor
     ~Feature() = default;
+
+    /// copy and move (the declared destructor suppresses the implicit moves)
+    Feature(const Feature &) = default;
+    Feature(Feature &&) noexcept = default;
+    Feature &operator=(const Feature &) = default;
+    Feature &operator=(Feature &&) noexcept = default;
 
     Size getPeakSizes() const
     {
