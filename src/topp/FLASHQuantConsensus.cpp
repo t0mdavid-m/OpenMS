@@ -16,6 +16,7 @@
 #include <array>
 #include <cmath>
 #include <fstream>
+#include <future>
 #include <map>
 #include <numeric>
 #include <tuple>
@@ -335,14 +336,21 @@ protected:
     std::vector<std::vector<FLASHQuantAlgorithm::MassAbundance>> value(kept.size(), std::vector<FLASHQuantAlgorithm::MassAbundance>(run_count));
     std::vector<std::vector<double>> decoy_value(kept.size(), std::vector<double>(run_count, 0));
     std::vector<std::vector<std::array<FDEvidence, 2>>> fd_evidence(kept.size(), std::vector<std::array<FDEvidence, 2>>(run_count)); // target, decoy
-    for (Size r = 0; r < run_count; ++r)
-    {
+    // the MS1 spectra of the next run are read while a run is measured (reading is mostly waiting for the disk: ~1.8 of ~4.3 s per run)
+    const auto load_run = [&in](Size r) {
       MzMLFile mzml;
-      mzml.setLogType(log_type_);
+      mzml.setLogType(ProgressLogger::NONE);
       mzml.getOptions().setMSLevels({1});
       PeakMap map;
       mzml.load(in[r], map);
       map.sortSpectra(true);
+      return map;
+    };
+    std::future<PeakMap> next_map = std::async(std::launch::async, load_run, (Size)0);
+    for (Size r = 0; r < run_count; ++r)
+    {
+      PeakMap map = next_map.get();
+      if (r + 1 < run_count) next_map = std::async(std::launch::async, load_run, r + 1);
       std::vector<FLASHQuantAlgorithm::QuantTarget> targets;
       std::vector<std::pair<Size, bool>> owner; // (consensus, decoy)
       for (Size k = 0; k < kept.size(); ++k)

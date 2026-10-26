@@ -2238,12 +2238,19 @@ namespace OpenMS
       {
         spectrum.push_back(Peak1D(mt[i].getRT(), mt[i].getIntensity()));
       }
-      SavitzkyGolayFilter sg;
-      Param param;
-      param.setValue("polynomial_order", polynomial_order);
-      param.setValue("frame_length", std::max(polynomial_order + 1, (int)win_size)); // at least polynomial_order + 1, or SG fails
-      sg.setParameters(param);
-      sg.filter(spectrum);
+      // one filter per frame length and thread: constructing a filter and setting its parameters computes its coefficients (two SVDs,
+      // which were most of the elution peak detection)
+      static thread_local std::map<int, SavitzkyGolayFilter> filters;
+      const int frame_length = std::max(polynomial_order + 1, (int)win_size); // at least polynomial_order + 1, or SG fails
+      auto [sg, inserted] = filters.try_emplace(frame_length);
+      if (inserted)
+      {
+        Param param;
+        param.setValue("polynomial_order", polynomial_order);
+        param.setValue("frame_length", frame_length);
+        sg->second.setParameters(param);
+      }
+      sg->second.filter(spectrum);
       std::vector<double> smoothed;
       smoothed.reserve(spectrum.size());
       for (const auto& p : spectrum)
@@ -2775,6 +2782,9 @@ namespace OpenMS
       }
     }
     std::vector<MassTrace> traces;
+    Size found_count = 0;
+    for (const auto& found : slice_traces) found_count += found.size();
+    traces.reserve(found_count);
     for (auto& found : slice_traces)
     {
       for (auto& mt : found) traces.push_back(std::move(mt));
@@ -2795,6 +2805,10 @@ namespace OpenMS
       detectElutionPeaks_(traces[i], split_traces[i], epd);
     }
     std::vector<MassTrace>().swap(traces);
+    Size split_count = 0;
+    for (const auto& sub_traces : split_traces) split_count += sub_traces.size();
+    input_mtraces.reserve(input_mtraces.size() + split_count);
+    input_seeds.reserve(input_seeds.size() + split_count);
     for (auto& sub_traces : split_traces)
     {
       for (auto& mt : sub_traces)
@@ -2802,7 +2816,7 @@ namespace OpenMS
         if (mt.getSize() < min_peaks_of_trace_() || mt.getFWHM() == 0) continue;
         FeatureSeed seed(mt, use_smoothed_intensities_);
         seed.setTraceIndex(input_mtraces.size());
-        input_seeds.push_back(seed);
+        input_seeds.push_back(std::move(seed));
         input_mtraces.push_back(std::move(mt));
       }
       std::vector<MassTrace>().swap(sub_traces);
