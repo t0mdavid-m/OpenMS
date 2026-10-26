@@ -2358,92 +2358,10 @@ namespace OpenMS
     // *********************************************************** //
     // Step 1 raw mass traces, as the TOPP tool FLASHQuant detects them
     // *********************************************************** //
-    Param p_mtd = MassTraceDetection().getDefaults();
-    p_mtd.setValue("chrom_peak_snr", 3.0);
-    p_mtd.setValue("mass_error_ppm", 10.0);
-    p_mtd.setValue("trace_termination_outliers", 2);
-    // The traces are detected in m/z slices in parallel (MassTraceDetection is sequential; 17 s on a lysate run): each slice with 100 ppm
-    // of its neighbours on both sides, keeping the traces whose centroid lies in the slice itself. A trace stays within its mass error
-    // (10 ppm) of its centroid, so the slices give the traces of the whole map, but for traces seeded differently near a slice border.
-    // (MassTraceDetection on the whole map: 986,396 traces; in 64 slices: about as many.)
-    std::vector<double> sample_mzs;
-    for (Size i = 0; i < ms1_map.size(); i += std::max((Size)1, ms1_map.size() / 200))
-    {
-      for (const auto& peak : ms1_map[i]) sample_mzs.push_back(peak.getMZ());
-    }
-    std::sort(sample_mzs.begin(), sample_mzs.end());
-    // a fixed number of slices, so that the result does not depend on the number of threads (the resolution of shared traces carries
-    // small differences of the traces near a slice border on: Eclip_1480, 7 vs 48 slices: 80 of 9.3k features differ by > 10%)
-    const int slice_count = sample_mzs.size() < 1000 ? 1 : 64;
-    std::vector<double> borders {0.0};
-    for (int k = 1; k < slice_count; ++k) borders.push_back(sample_mzs[sample_mzs.size() * k / slice_count]);
-    borders.push_back(std::numeric_limits<double>::max());
-    std::vector<std::vector<MassTrace>> slice_traces(slice_count);
-#pragma omp parallel for schedule(dynamic, 1)
-    for (int k = 0; k < slice_count; ++k)
-    {
-      const double lo = borders[k], hi = borders[k + 1], lo_margin = lo * (1 - 100e-6), hi_margin = hi * (1 + 100e-6);
-      PeakMap slice;
-      slice.reserve(ms1_map.size());
-      for (const auto& spec : ms1_map)
-      {
-        MSSpectrum part;
-        static_cast<SpectrumSettings&>(part) = spec;
-        part.setRT(spec.getRT());
-        part.setMSLevel(spec.getMSLevel());
-        part.setNativeID(spec.getNativeID());
-        for (auto it = spec.MZBegin(lo_margin); it != spec.end() && it->getMZ() < hi_margin; ++it) part.push_back(*it);
-        slice.addSpectrum(std::move(part));
-      }
-      slice.updateRanges();
-      MassTraceDetection slice_mtd;
-      slice_mtd.setLogType(ProgressLogger::NONE);
-      slice_mtd.setParameters(p_mtd);
-      std::vector<MassTrace> found;
-      slice_mtd.run(slice, found);
-      for (auto& mt : found)
-      {
-        const double centroid = mt.getCentroidMZ();
-        if (centroid >= lo && centroid < hi) slice_traces[k].push_back(std::move(mt));
-      }
-    }
-    std::vector<MassTrace> traces;
-    for (auto& found : slice_traces)
-    {
-      for (auto& mt : found) traces.push_back(std::move(mt));
-      std::vector<MassTrace>().swap(found);
-    }
-    // a canonical order (by centroid m/z, then first retention time): the resolution of shared traces depends on the order of the traces
-    // for some groups (Eclip_1480: 71 of 9.3k features changed by > 10% with the order of the slices)
-    std::sort(traces.begin(), traces.end(), [](const MassTrace& a, const MassTrace& b) {
-      if (a.getCentroidMZ() != b.getCentroidMZ()) return a.getCentroidMZ() < b.getCentroidMZ();
-      return a.begin()->getRT() < b.begin()->getRT();
-    });
-    lap("mass traces");
-
-    ElutionPeakDetection epd;
-    std::vector<std::vector<MassTrace>> split_traces(traces.size());
-#pragma omp parallel for schedule(dynamic, 64)
-    for (SignedSize i = 0; i < (SignedSize)traces.size(); ++i)
-    {
-      detectElutionPeaks_(traces[i], split_traces[i], epd);
-    }
-    std::vector<MassTrace>().swap(traces);
     std::vector<MassTrace> input_mtraces;
     std::vector<FeatureSeed> input_seeds;
-    for (auto& sub_traces : split_traces)
-    {
-      for (auto& mt : sub_traces)
-      {
-        if (mt.getSize() < min_peaks_of_trace_() || mt.getFWHM() == 0) continue;
-        FeatureSeed seed(mt, use_smoothed_intensities_);
-        seed.setTraceIndex(input_mtraces.size());
-        input_seeds.push_back(seed);
-        input_mtraces.push_back(std::move(mt));
-      }
-      std::vector<MassTrace>().swap(sub_traces);
-    }
-    lap("elution peaks");
+    detectRawTraces_(ms1_map, input_mtraces, input_seeds);
+    lap("mass traces and elution peaks");
 
     // the trace of each raw peak, by the retention time of its spectrum
     std::unordered_map<double, std::vector<std::pair<double, Size>>> peaks_at_rt;
@@ -2803,5 +2721,135 @@ namespace OpenMS
     }
     OPENMS_LOG_INFO << std::endl;
     fd_seeded_ = false;
+  }
+
+  void FLASHQuantAlgorithm::detectRawTraces_(const PeakMap& ms1_map, std::vector<MassTrace>& input_mtraces, std::vector<FeatureSeed>& input_seeds) const
+  {
+    Param p_mtd = MassTraceDetection().getDefaults();
+    p_mtd.setValue("chrom_peak_snr", 3.0);
+    p_mtd.setValue("mass_error_ppm", 10.0);
+    p_mtd.setValue("trace_termination_outliers", 2);
+    // The traces are detected in m/z slices in parallel (MassTraceDetection is sequential; 17 s on a lysate run): each slice with 100 ppm
+    // of its neighbours on both sides, keeping the traces whose centroid lies in the slice itself. A trace stays within its mass error
+    // (10 ppm) of its centroid, so the slices give the traces of the whole map, but for traces seeded differently near a slice border.
+    // (MassTraceDetection on the whole map: 986,396 traces; in 64 slices: about as many.)
+    std::vector<double> sample_mzs;
+    for (Size i = 0; i < ms1_map.size(); i += std::max((Size)1, ms1_map.size() / 200))
+    {
+      for (const auto& peak : ms1_map[i]) sample_mzs.push_back(peak.getMZ());
+    }
+    std::sort(sample_mzs.begin(), sample_mzs.end());
+    // a fixed number of slices, so that the result does not depend on the number of threads (the resolution of shared traces carries
+    // small differences of the traces near a slice border on: Eclip_1480, 7 vs 48 slices: 80 of 9.3k features differ by > 10%)
+    const int slice_count = sample_mzs.size() < 1000 ? 1 : 64;
+    std::vector<double> borders {0.0};
+    for (int k = 1; k < slice_count; ++k) borders.push_back(sample_mzs[sample_mzs.size() * k / slice_count]);
+    borders.push_back(std::numeric_limits<double>::max());
+    std::vector<std::vector<MassTrace>> slice_traces(slice_count);
+#pragma omp parallel for schedule(dynamic, 1)
+    for (int k = 0; k < slice_count; ++k)
+    {
+      const double lo = borders[k], hi = borders[k + 1], lo_margin = lo * (1 - 100e-6), hi_margin = hi * (1 + 100e-6);
+      PeakMap slice;
+      slice.reserve(ms1_map.size());
+      for (const auto& spec : ms1_map)
+      {
+        MSSpectrum part;
+        static_cast<SpectrumSettings&>(part) = spec;
+        part.setRT(spec.getRT());
+        part.setMSLevel(spec.getMSLevel());
+        part.setNativeID(spec.getNativeID());
+        for (auto it = spec.MZBegin(lo_margin); it != spec.end() && it->getMZ() < hi_margin; ++it) part.push_back(*it);
+        slice.addSpectrum(std::move(part));
+      }
+      slice.updateRanges();
+      MassTraceDetection slice_mtd;
+      slice_mtd.setLogType(ProgressLogger::NONE);
+      slice_mtd.setParameters(p_mtd);
+      std::vector<MassTrace> found;
+      slice_mtd.run(slice, found);
+      for (auto& mt : found)
+      {
+        const double centroid = mt.getCentroidMZ();
+        if (centroid >= lo && centroid < hi) slice_traces[k].push_back(std::move(mt));
+      }
+    }
+    std::vector<MassTrace> traces;
+    for (auto& found : slice_traces)
+    {
+      for (auto& mt : found) traces.push_back(std::move(mt));
+      std::vector<MassTrace>().swap(found);
+    }
+    // a canonical order (by centroid m/z, then first retention time): the resolution of shared traces depends on the order of the traces
+    // for some groups (Eclip_1480: 71 of 9.3k features changed by > 10% with the order of the slices)
+    std::sort(traces.begin(), traces.end(), [](const MassTrace& a, const MassTrace& b) {
+      if (a.getCentroidMZ() != b.getCentroidMZ()) return a.getCentroidMZ() < b.getCentroidMZ();
+      return a.begin()->getRT() < b.begin()->getRT();
+    });
+
+    ElutionPeakDetection epd;
+    std::vector<std::vector<MassTrace>> split_traces(traces.size());
+#pragma omp parallel for schedule(dynamic, 64)
+    for (SignedSize i = 0; i < (SignedSize)traces.size(); ++i)
+    {
+      detectElutionPeaks_(traces[i], split_traces[i], epd);
+    }
+    std::vector<MassTrace>().swap(traces);
+    for (auto& sub_traces : split_traces)
+    {
+      for (auto& mt : sub_traces)
+      {
+        if (mt.getSize() < min_peaks_of_trace_() || mt.getFWHM() == 0) continue;
+        FeatureSeed seed(mt, use_smoothed_intensities_);
+        seed.setTraceIndex(input_mtraces.size());
+        input_seeds.push_back(seed);
+        input_mtraces.push_back(std::move(mt));
+      }
+      std::vector<MassTrace>().swap(sub_traces);
+    }
+  }
+
+  void FLASHQuantAlgorithm::quantifyTargets(const PeakMap& ms1_map, const std::vector<QuantTarget>& targets,
+                                            const FLASHHelperClasses::PrecalculatedAveragine& avg, std::vector<MassAbundance>& abundances)
+  {
+    // per target, the raw traces at the m/z of its charges and core isotopes (>= 10% of the most abundant) within 10 ppm whose apex
+    // lies in its retention time window, their bulk areas summed (no resolution of shared traces)
+    const bool was_seeded = fd_seeded_;
+    fd_seeded_ = true; // the trace detection of FLASHDeconv masses
+    std::vector<MassTrace> input_mtraces;
+    std::vector<FeatureSeed> input_seeds;
+    detectRawTraces_(ms1_map, input_mtraces, input_seeds);
+    fd_seeded_ = was_seeded;
+    std::vector<std::pair<double, Size>> by_mz(input_mtraces.size());
+    for (Size t = 0; t < input_mtraces.size(); ++t) by_mz[t] = {input_seeds[t].getCentroidMz(), t};
+    std::sort(by_mz.begin(), by_mz.end());
+    const double charge_mass = FLASHHelperClasses::getChargeMass(true);
+    abundances.assign(targets.size(), MassAbundance(.0, 0));
+#pragma omp parallel for schedule(dynamic, 64)
+    for (SignedSize k = 0; k < (SignedSize)targets.size(); ++k)
+    {
+      const auto& target = targets[k];
+      const auto iso = avg.get(target.mass);
+      double iso_max = 0;
+      for (Size i = 0; i < iso.size(); ++i) iso_max = std::max(iso_max, (double)iso[i].getIntensity());
+      std::set<Size> used;
+      double area = 0;
+      for (int z = target.min_charge; z <= target.max_charge; ++z)
+      {
+        for (Size i = 0; i < iso.size(); ++i)
+        {
+          if (iso[i].getIntensity() < 0.1 * iso_max) continue;
+          const double mz = (target.mass + i * iso_da_distance_) / z + charge_mass, tol = mz * 10e-6;
+          for (auto it = std::lower_bound(by_mz.begin(), by_mz.end(), std::make_pair(mz - tol, (Size)0)); it != by_mz.end() && it->first <= mz + tol; ++it)
+          {
+            const Size t = it->second;
+            const double apex = input_mtraces[t].getCentroidRT();
+            if (apex < target.rt_start || apex > target.rt_end || !used.insert(t).second) continue;
+            area += input_seeds[t].computeBulkPeakArea(use_smoothed_intensities_);
+          }
+        }
+      }
+      abundances[k] = MassAbundance(area, used.size());
+    }
   }
 }

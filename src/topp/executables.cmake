@@ -41,6 +41,7 @@ FileInfo
 FileMerger
 FLASHAnnotator
 FLASHDeconv
+FLASHQuantConsensus
 FLASHTnT
 FuzzyDiff
 GenericWrapper

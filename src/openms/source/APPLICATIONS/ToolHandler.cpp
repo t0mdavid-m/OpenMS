@@ -83,6 +83,7 @@ namespace OpenMS
     tools_map["FLASHDeconv"] = Internal::ToolDescription("FLASHDeconv", cat_topdown);
     tools_map["FLASHTnT"] = Internal::ToolDescription("FLASHTnT", cat_topdown);
     tools_map["FLASHAnnotator"] = Internal::ToolDescription("FLASHAnnotator", cat_topdown);
+    tools_map["FLASHQuantConsensus"] = Internal::ToolDescription("FLASHQuantConsensus", cat_topdown);
     tools_map["DLModel"] = Internal::ToolDescription("DLModel", cat_topdown);
     tools_map["FuzzyDiff"] = Internal::ToolDescription("FuzzyDiff", cat_dev);
     // tools_map["GenericWrapper"] = ... (place any extra handling here)

@@ -83,6 +83,18 @@ namespace OpenMS
                                   std::vector<std::vector<MassAbundance>>& mass_abundances, std::map<uint, MassAbundance>& feature_abundances,
                                   const std::vector<FLASHHelperClasses::MassFeature>* mass_features = nullptr);
 
+    /// a mass to quantify in a run from its raw traces (FLASHQuantConsensus: a consensus feature in every run)
+    struct QuantTarget
+    {
+      double mass;            ///< monoisotopic mass
+      double rt_start, rt_end; ///< seconds: the window of the apex of its traces
+      int min_charge, max_charge;
+    };
+    /// the summed bulk area of the raw traces at each target's charges and core isotopes (>= 10% of the most abundant) within 10 ppm
+    /// whose apex lies in its window (no resolution of shared traces), and the number of those traces
+    void quantifyTargets(const PeakMap& ms1_map, const std::vector<QuantTarget>& targets, const FLASHHelperClasses::PrecalculatedAveragine& avg,
+                         std::vector<MassAbundance>& abundances);
+
     // test purpose
     String output_file_path_;
     std::vector<double> rts_from_org_scans_;
@@ -94,6 +106,9 @@ namespace OpenMS
     /// FLASHQuant's elution peak detection (TOPP FLASHQuant): smoothing window from the trace's own FWHM, Savitzky-Golay of order 3, and
     /// sub-traces of at least min_nr_peaks_in_mtraces_ peaks; @p epd only lends its local extrema search
     void detectElutionPeaks_(MassTrace& mt, std::vector<MassTrace>& single_mtraces, const ElutionPeakDetection& epd) const;
+
+    /// the raw mass traces of the MS1 map (in m/z slices, then FLASHQuant's elution peak detection) and their seeds
+    void detectRawTraces_(const PeakMap& ms1_map, std::vector<MassTrace>& input_mtraces, std::vector<FeatureSeed>& input_seeds) const;
 
     /// FLASHQuant's quantity of a feature group: the bulk peak area of each trace with an isotope index, summed
     double groupQuantity_(const FeatureGroup& fg) const;
