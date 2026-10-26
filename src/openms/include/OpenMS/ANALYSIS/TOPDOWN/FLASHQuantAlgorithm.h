@@ -166,9 +166,10 @@ namespace OpenMS
 
     MassTrace updateMassTrace_(const MassTrace& ref_trace, const double &ratio) const;
 
-    void fitTraceModelFromUniqueTraces_(Feature const& tmp_feat, EGHTraceFitter* fitted_model) const;
+    /// @return false if the model could not be fitted (logged as an error if @p log_errors)
+    bool fitTraceModelFromUniqueTraces_(Feature const& tmp_feat, EGHTraceFitter* fitted_model, bool log_errors = true) const;
 
-    void runElutionModelFit_(FeatureFinderAlgorithmPickedHelperStructs::MassTraces &m_traces, EGHTraceFitter* fitter) const;
+    bool runElutionModelFit_(FeatureFinderAlgorithmPickedHelperStructs::MassTraces &m_traces, EGHTraceFitter* fitter, bool log_errors = true) const;
 
     /// @p entries: the features of the trace with their component (-1: none), in feature order
     void updateFeatureWithFitModel(std::vector<Feature>& conflicting_features, const std::vector<std::pair<Size, long>>& entries,

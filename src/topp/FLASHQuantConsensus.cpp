@@ -38,16 +38,16 @@ using namespace std;
   consensus feature. A consensus feature detected in at least -min_run_fraction of the runs is measured in every run: the raw mass
   traces at its charges (the median range of its detections) and core isotopes within 10 ppm whose apex lies in its window (the aligned
   apex mapped into the run, +- half its median width), their bulk areas summed. In a run where it was not detected (match between runs),
-  FLASHDeconv looks for its mass in every MS1 scan of the window: the peak group of the mass as FLASHDeconv forms and scores one (raw
-  peaks at its charges +- 2, isotope offset search, charge fit, isotope cosine, charge SNR, Qscore), kept if its mass stays within the
-  tolerance of the target (or one isotope off), and the scans combined as FLASHDeconv combines the scans of a feature (Qscore2D: one
-  minus the lowest product of (1 - Qscore) over consecutive scans, so the whole envelope must recur scan after scan). The score of the
-  transfer is that Qscore2D if FLASHDeconv's mass of it (intensity-weighted over the scans) lies within three times the median mass
-  error of the detected features of the feature's own mass (measured the same way where it was detected), and it has a raw abundance;
-  else 0. The null: a decoy mass below the envelope by its
-  width + 5 Da (a shift within the envelope, as in bottom-up, falls on the species' own isotopes), measured and scored the same way. The
-  FDR of a score threshold is the number of null scores above it over the number of target scores above it; values whose q-value
-  exceeds -mbr_fdr are NaN.
+  its mass is looked for in every MS1 scan of the window with FLASHDeconv's peak group scoring (PeakGroup: raw peaks at its charges +- 2,
+  isotope offset search, charge fit, isotope cosine, charge SNR, Qscore; on the spectra as read, without FLASHDeconv's removal of low
+  peaks and its detection limit), kept if its mass stays within the tolerance of the target (or one isotope off), and the scans combined
+  as FLASHDeconv combines the scans of a feature (Qscore2D: one minus the lowest product of (1 - Qscore) over consecutive scans, so the
+  whole envelope must recur scan after scan). The score of the transfer is that Qscore2D if the mass found (intensity-weighted over the
+  scans) lies within three times the median mass error of the detected features of the feature's own mass (measured the same way where
+  it was detected; the feature table's mass if no detected run has evidence), and it has a raw abundance; else 0. The null: a decoy mass
+  below the envelope by its width + 5 Da (a shift within the envelope, as in bottom-up, falls on the species' own isotopes), measured and
+  scored the same way. The FDR of a score threshold is the number of null scores at or above it over the number of target scores at or
+  above it; values whose q-value exceeds -mbr_fdr are NaN. A detected run without raw abundance (no trace in its window) is NaN too.
 */
 
 // We do not want this class to show up in the docu:
@@ -90,7 +90,8 @@ protected:
     setMaxFloat_("min_run_fraction", 1.0);
     registerOutputFile_("out_mbr_detail", "<file>", "", "Match between runs, per consensus feature and run (detected or transfer): the value, FLASHDeconv's "
                         "evidence for the mass (Qscore2D, best scan Qscore, scans found, mass error), the same for its decoy where not detected, "
-                        "the feature's own mass error where detected (the reference of the mass errors) and its median abundance where detected.", false, true);
+                        "the feature's own mass error where detected (the reference of the mass errors) and its median abundance where detected; "
+                        "fields not computed (no evidence with -mbr_fdr < 0, no decoy for a detected run) are empty.", false, true);
     setValidFormats_("out_mbr_detail", ListUtils::create<String>("tsv"));
     registerDoubleOption_("mbr_fdr", "<fdr>", 0.01, "Match between runs: values are kept up to this FDR (target-decoy, see above); 1 keeps every "
                           "value, a negative value switches match between runs off (NaN where not detected).", false);
@@ -110,12 +111,13 @@ protected:
     {
       if (col.find(c) == col.end()) throw Exception::ParseError(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, file, String("no column ") + c);
     }
+    const auto decoy_col = col.find("IsDecoy"); // decoy features (FLASHDeconv with FDR reporting) are not features
     std::vector<Feature> features;
     while (std::getline(in, line))
     {
       std::vector<String> v;
       String(line).split('\t', v);
-      if (v.size() < header.size() || v[col["MSLevel"]] != "1") continue;
+      if (v.size() < header.size() || v[col["MSLevel"]] != "1" || (decoy_col != col.end() && v[decoy_col->second] != "0")) continue;
       features.push_back({v[col["MonoisotopicMass"]].toDouble(), v[col["ApexRetentionTime"]].toDouble(), v[col["StartRetentionTime"]].toDouble(),
                           v[col["EndRetentionTime"]].toDouble(), v[col["ApexRetentionTime"]].toDouble(), v[col["MinCharge"]].toInt(),
                           v[col["MaxCharge"]].toInt()});
@@ -167,7 +169,7 @@ protected:
 
   /// FLASHDeconv's evidence for @p target: in every MS1 scan of its window, the peak group of its mass as FLASHDeconv forms and scores
   /// one (raw peaks recruited at its charges +- 2, isotope offset search, charge fit, isotope cosine >= @p min_cos, charge SNR >= @p min_snr,
-  /// Qscore), found if its mass stays within @p tol of the target's (or one isotope off); the scans combined as FLASHDeconv combines the
+  /// Qscore; on the spectra as read: no removal of low peaks, no detection limit), found if its mass stays within @p tol of the target's (or one isotope off); the scans combined as FLASHDeconv combines the
   /// scans of a feature (Qscore2D: one minus the lowest product of (1 - Qscore) over consecutive scans)
   static FDEvidence fdEvidence_(const PeakMap& map, const std::vector<double>& rts, const FLASHQuantAlgorithm::QuantTarget& target,
                                 const FLASHHelperClasses::PrecalculatedAveragine& avg, double tol, double min_cos, double min_snr)
@@ -181,6 +183,11 @@ protected:
     for (Size s = std::lower_bound(rts.begin(), rts.end(), target.rt_start) - rts.begin(); s < map.size() && rts[s] <= target.rt_end; ++s)
     {
       const MSSpectrum& spec = map[s];
+      if (spec.empty()) // no peaks: the mass is not found in this scan
+      {
+        in_chain = false;
+        continue;
+      }
       PeakGroup pg(z1, z2, true);
       pg.setIsotopeDaDistance(iso);
       double next = target.mass, prev_cos = 0;
@@ -236,6 +243,16 @@ protected:
     return v[v.size() / 2];
   }
 
+  /// the median of @p v, the mean of the two middle values for an even count (median_ takes the upper one)
+  static double centreMedian_(std::vector<double> v)
+  {
+    if (v.empty()) return 0;
+    const Size h = v.size() / 2;
+    std::nth_element(v.begin(), v.begin() + h, v.end());
+    if (v.size() % 2 == 1) return v[h];
+    return 0.5 * (v[h] + *std::max_element(v.begin(), v.begin() + h));
+  }
+
   /// the retention time offset of a run to the first one at retention time @p rt: the median offset of the anchor features within 2 min
   static double offset_(const std::vector<std::pair<double, double>>& anchors, double rt)
   {
@@ -281,7 +298,7 @@ protected:
     std::vector<Consensus> kept;
     for (auto& c : cons)
     {
-      if (c.runs.size() >= min_fraction * run_count && !c.runs.empty()) kept.push_back(std::move(c));
+      if (!c.runs.empty() && (double)c.runs.size() / run_count >= min_fraction - 1e-9) kept.push_back(std::move(c));
     }
     OPENMS_LOG_INFO << "Consensus features: " << cons.size() << ", detected in at least " << min_fraction * 100 << "% of the " << run_count
                     << " runs: " << kept.size() << endl;
@@ -387,7 +404,8 @@ protected:
     }
 
     // The score of a transfer: FLASHDeconv's Qscore2D of its mass in its window, if FLASHDeconv's mass of it is within three times the
-    // median mass error of the features where detected and it has a raw abundance; else 0 (never kept). Its decoy is scored the same way.
+    // median mass error of the features where detected and it has a raw abundance; else 0 (kept only with -mbr_fdr 1). Its decoy is
+    // scored the same way.
     // FLASHDeconv's mass, from all the peaks of the envelope in a scan, is far more precise than any single trace. The error is taken
     // against the feature's own mass measured the same way where detected (the median signed error of those runs; for a detected run, of
     // the other ones): the mass of the FLASHDeconv feature table is another estimate, off by a fixed amount for a quarter of the features.
@@ -406,12 +424,12 @@ protected:
         }
         std::vector<double> all;
         for (const auto& [r, e] : own) all.push_back(e);
-        reference[k] = median_(all);
+        reference[k] = centreMedian_(all);
         for (const auto& [r, e] : own)
         {
           std::vector<double> others;
           for (const auto& [r2, e2] : own) { if (r2 != r) others.push_back(e2); }
-          if (!others.empty()) errors.push_back(std::abs(e - median_(others)));
+          if (!others.empty()) errors.push_back(std::abs(e - centreMedian_(others)));
         }
       }
       mass_gate = 3 * median_(errors);
@@ -472,7 +490,10 @@ protected:
       for (Size k = 0; k < kept.size(); ++k)
       {
         std::vector<double> det;
-        for (const auto& [r, i] : kept[k].runs) det.push_back(value[k][r].first);
+        for (const auto& [r, i] : kept[k].runs)
+        {
+          if (value[k][r].first > 0) det.push_back(value[k][r].first);
+        }
         const double det_median = median_(det);
         for (Size r = 0; r < run_count; ++r)
         {
@@ -480,11 +501,18 @@ protected:
           ds << k << "\t" << r << "\t" << (detected ? "detected" : "transfer") << "\t" << std::to_string(value[k][r].first);
           for (int kind = 0; kind < 2; ++kind)
           {
+            // empty where not computed: no evidence with -mbr_fdr < 0, no decoy for a detected run
+            const bool computed = mbr_fdr >= 0 && (kind == 0 || !detected);
             const auto& e = fd_evidence[k][r][kind];
-            if (kind == 1) ds << "\t" << std::to_string(decoy_value[k][r]);
+            if (kind == 1) ds << "\t" << (computed ? String(std::to_string(decoy_value[k][r])) : String(""));
+            if (!computed)
+            {
+              ds << "\t\t\t\t";
+              continue;
+            }
             ds << "\t" << std::to_string(e.qscore2d) << "\t" << std::to_string(e.max_qscore) << "\t" << e.scans << "\t" << std::to_string(e.ppm);
           }
-          ds << "\t" << std::to_string(reference[k]) << "\t" << std::to_string(det_median) << "\n";
+          ds << "\t" << (mbr_fdr >= 0 ? String(std::to_string(reference[k])) : String("")) << "\t" << std::to_string(det_median) << "\n";
         }
       }
     }
@@ -506,7 +534,7 @@ protected:
         const double v = value[k][r].first;
         if (kept[k].runs.count(r) > 0)
         {
-          os << "\t" << std::to_string(v) << "\tdetected\t\t";
+          os << "\t" << (v > 0 ? String(std::to_string(v)) : String("nan")) << "\tdetected\t\t";
           continue;
         }
         mbr_total++;
