@@ -22,6 +22,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/LogCell.h>           // TSVFile::parse unquotes id-bearing cells
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>  // encode/decode for distinct MS1 ids
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanRole.h>          // roleOf: monitor scans are not surveys
+#include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>                 // splitEnvelope
 #include <OpenMS/SYSTEM/File.h>  // freshLogDir: makeDir / removeDirRecursively
 #include "FLASHIda_TestAccess.h"  // FLASHIdaTestAccess::explorationActive (private-state access)
 
@@ -64,6 +65,37 @@ namespace
   inline bool posFinite(double x) { return std::isfinite(x) && x > 0.0; }
   inline bool nonNegFinite(double x) { return std::isfinite(x) && x >= -1e-9; }
   inline bool inUnit(double x) { return std::isfinite(x) && x >= -1e-6 && x <= 1.0 + 1e-6; }
+
+  /// An ADR-0036 SPLIT envelope of cytC (inclusion_cytc_charges_wide.txt's row 12351.3, charges 12..18): two
+  /// PeakGroups 0.05 Da apart (one nominal mass, both inside the row's +-2 x tolerance window) resolving the
+  /// disjoint named charges 12..14 and 15..16, three isotopes per charge so every charge has a measured window.
+  /// Built, not deconvolved: since FDmerge c3994ccc9b the deconvolution keeps only the group explaining the most
+  /// signal among those within tolerance, so no committed fixture yields a sibling any more.
+  inline std::vector<PeakGroup> splitEnvelope()
+  {
+    const double proton = 1.00727646677;
+    const double iso_gap = 1.00235;
+    auto group = [&](double mono_mass, const std::vector<int>& charges) {
+      PeakGroup pg(charges.front(), charges.back(), true);
+      pg.setMonoisotopicMass(mono_mass);
+      for (int z : charges)
+      {
+        for (int iso = 0; iso < 3; ++iso)
+        {
+          FLASHHelperClasses::LogMzPeak lp;
+          lp.mz = (mono_mass + z * proton + iso * iso_gap) / z;
+          lp.abs_charge = z;
+          pg.push_back(lp);
+        }
+        pg.setChargeSNR(z, 10.0f);
+        pg.setChargeIsotopeCosine(z, 0.99f);
+      }
+      pg.setQscore(0.9);
+      pg.setRepAbsCharge(charges.front());
+      return pg;
+    };
+    return {group(12351.30, {12, 13, 14}), group(12351.35, {15, 16})};
+  }
   inline bool inMass(double x) { return std::isfinite(x) && x >= FI_MIN_MASS - 1.0 && x <= FI_MAX_MASS + 1.0; }
   inline bool inChargeD(double z)
   {

@@ -363,37 +363,8 @@ namespace
     return pg;
   }
 
-  /// A SPLIT envelope of the wide row's species (ADR-0036): two PeakGroups of mass 12351.3, 0.05 Da apart (one
-  /// nominal mass, both inside the row's +-2 x tolerance window), resolving disjoint named charges 12..14 and
-  /// 15..16. Built rather than deconvolved: since FDmerge c3994ccc9b the deconvolution keeps only the group
-  /// explaining the most signal among those within tolerance, so ms1_cytc no longer yields one. Selected at
-  /// kSplitRt (seconds), inside the row's window.
+  /// Selection time (seconds) for splitEnvelope (FLASHIda_TestHelpers.h), inside the wide row's window.
   const double kSplitRt = 60.0;
-  std::vector<PeakGroup> splitEnvelope()
-  {
-    const double proton = 1.00727646677;
-    const double iso_gap = 1.00235;
-    auto group = [&](double mono_mass, const std::vector<int>& charges) {
-      PeakGroup pg(charges.front(), charges.back(), true);
-      pg.setMonoisotopicMass(mono_mass);
-      for (int z : charges)
-      {
-        for (int iso = 0; iso < 3; ++iso)
-        {
-          FLASHHelperClasses::LogMzPeak lp;
-          lp.mz = (mono_mass + z * proton + iso * iso_gap) / z;
-          lp.abs_charge = z;
-          pg.push_back(lp);
-        }
-        pg.setChargeSNR(z, 10.0f);
-        pg.setChargeIsotopeCosine(z, 0.99f);
-      }
-      pg.setQscore(0.9);
-      pg.setRepAbsCharge(charges.front());
-      return pg;
-    };
-    return {group(12351.30, {12, 13, 14}), group(12351.35, {15, 16})};
-  }
 
   /// selectFrom on a fresh selection built from @p cfg, with stdout captured into @p log.
   int selectSplit(const std::string& cfg, std::unique_ptr<Config>& config, std::unique_ptr<Deconvolution>& deconv,

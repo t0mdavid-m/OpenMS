@@ -146,6 +146,14 @@ namespace OpenMS
     /// 2026-10-22: a private hook, not a production seam); an empty function clears it.
     static void onBeforeReplan(FLASHIda& f, std::function<void()> fn) { f.before_replan_ = std::move(fn); }
 
+    /// Runs @p fn on every survey's deconvolved MS1 between the deconvolution and the selection
+    /// (PrecursorSelection's private after_deconvolve_ seam), so the WHOLE survey path -- selection, plan units,
+    /// replacePlan, [REPLAN] -- runs on PeakGroups the test chose.
+    static void onAfterDeconvolve(FLASHIda& f, std::function<void(DeconvolvedSpectrum&)> fn)
+    {
+      f.selection_.after_deconvolve_ = std::move(fn);
+    }
+
     /// Quantification groups still open: a frozen group stays open until its last member returns.
     static size_t quantOpenGroupCount(const FLASHIda& f) { return f.quant_.openGroupCount(); }
 

@@ -245,6 +245,7 @@ namespace OpenMS
 
     // Deconvolve MS1 spectrum (result stored in deconv_.deconvolvedMS1())
     deconv_.deconvolveMS1(mzs, ints, length, rt, faims_cv);
+    if (after_deconvolve_) after_deconvolve_(deconv_.deconvolvedMS1());
     // per spec deconvolution
     filterPeakGroupsUsingMassExclusion_(ms_level, rt);
     return (int)selected_peak_groups_.size();

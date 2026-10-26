@@ -42,6 +42,7 @@
 #include <OpenMS/FORMAT/FASTAFile.h>
 
 #include <algorithm>
+#include <functional>
 #include <map>
 #include <set>
 #include <unordered_map>
@@ -326,6 +327,12 @@ namespace OpenMS
     /// nothing in the production API exposes acquisition memory (ADR-0042). Same idiom the engine
     /// already uses for FLASHIda and Exploration; see FLASHIda_TestAccess.h.
     friend struct FLASHIdaTestAccess;
+
+    /// Test seam between a survey's deconvolution and its selection, so a test can hand the whole survey path a
+    /// set of PeakGroups the deconvolution would not produce (an ADR-0036 split envelope, since FDmerge's
+    /// deconvolution keeps one group per mass within tolerance). Empty in production; only FLASHIda_TestAccess.h
+    /// sets it.
+    std::function<void(DeconvolvedSpectrum&)> after_deconvolve_;
 
     /// Maps for global inclusion targeting
     std::map<double, std::vector<double>> target_mass_rt_map_;

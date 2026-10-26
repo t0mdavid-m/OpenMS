@@ -28,6 +28,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <map>
 #include <mutex>
@@ -147,13 +148,15 @@ namespace
 
   /// Drive @p cfg over cytC and pair every `[REPLAN]` line with the survey's MS2 commands. The drive is
   /// depth 1, so every MS2 a survey planned is dequeued before the next survey: the survey's plan is
-  /// exactly the MS2 commands whose parent it is.
-  std::vector<SurveyPlan> plansOf(const std::string& cfg)
+  /// exactly the MS2 commands whose parent it is. @p replace, when set, rewrites every survey's deconvolved
+  /// PeakGroups before selection (FLASHIdaTestAccess::onAfterDeconvolve).
+  std::vector<SurveyPlan> plansOf(const std::string& cfg, std::function<void(DeconvolvedSpectrum&)> replace = {})
   {
     auto scans = loadTsvScans("../../FlashIDA/test-data/spectra/ms1_cytc.txt");
     AcqResult a;
     const std::string out = captureCout([&] {
       FLASHIda ida(const_cast<char*>(cfg.c_str()));
+      if (replace) FLASHIdaTestAccess::onAfterDeconvolve(ida, replace);
       a = runInterleaved(&ida, scans, std::vector<ScanData>{}, nullptr, 4000);
     });
     std::map<std::string, std::vector<const ScanCommand*>> by_survey;
@@ -704,11 +707,16 @@ START_SECTION(siblings_form_one_unit)
     TEST_EQUAL(p.dropped, 0)
   }
 
-  // So the same assertion again on the WIDE row 12..18 (FLASHIda_ChargeModes_test CM-09's config), whose
-  // envelope arrives split: there a survey admits a sibling, and two commands of one nominal mass in one
-  // survey must still be one unit.
+  // So the same assertion again on the WIDE row 12..18 (FLASHIda_ChargeModes_test CM-09's config) with every
+  // survey's envelope SPLIT: there a survey admits a sibling, and two commands of one nominal mass in one survey
+  // must still be one unit. The split is synthetic (splitEnvelope), handed to the whole survey path through the
+  // deconvolution seam, because FDmerge's deconvolution no longer leaves one in ms1_cytc.
   const auto split = plansOf(inclusionChargeSetConfig(freshLogDir("replan_siblings_split"), "inclusion_cytc_charges_wide.txt",
-                                                      /*max_precursors=*/2, /*strict_inclusion=*/true));
+                                                      /*max_precursors=*/2, /*strict_inclusion=*/true),
+                             [](DeconvolvedSpectrum& ds) {
+                               ds.clear();
+                               for (const PeakGroup& pg : splitEnvelope()) ds.push_back(pg);
+                             });
   TEST_EQUAL(split.empty(), false)
   int surveys_with_siblings = 0;
   for (const auto& p : split)
