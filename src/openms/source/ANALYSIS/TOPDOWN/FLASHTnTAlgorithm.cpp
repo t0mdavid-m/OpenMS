@@ -320,11 +320,9 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "and their scores are still reported, so this can be used to shortlist proteins cheaply.");
   defaults_.setValidStrings("protein_level_only", {"true", "false"});
 
-  defaults_.setValue("max_protein_hits", 100,
-                     "Number of candidate proteins kept per spectrum by the protein-level search. When proteoform search "
-                     "runs, only these are characterized. 100 rather than 50: the correct protein of a spectrum often ranks "
-                     "50-200 (chance tags of long proteins), and only the extension tells them apart (11 survey runs: +0.9 % "
-                     "spectra, the same decoys, +11 % run time).");
+  defaults_.setValue("max_protein_hits", 50,
+                     "Number of candidate proteins kept per spectrum by the protein-level search, chosen as candidate_ranking says. When "
+                     "proteoform search runs, only these are characterized.");
   defaults_.setMinInt("max_protein_hits", 1);
 
   defaults_.setValue("protein_tol", 0.0,
@@ -392,7 +390,7 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "of 1549, for about a third of the run time. Alone, gapped tags find about as much as sequence tags (1480 without the "
                      "cascade: 4547 spectra by gapped tags vs 4117 by sequence tags, 1538 and 1579 proteoforms, 305 proteins each).");
   defaults_.setValidStrings("gapped_tags", {"off", "fallback", "both", "only"});
-  defaults_.setValue("candidate_ranking", "union", "How the candidate proteins of a spectrum are cut to max_protein_hits: "
+  defaults_.setValue("candidate_ranking", "learned", "How the candidate proteins of a spectrum are cut to max_protein_hits: "
                      "union (the max_protein_hits best by score and those by matched tags); the others keep as many as union would, chosen by: fusion "
                      "(reciprocal rank fusion of the two ranks, 1/(60+r)); poisson (-log10 P(Poisson >= its tag count), the rate from the tags per "
                      "residue of the spectrum's candidates times its length); precursor (a start and an end implied by a tag and the precursor mass "
