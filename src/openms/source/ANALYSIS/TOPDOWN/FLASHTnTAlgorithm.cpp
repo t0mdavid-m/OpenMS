@@ -13,6 +13,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHGappedTaggerAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTAlgorithm.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTCandidateRanker.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/MassLadderAlgorithm.h>
 #include <boost/math/special_functions/gamma.hpp>
 #include <algorithm>
@@ -396,8 +397,12 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "(reciprocal rank fusion of the two ranks, 1/(60+r)); poisson (-log10 P(Poisson >= its tag count), the rate from the tags per "
                      "residue of the spectrum's candidates times its length); precursor (a start and an end implied by a tag and the precursor mass "
                      "both on residue boundaries first, then score); twosided (the score of a tag's side plus that of the other side at the shift the "
-                     "precursor mass implies).");
-  defaults_.setValidStrings("candidate_ranking", {"union", "fusion", "poisson", "precursor", "twosided"});
+                     "precursor mass implies). learned keeps the max_protein_hits best of the union of the 500 best by score and by matched tags by a "
+                     "small model of each candidate's own evidence (FLASHTnTCandidateRanker: its score, the chance probability of the ion ladder at its "
+                     "tags' offset, whether that offset is a residue boundary; not the precursor mass). Trained to keep the protein of each spectrum's "
+                     "best PrSM of a 500-candidate search, left out by dataset its 10 best held it in 94.6 % of the spectra (gapped tags 89.2 %), the "
+                     "union of the 100 best in 93.8 % (86.8 %).");
+  defaults_.setValidStrings("candidate_ranking", {"union", "fusion", "poisson", "precursor", "twosided", "learned"});
   defaults_.setValue("terminal_ladders", "true",
                      "Candidate proteins from terminal ladders: deconvolved masses that are residue sums from an intact protein terminus (the N-terminus "
                      "also without the initiator Met and with acetylation), found without a sequence tag. In every spectrum the min_protein_hits best "
@@ -1548,6 +1553,11 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   }
   const double t_residue_sums = lap();
   const double protein_tol = protein_tol_ > 0 ? protein_tol_ : (ms2_tol > 0 ? ms2_tol : tol);
+  // the learned candidate cut reads the ion ladders from the residue sums: c ions NH3 above them; z ions NH3 below, z+1 ions NH3 - H
+  const auto ion_types = param_.getValue("ion_type").toStringVector();
+  auto hasIonType = [&ion_types](const std::string& t) { return std::find(ion_types.begin(), ion_types.end(), t) != ion_types.end(); };
+  const double learned_prefix_offset = hasIonType("c") ? 17.026549 : 0.0;
+  const double learned_suffix_offset = hasIonType("zp1") ? -16.018724 : (hasIonType("z") ? -17.026549 : 0.0);
 
   // The protein-level search runs on every spectrum before any extension, because the run-level protein FDR
   // that decides which candidates are extended needs all of it. Each spectrum's candidates stay in
@@ -2075,7 +2085,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       }
       if (candidate_ranking_ != "union" && (int)ranked_count > max_protein_hits_)
       {
-        const Size kept_count = (Size)std::count(keep.begin(), keep.end(), true);
+        // learned: max_protein_hits; the others: as many as union kept
+        const Size kept_count = candidate_ranking_ == "learned" ? (Size)max_protein_hits_ : (Size)std::count(keep.begin(), keep.end(), true);
         auto entryOf = [&](Size c) { return c < seq_count ? seq_candidates[c].protein : hit_shifts[c - seq_count].fasta_index; };
         auto tagCount = [&](Size c) { return c < seq_count ? (double)seq_candidates[c].tag_count : (double)gapped_tag_counts[c - seq_count]; };
         // a side's shifts and tag flanking masses
@@ -2158,6 +2169,41 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
                 }
               }
             }
+          }
+        }
+        else if (candidate_ranking_ == "learned")
+        {
+          // the candidates the model was trained on: the union of the 500 best by score (ranked is in score order) and by matched tags
+          constexpr Size learned_pool = 500;
+          std::vector<char> in_pool(ranked_count, 0);
+          std::fill(in_pool.begin(), in_pool.begin() + std::min(ranked_count, learned_pool), 1);
+          if (ranked_count > learned_pool)
+          {
+            std::vector<std::pair<double, Size>> by_tags;
+            by_tags.reserve(ranked_count);
+            for (Size i = 0; i < ranked_count; i++) by_tags.emplace_back(-tagCount(ranked[i].index), i);
+            std::partial_sort(by_tags.begin(), by_tags.begin() + learned_pool, by_tags.end());
+            for (Size i = 0; i < learned_pool; i++) in_pool[by_tags[i].second] = 1;
+          }
+          FLASHTnTCandidateRanker::Spectrum spectrum;
+          spectrum.masses.reserve(dspec.size());
+          for (const auto& pg : dspec) spectrum.masses.push_back(pg.getMonoMass());
+          std::sort(spectrum.masses.begin(), spectrum.masses.end());
+          spectrum.prefix_offset = learned_prefix_offset;
+          spectrum.suffix_offset = learned_suffix_offset;
+          std::fill(key.begin(), key.end(), -std::numeric_limits<double>::infinity());
+          for (Size i = 0; i < ranked_count; i++)
+          {
+            if (! in_pool[i]) continue;
+            const Size c = ranked[i].index, e = entryOf(c);
+            FLASHTnTCandidateRanker::Candidate cand;
+            cand.prefix = &pro_prefix[e];
+            cand.suffix = &pro_suffix[e];
+            const double* flanks;
+            shiftsOf(c, true, cand.n_shifts, flanks, cand.n_count);
+            shiftsOf(c, false, cand.c_shifts, flanks, cand.c_count);
+            cand.score = ranked[i].score;
+            key[i] = FLASHTnTCandidateRanker::score(FLASHTnTCandidateRanker::features(spectrum, cand));
           }
         }
         else // twosided

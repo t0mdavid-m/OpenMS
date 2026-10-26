@@ -27,6 +27,7 @@ set(sources_list
         FLASHGappedTaggerAlgorithm.cpp
         FLASHTaggerAlgorithm.cpp
         FLASHTnTAlgorithm.cpp
+        FLASHTnTCandidateRanker.cpp
         MassFeatureTrace.cpp
         PeakGroup.cpp
         PeakGroupScoring.cpp
