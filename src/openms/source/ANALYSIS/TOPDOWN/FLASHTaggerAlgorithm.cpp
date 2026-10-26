@@ -8,8 +8,17 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
+#ifdef _OPENMP
+  #include <omp.h>
+#else
+  #define omp_in_parallel() 0
+#endif
 #include <utility>
+#include <boost/math/special_functions/gamma.hpp>
 #include <OpenMS/ANALYSIS/ID/PeptideIndexing.h>
+#include <cmath>
+#include <algorithm>
+#include <limits>
 
 namespace OpenMS
 {
@@ -405,9 +414,6 @@ void FLASHTaggerAlgorithm::run(const DeconvolvedSpectrum& deconvolved_spectrum, 
   // setLogType(CMD);
   if (deconvolved_spectrum.empty() || deconvolved_spectrum.isDecoy()) return;
 
-  auto tags = std::vector<FLASHHelperClasses::Tag>();
-  tags.reserve(max_tag_length_ * max_tag_counts_.back());
-
   for (int mode = 0; mode < (common_shifts_.empty() ? 3 : 1); mode++)
     generateTags_(deconvolved_spectrum, ppm, mode);
 
@@ -514,7 +520,7 @@ void FLASHTaggerAlgorithm::updateTagSet_(std::set<FLASHHelperClasses::Tag>& tag_
       for (const auto& pt : iter->second)
       {
         if (pt.getNtermMass() < 0) continue;
-        if (abs(pt.getNtermMass() - flanking_mass) / std::max(pt.getNtermMass(), flanking_mass) * 1e6 > ppm) continue;
+        if (std::abs(pt.getNtermMass() - flanking_mass) / std::max(pt.getNtermMass(), flanking_mass) * 1e6 > ppm) continue;
         pass = false;
         break;
       }
@@ -534,7 +540,7 @@ void FLASHTaggerAlgorithm::updateTagSet_(std::set<FLASHHelperClasses::Tag>& tag_
       for (const auto& pt : iter->second)
       {
         if (pt.getCtermMass() < 0) continue;
-        if (abs(pt.getCtermMass() - flanking_mass) / std::max(pt.getCtermMass(), flanking_mass) * 1e6 > ppm) continue;
+        if (std::abs(pt.getCtermMass() - flanking_mass) / std::max(pt.getCtermMass(), flanking_mass) * 1e6 > ppm) continue;
         pass = false;
         break;
       }
@@ -594,11 +600,11 @@ void FLASHTaggerAlgorithm::getTags_(const std::vector<double>& mzs, const std::v
   int max_vertex_score = *std::max_element(_scores.begin(), _scores.end());
   int min_vertex_score = *std::min_element(_scores.begin(), _scores.end());
 
-  max_path_score_ = std::max(max_vertex_score, max_vertex_score) * (max_tag_length_ + 2);
-  min_path_score_ = std::max(min_vertex_score, min_vertex_score) * (max_tag_length_ + 2);
+  max_path_score_ = max_vertex_score * (max_tag_length_ + 2);
+  min_path_score_ = min_vertex_score * (max_tag_length_ + 2);
 
-  max_path_score_ = std::max(max_path_score_, std::max(max_vertex_score, max_vertex_score) * (min_tag_length_ - 2));
-  min_path_score_ = std::min(min_path_score_, std::max(min_vertex_score, min_vertex_score) * (min_tag_length_ - 2));
+  max_path_score_ = std::max(max_path_score_, max_vertex_score * (min_tag_length_ - 2));
+  min_path_score_ = std::min(min_path_score_, min_vertex_score * (min_tag_length_ - 2));
   min_path_score_ = std::max(0, min_path_score_);
 
   std::set<FLASHHelperClasses::Tag> tagSet;
@@ -655,7 +661,7 @@ void FLASHTaggerAlgorithm::getTags_(const std::vector<double>& mzs, const std::v
 
 Size FLASHTaggerAlgorithm::find_with_X_(const std::string_view& A, const String& B, Size pos) // allow a single X. pos is in A
 {
-  if (A.length() <= B.length()) return String::npos;
+  if (A.length() < B.length()) return String::npos;
   for (size_t i = pos; i <= A.length() - B.length(); ++i)
   {
     bool match = true;
@@ -679,7 +685,7 @@ Size FLASHTaggerAlgorithm::find_with_X_(const std::string_view& A, const String&
 // Make output struct containing all information about matched entries and tags, coverage, score etc.
 void FLASHTaggerAlgorithm::runMatching(std::vector<ProteinHit>& hits,
                                        const DeconvolvedSpectrum& deconvolved_spectrum,
-                                       const std::vector<int> spec_vec,
+                                       const std::vector<int>& spec_vec,
                                        const std::vector<std::unordered_set<int>>& vec_pro,
                                        const std::vector<std::unordered_set<int>>& rev_vec_pro,
                                        const double max_mod_mass)
@@ -698,10 +704,9 @@ void FLASHTaggerAlgorithm::runMatching(std::vector<ProteinHit>& hits,
 #pragma omp parallel for default(none)                                                                                                     \
   shared(spec_vec, spec_scores, deconvolved_spectrum, hits, vec_pro, \
            rev_vec_pro, scan, max_mod_mass, std::cout)
-  for (int i = 0; i < hits.size(); i++)
+  for (int i = 0; i < (int)hits.size(); i++)
   {
     auto& hit = hits[i];
-    std::vector<int> matched_tag_indices;
     std::vector<int> n_spec_pro_diffs = hit.getMetaValue("NtermFlankingMasses").toIntList(),
                      c_spec_pro_diffs = hit.getMetaValue("CtermFlankingMasses").toIntList();
     int index = hit.getMetaValue("FastaIndex");
@@ -714,6 +719,216 @@ void FLASHTaggerAlgorithm::runMatching(std::vector<ProteinHit>& hits,
   }
 }
 
+namespace
+{
+// the match count and lambda of one shift (j: its index), and a bound of its score: -log10 P(Poisson(lam) = cntr) >= -log10 P(Poisson(lam) >= cntr)
+struct ShiftCount
+{
+  double bound;
+  double lam;
+  int cntr;
+  Size j;
+};
+
+// log(k!) for the bound (std::lgamma would write the global signgam from every thread)
+const std::vector<double>& logFactorials()
+{
+  static const std::vector<double> log_factorial = [] {
+    std::vector<double> t(4096, 0.0);
+    for (Size k = 2; k < t.size(); k++) t[k] = t[k - 1] + std::log((double)k);
+    return t;
+  }();
+  return log_factorial;
+}
+
+ShiftCount shiftCount(const int cntr, const double lambda, const Size j)
+{
+  const auto& log_factorial = logFactorials();
+  const double lam = std::max(lambda, 1e-12);
+  const double bound = cntr < (int)log_factorial.size() ? (lam - cntr * std::log(lam) + log_factorial[cntr]) / std::log(10.0)
+                                                        : std::numeric_limits<double>::infinity();
+  return {bound, lam, cntr, j};
+}
+
+// The best score (-log10 P) of the counted shifts and the match count of the first shift (in shift order) that has it, as when the tail
+// probabilities are evaluated in shift order with a strict ">" update. They (long double, the costly part) are evaluated in descending order of
+// their bound: the best shift tends to come first, and a shift whose bound is below the best (with a margin far above the rounding of either)
+// cannot reach it, nor can the shifts after it.
+double bestShiftScore(std::vector<ShiftCount>& counted, int* best_count)
+{
+  std::sort(counted.begin(), counted.end(), [](const ShiftCount& l, const ShiftCount& r) { return l.bound > r.bound; });
+  double best = 0;
+  Size best_j = 0;
+  for (const auto& c : counted)
+  {
+    if (best > 0 && c.bound + 1e-6 < best) break;
+    const double p = boost::math::gamma_p((double)c.cntr, c.lam); // P(Poisson(lambda) >= cntr)
+    const double log_p = -std::log10(std::max(p, 1e-300));
+    if (log_p > best || (log_p == best && best > 0 && c.j < best_j))
+    {
+      best = log_p;
+      best_j = c.j;
+      if (best_count != nullptr) *best_count = c.cntr;
+    }
+  }
+  return best;
+}
+} // namespace
+
+// The score of one side is the chance probability of its best shift, as -log10. For a shift, a mass whose shifted value lies on the
+// protein (0 .. the last residue sum) lands within its margin of one of the L residue sums by chance with probability
+// 2 * margin * L / (protein mass); lambda sums these over the masses. The match count k is compared with Poisson(lambda), and the
+// smallest P(X >= k) over the shifts is multiplied by the number of shifts tried. A summed node score instead grows with the protein
+// length (more residue sums to land on, more tag positions to try): in a native spectrum with ~240 masses, decoys of 1000-1500
+// residues scored 77 on average vs 52 for those under 700, so long noise proteins outranked real ones.
+double FLASHTaggerAlgorithm::scoreShifts(const std::vector<double>& masses, const std::vector<double>& residue_sums, const double* shifts,
+                                         const double* flanks, Size count, double tol_ppm, double density_mass, int* best_count)
+{
+  if (best_count != nullptr) *best_count = 0;
+  if (count == 0 || residue_sums.size() < 2) return 0.0;
+  const double protein_mass = residue_sums.back();
+  const double density = (double)(residue_sums.size() - 1) / (density_mass > 0 ? density_mass : protein_mass);
+  static thread_local std::vector<ShiftCount> counted; // per-worker scratch
+  counted.clear();
+  for (Size j = 0; j < count; j++)
+  {
+    int cntr = 0;
+    double lambda = 0;
+    // masses ascend, and so does target - margin (the margin grows by a ppm fraction of the mass): the first residue sum at or above it
+    // is found by a pointer that only moves forward, as std::lower_bound would find it
+    auto it = residue_sums.begin();
+    for (Size k = 0; k < masses.size(); k++)
+    {
+      const double target = masses[k] + shifts[j];
+      const double margin = tol_ppm * 1e-6 * (std::max(masses[k], target) + flanks[j]);
+      if (target < -margin || target > protein_mass + margin) continue;
+      lambda += std::min(1.0, 2.0 * margin * density);
+      const double low = target - margin;
+      if (it != residue_sums.begin() && *(it - 1) >= low) it = std::lower_bound(residue_sums.begin(), it, low); // never moves back in practice
+      while (it != residue_sums.end() && *it < low) ++it;
+      if (it == residue_sums.end() || *it > target + margin) continue;
+      cntr++;
+    }
+    if (cntr == 0) continue;
+    counted.push_back(shiftCount(cntr, lambda, j));
+  }
+  const double best = bestShiftScore(counted, best_count); // -log10 P
+  return std::max(0.0, best - std::log10((double)count));
+}
+
+namespace
+{
+// the buckets of indexResidueSums: a power of two, so that a mass times its inverse is exact and the bucket of a mass starts at or below it
+constexpr double sum_bucket_width = 64.0;
+constexpr double sum_bucket_inverse = 1.0 / sum_bucket_width;
+} // namespace
+
+void FLASHTaggerAlgorithm::indexResidueSums(const std::vector<double>& residue_sums, std::vector<std::uint32_t>& sum_index)
+{
+  sum_index.clear();
+  if (residue_sums.size() < 2 || residue_sums.size() >= (Size)UINT32_MAX || ! (residue_sums[0] >= 0)
+      || ! (residue_sums.back() < 1e12))
+  {
+    return;
+  }
+  for (Size i = 1; i < residue_sums.size(); i++)
+  {
+    if (! (residue_sums[i - 1] <= residue_sums[i])) return; // not sorted
+  }
+  const Size buckets = (Size)(residue_sums.back() * sum_bucket_inverse) + 1;
+  sum_index.resize(buckets);
+  Size i = 0;
+  for (Size b = 0; b < buckets; b++)
+  {
+    const double start = (double)b * sum_bucket_width;
+    while (residue_sums[i] < start) i++; // the last sum is at or above the start of the last bucket
+    sum_index[b] = (std::uint32_t)i;
+  }
+}
+
+// scoreShifts, the same operations in the same order, but the first residue sum at or above low (the position of the walk there, which
+// for sorted sums is that whatever the earlier masses were, and stays put for a NaN) is looked up: from the first sum of the bucket of low,
+// past at most two sums (no residue is lighter than 32 Da), without a branch that depends on the masses.
+double FLASHTaggerAlgorithm::scoreShifts(const std::vector<double>& masses, const std::vector<double>& residue_sums,
+                                         const std::vector<std::uint32_t>& sum_index, const double* shifts, const double* flanks, Size count,
+                                         double tol_ppm, double density_mass, int* best_count)
+{
+  // the index of other sums (not of the same size and maximum) is not used
+  if (sum_index.empty() || residue_sums.size() < 2 || ! (residue_sums.back() >= 0 && residue_sums.back() < 1e12)
+      || sum_index.size() != (Size)(residue_sums.back() * sum_bucket_inverse) + 1 || sum_index.back() >= residue_sums.size())
+  {
+    return scoreShifts(masses, residue_sums, shifts, flanks, count, tol_ppm, density_mass, best_count);
+  }
+  if (best_count != nullptr) *best_count = 0;
+  if (count == 0) return 0.0;
+  const double protein_mass = residue_sums.back();
+  const double density = (double)(residue_sums.size() - 1) / (density_mass > 0 ? density_mass : protein_mass);
+  const double* const sums = residue_sums.data();
+  const std::uint32_t* const first = sum_index.data();
+  const Size end = residue_sums.size();
+  static thread_local std::vector<ShiftCount> counted; // per-worker scratch
+  counted.clear();
+  for (Size j = 0; j < count; j++)
+  {
+    int cntr = 0;
+    double lambda = 0;
+    Size it = 0;
+    for (Size k = 0; k < masses.size(); k++)
+    {
+      const double target = masses[k] + shifts[j];
+      const double margin = tol_ppm * 1e-6 * (std::max(masses[k], target) + flanks[j]);
+      if (target < -margin || target > protein_mass + margin) continue;
+      lambda += std::min(1.0, 2.0 * margin * density);
+      const double low = target - margin;
+      if (low > sums[0])
+      {
+        if (low > protein_mass) { it = end; }
+        else
+        {
+          it = first[(Size)(low * sum_bucket_inverse)];
+          it += (Size)(sums[it] < low);
+          it += (Size)(sums[it] < low);
+          while (sums[it] < low) ++it;
+        }
+      }
+      else if (low <= sums[0]) { it = 0; }
+      if (it == end || sums[it] > target + margin) continue;
+      cntr++;
+    }
+    if (cntr == 0) continue;
+    counted.push_back(shiftCount(cntr, lambda, j));
+  }
+  const double best = bestShiftScore(counted, best_count); // -log10 P
+  return std::max(0.0, best - std::log10((double)count));
+}
+
+void FLASHTaggerAlgorithm::runMatchingExact(std::vector<ProteinHit>& hits,
+                                            const std::vector<ProteinShifts>& shifts,
+                                            const DeconvolvedSpectrum& deconvolved_spectrum,
+                                            const std::vector<std::vector<double>>& prefix_masses,
+                                            const std::vector<std::vector<double>>& suffix_masses,
+                                            double tol_ppm)
+{
+  // the masses; mass 0 stands for the terminus, as in runMatching
+  std::vector<double> masses {0.0};
+  masses.reserve(deconvolved_spectrum.size() + 1);
+  for (const auto& pg : deconvolved_spectrum)
+  {
+    masses.push_back(pg.getMonoMass());
+  }
+
+  // FLASHTnT calls this from a loop that is already parallel over spectra; nesting would oversubscribe the threads
+#pragma omp parallel for schedule(dynamic) if (! omp_in_parallel())
+  for (int i = 0; i < (int)hits.size(); i++)
+  {
+    auto& hit = hits[i];
+    const auto& sh = shifts[i];
+    const Size index = sh.fasta_index;
+    hit.setScore(std::max(scoreShifts(masses, prefix_masses[index], sh.n_shifts.data(), sh.n_flanks.data(), sh.n_shifts.size(), tol_ppm),
+                          scoreShifts(masses, suffix_masses[index], sh.c_shifts.data(), sh.c_flanks.data(), sh.c_shifts.size(), tol_ppm)));
+  }
+}
+
 void FLASHTaggerAlgorithm::fillTags(std::vector<FLASHHelperClasses::Tag>& tags, int tag_length) const
 {
   for (const auto& tag : tags_)
@@ -723,37 +938,84 @@ void FLASHTaggerAlgorithm::fillTags(std::vector<FLASHHelperClasses::Tag>& tags, 
   }
 }
 
+namespace
+{
+// The internal mass of the residues [begin, end) of @p seq without its X, as AASequence::fromString() of them gives it with
+// getMonoWeight(Residue::Internal) when all are one-letter codes A-Z of residues (each ResidueDB::getResidue(char), their masses added to 0
+// in sequence order): the same additions in the same order, without parsing. False if another character is among them (AASequence then).
+bool sumInternalMasses(const String& seq, Size begin, Size end, double& sum, Size& count)
+{
+  static const ResidueDB* rdb = ResidueDB::getInstance();
+  static const Residue* unknown = rdb->getResidue(String("X"));
+  sum = 0;
+  count = 0;
+  for (Size i = begin; i < end; i++)
+  {
+    const char c = seq[i];
+    if (c == 'X') continue;
+    if (c < 'A' || c > 'Z') return false;
+    const Residue* r = rdb->getResidue((unsigned char)c);
+    if (r == nullptr || r == unknown) return false;
+    sum += r->getMonoWeight(Residue::Internal);
+    count++;
+  }
+  return true;
+}
+} // namespace
+
 void FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(std::vector<int>& positions,
                                                                    std::vector<double>& masses,
                                                                    double flanking_mass_tol,
                                                                    const String& seq, //
-                                                                   const FLASHHelperClasses::Tag& tag)
+                                                                   const FLASHHelperClasses::Tag& tag,
+                                                                   const std::vector<std::pair<int, double>>* fixed)
 {
+  // the summed fixed modification masses of the residues [begin, end) of seq
+  auto fixedSum = [fixed](Size begin, Size end) {
+    double sum = 0;
+    if (fixed == nullptr) return sum;
+    for (const auto& [p, mass] : *fixed)
+    {
+      if (p >= 0 && (Size)p >= begin && (Size)p < end) sum += mass;
+    }
+    return sum;
+  };
   std::vector<int> indices;
   const auto& tagseq = tag.getUppercaseSequence();
-  Size pos = find_with_X_(seq, tagseq);
+  // without X in the protein, find_with_X_ finds exact matches only
+  const bool with_x = seq.find('X') != String::npos;
+  auto findTag = [&](Size from) { return with_x ? find_with_X_(seq, tagseq, from) : seq.find(tagseq, from); };
+  Size pos = findTag(0);
   while (pos != String::npos)
   {
     double delta_mass = - flanking_mass_tol - 1;
 
-    auto x_pos = seq.find('X');
+    double sum = 0;
+    Size count = 0;
     if (tag.getNtermMass() > 0)
     {
-      auto nterm = seq.substr(0, pos);
-      if (! nterm.empty())
+      if (pos == 0) {}
+      else if (sumInternalMasses(seq, 0, pos, sum, count)) { delta_mass = tag.getNtermMass() - (count == 0 ? 0 : sum); }
+      else
       {
-        if (x_pos != String::npos) { nterm.erase(remove(nterm.begin(), nterm.end(), 'X'), nterm.end()); }
+        auto nterm = seq.substr(0, pos);
+        if (with_x) { nterm.erase(remove(nterm.begin(), nterm.end(), 'X'), nterm.end()); }
         delta_mass = tag.getNtermMass() - (nterm.empty() ? 0 : AASequence::fromString(nterm).getMonoWeight(Residue::Internal));
       }
+      if (fixed != nullptr && pos > 0) delta_mass -= fixedSum(0, pos);
     }
     else
     {
-      auto cterm = seq.substr(pos + tag.getSequence().length());
-      if (! cterm.empty())
+      const Size cterm_start = pos + tag.getSequence().length();
+      if (cterm_start >= seq.length()) {}
+      else if (sumInternalMasses(seq, cterm_start, seq.length(), sum, count)) { delta_mass = tag.getCtermMass() - (count == 0 ? 0 : sum); }
+      else
       {
-        if (x_pos != String::npos) cterm.erase(remove(cterm.begin(), cterm.end(), 'X'), cterm.end());
+        auto cterm = seq.substr(cterm_start);
+        if (with_x) cterm.erase(remove(cterm.begin(), cterm.end(), 'X'), cterm.end());
         delta_mass = tag.getCtermMass() - (cterm.empty() ? 0 : AASequence::fromString(cterm).getMonoWeight(Residue::Internal));
       }
+      if (fixed != nullptr && cterm_start < seq.length()) delta_mass -= fixedSum(cterm_start, seq.length());
     }
 
     if (delta_mass != - flanking_mass_tol - 1 && (flanking_mass_tol < 0 || std::abs(delta_mass) <= flanking_mass_tol))
@@ -761,7 +1023,7 @@ void FLASHTaggerAlgorithm::fillMatchedPositionsAndFlankingMassDiffs(std::vector<
       masses.push_back(delta_mass);
       positions.push_back((int)pos);
     }
-    pos = find_with_X_(seq, tagseq, pos + 1);
+    pos = findTag(pos + 1);
   }
 }
 } // namespace OpenMS

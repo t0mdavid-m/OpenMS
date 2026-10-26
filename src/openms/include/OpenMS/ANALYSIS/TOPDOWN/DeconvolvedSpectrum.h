@@ -54,6 +54,9 @@ namespace OpenMS
     /// assignment operator
     DeconvolvedSpectrum& operator=(const DeconvolvedSpectrum& deconvolved_spectrum) = default;
 
+    /// move assignment
+    DeconvolvedSpectrum& operator=(DeconvolvedSpectrum&& deconvolved_spectrum) noexcept = default;
+
     /// Convert DeconvolvedSpectrum to MSSpectrum (e.g., used to store in mzML format).
     /// @param to_charge the charge of each peak in mzml output.
     /// @param tol the ppm tolerance
@@ -78,8 +81,9 @@ namespace OpenMS
     /// get CV for FAIMS
     double getCV() const;
 
-    /// get possible max mass of the deconvolved masses - for MS1, max mass specified by user
-    /// for MSn, min value between max mass specified by the user and precursor mass
+    /// get possible max mass of the deconvolved masses - for MS1 (or without a precursor peak group), max mass specified by user
+    /// for MSn, min value between max mass specified by the user and precursor mass. If the precursor peak group uses the window bounds
+    /// (PeakGroup::useWindowBounds), the precursor mass is raised to the heaviest mass in the isolation window
     /// @param max_mass the max mass specified by the user
     double getCurrentMaxMass(double max_mass) const;
 
@@ -88,8 +92,10 @@ namespace OpenMS
     /// @param min_mass the min mass specified by the user
     double getCurrentMinMass(double min_mass) const;
 
-    /// get possible max charge of the deconvolved masses - for MS1, max charge specified by user
-    /// for MSn, min value between max charge specified by the user and precursor charge
+    /// get possible max charge of the deconvolved masses - for MS1 (or without a precursor peak group), max charge specified by user
+    /// for MSn, min value between max charge specified by the user and the charge of the isolated precursor ion (precursor peak; the
+    /// representative charge of the precursor peak group if it is unknown). If the precursor peak group uses the window bounds
+    /// (PeakGroup::useWindowBounds), that charge is raised to the highest charge in the isolation window
     /// @param max_abs_charge the max absolute value of the charge specified by the user
     int getCurrentMaxAbsCharge(int max_abs_charge) const;
 
@@ -128,11 +134,55 @@ namespace OpenMS
     /// set precursor peakGroup
     void setPrecursorPeakGroup(const PeakGroup& pg);
 
+    /// mass of the decoy precursor (with report_FDR): the MS1 decoy mass (noise or signal decoy) of the isolation window that beat the
+    /// precursor by the fragments (precursor_by_fragments), or the one of the highest charge SNR without it; -1 if none
+    double getDecoyPrecursorMass() const
+    {
+      return decoy_precursor_mass_;
+    }
+    void setDecoyPrecursorMass(double mass)
+    {
+      decoy_precursor_mass_ = mass;
+    }
+    /// weight of the decoy precursor in an FDR, as FLASHDeconv counts its decoys: 1 for a signal decoy, the noise decoy weight for a noise
+    /// decoy (negative until that weight is known)
+    double getDecoyPrecursorWeight() const
+    {
+      return decoy_precursor_weight_;
+    }
+    void setDecoyPrecursorWeight(double weight)
+    {
+      decoy_precursor_weight_ = weight;
+    }
+    /// precursor score (2D Qscore, as FLASHDeconv scores its target and decoy masses for its own FDR) of the decoy precursor, so that a
+    /// decoy spectrum competes with the spectrum on the precursor; -1 if unknown (a decoy mass can score 0)
+    double getDecoyPrecursorQscore() const
+    {
+      return decoy_precursor_qscore_;
+    }
+    void setDecoyPrecursorQscore(double qscore)
+    {
+      decoy_precursor_qscore_ = qscore;
+    }
+    /// the decoy precursor's Qscore in its survey scan alone (1D), the score a decoy spectrum competes on: a decoy is rarely traced over
+    /// several scans, so the 2D Qscore favours the precursor; -1 if unknown
+    double getDecoyPrecursorQscore1D() const
+    {
+      return decoy_precursor_qscore1d_;
+    }
+    void setDecoyPrecursorQscore1D(double qscore)
+    {
+      decoy_precursor_qscore1d_ = qscore;
+    }
+
     /// original spectrum setter
     void setOriginalSpectrum(const MSSpectrum& spec);
 
     /// set peak groups in this spectrum
     void setPeakGroups(const std::vector<PeakGroup>& x);
+
+    /// set peak groups in this spectrum, taking ownership of @p x
+    void setPeakGroups(std::vector<PeakGroup>&& x);
 
     void setPrecursorMassIntensityMap(const std::vector<std::tuple<double, double>>& map);
 
@@ -147,6 +197,10 @@ namespace OpenMS
     const PeakGroup& operator[](Size i) const;
     PeakGroup& operator[](Size i);
     void push_back(const PeakGroup& pg);
+    void push_back(PeakGroup&& pg);
+
+    /// exchange the peak group vector with @p x (lets callers recycle vector capacity)
+    void swapPeakGroups(std::vector<PeakGroup>& x);
     void emplace_back(const PeakGroup& pg);
     void pop_back();
     PeakGroup& back();
@@ -190,6 +244,11 @@ namespace OpenMS
     MSSpectrum spec_;
     /// precursor peakGroup (or mass)
     PeakGroup precursor_peak_group_;
+    /// the decoy precursor mass (see getDecoyPrecursorMass), -1 if none
+    double decoy_precursor_mass_ = -1;
+    double decoy_precursor_weight_ = 1;
+    double decoy_precursor_qscore_ = -1;
+    double decoy_precursor_qscore1d_ = -1;
     /// precursor raw peak (not deconvolved one)
     Precursor precursor_peak_;
     /// precursor deconvolved peak

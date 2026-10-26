@@ -100,6 +100,11 @@ namespace OpenMS
    *
    * Headers are written in the CONSTRUCTOR, before any thread exists, so they
    * need no lock and cannot race a writer.
+   *
+   * Every cell that carries a tracking id (ids, id lists, scan_description) is
+   * written through quoteLogCell (LogCell.h): tracking ids 8,836 to 17,671 begin
+   * with '"', which CSV-style readers take as an opening quote. Readers unquote
+   * with unquoteLogId / unquoteLogCell.
    */
   class OPENMS_DLLAPI IdaLogger
   {

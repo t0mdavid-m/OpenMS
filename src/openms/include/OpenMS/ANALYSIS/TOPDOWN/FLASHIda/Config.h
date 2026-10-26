@@ -321,6 +321,15 @@ namespace OpenMS
     double rt_window = 180.0;          ///< retention-time window, SECONDS (ADR-0051)
     /// Orders SPECIES only (Deconvolution.cpp's sortByLevelMetric). Before ADR-0059 it also chose the
     /// anchor charge (best qscore); that is charge_selection's job now.
+    /// precursor_selection.log_target_rt_window -- the ida.log targets of inclusion mode (files.target_logs) are targets only
+    /// within rt_window of a reference acquisition of their mass (true, the default), or at every retention time (false: the
+    /// behaviour from 2025-07-07, "disable rt based exclusion for inclusion", to 2026-10-21; e.g. for references whose gradient
+    /// does not match the run).
+    bool log_target_rt_window = true;
+    /// precursor_selection.log_target_charges -- "any" (the default): an ida.log target is a mass, matched at any charge;
+    /// "reference": matched only at a charge the reference acquired it at, and each acquisition uses that charge up for the rest
+    /// of the run (charge-state targeting, the behaviour from 2025-07-04 to 2026-10-21).
+    bool log_target_reference_charges = false;
     bool consider_all_charges = false;
     /// precursor_selection.charge_selection -- ranks a species' charges (ADR-0059).
     ChargeSelection charge_selection = ChargeSelection::Snr;

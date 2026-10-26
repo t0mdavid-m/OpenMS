@@ -21,6 +21,10 @@
 #include <limits>
 #include <unordered_set>
 
+#ifdef _OPENMP
+  #include <omp.h>
+#endif
+
 namespace OpenMS
 {
   /// Constructor
@@ -423,11 +427,27 @@ namespace OpenMS
       return;
     }
 
+    // The ranges of the spectra without float data arrays are computed in parallel for many spectra (each spectrum only reads and
+    // writes itself). A spectrum with float data arrays stays in the serial loop: looking for an ion mobility array among them may
+    // throw and catch exceptions (unknown CV names), which must not happen in several threads at once.
+    bool parallel_spectrum_ranges = false;
+#if defined(_OPENMP) && !defined(OPENMS_ASSERTIONS)
+    if (spectra_.size() > 1024 && !omp_in_parallel() && omp_get_max_threads() > 1)
+    {
+      parallel_spectrum_ranges = true;
+#pragma omp parallel for schedule(dynamic, 64)
+      for (SignedSize i = 0; i < (SignedSize)spectra_.size(); ++i)
+      {
+        if (spectra_[i].getFloatDataArrays().empty()) spectra_[i].updateRanges();
+      }
+    }
+#endif
+
     // Update spectrum ranges
     for (Base::iterator it = spectra_.begin(); it != spectra_.end(); ++it)
     {      
       // Update ranges for the spectrum itself
-      it->updateRanges();
+      if (!parallel_spectrum_ranges || !it->getFloatDataArrays().empty()) it->updateRanges();
       
       // Update spectrum range manager with this spectrum's ranges
       // Add to both general ranges and MS level-specific ranges

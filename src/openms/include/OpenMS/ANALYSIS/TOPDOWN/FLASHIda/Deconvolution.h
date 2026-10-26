@@ -75,6 +75,10 @@ namespace OpenMS
 
     /**
      * @brief Deconvolve an MSn (n>1) spectrum, store result, return peak-group count
+     *
+     * The MSn deconvolution never sees target masses: it clears whatever engine().setTargetMasses() left on
+     * the shared engine (the survey's inclusion targets), so they must be set again before the next MS1
+     * deconvolution -- which PrecursorSelection::filterAndRank does before every survey.
      * @param mzs m/z values
      * @param ints intensities
      * @param length number of peaks
@@ -119,8 +123,8 @@ namespace OpenMS
     /**
      * @brief Access the underlying SpectralDeconvolution engine
      *
-     * Used by getPeakGroups() / PrecursorSelection to call
-     * fd_.setTargetMasses() before triggering a deconvolution.
+     * Used by PrecursorSelection::filterAndRank to call fd_.setTargetMasses() before deconvolveMS1().
+     * Targets set here reach the MS1 deconvolution only: deconvolveMSn() clears them.
      */
     SpectralDeconvolution& engine() { return fd_; }
 

@@ -2192,6 +2192,65 @@ START_SECTION(processScan_mass_exclusion_thresholded)
 }
 END_SECTION
 
+// removeFromExclusionList undoes ONE acquisition's mark on acquisition memory. It has had no caller
+// since its C export went with the legacy bridge exports (fdc795f297), and it still divided the qscore
+// ledger by (1 - q) -- the inverse of the running product the ledger held before `4457abeb4c change
+// algorithm to max qscore`. Against the stored SCORE that raised the bar it was meant to lift (0.6 became
+// 1.5, which no survey can reach) and divided by zero at q = 1. Driven on a record laid down by hand,
+// as filterPeakGroupsUsingMassExclusion_ writes it, because no engine path reaches the member.
+START_SECTION(removeFromExclusionList_lifts_the_bars_and_the_ledger_entry_it_set)
+{
+  const std::string dir = freshLogDir("remove_from_exclusion_list");
+  Config config(buildJsonWithLogDir(dir));
+  Deconvolution deconv(config, config.toleranceList());
+  PrecursorSelection selection(config, deconv);
+  auto& mem = FLASHIdaTestAccess::selectionMemory(selection);
+
+  // One admitted, bar-arming acquisition: window id -> nominal mass, integer m/z, qscore, charge.
+  auto record = [&mem](int id, int nominal, int mz, double q, int z, double rt) {
+    mem.id_mass_map_[id] = nominal;
+    mem.id_mz_map_[id] = mz;
+    mem.id_qscore_map_[id] = q;
+    mem.id_charge_map_[id] = z;
+    mem.all_mass_rt_map_[nominal] = rt;
+    mem.mass_qscore_map_[nominal] = q;
+    mem.tqscore_exceeding_mass_rt_map_[nominal] = rt;
+    mem.tqscore_exceeding_mz_rt_map_[mz] = rt;
+    mem.window_id_ = std::max(mem.window_id_, id + 1);
+  };
+  record(0, 12345, 824, 0.6, 15, 10.0);
+  record(1, 8600, 957, 1.0, 9, 10.0);
+
+  // An id never recorded -- not yet issued, or negative -- changes nothing. The negative one used to
+  // slip past `id >= window_id_` and default-insert a record for nominal mass 0 through operator[].
+  const auto before = mem;
+  selection.removeFromExclusionList(2);
+  selection.removeFromExclusionList(-1);
+  TEST_EQUAL(mem == before, true)
+
+  selection.removeFromExclusionList(0);
+  TEST_EQUAL(mem.tqscore_exceeding_mass_rt_map_.count(12345), 0)
+  TEST_EQUAL(mem.tqscore_exceeding_mz_rt_map_.count(824), 0)
+  TEST_EQUAL(mem.mass_qscore_map_.count(12345), 0)   // forgotten -- not raised to 0.6 / 0.4 = 1.5
+  TEST_EQUAL(mem.id_mass_map_.count(0), 0)           // the record is consumed
+  TEST_EQUAL(mem.tqscore_exceeding_mass_rt_map_.count(8600), 1)  // the other acquisition is untouched
+  TEST_EQUAL(mem.mass_qscore_map_.count(8600), 1)
+
+  // q = 1 used to divide by zero.
+  selection.removeFromExclusionList(1);
+  TEST_EQUAL(mem.mass_qscore_map_.count(8600), 0)
+  TEST_EQUAL(mem.tqscore_exceeding_mz_rt_map_.count(957), 0)
+
+  // A LATER acquisition of the same mass stored its own score; removing the earlier one leaves that
+  // ledger entry alone (it is the later acquisition's, not the removed one's).
+  record(2, 5000, 600, 0.5, 8, 20.0);
+  record(3, 5000, 601, 0.7, 8, 30.0);
+  selection.removeFromExclusionList(2);
+  TEST_EQUAL(mem.mass_qscore_map_.count(5000), 1)
+  if (mem.mass_qscore_map_.count(5000) == 1) { TEST_REAL_SIMILAR(mem.mass_qscore_map_.at(5000), 0.7) }
+}
+END_SECTION
+
 // ADR-0051: acquisition memory -- both exclusion bars and the qscore ledger -- expires once it is older
 // than rt_window SECONDS. processScan takes seconds and runInterleaved feeds the fixture's header times
 // straight in, so this is the engine's own contract, not the host's: it cannot see the bridge bug (the
@@ -2256,6 +2315,167 @@ START_SECTION(processScan_acquisition_memory_expires_after_rt_window_seconds)
   {
     TEST_EQUAL(expired[i] - expired[i - 1] >= 30.0, true)
     TEST_EQUAL(expired[i] - expired[i - 1] <= 40.0, true)
+  }
+}
+END_SECTION
+
+// GTM: the ida.log targets (targeting "inclusion" + target_logs) are masses. A reference mass is a target at any charge (not
+// only at its reference Z=, and no charge is used up by an acquisition), and only within rt_window of a reference acquisition
+// of it. Synthetic PeakGroups under strict inclusion, so a PeakGroup is taken exactly when it matches an active target.
+START_SECTION(ida_log_targets_are_masses_within_the_rt_window)
+{
+  const std::string dir = freshLogDir("gtm_mass_targets");
+  const std::string ref_log = dir + "/reference_ida.log";
+  {
+    std::ofstream f(ref_log);
+    // One reference target: 10000.0000 Da, acquired at charge 10 at 1 min.
+    f << "MS1 Scan# 1 RT 1.0000 (Access ID !!\") - 1 targets\n";
+    f << "Mass=10000.0000\tZ=10\tScore=0.90000\tWindow=[1000.5000-1001.9000]"
+         "\tPrecursorIntensity=1.00000\tPrecursorMassIntensity=2.00000"
+         "\tFeatures=[0.9,1.0,0.9,1.0,0.9,1.0]\tChargeRange=[8-12]\tHCD=0\n";
+    f << "AllMass=10000.0000\n";
+  }
+  std::string cfg = buildJsonWithLogDir(dir);   // rt_window 180 s, max_precursors 5
+  {
+    auto rep = [&cfg](const std::string& from, const std::string& to) {
+      auto p = cfg.find(from);
+      TEST_EQUAL(p != std::string::npos, true)   // a missing literal would leave the config silently unchanged
+      if (p != std::string::npos) cfg.replace(p, from.size(), to);
+    };
+    rep("\"targeting\": \"none\"", "\"targeting\": \"inclusion\"");
+    rep("\"strict_inclusion\": false", "\"strict_inclusion\": true");
+    rep("\"target_logs\": []", "\"target_logs\": [\"" + ref_log + "\"]");
+  }
+
+  // A synthetic MS1 PeakGroup resolving exactly @p charges -- three isotopes each, so every charge has a
+  // measured m/z window -- with the first as its representative charge.
+  auto envelope = [](double mono_mass, const std::vector<int>& charges, double qscore) {
+    const double proton = 1.00727646677;
+    const double iso_gap = 1.00235;
+    PeakGroup pg(charges.front(), charges.back(), true);
+    pg.setMonoisotopicMass(mono_mass);
+    for (int z : charges)
+    {
+      for (int iso = 0; iso < 3; ++iso)
+      {
+        FLASHHelperClasses::LogMzPeak lp;
+        lp.mz = (mono_mass + z * proton + iso * iso_gap) / z;
+        lp.abs_charge = z;
+        pg.push_back(lp);
+      }
+      pg.setChargeSNR(z, 5.0f);
+      pg.setChargeIsotopeCosine(z, 0.99f);
+    }
+    pg.setQscore(qscore);
+    pg.setRepAbsCharge(charges.front());
+    return pg;
+  };
+  const PeakGroup other_charges = envelope(10000.0, {12, 13, 14}, 0.9);   // the target's mass, charges never acquired in the reference
+  const PeakGroup same_charge = envelope(10000.0, {10, 11, 12}, 0.9);     // the target's mass at its reference charge 10
+  const PeakGroup no_target = envelope(15000.0, {10, 11, 12}, 0.8);
+  auto taken = [&cfg](const std::vector<PeakGroup>& pgs, double rt) {
+    Config config(cfg);
+    Deconvolution deconv(config, config.toleranceList());
+    PrecursorSelection selection(config, deconv);
+    return FLASHIdaTestAccess::selectFrom(selection, pgs, rt);
+  };
+  // 2 min after the reference acquisition (inside the 180 s window): the target's mass is taken at any charge, the other mass is not.
+  TEST_EQUAL(taken({other_charges, no_target}, 180.0), 1)
+  TEST_EQUAL(taken({same_charge, no_target}, 180.0), 1)
+  // 10 min after it: no target is active, so nothing is taken under strict inclusion.
+  TEST_EQUAL(taken({same_charge, no_target}, 660.0), 0)
+}
+END_SECTION
+
+// The GTM behaviour of 2025-07 to 2026-10, kept as options: log_target_rt_window false (an ida.log target at every retention time)
+// and log_target_charges "reference" (only at a charge the reference acquired it at, each acquisition using that charge up). Under
+// non-strict inclusion a candidate that matched no target must not use up a charge of a target an earlier candidate was checked against.
+START_SECTION(ida_log_target_legacy_options)
+{
+  const std::string dir = freshLogDir("gtm_legacy_options");
+  const std::string ref_log = dir + "/reference_ida.log";
+  {
+    std::ofstream f(ref_log);
+    // One reference target: 10000.0000 Da, acquired at charge 10 at 1 min.
+    f << "MS1 Scan# 1 RT 1.0000 (Access ID !!\") - 1 targets\n";
+    f << "Mass=10000.0000\tZ=10\tScore=0.90000\tWindow=[1000.5000-1001.9000]"
+         "\tPrecursorIntensity=1.00000\tPrecursorMassIntensity=2.00000"
+         "\tFeatures=[0.9,1.0,0.9,1.0,0.9,1.0]\tChargeRange=[8-12]\tHCD=0\n";
+    f << "AllMass=10000.0000\n";
+  }
+  // rt_window 180 s, max_precursors 5; inclusion with the reference log, strictness and options as given
+  auto config_with = [&](bool strict, const std::string& options) {
+    std::string cfg = buildJsonWithLogDir(dir);
+    auto rep = [&cfg](const std::string& from, const std::string& to) {
+      auto p = cfg.find(from);
+      TEST_EQUAL(p != std::string::npos, true)
+      if (p != std::string::npos) cfg.replace(p, from.size(), to);
+    };
+    rep("\"targeting\": \"none\"", "\"targeting\": \"inclusion\"");
+    rep("\"strict_inclusion\": false", std::string("\"strict_inclusion\": ") + (strict ? "true" : "false") + ", " + options);
+    rep("\"target_logs\": []", "\"target_logs\": [\"" + ref_log + "\"]");
+    return cfg;
+  };
+  auto envelope = [](double mono_mass, const std::vector<int>& charges, double qscore) {
+    const double proton = 1.00727646677;
+    const double iso_gap = 1.00235;
+    PeakGroup pg(charges.front(), charges.back(), true);
+    pg.setMonoisotopicMass(mono_mass);
+    for (int z : charges)
+    {
+      for (int iso = 0; iso < 3; ++iso)
+      {
+        FLASHHelperClasses::LogMzPeak lp;
+        lp.mz = (mono_mass + z * proton + iso * iso_gap) / z;
+        lp.abs_charge = z;
+        pg.push_back(lp);
+      }
+      pg.setChargeSNR(z, 5.0f);
+      pg.setChargeIsotopeCosine(z, 0.99f);
+    }
+    pg.setQscore(qscore);
+    pg.setRepAbsCharge(charges.front());
+    return pg;
+  };
+  const PeakGroup other_charges = envelope(10000.0, {12, 13, 14}, 0.9);
+  const PeakGroup same_charge = envelope(10000.0, {10, 11, 12}, 0.9);
+  const PeakGroup no_target = envelope(15000.0, {10, 11, 12}, 0.8);
+  auto count_10 = [](const PrecursorSelection& selection) {
+    const auto lists = FLASHIdaTestAccess::targetMassCharges(selection);
+    TEST_EQUAL(lists.size(), 1)
+    return lists.empty() ? -1 : (int)std::count(lists.begin()->second.begin(), lists.begin()->second.end(), 10);
+  };
+  {
+    // log_target_rt_window false: the target is active 10 min after its reference acquisition
+    Config config(config_with(true, "\"log_target_rt_window\": false"));
+    Deconvolution deconv(config, config.toleranceList());
+    PrecursorSelection selection(config, deconv);
+    TEST_EQUAL(FLASHIdaTestAccess::selectFrom(selection, {same_charge, no_target}, 660.0), 1)
+  }
+  {
+    // log_target_charges "reference", strict: not at the charges the reference never acquired
+    Config config(config_with(true, "\"log_target_charges\": \"reference\""));
+    Deconvolution deconv(config, config.toleranceList());
+    PrecursorSelection selection(config, deconv);
+    TEST_EQUAL(FLASHIdaTestAccess::selectFrom(selection, {other_charges, no_target}, 180.0), 0)
+    TEST_EQUAL(count_10(selection), 1)
+  }
+  {
+    // ... at its reference charge 10, which the acquisition uses up
+    Config config(config_with(true, "\"log_target_charges\": \"reference\""));
+    Deconvolution deconv(config, config.toleranceList());
+    PrecursorSelection selection(config, deconv);
+    TEST_EQUAL(FLASHIdaTestAccess::selectFrom(selection, {same_charge, no_target}, 180.0), 1)
+    TEST_EQUAL(count_10(selection), 0)
+  }
+  {
+    // non-strict: the target's mass at charges 12-14 is checked against the target and does not match; the other mass, at
+    // charge 10, matches no target; both are taken in phase 1, and the target keeps its charge 10
+    Config config(config_with(false, "\"log_target_charges\": \"reference\""));
+    Deconvolution deconv(config, config.toleranceList());
+    PrecursorSelection selection(config, deconv);
+    TEST_EQUAL(FLASHIdaTestAccess::selectFrom(selection, {other_charges, no_target}, 60.0), 2)
+    TEST_EQUAL(count_10(selection), 1)
   }
 }
 END_SECTION

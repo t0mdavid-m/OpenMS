@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <OpenMS/CONCEPT/Constants.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
@@ -17,6 +18,7 @@
 #include <OpenMS/KERNEL/MSSpectrum.h>
 #include <boost/dynamic_bitset.hpp>
 #include <iostream>
+#include <memory>
 
 namespace OpenMS
 {
@@ -130,6 +132,27 @@ namespace OpenMS
     void updateMembers_() override;
 
   private:
+    /// FLASHDeconvAlgorithm attaches one immutable averagine to its per-thread spectrum workers (setSharedAveragine_)
+    friend class FLASHDeconvAlgorithm;
+
+    /**
+      @brief Use @p avg, an immutable averagine shared by several instances (the spectrum workers of FLASHDeconvAlgorithm), instead of the
+      own one. calculateAveragine and setAveragine return to the own averagine.
+      @param avg the shared averagine (not null; not modified while shared)
+      @throws Exception::InvalidParameter if @p avg is null
+    */
+    void setSharedAveragine_(std::shared_ptr<const PrecalculatedAveragine> avg);
+
+    /// frees the pooled per-spectrum arrays; the decoy instances of an FDR run call it after each spectrum, so a worker keeps one set
+    /// of pools instead of three
+    void releasePools();
+
+    /// the averagine in use: the shared one if set, otherwise the own one
+    const PrecalculatedAveragine& activeAveragine_() const noexcept
+    {
+      return shared_avg_ ? *shared_avg_ : avg_;
+    }
+
     /// FLASHDeconv parameters
 
     /// allowed isotope error in deconvolved mass to calculate qvalue
@@ -170,6 +193,8 @@ namespace OpenMS
 
     /// precalculated averagine distributions for fast averagine generation
     FLASHHelperClasses::PrecalculatedAveragine avg_;
+    /// an immutable averagine shared with other instances (setSharedAveragine_); used instead of avg_ when set
+    std::shared_ptr<const PrecalculatedAveragine> shared_avg_;
 
     /// mass bins that are targeted for FLASHIda global targeting mode
     boost::dynamic_bitset<> target_mass_bins_;
@@ -189,6 +214,11 @@ namespace OpenMS
     DeconvolvedSpectrum deconvolved_spectrum_;
     /// binned_log_masses_ stores the selected bins for this spectrum + overlapped spectrum (previous a few spectra).
     boost::dynamic_bitset<> binned_log_masses_;
+    /// log m/z of every peak of the original spectrum of deconvolved_spectrum_, computed once per spectrum (FLASHHelperClasses::getLogMz)
+    std::vector<double> original_log_mzs_;
+    /// nearest-peak lookup of the original spectrum of deconvolved_spectrum_, built once per spectrum (PeakGroup::recruitAllPeaksInSpectrum)
+    PeakGroup::NearestPeakIndex original_nearest_peaks_;
+
     /// binned_log_mz_peaks_ stores the binned log mz peaks
     boost::dynamic_bitset<> binned_log_mz_peaks_;
 
@@ -209,8 +239,8 @@ namespace OpenMS
     /// current ms Level
     uint ms_level_;
 
-    /// isotope dalton distance
-    double iso_da_distance_;
+    /// isotope dalton distance (set per spectrum; initialised for setTargetMasses before the first deconvolution)
+    double iso_da_distance_ = Constants::ISOTOPE_MASSDIFF_55K_U;
 
     /// for precursor targetting.
     int target_precursor_charge_ = 0;
@@ -218,6 +248,61 @@ namespace OpenMS
 
     /// this is additional mass tolerance in Da to get more high signal-to-ratio peaks in this candidate peakgroup finding
     double max_mass_dalton_tolerance_ = .16;
+
+    /// a mass bin selected by filterMassBins_ and the range of the charge indices (charge - 1) it was selected for
+    struct MassBinChargeRange_
+    {
+      Size bin;
+      int min_charge_index;
+      int max_charge_index;
+    };
+
+    /// the state per mass bin of updateMassBins_, kept from spectrum to spectrum so that it is not allocated and filled for every spectrum
+    /// (see updateCandidateMassBins_); a copy starts empty
+    struct MassBinScratch_
+    {
+      /// the rest of the state of a mass bin in the consecutive-charge chain search, valid only where prev_charges holds a tag of the current spectrum
+      struct ChainState
+      {
+        float prev_intensity;
+        float prev_residual;
+        unsigned short support_peak_count;
+        short chain_offset;
+      };
+      /// charge index of the last peak per mass bin, as a tag: charge_tag_base + charge index in the current spectrum; lower values: none
+      std::vector<unsigned short> prev_charges;
+      std::vector<ChainState> chain_states;
+      /// the tag of charge index 0 in the next spectrum; 0: prev_charges must be reset first
+      int charge_tag_base = 0;
+      /// intensity per mass bin; all zero between spectra (when mass_intensities_clean)
+      std::vector<float> mass_intensities;
+      /// the mass bins of mass_intensities written in the current spectrum (to zero them again)
+      std::vector<Size> written_mass_bins;
+      bool mass_intensities_clean = true;
+
+      MassBinScratch_() = default;
+      MassBinScratch_(const MassBinScratch_&) {}
+      MassBinScratch_(MassBinScratch_&&) = default;
+      MassBinScratch_& operator=(const MassBinScratch_&) { return *this; }
+      MassBinScratch_& operator=(MassBinScratch_&&) = default;
+    };
+    MassBinScratch_ mass_bin_scratch_;
+
+    /// Pools for the per-spectrum arrays (sized by the m/z bins, several MB, or by the peaks; the mass-bin state is mass_bin_scratch_) and
+    /// the candidate peak group vector:
+    /// an instance reuses their capacity from spectrum to spectrum instead of allocating (and faulting in) fresh pages every time. Only
+    /// the capacity carries over; every use refills them first, so the values are those of freshly constructed vectors.
+    std::vector<float> mz_intensities_pool_;
+    std::vector<double> exact_mz_positions_pool_;
+    std::vector<Size> mz_bin_index_reverse_pool_;
+    std::vector<Size> peak_bin_numbers_pool_;
+    std::vector<PeakGroup> candidate_pool_;
+
+    /// whether getCandidatePeakGroups_ scores each candidate as soon as it is built and keeps only those that pass (set per spectrum by
+    /// generatePeakGroupsFromSpectrum_: inside a parallel region, where the scoring loop runs serially anyway)
+    bool fused_scoring_ = false;
+    /// detection limit of the current spectrum (the intensity of its weakest positive peak), set by generatePeakGroupsFromSpectrum_
+    float detection_limit_ = 0;
 
     /** @brief static function that converts bin to value
         @param bin bin number
@@ -258,32 +343,39 @@ namespace OpenMS
 
     /** @brief Update binned_log_masses_. It select candidate mass bins using the universal pattern, eliminate possible harmonic masses. This function does not perform deisotoping
         @param mz_intensities per mz bin intensity
-        @return a matrix containing charge ranges for all found masses
+        @return the selected mass bins in increasing order, each with its charge range
      */
-    Matrix<int> updateMassBins_(const std::vector<float>& mz_intensities);
+    std::vector<MassBinChargeRange_> updateMassBins_(const std::vector<float>& mz_intensities);
 
     /** @brief Subfunction of updateMassBins_.
         @param mass_intensities per mass bin intensity
-        @return a matrix containing charge ranges for all found masses
+        @param chain_redirects (m/z bin x current max charge + charge index, mass bin) for the peaks updateCandidateMassBins_ added to the mass bin
+               of their consecutive-charge chain instead of their own (rounded) mass bin, sorted here
+        @return the selected mass bins in increasing order, each with its charge range
      */
-    Matrix<int> filterMassBins_(const std::vector<float>& mass_intensities);
+    std::vector<MassBinChargeRange_> filterMassBins_(const std::vector<float>& mass_intensities, std::vector<std::pair<Size, long>>& chain_redirects);
 
     /** @brief Subfunction of updateMassBins_. It select candidate masses and update binned_log_masses_ using the universal pattern, eliminate possible harmonic masses
-        @param mass_intensities mass bin intensities which are updated in this function
+        The mass bin intensities go to mass_bin_scratch_.mass_intensities (the written bins to mass_bin_scratch_.written_mass_bins).
         @param mz_intensities mz bin intensities
+        @param chain_redirects output: (m/z bin x current max charge + charge index, mass bin) for the peaks added to the mass bin of their
+               consecutive-charge chain instead of their own (rounded) mass bin
      */
-    void updateCandidateMassBins_(std::vector<float>& mass_intensities, const std::vector<float>& mz_intensities);
+    void updateCandidateMassBins_(const std::vector<float>& mz_intensities, std::vector<std::pair<Size, long>>& chain_redirects);
 
-    /** @brief For selected masses in binned_log_masses_, select the peaks from the original spectrum. Also isotopic peaks are clustered in this function.
-        @param per_mass_abs_charge_ranges charge range per mass
+    /** @brief For the selected mass bins, select the peaks from the original spectrum. Also isotopic peaks are clustered in this function.
+        @param mass_bin_charge_ranges the selected mass bins in increasing order, each with its charge range (filterMassBins_)
      */
-    void getCandidatePeakGroups_(const Matrix<int>& per_mass_abs_charge_ranges);
+    void getCandidatePeakGroups_(const std::vector<MassBinChargeRange_>& mass_bin_charge_ranges);
 
     /// Make the universal pattern.
     void setFilters_();
 
     /// function for peak group scoring and filtering
     void scoreAndFilterPeakGroups_();
+
+    /// isotope/charge scoring of one candidate peak group (the first filter of scoreAndFilterPeakGroups_); true if it is kept
+    bool scorePeakGroup_(PeakGroup& peak_group);
 
     /// filter out charge error masses
     void removeChargeErrorPeakGroups_(DeconvolvedSpectrum& dspec, const PeakGroup::TargetDecoyType& target_decoy_type) const;

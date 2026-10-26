@@ -230,7 +230,14 @@ namespace OpenMS
 
     /**
      * @brief Remove a given precursor from the exclusion list by id (needed for FAIMS)
-     * @param id id of precursor
+     *
+     * Undoes what acquisition @p id wrote to acquisition memory: both dynamic-exclusion bars of its
+     * nominal mass and integer m/z, its authored (mass, charge) entry, and its qscore-ledger entry if
+     * this acquisition is the one that set it. An id never recorded (or already removed) is a no-op.
+     *
+     * @note No production caller: its C export (RemoveFromExclusionList) went with the legacy bridge
+     * exports in fdc795f297, and nothing in the engine calls it.
+     * @param id id of precursor (a trigger id, PrecursorSelection::triggerIds())
      */
     void removeFromExclusionList(int id);
 
@@ -323,6 +330,7 @@ namespace OpenMS
     /// Maps for global inclusion targeting
     std::map<double, std::vector<double>> target_mass_rt_map_;
     std::map<double, std::vector<double>> target_mass_qscore_map_;
+    /// with log_target_charges "reference": per ida.log target mass, the charges (Z=) still to be acquired
     std::map<double, std::vector<int>> target_mass_charge_map_;
     std::vector<double> target_masses_;
 
@@ -365,6 +373,20 @@ namespace OpenMS
     std::vector<FASTAFile::FASTAEntry> target_protein_database_;
     std::vector<TargetPTM> target_ptms_;
     std::set<double> expanded_target_masses_;
+
+    /// The tag-expanded targets (addDynamicTargets_), kept APART from inclusion_targets_.
+    ///
+    /// They used to be appended to inclusion_targets_, and filterAndRank reads a NON-EMPTY
+    /// inclusion_targets_ as "a TSV inclusion list was loaded" -- so the first tag detection of a
+    /// run switched it from the ida.log targets (target_logs) to the TSV path and every reference
+    /// target was dropped for the rest of the run. Kept here, they are added on top of whichever
+    /// reference list is in force, TSV or ida.log.
+    std::vector<InclusionTarget> dynamic_targets_;
+
+    /// Rebuild target_masses_, active_targets_ and target_priority_map_ for inclusion mode at @p rt:
+    /// the reference targets (the TSV inclusion list if one was loaded, otherwise the ida.log
+    /// targets) plus the tag-expanded targets active at @p rt. target_masses_ comes back sorted.
+    void collectInclusionTargets_(double rt);
 
     /// Filter peak groups using mass exclusion logic
     void filterPeakGroupsUsingMassExclusion_(int ms_level, double rt);

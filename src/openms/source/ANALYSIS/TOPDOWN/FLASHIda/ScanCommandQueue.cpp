@@ -774,7 +774,7 @@ namespace OpenMS
         cmd.dequeue_timestamp_ms = static_cast<uint64_t>(
           std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count());
-        pending_scan_map_[cmd.scan_id] = cmd;
+        registerPending_(cmd);
 
         // Commit at dequeue: the first command of a unit to go out commits its species, and each command
         // commits the stamps of every charge it isolates (a multiplexed one: its notches too). Both move to the
@@ -850,7 +850,33 @@ namespace OpenMS
   void ScanCommandQueue::registerPending(const ScanCommand& cmd)
   {
     std::lock_guard<std::mutex> lock(queue_mutex_);
-    pending_scan_map_[cmd.scan_id] = cmd;
+    registerPending_(cmd);
+  }
+
+  void ScanCommandQueue::registerPending_(const ScanCommand& cmd)
+  {
+    pending_scan_map_[cmd.scan_id] = PendingEntry{cmd, ++pending_registrations_};
+
+    // The MAX_IN_FLIGHT bound (see the header). Swept in batches rather than per registration: the
+    // sweep walks the whole map, and once per IN_FLIGHT_SWEEP_EVERY registrations keeps that cost
+    // negligible while still bounding the map. Under the lock the caller already holds, so a sweep
+    // cannot race a resolvePending for the same id.
+    if (pending_registrations_ % IN_FLIGHT_SWEEP_EVERY != 0) return;
+    for (auto it = pending_scan_map_.begin(); it != pending_scan_map_.end();)
+    {
+      const uint64_t sent_since = pending_registrations_ - it->second.registration;
+      if (sent_since <= MAX_IN_FLIGHT)
+      {
+        ++it;
+        continue;
+      }
+      std::cout << "[TRACK-LOST] id=" << encode(it->first)
+                << " ms_level=" << it->second.cmd.msn_level
+                << " sent_since=" << sent_since
+                << " (no result came back; the engine stops waiting for it)" << std::endl;
+      ms3_cmd_proteoform_.erase(it->first);  // drop any stashed MS3 proteoform (no-op once dequeued)
+      it = pending_scan_map_.erase(it);
+    }
   }
 
   std::optional<ScanCommand> ScanCommandQueue::resolvePending(int id)
@@ -859,7 +885,7 @@ namespace OpenMS
     auto it = pending_scan_map_.find(id);
     if (it == pending_scan_map_.end())
       return std::nullopt;
-    ScanCommand cmd = it->second;
+    ScanCommand cmd = it->second.cmd;
     pending_scan_map_.erase(it);
     return cmd;
   }
@@ -1193,7 +1219,7 @@ namespace OpenMS
       {
         removed.push_back(pit->first);
         std::cout << "[TRACK-CANCEL] id=" << encode(pit->first)
-                  << " ms_level=" << pit->second.msn_level << " state=in-flight" << std::endl;
+                  << " ms_level=" << pit->second.cmd.msn_level << " state=in-flight" << std::endl;
         ms3_cmd_proteoform_.erase(pit->first);  // drop any stashed MS3 proteoform (no-op for non-MS3)
         forgetQueued_(pit->first);              // registry hygiene, as for a queued one (no-op once dequeued)
         pit = pending_scan_map_.erase(pit);

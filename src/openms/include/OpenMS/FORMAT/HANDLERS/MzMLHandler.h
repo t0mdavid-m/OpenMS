@@ -24,6 +24,7 @@
 #include <OpenMS/FORMAT/VALIDATORS/SemanticValidator.h>
 
 #include <map>
+#include <memory>
 
 
 //MISSING:
@@ -197,6 +198,12 @@ protected:
           multiple threads if available) and append them to the result.
       */
       void populateSpectraWithData_();
+
+      /// Populates the spectra on the stack (and those decoded in the background) at the end of the file
+      void flushSpectraWithData_();
+
+      /// Decodes the spectra on the stack with the default team of threads and appends them (what populateSpectraWithData_ did before)
+      void populateSpectraNow_();
 
       /**
           @brief Populate all chromatograms on the stack with data from input
@@ -429,6 +436,19 @@ protected:
 
       /// Vector of spectrum data stored for later parallel processing
       std::vector<SpectrumData> spectrum_data_;
+
+      /// Decodes the binary data of one spectrum of the stack
+      void decodeSpectrumData_(SpectrumData& spectrum_data);
+
+      /// Decodes a batch of spectra with @p threads threads (in the background); returns the number of errors and the last message
+      int decodeSpectrumBatch_(std::vector<SpectrumData>& batch, int threads, String& error_message);
+
+      /// Appends decoded spectra to the experiment / consumer, in order
+      void appendSpectra_(std::vector<SpectrumData>& batch);
+
+      /// Decodes full stacks of spectra in its own thread while the parse goes on (loading into an experiment with three or more threads)
+      class BackgroundDecoder_;
+      std::shared_ptr<BackgroundDecoder_> background_decoder_;
 
       /**
           @brief Data necessary to generate a single chromatogram

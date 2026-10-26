@@ -38,6 +38,29 @@ namespace OpenMS
     };
 
 
+    /**
+      @brief The index of the peak of a spectrum nearest to an m/z, the same as MSSpectrum::findNearest, from a grid over the m/z range of the
+      spectrum (built once per spectrum) instead of a binary search. Built only for a spectrum whose m/z values are finite and sorted
+      (non-decreasing); for any other spectrum it stays unusable, and recruitAllPeaksInSpectrum calls MSSpectrum::findNearest.
+    */
+    class OPENMS_DLLAPI NearestPeakIndex
+    {
+    public:
+      /// build the grid for @p spec (unusable if @p spec is empty, or its m/z values are not finite and sorted)
+      void build(const MSSpectrum& spec);
+      /// whether the grid is usable and was built for a spectrum of the size of @p spec (it must have been built for @p spec)
+      bool usableFor(const MSSpectrum& spec) const;
+      /// the index of the peak of @p spec nearest to @p mz, as spec.findNearest(mz); only if usableFor(spec)
+      Size findNearest(const MSSpectrum& spec, double mz) const;
+
+    private:
+      Size size_ = 0;
+      bool usable_ = false;
+      double first_mz_ = 0, last_mz_ = 0, cells_per_mz_ = 0;
+      /// per cell: the first peak whose m/z is not below the start of the cell
+      std::vector<Size> first_peaks_;
+    };
+
     /// default constructor
     PeakGroup() = default;
 
@@ -56,7 +79,7 @@ namespace OpenMS
     PeakGroup(const PeakGroup&) = default;
 
     /// move constructor
-    PeakGroup(PeakGroup&& other) = default;
+    PeakGroup(PeakGroup&& other) noexcept = default;
 
     /// comparison operators
     bool operator<(const PeakGroup& a) const;
@@ -67,6 +90,9 @@ namespace OpenMS
 
     /// assignment operator
     PeakGroup& operator=(const PeakGroup& t) = default;
+
+    /// move assignment (without it std::sort and vector moves deep-copy every peak vector)
+    PeakGroup& operator=(PeakGroup&& t) noexcept = default;
 
     /**
            @brief add monoisotopic indices of peaks by offset and discard negative isotope peaks. Total intensity is also updated
@@ -98,6 +124,13 @@ namespace OpenMS
      * @return returns the noisy peaks for this peakgroup - i.e., the raw peaks within the range of this peakGroup that are not matched to any istope of this peakGroup mass.
      */
     std::vector<LogMzPeak> recruitAllPeaksInSpectrum(const MSSpectrum& spec, double tol, const FLASHHelperClasses::PrecalculatedAveragine& avg, double mono_mass, bool renew_signal_peaks = true);
+
+    /// as above, but writes the noisy peaks into @p noisy_peaks (cleared first) so callers can reuse its capacity. @p log_mzs, if given,
+    /// holds the log m/z of every peak of @p spec (FLASHHelperClasses::getLogMz with this group's polarity), computed once per spectrum.
+    /// @p nearest_peaks, if given, is a NearestPeakIndex built for @p spec (the first peak of each charge is looked up there)
+    void recruitAllPeaksInSpectrum(const MSSpectrum& spec, double tol, const FLASHHelperClasses::PrecalculatedAveragine& avg, double mono_mass,
+                                   std::vector<LogMzPeak>& noisy_peaks, bool renew_signal_peaks = true, const std::vector<double>* log_mzs = nullptr,
+                                   const NearestPeakIndex* nearest_peaks = nullptr);
 
     /// set scan number
     void setScanNumber(int scan_number);
@@ -171,9 +204,6 @@ namespace OpenMS
     /// get isotopic cosine score
     float getIsotopeCosine() const;
 
-    /// get the density of the peaks within charge and isotope range
-    float getPeakOccupancy() const;
-
     /// get representative charge (max SNR)
     int getRepAbsCharge() const;
 
@@ -235,6 +265,34 @@ namespace OpenMS
     /// get distance between consecutive isotopes
     double getIsotopeDaDistance() const;
 
+    /**
+     * @brief set the detection limit of the spectrum in which this peak group is scored: the intensity of the weakest peak of that spectrum.
+     * Noise below it cannot be observed, so it floors the per-charge noise power when the charge range is determined (updateChargeRange_).
+     * @param intensity detection limit. 0 (default) keeps the former unit-less floor of 1
+     */
+    void setDetectionLimit(float intensity);
+
+    /**
+     * For a precursor peak group: set the bounds of its isolation window, i.e., the heaviest mass and the highest charge (at which the
+     * window holds a peak of the mass) among all the target masses in the window
+     * @param max_mass the heaviest mass in the window
+     * @param max_charge the highest charge in the window
+     */
+    void setWindowBounds(double max_mass, int max_charge);
+
+    /// get the heaviest mass in the isolation window of this precursor peak group (0 if not set)
+    double getWindowMaxMass() const;
+
+    /// get the highest charge in the isolation window of this precursor peak group (0 if not set)
+    int getWindowMaxCharge() const;
+
+    /// set if the MSn spectrum of this precursor peak group is deconvolved within the window bounds (the maximum mass and charge over all
+    /// the masses in the isolation window) instead of the bounds of this mass alone
+    void setUseWindowBounds(bool use);
+
+    /// get if the MSn spectrum of this precursor peak group is deconvolved within the window bounds
+    bool useWindowBounds() const;
+
     /// get minimum neagative isotope index
     int getMinNegativeIsotopeIndex() const;
 
@@ -273,39 +331,48 @@ namespace OpenMS
     void swap(std::vector<FLASHHelperClasses::LogMzPeak>& x);
     void sort();
 
-    std::tuple<std::vector<double>, std::vector<double>> getDLVector(const MSSpectrum& spec, const Size charge_count, const Size isotope_count,
-                                                                     const FLASHHelperClasses::PrecalculatedAveragine& avg, double tol);
-
   private:
+    /// the per-charge noise powers of the last scoring iteration, computed when first needed (defined in PeakGroup.cpp)
+    struct ChargeNoise_;
+
     /// update chargefit score and also update per charge intensities here.
     void updateChargeFitScoreAndChargeIntensities_(bool is_low_charge);
     /// update avg ppm error
     void updateAvgMassError_();
+    /// average absolute per-isotope mass error (same arithmetic as averaging getMassErrors(ppm))
+    float averageAbsMassError_(bool ppm) const;
+    /// sort peaks, skipping std::sort when already strictly increasing
+    void sortPeaks_();
     /// update avg Da error
     float getPPMError_(const LogMzPeak& p) const;
     /// get Da error of a logMzPeak from the closest isotope
     float getDaError_(const LogMzPeak& p) const;
-    /// using signal and total (signal + noise) power, update SNR value
-    void updateSNR_(float mul_factor);
+    /// using signal and total (signal + noise) power, update SNR value. @p lazy_noise: see updatePerChargeInformation_
+    void updateSNR_(float mul_factor, ChargeNoise_* lazy_noise = nullptr);
     /// clear peaks
     void clear_();
     /// calculate per isotope intensities. When abs_charge == 0, all peaks are considered
     void getPerIsotopeIntensities_(std::vector<float>& intensities, int& min_isotope_index, int& max_isotope_index, int abs_charge, int min_negative_isotope_index, double tol);
       /// update per charge intensities, noise power, and squared intensities. used for SNR estimation
-    void updatePerChargeInformation_(const std::vector<LogMzPeak>& noisy_peaks, double tol, bool is_last);
-    /// update the charge range using the calculated per charge information
-    void updateChargeRange_();
+    /// (with @p is_last and @p lazy_noise, the per-charge noise powers are left to chargeNoisePower_, computed when first read)
+    void updatePerChargeInformation_(const std::vector<LogMzPeak>& noisy_peaks, double tol, bool is_last, ChargeNoise_* lazy_noise = nullptr);
+    /// update the charge range using the calculated per charge information (per charge SNR with the noise power floored by the detection limit)
+    void updateChargeRange_(ChargeNoise_* lazy_noise = nullptr);
+    /// the noise power of charge @p z (per_charge_noise_pwr_), first computed here if it is left to @p lazy_noise
+    float chargeNoisePower_(int z, ChargeNoise_* lazy_noise);
     /// update per charge cosine values
     void updatePerChargeCos_(const FLASHHelperClasses::PrecalculatedAveragine& avg, double tol);
 
     /**
      * calculate noisy peak power. The goal of this function is to group noisy peaks that are possibly from the same molecule and sum their intensities before calculate power
      * @param noisy_peaks noisy peaks to calculate power
-     * @param z charge
+     * @param signal_peaks signal peaks of this peak group
+     * @param charge_count number of charges in the charge range (limits the number of noisy peaks when z is 0)
+     * @param z charge (0: all charges)
      * @param tol ppm tolerance
      * @return calculated noise power
      */
-    float getNoisePeakPower_(const std::vector<LogMzPeak>& noisy_peaks, int z, double tol) const;
+    float getNoisePeakPower_(const std::vector<LogMzPeak>& noisy_peaks, const std::vector<LogMzPeak>& signal_peaks, int charge_count, int z, double tol) const;
 
     /// log Mz peaks
     std::vector<FLASHHelperClasses::LogMzPeak> logMzpeaks_;
@@ -343,11 +410,18 @@ namespace OpenMS
 
     /// distance between consecutive isotopes. Can be different for decoys
     double iso_da_distance_ = Constants::ISOTOPE_MASSDIFF_55K_U;
+    /// detection limit (intensity of the weakest peak) of the spectrum in which this peak group is scored. Floors the per-charge noise power
+    float detection_limit_ = 0.f;
     /// scoring variables
     /// the charge for which the charge SNR is maximized
     int max_snr_abs_charge_ = -1;
     /// cosine score between averagine and the observed isotope pattern
     float isotope_cosine_score_ = 0.f;
+    /// for a precursor peak group, the heaviest mass and the highest charge among all the target masses in its isolation window
+    double window_max_mass_ = 0;
+    int window_max_charge_ = 0;
+    /// if the MSn spectrum is deconvolved within the window bounds instead of the bounds of this mass
+    bool use_window_bounds_ = false;
     /// charge fit score
     float charge_score_ = 0.f;
     /// quality score

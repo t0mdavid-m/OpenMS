@@ -4,6 +4,7 @@ set(directory source/ANALYSIS/TOPDOWN)
 ### list all filenames of the directory here
 set(sources_list
         DeconvolvedSpectrum.cpp
+        FLASHAnnotatorAlgorithm.cpp
         SpectralDeconvolution.cpp
         FLASHDeconvAlgorithm.cpp
         FLASHHelperClasses.cpp
@@ -26,11 +27,14 @@ set(sources_list
         FLASHGappedTaggerAlgorithm.cpp
         FLASHTaggerAlgorithm.cpp
         FLASHTnTAlgorithm.cpp
+        FLASHTnTCandidateRanker.cpp
         MassFeatureTrace.cpp
         PeakGroup.cpp
         PeakGroupScoring.cpp
         Qvalue.cpp
         TopDownIsobaricQuantification.cpp
+        MassLadderAlgorithm.cpp
+        ProteoformDatabase.cpp
 )
 
 ### add path to the filenames

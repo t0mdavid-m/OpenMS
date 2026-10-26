@@ -15,6 +15,7 @@
 #include <OpenMS/FORMAT/FASTAFile.h>
 #include <OpenMS/METADATA/ProteinHit.h>
 #include <boost/dynamic_bitset.hpp>
+#include <cstdint>
 #include <iomanip>
 #include <iostream>
 
@@ -67,10 +68,62 @@ public:
    */
   static void runMatching(std::vector<ProteinHit>& hits,
                           const DeconvolvedSpectrum& deconvolved_spectrum,
-                          const std::vector<int> spec_vec,
+                          const std::vector<int>& spec_vec,
                           const std::vector<std::unordered_set<int>>& vec_pro,
                           const std::vector<std::unordered_set<int>>& rev_vec_pro,
                           const double max_mod_mass = 0);
+
+  /// tag-derived shifts of one candidate protein: protein residue sum up to the tag minus the tag flanking mass, with that flanking mass
+  struct OPENMS_DLLAPI ProteinShifts
+  {
+    std::vector<double> n_shifts, n_flanks, c_shifts, c_flanks;
+    /// index of the protein in the database (the residue sums passed to runMatchingExact)
+    Size fasta_index = 0;
+  };
+
+  /**
+   * @brief Score protein hits with exact masses: a deconvolved mass, moved by a tag-derived shift, matches a protein residue sum within
+   * @p tol_ppm (of the mass plus the tag flanking mass the shift was computed from). The score is -log10 of the chance of the match
+   * count: P(Poisson(lambda) >= count) at the best shift times the number of shifts, where lambda is the expected number of chance
+   * matches on this protein (masses that fall on it times 2 * margin * residues per Da). The larger of the N- and C-terminal sides.
+   * Unlike a summed node score it does not grow with the protein length.
+   * @param hits protein hits to score (meta value FastaIndex)
+   * @param shifts the shifts of each hit, in the order of @p hits
+   * @param deconvolved_spectrum deconvolved spectrum
+   * @param prefix_masses per protein (FastaIndex), the sorted residue sums from the N-terminus, 0 included
+   * @param suffix_masses per protein, the sorted residue sums from the C-terminus, 0 included
+   * @param tol_ppm mass tolerance in ppm
+   */
+  static void runMatchingExact(std::vector<ProteinHit>& hits,
+                               const std::vector<ProteinShifts>& shifts,
+                               const DeconvolvedSpectrum& deconvolved_spectrum,
+                               const std::vector<std::vector<double>>& prefix_masses,
+                               const std::vector<std::vector<double>>& suffix_masses,
+                               double tol_ppm);
+
+  /**
+   * @brief The score of one side of a protein in runMatchingExact: -log10 of the chance of the match count at the best of the @p count
+   * shifts @p shifts (with the tag flanking masses @p flanks they were computed from), times @p count.
+   * @param masses mass 0 (the terminus), then the deconvolved masses, ascending
+   * @param residue_sums the sorted residue sums of the side, 0 included
+   * @param density_mass the mass over which the residue sums are spread for the chance of a match (residues / mass); 0: the last
+   * residue sum. A database entry with fixed modifications (ProteoformDatabase) passes the mass of its residues without them, so that
+   * fixed masses no match touches do not raise its score over the same entry without them.
+   * @param best_count if not nullptr: the match count of the best shift (0 if none)
+   */
+  static double scoreShifts(const std::vector<double>& masses, const std::vector<double>& residue_sums, const double* shifts,
+                            const double* flanks, Size count, double tol_ppm, double density_mass = 0, int* best_count = nullptr);
+
+  /**
+   * @brief scoreShifts with the residue sum at or above a mass looked up in @p sum_index (indexResidueSums of @p residue_sums) instead of
+   * walked to; the same result. An empty index: scoreShifts without it.
+   */
+  static double scoreShifts(const std::vector<double>& masses, const std::vector<double>& residue_sums, const std::vector<std::uint32_t>& sum_index,
+                            const double* shifts, const double* flanks, Size count, double tol_ppm, double density_mass = 0,
+                            int* best_count = nullptr);
+
+  /// the index of scoreShifts: per 64 Da from 0, the number of residue sums below; empty unless the sums are sorted, from 0 or above
+  static void indexResidueSums(const std::vector<double>& residue_sums, std::vector<std::uint32_t>& sum_index);
 
   /**
    * @brief fill tags with the length of @p tag_length in @p tags
@@ -90,12 +143,14 @@ public:
   * @param flanking_mass_tol up to how large mass flanking mass is allowed?
   * @param seq the input protein sequence
   * @param tag the tags to be matched against sequence
+  * @param fixed fixed modifications of @p seq (position in @p seq, mass; ProteoformDatabase), added to the flanking residue sums; nullptr: none
   */
   static void fillMatchedPositionsAndFlankingMassDiffs(std::vector<int>& positions,
                                                       std::vector<double>& masses,
                                                       double flanking_mass_tol,
                                                       const String& seq,
-                                                      const FLASHHelperClasses::Tag& tag);
+                                                      const FLASHHelperClasses::Tag& tag,
+                                                      const std::vector<std::pair<int, double>>* fixed = nullptr);
 
   /// maximum node score for tag generation and extension
   const static int max_node_score = 8;

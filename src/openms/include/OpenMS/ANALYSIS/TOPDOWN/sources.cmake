@@ -4,9 +4,11 @@ set(directory include/OpenMS/ANALYSIS/TOPDOWN)
 ### list all header files of the directory here
 set(sources_list_h
         DeconvolvedSpectrum.h
+        FLASHAnnotatorAlgorithm.h
         SpectralDeconvolution.h
         FLASHDeconvAlgorithm.h
         FLASHHelperClasses.h
+        FLASHHugePages.h
         FLASHExtenderAlgorithm.h
         FLASHIda.h
         FLASHIda/Config.h
@@ -18,6 +20,7 @@ set(sources_list_h
         FLASHIda/RefineSettings.h
         FLASHIda/FragmentAnalysis.h
         FLASHIda/IdaLogger.h
+        FLASHIda/LogCell.h
         FLASHIda/MS3FragmentMatcher.h
         FLASHIda/PrecursorSelection.h
         FLASHIda/Quantification.h
@@ -29,11 +32,14 @@ set(sources_list_h
         FLASHGappedTaggerAlgorithm.h
         FLASHTaggerAlgorithm.h
         FLASHTnTAlgorithm.h
+        FLASHTnTCandidateRanker.h
         MassFeatureTrace.h
         PeakGroup.h
         PeakGroupScoring.h
         Qvalue.h
         TopDownIsobaricQuantification.h
+        MassLadderAlgorithm.h
+        ProteoformDatabase.h
 )
 
 ### add path to the filenames

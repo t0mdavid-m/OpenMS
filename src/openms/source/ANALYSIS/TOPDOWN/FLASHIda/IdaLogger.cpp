@@ -35,6 +35,7 @@
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/IdaLogger.h>
 
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/LogCell.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/MS3FragmentMatcher.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanRole.h>
@@ -480,10 +481,12 @@ namespace OpenMS
       decision_survey = ScanCommandQueue::encode(decision->decision_survey_id);
       if (decision->isolation_purity >= 0.0) { isolation_purity = mz(decision->isolation_purity); }
     }
-    commands_tsv_stream_ << id_str << "\t"
+    // Every cell that carries a tracking id goes through quoteLogCell (LogCell.h): ids 8,836 to 17,671
+    // begin with '"', which CSV-style readers take as an opening quote. A no-op for every other cell.
+    commands_tsv_stream_ << quoteLogCell(id_str) << "\t"
                          << scan_type << "\t"
                          << cmd.msn_level << "\t"
-                         << parent_id << "\t"
+                         << quoteLogCell(parent_id) << "\t"
                          << precursor_id << "\t"          // P5: per-MS1-selection precursor identity
                          << cmd.priority << "\t"
                          << mass(cmd.mono_mass, cmd.mono_mass_s1) << "\t"
@@ -508,12 +511,12 @@ namespace OpenMS
                          << ion_type << "\t"
                          << ion_index << "\t"
                          << ms3_proteoform << "\t"        // wide MS3 fragment ProForma ("" for MS1/MS2/AGC)
-                         << cmd.scan_description << "\t"  // E6: raw descriptor (tab/newline-free by construction)
+                         << quoteLogCell(cmd.scan_description) << "\t"  // E6: raw descriptor (tab/newline-free by construction)
                          << cmd.faims_cv << "\t"
                          << cmd.faims_enabled << "\t"     // 0/1; disambiguates CV 0 from no FAIMS
                          << mz(cmd.first_mass) << "\t"    // ADR-0026 d6: 0 = unset (instrument method default), a real value
                          << mz(cmd.last_mass) << "\t"
-                         << decision_survey << "\t"
+                         << quoteLogCell(decision_survey) << "\t"
                          << isolation_purity << "\t"
                          << cmd.enqueue_timestamp_ms << "\n";
     commands_tsv_stream_.flush();
@@ -561,16 +564,18 @@ namespace OpenMS
     {
       // The child_ids separator MUST be outside the 0x21-0x7E tracking-id alphabet
       // (encoded ids may contain ';', ',', '"', etc.); space (0x20) is the only printable
-      // char the alphabet excludes, so ids can never collide with it. Readers split on ' '.
+      // char the alphabet excludes, so ids can never collide with it. Readers unquote the
+      // cell (LogCell.h) and then split on ' '.
       if (i > 0) child_str += " ";
       child_str += child_ids[i];
     }
 
-    results_tsv_stream_ << tracking_id << "\t"
+    // Id-bearing cells through quoteLogCell (LogCell.h), as in writeScanCommandRow.
+    results_tsv_stream_ << quoteLogCell(tracking_id) << "\t"
                         << ms_level << "\t"
-                        << parent_tracking_id << "\t"
+                        << quoteLogCell(parent_tracking_id) << "\t"
                         << commands_pushed << "\t"
-                        << child_str << "\t"
+                        << quoteLogCell(child_str) << "\t"
                         << rt << "\t"
                         << duration << "\t"
                         << duration_received << "\t"
@@ -593,7 +598,7 @@ namespace OpenMS
                         << total_variants << "\t"
                         // F5: winner pointer — non-empty ONLY on the group-completing exploration row
                         // (the winning variant's encoded id); "" everywhere else.
-                        << winner_tracking_id << "\t";
+                        << quoteLogCell(winner_tracking_id) << "\t";
     results_tsv_stream_ << activation_type << "\t"
                         << collision_energy << "\t"
                         << reaction_time << "\t";
@@ -863,7 +868,7 @@ namespace OpenMS
                       + std::to_string(ctx.fragment_ion_index);
 
     identification_tsv_stream_
-      << tracking_id << "\t"
+      << quoteLogCell(tracking_id) << "\t"   // LogCell.h, as in writeScanCommandRow
       << scan_mode << "\t"
       << ms_level << "\t"
       // P5: per-MS1-selection precursor identity (plain decimal).
@@ -979,7 +984,8 @@ namespace OpenMS
     const std::string diff_da_str  = joinDoubles(r.combined_diff_da, 4);
     const std::string diff_ppm_str = joinDoubles(r.combined_diff_ppm, 2);
 
-    pooled_stream_ << r.trigger_scan_id << "\t"
+    // Id-bearing cells through quoteLogCell (LogCell.h), as in writeScanCommandRow.
+    pooled_stream_ << quoteLogCell(r.trigger_scan_id) << "\t"
                    << r.trigger << "\t"
                    // P5: per-MS1-selection precursor identity (the model key).
                    << r.precursor_id << "\t"
@@ -994,7 +1000,7 @@ namespace OpenMS
                    // Fragment-mass table (grouped): masses | ion labels | measured | theoretical | diff_da | diff_ppm.
                    << masses_str << "\t" << ions_str << "\t"
                    << measured_str << "\t" << theo_str << "\t" << diff_da_str << "\t" << diff_ppm_str << "\t"
-                   << scan_ids_str << "\t"
+                   << quoteLogCell(scan_ids_str) << "\t"
                    << r.nominal_mass << "\n";
     pooled_stream_.flush();
   }

@@ -89,10 +89,8 @@ namespace OpenMS
     PeakGroup empty;
     fd_.performSpectrumDeconvolution(spec, 0, empty);
     deconvolved_spectrum_ = fd_.getDeconvolvedSpectrum();
-    for (PeakGroup pg : deconvolved_spectrum_) {
-      std::cout << pg.getMonoMass() << ", ";
-    }
-    std::cout << std::endl;
+    // No stdout here: the masses are logged as ida.log AllMass= and scan_results deconv_masses, and a
+    // per-survey std::endl under analysis_mutex_ is the console-flush pathology of ADR-0025 / ADR-0033.
     return deconvolved_spectrum_;
   }
 
@@ -146,6 +144,17 @@ namespace OpenMS
       const int sign = precursor_charge > 0 ? 1 : -1;
       setChargeWindow_(sign * 1, sign * std::abs(precursor_charge));
     }
+
+    // LOAD-BEARING: no MS1 target masses in an MSn deconvolution. fd_ is shared MS1<->MSn, and
+    // PrecursorSelection::filterAndRank sets the survey's inclusion targets on it (engine().setTargetMasses)
+    // before deconvolveMS1, so without this they are still set here. SpectralDeconvolution applies targets at
+    // EVERY MS level: a fragment peak whose interpretation at some charge lands in a target's mass bins is
+    // pulled there (filterMassBins_ gives it intensity 1e38, so it beats the peak's other charges), and a
+    // fragment mass within 2 x tol of a target is flagged targeted and skips the charge-error and overlap
+    // filters. A target is an intact precursor mass of the survey and says nothing about a fragment; the
+    // exploration and monitor engines never see targets, so the regular MSn path disagreed with them on
+    // the same spectrum. filterAndRank sets the targets again before every survey, so MS1 is unchanged.
+    fd_.setTargetMasses({}, false);
 
     // Perform deconvolution (empty precursor_pg if mass <= 0 or charge == 0)
     fd_.performSpectrumDeconvolution(spec, 0, precursor_pg);

@@ -436,7 +436,7 @@ namespace OpenMS
          "precursor_charges", "strict_inclusion", "tie_threshold",
          "rank_by", "max_precursors", "min_precursor_charge", "additional_scans", "exploration",
          "tag_expansion", "snr_threshold", "max_charge_states", "min_charge_states",
-         "charge_selection"},
+         "log_target_rt_window", "log_target_charges", "charge_selection"},
         "precursor_selection");
     targeting_.rt_window = ps.value("rt_window", 180.0);
     targeting_.consider_all_charges = ps.value("consider_all_charges", false);
@@ -445,6 +445,15 @@ namespace OpenMS
     targeting_.charge_selection = parseChargeSelection(ps);
     targeting_.strict_inclusion = ps.value("strict_inclusion", false);
     targeting_.tie_threshold = ps.value("tie_threshold", 0.1);
+    targeting_.log_target_rt_window = ps.value("log_target_rt_window", true);
+    {
+      const std::string c = ps.value("log_target_charges", std::string("any"));
+      if (c == "any") targeting_.log_target_reference_charges = false;
+      else if (c == "reference") targeting_.log_target_reference_charges = true;
+      else
+        throw std::invalid_argument("Config: precursor_selection.log_target_charges must be \"any\" (mass targeting) or \"reference\" "
+                                    "(only the charges the reference acquired, each used up once); got \"" + c + "\".");
+    }
 
     // The notch ADMISSION gate (NotchSelection.h) and the anchor's own SNR bar. Authorable since
     // ADR-0040. It was assigned a hardcoded 1.0 AFTER this entire parse, so adding this line

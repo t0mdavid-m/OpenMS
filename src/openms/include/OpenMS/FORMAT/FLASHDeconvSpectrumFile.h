@@ -42,7 +42,7 @@ namespace OpenMS
           @param decoy_avg averagine for noise decoy
           @param tol mass tolerance
           @param write_detail if this is set, more detailed information on each mass will be written in the output file.
-          @param record_decoy if set true, decoy and qvalue information will be written.
+          @param report_decoy if set true, decoy and qvalue information will be written.
           @param noise_decoy_weight noise decoy weight. Determines how often the noise decoy masses will be written
           Default MS1 headers are:
             FileName, ScanNum, TargetDecoyType, RetentionTime, MassCountInSpec, AverageMass, MonoisotopicMass,
@@ -62,7 +62,14 @@ namespace OpenMS
                                        const FLASHHelperClasses::PrecalculatedAveragine& decoy_avg,
                                        double tol,
                                        bool write_detail,
-                                       bool record_decoy, double noise_decoy_weight);
+                                       bool report_decoy, double noise_decoy_weight);
+
+    /// writeDeconvolvedMasses for every spectrum of @p spectra whose MS level has a file in @p out_files (open in @p streams), in input order and
+    /// with the same bytes; the spectra are formatted in parallel (with @p report_decoy, the noise-decoy draws are replayed serially up front)
+    static void writeDeconvolvedMasses(std::vector<DeconvolvedSpectrum>& spectra, std::vector<std::fstream>& streams, const std::vector<String>& out_files,
+                                       const String& file_name, const FLASHHelperClasses::PrecalculatedAveragine& avg,
+                                       const FLASHHelperClasses::PrecalculatedAveragine& decoy_avg, const std::vector<double>& tols, bool write_detail,
+                                       bool report_decoy, double noise_decoy_weight);
 
     /**
      *
@@ -78,6 +85,11 @@ namespace OpenMS
                           const String& deconvolved_mzML_file,
                           const String& annotated_mzML_file,
                           int mzml_charge, DoubleList tols);
+
+    /// The deconvolved map writeMzML stores as the deconvolved mzML (the experimental settings of @p map and one spectrum per non-empty,
+    /// non-decoy deconvolved spectrum with masses, in input order), built in memory, e.g. for FLASHTnT on a raw mzML.
+    static void toDeconvolvedMap(const MSExperiment& map, std::vector<DeconvolvedSpectrum>& deconvolved_spectra, int mzml_charge,
+                                 const DoubleList& tols, MSExperiment& deconvolved_map);
 
     /**
      * write isobaric quantification results

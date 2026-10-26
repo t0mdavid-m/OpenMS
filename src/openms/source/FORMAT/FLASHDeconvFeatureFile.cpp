@@ -7,6 +7,9 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/FORMAT/FLASHDeconvFeatureFile.h>
+#include <algorithm>
+#include <exception>
+#include <iomanip>
 
 namespace OpenMS
 {
@@ -48,9 +51,8 @@ namespace OpenMS
 
   void FLASHDeconvFeatureFile::writeFeatures(const std::vector<FLASHHelperClasses::MassFeature>& mass_features, const String& file_name, std::fstream& fs, bool report_decoy)
   {
-    std::stringstream ss;
-    for (auto& mass_feature : mass_features)
-    {
+    // the row of a feature
+    const auto write_row = [&file_name, report_decoy](const FLASHHelperClasses::MassFeature& mass_feature, std::stringstream& ss) {
       const auto& mt = mass_feature.mt;
       double mass = mt.getCentroidMZ() + mass_feature.iso_offset * Constants::ISOTOPE_MASSDIFF_55K_U;
       double avg_mass = mass_feature.avg_mass;
@@ -100,8 +102,42 @@ namespace OpenMS
         }
       }
       ss << "\n";
+    };
+
+    // The rows are formatted in blocks in parallel and written in order. A block starts with the stream state the rows before it leave:
+    // the default precision before the first row, and the precision a row ends with (-1) before any other row.
+    const Size block_size = 256;
+    const Size block_count = (mass_features.size() + block_size - 1) / block_size;
+    std::vector<std::string> blocks(block_count);
+    std::vector<std::exception_ptr> errors(block_count);
+#pragma omp parallel for schedule(dynamic, 1)
+    for (SignedSize b = 0; b < (SignedSize)block_count; b++)
+    {
+      try
+      {
+        std::stringstream ss;
+        if (b > 0) ss << std::setprecision(-1);
+        const Size row_end = std::min(mass_features.size(), (Size)(b + 1) * block_size);
+        for (Size row = (Size)b * block_size; row < row_end; row++)
+        {
+          write_row(mass_features[row], ss);
+        }
+        blocks[b] = ss.str();
+      }
+      catch (...)
+      {
+        errors[b] = std::current_exception();
+      }
     }
-    fs << ss.str();
+    // the first error (of the first row that failed), and then nothing written, as before
+    for (const auto& error : errors)
+    {
+      if (error) std::rethrow_exception(error);
+    }
+    for (const auto& block : blocks)
+    {
+      fs << block;
+    }
   }
 
   void FLASHDeconvFeatureFile::writeTopFDFeatures(std::vector<DeconvolvedSpectrum>& deconvolved_spectra, const std::vector<FLASHHelperClasses::MassFeature>& mass_features,
@@ -164,6 +200,14 @@ namespace OpenMS
 
     if (ms_level == 2)
     {
+      // The MS1 target features by their index. A precursor without one got an index beyond them in the MS1 pass above, which may be
+      // the index of a decoy feature (report_FDR) or an MSn feature as well, so a feature is looked up by its index among these only.
+      std::map<uint, const FLASHHelperClasses::MassFeature*> ms1_features;
+      for (const auto& mass_feature : mass_features)
+      {
+        if (mass_feature.ms_level != 1 || mass_feature.is_decoy) continue;
+        ms1_features[mass_feature.index] = &mass_feature;
+      }
       for (auto& dspec : deconvolved_spectra)
       {
         if (dspec.getOriginalSpectrum().getMSLevel() == 1 || dspec.getPrecursorPeakGroup().empty()) continue;
@@ -172,9 +216,10 @@ namespace OpenMS
         int ms2_scan_number = dspec.getScanNumber();
         ss << file_name << "\t0\t" << ms2_scan_number - 1 << "\t" << ms2_scan_number << "\t" << pg.getScanNumber() - 1 << "\t" << pg.getScanNumber() << "\t" << pg.getFeatureIndex() << "\t";
 
-        if (pg.getFeatureIndex() < mass_features.size() + 1)
+        const auto fit = ms1_features.find(pg.getFeatureIndex());
+        if (fit != ms1_features.end())
         {
-          const auto& mass_feature = mass_features[pg.getFeatureIndex() - 1];
+          const auto& mass_feature = *fit->second;
           const auto& apex = mass_feature.mt[mass_feature.mt.findMaxByIntPeak()];
           double sum_intensity = .0;
 

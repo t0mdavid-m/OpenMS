@@ -14,9 +14,14 @@
 #include <OpenMS/CONCEPT/Constants.h>
 #include <OpenMS/FEATUREFINDER/MassTraceDetection.h>
 #include <boost/dynamic_bitset.hpp>
+#include <limits>
 
 namespace OpenMS
 {
+  class PeakGroup;
+  class ResidueModification;
+  class SpectralDeconvolution;
+
   /**
    * @brief Wrapper struct for all the structs needed by the FLASHDeconv
    * The following structures/classes are defined: PrecalculatedAveragine, MassFeature, IsobaricQuantities, LogMzPeak,
@@ -63,6 +68,15 @@ namespace OpenMS
       double min_mass_;
       /// calculate the mass bin index from mass
       Size massToIndex_(double mass) const;
+
+      friend class OpenMS::PeakGroup;
+      friend class OpenMS::SpectralDeconvolution;
+
+      /// borrow the cached distribution for read-only scoring (same bin as get(); valid while this model lives)
+      const IsotopeDistribution& getReference_(double mass) const
+      {
+        return isotopes_[massToIndex_(mass)];
+      }
 
     public:
       /// default constructor
@@ -212,6 +226,12 @@ namespace OpenMS
       */
       explicit LogMzPeak(const Peak1D& peak, bool positive);
 
+      /// constructor from Peak1D with its log m/z already computed (getLogMz(peak.getMZ(), positive))
+      LogMzPeak(const Peak1D& peak, bool positive, double log_mz) :
+          mz(peak.getMZ()), intensity(peak.getIntensity()), logMz(log_mz), abs_charge(0), is_positive(positive), isotopeIndex(0)
+      {
+      }
+
       /// copy constructor
       LogMzPeak(const LogMzPeak&) = default;
 
@@ -294,8 +314,17 @@ namespace OpenMS
       /// constructor
       explicit Tag(const String& seq, double n_mass, double c_mass, const std::vector<double>& mzs, const std::vector<int>& scores, int scan);
 
+      /// constructor of a gapped tag: @p mzs are the masses at the gap boundaries only, so the residue length is given explicitly
+      explicit Tag(String seq, double n_mass, double c_mass, std::vector<double>& mzs, std::vector<int>& scores, int scan, Size length);
+
       /// copy constructor
       Tag(const Tag&) = default;
+
+      /// move constructor (the declared copy constructor would otherwise make every move a copy)
+      Tag(Tag&&) noexcept = default;
+
+      Tag& operator=(const Tag&) = default;
+      Tag& operator=(Tag&&) noexcept = default;
 
       /// destructor
       ~Tag() = default;
@@ -308,7 +337,13 @@ namespace OpenMS
       [[nodiscard]] const String& getUppercaseSequence() const;
       [[nodiscard]] double getNtermMass() const;
       [[nodiscard]] double getCtermMass() const;
+      /// number of residues the tag spans (for a gapped tag more than the number of mass gaps)
       Size getLength() const;
+      /// true if consecutive masses of the tag may be more than one residue apart
+      bool isGapped() const
+      {
+        return length_ + 1 != mzs_.size();
+      }
       int getScore() const;
       int getScore(int pos) const;
       int getScan() const;
@@ -348,6 +383,129 @@ namespace OpenMS
 
     /// A generic Directed Acyclic Graph structure for FLASHTaggerAlgorithm and FLASHExtensionAlgorithm.
     /// It is a 1-D graph so multiple dimension graph should be changed into 1-D to use this structure.
+    /**
+       @brief A set of vertex indices for graphs whose vertex space is huge but sparsely visited. A paged bitset: pages of 2^15 vertices
+       (4 KB) are created when first touched, so memory follows the touched part of the space, and a lookup is a page lookup (the last
+       page is cached; vertex indices of one search are clustered) plus a bit test. Pages are kept in blocks of 16 that never move (one
+       growing array copied all pages at every reallocation); clear() keeps the blocks for the next use, and a page is zeroed when it is
+       handed out again (a new block is zero already).
+    */
+    class OPENMS_DLLAPI VisitedVertexSet
+    {
+    public:
+      /// true if vertex was not in the set
+      bool insert(Size vertex)
+      {
+        uint64_t* page = page_(vertex >> page_bits_, true);
+        const Size bit = vertex & (page_size_ - 1);
+        uint64_t& word = page[bit >> 6];
+        const uint64_t mask = uint64_t(1) << (bit & 63);
+        if (word & mask) return false;
+        word |= mask;
+        ++count_;
+        return true;
+      }
+
+      bool contains(Size vertex) const
+      {
+        const uint64_t* page = const_cast<VisitedVertexSet*>(this)->page_(vertex >> page_bits_, false);
+        if (page == nullptr) return false;
+        const Size bit = vertex & (page_size_ - 1);
+        return (page[bit >> 6] >> (bit & 63)) & 1;
+      }
+
+      void clear()
+      {
+        std::fill(table_keys_.begin(), table_keys_.end(), empty_);
+        page_count_ = 0;
+        count_ = 0;
+        last_page_id_ = empty_;
+      }
+
+      Size size() const
+      {
+        return count_;
+      }
+
+    private:
+      static constexpr Size page_bits_ = 15;
+      static constexpr Size page_size_ = Size(1) << page_bits_;
+      static constexpr Size page_words_ = page_size_ / 64;
+      static constexpr Size empty_ = std::numeric_limits<Size>::max();
+      static constexpr Size block_bits_ = 4;
+      static constexpr Size block_pages_ = Size(1) << block_bits_;
+
+      std::vector<std::vector<uint64_t>> blocks_; // pages, block_pages_ per block, page_words_ words each
+      Size used_pages_ = 0;                        // pages handed out since the blocks were allocated (those below are zeroed on reuse)
+      std::vector<Size> table_keys_;    // page id per slot (open addressing)
+      std::vector<Size> table_values_;  // page number per slot
+      Size table_mask_ = 0;
+      Size page_count_ = 0;
+      Size count_ = 0;
+      Size last_page_id_ = empty_;
+      Size last_page_number_ = 0;
+
+      static Size slot_(Size id, Size mask)
+      {
+        return (Size)((id * 0x9E3779B97F4A7C15ULL) >> 24) & mask;
+      }
+
+      uint64_t* pageData_(Size number)
+      {
+        return blocks_[number >> block_bits_].data() + (number & (block_pages_ - 1)) * page_words_;
+      }
+
+      uint64_t* page_(Size id, bool create)
+      {
+        if (id == last_page_id_) return pageData_(last_page_number_);
+        if (! table_keys_.empty())
+        {
+          for (Size i = slot_(id, table_mask_);; i = (i + 1) & table_mask_)
+          {
+            if (table_keys_[i] == id)
+            {
+              last_page_id_ = id;
+              last_page_number_ = table_values_[i];
+              return pageData_(last_page_number_);
+            }
+            if (table_keys_[i] == empty_) break;
+          }
+        }
+        if (! create) return nullptr;
+        if ((page_count_ + 1) * 2 > table_keys_.size()) grow_table_();
+        Size i = slot_(id, table_mask_);
+        while (table_keys_[i] != empty_) i = (i + 1) & table_mask_;
+        table_keys_[i] = id;
+        table_values_[i] = page_count_;
+        if ((page_count_ >> block_bits_) == blocks_.size()) blocks_.emplace_back(block_pages_ * page_words_, uint64_t(0));
+        uint64_t* page = pageData_(page_count_);
+        if (page_count_ < used_pages_) std::fill(page, page + page_words_, uint64_t(0));
+        else used_pages_ = page_count_ + 1;
+        last_page_id_ = id;
+        last_page_number_ = page_count_++;
+        return page;
+      }
+
+      void grow_table_()
+      {
+        std::vector<Size> old_keys, old_values;
+        old_keys.swap(table_keys_);
+        old_values.swap(table_values_);
+        const Size n = old_keys.empty() ? 64 : old_keys.size() * 2;
+        table_keys_.assign(n, empty_);
+        table_values_.assign(n, 0);
+        table_mask_ = n - 1;
+        for (Size k = 0; k < old_keys.size(); k++)
+        {
+          if (old_keys[k] == empty_) continue;
+          Size i = slot_(old_keys[k], table_mask_);
+          while (table_keys_[i] != empty_) i = (i + 1) & table_mask_;
+          table_keys_[i] = old_keys[k];
+          table_values_[i] = old_values[k];
+        }
+      }
+    };
+
     class OPENMS_DLLAPI DAG
     {
     public:
@@ -363,12 +521,32 @@ namespace OpenMS
         return vertex_count_;
       }
 
+      /// same as the bitset version, for callers whose vertex space is huge but sparsely visited (FLASHExtender)
+      bool addEdge(Size vertex1, Size vertex2, VisitedVertexSet& visited)
+      {
+        if (vertex1 >= vertex_count_ || vertex2 >= vertex_count_) return false;
+        if (! visited.contains(vertex2)) return false;
+        visited.insert(vertex1);
+        edges_.emplace_back(vertex1, vertex2);
+        return true;
+      }
+
+      /// addEdge for a @p vertex2 the caller knows to be in @p visited: the same without that lookup (FLASHExtender adds the edges of a
+      /// search from its start vertex, which it tests once)
+      bool addEdgeFromVisited(Size vertex1, Size vertex2, VisitedVertexSet& visited)
+      {
+        if (vertex1 >= vertex_count_ || vertex2 >= vertex_count_) return false;
+        visited.insert(vertex1);
+        edges_.emplace_back(vertex1, vertex2);
+        return true;
+      }
+
       bool addEdge(Size vertex1, Size vertex2, boost::dynamic_bitset<>& visited)
       {
         if (vertex1 >= vertex_count_ || vertex2 >= vertex_count_) return false;
         if (! visited[vertex2]) return false;
         visited[vertex1] = true;
-        adj_list_for_speed_up_[vertex2].insert(vertex1); //
+        edges_.emplace_back(vertex1, vertex2); //
         return true;
       }
 
@@ -384,19 +562,44 @@ namespace OpenMS
         std::unordered_set<Size> visited;
         std::vector<Size> path;
 
-        if (adj_list_.empty())
+        // the adjacency is built once (at the first search that finds it empty): every edge once, by source and then target, so the
+        // targets of a vertex are in ascending order
+        if (! adjacency_used_)
         {
-          for (const auto& [v2, vertices] : adj_list_for_speed_up_)
-          {
-            for (const auto& v1 : vertices)
+          sources_.clear();
+          offsets_.clear();
+          targets_.clear();
+          auto add = [this](Size v1, Size v2) {
+            if (sources_.empty() || sources_.back() != v1)
             {
-              adj_list_[v1].push_back(v2);
+              sources_.push_back(v1);
+              offsets_.push_back(targets_.size());
             }
-          }
-          for (auto& v : adj_list_)
+            targets_.push_back(v2);
+          };
+          // vertices are below vertex_count_ <= 2^bits: if an edge fits in 64 bits as (vertex1 << bits) | vertex2, the edges are sorted
+          // as these numbers, which order them as the pairs do
+          int bits = 1;
+          while (bits < 64 && (Size(1) << bits) < vertex_count_) bits++;
+          if (2 * bits <= 64)
           {
-            std::sort(v.second.begin(), v.second.end());
+            std::vector<uint64_t> keys(edges_.size());
+            for (Size e = 0; e < edges_.size(); e++) keys[e] = (uint64_t(edges_[e].first) << bits) | uint64_t(edges_[e].second);
+            // not needed any more: an edge makes the adjacency non-empty, so it is never built again (see adjacency_used_)
+            std::vector<std::pair<Size, Size>>().swap(edges_);
+            sortKeys_(keys, 2 * bits);
+            keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+            const uint64_t mask = (uint64_t(1) << bits) - 1;
+            for (uint64_t key : keys) add((Size)(key >> bits), (Size)(key & mask));
           }
+          else
+          {
+            std::sort(edges_.begin(), edges_.end());
+            edges_.erase(std::unique(edges_.begin(), edges_.end()), edges_.end());
+            for (const auto& [v1, v2] : edges_) add(v1, v2);
+          }
+          offsets_.push_back(targets_.size());
+          adjacency_used_ = ! sources_.empty();
         }
         findAllPaths_(source, sink, visited, path, all_paths, max_count); // reverse traveling
       }
@@ -404,8 +607,43 @@ namespace OpenMS
     private:
       Size vertex_count_;
       // 0, 1, 2, ... ,vertex_count - 1
-      std::map<Size, std::vector<Size>> adj_list_; //
-      std::unordered_map<Size, std::unordered_set<Size>> adj_list_for_speed_up_; // vertex swapped for fast storing of edges
+      /// the edges as added (vertex1, vertex2), duplicates included
+      std::vector<std::pair<Size, Size>> edges_;
+      /// the adjacency of findAllPaths: the vertices with edges (ascending), and per vertex its targets (ascending) in targets_
+      std::vector<Size> sources_, offsets_, targets_;
+      /// whether the adjacency is built and kept (a search visited a vertex's adjacency, or it has an edge)
+      bool adjacency_used_ = false;
+
+      /// sort @p keys (all below 2^@p key_bits) ascending: large ones by an LSD radix sort over bytes (skipping bytes equal in all keys)
+      static void sortKeys_(std::vector<uint64_t>& keys, int key_bits)
+      {
+        if (keys.size() < 16384)
+        {
+          std::sort(keys.begin(), keys.end());
+          return;
+        }
+        const int passes = (key_bits + 7) / 8;
+        std::vector<Size> counts(passes * 256, 0);
+        for (uint64_t key : keys)
+        {
+          for (int p = 0; p < passes; p++) counts[p * 256 + ((key >> (8 * p)) & 255)]++;
+        }
+        std::vector<uint64_t> buffer(keys.size());
+        for (int p = 0; p < passes; p++)
+        {
+          Size* count = counts.data() + p * 256;
+          if (count[(keys[0] >> (8 * p)) & 255] == keys.size()) continue; // the same byte in all keys
+          Size sum = 0;
+          for (int d = 0; d < 256; d++)
+          {
+            const Size n = count[d];
+            count[d] = sum;
+            sum += n;
+          }
+          for (uint64_t key : keys) buffer[count[(key >> (8 * p)) & 255]++] = key;
+          keys.swap(buffer);
+        }
+      }
       /// recursive part for the findAllPaths(..)
       void findAllPaths_(Size current,
                          Size destination,
@@ -422,9 +660,16 @@ namespace OpenMS
         if (current == destination) { all_paths.push_back(path);}
         else
         {
-          for (Size i : adj_list_[current])
+          adjacency_used_ = true;
+          const auto it = std::lower_bound(sources_.begin(), sources_.end(), current);
+          if (it != sources_.end() && *it == current)
           {
-            if (visited.find(i) == visited.end()) { findAllPaths_(i, destination, visited, path, all_paths, max_count); }
+            const Size k = (Size)(it - sources_.begin());
+            for (Size e = offsets_[k]; e < offsets_[k + 1]; e++)
+            {
+              const Size i = targets_[e];
+              if (visited.find(i) == visited.end()) { findAllPaths_(i, destination, visited, path, all_paths, max_count); }
+            }
           }
         }
 
@@ -446,5 +691,56 @@ namespace OpenMS
        @param positive_ioniziation_mode Determines the charge carrier mass (true = positive or false = negative)
     */
     static float getChargeMass(bool positive_ioniziation_mode);
+
+    /**
+       @brief The modification a user names (FLASHTnT var_mod and fixed_mod): a name with its site as in Unimod/PSI-MOD, e.g. "Oxidation (M)",
+       or a Unimod accession number with its site, e.g. "35 (M)", "1 (N-term)" ("UNIMOD:35 (M)" is the same; sites: a residue letter, N-term,
+       C-term, Protein N-term, Protein C-term). A bare accession ("35") is taken only if the database knows one site for it.
+       @throw Exception::ElementNotFound for an unknown name, or an accession unknown at the site
+       @throw Exception::InvalidValue for a bare accession of several sites (the message lists them) or a malformed accession
+    */
+    static const ResidueModification* resolveModification(const String& spec);
   };
+
+  // Hot in every peak-group sort and mass computation: defined inline (same arithmetic as before).
+  inline float FLASHHelperClasses::getChargeMass(const bool positive_ioniziation_mode)
+  {
+    return (float)(positive_ioniziation_mode ? Constants::PROTON_MASS_U : -Constants::PROTON_MASS_U);
+  }
+
+  inline double FLASHHelperClasses::LogMzPeak::getUnchargedMass() const
+  {
+    if (abs_charge == 0)
+    {
+      return .0;
+    }
+    if (mass <= 0)
+    {
+      return (mz - getChargeMass(is_positive)) * (float)abs_charge;
+    }
+    return mass;
+  }
+
+  inline bool FLASHHelperClasses::LogMzPeak::operator<(const LogMzPeak& a) const
+  {
+    if (this->logMz == a.logMz)
+    {
+      return this->intensity < a.intensity;
+    }
+    return this->logMz < a.logMz;
+  }
+
+  inline bool FLASHHelperClasses::LogMzPeak::operator>(const LogMzPeak& a) const
+  {
+    if (this->logMz == a.logMz)
+    {
+      return this->intensity > a.intensity;
+    }
+    return this->logMz > a.logMz;
+  }
+
+  inline bool FLASHHelperClasses::LogMzPeak::operator==(const LogMzPeak& a) const
+  {
+    return this->logMz == a.logMz && this->intensity == a.intensity;
+  }
 } // namespace OpenMS

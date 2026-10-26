@@ -1,312 +1,120 @@
-#include <iostream>
+// Copyright (c) 2002-present, OpenMS Inc. -- EKU Tuebingen, ETH Zurich, and FU Berlin
+// SPDX-License-Identifier: BSD-3-Clause
+//
+// --------------------------------------------------------------------------
+// $Maintainer: Kyowon Jeong $
+// $Authors: Kyowon Jeong $
+// --------------------------------------------------------------------------
+
+#include <OpenMS/CONCEPT/ClassTest.h>
+#include <OpenMS/test_config.h>
+
+///////////////////////////
 #include <OpenMS/CHEMISTRY/ProForma.h>
 #include <OpenMS/CHEMISTRY/AASequence.h>
+#include <OpenMS/CHEMISTRY/EmpiricalFormula.h>
+///////////////////////////
 
-void test_parseSimpleModification()
+using namespace OpenMS;
+using namespace std;
+
+START_TEST(ProForma, "$Id$")
+
+START_SECTION(static ProForma fromString(const String& proforma))
 {
-  OpenMS::AASequence seq = OpenMS::AASequence::fromString("ACDEFGHIK");
-  OpenMS::ProForma proforma(seq);
+  // round trips of the supported notation
+  for (const String s : {"PEPTIDE", "PEM[Oxidation]K", "S[Phospho][+1.0]EK", "P(EMK)[+15.9949]R", "[Acetyl]-PEPTIDE", "PEPTIDE-[Amidated]",
+                         "[Phospho]?PEPTIDE", "{Glycan:Hex}PEPTIDE", "<[Carbamidomethyl]@C>PEPTCDE", "PEPTIDE/2", "EM[MOD:00719]EVEES[MOD:00046]PEK",
+                         "EM[UNIMOD:35]K", "M[Formula:O]K", "(PEP)[-18.0106]TIDE"})
+  {
+    TEST_EQUAL(ProForma::fromString(s).toString(), s)
+  }
 
-  std::string proforma_str = "A[Phospho]CDEFGHIK";
-  proforma.fromProFormaString(proforma_str);
-  std::string output = proforma.toProFormaString();
-  if (output == proforma_str)
+  // masses: named, accession, PSI-MOD, formula, glycan, alternatives, observed
+  TEST_REAL_SIMILAR(ProForma::fromString("PEM[Oxidation]K").getModifications()[0].mass, 15.994915)
+  TEST_REAL_SIMILAR(ProForma::fromString("PEM[U:Oxidation]K").getModifications()[0].mass, 15.994915)
+  TEST_REAL_SIMILAR(ProForma::fromString("PEM[UNIMOD:35]K").getModifications()[0].mass, 15.994915)
+  TEST_REAL_SIMILAR(ProForma::fromString("PEM[MOD:00719]K").getModifications()[0].mass, 15.994915)
+  TEST_REAL_SIMILAR(ProForma::fromString("PEM[Formula:O]K").getModifications()[0].mass, 15.994915)
+  TEST_REAL_SIMILAR(ProForma::fromString("PEN[Glycan:Hex1HexNAc1]K").getModifications()[0].mass, 365.132197)
+  TEST_REAL_SIMILAR(ProForma::fromString("PES[INFO:x|Phospho|+79.97]K").getModifications()[0].mass, 79.966331)
+  TEST_REAL_SIMILAR(ProForma::fromString("PES[Obs:+79.97]K").getModifications()[0].mass, 79.97)
+  TEST_REAL_SIMILAR(ProForma::fromString("PEK[Cation:Ca[II]]").getModifications()[0].mass, 37.946941)
+
+  // sites and positions
+  TEST_EXCEPTION(Exception::ParseError, ProForma::fromString("PEPTIDE#"))
+  ProForma pf = ProForma::fromString("<[Carbamidomethyl]@C>[Acetyl]-PC(EMK)[+15.9949]S[Phospho]C-[Amidated]/3");
+  TEST_EQUAL(pf.getSequence(), "PCEMKSC")
+  TEST_EQUAL(pf.getCharge(), 3)
+  TEST_EQUAL(pf.getModifications().size(), 6)
+  int globals = 0, ranges = 0, n_term = 0, c_term = 0;
+  for (const auto& m : pf.getModifications())
   {
-    std::cout << "test_parseSimpleModification PASSED" << std::endl;
+    globals += m.global;
+    if (m.site == ProForma::Site::RESIDUE && m.end > m.start)
+    {
+      ranges++;
+      TEST_EQUAL(m.start, 2)
+      TEST_EQUAL(m.end, 4)
+    }
+    n_term += m.site == ProForma::Site::N_TERM;
+    c_term += m.site == ProForma::Site::C_TERM;
   }
-  else
-  {
-    std::cerr << "test_parseSimpleModification FAILED: Expected " << proforma_str << " but got " << output << std::endl;
-  }
+  TEST_EQUAL(globals, 2)
+  TEST_EQUAL(ranges, 1)
+  TEST_EQUAL(n_term, 1)
+  TEST_EQUAL(c_term, 1)
+  TEST_EQUAL(pf.toString(), "<[Carbamidomethyl]@C>[Acetyl]-PC(EMK)[+15.9949]S[Phospho]C-[Amidated]/3")
+
+  // unknown position with a count, a localisation group (the tag with the name carries the mass)
+  pf = ProForma::fromString("[Phospho]^2?PEPTIDE");
+  TEST_EQUAL(pf.getModifications().size(), 2)
+  pf = ProForma::fromString("PES[Phospho#g1(0.8)]T[#g1(0.2)]K");
+  TEST_EQUAL(pf.getModifications().size(), 1)
+  TEST_EQUAL(pf.getModifications()[0].start, 2)
+
+  // invalid or unsupported
+  TEST_EXCEPTION(Exception::ParseError, ProForma::fromString("A[PhosphoCDEFGHIK"))
+  TEST_EXCEPTION(Exception::ParseError, ProForma::fromString("A[NoSuchModification]C"))
+  TEST_EXCEPTION(Exception::ParseError, ProForma::fromString("PEPTIDE+PEPTIDE"))
+  TEST_EXCEPTION(Exception::ParseError, ProForma::fromString("PEPTBDE"))
+  TEST_EXCEPTION(Exception::ParseError, ProForma::fromString("PEP(TI(D)[+1])[+1]E"))
+  TEST_EXCEPTION(Exception::ParseError, ProForma::fromString("PEPTIDE/[Na:z+1]"))
+  TEST_EXCEPTION(Exception::ParseError, ProForma::fromString("<13C>PEPTIDE"))
+  TEST_EXCEPTION(Exception::ParseError, ProForma::fromString("PEK[#XL1]"))
 }
+END_SECTION
 
-void test_parseMassShiftModification()
+START_SECTION(String toString() const)
 {
-  OpenMS::AASequence seq = OpenMS::AASequence::fromString("ACDEFGHIK");
-  OpenMS::ProForma proforma(seq);
-
-  std::string proforma_str = "A[+15.99]CDEFGHIK";
-  proforma.fromProFormaString(proforma_str);
-  std::string output = proforma.toProFormaString();
-  if (output == proforma_str)
-  {
-    std::cout << "test_parseMassShiftModification PASSED" << std::endl;
-  }
-  else
-  {
-    std::cerr << "test_parseMassShiftModification FAILED: Expected " << proforma_str << " but got " << output << std::endl;
-  }
+  ProForma pf("PEPTIDEK");
+  pf.addModification(1, 1, 15.994915);
+  pf.addModification(3, 5, -18.010565, "");
+  pf.addModification(3, 5, 1.0);
+  pf.addModification(ProForma::Site::N_TERM, 42.010565, "Acetyl");
+  TEST_EQUAL(pf.toString(), "[Acetyl]-PE[+15.994915]P(TID)[-18.010565][+1.0]EK")
+  TEST_EXCEPTION(Exception::InvalidValue, pf.addModification(4, 6, 1.0))
+  TEST_EXCEPTION(Exception::InvalidValue, pf.addModification(7, 8, 1.0))
+  pf.addModification(4, 4, 2.0); // a residue inside a range
+  TEST_EQUAL(pf.toString(), "[Acetyl]-PE[+15.994915]P(TI[+2.0]D)[-18.010565][+1.0]EK")
 }
+END_SECTION
 
-void test_parseNTerminalModification()
+START_SECTION(double getMonoMass() const)
 {
-  OpenMS::AASequence seq = OpenMS::AASequence::fromString("ACDEFGHIK");
-  OpenMS::ProForma proforma(seq);
-
-  std::string proforma_str = "[Acetyl]-ACDEFGHIK";
-  proforma.fromProFormaString(proforma_str);
-  std::string output = proforma.toProFormaString();
-  if (output == proforma_str)
-  {
-    std::cout << "test_parseNTerminalModification PASSED" << std::endl;
-  }
-  else
-  {
-    std::cerr << "test_parseNTerminalModification FAILED: Expected " << proforma_str << " but got " << output << std::endl;
-  }
+  const ProForma pf = ProForma::fromString("{Glycan:Hex}[Acetyl]-PEM[Oxidation]K");
+  const double expected = AASequence::fromString("PEMK").getMonoWeight() + 162.052824 + 42.010565 + 15.994915;
+  TEST_REAL_SIMILAR(pf.getMonoMass(), expected)
 }
+END_SECTION
 
-void test_parseCTerminalModification()
+START_SECTION(static String formatMass(double mass))
 {
-  OpenMS::AASequence seq = OpenMS::AASequence::fromString("ACDEFGHIK");
-  OpenMS::ProForma proforma(seq);
-
-  std::string proforma_str = "ACDEFGHIK-[Amidation]";
-  proforma.fromProFormaString(proforma_str);
-  std::string output = proforma.toProFormaString();
-  if (output == proforma_str)
-  {
-    std::cout << "test_parseCTerminalModification PASSED" << std::endl;
-  }
-  else
-  {
-    std::cerr << "test_parseCTerminalModification FAILED: Expected " << proforma_str << " but got " << output << std::endl;
-  }
+  TEST_EQUAL(ProForma::formatMass(15.994915), "+15.994915")
+  TEST_EQUAL(ProForma::formatMass(-18.010565), "-18.010565")
+  TEST_EQUAL(ProForma::formatMass(80.9787), "+80.9787")
+  TEST_EQUAL(ProForma::formatMass(1.0), "+1.0")
 }
+END_SECTION
 
-void test_parseAmbiguousModification()
-{
-  OpenMS::AASequence seq = OpenMS::AASequence::fromString("ACDEFGHIK");
-  OpenMS::ProForma proforma(seq);
-
-  std::string proforma_str = "A[+15.99]?CDEFGHIK";
-  proforma.fromProFormaString(proforma_str);
-  std::string output = proforma.toProFormaString();
-  if (output == proforma_str)
-  {
-    std::cout << "test_parseAmbiguousModification PASSED" << std::endl;
-  }
-  else
-  {
-    std::cerr << "test_parseAmbiguousModification FAILED: Expected " << proforma_str << " but got " << output << std::endl;
-  }
-}
-
-void test_invalidModificationFormat()
-{
-  OpenMS::AASequence seq = OpenMS::AASequence::fromString("ACDEFGHIK");
-  OpenMS::ProForma proforma(seq);
-
-  std::string invalid_proforma_str = "A[PhosphoCDEFGHIK"; // Missing closing bracket
-  try
-  {
-    proforma.fromProFormaString(invalid_proforma_str);
-    std::cerr << "test_invalidModificationFormat FAILED: No exception thrown" << std::endl;
-  }
-  catch (const std::runtime_error&)
-  {
-    std::cout << "test_invalidModificationFormat PASSED" << std::endl;
-  }
-  catch (const std::exception& e)
-  {
-    std::cerr << "test_invalidModificationFormat FAILED with unexpected exception: " << e.what() << std::endl;
-  }
-}
-
-void test_unsupportedCV()
-{
-  OpenMS::AASequence seq = OpenMS::AASequence::fromString("ACDEFGHIK");
-  OpenMS::ProForma proforma(seq);
-
-  std::string invalid_proforma_str = "A[XYZ:12345]CDEFGHIK"; // Unsupported CV
-  try
-  {
-    proforma.fromProFormaString(invalid_proforma_str);
-    std::cerr << "test_unsupportedCV FAILED: No exception thrown" << std::endl;
-  }
-  catch (const std::invalid_argument&)
-  {
-    std::cout << "test_unsupportedCV PASSED" << std::endl;
-  }
-  catch (const std::exception& e)
-  {
-    std::cerr << "test_unsupportedCV FAILED with unexpected exception: " << e.what() << std::endl;
-  }
-}
-
-void test_removeModification()
-{
-  OpenMS::AASequence seq = OpenMS::AASequence::fromString("ACDEFGHIK");
-  OpenMS::ProForma proforma(seq);
-
-  std::string proforma_str = "A[Phospho]CDEFGHIK";
-  proforma.fromProFormaString(proforma_str);
-  proforma.removeModification(1);
-  std::string output = proforma.toProFormaString();
-  if (output == "ACDEFGHIK")
-  {
-    std::cout << "test_removeModification PASSED" << std::endl;
-  }
-  else
-  {
-    std::cerr << "test_removeModification FAILED: Expected ACDEFGHIK but got " << output << std::endl;
-  }
-}
-
-void test_validProFormaPSIMOD()
-{
-  OpenMS::AASequence seq = OpenMS::AASequence::fromString("EMEVEESPEK");
-  OpenMS::ProForma proforma(seq);
-
-  std::string proforma_str = "EM[MOD:00719]EVEES[MOD:00046]PEK";
-  proforma.fromProFormaString(proforma_str);
-  std::string output = proforma.toProFormaString();
-  if (output == proforma_str)
-  {
-    std::cout << "test_validProFormaPSIMOD PASSED" << std::endl;
-  }
-  else
-  {
-    std::cerr << "test_validProFormaPSIMOD FAILED: Expected " << proforma_str << " but got " << output << std::endl;
-  }
-}
-
-void test_validProFormaUNIMOD()
-{
-  OpenMS::AASequence seq = OpenMS::AASequence::fromString("EMEVEESPEK");
-  OpenMS::ProForma proforma(seq);
-
-  std::string proforma_str = "EM[UNIMOD:35]EVEES[UNIMOD:56]PEK";
-  proforma.fromProFormaString(proforma_str);
-  std::string output = proforma.toProFormaString();
-  if (output == proforma_str)
-  {
-    std::cout << "test_validProFormaUNIMOD PASSED" << std::endl;
-  }
-  else
-  {
-    std::cerr << "test_validProFormaUNIMOD FAILED: Expected " << proforma_str << " but got " << output << std::endl;
-  }
-}
-
-void test_validProFormaRESID()
-{
-  OpenMS::AASequence seq = OpenMS::AASequence::fromString("EMEVEESPEK");
-  OpenMS::ProForma proforma(seq);
-
-  std::string proforma_str = "EM[RESID:AA0581]EVEES[RESID:AA0037]PEK";
-  proforma.fromProFormaString(proforma_str);
-  std::string output = proforma.toProFormaString();
-  if (output == proforma_str)
-  {
-    std::cout << "test_validProFormaRESID PASSED" << std::endl;
-  }
-  else
-  {
-    std::cerr << "test_validProFormaRESID FAILED: Expected " << proforma_str << " but got " << output << std::endl;
-  }
-}
-
-void test_invalidProFormaPSIMODSyntax()
-{
-  OpenMS::AASequence seq = OpenMS::AASequence::fromString("EMEVEESPEK");
-  OpenMS::ProForma proforma(seq);
-
-  std::string invalid_proforma_str = "EM[M:00719]EVEES[M:00046]PEK";
-  try
-  {
-    proforma.fromProFormaString(invalid_proforma_str);
-    std::cerr << "test_invalidProFormaPSIMODSyntax FAILED: No exception thrown" << std::endl;
-  }
-  catch (const std::invalid_argument&)
-  {
-    std::cout << "test_invalidProFormaPSIMODSyntax PASSED" << std::endl;
-  }
-  catch (const std::exception& e)
-  {
-    std::cerr << "test_invalidProFormaPSIMODSyntax FAILED with unexpected exception: " << e.what() << std::endl;
-  }
-}
-
-void test_invalidProFormaUNIMODSyntax()
-{
-  OpenMS::AASequence seq = OpenMS::AASequence::fromString("EMEVEESPEK");
-  OpenMS::ProForma proforma(seq);
-
-  std::string invalid_proforma_str = "EM[U:35]EVEES[U:56]PEK";
-  try
-  {
-    proforma.fromProFormaString(invalid_proforma_str);
-    std::cerr << "test_invalidProFormaUNIMODSyntax FAILED: No exception thrown" << std::endl;
-  }
-  catch (const std::invalid_argument&)
-  {
-    std::cout << "test_invalidProFormaUNIMODSyntax PASSED" << std::endl;
-  }
-  catch (const std::exception& e)
-  {
-    std::cerr << "test_invalidProFormaUNIMODSyntax FAILED with unexpected exception: " << e.what() << std::endl;
-  }
-}
-
-void test_invalidProFormaRESIDSyntax()
-{
-  OpenMS::AASequence seq = OpenMS::AASequence::fromString("EMEVEESPEK");
-  OpenMS::ProForma proforma(seq);
-
-  std::string invalid_proforma_str = "EM[R:AA0581]EVEES[R:AA0037]PEK";
-  try
-  {
-    proforma.fromProFormaString(invalid_proforma_str);
-    std::cerr << "test_invalidProFormaRESIDSyntax FAILED: No exception thrown" << std::endl;
-  }
-  catch (const std::invalid_argument&)
-  {
-    std::cout << "test_invalidProFormaRESIDSyntax PASSED" << std::endl;
-  }
-  catch (const std::exception& e)
-  {
-    std::cerr << "test_invalidProFormaRESIDSyntax FAILED with unexpected exception: " << e.what() << std::endl;
-  }
-}
-
-void test_parseRangeModification()
-{
-  OpenMS::AASequence seq = OpenMS::AASequence::fromString("ACDEFGHIK");
-  OpenMS::ProForma proforma(seq);
-
-  std::string proforma_str = "A(CDE)[+12.5]FGHIK";
-  proforma.fromProFormaString(proforma_str);
-  std::string output = proforma.toProFormaString();
-  if (output == proforma_str)
-  {
-    std::cout << "test_parseRangeModification PASSED" << std::endl;
-  }
-  else
-  {
-    std::cerr << "test_parseRangeModification FAILED: Expected " << proforma_str << " but got " << output << std::endl;
-  }
-}
-
-int main()
-{
-  test_parseSimpleModification();
-  test_parseMassShiftModification();
-  test_parseNTerminalModification();
-  test_parseCTerminalModification();
-  test_parseAmbiguousModification();
-  test_invalidModificationFormat();
-  test_unsupportedCV();
-  test_removeModification();
-
-  test_validProFormaPSIMOD();
-  test_validProFormaUNIMOD();
-  test_validProFormaRESID();
-  test_invalidProFormaPSIMODSyntax();
-  test_invalidProFormaUNIMODSyntax();
-  test_invalidProFormaRESIDSyntax();
-  test_parseRangeModification();
-
-  return 0;
-}
-
+END_TEST

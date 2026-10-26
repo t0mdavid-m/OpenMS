@@ -19,6 +19,7 @@
 #pragma once
 
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/LogCell.h>           // TSVFile::parse unquotes id-bearing cells
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandQueue.h>  // encode/decode for distinct MS1 ids
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanRole.h>          // roleOf: monitor scans are not surveys
 #include <OpenMS/SYSTEM/File.h>  // freshLogDir: makeDir / removeDirRecursively
@@ -201,13 +202,16 @@ namespace
         // C# String.Split('\t'). The prior std::getline(iss, col, '\t') loop DROPPED a trailing empty
         // field, so scan_results rows whose new last column (winner_tracking_id) is empty tokenized to
         // one fewer column than the header and failed row.size()==headers.size().
+        // Each cell is unquoted (LogCell.h): IdaLogger quotes an id-bearing cell that begins with '"'
+        // (tracking ids 8,836 to 17,671), so a cell compares equal to the id the engine minted.
+        // Every file read here is engine-written, where unquoteLogCell is exact.
         std::vector<std::string> cols;
         size_t start = 0;
         while (true)
         {
           size_t t = line.find('\t', start);
-          if (t == std::string::npos) { cols.push_back(line.substr(start)); break; }
-          cols.push_back(line.substr(start, t - start));
+          if (t == std::string::npos) { cols.push_back(unquoteLogCell(line.substr(start))); break; }
+          cols.push_back(unquoteLogCell(line.substr(start, t - start)));
           start = t + 1;
         }
 

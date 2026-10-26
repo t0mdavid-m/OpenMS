@@ -27,6 +27,7 @@
 #include <utility>   // std::pair
 
 #include "FLASHIda_TestHelpers.h"
+#include "FLASHIda_TestAccess.h"  // the target-log loader's maps (PrecursorSelection is a friend)
 
 using namespace OpenMS;
 
@@ -125,6 +126,47 @@ START_TEST(FLASHIda_Logging, "$Id$")
 
 /////////////////////////////////////////////////////////////
 
+// deconvolveMS1 writes nothing to stdout.
+//
+// It used to print every mass of every survey, then std::endl -- one flush per survey under
+// analysis_mutex_, the console pathology of ADR-0025 / ADR-0033, for masses ida.log (AllMass=) and
+// scan_results (deconv_masses) already record. Not vacuous on any input: the old code wrote at least
+// that newline on every call, whatever the spectrum held. No fixture: one synthetic 10 kDa species.
+START_SECTION(deconvolveMS1_writes_nothing_to_stdout)
+{
+  Config cfg{buildJsonWithLogDir("")};
+  Deconvolution deconv(cfg, {10.0, 10.0, 10.0});
+
+  // Charges 12 down to 8, so the m/z come out ascending; a Poisson envelope (lambda 5.4) per charge.
+  std::vector<double> mzs, ints;
+  const double mass = 10000.0, lambda = 5.4;
+  for (int z = 12; z >= 8; --z)
+  {
+    double p = std::exp(-lambda);
+    for (int k = 0; k < 14; ++k)
+    {
+      if (k > 0) { p *= lambda / k; }
+      mzs.push_back((mass + k * Constants::ISOTOPE_MASSDIFF_55K_U + z * Constants::PROTON_MASS_U) / z);
+      ints.push_back(1e6 * p);
+    }
+  }
+
+  std::ostringstream captured;
+  std::streambuf* const real_cout = std::cout.rdbuf(captured.rdbuf());
+  try
+  {
+    deconv.deconvolveMS1(mzs.data(), ints.data(), static_cast<int>(mzs.size()), 60.0, 0.0);
+  }
+  catch (...)
+  {
+    std::cout.rdbuf(real_cout);
+    throw;
+  }
+  std::cout.rdbuf(real_cout);
+  TEST_EQUAL(captured.str(), std::string())
+}
+END_SECTION
+
 // Test 0: a >= 10 target count must not be mistaken for "0 targets"
 //
 // The skip test was `line.find("0 targets")`, an unanchored SUBSTRING, so it also matched
@@ -173,6 +215,87 @@ START_SECTION(ida_log_double_digit_target_count_is_not_skipped)
   TEST_EQUAL(parsed[9].size(), 1)
   TEST_TRUE(std::abs(parsed[7][0][0] - 12351.3933) < 0.001)
   TEST_TRUE(std::abs(parsed[9][0][0] - 8604.9191) < 0.001)
+}
+END_SECTION
+
+// The OTHER reader of this grammar: PrecursorSelection's target-log loader (targeting.target_log_files),
+// which files every AllMass= line under the retention time of the MS1 header above it. It used to skip
+// "- 0 targets" headers before reading their RT, copying parseFLASHIdaLog's skip -- but a survey with no
+// target still writes its AllMass= line, and exclusion_masses (mode 3) reads exactly those lines. So the
+// masses of every target-less survey were filed under the PREVIOUS header's RT, and those ahead of the
+// first header with targets under 0.0, which filterAndRank applies at EVERY RT. MS1-only replays of the
+// Eclip lysates (2026-10-20) filed 17-41 % of the non-empty AllMass= lines of their logs under another
+// survey's RT, up to 92 s away.
+//
+// Driven off a hand-written log for the same reason as the section above: the defect is in the reader.
+START_SECTION(target_log_loader_files_allmass_under_its_own_survey)
+{
+  const std::string dir = freshLogDir("logging_target_log_loader_rt");
+  const std::string path = dir + "/ida.log";
+  {
+    std::ofstream f(path);
+    // Entry A, 0.5 min: no target, ahead of the first header that has one. Was filed under rt 0.
+    f << "MS1 Scan# 1 RT 0.5000 (Access ID !!\") - 0 targets\n";
+    f << "AllMass=5000.0000 6000.0000\n";
+    // Entry B, 1 min: one target.
+    f << "MS1 Scan# 2 RT 1.0000 (Access ID !!#) - 1 targets\n";
+    f << "Mass=12351.3933\tZ=15\tScore=0.90000\tWindow=[824.0356-825.8985]"
+         "\tPrecursorIntensity=1.00000\tPrecursorMassIntensity=2.00000"
+         "\tFeatures=[0.9,1.0,0.9,1.0,0.9,1.0]\tChargeRange=[12-19]\tHCD=0\n";
+    f << "AllMass=12351.3933 7000.0000\n";
+    // Entry C, 9 min: no target. Was filed under B's 1 min, eight minutes from where it was seen.
+    f << "MS1 Scan# 3 RT 9.0000 (Access ID !!$) - 0 targets\n";
+    f << "AllMass=8604.9191\n";
+  }
+
+  // The loader runs in PrecursorSelection's constructor; the targeting mode decides which lines it keeps.
+  auto loaderConfig = [&](const std::string& targeting) {
+    std::string cfg = buildJsonWithLogDir(dir);
+    auto rep = [&cfg](const std::string& from, const std::string& to) {
+      auto p = cfg.find(from);
+      TEST_EQUAL(p != std::string::npos, true)   // a missing literal would leave the config silently unchanged
+      if (p != std::string::npos) cfg.replace(p, from.size(), to);
+    };
+    rep("\"targeting\": \"none\"", "\"targeting\": \"" + targeting + "\"");
+    rep("\"target_logs\": []", "\"target_logs\": [\"" + path + "\"]");
+    return cfg;
+  };
+
+  {
+    Config config(loaderConfig("exclusion_masses"));
+    Deconvolution deconv(config, config.toleranceList());
+    PrecursorSelection selection(config, deconv);
+    // survey rt in SECONDS (the log writes minutes, the loader multiplies by 60) -> that survey's masses
+    const auto excl = FLASHIdaTestAccess::exclusionRtMasses(selection);
+
+    TEST_EQUAL(excl.size(), 3)
+    TEST_EQUAL(excl.count(0.0), 0)       // nothing is excluded at every retention time
+    TEST_EQUAL(excl.count(30.0), 1)      // A under its own 0.5 min
+    TEST_EQUAL(excl.count(60.0), 1)
+    TEST_EQUAL(excl.count(540.0), 1)     // C under its own 9 min
+    if (excl.count(30.0) == 1) { TEST_EQUAL(excl.at(30.0).size(), 2) }
+    if (excl.count(60.0) == 1) { TEST_EQUAL(excl.at(60.0).size(), 2) }  // B's own two, C's no longer appended
+    if (excl.count(540.0) == 1)
+    {
+      TEST_EQUAL(excl.at(540.0).size(), 1)
+      TEST_REAL_SIMILAR(excl.at(540.0)[0], 8604.9191)
+    }
+  }
+  {
+    // in_depth (mode 2) reads Mass= lines only, and a 0-target survey writes none: its load is unchanged.
+    Config config(loaderConfig("in_depth"));
+    Deconvolution deconv(config, config.toleranceList());
+    PrecursorSelection selection(config, deconv);
+    const auto targets = FLASHIdaTestAccess::targetMassRts(selection);
+
+    TEST_EQUAL(targets.size(), 1)
+    if (targets.size() == 1)
+    {
+      TEST_REAL_SIMILAR(targets.begin()->first, 12351.3933)
+      TEST_EQUAL(targets.begin()->second.size(), 1)
+      if (targets.begin()->second.size() == 1) { TEST_REAL_SIMILAR(targets.begin()->second[0], 60.0) }
+    }
+  }
 }
 END_SECTION
 
@@ -1100,6 +1223,247 @@ START_SECTION(scan_commands_mono_mass_is_written_at_four_decimals)
   TEST_TRUE(ms2_rows > 0)
   TEST_TRUE(ms3_rows > 0)
   TEST_TRUE(above_10k > 0)   // where six significant digits lose a decimal
+}
+END_SECTION
+
+// ---- Tracking ids that begin with '"' (LogCell.h) ----------------------------------------------------
+//
+// Tracking ids 8,836 to 17,671 begin with '"' -- 5,052 of the 13,887 scan_commands rows of an Eclip_1480
+// MS1 replay -- and a CSV-style reader takes it as an opening quote: Python's csv read that file as 11,400
+// rows, pandas stopped with a tokenizing error. IdaLogger now quotes exactly the cells that begin with '"'
+// (RFC 4180: enclose, double the quotes); every other cell, and so every log of a shorter run, is unchanged.
+
+// The rule itself, and its inverse, over every id that begins with '"' and every id that does not.
+// Fails if a cell without a leading '"' is touched (that would move every golden: id 1, "!!\"", opens every
+// run), if a quoted id does not read back, or if a raw id of an old file is taken for a quoted one.
+START_SECTION(log_cells_are_quoted_exactly_when_they_begin_with_a_quote)
+{
+  TEST_EQUAL(quoteLogCell(""), std::string())
+  TEST_EQUAL(quoteLogCell("!!\""), std::string("!!\""))                 // id 1: a '"', not a leading one
+  TEST_EQUAL(quoteLogCell("!!\"R5.30533k@10"), std::string("!!\"R5.30533k@10"))
+  TEST_EQUAL(quoteLogCell("\"!!"), std::string("\"\"\"!!\""))          // id 8,836
+  TEST_EQUAL(quoteLogCell("\"!\""), std::string("\"\"\"!\"\"\""))      // id 8,837: every quote doubled
+  TEST_EQUAL(quoteLogCell("\"!# !!$"), std::string("\"\"\"!# !!$\""))  // an id list led by such an id
+
+  int touched = 0, lost = 0;
+  for (int v = 1; v < 3 * 8836; ++v)
+  {
+    const std::string id = ScanCommandQueue::encode(v);
+    const std::string desc = id + "R5.30533k@10";
+    if (id.front() != '"')
+    {
+      if (quoteLogCell(id) != id || quoteLogCell(desc) != desc || unquoteLogId(id) != id) { ++touched; }
+      continue;
+    }
+    const std::string q = quoteLogCell(id);
+    if (q.size() < 6 || unquoteLogId(q) != id || unquoteLogCell(q) != id || unquoteLogCell(quoteLogCell(desc)) != desc) { ++lost; }
+  }
+  TEST_EQUAL(touched, 0)
+  TEST_EQUAL(lost, 0)
+
+  // A file re-saved by pandas or Excel quotes every cell that CONTAINS a '"'.
+  TEST_EQUAL(unquoteLogCell("\"!!\"\"\""), std::string("!!\""))
+  TEST_EQUAL(unquoteLogId("\"!!\"\"\""), std::string("!!\""))
+  // Not quoted cells: a lone inner quote (the raw id 8,931), an unclosed one.
+  TEST_EQUAL(unquoteLogCell("\"\"\""), std::string("\"\"\""))
+  TEST_EQUAL(unquoteLogCell("\"!#"), std::string("\"!#"))
+  // A raw id of a file written before the rule: unquoteLogCell would take "!" for a quoted !, unquoteLogId never.
+  TEST_EQUAL(unquoteLogCell("\"!\""), std::string("!"))
+  TEST_EQUAL(unquoteLogId("\"!\""), std::string("\"!\""))
+}
+END_SECTION
+
+// All four TSV streams, written by IdaLogger with ids that begin with '"', read three ways: by a CSV-style
+// reader (the defect), by the class tests' TSVFile, and by ScanCommandJoin, which is what FLASHDeconv's
+// -FD:scan_commands runs. No fixture and no acquisition: the rows are written directly.
+// Fails if a stream writes such an id raw (the CSV reader merges rows), or if a reader in this repository
+// does not unquote it (the ids or the join no longer match the engine's).
+START_SECTION(ids_that_begin_with_a_quote_survive_every_stream_and_reader)
+{
+  const std::string s_id = ScanCommandQueue::encode(8836);   // "!!  survey
+  const std::string m_id = ScanCommandQueue::encode(8837);   // "!"  MS2
+  const std::string c_id = ScanCommandQueue::encode(8838);   // "!#  a child
+  const std::string w_id = ScanCommandQueue::encode(8839);   // "!$  a winner
+  const std::string one = ScanCommandQueue::encode(1);       // !!"  a '"' that does not lead
+  ABORT_IF(s_id != "\"!!" || m_id != "\"!\"" || one != "!!\"")
+
+  const std::string dir = freshLogDir("logcell_t02");
+  Config cfg{buildJsonWithLogDir(dir)};
+  {
+    IdaLogger logger(cfg);
+
+    ScanCommand survey{};
+    survey.scan_id = 8836;
+    survey.msn_level = 1;
+    ScanCommandQueue::writeMs1Description(survey, ScanRole::Survey);
+    logger.writeScanCommandRow(survey);
+
+    ScanCommand ms2{};
+    ms2.scan_id = 8837;
+    ms2.msn_level = 2;
+    ms2.priority = 2;
+    ms2.num_stages = 1;
+    ms2.mono_mass = 5305.33;
+    ms2.qscore = 0.443474;
+    ms2.stages[0].charge_state = 10;
+    ms2.stages[0].precursor_mz = 531.791;
+    ms2.stages[0].isolation_width = 0.9;
+    ms2.stages[0].collision_energy = 29;
+    std::strncpy(ms2.stages[0].activation_type, "HCD", sizeof(ms2.stages[0].activation_type) - 1);
+    std::strncpy(ms2.parent_scan_id, s_id.c_str(), sizeof(ms2.parent_scan_id) - 1);
+    std::snprintf(ms2.scan_description, sizeof(ms2.scan_description), "%sR5.30533k@10", m_id.c_str());
+    logger.writeScanCommandRow(ms2, 1);
+
+    ScanCommand early = ms2;   // the same command as id 1: written exactly as before
+    early.scan_id = 1;
+    std::snprintf(early.scan_description, sizeof(early.scan_description), "%sR5.30533k@10", one.c_str());
+    logger.writeScanCommandRow(early, 1);
+
+    IdaLogger::ScanRowDescriptor res;
+    res.tracking_id = m_id;
+    res.ms_level = 2;
+    res.parent_tracking_id = s_id;
+    res.child_ids = {c_id, one};
+    res.winner_tracking_id = w_id;
+    logger.writeScanResultRow(res);
+
+    IdaLogger::IdRowDescriptor idr{};
+    idr.tracking_id = m_id;
+    idr.ms_level = 2;
+    idr.scan_mode = 'R';
+    FragmentAnalysis::ProteoformMatch::FragmentMatch frag;
+    frag.ion_type = "b";
+    frag.ion_index = 5;
+    frag.observed_mass = 500.25;
+    idr.match.fragments.push_back(frag);
+    logger.writeIdentificationRow(idr);
+
+    IdaLogger::PooledModelDescriptor pooled;
+    pooled.trigger_scan_id = m_id;
+    pooled.trigger = "MS2";
+    pooled.contributing_scan_ids = {8837, 1};
+    logger.writePooledModelRow(pooled);
+  }
+
+  // (1) The bytes: a leading '"' is quoted, a '"' elsewhere is not.
+  auto lines = [](const std::string& path) {
+    std::vector<std::string> out;
+    std::ifstream in(path);
+    std::string l;
+    while (std::getline(in, l)) out.push_back(l);
+    return out;
+  };
+  const auto cmd_lines = lines(dir + "/scan_commands.tsv");
+  ABORT_IF(cmd_lines.size() != 4)
+  TEST_EQUAL(cmd_lines[1].substr(0, cmd_lines[1].find('\t')), std::string("\"\"\"!!\""))
+  TEST_EQUAL(cmd_lines[2].substr(0, cmd_lines[2].find('\t')), std::string("\"\"\"!\"\"\""))
+  TEST_EQUAL(cmd_lines[3].substr(0, cmd_lines[3].find('\t')), std::string("!!\""))
+  TEST_TRUE(cmd_lines[3].find("\t!!\"R5.30533k@10\t") != std::string::npos)   // id 1's description, raw
+
+  // (2) A CSV-style reader -- Python's csv / pandas at their defaults: a '"' opens a quoted cell only at
+  // the start of a cell, a doubled '"' inside one is a quote, and a quoted cell runs across tabs and line
+  // ends. Every file must come back with one row per line, each as wide as the header.
+  auto csvRows = [](const std::string& path) {
+    std::ifstream in(path);
+    std::stringstream ss;
+    ss << in.rdbuf();
+    const std::string text = ss.str();
+    std::vector<std::vector<std::string>> rows(1);
+    std::string c;
+    bool quoted = false, at_start = true;
+    for (size_t i = 0; i < text.size(); ++i)
+    {
+      const char ch = text[i];
+      if (quoted)
+      {
+        if (ch != '"') { c += ch; }
+        else if (i + 1 < text.size() && text[i + 1] == '"') { c += '"'; ++i; }
+        else { quoted = false; }
+        continue;
+      }
+      if (ch == '"' && at_start) { quoted = true; at_start = false; continue; }
+      if (ch == '\t' || ch == '\n')
+      {
+        rows.back().push_back(c);
+        c.clear();
+        at_start = true;
+        if (ch == '\n') { rows.emplace_back(); }
+        continue;
+      }
+      c += ch;
+      at_start = false;
+    }
+    if (rows.back().empty() && c.empty()) { rows.pop_back(); }
+    else { rows.back().push_back(c); }
+    return rows;
+  };
+  for (const std::string name : {"scan_commands.tsv", "scan_results.tsv", "identification.tsv", "pooled_identification.tsv"})
+  {
+    const auto rows = csvRows(dir + "/" + name);
+    const size_t n_lines = lines(dir + "/" + name).size();
+    TEST_EQUAL(rows.size(), n_lines)
+    bool widths_ok = !rows.empty();
+    for (const auto& r : rows) { widths_ok = widths_ok && r.size() == rows.front().size(); }
+    TEST_TRUE(widths_ok)
+  }
+  const auto csv_cmds = csvRows(dir + "/scan_commands.tsv");
+  ABORT_IF(csv_cmds.size() != 4)
+  TEST_EQUAL(csv_cmds[1][0], s_id)
+  TEST_EQUAL(csv_cmds[2][0], m_id)
+  TEST_EQUAL(csv_cmds[2][3], s_id)
+  TEST_EQUAL(csv_cmds[3][0], one)
+
+  // (3) TSVFile, the class tests' reader: every id-bearing cell equals the id the engine minted.
+  auto cmds = TSVFile::parse(dir + "/scan_commands.tsv");
+  ABORT_IF(cmds.rows.size() != 3)
+  TEST_EQUAL(cell(cmds, cmds.rows[0], "tracking_id"), s_id)
+  TEST_EQUAL(cell(cmds, cmds.rows[0], "scan_description"), s_id + "S")
+  TEST_EQUAL(cell(cmds, cmds.rows[1], "tracking_id"), m_id)
+  TEST_EQUAL(cell(cmds, cmds.rows[1], "parent_tracking_id"), s_id)
+  TEST_EQUAL(cell(cmds, cmds.rows[1], "scan_description"), m_id + "R5.30533k@10")
+  TEST_EQUAL(cell(cmds, cmds.rows[2], "tracking_id"), one)
+  TEST_EQUAL(cell(cmds, cmds.rows[2], "scan_description"), one + "R5.30533k@10")
+  auto results = TSVFile::parse(dir + "/scan_results.tsv");
+  ABORT_IF(results.rows.size() != 1)
+  TEST_EQUAL(cell(results, results.rows[0], "tracking_id"), m_id)
+  TEST_EQUAL(cell(results, results.rows[0], "parent_tracking_id"), s_id)
+  TEST_EQUAL(cell(results, results.rows[0], "child_ids"), c_id + " " + one)
+  TEST_EQUAL(cell(results, results.rows[0], "winner_tracking_id"), w_id)
+  auto ident = TSVFile::parse(dir + "/identification.tsv");
+  ABORT_IF(ident.rows.size() != 1)
+  TEST_EQUAL(cell(ident, ident.rows[0], "tracking_id"), m_id)
+  auto pool = TSVFile::parse(dir + "/pooled_identification.tsv");
+  ABORT_IF(pool.rows.size() != 1)
+  TEST_EQUAL(cell(pool, pool.rows[0], "trigger_scan_id"), m_id)
+  TEST_EQUAL(cell(pool, pool.rows[0], "contributing_scan_ids"), m_id + " " + one)
+
+  // (4) ScanCommandJoin, i.e. FLASHDeconv: the ids parse and the MS2 joins to its survey.
+  auto rows = ScanCommandJoin::parse(dir + "/scan_commands.tsv");
+  TEST_EQUAL(rows.size(), 3)
+  ABORT_IF(rows.count(m_id) == 0 || rows.count(s_id) == 0 || rows.count(one) == 0)
+  TEST_EQUAL(rows[m_id].parent_tracking_id, s_id)
+  TEST_EQUAL(rows[m_id].charge, 10)
+  auto located = ScanCommandJoin::join({scanOf(40, 1, s_id + "S"), scanOf(41, 2, m_id + "R5.30533k@10", {531.790649})}, rows);
+  ABORT_IF(located.count(41) == 0)
+  TEST_EQUAL(located[41].parent_scan_number, 40)
+}
+END_SECTION
+
+// A file written BEFORE the rule holds those ids raw, and every such file must keep parsing (ADR-0046 d9).
+// "!" (id 8,837) begins and ends with '"' and would read as a quoted ! to a general unquote.
+// Fails if ScanCommandJoin unquotes a raw 3-character id.
+START_SECTION(scan_commands_parse_reads_raw_quote_ids_of_an_older_file)
+{
+  const Cells survey = surveyRow("\"!!", "267351474");
+  const Cells ms2 = withCell(withCell(withCell(kM37, "tracking_id", "\"!\""), "parent_tracking_id", "\"!!"),
+                             "scan_description", "\"!\"R5.30533k@10");
+  auto rows = ScanCommandJoin::parse(writeCommandsFile("logcell_t03", {kCmdHeader, survey, ms2}));
+  TEST_EQUAL(rows.size(), 2)
+  ABORT_IF(rows.count("\"!\"") == 0 || rows.count("\"!!") == 0)
+  TEST_EQUAL(rows["\"!\""].parent_tracking_id, std::string("\"!!"))
+  auto located = ScanCommandJoin::join({scanOf(32, 1, "\"!!S"), scanOf(37, 2, "\"!\"R5.30533k@10", {531.790649})}, rows);
+  ABORT_IF(located.count(37) == 0)
+  TEST_EQUAL(located[37].parent_scan_number, 32)
 }
 END_SECTION
 

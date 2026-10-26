@@ -253,6 +253,7 @@ set(format_executables_list
   TraMLFile_test
   TransformationXMLFile_test
   UnimodXMLFile_test
+  UniProtXMLFile_test
   XMassFile_test
   XMLFile_test
   XMLHandler_test
@@ -460,6 +461,7 @@ set(analysis_executables_list
   FLASHIda_CandidateAdmission_test
   PlanUnit_test
   FLASHIda_Replan_test
+  FLASHIda_DynamicTargets_test
   ScanCommandLayout_test
   FLASHIda_exploration_test
   KineticModel_test
@@ -484,6 +486,7 @@ set(analysis_executables_list
   Config_SchemaProjection_test
   Quantification_test
   FalseDiscoveryRate_test
+  ProteoformDatabase_test
   FeatureDeconvolution_test
   FeatureDistance_test
   FeatureGroupingAlgorithmKD_test
@@ -497,9 +500,12 @@ set(analysis_executables_list
   # bridge, not OpenMS/offline-FLASHDeconv library units). See
   # docs/superpowers/plans/2026-06-11-test-falsepass-mitigation.md (D2).
   # FIAMSScheduler_test             # offline FIA-MS batch scheduler, not FLASHIda
+  # FLASHAnnotatorAlgorithm_test    # offline FLASHAnnotator tool, not the real-time IDA bridge
   # FLASHDeconvAlgorithm_test       # offline FLASHDeconv tool, not the real-time IDA bridge
   # FLASHDeconvHelperStructs_test   # OpenMS/FLASHDeconv helper-struct unit test, out of scope
   # FLASHTaggerAlgorithm_test       # offline tagger; test is stale (hardcoded paths) - needs rewrite
+  # FLASHGappedTaggerAlgorithm_test  # offline FLASHTnT gapped tagger, not the real-time IDA bridge
+  FLASHTnTCandidateRanker_test
   IDBoostGraph_test
   IDMapper_test
   IDMergerAlgorithm_test
@@ -541,6 +547,7 @@ set(analysis_executables_list
   MassDecompositionAlgorithm_test
   MassDecomposition_test
   MassFeatureTrace_test
+  MassLadderAlgorithm_test
   MetaboliteFeatureDeconvolution_test
   MetaboliteSpectralMatching_test
   ModifiedPeptideGenerator_test

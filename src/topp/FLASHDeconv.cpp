@@ -6,17 +6,18 @@
 // $Authors: Kyowon Jeong, Jihyung Kim $
 // --------------------------------------------------------------------------
 //#define TRAIN_OUT  //
-//#define DEEP_LEARNING
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvAlgorithm.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHHugePages.h>
 #include <OpenMS/APPLICATIONS/TOPPBase.h>
 #include <OpenMS/FORMAT/FLASHDeconvFeatureFile.h>
 #include <OpenMS/FORMAT/FLASHDeconvSpectrumFile.h>
 #include <OpenMS/FORMAT/FileTypes.h>
 #include <OpenMS/FORMAT/MzMLFile.h>
 #include <QFileInfo>
-#ifdef DEEP_LEARNING
-  #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroupScoring.h>
+#include <limits>
+#if defined(__GLIBC__)
+  #include <malloc.h>
 #endif
 #ifdef TRAIN_OUT
   #include <OpenMS/ANALYSIS/TOPDOWN/Qscore.h>
@@ -43,6 +44,10 @@ using namespace std;
 
 See https://openms.de/FLASHDeconv for more information.
 
+On Linux with glibc, FLASHDeconv (like FLASHTnT) re-executes itself once at start-up to put its heap on transparent huge pages
+(GLIBC_TUNABLES=glibc.malloc.hugetlb=1; ~20 % faster at high thread counts, identical output). Set FLASH_NO_HUGETLB to prevent this. With
+OpenMP thread binding (OMP_PROC_BIND, OMP_PLACES, GOMP_CPU_AFFINITY, KMP_AFFINITY) it is skipped; set GLIBC_TUNABLES yourself there.
+
 
 <B>The command line parameters of this tool are:</B>
 @verbinclude TOPP_FLASHDeconv.cli
@@ -51,10 +56,6 @@ See https://openms.de/FLASHDeconv for more information.
 */
 class TOPPFLASHDeconv : public TOPPBase
 {
-#ifdef DEEP_LEARNING
-  const int charge_count = 11;
-  const int iso_count = 13;
-#endif
 public:
   TOPPFLASHDeconv():
       TOPPBase("FLASHDeconv",
@@ -318,9 +319,6 @@ protected:
       std::vector<fstream> out_train_streams = std::vector<fstream>(out_spec_file.size());
 #endif
 
-#ifdef DEEP_LEARNING
-      std::vector<fstream> out_dl_streams = std::vector<fstream>(out_spec_file.size());
-#endif
       for (Size i = 0; i < out_spec_file.size(); i++)
       {
         if (out_spec_file[i].empty() || (! keep_empty_out && per_ms_level_deconv_spec_count.find(i + 1) == per_ms_level_deconv_spec_count.end()))
@@ -334,100 +332,23 @@ protected:
         out_train_streams[i].open(out_spec_file[i] + "_train.csv", fstream::out);
         Qscore::writeAttCsvForQscoreTrainingHeader(out_train_streams[i]);
 #endif
-#ifdef DEEP_LEARNING
-        out_dl_streams[i].open(out_spec_file[i] + "_dl.csv", fstream::out);
-        out_dl_streams[i] << "FeatureIndex,Index,RTdelta,";
-        for (int n = 0; n < 2; n++)
-        {
-          String header = n == 0? "S" : "N";
-          for (int z = 0; z < charge_count; z++)
-          {
-            for (int j = 0; j < iso_count; j++)
-            {
-              out_dl_streams[i] <<header<<"_"<<z<<"_"<<j<<",";
-            }
-          }
-        }
-        for (int n = 0; n < PeakGroupScoring::getQscoreFeatureCount(); n++)
-        {
-          out_dl_streams[i] << "F"<<n<<",";
-        }
-        out_dl_streams[i] << "Charge,Qscore,Class\n";
-#endif
       }
 
-#ifdef DEEP_LEARNING
-      std::map<int, int> dl_index;
-#endif
 
+#ifdef TRAIN_OUT
       for (auto& deconvolved_spectrum : deconvolved_spectra)
       {
         uint ms_level = deconvolved_spectrum.getOriginalSpectrum().getMSLevel();
         if (out_spec_file[ms_level - 1].empty()) continue;
         FLASHDeconvSpectrumFile::writeDeconvolvedMasses(deconvolved_spectrum, out_spec_streams[ms_level - 1], in_file, fd.getAveragine(), fd.getDecoyAveragine(),
                                                         tols[ms_level - 1], write_detail, report_decoy, fd.getNoiseDecoyWeight());
-#ifdef TRAIN_OUT
         Qscore::writeAttCsvForQscoreTraining(deconvolved_spectrum, out_train_streams[ms_level - 1]);
-#endif
-#ifdef DEEP_LEARNING
-        double rt = deconvolved_spectrum.getOriginalSpectrum().getRT();
-        for (auto& pg : deconvolved_spectrum)
-        {
-          int feature_index = (pg.getFeatureIndex() > 0 ? pg.getFeatureIndex() : -1);
-          double rt_delta = .0;
-          if (feature_index >= 0)
-          {
-            const auto& mt = deconvolved_features[feature_index - 1].mt;
-            rt_delta = mt[mt.findMaxByIntPeak()].getRT() - rt;
-          }
-
-          out_dl_streams[ms_level - 1] << feature_index << ",";
-          if (dl_index.find(ms_level) == dl_index.end()) dl_index[ms_level] = 1;
-          out_dl_streams[ms_level - 1] << dl_index[ms_level]++ << "," << rt_delta << ",";
-
-          // if (pg.getQscore2D() < .9) continue;
-          const auto& [sig, noise]
-            = pg.getDLVector(deconvolved_spectrum.getOriginalSpectrum(), charge_count, iso_count, fd.getAveragine(), tols[ms_level - 1]);
-          for (const auto s : sig)
-          {
-            out_dl_streams[ms_level - 1] << s << ",";
-          }
-          for (const auto n : noise)
-          {
-            out_dl_streams[ms_level - 1] << n << ",";
-          }
-
-          const auto fv = PeakGroupScoring::toFeatureVector(&pg);
-          for (int n = 0; n < PeakGroupScoring::getQscoreFeatureCount(); n++)
-          {
-            out_dl_streams[ms_level - 1] << fv[n] <<",";
-          }
-
-          out_dl_streams[ms_level - 1] << pg.getRepAbsCharge() << ","<< pg.getQscore2D() << "," <<pg.getTargetDecoyType() << "\n";
-
-          /*
-          int index = 1;
-          std::cout << "s" << index << "=[";
-
-          for (int j = 0; j < sig.size(); j++)
-          {
-            if (j % iso_count == 0) std::cout << "\n";
-            std::cout << sig[j] << ",";
-          }
-          std::cout << "];\n";
-
-          std::cout << "n" << index++ << "=[";
-          // int v_index = z_index * isotope_count * bin_count + iso_index * bin_count + bin;
-
-          for (int j = 0; j < noise.size(); j++)
-          {
-            if (j % iso_count == 0) std::cout << "\n";
-            std::cout << noise[j] << ",";
-          }
-          std::cout << "];\n";*/
-        }
-#endif
       }
+#else
+      // the same rows in the same order, formatted in parallel (with report_FDR, the noise-decoy draws are replayed serially up front)
+      FLASHDeconvSpectrumFile::writeDeconvolvedMasses(deconvolved_spectra, out_spec_streams, out_spec_file, in_file, fd.getAveragine(), fd.getDecoyAveragine(), tols,
+                                                      write_detail, report_decoy, fd.getNoiseDecoyWeight());
+#endif
 
       for (Size i = 0; i < out_spec_file.size(); i++)
       {
@@ -436,9 +357,6 @@ protected:
         out_spec_streams[i].close();
 #ifdef TRAIN_OUT
         out_train_streams[i].close();
-#endif
-#ifdef DEEP_LEARNING
-        out_dl_streams[i].close();
 #endif
       }
     }
@@ -510,6 +428,19 @@ protected:
       }
     }
 
+    // All outputs are written: the deconvolved spectra (their peak groups) and the input spectra are released in parallel instead of one
+    // after the other by the destructors at the end of this function (each element is moved into a local that is destroyed).
+#pragma omp parallel for schedule(dynamic, 64)
+    for (SignedSize i = 0; i < (SignedSize)deconvolved_spectra.size(); i++)
+    {
+      DeconvolvedSpectrum released(std::move(deconvolved_spectra[i]));
+    }
+#pragma omp parallel for schedule(dynamic, 64)
+    for (SignedSize i = 0; i < (SignedSize)map.size(); i++)
+    {
+      MSSpectrum released(std::move(map[i]));
+    }
+
     return EXECUTION_OK;
   }
 };
@@ -517,6 +448,13 @@ protected:
 // the actual main function needed to create an executable
 int main(int argc, const char** argv)
 {
+  useTransparentHugePages(argv);
+#if defined(__GLIBC__)
+  // Keep freed heap memory in the per-thread arenas instead of trimming it back to the kernel after every
+  // spectrum: trim, refault and heap regrowth serialise on the process-wide mmap lock at high thread counts.
+  mallopt(M_TRIM_THRESHOLD, std::numeric_limits<int>::max());
+  mallopt(M_TOP_PAD, 256 << 20);
+#endif
   TOPPFLASHDeconv tool;
   return tool.main(argc, argv);
 }

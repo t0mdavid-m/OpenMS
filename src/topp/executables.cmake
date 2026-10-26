@@ -39,6 +39,7 @@ FileConverter
 FileFilter
 FileInfo
 FileMerger
+FLASHAnnotator
 FLASHDeconv
 FLASHTnT
 FuzzyDiff
@@ -136,6 +137,7 @@ StaticModification
 TextExporter
 TICCalculator
 TriqlerConverter
+UniPEFF
 XFDR
 XMLValidator
 )

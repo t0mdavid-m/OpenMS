@@ -101,6 +101,8 @@ ToolDescriptionFile.h
 TransformationXMLFile.h
 TriqlerFile.h
 UnimodXMLFile.h
+UniPEFFConverter.h
+UniProtXMLFile.h
 XMLFile.h
 XTandemInfile.h
 XTandemXMLFile.h

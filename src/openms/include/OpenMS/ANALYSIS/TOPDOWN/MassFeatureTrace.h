@@ -60,6 +60,29 @@ namespace OpenMS
     std::vector<FLASHHelperClasses::MassFeature> findFeaturesAndUpdateQscore2D(const PrecalculatedAveragine& averagine, std::vector<DeconvolvedSpectrum>& deconvolved_spectra, int ms_level = 1,
                                                                                      bool is_decoy = false);
 
+    /// The features of one tracing before they are numbered: per feature, the peak groups it labels (index of the spectrum in the traced
+    /// vector, index of the peak group in the spectrum) and its 2D Qscore
+    struct TracedFeatures
+    {
+      std::vector<FLASHHelperClasses::MassFeature> features;
+      std::vector<std::vector<std::pair<Size, Size>>> peak_groups;
+      std::vector<double> qscores;
+    };
+
+    /// The tracing of findFeaturesAndUpdateQscore2D without numbering the features and labelling their peak groups (reads the spectra only)
+    TracedFeatures traceFeatures(const PrecalculatedAveragine& averagine, const std::vector<DeconvolvedSpectrum>& deconvolved_spectra, int ms_level = 1,
+                                 bool is_decoy = false) const;
+
+    /**
+       @brief Numbers traced features with the process-wide feature index, in their order, and labels their peak groups (feature index and
+       2D Qscore), which findFeaturesAndUpdateQscore2D does feature by feature.
+       @param traced the traced features (moved out)
+       @param deconvolved_spectra the traced spectra, or the vector they were taken from when @p spectrum_indices is given
+       @param spectrum_indices if not empty, the index in @p deconvolved_spectra of each traced spectrum
+       */
+    static std::vector<FLASHHelperClasses::MassFeature> numberFeatures(TracedFeatures& traced, std::vector<DeconvolvedSpectrum>& deconvolved_spectra,
+                                                                       const std::vector<Size>& spectrum_indices = {});
+
   protected:
     void updateMembers_() override;
 

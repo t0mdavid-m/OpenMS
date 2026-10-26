@@ -43,11 +43,17 @@ namespace OpenMS
     if (!precursor_peak_group_.empty())
     {
       val << ";precursorscan=" << precursor_scan_number_ << ";precursormass=" << std::to_string(precursor_peak_group_.getMonoMass())
-          << ";precursorQscore=" << std::to_string(precursor_peak_group_.getQscore2D())  << ";precursorSNR=" << std::to_string(precursor_peak_group_.getChargeSNR(precursor_peak_.getCharge())) ;
+          << ";precursorQscore=" << std::to_string(precursor_peak_group_.getQscore2D())  << ";precursorSNR=" << std::to_string(precursor_peak_group_.getChargeSNR(precursor_peak_.getCharge()))
+          << ";precursorQscore1D=" << std::to_string(precursor_peak_group_.getQscore());
     }
     else
     {
       val << ";precursorscan=0;precursormass=0;precursorQscore=0;precursorSNR=0";
+    }
+    if (decoy_precursor_mass_ > 0)
+    {
+      val << ";decoyprecursormass=" << std::to_string(decoy_precursor_mass_) << ";decoyprecursorweight=" << std::to_string(decoy_precursor_weight_)
+          << ";decoyprecursorQscore=" << std::to_string(decoy_precursor_qscore_) << ";decoyprecursorQscore1D=" << std::to_string(decoy_precursor_qscore1d_);
     }
 
     val << ";peaks=";
@@ -204,7 +210,11 @@ namespace OpenMS
     {
       return max_mass;
     }
-    return std::min(max_mass, precursor_peak_group_.getMonoMass());
+    // with the window bounds, the heaviest mass in the isolation window (see getCurrentMaxAbsCharge)
+    const double precursor_mass = precursor_peak_group_.useWindowBounds()
+                                    ? std::max(precursor_peak_group_.getMonoMass(), precursor_peak_group_.getWindowMaxMass())
+                                    : precursor_peak_group_.getMonoMass();
+    return std::min(max_mass, precursor_mass);
   }
 
   double DeconvolvedSpectrum::getCurrentMinMass(const double min_mass) const
@@ -222,7 +232,16 @@ namespace OpenMS
     {
       return max_abs_charge;
     }
-    return std::min(max_abs_charge, abs(precursor_peak_group_.getRepAbsCharge()));
+    // A fragment ion carries at most the charge of the isolated precursor ion: its mass over the isolation m/z (precursor_peak_). The
+    // charge state of the precursor mass with the best SNR in MS1 (the rep charge) is often lower: on Eclip_1480, 42% of the spectra
+    // whose proteoforms TopPIC found and FLASHTnT did not were isolated above that charge, and the fragments in between were never
+    // deconvolved.
+    const int iso_z = abs(precursor_peak_.getCharge());
+    int bound = iso_z > 0 ? iso_z : abs(precursor_peak_group_.getRepAbsCharge());
+    // with the window bounds (the pass that chooses the precursor among the masses of the isolation window by the fragments), any
+    // of those masses may be the fragmented one
+    if (precursor_peak_group_.useWindowBounds()) bound = std::max(bound, precursor_peak_group_.getWindowMaxCharge());
+    return std::min(max_abs_charge, bound);
   }
 
   const Precursor& DeconvolvedSpectrum::getPrecursor() const
@@ -336,6 +355,16 @@ namespace OpenMS
     peak_groups_.push_back(pg);
   }
 
+  void DeconvolvedSpectrum::push_back(PeakGroup&& pg)
+  {
+    peak_groups_.push_back(std::move(pg));
+  }
+
+  void DeconvolvedSpectrum::swapPeakGroups(std::vector<PeakGroup>& x)
+  {
+    peak_groups_.swap(x);
+  }
+
   void DeconvolvedSpectrum::emplace_back(const PeakGroup& pg)
   {
     peak_groups_.emplace_back(pg);
@@ -396,6 +425,11 @@ namespace OpenMS
   {
     std::vector<PeakGroup>().swap(peak_groups_);
     peak_groups_ = x;
+  }
+
+  void DeconvolvedSpectrum::setPeakGroups(std::vector<PeakGroup>&& x)
+  {
+    peak_groups_ = std::move(x);
   }
 
   void DeconvolvedSpectrum::sort()
