@@ -176,52 +176,6 @@ namespace
     return plans;
   }
 
-  /// Split @p s on tabs, keeping empty fields.
-  std::vector<std::string> splitTabs(const std::string& s)
-  {
-    std::vector<std::string> out;
-    std::string cur;
-    for (char ch : s)
-    {
-      if (ch == '\t')
-      {
-        out.push_back(cur);
-        cur.clear();
-      }
-      else
-      {
-        cur += ch;
-      }
-    }
-    out.push_back(cur);
-    return out;
-  }
-
-  /// scan_commands.tsv rows with three columns removed by header name: the one that carries wall-clock time
-  /// (enqueue_ts), and the two re-planning added after the Push 1 tip capture below was taken (decision_survey_id,
-  /// isolation_purity) -- the capture has neither, and every other column must stay identical.
-  std::vector<std::vector<std::string>> stableCommandRows(const std::string& path, std::vector<std::string>& headers)
-  {
-    const TSVFile tsv = TSVFile::parse(path);
-    headers.clear();
-    std::vector<int> keep;
-    for (size_t i = 0; i < tsv.headers.size(); ++i)
-    {
-      const std::string& h = tsv.headers[i];
-      if (h == "enqueue_ts" || h == "decision_survey_id" || h == "isolation_purity") continue;
-      keep.push_back(static_cast<int>(i));
-      headers.push_back(tsv.headers[i]);
-    }
-    std::vector<std::vector<std::string>> rows;
-    for (const auto& row : tsv.rows)
-    {
-      std::vector<std::string> cells;
-      for (int i : keep) cells.push_back(i < static_cast<int>(row.size()) ? row[i] : std::string());
-      rows.push_back(cells);
-    }
-    return rows;
-  }
-
   /// The decision_survey_id cell of every scan_commands.tsv row in @p log_dir, keyed by the row's tracking_id (both
   /// encoded). The drain consumes the engine's decision record as it writes the row, so after the drain the log is
   /// where the decision survey is read -- and the logged value is the decided one.
@@ -240,168 +194,6 @@ namespace
     return it == surveys.end() ? std::string() : it->second;
   }
 
-  /// Cells agree: byte-identical, or -- token by token over the ';' and ',' sub-cell axes -- identical
-  /// strings or numbers within the golden comparer's relative tolerance. gcc and MSVC differ in FP
-  /// reduction order (CLAUDE.md), so a printed last digit is not a behaviour; a different command is.
-  bool sameCell(const std::string& a, const std::string& b)
-  {
-    if (a == b) return true;
-    auto tokens = [](const std::string& s) {
-      std::vector<std::string> t;
-      std::string cur;
-      for (char ch : s)
-      {
-        if (ch == ';' || ch == ',')
-        {
-          t.push_back(cur);
-          cur.clear();
-        }
-        else
-        {
-          cur += ch;
-        }
-      }
-      t.push_back(cur);
-      return t;
-    };
-    const auto ta = tokens(a), tb = tokens(b);
-    if (ta.size() != tb.size()) return false;
-    for (size_t i = 0; i < ta.size(); ++i)
-    {
-      if (ta[i] == tb[i]) continue;
-      if (ta[i].empty() || tb[i].empty()) return false;
-      char* ea = nullptr;
-      char* eb = nullptr;
-      const double x = std::strtod(ta[i].c_str(), &ea);
-      const double y = std::strtod(tb[i].c_str(), &eb);
-      if (*ea != '\0' || *eb != '\0') return false;
-      if (std::abs(x - y) > std::max(1e-6, 1e-3 * std::max(std::abs(x), std::abs(y)))) return false;
-    }
-    return true;
-  }
-
-  // scan_commands.tsv of the depth-1 drive below, captured at the Push 1 tip (OpenMS 3e5e58437b + Task 7b/7,
-  // before any survey called replacePlan) without enqueue_ts. Rows in dequeue order.
-  const std::vector<std::string> kDepth1PushOneTip = {
-    "!!\"\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!\"S\t0\t0\t500.0000\t2000."
-      "0000",
-    "!!#\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!#S\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!$\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!$S\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!%\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!%S\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!&\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!&S\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!'\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!'S\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!(\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!(S\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!)\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!)S\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!*\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!*S\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!+\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!+S\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!,\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!,S\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!-\trecording\t2\t!!,\t1\t2\t2063.6058\t4\t517.034\t1.05037\t0.476161\t0.860556\t1.43069\t0.860556\t1.18869\t1\tHCD\t29"
-      "\t29\t0\t0\t0\t0.23633\t5459.27\t5459.27\t\t0\t\t!!-R2.063606k@4\t0\t0\t0.0000\t0.0000",
-    "!!.\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!.S\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!/\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!/S\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!0\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!0S\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!1\trecording\t2\t!!0\t2\t2\t2277.2541\t4\t570.572\t1.29744\t0.771507\t0.93761\t4.96672\t0.93761\t4.96672\t1\tHCD\t29\t"
-      "29\t0\t0\t0\t2.99553\t5213.45\t5213.45\t\t0\t\t!!1R2.277254k@4\t0\t0\t0.0000\t0.0000",
-    "!!2\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!2S\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!3\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!3S\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!4\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!4S\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!5\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!5S\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!6\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!6S\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!7\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!7S\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!8\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!8S\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!9\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!9S\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!:\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!:S\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!;\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!;S\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!<\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!<S\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!=\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!=S\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!>\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!>S\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!?\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!?S\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!@\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!@S\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!A\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!AS\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!B\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!BS\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!C\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!CS\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!D\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!DS\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!E\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!ES\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!F\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!FS\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!G\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!GS\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!H\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!HS\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!I\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!IS\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!J\trecording\t2\t!!I\t3\t2\t5315.1289\t9\t591.911\t1.02839\t0.350165\t0.858807\t3.53716\t0.858807\t3.53716\t1\tHCD\t29"
-      "\t29\t0\t0\t0\t3.67734\t5876.7\t5876.7\t\t0\t\t!!JR5.315129k@9\t0\t0\t0.0000\t0.0000",
-    "!!K\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!KS\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!L\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!LS\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!M\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!MS\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!N\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!NS\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!O\trecording\t2\t!!N\t4\t2\t2256.1789\t4\t565.177\t1.05073\t0.419769\t0.853377\t1.30749\t0.853377\t0.528162\t1\tHCD\t2"
-      "9\t29\t0\t0\t0\t0.161604\t3336.41\t3336.41\t\t0\t\t!!OR2.256179k@4\t0\t0\t0.0000\t0.0000",
-    "!!P\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!PS\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!Q\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!QS\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!R\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!RS\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!S\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!SS\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!T\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!TS\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!U\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!US\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!V\trecording\t2\t!!U\t5\t2\t4297.1774\t7\t615.249\t0.941357\t0.393986\t0.57079\t2.8727\t0.881239\t4.42826\t1\tHCD\t29"
-      "\t29\t0\t0\t0\t3.00522\t3821.83\t5851.61\t\t0\t\t!!VR4.297177k@7\t0\t0\t0.0000\t0.0000",
-    "!!W\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!WS\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!X\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!XS\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!Y\trecording\t2\t!!X\t6\t2\t2135.7138\t4\t535.061\t1.0536\t0.3612\t0.872528\t12.5045\t0.872528\t0.352325\t1\tHCD\t29\t"
-      "29\t0\t0\t0\t2.79475\t3519.72\t3519.72\t\t0\t\t!!YR2.135714k@4\t0\t0\t0.0000\t0.0000",
-    "!!Z\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!ZS\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!![\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!![S\t0\t0\t500.0000\t2000.00"
-      "00",
-    "!!\\\tsurvey\t1\t\t0\t3\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\tnone\t0\t0\t0\t0\t0\t0\t0\t0\t\t0\t\t!!\\S\t0\t0\t500.0000\t2000."
-      "0000",
-  };
   // ---- The bought R (Task 10): a quantification verdict buys an identification R that waits ----------------
 
   /// The C++-schema twin of test-data/configs/method_quant_welch.json (@p charges "separate", the quant_welch
@@ -930,9 +722,10 @@ START_SECTION(siblings_form_one_unit)
 END_SECTION
 
 // At depth 1 every MS2 a survey planned is dequeued before the next survey arrives, so no survey ever meets
-// a waiting unit of its CV, and re-planning must not change a single command. The drive is
-// FLASHIda_Logging_test's (method_default's C++ twin, ms1_standard + ms2_hcd_fragment), compared with a
-// capture of the same drive taken at the Push 1 tip.
+// a waiting unit of its CV and re-planning must change nothing: no survey drops, keeps or adjusts a command, and
+// every survey-decided MS2 goes out decided by the survey that is its parent. The drive is FLASHIda_Logging_test's
+// (method_default's C++ twin, ms1_standard + ms2_hcd_fragment). It used to compare against a capture taken at the
+// Push 1 tip; FDmerge's deconvolution changed the selection itself, so the claim is now asserted directly.
 START_SECTION(depth1_drive_is_unchanged_without_a_stale_survey)
 {
   const std::string log_dir = freshLogDir("replan_depth1");
@@ -950,25 +743,28 @@ START_SECTION(depth1_drive_is_unchanged_without_a_stale_survey)
   {
     TEST_EQUAL(r.dropped, 0)
     TEST_EQUAL(r.kept, 0)
+    TEST_EQUAL(r.adjusted, 0)
   }
 
-  std::vector<std::string> headers;
-  const auto rows = stableCommandRows(log_dir + "/scan_commands.tsv", headers);
-  TEST_EQUAL(rows.empty(), false)
-  TEST_EQUAL(rows.size(), kDepth1PushOneTip.size())
-  ABORT_IF(rows.size() != kDepth1PushOneTip.size())
-  for (size_t r = 0; r < rows.size(); ++r)
+  const TSVFile tsv = TSVFile::parse(log_dir + "/scan_commands.tsv");
+  std::map<std::string, std::string> level_of;
+  for (const auto& row : tsv.rows) level_of[cell(tsv, row, "tracking_id")] = cell(tsv, row, "ms_level");
+  int survey_decided = 0;
+  for (const auto& row : tsv.rows)
   {
-    const std::vector<std::string> expected = splitTabs(kDepth1PushOneTip[r]);
-    TEST_EQUAL(rows[r].size(), expected.size())
-    if (rows[r].size() != expected.size()) continue;
-    for (size_t c = 0; c < expected.size(); ++c)
+    const std::string parent = cell(tsv, row, "parent_tracking_id");
+    const bool from_survey = cell(tsv, row, "ms_level") == "2" && level_of.count(parent) && level_of[parent] == "1";
+    if (from_survey)
     {
-      if (sameCell(rows[r][c], expected[c])) continue;
-      std::cerr << "row " << r << " column " << headers[c] << std::endl;
-      TEST_EQUAL(rows[r][c], expected[c])
+      ++survey_decided;
+      TEST_EQUAL(cell(tsv, row, "decision_survey_id"), parent)
+    }
+    else
+    {
+      TEST_EQUAL(cell(tsv, row, "decision_survey_id"), "")
     }
   }
+  TEST_EQUAL(survey_decided > 0, true) // non-vacuity: the drive selected something
 }
 END_SECTION
 
@@ -1515,10 +1311,12 @@ START_SECTION(bought_r_adjusted_to_better_charge)
     ida.getNextScanCommand(sent);
   });
   ABORT_IF(!w.bought)
-  TEST_EQUAL(std::abs(w.r.stages[0].charge_state), 13)
+  const int bought_z = std::abs(w.r.stages[0].charge_state);   // the winning Q's charge (the verdict's purest window)
+  TEST_EQUAL(std::find(w.covered.begin(), w.covered.end(), bought_z) != w.covered.end(), true)
   TEST_EQUAL(w.covered == w.q_charges, true) // registered with exactly the charges the group's Qs isolated
   TEST_EQUAL(w.covered.size() > 1, true)
   TEST_EQUAL(expected, 14) // non-vacuity: the newer survey prefers another charge, and a Q covered it
+  TEST_NOT_EQUAL(bought_z, expected) // so the adjust below is a MOVE, not a re-confirm
   TEST_EQUAL(std::find(w.covered.begin(), w.covered.end(), expected) != w.covered.end(), true)
 
   TEST_EQUAL(after.scan_id, w.r.scan_id)
