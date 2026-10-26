@@ -151,9 +151,10 @@ namespace OpenMS
 
     void runElutionModelFit_(FeatureFinderAlgorithmPickedHelperStructs::MassTraces &m_traces, EGHTraceFitter* fitter) const;
 
-    void updateFeatureWithFitModel(std::vector<Feature>& conflicting_features, Size mt_index,
+    /// @p entries: the features of the trace with their component (-1: none), in feature order
+    void updateFeatureWithFitModel(std::vector<Feature>& conflicting_features, const std::vector<std::pair<Size, long>>& entries,
                                    const MassTrace& obs_masstrace, const Size& org_index_of_obs_mt,
-                                   Matrix<int>& pointer_to_components, vector<std::vector<double>>& components);
+                                   const std::vector<std::vector<double>>& components);
 
     void getFLASHDeconvConsensusResult();
 
@@ -203,6 +204,7 @@ namespace OpenMS
     /// runFromDeconvolvedMasses: every group is kept and keeps its mass (no score filter, no isotope offset correction); a group the
     /// conflict resolution sets aside (all traces shared, or a harmonic) keeps its own traces in fd_set_aside_ and is reported with them
     bool fd_seeded_ = false;
+    bool fd_shared_fit_ = true; ///< with fd_seeded_: a feature without an unshared trace is resolved with a model from its shared traces
     std::vector<FeatureGroup> fd_set_aside_;
 };
 }

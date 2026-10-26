@@ -13,12 +13,16 @@
 #include <OpenMS/FEATUREFINDER/EGHTraceFitter.h>
 #include <OpenMS/FEATUREFINDER/MassTraceDetection.h>
 #include <OpenMS/PROCESSING/SMOOTHING/SavitzkyGolayFilter.h>
+#ifdef _OPENMP
+  #include <omp.h>
+#endif
 #include <chrono>
 #include <functional>
 #include <memory>
 #include <numeric>
 #include <queue>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace OpenMS
 {
@@ -864,10 +868,7 @@ namespace OpenMS
       std::iota(order.begin(), order.end(), 0);
       std::stable_sort(order.begin(), order.end(), [&clusters](Size a, Size b) { return clusters[a].size() > clusters[b].size(); });
       std::vector<std::exception_ptr> errors(clusters.size());
-#pragma omp parallel for schedule(dynamic, 1)
-      for (SignedSize o = 0; o < (SignedSize)order.size(); ++o)
-      {
-        const Size c = order[o];
+      const auto resolve_cluster = [&](const Size c) {
         try
         {
           auto& cluster = clusters[c];
@@ -875,7 +876,7 @@ namespace OpenMS
           {
             auto& out_feat = fgroups[*(cluster.begin())];
             if (rescoreFeatureGroup_(out_feat)) cluster_out[c].push_back(out_feat);
-            continue;
+            return;
           }
           resolveConflictInCluster_(fgroups, input_mtraces, shared_m_traces, cluster, cluster_out[c]);
         }
@@ -883,6 +884,18 @@ namespace OpenMS
         {
           errors[c] = std::current_exception();
         }
+      };
+      // the large clusters one after the other, each with its regions' fits and traces in parallel; then the others in parallel
+      const Size large = 500;
+      Size first_small = 0;
+      while (first_small < order.size() && clusters[order[first_small]].size() > large)
+      {
+        resolve_cluster(order[first_small++]);
+      }
+#pragma omp parallel for schedule(dynamic, 1)
+      for (SignedSize o = (SignedSize)first_small; o < (SignedSize)order.size(); ++o)
+      {
+        resolve_cluster(order[o]);
       }
       for (const auto& error : errors)
       {
@@ -1150,7 +1163,7 @@ namespace OpenMS
           break;
         }
       }
-      if (is_this_all_sharing)
+      if (is_this_all_sharing && !(fd_seeded_ && fd_shared_fit_)) // (FLASHDeconv masses: it is resolved with a model from its shared traces)
       {
         fg_idx_to_remove.insert(*fg_idx);
         continue;
@@ -1350,12 +1363,18 @@ namespace OpenMS
     std::map<std::vector<Size>, std::shared_ptr<EGHTraceFitter>> fit_cache; // the elution models fitted in this cluster
     /// 3. start from the highest intensity, iterate shared MT and get conflicting region (collecting conflicting Features)
     std::multimap<Size, Feature> solved_features; // key: feature group index, value: solved Feature
-    while(!shared_mt_idx_inty_pairs.empty())
+    // The shared traces by intensity, each starting a region unless an earlier region took it (it was erased from the list, from its
+    // front and per trace of a region: quadratic in the cluster size), and the traces of a region visited in the order they are found
+    // (it was a scan of the hash map for the first unvisited one per step: quadratic in the region size; Eclip_1480 has a region of
+    // ~50k features). The regions and their features are the same; only the order the features are collected in may differ.
+    std::unordered_set<Size> traces_in_regions;
+    for (Size next_pair = 0; next_pair < shared_mt_idx_inty_pairs.size(); ++next_pair)
     {
+      const Size first_mt = shared_mt_idx_inty_pairs[next_pair].first;
+      if (traces_in_regions.count(first_mt) > 0) continue;
       // double check if this trace is shared
-      if (shared_m_traces_indices[shared_mt_idx_inty_pairs[0].first].size() < 2)
+      if (shared_m_traces_indices[first_mt].size() < 2)
       {
-        shared_mt_idx_inty_pairs.erase(shared_mt_idx_inty_pairs.begin());
         continue;
       }
 
@@ -1367,19 +1386,11 @@ namespace OpenMS
       std::vector<MassTrace> conflicting_mts; // collect shared traces for resolution (not FeatureSeed, but original MassTrace. FeatureSeed has conflicting information)
       std::vector<Size> conflicting_mt_indices; // trace_index of collect shared traces for resolution
 
-      shared_mts_in_this_region.emplace(shared_mt_idx_inty_pairs[0].first, false); // add the first shared mt
-      while(true)
+      shared_mts_in_this_region.emplace(first_mt, false); // add the first shared mt
+      std::vector<Size> region_queue {first_mt};
+      for (Size q = 0; q < region_queue.size(); ++q)
       {
-        // find unvisited shared mt
-        auto found_mt = std::find_if(std::begin(shared_mts_in_this_region), std::end(shared_mts_in_this_region),
-                               [](auto&& p) { return p.second == false; });
-        // if no shared mt left
-        if (found_mt == std::end(shared_mts_in_this_region))
-        {
-          break;
-        }
-
-        Size this_shared_mt_index = found_mt->first;
+        Size this_shared_mt_index = region_queue[q];
         shared_mts_in_this_region[this_shared_mt_index] = true; // mark as visited
 
         // per conflicting features, make Feature
@@ -1437,18 +1448,15 @@ namespace OpenMS
             if (shared_mts_in_this_region.find(mt_idx) == shared_mts_in_this_region.end()) // if this shared trace is not visited yet
             {
               shared_mts_in_this_region.emplace(mt_idx, false);
+              region_queue.push_back(mt_idx);
             }
           }
           conflicting_features.push_back(new_feature);
         }
       }
 
-      /// 3.2 remove all conflicting MTs visited in this round from "look-up table" for the next round
-      for (auto &shared : shared_mts_in_this_region)
-      {
-        shared_mt_idx_inty_pairs.erase(std::remove_if(shared_mt_idx_inty_pairs.begin(), shared_mt_idx_inty_pairs.end(),
-                                                      [shared](auto const &p) {return p.first == shared.first;}));
-      }
+      /// 3.2 the conflicting MTs visited in this round start no other region
+      traces_in_regions.insert(region_queue.begin(), region_queue.end());
 
       /// 3.3 remove invalid feature from FeatureGroup and then collect conflicting mass traces
       for (auto &feat : features_not_for_resolution)
@@ -1474,9 +1482,8 @@ namespace OpenMS
       }
 
       // collect shared mass trace to be resolved after removing ineligible features
-      for (auto &candidate_mt : shared_mts_in_this_region)
+      for (const Size shared_mt_idx : region_queue)
       {
-        Size shared_mt_idx = candidate_mt.first;
         auto &conflict_feat_tags = shared_mt_N_features[shared_mt_idx];
 
         // if this is not used by any features
@@ -1651,10 +1658,10 @@ namespace OpenMS
 
       updated_fg_indices_in_this_cluster.push_back(idx);
       // save solved mass trace indices
-      for (auto & solved: solved_features)
+      const auto solved_of_group = solved_features.equal_range(idx); // (was a scan of all solved features per group: quadratic)
+      for (auto solved_it = solved_of_group.first; solved_it != solved_of_group.second; ++solved_it)
       {
-        if (solved.first != idx)
-          continue;
+        auto &solved = *solved_it;
 
         for(auto &solved_trace_idx : solved.second.solved_trace_indices)
         {
@@ -1775,6 +1782,14 @@ namespace OpenMS
 
     if (most_abundant_mt_ptr == nullptr)
     {
+      // FLASHDeconv masses: a mass with an elution in the raw signal gets a share of it, so a feature without any unshared trace takes
+      // its elution model from its shared traces (they are only fitted, not counted as its own)
+      if (fd_seeded_ && fd_shared_fit_ && !feat.shared_traces.empty())
+      {
+        feat.unique_traces = feat.shared_traces;
+        feat.unique_trace_indices = feat.shared_trace_indices;
+        return true;
+      }
       return false;
     }
 
@@ -1794,140 +1809,167 @@ namespace OpenMS
     {
       return;
     }
+    // a region can hold tens of thousands of features and shared traces (Eclip_1480): the fits and the per-trace resolutions are
+    // independent and run in parallel unless the region is already resolved inside a parallel loop over clusters
+#ifdef _OPENMP
+    const bool nested = omp_in_parallel() != 0;
+#else
+    const bool nested = true;
+#endif
 
-    /// Prepare Components per features (excluding conflicting mts)
-    std::vector<std::vector<double>> components;
-    // Matrix -- row : index of conflicting_mts , column : index of conflicting_features
-    Matrix<int> pointer_to_components(conflicting_mts.size(), conflicting_features.size(), -1);
-    auto a = pointer_to_components.getEigenMatrix();
-    for (Size i_of_f = 0; i_of_f < conflicting_features.size(); ++i_of_f)
+    /// the elution model of each feature from its unique traces: the cached ones, then the others fitted, then cached
+    const Size feature_count = conflicting_features.size();
+    std::vector<std::shared_ptr<EGHTraceFitter>> models(feature_count);
+    std::vector<std::vector<Size>> fit_keys(feature_count);
+    std::vector<Size> to_fit;
+    for (Size i_of_f = 0; i_of_f < feature_count; ++i_of_f)
     {
-      auto &tmp_feat = conflicting_features[i_of_f];
-      std::shared_ptr<EGHTraceFitter> fitted_model_owner; // released with the cache, or with each feature (was never freed)
-      std::vector<Size> fit_key;
+      const auto &tmp_feat = conflicting_features[i_of_f];
       if (fit_cache != nullptr)
       {
+        auto &fit_key = fit_keys[i_of_f];
         fit_key.reserve(tmp_feat.unique_trace_indices.size() + 2);
         fit_key.push_back(tmp_feat.feature_group_index);
         fit_key.push_back((Size)tmp_feat.charge);
         fit_key.insert(fit_key.end(), tmp_feat.unique_trace_indices.begin(), tmp_feat.unique_trace_indices.end());
         const auto cached = fit_cache->find(fit_key);
-        if (cached != fit_cache->end()) fitted_model_owner = cached->second;
-      }
-      if (fitted_model_owner == nullptr)
-      {
-        fitted_model_owner = std::make_shared<EGHTraceFitter>();
-        fitTraceModelFromUniqueTraces_(tmp_feat, fitted_model_owner.get());
-        if (fit_cache != nullptr) fit_cache->emplace(fit_key, fitted_model_owner);
-      }
-      EGHTraceFitter* fitted_model = fitted_model_owner.get();
-
-      // the model is not valid
-      double area = fitted_model->getArea();
-      if (area != area) // x != x: test for NaN
-      {
-        continue;
-      }
-
-      // store Component information (Component = calculated model of the trace)
-      for (Size row = 0; row < conflicting_mts.size(); ++row)
-      {
-        // if the feature doesn't own this conflicting_mt, skip
-        auto &trace_indices = tmp_feat.shared_trace_indices;
-        if (trace_indices.end() == std::find(trace_indices.begin(), trace_indices.end(), conflicting_mt_indices[row]))
+        if (cached != fit_cache->end())
         {
+          models[i_of_f] = cached->second;
           continue;
         }
+      }
+      to_fit.push_back(i_of_f);
+    }
+    std::vector<std::exception_ptr> errors(to_fit.size());
+#pragma omp parallel for schedule(dynamic, 4) if (!nested && to_fit.size() >= 16)
+    for (SignedSize i = 0; i < (SignedSize)to_fit.size(); ++i)
+    {
+      try
+      {
+        auto model = std::make_shared<EGHTraceFitter>();
+        fitTraceModelFromUniqueTraces_(conflicting_features[to_fit[i]], model.get());
+        models[to_fit[i]] = model;
+      }
+      catch (...)
+      {
+        errors[i] = std::current_exception();
+      }
+    }
+    for (const auto &error : errors)
+    {
+      if (error) std::rethrow_exception(error);
+    }
+    if (fit_cache != nullptr)
+    {
+      for (const Size i_of_f : to_fit) fit_cache->emplace(fit_keys[i_of_f], models[i_of_f]);
+    }
 
-        // normalize fitted value
-        std::vector<double> fit_intensities;
-        double summed_intensities = .0;
-        for (auto &peak: conflicting_mts[row])
+    /// per conflicting trace (row): the features sharing it, in feature order, each with its component, i.e. its model over the trace
+    /// normalized to sum 1 (-1: no valid model, or one that is 0 over the whole trace)
+    std::unordered_map<Size, Size> row_of_trace;
+    row_of_trace.reserve(conflicting_mt_indices.size());
+    for (Size row = 0; row < conflicting_mt_indices.size(); ++row)
+    {
+      row_of_trace.emplace(conflicting_mt_indices[row], row);
+    }
+    std::vector<std::vector<std::pair<Size, long>>> row_entries(conflicting_mts.size());
+    std::vector<std::vector<double>> components;
+    for (Size i_of_f = 0; i_of_f < feature_count; ++i_of_f)
+    {
+      const auto &tmp_feat = conflicting_features[i_of_f];
+      EGHTraceFitter* fitted_model = models[i_of_f].get();
+      const double area = fitted_model->getArea();
+      const bool valid = (area == area); // x != x: test for NaN
+      for (const Size trace_index : tmp_feat.shared_trace_indices)
+      {
+        const auto found = row_of_trace.find(trace_index);
+        if (found == row_of_trace.end()) continue;
+        const Size row = found->second;
+        long component_index = -1;
+        if (valid)
         {
-          double rt = peak.getRT();
-          double fitted_value = fitted_model->getValue(rt);
-          summed_intensities += fitted_value;
-          fit_intensities.push_back(fitted_value);
+          std::vector<double> fit_intensities;
+          double summed_intensities = .0;
+          for (auto &peak: conflicting_mts[row])
+          {
+            double fitted_value = fitted_model->getValue(peak.getRT());
+            summed_intensities += fitted_value;
+            fit_intensities.push_back(fitted_value);
+          }
+          // if fit_model's RT range doesn't overlap with the conflict_mt -> fit_intensities vec is all composed of 0.
+          if (summed_intensities != 0)
+          {
+            std::vector<double> component;
+            component.reserve(fit_intensities.size());
+            for (auto &inty: fit_intensities)
+            {
+              component.push_back(inty / summed_intensities);
+            }
+            component_index = (long)components.size();
+            components.push_back(std::move(component));
+          }
         }
-
-        // if fit_model's RT range doesn't overlap with the conflict_mt -> fit_intensities vec is all composed of 0.
-        if (summed_intensities == 0)
-        {
-          continue;
-        }
-
-        // save normalized intensities into component
-        std::vector<double> component;
-        for (auto &inty: fit_intensities)
-        {
-          component.push_back(inty/summed_intensities);
-        }
-
-        pointer_to_components.setValue(row, i_of_f, components.size()); // set the index to this component
-        components.push_back(component);
+        row_entries[row].emplace_back(i_of_f, component_index);
       }
     }
 
-    /// reconstruction of observed XICs (per conflicting mt)
-    for (Size row = 0; row < conflicting_mts.size(); ++row)
+    /// reconstruction of observed XICs (per conflicting mt). A row changes only the copies of its own trace in the features.
+    std::vector<std::exception_ptr> row_errors(conflicting_mts.size());
+#pragma omp parallel for schedule(dynamic, 16) if (!nested && !shared_output_requested_ && conflicting_mts.size() >= 64)
+    for (SignedSize r = 0; r < (SignedSize)conflicting_mts.size(); ++r)
     {
-      Size org_index_of_this_trace = conflicting_mt_indices[row];
-      auto &obs_masstrace = conflicting_mts[row];
-
-      auto components_indices = pointer_to_components.getEigenMatrix().row(row);
-//      auto components_indices = a.row(row);
-      Size column_size =
-          components_indices.size() - std::count(components_indices.begin(), components_indices.end(), -1); // number of features involved with this mt
-
-      // if no resolution is needed, skip the next part
-      if (column_size < 2) // only one or no Feature has valid model
+      try
       {
-        for (Size i_of_f = 0; i_of_f < components_indices.size(); ++i_of_f) // iterate feature
+        const Size row = (Size)r;
+        const Size org_index_of_this_trace = conflicting_mt_indices[row];
+        const auto &entries = row_entries[row];
+        const Size column_size = std::count_if(entries.begin(), entries.end(), [](const auto &e) { return e.second >= 0; });
+
+        // if no resolution is needed, skip the next part
+        if (column_size < 2) // only one or no Feature has valid model
         {
-          if (components_indices[i_of_f] == -1) // if this feature is not the one with the valid model
+          for (const auto &[i_of_f, component_index] : entries)
           {
             Feature &feat = conflicting_features[i_of_f];
             auto lmt_ptr = std::find_if(feat.shared_traces.begin(), feat.shared_traces.end(),
                                         [org_index_of_this_trace](auto &&x) { return x.getTraceIndex() == org_index_of_this_trace; });
-            if (lmt_ptr != feat.shared_traces.end())
+            if (lmt_ptr == feat.shared_traces.end()) continue;
+            if (component_index < 0) // if this feature is not the one with the valid model
             {
               lmt_ptr->setIntensity(0); // to be removed later
               if (shared_output_requested_)
               {
                 std::vector<double> zero_vec = std::vector<double>(lmt_ptr->getMassTrace().getSize(), 0);
-//                writeTheoreticalShapeForConflictResolution_(feat.feature_group_index, *lmt_ptr, zero_vec, 0);
                 feat.setTheoreticalShapes(*lmt_ptr, zero_vec, 0);
               }
             }
-          }
-          else // valid Feature
-          {
-            if (shared_output_requested_)
+            else if (shared_output_requested_) // valid Feature
             {
-              Feature &feat = conflicting_features[i_of_f];
-              auto lmt_ptr = std::find_if(feat.shared_traces.begin(), feat.shared_traces.end(),
-                                          [org_index_of_this_trace](auto &&x) { return x.getTraceIndex() == org_index_of_this_trace; });
-              auto &temp_comp = components[pointer_to_components.getValue(row, i_of_f)];
-//              writeTheoreticalShapeForConflictResolution_(feat.feature_group_index, *lmt_ptr, temp_comp, 1);
-              feat.setTheoreticalShapes(*lmt_ptr, temp_comp, 1);
+              feat.setTheoreticalShapes(*lmt_ptr, components[component_index], 1);
             }
           }
+          continue;
         }
-
-        continue;
+        updateFeatureWithFitModel(conflicting_features, entries, conflicting_mts[row], org_index_of_this_trace, components);
       }
-      updateFeatureWithFitModel(conflicting_features, row, obs_masstrace, org_index_of_this_trace, pointer_to_components, components);
+      catch (...)
+      {
+        row_errors[r] = std::current_exception();
+      }
     }
-    components.clear();
+    for (const auto &error : row_errors)
+    {
+      if (error) std::rethrow_exception(error);
+    }
   }
 
-  void FLASHQuantAlgorithm::updateFeatureWithFitModel(std::vector<Feature>& conflicting_features, Size mt_index,
+  void FLASHQuantAlgorithm::updateFeatureWithFitModel(std::vector<Feature>& conflicting_features, const std::vector<std::pair<Size, long>>& entries,
                                                       const MassTrace& obs_masstrace, const Size& org_index_of_obs_mt,
-                                                      Matrix<int>& pointer_to_components, vector<std::vector<double>>& components)
+                                                      const std::vector<std::vector<double>>& components)
   {
-    auto components_indices = pointer_to_components.getEigenMatrix().row(mt_index);
-    Size column_size =
-      components_indices.size() - std::count(components_indices.begin(), components_indices.end(), -1); // number of features involved with this mt
+    // the features of this mt with a valid component, in feature order
+    Size column_size = std::count_if(entries.begin(), entries.end(), [](const auto &e) { return e.second >= 0; });
 
     // prepare observed XIC vector
     Size mt_size = obs_masstrace.getSize();
@@ -1945,13 +1987,13 @@ namespace OpenMS
     // prepare theoretical matrix (include only related features)
     Matrix<double> theo_matrix(mt_size, column_size);
     Size col = 0;
-    for (Size comp_idx = 0; comp_idx < components_indices.size(); ++comp_idx)
+    for (const auto &[i_of_f, component_index] : entries)
     {
       // skipping no-feature column
-      if (components_indices[comp_idx] == -1)
+      if (component_index < 0)
         continue;
 
-      auto &temp_comp = components[pointer_to_components.getValue(mt_index, comp_idx)];
+      auto &temp_comp = components[component_index];
       for (Size tmp_r = 0; tmp_r < temp_comp.size(); ++tmp_r)
       {
         theo_matrix.setValue(tmp_r, col, temp_comp[tmp_r]);
@@ -1986,10 +2028,10 @@ namespace OpenMS
 
     /// update Features based on the calculated ratio
     col = 0;
-    for (Size i_of_f = 0; i_of_f < components_indices.size(); ++i_of_f) // iterate feature
+    for (const auto &[i_of_f, component_index] : entries)
     {
       // skipping not-this-feature column
-      if (components_indices[i_of_f] == -1)
+      if (component_index < 0)
         continue;
 
       auto &feat = conflicting_features[i_of_f];
@@ -2001,7 +2043,6 @@ namespace OpenMS
 
       if (this->shared_output_requested_)
       {
-//        this->writeTheoreticalShapeForConflictResolution_(feat.feature_group_index, *lmt_ptr, theo_matrix.col(col), calculated_ratio[col]);
         auto theo_vec = theo_matrix.getEigenMatrix().col(col);
         std::vector<double> this_col(theo_vec.begin(), theo_vec.end());
         feat.setTheoreticalShapes(*lmt_ptr, this_col, calculated_ratio[col]);
@@ -2289,13 +2330,18 @@ namespace OpenMS
 
   double FLASHQuantAlgorithm::groupQuantity_(const FeatureGroup& fg) const
   {
-    double quantity = .0;
+    // FLASHDeconv masses: the three largest traces. The sum over all traces (FLASHQuant) falls faster than the amount, as the weak
+    // charges and isotopes drop below detection (PXD042169 SpikeIn, normalized to E. coli: ProtMix |log2 error| 0.77 -> 0.61, E. coli
+    // |log2 ratio| 0.246 -> 0.211, E. coli CV 0.124 -> 0.119)
+    std::vector<double> areas;
     for (const auto& seed : fg)
     {
       if (seed.getIsotopeIndex() < 0) continue;
-      quantity += seed.computeBulkPeakArea(use_smoothed_intensities_);
+      areas.push_back(seed.computeBulkPeakArea(use_smoothed_intensities_));
     }
-    return quantity;
+    const Size top = fd_seeded_ ? std::min((Size)3, areas.size()) : areas.size();
+    std::partial_sort(areas.begin(), areas.begin() + top, areas.end(), std::greater<double>());
+    return std::accumulate(areas.begin(), areas.begin() + top, .0);
   }
 
   void FLASHQuantAlgorithm::runFromDeconvolvedMasses(const PeakMap& ms1_map, const std::vector<DeconvolvedSpectrum>& deconvolved_spectra,
@@ -2324,11 +2370,63 @@ namespace OpenMS
     p_mtd.setValue("chrom_peak_snr", 3.0);
     p_mtd.setValue("mass_error_ppm", 10.0);
     p_mtd.setValue("trace_termination_outliers", 2);
-    MassTraceDetection mtdet;
-    mtdet.setLogType(ProgressLogger::NONE);
-    mtdet.setParameters(p_mtd);
+    // The traces are detected in m/z slices in parallel (MassTraceDetection is sequential; 17 s on a lysate run): each slice with 100 ppm
+    // of its neighbours on both sides, keeping the traces whose centroid lies in the slice itself. A trace stays within its mass error
+    // (10 ppm) of its centroid, so the slices give the traces of the whole map, but for traces seeded differently near a slice border.
+    // (MassTraceDetection on the whole map: 986,396 traces; in 64 slices: about as many.)
+    std::vector<double> sample_mzs;
+    for (Size i = 0; i < ms1_map.size(); i += std::max((Size)1, ms1_map.size() / 200))
+    {
+      for (const auto& peak : ms1_map[i]) sample_mzs.push_back(peak.getMZ());
+    }
+    std::sort(sample_mzs.begin(), sample_mzs.end());
+    // a fixed number of slices, so that the result does not depend on the number of threads (the resolution of shared traces carries
+    // small differences of the traces near a slice border on: Eclip_1480, 7 vs 48 slices: 80 of 9.3k features differ by > 10%)
+    const int slice_count = sample_mzs.size() < 1000 ? 1 : 64;
+    std::vector<double> borders {0.0};
+    for (int k = 1; k < slice_count; ++k) borders.push_back(sample_mzs[sample_mzs.size() * k / slice_count]);
+    borders.push_back(std::numeric_limits<double>::max());
+    std::vector<std::vector<MassTrace>> slice_traces(slice_count);
+#pragma omp parallel for schedule(dynamic, 1)
+    for (int k = 0; k < slice_count; ++k)
+    {
+      const double lo = borders[k], hi = borders[k + 1], lo_margin = lo * (1 - 100e-6), hi_margin = hi * (1 + 100e-6);
+      PeakMap slice;
+      slice.reserve(ms1_map.size());
+      for (const auto& spec : ms1_map)
+      {
+        MSSpectrum part;
+        static_cast<SpectrumSettings&>(part) = spec;
+        part.setRT(spec.getRT());
+        part.setMSLevel(spec.getMSLevel());
+        part.setNativeID(spec.getNativeID());
+        for (auto it = spec.MZBegin(lo_margin); it != spec.end() && it->getMZ() < hi_margin; ++it) part.push_back(*it);
+        slice.addSpectrum(std::move(part));
+      }
+      slice.updateRanges();
+      MassTraceDetection slice_mtd;
+      slice_mtd.setLogType(ProgressLogger::NONE);
+      slice_mtd.setParameters(p_mtd);
+      std::vector<MassTrace> found;
+      slice_mtd.run(slice, found);
+      for (auto& mt : found)
+      {
+        const double centroid = mt.getCentroidMZ();
+        if (centroid >= lo && centroid < hi) slice_traces[k].push_back(std::move(mt));
+      }
+    }
     std::vector<MassTrace> traces;
-    mtdet.run(ms1_map, traces);
+    for (auto& found : slice_traces)
+    {
+      for (auto& mt : found) traces.push_back(std::move(mt));
+      std::vector<MassTrace>().swap(found);
+    }
+    // a canonical order (by centroid m/z, then first retention time): the resolution of shared traces depends on the order of the traces
+    // for some groups (Eclip_1480: 71 of 9.3k features changed by > 10% with the order of the slices)
+    std::sort(traces.begin(), traces.end(), [](const MassTrace& a, const MassTrace& b) {
+      if (a.getCentroidMZ() != b.getCentroidMZ()) return a.getCentroidMZ() < b.getCentroidMZ();
+      return a.begin()->getRT() < b.begin()->getRT();
+    });
     lap("mass traces");
 
     ElutionPeakDetection epd;
