@@ -81,7 +81,10 @@ protected:
     registerOutputFile_("out", "<file>", "", "Consensus feature tsv: per feature its mass, aligned apex and charges, and per run its abundance, "
                         "status (detected, mbr, or nan) and, for a match between runs, its score (FLASHDeconv's Qscore2D of the mass, see above) and q-value.", true);
     setValidFormats_("out", ListUtils::create<String>("tsv"));
-    registerDoubleOption_("min_run_fraction", "<fraction>", 0.5, "Consensus features detected in at least this fraction of the runs are quantified in every run.", false);
+    registerDoubleOption_("min_run_fraction", "<fraction>", 0.25, "Consensus features detected in at least this fraction of the runs are quantified in every run "
+                          "(where not detected, by match between runs at -mbr_fdr). Lower values quantify more features, but their many weak transfers "
+                          "raise the score threshold of all transfers (PXD042169: 0.25 doubled the quantified features over 0.5 at the same accuracy; "
+                          "features in >= 2 runs lost transfers of the strong features).", false);
     setMinFloat_("min_run_fraction", 0.0);
     setMaxFloat_("min_run_fraction", 1.0);
     registerOutputFile_("out_mbr_detail", "<file>", "", "Match between runs, per consensus feature and run (detected or transfer): the value, FLASHDeconv's "
