@@ -25,6 +25,8 @@
 #include "FLASHIda_TestHelpers.h"  // ground-truth harness: ScanData/loadTsvScans/TSVFile/AcqResult/runInterleaved/runFullCycle/ExplResult/driveOneExplorationGroup/inclusionPinCytc
 #include "FLASHIda_TestAccess.h"   // ExplorationTestAccess::feedResult/group (private-state access)
 
+#include <chrono>
+#include <thread>
 #include <vector>
 #include <algorithm>
 #include <fstream>
@@ -2988,10 +2990,13 @@ START_SECTION(fragment_match_propagated_in_feed_result)
   TEST_EQUAL(info.metric.fragment_count > 0, true)
   TEST_EQUAL(info.identification.matched_protein.empty(), false)
   TEST_STRING_EQUAL(info.identification.proteoform_sequence, std::string(ca_sequence))
-  // Full-length: FLASHExtender leaves region at -1 ("full sequence") or sets 0/259; assert NOT truncated
-  // (rejects an N-terminal start>0 or a C-terminal end in [0,259)).
-  TEST_EQUAL(info.identification.result.region_start <= 0, true)
-  TEST_EQUAL(info.identification.result.region_end < 0 || info.identification.result.region_end == 259, true)
+  // The region is NOT asserted full-length any more: since FDmerge b509393d6c FLASHExtender also searches
+  // truncated termini where the hit's tags land, and on this spectrum it reports an N-terminally truncated
+  // CA2 (owner decision 2026-10-26: intended). What stays pinned is that a region, when set, lies inside
+  // the 260-residue sequence.
+  const auto& res = info.identification.result;
+  TEST_EQUAL(res.region_start < 260, true)
+  TEST_EQUAL(res.region_end < 0 || (res.region_end > res.region_start && res.region_end <= 259), true)
 }
 END_SECTION
 
@@ -4748,6 +4753,9 @@ START_SECTION(a_monitor_scan_does_not_reset_the_survey_clock)
   ABORT_IF(bootstrapExplorationGroup(ida, ms1_scans) <= 0)
 
   FLASHIdaTestAccess::backdateMonitorClock(*ida, 0, 60000);
+  // Let the survey clock age past the 1 ms the assertion reads. Processing the bootstrap's last survey used to
+  // take longer than that on its own; FDmerge's deconvolution no longer does, so the age is made explicit.
+  std::this_thread::sleep_for(std::chrono::milliseconds(5));
   ScanCommand mon{};
   TEST_EQUAL(drainUntilRole(ida, ScanRole::Monitor, mon), true)
 

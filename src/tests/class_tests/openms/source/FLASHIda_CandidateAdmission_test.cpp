@@ -109,11 +109,12 @@ START_SECTION(anchor_without_an_authored_set_is_the_representative_charge)
 END_SECTION
 
 // CA-B2: charge_selection "qscore" reads the PER-CHARGE qscore map, which only updateQscore populates.
-// A PeakGroup that never went through it has no per-charge scores at all, so this ranks over an
-// empty map and yields no anchor. Pinned rather than worked around: it is the honest boundary of
-// what a synthetic PeakGroup can express, and a future helper that starts populating qscores_ should
-// have to notice this expectation change rather than silently strengthen four other tests.
-// (Before ADR-0059 this rule was selected by consider_all_charges.)
+// A PeakGroup that never went through it has no per-charge scores at all, so getBestQScoreCharge names no
+// resolved charge. Since the anchor must be a resolved charge (the snr/qscore fix after FDmerge), the rule
+// then takes its first resolved candidate: every candidate falls back to the group qscore and carries no
+// intensity, so the order is the lower charge. Pinned so that a helper which starts populating qscores_, or
+// a change to the fallback, has to notice. (Before the fix this yielded no anchor; before ADR-0059 the rule
+// was selected by consider_all_charges.)
 START_SECTION(charge_selection_qscore_ranks_over_the_per_charge_qscore_map)
 {
   PeakGroup pg = makeEnvelope(12351.39, {12, 13, 14}, 0.94, 10.0f);
@@ -123,7 +124,9 @@ START_SECTION(charge_selection_qscore_ranks_over_the_per_charge_qscore_map)
   AnchorChoice a = pickAnchor(pg, ctx);
 
   TEST_EQUAL(pg.getAllQscores().empty(), true)   // the premise, stated rather than assumed
-  TEST_EQUAL(a.resolved(), false)
+  TEST_EQUAL(a.resolved(), true)
+  TEST_EQUAL(a.charge, 12)
+  TEST_REAL_SIMILAR(a.score, 0.94)
 }
 END_SECTION
 
