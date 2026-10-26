@@ -185,6 +185,10 @@ namespace OpenMS
     Size min_nr_mtraces_ = 3; //  minimum number of mass traces to support feature group
     Size min_nr_charges_ = 2; //  minimum number of consecutive bridges to support feature group
     Size min_nr_peaks_in_mtraces_ = 4; // at least 4 is needed for EGHTraceFitter
+    /// the shortest trace taken: FLASHDeconv masses 3 (for its area; the elution models are fitted on all unique traces of a feature
+    /// together). PXD042169: features filled from FeatureQuantity -11%, SpikeIn ProtMix |log2 error| 0.764 -> 0.739, ProteomeMix human
+    /// 0.306 -> 0.297.
+    Size min_peaks_of_trace_() const { return fd_seeded_ ? 3 : min_nr_peaks_in_mtraces_; }
     bool use_smoothed_intensities_;
 
     /// variables for internal use (not for user input)

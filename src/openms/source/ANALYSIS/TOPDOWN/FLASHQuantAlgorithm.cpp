@@ -2229,7 +2229,7 @@ namespace OpenMS
 
   void FLASHQuantAlgorithm::detectElutionPeaks_(MassTrace& mt, std::vector<MassTrace>& single_mtraces, const ElutionPeakDetection& epd) const
   {
-    if (mt.getSize() < min_nr_peaks_in_mtraces_) return;
+    if (mt.getSize() < min_peaks_of_trace_()) return;
     const int polynomial_order = 3;
     const double scan_time = mt.getAverageMS1CycleTime();
     const auto smooth = [&mt, polynomial_order](Size win_size) {
@@ -2435,7 +2435,7 @@ namespace OpenMS
     {
       for (auto& mt : sub_traces)
       {
-        if (mt.getSize() < min_nr_peaks_in_mtraces_ || mt.getFWHM() == 0) continue;
+        if (mt.getSize() < min_peaks_of_trace_() || mt.getFWHM() == 0) continue;
         FeatureSeed seed(mt, use_smoothed_intensities_);
         seed.setTraceIndex(input_mtraces.size());
         input_seeds.push_back(seed);
