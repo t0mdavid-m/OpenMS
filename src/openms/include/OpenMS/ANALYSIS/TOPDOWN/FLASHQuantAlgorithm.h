@@ -24,7 +24,6 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/KERNEL/MSExperiment.h>
 #include <map>
-#include <tuple>
 #include <memory>
 #include <algorithm>
 #include <fstream>
@@ -93,17 +92,8 @@ namespace OpenMS
     };
     /// the summed bulk area of the raw traces at each target's charges and core isotopes (>= 10% of the most abundant) within 10 ppm
     /// whose apex lies in its window (no resolution of shared traces), and the number of those traces
-    /// the matched traces of a target: area-weighted mean apex (s), area-weighted SD of the apexes (s), area-weighted mean |m/z error| (ppm),
-    /// and co-elution: the area-weighted mean Pearson correlation of each trace's elution profile with the sum of the others (0 for one trace)
-    struct TargetEvidence
-    {
-      double apex = 0, apex_sd = 0, ppm = 0, coelution = 0;
-    };
-    /// @p slot_areas (optional): per target, the area of each (charge, isotope index) slot, in charge then isotope order;
-    /// @p evidence (optional): per target, its TargetEvidence
     void quantifyTargets(const PeakMap& ms1_map, const std::vector<QuantTarget>& targets, const FLASHHelperClasses::PrecalculatedAveragine& avg,
-                         std::vector<MassAbundance>& abundances, std::vector<std::vector<std::tuple<int, int, double>>>* slot_areas = nullptr,
-                         std::vector<TargetEvidence>* evidence = nullptr);
+                         std::vector<MassAbundance>& abundances);
 
     // test purpose
     String output_file_path_;

@@ -2810,8 +2810,7 @@ namespace OpenMS
   }
 
   void FLASHQuantAlgorithm::quantifyTargets(const PeakMap& ms1_map, const std::vector<QuantTarget>& targets,
-                                            const FLASHHelperClasses::PrecalculatedAveragine& avg, std::vector<MassAbundance>& abundances,
-                                            std::vector<std::vector<std::tuple<int, int, double>>>* slot_areas, std::vector<TargetEvidence>* evidence)
+                                            const FLASHHelperClasses::PrecalculatedAveragine& avg, std::vector<MassAbundance>& abundances)
   {
     // per target, the raw traces at the m/z of its charges and core isotopes (>= 10% of the most abundant) within 10 ppm whose apex
     // lies in its retention time window, their bulk areas summed (no resolution of shared traces)
@@ -2826,8 +2825,6 @@ namespace OpenMS
     std::sort(by_mz.begin(), by_mz.end());
     const double charge_mass = FLASHHelperClasses::getChargeMass(true);
     abundances.assign(targets.size(), MassAbundance(.0, 0));
-    if (slot_areas != nullptr) slot_areas->assign(targets.size(), {});
-    if (evidence != nullptr) evidence->assign(targets.size(), TargetEvidence());
 #pragma omp parallel for schedule(dynamic, 64)
     for (SignedSize k = 0; k < (SignedSize)targets.size(); ++k)
     {
@@ -2836,76 +2833,23 @@ namespace OpenMS
       double iso_max = 0;
       for (Size i = 0; i < iso.size(); ++i) iso_max = std::max(iso_max, (double)iso[i].getIntensity());
       std::set<Size> used;
-      std::vector<std::pair<Size, double>> matched; // (trace, area)
-      double area = 0, apex_sum = 0, apex_sq = 0, ppm_sum = 0;
+      double area = 0;
       for (int z = target.min_charge; z <= target.max_charge; ++z)
       {
         for (Size i = 0; i < iso.size(); ++i)
         {
           if (iso[i].getIntensity() < 0.1 * iso_max) continue;
           const double mz = (target.mass + i * iso_da_distance_) / z + charge_mass, tol = mz * 10e-6;
-          double slot = 0;
           for (auto it = std::lower_bound(by_mz.begin(), by_mz.end(), std::make_pair(mz - tol, (Size)0)); it != by_mz.end() && it->first <= mz + tol; ++it)
           {
             const Size t = it->second;
             const double apex = input_mtraces[t].getCentroidRT();
             if (apex < target.rt_start || apex > target.rt_end || !used.insert(t).second) continue;
-            const double a = input_seeds[t].computeBulkPeakArea(use_smoothed_intensities_);
-            matched.emplace_back(t, a);
-            slot += a;
-            apex_sum += a * apex;
-            apex_sq += a * apex * apex;
-            ppm_sum += a * std::abs(it->first - mz) / mz * 1e6;
+            area += input_seeds[t].computeBulkPeakArea(use_smoothed_intensities_);
           }
-          area += slot;
-          if (slot_areas != nullptr) (*slot_areas)[k].emplace_back(z, (int)i, slot);
         }
       }
       abundances[k] = MassAbundance(area, used.size());
-      if (evidence != nullptr && area > 0)
-      {
-        const double mean = apex_sum / area;
-        (*evidence)[k] = {mean, std::sqrt(std::max(0.0, apex_sq / area - mean * mean)), ppm_sum / area, 0.0};
-        if (matched.size() >= 2)
-        {
-          // the elution profiles on the scans the traces cover (smoothed intensities where available), each against the sum of the others
-          std::map<double, Size> scan_of;
-          for (const auto& [t, a] : matched)
-          {
-            for (const auto& p : input_mtraces[t]) scan_of.emplace(p.getRT(), 0);
-          }
-          Size n = 0;
-          for (auto& [rt, idx] : scan_of) idx = n++;
-          std::vector<std::vector<double>> profiles(matched.size(), std::vector<double>(n, 0.0));
-          std::vector<double> total(n, 0.0);
-          for (Size j = 0; j < matched.size(); ++j)
-          {
-            const auto& mt = input_mtraces[matched[j].first];
-            const auto& smoothed = mt.getSmoothedIntensities();
-            for (Size q = 0; q < mt.getSize(); ++q)
-            {
-              const double y = (use_smoothed_intensities_ && smoothed.size() == mt.getSize()) ? smoothed[q] : mt[q].getIntensity();
-              profiles[j][scan_of[mt[q].getRT()]] = y;
-              total[scan_of[mt[q].getRT()]] += y;
-            }
-          }
-          double weighted = 0, weights = 0;
-          for (Size j = 0; j < matched.size(); ++j)
-          {
-            double sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
-            for (Size q = 0; q < n; ++q)
-            {
-              const double x = profiles[j][q], y = total[q] - x;
-              sx += x; sy += y; sxx += x * x; syy += y * y; sxy += x * y;
-            }
-            const double vx = sxx - sx * sx / n, vy = syy - sy * sy / n;
-            const double corr = (vx > 0 && vy > 0) ? (sxy - sx * sy / n) / std::sqrt(vx * vy) : 0.0;
-            weighted += matched[j].second * corr;
-            weights += matched[j].second;
-          }
-          (*evidence)[k].coelution = weights > 0 ? weighted / weights : 0.0;
-        }
-      }
     }
   }
 }
