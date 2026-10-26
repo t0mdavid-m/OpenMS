@@ -12,6 +12,7 @@
 #include <OpenMS/FORMAT/MzMLFile.h>
 #include <QFileInfo>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <fstream>
 #include <map>
@@ -34,8 +35,12 @@ using namespace std;
   consensus feature. A consensus feature detected in at least -min_run_fraction of the runs is measured in every run: the raw mass
   traces at its charges (the median range of its detections) and core isotopes within 10 ppm whose apex lies in its window (the aligned
   apex mapped into the run, +- half its median width), their bulk areas summed. In a run where it was not detected (match between runs),
-  two decoys are measured the same way (mass + 5.5 Da, between the isotopes of the true mass; window 10 min later), and the value is kept
-  when it exceeds -mbr_min_ratio times the larger decoy (else NaN).
+  its score is the cosine of its (charge, isotope) slot areas to the feature's template (its slot pattern where detected), if its matched
+  traces pass three gates set from the detected features: |m/z error| at most twice their median, apex offset at most their 90%
+  quantile, and co-elution (each trace's elution profile against the sum of the others) >= 0.5; else 0. The null: a decoy mass below the
+  envelope by its width + 5 Da (a shift within the envelope, as in bottom-up, falls on the species' own isotopes), measured, gated and
+  scored the same way. The FDR of a score threshold is the number of null scores above it over the number of target
+  scores above it; values whose q-value exceeds -mbr_fdr are NaN.
 */
 
 // We do not want this class to show up in the docu:
@@ -68,13 +73,16 @@ protected:
     registerInputFileList_("in_feature", "<files>", {}, "FLASHDeconv feature tsv files (-out) of the runs, in the order of -in.", true);
     setValidFormats_("in_feature", ListUtils::create<String>("tsv"));
     registerOutputFile_("out", "<file>", "", "Consensus feature tsv: per feature its mass, aligned apex and charges, and per run its abundance, "
-                        "status (detected, mbr, or nan) and, for a match between runs, the ratio of the value to the larger decoy.", true);
+                        "status (detected, mbr, or nan) and, for a match between runs, the cosine of its slot pattern to the template and its q-value.", true);
     setValidFormats_("out", ListUtils::create<String>("tsv"));
     registerDoubleOption_("min_run_fraction", "<fraction>", 0.5, "Consensus features detected in at least this fraction of the runs are quantified in every run.", false);
     setMinFloat_("min_run_fraction", 0.0);
     setMaxFloat_("min_run_fraction", 1.0);
-    registerDoubleOption_("mbr_min_ratio", "<ratio>", 3.0, "Match between runs: a value is kept when it exceeds this many times the larger of its two "
-                          "decoys; 0 keeps every value, a negative value switches match between runs off (NaN where not detected).", false);
+    registerOutputFile_("out_mbr_detail", "<file>", "", "Match between runs, per transfer: the consensus feature, run, value, the cosine to the template, "
+                        "its decoy value and cosine, and the median abundance of the feature where detected.", false, true);
+    setValidFormats_("out_mbr_detail", ListUtils::create<String>("tsv"));
+    registerDoubleOption_("mbr_fdr", "<fdr>", 0.01, "Match between runs: values are kept up to this FDR (target-decoy, see above); 1 keeps every "
+                          "value, a negative value switches match between runs off (NaN where not detected).", false);
   }
 
   /// the FLASHDeconv MS1 features of a feature tsv
@@ -164,7 +172,7 @@ protected:
   {
     const StringList in = getStringList_("in"), in_feature = getStringList_("in_feature");
     const String out = getStringOption_("out");
-    const double min_fraction = getDoubleOption_("min_run_fraction"), mbr_min_ratio = getDoubleOption_("mbr_min_ratio");
+    const double min_fraction = getDoubleOption_("min_run_fraction"), mbr_fdr = getDoubleOption_("mbr_fdr");
     if (in.size() != in_feature.size() || in.empty())
     {
       OPENMS_LOG_ERROR << "-in and -in_feature need the same number of files" << endl;
@@ -221,10 +229,34 @@ protected:
     sd.setParameters(sd_param);
     sd.calculateAveragine(false);
     const auto& avg = sd.getAveragine();
+    // the decoy mass of a feature: below its isotope envelope (core isotopes, >= 10% of the most abundant) by the envelope's width + 5 Da,
+    // so that no isotope of the species at any charge falls on it
+    std::vector<double> decoy_shift(kept.size());
+    for (Size k = 0; k < kept.size(); ++k)
+    {
+      const auto iso = avg.get(summary[k].mass);
+      double iso_max = 0;
+      for (Size i = 0; i < iso.size(); ++i) iso_max = std::max(iso_max, (double)iso[i].getIntensity());
+      int first = -1, last = -1;
+      for (Size i = 0; i < iso.size(); ++i)
+      {
+        if (iso[i].getIntensity() < 0.1 * iso_max) continue;
+        if (first < 0) first = (int)i;
+        last = (int)i;
+      }
+      decoy_shift[k] = (last - first + 1) * Constants::ISOTOPE_MASSDIFF_55K_U + 5.0;
+    }
 
     // every run: the features and, where not detected, their two decoys
     std::vector<std::vector<FLASHQuantAlgorithm::MassAbundance>> value(kept.size(), std::vector<FLASHQuantAlgorithm::MassAbundance>(run_count));
     std::vector<std::vector<double>> ratio(kept.size(), std::vector<double>(run_count, -1));
+    std::vector<std::vector<std::array<double, 2>>> null_cos(kept.size(), std::vector<std::array<double, 2>>(run_count, std::array<double, 2> {0, 0}));
+    // per feature and run: the (charge, isotope) slot areas of the target and, where not detected, of its two decoys
+    using Slots = std::vector<std::tuple<int, int, double>>;
+    std::vector<std::vector<std::array<Slots, 3>>> slot_patterns(kept.size(), std::vector<std::array<Slots, 3>>(run_count)); // (not "slots": a Qt macro)
+    std::vector<std::vector<std::array<double, 3>>> measured(kept.size(), std::vector<std::array<double, 3>>(run_count, std::array<double, 3> {0, 0, 0}));
+    // per feature, run and kind (target, decoy): apex offset and apex SD (in half windows), |m/z error| (ppm) and co-elution of the matched traces
+    std::vector<std::vector<std::array<std::array<double, 4>, 3>>> evidence(kept.size(), std::vector<std::array<std::array<double, 4>, 3>>(run_count));
     for (Size r = 0; r < run_count; ++r)
     {
       MzMLFile mzml;
@@ -234,35 +266,156 @@ protected:
       mzml.load(in[r], map);
       map.sortSpectra(true);
       std::vector<FLASHQuantAlgorithm::QuantTarget> targets;
-      std::vector<std::pair<Size, int>> owner; // (consensus, 0 target / 1 mass decoy / 2 time decoy)
+      std::vector<std::pair<Size, int>> owner; // (consensus, 0 target / 1 mass decoy / 2 time decoy / 3, 4 decoys of the mass decoy)
       for (Size k = 0; k < kept.size(); ++k)
       {
         const auto& s = summary[k];
         const double center = (s.aligned + (anchors[r].empty() ? 0.0 : offset_(anchors[r], s.aligned))) * 60.0, half = s.half * 60.0;
         targets.push_back({s.mass, center - half, center + half, s.zmin, s.zmax});
         owner.emplace_back(k, 0);
-        if (kept[k].runs.count(r) > 0 || mbr_min_ratio < 0) continue;
-        targets.push_back({s.mass + 5.5, center - half, center + half, s.zmin, s.zmax});
-        owner.emplace_back(k, 1);
-        targets.push_back({s.mass, center + 600 - half, center + 600 + half, s.zmin, s.zmax});
-        owner.emplace_back(k, 2);
+        if (kept[k].runs.count(r) == 0 && mbr_fdr >= 0)
+        {
+          targets.push_back({s.mass - decoy_shift[k], center - half, center + half, s.zmin, s.zmax});
+          owner.emplace_back(k, 1);
+        }
       }
       FLASHQuantAlgorithm fq;
       std::vector<FLASHQuantAlgorithm::MassAbundance> abundances;
-      fq.quantifyTargets(map, targets, avg, abundances);
-      std::vector<double> decoy(kept.size(), 0);
+      std::vector<std::vector<std::tuple<int, int, double>>> slot_areas;
+      std::vector<FLASHQuantAlgorithm::TargetEvidence> target_evidence;
+      fq.quantifyTargets(map, targets, avg, abundances, &slot_areas, &target_evidence);
       for (Size t = 0; t < targets.size(); ++t)
       {
         const auto [k, kind] = owner[t];
         if (kind == 0) value[k][r] = abundances[t];
-        else decoy[k] = std::max(decoy[k], abundances[t].first);
-      }
-      for (Size k = 0; k < kept.size(); ++k)
-      {
-        if (kept[k].runs.count(r) > 0) continue;
-        ratio[k][r] = decoy[k] > 0 ? value[k][r].first / decoy[k] : (value[k][r].first > 0 ? std::numeric_limits<double>::infinity() : 0.0);
+        slot_patterns[k][r][kind] = std::move(slot_areas[t]);
+        measured[k][r][kind] = abundances[t].first;
+        const double center = (targets[t].rt_start + targets[t].rt_end) / 2, half = (targets[t].rt_end - targets[t].rt_start) / 2;
+        evidence[k][r][kind] = {std::abs(target_evidence[t].apex - center) / half, target_evidence[t].apex_sd / half, target_evidence[t].ppm,
+                                target_evidence[t].coelution};
       }
       OPENMS_LOG_INFO << "Run " << (r + 1) << " of " << run_count << ": " << targets.size() << " targets measured" << endl;
+    }
+
+    // The template of a feature: its (charge, isotope) slot pattern where detected (the mean of the unit-length slot vectors). A transfer
+    // scores the cosine of its slot pattern to the template; the null: the pattern of its decoy (below the envelope) against the same
+    // template. Random matches do not follow the charge and isotope pattern of the species.
+    std::vector<double> target_scores, null_scores;
+    // Gates on the evidence of the matched traces, from the features where detected (measured the same way): |m/z error| at most twice
+    // the median, apex offset at most the 90% quantile, and co-elution (the isotopes and charges aligned in retention time) >= 0.5. A
+    // decoy passes the same gates; the q-values are over the cosines of those passing (PXD042169: at 1% FDR, ~1.2-1.5k transfers in
+    // SpikeIn and ~0.9k in ProteomeMix instead of none on the cosine alone).
+    double ppm_gate = 0, offset_gate = 0;
+    {
+      std::vector<double> ppms, offsets;
+      for (Size k = 0; k < kept.size(); ++k)
+      {
+        for (Size r = 0; r < run_count; ++r)
+        {
+          if (kept[k].runs.count(r) == 0 || measured[k][r][0] <= 0) continue;
+          offsets.push_back(evidence[k][r][0][0]);
+          ppms.push_back(evidence[k][r][0][2]);
+        }
+      }
+      ppm_gate = 2 * median_(ppms);
+      if (!offsets.empty())
+      {
+        std::sort(offsets.begin(), offsets.end());
+        offset_gate = offsets[(Size)(0.9 * (offsets.size() - 1))];
+      }
+      OPENMS_LOG_INFO << "Match between runs: gates from the detected features: |m/z error| <= " << ppm_gate << " ppm, apex offset <= " << offset_gate
+                      << " half windows, co-elution >= 0.5" << endl;
+    }
+    const auto gated = [&](Size k, Size r, int kind) {
+      const auto& e = evidence[k][r][kind];
+      return measured[k][r][kind] > 0 && e[2] <= ppm_gate && e[0] <= offset_gate && e[3] >= 0.5;
+    };
+    for (Size k = 0; k < kept.size() && mbr_fdr >= 0; ++k)
+    {
+      std::map<std::pair<int, int>, double> tmpl;
+      for (Size r = 0; r < run_count; ++r)
+      {
+        if (kept[k].runs.count(r) == 0) continue;
+        double norm = 0;
+        for (const auto& [z, i, a] : slot_patterns[k][r][0]) norm += a * a;
+        if (norm <= 0) continue;
+        for (const auto& [z, i, a] : slot_patterns[k][r][0]) tmpl[{z, i}] += a / std::sqrt(norm);
+      }
+      double tmpl_norm = 0;
+      for (const auto& [key, a] : tmpl) tmpl_norm += a * a;
+      const auto cosine_to = [&](const Slots& v, const std::map<std::pair<int, int>, double>& with) {
+        double dot = 0, norm = 0;
+        for (const auto& [z, i, a] : v)
+        {
+          norm += a * a;
+          const auto it = with.find({z, i});
+          if (it != with.end()) dot += a * it->second;
+        }
+        return (norm > 0 && tmpl_norm > 0) ? dot / std::sqrt(norm * tmpl_norm) : 0.0;
+      };
+      const auto cosine = [&](const Slots& v) { return cosine_to(v, tmpl); };
+      for (Size r = 0; r < run_count; ++r)
+      {
+        if (kept[k].runs.count(r) > 0) continue;
+        ratio[k][r] = cosine(slot_patterns[k][r][0]);
+        null_cos[k][r] = {cosine(slot_patterns[k][r][1]), 0.0};
+        // the score: the cosine of a transfer that passes the gates, else 0 (never kept)
+        if (!gated(k, r, 0)) ratio[k][r] = 0;
+        if (!gated(k, r, 1)) null_cos[k][r][0] = 0;
+        target_scores.push_back(ratio[k][r]);
+        null_scores.push_back(null_cos[k][r][0]);
+      }
+    }
+    // q-values: the FDR of a threshold T is (null scores >= T) / (target scores >= T) (one null per transfer); the q-value of a
+    // score is the lowest FDR of the thresholds at or below it
+    std::sort(target_scores.begin(), target_scores.end());
+    std::sort(null_scores.begin(), null_scores.end());
+    std::map<double, double> qvalue; // distinct target score -> q-value
+    {
+      double lowest = std::numeric_limits<double>::max();
+      for (Size i = 0; i < target_scores.size(); ++i)
+      {
+        if (i > 0 && target_scores[i] == target_scores[i - 1]) continue;
+        const double t = target_scores[i];
+        const double targets_above = (double)(target_scores.size() - i);
+        const double nulls_above = (double)(null_scores.end() - std::lower_bound(null_scores.begin(), null_scores.end(), t));
+        lowest = std::min(lowest, std::min(1.0, nulls_above / targets_above));
+        qvalue[t] = lowest;
+      }
+    }
+    const auto q_of = [&qvalue](double t) { const auto it = qvalue.find(t); return it == qvalue.end() ? 1.0 : it->second; };
+    double threshold = std::numeric_limits<double>::infinity();
+    for (const auto& [t, q] : qvalue)
+    {
+      if (t > 0 && q <= mbr_fdr) { threshold = t; break; }
+    }
+    if (mbr_fdr >= 0)
+    {
+      const Size null_above = null_scores.end() - std::lower_bound(null_scores.begin(), null_scores.end(), threshold);
+      const Size target_above = target_scores.end() - std::lower_bound(target_scores.begin(), target_scores.end(), threshold);
+      OPENMS_LOG_INFO << "Match between runs: " << target_scores.size() << " transfers; score threshold at FDR " << mbr_fdr << ": " << threshold
+                      << " (targets at or above it " << target_above << ", nulls " << null_above << ")" << endl;
+    }
+
+    const String detail_out = getStringOption_("out_mbr_detail");
+    if (!detail_out.empty())
+    {
+      std::ofstream ds(detail_out);
+      ds << "ConsensusIndex\tRun\tValue\tDecoyValue\tCosine\tDecoyCosine\tDetectedMedian\tApexOffset\tApexSD\tPPM\tCoelution\tDecoyApexOffset\tDecoyApexSD\tDecoyPPM\tDecoyCoelution\n";
+      for (Size k = 0; k < kept.size(); ++k)
+      {
+        std::vector<double> det;
+        for (Size r = 0; r < run_count; ++r) { if (kept[k].runs.count(r) > 0) det.push_back(value[k][r].first); }
+        for (Size r = 0; r < run_count; ++r)
+        {
+          if (kept[k].runs.count(r) > 0) continue;
+          ds << k << "\t" << r << "\t" << std::to_string(measured[k][r][0]) << "\t" << std::to_string(measured[k][r][1])
+             << "\t" << std::to_string(ratio[k][r]) << "\t" << std::to_string(null_cos[k][r][0])
+             << "\t" << std::to_string(median_(det));
+          for (int kind = 0; kind < 2; ++kind) for (double e : evidence[k][r][kind]) ds << "\t" << std::to_string(e);
+          ds << "\n";
+        }
+      }
     }
 
     // output
@@ -270,7 +423,7 @@ protected:
     os << "ConsensusIndex\tMonoisotopicMass\tApexRetentionTime\tMinCharge\tMaxCharge\tDetectedRuns";
     std::vector<String> names;
     for (const auto& f : in) names.push_back(QFileInfo(f.toQString()).completeBaseName());
-    for (const auto& n : names) os << "\tAbundance_" << n << "\tStatus_" << n << "\tMatchRatio_" << n;
+    for (const auto& n : names) os << "\tAbundance_" << n << "\tStatus_" << n << "\tMatchCosine_" << n << "\tMatchQvalue_" << n;
     os << "\n";
     Size mbr_kept = 0, mbr_total = 0;
     for (Size k = 0; k < kept.size(); ++k)
@@ -282,17 +435,19 @@ protected:
         const double v = value[k][r].first;
         if (kept[k].runs.count(r) > 0)
         {
-          os << "\t" << std::to_string(v) << "\tdetected\t";
+          os << "\t" << std::to_string(v) << "\tdetected\t\t";
           continue;
         }
         mbr_total++;
-        const bool ok = mbr_min_ratio >= 0 && v > 0 && ratio[k][r] > mbr_min_ratio;
+        const double q = (mbr_fdr >= 0 && v > 0) ? q_of(ratio[k][r]) : 1.0;
+        const bool ok = mbr_fdr >= 0 && v > 0 && q <= mbr_fdr;
         mbr_kept += ok;
-        os << "\t" << (ok ? std::to_string(v) : String("nan")) << "\t" << (ok ? "mbr" : "nan") << "\t" << (mbr_min_ratio >= 0 ? std::to_string(ratio[k][r]) : String(""));
+        os << "\t" << (ok ? std::to_string(v) : String("nan")) << "\t" << (ok ? "mbr" : "nan") << "\t" << (mbr_fdr >= 0 ? std::to_string(ratio[k][r]) : String(""))
+           << "\t" << (mbr_fdr >= 0 ? std::to_string(q) : String(""));
       }
       os << "\n";
     }
-    OPENMS_LOG_INFO << "Match between runs: " << mbr_kept << " of " << mbr_total << " values kept (ratio to the larger decoy > " << mbr_min_ratio << ")" << endl;
+    OPENMS_LOG_INFO << "Match between runs: " << mbr_kept << " of " << mbr_total << " values kept (q-value <= " << mbr_fdr << ")" << endl;
     return EXECUTION_OK;
   }
 };
