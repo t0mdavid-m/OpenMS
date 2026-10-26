@@ -1460,7 +1460,10 @@ namespace OpenMS
         float nom = 1e-6f * mul_factor + mul_factor * sig_pwr;
         float denom = 1e-6f * mul_factor + chargeNoisePower_((int)c, lazy_noise) + (1 - per_charge_cos_squared) * per_charge_sum_signal_squared_[c];
 
-        per_charge_snr_[c] = denom <= 0 ? .0f : (nom / denom);
+        // A charge with no signal peak has no SNR. Without this the two 1e-6 regularisers cancel and a charge that
+        // updateChargeRange_ passed over (it skips up to two weak charges) scores exactly 1.0, above real charges,
+        // and becomes the representative charge with no peak to isolate.
+        per_charge_snr_[c] = (per_charge_sum_signal_squared_[c] <= 0 || denom <= 0) ? .0f : (nom / denom);
 
         total_denom += (1 - per_charge_cos_squared) * per_charge_sum_signal_squared_[c];
         total_nom += sqrt(sig_pwr);
