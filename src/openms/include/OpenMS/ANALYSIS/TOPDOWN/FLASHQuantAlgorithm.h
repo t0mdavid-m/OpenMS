@@ -74,10 +74,14 @@ namespace OpenMS
       @param avg FLASHDeconv's averagine
       @param mass_abundances out: per deconvolved spectrum (by position), per mass (by position): the abundance of its group
       @param feature_abundances out: per FLASHDeconv feature index: the abundance of its group
+      @param mass_features FLASHDeconv's features: a feature without a raw abundance (no trace of at least 4 peaks, or none left by the
+      resolution of shared traces) gets its FeatureQuantity times the median Abundance / FeatureQuantity of the run's features with both
+      (trace count 0), and its masses with it
     */
     void runFromDeconvolvedMasses(const PeakMap& ms1_map, const std::vector<DeconvolvedSpectrum>& deconvolved_spectra,
                                   const FLASHHelperClasses::PrecalculatedAveragine& avg,
-                                  std::vector<std::vector<MassAbundance>>& mass_abundances, std::map<uint, MassAbundance>& feature_abundances);
+                                  std::vector<std::vector<MassAbundance>>& mass_abundances, std::map<uint, MassAbundance>& feature_abundances,
+                                  const std::vector<FLASHHelperClasses::MassFeature>* mass_features = nullptr);
 
     // test purpose
     String output_file_path_;
@@ -204,7 +208,6 @@ namespace OpenMS
     /// runFromDeconvolvedMasses: every group is kept and keeps its mass (no score filter, no isotope offset correction); a group the
     /// conflict resolution sets aside (all traces shared, or a harmonic) keeps its own traces in fd_set_aside_ and is reported with them
     bool fd_seeded_ = false;
-    bool fd_shared_fit_ = true; ///< with fd_seeded_: a feature without an unshared trace is resolved with a model from its shared traces
     std::vector<FeatureGroup> fd_set_aside_;
 };
 }

@@ -23,6 +23,8 @@
 #include <queue>
 #include <unordered_map>
 #include <unordered_set>
+#include <set>
+#include <tuple>
 
 namespace OpenMS
 {
@@ -1163,7 +1165,7 @@ namespace OpenMS
           break;
         }
       }
-      if (is_this_all_sharing && !(fd_seeded_ && fd_shared_fit_)) // (FLASHDeconv masses: it is resolved with a model from its shared traces)
+      if (is_this_all_sharing)
       {
         fg_idx_to_remove.insert(*fg_idx);
         continue;
@@ -1782,14 +1784,6 @@ namespace OpenMS
 
     if (most_abundant_mt_ptr == nullptr)
     {
-      // FLASHDeconv masses: a mass with an elution in the raw signal gets a share of it, so a feature without any unshared trace takes
-      // its elution model from its shared traces (they are only fitted, not counted as its own)
-      if (fd_seeded_ && fd_shared_fit_ && !feat.shared_traces.empty())
-      {
-        feat.unique_traces = feat.shared_traces;
-        feat.unique_trace_indices = feat.shared_trace_indices;
-        return true;
-      }
       return false;
     }
 
@@ -2330,24 +2324,22 @@ namespace OpenMS
 
   double FLASHQuantAlgorithm::groupQuantity_(const FeatureGroup& fg) const
   {
-    // FLASHDeconv masses: the three largest traces. The sum over all traces (FLASHQuant) falls faster than the amount, as the weak
-    // charges and isotopes drop below detection (PXD042169 SpikeIn, normalized to E. coli: ProtMix |log2 error| 0.77 -> 0.61, E. coli
-    // |log2 ratio| 0.246 -> 0.211, E. coli CV 0.124 -> 0.119)
-    std::vector<double> areas;
+    // the sum over all traces (FLASHQuant). The three largest traces did better on PXD042169 SpikeIn but compressed the ratios of
+    // ProteomeMix (human at 1/5: +0.60 log2), the isotope-scaled estimates raised the CVs.
+    double quantity = .0;
     for (const auto& seed : fg)
     {
       if (seed.getIsotopeIndex() < 0) continue;
-      areas.push_back(seed.computeBulkPeakArea(use_smoothed_intensities_));
+      quantity += seed.computeBulkPeakArea(use_smoothed_intensities_);
     }
-    const Size top = fd_seeded_ ? std::min((Size)3, areas.size()) : areas.size();
-    std::partial_sort(areas.begin(), areas.begin() + top, areas.end(), std::greater<double>());
-    return std::accumulate(areas.begin(), areas.begin() + top, .0);
+    return quantity;
   }
 
   void FLASHQuantAlgorithm::runFromDeconvolvedMasses(const PeakMap& ms1_map, const std::vector<DeconvolvedSpectrum>& deconvolved_spectra,
                                                      const FLASHHelperClasses::PrecalculatedAveragine& avg,
                                                      std::vector<std::vector<MassAbundance>>& mass_abundances,
-                                                     std::map<uint, MassAbundance>& feature_abundances)
+                                                     std::map<uint, MassAbundance>& feature_abundances,
+                                                     const std::vector<FLASHHelperClasses::MassFeature>* mass_features)
   {
     fd_seeded_ = true;
     fd_set_aside_.clear();
@@ -2642,6 +2634,79 @@ namespace OpenMS
       fg.updateMembers(use_smoothed_intensities_);
       features.push_back(fg);
     }
+    // A group of at least two traces also takes the traces no mass claims at the m/z of its charges (+-2) and core isotopes (>= 10% of
+    // the most abundant) within 10 ppm and apex within half its median FWHM of its apex, if no other group wants them: FLASHDeconv
+    // reports fewer peaks per mass at a lower amount (PXD042169: quantified features 936 -> 943 and 873 -> 881, ProtMix |log2 error|
+    // 0.770 -> 0.737). Traces another mass claims are not taken: they made shared traces of most of them.
+    {
+      std::vector<std::pair<double, Size>> by_mz(input_mtraces.size());
+      for (Size t = 0; t < input_mtraces.size(); ++t) by_mz[t] = {input_seeds[t].getCentroidMz(), t};
+      std::sort(by_mz.begin(), by_mz.end());
+      std::vector<char> claimed(input_mtraces.size(), 0);
+      for (const auto& fg : features) for (const auto& seed : fg) claimed[seed.getTraceIndex()] = 1;
+      std::vector<std::vector<std::pair<Size, FeatureSeed>>> wanted(features.size()); // per group: (trace, seed)
+      std::vector<int> claimants(input_mtraces.size(), 0);
+#pragma omp parallel for schedule(dynamic, 64)
+      for (SignedSize f = 0; f < (SignedSize)features.size(); ++f)
+      {
+        const auto& fg = features[f];
+        if (fg.size() < 2) continue;
+        const double mono = groups[fg.getFDGroup()].mono_mass;
+        int zmin = std::numeric_limits<int>::max(), zmax = 0;
+        std::vector<double> fwhms;
+        const FeatureSeed* apex_seed = nullptr;
+        for (const auto& seed : fg)
+        {
+          zmin = std::min(zmin, seed.getCharge());
+          zmax = std::max(zmax, seed.getCharge());
+          fwhms.push_back(seed.getFwhmEnd() - seed.getFwhmStart());
+          if (apex_seed == nullptr || seed.getIntensity() > apex_seed->getIntensity()) apex_seed = &seed;
+        }
+        std::nth_element(fwhms.begin(), fwhms.begin() + fwhms.size() / 2, fwhms.end());
+        const double apex = apex_seed->getMassTrace().getCentroidRT(), half = std::max(1.0, fwhms[fwhms.size() / 2] / 2);
+        const auto iso = iso_model_.get(mono);
+        double iso_max = 0;
+        for (Size k = 0; k < iso.size(); ++k) iso_max = std::max(iso_max, (double)iso[k].getIntensity());
+        for (int z = std::max(1, zmin - 2); z <= zmax + 2; ++z)
+        {
+          for (Size i = 0; i < iso.size(); ++i)
+          {
+            if (iso[i].getIntensity() < 0.1 * iso_max) continue;
+            const double mz = (mono + i * iso_da_distance_) / z + charge_mass, tol = mz * 10e-6;
+            for (auto it = std::lower_bound(by_mz.begin(), by_mz.end(), std::make_pair(mz - tol, (Size)0)); it != by_mz.end() && it->first <= mz + tol; ++it)
+            {
+              const Size t = it->second;
+              if (claimed[t]) continue;
+              if (std::abs(input_mtraces[t].getCentroidRT() - apex) > half) continue;
+              FeatureSeed seed = input_seeds[t];
+              seed.setCharge(z);
+              seed.setIsotopeIndex((int)i);
+              seed.setMass((seed.getCentroidMz() - charge_mass) * z);
+              wanted[f].emplace_back(t, seed);
+#pragma omp atomic
+              claimants[t]++;
+            }
+          }
+        }
+      }
+      Size recruited = 0;
+      for (Size f = 0; f < features.size(); ++f)
+      {
+        bool changed = false;
+        for (auto& [t, seed] : wanted[f])
+        {
+          if (claimants[t] != 1) continue;
+          features[f].push_back(seed);
+          changed = true;
+          recruited++;
+        }
+        if (!changed) continue;
+        features[f].sort();
+        features[f].updateMembersForScoring();
+        features[f].updateMembers(use_smoothed_intensities_);
+      }
+      OPENMS_LOG_INFO << "FLASHQuant from FLASHDeconv masses: " << recruited << " unclaimed traces recruited" << std::endl;
+    }
     OPENMS_LOG_INFO << "FLASHQuant from FLASHDeconv masses: " << input_mtraces.size() << " raw mass traces, " << groups.size() << " mass groups ("
                     << group_of_feature.size() << " features), " << features.size() << " with traces" << std::endl;
 
@@ -2697,9 +2762,41 @@ namespace OpenMS
     {
       feature_abundances[feature_index] = group_abundance[g];
     }
+    // A feature without a raw abundance: its FeatureQuantity on the scale of the raw abundances (PXD042169, every feature quantified as
+    // with FeatureQuantity: SpikeIn ProtMix |log2 error| 0.935 -> 0.764, ProteomeMix human 0.358 -> 0.306, against FeatureQuantity).
+    Size filled = 0;
+    if (mass_features != nullptr)
+    {
+      std::map<uint, double> feature_quantity;
+      std::vector<double> ratios;
+      for (const auto& mf : *mass_features)
+      {
+        if (mf.ms_level != 1 || mf.is_decoy) continue;
+        const double quantity = mf.mt.computePeakArea();
+        feature_quantity[mf.index] = quantity;
+        const auto it = feature_abundances.find(mf.index);
+        if (it != feature_abundances.end() && it->second.first > 0 && quantity > 0) ratios.push_back(it->second.first / quantity);
+      }
+      if (!ratios.empty())
+      {
+        std::nth_element(ratios.begin(), ratios.begin() + ratios.size() / 2, ratios.end());
+        const double scale = ratios[ratios.size() / 2];
+        for (const auto& [feature_index, g] : group_of_feature)
+        {
+          auto& abundance = feature_abundances[feature_index];
+          if (abundance.first > 0) continue; // (NaN or 0)
+          const auto q = feature_quantity.find(feature_index);
+          if (q == feature_quantity.end() || !(q->second > 0)) continue;
+          abundance = MassAbundance(q->second * scale, 0);
+          for (const auto& [si, k] : groups[g].masses) mass_abundances[si][k] = abundance;
+          filled++;
+        }
+      }
+    }
     lap("abundances");
     OPENMS_LOG_INFO << "FLASHQuant from FLASHDeconv masses: " << (groups.size() - without_trace) << " groups with raw traces (" << emptied
-                    << " left without a trace by the resolution of shared traces: 0), " << without_trace << " without (NaN); wall time";
+                    << " left without a trace by the resolution of shared traces: 0), " << without_trace << " without (NaN); " << filled
+                    << " features filled from their FeatureQuantity; wall time";
     for (const auto& [name, seconds] : step_seconds)
     {
       OPENMS_LOG_INFO << " " << name << " " << String::number(seconds, 1) << " s";

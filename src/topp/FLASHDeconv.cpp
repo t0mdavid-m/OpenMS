@@ -136,12 +136,14 @@ protected:
     registerFlag_("quant",
                   "Quantify every MS1 mass from its raw signal (FLASHQuant). Input: the MS1 spectra of -in as loaded, centroided (as for "
                   "FLASHDeconv itself). The deconvolved masses are the starting point: the masses of one feature, or a mass without a feature, "
-                  "take the raw mass traces their peaks lie on (FLASHQuant's mass trace and elution peak detection); traces that several masses "
-                  "share are resolved as in FLASHQuant (elution model and isotope pattern of each mass, non-negative least squares). Output: the "
+                  "take the raw mass traces their peaks lie on (FLASHQuant's mass trace and elution peak detection), and the traces no other mass "
+                  "claims at their other charges and isotopes at their apex; traces that several masses share are resolved as in FLASHQuant (elution model and isotope pattern of each mass, non-negative least squares). Output: the "
                   "columns Abundance and AbundanceTraceCount at the end of the -out feature tsv and of the -out_spec1 tsv (one value per feature, "
                   "and each MS1 mass the value of its feature): FLASHQuant's quantity (area of each trace down to 10% of its apex, summed; "
-                  "intensity x seconds), or, for a mass without a raw trace of at least 4 peaks, its deconvolved intensities times the MS1 cycle "
-                  "time with a trace count of 0. Without the flag, nothing changes: the same masses, features and output files as before.");
+                  "intensity x seconds; AbundanceTraceCount: the traces summed). A feature without a raw trace of at least 4 peaks, or whose traces "
+                  "the resolution gave to other masses, gets its FeatureQuantity on the scale of the run's abundances (trace count 0); a mass "
+                  "without a feature and without a raw trace (a peak seen in one scan) gets NaN. Without the flag, nothing changes: the same "
+                  "masses, features and output files as before.");
 
     registerFlag_("write_detail",
                   "Include detailed peak information (m/z, intensity, charge, isotope index) for each deconvolved mass in the output spectrum tsv files specified by out_spec* options.",
@@ -300,7 +302,7 @@ protected:
       OPENMS_LOG_INFO << "Quantifying the MS1 masses from their raw signal (FLASHQuant) ..." << endl;
       FLASHQuantAlgorithm fq;
       fq.setLogType(log_type_);
-      fq.runFromDeconvolvedMasses(ms1_raw, deconvolved_spectra, fd.getAveragine(), mass_abundances, feature_abundances);
+      fq.runFromDeconvolvedMasses(ms1_raw, deconvolved_spectra, fd.getAveragine(), mass_abundances, feature_abundances, &deconvolved_features);
       ms1_raw.clear(true);
     }
     // collect statistics for information
