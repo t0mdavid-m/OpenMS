@@ -293,8 +293,9 @@ namespace OpenMS
   ///
   /// With no authored set the anchor is the envelope's own, chosen by `charge_selection` (ADR-0059):
   /// Snr is the representative charge (PeakGroup's max-SNR charge) and Qscore the best-qscore charge,
-  /// exactly the two accessors used before the key existed; Intensity and Purity take the first of
-  /// rankCharges over the resolved charges at or above the floor.
+  /// exactly the two accessors used before the key existed, as long as that charge is resolved; Intensity
+  /// and Purity, and Snr/Qscore when the accessor's charge has no measured window, take the first of
+  /// rankCharges over the resolved charges at or above the floor. No resolved charge: NoAnchorResolved.
   inline AnchorChoice pickAnchor(const PeakGroup& pg, const AnchorContext& ctx)
   {
     AnchorChoice out;
@@ -354,24 +355,39 @@ namespace OpenMS
       return out;
     }
 
+    // The resolved charges at or above the floor: the candidates every rule, the notches and the separate set read.
+    std::vector<NotchCandidate> cands = peakGroupNotchCandidates(pg, optimal_window_margin_, ctx.raw);
+    cands.erase(std::remove_if(cands.begin(), cands.end(),
+                               [&ctx](const NotchCandidate& n) { return ctx.min_charge > 0 && n.charge < ctx.min_charge; }),
+                cands.end());
+    if (cands.empty()) { out.reason = AdmissionReason::NoAnchorResolved; return out; }
+
     switch (ctx.charge_selection)
     {
       case ChargeSelection::Snr:
-        out.charge = pg.getRepAbsCharge();
-        out.score  = pg.getQscore();
-        break;
       case ChargeSelection::Qscore:
-        out.charge = pg.getBestQScoreCharge();
-        out.score  = pg.getBestQScore();
+      {
+        // The accessor's charge is the anchor only if it is RESOLVED. A single-peak charge has no measured
+        // window (getMzRange lo == hi) and is absent from the candidates above, yet it can top the per-charge
+        // SNR (no noise peak at that charge); anchoring on it would isolate a charge the rest of selection
+        // treats as absent. Otherwise the rule's first resolved charge, as for Intensity and Purity.
+        const bool snr = ctx.charge_selection == ChargeSelection::Snr;
+        const int accessor = snr ? pg.getRepAbsCharge() : pg.getBestQScoreCharge();
+        const bool resolved = std::any_of(cands.begin(), cands.end(), [accessor](const NotchCandidate& n) { return n.charge == accessor; });
+        if (resolved)
+        {
+          out.charge = accessor;
+          out.score  = snr ? pg.getQscore() : pg.getBestQScore();
+          break;
+        }
+        rankCharges(cands, ctx.charge_selection);
+        out.charge = cands.front().charge;
+        out.score  = cands.front().qscore;   // the anchor's OWN per-charge qscore
         break;
+      }
       case ChargeSelection::Intensity:
       case ChargeSelection::Purity:
       {
-        std::vector<NotchCandidate> cands = peakGroupNotchCandidates(pg, optimal_window_margin_, ctx.raw);
-        cands.erase(std::remove_if(cands.begin(), cands.end(),
-                                   [&ctx](const NotchCandidate& n) { return ctx.min_charge > 0 && n.charge < ctx.min_charge; }),
-                    cands.end());
-        if (cands.empty()) { out.reason = AdmissionReason::NoAnchorResolved; return out; }
         rankCharges(cands, ctx.charge_selection);
         out.charge = cands.front().charge;
         out.score  = cands.front().qscore;   // the anchor's OWN per-charge qscore
