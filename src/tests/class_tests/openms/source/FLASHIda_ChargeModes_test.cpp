@@ -37,6 +37,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <set>
 #include <sstream>
 #include <string>
@@ -320,6 +321,16 @@ namespace
     return cfg;
   }
 
+  // The ida.log target behaviour before FDmerge 1fe5ee0b3e, under its two switches: a target is matched only at a
+  // charge the reference acquired it at and each acquisition uses that charge up (the erase the journal stamps as
+  // LegacyTargetChargeErase), at every retention time (these logs' RTs do not match the fixtures' surveys).
+  std::string withReferenceLogTargets(std::string cfg)
+  {
+    const std::string rt = "\"rt_window\": 180,";
+    cfg.replace(cfg.find(rt), rt.size(), rt + " \"log_target_rt_window\": false, \"log_target_charges\": \"reference\",");
+    return cfg;
+  }
+
   // ---- A survey with more species than slots (CM-12, CM-13) -------------------------------------
   //
   // No committed fixture has one: ms1_standard yields <= 1 selectable mass per scan and ms1_cytc is
@@ -350,6 +361,55 @@ namespace
     pg.setQscore(qscore);
     pg.setRepAbsCharge(z_lo);
     return pg;
+  }
+
+  /// A SPLIT envelope of the wide row's species (ADR-0036): two PeakGroups of mass 12351.3, 0.05 Da apart (one
+  /// nominal mass, both inside the row's +-2 x tolerance window), resolving disjoint named charges 12..14 and
+  /// 15..16. Built rather than deconvolved: since FDmerge c3994ccc9b the deconvolution keeps only the group
+  /// explaining the most signal among those within tolerance, so ms1_cytc no longer yields one. Selected at
+  /// kSplitRt (seconds), inside the row's window.
+  const double kSplitRt = 60.0;
+  std::vector<PeakGroup> splitEnvelope()
+  {
+    const double proton = 1.00727646677;
+    const double iso_gap = 1.00235;
+    auto group = [&](double mono_mass, const std::vector<int>& charges) {
+      PeakGroup pg(charges.front(), charges.back(), true);
+      pg.setMonoisotopicMass(mono_mass);
+      for (int z : charges)
+      {
+        for (int iso = 0; iso < 3; ++iso)
+        {
+          FLASHHelperClasses::LogMzPeak lp;
+          lp.mz = (mono_mass + z * proton + iso * iso_gap) / z;
+          lp.abs_charge = z;
+          pg.push_back(lp);
+        }
+        pg.setChargeSNR(z, 10.0f);
+        pg.setChargeIsotopeCosine(z, 0.99f);
+      }
+      pg.setQscore(0.9);
+      pg.setRepAbsCharge(charges.front());
+      return pg;
+    };
+    return {group(12351.30, {12, 13, 14}), group(12351.35, {15, 16})};
+  }
+
+  /// selectFrom on a fresh selection built from @p cfg, with stdout captured into @p log.
+  int selectSplit(const std::string& cfg, std::unique_ptr<Config>& config, std::unique_ptr<Deconvolution>& deconv,
+                  std::unique_ptr<PrecursorSelection>& ps, std::string& log)
+  {
+    config = std::make_unique<Config>(cfg);
+    deconv = std::make_unique<Deconvolution>(*config, config->toleranceList());
+    ps = std::make_unique<PrecursorSelection>(*config, *deconv);
+    std::ostringstream captured;
+    std::streambuf* const real_cout = std::cout.rdbuf(captured.rdbuf());
+    int n = 0;
+    try { n = FLASHIdaTestAccess::selectFrom(*ps, splitEnvelope(), kSplitRt); }
+    catch (...) { std::cout.rdbuf(real_cout); throw; }
+    std::cout.rdbuf(real_cout);
+    log = captured.str();
+    return n;
   }
 
   /// Six well-separated species, each resolved at charges 8..11, with strictly decreasing qscores so
@@ -676,98 +736,41 @@ END_SECTION
 // bounds it.
 //
 // The discriminator has to be "two charges of one mass in ONE survey", not "the named set completed
-// eventually". Across surveys this fixture's winner varies -- z8..18, then z8..22, then z9,10,11 --
-// so the set is walked to completion with or without sibling admission, and an eventual-completion
-// assertion would pass against the defect. Within a single survey under `single`, a mass reaching
-// two charges is only possible if a second PeakGroup of it was admitted.
+// eventually": within a single survey under `single`, a mass reaching two charges is only possible if a
+// second PeakGroup of it was admitted. The split is synthetic (splitEnvelope): FDmerge's deconvolution
+// no longer leaves one in ms1_cytc.
 //
 // The max_precursors 1 arm pins the other half of the decision: the cap stays HARD, so a sibling is
 // not examined once the loop has ended, and the run says so rather than silently acquiring less.
 START_SECTION(a_split_authored_envelope_is_completed_within_one_survey)
 {
-  auto scans = loadTsvScans(ms1_tsv_path);
-  ABORT_IF(scans.empty())
-
-  std::ostringstream captured;
-  std::streambuf* const real_cout = std::cout.rdbuf(captured.rdbuf());
-  AcqResult roomy, cramped;
-  try
+  std::map<int, std::set<int>> taken;   // max_precursors -> charges of the authored mass in the one survey
+  std::map<int, std::string> logs;
+  for (int cap : {2, 1})
   {
-    const std::string roomy_cfg = cfgFor("single", "inclusion", wide_set_list, /*max_precursors=*/2,
-                                         /*strict_inclusion=*/true);
-    FLASHIda roomy_ida(const_cast<char*>(roomy_cfg.c_str()));
-    roomy = runMode(roomy_ida, scans);
-  }
-  catch (...)
-  {
-    std::cout.rdbuf(real_cout);
-    throw;
-  }
-  const std::string roomy_log = captured.str();
-  captured.str("");
-
-  try
-  {
-    const std::string cramped_cfg = cfgFor("single", "inclusion", wide_set_list, /*max_precursors=*/1,
-                                           /*strict_inclusion=*/true);
-    FLASHIda cramped_ida(const_cast<char*>(cramped_cfg.c_str()));
-    cramped = runMode(cramped_ida, scans);
-  }
-  catch (...)
-  {
-    std::cout.rdbuf(real_cout);
-    throw;
-  }
-  const std::string cramped_log = captured.str();
-  std::cout.rdbuf(real_cout);
-
-  TEST_EQUAL(roomy.ms2_cmds.size() > 0, true)
-  TEST_EQUAL(cramped.ms2_cmds.size() > 0, true)
-
-  // Non-vacuity first: the authored mass must actually have been acquired in both runs, or the
-  // counts below would both be zero and the test would pass having measured nothing.
-  int roomy_surveys_with_the_mass = 0, cramped_surveys_with_the_mass = 0;
-  int roomy_completing_surveys = 0, cramped_completing_surveys = 0;
-  std::set<int> roomy_union;
-
-  for (const auto& kv : chargesPerSurveyMass(roomy, /*with_notches=*/false))
-  {
-    if (kv.first.second != authored_mass) continue;
-    ++roomy_surveys_with_the_mass;
-    roomy_union.insert(kv.second.begin(), kv.second.end());
-    if (kv.second.size() >= 2) ++roomy_completing_surveys;
-  }
-  for (const auto& kv : chargesPerSurveyMass(cramped, /*with_notches=*/false))
-  {
-    if (kv.first.second != authored_mass) continue;
-    ++cramped_surveys_with_the_mass;
-    if (kv.second.size() >= 2) ++cramped_completing_surveys;
+    std::unique_ptr<Config> config;
+    std::unique_ptr<Deconvolution> deconv;
+    std::unique_ptr<PrecursorSelection> ps;
+    const int n = selectSplit(cfgFor("single", "inclusion", wide_set_list, cap, /*strict_inclusion=*/true), config, deconv, ps,
+                              logs[cap]);
+    for (int i = 0; i < n; ++i)
+      if (std::llround(ps->selectedPeakGroups()[i].getMonoMass()) == authored_mass) taken[cap].insert(ps->triggerCharges()[i]);
   }
 
-  TEST_EQUAL(roomy_surveys_with_the_mass > 0, true)
-  TEST_EQUAL(cramped_surveys_with_the_mass > 0, true)
-
-  if (roomy_completing_surveys == 0)
-    std::cout << "[CM-09] no survey acquired mass " << authored_mass << " at >=2 charges -- a "
-              << "sibling PeakGroup was never admitted, so the split envelope was not completed"
-              << std::endl;
-  TEST_EQUAL(roomy_completing_surveys > 0, true)
-
+  // Both PeakGroups contributed a charge: the sibling was admitted and completed part of the named set.
+  TEST_EQUAL(taken[2].size(), 2)
+  TEST_EQUAL(taken[2].count(12) + taken[2].count(13) + taken[2].count(14), 1)
+  TEST_EQUAL(taken[2].count(15) + taken[2].count(16), 1)
   // Everything acquired is a NAMED charge: completion must not become "acquire more".
-  for (int z : roomy_union)
-  {
-    if (wide_charges.count(z) == 0)
-      std::cout << "[CM-09] charge " << z << " is outside the authored set 12..18" << std::endl;
-    TEST_EQUAL(wide_charges.count(z) > 0, true)
-  }
+  for (int z : taken[2]) TEST_EQUAL(wide_charges.count(z) > 0, true)
 
-  // The hard cap: at max_precursors 1 the loop ends on the first species and no sibling is reached.
-  TEST_EQUAL(cramped_completing_surveys, 0)
+  // The hard cap: at max_precursors 1 the loop ends on the first PeakGroup and no sibling is reached.
+  TEST_EQUAL(taken[1].size(), 1)
 
   // ...and it is not silent about it. This is the whole reason the cap was left hard rather than
   // special-cased: the configuration remains legal and unchanged, and the run reports what it cost.
-  TEST_EQUAL(cramped_log.find("reason=budget_exhausted") != std::string::npos, true)
-  TEST_EQUAL(roomy_log.find("reason=budget_exhausted") == std::string::npos, true)
+  TEST_EQUAL(logs[1].find("reason=budget_exhausted") != std::string::npos, true)
+  TEST_EQUAL(logs[2].find("reason=budget_exhausted") == std::string::npos, true)
 }
 END_SECTION
 
@@ -1137,8 +1140,8 @@ START_SECTION(journal_replay_reproduces_in_place_memory)
     {"authored inclusion", cfgFor("single", "inclusion", charge_set_list, 5), &cytc},
     {"in_depth", withTargetLog(cfgFor("single", "in_depth"), target_log_path), &standard},
     {"in_depth cytc", withTargetLog(cfgFor("single", "in_depth"), target_log_path), &cytc},
-    {"legacy inclusion", withTargetLog(cfgFor("single", "inclusion"), target_log_path), &standard},
-    {"legacy inclusion cytc", withTargetLog(cfgFor("single", "inclusion"), cytc_log), &cytc},
+    {"legacy inclusion", withReferenceLogTargets(withTargetLog(cfgFor("single", "inclusion"), target_log_path)), &standard},
+    {"legacy inclusion cytc", withReferenceLogTargets(withTargetLog(cfgFor("single", "inclusion"), cytc_log)), &cytc},
   };
 
   int legacy_erases = 0;
@@ -1260,41 +1263,36 @@ END_SECTION
 
 // ADR-0036: the PeakGroups of one split envelope are ONE Precursor. Their stamps therefore land in one
 // SpeciesStamps, keyed by nominal mass, with every charge the survey acquired across all of them --
-// which is what lets a later push commit the species once.
+// which is what lets a later push commit the species once. The split is synthetic (splitEnvelope).
 START_SECTION(siblings_share_one_species_stamp_set)
 {
-  auto scans = loadTsvScans(ms1_tsv_path);
-  ABORT_IF(scans.empty())
+  std::unique_ptr<Config> config;
+  std::unique_ptr<Deconvolution> deconv;
+  std::unique_ptr<PrecursorSelection> ps;
+  std::string log;
+  const int n = selectSplit(cfgFor("single", "inclusion", wide_set_list, /*max_precursors=*/2, /*strict_inclusion=*/true),
+                            config, deconv, ps, log);
 
-  int surveys_with_siblings = 0;
-  forEachSurvey(cfgFor("single", "inclusion", wide_set_list, /*max_precursors=*/2, /*strict_inclusion=*/true), scans,
-                [&](const Config&, PrecursorSelection& ps, int n, int si) {
-                  // Every acquisition row of the survey, grouped by species.
-                  std::map<int, std::set<int>> charges_by_species;
-                  std::map<int, int> rows_by_species;
-                  for (int i = 0; i < n; ++i)
-                  {
-                    const int nm = SpectralDeconvolution::getNominalMass(ps.selectedPeakGroups()[i].getMonoMass());
-                    charges_by_species[nm].insert(ps.triggerCharges()[i]);
-                    ++rows_by_species[nm];
-                  }
-                  for (const auto& kv : rows_by_species)
-                  {
-                    if (kv.second < 2) continue;  // one PeakGroup: no sibling this survey
-                    ++surveys_with_siblings;
-                    TEST_EQUAL(ps.journal().species.count(kv.first), 1)
-                    const auto it = ps.journal().species.find(kv.first);
-                    if (it == ps.journal().species.end()) continue;
-                    std::set<int> journaled;
-                    for (const auto& pc : it->second.per_charge) journaled.insert(pc.first);
-                    if (journaled != charges_by_species[kv.first])
-                      std::cout << "[JOURNAL] survey=" << si << " nominal=" << kv.first
-                                << ": per_charge does not hold every acquired charge" << std::endl;
-                    TEST_EQUAL(journaled == charges_by_species[kv.first], true)
-                    TEST_EQUAL(it->second.nominal_mass, kv.first)
-                  }
-                });
-  TEST_EQUAL(surveys_with_siblings > 0, true)
+  std::map<int, std::set<int>> charges_by_species;
+  std::map<int, int> rows_by_species;
+  for (int i = 0; i < n; ++i)
+  {
+    const int nm = SpectralDeconvolution::getNominalMass(ps->selectedPeakGroups()[i].getMonoMass());
+    charges_by_species[nm].insert(ps->triggerCharges()[i]);
+    ++rows_by_species[nm];
+  }
+  TEST_EQUAL(rows_by_species.size(), 1)   // one species...
+  ABORT_IF(rows_by_species.size() != 1)
+  const int nominal = rows_by_species.begin()->first;
+  TEST_EQUAL(rows_by_species[nominal], 2) // ...acquired through both of its PeakGroups
+
+  TEST_EQUAL(ps->journal().species.count(nominal), 1)
+  const auto it = ps->journal().species.find(nominal);
+  ABORT_IF(it == ps->journal().species.end())
+  std::set<int> journaled;
+  for (const auto& pc : it->second.per_charge) journaled.insert(pc.first);
+  TEST_EQUAL(journaled == charges_by_species[nominal], true)
+  TEST_EQUAL(it->second.nominal_mass, nominal)
 }
 END_SECTION
 
