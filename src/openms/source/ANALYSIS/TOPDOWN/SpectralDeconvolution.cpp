@@ -82,7 +82,10 @@ namespace OpenMS
       "tol", DoubleList {10.0, 10.0},
       "PPM Tolerance for MS1, 2, ...: Specify the tolerance values in parts per million (ppm) using the this option. For example, -tol 10.0 5.0 sets "
       "the tolerance to 10.0 ppm for MS1 and 5.0 ppm for MS2. "
-      "If a negative value (e.g., -1) is provided, the tolerance will be estimated automatically by a tolerance estimation algorithm.");
+      "If a negative value (e.g., -1) is given for an MS level, its tolerance is determined from the data: spectra of the level are deconvolved at 30 ppm "
+      "(every 64th, then more until 20,000 peak errors or every 4th spectrum), and the tolerance is set so that +-0.8 x tol (the window in which a peak is "
+      "taken) holds 98% of the peak errors of the masses of Qscore >= 0.9, after the random peaks are subtracted (no fit). With fewer than 1,000 errors, "
+      "10 ppm. The determined tolerance is logged.");
 
     defaults_.setValue("min_mass", 50.0, "Minimum mass (Da)");
     defaults_.setValue("max_mass", 100000.0, "Maximum mass (Da)");

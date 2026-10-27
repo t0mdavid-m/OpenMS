@@ -232,9 +232,6 @@ namespace OpenMS
     /// determine tolerance
     void determineTolerance_(const MSExperiment& map, const Param& sd_param, const FLASHHelperClasses::PrecalculatedAveragine& avg, uint ms_level);
 
-    /// get histogram
-    static std::vector<int> getHistogram_(const std::vector<double>& data, double min_range, double max_range, double bin_size);
-
     /// filter low intensity peaks
     static void filterLowPeaks_(MSExperiment& map);
   };
