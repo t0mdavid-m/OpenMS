@@ -808,6 +808,11 @@ set_tests_properties("TOPP_FLASHQuantConsensus_6_out" PROPERTIES DEPENDS "TOPP_F
 add_test("TOPP_FLASHQuantConsensus_7" ${TOPP_BIN_PATH}/FLASHQuantConsensus -test -in ${DATA_DIR_TOPP}/FLASHQuantConsensus_input1.mzML ${DATA_DIR_TOPP}/FLASHQuantConsensus_input2.mzML -in_feature ${DATA_DIR_TOPP}/FLASHQuantConsensus_input1.tsv ${DATA_DIR_TOPP}/FLASHQuantConsensus_input2.tsv -in_id ${DATA_DIR_TOPP}/FLASHQuantConsensus_input1_prsm.tsv ${DATA_DIR_TOPP}/FLASHQuantConsensus_input2_prsm_decoy_hit.tsv -out FLASHQuantConsensus_7.tmp.tsv)
 add_test("TOPP_FLASHQuantConsensus_7_out" ${DIFF} -in1 FLASHQuantConsensus_7.tmp.tsv -in2 ${DATA_DIR_TOPP}/FLASHQuantConsensus_1_output.tsv)
 set_tests_properties("TOPP_FLASHQuantConsensus_7_out" PROPERTIES DEPENDS "TOPP_FLASHQuantConsensus_7")
+# run 2 with every other MS1 scan empty (no peaks): the empty scans are left out of the mass traces and do not break the MBR evidence;
+# the values are those of the full run 2 within 1%
+add_test("TOPP_FLASHQuantConsensus_8" ${TOPP_BIN_PATH}/FLASHQuantConsensus -test -in ${DATA_DIR_TOPP}/FLASHQuantConsensus_input1.mzML ${DATA_DIR_TOPP}/FLASHQuantConsensus_input2_halfempty.mzML -in_feature ${DATA_DIR_TOPP}/FLASHQuantConsensus_input1.tsv ${DATA_DIR_TOPP}/FLASHQuantConsensus_input2.tsv -out FLASHQuantConsensus_8.tmp.tsv)
+add_test("TOPP_FLASHQuantConsensus_8_out" ${DIFF} -in1 FLASHQuantConsensus_8.tmp.tsv -in2 ${DATA_DIR_TOPP}/FLASHQuantConsensus_8_output.tsv)
+set_tests_properties("TOPP_FLASHQuantConsensus_8_out" PROPERTIES DEPENDS "TOPP_FLASHQuantConsensus_8")
 
 #------------------------------------------------------------------------------
 # GNPSExport tests
