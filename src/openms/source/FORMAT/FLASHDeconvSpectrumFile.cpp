@@ -40,6 +40,34 @@ namespace OpenMS
                                  [](const PeakGroup& pg) { return pg.getTargetDecoyType() == PeakGroup::TargetDecoyType::target; });
     }
 
+    /// TopPIC's name of an activation method: TopPIC knows CID, HCD, ETD, ETCID, ETHCD, MPD and UVPD (res/base_data/activation_base.xml
+    /// of TopPIC 2.1) and stops at any other name; ECD gives the c/z-dot ions of ETD, photodissociation those of UVPD, infrared
+    /// multiphoton dissociation those of MPD, the other collisional methods those of CID. Empty if unknown.
+    String topPICActivation_(const Precursor::ActivationMethod method)
+    {
+      switch (method)
+      {
+        case Precursor::ActivationMethod::HCD: return "HCD";
+        case Precursor::ActivationMethod::ETD:
+        case Precursor::ActivationMethod::ECD: return "ETD";
+        case Precursor::ActivationMethod::ETciD: return "ETCID";
+        case Precursor::ActivationMethod::EThcD: return "ETHCD";
+        case Precursor::ActivationMethod::PHD: return "UVPD";
+        case Precursor::ActivationMethod::IMD: return "MPD";
+        case Precursor::ActivationMethod::CID:
+        case Precursor::ActivationMethod::HCID:
+        case Precursor::ActivationMethod::LCID:
+        case Precursor::ActivationMethod::TRAP:
+        case Precursor::ActivationMethod::PQD:
+        case Precursor::ActivationMethod::SID:
+        case Precursor::ActivationMethod::SORI:
+        case Precursor::ActivationMethod::BIRD:
+        case Precursor::ActivationMethod::PSD:
+        case Precursor::ActivationMethod::INSOURCE: return "CID";
+        default: return "";
+      }
+    }
+
     /// the row index of each MS level in the spectrum tsv files (1-based), continued over all calls of the writers
     std::vector<uint>& writerIndices_()
     {
@@ -888,13 +916,14 @@ namespace OpenMS
     {
       return;
     }
+    // the retention time in minutes, as TopPIC reads it (since TopPIC 1.8; seconds gave retention times 60 times too large)
     ss << std::fixed << std::setprecision(2);
     ss << "BEGIN IONS\n"
        << "FILE_NAME=" << filename << "\n"
        << "SPECTRUM_ID=" << dspec.getScanNumber() - 1 << "\n"
        << "TITLE=" << (dspec.isDecoy()? "DScan_" : "Scan_") << dspec.getScanNumber() << "\n"
        << "SCANS=" << dspec.getScanNumber() << "\n"
-       << "RETENTION_TIME=" << dspec.getOriginalSpectrum().getRT() << "\n"
+       << "RETENTION_TIME=" << std::setprecision(4) << dspec.getOriginalSpectrum().getRT() / 60.0 << std::setprecision(2) << "\n"
        << "LEVEL=" << dspec.getOriginalSpectrum().getMSLevel() << "\n";
 
 
@@ -907,9 +936,11 @@ namespace OpenMS
         << "PRECURSOR_WINDOW_BEGIN=" << -dspec.getPrecursor().getIsolationWindowLowerOffset() + dspec.getPrecursor().getMZ() << "\n"
          << "PRECURSOR_WINDOW_END=" << dspec.getPrecursor().getIsolationWindowUpperOffset() + dspec.getPrecursor().getMZ() << "\n";
 
-        if (dspec.getActivationMethod() < Precursor::ActivationMethod::SIZE_OF_ACTIVATIONMETHOD)
+      // TopPIC's activation name (TopPIC stops at a name it does not know, e.g. ECD or EThcD)
+      const String activation = topPICActivation_(dspec.getActivationMethod());
+      if (!activation.empty())
       {
-        ss << "ACTIVATION=" << Precursor::NamesOfActivationMethodShort[dspec.getActivationMethod()] << "\n";
+        ss << "ACTIVATION=" << activation << "\n";
       }
        ss << "PRECURSOR_MZ=" << std::to_string(dspec.getPrecursor().getMZ()) << "\n"
          << "PRECURSOR_CHARGE=" << (int)(dspec.getPrecursorCharge()) << "\n"

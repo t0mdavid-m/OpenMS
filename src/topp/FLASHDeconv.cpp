@@ -110,7 +110,9 @@ protected:
     setValidFormats_("out_msalign1", ListUtils::create<String>("msalign"), false);
 
     registerOutputFile_("out_msalign2", "<file>", "",
-                        "Output msalign (TopFD and ProMex compatible) file for MS2 deconvolved spectra. Ensure filename ends with ms2.msalign for TopPIC GUI compatibility (e.g., result_ms2.msalign; refer to TopPIC input formats).",
+                        "Output msalign (TopFD and ProMex compatible) file for MS2 deconvolved spectra. Ensure filename ends with ms2.msalign for TopPIC GUI compatibility (e.g., result_ms2.msalign; refer to TopPIC input formats). "
+                        "TopPIC (1.8 to 2.1) reads it as TopFD's: run TopPIC with -D (--disable-post-match), since FLASHDeconv writes no TopFD SQLite database, "
+                        "and give -out_feature2 as <name>_ms2.feature next to <name>_ms2.msalign (or run TopPIC with -x).",
                         false, true);
     setValidFormats_("out_msalign2", ListUtils::create<String>("msalign"), false);
 
