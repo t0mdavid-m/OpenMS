@@ -39,8 +39,9 @@ using namespace std;
   traces at its charges (the median range of its detections) and core isotopes within 10 ppm whose apex lies in its window (the aligned
   apex mapped into the run, +- half its median width), their bulk areas summed. In a run where it was not detected (match between runs),
   its mass is looked for in every MS1 scan of the window with FLASHDeconv's peak group scoring (PeakGroup: raw peaks at its charges +- 2,
-  isotope offset search, charge fit, isotope cosine, charge SNR, Qscore; on the spectra as read, without FLASHDeconv's removal of low
-  peaks and its detection limit), kept if its mass stays within the tolerance of the target (or one isotope off), and the scans combined
+  isotope offset search, charge fit, isotope cosine, charge SNR, Qscore; on all peaks of the spectra as read, the noise floored at
+  FLASHDeconv's detection limit of the scan: the weakest peak FLASHDeconv keeps), kept if its mass stays within the tolerance of the
+  target (or one isotope off), and the scans combined
   as FLASHDeconv combines the scans of a feature (Qscore2D: one minus the lowest product of (1 - Qscore) over consecutive scans, so the
   whole envelope must recur scan after scan). The score of the transfer is that Qscore2D if the mass found (intensity-weighted over the
   scans) lies within three times the median mass error of the detected features of the feature's own mass (measured the same way where
@@ -175,10 +176,12 @@ protected:
 
   /// FLASHDeconv's evidence for @p target: in every MS1 scan of its window, the peak group of its mass as FLASHDeconv forms and scores
   /// one (raw peaks recruited at its charges +- 2, isotope offset search, charge fit, isotope cosine >= @p min_cos, charge SNR >= @p min_snr,
-  /// Qscore; on the spectra as read: no removal of low peaks, no detection limit), found if its mass stays within @p tol of the target's (or one isotope off); the scans combined as FLASHDeconv combines the
-  /// scans of a feature (Qscore2D: one minus the lowest product of (1 - Qscore) over consecutive scans)
-  static FDEvidence fdEvidence_(const PeakMap& map, const std::vector<double>& rts, const FLASHQuantAlgorithm::QuantTarget& target,
-                                const FLASHHelperClasses::PrecalculatedAveragine& avg, double tol, double min_cos, double min_snr)
+  /// Qscore; on all peaks of the spectra as read, the noise floored at @p detection_limits per scan), found if its mass stays within @p tol
+  /// of the target's (or one isotope off); the scans combined as FLASHDeconv combines the scans of a feature (Qscore2D: one minus the
+  /// lowest product of (1 - Qscore) over consecutive scans)
+  static FDEvidence fdEvidence_(const PeakMap& map, const std::vector<double>& rts, const std::vector<float>& detection_limits,
+                                const FLASHQuantAlgorithm::QuantTarget& target, const FLASHHelperClasses::PrecalculatedAveragine& avg, double tol,
+                                double min_cos, double min_snr)
   {
     FDEvidence e;
     const double iso = Constants::ISOTOPE_MASSDIFF_55K_U;
@@ -198,6 +201,7 @@ protected:
       }
       PeakGroup pg(z1, z2, positive);
       pg.setIsotopeDaDistance(iso);
+      pg.setDetectionLimit(detection_limits[s]);
       double next = target.mass, prev_cos = 0;
       int offset = 0;
       bool determined = false;
@@ -242,6 +246,35 @@ protected:
     e.qscore2d = 1 - lowest;
     e.ppm = weights > 0 ? ppm_sum / weights : 0;
     return e;
+  }
+
+  /// FLASHDeconv's detection limit of a centroided spectrum: the weakest peak its low-peak filter keeps (above the intensity of the
+  /// 30,000th peak and above 1/1000 of the highest); it floors the noise power of a peak group. The peaks below it are not removed here:
+  /// with them filtered as FLASHDeconv does, PXD042169 kept fewer transfers (SpikeIn 12,252 vs 12,674 with all peaks).
+  static float detectionLimit_(const MSSpectrum& spec)
+  {
+    if (spec.empty()) return 0;
+    std::vector<float> ints;
+    ints.reserve(spec.size());
+    float max_int = 0;
+    for (const auto& p : spec)
+    {
+      ints.push_back(p.getIntensity());
+      max_int = std::max(max_int, p.getIntensity());
+    }
+    double threshold = max_int / 1000.0;
+    const Size count = 30000; // FLASHDeconv's peak count for centroided spectra
+    if (ints.size() > count)
+    {
+      std::nth_element(ints.begin(), ints.begin() + (SignedSize)count, ints.end(), std::greater<float>());
+      threshold = std::max(threshold, (double)ints[count]);
+    }
+    float limit = 0;
+    for (const auto& p : spec)
+    {
+      if (p.getIntensity() > threshold && (limit == 0 || p.getIntensity() < limit)) limit = p.getIntensity();
+    }
+    return limit;
   }
 
   static double median_(std::vector<double> v)
@@ -413,9 +446,14 @@ protected:
       if (mbr_fdr >= 0)
       {
         std::vector<double> rts(map.size());
-        for (Size s = 0; s < map.size(); ++s) rts[s] = map[s].getRT();
+        std::vector<float> limits(map.size());
+        for (Size s = 0; s < map.size(); ++s)
+        {
+          rts[s] = map[s].getRT();
+          limits[s] = detectionLimit_(map[s]);
+        }
 #pragma omp parallel for schedule(dynamic, 16)
-        for (SignedSize t = 0; t < (SignedSize)targets.size(); ++t) evidence[t] = fdEvidence_(map, rts, targets[t], avg, fd_tol, fd_min_cos, fd_min_snr);
+        for (SignedSize t = 0; t < (SignedSize)targets.size(); ++t) evidence[t] = fdEvidence_(map, rts, limits, targets[t], avg, fd_tol, fd_min_cos, fd_min_snr);
       }
       for (Size t = 0; t < targets.size(); ++t)
       {
