@@ -35,16 +35,20 @@ using namespace std;
 
   Input: the MS1 mzML files and the FLASHDeconv feature tsv files (-out) of the runs. The retention times of each run are aligned to the
   first run by the features most runs share; features of the same mass (10 ppm, or one isotope apart) and aligned apex (1 min) form a
-  consensus feature. A consensus feature detected in at least -min_run_fraction of the runs is measured in every run: the raw mass
-  traces at its charges (the median range of its detections) and core isotopes within 10 ppm whose apex lies in its window (the aligned
-  apex mapped into the run, +- half its median width), their bulk areas summed. In a run where it was not detected (match between runs),
+  consensus feature. A consensus feature detected in at least -min_run_fraction of the runs is measured in every run, in its window (the
+  aligned apex mapped into the run, +- half its median width): it is there if a raw mass trace at one of its charges (the median range
+  of its detections) and core isotopes lies within 10 ppm with its apex in the window, and its value is then the raw signal of all those
+  charges and isotopes: per MS1 scan of the window the raw peaks within 5 ppm of them (shifted by the run's mass error), integrated over
+  retention time (within 10 ppm if none is within 5 ppm; the traces' areas if none is within 10 ppm). The same charges and isotopes in
+  every run, whether a weak one has a trace there or not: trace areas lost the weak ones at low amounts and widened ratios. In a run
+  where it was not detected (match between runs),
   its mass is looked for in every MS1 scan of the window with FLASHDeconv's peak group scoring (PeakGroup: raw peaks at its charges +- 2,
   isotope offset search, charge fit, isotope cosine, charge SNR, Qscore; on all peaks of the spectra as read, the noise floored at
   FLASHDeconv's detection limit of the scan: the weakest peak FLASHDeconv keeps), kept if its mass stays within the tolerance of the
   target (or one isotope off), and the scans combined
   as FLASHDeconv combines the scans of a feature (Qscore2D: one minus the lowest product of (1 - Qscore) over consecutive scans, so the
-  whole envelope must recur scan after scan; a scan without peaks is passed over and does not break the run). The score of the transfer is that Qscore2D if the mass found (intensity-weighted over the
-  scans) lies within three times the median mass error of the detected features of the feature's own mass (measured the same way where
+  whole envelope must recur scan after scan; a scan without peaks is passed over and does not break the run). The score of the
+  transfer is that Qscore2D if the mass found (intensity-weighted over the scans) lies within three times the median mass error of the detected features of the feature's own mass (measured the same way where
   it was detected; the feature table's mass if no detected run has evidence; FLASHDeconv's tolerance if no feature has evidence in two
   runs where it was detected), and it has a raw abundance; else 0. The null: a decoy mass
   below the envelope by its width + 5.25 isotopes (a shift within the envelope, as in bottom-up, falls on the species' own isotopes; a

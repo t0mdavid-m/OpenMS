@@ -2937,8 +2937,11 @@ namespace OpenMS
   void FLASHQuantAlgorithm::quantifyTargets(const PeakMap& ms1_map, const std::vector<QuantTarget>& targets,
                                             const FLASHHelperClasses::PrecalculatedAveragine& avg, std::vector<MassAbundance>& abundances)
   {
-    // per target, the raw traces at the m/z of its charges and core isotopes (>= 10% of the most abundant) within 10 ppm whose apex
-    // lies in its retention time window, their bulk areas summed (no resolution of shared traces)
+    // per target, its slots: the m/z of its charges and core isotopes (>= 10% of the most abundant). The raw traces within 10 ppm of a
+    // slot whose apex lies in its retention time window are its traces (their bulk areas summed, no resolution of shared traces); a
+    // target with a trace is there, and its value is the raw signal of all its slots in its window (below). The trace areas counted
+    // only the slots with a trace in that run, which are fewer at low amounts: weak forms lost signal at low amounts, and ratios
+    // widened (PXD042169 SpikeIn, 21429.77 Da at 1/10: log2 error -0.66 by trace areas, -0.38 by the raw signal).
     const bool was_seeded = fd_seeded_;
     fd_seeded_ = true; // the trace detection of FLASHDeconv masses
     std::vector<MassTrace> input_mtraces;
@@ -2949,6 +2952,8 @@ namespace OpenMS
     for (Size t = 0; t < input_mtraces.size(); ++t) by_mz[t] = {input_seeds[t].getCentroidMz(), t};
     std::sort(by_mz.begin(), by_mz.end());
     abundances.assign(targets.size(), MassAbundance(.0, 0));
+    std::vector<std::vector<double>> slot_mzs(targets.size()); // (not "slots": a Qt macro)
+    std::vector<std::vector<std::pair<double, double>>> trace_errors(targets.size()); // per target, (ppm to its slot, area) of its traces
 #pragma omp parallel for schedule(dynamic, 64)
     for (SignedSize k = 0; k < (SignedSize)targets.size(); ++k)
     {
@@ -2967,16 +2972,103 @@ namespace OpenMS
         {
           if (iso[i].getIntensity() < 0.1 * iso_max) continue;
           const double mz = (target.mass + i * iso_da_distance_) / z + charge_mass, tol = mz * 10e-6;
+          slot_mzs[k].push_back(mz);
           for (auto it = std::lower_bound(by_mz.begin(), by_mz.end(), std::make_pair(mz - tol, (Size)0)); it != by_mz.end() && it->first <= mz + tol; ++it)
           {
             const Size t = it->second;
             const double apex = input_mtraces[t].getCentroidRT();
             if (apex < target.rt_start || apex > target.rt_end || !used.insert(t).second) continue;
-            area += input_seeds[t].computeBulkPeakArea(use_smoothed_intensities_);
+            const double trace_area = input_seeds[t].computeBulkPeakArea(use_smoothed_intensities_);
+            area += trace_area;
+            trace_errors[k].emplace_back((it->first - mz) / mz * 1e6, trace_area);
           }
         }
       }
       abundances[k] = MassAbundance(area, used.size());
+    }
+
+    // The raw signal of a target: per MS1 scan of its window (the scans with peaks, as the trace detection), the intensities of the raw
+    // peaks within 5 ppm of its slots summed (each peak once), integrated over retention time (trapezoids, intensity x seconds); within
+    // 10 ppm if none is within 5 ppm, its trace areas if none is within 10 ppm either (off-mass traces of a few small species). 5 ppm
+    // around the slots, shifted by the run's mass error (the area-weighted median error of the traces to their slots), as most of a
+    // species' signal lies within 1-2 ppm; the background of 10 ppm, or of a wider window, compressed ratios (PXD042169 ProteomeMix,
+    // human 0.2:1 to 5:1, slope of the measured ratios 0.97 at 5 ppm, 0.93 at 10 ppm, 0.87 at 10 ppm with 30 s more on both sides;
+    // 0.95 by trace areas).
+    double offset_ppm = 0;
+    {
+      std::vector<std::pair<double, double>> errors;
+      for (const auto& e : trace_errors) errors.insert(errors.end(), e.begin(), e.end());
+      std::sort(errors.begin(), errors.end());
+      double total = 0, cumulative = 0;
+      for (const auto& e : errors) total += e.second;
+      for (const auto& e : errors)
+      {
+        cumulative += e.second;
+        if (cumulative >= total / 2)
+        {
+          offset_ppm = e.first;
+          break;
+        }
+      }
+    }
+    if (std::abs(offset_ppm) > 2)
+    {
+      OPENMS_LOG_WARN << "Warning: FLASHQuant: the traces of the targets lie " << offset_ppm << " ppm off their m/z (the raw signal is taken "
+                      << "5 ppm around the shifted m/z); calibrate the run's m/z if this is a calibration error" << std::endl;
+    }
+    const double noise_int = MassTraceDetection().getDefaults().getValue("noise_threshold_int");
+    std::vector<Size> scans;
+    std::vector<double> scan_rts;
+    for (Size i = 0; i < ms1_map.size(); ++i)
+    {
+      const auto& spec = ms1_map[i];
+      if (spec.getMSLevel() != 1 || std::none_of(spec.begin(), spec.end(), [noise_int](const Peak1D& p) { return p.getIntensity() > noise_int; })) continue;
+      scans.push_back(i);
+      scan_rts.push_back(spec.getRT());
+    }
+    const auto raw_signal = [&](const QuantTarget& target, const std::vector<double>& target_slots, double ppm) {
+      std::vector<std::pair<double, double>> ranges; // the m/z ranges of the slots, overlapping ones merged (a peak is counted once)
+      for (const double slot : target_slots)
+      {
+        const double mz = slot * (1 + offset_ppm * 1e-6);
+        ranges.emplace_back(mz * (1 - ppm * 1e-6), mz * (1 + ppm * 1e-6));
+      }
+      std::sort(ranges.begin(), ranges.end());
+      std::vector<std::pair<double, double>> merged;
+      for (const auto& r : ranges)
+      {
+        if (!merged.empty() && r.first <= merged.back().second) merged.back().second = std::max(merged.back().second, r.second);
+        else merged.push_back(r);
+      }
+      const Size first = std::lower_bound(scan_rts.begin(), scan_rts.end(), target.rt_start) - scan_rts.begin();
+      const Size last = std::upper_bound(scan_rts.begin(), scan_rts.end(), target.rt_end) - scan_rts.begin();
+      double signal = 0, prev = 0;
+      for (Size j = first; j < last; ++j)
+      {
+        const auto& spec = ms1_map[scans[j]];
+        double sum = 0;
+        for (const auto& [lo, hi] : merged)
+        {
+          for (auto it = spec.MZBegin(lo); it != spec.end() && it->getMZ() <= hi; ++it) sum += it->getIntensity();
+        }
+        if (j > first) signal += (prev + sum) / 2 * (scan_rts[j] - scan_rts[j - 1]);
+        prev = sum;
+      }
+      return signal;
+    };
+#pragma omp parallel for schedule(dynamic, 64)
+    for (SignedSize k = 0; k < (SignedSize)targets.size(); ++k)
+    {
+      if (!(abundances[k].first > 0)) continue; // no trace: not there (no value)
+      for (const double ppm : {5.0, 10.0})
+      {
+        const double signal = raw_signal(targets[k], slot_mzs[k], ppm);
+        if (signal > 0)
+        {
+          abundances[k].first = signal;
+          break;
+        }
+      }
     }
   }
 }

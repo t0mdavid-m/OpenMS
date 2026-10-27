@@ -100,8 +100,9 @@ namespace OpenMS
         return positive;
       }
     };
-    /// the summed bulk area of the raw traces at each target's charges and core isotopes (>= 10% of the most abundant) within 10 ppm
-    /// whose apex lies in its window (no resolution of shared traces), and the number of those traces
+    /// per target, its value and the number of its raw traces (at its charges and core isotopes, >= 10% of the most abundant, within
+    /// 10 ppm, apex in its window): with a trace, the raw signal within 5 ppm of all its charges and core isotopes (shifted by the run's
+    /// mass error) integrated over its window (10 ppm, then the traces' bulk areas, if none); without a trace, 0. Centroided spectra.
     void quantifyTargets(const PeakMap& ms1_map, const std::vector<QuantTarget>& targets, const FLASHHelperClasses::PrecalculatedAveragine& avg,
                          std::vector<MassAbundance>& abundances);
 

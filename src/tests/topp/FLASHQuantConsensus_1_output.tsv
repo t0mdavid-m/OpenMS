@@ -1,6 +1,6 @@
 ConsensusIndex	MonoisotopicMass	ApexRetentionTime	MinCharge	MaxCharge	DetectedRuns	Abundance_FLASHQuantConsensus_input1	Status_FLASHQuantConsensus_input1	MatchScore_FLASHQuantConsensus_input1	MatchQvalue_FLASHQuantConsensus_input1	Abundance_FLASHQuantConsensus_input2	Status_FLASHQuantConsensus_input2	MatchScore_FLASHQuantConsensus_input2	MatchQvalue_FLASHQuantConsensus_input2
-0	6123.399457	0.400007	4	8	2	58280705.432874	detected			51112137.299133	detected		
-1	8240.700529	1	5	11	2	25051515.459000	detected			22758435.194595	detected		
-2	10011.198856	1.6	6	15	1	25425593.166260	detected			48326248.237732	mbr	1.000000	0.000000
-3	11873.899898	2.16667	7	16	2	19687342.526184	detected			9830793.749069	detected		
-4	13950.300699	2.73334	8	19	2	34960346.044060	detected			35474240.715256	detected		
+0	6123.399457	0.400007	4	8	2	59732785.796890	detected			58751854.382538	detected		
+1	8240.700529	1	5	11	2	29204665.996002	detected			29217020.525238	detected		
+2	10011.198856	1.6	6	15	1	44640353.652710	detected			89213836.121826	mbr	1.000000	0.000000
+3	11873.899898	2.16667	7	16	2	21801413.461700	detected			10930485.453018	detected		
+4	13950.300699	2.73334	8	19	2	36254571.501434	detected			36321696.731232	detected		
