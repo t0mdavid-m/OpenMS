@@ -2808,26 +2808,37 @@ namespace OpenMS
 
   void FLASHQuantAlgorithm::detectRawTraces_(const PeakMap& ms1_map, std::vector<MassTrace>& input_mtraces, std::vector<FeatureSeed>& input_seeds) const
   {
-    // MassTraceDetection needs at least 3 MS1 spectra (it throws otherwise); with fewer there is no trace, and every mass is without one
-    Size ms1_count = 0;
-    for (const auto& spec : ms1_map) ms1_count += spec.getMSLevel() == 1;
-    if (ms1_count < 3)
-    {
-      OPENMS_LOG_WARN << "Warning: FLASHQuant: " << ms1_count << " MS1 spectra (at least 3 are needed for mass traces): no raw mass traces, no abundances" << std::endl;
-      return;
-    }
     Param p_mtd = MassTraceDetection().getDefaults();
     p_mtd.setValue("chrom_peak_snr", 3.0);
     p_mtd.setValue("mass_error_ppm", 10.0);
     p_mtd.setValue("trace_termination_outliers", 2);
+    // MS1 spectra without a peak above MassTraceDetection's noise threshold are left out: it counts them in a trace's scans but never as
+    // misses, so with every other MS1 scan empty every trace fell below its minimum sample rate (0.5) and none was found
+    const double noise_int = p_mtd.getValue("noise_threshold_int");
+    std::vector<Size> use;
+    Size ms1_count = 0;
+    for (Size i = 0; i < ms1_map.size(); ++i)
+    {
+      if (ms1_map[i].getMSLevel() != 1) continue;
+      ++ms1_count;
+      if (std::any_of(ms1_map[i].begin(), ms1_map[i].end(), [noise_int](const Peak1D& p) { return p.getIntensity() > noise_int; })) use.push_back(i);
+    }
+    // MassTraceDetection needs at least 3 MS1 spectra (it throws otherwise); with fewer there is no trace, and every mass is without one
+    if (use.size() < 3)
+    {
+      OPENMS_LOG_WARN << "Warning: FLASHQuant: " << use.size() << " MS1 spectra with peaks (of " << ms1_count
+                      << "; at least 3 are needed for mass traces): no raw mass traces, no abundances" << std::endl;
+      return;
+    }
+    if (use.size() < ms1_count) OPENMS_LOG_INFO << "FLASHQuant: " << ms1_count - use.size() << " MS1 spectra without peaks left out of the mass traces" << std::endl;
     // The traces are detected in m/z slices in parallel (MassTraceDetection is sequential; 17 s on a lysate run): each slice with 100 ppm
     // of its neighbours on both sides, keeping the traces whose centroid lies in the slice itself. A trace stays within its mass error
     // (10 ppm) of its centroid, so the slices give the traces of the whole map, but for traces seeded differently near a slice border.
     // (MassTraceDetection on the whole map: 986,396 traces; in 64 slices: about as many.)
     std::vector<double> sample_mzs;
-    for (Size i = 0; i < ms1_map.size(); i += std::max((Size)1, ms1_map.size() / 200))
+    for (Size j = 0; j < use.size(); j += std::max((Size)1, use.size() / 200))
     {
-      for (const auto& peak : ms1_map[i]) sample_mzs.push_back(peak.getMZ());
+      for (const auto& peak : ms1_map[use[j]]) sample_mzs.push_back(peak.getMZ());
     }
     std::sort(sample_mzs.begin(), sample_mzs.end());
     // a fixed number of slices, so that the result does not depend on the number of threads (the resolution of shared traces carries
@@ -2840,9 +2851,10 @@ namespace OpenMS
     const auto detect_slice = [&](const int k) {
       const double lo = borders[k], hi = borders[k + 1], lo_margin = lo * (1 - 100e-6), hi_margin = hi * (1 + 100e-6);
       PeakMap slice;
-      slice.reserve(ms1_map.size());
-      for (const auto& spec : ms1_map)
+      slice.reserve(use.size());
+      for (const Size i : use)
       {
+        const auto& spec = ms1_map[i];
         MSSpectrum part;
         static_cast<SpectrumSettings&>(part) = spec;
         part.setRT(spec.getRT());

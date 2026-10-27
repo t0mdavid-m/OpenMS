@@ -43,7 +43,7 @@ using namespace std;
   FLASHDeconv's detection limit of the scan: the weakest peak FLASHDeconv keeps), kept if its mass stays within the tolerance of the
   target (or one isotope off), and the scans combined
   as FLASHDeconv combines the scans of a feature (Qscore2D: one minus the lowest product of (1 - Qscore) over consecutive scans, so the
-  whole envelope must recur scan after scan). The score of the transfer is that Qscore2D if the mass found (intensity-weighted over the
+  whole envelope must recur scan after scan; a scan without peaks is passed over and does not break the run). The score of the transfer is that Qscore2D if the mass found (intensity-weighted over the
   scans) lies within three times the median mass error of the detected features of the feature's own mass (measured the same way where
   it was detected; the feature table's mass if no detected run has evidence; FLASHDeconv's tolerance if no feature has evidence in two
   runs where it was detected), and it has a raw abundance; else 0. The null: a decoy mass
@@ -53,7 +53,8 @@ using namespace std;
   scored the same way. The FDR of a score threshold is the number of null scores at or above it over the number of target scores at or
   above it; values whose q-value exceeds -mbr_fdr are NaN. A detected run without raw abundance (no trace in its window) is NaN too.
   Ion mode: that of the features (negative charges: negative mode, m/z = mass / charge - proton mass); the feature files of one call must
-  share it. A run with fewer than 3 MS1 spectra has no mass traces: its values are NaN (with a warning).
+  share it. A run with fewer than 3 MS1 spectra with peaks has no mass traces: its values are NaN (with a warning); MS1 spectra without
+  peaks (e.g. every other scan) are left out of the mass traces.
   Identifications (-in_id, optional): FLASHTnT PrSMs of the runs. They mark the transfers whose values are as reliable as detected
   ones (status mbr_id); they add few values. A transfer with a raw abundance whose run identifies its mass in its window (within three
   times the median mass error of the identifications of the detected features; FLASHDeconv's tolerance if none is identified) is
@@ -271,11 +272,9 @@ protected:
     for (Size s = std::lower_bound(rts.begin(), rts.end(), target.rt_start) - rts.begin(); s < map.size() && rts[s] <= target.rt_end; ++s)
     {
       const MSSpectrum& spec = map[s];
-      if (spec.empty()) // no peaks: the mass is not found in this scan
-      {
-        in_chain = false;
-        continue;
-      }
+      // no peaks: the scan is passed over and does not break the run of consecutive scans, as FLASHDeconv's feature tracing passes over
+      // the scans without masses
+      if (spec.empty()) continue;
       PeakGroup pg(z1, z2, positive);
       pg.setIsotopeDaDistance(iso);
       pg.setDetectionLimit(detection_limits[s]);

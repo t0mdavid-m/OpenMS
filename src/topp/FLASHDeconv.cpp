@@ -144,7 +144,8 @@ protected:
                   "the resolution gave to other masses, gets its FeatureQuantity on the scale of the run's abundances (trace count 0; NaN when "
                   "no feature of the run has a raw abundance to set the scale); a mass "
                   "without a feature and without a raw trace (a peak seen in one scan) gets NaN. Either ion mode (that of the masses). With "
-                  "fewer than 3 MS1 spectra there are no raw traces: every Abundance is NaN (with a warning). Without the flag, nothing changes: "
+                  "fewer than 3 MS1 spectra with peaks there are no raw traces: every Abundance is NaN (with a warning); MS1 spectra without peaks "
+                  "(e.g. every other scan) are left out of the mass traces. Without the flag, nothing changes: "
                   "the same masses, features and output files as before.");
 
     registerFlag_("write_detail",
