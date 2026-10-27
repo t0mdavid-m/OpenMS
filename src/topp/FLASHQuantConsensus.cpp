@@ -57,7 +57,9 @@ using namespace std;
   Identifications (-in_id, optional): FLASHTnT PrSMs of the runs. A transfer whose run identifies its mass in its window (within three
   times the median mass error of the identifications of the detected features) scores 2, above any Qscore2D (an MS2 identification is
   evidence that FLASHDeconv's MS1 scoring may miss). Its decoy mass is matched the same way and scores 2 when identified, so the
-  identifications that fit a mass by chance count as nulls in the FDR like the others.
+  identifications that fit a mass by chance count as nulls in the FDR like the others. Such a transfer has the status mbr_id; its value
+  is as exact as a detected one (PXD042169 SpikeIn, E. coli transfers off by more than 2-fold: mbr_id 2.5%, mbr 19%, detected 11%).
+  -mbr_min_score keeps only the mbr transfers of at least that Qscore2D.
 */
 
 // We do not want this class to show up in the docu:
@@ -91,8 +93,8 @@ protected:
     setValidFormats_("in_feature", ListUtils::create<String>("tsv"));
     registerOutputFile_("out", "<file>", "", "Consensus feature tsv: per feature its mass, aligned apex and charges, and per run (named by the base name of its "
                         "-in file; a name two inputs share gets the run's position appended, _1, _2, ...) its abundance, "
-                        "status (detected, mbr, or nan) and, for a match between runs, its score (FLASHDeconv's Qscore2D of the mass, see above; 2 if "
-                        "the run identifies it, -in_id) and q-value.", true);
+                        "status (detected; mbr: a match between runs; mbr_id: one the run identifies, -in_id; or nan) and, for a match between "
+                        "runs, its score (FLASHDeconv's Qscore2D of the mass, see above; 2 if the run identifies it) and q-value.", true);
     setValidFormats_("out", ListUtils::create<String>("tsv"));
     registerDoubleOption_("min_run_fraction", "<fraction>", 0.25, "Consensus features detected in at least this fraction of the runs are quantified in every run "
                           "(where not detected, by match between runs at -mbr_fdr). Lower values quantify more features, but their many weak transfers "
@@ -116,6 +118,12 @@ protected:
                            "between runs like the other nulls. Needs FLASHTnT's q-values (a database with decoys). Without it, nothing changes.", false);
     setValidFormats_("in_id", ListUtils::create<String>("tsv"));
     registerDoubleOption_("id_fdr", "<q-value>", 0.01, "With -in_id: the PrSMs used, by their proteoform-level q-value.", false);
+    registerDoubleOption_("mbr_min_score", "<score>", 0.0, "Match between runs: transfers not identified in their run (status mbr) are kept only with a "
+                          "score (Qscore2D) at least this, besides -mbr_fdr; identified ones (mbr_id) always pass. The FDR says that the mass is "
+                          "there, not how exact the value is: PXD042169 SpikeIn, E. coli transfers off by more than 2-fold: identified 2.5%, "
+                          "Qscore2D >= 0.95 17%, < 0.95 25% (detected values 11%); 0.5 / 0.8 / 0.95 kept 95 / 81 / 65% of the transfers.", false);
+    setMinFloat_("mbr_min_score", 0.0);
+    setMaxFloat_("mbr_min_score", 1.0);
     setMinFloat_("id_fdr", 0.0);
     setMaxFloat_("id_fdr", 1.0);
   }
@@ -367,7 +375,7 @@ protected:
   {
     const StringList in = getStringList_("in"), in_feature = getStringList_("in_feature");
     const String out = getStringOption_("out");
-    const double min_fraction = getDoubleOption_("min_run_fraction"), mbr_fdr = getDoubleOption_("mbr_fdr");
+    const double min_fraction = getDoubleOption_("min_run_fraction"), mbr_fdr = getDoubleOption_("mbr_fdr"), mbr_min_score = getDoubleOption_("mbr_min_score");
     if (in.size() != in_feature.size() || in.empty())
     {
       OPENMS_LOG_ERROR << "-in and -in_feature need the same number of files" << endl;
@@ -752,7 +760,7 @@ protected:
     }
     for (const auto& n : names) os << "\tAbundance_" << n << "\tStatus_" << n << "\tMatchScore_" << n << "\tMatchQvalue_" << n;
     os << "\n";
-    Size mbr_kept = 0, mbr_total = 0;
+    Size mbr_kept = 0, mbr_total = 0, mbr_id_kept = 0;
     for (Size k = 0; k < kept.size(); ++k)
     {
       const auto& s = summary[k];
@@ -767,14 +775,18 @@ protected:
         }
         mbr_total++;
         const double q = (mbr_fdr >= 0 && v > 0) ? q_of(score[k][r]) : 1.0;
-        const bool ok = mbr_fdr >= 0 && v > 0 && q <= mbr_fdr;
+        const bool id = identified[k][r][0] && score[k][r] >= 2.0;
+        const bool ok = mbr_fdr >= 0 && v > 0 && q <= mbr_fdr && (id || score[k][r] >= mbr_min_score);
         mbr_kept += ok;
-        os << "\t" << (ok ? std::to_string(v) : String("nan")) << "\t" << (ok ? "mbr" : "nan") << "\t" << (mbr_fdr >= 0 ? std::to_string(score[k][r]) : String(""))
+        mbr_id_kept += ok && id;
+        os << "\t" << (ok ? std::to_string(v) : String("nan")) << "\t" << (ok ? (id ? "mbr_id" : "mbr") : "nan") << "\t" << (mbr_fdr >= 0 ? std::to_string(score[k][r]) : String(""))
            << "\t" << (mbr_fdr >= 0 ? std::to_string(q) : String(""));
       }
       os << "\n";
     }
-    OPENMS_LOG_INFO << "Match between runs: " << mbr_kept << " of " << mbr_total << " values kept (q-value <= " << mbr_fdr << ")" << endl;
+    OPENMS_LOG_INFO << "Match between runs: " << mbr_kept << " of " << mbr_total << " values kept (q-value <= " << mbr_fdr
+                    << (mbr_min_score > 0 ? String(", score >= ") + String(mbr_min_score) + " unless identified" : String("")) << ")"
+                    << (in_id.empty() ? String("") : String(", identified in their run (mbr_id) ") + String(mbr_id_kept)) << endl;
     return EXECUTION_OK;
   }
 };
