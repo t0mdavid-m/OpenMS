@@ -54,16 +54,20 @@ using namespace std;
   above it; values whose q-value exceeds -mbr_fdr are NaN. A detected run without raw abundance (no trace in its window) is NaN too.
   Ion mode: that of the features (negative charges: negative mode, m/z = mass / charge - proton mass); the feature files of one call must
   share it. A run with fewer than 3 MS1 spectra has no mass traces: its values are NaN (with a warning).
-  Identifications (-in_id, optional): FLASHTnT PrSMs of the runs. A transfer with a raw abundance whose run identifies its mass in its
-  window (within three times the median mass error of the identifications of the detected features; FLASHDeconv's tolerance if none
-  is identified) is identified (an MS2 identification is evidence that FLASHDeconv's MS1 scoring may miss). The identified transfers
-  have an FDR of their own: the decoy masses the runs identify the same way (of all the transfers) over the identified transfers.
-  Within -mbr_fdr, they are kept with the status mbr_id, whatever FLASHDeconv's evidence, and leave the targets of the other
-  transfers; else they are judged like the others. The other transfers are judged by FLASHDeconv's evidence against all the decoys,
-  as without identifications but without the identified transfers among their targets: their q-values are never lower than without
-  identifications (at a strict -mbr_fdr, a few fewer pass), so the identifications never let another transfer through. The value of
-  an mbr_id transfer is as exact as a detected one (PXD042169 SpikeIn, E. coli transfers off by more than 2-fold: mbr_id 2.5%, mbr
-  19%, detected 11%). -mbr_min_score keeps only the mbr transfers of at least that Qscore2D.
+  Identifications (-in_id, optional): FLASHTnT PrSMs of the runs. They mark the transfers whose values are as reliable as detected
+  ones (status mbr_id); they add few values. A transfer with a raw abundance whose run identifies its mass in its window (within three
+  times the median mass error of the identifications of the detected features; FLASHDeconv's tolerance if none is identified) is
+  identified. The identified transfers have an FDR of their own: the decoy masses the runs identify the same way (of all the transfers)
+  over the identified transfers. Within -mbr_fdr, they are kept with the status mbr_id, whatever FLASHDeconv's evidence, and leave the
+  targets of the other transfers; else they are judged like the others. The other transfers are judged by FLASHDeconv's evidence
+  against all the decoys, as without identifications but without the identified transfers among their targets: their q-values are
+  never lower than without identifications (at a strict -mbr_fdr, a few fewer pass), so the identifications never let another
+  transfer through. What they give (PXD042169, -mbr_fdr 0.01): MS2 is acquired and identified on strong signals, which FLASHDeconv's
+  evidence finds too (94-95% of the identified transfers are kept without identifications), so the kept values grow by 0.3-0.4%
+  (SpikeIn 19601 -> 19676, ProteomeMix 13739 -> 13780); a looser gate (10 ppm, 3 min) would add at most 1-2% more, a quarter to half
+  of them chance matches. But an mbr_id value is as exact as a detected one (SpikeIn, E. coli transfers off by more than 2-fold:
+  mbr_id 2.5%, mbr 19%, detected 11%), where a score cut barely helps (mbr of Qscore2D >= 0.95: 17%); mbr_id is 6% of the kept
+  transfers. It costs a FLASHTnT search of every run. -mbr_min_score keeps only the mbr transfers of at least that Qscore2D.
 */
 
 // We do not want this class to show up in the docu:
@@ -115,20 +119,22 @@ protected:
     setValidFormats_("out_mbr_detail", ListUtils::create<String>("tsv"));
     registerDoubleOption_("mbr_fdr", "<fdr>", 0.01, "Match between runs: values are kept up to this FDR (target-decoy, see above); 1 keeps every "
                           "value, a negative value switches match between runs off (NaN where not detected).", false);
-    registerInputFileList_("in_id", "<files>", {}, "Optional: FLASHTnT PrSM tsv files (-out_prsm) of the runs, in the order of -in. A transfer whose run "
-                           "identifies its mass (a PrSM in its window: target protein, not a decoy precursor, proteoform q-value <= -id_fdr; its "
+    registerInputFileList_("in_id", "<files>", {}, "Optional: FLASHTnT PrSM tsv files (-out_prsm) of the runs, in the order of -in. They mark the "
+                           "transfers whose values are as reliable as detected ones (status mbr_id) and add few values (see above; PXD042169: "
+                           "+0.3-0.4% values, as 94-95% of the identified transfers pass on FLASHDeconv's evidence anyway; transfers off by more "
+                           "than 2-fold: mbr_id 2.5%, mbr 19%, detected 11%). A transfer whose run identifies its mass (a PrSM in its window: target protein, not a decoy precursor, proteoform q-value <= -id_fdr; its "
                            "precursor mass equal to the transfer's, or one isotope off, within three times the median error of the identifications "
                            "of the features where detected; FLASHDeconv's tolerance if none is identified) and with a raw abundance is kept "
                            "with the status mbr_id, whatever FLASHDeconv's evidence, if the identified transfers pass -mbr_fdr as a class: the "
                            "decoy masses identified the same way over the identified transfers; else they are judged like the others. The "
                            "other transfers are judged by FLASHDeconv's evidence without the kept identified ones among their targets: their "
-                           "q-values are never lower than without identifications. Needs FLASHTnT's q-values (a database with decoys). "
-                           "Without it, nothing changes.", false);
+                           "q-values are never lower than without identifications. Needs a FLASHTnT search of every run, with q-values (a "
+                           "database with decoys). Without it, nothing changes.", false);
     setValidFormats_("in_id", ListUtils::create<String>("tsv"));
     registerDoubleOption_("id_fdr", "<q-value>", 0.01, "With -in_id: the PrSMs used, by their proteoform-level q-value.", false);
     registerDoubleOption_("mbr_min_score", "<score>", 0.0, "Match between runs: transfers other than mbr_id (status mbr) are kept only with a "
                           "score (Qscore2D) at least this, besides -mbr_fdr; mbr_id ones always pass. The FDR says that the mass is "
-                          "there, not how exact the value is: PXD042169 SpikeIn, E. coli transfers off by more than 2-fold: identified 2.5%, "
+                          "there, not how exact the value is: PXD042169 SpikeIn, E. coli transfers off by more than 2-fold: mbr_id 2.5%, "
                           "Qscore2D >= 0.95 17%, < 0.95 25% (detected values 11%); 0.5 / 0.8 / 0.95 kept 95 / 81 / 65% of the transfers.", false);
     setMinFloat_("mbr_min_score", 0.0);
     setMaxFloat_("mbr_min_score", 1.0);
