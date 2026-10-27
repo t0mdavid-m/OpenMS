@@ -47,11 +47,17 @@ using namespace std;
   scans) lies within three times the median mass error of the detected features of the feature's own mass (measured the same way where
   it was detected; the feature table's mass if no detected run has evidence; FLASHDeconv's tolerance if no feature has evidence in two
   runs where it was detected), and it has a raw abundance; else 0. The null: a decoy mass
-  below the envelope by its width + 5 Da (a shift within the envelope, as in bottom-up, falls on the species' own isotopes), measured and
+  below the envelope by its width + 5.25 isotopes (a shift within the envelope, as in bottom-up, falls on the species' own isotopes; a
+  whole number of isotopes below it, on its other forms: oxidized, methylated, ammonia or water lost, all near whole daltons; half an
+  isotope off still collects signal; a quarter collects the least), measured and
   scored the same way. The FDR of a score threshold is the number of null scores at or above it over the number of target scores at or
   above it; values whose q-value exceeds -mbr_fdr are NaN. A detected run without raw abundance (no trace in its window) is NaN too.
   Ion mode: that of the features (negative charges: negative mode, m/z = mass / charge - proton mass); the feature files of one call must
   share it. A run with fewer than 3 MS1 spectra has no mass traces: its values are NaN (with a warning).
+  Identifications (-in_id, optional): FLASHTnT PrSMs of the runs. A transfer whose run identifies its mass in its window (within three
+  times the median mass error of the identifications of the detected features) scores 2, above any Qscore2D (an MS2 identification is
+  evidence that FLASHDeconv's MS1 scoring may miss). Its decoy mass is matched the same way and scores 2 when identified, so the
+  identifications that fit a mass by chance count as nulls in the FDR like the others.
 */
 
 // We do not want this class to show up in the docu:
@@ -85,7 +91,8 @@ protected:
     setValidFormats_("in_feature", ListUtils::create<String>("tsv"));
     registerOutputFile_("out", "<file>", "", "Consensus feature tsv: per feature its mass, aligned apex and charges, and per run (named by the base name of its "
                         "-in file; a name two inputs share gets the run's position appended, _1, _2, ...) its abundance, "
-                        "status (detected, mbr, or nan) and, for a match between runs, its score (FLASHDeconv's Qscore2D of the mass, see above) and q-value.", true);
+                        "status (detected, mbr, or nan) and, for a match between runs, its score (FLASHDeconv's Qscore2D of the mass, see above; 2 if "
+                        "the run identifies it, -in_id) and q-value.", true);
     setValidFormats_("out", ListUtils::create<String>("tsv"));
     registerDoubleOption_("min_run_fraction", "<fraction>", 0.25, "Consensus features detected in at least this fraction of the runs are quantified in every run "
                           "(where not detected, by match between runs at -mbr_fdr). Lower values quantify more features, but their many weak transfers "
@@ -96,10 +103,58 @@ protected:
     registerOutputFile_("out_mbr_detail", "<file>", "", "Match between runs, per consensus feature and run (detected or transfer): the value, FLASHDeconv's "
                         "evidence for the mass (Qscore2D, best scan Qscore, scans found, mass error), the same for its decoy where not detected, "
                         "the feature's own mass error where detected (the reference of the mass errors) and its median abundance where detected; "
-                        "fields not computed (no evidence with -mbr_fdr < 0, no decoy for a detected run) are empty.", false, true);
+                        "fields not computed (no evidence with -mbr_fdr < 0, no decoy for a detected run) are empty. With -in_id, also whether the "
+                        "run identifies the mass (Identified) and the decoy mass (DecoyIdentified) of a transfer.", false, true);
     setValidFormats_("out_mbr_detail", ListUtils::create<String>("tsv"));
     registerDoubleOption_("mbr_fdr", "<fdr>", 0.01, "Match between runs: values are kept up to this FDR (target-decoy, see above); 1 keeps every "
                           "value, a negative value switches match between runs off (NaN where not detected).", false);
+    registerInputFileList_("in_id", "<files>", {}, "Optional: FLASHTnT PrSM tsv files (-out_prsm) of the runs, in the order of -in. A transfer whose run "
+                           "identifies its mass (a PrSM in its window: target protein, not a decoy precursor, proteoform q-value <= -id_fdr; its "
+                           "precursor mass equal to the transfer's, or one isotope off, within three times the median error of the identifications "
+                           "of the features where detected) scores 2, above any Qscore2D, whatever FLASHDeconv's evidence. Its decoy mass is "
+                           "matched the same way and scores 2 when identified, so identifications that fit by chance enter the FDR of the match "
+                           "between runs like the other nulls. Needs FLASHTnT's q-values (a database with decoys). Without it, nothing changes.", false);
+    setValidFormats_("in_id", ListUtils::create<String>("tsv"));
+    registerDoubleOption_("id_fdr", "<q-value>", 0.01, "With -in_id: the PrSMs used, by their proteoform-level q-value.", false);
+    setMinFloat_("id_fdr", 0.0);
+    setMaxFloat_("id_fdr", 1.0);
+  }
+
+  /// the identified masses of a FLASHTnT PrSM tsv, (retention time in s, mass), by retention time: target PrSMs (no DECOY accession, no
+  /// decoy precursor) whose proteoform-level q-value is at most @p id_fdr (-1, a q-value not computed, is not used; counted in
+  /// @p without_q); the mass is the precursor mass FLASHDeconv measured (the proteoform mass when there is none)
+  std::vector<std::pair<double, double>> readIdentifications_(const String& file, double id_fdr, Size& without_q) const
+  {
+    without_q = 0;
+    std::ifstream in(file);
+    std::string line;
+    std::getline(in, line);
+    std::vector<String> header;
+    String(line).split('\t', header);
+    std::map<String, Size> col;
+    for (Size i = 0; i < header.size(); ++i) col[header[i].trim()] = i;
+    for (const String& c : {"RetentionTime", "ProteinAccession", "PrecursorMass", "ProteoformMass", "ProteoformLevelQvalue"})
+    {
+      if (col.find(c) == col.end()) throw Exception::ParseError(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, file, String("no column ") + c);
+    }
+    const auto decoy_weight = col.find("DecoyPrecursorWeight");
+    std::vector<std::pair<double, double>> ids;
+    while (std::getline(in, line))
+    {
+      std::vector<String> v;
+      String(line).split('\t', v);
+      if (v.size() < header.size() || v[col["ProteinAccession"]].hasSubstring("DECOY")) continue;
+      // a decoy precursor PrSM keeps its target protein's accession (FLASHTnT -tnt:decoy_precursor with -tnt:keep_decoy)
+      if (decoy_weight != col.end() && !v[decoy_weight->second].trim().empty() && v[decoy_weight->second].toDouble() != 0) continue;
+      const double q = v[col["ProteoformLevelQvalue"]].trim().toDouble();
+      if (q < 0) { ++without_q; continue; }
+      if (q > id_fdr) continue;
+      double mass = v[col["PrecursorMass"]].toDouble();
+      if (!(mass > 0)) mass = v[col["ProteoformMass"]].toDouble();
+      if (mass > 0) ids.emplace_back(v[col["RetentionTime"]].toDouble(), mass);
+    }
+    std::sort(ids.begin(), ids.end());
+    return ids;
   }
 
   /// the FLASHDeconv MS1 features of a feature tsv, and in @p source the mzML it was made from (its FileName column; empty without rows)
@@ -318,6 +373,12 @@ protected:
       OPENMS_LOG_ERROR << "-in and -in_feature need the same number of files" << endl;
       return ILLEGAL_PARAMETERS;
     }
+    const StringList in_id = getStringList_("in_id");
+    if (!in_id.empty() && in_id.size() != in.size())
+    {
+      OPENMS_LOG_ERROR << "-in_id needs one file per run (as -in), or none" << endl;
+      return ILLEGAL_PARAMETERS;
+    }
     const Size run_count = in.size();
     std::vector<std::vector<Feature>> runs(run_count);
     bool positive_mode = false, negative_mode = false;
@@ -392,8 +453,11 @@ protected:
     // FLASHDeconv's MS1 tolerance, minimum isotope cosine and minimum charge SNR (its defaults)
     const double fd_tol = sd_param.getValue("tol").toDoubleVector()[0] * 1e-6, fd_min_cos = sd_param.getValue("min_cos").toDoubleVector()[0],
                  fd_min_snr = sd_param.getValue("min_snr").toDoubleVector()[0];
-    // the decoy mass of a feature: below its isotope envelope (core isotopes, >= 10% of the most abundant) by the envelope's width + 5 Da,
-    // so that no isotope of the species at any charge falls on it
+    // the decoy mass of a feature: below its isotope envelope (core isotopes, >= 10% of the most abundant) by the envelope's width + 5.25
+    // isotopes, where neither the species nor its other forms have signal. A whole number of isotopes (width + 5 Da before) falls on its
+    // oxidized, methylated, ammonia- or water-loss forms (-14 to -18 Da), and half an isotope still collects signal: PXD042169
+    // ProteomeMix, decoys with FLASHDeconv evidence at width + 5.0 / 5.25 / 5.4 / 5.5 / 5.6 / 5.75 / 6.0 isotopes: 16095 / 1403 / 1468 /
+    // 5408 / 1367 / 1080 / 14925 (transfers kept at 1% FDR 8161 / 13739 / 13739 / 10426 / 13739 / 13739 / 8020).
     std::vector<double> decoy_shift(kept.size());
     for (Size k = 0; k < kept.size(); ++k)
     {
@@ -407,13 +471,31 @@ protected:
         if (first < 0) first = (int)i;
         last = (int)i;
       }
-      decoy_shift[k] = (last - first + 1) * Constants::ISOTOPE_MASSDIFF_55K_U + 5.0;
+      decoy_shift[k] = (last - first + 1 + 5.25) * Constants::ISOTOPE_MASSDIFF_55K_U;
     }
 
     // every run: the features and, where not detected, their decoys; their raw abundance and FLASHDeconv's evidence for their masses
     std::vector<std::vector<FLASHQuantAlgorithm::MassAbundance>> value(kept.size(), std::vector<FLASHQuantAlgorithm::MassAbundance>(run_count));
     std::vector<std::vector<double>> decoy_value(kept.size(), std::vector<double>(run_count, 0));
     std::vector<std::vector<std::array<FDEvidence, 2>>> fd_evidence(kept.size(), std::vector<std::array<FDEvidence, 2>>(run_count)); // target, decoy
+    // -in_id: per feature and run, the smallest |mass error| (ppm, nearest isotope) of an identification of its mass in its window, and
+    // of its decoy mass (transfers only); and whether it is identified within the gate (set below)
+    const double id_fdr = getDoubleOption_("id_fdr");
+    std::vector<std::vector<std::array<double, 2>>> id_error(kept.size(), std::vector<std::array<double, 2>>(run_count, {-1.0, -1.0}));
+    std::vector<std::vector<std::array<bool, 2>>> identified(kept.size(), std::vector<std::array<bool, 2>>(run_count, {false, false}));
+    // the smallest |error| (ppm) of an identified mass to @p mass (or one isotope off) in [@p rt_start, @p rt_end]; -1 without
+    const auto id_match = [&](const std::vector<std::pair<double, double>>& ids, double mass, double rt_start, double rt_end) {
+      double best = -1;
+      for (auto it = std::lower_bound(ids.begin(), ids.end(), std::make_pair(rt_start, -1e300)); it != ids.end() && it->first <= rt_end; ++it)
+      {
+        for (int i = -1; i <= 1; ++i)
+        {
+          const double e = std::abs(it->second - mass - i * Constants::ISOTOPE_MASSDIFF_55K_U) / mass * 1e6;
+          if (e <= fd_tol * 1e6 && (best < 0 || e < best)) best = e;
+        }
+      }
+      return best;
+    };
     // the MS1 spectra of the next run are read while a run is measured (reading is mostly waiting for the disk: ~1.8 of ~4.3 s per run)
     const auto load_run = [&in](Size r) {
       MzMLFile mzml;
@@ -459,12 +541,25 @@ protected:
 #pragma omp parallel for schedule(dynamic, 16)
         for (SignedSize t = 0; t < (SignedSize)targets.size(); ++t) evidence[t] = fdEvidence_(map, rts, limits, targets[t], avg, fd_tol, fd_min_cos, fd_min_snr);
       }
+      std::vector<std::pair<double, double>> ids;
+      if (!in_id.empty() && mbr_fdr >= 0)
+      {
+        Size without_q = 0;
+        ids = readIdentifications_(in_id[r], id_fdr, without_q);
+        if (without_q > 0)
+        {
+          OPENMS_LOG_WARN << "Warning: " << in_id[r] << ": " << without_q << " PrSMs without a q-value (FLASHTnT without decoys) are not used" << endl;
+        }
+      }
       for (Size t = 0; t < targets.size(); ++t)
       {
         const auto [k, decoy] = owner[t];
         if (decoy) decoy_value[k][r] = abundances[t].first;
         else value[k][r] = abundances[t];
         fd_evidence[k][r][decoy ? 1 : 0] = evidence[t];
+        if (ids.empty()) continue;
+        const auto& target = targets[t];
+        id_error[k][r][decoy ? 1 : 0] = id_match(ids, target.mass, target.rt_start, target.rt_end);
       }
       OPENMS_LOG_INFO << "Run " << (r + 1) << " of " << run_count << ": " << targets.size() << " targets measured" << endl;
     }
@@ -510,6 +605,35 @@ protected:
       }
       if (mbr_fdr >= 0) OPENMS_LOG_INFO << "Match between runs: |mass error| gate from the detected features: " << mass_gate << " ppm" << endl;
     }
+    // -in_id: the gate of the identifications' mass errors, three times the median error of those of the features where detected (true
+    // identifications of the mass, nearly all: PXD042169 ProteomeMix median 0.34 ppm, 95% within 1.5 ppm; at FLASHDeconv's tolerance
+    // of 10 ppm, chance matches of a mass were ~2.6% of the identified transfers); FLASHDeconv's tolerance without any
+    if (!in_id.empty() && mbr_fdr >= 0)
+    {
+      std::vector<double> detected_errors;
+      for (Size k = 0; k < kept.size(); ++k)
+      {
+        for (const auto& [r, i] : kept[k].runs)
+        {
+          if (id_error[k][r][0] >= 0) detected_errors.push_back(id_error[k][r][0]);
+        }
+      }
+      const double id_gate = detected_errors.empty() ? fd_tol * 1e6 : 3 * median_(detected_errors);
+      Size id_targets = 0, id_nulls = 0;
+      for (Size k = 0; k < kept.size(); ++k)
+      {
+        for (Size r = 0; r < run_count; ++r)
+        {
+          if (kept[k].runs.count(r) > 0) continue;
+          for (int kind = 0; kind < 2; ++kind) identified[k][r][kind] = id_error[k][r][kind] >= 0 && id_error[k][r][kind] <= id_gate;
+          id_targets += identified[k][r][0];
+          id_nulls += identified[k][r][1];
+        }
+      }
+      OPENMS_LOG_INFO << "Match between runs: identifications (-in_id): |mass error| gate " << id_gate << " ppm (from " << detected_errors.size()
+                      << " identified detections); transfers identified " << id_targets << ", their decoy masses " << id_nulls << endl;
+    }
+    // an identification of the mass in the run (-in_id) scores 2, above any Qscore2D; so does a decoy whose mass is identified
     const auto score_of = [&](const FDEvidence& e, double v, double ref) {
       return (v > 0 && e.scans > 0 && std::abs(e.ppm - ref) <= mass_gate) ? e.qscore2d : 0.0;
     };
@@ -520,9 +644,9 @@ protected:
       for (Size r = 0; r < run_count; ++r)
       {
         if (kept[k].runs.count(r) > 0) continue;
-        score[k][r] = score_of(fd_evidence[k][r][0], value[k][r].first, reference[k]);
+        score[k][r] = (value[k][r].first > 0 && identified[k][r][0]) ? 2.0 : score_of(fd_evidence[k][r][0], value[k][r].first, reference[k]);
         target_scores.push_back(score[k][r]);
-        null_scores.push_back(score_of(fd_evidence[k][r][1], decoy_value[k][r], reference[k]));
+        null_scores.push_back(identified[k][r][1] ? 2.0 : score_of(fd_evidence[k][r][1], decoy_value[k][r], reference[k]));
       }
     }
     // q-values: the FDR of a threshold T is (null scores >= T) / (target scores >= T) (one null per transfer); the q-value of a
@@ -554,6 +678,7 @@ protected:
       const Size target_above = target_scores.end() - std::lower_bound(target_scores.begin(), target_scores.end(), threshold);
       OPENMS_LOG_INFO << "Match between runs: " << target_scores.size() << " transfers; score threshold at FDR " << mbr_fdr << ": " << threshold
                       << " (targets at or above it " << target_above << ", nulls " << null_above << ")" << endl;
+
     }
 
     const String detail_out = getStringOption_("out_mbr_detail");
@@ -561,7 +686,7 @@ protected:
     {
       std::ofstream ds(detail_out);
       ds << "ConsensusIndex\tRun\tStatus\tValue\tQscore2D\tMaxQscore\tScans\tMassErrorPPM\tDecoyValue\tDecoyQscore2D\tDecoyMaxQscore\tDecoyScans\tDecoyMassErrorPPM"
-            "\tReferenceErrorPPM\tDetectedMedian\n";
+            "\tReferenceErrorPPM\tDetectedMedian" << (in_id.empty() ? "" : "\tIdentified\tDecoyIdentified") << "\n";
       for (Size k = 0; k < kept.size(); ++k)
       {
         std::vector<double> det;
@@ -587,7 +712,14 @@ protected:
             }
             ds << "\t" << std::to_string(e.qscore2d) << "\t" << std::to_string(e.max_qscore) << "\t" << e.scans << "\t" << std::to_string(e.ppm);
           }
-          ds << "\t" << (mbr_fdr >= 0 ? String(std::to_string(reference[k])) : String("")) << "\t" << std::to_string(det_median) << "\n";
+          ds << "\t" << (mbr_fdr >= 0 ? String(std::to_string(reference[k])) : String("")) << "\t" << std::to_string(det_median);
+          // with -in_id, for a transfer: 1 if its run identifies the mass (its decoy mass) in its window
+          if (!in_id.empty())
+          {
+            const bool id_computed = mbr_fdr >= 0 && !detected;
+            ds << "\t" << (id_computed ? String(identified[k][r][0] ? "1" : "0") : String("")) << "\t" << (id_computed ? String(identified[k][r][1] ? "1" : "0") : String(""));
+          }
+          ds << "\n";
         }
       }
     }

@@ -794,6 +794,14 @@ add_test("TOPP_FLASHQuantConsensus_3_out" ${DIFF} -in1 FLASHQuantConsensus_3.tmp
 set_tests_properties("TOPP_FLASHQuantConsensus_3_out" PROPERTIES DEPENDS "TOPP_FLASHQuantConsensus_3")
 # a run with fewer than 3 MS1 spectra: its values NaN, no abort
 add_test("TOPP_FLASHQuantConsensus_4" ${TOPP_BIN_PATH}/FLASHQuantConsensus -test -in ${DATA_DIR_TOPP}/FLASHQuantConsensus_input1.mzML ${DATA_DIR_TOPP}/FLASHQuantConsensus_one_scan.mzML -in_feature ${DATA_DIR_TOPP}/FLASHQuantConsensus_input1.tsv ${DATA_DIR_TOPP}/FLASHQuantConsensus_input2.tsv -out FLASHQuantConsensus_4.tmp.tsv)
+# -in_id: run 2 identifies the transferred mass (10011 Da, PrSM in its window): the transfer scores 2; PrSMs of a decoy protein or above
+# -id_fdr are not used (the same output as without identifications)
+add_test("TOPP_FLASHQuantConsensus_5" ${TOPP_BIN_PATH}/FLASHQuantConsensus -test -in ${DATA_DIR_TOPP}/FLASHQuantConsensus_input1.mzML ${DATA_DIR_TOPP}/FLASHQuantConsensus_input2.mzML -in_feature ${DATA_DIR_TOPP}/FLASHQuantConsensus_input1.tsv ${DATA_DIR_TOPP}/FLASHQuantConsensus_input2.tsv -in_id ${DATA_DIR_TOPP}/FLASHQuantConsensus_input1_prsm.tsv ${DATA_DIR_TOPP}/FLASHQuantConsensus_input2_prsm.tsv -out FLASHQuantConsensus_5.tmp.tsv)
+add_test("TOPP_FLASHQuantConsensus_5_out" ${DIFF} -in1 FLASHQuantConsensus_5.tmp.tsv -in2 ${DATA_DIR_TOPP}/FLASHQuantConsensus_5_output.tsv)
+set_tests_properties("TOPP_FLASHQuantConsensus_5_out" PROPERTIES DEPENDS "TOPP_FLASHQuantConsensus_5")
+add_test("TOPP_FLASHQuantConsensus_6" ${TOPP_BIN_PATH}/FLASHQuantConsensus -test -in ${DATA_DIR_TOPP}/FLASHQuantConsensus_input1.mzML ${DATA_DIR_TOPP}/FLASHQuantConsensus_input2.mzML -in_feature ${DATA_DIR_TOPP}/FLASHQuantConsensus_input1.tsv ${DATA_DIR_TOPP}/FLASHQuantConsensus_input2.tsv -in_id ${DATA_DIR_TOPP}/FLASHQuantConsensus_input1_prsm.tsv ${DATA_DIR_TOPP}/FLASHQuantConsensus_input2_prsm_unused.tsv -out FLASHQuantConsensus_6.tmp.tsv)
+add_test("TOPP_FLASHQuantConsensus_6_out" ${DIFF} -in1 FLASHQuantConsensus_6.tmp.tsv -in2 ${DATA_DIR_TOPP}/FLASHQuantConsensus_1_output.tsv)
+set_tests_properties("TOPP_FLASHQuantConsensus_6_out" PROPERTIES DEPENDS "TOPP_FLASHQuantConsensus_6")
 
 #------------------------------------------------------------------------------
 # GNPSExport tests
