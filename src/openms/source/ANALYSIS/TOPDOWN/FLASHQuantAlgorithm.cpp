@@ -2477,6 +2477,7 @@ namespace OpenMS
       std::vector<std::pair<Size, int>> traces; // (trace, charge) of its raw peaks
     };
     std::vector<MassEntry> entries;
+    bool positive = true; // the ion mode of the masses (FLASHDeconv deconvolves a run in one mode)
     for (Size si = 0; si < deconvolved_spectra.size(); ++si)
     {
       const auto& dspec = deconvolved_spectra[si];
@@ -2487,6 +2488,7 @@ namespace OpenMS
       {
         const auto& pg = dspec[k];
         if (pg.getTargetDecoyType() != PeakGroup::TargetDecoyType::target) continue;
+        positive = pg.isPositive();
         MassEntry entry {si, k, pg.getFeatureIndex(), pg.getMonoMass(), pg.getIntensity(), {}};
         for (const auto& p : pg)
         {
@@ -2589,7 +2591,8 @@ namespace OpenMS
     // FeatureGroups: per trace the charge most of its peaks have in the group, and its isotope index from the group's monoisotopic mass
     std::vector<FeatureGroup> features;
     features.reserve(groups.size());
-    const double charge_mass = FLASHHelperClasses::getChargeMass(true);
+    // m/z = mass / charge + charge mass, charges absolute (the charge carrier: + a proton in positive mode, - a proton in negative mode)
+    const double charge_mass = FLASHHelperClasses::getChargeMass(positive);
     min_mass_ = std::numeric_limits<double>::max();
     max_mass_ = .0;
     for (Size g = 0; g < groups.size(); ++g)
@@ -2801,6 +2804,14 @@ namespace OpenMS
 
   void FLASHQuantAlgorithm::detectRawTraces_(const PeakMap& ms1_map, std::vector<MassTrace>& input_mtraces, std::vector<FeatureSeed>& input_seeds) const
   {
+    // MassTraceDetection needs at least 3 MS1 spectra (it throws otherwise); with fewer there is no trace, and every mass is without one
+    Size ms1_count = 0;
+    for (const auto& spec : ms1_map) ms1_count += spec.getMSLevel() == 1;
+    if (ms1_count < 3)
+    {
+      OPENMS_LOG_WARN << "Warning: FLASHQuant: " << ms1_count << " MS1 spectra (at least 3 are needed for mass traces): no raw mass traces, no abundances" << std::endl;
+      return;
+    }
     Param p_mtd = MassTraceDetection().getDefaults();
     p_mtd.setValue("chrom_peak_snr", 3.0);
     p_mtd.setValue("mass_error_ppm", 10.0);
@@ -2822,9 +2833,7 @@ namespace OpenMS
     for (int k = 1; k < slice_count; ++k) borders.push_back(sample_mzs[sample_mzs.size() * k / slice_count]);
     borders.push_back(std::numeric_limits<double>::max());
     std::vector<std::vector<MassTrace>> slice_traces(slice_count);
-#pragma omp parallel for schedule(dynamic, 1)
-    for (int k = 0; k < slice_count; ++k)
-    {
+    const auto detect_slice = [&](const int k) {
       const double lo = borders[k], hi = borders[k + 1], lo_margin = lo * (1 - 100e-6), hi_margin = hi * (1 + 100e-6);
       PeakMap slice;
       slice.reserve(ms1_map.size());
@@ -2849,6 +2858,23 @@ namespace OpenMS
         const double centroid = mt.getCentroidMZ();
         if (centroid >= lo && centroid < hi) slice_traces[k].push_back(std::move(mt));
       }
+    };
+    std::vector<std::exception_ptr> errors(slice_count); // an exception must not leave the parallel loop (that terminates the process)
+#pragma omp parallel for schedule(dynamic, 1)
+    for (int k = 0; k < slice_count; ++k)
+    {
+      try
+      {
+        detect_slice(k);
+      }
+      catch (...)
+      {
+        errors[k] = std::current_exception();
+      }
+    }
+    for (const auto& error : errors)
+    {
+      if (error) std::rethrow_exception(error);
     }
     std::vector<MassTrace> traces;
     Size found_count = 0;
@@ -2906,18 +2932,20 @@ namespace OpenMS
     std::vector<std::pair<double, Size>> by_mz(input_mtraces.size());
     for (Size t = 0; t < input_mtraces.size(); ++t) by_mz[t] = {input_seeds[t].getCentroidMz(), t};
     std::sort(by_mz.begin(), by_mz.end());
-    const double charge_mass = FLASHHelperClasses::getChargeMass(true);
     abundances.assign(targets.size(), MassAbundance(.0, 0));
 #pragma omp parallel for schedule(dynamic, 64)
     for (SignedSize k = 0; k < (SignedSize)targets.size(); ++k)
     {
       const auto& target = targets[k];
+      int zmin, zmax;
+      const bool positive = target.chargeRange(zmin, zmax);
+      const double charge_mass = FLASHHelperClasses::getChargeMass(positive);
       const auto iso = avg.get(target.mass);
       double iso_max = 0;
       for (Size i = 0; i < iso.size(); ++i) iso_max = std::max(iso_max, (double)iso[i].getIntensity());
       std::set<Size> used;
       double area = 0;
-      for (int z = target.min_charge; z <= target.max_charge; ++z)
+      for (int z = zmin; z <= zmax; ++z)
       {
         for (Size i = 0; i < iso.size(); ++i)
         {

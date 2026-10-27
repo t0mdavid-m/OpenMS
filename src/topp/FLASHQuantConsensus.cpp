@@ -44,10 +44,13 @@ using namespace std;
   as FLASHDeconv combines the scans of a feature (Qscore2D: one minus the lowest product of (1 - Qscore) over consecutive scans, so the
   whole envelope must recur scan after scan). The score of the transfer is that Qscore2D if the mass found (intensity-weighted over the
   scans) lies within three times the median mass error of the detected features of the feature's own mass (measured the same way where
-  it was detected; the feature table's mass if no detected run has evidence), and it has a raw abundance; else 0. The null: a decoy mass
+  it was detected; the feature table's mass if no detected run has evidence; FLASHDeconv's tolerance if no feature has evidence in two
+  runs where it was detected), and it has a raw abundance; else 0. The null: a decoy mass
   below the envelope by its width + 5 Da (a shift within the envelope, as in bottom-up, falls on the species' own isotopes), measured and
   scored the same way. The FDR of a score threshold is the number of null scores at or above it over the number of target scores at or
   above it; values whose q-value exceeds -mbr_fdr are NaN. A detected run without raw abundance (no trace in its window) is NaN too.
+  Ion mode: that of the features (negative charges: negative mode, m/z = mass / charge - proton mass); the feature files of one call must
+  share it. A run with fewer than 3 MS1 spectra has no mass traces: its values are NaN (with a warning).
 */
 
 // We do not want this class to show up in the docu:
@@ -79,7 +82,8 @@ protected:
     setValidFormats_("in", ListUtils::create<String>("mzML"));
     registerInputFileList_("in_feature", "<files>", {}, "FLASHDeconv feature tsv files (-out) of the runs, in the order of -in.", true);
     setValidFormats_("in_feature", ListUtils::create<String>("tsv"));
-    registerOutputFile_("out", "<file>", "", "Consensus feature tsv: per feature its mass, aligned apex and charges, and per run its abundance, "
+    registerOutputFile_("out", "<file>", "", "Consensus feature tsv: per feature its mass, aligned apex and charges, and per run (named by the base name of its "
+                        "-in file; a name two inputs share gets the run's position appended, _1, _2, ...) its abundance, "
                         "status (detected, mbr, or nan) and, for a match between runs, its score (FLASHDeconv's Qscore2D of the mass, see above) and q-value.", true);
     setValidFormats_("out", ListUtils::create<String>("tsv"));
     registerDoubleOption_("min_run_fraction", "<fraction>", 0.25, "Consensus features detected in at least this fraction of the runs are quantified in every run "
@@ -97,9 +101,10 @@ protected:
                           "value, a negative value switches match between runs off (NaN where not detected).", false);
   }
 
-  /// the FLASHDeconv MS1 features of a feature tsv
-  std::vector<Feature> readFeatures_(const String& file) const
+  /// the FLASHDeconv MS1 features of a feature tsv, and in @p source the mzML it was made from (its FileName column; empty without rows)
+  std::vector<Feature> readFeatures_(const String& file, String& source) const
   {
+    source.clear();
     std::ifstream in(file);
     std::string line;
     std::getline(in, line);
@@ -117,6 +122,7 @@ protected:
     {
       std::vector<String> v;
       String(line).split('\t', v);
+      if (source.empty() && col.find("FileName") != col.end() && v.size() > col["FileName"]) source = v[col["FileName"]];
       if (v.size() < header.size() || v[col["MSLevel"]] != "1" || (decoy_col != col.end() && v[decoy_col->second] != "0")) continue;
       features.push_back({v[col["MonoisotopicMass"]].toDouble(), v[col["ApexRetentionTime"]].toDouble(), v[col["StartRetentionTime"]].toDouble(),
                           v[col["EndRetentionTime"]].toDouble(), v[col["ApexRetentionTime"]].toDouble(), v[col["MinCharge"]].toInt(),
@@ -176,7 +182,9 @@ protected:
   {
     FDEvidence e;
     const double iso = Constants::ISOTOPE_MASSDIFF_55K_U;
-    const int z1 = std::max(1, target.min_charge - 2), z2 = target.max_charge + 2;
+    int zmin, zmax;
+    const bool positive = target.chargeRange(zmin, zmax);
+    const int z1 = std::max(1, zmin - 2), z2 = zmax + 2;
     double chain = 1, lowest = 1, weights = 0, ppm_sum = 0;
     bool in_chain = false;
     std::vector<FLASHHelperClasses::LogMzPeak> noisy;
@@ -188,7 +196,7 @@ protected:
         in_chain = false;
         continue;
       }
-      PeakGroup pg(z1, z2, true);
+      PeakGroup pg(z1, z2, positive);
       pg.setIsotopeDaDistance(iso);
       double next = target.mass, prev_cos = 0;
       int offset = 0;
@@ -279,7 +287,23 @@ protected:
     }
     const Size run_count = in.size();
     std::vector<std::vector<Feature>> runs(run_count);
-    for (Size r = 0; r < run_count; ++r) runs[r] = readFeatures_(in_feature[r]);
+    bool positive_mode = false, negative_mode = false;
+    for (Size r = 0; r < run_count; ++r)
+    {
+      String source;
+      runs[r] = readFeatures_(in_feature[r], source);
+      // the feature table names the mzML FLASHDeconv read: a different name hints at files given in another order than -in
+      if (!source.empty() && QFileInfo(source.toQString()).completeBaseName() != QFileInfo(in[r].toQString()).completeBaseName())
+      {
+        OPENMS_LOG_WARN << "Warning: " << in_feature[r] << " was made from " << source << ", not from " << in[r] << " (the files of -in and -in_feature pair up by their order)" << endl;
+      }
+      for (const auto& f : runs[r]) (f.max_charge > 0 ? positive_mode : negative_mode) = true;
+    }
+    if (positive_mode && negative_mode)
+    {
+      OPENMS_LOG_ERROR << "The feature files hold features of both ion modes (positive and negative charges); quantify the runs of each mode separately" << endl;
+      return ILLEGAL_PARAMETERS;
+    }
 
     // retention time alignment to the first run: anchors are the features matched (3 min, unaligned) in >= 80% of the runs and the first
     std::vector<std::vector<std::pair<double, double>>> anchors(run_count); // per run: (its apex, offset to the first run), by apex
@@ -433,6 +457,15 @@ protected:
         }
       }
       mass_gate = 3 * median_(errors);
+      // no feature with FLASHDeconv's evidence in two detected runs: no spread to take the gate from; FLASHDeconv's tolerance instead
+      // (the decoys pass the same gate, so the FDR still holds; a gate of 0 rejected every transfer)
+      const bool any_transfer = std::any_of(kept.begin(), kept.end(), [run_count](const Consensus& c) { return c.runs.size() < run_count; });
+      if (errors.empty() && mbr_fdr >= 0 && any_transfer)
+      {
+        mass_gate = fd_tol * 1e6;
+        OPENMS_LOG_WARN << "Warning: no feature has FLASHDeconv's evidence in two runs where it was detected; the |mass error| gate of the match between runs "
+                           "is FLASHDeconv's tolerance (" << mass_gate << " ppm)" << endl;
+      }
       if (mbr_fdr >= 0) OPENMS_LOG_INFO << "Match between runs: |mass error| gate from the detected features: " << mass_gate << " ppm" << endl;
     }
     const auto score_of = [&](const FDEvidence& e, double v, double ref) {
@@ -520,8 +553,17 @@ protected:
     // output
     std::ofstream os(out);
     os << "ConsensusIndex\tMonoisotopicMass\tApexRetentionTime\tMinCharge\tMaxCharge\tDetectedRuns";
+    // the run names (file base names); a name two inputs share gets the run's position appended (_1, _2, ...), so that no column repeats
     std::vector<String> names;
     for (const auto& f : in) names.push_back(QFileInfo(f.toQString()).completeBaseName());
+    {
+      std::map<String, Size> name_count;
+      for (const auto& n : names) name_count[n]++;
+      for (Size r = 0; r < run_count; ++r)
+      {
+        if (name_count[names[r]] > 1) names[r] += "_" + String(r + 1);
+      }
+    }
     for (const auto& n : names) os << "\tAbundance_" << n << "\tStatus_" << n << "\tMatchScore_" << n << "\tMatchQvalue_" << n;
     os << "\n";
     Size mbr_kept = 0, mbr_total = 0;

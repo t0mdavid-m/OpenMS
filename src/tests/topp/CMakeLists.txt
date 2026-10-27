@@ -769,6 +769,31 @@ set_tests_properties("TOPP_FLASHDeconv_3" PROPERTIES ENVIRONMENT "OMP_PROC_BIND=
 add_test("TOPP_FLASHDeconv_3_out1" ${CMAKE_COMMAND} -E compare_files FLASHDeconv_3.tmp.tsv FLASHDeconv_2.tmp.tsv)
 add_test("TOPP_FLASHDeconv_3_out2" ${CMAKE_COMMAND} -E compare_files FLASHDeconv_3_ms1.tmp.tsv FLASHDeconv_2_ms1.tmp.tsv)
 set_tests_properties("TOPP_FLASHDeconv_3_out1" "TOPP_FLASHDeconv_3_out2" PROPERTIES DEPENDS "TOPP_FLASHDeconv_2;TOPP_FLASHDeconv_3")
+# -quant (abundances from the raw mass traces, in parallel): the same, one thread against four, on a synthetic run (5 species, 80 MS1 scans)
+add_test("TOPP_FLASHDeconv_4" ${TOPP_BIN_PATH}/FLASHDeconv -test -threads 1 -quant -in ${DATA_DIR_TOPP}/FLASHQuantConsensus_input1.mzML -out FLASHDeconv_4.tmp.tsv -out_spec1 FLASHDeconv_4_ms1.tmp.tsv)
+add_test("TOPP_FLASHDeconv_5" ${TOPP_BIN_PATH}/FLASHDeconv -test -threads 4 -quant -in ${DATA_DIR_TOPP}/FLASHQuantConsensus_input1.mzML -out FLASHDeconv_5.tmp.tsv -out_spec1 FLASHDeconv_5_ms1.tmp.tsv)
+set_tests_properties("TOPP_FLASHDeconv_5" PROPERTIES ENVIRONMENT "OMP_PROC_BIND=true")
+add_test("TOPP_FLASHDeconv_5_out1" ${CMAKE_COMMAND} -E compare_files FLASHDeconv_5.tmp.tsv FLASHDeconv_4.tmp.tsv)
+add_test("TOPP_FLASHDeconv_5_out2" ${CMAKE_COMMAND} -E compare_files FLASHDeconv_5_ms1.tmp.tsv FLASHDeconv_4_ms1.tmp.tsv)
+set_tests_properties("TOPP_FLASHDeconv_5_out1" "TOPP_FLASHDeconv_5_out2" PROPERTIES DEPENDS "TOPP_FLASHDeconv_4;TOPP_FLASHDeconv_5")
+# -quant with fewer than 3 MS1 spectra (one scan of the run above): no mass traces, Abundance NaN, no abort
+add_test("TOPP_FLASHDeconv_6" ${TOPP_BIN_PATH}/FLASHDeconv -test -quant -in ${DATA_DIR_TOPP}/FLASHQuantConsensus_one_scan.mzML -out FLASHDeconv_6.tmp.tsv -out_spec1 FLASHDeconv_6_ms1.tmp.tsv)
+
+#------------------------------------------------------------------------------
+# FLASHQuantConsensus tests: two synthetic runs (5 species; run 2: one species x2, one x0.5, retention times +3 s) with their FLASHDeconv
+# -quant feature tables, run 2's without its feature of the species at 10011 Da (a match between runs); the output against the expected
+# one, and one thread against four. The same in negative ion mode (FLASHDeconv -SD:min_charge -1 -SD:max_charge -100).
+add_test("TOPP_FLASHQuantConsensus_1" ${TOPP_BIN_PATH}/FLASHQuantConsensus -test -threads 1 -in ${DATA_DIR_TOPP}/FLASHQuantConsensus_input1.mzML ${DATA_DIR_TOPP}/FLASHQuantConsensus_input2.mzML -in_feature ${DATA_DIR_TOPP}/FLASHQuantConsensus_input1.tsv ${DATA_DIR_TOPP}/FLASHQuantConsensus_input2.tsv -out FLASHQuantConsensus_1.tmp.tsv)
+add_test("TOPP_FLASHQuantConsensus_1_out" ${DIFF} -in1 FLASHQuantConsensus_1.tmp.tsv -in2 ${DATA_DIR_TOPP}/FLASHQuantConsensus_1_output.tsv)
+set_tests_properties("TOPP_FLASHQuantConsensus_1_out" PROPERTIES DEPENDS "TOPP_FLASHQuantConsensus_1")
+add_test("TOPP_FLASHQuantConsensus_2" ${TOPP_BIN_PATH}/FLASHQuantConsensus -test -threads 4 -in ${DATA_DIR_TOPP}/FLASHQuantConsensus_input1.mzML ${DATA_DIR_TOPP}/FLASHQuantConsensus_input2.mzML -in_feature ${DATA_DIR_TOPP}/FLASHQuantConsensus_input1.tsv ${DATA_DIR_TOPP}/FLASHQuantConsensus_input2.tsv -out FLASHQuantConsensus_2.tmp.tsv)
+add_test("TOPP_FLASHQuantConsensus_2_out" ${CMAKE_COMMAND} -E compare_files FLASHQuantConsensus_2.tmp.tsv FLASHQuantConsensus_1.tmp.tsv)
+set_tests_properties("TOPP_FLASHQuantConsensus_2_out" PROPERTIES DEPENDS "TOPP_FLASHQuantConsensus_1;TOPP_FLASHQuantConsensus_2")
+add_test("TOPP_FLASHQuantConsensus_3" ${TOPP_BIN_PATH}/FLASHQuantConsensus -test -in ${DATA_DIR_TOPP}/FLASHQuantConsensus_neg_input1.mzML ${DATA_DIR_TOPP}/FLASHQuantConsensus_neg_input2.mzML -in_feature ${DATA_DIR_TOPP}/FLASHQuantConsensus_neg_input1.tsv ${DATA_DIR_TOPP}/FLASHQuantConsensus_neg_input2.tsv -out FLASHQuantConsensus_3.tmp.tsv)
+add_test("TOPP_FLASHQuantConsensus_3_out" ${DIFF} -in1 FLASHQuantConsensus_3.tmp.tsv -in2 ${DATA_DIR_TOPP}/FLASHQuantConsensus_3_output.tsv)
+set_tests_properties("TOPP_FLASHQuantConsensus_3_out" PROPERTIES DEPENDS "TOPP_FLASHQuantConsensus_3")
+# a run with fewer than 3 MS1 spectra: its values NaN, no abort
+add_test("TOPP_FLASHQuantConsensus_4" ${TOPP_BIN_PATH}/FLASHQuantConsensus -test -in ${DATA_DIR_TOPP}/FLASHQuantConsensus_input1.mzML ${DATA_DIR_TOPP}/FLASHQuantConsensus_one_scan.mzML -in_feature ${DATA_DIR_TOPP}/FLASHQuantConsensus_input1.tsv ${DATA_DIR_TOPP}/FLASHQuantConsensus_input2.tsv -out FLASHQuantConsensus_4.tmp.tsv)
 
 #------------------------------------------------------------------------------
 # GNPSExport tests
@@ -3269,46 +3294,46 @@ set_tests_properties("TOPP_MassTraceExtractor_3_json_out" PROPERTIES DEPENDS "TO
 # golden output produced by the upstream C# UniPEFF tool (feat/merge-half-cystines
 # branch). The PSI-MOD / Unimod OBO files are overridden because the test fixture
 # uses synthetic accessions whose canonical names diverge from the real CVs.
-add_test("TOPP_UniPEFF_1" ${TOPP_BIN_PATH}/UniPEFF -test -in ${DATA_DIR_TOPP}/UniPEFF_1_input.xml -out ${TESTS_TEMP_DIR}/UniPEFF_1_output.tmp.peff -ptmlist ${DATA_DIR_TOPP}/UniPEFF_1_ptmlist.txt -psimod_obo ${DATA_DIR_TOPP}/UniPEFF_1_psi-mod.obo -unimod_obo ${DATA_DIR_TOPP}/UniPEFF_1_unimod.obo)
-add_test("TOPP_UniPEFF_1_out" ${DIFF} -in1 ${TESTS_TEMP_DIR}/UniPEFF_1_output.tmp.peff -in2 ${DATA_DIR_TOPP}/UniPEFF_1_output_A.peff)
+add_test("TOPP_UniPEFF_1" ${TOPP_BIN_PATH}/UniPEFF -test -in ${DATA_DIR_TOPP}/UniPEFF_1_input.xml -out UniPEFF_1_output.tmp.peff -ptmlist ${DATA_DIR_TOPP}/UniPEFF_1_ptmlist.txt -psimod_obo ${DATA_DIR_TOPP}/UniPEFF_1_psi-mod.obo -unimod_obo ${DATA_DIR_TOPP}/UniPEFF_1_unimod.obo)
+add_test("TOPP_UniPEFF_1_out" ${DIFF} -in1 UniPEFF_1_output.tmp.peff -in2 ${DATA_DIR_TOPP}/UniPEFF_1_output_A.peff)
 set_tests_properties("TOPP_UniPEFF_1_out" PROPERTIES DEPENDS "TOPP_UniPEFF_1")
 
-add_test("TOPP_UniPEFF_2" ${TOPP_BIN_PATH}/UniPEFF -test -annotation_identifiers -in ${DATA_DIR_TOPP}/UniPEFF_1_input.xml -out ${TESTS_TEMP_DIR}/UniPEFF_2_output.tmp.peff -ptmlist ${DATA_DIR_TOPP}/UniPEFF_1_ptmlist.txt -psimod_obo ${DATA_DIR_TOPP}/UniPEFF_1_psi-mod.obo -unimod_obo ${DATA_DIR_TOPP}/UniPEFF_1_unimod.obo)
-add_test("TOPP_UniPEFF_2_out" ${DIFF} -in1 ${TESTS_TEMP_DIR}/UniPEFF_2_output.tmp.peff -in2 ${DATA_DIR_TOPP}/UniPEFF_1_output_B.peff)
+add_test("TOPP_UniPEFF_2" ${TOPP_BIN_PATH}/UniPEFF -test -annotation_identifiers -in ${DATA_DIR_TOPP}/UniPEFF_1_input.xml -out UniPEFF_2_output.tmp.peff -ptmlist ${DATA_DIR_TOPP}/UniPEFF_1_ptmlist.txt -psimod_obo ${DATA_DIR_TOPP}/UniPEFF_1_psi-mod.obo -unimod_obo ${DATA_DIR_TOPP}/UniPEFF_1_unimod.obo)
+add_test("TOPP_UniPEFF_2_out" ${DIFF} -in1 UniPEFF_2_output.tmp.peff -in2 ${DATA_DIR_TOPP}/UniPEFF_1_output_B.peff)
 set_tests_properties("TOPP_UniPEFF_2_out" PROPERTIES DEPENDS "TOPP_UniPEFF_2")
 
 # Gzipped input must yield identical output to the plain .xml input (transparent gzip).
-add_test("TOPP_UniPEFF_3" ${TOPP_BIN_PATH}/UniPEFF -test -in ${DATA_DIR_TOPP}/UniPEFF_1_input.xml.gz -out ${TESTS_TEMP_DIR}/UniPEFF_3_output.tmp.peff -ptmlist ${DATA_DIR_TOPP}/UniPEFF_1_ptmlist.txt -psimod_obo ${DATA_DIR_TOPP}/UniPEFF_1_psi-mod.obo -unimod_obo ${DATA_DIR_TOPP}/UniPEFF_1_unimod.obo)
-add_test("TOPP_UniPEFF_3_out" ${DIFF} -in1 ${TESTS_TEMP_DIR}/UniPEFF_3_output.tmp.peff -in2 ${DATA_DIR_TOPP}/UniPEFF_1_output_A.peff)
+add_test("TOPP_UniPEFF_3" ${TOPP_BIN_PATH}/UniPEFF -test -in ${DATA_DIR_TOPP}/UniPEFF_1_input.xml.gz -out UniPEFF_3_output.tmp.peff -ptmlist ${DATA_DIR_TOPP}/UniPEFF_1_ptmlist.txt -psimod_obo ${DATA_DIR_TOPP}/UniPEFF_1_psi-mod.obo -unimod_obo ${DATA_DIR_TOPP}/UniPEFF_1_unimod.obo)
+add_test("TOPP_UniPEFF_3_out" ${DIFF} -in1 UniPEFF_3_output.tmp.peff -in2 ${DATA_DIR_TOPP}/UniPEFF_1_output_A.peff)
 set_tests_properties("TOPP_UniPEFF_3_out" PROPERTIES DEPENDS "TOPP_UniPEFF_3")
 
 # -prefix override: every entry is forced under a single user-supplied prefix.
-add_test("TOPP_UniPEFF_4" ${TOPP_BIN_PATH}/UniPEFF -test -in ${DATA_DIR_TOPP}/UniPEFF_1_input.xml -out ${TESTS_TEMP_DIR}/UniPEFF_4_output.tmp.peff -ptmlist ${DATA_DIR_TOPP}/UniPEFF_1_ptmlist.txt -psimod_obo ${DATA_DIR_TOPP}/UniPEFF_1_psi-mod.obo -unimod_obo ${DATA_DIR_TOPP}/UniPEFF_1_unimod.obo -prefix custom)
-add_test("TOPP_UniPEFF_4_out" ${DIFF} -in1 ${TESTS_TEMP_DIR}/UniPEFF_4_output.tmp.peff -in2 ${DATA_DIR_TOPP}/UniPEFF_2_output_prefix.peff)
+add_test("TOPP_UniPEFF_4" ${TOPP_BIN_PATH}/UniPEFF -test -in ${DATA_DIR_TOPP}/UniPEFF_1_input.xml -out UniPEFF_4_output.tmp.peff -ptmlist ${DATA_DIR_TOPP}/UniPEFF_1_ptmlist.txt -psimod_obo ${DATA_DIR_TOPP}/UniPEFF_1_psi-mod.obo -unimod_obo ${DATA_DIR_TOPP}/UniPEFF_1_unimod.obo -prefix custom)
+add_test("TOPP_UniPEFF_4_out" ${DIFF} -in1 UniPEFF_4_output.tmp.peff -in2 ${DATA_DIR_TOPP}/UniPEFF_2_output_prefix.peff)
 set_tests_properties("TOPP_UniPEFF_4_out" PROPERTIES DEPENDS "TOPP_UniPEFF_4")
 
 # -omit_molecular_processing: drops the \Processed annotation block.
-add_test("TOPP_UniPEFF_5" ${TOPP_BIN_PATH}/UniPEFF -test -in ${DATA_DIR_TOPP}/UniPEFF_1_input.xml -out ${TESTS_TEMP_DIR}/UniPEFF_5_output.tmp.peff -ptmlist ${DATA_DIR_TOPP}/UniPEFF_1_ptmlist.txt -psimod_obo ${DATA_DIR_TOPP}/UniPEFF_1_psi-mod.obo -unimod_obo ${DATA_DIR_TOPP}/UniPEFF_1_unimod.obo -omit_molecular_processing)
-add_test("TOPP_UniPEFF_5_out" ${DIFF} -in1 ${TESTS_TEMP_DIR}/UniPEFF_5_output.tmp.peff -in2 ${DATA_DIR_TOPP}/UniPEFF_2_output_omitproc.peff)
+add_test("TOPP_UniPEFF_5" ${TOPP_BIN_PATH}/UniPEFF -test -in ${DATA_DIR_TOPP}/UniPEFF_1_input.xml -out UniPEFF_5_output.tmp.peff -ptmlist ${DATA_DIR_TOPP}/UniPEFF_1_ptmlist.txt -psimod_obo ${DATA_DIR_TOPP}/UniPEFF_1_psi-mod.obo -unimod_obo ${DATA_DIR_TOPP}/UniPEFF_1_unimod.obo -omit_molecular_processing)
+add_test("TOPP_UniPEFF_5_out" ${DIFF} -in1 UniPEFF_5_output.tmp.peff -in2 ${DATA_DIR_TOPP}/UniPEFF_2_output_omitproc.peff)
 set_tests_properties("TOPP_UniPEFF_5_out" PROPERTIES DEPENDS "TOPP_UniPEFF_5")
 
 # -omit_amino_acid_modifications: drops \ModResPsi/\ModResUnimod/\ModRes and \DisulfideBond; ptmlist not read.
-add_test("TOPP_UniPEFF_6" ${TOPP_BIN_PATH}/UniPEFF -test -in ${DATA_DIR_TOPP}/UniPEFF_1_input.xml -out ${TESTS_TEMP_DIR}/UniPEFF_6_output.tmp.peff -omit_amino_acid_modifications)
-add_test("TOPP_UniPEFF_6_out" ${DIFF} -in1 ${TESTS_TEMP_DIR}/UniPEFF_6_output.tmp.peff -in2 ${DATA_DIR_TOPP}/UniPEFF_2_output_omitmods.peff)
+add_test("TOPP_UniPEFF_6" ${TOPP_BIN_PATH}/UniPEFF -test -in ${DATA_DIR_TOPP}/UniPEFF_1_input.xml -out UniPEFF_6_output.tmp.peff -omit_amino_acid_modifications)
+add_test("TOPP_UniPEFF_6_out" ${DIFF} -in1 UniPEFF_6_output.tmp.peff -in2 ${DATA_DIR_TOPP}/UniPEFF_2_output_omitmods.peff)
 set_tests_properties("TOPP_UniPEFF_6_out" PROPERTIES DEPENDS "TOPP_UniPEFF_6")
 
 # -omit_sequence_variations: drops \VariantSimple and \VariantComplex.
-add_test("TOPP_UniPEFF_7" ${TOPP_BIN_PATH}/UniPEFF -test -in ${DATA_DIR_TOPP}/UniPEFF_1_input.xml -out ${TESTS_TEMP_DIR}/UniPEFF_7_output.tmp.peff -ptmlist ${DATA_DIR_TOPP}/UniPEFF_1_ptmlist.txt -psimod_obo ${DATA_DIR_TOPP}/UniPEFF_1_psi-mod.obo -unimod_obo ${DATA_DIR_TOPP}/UniPEFF_1_unimod.obo -omit_sequence_variations)
-add_test("TOPP_UniPEFF_7_out" ${DIFF} -in1 ${TESTS_TEMP_DIR}/UniPEFF_7_output.tmp.peff -in2 ${DATA_DIR_TOPP}/UniPEFF_2_output_omitvar.peff)
+add_test("TOPP_UniPEFF_7" ${TOPP_BIN_PATH}/UniPEFF -test -in ${DATA_DIR_TOPP}/UniPEFF_1_input.xml -out UniPEFF_7_output.tmp.peff -ptmlist ${DATA_DIR_TOPP}/UniPEFF_1_ptmlist.txt -psimod_obo ${DATA_DIR_TOPP}/UniPEFF_1_psi-mod.obo -unimod_obo ${DATA_DIR_TOPP}/UniPEFF_1_unimod.obo -omit_sequence_variations)
+add_test("TOPP_UniPEFF_7_out" ${DIFF} -in1 UniPEFF_7_output.tmp.peff -in2 ${DATA_DIR_TOPP}/UniPEFF_2_output_omitvar.peff)
 set_tests_properties("TOPP_UniPEFF_7_out" PROPERTIES DEPENDS "TOPP_UniPEFF_7")
 
 # Compressed -out filenames (.peff.gz/.bz2/.zip) MUST be rejected — we don't write compressed PEFF.
-add_test("TOPP_UniPEFF_8_reject_gz" ${TOPP_BIN_PATH}/UniPEFF -test -in ${DATA_DIR_TOPP}/UniPEFF_1_input.xml -out ${TESTS_TEMP_DIR}/UniPEFF_8_should_not_be_written.peff.gz -ptmlist ${DATA_DIR_TOPP}/UniPEFF_1_ptmlist.txt -psimod_obo ${DATA_DIR_TOPP}/UniPEFF_1_psi-mod.obo -unimod_obo ${DATA_DIR_TOPP}/UniPEFF_1_unimod.obo)
+add_test("TOPP_UniPEFF_8_reject_gz" ${TOPP_BIN_PATH}/UniPEFF -test -in ${DATA_DIR_TOPP}/UniPEFF_1_input.xml -out UniPEFF_8_should_not_be_written.peff.gz -ptmlist ${DATA_DIR_TOPP}/UniPEFF_1_ptmlist.txt -psimod_obo ${DATA_DIR_TOPP}/UniPEFF_1_psi-mod.obo -unimod_obo ${DATA_DIR_TOPP}/UniPEFF_1_unimod.obo)
 set_tests_properties("TOPP_UniPEFF_8_reject_gz" PROPERTIES WILL_FAIL TRUE)
 
 # Whitespace-stripped UniProtKB XML (no inter-element whitespace) MUST parse identically.
 # Guards against future regression to a whitespace-sensitive parser.
-add_test("TOPP_UniPEFF_9" ${TOPP_BIN_PATH}/UniPEFF -test -in ${DATA_DIR_TOPP}/UniPEFF_2_input_compact.xml -out ${TESTS_TEMP_DIR}/UniPEFF_9_output.tmp.peff -ptmlist ${DATA_DIR_TOPP}/UniPEFF_1_ptmlist.txt -psimod_obo ${DATA_DIR_TOPP}/UniPEFF_1_psi-mod.obo -unimod_obo ${DATA_DIR_TOPP}/UniPEFF_1_unimod.obo)
-add_test("TOPP_UniPEFF_9_out" ${DIFF} -in1 ${TESTS_TEMP_DIR}/UniPEFF_9_output.tmp.peff -in2 ${DATA_DIR_TOPP}/UniPEFF_2_output_compact.peff)
+add_test("TOPP_UniPEFF_9" ${TOPP_BIN_PATH}/UniPEFF -test -in ${DATA_DIR_TOPP}/UniPEFF_2_input_compact.xml -out UniPEFF_9_output.tmp.peff -ptmlist ${DATA_DIR_TOPP}/UniPEFF_1_ptmlist.txt -psimod_obo ${DATA_DIR_TOPP}/UniPEFF_1_psi-mod.obo -unimod_obo ${DATA_DIR_TOPP}/UniPEFF_1_unimod.obo)
+add_test("TOPP_UniPEFF_9_out" ${DIFF} -in1 UniPEFF_9_output.tmp.peff -in2 ${DATA_DIR_TOPP}/UniPEFF_2_output_compact.peff)
 set_tests_properties("TOPP_UniPEFF_9_out" PROPERTIES DEPENDS "TOPP_UniPEFF_9")
 

@@ -141,9 +141,11 @@ protected:
                   "columns Abundance and AbundanceTraceCount at the end of the -out feature tsv and of the -out_spec1 tsv (one value per feature, "
                   "and each MS1 mass the value of its feature): FLASHQuant's quantity (area of each trace down to 10% of its apex, summed; "
                   "intensity x seconds; AbundanceTraceCount: the traces summed). A feature without a raw trace of at least 4 peaks, or whose traces "
-                  "the resolution gave to other masses, gets its FeatureQuantity on the scale of the run's abundances (trace count 0); a mass "
-                  "without a feature and without a raw trace (a peak seen in one scan) gets NaN. Without the flag, nothing changes: the same "
-                  "masses, features and output files as before.");
+                  "the resolution gave to other masses, gets its FeatureQuantity on the scale of the run's abundances (trace count 0; NaN when "
+                  "no feature of the run has a raw abundance to set the scale); a mass "
+                  "without a feature and without a raw trace (a peak seen in one scan) gets NaN. Either ion mode (that of the masses). With "
+                  "fewer than 3 MS1 spectra there are no raw traces: every Abundance is NaN (with a warning). Without the flag, nothing changes: "
+                  "the same masses, features and output files as before.");
 
     registerFlag_("write_detail",
                   "Include detailed peak information (m/z, intensity, charge, isotope index) for each deconvolved mass in the output spectrum tsv files specified by out_spec* options.",

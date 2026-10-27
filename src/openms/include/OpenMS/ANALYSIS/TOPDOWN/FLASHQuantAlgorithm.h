@@ -68,8 +68,9 @@ namespace OpenMS
       them, with its charge and the isotope index relative to the group's monoisotopic mass). The traces two groups share are then resolved
       as in FLASHQuant (elution model of each group from its own traces, isotope pattern, non-negative least squares), and the abundance of
       a group is FLASHQuant's quantity: the area of each of its traces down to 10% of its apex, summed. A group without any trace of at least
-      4 peaks gets the summed intensities of its masses times the MS1 cycle time (and a trace count of 0).
-      @param ms1_map the MS1 spectra as loaded (before FLASHDeconv's peak filtering), each sorted by m/z
+      4 peaks gets NaN (and a trace count of 0). The ion mode is that of the masses (in negative mode, m/z = mass / charge - proton mass).
+      @param ms1_map the MS1 spectra as loaded (before FLASHDeconv's peak filtering), each sorted by m/z; with fewer than 3, no traces
+      (every abundance NaN, with a warning)
       @param deconvolved_spectra FLASHDeconv's deconvolved spectra; the MS1 ones are quantified
       @param avg FLASHDeconv's averagine
       @param mass_abundances out: per deconvolved spectrum (by position), per mass (by position): the abundance of its group
@@ -88,7 +89,16 @@ namespace OpenMS
     {
       double mass;            ///< monoisotopic mass
       double rt_start, rt_end; ///< seconds: the window of the apex of its traces
-      int min_charge, max_charge;
+      int min_charge, max_charge; ///< as FLASHDeconv reports them: negative in negative ion mode (-largest .. -smallest absolute charge)
+
+      /// the absolute charge range (from 1 on) into @p zmin and @p zmax; returns whether the ion mode is positive
+      bool chargeRange(int& zmin, int& zmax) const
+      {
+        const bool positive = max_charge > 0;
+        zmin = std::max(1, positive ? min_charge : -max_charge);
+        zmax = positive ? max_charge : -min_charge;
+        return positive;
+      }
     };
     /// the summed bulk area of the raw traces at each target's charges and core isotopes (>= 10% of the most abundant) within 10 ppm
     /// whose apex lies in its window (no resolution of shared traces), and the number of those traces
