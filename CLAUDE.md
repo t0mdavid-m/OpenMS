@@ -88,6 +88,15 @@ is airtight:
 > `a_factor_shifts_the_ratio_and_leaves_the_reported_channels_raw` and
 > `emptiness_is_judged_on_the_raw_value` pin both.
 
+⚠️ **One owner-approved edit sits inside the boundary: `PeakGroup::updateSNR_`** (`fix(TOPDOWN)`
+`9721595ca4`, 2026-10-26, on top of the FDmerge merge `d0954cf37b`). FDmerge's `updateChargeRange_` passes
+over up to two weak charges, so a charge with **no peak** can now sit inside a PeakGroup's range. With
+no signal and no noise, the two `1e-6` regularisers cancel and that charge scores SNR **exactly 1.0**,
+above the real charges. It then became the representative charge, and `buildMS2` wrote an isolation
+centre of −5.5. The fix gives a charge with no signal SNR 0. It is a separate commit so Kyowon can take
+it into FDmerge or reject it; nothing was pushed to `FDmerge` itself. Every other FLASHDeconv/FLASHTnT
+file is exactly as FDmerge has it.
+
 ### Ownership tree — declaration order is load-bearing
 
 `FLASHIda` is the single orchestrator and owns all ten subsystems **by value**. C++ initializes
@@ -188,6 +197,16 @@ itself minted and dispatched its id.
 A sixth early return follows the gates: MS1 with `config_.level(1).selection == None` returns 0
 before selection. None of these paths reaches the TSV writers, so an un-commanded scan produces no
 log row — but gates 3–5 do leave a stdout trace.
+
+**Gate 3 also refuses a result that arrived too late** (FDmerge `96f8ab3732`). Only an answer
+(`resolvePending`) or an exploration abort (`cancelByScanIds`) empties `pending_scan_map_`, so a scan the
+host or instrument dropped, or one an MS1-only replay never feeds, used to stay for the life of the engine.
+Every registration is now numbered (`registerPending_`, called from `dequeue_` ahead of ADR-0060's commit
+block). Every `IN_FLIGHT_SWEEP_EVERY` (1024) registrations, entries more than `MAX_IN_FLIGHT` (10 000)
+registrations old are dropped with a `[TRACK-LOST] id=…` stdout line. A result arriving after that is
+`not_found`. The age is counted in commands **sent**, never in time, so an instrument pause cannot age an
+entry. It is deliberately not tied to `scheduling.scan_timeout`, which only drops **queued** commands
+(`cleanupExpired`).
 
 **`processScan` takes retention time in SECONDS** (ADR-0051). The C export converts the host's
 minutes, and it is the only production caller; the C++ tests call `processScan` directly with
@@ -798,7 +817,30 @@ the caller's responsibility.
   such id in a first pass and skips the `Mass=` lines carrying one, so a superseded decision is not an
   extra observation in `in_depth`'s `1 − ∏(1 − qscore)`. A log without `ID=` loads as before.
   `scan_results`' MS1 `child_ids` likewise stays decision-time and still lists a superseded id.
+- **Every TSV cell that carries a tracking id is written through `quoteLogCell`** (`FLASHIda/LogCell.h`,
+  FDmerge `96f8ab3732`). Base-94 ids use 0x21–0x7E, so ids 8,836–17,671 begin with `"`, which a
+  CSV-style reader (pandas, Python `csv`) takes as an opening quote. A cell beginning with `"` is
+  RFC 4180-quoted, and no other cell changes, so every log of a run under 8,836 commands is
+  byte-identical. This covers the ids, the space-joined id lists and `scan_description`. ADR-0060's
+  `decision_survey_id` is quoted on write too, and `ScanCommandJoin::parse` reads it back through
+  `unquoteLogId`. `ida.log` is not a TSV and is not quoted.
   `NormalizeIdaLog` masks both id kinds, so no golden sees their values.
+- **An `ida.log` target is a MASS, active within `rt_window` of a reference acquisition** (FDmerge
+  `20db11cef3`, "GTM"). Under `targeting: inclusion` with `files.target_logs` and no inclusion TSV
+  rows, `PrecursorSelection` makes each logged mass a target only while the current RT is within
+  `precursor_selection.rt_window` of an RT at which a reference acquired it, and matches it at any
+  charge. FDmerge `1fe5ee0b3e` keeps the two previous behaviours as keys, both exposed in `method.json`:
+  - `log_target_rt_window: false` makes every log target a target at every RT. That was the behaviour
+    from 2025-07-07 to 2026-10-21.
+  - `log_target_charges: "reference"` matches only at a charge the reference acquired. Each acquisition
+    uses that charge up, through `target_mass_charge_map_`, and the erase is journaled as a
+    `LegacyTargetChargeErase` stamp, so a re-planned-away command spends nothing.
+
+  The loader files `AllMass` lines under their own survey. FASTA tag-expanded targets **add** to the
+  log targets: they used to fill `inclusion_targets_`, which silently made the TSV branch replace them.
+  The gate is C++: `FLASHIda_DynamicTargets_test` together with `FLASHIda_ProcessScan_test`'s GTM
+  sections. The `log_target_charges: "reference"` path is also exercised by `FLASHIda_ChargeModes_test`'s
+  two legacy-inclusion cases.
 - **`Mass=` and `AllMass=` are the same rendering, and that is asserted** (ADR-0035 decision 5).
   Both are `std::fixed << setprecision(4)`, so a target's mass appears **verbatim** among its own
   entry's `AllMass=` tokens. `Mass=` used to say `std::defaultfloat` with no precision of its own —
@@ -942,6 +984,16 @@ isolated. Until ADR-0059 SNR admitted and **intensity** ranked, on the argument 
 clean-but-faint charge displace an abundant one under a clamp; the ranking is now authored
 (`snr | qscore | intensity | purity`, default `snr`, `purity` refused under `multiplexed`) and the same
 rule picks the anchor.
+
+⚠️ **Under `snr` and `qscore` the anchor must be a RESOLVED charge** (`fix(FLASHIda)` `463d2ba1a4`, made
+visible by the FDmerge merge). `pickAnchor` (`CandidateAdmission.h`) keeps
+`getRepAbsCharge()`/`getBestQScoreCharge()` only if that charge is in `resolvedCandidates_`, the same
+list every other rule, the notches and the `separate` set read. A single-peak charge has no measured
+window (`getMzRange` lo == hi) and is absent from that list. Since FDmerge's noise changes, such a charge
+can top the per-charge SNR (measured: 6306.15 Da rep z6 at SNR 1.55 against ≤ 0.86 for the full
+envelope). When the accessor's charge is unresolved, the first of `rankCharges(cands, rule)` is the anchor.
+With no candidate at all, the result is `NoAnchorResolved`. When the accessor's charge is resolved, the
+result is byte-identical.
 
 **Three of the policy's inputs are now AUTHORED, and all three are inert by default** (ADR-0040,
 `precursor_selection`). `snr_threshold` is the same gate as ever but reachable — it used to be
