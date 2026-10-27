@@ -54,12 +54,16 @@ using namespace std;
   above it; values whose q-value exceeds -mbr_fdr are NaN. A detected run without raw abundance (no trace in its window) is NaN too.
   Ion mode: that of the features (negative charges: negative mode, m/z = mass / charge - proton mass); the feature files of one call must
   share it. A run with fewer than 3 MS1 spectra has no mass traces: its values are NaN (with a warning).
-  Identifications (-in_id, optional): FLASHTnT PrSMs of the runs. A transfer whose run identifies its mass in its window (within three
-  times the median mass error of the identifications of the detected features) scores 2, above any Qscore2D (an MS2 identification is
-  evidence that FLASHDeconv's MS1 scoring may miss). Its decoy mass is matched the same way and scores 2 when identified, so the
-  identifications that fit a mass by chance count as nulls in the FDR like the others. Such a transfer has the status mbr_id; its value
-  is as exact as a detected one (PXD042169 SpikeIn, E. coli transfers off by more than 2-fold: mbr_id 2.5%, mbr 19%, detected 11%).
-  -mbr_min_score keeps only the mbr transfers of at least that Qscore2D.
+  Identifications (-in_id, optional): FLASHTnT PrSMs of the runs. A transfer with a raw abundance whose run identifies its mass in its
+  window (within three times the median mass error of the identifications of the detected features; FLASHDeconv's tolerance if none
+  is identified) is identified (an MS2 identification is evidence that FLASHDeconv's MS1 scoring may miss). The identified transfers
+  have an FDR of their own: the decoy masses the runs identify the same way (of all the transfers) over the identified transfers.
+  Within -mbr_fdr, they are kept with the status mbr_id, whatever FLASHDeconv's evidence, and leave the targets of the other
+  transfers; else they are judged like the others. The other transfers are judged by FLASHDeconv's evidence against all the decoys,
+  as without identifications but without the identified transfers among their targets: their q-values are never lower than without
+  identifications (at a strict -mbr_fdr, a few fewer pass), so the identifications never let another transfer through. The value of
+  an mbr_id transfer is as exact as a detected one (PXD042169 SpikeIn, E. coli transfers off by more than 2-fold: mbr_id 2.5%, mbr
+  19%, detected 11%). -mbr_min_score keeps only the mbr transfers of at least that Qscore2D.
 */
 
 // We do not want this class to show up in the docu:
@@ -94,7 +98,8 @@ protected:
     registerOutputFile_("out", "<file>", "", "Consensus feature tsv: per feature its mass, aligned apex and charges, and per run (named by the base name of its "
                         "-in file; a name two inputs share gets the run's position appended, _1, _2, ...) its abundance, "
                         "status (detected; mbr: a match between runs; mbr_id: one the run identifies, -in_id; or nan) and, for a match between "
-                        "runs, its score (FLASHDeconv's Qscore2D of the mass, see above; 2 if the run identifies it) and q-value.", true);
+                        "runs, its score (FLASHDeconv's Qscore2D of the mass, see above) and q-value (for mbr_id, that of the identified "
+                        "transfers).", true);
     setValidFormats_("out", ListUtils::create<String>("tsv"));
     registerDoubleOption_("min_run_fraction", "<fraction>", 0.25, "Consensus features detected in at least this fraction of the runs are quantified in every run "
                           "(where not detected, by match between runs at -mbr_fdr). Lower values quantify more features, but their many weak transfers "
@@ -113,13 +118,16 @@ protected:
     registerInputFileList_("in_id", "<files>", {}, "Optional: FLASHTnT PrSM tsv files (-out_prsm) of the runs, in the order of -in. A transfer whose run "
                            "identifies its mass (a PrSM in its window: target protein, not a decoy precursor, proteoform q-value <= -id_fdr; its "
                            "precursor mass equal to the transfer's, or one isotope off, within three times the median error of the identifications "
-                           "of the features where detected) scores 2, above any Qscore2D, whatever FLASHDeconv's evidence. Its decoy mass is "
-                           "matched the same way and scores 2 when identified, so identifications that fit by chance enter the FDR of the match "
-                           "between runs like the other nulls. Needs FLASHTnT's q-values (a database with decoys). Without it, nothing changes.", false);
+                           "of the features where detected; FLASHDeconv's tolerance if none is identified) and with a raw abundance is kept "
+                           "with the status mbr_id, whatever FLASHDeconv's evidence, if the identified transfers pass -mbr_fdr as a class: the "
+                           "decoy masses identified the same way over the identified transfers; else they are judged like the others. The "
+                           "other transfers are judged by FLASHDeconv's evidence without the kept identified ones among their targets: their "
+                           "q-values are never lower than without identifications. Needs FLASHTnT's q-values (a database with decoys). "
+                           "Without it, nothing changes.", false);
     setValidFormats_("in_id", ListUtils::create<String>("tsv"));
     registerDoubleOption_("id_fdr", "<q-value>", 0.01, "With -in_id: the PrSMs used, by their proteoform-level q-value.", false);
-    registerDoubleOption_("mbr_min_score", "<score>", 0.0, "Match between runs: transfers not identified in their run (status mbr) are kept only with a "
-                          "score (Qscore2D) at least this, besides -mbr_fdr; identified ones (mbr_id) always pass. The FDR says that the mass is "
+    registerDoubleOption_("mbr_min_score", "<score>", 0.0, "Match between runs: transfers other than mbr_id (status mbr) are kept only with a "
+                          "score (Qscore2D) at least this, besides -mbr_fdr; mbr_id ones always pass. The FDR says that the mass is "
                           "there, not how exact the value is: PXD042169 SpikeIn, E. coli transfers off by more than 2-fold: identified 2.5%, "
                           "Qscore2D >= 0.95 17%, < 0.95 25% (detected values 11%); 0.5 / 0.8 / 0.95 kept 95 / 81 / 65% of the transfers.", false);
     setMinFloat_("mbr_min_score", 0.0);
@@ -573,8 +581,8 @@ protected:
     }
 
     // The score of a transfer: FLASHDeconv's Qscore2D of its mass in its window, if FLASHDeconv's mass of it is within three times the
-    // median mass error of the features where detected and it has a raw abundance; else 0 (kept only with -mbr_fdr 1). Its decoy is
-    // scored the same way.
+    // median mass error of the features where detected and it has a raw abundance; else 0 (kept only with -mbr_fdr 1, or as mbr_id).
+    // Its decoy is scored the same way.
     // FLASHDeconv's mass, from all the peaks of the envelope in a scan, is far more precise than any single trace. The error is taken
     // against the feature's own mass measured the same way where detected (the median signed error of those runs; for a detected run, of
     // the other ones): the mass of the FLASHDeconv feature table is another estimate, off by a fixed amount for a quarter of the features.
@@ -627,35 +635,58 @@ protected:
         }
       }
       const double id_gate = detected_errors.empty() ? fd_tol * 1e6 : 3 * median_(detected_errors);
-      Size id_targets = 0, id_nulls = 0;
       for (Size k = 0; k < kept.size(); ++k)
       {
         for (Size r = 0; r < run_count; ++r)
         {
           if (kept[k].runs.count(r) > 0) continue;
           for (int kind = 0; kind < 2; ++kind) identified[k][r][kind] = id_error[k][r][kind] >= 0 && id_error[k][r][kind] <= id_gate;
-          id_targets += identified[k][r][0];
-          id_nulls += identified[k][r][1];
         }
       }
       OPENMS_LOG_INFO << "Match between runs: identifications (-in_id): |mass error| gate " << id_gate << " ppm (from " << detected_errors.size()
-                      << " identified detections); transfers identified " << id_targets << ", their decoy masses " << id_nulls << endl;
+                      << " identified detections)" << endl;
     }
-    // an identification of the mass in the run (-in_id) scores 2, above any Qscore2D; so does a decoy whose mass is identified
+    // the score of a transfer: FLASHDeconv's evidence alone
     const auto score_of = [&](const FDEvidence& e, double v, double ref) {
       return (v > 0 && e.scans > 0 && std::abs(e.ppm - ref) <= mass_gate) ? e.qscore2d : 0.0;
     };
+    // -in_id: the identified transfers (with a raw abundance) are a class with an FDR of its own: the decoy masses the runs identify (of
+    // all the transfers, with or without a raw abundance: the stricter count) over the identified transfers. Within -mbr_fdr, they are
+    // kept (mbr_id) and leave the targets of the other transfers; else they stay among them. The other transfers are scored against
+    // all the decoys by FLASHDeconv's evidence, as without identifications (one null per transfer, so a few more nulls than targets: the
+    // identifications never let another transfer through). Pooled with the others, the identified transfers (2-3% of the transfers of
+    // PXD042169, nearly no nulls) would loosen the threshold of the others.
+    const auto is_identified = [&](Size k, Size r) { return value[k][r].first > 0 && identified[k][r][0]; };
     std::vector<std::vector<double>> score(kept.size(), std::vector<double>(run_count, 0));
     std::vector<double> target_scores, null_scores;
+    Size id_targets = 0, id_nulls = 0;
     for (Size k = 0; k < kept.size() && mbr_fdr >= 0; ++k)
     {
       for (Size r = 0; r < run_count; ++r)
       {
         if (kept[k].runs.count(r) > 0) continue;
-        score[k][r] = (value[k][r].first > 0 && identified[k][r][0]) ? 2.0 : score_of(fd_evidence[k][r][0], value[k][r].first, reference[k]);
-        target_scores.push_back(score[k][r]);
-        null_scores.push_back(identified[k][r][1] ? 2.0 : score_of(fd_evidence[k][r][1], decoy_value[k][r], reference[k]));
+        score[k][r] = score_of(fd_evidence[k][r][0], value[k][r].first, reference[k]);
+        null_scores.push_back(score_of(fd_evidence[k][r][1], decoy_value[k][r], reference[k]));
+        id_targets += is_identified(k, r);
+        id_nulls += identified[k][r][1];
       }
+    }
+    const double id_q = id_targets > 0 ? std::min(1.0, (double)id_nulls / (double)id_targets) : 1.0;
+    const bool id_class = id_targets > 0 && id_q <= mbr_fdr;
+    for (Size k = 0; k < kept.size() && mbr_fdr >= 0; ++k)
+    {
+      for (Size r = 0; r < run_count; ++r)
+      {
+        if (kept[k].runs.count(r) > 0 || (id_class && is_identified(k, r))) continue;
+        target_scores.push_back(score[k][r]);
+      }
+    }
+    if (!in_id.empty() && mbr_fdr >= 0)
+    {
+      OPENMS_LOG_INFO << "Match between runs: identified transfers " << id_targets << ", identified decoy masses " << id_nulls
+                      << (id_targets == 0 ? String("")
+                          : String(": FDR ") + String(id_q) + (id_class ? " (kept: mbr_id)" : " (above -mbr_fdr: judged by FLASHDeconv's evidence like the others)"))
+                      << endl;
     }
     // q-values: the FDR of a threshold T is (null scores >= T) / (target scores >= T) (one null per transfer); the q-value of a
     // score is the lowest FDR of the thresholds at or below it
@@ -684,7 +715,8 @@ protected:
     {
       const Size null_above = null_scores.end() - std::lower_bound(null_scores.begin(), null_scores.end(), threshold);
       const Size target_above = target_scores.end() - std::lower_bound(target_scores.begin(), target_scores.end(), threshold);
-      OPENMS_LOG_INFO << "Match between runs: " << target_scores.size() << " transfers; score threshold at FDR " << mbr_fdr << ": " << threshold
+      OPENMS_LOG_INFO << "Match between runs: " << target_scores.size() << " transfers" << (id_class ? " not identified" : "") << "; score threshold at FDR "
+                      << mbr_fdr << ": " << threshold
                       << " (targets at or above it " << target_above << ", nulls " << null_above << ")" << endl;
 
     }
@@ -774,8 +806,8 @@ protected:
           continue;
         }
         mbr_total++;
-        const double q = (mbr_fdr >= 0 && v > 0) ? q_of(score[k][r]) : 1.0;
-        const bool id = identified[k][r][0] && score[k][r] >= 2.0;
+        const bool id = id_class && is_identified(k, r);
+        const double q = (mbr_fdr >= 0 && v > 0) ? (id ? id_q : q_of(score[k][r])) : 1.0;
         const bool ok = mbr_fdr >= 0 && v > 0 && q <= mbr_fdr && (id || score[k][r] >= mbr_min_score);
         mbr_kept += ok;
         mbr_id_kept += ok && id;
@@ -785,7 +817,7 @@ protected:
       os << "\n";
     }
     OPENMS_LOG_INFO << "Match between runs: " << mbr_kept << " of " << mbr_total << " values kept (q-value <= " << mbr_fdr
-                    << (mbr_min_score > 0 ? String(", score >= ") + String(mbr_min_score) + " unless identified" : String("")) << ")"
+                    << (mbr_min_score > 0 ? String(", score >= ") + String(mbr_min_score) + " unless mbr_id" : String("")) << ")"
                     << (in_id.empty() ? String("") : String(", identified in their run (mbr_id) ") + String(mbr_id_kept)) << endl;
     return EXECUTION_OK;
   }
