@@ -326,7 +326,9 @@ protected:
       String source;
       runs[r] = readFeatures_(in_feature[r], source);
       // the feature table names the mzML FLASHDeconv read: a different name hints at files given in another order than -in
-      if (!source.empty() && QFileInfo(source.toQString()).completeBaseName() != QFileInfo(in[r].toQString()).completeBaseName())
+      // (a path written on Windows has backslashes, which QFileInfo on other systems does not split at)
+      const auto base_name = [](String path) { path.substitute('\\', '/'); return QFileInfo(path.toQString()).completeBaseName(); };
+      if (!source.empty() && base_name(source) != base_name(in[r]))
       {
         OPENMS_LOG_WARN << "Warning: " << in_feature[r] << " was made from " << source << ", not from " << in[r] << " (the files of -in and -in_feature pair up by their order)" << endl;
       }
@@ -373,10 +375,12 @@ protected:
         m.push_back(f.mass);
         a.push_back(f.aligned);
         h.push_back((f.end - f.start) / 2);
-        z1.push_back(f.min_charge);
-        z2.push_back(f.max_charge);
+        // the median of the absolute charges (FLASHDeconv writes -largest .. -smallest in negative mode), signed again below
+        z1.push_back(negative_mode ? -f.max_charge : f.min_charge);
+        z2.push_back(negative_mode ? -f.min_charge : f.max_charge);
       }
-      summary.push_back({median_(m), median_(a), std::max(0.5, median_(h)), (int)median_(z1), (int)median_(z2)});
+      const int zlo = (int)median_(z1), zhi = (int)median_(z2);
+      summary.push_back({median_(m), median_(a), std::max(0.5, median_(h)), negative_mode ? -zhi : zlo, negative_mode ? -zlo : zhi});
       max_mass = std::max(max_mass, summary.back().mass);
     }
     SpectralDeconvolution sd;
@@ -591,15 +595,27 @@ protected:
     // output
     std::ofstream os(out);
     os << "ConsensusIndex\tMonoisotopicMass\tApexRetentionTime\tMinCharge\tMaxCharge\tDetectedRuns";
-    // the run names (file base names); a name two inputs share gets the run's position appended (_1, _2, ...), so that no column repeats
+    // the run names (file base names); a name two inputs share gets the run's position appended (_1, _2, ...), again while it equals
+    // another run's name (run, run, run_2: run_1, run_2_2, run_2), so that no column repeats
     std::vector<String> names;
     for (const auto& f : in) names.push_back(QFileInfo(f.toQString()).completeBaseName());
     {
-      std::map<String, Size> name_count;
-      for (const auto& n : names) name_count[n]++;
-      for (Size r = 0; r < run_count; ++r)
+      std::vector<bool> renamed(run_count, false);
+      for (bool repeated = true; repeated;)
       {
-        if (name_count[names[r]] > 1) names[r] += "_" + String(r + 1);
+        repeated = false;
+        std::map<String, Size> name_count;
+        for (const auto& n : names) name_count[n]++;
+        // first round: every run of a shared name; later: only the renamed ones (the names of the files stay)
+        const bool first_round = std::none_of(renamed.begin(), renamed.end(), [](bool b) { return b; });
+        for (Size r = 0; r < run_count; ++r)
+        {
+          if (name_count[names[r]] < 2) continue;
+          if (!renamed[r] && !first_round) continue;
+          names[r] += "_" + String(r + 1);
+          renamed[r] = true;
+          repeated = true;
+        }
       }
     }
     for (const auto& n : names) os << "\tAbundance_" << n << "\tStatus_" << n << "\tMatchScore_" << n << "\tMatchQvalue_" << n;
