@@ -183,9 +183,9 @@ void FLASHDeconvAlgorithm::filterLowPeaks_(MSExperiment& map)
       Size count = it.getType(false) == SpectrumSettings::CENTROID ? max_peak_count_for_centroid_ : max_peak_count_for_profile_;
       // The same result without the two sorts below: with strictly increasing m/z and no data arrays, the sort by position restores
       // the m/z order of the peaks the sort by intensity left, so the result is the peaks above the threshold in their order. The
-      // threshold is the intensity of rank count (0-based) in descending order and the highest intensity / 1000 (the mower left no
-      // NaN intensity). With exactly count peaks the code below reads past the end, so it stays as it is.
-      if (it.size() != count && it.getFloatDataArrays().empty() && it.getStringDataArrays().empty() && it.getIntegerDataArrays().empty())
+      // threshold is the intensity of rank count (0-based) in descending order (none with at most count peaks) and the highest
+      // intensity / 1000 (the mower left no NaN intensity).
+      if (it.getFloatDataArrays().empty() && it.getStringDataArrays().empty() && it.getIntegerDataArrays().empty())
       {
         bool increasing = true;
         float max_intensity = it[0].getIntensity();
@@ -215,7 +215,7 @@ void FLASHDeconvAlgorithm::filterLowPeaks_(MSExperiment& map)
         }
       }
       it.sortByIntensity(true);
-      double threshold = it.size() < count ? 0 : it[count].getIntensity();
+      double threshold = it.size() <= count ? 0 : it[count].getIntensity();
       threshold = std::max(threshold, (double)it.begin()->getIntensity() / 1000);
       // pop back the low intensity peaks using threshold
 
