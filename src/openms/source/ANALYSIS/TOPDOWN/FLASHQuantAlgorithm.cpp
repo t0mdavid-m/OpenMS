@@ -26,6 +26,19 @@
 #include <set>
 #include <tuple>
 
+namespace
+{
+  /// FeatureFinder's initial estimate of the EGH model of traces (EGHTraceFitter: apex and height of their summed, smoothed intensity
+  /// profile, sigma and tau from its half-maximum widths), without the Levenberg-Marquardt fit of EGHTraceFitter::fit
+  struct EGHEstimate : OpenMS::EGHTraceFitter
+  {
+    static void estimate(OpenMS::EGHTraceFitter& fitter, OpenMS::FeatureFinderAlgorithmPickedHelperStructs::MassTraces& traces)
+    {
+      (fitter.*(&EGHEstimate::setInitialParameters_))(traces);
+    }
+  };
+} // namespace
+
 namespace OpenMS
 {
   FLASHQuantAlgorithm::FLASHQuantAlgorithm() :
@@ -1371,8 +1384,7 @@ namespace OpenMS
       // them in parallel. The features of the cluster, as a region forms them from the groups as they are now, are fitted ahead in
       // parallel into the cache the regions read. A fit depends only on the unique traces named in its key, which no region changes,
       // so a region finds the same model it would fit; a feature whose traces a region changed gets another key and is fitted then.
-      // Fits that fail are not cached and not logged here: a region that uses the feature fits it again and logs the failure, as
-      // before; many features fitted ahead are never used by a region.
+      // A model that cannot be made is not cached: a region that uses the feature makes it again and fails the same way there.
       std::vector<Feature> ahead;
       std::set<std::pair<Size, int>> seen;
       for (const auto& [trace_index, group_and_charges] : shared_mt_N_features)
@@ -1405,11 +1417,12 @@ namespace OpenMS
         try
         {
           auto model = std::make_shared<EGHTraceFitter>();
-          if (fitTraceModelFromUniqueTraces_(ahead[i], model.get(), false)) models[i] = model;
+          fitTraceModelFromUniqueTraces_(ahead[i], model.get());
+          models[i] = model;
         }
         catch (...)
         {
-          // not cached: a region using this feature fits it again, and fails the same way there
+          // not cached (see above)
         }
       }
       for (Size i = 0; i < ahead.size(); ++i)
@@ -2105,7 +2118,7 @@ namespace OpenMS
   }
 
   // modified ElutionModelFitter::fitElutionModels
-  bool FLASHQuantAlgorithm::fitTraceModelFromUniqueTraces_(FLASHQuantHelper::Feature const& tmp_feat, EGHTraceFitter* fitter, bool log_errors) const
+  void FLASHQuantAlgorithm::fitTraceModelFromUniqueTraces_(FLASHQuantHelper::Feature const& tmp_feat, EGHTraceFitter* fitter) const
   {
     Size mass_traces_size = tmp_feat.unique_traces.size();
 
@@ -2139,7 +2152,7 @@ namespace OpenMS
         }
       }
       tmp_mtrace.updateMaximum();
-//      tmp_mtrace.theoretical_int = tmp_feat.isotope_probabilities[idx];
+      tmp_mtrace.theoretical_int = 1.0; // not read by the model (see runElutionModelFit_), but the struct leaves it uninitialized
       traces_for_fitting.push_back(tmp_mtrace);
     }
 
@@ -2148,7 +2161,7 @@ namespace OpenMS
 //    Param params = fitter->getDefaults();
 //    params.setValue("weighted", "true");
 //    fitter->setParameters(params);
-    return runElutionModelFit_(traces_for_fitting, fitter, log_errors);
+    runElutionModelFit_(traces_for_fitting, fitter);
   }
 
   // update MassTrace
@@ -2196,8 +2209,7 @@ namespace OpenMS
   }
 
   // from ElutionModelFitter.
-  bool FLASHQuantAlgorithm::runElutionModelFit_(FeatureFinderAlgorithmPickedHelperStructs::MassTraces &m_traces,
-                                                      EGHTraceFitter *fitter, bool log_errors) const
+  void FLASHQuantAlgorithm::runElutionModelFit_(FeatureFinderAlgorithmPickedHelperStructs::MassTraces &m_traces, EGHTraceFitter *fitter) const
   {
     // find the trace with maximal intensity:
     Size max_trace = 0;
@@ -2213,21 +2225,14 @@ namespace OpenMS
     m_traces.max_trace = max_trace;
     m_traces.baseline = 0.0;
 
-    // Fitting
-    try
-    {
-      fitter->fit(m_traces);
-    }
-    catch (Exception::UnableToFit &except)
-    {
-      if (log_errors)
-      {
-        OPENMS_LOG_ERROR << "Error fitting model to feature '"
-                         << except.getName()
-                         << " - " << except.getMessage() << endl;
-      }
-      return false;
-    }
+    // The model is FeatureFinder's initial estimate of the EGH. FLASHQuant ran EGHTraceFitter's Levenberg-Marquardt fit on top of it with
+    // the theoretical intensities of the traces left uninitialized (denormals such as 2.5e-312 read from memory): the model was ~0 at any
+    // height, no step moved it, and the fit only cost time (Eclip_1480: 62k of 120k fits ran to the limit of 500 evaluations, 10 of the
+    // 13.5 s of the resolution of shared traces). With the estimate alone the abundances of Eclip_1480 and of the 28 PXD042169 runs are
+    // the same to the last digit. A real fit (each trace's theoretical intensity its maximum relative to the largest) was not better:
+    // SpikeIn ProtMix |log2 error| 0.739 -> 0.705, E. coli 0.265 -> 0.259, but CVs up (0.134 -> 0.138) and ProteomeMix E. coli
+    // 0.177 -> 0.189.
+    EGHEstimate::estimate(*fitter, m_traces);
 
     // record model parameters:
     //    double center = fitter->getCenter(), height = fitter->getHeight();
@@ -2238,7 +2243,6 @@ namespace OpenMS
     //
     //    double lower_rt_bound = fitter->getLowerRTBound();
     //    double upper_rt_bound = fitter->getUpperRTBound();
-    return true;
   }
 
   void FLASHQuantAlgorithm::getFLASHDeconvConsensusResult()

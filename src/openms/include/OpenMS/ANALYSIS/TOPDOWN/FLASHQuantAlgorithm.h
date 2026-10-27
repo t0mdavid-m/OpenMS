@@ -176,10 +176,12 @@ namespace OpenMS
 
     MassTrace updateMassTrace_(const MassTrace& ref_trace, const double &ratio) const;
 
-    /// @return false if the model could not be fitted (logged as an error if @p log_errors)
-    bool fitTraceModelFromUniqueTraces_(Feature const& tmp_feat, EGHTraceFitter* fitted_model, bool log_errors = true) const;
+    /// the elution model of @p tmp_feat from its unique traces into @p fitted_model (runElutionModelFit_)
+    void fitTraceModelFromUniqueTraces_(Feature const& tmp_feat, EGHTraceFitter* fitted_model) const;
 
-    bool runElutionModelFit_(FeatureFinderAlgorithmPickedHelperStructs::MassTraces &m_traces, EGHTraceFitter* fitter, bool log_errors = true) const;
+    /// the EGH elution model of @p m_traces into @p fitter: EGHTraceFitter's initial estimate (apex and height of the summed, smoothed
+    /// intensity profile of the traces, sigma and tau from its half-maximum widths), without its Levenberg-Marquardt fit
+    void runElutionModelFit_(FeatureFinderAlgorithmPickedHelperStructs::MassTraces &m_traces, EGHTraceFitter* fitter) const;
 
     /// @p entries: the features of the trace with their component (-1: none), in feature order
     void updateFeatureWithFitModel(std::vector<Feature>& conflicting_features, const std::vector<std::pair<Size, long>>& entries,
