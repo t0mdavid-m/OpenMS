@@ -110,13 +110,15 @@ START_SECTION((GaussFitResult fit(std::vector< DPosition< 2 > >& points) const))
   gf.setInitialParameters(gfi);
   Math::GaussFitter::GaussFitResult gfr = gf.fit(gp);
   /*
-  x0:      240.10051 --> 240.1007246725147
-  sigma: 0.000375375 --> 0.00046642320683761701
-  A:          168324 --> 175011.8930067491
+  x0:      240.10051 --> 240.1007253
+  sigma: 0.000375375 --> 0.000481289037673808
+  A:          168324 --> 175052.062089376
+  the least-squares optimum (residual sum of squares 1.790e8; with the sigma derivative of the Jacobian a quarter of the true one, the
+  fit stopped at A 175011.89, sigma 0.00046642, sum 2.344e8)
   */
-  TEST_REAL_SIMILAR(gfr.A, 175011.893006749)
-  TEST_REAL_SIMILAR(gfr.x0, 240.1007246725147)
-  TEST_REAL_SIMILAR(gfr.sigma, 0.00046642320683761701)
+  TEST_REAL_SIMILAR(gfr.A, 175052.062089376)
+  TEST_REAL_SIMILAR(gfr.x0, 240.1007253)
+  TEST_REAL_SIMILAR(gfr.sigma, 0.000481289037673808)
   delete ptr;
 }
 END_SECTION
