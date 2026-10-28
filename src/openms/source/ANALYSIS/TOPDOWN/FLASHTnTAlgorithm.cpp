@@ -2856,6 +2856,23 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         }
         const bool with_dp = ranked_no_dp.size() < ranked.size();
         const auto proteoform_qvalues_no_dp = with_dp ? targetDecoyQvalues(ranked_no_dp) : proteoform_qvalues;
+        // and by blind group, as in the competition: a proteoform with an MS1 mass and no blind modification counts only the decoy
+        // precursors without one, one with a blind modification only those with one (the targets and the database decoys as they are)
+        const auto blindGroup = [this, &clusters, &order](Size k) { return blindModCount_(proteoform_hits_[clusters[order[k]][0]]) > 0 ? 1 : 0; };
+        std::array<std::vector<RankedItem<double>>, 2> ranked_dp;
+        std::array<std::vector<Size>, 2> dp_pos {std::vector<Size>(order.size(), (Size)-1), std::vector<Size>(order.size(), (Size)-1)};
+        for (Size k = 0; with_dp && k < order.size(); k++)
+        {
+          const bool dp = no_dp_pos[k] == (Size)-1;
+          for (int g = 0; g < 2; g++)
+          {
+            if (dp && blindGroup(k) != g) continue;
+            dp_pos[g][k] = ranked_dp[g].size();
+            ranked_dp[g].push_back(ranked[k]);
+          }
+        }
+        std::array<std::vector<double>, 2> proteoform_qvalues_dp;
+        for (int g = 0; with_dp && g < 2; g++) proteoform_qvalues_dp[g] = targetDecoyQvalues(ranked_dp[g]);
         auto& counts = class_counts[c];
         counts = {0, 0, 0};
         for (Size k = 0; k < order.size(); k++)
@@ -2863,7 +2880,9 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
           const Size rep = clusters[order[k]][0];
           const bool ms1_mass = (double)proteoform_hits_[rep].getMetaValue("Mass", -1.0) > 0
                                 && (int)proteoform_hits_[rep].getMetaValue("ProteoformMassByFragmentMass", 0) == 0;
-          const double pq = (ms1_mass || no_dp_pos[k] == (Size)-1) ? proteoform_qvalues[k] : proteoform_qvalues_no_dp[with_dp ? no_dp_pos[k] : k];
+          double pq = proteoform_qvalues[k]; // without decoy precursors the only ranking
+          if (with_dp && ms1_mass) pq = proteoform_qvalues_dp[blindGroup(k)][dp_pos[blindGroup(k)][k]];
+          else if (with_dp && no_dp_pos[k] != (Size)-1) pq = proteoform_qvalues_no_dp[no_dp_pos[k]];
           for (Size i : clusters[order[k]])
           {
             proteoform_hits_[i].setMetaValue("proqvalue", pq);
@@ -3556,49 +3575,68 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         // Qscore, the score its own FDR compares target and decoy masses with) is higher than the precursor's. The fragments cannot decide
         // the mass: a related or wrong mass explains nearly the same ladders, only the MS1 signal tells them apart. Inputs from FLASHDeconv
         // versions that do not write the decoy precursor's score fall back to the fragment score (the higher PrSM score wins).
+        // The competition is held per blind group (no blind modification, or one or more): a decoy PrSM replaces only the spectrum's
+        // MS1-based PrSMs of its own group, and counts against the proteoforms of that group (the proteoform FDR below). A decoy mass that
+        // fits a sequence only with a blind modification says nothing against a PrSM that matches the unmodified sequence mass, and the other
+        // way round (the three lysates with decoy precursors and the MS1 noise decoy weight: of the proteoforms lost against the MS2 weight,
+        // those without a blind modification matched their unmodified sequence mass within 10 ppm in 88-92% and were found in another lysate
+        // in 58-72%, the ones with a blind modification in 22-31%).
         int decoy_wins = 0, decoy_tries = 0, decoy_by_fragments = 0;
+        std::array<int, 2> group_wins {0, 0}; // by blind group
+        const auto blindGroup = [](const ProteinHit& h) { return blindModCount_(h) > 0 ? 1 : 0; };
         for (int d : todo)
         {
           if (decoy_proteoforms[d].empty()) continue;
           decoy_tries++;
-          double best_decoy = -1e10, best_own = -1e10;
-          for (const auto& h : decoy_proteoforms[d]) best_decoy = std::max(best_decoy, h.getScore());
-          for (const auto& h : spec_proteoforms[d])
-          {
-            if (ms1Based(h)) best_own = std::max(best_own, h.getScore());
-          }
           // on the Qscores in the survey scan alone (1D) when the input has them: a decoy is rarely traced over several scans, so the 2D
           // Qscore favours the precursor (Eclip_1480: of 137 decoy spectra giving a PrSM with the decoy mass, 12 decoys beat the precursor on
-          // the 1D Qscore, 6 on the 2D one)
+          // the 1D Qscore, 6 on the 2D one). The precursor decides for both groups; without its scores, the fragments within each group.
           const double decoy_qscore1d = dspecs[d].getDecoyPrecursorQscore1D(), decoy_qscore = dspecs[d].getDecoyPrecursorQscore();
-          if (decoy_qscore1d >= 0)
+          int by_precursor = -1; // 1: the decoy precursor beats the precursor, 0: it does not, -1: no decoy precursor score
+          if (decoy_qscore1d >= 0) by_precursor = decoy_qscore1d > dspecs[d].getPrecursorPeakGroup().getQscore() ? 1 : 0;
+          else if (decoy_qscore >= 0) by_precursor = decoy_qscore > dspecs[d].getPrecursorPeakGroup().getQscore2D() ? 1 : 0;
+          else decoy_by_fragments++;
+          if (by_precursor == 0) continue;
+          std::array<double, 2> best_decoy {-1e10, -1e10};
+          for (const auto& h : decoy_proteoforms[d])
           {
-            if (decoy_qscore1d <= dspecs[d].getPrecursorPeakGroup().getQscore()) continue;
+            auto& best = best_decoy[blindGroup(h)];
+            best = std::max(best, h.getScore());
           }
-          else if (decoy_qscore >= 0)
+          std::array<bool, 2> wins {false, false};
+          for (int g = 0; g < 2; g++)
           {
-            if (decoy_qscore <= dspecs[d].getPrecursorPeakGroup().getQscore2D()) continue;
+            if (best_decoy[g] == -1e10) continue; // no decoy PrSM of the group
+            if (by_precursor < 0)
+            {
+              double best_own = -1e10;
+              for (const auto& h : spec_proteoforms[d])
+              {
+                if (ms1Based(h) && blindGroup(h) == g) best_own = std::max(best_own, h.getScore());
+              }
+              if (best_decoy[g] <= best_own) continue;
+            }
+            wins[g] = true;
+            group_wins[g]++;
           }
-          else
-          {
-            decoy_by_fragments++;
-            if (best_decoy <= best_own) continue;
-          }
+          if (! wins[0] && ! wins[1]) continue;
           decoy_wins++;
           std::vector<ProteinHit> kept;
           for (auto& h : spec_proteoforms[d])
           {
-            if (! ms1Based(h)) kept.push_back(std::move(h));
+            if (! ms1Based(h) || ! wins[blindGroup(h)]) kept.push_back(std::move(h));
           }
           for (auto& h : decoy_proteoforms[d])
           {
-            if (h.getScore() == best_decoy) kept.push_back(std::move(h));
+            const int g = blindGroup(h);
+            if (wins[g] && h.getScore() == best_decoy[g]) kept.push_back(std::move(h));
           }
           spec_proteoforms[d].swap(kept);
         }
         OPENMS_LOG_INFO << "Decoy precursors: " << copies << " spectra with an MS1-based PrSM and an MS1 decoy mass (" << without_decoy
                         << " without one); the decoy spectrum gave a PrSM with the decoy mass in " << decoy_tries << ", the decoy precursor wins in "
-                        << decoy_wins << (decoy_by_fragments > 0 ? " (" + String(decoy_by_fragments) + " decided on the fragments: no decoy precursor score in the input)" : String(""))
+                        << decoy_wins << " (against PrSMs without a blind modification in " << group_wins[0] << ", with one in " << group_wins[1] << ")"
+                        << (decoy_by_fragments > 0 ? " (" + String(decoy_by_fragments) + " decided on the fragments: no decoy precursor score in the input)" : String(""))
                         << std::endl;
       }
 
