@@ -1,0 +1,3 @@
+PrSMIndex	Scan	RetentionTime	NumMass	ProteinAccession	ProteinDescription	PrecursorMass	ProteoformMass	ProteoformMassFromComplementaryFragmentIonPairs	DatabaseSequence	ProteinSequence	Proforma	MatchingFragments	Coverage(%)	StartPosition	EndPosition	TagCount	TagIndices	ModCount	ModMass	ModID	ModAccession	ModStart	ModEnd	PrecursorQscore	PrecursorSNR	Score	PrSMLevelQvalue	ProteoformLevelQvalue	ProteoformIndex	CandidateSource	FDRClass	ModVariable	DecoyPrecursorWeight	ProteinLevelQvalue	ExtensionScore	RawScore	RawMatchedFragments	RawFragmentHypotheses	RawCoverage(%)
+0	1	98.0	1	DECOY_sp|SYN3|SYN3	synthetic	10011.2	10011.2																				0.000000	0.000000											
+1	1	98.0	1	sp|SYN3|SYN3	synthetic	10011.2	10011.2																				0.000000	0.200000											

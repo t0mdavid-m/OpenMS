@@ -125,7 +125,7 @@ namespace OpenMS
       {
         precursor_scan_ms2_scans[pre_scan].push_back(scan_number);
         ms2_scan_precursor_scan[scan_number] = pre_scan;
-        ms2_scan_precursor_mz[scan_number] = it->getPrecursors()[0].getMZ();
+        if (! it->getPrecursors().empty()) ms2_scan_precursor_mz[scan_number] = it->getPrecursors()[0].getMZ(); // an MSn without precursor: none
       }
     }
 
@@ -141,6 +141,15 @@ namespace OpenMS
       scan_precursors_map[precursor.getScanNumber()].insert(precursor);
     }
 
+    // the spectrum of the retention time nearest to rt (end() if there is none): lower_bound alone was dereferenced past the last spectrum
+    const auto nearest_rt = [&rt_scan_map](double rt) {
+      auto it = rt_scan_map.lower_bound(rt);
+      if (it == rt_scan_map.begin()) return it;
+      auto prev = std::prev(it);
+      if (it == rt_scan_map.end() || std::abs(prev->first - rt) < std::abs(it->first - rt)) return prev;
+      return it;
+    };
+
     for (auto& mf : mass_features)
     {
       auto& mass_trace = mf.mt;
@@ -151,10 +160,10 @@ namespace OpenMS
       // each peak = a precursor peak group
       for (auto& p : mass_trace)
       {
-        auto trt = *rt_scan_map.lower_bound(p.getRT());
-        if (std::abs(trt.first - p.getRT()) > .01)
+        const auto trt_it = nearest_rt(p.getRT());
+        if (trt_it == rt_scan_map.end() || std::abs(trt_it->first - p.getRT()) > .01)
           continue;
-        int scan = trt.second;
+        int scan = trt_it->second;
         if (scan_precursors_map.find(scan) == scan_precursors_map.end())
           continue;
         for (auto& pg : scan_precursors_map[scan])
@@ -204,10 +213,10 @@ namespace OpenMS
       if (max_int <= 0)
         continue;
 
-      auto trt = *rt_scan_map.lower_bound(feature.getRT());
-      if (std::abs(trt.first - feature.getRT()) > .01)
+      const auto trt_it = nearest_rt(feature.getRT());
+      if (trt_it == rt_scan_map.end() || std::abs(trt_it->first - feature.getRT()) > .01)
         continue;
-      int scan = trt.second;
+      int scan = trt_it->second;
       ms2_ints[scan] = intensities;
     }
 

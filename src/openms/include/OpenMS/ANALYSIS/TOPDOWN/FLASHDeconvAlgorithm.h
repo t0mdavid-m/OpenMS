@@ -71,10 +71,25 @@ namespace OpenMS
     /// get calculated decoy averagine. Call after calculateAveragine is called.
     const FLASHHelperClasses::PrecalculatedAveragine& getDecoyAveragine();
 
-    /// get noise decoy weight
+    /// get the noise decoy weight of MS1 (see getNoiseDecoyWeights)
     double getNoiseDecoyWeight() const
     {
-      return noise_decoy_weight_;
+      return getNoiseDecoyWeight(1);
+    }
+
+    /// get the noise decoy weight of an MS level (1 if not determined)
+    double getNoiseDecoyWeight(uint ms_level) const
+    {
+      const auto it = noise_decoy_weights_.find(ms_level);
+      return it == noise_decoy_weights_.end() ? 1.0 : it->second;
+    }
+
+    /// get the noise decoy weights by MS level - 1 (for the writers), for MS levels 1 to @p max_ms_level
+    std::vector<double> getNoiseDecoyWeights(uint max_ms_level) const
+    {
+      std::vector<double> weights;
+      for (uint l = 1; l <= max_ms_level; l++) weights.push_back(getNoiseDecoyWeight(l));
+      return weights;
     }
     /// get scan number of the spectrum in @p index -th in @p map
     static int getScanNumber(const MSExperiment& map, Size index);
@@ -131,8 +146,8 @@ namespace OpenMS
     /// default precursor isolation window size.
     double isolation_window_size_{3.0};
 
-    /// noise decoy weight determined with qvalue calcualtion.
-    double noise_decoy_weight_ = 1;
+    /// noise decoy weight of each MS level, determined with the q-value calculation
+    std::map<uint, double> noise_decoy_weights_;
     /// ADR-0046: the commanded MS2 scans by scan number, each naming the survey its command was decided from
     std::map<int, ScanCommandJoin::Located> located_by_scan_;
     /// a map from native ID to precursor peak
@@ -231,9 +246,6 @@ namespace OpenMS
 
     /// determine tolerance
     void determineTolerance_(const MSExperiment& map, const Param& sd_param, const FLASHHelperClasses::PrecalculatedAveragine& avg, uint ms_level);
-
-    /// get histogram
-    static std::vector<int> getHistogram_(const std::vector<double>& data, double min_range, double max_range, double bin_size);
 
     /// filter low intensity peaks
     static void filterLowPeaks_(MSExperiment& map);

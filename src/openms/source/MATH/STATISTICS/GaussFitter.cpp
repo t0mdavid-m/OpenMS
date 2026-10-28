@@ -65,7 +65,7 @@ namespace OpenMS::Math
         const double x0 = x(1);
         const double sig = x(2);
         const double sig2 = 2 * sig * sig;
-        const double sig3 = 2 * sig2 * sig;
+        const double sig3 = sig * sig * sig; // d/dsig of A exp(-(x - x0)^2 / (2 sig^2)) is A exp(...) (x - x0)^2 / sig^3 (was 4 sig^3: a quarter of it)
 
         UInt i = 0;
         for (std::vector<DPosition<2> >::const_iterator it = m_data->begin(); it != m_data->end(); ++it, ++i)

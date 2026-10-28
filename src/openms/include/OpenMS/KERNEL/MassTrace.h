@@ -68,8 +68,14 @@ public:
     /// Copy constructor
     MassTrace(const MassTrace &) = default;
 
+    /// Move constructor (without it, the declared copy constructor makes every move, sort and vector growth copy the peaks)
+    MassTrace(MassTrace &&) noexcept = default;
+
     /// Assignment operator
     MassTrace & operator=(const MassTrace &) = default;
+
+    /// Move assignment operator
+    MassTrace & operator=(MassTrace &&) noexcept = default;
 
     /// Random access operator
     PeakType& operator[](const Size & mt_idx);

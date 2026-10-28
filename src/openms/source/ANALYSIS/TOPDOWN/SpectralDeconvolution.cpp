@@ -82,7 +82,11 @@ namespace OpenMS
       "tol", DoubleList {10.0, 10.0},
       "PPM Tolerance for MS1, 2, ...: Specify the tolerance values in parts per million (ppm) using the this option. For example, -tol 10.0 5.0 sets "
       "the tolerance to 10.0 ppm for MS1 and 5.0 ppm for MS2. "
-      "If a negative value (e.g., -1) is provided, the tolerance will be estimated automatically by a tolerance estimation algorithm.");
+      "If a negative value (e.g., -1) is given for an MS level, its tolerance is determined from the data: spectra of the level are deconvolved at 30 ppm "
+      "(every 64th, then more until 20,000 peak errors or every 4th spectrum), and the tolerance is set so that +-0.8 x tol (the window in which a peak is "
+      "taken) holds 98% of the peak errors of the masses of Qscore >= 0.9, after the random peaks are subtracted (no fit). If the errors reach beyond "
+      "a third of the window, at 100 and then 300 ppm. With fewer than 1,000 errors or no error distribution standing out of the random peaks, "
+      "10 ppm. The determined tolerance is logged.");
 
     defaults_.setValue("min_mass", 50.0, "Minimum mass (Da)");
     defaults_.setValue("max_mass", 100000.0, "Maximum mass (Da)");
@@ -246,7 +250,8 @@ namespace OpenMS
         deconvolved_spectrum_.setPrecursor(precursor);
       }
 
-      if (target_precursor_charge_ != 0 || target_precursor_mz_ > 0) { setTargetPrecursorCharge_(); }
+      // a target precursor m/z needs its charge (help of precursor_mz): without one it built a precursor of mass 0, which capped the MSn masses
+      if (target_precursor_charge_ != 0) { setTargetPrecursorCharge_(); }
 
       if (deconvolved_spectrum_.getPrecursorPeakGroup().empty())
       {
@@ -1291,19 +1296,19 @@ namespace OpenMS
     bool match = false;
     double mass = offset * iso_da_distance_ + peak_group.getMonoMass();
     double mass_da_tol = mass * tol;
-    auto upper
-      = std::upper_bound(excluded_masses_for_decoy_runs_.begin(), excluded_masses_for_decoy_runs_.end(), mass + mass_da_tol);
-    while (upper != excluded_masses_for_decoy_runs_.end())
+    // the excluded masses at or below mass + tol, downwards while within tol (a mass at or above the heaviest excluded one was not checked:
+    // the search started at end())
+    auto it = std::upper_bound(excluded_masses_for_decoy_runs_.begin(), excluded_masses_for_decoy_runs_.end(), mass + mass_da_tol);
+    while (it != excluded_masses_for_decoy_runs_.begin())
     {
-      double delta = mass - *upper;
+      --it;
+      double delta = mass - *it;
+      if (delta > mass_da_tol) break;
       if (std::abs(delta) < mass_da_tol)
       {
         match = true;
         break;
       }
-      if (delta > mass_da_tol) break;
-      if (upper == excluded_masses_for_decoy_runs_.begin()) { break; }
-      upper--;
     }
     return match;
   }
@@ -1554,8 +1559,9 @@ namespace OpenMS
     filtered_peak_groups.clear();
     filtered_peak_groups.reserve(deconvolved_spectrum_.size());
 
-    std::set<Size> indices;
-    if (target_decoy_type_ == PeakGroup::signal_decoy)
+    std::set<Size> indices; // the signal decoys that pass the checks below (none may pass)
+    const bool signal_decoy_run = target_decoy_type_ == PeakGroup::signal_decoy;
+    if (signal_decoy_run)
     {
       excluded_masses_for_decoy_runs_.clear();
       for (const auto& pg : *target_dspec_for_decoy_calculation_) // pg are the target peak groups from normal spectrum deconvolution
@@ -1593,7 +1599,8 @@ namespace OpenMS
     {
       auto& pg = deconvolved_spectrum_[k];
 
-      if (!indices.empty() && (indices.find(k) == indices.end()))
+      // a signal decoy must have passed the checks above (when none did, every one was kept)
+      if (signal_decoy_run && indices.find(k) == indices.end())
       {
         continue;
       }

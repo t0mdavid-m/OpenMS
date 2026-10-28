@@ -18,15 +18,16 @@ namespace OpenMS
      @ingroup FileIO
 **/
 
-  void FLASHDeconvFeatureFile::writeHeader(std::fstream& fs, bool report_decoy)
+  void FLASHDeconvFeatureFile::writeHeader(std::fstream& fs, bool report_decoy, bool write_abundance)
   {
     fs << "FeatureIndex\tFileName\tMSLevel";
     if (report_decoy) fs << "\tIsDecoy";
 
     fs << "\tMonoisotopicMass\tAverageMass\tMassCount\tStartRetentionTime"
           "\tEndRetentionTime\tRetentionTimeDuration\tApexRetentionTime"
-          "\tSumIntensity\tMaxIntensity\tFeatureQuantity\tMinCharge\tMaxCharge\tChargeCount\tIsotopeCosineScore\tQscore2D\tPerChargeIntensity\tPerIsotopeIntensity"
-          "\n";
+          "\tSumIntensity\tMaxIntensity\tFeatureQuantity\tMinCharge\tMaxCharge\tChargeCount\tIsotopeCosineScore\tQscore2D\tPerChargeIntensity\tPerIsotopeIntensity";
+    if (write_abundance) { fs << "\tAbundance\tAbundanceTraceCount"; }
+    fs << "\n";
   }
 
   void FLASHDeconvFeatureFile::writeTopFDFeatureHeader(std::fstream& fs, uint ms_level)
@@ -49,10 +50,11 @@ namespace OpenMS
     fs.flush();
   }
 
-  void FLASHDeconvFeatureFile::writeFeatures(const std::vector<FLASHHelperClasses::MassFeature>& mass_features, const String& file_name, std::fstream& fs, bool report_decoy)
+  void FLASHDeconvFeatureFile::writeFeatures(const std::vector<FLASHHelperClasses::MassFeature>& mass_features, const String& file_name, std::fstream& fs, bool report_decoy,
+                                             const std::map<uint, std::pair<double, Size>>* abundances)
   {
     // the row of a feature
-    const auto write_row = [&file_name, report_decoy](const FLASHHelperClasses::MassFeature& mass_feature, std::stringstream& ss) {
+    const auto write_row = [&file_name, report_decoy, abundances](const FLASHHelperClasses::MassFeature& mass_feature, std::stringstream& ss) {
       const auto& mt = mass_feature.mt;
       double mass = mt.getCentroidMZ() + mass_feature.iso_offset * Constants::ISOTOPE_MASSDIFF_55K_U;
       double avg_mass = mass_feature.avg_mass;
@@ -70,7 +72,7 @@ namespace OpenMS
       }
 
       ss << "\t" << std::to_string(mass) << "\t" << std::to_string(avg_mass) << "\t" // massdiff
-         << mt.getSize() << "\t" << mt.begin()->getRT()/60.0 << "\t" << mt.rbegin()->getRT()/60.0 << "\t" << mt.getTraceLength() << "\t" << mt[mt.findMaxByIntPeak()].getRT()/60.0 << "\t" << sum_intensity << "\t"
+         << mt.getSize() << "\t" << mt.begin()->getRT()/60.0 << "\t" << mt.rbegin()->getRT()/60.0 << "\t" << mt.getTraceLength()/60.0 << "\t" << mt[mt.findMaxByIntPeak()].getRT()/60.0 << "\t" << sum_intensity << "\t"
          << mt.getMaxIntensity(false) << "\t" << mt.computePeakArea() << "\t" << mass_feature.min_charge << "\t" << mass_feature.max_charge << "\t" << mass_feature.charge_count << "\t"
          << mass_feature.isotope_score << "\t" << std::setprecision (15) << (mass_feature.qscore) << std::setprecision (-1) << "\t";
 
@@ -100,6 +102,12 @@ namespace OpenMS
         if (i < iso_end_index)
         { ss << ";";
         }
+      }
+      if (abundances != nullptr)
+      {
+        const auto it = abundances->find(mass_feature.index);
+        if (it != abundances->end()) { ss << "\t" << std::to_string(it->second.first) << "\t" << it->second.second; }
+        else { ss << "\tnan\t0"; }
       }
       ss << "\n";
     };
@@ -144,7 +152,6 @@ namespace OpenMS
                                                   const std::map<int, double>& scan_rt_map, const String& file_name, std::fstream& fs, uint ms_level)
   {
     std::stringstream ss;
-    static std::map<int, uint> msNscan_to_feature_index;
 
     if (ms_level == 1)
     {
@@ -176,7 +183,9 @@ namespace OpenMS
         if (dspec.getPrecursorPeakGroup().getFeatureIndex() != 0) continue;
         auto pg = dspec.getPrecursorPeakGroup();
         
-        double rt = scan_rt_map.at(pg.getScanNumber())/60.0;
+        // the precursor scan's retention time; the MS2 spectrum's if the precursor scan is not among the deconvolved spectra
+        const auto rt_it = scan_rt_map.find(pg.getScanNumber());
+        double rt = (rt_it != scan_rt_map.end() ? rt_it->second : dspec.getOriginalSpectrum().getRT()) / 60.0;
         const auto& [z, Z] = pg.getAbsChargeRange();
         pg.setFeatureIndex(++max_feature_index);
         dspec.setPrecursorPeakGroup(pg);
@@ -230,14 +239,16 @@ namespace OpenMS
           // Fraction_feature_score stays 0: TopPIC copies it verbatim into the PrSM table's
           // "Feature score", so populating it could move results. Deliberately out of scope.
           const double mono_mass = mass_feature.mt.getCentroidMZ();
-          const double mono_mz = mono_mass / mass_feature.rep_charge + Constants::PROTON_MASS_U;
+          // the charge carrier of the ion mode (negative mode: charges below 0), not always a proton
+          const double mono_mz = mono_mass / std::max(1, std::abs(mass_feature.rep_charge)) + FLASHHelperClasses::getChargeMass(mass_feature.min_charge >= 0);
           ss << std::to_string(sum_intensity) << "\t0\t" << std::to_string(mass_feature.mt.begin()->getRT()/60.0)
              << "\t" << std::to_string(mass_feature.mt.rbegin()->getRT()/60.0) << "\t" << std::to_string(apex.getRT()/60.0) << "\t" << std::to_string(mono_mass)
              << "\t" << std::to_string(mono_mz) << "\t" << std::to_string(mass_feature.rep_mz) << "\t" << mass_feature.rep_charge << "\t" << std::to_string(dspec.getPrecursor().getIntensity()) << "\n";
         }
         else
         {
-          double rt = scan_rt_map.at(pg.getScanNumber()) / 60.0;
+          const auto rt_it = scan_rt_map.find(pg.getScanNumber());
+          double rt = (rt_it != scan_rt_map.end() ? rt_it->second : dspec.getOriginalSpectrum().getRT()) / 60.0;
           double rep_mz = 0;
           double p_int = 0;
 
@@ -252,7 +263,7 @@ namespace OpenMS
           // rep_mz is the observed most-intense peak at the representative charge and stays 0 when
           // that charge is absent from the isolation-window-narrowed group; TopPIC parses
           // Precursor_average_mz and discards it, so that is left as-is.
-          const double mono_mz = pg.getMonoMass() / pg.getRepAbsCharge() + Constants::PROTON_MASS_U;
+          const double mono_mz = pg.getMonoMass() / std::max(1, pg.getRepAbsCharge()) + FLASHHelperClasses::getChargeMass(pg.isPositive());
           ss << std::to_string(pg.getIntensity()) << "\t0\t" << std::to_string(rt)
              << "\t" << std::to_string(rt) << "\t" << std::to_string(rt) << "\t" << std::to_string(pg.getMonoMass())
              << "\t" << std::to_string(mono_mz) << "\t" << std::to_string(rep_mz) << "\t" << pg.getRepAbsCharge() << "\t" << std::to_string(dspec.getPrecursor().getIntensity()) << "\n";
