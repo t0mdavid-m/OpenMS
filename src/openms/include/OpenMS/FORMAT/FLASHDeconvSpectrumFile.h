@@ -45,7 +45,7 @@ namespace OpenMS
           @param tol mass tolerance
           @param write_detail if this is set, more detailed information on each mass will be written in the output file.
           @param report_decoy if set true, decoy and qvalue information will be written.
-          @param noise_decoy_weight noise decoy weight. Determines how often the noise decoy masses will be written
+          @param noise_decoy_weight noise decoy weight of the spectrum's MS level: how often each noise decoy mass is written on average (deterministic)
           @param abundances (FLASHDeconv -quant) per mass of @p dspec (by its position): the abundance and the number of raw mass traces it is
           summed over, appended to each MS1 row (nan and 0 for a decoy). Without it, the rows are written as before.
           Default MS1 headers are:
@@ -70,12 +70,12 @@ namespace OpenMS
                                        const std::vector<std::pair<double, Size>>* abundances = nullptr);
 
     /// writeDeconvolvedMasses for every spectrum of @p spectra whose MS level has a file in @p out_files (open in @p streams), in input order and
-    /// with the same bytes; the spectra are formatted in parallel (with @p report_decoy, the noise-decoy draws are replayed serially up front).
+    /// with the same bytes; the spectra are formatted in parallel (with @p report_decoy, the noise-decoy carries are replayed serially up front; @p noise_decoy_weights by MS level - 1).
     /// @p abundances (FLASHDeconv -quant) is indexed by the position of a spectrum in @p spectra, then of the mass in it
     static void writeDeconvolvedMasses(std::vector<DeconvolvedSpectrum>& spectra, std::vector<std::fstream>& streams, const std::vector<String>& out_files,
                                        const String& file_name, const FLASHHelperClasses::PrecalculatedAveragine& avg,
                                        const FLASHHelperClasses::PrecalculatedAveragine& decoy_avg, const std::vector<double>& tols, bool write_detail,
-                                       bool report_decoy, double noise_decoy_weight,
+                                       bool report_decoy, const std::vector<double>& noise_decoy_weights,
                                        const std::vector<std::vector<std::pair<double, Size>>>* abundances = nullptr);
 
     /**
@@ -115,14 +115,10 @@ namespace OpenMS
       @param filename mzml file name
       @param qval_threshold qvalue threshold to filter out high qvalue precursors.
       @param min_ms_level min ms level of the dataset
-      @param randomize_precursor_mass if set, a random number between -100 to 100 is added to precursor mass
-      @param randomize_fragment_mass if set, a random number between -100 to 100 is added to fragment mass
     */
     static void writeTopFD(DeconvolvedSpectrum& dspec, std::fstream& fs, const String& filename,
                            const double qval_threshold = 1.0,
-                           const uint min_ms_level = 1,
-                           bool randomize_precursor_mass = false,
-                           bool randomize_fragment_mass = false);
+                           const uint min_ms_level = 1);
 
   private:
 

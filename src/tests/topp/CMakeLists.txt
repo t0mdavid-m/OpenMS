@@ -761,7 +761,7 @@ add_test("TOPP_FLASHDeconv_1" ${TOPP_BIN_PATH}/FLASHDeconv -test -in ${DATA_DIR_
 # We cannot currently test the correctness of the tsv output
 # FuzzyDiff cannot give out tolerances/whitelist for tabular format outputs (.tsv)
 # The outputs must not depend on the thread count (spectra deconvolved, and spectrum tsv rows formatted, in parallel; with decoys, the
-# noise-decoy draws replayed per spectrum): one thread against four, the latter with OpenMP thread binding (no huge-page re-execution),
+# noise-decoy carries replayed per spectrum): one thread against four, the latter with OpenMP thread binding (no huge-page re-execution),
 # compared byte for byte (the sample input holds MS1 spectra only)
 add_test("TOPP_FLASHDeconv_2" ${TOPP_BIN_PATH}/FLASHDeconv -test -threads 1 -in ${DATA_DIR_TOPP}/FLASHDeconv_sample_input.mzML -FD:report_FDR -out FLASHDeconv_2.tmp.tsv -out_spec1 FLASHDeconv_2_ms1.tmp.tsv)
 add_test("TOPP_FLASHDeconv_3" ${TOPP_BIN_PATH}/FLASHDeconv -test -threads 4 -in ${DATA_DIR_TOPP}/FLASHDeconv_sample_input.mzML -FD:report_FDR -out FLASHDeconv_3.tmp.tsv -out_spec1 FLASHDeconv_3_ms1.tmp.tsv)
@@ -778,6 +778,15 @@ add_test("TOPP_FLASHDeconv_5_out2" ${CMAKE_COMMAND} -E compare_files FLASHDeconv
 set_tests_properties("TOPP_FLASHDeconv_5_out1" "TOPP_FLASHDeconv_5_out2" PROPERTIES DEPENDS "TOPP_FLASHDeconv_4;TOPP_FLASHDeconv_5")
 # -quant with fewer than 3 MS1 spectra (one scan of the run above): no mass traces, Abundance NaN, no abort
 add_test("TOPP_FLASHDeconv_6" ${TOPP_BIN_PATH}/FLASHDeconv -test -quant -in ${DATA_DIR_TOPP}/FLASHQuantConsensus_one_scan.mzML -out FLASHDeconv_6.tmp.tsv -out_spec1 FLASHDeconv_6_ms1.tmp.tsv)
+# negative ion mode (-SD:min_charge -1 -SD:max_charge -100) with -quant and the TopFD feature file on the synthetic negative run: one thread
+# against four (the outputs hold the input path, so they are not compared with stored files)
+add_test("TOPP_FLASHDeconv_7" ${TOPP_BIN_PATH}/FLASHDeconv -test -threads 1 -quant -SD:min_charge -1 -SD:max_charge -100 -in ${DATA_DIR_TOPP}/FLASHQuantConsensus_neg_input1.mzML -out FLASHDeconv_7.tmp.tsv -out_spec1 FLASHDeconv_7_ms1.tmp.tsv -out_feature1 FLASHDeconv_7_ms1.tmp.feature)
+add_test("TOPP_FLASHDeconv_8" ${TOPP_BIN_PATH}/FLASHDeconv -test -threads 4 -quant -SD:min_charge -1 -SD:max_charge -100 -in ${DATA_DIR_TOPP}/FLASHQuantConsensus_neg_input1.mzML -out FLASHDeconv_8.tmp.tsv -out_spec1 FLASHDeconv_8_ms1.tmp.tsv -out_feature1 FLASHDeconv_8_ms1.tmp.feature)
+set_tests_properties("TOPP_FLASHDeconv_8" PROPERTIES ENVIRONMENT "OMP_PROC_BIND=true")
+add_test("TOPP_FLASHDeconv_8_out1" ${CMAKE_COMMAND} -E compare_files FLASHDeconv_8.tmp.tsv FLASHDeconv_7.tmp.tsv)
+add_test("TOPP_FLASHDeconv_8_out2" ${CMAKE_COMMAND} -E compare_files FLASHDeconv_8_ms1.tmp.tsv FLASHDeconv_7_ms1.tmp.tsv)
+add_test("TOPP_FLASHDeconv_8_out3" ${CMAKE_COMMAND} -E compare_files FLASHDeconv_8_ms1.tmp.feature FLASHDeconv_7_ms1.tmp.feature)
+set_tests_properties("TOPP_FLASHDeconv_8_out1" "TOPP_FLASHDeconv_8_out2" "TOPP_FLASHDeconv_8_out3" PROPERTIES DEPENDS "TOPP_FLASHDeconv_7;TOPP_FLASHDeconv_8")
 
 #------------------------------------------------------------------------------
 # FLASHQuantConsensus tests: two synthetic runs (5 species; run 2: one species x2, one x0.5, retention times +3 s) with their FLASHDeconv

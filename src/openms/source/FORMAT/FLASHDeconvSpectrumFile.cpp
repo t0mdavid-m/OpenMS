@@ -13,7 +13,6 @@
 #include <exception>
 #include <memory>
 #include <mutex>
-#include <random>
 #include <sstream>
 #include <thread>
 #ifdef _OPENMP
@@ -28,7 +27,6 @@ namespace OpenMS
 
    */
 
-  inline std::default_random_engine generator_;
 
   namespace
   {
@@ -68,6 +66,12 @@ namespace OpenMS
       }
     }
 
+    /// the isolation window target m/z of @p precursor (mzML), its m/z if not given
+    double isolationTargetMz_(const Precursor& precursor)
+    {
+      return precursor.metaValueExists("isolation window target m/z") ? (double)precursor.getMetaValue("isolation window target m/z") : precursor.getMZ();
+    }
+
     /// the row index of each MS level in the spectrum tsv files (1-based), continued over all calls of the writers
     std::vector<uint>& writerIndices_()
     {
@@ -75,37 +79,43 @@ namespace OpenMS
       return indices;
     }
 
-    /// With report_decoy, a noise decoy mass is written with the probability noise_decoy_weight (repeated while the drawn number times the
-    /// weight exceeds 1). Returns whether peak group @p pg is written, drawing from @p gen; @p repeat tells whether it is written again.
-    bool drawNoiseDecoy_(const PeakGroup& pg, const double noise_decoy_weight, std::default_random_engine& gen, bool& repeat)
+    /// With report_decoy, the noise decoy masses are written noise_decoy_weight times each on average, without randomness: each adds the weight
+    /// to @p carry, and is written as many times as whole units are in it (taken out). Returns how often peak group @p pg is written.
+    Size noiseDecoyCopies_(const PeakGroup& pg, const double noise_decoy_weight, double& carry)
     {
-      repeat = false;
-      if (pg.getTargetDecoyType() != PeakGroup::TargetDecoyType::noise_decoy) return true;
-      std::uniform_real_distribution<double> distribution(0.0, 1.0); // stateless: a fresh one draws as the one shared before did
-      const double number = distribution(gen);
-      if (number > noise_decoy_weight) return false;
-      repeat = number * noise_decoy_weight > 1.0;
-      return true;
+      if (pg.getTargetDecoyType() != PeakGroup::TargetDecoyType::noise_decoy) return 1;
+      carry += noise_decoy_weight;
+      const Size copies = (Size)std::floor(carry);
+      carry -= (double)copies;
+      return copies;
     }
 
-    /// the number of rows writeDeconvolvedMasses_ writes for @p dspec with report_decoy, drawing from @p gen exactly as it does
-    Size countDecoyReportRows_(const DeconvolvedSpectrum& dspec, const double noise_decoy_weight, std::default_random_engine& gen)
+    /// the number of rows writeDeconvolvedMasses_ writes for @p dspec with report_decoy, advancing @p carry exactly as it does
+    Size countDecoyReportRows_(const DeconvolvedSpectrum& dspec, const double noise_decoy_weight, double& carry)
     {
       Size rows = 0;
-      for (int i = 0; i < (int)dspec.size(); i++)
-      {
-        bool repeat;
-        if (! drawNoiseDecoy_(dspec[i], noise_decoy_weight, gen, repeat)) continue;
-        if (repeat) i--;
-        rows++;
-      }
+      for (const auto& pg : dspec) rows += noiseDecoyCopies_(pg, noise_decoy_weight, carry);
       return rows;
     }
 
-    /// the rows of the non-empty spectrum @p dspec into @p fs, numbered from @p index on (advanced past them); noise decoys are drawn from @p gen
+    /// the noise decoy carry of each MS level (by MS level - 1) of the single-spectrum writer, continued over its calls (as writerIndices_)
+    std::vector<double>& writerCarries_()
+    {
+      static std::vector<double> carries {};
+      return carries;
+    }
+
+    /// the weight of MS level @p ms_level in @p weights (by MS level - 1), 1 if absent
+    double levelWeight_(const std::vector<double>& weights, const uint ms_level)
+    {
+      return ms_level >= 1 && ms_level <= weights.size() ? weights[ms_level - 1] : 1.0;
+    }
+
+    /// the rows of the non-empty spectrum @p dspec into @p fs, numbered from @p index on (advanced past them); noise decoys are written as
+    /// noiseDecoyCopies_ says, from @p carry on (advanced)
     void writeDeconvolvedMasses_(DeconvolvedSpectrum& dspec, std::ostream& fs, const String& file_name, const FLASHHelperClasses::PrecalculatedAveragine& avg,
                                  const FLASHHelperClasses::PrecalculatedAveragine& decoy_avg, double tol, const bool write_detail, const bool report_decoy,
-                                 const double noise_decoy_weight, uint& index, std::default_random_engine& gen,
+                                 const double noise_decoy_weight, uint& index, double& carry,
                                  const std::vector<std::pair<double, Size>>* abundances = nullptr)
     {
     std::stringstream ss;
@@ -196,15 +206,15 @@ namespace OpenMS
     std::vector<double> log_mzs;
     bool log_mzs_positive = true;
     std::vector<FLASHHelperClasses::LogMzPeak> noisy_peaks;
+    Size remaining = 0; // the rows of the current mass still to be written
     for (int i = 0; i < dspec.size(); i++)
     {
       auto& pg = dspec[i];
       if (!report_decoy && pg.getTargetDecoyType() != PeakGroup::TargetDecoyType::target) continue;
 
-      /// TODO : make this non-random. And move this to FLASHDeconv.cpp before this function is called.
-      bool repeat;
-      if (! drawNoiseDecoy_(pg, noise_decoy_weight, gen, repeat)) continue;
-      if (repeat) i--;
+      if (remaining == 0) remaining = report_decoy ? noiseDecoyCopies_(pg, noise_decoy_weight, carry) : 1;
+      if (remaining == 0) continue;
+      if (--remaining > 0) i--; // written again
 
       const auto& avg_ = pg.getTargetDecoyType() == PeakGroup::TargetDecoyType::noise_decoy? decoy_avg : avg;
       const double mono_mass = pg.getMonoMass();
@@ -385,19 +395,21 @@ namespace OpenMS
     if (!report_decoy && dspec.isDecoy()) return;
     if (dspec.empty()) return;
     auto& indices = writerIndices_();
+    auto& carries = writerCarries_();
     while (indices.size() <= dspec.getOriginalSpectrum().getMSLevel())
     {
       indices.push_back(1);
+      carries.push_back(.5);
     }
     writeDeconvolvedMasses_(dspec, fs, file_name, avg, decoy_avg, tol, write_detail, report_decoy, noise_decoy_weight, indices[dspec.getOriginalSpectrum().getMSLevel() - 1],
-                            generator_, abundances);
+                            carries[dspec.getOriginalSpectrum().getMSLevel() - 1], abundances);
   }
 
   void FLASHDeconvSpectrumFile::writeDeconvolvedMasses(std::vector<DeconvolvedSpectrum>& spectra, std::vector<std::fstream>& streams,
                                                        const std::vector<String>& out_files, const String& file_name,
                                                        const FLASHHelperClasses::PrecalculatedAveragine& avg,
                                                        const FLASHHelperClasses::PrecalculatedAveragine& decoy_avg, const std::vector<double>& tols,
-                                                       const bool write_detail, const bool report_decoy, const double noise_decoy_weight,
+                                                       const bool write_detail, const bool report_decoy, const std::vector<double>& noise_decoy_weights,
                                                        const std::vector<std::vector<std::pair<double, Size>>>* abundances)
   {
     // the spectra of the files to be written, in input order
@@ -408,16 +420,16 @@ namespace OpenMS
       if (ms_level == 0 || ms_level > out_files.size() || out_files[ms_level - 1].empty()) continue;
       jobs.push_back(s);
     }
-    // A spectrum's rows depend only on the spectrum, the index of its first row and, with report_decoy, the state of the random sequence the
-    // noise decoys are drawn from (one sequence in spectrum order). Both are advanced up front per spectrum, in input order (by one per target
-    // mass, or with report_decoy by replaying the draws). The spectra are then formatted in parallel, and the formatted rows are written in
+    // A spectrum's rows depend only on the spectrum, the index of its first row and, with report_decoy, the noise decoy carry of its MS level
+    // (one carry per MS level in spectrum order). Both are advanced up front per spectrum, in input order (by one per target mass, or with
+    // report_decoy by replaying the carry). The spectra are then formatted in parallel, and the formatted rows are written in
     // input order as they become ready, by whichever thread holds the write lock: no thread waits at a barrier, and a buffer is released as
     // soon as it is written.
     auto& indices = writerIndices_();
     const Size n = jobs.size();
     std::vector<uint> first_index(n, 0);
-    std::vector<std::default_random_engine> first_gen; // with report_decoy only (otherwise generator_ is not advanced here)
-    if (report_decoy) first_gen.assign(n, generator_);
+    std::vector<double> first_carry(n, .5); // the noise decoy carry each spectrum starts from (with report_decoy), per MS level from 0.5 on
+    std::vector<double> carries; // by MS level - 1
     std::vector<char> skip(n, 0);
     for (Size k = 0; k < n; k++)
     {
@@ -430,8 +442,10 @@ namespace OpenMS
       const uint ms_level = dspec.getOriginalSpectrum().getMSLevel();
       while (indices.size() <= ms_level) indices.push_back(1);
       first_index[k] = indices[ms_level - 1];
-      if (report_decoy) first_gen[k] = generator_;
-      indices[ms_level - 1] += (uint)(report_decoy ? countDecoyReportRows_(dspec, noise_decoy_weight, generator_) : countTargetMasses(dspec));
+      while (carries.size() < ms_level) carries.push_back(.5);
+      first_carry[k] = carries[ms_level - 1];
+      indices[ms_level - 1] += (uint)(report_decoy ? countDecoyReportRows_(dspec, levelWeight_(noise_decoy_weights, ms_level), carries[ms_level - 1])
+                                                   : countTargetMasses(dspec));
     }
 
     int threads = 1;
@@ -494,9 +508,9 @@ namespace OpenMS
           auto& dspec = spectra[jobs[k]];
           std::ostringstream os;
           uint index = first_index[k];
-          auto gen = report_decoy ? first_gen[k] : generator_;
+          double carry = first_carry[k];
           writeDeconvolvedMasses_(dspec, os, file_name, avg, decoy_avg, tols[dspec.getOriginalSpectrum().getMSLevel() - 1], write_detail, report_decoy,
-                                  noise_decoy_weight, index, gen,
+                                  levelWeight_(noise_decoy_weights, dspec.getOriginalSpectrum().getMSLevel()), index, carry,
                                   abundances != nullptr && jobs[k] < abundances->size() ? &(*abundances)[jobs[k]] : nullptr);
           buffers[k] = os.str();
         }
@@ -896,8 +910,7 @@ namespace OpenMS
     fs << "####################### Parameters ######################\n";
   }
 
-  void FLASHDeconvSpectrumFile::writeTopFD(DeconvolvedSpectrum& dspec, std::fstream& fs, const String& filename, const double qval_threshold, const uint min_ms_level,
-                                           const bool randomize_precursor_mass, const bool randomize_fragment_mass)
+  void FLASHDeconvSpectrumFile::writeTopFD(DeconvolvedSpectrum& dspec, std::fstream& fs, const String& filename, const double qval_threshold, const uint min_ms_level)
   {
     std::stringstream ss;
     UInt ms_level = dspec.getOriginalSpectrum().getMSLevel();
@@ -933,8 +946,9 @@ namespace OpenMS
 
       ss << "MS_ONE_ID=" << dspec.getPrecursorScanNumber() - 1 << "\n"
          << "MS_ONE_SCAN=" << dspec.getPrecursorScanNumber() << "\n"
-        << "PRECURSOR_WINDOW_BEGIN=" << -dspec.getPrecursor().getIsolationWindowLowerOffset() + dspec.getPrecursor().getMZ() << "\n"
-         << "PRECURSOR_WINDOW_END=" << dspec.getPrecursor().getIsolationWindowUpperOffset() + dspec.getPrecursor().getMZ() << "\n";
+        // the isolation window around its target m/z (the offsets are relative to it; MzMLHandler keeps the selected ion m/z as the m/z)
+        << "PRECURSOR_WINDOW_BEGIN=" << -dspec.getPrecursor().getIsolationWindowLowerOffset() + isolationTargetMz_(dspec.getPrecursor()) << "\n"
+         << "PRECURSOR_WINDOW_END=" << dspec.getPrecursor().getIsolationWindowUpperOffset() + isolationTargetMz_(dspec.getPrecursor()) << "\n";
 
       // TopPIC's activation name (TopPIC stops at a name it does not know, e.g. ECD or EThcD)
       const String activation = topPICActivation_(dspec.getActivationMethod());
@@ -944,7 +958,7 @@ namespace OpenMS
       }
        ss << "PRECURSOR_MZ=" << std::to_string(dspec.getPrecursor().getMZ()) << "\n"
          << "PRECURSOR_CHARGE=" << (int)(dspec.getPrecursorCharge()) << "\n"
-         << "PRECURSOR_MASS=" << std::to_string(precursor_mass + (randomize_precursor_mass ? (((double)rand() / (RAND_MAX)) * 200.0 - 100.0) : .0)) << "\n" // random number between 0 and 100.
+         << "PRECURSOR_MASS=" << std::to_string(precursor_mass) << "\n"
          << "PRECURSOR_INTENSITY=" << dspec.getPrecursor().getIntensity() << "\n"
          << "PRECURSOR_FEATURE_ID=" << dspec.getPrecursorPeakGroup().getFeatureIndex() << "\n"
          << "PRECURSOR_QSCORE=" << dspec.getPrecursorPeakGroup().getQscore2D() << "\n";
@@ -977,7 +991,7 @@ namespace OpenMS
       }
 
       ss << std::fixed << std::setprecision(2);
-      ss << std::to_string(pg.getMonoMass() + (randomize_fragment_mass ? (((double)rand() / (RAND_MAX)) * 200.0 - 100.0) : .0)) << "\t" << pg.getIntensity() << "\t"
+      ss << std::to_string(pg.getMonoMass()) << "\t" << pg.getIntensity() << "\t"
          << (pg.isPositive() ? std::get<1>(pg.getAbsChargeRange()) : -std::get<1>(pg.getAbsChargeRange())) << "\n";
       ss << std::setprecision(-1);
       if (++size >= topFD_max_peak_count_)

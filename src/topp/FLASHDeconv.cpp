@@ -21,7 +21,7 @@
   #include <malloc.h>
 #endif
 #ifdef TRAIN_OUT
-  #include <OpenMS/ANALYSIS/TOPDOWN/Qscore.h>
+  #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroupScoring.h>
 #endif
 using namespace OpenMS;
 using namespace std;
@@ -34,7 +34,7 @@ using namespace std;
 
   @brief FLASHDeconv performs ultrafast deconvolution of top down proteomics MS datasets.
   FLASHDeconv takes mzML file as input and outputs deconvolved feature list (.tsv) and
-  deconvolved spectra files (.tsv, .mzML, .msalign, .ms1ft).
+  deconvolved spectra files (.tsv, .mzML, .msalign, .feature).
   FLASHDeconv uses SpectralDeconvolution for spectral level deconvolution and MassFeatureTracer to detect mass features.
   Also for MSn spectra, the precursor masses (not peak m/zs) should be determined and assigned in most cases. This assignment
   can be done by tracking MSn-1 spectra deconvolution information. Thus FLASHDeconv class keeps MSn-1 spectra deconvolution information
@@ -99,7 +99,8 @@ protected:
     setValidFormats_("out_quant", ListUtils::create<String>("tsv"));
 
     registerOutputFile_("out_annotated_mzml", "<file>", "",
-                        "Output annotated mzML file with monoisotopic mass, charge, and isotope index metadata for peaks. Unannotated peaks are also retained without metadata.",
+                        "Output annotated mzML file: the input spectra that have deconvolved masses (all their peaks), each with the meta value "
+                        "DeconvMassPeakIndices listing its masses as monoisotopic mass:indices of its peaks (in the m/z-sorted spectrum), separated by ';'.",
                         false);
     setValidFormats_("out_annotated_mzml", ListUtils::create<String>("mzML"));
 
@@ -142,7 +143,7 @@ protected:
                   "claims at their other charges and isotopes at their apex; traces that several masses share are resolved as in FLASHQuant (elution model and isotope pattern of each mass, non-negative least squares). Output: the "
                   "columns Abundance and AbundanceTraceCount at the end of the -out feature tsv and of the -out_spec1 tsv (one value per feature, "
                   "and each MS1 mass the value of its feature): FLASHQuant's quantity (area of each trace down to 10% of its apex, summed; "
-                  "intensity x seconds; AbundanceTraceCount: the traces summed). A feature without a raw trace of at least 4 peaks, or whose traces "
+                  "intensity x seconds; AbundanceTraceCount: the traces summed). A feature without a raw trace of at least 3 peaks, or whose traces "
                   "the resolution gave to other masses, gets its FeatureQuantity on the scale of the run's abundances (trace count 0; NaN when "
                   "no feature of the run has a raw abundance to set the scale); a mass "
                   "without a feature and without a raw trace (a peak seen in one scan) gets NaN. Either ion mode (that of the masses). With "
@@ -371,7 +372,7 @@ protected:
         FLASHDeconvSpectrumFile::writeDeconvolvedMassesHeader(out_spec_streams[i], i + 1, write_detail, report_decoy, quant && i == 0);
 #ifdef TRAIN_OUT
         out_train_streams[i].open(out_spec_file[i] + "_train.csv", fstream::out);
-        Qscore::writeAttCsvForQscoreTrainingHeader(out_train_streams[i]);
+        PeakGroupScoring::writeAttCsvForQscoreTrainingHeader(out_train_streams[i]);
 #endif
       }
 
@@ -382,13 +383,13 @@ protected:
         uint ms_level = deconvolved_spectrum.getOriginalSpectrum().getMSLevel();
         if (out_spec_file[ms_level - 1].empty()) continue;
         FLASHDeconvSpectrumFile::writeDeconvolvedMasses(deconvolved_spectrum, out_spec_streams[ms_level - 1], in_file, fd.getAveragine(), fd.getDecoyAveragine(),
-                                                        tols[ms_level - 1], write_detail, report_decoy, fd.getNoiseDecoyWeight());
-        Qscore::writeAttCsvForQscoreTraining(deconvolved_spectrum, out_train_streams[ms_level - 1]);
+                                                        tols[ms_level - 1], write_detail, report_decoy, fd.getNoiseDecoyWeight(ms_level));
+        PeakGroupScoring::writeAttCsvForQscoreTraining(deconvolved_spectrum, out_train_streams[ms_level - 1]);
       }
 #else
-      // the same rows in the same order, formatted in parallel (with report_FDR, the noise-decoy draws are replayed serially up front)
+      // the same rows in the same order, formatted in parallel (with report_FDR, the noise-decoy carries are replayed serially up front)
       FLASHDeconvSpectrumFile::writeDeconvolvedMasses(deconvolved_spectra, out_spec_streams, out_spec_file, in_file, fd.getAveragine(), fd.getDecoyAveragine(), tols,
-                                                      write_detail, report_decoy, fd.getNoiseDecoyWeight(), quant ? &mass_abundances : nullptr);
+                                                      write_detail, report_decoy, fd.getNoiseDecoyWeights((uint)tols.size()), quant ? &mass_abundances : nullptr);
 #endif
 
       for (Size i = 0; i < out_spec_file.size(); i++)
@@ -458,7 +459,7 @@ protected:
         if (out_topfd_file[ms_level - 1].empty()) continue;
 
         FLASHDeconvSpectrumFile::writeTopFD(deconvolved_spectrum, out_topfd_streams[ms_level - 1], in_file, 1,
-                                            per_ms_level_deconv_spec_count.begin()->first, false, false);
+                                            per_ms_level_deconv_spec_count.begin()->first);
       }
 
       for (Size i = 0; i < out_topfd_file.size(); i++)

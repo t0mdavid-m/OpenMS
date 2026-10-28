@@ -20,6 +20,11 @@ namespace OpenMS
     uint next_feature_index = 1;
   }
 
+  void MassFeatureTrace::resetFeatureIndex()
+  {
+    next_feature_index = 1;
+  }
+
   MassFeatureTrace::MassFeatureTrace() : DefaultParamHandler("MassFeatureTrace")
   {
     Param mtd_defaults = MassTraceDetection().getDefaults();

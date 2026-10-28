@@ -69,6 +69,9 @@ namespace OpenMS
       std::vector<double> qscores;
     };
 
+    /// restart the feature indices at 1 (FLASHDeconvAlgorithm::run calls it per run; the indices continued over runs in one process)
+    static void resetFeatureIndex();
+
     /// The tracing of findFeaturesAndUpdateQscore2D without numbering the features and labelling their peak groups (reads the spectra only)
     TracedFeatures traceFeatures(const PrecalculatedAveragine& averagine, const std::vector<DeconvolvedSpectrum>& deconvolved_spectra, int ms_level = 1,
                                  bool is_decoy = false) const;

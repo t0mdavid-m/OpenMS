@@ -28,9 +28,9 @@ namespace OpenMS
     return ret;
   }
 
-  double Qvalue::updatePeakGroupQvalues(std::vector<DeconvolvedSpectrum>& deconvolved_spectra) // per ms level + precursor update as well.
+  std::map<uint, double> Qvalue::updatePeakGroupQvalues(std::vector<DeconvolvedSpectrum>& deconvolved_spectra) // per ms level + precursor update as well.
   {
-    double noise_weight = 1;
+    std::map<uint, double> noise_weights; // per MS level (the weight of the last level was returned for all levels)
     std::map<uint, std::vector<double>> score_map_target; // target PeakGroupScoring vector per ms level
     std::map<uint, std::vector<double>> score_signal_decoy_map; // signal decoy PeakGroupScoring vector per ms level
     std::map<uint, std::vector<double>> score_noise_decoy_map; // noise decoy PeakGroupScoring vector per ms level
@@ -112,7 +112,7 @@ namespace OpenMS
       }
 
       auto calculated_vec = left.completeOrthogonalDecomposition().pseudoInverse() * score_dist_target;
-      noise_weight = calculated_vec.row(0)[0];
+      double noise_weight = calculated_vec.row(0)[0];
 
       if (calculated_vec.row(1)[0] < 0)
       {
@@ -120,8 +120,10 @@ namespace OpenMS
         noise_weight = calculated_vec_non_negative.row(0)[0];
       }
 
-      if (std::isnan(noise_weight)) noise_weight = 1.0;
+      // an empty fit window (no noise decoy between the bounds, e.g. the top signal decoy below 0.3) leaves no evidence: weight 1
+      if (std::isnan(noise_weight) || score_dist_noise_decoy.sum() == 0) noise_weight = 1.0;
       noise_weight = std::max(noise_weight, 0.01);
+      noise_weights[ms_level] = noise_weight;
       std::sort(scores_target.rbegin(), scores_target.rend());
       std::sort(scores_signal_decoy.rbegin(), scores_signal_decoy.rend());
       std::sort(scores_noise_decoy.rbegin(), scores_noise_decoy.rend());
@@ -220,9 +222,13 @@ namespace OpenMS
       if (! has_nan)
       {
         // binary search in the ascending keys, as std::map::find
+        // the q-value of the lowest target score at or above qs (the same targets are counted at both thresholds), the highest target
+        // score's above all of them; it was 0 for a score that no target has (a decoy mass, a precursor that is no target mass, a mass of
+        // a feature counted once), which let such masses pass every q-value cut
         const auto qvalue_of = [&qscore_keys, &qvalue_values](double qs) {
+          if (qscore_keys.empty()) return 1.0;
           const auto it = std::lower_bound(qscore_keys.begin(), qscore_keys.end(), qs);
-          return it == qscore_keys.end() || *it != qs ? .0 : qvalue_values[it - qscore_keys.begin()];
+          return it == qscore_keys.end() ? qvalue_values.back() : qvalue_values[it - qscore_keys.begin()];
         };
 #pragma omp parallel for schedule(dynamic, 64)
         for (SignedSize s = 0; s < (SignedSize)deconvolved_spectra.size(); s++)
@@ -256,9 +262,15 @@ namespace OpenMS
 
       if (! key_nan)
       {
-        // the refined table as a map, for the serial lookups that insert (std::map::operator[])
+        // the refined table as a map, for the serial lookups below
         for (Size k = 0; k < qscore_keys.size(); k++) map_qvalue.emplace_hint(map_qvalue.end(), qscore_keys[k], qvalue_values[k]);
       }
+      // as qvalue_of above (a NaN Qscore2D: q-value 1)
+      const auto map_qvalue_of = [&map_qvalue](double qs) {
+        if (map_qvalue.empty() || std::isnan(qs)) return 1.0;
+        const auto it = map_qvalue.lower_bound(qs);
+        return it == map_qvalue.end() ? map_qvalue.rbegin()->second : it->second;
+      };
       for (auto& deconvolved_spectrum : deconvolved_spectra)
       {
         if (deconvolved_spectrum.empty() || deconvolved_spectrum.isDecoy())
@@ -270,7 +282,7 @@ namespace OpenMS
           auto precursor_pg = deconvolved_spectrum.getPrecursorPeakGroup();
           double qs = precursor_pg.getQscore2D();
 
-          precursor_pg.setQvalue(map_qvalue[qs]);
+          precursor_pg.setQvalue(map_qvalue_of(qs));
           deconvolved_spectrum.setPrecursorPeakGroup(precursor_pg);
         }
 
@@ -281,10 +293,10 @@ namespace OpenMS
 
         for (auto& pg : deconvolved_spectrum)
         {
-          pg.setQvalue(map_qvalue[pg.getQscore2D()]);
+          pg.setQvalue(map_qvalue_of(pg.getQscore2D()));
         }
       }
     }
-    return noise_weight;
+    return noise_weights;
   }
 } // namespace OpenMS

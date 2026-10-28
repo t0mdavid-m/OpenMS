@@ -91,7 +91,7 @@ FLASHDeconvAlgorithm::FLASHDeconvAlgorithm(): DefaultParamHandler("FLASHDeconvAl
 
   defaults_.setValue("merging_method", 0,
                      "Method for merging spectra before deconvolution. 0: No merging  1: Gaussian averaging per MS level, effective for Q-TOF datasets. For MSn (n > 1), only the spectra from the same precursor mass "
-                     "(subject to tolerance set by SD:tol) are averaged. 2: Block merging, combining all spectra into one per MS level (e.g., for NativeMS datasets).");
+                     "(within 0.2 m/z of precursor m/z and 30 s) are averaged. 2: Block merging, combining all spectra into one per MS level (e.g., for NativeMS datasets).");
   defaults_.setMinInt("merging_method", 0);
   defaults_.setMaxInt("merging_method", 2);
 
@@ -386,7 +386,8 @@ void FLASHDeconvAlgorithm::deconvolveSpectrum_(const MSExperiment& map, Spectrum
   std::vector<double> fragment_masses;                                   // the fragment masses both rounds score on
   bool round1 = false;                                                   // whether round 1 ran (several target masses)
   bool reuse_round1 = false; // round 1's deconvolution is the final one (same precursor, same mass and charge bounds)
-  if (precursor_by_fragments_ && ms_level > 1 && ! precursor_pg.empty())
+  // not for a spectrum whose precursor FLASHIda commanded (-scan_commands): the commanded precursor stays (ADR-0046)
+  if (precursor_by_fragments_ && ms_level > 1 && ! precursor_pg.empty() && located_by_scan_.find(scan_number) == located_by_scan_.end())
   {
     const auto cit = native_id_window_candidates_.find(native_id);
     const auto dit = native_id_window_decoys_.find(native_id);
@@ -1006,6 +1007,7 @@ void FLASHDeconvAlgorithm::run(MSExperiment& map,
 {
   min_level_features_.reset();
   min_level_trace_error_ = nullptr;
+  MassFeatureTrace::resetFeatureIndex(); // the feature indices of this run start at 1
 
   // ADR-0046: join this data file to its acquisition BEFORE any deconvolution, so a scan_commands file that
   // does not belong to it aborts in seconds. Metadata only -- nothing below has touched the spectra yet.
@@ -1074,10 +1076,18 @@ void FLASHDeconvAlgorithm::run(MSExperiment& map,
   // feature tracing here and update FeatureQScores
   runFeatureFinding_(deconvolved_spectra, deconvolved_features);
 
-  noise_decoy_weight_ = Qvalue::updatePeakGroupQvalues(deconvolved_spectra);
+  noise_decoy_weights_ = Qvalue::updatePeakGroupQvalues(deconvolved_spectra);
+  if (report_decoy_)
+  {
+    String weights;
+    for (const auto& [level, weight] : noise_decoy_weights_) weights += " MS" + String(level) + " " + String::number(weight, 3);
+    OPENMS_LOG_INFO << "Noise decoy weights:" << weights << std::endl;
+  }
   for (auto& dspec : deconvolved_spectra)
   {
-    if (dspec.getDecoyPrecursorMass() > 0 && dspec.getDecoyPrecursorWeight() < 0) dspec.setDecoyPrecursorWeight(noise_decoy_weight_);
+    // a decoy precursor is a mass of the level below: its weight is that level's
+    const uint ms_level = dspec.getOriginalSpectrum().getMSLevel();
+    if (dspec.getDecoyPrecursorMass() > 0 && dspec.getDecoyPrecursorWeight() < 0) dspec.setDecoyPrecursorWeight(getNoiseDecoyWeight(ms_level > 1 ? ms_level - 1 : 1));
   }
 
   TopDownIsobaricQuantification quantifier;
@@ -1103,7 +1113,7 @@ PeakGroup FLASHDeconvAlgorithm::peakGroupFromCommand_(const ScanCommandJoin::Loc
   precursor_log_mz_peak.mass = row.mono_mass;
   precursor_log_mz_peak.intensity = (float)row.peakgroup_intensity;
 
-  PeakGroup precursor_pg(precursor_log_mz_peak.abs_charge, precursor_log_mz_peak.abs_charge, true);
+  PeakGroup precursor_pg(precursor_log_mz_peak.abs_charge, precursor_log_mz_peak.abs_charge, precursor_log_mz_peak.is_positive);
   precursor_pg.push_back(precursor_log_mz_peak);
   precursor_pg.setChargeIsotopeCosine(precursor_log_mz_peak.abs_charge, (float)row.charge_cos);
   precursor_pg.setChargeSNR(precursor_log_mz_peak.abs_charge, (float)row.charge_snr);

@@ -249,7 +249,8 @@ namespace OpenMS
         deconvolved_spectrum_.setPrecursor(precursor);
       }
 
-      if (target_precursor_charge_ != 0 || target_precursor_mz_ > 0) { setTargetPrecursorCharge_(); }
+      // a target precursor m/z needs its charge (help of precursor_mz): without one it built a precursor of mass 0, which capped the MSn masses
+      if (target_precursor_charge_ != 0) { setTargetPrecursorCharge_(); }
 
       if (deconvolved_spectrum_.getPrecursorPeakGroup().empty())
       {
@@ -1294,19 +1295,19 @@ namespace OpenMS
     bool match = false;
     double mass = offset * iso_da_distance_ + peak_group.getMonoMass();
     double mass_da_tol = mass * tol;
-    auto upper
-      = std::upper_bound(excluded_masses_for_decoy_runs_.begin(), excluded_masses_for_decoy_runs_.end(), mass + mass_da_tol);
-    while (upper != excluded_masses_for_decoy_runs_.end())
+    // the excluded masses at or below mass + tol, downwards while within tol (a mass at or above the heaviest excluded one was not checked:
+    // the search started at end())
+    auto it = std::upper_bound(excluded_masses_for_decoy_runs_.begin(), excluded_masses_for_decoy_runs_.end(), mass + mass_da_tol);
+    while (it != excluded_masses_for_decoy_runs_.begin())
     {
-      double delta = mass - *upper;
+      --it;
+      double delta = mass - *it;
+      if (delta > mass_da_tol) break;
       if (std::abs(delta) < mass_da_tol)
       {
         match = true;
         break;
       }
-      if (delta > mass_da_tol) break;
-      if (upper == excluded_masses_for_decoy_runs_.begin()) { break; }
-      upper--;
     }
     return match;
   }
@@ -1557,8 +1558,9 @@ namespace OpenMS
     filtered_peak_groups.clear();
     filtered_peak_groups.reserve(deconvolved_spectrum_.size());
 
-    std::set<Size> indices;
-    if (target_decoy_type_ == PeakGroup::signal_decoy)
+    std::set<Size> indices; // the signal decoys that pass the checks below (none may pass)
+    const bool signal_decoy_run = target_decoy_type_ == PeakGroup::signal_decoy;
+    if (signal_decoy_run)
     {
       excluded_masses_for_decoy_runs_.clear();
       for (const auto& pg : *target_dspec_for_decoy_calculation_) // pg are the target peak groups from normal spectrum deconvolution
@@ -1596,7 +1598,8 @@ namespace OpenMS
     {
       auto& pg = deconvolved_spectrum_[k];
 
-      if (!indices.empty() && (indices.find(k) == indices.end()))
+      // a signal decoy must have passed the checks above (when none did, every one was kept)
+      if (signal_decoy_run && indices.find(k) == indices.end())
       {
         continue;
       }
