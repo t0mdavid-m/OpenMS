@@ -89,8 +89,8 @@ namespace OpenMS
                        "are given).");
     defaults_.setMinInt("max_var_mod_count", 0);
     defaults_.setValue("var_mod_penalty", std::vector<int> {},
-                       "Score penalty of each variable modification, in the order given (var_mod, then var_mod_file); missing or lower: 2. "
-                       "FLASHTnT raises it for modifications its decoy PrSMs use about as often as its target PrSMs.");
+                       "Score penalty of each variable modification, in the order given (var_mod, then var_mod_file); missing or lower: 2 "
+                       "(a blind modification costs 19).");
     defaults_.addTag("var_mod_penalty", "advanced");
 
     defaults_.setValue("cleavage_weight", 5.0, "Weight of the backbone cleavage propensity: a matched fragment mass adds round(weight x (w_before + "
@@ -2075,7 +2075,7 @@ namespace OpenMS
         hit.setMetaValue(mi_blind_mod_count, (int)std::count(mod_vars.begin(), mod_vars.end(), 0));
         hit.setMetaValue(mi_modification_variable, mod_vars); // 1: a variable (searched) modification, 0: a blind shift
         {
-          // the variable modification names of the path ("A+B," per shift, alternatives separated by ","), for FLASHTnT's penalty learning
+          // the variable modification names of the path ("A+B," per shift, alternatives separated by ",")
           std::vector<String> var_entries;
           for (Size k = 0; k < mod_vars.size(); k++)
           {

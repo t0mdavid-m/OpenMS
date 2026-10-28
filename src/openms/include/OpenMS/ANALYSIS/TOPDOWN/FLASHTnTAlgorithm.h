@@ -101,8 +101,8 @@ public:
   /// a function that loads the raw MSn spectra of the given scan numbers (FLASHAnnotatorAlgorithm::loadSpectra on the raw mzML)
   using RawSpectrumLoader = std::function<void(const std::set<int>&, std::map<int, MSSpectrum>&)>;
 
-  /// With a loader, every PrSM (targets and decoys alike) is annotated on its raw spectrum before the FDR (FLASHAnnotatorAlgorithm, the
-  /// raw: parameters) and ranked by its extension score plus raw_score_weight times its raw score.
+  /// With a loader, every PrSM (targets and decoys alike) is annotated on its raw spectrum before the FDR (FLASHAnnotatorAlgorithm with its
+  /// defaults and raw:tol) and ranked by its extension score plus 8 times its raw score.
   void setRawSpectrumLoader(RawSpectrumLoader loader)
   {
     raw_loader_ = std::move(loader);
@@ -127,8 +127,6 @@ private:
 
   Param tagger_param_, extender_param_, gapped_param_, annotator_param_;
   RawSpectrumLoader raw_loader_;
-  /// weight of the raw-spectrum evidence score added to the extension score for the FDR
-  double raw_score_weight_ = 8.0;
   /// the raw spectra of loadRawSpectra_, by position (raw_slot_: scan to position): their peaks centroided into raw_peaks_ and removed
   /// from raw_spectra_, which keep the precursor information
   std::vector<MSSpectrum> raw_spectra_;
@@ -145,12 +143,11 @@ private:
   /// the raw-spectrum PrSM of @p hit (its proteoform, bounded by the entry where a terminus is open) and its given precursor mass (-1:
   /// none); false if its spectrum is not loaded
   bool toRawPrSM_(const ProteinHit& hit, FLASHAnnotatorAlgorithm::PrSM& prsm, double& precursor_mass) const;
-  /// the raw-evidence score of a hit for the path alternatives of the extension (raw_score_weight x raw score, as annotateOnRawSpectra_
-  /// adds it); the raw spectra must stay loaded while it is used
+  /// the raw-evidence score of a hit for the path alternatives of the extension (8 x raw score, as annotateOnRawSpectra_ adds it); the
+  /// raw spectra must stay loaded while it is used
   std::function<double(const ProteinHit&)> alternativeRawScorer_() const;
-  /// path_alternatives (-1 resolved) and path_alternative_margin
+  /// path alternatives per candidate protein and extension mode (native: 2, else 0)
   int path_alternatives_ = 0;
-  int path_alternative_margin_ = 19;
   /// one PrSM per spectrum: the best by score (a determined mass and termini break a tie, then the coverage, then the earlier PrSM);
   /// @p label and @p score_name go into the log line
   static void keepBestPerSpectrum_(std::vector<ProteinHit>& hits, const String& label, const String& score_name);
@@ -158,24 +155,18 @@ private:
   int chimeric_rounds_ = 0;
   /// candidates from gapped tags: off, fallback (spectra without sequence-tag candidates), both, only
   String gapped_mode_ = "fallback";
-  /// how the candidate proteins of a spectrum are cut (candidate_ranking): union, fusion, poisson, precursor, twosided
-  String candidate_ranking_ = "union";
   /// candidates from terminal ladders (residue sums from an intact protein terminus) in every spectrum
   bool terminal_ladders_ = true;
   /// candidates from precursor-anchored ladders (windows whose unmodified mass is the precursor mass) in every spectrum with a precursor mass
   bool precursor_ladders_ = true;
   /// search cascade: sequence tags and ladders in every spectrum, then gapped tags only in the spectra the first stage identifies nothing in
   bool search_cascade_ = true;
-  /// learn variable modification penalties from target and decoy usage
-  bool learn_var_mod_penalty_ = false;
   /// search spectra with MS1-based PrSMs again with decoy precursor masses, as decoys of the precursor in the FDR
   bool decoy_precursor_ = false;
   /// co-isolation: an MS1 mass reported by PrSMs of different proteins stays with the protein that explains it best
   bool one_proteoform_per_feature_ = true;
   /// native and targeted runs: candidates of every source chosen by the decoy margin of their spectrum, every candidate's PrSM reported
   bool native_ = false;
-  /// with native_: the margin (-log10 units) over the best decoy candidate of the same source in the spectrum
-  double native_margin_ = 2.0;
   double decoy_factor_ = 0, pro_fdr_ = 1;
   /// how many nodes (massses) will be used
   /// at most this many masses (best Qscore first) per spectrum are used: 400, lysate MS2 spectra rarely have this many masses; no cap with
@@ -185,11 +176,10 @@ private:
 
   bool keep_decoy_ = false;
   bool keep_underdetermined_ = true;
+  /// several PrSMs per spectrum (native only)
   bool multiple_hits_per_spec_ = false;
   bool protein_level_only_ = false;
   int max_protein_hits_ = 50;
-  /// mass tolerance (ppm) of the protein-level search; <= 0: the MS2 deconvolution tolerance of the input
-  double protein_tol_ = 0;
   int min_protein_hits_ = 5;
   double protein_fdr_ = 0.1;
   std::vector<ProteinHit> proteoform_hits_;

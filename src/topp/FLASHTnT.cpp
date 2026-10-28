@@ -144,7 +144,7 @@ protected:
     registerInputFile_("in_raw", "<file>", "",
                        "Raw mzML file (profile or centroid) FLASHDeconv was run on. With it, every PrSM (targets and decoys) is annotated on its raw "
                        "spectrum (fragment isotope envelopes at every charge, as FLASHAnnotator) before the FDR, and ranked by its extension score "
-                       "plus -raw_score_weight times its raw score. The raw annotation columns are written in the PrSM and proteoform files.",
+                       "plus 8 times its raw score. The raw annotation columns are written in the PrSM and proteoform files.",
                        false);
     setValidFormats_("in_raw", ListUtils::create<String>("mzML"));
 
@@ -170,7 +170,8 @@ protected:
     //registerSubsection_("tnt", "TnT algorithm parameters");
     registerSubsection_("tag", "Tag algorithm parameters");
     registerSubsection_("ex", "Extension algorithm parameters");
-    registerSubsection_("fd", "FLASHDeconv parameters, used when -in is a raw mzML (the same as FLASHDeconv's FD:, SD:, ft: and iq: parameters)");
+    registerSubsection_("fd", "FLASHDeconv parameters, used when -in is a raw mzML (FLASHDeconv's FD: and SD: parameters; its feature tracing and "
+                              "isobaric quantification keep their defaults, and decoy masses are made with -decoy_precursor)");
   }
 
   Param getSubsectionDefaults_(const String& prefix) const override
@@ -184,8 +185,21 @@ protected:
       auto tnt_param = FLASHTnTAlgorithm().getDefaults();
       return tnt_param.copy("ex:", true);
     }
-    else if (prefix == "fd") { return FLASHDeconvAlgorithm().getDefaults(); }
+    else if (prefix == "fd") { return fdDefaults_(); }
     else { throw Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, "Unknown subsection", prefix); }
+  }
+
+  // FLASHDeconv's parameters as FLASHTnT exposes them. Kept at their defaults: feature tracing (ft:), isobaric quantification (iq:), the
+  // RNA averagine and the beta isotope error tolerance of FLASHDeconv's mass FDR; report_FDR is set by FLASHTnT (with -decoy_precursor).
+  static Param fdDefaults_()
+  {
+    Param p = FLASHDeconvAlgorithm().getDefaults();
+    p.removeAll("ft:");
+    p.removeAll("iq:");
+    p.remove("use_RNA_averagine");
+    p.remove("allowed_isotope_error");
+    p.remove("report_FDR");
+    return p;
   }
 
   // the main_ function is called after all parameters are read
@@ -306,7 +320,10 @@ protected:
         raw_msn_spectra.emplace(scan, spec); // the first spectrum of a scan number, as the file reader keeps it
       }
       FLASHDeconvAlgorithm fd;
-      fd.setParameters(getParam_().copy("fd:", true));
+      Param fd_param = getParam_().copy("fd:", true);
+      // the decoy precursor masses of the isolation windows (FLASHDeconv's report_FDR) are needed for -decoy_precursor only
+      fd_param.setValue("report_FDR", getParam_().getValue("decoy_precursor").toString() == "true" ? "true" : "false");
+      fd.setParameters(fd_param);
       std::vector<DeconvolvedSpectrum> deconvolved_spectra;
       std::vector<FLASHHelperClasses::MassFeature> deconvolved_features;
       fd.run(map, deconvolved_spectra, deconvolved_features);

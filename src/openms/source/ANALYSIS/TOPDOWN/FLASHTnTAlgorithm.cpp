@@ -15,7 +15,6 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTCandidateRanker.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/MassLadderAlgorithm.h>
-#include <boost/math/special_functions/gamma.hpp>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -82,11 +81,17 @@ constexpr Size null_min_tail_decoys = 5;
 constexpr Size null_min_class_decoys = 20;
 // protein level: floor of a null p-value and of a local FDR before its log
 constexpr double fdr_p_floor = 1e-300;
-// variable modification penalties: learned from a pilot extension of every var_mod_pilot_stride-th spectrum in input order (a fixed
-// subset that samples the whole run, the same for every thread count), so that only that share of the spectra is extended twice
-constexpr int var_mod_pilot_stride = 4;
-// variable modification penalties: with fewer decoy PrSMs, chance usage is not estimated and the penalties are not learned
-constexpr Size var_mod_min_decoy_prsms = 50;
+// raw-spectrum scoring: a PrSM is ranked for the FDR by its extension score plus this weight times its raw score (-log10 of the chance
+// of its matched fragment envelopes). Eclip_1480 at 1%: 4846 PrSMs by the extension score, 5189 by the raw score alone, 5241 at 4 x raw,
+// 5247 at 8, 5240 at 16, 5012 at 1
+constexpr double raw_score_weight = 8.0;
+// path alternatives (with native, 2 per candidate protein and extension mode): the next-ranked paths within this margin of the mode's best
+// path score, the penalty of one blind modification
+constexpr int native_path_alternatives = 2;
+constexpr int path_alternative_margin = 19;
+// native: a candidate is characterized when its score (-log10 of the chance probability of its matches) exceeds that of the best decoy
+// candidate of its source in its spectrum by this margin
+constexpr double native_margin = 2.0;
 
 // the registry index of a meta value name used below, registered once: a lookup by name takes the registry's critical section (the map is
 // read-only after its construction, so threads share it without a lock)
@@ -298,15 +303,12 @@ FLASHTnTAlgorithm& FLASHTnTAlgorithm::operator=(const FLASHTnTAlgorithm& rhs)
 
 void FLASHTnTAlgorithm::setDefaultParams_()
 {
-  defaults_.setValue("pro_fdr", 1.0,
+  defaults_.setValue("pro_fdr", 0.01,
                      "Specifies the proteoform-level FDR; proteins are reported at the same level. The reported PrSMs are those of the reported "
                      "proteoforms (PrSM q-values only rank the PrSMs within their FDR class; they are no filter). Also the PrSM q-value up to "
                      "which a determined PrSM is preferred as proteoform representative and counts as passing in the protein ranking (0.01 "
-                     "when 1).");
+                     "when 1). 1 reports every proteoform with its q-value.");
   defaults_.setMinFloat("pro_fdr", 0.0);
-
-  defaults_.setValue("only_single_hit", "false", "Allows only a single hit per spectrum.");
-  defaults_.setValidStrings("only_single_hit", {"true", "false"});
 
   defaults_.setValue("discard_underdetermined", "false",
                      "Discards underdetermined proteoform IDs (e.g., those without exact precursor masses or start/end positions).");
@@ -321,20 +323,21 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   defaults_.setValidStrings("protein_level_only", {"true", "false"});
 
   defaults_.setValue("max_protein_hits", 50,
-                     "Number of candidate proteins kept per spectrum by the protein-level search, chosen as candidate_ranking says. When "
-                     "proteoform search runs, only these are characterized.");
+                     "Number of candidate proteins kept per spectrum by the protein-level search. When proteoform search runs, only these are "
+                     "characterized. With more candidates, the best of the union of the 500 best by score and by matched tags are kept by a small "
+                     "model of each candidate's own evidence (FLASHTnTCandidateRanker: its score, the chance probability of the ion ladder at its "
+                     "tags' offset, whether that offset is a residue boundary; not the precursor mass), trained to keep the protein of each "
+                     "spectrum's best PrSM of a 500-candidate search: left out by dataset, its 10 best held it in 94.6% of the spectra (gapped tags "
+                     "89.2%), the union of the 100 best by score and by matched tags in 93.8% (86.8%).");
   defaults_.setMinInt("max_protein_hits", 1);
-
-  defaults_.setValue("protein_tol", 0.0,
-                     "Mass tolerance (ppm) of the protein-level search: a deconvolved mass, moved by a tag-derived shift, matches a "
-                     "protein residue sum within it. 0: the MS2 deconvolution tolerance recorded in the input file.");
-  defaults_.setMinFloat("protein_tol", 0.0);
+  defaults_.addTag("max_protein_hits", "advanced");
 
   defaults_.setValue("min_protein_hits", 5,
                      "Number of best-scoring candidate proteins per spectrum that are always characterized. The other "
                      "candidates are characterized only if their protein, or its target-decoy partner, passes protein_fdr. Used only when the database "
                      "contains decoys (DECOY prefix); otherwise all candidates kept by max_protein_hits are characterized.");
   defaults_.setMinInt("min_protein_hits", 1);
+  defaults_.addTag("min_protein_hits", "advanced");
 
   defaults_.setValue("protein_fdr", 0.1,
                      "Run-level protein FDR, from each protein's best tag-based score over all spectra, that a candidate "
@@ -342,6 +345,7 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "database. 1 characterizes all candidates kept by max_protein_hits.");
   defaults_.setMinFloat("protein_fdr", 0.0);
   defaults_.setMaxFloat("protein_fdr", 1.0);
+  defaults_.addTag("protein_fdr", "advanced");
 
   defaults_.setValue("ion_type", std::vector<std::string> {"b", "y"}, "Specifies ion types to consider.");
   defaults_.setValidStrings("ion_type", {"b", "c", "a", "y", "z", "x", "zp1", "zp2"});
@@ -368,6 +372,9 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   auto tparam = FLASHTaggerAlgorithm().getDefaults();
   tparam.remove("ion_type");
   tparam.remove("fixed_mod"); // unused by the tagger (FLASHIda sets it); fixed modifications are the FLASHTnT tool's fixed_mod
+  // the tagger's own mass gaps: gapped tags (gapped_tags) search gaps of any residue count instead
+  tparam.remove("allow_gap");
+  tparam.remove("max_aa_in_gap");
   defaults_.insert("tag:", tparam);
 
   auto eparam = FLASHExtenderAlgorithm().getDefaults();
@@ -377,6 +384,9 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   eparam.remove("max_mod_mass");
   eparam.remove("fixed_mod"); // unused by the extender (FLASHIda sets it)
   eparam.remove("var_mod");
+  // the extender's defaults: the cleavage propensity weight and table, fitted on lysates and native proteins
+  eparam.remove("cleavage_weight");
+  eparam.remove("cleavage_table");
 
   defaults_.insert("ex:", eparam);
 
@@ -390,17 +400,6 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "of 1549, for about a third of the run time. Alone, gapped tags find about as much as sequence tags (1480 without the "
                      "cascade: 4547 spectra by gapped tags vs 4117 by sequence tags, 1538 and 1579 proteoforms, 305 proteins each).");
   defaults_.setValidStrings("gapped_tags", {"off", "fallback", "both", "only"});
-  defaults_.setValue("candidate_ranking", "learned", "How the candidate proteins of a spectrum are cut to max_protein_hits: "
-                     "union (the max_protein_hits best by score and those by matched tags); the others keep as many as union would, chosen by: fusion "
-                     "(reciprocal rank fusion of the two ranks, 1/(60+r)); poisson (-log10 P(Poisson >= its tag count), the rate from the tags per "
-                     "residue of the spectrum's candidates times its length); precursor (a start and an end implied by a tag and the precursor mass "
-                     "both on residue boundaries first, then score); twosided (the score of a tag's side plus that of the other side at the shift the "
-                     "precursor mass implies). learned keeps the max_protein_hits best of the union of the 500 best by score and by matched tags by a "
-                     "small model of each candidate's own evidence (FLASHTnTCandidateRanker: its score, the chance probability of the ion ladder at its "
-                     "tags' offset, whether that offset is a residue boundary; not the precursor mass). Trained to keep the protein of each spectrum's "
-                     "best PrSM of a 500-candidate search, left out by dataset its 10 best held it in 94.6 % of the spectra (gapped tags 89.2 %), the "
-                     "union of the 100 best in 93.8 % (86.8 %).");
-  defaults_.setValidStrings("candidate_ranking", {"union", "fusion", "poisson", "precursor", "twosided", "learned"});
   defaults_.setValue("terminal_ladders", "true",
                      "Candidate proteins from terminal ladders: deconvolved masses that are residue sums from an intact protein terminus (the N-terminus "
                      "also without the initiator Met and with acetylation), found without a sequence tag. In every spectrum the min_protein_hits best "
@@ -409,7 +408,7 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   defaults_.setValue("precursor_ladders", "true",
                      "Candidate proteins from precursor-anchored ladders: in each MSn spectrum with a precursor mass, every stretch of a protein (between "
                      "non-standard residues) whose unmodified mass equals the precursor mass (within the MS1 deconvolution tolerance of the input, or "
-                     "protein_tol's tolerance if the input has no MS1 spectra; isotope errors -1 to +1) is scored by the chance probability of the "
+                     "the MS2 one if the input has no MS1 spectra; isotope errors -1 to +1) is scored by the chance probability of the "
                      "deconvolved masses on its prefix and suffix fragment ladders (a position counts once per side, whatever ion types match it). The "
                      "stretches are unmodified: N-terminal acetylation and other modifications are not proposed (initiator Met removal is a stretch "
                      "from residue 2). The min_protein_hits best stretches are characterized from tags on their ladders. Only their PrSMs of "
@@ -422,35 +421,35 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "Search in two stages. true: stage 1 searches every spectrum with sequence tags and terminal and precursor ladders (those "
                      "that are on), which compete per spectrum as in a single stage; stage 2 searches with gapped tags only the spectra stage 1 did "
                      "not identify (no target PrSM whose proteoform passes pro_fdr, 1% without a filter). The PrSM q-values are computed per stage "
-                     "(and FDR class), so the PrSMs of stage 2 compete only with the decoys of stage 2; the variable modification penalties are "
-                     "learned in stage 1. Gapped tags then rescue spectra the other sources leave unidentified instead of taking the place of their "
+                     "(and FDR class), so the PrSMs of stage 2 compete only with the decoys of stage 2. Gapped tags then rescue spectra the other "
+                     "sources leave unidentified instead of taking the place of their "
                      "candidates (Eclip_1480: 121 instead of 51 rescued spectra at the same number of proteoforms; D60 human Caco-2: 529 instead of "
                      "526 proteoforms). false: one stage searches every spectrum with every source. A single stage is also used with gapped_tags off, "
                      "with native, with protein_level_only and without decoys in the database; the chimeric rounds search with all sources.");
   defaults_.setValidStrings("search_cascade", {"true", "false"});
+  defaults_.addTag("search_cascade", "advanced");
   defaults_.setValue("one_proteoform_per_feature", "true",
                      "Co-isolation: when PrSMs of different proteins report the same mass taken from MS1 (within twice the precursor tolerance, "
                      "one isotope apart allowed) within 2 min, the mass is one MS1 feature of one proteoform, and only the protein that explains it "
                      "best keeps it (by its best PrSM score, which already prices blind shifts, then fewer blind modifications, then more PrSMs at that mass); the "
                      "other proteins' PrSMs are reported without a mass. Masses from fragment pairs and decoy precursors are not affected.");
   defaults_.setValidStrings("one_proteoform_per_feature", {"true", "false"});
+  defaults_.addTag("one_proteoform_per_feature", "advanced");
   defaults_.setValue("native", "false",
                      "Native and targeted top-down (one or a few spectra, often several proteins per spectrum, no MS1 survey): the candidate "
                      "proteins of each source (sequence tags; sliding ladders, i.e. masses read as residue sums from any start or to any end of a "
                      "protein, instead of terminal ladders; precursor ladders) are characterized when their candidate score "
                      "(-log10 of the chance probability of their matches) exceeds that of the best decoy candidate of the same source in the same "
-                     "spectrum by native_margin (at most max_protein_hits per source), and every such candidate's PrSM is reported, also without a "
-                     "determined mass, one per protein (the better one). Gapped tags are not used, only_single_hit is ignored, and at least one "
-                     "residual round of chimeric_rounds is searched (co-isolated proteins). Needs decoys in the database (DECOY prefix); without "
-                     "them, the candidates are chosen as without the option.");
+                     "spectrum by 2 (at most max_protein_hits per source), and every such candidate's PrSM is reported, also without a "
+                     "determined mass, one per protein (the better one); without native, each spectrum reports its best PrSM only. Gapped tags "
+                     "are not used, with the raw spectra two more paths per candidate protein and extension mode are scored on them (the "
+                     "next-ranked within one blind modification's penalty of the best), and at least one residual round of chimeric_rounds is searched (co-isolated "
+                     "proteins). Needs decoys in the database (DECOY prefix); without them, the candidates are chosen as without the option.");
   defaults_.setValidStrings("native", {"true", "false"});
-  defaults_.setValue("native_margin", 2.0,
-                     "With native: the margin (-log10 units) by which a candidate's score must exceed that of the best decoy candidate of its source "
-                     "in its spectrum.");
-  defaults_.setMinFloat("native_margin", 0.0);
   defaults_.setValue("decoy_precursor", "false",
                      "Decoy precursors: spectra whose PrSM took its mass from MS1 are searched again with the decoy precursor mass of their isolation "
-                     "window instead of the precursor mass (FLASHDeconv -FD:report_FDR true writes it and its score). When that search gives a PrSM "
+                     "window instead of the precursor mass (with a raw mzML as -in, FLASHTnT has FLASHDeconv choose it; a deconvolved mzML must "
+                     "come from FLASHDeconv -FD:report_FDR true, which writes it and its score). When that search gives a PrSM "
                      "reporting the decoy mass, the decoy precursor wins if its precursor score (FLASHDeconv's 2D Qscore) is higher than the "
                      "precursor's; the winning decoy PrSM replaces the spectrum's MS1-based PrSMs and counts as a decoy in the FDR, at the "
                      "proteoform level only against proteoforms whose mass came from MS1. Controls wrong MS1 precursor masses; PrSMs with masses "
@@ -462,45 +461,17 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "spacings away, and its proteoform mass), the 400-mass cap is applied again to what is left, and the residual is searched "
                      "again: tags, candidate proteins (sequence and gapped tags, terminal ladders; no precursor ladders) without the proteins of "
                      "the spectrum's earlier best PrSMs and their target-decoy partners, and the extension, without the precursor mass (it belongs "
-                     "to the first proteoform). Every candidate's PrSM is kept as with -in_raw (scored on the raw spectrum with it), then, with "
-                     "only_single_hit, the best one. Residual PrSMs are added to the scan (meta value ChimericRound r) and form their own FDR class "
+                     "to the first proteoform). Every candidate's PrSM is kept as with -in_raw (scored on the raw spectrum with it), then the best "
+                     "one (with native, all). Residual PrSMs are added to the scan (meta value ChimericRound r) and form their own FDR class "
                      "per round (\"residual 1\", \"residual 2\"). The evidence in a single spectrum is reported, not filtered: ResidualNullScore, the "
                      "best extension score of the other decoy PrSMs of the same residual search, ResidualScoreRatio, the extension score over it, "
                      "and MatchedMasses, the masses on the path. Without the option, results are unchanged.");
   defaults_.setMinInt("chimeric_rounds", 0);
   defaults_.setMaxInt("chimeric_rounds", max_chimeric_rounds);
-  defaults_.setValue("learn_var_mod_penalty", "false",
-                     "Raises the penalty of a variable modification that target PrSMs use per opportunity (fitting residue or terminus) no more often than decoy PrSMs "
-                     "(chance), up to that of a blind shift. The usage is counted in a pilot pass over every 4th spectrum (all spectra if the pilot "
-                     "has fewer than 50 decoy PrSMs); with a raised penalty, all spectra are then extended once with the learned penalties. "
-                     "Needs decoys and at least 50 decoy PrSMs. Off by default: a listed variable modification keeps its small penalty (2, a blind "
-                     "shift costs 19); on E. coli lysates, learning raised most of them to the blind-shift penalty and the variable modifications "
-                     "added no proteoforms, while the small penalty added 1.4% at unchanged entrapment.");
-  defaults_.setValidStrings("learn_var_mod_penalty", {"true", "false"});
-  defaults_.addTag("learn_var_mod_penalty", "advanced");
-  defaults_.insert("gapped:", FLASHGappedTaggerAlgorithm().getDefaults());
-  defaults_.setValue("raw_score_weight", 8.0,
-                     "With the raw mzML (-in_raw), every PrSM is annotated on its raw spectrum (FLASHAnnotator: isotope envelopes of the proteoform's "
-                     "fragments at every charge) and ranked for the FDR by its extension score plus this weight times its raw score (-log10 of the "
-                     "chance of the matched fragments). 0: the raw score is reported but not used in the ranking.");
-  defaults_.setMinFloat("raw_score_weight", 0.0);
-  defaults_.setValue("path_alternatives", -1,
-                     "With the raw mzML (-in_raw): per candidate protein, how many more of its distinct proteoforms (protein length, modification "
-                     "mass) are extended and scored on the raw spectrum, the next-ranked paths of one extension mode (N-terminal, C-terminal, "
-                     "precursor mass) within path_alternative_margin of that mode's best path score; its PrSM is the one of the best extension + "
-                     "raw score (the usual one among equal ones), for targets and decoys alike. Otherwise the extension keeps one path per mode, "
-                     "chosen among equal scores by the smaller modification mass without looking at the raw spectrum (a native OMPF spectrum: "
-                     "205-362 instead of 1-362 at the same score, with the weaker raw evidence). -1: 2 with -native, else 0 (off).");
-  defaults_.setMinInt("path_alternatives", -1);
-  defaults_.addTag("path_alternatives", "advanced");
-  defaults_.setValue("path_alternative_margin", 19,
-                     "Path score margin of the path alternatives (path_alternatives) below a mode's best path score; 19 is the penalty of one "
-                     "blind modification, 0 takes equal scores only.");
-  defaults_.setMinInt("path_alternative_margin", 0);
-  defaults_.addTag("path_alternative_margin", "advanced");
-  auto aparam = FLASHAnnotatorAlgorithm().getDefaults();
-  aparam.remove("ion_type");
-  defaults_.insert("raw:", aparam);
+  // raw-spectrum annotation (FLASHAnnotator's defaults, terminal fragments only): only its tolerance is a parameter
+  const auto aparam = FLASHAnnotatorAlgorithm().getDefaults();
+  defaults_.setValue("raw:tol", aparam.getValue("tol"), aparam.getDescription("tol"));
+  defaults_.setMinFloat("raw:tol", 0.0);
   defaultsToParam_();
 }
 
@@ -516,23 +487,25 @@ void FLASHTnTAlgorithm::updateMembers_()
   extender_param_.setValue("max_mod_mass", param_.getValue("max_mod_mass"));
   extender_param_.setValue("var_mod", param_.getValue("var_mod"));
 
-  gapped_param_ = param_.copy("gapped:", true);
-  annotator_param_ = param_.copy("raw:", true);
+  gapped_param_ = FLASHGappedTaggerAlgorithm().getDefaults();
+  annotator_param_ = FLASHAnnotatorAlgorithm().getDefaults();
+  annotator_param_.setValue("tol", param_.getValue("raw:tol"));
   annotator_param_.setValue("ion_type", param_.getValue("ion_type"));
-  raw_score_weight_ = param_.getValue("raw_score_weight");
   gapped_mode_ = param_.getValue("gapped_tags").toString();
-  candidate_ranking_ = param_.getValue("candidate_ranking").toString();
   terminal_ladders_ = param_.getValue("terminal_ladders").toString() == "true";
   precursor_ladders_ = param_.getValue("precursor_ladders").toString() == "true";
   search_cascade_ = param_.getValue("search_cascade").toString() == "true";
-  learn_var_mod_penalty_ = param_.getValue("learn_var_mod_penalty").toString() == "true";
   decoy_precursor_ = param_.getValue("decoy_precursor").toString() == "true";
   one_proteoform_per_feature_ = param_.getValue("one_proteoform_per_feature").toString() == "true";
   chimeric_rounds_ = param_.getValue("chimeric_rounds");
   pro_fdr_ = param_.getValue("pro_fdr");
   keep_decoy_ = param_.getValue("keep_decoy").toString() == "true";
   keep_underdetermined_ = param_.getValue("discard_underdetermined").toString() == "false";
-  multiple_hits_per_spec_ = param_.getValue("only_single_hit").toString() == "false";
+  // One PrSM per spectrum, its best (with native, every candidate's, below). Several per spectrum put homologs of the spectrum's own
+  // protein beside it, which shuffled decoys do not model: three E. coli lysates with the B. theta entrapment at 1%, 5323 proteoforms
+  // with 91 B. theta (73 of them among the 750 that were not their spectrum's best PrSM; of the B. theta PrSMs beside a better one, 128
+  // were homologs of its protein, 92 unrelated, against 123 unrelated decoys) instead of 5083 with 39, in the same time.
+  multiple_hits_per_spec_ = false;
 
   // the largest total mass shift of the blind modifications of a proteoform (+ 1 Da): the bound of the tag flanking masses and of the
   // candidate blind modifications annotated by the extension
@@ -540,14 +513,14 @@ void FLASHTnTAlgorithm::updateMembers_()
 
   protein_level_only_ = param_.getValue("protein_level_only").toString() == "true";
   max_protein_hits_ = param_.getValue("max_protein_hits");
-  protein_tol_ = param_.getValue("protein_tol");
   min_protein_hits_ = param_.getValue("min_protein_hits");
   protein_fdr_ = param_.getValue("protein_fdr");
   native_ = param_.getValue("native").toString() == "true";
-  path_alternatives_ = param_.getValue("path_alternatives");
-  if (path_alternatives_ < 0) path_alternatives_ = native_ ? 2 : 0;
-  path_alternative_margin_ = param_.getValue("path_alternative_margin");
-  native_margin_ = param_.getValue("native_margin");
+  // Path alternatives (native only): per candidate protein and extension mode, the next-ranked paths within path_alternative_margin of the
+  // mode's best are scored on the raw spectrum too, and the PrSM is the one of the best extension + raw score. Otherwise the extension
+  // keeps one path per mode, chosen among equal scores by the smaller modification mass without looking at the raw spectrum (a native
+  // OMPF spectrum: 205-362 instead of 1-362 at the same score, with the weaker raw evidence).
+  path_alternatives_ = native_ ? native_path_alternatives : 0;
   max_node_cntr_ = 400;
   if (native_)
   {
@@ -1550,7 +1523,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     FLASHTaggerAlgorithm::indexResidueSums(pro_suffix[k], pro_suffix_index[k]);
   }
   const double t_residue_sums = lap();
-  const double protein_tol = protein_tol_ > 0 ? protein_tol_ : (ms2_tol > 0 ? ms2_tol : tol);
+  const double protein_tol = ms2_tol > 0 ? ms2_tol : tol;
   // the learned candidate cut reads the ion ladders from the residue sums: c ions NH3 above them; z ions NH3 below, z+1 ions NH3 - H
   const auto ion_types = param_.getValue("ion_type").toStringVector();
   auto hasIonType = [&ion_types](const std::string& t) { return std::find(ion_types.begin(), ion_types.end(), t) != ion_types.end(); };
@@ -1596,7 +1569,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   // ladders from the runs of standard residues of the database, for the window search of every spectrum with a precursor mass. The
   // precursor ladders are built only if a spectrum has a precursor mass.
   // Native mode (native): the candidates of a source in a spectrum are kept when their score exceeds that of the best decoy candidate of
-  // the same source in the spectrum by native_margin_ (decoys thereby never), best first, at most max_protein_hits_. A spectrum is its own
+  // the same source in the spectrum by native_margin (decoys thereby never), best first, at most max_protein_hits_. A spectrum is its own
   // null here: native runs have one or a few spectra, too few for an FDR over spectra. Native mode reads ladders from any start or end of a
   // protein (sliding ladders, MassLadderAlgorithm::searchSlidingLadders) instead of the intact termini only: the outer membrane proteins
   // of the targeted test spectra lack their signal peptides (OMPA from residue 22). Gapped-tag candidates were never an expected protein
@@ -1659,7 +1632,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     String names;
     for (auto& c : cands)
     {
-      if ((int)kept.size() >= max_protein_hits_ || score_of(c) < best_decoy + native_margin_) break;
+      if ((int)kept.size() >= max_protein_hits_ || score_of(c) < best_decoy + native_margin) break;
       if (is_decoy(c)) continue;
       names += String(kept.empty() ? " " : ", ") + fasta_entry[protein_of(c)].identifier + " " + String::number(score_of(c), 1);
       kept.push_back(std::move(c));
@@ -2056,35 +2029,16 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     }
     else
     {
-      // The score above uses the masses of the whole spectrum against the protein; a correct protein with few of them can end up below
-      // the cut. The number of distinct matched tags is sequence-specific evidence, so keep the best hits by that criterion as well and
-      // let the extension decide between them.
+      // More candidates than max_protein_hits: the max_protein_hits best by a small model of each candidate's own evidence
+      // (FLASHTnTCandidateRanker: its score, the chance probability of the ion ladder at its tags' offset, whether that offset is a residue
+      // boundary), among the union of the 500 best by score and by matched tags (the candidates it was trained on). The score uses the
+      // masses of the whole spectrum against the protein, so a correct protein with few of them can rank low by it; the number of distinct
+      // matched tags is sequence-specific evidence. Left out by dataset, the model's 10 best held the protein of the spectrum's best PrSM of
+      // a 500-candidate search in 94.6% of the spectra (gapped tags 89.2%), the union of the 100 best by score and by matched tags in 93.8%
+      // (86.8%).
       std::vector<bool> keep(ranked_count, (int)ranked_count <= max_protein_hits_);
       if ((int)ranked_count > max_protein_hits_)
       {
-        for (int i = 0; i < max_protein_hits_; i++)
-        {
-          keep[i] = true; // ranked by score
-        }
-
-        std::vector<std::pair<int, Size>> by_tag_count;
-        by_tag_count.reserve(ranked_count);
-        for (Size i = 0; i < ranked_count; i++)
-        {
-          const Size c = ranked[i].index;
-          const Size tag_count = c < seq_count ? seq_candidates[c].tag_count : gapped_tag_counts[c - seq_count];
-          by_tag_count.emplace_back(-(int)tag_count, i);
-        }
-        std::partial_sort(by_tag_count.begin(), by_tag_count.begin() + max_protein_hits_, by_tag_count.end());
-        for (int i = 0; i < max_protein_hits_; i++)
-        {
-          keep[by_tag_count[i].second] = true;
-        }
-      }
-      if (candidate_ranking_ != "union" && (int)ranked_count > max_protein_hits_)
-      {
-        // learned: max_protein_hits; the others: as many as union kept
-        const Size kept_count = candidate_ranking_ == "learned" ? (Size)max_protein_hits_ : (Size)std::count(keep.begin(), keep.end(), true);
         auto entryOf = [&](Size c) { return c < seq_count ? seq_candidates[c].protein : hit_shifts[c - seq_count].fasta_index; };
         auto tagCount = [&](Size c) { return c < seq_count ? (double)seq_candidates[c].tag_count : (double)gapped_tag_counts[c - seq_count]; };
         // a side's shifts and tag flanking masses
@@ -2106,142 +2060,42 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
             n = sv.size();
           }
         };
-        const double precursor = dspec.getPrecursorPeakGroup().getMonoMass();
-        const double h2o = EmpiricalFormula("H2O").getMonoWeight();
-        std::vector<double> key(ranked_count, 0.0);
-        if (candidate_ranking_ == "fusion")
+        constexpr Size learned_pool = 500;
+        std::vector<char> in_pool(ranked_count, 0);
+        std::fill(in_pool.begin(), in_pool.begin() + std::min(ranked_count, learned_pool), 1); // ranked is in score order
+        if (ranked_count > learned_pool)
         {
-          // rank by score is i; rank by matched tags from a stable sort of the score order
-          std::vector<Size> by_tags(ranked_count);
-          std::iota(by_tags.begin(), by_tags.end(), 0);
-          std::stable_sort(by_tags.begin(), by_tags.end(), [&](Size a, Size b) { return tagCount(ranked[a].index) > tagCount(ranked[b].index); });
-          std::vector<Size> tag_rank(ranked_count);
-          for (Size r = 0; r < ranked_count; r++) tag_rank[by_tags[r]] = r;
-          for (Size i = 0; i < ranked_count; i++) key[i] = 1.0 / (60.0 + i) + 1.0 / (60.0 + tag_rank[i]);
+          std::vector<std::pair<double, Size>> by_tags;
+          by_tags.reserve(ranked_count);
+          for (Size i = 0; i < ranked_count; i++) by_tags.emplace_back(-tagCount(ranked[i].index), i);
+          std::partial_sort(by_tags.begin(), by_tags.begin() + learned_pool, by_tags.end());
+          for (Size i = 0; i < learned_pool; i++) in_pool[by_tags[i].second] = 1;
         }
-        else if (candidate_ranking_ == "poisson")
+        FLASHTnTCandidateRanker::Spectrum spectrum;
+        spectrum.masses.reserve(dspec.size());
+        for (const auto& pg : dspec) spectrum.masses.push_back(pg.getMonoMass());
+        std::sort(spectrum.masses.begin(), spectrum.masses.end());
+        spectrum.prefix_offset = learned_prefix_offset;
+        spectrum.suffix_offset = learned_suffix_offset;
+        std::vector<double> key(ranked_count, -std::numeric_limits<double>::infinity());
+        for (Size i = 0; i < ranked_count; i++)
         {
-          // chance tag hits grow with the length: the spectrum's tag hits per candidate residue times the length
-          double hit_sum = 0, len_sum = 0;
-          for (const auto& r : ranked)
-          {
-            hit_sum += tagCount(r.index);
-            len_sum += fasta_entry[entryOf(r.index)].sequence.length();
-          }
-          for (Size i = 0; i < ranked_count; i++)
-          {
-            const double k = tagCount(ranked[i].index);
-            const double lam = hit_sum * fasta_entry[entryOf(ranked[i].index)].sequence.length() / std::max(1.0, len_sum);
-            key[i] = k > 0 && lam > 0 ? -std::log10(std::max(boost::math::gamma_p(k, lam), 1e-300)) : 0.0;
-          }
+          if (! in_pool[i]) continue;
+          const Size c = ranked[i].index, e = entryOf(c);
+          FLASHTnTCandidateRanker::Candidate cand;
+          cand.prefix = &pro_prefix[e];
+          cand.suffix = &pro_suffix[e];
+          const double* flanks;
+          shiftsOf(c, true, cand.n_shifts, flanks, cand.n_count);
+          shiftsOf(c, false, cand.c_shifts, flanks, cand.c_count);
+          cand.score = ranked[i].score;
+          key[i] = FLASHTnTCandidateRanker::score(FLASHTnTCandidateRanker::features(spectrum, cand));
         }
-        else if (candidate_ranking_ == "precursor")
-        {
-          // 1 if a tag shift and its precursor complement both land on residue boundaries, start before end; 0 otherwise
-          for (Size i = 0; i < ranked_count && precursor > 0; i++)
-          {
-            const Size e = entryOf(ranked[i].index);
-            const auto& pre = pro_prefix[e];
-            const auto& suf = pro_suffix[e];
-            const double room = pre.back() - (precursor - h2o);
-            const int len = (int)pre.size() - 1;
-            // index of a residue sum within the margin, or -1
-            auto boundary = [&](const std::vector<double>& sums, double m) {
-              const double margin = protein_tol * 1e-6 * (precursor + std::abs(m));
-              const auto it = std::lower_bound(sums.begin(), sums.end(), m - margin);
-              return it != sums.end() && *it <= m + margin ? (int)(it - sums.begin()) : -1;
-            };
-            for (int side = 0; side < 2 && key[i] == 0; side++)
-            {
-              const double* s;
-              const double* f;
-              Size n;
-              shiftsOf(ranked[i].index, side == 0, s, f, n);
-              for (Size j = 0; j < n; j++)
-              {
-                const int a = boundary(side == 0 ? pre : suf, s[j]), b = boundary(side == 0 ? suf : pre, room - s[j]);
-                if (a >= 0 && b >= 0 && a + b < len)
-                {
-                  key[i] = 1;
-                  break;
-                }
-              }
-            }
-          }
-        }
-        else if (candidate_ranking_ == "learned")
-        {
-          // the candidates the model was trained on: the union of the 500 best by score (ranked is in score order) and by matched tags
-          constexpr Size learned_pool = 500;
-          std::vector<char> in_pool(ranked_count, 0);
-          std::fill(in_pool.begin(), in_pool.begin() + std::min(ranked_count, learned_pool), 1);
-          if (ranked_count > learned_pool)
-          {
-            std::vector<std::pair<double, Size>> by_tags;
-            by_tags.reserve(ranked_count);
-            for (Size i = 0; i < ranked_count; i++) by_tags.emplace_back(-tagCount(ranked[i].index), i);
-            std::partial_sort(by_tags.begin(), by_tags.begin() + learned_pool, by_tags.end());
-            for (Size i = 0; i < learned_pool; i++) in_pool[by_tags[i].second] = 1;
-          }
-          FLASHTnTCandidateRanker::Spectrum spectrum;
-          spectrum.masses.reserve(dspec.size());
-          for (const auto& pg : dspec) spectrum.masses.push_back(pg.getMonoMass());
-          std::sort(spectrum.masses.begin(), spectrum.masses.end());
-          spectrum.prefix_offset = learned_prefix_offset;
-          spectrum.suffix_offset = learned_suffix_offset;
-          std::fill(key.begin(), key.end(), -std::numeric_limits<double>::infinity());
-          for (Size i = 0; i < ranked_count; i++)
-          {
-            if (! in_pool[i]) continue;
-            const Size c = ranked[i].index, e = entryOf(c);
-            FLASHTnTCandidateRanker::Candidate cand;
-            cand.prefix = &pro_prefix[e];
-            cand.suffix = &pro_suffix[e];
-            const double* flanks;
-            shiftsOf(c, true, cand.n_shifts, flanks, cand.n_count);
-            shiftsOf(c, false, cand.c_shifts, flanks, cand.c_count);
-            cand.score = ranked[i].score;
-            key[i] = FLASHTnTCandidateRanker::score(FLASHTnTCandidateRanker::features(spectrum, cand));
-          }
-        }
-        else // twosided
-        {
-          for (Size i = 0; i < ranked_count; i++)
-          {
-            const Size c = ranked[i].index, e = entryOf(c);
-            const double plain_mass = with_fixed ? pro_plain_mass[e] : 0.0;
-            if (precursor <= 0)
-            {
-              key[i] = scores[c];
-              continue;
-            }
-            const double room = pro_prefix[e].back() - (precursor - h2o);
-            double best = 0;
-            for (int side = 0; side < 2; side++)
-            {
-              const double* s;
-              const double* f;
-              Size n;
-              shiftsOf(c, side == 0, s, f, n);
-              if (n == 0) continue;
-              std::vector<double> comp(n);
-              for (Size j = 0; j < n; j++) comp[j] = room - s[j];
-              const auto& own = side == 0 ? pro_prefix[e] : pro_suffix[e];
-              const auto& own_index = side == 0 ? pro_prefix_index[e] : pro_suffix_index[e];
-              const auto& other = side == 0 ? pro_suffix[e] : pro_prefix[e];
-              const auto& other_index = side == 0 ? pro_suffix_index[e] : pro_prefix_index[e];
-              best = std::max(best, FLASHTaggerAlgorithm::scoreShifts(score_masses, own, own_index, s, f, n, protein_tol, plain_mass)
-                                      + FLASHTaggerAlgorithm::scoreShifts(score_masses, other, other_index, comp.data(), f, n, protein_tol, plain_mass));
-            }
-            key[i] = best;
-          }
-        }
-        // the kept_count best by the key; ties in score order
+        // the max_protein_hits best by the key; ties in score order
         std::vector<Size> order(ranked_count);
         std::iota(order.begin(), order.end(), 0);
         std::stable_sort(order.begin(), order.end(), [&](Size a, Size b) { return key[a] > key[b]; });
-        std::fill(keep.begin(), keep.end(), false);
-        for (Size j = 0; j < kept_count; j++) keep[order[j]] = true;
+        for (int j = 0; j < max_protein_hits_; j++) keep[order[j]] = true;
       }
       for (Size i = 0; i < ranked_count; i++)
       {
@@ -2472,7 +2326,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     if (with_precursor_ladders) mass_ladders.clearPrecursorWindows();
     if (native_rule)
     {
-      OPENMS_LOG_INFO << "Native candidates (score above the best decoy of the source in the spectrum + " << native_margin_ << "):";
+      OPENMS_LOG_INFO << "Native candidates (score above the best decoy of the source in the spectrum + " << native_margin << "):";
       for (Size k = 0; k < native_sources.size(); k++)
       {
         OPENMS_LOG_INFO << (k ? ", " : " ") << native_sources[k] << " " << (Size)native_kept[k];
@@ -3136,7 +2990,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         extender.setFixedModifications(db);
         // the chimeric search removes the masses of a spectrum's best PrSM before the next round
         extender.setReportMatchedMasses(chimeric_rounds_ > 0);
-        extender.setPathAlternatives(alternative_scorer, path_alternatives_, path_alternative_margin_);
+        extender.setPathAlternatives(alternative_scorer, path_alternatives_, path_alternative_margin);
         // with raw-spectrum scoring, every candidate's PrSM is kept here and the best one per spectrum is chosen by the combined score in
         // annotateOnRawSpectra_: the extension score alone (deconvolved masses) picked another protein in 1 of 15 spectra of Eclip_1480
         // where TopPIC's protein had the better raw evidence (offline: 5252 -> 5451 PrSMs, 1435 -> 1500 proteoforms at 1%)
@@ -3308,164 +3162,6 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       alternative_scorer = alternativeRawScorer_();
     }
 
-    // Variable modification penalties from this run: a decoy (shuffled) protein can use a modification only by chance, so a modification
-    // that target PrSMs use per opportunity (a fitting residue in the proteoform, or the proteoform terminus) no more often than decoy PrSMs
-    // explains nothing and gets a penalty up to that of a blind shift. The usage is counted in a pilot pass: every var_mod_pilot_stride-th
-    // spectrum in input order, extended with the first-pass penalties. If the pilot has fewer than var_mod_min_decoy_prsms decoy PrSMs, the
-    // other spectra are extended with the first-pass penalties too and the usage is counted over all spectra (a small run gains nothing
-    // from a pilot). Then the main pass makes the result exactly one extension of every spectrum at the penalties that are used:
-    // - a raised penalty: every spectrum is extended with the learned penalties, the pilot spectra again. Re-extending only the spectra
-    //   whose kept PrSMs used a raised modification is not the same: a candidate whose best path used one can have been dropped afterwards
-    //   (e.g. the terminal- and precursor-ladder rules drop undetermined PrSMs and the same proteoform as another source's) while, at the
-    //   raised penalty, another path of it is kept (Eclip_1480: a better unmodified 1% PrSM missed in 25 spectra, CISY lost, a false
-    //   RS11_BACTN reported).
-    // - no raised penalty (or none learned): only the spectra not extended yet are extended, with the first-pass penalties. A spectrum's
-    //   extension depends only on the spectrum, its candidates and the parameters, none of which changes between the passes, so the pilot
-    //   spectra keep exactly the PrSMs a single pass gives them.
-    // Without learning, the main pass is the only one.
-    Param learned_extender_param; // empty unless penalties were raised
-    FLASHExtenderAlgorithm probe;
-    probe.setParameters(extender_param_);
-    const auto var_names = probe.getVariableModificationNames();
-    const auto var_residues = probe.getVariableModificationResidues();
-    const auto var_positions = probe.getVariableModificationPositions();
-    std::vector<int> not_extended = all_spectra; // the spectra without PrSMs at the first-pass penalties yet
-    if (learn_var_mod_penalty_ && ! var_names.empty() && decoy_factor_ > 0)
-    {
-      std::vector<int> pilot;
-      not_extended.clear();
-      for (int d : all_spectra)
-      {
-        (d % var_mod_pilot_stride == 0 ? pilot : not_extended).push_back(d);
-      }
-      startProgress(0, (SignedSize)pilot.size(), "Running extension algorithm (pilot pass for the variable modification penalties) ...");
-      extendSpectra(pilot, extender_param_);
-      endProgress();
-
-      const Size n_mods = var_names.size();
-      std::map<String, Size> name_to_mod;
-      for (Size i = n_mods; i-- > 0;) name_to_mod[var_names[i]] = i;
-      const UInt mi_variable_modifications = registry.registerName("VariableModifications");
-      // the modifications a PrSM used (every alternative named for a shift counts)
-      auto usedMods = [&](const ProteinHit& h, std::vector<char>& used) {
-        used.assign(n_mods, 0);
-        if (! h.metaValueExists(mi_variable_modifications)) return;
-        for (const auto& entry : h.getMetaValue(mi_variable_modifications).toStringList())
-        {
-          std::vector<String> alternatives;
-          String(entry).split(',', alternatives);
-          for (const auto& alt : alternatives)
-          {
-            std::vector<String> names;
-            alt.split('+', names);
-            for (const auto& nm : names)
-            {
-              auto it = name_to_mod.find(nm);
-              if (it != name_to_mod.end()) used[it->second] = 1;
-            }
-          }
-        }
-      };
-      // uses and opportunities per modification, targets and decoys, over the PrSMs of the given spectra (in spectrum order, so the sums
-      // are the same in every run). Precursor-ladder PrSMs take no part: their source proposes only windows whose unmodified mass is the
-      // precursor mass, so they are unmodified by selection, not by chance, and their opportunities without uses would move the
-      // target/decoy enrichment by the share of targets and decoys among them
-      std::vector<double> use_t, use_d, opp_t, opp_d;
-      Size n_d = 0;
-      auto countUsage = [&](const std::vector<int>& spectra) {
-        use_t.assign(n_mods, 0);
-        use_d.assign(n_mods, 0);
-        opp_t.assign(n_mods, 0);
-        opp_d.assign(n_mods, 0);
-        n_d = 0;
-        std::vector<char> used;
-        // a residue (or terminus) with a fixed modification of the PrSM's entry is no opportunity for a variable one there (the extension
-        // does not put it there): per protein position, the kinds of the entry's fixed modifications (ProteoformDatabase::occupancy)
-        std::map<int, std::uint8_t> occupied;
-        auto isFree = [&](int p, int position) {
-          if (occupied.empty()) return true;
-          const auto it = occupied.find(p);
-          return it == occupied.end() || (it->second & (position == 0 ? 1 : (position == 1 ? 2 : 4))) == 0;
-        };
-        for (int d : spectra)
-        {
-          for (const auto& h : spec_proteoforms[d])
-          {
-            if (h.metaValueExists(mi_precursor_ladder)) continue;
-            const bool decoy = h.getAccession().hasPrefix("DECOY");
-            const String& seq = h.getSequence();
-            int s = h.metaValueExists("StartPosition") ? (int)h.getMetaValue("StartPosition") - 1 : 0;
-            int e = h.metaValueExists("EndPosition") ? (int)h.getMetaValue("EndPosition") : (int)seq.size();
-            // an open terminus: the end of the database entry's processed form (a FASTA protein: its own)
-            if (s < 0) s = h.metaValueExists(mi_entry_start) ? std::max(0, (int)h.getMetaValue(mi_entry_start) - 1) : 0;
-            if (e <= s || e > (int)seq.size()) e = h.metaValueExists(mi_entry_end) ? std::min((int)seq.size(), (int)h.getMetaValue(mi_entry_end)) : (int)seq.size();
-            occupied.clear();
-            if (with_fixed)
-            {
-              const Size entry = (Size)(int)h.getMetaValue(mi_fasta_index);
-              for (const auto& [p, bits] : db->occupancy()[entry]) occupied[db->entries[entry].offset + p] |= bits;
-            }
-            n_d += decoy;
-            usedMods(h, used);
-            for (Size m = 0; m < n_mods; m++)
-            {
-              double opportunities = 0;
-              if (var_positions[m] == 1) opportunities = (var_residues[m].empty() || var_residues[m].has(seq[s])) && isFree(s, 1);
-              else if (var_positions[m] == 2) opportunities = (var_residues[m].empty() || var_residues[m].has(seq[e - 1])) && isFree(e - 1, 2);
-              else
-              {
-                for (int p = s; p < e; p++) opportunities += (var_residues[m].empty() || var_residues[m].has(seq[p])) && isFree(p, 0);
-              }
-              (decoy ? opp_d : opp_t)[m] += opportunities;
-              if (used[m]) (decoy ? use_d : use_t)[m] += 1;
-            }
-          }
-        }
-      };
-      countUsage(pilot);
-      const std::vector<int>* learned_from = &pilot;
-      if (n_d < var_mod_min_decoy_prsms)
-      {
-        OPENMS_LOG_INFO << "Variable modification penalties: " << n_d << " decoy PrSMs in the pilot pass (fewer than " << var_mod_min_decoy_prsms
-                        << "), so the other spectra are extended with the first-pass penalties too and all spectra are used" << std::endl;
-        startProgress(0, (SignedSize)not_extended.size(), "Running extension algorithm (the other spectra for the variable modification penalties) ...");
-        extendSpectra(not_extended, extender_param_);
-        endProgress();
-        not_extended.clear();
-        countUsage(all_spectra);
-        learned_from = &all_spectra;
-      }
-      // enough decoy PrSMs to estimate chance usage
-      if (n_d >= var_mod_min_decoy_prsms)
-      {
-        OPENMS_LOG_INFO << "Variable modification penalties from the PrSMs of " << learned_from->size() << " of " << dspecs.size() << " spectra ("
-                        << n_d << " decoy PrSMs)" << std::endl;
-        std::vector<int> penalties(n_mods, 2);
-        bool raised = false;
-        for (Size m = 0; m < n_mods; m++)
-        {
-          // usage per opportunity, target over decoy, with one pseudo-use on each side; 8x enrichment or more keeps the default
-          // penalty 2, none gives 19 (a blind shift)
-          if (opp_t[m] <= 0 || opp_d[m] <= 0) continue;
-          const double enrichment = ((use_t[m] + 1) / opp_t[m]) / ((use_d[m] + 1) / opp_d[m]);
-          penalties[m] = std::max(2, std::min(19, (int)std::lround(19.0 - 17.0 / 3.0 * std::log2(std::max(1.0, enrichment)))));
-          raised |= penalties[m] > 2;
-          OPENMS_LOG_INFO << "Variable modification " << var_names[m] << ": used by " << use_t[m] << " target and " << use_d[m]
-                          << " decoy PrSMs, enrichment per opportunity " << enrichment << ", penalty " << penalties[m] << std::endl;
-        }
-        if (raised)
-        {
-          learned_extender_param = extender_param_;
-          learned_extender_param.setValue("var_mod_penalty", penalties);
-        }
-      }
-      else
-      {
-        OPENMS_LOG_INFO << "Variable modification penalties not learned: " << n_d << " decoy PrSMs in all spectra (fewer than "
-                        << var_mod_min_decoy_prsms << ")" << std::endl;
-      }
-    }
-
     // An undetermined PrSM (no mass) with an open terminus has no precursor mass to constrain a blind shift: the shift takes up whatever
     // the sequence of a similar protein differs by. On the B. theta entrapment of the three lysates, 7 of the 8 B. theta proteoforms of the
     // class at 1% had one, against 11 of the 58 E. coli ones; without such PrSMs the class held 1 B. theta of 58, and the three lysates gave
@@ -3482,36 +3178,12 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     };
 
     // The PrSMs of the spectra of one stage (@p spectra; the first stage: every spectrum), appended to proteoform_hits_ in spectrum order.
-    // Main pass of the first stage: with learned penalties every spectrum, otherwise the spectra not extended yet with the first-pass
-    // penalties; a later stage of the search cascade extends its spectra with the penalties in use. The precursor-ladder counts describe
-    // the extension that is kept: they restart before a pass that replaces the pilot's PrSMs, and otherwise the counts of the passes add up
-    // to those of a single pass.
-    const bool penalties_learned = ! learned_extender_param.empty();
-    const Param& eparam_in_use = penalties_learned ? learned_extender_param : extender_param_;
     const UInt mi_stage = registry.registerName("SearchStage");
     auto extendStage = [&](int stage, const std::vector<int>& spectra) {
       const bool first_stage = stage == stages[0];
-      if (! first_stage)
-      {
-        startProgress(0, (SignedSize)spectra.size(), "Running extension algorithm (search cascade stage " + String(stage) + ") ...");
-        extendSpectra(spectra, eparam_in_use);
-      }
-      else
-      {
-        if (penalties_learned)
-        {
-          OPENMS_LOG_INFO << "Extending all " << dspecs.size() << " spectra with the learned penalties" << std::endl;
-          pl_determined = 0;
-          pl_at_both_ends = 0;
-          pl_at_start = 0;
-          pl_at_end = 0;
-          pl_duplicates = 0;
-          pl_undetermined = 0;
-        }
-        const std::vector<int>& main_spectra = penalties_learned ? all_spectra : not_extended;
-        startProgress(0, (SignedSize)main_spectra.size(), "Running extension algorithm ...");
-        extendSpectra(main_spectra, eparam_in_use);
-      }
+      startProgress(0, (SignedSize)spectra.size(),
+                    first_stage ? String("Running extension algorithm ...") : "Running extension algorithm (search cascade stage " + String(stage) + ") ...");
+      extendSpectra(spectra, extender_param_);
       const bool extend_over_spectra = overSpectra(spectra);
       if (use_precursor_ladders && (stage == 0 || stage == 1))
       {
@@ -3531,7 +3203,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         auto ms1Based = [](const ProteinHit& h) {
           return (double)h.getMetaValue("Mass") > 0 && (int)h.getMetaValue("ProteoformMassByFragmentMass") == 0;
         };
-        const Param& eparam_now = eparam_in_use;
+        const Param& eparam_now = extender_param_;
         std::vector<std::vector<ProteinHit>> decoy_proteoforms(dspecs.size());
         int copies = 0, without_decoy = 0;
         std::vector<int> todo;
@@ -3747,14 +3419,14 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     // per-spectrum null is lower in the residual. Every spectrum with a PrSM is searched again, whether its best PrSM is a target or a
     // decoy, so that the residual PrSMs of targets and decoys come from the same procedure; they form an FDR class per round. Per round:
     // - removed: the masses on the path of the spectrum's best PrSM of the last round (the extension's MatchedMassIndices; with
-    //   only_single_hit its only PrSM, else the best by score, then a determined mass and termini, then coverage), each also up to
+    //   one PrSM per spectrum its only PrSM, else (native) the best by score, then a determined mass and termini, then coverage), each also up to
     //   chimeric_isotope_offsets isotope spacings away, and its proteoform mass, all within the spectrum's tolerance. They are removed from
     //   all masses of the spectrum, and the cap max_node_cntr_ is applied again to the rest, as to the input.
     // - searched: tags of the residual (a tag found before in the scan keeps its index; new tag sequences are looked up in the database),
     //   the candidates of searchCandidates without precursor ladders and without the proteins of the spectrum's earlier best PrSMs and
     //   their target-decoy partners, and the extension without a precursor mass (the MS1 mass is the first proteoform's; a mass can still
-    //   come from complementary fragment pairs). Every candidate's PrSM is kept, scored on the raw spectrum with -in_raw, and with
-    //   only_single_hit the best one per spectrum is reported (by the combined score with -in_raw, as in the first search).
+    //   come from complementary fragment pairs). Every candidate's PrSM is kept, scored on the raw spectrum with -in_raw, and the best
+    //   one per spectrum is reported (by the combined score with -in_raw, as in the first search; native: every candidate's).
     // - reported per residual PrSM: ChimericRound, RemovedMasses (removed from the spectrum before this round), ResidualNullScore (the
     //   best extension score of the other decoy PrSMs of the same residual search; -1: none) and ResidualScoreRatio (extension score /
     //   ResidualNullScore; -1: no null). They are not a filter: the FDR is the target-decoy competition of the round's class, and the
@@ -3762,7 +3434,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     //   databases), so it is applied by the user, e.g. to a single native spectrum, where no class has enough PrSMs for a q-value.
     if (chimeric_rounds_ > 0 && ! proteoform_hits_.empty())
     {
-      const Param& eparam_now = learned_extender_param.empty() ? extender_param_ : learned_extender_param;
+      const Param& eparam_now = extender_param_;
       const UInt mi_round = registry.registerName("ChimericRound"), mi_matched_masses = registry.registerName("MatchedMassIndices"),
                  mi_removed = registry.registerName("RemovedMasses"), mi_null = registry.registerName("ResidualNullScore"),
                  mi_ratio = registry.registerName("ResidualScoreRatio"), mi_mass = registry.registerName("Mass");
@@ -4429,7 +4101,7 @@ std::function<double(const ProteinHit&)> FLASHTnTAlgorithm::alternativeRawScorer
       prsm.precursor_charge = annotator->precursorChargeCap(raw_spectra_[prsm.spectrum_index], precursor_mass, reason);
       annotator->annotate(raw_peaks_, {prsm}, results);
     }
-    return raw_score_weight_ * std::max(0.0, results[0].score);
+    return raw_score_weight * std::max(0.0, results[0].score);
   };
 }
 
@@ -4488,7 +4160,7 @@ void FLASHTnTAlgorithm::annotateOnRawSpectra_(std::vector<ProteinHit>& hits) con
       const double mass = (double)hit.getMetaValue(tntKey("Mass"), -1.0);
       raw = std::max(0.0, raw - std::log10(shiftedCandidateCount(hit.getSequence(), mass, max_total_mod_mass_)));
     }
-    hit.setScore(hit.getScore() + raw_score_weight_ * raw);
+    hit.setScore(hit.getScore() + raw_score_weight * raw);
   }
   OPENMS_LOG_INFO << "Raw spectra: " << raw_peaks_.size() << " loaded (" << raw_profile_count_ << " centroided); PrSMs annotated: " << annotated
                   << " of " << hits.size() << " (" << without_spectrum << " without their scan in the raw file)" << std::endl;
