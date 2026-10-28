@@ -837,8 +837,11 @@ namespace
   /// recruited within @p max_error): the errors histogrammed in 0.1 ppm bins, the background of random peaks taken as the mean
   /// count over [0.5, 0.75) x max_error (beyond the true peaks' tails, below the rise at the window's edge), and the excess over it
   /// summed from 0. -1 if there is no excess or the half-width reaches 0.5 x max_error (the window was too narrow).
-  double trueErrorHalfWidth(const std::vector<double>& abs_errors, const double max_error, const double coverage)
+  /// @p centre_excess: the mean excess per bin within the half-width relative to the background (how far the true peaks stand out of
+  /// the random ones; near 0 when the true errors are spread flat over the whole window and the half-width is noise)
+  double trueErrorHalfWidth(const std::vector<double>& abs_errors, const double max_error, const double coverage, double& centre_excess)
   {
+    centre_excess = 0;
     const double bin = 0.1;
     const Size bin_count = (Size)std::round(max_error / bin);
     std::vector<double> counts(bin_count, 0);
@@ -857,7 +860,10 @@ namespace
     for (Size b = 0; b < band_begin; b++)
     {
       sum += counts[b] - background;
-      if (sum >= coverage * total) return (double)(b + 1) * bin;
+      if (sum < coverage * total) continue;
+      const double centre = sum / (double)(b + 1); // the mean excess per bin within the half-width
+      centre_excess = background > 0 ? centre / background : std::numeric_limits<double>::infinity();
+      return (double)(b + 1) * bin;
     }
     return -1;
   }
@@ -889,10 +895,17 @@ void FLASHDeconvAlgorithm::determineTolerance_(const MSExperiment& map, const Pa
   const auto shared_avg = std::make_shared<const FLASHHelperClasses::PrecalculatedAveragine>(avg);
   const int min_charge = sd_param.getValue("min_charge");
 
+  const double coverage = .98, recruit = .8, min_centre_excess = .25;
   // the errors of the peaks of good masses (or, for profile spectra, per charge and isotope slot, the intensity-weighted mean) of the
   // spectra at @p positions, deconvolved with tolerance @p sample_tol, in parallel; one vector per position, so the result does not
-  // depend on the number of threads
+  // depend on the number of threads. In a window wider than 30 ppm, only masses whose isotope spacing (ppm: the isotope distance / mass)
+  // is at least twice the recruitment window: in a heavier mass a peak of the next isotope falls in the window, and its errors spread to
+  // half the spacing instead of to the window's edge (no background band; at 300 ppm, MS1 of an ETD file with 5 ppm added to every peak
+  // gave 64 ppm). Not at 30 ppm: there the heavier masses' wider errors are those FD meets at its working tolerances (all masses: 1480
+  // MS1 6.6 ppm; masses below 20.8 kDa only: 5.1 ppm, and MS1 5 ppm lost proteoforms against 10 ppm in FLASHTnT, 1688 vs 1716).
   const auto collect = [&](const std::vector<Size>& positions, const double sample_tol) {
+    // in isotope distances (x getIsotopeDaDistance())
+    const double max_mass = sample_tol > 30.0 ? 1e6 / (2.0 * recruit * sample_tol) : std::numeric_limits<double>::max();
     Param p = sd_param;
     DoubleList tols(tols_.size(), sample_tol);
     p.setValue("tol", tols);
@@ -913,7 +926,7 @@ void FLASHDeconvAlgorithm::determineTolerance_(const MSExperiment& map, const Pa
           sd.performSpectrumDeconvolution(map[spectra[positions[k]]], 0, PeakGroup());
           for (const auto& pg : sd.getDeconvolvedSpectrum())
           {
-            if (pg.getQscore() < .9) continue;
+            if (pg.getQscore() < .9 || pg.getMonoMass() > max_mass * pg.getIsotopeDaDistance()) continue;
             std::map<std::pair<int, int>, std::pair<double, double>> per_slot; // (charge, isotope) -> (sum of intensity x error, sum of intensity)
             for (const auto& peak : pg)
             {
@@ -943,46 +956,63 @@ void FLASHDeconvAlgorithm::determineTolerance_(const MSExperiment& map, const Pa
     return errors;
   };
 
-  // spectra sampled in rounds, each doubling the sample, until 20,000 errors or every 4th spectrum
-  const double coverage = .98, recruit = .8;
+  // The sample tolerance (window) widens until the true errors end well inside it: at 30 ppm the background band starts at 12 ppm, so
+  // true errors reaching it raise the background and cap the half-width near 11 ppm (tol ~14) however wide they are. A window is taken
+  // when its half-width is at most a third of the recruitment window (the true peaks end before the band) and the true peaks stand out
+  // (centre excess at least 0.25 x background; a flat spread gives a half-width of noise); else the widest window with a half-width whose
+  // peaks stand out (it may underestimate); else 10 ppm. Simulated Gaussian and t(3) errors, random peaks 15% to 150% of the true ones:
+  // tol needed up to ~40 ppm is found within 15%; 30 ppm alone gave 14 for every tol needed above 14.
+  // Per window, spectra are sampled in rounds, each doubling the sample, until 20,000 errors or every 4th spectrum.
   const std::vector<std::pair<Size, Size>> rounds {{64, 0}, {64, 32}, {32, 16}, {16, 8}, {8, 4}};
-  std::vector<double> sampled;
-  Size sampled_spectra = 0;
-  for (const auto& [stride, offset] : rounds)
-  {
-    std::vector<Size> positions;
-    for (Size i = offset; i < spectra.size(); i += stride) positions.push_back(i);
-    sampled_spectra += positions.size();
-    for (const auto& errors : collect(positions, 30.0)) sampled.insert(sampled.end(), errors.begin(), errors.end());
-    if (sampled.size() >= 20000) break;
-  }
+  const std::vector<double> sample_tols {30.0, 100.0, 300.0};
   const String unit = centroid ? "peak errors" : "slot errors (profile)";
-  if (sampled.size() < 1000)
+  std::vector<double> sampled;   // the errors of the window taken
+  String trace;                  // the windows tried, for the log
+  Size sampled_spectra = 0, max_error_count = 0;
+  double half_width = -1, sample_tol = 0, centre_excess = 0;
+  bool within_window = false; // the window taken holds the true errors well inside (not only the widest with a half-width)
+  for (const double tol : sample_tols)
   {
-    OPENMS_LOG_INFO << "failed. Only " << sampled.size() << " " << unit << " from Qscore >= 0.9 masses in " << sampled_spectra << " of " << spectra.size()
-                    << " spectra (1000 needed). Set to 10ppm (default tolerance)." << std::endl;
-    tols_[ms_level - 1] = 10;
-    return;
-  }
-  double sample_tol = 30.0;
-  std::vector<double> abs_errors(sampled.size());
-  std::transform(sampled.begin(), sampled.end(), abs_errors.begin(), [](double e) { return std::abs(e); });
-  double half_width = trueErrorHalfWidth(abs_errors, recruit * sample_tol, coverage);
-  if (half_width < 0) // the true peaks reach beyond the background band: once more with a wider tolerance
-  {
-    sample_tol = 100.0;
-    sampled.clear();
-    std::vector<Size> positions;
-    for (Size i = 0; i < spectra.size(); i += 8) positions.push_back(i);
-    for (const auto& errors : collect(positions, sample_tol)) sampled.insert(sampled.end(), errors.begin(), errors.end());
-    abs_errors.resize(sampled.size());
-    std::transform(sampled.begin(), sampled.end(), abs_errors.begin(), [](double e) { return std::abs(e); });
-    half_width = sampled.size() < 1000 ? -1 : trueErrorHalfWidth(abs_errors, recruit * sample_tol, coverage);
+    std::vector<double> errors;
+    Size spectrum_count = 0;
+    for (const auto& [stride, offset] : rounds)
+    {
+      std::vector<Size> positions;
+      for (Size i = offset; i < spectra.size(); i += stride) positions.push_back(i);
+      spectrum_count += positions.size();
+      for (const auto& e : collect(positions, tol)) errors.insert(errors.end(), e.begin(), e.end());
+      if (errors.size() >= 20000) break;
+    }
+    max_error_count = std::max(max_error_count, errors.size());
+    trace += String(trace.empty() ? "" : ", ") + String((int)tol) + " ppm: " + String(errors.size()) + " errors";
+    if (errors.size() < 1000) continue;
+    std::vector<double> abs_errors(errors.size());
+    std::transform(errors.begin(), errors.end(), abs_errors.begin(), [](double e) { return std::abs(e); });
+    double excess = 0;
+    const double hw = trueErrorHalfWidth(abs_errors, recruit * tol, coverage, excess);
+    trace += ", half-width " + (hw > 0 ? String::number(hw, 1) : String("none")) + ", centre " + String::number(excess, 1) + " x background";
+    // no random peak in the band (an infinite centre excess) means the window is not measured beyond the true peaks: not taken
+    if (hw <= 0 || excess < min_centre_excess || std::isinf(excess)) continue;
+    half_width = hw;
+    sample_tol = tol;
+    centre_excess = excess;
+    sampled = std::move(errors);
+    sampled_spectra = spectrum_count;
+    within_window = hw <= recruit * tol / 3.0;
+    if (within_window) break;
   }
   if (half_width < 0)
   {
-    OPENMS_LOG_INFO << "failed. The errors of " << sampled.size() << " " << unit << " show no true-peak distribution within " << recruit * sample_tol
-                    << " ppm. Set to 10ppm (default tolerance)." << std::endl;
+    if (max_error_count < 1000)
+    {
+      OPENMS_LOG_INFO << "failed. Only " << max_error_count << " " << unit << " from Qscore >= 0.9 masses (1000 needed; " << trace
+                      << "). Set to 10ppm (default tolerance)." << std::endl;
+    }
+    else
+    {
+      OPENMS_LOG_INFO << "failed. The " << unit << " show no true-peak distribution standing out of the random peaks (" << trace
+                      << "). Set to 10ppm (default tolerance)." << std::endl;
+    }
     tols_[ms_level - 1] = 10;
     return;
   }
@@ -997,8 +1027,9 @@ void FLASHDeconvAlgorithm::determineTolerance_(const MSExperiment& map, const Pa
   const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
   OPENMS_LOG_INFO << "done. Determined tolerance: " << tols_[ms_level - 1] << " ppm (" << (int)std::round(100 * coverage) << "% of " << sampled.size() << " " << unit
                   << " within +-" << String::number(half_width, 1) << " ppm = " << recruit << " x tol; " << sampled_spectra << " of " << spectra.size()
-                  << " spectra deconvolved at " << sample_tol << " ppm; centre " << String::number(median, 2) << " ppm, robust sigma "
-                  << String::number(sigma, 2) << " ppm; " << String::number(seconds, 1) << " s)." << std::endl;
+                  << " spectra deconvolved at " << sample_tol << " ppm" << (within_window ? "" : ", the widest window: may be underestimated")
+                  << "; true peaks " << String::number(centre_excess, 1) << " x background at the centre; centre " << String::number(median, 2)
+                  << " ppm, robust sigma " << String::number(sigma, 2) << " ppm; " << String::number(seconds, 1) << " s; windows " << trace << ")." << std::endl;
 }
 
 void FLASHDeconvAlgorithm::run(MSExperiment& map,
