@@ -106,7 +106,8 @@ protected:
     ProteaseDB::getInstance()->getAllNames(all_enzymes);
     registerStringOption_("enzyme", "<enzyme>", "Trypsin", "Enzyme used for the digestion of the sample. Only applicable if parameter 'type' is 'protein'. "
                           "'no cleavage' (protein decoys, e.g. for top-down searches): the protein is shuffled or reversed as a whole, except its "
-                          "N-terminal residue (e.g. the initiator Met), which stays first.",false);
+                          "first two residues (the initiator Met and the residue that starts the protein without it), which stay in place, as "
+                          "in TopPIC's decoys.",false);
     setValidStrings_("enzyme", all_enzymes);
 
     registerSubsection_("Decoy", "Decoy parameters section");
@@ -473,14 +474,18 @@ protected:
             }
             else // no cleavage (or an enzyme without kept peptide termini): the whole protein
             {
-              // A protein decoy ('no cleavage') keeps the N-terminal residue of its target. Top-down searches give a protein that starts
-              // with the initiator Met its removal (and the N-terminal acetylation) as alternative forms, so a decoy that lost the Met has
-              // fewer N-terminal proteoforms than its target and undercounts the false ones: FLASHTnT on three E. coli lysates with a
-              // B. theta entrapment database, entrapment per decoy proteoform 0.91 at the N-terminus and 0.41 elsewhere (0.58 expected
-              // from the database sizes) with decoys of which 3% started with Met, 0.52 and 0.55 with decoys starting as their targets
-              // (5065 instead of 5083 proteoforms at 1%, 32 instead of 39 from B. theta). TopPIC's decoys keep the first two residues.
-              const bool keep_n_term = enzyme == "no cleavage" && ! decoy_entry.sequence.empty();
-              auto first = decoy_entry.sequence.begin() + (keep_n_term ? 1 : 0);
+              // A protein decoy ('no cleavage') keeps the first two residues of its target, as TopPIC's decoys do. Top-down searches give a
+              // protein that starts with the initiator Met its removal (and the N-terminal acetylation) as alternative forms, so a decoy
+              // that lost the Met has fewer N-terminal proteoforms than its target and undercounts the false ones, and the form without the
+              // Met starts with the second residue. FLASHTnT on three E. coli lysates with a B. theta entrapment database, entrapment per
+              // decoy proteoform at 1% (0.58 expected from the database sizes; all scores: 0.91 at the N-terminus, 0.41 elsewhere with
+              // decoys of which 3% started with Met):
+              // - the first residue kept, decoys of seeds 1-3: 0.83, 0.83, 1.41 at the N-terminus; 5000-5020 proteoforms, 33-50 from
+              //   B. theta (estimated 1.14-1.72% false);
+              // - the first two residues kept (the same decoys with the second residue swapped in): 0.65, 0.65, 1.00; 4935-4963
+              //   proteoforms, 26-41 from B. theta (0.91-1.44%); TopPIC's own decoys: 0.69, 5010, 30 (1.04%).
+              const auto kept = enzyme == "no cleavage" ? std::min<Size>(2, decoy_entry.sequence.size()) : 0;
+              auto first = decoy_entry.sequence.begin() + kept;
               if (shuffle)
               {
                 shuffler.seed(repeat_seed); // use per-repeat seed for distinct decoys
