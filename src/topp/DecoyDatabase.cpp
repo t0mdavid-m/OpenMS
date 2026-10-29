@@ -104,7 +104,9 @@ protected:
 
     StringList all_enzymes;
     ProteaseDB::getInstance()->getAllNames(all_enzymes);
-    registerStringOption_("enzyme", "<enzyme>", "Trypsin", "Enzyme used for the digestion of the sample. Only applicable if parameter 'type' is 'protein'.",false);
+    registerStringOption_("enzyme", "<enzyme>", "Trypsin", "Enzyme used for the digestion of the sample. Only applicable if parameter 'type' is 'protein'. "
+                          "'no cleavage' (protein decoys, e.g. for top-down searches): the protein is shuffled or reversed as a whole, except its "
+                          "N-terminal residue (e.g. the initiator Met), which stays first.",false);
     setValidStrings_("enzyme", all_enzymes);
 
     registerSubsection_("Decoy", "Decoy parameters section");
@@ -469,17 +471,24 @@ protected:
               }
               decoy_entry.sequence = new_sequence;
             }
-            else // no cleavage
+            else // no cleavage (or an enzyme without kept peptide termini): the whole protein
             {
-              // sequence
+              // A protein decoy ('no cleavage') keeps the N-terminal residue of its target. Top-down searches give a protein that starts
+              // with the initiator Met its removal (and the N-terminal acetylation) as alternative forms, so a decoy that lost the Met has
+              // fewer N-terminal proteoforms than its target and undercounts the false ones: FLASHTnT on three E. coli lysates with a
+              // B. theta entrapment database, entrapment per decoy proteoform 0.91 at the N-terminus and 0.41 elsewhere (0.58 expected
+              // from the database sizes) with decoys of which 3% started with Met, 0.52 and 0.55 with decoys starting as their targets
+              // (5065 instead of 5083 proteoforms at 1%, 32 instead of 39 from B. theta). TopPIC's decoys keep the first two residues.
+              const bool keep_n_term = enzyme == "no cleavage" && ! decoy_entry.sequence.empty();
+              auto first = decoy_entry.sequence.begin() + (keep_n_term ? 1 : 0);
               if (shuffle)
               {
                 shuffler.seed(repeat_seed); // use per-repeat seed for distinct decoys
-                shuffler.portable_random_shuffle(decoy_entry.sequence.begin(), decoy_entry.sequence.end());
+                shuffler.portable_random_shuffle(first, decoy_entry.sequence.end());
               }
               else // reverse
               {
-                decoy_entry.sequence.reverse();
+                std::reverse(first, decoy_entry.sequence.end());
               }
             }
           } // protein entry
