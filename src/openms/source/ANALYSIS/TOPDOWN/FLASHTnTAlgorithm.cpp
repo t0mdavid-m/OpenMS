@@ -4446,9 +4446,12 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   releaseInParallel(rev_vec_pro);
   releaseInParallel(pro_prefix);
   releaseInParallel(pro_suffix);
+  releaseInParallel(pro_prefix_index);
+  releaseInParallel(pro_suffix_index);
   releaseInParallel(ladder_candidates);
   releaseInParallel(pl_candidates);
   releaseInParallel(decoy_pl_candidates);
+  gapped_tagger.releaseIndex();
   // TODO
   // per scan, get the scan number and the precursor mass - maybe given or maybe deconvolved.
   // get all protoeforms - mass and score.

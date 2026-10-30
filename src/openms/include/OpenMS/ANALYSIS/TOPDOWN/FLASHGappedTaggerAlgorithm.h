@@ -99,6 +99,10 @@ public:
   /// bytes held by the index and the plausibility set
   Size getIndexBytes() const;
 
+  /// Frees the index (search finds nothing afterwards). Its bitmaps are freed with all threads when no copy shares them: their containers
+  /// are allocated one by one, and freeing them with the last copy took seconds of one thread.
+  void releaseIndex();
+
 protected:
   void updateMembers_() override;
 
