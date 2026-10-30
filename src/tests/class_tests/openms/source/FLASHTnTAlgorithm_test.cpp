@@ -17,7 +17,8 @@
 
 using namespace OpenMS;
 
-// The label-blind rules of FLASHTnT that can be checked without a search: the entry order that breaks candidate-cut ties
+// The label-blind rules of FLASHTnT that can be checked without a search: the entry order that breaks candidate-cut ties, and the
+// defaults of the options
 START_TEST(FLASHTnTAlgorithm, "$Id$")
 
 START_SECTION((static std::uint64_t entryOrder(std::uint64_t index)))
@@ -34,6 +35,16 @@ START_SECTION((static std::uint64_t entryOrder(std::uint64_t index)))
   TEST_EQUAL(seen.size(), 1000)
   TEST_EQUAL(ascending > 400 && ascending < 600, true)
   TEST_EQUAL(FLASHTnTAlgorithm::entryOrder(0) == 0, false)
+}
+END_SECTION
+
+START_SECTION((FLASHTnTAlgorithm()))
+{
+  // the defaults of the FDR and mass options, and the values each of them takes
+  const Param p = FLASHTnTAlgorithm().getDefaults();
+  TEST_STRING_EQUAL(p.getValue("terminal_ladder_class").toString(), "true")
+  TEST_EQUAL(p.getValidStrings("terminal_ladder_class").size(), 2)
+  TEST_EQUAL(p.hasTag("terminal_ladder_class", "advanced"), true)
 }
 END_SECTION
 

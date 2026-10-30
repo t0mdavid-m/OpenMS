@@ -179,6 +179,8 @@ private:
 
   bool keep_decoy_ = false;
   bool keep_underdetermined_ = true;
+  /// terminal-ladder PrSMs as an FDR and proteoform class of their own
+  bool terminal_ladder_class_ = true;
   /// several PrSMs per spectrum (native only)
   bool multiple_hits_per_spec_ = false;
   bool protein_level_only_ = false;

@@ -49,25 +49,29 @@ namespace
 // FDR classes of the PrSMs (meta value FDRClass): determined mass and termini by number of blind modifications (classes 0 to
 // fdr_class_max_blind, the last one with that many or more), and undetermined by whether both termini are known. The "; N blind" form is
 // kept for parsers of the label. The PrSMs of precursor-ladder candidates (all determined) form a class of their own by their source,
-// so that their decoys are not hidden in the large, nearly decoy-free determined classes. So do the PrSMs of each residual round of the
-// chimeric search (option chimeric_rounds; meta value ChimericRound r > 0): a search of what is left of a spectrum after its best PrSM
-// has its own chance rate.
+// so that their decoys are not hidden in the large, nearly decoy-free determined classes, and so do those of terminal-ladder candidates
+// (option terminal_ladder_class). So do the PrSMs of each residual round of the chimeric search (option chimeric_rounds; meta value
+// ChimericRound r > 0): a search of what is left of a spectrum after its best PrSM has its own chance rate.
 constexpr int fdr_class_max_blind = 2;
 constexpr int fdr_class_both_termini = fdr_class_max_blind + 1;
 constexpr int fdr_class_open_terminus = fdr_class_both_termini + 1;
 constexpr int fdr_class_precursor_ladder = fdr_class_open_terminus + 1;
+// option terminal_ladder_class: the PrSMs of terminal-ladder candidates, by source as well (determined or not)
+constexpr int fdr_class_terminal_ladder = fdr_class_precursor_ladder + 1;
 // the residual rounds of the chimeric search: round r is class fdr_class_residual + r - 1
 constexpr int max_chimeric_rounds = 2;
-constexpr int fdr_class_residual = fdr_class_precursor_ladder + 1;
+constexpr int fdr_class_residual = fdr_class_terminal_ladder + 1;
 constexpr int fdr_class_count = fdr_class_residual + max_chimeric_rounds;
 const char* const fdr_class_names[] = {"determined; 0 blind", "determined; 1 blind", "determined; 2 blind", "undetermined, both termini",
-                                       "undetermined, open terminus", "precursor ladder", "residual 1", "residual 2"};
+                                       "undetermined, open terminus", "precursor ladder", "terminal ladder", "residual 1", "residual 2"};
 static_assert(std::size(fdr_class_names) == (Size)fdr_class_count, "one label per FDR class");
-// proteoform classes (a partition of the proteoforms; the FDR below): the determined PrSM classes are one, the undetermined ones and the
-// residual rounds as for PrSMs
-constexpr int pf_class_determined = 0, pf_class_both_termini = 1, pf_class_open_terminus = 2, pf_class_precursor_ladder = 3, pf_class_residual = 4;
+// proteoform classes (a partition of the proteoforms; the FDR below): the determined PrSM classes are one, the undetermined ones, the ladder
+// classes and the residual rounds as for PrSMs
+constexpr int pf_class_determined = 0, pf_class_both_termini = 1, pf_class_open_terminus = 2, pf_class_precursor_ladder = 3, pf_class_terminal_ladder = 4,
+              pf_class_residual = 5;
 constexpr int pf_class_count = pf_class_residual + max_chimeric_rounds;
-const char* const pf_class_names[] = {"determined", "undetermined, both termini", "undetermined, open terminus", "precursor ladder", "residual 1", "residual 2"};
+const char* const pf_class_names[] = {"determined", "undetermined, both termini", "undetermined, open terminus", "precursor ladder", "terminal ladder",
+                                      "residual 1", "residual 2"};
 static_assert(std::size(pf_class_names) == (Size)pf_class_count, "one label per proteoform class");
 // chimeric search: with a mass matched by the best PrSM, the masses within the spectrum's tolerance of it moved by up to this many isotope
 // spacings are removed as well (FLASHDeconv's monoisotopic errors of the same fragment). On the 20 native spectra of the prototype, the
@@ -329,6 +333,14 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   defaults_.setValue("keep_decoy", "false", "Retains decoy hits in the results.");
   defaults_.setValidStrings("keep_decoy", {"true", "false"});
 
+  defaults_.setValue("terminal_ladder_class", "true",
+                     "The PrSMs of terminal-ladder candidates (mass ladders from an intact protein terminus, no sequence tag) form an FDR class and "
+                     "a proteoform class of their own (\"terminal ladder\"), as the precursor-ladder ones do; false: they are classed as the PrSMs "
+                     "of the tag search. In a shuffled entrapment of ten datasets (several PrSMs per spectrum), 73% of the entrapment proteoforms "
+                     "passing 1% without the class came from this source, against 51% of the target proteoforms of the same score.");
+  defaults_.setValidStrings("terminal_ladder_class", {"true", "false"});
+  defaults_.addTag("terminal_ladder_class", "advanced");
+
   defaults_.setValue("protein_level_only", "false",
                      "Stops after the protein-level search, skipping proteoform characterization. The candidate proteins "
                      "and their scores are still reported, so this can be used to shortlist proteins cheaply.");
@@ -513,6 +525,7 @@ void FLASHTnTAlgorithm::updateMembers_()
   pro_fdr_ = param_.getValue("pro_fdr");
   keep_decoy_ = param_.getValue("keep_decoy").toString() == "true";
   keep_underdetermined_ = param_.getValue("discard_underdetermined").toString() == "false";
+  terminal_ladder_class_ = param_.getValue("terminal_ladder_class").toString() == "true";
   // One PrSM per spectrum, its best (with native, every candidate's, below). Several per spectrum put homologs of the spectrum's own
   // protein beside it, which shuffled decoys do not model: three E. coli lysates with the B. theta entrapment at 1%, 5323 proteoforms
   // with 91 B. theta (73 of them among the 750 that were not their spectrum's best PrSM; of the B. theta PrSMs beside a better one, 128
@@ -776,7 +789,7 @@ void FLASHTnTAlgorithm::setProteinQvalues_(const std::vector<int>& hit_class, co
         if (end == form_end && (start == form_start || (form_start == 1 && start == 2))) whole_protein = isDetermined(hit);
       }
     }
-    protein_class[i] = (c == fdr_class_precursor_ladder || (c <= fdr_class_max_blind && ! whole_protein)) ? c3_model : c;
+    protein_class[i] = (c == fdr_class_precursor_ladder || c == fdr_class_terminal_ladder || (c <= fdr_class_max_blind && ! whole_protein)) ? c3_model : c;
   }
 
   // null of the PrSM score per class
@@ -2465,8 +2478,14 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       if (! isDetermined(hit) && ! keep_underdetermined_) return -1;
       return fdr_class_residual + std::min(chimeric_round, max_chimeric_rounds) - 1;
     }
+    const bool determined = isDetermined(hit);
     if (hit.metaValueExists(mi_precursor_ladder)) return (int)fdr_class_precursor_ladder; // by source; all of them are determined
-    if (isDetermined(hit)) return (int)std::min(blindModCount_(hit), (Size)fdr_class_max_blind);
+    if (terminal_ladder_class_ && hit.metaValueExists(mi_terminal))
+    { // by source as well (option terminal_ladder_class); undetermined ones only with keep_underdetermined_, as below
+      if (! (determined || keep_underdetermined_)) return -1;
+      return (int)fdr_class_terminal_ladder;
+    }
+    if (determined) return (int)std::min(blindModCount_(hit), (Size)fdr_class_max_blind);
     if (! keep_underdetermined_) return -1;
     const bool both_termini = (int)hit.getMetaValue("StartPosition") > 0 && (int)hit.getMetaValue("EndPosition") > 0;
     return (int)(both_termini ? fdr_class_both_termini : fdr_class_open_terminus);
@@ -2529,7 +2548,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         }
         String line = String("FDR class \"") + fdr_class_names[c] + "\": " + String(targets) + " target and " + String(decoy_count)
                       + " decoy PrSMs (decoy weight " + String(weight) + "); protein-level null: "
-                      + (c == fdr_class_precursor_ladder ? String("that of \"undetermined, both termini\" (setProteinQvalues_)")
+                      + (c == fdr_class_precursor_ladder || c == fdr_class_terminal_ladder ? String("that of \"undetermined, both termini\" (setProteinQvalues_)")
                          : String(decoy_count >= null_min_class_decoys ? "own" : "pooled")
                              + (c <= fdr_class_max_blind ? "; those not the whole protein: that of \"undetermined, both termini\"" : ""));
         if (c == fdr_class_precursor_ladder && ! class_hits[c].empty())
@@ -2593,11 +2612,12 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       // counted together with its neighbours, below): their wrong windows are near misses of a similar sequence that shuffled decoys do not
       // show (B. theta entrapment of the three lysates: in one class with the determined proteoforms, 18 B. theta precursor-ladder
       // proteoforms at 1%, 9% estimated error; in a class of their own 4, with 9 more E. coli proteins over the runs). Precedence: a determined PrSM of the
-      // main search other than a precursor-ladder one (any blind count) makes the proteoform "determined"; else a precursor-ladder PrSM
-      // "precursor ladder"; else one with both termini "undetermined, both termini"; else "undetermined, open terminus"; a proteoform of
-      // residual-round PrSMs only is "residual r" (its lowest round). A proteoform is ranked by the best score of the PrSMs that decide its
-      // class, and its row (Representative) is one of them: of a determined or precursor-ladder proteoform the PrSM passing rep_q with the
-      // fewest blind modifications, else the best scoring one. Every PrSM carries the proteoform's q-value and class (ProteoformFDRClass).
+      // main search other than a ladder one (any blind count) makes the proteoform "determined"; else a precursor-ladder PrSM "precursor
+      // ladder"; else a terminal-ladder PrSM "terminal ladder" (option terminal_ladder_class); else one with both termini "undetermined,
+      // both termini"; else "undetermined, open terminus"; a proteoform of residual-round PrSMs only is "residual r" (its lowest round). A
+      // proteoform is ranked by the best score of the PrSMs that decide its class, and its row (Representative) is one of them: of a
+      // determined or ladder proteoform the PrSM passing rep_q with the fewest blind modifications, else the best scoring one. Every PrSM
+      // carries the proteoform's q-value and class (ProteoformFDRClass).
       std::vector<int> cluster_class(clusters.size(), -1);
       std::vector<double> cluster_score(clusters.size(), 0.0);
       for (Size k = 0; k < clusters.size(); k++)
@@ -2613,12 +2633,21 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         }
         if (! main_members.empty())
         {
-          for (Size i : main_members) { if (isDetermined(proteoform_hits_[i]) && hit_class[i] != fdr_class_precursor_ladder) defining.push_back(i); }
+          for (Size i : main_members)
+          {
+            if (isDetermined(proteoform_hits_[i]) && hit_class[i] != fdr_class_precursor_ladder && hit_class[i] != fdr_class_terminal_ladder)
+              defining.push_back(i);
+          }
           cluster_class[k] = pf_class_determined;
           if (defining.empty())
           {
             for (Size i : main_members) { if (hit_class[i] == fdr_class_precursor_ladder) defining.push_back(i); }
             cluster_class[k] = pf_class_precursor_ladder;
+          }
+          if (defining.empty())
+          {
+            for (Size i : main_members) { if (hit_class[i] == fdr_class_terminal_ladder) defining.push_back(i); }
+            cluster_class[k] = pf_class_terminal_ladder;
           }
           if (defining.empty())
           {
@@ -2644,7 +2673,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         for (Size i : defining)
         {
           cluster_score[k] = std::max(cluster_score[k], proteoform_hits_[i].getScore());
-          if (cluster_class[k] == pf_class_determined || cluster_class[k] == pf_class_precursor_ladder)
+          if (cluster_class[k] == pf_class_determined || cluster_class[k] == pf_class_precursor_ladder || cluster_class[k] == pf_class_terminal_ladder)
           {
             // passing first, then fewer blind modifications, then the higher score
             const bool pass_i = qvalues[i] <= rep_q, pass_row = qvalues[row] <= rep_q;
@@ -2848,6 +2877,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     // precursor-ladder PrSMs of the extension that is kept: kept (determined; of them at both window ends, at the window start only, at the
     // window end only), dropped as the same proteoform as a determined PrSM of another source, dropped as undetermined
     std::atomic<Size> pl_determined {0}, pl_at_both_ends {0}, pl_at_start {0}, pl_at_end {0}, pl_duplicates {0}, pl_undetermined {0};
+    // determined terminal-ladder PrSMs dropped as the same proteoform as a determined PrSM of another source (the ladder duplicate rule)
+    std::atomic<Size> tl_duplicates {0};
     // A PrSM of a database entry (by_entry) is decoded to its protein right after the extension: its positions (and TagPositions) moved to
     // the full-length protein, the entry's fixed modifications inside the proteoform merged into its modifications by position
     // (ModificationVariable 2; BlindModCount and VariableModifications stay those of the search), the sequence the full-length protein, and
@@ -3080,11 +3111,29 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         std::vector<ProteinHit> ladder_out;
         extend(ladder_hits, ladder_out);
         std::vector<ProteinHit> determined, undetermined;
+        Size duplicates = 0;
         for (auto& h : ladder_out)
         {
           h.setMetaValue(native_rule ? mi_sliding : mi_terminal, 1);
+          // The ladder duplicate rule: a determined ladder PrSM that is the same proteoform (same accession, areConsistent_) as a
+          // determined PrSM another source found in this spectrum is dropped, as a precursor-ladder one is (below). It adds nothing the
+          // spectrum does not have; kept, it would count twice or, with one PrSM per spectrum, take the spectrum from the tag search when it
+          // scores higher, and pad the terminal-ladder class with sure targets (E. coli 10_LC_PBS, several PrSMs per spectrum: 767 of
+          // the 1,416 terminal-ladder targets at 1% were such duplicates, none of them an entrapment). It acts here, before the spectrum's
+          // PrSM is chosen: out holds the other sources' PrSMs (one PrSM per spectrum: the best of the tag search; every candidate's
+          // with keep_all, which keepBestPerSpectrum_ then chooses from), so the proteoform stays with the tag search and its class. The
+          // rule reads no label.
+          if (! native_rule && is_determined(h)
+              && std::any_of(out.begin(), out.end(), [&](const ProteinHit& o) {
+                   return is_determined(o) && o.getAccession() == h.getAccession() && areConsistent_(o, h, pl_precursor_tol);
+                 }))
+          {
+            duplicates++;
+            continue;
+          }
           (is_determined(h) ? determined : undetermined).push_back(h);
         }
+        tl_duplicates += duplicates;
         const bool fill = out.empty();
         if (native_rule)
         {
@@ -3212,6 +3261,11 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
                         << " at both window ends, " << pl_at_start.load() << " at the window start only, " << pl_at_end.load()
                         << " at the window end only), " << pl_duplicates.load() << " dropped as the same proteoform as a determined PrSM of another source, "
                         << pl_undetermined.load() << " undetermined dropped" << std::endl;
+      }
+      if (tl_duplicates.load() > 0)
+      {
+        OPENMS_LOG_INFO << "Terminal-ladder PrSMs: " << tl_duplicates.load() << " dropped as the same proteoform as a determined PrSM of another source"
+                        << std::endl;
       }
       // Decoy precursors: a spectrum whose PrSM took its mass from MS1 is searched again as a decoy spectrum whose precursor mass is the
       // decoy precursor mass (noise or signal decoy) of its isolation window, as FLASHDeconv chose it with report_FDR. A PrSM of that copy
@@ -3836,12 +3890,15 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   //   determined classes would hide. The class does not split by blind modifications: a window fits the unmodified mass, so such a PrSM
   //   with blind shifts left its window (the log line of the class counts them, targets and decoys, to decide whether it should be split).
   //   At the protein level the class uses the pooled null while it has fewer than null_min_class_decoys decoys, and its decoys join the
-  //   pooled null (so the null of the sparse determined classes changes with the option; not yet measured). The PrSMs of each residual
-  //   round of the chimeric search (meta value ChimericRound r > 0) are class "residual r", also by source and before the rules above;
+  //   pooled null (so the null of the sparse determined classes changes with the option; not yet measured). The PrSMs of terminal-ladder
+  //   candidates (meta value TerminalLadder; a determined one that is the same proteoform as a determined PrSM of another source in the
+  //   spectrum is dropped) are class "terminal ladder" in the same way (option terminal_ladder_class), determined or not. The PrSMs of each
+  //   residual round of the chimeric search (meta value ChimericRound r > 0) are class "residual r", also by source and before the rules above;
   //   determined and undetermined ones share it (the log line of the class counts both), and its decoys join the pooled null like those
   //   of the precursor-ladder class. Each PrSM is in exactly one class, so no PrSM passes twice. With discard_underdetermined the undetermined PrSMs are in no class and take part in nothing below,
   //   the proteoforms included.
-  // - proteoforms: per proteoform class (a partition: determined, undetermined with both termini, with an open terminus, residual r),
+  // - proteoforms: per proteoform class (a partition: determined, undetermined with both termini, with an open terminus, precursor ladder,
+  //   terminal ladder, residual r),
   //   ranked by the best score of the PrSMs that decide the class (proteoformQvalues; -native: one ranking by PrSM q-value);
   // - proteins: ranked by their best proteoform (the lowest proteoform q-value, then the best score of its PrSMs) and target-decoy counted,
   //   so that a protein is identified by a proteoform; -native: setProteinQvalues_ (local-FDR evidence of all PrSMs).
