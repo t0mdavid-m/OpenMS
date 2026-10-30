@@ -330,6 +330,12 @@ protected:
       MSExperiment deconvolved_map;
       FLASHDeconvSpectrumFile::toDeconvolvedMap(map, deconvolved_spectra, 0, fd.getTolerances(), deconvolved_map);
       map = std::move(deconvolved_map);
+      // the deconvolved spectra are freed with all threads instead of by the serial destructor at the end of this block
+#pragma omp parallel for schedule(dynamic, 64)
+      for (SignedSize i = 0; i < (SignedSize)deconvolved_spectra.size(); ++i)
+      {
+        deconvolved_spectra[i] = DeconvolvedSpectrum();
+      }
       if (! in_raw.empty()) OPENMS_LOG_WARN << "-in_raw is not read: the raw spectra are those of -in" << endl;
     }
 
