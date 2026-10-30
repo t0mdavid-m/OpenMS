@@ -10,6 +10,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandJoin.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/MassFeatureTrace.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHPhaseTrace.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/Qvalue.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/TopDownIsobaricQuantification.h>
@@ -1065,8 +1066,10 @@ void FLASHDeconvAlgorithm::run(MSExperiment& map,
     OPENMS_LOG_INFO << "FLASHIda scan commands used: " << scan_commands_file_ << " (" << located_by_scan_.size() << " commanded MS2 scans located)" << std::endl;
   }
 
+  flashPhase("fd: run start");
   updateMSLevels_(map);
   filterLowPeaks_(map);
+  flashPhase("fd: low peaks filtered");
 
   sd_ = SpectralDeconvolution();
   Param sd_param = param_.copy("SD:", true);
@@ -1102,10 +1105,13 @@ void FLASHDeconvAlgorithm::run(MSExperiment& map,
   deconvolved_spectra.reserve(map.size() * 4);
 
   // run spectral deconvolution here and get deconvolved spectra
+  flashPhase("fd: spectral deconvolution start");
   runSpectralDeconvolution_(map, deconvolved_spectra);
+  flashPhase("fd: spectral deconvolution end");
 
   // feature tracing here and update FeatureQScores
   runFeatureFinding_(deconvolved_spectra, deconvolved_features);
+  flashPhase("fd: features end");
 
   noise_decoy_weights_ = Qvalue::updatePeakGroupQvalues(deconvolved_spectra);
   if (report_decoy_)
@@ -1125,7 +1131,9 @@ void FLASHDeconvAlgorithm::run(MSExperiment& map,
   Param quant_param = param_.copy("iq:", true);
   quantifier.setParameters(quant_param);
   // Isobaric quant run
+  flashPhase("fd: q-values end");
   quantifier.quantify(map, deconvolved_spectra, deconvolved_features);
+  flashPhase("fd: run end");
 }
 
 // ADR-0046 decision 3: FLASHDeconv's deconvolution of the commanded survey holds NOTHING in the isolation window,

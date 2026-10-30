@@ -13,6 +13,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHGappedTaggerAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTAlgorithm.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHPhaseTrace.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTCandidateRanker.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/MassLadderAlgorithm.h>
 #include <algorithm>
@@ -1076,6 +1077,7 @@ namespace
 void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile::FASTAEntry>& original_fasta_entry, const ProteoformDatabase* db)
 {
   setLogType(CMD);
+  flashPhase("tnt: run start");
 
   // The database (ProteoformDatabase): without one, the FASTA entries are the proteins (the identity database), and every step below
   // that reads it is the search as before. With a PEFF database, an entry is a processed form of a protein with fixed modifications: the
@@ -1209,6 +1211,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     }
   }
 
+  flashPhase("tnt: before tags");
   startProgress(0, (SignedSize)map.size(), "Finding sequence tags ...");
 
   // Spectra in parallel, each into its own slot, collected in input order below, so that dspecs, the tolerances and tags_ are those of one
@@ -1475,6 +1478,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       Size protein;
     };
 
+    flashPhase("tnt: tag search start");
     startProgress(0, (SignedSize)protein_seqs.size(), "Searching tags against database ...");
 
     const Size block_size = 4096;
@@ -1637,6 +1641,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     endProgress();
   };
   searchTagSequences(tag_seqs);
+  flashPhase("tnt: tag search end");
   startProgress(0, (SignedSize)dspecs.size(), "Running candidate protein filtration ...");
 
   // wall time of the database indexes below (logged after the mass ladders)
@@ -1686,6 +1691,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   }
   // their bucket indices, with which FLASHTaggerAlgorithm::scoreShifts looks the residue sum of a mass up instead of walking to it
   std::vector<std::vector<std::uint32_t>> pro_prefix_index(cleaned_protein_seqs.size()), pro_suffix_index(cleaned_protein_seqs.size());
+  flashPhase("tnt: residue sum index");
 #pragma omp parallel for schedule(dynamic, 64)
   for (int k = 0; k < (int)cleaned_protein_seqs.size(); k++)
   {
@@ -1726,6 +1732,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   // gapped tags (only for spectra in which no sequence tag proposes a protein); their tags are kept per spectrum until appended to tags_
   FLASHGappedTaggerAlgorithm gapped_tagger;
   lap();
+  flashPhase("tnt: gapped index");
   if (gapped_mode_ != "off")
   {
     gapped_tagger.setParameters(gapped_param_);
@@ -1762,6 +1769,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   MassLadderAlgorithm mass_ladders;
   // the sliding ladders of native mode read the runs of standard residues of the precursor ladders
   lap();
+  flashPhase("tnt: mass ladder index");
   mass_ladders.buildIndex(protein_seqs, param_.getValue("ion_type").toStringVector(), terminal_ladders_, use_precursor_ladders || native_rule, db);
   OPENMS_LOG_INFO << "Database indexes (wall s): protein mass sets " << t_mass_sets << ", residue sums " << t_residue_sums << ", gapped tags "
                   << t_gapped << ", mass ladders " << lap() << std::endl;
@@ -2478,7 +2486,9 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         all_precursor_masses.push_back(dspec.getPrecursorPeakGroup().getMonoMass());
         if (decoy_precursor_ && dspec.getDecoyPrecursorMass() > 0) all_precursor_masses.push_back(dspec.getDecoyPrecursorMass());
       }
+      flashPhase("tnt: prepare windows");
       mass_ladders.preparePrecursorWindows(all_precursor_masses, pl_precursor_tol);
+      flashPhase("tnt: prepare windows end");
     }
     std::vector<std::vector<MassLadderAlgorithm::Candidate>> sliding_of;
     if (native_rule) searchSlidingSpectra(dspecs, spectra, nullptr, sliding_of);
@@ -2593,8 +2603,10 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   };
   std::vector<int> all_spectra(dspecs.size());
   std::iota(all_spectra.begin(), all_spectra.end(), 0);
+  flashPhase("tnt: search stage first");
   searchStage(stages[0], all_spectra);
   endProgress();
+  flashPhase("tnt: search stage first end");
 
   // the FDR below: decoys, their weights, the PrSM level of a passing PrSM and the FDR class of a PrSM; defined here for the search cascade,
   // which decides from each stage's PrSM q-values which spectra the next stage searches
@@ -3416,7 +3428,9 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       const bool first_stage = stage == stages[0];
       startProgress(0, (SignedSize)spectra.size(),
                     first_stage ? String("Running extension algorithm ...") : "Running extension algorithm (search cascade stage " + String(stage) + ") ...");
+      flashPhase("tnt: extension start");
       extendSpectra(spectra, extender_param_);
+      flashPhase("tnt: extension main end");
       const bool extend_over_spectra = overSpectra(spectra);
       if (use_precursor_ladders && (stage == 0 || stage == 1))
       {
@@ -3466,6 +3480,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
           }
           if (others > 0) todo.push_back(d);
         }
+        flashPhase("tnt: reselection start");
         std::vector<std::vector<ProteinHit>> chosen(dspecs.size());
         std::vector<double> chosen_mass(dspecs.size(), -1.0);
         // The alternatives of every spectrum (the window masses by decreasing intensity: of alternatives whose PrSMs score equally, the
@@ -3556,6 +3571,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         }
         const Size tries = alternatives.size();
         std::vector<Alternative>().swap(alternatives);
+        flashPhase("tnt: reselection end");
         int reselected = 0;
         for (int d : todo)
         {
@@ -3596,6 +3612,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
           }
           todo.push_back(d);
         }
+        flashPhase("tnt: decoy precursors start");
         copies = (int)todo.size();
         std::vector<int> decoy_order(todo);
         if (extend_over_spectra) heaviestFirst(decoy_order, true);
@@ -3700,6 +3717,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       }
       endProgress();
 
+      flashPhase("tnt: extension stage end");
       // raw-spectrum evidence of every PrSM, targets and decoys alike, before the FDR
       if (raw_loader_ && ! stage_hits.empty())
       {
@@ -3707,6 +3725,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         for (const auto& hit : stage_hits) scans.insert((int)hit.getMetaValue("Scan"));
         loadRawSpectra_(scans);
         annotateOnRawSpectra_(stage_hits);
+        flashPhase("tnt: raw annotation end");
         dropOpenTerminusShifts(stage_hits);
         // one PrSM per spectrum: the best by the combined score; the extension kept every candidate's PrSM for this choice
         if (! multiple_hits_per_spec_) keepBestPerSpectrum_(stage_hits, stage == 0 ? String("") : " (search cascade stage " + String(stage) + ")", "combined score");
@@ -4220,6 +4239,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   std::vector<double> qvalues, decoy_weights;
   std::vector<bool> decoys;
   // the proteoforms: positions of their PrSMs in proteoform_hits_ (Index), the representative first; representatives in the order above
+  flashPhase("tnt: proteoform q-values");
   const auto clusters = proteoformQvalues(hit_class, qvalues, decoys, decoy_weights, true);
   const Size hit_count = proteoform_hits_.size();
 
