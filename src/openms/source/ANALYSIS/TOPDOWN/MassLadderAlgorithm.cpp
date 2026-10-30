@@ -43,6 +43,12 @@ inline std::uint64_t scrambledIndex(std::uint64_t x)
 }
 // the residues of terminal and precursor ladders
 const std::string standard_residues = "ACDEFGHIKLMNPQRSTVWYUO";
+// whether a character is one of standard_residues: a table, not a search of the string per residue of the database
+const std::array<bool, 256> standard_residue = [] {
+  std::array<bool, 256> table {};
+  for (const char c : standard_residues) table[(unsigned char)c] = true;
+  return table;
+}();
 
 // BEGIN precursor ladder kernel
 // Precursor-anchored ladders (option precursor_ladders): the windows (i, j) of the database proteins whose unmodified mass equals the
@@ -634,7 +640,6 @@ void MassLadderAlgorithm::buildIndex(const std::vector<std::string>& protein_seq
   // initiator Met and with acetylation) that lands on a residue sum reads from the intact terminus; no sequence tag is needed. The sums
   // from the N-terminus are also built for the precursor ladders alone: they are the window sums of a protein of standard residues only.
   const auto* rdb = ResidueDB::getInstance();
-  const std::string& standard = standard_residues;
   // the fixed modification masses of an entry by residue (empty: none)
   auto fixedByResidue = [&](Size k, std::vector<double>& extra) {
     extra.clear();
@@ -651,7 +656,7 @@ void MassLadderAlgorithm::buildIndex(const std::vector<std::string>& protein_seq
     {
       const Size pos = reverse ? seq.size() - 1 - j : j;
       const char aa = seq[pos];
-      if (standard.find(aa) == std::string::npos) break;
+      if (! standard_residue[(unsigned char)aa]) break;
       if (extra.empty()) out.push_back(out.back() + rdb->getResidue(aa)->getMonoWeight(Residue::Internal));
       else out.push_back(out.back() + rdb->getResidue(aa)->getMonoWeight(Residue::Internal) + extra[pos]);
     }
@@ -732,7 +737,8 @@ void MassLadderAlgorithm::buildIndex(const std::vector<std::string>& protein_seq
     std::vector<Size> other;
     for (Size k = 0; k < protein_seqs.size(); k++)
     {
-      if (protein_seqs[k].find_first_not_of(standard_residues) != std::string::npos) other.push_back(k);
+      const auto& seq = protein_seqs[k];
+      if (std::any_of(seq.begin(), seq.end(), [](char c) { return ! standard_residue[(unsigned char)c]; })) other.push_back(k);
     }
     window_sums_.assign(protein_seqs.size(), nullptr);
     window_own_sums_.resize(other.size()); // not resized below: the pointers into it stay valid
@@ -747,7 +753,7 @@ void MassLadderAlgorithm::buildIndex(const std::vector<std::string>& protein_seq
       for (Size x = 0; x < seq.size(); x++)
       {
         const char aa = seq[x];
-        const double mass = standard_residues.find(aa) == std::string::npos ? 0.0 : rdb->getResidue(aa)->getMonoWeight(Residue::Internal);
+        const double mass = ! standard_residue[(unsigned char)aa] ? 0.0 : rdb->getResidue(aa)->getMonoWeight(Residue::Internal);
         if (extra.empty()) own.push_back(own.back() + mass);
         else own.push_back(own.back() + mass + (mass > 0 ? extra[x] : 0.0));
       }
@@ -765,7 +771,7 @@ void MassLadderAlgorithm::buildIndex(const std::vector<std::string>& protein_seq
         fixedByResidue(k, extra);
         auto& fs = window_fixed_sums_[k];
         fs.assign(1, 0.0);
-        for (Size x = 0; x < seq.size(); x++) fs.push_back(fs.back() + (standard_residues.find(seq[x]) == std::string::npos ? 0.0 : extra[x]));
+        for (Size x = 0; x < seq.size(); x++) fs.push_back(fs.back() + (! standard_residue[(unsigned char)seq[x]] ? 0.0 : extra[x]));
       }
       // a window contains every fixed modification of its entry: no other window is new (the same window of the entry without the
       // modifications outside it is one already)
@@ -778,7 +784,7 @@ void MassLadderAlgorithm::buildIndex(const std::vector<std::string>& protein_seq
       long a = -1;
       for (Size x = 0; x <= seq.size(); x++)
       {
-        const bool is_standard = x < seq.size() && standard_residues.find(seq[x]) != std::string::npos;
+        const bool is_standard = x < seq.size() && standard_residue[(unsigned char)seq[x]];
         if (is_standard && a < 0) a = (long)x;
         if (! is_standard && a >= 0)
         {
