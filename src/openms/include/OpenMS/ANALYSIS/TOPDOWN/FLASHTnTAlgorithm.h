@@ -34,6 +34,11 @@ namespace OpenMS
 class OPENMS_DLLAPI FLASHTnTAlgorithm : public DefaultParamHandler, public ProgressLogger
 {
 public:
+  /// option protein_evidence proteoforms: whether a protein of @p proteoforms proteoforms takes part in the protein ranking (two or more,
+  /// or @p strong: one of them is a determined tag-search proteoform without blind modifications of protein_evidence_min_mass)
+  static bool proteinEvidenceSupported(Size proteoforms, bool strong);
+  /// the blind modifications of a PrSM: its BlindModCount, else the ModificationVariable entries of kind 0, else all its Modifications
+  static Size blindModCount(const ProteinHit& hit);
   /// the fixed pseudo-random order of the database entries (splitmix64 of the index) that breaks the ties of the candidate cuts
   static std::uint64_t entryOrder(std::uint64_t index);
   /// constructor
@@ -181,6 +186,9 @@ private:
   bool keep_underdetermined_ = true;
   /// terminal-ladder PrSMs as an FDR and proteoform class of their own
   bool terminal_ladder_class_ = true;
+  /// a protein takes part in the protein ranking with two proteoforms or one strong one (proteoforms), or with any (none)
+  bool protein_evidence_ = true;
+  double protein_evidence_min_mass_ = 3000;
   /// several PrSMs per spectrum (native only)
   bool multiple_hits_per_spec_ = false;
   bool protein_level_only_ = false;
