@@ -133,7 +133,7 @@ private:
   std::vector<Size> offsets_;
 
   // mass index: bin -> slot of a non-empty bin; per slot the bitmap of the window start positions and their number (shared by
-  // copies, never changed after buildIndex)
+  // copies, not changed after buildIndex; releaseIndex frees them, in place only when no copy shares them)
   std::int64_t key_min_ = 0, key_max_ = 0;
   std::vector<std::uint32_t> slot_;
   std::vector<std::uint64_t> slot_count_;
