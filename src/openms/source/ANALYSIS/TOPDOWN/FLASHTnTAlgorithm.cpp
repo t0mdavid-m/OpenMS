@@ -479,12 +479,15 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "with native, with protein_level_only and without decoys in the database; the chimeric rounds search with all sources.");
   defaults_.setValidStrings("search_cascade", {"true", "false"});
   defaults_.addTag("search_cascade", "advanced");
-  defaults_.setValue("one_proteoform_per_feature", "true",
+  defaults_.setValue("one_proteoform_per_feature", "fitted",
                      "Co-isolation: when PrSMs of different proteins report the same mass taken from MS1 (within twice the precursor tolerance, "
-                     "one isotope apart allowed) within 2 min, the mass is one MS1 feature of one proteoform, and only the protein that explains it "
-                     "best keeps it (by its best PrSM score, which already prices blind shifts, then fewer blind modifications, then more PrSMs at that mass); the "
-                     "other proteins' PrSMs are reported without a mass. Masses from fragment pairs and decoy precursors are not affected.");
-  defaults_.setValidStrings("one_proteoform_per_feature", {"true", "false"});
+                     "one isotope apart allowed) within 2 min, the mass is one MS1 feature of one proteoform, and the protein that explains it "
+                     "best keeps it (by its best PrSM score, which already prices blind shifts, then fewer blind modifications, then more PrSMs at "
+                     "that mass). fitted: the other proteins' PrSMs whose mass needs a blind modification are reported without a mass, those whose "
+                     "mass needs none keep it (their own stretch and modifications explain it; on ten datasets 183 spectra lost such a mass with "
+                     "true, and TopPIC assigned the losing protein to most of them). true: all the other proteins' PrSMs are reported without a "
+                     "mass. Masses from fragment pairs and decoy precursors are not affected.");
+  defaults_.setValidStrings("one_proteoform_per_feature", {"true", "false", "fitted"});
   defaults_.addTag("one_proteoform_per_feature", "advanced");
   defaults_.setValue("native", "false",
                      "Native and targeted top-down (one or a few spectra, often several proteins per spectrum, no MS1 survey): the candidate "
@@ -557,7 +560,8 @@ void FLASHTnTAlgorithm::updateMembers_()
   search_cascade_ = param_.getValue("search_cascade").toString() == "true";
   decoy_precursor_ = param_.getValue("decoy_precursor").toString() == "true";
   precursor_reselect_ = param_.getValue("precursor_reselect").toString() == "true";
-  one_proteoform_per_feature_ = param_.getValue("one_proteoform_per_feature").toString() == "true";
+  one_proteoform_per_feature_ = param_.getValue("one_proteoform_per_feature").toString() != "false";
+  one_proteoform_per_feature_fitted_ = param_.getValue("one_proteoform_per_feature").toString() == "fitted";
   chimeric_rounds_ = param_.getValue("chimeric_rounds");
   pro_fdr_ = param_.getValue("pro_fdr");
   keep_decoy_ = param_.getValue("keep_decoy").toString() == "true";
@@ -4003,7 +4007,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   // a blind shift (raw score minus log10 of the windows it opens); ranked by blind count first, low-scoring PrSMs that fit the mass by
   // truncation alone (mostly decoys and PrSMs far below 1%) took the masses of real one-shift proteoforms in the same feature (Eclip_1480:
   // 544 PrSMs lost the mass, 625 with the B. theta entrapment database; 323 of the 342 E. coli proteoforms that only the entrapment search
-  // left undetermined had lost the mass to a PrSM outside the 1% list).
+  // left undetermined had lost the mass to a PrSM outside the 1% list). With fitted (the default), only the PrSMs whose mass needs a blind
+  // modification lose it.
   if (one_proteoform_per_feature_ && precursor_tol > 0)
   {
     const double iso = Constants::ISOTOPE_MASSDIFF_55K_U, rt_window = 120.0;
@@ -4076,6 +4081,10 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       {
         auto& h = proteoform_hits_[idx[a]];
         if (h.getAccession() == owner) continue;
+        // fitted: a mass that needs no blind shift is explained by the PrSM's own stretch and modifications; it is not one that a
+        // truncation and a shift fitted to another protein's feature (ten datasets: 183 spectra lost such a mass without the exception,
+        // TopPIC assigned the loser's protein to most of them and agreed with the winner on 12)
+        if (one_proteoform_per_feature_fitted_ && blindModCount_(h) == 0) continue;
         h.setMetaValue(tntKey("Mass"), -1.0);
         h.setMetaValue(tntKey("MassLostToFeatureOwner"), owner);
         demoted++;

@@ -180,6 +180,8 @@ private:
   bool precursor_reselect_ = true;
   /// co-isolation: an MS1 mass reported by PrSMs of different proteins stays with the protein that explains it best
   bool one_proteoform_per_feature_ = true;
+  /// with one_proteoform_per_feature_: a PrSM whose mass needs no blind modification keeps it (fitted)
+  bool one_proteoform_per_feature_fitted_ = true;
   /// native and targeted runs: candidates of every source chosen by the decoy margin of their spectrum, every candidate's PrSM reported
   bool native_ = false;
   double decoy_factor_ = 0, pro_fdr_ = 1;
