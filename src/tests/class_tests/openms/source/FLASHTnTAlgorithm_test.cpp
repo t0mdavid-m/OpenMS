@@ -13,13 +13,16 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTAlgorithm.h>
 #include <OpenMS/METADATA/ProteinHit.h>
 #include <cstdint>
+#include <functional>
 #include <set>
+#include <vector>
 ///////////////////////////
 
 using namespace OpenMS;
 
 // The label-blind rules of FLASHTnT that can be checked without a search: the entry order that breaks candidate-cut ties, the protein
-// evidence rule (option protein_evidence) and the blind modification count it reads, and the defaults of the options
+// evidence rule (option protein_evidence) and the blind modification count it reads, the grouping of small proteoform classes (option
+// merge_small_classes), and the defaults of the options
 START_TEST(FLASHTnTAlgorithm, "$Id$")
 
 START_SECTION((static bool proteinEvidenceSupported(Size proteoforms, bool strong)))
@@ -63,6 +66,46 @@ START_SECTION((static std::uint64_t entryOrder(std::uint64_t index)))
 }
 END_SECTION
 
+START_SECTION((static std::vector<std::vector<int>> groupClasses(const std::vector<int>& class_order, const std::vector<Size>& class_size, Size min_size, bool by_kind, const std::function<int(int)>& kind_of)))
+{
+  // classes as in FLASHTnT: 0 determined, 1 both termini, 2 open terminus, 3 precursor ladder, 4 terminal ladder
+  const std::vector<int> class_order = {0, 1, 2, 3, 4};
+  const std::vector<int> kind_order = {0, 3, 4, 1, 2};
+  const auto kind_of = [](int c) { return c == 0 ? 0 : 1; };
+  // E. coli-like run: a small undetermined group (93 + 5 < 100) before a large precursor-ladder class
+  std::vector<Size> size = {760, 93, 5, 156, 577};
+  auto g = FLASHTnTAlgorithm::groupClasses(class_order, size, 100, false, kind_of);
+  TEST_EQUAL(g.size(), 3)
+  TEST_EQUAL(g[1].size(), 3) // true: the undetermined group absorbs the precursor-ladder class
+  TEST_EQUAL(g[1][2], 3)
+  g = FLASHTnTAlgorithm::groupClasses(kind_order, size, 100, true, kind_of);
+  TEST_EQUAL(g.size(), 3) // kind: determined | precursor ladder | terminal ladder + the small undetermined group (last, joins the group before it)
+  TEST_EQUAL(g[1].size(), 1)
+  TEST_EQUAL(g[1][0], 3)
+  TEST_EQUAL(g[2].size(), 3)
+  TEST_EQUAL(g[2][0], 4)
+  // an undetermined group of at least 100 stays its own group, in both walks
+  size = {760, 93, 10, 156, 577};
+  g = FLASHTnTAlgorithm::groupClasses(class_order, size, 100, false, kind_of);
+  TEST_EQUAL(g.size(), 4)
+  g = FLASHTnTAlgorithm::groupClasses(kind_order, size, 100, true, kind_of);
+  TEST_EQUAL(g.size(), 4) // determined | precursor ladder | terminal ladder | undetermined
+  TEST_EQUAL(g[3].size(), 2)
+  TEST_EQUAL(g[3][0], 1)
+  // empty classes take no part
+  size = {760, 93, 10, 0, 577};
+  g = FLASHTnTAlgorithm::groupClasses(kind_order, size, 100, true, kind_of);
+  TEST_EQUAL(g.size(), 3)
+  TEST_EQUAL(g[1].size(), 1)
+  TEST_EQUAL(g[1][0], 4)
+  // a tiny run: the determined class alone is small and joins the other kind's first group
+  size = {30, 20, 5, 10, 50};
+  g = FLASHTnTAlgorithm::groupClasses(kind_order, size, 100, true, kind_of);
+  TEST_EQUAL(g.size(), 1)
+  TEST_EQUAL(g[0].size(), 5)
+}
+END_SECTION
+
 START_SECTION((FLASHTnTAlgorithm()))
 {
   // the defaults of the FDR and mass options, and the values each of them takes
@@ -73,6 +116,8 @@ START_SECTION((FLASHTnTAlgorithm()))
   TEST_STRING_EQUAL(p.getValue("protein_evidence").toString(), "proteoforms")
   TEST_EQUAL(p.getValidStrings("protein_evidence").size(), 2)
   TEST_REAL_SIMILAR((double)p.getValue("protein_evidence_min_mass"), 3000.0)
+  TEST_STRING_EQUAL(p.getValue("merge_small_classes").toString(), "kind")
+  TEST_EQUAL(p.getValidStrings("merge_small_classes").size(), 2)
 }
 END_SECTION
 

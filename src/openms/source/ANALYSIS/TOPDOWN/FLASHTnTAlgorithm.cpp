@@ -340,6 +340,16 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "passing 1% without the class came from this source, against 51% of the target proteoforms of the same score.");
   defaults_.setValidStrings("terminal_ladder_class", {"true", "false"});
   defaults_.addTag("terminal_ladder_class", "advanced");
+  defaults_.setValue("merge_small_classes", "kind",
+                     "Proteoform classes with fewer than 100 proteoforms (targets and decoys: the rule reads no label) are counted together with "
+                     "others. kind: the determined class stays on its own and the ladder and undetermined classes are merged among themselves in "
+                     "the order precursor ladder, terminal ladder, undetermined (both termini, open terminus), so that a small undetermined group "
+                     "joins the terminal-ladder class and never pulls the precursor-ladder or the determined class under its cutoff; a kind whose "
+                     "classes together stay under 100 joins the other kind's first group. true: the classes in their order (determined, "
+                     "undetermined, precursor ladder, terminal ladder), a last small group joining the one before (on 38 runs the undetermined "
+                     "group absorbed the precursor-ladder class of a run and cost it 11 of 152 proteoforms).");
+  defaults_.setValidStrings("merge_small_classes", {"true", "kind"});
+  defaults_.addTag("merge_small_classes", "advanced");
   defaults_.setValue("protein_evidence", "proteoforms",
                      "What identifies a protein at the protein level. proteoforms: at least two distinct proteoforms, or one determined "
                      "proteoform (mass and both termini known, from the tag search) without blind modifications (variable and annotated ones "
@@ -539,6 +549,7 @@ void FLASHTnTAlgorithm::updateMembers_()
   keep_decoy_ = param_.getValue("keep_decoy").toString() == "true";
   keep_underdetermined_ = param_.getValue("discard_underdetermined").toString() == "false";
   terminal_ladder_class_ = param_.getValue("terminal_ladder_class").toString() == "true";
+  merge_by_kind_ = param_.getValue("merge_small_classes").toString() == "kind";
   protein_evidence_ = param_.getValue("protein_evidence").toString() == "proteoforms";
   protein_evidence_min_mass_ = param_.getValue("protein_evidence_min_mass");
   // One PrSM per spectrum, its best (with native, every candidate's, below). Several per spectrum put homologs of the spectrum's own
@@ -643,6 +654,62 @@ std::set<Size> FLASHTnTAlgorithm::getProteinsPassingFDR_(const ProteoformDatabas
 std::uint64_t FLASHTnTAlgorithm::entryOrder(std::uint64_t index)
 {
   return scrambledIndex(index);
+}
+
+std::vector<std::vector<int>> FLASHTnTAlgorithm::groupClasses(const std::vector<int>& class_order, const std::vector<Size>& class_size, Size min_size,
+                                                             bool by_kind, const std::function<int(int)>& kind_of)
+{
+  std::vector<std::vector<int>> groups;
+  std::vector<Size> group_total;
+  for (int kind = 0; kind < (by_kind ? 2 : 1); kind++)
+  {
+    std::vector<std::vector<int>> kind_groups;
+    std::vector<Size> kind_totals;
+    Size group_size = 0;
+    for (int c : class_order)
+    {
+      if (class_size[c] == 0 || (by_kind && kind_of(c) != kind)) continue;
+      if (kind_groups.empty() || group_size >= min_size)
+      {
+        kind_groups.push_back({});
+        kind_totals.push_back(0);
+        group_size = 0;
+      }
+      kind_groups.back().push_back(c);
+      group_size += class_size[c];
+      kind_totals.back() += class_size[c];
+    }
+    if (kind_groups.size() > 1 && group_size < min_size)
+    {
+      kind_groups[kind_groups.size() - 2].insert(kind_groups[kind_groups.size() - 2].end(), kind_groups.back().begin(), kind_groups.back().end());
+      kind_totals[kind_totals.size() - 2] += kind_totals.back();
+      kind_groups.pop_back();
+      kind_totals.pop_back();
+    }
+    for (Size gi = 0; gi < kind_groups.size(); gi++)
+    {
+      groups.push_back(kind_groups[gi]);
+      group_total.push_back(kind_totals[gi]);
+    }
+  }
+  if (by_kind && groups.size() > 1)
+  {
+    // a kind that is one small group joins the other kind's first group
+    for (Size gi = groups.size(); gi-- > 0;)
+    {
+      if (group_total[gi] >= min_size || groups.size() == 1) continue;
+      const int kind = kind_of(groups[gi][0]);
+      bool alone = true;
+      for (Size gj = 0; gj < groups.size() && alone; gj++) alone = gj == gi || kind_of(groups[gj][0]) != kind;
+      if (! alone) continue;
+      const Size target = gi == 0 ? 1 : 0;
+      groups[target].insert(groups[target].end(), groups[gi].begin(), groups[gi].end());
+      group_total[target] += group_total[gi];
+      groups.erase(groups.begin() + gi);
+      group_total.erase(group_total.begin() + gi);
+    }
+  }
+  return groups;
 }
 
 bool FLASHTnTAlgorithm::proteinEvidenceSupported(Size proteoforms, bool strong)
@@ -2718,36 +2785,33 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         }
         proteoform_hits_[row].setMetaValue("PrSMIndices", prsm_indices);
       }
-      // Classes with few targets are counted together: in the order of the classes, a group takes classes until it has min_class_targets
-      // targets, and a last group with fewer joins the one before. The classes of a lysate run have hundreds of targets each and stay
-      // apart; in a small run (a single SEC fraction of PXD012247: 83 determined, 20 and 90 undetermined targets) a class alone is
-      // decided by its few decoys, or by none.
-      constexpr Size min_class_targets = 100;
-      std::vector<Size> class_targets(pf_class_count, 0), class_size(pf_class_count, 0);
+      // Classes with few proteoforms are counted together (option merge_small_classes): a group takes classes until it has
+      // min_class_size proteoforms (targets and decoys: the rule must not read the labels), and a last group with fewer joins the one
+      // before. The classes of a lysate run have hundreds of targets each and stay apart; in a small run (a single SEC fraction of
+      // PXD012247: 83 determined, 20 and 90 undetermined targets) a class alone is decided by its few decoys, or by none.
+      // kind (the default): the grouping runs within two kinds of classes, the determined class and the ladder and undetermined classes,
+      // so that a small undetermined group cannot absorb a large determined class (and its few decoys set the cutoff of hundreds of
+      // determined proteoforms); the ladder classes are walked first and the undetermined ones last, so that a small undetermined group is
+      // the last group and joins the (ladder) group before it. A kind whose only group stays below min_class_size joins the other kind's
+      // first group. true: one walk in the order of the classes.
+      constexpr Size min_class_size = 100;
+      std::vector<Size> class_size(pf_class_count, 0);
       for (Size k = 0; k < clusters.size(); k++)
       {
-        if (cluster_class[k] < 0) continue;
-        class_size[cluster_class[k]]++;
-        class_targets[cluster_class[k]] += decoys[clusters[k][0]] ? 0 : 1;
+        if (cluster_class[k] >= 0) class_size[cluster_class[k]]++;
       }
-      std::vector<std::vector<int>> groups;
-      Size group_targets = 0;
-      for (int c = 0; c < pf_class_count; c++)
+      const auto kind_of = [](int c) { return c == pf_class_determined ? 0 : 1; };
+      std::vector<int> class_order;
+      if (merge_by_kind_)
       {
-        if (class_size[c] == 0) continue;
-        if (groups.empty() || group_targets >= min_class_targets)
-        {
-          groups.push_back({});
-          group_targets = 0;
-        }
-        groups.back().push_back(c);
-        group_targets += class_targets[c];
+        class_order = {pf_class_determined, pf_class_precursor_ladder, pf_class_terminal_ladder, pf_class_both_termini, pf_class_open_terminus};
+        for (int c = pf_class_residual; c < pf_class_count; c++) class_order.push_back(c);
       }
-      if (groups.size() > 1 && group_targets < min_class_targets)
+      else
       {
-        groups[groups.size() - 2].insert(groups[groups.size() - 2].end(), groups.back().begin(), groups.back().end());
-        groups.pop_back();
+        for (int c = 0; c < pf_class_count; c++) class_order.push_back(c);
       }
+      const std::vector<std::vector<int>> groups = groupClasses(class_order, class_size, min_class_size, merge_by_kind_, kind_of);
       std::vector<int> group_of(pf_class_count, -1);
       std::vector<String> group_names;
       for (Size g = 0; g < groups.size(); g++)
