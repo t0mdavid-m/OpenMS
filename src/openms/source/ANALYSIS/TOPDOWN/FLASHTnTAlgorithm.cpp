@@ -3325,15 +3325,41 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
                            decoy_mass ? decoy_pl_candidates : pl_candidates, decoy_mass ? decoy_pl_ranges[d] : pl_ranges[d], out,
                            multiple_hits_per_spec_ || keep_all_candidates);
     };
+    // The residues the extension of spectrum d works through (the lengths of its candidates' proteins): the loops below that run over
+    // spectra in parallel extend the heaviest spectra first, so that a few spectra are not the tail of their dynamic schedule (each writes
+    // its own slot). On F3_1, spectra with ladder candidates on proteins of tens of thousands of residues took up to 3 s each and were
+    // extended last; the number of candidates did not tell them. A loop over spectra that runs serially (its extensions parallel over
+    // candidates) keeps the spectrum order: the raw path-alternative scorer (native) shares an isotope table that grows with the masses
+    // scored, so there the order of the extensions is part of the result.
+    const auto extensionCost = [&](int d, bool decoy_mass) {
+      Size residues = 0;
+      const auto add = [&](const std::vector<ProteinHit>& hits, const std::pair<Size, Size>& range) {
+        for (Size i = range.first; i < range.second; i++)
+        {
+          if (hits[i].metaValueExists(mi_fasta_index)) residues += fasta_entry[(Size)(int)hits[i].getMetaValue(mi_fasta_index)].sequence.length();
+        }
+      };
+      add(protein_hits_, candidate_ranges[d]);
+      add(ladder_candidates, ladder_ranges[d]);
+      add(decoy_mass ? decoy_pl_candidates : pl_candidates, decoy_mass ? decoy_pl_ranges[d] : pl_ranges[d]);
+      return residues;
+    };
+    const auto heaviestFirst = [&](std::vector<int>& order, bool decoy_mass) {
+      std::vector<Size> cost(dspecs.size(), 0);
+      for (int d : order) cost[d] = extensionCost(d, decoy_mass);
+      std::stable_sort(order.begin(), order.end(), [&](int l, int r) { return cost[l] > cost[r]; });
+    };
     // Extends the given spectra with the given parameters. Each spectrum is extended on its own and writes only its own slot, so the result
     // depends neither on the thread count and schedule nor on which other spectra are extended in the same call.
     auto extendSpectra = [&](const std::vector<int>& spectra, const Param& eparam) {
       const bool over_spectra = overSpectra(spectra);
+      std::vector<int> order(spectra);
+      if (over_spectra) heaviestFirst(order, false);
 #pragma omp parallel for schedule(dynamic) if (over_spectra)
-      for (int k = 0; k < (int)spectra.size(); k++)
+      for (int k = 0; k < (int)order.size(); k++)
       {
         nextProgress();
-        const int d = spectra[k];
+        const int d = order[k];
         extendSpectrumInto(d, eparam, dspecs[d], spec_proteoforms[d], false);
       }
     };
@@ -3420,48 +3446,94 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         }
         std::vector<std::vector<ProteinHit>> chosen(dspecs.size());
         std::vector<double> chosen_mass(dspecs.size(), -1.0);
-        std::atomic<int> tries {0};
+        // The alternatives of every spectrum (the window masses by decreasing intensity: of alternatives whose PrSMs score equally, the
+        // more intense mass takes the spectrum) are extended each on its own, in parallel and the heaviest spectra first (a spectrum's
+        // alternatives one after another left a few spectra of many alternatives as the tail of the loop), then chosen per spectrum in that
+        // order: the same choice as extending them one after another. Run serially, they are extended in that order too. The PrSMs of an
+        // alternative that cannot be chosen (no top, or a top below the spectrum's best less the penalty, where the choice starts) are
+        // freed at once, so that only those that can win are held until the choice.
+        struct Alternative
+        {
+          int d = 0;
+          double mass = 0;
+          double top = -1e10; // the best score of a PrSM with a mass the precursor-mass path took from this mass; -1e10: none
+          std::vector<ProteinHit> out;
+        };
+        std::vector<Alternative> alternatives;
+        std::vector<std::pair<Size, Size>> alternatives_of(dspecs.size(), {0, 0});
+        for (int d : todo)
+        {
+          const double own = dspecs[d].getPrecursorPeakGroup().getMonoMass();
+          std::vector<std::pair<double, double>> by_intensity;
+          for (const auto& [m, j] : dspecs[d].getPrecursorMassIntensityMap()) by_intensity.emplace_back(j, m);
+          std::stable_sort(by_intensity.begin(), by_intensity.end(), [](const auto& l, const auto& r) { return l.first > r.first; });
+          alternatives_of[d].first = alternatives.size();
+          for (const auto& [j, m] : by_intensity)
+          {
+            if (m <= 0 || std::abs(m - own) <= 0.01) continue;
+            alternatives.push_back({d, m, -1e10, {}});
+          }
+          alternatives_of[d].second = alternatives.size();
+        }
+        std::vector<double> best_own(dspecs.size(), -1e10); // the spectrum's best score: the choice starts at it less the penalty
+        for (int d : todo)
+        {
+          for (const auto& h : spec_proteoforms[d]) best_own[d] = std::max(best_own[d], h.getScore());
+        }
+        const double penalty = FLASHExtenderAlgorithm::truncation_penalty; // the penalty a precursor-mass path pays for a truncation
+        std::vector<Size> work(alternatives.size());
+        std::iota(work.begin(), work.end(), 0);
+        if (extend_over_spectra)
+        {
+          std::vector<Size> spectrum_cost(dspecs.size(), 0);
+          for (int d : todo) spectrum_cost[d] = extensionCost(d, false);
+          std::stable_sort(work.begin(), work.end(), [&](Size l, Size r) { return spectrum_cost[alternatives[l].d] > spectrum_cost[alternatives[r].d]; });
+        }
+  #pragma omp parallel for schedule(dynamic) if (extend_over_spectra)
+        for (int k = 0; k < (int)work.size(); k++)
+        {
+          auto& alt = alternatives[work[k]];
+          DeconvolvedSpectrum alt_spec = dspecs[alt.d];
+          auto pg = alt_spec.getPrecursorPeakGroup();
+          pg.setMonoisotopicMass(alt.mass);
+          alt_spec.setPrecursorPeakGroup(pg);
+          extendSpectrumInto(alt.d, extender_param_, alt_spec, alt.out, false);
+          // the alternative's best PrSM must have a mass a precursor-mass path took from it (not one from fragment pairs): an alternative
+          // whose best PrSM still has no mass would change the precursor without giving the spectrum a mass
+          double top = -1e10, best_any = -1e10;
+          for (const auto& h : alt.out)
+          {
+            best_any = std::max(best_any, h.getScore());
+            if ((double)h.getMetaValue("Mass") <= 0 || (int)h.getMetaValue("ProteoformMassByFragmentMass") != 0) continue;
+            if (std::abs((double)h.getMetaValue("Mass") - alt.mass) > 3 * iso + 0.1) continue; // a mass taken from this precursor, up to isotope errors
+            top = std::max(top, h.getScore());
+          }
+          alt.top = top < best_any ? -1e10 : top;
+          if (! (alt.top > -1e9 && alt.top >= best_own[alt.d] - penalty))
+          {
+            alt.top = -1e10;
+            std::vector<ProteinHit>().swap(alt.out);
+          }
+        }
   #pragma omp parallel for schedule(dynamic) if (extend_over_spectra)
         for (int k = 0; k < (int)todo.size(); k++)
         {
           const int d = todo[k];
-          const double own = dspecs[d].getPrecursorPeakGroup().getMonoMass();
-          double best_own = -1e10;
-          for (const auto& h : spec_proteoforms[d]) best_own = std::max(best_own, h.getScore());
-          double best_alt = best_own - FLASHExtenderAlgorithm::truncation_penalty; // the penalty a precursor-mass path pays for a truncation
-          // the window masses by decreasing intensity: of alternatives whose PrSMs score equally, the more intense mass takes the spectrum
-          std::vector<std::pair<double, double>> by_intensity;
-          for (const auto& [m, j] : dspecs[d].getPrecursorMassIntensityMap()) by_intensity.emplace_back(j, m);
-          std::stable_sort(by_intensity.begin(), by_intensity.end(), [](const auto& l, const auto& r) { return l.first > r.first; });
-          for (const auto& [j, m] : by_intensity)
+          double best_alt = best_own[d] - penalty;
+          for (Size a = alternatives_of[d].first; a < alternatives_of[d].second; a++)
           {
-            if (m <= 0 || std::abs(m - own) <= 0.01) continue;
-            tries++;
-            DeconvolvedSpectrum alt_spec = dspecs[d];
-            auto pg = alt_spec.getPrecursorPeakGroup();
-            pg.setMonoisotopicMass(m);
-            alt_spec.setPrecursorPeakGroup(pg);
-            std::vector<ProteinHit> out;
-            extendSpectrumInto(d, extender_param_, alt_spec, out, false);
-            // the alternative's best PrSM must have a mass a precursor-mass path took from it (not one from fragment pairs): an alternative
-            // whose best PrSM still has no mass would change the precursor without giving the spectrum a mass
-            double top = -1e10, best_any = -1e10;
-            for (const auto& h : out)
+            auto& alt = alternatives[a];
+            if (alt.top > -1e9 && (chosen_mass[d] <= 0 ? alt.top >= best_alt : alt.top > best_alt))
             {
-              best_any = std::max(best_any, h.getScore());
-              if ((double)h.getMetaValue("Mass") <= 0 || (int)h.getMetaValue("ProteoformMassByFragmentMass") != 0) continue;
-              if (std::abs((double)h.getMetaValue("Mass") - m) > 3 * iso + 0.1) continue; // a mass taken from this precursor, up to isotope errors
-              top = std::max(top, h.getScore());
+              best_alt = alt.top;
+              chosen_mass[d] = alt.mass;
+              chosen[d].swap(alt.out);
             }
-            if (top < best_any) top = -1e10;
-            if (top > -1e9 && (chosen_mass[d] <= 0 ? top >= best_alt : top > best_alt))
-            {
-              best_alt = top;
-              chosen_mass[d] = m;
-              chosen[d].swap(out);
-            }
+            std::vector<ProteinHit>().swap(alt.out);
           }
         }
+        const Size tries = alternatives.size();
+        std::vector<Alternative>().swap(alternatives);
         int reselected = 0;
         for (int d : todo)
         {
@@ -3474,7 +3546,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
           dspecs[d].setPrecursorPeakGroup(pg);
         }
         OPENMS_LOG_INFO << "Precursor re-selection: " << todo.size() << " spectra whose PrSM has no mass and whose isolation window holds other masses, "
-                        << tries.load() << " alternative masses tried, " << reselected << " spectra re-selected" << std::endl;
+                        << tries << " alternative masses tried, " << reselected << " spectra re-selected" << std::endl;
       }
       // Decoy precursors: a spectrum whose PrSM took its mass from MS1 is searched again as a decoy spectrum whose precursor mass is the
       // decoy precursor mass (noise or signal decoy) of its isolation window, as FLASHDeconv chose it with report_FDR. A PrSM of that copy
@@ -3503,14 +3575,16 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
           todo.push_back(d);
         }
         copies = (int)todo.size();
+        std::vector<int> decoy_order(todo);
+        if (extend_over_spectra) heaviestFirst(decoy_order, true);
         if (copies == 0 && first_stage)
         {
           OPENMS_LOG_WARN << "Decoy precursors: the input has no decoy precursor masses; run FLASHDeconv with -FD:report_FDR true" << std::endl;
         }
   #pragma omp parallel for schedule(dynamic) if (extend_over_spectra)
-        for (int k = 0; k < (int)todo.size(); k++)
+        for (int k = 0; k < (int)decoy_order.size(); k++)
         {
-          const int d = todo[k];
+          const int d = decoy_order[k];
           DeconvolvedSpectrum decoy_spec = dspecs[d];
           auto pg = decoy_spec.getPrecursorPeakGroup();
           const double decoy_mass = decoy_spec.getDecoyPrecursorMass();
