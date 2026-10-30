@@ -116,13 +116,6 @@ public:
     }
   };
 
-  /// precursor ladders: a window found by preparePrecursorWindows, residues a + start .. a + start + length - 1 of a segment
-  struct PreparedWindow
-  {
-    std::uint32_t segment;
-    std::uint16_t start, length;
-  };
-
   MassLadderAlgorithm() = default;
   /// not copyable: the window residue sums point into the object's own storage
   MassLadderAlgorithm(const MassLadderAlgorithm&) = delete;
@@ -256,14 +249,19 @@ private:
   std::vector<const double*> window_sums_;
   /// precursor ladders: the storage of window_sums_ (the sums of a protein of standard residues only are its ladder_pre_ sums)
   std::vector<std::vector<double>> window_own_sums_;
-  /// precursor ladders, preparePrecursorWindows: the precursor tolerance, the prepared masses (ascending, distinct) and their windows, by
-  /// chunk of segments and in a chunk by mass (in the order of the sweep): those of mass n in chunk c start at
-  /// prepared_offsets_[n * prepared_chunks_ + c] (a row more than masses for the ends)
+  /// precursor ladders, preparePrecursorWindows: the precursor tolerance, the prepared masses (ascending, distinct) and the window starts
+  /// of each, by chunk of segments (the first segment of chunk c: prepared_chunk_first_[c]) and in a chunk by mass, in the order of the
+  /// sweep. A start is its position among the residues of all segments (prepared_segment_base_[s]: those of the segments before s),
+  /// stored as 16-bit units: the difference to the previous start of its mass in the chunk (the first: to the chunk's first residue), or
+  /// 0xFFFF and the position in two units. Those of mass n in chunk c begin at unit prepared_offsets_[n * prepared_chunks_ + c] (a row
+  /// more than masses for the ends). The windows of a start are found again from it, as the sweep finds them (searchListed).
   double prepared_tol_ppm_ = -1;
   std::vector<double> prepared_masses_;
   Size prepared_chunks_ = 0;
-  std::unique_ptr<PreparedWindow[]> prepared_windows_; // not value-initialized: written once, by the threads that fill it
-  Size prepared_window_count_ = 0;
+  std::unique_ptr<std::uint16_t[]> prepared_starts_; // not value-initialized: written once, by the threads that fill it
+  Size prepared_unit_count_ = 0;
   std::vector<std::uint32_t> prepared_offsets_;
+  std::vector<std::uint32_t> prepared_chunk_first_;
+  std::vector<std::uint32_t> prepared_segment_base_;
 };
 } // namespace OpenMS

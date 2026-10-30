@@ -330,12 +330,13 @@ inline void search(const std::vector<TargetSet>& sets, const std::vector<Segment
   }
 }
 
-// The same as search for the windows of the precursor mass listed by findWindows (the hypotheses of the sweep, in its order): those of
-// chunk c are windows[begin[c] .. end[c] - 1].
+// The same as search for the window starts of the precursor mass listed by findWindows: the starts of its chunk c are units
+// starts[begin[c] .. end[c] - 1] (see findWindows), each a start i with at least one window, whose windows (i, j) are found as search finds
+// them (the first j at or above the low end, by bisection where search walks to it, then the same tests in the same order).
 inline void searchListed(const std::vector<TargetSet>& sets, const std::vector<Segment>& segments, const std::vector<const double*>& sums,
-                         const MassLadderAlgorithm::PreparedWindow* windows, const std::uint32_t* begin, const std::uint32_t* end, std::size_t chunks,
-                         double precursor_mass, double precursor_tol_ppm, double h2o, double isotope_mass, int min_k, std::size_t top_n, Result& result,
-                         const MassLadderAlgorithm::WindowOwnership* owners)
+                         const std::uint32_t* segment_base, const std::uint16_t* starts, const std::uint32_t* begin, const std::uint32_t* end,
+                         const std::uint32_t* chunk_first, std::size_t chunks, double precursor_mass, double precursor_tol_ppm, double h2o,
+                         double isotope_mass, int min_k, int min_length, std::size_t top_n, Result& result, const MassLadderAlgorithm::WindowOwnership* owners)
 {
   result.hypotheses = 0;
   result.top.clear();
@@ -344,13 +345,32 @@ inline void searchListed(const std::vector<TargetSet>& sets, const std::vector<S
   std::vector<int> counts(sets.size(), 0);
   for (std::size_t c = 0; c < chunks; c++)
   {
-    for (std::uint32_t t = begin[c]; t < end[c]; t++)
+    std::size_t s = chunk_first[c];
+    std::uint32_t position = segment_base[s];
+    for (std::uint32_t u = begin[c]; u < end[c];)
     {
-      const auto& seg = segments[windows[t].segment];
+      const std::uint16_t d = starts[u++];
+      if (d == 0xFFFF)
+      {
+        position = (std::uint32_t)starts[u] | ((std::uint32_t)starts[u + 1] << 16);
+        u += 2;
+      }
+      else position += d;
+      while (segment_base[s + 1] <= position) s++;
+      const auto& seg = segments[s];
       const double* S = sums[seg.protein];
-      const std::size_t i = (std::size_t)seg.a + windows[t].start, j = i + windows[t].length;
-      const double mass = S[j] - S[i];
-      scoreWindow(sets, S, seg.protein, i, j, mass, isotopeOf(mass, q, h2o, isotope_mass), min_k, top_n, counts, result, owners);
+      const std::size_t i = (std::size_t)seg.a + (position - segment_base[s]);
+      const double si = S[i];
+      const std::size_t jp = (std::size_t)(std::partition_point(S + i + 1, S + seg.b + 1, [&](double sj) { return sj - si < q.low; }) - S);
+      for (std::size_t j = jp; j <= seg.b && S[j] - si <= q.high; j++)
+      {
+        if ((int)(j - i) < min_length) continue; // not a hypothesis either
+        if (j < seg.j_min) continue;
+        const double mass = S[j] - si;
+        const int isotope = isotopeOf(mass, q, h2o, isotope_mass);
+        if (isotope == 2) continue;
+        scoreWindow(sets, S, seg.protein, i, j, mass, isotope, min_k, top_n, counts, result, owners);
+      }
     }
   }
 }
@@ -360,26 +380,28 @@ inline void searchListed(const std::vector<TargetSet>& sets, const std::vector<S
 // isotope intervals, widened far beyond rounding errors) pre-filters the windows of at least min_length residues up to the largest such
 // sum; a window in a set bin is tested against the queries whose [low, high] can hold its mass, exactly as search tests it. Pass 1 counts
 // the hypotheses of each query per chunk of consecutive segments, pass 2 writes them grouped by query, each group in the order of search
-// (segment, i, j) over the chunks. Only the ascending queries whose hypotheses fit max_windows in all are listed (prepared).
-// Returns false (nothing listed) if the windows are not listed: a segment of 65536 residues or more, residue sums beyond 10 MDa or
-// isotope intervals of more than 2^25 bins in all (precursor tolerances far beyond those of mass spectrometers).
+// (segment, i, j) over the chunks. Not the windows are written but their starts (i, by segment_base: the residues of the segments before),
+// once per start, as 16-bit units: the difference to the previous start of the query in the chunk (the first: to the chunk's first
+// residue), or 0xFFFF and the start in two units (searchListed finds the windows of a start again). Only the ascending queries whose
+// starts fit max_units in all are listed (prepared); chunk_first: the first segment of each chunk.
+// Returns false (nothing listed) if the windows are not listed: 2^32 residues or more in all, residue sums beyond 10 MDa or isotope
+// intervals of more than 2^25 bins in all (precursor tolerances far beyond those of mass spectrometers).
 inline bool findWindows(const std::vector<Segment>& segments, const std::vector<const double*>& sums, const std::vector<Query>& queries,
-                        double h2o, double isotope_mass, int min_length, std::size_t max_windows, std::size_t& prepared, std::size_t& chunks_out,
-                        std::unique_ptr<MassLadderAlgorithm::PreparedWindow[]>& windows, std::size_t& window_count, std::vector<std::uint32_t>& offsets)
+                        double h2o, double isotope_mass, int min_length, std::size_t max_units, std::size_t& prepared, std::size_t& chunks_out,
+                        const std::vector<std::uint32_t>& segment_base, std::unique_ptr<std::uint16_t[]>& starts, std::size_t& unit_count,
+                        std::vector<std::uint32_t>& offsets, std::vector<std::uint32_t>& chunk_first)
 {
   prepared = 0;
   chunks_out = 0;
-  windows.reset();
-  window_count = 0;
+  starts.reset();
+  unit_count = 0;
   offsets.clear();
+  chunk_first.clear();
   const std::size_t n_queries = queries.size();
   if (n_queries == 0 || segments.empty()) return true;
   if (n_queries >= ((std::size_t)1 << 31)) return false;
-  max_windows = std::min(max_windows, ((std::size_t)1 << 31) - 1);
-  for (const auto& seg : segments)
-  {
-    if (seg.b - seg.a > 65535) return false;
-  }
+  if (segment_base.size() != segments.size() + 1) return false; // 2^32 residues or more
+  max_units = std::min(max_units, ((std::size_t)1 << 31) - 1);
   // the bins of the residue sums that can fit a query: a sum m that passes isotopeOf at v is within tol of mass + v x isotope_mass - h2o
   // up to rounding errors of a few ulps (about 1e-15 x mass), far below pad
   constexpr double bin_inverse = 32.0;
@@ -500,29 +522,40 @@ inline bool findWindows(const std::vector<Segment>& segments, const std::vector<
   }
   if (chunk_start.back() != segments.size()) chunk_start.push_back(segments.size());
   const std::size_t chunks = chunk_start.size() - 1;
-  // pass 1: the hypotheses per chunk and query (counts above max_windows are not needed)
+  // the start of a hypothesis (s, i) by segment_base; the last start of each query in a chunk (none: the chunk's first residue, below)
+  constexpr std::uint32_t none = UINT32_MAX;
+  auto startOf = [&](std::size_t s, std::size_t i) { return segment_base[s] + (std::uint32_t)(i - segments[s].a); };
+  // pass 1: the units per chunk and query (counts above max_units are not needed)
   std::vector<std::uint32_t> table(chunks * n_queries, 0);
 #pragma omp parallel for schedule(dynamic, 1) if (threads > 1)
   for (long c = 0; c < (long)chunks; c++)
   {
     std::uint32_t* count = table.data() + (std::size_t)c * n_queries;
-    enumerate(chunk_start[c], chunk_start[c + 1], [&](bool fits, std::uint32_t n, std::size_t, std::size_t, std::size_t) {
-      count[n] += (std::uint32_t)(fits & (count[n] <= max_windows));
+    std::vector<std::uint32_t> last(n_queries, none);
+    const std::uint32_t base = segment_base[chunk_start[c]];
+    enumerate(chunk_start[c], chunk_start[c + 1], [&](bool fits, std::uint32_t n, std::size_t s, std::size_t i, std::size_t) {
+      if (! fits) return;
+      const std::uint32_t p = startOf(s, i);
+      if (p == last[n]) return; // another window of the same start
+      const std::uint32_t previous = last[n] == none ? base : last[n];
+      last[n] = p;
+      if (count[n] <= max_units) count[n] += p - previous < 0xFFFF ? 1 : 3;
     });
   }
-  // the queries listed: from the lowest mass while their hypotheses fit max_windows
+  // the queries listed: from the lowest mass while their starts fit max_units
   std::size_t total = 0;
   for (; prepared < n_queries; prepared++)
   {
     std::size_t sum = 0;
     for (std::size_t c = 0; c < chunks; c++) sum += table[c * n_queries + prepared];
-    if (total + sum > max_windows) break;
+    if (total + sum > max_units) break;
     total += sum;
   }
   if (prepared == 0) return true;
-  // the windows by chunk, in a chunk by query (so that a chunk writes to its own part only): offsets[n * chunks + c] is the first of
+  // the units by chunk, in a chunk by query (so that a chunk writes to its own part only): offsets[n * chunks + c] is the first of
   // query n in chunk c, offsets[prepared * chunks + c] the end of chunk c
   chunks_out = chunks;
+  chunk_first.assign(chunk_start.begin(), chunk_start.end());
   offsets.assign((prepared + 1) * chunks, 0);
   std::size_t position = 0;
   for (std::size_t c = 0; c < chunks; c++)
@@ -535,16 +568,28 @@ inline bool findWindows(const std::vector<Segment>& segments, const std::vector<
     }
     offsets[prepared * chunks + c] = (std::uint32_t)position;
   }
-  // pass 2: the hypotheses of the listed queries (not value-initialized: every one is written below, by the thread of its chunk)
-  windows = std::make_unique_for_overwrite<MassLadderAlgorithm::PreparedWindow[]>(total);
-  window_count = total;
+  // pass 2: the starts of the listed queries (not value-initialized: every unit is written below, by the thread of its chunk)
+  starts = std::make_unique_for_overwrite<std::uint16_t[]>(total);
+  unit_count = total;
 #pragma omp parallel for schedule(dynamic, 1) if (threads > 1)
   for (long c = 0; c < (long)chunks; c++)
   {
     std::uint32_t* next = table.data() + (std::size_t)c * n_queries;
-    enumerate(chunk_start[c], chunk_start[c + 1], [&](bool fits, std::uint32_t n, std::size_t s, std::size_t i, std::size_t j) {
+    std::vector<std::uint32_t> last(prepared, none);
+    const std::uint32_t base = segment_base[chunk_start[c]];
+    enumerate(chunk_start[c], chunk_start[c + 1], [&](bool fits, std::uint32_t n, std::size_t s, std::size_t i, std::size_t) {
       if (! fits || n >= prepared) return;
-      windows[next[n]++] = {(std::uint32_t)s, (std::uint16_t)(i - segments[s].a), (std::uint16_t)(j - i)};
+      const std::uint32_t p = startOf(s, i);
+      if (p == last[n]) return;
+      const std::uint32_t previous = last[n] == none ? base : last[n];
+      last[n] = p;
+      if (p - previous < 0xFFFF) { starts[next[n]++] = (std::uint16_t)(p - previous); }
+      else
+      {
+        starts[next[n]++] = 0xFFFF;
+        starts[next[n]++] = (std::uint16_t)(p & 0xFFFF);
+        starts[next[n]++] = (std::uint16_t)(p >> 16);
+      }
     });
   }
   return true;
@@ -1038,9 +1083,10 @@ void MassLadderAlgorithm::searchPrecursorLadders(const std::vector<double>& mass
     if (prepared != prepared_masses_.end() && *prepared == precursor_masses[n] && precursor_tol_ppm == prepared_tol_ppm_)
     {
       const Size q = (Size)(prepared - prepared_masses_.begin());
-      precursor_ladder::searchListed(sets, segments_, window_sums_, prepared_windows_.get(), prepared_offsets_.data() + q * prepared_chunks_,
-                                     prepared_offsets_.data() + (q + 1) * prepared_chunks_, prepared_chunks_, precursor_masses[n], precursor_tol_ppm,
-                                     h2o, Constants::C13C12_MASSDIFF_U, precursor_ladder_min_k, top_n, found, owners);
+      precursor_ladder::searchListed(sets, segments_, window_sums_, prepared_segment_base_.data(), prepared_starts_.get(),
+                                     prepared_offsets_.data() + q * prepared_chunks_, prepared_offsets_.data() + (q + 1) * prepared_chunks_,
+                                     prepared_chunk_first_.data(), prepared_chunks_, precursor_masses[n], precursor_tol_ppm,
+                                     h2o, Constants::C13C12_MASSDIFF_U, precursor_ladder_min_k, precursor_ladder_min_length, top_n, found, owners);
     }
     else
     {
@@ -1115,9 +1161,23 @@ void MassLadderAlgorithm::preparePrecursorWindows(const std::vector<double>& pre
   std::vector<precursor_ladder::Query> queries;
   queries.reserve(masses.size());
   for (double m : masses) queries.push_back(precursor_ladder::makeQuery(m, precursor_tol_ppm, h2o, Constants::C13C12_MASSDIFF_U));
+  // the residues of the segments before each (empty, so nothing listed, with 2^32 residues or more)
+  prepared_segment_base_.assign(1, 0);
+  for (const auto& seg : segments_)
+  {
+    const Size next = (Size)prepared_segment_base_.back() + (seg.b - seg.a);
+    if (next >= UINT32_MAX)
+    {
+      prepared_segment_base_.clear();
+      break;
+    }
+    prepared_segment_base_.push_back((std::uint32_t)next);
+  }
+  // up to 2^29 units (1 GiB): the starts of about 4x as many windows as 2^27 windows of 8 bytes listed before
   Size prepared = 0;
   if (! precursor_ladder::findWindows(segments_, window_sums_, queries, h2o, Constants::C13C12_MASSDIFF_U, precursor_ladder_min_length,
-                                      (Size)1 << 27, prepared, prepared_chunks_, prepared_windows_, prepared_window_count_, prepared_offsets_)
+                                      (Size)1 << 29, prepared, prepared_chunks_, prepared_segment_base_, prepared_starts_, prepared_unit_count_,
+                                      prepared_offsets_, prepared_chunk_first_)
       || prepared == 0)
   {
     clearPrecursorWindows();
@@ -1133,9 +1193,11 @@ void MassLadderAlgorithm::clearPrecursorWindows()
   prepared_tol_ppm_ = -1;
   std::vector<double>().swap(prepared_masses_);
   prepared_chunks_ = 0;
-  prepared_windows_.reset();
-  prepared_window_count_ = 0;
+  prepared_starts_.reset();
+  prepared_unit_count_ = 0;
   std::vector<std::uint32_t>().swap(prepared_offsets_);
+  std::vector<std::uint32_t>().swap(prepared_chunk_first_);
+  std::vector<std::uint32_t>().swap(prepared_segment_base_);
 }
 
 // Sliding ladders: per protein, every start i of a prefix ladder (masses = S(x) - S(i) on prefix ion types) and every end j of a suffix

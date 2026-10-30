@@ -13,6 +13,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/MassLadderAlgorithm.h>
 #include <OpenMS/CHEMISTRY/Residue.h>
 #include <OpenMS/CHEMISTRY/ResidueDB.h>
+#include <OpenMS/CONCEPT/Constants.h>
 #include <random>
 ///////////////////////////
 
@@ -104,6 +105,90 @@ START_SECTION(([EXTRA] searchSlidingLadders for many spectra equals the search o
     for (const auto& cand : alone) TEST_EQUAL(excluded[s].count(cand.protein), 0)
   }
   TEST_EQUAL(with_candidates > 30, true)
+}
+END_SECTION
+
+START_SECTION(([EXTRA] searchPrecursorLadders with prepared window starts equals the sweep of each precursor mass))
+{
+  // a first protein of 66000 single standard residues between non-standard ones (66000 residues of segments, no window), then 300
+  // proteins: the first start of a precursor mass in the first chunk lies more than 65535 residues after the chunk's first residue (the
+  // long form of a start). The protein is little work, so the first chunk (up to 128 of about equal work) does not end inside it.
+  std::mt19937 rng(11);
+  const std::string aa = "ACDEFGHIKLMNPQRSTVWY";
+  std::vector<std::string> proteins;
+  {
+    std::string gap;
+    for (int k = 0; k < 66000; ++k) gap += "AX";
+    proteins.push_back(gap);
+  }
+  for (int p = 1; p < 301; ++p)
+  {
+    std::string seq = "M";
+    const int length = 100 + (int)(rng() % 300);
+    for (int i = 1; i < length; ++i) seq += aa[rng() % aa.size()];
+    if (p % 9 == 4) seq[length / 3] = 'X';
+    proteins.push_back(seq);
+  }
+  MassLadderAlgorithm ladders;
+  ladders.buildIndex(proteins, {"b", "y"}, true, true);
+
+  // 300 precursor masses (at least 256, so that they are prepared): windows of 15-60 residues of the proteins, some one isotope off
+  const auto* rdb = ResidueDB::getInstance();
+  const double h2o = Residue::getInternalToFull().getMonoWeight(), b_offset = Residue::getInternalToBIon().getMonoWeight(),
+               y_offset = Residue::getInternalToYIon().getMonoWeight();
+  auto internal = [&](const std::string& seq, Size from, Size to) {
+    double sum = 0;
+    for (Size x = from; x < to; ++x) sum += rdb->getResidue(seq[x])->getMonoWeight(Residue::Internal);
+    return sum;
+  };
+  std::vector<double> precursor_masses;
+  while (precursor_masses.size() < 300)
+  {
+    const Size p = 1 + rng() % (proteins.size() - 1);
+    const auto& seq = proteins[p];
+    const Size length = 15 + rng() % 46, from = rng() % (seq.size() - length);
+    if (seq.substr(from, length).find('X') != std::string::npos) continue;
+    precursor_masses.push_back(internal(seq, from, from + length) + h2o + (rng() % 5 == 0 ? Constants::C13C12_MASSDIFF_U : 0.0));
+  }
+  // a spectrum: b and y masses of a few of those windows, and unrelated masses
+  std::vector<double> masses;
+  for (int k = 0; k < 6; ++k)
+  {
+    const auto& seq = proteins[1 + k * 7];
+    for (Size x = 3; x < 25; x += 2) masses.push_back(internal(seq, 0, x) + b_offset);
+    for (Size x = 4; x < 25; x += 3) masses.push_back(internal(seq, seq.size() - x, seq.size()) + y_offset);
+  }
+  for (int k = 0; k < 40; ++k) masses.push_back(300.0 + (double)(rng() % 900000) / 100.0);
+  std::sort(masses.begin(), masses.end());
+
+  std::vector<MassLadderAlgorithm::PrecursorLadderResult> prepared, swept;
+  ladders.preparePrecursorWindows(precursor_masses, 10.0);
+  ladders.searchPrecursorLadders(masses, precursor_masses, 10.0, 10.0, 5, prepared);
+  ladders.clearPrecursorWindows();
+  ladders.searchPrecursorLadders(masses, precursor_masses, 10.0, 10.0, 5, swept);
+  TEST_EQUAL(prepared.size(), swept.size())
+  Size windows = 0, candidates = 0;
+  for (Size n = 0; n < swept.size() && n < prepared.size(); ++n)
+  {
+    TEST_EQUAL(prepared[n].windows, swept[n].windows)
+    TEST_EQUAL(prepared[n].candidates.size(), swept[n].candidates.size())
+    windows += swept[n].windows;
+    candidates += swept[n].candidates.size();
+    for (Size c = 0; c < swept[n].candidates.size() && c < prepared[n].candidates.size(); ++c)
+    {
+      const auto &a = prepared[n].candidates[c], &b = swept[n].candidates[c];
+      TEST_EQUAL(a.protein, b.protein)
+      TEST_EQUAL(a.rank, b.rank)
+      TEST_EQUAL(a.score == b.score, true) // the same windows in the same order, so the same double
+      TEST_EQUAL(a.window_start, b.window_start)
+      TEST_EQUAL(a.window_end, b.window_end)
+      TEST_EQUAL(a.isotope, b.isotope)
+      TEST_EQUAL(a.ladders.size(), b.ladders.size())
+      for (Size l = 0; l < a.ladders.size() && l < b.ladders.size(); ++l) TEST_EQUAL(a.ladders[l].mass_indices == b.ladders[l].mass_indices, true)
+    }
+  }
+  TEST_EQUAL(windows >= 300, true) // every precursor mass has at least the window it was taken from
+  TEST_EQUAL(candidates > 0, true)
 }
 END_SECTION
 
