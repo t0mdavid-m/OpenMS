@@ -420,9 +420,9 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   defaults_.setValue("search_cascade", "true",
                      "Search in two stages. true: stage 1 searches every spectrum with sequence tags and terminal and precursor ladders (those "
                      "that are on), which compete per spectrum as in a single stage; stage 2 searches with gapped tags only the spectra stage 1 did "
-                     "not identify (no target PrSM whose proteoform passes pro_fdr, 1% without a filter). The PrSM q-values are computed per stage "
-                     "(and FDR class), so the PrSMs of stage 2 compete only with the decoys of stage 2. Gapped tags then rescue spectra the other "
-                     "sources leave unidentified instead of taking the place of their "
+                     "not identify (no PrSM, target or decoy alike, whose proteoform passes pro_fdr, 1% without a filter). The PrSM q-values are "
+                     "computed per stage (and FDR class), so the PrSMs of stage 2 compete only with the decoys of stage 2. Gapped tags then rescue spectra "
+                     "the other sources leave unidentified instead of taking the place of their "
                      "candidates (Eclip_1480: 121 instead of 51 rescued spectra at the same number of proteoforms; D60 human Caco-2: 529 instead of "
                      "526 proteoforms). false: one stage searches every spectrum with every source. A single stage is also used with gapped_tags off, "
                      "with native, with protein_level_only and without decoys in the database; the chimeric rounds search with all sources.");
@@ -2286,7 +2286,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   };
 
   // Search cascade (search_cascade): stage 1 searches every spectrum with sequence tags and the ladders, stage 2 with gapped tags only the
-  // spectra stage 1 did not identify (a target PrSM whose proteoform passes rep_q, see identifiedSoFar below). Without the cascade, one
+  // spectra stage 1 did not identify (a PrSM, target or decoy, whose proteoform passes rep_q, see identifiedSoFar below). Without the cascade, one
   // stage (0) searches every spectrum with every source. The stages are decided by the target-decoy FDR, so the cascade needs decoys.
   const bool cascade = search_cascade_ && gapped_mode_ != "off" && ! native_rule && ! protein_level_only_ && decoy_factor_ > 0;
   std::vector<int> stages {0};
@@ -3342,12 +3342,15 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       }
     };
 
-    // The spectra identified after a stage of the search cascade: whose best PrSM (by score, of any stage so far) is a target whose
-    // proteoform q-value is at most rep_q, the level at which proteoforms are reported. A passing target below a better decoy or a better
-    // failing target does not identify its spectrum (survey benchmark: 187 gapped-tag identifications had a decoy best PrSM in stage 1 and
-    // were never searched with gapped tags). The q-values are those the FDR below gives the PrSMs so far (per class and stage, the
-    // proteoforms over all of them), computed on a copy; the one proteoform per MS1 feature rule is applied at the end only. An identified
-    // spectrum is searched by no later stage.
+    // The spectra identified after a stage of the search cascade: whose best PrSM (by score, of any stage so far), target or decoy alike,
+    // has a proteoform q-value of at most rep_q, the level at which proteoforms are reported. Label-blind, so that a chance decoy PrSM
+    // meets the same competition as a chance target one: when only targets identified their spectra, a spectrum won by a passing decoy was
+    // searched again by the next stage while one won by a passing target was not, and chance decoys won their spectra less often than chance
+    // targets (38 runs of ten datasets, shuffled entrapment, measured on dd8eb5de69: at the top of the protein ranking 20 entrapment proteins
+    // against 1 decoy protein in three runs). A passing PrSM below a better failing one does not identify its spectrum (the best PrSM
+    // guard; a spectrum can hold several PrSMs with decoy precursors of both blind groups). The q-values are those the FDR below gives the
+    // PrSMs so far (per class and stage, the proteoforms over all of them), computed on a copy; the one proteoform per MS1 feature rule is
+    // applied at the end only. An identified spectrum is searched by no later stage.
     std::map<int, int> spectrum_of_scan_number;
     for (int d = 0; d < (int)dspecs.size(); d++) spectrum_of_scan_number[dspecs[d].getScanNumber()] = d;
     auto identifiedSoFar = [&]() {
@@ -3364,7 +3367,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         const auto it = spectrum_of_scan_number.find((int)hit.getMetaValue(mi_scan));
         // the spectrum's best PrSM only (proteoform_hits_ is in byScore order here)
         if (it == spectrum_of_scan_number.end() || ! seen.insert(it->second).second) continue;
-        if (decoys[i] || hit_class[i] < 0 || (double)hit.getMetaValue("proqvalue", 1.0) > rep_q) continue;
+        if (hit_class[i] < 0 || (double)hit.getMetaValue("proqvalue", 1.0) > rep_q) continue;
         identified.insert(it->second);
       }
       proteoform_hits_.swap(kept);
@@ -3399,7 +3402,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       }
       OPENMS_LOG_INFO << "Search cascade stage " << stage << " (" << (stage == 1 ? "sequence tags and ladders" : "gapped tags") << "): " << stage_spectra.size()
                       << " spectra searched, " << proteoform_hits_.size() - from << " PrSMs, " << stage_spectra.size() - rest.size()
-                      << " of the spectra identified (a target PrSM at proteoform q-value <= " << rep_q << "); the next stage searches the other "
+                      << " of the spectra identified (a PrSM, target or decoy, at proteoform q-value <= " << rep_q << "); the next stage searches the other "
                       << rest.size() << std::endl;
       stage_spectra.swap(rest);
     }
