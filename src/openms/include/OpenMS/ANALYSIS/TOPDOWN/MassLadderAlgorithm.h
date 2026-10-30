@@ -197,6 +197,12 @@ public:
     return segments_.size();
   }
 
+  /// the number of precursor masses whose windows preparePrecursorWindows listed (0: all are swept)
+  Size getPreparedMassCount() const
+  {
+    return prepared_masses_.size();
+  }
+
 private:
   /// a residue sum from a terminus and its protein, in the mass-sorted terminal ladder index
   struct LadderEntry

@@ -15,6 +15,9 @@
 #include <OpenMS/CHEMISTRY/ResidueDB.h>
 #include <OpenMS/CONCEPT/Constants.h>
 #include <random>
+#ifdef _OPENMP
+  #include <omp.h>
+#endif
 ///////////////////////////
 
 using namespace OpenMS;
@@ -112,7 +115,11 @@ START_SECTION(([EXTRA] searchPrecursorLadders with prepared window starts equals
 {
   // a first protein of 66000 single standard residues between non-standard ones (66000 residues of segments, no window), then 300
   // proteins: the first start of a precursor mass in the first chunk lies more than 65535 residues after the chunk's first residue (the
-  // long form of a start). The protein is little work, so the first chunk (up to 128 of about equal work) does not end inside it.
+  // long form of a start). The protein is little work, so the first chunk (of 8 of about equal work, with 4 threads) does not end inside it.
+#ifdef _OPENMP
+  const int threads = omp_get_max_threads();
+  omp_set_num_threads(4);
+#endif
   std::mt19937 rng(11);
   const std::string aa = "ACDEFGHIKLMNPQRSTVWY";
   std::vector<std::string> proteins;
@@ -162,10 +169,18 @@ START_SECTION(([EXTRA] searchPrecursorLadders with prepared window starts equals
   std::sort(masses.begin(), masses.end());
 
   std::vector<MassLadderAlgorithm::PrecursorLadderResult> prepared, swept;
+  std::vector<double> distinct = precursor_masses;
+  std::sort(distinct.begin(), distinct.end());
+  distinct.erase(std::unique(distinct.begin(), distinct.end()), distinct.end());
   ladders.preparePrecursorWindows(precursor_masses, 10.0);
+  TEST_EQUAL(ladders.getPreparedMassCount(), distinct.size()) // every mass is listed, so the search below reads the listed windows
   ladders.searchPrecursorLadders(masses, precursor_masses, 10.0, 10.0, 5, prepared);
   ladders.clearPrecursorWindows();
+  TEST_EQUAL(ladders.getPreparedMassCount(), 0)
   ladders.searchPrecursorLadders(masses, precursor_masses, 10.0, 10.0, 5, swept);
+#ifdef _OPENMP
+  omp_set_num_threads(threads);
+#endif
   TEST_EQUAL(prepared.size(), swept.size())
   Size windows = 0, candidates = 0;
   for (Size n = 0; n < swept.size() && n < prepared.size(); ++n)
@@ -184,7 +199,13 @@ START_SECTION(([EXTRA] searchPrecursorLadders with prepared window starts equals
       TEST_EQUAL(a.window_end, b.window_end)
       TEST_EQUAL(a.isotope, b.isotope)
       TEST_EQUAL(a.ladders.size(), b.ladders.size())
-      for (Size l = 0; l < a.ladders.size() && l < b.ladders.size(); ++l) TEST_EQUAL(a.ladders[l].mass_indices == b.ladders[l].mass_indices, true)
+      for (Size l = 0; l < a.ladders.size() && l < b.ladders.size(); ++l)
+      {
+        TEST_EQUAL(a.ladders[l].prefix, b.ladders[l].prefix)
+        TEST_EQUAL(a.ladders[l].start, b.ladders[l].start)
+        TEST_EQUAL(a.ladders[l].end, b.ladders[l].end)
+        TEST_EQUAL(a.ladders[l].mass_indices == b.ladders[l].mass_indices, true)
+      }
     }
   }
   TEST_EQUAL(windows >= 300, true) // every precursor mass has at least the window it was taken from

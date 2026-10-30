@@ -379,13 +379,14 @@ inline void searchListed(const std::vector<TargetSet>& sets, const std::vector<S
 // pass over the database instead of one sweep per mass. A bitset of 1/32 Da bins of the residue sums that can fit a query (its three
 // isotope intervals, widened far beyond rounding errors) pre-filters the windows of at least min_length residues up to the largest such
 // sum; a window in a set bin is tested against the queries whose [low, high] can hold its mass, exactly as search tests it. Pass 1 counts
-// the hypotheses of each query per chunk of consecutive segments, pass 2 writes them grouped by query, each group in the order of search
-// (segment, i, j) over the chunks. Not the windows are written but their starts (i, by segment_base: the residues of the segments before),
+// the units of the starts of each query per chunk of consecutive segments, pass 2 writes them grouped by query, each group in the order of
+// search (segment, i, j) over the chunks. Not the windows are written but their starts (i, by segment_base: the residues of the segments before),
 // once per start, as 16-bit units: the difference to the previous start of the query in the chunk (the first: to the chunk's first
 // residue), or 0xFFFF and the start in two units (searchListed finds the windows of a start again). Only the ascending queries whose
 // starts fit max_units in all are listed (prepared); chunk_first: the first segment of each chunk.
-// Returns false (nothing listed) if the windows are not listed: 2^32 residues or more in all, residue sums beyond 10 MDa or isotope
-// intervals of more than 2^25 bins in all (precursor tolerances far beyond those of mass spectrometers).
+// Returns false (nothing listed) if the windows are not listed: no segment_base (2^32 residues or more in all, or sums that do not increase
+// in a segment), residue sums beyond 10 MDa or isotope intervals of more than 2^25 bins in all (precursor tolerances far beyond those of
+// mass spectrometers).
 inline bool findWindows(const std::vector<Segment>& segments, const std::vector<const double*>& sums, const std::vector<Query>& queries,
                         double h2o, double isotope_mass, int min_length, std::size_t max_units, std::size_t& prepared, std::size_t& chunks_out,
                         const std::vector<std::uint32_t>& segment_base, std::unique_ptr<std::uint16_t[]>& starts, std::size_t& unit_count,
@@ -400,7 +401,7 @@ inline bool findWindows(const std::vector<Segment>& segments, const std::vector<
   const std::size_t n_queries = queries.size();
   if (n_queries == 0 || segments.empty()) return true;
   if (n_queries >= ((std::size_t)1 << 31)) return false;
-  if (segment_base.size() != segments.size() + 1) return false; // 2^32 residues or more
+  if (segment_base.size() != segments.size() + 1) return false; // no segment_base
   max_units = std::min(max_units, ((std::size_t)1 << 31) - 1);
   // the bins of the residue sums that can fit a query: a sum m that passes isotopeOf at v is within tol of mass + v x isotope_mass - h2o
   // up to rounding errors of a few ulps (about 1e-15 x mass), far below pad
@@ -1144,7 +1145,8 @@ void MassLadderAlgorithm::searchPrecursorLadders(const std::vector<double>& mass
 
 // Precursor ladders of many spectra: the windows of all their precursor masses in one pass over the database (precursor_ladder::findWindows)
 // instead of one sweep per mass, which costs more than the rest of the search. Masses up to 1 MDa at precursor tolerances up to 1000 ppm;
-// at most 2^27 windows (1 GB) are listed, those of the lowest masses first. The other masses are swept.
+// the window starts of the lowest masses are listed, up to 2^29 units (1 GiB). The other masses are swept, and so are all if the residue
+// sums of a segment do not increase (searchListed finds the first window of a start by bisection, the sweep by moving on).
 void MassLadderAlgorithm::preparePrecursorWindows(const std::vector<double>& precursor_masses, double precursor_tol_ppm)
 {
   clearPrecursorWindows();
@@ -1161,12 +1163,15 @@ void MassLadderAlgorithm::preparePrecursorWindows(const std::vector<double>& pre
   std::vector<precursor_ladder::Query> queries;
   queries.reserve(masses.size());
   for (double m : masses) queries.push_back(precursor_ladder::makeQuery(m, precursor_tol_ppm, h2o, Constants::C13C12_MASSDIFF_U));
-  // the residues of the segments before each (empty, so nothing listed, with 2^32 residues or more)
+  // the residues of the segments before each (empty, so nothing listed, with 2^32 residues or more or sums that do not increase)
   prepared_segment_base_.assign(1, 0);
   for (const auto& seg : segments_)
   {
     const Size next = (Size)prepared_segment_base_.back() + (seg.b - seg.a);
-    if (next >= UINT32_MAX)
+    const double* S = window_sums_[seg.protein];
+    bool increasing = true;
+    for (Size i = seg.a; i < seg.b && increasing; i++) increasing = S[i + 1] > S[i];
+    if (next >= UINT32_MAX || ! increasing)
     {
       prepared_segment_base_.clear();
       break;
