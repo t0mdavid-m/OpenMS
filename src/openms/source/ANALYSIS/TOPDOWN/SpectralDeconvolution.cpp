@@ -403,7 +403,7 @@ namespace OpenMS
   Size SpectralDeconvolution::getBinNumber_(const double value, const double min_value, const double bin_mul_factor)
   {
     if (value < min_value) { return 0; }
-    return (Size)round((value - min_value) * bin_mul_factor);
+    return (Size)FLASHHelperClasses::roundHalfAway((value - min_value) * bin_mul_factor);
   }
 
   // From log mz to mz bins.
@@ -1133,7 +1133,7 @@ namespace OpenMS
         int apex_index = (int)activeAveragine_().getApexIndex(t_mass);
         for (auto& p : bin_peaks)
         {
-          p.isotopeIndex = (int)round((p.getUnchargedMass() - t_mass) / iso_da_distance_);
+          p.isotopeIndex = (int)FLASHHelperClasses::roundHalfAway((p.getUnchargedMass() - t_mass) / iso_da_distance_);
 
           if (std::abs(t_mass - p.getUnchargedMass() + iso_da_distance_ * p.isotopeIndex) > iso_tolerance) { continue; }
           p.isotopeIndex += apex_index;

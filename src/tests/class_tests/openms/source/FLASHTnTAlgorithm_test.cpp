@@ -11,8 +11,10 @@
 
 ///////////////////////////
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHHelperClasses.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTAlgorithm.h>
 #include <OpenMS/METADATA/ProteinHit.h>
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <set>
@@ -24,7 +26,8 @@ using namespace OpenMS;
 
 // The label-blind rules of FLASHTnT that can be checked without a search: the entry order that breaks candidate-cut ties, the protein
 // evidence rule (option protein_evidence) and the blind modification count it reads, the grouping of small proteoform classes (option
-// merge_small_classes), the window masses of DeconvMassInfo (option precursor_reselect), and the defaults of the options
+// merge_small_classes), the window masses of DeconvMassInfo (option precursor_reselect), the rounding of the hot loops
+// (FLASHHelperClasses::roundHalfAway), and the defaults of the options
 START_TEST(FLASHTnTAlgorithm, "$Id$")
 
 START_SECTION((static bool proteinEvidenceSupported(Size proteoforms, bool strong)))
@@ -122,6 +125,23 @@ START_SECTION((static String DeconvolvedSpectrum::formatWindowMasses(const std::
   TEST_REAL_SIMILAR(std::get<1>(back[1]), 99.0)
   TEST_EQUAL(DeconvolvedSpectrum::parseWindowMasses("").size(), 0)
   TEST_EQUAL(DeconvolvedSpectrum::parseWindowMasses("garbage,1:2").size(), 1)
+}
+END_SECTION
+
+START_SECTION((static double FLASHHelperClasses::roundHalfAway(double x)))
+{
+  // std::round without the libm call: the same value for halfway cases, negative values, the doubles next to a half, values at and
+  // beyond 2^52 (integers), beyond 2^63 (converted to Size at some call sites) and a sweep of quarter values
+  std::vector<double> xs = {0.0, -0.0, 0.5, -0.5, 1.5, -1.5, 2.5, -2.5, 0.49999999999999994, -0.49999999999999994, std::nextafter(0.5, 1.0),
+                            std::nextafter(2.5, 0.0), 1e-300, 4503599627370495.5, -4503599627370495.5, 4503599627370496.0, 9007199254740993.0,
+                            9.3e18, 1.7e19, 1e300, -1e300};
+  for (int i = -2000; i <= 2000; i++) xs.push_back(i * 0.25 + i * 1e-9);
+  int differ = 0;
+  for (double x : xs) differ += ! (FLASHHelperClasses::roundHalfAway(x) == std::round(x));
+  TEST_EQUAL(differ, 0)
+  TEST_EQUAL((Size)FLASHHelperClasses::roundHalfAway(1.7e19), (Size)std::round(1.7e19))
+  TEST_EQUAL((int)FLASHHelperClasses::roundHalfAway(-2.5), -3)
+  TEST_EQUAL((int)FLASHHelperClasses::roundHalfAway(2.4999999999999996), 2)
 }
 END_SECTION
 
