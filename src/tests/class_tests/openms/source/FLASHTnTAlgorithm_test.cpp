@@ -138,6 +138,12 @@ START_SECTION((FLASHTnTAlgorithm()))
   TEST_STRING_EQUAL(p.getValue("merge_small_classes").toString(), "kind")
   TEST_EQUAL(p.getValidStrings("merge_small_classes").size(), 2)
   TEST_STRING_EQUAL(p.getValue("precursor_reselect").toString(), "true")
+  // FLASHTnT's extender parameters differ from the extender's own defaults
+  TEST_STRING_EQUAL(p.getValue("ex:skip_precursor_inference").toString(), "corroborated")
+  TEST_EQUAL(p.getValidStrings("ex:skip_precursor_inference").size(), 3)
+  TEST_STRING_EQUAL(p.getValue("ex:ladder_end_penalty").toString(), "false")
+  TEST_EQUAL(p.getValidStrings("ex:ladder_end_penalty").size(), 2)
+  TEST_EQUAL(p.hasTag("ex:ladder_end_penalty", "advanced"), true)
 }
 END_SECTION
 
