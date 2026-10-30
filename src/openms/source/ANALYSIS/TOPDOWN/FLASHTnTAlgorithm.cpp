@@ -1542,14 +1542,36 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
               continue;
             }
             double nmass = h.query_pos <= 0 ? .0 : prefix[h.query_pos];
+            if (fixed != nullptr) nmass += fixed_n;
+            hits.push_back({h.needle_index, h.query_pos, true, nmass, fixed_c, (Size)i}); // the C-terminal residues are summed below
+          }
+        }
+      }
+      // The C-terminal flanking masses of the summed hits: the residues after the tag, summed from it to the C-terminus (as before), then
+      // the fixed masses after it. In chunks of hits rather than per protein: on a protein of tens of thousands of residues, one thread
+      // summing them for all its hits was the tail of the block.
+      {
+        constexpr Size chunk = 256;
+        std::vector<std::pair<Size, Size>> work; // (protein of the block, first hit)
+        for (Size i = 0; i < block_end - block_start; i++)
+        {
+          for (Size first = 0; first < block_hits[i].size(); first += chunk) work.emplace_back(i, first);
+        }
+#pragma omp parallel for schedule(dynamic, 1)
+        for (SignedSize w = 0; w < (SignedSize)work.size(); w++)
+        {
+          const Size i = work[w].first, protein = block_start + i;
+          auto& hits = block_hits[i];
+          const std::string& pseq = protein_seqs[protein];
+          const bool with_fixed = entry_fixed != nullptr && ! (*entry_fixed)[protein].empty();
+          for (Size k = work[w].second; k < std::min(hits.size(), work[w].second + chunk); k++)
+          {
+            auto& h = hits[k];
+            if (! h.summed) continue;
             double cmass = .0;
-            for (Size k = end; k < n; k++) cmass += aa_internal_mass[(unsigned char)pseq[k]];
-            if (fixed != nullptr)
-            {
-              nmass += fixed_n;
-              cmass += fixed_c;
-            }
-            hits.push_back({h.needle_index, h.query_pos, true, nmass, cmass, (Size)i});
+            for (Size r = (Size)h.query_pos + seqs[h.needle_index].length(); r < pseq.size(); r++) cmass += aa_internal_mass[(unsigned char)pseq[r]];
+            if (with_fixed) cmass += h.cmass; // the fixed masses after the tag
+            h.cmass = cmass;
           }
         }
       }
