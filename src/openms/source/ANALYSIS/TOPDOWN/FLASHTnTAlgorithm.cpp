@@ -28,6 +28,7 @@
 #include <memory>
 #include <numeric>
 #include <functional>
+#include <queue>
 #include <unordered_map>
 #include <unordered_set>
 #ifdef _OPENMP
@@ -2071,10 +2072,9 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     // by_entry: per candidate, the scores of both sides summed, and the match counts of both sides' best shifts
     std::vector<double> side_score_sums(by_entry ? candidate_count : 0, 0.0);
     std::vector<std::pair<int, int>> side_counts(by_entry ? candidate_count : 0, {0, 0});
-    // a loop that is already parallel over spectra runs this serially
-#pragma omp parallel for schedule(dynamic) if (! omp_in_parallel())
-    for (int i = 0; i < (int)candidate_count; i++)
-    {
+    // the score of candidate i: a side that cannot score above score_floor is not scored (FLASHTaggerAlgorithm::scoreShifts), so that the
+    // candidate's score is then below score_floor or is that of its other side
+    auto scoreCandidate = [&](int i, double score_floor) {
       const Size e = (Size)i < seq_count ? seq_candidates[i].protein : hit_shifts[i - seq_count].fasta_index;
       const double plain_mass = with_fixed ? pro_plain_mass[e] : 0.0;
       int n_count = 0, c_count = 0;
@@ -2085,17 +2085,17 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       {
         const auto& c = seq_candidates[i];
         n_score = FLASHTaggerAlgorithm::scoreShifts(score_masses, pro_prefix[c.protein], pro_prefix_index[c.protein], shift_values.data() + c.n_first,
-                                                    flank_values.data() + c.n_first, c.n_count, protein_tol, plain_mass, n_best);
+                                                    flank_values.data() + c.n_first, c.n_count, protein_tol, plain_mass, n_best, score_floor);
         c_score = FLASHTaggerAlgorithm::scoreShifts(score_masses, pro_suffix[c.protein], pro_suffix_index[c.protein], shift_values.data() + c.c_first,
-                                                    flank_values.data() + c.c_first, c.c_count, protein_tol, plain_mass, c_best);
+                                                    flank_values.data() + c.c_first, c.c_count, protein_tol, plain_mass, c_best, score_floor);
       }
       else
       {
         const auto& sh = hit_shifts[i - seq_count];
         n_score = FLASHTaggerAlgorithm::scoreShifts(score_masses, pro_prefix[sh.fasta_index], pro_prefix_index[sh.fasta_index], sh.n_shifts.data(),
-                                                    sh.n_flanks.data(), sh.n_shifts.size(), protein_tol, plain_mass, n_best);
+                                                    sh.n_flanks.data(), sh.n_shifts.size(), protein_tol, plain_mass, n_best, score_floor);
         c_score = FLASHTaggerAlgorithm::scoreShifts(score_masses, pro_suffix[sh.fasta_index], pro_suffix_index[sh.fasta_index], sh.c_shifts.data(),
-                                                    sh.c_flanks.data(), sh.c_shifts.size(), protein_tol, plain_mass, c_best);
+                                                    sh.c_flanks.data(), sh.c_shifts.size(), protein_tol, plain_mass, c_best, score_floor);
       }
       scores[i] = std::max(n_score, c_score);
       if (by_entry)
@@ -2103,6 +2103,56 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         side_score_sums[i] = n_score + c_score;
         side_counts[i] = {n_count, c_count};
       }
+    };
+    // Of more than learned_pool candidates (one entry per protein, without the native cut) only the learned_pool best by score and by
+    // matched tags are ranked further (the cut below, which keeps max_protein_hits_ of them). Those by tags (matched tags at least the
+    // learned_pool-th most) are scored first, then the others with the learned_pool-th best score so far as floor: one that cannot reach
+    // it scores below the learned_pool best, so the ranks of the others, both pools and the cut are those of all scored. The floor
+    // rises as the candidates are scored, so this runs where the loop over spectra is parallel (one candidate after the other). It relies
+    // on: one candidate per protein without by_entry (a gapped-tag candidate is never a protein of the sequence tags), so that the order
+    // of ranked is total and the candidates scored exactly keep their relative order; the same learned_pool here and in both pools; and
+    // a cut that keeps only pool members (more than learned_pool candidates, max_protein_hits_ <= learned_pool, no native cut).
+    constexpr Size learned_pool = 500;
+    auto tagCount = [&](Size c) { return c < seq_count ? (double)seq_candidates[c].tag_count : (double)gapped_tag_counts[c - seq_count]; };
+#ifdef _OPENMP
+    const bool one_by_one = omp_in_parallel();
+#else
+    const bool one_by_one = true;
+#endif
+    if (one_by_one && ! native_rule && ! by_entry && candidate_count > learned_pool && (Size)max_protein_hits_ <= learned_pool)
+    {
+      std::vector<double> tags(candidate_count);
+      for (Size i = 0; i < candidate_count; i++) tags[i] = tagCount(i);
+      std::vector<double> sorted_tags = tags;
+      std::nth_element(sorted_tags.begin(), sorted_tags.begin() + (learned_pool - 1), sorted_tags.end(), std::greater<double>());
+      const double tag_floor = sorted_tags[learned_pool - 1];
+      std::priority_queue<double, std::vector<double>, std::greater<double>> best; // the learned_pool best scores so far
+      auto add = [&](double score) {
+        if (best.size() < learned_pool) best.push(score);
+        else if (score > best.top())
+        {
+          best.pop();
+          best.push(score);
+        }
+      };
+      for (Size i = 0; i < candidate_count; i++)
+      {
+        if (tags[i] < tag_floor) continue;
+        scoreCandidate((int)i, -std::numeric_limits<double>::infinity());
+        add(scores[i]);
+      }
+      for (Size i = 0; i < candidate_count; i++)
+      {
+        if (tags[i] >= tag_floor) continue;
+        scoreCandidate((int)i, best.size() < learned_pool ? -std::numeric_limits<double>::infinity() : best.top());
+        add(scores[i]);
+      }
+    }
+    else
+    {
+      // a loop that is already parallel over spectra runs this serially
+#pragma omp parallel for schedule(dynamic) if (! omp_in_parallel())
+      for (int i = 0; i < (int)candidate_count; i++) scoreCandidate(i, -std::numeric_limits<double>::infinity());
     }
 
     // One entry per protein (a PEFF database: several entries per protein), so that the cuts below and the extension count proteins: the
@@ -2222,7 +2272,6 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       if ((int)ranked_count > max_protein_hits_)
       {
         auto entryOf = [&](Size c) { return c < seq_count ? seq_candidates[c].protein : hit_shifts[c - seq_count].fasta_index; };
-        auto tagCount = [&](Size c) { return c < seq_count ? (double)seq_candidates[c].tag_count : (double)gapped_tag_counts[c - seq_count]; };
         // a side's shifts and tag flanking masses
         auto shiftsOf = [&](Size c, bool n_side, const double*& s, const double*& f, Size& n) {
           if (c < seq_count)
@@ -2242,7 +2291,6 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
             n = sv.size();
           }
         };
-        constexpr Size learned_pool = 500;
         std::vector<char> in_pool(ranked_count, 0);
         std::fill(in_pool.begin(), in_pool.begin() + std::min(ranked_count, learned_pool), 1); // ranked is in score order
         if (ranked_count > learned_pool)
