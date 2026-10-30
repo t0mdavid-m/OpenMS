@@ -90,8 +90,8 @@ constexpr double raw_score_weight = 8.0;
 constexpr int native_path_alternatives = 2;
 constexpr int path_alternative_margin = 19;
 // native: a candidate is characterized when its score (-log10 of the chance probability of its matches) exceeds that of the best decoy
-// candidate of its source in its spectrum by this margin
-constexpr double native_margin = 2.0;
+// candidate of its source in its spectrum by this margin (see the native rule below)
+constexpr double native_margin = 2.5;
 
 // the registry index of a meta value name used below, registered once: a lookup by name takes the registry's critical section (the map is
 // read-only after its construction, so threads share it without a lock)
@@ -440,7 +440,7 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "proteins of each source (sequence tags; sliding ladders, i.e. masses read as residue sums from any start or to any end of a "
                      "protein, instead of terminal ladders; precursor ladders) are characterized when their candidate score "
                      "(-log10 of the chance probability of their matches) exceeds that of the best decoy candidate of the same source in the same "
-                     "spectrum by 2 (at most max_protein_hits per source), and every such candidate's PrSM is reported, also without a "
+                     "spectrum by 2.5 (at most max_protein_hits per source), and every such candidate's PrSM is reported, also without a "
                      "determined mass, one per protein (the better one); without native, each spectrum reports its best PrSM only. Gapped tags "
                      "are not used, with the raw spectra two more paths per candidate protein and extension mode are scored on them (the "
                      "next-ranked within one blind modification's penalty of the best), and at least one residual round of chimeric_rounds is searched (co-isolated "
@@ -1577,7 +1577,10 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   // beforehand. On 25 native and targeted test spectra (OMPA, OMPF, TSX, DLDH and GapA mixtures, DLDH, AQPZ, NISTmAb 1-6, SIGMAmAb,
   // Infliximab, carbonic anhydrase, VAMP2, semiSWEET; 43 expected proteins) against E. coli + the expected proteins, native mode found as
   // many expected proteins as without it (29) and 8 other proteins instead of 27 (6 instead of 8 of them chains of another antibody or
-  // porins next to OMPF); against databases without the expected proteins, it called 1 protein instead of 33.
+  // porins next to OMPF); against databases without the expected proteins, it called 1 protein instead of 33. The margin is 2.5 since the
+  // decoys keep their first two residues (DecoyDatabase): on these spectra with decoy seeds 1-3, null-database calls 1/1/1 -> 0/0/0,
+  // expected proteins 35/33/36 -> 34/33/35 of 43, other proteins 6/7/7 -> 5/5/6, the mAb chains 20/20 unchanged. 2.3, just above the best
+  // null candidate (2.27), also called no null protein (34/33/36 expected), with less room to the null.
   const bool native_rule = native_ && decoy_factor_ > 0;
   if (native_ && ! native_rule)
   {
