@@ -20,6 +20,7 @@
 #include <chrono>
 #include <atomic>
 #include <cmath>
+#include <cstdint>
 #include <exception>
 #include <iterator>
 #include <limits>
@@ -132,6 +133,17 @@ double shiftedCandidateCount(const String& sequence, double mass, double max_shi
     count += (double)(last - first);
   }
   return std::max(1.0, count);
+}
+
+// A fixed pseudo-random order of the database entries for ties (splitmix64 of the index; MassLadderAlgorithm breaks its ties the
+// same way). The database order puts every target before every decoy, so a cut that broke ties by it kept chance candidates of targets
+// and dropped those of decoys.
+inline std::uint64_t scrambledIndex(std::uint64_t x)
+{
+  x += 0x9E3779B97F4A7C15ULL;
+  x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ULL;
+  x = (x ^ (x >> 27)) * 0x94D049BB133111EBULL;
+  return x ^ (x >> 31);
 }
 
 // mass and both termini known (unknown: -1)
@@ -598,6 +610,11 @@ std::set<Size> FLASHTnTAlgorithm::getProteinsPassingFDR_(const ProteoformDatabas
   }
   passing.insert(partners.begin(), partners.end());
   return passing;
+}
+
+std::uint64_t FLASHTnTAlgorithm::entryOrder(std::uint64_t index)
+{
+  return scrambledIndex(index);
 }
 
 Size FLASHTnTAlgorithm::blindModCount_(const ProteinHit& hit)
@@ -1972,12 +1989,13 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       for (const auto& [protein, k] : kept_of) scores[k] = best_of[protein].second;
     }
 
-    // Ranked by score, coverage and description with std::sort. The keys are those the hits had, so every comparison and with it the
-    // order, ties included, is that of sorting the hits (std::sort's moves depend on the comparisons only).
+    // Ranked by score, coverage and a fixed pseudo-random order of the entries (scrambledIndex) with std::sort. Ties in score and
+    // coverage are common (shuffles of a protein have its length and composition), and the description broke them before: a target's
+    // ("sp|...") sorted before a decoy's ("DECOY_..."), so a chance candidate was cut in favour of the targets.
     struct RankedCandidate
     {
       double score, coverage;
-      const String* description;
+      std::uint64_t order;
       Size index;
     };
     std::vector<RankedCandidate> ranked;
@@ -1988,13 +2006,13 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       if (i < seq_count)
       {
         const auto& fe = fasta_entry[seq_candidates[i].protein];
-        ranked.push_back({scores[i], (double)seq_candidates[i].covered_pos / (double)fe.sequence.length(), &fe.description, i});
+        ranked.push_back({scores[i], (double)seq_candidates[i].covered_pos / (double)fe.sequence.length(), scrambledIndex(seq_candidates[i].protein), i});
       }
-      else { ranked.push_back({scores[i], hits[i - seq_count].getCoverage(), &fasta_entry[hit_shifts[i - seq_count].fasta_index].description, i}); }
+      else { ranked.push_back({scores[i], hits[i - seq_count].getCoverage(), scrambledIndex(hit_shifts[i - seq_count].fasta_index), i}); }
     }
     const Size ranked_count = ranked.size();
     std::sort(ranked.begin(), ranked.end(), [](const RankedCandidate& left, const RankedCandidate& right) {
-      return left.score == right.score ? (left.coverage == right.coverage ? (*left.description > *right.description) : (left.coverage > right.coverage))
+      return left.score == right.score ? (left.coverage == right.coverage ? (left.order < right.order) : (left.coverage > right.coverage))
                                        : (left.score > right.score);
     });
 

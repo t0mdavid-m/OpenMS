@@ -17,6 +17,7 @@
 #include <OpenMS/FORMAT/FASTAFile.h>
 #include <OpenMS/METADATA/ProteinHit.h>
 #include <boost/dynamic_bitset.hpp>
+#include <cstdint>
 #include <functional>
 #include <iomanip>
 #include <iostream>
@@ -33,6 +34,8 @@ namespace OpenMS
 class OPENMS_DLLAPI FLASHTnTAlgorithm : public DefaultParamHandler, public ProgressLogger
 {
 public:
+  /// the fixed pseudo-random order of the database entries (splitmix64 of the index) that breaks the ties of the candidate cuts
+  static std::uint64_t entryOrder(std::uint64_t index);
   /// constructor
   FLASHTnTAlgorithm();
 
