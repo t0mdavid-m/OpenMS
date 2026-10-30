@@ -697,15 +697,17 @@ void MassLadderAlgorithm::buildIndex(const std::vector<std::string>& protein_seq
       for (Size j = 1; j < ladder_pre_[k].size(); j++) ladder_pre_index_[pre_first[k] + j - 1] = {ladder_pre_[k][j], (std::uint32_t)k};
       for (Size j = 1; j < ladder_suf_[k].size(); j++) ladder_suf_index_[suf_first[k] + j - 1] = {ladder_suf_[k][j], (std::uint32_t)k};
     }
-    // the two sorts at the same time, each as before
-    auto by_mass = [](const LadderEntry& a, const LadderEntry& b) { return a.mass < b.mass; };
-#pragma omp parallel sections if (! omp_in_parallel())
-    {
-#pragma omp section
-      std::sort(ladder_pre_index_.begin(), ladder_pre_index_.end(), by_mass);
-#pragma omp section
-      std::sort(ladder_suf_index_.begin(), ladder_suf_index_.end(), by_mass);
-    }
+    // by mass, then protein: a total order, so that every sort gives the same index; each sort in parallel (two sorts at the same time
+    // left the other threads idle for seconds). searchTerminalLadders does not read the order of entries of equal mass: it visits the
+    // shifts one after another, so a protein's shifts are first counted in shift order whatever the order of its equal masses.
+    auto by_mass = [](const LadderEntry& a, const LadderEntry& b) { return a.mass != b.mass ? a.mass < b.mass : a.protein < b.protein; };
+#if defined(_OPENMP) && defined(__GLIBCXX__)
+    __gnu_parallel::sort(ladder_pre_index_.begin(), ladder_pre_index_.end(), by_mass);
+    __gnu_parallel::sort(ladder_suf_index_.begin(), ladder_suf_index_.end(), by_mass);
+#else
+    std::sort(ladder_pre_index_.begin(), ladder_pre_index_.end(), by_mass);
+    std::sort(ladder_suf_index_.begin(), ladder_suf_index_.end(), by_mass);
+#endif
 
     const double met = rdb->getResidue('M')->getMonoWeight(Residue::Internal);
     const double acetyl = EmpiricalFormula("C2H2O").getMonoWeight();
