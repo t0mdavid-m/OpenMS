@@ -502,6 +502,15 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "proteoform level only against proteoforms whose mass came from MS1. Controls wrong MS1 precursor masses; PrSMs with masses "
                      "from fragment pairs or without a mass are not affected.");
   defaults_.setValidStrings("decoy_precursor", {"true", "false"});
+  defaults_.setValue("precursor_reselect", "true",
+                     "A spectrum whose PrSM has no proteoform mass although the spectrum has an MS1 precursor mass is searched again with each "
+                     "other target mass of its isolation window (the masses FLASHDeconv registered with the precursor, from its survey scan and the "
+                     "neighbouring ones). The alternative mass whose search gives a best PrSM with a mass a precursor-mass path took from it (of "
+                     "equal ones the more intense mass) takes the spectrum, PrSMs and precursor, when that PrSM scores at least as high as the "
+                     "spectrum's best PrSM less one truncation penalty. Targets and decoys get the same tries. On ten datasets a fifth of the PrSMs "
+                     "passing 1% had no mass, and a quarter of those spectra had a precursor of low quality.");
+  defaults_.setValidStrings("precursor_reselect", {"true", "false"});
+  defaults_.addTag("precursor_reselect", "advanced");
   defaults_.setValue("chimeric_rounds", 0,
                      "Residual search of chimeric spectra: rounds after the first search (0: off). In each round, every spectrum with a PrSM (target or "
                      "decoy alike) loses the deconvolved masses its best PrSM matched (the masses on the path, also those one or two isotope "
@@ -543,6 +552,7 @@ void FLASHTnTAlgorithm::updateMembers_()
   precursor_ladders_ = param_.getValue("precursor_ladders").toString() == "true";
   search_cascade_ = param_.getValue("search_cascade").toString() == "true";
   decoy_precursor_ = param_.getValue("decoy_precursor").toString() == "true";
+  precursor_reselect_ = param_.getValue("precursor_reselect").toString() == "true";
   one_proteoform_per_feature_ = param_.getValue("one_proteoform_per_feature").toString() == "true";
   chimeric_rounds_ = param_.getValue("chimeric_rounds");
   pro_fdr_ = param_.getValue("pro_fdr");
@@ -1320,6 +1330,14 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       }
 
       dspec.setPrecursorPeakGroup(pg);
+    }
+    // the target masses of the isolation window (option precursor_reselect)
+    if (deconv_meta_str.hasSubstring("windowmasses="))
+    {
+      const int w_s = (int)deconv_meta_str.find("windowmasses=") + 13;
+      const int w_e = (int)deconv_meta_str.find(";", w_s);
+      const String w_str = deconv_meta_str.substr(w_s, w_e == (int)String::npos ? String::npos : w_e - w_s);
+      dspec.setPrecursorMassIntensityMap(DeconvolvedSpectrum::parseWindowMasses(w_str));
     }
     for (Size i = 0; i < spec.size(); i++)
     {
@@ -3355,6 +3373,100 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       {
         OPENMS_LOG_INFO << "Terminal-ladder PrSMs: " << tl_duplicates.load() << " dropped as the same proteoform as a determined PrSM of another source"
                         << std::endl;
+      }
+      // Option precursor_reselect. A spectrum whose PrSM has no proteoform mass although the spectrum has an MS1 precursor mass is searched
+      // again with each other target mass of its isolation window (the masses FLASHDeconv registered with the precursor from its survey
+      // scan and the neighbouring ones, getPrecursorMassIntensityMap). The alternative whose search gives a best PrSM with a mass a
+      // precursor-mass path took from it replaces the spectrum's PrSMs and becomes its precursor, when that PrSM scores at least as high
+      // as the spectrum's best PrSM less one truncation penalty (a precursor-mass path pays for its truncations, a terminal result does
+      // not); of equal alternatives the more intense mass. Targets and decoys get the same tries, so the FDR classes stay label-blind. On
+      // ten datasets (38 runs, dd8eb5de69) 21% of the PrSMs passing 1% had no mass although 99% of their spectra had a precursor mass, and
+      // 27% of those precursors had a Qscore below 0.5 (determined: 2%).
+      // It runs before the spectrum's one PrSM is chosen and before the decoy precursors, so that the re-selected PrSM is the one that
+      // competes. Without the raw spectra the extension kept one PrSM per spectrum, and the alternative's best replaces it. With them
+      // (keep_all_candidates) every candidate's PrSM is kept until keepBestPerSpectrum_, which reports a determined PrSM before any other:
+      // a spectrum with a determined PrSM reports a mass and is not re-selected, and a re-selected spectrum holds the alternative's
+      // PrSMs, of which the winner, determined, is reported unless a better determined one of the same search is.
+      if (precursor_reselect_)
+      {
+        const double iso = Constants::C13C12_MASSDIFF_U;
+        std::vector<int> todo;
+        for (int d : spectra)
+        {
+          const auto& own_hits = spec_proteoforms[d];
+          if (dspecs[d].getPrecursorPeakGroup().getMonoMass() <= 0 || own_hits.empty()) continue;
+          if (std::any_of(own_hits.begin(), own_hits.end(), [](const ProteinHit& h) { return isDetermined(h); })) continue;
+          const ProteinHit* best = nullptr;
+          for (const auto& h : own_hits)
+          {
+            if (best == nullptr || h.getScore() > best->getScore()) best = &h;
+          }
+          if ((double)best->getMetaValue("Mass") > 0) continue;
+          const double own = dspecs[d].getPrecursorPeakGroup().getMonoMass();
+          int others = 0;
+          for (const auto& [m, j] : dspecs[d].getPrecursorMassIntensityMap())
+          {
+            if (m > 0 && std::abs(m - own) > 0.01) others++;
+          }
+          if (others > 0) todo.push_back(d);
+        }
+        std::vector<std::vector<ProteinHit>> chosen(dspecs.size());
+        std::vector<double> chosen_mass(dspecs.size(), -1.0);
+        std::atomic<int> tries {0};
+  #pragma omp parallel for schedule(dynamic) if (extend_over_spectra)
+        for (int k = 0; k < (int)todo.size(); k++)
+        {
+          const int d = todo[k];
+          const double own = dspecs[d].getPrecursorPeakGroup().getMonoMass();
+          double best_own = -1e10;
+          for (const auto& h : spec_proteoforms[d]) best_own = std::max(best_own, h.getScore());
+          double best_alt = best_own - FLASHExtenderAlgorithm::truncation_penalty; // the penalty a precursor-mass path pays for a truncation
+          // the window masses by decreasing intensity: of alternatives whose PrSMs score equally, the more intense mass takes the spectrum
+          std::vector<std::pair<double, double>> by_intensity;
+          for (const auto& [m, j] : dspecs[d].getPrecursorMassIntensityMap()) by_intensity.emplace_back(j, m);
+          std::stable_sort(by_intensity.begin(), by_intensity.end(), [](const auto& l, const auto& r) { return l.first > r.first; });
+          for (const auto& [j, m] : by_intensity)
+          {
+            if (m <= 0 || std::abs(m - own) <= 0.01) continue;
+            tries++;
+            DeconvolvedSpectrum alt_spec = dspecs[d];
+            auto pg = alt_spec.getPrecursorPeakGroup();
+            pg.setMonoisotopicMass(m);
+            alt_spec.setPrecursorPeakGroup(pg);
+            std::vector<ProteinHit> out;
+            extendSpectrumInto(d, extender_param_, alt_spec, out, false);
+            // the alternative's best PrSM must have a mass a precursor-mass path took from it (not one from fragment pairs): an alternative
+            // whose best PrSM still has no mass would change the precursor without giving the spectrum a mass
+            double top = -1e10, best_any = -1e10;
+            for (const auto& h : out)
+            {
+              best_any = std::max(best_any, h.getScore());
+              if ((double)h.getMetaValue("Mass") <= 0 || (int)h.getMetaValue("ProteoformMassByFragmentMass") != 0) continue;
+              if (std::abs((double)h.getMetaValue("Mass") - m) > 3 * iso + 0.1) continue; // a mass taken from this precursor, up to isotope errors
+              top = std::max(top, h.getScore());
+            }
+            if (top < best_any) top = -1e10;
+            if (top > -1e9 && (chosen_mass[d] <= 0 ? top >= best_alt : top > best_alt))
+            {
+              best_alt = top;
+              chosen_mass[d] = m;
+              chosen[d].swap(out);
+            }
+          }
+        }
+        int reselected = 0;
+        for (int d : todo)
+        {
+          if (chosen_mass[d] <= 0) continue;
+          reselected++;
+          for (auto& h : chosen[d]) h.setMetaValue("PrecursorReselected", chosen_mass[d]);
+          spec_proteoforms[d].swap(chosen[d]);
+          auto pg = dspecs[d].getPrecursorPeakGroup(); // the spectrum's precursor from here on (reported mass, feature and decoy rules)
+          pg.setMonoisotopicMass(chosen_mass[d]);
+          dspecs[d].setPrecursorPeakGroup(pg);
+        }
+        OPENMS_LOG_INFO << "Precursor re-selection: " << todo.size() << " spectra whose PrSM has no mass and whose isolation window holds other masses, "
+                        << tries.load() << " alternative masses tried, " << reselected << " spectra re-selected" << std::endl;
       }
       // Decoy precursors: a spectrum whose PrSM took its mass from MS1 is searched again as a decoy spectrum whose precursor mass is the
       // decoy precursor mass (noise or signal decoy) of its isolation window, as FLASHDeconv chose it with report_FDR. A PrSM of that copy

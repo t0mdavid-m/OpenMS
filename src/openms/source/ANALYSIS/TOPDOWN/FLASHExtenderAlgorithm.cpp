@@ -29,7 +29,8 @@ namespace OpenMS
   inline const double c13_spacing = Constants::C13C12_MASSDIFF_U; // one isotope (shared by name in the parallel extension loop)
   // Base penalty for a terminal truncation, equivalent to the base blind-modification (mass-shift)
   // penalty applied in findSubPathsBetweenTagEndPoints. Equals 19.
-  inline const int truncation_penalty = 1 + 2 * (multi_ion_score + FLASHTaggerAlgorithm::max_node_score);
+  static_assert(FLASHExtenderAlgorithm::truncation_penalty == 1 + 2 * (multi_ion_score + FLASHTaggerAlgorithm::max_node_score),
+                "the truncation penalty equals the base blind-modification penalty");
   // Minimum number of unshifted suffix fragment masses from the protein C-terminus against which a precursor-mass path ending before
   // the C-terminus is not accepted. Set from an empirical null on Eclip_1480: ladders read from a wrong C-terminus of the right protein
   // (78,686 internal positions of 1% PrSMs) reach k >= 4 at a rate of 7.6e-5 (shuffled decoys: 1.6e-5 of 378,800), so the about 200

@@ -219,6 +219,12 @@ private:
     }
   };
 
+public:
+  /// penalty of a terminal truncation in a precursor-mass path (equals the base blind-modification penalty of
+  /// findSubPathsBetweenTagEndPoints); public so that FLASHTnT's precursor re-selection can allow for it
+  static constexpr int truncation_penalty = 19;
+
+private:
   /// Protein hit information that should be retained throughout the run.
   struct OPENMS_DLLAPI HitInformation
   {

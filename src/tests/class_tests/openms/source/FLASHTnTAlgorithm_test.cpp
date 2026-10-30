@@ -10,11 +10,13 @@
 #include <OpenMS/test_config.h>
 
 ///////////////////////////
+#include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTAlgorithm.h>
 #include <OpenMS/METADATA/ProteinHit.h>
 #include <cstdint>
 #include <functional>
 #include <set>
+#include <tuple>
 #include <vector>
 ///////////////////////////
 
@@ -22,7 +24,7 @@ using namespace OpenMS;
 
 // The label-blind rules of FLASHTnT that can be checked without a search: the entry order that breaks candidate-cut ties, the protein
 // evidence rule (option protein_evidence) and the blind modification count it reads, the grouping of small proteoform classes (option
-// merge_small_classes), and the defaults of the options
+// merge_small_classes), the window masses of DeconvMassInfo (option precursor_reselect), and the defaults of the options
 START_TEST(FLASHTnTAlgorithm, "$Id$")
 
 START_SECTION((static bool proteinEvidenceSupported(Size proteoforms, bool strong)))
@@ -106,6 +108,23 @@ START_SECTION((static std::vector<std::vector<int>> groupClasses(const std::vect
 }
 END_SECTION
 
+START_SECTION((static String DeconvolvedSpectrum::formatWindowMasses(const std::vector<std::tuple<double, double>>& map)))
+{
+  // the isolation-window masses FLASHDeconv writes into DeconvMassInfo ("windowmasses=") and FLASHTnT reads back
+  std::vector<std::tuple<double, double>> map = {{0.0, 1e6}, {8565.4321, 1234.5}, {8579.4477, 99.0}};
+  const String s = DeconvolvedSpectrum::formatWindowMasses(map);
+  TEST_EQUAL(s.hasSubstring("8565.432"), true)
+  TEST_EQUAL(s.hasSubstring("1e+06"), false) // an entry without a mass (<= 0) is left out
+  TEST_EQUAL(s.hasSubstring(";"), false)     // no field separator of DeconvMassInfo
+  const auto back = DeconvolvedSpectrum::parseWindowMasses(s);
+  TEST_EQUAL(back.size(), 2)
+  TEST_REAL_SIMILAR(std::get<0>(back[0]), 8565.4321)
+  TEST_REAL_SIMILAR(std::get<1>(back[1]), 99.0)
+  TEST_EQUAL(DeconvolvedSpectrum::parseWindowMasses("").size(), 0)
+  TEST_EQUAL(DeconvolvedSpectrum::parseWindowMasses("garbage,1:2").size(), 1)
+}
+END_SECTION
+
 START_SECTION((FLASHTnTAlgorithm()))
 {
   // the defaults of the FDR and mass options, and the values each of them takes
@@ -118,6 +137,7 @@ START_SECTION((FLASHTnTAlgorithm()))
   TEST_REAL_SIMILAR((double)p.getValue("protein_evidence_min_mass"), 3000.0)
   TEST_STRING_EQUAL(p.getValue("merge_small_classes").toString(), "kind")
   TEST_EQUAL(p.getValidStrings("merge_small_classes").size(), 2)
+  TEST_STRING_EQUAL(p.getValue("precursor_reselect").toString(), "true")
 }
 END_SECTION
 

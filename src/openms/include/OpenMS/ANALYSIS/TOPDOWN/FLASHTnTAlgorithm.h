@@ -176,6 +176,8 @@ private:
   bool search_cascade_ = true;
   /// search spectra with MS1-based PrSMs again with decoy precursor masses, as decoys of the precursor in the FDR
   bool decoy_precursor_ = false;
+  /// a spectrum whose PrSM has no mass is searched again with the other masses of its isolation window
+  bool precursor_reselect_ = true;
   /// co-isolation: an MS1 mass reported by PrSMs of different proteins stays with the protein that explains it best
   bool one_proteoform_per_feature_ = true;
   /// native and targeted runs: candidates of every source chosen by the decoy margin of their spectrum, every candidate's PrSM reported
