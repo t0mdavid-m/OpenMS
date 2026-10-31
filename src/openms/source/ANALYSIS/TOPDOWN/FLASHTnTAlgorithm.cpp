@@ -13,6 +13,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHGappedTaggerAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTaggerAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTAlgorithm.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHPhaseTrace.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTCandidateRanker.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/MassLadderAlgorithm.h>
 #include <algorithm>
@@ -20,12 +21,14 @@
 #include <chrono>
 #include <atomic>
 #include <cmath>
+#include <cstdint>
 #include <exception>
 #include <iterator>
 #include <limits>
 #include <memory>
 #include <numeric>
 #include <functional>
+#include <queue>
 #include <unordered_map>
 #include <unordered_set>
 #ifdef _OPENMP
@@ -48,25 +51,29 @@ namespace
 // FDR classes of the PrSMs (meta value FDRClass): determined mass and termini by number of blind modifications (classes 0 to
 // fdr_class_max_blind, the last one with that many or more), and undetermined by whether both termini are known. The "; N blind" form is
 // kept for parsers of the label. The PrSMs of precursor-ladder candidates (all determined) form a class of their own by their source,
-// so that their decoys are not hidden in the large, nearly decoy-free determined classes. So do the PrSMs of each residual round of the
-// chimeric search (option chimeric_rounds; meta value ChimericRound r > 0): a search of what is left of a spectrum after its best PrSM
-// has its own chance rate.
+// so that their decoys are not hidden in the large, nearly decoy-free determined classes, and so do those of terminal-ladder candidates
+// (option terminal_ladder_class). So do the PrSMs of each residual round of the chimeric search (option chimeric_rounds; meta value
+// ChimericRound r > 0): a search of what is left of a spectrum after its best PrSM has its own chance rate.
 constexpr int fdr_class_max_blind = 2;
 constexpr int fdr_class_both_termini = fdr_class_max_blind + 1;
 constexpr int fdr_class_open_terminus = fdr_class_both_termini + 1;
 constexpr int fdr_class_precursor_ladder = fdr_class_open_terminus + 1;
+// option terminal_ladder_class: the PrSMs of terminal-ladder candidates, by source as well (determined or not)
+constexpr int fdr_class_terminal_ladder = fdr_class_precursor_ladder + 1;
 // the residual rounds of the chimeric search: round r is class fdr_class_residual + r - 1
 constexpr int max_chimeric_rounds = 2;
-constexpr int fdr_class_residual = fdr_class_precursor_ladder + 1;
+constexpr int fdr_class_residual = fdr_class_terminal_ladder + 1;
 constexpr int fdr_class_count = fdr_class_residual + max_chimeric_rounds;
 const char* const fdr_class_names[] = {"determined; 0 blind", "determined; 1 blind", "determined; 2 blind", "undetermined, both termini",
-                                       "undetermined, open terminus", "precursor ladder", "residual 1", "residual 2"};
+                                       "undetermined, open terminus", "precursor ladder", "terminal ladder", "residual 1", "residual 2"};
 static_assert(std::size(fdr_class_names) == (Size)fdr_class_count, "one label per FDR class");
-// proteoform classes (a partition of the proteoforms; the FDR below): the determined PrSM classes are one, the undetermined ones and the
-// residual rounds as for PrSMs
-constexpr int pf_class_determined = 0, pf_class_both_termini = 1, pf_class_open_terminus = 2, pf_class_precursor_ladder = 3, pf_class_residual = 4;
+// proteoform classes (a partition of the proteoforms; the FDR below): the determined PrSM classes are one, the undetermined ones, the ladder
+// classes and the residual rounds as for PrSMs
+constexpr int pf_class_determined = 0, pf_class_both_termini = 1, pf_class_open_terminus = 2, pf_class_precursor_ladder = 3, pf_class_terminal_ladder = 4,
+              pf_class_residual = 5;
 constexpr int pf_class_count = pf_class_residual + max_chimeric_rounds;
-const char* const pf_class_names[] = {"determined", "undetermined, both termini", "undetermined, open terminus", "precursor ladder", "residual 1", "residual 2"};
+const char* const pf_class_names[] = {"determined", "undetermined, both termini", "undetermined, open terminus", "precursor ladder", "terminal ladder",
+                                      "residual 1", "residual 2"};
 static_assert(std::size(pf_class_names) == (Size)pf_class_count, "one label per proteoform class");
 // chimeric search: with a mass matched by the best PrSM, the masses within the spectrum's tolerance of it moved by up to this many isotope
 // spacings are removed as well (FLASHDeconv's monoisotopic errors of the same fragment). On the 20 native spectra of the prototype, the
@@ -132,6 +139,17 @@ double shiftedCandidateCount(const String& sequence, double mass, double max_shi
     count += (double)(last - first);
   }
   return std::max(1.0, count);
+}
+
+// A fixed pseudo-random order of the database entries for ties (splitmix64 of the index; MassLadderAlgorithm breaks its ties the
+// same way). The database order puts every target before every decoy, so a cut that broke ties by it kept chance candidates of targets
+// and dropped those of decoys.
+inline std::uint64_t scrambledIndex(std::uint64_t x)
+{
+  x += 0x9E3779B97F4A7C15ULL;
+  x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ULL;
+  x = (x ^ (x >> 27)) * 0x94D049BB133111EBULL;
+  return x ^ (x >> 31);
 }
 
 // mass and both termini known (unknown: -1)
@@ -317,6 +335,37 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   defaults_.setValue("keep_decoy", "false", "Retains decoy hits in the results.");
   defaults_.setValidStrings("keep_decoy", {"true", "false"});
 
+  defaults_.setValue("terminal_ladder_class", "true",
+                     "The PrSMs of terminal-ladder candidates (mass ladders from an intact protein terminus, no sequence tag) form an FDR class and "
+                     "a proteoform class of their own (\"terminal ladder\"), as the precursor-ladder ones do; false: they are classed as the PrSMs "
+                     "of the tag search. In a shuffled entrapment of ten datasets (several PrSMs per spectrum), 73% of the entrapment proteoforms "
+                     "passing 1% without the class came from this source, against 51% of the target proteoforms of the same score.");
+  defaults_.setValidStrings("terminal_ladder_class", {"true", "false"});
+  defaults_.addTag("terminal_ladder_class", "advanced");
+  defaults_.setValue("merge_small_classes", "kind",
+                     "Proteoform classes with fewer than 100 proteoforms (targets and decoys: the rule reads no label) are counted together with "
+                     "others. kind: the determined class stays on its own and the ladder and undetermined classes are merged among themselves in "
+                     "the order precursor ladder, terminal ladder, undetermined (both termini, open terminus), so that a small undetermined group "
+                     "joins the terminal-ladder class and never pulls the precursor-ladder or the determined class under its cutoff; a kind whose "
+                     "classes together stay under 100 joins the other kind's first group. true: the classes in their order (determined, "
+                     "undetermined, precursor ladder, terminal ladder), a last small group joining the one before (on 38 runs the undetermined "
+                     "group absorbed the precursor-ladder class of a run and cost it 11 of 152 proteoforms).");
+  defaults_.setValidStrings("merge_small_classes", {"true", "kind"});
+  defaults_.addTag("merge_small_classes", "advanced");
+  defaults_.setValue("protein_evidence", "proteoforms",
+                     "What identifies a protein at the protein level. proteoforms: at least two distinct proteoforms, or one determined "
+                     "proteoform (mass and both termini known, from the tag search) without blind modifications (variable and annotated ones "
+                     "allowed) of at least protein_evidence_min_mass Da; a protein with less (target or decoy alike) takes no part in the protein "
+                     "ranking and gets the protein q-value 1. none: any proteoform in a class. The PrSM and proteoform levels are unchanged. In a "
+                     "shuffled entrapment of ten datasets (38 runs), the proteins of one PrSM were 10% entrapment at a nominal 1% (61 of 1206) "
+                     "while their decoys were rare; proteoforms kept 72% of the proteins at an entrapment FDP of 0.5%.");
+  defaults_.setValidStrings("protein_evidence", {"none", "proteoforms"});
+  defaults_.setValue("protein_evidence_min_mass", 3000.0,
+                     "The mass (Da) a single determined proteoform without blind modifications needs to identify a protein with protein_evidence "
+                     "proteoforms.");
+  defaults_.setMinFloat("protein_evidence_min_mass", 0.0);
+  defaults_.addTag("protein_evidence_min_mass", "advanced");
+
   defaults_.setValue("protein_level_only", "false",
                      "Stops after the protein-level search, skipping proteoform characterization. The candidate proteins "
                      "and their scores are still reported, so this can be used to shortlist proteins cheaply.");
@@ -387,6 +436,10 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   // the extender's defaults: the cleavage propensity weight and table, fitted on lysates and native proteins
   eparam.remove("cleavage_weight");
   eparam.remove("cleavage_table");
+  // FLASHTnT's own mass rules (the extender's defaults stay as released, for FLASHIda): fragment-pair masses only where a window mass
+  // corroborates them, and no truncation penalty for an end the suffix ladder reads
+  eparam.setValue("skip_precursor_inference", "corroborated", eparam.getDescription("skip_precursor_inference"), eparam.getTags("skip_precursor_inference"));
+  eparam.setValue("ladder_end_penalty", "false", eparam.getDescription("ladder_end_penalty"), eparam.getTags("ladder_end_penalty"));
 
   defaults_.insert("ex:", eparam);
 
@@ -420,20 +473,23 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   defaults_.setValue("search_cascade", "true",
                      "Search in two stages. true: stage 1 searches every spectrum with sequence tags and terminal and precursor ladders (those "
                      "that are on), which compete per spectrum as in a single stage; stage 2 searches with gapped tags only the spectra stage 1 did "
-                     "not identify (no target PrSM whose proteoform passes pro_fdr, 1% without a filter). The PrSM q-values are computed per stage "
-                     "(and FDR class), so the PrSMs of stage 2 compete only with the decoys of stage 2. Gapped tags then rescue spectra the other "
-                     "sources leave unidentified instead of taking the place of their "
+                     "not identify (no PrSM, target or decoy alike, whose proteoform passes pro_fdr, 1% without a filter). The PrSM q-values are "
+                     "computed per stage (and FDR class), so the PrSMs of stage 2 compete only with the decoys of stage 2. Gapped tags then rescue spectra "
+                     "the other sources leave unidentified instead of taking the place of their "
                      "candidates (Eclip_1480: 121 instead of 51 rescued spectra at the same number of proteoforms; D60 human Caco-2: 529 instead of "
                      "526 proteoforms). false: one stage searches every spectrum with every source. A single stage is also used with gapped_tags off, "
                      "with native, with protein_level_only and without decoys in the database; the chimeric rounds search with all sources.");
   defaults_.setValidStrings("search_cascade", {"true", "false"});
   defaults_.addTag("search_cascade", "advanced");
-  defaults_.setValue("one_proteoform_per_feature", "true",
+  defaults_.setValue("one_proteoform_per_feature", "fitted",
                      "Co-isolation: when PrSMs of different proteins report the same mass taken from MS1 (within twice the precursor tolerance, "
-                     "one isotope apart allowed) within 2 min, the mass is one MS1 feature of one proteoform, and only the protein that explains it "
-                     "best keeps it (by its best PrSM score, which already prices blind shifts, then fewer blind modifications, then more PrSMs at that mass); the "
-                     "other proteins' PrSMs are reported without a mass. Masses from fragment pairs and decoy precursors are not affected.");
-  defaults_.setValidStrings("one_proteoform_per_feature", {"true", "false"});
+                     "one isotope apart allowed) within 2 min, the mass is one MS1 feature of one proteoform, and the protein that explains it "
+                     "best keeps it (by its best PrSM score, which already prices blind shifts, then fewer blind modifications, then more PrSMs at "
+                     "that mass). fitted: the other proteins' PrSMs whose mass needs a blind modification are reported without a mass, those whose "
+                     "mass needs none keep it (their own stretch and modifications explain it; on ten datasets 183 spectra lost such a mass with "
+                     "true, and TopPIC assigned the losing protein to most of them). true: all the other proteins' PrSMs are reported without a "
+                     "mass. Masses from fragment pairs and decoy precursors are not affected.");
+  defaults_.setValidStrings("one_proteoform_per_feature", {"true", "false", "fitted"});
   defaults_.addTag("one_proteoform_per_feature", "advanced");
   defaults_.setValue("native", "false",
                      "Native and targeted top-down (one or a few spectra, often several proteins per spectrum, no MS1 survey): the candidate "
@@ -455,6 +511,15 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "proteoform level only against proteoforms whose mass came from MS1. Controls wrong MS1 precursor masses; PrSMs with masses "
                      "from fragment pairs or without a mass are not affected.");
   defaults_.setValidStrings("decoy_precursor", {"true", "false"});
+  defaults_.setValue("precursor_reselect", "true",
+                     "A spectrum whose PrSM has no proteoform mass although the spectrum has an MS1 precursor mass is searched again with each "
+                     "other target mass of its isolation window (the masses FLASHDeconv registered with the precursor, from its survey scan and the "
+                     "neighbouring ones). The alternative mass whose search gives a best PrSM with a mass a precursor-mass path took from it (of "
+                     "equal ones the more intense mass) takes the spectrum, PrSMs and precursor, when that PrSM scores at least as high as the "
+                     "spectrum's best PrSM less one truncation penalty. Targets and decoys get the same tries. On ten datasets a fifth of the PrSMs "
+                     "passing 1% had no mass, and a quarter of those spectra had a precursor of low quality.");
+  defaults_.setValidStrings("precursor_reselect", {"true", "false"});
+  defaults_.addTag("precursor_reselect", "advanced");
   defaults_.setValue("chimeric_rounds", 0,
                      "Residual search of chimeric spectra: rounds after the first search (0: off). In each round, every spectrum with a PrSM (target or "
                      "decoy alike) loses the deconvolved masses its best PrSM matched (the masses on the path, also those one or two isotope "
@@ -496,11 +561,17 @@ void FLASHTnTAlgorithm::updateMembers_()
   precursor_ladders_ = param_.getValue("precursor_ladders").toString() == "true";
   search_cascade_ = param_.getValue("search_cascade").toString() == "true";
   decoy_precursor_ = param_.getValue("decoy_precursor").toString() == "true";
-  one_proteoform_per_feature_ = param_.getValue("one_proteoform_per_feature").toString() == "true";
+  precursor_reselect_ = param_.getValue("precursor_reselect").toString() == "true";
+  one_proteoform_per_feature_ = param_.getValue("one_proteoform_per_feature").toString() != "false";
+  one_proteoform_per_feature_fitted_ = param_.getValue("one_proteoform_per_feature").toString() == "fitted";
   chimeric_rounds_ = param_.getValue("chimeric_rounds");
   pro_fdr_ = param_.getValue("pro_fdr");
   keep_decoy_ = param_.getValue("keep_decoy").toString() == "true";
   keep_underdetermined_ = param_.getValue("discard_underdetermined").toString() == "false";
+  terminal_ladder_class_ = param_.getValue("terminal_ladder_class").toString() == "true";
+  merge_by_kind_ = param_.getValue("merge_small_classes").toString() == "kind";
+  protein_evidence_ = param_.getValue("protein_evidence").toString() == "proteoforms";
+  protein_evidence_min_mass_ = param_.getValue("protein_evidence_min_mass");
   // One PrSM per spectrum, its best (with native, every candidate's, below). Several per spectrum put homologs of the spectrum's own
   // protein beside it, which shuffled decoys do not model: three E. coli lysates with the B. theta entrapment at 1%, 5323 proteoforms
   // with 91 B. theta (73 of them among the 750 that were not their spectrum's best PrSM; of the B. theta PrSMs beside a better one, 128
@@ -598,6 +669,77 @@ std::set<Size> FLASHTnTAlgorithm::getProteinsPassingFDR_(const ProteoformDatabas
   }
   passing.insert(partners.begin(), partners.end());
   return passing;
+}
+
+std::uint64_t FLASHTnTAlgorithm::entryOrder(std::uint64_t index)
+{
+  return scrambledIndex(index);
+}
+
+std::vector<std::vector<int>> FLASHTnTAlgorithm::groupClasses(const std::vector<int>& class_order, const std::vector<Size>& class_size, Size min_size,
+                                                             bool by_kind, const std::function<int(int)>& kind_of)
+{
+  std::vector<std::vector<int>> groups;
+  std::vector<Size> group_total;
+  for (int kind = 0; kind < (by_kind ? 2 : 1); kind++)
+  {
+    std::vector<std::vector<int>> kind_groups;
+    std::vector<Size> kind_totals;
+    Size group_size = 0;
+    for (int c : class_order)
+    {
+      if (class_size[c] == 0 || (by_kind && kind_of(c) != kind)) continue;
+      if (kind_groups.empty() || group_size >= min_size)
+      {
+        kind_groups.push_back({});
+        kind_totals.push_back(0);
+        group_size = 0;
+      }
+      kind_groups.back().push_back(c);
+      group_size += class_size[c];
+      kind_totals.back() += class_size[c];
+    }
+    if (kind_groups.size() > 1 && group_size < min_size)
+    {
+      kind_groups[kind_groups.size() - 2].insert(kind_groups[kind_groups.size() - 2].end(), kind_groups.back().begin(), kind_groups.back().end());
+      kind_totals[kind_totals.size() - 2] += kind_totals.back();
+      kind_groups.pop_back();
+      kind_totals.pop_back();
+    }
+    for (Size gi = 0; gi < kind_groups.size(); gi++)
+    {
+      groups.push_back(kind_groups[gi]);
+      group_total.push_back(kind_totals[gi]);
+    }
+  }
+  if (by_kind && groups.size() > 1)
+  {
+    // a kind that is one small group joins the other kind's first group
+    for (Size gi = groups.size(); gi-- > 0;)
+    {
+      if (group_total[gi] >= min_size || groups.size() == 1) continue;
+      const int kind = kind_of(groups[gi][0]);
+      bool alone = true;
+      for (Size gj = 0; gj < groups.size() && alone; gj++) alone = gj == gi || kind_of(groups[gj][0]) != kind;
+      if (! alone) continue;
+      const Size target = gi == 0 ? 1 : 0;
+      groups[target].insert(groups[target].end(), groups[gi].begin(), groups[gi].end());
+      group_total[target] += group_total[gi];
+      groups.erase(groups.begin() + gi);
+      group_total.erase(group_total.begin() + gi);
+    }
+  }
+  return groups;
+}
+
+bool FLASHTnTAlgorithm::proteinEvidenceSupported(Size proteoforms, bool strong)
+{
+  return strong || proteoforms >= 2;
+}
+
+Size FLASHTnTAlgorithm::blindModCount(const ProteinHit& hit)
+{
+  return blindModCount_(hit);
 }
 
 Size FLASHTnTAlgorithm::blindModCount_(const ProteinHit& hit)
@@ -759,7 +901,7 @@ void FLASHTnTAlgorithm::setProteinQvalues_(const std::vector<int>& hit_class, co
         if (end == form_end && (start == form_start || (form_start == 1 && start == 2))) whole_protein = isDetermined(hit);
       }
     }
-    protein_class[i] = (c == fdr_class_precursor_ladder || (c <= fdr_class_max_blind && ! whole_protein)) ? c3_model : c;
+    protein_class[i] = (c == fdr_class_precursor_ladder || c == fdr_class_terminal_ladder || (c <= fdr_class_max_blind && ! whole_protein)) ? c3_model : c;
   }
 
   // null of the PrSM score per class
@@ -936,6 +1078,7 @@ namespace
 void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile::FASTAEntry>& original_fasta_entry, const ProteoformDatabase* db)
 {
   setLogType(CMD);
+  flashPhase("tnt: run start");
 
   // The database (ProteoformDatabase): without one, the FASTA entries are the proteins (the identity database), and every step below
   // that reads it is the search as before. With a PEFF database, an entry is a processed form of a protein with fixed modifications: the
@@ -1069,6 +1212,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     }
   }
 
+  flashPhase("tnt: before tags");
   startProgress(0, (SignedSize)map.size(), "Finding sequence tags ...");
 
   // Spectra in parallel, each into its own slot, collected in input order below, so that dspecs, the tolerances and tags_ are those of one
@@ -1199,6 +1343,14 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
 
       dspec.setPrecursorPeakGroup(pg);
     }
+    // the target masses of the isolation window (option precursor_reselect)
+    if (deconv_meta_str.hasSubstring("windowmasses="))
+    {
+      const int w_s = (int)deconv_meta_str.find("windowmasses=") + 13;
+      const int w_e = (int)deconv_meta_str.find(";", w_s);
+      const String w_str = deconv_meta_str.substr(w_s, w_e == (int)String::npos ? String::npos : w_e - w_s);
+      dspec.setPrecursorMassIntensityMap(DeconvolvedSpectrum::parseWindowMasses(w_str));
+    }
     for (Size i = 0; i < spec.size(); i++)
     {
       PeakGroup peak;
@@ -1327,6 +1479,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       Size protein;
     };
 
+    flashPhase("tnt: tag search start");
     startProgress(0, (SignedSize)protein_seqs.size(), "Searching tags against database ...");
 
     const Size block_size = 4096;
@@ -1394,14 +1547,36 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
               continue;
             }
             double nmass = h.query_pos <= 0 ? .0 : prefix[h.query_pos];
+            if (fixed != nullptr) nmass += fixed_n;
+            hits.push_back({h.needle_index, h.query_pos, true, nmass, fixed_c, (Size)i}); // the C-terminal residues are summed below
+          }
+        }
+      }
+      // The C-terminal flanking masses of the summed hits: the residues after the tag, summed from it to the C-terminus (as before), then
+      // the fixed masses after it. In chunks of hits rather than per protein: on a protein of tens of thousands of residues, one thread
+      // summing them for all its hits was the tail of the block.
+      {
+        constexpr Size chunk = 256;
+        std::vector<std::pair<Size, Size>> work; // (protein of the block, first hit)
+        for (Size i = 0; i < block_end - block_start; i++)
+        {
+          for (Size first = 0; first < block_hits[i].size(); first += chunk) work.emplace_back(i, first);
+        }
+#pragma omp parallel for schedule(dynamic, 1)
+        for (SignedSize w = 0; w < (SignedSize)work.size(); w++)
+        {
+          const Size i = work[w].first, protein = block_start + i;
+          auto& hits = block_hits[i];
+          const std::string& pseq = protein_seqs[protein];
+          const bool with_fixed = entry_fixed != nullptr && ! (*entry_fixed)[protein].empty();
+          for (Size k = work[w].second; k < std::min(hits.size(), work[w].second + chunk); k++)
+          {
+            auto& h = hits[k];
+            if (! h.summed) continue;
             double cmass = .0;
-            for (Size k = end; k < n; k++) cmass += aa_internal_mass[(unsigned char)pseq[k]];
-            if (fixed != nullptr)
-            {
-              nmass += fixed_n;
-              cmass += fixed_c;
-            }
-            hits.push_back({h.needle_index, h.query_pos, true, nmass, cmass, (Size)i});
+            for (Size r = (Size)h.query_pos + seqs[h.needle_index].length(); r < pseq.size(); r++) cmass += aa_internal_mass[(unsigned char)pseq[r]];
+            if (with_fixed) cmass += h.cmass; // the fixed masses after the tag
+            h.cmass = cmass;
           }
         }
       }
@@ -1467,6 +1642,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     endProgress();
   };
   searchTagSequences(tag_seqs);
+  flashPhase("tnt: tag search end");
   startProgress(0, (SignedSize)dspecs.size(), "Running candidate protein filtration ...");
 
   // wall time of the database indexes below (logged after the mass ladders)
@@ -1516,6 +1692,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   }
   // their bucket indices, with which FLASHTaggerAlgorithm::scoreShifts looks the residue sum of a mass up instead of walking to it
   std::vector<std::vector<std::uint32_t>> pro_prefix_index(cleaned_protein_seqs.size()), pro_suffix_index(cleaned_protein_seqs.size());
+  flashPhase("tnt: residue sum index");
 #pragma omp parallel for schedule(dynamic, 64)
   for (int k = 0; k < (int)cleaned_protein_seqs.size(); k++)
   {
@@ -1556,6 +1733,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   // gapped tags (only for spectra in which no sequence tag proposes a protein); their tags are kept per spectrum until appended to tags_
   FLASHGappedTaggerAlgorithm gapped_tagger;
   lap();
+  flashPhase("tnt: gapped index");
   if (gapped_mode_ != "off")
   {
     gapped_tagger.setParameters(gapped_param_);
@@ -1592,6 +1770,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   MassLadderAlgorithm mass_ladders;
   // the sliding ladders of native mode read the runs of standard residues of the precursor ladders
   lap();
+  flashPhase("tnt: mass ladder index");
   mass_ladders.buildIndex(protein_seqs, param_.getValue("ion_type").toStringVector(), terminal_ladders_, use_precursor_ladders || native_rule, db);
   OPENMS_LOG_INFO << "Database indexes (wall s): protein mass sets " << t_mass_sets << ", residue sums " << t_residue_sums << ", gapped tags "
                   << t_gapped << ", mass ladders " << lap() << std::endl;
@@ -1893,10 +2072,9 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     // by_entry: per candidate, the scores of both sides summed, and the match counts of both sides' best shifts
     std::vector<double> side_score_sums(by_entry ? candidate_count : 0, 0.0);
     std::vector<std::pair<int, int>> side_counts(by_entry ? candidate_count : 0, {0, 0});
-    // a loop that is already parallel over spectra runs this serially
-#pragma omp parallel for schedule(dynamic) if (! omp_in_parallel())
-    for (int i = 0; i < (int)candidate_count; i++)
-    {
+    // the score of candidate i: a side that cannot score above score_floor is not scored (FLASHTaggerAlgorithm::scoreShifts), so that the
+    // candidate's score is then below score_floor or is that of its other side
+    auto scoreCandidate = [&](int i, double score_floor) {
       const Size e = (Size)i < seq_count ? seq_candidates[i].protein : hit_shifts[i - seq_count].fasta_index;
       const double plain_mass = with_fixed ? pro_plain_mass[e] : 0.0;
       int n_count = 0, c_count = 0;
@@ -1907,17 +2085,17 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       {
         const auto& c = seq_candidates[i];
         n_score = FLASHTaggerAlgorithm::scoreShifts(score_masses, pro_prefix[c.protein], pro_prefix_index[c.protein], shift_values.data() + c.n_first,
-                                                    flank_values.data() + c.n_first, c.n_count, protein_tol, plain_mass, n_best);
+                                                    flank_values.data() + c.n_first, c.n_count, protein_tol, plain_mass, n_best, score_floor);
         c_score = FLASHTaggerAlgorithm::scoreShifts(score_masses, pro_suffix[c.protein], pro_suffix_index[c.protein], shift_values.data() + c.c_first,
-                                                    flank_values.data() + c.c_first, c.c_count, protein_tol, plain_mass, c_best);
+                                                    flank_values.data() + c.c_first, c.c_count, protein_tol, plain_mass, c_best, score_floor);
       }
       else
       {
         const auto& sh = hit_shifts[i - seq_count];
         n_score = FLASHTaggerAlgorithm::scoreShifts(score_masses, pro_prefix[sh.fasta_index], pro_prefix_index[sh.fasta_index], sh.n_shifts.data(),
-                                                    sh.n_flanks.data(), sh.n_shifts.size(), protein_tol, plain_mass, n_best);
+                                                    sh.n_flanks.data(), sh.n_shifts.size(), protein_tol, plain_mass, n_best, score_floor);
         c_score = FLASHTaggerAlgorithm::scoreShifts(score_masses, pro_suffix[sh.fasta_index], pro_suffix_index[sh.fasta_index], sh.c_shifts.data(),
-                                                    sh.c_flanks.data(), sh.c_shifts.size(), protein_tol, plain_mass, c_best);
+                                                    sh.c_flanks.data(), sh.c_shifts.size(), protein_tol, plain_mass, c_best, score_floor);
       }
       scores[i] = std::max(n_score, c_score);
       if (by_entry)
@@ -1925,6 +2103,56 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         side_score_sums[i] = n_score + c_score;
         side_counts[i] = {n_count, c_count};
       }
+    };
+    // Of more than learned_pool candidates (one entry per protein, without the native cut) only the learned_pool best by score and by
+    // matched tags are ranked further (the cut below, which keeps max_protein_hits_ of them). Those by tags (matched tags at least the
+    // learned_pool-th most) are scored first, then the others with the learned_pool-th best score so far as floor: one that cannot reach
+    // it scores below the learned_pool best, so the ranks of the others, both pools and the cut are those of all scored. The floor
+    // rises as the candidates are scored, so this runs where the loop over spectra is parallel (one candidate after the other). It relies
+    // on: one candidate per protein without by_entry (a gapped-tag candidate is never a protein of the sequence tags), so that the order
+    // of ranked is total and the candidates scored exactly keep their relative order; the same learned_pool here and in both pools; and
+    // a cut that keeps only pool members (more than learned_pool candidates, max_protein_hits_ <= learned_pool, no native cut).
+    constexpr Size learned_pool = 500;
+    auto tagCount = [&](Size c) { return c < seq_count ? (double)seq_candidates[c].tag_count : (double)gapped_tag_counts[c - seq_count]; };
+#ifdef _OPENMP
+    const bool one_by_one = omp_in_parallel();
+#else
+    const bool one_by_one = true;
+#endif
+    if (one_by_one && ! native_rule && ! by_entry && candidate_count > learned_pool && (Size)max_protein_hits_ <= learned_pool)
+    {
+      std::vector<double> tags(candidate_count);
+      for (Size i = 0; i < candidate_count; i++) tags[i] = tagCount(i);
+      std::vector<double> sorted_tags = tags;
+      std::nth_element(sorted_tags.begin(), sorted_tags.begin() + (learned_pool - 1), sorted_tags.end(), std::greater<double>());
+      const double tag_floor = sorted_tags[learned_pool - 1];
+      std::priority_queue<double, std::vector<double>, std::greater<double>> best; // the learned_pool best scores so far
+      auto add = [&](double score) {
+        if (best.size() < learned_pool) best.push(score);
+        else if (score > best.top())
+        {
+          best.pop();
+          best.push(score);
+        }
+      };
+      for (Size i = 0; i < candidate_count; i++)
+      {
+        if (tags[i] < tag_floor) continue;
+        scoreCandidate((int)i, -std::numeric_limits<double>::infinity());
+        add(scores[i]);
+      }
+      for (Size i = 0; i < candidate_count; i++)
+      {
+        if (tags[i] >= tag_floor) continue;
+        scoreCandidate((int)i, best.size() < learned_pool ? -std::numeric_limits<double>::infinity() : best.top());
+        add(scores[i]);
+      }
+    }
+    else
+    {
+      // a loop that is already parallel over spectra runs this serially
+#pragma omp parallel for schedule(dynamic) if (! omp_in_parallel())
+      for (int i = 0; i < (int)candidate_count; i++) scoreCandidate(i, -std::numeric_limits<double>::infinity());
     }
 
     // One entry per protein (a PEFF database: several entries per protein), so that the cuts below and the extension count proteins: the
@@ -1972,12 +2200,13 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       for (const auto& [protein, k] : kept_of) scores[k] = best_of[protein].second;
     }
 
-    // Ranked by score, coverage and description with std::sort. The keys are those the hits had, so every comparison and with it the
-    // order, ties included, is that of sorting the hits (std::sort's moves depend on the comparisons only).
+    // Ranked by score, coverage and a fixed pseudo-random order of the entries (scrambledIndex) with std::sort. Ties in score and
+    // coverage are common (shuffles of a protein have its length and composition), and the description broke them before: a target's
+    // ("sp|...") sorted before a decoy's ("DECOY_..."), so a chance candidate was cut in favour of the targets.
     struct RankedCandidate
     {
       double score, coverage;
-      const String* description;
+      std::uint64_t order;
       Size index;
     };
     std::vector<RankedCandidate> ranked;
@@ -1988,13 +2217,13 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       if (i < seq_count)
       {
         const auto& fe = fasta_entry[seq_candidates[i].protein];
-        ranked.push_back({scores[i], (double)seq_candidates[i].covered_pos / (double)fe.sequence.length(), &fe.description, i});
+        ranked.push_back({scores[i], (double)seq_candidates[i].covered_pos / (double)fe.sequence.length(), scrambledIndex(seq_candidates[i].protein), i});
       }
-      else { ranked.push_back({scores[i], hits[i - seq_count].getCoverage(), &fasta_entry[hit_shifts[i - seq_count].fasta_index].description, i}); }
+      else { ranked.push_back({scores[i], hits[i - seq_count].getCoverage(), scrambledIndex(hit_shifts[i - seq_count].fasta_index), i}); }
     }
     const Size ranked_count = ranked.size();
     std::sort(ranked.begin(), ranked.end(), [](const RankedCandidate& left, const RankedCandidate& right) {
-      return left.score == right.score ? (left.coverage == right.coverage ? (*left.description > *right.description) : (left.coverage > right.coverage))
+      return left.score == right.score ? (left.coverage == right.coverage ? (left.order < right.order) : (left.coverage > right.coverage))
                                        : (left.score > right.score);
     });
 
@@ -2043,7 +2272,6 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       if ((int)ranked_count > max_protein_hits_)
       {
         auto entryOf = [&](Size c) { return c < seq_count ? seq_candidates[c].protein : hit_shifts[c - seq_count].fasta_index; };
-        auto tagCount = [&](Size c) { return c < seq_count ? (double)seq_candidates[c].tag_count : (double)gapped_tag_counts[c - seq_count]; };
         // a side's shifts and tag flanking masses
         auto shiftsOf = [&](Size c, bool n_side, const double*& s, const double*& f, Size& n) {
           if (c < seq_count)
@@ -2063,7 +2291,6 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
             n = sv.size();
           }
         };
-        constexpr Size learned_pool = 500;
         std::vector<char> in_pool(ranked_count, 0);
         std::fill(in_pool.begin(), in_pool.begin() + std::min(ranked_count, learned_pool), 1); // ranked is in score order
         if (ranked_count > learned_pool)
@@ -2286,7 +2513,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   };
 
   // Search cascade (search_cascade): stage 1 searches every spectrum with sequence tags and the ladders, stage 2 with gapped tags only the
-  // spectra stage 1 did not identify (a target PrSM whose proteoform passes rep_q, see identifiedSoFar below). Without the cascade, one
+  // spectra stage 1 did not identify (a PrSM, target or decoy, whose proteoform passes rep_q, see identifiedSoFar below). Without the cascade, one
   // stage (0) searches every spectrum with every source. The stages are decided by the target-decoy FDR, so the cascade needs decoys.
   const bool cascade = search_cascade_ && gapped_mode_ != "off" && ! native_rule && ! protein_level_only_ && decoy_factor_ > 0;
   std::vector<int> stages {0};
@@ -2307,7 +2534,9 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         all_precursor_masses.push_back(dspec.getPrecursorPeakGroup().getMonoMass());
         if (decoy_precursor_ && dspec.getDecoyPrecursorMass() > 0) all_precursor_masses.push_back(dspec.getDecoyPrecursorMass());
       }
+      flashPhase("tnt: prepare windows");
       mass_ladders.preparePrecursorWindows(all_precursor_masses, pl_precursor_tol);
+      flashPhase("tnt: prepare windows end");
     }
     std::vector<std::vector<MassLadderAlgorithm::Candidate>> sliding_of;
     if (native_rule) searchSlidingSpectra(dspecs, spectra, nullptr, sliding_of);
@@ -2422,8 +2651,10 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   };
   std::vector<int> all_spectra(dspecs.size());
   std::iota(all_spectra.begin(), all_spectra.end(), 0);
+  flashPhase("tnt: search stage first");
   searchStage(stages[0], all_spectra);
   endProgress();
+  flashPhase("tnt: search stage first end");
 
   // the FDR below: decoys, their weights, the PrSM level of a passing PrSM and the FDR class of a PrSM; defined here for the search cascade,
   // which decides from each stage's PrSM q-values which spectra the next stage searches
@@ -2447,8 +2678,14 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       if (! isDetermined(hit) && ! keep_underdetermined_) return -1;
       return fdr_class_residual + std::min(chimeric_round, max_chimeric_rounds) - 1;
     }
+    const bool determined = isDetermined(hit);
     if (hit.metaValueExists(mi_precursor_ladder)) return (int)fdr_class_precursor_ladder; // by source; all of them are determined
-    if (isDetermined(hit)) return (int)std::min(blindModCount_(hit), (Size)fdr_class_max_blind);
+    if (terminal_ladder_class_ && hit.metaValueExists(mi_terminal))
+    { // by source as well (option terminal_ladder_class); undetermined ones only with keep_underdetermined_, as below
+      if (! (determined || keep_underdetermined_)) return -1;
+      return (int)fdr_class_terminal_ladder;
+    }
+    if (determined) return (int)std::min(blindModCount_(hit), (Size)fdr_class_max_blind);
     if (! keep_underdetermined_) return -1;
     const bool both_termini = (int)hit.getMetaValue("StartPosition") > 0 && (int)hit.getMetaValue("EndPosition") > 0;
     return (int)(both_termini ? fdr_class_both_termini : fdr_class_open_terminus);
@@ -2511,7 +2748,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         }
         String line = String("FDR class \"") + fdr_class_names[c] + "\": " + String(targets) + " target and " + String(decoy_count)
                       + " decoy PrSMs (decoy weight " + String(weight) + "); protein-level null: "
-                      + (c == fdr_class_precursor_ladder ? String("that of \"undetermined, both termini\" (setProteinQvalues_)")
+                      + (c == fdr_class_precursor_ladder || c == fdr_class_terminal_ladder ? String("that of \"undetermined, both termini\" (setProteinQvalues_)")
                          : String(decoy_count >= null_min_class_decoys ? "own" : "pooled")
                              + (c <= fdr_class_max_blind ? "; those not the whole protein: that of \"undetermined, both termini\"" : ""));
         if (c == fdr_class_precursor_ladder && ! class_hits[c].empty())
@@ -2575,11 +2812,12 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       // counted together with its neighbours, below): their wrong windows are near misses of a similar sequence that shuffled decoys do not
       // show (B. theta entrapment of the three lysates: in one class with the determined proteoforms, 18 B. theta precursor-ladder
       // proteoforms at 1%, 9% estimated error; in a class of their own 4, with 9 more E. coli proteins over the runs). Precedence: a determined PrSM of the
-      // main search other than a precursor-ladder one (any blind count) makes the proteoform "determined"; else a precursor-ladder PrSM
-      // "precursor ladder"; else one with both termini "undetermined, both termini"; else "undetermined, open terminus"; a proteoform of
-      // residual-round PrSMs only is "residual r" (its lowest round). A proteoform is ranked by the best score of the PrSMs that decide its
-      // class, and its row (Representative) is one of them: of a determined or precursor-ladder proteoform the PrSM passing rep_q with the
-      // fewest blind modifications, else the best scoring one. Every PrSM carries the proteoform's q-value and class (ProteoformFDRClass).
+      // main search other than a ladder one (any blind count) makes the proteoform "determined"; else a precursor-ladder PrSM "precursor
+      // ladder"; else a terminal-ladder PrSM "terminal ladder" (option terminal_ladder_class); else one with both termini "undetermined,
+      // both termini"; else "undetermined, open terminus"; a proteoform of residual-round PrSMs only is "residual r" (its lowest round). A
+      // proteoform is ranked by the best score of the PrSMs that decide its class, and its row (Representative) is one of them: of a
+      // determined or ladder proteoform the PrSM passing rep_q with the fewest blind modifications, else the best scoring one. Every PrSM
+      // carries the proteoform's q-value and class (ProteoformFDRClass).
       std::vector<int> cluster_class(clusters.size(), -1);
       std::vector<double> cluster_score(clusters.size(), 0.0);
       for (Size k = 0; k < clusters.size(); k++)
@@ -2595,12 +2833,21 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         }
         if (! main_members.empty())
         {
-          for (Size i : main_members) { if (isDetermined(proteoform_hits_[i]) && hit_class[i] != fdr_class_precursor_ladder) defining.push_back(i); }
+          for (Size i : main_members)
+          {
+            if (isDetermined(proteoform_hits_[i]) && hit_class[i] != fdr_class_precursor_ladder && hit_class[i] != fdr_class_terminal_ladder)
+              defining.push_back(i);
+          }
           cluster_class[k] = pf_class_determined;
           if (defining.empty())
           {
             for (Size i : main_members) { if (hit_class[i] == fdr_class_precursor_ladder) defining.push_back(i); }
             cluster_class[k] = pf_class_precursor_ladder;
+          }
+          if (defining.empty())
+          {
+            for (Size i : main_members) { if (hit_class[i] == fdr_class_terminal_ladder) defining.push_back(i); }
+            cluster_class[k] = pf_class_terminal_ladder;
           }
           if (defining.empty())
           {
@@ -2626,7 +2873,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         for (Size i : defining)
         {
           cluster_score[k] = std::max(cluster_score[k], proteoform_hits_[i].getScore());
-          if (cluster_class[k] == pf_class_determined || cluster_class[k] == pf_class_precursor_ladder)
+          if (cluster_class[k] == pf_class_determined || cluster_class[k] == pf_class_precursor_ladder || cluster_class[k] == pf_class_terminal_ladder)
           {
             // passing first, then fewer blind modifications, then the higher score
             const bool pass_i = qvalues[i] <= rep_q, pass_row = qvalues[row] <= rep_q;
@@ -2646,36 +2893,33 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         }
         proteoform_hits_[row].setMetaValue("PrSMIndices", prsm_indices);
       }
-      // Classes with few targets are counted together: in the order of the classes, a group takes classes until it has min_class_targets
-      // targets, and a last group with fewer joins the one before. The classes of a lysate run have hundreds of targets each and stay
-      // apart; in a small run (a single SEC fraction of PXD012247: 83 determined, 20 and 90 undetermined targets) a class alone is
-      // decided by its few decoys, or by none.
-      constexpr Size min_class_targets = 100;
-      std::vector<Size> class_targets(pf_class_count, 0), class_size(pf_class_count, 0);
+      // Classes with few proteoforms are counted together (option merge_small_classes): a group takes classes until it has
+      // min_class_size proteoforms (targets and decoys: the rule must not read the labels), and a last group with fewer joins the one
+      // before. The classes of a lysate run have hundreds of targets each and stay apart; in a small run (a single SEC fraction of
+      // PXD012247: 83 determined, 20 and 90 undetermined targets) a class alone is decided by its few decoys, or by none.
+      // kind (the default): the grouping runs within two kinds of classes, the determined class and the ladder and undetermined classes,
+      // so that a small undetermined group cannot absorb a large determined class (and its few decoys set the cutoff of hundreds of
+      // determined proteoforms); the ladder classes are walked first and the undetermined ones last, so that a small undetermined group is
+      // the last group and joins the (ladder) group before it. A kind whose only group stays below min_class_size joins the other kind's
+      // first group. true: one walk in the order of the classes.
+      constexpr Size min_class_size = 100;
+      std::vector<Size> class_size(pf_class_count, 0);
       for (Size k = 0; k < clusters.size(); k++)
       {
-        if (cluster_class[k] < 0) continue;
-        class_size[cluster_class[k]]++;
-        class_targets[cluster_class[k]] += decoys[clusters[k][0]] ? 0 : 1;
+        if (cluster_class[k] >= 0) class_size[cluster_class[k]]++;
       }
-      std::vector<std::vector<int>> groups;
-      Size group_targets = 0;
-      for (int c = 0; c < pf_class_count; c++)
+      const auto kind_of = [](int c) { return c == pf_class_determined ? 0 : 1; };
+      std::vector<int> class_order;
+      if (merge_by_kind_)
       {
-        if (class_size[c] == 0) continue;
-        if (groups.empty() || group_targets >= min_class_targets)
-        {
-          groups.push_back({});
-          group_targets = 0;
-        }
-        groups.back().push_back(c);
-        group_targets += class_targets[c];
+        class_order = {pf_class_determined, pf_class_precursor_ladder, pf_class_terminal_ladder, pf_class_both_termini, pf_class_open_terminus};
+        for (int c = pf_class_residual; c < pf_class_count; c++) class_order.push_back(c);
       }
-      if (groups.size() > 1 && group_targets < min_class_targets)
+      else
       {
-        groups[groups.size() - 2].insert(groups[groups.size() - 2].end(), groups.back().begin(), groups.back().end());
-        groups.pop_back();
+        for (int c = 0; c < pf_class_count; c++) class_order.push_back(c);
       }
+      const std::vector<std::vector<int>> groups = groupClasses(class_order, class_size, min_class_size, merge_by_kind_, kind_of);
       std::vector<int> group_of(pf_class_count, -1);
       std::vector<String> group_names;
       for (Size g = 0; g < groups.size(); g++)
@@ -2830,6 +3074,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     // precursor-ladder PrSMs of the extension that is kept: kept (determined; of them at both window ends, at the window start only, at the
     // window end only), dropped as the same proteoform as a determined PrSM of another source, dropped as undetermined
     std::atomic<Size> pl_determined {0}, pl_at_both_ends {0}, pl_at_start {0}, pl_at_end {0}, pl_duplicates {0}, pl_undetermined {0};
+    // determined terminal-ladder PrSMs dropped as the same proteoform as a determined PrSM of another source (the ladder duplicate rule)
+    std::atomic<Size> tl_duplicates {0};
     // A PrSM of a database entry (by_entry) is decoded to its protein right after the extension: its positions (and TagPositions) moved to
     // the full-length protein, the entry's fixed modifications inside the proteoform merged into its modifications by position
     // (ModificationVariable 2; BlindModCount and VariableModifications stay those of the search), the sequence the full-length protein, and
@@ -3062,11 +3308,29 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         std::vector<ProteinHit> ladder_out;
         extend(ladder_hits, ladder_out);
         std::vector<ProteinHit> determined, undetermined;
+        Size duplicates = 0;
         for (auto& h : ladder_out)
         {
           h.setMetaValue(native_rule ? mi_sliding : mi_terminal, 1);
+          // The ladder duplicate rule: a determined ladder PrSM that is the same proteoform (same accession, areConsistent_) as a
+          // determined PrSM another source found in this spectrum is dropped, as a precursor-ladder one is (below). It adds nothing the
+          // spectrum does not have; kept, it would count twice or, with one PrSM per spectrum, take the spectrum from the tag search when it
+          // scores higher, and pad the terminal-ladder class with sure targets (E. coli 10_LC_PBS, several PrSMs per spectrum: 767 of
+          // the 1,416 terminal-ladder targets at 1% were such duplicates, none of them an entrapment). It acts here, before the spectrum's
+          // PrSM is chosen: out holds the other sources' PrSMs (one PrSM per spectrum: the best of the tag search; every candidate's
+          // with keep_all, which keepBestPerSpectrum_ then chooses from), so the proteoform stays with the tag search and its class. The
+          // rule reads no label.
+          if (! native_rule && is_determined(h)
+              && std::any_of(out.begin(), out.end(), [&](const ProteinHit& o) {
+                   return is_determined(o) && o.getAccession() == h.getAccession() && areConsistent_(o, h, pl_precursor_tol);
+                 }))
+          {
+            duplicates++;
+            continue;
+          }
           (is_determined(h) ? determined : undetermined).push_back(h);
         }
+        tl_duplicates += duplicates;
         const bool fill = out.empty();
         if (native_rule)
         {
@@ -3143,15 +3407,41 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
                            decoy_mass ? decoy_pl_candidates : pl_candidates, decoy_mass ? decoy_pl_ranges[d] : pl_ranges[d], out,
                            multiple_hits_per_spec_ || keep_all_candidates);
     };
+    // The residues the extension of spectrum d works through (the lengths of its candidates' proteins): the loops below that run over
+    // spectra in parallel extend the heaviest spectra first, so that a few spectra are not the tail of their dynamic schedule (each writes
+    // its own slot). On F3_1, spectra with ladder candidates on proteins of tens of thousands of residues took up to 3 s each and were
+    // extended last; the number of candidates did not tell them. A loop over spectra that runs serially (its extensions parallel over
+    // candidates) keeps the spectrum order: the raw path-alternative scorer (native) shares an isotope table that grows with the masses
+    // scored, so there the order of the extensions is part of the result.
+    const auto extensionCost = [&](int d, bool decoy_mass) {
+      Size residues = 0;
+      const auto add = [&](const std::vector<ProteinHit>& hits, const std::pair<Size, Size>& range) {
+        for (Size i = range.first; i < range.second; i++)
+        {
+          if (hits[i].metaValueExists(mi_fasta_index)) residues += fasta_entry[(Size)(int)hits[i].getMetaValue(mi_fasta_index)].sequence.length();
+        }
+      };
+      add(protein_hits_, candidate_ranges[d]);
+      add(ladder_candidates, ladder_ranges[d]);
+      add(decoy_mass ? decoy_pl_candidates : pl_candidates, decoy_mass ? decoy_pl_ranges[d] : pl_ranges[d]);
+      return residues;
+    };
+    const auto heaviestFirst = [&](std::vector<int>& order, bool decoy_mass) {
+      std::vector<Size> cost(dspecs.size(), 0);
+      for (int d : order) cost[d] = extensionCost(d, decoy_mass);
+      std::stable_sort(order.begin(), order.end(), [&](int l, int r) { return cost[l] > cost[r]; });
+    };
     // Extends the given spectra with the given parameters. Each spectrum is extended on its own and writes only its own slot, so the result
     // depends neither on the thread count and schedule nor on which other spectra are extended in the same call.
     auto extendSpectra = [&](const std::vector<int>& spectra, const Param& eparam) {
       const bool over_spectra = overSpectra(spectra);
+      std::vector<int> order(spectra);
+      if (over_spectra) heaviestFirst(order, false);
 #pragma omp parallel for schedule(dynamic) if (over_spectra)
-      for (int k = 0; k < (int)spectra.size(); k++)
+      for (int k = 0; k < (int)order.size(); k++)
       {
         nextProgress();
-        const int d = spectra[k];
+        const int d = order[k];
         extendSpectrumInto(d, eparam, dspecs[d], spec_proteoforms[d], false);
       }
     };
@@ -3186,7 +3476,9 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       const bool first_stage = stage == stages[0];
       startProgress(0, (SignedSize)spectra.size(),
                     first_stage ? String("Running extension algorithm ...") : "Running extension algorithm (search cascade stage " + String(stage) + ") ...");
+      flashPhase("tnt: extension start");
       extendSpectra(spectra, extender_param_);
+      flashPhase("tnt: extension main end");
       const bool extend_over_spectra = overSpectra(spectra);
       if (use_precursor_ladders && (stage == 0 || stage == 1))
       {
@@ -3194,6 +3486,153 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
                         << " at both window ends, " << pl_at_start.load() << " at the window start only, " << pl_at_end.load()
                         << " at the window end only), " << pl_duplicates.load() << " dropped as the same proteoform as a determined PrSM of another source, "
                         << pl_undetermined.load() << " undetermined dropped" << std::endl;
+      }
+      if (tl_duplicates.load() > 0)
+      {
+        OPENMS_LOG_INFO << "Terminal-ladder PrSMs: " << tl_duplicates.load() << " dropped as the same proteoform as a determined PrSM of another source"
+                        << std::endl;
+      }
+      // Option precursor_reselect. A spectrum whose PrSM has no proteoform mass although the spectrum has an MS1 precursor mass is searched
+      // again with each other target mass of its isolation window (the masses FLASHDeconv registered with the precursor from its survey
+      // scan and the neighbouring ones, getPrecursorMassIntensityMap). The alternative whose search gives a best PrSM with a mass a
+      // precursor-mass path took from it replaces the spectrum's PrSMs and becomes its precursor, when that PrSM scores at least as high
+      // as the spectrum's best PrSM less one truncation penalty (a precursor-mass path pays for its truncations, a terminal result does
+      // not); of equal alternatives the more intense mass. Targets and decoys get the same tries, so the FDR classes stay label-blind. On
+      // ten datasets (38 runs, dd8eb5de69) 21% of the PrSMs passing 1% had no mass although 99% of their spectra had a precursor mass, and
+      // 27% of those precursors had a Qscore below 0.5 (determined: 2%).
+      // It runs before the spectrum's one PrSM is chosen and before the decoy precursors, so that the re-selected PrSM is the one that
+      // competes. Without the raw spectra the extension kept one PrSM per spectrum, and the alternative's best replaces it. With them
+      // (keep_all_candidates) every candidate's PrSM is kept until keepBestPerSpectrum_, which reports a determined PrSM before any other:
+      // a spectrum with a determined PrSM reports a mass and is not re-selected, and a re-selected spectrum holds the alternative's
+      // PrSMs, of which the winner, determined, is reported unless a better determined one of the same search is.
+      if (precursor_reselect_)
+      {
+        const double iso = Constants::C13C12_MASSDIFF_U;
+        std::vector<int> todo;
+        for (int d : spectra)
+        {
+          const auto& own_hits = spec_proteoforms[d];
+          if (dspecs[d].getPrecursorPeakGroup().getMonoMass() <= 0 || own_hits.empty()) continue;
+          if (std::any_of(own_hits.begin(), own_hits.end(), [](const ProteinHit& h) { return isDetermined(h); })) continue;
+          const ProteinHit* best = nullptr;
+          for (const auto& h : own_hits)
+          {
+            if (best == nullptr || h.getScore() > best->getScore()) best = &h;
+          }
+          if ((double)best->getMetaValue("Mass") > 0) continue;
+          const double own = dspecs[d].getPrecursorPeakGroup().getMonoMass();
+          int others = 0;
+          for (const auto& [m, j] : dspecs[d].getPrecursorMassIntensityMap())
+          {
+            if (m > 0 && std::abs(m - own) > 0.01) others++;
+          }
+          if (others > 0) todo.push_back(d);
+        }
+        flashPhase("tnt: reselection start");
+        std::vector<std::vector<ProteinHit>> chosen(dspecs.size());
+        std::vector<double> chosen_mass(dspecs.size(), -1.0);
+        // The alternatives of every spectrum (the window masses by decreasing intensity: of alternatives whose PrSMs score equally, the
+        // more intense mass takes the spectrum) are extended each on its own, in parallel and the heaviest spectra first (a spectrum's
+        // alternatives one after another left a few spectra of many alternatives as the tail of the loop), then chosen per spectrum in that
+        // order: the same choice as extending them one after another. Run serially, they are extended in that order too. The PrSMs of an
+        // alternative that cannot be chosen (no top, or a top below the spectrum's best less the penalty, where the choice starts) are
+        // freed at once, so that only those that can win are held until the choice.
+        struct Alternative
+        {
+          int d = 0;
+          double mass = 0;
+          double top = -1e10; // the best score of a PrSM with a mass the precursor-mass path took from this mass; -1e10: none
+          std::vector<ProteinHit> out;
+        };
+        std::vector<Alternative> alternatives;
+        std::vector<std::pair<Size, Size>> alternatives_of(dspecs.size(), {0, 0});
+        for (int d : todo)
+        {
+          const double own = dspecs[d].getPrecursorPeakGroup().getMonoMass();
+          std::vector<std::pair<double, double>> by_intensity;
+          for (const auto& [m, j] : dspecs[d].getPrecursorMassIntensityMap()) by_intensity.emplace_back(j, m);
+          std::stable_sort(by_intensity.begin(), by_intensity.end(), [](const auto& l, const auto& r) { return l.first > r.first; });
+          alternatives_of[d].first = alternatives.size();
+          for (const auto& [j, m] : by_intensity)
+          {
+            if (m <= 0 || std::abs(m - own) <= 0.01) continue;
+            alternatives.push_back({d, m, -1e10, {}});
+          }
+          alternatives_of[d].second = alternatives.size();
+        }
+        std::vector<double> best_own(dspecs.size(), -1e10); // the spectrum's best score: the choice starts at it less the penalty
+        for (int d : todo)
+        {
+          for (const auto& h : spec_proteoforms[d]) best_own[d] = std::max(best_own[d], h.getScore());
+        }
+        const double penalty = FLASHExtenderAlgorithm::truncation_penalty; // the penalty a precursor-mass path pays for a truncation
+        std::vector<Size> work(alternatives.size());
+        std::iota(work.begin(), work.end(), 0);
+        if (extend_over_spectra)
+        {
+          std::vector<Size> spectrum_cost(dspecs.size(), 0);
+          for (int d : todo) spectrum_cost[d] = extensionCost(d, false);
+          std::stable_sort(work.begin(), work.end(), [&](Size l, Size r) { return spectrum_cost[alternatives[l].d] > spectrum_cost[alternatives[r].d]; });
+        }
+  #pragma omp parallel for schedule(dynamic) if (extend_over_spectra)
+        for (int k = 0; k < (int)work.size(); k++)
+        {
+          auto& alt = alternatives[work[k]];
+          DeconvolvedSpectrum alt_spec = dspecs[alt.d];
+          auto pg = alt_spec.getPrecursorPeakGroup();
+          pg.setMonoisotopicMass(alt.mass);
+          alt_spec.setPrecursorPeakGroup(pg);
+          extendSpectrumInto(alt.d, extender_param_, alt_spec, alt.out, false);
+          // the alternative's best PrSM must have a mass a precursor-mass path took from it (not one from fragment pairs): an alternative
+          // whose best PrSM still has no mass would change the precursor without giving the spectrum a mass
+          double top = -1e10, best_any = -1e10;
+          for (const auto& h : alt.out)
+          {
+            best_any = std::max(best_any, h.getScore());
+            if ((double)h.getMetaValue("Mass") <= 0 || (int)h.getMetaValue("ProteoformMassByFragmentMass") != 0) continue;
+            if (std::abs((double)h.getMetaValue("Mass") - alt.mass) > 3 * iso + 0.1) continue; // a mass taken from this precursor, up to isotope errors
+            top = std::max(top, h.getScore());
+          }
+          alt.top = top < best_any ? -1e10 : top;
+          if (! (alt.top > -1e9 && alt.top >= best_own[alt.d] - penalty))
+          {
+            alt.top = -1e10;
+            std::vector<ProteinHit>().swap(alt.out);
+          }
+        }
+  #pragma omp parallel for schedule(dynamic) if (extend_over_spectra)
+        for (int k = 0; k < (int)todo.size(); k++)
+        {
+          const int d = todo[k];
+          double best_alt = best_own[d] - penalty;
+          for (Size a = alternatives_of[d].first; a < alternatives_of[d].second; a++)
+          {
+            auto& alt = alternatives[a];
+            if (alt.top > -1e9 && (chosen_mass[d] <= 0 ? alt.top >= best_alt : alt.top > best_alt))
+            {
+              best_alt = alt.top;
+              chosen_mass[d] = alt.mass;
+              chosen[d].swap(alt.out);
+            }
+            std::vector<ProteinHit>().swap(alt.out);
+          }
+        }
+        const Size tries = alternatives.size();
+        std::vector<Alternative>().swap(alternatives);
+        flashPhase("tnt: reselection end");
+        int reselected = 0;
+        for (int d : todo)
+        {
+          if (chosen_mass[d] <= 0) continue;
+          reselected++;
+          for (auto& h : chosen[d]) h.setMetaValue("PrecursorReselected", chosen_mass[d]);
+          spec_proteoforms[d].swap(chosen[d]);
+          auto pg = dspecs[d].getPrecursorPeakGroup(); // the spectrum's precursor from here on (reported mass, feature and decoy rules)
+          pg.setMonoisotopicMass(chosen_mass[d]);
+          dspecs[d].setPrecursorPeakGroup(pg);
+        }
+        OPENMS_LOG_INFO << "Precursor re-selection: " << todo.size() << " spectra whose PrSM has no mass and whose isolation window holds other masses, "
+                        << tries << " alternative masses tried, " << reselected << " spectra re-selected" << std::endl;
       }
       // Decoy precursors: a spectrum whose PrSM took its mass from MS1 is searched again as a decoy spectrum whose precursor mass is the
       // decoy precursor mass (noise or signal decoy) of its isolation window, as FLASHDeconv chose it with report_FDR. A PrSM of that copy
@@ -3221,15 +3660,18 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
           }
           todo.push_back(d);
         }
+        flashPhase("tnt: decoy precursors start");
         copies = (int)todo.size();
+        std::vector<int> decoy_order(todo);
+        if (extend_over_spectra) heaviestFirst(decoy_order, true);
         if (copies == 0 && first_stage)
         {
           OPENMS_LOG_WARN << "Decoy precursors: the input has no decoy precursor masses; run FLASHDeconv with -FD:report_FDR true" << std::endl;
         }
   #pragma omp parallel for schedule(dynamic) if (extend_over_spectra)
-        for (int k = 0; k < (int)todo.size(); k++)
+        for (int k = 0; k < (int)decoy_order.size(); k++)
         {
-          const int d = todo[k];
+          const int d = decoy_order[k];
           DeconvolvedSpectrum decoy_spec = dspecs[d];
           auto pg = decoy_spec.getPrecursorPeakGroup();
           const double decoy_mass = decoy_spec.getDecoyPrecursorMass();
@@ -3323,6 +3765,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       }
       endProgress();
 
+      flashPhase("tnt: extension stage end");
       // raw-spectrum evidence of every PrSM, targets and decoys alike, before the FDR
       if (raw_loader_ && ! stage_hits.empty())
       {
@@ -3330,6 +3773,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         for (const auto& hit : stage_hits) scans.insert((int)hit.getMetaValue("Scan"));
         loadRawSpectra_(scans);
         annotateOnRawSpectra_(stage_hits);
+        flashPhase("tnt: raw annotation end");
         dropOpenTerminusShifts(stage_hits);
         // one PrSM per spectrum: the best by the combined score; the extension kept every candidate's PrSM for this choice
         if (! multiple_hits_per_spec_) keepBestPerSpectrum_(stage_hits, stage == 0 ? String("") : " (search cascade stage " + String(stage) + ")", "combined score");
@@ -3342,12 +3786,15 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       }
     };
 
-    // The spectra identified after a stage of the search cascade: whose best PrSM (by score, of any stage so far) is a target whose
-    // proteoform q-value is at most rep_q, the level at which proteoforms are reported. A passing target below a better decoy or a better
-    // failing target does not identify its spectrum (survey benchmark: 187 gapped-tag identifications had a decoy best PrSM in stage 1 and
-    // were never searched with gapped tags). The q-values are those the FDR below gives the PrSMs so far (per class and stage, the
-    // proteoforms over all of them), computed on a copy; the one proteoform per MS1 feature rule is applied at the end only. An identified
-    // spectrum is searched by no later stage.
+    // The spectra identified after a stage of the search cascade: whose best PrSM (by score, of any stage so far), target or decoy alike,
+    // has a proteoform q-value of at most rep_q, the level at which proteoforms are reported. Label-blind, so that a chance decoy PrSM
+    // meets the same competition as a chance target one: when only targets identified their spectra, a spectrum won by a passing decoy was
+    // searched again by the next stage while one won by a passing target was not, and chance decoys won their spectra less often than chance
+    // targets (38 runs of ten datasets, shuffled entrapment, measured on dd8eb5de69: at the top of the protein ranking 20 entrapment proteins
+    // against 1 decoy protein in three runs). A passing PrSM below a better failing one does not identify its spectrum (the best PrSM
+    // guard; a spectrum can hold several PrSMs with decoy precursors of both blind groups). The q-values are those the FDR below gives the
+    // PrSMs so far (per class and stage, the proteoforms over all of them), computed on a copy; the one proteoform per MS1 feature rule is
+    // applied at the end only. An identified spectrum is searched by no later stage.
     std::map<int, int> spectrum_of_scan_number;
     for (int d = 0; d < (int)dspecs.size(); d++) spectrum_of_scan_number[dspecs[d].getScanNumber()] = d;
     auto identifiedSoFar = [&]() {
@@ -3364,7 +3811,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         const auto it = spectrum_of_scan_number.find((int)hit.getMetaValue(mi_scan));
         // the spectrum's best PrSM only (proteoform_hits_ is in byScore order here)
         if (it == spectrum_of_scan_number.end() || ! seen.insert(it->second).second) continue;
-        if (decoys[i] || hit_class[i] < 0 || (double)hit.getMetaValue("proqvalue", 1.0) > rep_q) continue;
+        if (hit_class[i] < 0 || (double)hit.getMetaValue("proqvalue", 1.0) > rep_q) continue;
         identified.insert(it->second);
       }
       proteoform_hits_.swap(kept);
@@ -3399,7 +3846,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       }
       OPENMS_LOG_INFO << "Search cascade stage " << stage << " (" << (stage == 1 ? "sequence tags and ladders" : "gapped tags") << "): " << stage_spectra.size()
                       << " spectra searched, " << proteoform_hits_.size() - from << " PrSMs, " << stage_spectra.size() - rest.size()
-                      << " of the spectra identified (a target PrSM at proteoform q-value <= " << rep_q << "); the next stage searches the other "
+                      << " of the spectra identified (a PrSM, target or decoy, at proteoform q-value <= " << rep_q << "); the next stage searches the other "
                       << rest.size() << std::endl;
       stage_spectra.swap(rest);
     }
@@ -3723,7 +4170,8 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   // a blind shift (raw score minus log10 of the windows it opens); ranked by blind count first, low-scoring PrSMs that fit the mass by
   // truncation alone (mostly decoys and PrSMs far below 1%) took the masses of real one-shift proteoforms in the same feature (Eclip_1480:
   // 544 PrSMs lost the mass, 625 with the B. theta entrapment database; 323 of the 342 E. coli proteoforms that only the entrapment search
-  // left undetermined had lost the mass to a PrSM outside the 1% list).
+  // left undetermined had lost the mass to a PrSM outside the 1% list). With fitted (the default), only the PrSMs whose mass needs a blind
+  // modification lose it.
   if (one_proteoform_per_feature_ && precursor_tol > 0)
   {
     const double iso = Constants::ISOTOPE_MASSDIFF_55K_U, rt_window = 120.0;
@@ -3796,6 +4244,10 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       {
         auto& h = proteoform_hits_[idx[a]];
         if (h.getAccession() == owner) continue;
+        // fitted: a mass that needs no blind shift is explained by the PrSM's own stretch and modifications; it is not one that a
+        // truncation and a shift fitted to another protein's feature (ten datasets: 183 spectra lost such a mass without the exception,
+        // TopPIC assigned the loser's protein to most of them and agreed with the winner on 12)
+        if (one_proteoform_per_feature_fitted_ && blindModCount_(h) == 0) continue;
         h.setMetaValue(tntKey("Mass"), -1.0);
         h.setMetaValue(tntKey("MassLostToFeatureOwner"), owner);
         demoted++;
@@ -3815,15 +4267,19 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   //   determined classes would hide. The class does not split by blind modifications: a window fits the unmodified mass, so such a PrSM
   //   with blind shifts left its window (the log line of the class counts them, targets and decoys, to decide whether it should be split).
   //   At the protein level the class uses the pooled null while it has fewer than null_min_class_decoys decoys, and its decoys join the
-  //   pooled null (so the null of the sparse determined classes changes with the option; not yet measured). The PrSMs of each residual
-  //   round of the chimeric search (meta value ChimericRound r > 0) are class "residual r", also by source and before the rules above;
+  //   pooled null (so the null of the sparse determined classes changes with the option; not yet measured). The PrSMs of terminal-ladder
+  //   candidates (meta value TerminalLadder; a determined one that is the same proteoform as a determined PrSM of another source in the
+  //   spectrum is dropped) are class "terminal ladder" in the same way (option terminal_ladder_class), determined or not. The PrSMs of each
+  //   residual round of the chimeric search (meta value ChimericRound r > 0) are class "residual r", also by source and before the rules above;
   //   determined and undetermined ones share it (the log line of the class counts both), and its decoys join the pooled null like those
   //   of the precursor-ladder class. Each PrSM is in exactly one class, so no PrSM passes twice. With discard_underdetermined the undetermined PrSMs are in no class and take part in nothing below,
   //   the proteoforms included.
-  // - proteoforms: per proteoform class (a partition: determined, undetermined with both termini, with an open terminus, residual r),
+  // - proteoforms: per proteoform class (a partition: determined, undetermined with both termini, with an open terminus, precursor ladder,
+  //   terminal ladder, residual r),
   //   ranked by the best score of the PrSMs that decide the class (proteoformQvalues; -native: one ranking by PrSM q-value);
   // - proteins: ranked by their best proteoform (the lowest proteoform q-value, then the best score of its PrSMs) and target-decoy counted,
-  //   so that a protein is identified by a proteoform; -native: setProteinQvalues_ (local-FDR evidence of all PrSMs).
+  //   so that a protein is identified by a proteoform; with protein_evidence proteoforms only proteins of two proteoforms or of one strong
+  //   one take part; -native: setProteinQvalues_ (local-FDR evidence of all PrSMs).
   // Without decoys in the database and without discard_underdetermined no q-value is set.
   //   With search_cascade, the PrSM q-values are computed per class and stage (meta value SearchStage), so that the gapped-tag PrSMs of
   //   stage 2, from the spectra stage 1 did not identify, compete only with the decoys of stage 2.
@@ -3831,6 +4287,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   std::vector<double> qvalues, decoy_weights;
   std::vector<bool> decoys;
   // the proteoforms: positions of their PrSMs in proteoform_hits_ (Index), the representative first; representatives in the order above
+  flashPhase("tnt: proteoform q-values");
   const auto clusters = proteoformQvalues(hit_class, qvalues, decoys, decoy_weights, true);
   const Size hit_count = proteoform_hits_.size();
 
@@ -3851,12 +4308,27 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     {
       std::pair<double, double> key {2.0, 0.0}; // lowest proteoform q-value, -best score
       bool internal = false;
+      Size proteoforms = 0; // clusters in a class (option protein_evidence)
+      bool strong = false;  // a determined (tag search) proteoform without blind modifications of protein_evidence_min_mass (option protein_evidence)
     };
     std::map<String, ProteinBest> best_of;
     for (const auto& members : clusters)
     {
       const auto& rep = proteoform_hits_[members[0]];
       if (rep.metaValueExists("DecoyPrecursor") && ! rep.getAccession().hasPrefix("DECOY")) continue;
+      if (! rep.metaValueExists("proqvalue")) continue; // in no proteoform class (discard_underdetermined): no protein evidence
+      best_of[rep.getAccession()].proteoforms++;
+      for (Size i : members)
+      {
+        const auto& h = proteoform_hits_[i];
+        // the determined classes of the tag search (not a ladder window, which fits any precursor mass somewhere)
+        if (hit_class[i] >= 0 && hit_class[i] <= fdr_class_max_blind && (double)h.getMetaValue("Mass") >= protein_evidence_min_mass_
+            && blindModCount_(h) == 0)
+        {
+          best_of[rep.getAccession()].strong = true;
+          break;
+        }
+      }
       const double q = rep.getMetaValue("proqvalue", 1.0);
       double score = 0;
       for (Size i : members) score = std::max(score, proteoform_hits_[i].getScore());
@@ -3878,13 +4350,29 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
     }
     std::map<String, double> protein_q;
     const double protein_decoy_weight = 1.0 / std::max(decoy_factor_, 1e-9);
+    // option protein_evidence proteoforms: a protein of one proteoform that is not a determined proteoform without blind modifications of
+    // protein_evidence_min_mass takes no part (targets and decoys alike; q-value 1). In a shuffled entrapment of 38 runs (dd8eb5de69) the
+    // proteins of one PrSM were 10% entrapment at a nominal 1% (61 of 1206) while their decoys were rare, those of two or more 0.4%.
+    auto supported = [&](const ProteinBest& b) { return ! protein_evidence_ || proteinEvidenceSupported(b.proteoforms, b.strong); };
+    if (protein_evidence_)
+    {
+      Size unsupported_targets = 0, unsupported_decoys = 0;
+      for (const auto& [acc, b] : best_of)
+      {
+        if (! supported(b)) (acc.hasPrefix("DECOY") ? unsupported_decoys : unsupported_targets)++;
+      }
+      OPENMS_LOG_INFO << "Protein evidence: " << unsupported_targets << " target and " << unsupported_decoys << " decoy proteins without two "
+                      << "proteoforms or a determined proteoform without blind modifications of " << protein_evidence_min_mass_ << " Da are not ranked"
+                      << std::endl;
+    }
     for (const bool internal : {false, true})
     {
       std::vector<std::pair<std::pair<double, double>, String>> ranked_proteins;
       for (const auto& [acc, b] : best_of)
       {
-        if (b.internal == internal) ranked_proteins.emplace_back(b.key, acc);
+        if (b.internal == internal && supported(b)) ranked_proteins.emplace_back(b.key, acc);
       }
+      if (ranked_proteins.empty()) continue;
       std::sort(ranked_proteins.begin(), ranked_proteins.end());
       std::vector<RankedItem<std::pair<double, double>>> items;
       items.reserve(ranked_proteins.size());
@@ -4006,9 +4494,12 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   releaseInParallel(rev_vec_pro);
   releaseInParallel(pro_prefix);
   releaseInParallel(pro_suffix);
+  releaseInParallel(pro_prefix_index);
+  releaseInParallel(pro_suffix_index);
   releaseInParallel(ladder_candidates);
   releaseInParallel(pl_candidates);
   releaseInParallel(decoy_pl_candidates);
+  gapped_tagger.releaseIndex();
   // TODO
   // per scan, get the scan number and the precursor mass - maybe given or maybe deconvolved.
   // get all protoeforms - mass and score.

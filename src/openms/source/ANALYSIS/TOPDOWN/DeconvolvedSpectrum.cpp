@@ -7,6 +7,7 @@
 // --------------------------------------------------------------------------
 
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
+#include <sstream>
 #include <algorithm>
 
 namespace OpenMS
@@ -50,6 +51,8 @@ namespace OpenMS
     {
       val << ";precursorscan=0;precursormass=0;precursorQscore=0;precursorSNR=0";
     }
+    // the target masses of the isolation window (with their intensities), for FLASHTnT's precursor re-selection
+    if (! precursor_mass_intensity_map_.empty()) val << ";windowmasses=" << formatWindowMasses(precursor_mass_intensity_map_);
     if (decoy_precursor_mass_ > 0)
     {
       val << ";decoyprecursormass=" << std::to_string(decoy_precursor_mass_) << ";decoyprecursorweight=" << std::to_string(decoy_precursor_weight_)
@@ -278,6 +281,39 @@ namespace OpenMS
   void DeconvolvedSpectrum::setDeconvolvedPrecursor(const Precursor& precursor)
   {
     deconvolved_precursor_peak_ = precursor;
+  }
+
+  String DeconvolvedSpectrum::formatWindowMasses(const std::vector<std::tuple<double, double>>& map)
+  {
+    std::stringstream ss;
+    bool first = true;
+    for (const auto& [m, it] : map)
+    {
+      if (m <= 0) continue;
+      ss << (first ? "" : ",") << std::to_string(m) << ":" << std::to_string(it);
+      first = false;
+    }
+    return ss.str();
+  }
+
+  std::vector<std::tuple<double, double>> DeconvolvedSpectrum::parseWindowMasses(const String& value)
+  {
+    std::vector<std::tuple<double, double>> window;
+    Size pos = 0;
+    while (pos < value.size())
+    {
+      Size next = value.find(",", pos);
+      if (next == String::npos) next = value.size();
+      const String token = value.substr(pos, next - pos);
+      const Size colon = token.find(":");
+      if (colon != String::npos && colon > 0)
+      {
+        try { window.emplace_back(std::stod(token.substr(0, colon)), std::stod(token.substr(colon + 1))); }
+        catch (const std::exception&) {}
+      }
+      pos = next + 1;
+    }
+    return window;
   }
 
   void DeconvolvedSpectrum::setPrecursorMassIntensityMap(const std::vector<std::tuple<double, double>>& map)

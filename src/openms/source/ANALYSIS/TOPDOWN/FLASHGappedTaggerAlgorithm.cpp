@@ -117,6 +117,20 @@ Size FLASHGappedTaggerAlgorithm::getIndexBytes() const
          + plausible_rank_.size() * sizeof(std::uint32_t);
 }
 
+void FLASHGappedTaggerAlgorithm::releaseIndex()
+{
+  if (bins_ != nullptr && bins_.use_count() == 1)
+  {
+    // the only holder: the bitmaps (built here, so not const) freed in parallel
+    auto& bitmaps = const_cast<BinBitmaps&>(*bins_).bitmaps;
+#pragma omp parallel for schedule(dynamic, 256)
+    for (long s = 0; s < (long)bitmaps.size(); ++s) bitmaps[s] = roaring::Roaring();
+  }
+  bins_.reset();
+  std::vector<std::uint32_t>().swap(slot_);
+  std::vector<std::uint64_t>().swap(slot_count_);
+}
+
 void FLASHGappedTaggerAlgorithm::buildIndex(const std::vector<std::string>& protein_seqs, const std::vector<std::vector<std::pair<int, double>>>* fixed)
 {
   double aa_mass[128] = {0};

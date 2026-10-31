@@ -396,10 +396,12 @@ namespace OpenMS
 
         for (double d : div_factors)
         {
-          double distance = normalized_dist / d * (max_bin_number - bin_number_margin);
-          Size bin = (Size)round(distance);
-          if (bin == 0) { continue; }
-          if (bin >= max_bin_number) { continue; } // larger divisors give smaller bins that may still be in range, so skip (not break) this d
+          const double distance = normalized_dist / d * (max_bin_number - bin_number_margin);
+          // bin = round(distance), with distance >= 0 (the peaks ascend): 0 below 0.5, max_bin_number or more from max_bin_number - 0.5 on,
+          // and in between (trunc(2 distance) + 1) / 2 (2 distance is exact), without a rounding call. Larger divisors give smaller bins
+          // that may still be in range, so a bin out of range skips (not breaks) this d.
+          if (! (distance >= 0.5) || distance >= (double)max_bin_number - 0.5) { continue; }
+          const Size bin = ((Size)(int)(2.0 * distance) + 1) / 2;
 
           used_bins |= std::uint32_t(1) << bin;
           double current_error = d * max_bin_number + std::abs((double)bin - distance); // larger when d gets larger. For the same d, comparable.
@@ -941,7 +943,7 @@ namespace OpenMS
         float pint = spec[index].getIntensity();
         if (pint <= 0) { continue; }
         double pmz = spec[index].getMZ();
-        int iso_index = (int)round((pmz - cmz) / iso_delta);
+        int iso_index = (int)FLASHHelperClasses::roundHalfAway((pmz - cmz) / iso_delta);
         if (iso_index > max_isotope) { break; }
 
         if (iso_index < min_isotope) { continue; }

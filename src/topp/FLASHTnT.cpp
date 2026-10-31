@@ -9,6 +9,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/DeconvolvedSpectrum.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHAnnotatorAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvAlgorithm.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHPhaseTrace.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHHugePages.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHTnTAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/ProteoformDatabase.h>
@@ -284,7 +285,9 @@ protected:
     // reading mzMLs with m/z and rt criteria.
 
     mzml.setLogType(log_type_);
+    flashPhase("tool: load start");
     mzml.load(in_file, map);
+    flashPhase("tool: load end");
 
     // A raw mzML (no spectrum with FLASHDeconv's deconvolved masses) is deconvolved here, as FLASHDeconv does before writing its
     // deconvolved mzML (FLASHDeconvSpectrumFile::toDeconvolvedMap, uncharged masses), and its MSn spectra are kept for the raw-spectrum
@@ -319,6 +322,7 @@ protected:
         }
         raw_msn_spectra.emplace(scan, spec); // the first spectrum of a scan number, as the file reader keeps it
       }
+      flashPhase("tool: raw spectra copied");
       FLASHDeconvAlgorithm fd;
       Param fd_param = getParam_().copy("fd:", true);
       // the decoy precursor masses of the isolation windows (FLASHDeconv's report_FDR) are needed for -decoy_precursor only
@@ -326,10 +330,20 @@ protected:
       fd.setParameters(fd_param);
       std::vector<DeconvolvedSpectrum> deconvolved_spectra;
       std::vector<FLASHHelperClasses::MassFeature> deconvolved_features;
+      flashPhase("tool: deconvolution start");
       fd.run(map, deconvolved_spectra, deconvolved_features);
+      flashPhase("tool: deconvolution end");
       MSExperiment deconvolved_map;
       FLASHDeconvSpectrumFile::toDeconvolvedMap(map, deconvolved_spectra, 0, fd.getTolerances(), deconvolved_map);
       map = std::move(deconvolved_map);
+      flashPhase("tool: deconvolved map");
+      // the deconvolved spectra are freed with all threads instead of by the serial destructor at the end of this block
+#pragma omp parallel for schedule(dynamic, 64)
+      for (SignedSize i = 0; i < (SignedSize)deconvolved_spectra.size(); ++i)
+      {
+        deconvolved_spectra[i] = DeconvolvedSpectrum();
+      }
+      flashPhase("tool: deconvolved spectra freed");
       if (! in_raw.empty()) OPENMS_LOG_WARN << "-in_raw is not read: the raw spectra are those of -in" << endl;
     }
 
@@ -352,6 +366,7 @@ protected:
     tnt_param.remove("force");
     tnt_param.remove("test");
 
+    flashPhase("tool: parameters");
     double pro_fdr = tnt_param.getValue("pro_fdr");
     // the chimeric columns are written only with the residual search, so that other outputs keep their format
     const bool chimeric = (int)tnt_param.getValue("chimeric_rounds") > 0 || tnt_param.getValue("native").toString() == "true"; // -native searches a residual round
@@ -435,6 +450,7 @@ protected:
       FASTAFile fasta_file;
       fasta_file.load(in_db, fasta_entry);
     }
+    flashPhase("tool: database read");
     OPENMS_LOG_INFO << "Database read: " << fasta_entry.size() << " entries in "
                     << std::chrono::duration<double>(std::chrono::steady_clock::now() - db_read_start).count() << " s" << endl;
     // Run here!
@@ -469,8 +485,10 @@ protected:
       FLASHTnTFile::writeProteinHeader(out_protein_stream);
     }
 
+    flashPhase("tool: output headers");
     FLASHTnTAlgorithm tnt;
     tnt.setParameters(tnt_param);
+    flashPhase("tool: tnt parameters set");
     if (raw_input)
     {
       tnt.setRawSpectrumLoader([&raw_msn_spectra](const std::set<int>& scans, std::map<int, MSSpectrum>& spectra) {
@@ -487,7 +505,9 @@ protected:
         FLASHAnnotatorAlgorithm::loadSpectra(in_raw, scans, spectra);
       });
     }
+    flashPhase("tool: database loaded");
     tnt.run(map, fasta_entry, peff ? &database : nullptr);
+    flashPhase("tool: tnt end");
     const auto& proteoform_hits = tnt.getProteoforms();
 
     OPENMS_LOG_INFO << "FLASHTnT run complete. Now writing the results in output files ..." << endl;
@@ -520,6 +540,7 @@ protected:
     {
       map[i] = MSSpectrum();
     }
+    flashPhase("tool: written");
     return EXECUTION_OK;
   }
 };

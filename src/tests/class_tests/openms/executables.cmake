@@ -506,6 +506,8 @@ set(analysis_executables_list
   # FLASHTaggerAlgorithm_test       # offline tagger; test is stale (hardcoded paths) - needs rewrite
   # FLASHGappedTaggerAlgorithm_test  # offline FLASHTnT gapped tagger, not the real-time IDA bridge
   FLASHTnTCandidateRanker_test
+  FLASHTnTAlgorithm_test
+  FLASHExtenderAlgorithm_test
   IDBoostGraph_test
   IDMapper_test
   IDMergerAlgorithm_test
