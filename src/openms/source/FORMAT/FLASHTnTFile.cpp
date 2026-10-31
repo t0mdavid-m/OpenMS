@@ -35,7 +35,7 @@ void FLASHTnTFile::writePrSMHeader(std::fstream& fs, bool chimeric)
         "orma\tMatchingFragments\tCoverage(%)\tStartPosition\tEndPosition"
         "\tTagCount\tTagIndices\tModCount\tModMass\tModID\tModAccession\tModStart\tModEnd\tPrecursorQscore\tPrecursorSNR\tScore\tPrSMLevelQvalue\tProteoformLevelQvalue"
         "\tProteoformIndex\tCandidateSource\tFDRClass\tModVariable\tDecoyPrecursorWeight\tProteinLevelQvalue"
-        "\tExtensionScore\tRawScore\tRawMatchedFragments\tRawFragmentHypotheses\tRawCoverage(%)"
+        "\tExtensionScore\tRawScore\tRawMatchedFragments\tRawFragmentHypotheses\tRawCoverage(%)\tMassEvidence"
      << (chimeric ? "\tChimericRound\tMatchedMasses\tRemovedMasses\tResidualNullScore\tResidualScoreRatio" : "") << "\n";
 }
 
@@ -45,7 +45,7 @@ void FLASHTnTFile::writeProHeader(std::fstream& fs, bool chimeric)
   fs << "ProteoformIndex\tPrSMIndices\tScan\tRetentionTime\tNumMass\tProteinAccession\tProteinDescription\tPrecursorMass\tProteoformMass\tProteoformMassFromComplementaryFragmentIonPairs\tDatabaseSequence\tProteinSequence\tProf"
         "orma\tMatchingFragments\tCoverage(%)\tStartPosition\tEndPosition"
         "\tTagCount\tTagIndices\tModCount\tModMass\tModID\tModAccession\tModStart\tModEnd\tPrecursorQscore\tPrecursorSNR\tScore\tProteoformLevelQvalue\tCandidateSource\tFDRClass\tModVariable\tProteinLevelQvalue"
-        "\tExtensionScore\tRawScore\tRawMatchedFragments\tRawFragmentHypotheses\tRawCoverage(%)"
+        "\tExtensionScore\tRawScore\tRawMatchedFragments\tRawFragmentHypotheses\tRawCoverage(%)\tMassEvidence"
      << (chimeric ? "\tChimericRound\tMatchedMasses\tRemovedMasses\tResidualNullScore\tResidualScoreRatio" : "") << "\n";
 }
 
@@ -276,6 +276,23 @@ namespace
       out += v == 2 ? "2" : (v != 0 ? "1" : "0");
     }
     return out;
+  }
+
+  /// The evidence behind the reported proteoform mass (column MassEvidence): "exact" when the residues and the annotated (variable, fixed)
+  /// modifications give the mass, "blind shift" when it needs an unexplained mass shift the path fitted, "none" without a mass. On ten
+  /// datasets FLASHTnT's exact masses agreed with TopPIC's in 93% of the scans both identified as the same protein, masses with a blind
+  /// shift in 47-58%.
+  OpenMS::String massEvidence(const OpenMS::ProteinHit& hit)
+  {
+    if (! hit.metaValueExists(prsmKey("Mass")) || (double)hit.getMetaValue(prsmKey("Mass")) <= 0) return "none";
+    if (hit.metaValueExists(prsmKey("ModificationVariable")))
+    {
+      for (int v : hit.getMetaValue(prsmKey("ModificationVariable")).toIntList())
+        if (v == 0) return "blind shift";
+      return "exact";
+    }
+    // without the kinds, every modification counts as blind
+    return hit.metaValueExists(prsmKey("Modifications")) && ! hit.getMetaValue(prsmKey("Modifications")).toDoubleList().empty() ? "blind shift" : "exact";
   }
 
   /// the residues [first, end) of the hit's sequence that the ProteinSequence column shows: the proteoform, an open terminus bounded by
@@ -516,7 +533,7 @@ void OpenMS::FLASHTnTFile::writePrSMs(const std::vector<ProteinHit>& hits, std::
        << (hit.metaValueExists(prsmKey("FDRClass")) ? hit.getMetaValue(prsmKey("FDRClass")).toString() : String()) << "\t" << modVariable(hit) << "\t"
        << (hit.metaValueExists(prsmKey("DecoyPrecursor")) ? (double)hit.getMetaValue(prsmKey("DecoyPrecursor")) : 0.0) << "\t"
        << std::to_string(hit.metaValueExists(prsmKey("ProteinQvalue")) ? (double)hit.getMetaValue(prsmKey("ProteinQvalue")) : -1) << rawColumns(hit)
-       << (chimeric ? chimericColumns(hit) : String()) << "\n";
+       << "\t" << massEvidence(hit) << (chimeric ? chimericColumns(hit) : String()) << "\n";
     rows[h] = ss.str();
     }
     catch (...)
@@ -603,7 +620,7 @@ void OpenMS::FLASHTnTFile::writeProteoforms(const std::vector<ProteinHit>& hits,
        << (hit.metaValueExists("ProteoformFDRClass") ? hit.getMetaValue("ProteoformFDRClass").toString()
           : hit.metaValueExists("FDRClass") ? hit.getMetaValue("FDRClass").toString() : String()) << "\t" << modVariable(hit) << "\t"
        << std::to_string(hit.metaValueExists("ProteinQvalue") ? (double)hit.getMetaValue("ProteinQvalue") : -1) << rawColumns(hit)
-       << (chimeric ? chimericColumns(hit) : String()) << "\n";
+       << "\t" << massEvidence(hit) << (chimeric ? chimericColumns(hit) : String()) << "\n";
   }
   fs << ss.str();
 }

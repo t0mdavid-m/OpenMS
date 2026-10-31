@@ -17,6 +17,7 @@
 #include <OpenMS/FORMAT/FASTAFile.h>
 #include <OpenMS/METADATA/ProteinHit.h>
 #include <boost/dynamic_bitset.hpp>
+#include <cstdint>
 #include <functional>
 #include <iomanip>
 #include <iostream>
@@ -33,6 +34,18 @@ namespace OpenMS
 class OPENMS_DLLAPI FLASHTnTAlgorithm : public DefaultParamHandler, public ProgressLogger
 {
 public:
+  /// option protein_evidence proteoforms: whether a protein of @p proteoforms proteoforms takes part in the protein ranking (two or more,
+  /// or @p strong: one of them is a determined tag-search proteoform without blind modifications of protein_evidence_min_mass)
+  static bool proteinEvidenceSupported(Size proteoforms, bool strong);
+  /// the grouping of the proteoform classes for the FDR (option merge_small_classes): in @p class_order, a group takes classes until it
+  /// holds @p min_size proteoforms (targets and decoys) and a last smaller group joins the one before; with @p by_kind (kind) within
+  /// the two kinds @p kind_of gives (0, 1) separately, a kind that is one small group joining the other kind's first group
+  static std::vector<std::vector<int>> groupClasses(const std::vector<int>& class_order, const std::vector<Size>& class_size, Size min_size,
+                                                    bool by_kind, const std::function<int(int)>& kind_of);
+  /// the blind modifications of a PrSM: its BlindModCount, else the ModificationVariable entries of kind 0, else all its Modifications
+  static Size blindModCount(const ProteinHit& hit);
+  /// the fixed pseudo-random order of the database entries (splitmix64 of the index) that breaks the ties of the candidate cuts
+  static std::uint64_t entryOrder(std::uint64_t index);
   /// constructor
   FLASHTnTAlgorithm();
 
@@ -163,8 +176,12 @@ private:
   bool search_cascade_ = true;
   /// search spectra with MS1-based PrSMs again with decoy precursor masses, as decoys of the precursor in the FDR
   bool decoy_precursor_ = false;
+  /// a spectrum whose PrSM has no mass is searched again with the other masses of its isolation window
+  bool precursor_reselect_ = true;
   /// co-isolation: an MS1 mass reported by PrSMs of different proteins stays with the protein that explains it best
   bool one_proteoform_per_feature_ = true;
+  /// with one_proteoform_per_feature_: a PrSM whose mass needs no blind modification keeps it (fitted)
+  bool one_proteoform_per_feature_fitted_ = true;
   /// native and targeted runs: candidates of every source chosen by the decoy margin of their spectrum, every candidate's PrSM reported
   bool native_ = false;
   double decoy_factor_ = 0, pro_fdr_ = 1;
@@ -176,6 +193,13 @@ private:
 
   bool keep_decoy_ = false;
   bool keep_underdetermined_ = true;
+  /// terminal-ladder PrSMs as an FDR and proteoform class of their own
+  bool terminal_ladder_class_ = true;
+  /// a protein takes part in the protein ranking with two proteoforms or one strong one (proteoforms), or with any (none)
+  bool protein_evidence_ = true;
+  /// proteoform classes with few proteoforms counted together with the next ones within their kind (kind) or in class order (true)
+  bool merge_by_kind_ = true;
+  double protein_evidence_min_mass_ = 3000;
   /// several PrSMs per spectrum (native only)
   bool multiple_hits_per_spec_ = false;
   bool protein_level_only_ = false;
