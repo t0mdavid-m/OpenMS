@@ -20,6 +20,7 @@
 #include <array>
 #include <bit>
 #include <cmath>
+#include <cstdint>
 #include <numeric>
 #include <map>
 #ifdef _OPENMP
@@ -30,6 +31,16 @@ namespace OpenMS
 {
 namespace
 {
+// A fixed pseudo-random order of the entries for ties (splitmix64 of the index). The cuts below keep the top_n best; equal scores are
+// common (shuffles of a protein have its length and composition, so the same chance probability for the same matched count), and
+// breaking them by the index would keep every target before every decoy (the decoys follow the targets in the database).
+inline std::uint64_t scrambledIndex(std::uint64_t x)
+{
+  x += 0x9E3779B97F4A7C15ULL;
+  x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ULL;
+  x = (x ^ (x >> 27)) * 0x94D049BB133111EBULL;
+  return x ^ (x >> 31);
+}
 // the residues of terminal and precursor ladders
 const std::string standard_residues = "ACDEFGHIKLMNPQRSTVWYUO";
 
@@ -164,12 +175,12 @@ struct Window
   std::vector<int> counts;    // matched positions per target set (for the tags)
 };
 
-// LogP descending, k descending, then protein, i and j ascending
+// LogP descending, k descending, then protein in the fixed pseudo-random order (scrambledIndex), i and j ascending
 inline bool isBetter(const Window& a, const Window& b)
 {
   if (a.log_p != b.log_p) return a.log_p > b.log_p;
   if (a.k != b.k) return a.k > b.k;
-  if (a.protein != b.protein) return a.protein < b.protein;
+  if (a.protein != b.protein) return scrambledIndex(a.protein) < scrambledIndex(b.protein);
   if (a.i != b.i) return a.i < b.i;
   return a.j < b.j;
 }
@@ -956,7 +967,7 @@ void MassLadderAlgorithm::searchTerminalLadders(const std::vector<double>& masse
   bestEntryPerProtein_(ranked, ranked_evidence);
   Size top = std::min(ranked.size(), top_n);
   std::partial_sort(ranked.begin(), ranked.begin() + top, ranked.end(),
-                    [](const auto& a, const auto& b) { return a.first != b.first ? a.first > b.first : a.second < b.second; });
+                    [](const auto& a, const auto& b) { return a.first != b.first ? a.first > b.first : scrambledIndex(a.second) < scrambledIndex(b.second); });
   // the top proteins are the cut; each of their entries with evidence is a candidate (annotated residues are residues of the entry)
   addEntriesOfTopProteins_(ranked, top, with_evidence);
   for (Size r = 0; r < top; r++)
@@ -1186,7 +1197,7 @@ void MassLadderAlgorithm::searchSlidingLadders(const std::vector<const std::vect
     bestEntryPerProtein_(ranked, ranked_evidence);
     Size top = std::min(ranked.size(), top_n);
     std::partial_sort(ranked.begin(), ranked.begin() + top, ranked.end(),
-                      [](const auto& a, const auto& b) { return a.first != b.first ? a.first > b.first : a.second < b.second; });
+                      [](const auto& a, const auto& b) { return a.first != b.first ? a.first > b.first : scrambledIndex(a.second) < scrambledIndex(b.second); });
     // the top proteins are the cut; each of their entries with evidence is a candidate (annotated residues are residues of the entry)
     addEntriesOfTopProteins_(ranked, top, with_evidence);
     for (Size r = 0; r < top; r++)

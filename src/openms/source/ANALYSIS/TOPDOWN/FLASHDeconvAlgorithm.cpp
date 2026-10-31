@@ -1645,6 +1645,34 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
         rescued_precursors_++;
       }
     }
+    // The target masses of the neighbouring surveys (within precursor_rescue_window) that have a peak in the window join the window
+    // masses as further candidates for FLASHTnT's precursor re-selection (not as the precursor): an LC-MS precursor elutes over several
+    // survey scans, and the one the isolation picked need not be the loudest in the preceding scan. Masses within 2 x tolerance of a
+    // registered one are the same mass.
+    if (survey_indices.size() > 1 && native_id_precursor_mass_intensity_map_.find(native_id) != native_id_precursor_mass_intensity_map_.end())
+    {
+      auto& mi = native_id_precursor_mass_intensity_map_[native_id];
+      for (Size k = 1; k < survey_indices.size(); k++)
+      {
+        const DeconvolvedSpectrum* ds = deconvolved_of(survey_indices[k]);
+        if (ds == nullptr) continue;
+        for (const auto& pg : *ds)
+        {
+          if (pg.getTargetDecoyType() != PeakGroup::target || pg[0].mz > end_mz || pg[pg.size() - 1].mz < start_mz) continue;
+          const int c = int(round(pg.getMonoMass() / start_mz));
+          double intensity = 0;
+          for (const auto& p : pg)
+          {
+            if (p.abs_charge == c && p.mz >= start_mz && p.mz <= end_mz) intensity += p.intensity;
+          }
+          if (intensity <= 0) continue;
+          const double m = pg.getMonoMass();
+          bool known = false;
+          for (const auto& [m0, j] : mi) known = known || (m0 > 0 && std::abs(m0 - m) <= 2e-6 * tols_[0] * m);
+          if (! known) mi.emplace_back(m, intensity);
+        }
+      }
+    }
     if (located != nullptr && native_id_precursor_peak_group_map_.find(native_id) == native_id_precursor_peak_group_map_.end())
     {
       native_id_precursor_peak_group_map_[native_id] = peakGroupFromCommand_(*located);
