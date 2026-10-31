@@ -434,9 +434,8 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   // the extender's defaults: the cleavage propensity weight and table, fitted on lysates and native proteins
   eparam.remove("cleavage_weight");
   eparam.remove("cleavage_table");
-  // FLASHTnT's own mass rules (the extender's defaults stay as released, for FLASHIda): fragment-pair masses only where a window mass
-  // corroborates them, and no truncation penalty for an end the suffix ladder reads
-  eparam.setValue("skip_precursor_inference", "corroborated", eparam.getDescription("skip_precursor_inference"), eparam.getTags("skip_precursor_inference"));
+  // FLASHTnT's own mass rule (the extender's default stays as released, for FLASHIda): no truncation penalty for an end the suffix
+  // ladder reads
   eparam.setValue("ladder_end_penalty", "false", eparam.getDescription("ladder_end_penalty"), eparam.getTags("ladder_end_penalty"));
 
   defaults_.insert("ex:", eparam);

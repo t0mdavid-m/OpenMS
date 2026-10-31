@@ -103,8 +103,7 @@ namespace OpenMS
 
     defaults_.setValue("ion_type", std::vector<std::string> {"b", "y"}, "Specifies ion types to consider");
     defaults_.setValidStrings("ion_type", {"b", "c", "a", "y", "z", "x", "zp1", "zp2"});
-    // FLASHTnT sets corroborated and ladder_end_penalty false in its own parameters (FLASHTnTAlgorithm); FLASHIda's extender keeps
-    // these defaults
+    // FLASHTnT sets ladder_end_penalty false in its own parameters (FLASHTnTAlgorithm); FLASHIda's extender keeps these defaults
     defaults_.setValue("skip_precursor_inference", "false",
                        "Precursor mass inference from complementary fragment ion pairs, where the terminal paths together span the protein. "
                        "corroborated: an inferred mass that differs from the MS1 precursor mass is kept only if the spectrum's complementary "

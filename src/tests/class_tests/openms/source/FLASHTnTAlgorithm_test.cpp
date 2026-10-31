@@ -141,8 +141,8 @@ START_SECTION((FLASHTnTAlgorithm()))
   TEST_STRING_EQUAL(p.getValue("one_proteoform_per_feature").toString(), "fitted")
   TEST_EQUAL(p.getValidStrings("one_proteoform_per_feature").size(), 3)
   TEST_EQUAL(p.hasTag("one_proteoform_per_feature", "advanced"), true)
-  // FLASHTnT's extender parameters differ from the extender's own defaults
-  TEST_STRING_EQUAL(p.getValue("ex:skip_precursor_inference").toString(), "corroborated")
+  // FLASHTnT's extender parameters: the extender's precursor inference, and ladder_end_penalty unlike the extender's default
+  TEST_STRING_EQUAL(p.getValue("ex:skip_precursor_inference").toString(), "false")
   TEST_EQUAL(p.getValidStrings("ex:skip_precursor_inference").size(), 3)
   TEST_STRING_EQUAL(p.getValue("ex:ladder_end_penalty").toString(), "false")
   TEST_EQUAL(p.getValidStrings("ex:ladder_end_penalty").size(), 2)
