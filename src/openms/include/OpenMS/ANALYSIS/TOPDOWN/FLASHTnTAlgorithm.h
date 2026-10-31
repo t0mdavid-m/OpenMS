@@ -197,9 +197,13 @@ private:
   bool terminal_ladder_class_ = true;
   /// a protein takes part in the protein ranking with two proteoforms or one strong one (proteoforms), or with any (none)
   bool protein_evidence_ = true;
+  /// protein_evidence passing: only proteoforms at the reporting cutoff count as protein evidence
+  bool protein_evidence_passing_ = true;
   /// proteoform classes with few proteoforms counted together with the next ones within their kind (kind) or in class order (true)
   bool merge_by_kind_ = true;
   double protein_evidence_min_mass_ = 3000;
+  /// a single proteoform of at least this many matched fragment positions is strong protein evidence (0: off)
+  int protein_evidence_min_fragments_ = 7;
   /// several PrSMs per spectrum (native only)
   bool multiple_hits_per_spec_ = false;
   bool protein_level_only_ = false;

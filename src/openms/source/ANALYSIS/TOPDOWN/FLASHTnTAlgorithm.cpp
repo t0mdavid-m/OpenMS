@@ -350,19 +350,29 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "group absorbed the precursor-ladder class of a run and cost it 11 of 152 proteoforms).");
   defaults_.setValidStrings("merge_small_classes", {"true", "kind"});
   defaults_.addTag("merge_small_classes", "advanced");
-  defaults_.setValue("protein_evidence", "proteoforms",
+  defaults_.setValue("protein_evidence", "passing",
                      "What identifies a protein at the protein level. proteoforms: at least two distinct proteoforms, or one determined "
                      "proteoform (mass and both termini known, from the tag search) without blind modifications (variable and annotated ones "
-                     "allowed) of at least protein_evidence_min_mass Da; a protein with less (target or decoy alike) takes no part in the protein "
-                     "ranking and gets the protein q-value 1. none: any proteoform in a class. The PrSM and proteoform levels are unchanged. In a "
+                     "allowed) of at least protein_evidence_min_mass Da, or one of at least protein_evidence_min_fragments matched fragment "
+                     "positions; a protein with less (target or decoy alike) takes no part in the protein ranking and gets the protein q-value 1. "
+                     "passing: as proteoforms, but only proteoforms at the reporting proteoform q-value (pro_fdr, 0.01 when that is 1) count, so "
+                     "that a protein without one takes no part. none: any proteoform in a class. The PrSM and proteoform levels are unchanged. In a "
                      "shuffled entrapment of ten datasets (38 runs), the proteins of one PrSM were 10% entrapment at a nominal 1% (61 of 1206) "
-                     "while their decoys were rare; proteoforms kept 72% of the proteins at an entrapment FDP of 0.5%.");
-  defaults_.setValidStrings("protein_evidence", {"none", "proteoforms"});
+                     "while their decoys were rare; proteoforms kept 72% of the proteins at an entrapment FDP of 0.5%. On 452 runs of the same "
+                     "datasets, passing with protein_evidence_min_fragments 7 found 98% of the proteins of TopPIC 2.1.0 (unique per dataset) at "
+                     "a protein FDP of 0.5 / 1.1% (lower / paired upper bound, shuffled entrapment; TopPIC 1.1 / 2.1%).");
+  defaults_.setValidStrings("protein_evidence", {"none", "proteoforms", "passing"});
   defaults_.setValue("protein_evidence_min_mass", 3000.0,
                      "The mass (Da) a single determined proteoform without blind modifications needs to identify a protein with protein_evidence "
                      "proteoforms.");
   defaults_.setMinFloat("protein_evidence_min_mass", 0.0);
   defaults_.addTag("protein_evidence_min_mass", "advanced");
+  defaults_.setValue("protein_evidence_min_fragments", 7,
+                     "With protein_evidence proteoforms or passing, a single proteoform whose PrSM matches at least this many fragment positions "
+                     "(column MatchingFragments) also identifies its protein. 0: off. On the 414 runs not used to choose it, 7 gave a protein FDP "
+                     "of 0.5 / 1.0% (shuffled entrapment) and 8 gave 0.4 / 0.9%, for 4.5% fewer proteins.");
+  defaults_.setMinInt("protein_evidence_min_fragments", 0);
+  defaults_.addTag("protein_evidence_min_fragments", "advanced");
 
   defaults_.setValue("protein_level_only", "false",
                      "Stops after the protein-level search, skipping proteoform characterization. The candidate proteins "
@@ -567,8 +577,10 @@ void FLASHTnTAlgorithm::updateMembers_()
   keep_underdetermined_ = param_.getValue("discard_underdetermined").toString() == "false";
   terminal_ladder_class_ = param_.getValue("terminal_ladder_class").toString() == "true";
   merge_by_kind_ = param_.getValue("merge_small_classes").toString() == "kind";
-  protein_evidence_ = param_.getValue("protein_evidence").toString() == "proteoforms";
+  protein_evidence_ = param_.getValue("protein_evidence").toString() != "none";
+  protein_evidence_passing_ = param_.getValue("protein_evidence").toString() == "passing";
   protein_evidence_min_mass_ = param_.getValue("protein_evidence_min_mass");
+  protein_evidence_min_fragments_ = (int)param_.getValue("protein_evidence_min_fragments");
   // One PrSM per spectrum, its best (with native, every candidate's, below). Several per spectrum put homologs of the spectrum's own
   // protein beside it, which shuffled decoys do not model: three E. coli lysates with the B. theta entrapment at 1%, 5323 proteoforms
   // with 91 B. theta (73 of them among the 750 that were not their spectrum's best PrSM; of the B. theta PrSMs beside a better one, 128
@@ -4152,6 +4164,12 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       const auto& rep = proteoform_hits_[members[0]];
       if (rep.metaValueExists("DecoyPrecursor") && ! rep.getAccession().hasPrefix("DECOY")) continue;
       if (! rep.metaValueExists("proqvalue")) continue; // in no proteoform class (discard_underdetermined): no protein evidence
+      const double q = rep.getMetaValue("proqvalue", 1.0);
+      // option protein_evidence passing: a proteoform above the reporting cutoff is no evidence of its protein, so that a protein without
+      // a reported proteoform takes no part in the ranking (targets and decoys alike). With proteoforms, such proteoforms counted toward
+      // two proteoforms: in a shuffled entrapment of 38 runs (22f25b5844), 19 of the 24 entrapment proteins per seed at protein q 1% had
+      // no proteoform at proteoform q 1%.
+      if (protein_evidence_passing_ && q > rep_q) continue;
       best_of[rep.getAccession()].proteoforms++;
       for (Size i : members)
       {
@@ -4164,7 +4182,11 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
           break;
         }
       }
-      const double q = rep.getMetaValue("proqvalue", 1.0);
+      // option protein_evidence_min_fragments: a proteoform matching that many fragment positions identifies its protein alone
+      if (protein_evidence_min_fragments_ > 0 && (int)rep.getMetaValue("MatchedAA", 0) >= protein_evidence_min_fragments_)
+      {
+        best_of[rep.getAccession()].strong = true;
+      }
       double score = 0;
       for (Size i : members) score = std::max(score, proteoform_hits_[i].getScore());
       const std::pair<double, double> key {q, -score};
