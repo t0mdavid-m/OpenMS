@@ -560,6 +560,7 @@ private:
   const int min_path_score_ = -20;
   const int max_extension_stretch_ = 50;
   double max_mod_mass_ = 500.0;
+  int common_ptm_bonus_ = 0; // path score given back to a blind shift of a common PTM mass
   /// largest absolute mass of a single variable modification (0 without them)
   double max_var_mod_mass_ = 0;
   double given_precursor_mass_ = -1;

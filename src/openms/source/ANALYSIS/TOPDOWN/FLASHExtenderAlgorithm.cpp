@@ -44,6 +44,10 @@ namespace OpenMS
   inline const int min_n_term_ladder = min_c_term_ladder;  // Penalty per variable modification: a known residue-specific shift costs far less than a blind modification, but more than
   // nothing, so that an unmodified path wins a tie.
   inline const int var_mod_penalty = 1 + multi_ion_score;
+  // common PTM masses for common_ptm_bonus: the 28 masses of the offline simulation (bonus_sim.py)
+  inline const std::vector<double> common_ptm_masses = {15.994915, 31.98983, 42.010565, 14.01565, 28.0313, 42.04695, 79.966331, 27.994915,
+    0.984016, 21.981943, 37.955882, 57.021464, -18.010565, -17.026549, 43.005814, 100.016044, -2.01565, -131.040485, -89.02992, 114.042927,
+    15.010899, 47.984744, 79.956815, 72.021129, 86.000394, 162.052824, 203.079373, 304.20536};
 
   // whether a set bit of @p bits (bit b: a protein mass in [b, b + 1)) lies in [floor(lo), floor(hi)], i.e. whether a protein mass can be in
   // [lo, hi]. True (no filtering) for NaN or a range of 64 Da or more; false for an empty range.
@@ -79,6 +83,8 @@ namespace OpenMS
 
     defaults_.setValue("max_blind_mod_count", 2, "Maximum number of blind modifications per proteoform.");
     defaults_.setValue("max_mod_mass", 500.0, "Maximum absolute mass of blind modifications.");
+    defaults_.setValue("common_ptm_bonus", 0, "Path score given back to a blind modification at a common PTM mass (0: off).");
+    defaults_.addTag("common_ptm_bonus", "advanced");
 
     defaults_.setValue("var_mod", std::vector<std::string> {}, "Variable modifications, by name as in Unimod/PSI-MOD (e.g. 'Oxidation (M)', "
                        "'Acetyl (N-term)', 'Phospho (S)'). Searched with their own count, independently of blind modifications; both can occur "
@@ -113,6 +119,7 @@ namespace OpenMS
   {
     max_blind_mod_cntr_ = param_.getValue("max_blind_mod_count");
     max_mod_mass_ = param_.getValue("max_mod_mass");
+    common_ptm_bonus_ = param_.getValue("common_ptm_bonus");
     skip_precursor_inference_ = param_.getValue("skip_precursor_inference") == "true";
     loadVariableModifications_();
     cleavage_weight_ = param_.getValue("cleavage_weight");
@@ -2622,6 +2629,9 @@ namespace OpenMS
 
             next_score -= 1 + 2 * (multi_ion_score + FLASHTaggerAlgorithm::max_node_score);
             if (! blindModNear_(delta_delta, t_margin)) next_score -= multi_ion_score + FLASHTaggerAlgorithm::max_node_score;
+            else if (common_ptm_bonus_ > 0
+                     && std::any_of(common_ptm_masses.begin(), common_ptm_masses.end(), [&](double m) { return std::abs(m - delta_delta) <= t_margin; }))
+              next_score += common_ptm_bonus_;
           }
         }
 
