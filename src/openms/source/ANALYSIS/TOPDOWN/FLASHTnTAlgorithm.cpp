@@ -21,7 +21,10 @@
 #include <chrono>
 #include <atomic>
 #include <cmath>
+#include <cstdlib>
 #include <exception>
+#include <fstream>
+#include <iomanip>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -3392,6 +3395,12 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         loadRawSpectra_(scans);
         annotateOnRawSpectra_(stage_hits);
         dropOpenTerminusShifts(stage_hits);
+        if (const char* trace_file = std::getenv("FLASH_TRACE_FEATURES"))
+        {
+          try { traceCandidates_(stage_hits, trace_file); }
+          catch (const Exception::BaseException& e) { OPENMS_LOG_WARN << "FLASH_TRACE_FEATURES failed: " << e.what() << " (" << e.getName() << ")" << std::endl; }
+          catch (const std::exception& e) { OPENMS_LOG_WARN << "FLASH_TRACE_FEATURES failed: " << e.what() << std::endl; }
+        }
         // one PrSM per spectrum: the best by the combined score; the extension kept every candidate's PrSM for this choice
         if (! multiple_hits_per_spec_) keepBestPerSpectrum_(stage_hits, stage == 0 ? String("") : " (search cascade stage " + String(stage) + ")", "combined score");
       }
@@ -4597,6 +4606,28 @@ void FLASHTnTAlgorithm::setCombinedCoverage_(const std::vector<std::vector<Size>
   {
     OPENMS_LOG_INFO << "Combined coverage: " << combined << " target proteoforms with two or more PrSMs combined; their mean coverage " << sum_best / combined
                     << "% by the best PrSM, " << sum_combined / combined << "% combined (chance " << sum_chance / combined << "%)" << std::endl;
+  }
+}
+
+void FLASHTnTAlgorithm::traceCandidates_(const std::vector<ProteinHit>& hits, const char* file) const
+{
+  // every candidate PrSM before the spectrum's choice, with what a scoring function needs to be rebuilt offline: its proteoform (residues and
+  // shifts), the termini, the mass and the scores. Appended (one call per stage of the search cascade). Diagnostics only.
+  std::ofstream out(file, std::ios::app);
+  out << std::setprecision(10);
+  for (const auto& hit : hits)
+  {
+    FLASHAnnotatorAlgorithm::PrSM prsm;
+    double precursor = -1;
+    toRawPrSM_(hit, prsm, precursor);
+    String mods;
+    for (const auto& m : prsm.modifications) mods += String(m.mass) + "@" + String(m.start) + "-" + String(m.end) + ";";
+    const char* source = hit.metaValueExists("PrecursorLadder") ? "precursor_ladder" : hit.metaValueExists("TerminalLadder") ? "terminal_ladder" : "tag";
+    out << (int)hit.getMetaValue(tntKey("Scan")) << "\t" << hit.getAccession() << "\t" << (int)hit.getMetaValue("StartPosition", 0) << "\t"
+        << (int)hit.getMetaValue("EndPosition", 0) << "\t" << (prsm.known_n_term ? 1 : 0) << (prsm.known_c_term ? 1 : 0) << "\t" << prsm.sequence << "\t" << mods << "\t"
+        << (double)hit.getMetaValue(tntKey("Mass"), -1.0) << "\t" << precursor << "\t" << hit.getScore() << "\t" << (double)hit.getMetaValue(tntKey("ExtensionScore"), 0.0) << "\t"
+        << (double)hit.getMetaValue(tntKey("RawScore"), 0.0) << "\t" << (int)hit.getMetaValue(tntKey("RawMatchedFragments"), 0) << "\t"
+        << (int)hit.getMetaValue(tntKey("RawFragmentHypotheses"), 0) << "\t" << (isDetermined(hit) ? 1 : 0) << "\t" << blindModCount_(hit) << "\t" << source << "\n";
   }
 }
 
