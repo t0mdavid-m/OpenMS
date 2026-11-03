@@ -75,6 +75,8 @@ using namespace std;
   (SpikeIn 23420 -> 23438, ProteomeMix 17218 -> 17244). An mbr_id value is a little more exact than an mbr one (SpikeIn, E. coli,
   median |log2 error| 0.10 vs 0.18; off by more than 2-fold 0.1% vs 2.6%, detected values 1.3%); mbr_id is 5% of the kept transfers.
   It costs a FLASHTnT search of every run. -mbr_min_score keeps only the mbr transfers of at least that Qscore2D.
+  -out_id (with -in_id) writes which PrSMs identify each consensus feature, in detected runs and transfers alike, so that the values
+  can be read per proteoform or protein; it changes no value.
 */
 
 // We do not want this class to show up in the docu:
@@ -138,6 +140,14 @@ protected:
                            "q-values are never lower than without identifications. Needs a FLASHTnT search of every run, with q-values (a "
                            "database with decoys). Without it, nothing changes.", false);
     setValidFormats_("in_id", ListUtils::create<String>("tsv"));
+    registerOutputFile_("out_id", "<file>", "", "With -in_id: the identifications of the consensus features. One row per PrSM of -in_id "
+                        "(target protein, not a decoy precursor, proteoform q-value <= -id_fdr) assigned to a consensus feature: the PrSM lies "
+                        "in the feature's window in its run and its precursor mass is the feature's mass, or one isotope off, within "
+                        "FLASHDeconv's tolerance (the nearest feature if several qualify). Columns: ConsensusIndex, Run (as in -out), the "
+                        "PrSM's PrSMIndex, Scan, RetentionTime, ProteinAccession, ProteinDescription, ProteoformIndex, Proforma, "
+                        "ProteoformMass, PrecursorMass, ProteoformLevelQvalue, and the MassErrorPPM of the match (nearest isotope). "
+                        "Detected runs and transfers alike; a feature without a row is not identified. Without it, nothing changes.", false);
+    setValidFormats_("out_id", ListUtils::create<String>("tsv"));
     registerDoubleOption_("id_fdr", "<q-value>", 0.01, "With -in_id: the PrSMs used, by their proteoform-level q-value.", false);
     registerDoubleOption_("mbr_min_score", "<score>", 0.0, "Match between runs: transfers other than mbr_id (status mbr) are kept only with a "
                           "score (Qscore2D) at least this, besides -mbr_fdr; mbr_id ones always pass. The FDR says that the mass is "
@@ -185,6 +195,50 @@ protected:
     }
     std::sort(ids.begin(), ids.end());
     return ids;
+  }
+
+  /// a PrSM of a FLASHTnT PrSM tsv, as -out_id reports it
+  struct PrSM
+  {
+    double rt, mass; // seconds; the precursor mass FLASHDeconv measured (the proteoform mass when there is none)
+    std::vector<String> fields; // PrSMIndex, Scan, RetentionTime, ProteinAccession, ProteinDescription, ProteoformIndex, Proforma, ProteoformMass, PrecursorMass, ProteoformLevelQvalue
+  };
+
+  /// the PrSMs of a FLASHTnT PrSM tsv that -out_id assigns: those readIdentifications_ uses (target protein, not a decoy precursor,
+  /// proteoform-level q-value in [0, @p id_fdr]), with the columns -out_id reports (empty where the file has no such column)
+  std::vector<PrSM> readPrSMs_(const String& file, double id_fdr) const
+  {
+    static const std::vector<String> reported = {"PrSMIndex", "Scan", "RetentionTime", "ProteinAccession", "ProteinDescription", "ProteoformIndex",
+                                                 "Proforma", "ProteoformMass", "PrecursorMass", "ProteoformLevelQvalue"};
+    std::ifstream in(file);
+    std::string line;
+    std::getline(in, line);
+    std::vector<String> header;
+    String(line).split('\t', header);
+    std::map<String, Size> col;
+    for (Size i = 0; i < header.size(); ++i) col[header[i].trim()] = i;
+    const auto decoy_weight = col.find("DecoyPrecursorWeight");
+    std::vector<PrSM> prsms;
+    while (std::getline(in, line))
+    {
+      std::vector<String> v;
+      String(line).split('\t', v);
+      if (v.size() < header.size() || v[col["ProteinAccession"]].hasSubstring("DECOY")) continue;
+      if (decoy_weight != col.end() && !v[decoy_weight->second].trim().empty() && v[decoy_weight->second].toDouble() != 0) continue;
+      const double q = v[col["ProteoformLevelQvalue"]].trim().toDouble();
+      if (q < 0 || q > id_fdr) continue;
+      double mass = v[col["PrecursorMass"]].toDouble();
+      if (!(mass > 0)) mass = v[col["ProteoformMass"]].toDouble();
+      if (!(mass > 0)) continue;
+      PrSM p{v[col["RetentionTime"]].toDouble(), mass, {}};
+      for (const auto& c : reported)
+      {
+        const auto it = col.find(c);
+        p.fields.push_back(it == col.end() ? String("") : String(v[it->second]).trim());
+      }
+      prsms.push_back(p);
+    }
+    return prsms;
   }
 
   /// the FLASHDeconv MS1 features of a feature tsv, and in @p source the mzML it was made from (its FileName column; empty without rows)
@@ -407,6 +461,12 @@ protected:
       OPENMS_LOG_ERROR << "-in_id needs one file per run (as -in), or none" << endl;
       return ILLEGAL_PARAMETERS;
     }
+    const String out_id = getStringOption_("out_id");
+    if (!out_id.empty() && in_id.empty())
+    {
+      OPENMS_LOG_ERROR << "-out_id needs the identifications of the runs (-in_id)" << endl;
+      return ILLEGAL_PARAMETERS;
+    }
     const Size run_count = in.size();
     std::vector<std::vector<Feature>> runs(run_count);
     bool positive_mode = false, negative_mode = false;
@@ -534,6 +594,8 @@ protected:
       map.sortSpectra(true);
       return map;
     };
+    // -out_id: per run, the PrSMs assigned to a consensus feature: (consensus, |mass error| ppm, PrSM)
+    std::vector<std::vector<std::tuple<Size, double, PrSM>>> assigned(run_count);
     std::future<PeakMap> next_map = std::async(std::launch::async, load_run, (Size)0);
     for (Size r = 0; r < run_count; ++r)
     {
@@ -588,6 +650,40 @@ protected:
         if (ids.empty()) continue;
         const auto& target = targets[t];
         id_error[k][r][decoy ? 1 : 0] = id_match(ids, target.mass, target.rt_start, target.rt_end);
+      }
+      if (!out_id.empty())
+      {
+        // the features' windows in this run, by mass: each PrSM goes to the feature of the smallest |error| (nearest isotope) whose
+        // window holds it
+        std::vector<std::pair<double, Size>> by_mass; // (mass, target)
+        for (Size t = 0; t < targets.size(); ++t)
+        {
+          if (!owner[t].second) by_mass.emplace_back(targets[t].mass, t);
+        }
+        std::sort(by_mass.begin(), by_mass.end());
+        for (const PrSM& p : readPrSMs_(in_id[r], id_fdr))
+        {
+          double best = -1;
+          Size best_t = 0;
+          for (int i = -1; i <= 1; ++i)
+          {
+            const double m = p.mass - i * Constants::ISOTOPE_MASSDIFF_55K_U; // the feature's mass if the PrSM is i isotopes off
+            const double tol = m * fd_tol;
+            for (auto it = std::lower_bound(by_mass.begin(), by_mass.end(), std::make_pair(m - tol, (Size)0));
+                 it != by_mass.end() && it->first <= m + tol; ++it)
+            {
+              const auto& target = targets[it->second];
+              if (p.rt < target.rt_start || p.rt > target.rt_end) continue;
+              const double e = std::abs(m - target.mass) / target.mass * 1e6;
+              if (best < 0 || e < best)
+              {
+                best = e;
+                best_t = it->second;
+              }
+            }
+          }
+          if (best >= 0) assigned[r].emplace_back(owner[best_t].first, best, p);
+        }
       }
       OPENMS_LOG_INFO << "Run " << (r + 1) << " of " << run_count << ": " << targets.size() << " targets measured" << endl;
     }
@@ -817,6 +913,31 @@ protected:
           repeated = true;
         }
       }
+    }
+    if (!out_id.empty())
+    {
+      std::ofstream is(out_id);
+      is << "ConsensusIndex\tRun\tPrSMIndex\tScan\tRetentionTime\tProteinAccession\tProteinDescription\tProteoformIndex\tProforma\tProteoformMass"
+            "\tPrecursorMass\tProteoformLevelQvalue\tMassErrorPPM\n";
+      std::vector<std::tuple<Size, Size, Size>> order; // (consensus, run, position): by feature, then run, in the PrSM file's order
+      for (Size r = 0; r < run_count; ++r)
+      {
+        for (Size i = 0; i < assigned[r].size(); ++i) order.emplace_back(std::get<0>(assigned[r][i]), r, i);
+      }
+      std::sort(order.begin(), order.end());
+      Size identified_features = 0;
+      for (Size i = 0; i < order.size(); ++i)
+      {
+        const auto [k, r, pos] = order[i];
+        if (i == 0 || std::get<0>(order[i - 1]) != k) ++identified_features;
+        const double error = std::get<1>(assigned[r][pos]);
+        const PrSM& p = std::get<2>(assigned[r][pos]);
+        is << k << "\t" << names[r];
+        for (const auto& f : p.fields) is << "\t" << f;
+        is << "\t" << std::to_string(error) << "\n";
+      }
+      OPENMS_LOG_INFO << "Identifications (-out_id): " << order.size() << " PrSMs assigned to " << identified_features << " of " << kept.size()
+                      << " consensus features" << endl;
     }
     for (const auto& n : names) os << "\tAbundance_" << n << "\tStatus_" << n << "\tMatchScore_" << n << "\tMatchQvalue_" << n;
     os << "\n";
