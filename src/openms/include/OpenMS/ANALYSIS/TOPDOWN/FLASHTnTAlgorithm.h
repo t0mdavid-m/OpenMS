@@ -161,6 +161,8 @@ private:
   /// one PrSM per spectrum: the best by score (a determined mass and termini break a tie, then the coverage, then the earlier PrSM);
   /// @p label and @p score_name go into the log line
   static void keepBestPerSpectrum_(std::vector<ProteinHit>& hits, const std::string& label, const std::string& score_name);
+  /// FLASH_TRACE_FEATURES: every candidate PrSM before the spectrum's choice, appended to @p file (diagnostics)
+  void traceCandidates_(const std::vector<ProteinHit>& hits, const char* file) const;
   /// residual search rounds of chimeric spectra after the first search (0: off)
   int chimeric_rounds_ = 0;
   /// candidates from gapped tags: off, fallback (spectra without sequence-tag candidates), both, only
