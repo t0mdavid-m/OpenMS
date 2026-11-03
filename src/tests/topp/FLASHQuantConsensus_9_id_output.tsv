@@ -1,0 +1,3 @@
+ConsensusIndex	Run	PrSMIndex	Scan	RetentionTime	ProteinAccession	ProteinDescription	ProteoformIndex	Proforma	ProteoformMass	PrecursorMass	ProteoformLevelQvalue	MassErrorPPM
+0	FLASHQuantConsensus_input1	0	1	26.0	sp|SYN1|SYN1	synthetic			6123.4	6123.4	0.000000	0.088676
+2	FLASHQuantConsensus_input2	0	1	98.0	sp|SYN3|SYN3	synthetic			10011.2	10011.2	0.000000	0.114272
