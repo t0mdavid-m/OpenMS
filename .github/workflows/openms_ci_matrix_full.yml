@@ -45,14 +45,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: windows-2022
+          - os: windows-2025
             # cl.exe is currently the only supported. Needs a VS shell to be set up (especially if used without VS CMake Generator)
             # clang.exe is also installed but untested (might crash with our VS specific compiler definitions)
             # clang-cl.exe might be used instead.
             compiler: cl.exe
-            # VS 2022: 14.30-14.39 (corresponds to MSVC v143)
-            # VS 2019: 14.20-14.29 (corresponds to MSVC v142)
-            compiler_ver: 14.36    # Specific toolset version for VS 2022 -- must (roughly) match Qt6 compiler (see below)
+            # the runner's default toolset (vs-shell sets no version): VS 2026, MSVC 14.51, as the contrib release was built with;
+            # the contrib libraries do not link with older STLs (windows-2022 has MSVC 14.44)
+            compiler_ver: "default"
 
           - os: macos-15-intel
             # Since the appleclang version is dependent on the XCode versions that are installed
@@ -284,7 +284,8 @@ jobs:
           # Install eigen from choco
           choco install eigen -y --no-progress
           echo "eigen_choco=C:\ProgramData\chocolatey\lib\eigen\share\cmake" >> $GITHUB_OUTPUT
-          choco install doxygen.portable ghostscript graphviz -y --no-progress
+          # no ghostscript or graphviz (as on develop): the ghostscript installer hangs on windows-2025
+          choco install doxygen.portable -y --no-progress
           
           if [[ "${{ steps.set-vars.outputs.pkg_type }}" != "none" ]]; then
             # uses a custom NSIS, which provides 8-k string support and has UltraModernUI integrated already

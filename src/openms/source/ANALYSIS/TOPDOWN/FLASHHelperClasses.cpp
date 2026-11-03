@@ -202,7 +202,7 @@ namespace OpenMS
 
   Size FLASHHelperClasses::PrecalculatedAveragine::massToIndex_(const double mass) const
   {
-    Size i = (Size)round(std::max(.0, mass - min_mass_) / mass_interval_);
+    Size i = (Size)roundHalfAway(std::max(.0, mass - min_mass_) / mass_interval_);
     i = std::min(i, isotopes_.size() - 1);
     return i;
   }

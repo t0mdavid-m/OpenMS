@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 
 namespace OpenMS
 {
@@ -110,9 +111,12 @@ public:
    * residue sum. A database entry with fixed modifications (ProteoformDatabase) passes the mass of its residues without them, so that
    * fixed masses no match touches do not raise its score over the same entry without them.
    * @param best_count if not nullptr: the match count of the best shift (0 if none)
+   * @param score_floor a side that cannot score above it is not scored: -infinity is returned (best_count 0), its score being below it
+   * (by a bound: -log10 of the chance of exactly the match count, at the best shift by it)
    */
   static double scoreShifts(const std::vector<double>& masses, const std::vector<double>& residue_sums, const double* shifts,
-                            const double* flanks, Size count, double tol_ppm, double density_mass = 0, int* best_count = nullptr);
+                            const double* flanks, Size count, double tol_ppm, double density_mass = 0, int* best_count = nullptr,
+                            double score_floor = -std::numeric_limits<double>::infinity());
 
   /**
    * @brief scoreShifts with the residue sum at or above a mass looked up in @p sum_index (indexResidueSums of @p residue_sums) instead of
@@ -120,7 +124,7 @@ public:
    */
   static double scoreShifts(const std::vector<double>& masses, const std::vector<double>& residue_sums, const std::vector<std::uint32_t>& sum_index,
                             const double* shifts, const double* flanks, Size count, double tol_ppm, double density_mass = 0,
-                            int* best_count = nullptr);
+                            int* best_count = nullptr, double score_floor = -std::numeric_limits<double>::infinity());
 
   /// the index of scoreShifts: per 64 Da from 0, the number of residue sums below; empty unless the sums are sorted, from 0 or above
   static void indexResidueSums(const std::vector<double>& residue_sums, std::vector<std::uint32_t>& sum_index);

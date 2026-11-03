@@ -773,6 +773,20 @@ double bestShiftScore(std::vector<ShiftCount>& counted, int* best_count)
   }
   return best;
 }
+
+// The score of a side: bestShiftScore of the counted shifts, less log10 of the shifts tried, at least 0. -infinity (not evaluated) if it
+// cannot exceed score_floor, its bound (that of the best bound, less log10 of the shifts tried) being below it with the same margin.
+double sideScore(std::vector<ShiftCount>& counted, Size count, int* best_count, double score_floor)
+{
+  if (score_floor > 0)
+  {
+    double bound = 0;
+    for (const auto& c : counted) bound = std::max(bound, c.bound);
+    if (std::max(0.0, bound - std::log10((double)count)) + 1e-6 < score_floor) return -std::numeric_limits<double>::infinity();
+  }
+  const double best = bestShiftScore(counted, best_count); // -log10 P
+  return std::max(0.0, best - std::log10((double)count));
+}
 } // namespace
 
 // The score of one side is the chance probability of its best shift, as -log10. For a shift, a mass whose shifted value lies on the
@@ -782,7 +796,7 @@ double bestShiftScore(std::vector<ShiftCount>& counted, int* best_count)
 // length (more residue sums to land on, more tag positions to try): in a native spectrum with ~240 masses, decoys of 1000-1500
 // residues scored 77 on average vs 52 for those under 700, so long noise proteins outranked real ones.
 double FLASHTaggerAlgorithm::scoreShifts(const std::vector<double>& masses, const std::vector<double>& residue_sums, const double* shifts,
-                                         const double* flanks, Size count, double tol_ppm, double density_mass, int* best_count)
+                                         const double* flanks, Size count, double tol_ppm, double density_mass, int* best_count, double score_floor)
 {
   if (best_count != nullptr) *best_count = 0;
   if (count == 0 || residue_sums.size() < 2) return 0.0;
@@ -812,8 +826,7 @@ double FLASHTaggerAlgorithm::scoreShifts(const std::vector<double>& masses, cons
     if (cntr == 0) continue;
     counted.push_back(shiftCount(cntr, lambda, j));
   }
-  const double best = bestShiftScore(counted, best_count); // -log10 P
-  return std::max(0.0, best - std::log10((double)count));
+  return sideScore(counted, count, best_count, score_floor);
 }
 
 namespace
@@ -851,13 +864,13 @@ void FLASHTaggerAlgorithm::indexResidueSums(const std::vector<double>& residue_s
 // past at most two sums (no residue is lighter than 32 Da), without a branch that depends on the masses.
 double FLASHTaggerAlgorithm::scoreShifts(const std::vector<double>& masses, const std::vector<double>& residue_sums,
                                          const std::vector<std::uint32_t>& sum_index, const double* shifts, const double* flanks, Size count,
-                                         double tol_ppm, double density_mass, int* best_count)
+                                         double tol_ppm, double density_mass, int* best_count, double score_floor)
 {
   // the index of other sums (not of the same size and maximum) is not used
   if (sum_index.empty() || residue_sums.size() < 2 || ! (residue_sums.back() >= 0 && residue_sums.back() < 1e12)
       || sum_index.size() != (Size)(residue_sums.back() * sum_bucket_inverse) + 1 || sum_index.back() >= residue_sums.size())
   {
-    return scoreShifts(masses, residue_sums, shifts, flanks, count, tol_ppm, density_mass, best_count);
+    return scoreShifts(masses, residue_sums, shifts, flanks, count, tol_ppm, density_mass, best_count, score_floor);
   }
   if (best_count != nullptr) *best_count = 0;
   if (count == 0) return 0.0;
@@ -898,8 +911,7 @@ double FLASHTaggerAlgorithm::scoreShifts(const std::vector<double>& masses, cons
     if (cntr == 0) continue;
     counted.push_back(shiftCount(cntr, lambda, j));
   }
-  const double best = bestShiftScore(counted, best_count); // -log10 P
-  return std::max(0.0, best - std::log10((double)count));
+  return sideScore(counted, count, best_count, score_floor);
 }
 
 void FLASHTaggerAlgorithm::runMatchingExact(std::vector<ProteinHit>& hits,

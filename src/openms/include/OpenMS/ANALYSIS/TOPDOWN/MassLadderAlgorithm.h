@@ -42,6 +42,17 @@ the best ion type of each side as a ladder spanning residues of the protein), fr
 class OPENMS_DLLAPI MassLadderAlgorithm
 {
 public:
+  /// The fixed pseudo-random order of the database entries (splitmix64 of the index) that breaks the ties of the candidate cuts, here and
+  /// in FLASHTnTAlgorithm. The database order puts every target before every decoy, so a cut that broke ties by it kept chance
+  /// candidates of targets and dropped those of decoys (shuffles of a protein have its length and composition, so equal scores are
+  /// common).
+  static std::uint64_t entryOrder(std::uint64_t index)
+  {
+    index += 0x9E3779B97F4A7C15ULL;
+    index = (index ^ (index >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    index = (index ^ (index >> 27)) * 0x94D049BB133111EBULL;
+    return index ^ (index >> 31);
+  }
   /// precursor ladders: a window needs this many matched ladder positions to be a candidate (the prototype's calibrated setting)
   static constexpr int precursor_ladder_min_k = 3;
   /// precursor ladders: a window has at least this many residues. Shorter windows were chance hits: on Eclip_1480 against E. coli + B.
@@ -114,13 +125,6 @@ public:
       }
       return true;
     }
-  };
-
-  /// precursor ladders: a window found by preparePrecursorWindows, residues a + start .. a + start + length - 1 of a segment
-  struct PreparedWindow
-  {
-    std::uint32_t segment;
-    std::uint16_t start, length;
   };
 
   MassLadderAlgorithm() = default;
@@ -204,6 +208,12 @@ public:
     return segments_.size();
   }
 
+  /// the number of precursor masses whose windows preparePrecursorWindows listed (0: all are swept)
+  Size getPreparedMassCount() const
+  {
+    return prepared_masses_.size();
+  }
+
 private:
   /// a residue sum from a terminus and its protein, in the mass-sorted terminal ladder index
   struct LadderEntry
@@ -256,14 +266,18 @@ private:
   std::vector<const double*> window_sums_;
   /// precursor ladders: the storage of window_sums_ (the sums of a protein of standard residues only are its ladder_pre_ sums)
   std::vector<std::vector<double>> window_own_sums_;
-  /// precursor ladders, preparePrecursorWindows: the precursor tolerance, the prepared masses (ascending, distinct) and their windows, by
-  /// chunk of segments and in a chunk by mass (in the order of the sweep): those of mass n in chunk c start at
-  /// prepared_offsets_[n * prepared_chunks_ + c] (a row more than masses for the ends)
+  /// precursor ladders, preparePrecursorWindows: the precursor tolerance, the prepared masses (ascending, distinct) and the window starts
+  /// of each, by chunk of segments (the first segment of chunk c: prepared_chunk_first_[c]) and in a chunk by mass, in the order of the
+  /// sweep. A start is its position among the residues of all segments (prepared_segment_base_[s]: those of the segments before s),
+  /// stored as 16-bit units: the difference to the previous start of its mass in the chunk (the first: to the chunk's first residue), or
+  /// 0xFFFF and the position in two units. Those of mass n in chunk c begin at unit prepared_offsets_[n * prepared_chunks_ + c] (a row
+  /// more than masses for the ends). The windows of a start are found again from it, as the sweep finds them (searchListed).
   double prepared_tol_ppm_ = -1;
   std::vector<double> prepared_masses_;
   Size prepared_chunks_ = 0;
-  std::unique_ptr<PreparedWindow[]> prepared_windows_; // not value-initialized: written once, by the threads that fill it
-  Size prepared_window_count_ = 0;
+  std::unique_ptr<std::uint16_t[]> prepared_starts_; // not value-initialized: written once, by the threads that fill it
   std::vector<std::uint32_t> prepared_offsets_;
+  std::vector<std::uint32_t> prepared_chunk_first_;
+  std::vector<std::uint32_t> prepared_segment_base_;
 };
 } // namespace OpenMS

@@ -542,7 +542,7 @@ void FLASHAnnotatorAlgorithm::ensureIsotopeTable_(double mass)
 int FLASHAnnotatorAlgorithm::massToBin_(double mass) const
 {
   // the same rounding as PrecalculatedAveragine::massToIndex_
-  int bin = (int)std::round(std::max(.0, mass - min_mass_) / bin_width_);
+  int bin = (int)FLASHHelperClasses::roundHalfAway(std::max(.0, mass - min_mass_) / bin_width_);
   return std::min(bin, (int)table_.apex_pos.size() - 1);
 }
 

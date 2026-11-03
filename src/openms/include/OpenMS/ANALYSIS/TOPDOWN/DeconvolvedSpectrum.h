@@ -184,6 +184,9 @@ namespace OpenMS
     /// set peak groups in this spectrum, taking ownership of @p x
     void setPeakGroups(std::vector<PeakGroup>&& x);
 
+    /// the window masses as written in DeconvMassInfo ("windowmasses=" value: mass:intensity,...; masses <= 0 left out) and back
+    static String formatWindowMasses(const std::vector<std::tuple<double, double>>& map);
+    static std::vector<std::tuple<double, double>> parseWindowMasses(const String& value);
     void setPrecursorMassIntensityMap(const std::vector<std::tuple<double, double>>& map);
 
     /// iterators and vector operators for std::vector<PeakGroup> peak_groups_ in this spectrum

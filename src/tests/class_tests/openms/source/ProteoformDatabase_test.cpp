@@ -17,6 +17,9 @@
 #include <OpenMS/FORMAT/FLASHTnTFile.h>
 #include <OpenMS/CHEMISTRY/ResidueDB.h>
 #include <algorithm>
+#include <cmath>
+#include <limits>
+#include <random>
 ///////////////////////////
 
 using namespace OpenMS;
@@ -358,6 +361,62 @@ START_SECTION(FLASHTaggerAlgorithm::scoreShifts with a density mass and the best
   // the same sums spread over less mass (the residues without fixed masses): a match is likelier by chance
   TEST_EQUAL(FLASHTaggerAlgorithm::scoreShifts(masses, sums, shifts.data(), flanks.data(), 2, 10.0, 900.0, &count) < score, true)
   TEST_EQUAL(count, 4)
+}
+END_SECTION
+
+START_SECTION(FLASHTaggerAlgorithm::scoreShifts with a floor)
+{
+  // random proteins, spectra and shifts: with a floor the score is the same, or -infinity (with a best count of 0) if it is below the floor
+  std::mt19937 rng(5);
+  std::uniform_real_distribution<double> residue(57.0, 186.0), unit(0.0, 1.0);
+  Size below = 0, same = 0;
+  for (int trial = 0; trial < 300; trial++)
+  {
+    std::vector<double> sums {0.0};
+    const int length = 50 + (int)(rng() % 300);
+    for (int k = 0; k < length; k++) sums.push_back(sums.back() + residue(rng));
+    std::vector<std::uint32_t> index;
+    FLASHTaggerAlgorithm::indexResidueSums(sums, index);
+    // masses: some residue sums of the protein at one shift, and random ones
+    const double shift = (double)(rng() % 3) * 1000.0 * unit(rng);
+    std::vector<double> masses;
+    const int planted = (int)(rng() % 12);
+    for (int k = 0; k < planted; k++) masses.push_back(sums[1 + rng() % (sums.size() - 1)] - shift);
+    for (int k = 0; k < 40; k++) masses.push_back(300.0 + 20000.0 * unit(rng));
+    masses.erase(std::remove_if(masses.begin(), masses.end(), [](double m) { return m <= 0; }), masses.end());
+    masses.push_back(0.0); // the terminus
+    std::sort(masses.begin(), masses.end());
+    std::vector<double> shifts {shift}, flanks {0.0};
+    for (int k = 0; k < 6; k++)
+    {
+      shifts.push_back(2000.0 * unit(rng) - 1000.0);
+      flanks.push_back(100.0 * unit(rng));
+    }
+    int count = -1;
+    const double score = FLASHTaggerAlgorithm::scoreShifts(masses, sums, index, shifts.data(), flanks.data(), shifts.size(), 10.0, 0.0, &count);
+    for (double score_floor : {0.0, score - 1.0, score, score + 1e-3, score + 0.5, score + 3.0, 1000.0})
+    {
+      int floor_count = -1, plain_count = -1;
+      const double with_floor = FLASHTaggerAlgorithm::scoreShifts(masses, sums, index, shifts.data(), flanks.data(), shifts.size(), 10.0, 0.0,
+                                                                  &floor_count, score_floor);
+      const double plain = FLASHTaggerAlgorithm::scoreShifts(masses, sums, shifts.data(), flanks.data(), shifts.size(), 10.0, 0.0, &plain_count, score_floor);
+      TEST_EQUAL(with_floor == plain || (std::isinf(with_floor) && std::isinf(plain)), true)
+      if (with_floor == -std::numeric_limits<double>::infinity())
+      {
+        below++;
+        TEST_EQUAL(score < score_floor, true)
+        TEST_EQUAL(floor_count, 0)
+      }
+      else
+      {
+        same++;
+        TEST_EQUAL(with_floor == score, true) // the same double
+        TEST_EQUAL(floor_count, count)
+      }
+    }
+  }
+  TEST_EQUAL(below > 300, true)
+  TEST_EQUAL(same > 300, true)
 }
 END_SECTION
 

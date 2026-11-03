@@ -29,7 +29,8 @@ namespace OpenMS
   inline const double c13_spacing = Constants::C13C12_MASSDIFF_U; // one isotope (shared by name in the parallel extension loop)
   // Base penalty for a terminal truncation, equivalent to the base blind-modification (mass-shift)
   // penalty applied in findSubPathsBetweenTagEndPoints. Equals 19.
-  inline const int truncation_penalty = 1 + 2 * (multi_ion_score + FLASHTaggerAlgorithm::max_node_score);
+  static_assert(FLASHExtenderAlgorithm::truncation_penalty == 1 + 2 * (multi_ion_score + FLASHTaggerAlgorithm::max_node_score),
+                "the truncation penalty equals the base blind-modification penalty");
   // Minimum number of unshifted suffix fragment masses from the protein C-terminus against which a precursor-mass path ending before
   // the C-terminus is not accepted. Set from an empirical null on Eclip_1480: ladders read from a wrong C-terminus of the right protein
   // (78,686 internal positions of 1% PrSMs) reach k >= 4 at a rate of 7.6e-5 (shuffled decoys: 1.6e-5 of 378,800), so the about 200
@@ -102,9 +103,22 @@ namespace OpenMS
 
     defaults_.setValue("ion_type", std::vector<std::string> {"b", "y"}, "Specifies ion types to consider");
     defaults_.setValidStrings("ion_type", {"b", "c", "a", "y", "z", "x", "zp1", "zp2"});
-    defaults_.setValue("skip_precursor_inference", "false", "Set to skip precursor mass inference with complimentary fragment ion pairs. Precursor masses inferred from MSn-1 will be used in MSn");
-    defaults_.setValidStrings("skip_precursor_inference", {"true", "false"});
+    // FLASHTnT sets ladder_end_penalty false in its own parameters (FLASHTnTAlgorithm); FLASHIda's extender keeps these defaults
+    defaults_.setValue("skip_precursor_inference", "false",
+                       "Precursor mass inference from complementary fragment ion pairs, where the terminal paths together span the protein. "
+                       "corroborated: an inferred mass that differs from the MS1 precursor mass is kept only if the spectrum's complementary "
+                       "pairs single it out and it also is a mass of the isolation window (one isotope off allowed; on ten datasets 1,215 masses "
+                       "without the window condition, 4% of the spectra with a mass, agreed with TopPIC's in 13%); false: the complementary pairs "
+                       "suffice; true: no inference, the precursor masses inferred from MSn-1 are used in MSn.");
+    defaults_.setValidStrings("skip_precursor_inference", {"true", "false", "corroborated"});
     defaults_.addTag("skip_precursor_inference", "advanced");
+    defaults_.setValue("ladder_end_penalty", "true",
+                       "Whether a precursor-mass path pays the truncation penalty for an internal C-terminal end that the suffix ladder of the "
+                       "terminal paths reads (at least as many fragments as a terminal ladder needs). false: it does not, as its start is taken "
+                       "from a prefix ladder that reads it (on ten datasets 112 spectra kept no mass although their terminal stretch fit the "
+                       "precursor exactly, the path scoring 0 after the penalty); true: every internal C-terminal end pays it.");
+    defaults_.setValidStrings("ladder_end_penalty", {"true", "false"});
+    defaults_.addTag("ladder_end_penalty", "advanced");
 
     defaultsToParam_();
   }
@@ -114,6 +128,8 @@ namespace OpenMS
     max_blind_mod_cntr_ = param_.getValue("max_blind_mod_count");
     max_mod_mass_ = param_.getValue("max_mod_mass");
     skip_precursor_inference_ = param_.getValue("skip_precursor_inference") == "true";
+    precursor_inference_corroborated_ = param_.getValue("skip_precursor_inference") == "corroborated";
+    ladder_end_penalty_ = param_.getValue("ladder_end_penalty").toString() == "true";
     loadVariableModifications_();
     cleavage_weight_ = param_.getValue("cleavage_weight");
     loadCleavageTables_();
@@ -1754,8 +1770,13 @@ namespace OpenMS
             }
             if (debug) { std::cout << std::endl; }
             int mode_score = getScore_(best_path[0]);
-            if (m == 2 && hi.protein_end_position_ >= 0 && hi.protein_end_position_ < (int)hit.getSequence().size())
-              mode_score -= truncation_penalty; // penalize C-terminal truncation in the both-termini path
+            // penalize C-terminal truncation in the both-termini path; with ladder_end_penalty false, not an end the suffix ladder of
+            // the terminal paths reads (as the start is taken from a prefix ladder that reads it, start_prior_): on ten datasets 112
+            // spectra kept no mass although their terminal stretch fit the precursor exactly, mode 2 scoring it at 0 after this
+            // penalty (Rieske presequence 1-78 in mouse brain: 19 - 19 against 72 for the terminal paths)
+            if (m == 2 && hi.protein_end_position_ >= 0 && hi.protein_end_position_ < (int)hit.getSequence().size()
+                && ! (! ladder_end_penalty_ && hi.protein_end_position_ == terminal_end && terminal_c_ladder >= min_c_term_ladder))
+              mode_score -= truncation_penalty;
             if (m == 1 && hi.protein_start_position_ >= 0 && hi.protein_end_position_ >= 0 && hi.protein_start_position_ >= hi.protein_end_position_)
             {
               // the N- and C-terminal paths overlap: keep one of them, and drop the modifications and matched positions of the other
@@ -1801,6 +1822,19 @@ namespace OpenMS
               = given_precursor_mass_ > 0 && std::abs(given_precursor_mass_ - hi.calculated_precursor_mass_) <= tol_ * given_precursor_mass_;
             if (! reject_mass && precursor_by_fragment && ! given_mass_agrees) // the MS1 precursor mass confirms it
               reject_mass = ! hasComplementaryPairSupport_(sorted_masses, hi.calculated_precursor_mass_, hi.inferred_suffix_node_, hi.inferred_prefix_node_);
+            // option skip_precursor_inference corroborated: against an MS1 precursor mass, a mass from fragment pairs must also be a mass
+            // of the isolation window (a co-isolated species; one isotope off allowed). On ten datasets 1,215 such masses (4% of the
+            // spectra with a mass) agreed with TopPIC's in 13%.
+            if (! reject_mass && precursor_by_fragment && ! given_mass_agrees && precursor_inference_corroborated_ && given_precursor_mass_ > 0)
+            {
+              bool in_window = false;
+              for (const auto& [wm, wi] : dspec.getPrecursorMassIntensityMap())
+              {
+                for (int k = -1; k <= 1 && ! in_window; k++)
+                  in_window = wm > 0 && std::abs(wm + k * c13_spacing - hi.calculated_precursor_mass_) <= tol_ * hi.calculated_precursor_mass_;
+              }
+              reject_mass = ! in_window;
+            }
             // Unshifted suffix fragment masses measured from the C-terminus cannot come from a proteoform that ends before it. A precursor
             // mass of a co-isolated species makes the path end where that mass fits and absorb the rest with blind shifts: on Eclip_1480
             // scan 8324, YCII 1-76 [+28.0, -484.8] scored 37, the terminal result 1-98 with 21 y ions 228.

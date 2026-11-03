@@ -219,6 +219,12 @@ private:
     }
   };
 
+public:
+  /// penalty of a terminal truncation in a precursor-mass path (equals the base blind-modification penalty of
+  /// findSubPathsBetweenTagEndPoints); public so that FLASHTnT's precursor re-selection can allow for it
+  static constexpr int truncation_penalty = 19;
+
+private:
   /// Protein hit information that should be retained throughout the run.
   struct OPENMS_DLLAPI HitInformation
   {
@@ -544,6 +550,11 @@ private:
   double tol_;
 
   bool skip_precursor_inference_ = true;
+  /// option skip_precursor_inference corroborated: a mass from fragment pairs that differs from the MS1 precursor mass is kept only if
+  /// it also is a mass of the isolation window (one isotope off allowed)
+  bool precursor_inference_corroborated_ = false;
+  /// option ladder_end_penalty: a precursor-mass path pays the truncation penalty also for an end the suffix ladder of the terminal paths reads
+  bool ladder_end_penalty_ = true;
   /// set MatchedMassIndices on every proteoform hit (setReportMatchedMasses)
   bool report_matched_masses_ = false;
   /// setPathAlternatives

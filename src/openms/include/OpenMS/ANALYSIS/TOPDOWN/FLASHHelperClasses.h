@@ -14,6 +14,8 @@
 #include <OpenMS/CONCEPT/Constants.h>
 #include <OpenMS/FEATUREFINDER/MassTraceDetection.h>
 #include <boost/dynamic_bitset.hpp>
+#include <cmath>
+#include <cstdint>
 #include <limits>
 
 namespace OpenMS
@@ -693,6 +695,13 @@ namespace OpenMS
     static float getChargeMass(bool positive_ioniziation_mode);
 
     /**
+       @brief std::round(@p x) (halfway cases away from zero), without the libm call that builds without SSE4.1 make for it in hot loops.
+       Equal to std::round(x) up to the sign of a zero result (so the same after a conversion to an integer type): below 2^52 in magnitude,
+       the fraction x - trunc(x) is exact in double; from 2^52 on (and for infinities and NaN), x is returned, as std::round returns it.
+    */
+    static double roundHalfAway(double x);
+
+    /**
        @brief The modification a user names (FLASHTnT var_mod and fixed_mod): a name with its site as in Unimod/PSI-MOD, e.g. "Oxidation (M)",
        or a Unimod accession number with its site, e.g. "35 (M)", "1 (N-term)" ("UNIMOD:35 (M)" is the same; sites: a residue letter, N-term,
        C-term, Protein N-term, Protein C-term). A bare accession ("35") is taken only if the database knows one site for it.
@@ -701,6 +710,14 @@ namespace OpenMS
     */
     static const ResidueModification* resolveModification(const String& spec);
   };
+
+  inline double FLASHHelperClasses::roundHalfAway(const double x)
+  {
+    if (! (std::abs(x) < 0x1p52)) return x;       // an integer already (or not finite)
+    const double t = (double)(std::int64_t)x;     // truncated toward zero
+    const double f = x - t;                       // exact
+    return t + (double)((f >= 0.5) - (f <= -0.5)); // exact: an integer below 2^53
+  }
 
   // Hot in every peak-group sort and mass computation: defined inline (same arithmetic as before).
   inline float FLASHHelperClasses::getChargeMass(const bool positive_ioniziation_mode)

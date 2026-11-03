@@ -10,6 +10,7 @@
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHDeconvAlgorithm.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/FLASHIda/ScanCommandJoin.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/MassFeatureTrace.h>
+#include <OpenMS/ANALYSIS/TOPDOWN/FLASHPhaseTrace.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/PeakGroup.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/Qvalue.h>
 #include <OpenMS/ANALYSIS/TOPDOWN/TopDownIsobaricQuantification.h>
@@ -1065,8 +1066,10 @@ void FLASHDeconvAlgorithm::run(MSExperiment& map,
     OPENMS_LOG_INFO << "FLASHIda scan commands used: " << scan_commands_file_ << " (" << located_by_scan_.size() << " commanded MS2 scans located)" << std::endl;
   }
 
+  flashPhase("fd: run start");
   updateMSLevels_(map);
   filterLowPeaks_(map);
+  flashPhase("fd: low peaks filtered");
 
   sd_ = SpectralDeconvolution();
   Param sd_param = param_.copy("SD:", true);
@@ -1102,10 +1105,13 @@ void FLASHDeconvAlgorithm::run(MSExperiment& map,
   deconvolved_spectra.reserve(map.size() * 4);
 
   // run spectral deconvolution here and get deconvolved spectra
+  flashPhase("fd: spectral deconvolution start");
   runSpectralDeconvolution_(map, deconvolved_spectra);
+  flashPhase("fd: spectral deconvolution end");
 
   // feature tracing here and update FeatureQScores
   runFeatureFinding_(deconvolved_spectra, deconvolved_features);
+  flashPhase("fd: features end");
 
   noise_decoy_weights_ = Qvalue::updatePeakGroupQvalues(deconvolved_spectra);
   if (report_decoy_)
@@ -1125,7 +1131,9 @@ void FLASHDeconvAlgorithm::run(MSExperiment& map,
   Param quant_param = param_.copy("iq:", true);
   quantifier.setParameters(quant_param);
   // Isobaric quant run
+  flashPhase("fd: q-values end");
   quantifier.quantify(map, deconvolved_spectra, deconvolved_features);
+  flashPhase("fd: run end");
 }
 
 // ADR-0046 decision 3: FLASHDeconv's deconvolution of the commanded survey holds NOTHING in the isolation window,
@@ -1643,6 +1651,34 @@ void FLASHDeconvAlgorithm::findPrecursorPeakGroupsForMSnSpectra_(const MSExperim
         native_id_decoy_precursor_qscore1d_map_.erase(native_id);
         scan_survey(best_index, true);
         rescued_precursors_++;
+      }
+    }
+    // The target masses of the neighbouring surveys (within precursor_rescue_window) that have a peak in the window join the window
+    // masses as further candidates for FLASHTnT's precursor re-selection (not as the precursor): an LC-MS precursor elutes over several
+    // survey scans, and the one the isolation picked need not be the loudest in the preceding scan. Masses within 2 x tolerance of a
+    // registered one are the same mass.
+    if (survey_indices.size() > 1 && native_id_precursor_mass_intensity_map_.find(native_id) != native_id_precursor_mass_intensity_map_.end())
+    {
+      auto& mi = native_id_precursor_mass_intensity_map_[native_id];
+      for (Size k = 1; k < survey_indices.size(); k++)
+      {
+        const DeconvolvedSpectrum* ds = deconvolved_of(survey_indices[k]);
+        if (ds == nullptr) continue;
+        for (const auto& pg : *ds)
+        {
+          if (pg.getTargetDecoyType() != PeakGroup::target || pg[0].mz > end_mz || pg[pg.size() - 1].mz < start_mz) continue;
+          const int c = int(round(pg.getMonoMass() / start_mz));
+          double intensity = 0;
+          for (const auto& p : pg)
+          {
+            if (p.abs_charge == c && p.mz >= start_mz && p.mz <= end_mz) intensity += p.intensity;
+          }
+          if (intensity <= 0) continue;
+          const double m = pg.getMonoMass();
+          bool known = false;
+          for (const auto& [m0, j] : mi) known = known || (m0 > 0 && std::abs(m0 - m) <= 2e-6 * tols_[0] * m);
+          if (! known) mi.emplace_back(m, intensity);
+        }
       }
     }
     if (located != nullptr && native_id_precursor_peak_group_map_.find(native_id) == native_id_precursor_peak_group_map_.end())
