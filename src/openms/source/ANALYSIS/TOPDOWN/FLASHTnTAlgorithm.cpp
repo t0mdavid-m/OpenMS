@@ -480,6 +480,19 @@ void FLASHTnTAlgorithm::setDefaultParams_()
                      "whose gradient-boosted trees give the chosen PrSM's confidence, which replaces its score in the FDR (the combined score is kept "
                      "as CombinedScore). Empty: the best combined score, as before.",
                      {"advanced"});
+  defaults_.setValue("protein_open_terminus_model", "false",
+                     "Protein q-values: score an undetermined PrSM with an open terminus with the model of the class \"undetermined, both "
+                     "termini\" (its decoy null, share of false targets and target density), as precursor-ladder PrSMs and determined PrSMs "
+                     "that are not the whole protein already are. PrSM and proteoform q-values are unchanged.",
+                     {"advanced"});
+  defaults_.setValidStrings("protein_open_terminus_model", {"true", "false"});
+  defaults_.setValue("protein_ranking", "proteoform",
+                     "Protein q-values (without -native): 'proteoform' ranks a protein by its best proteoform (the lowest proteoform q-value, then "
+                     "its best score); 'top_two_prsms' by the sum of the scores of its two best PrSMs (one PrSM per spectrum; a protein seen in "
+                     "one spectrum keeps that spectrum's score; with scoring_model, softplus of the confidence, -log P(wrong), is what is summed), "
+                     "targets and decoys in one ranking.",
+                     {"advanced"});
+  defaults_.setValidStrings("protein_ranking", {"proteoform", "top_two_prsms"});
   defaultsToParam_();
 }
 
@@ -587,6 +600,8 @@ void FLASHTnTAlgorithm::updateMembers_()
   annotator_param_.setValue("tol", param_.getValue("raw:tol"));
   annotator_param_.setValue("ion_type", param_.getValue("ion_type"));
   gapped_mode_ = param_.getValue("gapped_tags").toString();
+  protein_open_terminus_model_ = param_.getValue("protein_open_terminus_model").toString() == "true";
+  protein_top_two_ = param_.getValue("protein_ranking").toString() == "top_two_prsms";
   const String scoring_file = param_.getValue("scoring_model").toString();
   scoring_model_ = scoring_file.empty() ? nullptr : LearnedScoringModel::load(scoring_file);
   terminal_ladders_ = param_.getValue("terminal_ladders").toString() == "true";
@@ -856,7 +871,10 @@ void FLASHTnTAlgorithm::setProteinQvalues_(const std::vector<int>& hit_class, co
         if (end == form_end && (start == form_start || (form_start == 1 && start == 2))) whole_protein = isDetermined(hit);
       }
     }
-    protein_class[i] = (c == fdr_class_precursor_ladder || (c <= fdr_class_max_blind && ! whole_protein)) ? c3_model : c;
+    // protein_open_terminus_model: an open-terminus PrSM too (its own class has almost no decoys at the top, so its own model gave a single
+    // such PrSM a local FDR near 0 and carried one-PrSM proteins: 10 of 29 shuffled-entrapment proteins at 1% on the development runs)
+    protein_class[i] = (c == fdr_class_precursor_ladder || (c <= fdr_class_max_blind && ! whole_protein) || (protein_open_terminus_model_ && c == fdr_class_open_terminus))
+                         ? c3_model : c;
   }
 
   // null of the PrSM score per class
@@ -3949,6 +3967,60 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
   const Size hit_count = proteoform_hits_.size();
 
   if (use_fdr && native_rule) { setProteinQvalues_(hit_class, qvalues, decoys, decoy_weights, clusters, rep_q, *db); }
+  else if (use_fdr && protein_top_two_)
+  {
+    // Protein q-values from the two best PrSMs of each protein (protein_ranking top_two_prsms): a protein's score is the sum of the scores
+    // of its two best PrSMs (a protein seen in one spectrum keeps that spectrum's score), and the proteins, targets and decoys alike, are
+    // target-decoy counted in one ranking. A learned score (scoring_model) is a log-odds: softplus(score) = -log P(the PrSM is wrong) is
+    // what adds over independent PrSMs. A single strong PrSM, often an undetermined one with an open C-terminus, no longer carries a
+    // protein alone: on the development runs (shuffled entrapment, seed 1, first run of 11 data sets) 812 target and 2 entrapment
+    // proteins pass at 1%, against 905 and 27 ranked by the best proteoform. A decoy precursor of a target ranks no protein.
+    // one PrSM per spectrum: a spectrum can keep two PrSMs of one protein (e.g. one with both termini and one with an open terminus), and
+    // its best alone is evidence; counted twice, one spectrum would pass a protein as two
+    const double ninf = -std::numeric_limits<double>::infinity();
+    std::map<int, Size> best_of_scan;
+    for (Size i = 0; i < hit_count; i++)
+    {
+      if (hit_class[i] < 0) continue;
+      const auto& hit = proteoform_hits_[i];
+      if (hit.metaValueExists("DecoyPrecursor") && ! hit.getAccession().hasPrefix("DECOY")) continue;
+      auto [it, fresh] = best_of_scan.try_emplace((int)hit.getMetaValue(tntKey("Scan")), i);
+      if (! fresh && hit.getScore() > proteoform_hits_[it->second].getScore()) it->second = i;
+    }
+    std::map<String, std::array<double, 2>> top_two;
+    for (const auto& [scan, i] : best_of_scan)
+    {
+      const auto& hit = proteoform_hits_[i];
+      const double s = hit.getScore();
+      const double evidence = scoring_model_ ? (s > 30 ? s : std::log1p(std::exp(s))) : s;
+      auto& t = top_two.try_emplace(hit.getAccession(), std::array<double, 2> {ninf, ninf}).first->second;
+      if (evidence > t[0]) { t[1] = t[0]; t[0] = evidence; }
+      else if (evidence > t[1]) t[1] = evidence;
+    }
+    std::vector<std::pair<double, String>> ranked_proteins; // -score, accession
+    for (const auto& [acc, t] : top_two) ranked_proteins.emplace_back(-(t[0] + (t[1] > ninf ? t[1] : 0.0)), acc);
+    std::sort(ranked_proteins.begin(), ranked_proteins.end());
+    const double protein_decoy_weight = 1.0 / std::max(decoy_factor_, 1e-9);
+    std::vector<RankedItem<double>> items;
+    items.reserve(ranked_proteins.size());
+    for (const auto& [key, acc] : ranked_proteins) items.push_back({key, acc.hasPrefix("DECOY"), protein_decoy_weight});
+    const auto protein_qvalues = targetDecoyQvalues(items);
+    std::map<String, double> protein_q;
+    Size targets = 0, decoy_count = 0, passing = 0;
+    for (Size k = 0; k < ranked_proteins.size(); k++)
+    {
+      protein_q[ranked_proteins[k].second] = protein_qvalues[k];
+      if (items[k].decoy) decoy_count++;
+      else { targets++; passing += protein_qvalues[k] <= rep_q; }
+    }
+    OPENMS_LOG_INFO << "Proteins by their two best PrSMs: " << targets << " target and " << decoy_count << " decoy proteins, " << passing
+                    << " targets at q <= " << rep_q << std::endl;
+    for (auto& hit : proteoform_hits_)
+    {
+      const auto it = protein_q.find(hit.getAccession());
+      hit.setMetaValue("ProteinQvalue", it == protein_q.end() ? 1.0 : it->second);
+    }
+  }
   else if (use_fdr)
   {
     // Protein q-values from the proteoforms: a protein is ranked by its best proteoform (the lowest proteoform q-value, then the best
