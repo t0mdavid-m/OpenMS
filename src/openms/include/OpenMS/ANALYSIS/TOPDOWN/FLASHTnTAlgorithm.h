@@ -169,6 +169,10 @@ private:
   void traceCandidates_(const std::vector<ProteinHit>& hits, const char* file) const;
   /// learned PrSM scoring (scoring_model): its choice weights and confidence trees; null when off
   std::shared_ptr<const LearnedScoringModel> scoring_model_;
+  /// protein q-values: open-terminus PrSMs scored with the model of "undetermined, both termini"
+  bool protein_open_terminus_model_ = false;
+  /// protein q-values from the two best PrSMs of each protein (protein_ranking top_two_prsms) instead of its best proteoform
+  bool protein_top_two_ = false;
   /// with scoring_model_: the spectrum's PrSM chosen by the model's choice score, the others removed, and its score replaced by the model's
   /// confidence (the combined score kept as meta value CombinedScore). @p spectra: the deconvolved spectra by scan number.
   void applyLearnedScoring_(std::vector<ProteinHit>& hits, const std::map<int, const MSSpectrum*>& spectra) const;
