@@ -21,10 +21,14 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <set>
 
 namespace OpenMS
 {
+/// learned PrSM scoring loaded from scoring_model (defined in FLASHTnTAlgorithm.cpp)
+struct LearnedScoringModel;
+
 /**
 @brief
 @ingroup Topdown
@@ -163,6 +167,11 @@ private:
   static void keepBestPerSpectrum_(std::vector<ProteinHit>& hits, const std::string& label, const std::string& score_name);
   /// FLASH_TRACE_FEATURES: every candidate PrSM before the spectrum's choice, appended to @p file (diagnostics)
   void traceCandidates_(const std::vector<ProteinHit>& hits, const char* file) const;
+  /// learned PrSM scoring (scoring_model): its choice weights and confidence trees; null when off
+  std::shared_ptr<const LearnedScoringModel> scoring_model_;
+  /// with scoring_model_: the spectrum's PrSM chosen by the model's choice score, the others removed, and its score replaced by the model's
+  /// confidence (the combined score kept as meta value CombinedScore). @p spectra: the deconvolved spectra by scan number.
+  void applyLearnedScoring_(std::vector<ProteinHit>& hits, const std::map<int, const MSSpectrum*>& spectra) const;
   /// residual search rounds of chimeric spectra after the first search (0: off)
   int chimeric_rounds_ = 0;
   /// candidates from gapped tags: off, fallback (spectra without sequence-tag candidates), both, only
