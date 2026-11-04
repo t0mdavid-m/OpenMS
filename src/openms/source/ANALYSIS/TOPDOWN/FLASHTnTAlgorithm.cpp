@@ -487,8 +487,100 @@ void FLASHTnTAlgorithm::setDefaultParams_()
   const auto aparam = FLASHAnnotatorAlgorithm().getDefaults();
   defaults_.setValue("raw:tol", aparam.getValue("tol"), aparam.getDescription("tol"));
   defaults_.setMinFloat("raw:tol", 0.0);
+  defaults_.setValue("scoring_model", "",
+                     "Learned PrSM scoring (needs -in_raw): a model file whose linear choice score picks each spectrum's PrSM among its candidates and "
+                     "whose gradient-boosted trees give the chosen PrSM's confidence, which replaces its score in the FDR (the combined score is kept "
+                     "as CombinedScore). Empty: the best combined score, as before.",
+                     {"advanced"});
   defaultsToParam_();
 }
+
+// Learned PrSM scoring (scoring_model): a linear choice score over a candidate PrSM's features picks the spectrum's PrSM, and gradient-boosted
+// trees give the chosen PrSM's confidence, which replaces its score in the FDR. The model file is plain text, one entry per line:
+//   choice <feature> <weight>        the choice score is the weighted sum of these features
+//   conf_feature <feature>           the trees' features, in their order
+//   conf_baseline <value>            the trees' starting value (log-odds)
+//   tree <node count>                followed by one line per node: <feature> <threshold> <left> <right> <leaf 0|1> <value> <missing left 0|1>
+// The features are those of the offline pipeline that fit the model (TD_survey scripts cand_features.py, add_feats.py, conf_fit.py), on the
+// deconvolved spectrum's masses: residue masses without fixed modifications, fragments of the ion types at 10 ppm (+-1 isotope above 5 kDa),
+// a fragment inside a modification window counted for either placement.
+struct LearnedScoringModel
+{
+  struct Node
+  {
+    int feature = 0;
+    double threshold = 0;
+    int left = 0, right = 0;
+    bool leaf = true;
+    double value = 0;
+    bool missing_left = true;
+  };
+  std::vector<std::pair<String, double>> choice;
+  std::vector<String> conf_features;
+  double conf_baseline = 0;
+  std::vector<std::vector<Node>> trees;
+
+  static std::shared_ptr<const LearnedScoringModel> load(const String& file)
+  {
+    std::ifstream in(file);
+    if (! in) throw Exception::FileNotFound(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, file);
+    auto model = std::make_shared<LearnedScoringModel>();
+    std::string kind;
+    while (in >> kind)
+    {
+      if (kind == "choice")
+      {
+        std::string f;
+        double w;
+        in >> f >> w;
+        model->choice.emplace_back(f, w);
+      }
+      else if (kind == "conf_feature")
+      {
+        std::string f;
+        in >> f;
+        model->conf_features.emplace_back(f);
+      }
+      else if (kind == "conf_baseline") in >> model->conf_baseline;
+      else if (kind == "tree")
+      {
+        Size n = 0;
+        in >> n;
+        std::vector<Node> tree(n);
+        for (auto& node : tree)
+        {
+          int leaf = 0, missing_left = 0;
+          in >> node.feature >> node.threshold >> node.left >> node.right >> leaf >> node.value >> missing_left;
+          node.leaf = leaf != 0;
+          node.missing_left = missing_left != 0;
+        }
+        model->trees.push_back(std::move(tree));
+      }
+      else throw Exception::ParseError(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, kind, "unknown entry in the scoring model " + file);
+      if (in.fail()) throw Exception::ParseError(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, kind, "malformed entry in the scoring model " + file);
+    }
+    if (model->choice.empty() || model->trees.empty())
+      throw Exception::ParseError(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION, file, "a scoring model needs choice weights and confidence trees");
+    return model;
+  }
+
+  /// the trees' log-odds for the features @p x (in conf_features order)
+  double confidence(const std::vector<double>& x) const
+  {
+    double sum = conf_baseline;
+    for (const auto& tree : trees)
+    {
+      int n = 0;
+      while (! tree[n].leaf)
+      {
+        const double v = x[tree[n].feature];
+        n = (std::isnan(v) ? tree[n].missing_left : v <= tree[n].threshold) ? tree[n].left : tree[n].right;
+      }
+      sum += tree[n].value;
+    }
+    return sum;
+  }
+};
 
 void FLASHTnTAlgorithm::updateMembers_()
 {
@@ -507,6 +599,8 @@ void FLASHTnTAlgorithm::updateMembers_()
   annotator_param_.setValue("tol", param_.getValue("raw:tol"));
   annotator_param_.setValue("ion_type", param_.getValue("ion_type"));
   gapped_mode_ = param_.getValue("gapped_tags").toString();
+  const String scoring_file = param_.getValue("scoring_model").toString();
+  scoring_model_ = scoring_file.empty() ? nullptr : LearnedScoringModel::load(scoring_file);
   terminal_ladders_ = param_.getValue("terminal_ladders").toString() == "true";
   precursor_ladders_ = param_.getValue("precursor_ladders").toString() == "true";
   search_cascade_ = param_.getValue("search_cascade").toString() == "true";
@@ -3401,8 +3495,19 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
           catch (const Exception::BaseException& e) { OPENMS_LOG_WARN << "FLASH_TRACE_FEATURES failed: " << e.what() << " (" << e.getName() << ")" << std::endl; }
           catch (const std::exception& e) { OPENMS_LOG_WARN << "FLASH_TRACE_FEATURES failed: " << e.what() << std::endl; }
         }
-        // one PrSM per spectrum: the best by the combined score; the extension kept every candidate's PrSM for this choice
-        if (! multiple_hits_per_spec_) keepBestPerSpectrum_(stage_hits, stage == 0 ? String("") : " (search cascade stage " + String(stage) + ")", "combined score");
+        // one PrSM per spectrum: the best by the combined score, or with a scoring model by its choice score (its score then its confidence);
+        // the extension kept every candidate's PrSM for this choice
+        if (! multiple_hits_per_spec_)
+        {
+          if (scoring_model_)
+          {
+            std::map<int, const MSSpectrum*> spectra;
+            for (Size index = 0; index < map.size(); index++)
+              if (map[index].getMSLevel() > 1) spectra[FLASHDeconvAlgorithm::getScanNumber(map, index)] = &map[index];
+            applyLearnedScoring_(stage_hits, spectra);
+          }
+          else keepBestPerSpectrum_(stage_hits, stage == 0 ? String("") : " (search cascade stage " + String(stage) + ")", "combined score");
+        }
       }
       else { dropOpenTerminusShifts(stage_hits); }
       for (auto& h : stage_hits)
@@ -4607,6 +4712,297 @@ void FLASHTnTAlgorithm::setCombinedCoverage_(const std::vector<std::vector<Size>
     OPENMS_LOG_INFO << "Combined coverage: " << combined << " target proteoforms with two or more PrSMs combined; their mean coverage " << sum_best / combined
                     << "% by the best PrSM, " << sum_combined / combined << "% combined (chance " << sum_chance / combined << "%)" << std::endl;
   }
+}
+
+namespace
+{
+// residue masses of the offline features (no fixed modifications: the model was fit on them)
+double scoringResidueMass(char c)
+{
+  switch (c)
+  {
+    case 'G': return 57.02146;
+    case 'A': return 71.03711;
+    case 'S': return 87.03203;
+    case 'P': return 97.05276;
+    case 'V': return 99.06841;
+    case 'T': return 101.04768;
+    case 'C': return 103.00919;
+    case 'L':
+    case 'I': return 113.08406;
+    case 'N': return 114.04293;
+    case 'D': return 115.02694;
+    case 'Q': return 128.05858;
+    case 'K': return 128.09496;
+    case 'E': return 129.04259;
+    case 'M': return 131.04049;
+    case 'H': return 137.05891;
+    case 'F': return 147.06841;
+    case 'R': return 156.10111;
+    case 'Y': return 163.06333;
+    case 'W': return 186.07931;
+    case 'U': return 150.95364;
+    case 'O': return 237.14773;
+    default: return -1;
+  }
+}
+
+// common modification masses (common_shift: every shift within 0.05 Da of one of them)
+constexpr double scoring_common_shifts[] = {15.994915, 31.98983,   42.010565, 14.01565,  28.0313,    42.04695,   79.966331, 27.994915, 0.984016,  21.981943,
+                                            37.955882, 57.021464, -18.010565, -17.026549, 43.005814, 100.016044, -2.01565,  -131.040485, -89.02992, 114.042927,
+                                            15.010899, 47.984744, 79.956815,  72.021129,  86.000394, 162.052824, 203.079373, 304.20536};
+
+// fragment-evidence features of a proteoform in a deconvolved spectrum (masses ascending, intensities aligned); empty if a residue is unknown
+std::map<String, double> scoringEvidence(const String& seq, const std::vector<FLASHAnnotatorAlgorithm::Modification>& mods, bool known_n, bool known_c,
+                                         const std::vector<double>& masses, const std::vector<double>& intensities, const std::vector<double>& n_offsets,
+                                         const std::vector<double>& c_offsets)
+{
+  const int L = (int)seq.size();
+  if (L < 2) return {};
+  std::vector<double> prefix(L + 1, 0.0);
+  for (int i = 0; i < L; i++)
+  {
+    const double m = scoringResidueMass(seq[i]);
+    if (m < 0) return {};
+    prefix[i + 1] = prefix[i] + m;
+  }
+  double total_intensity = std::accumulate(intensities.begin(), intensities.end(), 0.0);
+  if (total_intensity == 0) total_intensity = 1.0;
+  double m_any = 0, m_exact = 0, n_side = 0, c_side = 0, matched_intensity = 0;
+  std::set<Size> used;
+  std::vector<double> errors;
+  std::vector<bool> cut_hit(L - 1, false);
+  constexpr double iso = 1.0033548;
+  auto find = [&](double x) -> long { // index of a mass within 10 ppm of x (the first at or above x - 10 ppm), -1 if none
+    const auto it = std::lower_bound(masses.begin(), masses.end(), x - 10e-6 * x);
+    return it != masses.end() && *it <= x + 10e-6 * x ? (long)(it - masses.begin()) : -1;
+  };
+  for (int cut = 1; cut < L; cut++)
+  {
+    double left = 0, right = 0, inside = 0;
+    for (const auto& mod : mods)
+    {
+      if (mod.end < cut) left += mod.mass;
+      if (mod.start >= cut) right += mod.mass;
+      if (mod.start < cut && cut <= mod.end) inside += mod.mass;
+    }
+    struct Candidate { bool n; double m1, m2; };
+    std::vector<Candidate> candidates;
+    if (known_n)
+      for (double o : n_offsets) candidates.push_back({true, prefix[cut] + left + o, prefix[cut] + left + inside + o});
+    if (known_c)
+      for (double o : c_offsets) candidates.push_back({false, prefix[L] - prefix[cut] + right + o, prefix[L] - prefix[cut] + right + inside + o});
+    for (const auto& cand : candidates)
+    {
+      long index = -1;
+      int iso_off = 0;
+      double ppm = 0;
+      for (int which = 0; which < (inside == 0 ? 1 : 2) && index < 0; which++)
+      {
+        const double m = which == 0 ? cand.m1 : cand.m2;
+        for (int k : {0, -1, 1})
+        {
+          if (k != 0 && m < 5000) continue;
+          const double x = m + k * iso;
+          index = find(x);
+          if (index >= 0)
+          {
+            iso_off = k;
+            ppm = (masses[index] - x) / x * 1e6;
+            break;
+          }
+        }
+      }
+      if (index < 0) continue;
+      m_any++;
+      m_exact += iso_off == 0;
+      cut_hit[cut - 1] = true;
+      (cand.n ? n_side : c_side)++;
+      if (used.insert((Size)index).second) matched_intensity += intensities[index];
+      errors.push_back(std::fabs(ppm));
+    }
+  }
+  int longest = 0, run = 0, hit_cuts = 0;
+  for (bool h : cut_hit)
+  {
+    run = h ? run + 1 : 0;
+    longest = std::max(longest, run);
+    hit_cuts += h;
+  }
+  double err_med = 10.0;
+  if (! errors.empty())
+  {
+    std::sort(errors.begin(), errors.end());
+    const Size n = errors.size();
+    err_med = n % 2 ? errors[n / 2] : (errors[n / 2 - 1] + errors[n / 2]) / 2;
+  }
+  return {{"m_any", m_any}, {"m_exact", m_exact}, {"cuts_hit", (double)hit_cuts}, {"cut_frac", (double)hit_cuts / (L - 1)},
+          {"longest_run", (double)longest}, {"n_side", n_side}, {"c_side", c_side}, {"int_frac", matched_intensity / total_intensity},
+          {"peaks_used", (double)used.size()}, {"err_med", err_med}};
+}
+
+// sub_like (a shift equal to replacing one residue of its window by another amino acid, 0.02 Da) and wlen (the longest shift window)
+std::pair<double, double> scoringShiftShape(const String& seq, const std::vector<FLASHAnnotatorAlgorithm::Modification>& mods)
+{
+  static const String residues = "GASPVTCLNDQKEMHFRYW";
+  double sub = 0, wlen = 0;
+  for (const auto& mod : mods)
+  {
+    const int s = std::max(mod.start, 0), e = mod.end;
+    wlen = std::max(wlen, (double)(e - s + 1));
+    if (sub > 0) continue;
+    for (int i = s; i <= e && i < (int)seq.size() && sub == 0; i++)
+    {
+      const char r = seq[i] == 'I' ? 'L' : seq[i];
+      if (residues.find(r) == String::npos) continue;
+      for (char a : residues)
+      {
+        const double d = scoringResidueMass(a) - scoringResidueMass(r);
+        if (a != r && std::fabs(d) > 0.05 && std::fabs(d - mod.mass) <= 0.02)
+        {
+          sub = 1;
+          break;
+        }
+      }
+    }
+  }
+  return {sub, wlen};
+}
+} // namespace
+
+void FLASHTnTAlgorithm::applyLearnedScoring_(std::vector<ProteinHit>& hits, const std::map<int, const MSSpectrum*>& spectra) const
+{
+  const auto& model = *scoring_model_;
+  constexpr double h2o = 18.010565; // as the offline features
+  std::vector<double> n_offsets, c_offsets;
+  for (const auto& t : param_.getValue("ion_type").toStringVector())
+  {
+    if (t == "a") n_offsets.push_back(-27.994915);
+    else if (t == "b") n_offsets.push_back(0.0);
+    else if (t == "c") n_offsets.push_back(17.026549);
+    else if (t == "x") c_offsets.push_back(h2o + 25.979265);
+    else if (t == "y") c_offsets.push_back(h2o);
+    else if (t == "z") c_offsets.push_back(h2o - 17.026549);
+    else if (t == "zp1") c_offsets.push_back(h2o - 16.018724);
+    else if (t == "zp2") c_offsets.push_back(h2o - 15.010899);
+  }
+  if (n_offsets.empty()) n_offsets.push_back(0.0);
+  if (c_offsets.empty()) c_offsets.push_back(h2o);
+
+  // per hit: its features, its choice score, and a key that makes duplicate candidates count once (as the offline features did)
+  const Size n = hits.size();
+  std::vector<std::map<String, double>> features(n);
+  std::vector<double> choice(n, 0.0);
+  std::vector<String> keys(n);
+#pragma omp parallel for schedule(dynamic)
+  for (int64_t i = 0; i < (int64_t)n; i++)
+  {
+    const auto& hit = hits[i];
+    FLASHAnnotatorAlgorithm::PrSM prsm;
+    double precursor = -1;
+    toRawPrSM_(hit, prsm, precursor);
+    auto& f = features[i];
+    f["score"] = hit.getScore();
+    f["ext"] = (double)hit.getMetaValue(tntKey("ExtensionScore"), 0.0);
+    f["raw"] = (double)hit.getMetaValue(tntKey("RawScore"), 0.0);
+    f["raw_k"] = (int)hit.getMetaValue(tntKey("RawMatchedFragments"), 0);
+    f["det"] = isDetermined(hit) ? 1 : 0;
+    f["blind"] = (double)blindModCount_(hit);
+    f["ladder_p"] = hit.metaValueExists("PrecursorLadder") ? 1 : 0;
+    f["ladder_t"] = ! hit.metaValueExists("PrecursorLadder") && hit.metaValueExists("TerminalLadder") ? 1 : 0;
+    double shift_abs = 0;
+    bool common = ! prsm.modifications.empty();
+    String mods;
+    for (const auto& m : prsm.modifications)
+    {
+      shift_abs += std::fabs(m.mass);
+      double best = std::numeric_limits<double>::max();
+      for (double c : scoring_common_shifts) best = std::min(best, std::fabs(c - m.mass));
+      common = common && best <= 0.05;
+      mods += String(m.mass) + "@" + String(m.start) + "-" + String(m.end) + ";";
+    }
+    f["shift_abs"] = std::log1p(shift_abs);
+    f["common_shift"] = common ? 1 : 0;
+    f["len"] = (double)prsm.sequence.size();
+    const auto [sub, wlen] = scoringShiftShape(prsm.sequence, prsm.modifications);
+    f["sub_like"] = sub;
+    f["wlen"] = wlen;
+    const int scan = (int)hit.getMetaValue(tntKey("Scan"));
+    const auto sit = spectra.find(scan);
+    if (sit != spectra.end())
+    {
+      std::vector<std::pair<double, double>> peaks;
+      for (const auto& p : *sit->second) peaks.emplace_back(p.getMZ(), p.getIntensity());
+      std::sort(peaks.begin(), peaks.end());
+      std::vector<double> masses, intensities;
+      for (const auto& [m, in] : peaks)
+      {
+        masses.push_back(m);
+        intensities.push_back(in);
+      }
+      for (const auto& [k, v] : scoringEvidence(prsm.sequence, prsm.modifications, prsm.known_n_term, prsm.known_c_term, masses, intensities, n_offsets, c_offsets))
+        f[k] = v;
+    }
+    for (const auto& [name, w] : model.choice)
+    {
+      const auto it = f.find(name);
+      choice[i] += w * (it == f.end() ? 0.0 : it->second);
+    }
+    keys[i] = hit.getAccession() + "|" + String((int)hit.getMetaValue("StartPosition", 0)) + "|" + String((int)hit.getMetaValue("EndPosition", 0)) + "|"
+              + String((double)hit.getMetaValue(tntKey("Mass"), -1.0)) + "|" + mods;
+  }
+
+  if (const char* trace_file = std::getenv("FLASH_TRACE_SCORING")) // diagnostics: every candidate's features and choice score
+  {
+    std::ofstream out(trace_file, std::ios::app);
+    out << std::setprecision(10);
+    for (Size i = 0; i < n; i++)
+    {
+      out << (int)hits[i].getMetaValue(tntKey("Scan")) << "\t" << keys[i] << "\t" << choice[i];
+      for (const auto& [k, v] : features[i]) out << "\t" << k << "=" << v;
+      out << "\n";
+    }
+  }
+  // per spectrum: the chosen PrSM (the best choice score), its spectrum context, its confidence
+  std::map<int, std::vector<Size>> by_scan;
+  for (Size i = 0; i < n; i++) by_scan[(int)hits[i].getMetaValue(tntKey("Scan"))].push_back(i);
+  std::vector<bool> keep(n, false);
+  for (const auto& [scan, idx] : by_scan)
+  {
+    std::vector<Size> unique;
+    std::set<String> seen;
+    for (Size i : idx)
+      if (seen.insert(keys[i]).second) unique.push_back(i);
+    Size best = unique.front();
+    for (Size i : unique)
+      if (choice[i] > choice[best]) best = i;
+    double other = std::numeric_limits<double>::lowest(), other_protein = std::numeric_limits<double>::lowest();
+    for (Size i : unique)
+    {
+      if (i == best) continue;
+      other = std::max(other, hits[i].getScore());
+      if (hits[i].getAccession() != hits[best].getAccession()) other_protein = std::max(other_protein, hits[i].getScore());
+    }
+    auto& f = features[best];
+    f["n_cand"] = std::log1p((double)unique.size());
+    f["gap1"] = hits[best].getScore() - (other == std::numeric_limits<double>::lowest() ? 0.0 : other);
+    f["gap_oth"] = hits[best].getScore() - (other_protein == std::numeric_limits<double>::lowest() ? 0.0 : other_protein);
+    std::vector<double> x;
+    for (const auto& name : model.conf_features)
+    {
+      const auto it = f.find(name);
+      x.push_back(it == f.end() ? 0.0 : it->second);
+    }
+    auto& hit = hits[best];
+    hit.setMetaValue("CombinedScore", hit.getScore());
+    hit.setMetaValue("ChoiceScore", choice[best]);
+    hit.setScore(model.confidence(x));
+    keep[best] = true;
+  }
+  Size w = 0;
+  for (Size i = 0; i < n; i++)
+    if (keep[i]) hits[w++] = std::move(hits[i]);
+  hits.resize(w);
 }
 
 void FLASHTnTAlgorithm::traceCandidates_(const std::vector<ProteinHit>& hits, const char* file) const
