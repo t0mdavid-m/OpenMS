@@ -2679,11 +2679,18 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
           prsm_indices.push_back((int)i);
         }
         proteoform_hits_[row].setMetaValue("PrSMIndices", prsm_indices);
+        proteoform_hits_[row].setMetaValue("ProteoformEvidenceClass", cluster_class[k]); // its own class, also when counted with others
       }
       // Classes with few targets are counted together: in the order of the classes, a group takes classes until it has min_class_targets
       // targets, and a last group with fewer joins the one before. The classes of a lysate run have hundreds of targets each and stay
       // apart; in a small run (a single SEC fraction of PXD012247: 83 determined, 20 and 90 undetermined targets) a class alone is
       // decided by its few decoys, or by none.
+      // The open-terminus class (undetermined mass, one terminus unknown) is not counted: its proteoforms keep their rows, with q-value 1,
+      // and no protein (below). The class holds about as many decoys as targets (B. theta entrapment of the three lysates, three seeds:
+      // 722-835 target and 735-858 decoy proteoforms per run), so the 5-15 targets above its first decoy passed at q = 0: 83 E. coli and
+      // 5 B. theta proteoforms over the nine runs (5.7%, against 0.5% for the other classes), and 5 of the 27 B. theta proteins at 1%.
+      // Target-decoy counting with +1 passes none of them either, but in every class it would also drop the precursor-ladder class
+      // (about 83 targets per run, 0.5% B. theta). Without the class: proteoforms 14989 -> 14906, proteins 2953 -> 2923 E. coli.
       constexpr Size min_class_targets = 100;
       std::vector<Size> class_targets(pf_class_count, 0), class_size(pf_class_count, 0);
       for (Size k = 0; k < clusters.size(); k++)
@@ -2696,7 +2703,7 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       Size group_targets = 0;
       for (int c = 0; c < pf_class_count; c++)
       {
-        if (class_size[c] == 0) continue;
+        if (class_size[c] == 0 || c == pf_class_open_terminus) continue;
         if (groups.empty() || group_targets >= min_class_targets)
         {
           groups.push_back({});
@@ -2788,6 +2795,22 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
         if (! log) break;
         OPENMS_LOG_INFO << "Proteoform class \"" << group_names[c] << "\": " << counts[0] << " target and " << counts[1] << " decoy proteoforms, "
                         << counts[2] << " targets at q <= " << rep_q << std::endl;
+      }
+      // the open-terminus class, not counted (above)
+      for (Size k = 0; k < clusters.size(); k++)
+      {
+        if (cluster_class[k] != pf_class_open_terminus) continue;
+        for (Size i : clusters[k])
+        {
+          proteoform_hits_[i].setMetaValue("proqvalue", 1.0);
+          proteoform_hits_[i].setMetaValue("ProteoformFDRClass", String(pf_class_names[pf_class_open_terminus]));
+        }
+      }
+      if (log && class_size[pf_class_open_terminus] > 0)
+      {
+        OPENMS_LOG_INFO << "Proteoform class \"" << pf_class_names[pf_class_open_terminus] << "\": " << class_targets[pf_class_open_terminus]
+                        << " target and " << class_size[pf_class_open_terminus] - class_targets[pf_class_open_terminus]
+                        << " decoy proteoforms, not counted (q-value 1)" << std::endl;
       }
     }
     else if (use_fdr)
@@ -3887,11 +3910,15 @@ void FLASHTnTAlgorithm::run(const MSExperiment& map, const std::vector<FASTAFile
       std::pair<double, double> key {2.0, 0.0}; // lowest proteoform q-value, -best score
       bool internal = false;
     };
+    // A proteoform of the open-terminus class (not counted, proteoformQvalues) ranks no protein: with its q-value 1 it would still rank
+    // a protein below all others, and pass with the decoy-free margin above it (the proteins that only such a proteoform identified were
+    // 5 B. theta of 35 at 1% when the class was counted).
     std::map<String, ProteinBest> best_of;
     for (const auto& members : clusters)
     {
       const auto& rep = proteoform_hits_[members[0]];
       if (rep.metaValueExists("DecoyPrecursor") && ! rep.getAccession().hasPrefix("DECOY")) continue;
+      if (rep.metaValueExists("ProteoformEvidenceClass") && (int)rep.getMetaValue("ProteoformEvidenceClass") == pf_class_open_terminus) continue;
       const double q = rep.getMetaValue("proqvalue", 1.0);
       double score = 0;
       for (Size i : members) score = std::max(score, proteoform_hits_[i].getScore());
